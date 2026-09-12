@@ -1,0 +1,13 @@
+{
+  "name": "@sciretriever/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "preview": "pnpm build && node dist/preview.js"
+  },
+  "dependencies": {
+    "@sciretriever/contracts": "workspace:*"
+  }
+}

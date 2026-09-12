@@ -1,0 +1,63 @@
+{
+  "provenance": {
+    "provenance_id": "00000000-0000-0000-0000-000000000001",
+    "source_kind": "metadata-provider",
+    "source_name": "fixture-provider",
+    "source_record_id": "fixture-record-1",
+    "observed_at": "2026-01-02T03:04:05Z",
+    "input_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "parameters_sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "metadata": {
+    "title": "Synthetic Literature Fixture",
+    "authors": [{"kind": "person", "display_name": "Ada Lovelace", "given_name": "Ada", "family_name": "Lovelace", "orcid": null, "affiliations": []}],
+    "abstract": "A deterministic offline fixture.",
+    "publication_date": "2026-01-02",
+    "publication_year": 2026,
+    "document_type": "article",
+    "language": "en",
+    "venue": "Fixture Journal",
+    "publisher": "Fixture Press",
+    "volume": "1",
+    "issue": "1",
+    "pages": "1-9",
+    "identifiers": [{"namespace": "doi", "value": "10.1234/fixture.1"}, {"namespace": "arxiv", "value": "2601.00001"}],
+    "keywords": ["offline", "fixture"]
+  },
+  "query": {
+    "text": "deterministic",
+    "title": null,
+    "author": null,
+    "author_orcids": [],
+    "identifiers": [],
+    "publication_year_from": 2020,
+    "publication_year_to": 2030,
+    "venue": null,
+    "publisher": null,
+    "document_types": ["article"],
+    "languages": ["en"],
+    "keywords": ["fixture"],
+    "version_roles": [],
+    "statuses": [],
+    "missing_steps": [],
+    "needs_manual_pdf": null,
+    "discovery_run_ids": []
+  },
+  "asset": {
+    "asset_id": "00000000-0000-0000-0000-000000000002",
+    "sha256": "c3b80fb16f0169208eba7872ddd2ecda132f3dc1d816b392bfa8b016b82c3ddb",
+    "size_bytes": 23,
+    "media_type": "application/pdf",
+    "path": "objects/aa/synthetic.pdf"
+  },
+  "relation": {
+    "reference_id": "00000000-0000-0000-0000-000000000003",
+    "source_literature_id": "00000000-0000-0000-0000-000000000004",
+    "target_literature_id": "00000000-0000-0000-0000-000000000005"
+  },
+  "literature": {
+    "meta_literature_id": "00000000-0000-0000-0000-000000000006",
+    "representative_literature_id": "00000000-0000-0000-0000-000000000004"
+  },
+  "canonical_parameters": {"z": "末", "a": 1, "nested": {"b": true, "a": null}}
+}

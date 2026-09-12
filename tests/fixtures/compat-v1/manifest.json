@@ -1,0 +1,20 @@
+{
+  "schema": "sciretriever-typescript-compat-fixture.v1",
+  "source_schema_product": "sciretriever",
+  "source_schema_version": 1,
+  "source_schema_fingerprint": "2c76d070095e31e5d30d749386ab29c1ab3485fe9ae302b7d8cae959f5df2fc9",
+  "captured_at": "2026-09-09",
+  "synthetic_only": true,
+  "records_file": "records.json",
+  "canonical_encoding": {"ensure_ascii": false, "sort_keys": true, "separators": [",", ":"], "utf8": "strict"},
+  "sha256_by_record": {
+    "provenance": "2858a55ca73d888771fed71faee5ca6796c0af58ee816d2a7573dfb23a3d9ed6",
+    "metadata": "ff30a64bc5a89c6e88562d8c3f9426434df408acd164fe49a4d5951e1cf54aac",
+    "query": "26224dfd4fa4c437667ab54a4f1e14c467c5ebebbcf9765f0d3ef37754d535a9",
+    "asset": "94c9ccf5f2c2c8ddb6c883d3f6a2487c903f64ec84c0fbf7fd4b44884e3889fb",
+    "relation": "f416befce4d5f4f3f23a856ec97c7bb82a6074cc8e5770c98ad2159854462d90",
+    "literature": "fb3180d195f95955f080d338ae9cfa1177a301b941a7f9ba14e10b26aa0e9417",
+    "canonical_parameters": "86e3e4f00693ff6f8c24e6365d6f5ca6645e7cf1f518059da9748565498727cc"
+  },
+  "asset_bytes": "%PDF-synthetic-fixture%"
+}

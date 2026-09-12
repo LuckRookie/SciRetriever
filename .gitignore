@@ -8,12 +8,15 @@ wheels/
 
 # Virtual environments
 .venv
+node_modules/
 .vscode
 
 # other files
 logs
 *.db
 *.html
+!/apps/web/public/index.html
+!/apps/web/public/live.html
 page_1.json
 *.ipynb
 *.txt

@@ -1,0 +1,32 @@
+{
+  "name": "@sciretriever/server",
+  "version": "0.1.0",
+  "private": true,
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "dist/web/*.html",
+    "dist/web/*.css"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "sciretriever": "./dist/cli/main.js"
+  },
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@sciretriever/contracts": "workspace:*",
+    "cloakbrowser": "0.5.8",
+    "playwright": "1.55.0",
+    "playwright-core": "1.55.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  }
+}
