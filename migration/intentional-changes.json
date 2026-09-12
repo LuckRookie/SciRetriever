@@ -1,0 +1,59 @@
+{
+  "schema": "sciretriever-typescript-intentional-change-ledger.v1",
+  "captured_at": "2026-09-12",
+  "authority": [
+    "docs/architecture/decisions/0024-typescript-browser-workbench-migration.md",
+    "docs/architecture/decisions/0023-generic-browser-agent-executor.md"
+  ],
+  "changes": [
+    {
+      "id": "IC-001",
+      "area": "runtime-owner",
+      "previous": "Python application and CLI were the production entry.",
+      "current": "TypeScript Application, CLI and portable package are the production runtime; Python files are historical maintenance material.",
+      "reason": "Explicit full Python-to-TypeScript migration target and T061 retirement.",
+      "status": "implemented",
+      "tasks": ["T044", "T055", "T061"]
+    },
+    {
+      "id": "IC-002",
+      "area": "agent-actions",
+      "previous": "Original migration draft proposed a broader generic action union.",
+      "current": "Agent capability remains six closed actions; operator text/pointer input is a separate authenticated command.",
+      "reason": "Preserves accepted ADR 0023 least privilege while completing the migration.",
+      "status": "implemented",
+      "tasks": ["T002", "T022", "T030"]
+    },
+    {
+      "id": "IC-003",
+      "area": "browser-capture",
+      "previous": "Navigation-wide prefetch was used as a PDF capture shortcut.",
+      "current": "Native navigation continues by default; response/download/blob/data/frame/popup capture is admitted and spooled separately.",
+      "reason": "Separates Browser, Network and Acquisition ownership and avoids treating HTML as a PDF.",
+      "status": "implemented-with-deferred-range-viewer",
+      "tasks": ["T020", "T023", "T027", "T028"]
+    },
+    {
+      "id": "IC-004",
+      "area": "durable-execution",
+      "previous": "Long-running completion was process-local and request-bound.",
+      "current": "Jobs, targets, attempts, policy snapshots, events, leases, candidates and interventions are durable in the explicit v2 schema.",
+      "reason": "Required for restart, pause and candidate reconciliation without a second literature state.",
+      "status": "implemented",
+      "tasks": ["T046", "T047", "T048", "T049", "T050", "T051", "T054"]
+    },
+    {
+      "id": "IC-005",
+      "area": "validation-route",
+      "previous": "Python Quick/Full were the default project gate.",
+      "current": "TypeScript Quick/Full are the default gate; Python Harness remains an explicit historical maintenance command.",
+      "reason": "Owner decision dated 2026-09-10; preserves historical checks without slowing TS delivery.",
+      "status": "implemented",
+      "tasks": ["T055", "T060"]
+    }
+  ],
+  "non_changes": [
+    "MetaLiterature/Literature identity, provenance, current facts, v1 schema and immutable asset rules remain unchanged.",
+    "No production Catalog, Profile, credential or external Provider was accessed during migration validation."
+  ]
+}

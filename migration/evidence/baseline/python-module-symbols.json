@@ -1,0 +1,4653 @@
+{
+  "sciretriever.__init__": {
+    "__all__": [],
+    "path": "src/sciretriever/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.__main__": {
+    "__all__": [],
+    "path": "src/sciretriever/__main__.py",
+    "symbols": []
+  },
+  "sciretriever.acquisition.access_profiles": {
+    "__all__": [
+      "AccessPlatformKey",
+      "BrowserRateLimitGroup",
+      "BrowserSessionKey",
+      "PolicyEvidence",
+      "ProfileProductionStatus",
+      "PublisherAccessKey",
+      "PublisherAccessEvidence",
+      "PublisherAccessProfile",
+      "PublisherAccessProfileCatalog",
+      "normalize_profile_origin"
+    ],
+    "path": "src/sciretriever/acquisition/access_profiles.py",
+    "symbols": [
+      "AccessPlatformKey",
+      "BrowserRateLimitGroup",
+      "BrowserSessionKey",
+      "PolicyEvidence",
+      "ProfileProductionStatus",
+      "PublisherAccessEvidence",
+      "PublisherAccessKey",
+      "PublisherAccessProfile",
+      "PublisherAccessProfileCatalog",
+      "normalize_profile_origin"
+    ]
+  },
+  "sciretriever.acquisition.api": {
+    "__all__": [
+      "AUTHORIZED_PDF_API_PROVIDER_KEYS",
+      "BUILTIN_SCI_HUB_MIRROR_URLS",
+      "CONTROLLED_BROWSER_PRODUCTION_AVAILABLE",
+      "CONTROLLED_BROWSER_PRODUCTION_ROUTE_COUNT",
+      "AcquisitionApi",
+      "AcquisitionExpectedFacts",
+      "AcquisitionFailure",
+      "AcquisitionGroupProgress",
+      "AcquisitionProgressObserver",
+      "AcquisitionProgressPhase",
+      "AcquisitionProgressSnapshot",
+      "AcquisitionRequest",
+      "BrowserEscalationObserver",
+      "BrowserEscalationSummary",
+      "CancellationEvent",
+      "CohortPreparationObserver",
+      "CohortPreparationItem",
+      "ManualPdfInputError",
+      "PdfValidationCancelled",
+      "PreparedAcquisition",
+      "PreparedAcquisitionCohort",
+      "ReadablePdfSource",
+      "UNSUPPORTED_AUTHORIZED_PDF_API_PROVIDER_KEYS"
+    ],
+    "path": "src/sciretriever/acquisition/api.py",
+    "symbols": [
+      "AUTHORIZED_PDF_API_PROVIDER_KEYS",
+      "AcquisitionApi",
+      "AutomaticAcquisitionService",
+      "CONTROLLED_BROWSER_PRODUCTION_AVAILABLE",
+      "CONTROLLED_BROWSER_PRODUCTION_ROUTE_COUNT",
+      "CohortPreparationItem",
+      "CohortPreparationObserver",
+      "PreparedAcquisition",
+      "PreparedAcquisitionCohort",
+      "UNSUPPORTED_AUTHORIZED_PDF_API_PROVIDER_KEYS"
+    ]
+  },
+  "sciretriever.acquisition.authorized": {
+    "__all__": [
+      "AuthorizedClientFailure",
+      "AuthorizedClientFailureKind",
+      "AuthorizedDownloadLocator",
+      "AuthorizedDownloadMiss",
+      "AuthorizedDownloadResult",
+      "AuthorizedEntitlement",
+      "AuthorizedEvidenceKind",
+      "AuthorizedLookupDownloads",
+      "AuthorizedLookupMiss",
+      "AuthorizedLookupResult",
+      "AuthorizedLookupTarget",
+      "AuthorizedNormalMiss",
+      "AuthorizedPdfDownload",
+      "AuthorizedPdfSource",
+      "AuthorizedProviderClient",
+      "AuthorizedProviderContract",
+      "AuthorizedRecordIdentityRule",
+      "CORE_AUTHORIZED_CONTRACT",
+      "Clock",
+      "ELSEVIER_AUTHORIZED_CONTRACT",
+      "PRODUCTION_AUTHORIZED_PROVIDER_CATALOG",
+      "ProvenanceIdFactory",
+      "UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS",
+      "WILEY_AUTHORIZED_CONTRACT",
+      "authorized_route_status"
+    ],
+    "path": "src/sciretriever/acquisition/authorized.py",
+    "symbols": [
+      "AuthorizedClientFailure",
+      "AuthorizedClientFailureKind",
+      "AuthorizedDownloadLocator",
+      "AuthorizedDownloadMiss",
+      "AuthorizedDownloadResult",
+      "AuthorizedEntitlement",
+      "AuthorizedEvidenceKind",
+      "AuthorizedLookupDownloads",
+      "AuthorizedLookupMiss",
+      "AuthorizedLookupResult",
+      "AuthorizedLookupTarget",
+      "AuthorizedNormalMiss",
+      "AuthorizedPdfDownload",
+      "AuthorizedPdfSource",
+      "AuthorizedProviderClient",
+      "AuthorizedProviderContract",
+      "AuthorizedRecordIdentityRule",
+      "CORE_AUTHORIZED_CONTRACT",
+      "Clock",
+      "ELSEVIER_AUTHORIZED_CONTRACT",
+      "PRODUCTION_AUTHORIZED_PROVIDER_CATALOG",
+      "ProvenanceIdFactory",
+      "UNSUPPORTED_AUTHORIZED_API_PROVIDER_KEYS",
+      "WILEY_AUTHORIZED_CONTRACT",
+      "authorized_route_status"
+    ]
+  },
+  "sciretriever.acquisition.browser_admission": {
+    "__all__": [
+      "BrowserAdmissionCandidate",
+      "BrowserAdmissionConfiguration",
+      "BrowserAdmissionController",
+      "BrowserAdmissionDecision",
+      "BrowserAdmissionDisposition",
+      "BrowserAdmissionResult",
+      "BrowserEscalationGroupSummary",
+      "BrowserEscalationSummary",
+      "BrowserGroupAdmissionState",
+      "BrowserGroupReadiness"
+    ],
+    "path": "src/sciretriever/acquisition/browser_admission.py",
+    "symbols": [
+      "BrowserAdmissionCandidate",
+      "BrowserAdmissionConfiguration",
+      "BrowserAdmissionController",
+      "BrowserAdmissionDecision",
+      "BrowserAdmissionDisposition",
+      "BrowserAdmissionResult",
+      "BrowserEscalationGroupSummary",
+      "BrowserEscalationSummary",
+      "BrowserGroupAdmissionState",
+      "BrowserGroupReadiness"
+    ]
+  },
+  "sciretriever.acquisition.browser_control": {
+    "__all__": [
+      "AgentBrowserController",
+      "BrowserAgentResult",
+      "BrowserArticleGoal",
+      "BrowserStepSessionFactory",
+      "action_from_agent_tool_call",
+      "browser_agent_tool_declarations",
+      "build_browser_agent_call"
+    ],
+    "path": "src/sciretriever/acquisition/browser_control.py",
+    "symbols": [
+      "AgentBrowserController",
+      "BROWSER_AGENT_MAX_OUTPUT_TOKENS",
+      "BrowserAgentResult",
+      "BrowserArticleGoal",
+      "BrowserStepSessionFactory",
+      "action_from_agent_tool_call",
+      "browser_agent_tool_declarations",
+      "build_browser_agent_call"
+    ]
+  },
+  "sciretriever.acquisition.cohort": {
+    "__all__": [
+      "AcquisitionGroupProgress",
+      "AcquisitionProgressObserver",
+      "AcquisitionProgressPhase",
+      "AcquisitionProgressSnapshot",
+      "AcquisitionWorkItem",
+      "AcquisitionWorkItemResult",
+      "BrowserEscalationObserver",
+      "CohortExecutionResult",
+      "TieredCohortExecutor",
+      "WorkItemDisposition"
+    ],
+    "path": "src/sciretriever/acquisition/cohort.py",
+    "symbols": [
+      "AcquisitionGroupProgress",
+      "AcquisitionProgressObserver",
+      "AcquisitionProgressPhase",
+      "AcquisitionProgressSnapshot",
+      "AcquisitionWorkItem",
+      "AcquisitionWorkItemResult",
+      "BrowserEscalationObserver",
+      "CohortExecutionResult",
+      "PlanRefresher",
+      "RouteExecutor",
+      "TierCompletionObserver",
+      "TieredCohortExecutor",
+      "WorkItemDisposition"
+    ]
+  },
+  "sciretriever.acquisition.manual": {
+    "__all__": [
+      "ManualPdfAdmissionService",
+      "ManualPdfInputError"
+    ],
+    "path": "src/sciretriever/acquisition/manual.py",
+    "symbols": [
+      "ManualPdfAdmissionService",
+      "ManualPdfInputError"
+    ]
+  },
+  "sciretriever.acquisition.outcomes": {
+    "__all__": [
+      "RouteExecutionResult",
+      "RouteOutcome"
+    ],
+    "path": "src/sciretriever/acquisition/outcomes.py",
+    "symbols": [
+      "RouteExecutionResult",
+      "RouteOutcome"
+    ]
+  },
+  "sciretriever.acquisition.pdf_identity": {
+    "__all__": [
+      "browser_pdf_belongs_to_literature"
+    ],
+    "path": "src/sciretriever/acquisition/pdf_identity.py",
+    "symbols": [
+      "browser_pdf_belongs_to_literature"
+    ]
+  },
+  "sciretriever.acquisition.planning": {
+    "__all__": [
+      "AccessRouteHint",
+      "AccessRouteHintKind",
+      "AcquisitionPlan",
+      "AcquisitionPlanBuilder",
+      "AcquisitionPlanningSession",
+      "DoiLandingResolution",
+      "DoiLandingResolutionPort",
+      "DoiResolutionState",
+      "ProgressiveAcquisitionPlanner",
+      "PublisherAccessResolution",
+      "PublisherAccessResolver",
+      "ResolutionEvidence",
+      "ResolutionEvidenceKind",
+      "RouteCapability",
+      "RouteReadiness",
+      "RouteSpec",
+      "build_resolution_evidence",
+      "runtime_url_origin"
+    ],
+    "path": "src/sciretriever/acquisition/planning.py",
+    "symbols": [
+      "AccessRouteHint",
+      "AccessRouteHintKind",
+      "AcquisitionPlan",
+      "AcquisitionPlanBuilder",
+      "AcquisitionPlanningSession",
+      "DoiLandingResolution",
+      "DoiLandingResolutionPort",
+      "DoiResolutionState",
+      "ProgressiveAcquisitionPlanner",
+      "PublisherAccessResolution",
+      "PublisherAccessResolver",
+      "ResolutionEvidence",
+      "ResolutionEvidenceKind",
+      "RouteCapability",
+      "RouteReadiness",
+      "RouteSpec",
+      "build_resolution_evidence",
+      "runtime_url_origin"
+    ]
+  },
+  "sciretriever.acquisition.ports": {
+    "__all__": [
+      "AcquisitionExpectedFacts",
+      "AcquisitionRequest",
+      "AcquisitionExhaustionPublicationCommand",
+      "AcquisitionExhaustionClearPort",
+      "AcquisitionExhaustionPublicationPort",
+      "AcquisitionFailure",
+      "AcquisitionSourceFailure",
+      "BrowserPdfAssociationEvidence",
+      "CancellationEvent",
+      "CandidateKeyTracker",
+      "PdfValidationStage",
+      "PdfValidationStagingPort",
+      "PrimaryPdfPublicationResult",
+      "PrimaryPdfPreparation",
+      "PrimaryPdfPreparationPort",
+      "TemporaryPdf",
+      "TemporaryPdfContent",
+      "ValidatedPdfContent",
+      "ValidatedPrimaryPdfCommitPort",
+      "ValidatedPrimaryPdfPublicationCommand"
+    ],
+    "path": "src/sciretriever/acquisition/ports.py",
+    "symbols": [
+      "AcquisitionExhaustionClearPort",
+      "AcquisitionExhaustionPublicationCommand",
+      "AcquisitionExhaustionPublicationPort",
+      "AcquisitionExpectedFacts",
+      "AcquisitionFailure",
+      "AcquisitionRequest",
+      "AcquisitionSourceFailure",
+      "BrowserPdfAssociationEvidence",
+      "CancellationEvent",
+      "CandidateKeyTracker",
+      "PdfValidationStage",
+      "PdfValidationStagingPort",
+      "PrimaryPdfPreparation",
+      "PrimaryPdfPreparationPort",
+      "PrimaryPdfPublicationResult",
+      "TemporaryPdf",
+      "TemporaryPdfContent",
+      "ValidatedPdfContent",
+      "ValidatedPrimaryPdfCommitPort",
+      "ValidatedPrimaryPdfPublicationCommand"
+    ]
+  },
+  "sciretriever.acquisition.profile_catalog": {
+    "__all__": [
+      "ACM_ACCESS_PROFILE",
+      "ACS_ACCESS_PROFILE",
+      "AIP_ACCESS_PROFILE",
+      "AMERICAN_MATHEMATICAL_SOCIETY_ACCESS_PROFILE",
+      "ANNUAL_REVIEWS_ACCESS_PROFILE",
+      "APS_ACCESS_PROFILE",
+      "COPERNICUS_ACCESS_PROFILE",
+      "CORE_ACCESS_PROFILE",
+      "ELSEVIER_ACCESS_PROFILE",
+      "FRONTIERS_ACCESS_PROFILE",
+      "IEEE_ACCESS_PROFILE",
+      "IOP_ACCESS_PROFILE",
+      "MDPI_ACCESS_PROFILE",
+      "NATURE_ACCESS_PROFILE",
+      "OXFORD_ACADEMIC_ACCESS_PROFILE",
+      "PNAS_ACCESS_PROFILE",
+      "PLOS_ACCESS_PROFILE",
+      "PUBLISHER_ACCESS_VERIFICATION_MATRIX",
+      "PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG",
+      "RSC_ACCESS_PROFILE",
+      "ROYAL_SOCIETY_ACCESS_PROFILE",
+      "SCIENCE_ACCESS_PROFILE",
+      "SPRINGERLINK_ACCESS_PROFILE",
+      "WILEY_ACCESS_PROFILE",
+      "WORLD_SCIENTIFIC_ACCESS_PROFILE"
+    ],
+    "path": "src/sciretriever/acquisition/profile_catalog.py",
+    "symbols": [
+      "ACM_ACCESS_PROFILE",
+      "ACS_ACCESS_PROFILE",
+      "AIP_ACCESS_PROFILE",
+      "AMERICAN_MATHEMATICAL_SOCIETY_ACCESS_PROFILE",
+      "ANNUAL_REVIEWS_ACCESS_PROFILE",
+      "APS_ACCESS_PROFILE",
+      "COPERNICUS_ACCESS_PROFILE",
+      "CORE_ACCESS_PROFILE",
+      "ELSEVIER_ACCESS_PROFILE",
+      "FRONTIERS_ACCESS_PROFILE",
+      "IEEE_ACCESS_PROFILE",
+      "IOP_ACCESS_PROFILE",
+      "MDPI_ACCESS_PROFILE",
+      "NATURE_ACCESS_PROFILE",
+      "OXFORD_ACADEMIC_ACCESS_PROFILE",
+      "PLOS_ACCESS_PROFILE",
+      "PNAS_ACCESS_PROFILE",
+      "PRODUCTION_PUBLISHER_ACCESS_PROFILE_CATALOG",
+      "PUBLISHER_ACCESS_VERIFICATION_MATRIX",
+      "ROYAL_SOCIETY_ACCESS_PROFILE",
+      "RSC_ACCESS_PROFILE",
+      "SCIENCE_ACCESS_PROFILE",
+      "SPRINGERLINK_ACCESS_PROFILE",
+      "WILEY_ACCESS_PROFILE",
+      "WORLD_SCIENTIFIC_ACCESS_PROFILE"
+    ]
+  },
+  "sciretriever.acquisition.profile_verification": {
+    "__all__": [
+      "PublisherAccessVerificationMatrix",
+      "PublisherProfileVerificationError"
+    ],
+    "path": "src/sciretriever/acquisition/profile_verification.py",
+    "symbols": [
+      "PublisherAccessVerificationMatrix",
+      "PublisherProfileVerificationError"
+    ]
+  },
+  "sciretriever.acquisition.providers.__init__": {
+    "__all__": [
+      "CORE_ACCESS_POLICY",
+      "CORE_ACCESS_SCOPE",
+      "CoreAuthorizedPdfClient",
+      "ELSEVIER_ARTICLE_ACCESS_POLICY",
+      "ELSEVIER_ARTICLE_ACCESS_SCOPE",
+      "ElsevierAuthorizedPdfClient",
+      "WILEY_ACCESS_POLICY",
+      "WILEY_ACCESS_SCOPE",
+      "WileyAuthorizedPdfClient"
+    ],
+    "path": "src/sciretriever/acquisition/providers/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.acquisition.providers.core": {
+    "__all__": [
+      "CORE_ACCESS_POLICY",
+      "CORE_ACCESS_SCOPE",
+      "CoreAuthorizedPdfClient"
+    ],
+    "path": "src/sciretriever/acquisition/providers/core.py",
+    "symbols": [
+      "CORE_ACCESS_POLICY",
+      "CORE_ACCESS_SCOPE",
+      "CoreAuthorizedPdfClient"
+    ]
+  },
+  "sciretriever.acquisition.providers.elsevier": {
+    "__all__": [
+      "ELSEVIER_ARTICLE_ACCESS_POLICY",
+      "ELSEVIER_ARTICLE_ACCESS_SCOPE",
+      "ElsevierAuthorizedPdfClient"
+    ],
+    "path": "src/sciretriever/acquisition/providers/elsevier.py",
+    "symbols": [
+      "ELSEVIER_ARTICLE_ACCESS_POLICY",
+      "ELSEVIER_ARTICLE_ACCESS_SCOPE",
+      "ElsevierAuthorizedPdfClient"
+    ]
+  },
+  "sciretriever.acquisition.providers.wiley": {
+    "__all__": [
+      "WILEY_ACCESS_POLICY",
+      "WILEY_ACCESS_SCOPE",
+      "WileyAuthorizedPdfClient"
+    ],
+    "path": "src/sciretriever/acquisition/providers/wiley.py",
+    "symbols": [
+      "WILEY_ACCESS_POLICY",
+      "WILEY_ACCESS_SCOPE",
+      "WileyAuthorizedPdfClient"
+    ]
+  },
+  "sciretriever.acquisition.publication": {
+    "__all__": [
+      "ArtifactIdFactory",
+      "AssetIdFactory",
+      "LiteratureAssetIdFactory",
+      "PrimaryPdfPublisher",
+      "ValidatedPrimaryPdfPublisher"
+    ],
+    "path": "src/sciretriever/acquisition/publication.py",
+    "symbols": [
+      "ArtifactIdFactory",
+      "AssetIdFactory",
+      "LiteratureAssetIdFactory",
+      "PrimaryPdfPublisher",
+      "ValidatedPrimaryPdfPublisher"
+    ]
+  },
+  "sciretriever.acquisition.registry": {
+    "__all__": [
+      "ACQUISITION_PROVIDER_ORDER",
+      "PRODUCTION_WEB_HOSTS_BY_PROVIDER",
+      "AcquisitionAssemblyDependencies",
+      "AcquisitionCapability",
+      "BrowserAgentDependency",
+      "AcquisitionProviderMapping",
+      "AcquisitionProviderStatus",
+      "AcquisitionRegistry",
+      "AcquisitionRegistryError",
+      "acquisition_provider_statuses",
+      "build_acquisition_registry",
+      "production_web_access_profile_resolver",
+      "validate_acquisition_provider_matrix"
+    ],
+    "path": "src/sciretriever/acquisition/registry.py",
+    "symbols": [
+      "ACQUISITION_PROVIDER_ORDER",
+      "AcquisitionAssemblyDependencies",
+      "AcquisitionCapability",
+      "AcquisitionProviderMapping",
+      "AcquisitionProviderStatus",
+      "AcquisitionRegistry",
+      "AcquisitionRegistryError",
+      "BrowserAgentDependency",
+      "PRODUCTION_WEB_HOSTS_BY_PROVIDER",
+      "acquisition_provider_statuses",
+      "build_acquisition_registry",
+      "production_web_access_profile_resolver",
+      "validate_acquisition_provider_matrix"
+    ]
+  },
+  "sciretriever.acquisition.routes": {
+    "__all__": [
+      "AcquisitionRouteRegistry",
+      "PdfRouteAdapter",
+      "RouteAdapterBinding",
+      "RouteExecutionContext",
+      "RouteInstallationStatus",
+      "delivery_results"
+    ],
+    "path": "src/sciretriever/acquisition/routes.py",
+    "symbols": [
+      "AcquisitionRouteRegistry",
+      "PdfRouteAdapter",
+      "RouteAdapterBinding",
+      "RouteExecutionContext",
+      "RouteInstallationStatus",
+      "delivery_results"
+    ]
+  },
+  "sciretriever.acquisition.routing": {
+    "__all__": [
+      "AcquisitionEvidence",
+      "ObservedAssetHint",
+      "ProviderRecordIdentity",
+      "RoutingEvidenceKind",
+      "StableProviderLocator",
+      "WeakRoutingHints",
+      "build_acquisition_evidence"
+    ],
+    "path": "src/sciretriever/acquisition/routing.py",
+    "symbols": [
+      "AcquisitionEvidence",
+      "ObservedAssetHint",
+      "ProviderRecordIdentity",
+      "RoutingEvidenceKind",
+      "StableProviderLocator",
+      "WeakRoutingHints",
+      "build_acquisition_evidence"
+    ]
+  },
+  "sciretriever.acquisition.rules": {
+    "__all__": [
+      "CancellationEvent",
+      "DEFAULT_MAX_PDF_BYTES",
+      "PdfByteSource",
+      "PdfValidationCancelled",
+      "PdfValidationCode",
+      "PdfValidationError",
+      "PdfValidationStagingError",
+      "ReadablePdfSource",
+      "ValidatedPdf",
+      "validate_pdf"
+    ],
+    "path": "src/sciretriever/acquisition/rules.py",
+    "symbols": [
+      "CancellationEvent",
+      "DEFAULT_MAX_PDF_BYTES",
+      "PdfByteSource",
+      "PdfValidationCancelled",
+      "PdfValidationCode",
+      "PdfValidationError",
+      "PdfValidationStagingError",
+      "ReadablePdfSource",
+      "ValidatedPdf",
+      "validate_pdf"
+    ]
+  },
+  "sciretriever.acquisition.sources.__init__": {
+    "__all__": [
+      "ArxivPdfSource",
+      "BrowserFlowSession",
+      "BrowserRunner",
+      "BUILTIN_SCI_HUB_MIRROR_URLS",
+      "CONTROLLED_BROWSER_PRODUCTION_STATUS",
+      "ConfiguredLocatorResolver",
+      "ConfiguredSciHubLandingResolver",
+      "ConfiguredSciHubPdfSource",
+      "ControlledBrowserPdfSource",
+      "GenericBrowserDestinationGuard",
+      "DirectPdfSource",
+      "DoiLandingResolver",
+      "EuropePmcPdfSource",
+      "PublicLocatorFetcher",
+      "UnpaywallPdfSource",
+      "WebAccessProfileResolver",
+      "configured_sci_hub_route_status",
+      "build_generic_browser_destination_guard"
+    ],
+    "path": "src/sciretriever/acquisition/sources/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.acquisition.sources.arxiv": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "ArxivPdfSource",
+      "PublicLocatorFetcher"
+    ],
+    "path": "src/sciretriever/acquisition/sources/arxiv.py",
+    "symbols": [
+      "ACCESS_SCOPE",
+      "ArxivPdfSource",
+      "BASELINE_ACCESS_POLICY",
+      "PublicLocatorFetcher"
+    ]
+  },
+  "sciretriever.acquisition.sources.browser": {
+    "__all__": [
+      "BrowserFlowSession",
+      "BrowserRunner",
+      "CONTROLLED_BROWSER_PRODUCTION_STATUS",
+      "ControlledBrowserPdfSource",
+      "GenericBrowserDestinationGuard",
+      "build_generic_browser_destination_guard"
+    ],
+    "path": "src/sciretriever/acquisition/sources/browser.py",
+    "symbols": [
+      "BrowserRunner",
+      "CONTROLLED_BROWSER_PRODUCTION_STATUS",
+      "Clock",
+      "ControlledBrowserPdfSource",
+      "GenericBrowserDestinationGuard",
+      "ProvenanceIdFactory",
+      "build_generic_browser_destination_guard"
+    ]
+  },
+  "sciretriever.acquisition.sources.configured_sci_hub": {
+    "__all__": [
+      "BUILTIN_SCI_HUB_MIRROR_URLS",
+      "ConfiguredLocatorResolver",
+      "ConfiguredSciHubLandingResolver",
+      "ConfiguredSciHubPdfSource",
+      "PublicLocatorFetcher",
+      "configured_sci_hub_route_status"
+    ],
+    "path": "src/sciretriever/acquisition/sources/configured_sci_hub.py",
+    "symbols": [
+      "BUILTIN_SCI_HUB_MIRROR_URLS",
+      "ConfiguredLocatorResolver",
+      "ConfiguredSciHubLandingResolver",
+      "ConfiguredSciHubPdfSource",
+      "PublicLocatorFetcher",
+      "configured_sci_hub_route_status"
+    ]
+  },
+  "sciretriever.acquisition.sources.direct": {
+    "__all__": [
+      "DirectPdfSource",
+      "PublicLocatorFetcher",
+      "WebAccessProfileResolver"
+    ],
+    "path": "src/sciretriever/acquisition/sources/direct.py",
+    "symbols": [
+      "Clock",
+      "DirectPdfSource",
+      "ProvenanceIdFactory",
+      "PublicLocatorFetcher",
+      "WebAccessProfileResolver"
+    ]
+  },
+  "sciretriever.acquisition.sources.doi_landing": {
+    "__all__": [
+      "DoiLandingResolver"
+    ],
+    "path": "src/sciretriever/acquisition/sources/doi_landing.py",
+    "symbols": [
+      "DoiLandingResolver"
+    ]
+  },
+  "sciretriever.acquisition.sources.europe_pmc": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "EuropePmcPdfSource",
+      "PublicLocatorFetcher"
+    ],
+    "path": "src/sciretriever/acquisition/sources/europe_pmc.py",
+    "symbols": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "EuropePmcPdfSource",
+      "PublicLocatorFetcher"
+    ]
+  },
+  "sciretriever.acquisition.sources.unpaywall": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "PublicLocatorFetcher",
+      "UnpaywallPdfSource"
+    ],
+    "path": "src/sciretriever/acquisition/sources/unpaywall.py",
+    "symbols": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "PublicLocatorFetcher",
+      "UnpaywallPdfSource"
+    ]
+  },
+  "sciretriever.acquisition.tiered_service": {
+    "__all__": [
+      "TieredAcquisitionService"
+    ],
+    "path": "src/sciretriever/acquisition/tiered_service.py",
+    "symbols": [
+      "TieredAcquisitionService"
+    ]
+  },
+  "sciretriever.agents.__init__": {
+    "__all__": [],
+    "path": "src/sciretriever/agents/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.agents.api": {
+    "__all__": [
+      "AgentCall",
+      "AgentCallLimits",
+      "AgentCapability",
+      "AgentCapabilityReadiness",
+      "AgentFailure",
+      "AgentDebugImageRecorder",
+      "AgentImagePart",
+      "AgentModelCapabilities",
+      "AgentModelCatalog",
+      "AgentModelSummary",
+      "AgentProvenance",
+      "AgentResult",
+      "AgentRole",
+      "AgentRoleBinding",
+      "AgentRoleIdentity",
+      "AgentRuntime",
+      "AgentStructuredResult",
+      "AgentTextPart",
+      "AgentToolCall",
+      "AgentToolDeclaration",
+      "AgentUsage"
+    ],
+    "path": "src/sciretriever/agents/api.py",
+    "symbols": []
+  },
+  "sciretriever.agents.calls": {
+    "__all__": [
+      "AgentCall",
+      "AgentCallLimits",
+      "AgentProvenance",
+      "AgentResult",
+      "AgentStructuredResult",
+      "AgentUsage"
+    ],
+    "path": "src/sciretriever/agents/calls.py",
+    "symbols": [
+      "AgentCall",
+      "AgentCallLimits",
+      "AgentProvenance",
+      "AgentResult",
+      "AgentStructuredResult",
+      "AgentUsage",
+      "request_input_hash"
+    ]
+  },
+  "sciretriever.agents.capabilities": {
+    "__all__": [
+      "AgentCapability",
+      "AgentCapabilityReadiness",
+      "AgentModelCapabilities",
+      "AgentRole",
+      "capability_missing",
+      "required_capabilities"
+    ],
+    "path": "src/sciretriever/agents/capabilities.py",
+    "symbols": [
+      "AgentCapability",
+      "AgentCapabilityReadiness",
+      "AgentModelCapabilities",
+      "AgentRole",
+      "capability_missing",
+      "required_capabilities"
+    ]
+  },
+  "sciretriever.agents.debug": {
+    "__all__": [
+      "AgentDebugImageRecorder"
+    ],
+    "path": "src/sciretriever/agents/debug.py",
+    "symbols": [
+      "AgentDebugImageRecorder"
+    ]
+  },
+  "sciretriever.agents.failures": {
+    "__all__": [
+      "AgentFailure",
+      "AgentRemoteErrorKind",
+      "agent_failure"
+    ],
+    "path": "src/sciretriever/agents/failures.py",
+    "symbols": [
+      "AgentFailure",
+      "AgentRemoteErrorKind",
+      "agent_failure"
+    ]
+  },
+  "sciretriever.agents.messages": {
+    "__all__": [
+      "AgentImagePart",
+      "AgentTextPart"
+    ],
+    "path": "src/sciretriever/agents/messages.py",
+    "symbols": [
+      "AgentImagePart",
+      "AgentTextPart",
+      "MAX_IMAGE_PARTS",
+      "MAX_TEXT_PARTS",
+      "utf8_size"
+    ]
+  },
+  "sciretriever.agents.ports": {
+    "__all__": [
+      "AgentProviderCall",
+      "AgentProviderPort"
+    ],
+    "path": "src/sciretriever/agents/ports.py",
+    "symbols": [
+      "AgentProviderCall",
+      "AgentProviderPort"
+    ]
+  },
+  "sciretriever.agents.providers.__init__": {
+    "__all__": [],
+    "path": "src/sciretriever/agents/providers/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.agents.providers.anthropic": {
+    "__all__": [
+      "AnthropicMessagesAdapter"
+    ],
+    "path": "src/sciretriever/agents/providers/anthropic.py",
+    "symbols": [
+      "AnthropicMessagesAdapter"
+    ]
+  },
+  "sciretriever.agents.providers.base": {
+    "__all__": [
+      "ANTHROPIC_ACCESS_SCOPE",
+      "ANTHROPIC_BASELINE_ACCESS_POLICY",
+      "OPENAI_ACCESS_SCOPE",
+      "OPENAI_BASELINE_ACCESS_POLICY",
+      "agent_http_connection",
+      "agent_request_endpoint",
+      "anthropic_input_parts",
+      "image_data_url",
+      "openai_chat_input_parts",
+      "openai_responses_input_parts",
+      "tool_declarations",
+      "usage_from_payload",
+      "ProviderHttpAdapterBase"
+    ],
+    "path": "src/sciretriever/agents/providers/base.py",
+    "symbols": [
+      "ANTHROPIC_ACCESS_SCOPE",
+      "ANTHROPIC_BASELINE_ACCESS_POLICY",
+      "ANTHROPIC_CREDENTIAL_ORIGIN",
+      "ANTHROPIC_ENDPOINT",
+      "OPENAI_ACCESS_SCOPE",
+      "OPENAI_BASELINE_ACCESS_POLICY",
+      "OPENAI_CREDENTIAL_ORIGIN",
+      "OPENAI_ENDPOINT",
+      "ProviderHttpAdapterBase",
+      "agent_http_connection",
+      "agent_request_endpoint",
+      "anthropic_input_parts",
+      "image_data_url",
+      "openai_chat_input_parts",
+      "openai_responses_input_parts",
+      "provider_failure",
+      "tool_declarations",
+      "usage_from_payload"
+    ]
+  },
+  "sciretriever.agents.providers.models": {
+    "__all__": [
+      "AgentModelCatalog",
+      "AgentModelCatalogClient",
+      "AgentModelSummary"
+    ],
+    "path": "src/sciretriever/agents/providers/models.py",
+    "symbols": [
+      "AgentModelCatalog",
+      "AgentModelCatalogClient",
+      "AgentModelSummary"
+    ]
+  },
+  "sciretriever.agents.providers.openai_chat": {
+    "__all__": [
+      "OpenAIChatCompletionsAdapter"
+    ],
+    "path": "src/sciretriever/agents/providers/openai_chat.py",
+    "symbols": [
+      "OpenAIChatCompletionsAdapter"
+    ]
+  },
+  "sciretriever.agents.providers.openai_responses": {
+    "__all__": [
+      "OpenAIResponsesAdapter"
+    ],
+    "path": "src/sciretriever/agents/providers/openai_responses.py",
+    "symbols": [
+      "OpenAIResponsesAdapter"
+    ]
+  },
+  "sciretriever.agents.providers.sse": {
+    "__all__": [
+      "ServerSentEvent",
+      "parse_sse_events"
+    ],
+    "path": "src/sciretriever/agents/providers/sse.py",
+    "symbols": [
+      "ServerSentEvent",
+      "parse_sse_events"
+    ]
+  },
+  "sciretriever.agents.runtime": {
+    "__all__": [
+      "AgentRoleBinding",
+      "AgentRoleIdentity",
+      "AgentRuntime"
+    ],
+    "path": "src/sciretriever/agents/runtime.py",
+    "symbols": [
+      "AgentRoleBinding",
+      "AgentRoleIdentity",
+      "AgentRuntime"
+    ]
+  },
+  "sciretriever.agents.tools": {
+    "__all__": [
+      "AgentToolCall",
+      "AgentToolDeclaration"
+    ],
+    "path": "src/sciretriever/agents/tools.py",
+    "symbols": [
+      "AgentToolCall",
+      "AgentToolDeclaration",
+      "MAX_TOOLS",
+      "canonical_json_bytes",
+      "parse_strict_json",
+      "parse_strict_json_object",
+      "validate_tool_arguments"
+    ]
+  },
+  "sciretriever.analysis.__init__": {
+    "__all__": [],
+    "path": "src/sciretriever/analysis/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.analysis.api": {
+    "__all__": [
+      "AnalysisApi",
+      "ContentAnalysisFailure",
+      "ContentAnalysisInput",
+      "ContentAnalysisResult",
+      "ReferenceLookupFailure"
+    ],
+    "path": "src/sciretriever/analysis/api.py",
+    "symbols": [
+      "AnalysisApi",
+      "ContentAnalysisResult"
+    ]
+  },
+  "sciretriever.analysis.content": {
+    "__all__": [
+      "ContentAnalysisFailure",
+      "ContentAnalysisInput",
+      "ContentAnalysisLimits",
+      "content_analysis_failure"
+    ],
+    "path": "src/sciretriever/analysis/content.py",
+    "symbols": [
+      "ContentAnalysisFailure",
+      "ContentAnalysisLimits",
+      "content_analysis_failure"
+    ]
+  },
+  "sciretriever.analysis.failures": {
+    "__all__": [
+      "analysis_cancelled_failure",
+      "analysis_internal_failure",
+      "normalize_agent_failure"
+    ],
+    "path": "src/sciretriever/analysis/failures.py",
+    "symbols": [
+      "analysis_cancelled_failure",
+      "analysis_internal_failure",
+      "normalize_agent_failure"
+    ]
+  },
+  "sciretriever.analysis.markdown": {
+    "__all__": [
+      "ContentMarkdownDraft",
+      "build_content_analysis_call",
+      "parse_content_markdown_draft",
+      "parse_content_markdown_response",
+      "render_canonical_markdown"
+    ],
+    "path": "src/sciretriever/analysis/markdown.py",
+    "symbols": [
+      "ContentMarkdownDraft",
+      "build_content_analysis_call",
+      "parse_content_markdown_draft",
+      "parse_content_markdown_response",
+      "render_canonical_markdown"
+    ]
+  },
+  "sciretriever.analysis.markdown_rules": {
+    "__all__": [
+      "ContentMarkdownError",
+      "FINAL_FIXED_TITLES",
+      "FIXED_SECTION_TITLES",
+      "METADATA_FIELDS",
+      "MISSING",
+      "REFERENCE_TITLE",
+      "fixed_role_for_title",
+      "heading_comparison_key",
+      "is_fixed_heading_title",
+      "is_missing_expression",
+      "is_parallel_metadata_title",
+      "validate_references",
+      "validate_sections"
+    ],
+    "path": "src/sciretriever/analysis/markdown_rules.py",
+    "symbols": [
+      "ContentMarkdownError",
+      "FINAL_FIXED_TITLES",
+      "FIXED_SECTION_TITLES",
+      "METADATA_FIELDS",
+      "MISSING",
+      "REFERENCE_TITLE",
+      "fixed_role_for_title",
+      "heading_comparison_key",
+      "is_fixed_heading_title",
+      "is_missing_expression",
+      "is_parallel_metadata_title",
+      "validate_references",
+      "validate_sections"
+    ]
+  },
+  "sciretriever.analysis.metadata": {
+    "__all__": [
+      "MetadataAnalysisFailure",
+      "MetadataAnalysisReceipt",
+      "MetadataAnalysisStage",
+      "MetadataStageInput"
+    ],
+    "path": "src/sciretriever/analysis/metadata.py",
+    "symbols": [
+      "MetadataAnalysisFailure",
+      "MetadataAnalysisReceipt",
+      "MetadataAnalysisStage",
+      "MetadataStageInput"
+    ]
+  },
+  "sciretriever.analysis.metadata_rules": {
+    "__all__": [
+      "metadata_input_sha256"
+    ],
+    "path": "src/sciretriever/analysis/metadata_rules.py",
+    "symbols": [
+      "MetadataRuleKind",
+      "MetadataRuleViolation",
+      "metadata_input_sha256",
+      "validate_metadata_proposal",
+      "validate_user_observations"
+    ]
+  },
+  "sciretriever.analysis.ports": {
+    "__all__": [
+      "AnalysisArtifactPublicationPort",
+      "AnalysisArtifactReadPort",
+      "AnalysisCurrentInputPort",
+      "AnalysisCall",
+      "AnalysisRequest",
+      "AnalysisRequestKind",
+      "ContentAnalysisInput",
+      "ContentInputIdentity",
+      "StagedContentMarkdown"
+    ],
+    "path": "src/sciretriever/analysis/ports.py",
+    "symbols": [
+      "AnalysisArtifactPublicationPort",
+      "AnalysisArtifactReadPort",
+      "AnalysisCall",
+      "AnalysisCurrentInputPort",
+      "AnalysisRequest",
+      "AnalysisRequestKind",
+      "ContentAnalysisInput",
+      "ContentInputIdentity",
+      "StagedContentMarkdown",
+      "canonical_json_bytes",
+      "parse_strict_json_object",
+      "utf8_size"
+    ]
+  },
+  "sciretriever.analysis.references": {
+    "__all__": [
+      "ReferenceLookupBudget",
+      "ReferenceLookupFailure",
+      "ReferenceLookupStage",
+      "build_reference_lookup_call",
+      "parse_reference_lookup_response"
+    ],
+    "path": "src/sciretriever/analysis/references.py",
+    "symbols": [
+      "ReferenceLookupBudget",
+      "ReferenceLookupFailure",
+      "ReferenceLookupStage",
+      "build_reference_lookup_call",
+      "parse_reference_lookup_response"
+    ]
+  },
+  "sciretriever.analysis.service": {
+    "__all__": [
+      "AnalysisService",
+      "Clock",
+      "ProvenanceIdFactory"
+    ],
+    "path": "src/sciretriever/analysis/service.py",
+    "symbols": [
+      "AnalysisService",
+      "Clock",
+      "ProvenanceIdFactory"
+    ]
+  },
+  "sciretriever.bootstrap.__init__": {
+    "__all__": [
+      "ApplicationObjectGraph",
+      "BibliographyExchangeObjectGraph",
+      "BootstrapError",
+      "BootstrapExternalDependencies",
+      "CitationDiscoveryObjectGraph",
+      "DatabaseCompletionObjectGraph",
+      "LocalLibraryObjectGraph",
+      "ManualPdfObjectGraph",
+      "ProductionConfigurationProbeSession",
+      "PRODUCTION_BROWSER_CONFIGURATION_PROBE_ACCESS_KEYS",
+      "ProductionEntryScope",
+      "TopicDiscoveryObjectGraph",
+      "build_object_graph",
+      "build_production_configuration_probe_session",
+      "build_production_object_graph",
+      "fetch_agent_models"
+    ],
+    "path": "src/sciretriever/bootstrap/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.bootstrap.assembly": {
+    "__all__": [
+      "ApplicationObjectGraph",
+      "BibliographyExchangeObjectGraph",
+      "BootstrapError",
+      "BootstrapExternalDependencies",
+      "CitationDiscoveryObjectGraph",
+      "DatabaseCompletionObjectGraph",
+      "LocalLibraryObjectGraph",
+      "ManualPdfObjectGraph",
+      "PRODUCTION_BROWSER_CONFIGURATION_PROBE_ACCESS_KEYS",
+      "ProductionEntryScope",
+      "TopicDiscoveryObjectGraph",
+      "build_object_graph",
+      "build_production_object_graph"
+    ],
+    "path": "src/sciretriever/bootstrap/assembly.py",
+    "symbols": [
+      "build_object_graph",
+      "build_production_object_graph"
+    ]
+  },
+  "sciretriever.bootstrap.browser": {
+    "__all__": [],
+    "path": "src/sciretriever/bootstrap/browser.py",
+    "symbols": [
+      "PRODUCTION_BROWSER_CONFIGURATION_PROBE_ACCESS_KEYS"
+    ]
+  },
+  "sciretriever.bootstrap.errors": {
+    "__all__": [
+      "BootstrapError"
+    ],
+    "path": "src/sciretriever/bootstrap/errors.py",
+    "symbols": [
+      "BootstrapError"
+    ]
+  },
+  "sciretriever.bootstrap.graphs": {
+    "__all__": [],
+    "path": "src/sciretriever/bootstrap/graphs.py",
+    "symbols": [
+      "ApplicationObjectGraph",
+      "BibliographyExchangeEntry",
+      "BibliographyExchangeObjectGraph",
+      "BibliographyExportScope",
+      "BootstrapExternalDependencies",
+      "CitationDiscoveryEntry",
+      "CitationDiscoveryObjectGraph",
+      "DatabaseCompletionEntry",
+      "DatabaseCompletionObjectGraph",
+      "LocalLibraryEntry",
+      "LocalLibraryObjectGraph",
+      "ManualPdfEntry",
+      "ManualPdfObjectGraph",
+      "ProductionEntryScope",
+      "TopicDiscoveryEntry",
+      "TopicDiscoveryObjectGraph"
+    ]
+  },
+  "sciretriever.bootstrap.probes": {
+    "__all__": [
+      "ProductionConfigurationProbeSession",
+      "build_production_configuration_probe_session",
+      "fetch_agent_models"
+    ],
+    "path": "src/sciretriever/bootstrap/probes.py",
+    "symbols": [
+      "ProductionConfigurationProbeSession",
+      "build_production_configuration_probe_session",
+      "fetch_agent_models"
+    ]
+  },
+  "sciretriever.bootstrap.services": {
+    "__all__": [],
+    "path": "src/sciretriever/bootstrap/services.py",
+    "symbols": []
+  },
+  "sciretriever.bootstrap.storage": {
+    "__all__": [],
+    "path": "src/sciretriever/bootstrap/storage.py",
+    "symbols": []
+  },
+  "sciretriever.configuration.__init__": {
+    "__all__": [
+      "AcquisitionSourcesConfig",
+      "AUTO_ACQUISITION_SOURCE_PROVIDERS",
+      "AUTO_METADATA_SOURCE_PROVIDERS",
+      "AgentProtocol",
+      "AgentReasoningEffort",
+      "BrowserAccessStatus",
+      "BrowserConfig",
+      "BrowserConfigurationProbePort",
+      "BrowserConfigurationProbeResult",
+      "BrowserProfileCancellation",
+      "BrowserProfileHandle",
+      "BrowserProfilePresence",
+      "BrowserProfileRuntimeLease",
+      "BrowserProfileStatus",
+      "CLOAKBROWSER_BROWSER_VERSION",
+      "CLOAKBROWSER_ORIGIN",
+      "CLOAKBROWSER_PLAYWRIGHT_VERSION",
+      "CLOAKBROWSER_WRAPPER_VERSION",
+      "CloakRuntimeManager",
+      "AnalysisModelSelection",
+      "Configuration",
+      "ConfigurationDiagnostic",
+      "ConfigurationError",
+      "ConfigurationProbePort",
+      "ConfigurationProbeResult",
+      "ConfigurationProbeSummary",
+      "ConfigurationStatus",
+      "CredentialLookup",
+      "CredentialStatus",
+      "ProviderCapability",
+      "ProviderCredentialStatus",
+      "ProviderName",
+      "ModelConfig",
+      "ModelProviderConfig",
+      "ModelProvidersConfig",
+      "ModelRegistryUpdate",
+      "ModelsConfig",
+      "RuntimeSecretLookup",
+      "SciHubAcquisitionConfig",
+      "UnpaywallAcquisitionConfig",
+      "browser_access_status",
+      "browser_profile_path",
+      "browser_profile_identity_status",
+      "browser_profile_status",
+      "build_model_configuration",
+      "build_model_provider_configuration",
+      "configurable_credential_providers",
+      "configure_browser_access_profile",
+      "configured_browser_group_policies",
+      "configuration_diff",
+      "configuration_path",
+      "configuration_runtime_status",
+      "configuration_service_origin",
+      "configuration_status",
+      "core_credential_section_exists",
+      "credential_diagnostic",
+      "credential_field_specs",
+      "credential_path",
+      "credential_section_exists",
+      "credential_status_for",
+      "eligible_production_browser_access_keys",
+      "initialize_browser_profile",
+      "load_configuration",
+      "load_credentials",
+      "load_editable_user_configuration",
+      "load_runtime_secrets",
+      "load_user_configuration",
+      "metadata_source_providers",
+      "model_provider_credential_section_exists",
+      "parse_configuration",
+      "remove_browser_profile",
+      "remove_model",
+      "remove_model_provider",
+      "remove_core_credentials",
+      "remove_credentials",
+      "remove_model_provider_credentials",
+      "resolve_browser_profile",
+      "resolve_task_model",
+      "run_acquisition_configuration_probes",
+      "run_browser_configuration_probe",
+      "run_configuration_probes",
+      "set_core_credentials",
+      "set_credentials",
+      "set_model_provider_credentials",
+      "select_analysis_model",
+      "select_browser_model",
+      "acquisition_source_providers",
+      "tightened_browser_group_policies",
+      "update_configuration_sections",
+      "update_core_service_configuration",
+      "update_model_provider_configuration",
+      "upsert_model",
+      "upsert_model_provider"
+    ],
+    "path": "src/sciretriever/configuration/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.configuration.agent_setup": {
+    "__all__": [
+      "AnalysisLimitsDisposition",
+      "AnalysisModelSelection",
+      "ModelRegistryUpdate",
+      "build_model_configuration",
+      "build_model_provider_configuration",
+      "remove_model",
+      "remove_model_provider",
+      "resolve_task_model",
+      "select_analysis_model",
+      "select_browser_model",
+      "upsert_model",
+      "upsert_model_provider"
+    ],
+    "path": "src/sciretriever/configuration/agent_setup.py",
+    "symbols": [
+      "AnalysisLimitsDisposition",
+      "AnalysisModelSelection",
+      "ModelRegistryUpdate",
+      "build_model_configuration",
+      "build_model_provider_configuration",
+      "remove_model",
+      "remove_model_provider",
+      "resolve_task_model",
+      "select_analysis_model",
+      "select_browser_model",
+      "upsert_model",
+      "upsert_model_provider"
+    ]
+  },
+  "sciretriever.configuration.browser_access": {
+    "__all__": [
+      "browser_access_status",
+      "configured_browser_group_policies",
+      "eligible_production_browser_access_keys",
+      "tightened_browser_group_policies"
+    ],
+    "path": "src/sciretriever/configuration/browser_access.py",
+    "symbols": [
+      "browser_access_status",
+      "configured_browser_group_policies",
+      "eligible_production_browser_access_keys",
+      "tightened_browser_group_policies"
+    ]
+  },
+  "sciretriever.configuration.browser_identity": {
+    "__all__": [
+      "BROWSER_VERSION",
+      "DIRECTORY_MODE",
+      "FILE_MODE",
+      "IDENTITY_SCHEMA",
+      "LANGUAGES",
+      "LOCALE",
+      "MANIFEST_NAME",
+      "MANIFEST_MAX_BYTES",
+      "PERSONA",
+      "SCREEN",
+      "TIMEZONE",
+      "BrowserProfileIdentityStatus",
+      "BrowserProfileLaunchIdentity",
+      "BrowserProfileTransitionError",
+      "manifest_bytes",
+      "manifest_path",
+      "new_identity",
+      "parse_identity_manifest",
+      "parse_manifest_bytes",
+      "publish_manifest",
+      "read_manifest"
+    ],
+    "path": "src/sciretriever/configuration/browser_identity.py",
+    "symbols": [
+      "BROWSER_VERSION",
+      "BrowserProfileIdentityStatus",
+      "BrowserProfileLaunchIdentity",
+      "BrowserProfileTransitionError",
+      "DIRECTORY_MODE",
+      "FILE_MODE",
+      "IDENTITY_SCHEMA",
+      "IDENTITY_SCHEMA_VERSION",
+      "LANGUAGES",
+      "LOCALE",
+      "MANIFEST_MAX_BYTES",
+      "MANIFEST_NAME",
+      "PERSONA",
+      "SCREEN",
+      "TIMEZONE",
+      "manifest_bytes",
+      "manifest_path",
+      "new_identity",
+      "parse_identity_manifest",
+      "parse_manifest_bytes",
+      "publish_manifest",
+      "read_manifest"
+    ]
+  },
+  "sciretriever.configuration.browser_profiles": {
+    "__all__": [
+      "BrowserProfileCancellation",
+      "BrowserProfileHandle",
+      "BrowserProfileIdentityStatus",
+      "BrowserProfileLaunchIdentity",
+      "BrowserProfilePresence",
+      "BrowserProfileRuntimeLease",
+      "BrowserProfileStatus",
+      "BrowserProfileTransitionError",
+      "browser_profile_path",
+      "browser_profile_status",
+      "browser_profile_identity_status",
+      "check_browser_profile_cancel",
+      "initialize_browser_profile",
+      "remove_browser_profile",
+      "resolve_browser_profile"
+    ],
+    "path": "src/sciretriever/configuration/browser_profiles.py",
+    "symbols": [
+      "BrowserProfileCancellation",
+      "BrowserProfileHandle",
+      "BrowserProfileRuntimeLease",
+      "browser_profile_identity_status",
+      "browser_profile_path",
+      "browser_profile_status",
+      "check_browser_profile_cancel",
+      "initialize_browser_profile",
+      "remove_browser_profile",
+      "resolve_browser_profile"
+    ]
+  },
+  "sciretriever.configuration.cloak_runtime": {
+    "__all__": [
+      "CLOAKBROWSER_ARCHIVE_SHA256",
+      "CLOAKBROWSER_BROWSER_VERSION",
+      "CLOAKBROWSER_ORIGIN",
+      "CLOAKBROWSER_PLATFORM",
+      "CLOAKBROWSER_PLAYWRIGHT_VERSION",
+      "CLOAKBROWSER_WRAPPER_VERSION",
+      "CloakBinaryInstaller",
+      "CloakBinarySpec",
+      "CloakBinaryVerification",
+      "CloakBinaryVerifier",
+      "CloakRuntimeLease",
+      "CloakRuntimeManager",
+      "CloakRuntimeStatus",
+      "DEFAULT_CLOAK_BINARY_SPEC",
+      "OfficialCloakBinaryInstaller",
+      "OfficialCloakBinaryVerifier",
+      "ProductionCloakBinaryInstaller",
+      "ProductionCloakBinaryVerifier",
+      "cloak_runtime_root"
+    ],
+    "path": "src/sciretriever/configuration/cloak_runtime.py",
+    "symbols": [
+      "CLOAKBROWSER_ARCHIVE_SHA256",
+      "CLOAKBROWSER_BROWSER_VERSION",
+      "CLOAKBROWSER_ORIGIN",
+      "CLOAKBROWSER_PLATFORM",
+      "CLOAKBROWSER_PLAYWRIGHT_VERSION",
+      "CLOAKBROWSER_WRAPPER_VERSION",
+      "CloakBinaryInstaller",
+      "CloakBinarySpec",
+      "CloakBinaryVerification",
+      "CloakBinaryVerifier",
+      "CloakRuntimeLease",
+      "CloakRuntimeManager",
+      "CloakRuntimeStatus",
+      "DEFAULT_CLOAK_BINARY_SPEC",
+      "OfficialCloakBinaryInstaller",
+      "OfficialCloakBinaryVerifier",
+      "ProductionCloakBinaryInstaller",
+      "ProductionCloakBinaryVerifier",
+      "cloak_runtime_root"
+    ]
+  },
+  "sciretriever.configuration.credential_edits": {
+    "__all__": [],
+    "path": "src/sciretriever/configuration/credential_edits.py",
+    "symbols": [
+      "remove_core_credentials",
+      "remove_credentials",
+      "remove_model_provider_credentials",
+      "set_core_credentials",
+      "set_credentials",
+      "set_model_provider_credentials",
+      "update_core_service_configuration",
+      "update_model_provider_configuration"
+    ]
+  },
+  "sciretriever.configuration.credentials": {
+    "__all__": [],
+    "path": "src/sciretriever/configuration/credentials.py",
+    "symbols": [
+      "CredentialLookup",
+      "RuntimeSecretLookup",
+      "configurable_credential_providers",
+      "configuration_service_origin",
+      "core_credential_section_exists",
+      "credential_diagnostic",
+      "credential_field_specs",
+      "credential_path",
+      "credential_section_exists",
+      "credential_status_for",
+      "load_credentials",
+      "load_runtime_secrets",
+      "model_provider_credential_section_exists"
+    ]
+  },
+  "sciretriever.configuration.documents": {
+    "__all__": [],
+    "path": "src/sciretriever/configuration/documents.py",
+    "symbols": [
+      "ConfigurationChange",
+      "configuration_diff",
+      "configuration_path",
+      "configure_browser_access_profile",
+      "load_configuration",
+      "load_editable_user_configuration",
+      "load_user_configuration",
+      "parse_configuration",
+      "update_configuration_sections"
+    ]
+  },
+  "sciretriever.configuration.errors": {
+    "__all__": [
+      "ConfigurationError",
+      "fail"
+    ],
+    "path": "src/sciretriever/configuration/errors.py",
+    "symbols": [
+      "ConfigurationError",
+      "fail"
+    ]
+  },
+  "sciretriever.configuration.file_store": {
+    "__all__": [],
+    "path": "src/sciretriever/configuration/file_store.py",
+    "symbols": []
+  },
+  "sciretriever.configuration.filesystem": {
+    "__all__": [
+      "current_uid",
+      "mode",
+      "safe_path",
+      "same_identity",
+      "same_metadata"
+    ],
+    "path": "src/sciretriever/configuration/filesystem.py",
+    "symbols": [
+      "current_uid",
+      "mode",
+      "safe_path",
+      "same_identity",
+      "same_metadata"
+    ]
+  },
+  "sciretriever.configuration.source_selection": {
+    "__all__": [
+      "AUTO_ACQUISITION_SOURCE_PROVIDERS",
+      "AUTO_METADATA_SOURCE_PROVIDERS",
+      "acquisition_source_providers",
+      "metadata_source_providers"
+    ],
+    "path": "src/sciretriever/configuration/source_selection.py",
+    "symbols": [
+      "AUTO_ACQUISITION_SOURCE_PROVIDERS",
+      "AUTO_METADATA_SOURCE_PROVIDERS",
+      "acquisition_source_providers",
+      "metadata_source_providers"
+    ]
+  },
+  "sciretriever.configuration.status": {
+    "__all__": [],
+    "path": "src/sciretriever/configuration/status.py",
+    "symbols": [
+      "BrowserConfigurationProbePort",
+      "ConfigurationProbePort",
+      "configuration_runtime_status",
+      "configuration_status",
+      "run_acquisition_configuration_probes",
+      "run_browser_configuration_probe",
+      "run_configuration_probes"
+    ]
+  },
+  "sciretriever.entry.api": {
+    "__all__": [
+      "EntryApi"
+    ],
+    "path": "src/sciretriever/entry/api.py",
+    "symbols": [
+      "EntryApi"
+    ]
+  },
+  "sciretriever.entry.citations": {
+    "__all__": [
+      "CitationDiscoveryOperation",
+      "DiscoveryRunIdFactory"
+    ],
+    "path": "src/sciretriever/entry/citations.py",
+    "symbols": [
+      "CitationDiscoveryOperation",
+      "DiscoveryRunIdFactory"
+    ]
+  },
+  "sciretriever.entry.cli.config_center.__init__": {
+    "__all__": [
+      "run_config",
+      "run_config_manager"
+    ],
+    "path": "src/sciretriever/entry/cli/config_center/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.entry.cli.config_center.analysis": {
+    "__all__": [
+      "manage_analyze"
+    ],
+    "path": "src/sciretriever/entry/cli/config_center/analysis.py",
+    "symbols": [
+      "manage_analyze"
+    ]
+  },
+  "sciretriever.entry.cli.config_center.browser": {
+    "__all__": [
+      "manage_browser"
+    ],
+    "path": "src/sciretriever/entry/cli/config_center/browser.py",
+    "symbols": [
+      "manage_browser"
+    ]
+  },
+  "sciretriever.entry.cli.config_center.commands": {
+    "__all__": [
+      "run_config"
+    ],
+    "path": "src/sciretriever/entry/cli/config_center/commands.py",
+    "symbols": [
+      "run_config"
+    ]
+  },
+  "sciretriever.entry.cli.config_center.common": {
+    "__all__": [
+      "ConfigurationCenterQuit",
+      "ask_boolean",
+      "ask_positive_integer",
+      "ask_text",
+      "confirm",
+      "confirm_changes",
+      "option",
+      "read_line",
+      "select_value"
+    ],
+    "path": "src/sciretriever/entry/cli/config_center/common.py",
+    "symbols": [
+      "ConfigurationCenterQuit",
+      "ask_boolean",
+      "ask_positive_integer",
+      "ask_text",
+      "confirm",
+      "confirm_changes",
+      "option",
+      "read_line",
+      "select_value"
+    ]
+  },
+  "sciretriever.entry.cli.config_center.manager": {
+    "__all__": [
+      "configuration_home_rows",
+      "run_config_manager"
+    ],
+    "path": "src/sciretriever/entry/cli/config_center/manager.py",
+    "symbols": [
+      "configuration_home_rows",
+      "run_config_manager"
+    ]
+  },
+  "sciretriever.entry.cli.config_center.models": {
+    "__all__": [
+      "choose_model",
+      "manage_models"
+    ],
+    "path": "src/sciretriever/entry/cli/config_center/models.py",
+    "symbols": [
+      "choose_model",
+      "manage_models"
+    ]
+  },
+  "sciretriever.entry.cli.config_center.parsing": {
+    "__all__": [
+      "manage_parse"
+    ],
+    "path": "src/sciretriever/entry/cli/config_center/parsing.py",
+    "symbols": [
+      "manage_parse"
+    ]
+  },
+  "sciretriever.entry.cli.config_center.probes": {
+    "__all__": [
+      "ConfigurationTestExecution",
+      "ConfigurationTestRequest",
+      "confirmation_message",
+      "execute_configuration_test",
+      "payload_mapping",
+      "run_interactive_test"
+    ],
+    "path": "src/sciretriever/entry/cli/config_center/probes.py",
+    "symbols": [
+      "ConfigurationTestExecution",
+      "ConfigurationTestOwner",
+      "ConfigurationTestPayload",
+      "ConfigurationTestRequest",
+      "confirmation_message",
+      "execute_configuration_test",
+      "payload_mapping",
+      "run_interactive_test"
+    ]
+  },
+  "sciretriever.entry.cli.config_center.source_credentials": {
+    "__all__": [
+      "credential_state",
+      "manage_source_key"
+    ],
+    "path": "src/sciretriever/entry/cli/config_center/source_credentials.py",
+    "symbols": [
+      "credential_state",
+      "manage_source_key"
+    ]
+  },
+  "sciretriever.entry.cli.config_center.sources": {
+    "__all__": [
+      "manage_download",
+      "manage_search"
+    ],
+    "path": "src/sciretriever/entry/cli/config_center/sources.py",
+    "symbols": [
+      "manage_download",
+      "manage_search"
+    ]
+  },
+  "sciretriever.entry.cli.config_center.status": {
+    "__all__": [
+      "ordinary_provider_settings",
+      "run_status",
+      "show_local_status",
+      "status_payload"
+    ],
+    "path": "src/sciretriever/entry/cli/config_center/status.py",
+    "symbols": [
+      "ordinary_provider_settings",
+      "run_status",
+      "show_local_status",
+      "status_payload"
+    ]
+  },
+  "sciretriever.entry.cli.config_probe_diagnostics": {
+    "__all__": [
+      "diagnosed_probe_payload",
+      "diagnosis_lines",
+      "ProbeDiagnosis"
+    ],
+    "path": "src/sciretriever/entry/cli/config_probe_diagnostics.py",
+    "symbols": [
+      "ProbeDiagnosis",
+      "diagnosed_probe_payload",
+      "diagnosis_lines"
+    ]
+  },
+  "sciretriever.entry.cli.config_ui": {
+    "__all__": [
+      "ConfigActionKind",
+      "ConfigConsole",
+      "ConfigOption",
+      "ConfigStatusPresenter",
+      "ConfigTheme",
+      "TerminalChoice",
+      "interactive_terminal",
+      "resolve_theme"
+    ],
+    "path": "src/sciretriever/entry/cli/config_ui.py",
+    "symbols": [
+      "ConfigActionKind",
+      "ConfigConsole",
+      "ConfigOption",
+      "ConfigStatusPresenter",
+      "ConfigTheme",
+      "TerminalChoice",
+      "ThemePalette",
+      "interactive_terminal",
+      "resolve_theme"
+    ]
+  },
+  "sciretriever.entry.cli.main": {
+    "__all__": [
+      "main"
+    ],
+    "path": "src/sciretriever/entry/cli/main.py",
+    "symbols": [
+      "main"
+    ]
+  },
+  "sciretriever.entry.codecs._common": {
+    "__all__": [
+      "CodecDocumentError",
+      "DEFAULT_MAX_INPUT_BYTES",
+      "affiliations",
+      "author_display",
+      "author_omissions",
+      "clean_text",
+      "display_author",
+      "document_failure",
+      "empty_document",
+      "has_export_identity",
+      "identifier_groups",
+      "identifier_omissions",
+      "identifiers",
+      "malformed_record",
+      "metadata_record",
+      "normalize_unicode_scalars",
+      "omission",
+      "ordered_text",
+      "parse_year",
+      "publication_date",
+      "read_text",
+      "split_keywords",
+      "unencodable_record",
+      "validate_record_unicode",
+      "write_all"
+    ],
+    "path": "src/sciretriever/entry/codecs/_common.py",
+    "symbols": [
+      "CodecDocumentError",
+      "DEFAULT_MAX_INPUT_BYTES",
+      "affiliations",
+      "author_display",
+      "author_omissions",
+      "clean_text",
+      "display_author",
+      "document_failure",
+      "empty_document",
+      "has_export_identity",
+      "identifier_groups",
+      "identifier_omissions",
+      "identifiers",
+      "malformed_record",
+      "metadata_record",
+      "normalize_unicode_scalars",
+      "omission",
+      "ordered_text",
+      "parse_year",
+      "publication_date",
+      "read_text",
+      "split_keywords",
+      "unencodable_record",
+      "validate_record_unicode",
+      "write_all"
+    ]
+  },
+  "sciretriever.entry.codecs.bibtex": {
+    "__all__": [
+      "decode_bibtex",
+      "encode_bibtex"
+    ],
+    "path": "src/sciretriever/entry/codecs/bibtex.py",
+    "symbols": [
+      "decode_bibtex",
+      "encode_bibtex"
+    ]
+  },
+  "sciretriever.entry.codecs.csl_json": {
+    "__all__": [
+      "decode_csl_json",
+      "encode_csl_json"
+    ],
+    "path": "src/sciretriever/entry/codecs/csl_json.py",
+    "symbols": [
+      "JsonValue",
+      "decode_csl_json",
+      "encode_csl_json"
+    ]
+  },
+  "sciretriever.entry.codecs.ris": {
+    "__all__": [
+      "decode_ris",
+      "encode_ris"
+    ],
+    "path": "src/sciretriever/entry/codecs/ris.py",
+    "symbols": [
+      "decode_ris",
+      "encode_ris"
+    ]
+  },
+  "sciretriever.entry.completion": {
+    "__all__": [
+      "DatabaseCompletionOperation"
+    ],
+    "path": "src/sciretriever/entry/completion.py",
+    "symbols": [
+      "AssetDatabaseCompletionOperation",
+      "DatabaseCompletionOperation"
+    ]
+  },
+  "sciretriever.entry.discovery": {
+    "__all__": [
+      "TopicDiscoveryOperation"
+    ],
+    "path": "src/sciretriever/entry/discovery.py",
+    "symbols": [
+      "DiscoveryRunIdFactory",
+      "TopicDiscoveryOperation"
+    ]
+  },
+  "sciretriever.entry.exchange": {
+    "__all__": [
+      "BibliographyCodecs",
+      "BibliographyExportScope",
+      "BibliographyOperations",
+      "ObservationIdFactory",
+      "ProvenanceIdFactory"
+    ],
+    "path": "src/sciretriever/entry/exchange.py",
+    "symbols": [
+      "BibliographyCodecs",
+      "BibliographyExportScope",
+      "BibliographyOperations",
+      "ObservationIdFactory",
+      "ProvenanceIdFactory"
+    ]
+  },
+  "sciretriever.entry.execution": {
+    "__all__": [
+      "ExecutionSnapshotError",
+      "FrozenLiteratureCandidate",
+      "TransientExecution",
+      "TransientLiteratureExecution",
+      "TransientMetaExecution",
+      "candidate_order_key",
+      "execute_database_write",
+      "freeze_execution",
+      "order_execution_candidates"
+    ],
+    "path": "src/sciretriever/entry/execution.py",
+    "symbols": [
+      "ExecutionSnapshotError",
+      "FrozenLiteratureCandidate",
+      "TransientExecution",
+      "TransientLiteratureExecution",
+      "TransientMetaExecution",
+      "candidate_order_key",
+      "execute_database_write",
+      "freeze_execution",
+      "order_execution_candidates"
+    ]
+  },
+  "sciretriever.entry.library": {
+    "__all__": [
+      "LibraryOperations"
+    ],
+    "path": "src/sciretriever/entry/library.py",
+    "symbols": [
+      "LibraryOperations"
+    ]
+  },
+  "sciretriever.entry.manual": {
+    "__all__": [
+      "ManualPdfOperation"
+    ],
+    "path": "src/sciretriever/entry/manual.py",
+    "symbols": [
+      "ManualPdfOperation"
+    ]
+  },
+  "sciretriever.entry.orchestration": {
+    "__all__": [
+      "AcquisitionRequestFactory",
+      "AssetCompletionTargetOrchestrator",
+      "AutomaticAcquisitionPort",
+      "CommitExecutor",
+      "CommitNotStarted",
+      "CompletionStageFailure",
+      "CompletionTargetOrchestrator",
+      "ContentAcceptancePort",
+      "ContentAnalysisInputFactory",
+      "ContentAnalysisPort",
+      "ParserRequestFactory",
+      "ParsingOperationPort",
+      "TargetOrchestrationResult"
+    ],
+    "path": "src/sciretriever/entry/orchestration.py",
+    "symbols": [
+      "AcquisitionRequestFactory",
+      "AssetCompletionTargetOrchestrator",
+      "AutomaticAcquisitionPort",
+      "CommitExecutor",
+      "CommitNotStarted",
+      "CompletionStage",
+      "CompletionStageFailure",
+      "CompletionTargetOrchestrator",
+      "ContentAcceptancePort",
+      "ContentAnalysisInputFactory",
+      "ContentAnalysisPort",
+      "ParserRequestFactory",
+      "ParsingOperationPort",
+      "TargetOrchestrationResult"
+    ]
+  },
+  "sciretriever.entry.ports": {
+    "__all__": [
+      "AtomicUserOutputPort",
+      "BibliographyCodecPort",
+      "BibliographyDecodeResult",
+      "BibliographyEncodeResult",
+      "BibliographyFieldOmission",
+      "BibliographyRecordFailure",
+      "ClockPort",
+      "CurrentFactsSnapshot",
+      "CurrentFactsSnapshotReadPort",
+      "DecodedBibliographyItem",
+      "DiscoveryPublicationPort",
+      "DiscoveryRunReadPort",
+      "DiscoveryRunRepositoryPort",
+      "DiscoveryRunSnapshot",
+      "ExecutionCurrentFacts",
+      "DiscoveryRunRecoveryPort",
+      "LiteratureSelectorSnapshot",
+      "MetaSelectorSnapshot",
+      "NoUsableContentCleanupCommand",
+      "NoUsableContentCleanupFailure",
+      "NoUsableContentCleanupPort",
+      "NoUsableContentCleanupResult",
+      "ProviderRelationCandidatePage",
+      "ProviderRelationCandidateReadPort",
+      "ProviderRelationCandidateReadRequest",
+      "ProviderRelationCandidateRef",
+      "ProviderRelationSeedFacts",
+      "SelectorSnapshot",
+      "SelectorSnapshotReadPort",
+      "TerminalDiscoveryRunStatus",
+      "UserOutputConflictError",
+      "UserOutputTarget",
+      "WriteAdmissionFailure",
+      "WriteAdmissionPort"
+    ],
+    "path": "src/sciretriever/entry/ports.py",
+    "symbols": [
+      "AtomicUserOutputPort",
+      "BibliographyCodecPort",
+      "BibliographyDecodeResult",
+      "BibliographyEncodeResult",
+      "BibliographyFieldOmission",
+      "BibliographyRecordFailure",
+      "ClockPort",
+      "CurrentFactsSnapshot",
+      "CurrentFactsSnapshotReadPort",
+      "DecodedBibliographyItem",
+      "DiscoveryPublicationPort",
+      "DiscoveryRunReadPort",
+      "DiscoveryRunRecoveryPort",
+      "DiscoveryRunRepositoryPort",
+      "DiscoveryRunSnapshot",
+      "ExecutionCurrentFacts",
+      "LiteratureSelectorSnapshot",
+      "MetaSelectorSnapshot",
+      "NoUsableContentCleanupCommand",
+      "NoUsableContentCleanupFailure",
+      "NoUsableContentCleanupPort",
+      "NoUsableContentCleanupResult",
+      "ProviderRelationCandidatePage",
+      "ProviderRelationCandidateReadPort",
+      "ProviderRelationCandidateReadRequest",
+      "ProviderRelationCandidateRef",
+      "ProviderRelationSeedFacts",
+      "SelectorSnapshot",
+      "SelectorSnapshotReadPort",
+      "TerminalDiscoveryRunStatus",
+      "UserOutputConflictError",
+      "UserOutputTarget",
+      "WriteAdmissionFailure",
+      "WriteAdmissionPort"
+    ]
+  },
+  "sciretriever.literature.__init__": {
+    "__all__": [],
+    "path": "src/sciretriever/literature/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.literature.api": {
+    "__all__": [
+      "ContentAcceptanceDecision",
+      "ContentReferenceClosureToken",
+      "CurrentContentLineage",
+      "CurrentLiteratureFacts",
+      "LiteratureApi",
+      "LiteratureArtifactReadError",
+      "LiteratureArtifactReference",
+      "ObservationAcceptanceResult",
+      "NoUsableContentCleanupPreparation",
+      "ReferenceCleanupDecision",
+      "StalePreconditionError",
+      "derive_status",
+      "provider_key_matches_seed"
+    ],
+    "path": "src/sciretriever/literature/api.py",
+    "symbols": [
+      "LiteratureApi"
+    ]
+  },
+  "sciretriever.literature.content": {
+    "__all__": [
+      "ContentAcceptanceDecision",
+      "ContentAcceptanceReason",
+      "ContentAcceptanceReplacement",
+      "canonical_literature_content_json",
+      "decide_content_acceptance",
+      "literature_content_artifact",
+      "metadata_sha256"
+    ],
+    "path": "src/sciretriever/literature/content.py",
+    "symbols": [
+      "ContentAcceptanceDecision",
+      "ContentAcceptanceReason",
+      "ContentAcceptanceReplacement",
+      "canonical_literature_content_json",
+      "decide_content_acceptance",
+      "literature_content_artifact",
+      "metadata_sha256"
+    ]
+  },
+  "sciretriever.literature.exchange": {
+    "__all__": [
+      "BibliographicObservationError",
+      "ExportSelectionError",
+      "LiteratureExchangeError",
+      "observation_from_bibliographic_record",
+      "select_export_literatures"
+    ],
+    "path": "src/sciretriever/literature/exchange.py",
+    "symbols": [
+      "BibliographicObservationError",
+      "ExportSelectionError",
+      "LiteratureExchangeError",
+      "observation_from_bibliographic_record",
+      "select_export_literatures"
+    ]
+  },
+  "sciretriever.literature.identity": {
+    "__all__": [
+      "FallbackIdentityKey",
+      "IdentityIndex",
+      "IdentityDecision",
+      "IdentityDecisionKind",
+      "MetaLiteratureDecision",
+      "MetaLiteratureDecisionKind",
+      "STABLE_IDENTIFIER_NAMESPACES",
+      "StableIdentifierKey",
+      "VersionEvidence",
+      "fallback_identity_key",
+      "fallback_identity_sha256",
+      "normalize_identity_text",
+      "provider_key_matches_seed",
+      "resolve_literature_identity",
+      "resolve_meta_literature",
+      "stable_identifier_keys",
+      "stable_identifier_index"
+    ],
+    "path": "src/sciretriever/literature/identity.py",
+    "symbols": [
+      "FallbackIdentityKey",
+      "IdentityDecision",
+      "IdentityDecisionKind",
+      "IdentityIndex",
+      "MetaLiteratureDecision",
+      "MetaLiteratureDecisionKind",
+      "STABLE_IDENTIFIER_NAMESPACES",
+      "StableIdentifierKey",
+      "VersionEvidence",
+      "fallback_identity_key",
+      "fallback_identity_sha256",
+      "normalize_identity_text",
+      "provider_key_matches_seed",
+      "resolve_literature_identity",
+      "resolve_meta_literature",
+      "stable_identifier_index",
+      "stable_identifier_keys"
+    ]
+  },
+  "sciretriever.literature.metadata": {
+    "__all__": [
+      "AcceptanceOutcome",
+      "MetadataObservationAcceptanceDecision",
+      "MetadataProjectionDecision",
+      "ProjectionOutcome",
+      "accept_observation",
+      "project_metadata",
+      "same_provider_observation",
+      "same_user_observation",
+      "user_observation_semantic_sha256"
+    ],
+    "path": "src/sciretriever/literature/metadata.py",
+    "symbols": [
+      "AcceptanceOutcome",
+      "MetadataObservationAcceptanceDecision",
+      "MetadataProjectionDecision",
+      "ProjectionOutcome",
+      "accept_observation",
+      "project_metadata",
+      "same_provider_observation",
+      "same_user_observation",
+      "user_observation_semantic_sha256"
+    ]
+  },
+  "sciretriever.literature.ports": {
+    "__all__": [
+      "ContentAcceptanceReplacement",
+      "ContentReadContext",
+      "ContentReadRequest",
+      "ContentPublicationCommand",
+      "ContentPublicationPort",
+      "ContentReferenceClosureToken",
+      "CurrentContentLineage",
+      "CurrentLiteratureFacts",
+      "CurrentPrimaryPdf",
+      "CurrentFactsReadContext",
+      "CurrentFactsReadRequest",
+      "DeletionReadContext",
+      "DeletionReadRequest",
+      "FallbackIdentityIndex",
+      "IdentityReadContext",
+      "IdentityReadRequest",
+      "IdentityObservationPublicationCommand",
+      "IdentityObservationPublicationPort",
+      "LiteratureDeletionCommand",
+      "LiteratureArtifactReadError",
+      "LiteratureArtifactReadPort",
+      "LiteratureArtifactReference",
+      "LiteratureCursorError",
+      "LiteratureIdentityToken",
+      "LiteratureMaintenancePort",
+      "LiteratureObservation",
+      "LiteratureQueryPort",
+      "LiteratureReadPort",
+      "MetaLiteratureReadContext",
+      "MetaLiteratureReadRequest",
+      "MetaLiteratureIdentityToken",
+      "ProviderRecordReadKey",
+      "ProviderRelationObservationReadContext",
+      "ProviderRelationObservationReadRequest",
+      "ReferenceReadContext",
+      "ReferenceReadRequest",
+      "ReferencePublicationCommand",
+      "ReferencePublicationPort",
+      "ReferenceCleanupDecision",
+      "ReferenceCursorPosition",
+      "ReferenceSupportAppendCommand",
+      "StalePreconditionError",
+      "StructuredContentArtifactContent",
+      "SearchCursorPosition",
+      "UserObservationIndex",
+      "VersionLinkReadKey",
+      "analysis_input_sha256",
+      "canonical_literature_content_json",
+      "content_reference_closure_token",
+      "decode_reference_cursor",
+      "decode_search_cursor",
+      "derive_status",
+      "encode_reference_cursor",
+      "encode_search_cursor",
+      "first_missing_step",
+      "fts5_index_text",
+      "literature_content_artifact",
+      "metadata_sha256",
+      "normalize_contains_text",
+      "normalized_contains",
+      "quoted_fts5_and_query",
+      "reference_sort_key",
+      "relevance_sort_key"
+    ],
+    "path": "src/sciretriever/literature/ports.py",
+    "symbols": [
+      "ContentPublicationCommand",
+      "ContentPublicationPort",
+      "ContentReadContext",
+      "ContentReadRequest",
+      "ContentReferenceClosureToken",
+      "CurrentFactsReadContext",
+      "CurrentFactsReadRequest",
+      "DeletionReadContext",
+      "DeletionReadRequest",
+      "FallbackIdentityIndex",
+      "IdentityObservationPublicationCommand",
+      "IdentityObservationPublicationPort",
+      "IdentityReadContext",
+      "IdentityReadRequest",
+      "LiteratureArtifactReadError",
+      "LiteratureArtifactReadPort",
+      "LiteratureArtifactReference",
+      "LiteratureDeletionCommand",
+      "LiteratureIdentityToken",
+      "LiteratureMaintenancePort",
+      "LiteratureObservation",
+      "LiteratureQueryPort",
+      "LiteratureReadPort",
+      "MetaLiteratureIdentityToken",
+      "MetaLiteratureReadContext",
+      "MetaLiteratureReadRequest",
+      "ProviderRecordReadKey",
+      "ProviderRelationObservationReadContext",
+      "ProviderRelationObservationReadRequest",
+      "ReferencePublicationCommand",
+      "ReferencePublicationPort",
+      "ReferenceReadContext",
+      "ReferenceReadRequest",
+      "ReferenceSupportAppendCommand",
+      "StalePreconditionError",
+      "StructuredContentArtifactContent",
+      "UserObservationIndex",
+      "VersionLinkReadKey",
+      "content_reference_closure_token"
+    ]
+  },
+  "sciretriever.literature.query": {
+    "__all__": [
+      "LiteratureCursorError",
+      "LiteratureQueryError",
+      "ReferenceCursorPosition",
+      "SearchCursorPosition",
+      "decode_reference_cursor",
+      "decode_search_cursor",
+      "encode_reference_cursor",
+      "encode_search_cursor",
+      "first_missing_step",
+      "fts5_index_text",
+      "matches_all_requested_values",
+      "matches_any_requested_value",
+      "normalize_contains_text",
+      "normalize_query_text",
+      "normalized_contains",
+      "query_fingerprint",
+      "quoted_fts5_and_query",
+      "reference_sort_key",
+      "relevance_sort_key",
+      "text_search_terms"
+    ],
+    "path": "src/sciretriever/literature/query.py",
+    "symbols": [
+      "LiteratureCursorError",
+      "LiteratureQueryError",
+      "ReferenceCursorPosition",
+      "SearchCursorPosition",
+      "decode_reference_cursor",
+      "decode_search_cursor",
+      "encode_reference_cursor",
+      "encode_search_cursor",
+      "first_missing_step",
+      "fts5_index_text",
+      "matches_all_requested_values",
+      "matches_any_requested_value",
+      "normalize_contains_text",
+      "normalize_query_text",
+      "normalized_contains",
+      "query_fingerprint",
+      "quoted_fts5_and_query",
+      "reference_sort_key",
+      "relevance_sort_key",
+      "text_search_terms"
+    ]
+  },
+  "sciretriever.literature.references": {
+    "__all__": [
+      "ContentReferenceEvidence",
+      "MetadataReferenceEvidence",
+      "ProviderRelationEvidence",
+      "ReferenceAcceptanceDecision",
+      "ReferenceAcceptanceKind",
+      "ReferenceCleanupDecision",
+      "ReferenceCleanupKind",
+      "ReferenceSupportEvidence",
+      "decide_content_replacement_cleanup",
+      "decide_reference"
+    ],
+    "path": "src/sciretriever/literature/references.py",
+    "symbols": [
+      "ContentReferenceEvidence",
+      "MetadataReferenceEvidence",
+      "ProviderRelationEvidence",
+      "ReferenceAcceptanceDecision",
+      "ReferenceAcceptanceKind",
+      "ReferenceCleanupDecision",
+      "ReferenceCleanupKind",
+      "ReferenceSupportEvidence",
+      "decide_content_replacement_cleanup",
+      "decide_reference"
+    ]
+  },
+  "sciretriever.literature.service": {
+    "__all__": [
+      "IdFactory",
+      "LiteratureInvariantError",
+      "LiteratureMaintenanceResult",
+      "LiteratureNotFoundError",
+      "LiteratureService",
+      "LiteratureStatusResult",
+      "NoUsableContentCleanupPreparation",
+      "ObservationAcceptanceResult"
+    ],
+    "path": "src/sciretriever/literature/service.py",
+    "symbols": [
+      "IdFactory",
+      "LiteratureInvariantError",
+      "LiteratureMaintenanceResult",
+      "LiteratureNotFoundError",
+      "LiteratureService",
+      "LiteratureStatusResult",
+      "NoUsableContentCleanupPreparation",
+      "ObservationAcceptanceResult"
+    ]
+  },
+  "sciretriever.literature.state": {
+    "__all__": [
+      "CurrentContentLineage",
+      "CurrentLiteratureFacts",
+      "CurrentPrimaryPdf",
+      "derive_status"
+    ],
+    "path": "src/sciretriever/literature/state.py",
+    "symbols": [
+      "CurrentContentLineage",
+      "CurrentLiteratureFacts",
+      "CurrentPrimaryPdf",
+      "derive_status"
+    ]
+  },
+  "sciretriever.logging.__init__": {
+    "__all__": [],
+    "path": "src/sciretriever/logging/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.logging.api": {
+    "__all__": [
+      "configure_logging",
+      "get_logger"
+    ],
+    "path": "src/sciretriever/logging/api.py",
+    "symbols": [
+      "configure_logging",
+      "get_logger"
+    ]
+  },
+  "sciretriever.logging.presentation": {
+    "__all__": [
+      "DiagnosticFormatter",
+      "stream_output_width",
+      "stream_supports_color"
+    ],
+    "path": "src/sciretriever/logging/presentation.py",
+    "symbols": [
+      "DiagnosticFormatter",
+      "stream_output_width",
+      "stream_supports_color"
+    ]
+  },
+  "sciretriever.logging.redaction": {
+    "__all__": [],
+    "path": "src/sciretriever/logging/redaction.py",
+    "symbols": [
+      "RedactingFormatter",
+      "RedactionFilter",
+      "redact_record",
+      "redact_text"
+    ]
+  },
+  "sciretriever.logging.setup": {
+    "__all__": [],
+    "path": "src/sciretriever/logging/setup.py",
+    "symbols": [
+      "configure_logging"
+    ]
+  },
+  "sciretriever.metadata.__init__": {
+    "__all__": [
+      "MetadataApi",
+      "METADATA_PROVIDER_ORDER",
+      "METADATA_SEARCH_PROVIDER_ORDER",
+      "MetadataBatchResult",
+      "MetadataAssemblyDependencies",
+      "MetadataCapability",
+      "MetadataLookupRequest",
+      "MetadataProviderRegistration",
+      "MetadataProviderResult",
+      "MetadataProviderStatus",
+      "MetadataReferenceQueryRequest",
+      "MetadataRegistry",
+      "MetadataRegistryError",
+      "MetadataService",
+      "ProviderReferenceQuery",
+      "build_metadata_registry",
+      "metadata_provider_statuses",
+      "validate_metadata_provider_matrix"
+    ],
+    "path": "src/sciretriever/metadata/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.metadata.api": {
+    "__all__": [
+      "CancellationEvent",
+      "MAX_PROVIDER_RELATION_PUBLICATION_BATCH",
+      "MetadataApi",
+      "MetadataBatchResult",
+      "MetadataLookupRequest",
+      "MetadataProviderInvocation",
+      "MetadataProviderInvocationOutcome",
+      "MetadataProviderResult",
+      "MetadataPublication",
+      "MetadataReferenceQueryRequest",
+      "ProviderReferenceQuery",
+      "ProviderRelationObservationPublicationPort"
+    ],
+    "path": "src/sciretriever/metadata/api.py",
+    "symbols": [
+      "MetadataApi"
+    ]
+  },
+  "sciretriever.metadata.ports": {
+    "__all__": [
+      "MAX_PROVIDER_RELATION_PUBLICATION_BATCH",
+      "MetadataLookupPort",
+      "MetadataProviderFailure",
+      "ProviderRelationObservationPublicationPort",
+      "RawItemDelivery",
+      "RawItemSession",
+      "ReferenceQueryPort",
+      "TopicSearchPort"
+    ],
+    "path": "src/sciretriever/metadata/ports.py",
+    "symbols": [
+      "MAX_PROVIDER_RELATION_PUBLICATION_BATCH",
+      "MetadataLookupPort",
+      "MetadataProviderFailure",
+      "ProviderRelationObservationPublicationPort",
+      "RawItemDelivery",
+      "RawItemSession",
+      "ReferenceQueryPort",
+      "TopicSearchPort"
+    ]
+  },
+  "sciretriever.metadata.probe": {
+    "__all__": [
+      "MetadataProbeEvidence",
+      "MetadataProbeFailure",
+      "MetadataProbePort",
+      "probe_feedback_wall_time",
+      "run_metadata_probe",
+      "system_probe_wall_clock"
+    ],
+    "path": "src/sciretriever/metadata/probe.py",
+    "symbols": [
+      "MetadataProbeEvidence",
+      "MetadataProbeFailure",
+      "MetadataProbePort",
+      "probe_feedback_wall_time",
+      "run_metadata_probe",
+      "system_probe_wall_clock"
+    ]
+  },
+  "sciretriever.metadata.providers._shared.__init__": {
+    "__all__": [
+      "access_failure_to_provider_failure",
+      "header_value",
+      "interpreted_access_feedback",
+      "invalid_record_failure",
+      "monotonic_deadline_from_wall_time",
+      "optional_nonblank_string",
+      "optional_nonnegative_integer",
+      "parse_bounded_json",
+      "parse_bounded_xml",
+      "parse_retry_after",
+      "require_json_array",
+      "require_json_object",
+      "require_xml_root",
+      "retry_after_feedback",
+      "stabilize_provider_metadata_observation",
+      "stabilize_provider_relation_observation",
+      "strict_nonnegative_integer",
+      "xml_children"
+    ],
+    "path": "src/sciretriever/metadata/providers/_shared/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.metadata.providers._shared.failures": {
+    "__all__": [
+      "access_failure_to_provider_failure",
+      "conflicting_header_failure",
+      "invalid_record_failure",
+      "malformed_json_failure",
+      "malformed_xml_failure",
+      "response_too_large_failure",
+      "unknown_shape_failure",
+      "unsafe_xml_failure"
+    ],
+    "path": "src/sciretriever/metadata/providers/_shared/failures.py",
+    "symbols": [
+      "access_failure_to_provider_failure",
+      "conflicting_header_failure",
+      "invalid_record_failure",
+      "malformed_json_failure",
+      "malformed_xml_failure",
+      "response_too_large_failure",
+      "unknown_shape_failure",
+      "unsafe_xml_failure"
+    ]
+  },
+  "sciretriever.metadata.providers._shared.feedback": {
+    "__all__": [
+      "header_value",
+      "interpreted_access_feedback",
+      "monotonic_deadline_from_wall_time",
+      "parse_retry_after",
+      "retry_after_feedback"
+    ],
+    "path": "src/sciretriever/metadata/providers/_shared/feedback.py",
+    "symbols": [
+      "header_value",
+      "interpreted_access_feedback",
+      "monotonic_deadline_from_wall_time",
+      "parse_retry_after",
+      "retry_after_feedback"
+    ]
+  },
+  "sciretriever.metadata.providers._shared.identity": {
+    "__all__": [
+      "stabilize_provider_metadata_observation",
+      "stabilize_provider_relation_observation"
+    ],
+    "path": "src/sciretriever/metadata/providers/_shared/identity.py",
+    "symbols": [
+      "stabilize_provider_metadata_observation",
+      "stabilize_provider_relation_observation"
+    ]
+  },
+  "sciretriever.metadata.providers._shared.parsing": {
+    "__all__": [
+      "optional_nonblank_string",
+      "optional_nonnegative_integer",
+      "parse_bounded_json",
+      "parse_bounded_xml",
+      "require_json_array",
+      "require_json_object",
+      "require_xml_root",
+      "strict_nonnegative_integer",
+      "xml_children"
+    ],
+    "path": "src/sciretriever/metadata/providers/_shared/parsing.py",
+    "symbols": [
+      "optional_nonblank_string",
+      "optional_nonnegative_integer",
+      "parse_bounded_json",
+      "parse_bounded_xml",
+      "require_json_array",
+      "require_json_object",
+      "require_xml_root",
+      "strict_nonnegative_integer",
+      "xml_children"
+    ]
+  },
+  "sciretriever.metadata.providers.arxiv.__init__": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "ArxivAdapter",
+      "BASELINE_ACCESS_POLICY"
+    ],
+    "path": "src/sciretriever/metadata/providers/arxiv/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.metadata.providers.arxiv.adapter": {
+    "__all__": [
+      "ArxivAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/arxiv/adapter.py",
+    "symbols": [
+      "ACCESS_SCOPE",
+      "ArxivAdapter",
+      "BASELINE_ACCESS_POLICY"
+    ]
+  },
+  "sciretriever.metadata.providers.core.__init__": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "CoreAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/core/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.metadata.providers.core.adapter": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "CoreAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/core/adapter.py",
+    "symbols": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "CoreAdapter"
+    ]
+  },
+  "sciretriever.metadata.providers.crossref.__init__": {
+    "__all__": [
+      "CrossrefAdapter",
+      "POLITE_ACCESS_SCOPE",
+      "POLITE_BASELINE_ACCESS_POLICY",
+      "PUBLIC_ACCESS_SCOPE",
+      "PUBLIC_BASELINE_ACCESS_POLICY"
+    ],
+    "path": "src/sciretriever/metadata/providers/crossref/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.metadata.providers.crossref.adapter": {
+    "__all__": [
+      "CrossrefAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/crossref/adapter.py",
+    "symbols": [
+      "CrossrefAdapter",
+      "POLITE_ACCESS_SCOPE",
+      "POLITE_BASELINE_ACCESS_POLICY",
+      "PUBLIC_ACCESS_SCOPE",
+      "PUBLIC_BASELINE_ACCESS_POLICY"
+    ]
+  },
+  "sciretriever.metadata.providers.datacite.__init__": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "DataCiteAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/datacite/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.metadata.providers.datacite.adapter": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "DataCiteAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/datacite/adapter.py",
+    "symbols": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "DataCiteAdapter"
+    ]
+  },
+  "sciretriever.metadata.providers.elsevier.__init__": {
+    "__all__": [
+      "ABSTRACT_ACCESS_SCOPE",
+      "ABSTRACT_BASELINE_ACCESS_POLICY",
+      "ADAPTER_REVISION",
+      "ElsevierScopusAdapter",
+      "SEARCH_ACCESS_SCOPE",
+      "SEARCH_BASELINE_ACCESS_POLICY"
+    ],
+    "path": "src/sciretriever/metadata/providers/elsevier/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.metadata.providers.elsevier.adapter": {
+    "__all__": [
+      "ABSTRACT_ACCESS_SCOPE",
+      "ABSTRACT_BASELINE_ACCESS_POLICY",
+      "ADAPTER_REVISION",
+      "ElsevierScopusAdapter",
+      "SEARCH_ACCESS_SCOPE",
+      "SEARCH_BASELINE_ACCESS_POLICY"
+    ],
+    "path": "src/sciretriever/metadata/providers/elsevier/adapter.py",
+    "symbols": [
+      "ABSTRACT_ACCESS_SCOPE",
+      "ABSTRACT_BASELINE_ACCESS_POLICY",
+      "ADAPTER_REVISION",
+      "ElsevierScopusAdapter",
+      "SEARCH_ACCESS_SCOPE",
+      "SEARCH_BASELINE_ACCESS_POLICY"
+    ]
+  },
+  "sciretriever.metadata.providers.europe_pmc.__init__": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "EuropePmcAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/europe_pmc/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.metadata.providers.europe_pmc.adapter": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "EuropePmcAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/europe_pmc/adapter.py",
+    "symbols": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "EuropePmcAdapter"
+    ]
+  },
+  "sciretriever.metadata.providers.openalex.__init__": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "OpenAlexAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/openalex/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.metadata.providers.openalex.adapter": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "OpenAlexAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/openalex/adapter.py",
+    "symbols": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "OpenAlexAdapter"
+    ]
+  },
+  "sciretriever.metadata.providers.opencitations.__init__": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "OpenCitationsAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/opencitations/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.metadata.providers.opencitations.adapter": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "OpenCitationsAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/opencitations/adapter.py",
+    "symbols": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "OpenCitationsAdapter"
+    ]
+  },
+  "sciretriever.metadata.providers.semantic_scholar.__init__": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "SemanticScholarAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/semantic_scholar/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.metadata.providers.semantic_scholar.adapter": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "SemanticScholarAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/semantic_scholar/adapter.py",
+    "symbols": [
+      "ACCESS_SCOPE",
+      "BASELINE_ACCESS_POLICY",
+      "SemanticScholarAdapter"
+    ]
+  },
+  "sciretriever.metadata.providers.springer.__init__": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "ADAPTER_REVISION",
+      "BASELINE_ACCESS_POLICY",
+      "SpringerMetaV2Adapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/springer/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.metadata.providers.springer.adapter": {
+    "__all__": [
+      "ACCESS_SCOPE",
+      "ADAPTER_REVISION",
+      "BASELINE_ACCESS_POLICY",
+      "SpringerMetaV2Adapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/springer/adapter.py",
+    "symbols": [
+      "ACCESS_SCOPE",
+      "ADAPTER_REVISION",
+      "BASELINE_ACCESS_POLICY",
+      "SpringerMetaV2Adapter"
+    ]
+  },
+  "sciretriever.metadata.providers.web_of_science.__init__": {
+    "__all__": [
+      "EXPANDED_ACCESS_SCOPE",
+      "EXPANDED_BASELINE_ACCESS_POLICY",
+      "STARTER_ACCESS_SCOPE",
+      "STARTER_BASELINE_ACCESS_POLICY",
+      "WebOfScienceExpandedAdapter",
+      "WebOfScienceStarterAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/web_of_science/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.metadata.providers.web_of_science.adapter": {
+    "__all__": [
+      "EXPANDED_ACCESS_SCOPE",
+      "EXPANDED_BASELINE_ACCESS_POLICY",
+      "STARTER_ACCESS_SCOPE",
+      "STARTER_BASELINE_ACCESS_POLICY",
+      "WebOfScienceExpandedAdapter",
+      "WebOfScienceStarterAdapter"
+    ],
+    "path": "src/sciretriever/metadata/providers/web_of_science/adapter.py",
+    "symbols": [
+      "EXPANDED_ACCESS_SCOPE",
+      "EXPANDED_BASELINE_ACCESS_POLICY",
+      "STARTER_ACCESS_SCOPE",
+      "STARTER_BASELINE_ACCESS_POLICY",
+      "WebOfScienceExpandedAdapter",
+      "WebOfScienceStarterAdapter"
+    ]
+  },
+  "sciretriever.metadata.publication": {
+    "__all__": [
+      "MAX_PROVIDER_RELATION_PUBLICATION_BATCH",
+      "MetadataPublication",
+      "ProviderRelationObservationPublicationPort"
+    ],
+    "path": "src/sciretriever/metadata/publication.py",
+    "symbols": [
+      "MetadataPublication"
+    ]
+  },
+  "sciretriever.metadata.registry": {
+    "__all__": [
+      "METADATA_PROVIDER_ORDER",
+      "METADATA_SEARCH_PROVIDER_ORDER",
+      "MetadataAssemblyDependencies",
+      "MetadataCapability",
+      "MetadataProviderRegistration",
+      "MetadataProviderStatus",
+      "MetadataProbeRegistration",
+      "MetadataProbeRegistry",
+      "MetadataRegistry",
+      "MetadataRegistryError",
+      "build_metadata_registry",
+      "build_metadata_probe_registry",
+      "metadata_provider_statuses",
+      "validate_metadata_provider_matrix"
+    ],
+    "path": "src/sciretriever/metadata/registry.py",
+    "symbols": [
+      "METADATA_PROVIDER_ORDER",
+      "METADATA_SEARCH_PROVIDER_ORDER",
+      "MetadataAssemblyDependencies",
+      "MetadataCapability",
+      "MetadataProbeRegistration",
+      "MetadataProbeRegistry",
+      "MetadataProviderRegistration",
+      "MetadataProviderStatus",
+      "MetadataRegistry",
+      "MetadataRegistryError",
+      "build_metadata_probe_registry",
+      "build_metadata_registry",
+      "metadata_provider_statuses",
+      "validate_metadata_provider_matrix"
+    ]
+  },
+  "sciretriever.metadata.rules": {
+    "__all__": [
+      "CancellationEvent",
+      "MetadataBatchResult",
+      "MetadataLookupRequest",
+      "MetadataProviderInvocation",
+      "MetadataProviderInvocationOutcome",
+      "MetadataProviderResult",
+      "MetadataReferenceQueryRequest",
+      "NeutralMetadataItem",
+      "ProviderReferenceQuery",
+      "ReferenceQueryContext",
+      "ReferenceQueryDirection",
+      "TopicSearchQuery"
+    ],
+    "path": "src/sciretriever/metadata/rules.py",
+    "symbols": [
+      "CancellationEvent",
+      "MetadataBatchResult",
+      "MetadataLookupRequest",
+      "MetadataProviderInvocation",
+      "MetadataProviderInvocationOutcome",
+      "MetadataProviderResult",
+      "MetadataReferenceQueryRequest",
+      "NeutralMetadataItem",
+      "ProviderReferenceQuery",
+      "ReferenceQueryContext",
+      "ReferenceQueryDirection",
+      "TopicSearchQuery",
+      "relation_matches_query"
+    ]
+  },
+  "sciretriever.metadata.service": {
+    "__all__": [
+      "MetadataService"
+    ],
+    "path": "src/sciretriever/metadata/service.py",
+    "symbols": [
+      "MetadataService"
+    ]
+  },
+  "sciretriever.model.__init__": {
+    "__all__": [],
+    "path": "src/sciretriever/model/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.model.access": {
+    "__all__": [
+      "AccessFailure",
+      "AccessResponse",
+      "AccessResult",
+      "BoundedByteStream",
+      "BrowserCapture",
+      "BrowserCaptureBatch",
+      "BrowserCaptureKind",
+      "BrowserRequest",
+      "BrowserResult",
+      "Header",
+      "HttpResult",
+      "TransportRequest",
+      "TransportResponse",
+      "has_sensitive_query_parameter"
+    ],
+    "path": "src/sciretriever/model/access.py",
+    "symbols": [
+      "AccessFailure",
+      "AccessResponse",
+      "AccessResult",
+      "BoundedByteStream",
+      "BrowserCapture",
+      "BrowserCaptureBatch",
+      "BrowserCaptureKind",
+      "BrowserRequest",
+      "BrowserResult",
+      "Header",
+      "HttpResult",
+      "TransportRequest",
+      "TransportResponse",
+      "has_sensitive_query_parameter"
+    ]
+  },
+  "sciretriever.model.acquisition": {
+    "__all__": [
+      "AcceptedManualPdf",
+      "AcquiredPrimaryPdf",
+      "AcquisitionPath",
+      "AcquisitionResult",
+      "Asset",
+      "AssetHint",
+      "AssetHintKind",
+      "AssetRole",
+      "AutomaticPdfAcquisitionExhaustion",
+      "LiteratureAsset",
+      "NoPrimaryPdf",
+      "PdfCandidate"
+    ],
+    "path": "src/sciretriever/model/acquisition.py",
+    "symbols": [
+      "AcceptedManualPdf",
+      "AcquiredPrimaryPdf",
+      "AcquisitionPath",
+      "AcquisitionResult",
+      "Asset",
+      "AssetHint",
+      "AssetHintKind",
+      "AssetRole",
+      "AutomaticPdfAcquisitionExhaustion",
+      "LiteratureAsset",
+      "NoPrimaryPdf",
+      "PdfCandidate"
+    ]
+  },
+  "sciretriever.model.analysis": {
+    "__all__": [
+      "ArtifactRef",
+      "FinalMetadataProposal",
+      "LiteratureContent",
+      "LiteratureContentProposal",
+      "LiteratureSection",
+      "LiteratureSectionRole",
+      "LiteratureSubsection",
+      "MetadataAnalysisResult",
+      "NoUsableContent",
+      "ReferenceLookup",
+      "analysis_input_sha256",
+      "content_sha256"
+    ],
+    "path": "src/sciretriever/model/analysis.py",
+    "symbols": [
+      "ArtifactRef",
+      "FinalMetadataProposal",
+      "LiteratureContent",
+      "LiteratureContentProposal",
+      "LiteratureSection",
+      "LiteratureSectionRole",
+      "LiteratureSubsection",
+      "MetadataAnalysisResult",
+      "NoUsableContent",
+      "ReferenceLookup",
+      "analysis_input_sha256",
+      "content_sha256"
+    ]
+  },
+  "sciretriever.model.configuration": {
+    "__all__": [
+      "AcquisitionProviderTuple",
+      "AcquisitionSourcesConfig",
+      "AnalysisConfig",
+      "AgentProtocol",
+      "AgentReasoningEffort",
+      "AssetsConfig",
+      "BrowserAccessKeyValue",
+      "BrowserAccessStatus",
+      "BrowserConfigurationProbeResult",
+      "BrowserConfig",
+      "BrowserPolicyOverrideConfig",
+      "BrowserPolicyStatus",
+      "BrowserProbeAvailabilityStatus",
+      "BrowserProfileIdentity",
+      "BrowserProfilePresence",
+      "BrowserProfileSelectionStatus",
+      "BrowserProfileStatus",
+      "BrowserRouteStatus",
+      "BrowserRuntimeStatus",
+      "BrowserSessionStatus",
+      "Configuration",
+      "ConfigurationActionRequired",
+      "ConfigurationCapabilityStatus",
+      "ConfigurationDiagnostic",
+      "ConfigurationFingerprint",
+      "ConfigurationProbeResult",
+      "ConfigurationProbeSummary",
+      "CoreConfigurationProbeFailureEvidence",
+      "CoreConfigurationProbeResult",
+      "ConfigurationRuntimeStatus",
+      "ConfigurationStatus",
+      "ContactEmail",
+      "CoreCredentialService",
+      "CrossrefAccessMode",
+      "CrossrefMetadataConfig",
+      "CredentialFieldSpec",
+      "CredentialFieldStatus",
+      "CredentialStatus",
+      "ExecutionConfig",
+      "LibraryConfig",
+      "AgentConfigurationProbeDetails",
+      "MetadataProviderTuple",
+      "MetadataSourcesConfig",
+      "ModelConfig",
+      "ModelConfigurationProbeDetails",
+      "ModelProviderConfig",
+      "ModelProviderConfigurationProbeDetails",
+      "ModelProvidersConfig",
+      "ModelsConfig",
+      "MinerUConfigurationProbeDetails",
+      "OrdinaryProviderParameter",
+      "ParsingConfig",
+      "ParsingConfigurationStatus",
+      "ParserConnectionMode",
+      "PathsConfig",
+      "ProviderCapability",
+      "ProviderCredentialStatus",
+      "ProviderName",
+      "SciHubAcquisitionConfig",
+      "AgentsConfigurationStatus",
+      "AnalysisRoleConfigurationStatus",
+      "BrowserRoleConfigurationStatus",
+      "ProbeOutcome",
+      "SourcesConfig",
+      "SourceMode",
+      "StableFailureCode",
+      "UnpaywallAcquisitionConfig",
+      "WebOfScienceMetadataConfig",
+      "WebOfScienceProduct",
+      "normalize_browser_access_key",
+      "normalize_browser_profile_identity",
+      "normalize_model_provider_identity",
+      "split_model_reference"
+    ],
+    "path": "src/sciretriever/model/configuration.py",
+    "symbols": [
+      "AcquisitionProviderTuple",
+      "AcquisitionSourcesConfig",
+      "AgentConfigurationProbeDetails",
+      "AgentModelIdentity",
+      "AgentProtocol",
+      "AgentProtocolValue",
+      "AgentReasoningEffort",
+      "AgentReasoningEffortValue",
+      "AgentsConfigurationStatus",
+      "AnalysisConfig",
+      "AnalysisRoleConfigurationStatus",
+      "AssetsConfig",
+      "BrowserAccessKeyValue",
+      "BrowserAccessStatus",
+      "BrowserConfig",
+      "BrowserConfigurationProbeResult",
+      "BrowserPolicyOverrideConfig",
+      "BrowserPolicyStatus",
+      "BrowserProbeAvailabilityStatus",
+      "BrowserProfileIdentity",
+      "BrowserProfilePresence",
+      "BrowserProfileSelectionStatus",
+      "BrowserProfileStatus",
+      "BrowserRateLimitGroupValue",
+      "BrowserRoleConfigurationStatus",
+      "BrowserRouteStatus",
+      "BrowserRuntimeStatus",
+      "BrowserSessionStatus",
+      "CapabilityValue",
+      "Configuration",
+      "ConfigurationActionRequired",
+      "ConfigurationCapabilityStatus",
+      "ConfigurationDiagnostic",
+      "ConfigurationFingerprint",
+      "ConfigurationProbeResult",
+      "ConfigurationProbeSummary",
+      "ConfigurationRuntimeStatus",
+      "ConfigurationStatus",
+      "ContactEmail",
+      "CoreConfigurationProbeFailureEvidence",
+      "CoreConfigurationProbeResult",
+      "CoreCredentialService",
+      "CredentialFieldSpec",
+      "CredentialFieldStatus",
+      "CredentialStatus",
+      "CrossrefAccessMode",
+      "CrossrefAccessModeValue",
+      "CrossrefMetadataConfig",
+      "ExecutionConfig",
+      "FiniteNonnegativeBrowserPolicyValue",
+      "FinitePositiveBrowserPolicyValue",
+      "LibraryConfig",
+      "MetadataProviderTuple",
+      "MetadataSourcesConfig",
+      "MinerUConfigurationProbeDetails",
+      "ModelConfig",
+      "ModelConfigurationProbeDetails",
+      "ModelProviderConfig",
+      "ModelProviderConfigurationProbeDetails",
+      "ModelProvidersConfig",
+      "ModelReference",
+      "ModelsConfig",
+      "NonBlankText",
+      "OrdinaryProviderParameter",
+      "ParserConnectionMode",
+      "ParserConnectionModeValue",
+      "ParsingConfig",
+      "ParsingConfigurationStatus",
+      "PathsConfig",
+      "ProbeOutcome",
+      "ProbeOutcomeValue",
+      "ProbeRequestURL",
+      "ProviderCapability",
+      "ProviderCredentialStatus",
+      "ProviderIdentity",
+      "ProviderName",
+      "ProviderValue",
+      "SciHubAcquisitionConfig",
+      "SciHubURL",
+      "SourceMode",
+      "SourceModeValue",
+      "SourcesConfig",
+      "StableFailureCode",
+      "StatusValue",
+      "UnpaywallAcquisitionConfig",
+      "WebOfScienceMetadataConfig",
+      "WebOfScienceProduct",
+      "WebOfScienceProductValue",
+      "normalize_browser_access_key",
+      "normalize_browser_profile_identity",
+      "normalize_model_provider_identity",
+      "split_model_reference"
+    ]
+  },
+  "sciretriever.model.discovery": {
+    "__all__": [
+      "CitationDiscoveryCause",
+      "CitationDiscoveryInput",
+      "DiscoveryCause",
+      "DiscoveryInput",
+      "DiscoveryResult",
+      "DiscoveryRun",
+      "DiscoveryRunStatus",
+      "DiscoverySourceOutcome",
+      "DiscoverySourceResult",
+      "ProviderDiscoveryLimit",
+      "TopicDiscoveryCause",
+      "TopicDiscoveryInput"
+    ],
+    "path": "src/sciretriever/model/discovery.py",
+    "symbols": [
+      "CitationDiscoveryCause",
+      "CitationDiscoveryInput",
+      "DiscoveryCause",
+      "DiscoveryInput",
+      "DiscoveryResult",
+      "DiscoveryRun",
+      "DiscoveryRunStatus",
+      "DiscoverySourceOutcome",
+      "DiscoverySourceResult",
+      "ProviderDiscoveryLimit",
+      "TopicDiscoveryCause",
+      "TopicDiscoveryInput"
+    ]
+  },
+  "sciretriever.model.execution": {
+    "__all__": [
+      "AllPendingSelector",
+      "BatchGoal",
+      "BatchRequest",
+      "BatchSelector",
+      "DiscoveryRunSelector",
+      "ImportReportSelector",
+      "LiteratureSelector",
+      "MetaLiteratureSelector",
+      "QuerySelector"
+    ],
+    "path": "src/sciretriever/model/execution.py",
+    "symbols": [
+      "AllPendingSelector",
+      "BatchGoal",
+      "BatchRequest",
+      "BatchSelector",
+      "DiscoveryRunSelector",
+      "ImportReportSelector",
+      "LiteratureSelector",
+      "MetaLiteratureSelector",
+      "QuerySelector"
+    ]
+  },
+  "sciretriever.model.library": {
+    "__all__": [
+      "LibraryQuery",
+      "LibrarySearchPage",
+      "LibrarySearchRequest",
+      "LibrarySort",
+      "LiteratureAssetView",
+      "LiteratureDetail",
+      "LiteratureMissingStep",
+      "LiteratureReferenceItem",
+      "LiteratureReferencePage",
+      "LiteratureReferenceRequest",
+      "LiteratureSearchItem",
+      "ReferenceDetail",
+      "ReferenceDirection"
+    ],
+    "path": "src/sciretriever/model/library.py",
+    "symbols": [
+      "LibraryQuery",
+      "LibrarySearchPage",
+      "LibrarySearchRequest",
+      "LibrarySort",
+      "LiteratureAssetView",
+      "LiteratureDetail",
+      "LiteratureMissingStep",
+      "LiteratureReferenceItem",
+      "LiteratureReferencePage",
+      "LiteratureReferenceRequest",
+      "LiteratureSearchItem",
+      "ReferenceDetail",
+      "ReferenceDirection"
+    ]
+  },
+  "sciretriever.model.literature": {
+    "__all__": [
+      "Affiliation",
+      "Author",
+      "AuthorKind",
+      "ContentReferenceTextSupport",
+      "Identifier",
+      "Literature",
+      "LiteratureStatus",
+      "MetadataReferenceTextSupport",
+      "MetaLiterature",
+      "ProviderRelationSupport",
+      "Reference",
+      "ReferenceSupport",
+      "ReferenceSupportSource",
+      "VersionRole"
+    ],
+    "path": "src/sciretriever/model/literature.py",
+    "symbols": [
+      "Affiliation",
+      "Author",
+      "AuthorKind",
+      "ContentReferenceTextSupport",
+      "Identifier",
+      "Literature",
+      "LiteratureStatus",
+      "MetaLiterature",
+      "MetadataReferenceTextSupport",
+      "ProviderRelationSupport",
+      "Reference",
+      "ReferenceSupport",
+      "ReferenceSupportSource",
+      "VersionRole"
+    ]
+  },
+  "sciretriever.model.metadata": {
+    "__all__": [
+      "LiteratureMetadata",
+      "MetadataObservation",
+      "ProviderLiteratureKey",
+      "ProviderRelationObservation"
+    ],
+    "path": "src/sciretriever/model/metadata.py",
+    "symbols": [
+      "LiteratureMetadata",
+      "MetadataObservation",
+      "ProviderLiteratureKey",
+      "ProviderRelationObservation"
+    ]
+  },
+  "sciretriever.model.parsing": {
+    "__all__": [
+      "ParserArtifactRef",
+      "ParserProvenance",
+      "ParserRequest",
+      "ParserResource",
+      "ParserResult",
+      "StorageObjectRef",
+      "parser_result_sha256"
+    ],
+    "path": "src/sciretriever/model/parsing.py",
+    "symbols": [
+      "ParserArtifactRef",
+      "ParserProvenance",
+      "ParserRequest",
+      "ParserResource",
+      "ParserResult",
+      "StorageObjectRef",
+      "parser_result_sha256"
+    ]
+  },
+  "sciretriever.model.primitives": {
+    "__all__": [
+      "AssetId",
+      "DiscoveryRunId",
+      "InternalId",
+      "LiteratureAssetId",
+      "LiteratureId",
+      "MetaLiteratureId",
+      "ObservationId",
+      "ProvenanceId",
+      "ReferenceId",
+      "RelativeArtifactPath",
+      "Sha256",
+      "SourceKind",
+      "UtcTimestamp",
+      "sha256_digest"
+    ],
+    "path": "src/sciretriever/model/primitives.py",
+    "symbols": [
+      "AssetId",
+      "DiscoveryRunId",
+      "InternalId",
+      "LiteratureAssetId",
+      "LiteratureId",
+      "MetaLiteratureId",
+      "ObservationId",
+      "ProvenanceId",
+      "ReferenceId",
+      "RelativeArtifactPath",
+      "Sha256",
+      "SourceKind",
+      "UtcTimestamp",
+      "sha256_digest"
+    ]
+  },
+  "sciretriever.model.provenance": {
+    "__all__": [
+      "Provenance"
+    ],
+    "path": "src/sciretriever/model/provenance.py",
+    "symbols": [
+      "Provenance"
+    ]
+  },
+  "sciretriever.model.record": {
+    "__all__": [
+      "BibliographicRecord"
+    ],
+    "path": "src/sciretriever/model/record.py",
+    "symbols": [
+      "BibliographicRecord"
+    ]
+  },
+  "sciretriever.model.report": {
+    "__all__": [
+      "AcceptedImportRecord",
+      "AcceptedManualPdfReportResult",
+      "BibliographyFormat",
+      "CompletionTarget",
+      "CompletionStage",
+      "DatabaseCompletionReport",
+      "DiscoveryProviderReport",
+      "DiscoveryProviderReportOutcome",
+      "DiscoveryReport",
+      "EntryReport",
+      "ExportFieldOmission",
+      "ExportReport",
+      "FailedCompletionTarget",
+      "FailedReportEnd",
+      "FinishedReportEnd",
+      "GoalReachedTarget",
+      "ImportAcceptanceOutcome",
+      "ImportRecordReport",
+      "ImportReport",
+      "InterruptedCompletionTarget",
+      "InterruptedReportEnd",
+      "LiteratureCompletionTarget",
+      "ManualPdfReport",
+      "ManualPdfReportResult",
+      "MetaLiteratureCompletionTarget",
+      "NeedsManualPdfTarget",
+      "NotStartedCompletionTarget",
+      "RejectedImportRecord",
+      "RejectedManualPdfReportResult",
+      "ReportEnd",
+      "SkippedExportRecord",
+      "StableFailure"
+    ],
+    "path": "src/sciretriever/model/report.py",
+    "symbols": [
+      "AcceptedImportRecord",
+      "AcceptedManualPdfReportResult",
+      "BibliographyFormat",
+      "CompletionStage",
+      "CompletionTarget",
+      "DatabaseCompletionReport",
+      "DiscoveryProviderReport",
+      "DiscoveryProviderReportOutcome",
+      "DiscoveryReport",
+      "EntryReport",
+      "ExportFieldOmission",
+      "ExportReport",
+      "FailedCompletionTarget",
+      "FailedReportEnd",
+      "FinishedReportEnd",
+      "GoalReachedTarget",
+      "ImportAcceptanceOutcome",
+      "ImportRecordReport",
+      "ImportReport",
+      "InterruptedCompletionTarget",
+      "InterruptedReportEnd",
+      "LiteratureCompletionTarget",
+      "ManualPdfReport",
+      "ManualPdfReportResult",
+      "MetaLiteratureCompletionTarget",
+      "NeedsManualPdfTarget",
+      "NotStartedCompletionTarget",
+      "RejectedImportRecord",
+      "RejectedManualPdfReportResult",
+      "ReportEnd",
+      "SkippedExportRecord",
+      "StableFailure"
+    ]
+  },
+  "sciretriever.network.__init__": {
+    "__all__": [],
+    "path": "src/sciretriever/network/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.network.admission": {
+    "__all__": [
+      "AccessCancelled",
+      "AccessCoordinator",
+      "AccessFeedback",
+      "AccessPermit",
+      "AccessPolicy",
+      "AccessScope",
+      "AdmissionError",
+      "AdmissionTimeout",
+      "HostPermit",
+      "PolicyError",
+      "PolicyRequired",
+      "PeriodicQuota"
+    ],
+    "path": "src/sciretriever/network/admission.py",
+    "symbols": [
+      "AccessCancelled",
+      "AccessCoordinator",
+      "AccessFeedback",
+      "AccessPermit",
+      "AccessPolicy",
+      "AccessScope",
+      "AdmissionError",
+      "AdmissionTimeout",
+      "Channel",
+      "Clock",
+      "HostPermit",
+      "PeriodicQuota",
+      "PolicyError",
+      "PolicyRequired"
+    ]
+  },
+  "sciretriever.network.browser": {
+    "__all__": [
+      "BrowserOperationLimits",
+      "BrowserCaptureCorrelation",
+      "BrowserCaptureDecision",
+      "BrowserCaptureEvidence",
+      "BrowserCapturePolicy",
+      "BrowserClient",
+      "BrowserConnectionOriginGuard",
+      "BrowserDestinationGuard",
+      "BrowserDestinationKind",
+      "BrowserError",
+      "BrowserFlowController",
+      "BrowserFlowSession",
+      "BrowserPageObservation",
+      "BrowserRequestGuard",
+      "BrowserRequestObservation"
+    ],
+    "path": "src/sciretriever/network/browser.py",
+    "symbols": [
+      "BrowserCaptureCorrelation",
+      "BrowserCaptureDecision",
+      "BrowserCaptureEvidence",
+      "BrowserCapturePolicy",
+      "BrowserCapturePrefetchPolicy",
+      "BrowserClient",
+      "BrowserConnectionOriginGuard",
+      "BrowserDestinationGuard",
+      "BrowserDestinationKind",
+      "BrowserError",
+      "BrowserFactory",
+      "BrowserFlowController",
+      "BrowserFlowSession",
+      "BrowserOperationLimits",
+      "BrowserPageObservation",
+      "BrowserRequestGuard",
+      "BrowserRequestObservation",
+      "Clock"
+    ]
+  },
+  "sciretriever.network.browser_connect": {
+    "__all__": [
+      "BrowserConnectProxy",
+      "BrowserNativeTransportError",
+      "HeadedDisplayLease",
+      "acquire_headed_display",
+      "xvfb_executable_available"
+    ],
+    "path": "src/sciretriever/network/browser_connect.py",
+    "symbols": [
+      "BrowserConnectProxy",
+      "BrowserNativeTransportError",
+      "HeadedDisplayLease",
+      "acquire_headed_display",
+      "xvfb_executable_available"
+    ]
+  },
+  "sciretriever.network.browser_control": {
+    "__all__": [
+      "BROWSER_OBSERVATION_MEDIA_TYPE",
+      "BrowserAction",
+      "BrowserActionKind",
+      "BrowserActionOutcome",
+      "BrowserActionReceipt",
+      "BrowserAgentStatus",
+      "BrowserBlocked",
+      "BrowserBlockedReason",
+      "BrowserBounds",
+      "BrowserCancelled",
+      "BrowserCaptured",
+      "BrowserCaptureState",
+      "BrowserElement",
+      "BrowserElementState",
+      "BrowserFailed",
+      "BrowserObservation",
+      "BrowserObservationUnavailable",
+      "BrowserPageState",
+      "BrowserReady",
+      "BrowserScreenshot",
+      "BrowserScrollState",
+      "BrowserStep",
+      "BrowserStepAssessment",
+      "BrowserStepKind",
+      "BrowserStepPolicy",
+      "BrowserStepSession",
+      "BrowserSurface",
+      "BrowserSurfaceKind",
+      "BrowserViewport",
+      "ClickElement",
+      "ClickPoint",
+      "GoBack",
+      "ScrollSurface",
+      "Stop",
+      "WaitForChange",
+      "execution_binding_fingerprint",
+      "stable_action_intent_fingerprint",
+      "stable_semantic_page_fingerprint"
+    ],
+    "path": "src/sciretriever/network/browser_control.py",
+    "symbols": [
+      "BROWSER_OBSERVATION_MEDIA_TYPE",
+      "BrowserAction",
+      "BrowserActionKind",
+      "BrowserActionOutcome",
+      "BrowserActionReceipt",
+      "BrowserAgentStatus",
+      "BrowserBlocked",
+      "BrowserBlockedReason",
+      "BrowserBounds",
+      "BrowserCancelled",
+      "BrowserCancelledTransition",
+      "BrowserCandidateTimeoutTransition",
+      "BrowserCaptureState",
+      "BrowserCaptured",
+      "BrowserCapturedTransition",
+      "BrowserElement",
+      "BrowserElementState",
+      "BrowserFailed",
+      "BrowserFailedTransition",
+      "BrowserObservation",
+      "BrowserObservationLedger",
+      "BrowserObservationUnavailable",
+      "BrowserPageState",
+      "BrowserReady",
+      "BrowserScreenshot",
+      "BrowserScrollState",
+      "BrowserSettledTransition",
+      "BrowserStaleTransition",
+      "BrowserStep",
+      "BrowserStepAssessment",
+      "BrowserStepDriver",
+      "BrowserStepKind",
+      "BrowserStepPolicy",
+      "BrowserStepSession",
+      "BrowserStoppedTransition",
+      "BrowserSurface",
+      "BrowserSurfaceKind",
+      "BrowserTransition",
+      "BrowserTransitionKind",
+      "BrowserViewport",
+      "ClickElement",
+      "ClickPoint",
+      "GoBack",
+      "ScrollSurface",
+      "Stop",
+      "WaitForChange",
+      "execution_binding_fingerprint",
+      "stable_action_intent_fingerprint",
+      "stable_semantic_page_fingerprint"
+    ]
+  },
+  "sciretriever.network.browser_runtime": {
+    "__all__": [
+      "BrowserRuntimeBoundaryError",
+      "configure_pdf_download_preference",
+      "runtime_profile_directory"
+    ],
+    "path": "src/sciretriever/network/browser_runtime.py",
+    "symbols": [
+      "BrowserRuntimeBoundaryError",
+      "configure_pdf_download_preference",
+      "runtime_profile_directory"
+    ]
+  },
+  "sciretriever.network.browser_scheduler": {
+    "__all__": [
+      "BrowserAttemptCompletion",
+      "BrowserAttemptDisposition",
+      "BrowserArticleAttempt",
+      "BrowserCircuitReason",
+      "BrowserGroupFeedback",
+      "BrowserGroupPolicy",
+      "BrowserGroupRuntimeSnapshot",
+      "BrowserGroupScheduler",
+      "BrowserScheduledAttemptResult",
+      "BrowserScheduledDisposition",
+      "BrowserSchedulerCancellation",
+      "BrowserSchedulerClock",
+      "BrowserSchedulingCancelled"
+    ],
+    "path": "src/sciretriever/network/browser_scheduler.py",
+    "symbols": [
+      "BrowserArticleAttempt",
+      "BrowserAttemptCompletion",
+      "BrowserAttemptDisposition",
+      "BrowserCircuitReason",
+      "BrowserGroupFeedback",
+      "BrowserGroupPolicy",
+      "BrowserGroupRuntimeSnapshot",
+      "BrowserGroupScheduler",
+      "BrowserScheduledAttemptResult",
+      "BrowserScheduledDisposition",
+      "BrowserSchedulerCancellation",
+      "BrowserSchedulerClock",
+      "BrowserSchedulingCancelled"
+    ]
+  },
+  "sciretriever.network.browser_sessions": {
+    "__all__": [
+      "BrowserSessionBroker",
+      "BrowserSessionCancelled",
+      "BrowserSessionError",
+      "BrowserSessionTimeout"
+    ],
+    "path": "src/sciretriever/network/browser_sessions.py",
+    "symbols": [
+      "BrowserFactory",
+      "BrowserSessionBroker",
+      "BrowserSessionCancellation",
+      "BrowserSessionCancelled",
+      "BrowserSessionError",
+      "BrowserSessionLease",
+      "BrowserSessionTimeout",
+      "Clock",
+      "EventHandler",
+      "RouteHandler"
+    ]
+  },
+  "sciretriever.network.cloakbrowser": {
+    "__all__": [
+      "CloakBrowserFactory",
+      "CloakBrowserRuntimeAvailability",
+      "CloakBrowserRuntimeError",
+      "cloakbrowser_runtime_availability"
+    ],
+    "path": "src/sciretriever/network/cloakbrowser.py",
+    "symbols": [
+      "CloakBrowserFactory",
+      "CloakBrowserIdentity",
+      "CloakBrowserRuntimeAvailability",
+      "CloakBrowserRuntimeError",
+      "cloakbrowser_runtime_availability"
+    ]
+  },
+  "sciretriever.network.http": {
+    "__all__": [
+      "HttpClient",
+      "RedirectAccessProfileResolver",
+      "RedirectTargetGuard",
+      "ResponseFeedbackInterpreter",
+      "SecureHttpTransport",
+      "SystemResolver"
+    ],
+    "path": "src/sciretriever/network/http.py",
+    "symbols": [
+      "Clock",
+      "CredentialQueryInput",
+      "HeaderInput",
+      "HttpClient",
+      "RedirectAccessProfileResolver",
+      "RedirectTargetGuard",
+      "ResponseFeedbackInterpreter",
+      "SecureHttpTransport",
+      "Sleeper",
+      "SystemResolver"
+    ]
+  },
+  "sciretriever.network.playwright": {
+    "__all__": [
+      "PlaywrightRuntimeError"
+    ],
+    "path": "src/sciretriever/network/playwright.py",
+    "symbols": [
+      "PlaywrightRuntimeError"
+    ]
+  },
+  "sciretriever.network.policy": {
+    "__all__": [
+      "AddressClass",
+      "BudgetUsage",
+      "DestinationPolicy",
+      "NormalizedURL",
+      "Origin",
+      "PolicyError",
+      "RedirectDecision",
+      "ResolvedDestination",
+      "Resolver",
+      "ResourceBudget",
+      "append_opaque_path_parameter",
+      "classify_address",
+      "evaluate_redirect",
+      "normalize_url",
+      "normalize_url_with_configured_port",
+      "redact_cookie",
+      "redact_exception",
+      "redact_headers",
+      "redact_query",
+      "redact_url",
+      "resolve_destination"
+    ],
+    "path": "src/sciretriever/network/policy.py",
+    "symbols": [
+      "AddressClass",
+      "BudgetUsage",
+      "DestinationPolicy",
+      "NormalizedURL",
+      "Origin",
+      "PolicyError",
+      "RedirectDecision",
+      "ResolvedDestination",
+      "Resolver",
+      "ResolverLike",
+      "ResourceBudget",
+      "append_opaque_path_parameter",
+      "classify_address",
+      "evaluate_redirect",
+      "normalize_url",
+      "normalize_url_with_configured_port",
+      "redact_cookie",
+      "redact_exception",
+      "redact_headers",
+      "redact_query",
+      "redact_url",
+      "resolve_destination"
+    ]
+  },
+  "sciretriever.network.response_feedback": {
+    "__all__": [
+      "FeedbackHeaderError",
+      "header_value",
+      "nonnegative_integer_header",
+      "nonnegative_number_header",
+      "parse_retry_after",
+      "quota_reset_deadline",
+      "retry_after_feedback"
+    ],
+    "path": "src/sciretriever/network/response_feedback.py",
+    "symbols": [
+      "FeedbackHeaderError",
+      "header_value",
+      "nonnegative_integer_header",
+      "nonnegative_number_header",
+      "parse_retry_after",
+      "quota_reset_deadline",
+      "retry_after_feedback"
+    ]
+  },
+  "sciretriever.parsing.__init__": {
+    "__all__": [],
+    "path": "src/sciretriever/parsing/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.parsing.adapters.mineru": {
+    "__all__": [
+      "MinerUAdapterBounds",
+      "MinerUAdapterError",
+      "MinerUArchiveResult",
+      "MinerUHealth",
+      "MinerUProtocol2Bounds",
+      "MinerUProtocol2Error",
+      "MinerUProtocol2ServiceClient",
+      "MinerUServicePort",
+      "MinerUTask",
+      "OperatorManagedMinerUAdapter"
+    ],
+    "path": "src/sciretriever/parsing/adapters/mineru.py",
+    "symbols": [
+      "MinerUAdapterBounds",
+      "MinerUAdapterError",
+      "MinerUArchiveResult",
+      "MinerUHealth",
+      "MinerUProtocol2Bounds",
+      "MinerUProtocol2Error",
+      "MinerUProtocol2ServiceClient",
+      "MinerUServicePort",
+      "MinerUTask",
+      "OperatorManagedMinerUAdapter"
+    ]
+  },
+  "sciretriever.parsing.adapters.mineru_converter": {
+    "__all__": [
+      "ConvertedMinerUOutput",
+      "MinerUConversionBounds",
+      "MinerUConversionError",
+      "convert_mineru_archive"
+    ],
+    "path": "src/sciretriever/parsing/adapters/mineru_converter.py",
+    "symbols": [
+      "ConvertedMinerUOutput",
+      "MinerUConversionBounds",
+      "MinerUConversionError",
+      "convert_mineru_archive"
+    ]
+  },
+  "sciretriever.parsing.api": {
+    "__all__": [
+      "ParsingApi",
+      "ParsingFailure",
+      "PreparedParsing"
+    ],
+    "path": "src/sciretriever/parsing/api.py",
+    "symbols": [
+      "ParsingApi",
+      "PreparedParsing"
+    ]
+  },
+  "sciretriever.parsing.archive": {
+    "__all__": [
+      "ExtractedParserArchive",
+      "ParserArchiveBounds",
+      "ParserArchiveError",
+      "ParserArchiveMember",
+      "extract_parser_archive"
+    ],
+    "path": "src/sciretriever/parsing/archive.py",
+    "symbols": [
+      "ExtractedParserArchive",
+      "ParserArchiveBounds",
+      "ParserArchiveError",
+      "ParserArchiveMember",
+      "extract_parser_archive"
+    ]
+  },
+  "sciretriever.parsing.markdown": {
+    "__all__": [
+      "MarkdownConversionBounds",
+      "MarkdownConversionError",
+      "MarkdownResourceUse",
+      "NormalizedMarkdown",
+      "canonical_resource_path",
+      "normalize_parser_markdown",
+      "validated_markdown_resource_references"
+    ],
+    "path": "src/sciretriever/parsing/markdown.py",
+    "symbols": [
+      "MarkdownConversionBounds",
+      "MarkdownConversionError",
+      "MarkdownResourceUse",
+      "NormalizedMarkdown",
+      "canonical_resource_path",
+      "normalize_parser_markdown",
+      "validated_markdown_resource_references"
+    ]
+  },
+  "sciretriever.parsing.ports": {
+    "__all__": [
+      "ParserArtifactContent",
+      "ParserArtifactCleanup",
+      "ParserPort",
+      "ParserResultPublicationCommand",
+      "ParserResultStorePort",
+      "ParsingFailure",
+      "StagedParserArtifact",
+      "StagedParserOutput",
+      "StagedParserResource"
+    ],
+    "path": "src/sciretriever/parsing/ports.py",
+    "symbols": [
+      "ParserArtifactCleanup",
+      "ParserArtifactContent",
+      "ParserPort",
+      "ParserResultPublicationCommand",
+      "ParserResultStorePort",
+      "ParsingFailure",
+      "StagedParserArtifact",
+      "StagedParserOutput",
+      "StagedParserResource"
+    ]
+  },
+  "sciretriever.parsing.publication": {
+    "__all__": [
+      "ParserResultPublisher",
+      "same_parser_result_manifest"
+    ],
+    "path": "src/sciretriever/parsing/publication.py",
+    "symbols": [
+      "ParserResultPublisher",
+      "same_parser_result_manifest"
+    ]
+  },
+  "sciretriever.parsing.resources": {
+    "__all__": [
+      "NormalizedParserArtifacts",
+      "ParserResourceBounds",
+      "ParserResourceConversionError",
+      "convert_parser_artifacts",
+      "validate_normalized_parser_artifacts"
+    ],
+    "path": "src/sciretriever/parsing/resources.py",
+    "symbols": [
+      "NormalizedParserArtifacts",
+      "ParserResourceBounds",
+      "ParserResourceConversionError",
+      "convert_parser_artifacts",
+      "validate_normalized_parser_artifacts"
+    ]
+  },
+  "sciretriever.parsing.rules": {
+    "__all__": [
+      "ParserStructureError",
+      "prepare_parser_result"
+    ],
+    "path": "src/sciretriever/parsing/rules.py",
+    "symbols": [
+      "ParserStructureError",
+      "prepare_parser_result"
+    ]
+  },
+  "sciretriever.parsing.service": {
+    "__all__": [
+      "ParsingService"
+    ],
+    "path": "src/sciretriever/parsing/service.py",
+    "symbols": [
+      "ParsingService"
+    ]
+  },
+  "sciretriever.storage.__init__": {
+    "__all__": [],
+    "path": "src/sciretriever/storage/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.storage.analysis_artifacts": {
+    "__all__": [
+      "AnalysisArtifactPublicationError",
+      "AnalysisArtifactPublisher"
+    ],
+    "path": "src/sciretriever/storage/analysis_artifacts.py",
+    "symbols": [
+      "AnalysisArtifactPublicationError",
+      "AnalysisArtifactPublisher"
+    ]
+  },
+  "sciretriever.storage.completion": {
+    "__all__": [
+      "CompletionInputBuilder",
+      "CompletionInputError",
+      "VerifiedStorageObjectError",
+      "VerifiedStorageObjectRef"
+    ],
+    "path": "src/sciretriever/storage/completion.py",
+    "symbols": [
+      "CompletionInputBuilder",
+      "CompletionInputError",
+      "VerifiedStorageObjectError",
+      "VerifiedStorageObjectRef"
+    ]
+  },
+  "sciretriever.storage.files.__init__": {
+    "__all__": [],
+    "path": "src/sciretriever/storage/files/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.storage.files.output": {
+    "__all__": [
+      "AtomicOutput",
+      "AtomicOutputError",
+      "OutputConflictError",
+      "OutputIntegrityError",
+      "OutputResult",
+      "OutputSecurityError",
+      "write_atomic"
+    ],
+    "path": "src/sciretriever/storage/files/output.py",
+    "symbols": [
+      "AtomicOutput",
+      "AtomicOutputError",
+      "Checkpoint",
+      "OutputConflictError",
+      "OutputIntegrityError",
+      "OutputResult",
+      "OutputSecurityError",
+      "OutputSource",
+      "write_atomic"
+    ]
+  },
+  "sciretriever.storage.files.paths": {
+    "__all__": [
+      "ReferenceKind",
+      "StoragePathError",
+      "StorageRoot",
+      "content_addressed_reference"
+    ],
+    "path": "src/sciretriever/storage/files/paths.py",
+    "symbols": [
+      "ReferenceKind",
+      "StoragePathError",
+      "StorageRoot",
+      "content_addressed_reference"
+    ]
+  },
+  "sciretriever.storage.files.reader": {
+    "__all__": [
+      "VerifiedArtifactLease",
+      "VerifiedReader",
+      "VerifiedReaderError"
+    ],
+    "path": "src/sciretriever/storage/files/reader.py",
+    "symbols": [
+      "VerifiedArtifactLease",
+      "VerifiedReader",
+      "VerifiedReaderError"
+    ]
+  },
+  "sciretriever.storage.files.reconciliation": {
+    "__all__": [
+      "ArtifactReconciliationError",
+      "ArtifactReconciliationIntegrityError",
+      "ArtifactStoreReconciler",
+      "Checkpoint",
+      "ReconciliationResult"
+    ],
+    "path": "src/sciretriever/storage/files/reconciliation.py",
+    "symbols": [
+      "ArtifactReconciliationError",
+      "ArtifactReconciliationIntegrityError",
+      "ArtifactStoreReconciler",
+      "Checkpoint",
+      "ReconciliationResult"
+    ]
+  },
+  "sciretriever.storage.files.staging": {
+    "__all__": [
+      "StagingError",
+      "StagingFile",
+      "StagingIdentity",
+      "create_staging"
+    ],
+    "path": "src/sciretriever/storage/files/staging.py",
+    "symbols": [
+      "StagingError",
+      "StagingFile",
+      "StagingIdentity",
+      "create_staging"
+    ]
+  },
+  "sciretriever.storage.files.store": {
+    "__all__": [
+      "ArtifactConflictError",
+      "ArtifactIntegrityError",
+      "ArtifactReference",
+      "ArtifactSource",
+      "ArtifactStore",
+      "ArtifactStoreError"
+    ],
+    "path": "src/sciretriever/storage/files/store.py",
+    "symbols": [
+      "ArtifactConflictError",
+      "ArtifactIntegrityError",
+      "ArtifactReference",
+      "ArtifactSource",
+      "ArtifactStore",
+      "ArtifactStoreError",
+      "Checkpoint",
+      "ReadableSource"
+    ]
+  },
+  "sciretriever.storage.literature_artifacts": {
+    "__all__": [
+      "LiteratureArtifactReadError",
+      "LiteratureArtifactReader",
+      "LiteratureArtifactReference"
+    ],
+    "path": "src/sciretriever/storage/literature_artifacts.py",
+    "symbols": [
+      "LiteratureArtifactReader"
+    ]
+  },
+  "sciretriever.storage.locking": {
+    "__all__": [
+      "CatalogLockConflictError",
+      "CatalogLockError",
+      "CatalogLockSecurityError",
+      "CatalogLockStateError",
+      "CatalogWriteLock"
+    ],
+    "path": "src/sciretriever/storage/locking.py",
+    "symbols": [
+      "CatalogLockConflictError",
+      "CatalogLockError",
+      "CatalogLockSecurityError",
+      "CatalogLockStateError",
+      "CatalogWriteLock"
+    ]
+  },
+  "sciretriever.storage.pdf_validation_staging": {
+    "__all__": [
+      "PdfValidationStagingAdapterError",
+      "SystemPdfValidationStaging"
+    ],
+    "path": "src/sciretriever/storage/pdf_validation_staging.py",
+    "symbols": [
+      "DescriptorStageFactory",
+      "PdfValidationStagingAdapterError",
+      "SystemPdfValidationStaging",
+      "TemporaryDirectoryFactory"
+    ]
+  },
+  "sciretriever.storage.sqlite.__init__": {
+    "__all__": [],
+    "path": "src/sciretriever/storage/sqlite/__init__.py",
+    "symbols": []
+  },
+  "sciretriever.storage.sqlite.acquisition_publication": {
+    "__all__": [
+      "AcquisitionPublicationConflictError",
+      "AcquisitionPublicationError",
+      "AcquisitionPublicationIntegrityError",
+      "SqliteAcquisitionPublication"
+    ],
+    "path": "src/sciretriever/storage/sqlite/acquisition_publication.py",
+    "symbols": [
+      "AcquisitionPublicationConflictError",
+      "AcquisitionPublicationError",
+      "AcquisitionPublicationIntegrityError",
+      "Checkpoint",
+      "SqliteAcquisitionPublication"
+    ]
+  },
+  "sciretriever.storage.sqlite.analysis_artifacts": {
+    "__all__": [
+      "AnalysisArtifactReadError",
+      "AnalysisArtifactReader"
+    ],
+    "path": "src/sciretriever/storage/sqlite/analysis_artifacts.py",
+    "symbols": [
+      "AnalysisArtifactReadError",
+      "AnalysisArtifactReader"
+    ]
+  },
+  "sciretriever.storage.sqlite.analysis_inputs": {
+    "__all__": [
+      "AnalysisCurrentInputError",
+      "SqliteAnalysisCurrentInputs"
+    ],
+    "path": "src/sciretriever/storage/sqlite/analysis_inputs.py",
+    "symbols": [
+      "AnalysisCurrentInputError",
+      "SqliteAnalysisCurrentInputs"
+    ]
+  },
+  "sciretriever.storage.sqlite.artifact_references": {
+    "__all__": [
+      "ArtifactReferenceSnapshot",
+      "ArtifactReferenceStoreError",
+      "ArtifactReferenceStoreIntegrityError",
+      "CatalogArtifactObject",
+      "FormalArtifactReference",
+      "SqliteArtifactReferenceStore"
+    ],
+    "path": "src/sciretriever/storage/sqlite/artifact_references.py",
+    "symbols": [
+      "ArtifactReferenceSnapshot",
+      "ArtifactReferenceStoreError",
+      "ArtifactReferenceStoreIntegrityError",
+      "CatalogArtifactObject",
+      "FormalArtifactReference",
+      "SqliteArtifactReferenceStore"
+    ]
+  },
+  "sciretriever.storage.sqlite.artifacts": {
+    "__all__": [
+      "ArtifactCatalogConflictError",
+      "ArtifactCatalogError",
+      "ArtifactCatalogIntegrityError",
+      "ArtifactObject",
+      "get_artifact",
+      "get_provenance",
+      "register_artifact",
+      "register_provenance"
+    ],
+    "path": "src/sciretriever/storage/sqlite/artifacts.py",
+    "symbols": [
+      "ArtifactCatalogConflictError",
+      "ArtifactCatalogError",
+      "ArtifactCatalogIntegrityError",
+      "ArtifactObject",
+      "CatalogTarget",
+      "get_artifact",
+      "get_provenance",
+      "register_artifact",
+      "register_provenance"
+    ]
+  },
+  "sciretriever.storage.sqlite.content_publication": {
+    "__all__": [
+      "CONTENT_PUBLICATION_FAILPOINTS",
+      "ContentPublicationConflictError",
+      "ContentPublicationError",
+      "ContentPublicationIntegrityError",
+      "SqliteContentPublication"
+    ],
+    "path": "src/sciretriever/storage/sqlite/content_publication.py",
+    "symbols": [
+      "CONTENT_PUBLICATION_FAILPOINTS",
+      "ContentPublicationCheckpoint",
+      "ContentPublicationConflictError",
+      "ContentPublicationError",
+      "ContentPublicationIntegrityError",
+      "SqliteContentPublication"
+    ]
+  },
+  "sciretriever.storage.sqlite.discovery_repository": {
+    "__all__": [
+      "Checkpoint",
+      "DiscoveryRepositoryConflictError",
+      "DiscoveryRepositoryError",
+      "DiscoveryRepositoryIntegrityError",
+      "DiscoveryRunNotFoundError",
+      "SqliteDiscoveryRepository"
+    ],
+    "path": "src/sciretriever/storage/sqlite/discovery_repository.py",
+    "symbols": [
+      "Checkpoint",
+      "DiscoveryRepositoryConflictError",
+      "DiscoveryRepositoryError",
+      "DiscoveryRepositoryIntegrityError",
+      "DiscoveryRunNotFoundError",
+      "SqliteDiscoveryRepository"
+    ]
+  },
+  "sciretriever.storage.sqlite.engine": {
+    "__all__": [
+      "CatalogBootstrapError",
+      "CatalogConnection",
+      "CatalogConnectionError",
+      "CatalogEngine",
+      "CatalogError",
+      "CatalogPathError",
+      "DEFAULT_BUSY_TIMEOUT_MS",
+      "MAX_BUSY_TIMEOUT_MS",
+      "UnsupportedCatalogError",
+      "canonical_catalog_path",
+      "create_or_open_catalog",
+      "open_read_only_snapshot",
+      "validate_catalog"
+    ],
+    "path": "src/sciretriever/storage/sqlite/engine.py",
+    "symbols": [
+      "CatalogBootstrapError",
+      "CatalogConnection",
+      "CatalogConnectionError",
+      "CatalogEngine",
+      "CatalogError",
+      "CatalogPathError",
+      "Checkpoint",
+      "DEFAULT_BUSY_TIMEOUT_MS",
+      "MAX_BUSY_TIMEOUT_MS",
+      "UnsupportedCatalogError",
+      "canonical_catalog_path",
+      "create_or_open_catalog",
+      "open_read_only_snapshot",
+      "validate_catalog"
+    ]
+  },
+  "sciretriever.storage.sqlite.entry_reader": {
+    "__all__": [
+      "EntryReaderError",
+      "EntryReaderNotFoundError",
+      "SqliteEntryReader"
+    ],
+    "path": "src/sciretriever/storage/sqlite/entry_reader.py",
+    "symbols": [
+      "EntryReaderError",
+      "EntryReaderNotFoundError",
+      "SqliteEntryReader"
+    ]
+  },
+  "sciretriever.storage.sqlite.literature_artifact_catalog": {
+    "__all__": [],
+    "path": "src/sciretriever/storage/sqlite/literature_artifact_catalog.py",
+    "symbols": [
+      "LiteratureArtifactCatalogError",
+      "verify_literature_artifact_catalog"
+    ]
+  },
+  "sciretriever.storage.sqlite.literature_preconditions": {
+    "__all__": [
+      "LiteraturePreconditionReadError",
+      "LiteraturePreconditionReader"
+    ],
+    "path": "src/sciretriever/storage/sqlite/literature_preconditions.py",
+    "symbols": [
+      "LiteraturePreconditionReadError",
+      "LiteraturePreconditionReader"
+    ]
+  },
+  "sciretriever.storage.sqlite.literature_reader": {
+    "__all__": [
+      "LiteratureReader",
+      "LiteratureReaderError",
+      "LiteratureReaderNotFoundError",
+      "SQLiteLiteratureQueryReader"
+    ],
+    "path": "src/sciretriever/storage/sqlite/literature_reader.py",
+    "symbols": [
+      "LiteratureReader",
+      "LiteratureReaderError",
+      "LiteratureReaderNotFoundError",
+      "SQLiteLiteratureQueryReader"
+    ]
+  },
+  "sciretriever.storage.sqlite.literature_writer": {
+    "__all__": [
+      "LiteratureWriter",
+      "LiteratureWriterConflictError",
+      "LiteratureWriterError",
+      "LiteratureWriterIntegrityError"
+    ],
+    "path": "src/sciretriever/storage/sqlite/literature_writer.py",
+    "symbols": [
+      "Checkpoint",
+      "LiteratureWriter",
+      "LiteratureWriterConflictError",
+      "LiteratureWriterError",
+      "LiteratureWriterIntegrityError"
+    ]
+  },
+  "sciretriever.storage.sqlite.metadata_publication": {
+    "__all__": [
+      "SqliteProviderRelationObservationPublication"
+    ],
+    "path": "src/sciretriever/storage/sqlite/metadata_publication.py",
+    "symbols": [
+      "SqliteProviderRelationObservationPublication"
+    ]
+  },
+  "sciretriever.storage.sqlite.no_usable_content_cleanup": {
+    "__all__": [
+      "NO_USABLE_CONTENT_CLEANUP_FAILPOINTS",
+      "NoUsableContentCleanupConflictError",
+      "NoUsableContentCleanupIntegrityError",
+      "NoUsableContentCleanupStorageError",
+      "SqliteNoUsableContentCleanup"
+    ],
+    "path": "src/sciretriever/storage/sqlite/no_usable_content_cleanup.py",
+    "symbols": [
+      "CleanupCheckpoint",
+      "NO_USABLE_CONTENT_CLEANUP_FAILPOINTS",
+      "NoUsableContentCleanupConflictError",
+      "NoUsableContentCleanupIntegrityError",
+      "NoUsableContentCleanupStorageError",
+      "SqliteNoUsableContentCleanup"
+    ]
+  },
+  "sciretriever.storage.sqlite.parsing_publication": {
+    "__all__": [
+      "PARSER_RESULT_PUBLICATION_FAILPOINTS",
+      "ParserResultPublicationConflictError",
+      "ParserResultPublicationError",
+      "ParserResultPublicationIntegrityError",
+      "SqliteParserResultPublication"
+    ],
+    "path": "src/sciretriever/storage/sqlite/parsing_publication.py",
+    "symbols": [
+      "PARSER_RESULT_PUBLICATION_FAILPOINTS",
+      "ParserResultPublicationCheckpoint",
+      "ParserResultPublicationConflictError",
+      "ParserResultPublicationError",
+      "ParserResultPublicationIntegrityError",
+      "SqliteParserResultPublication"
+    ]
+  },
+  "sciretriever.storage.sqlite.schema": {
+    "__all__": [
+      "SCHEMA_FINGERPRINT",
+      "SCHEMA_INDEXES",
+      "SCHEMA_MANIFEST",
+      "SCHEMA_PRODUCT",
+      "SCHEMA_TABLES",
+      "SCHEMA_TRIGGERS",
+      "SCHEMA_VERSION",
+      "schema_fingerprint"
+    ],
+    "path": "src/sciretriever/storage/sqlite/schema.py",
+    "symbols": [
+      "SCHEMA_FINGERPRINT",
+      "SCHEMA_INDEXES",
+      "SCHEMA_MANIFEST",
+      "SCHEMA_PRODUCT",
+      "SCHEMA_TABLES",
+      "SCHEMA_TRIGGERS",
+      "SCHEMA_VERSION",
+      "schema_fingerprint"
+    ]
+  },
+  "sciretriever.storage.sqlite.schema_discovery": {
+    "__all__": [
+      "DISCOVERY_SCHEMA_INDEXES",
+      "DISCOVERY_SCHEMA_MANIFEST",
+      "DISCOVERY_SCHEMA_TABLES",
+      "DISCOVERY_SCHEMA_TRIGGERS"
+    ],
+    "path": "src/sciretriever/storage/sqlite/schema_discovery.py",
+    "symbols": [
+      "DISCOVERY_SCHEMA_INDEXES",
+      "DISCOVERY_SCHEMA_MANIFEST",
+      "DISCOVERY_SCHEMA_TABLES",
+      "DISCOVERY_SCHEMA_TRIGGERS"
+    ]
+  },
+  "sciretriever.storage.sqlite.schema_literature": {
+    "__all__": [
+      "LITERATURE_SCHEMA_MANIFEST",
+      "LITERATURE_SCHEMA_INDEXES",
+      "LITERATURE_SCHEMA_TABLES"
+    ],
+    "path": "src/sciretriever/storage/sqlite/schema_literature.py",
+    "symbols": [
+      "LITERATURE_SCHEMA_INDEXES",
+      "LITERATURE_SCHEMA_MANIFEST",
+      "LITERATURE_SCHEMA_TABLES"
+    ]
+  }
+}

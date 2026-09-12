@@ -1,411 +1,91 @@
-# Block 01｜基线、风险与公共合同
-
-## 块身份
-
-- 状态：`In progress`；既有合同实现保留，高风险验证、迁移追踪和长期决策状态尚未通过 R3
-- Tasks：`BASE-01`、`INVENTORY-MODULES`、`INVENTORY-ENTRY`、`INVENTORY-METADATA`
-  `INVENTORY-ACQUISITION`、`INVENTORY-CLI`、`INVENTORY-CONFIG`、`INVENTORY-TESTS`
-  `INVENTORY-TRACEABILITY`、`RUNTIME-SPIKE`、`BROWSER-RUNTIME-SPIKE`
-  `PLATFORM-SAFETY-SPIKE`、`PDF-ENGINE-SPIKE`、`THREAT-MODEL`
-  `PLATFORM-RELEASE-MATRIX`、`RUNTIME-SELECTION`、`FIXTURE-V1`
-  `MIGRATION-DECISIONS`、`TOOLCHAIN-CONTRACT`
-  `MODEL-IDENTITY`、`MODEL-RECORDS`、`MODEL-ERRORS`、`CANONICAL-JSON`
-  `CANONICAL-INTEGRITY`、`MIGRATION-CONTRACTS`、`BASELINE-ACCEPTANCE`
-- 前置块：无
-- 下游块：Block 02
-- 恢复点：`INVENTORY-MODULES`；先补齐各 inventory Task，再由 `INVENTORY-TRACEABILITY` 汇合逐项迁移追踪，
-  随后关闭运行时 spike、长期合同状态和 `BASELINE-ACCEPTANCE`。在该恢复点通过前不开始新的实现切片
-
-## 块结果
-
-建立自包含的迁移边界、版本和平台事实，生成不含用户数据的 v1 fixture，并固定能被后续模块共同消费的
-strict contracts、canonical bytes/hash 和查询规则。
-
-## 进入条件
-
-已获得离线计划和本地合成材料修改授权；基线 commit、项目真相源和用户数据保护边界已记录。
-
-## 责任与改动面
-
-Primary 负责 `migration/`、`packages/contracts/`、fixture 和计划证据。Python 源码、既有测试、用户配置、
-Catalog、Profile 和凭据保持不变。生产者是当前 Python Model/Entry/Storage，消费者是后续 TS contracts、
-Storage、Network、Agents 和业务模块。
-
-## 需要保持的行为
-
-不得重算旧 golden 迁就新实现；不得把领域特定 schema 放入通用合同；不得将 Proposed 选择写成 Accepted；
-不得访问真实数据或外部服务。
-
-## Tasks
-
-本节是本块 Task 定义与状态的唯一位置，按列出顺序串行执行。[任务索引](task-ledger.md)仅用于定位。
-反引号中的文件路径均相对仓库根目录；未实现任务的路径是拟新增落点，不表示文件或测试已经存在。
-每项完成还须满足本块公共退出条件；测试名只描述行为，禁止按计划顺序命名。
-
-### BASE-01
-
-- [x] **BASE-01 — 固定 baseline revision、工作树、Python 版本和既有门禁结果。**
-  - 状态：`Completed`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：记录指定 baseline、工作树范围、工具版本和 Python 门禁结果；后续差分只与这份已捕获基线比较。
-  - 改动面：`migration/baseline/`。
-  - 依赖：无。
-  - 验收：基线 revision 可解析，证据区分受保护改动和本任务文件；失败或未运行命令保留原状态，不将缺项当通过。
-  - 直接验证：`migration/baseline/README.md`、Python Quick/Full。
-  - 证据：[已有记录](../../../migration/baseline/README.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### INVENTORY-MODULES
-
-- [ ] **INVENTORY-MODULES — 为 235 个 Python 源模块逐一记录 target、owner、公开符号和 disposition。**
-  - 状态：`In progress`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：逐模块记录来源、公开符号、目标责任模块及 migrate/retain/retire 处置；数字只描述基线快照。
-  - 改动面：`migration/inventory.json`、`python-module-symbols.json`。
-  - 依赖：[BASE-01](#base-01)。
-  - 验收：清单与基线活动模块逐项对应，无遗漏/重复；每项还记录 consumer、目标 Task、直接测试、证据和
-    `unstarted/implemented/verified/retained/retired` 状态；退役项必须有批准依据，不能以目标目录存在代替迁移完成。
-  - 直接验证：`tests/test_migration_inventory.py`。
-  - 证据：[已有记录](../../../migration/evidence/baseline/inventory.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### INVENTORY-ENTRY
-
-- [ ] **INVENTORY-ENTRY — 逐一记录 8 个公开 `api.py` 入口及导出符号。**
-  - 状态：`In progress`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：列出公开 api.py 的导出和调用方，指定对应 TS 公共入口；识别仅内部使用的接口。
-  - 改动面：`migration/inventory.json`。
-  - 依赖：[INVENTORY-MODULES](#inventory-modules)。
-  - 验收：基线公开导出均有调用方、目标入口、目标 Task、直接测试和处置状态；缺少目标或消费者的项保持
-    未闭合，不能标为已实现 API。
-  - 直接验证：`tests/test_migration_inventory.py`。
-  - 证据：[已有记录](../../../migration/evidence/baseline/inventory.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### INVENTORY-METADATA
-
-- [ ] **INVENTORY-METADATA — 逐一记录 11 个 Metadata adapter 及其请求、响应和失败边界。**
-  - 状态：`In progress`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：按供应商列出支持的 search/lookup/reference/citation 能力、协议边界和目标 adapter。
-  - 改动面：`migration/inventory.json`。
-  - 依赖：[INVENTORY-MODULES](#inventory-modules)。
-  - 验收：基线每个 adapter 都有逐项能力、消费方、目标 Task、fixture、直接测试和证据记录；供应商未支持的
-    能力显式标出，不能用统一接口推断支持。
-  - 直接验证：`tests/test_migration_inventory.py`。
-  - 证据：[已有记录](../../../migration/evidence/baseline/inventory.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### INVENTORY-ACQUISITION
-
-- [ ] **INVENTORY-ACQUISITION — 逐一记录 7 个来源和 3 个授权获取 adapter。**
-  - 状态：`In progress`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：列出七个来源和三个授权 adapter 的 route 输入、凭据 owner、Candidate 输出及失败归属。
-  - 改动面：`migration/inventory.json`。
-  - 依赖：[INVENTORY-MODULES](#inventory-modules)。
-  - 验收：十个入口均有消费方、目标 Task、fixture、直接测试、证据和处置状态；区分 Metadata 与 PDF 获取能力，
-    不能以相同供应商名称合并处置。
-  - 直接验证：`tests/test_migration_inventory.py`。
-  - 证据：[已有记录](../../../migration/evidence/baseline/inventory.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### INVENTORY-CLI
-
-- [ ] **INVENTORY-CLI — 逐一记录 23 个 CLI command path、参数和用户可观察错误。**
-  - 状态：`In progress`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：逐 command path 记录参数、selector、输出格式、退出码和配置 owner，作为 CLI 差分输入。
-  - 改动面：`migration/inventory.json`。
-  - 依赖：[INVENTORY-ENTRY](#inventory-entry)。
-  - 验收：命令及参数与基线一致；每条命令有调用方、目标 Task、直接测试和证据；帮助、错误和未开始操作也有
-    落点，不能只盘点成功分支。
-  - 直接验证：`tests/test_migration_inventory.py`。
-  - 证据：[已有记录](../../../migration/evidence/baseline/inventory.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### INVENTORY-CONFIG
-
-- [ ] **INVENTORY-CONFIG — 逐一记录 11 个 configuration section、alias、敏感字段和读写 owner。**
-  - 状态：`In progress`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：逐 section 记录默认值、引用、敏感字段、读写 owner 和现有交互入口。
-  - 改动面：`migration/inventory.json`。
-  - 依赖：[INVENTORY-MODULES](#inventory-modules)。
-  - 验收：普通配置与 secret 分开；每个字段有消费方、目标 Task、差分测试和证据；未知 section/key、废弃 schema
-    和引用错误的处理均可定位。
-  - 直接验证：`tests/test_migration_inventory.py`。
-  - 证据：[已有记录](../../../migration/evidence/baseline/inventory.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### INVENTORY-TESTS
-
-- [ ] **INVENTORY-TESTS — 为 161 个现有 Python 测试文件记录行为 area、被保护能力和迁移测试落点。**
-  - 状态：`In progress`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：为每个基线测试文件记录所保护的用户结果与目标测试；保留行为测试而非沿用阶段名称。
-  - 改动面：`migration/inventory.json`。
-  - 依赖：[INVENTORY-MODULES](#inventory-modules)。
-  - 验收：活动测试无遗漏；每个测试文件关联被保护行为、消费 Task、目标行为测试和证据；未迁移测试保留未完成
-    状态，不能把创建同名空文件视为行为覆盖。
-  - 直接验证：`tests/test_migration_inventory.py`。
-  - 证据：[已有记录](../../../migration/evidence/baseline/inventory.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### INVENTORY-TRACEABILITY
-
-- [ ] **INVENTORY-TRACEABILITY — 关闭活动能力、调用方、Task、直接测试和证据的逐项迁移追踪。**
-  - 状态：`Pending`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：汇合模块、公开入口、Provider、Acquisition、CLI、Configuration 和测试清单；为每项填写 consumer、
-    target Task、direct test、evidence、disposition、migration status 和批准退役依据。
-  - 改动面：`migration/inventory.json`、`migration/evidence/baseline/inventory.md`。
-  - 依赖：[INVENTORY-MODULES](#inventory-modules)、[INVENTORY-ENTRY](#inventory-entry)、
-    [INVENTORY-METADATA](#inventory-metadata)、[INVENTORY-ACQUISITION](#inventory-acquisition)、
-    [INVENTORY-CLI](#inventory-cli)、[INVENTORY-CONFIG](#inventory-config)、[INVENTORY-TESTS](#inventory-tests)。
-  - 验收：活动项无未归属、重复 owner 或空处置；`implemented/verified/retired` 都能定位到实际测试和证据；
-    `unstarted` 不被计作完成，`retirements` 与 `unresolved` 不允许用空数组掩盖未知项。
-  - 直接验证：扩展 `tests/test_migration_inventory.py`，验证字段完整性、Task 链接、测试存在性、状态转换和退役依据。
-  - 证据：更新 `migration/evidence/baseline/inventory.md`；当前结构清单仅作为输入，尚未关闭本 Task。
-
-### RUNTIME-SPIKE
-
-- [x] **RUNTIME-SPIKE — 记录本机运行时能力与未验证限制。**
-  - 状态：`Completed`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：记录本机 Node/pnpm、Chromium、SQLite、PDF 和文件原语的探测结果；区分已执行、缺失及待选 binding。
-  - 改动面：`migration/spikes/`。
-  - 依赖：[BASE-01](#base-01)。
-  - 验收：版本、平台和探测命令可复现；缺失 Chromium、未选择 TS SQLite binding 明确为限制，不能据此声称 Browser/DB 可运行。
-  - 直接验证：`tests/test_runtime_capabilities.py`。
-  - 证据：[已有记录](../../../migration/evidence/baseline/runtime-capabilities.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### BROWSER-RUNTIME-SPIKE
-
-- [ ] **BROWSER-RUNTIME-SPIKE — 验证并固定 Browser wrapper、Playwright、Chromium、Profile、下载和投屏组合。**
-  - 状态：`In progress`；owner：Primary，Browser Host 为运行时 owner。
-  - 动作：用真实本地 Chromium 与 loopback fixture 验证 operator-managed wrapper、persistent Profile、native download、
-    screencast/ScreenSource、异常关闭和 binary 发现；区分 PATH 缺失、缓存 binary 可用、已选择和正式支持。
-  - 改动面：`migration/spikes/browser-runtime/`、`migration/evidence/baseline/browser-runtime.md`。
-  - 依赖：[RUNTIME-SPIKE](#runtime-spike)、[INVENTORY-TRACEABILITY](#inventory-traceability)。
-  - 验收：组合版本和平台可复现；headless smoke、headed/CloakBrowser、download、screen、Profile reopen 分别给出
-    `passed/failed/not-run`；CDP 后备若保留必须有独立结果，未验证组合不得列为支持。
-  - 直接验证：`apps/server/test/browser-runtime-compatibility.test.ts`、真实 Chromium loopback smoke；不访问外部站点。
-  - 证据：合并现有 `browser-host.md` 的有效 smoke，补齐缺失组合后写入上述证据；当前未闭合。
-
-### PLATFORM-SAFETY-SPIKE
-
-- [ ] **PLATFORM-SAFETY-SPIKE — 验证文件持久原语、跨进程锁和 Browser 原生出口安全可实现性。**
-  - 状态：`In progress`；owner：Primary，FileStore 和 Network 分别拥有文件与出口事实。
-  - 动作：在支持平台验证 no-follow、no-clobber、目录/文件 fsync、路径替换、锁竞争、持锁进程退出、DNS/IP 绑定、
-    CONNECT 与原生 Browser continue 路径；缺失能力形成窄适配或平台限制决定。
-  - 改动面：`migration/spikes/platform-safety/`、`migration/evidence/baseline/platform-safety.md`。
-  - 依赖：[RUNTIME-SPIKE](#runtime-spike)、[INVENTORY-TRACEABILITY](#inventory-traceability)。
-  - 验收：路径替换、symlink/hardlink、崩溃释放、mixed DNS、redirect、非标准端口和旁路通道有可重放结果；
-    不能用字符串路径检查、普通 rename 或 mock socket 冒充平台保证。
-  - 直接验证：行为命名的文件原语/Browser 出口 spike 测试和独立进程 fixture。
-  - 证据：拟写入 `migration/evidence/baseline/platform-safety.md`；当前现有文件测试只是输入。
-
-### PDF-ENGINE-SPIKE
-
-- [ ] **PDF-ENGINE-SPIKE — 选择可受限执行的 PDF 结构检查和文章身份文本提取组合。**
-  - 状态：`In progress`；owner：Primary，Acquisition 拥有 PDF 接纳和身份证据。
-  - 动作：比较候选工具对页树、加密、无文本、正文、引用、补充材料、大文件和压缩异常的行为；固定时间、内存、
-    输入上限、终止和无外部 fetch 边界。
-  - 改动面：`migration/spikes/pdf-engine/`、`tests/fixtures/pdf/`、`migration/evidence/baseline/pdf-engine.md`。
-  - 依赖：[RUNTIME-SPIKE](#runtime-spike)、[INVENTORY-TRACEABILITY](#inventory-traceability)。
-  - 验收：结构检查和身份文本提取能力分别记录；正文含 Supplementary、引用含目标 DOI、无 DOI 相近标题、损坏、
-    加密、无文本和资源炸弹均有结果；最终安装不隐式依赖 Python 开发环境。
-  - 直接验证：`apps/server/test/pdf-engine-compatibility.test.ts` 与受限 worker fixture。
-  - 证据：拟写入 `migration/evidence/baseline/pdf-engine.md`；当前工具版本记录不能关闭本 Task。
-
-### THREAT-MODEL
-
-- [ ] **THREAT-MODEL — 固定单操作者、控制面、凭据、外部页面、PDF 和持久服务威胁模型。**
-  - 状态：`Pending`；owner：Primary，安全责任按各事实 owner 路由。
-  - 动作：列出信任边界、资产、攻击入口、失败影响和缓解 owner，覆盖本机 API/WS、Origin/Host/CSRF、prompt
-    injection、credential grant、截图、Profile、下载、PDF、日志和恢复操作。
-  - 改动面：`migration/threat-model.md`。
-  - 依赖：[BROWSER-RUNTIME-SPIKE](#browser-runtime-spike)、[PLATFORM-SAFETY-SPIKE](#platform-safety-spike)、
-    [PDF-ENGINE-SPIKE](#pdf-engine-spike)。
-  - 验收：每个高风险入口有预防控制、直接测试 owner、残余风险和转化信号；网页或 Agent 不能修改策略、扩大能力、
-    读取任意服务器文件或把 secret 写入日志/DTO。
-  - 直接验证：文档语义审查及 [验收矩阵](verification-matrix.md) 的安全场景链接完整性检查。
-  - 证据：拟写入 `migration/threat-model.md`；未完成。
-
-### PLATFORM-RELEASE-MATRIX
-
-- [ ] **PLATFORM-RELEASE-MATRIX — 定义可测试平台、运行依赖、性能观察项和支持声明规则。**
-  - 状态：`Pending`；owner：Primary，发行责任由最终验证块消费。
-  - 动作：逐平台记录 Node、SQLite、Browser、显示、PDF、native 组件、安装形态和 doctor 规则；定义事件循环、DB、
-    frame、transfer、内存、磁盘和背压的测量项，不预填未经测量的数字。
-  - 改动面：`migration/release-matrix.json`、`migration/performance-measures.md`。
-  - 依赖：[BROWSER-RUNTIME-SPIKE](#browser-runtime-spike)、[PLATFORM-SAFETY-SPIKE](#platform-safety-spike)、
-    [PDF-ENGINE-SPIKE](#pdf-engine-spike)、[THREAT-MODEL](#threat-model)。
-  - 验收：支持、不支持和 `not-run` 可区分；无 Python/编译器/VNC、headed 显示和缓存 browser 的要求有明确结论；
-    性能阈值只有在最终专项验证后才能成为承诺。
-  - 直接验证：schema/链接检查和逐平台安装任务对矩阵字段的消费检查。
-  - 证据：拟写入 `migration/release-matrix.json` 和 `migration/performance-measures.md`；未完成。
-
-### RUNTIME-SELECTION
-
-- [ ] **RUNTIME-SELECTION — 形成 Browser、SQLite、PDF、文件安全和发行组合的正式运行时选择记录。**
-  - 状态：`Pending`；owner：Primary；长期选择必须路由到 requirement/ADR，易变版本留在 migration evidence。
-  - 动作：汇总各 spike，记录 adopted/rejected/unsupported 组合、版本约束、许可证、打包影响、回退条件和消费 Task；
-    明确 `node:sqlite`、Chromium/CloakBrowser 和 PDF 工具的当前选择状态。
-  - 改动面：`migration/runtime-selection.json`、`decision-log.md`。
-  - 依赖：[PLATFORM-RELEASE-MATRIX](#platform-release-matrix)、[FIXTURE-V1](#fixture-v1)。
-  - 验收：不存在“未安装/已缓存/已选择/已支持”混写；所有未通过 spike 的组合阻断相应下游，不通过降级安全合同继续。
-  - 直接验证：`tests/test_runtime_capabilities.py` 扩展为状态和消费链接验证；文档语义审查。
-  - 证据：拟写入 `migration/runtime-selection.json`；未完成。
-
-### FIXTURE-V1
-
-- [x] **FIXTURE-V1 — 生成固定的 synthetic metadata、literature、relation、asset、query、canonical bytes 和 hash fixture。**
-  - 状态：`Completed`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：固定合成记录、canonical bytes、hash 和 schema fingerprint；为后续 SQLite/query 差分保留输入来源。
-  - 改动面：`tests/fixtures/compat-v1/`。
-  - 依赖：[INVENTORY-TESTS](#inventory-tests)。
-  - 验收：重放生成得到相同 bytes/hash；改动输入或 golden 能被完整性检查识别；不读取用户数据库。
-  - 直接验证：`tests/test_fixture_integrity.py`。
-  - 证据：[已有记录](../../../migration/evidence/baseline/fixture-integrity.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### MIGRATION-DECISIONS
-
-- [ ] **MIGRATION-DECISIONS — 记录迁移 ownership、威胁模型、平台范围、回退和待授权事项。**
-  - 状态：`In progress`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：记录模块 owner、威胁面、迁移/回退和支持平台候选；将需要改变长期合同的事项路由到 requirement/ADR。
-  - 改动面：`migration/`。
-  - 依赖：[RUNTIME-SELECTION](#runtime-selection)、[THREAT-MODEL](#threat-model)、[FIXTURE-V1](#fixture-v1)。
-  - 验收：每个拟议选择有证据、消费任务和回退条件；执行决定与 Accepted 架构决定明确区分，未决项不隐式成为下游合同。
-  - 直接验证：`tests/test_migration_decisions.py`。
-  - 证据：[决策记录](decision-log.md)；当前已有离线执行决定，运行时选择、阶段移动和长期合同批准状态仍未闭合。
-
-### TOOLCHAIN-CONTRACT
-
-- [x] **TOOLCHAIN-CONTRACT — 使源码、测试和安装入口共同通过严格工具链。**
-  - 状态：`Completed`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：将活动源码和测试纳入 strict typecheck，固定锁文件及 format/lint/test/build 入口，验证各 workspace 的公开包入口。
-  - 改动面：根及两个 workspace 的 `package.json` / `tsconfig*.json`、`pnpm-lock.yaml`、`apps/server/src/index.ts`、直接测试与验证文档。
-  - 依赖：[RUNTIME-SPIKE](#runtime-spike)、[FIXTURE-V1](#fixture-v1)。
-  - 验收：源码和测试中的类型错误均使 typecheck 失败；零测试命令失败；冻结安装后可从产物导入公开包；生成物不混入源码。
-  - 直接验证：`packages/contracts/test/toolchain-contract.test.ts`、`packages/contracts/test/package-entrypoints.test.ts`、source/test 类型失败与零测试负例、TS/Python Full。
-  - 证据：[2026-09-09 重新验收](../../../migration/evidence/contracts/toolchain.md)；6 files / 25 TS tests、Python 2218 tests（3 个真实 runtime QA 跳过）、wheel 与包入口通过。
-
-### MODEL-IDENTITY
-
-- [x] **MODEL-IDENTITY — 解析固定 UUID、SHA-256、相对 POSIX 路径、枚举、Identifier，并以不同 brand 阻止 ID 互换；拒绝大小写/空白/非法格式。**
-  - 状态：`Completed`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：在中性合同边界验证 UUID、SHA-256、相对路径、Identifier 和枚举，并通过 brand 区分 ID 种类。
-  - 改动面：`packages/contracts/src/index.ts`。
-  - 依赖：[TOOLCHAIN-CONTRACT](#toolchain-contract)、[FIXTURE-V1](#fixture-v1)。
-  - 验收：固定合法值往返不变；非法格式、空白/大小写差异按 v1 规则拒绝，不同 ID 类型不能混用。
-  - 直接验证：`packages/contracts/test/contract-validation.test.ts`。
-  - 证据：[已有记录](../../../migration/evidence/contracts/model-and-canonical.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### MODEL-RECORDS
-
-- [x] **MODEL-RECORDS — 解析 Provenance、LiteratureMetadata、Literature、MetaLiterature、Reference、Asset、LibraryQuery；拒绝未知字段、错误 null、反向年份范围和自引用。**
-  - 状态：`Completed`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：为 provenance、metadata、literature、relation、asset 和 query 提供 closed parser；字段语义取自 Model 真相源。
-  - 改动面：`packages/contracts/src/index.ts`。
-  - 依赖：[MODEL-IDENTITY](#model-identity)。
-  - 验收：合成 v1 记录可解析；未知字段、错误 null、反向范围、自引用被拒绝，缺失 provenance 不被补造。
-  - 直接验证：`packages/contracts/test/contract-validation.test.ts`、compat-v1 fixture。
-  - 证据：[已有记录](../../../migration/evidence/contracts/model-and-canonical.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### MODEL-ERRORS
-
-- [x] **MODEL-ERRORS — 提供 closed `ContractValidationError`、稳定脱敏 failure 和严格 ReportEnd；错误只返回固定消息、路径和 code，不回显输入。**
-  - 状态：`Completed`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：输出固定 code、字段路径和脱敏消息，解析严格 ReportEnd；禁止回显原始输入或 vendor 异常。
-  - 改动面：`packages/contracts/src/index.ts`。
-  - 依赖：[MODEL-IDENTITY](#model-identity)。
-  - 验收：合法报告可往返；坏状态与未知字段拒绝，含合成敏感标记的输入不出现在错误或 JSON 中。
-  - 直接验证：`packages/contracts/test/contract-validation.test.ts`。
-  - 证据：[已有记录](../../../migration/evidence/contracts/model-and-canonical.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### CANONICAL-JSON
-
-- [x] **CANONICAL-JSON — 实现递归 key 排序、Unicode NFC、UTF-8、有限数字和 duplicate-key strict JSON；输出与 v1 fixture 逐字节一致。**
-  - 状态：`Completed`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：实现 v1 key 排序、Unicode/UTF-8、有限数值和严格 JSON 解码；重放冻结 golden。
-  - 改动面：`packages/contracts/src/index.ts`。
-  - 依赖：[MODEL-RECORDS](#model-records)。
-  - 验收：先逐字节比较再比较 hash；重复 key、非有限数和非法 JSON 拒绝，不更新旧 golden 消除差异。
-  - 直接验证：`packages/contracts/test/canonical-encoding.test.ts`。
-  - 证据：[已有记录](../../../migration/evidence/contracts/model-and-canonical.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### CANONICAL-INTEGRITY
-
-- [x] **CANONICAL-INTEGRITY — 对 canonical bytes 计算 SHA-256，并实现带 kind/version/checksum 绑定的无填充 base64url cursor 编解码和篡改拒绝。**
-  - 状态：`Completed`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：对 canonical bytes 计算 SHA-256；cursor 绑定 kind、version、payload 和 checksum，并使用无填充 base64url。
-  - 改动面：`packages/contracts/src/index.ts`。
-  - 依赖：[CANONICAL-JSON](#canonical-json)。
-  - 验收：v1 摘要一致；篡改 payload/checksum、错误 kind/version 和不规范编码均不能解成有效 cursor。
-  - 直接验证：`packages/contracts/test/canonical-encoding.test.ts`。
-  - 证据：[已有记录](../../../migration/evidence/contracts/model-and-canonical.md)；沿用已记录的切片结果，不代表下游能力已实现。
-
-### MIGRATION-CONTRACTS
-
-- [ ] **MIGRATION-CONTRACTS — 把已获准的迁移方向落实到权威设计，并分离 Proposed 与 Accepted 决策。**
-  - 状态：`In progress`；owner：Primary，业务责任按本块“责任与改动面”。
-  - 动作：依据用户获准方向补齐 TS 运行时、人工控制、Candidate 持久生命周期和 v2 execution 的目标合同及 owner；标明旧 Accepted 选择的保留、修订或替代，不从历史研究档案推导授权。
-  - 改动面：`docs/architecture/`。
-  - 依赖：[MIGRATION-DECISIONS](#migration-decisions)、[CANONICAL-INTEGRITY](#canonical-integrity)。
-  - 验收：requirements/ADR/design/technical 相互链接且无第二 owner；生产者/消费者、迁移和回退齐备；现有不持久化
-    报告等合同的变化需显式处置；ADR 0024 的长期 `Accepted` 状态有独立批准事实，否则保持 `Proposed`；离线实施
-    授权不能替代长期架构接受或生产切换授权。
-  - 直接验证：文档语义审查；逐项核对 requirement/ADR/design/technical 与生产者/消费者表。
-  - 证据：[合同衔接审查](../../../migration/evidence/baseline/migration-contracts.md)；当前文档已建立，但长期批准依据和
-    新增验收场景追踪尚待关闭。
-
-### BASELINE-ACCEPTANCE
-
-- [ ] **BASELINE-ACCEPTANCE — 在实现继续前关闭清单、spike、运行时选择、合同和验收追踪的 R3。**
-  - 状态：`Pending`；owner：Primary，作为 Block 02 的唯一进入门。
-  - 动作：审查本块所有 Task、[验收矩阵](verification-matrix.md)、运行时选择、决策状态和工作树边界，形成正式
-    baseline acceptance；只汇总证据，不补实现旁路。
-  - 改动面：`migration/m0-decision-record.md`、本块完成证据、根计划状态。
-  - 依赖：[INVENTORY-TRACEABILITY](#inventory-traceability)、[RUNTIME-SELECTION](#runtime-selection)、
-    [MIGRATION-CONTRACTS](#migration-contracts)、[CANONICAL-INTEGRITY](#canonical-integrity)。
-  - 验收：关键能力有 `passed/failed/not-run` 结果；阻断/不支持组合和首个实施切片明确；未通过项不会因环境版本、
-    测试总数或计划 checkbox 被当作已接受基线。
-  - 直接验证：文档链接、Task 依赖、验收场景覆盖和证据存在性检查；不运行真实外部操作。
-  - 证据：拟写入 `migration/m0-decision-record.md`；未完成。
-
-## 执行方式与集成点
-
-`BASE-01` 完成后关闭 `INVENTORY-*`/`INVENTORY-TRACEABILITY`，再执行 Browser、平台安全、PDF、威胁模型、
-发行矩阵和运行时选择；之后执行 `MIGRATION-DECISIONS`、
-`TOOLCHAIN-CONTRACT`、`MODEL-IDENTITY`、`MODEL-RECORDS`、`MODEL-ERRORS`、`CANONICAL-JSON`、
-`CANONICAL-INTEGRITY`、`MIGRATION-CONTRACTS` 和 `BASELINE-ACCEPTANCE`。每个任务完成后运行其直接检查、审查 diff 和
-证据，再更新本节状态；不使用阶段编号推导任务状态。
-
-## 审查门
-
-R0 检查计划自包含；R1 检查基线和授权；R2 检查 fixture 来源、合同 owner、负例和 bytes；R3 检查是否足以
-进入 Block 02。任何数据/安全/兼容差异都阻断下游。
-
-## 接口 / 数据 / 依赖影响
-
-新增迁移清单、合成 fixture 和 contracts，不改变 Python 公开行为、用户数据或生产 schema。Node/浏览器/
-SQLite/PDF 选择在证据充分前只是 Proposed。
-
-## 验证与证据
-
-证据目录为 `migration/evidence/baseline/` 和 `migration/evidence/contracts/`；直接测试使用
-`test_migration_inventory.py`、`tests/test_fixture_integrity.py`、`contract-validation.test.ts`、
-`canonical-encoding.test.ts` 等行为名称。
-
-## 退出条件
-
-能力清单逐项关联 consumer/Task/test/evidence；高风险 spike 可复现；v1 fixture 稳定；合同、bytes/hash 和负例
-直接测试通过；Python Quick/Full 仍通过；运行时选择、长期合同状态、未支持组合和阻断事实已记录；
-`BASELINE-ACCEPTANCE` 通过。
-
-## 完成证据
-
-基线和合同的既有记录分别见 [inventory](../../../migration/evidence/baseline/inventory.md)、
-[runtime-capabilities](../../../migration/evidence/baseline/runtime-capabilities.md)、
-[model-and-canonical](../../../migration/evidence/contracts/model-and-canonical.md) 和
-[toolchain](../../../migration/evidence/contracts/toolchain.md)。基线/合同记录保留当时范围；toolchain 文件增加了本轮重新验收证据。
-
-`TOOLCHAIN-CONTRACT` 已修复测试类型覆盖、server 包入口和冻结锁文件缺口，并经直接验证及 TS/Python Full 重新闭合。
-现有合同、工具链和合成 fixture 证据保留。Inventory 尚未形成逐项迁移追踪；Browser/平台/PDF spike、威胁模型、
-发行矩阵、运行时选择和长期合同批准状态尚未闭合，因此本块未达到 R3，也不能交接 Block 02。
-
-## 失败与恢复
-
-基线失败停止在 `BASE-01`；fixture 或 canonical 差异停止在 `FIXTURE-V1`、`CANONICAL-JSON` 或
-`CANONICAL-INTEGRITY`；不修改既有 golden，保留失败样本并从最近一个通过的任务恢复。Chromium 和 TS
-SQLite binding 的未决事实仍由后续块进入门处理，不在本块假装完成。
-
-## 下游交接
-
-交接能力清单、v1 fixture、strict contracts、canonical/hash 算法、平台阻断范围和决策记录；不交接临时
-实现、真实数据或未批准的架构承诺。
+# M0｜全量 TypeScript 迁移的基线、合同与高风险验证
+
+## 目标与原始依据
+
+本文件恢复原始 M0 的 **T001–T008**，为整个 M0–M6 / T001–T064 全量迁移建立实施基线。最终目标是全部活动 Python 产品能力由 TypeScript 实现，发布包由 TypeScript/Node 运行，不依赖 Python 解释器，也不通过 Python RPC 运行业务。Browser 工作台是其中一个能力切片；配置、全部 Provider、文献业务、CLI、解析、分析、持久任务、恢复和安装发行均在全量计划内。
+
+原始依据只使用归档的 [`original-bundle`](../../archive/2026-09-07-typescript-browser-workbench-reference/original-bundle/)：
+
+- [01｜代码盘点](../../archive/2026-09-07-typescript-browser-workbench-reference/original-bundle/01-codebase-audit.md)：活动文件、公开入口和测试的完整映射。
+- [05｜TS 迁移](../../archive/2026-09-07-typescript-browser-workbench-reference/original-bundle/05-ts-migration.md)、[06｜存储升级](../../archive/2026-09-07-typescript-browser-workbench-reference/original-bundle/06-storage-upgrade.md)：稳定行为、v1 字节与数据兼容。
+- [07｜路线](../../archive/2026-09-07-typescript-browser-workbench-reference/original-bundle/07-roadmap.md)和 [tasks.json](../../archive/2026-09-07-typescript-browser-workbench-reference/original-bundle/tasks.json)：固定任务、依赖、交付物和退出条件。
+- [08｜验收矩阵](../../archive/2026-09-07-typescript-browser-workbench-reference/original-bundle/08-tests-release.md)、[09｜合同与 ADR 草案](../../archive/2026-09-07-typescript-browser-workbench-reference/original-bundle/09-contracts-adr.md)：验收 ID、合同变更与决策主题。
+- [10｜来源](../../archive/2026-09-07-typescript-browser-workbench-reference/original-bundle/10-sources.md)、[11｜实施交接](../../archive/2026-09-07-typescript-browser-workbench-reference/original-bundle/11-agent-handoff.md)、[sources.json](../../archive/2026-09-07-typescript-browser-workbench-reference/original-bundle/sources.json)和 [validation-report.json](../../archive/2026-09-07-typescript-browser-workbench-reference/original-bundle/validation-report.json)：原始证据范围、实施纪律、机器来源清单和原始计划包自检结果。
+
+原始材料是计划基线；[产品需求](../../architecture/requirements.md)和 [Accepted ADR](../../architecture/decisions/README.md)仍约束实现。任务状态统一维护在[全量迁移路线](full-migration-roadmap.md#m0冻结基线与高风险验证)，本文件说明执行与验收，不维护第二套完成状态。当前 M0 基线、依赖、安全和性能观察项已完成，真实外部验证仍按授权边界记录。
+
+## 全量盘点范围
+
+T001 从原始 commit `e1a33d5986f654f2692d7619dd58448944ec3463` 与当前工作树分别记录基线及增量，不能只筛选 Browser 调用链。盘点至少覆盖：
+
+| 范围 | 必须追踪的行为与入口 |
+| --- | --- |
+| Entry / CLI / Configuration | 全部公开 API、CLI leaves、参数、报告、退出码、配置与 TUI、凭据、实际 parser 和配置示例 |
+| Metadata / Discovery / Import | 全部注册 Provider、Auto/Custom、search/lookup/citations、分页和逐来源限额、主题/引用发现、书目编解码与导入 |
+| Literature / Acquisition | 身份、版本、来源 observation、引用 support、current facts；Public/API/Browser、手动 PDF、候选验收、资产发布与耗尽语义 |
+| Parsing / Analysis / Agents | 外部 MinerU 协议与产物、两阶段分析和 lineage、三种模型协议、流式/非流式、图像/tool/schema、预算与取消 |
+| 基础设施与交付 | Model、Network、Storage、Logging、Bootstrap、Browser；所有活动测试及用例、scripts、CI、打包元数据和安装入口 |
+
+2026-09-10 的[现有盘点](../../../migration/evidence/baseline/inventory.md)记录了 242 个 Python 源模块（原始 235 个 + 7 个迁移 bridge）、161 个 Python 测试文件、8 个公开 `api.py` 入口、23 个 CLI 路径、11 个 Metadata Provider、7 个 Acquisition source 和 3 个授权 Acquisition provider。这些是盘点快照，不是完成数量或固定上限；执行时必须追踪后续增量。161 个测试文件也不能代替逐用例的验收映射。
+
+每个条目需表达原始要求的 `currentPath / publicSymbols / consumers / tests / targetPath / disposition / taskId / evidence`。复用现有 `migration/inventory.json` 的字段结构，补齐缺项并说明字段对应，不另建清单系统。处置应能区分 `port`、`redesign`、`retire-approved`、`historical-nonruntime`；现有 `migrate` 标记需细化为迁移或重设计，不能作为已退役证据。每个旧验收用例要有 TS 验收映射或明确变更理由，不要求新旧文件一一对应，也不用文件减少或测试数量相等证明迁移完成。
+
+## 原始 M0 任务
+
+下表保留原始任务 ID、标题、依赖与验收 ID。产物路径是原计划落点；已有等价实现、fixture 或证据时直接复用并记录对应关系，不为满足目录形式重复建立 spike 工程。
+
+| ID | 原始任务 | 依赖 | 交付物与验收重点 | 验收 ID |
+| --- | --- | --- | --- | --- |
+| T001 | 冻结仓库、实际入口与逐文件迁移盘点 | — | `migration/inventory.json`、`migration/baseline/`：commit/工作树记录、全部活动文件及公开符号、消费者、Provider、CLI、配置和测试映射；历史目录独立标识，每项有去向；旧离线 Harness 已有结果、失败或未运行原因如实记录，不访问用户数据或真实站点 | C03、C06、E07 |
+| T002 | 形成新需求和六项ADR草案及变更清单 | T001 | 需求/ADR 变更表与 `migration/intentional-changes.json`：覆盖全 TS、Browser 工作区、冻结策略、持久任务、catalog v2、原生访问六个主题；逐项说明旧合同保留或修改、适用 Accepted 决策和待决差异；运行状态不替代文献事实，草案不标为 Accepted | E07 |
+| T003 | 验证并固定TS浏览器与投屏依赖组合 | T001 | `spikes/browser-compat/`、`migration/runtime-matrix.json` 或现有等价证据：wrapper/Playwright/Chromium/Node/平台组合、persistent/download/screencast 探针、许可与二进制分发检查；真实 Chromium 只访问本地 fixture，显式处理原始 Playwright 1.55 限制，未验证组合不得标支持 | B08、D01 |
+| T004 | 验证文件原语、单写锁与原生出口安全可实现性 | T001 | `spikes/platform-safety/`、`migration/native-capabilities.json` 或现有等价证据：锁、no-follow、no-clobber、fsync、CONNECT 与 DNS 绑定验证；覆盖路径替换、崩溃释放，区分隧道预算与逐响应字节预算；Node 能力缺口必须有窄适配器或明确平台限制，不能降低保证 | N01、N06、S04 |
+| T005 | 验证TS PDF结构检查与身份文本提取引擎 | T001 | `spikes/pdf-inspector/`、`tests/fixtures/pdf/` 或现有等价证据：引擎评估及主文/引用/补充/无文本/加密/大文件样本；区分结构校验与文本提取质量，独立执行可终止，最终用户无需另装 Python 或编译工具 | D09、D10、D11、D12 |
+| T006 | 导出v1数据库、Model与哈希的离线goldens | T001 | `tests/fixtures/compat-v1/`、`migration/oracle-manifest.json`：合成 v1 库、DDL 原始字节/指纹、Model 正负例、canonical 字节、查询、关系及资产 manifest；固定时钟与 ID，覆盖 Unicode/时间/null/数字边界，先比较字节再比较 hash，不用用户库或修改 golden 掩盖差异 | C01、C02、S01 |
+| T007 | 冻结威胁模型、性能观察项与平台发行目标 | T001、T003、T004、T005 | `migration/threat-model.md`、`migration/release-matrix.json` 或现有等价证据：单操作者、控制面、凭据、外部页面威胁模型及平台/性能/配额语义；单端口仍有认证和 Origin/CSRF 保护，列明 Linux 显示依赖，不使用浮动 binary 或隐式外网测试 | N03、N04、E04 |
+| T008 | 关闭关键spike并接受实施基线 | T002、T003、T004、T005、T006、T007 | `migration/m0-decision-record.md`、`migration/runtime-selection.json` 或现有等价记录：选型、ADR 状态、阻塞/不支持组合及首个切片范围；每项关键能力有可重现结果和明确结论，区分实施文档与需授权的变更，未通过 spike 不进入生产替换 | B08、S04、E07 |
+
+### T002 的合同处理
+
+六个主题分别核对即可，已有 Accepted ADR 覆盖的内容通过链接复用，不机械新增六份 ADR。变更表要记录原合同、目标合同、受影响的生产者/消费者、持久化与兼容性、任务、验收以及实际决策状态。
+
+原始草案建议扩大 Agent 动作并改变进程内任务限制，这两项必须显式处理：当前 [ADR 0023](../../architecture/decisions/0023-generic-browser-agent-executor.md)与 [ADR 0024](../../architecture/decisions/0024-typescript-browser-workbench-migration.md)保留六种封闭 Agent 动作，人工键盘/文本输入使用独立 operator command；不能直接把归档中的通用动作草案写入模型权限。持久 job/attempt/candidate 和 v2 则按全量 M5 范围，在合成副本中验证，运行事实与 Literature current facts 保持隔离。实际公开合同变更依照仓库规则处理，计划恢复本身不代表合同已获接受。
+
+继续冻结 MetaLiterature/Literature 身份、来源 observation、版本与引用 support、唯一 current metadata/content、primary-pdf、provenance/lineage、固定 home、外部 MinerU、v1 schema 和不可变资产语义。Configuration、Network、Browser、Acquisition、Literature、Storage、Agents 与 Application 的单一 owner 使用 ADR 0024 的责任表。
+
+### T003–T008 的实现约束
+
+保留模块化单体、SQLite Catalog、不可变 ArtifactStore 和单一 Application。当前开发/CI 基线为 Node 22.19.0，最终发行组合由 T003/T057 的证据确定；复用现有 `node:sqlite`、鉴权 HTTP + SSE/JPEG 和 command 输入，只有相关验收证明缺口才更换 binding 或增加 WebSocket。T004 只有证明 Node 文件原语不足时才引入窄 native 适配器。
+
+M5 只保存恢复所需的 job/target/attempt/policy、关键事件、Candidate 和 intervention，不扩展为完整 event sourcing，也不引入 Redis、微服务、分布式调度、多租户或多 Agent 平台。性能只记录原计划要求的观察项、测量方法和实际结果，不自行建立额外阈值门禁。
+
+## 已有首阶段证据如何复用
+
+下表保留旧 `01-01–01-07` 编号以承接既有文档引用；这些编号仅为历史证据索引，当前执行与关闭使用 T001–T008。已有切片证据不能直接证明对应原始任务全部完成。
+
+| 旧索引 | 现有证据 | 原始任务归属与仍需核对的范围 |
+| --- | --- | --- |
+| 01-01 | [目标旅程](README.md)、[支持矩阵](../../../migration/evidence/final/support-matrix.md) | T003/T007/T008：开发平台与首阶段安装证据可复用；最终发行平台、依赖、许可和安装边界仍需冻结 |
+| 01-02 | [inventory 记录](../../../migration/evidence/baseline/inventory.md)、[模块迁移映射](migration-map.md) | T001：保留 242 模块等盘点快照，补齐消费者、直接测试及用例、任务和证据映射 |
+| 01-03 | [v1 Model/canonical 记录](../../../migration/evidence/contracts/model-and-canonical.md) | T002/T006，并交接 T010/T011：已有 DTO/schema 和 canonical 切片可复用；全业务 Model 正负例与差分仍待覆盖 |
+| 01-04 | [Observation 记录](../../../migration/evidence/browser-acquisition/browser-observation.md)、[会话 API 记录](../../../migration/evidence/browser-acquisition/workbench-session-api.md) | T002，并交接 T021/T024/T026：保留 revision/viewport_version 与 document_generation/viewport_revision/control_epoch/frame_seq 的映射、唯一生产者、递增条件和消费者，不直接改名破坏合同 |
+| 01-05 | [ADR 0024 owner 表](../../architecture/decisions/0024-typescript-browser-workbench-migration.md) | T002/T008，并交接 T018：复用唯一 TS owner；Application 对象图已闭合，Python 仅作历史 oracle |
+| 01-06 | [fixture 记录](../../../migration/evidence/baseline/fixture-integrity.md)、[Browser→MinerU→Analysis 联合旅程](../../../migration/evidence/runtime/browser-mineru-analysis-journey.md) | T006：复用合成字节与 loopback 输入；补齐 v1 查询、关系、资产 manifest 和边界样本 |
+| 01-07 | [Accepted 合同记录](../../../migration/evidence/baseline/migration-contracts.md) | T002/T008：复用已有决策，补齐六主题变更表、关键 spike 结论与统一实施基线 |
+
+## 执行顺序与验证
+
+先补齐 T001 的完整映射与工作树增量记录；满足依赖后推进 T002–T006，T007 汇总平台和能力验证，最后由 T008 关闭实施基线。已有 TS 切片可继续提供证据，但不能据此省略未完成依赖。每份 spike 记录保留复现入口、环境/依赖、预期与实际结果、限制、证据路径和影响任务即可。
+
+依据 owner 于 2026-09-10 的决定及 [HARNESS.md](../../../HARNESS.md)，后续代码验证使用相关 Vitest、`pnpm quick`、`pnpm full`；不默认运行 Python Quick、Python Full 或全量 unittest。T001 的旧 Harness 结果保留已有记录，未运行项标记 `not-run-by-owner-decision`，不得写成通过，也不为关闭 M0 重启 Python 全量测试。T006 复用已冻结的离线 goldens，缺失基线如实登记，不能由 TS 实现自生成预期后宣称完成兼容差分。
+
+文档修改检查 diff、本地链接、术语、命令事实和 Markdown 结构。行为测试使用 fake、合成 fixture 或 loopback；T003 使用实际 Chromium 访问本地 fixture。真实 Provider、站点、MinerU、LLM、个人配置、凭据、Profile、用户库和语料不作为默认验证输入。
+
+## M0 退出门与后续交接
+
+- T001 覆盖全部活动文件、入口、adapter、配置、测试及用例，每项有迁移去向或明确处置依据；新增 bridge 也有后续迁移与退役任务。
+- T002 的六主题合同差异、Accepted/Proposed 状态和 intentional changes 清楚，稳定数据语义与单一 owner 没有隐式改变。
+- T003–T007 的依赖组合、文件/网络原语、PDF 引擎、v1 goldens、威胁模型和发行目标有可重现结果；未解决能力有明确阻断范围，不能通过标记“不支持”省略必需业务能力。
+- T008 汇总并接受统一实施基线，所有原始 M0 验收项都有结果或允许不运行的明确依据；计划、证据和全量路线状态一致。
+
+M0 关闭表示全量迁移基线成立；M1–M6 的任务、证据和剩余授权边界见全量路线。最终 TS 包不保留 Python 业务回退；真实生产切换和用户数据迁移仍按 T063/T064 的授权流程执行，历史 Python 源码按 T061 报告保留为非运行材料。

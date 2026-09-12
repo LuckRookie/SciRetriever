@@ -1,7 +1,7 @@
 # SciRetriever
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Package](https://img.shields.io/badge/package-0.1.0-2F855A)](pyproject.toml)
+[![Node](https://img.shields.io/badge/Node-22.19.0-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Package](https://img.shields.io/badge/package-0.1.0-2F855A)](package.json)
 [![CI](https://img.shields.io/badge/CI-quick%20%2B%20full-1F6FEB)](.github/workflows/ci.yml)
 
 ## 产品定位
@@ -12,18 +12,19 @@ SciRetriever 面向需要持续建立专题文献数据库的研究者和文献�
 
 ## 安装与最小本地启动
 
-SciRetriever 支持 Python 3.10 及以上版本，开发基线为 Python 3.12。当前仓库没有声明已经发布到 PyPI；从源码检出后使用锁定依赖运行：
+当前 TypeScript 版本使用 Node 22.19.0 和 pnpm 10.32.1；仓库没有声明已经发布到 npm。从源码检出后使用锁定依赖运行：
 
 ```bash
-uv sync --locked
+pnpm install --frozen-lockfile
+pnpm build
 ```
 
 普通运行配置固定保存在 `~/.sciretriever/config.toml`；文献 Provider、Model Provider 与远程 MinerU 的
 secret 另存为同目录下的 `credentials.toml`。推荐通过统一配置中心管理支持的设置：
 
 ```bash
-uv run --frozen sciretriever config
-uv run --frozen sciretriever config status
+node apps/server/dist/cli/main.js config status
+node apps/server/dist/cli/main.js config test --help
 ```
 
 首次确认修改时，配置中心会以私有权限创建普通配置文件。用户也可以直接编辑同一个
@@ -49,18 +50,41 @@ artifact_root = "/absolute/private/path/artifacts"
 从任意工作目录运行都会读取这一个文件；无需选择配置路径：
 
 ```bash
-uv run --frozen sciretriever --help
+node apps/server/dist/cli/main.js --help
 ```
 
 一个完全本地的最小旅程如下；它不会访问外部 Provider：
 
 ```bash
-uv run --frozen sciretriever import metadata bibtex library.bib --json
-uv run --frozen sciretriever literature search --json
-uv run --frozen sciretriever literature show LITERATURE_ID --json
-uv run --frozen sciretriever import pdf LITERATURE_ID article.pdf --json
-uv run --frozen sciretriever export pdf LITERATURE_ID article-copy.pdf --json
+node apps/server/dist/cli/main.js import metadata bibtex library.bib --json
+node apps/server/dist/cli/main.js literature search --json
+node apps/server/dist/cli/main.js literature show LITERATURE_ID --json
+node apps/server/dist/cli/main.js import pdf LITERATURE_ID article.pdf --json
+node apps/server/dist/cli/main.js export pdf LITERATURE_ID article-copy.pdf --json
 ```
+
+## Browser 工作台预览
+
+源码保留两个本地入口。静态交互样本用于快速查看布局与状态，不启动 Browser Host：
+
+```bash
+pnpm install --frozen-lockfile
+pnpm preview:browser
+```
+
+打开 [静态样本](http://127.0.0.1:4173)，体验人工接管、模拟 PDF 获取、候选确认及失败场景。
+
+实时工作台使用已校验的 operator Cloak bundle、真实 Browser Host、JPEG/SSE、持久 Candidate 与临时文献库：
+
+```bash
+SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm preview:workbench
+```
+
+打开 [实时工作台](http://127.0.0.1:4174)。它只访问合成 loopback 页面，支持双 viewer、接管/释放、PDF 捕获、
+accepted 发布、uncertain 放弃、文献搜索/详情/引用/文件下载和 390px 布局。入口使用新的系统临时 home，正常退出
+时清理，不读取用户 catalog、Profile 或凭据；配置、凭据和 readiness 由 TypeScript owner 直接组装。
+运行依赖、支持边界和验证入口见 [web 工作台说明](apps/web/README.md)及
+[TypeScript 开发入口](docs/development/typescript-foundation.md)。
 
 ## 命令行入口
 
@@ -88,6 +112,8 @@ sciretriever export content
 sciretriever config
 sciretriever config status
 sciretriever config test --help
+sciretriever jobs create
+sciretriever jobs run JOB_ID
 ```
 
 每个叶命令都支持 `--json`。稳定主结果写入 stdout；日志、进度和脱敏诊断写入 stderr。日志有两个运行模式：
@@ -171,7 +197,7 @@ sciretriever complete content ...
 手动 PDF 使用：
 
 ```bash
-uv run --frozen sciretriever import pdf LITERATURE_ID input.pdf --json
+pnpm sciretriever import pdf LITERATURE_ID input.pdf --json
 ```
 
 该命令要求选择已经存在的具体 Literature。SciRetriever 复制而不移动用户文件，并在内部副本上检查实际 PDF 字节、标准 reader 和页面树；不会保存用户文件的绝对路径，也不会修改或删除原文件。若已有主 PDF，导入会拒绝而不是静默替换。成功只达到 `ASSET_READY`，不会隐式运行 Parsing 或 Analysis；同时会清除该 Literature 先前的自动获取耗尽事实。
@@ -413,17 +439,20 @@ CloakBrowser wrapper 是 wheel dependency；定制 Chromium binary 由用户显�
 ## 开发与验证
 
 ```bash
-uv sync --locked --dev
-uv run --frozen python scripts/harness.py quick
-uv run --frozen python scripts/harness.py full
+pnpm install --frozen-lockfile
+pnpm quick
+pnpm full
 ```
 
-Quick 执行 Ruff lint、Ruff format check 和 compileall，适合代码开发循环和普通工作分支的快速反馈；Full 还执行 Pyright strict、全部 `unittest`、wheel 构建和 wheel 内容核对，代码交付、PR、master、发布和安装包级验收默认必须通过。精确合同见 [`HARNESS.md`](HARNESS.md)。
+按项目 owner 于 2026-09-10 的决定，后续默认验收和 CI 采用 TypeScript：Quick 执行 Prettier、ESLint 与 strict 类型检查；Full 追加全部 Vitest 和构建。Python Harness 仅保留为明确要求时使用的历史维护入口，不再默认运行。精确合同见 [`HARNESS.md`](HARNESS.md)。
 
 ## 项目文档
 
 - [当前用户指南](docs/guides/README.md)
 - [配置手册](docs/guides/configuration.md)
+- [安装指南](docs/guides/installation.md)
+- [升级与恢复](docs/guides/upgrade.md)
+- [切换与回退](docs/guides/cutover.md)
 - [产品需求](docs/architecture/requirements.md)
 - [架构与设计](docs/architecture/README.md)
 - [开发手册](docs/development/README.md)

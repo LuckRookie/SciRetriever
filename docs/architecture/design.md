@@ -99,19 +99,19 @@ Logging 是具有独立代码目录和公开 API 的公用基础模块，但仍�
 
 系统只使用六个核心功能模块和五个公用基础模块描述产品架构。
 
-| 类别 | 模块 | 主要责任 |
-|---|---|---|
-| 核心功能 | 入口与流程编排 | 接收用户操作，分别组织 DiscoveryRun、运行时 selector 与内存目标冻结、缺 PDF 目标的有界风险 cohort、逐目标后续补全、运行报告、手动 PDF、查询和书目交换 |
-| 核心功能 | 元数据供应商 | 执行元数据搜索和引用查询，把供应商结果转换为统一内部数据 |
-| 核心功能 | 文献管理 | 管理文献身份、版本、来源元数据、统一元数据、引用和当前状态 |
-| 核心功能 | Acquisition | 根据访问方 Profile/Resolution 形成 Public/API/Browser Plan 并执行当前层 route，或接纳用户明确绑定的本地 PDF；所有路径执行相同基本文件检查 |
-| 核心功能 | Parsing | 通过当前解析器把 PDF 转换为中性的 Parser 中间结果 |
-| 核心功能 | LLM 分析与总结 | 先判断内容并确定结构化最终元数据，再以该元数据为上下文生成和解析正文 Markdown、结构化章节与参考文献，并按需形成临时引用检索线索 |
-| 公用基础 | Model | 定义除 Logging 外各模块交换的领域中立数据合同 |
-| 公用基础 | Agents | 为 Analysis 与受控 Browser 提供无状态、Provider-neutral 的单次模型执行、role binding、capability/readiness、取消、严格结构化/tool decision 和稳定失败；不拥有消费模块 workflow、工具执行或事实写入 |
-| 公用基础 | 网络基础设施 | 统一提供安全 HTTP、受控浏览器、单次资源上限和脱敏；唯一生成 Browser Observation、执行动作、capture 与 cleanup |
-| 公用基础 | 存储 | 保存 DiscoveryRun、文献当前关系事实、自动 PDF 获取耗尽事实和不可变文件，提供一致查询与事务边界；不保存批量运行现场或报告 |
-| 公用基础 | Logging | 统一 logger 获取、生产进程配置、stderr 输出、formatter 和最终脱敏防线；不形成 Report 或业务事件系统 |
+| 类别     | 模块           | 主要责任                                                                                                                                                                                           |
+| -------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 核心功能 | 入口与流程编排 | 接收用户操作，分别组织 DiscoveryRun、运行时 selector 与内存目标冻结、缺 PDF 目标的有界风险 cohort、逐目标后续补全、运行报告、手动 PDF、查询和书目交换                                              |
+| 核心功能 | 元数据供应商   | 执行元数据搜索和引用查询，把供应商结果转换为统一内部数据                                                                                                                                           |
+| 核心功能 | 文献管理       | 管理文献身份、版本、来源元数据、统一元数据、引用和当前状态                                                                                                                                         |
+| 核心功能 | Acquisition    | 根据访问方 Profile/Resolution 形成 Public/API/Browser Plan 并执行当前层 route，或接纳用户明确绑定的本地 PDF；所有路径执行相同基本文件检查                                                          |
+| 核心功能 | Parsing        | 通过当前解析器把 PDF 转换为中性的 Parser 中间结果                                                                                                                                                  |
+| 核心功能 | LLM 分析与总结 | 先判断内容并确定结构化最终元数据，再以该元数据为上下文生成和解析正文 Markdown、结构化章节与参考文献，并按需形成临时引用检索线索                                                                    |
+| 公用基础 | Model          | 定义除 Logging 外各模块交换的领域中立数据合同                                                                                                                                                      |
+| 公用基础 | Agents         | 为 Analysis 与受控 Browser 提供无状态、Provider-neutral 的单次模型执行、role binding、capability/readiness、取消、严格结构化/tool decision 和稳定失败；不拥有消费模块 workflow、工具执行或事实写入 |
+| 公用基础 | 网络基础设施   | 统一提供安全 HTTP、受控浏览器、单次资源上限和脱敏；唯一生成 Browser Observation、执行动作、capture 与 cleanup                                                                                      |
+| 公用基础 | 存储           | 保存 DiscoveryRun、文献当前关系事实、自动 PDF 获取耗尽事实和不可变文件，提供一致查询与事务边界；不保存批量运行现场或报告                                                                           |
+| 公用基础 | Logging        | 统一 logger 获取、生产进程配置、stderr 输出、formatter 和最终脱敏防线；不形成 Report 或业务事件系统                                                                                                |
 
 书目格式编解码、运行配置、对象组装和本机写入互斥是上述模块内部或启动阶段需要的技术能力，不增加新的产品模块。具体代码位置由技术文档规定。
 
@@ -486,7 +486,9 @@ Acquisition 的公开业务结果只有“获得当前主 PDF”和“没有获�
 
 ### 4.5 Parsing
 
-Parsing 模块把当前主 PDF 转换为领域中立的 `ParserResult` 中间结果。当前解析实现选择 operator-managed MinerU 服务，但 MinerU 不是产品合同，也不拥有 SciRetriever 的文献状态、轻结构化文档或引用事实。
+Parsing 模块把当前主 PDF 转换为领域中立的 `ParserResult` 中间结果。Parsing 通过稳定的
+`ParserBackend` 兼容性接口接入具体后端，当前部署选择 operator-managed MinerU backend；MinerU
+不是产品合同，也不拥有 SciRetriever 的文献状态、轻结构化文档或引用事实。
 
 它负责：
 
@@ -687,17 +689,17 @@ Catalog 长期保存一个 Literature 关联的全部已接纳 `MetadataObservat
 
 #### 5.4.1 事实所有权
 
-| 事实 | 业务所有者 | 存储责任 |
-|---|---|---|
-| DiscoveryRun、来源结果、发现对象和原因 | 入口与流程编排 | 保存冻结输入、逐来源终止结果、到 MetaLiterature 的结果关系及直接原因；不保存过程计数或完整路径 |
-| 自动 PDF 获取耗尽 | Acquisition | 只保存具体 Literature 已正常耗尽当前自动路径这一最小事实；不保存原因、候选、尝试或配置快照，并在输入变化、主 PDF 成功或明确重试时清除 |
-| 来源 observation | 元数据供应商 | 保存元数据事实、同文献版本连接、逐边 ProviderRelationObservation 和供应商身份 |
-| MetaLiterature、Literature、LiteratureMetadata、Reference、ReferenceSupport 和状态 | 文献管理 | 保存权威身份、信息、关系及其来源支持 |
-| 当前主 PDF、补充资产及来源 | Acquisition | 保存不可变文件和版本关系 |
-| 当前 ParserResult、实际引用资源及 parser provenance | Parsing | 只保存每个输入 Asset 的当前中间结果；新结果完整接纳后替换当前关系，旧字节进入可回收缓存，不形成历史或文献状态 |
-| 第一阶段元数据提案、第二阶段内容 Markdown 草稿、内容判断和待验收解析结果 | LLM 分析与总结 | 两阶段临时结果不长期保存；只保存最终接纳内容的一项 Analysis provenance |
-| 最终 LiteratureMetadata、当前 LiteratureContent 与规范 Markdown | 文献管理 | 权威元数据长期保存；结构化章节、参考文献和 artifact 关系只保存一个可重建当前结果，不形成历史 |
-| BatchSelector、冻结目标候选、逐目标运行结果和 Report | 入口与流程编排 | 只在当前进程内展开、冻结、汇总并返回；不进入 Catalog，也不参与下次选择 |
+| 事实                                                                               | 业务所有者     | 存储责任                                                                                                                              |
+| ---------------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| DiscoveryRun、来源结果、发现对象和原因                                             | 入口与流程编排 | 保存冻结输入、逐来源终止结果、到 MetaLiterature 的结果关系及直接原因；不保存过程计数或完整路径                                        |
+| 自动 PDF 获取耗尽                                                                  | Acquisition    | 只保存具体 Literature 已正常耗尽当前自动路径这一最小事实；不保存原因、候选、尝试或配置快照，并在输入变化、主 PDF 成功或明确重试时清除 |
+| 来源 observation                                                                   | 元数据供应商   | 保存元数据事实、同文献版本连接、逐边 ProviderRelationObservation 和供应商身份                                                         |
+| MetaLiterature、Literature、LiteratureMetadata、Reference、ReferenceSupport 和状态 | 文献管理       | 保存权威身份、信息、关系及其来源支持                                                                                                  |
+| 当前主 PDF、补充资产及来源                                                         | Acquisition    | 保存不可变文件和版本关系                                                                                                              |
+| 当前 ParserResult、实际引用资源及 parser provenance                                | Parsing        | 只保存每个输入 Asset 的当前中间结果；新结果完整接纳后替换当前关系，旧字节进入可回收缓存，不形成历史或文献状态                         |
+| 第一阶段元数据提案、第二阶段内容 Markdown 草稿、内容判断和待验收解析结果           | LLM 分析与总结 | 两阶段临时结果不长期保存；只保存最终接纳内容的一项 Analysis provenance                                                                |
+| 最终 LiteratureMetadata、当前 LiteratureContent 与规范 Markdown                    | 文献管理       | 权威元数据长期保存；结构化章节、参考文献和 artifact 关系只保存一个可重建当前结果，不形成历史                                          |
+| BatchSelector、冻结目标候选、逐目标运行结果和 Report                               | 入口与流程编排 | 只在当前进程内展开、冻结、汇总并返回；不进入 Catalog，也不参与下次选择                                                                |
 
 #### 5.4.2 一致提交
 
@@ -729,16 +731,26 @@ Logging 不拥有业务结果：各模块先形成 typed result 或稳定 failur
 
 日志和用户主要结果使用不同通道：实时日志与进度进入 stderr，CLI 文本结果、JSON Report 和其它可管道结果进入 stdout。日志格式不是稳定公开 API，也不能成为批次历史或恢复输入。Network 负责 URL、header、Cookie、凭据、challenge 资源事实和网络异常的边界脱敏；Provider、Parser 与 Agents adapter 负责各自私有对象、响应、prompt 和异常的边界转换；Logging 的 Filter 只提供最终防线，不能替代这些来源边界。Entry 只记录已经稳定化的 failure 与安全 ID，不直接记录原始外部对象、Browser observation 或文献正文。
 
+## 5.6 TypeScript 迁移映射
+
+TypeScript 迁移按照 [ADR 0024](decisions/0024-typescript-browser-workbench-migration.md) 和
+[TypeScript 工作台技术文档](technical/typescript-workbench.md) 实现当前对象图。它是实现替换路线，
+不创建第二个文献数据库、第二个 Browser owner 或生产双写；TypeScript Application 是当前生产入口，Python
+源码、历史测试和 Harness 仅作为离线 oracle 与维护材料保留，不进入生产运行路径。
+contracts、Configuration、Network、Browser Host、Agents、Acquisition、FileStore、DB Worker、Literature
+和 Entry 的事实所有权与本设计前文保持一致。v1 文献事实先在合成 fixture/副本中验证，v2 运行事实只有
+在显式 execution schema 任务中升级；最终切换需另有回滚证据和明确授权。
+
 ## 6. 文献身份、元数据与状态
 
 ### 6.1 MetaLiterature 与 Literature
 
 系统使用两层内部身份：
 
-| 身份 | 含义 |
-|---|---|
-| `MetaLiterature` | 同一文献多个明确版本的稳定聚合身份 |
-| `Literature` | 能够独立拥有 `LiteratureMetadata`、PDF 和 `LiteratureContent` 的具体文献 |
+| 身份             | 含义                                                                     |
+| ---------------- | ------------------------------------------------------------------------ |
+| `MetaLiterature` | 同一文献多个明确版本的稳定聚合身份                                       |
+| `Literature`     | 能够独立拥有 `LiteratureMetadata`、PDF 和 `LiteratureContent` 的具体文献 |
 
 预印本、作者接受稿和正式发表版只有在来源 observation 存在明确同文献版本连接时才共享 `MetaLiterature`，并保留为不同 `Literature`。不同 Literature 之间不混合元数据、资产或内容。
 
@@ -764,13 +776,13 @@ Literature
 
 文献 identifier 的值不使用 SciRetriever 私有格式，而是在公共 Model 边界转换为官方 canonical form：
 
-| namespace | 接受的传输表示 | 当前 Literature 身份值 |
-|---|---|---|
-| `doi` | 裸 DOI、`doi:`、`https://doi.org/` 或 `http://dx.doi.org/` 包装 | 去壳、去边界空白并转为小写的 `10.xxxx/...` |
-| `arxiv` | 官方新式/旧式 ID、`arXiv:` 或官方 arXiv URL，可带 `vN` revision | 不带 `vN` 的新式 `2501.01234` 或旧式 `hep-th/9901001` 基础 ID |
-| `pmid` | 官方 PMID 值 | 纯数字 |
-| `pmcid` | 官方 PMCID 值 | 大写 `PMC` 加数字 |
-| 其它受支持 namespace | 官方规范允许的表示 | 各自官方 canonical form，不附加项目自定义前缀 |
+| namespace            | 接受的传输表示                                                  | 当前 Literature 身份值                                        |
+| -------------------- | --------------------------------------------------------------- | ------------------------------------------------------------- |
+| `doi`                | 裸 DOI、`doi:`、`https://doi.org/` 或 `http://dx.doi.org/` 包装 | 去壳、去边界空白并转为小写的 `10.xxxx/...`                    |
+| `arxiv`              | 官方新式/旧式 ID、`arXiv:` 或官方 arXiv URL，可带 `vN` revision | 不带 `vN` 的新式 `2501.01234` 或旧式 `hep-th/9901001` 基础 ID |
+| `pmid`               | 官方 PMID 值                                                    | 纯数字                                                        |
+| `pmcid`              | 官方 PMCID 值                                                   | 大写 `PMC` 加数字                                             |
+| 其它受支持 namespace | 官方规范允许的表示                                              | 各自官方 canonical form，不附加项目自定义前缀                 |
 
 只有确实标识当前具体 Literature 的官方 ID 才能进入 `LiteratureMetadata.identifiers`。OpenAlex Work ID、Web of Science UID、Semantic Scholar Paper ID、Scopus EID 等 Provider record identity 即使格式稳定，也只能进入 `Provenance.source_record_id` 或 `ProviderLiteratureKey.record_id`。它们可以定位同一 Provider 中的来源记录或版本端点，不能作为跨供应商文献自身标识符。
 
@@ -842,11 +854,11 @@ Analysis 对有效文献形成一份最终元数据与内容提案后，文献�
   -> 内容完成
 ```
 
-| 状态 | 推导依据 |
-|---|---|
-| 未审阅 | 已有当前统一元数据，但没有当前主 PDF |
-| 已有文献资产 | 当前主 PDF 已通过基本检查并与该版本关联 |
-| 内容完成 | 当前最终元数据、关键词、`LiteratureContent` 和规范 Markdown 已由 Literature 整体接纳，对齐当前主 PDF 和 metadata revision，并具有 Analysis provenance |
+| 状态         | 推导依据                                                                                                                                              |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 未审阅       | 已有当前统一元数据，但没有当前主 PDF                                                                                                                  |
+| 已有文献资产 | 当前主 PDF 已通过基本检查并与该版本关联                                                                                                               |
+| 内容完成     | 当前最终元数据、关键词、`LiteratureContent` 和规范 Markdown 已由 Literature 整体接纳，对齐当前主 PDF 和 metadata revision，并具有 Analysis provenance |
 
 状态不是可以独立修改的第二份字段。任务、失败、MinerU task 或 LLM 调用记录不能直接决定文献状态。
 
@@ -945,10 +957,10 @@ Literature 形成可转换的当前统一元数据后即可导出，不要求先
 
 二者都由入口与流程编排负责，但持久化边界不同：
 
-| 概念 | 含义 | 生命周期 |
-|---|---|---|
+| 概念           | 含义                                                       | 生命周期                                                           |
+| -------------- | ---------------------------------------------------------- | ------------------------------------------------------------------ |
 | `DiscoveryRun` | 一次领域搜索或引用扩展的冻结输入、来源结果、发现对象和原因 | 运行中追加已确认结果，完成后作为不可反推的发现 provenance 长期保存 |
-| 数据库补全操作 | 从当前数据库范围补齐 PDF 或最终内容的一次调用 | Selector、目标、候选和 Report 只存在于当前进程，不形成运行历史 |
+| 数据库补全操作 | 从当前数据库范围补齐 PDF 或最终内容的一次调用              | Selector、目标、候选和 Report 只存在于当前进程，不形成运行历史     |
 
 当前产品不建立 Collection。一次历史发现由 DiscoveryRun 表达，动态语义范围由本地查询表达，明确处理对象由 MetaLiterature/Literature ID 表达；系统不创建领域占位符，也不判断文献是否属于某个集合。未来 Zotero 式人工文件夹只有在形成独立产品需求后才设计。本地只读查询不保存为 DiscoveryRun，但可以成为本次补全的类型化 selector。
 
@@ -967,9 +979,9 @@ Selector 本身不保存，不混入目标、Provider、并发、Parser、LLM、
 
 支持两个内容维护目标：
 
-| 目标 | 含义 |
-|---|---|
-| `ASSET_READY` | 为尚无可用版本主 PDF 的 MetaLiterature，或用户明确指定的具体 Literature，执行 PDF 获取和基本检查 |
+| 目标            | 含义                                                                                                                      |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `ASSET_READY`   | 为尚无可用版本主 PDF 的 MetaLiterature，或用户明确指定的具体 Literature，执行 PDF 获取和基本检查                          |
 | `CONTENT_READY` | 从所选版本第一个缺失步骤继续，必要时补充主 PDF，再经 Parsing、Analysis 和 Literature 接纳形成最终内容；这是默认端到端目标 |
 
 冻结目标后，已有 PDF 的 Literature 可以从自己的后续缺失步骤继续；缺 PDF 的当前具体 Literature 形成有界 acquisition cohort。每个 cohort 先让全部目标完成 Public 层，再让未解决目标完成 Authorized API 层，最后只把允许升级的最小剩余集合交给按风险组调度的 Browser。该层级屏障不改变冻结范围、不建立 BatchRun，也不要求较早获得并已提交 PDF 的目标等待 Browser 层结束后才能继续 Parsing/Analysis。
@@ -1025,16 +1037,16 @@ Report 不设置 ReportId、时间、持续时间、通用任务 status、自由
 
 ## 9. 需求对应
 
-| 产品需求 | 主要设计响应 |
-|---|---|
-| R1 发起文献收集 | 入口与流程编排把领域搜索和引用扩展分别保存为有边界 DiscoveryRun；它不创建 Collection 或自动启动内容处理，供应商关系只有当前范围选中的目标接纳后才建立本地引用 |
-| R2 多来源元数据搜索 | 领域 DiscoveryRun 对本次全部 Provider 按过滤前原始 item 分别执行 scan limit；文献管理保留满足标题或 DOI 最低条件的 observation、收敛身份并形成统一元数据，不对每条结果自动执行逐篇全源补查或元数据阶段语义过滤 |
-| R3 文献资产获取 | Acquisition 先根据明确资产线索、稳定定位和实际 landing origin 形成访问方 Resolution/Plan，不按 publisher 或 metadata 来源硬编码；Public/API/Browser 严格升级和手动接纳都按实际字节、标准 PDF reader 和可读页面树执行最低文件检查；手动操作复制并保护用户原文件；全部适用 routes 正常耗尽时保存最小 `needs_manual_pdf` 当前事实，临时错误或 Browser action-required 不冒充耗尽 |
-| R4 文献解析 | Parsing 通过可替换 Parser 生成规范化 Markdown `ParserResult`，保留实际引用资源、输入/结果 hash 与 parser provenance，并只维护一个当前结果 |
-| R5 语言模型内容判断与总结 | Analysis 用一次有序两阶段逻辑分析先判断属于当前 Literature 的实际内容并确定最终元数据与关键词，再以该元数据为上下文生成和解析 Markdown 字符串章节与有序参考文献；Literature 整体接纳单一当前内容并以统一“未提供”缺失值确定性渲染规范 Markdown |
-| R6 文献数据库 | 所有操作从当前逻辑文献数据库出发并把确认结果提交回同一数据库；DiscoveryRun 保存发现 provenance，数据库补全只保存确认的文献事实和自动获取耗尽，Catalog + ArtifactStore 提供稳定引用、逐阶段保存和一致查询 |
-| R7 书目信息导入与导出 | 入口、文献管理和存储共同提供三类书目格式的逐条导入导出；导入复用 MetadataObservation、用户非空值优先且不保存过程历史，导出不要求全文完成 |
-| R8 大批量处理 | 入口与流程编排从运行时 selector 在内存冻结目标、按 MetaLiterature 选择具体版本并只在稳定缺失时回退；缺 PDF 目标按有界 cohort 先 Public、再 API、最后最小 Browser 集合，不同 Browser group 并行而同组串行；逐目标事实与失败仍隔离，报告、中断和重跑不保存批次运行历史 |
+| 产品需求                  | 主要设计响应                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R1 发起文献收集           | 入口与流程编排把领域搜索和引用扩展分别保存为有边界 DiscoveryRun；它不创建 Collection 或自动启动内容处理，供应商关系只有当前范围选中的目标接纳后才建立本地引用                                                                                                                                                                                                                 |
+| R2 多来源元数据搜索       | 领域 DiscoveryRun 对本次全部 Provider 按过滤前原始 item 分别执行 scan limit；文献管理保留满足标题或 DOI 最低条件的 observation、收敛身份并形成统一元数据，不对每条结果自动执行逐篇全源补查或元数据阶段语义过滤                                                                                                                                                                |
+| R3 文献资产获取           | Acquisition 先根据明确资产线索、稳定定位和实际 landing origin 形成访问方 Resolution/Plan，不按 publisher 或 metadata 来源硬编码；Public/API/Browser 严格升级和手动接纳都按实际字节、标准 PDF reader 和可读页面树执行最低文件检查；手动操作复制并保护用户原文件；全部适用 routes 正常耗尽时保存最小 `needs_manual_pdf` 当前事实，临时错误或 Browser action-required 不冒充耗尽 |
+| R4 文献解析               | Parsing 通过可替换 Parser 生成规范化 Markdown `ParserResult`，保留实际引用资源、输入/结果 hash 与 parser provenance，并只维护一个当前结果                                                                                                                                                                                                                                     |
+| R5 语言模型内容判断与总结 | Analysis 用一次有序两阶段逻辑分析先判断属于当前 Literature 的实际内容并确定最终元数据与关键词，再以该元数据为上下文生成和解析 Markdown 字符串章节与有序参考文献；Literature 整体接纳单一当前内容并以统一“未提供”缺失值确定性渲染规范 Markdown                                                                                                                                 |
+| R6 文献数据库             | 所有操作从当前逻辑文献数据库出发并把确认结果提交回同一数据库；DiscoveryRun 保存发现 provenance，数据库补全只保存确认的文献事实和自动获取耗尽，Catalog + ArtifactStore 提供稳定引用、逐阶段保存和一致查询                                                                                                                                                                      |
+| R7 书目信息导入与导出     | 入口、文献管理和存储共同提供三类书目格式的逐条导入导出；导入复用 MetadataObservation、用户非空值优先且不保存过程历史，导出不要求全文完成                                                                                                                                                                                                                                      |
+| R8 大批量处理             | 入口与流程编排从运行时 selector 在内存冻结目标、按 MetaLiterature 选择具体版本并只在稳定缺失时回退；缺 PDF 目标按有界 cohort 先 Public、再 API、最后最小 Browser 集合，不同 Browser group 并行而同组串行；逐目标事实与失败仍隔离，报告、中断和重跑不保存批次运行历史                                                                                                          |
 
 ## 10. 文档责任
 

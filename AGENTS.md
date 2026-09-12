@@ -31,12 +31,12 @@
 | 字段 | 值 |
 | --- | --- |
 | 项目定位 | 面向用户指定研究领域的大批量文献收集与文献数据库维护工具；产品自身保持领域中立 |
-| 主要语言 | Python 3.10+；开发基线 Python 3.12 |
-| 包管理 | `uv`，锁文件 `uv.lock` |
-| 活动源码 | `src/sciretriever/` |
-| 测试 | `tests/`，标准库 `unittest` |
-| 质量入口 | `scripts/harness.py quick / full` |
-| CI | 普通非 master 分支 push 运行 Python 3.12 Quick；PR、master 和手动运行执行 Python 3.10/3.12 Full |
+| 主要语言 | TypeScript/Node 22.19.0；Python 仅为历史维护材料 |
+| 包管理 | `pnpm`，锁文件 `pnpm-lock.yaml` |
+| 活动源码 | `packages/`、`apps/server/src/`、`apps/web/src/` |
+| 测试 | `packages/*/test/`、`apps/*/test/`，Vitest；`tests/fixtures/` 仅保存合成兼容 fixture |
+| 质量入口 | `pnpm quick / test / full`；Python Harness 仅为历史维护入口 |
+| CI | 普通非 master 分支 push 运行 TS Quick；PR、master 和手动运行执行 TS Full（Node 22.19.0） |
 | 临时文件 | 系统临时目录下的 `sciretriever-*` |
 | 不提交内容 | 个人配置、运行时 catalog、文献资产、用户语料、`.venv/`、`build/`、`dist/`、缓存和临时文件 |
 
@@ -57,7 +57,7 @@ configuration/
 bootstrap/
 ~~~
 
-模块责任和依赖以[设计文档](docs/architecture/design.md)及[技术文档](docs/architecture/technical.md)为准。跨功能模块通过公开 `api.py` 和中性 Model 协作；外部协议在所属 adapter 边界转换；`configuration/` 与 `bootstrap/` 是原启动阶段技术模块的 package 化代码组织，不增加新的核心产品模块，其中 `bootstrap` 负责生产组装。
+模块责任和依赖以[设计文档](docs/architecture/design.md)及[技术文档](docs/architecture/technical.md)为准。跨功能模块通过公开 TypeScript API 和中性 Model 协作；外部协议在所属 adapter 边界转换；`configuration/` 与 `bootstrap/` 负责生产组装，不增加新的核心产品模块。迁移前的 Python 源码、测试和工具链快照位于 `archive/2026-09-12-typescript-python-retirement/`，不属于活动源码。
 
 ## 3. 开发与架构演进
 
@@ -84,22 +84,26 @@ bootstrap/
 
 ## 5. 验证入口
 
-从仓库根目录执行：
+依据项目 owner 于 2026-09-10 的决定，后续开发和全量验收转向 TypeScript，不再默认运行 Python Quick、Full 或全量 unittest。从仓库根目录执行：
 
 ~~~bash
-uv sync --locked --dev
-uv run --frozen python -m unittest discover -s tests -p 'test_<name>.py'
-uv run --frozen python scripts/harness.py quick
-uv run --frozen python scripts/harness.py full
+pnpm install --frozen-lockfile
+pnpm exec vitest run <相关测试文件>
+pnpm quick
+pnpm full
 ~~~
 
 - 相关测试：开发循环和单个能力切片的首选反馈。
-- Quick：Ruff lint、Ruff format check 和 `compileall`；用于代码开发循环和普通工作分支 push，不包含全库严格类型检查、全量测试或 wheel 构建。
-- Full：Quick、Pyright strict、全部 unittest、wheel 构建和 wheel 内容核对；代码交付、PR、master、发布和安装包级验收默认必须通过。
-- 文档-only 修改不要求运行 Python Harness；检查 diff、链接、术语、命令事实和 Markdown 结构。
+- Quick：Prettier、ESLint、源码和测试 strict 类型检查。
+- Full：Quick、全部 Vitest 与所有已注册 TS project 的构建；代码交付默认必须通过。
+- Python Harness、Python 源码和既有 Python 测试已归档到 `archive/2026-09-12-typescript-python-retirement/`，不作为 TS 交付的阻断项；只有用户明确要求历史复核时才处理归档快照。
+- 文档-only 修改检查 diff、链接、术语、命令事实和 Markdown 结构。
 - Full 未通过或未运行时不得声称代码修改已经完成质量验收；确因环境无法运行时，准确说明原因、已运行检查和残余风险。
 
-精确步骤由 [HARNESS.md](HARNESS.md)、`scripts/harness.py` 和 CI 定义。
+精确步骤见 [HARNESS.md](HARNESS.md)、`package.json` 与 CI；当前包、离线安装验证和恢复入口见
+[TypeScript 基础开发入口](docs/development/typescript-foundation.md)。TS 生产路径不依赖 Python；历史源码归档已完成，真实用户数据切换仍需按计划授权执行。
+
+TS Full 使用 TypeScript Configuration/Credential owner 和合成临时 home，不启动 Python bridge；Python Harness 与既有测试只作为明确要求时的历史维护入口。安装、依赖和支持边界见 [TypeScript 基础开发入口](docs/development/typescript-foundation.md)。
 
 ## 6. 必须保留的安全边界
 
@@ -109,7 +113,7 @@ uv run --frozen python scripts/harness.py full
 - 不读取、打印、硬编码或提交 secret、Cookie、Token、签名 URL、个人 `config.toml` 或用户凭据文件。
 - 不修改、迁移或删除用户资产、真实 catalog 或仓库外材料，除非任务明确授权并先解析精确目标。
 - 临时文件和测试数据库进入系统临时目录，不散落到仓库根目录。
-- 依赖或 `uv.lock` 只在当前实现明确需要时修改，不顺手升级无关依赖；交付时说明原因和影响。
+- 依赖或 `pnpm-lock.yaml` 只在当前实现明确需要时修改，不顺手升级无关依赖；交付时说明原因和影响。
 - 外部 HTTP、浏览器、MinerU 和 LLM 测试使用 fake、fixture 或明确的离线边界；真实只读探测也必须由用户明确要求。
 - 产品边界、事实所有权、不可变资产、凭据和网络安全由 requirements 与 Accepted ADR 约束，任何工作方式都不能绕过。
 

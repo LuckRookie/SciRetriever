@@ -1,0 +1,26 @@
+{
+  "schema": "sciretriever-typescript-runtime-spike.v1",
+  "captured_at": "2026-09-09",
+  "platform": "Linux x86_64",
+  "node": {"version": "22.19.0", "status": "available"},
+  "package_manager": {"name": "pnpm", "version": "10.32.1", "status": "available"},
+  "chromium": {"status": "not-installed", "supported": false, "blocker": "Browser loopback smoke cannot run until a reviewed Chromium binary is supplied."},
+  "sqlite": {"system_version": "3.49.2", "python_runtime_check": "passed", "typescript_binding": "not-selected"},
+  "pdf": {
+    "pdfinfo": {"version": "24.02.0", "status": "available"},
+    "mutool": {"version": "1.23.10", "status": "available"},
+    "qpdf": {"status": "not-installed"}
+  },
+  "file_primitives": {
+    "temporary_directory": "passed",
+    "o_nofollow_read": "passed",
+    "atomic_rename": "passed",
+    "directory_fsync": "passed"
+  },
+  "network": {
+    "real_external_access": false,
+    "loopback_fixture": "not-run in this spike",
+    "dns_and_ssrf": "must be implemented and tested with fakes before external access"
+  },
+  "unsupported_until_follow_up": ["Chromium Browser Host smoke", "TypeScript SQLite binding choice", "loopback HTTP fixture"]
+}

@@ -6,30 +6,32 @@
 - Parser 服务边界：[ADR 0003](../decisions/0003-operator-managed-mineru-service.md)
 - 当前中间合同：[ADR 0010](../decisions/0010-parser-neutral-markdown-current-result.md)
 
-本文定义目标 `src/sciretriever/parsing/` 的 Parser Port、Adapter 选择、parser-neutral Markdown `ParserResult`、结构检查、当前结果替换和资产 lineage。Parsing 不判断文献身份、实际内容或参考文献边界，不形成 `LiteratureContent`，也不拥有 MinerU 等外部 Parser 服务。
+本文定义活动 `apps/server/src/parsing/` 的 ParserBackend、后端选择、parser-neutral Markdown `ParserResult`、结构检查、当前结果替换和资产 lineage。Parsing 不判断文献身份、实际内容或参考文献边界，不形成 `LiteratureContent`，也不拥有 MinerU 等外部 Parser 服务。
 
 ## 1. 目标结构
 
 ```text
 parsing/
-  api.py
-  service.py
-  rules.py
-  ports.py
-  adapters/
-    mineru.py
-    ...
+  ports.ts
+  service.ts
+  artifact-rules.ts
+  publication.ts
+  backends/
+    mineru/
+      index.ts
+      http.ts
+      loopback.ts
+      archive.ts
 ```
 
-- `api.py` 提供解析当前主资产和读取当前 ParserResult 的公开操作；
-- `service.py` 组织 Parser 调用、结构接纳、stale 复检和当前结果替换；
-- `rules.py` 检查 Markdown、资源、hash、页数、provenance 和输入对齐；
-- `ports.py` 声明 Parsing 消费的 Parser 与 artifact 存取能力；
-- `adapters/` 理解具体 Parser 私有协议并转换为统一合同。
+- `service.ts` 组织 ParserBackend 调用、结构接纳、stale 复检和当前结果替换；
+- `artifact-rules.ts` 检查 Markdown、资源、hash、页数、provenance 和输入对齐；
+- `ports.ts` 声明 Parsing 与所有后端共享的 ParserBackend 兼容性接口，以及 artifact 存取能力；
+- `backends/` 按具体后端隔离私有协议，并转换为统一合同；每个后端拥有自己的子目录和导出入口。
 
-Parser Adapter 是 Parsing 模块内部的可替换实现，不是动态第三方插件平台。`sciretriever.bootstrap` 根据已解析配置显式构造一个 Adapter；同一 PDF 一次只调用一个 Parser，不竞赛、不合并，也不自动回退。增加新 Adapter 不得要求 Analysis 理解新的输入格式。
+`ParserBackend` 是 Parsing 模块内部所有后端的稳定兼容性接口，不是动态第三方插件平台。`bootstrap` 根据已解析配置显式构造一个后端；同一 PDF 一次只调用一个后端，不竞赛、不合并，也不自动回退。增加 GROBID、Docling 或 PyMuPDF 等后端时，只需在 `backends/<name>/` 实现该接口并完成同一组结构验收，Analysis 不需要理解新的输入格式。MinerU 只是当前的一个后端，不拥有 Parsing 公共合同。
 
-## 2. 输入与 Parser Port
+## 2. 输入与 ParserBackend
 
 Parsing 公开输入只定位已经接纳的当前主 PDF：
 
@@ -37,40 +39,40 @@ Parsing 公开输入只定位已经接纳的当前主 PDF：
 ParserRequest
   source_asset_id: AssetId
   source_sha256: Sha256
-  media_type: str
-  content_ref: StorageObjectRef
+  media_type: "application/pdf"
+  withContent(consume, signal?) -> Promise<T>
 ```
 
-`media_type` 当前 PDF 路径必须是 `application/pdf`；`content_ref` 是 Storage 提供的不含机器绝对路径的读取能力或引用。完整 `Literature`、元数据、供应商 URL、SQL row、Parser mode 和凭据不进入请求。Parser 选择、mode、模型和连接配置在 `sciretriever.bootstrap` 构造 Adapter 时固定。
+`withContent` 是 Storage 提供的有界字节读取能力，不把机器绝对路径暴露给 backend。完整 `Literature`、元数据、供应商 URL、SQL row、Parser mode 和凭据不进入请求。后端选择、mode、模型和连接配置在 `bootstrap` 构造具体 backend 时固定。
 
 逻辑 Port 为：
 
 ```text
-ParserPort.parse(ParserRequest) -> staged parser output
+ParserBackend.parse(ParserRequest) -> staged parser output
 ```
 
-`staged parser output` 只存在于 Parsing 适配边界，可以包含本次转换所需的临时 Markdown、资源和 Parser 私有产物；它不是公共 Model，也不能直接持久化为产品事实。Adapter 在返回 Parsing service 前必须完成 vendor/service 类型隔离和初步协议验证。
+`staged parser output` 只存在于 Parsing backend 边界，可以包含本次转换所需的临时 Markdown、资源和后端私有产物；它不是公共 Model，也不能直接持久化为产品事实。backend 在返回 Parsing service 前必须完成 vendor/service 类型隔离和初步协议验证。
 
-Operator-managed MinerU 的 submit、poll、resume task 和归档下载仍属于 MinerU Adapter 内部。外部 task ID 只服务当前尝试的有界恢复和诊断，不进入 `ParserRequest`、`ParserResult` 或 Catalog。
+Operator-managed MinerU 的 submit、poll、resume task 和归档下载仍属于 `backends/mineru/` 内部。外部 task ID 只服务当前尝试的有界恢复和诊断，不进入 `ParserRequest`、`ParserResult` 或 Catalog。
 
-当前 production adapter 锁定 MinerU 3.4.4、protocol 2、profile `vlm-engine`、archive
+当前 production backend 锁定 MinerU 3.4.4、protocol 2、profile `vlm-engine`、archive
 backend `vlm` 与 parse method `auto`。Bootstrap 从严格 `[parsing]` 读取 connection mode、
 Base URL、model identity 与 remote upload consent；remote bearer token 从统一凭据文件读取并
 与规范 origin 精确绑定，loopback 不读取 token。`config test parse` 复用同一 production
 client 但只执行 health/release/protocol/profile 检查，不提交 task 或上传 PDF。
 
-## 3. Adapter 转换
+## 3. Backend 转换
 
-不同 Parser 使用自己的转换路径：
+不同 backend 使用自己的转换路径：
 
 ```text
-MinerU Markdown/JSON/images ──> MinerUAdapter ──┐
-GROBID TEI                  ──> GROBIDAdapter ──┤
-Docling JSON                ──> DoclingAdapter ─┼─> normalized Markdown + resources
-PyMuPDF text/blocks         ──> PyMuPDFAdapter ─┘
+MinerU Markdown/JSON/images ──> MinerUBackend ──┐
+GROBID TEI                  ──> GROBIDBackend ──┤
+Docling JSON                ──> DoclingBackend ─┼─> normalized Markdown + resources
+PyMuPDF text/blocks         ──> PyMuPDFBackend ─┘
 ```
 
-公共结果由 Analysis 的消费需要定义，不由 MinerU 输出定义。Adapter 必须：
+公共结果由 Analysis 的消费需要定义，不由 MinerU 输出定义。backend 必须：
 
 1. 验证自己支持的 Parser 版本、mode 和原始输出合同；
 2. 恢复该 Parser 能稳定表达的阅读顺序；
@@ -80,7 +82,7 @@ PyMuPDF text/blocks         ──> PyMuPDFAdapter ─┘
 6. 形成 parser identity、有效参数 hash 和输入 hash；
 7. 隔离并在尝试结束后清理私有过程文件。
 
-MinerU 的 VLM、pipeline 或其它 backend 是同一个 Adapter 的显式 profile。配置与返回声明不一致、版本不受支持或输出合同无法无歧义转换时稳定失败；Adapter 不根据 JSON 形状偷猜 mode，也不在一个 mode 失败后自动切换另一个 mode。只有未来真实输出合同出现不兼容时，才在 MinerU Adapter 内增加版本或 profile 专属转换器，公共 `ParserResult` 不变。
+MinerU 的 VLM、pipeline 或其它 backend 是同一个 MinerU backend 的显式 profile。配置与返回声明不一致、版本不受支持或输出合同无法无歧义转换时稳定失败；backend 不根据 JSON 形状偷猜 mode，也不在一个 mode 失败后自动切换另一个 mode。只有未来真实输出合同出现不兼容时，才在 `backends/mineru/` 内增加版本或 profile 专属转换器，公共 `ParserResult` 不变。
 
 ## 4. ParserResult 精确合同
 
@@ -200,9 +202,9 @@ MinerU 的原始归档、`middle.json`、`content_list*.json`、model output、l
 - 外部 task ID 只在当前尝试的有界恢复中使用，retention 到期或服务不认识 task 时由本次尝试失败或重新提交，不形成产品状态；
 - 诊断只保存有界、脱敏的目标级失败，不保存原始归档、用户正文、secret、task URL 或机器路径。
 
-## 9. Adapter 验收
+## 9. Backend 验收
 
-每个生产 Adapter 必须使用同一组离线合同测试，至少覆盖：
+每个生产 backend 必须使用同一组离线合同测试，至少覆盖：
 
 - 普通文本、双栏、表格/公式、扫描型和带本地图片引用的代表性 PDF；
 - 私有输出能够形成非空规范化 Markdown 和完整资源映射；

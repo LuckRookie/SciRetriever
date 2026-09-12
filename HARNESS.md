@@ -16,7 +16,7 @@
 机械门禁只实现项目 owner 已确认且工具能够稳定判断的规则：
 
 - 不把对话总结、执行计划、审查意见、通用经验或自行推导的约束新增为 CLI 检查、固定阈值或阻断条件。
-- `scripts/harness.py` 定义实际步骤，`pyproject.toml` 定义 Ruff/Pyright 配置，`.github/workflows/ci.yml` 定义 CI 触发和运行方式。
+- `package.json` 定义当前 TS Quick/Test/Full，`.github/workflows/ci.yml` 定义 CI 触发和运行方式；Python Harness 与 `pyproject.toml` 已归档到 `archive/2026-09-12-typescript-python-retirement/`，不参与当前门禁。
 - 修改 Quick/Full 步骤或 CI 运行方式时，同步本文件、`AGENTS.md`、直接测试和开发入口。
 - 文档中的命令或路径与仓库不符时，先核实真实入口；不虚构工具，也不把未执行的能力写成门禁。
 
@@ -81,34 +81,29 @@
 - 错误只在能够增加上下文、完成协议转换或形成稳定用户结果的层处理，并保留异常链。
 - 禁止空 `except` 和无记录吞错；资源使用 context manager 或等价的确定性清理机制。
 
-## 5. Python 基线与机械门禁
+## 5. 验证路线与机械门禁
 
-`scripts/harness.py` 为 Ruff、`compileall` 和 Pyright 生成同一份排序后的活动 Python 文件清单：
+2026-09-10 项目 owner 决定：后续开发以 TypeScript 为主，默认 Quick/Full 分别指 `pnpm quick`/`pnpm full`；不再自动运行 Python Quick、Full 或全量 unittest。5.1–5.3 保留 Python 历史工具说明，仅在用户明确要求时使用；CI 已转向 5.4 的 TS 路线。
 
-- 项目根目录已有的 `*.py`；
-- `src/sciretriever/**/*.py`；
-- `tests/**/*.py`；
-- `scripts/**/*.py`。
+归档快照中的 `scripts/harness.py` 曾为 Ruff、`compileall` 和 Pyright 生成同一份排序后的 Python 文件清单。当前根目录没有活动 Python 源码，归档快照不进入 TS 验收：
 
-归档、虚拟环境、构建目录、缓存、生成物和 vendored code 不进入这组检查；测试发现和 wheel 内容门禁使用各自明确范围。
+- `archive/2026-09-12-typescript-python-retirement/src/sciretriever/**/*.py`；
+- `archive/2026-09-12-typescript-python-retirement/tests/**/*.py`；
+- `archive/2026-09-12-typescript-python-retirement/scripts/**/*.py`。
 
-### 5.1 相关验证
+归档、虚拟环境、构建目录、缓存、生成物和 vendored code 不进入当前 TS 检查；Python 快照的历史测试发现和 wheel 内容门禁只在明确的历史复核中使用。
+
+### 5.1 历史 Python 相关验证
 
 开发循环先运行与改动直接相关的测试或原生命令，例如：
 
-~~~bash
-uv run --frozen python -m unittest discover -s tests -p 'test_<name>.py'
-uv run --frozen ruff check <paths>
-uv run --frozen pyright <paths>
-~~~
+Python 源码和测试已移入归档快照。需要历史复核时，必须在隔离副本中恢复相应快照和合成 fixture，并明确记录其结果；当前任务不再从根目录运行这些命令。
 
 相关验证用于快速反馈，不能单独证明跨模块或产品级修改已经完成。
 
-### 5.2 Quick
+### 5.2 历史 Python Quick
 
-~~~bash
-uv run --frozen python scripts/harness.py quick
-~~~
+历史 Python Quick 的实现仍保存在 `archive/2026-09-12-typescript-python-retirement/scripts/harness.py`，不属于当前根目录的可执行门禁。
 
 Quick 对全部活动 Python 文件执行：
 
@@ -116,13 +111,11 @@ Quick 对全部活动 Python 文件执行：
 2. Ruff format check；
 3. `compileall`。
 
-Quick 用于代码开发循环和普通工作分支 push 的快速机械反馈。它不执行 Pyright、全量 unittest 或 wheel 构建，不能作为代码交付的完整验收。
+历史 Python Quick 不执行 Pyright、全量 unittest 或 wheel 构建；后续普通工作分支 push 使用 5.4 的 TS Quick。
 
-### 5.3 Full
+### 5.3 历史 Python Full
 
-~~~bash
-uv run --frozen python scripts/harness.py full
-~~~
+历史 Python Full 的实现仍保存在上述归档快照，不属于当前根目录的可执行门禁。
 
 Full 执行：
 
@@ -130,11 +123,27 @@ Full 执行：
 2. Pyright strict；
 3. 全部 unittest，并拒绝零测试；
 4. 从清理后的 staging 构建 wheel；
-5. 核对 wheel 中的 Python 模块与 `src/sciretriever/` 一致。
+5. 历史复核时核对 wheel 中的 Python 模块与归档快照的 `src/sciretriever/` 一致；当前 TS 包不构建 Python wheel。
 
-代码交付、PR、master、发布和安装包级验收使用 Full。CI 中普通非 master 分支 push 在 Python 3.12 上运行 Quick；PR、master push 和手动运行在 Python 3.10、3.12 上运行 Full。
+本节 Python Full 保留用于明确授权的历史维护，不作为后续 TS 代码交付、PR 或 master 的默认验收。
 
-最低运行版本是 Python 3.10，开发基线是 Python 3.12。Ruff 和 Pyright 的配置位于 `pyproject.toml`；Full 中任何步骤失败都表示完整质量门禁未通过。
+历史 Python 最低运行版本是 3.10，开发基线是 3.12；对应 `.python-version`、`pyproject.toml`、`uv.lock` 和 `pyrightconfig.json` 均在归档快照中。当前 TS 交付不运行这些历史检查，也不调整或弱化其工具内部检查。
+
+### 5.4 TypeScript 开发验证
+
+当前 TypeScript workspace 使用 `pnpm quick / test / full`，TS Full 是默认全量验收：
+
+- Quick：Prettier、ESLint、源码 project references 构建类型检查，以及 `tsconfig.tests.json` 的测试 strict 类型检查。
+- Test：Vitest 行为测试；零测试失败。包入口测试会构建两个现有 workspace，将实际 tarball 在系统临时目录离线安装，
+  使用 Node 验证公开导入、配置拒绝和包内容，结束后清理自己的目录。
+- Full：Quick、Test 和所有已注册 project 的 build。构建元数据进入 ignored `dist/`，不进入源码或安装包。
+
+本地与 CI 采用同一套 TS 命令。CI 普通非 master 分支 push 运行 Quick；PR、master push 和手动运行执行 Full，
+使用 Node 22.19.0、锁定 pnpm 及 Playwright 的测试 Chromium。安装依赖/二进制可以联网，行为测试仍只访问 fake/loopback。
+完整平台发布和 Browser 安装旅程另按对应任务验收，两个开发包的离线安装测试不能替代最终产品安装验收。详细范围见
+[TypeScript 基础开发入口](docs/development/typescript-foundation.md)。
+
+TS Full 使用 TypeScript Configuration/Credential owner 和合成临时 home，不启动 Python bridge；Python Harness 与既有测试只作为明确要求时的历史维护入口。安装、依赖和支持边界见 [TypeScript 基础开发入口](docs/development/typescript-foundation.md)。
 
 ## 6. 测试、验证与语义审查
 
@@ -143,7 +152,7 @@ Full 执行：
 | L0 | diff、修改文件诊断、最小复现和相关测试 | 所有改动 |
 | L1 | Quick 机械检查 | 所有代码改动 |
 | L2 | 类型、模块组装、序列化合同或真实依赖的离线冒烟 | 跨模块、配置或合同改动 |
-| L3 | 全部测试、wheel、安装后验收和关键用户路径 | 代码交付、用户流程或运行时改动 |
+| L3 | TS 全部测试、构建、安装后验收和关键用户路径 | 代码交付、用户流程或运行时改动 |
 | L4 | 需求、架构责任、安全边界与最终 diff 的语义审查 | 中高风险改动 |
 | L5 | 授权人员审批 | 产品边界、生产、安全、公开合同和受支持数据迁移 |
 

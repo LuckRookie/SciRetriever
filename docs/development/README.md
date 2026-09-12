@@ -5,6 +5,7 @@
 ## 常用入口
 
 - [代码与文档同步映射](documentation-map.md)：代码变化需要同步核对哪些当前文档。
+- [TypeScript 基础开发入口](typescript-foundation.md)：TS workspace、合同包、离线验证和当前运行时阻断。
 - [Provider 接入开发手册](provider-integration.md)：新增或实质修改 Metadata Provider 或 Acquisition Provider client/adapter 时的安全与验收检查。
 - [Publisher Access Profile 准入与验证矩阵](../notes/providers/publisher-access-matrix.md)：Publisher/Access Provider 的统一证据包、三态状态、Browser rule 对齐和当前生产矩阵。
 - [整体架构](../architecture/README.md)：修改领域边界、数据所有权、持久化或依赖方向前的设计真相源。
@@ -12,12 +13,10 @@
 ## 验证
 
 ```bash
-uv run --frozen python scripts/harness.py quick
-uv run --frozen python scripts/harness.py full
+pnpm quick
+pnpm full
 ```
 
-Quick 只运行 Ruff lint、format check 和 compileall，适合代码开发循环和普通工作分支的
-快速反馈。Full 另外运行 Pyright strict、全部 unittest、wheel 构建与内容核对；代码交付、
-PR、master、发布和安装包级验收默认必须通过 Full。精确规则见根目录 `HARNESS.md`。
+按项目 owner 于 2026-09-10 的决定，后续全量验收采用 TS Full：Prettier、ESLint、源码与测试 strict 类型检查、Vitest 和构建。Python Harness 保留为历史维护入口，只有明确要求时才运行。精确规则见根目录 `HARNESS.md`。
 
 测试、构建和 harness 不得连接真实供应商、生产数据库或用户语料。

@@ -1,0 +1,4939 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-12",
+  "production_runtime": {
+    "language": "typescript",
+    "runtime": "node",
+    "entry": "apps/server/src/cli/main.ts",
+    "application": "apps/server/src/bootstrap/application.ts",
+    "portable_builder": "scripts/package/build-portable.mjs"
+  },
+  "python_policy": {
+    "status": "retired-from-production",
+    "historical_files_are_not_packaged": true,
+    "python_harness": "explicit-opt-in historical maintenance only",
+    "user_data_migration": "not-authorized",
+    "historical_files_are_archived": true,
+    "archive_root": "archive/2026-09-12-typescript-python-retirement"
+  },
+  "checks": {
+    "ts_source_does_not_spawn_python": true,
+    "portable_manifest_excludes_python": true,
+    "ts_configuration_parser_is_owner": true,
+    "ts_parser_and_analysis_are_owners": true,
+    "active_python_files": 0,
+    "archive_manifest_verified": true
+  },
+  "records": [
+    {
+      "path": ".python-version",
+      "kind": "python-version-marker",
+      "disposition": "historical-maintenance",
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/.python-version",
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ]
+    },
+    {
+      "path": "pyproject.toml",
+      "kind": "python-project-manifest",
+      "disposition": "historical-maintenance",
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/pyproject.toml"
+    },
+    {
+      "path": "pyrightconfig.json",
+      "kind": "python-typecheck-config",
+      "disposition": "historical-maintenance",
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/pyrightconfig.json",
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ]
+    },
+    {
+      "path": "scripts/__init__.py",
+      "kind": "python-script-support",
+      "disposition": "historical-maintenance",
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/scripts/__init__.py"
+    },
+    {
+      "path": "scripts/harness.py",
+      "kind": "python-harness",
+      "disposition": "historical-maintenance",
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/scripts/harness.py"
+    },
+    {
+      "path": "src/sciretriever/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/index.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/__main__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/cli/main.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/__main__.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/access_profiles.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/access_profiles.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/api.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/api.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/authorized.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/authorized.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/browser_admission.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/browser_admission.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/browser_control.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/browser_control.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/cohort.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/cohort.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/manual.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/manual.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/outcomes.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/outcomes.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/pdf_identity.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/pdf_identity.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/planning.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/planning.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/ports.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/ports.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/profile_catalog.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/profile_catalog.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/profile_verification.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/profile_verification.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/providers/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/providers/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/providers/core.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/providers/core.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/providers/elsevier.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/providers/elsevier.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/providers/wiley.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/providers/wiley.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/publication.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/publication.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/registry.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/registry.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/routes.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/routes.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/routing.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/routing.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/rules.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/rules.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/sources/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/sources/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/sources/arxiv.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/sources/arxiv.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/sources/browser.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/sources/browser.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/sources/configured_sci_hub.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/sources/configured_sci_hub.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/sources/direct.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/sources/direct.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/sources/doi_landing.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/sources/doi_landing.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/sources/europe_pmc.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/sources/europe_pmc.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/sources/unpaywall.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/sources/unpaywall.py"
+    },
+    {
+      "path": "src/sciretriever/acquisition/tiered_service.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/acquisition"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/acquisition/tiered_service.py"
+    },
+    {
+      "path": "src/sciretriever/agents/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/agents/api.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/api.py"
+    },
+    {
+      "path": "src/sciretriever/agents/calls.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/calls.py"
+    },
+    {
+      "path": "src/sciretriever/agents/capabilities.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/capabilities.py"
+    },
+    {
+      "path": "src/sciretriever/agents/debug.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/debug.py"
+    },
+    {
+      "path": "src/sciretriever/agents/failures.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/failures.py"
+    },
+    {
+      "path": "src/sciretriever/agents/messages.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/messages.py"
+    },
+    {
+      "path": "src/sciretriever/agents/ports.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/ports.py"
+    },
+    {
+      "path": "src/sciretriever/agents/providers/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/providers/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/agents/providers/anthropic.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/providers/anthropic.py"
+    },
+    {
+      "path": "src/sciretriever/agents/providers/base.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/providers/base.py"
+    },
+    {
+      "path": "src/sciretriever/agents/providers/models.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/providers/models.py"
+    },
+    {
+      "path": "src/sciretriever/agents/providers/openai_chat.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/providers/openai_chat.py"
+    },
+    {
+      "path": "src/sciretriever/agents/providers/openai_responses.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/providers/openai_responses.py"
+    },
+    {
+      "path": "src/sciretriever/agents/providers/sse.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/providers/sse.py"
+    },
+    {
+      "path": "src/sciretriever/agents/runtime.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/runtime.py"
+    },
+    {
+      "path": "src/sciretriever/agents/tools.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/agents"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/agents/tools.py"
+    },
+    {
+      "path": "src/sciretriever/analysis/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/analysis"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/analysis/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/analysis/api.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/analysis"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/analysis/api.py"
+    },
+    {
+      "path": "src/sciretriever/analysis/content.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/analysis"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/analysis/content.py"
+    },
+    {
+      "path": "src/sciretriever/analysis/failures.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/analysis"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/analysis/failures.py"
+    },
+    {
+      "path": "src/sciretriever/analysis/markdown.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/analysis"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/analysis/markdown.py"
+    },
+    {
+      "path": "src/sciretriever/analysis/markdown_rules.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/analysis"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/analysis/markdown_rules.py"
+    },
+    {
+      "path": "src/sciretriever/analysis/metadata.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/analysis"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/analysis/metadata.py"
+    },
+    {
+      "path": "src/sciretriever/analysis/metadata_rules.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/analysis"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/analysis/metadata_rules.py"
+    },
+    {
+      "path": "src/sciretriever/analysis/ports.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/analysis"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/analysis/ports.py"
+    },
+    {
+      "path": "src/sciretriever/analysis/references.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/analysis"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/analysis/references.py"
+    },
+    {
+      "path": "src/sciretriever/analysis/service.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/analysis"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/analysis/service.py"
+    },
+    {
+      "path": "src/sciretriever/bootstrap/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/bootstrap"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/bootstrap/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/bootstrap/assembly.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/bootstrap"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/bootstrap/assembly.py"
+    },
+    {
+      "path": "src/sciretriever/bootstrap/browser.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/bootstrap"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/bootstrap/browser.py"
+    },
+    {
+      "path": "src/sciretriever/bootstrap/errors.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/bootstrap"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/bootstrap/errors.py"
+    },
+    {
+      "path": "src/sciretriever/bootstrap/graphs.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/bootstrap"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/bootstrap/graphs.py"
+    },
+    {
+      "path": "src/sciretriever/bootstrap/probes.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/bootstrap"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/bootstrap/probes.py"
+    },
+    {
+      "path": "src/sciretriever/bootstrap/services.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/bootstrap"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/bootstrap/services.py"
+    },
+    {
+      "path": "src/sciretriever/bootstrap/storage.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/bootstrap"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/bootstrap/storage.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/agent_setup.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/agent_setup.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/browser_access.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/browser_access.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/browser_identity.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/browser_identity.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/browser_profiles.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/browser_profiles.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/cloak_runtime.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/cloak_runtime.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/credential_edits.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/credential_edits.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/credential_projection.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/credential_projection.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/credentials.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/credentials.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/documents.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/documents.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/errors.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/errors.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/file_store.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/file_store.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/filesystem.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/filesystem.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/projection.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/projection.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/readiness_projection.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/readiness_projection.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/source_selection.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/source_selection.py"
+    },
+    {
+      "path": "src/sciretriever/configuration/status.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/configuration"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/configuration/status.py"
+    },
+    {
+      "path": "src/sciretriever/entry/analysis_bridge.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/analysis_bridge.py"
+    },
+    {
+      "path": "src/sciretriever/entry/api.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/api.py"
+    },
+    {
+      "path": "src/sciretriever/entry/citations.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/citations.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/config_center/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/config_center/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/config_center/analysis.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/config_center/analysis.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/config_center/browser.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/config_center/browser.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/config_center/commands.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/config_center/commands.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/config_center/common.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/config_center/common.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/config_center/manager.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/config_center/manager.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/config_center/models.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/config_center/models.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/config_center/parsing.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/config_center/parsing.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/config_center/probes.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/config_center/probes.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/config_center/source_credentials.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/config_center/source_credentials.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/config_center/sources.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/config_center/sources.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/config_center/status.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/config_center/status.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/config_probe_diagnostics.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/config_probe_diagnostics.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/config_ui.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/config_ui.py"
+    },
+    {
+      "path": "src/sciretriever/entry/cli/main.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/cli/main.py"
+    },
+    {
+      "path": "src/sciretriever/entry/codecs/_common.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/codecs/_common.py"
+    },
+    {
+      "path": "src/sciretriever/entry/codecs/bibtex.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/codecs/bibtex.py"
+    },
+    {
+      "path": "src/sciretriever/entry/codecs/csl_json.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/codecs/csl_json.py"
+    },
+    {
+      "path": "src/sciretriever/entry/codecs/ris.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/codecs/ris.py"
+    },
+    {
+      "path": "src/sciretriever/entry/completion.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/completion.py"
+    },
+    {
+      "path": "src/sciretriever/entry/configuration_bridge.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/configuration_bridge.py"
+    },
+    {
+      "path": "src/sciretriever/entry/discovery.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/discovery.py"
+    },
+    {
+      "path": "src/sciretriever/entry/exchange.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/exchange.py"
+    },
+    {
+      "path": "src/sciretriever/entry/execution.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/execution.py"
+    },
+    {
+      "path": "src/sciretriever/entry/library.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/library.py"
+    },
+    {
+      "path": "src/sciretriever/entry/manual.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/manual.py"
+    },
+    {
+      "path": "src/sciretriever/entry/orchestration.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/orchestration.py"
+    },
+    {
+      "path": "src/sciretriever/entry/ports.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/entry"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/entry/ports.py"
+    },
+    {
+      "path": "src/sciretriever/literature/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/literature"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/literature/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/literature/api.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/literature"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/literature/api.py"
+    },
+    {
+      "path": "src/sciretriever/literature/content.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/literature"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/literature/content.py"
+    },
+    {
+      "path": "src/sciretriever/literature/exchange.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/literature"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/literature/exchange.py"
+    },
+    {
+      "path": "src/sciretriever/literature/identity.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/literature"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/literature/identity.py"
+    },
+    {
+      "path": "src/sciretriever/literature/metadata.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/literature"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/literature/metadata.py"
+    },
+    {
+      "path": "src/sciretriever/literature/ports.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/literature"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/literature/ports.py"
+    },
+    {
+      "path": "src/sciretriever/literature/query.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/literature"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/literature/query.py"
+    },
+    {
+      "path": "src/sciretriever/literature/references.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/literature"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/literature/references.py"
+    },
+    {
+      "path": "src/sciretriever/literature/service.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/literature"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/literature/service.py"
+    },
+    {
+      "path": "src/sciretriever/literature/state.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/literature"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/literature/state.py"
+    },
+    {
+      "path": "src/sciretriever/logging/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/logging"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/logging/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/logging/api.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/logging"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/logging/api.py"
+    },
+    {
+      "path": "src/sciretriever/logging/presentation.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/logging"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/logging/presentation.py"
+    },
+    {
+      "path": "src/sciretriever/logging/redaction.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/logging"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/logging/redaction.py"
+    },
+    {
+      "path": "src/sciretriever/logging/setup.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/logging"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/logging/setup.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/api.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/api.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/ports.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/ports.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/probe.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/probe.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/_shared/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/_shared/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/_shared/failures.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/_shared/failures.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/_shared/feedback.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/_shared/feedback.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/_shared/identity.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/_shared/identity.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/_shared/parsing.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/_shared/parsing.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/arxiv/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/arxiv/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/arxiv/adapter.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/arxiv/adapter.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/core/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/core/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/core/adapter.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/core/adapter.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/crossref/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/crossref/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/crossref/adapter.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/crossref/adapter.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/datacite/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/datacite/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/datacite/adapter.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/datacite/adapter.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/elsevier/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/elsevier/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/elsevier/adapter.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/elsevier/adapter.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/europe_pmc/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/europe_pmc/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/europe_pmc/adapter.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/europe_pmc/adapter.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/openalex/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/openalex/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/openalex/adapter.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/openalex/adapter.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/opencitations/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/opencitations/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/opencitations/adapter.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/opencitations/adapter.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/semantic_scholar/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/semantic_scholar/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/semantic_scholar/adapter.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/semantic_scholar/adapter.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/springer/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/springer/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/springer/adapter.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/springer/adapter.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/web_of_science/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/web_of_science/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/providers/web_of_science/adapter.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/providers/web_of_science/adapter.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/publication.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/publication.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/registry.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/registry.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/rules.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/rules.py"
+    },
+    {
+      "path": "src/sciretriever/metadata/service.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/metadata"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/metadata/service.py"
+    },
+    {
+      "path": "src/sciretriever/model/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/model/access.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/access.py"
+    },
+    {
+      "path": "src/sciretriever/model/acquisition.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/acquisition.py"
+    },
+    {
+      "path": "src/sciretriever/model/analysis.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/analysis.py"
+    },
+    {
+      "path": "src/sciretriever/model/configuration.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/configuration.py"
+    },
+    {
+      "path": "src/sciretriever/model/discovery.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/discovery.py"
+    },
+    {
+      "path": "src/sciretriever/model/execution.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/execution.py"
+    },
+    {
+      "path": "src/sciretriever/model/library.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/library.py"
+    },
+    {
+      "path": "src/sciretriever/model/literature.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/literature.py"
+    },
+    {
+      "path": "src/sciretriever/model/metadata.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/metadata.py"
+    },
+    {
+      "path": "src/sciretriever/model/parsing.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/parsing.py"
+    },
+    {
+      "path": "src/sciretriever/model/primitives.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/primitives.py"
+    },
+    {
+      "path": "src/sciretriever/model/provenance.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/provenance.py"
+    },
+    {
+      "path": "src/sciretriever/model/record.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/record.py"
+    },
+    {
+      "path": "src/sciretriever/model/report.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "packages/contracts/src"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/model/report.py"
+    },
+    {
+      "path": "src/sciretriever/network/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/network"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/network/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/network/admission.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/network"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/network/admission.py"
+    },
+    {
+      "path": "src/sciretriever/network/browser.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/network"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/network/browser.py"
+    },
+    {
+      "path": "src/sciretriever/network/browser_connect.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/network"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/network/browser_connect.py"
+    },
+    {
+      "path": "src/sciretriever/network/browser_control.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/network"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/network/browser_control.py"
+    },
+    {
+      "path": "src/sciretriever/network/browser_runtime.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/network"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/network/browser_runtime.py"
+    },
+    {
+      "path": "src/sciretriever/network/browser_scheduler.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/network"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/network/browser_scheduler.py"
+    },
+    {
+      "path": "src/sciretriever/network/browser_sessions.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/network"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/network/browser_sessions.py"
+    },
+    {
+      "path": "src/sciretriever/network/cloakbrowser.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/network"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/network/cloakbrowser.py"
+    },
+    {
+      "path": "src/sciretriever/network/http.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/network"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/network/http.py"
+    },
+    {
+      "path": "src/sciretriever/network/playwright.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/network"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/network/playwright.py"
+    },
+    {
+      "path": "src/sciretriever/network/policy.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/network"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/network/policy.py"
+    },
+    {
+      "path": "src/sciretriever/network/response_feedback.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/network"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/network/response_feedback.py"
+    },
+    {
+      "path": "src/sciretriever/parsing/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/parsing"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/parsing/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/parsing/adapters/mineru.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/parsing"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/parsing/adapters/mineru.py"
+    },
+    {
+      "path": "src/sciretriever/parsing/adapters/mineru_converter.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/parsing"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/parsing/adapters/mineru_converter.py"
+    },
+    {
+      "path": "src/sciretriever/parsing/api.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/parsing"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/parsing/api.py"
+    },
+    {
+      "path": "src/sciretriever/parsing/archive.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/parsing"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/parsing/archive.py"
+    },
+    {
+      "path": "src/sciretriever/parsing/artifact_bridge.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/parsing"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/parsing/artifact_bridge.py"
+    },
+    {
+      "path": "src/sciretriever/parsing/markdown.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/parsing"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/parsing/markdown.py"
+    },
+    {
+      "path": "src/sciretriever/parsing/mineru_bridge.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/parsing"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/parsing/mineru_bridge.py"
+    },
+    {
+      "path": "src/sciretriever/parsing/ports.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/parsing"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/parsing/ports.py"
+    },
+    {
+      "path": "src/sciretriever/parsing/publication.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/parsing"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/parsing/publication.py"
+    },
+    {
+      "path": "src/sciretriever/parsing/resources.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/parsing"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/parsing/resources.py"
+    },
+    {
+      "path": "src/sciretriever/parsing/rules.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/parsing"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/parsing/rules.py"
+    },
+    {
+      "path": "src/sciretriever/parsing/service.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/parsing"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/parsing/service.py"
+    },
+    {
+      "path": "src/sciretriever/storage/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/storage/analysis_artifacts.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/analysis_artifacts.py"
+    },
+    {
+      "path": "src/sciretriever/storage/completion.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/completion.py"
+    },
+    {
+      "path": "src/sciretriever/storage/files/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/files/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/storage/files/output.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/files/output.py"
+    },
+    {
+      "path": "src/sciretriever/storage/files/paths.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/files/paths.py"
+    },
+    {
+      "path": "src/sciretriever/storage/files/reader.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/files/reader.py"
+    },
+    {
+      "path": "src/sciretriever/storage/files/reconciliation.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/files/reconciliation.py"
+    },
+    {
+      "path": "src/sciretriever/storage/files/staging.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/files/staging.py"
+    },
+    {
+      "path": "src/sciretriever/storage/files/store.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/files/store.py"
+    },
+    {
+      "path": "src/sciretriever/storage/literature_artifacts.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/literature_artifacts.py"
+    },
+    {
+      "path": "src/sciretriever/storage/locking.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/locking.py"
+    },
+    {
+      "path": "src/sciretriever/storage/pdf_validation_staging.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/pdf_validation_staging.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/__init__.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/__init__.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/acquisition_publication.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/acquisition_publication.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/analysis_artifacts.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/analysis_artifacts.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/analysis_inputs.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/analysis_inputs.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/artifact_references.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/artifact_references.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/artifacts.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/artifacts.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/content_publication.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/content_publication.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/discovery_repository.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/discovery_repository.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/engine.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/engine.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/entry_reader.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/entry_reader.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/literature_artifact_catalog.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/literature_artifact_catalog.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/literature_preconditions.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/literature_preconditions.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/literature_reader.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/literature_reader.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/literature_writer.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/literature_writer.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/metadata_publication.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/metadata_publication.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/no_usable_content_cleanup.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/no_usable_content_cleanup.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/parsing_publication.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/parsing_publication.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/schema.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/schema.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/schema_discovery.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/schema_discovery.py"
+    },
+    {
+      "path": "src/sciretriever/storage/sqlite/schema_literature.py",
+      "kind": "python-source",
+      "disposition": "historical-nonruntime",
+      "ts_targets": [
+        "apps/server/src/storage"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/src/sciretriever/storage/sqlite/schema_literature.py"
+    },
+    {
+      "path": "tests/__init__.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/__init__.py"
+    },
+    {
+      "path": "tests/acceptance/__init__.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/__init__.py"
+    },
+    {
+      "path": "tests/acceptance/helpers/__init__.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/helpers/__init__.py"
+    },
+    {
+      "path": "tests/acceptance/helpers/drive_citation_discovery.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/helpers/drive_citation_discovery.py"
+    },
+    {
+      "path": "tests/acceptance/helpers/drive_cloakbrowser.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/helpers/drive_cloakbrowser.py"
+    },
+    {
+      "path": "tests/acceptance/helpers/drive_completion_control.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/helpers/drive_completion_control.py"
+    },
+    {
+      "path": "tests/acceptance/helpers/drive_controlled_browser.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/helpers/drive_controlled_browser.py"
+    },
+    {
+      "path": "tests/acceptance/helpers/drive_database_completion.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/helpers/drive_database_completion.py"
+    },
+    {
+      "path": "tests/acceptance/helpers/drive_mineru_loopback.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/parsing-service.test.ts",
+        "apps/server/test/mineru-parser.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/helpers/drive_mineru_loopback.py"
+    },
+    {
+      "path": "tests/acceptance/helpers/drive_topic_discovery.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/helpers/drive_topic_discovery.py"
+    },
+    {
+      "path": "tests/acceptance/helpers/inspect_install.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/helpers/inspect_install.py"
+    },
+    {
+      "path": "tests/acceptance/helpers/installed_wheel.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/helpers/installed_wheel.py"
+    },
+    {
+      "path": "tests/acceptance/helpers/probe_local_console.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/helpers/probe_local_console.py"
+    },
+    {
+      "path": "tests/acceptance/helpers/probe_sitecustomize.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/helpers/probe_sitecustomize.py"
+    },
+    {
+      "path": "tests/acceptance/helpers/sciretriever_acceptance_transport.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/helpers/sciretriever_acceptance_transport.py"
+    },
+    {
+      "path": "tests/acceptance/helpers/sitecustomize_production_fixture.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/helpers/sitecustomize_production_fixture.py"
+    },
+    {
+      "path": "tests/acceptance/test_installed_citation_discovery.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/test_installed_citation_discovery.py"
+    },
+    {
+      "path": "tests/acceptance/test_installed_cli_surface.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/test_installed_cli_surface.py"
+    },
+    {
+      "path": "tests/acceptance/test_installed_cloakbrowser.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/test_installed_cloakbrowser.py"
+    },
+    {
+      "path": "tests/acceptance/test_installed_completion_control.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/test_installed_completion_control.py"
+    },
+    {
+      "path": "tests/acceptance/test_installed_controlled_browser.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/test_installed_controlled_browser.py"
+    },
+    {
+      "path": "tests/acceptance/test_installed_database_completion.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/test_installed_database_completion.py"
+    },
+    {
+      "path": "tests/acceptance/test_installed_exchange_and_manual_pdf.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/test_installed_exchange_and_manual_pdf.py"
+    },
+    {
+      "path": "tests/acceptance/test_installed_final_offline_journey.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/test_installed_final_offline_journey.py"
+    },
+    {
+      "path": "tests/acceptance/test_installed_local_database_journey.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/test_installed_local_database_journey.py"
+    },
+    {
+      "path": "tests/acceptance/test_installed_mineru_loopback.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/parsing-service.test.ts",
+        "apps/server/test/mineru-parser.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/test_installed_mineru_loopback.py"
+    },
+    {
+      "path": "tests/acceptance/test_installed_production_bootstrap_journey.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/test_installed_production_bootstrap_journey.py"
+    },
+    {
+      "path": "tests/acceptance/test_installed_topic_discovery.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/test_installed_topic_discovery.py"
+    },
+    {
+      "path": "tests/acceptance/test_wheel_contents.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/analysis-service.test.ts",
+        "apps/server/test/content-analysis-entry.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/acceptance/test_wheel_contents.py"
+    },
+    {
+      "path": "tests/browser_https_fixture.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/browser_https_fixture.py"
+    },
+    {
+      "path": "tests/metadata_provider_contract.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/metadata_provider_contract.py"
+    },
+    {
+      "path": "tests/test_acquisition_authorized.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_authorized.py"
+    },
+    {
+      "path": "tests/test_acquisition_browser.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_browser.py"
+    },
+    {
+      "path": "tests/test_acquisition_cohorts.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_cohorts.py"
+    },
+    {
+      "path": "tests/test_acquisition_configured_sci_hub.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_configured_sci_hub.py"
+    },
+    {
+      "path": "tests/test_acquisition_contracts.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_contracts.py"
+    },
+    {
+      "path": "tests/test_acquisition_core_authorized.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_core_authorized.py"
+    },
+    {
+      "path": "tests/test_acquisition_direct.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_direct.py"
+    },
+    {
+      "path": "tests/test_acquisition_elsevier_authorized.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_elsevier_authorized.py"
+    },
+    {
+      "path": "tests/test_acquisition_manual.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_manual.py"
+    },
+    {
+      "path": "tests/test_acquisition_matrix.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_matrix.py"
+    },
+    {
+      "path": "tests/test_acquisition_pdf_identity.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_pdf_identity.py"
+    },
+    {
+      "path": "tests/test_acquisition_pdf_validation.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_pdf_validation.py"
+    },
+    {
+      "path": "tests/test_acquisition_planning.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_planning.py"
+    },
+    {
+      "path": "tests/test_acquisition_public_protocols.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_public_protocols.py"
+    },
+    {
+      "path": "tests/test_acquisition_publication.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_publication.py"
+    },
+    {
+      "path": "tests/test_acquisition_wiley_authorized.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_acquisition_wiley_authorized.py"
+    },
+    {
+      "path": "tests/test_agent_configuration_setup.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/agent-runtime.test.ts",
+        "apps/server/test/agent-wire.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_agent_configuration_setup.py"
+    },
+    {
+      "path": "tests/test_agent_model_catalog.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/agent-runtime.test.ts",
+        "apps/server/test/agent-wire.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_agent_model_catalog.py"
+    },
+    {
+      "path": "tests/test_agents.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/agent-runtime.test.ts",
+        "apps/server/test/agent-wire.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_agents.py"
+    },
+    {
+      "path": "tests/test_agents_contracts.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/agent-runtime.test.ts",
+        "apps/server/test/agent-wire.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_agents_contracts.py"
+    },
+    {
+      "path": "tests/test_agents_providers.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/agent-runtime.test.ts",
+        "apps/server/test/agent-wire.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_agents_providers.py"
+    },
+    {
+      "path": "tests/test_analysis_content_proposal.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/analysis-service.test.ts",
+        "apps/server/test/content-analysis-entry.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_analysis_content_proposal.py"
+    },
+    {
+      "path": "tests/test_analysis_markdown.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/analysis-service.test.ts",
+        "apps/server/test/content-analysis-entry.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_analysis_markdown.py"
+    },
+    {
+      "path": "tests/test_analysis_metadata_stage.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_analysis_metadata_stage.py"
+    },
+    {
+      "path": "tests/test_analysis_reference_lookup.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/analysis-service.test.ts",
+        "apps/server/test/content-analysis-entry.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_analysis_reference_lookup.py"
+    },
+    {
+      "path": "tests/test_analysis_storage_adapters.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/sqlite-compatibility.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_analysis_storage_adapters.py"
+    },
+    {
+      "path": "tests/test_architecture_cutover.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_architecture_cutover.py"
+    },
+    {
+      "path": "tests/test_artifact_store.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/sqlite-compatibility.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_artifact_store.py"
+    },
+    {
+      "path": "tests/test_atomic_output.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/sqlite-compatibility.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_atomic_output.py"
+    },
+    {
+      "path": "tests/test_bootstrap_cloak_probe.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_bootstrap_cloak_probe.py"
+    },
+    {
+      "path": "tests/test_bootstrap_readiness.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_bootstrap_readiness.py"
+    },
+    {
+      "path": "tests/test_browser_admission.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_browser_admission.py"
+    },
+    {
+      "path": "tests/test_browser_agent_control.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_browser_agent_control.py"
+    },
+    {
+      "path": "tests/test_browser_agent_integration.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_browser_agent_integration.py"
+    },
+    {
+      "path": "tests/test_browser_challenge_lifecycle.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_browser_challenge_lifecycle.py"
+    },
+    {
+      "path": "tests/test_browser_configuration_status.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_browser_configuration_status.py"
+    },
+    {
+      "path": "tests/test_browser_connect.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_browser_connect.py"
+    },
+    {
+      "path": "tests/test_browser_profiles.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_browser_profiles.py"
+    },
+    {
+      "path": "tests/test_browser_provider_cloakbrowser.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_browser_provider_cloakbrowser.py"
+    },
+    {
+      "path": "tests/test_browser_runtime.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_browser_runtime.py"
+    },
+    {
+      "path": "tests/test_browser_scheduler.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_browser_scheduler.py"
+    },
+    {
+      "path": "tests/test_browser_sessions.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_browser_sessions.py"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_cli.py"
+    },
+    {
+      "path": "tests/test_cloak_runtime_configuration.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_cloak_runtime_configuration.py"
+    },
+    {
+      "path": "tests/test_config_center_analysis.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_config_center_analysis.py"
+    },
+    {
+      "path": "tests/test_config_center_browser.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_config_center_browser.py"
+    },
+    {
+      "path": "tests/test_config_center_commands.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_config_center_commands.py"
+    },
+    {
+      "path": "tests/test_config_center_common.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_config_center_common.py"
+    },
+    {
+      "path": "tests/test_config_center_manager.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_config_center_manager.py"
+    },
+    {
+      "path": "tests/test_config_center_models.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_config_center_models.py"
+    },
+    {
+      "path": "tests/test_config_center_parsing.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_config_center_parsing.py"
+    },
+    {
+      "path": "tests/test_config_center_probes.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_config_center_probes.py"
+    },
+    {
+      "path": "tests/test_config_center_source_credentials.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_config_center_source_credentials.py"
+    },
+    {
+      "path": "tests/test_config_center_sources.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_config_center_sources.py"
+    },
+    {
+      "path": "tests/test_config_center_status.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_config_center_status.py"
+    },
+    {
+      "path": "tests/test_config_ui.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_config_ui.py"
+    },
+    {
+      "path": "tests/test_configuration_boundary.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_configuration_boundary.py"
+    },
+    {
+      "path": "tests/test_configuration_browser_runtime_ui.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_configuration_browser_runtime_ui.py"
+    },
+    {
+      "path": "tests/test_configuration_editing.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_configuration_editing.py"
+    },
+    {
+      "path": "tests/test_configuration_probes.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_configuration_probes.py"
+    },
+    {
+      "path": "tests/test_configuration_source_selection.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_configuration_source_selection.py"
+    },
+    {
+      "path": "tests/test_content_pipeline_contracts.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/analysis-service.test.ts",
+        "apps/server/test/content-analysis-entry.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_content_pipeline_contracts.py"
+    },
+    {
+      "path": "tests/test_core_configuration_probes.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/configuration-owner.test.ts",
+        "apps/server/test/configuration-typescript-owner.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_core_configuration_probes.py"
+    },
+    {
+      "path": "tests/test_entry_citation_discovery.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_entry_citation_discovery.py"
+    },
+    {
+      "path": "tests/test_entry_completion.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_entry_completion.py"
+    },
+    {
+      "path": "tests/test_entry_completion_inputs.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_entry_completion_inputs.py"
+    },
+    {
+      "path": "tests/test_entry_contracts.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_entry_contracts.py"
+    },
+    {
+      "path": "tests/test_entry_current_facts.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_entry_current_facts.py"
+    },
+    {
+      "path": "tests/test_entry_exchange.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_entry_exchange.py"
+    },
+    {
+      "path": "tests/test_entry_library.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_entry_library.py"
+    },
+    {
+      "path": "tests/test_entry_manual_pdf.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_entry_manual_pdf.py"
+    },
+    {
+      "path": "tests/test_entry_topic_discovery.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_entry_topic_discovery.py"
+    },
+    {
+      "path": "tests/test_fixture_integrity.py",
+      "kind": "python-migration-check",
+      "disposition": "historical-maintenance",
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_fixture_integrity.py",
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ]
+    },
+    {
+      "path": "tests/test_harness.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_harness.py"
+    },
+    {
+      "path": "tests/test_literature_api.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_literature_api.py"
+    },
+    {
+      "path": "tests/test_literature_architecture.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_literature_architecture.py"
+    },
+    {
+      "path": "tests/test_literature_content.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/analysis-service.test.ts",
+        "apps/server/test/content-analysis-entry.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_literature_content.py"
+    },
+    {
+      "path": "tests/test_literature_exchange.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_literature_exchange.py"
+    },
+    {
+      "path": "tests/test_literature_identity.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_literature_identity.py"
+    },
+    {
+      "path": "tests/test_literature_metadata.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_literature_metadata.py"
+    },
+    {
+      "path": "tests/test_literature_query.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_literature_query.py"
+    },
+    {
+      "path": "tests/test_literature_query_rules.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_literature_query_rules.py"
+    },
+    {
+      "path": "tests/test_literature_references.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_literature_references.py"
+    },
+    {
+      "path": "tests/test_logging_foundation.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_logging_foundation.py"
+    },
+    {
+      "path": "tests/test_logging_presentation.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_logging_presentation.py"
+    },
+    {
+      "path": "tests/test_metadata_contracts.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_metadata_contracts.py"
+    },
+    {
+      "path": "tests/test_metadata_crossref_arxiv.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_metadata_crossref_arxiv.py"
+    },
+    {
+      "path": "tests/test_metadata_elsevier_springer.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_metadata_elsevier_springer.py"
+    },
+    {
+      "path": "tests/test_metadata_europepmc_datacite_core.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_metadata_europepmc_datacite_core.py"
+    },
+    {
+      "path": "tests/test_metadata_opencitations.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_metadata_opencitations.py"
+    },
+    {
+      "path": "tests/test_metadata_probe_registry.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_metadata_probe_registry.py"
+    },
+    {
+      "path": "tests/test_metadata_probes.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_metadata_probes.py"
+    },
+    {
+      "path": "tests/test_metadata_probes_commercial.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_metadata_probes_commercial.py"
+    },
+    {
+      "path": "tests/test_metadata_provider_contract.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_metadata_provider_contract.py"
+    },
+    {
+      "path": "tests/test_metadata_provider_matrix.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_metadata_provider_matrix.py"
+    },
+    {
+      "path": "tests/test_metadata_publication.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_metadata_publication.py"
+    },
+    {
+      "path": "tests/test_metadata_semantic_openalex.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_metadata_semantic_openalex.py"
+    },
+    {
+      "path": "tests/test_metadata_web_of_science.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_metadata_web_of_science.py"
+    },
+    {
+      "path": "tests/test_migration_decisions.py",
+      "kind": "python-migration-check",
+      "disposition": "historical-maintenance",
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_migration_decisions.py",
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ]
+    },
+    {
+      "path": "tests/test_migration_inventory.py",
+      "kind": "python-migration-check",
+      "disposition": "historical-maintenance",
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_migration_inventory.py",
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ]
+    },
+    {
+      "path": "tests/test_model_acquisition_parsing_analysis.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_model_acquisition_parsing_analysis.py"
+    },
+    {
+      "path": "tests/test_model_discovery_report.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_model_discovery_report.py"
+    },
+    {
+      "path": "tests/test_model_execution.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_model_execution.py"
+    },
+    {
+      "path": "tests/test_model_library_record.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_model_library_record.py"
+    },
+    {
+      "path": "tests/test_model_literature_metadata.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/metadata-service.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_model_literature_metadata.py"
+    },
+    {
+      "path": "tests/test_model_primitives_provenance.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_model_primitives_provenance.py"
+    },
+    {
+      "path": "tests/test_network_admission.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/network-admission.test.ts",
+        "apps/server/test/network-budget.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_network_admission.py"
+    },
+    {
+      "path": "tests/test_network_browser.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_network_browser.py"
+    },
+    {
+      "path": "tests/test_network_cloakbrowser.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_network_cloakbrowser.py"
+    },
+    {
+      "path": "tests/test_network_cloakbrowser_local.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_network_cloakbrowser_local.py"
+    },
+    {
+      "path": "tests/test_network_http.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/network-admission.test.ts",
+        "apps/server/test/network-budget.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_network_http.py"
+    },
+    {
+      "path": "tests/test_network_playwright_control.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/workbench-session.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_network_playwright_control.py"
+    },
+    {
+      "path": "tests/test_network_policy.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/network-admission.test.ts",
+        "apps/server/test/network-budget.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_network_policy.py"
+    },
+    {
+      "path": "tests/test_network_response_feedback.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/network-admission.test.ts",
+        "apps/server/test/network-budget.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_network_response_feedback.py"
+    },
+    {
+      "path": "tests/test_network_storage_foundation.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/sqlite-compatibility.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_network_storage_foundation.py"
+    },
+    {
+      "path": "tests/test_parsing_contracts.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/parsing-service.test.ts",
+        "apps/server/test/mineru-parser.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_parsing_contracts.py"
+    },
+    {
+      "path": "tests/test_parsing_mineru.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/parsing-service.test.ts",
+        "apps/server/test/mineru-parser.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_parsing_mineru.py"
+    },
+    {
+      "path": "tests/test_parsing_publication.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/parsing-service.test.ts",
+        "apps/server/test/mineru-parser.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_parsing_publication.py"
+    },
+    {
+      "path": "tests/test_parsing_resources.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/parsing-service.test.ts",
+        "apps/server/test/mineru-parser.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_parsing_resources.py"
+    },
+    {
+      "path": "tests/test_pdf_acquisition_reform_contracts.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_pdf_acquisition_reform_contracts.py"
+    },
+    {
+      "path": "tests/test_publisher_access_profiles.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_publisher_access_profiles.py"
+    },
+    {
+      "path": "tests/test_publisher_profile_verification.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_publisher_profile_verification.py"
+    },
+    {
+      "path": "tests/test_runtime_capabilities.py",
+      "kind": "python-migration-check",
+      "disposition": "historical-maintenance",
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_runtime_capabilities.py",
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ]
+    },
+    {
+      "path": "tests/test_storage_content_publication.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/sqlite-compatibility.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_storage_content_publication.py"
+    },
+    {
+      "path": "tests/test_storage_discovery.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/sqlite-compatibility.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_storage_discovery.py"
+    },
+    {
+      "path": "tests/test_storage_discovery_schema.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/sqlite-compatibility.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_storage_discovery_schema.py"
+    },
+    {
+      "path": "tests/test_storage_literature_preconditions.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/sqlite-compatibility.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_storage_literature_preconditions.py"
+    },
+    {
+      "path": "tests/test_storage_literature_write.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/sqlite-compatibility.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_storage_literature_write.py"
+    },
+    {
+      "path": "tests/test_storage_locking.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/sqlite-compatibility.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_storage_locking.py"
+    },
+    {
+      "path": "tests/test_storage_no_usable_content_cleanup.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/sqlite-compatibility.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_storage_no_usable_content_cleanup.py"
+    },
+    {
+      "path": "tests/test_storage_paths.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/sqlite-compatibility.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_storage_paths.py"
+    },
+    {
+      "path": "tests/test_storage_reconciliation.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/sqlite-compatibility.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_storage_reconciliation.py"
+    },
+    {
+      "path": "tests/test_storage_sqlite_engine.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/sqlite-compatibility.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_storage_sqlite_engine.py"
+    },
+    {
+      "path": "tests/test_tiered_acquisition_service.py",
+      "kind": "python-test-oracle",
+      "disposition": "historical-oracle",
+      "ts_tests": [
+        "apps/server/test/candidate-acceptance.test.ts"
+      ],
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/tests/test_tiered_acquisition_service.py"
+    },
+    {
+      "path": "uv.lock",
+      "kind": "python-lockfile",
+      "disposition": "historical-maintenance",
+      "evidence": [
+        "migration/evidence/runtime/python-retirement.md"
+      ],
+      "archive_path": "archive/2026-09-12-typescript-python-retirement/uv.lock"
+    }
+  ],
+  "counts": {
+    "python_source": 242,
+    "python_test_oracle": 161,
+    "historical_support": 4
+  },
+  "archive": {
+    "status": "archived",
+    "root": "archive/2026-09-12-typescript-python-retirement",
+    "manifest": "archive/2026-09-12-typescript-python-retirement/MANIFEST.json",
+    "readme": "archive/2026-09-12-typescript-python-retirement/README.md",
+    "file_count": 413,
+    "active_python_files": 0,
+    "source_modules": 242,
+    "test_oracles": 161,
+    "migration_checks": 4,
+    "harness_files": 2,
+    "toolchain_files": 4
+  },
+  "records_count": 413
+}

@@ -1,0 +1,68 @@
+{
+  "schema": "sciretriever-typescript-runtime-matrix.v1",
+  "captured_at": "2026-09-12",
+  "verification": {
+    "environment": "repository-local synthetic fixtures",
+    "external_network": "not-authorized",
+    "user_state": "not-read"
+  },
+  "toolchain": {
+    "node": { "version": "22.19.0", "status": "verified" },
+    "pnpm": { "version": "10.32.1", "status": "verified" },
+    "typescript": { "version": "5.9.2", "status": "verified" },
+    "playwright": { "version": "1.55.0", "status": "locked" },
+    "cloakbrowser": {
+      "wrapper_version": "0.5.8",
+      "binary_version": "146.0.7680.177.5",
+      "distribution": "operator-managed bundle",
+      "status": "contract-verified-bundle-not-present-in-this-run"
+    }
+  },
+  "platforms": [
+    {
+      "platform": "linux-x64",
+      "status": "development-verified",
+      "browser_binary": "requires operator-managed CloakBrowser bundle",
+      "display": "headed Chromium requires a supported display/Xvfb environment",
+      "evidence": [
+        "apps/server/test/browser-host.test.ts",
+        "apps/server/test/browser-complex-capture.test.ts",
+        "migration/evidence/browser-acquisition/browser-host.md"
+      ]
+    },
+    {
+      "platform": "darwin",
+      "status": "not-verified",
+      "support": "not-claimed"
+    },
+    {
+      "platform": "win32",
+      "status": "not-verified",
+      "support": "not-claimed"
+    },
+    {
+      "platform": "linux-arm64",
+      "status": "not-verified",
+      "support": "not-claimed"
+    }
+  ],
+  "probes": {
+    "persistent_profile": {
+      "fixture": "apps/server/test/browser-host.test.ts",
+      "status": "live-probe-requires-bundle"
+    },
+    "download_capture": {
+      "fixture": "apps/server/test/browser-complex-capture.test.ts",
+      "status": "synthetic-loopback-passed"
+    },
+    "screencast_backpressure": {
+      "fixture": "apps/web/test/browser-workbench.test.ts",
+      "status": "synthetic-workbench-passed"
+    },
+    "installed_bundle_validation": {
+      "fixture": "apps/server/test/cloak-runtime.test.ts",
+      "status": "not-run-without-operator-bundle"
+    }
+  },
+  "release_rule": "Only linux-x64 with the exact verified wrapper, Playwright and signed operator bundle may be claimed as supported; all other combinations remain unverified."
+}

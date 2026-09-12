@@ -1,0 +1,67 @@
+{
+  "schema": "sciretriever-typescript-release-readiness.v1",
+  "captured_at": "2026-09-12",
+  "decision": "not-ready-for-production-cutover",
+  "runtime": {
+    "application": "typescript-node",
+    "python_runtime_path": false,
+    "python_subprocess_fallback": false,
+    "default_network": "loopback-and-fake-only",
+    "supported_development_platform": "linux-x64"
+  },
+  "verification": {
+    "quick": "passed",
+    "full": {
+      "status": "passed",
+      "test_files": 119,
+      "skipped_files": 3,
+      "tests": 466,
+      "skipped_tests": 4
+    },
+    "diff_check": "passed",
+    "relevant_follow_up_tests": {
+      "status": "passed",
+      "scope": [
+        "browser-host",
+        "browser-complex-capture",
+        "browser-transfer",
+        "execution-queue",
+        "pdf-acceptance",
+        "pdf-evidence",
+        "workbench-http",
+        "web-browser-workbench"
+      ]
+    }
+  },
+  "closed_scope": [
+    "M0 baseline and contracts",
+    "M1 TypeScript foundation and v1 compatibility",
+    "M2 browser workbench supported boundary",
+    "M3 offline acquisition orchestration",
+    "M4 business capability migration",
+    "M5 durable execution and single-port workbench",
+    "M6 packaging, recovery rehearsal and Python production retirement"
+  ],
+  "explicit_boundaries": [
+    "CloakBrowser live bundle probe requires an operator-managed bundle",
+    "complex PDF viewer and cross-version HTTP Range reassembly remain deferred",
+    "compression-bomb and non-Linux PDF reader behavior are not supported claims",
+    "macOS, Windows and ARM are not verified",
+    "real sites, providers, MinerU/LLM, user Catalog/Profile and credentials were not accessed"
+  ],
+  "authorization": {
+    "real_site_validation": "not-authorized/not-run",
+    "production_data_migration": "not-authorized/not-run",
+    "release_or_cutover": "not-authorized/not-run"
+  },
+  "evidence": [
+    "migration/inventory.json",
+    "migration/retirement-report.json",
+    "migration/runtime-matrix.json",
+    "migration/release-matrix.json",
+    "migration/evidence/final/readiness-report.md",
+    "migration/evidence/browser-acquisition/browser-lifecycle-matrix.md",
+    "migration/evidence/browser-acquisition/browser-capture-matrix.md",
+    "migration/evidence/runtime/tiered-acquisition-batch.md"
+  ]
+}

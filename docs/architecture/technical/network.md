@@ -632,7 +632,7 @@ exception 不进入 `PdfCandidate`、Report、SQLite、provenance、status 或�
 ```text
 metadata.providers       -> network.http
 acquisition.routes       -> network.http and/or network.browser
-parsing.mineru           -> network.http
+parsing.backends.mineru  -> network.http
 agents.providers        -> network.http
 bootstrap provider probe -> network.http
 

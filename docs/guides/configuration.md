@@ -804,6 +804,12 @@ sciretriever config test --all [--json]
 误判为失败；其它必需 probe 的 failed/skipped 使整体退出码为 3。人类模式在会联网或消耗额度的
 Probe 前确认；`--json` 是明确的脚本调用，不交互确认。
 
+测试结束后增加 execution 摘要：owner、逻辑 target、稳定 code、耗时毫秒、下一步，以及可能的网络和额度
+影响；JSON 保留原有结果字段并新增 `execution`。`network = not-requested` 表示本地跳过或没有外部下载
+probe；`may-have-run` 是保守的副作用说明，不表示已测得请求数或流量。`may_consume_quota` 同样不是额度账单。
+测试运行时按 Ctrl+C 会关闭当前 probe session，输出 `configuration-test-cancelled`；CLI 返回 130，TUI
+返回当前页面。已发出的请求可能已经消耗额度，取消不会自动重试。
+
 当前 Browser Site 目标是：
 
 ```text

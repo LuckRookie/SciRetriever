@@ -1,0 +1,34 @@
+{
+  "schema": "sciretriever-typescript-oracle-manifest.v1",
+  "captured_at": "2026-09-12",
+  "source": "tests/fixtures/compat-v1",
+  "synthetic_only": true,
+  "fixed_clock": "2026-01-02T03:04:05Z",
+  "fixed_ids": [
+    "00000000-0000-0000-0000-000000000001",
+    "00000000-0000-0000-0000-000000000002"
+  ],
+  "canonical_encoding": {
+    "ensure_ascii": false,
+    "sort_keys": true,
+    "separators": [",", ":"],
+    "utf8": "strict"
+  },
+  "fixture_manifest": "tests/fixtures/compat-v1/manifest.json",
+  "records": "tests/fixtures/compat-v1/records.json",
+  "sha256_by_record": {
+    "provenance": "2858a55ca73d888771fed71faee5ca6796c0af58ee816d2a7573dfb23a3d9ed6",
+    "metadata": "ff30a64bc5a89c6e88562d8c3f9426434df408acd164fe49a4d5951e1cf54aac",
+    "query": "26224dfd4fa4c437667ab54a4f1e14c467c5ebebbcf9765f0d3ef37754d535a9",
+    "asset": "94c9ccf5f2c2c8ddb6c883d3f6a2487c903f64ec84c0fbf7fd4b44884e3889fb",
+    "relation": "f416befce4d5f4f3f23a856ec97c7bb82a6074cc8e5770c98ad2159854462d90",
+    "literature": "fb3180d195f95955f080d338ae9cfa1177a301b941a7f9ba14e10b26aa0e9417",
+    "canonical_parameters": "86e3e4f00693ff6f8c24e6365d6f5ca6645e7cf1f518059da9748565498727cc"
+  },
+  "coverage": ["unicode", "microsecond timestamps", "null values", "safe integers", "relationships", "asset manifest", "query projection"],
+  "verification": [
+    "packages/contracts/test/canonical-encoding.test.ts",
+    "apps/server/test/sqlite-compatibility.test.ts",
+    "apps/server/test/literature-query-integrity.test.ts"
+  ]
+}

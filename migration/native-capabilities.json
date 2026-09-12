@@ -1,0 +1,52 @@
+{
+  "schema": "sciretriever-typescript-native-capabilities.v1",
+  "captured_at": "2026-09-12",
+  "platform": "linux-x64",
+  "scope": "synthetic temporary directories and loopback fixtures only",
+  "file_primitives": {
+    "exclusive_create_nofollow": {
+      "status": "passed",
+      "evidence": ["apps/server/test/file-locking.test.ts", "apps/server/test/immutable-file-store.test.ts"]
+    },
+    "directory_and_file_fsync": {
+      "status": "passed",
+      "evidence": ["apps/server/src/configuration/cloak-runtime.ts", "apps/server/test/file-staging-lifecycle.test.ts"]
+    },
+    "atomic_no_clobber_publish": {
+      "status": "passed",
+      "evidence": ["apps/server/test/immutable-publication.test.ts", "apps/server/test/artifact-recovery.test.ts"]
+    },
+    "path_replacement_and_link_rejection": {
+      "status": "passed",
+      "evidence": ["apps/server/test/artifact-reclamation.test.ts", "apps/server/test/artifact-recovery.test.ts"]
+    },
+    "cross_process_profile_lock": {
+      "status": "passed",
+      "evidence": ["apps/server/test/browser-host.test.ts"]
+    }
+  },
+  "network_primitives": {
+    "dns_pinned_connect": {
+      "status": "passed-with-loopback-fakes",
+      "evidence": ["apps/server/test/network-connection.test.ts", "apps/server/test/network-resolution-policy.test.ts"]
+    },
+    "redirect_and_origin_binding": {
+      "status": "passed",
+      "evidence": ["apps/server/test/network-redirect-credentials.test.ts", "apps/server/test/network-admission.test.ts"]
+    },
+    "budget_separation": {
+      "status": "passed",
+      "definition": "CONNECT/tunnel admission and per-response body limits are separate owners and counters",
+      "evidence": ["apps/server/test/network-budget.test.ts", "apps/server/test/network-body-limits.test.ts"]
+    }
+  },
+  "native_addon": {
+    "required": false,
+    "decision": "Node fs, dns and socket primitives preserve the tested Linux guarantees; no native addon is introduced.",
+    "other_platforms": "not-verified and not-claimed"
+  },
+  "limitations": [
+    "No claim is made for macOS, Windows or ARM file-lock behavior until a platform fixture is authorized and run.",
+    "No real external endpoint or production filesystem was accessed."
+  ]
+}
