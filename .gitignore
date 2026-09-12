@@ -22,3 +22,6 @@ work/*
 
 # Local agent state and personal runtime configuration
 /config.toml
+
+# Local historical archives (kept on disk, never committed)
+archive/
