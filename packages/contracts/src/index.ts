@@ -447,6 +447,91 @@ export type ReportEnd =
   | { readonly kind: "interrupted" }
   | { readonly kind: "failed"; readonly failure: StableFailure };
 
+/** The frozen completion goal of one database-completion request. */
+export type BatchGoal = "ASSET_READY" | "CONTENT_READY";
+
+/** The business stage that produced one completion target outcome. */
+export type CompletionStage =
+  | "acquisition"
+  | "parsing"
+  | "analysis"
+  | "literature";
+
+/** A frozen request target, selected before any stage ran. */
+export type CompletionTarget =
+  | {
+      readonly kind: "meta-literature";
+      readonly meta_literature_id: MetaLiteratureId;
+    }
+  | { readonly kind: "literature"; readonly literature_id: LiteratureId };
+
+/**
+ * The five mutually exclusive partitions of a database completion report.
+ * Order is the presenter-facing contract order; every frozen target appears in
+ * exactly one of them, so their lengths sum to the number of selected targets.
+ */
+export const DATABASE_COMPLETION_REPORT_PARTITIONS = [
+  "completed",
+  "failed",
+  "skipped",
+  "notStarted",
+  "interrupted",
+] as const;
+export type DatabaseCompletionReportPartition =
+  (typeof DATABASE_COMPLETION_REPORT_PARTITIONS)[number];
+
+/** The target reached its goal; `literature_id` is the concrete version. */
+export interface CompletedCompletionTarget {
+  readonly target: CompletionTarget;
+  readonly literature_id: LiteratureId;
+}
+/** Stable reasons for a target that was deliberately not executed. */
+export type SkippedCompletionReason =
+  | "manual-pdf-required"
+  | "already-satisfied"
+  | "not-eligible";
+/** A target that was explicitly not executed, never a hidden system error. */
+export interface SkippedCompletionTarget {
+  readonly target: CompletionTarget;
+  readonly reason: SkippedCompletionReason;
+  readonly literature_ids: readonly LiteratureId[];
+}
+/** A target failed inside one stage; `literature_id` is null before a version exists. */
+export interface FailedCompletionTarget {
+  readonly target: CompletionTarget;
+  readonly literature_id: LiteratureId | null;
+  readonly stage: CompletionStage;
+  readonly failure: StableFailure;
+}
+/** A started target cancelled by a user-controlled stop. */
+export interface InterruptedCompletionTarget {
+  readonly target: CompletionTarget;
+  readonly literature_id: LiteratureId | null;
+}
+/** A frozen target that was never started. */
+export interface NotStartedCompletionTarget {
+  readonly target: CompletionTarget;
+}
+
+/**
+ * Non-persistent, provider-neutral receipt of one database-completion request.
+ * Partitions are mutually exclusive per target and the report never enters the
+ * catalog, a durable run, or the next target selection. `end.kind = "finished"`
+ * means the request reached its normal boundary and therefore cannot coexist
+ * with `interrupted` targets, which only a user-controlled stop produces.
+ */
+export interface DatabaseCompletionReport {
+  readonly kind: "database-completion";
+  readonly end: ReportEnd;
+  readonly goal: BatchGoal;
+  readonly completed: readonly CompletedCompletionTarget[];
+  readonly failed: readonly FailedCompletionTarget[];
+  readonly skipped: readonly SkippedCompletionTarget[];
+  readonly notStarted: readonly NotStartedCompletionTarget[];
+  readonly interrupted: readonly InterruptedCompletionTarget[];
+  readonly no_usable_content_literature_ids: readonly LiteratureId[];
+}
+
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HASH_RE = /^[0-9a-f]{64}$/;
 const RFC3339_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
@@ -998,6 +1083,202 @@ export function parseReportEnd(value: unknown): ReportEnd {
   const failed = exact(record, ["kind", "failure"], []);
   return Object.freeze({ kind, failure: parseStableFailure(failed.failure) });
 }
+export function parseCompletionTarget(
+  value: unknown,
+  path: readonly string[] = [],
+): CompletionTarget {
+  const record = object(value, path);
+  if (record.kind === "meta-literature") {
+    const target = exact(record, ["kind", "meta_literature_id"], path);
+    return Object.freeze({
+      kind: "meta-literature" as const,
+      meta_literature_id: id<"MetaLiteratureId">(target.meta_literature_id, [
+        ...path,
+        "meta_literature_id",
+      ]),
+    });
+  }
+  if (record.kind === "literature") {
+    const target = exact(record, ["kind", "literature_id"], path);
+    return Object.freeze({
+      kind: "literature" as const,
+      literature_id: id<"LiteratureId">(target.literature_id, [
+        ...path,
+        "literature_id",
+      ]),
+    });
+  }
+  return fail([...path, "kind"]);
+}
+function completionTargetKey(target: CompletionTarget): string {
+  return target.kind === "meta-literature"
+    ? `meta-literature:${target.meta_literature_id}`
+    : `literature:${target.literature_id}`;
+}
+function parseCompletedCompletionTarget(
+  value: unknown,
+  path: readonly string[],
+): CompletedCompletionTarget {
+  const record = exact(value, ["target", "literature_id"], path);
+  return Object.freeze({
+    target: parseCompletionTarget(record.target, [...path, "target"]),
+    literature_id: id<"LiteratureId">(record.literature_id, [
+      ...path,
+      "literature_id",
+    ]),
+  });
+}
+function parseSkippedCompletionTarget(
+  value: unknown,
+  path: readonly string[],
+): SkippedCompletionTarget {
+  const record = exact(value, ["target", "reason", "literature_ids"], path);
+  const literatureIds = list(
+    record.literature_ids,
+    [...path, "literature_ids"],
+    (item, itemPath) => id<"LiteratureId">(item, itemPath),
+  );
+  if (new Set(literatureIds).size !== literatureIds.length)
+    fail([...path, "literature_ids"]);
+  return Object.freeze({
+    target: parseCompletionTarget(record.target, [...path, "target"]),
+    reason: enumeration<SkippedCompletionReason>(
+      record.reason,
+      ["manual-pdf-required", "already-satisfied", "not-eligible"],
+      [...path, "reason"],
+    ),
+    literature_ids: literatureIds,
+  });
+}
+function parseFailedCompletionTarget(
+  value: unknown,
+  path: readonly string[],
+): FailedCompletionTarget {
+  const record = exact(
+    value,
+    ["target", "literature_id", "stage", "failure"],
+    path,
+  );
+  return Object.freeze({
+    target: parseCompletionTarget(record.target, [...path, "target"]),
+    literature_id:
+      record.literature_id === null
+        ? null
+        : id<"LiteratureId">(record.literature_id, [...path, "literature_id"]),
+    stage: enumeration<CompletionStage>(
+      record.stage,
+      ["acquisition", "parsing", "analysis", "literature"],
+      [...path, "stage"],
+    ),
+    failure: parseStableFailure(record.failure),
+  });
+}
+function parseInterruptedCompletionTarget(
+  value: unknown,
+  path: readonly string[],
+): InterruptedCompletionTarget {
+  const record = exact(value, ["target", "literature_id"], path);
+  return Object.freeze({
+    target: parseCompletionTarget(record.target, [...path, "target"]),
+    literature_id:
+      record.literature_id === null
+        ? null
+        : id<"LiteratureId">(record.literature_id, [...path, "literature_id"]),
+  });
+}
+function parseNotStartedCompletionTarget(
+  value: unknown,
+  path: readonly string[],
+): NotStartedCompletionTarget {
+  const record = exact(value, ["target"], path);
+  return Object.freeze({
+    target: parseCompletionTarget(record.target, [...path, "target"]),
+  });
+}
+export function parseDatabaseCompletionReport(
+  value: unknown,
+): DatabaseCompletionReport {
+  const record = exact(
+    value,
+    [
+      "kind",
+      "end",
+      "goal",
+      "completed",
+      "failed",
+      "skipped",
+      "notStarted",
+      "interrupted",
+      "no_usable_content_literature_ids",
+    ],
+    [],
+  );
+  if (record.kind !== "database-completion") fail(["kind"]);
+  const end = parseReportEnd(record.end);
+  const goal = enumeration<BatchGoal>(
+    record.goal,
+    ["ASSET_READY", "CONTENT_READY"],
+    ["goal"],
+  );
+  const completed = list(
+    record.completed,
+    ["completed"],
+    parseCompletedCompletionTarget,
+  );
+  const failed = list(record.failed, ["failed"], parseFailedCompletionTarget);
+  const skipped = list(
+    record.skipped,
+    ["skipped"],
+    parseSkippedCompletionTarget,
+  );
+  const notStarted = list(
+    record.notStarted,
+    ["notStarted"],
+    parseNotStartedCompletionTarget,
+  );
+  const interrupted = list(
+    record.interrupted,
+    ["interrupted"],
+    parseInterruptedCompletionTarget,
+  );
+  const partitions: readonly (readonly [
+    DatabaseCompletionReportPartition,
+    readonly { readonly target: CompletionTarget }[],
+  ])[] = [
+    ["completed", completed],
+    ["failed", failed],
+    ["skipped", skipped],
+    ["notStarted", notStarted],
+    ["interrupted", interrupted],
+  ];
+  const targets = new Set<string>();
+  for (const [partition, items] of partitions) {
+    for (const [index, item] of items.entries()) {
+      const key = completionTargetKey(item.target);
+      if (targets.has(key)) fail([partition, String(index), "target"]);
+      targets.add(key);
+    }
+  }
+  if (end.kind === "finished" && interrupted.length > 0) fail(["interrupted"]);
+  const noUsableContent = list(
+    record.no_usable_content_literature_ids,
+    ["no_usable_content_literature_ids"],
+    (item, path) => id<"LiteratureId">(item, path),
+  );
+  if (new Set(noUsableContent).size !== noUsableContent.length)
+    fail(["no_usable_content_literature_ids"]);
+  return Object.freeze({
+    kind: "database-completion",
+    end,
+    goal,
+    completed,
+    failed,
+    skipped,
+    notStarted,
+    interrupted,
+    no_usable_content_literature_ids: noUsableContent,
+  });
+}
 export function parseUtcTimestamp(
   value: unknown,
   path: readonly string[] = [],
@@ -1057,9 +1338,7 @@ export async function sha256(value: Uint8Array): Promise<Sha256> {
     item.toString(16).padStart(2, "0"),
   ).join("") as Sha256;
 }
-export function parseStrictJsonObject(
-  value: string | Uint8Array,
-): Record<string, unknown> {
+export function parseStrictJsonValue(value: string | Uint8Array): unknown {
   let source: string;
   try {
     source =
@@ -1067,13 +1346,17 @@ export function parseStrictJsonObject(
         ? value
         : new TextDecoder("utf-8", { fatal: true }).decode(value);
     const parsed: unknown = JSON.parse(source);
-    const result = object(parsed, []);
     if (hasDuplicateKeys(source)) fail();
-    return result;
+    return parsed;
   } catch (error) {
     if (error instanceof ContractValidationError) throw error;
     fail();
   }
+}
+export function parseStrictJsonObject(
+  value: string | Uint8Array,
+): Record<string, unknown> {
+  return object(parseStrictJsonValue(value), []);
 }
 function hasDuplicateKeys(source: string): boolean {
   let index = 0;
@@ -1855,6 +2138,7 @@ export interface WorkbenchCandidate {
   readonly publication: CandidatePublicationReceipt | null;
 }
 export interface WorkbenchView {
+  readonly mode?: "synthetic" | "production";
   readonly session_id: string;
   readonly article_id: string;
   readonly state:
@@ -1881,8 +2165,50 @@ export interface WorkbenchView {
     | "browser-failed"
     | null;
   readonly candidates: readonly WorkbenchCandidate[];
+  /** Bounded, process-local guidance for the active article. Older v1 views omit it. */
+  readonly guidance?: readonly WorkbenchGuidance[];
+  /** Present only for an explicit production PDF operation. No durable run is created. */
+  readonly operation_feedback?: WorkbenchOperationFeedback;
+}
+export interface WorkbenchOperationFeedback {
+  readonly phase: "idle" | "acquiring" | "browser" | "settling" | "ended";
+  /** Null until the selector has been frozen by Entry. */
+  readonly targets: {
+    readonly total: number | null;
+    readonly running: number;
+    readonly completed: number;
+    readonly failed: number;
+    readonly skipped: number;
+    readonly interrupted: number;
+    readonly not_started: number;
+  };
+  readonly current_target: LiteratureId | null;
+  readonly report: DatabaseCompletionReport | null;
+  readonly failure: StableFailure | null;
+  readonly primary_pdf_status:
+    | "unchecked"
+    | "missing"
+    | "verified"
+    | "unreadable";
+  /** Read back through Library after the operation; capture alone never sets this. */
+  readonly primary_pdf: {
+    readonly sha256: string;
+    readonly size_bytes: number;
+  } | null;
+}
+export interface WorkbenchGuidance {
+  readonly guidance_id: string;
+  readonly article_id: string;
+  readonly text: string;
+  readonly state:
+    | "accepted"
+    | "consumed"
+    | "rejected"
+    | "expired"
+    | "cancelled";
 }
 export function parseWorkbenchView(value: unknown): WorkbenchView {
+  const shape = object(value, []);
   const r = exact(
     value,
     [
@@ -1894,6 +2220,9 @@ export function parseWorkbenchView(value: unknown): WorkbenchView {
       "model_ready",
       "error",
       "candidates",
+      ...("guidance" in shape ? ["guidance"] : []),
+      ...("mode" in shape ? ["mode"] : []),
+      ...("operation_feedback" in shape ? ["operation_feedback"] : []),
     ],
     [],
   );
@@ -1957,7 +2286,36 @@ export function parseWorkbenchView(value: unknown): WorkbenchView {
           : parseCandidatePublicationReceipt(candidate.publication),
     });
   });
+  if (
+    r.guidance !== undefined &&
+    (!Array.isArray(r.guidance) || r.guidance.length > 64)
+  )
+    fail();
+  const guidance = (r.guidance as readonly unknown[] | undefined)?.map(
+    (value) => {
+      const item = exact(
+        value,
+        ["guidance_id", "article_id", "text", "state"],
+        [],
+      );
+      if (
+        !["accepted", "consumed", "rejected", "expired", "cancelled"].includes(
+          item.state as string,
+        )
+      )
+        fail();
+      return Object.freeze({
+        guidance_id: workbenchId(item.guidance_id),
+        article_id: workbenchId(item.article_id),
+        text: wireText(item.text, 2048),
+        state: item.state as WorkbenchGuidance["state"],
+      });
+    },
+  );
   const view = {
+    ...(r.mode === undefined
+      ? {}
+      : { mode: enumeration(r.mode, ["synthetic", "production"], ["mode"]) }),
     session_id: workbenchId(r.session_id),
     article_id: workbenchId(r.article_id),
     state: r.state as WorkbenchView["state"],
@@ -1973,6 +2331,14 @@ export function parseWorkbenchView(value: unknown): WorkbenchView {
     model_ready: wireBoolean(r.model_ready),
     error: r.error as WorkbenchView["error"],
     candidates: Object.freeze(candidates),
+    ...(guidance ? { guidance: Object.freeze(guidance) } : {}),
+    ...(r.operation_feedback === undefined
+      ? {}
+      : {
+          operation_feedback: parseWorkbenchOperationFeedback(
+            r.operation_feedback,
+          ),
+        }),
   };
   if (
     view.control.workspace_id !== view.session_id ||
@@ -1989,6 +2355,91 @@ export function parseWorkbenchView(value: unknown): WorkbenchView {
   )
     fail();
   return Object.freeze(view);
+}
+
+function parseWorkbenchOperationFeedback(
+  value: unknown,
+): WorkbenchOperationFeedback {
+  const r = exact(
+    value,
+    [
+      "phase",
+      "targets",
+      "current_target",
+      "report",
+      "failure",
+      "primary_pdf_status",
+      "primary_pdf",
+    ],
+    [],
+  );
+  const t = exact(
+    r.targets,
+    [
+      "total",
+      "running",
+      "completed",
+      "failed",
+      "skipped",
+      "interrupted",
+      "not_started",
+    ],
+    [],
+  );
+  const targets = {
+    total: t.total === null ? null : wireCount(t.total),
+    running: wireCount(t.running),
+    completed: wireCount(t.completed),
+    failed: wireCount(t.failed),
+    skipped: wireCount(t.skipped),
+    interrupted: wireCount(t.interrupted),
+    not_started: wireCount(t.not_started),
+  };
+  if (
+    targets.total !== null &&
+    targets.running +
+      targets.completed +
+      targets.failed +
+      targets.skipped +
+      targets.interrupted +
+      targets.not_started !==
+      targets.total
+  )
+    fail();
+  const phase = enumeration(
+    r.phase,
+    ["idle", "acquiring", "browser", "settling", "ended"] as const,
+    [],
+  );
+  const report =
+    r.report === null ? null : parseDatabaseCompletionReport(r.report);
+  const failure = r.failure === null ? null : parseStableFailure(r.failure);
+  const primary =
+    r.primary_pdf === null
+      ? null
+      : exact(r.primary_pdf, ["sha256", "size_bytes"], []);
+  const primaryStatus = enumeration(
+    r.primary_pdf_status,
+    ["unchecked", "missing", "verified", "unreadable"] as const,
+    [],
+  );
+  if ((primary === null) === (primaryStatus === "verified")) fail();
+  return Object.freeze({
+    phase,
+    targets: Object.freeze(targets),
+    current_target:
+      r.current_target === null ? null : parseLiteratureId(r.current_target),
+    report,
+    failure,
+    primary_pdf_status: primaryStatus,
+    primary_pdf:
+      primary === null
+        ? null
+        : Object.freeze({
+            sha256: hash(primary.sha256, []),
+            size_bytes: wireCount(primary.size_bytes),
+          }),
+  });
 }
 
 export interface ConfigurationReadinessItem {
@@ -2129,6 +2580,18 @@ export function parseConfigurationReadiness(
   });
 }
 export * from "./content.js";
+export * from "./document.js";
+export * from "./document-read.js";
+export * from "./retrieval-context.js";
+export * from "./extraction.js";
+export * from "./extraction-delivery.js";
+export * from "./extraction-delivery-result.js";
+export * from "./extraction-preparation.js";
+export * from "./input-manifest.js";
+export * from "./knowledge.js";
+export * from "./synthesis-manifest.js";
+export * from "./knowledge-context.js";
+export * from "./synthesis.js";
 import {
   parseParserResult,
   parseLiteratureContent,
