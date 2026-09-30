@@ -36,6 +36,8 @@ export interface BrowserHostOptions {
   readonly profile: string;
   readonly executablePath?: string;
   readonly headless?: boolean;
+  /** Exact top-level document allowed by a reachability-only Site probe. */
+  readonly probeDocumentUrl?: string;
   /** Network must return the exact URL that it admitted for navigation. */
   readonly admitNavigation?: BrowserNavigationAdmission;
 }
@@ -127,6 +129,8 @@ export class BrowserHost {
   private readonly pageIds = new Map<Page, string>();
   private readonly pageParents = new Map<Page, Page>();
   private readonly runtimes = new Map<string, BrowserPageRuntime>();
+  /** A blocked document navigation cannot be interpreted as a normal no-PDF page. */
+  private readonly blockedNavigations = new Set<string>();
   private activePageId: string | undefined;
   private sequence = 0;
   private state: BrowserHostDiagnostics["status"] = "stopped";
@@ -247,7 +251,10 @@ export class BrowserHost {
               ? { executablePath: this.options.executablePath }
               : {}),
             headless: this.options.headless ?? false,
-            acceptDownloads: true,
+            acceptDownloads: this.options.probeDocumentUrl === undefined,
+            ...(this.options.probeDocumentUrl
+              ? { javaScriptEnabled: false }
+              : {}),
             serviceWorkers: "block",
             ...(this.options.proxy
               ? { proxy: { ...this.options.proxy, bypass: "<-loopback>" } }
@@ -268,12 +275,19 @@ export class BrowserHost {
         throw new BrowserHostError();
       }
       await this.context.route("**/*", async (route) => {
+        let criticalNavigation = route.request().isNavigationRequest();
+        let criticalPageId: string | undefined;
         try {
           const request = route.request();
           let page: Page;
           try {
-            page = request.frame().page();
+            const frame = request.frame();
+            page = frame.page();
+            // An unrelated subframe can be blocked without turning the article
+            // into a Browser-tier failure. Its top-level document remains usable.
+            criticalNavigation &&= frame.parentFrame() === null;
           } catch {
+            if (this.options.probeDocumentUrl) throw new BrowserHostError();
             // Chromium exposes a popup's first navigation before its frame is
             // created. Validate that request against the active page origin,
             // then continue it; subsequent popup requests have a stable page
@@ -293,9 +307,11 @@ export class BrowserHost {
           }
           const known = this.pageIds.has(page);
           const pageId = this.pageIds.get(page) ?? this.trackPage(page);
+          criticalPageId = pageId;
           const related = known
             ? this.pageBelongsToActiveWorkspace(page)
             : this.admitInitialPopup(page, request.url());
+          if (!related) criticalPageId = undefined;
           if (
             !related ||
             !this.options.admitNavigation ||
@@ -304,6 +320,14 @@ export class BrowserHost {
           )
             throw new BrowserHostError();
           const requested = request.url();
+          if (
+            this.options.probeDocumentUrl &&
+            (requested !== this.options.probeDocumentUrl ||
+              !request.isNavigationRequest() ||
+              request.resourceType() !== "document" ||
+              request.frame().parentFrame() !== null)
+          )
+            throw new BrowserHostError();
           if (
             !this.options.proxy &&
             !["127.0.0.1", "[::1]"].includes(new URL(requested).hostname)
@@ -319,6 +343,10 @@ export class BrowserHost {
           );
           await route.continue();
         } catch {
+          if (criticalNavigation && !this.options.probeDocumentUrl) {
+            const pageId = criticalPageId ?? this.activePageId;
+            if (pageId) this.blockedNavigations.add(pageId);
+          }
           try {
             await route.abort("blockedbyclient");
           } catch {
@@ -490,12 +518,22 @@ export class BrowserHost {
       },
       snapshot: async () => {
         const runtime = this.runtimes.get(id);
-        if (!runtime || this.activePageId !== id) throw new BrowserHostError();
+        if (
+          !runtime ||
+          this.activePageId !== id ||
+          this.blockedNavigations.has(id)
+        )
+          throw new BrowserHostError();
         return runtime.snapshot();
       },
       apply: async (input, generation, current) => {
         const runtime = this.runtimes.get(id);
-        if (!runtime || this.activePageId !== id) throw new BrowserHostError();
+        if (
+          !runtime ||
+          this.activePageId !== id ||
+          this.blockedNavigations.has(id)
+        )
+          throw new BrowserHostError();
         await runtime.apply(
           input,
           generation,
@@ -549,6 +587,7 @@ export class BrowserHost {
     page.once("close", () => {
       this.pages.delete(id);
       this.runtimes.delete(id);
+      this.blockedNavigations.delete(id);
       this.pageIds.delete(page);
       this.pageParents.delete(page);
       if (this.activePageId === id) {

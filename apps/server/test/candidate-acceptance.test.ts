@@ -1,7 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { parseAsset, parseLiterature } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
@@ -95,14 +94,9 @@ async function setup() {
 it("accepts a recovered PDF using current Literature facts, replays the receipt, and deduplicates repeated bytes", async () => {
   const s = await setup();
   try {
-    const catalog = new DatabaseSync(join(s.app.home, "catalog.sqlite"));
-    try {
-      catalog
-        .prepare("INSERT INTO automatic_pdf_acquisition_exhaustions VALUES(?)")
-        .run(id(1));
-    } finally {
-      catalog.close();
-    }
+    // The fact is written through its public API; direct tests never fabricate it with
+    // raw SQL, so this proves the production write path.
+    await s.app.database.setAutomaticPdfExhaustion(id(1));
     expect(
       (await s.app.library.search({ query: { needs_manual_pdf: true } }))
         .total_count,

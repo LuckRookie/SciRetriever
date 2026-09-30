@@ -141,6 +141,8 @@ export class NetworkBudgetCoordinator {
   private readonly states = new Map<string, State>();
   private readonly hostActive = new Map<string, number>();
   private readonly hostLimits = new Map<string, number>();
+  private readonly retryTimers = new Set<ReturnType<typeof setTimeout>>();
+  private closed = false;
   private readonly clock: BudgetClock;
 
   constructor(clock: BudgetClock = systemClock) {
@@ -153,6 +155,7 @@ export class NetworkBudgetCoordinator {
     limits: BudgetLimits,
     options: BudgetAcquireOptions = {},
   ): Promise<BudgetPermit> {
+    if (this.closed) return Promise.reject(new NetworkBudgetError());
     checkName(scope);
     checkName(host);
     const checked = checkLimits(limits);
@@ -238,15 +241,32 @@ export class NetworkBudgetCoordinator {
       Math.max(state.retryAfter.get(host) ?? 0, this.clock.now() + bounded),
     );
     this.states.set(scope, state);
+    const schedule = (delay: number): void => {
+      const timer = this.clock.setTimeout(() => {
+        this.retryTimers.delete(timer);
+        wake();
+      }, delay);
+      this.retryTimers.add(timer);
+    };
     const wake = (): void => {
+      if (this.closed) return;
       const remaining = (state.retryAfter.get(host) ?? 0) - this.clock.now();
       if (remaining > 0) {
-        this.clock.setTimeout(wake, Math.max(1, Math.ceil(remaining)));
+        schedule(Math.max(1, Math.ceil(remaining)));
         return;
       }
       this.pump(scope, state);
     };
-    this.clock.setTimeout(wake, Math.max(1, Math.ceil(bounded)));
+    schedule(Math.max(1, Math.ceil(bounded)));
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    for (const timer of this.retryTimers) this.clock.clearTimeout(timer);
+    this.retryTimers.clear();
+    for (const state of this.states.values())
+      for (const waiter of [...state.queue]) this.cancelWaiter(state, waiter);
   }
 
   /** Parse a response Retry-After value without allowing an unbounded delay. */

@@ -13,6 +13,7 @@ export interface AssessedCandidate {
 export interface IntakeTarget {
   readonly article_id: string;
   readonly identifier: string;
+  /** The concrete version this intake is bound to; late bytes cannot change it. */
   readonly version: string;
 }
 

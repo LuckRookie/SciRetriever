@@ -17,6 +17,11 @@ import {
   parseToml,
   parseConfiguration,
 } from "../src/configuration/index.js";
+import { NetworkBudgetCoordinator } from "../src/network/budget.js";
+import {
+  ProbeRequestError,
+  readOnlyProbeRequest,
+} from "../src/network/probe.js";
 
 function rejects(value: string | Uint8Array): void {
   expect(() => parseConfiguration(value)).toThrow(ConfigurationBoundaryError);
@@ -242,5 +247,57 @@ model = "openai/text-model"
     await expect(loadConfiguration(home)).rejects.toBeInstanceOf(
       ConfigurationBoundaryError,
     );
+  });
+});
+
+describe("read-only probe request boundary", () => {
+  const coordinator = new NetworkBudgetCoordinator();
+  it("admits one https endpoint and refuses unsigned or credential-bearing shapes", async () => {
+    await expect(
+      readOnlyProbeRequest({
+        url: "http://example.test/models",
+        coordinator,
+      }),
+    ).rejects.toBeInstanceOf(ProbeRequestError);
+    await expect(
+      readOnlyProbeRequest({
+        url: "https://user:secret@example.test/models",
+        coordinator,
+      }),
+    ).rejects.toBeInstanceOf(ProbeRequestError);
+    await expect(
+      readOnlyProbeRequest({
+        url: "https://example.test/models?signature=abc",
+        coordinator,
+      }),
+    ).rejects.toBeInstanceOf(ProbeRequestError);
+    await expect(
+      readOnlyProbeRequest({
+        url: "https://example.test/models",
+        headers: [["authorization", "Bearer synthetic"]],
+        coordinator,
+      }),
+    ).rejects.toBeInstanceOf(ProbeRequestError);
+    await expect(
+      readOnlyProbeRequest({
+        url: "https://example.test/models",
+        credential_headers: [["x-custom-token", "synthetic"]],
+        coordinator,
+      }),
+    ).rejects.toBeInstanceOf(ProbeRequestError);
+    await expect(
+      readOnlyProbeRequest({
+        url: "https://example.test/models",
+        credential_headers: [["authorization", "line\nbreak"]],
+        coordinator,
+      }),
+    ).rejects.toBeInstanceOf(ProbeRequestError);
+    await expect(
+      readOnlyProbeRequest({
+        url: "https://example.test/models",
+        coordinator,
+        maxResponseBytes: 2_000_000,
+      }),
+    ).rejects.toBeInstanceOf(ProbeRequestError);
   });
 });

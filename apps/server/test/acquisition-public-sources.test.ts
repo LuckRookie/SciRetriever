@@ -27,6 +27,8 @@ import {
   workbenchPdf,
 } from "../src/workbench/synthetic-fixture.js";
 import { parseCredentialText } from "../src/configuration/credentials.js";
+import { assemblePublicPdfDownloadTransport } from "../src/acquisition/assembly.js";
+import { NetworkBudgetCoordinator } from "../src/network/budget.js";
 
 const request = {
   identifiers: [
@@ -181,6 +183,27 @@ describe("TypeScript public acquisition sources", () => {
     } finally {
       await application.close();
       await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("binds a public PDF transport to one safe HTTPS origin", () => {
+    const coordinator = new NetworkBudgetCoordinator();
+    try {
+      expect(() =>
+        assemblePublicPdfDownloadTransport(
+          safeLocator("direct", "http://repository.example/article.pdf"),
+          coordinator,
+        ),
+      ).toThrow("safe HTTPS URL");
+      const transport = assemblePublicPdfDownloadTransport(
+        safeLocator("direct", "https://repository.example/article.pdf"),
+        coordinator,
+      );
+      expect(() =>
+        transport.request("https://other.example/article.pdf"),
+      ).toThrow("changed origin");
+    } finally {
+      coordinator.close();
     }
   });
 
@@ -557,5 +580,256 @@ describe("TypeScript public acquisition sources", () => {
       await application.close();
       await rm(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("controlled browser acquisition route", () => {
+  it("reports a disabled browser switch as skipped and never runs it", async () => {
+    const { assemblePublicAcquisitionRegistry } = await import(
+      "../src/acquisition/assembly.js"
+    );
+    const { NetworkBudgetCoordinator } = await import(
+      "../src/network/budget.js"
+    );
+    // Bootstrap always supplies the admission decision, so the assembly never has to
+    // guess whether the tier is off or merely unwired.
+    const registry = assemblePublicAcquisitionRegistry(
+      parseConfiguration(""),
+      new NetworkBudgetCoordinator(),
+      {
+        browser_admission: {
+          enabled: false,
+          controlled_delivery: false,
+          unavailable_reason: null,
+        },
+      },
+    );
+    // Public sources and the DOI landing route stay in order, and the Browser tier is
+    // expressed as an explicit disabled route rather than being silently absent.
+    expect(registry.statuses.map((item) => item.source_name)).toEqual([
+      "direct",
+      "arxiv",
+      "europe-pmc",
+      "doi-landing",
+      "browser",
+    ]);
+    expect(
+      registry.statuses.find((item) => item.source_name === "browser"),
+    ).toEqual({
+      source_name: "browser",
+      ready: false,
+      failure_code: "browser-disabled",
+    });
+    // A disabled tier is not an applicable route, so it is not runnable. This is the
+    // only case where the target may still reach a normal exhaustion.
+    expect(registry.sources.map((item) => item.source_name)).toEqual([
+      "direct",
+      "arxiv",
+      "europe-pmc",
+      "doi-landing",
+    ]);
+  });
+
+  it("expresses browser admission honestly instead of claiming a runnable tier", async () => {
+    const { assemblePublicAcquisitionRegistry, splitAcquisitionRoutes } =
+      await import("../src/acquisition/assembly.js");
+    const { NetworkBudgetCoordinator } = await import(
+      "../src/network/budget.js"
+    );
+    // Admission is an operator switch plus a readiness claim. Only a claimed
+    // controlled delivery with no unavailable reason may be ready; every other shape
+    // stays unready with its own stable reason, and an enabled tier always remains in
+    // the runnable list so a locator caller fails closed instead of exhausting.
+    const cases = [
+      {
+        admission: {
+          enabled: true,
+          controlled_delivery: true,
+          unavailable_reason: null,
+        },
+        ready: true,
+        failure_code: null,
+      },
+      {
+        admission: {
+          enabled: true,
+          controlled_delivery: false,
+          unavailable_reason: "browser-runtime-unavailable" as const,
+        },
+        ready: false,
+        failure_code: "browser-runtime-unavailable",
+      },
+      {
+        admission: {
+          enabled: true,
+          controlled_delivery: false,
+          unavailable_reason: null,
+        },
+        ready: false,
+        failure_code: "browser-controlled-delivery-unavailable",
+      },
+    ];
+    for (const expected of cases) {
+      const registry = assemblePublicAcquisitionRegistry(
+        parseConfiguration(""),
+        new NetworkBudgetCoordinator(),
+        { browser_admission: expected.admission },
+      );
+      // The tier is ordered last, behind every public and API route.
+      expect(registry.statuses.map((item) => item.source_name)).toEqual([
+        "direct",
+        "arxiv",
+        "europe-pmc",
+        "doi-landing",
+        "browser",
+      ]);
+      expect(
+        registry.statuses.find((item) => item.source_name === "browser"),
+      ).toEqual({
+        source_name: "browser",
+        ready: expected.ready,
+        failure_code: expected.failure_code,
+      });
+      expect(registry.sources.map((item) => item.source_name)).toEqual([
+        "direct",
+        "arxiv",
+        "europe-pmc",
+        "doi-landing",
+        "browser",
+      ]);
+      // Entry runs only the locator view and escalates explicitly, so the throwing
+      // Browser source can never abort the batch before the session is asked.
+      const split = splitAcquisitionRoutes(registry);
+      expect(split.routes.sources.map((item) => item.source_name)).toEqual([
+        "direct",
+        "arxiv",
+        "europe-pmc",
+        "doi-landing",
+      ]);
+      expect(split.browser).toEqual({
+        enabled: true,
+        ready: expected.ready,
+        unavailable_reason: expected.failure_code,
+      });
+    }
+  });
+
+  it("separates the locator view from a disabled browser admission", async () => {
+    const { assemblePublicAcquisitionRegistry, splitAcquisitionRoutes } =
+      await import("../src/acquisition/assembly.js");
+    const { NetworkBudgetCoordinator } = await import(
+      "../src/network/budget.js"
+    );
+    const registry = assemblePublicAcquisitionRegistry(
+      parseConfiguration(""),
+      new NetworkBudgetCoordinator(),
+      {
+        browser_admission: {
+          enabled: false,
+          controlled_delivery: false,
+          unavailable_reason: null,
+        },
+      },
+    );
+    const split = splitAcquisitionRoutes(registry);
+    // A disabled switch is not an applicable route: Entry may let the target reach its
+    // normal end (and Entry's own durable exhaustion) instead of escalating.
+    expect(split.browser).toEqual({
+      enabled: false,
+      ready: false,
+      unavailable_reason: null,
+    });
+    expect(split.routes.sources.map((item) => item.source_name)).toEqual([
+      "direct",
+      "arxiv",
+      "europe-pmc",
+      "doi-landing",
+    ]);
+  });
+
+  it("keeps a selected but unconfigured route as a fail-closed locator outcome", async () => {
+    const { assemblePublicAcquisitionRegistry, splitAcquisitionRoutes } =
+      await import("../src/acquisition/assembly.js");
+    const { NetworkBudgetCoordinator } = await import(
+      "../src/network/budget.js"
+    );
+    const registry = assemblePublicAcquisitionRegistry(
+      parseConfiguration(
+        '[sources.acquisition]\nmode = "custom"\nproviders = ["wiley", "arxiv", "sci-hub"]\n',
+      ),
+      new NetworkBudgetCoordinator(),
+    );
+    // The ordinary registry keeps Wiley out of runnable sources for readiness/status
+    // reporting, but Entry's locator split must not lose the unresolved selected route.
+    expect(registry.sources.map((item) => item.source_name)).toEqual([
+      "direct",
+      "arxiv",
+      "sci-hub",
+      "doi-landing",
+    ]);
+    const split = splitAcquisitionRoutes(registry);
+    expect(split.routes.sources.map((item) => item.source_name)).toEqual([
+      "direct",
+      "wiley",
+      "arxiv",
+      "sci-hub",
+      "doi-landing",
+    ]);
+    const wiley = split.routes.sources.find(
+      (item) => item.source_name === "wiley",
+    );
+    expect(wiley).toBeDefined();
+    await expect(wiley!.discover({ identifiers: [] })).rejects.toMatchObject({
+      code: "download-unavailable",
+      retryable: false,
+    });
+    const { TieredAcquisitionService } = await import(
+      "../src/acquisition/tiered.js"
+    );
+    await expect(
+      new TieredAcquisitionService(split.routes, { cooldown_ms: 0 }).run(
+        [{ key: "unconfigured-route", request: { identifiers: [] } }],
+        async () => undefined,
+      ),
+    ).rejects.toMatchObject({
+      code: "download-unavailable",
+      retryable: false,
+    });
+  });
+
+  it("fails closed instead of exhausting a target whose browser tier is unavailable", async () => {
+    const { assemblePublicAcquisitionRegistry } = await import(
+      "../src/acquisition/assembly.js"
+    );
+    const { NetworkBudgetCoordinator } = await import(
+      "../src/network/budget.js"
+    );
+    const { TieredAcquisitionService } = await import(
+      "../src/acquisition/tiered.js"
+    );
+    const registry = assemblePublicAcquisitionRegistry(
+      parseConfiguration(""),
+      new NetworkBudgetCoordinator(),
+      {
+        browser_admission: {
+          enabled: true,
+          controlled_delivery: true,
+          unavailable_reason: null,
+        },
+      },
+    );
+    // The unavailable tier must fail closed rather than let the target be reported as
+    // a normal exhaustion, and the download callback must never be asked to fetch a
+    // Browser URL with the credential-free public transport.
+    await expect(
+      new TieredAcquisitionService(registry, { cooldown_ms: 0 }).run(
+        [{ key: "browser-target", request: { identifiers: [] } }],
+        async () => {
+          throw new Error(
+            "browser route must not hand out a fetchable candidate",
+          );
+        },
+      ),
+    ).rejects.toMatchObject({ retryable: false });
   });
 });

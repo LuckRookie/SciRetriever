@@ -34,6 +34,8 @@ export interface AcquisitionSourceRequest {
 export interface AcquisitionSourcePort {
   readonly source_name: string;
   readonly ready: boolean;
+  /** Risk tier used by Entry's operation-local cohort barrier. */
+  readonly acquisition_tier?: "public" | "authorized-api";
   discover(
     request: AcquisitionSourceRequest,
     signal?: AbortSignal,
@@ -591,6 +593,7 @@ function authorizedUrl(
 
 /** Credential-bearing source that exposes only an opaque, non-secret locator. */
 export class AuthorizedPdfSource implements AcquisitionSourcePort {
+  readonly acquisition_tier = "authorized-api" as const;
   readonly source_name: AuthorizedProvider;
   readonly ready = true;
   private readonly locators = new Map<string, AuthorizedDownloadLocator>();
@@ -639,6 +642,13 @@ export interface AcquisitionSourceStatus {
 export class PublicAcquisitionRegistry {
   readonly sources: readonly AcquisitionSourcePort[];
   readonly statuses: readonly AcquisitionSourceStatus[];
+  /**
+   * Configuration/readiness failures for routes intentionally selected by the caller but
+   * not runnable in this process. The ordinary registry keeps those routes out of its
+   * locator list for compatibility; Entry's split view materializes them as fail-closed
+   * route outcomes so they can never be mistaken for normal exhaustion.
+   */
+  readonly unavailable: Readonly<Record<string, string>>;
   constructor(
     sources: readonly AcquisitionSourcePort[],
     expectedSourceNames?: readonly string[],
@@ -680,6 +690,7 @@ export class PublicAcquisitionRegistry {
       presentNames.some((name) => !/^[a-z0-9][a-z0-9-]{0,127}$/u.test(name))
     )
       throw new TypeError("invalid acquisition source order");
+    this.unavailable = Object.freeze({ ...unavailable });
     this.sources = Object.freeze(
       presentNames.flatMap((name) =>
         byName.has(name) ? [byName.get(name)!] : [],

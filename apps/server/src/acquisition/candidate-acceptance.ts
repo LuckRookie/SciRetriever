@@ -111,6 +111,8 @@ export class CandidateAcceptanceService {
     if (!facts) throw new CandidateAcceptanceError("literature-not-found");
     // Reject stale or misattributed inputs before invoking PDF tools.
     requireCurrentCandidate(facts, input.metadata_snapshot, candidate);
+    if (candidate.source_name === "manual-pdf" && facts.primary_asset)
+      throw new LiteraturePublicationError("primary-asset-conflict");
     check();
     const doi = facts.literature.metadata.identifiers.find(
       (identifier) => identifier.namespace === "doi",
@@ -152,14 +154,21 @@ export class CandidateAcceptanceService {
       target: existing?.path ?? `objects/${candidate.sha256}.pdf`,
       provenance: {
         provenance_id: await stableId("candidate-publication", input),
-        source_kind: "asset-provider",
+        source_kind:
+          candidate.source_name === "manual-pdf" ? "user" : "asset-provider",
         source_name: candidate.source_name,
-        source_record_id: candidate.source_record_id ?? candidate.transfer_id,
+        source_record_id:
+          candidate.source_name === "manual-pdf"
+            ? null
+            : (candidate.source_record_id ?? candidate.transfer_id),
         observed_at: candidate.capture!.captured_at,
         input_sha256: candidate.sha256,
         parameters_sha256: null,
       },
-      source_url: candidate.capture!.source_url,
+      source_url:
+        candidate.source_name === "manual-pdf"
+          ? null
+          : candidate.capture!.source_url,
       identity: "accepted",
     });
     check();

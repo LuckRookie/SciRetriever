@@ -12,6 +12,8 @@ export interface AdapterConfig {
   readonly model: string;
   readonly endpoint: string;
   readonly credential: string | null;
+  /** Resolve a fresh secret immediately before each request dispatch. */
+  readonly credentialProvider?: () => Promise<string | null>;
   readonly transport: AgentTransport;
   readonly maxResponseBytes?: number;
 }
@@ -20,6 +22,39 @@ export type AgentWireProtocol =
   | "openai-chat"
   | "openai-responses"
   | "anthropic";
+
+/** Anthropic requires the API version header on every request. */
+export const ANTHROPIC_API_VERSION_HEADER = [
+  "anthropic-version",
+  "2023-06-01",
+] as const;
+
+/**
+ * The single protocol-derived credential header. A configuration probe and the
+ * production adapter must never disagree about which header carries the key:
+ * Anthropic authenticates with `x-api-key`, the OpenAI protocols with a bearer
+ * `authorization` header.
+ */
+export function credentialHeader(
+  protocol: AgentWireProtocol,
+  credential: string,
+): readonly [string, string] {
+  switch (protocol) {
+    case "anthropic":
+      return ["x-api-key", credential];
+    case "openai-chat":
+    case "openai-responses":
+      return ["authorization", `Bearer ${credential}`];
+    default: {
+      // A new wire protocol has to decide its credential header explicitly: silently
+      // inheriting the bearer form would send the key to an unverified destination.
+      const exhaustive: never = protocol;
+      throw new AgentFailure(
+        `agent-protocol-unsupported:${String(exhaustive)}`,
+      );
+    }
+  }
+}
 export function requestBody(
   call: AgentCall,
   protocol: AgentWireProtocol,
@@ -125,9 +160,12 @@ export async function post(
   protocol: AgentWireProtocol = "openai-chat",
 ): Promise<AgentTransportResponse> {
   const endpoint = new URL(config.endpoint);
+  const credential = config.credentialProvider
+    ? await config.credentialProvider()
+    : config.credential;
   if (
-    (endpoint.protocol === "http:" && config.credential !== null) ||
-    (endpoint.protocol === "https:" && !config.credential)
+    (endpoint.protocol === "http:" && credential !== null) ||
+    (endpoint.protocol === "https:" && !credential)
   )
     throw new AgentFailure("agent-credentials");
   let encoded: Uint8Array;
@@ -142,14 +180,8 @@ export async function post(
     endpoint: config.endpoint,
     headers: [
       ["content-type", "application/json"],
-      ...(protocol === "anthropic"
-        ? ([["anthropic-version", "2023-06-01"]] as const)
-        : []),
-      ...(config.credential === null
-        ? []
-        : protocol === "anthropic"
-          ? ([["x-api-key", config.credential]] as const)
-          : ([["authorization", `Bearer ${config.credential}`]] as const)),
+      ...(protocol === "anthropic" ? [ANTHROPIC_API_VERSION_HEADER] : []),
+      ...(credential === null ? [] : [credentialHeader(protocol, credential)]),
       ["accept", stream ? "text/event-stream" : "application/json"],
     ],
     body: encoded,

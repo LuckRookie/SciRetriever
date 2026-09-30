@@ -63,6 +63,10 @@ class ManualClock implements BudgetClock {
       }
     }
   }
+
+  pendingTimers(): number {
+    return this.timers.size;
+  }
 }
 
 describe("network budget coordination", () => {
@@ -231,6 +235,20 @@ describe("network budget coordination", () => {
     const permit = await waiting;
     expect(permit.host).toBe("early.test");
     permit.release();
+  });
+
+  it("cancels queued work and Retry-After timers when the coordinator closes", async () => {
+    const clock = new ManualClock();
+    const coordinator = new NetworkBudgetCoordinator(clock);
+    coordinator.applyRetryAfter("scope", "closed.test", 10, limits);
+    const waiting = coordinator.acquire("scope", "closed.test", limits);
+    expect(clock.pendingTimers()).toBe(1);
+    coordinator.close();
+    await expect(waiting).rejects.toBeInstanceOf(NetworkBudgetError);
+    await expect(
+      coordinator.acquire("scope", "closed.test", limits),
+    ).rejects.toBeInstanceOf(NetworkBudgetError);
+    expect(clock.pendingTimers()).toBe(0);
   });
 
   it("rejects invalid budget and input values with a stable error", async () => {

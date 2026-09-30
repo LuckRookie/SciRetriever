@@ -19,6 +19,17 @@ describe("PDF content identity evidence", () => {
       value: `doi:${FIXTURE_DOI}`,
     });
   });
+  it("accepts a target DOI without a synthetic version label", async () => {
+    expect(
+      (
+        await assessPdfIdentity(
+          workbenchPdf(FIXTURE_DOI, ""),
+          `doi:${FIXTURE_DOI}`,
+          "published",
+        )
+      ).verdict.disposition,
+    ).toBe("accepted");
+  });
   it("keeps conflicting identity or version uncertain and rejects malformed input", async () => {
     expect(
       (

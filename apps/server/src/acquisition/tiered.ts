@@ -1,3 +1,4 @@
+import { ContractValidationError } from "@sciretriever/contracts";
 import type { SourceCandidate } from "./sources/locators.js";
 import type {
   AcquisitionSourcePort,
@@ -21,11 +22,189 @@ export type AcquisitionFailureCode =
   | "execution-cancelled"
   | "source-cooldown";
 
+/**
+ * An explicitly declared, low-risk route unavailability.
+ *
+ * It is a declaration by the route itself — never a code pattern a caller may infer — that
+ * it can prove it cannot serve this target: the source does not apply, or it has no PDF
+ * capability for this source. Nothing was attempted and no retry would help, so this is
+ * neither a temporary nor an unknown failure.
+ *
+ * An entitlement/permission problem is deliberately **not** part of this set: gaining access
+ * needs operator action, and ADR 0015 §7 forbids turning an action-required state into an
+ * automatic Browser run. Such a route keeps reporting an ordinary route failure.
+ *
+ * Only this explicit declaration (or a normal miss) may let an independently admitted
+ * Browser take over; retryable, temporary, deferred and unrecognized failures always stay
+ * unresolved route failures.
+ */
+export type AcquisitionRouteUnavailability = "not-applicable" | "no-capability";
+
 export interface AcquisitionBatchFailure {
   readonly code: AcquisitionFailureCode;
   readonly source: string | null;
   readonly reason: string;
   readonly retryable: boolean;
+  /**
+   * Non-null only when the route explicitly declared a low-risk unavailability. Entry reads
+   * this field — never `code` — to decide whether an admitted Browser may take over, so a
+   * provider failure can never be rescued by pattern matching. Producers that do not declare
+   * anything leave it absent/null, which is the fail-closed default.
+   */
+  readonly unavailability?: AcquisitionRouteUnavailability | null;
+}
+
+/**
+ * Stable classification of one failure raised while discovering a source or
+ * delivering a candidate (M7).
+ *
+ * Fail-closed policy (a recorded team decision, not an accident): only an
+ * explicitly classified, retryable `route` failure may continue with the next
+ * candidate or source. A `route` error the caller marked non-retryable is
+ * surfaced as `system` instead of being swallowed by another route. `cancel`,
+ * `receipt`, `storage`, `contract`, `system` and every unrecognized error also
+ * leave the batch, so none of them can be degraded into an exhaustion fact.
+ */
+export type AcquisitionFailureKind =
+  | "route"
+  | "system"
+  | "cancel"
+  | "receipt"
+  | "storage"
+  | "contract";
+
+/**
+ * Explicitly marks one candidate/source outcome the batch may continue past.
+ * Callers whose download step raises plain route errors wrap them once here so
+ * the batch never has to guess.
+ */
+export class AcquisitionRouteError extends Error {
+  constructor(
+    readonly code: AcquisitionFailureCode,
+    readonly reason: string,
+    readonly retryable = true,
+  ) {
+    super("acquisition route failed");
+    this.name = "AcquisitionRouteError";
+  }
+}
+
+/**
+ * An explicit low-risk unavailability raised by a route.
+ *
+ * Unlike `AcquisitionRouteError` it is not an unresolved failure: the route proved it
+ * cannot serve this target, so the batch records it without cooling the source down and
+ * Entry may hand the target to an independently admitted Browser. Raising it is the only
+ * way to authorize that handover; no failure code is ever interpreted this way.
+ */
+export class AcquisitionUnavailableError extends Error {
+  constructor(
+    readonly code: AcquisitionFailureCode,
+    readonly reason: string,
+    readonly unavailability: AcquisitionRouteUnavailability,
+  ) {
+    super("acquisition route unavailable");
+    this.name = "AcquisitionUnavailableError";
+  }
+}
+
+/** One operation-local candidate was already rejected; try the next without cooling the route. */
+export class AcquisitionCandidateSkippedError extends Error {
+  constructor() {
+    super("acquisition candidate already attempted");
+    this.name = "AcquisitionCandidateSkippedError";
+  }
+}
+
+function failureCodeOf(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("code" in error))
+    return null;
+  const code = (error as { readonly code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+/**
+ * Classifies a failure without importing every emitting module. Only explicitly
+ * recognized route classes may continue with another route, and only a
+ * retryable route failure is one of them. Cancellation and the
+ * storage/admission/receipt/contract/system classes are recognized exactly;
+ * every unrecognized error (including an unknown exception escaping a source's
+ * `discover`) is `system`, so it can never trigger a cross-version fallback or
+ * become a durable exhaustion fact (requirements R8).
+ */
+export function classifyAcquisitionFailure(
+  error: unknown,
+  signal: AbortSignal,
+  context: "discovery" | "delivery" = "delivery",
+): AcquisitionFailureKind {
+  const name = error instanceof Error ? error.name : "";
+  const code = failureCodeOf(error);
+  if (
+    name === "AbortError" ||
+    code === "queue-interrupted" ||
+    code === "write-admission-cancelled" ||
+    code === "candidate-cancelled"
+  )
+    return "cancel";
+  if (
+    code?.startsWith("write-admission") ||
+    name === "BrowserTransferError" ||
+    name === "SqliteWorkerError" ||
+    // Filesystem/SQLite errno shapes are never a provider route outcome.
+    /^(?:E[A-Z]{2,}|SQLITE_)/u.test(code ?? "")
+  )
+    return "storage";
+  if (
+    code === "candidate-receipt-conflict" ||
+    code === "candidate-publication" ||
+    name === "CandidatePublicationError"
+  )
+    return "receipt";
+  // A stop signal cannot erase a known persistence/publication failure, including
+  // one raised while discarding a receipt. Ordinary aborted I/O remains a cancel.
+  if (signal.aborted) return "cancel";
+  // Only a retryable route failure may continue with another route; a route
+  // error the caller marked non-retryable (for example a resolution that needs
+  // operator action) leaves the batch like any other failure.
+  if (error instanceof AcquisitionRouteError)
+    return error.retryable ? "route" : "system";
+  // An explicit low-risk unavailability is a route outcome by declaration: it never leaves
+  // the batch, and callers that special-case it (the runner, then Entry) still treat it as
+  // route-local rather than as an unresolved system failure.
+  if (error instanceof AcquisitionUnavailableError) return "route";
+  if (error instanceof ContractValidationError || error instanceof TypeError)
+    return "contract";
+  if (
+    name === "NetworkBudgetError" ||
+    code === "literature-stale" ||
+    code === "candidate-misattributed" ||
+    code === "primary-asset-conflict" ||
+    code === "candidate-command-invalid"
+  )
+    return "system";
+  if (name === "CandidateAcceptanceError") return "route";
+  if (
+    code === "candidate-rejected" ||
+    code === "candidate-uncertain" ||
+    code === "candidate-not-found" ||
+    code === "literature-not-found" ||
+    name === "PdfAcceptanceError" ||
+    name === "NetworkHttpError" ||
+    name === "NetworkConnectionError" ||
+    name === "NetworkPolicyError"
+  )
+    return "route";
+  // `downloadPdfCandidate`/`downloadSourceCandidate` describe a rejected
+  // candidate (empty body, byte limit, media type, unavailable source) with a
+  // plain acquisition error; anything else escaping delivery is not a route.
+  if (
+    context === "delivery" &&
+    error instanceof Error &&
+    /^acquisition /u.test(error.message)
+  )
+    return "route";
+  // Unknown errors are system failures in both contexts: no fallback, no fact.
+  return "system";
 }
 
 export interface AcquisitionBatchItem {
@@ -71,8 +250,21 @@ function failure(
   source: string | null,
   reason: string,
   retryable: boolean,
+  unavailability: AcquisitionRouteUnavailability | null = null,
 ): AcquisitionBatchFailure {
-  return Object.freeze({ code, source, reason, retryable });
+  return Object.freeze({ code, source, reason, retryable, unavailability });
+}
+
+/**
+ * Records one explicit low-risk unavailability. It is deliberately non-retryable and never
+ * cools the source down: there is nothing to retry, and the target may still be served by
+ * another route or by the independently admitted Browser.
+ */
+function unavailableFailure(
+  error: AcquisitionUnavailableError,
+  source: string | null,
+): AcquisitionBatchFailure {
+  return failure(error.code, source, error.reason, false, error.unavailability);
 }
 
 function copyResult(
@@ -90,6 +282,11 @@ function copyResult(
  * Executes public/API/browser source ports in their configured order.
  * Discovery, candidate download and policy disposition remain separate so a
  * source failure cannot be mistaken for a permanent exhaustion fact.
+ *
+ * Fallback is fail-closed: a source that wants its provider failure treated as
+ * a continuable route must raise `AcquisitionRouteError` (or a known network
+ * rejection). Unknown exceptions stay system failures and are surfaced, not
+ * retried on another route.
  */
 export class TieredAcquisitionService {
   private readonly cooldownUntil = new Map<string, number>();
@@ -150,19 +347,12 @@ export class TieredAcquisitionService {
     for (const item of items) {
       if (signal.aborted) {
         results.push(
-          copyResult({
-            key: item.key,
-            disposition: "interrupted",
-            source: null,
-            candidate: null,
-            failure: failure(
-              "execution-cancelled",
-              null,
-              "Acquisition batch was cancelled before this target ran.",
-              true,
-            ),
-            attempted_sources: [],
-          }),
+          this.interrupted(
+            item.key,
+            [],
+            null,
+            "Acquisition batch was cancelled before this target ran.",
+          ),
         );
         continue;
       }
@@ -181,22 +371,14 @@ export class TieredAcquisitionService {
   ): Promise<AcquisitionBatchResult> {
     const attempted: string[] = [];
     let lastFailure: AcquisitionBatchFailure | null = null;
-    let sawCandidate = false;
     for (const source of this.registry.sources) {
       if (signal.aborted)
-        return copyResult({
-          key: item.key,
-          disposition: "interrupted",
-          source: null,
-          candidate: null,
-          failure: failure(
-            "execution-cancelled",
-            null,
-            "Acquisition batch was cancelled while a target was running.",
-            true,
-          ),
-          attempted_sources: attempted,
-        });
+        return this.interrupted(
+          item.key,
+          attempted,
+          null,
+          "Acquisition batch was cancelled while a target was running.",
+        );
       const cooldown = this.cooldownUntil.get(source.source_name) ?? 0;
       if (cooldown > this.now()) {
         lastFailure = failure(
@@ -211,7 +393,24 @@ export class TieredAcquisitionService {
       let candidates: readonly SourceCandidate[];
       try {
         candidates = await source.discover(item.request, signal);
-      } catch {
+      } catch (error) {
+        // A discovery failure is one route outcome; an explicitly classified
+        // storage/receipt/contract/system failure leaves the batch untouched.
+        // An explicit low-risk unavailability is not a failure at all: it is recorded
+        // as-is (non-retryable, no cooldown) so Entry can decide with its own admission.
+        if (error instanceof AcquisitionUnavailableError) {
+          lastFailure = unavailableFailure(error, source.source_name);
+          continue;
+        }
+        const kind = classifyAcquisitionFailure(error, signal, "discovery");
+        if (kind === "cancel")
+          return this.interrupted(
+            item.key,
+            attempted,
+            null,
+            "Acquisition batch was cancelled while a source was being discovered.",
+          );
+        if (kind !== "route") throw error;
         this.cooldownUntil.set(
           source.source_name,
           this.now() + this.cooldownMs,
@@ -232,22 +431,14 @@ export class TieredAcquisitionService {
         disposition: "discovered",
       });
       if (bounded.length === 0) continue;
-      sawCandidate = true;
       for (const candidate of bounded) {
         if (signal.aborted)
-          return copyResult({
-            key: item.key,
-            disposition: "interrupted",
-            source: source.source_name,
-            candidate: null,
-            failure: failure(
-              "execution-cancelled",
-              source.source_name,
-              "Acquisition batch was cancelled during candidate delivery.",
-              true,
-            ),
-            attempted_sources: attempted,
-          });
+          return this.interrupted(
+            item.key,
+            attempted,
+            source.source_name,
+            "Acquisition batch was cancelled during candidate delivery.",
+          );
         try {
           await download(item, source, candidate, signal);
           onProgress?.({
@@ -264,7 +455,26 @@ export class TieredAcquisitionService {
             failure: null,
             attempted_sources: attempted,
           });
-        } catch {
+        } catch (error) {
+          // Only a route failure continues with the next candidate. A
+          // cancellation stops this target; storage, receipt, contract and
+          // system failures leave the batch instead of being swallowed.
+          // A declared low-risk unavailability concerns the whole route/target, so the
+          // remaining candidates of this source are skipped and the next route is tried.
+          if (error instanceof AcquisitionUnavailableError) {
+            lastFailure = unavailableFailure(error, source.source_name);
+            break;
+          }
+          if (error instanceof AcquisitionCandidateSkippedError) continue;
+          const kind = classifyAcquisitionFailure(error, signal, "delivery");
+          if (kind === "cancel")
+            return this.interrupted(
+              item.key,
+              attempted,
+              source.source_name,
+              "Acquisition batch was cancelled during candidate delivery.",
+            );
+          if (kind !== "route") throw error;
           lastFailure = failure(
             "candidate-download-failed",
             source.source_name,
@@ -280,16 +490,33 @@ export class TieredAcquisitionService {
         }
       }
     }
-    if (!sawCandidate && lastFailure?.code === "source-discovery-failed")
-      return this.policyResult(item.key, attempted, lastFailure);
-    if (sawCandidate && lastFailure)
-      return this.policyResult(item.key, attempted, lastFailure);
+    // `exhausted` requires that every applicable route ended normally: any
+    // unresolved failure (discovery error, cooldown after one, failed delivery)
+    // is a route outcome and must never be reported as a normal exhaustion.
+    // This is the only value Entry may turn into a durable exhaustion fact.
+    if (lastFailure) return this.policyResult(item.key, attempted, lastFailure);
     return copyResult({
       key: item.key,
       disposition: "exhausted",
       source: null,
       candidate: null,
       failure: null,
+      attempted_sources: attempted,
+    });
+  }
+
+  private interrupted(
+    key: string,
+    attempted: readonly string[],
+    source: string | null,
+    reason: string,
+  ): AcquisitionBatchResult {
+    return copyResult({
+      key,
+      disposition: "interrupted",
+      source,
+      candidate: null,
+      failure: failure("execution-cancelled", source, reason, true),
       attempted_sources: attempted,
     });
   }

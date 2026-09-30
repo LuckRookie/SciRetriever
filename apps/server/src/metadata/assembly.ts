@@ -9,6 +9,7 @@ import {
   issueProviderCredentialGrant,
   readProviderCredential,
   type CredentialBundle,
+  type CurrentCredentialReader,
 } from "../configuration/credentials.js";
 import type { MetadataTransport } from "./providers.js";
 import { CrossrefRestAdapter } from "./crossref.js";
@@ -37,6 +38,7 @@ import type {
   ReferenceQueryPort,
   TopicSearchPort,
 } from "./ports.js";
+import { MetadataProviderFailure } from "./ports.js";
 
 type ProviderName =
   | "web-of-science"
@@ -54,6 +56,8 @@ type ProviderName =
 export interface MetadataAssemblyOptions {
   readonly resolver?: Resolver;
   readonly connection?: ConnectionDependencies;
+  /** Configuration owner re-reads the credential file before each provider request. */
+  readonly currentCredential?: CurrentCredentialReader;
   /** Offline tests may inject the same bounded provider transport contract. */
   readonly transportFactory?: (
     provider: ProviderName,
@@ -88,6 +92,40 @@ const CREDENTIAL_HEADERS: Readonly<
   core: { api_key: "authorization" },
   opencitations: { access_token: "authorization" },
 };
+
+const REQUIRED_METADATA_CREDENTIALS: readonly {
+  readonly provider: ProviderName;
+  readonly field: string;
+  readonly header?: string;
+}[] = [
+  { provider: "web-of-science", field: "api_key", header: "x-apikey" },
+  { provider: "elsevier", field: "api_key", header: "x-els-apikey" },
+  { provider: "springer", field: "api_key" },
+];
+
+function assertRequiredMetadataCredential(
+  provider: ProviderName,
+  headers: Readonly<Record<string, string>>,
+  query: readonly (readonly [string, string])[],
+): void {
+  const required = REQUIRED_METADATA_CREDENTIALS.find(
+    (item) => item.provider === provider,
+  );
+  if (
+    !required ||
+    (required.header
+      ? headers[required.header] !== undefined
+      : query.some(([field]) => field === required.field))
+  )
+    return;
+  throw new MetadataProviderFailure({
+    code: "metadata-provider-credential-unavailable",
+    reason:
+      "The metadata provider's required credential is missing or revoked.",
+    action: "Restore the required provider credential and retry.",
+    retryable: false,
+  });
+}
 
 function originParts(value: string): {
   readonly scheme: "https";
@@ -152,6 +190,41 @@ function providerCredentialQuery(
   ];
 }
 
+async function currentProviderCredentialHeaders(
+  provider: ProviderName,
+  options: MetadataAssemblyOptions,
+): Promise<Readonly<Record<string, string>>> {
+  const mapping = CREDENTIAL_HEADERS[provider] ?? {};
+  const result: Record<string, string> = {};
+  for (const [field, header] of Object.entries(mapping)) {
+    const value = await options.currentCredential?.({
+      namespace: "provider",
+      provider,
+      field,
+      origin: null,
+      operation: "provider-request",
+    });
+    if (value !== null && value !== undefined)
+      result[header] = header === "authorization" ? `Bearer ${value}` : value;
+  }
+  return result;
+}
+
+async function currentProviderCredentialQuery(
+  provider: ProviderName,
+  options: MetadataAssemblyOptions,
+): Promise<readonly (readonly [string, string])[]> {
+  if (provider !== "springer") return [];
+  const value = await options.currentCredential?.({
+    namespace: "provider",
+    provider,
+    field: "api_key",
+    origin: null,
+    operation: "provider-request",
+  });
+  return value === null || value === undefined ? [] : [["api_key", value]];
+}
+
 function providerTransport(
   provider: ProviderName,
   baseUrl: string,
@@ -195,9 +268,14 @@ function providerTransport(
         throw new Error("metadata provider changed origin");
       const headers = {
         ...(requestOptions.headers ?? {}),
-        ...providerCredentialHeaders(credentials, provider),
+        ...(options.currentCredential
+          ? await currentProviderCredentialHeaders(provider, options)
+          : providerCredentialHeaders(credentials, provider)),
       };
-      const credentialQuery = providerCredentialQuery(credentials, provider);
+      const credentialQuery = options.currentCredential
+        ? await currentProviderCredentialQuery(provider, options)
+        : providerCredentialQuery(credentials, provider);
+      assertRequiredMetadataCredential(provider, headers, credentialQuery);
       if (injected)
         return injected.request(
           credentialQuery.length
@@ -364,8 +442,8 @@ export function assembleMetadataRegistry(
   }
 
   const readiness: Record<string, string | null> = {};
-  for (const provider of ["elsevier", "springer", "web-of-science"] as const)
-    if (!credentialFields(credentials, provider).includes("api_key"))
+  for (const { provider, field } of REQUIRED_METADATA_CREDENTIALS)
+    if (!credentialFields(credentials, provider).includes(field))
       readiness[provider] = "credential-missing";
   const capabilities: Record<string, readonly MetadataCapability[]> = {
     ...METADATA_CAPABILITIES,
@@ -375,11 +453,21 @@ export function assembleMetadataRegistry(
       ...(METADATA_CAPABILITIES["web-of-science"] ?? []),
       "reference-query",
     ];
+  // The origins above are the only endpoints an explicit read-only probe may
+  // report; an unconfigured Web of Science stays null instead of guessing.
+  const endpoints: Record<string, string | null> = { ...ORIGINS };
+  endpoints["web-of-science"] =
+    web?.product === "expanded"
+      ? "https://wos-api.clarivate.com/api/wos"
+      : web
+        ? "https://api.clarivate.com/apis/wos-starter/v2"
+        : null;
   const registry = buildMetadataRegistry({
     topic_search_ports: topics,
     lookup_ports: lookups,
     reference_query_ports: references,
     readiness,
+    endpoints,
     capabilities,
   });
   const selected = configuredMetadataSelections(configuration, capabilities);

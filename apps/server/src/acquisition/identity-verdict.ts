@@ -44,6 +44,7 @@ export function judgeIdentity(input: {
   evidence.push({ kind: "identifier", value: input.targetIdentifier });
   if (
     input.targetVersion !== undefined &&
+    input.candidateVersion !== undefined &&
     input.candidateVersion !== input.targetVersion
   )
     return Object.freeze({

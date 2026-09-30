@@ -29,6 +29,12 @@ export interface MetadataProviderStatus {
   readonly production_available: boolean;
   readonly ready: boolean;
   readonly failure_code: string | null;
+  /**
+   * The configured provider origin an explicit read-only probe would reach.
+   * Null when the registry was assembled from injected ports only, so a probe
+   * never guesses an endpoint.
+   */
+  readonly endpoint: string | null;
 }
 export interface MetadataRegistry {
   readonly service: MetadataService;
@@ -115,6 +121,7 @@ export function buildMetadataRegistry(
     readonly lookup_ports?: readonly MetadataLookupPort[];
     readonly reference_query_ports?: readonly ReferenceQueryPort[];
     readonly readiness?: Readonly<Record<string, string | null>>;
+    readonly endpoints?: Readonly<Record<string, string | null>>;
     readonly capabilities?: Readonly<
       Record<string, readonly MetadataCapability[]>
     >;
@@ -148,6 +155,7 @@ export function buildMetadataRegistry(
       failure_code: !available
         ? "missing-production-adapter"
         : readinessFailure,
+      endpoint: options.endpoints?.[provider_name] ?? null,
     });
   });
   const selection = Object.freeze({

@@ -1,7 +1,9 @@
+import { deflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
   acceptPdf,
   PdfAcceptanceError,
+  readPdfTool,
 } from "../src/acquisition/pdf-acceptance.js";
 
 function pdf(): Uint8Array {
@@ -24,6 +26,53 @@ function pdf(): Uint8Array {
       "\n",
     )}\ntrailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
   return new TextEncoder().encode(body);
+}
+
+/** A small compressed stream that expands beyond the first-page text limit. */
+function compressedOutputFixture(): Uint8Array {
+  const line = "X".repeat(80);
+  const content = Array.from(
+    { length: 5_000 },
+    (_, index) =>
+      `BT /F1 8 Tf 10 ${10 + (index % 760)} Td (${line}${String(index).padStart(5, "0")}) Tj ET`,
+  ).join("\n");
+  const compressed = deflateSync(Buffer.from(content), { level: 9 });
+  const objects = [
+    Buffer.from("<< /Type /Catalog /Pages 2 0 R >>"),
+    Buffer.from("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+    Buffer.from(
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    ),
+    Buffer.from("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+    Buffer.concat([
+      Buffer.from(
+        `<< /Length ${compressed.byteLength} /Filter /FlateDecode >>\nstream\n`,
+      ),
+      compressed,
+      Buffer.from("\nendstream"),
+    ]),
+  ];
+  let body = Buffer.from("%PDF-1.4\n");
+  const offsets = [0];
+  for (const [index, object] of objects.entries()) {
+    offsets.push(body.byteLength);
+    body = Buffer.concat([
+      body,
+      Buffer.from(`${index + 1} 0 obj\n`),
+      object,
+      Buffer.from("\nendobj\n"),
+    ]);
+  }
+  const xref = body.byteLength;
+  const trailer = Buffer.from(
+    `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets
+      .slice(1)
+      .map((offset) => `${String(offset).padStart(10, "0")} 00000 n `)
+      .join(
+        "\n",
+      )}\ntrailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`,
+  );
+  return new Uint8Array(Buffer.concat([body, trailer]));
 }
 
 describe("bounded PDF acceptance", () => {
@@ -49,6 +98,13 @@ describe("bounded PDF acceptance", () => {
       `${new TextDecoder().decode(pdf()).replace("%%EOF", "/Encrypt 9 0 R\n%%EOF")}\n`,
     );
     await expect(acceptPdf(encrypted)).rejects.toBeInstanceOf(
+      PdfAcceptanceError,
+    );
+  });
+  it("terminates a compressed stream when first-page text exceeds the output bound", async () => {
+    const fixture = compressedOutputFixture();
+    expect(fixture.byteLength).toBeLessThan(64 * 1024);
+    await expect(readPdfTool(fixture, "pdftotext")).rejects.toBeInstanceOf(
       PdfAcceptanceError,
     );
   });

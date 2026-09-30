@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { judgeIdentity } from "../src/acquisition/identity-verdict.js";
 
 describe("conservative identity and version verdict", () => {
-  it("accepts only matching identifier and version evidence", () => {
+  it("accepts matching identifier evidence and rejects an explicit version conflict", () => {
     expect(
       judgeIdentity({
         targetIdentifier: "doi:10.1/x",
@@ -16,6 +16,23 @@ describe("conservative identity and version verdict", () => {
       judgeIdentity({
         targetIdentifier: "doi:10.1/x",
         candidateIdentifier: "doi:10.1/y",
+        isPdf: true,
+      }).disposition,
+    ).toBe("uncertain");
+    expect(
+      judgeIdentity({
+        targetIdentifier: "doi:10.1/x",
+        candidateIdentifier: "doi:10.1/x",
+        targetVersion: "published",
+        isPdf: true,
+      }).disposition,
+    ).toBe("accepted");
+    expect(
+      judgeIdentity({
+        targetIdentifier: "doi:10.1/x",
+        candidateIdentifier: "doi:10.1/x",
+        targetVersion: "published",
+        candidateVersion: "preprint",
         isPdf: true,
       }).disposition,
     ).toBe("uncertain");

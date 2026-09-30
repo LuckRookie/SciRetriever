@@ -13,6 +13,18 @@ export type CredentialOperation =
   | "parser-health"
   | "provider-request";
 
+/** One exact credential use requested immediately before an external dispatch. */
+export interface CredentialReadRequest {
+  readonly namespace: CredentialGrant["namespace"];
+  readonly provider: string;
+  readonly field: string;
+  readonly origin: string | null;
+  readonly operation: CredentialOperation;
+}
+export type CurrentCredentialReader = (
+  request: CredentialReadRequest,
+) => Promise<string | null>;
+
 export interface CredentialGrant {
   readonly id: string;
   readonly namespace: "provider" | "model" | "core";
