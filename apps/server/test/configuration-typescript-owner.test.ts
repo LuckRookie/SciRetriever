@@ -1,11 +1,19 @@
+import { existsSync } from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  ConfigurationProbeSession,
   ConfigurationOwnerError,
   TypeScriptConfigurationOwner,
+  fixedConfigurationHome,
 } from "../src/configuration/owner.js";
+import { configurationPath } from "../src/configuration/index.js";
+import { loadCredentialBundle } from "../src/configuration/credentials.js";
+import { NetworkBudgetCoordinator } from "../src/network/budget.js";
+import { assembleMetadataRegistry } from "../src/metadata/assembly.js";
+import type { MetadataTransport } from "../src/metadata/providers.js";
 
 describe("TypeScript configuration owner", () => {
   it("reads, validates, diffs and publishes without a Python process", async () => {
@@ -101,6 +109,88 @@ describe("TypeScript configuration owner", () => {
     }
   });
 
+  it("roundtrips hyphenated Web of Science and Sci-Hub source tables atomically", async () => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-ts-owner-sources-"),
+    );
+    try {
+      const owner = new TypeScriptConfigurationOwner(home);
+      const initial = await owner.read();
+      const candidate = {
+        ...initial.configuration,
+        sources: {
+          ...initial.configuration.sources,
+          metadata: {
+            ...initial.configuration.sources.metadata,
+            mode: "custom" as const,
+            providers: ["web-of-science"],
+            web_of_science: {
+              product: "expanded",
+              database: "WOS-Synthetic",
+              edition: "2026",
+            },
+          },
+          acquisition: {
+            ...initial.configuration.sources.acquisition,
+            mode: "custom" as const,
+            providers: ["sci-hub"],
+            sci_hub: { urls: ["https://sci-hub.example"] },
+          },
+        },
+      };
+      const published = await owner.publishConfiguration(
+        candidate,
+        initial.revision,
+        ["sources"],
+      );
+      expect(published.configuration.sources).toMatchObject({
+        metadata: {
+          web_of_science: {
+            product: "expanded",
+            database: "WOS-Synthetic",
+            edition: "2026",
+          },
+        },
+        acquisition: {
+          sci_hub: { urls: ["https://sci-hub.example"] },
+        },
+      });
+      const path = join(home, ".sciretriever/config.toml");
+      const bytes = await readFile(path, "utf8");
+      expect(bytes).toContain('["sources"."metadata"."web-of-science"]');
+      expect(bytes).toContain('["sources"."acquisition"."sci-hub"]');
+      expect(bytes).not.toContain('["sources"."metadata"."web_of_science"]');
+      expect(bytes).not.toContain('["sources"."acquisition"."sci_hub"]');
+
+      const roundtrip = await owner.publishConfiguration(
+        published.configuration,
+        published.revision,
+        ["sources"],
+      );
+      expect(roundtrip.configuration.sources).toEqual(
+        published.configuration.sources,
+      );
+      const invalid = {
+        ...roundtrip.configuration,
+        sources: {
+          ...roundtrip.configuration.sources,
+          metadata: {
+            ...roundtrip.configuration.sources.metadata,
+            providers: ["not-a-supported-source"],
+          },
+        },
+      };
+      await expect(
+        owner.publishConfiguration(invalid, roundtrip.revision, ["sources"]),
+      ).rejects.toMatchObject({ code: "configuration-invalid" });
+      expect((await owner.read()).configuration.sources).toEqual(
+        roundtrip.configuration.sources,
+      );
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("owns origin-bound model, source, and MinerU credential edits atomically", async () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-ts-owner-credentials-"),
@@ -173,6 +263,122 @@ describe("TypeScript configuration owner", () => {
       ]);
       expect((await readFile(path, "utf8")).includes(secret)).toBe(false);
     } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the production configuration identity fixed to the user home", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-ts-owner-home-"));
+    const previous = process.env.SCIRETRIEVER_HOME;
+    process.env.SCIRETRIEVER_HOME = home;
+    try {
+      // Neither the environment variable nor the working directory selects the
+      // production configuration; only an explicit owner seam does.
+      expect(fixedConfigurationHome()).toBe(homedir());
+      expect(new TypeScriptConfigurationOwner().home).toBe(homedir());
+      expect(configurationPath()).toBe(
+        join(homedir(), ".sciretriever", "config.toml"),
+      );
+      expect(configurationPath()).not.toContain(home);
+      const owner = new TypeScriptConfigurationOwner(home);
+      await owner.publish('[browser]\nprofile = "synthetic"\n', "missing", [
+        "browser",
+      ]);
+      expect((await owner.read()).configuration.browser.profile).toBe(
+        "synthetic",
+      );
+    } finally {
+      if (previous === undefined) delete process.env.SCIRETRIEVER_HOME;
+      else process.env.SCIRETRIEVER_HOME = previous;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("uses credentials inside the probe without returning them and without Storage effects", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-ts-owner-probe-"));
+    const secret = "synthetic-probe-owner-secret";
+    try {
+      const owner = new TypeScriptConfigurationOwner(home);
+      const published = await owner.publish(
+        '[sources.metadata]\nmode = "custom"\nproviders = ["core"]\n[browser]\nenabled = false\n',
+        "missing",
+        ["sources", "browser"],
+      );
+      await owner.credential(
+        {
+          namespace: "source",
+          target: "core",
+          kind: "set",
+          fields: { api_key: secret },
+        },
+        published.revision,
+      );
+      const credentials = await loadCredentialBundle(home);
+      const seen: string[] = [];
+      const transport: MetadataTransport = {
+        request: async (_url, options) => {
+          seen.push(JSON.stringify(options?.headers ?? {}));
+          return { totalHits: 0, offset: 0, limit: 100, results: [] };
+        },
+      };
+      const metadata = assembleMetadataRegistry(
+        (await owner.read()).configuration,
+        credentials,
+        new NetworkBudgetCoordinator(),
+        { transportFactory: () => transport },
+      );
+      const session = await ConfigurationProbeSession.create(owner, {
+        metadata,
+        now: () => 1_000,
+      });
+      try {
+        const result = await session.run(
+          { owner: "search", target: "core", image: false },
+          { authorized: true },
+        );
+        expect(result).toMatchObject({
+          outcome: "passed",
+          network_performed: true,
+          method: "GET",
+          endpoint: "https://api.core.ac.uk",
+          article_entitlement: "not-proven",
+          persisted: false,
+          execution: { elapsed_ms: 0, may_consume_quota: true },
+        });
+        // The credential reaches the provider request but never the result.
+        expect(seen.join("")).toContain(secret);
+        expect(JSON.stringify(result)).not.toContain(secret);
+        const repeated = await session.run(
+          { owner: "search", target: "core", image: false },
+          { authorized: true },
+        );
+        expect(repeated).toEqual(result);
+        expect(existsSync(join(home, "catalog.sqlite"))).toBe(false);
+        expect(existsSync(join(home, "artifacts"))).toBe(false);
+      } finally {
+        session.close();
+      }
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an unknown probe owner instead of widening it to the aggregate probe", async () => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-ts-owner-probe-input-"),
+    );
+    const owner = new TypeScriptConfigurationOwner(home);
+    const session = await ConfigurationProbeSession.create(owner);
+    try {
+      await expect(
+        session.run(
+          { owner: "unknown-owner", target: null, image: false } as never,
+          { authorized: true },
+        ),
+      ).rejects.toMatchObject({ code: "configuration-probe-invalid" });
+      expect(existsSync(join(home, "catalog.sqlite"))).toBe(false);
+    } finally {
+      session.close();
       await rm(home, { recursive: true, force: true });
     }
   });
