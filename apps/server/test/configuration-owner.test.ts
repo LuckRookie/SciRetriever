@@ -40,15 +40,18 @@ it("assembles adapters from the TS owner's saved snapshot and reloads on restart
     );
     application = await createApplication(home, { configurationOwner: owner });
     expect(application.agents.identity("analysis").model).toBe("first");
-    await owner.publish(
+    expect(application.configuration_revision).toBe(baseline.revision);
+    const changed = await owner.publish(
       payload.replace('model = "fixture/first"', 'model = "fixture/second"'),
       baseline.revision,
       ["analyze"],
     );
     expect(application.agents.identity("analysis").model).toBe("first");
+    expect(application.configuration_revision).toBe(baseline.revision);
     await application.close();
     application = await createApplication(home, { configurationOwner: owner });
     expect(application.agents.identity("analysis").model).toBe("second");
+    expect(application.configuration_revision).toBe(changed.revision);
     await application.close();
     application = undefined;
     await writeFile(

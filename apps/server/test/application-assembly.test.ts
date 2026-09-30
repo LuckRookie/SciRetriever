@@ -13,17 +13,63 @@ import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
-import { parseAsset, sha256 } from "@sciretriever/contracts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  parseAsset,
+  parseLibraryQuery,
+  parseLiterature,
+  parseLiteratureId,
+  parseMetadataObservation,
+  sha256,
+  type DurableCandidate,
+  type LiteratureId,
+  type VersionRole,
+} from "@sciretriever/contracts";
 
 import { createApplication } from "../src/bootstrap/application.js";
-import { TypeScriptConfigurationOwner } from "../src/configuration/owner.js";
+import { BROWSER_ROUTE_NAME } from "../src/acquisition/assembly.js";
 import {
+  AcquisitionRouteError,
+  AcquisitionUnavailableError,
+} from "../src/acquisition/tiered.js";
+import { PublicAcquisitionRegistry } from "../src/acquisition/sources/public.js";
+import { BrowserCandidateIntake } from "../src/acquisition/browser-intake.js";
+import {
+  DatabaseCompletionService,
+  DatabaseCompletionTargetRunner,
+} from "../src/entry/database-completion.js";
+import { EntryPdfAcquisitionService } from "../src/entry/pdf-acquisition.js";
+import { CloakRuntimeError } from "../src/configuration/cloak-runtime.js";
+import { TypeScriptConfigurationOwner } from "../src/configuration/owner.js";
+import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
+import type { ParserBackend } from "../src/parsing/ports.js";
+import {
+  FIXTURE_DOI,
   FIXTURE_LITERATURE,
   workbenchPdf,
 } from "../src/workbench/synthetic-fixture.js";
 
 const execFileAsync = promisify(execFile);
+
+const browserFixtureId = (n: number): LiteratureId =>
+  parseLiteratureId(`00000000-0000-0000-0000-${String(n).padStart(12, "0")}`);
+
+/**
+ * A synthetic Literature with no identifier and no asset hint: every locator route
+ * finds nothing, so a completion run stays fully offline and reaches its own normal
+ * end instead of attempting an external fetch.
+ */
+const offlineLiterature = (literatureId: string, metaId: string) =>
+  parseLiterature({
+    ...FIXTURE_LITERATURE,
+    literature_id: literatureId,
+    meta_literature_id: metaId,
+    metadata: {
+      ...FIXTURE_LITERATURE.metadata,
+      title: "Offline browser fixture",
+      identifiers: [],
+    },
+  });
 
 describe("application composition", () => {
   it("constructs one shared offline object graph with stable ownership boundaries", async () => {
@@ -60,6 +106,14 @@ describe("application composition", () => {
         ["springer", "credential-missing"],
       ]);
       expect(application.agents.readiness("analysis").configured).toBe(false);
+      // Bootstrap is the only Browser owner, and with Browser left off it registers
+      // no Browser route and starts nothing.
+      expect(application.configuration.browser.enabled).toBe(false);
+      expect(
+        application.acquisition.statuses.find(
+          (item) => item.source_name === "browser",
+        ),
+      ).toBeUndefined();
     } finally {
       await application.close();
     }
@@ -336,6 +390,1857 @@ describe("application composition", () => {
       );
       await rm(home, { recursive: true, force: true });
       await rm(certificateDirectory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("assembly of the unified completion entry", () => {
+  it("drives database completion from the assembled graph without a second acquisition graph", async () => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-assembly-completion-"),
+    );
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+    });
+    try {
+      // Bootstrap owns the only construction of the shared acquisition port and
+      // the completion orchestration; a caller must reuse these instances instead
+      // of assembling a second, isolated acquisition graph.
+      expect(application.pdfAcquisition).not.toBeNull();
+      expect(application.databaseCompletion).not.toBeNull();
+      const service = application.databaseCompletion!;
+      const emptyScope = parseLibraryQuery({
+        text: null,
+        title: "no such assembly scope",
+        author: null,
+        author_orcids: [],
+        identifiers: [],
+        publication_year_from: null,
+        publication_year_to: null,
+        venue: null,
+        publisher: null,
+        document_types: [],
+        languages: [],
+        keywords: [],
+        version_roles: [],
+        statuses: [],
+        missing_steps: [],
+        needs_manual_pdf: null,
+        discovery_run_ids: [],
+      });
+      await expect(
+        service.run({
+          selector: { kind: "query", query: emptyScope },
+          goal: "ASSET_READY",
+        }),
+      ).resolves.toMatchObject({
+        kind: "database-completion",
+        goal: "ASSET_READY",
+        end: { kind: "finished" },
+        completed: [],
+        failed: [],
+        skipped: [],
+        notStarted: [],
+        interrupted: [],
+      });
+
+      await application.database.putLiterature(FIXTURE_LITERATURE);
+      // Durable jobs use the same target unit and now receive the same shared
+      // acquisition port as the CLI. The expected outcome changes accordingly: the
+      // goal is no longer an unwired `pdf-acquisition-required`, it is a real
+      // automatic route attempt that ends in a stable route failure.
+      const runner = new DatabaseCompletionTargetRunner({
+        library: {
+          detail: (literatureId) => application.library.detail(literatureId),
+        },
+        database: application.database,
+        completion: application.completion,
+        acquisition: application.pdfAcquisition,
+      });
+      const jobOutcome = await runner.runTarget(
+        FIXTURE_LITERATURE.literature_id,
+        {
+          goal: "ASSET_READY",
+        },
+      );
+      expect(jobOutcome.partition).toBe("failed");
+      expect(jobOutcome.failure?.code).toMatch(/^pdf-/u);
+      expect(jobOutcome.failure?.code).not.toBe("pdf-acquisition-required");
+      expect(jobOutcome.operation_failure).toBe(false);
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to build a production Browser host without a verified runtime and never reaches the driver", async () => {
+    const { createProductionBrowserHostFactory } = await import(
+      "../src/browser/production-host.js"
+    );
+    let flowRequests = 0;
+    const factory = createProductionBrowserHostFactory({
+      runtime: undefined,
+      article_flow_factory: () => {
+        flowRequests += 1;
+        return {
+          deliver: async () => ({
+            kind: "refused" as const,
+            code: "browser-flow-unavailable",
+            reason: "this driver must never be reached",
+            retryable: false as const,
+          }),
+        };
+      },
+    });
+    // Offline and honest: without a verified runtime the factory must neither build a
+    // host nor ask for a driver. This proves the gate without launching Chromium and
+    // without fabricating a verified Cloak runtime. The middle link that starts the
+    // real host (factory -> host.start/openPage -> deliver) still needs a verified
+    // runtime and stays an explicit residual (T20-F16).
+    expect(
+      factory({ profile: join(tmpdir(), "sciretriever-browser-refused") }),
+    ).toBeNull();
+    expect(flowRequests).toBe(0);
+  });
+
+  it("refuses to admit a production Browser without a verified runtime", async () => {
+    const { productionBrowserCapability } = await import(
+      "../src/browser/production-host.js"
+    );
+    // Readiness may never come from a bundle path string: only a verified runtime
+    // admits the tier, so an unverified process reports one stable reason. T20-F16
+    // (the factory → host.start/openPage middle link) still needs a verified Cloak
+    // runtime and stays an explicit residual rather than a fabricated bundle.
+    expect(productionBrowserCapability({ runtime: undefined })).toEqual({
+      available: false,
+      reason: "browser-runtime-unavailable",
+    });
+  });
+
+  it("admits the browser tier only through the bootstrap-owned deferred runtime", async () => {
+    vi.stubEnv("SCIRETRIEVER_CLOAK_BUNDLE", "");
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-assembly-browser-"),
+    );
+    const directory = join(home, ".sciretriever");
+    await mkdir(directory, { mode: 0o700 });
+    await writeFile(
+      join(directory, "config.toml"),
+      ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
+      { mode: 0o600 },
+    );
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+    });
+    try {
+      // Enabling Browser without a verified runtime must not fake a runnable route:
+      // readiness comes from the real capability, so the registry reports the stable
+      // runtime reason and the tier stays ordered last behind every public and API
+      // route.
+      expect(
+        application.acquisition.statuses.map((i) => i.source_name),
+      ).toEqual(["direct", "arxiv", "europe-pmc", "doi-landing", "browser"]);
+      expect(
+        application.acquisition.statuses.find(
+          (item) => item.source_name === "browser",
+        ),
+      ).toEqual({
+        source_name: "browser",
+        ready: false,
+        failure_code: "browser-runtime-unavailable",
+      });
+      // The graph needs no Browser runtime at all, so assembling it cannot construct,
+      // start or probe a Browser process, profile or Cloak bundle: demanding the host
+      // stays stably unavailable instead of surfacing a half-wired one.
+      expect(application.browserHost()).toBeNull();
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("never writes an exhaustion fact for a target whose admitted browser tier cannot deliver", async () => {
+    vi.stubEnv("SCIRETRIEVER_CLOAK_BUNDLE", "");
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-assembly-browser-"),
+    );
+    const directory = join(home, ".sciretriever");
+    await mkdir(directory, { mode: 0o700 });
+    await writeFile(
+      join(directory, "config.toml"),
+      ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
+      { mode: 0o600 },
+    );
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+    });
+    try {
+      const id = browserFixtureId(1001);
+      await application.database.putLiterature(
+        offlineLiterature(id, browserFixtureId(2001)),
+      );
+      expect(await application.database.hasAutomaticPdfExhaustion(id)).toBe(
+        false,
+      );
+      // The operator admitted an applicable tier this process cannot serve. It must
+      // stay an unresolved target failure with its own stable Browser code: not a
+      // policy skip and not a durable "no automatic route left" fact.
+      const runner = new DatabaseCompletionTargetRunner({
+        library: {
+          detail: (literatureId) => application.library.detail(literatureId),
+        },
+        database: application.database,
+        completion: application.completion,
+        acquisition: application.pdfAcquisition,
+      });
+      const outcome = await runner.runTarget(id, { goal: "ASSET_READY" });
+      expect(outcome).toMatchObject({
+        partition: "failed",
+        failure: { code: "pdf-browser-runtime-unavailable", retryable: false },
+        operation_failure: false,
+      });
+      expect(await application.database.hasAutomaticPdfExhaustion(id)).toBe(
+        false,
+      );
+      // Readiness is the real capability: no verified runtime, no delivered route.
+      expect(
+        application.acquisition.statuses.find(
+          (item) => item.source_name === "browser",
+        ),
+      ).toEqual({
+        source_name: "browser",
+        ready: false,
+        failure_code: "browser-runtime-unavailable",
+      });
+      expect(
+        application.acquisition.sources.map((item) => item.source_name),
+      ).toContain("browser");
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("runs the locator routes through an explicit non-Browser view and escalates exactly once", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-assembly-split-"));
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+    });
+    try {
+      const id = browserFixtureId(1101);
+      await application.database.putLiterature(
+        offlineLiterature(id, browserFixtureId(2101)),
+      );
+      const calls: string[] = [];
+      const registry = new PublicAcquisitionRegistry(
+        [
+          {
+            source_name: "route-a",
+            ready: true,
+            discover: async () => {
+              calls.push("route-a");
+              return [];
+            },
+          },
+          {
+            source_name: BROWSER_ROUTE_NAME,
+            ready: false,
+            discover: async () => {
+              calls.push("browser-source");
+              throw new Error(
+                "the Browser source must never run inside the tiered batch",
+              );
+            },
+          },
+        ],
+        ["route-a", BROWSER_ROUTE_NAME],
+      );
+      const port = new EntryPdfAcquisitionService({
+        registry,
+        network_budget: application.networkBudget,
+        transfers: application.execution!.transfers,
+        acceptance: application.execution!.acceptance,
+        browser_host: () => ({
+          deliverCandidate: async () => {
+            calls.push("browser-host");
+            return {
+              kind: "refused" as const,
+              code: "browser-flow-unavailable",
+              reason: "article flow not wired",
+              retryable: false as const,
+            };
+          },
+          close: async () => undefined,
+        }),
+      });
+      const detail = await application.library.detail(id);
+      const facts = await application.database.currentFacts(id);
+      const outcome = await port.acquire({
+        literature_id: parseLiteratureId(id),
+        detail,
+        metadata_snapshot: facts!.metadata_snapshot,
+        signal: new AbortController().signal,
+      });
+      // Order proves the single path: the locator view ran to its normal end, the
+      // throwing Browser source never ran, and the owned session was escalated to once.
+      expect(calls).toEqual(["route-a", "browser-host"]);
+      expect(outcome).toMatchObject({
+        kind: "browser-failure",
+        code: "browser-flow-unavailable",
+      });
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("escalates to the owned Browser only after every locator route ended and maps its outcome honestly", async () => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-assembly-escalate-"),
+    );
+    const directory = join(home, ".sciretriever");
+    await mkdir(directory, { mode: 0o700 });
+    await writeFile(
+      join(directory, "config.toml"),
+      ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
+      { mode: 0o600 },
+    );
+    const deliveries: string[] = [];
+    let mode: "refused" | "mismatch" | "delivered" = "refused";
+    let pending: DurableCandidate | null = null;
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+      // The synthetic owner injects an identity navigation admission: an injected host
+      // factory is a construction seam, never an exemption from the admission the registry
+      // reports, so `browserHost()` stays closed without one.
+      browserAdmitNavigation: async (url: string) => url,
+      browserHost: () => ({
+        deliverCandidate: async (request) => {
+          deliveries.push(request.literature_id);
+          if (mode === "refused")
+            return {
+              kind: "refused" as const,
+              code: "browser-flow-unavailable",
+              reason: "article flow not wired",
+              retryable: false as const,
+            };
+          if (pending === null) throw new Error("missing spooled candidate");
+          return {
+            kind: "delivered" as const,
+            candidate: pending,
+            accepted: mode === "delivered",
+          };
+        },
+        close: async () => undefined,
+      }),
+    });
+    try {
+      const id = browserFixtureId(1201);
+      await application.database.putLiterature(
+        offlineLiterature(id, browserFixtureId(2201)),
+      );
+      const runner = new DatabaseCompletionTargetRunner({
+        library: {
+          detail: (literatureId) => application.library.detail(literatureId),
+        },
+        database: application.database,
+        completion: application.completion,
+        acquisition: application.pdfAcquisition,
+      });
+      // The Browser session spools its own bytes; the ordinary receipt path still
+      // validates and commits the accepted delivery below.
+      const spooledBytes = workbenchPdf();
+      await application.execution!.transfers.begin(
+        "browser-transfer-1",
+        undefined,
+        {
+          session_id: "browser-session",
+          article_id: id,
+          page_id: "browser-page",
+          document_generation: 1,
+          source_url: "https://fixture.invalid/paper",
+          captured_at: "2026-09-10T00:00:00Z",
+        },
+      );
+      await application.execution!.transfers.append(
+        "browser-transfer-1",
+        spooledBytes,
+      );
+      await application.execution!.transfers.complete("browser-transfer-1");
+      pending = await application.database.getCandidate("browser-transfer-1");
+      expect(pending).not.toBeNull();
+
+      // A refused delivery is an unresolved target failure with its own Browser code,
+      // and it must never become a durable exhaustion fact.
+      const refused = await runner.runTarget(id, { goal: "ASSET_READY" });
+      expect(refused).toMatchObject({
+        partition: "failed",
+        failure: { code: "pdf-browser-flow-unavailable", retryable: false },
+        operation_failure: false,
+      });
+      expect(await application.database.hasAutomaticPdfExhaustion(id)).toBe(
+        false,
+      );
+      expect(deliveries).toEqual([id]);
+
+      // A delivery whose identity assessment rejected the bytes is also an unresolved
+      // failure, never an accepted acquisition.
+      mode = "mismatch";
+      const mismatched = await runner.runTarget(id, { goal: "ASSET_READY" });
+      expect(mismatched).toMatchObject({
+        partition: "failed",
+        failure: { code: "pdf-browser-identity-mismatch" },
+      });
+      expect(await application.database.hasAutomaticPdfExhaustion(id)).toBe(
+        false,
+      );
+      expect(deliveries).toEqual([id, id]);
+
+      // An accepted Browser delivery really reaches the ordinary receipt path and
+      // commits a primary PDF. The identity evidence needs the fixture DOI, so this
+      // step drives the Entry port over a hand-built registry whose locator view is
+      // empty: no route may fetch the DOI landing page, and the run stays offline.
+      mode = "delivered";
+      const doiId = browserFixtureId(1202);
+      await application.database.putLiterature(
+        parseLiterature({
+          ...FIXTURE_LITERATURE,
+          literature_id: doiId,
+          meta_literature_id: browserFixtureId(2202),
+        }),
+      );
+      const bytes = workbenchPdf();
+      await application.execution!.transfers.begin(
+        "browser-transfer-2",
+        undefined,
+        {
+          session_id: "browser-session",
+          article_id: doiId,
+          page_id: "browser-page",
+          document_generation: 1,
+          source_url: "https://fixture.invalid/paper",
+          captured_at: "2026-09-10T00:00:00Z",
+        },
+      );
+      await application.execution!.transfers.append(
+        "browser-transfer-2",
+        bytes,
+      );
+      await application.execution!.transfers.complete("browser-transfer-2");
+      pending = await application.database.getCandidate("browser-transfer-2");
+      expect(pending).not.toBeNull();
+      const deliveryPort = new EntryPdfAcquisitionService({
+        registry: new PublicAcquisitionRegistry(
+          [
+            {
+              source_name: "route-a",
+              ready: true,
+              discover: async () => [],
+            },
+            {
+              source_name: BROWSER_ROUTE_NAME,
+              ready: false,
+              discover: async () => {
+                throw new Error(
+                  "the Browser source must never run inside the tiered batch",
+                );
+              },
+            },
+          ],
+          ["route-a", BROWSER_ROUTE_NAME],
+        ),
+        network_budget: application.networkBudget,
+        transfers: application.execution!.transfers,
+        acceptance: application.execution!.acceptance,
+        browser_host: () => application.browserHost(),
+      });
+      const facts = await application.database.currentFacts(doiId);
+      const deliveryOutcome = await deliveryPort.acquire({
+        literature_id: parseLiteratureId(doiId),
+        detail: await application.library.detail(doiId),
+        metadata_snapshot: facts!.metadata_snapshot,
+        signal: new AbortController().signal,
+      });
+      expect(deliveryOutcome).toMatchObject({
+        kind: "acquired",
+        literature_id: doiId,
+      });
+      expect(
+        (await application.library.detail(doiId)).primary_pdf,
+      ).not.toBeNull();
+      expect(deliveries).toEqual([id, id, doiId]);
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a disabled Browser tier non-applicable so a target may still exhaust", async () => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-assembly-browser-off-"),
+    );
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+    });
+    try {
+      const id = browserFixtureId(1301);
+      await application.database.putLiterature(
+        offlineLiterature(id, browserFixtureId(2301)),
+      );
+      const runner = new DatabaseCompletionTargetRunner({
+        library: {
+          detail: (literatureId) => application.library.detail(literatureId),
+        },
+        database: application.database,
+        completion: application.completion,
+        acquisition: application.pdfAcquisition,
+      });
+      const outcome = await runner.runTarget(id, { goal: "ASSET_READY" });
+      // The operator never asked for the tier, so it is not an applicable route: the
+      // normal end may become the durable exhaustion fact for this target.
+      expect(outcome).toMatchObject({
+        partition: "skipped",
+        skipped_reason: "manual-pdf-required",
+        failure: null,
+      });
+      expect(await application.database.hasAutomaticPdfExhaustion(id)).toBe(
+        true,
+      );
+      expect(
+        application.acquisition.statuses.some(
+          (item) => item.source_name === "browser",
+        ),
+      ).toBe(false);
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("hands the shared completion orchestration a live completion service, not a null captured too early", async () => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-assembly-live-completion-"),
+    );
+    const directory = join(home, ".sciretriever");
+    await mkdir(directory, { mode: 0o700 });
+    await writeFile(
+      join(directory, "config.toml"),
+      [
+        "[providers.fixture]",
+        'api = "openai-chat-completions"',
+        'base_url = "http://127.0.0.1:9/v1"',
+        "",
+        '[models."fixture/model"]',
+        "stream = false",
+        "",
+        "[analyze]",
+        'model = "fixture/model"',
+        "metadata_max_output_tokens = 2048",
+        "content_max_output_tokens = 4096",
+        "max_input_bytes = 1048576",
+        "max_chunk_bytes = 1048576",
+        "max_chunk_count = 1",
+        "max_total_llm_requests = 2",
+        "max_total_output_tokens = 6144",
+        "",
+      ].join("\n"),
+      { mode: 0o600 },
+    );
+    const stubParser: ParserBackend = {
+      async parse() {
+        throw new Error("the stub parser must never be invoked in this test");
+      },
+    };
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+      parsing: {
+        rules: new TypeScriptParserArtifactRules(),
+        parser: stubParser,
+      },
+    });
+    try {
+      // Construction order matters: the shared orchestration must be built after the
+      // completion service exists, so it can never capture a null.
+      expect(application.completion).not.toBeNull();
+      expect(application.databaseCompletion).not.toBeNull();
+      const id = browserFixtureId(1401);
+      await application.database.putLiterature(
+        offlineLiterature(id, browserFixtureId(2401)),
+      );
+      const report = await application.databaseCompletion!.run({
+        selector: {
+          kind: "literatures",
+          literature_ids: [parseLiteratureId(id)],
+        },
+        goal: "CONTENT_READY",
+      });
+      // The live service is reached for real: the target reaches a legitimate
+      // terminal partition, never the old null-captured completion failure. In the
+      // production graph the target has no PDF, so the automatic acquisition policy
+      // may report an explicit manual intervention skip before Parsing/Analysis.
+      expect(report.failed.map((item) => item.failure.code)).not.toContain(
+        "content-completion-unavailable",
+      );
+      expect(report.end.kind).toBe("finished");
+      expect(
+        report.completed.length +
+          report.failed.length +
+          report.skipped.length +
+          report.interrupted.length +
+          report.notStarted.length,
+      ).toBe(1);
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("admits only one validated landing page to the article driver", async () => {
+    const { admitBrowserArticleRequest } = await import(
+      "../src/browser/production-host.js"
+    );
+    const base = {
+      literature_id: FIXTURE_LITERATURE.literature_id,
+      identifier: "doi:10.5555/sciretriever.fixture",
+      version: "published",
+      metadata_snapshot: {
+        metadata_sha256: "a".repeat(64),
+        metadata_revision: 1,
+      },
+      signal: new AbortController().signal,
+    } as unknown as Parameters<typeof admitBrowserArticleRequest>[0];
+    // No admitted page: the driver is never asked.
+    expect(admitBrowserArticleRequest({ ...base, start_url: null })).toEqual({
+      ok: false,
+      refusal: {
+        kind: "refused",
+        code: "browser-flow-unavailable",
+        reason: "No admitted landing page is available for this article.",
+        retryable: false,
+      },
+    });
+    for (const start_url of [
+      "http://fixture.invalid/article",
+      "https://user:secret@fixture.invalid/article",
+      "https://fixture.invalid/article#fragment",
+      "not a url",
+    ]) {
+      const admitted = admitBrowserArticleRequest({ ...base, start_url });
+      expect(admitted.ok).toBe(false);
+      if (!admitted.ok)
+        expect(admitted.refusal).toMatchObject({
+          code: "browser-start-url-invalid",
+          retryable: false,
+        });
+    }
+    const admitted = admitBrowserArticleRequest({
+      ...base,
+      start_url: "https://fixture.invalid/article?q=1",
+    });
+    expect(admitted.ok).toBe(true);
+    if (admitted.ok)
+      expect(admitted.request.start_url).toBe(
+        "https://fixture.invalid/article?q=1",
+      );
+  });
+
+  it("selects the browser start page from the target's own landing hints only", async () => {
+    const { browserStartUrl } = await import("../src/entry/pdf-acquisition.js");
+    const hint = (overrides: Record<string, unknown>) => ({
+      url: "https://fixture.invalid/article",
+      kind: "landing-page",
+      media_type: null,
+      asset_role: null,
+      version_role: null,
+      access_status: "open",
+      license: null,
+      ...overrides,
+    });
+    const observation = (asset_hints: readonly unknown[]) =>
+      ({ asset_hints }) as never;
+    // Only a plain HTTPS landing page qualifies: a direct-file PDF, a non-HTTPS URL,
+    // an embedded credential and a fragment are all rejected rather than guessed.
+    expect(
+      browserStartUrl(
+        [
+          observation([
+            hint({ kind: "direct-file" }),
+            hint({ url: "http://fixture.invalid/article" }),
+            hint({ url: "https://user:secret@fixture.invalid/article" }),
+            hint({ url: "https://fixture.invalid/article#x" }),
+            hint({ version_role: "preprint" }),
+          ]),
+        ],
+        "published",
+      ),
+    ).toBeNull();
+    // Version policy: a published target never navigates to a preprint landing page;
+    // it uses the unversioned hint when no exact match exists.
+    expect(
+      browserStartUrl(
+        [
+          observation([
+            hint({ kind: "direct-file" }),
+            hint({
+              url: "https://fixture.invalid/preprint",
+              version_role: "preprint",
+            }),
+            hint({ url: "https://fixture.invalid/published" }),
+          ]),
+        ],
+        "published",
+      ),
+    ).toBe("https://fixture.invalid/published");
+    // A preprint target prefers its exact version hint over the unversioned fallback.
+    expect(
+      browserStartUrl(
+        [
+          observation([
+            hint({ url: "https://fixture.invalid/unversioned" }),
+            hint({
+              url: "https://fixture.invalid/preprint",
+              version_role: "preprint",
+            }),
+          ]),
+        ],
+        "preprint",
+      ),
+    ).toBe("https://fixture.invalid/preprint");
+    // Every other concrete role follows the same rule: its own exact hint wins, an
+    // unversioned hint is the only fallback, and a hint naming another version is never
+    // navigated to — so a non-published target is never sent to a published page and vice
+    // versa.
+    for (const role of ["accepted-manuscript", "preprint", "other"] as const) {
+      const other = role === "preprint" ? "published" : "preprint";
+      const otherHint = hint({
+        url: `https://fixture.invalid/other-${role}`,
+        version_role: other,
+      });
+      expect(
+        browserStartUrl(
+          [
+            observation([
+              otherHint,
+              hint({ url: `https://fixture.invalid/unversioned-${role}` }),
+              hint({
+                url: `https://fixture.invalid/exact-${role}`,
+                version_role: role,
+              }),
+            ]),
+          ],
+          role,
+        ),
+      ).toBe(`https://fixture.invalid/exact-${role}`);
+      expect(
+        browserStartUrl(
+          [
+            observation([
+              otherHint,
+              hint({ url: `https://fixture.invalid/unversioned-${role}` }),
+            ]),
+          ],
+          role,
+        ),
+      ).toBe(`https://fixture.invalid/unversioned-${role}`);
+      expect(browserStartUrl([observation([otherHint])], role)).toBeNull();
+    }
+  });
+
+  it("hands the target's own concrete version role and landing page to the Browser delivery", async () => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-assembly-version-role-"),
+    );
+    const directory = join(home, ".sciretriever");
+    await mkdir(directory, { mode: 0o700 });
+    await writeFile(
+      join(directory, "config.toml"),
+      ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
+      { mode: 0o600 },
+    );
+    const seen: Array<{ version: string; start_url: string | null }> = [];
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+      browserAdmitNavigation: async (url: string) => url,
+      browserHost: () => ({
+        deliverCandidate: async (request) => {
+          seen.push({ version: request.version, start_url: request.start_url });
+          return {
+            kind: "refused" as const,
+            code: "browser-flow-unavailable",
+            reason: "fixture never navigates",
+            retryable: false as const,
+          };
+        },
+        close: async () => undefined,
+      }),
+    });
+    try {
+      const port = new EntryPdfAcquisitionService({
+        registry: new PublicAcquisitionRegistry(
+          [
+            {
+              source_name: "route-a",
+              ready: true,
+              // Every locator route ends normally without a candidate, so the target reaches
+              // the independently admitted Browser carrying its own concrete version role.
+              discover: async () => [],
+            },
+            {
+              source_name: BROWSER_ROUTE_NAME,
+              ready: false,
+              discover: async () => {
+                throw new Error(
+                  "the Browser source must never run inside the tiered batch",
+                );
+              },
+            },
+          ],
+          ["route-a", BROWSER_ROUTE_NAME],
+        ),
+        network_budget: application.networkBudget,
+        transfers: application.execution!.transfers,
+        acceptance: application.execution!.acceptance,
+        browser_host: () => application.browserHost(),
+      });
+      const roles: readonly VersionRole[] = [
+        "accepted-manuscript",
+        "preprint",
+        "other",
+      ];
+      for (const [index, role] of roles.entries()) {
+        const id = browserFixtureId(1300 + index);
+        const hint = (url: string, version: VersionRole | null) => ({
+          url,
+          kind: "landing-page" as const,
+          media_type: null,
+          asset_role: null,
+          version_role: version,
+          access_status: "open" as const,
+          license: null,
+        });
+        const metadata = {
+          ...FIXTURE_LITERATURE.metadata,
+          identifiers: [],
+        };
+        await application.database.putLiterature(
+          parseLiterature({
+            ...FIXTURE_LITERATURE,
+            literature_id: id,
+            meta_literature_id: browserFixtureId(2300 + index),
+            version_role: role,
+            metadata,
+          }),
+        );
+        // The observation carries the landing hints; publishing it binds them to this
+        // target so Entry sees the target's own version-specific landing page.
+        await application.observations.publish({
+          ...parseMetadataObservation({
+            observation_id: browserFixtureId(3300 + index),
+            provenance: {
+              provenance_id: browserFixtureId(4300 + index),
+              source_kind: "metadata-provider",
+              source_name: "fixture",
+              source_record_id: `record-${index}`,
+              observed_at: "2026-09-10T00:00:00Z",
+              input_sha256: "a".repeat(64),
+              parameters_sha256: null,
+            },
+            metadata,
+            version_role: role,
+            version_links: [],
+            asset_hints: [
+              hint("https://fixture.invalid/published", "published"),
+              hint(`https://fixture.invalid/unversioned-${role}`, null),
+              hint(`https://fixture.invalid/exact-${role}`, role),
+            ],
+            reference_texts: [],
+            declared_keywords: [],
+            reference_count: 0,
+            cited_by_count: 0,
+          }),
+          literature_id: id,
+        });
+        const facts = await application.database.currentFacts(id);
+        await expect(
+          port.acquire({
+            literature_id: parseLiteratureId(id),
+            detail: await application.library.detail(id),
+            metadata_snapshot: facts!.metadata_snapshot,
+            signal: new AbortController().signal,
+          }),
+        ).resolves.toMatchObject({ kind: "browser-failure" });
+        // No hard-coded `published`: the delivery request carries the target's own role and
+        // its own exact landing page, never another version's page.
+        expect(seen.at(-1)).toEqual({
+          version: role,
+          start_url: `https://fixture.invalid/exact-${role}`,
+        });
+      }
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("owns the controlled Browser host in Bootstrap and releases it on close", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-assembly-owner-"));
+    const directory = join(home, ".sciretriever");
+    await mkdir(directory, { mode: 0o700 });
+    await writeFile(
+      join(directory, "config.toml"),
+      ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
+      { mode: 0o600 },
+    );
+    let built = 0;
+    let closed = 0;
+    let deliveries = 0;
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+      // Identity admission for the injected seam: without it the public demand surface
+      // fails closed, exactly as it does for the production factory.
+      browserAdmitNavigation: async (url: string) => url,
+      // Fake seam: proves the object graph without launching Playwright.
+      browserHost: () => {
+        built += 1;
+        return {
+          deliverCandidate: async () => {
+            deliveries += 1;
+            return {
+              kind: "refused" as const,
+              code: "browser-flow-unavailable",
+              reason: "not wired",
+              retryable: false as const,
+            };
+          },
+          close: async () => {
+            closed += 1;
+          },
+        };
+      },
+    });
+    try {
+      // Bootstrap is the only owner and builds nothing until the host is demanded, so
+      // an idle Application never starts a Browser or takes the profile lock.
+      expect(built).toBe(0);
+      const host = application.browserHost();
+      expect(host).not.toBeNull();
+      expect(built).toBe(1);
+      // Demanding it again returns the same owned instance instead of a second owner.
+      expect(application.browserHost()).toBe(host);
+      expect(built).toBe(1);
+      // A delivery must be an accepted candidate or a stable refusal — never an empty
+      // list and never a bare transfer id.
+      const delivery = await host!.deliverCandidate({
+        literature_id: FIXTURE_LITERATURE.literature_id,
+        identifier: `doi:${FIXTURE_LITERATURE.metadata.identifiers[0]?.value ?? "x"}`,
+        version: "published",
+        start_url: null,
+        metadata_snapshot: {
+          metadata_sha256: "a".repeat(64),
+          metadata_revision: 1,
+        } as never,
+        signal: new AbortController().signal,
+      });
+      expect(delivery.kind).toBe("refused");
+      expect(delivery).not.toHaveProperty("candidate");
+      expect(deliveries).toBe(1);
+      expect(closed).toBe(0);
+      // Closing the Application must release the owned host exactly once.
+      await application.close();
+      expect(closed).toBe(1);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("browser intake end-to-end (offline)", () => {
+  it("turns synthetic Browser bytes into a real DurableCandidate through the Intake boundary", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-intake-e2e-"));
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+    });
+    try {
+      const transfers = application.execution!.transfers;
+      const pdf = workbenchPdf(FIXTURE_DOI, "published");
+      // The Browser capture path: a transfer is opened, bytes are appended, then the
+      // Intake owner completes it. Nothing here is a hand-built candidate.
+      const transferId = "e2e-browser-transfer";
+      const capture = {
+        session_id: "e2e-session",
+        article_id: FIXTURE_LITERATURE.literature_id,
+        page_id: "e2e-page",
+        document_generation: 0,
+        source_url: `https://fixture.example.test/article`,
+        captured_at: new Date().toISOString(),
+      };
+      const intake = new BrowserCandidateIntake(transfers, {
+        article_id: FIXTURE_LITERATURE.literature_id,
+        identifier: `doi:${FIXTURE_DOI}`,
+        version: "published",
+      });
+      async function* chunks(): AsyncGenerator<Uint8Array> {
+        yield pdf;
+      }
+      const received = await intake.receive({
+        signal: new AbortController().signal,
+        transfer_id: transferId,
+        capture,
+        chunks: chunks(),
+      });
+      // A real durable candidate: real sha256/byte size/reference from the file store.
+      expect(received.candidate.transfer_id).toBe(transferId);
+      expect(received.candidate.state).toBe("durable-ready");
+      expect(received.candidate.sha256).toBe(await sha256(pdf));
+      expect(received.candidate.size_bytes).toBe(pdf.byteLength);
+      expect(received.candidate.reference.length).toBeGreaterThan(0);
+      // Re-assessment reads the published bytes back through the same boundary.
+      const assessed = await intake.assess(received.candidate);
+      expect(assessed.candidate.sha256).toBe(received.candidate.sha256);
+      expect(["accepted", "uncertain", "rejected"]).toContain(
+        assessed.assessment.verdict.disposition,
+      );
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+  it("does not construct or deliver a production Browser when navigation admission is missing", async () => {
+    vi.stubEnv("SCIRETRIEVER_CLOAK_BUNDLE", "");
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-assembly-no-admission-"),
+    );
+    const directory = join(home, ".sciretriever");
+    await mkdir(directory, { mode: 0o700 });
+    await writeFile(
+      join(directory, "config.toml"),
+      ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
+      { mode: 0o600 },
+    );
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+    });
+    try {
+      // Browser is enabled, yet no verified runtime and no explicit navigation
+      // admission exist: the production owner must stay stably unavailable, so nothing
+      // is constructed, started or delivered.
+      expect(application.configuration.browser.enabled).toBe(true);
+      expect(application.browserHost()).toBeNull();
+      expect(application.browserHost()).toBeNull();
+      expect(
+        application.acquisition.statuses.find(
+          (item) => item.source_name === "browser",
+        ),
+      ).toEqual({
+        source_name: "browser",
+        ready: false,
+        failure_code: "browser-runtime-unavailable",
+      });
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("rejects a forged runtime at the production host's verified-runtime trust anchor", async () => {
+    const { createProductionBrowserHostFactory } = await import(
+      "../src/browser/production-host.js"
+    );
+    // `verifyInstalledCloakRuntime` registers its own frozen result in a module-private
+    // WeakSet that `BrowserHost`'s constructor re-checks through
+    // `assertVerifiedCloakRuntime`, so a structurally identical object cannot be forged.
+    // The only offline way to exercise this factory's wiring is the explicitly injected
+    // `host_seam` below; the real chain
+    // `verifyInstalledCloakRuntime -> new BrowserHost -> start -> openPage -> deliver`
+    // stays an unrun residual (T20-F16 / T23-F03) and is never claimed as verified.
+    const forged = Object.freeze({
+      executablePath: "/synthetic/cloak/chrome",
+      version: "0.0.0-forged",
+    });
+    const factory = createProductionBrowserHostFactory({
+      runtime: forged as never,
+    });
+    // Admission present, so the forged runtime reaches the real construction site and the
+    // WeakSet trust anchor — not the runtime gate — is what refuses it.
+    expect(() =>
+      factory({
+        profile: join(tmpdir(), "sciretriever-browser-forged"),
+        admitNavigation: async (url: string) => url,
+      }),
+    ).toThrow(CloakRuntimeError);
+  });
+
+  it("closes the public browserHost() without a navigation admission even for an injected factory", async () => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-assembly-no-admission-seam-"),
+    );
+    const directory = join(home, ".sciretriever");
+    await mkdir(directory, { mode: 0o700 });
+    await writeFile(
+      join(directory, "config.toml"),
+      ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
+      { mode: 0o600 },
+    );
+    let built = 0;
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+      // An injected factory is a host-construction seam only. Without the Network-owned
+      // navigation admission this process can never deliver an article, so the public
+      // demand surface must neither construct, start nor hand out a host — the same
+      // fail-closed rule the production factory applies at its own construction site.
+      browserHost: () => {
+        built += 1;
+        return {
+          deliverCandidate: async () => ({
+            kind: "refused" as const,
+            code: "browser-flow-unavailable",
+            reason: "this host must never be handed out",
+            retryable: false as const,
+          }),
+          close: async () => undefined,
+        };
+      },
+    });
+    try {
+      expect(application.browserHost()).toBeNull();
+      expect(built).toBe(0);
+      expect(
+        application.acquisition.statuses.find(
+          (item) => item.source_name === "browser",
+        ),
+      ).toEqual({
+        source_name: "browser",
+        ready: false,
+        failure_code: "browser-runtime-unavailable",
+      });
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps one construction site, a gate before it, and a seam Bootstrap never supplies", async () => {
+    const { createProductionBrowserHostFactory } = await import(
+      "../src/browser/production-host.js"
+    );
+    // Static call-graph evidence for the link that cannot run offline: the production
+    // factory has exactly one real `new BrowserHost(hostOptions)` site, the verified
+    // runtime gate runs before it, the trusted constructor still re-checks
+    // `assertVerifiedCloakRuntime`, and Bootstrap never mentions the offline wiring seam —
+    // so the production object graph has no path that skips the trust anchor.
+    const productionHost = await readFile(
+      new URL("../src/browser/production-host.ts", import.meta.url),
+      "utf8",
+    );
+    const rawHost = await readFile(
+      new URL("../src/browser/host.ts", import.meta.url),
+      "utf8",
+    );
+    const bootstrap = await readFile(
+      new URL("../src/bootstrap/application.ts", import.meta.url),
+      "utf8",
+    );
+    expect(
+      productionHost.match(/new BrowserHost\(hostOptions\)/g),
+    ).toHaveLength(1);
+    expect(
+      productionHost.indexOf("new BrowserHost(hostOptions)"),
+    ).toBeGreaterThan(
+      productionHost.indexOf(
+        "productionBrowserCapability({ runtime: options.runtime })",
+      ),
+    );
+    expect(bootstrap).not.toContain("host_seam");
+    expect(rawHost).toContain("assertVerifiedCloakRuntime(options.runtime)");
+    // Behavioral half of the same gate: no verified runtime, no host, no driver.
+    const factory = createProductionBrowserHostFactory({ runtime: undefined });
+    expect(
+      factory({ profile: join(tmpdir(), "sciretriever-browser-noseam") }),
+    ).toBeNull();
+  });
+
+  it("refuses to construct a host without an admitted navigation, even through the offline seam", async () => {
+    const { createProductionBrowserHostFactory } = await import(
+      "../src/browser/production-host.js"
+    );
+    const built: string[] = [];
+    const factory = createProductionBrowserHostFactory({
+      runtime: undefined,
+      host_seam: () => {
+        built.push("host");
+        return {
+          start: async () => undefined,
+          openPage: async () => ({ close: async () => undefined }) as never,
+          close: async () => undefined,
+        };
+      },
+    });
+    // The wiring seam substitutes the runtime gate, so this is the admission gate alone: a
+    // direct factory call may not build a Browser that could only be refused later.
+    expect(
+      factory({ profile: join(tmpdir(), "sciretriever-browser-no-admission") }),
+    ).toBeNull();
+    expect(built).toEqual([]);
+  });
+
+  it("covers the production host wiring through an explicitly injected offline host seam", async () => {
+    const { createProductionBrowserHostFactory } = await import(
+      "../src/browser/production-host.js"
+    );
+    // This test covers the production factory's own wiring only: construction site ->
+    // start/openPage -> navigation admission -> article-flow factory -> Intake candidate
+    // -> invalid-start refusal -> close. It is NOT evidence that the real production
+    // chain runs: `verifyInstalledCloakRuntime -> new BrowserHost -> start -> openPage ->
+    // deliver` cannot be produced offline because the runtime trust anchor is a
+    // module-private WeakSet, so that chain stays an unrun residual (T20-F16 / T23-F03)
+    // and must never be reported as verified here.
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-assembly-seam-"));
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+    });
+    try {
+      await application.database.putLiterature(FIXTURE_LITERATURE);
+      const transfers = application.execution!.transfers;
+      const calls: string[] = [];
+      let seenAdmission: unknown = null;
+      const factory = createProductionBrowserHostFactory({
+        runtime: undefined,
+        article_flow_factory: (pages) => ({
+          deliver: async (request) => {
+            calls.push(`flow:${request.version}`);
+            const page = await pages.openPage(request);
+            calls.push("page-opened");
+            await page.close();
+            const intake = new BrowserCandidateIntake(transfers, {
+              article_id: request.literature_id,
+              identifier: request.identifier,
+              version: request.version,
+            });
+            const bytes = workbenchPdf(FIXTURE_DOI, request.version);
+            async function* chunks(): AsyncGenerator<Uint8Array> {
+              yield bytes;
+            }
+            const received = await intake.receive({
+              signal: request.signal,
+              transfer_id: `seam-${request.literature_id}`,
+              capture: {
+                session_id: "seam-session",
+                article_id: request.literature_id,
+                page_id: "seam-page",
+                document_generation: 0,
+                source_url: "https://fixture.example.test/article",
+                captured_at: "2026-09-10T00:00:00Z",
+              },
+              chunks: chunks(),
+            });
+            return {
+              kind: "delivered" as const,
+              candidate: received.candidate,
+              accepted: received.assessment.verdict.disposition === "accepted",
+            };
+          },
+        }),
+        host_seam: (options) => {
+          seenAdmission = options.admitNavigation;
+          return {
+            start: async () => {
+              calls.push("start");
+            },
+            openPage: async (url?: string) => {
+              await expect(
+                options.admitNavigation?.("https://other.fixture.invalid/"),
+              ).rejects.toThrow();
+              expect(await options.admitNavigation?.(url!)).toBe(url);
+              calls.push(`openPage:${url ?? "-"}`);
+              return {
+                close: async () => {
+                  calls.push("page-close");
+                },
+              } as never;
+            },
+            close: async () => {
+              calls.push("host-close");
+            },
+          };
+        },
+      });
+      const host = factory({
+        profile: join(tmpdir(), "sciretriever-browser-seam"),
+        admitNavigation: async (url: string) => url,
+      });
+      expect(host).not.toBeNull();
+      const facts = await application.database.currentFacts(
+        FIXTURE_LITERATURE.literature_id,
+      );
+      const request = {
+        literature_id: FIXTURE_LITERATURE.literature_id,
+        identifier: `doi:${FIXTURE_DOI}`,
+        version: "published" as const,
+        start_url: "https://fixture.invalid/article",
+        metadata_snapshot: facts!.metadata_snapshot,
+        signal: new AbortController().signal,
+      };
+      const delivery = await host!.deliverCandidate(request);
+      expect(delivery).toMatchObject({ kind: "delivered", accepted: true });
+      // The host factory owns the page source: start/openPage run on the raw host, the
+      // driver receives the already-admitted URL and the concrete target version, and
+      // the page is always released.
+      expect(calls).toEqual([
+        "flow:published",
+        "start",
+        "openPage:https://fixture.invalid/article",
+        "page-opened",
+        "page-close",
+      ]);
+      // admitNavigation reaches the raw host options unchanged.
+      expect(typeof seenAdmission).toBe("function");
+      // The Intake-produced candidate commits through the ordinary acceptance path:
+      // direct acceptance turns the target into a durable primary PDF.
+      expect(delivery.kind).toBe("delivered");
+      if (delivery.kind === "delivered") {
+        await application.execution!.acceptance.accept({
+          receipt_id: "seam-receipt",
+          literature_id: FIXTURE_LITERATURE.literature_id,
+          transfer_id: delivery.candidate.transfer_id,
+          metadata_snapshot: facts!.metadata_snapshot,
+        });
+        expect(
+          (await application.library.detail(FIXTURE_LITERATURE.literature_id))
+            .primary_pdf,
+        ).not.toBeNull();
+      }
+      // A start URL that is not an admitted landing page is refused before any Browser
+      // work happens.
+      calls.length = 0;
+      await expect(
+        host!.deliverCandidate({
+          ...request,
+          start_url: "http://fixture.invalid/x",
+        }),
+      ).resolves.toMatchObject({
+        kind: "refused",
+        code: "browser-start-url-invalid",
+      });
+      expect(calls).toEqual([]);
+      await host!.close();
+      expect(calls).toContain("host-close");
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("never converts a resolved route failure into Browser traffic (ADR0015 §7)", async () => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-assembly-fail-closed-"),
+    );
+    const directory = join(home, ".sciretriever");
+    await mkdir(directory, { mode: 0o700 });
+    await writeFile(
+      join(directory, "config.toml"),
+      ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
+      { mode: 0o600 },
+    );
+    let deliveries = 0;
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+      // The Browser tier must be genuinely admitted here — otherwise this test could not
+      // prove "no escalation" — so the synthetic owner injects an identity admission.
+      browserAdmitNavigation: async (url: string) => url,
+      browserHost: () => ({
+        deliverCandidate: async () => {
+          deliveries += 1;
+          return {
+            kind: "refused" as const,
+            code: "browser-flow-unavailable",
+            reason: "the Browser must never be reached here",
+            retryable: false as const,
+          };
+        },
+        close: async () => undefined,
+      }),
+    });
+    try {
+      const id = browserFixtureId(1601);
+      await application.database.putLiterature(
+        offlineLiterature(id, browserFixtureId(2601)),
+      );
+      const detail = await application.library.detail(id);
+      const facts = await application.database.currentFacts(id);
+      const acquireRequest = {
+        literature_id: parseLiteratureId(id),
+        detail,
+        metadata_snapshot: facts!.metadata_snapshot,
+        signal: new AbortController().signal,
+      };
+      const withRoute = (failure: {
+        code: "source-discovery-failed" | "download-unavailable";
+        retryable: boolean;
+      }) =>
+        new EntryPdfAcquisitionService({
+          registry: new PublicAcquisitionRegistry(
+            [
+              {
+                source_name: "route-a",
+                ready: true,
+                discover: async () => {
+                  throw new AcquisitionRouteError(
+                    failure.code,
+                    "fixture route failure",
+                    failure.retryable,
+                  );
+                },
+              },
+              {
+                source_name: BROWSER_ROUTE_NAME,
+                ready: false,
+                discover: async () => {
+                  throw new Error("never run");
+                },
+              },
+            ],
+            ["route-a", BROWSER_ROUTE_NAME],
+          ),
+          network_budget: application.networkBudget,
+          transfers: application.execution!.transfers,
+          acceptance: application.execution!.acceptance,
+          browser_host: () => application.browserHost(),
+        });
+
+      // Paired evidence: a temporary (retryable) failure and an explicitly
+      // non-retryable route error both stay fail-closed, and neither writes a fact.
+      await expect(
+        withRoute({ code: "source-discovery-failed", retryable: true }).acquire(
+          acquireRequest,
+        ),
+      ).resolves.toMatchObject({
+        kind: "route-failure",
+        failure: { code: "source-discovery-failed", retryable: true },
+      });
+      await expect(
+        withRoute({ code: "download-unavailable", retryable: false }).acquire(
+          acquireRequest,
+        ),
+      ).resolves.toMatchObject({
+        kind: "route-failure",
+        failure: { code: "download-unavailable", retryable: false },
+      });
+      expect(deliveries).toBe(0);
+      expect(await application.database.hasAutomaticPdfExhaustion(id)).toBe(
+        false,
+      );
+      // A policy pause also stops before Browser admission.
+      const paused = new EntryPdfAcquisitionService({
+        registry: new PublicAcquisitionRegistry(
+          [
+            {
+              source_name: "route-a",
+              ready: true,
+              discover: async () => {
+                throw new AcquisitionRouteError(
+                  "source-discovery-failed",
+                  "temporary provider failure",
+                );
+              },
+            },
+            {
+              source_name: BROWSER_ROUTE_NAME,
+              ready: false,
+              discover: async () => {
+                throw new Error("never run");
+              },
+            },
+          ],
+          ["route-a", BROWSER_ROUTE_NAME],
+        ),
+        network_budget: application.networkBudget,
+        transfers: application.execution!.transfers,
+        acceptance: application.execution!.acceptance,
+        assistance: "pause",
+        browser_host: () => application.browserHost(),
+      });
+      await expect(paused.acquire(acquireRequest)).resolves.toMatchObject({
+        kind: "assistance-required",
+      });
+      const cancelled = new AbortController();
+      cancelled.abort();
+      await expect(
+        withRoute({ code: "download-unavailable", retryable: false }).acquire({
+          ...acquireRequest,
+          signal: cancelled.signal,
+        }),
+      ).resolves.toMatchObject({ kind: "cancelled" });
+      expect(deliveries).toBe(0);
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rescues an explicitly declared low-risk unavailability through the admitted Browser", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-assembly-rescue-"));
+    const directory = join(home, ".sciretriever");
+    await mkdir(directory, { mode: 0o700 });
+    await writeFile(
+      join(directory, "config.toml"),
+      ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
+      { mode: 0o600 },
+    );
+    const deliveries: string[] = [];
+    let pending: DurableCandidate | null = null;
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+      browserAdmitNavigation: async (url: string) => url,
+      browserHost: () => ({
+        deliverCandidate: async (request) => {
+          deliveries.push(request.literature_id);
+          if (pending === null) throw new Error("missing spooled candidate");
+          return {
+            kind: "delivered" as const,
+            candidate: pending,
+            accepted: true,
+          };
+        },
+        close: async () => undefined,
+      }),
+    });
+    try {
+      const id = browserFixtureId(1401);
+      await application.database.putLiterature(
+        parseLiterature({
+          ...FIXTURE_LITERATURE,
+          literature_id: id,
+          meta_literature_id: browserFixtureId(2401),
+        }),
+      );
+      await application.execution!.transfers.begin(
+        "rescue-transfer",
+        undefined,
+        {
+          session_id: "browser-session",
+          article_id: id,
+          page_id: "browser-page",
+          document_generation: 1,
+          source_url: "https://fixture.invalid/paper",
+          captured_at: "2026-09-10T00:00:00Z",
+        },
+      );
+      await application.execution!.transfers.append(
+        "rescue-transfer",
+        workbenchPdf(),
+      );
+      await application.execution!.transfers.complete("rescue-transfer");
+      pending = await application.database.getCandidate("rescue-transfer");
+      expect(pending).not.toBeNull();
+
+      const facts = await application.database.currentFacts(id);
+      const port = new EntryPdfAcquisitionService({
+        registry: new PublicAcquisitionRegistry(
+          [
+            {
+              source_name: "route-a",
+              ready: true,
+              discover: async () => {
+                // The route declares an explicit low-risk unavailability: it has no PDF
+                // capability for this target. Only this declaration — never a failure code
+                // — lets Entry hand the target to the independently admitted Browser.
+                throw new AcquisitionUnavailableError(
+                  "download-unavailable",
+                  "the route has no PDF capability for this target",
+                  "no-capability",
+                );
+              },
+            },
+            {
+              source_name: BROWSER_ROUTE_NAME,
+              ready: false,
+              discover: async () => {
+                throw new Error(
+                  "the Browser source must never run inside the tiered batch",
+                );
+              },
+            },
+          ],
+          ["route-a", BROWSER_ROUTE_NAME],
+        ),
+        network_budget: application.networkBudget,
+        transfers: application.execution!.transfers,
+        acceptance: application.execution!.acceptance,
+        browser_host: () => application.browserHost(),
+      });
+      await expect(
+        port.acquire({
+          literature_id: parseLiteratureId(id),
+          detail: await application.library.detail(id),
+          metadata_snapshot: facts!.metadata_snapshot,
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toMatchObject({ kind: "acquired" });
+      // The rescue really ran through the admitted Browser session exactly once and the
+      // delivered candidate committed through the ordinary receipt path.
+      expect(deliveries).toEqual([id]);
+      expect((await application.library.detail(id)).primary_pdf).not.toBeNull();
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the declared low-risk failure when the rescue Browser cannot deliver", async () => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-assembly-rescue-failed-"),
+    );
+    const directory = join(home, ".sciretriever");
+    await mkdir(directory, { mode: 0o700 });
+    await writeFile(
+      join(directory, "config.toml"),
+      ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
+      { mode: 0o600 },
+    );
+    let deliveries = 0;
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+      browserAdmitNavigation: async (url: string) => url,
+      browserHost: () => ({
+        deliverCandidate: async () => {
+          deliveries += 1;
+          return {
+            kind: "refused" as const,
+            code: "browser-flow-unavailable",
+            reason: "no article flow in this fixture",
+            retryable: false as const,
+          };
+        },
+        close: async () => undefined,
+      }),
+    });
+    try {
+      const id = browserFixtureId(1402);
+      await application.database.putLiterature(
+        offlineLiterature(id, browserFixtureId(2402)),
+      );
+      const facts = await application.database.currentFacts(id);
+      const port = new EntryPdfAcquisitionService({
+        registry: new PublicAcquisitionRegistry(
+          [
+            {
+              source_name: "route-a",
+              ready: true,
+              discover: async () => {
+                throw new AcquisitionUnavailableError(
+                  "download-unavailable",
+                  "the route has no PDF capability for this target",
+                  "no-capability",
+                );
+              },
+            },
+            {
+              source_name: BROWSER_ROUTE_NAME,
+              ready: false,
+              discover: async () => {
+                throw new Error(
+                  "the Browser source must never run inside the tiered batch",
+                );
+              },
+            },
+          ],
+          ["route-a", BROWSER_ROUTE_NAME],
+        ),
+        network_budget: application.networkBudget,
+        transfers: application.execution!.transfers,
+        acceptance: application.execution!.acceptance,
+        browser_host: () => application.browserHost(),
+      });
+      // The rescue was attempted, and its refusal keeps the original declared failure as
+      // the target's stable outcome: no second failure taxonomy, no exhaustion fact.
+      await expect(
+        port.acquire({
+          literature_id: parseLiteratureId(id),
+          detail: await application.library.detail(id),
+          metadata_snapshot: facts!.metadata_snapshot,
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toMatchObject({
+        kind: "route-failure",
+        failure: {
+          code: "download-unavailable",
+          retryable: false,
+          unavailability: "no-capability",
+        },
+      });
+      expect(deliveries).toBe(1);
+      expect(await application.database.hasAutomaticPdfExhaustion(id)).toBe(
+        false,
+      );
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("never rescues when the batch's last recorded outcome is a temporary failure", async () => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-assembly-rescue-last-wins-"),
+    );
+    const directory = join(home, ".sciretriever");
+    await mkdir(directory, { mode: 0o700 });
+    await writeFile(
+      join(directory, "config.toml"),
+      ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
+      { mode: 0o600 },
+    );
+    let deliveries = 0;
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+      browserAdmitNavigation: async (url: string) => url,
+      browserHost: () => ({
+        deliverCandidate: async () => {
+          deliveries += 1;
+          return {
+            kind: "refused" as const,
+            code: "browser-flow-unavailable",
+            reason: "the Browser must never be reached for a temporary failure",
+            retryable: false as const,
+          };
+        },
+        close: async () => undefined,
+      }),
+    });
+    try {
+      const id = browserFixtureId(1403);
+      await application.database.putLiterature(
+        offlineLiterature(id, browserFixtureId(2403)),
+      );
+      const facts = await application.database.currentFacts(id);
+      const port = new EntryPdfAcquisitionService({
+        registry: new PublicAcquisitionRegistry(
+          [
+            {
+              source_name: "route-a",
+              ready: true,
+              discover: async () => {
+                throw new AcquisitionUnavailableError(
+                  "download-unavailable",
+                  "the route has no PDF capability for this target",
+                  "no-capability",
+                );
+              },
+            },
+            {
+              source_name: "route-b",
+              ready: true,
+              discover: async () => {
+                throw new AcquisitionRouteError(
+                  "source-discovery-failed",
+                  "temporary provider failure",
+                );
+              },
+            },
+            {
+              source_name: BROWSER_ROUTE_NAME,
+              ready: false,
+              discover: async () => {
+                throw new Error(
+                  "the Browser source must never run inside the tiered batch",
+                );
+              },
+            },
+          ],
+          ["route-a", "route-b", BROWSER_ROUTE_NAME],
+        ),
+        network_budget: application.networkBudget,
+        transfers: application.execution!.transfers,
+        acceptance: application.execution!.acceptance,
+        browser_host: () => application.browserHost(),
+      });
+      // A preceding low-risk declaration never survives a later temporary outcome, and a
+      // retryable policy result never escalates: the target stays a stable route failure
+      // with no Browser traffic and no exhaustion fact.
+      await expect(
+        port.acquire({
+          literature_id: parseLiteratureId(id),
+          detail: await application.library.detail(id),
+          metadata_snapshot: facts!.metadata_snapshot,
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toMatchObject({
+        kind: "route-failure",
+        failure: {
+          code: "source-discovery-failed",
+          retryable: true,
+          unavailability: null,
+        },
+      });
+      expect(deliveries).toBe(0);
+      expect(await application.database.hasAutomaticPdfExhaustion(id)).toBe(
+        false,
+      );
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a notify policy stop as an explicit not-eligible skip with the stable code on progress", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-assembly-notify-"));
+    const application = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+    });
+    try {
+      const id = browserFixtureId(1501);
+      await application.database.putLiterature(
+        offlineLiterature(id, browserFixtureId(2501)),
+      );
+      const service = new DatabaseCompletionService({
+        library: application.library,
+        database: application.database,
+        writes: application.writes,
+        completion: application.completion,
+        acquisition: {
+          acquire: async () => ({
+            kind: "policy-skip",
+            failure: {
+              code: "assistance-skipped",
+              source: "route-a",
+              reason:
+                "The target was skipped after a non-terminal failure; notification is advisory only.",
+              retryable: false,
+            },
+          }),
+        },
+      });
+      const progress: string[] = [];
+      const report = await service.run(
+        {
+          selector: {
+            kind: "literatures",
+            literature_ids: [parseLiteratureId(id)],
+          },
+          goal: "ASSET_READY",
+        },
+        {
+          on_progress: (item) =>
+            progress.push(`${item.state}:${item.failure?.code ?? "-"}`),
+        },
+      );
+      // The notify policy did not continue this eligible target: the report says
+      // `skipped`/`not-eligible` (never a failure partition, never a silent success) and
+      // the stable `pdf-assistance-skipped` code stays on the progress detail (stderr).
+      expect(report.end).toEqual({ kind: "finished" });
+      expect(report.failed).toEqual([]);
+      expect(report.skipped).toMatchObject([
+        { reason: "not-eligible", literature_ids: [id] },
+      ]);
+      expect(progress).toContain("skipped:pdf-assistance-skipped");
+      expect(await application.database.hasAutomaticPdfExhaustion(id)).toBe(
+        false,
+      );
+    } finally {
+      await application.close();
+      await rm(home, { recursive: true, force: true });
     }
   });
 });

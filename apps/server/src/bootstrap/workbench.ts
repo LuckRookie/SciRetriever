@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import {
   canonicalJsonBytes,
+  parseLiteratureId,
   sha256,
   type MetadataSnapshot,
 } from "@sciretriever/contracts";
 import { join } from "node:path";
 import {
   createApplication,
+  createQueryApplication,
   type Application,
   type ApplicationOptions,
 } from "./application.js";
@@ -14,20 +16,368 @@ import { BrowserHost } from "../browser/host.js";
 import { BrowserNetworkProxy } from "../network/browser-proxy.js";
 import { resolveDestination } from "../network/policy.js";
 import type { VerifiedCloakRuntime } from "../configuration/cloak-runtime.js";
+import { bundlePreview } from "../configuration/credentials.js";
 import { BrowserCandidateIntake } from "../acquisition/browser-intake.js";
 import { CandidateAbandonmentError } from "../acquisition/candidate-abandonment.js";
-import { TypeScriptConfigurationOwner } from "../configuration/owner.js";
+import {
+  ConfigurationProbeSession,
+  TypeScriptConfigurationOwner,
+  type ConfigurationProbeRequest,
+  type ConfigurationProbeSeams,
+} from "../configuration/owner.js";
 import { createBrowserDecision } from "../browser/decision.js";
 import { WorkbenchSession } from "../workbench/session.js";
+import { ProductionWorkbenchSession } from "../workbench/production-session.js";
 import {
+  startQueryOnlyHttp,
+  type QueryOnlyHttpOptions,
   startWorkbenchHttp,
   type WorkbenchStaticAsset,
+  type WorkbenchRuntimeCapabilities,
+  type WorkbenchHttpOptions,
 } from "../workbench/http.js";
+import {
+  loadMaintenanceWorkbenchAssets,
+  loadQueryWorkbenchAssets,
+  loadWorkbenchAssets,
+} from "../workbench/assets.js";
 import {
   FIXTURE_DOI,
   FIXTURE_LITERATURE,
   startWorkbenchFixture,
 } from "../workbench/synthetic-fixture.js";
+
+export function describeWorkbenchRuntime(
+  application: Application,
+): WorkbenchRuntimeCapabilities {
+  const parsingConfiguration = application.configuration.parsing;
+  const remoteParserConfigured =
+    parsingConfiguration.connection_mode === "remote" &&
+    parsingConfiguration.remote_upload_authorized &&
+    parsingConfiguration.base_url !== null &&
+    parsingConfiguration.model_identity !== null;
+  const loopbackParserConfigured =
+    parsingConfiguration.connection_mode === "loopback" &&
+    parsingConfiguration.base_url !== null &&
+    parsingConfiguration.model_identity !== null;
+  const parserConfigured = remoteParserConfigured || loopbackParserConfigured;
+  const parserCredentialPresent = (() => {
+    if (!remoteParserConfigured || !parsingConfiguration.base_url) return false;
+    const origin = new URL(parsingConfiguration.base_url).origin;
+    return bundlePreview(application.credentials).sections.some(
+      (section) =>
+        section.section === "mineru" &&
+        section.origin === origin &&
+        section.fields.some(
+          (field) => field.field === "bearer_token" && field.present,
+        ),
+    );
+  })();
+  const parsingAssembled = application.parsing !== null;
+  const parsingReason: WorkbenchRuntimeCapabilities["parsing"]["unavailable_reason"] =
+    parsingAssembled
+      ? null
+      : !parserConfigured
+        ? "configuration-incomplete"
+        : remoteParserConfigured && !parserCredentialPresent
+          ? "startup-credential-missing"
+          : "assembly-unavailable";
+  const selectedMetadata = new Set([
+    ...application.metadata.topic_selection,
+    ...application.metadata.reference_selection,
+  ]);
+  const acquisitionSelection = application.configuration.sources.acquisition;
+  const selectedAcquisition = new Set(
+    acquisitionSelection.mode === "custom"
+      ? acquisitionSelection.providers
+      : application.acquisition.statuses
+          .map((status) => status.source_name)
+          .filter(
+            (source) =>
+              source !== "direct" &&
+              source !== "doi-landing" &&
+              source !== "browser",
+          ),
+  );
+  if (application.configuration.browser.enabled)
+    selectedAcquisition.add("browser");
+
+  return {
+    parsing: {
+      assembled: parsingAssembled,
+      unavailable_reason: parsingReason,
+    },
+    metadata: application.metadata.statuses.map((status) => ({
+      provider_name: status.provider_name,
+      selected: selectedMetadata.has(status.provider_name),
+      assembled: status.ready,
+      production_available: status.production_available,
+      ready_at_startup: status.ready,
+      failure_code: status.failure_code,
+    })),
+    acquisition: application.acquisition.statuses.map((status) => ({
+      source_name: status.source_name,
+      selected: selectedAcquisition.has(status.source_name),
+      assembled: status.ready,
+      ready_at_startup: status.ready,
+      failure_code: status.failure_code,
+    })),
+  };
+}
+
+function configurationHttpAdapter(
+  application: Application,
+  owner: TypeScriptConfigurationOwner,
+  probeSeams: ConfigurationProbeSeams = {},
+): NonNullable<WorkbenchHttpOptions["configuration"]> {
+  return {
+    runtime_revision: application.configuration_revision,
+    runtime_capabilities: describeWorkbenchRuntime(application),
+    status: (signal) => owner.status(signal),
+    read: (signal) => owner.read(signal),
+    diff: (payload, baseline, signal) => owner.diff(payload, baseline, signal),
+    publish: (payload, baseline, sections, signal) =>
+      owner.publish(payload, baseline, sections, signal),
+    publishConfiguration: (configuration, baseline, sections, signal) =>
+      owner.publishConfiguration(configuration, baseline, sections, signal),
+    probe: async (request, signal) => {
+      const probe = await ConfigurationProbeSession.create(owner, probeSeams);
+      try {
+        return await probe.run(request as ConfigurationProbeRequest, {
+          authorized: true,
+          ...(signal ? { signal } : {}),
+        });
+      } finally {
+        probe.close();
+      }
+    },
+    credential: (edit, baseline, signal) =>
+      owner.credential(edit, baseline, signal),
+  };
+}
+
+/** Explicit query-only Web entry. It never constructs the Browser/Jobs Application. */
+export async function startQueryOnlyWorkbench(options: {
+  readonly home: string;
+  readonly assets?: ReadonlyMap<string, WorkbenchStaticAsset>;
+  readonly port?: number;
+}): Promise<{
+  readonly origin: string;
+  readonly application: Awaited<ReturnType<typeof createQueryApplication>>;
+  close(): Promise<void>;
+}> {
+  const application = await createQueryApplication(options.home);
+  let http: Awaited<ReturnType<typeof startQueryOnlyHttp>> | undefined;
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> =>
+    (closing ??= (async () => {
+      try {
+        await http?.close();
+      } finally {
+        await application.close();
+      }
+    })());
+  try {
+    const assets = options.assets ?? (await loadQueryWorkbenchAssets());
+    const httpOptions: QueryOnlyHttpOptions = {
+      application,
+      assets,
+      ...(options.port === undefined ? {} : { port: options.port }),
+    };
+    http = await startQueryOnlyHttp(httpOptions);
+    return { origin: http.origin, application, close };
+  } catch (error) {
+    await close();
+    throw error;
+  }
+}
+
+/** Maintenance Web entry. It assembles the catalog owners without starting a Browser session. */
+export async function startMaintenanceWorkbench(options: {
+  readonly home: string;
+  readonly assets?: ReadonlyMap<string, WorkbenchStaticAsset>;
+  readonly port?: number;
+}): Promise<{
+  readonly origin: string;
+  readonly application: Application;
+  close(): Promise<void>;
+}> {
+  const application = await createApplication(options.home, {
+    executionSchema: "require-v2",
+  });
+  let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
+  let http: Awaited<ReturnType<typeof startQueryOnlyHttp>> | undefined;
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    if (closing) return closing;
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    closing = new Promise<void>((done, fail) => {
+      resolve = done;
+      reject = fail;
+    });
+    void (async () => {
+      const failures: unknown[] = [];
+      for (const resource of [http, query, application]) {
+        try {
+          await resource?.close();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length)
+        reject(new AggregateError(failures, "maintenance shutdown failed"));
+      else resolve();
+    })();
+    return closing;
+  };
+  try {
+    if (!application.maintenance)
+      throw new Error("maintenance intake unavailable");
+    query = await createQueryApplication(options.home);
+    if (query.readiness.status !== "ready")
+      throw new Error("maintenance query unavailable");
+    http = await startQueryOnlyHttp({
+      application: query,
+      maintenance: application.maintenance,
+      assets: options.assets ?? (await loadMaintenanceWorkbenchAssets()),
+      ...(options.port === undefined ? {} : { port: options.port }),
+    });
+    return { origin: http.origin, application, close };
+  } catch (error) {
+    try {
+      await close();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "maintenance startup and cleanup failed",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+/** Explicit production Browser workbench. A view alone never starts acquisition. */
+export async function startProductionWorkbench(options: {
+  readonly home: string;
+  readonly literature_id: string;
+  readonly assets?: ReadonlyMap<string, WorkbenchStaticAsset>;
+  readonly port?: number;
+  readonly applicationOptions?: Omit<
+    ApplicationOptions,
+    "executionSchema" | "browserCollaboration"
+  >;
+  /** Test/operator probe seam; production defaults to the Configuration owner probe. */
+  readonly configurationProbeSeams?: ConfigurationProbeSeams;
+}): Promise<{
+  readonly origin: string;
+  readonly session: ProductionWorkbenchSession;
+  readonly application: Application;
+  close(): Promise<void>;
+}> {
+  const literatureId = parseLiteratureId(options.literature_id);
+  const configurationOwner =
+    options.applicationOptions?.configurationOwner ??
+    new TypeScriptConfigurationOwner(options.home);
+  let application: Application | undefined;
+  const session = new ProductionWorkbenchSession(
+    literatureId,
+    (observation, frame, signal, guidance) => {
+      if (!application) throw new Error("application unavailable");
+      return createBrowserDecision(application.agents)(
+        observation,
+        frame,
+        signal,
+        guidance,
+      );
+    },
+  );
+  let http: Awaited<ReturnType<typeof startWorkbenchHttp>> | undefined;
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    if (closing) return closing;
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    closing = new Promise<void>((done, fail) => {
+      resolve = done;
+      reject = fail;
+    });
+    void (async () => {
+      const settled = await Promise.allSettled([
+        Promise.resolve().then(() => http?.close()),
+        Promise.resolve().then(() => session.close()),
+        Promise.resolve().then(() => application?.close()),
+      ]);
+      const failures = settled.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length)
+        reject(
+          new AggregateError(failures, "production workbench shutdown failed"),
+        );
+      else resolve();
+    })();
+    return closing;
+  };
+  try {
+    application = await createApplication(options.home, {
+      ...options.applicationOptions,
+      configurationOwner,
+      executionSchema: "require-v2",
+      browserCollaboration: session,
+    });
+    const app = application;
+    if (!app.databaseCompletion)
+      throw new Error("database completion unavailable");
+    session.bindOperation(
+      (articleId, signal, feedback) =>
+        app.databaseCompletion!.run(
+          {
+            selector: {
+              kind: "literatures",
+              literature_ids: [parseLiteratureId(articleId)],
+            },
+            goal: "ASSET_READY",
+          },
+          { signal, on_scope: feedback.scope, on_progress: feedback.progress },
+        ),
+      async (articleId) => {
+        const asset = (await app.library.detail(articleId)).primary_pdf?.asset;
+        if (!asset) return null;
+        await app.literatureArtifacts.withArtifact(asset, async (chunks) => {
+          for await (const _chunk of chunks) void _chunk;
+        });
+        return { sha256: asset.sha256, size_bytes: asset.size_bytes };
+      },
+    );
+    http = await startWorkbenchHttp({
+      session,
+      acquisition: session,
+      assets: options.assets ?? (await loadWorkbenchAssets()),
+      ...(options.port === undefined ? {} : { port: options.port }),
+      library: { queries: app.library, artifacts: app.literatureArtifacts },
+      ...(app.maintenance ? { maintenance: app.maintenance } : {}),
+      configuration: configurationHttpAdapter(
+        app,
+        configurationOwner,
+        options.configurationProbeSeams,
+      ),
+    });
+    return { origin: http.origin, session, application: app, close };
+  } catch (error) {
+    try {
+      await close();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "production workbench startup failed",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
 
 /** Explicit synthetic composition: one Application and Network budget, no real Provider or user Profile. */
 export async function startSyntheticWorkbench(options: {
@@ -46,12 +396,13 @@ export async function startSyntheticWorkbench(options: {
   readonly application: Application;
   close(): Promise<void>;
 }> {
+  const configurationOwner =
+    options.configurationOwner ??
+    new TypeScriptConfigurationOwner(options.home);
   const application = await createApplication(options.home, {
     ...options.applicationOptions,
     executionSchema: "upgrade-synthetic",
-    ...(options.configurationOwner
-      ? { configurationOwner: options.configurationOwner }
-      : {}),
+    configurationOwner,
   });
   let fixture: Awaited<ReturnType<typeof startWorkbenchFixture>> | undefined;
   let proxy: BrowserNetworkProxy | undefined;
@@ -274,6 +625,9 @@ export async function startSyntheticWorkbench(options: {
     await session.refresh();
     http = await startWorkbenchHttp({
       session,
+      ...(application.maintenance
+        ? { maintenance: application.maintenance }
+        : {}),
       tabs: {
         list: () => host!.listPages(),
         activate: async (pageId) => {
@@ -306,9 +660,7 @@ export async function startSyntheticWorkbench(options: {
             },
           }
         : {}),
-      configuration:
-        options.configurationOwner ??
-        new TypeScriptConfigurationOwner(options.home),
+      configuration: configurationHttpAdapter(application, configurationOwner),
       library: {
         queries: application.library,
         artifacts: application.literatureArtifacts,

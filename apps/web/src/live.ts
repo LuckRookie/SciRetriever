@@ -1,5 +1,9 @@
 import { mountLibrary } from "./library.js";
 import { mountJobs } from "./jobs.js";
+import { mountConfiguration } from "./config.js";
+import { record } from "./wire.js";
+import { mountWorkspaceHistory } from "./navigation.js";
+import { candidateStatus } from "./feedback.js";
 import {
   parseWorkbenchView,
   parseConfigurationReadiness,
@@ -13,6 +17,7 @@ function node<T extends HTMLElement = HTMLElement>(id: string): T {
   return value as T;
 }
 let view: WorkbenchView | undefined;
+let pendingArticleId: string | undefined;
 let clientId = "",
   csrf = "",
   busy = false,
@@ -22,6 +27,7 @@ let frameUrl: string | undefined;
 let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
 let stream: EventSource | undefined;
 let tabsTimer: ReturnType<typeof setInterval> | undefined;
+let openLibraryArticle: (id: string) => Promise<void> = async () => {};
 interface BrowserTab {
   readonly id: string;
   readonly url: string;
@@ -75,7 +81,11 @@ async function request(
     },
     body: JSON.stringify(body),
   });
-  const result = (await response.json()) as Record<string, unknown>;
+  const result = await response
+    .json()
+    .then((value) => record(value, "workbench response"))
+    .catch(() => ({ code: "invalid-response" }));
+  if (result.code === "invalid-response") throw new Error("invalid-response");
   if (!response.ok)
     throw new Error(
       typeof result.code === "string" ? result.code : "command-rejected",
@@ -86,7 +96,11 @@ async function read(path: string): Promise<Record<string, unknown>> {
   const response = await fetch(
     `${path}${path.includes("?") ? "&" : "?"}client_id=${encodeURIComponent(clientId)}`,
   );
-  const result = (await response.json()) as Record<string, unknown>;
+  const result = await response
+    .json()
+    .then((value) => record(value, "workbench response"))
+    .catch(() => ({ code: "invalid-response" }));
+  if (result.code === "invalid-response") throw new Error("invalid-response");
   if (!response.ok)
     throw new Error(
       typeof result.code === "string" ? result.code : "command-rejected",
@@ -113,7 +127,12 @@ async function transact(
   }
 }
 function accept(value: unknown): void {
-  view = parseWorkbenchView(value);
+  const next = parseWorkbenchView(value);
+  if (next.mode === "production" && next.session_id !== view?.session_id) {
+    pendingArticleId = next.article_id;
+    node<HTMLInputElement>("acquisition-literature").value = next.article_id;
+  }
+  view = next;
   render();
   void loadFrame();
 }
@@ -166,7 +185,13 @@ async function refreshTabs(): Promise<void> {
 function control(kind: string): void {
   if (!view) return;
   void transact(() =>
-    request("/api/control", { kind, control_epoch: view!.control.epoch }),
+    request("/api/control", {
+      kind,
+      control_epoch: view!.control.epoch,
+      ...(view!.mode === "production"
+        ? { session_id: view!.session_id, article_id: view!.article_id }
+        : {}),
+    }),
   );
 }
 function action(
@@ -228,6 +253,67 @@ async function loadFrame(): Promise<void> {
 function render(): void {
   if (!view) return;
   const observation = view.observation;
+  const production = view.mode === "production";
+  if (production) {
+    node("live-task-kind").textContent = "生产文献获取 · 由用户明确启动";
+    node("live-task-title").textContent = view.article_id;
+    node("live-task-detail").textContent = observation?.title || "等待获取操作";
+    node("live-task-badge").textContent = "生产会话";
+  }
+  node("acquisition-form").hidden = !production;
+  node("guidance-section").hidden = !production;
+  const operation = view.operation_feedback;
+  node("operation-feedback").hidden = !production || !operation;
+  if (production && operation) {
+    const phaseLabels = {
+      idle: "等待你明确开始 PDF 获取。",
+      acquiring: "正在执行已启动的获取操作；当前路线及总等待时间尚不可见。",
+      browser: "浏览器文章已打开；操作、人工等待和候选处理共用文章截止时间。",
+      settling: "页面流程已结束，正在结算候选与提交结果。",
+      ended: "本次获取操作已结束。",
+    };
+    node("operation-phase").textContent = phaseLabels[operation.phase];
+    const report = operation.report;
+    const targets = operation.targets;
+    node("operation-targets").textContent =
+      targets.total === null
+        ? operation.phase === "idle"
+          ? "尚未冻结获取目标。"
+          : "正在形成目标范围；实际目标数尚未确定。"
+        : `冻结目标 ${targets.total}：当前 ${operation.current_target ?? "无运行中目标"}；运行中 ${targets.running}，未开始 ${targets.not_started}，已完成 ${targets.completed}，失败 ${targets.failed}，跳过 ${targets.skipped}，中断 ${targets.interrupted}。剩余未结算 ${targets.running + targets.not_started}。${report?.skipped.map((item) => item.reason).join("、") ?? ""}`;
+    const failure = operation.failure;
+    node("operation-failure").textContent = failure
+      ? `${failure.code}：${failure.reason} ${failure.action}`
+      : "";
+    if (operation.primary_pdf_status === "unreadable")
+      node("operation-failure").textContent +=
+        " 已登记的主 PDF 文件未通过可读性校验；请检查已有资料。";
+    node("operation-read").hidden = operation.primary_pdf === null;
+    if (operation.primary_pdf)
+      node("operation-phase").textContent +=
+        ` Library 已确认主 PDF：${operation.primary_pdf.sha256.slice(0, 16)}…（${(operation.primary_pdf.size_bytes / 1024).toFixed(1)} KB）。`;
+  }
+  node<HTMLButtonElement>("acquisition-start").disabled =
+    busy ||
+    !production ||
+    view.state === "agent-running" ||
+    (!!observation &&
+      !["finished", "failed", "cancelled"].includes(view.state));
+  const guidanceRoot = node("guidance-list");
+  guidanceRoot.replaceChildren(
+    ...(view.guidance ?? []).map((item) => {
+      const line = document.createElement("p");
+      const state = {
+        accepted: "等待下次模型观察",
+        consumed: "已交给模型",
+        rejected: "未接纳",
+        expired: "已过期",
+        cancelled: "已撤销",
+      }[item.state];
+      line.textContent = `${item.text} · ${state}`;
+      return line;
+    }),
+  );
   const terminal = ["cancelled", "finished", "failed"].includes(view.state);
   const canInput = mine() && !busy && !terminal && view.state !== "paused";
   image.dataset.control = String(canInput);
@@ -235,7 +321,9 @@ function render(): void {
   node("owner").textContent = mine()
     ? "你正在控制页面"
     : view.control.controller_id
-      ? "另一个操作者正在控制"
+      ? view.control.controller_id.startsWith("agent-")
+        ? "Agent 正在控制页面"
+        : "另一个操作者正在控制"
       : "等待人工接管";
   node("owner-note").textContent =
     `${view.control.viewers} 个观看者 · 同一页面只有一个控制者`;
@@ -243,15 +331,24 @@ function render(): void {
     ? "释放控制"
     : "人工接管";
   node<HTMLButtonElement>("takeover").disabled =
-    busy || (terminal && !view.candidates.length);
+    busy || !observation || (terminal && !view.candidates.length);
   node<HTMLButtonElement>("pause").textContent =
     view.state === "paused" ? "继续会话" : "暂停";
   node<HTMLButtonElement>("pause").disabled = !mine() || busy || terminal;
-  node<HTMLButtonElement>("cancel").disabled = !mine() || terminal || busy;
-  node<HTMLButtonElement>("agent").disabled = !canInput;
-  node("agent").textContent = view.model_ready
-    ? "让 Agent 执行一步"
-    : "模型未配置";
+  node<HTMLButtonElement>("cancel").disabled =
+    terminal ||
+    busy ||
+    (production
+      ? observation
+        ? !mine()
+        : view.state !== "agent-running"
+      : !mine());
+  node<HTMLButtonElement>("agent").disabled = production || !canInput;
+  node("agent").textContent = production
+    ? "自动流程中"
+    : view.model_ready
+      ? "让 Agent 执行一步"
+      : "模型未配置";
   for (const button of document.querySelectorAll<HTMLButtonElement>(
     ".live-key-buttons button, #text-form button",
   ))
@@ -316,11 +413,7 @@ function render(): void {
         candidateRoot.append(item);
       }
       const title = item.querySelector("strong")!;
-      title.textContent = candidate.publication
-        ? "已发布到当前文献"
-        : candidate.disposition === "accepted"
-          ? "身份与版本已核验"
-          : "候选已保存，身份待确认";
+      title.textContent = candidateStatus(view, candidate);
       const [detail, hash] = item.querySelectorAll("p");
       detail!.textContent = `PDF · ${candidate.page_count} 页 · ${(candidate.size_bytes / 1024).toFixed(1)} KB`;
       hash!.textContent = `SHA256 ${candidate.sha256.slice(0, 16)}…`;
@@ -329,8 +422,11 @@ function render(): void {
       )!;
       acceptButton.textContent = candidate.publication
         ? "已入库"
-        : "发布到当前文献";
+        : production
+          ? "由获取操作验收"
+          : "发布到当前文献";
       acceptButton.disabled =
+        production ||
         !!candidate.publication ||
         candidate.disposition !== "accepted" ||
         busy ||
@@ -338,10 +434,17 @@ function render(): void {
       const abandonButton = item.querySelector<HTMLButtonElement>(
         '[data-action="abandon"]',
       )!;
-      abandonButton.disabled = !!candidate.publication || busy || !mine();
+      abandonButton.disabled =
+        production || !!candidate.publication || busy || !mine();
     }
   }
-  if (!observation) return;
+  if (!observation) {
+    node("budget").textContent =
+      production && operation?.phase !== "idle"
+        ? "Browser 文章截止时间尚不可读；不估算整个获取操作耗时。"
+        : "";
+    return;
+  }
   node("page-title").textContent = observation.title;
   node("page-url").textContent = observation.url;
   node("frame-status").textContent =
@@ -351,7 +454,7 @@ function render(): void {
         ? "会话暂停"
         : "真实浏览器";
   node("budget").textContent =
-    `剩余 ${observation.remaining.actions} 次操作 · ${Math.ceil(observation.remaining.deadline_ms / 60000)} 分钟`;
+    `本篇 Browser 剩余 ${observation.remaining.actions} 次操作 · ${Math.ceil(observation.remaining.deadline_ms / 1000)} 秒截止；不含其它获取路线的等待。`;
   node("observation-info").textContent =
     `观察 ${observation.observation_revision} · ${observation.loading ? "页面加载中" : "页面已加载"}${observation.partial ? " · 摘要已截断" : ""}${
       observation.capture_state === "CANDIDATE"
@@ -417,6 +520,39 @@ function render(): void {
 node("takeover").addEventListener("click", () =>
   control(mine() ? "release" : "takeover"),
 );
+node("acquisition-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const articleId = pendingArticleId?.trim();
+  if (!articleId) return;
+  void transact(() =>
+    request("/api/acquisition/start", { article_id: articleId }),
+  );
+});
+node("acquisition-literature").addEventListener("input", () => {
+  pendingArticleId = node<HTMLInputElement>("acquisition-literature").value;
+});
+node("operation-read").addEventListener("click", () => {
+  if (view?.operation_feedback?.primary_pdf)
+    void openLibraryArticle(view.article_id);
+});
+node("guidance-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!view) return;
+  const input = node<HTMLInputElement>("guidance-text");
+  const text = input.value.trim();
+  if (!text) return;
+  void transact(async () => {
+    const result = await request("/api/guidance", {
+      guidance_id: crypto.randomUUID(),
+      session_id: view!.session_id,
+      article_id: view!.article_id,
+      control_epoch: view!.control.epoch,
+      text,
+    });
+    input.value = "";
+    return result;
+  });
+});
 node("pause").addEventListener("click", () =>
   control(view?.state === "paused" ? "resume" : "pause"),
 );
@@ -541,11 +677,17 @@ async function connect(): Promise<void> {
     .catch(() => {
       node("config-status").textContent = "配置状态不可用";
     });
-  mountLibrary({
+  openLibraryArticle = mountLibrary({
     request,
     currentArticle: () => view?.article_id,
     selectArticle: async (id) => {
       if (!view) throw new Error("workbench unavailable");
+      if (view.mode === "production") {
+        pendingArticleId = id;
+        node<HTMLInputElement>("acquisition-literature").value = id;
+        feedback("已选中文献。点击“获取这篇文献的 PDF”后才会启动获取。");
+        return;
+      }
       if (!mine()) {
         const takeover = await request("/api/control", {
           kind: "takeover",
@@ -599,8 +741,45 @@ async function connect(): Promise<void> {
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     },
-  });
+  }).openArticle;
+  node<HTMLFormElement>("manual-pdf-form").addEventListener(
+    "submit",
+    (event) => {
+      event.preventDefault();
+      const file = node<HTMLInputElement>("manual-pdf-file").files?.[0];
+      const id = node<HTMLInputElement>(
+        "manual-pdf-literature-id",
+      ).value.trim();
+      const status = node("manual-pdf-status");
+      if (!file || !id) return;
+      if (file.size < 1 || file.size > 16 * 1024 * 1024) {
+        status.textContent = "文件必须为不超过 16 MiB 的非空 PDF。";
+        return;
+      }
+      status.textContent = "正在检查并接纳 PDF…";
+      void fetch(`/api/v1/maintenance/ingest-pdf${query()}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/pdf",
+          "X-Workbench-Csrf": csrf,
+          "X-Sciretriever-Protocol-Version": "1",
+          "X-Literature-Id": id,
+        },
+        body: file,
+      })
+        .then(async (response) => {
+          const value = record(await response.json(), "PDF 接纳响应");
+          if (!response.ok) throw new Error(String(value.code ?? "接纳失败"));
+          status.textContent = "PDF 已接纳。文献资料可刷新查看。";
+        })
+        .catch((error: unknown) => {
+          status.textContent = `PDF 未接纳：${error instanceof Error ? error.message : "未知错误"}`;
+        });
+    },
+  );
   mountJobs({ read, request });
+  mountConfiguration({ read, request });
+  mountWorkspaceHistory();
   await refreshTabs();
   tabsTimer = setInterval(() => void refreshTabs(), 1000);
   stream = new EventSource(`/api/events${query()}`);

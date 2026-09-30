@@ -17,6 +17,8 @@ logs
 *.html
 !/apps/web/public/index.html
 !/apps/web/public/live.html
+!/apps/web/public/query.html
+!/apps/web/public/maintenance.html
 page_1.json
 *.ipynb
 *.txt

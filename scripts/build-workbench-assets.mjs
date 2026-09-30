@@ -16,6 +16,20 @@ await build({
   platform: "browser",
   outfile: resolve(serverAssets, "live.js"),
 });
+await build({
+  entryPoints: [resolve(repository, "apps/web/src/query.ts")],
+  bundle: true,
+  format: "esm",
+  platform: "browser",
+  outfile: resolve(serverAssets, "query.js"),
+});
+await build({
+  entryPoints: [resolve(repository, "apps/web/src/maintenance.ts")],
+  bundle: true,
+  format: "esm",
+  platform: "browser",
+  outfile: resolve(serverAssets, "maintenance.js"),
+});
 await Promise.all([
   copyFile(
     resolve(repository, "apps/web/public/live.html"),
@@ -30,7 +44,23 @@ await Promise.all([
     resolve(serverAssets, "live.css"),
   ),
   copyFile(
+    resolve(repository, "apps/web/public/query.html"),
+    resolve(serverAssets, "query.html"),
+  ),
+  copyFile(
+    resolve(repository, "apps/web/public/maintenance.html"),
+    resolve(serverAssets, "maintenance.html"),
+  ),
+  copyFile(
     resolve(serverAssets, "live.js"),
     resolve(webDist, "live.bundle.js"),
+  ),
+  copyFile(
+    resolve(serverAssets, "query.js"),
+    resolve(webDist, "query.bundle.js"),
+  ),
+  copyFile(
+    resolve(serverAssets, "maintenance.js"),
+    resolve(webDist, "maintenance.bundle.js"),
   ),
 ]);

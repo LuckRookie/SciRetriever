@@ -10,6 +10,10 @@ import type { LiteratureQueryService } from "../literature/query.js";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import type { ParsingService } from "../parsing/service.js";
 import type { ContentAnalysisService } from "./content-analysis.js";
+import {
+  directCompletionCommit,
+  type CompletionCommit,
+} from "./completion-execution.js";
 export interface CompletionCommand {
   readonly literature_id: string;
   readonly transfer_ids: readonly string[];
@@ -66,6 +70,7 @@ export class LiteratureCompletionService {
   complete(
     value: CompletionCommand,
     signal?: AbortSignal,
+    commit: CompletionCommit = directCompletionCommit,
   ): Promise<CompletionResult> {
     if (this.stop.signal.aborted)
       return Promise.reject(
@@ -99,7 +104,7 @@ export class LiteratureCompletionService {
     const active = signal
       ? AbortSignal.any([signal, this.stop.signal])
       : this.stop.signal;
-    const pending = this.run(command, active);
+    const pending = this.run(command, active, commit);
     this.active.set(command.literature_id, pending);
     void pending.then(
       () => this.active.delete(command.literature_id),
@@ -110,6 +115,7 @@ export class LiteratureCompletionService {
   private async run(
     command: CompletionCommand,
     signal: AbortSignal,
+    commit: CompletionCommit,
   ): Promise<CompletionResult> {
     const id = command.literature_id,
       attempts: CompletionAttempt[] = [],
@@ -128,7 +134,7 @@ export class LiteratureCompletionService {
         content: detail.content,
         attempts,
       };
-    // Capture identities before NoUsableContent removes duplicate durable records. Bytes are verified only when selected.
+    // Capture supplied candidate identities before processing. Bytes are verified only when selected.
     const candidates: { id: string; candidate: DurableCandidate | null }[] = [];
     for (const transferId of command.transfer_ids) {
       check();
@@ -160,25 +166,27 @@ export class LiteratureCompletionService {
           }
           tried.add(next.candidate.sha256);
           try {
-            await this.acceptance.accept(
-              {
-                literature_id: id,
-                transfer_id: next.id,
-                receipt_id: `completion:${randomUUID()}`,
-                metadata_snapshot: {
-                  revision: detail.metadata_revision,
-                  sha256: detail.metadata_sha256,
+            await commit(() =>
+              this.acceptance.accept(
+                {
+                  literature_id: id,
+                  transfer_id: next.id,
+                  receipt_id: `completion:${randomUUID()}`,
+                  metadata_snapshot: {
+                    revision: detail.metadata_revision,
+                    sha256: detail.metadata_sha256,
+                  },
                 },
-              },
-              signal,
+                signal,
+              ),
             );
           } catch (error) {
-            check();
             if (
               error instanceof LiteraturePublicationError &&
               (error.code === "candidate-rejected" ||
                 error.code === "candidate-uncertain")
             ) {
+              check();
               attempts.push({
                 transfer_id: next.id,
                 outcome:
@@ -222,13 +230,15 @@ export class LiteratureCompletionService {
         const prepared = await this.parsing.prepareCurrentPrimary(id, signal);
         try {
           check();
-          await this.parsing.commitCurrentPrimary(prepared, signal);
+          await commit(() =>
+            this.parsing.commitCurrentPrimary(prepared, signal),
+          );
         } finally {
           this.parsing.discardPrepared(prepared);
         }
       }
       check();
-      const result = await this.analysis.analyzeCurrent(id, signal);
+      const result = await this.analysis.analyzeCurrent(id, signal, commit);
       if (result.outcome === "content_accepted") {
         attempts.push({ transfer_id: transferId, outcome: "content_accepted" });
         return {
@@ -238,18 +248,14 @@ export class LiteratureCompletionService {
           attempts,
         };
       }
-      if (result.outcome !== "no_usable_content_cleaned")
+      if (result.outcome !== "no_usable_content")
         throw new LiteratureCompletionFailure("completion-contract");
       attempts.push({ transfer_id: transferId, outcome: "no_usable_content" });
-      check();
-      detail = await this.library.detail(id);
-      if (detail.content)
-        return {
-          outcome: "content_ready",
-          literature_id: id,
-          content: detail.content,
-          attempts,
-        };
+      return {
+        outcome: "supplied_candidates_exhausted",
+        literature_id: id,
+        attempts,
+      };
     }
   }
   async close(): Promise<void> {

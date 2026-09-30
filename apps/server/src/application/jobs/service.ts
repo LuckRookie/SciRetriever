@@ -10,11 +10,19 @@ import {
 } from "../../storage/execution/repository.js";
 import { canonicalJsonBytes, sha256 } from "@sciretriever/contracts";
 import {
-  selectLiteratures,
-  type LiteratureSelector,
-} from "../../entry/selectors.js";
+  parseLiteratureId,
+  parseMetaLiteratureId,
+  type BatchGoal,
+  type CompletionTarget,
+  type StableFailure,
+} from "@sciretriever/contracts";
+import type { LiteratureSelector } from "../../entry/selectors.js";
 import type { LiteratureQueryService } from "../../literature/query.js";
-import type { LiteratureCompletionService } from "../../entry/literature-completion.js";
+import {
+  DatabaseCompletionService,
+  type DatabaseCompletionTargetOutcome,
+  type FrozenCompletionTarget,
+} from "../../entry/database-completion.js";
 import type { InterventionService } from "./interventions.js";
 
 export interface ExecutionRunResult {
@@ -43,6 +51,14 @@ export class QueuePausedError extends Error {
   }
 }
 
+/** Stable Entry failure propagated into the durable attempt without reclassification. */
+export class QueueTargetFailureError extends Error {
+  constructor(readonly failure: NonNullable<ExecutionAttempt["failure"]>) {
+    super("execution target failed");
+    this.name = "QueueTargetFailureError";
+  }
+}
+
 /**
  * Minimal durable queue. It claims one target at a time for a job, persists
  * each attempt and event, and always releases its lease in a finally block.
@@ -57,7 +73,7 @@ export class ExecutionQueue {
   }
 
   pause(jobId: string) {
-    return this.repository.updateJob(jobId, "paused");
+    return this.repository.controlJob(jobId, "paused");
   }
 
   resume(jobId: string) {
@@ -65,7 +81,7 @@ export class ExecutionQueue {
   }
 
   cancel(jobId: string, finishedAt = new Date().toISOString()) {
-    return this.repository.updateJob(jobId, "cancelled", finishedAt);
+    return this.repository.controlJob(jobId, "cancelled", finishedAt);
   }
 
   async runNext(
@@ -137,7 +153,7 @@ export class ExecutionQueue {
         await this.repository.appendEvent({
           event_id: `event-${randomUUID()}`,
           job_id: jobId,
-          sequence: await this.nextSequence(jobId),
+          sequence: -1,
           kind: "target-budget-exhausted",
           payload: { target_id: target.target_id, failure },
           created_at: new Date().toISOString(),
@@ -185,7 +201,7 @@ export class ExecutionQueue {
         await this.repository.appendEvent({
           event_id: `event-${randomUUID()}`,
           job_id: jobId,
-          sequence: await this.nextSequence(jobId),
+          sequence: -1,
           kind: "attempt-started",
           payload: { target_id: target.target_id, attempt_id: attemptId },
           created_at: acquiredAt,
@@ -228,7 +244,7 @@ export class ExecutionQueue {
             await this.repository.appendEvent({
               event_id: `event-${randomUUID()}`,
               job_id: jobId,
-              sequence: await this.nextSequence(jobId),
+              sequence: -1,
               kind: "attempt-paused-for-assistance",
               payload: {
                 target_id: target.target_id,
@@ -242,17 +258,24 @@ export class ExecutionQueue {
           outcome =
             error instanceof QueueInterruptedError ? "interrupted" : "failed";
           const retryable =
-            outcome === "interrupted" || error instanceof QueueRetryableError;
+            outcome === "interrupted" ||
+            error instanceof QueueRetryableError ||
+            (error instanceof QueueTargetFailureError &&
+              error.failure.retryable);
           const retry = retryable && previousAttempts < maxRetries;
-          failure = {
-            code:
-              outcome === "interrupted"
-                ? "execution-interrupted"
-                : "execution-handler-failed",
-            reason: "The execution target did not complete.",
-            action: "Retry the target after inspecting its persisted attempt.",
-            retryable,
-          };
+          failure =
+            error instanceof QueueTargetFailureError
+              ? error.failure
+              : {
+                  code:
+                    outcome === "interrupted"
+                      ? "execution-interrupted"
+                      : "execution-handler-failed",
+                  reason: "The execution target did not complete.",
+                  action:
+                    "Retry the target after inspecting its persisted attempt.",
+                  retryable,
+                };
           await this.repository.updateTarget(
             target.target_id,
             retry ? "queued" : outcome,
@@ -270,7 +293,7 @@ export class ExecutionQueue {
         await this.repository.appendEvent({
           event_id: `event-${randomUUID()}`,
           job_id: jobId,
-          sequence: await this.nextSequence(jobId),
+          sequence: -1,
           kind:
             failure?.retryable &&
             (await this.repository.getTarget(target.target_id))?.stage ===
@@ -335,11 +358,6 @@ export class ExecutionQueue {
       results.push(next);
     }
     return Object.freeze(results);
-  }
-
-  private async nextSequence(jobId: string): Promise<number> {
-    const last = (await this.repository.listEvents(jobId, -1, 1000)).at(-1);
-    return last ? last.sequence + 1 : 0;
   }
 }
 
@@ -413,7 +431,8 @@ export class ExecutionScheduler {
 export class ExecutionJobService {
   constructor(
     private readonly repository: ExecutionRepository,
-    private readonly library: Pick<LiteratureQueryService, "search">,
+    private readonly completion: DatabaseCompletionService,
+    private readonly library: Pick<LiteratureQueryService, "detail">,
   ) {}
 
   async create(
@@ -422,50 +441,89 @@ export class ExecutionJobService {
       readonly goal?: "pdf" | "content";
     },
   ) {
-    const selected = await selectLiteratures(this.library, input.selector);
-    if (selected.items.length > 10_000)
-      throw new TypeError("execution selector is too large");
     const { selector, goal = "content", ...jobInput } = input;
-    const job = await this.repository.createJob({
-      ...jobInput,
-      selector: { schema_version: 1, goal, selector },
+    const jobId =
+      jobInput.job_id ??
+      `job-${(
+        await sha256(
+          canonicalJsonBytes({ idempotency_key: jobInput.idempotency_key }),
+        )
+      ).slice(0, 32)}`;
+    const existing = await this.repository.getJob(jobId);
+    if (existing) {
+      const saved = existing.selector as { selector?: unknown; goal?: unknown };
+      if (
+        existing.idempotency_key !== jobInput.idempotency_key ||
+        existing.target_kind !== jobInput.target_kind ||
+        existing.policy_version !== jobInput.policy_version ||
+        saved.goal !== goal ||
+        !Buffer.from(canonicalJsonBytes(saved.selector)).equals(
+          Buffer.from(canonicalJsonBytes(selector)),
+        )
+      )
+        throw new TypeError("execution job idempotency conflict");
+      return this.repository.createJob({
+        ...jobInput,
+        job_id: jobId,
+        selector: existing.selector,
+      });
+    }
+    const frozen = await this.completion.freezeRequest({
+      selector,
+      goal: goal === "pdf" ? "ASSET_READY" : "CONTENT_READY",
     });
-    for (const [ordinal, item] of selected.items.entries()) {
+    if (frozen.length > 10_000)
+      throw new TypeError("execution selector is too large");
+    const targetInputs: ExecutionTarget[] = [];
+    for (const [ordinal, item] of frozen.entries()) {
       const digest = await sha256(
         canonicalJsonBytes({
-          job_id: job.job_id,
-          literature_id: item.literature.literature_id,
+          job_id: jobId,
+          target: item.target,
           ordinal,
         }),
       );
-      await this.repository.putTarget({
+      targetInputs.push({
         target_id: `target-${digest.slice(0, 32)}`,
-        job_id: job.job_id,
+        job_id: jobId,
         ordinal,
-        literature_id: item.literature.literature_id,
-        version_role: item.literature.version_role,
+        literature_id: item.candidates[0] ?? null,
+        version_role: (await this.library.detail(item.candidates[0]!))
+          .literature.version_role,
         stage: "queued",
         disposition: "pending",
         next_eligible_at: null,
       });
     }
-    return job;
+    return this.repository.createJob({
+      ...jobInput,
+      job_id: jobId,
+      selector: { schema_version: 2, goal, selector, frozen_targets: frozen },
+      targets: targetInputs,
+    });
   }
 }
 
 export interface ExecutionTaskRuntime {
-  readonly detail: LiteratureQueryService["detail"];
-  readonly completion: Pick<LiteratureCompletionService, "complete"> | null;
+  readonly completion: DatabaseCompletionService;
 }
 
-/** Runs durable targets through the existing Literature completion owner. */
+/**
+ * Adapts the complete Entry operation to the existing durable Job wire. The
+ * operation owns cohort and report decisions; Jobs own leases, budgets,
+ * attempts, intervention policy and events.
+ */
 export class ExecutionTaskService {
   constructor(
     private readonly repository: ExecutionRepository,
-    private readonly queue: ExecutionQueue,
+    _queue: ExecutionQueue,
     private readonly interventions: InterventionService,
     private readonly runtime: ExecutionTaskRuntime,
-  ) {}
+  ) {
+    // Keep the existing public constructor wire. The complete Entry operation
+    // now owns target execution, while this service owns its durable records.
+    void _queue;
+  }
 
   async runJob(
     jobId: string,
@@ -473,73 +531,484 @@ export class ExecutionTaskService {
   ): Promise<readonly ExecutionRunResult[]> {
     const job = await this.repository.getJob(jobId);
     if (!job) throw new TypeError("execution job is unavailable");
-    const snapshot =
-      job.selector &&
-      typeof job.selector === "object" &&
-      !Array.isArray(job.selector) &&
-      "selector" in job.selector
-        ? (job.selector as { selector: unknown; goal?: unknown })
-        : { selector: job.selector, goal: "content" as const };
-    const goal = snapshot.goal === "pdf" ? "pdf" : "content";
-    const failure = {
-      code:
-        goal === "pdf"
-          ? "pdf-acquisition-required"
-          : "content-completion-unavailable",
-      reason:
-        goal === "pdf"
-          ? "No durable primary PDF is available for this target."
-          : "The target cannot continue without the configured completion services.",
-      action:
-        goal === "pdf"
-          ? "Provide a verified PDF or run an admitted acquisition route."
-          : "Configure Parsing and Analysis, then resume the task.",
-      retryable: false,
-    } as const;
-    return this.queue.runUntilIdle(
-      jobId,
-      async (target, signal) => {
-        if (!target.literature_id) return "skipped";
-        const detail = await this.runtime.detail(target.literature_id);
-        if (goal === "pdf") {
-          if (detail.primary_pdf) return "completed";
-          const intervention = await this.interventions.request({
-            job_id: jobId,
-            target_id: target.target_id,
-            failure,
-          });
-          if (intervention.status === "open" && intervention.mode === "pause")
-            throw new QueuePausedError(failure);
-          return "skipped";
+    if (!["queued", "running"].includes(job.status)) return [];
+    const max = options.max_targets ?? 1000;
+    if (!Number.isSafeInteger(max) || max < 1 || max > 10000)
+      throw new TypeError("execution queue bound is invalid");
+    const maxRetries = Math.min(options.max_retries ?? 100, 100);
+    const retryDelay = options.retry_delay_ms ?? 0;
+    if (
+      !Number.isSafeInteger(maxRetries) ||
+      maxRetries < 0 ||
+      !Number.isSafeInteger(retryDelay) ||
+      retryDelay < 0 ||
+      retryDelay > 86_400_000
+    )
+      throw new TypeError("execution retry bounds are invalid");
+    const all = await this.repository.listTargets(jobId, 10000);
+    const snapshot = decodeCompletionSnapshot(job.selector, all);
+    const eligibleAt = options.now ?? new Date().toISOString();
+    const eligible = all
+      .filter(
+        (target) =>
+          target.stage === "queued" &&
+          (target.next_eligible_at === null ||
+            target.next_eligible_at <= eligibleAt),
+      )
+      .slice(0, max);
+    if (!eligible.length) {
+      await this.finalize(jobId);
+      return [];
+    }
+    const policy = await this.repository.getPolicy(jobId);
+    const budget = await this.repository.getBudget(jobId);
+    if (!policy || !budget)
+      throw new TypeError("execution policy is unavailable");
+    const leaseId = `lease-${randomUUID()}`;
+    await this.repository.acquireLease({
+      lease_id: leaseId,
+      job_id: jobId,
+      workspace_id: options.workspace_id ?? null,
+      boot_id: options.boot_id ?? randomUUID(),
+      control_epoch: 0,
+      acquired_at: new Date().toISOString(),
+      released_at: null,
+    });
+    try {
+      // The operator may pause or cancel between the initial read and lease.
+      if (
+        !["queued", "running"].includes(
+          (await this.repository.getJob(jobId))!.status,
+        )
+      )
+        return [];
+      const available = Math.max(0, budget.max_attempts - budget.attempts);
+      const admitted = eligible.slice(0, available);
+      const selected = admitted.map((row) => snapshot.targets[row.ordinal]!);
+      const selectedRows = new Map(
+        selected.map((item, index) => [
+          targetKey(item.target),
+          admitted[index]!,
+        ]),
+      );
+      const attemptIds = new Map<string, string>();
+      const settled = new Map<string, ExecutionRunResult>();
+      const report = selected.length
+        ? await this.runtime.completion.runFrozen(selected, snapshot.goal, {
+            signal: options.signal,
+            on_target_start: async (target) => {
+              const row = selectedRows.get(targetKey(target));
+              if (!row)
+                throw new TypeError("frozen execution target is unavailable");
+              // The durable claim atomically checks queued/running status and
+              // changes the first queued Job to running. A pause/cancel wins
+              // by refusing this target before budget or attempt creation.
+              const claimed = await this.repository.claimTarget(
+                jobId,
+                eligibleAt,
+                row.target_id,
+              );
+              if (!claimed) return false;
+              const claim = await this.repository.consumeBudget(jobId, {
+                attempts: 1,
+                network_bytes: 0,
+                model_calls: 0,
+              });
+              if (!claim.accepted)
+                throw new TypeError(
+                  "execution attempt budget changed during admission",
+                );
+              const attemptId = `attempt-${randomUUID()}`;
+              await this.repository.startAttempt({
+                attempt_id: attemptId,
+                target_id: row.target_id,
+                stage: "acquisition",
+                status: "running",
+                started_at: new Date().toISOString(),
+                finished_at: null,
+                failure: null,
+                usage: null,
+              });
+              attemptIds.set(row.target_id, attemptId);
+              await this.event(jobId, "attempt-started", {
+                target_id: row.target_id,
+                attempt_id: attemptId,
+              });
+              return true;
+            },
+            on_target_finish: async (target, outcome) => {
+              const key = targetKey(target);
+              const row = selectedRows.get(key);
+              if (!row)
+                throw new TypeError("frozen execution target is unavailable");
+              const result = await this.settleTarget(
+                jobId,
+                row,
+                attemptIds.get(row.target_id) ?? null,
+                outcome,
+                snapshot.goal,
+                Math.min(policy.max_retries, maxRetries),
+                retryDelay,
+              );
+              settled.set(row.target_id, result.result);
+              return result.stopAdmission;
+            },
+          })
+        : null;
+      // A failed settlement hook is converted by Entry to an operation failure.
+      // Give its attempt a stable terminal record if the repository is still
+      // available; do not leave a running attempt merely because UX failed.
+      if (report) {
+        for (const failed of report.failed) {
+          const row = selectedRows.get(targetKey(failed.target));
+          if (!row || settled.has(row.target_id)) continue;
+          const result = await this.finishFailedSettlement(
+            jobId,
+            row,
+            attemptIds.get(row.target_id) ?? null,
+            failed.failure,
+          );
+          settled.set(row.target_id, result);
         }
-        if (detail.content) return "completed";
-        if (!this.runtime.completion) {
-          const intervention = await this.interventions.request({
-            job_id: jobId,
-            target_id: target.target_id,
-            failure,
-          });
-          if (intervention.status === "open" && intervention.mode === "pause")
-            throw new QueuePausedError(failure);
-          return "skipped";
-        }
-        const result = await this.runtime.completion.complete(
-          { literature_id: target.literature_id, transfer_ids: [] },
-          signal,
+      }
+      const results: ExecutionRunResult[] = admitted.flatMap((row) => {
+        const result = settled.get(row.target_id);
+        return result ? [result] : [];
+      });
+      if (report?.end.kind === "failed")
+        await this.repository.updateJobIfActive(
+          jobId,
+          "failed",
+          new Date().toISOString(),
         );
-        if (result.outcome === "content_ready") return "completed";
-        const intervention = await this.interventions.request({
-          job_id: jobId,
-          target_id: target.target_id,
-          failure,
-        });
-        if (intervention.status === "open" && intervention.mode === "pause")
-          throw new QueuePausedError(failure);
-        return "skipped";
-      },
-      options,
+      else if (report?.end.kind === "interrupted") {
+        if (
+          options.signal?.aborted ||
+          !(await this.repository.listTargets(jobId, 10000)).some(
+            (row) => row.stage === "queued",
+          )
+        )
+          await this.repository.updateJobIfActive(
+            jobId,
+            "interrupted",
+            new Date().toISOString(),
+          );
+      } else if (report?.end.kind === "finished" || !report) {
+        if (
+          !["queued", "running"].includes(
+            (await this.repository.getJob(jobId))!.status,
+          )
+        )
+          return Object.freeze(results);
+        for (const row of eligible.slice(available)) {
+          const failure = {
+            code: "execution-budget-exhausted",
+            reason: "The frozen job attempt budget is exhausted.",
+            action: "Create a new job with an explicitly reviewed policy.",
+            retryable: false,
+          };
+          await this.repository.updateTarget(
+            row.target_id,
+            "skipped",
+            "skipped",
+          );
+          await this.event(jobId, "target-budget-exhausted", {
+            target_id: row.target_id,
+            failure,
+          });
+          results.push({
+            target_id: row.target_id,
+            outcome: "skipped",
+            failure,
+          });
+        }
+        await this.finalize(jobId);
+      }
+      return Object.freeze(results);
+    } finally {
+      await this.repository.releaseLease(leaseId);
+    }
+  }
+
+  private async settleTarget(
+    jobId: string,
+    row: ExecutionTarget,
+    attemptId: string | null,
+    outcome: DatabaseCompletionTargetOutcome,
+    goal: BatchGoal,
+    maxRetries: number,
+    retryDelay: number,
+  ): Promise<{ result: ExecutionRunResult; stopAdmission: boolean }> {
+    const failure =
+      outcome.failure ??
+      (outcome.partition === "interrupted"
+        ? {
+            code: "execution-interrupted",
+            reason: "The execution target did not complete.",
+            action: "Retry the target after inspecting its persisted attempt.",
+            retryable: true,
+          }
+        : outcome.partition === "completed"
+          ? null
+          : completionFallback(goal));
+    const active = ["queued", "running"].includes(
+      (await this.repository.getJob(jobId))!.status,
+    );
+    let result: ExecutionRunResult;
+    let stage: ExecutionTarget["stage"];
+    let disposition: ExecutionTarget["disposition"];
+    let attemptStatus: ExecutionAttempt["status"];
+    let eventKind: string;
+    let stopAdmission = !active;
+    let nextEligibleAt: string | null = null;
+    if (outcome.partition === "completed") {
+      result = {
+        target_id: row.target_id,
+        outcome: "completed",
+        failure: null,
+      };
+      stage = "completed";
+      disposition = "completed";
+      attemptStatus = "completed";
+      eventKind = "attempt-completed";
+    } else if (outcome.operation_failure) {
+      result = { target_id: row.target_id, outcome: "failed", failure };
+      stage = "failed";
+      disposition = "failed";
+      attemptStatus = "failed";
+      eventKind = "attempt-failed";
+    } else if (outcome.partition === "interrupted") {
+      const previousAttempts = (
+        await this.repository.listAttempts(row.target_id)
+      ).length;
+      const retry = active && previousAttempts <= maxRetries;
+      result = { target_id: row.target_id, outcome: "interrupted", failure };
+      stage = retry ? "queued" : "interrupted";
+      disposition = retry ? "pending" : "interrupted";
+      attemptStatus = "interrupted";
+      eventKind = retry ? "attempt-retry-scheduled" : "attempt-interrupted";
+      nextEligibleAt = retry
+        ? new Date(Date.now() + retryDelay).toISOString()
+        : null;
+    } else {
+      // A pause or cancel can arrive while this target runs. Its committed
+      // materials survive, but no new operator request is created afterwards.
+      const intervention = active
+        ? await this.interventions.request(
+            {
+              job_id: jobId,
+              target_id: row.target_id,
+              failure: failure!,
+            },
+            true,
+          )
+        : null;
+      const pause =
+        intervention?.status === "open" && intervention.mode === "pause";
+      if (pause) {
+        stopAdmission = true;
+      }
+      if (active && intervention === null) stopAdmission = true;
+      result = {
+        target_id: row.target_id,
+        outcome: pause ? "interrupted" : "skipped",
+        failure,
+      };
+      stage = pause ? "queued" : "skipped";
+      disposition = pause ? "pending" : "skipped";
+      attemptStatus = pause ? "interrupted" : "completed";
+      eventKind = pause ? "attempt-paused-for-assistance" : "attempt-skipped";
+    }
+    await this.repository.updateTarget(
+      row.target_id,
+      stage,
+      disposition,
+      nextEligibleAt,
+    );
+    if (attemptId) {
+      await this.repository.finishAttempt(
+        attemptId,
+        attemptStatus,
+        new Date().toISOString(),
+        attemptStatus === "completed" && result.outcome === "completed"
+          ? null
+          : failure,
+        null,
+      );
+      await this.event(jobId, eventKind, {
+        target_id: row.target_id,
+        attempt_id: attemptId,
+        failure: result.outcome === "completed" ? null : failure,
+      });
+    }
+    return { result, stopAdmission };
+  }
+
+  private async finishFailedSettlement(
+    jobId: string,
+    row: ExecutionTarget,
+    attemptId: string | null,
+    failure: StableFailure,
+  ): Promise<ExecutionRunResult> {
+    await this.repository.updateTarget(row.target_id, "failed", "failed");
+    if (attemptId) {
+      await this.repository.finishAttempt(
+        attemptId,
+        "failed",
+        new Date().toISOString(),
+        failure,
+        null,
+      );
+      await this.event(jobId, "attempt-failed", {
+        target_id: row.target_id,
+        attempt_id: attemptId,
+        failure,
+      });
+    }
+    return { target_id: row.target_id, outcome: "failed", failure };
+  }
+
+  private async event(
+    jobId: string,
+    kind: string,
+    payload: unknown,
+  ): Promise<void> {
+    await this.repository.appendEvent({
+      event_id: `event-${randomUUID()}`,
+      job_id: jobId,
+      sequence: -1,
+      kind,
+      payload,
+      created_at: new Date().toISOString(),
+    });
+  }
+
+  private async finalize(jobId: string): Promise<void> {
+    const job = await this.repository.getJob(jobId);
+    if (
+      !job ||
+      ["paused", "cancelled", "failed", "interrupted"].includes(job.status)
+    )
+      return;
+    const targets = await this.repository.listTargets(jobId, 10000);
+    if (
+      targets.some((target) =>
+        ["queued", "acquisition", "parsing", "analysis", "literature"].includes(
+          target.stage,
+        ),
+      )
+    )
+      return;
+    await this.repository.updateJobIfActive(
+      jobId,
+      targets.some((target) => target.stage === "failed")
+        ? "failed"
+        : "completed",
+      new Date().toISOString(),
     );
   }
+}
+
+function targetKey(target: CompletionTarget): string {
+  return target.kind === "literature"
+    ? `literature:${target.literature_id}`
+    : `meta-literature:${target.meta_literature_id}`;
+}
+
+function completionFallback(goal: BatchGoal): StableFailure {
+  return goal === "ASSET_READY"
+    ? {
+        code: "pdf-acquisition-required",
+        reason: "No durable primary PDF is available for this target.",
+        action: "Provide a verified PDF or run an admitted acquisition route.",
+        retryable: false,
+      }
+    : {
+        code: "content-completion-unavailable",
+        reason:
+          "The target cannot continue without the configured completion services.",
+        action: "Configure Parsing and Analysis, then resume the task.",
+        retryable: false,
+      };
+}
+
+function decodeCompletionSnapshot(
+  selector: unknown,
+  rows: readonly ExecutionTarget[],
+): { goal: BatchGoal; targets: readonly FrozenCompletionTarget[] } {
+  const source =
+    selector && typeof selector === "object" && !Array.isArray(selector)
+      ? (selector as Record<string, unknown>)
+      : {};
+  const goal: BatchGoal =
+    source.goal === "pdf" ? "ASSET_READY" : "CONTENT_READY";
+  if (source.schema_version === undefined || source.schema_version === 1) {
+    return {
+      goal,
+      targets: rows.map((row) => {
+        if (!row.literature_id)
+          throw new TypeError("legacy execution target is invalid");
+        const id = parseLiteratureId(row.literature_id);
+        return {
+          target: { kind: "literature", literature_id: id },
+          candidates: [id],
+          // v1 Jobs never cleared a prior automatic exhaustion fact.
+          clear_exhaustion: false,
+        };
+      }),
+    };
+  }
+  if (source.schema_version !== 2)
+    throw new TypeError("execution selector version is unsupported");
+  if (
+    !Array.isArray(source.frozen_targets) ||
+    source.frozen_targets.length !== rows.length
+  )
+    throw new TypeError("frozen execution targets are invalid");
+  return {
+    goal,
+    targets: source.frozen_targets.map((value: unknown, index: number) => {
+      if (!value || typeof value !== "object" || Array.isArray(value))
+        throw new TypeError("frozen execution target is invalid");
+      const item = value as Record<string, unknown>;
+      const raw = item.target as Record<string, unknown>;
+      if (
+        !raw ||
+        typeof raw !== "object" ||
+        !Array.isArray(item.candidates) ||
+        item.candidates.length === 0 ||
+        typeof item.clear_exhaustion !== "boolean"
+      )
+        throw new TypeError("frozen execution target is invalid");
+      const target: CompletionTarget =
+        raw.kind === "literature"
+          ? {
+              kind: "literature",
+              literature_id: parseLiteratureId(raw.literature_id),
+            }
+          : raw.kind === "meta-literature"
+            ? {
+                kind: "meta-literature",
+                meta_literature_id: parseMetaLiteratureId(
+                  raw.meta_literature_id,
+                ),
+              }
+            : (() => {
+                throw new TypeError("frozen execution target is invalid");
+              })();
+      const candidates = item.candidates.map((id: unknown) =>
+        parseLiteratureId(id),
+      );
+      if (
+        rows[index]?.ordinal !== index ||
+        rows[index]?.literature_id !== candidates[0]
+      )
+        throw new TypeError(
+          "frozen execution target does not match its durable row",
+        );
+      return { target, candidates, clear_exhaustion: item.clear_exhaustion };
+    }),
+  };
 }
 
 export class QueueInterruptedError extends Error {

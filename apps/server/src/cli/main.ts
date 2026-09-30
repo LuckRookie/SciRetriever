@@ -1,10 +1,12 @@
 import { readFile, realpath } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import * as applicationBootstrap from "../bootstrap/application.js";
+import { DocumentProcessingError } from "../document/service.js";
+import { ParsingFailure } from "../parsing/ports.js";
 import {
-  createApplication,
+  QueryApplicationError,
   type Application,
+  type QueryApplication,
 } from "../bootstrap/application.js";
 import {
   decodeBibliography,
@@ -23,7 +25,13 @@ import {
 } from "../entry/bibliography-export.js";
 import {
   ConfigurationOwnerError,
+  ConfigurationProbeError,
+  ConfigurationProbeSession,
+  fixedConfigurationHome,
   TypeScriptConfigurationOwner,
+  type ConfigurationProbeRequest,
+  type ConfigurationProbeResult,
+  type ConfigurationProbeSeams,
 } from "../configuration/owner.js";
 import { LiteratureNotFoundError } from "../literature/query.js";
 import {
@@ -34,12 +42,20 @@ import {
   parseMetaLiteratureId,
   type LibraryQuery,
 } from "@sciretriever/contracts";
-import {
-  selectLiteratures,
-  type LiteratureSelector,
-} from "../entry/selectors.js";
+import { type LiteratureSelector } from "../entry/selectors.js";
 import { runConfigurationCenter } from "./config-center.js";
+import {
+  renderConfigurationTest,
+  renderStatus,
+  type ConfigTheme,
+} from "./config-ui.js";
 import { runDoctor } from "../entry/doctor.js";
+import {
+  MigrationSafetyError,
+  SYNTHETIC_COPY_DECLARATION_FLAG,
+} from "../storage/execution/migration-gate.js";
+import { CatalogSchemaError } from "../storage/sqlite/migration-scope.js";
+import { WriteAdmissionError } from "../storage/write-admission.js";
 
 export interface CliOptions {
   readonly home?: string;
@@ -48,6 +64,14 @@ export interface CliOptions {
   readonly stderr?: (text: string) => void;
   readonly stdin?: AsyncIterable<Uint8Array>;
   readonly json?: boolean;
+  /** User-controlled stop; a frozen database-completion scope reports it. */
+  readonly signal?: AbortSignal;
+  /**
+   * Explicit offline seam for the read-only configuration probe. Production
+   * and ordinary callers leave it undefined so real adapters and the shared
+   * Network are used instead.
+   */
+  readonly probeSeams?: ConfigurationProbeSeams;
 }
 
 export interface CliResult {
@@ -73,8 +97,17 @@ function invalidInput(): never {
   throw new CliInputError();
 }
 
-const DEFAULT_HOME = () =>
-  process.env.SCIRETRIEVER_HOME ?? join(tmpdir(), "sciretriever-cli");
+/**
+ * The only production configuration identity is the fixed user home. An
+ * explicitly injected `home` remains an internal isolation seam, while
+ * `SCIRETRIEVER_HOME`, the working directory and legacy paths never change
+ * where ordinary configuration and credentials live (ADR 0018).
+ */
+export function configurationHome(
+  options: Pick<CliOptions, "home"> = {},
+): string {
+  return options.home ?? fixedConfigurationHome();
+}
 
 function output(value: unknown, options: CliOptions): CliResult {
   const text = `${JSON.stringify(value, null, options.json ? 0 : 2)}\n`;
@@ -84,13 +117,18 @@ function output(value: unknown, options: CliOptions): CliResult {
 
 function usage(options: CliOptions): CliResult {
   const text =
-    "Usage: sciretriever <discover|complete|literature|import|export|config|storage|jobs> ...\n" +
+    "Usage: sciretriever <discover|complete|literature|import|export|config|storage|maintenance|jobs> ...\n" +
     "  discover topic QUERY | discover citations --seed-literature-id ID\n" +
     "  complete pdf|content [--literature-id ID] [--transfers ID,...]\n" +
     "  literature search [query options] | show ID | references ID | cited-by ID\n" +
     "  import metadata FORMAT SOURCE | import pdf ID SOURCE\n" +
+    "  document parse --literature-id ID --asset-id ID --asset-sha256 SHA256 --mode reuse-current|reparse [--expected-default-revision N]\n" +
     "  export metadata FORMAT OUTPUT | export pdf|content ID --path PATH\n" +
-    "  jobs create [--text QUERY] | jobs run JOB_ID\n";
+    "  config [--theme auto|dark|light|mono] | config status [--json] [--theme ...] | config test ...\n" +
+    "  jobs create [--text QUERY] | jobs run JOB_ID\n" +
+    "  storage schema-inspect|schema-init --catalog PATH | schema-upgrade --catalog PATH [--dry-run | --backup PATH]\n" +
+    "  storage document-inspect|retrieval-inspect|extraction-inspect --catalog PATH | document-migrate|retrieval-migrate|extraction-migrate --catalog PATH [--dry-run | --backup PATH --synthetic-copy]\n" +
+    "  maintenance rebuild-index (requires an existing v4 catalog) | rebuild-knowledge-index (requires v8)\n";
   options.stdout?.(text);
   return { code: 0 };
 }
@@ -135,6 +173,169 @@ function integerOption(
   return parsed;
 }
 
+function metadataScanLimit(
+  args: readonly string[],
+  configuredLimit: number,
+): number {
+  if (args.includes("--scan-limit") && argument(args, "--scan-limit") === null)
+    invalidInput();
+  const limit = args.includes("--scan-limit")
+    ? integerOption(args, "--scan-limit", configuredLimit)
+    : configuredLimit;
+  if (limit < 1) invalidInput();
+  return limit;
+}
+
+function themeOption(args: readonly string[]): ConfigTheme {
+  const value = argument(args, "--theme");
+  if (args.includes("--theme") && value === null) invalidInput();
+  if (
+    value === null ||
+    value === "auto" ||
+    value === "dark" ||
+    value === "light" ||
+    value === "mono"
+  )
+    return value ?? "auto";
+  invalidInput();
+}
+
+const PROBE_FLAGS = new Set(["--all", "--image", "--target", "--theme"]);
+
+function probePositionals(args: readonly string[]): readonly string[] {
+  const values: string[] = [];
+  const rest = args.slice(2);
+  for (let index = 0; index < rest.length; index += 1) {
+    const item = rest[index]!;
+    if (item === "--target") {
+      index += 1;
+      continue;
+    }
+    if (item.startsWith("--")) {
+      if (!PROBE_FLAGS.has(item)) invalidInput();
+      continue;
+    }
+    values.push(item);
+  }
+  return values;
+}
+
+/**
+ * One explicit request shape shared by the interactive center and the
+ * structured CLI: both must select the same owner and target before dispatch.
+ */
+function parseProbeRequest(args: readonly string[]): ConfigurationProbeRequest {
+  const positionals = probePositionals(args);
+  const all = args.includes("--all");
+  const image = args.includes("--image");
+  const targetFlag = argument(args, "--target");
+  const head = positionals[0] ?? null;
+  if (image && head !== "model") invalidInput();
+  if (head === null || head === "all") {
+    // A bare `config test` selects nothing; only an explicit `--all` does.
+    const extra = positionals.length - (head === "all" ? 1 : 0);
+    if (image || targetFlag || extra !== 0) invalidInput();
+    if (head === null && !all) invalidInput();
+    return { owner: "all", target: null, image: false };
+  }
+  if (all && head !== "search" && head !== "download") invalidInput();
+  if (head === "provider" || head === "model") {
+    const target = positionals[1] ?? targetFlag;
+    if (!target || positionals.length > 2) invalidInput();
+    return { owner: head, target, image };
+  }
+  if (head === "search" || head === "download") {
+    if (positionals.length > 2) invalidInput();
+    const target = positionals[1] ?? targetFlag;
+    if (all) {
+      if (target) invalidInput();
+      return { owner: head, target: null, image: false };
+    }
+    if (!target) invalidInput();
+    return { owner: head, target, image: false };
+  }
+  if (head === "parse" || head === "analyze") {
+    if (positionals.length > 1 || targetFlag || all) invalidInput();
+    return { owner: head, target: null, image: false };
+  }
+  if (head === "browser") {
+    const sub = positionals[1];
+    if (sub === "model") {
+      if (positionals.length > 2 || targetFlag || all) invalidInput();
+      return { owner: "browser-model", target: null, image: false };
+    }
+    if (sub === "site") {
+      const target = positionals[2] ?? targetFlag;
+      if (!target || all || positionals.length > 3) invalidInput();
+      return { owner: "browser-site", target, image: false };
+    }
+  }
+  invalidInput();
+}
+
+function probeLabel(selection: {
+  readonly owner: string;
+  readonly target: string | null;
+}): string {
+  const target = selection.target === null ? "" : ` ${selection.target}`;
+  return `config test ${selection.owner}${target}`;
+}
+
+async function readConfirmationLine(
+  stdin: AsyncIterable<Uint8Array>,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const pending = (async (): Promise<string> => {
+    let text = "";
+    for await (const chunk of stdin) {
+      text += Buffer.from(chunk).toString("utf8");
+      if (text.includes("\n") || text.length > 8) break;
+    }
+    return text;
+  })();
+  if (!signal) return pending;
+  return new Promise<string | null>((resolve, reject) => {
+    const onAbort = (): void => resolve(null);
+    signal.addEventListener("abort", onAbort, { once: true });
+    pending.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * Human-mode confirmation before any probe that could reach the network or
+ * consume quota; `--json` is the explicit script invocation and never prompts.
+ */
+async function confirmConfigurationProbe(
+  options: CliOptions,
+  request: ConfigurationProbeRequest,
+): Promise<boolean> {
+  if (request.owner === "download") return true;
+  const stdin = options.stdin;
+  if (stdin === undefined) return false;
+  const write =
+    options.stderr ?? ((text: string) => process.stderr.write(text));
+  write(`${probeLabel(request)}: perform one bounded read-only probe? [y/N] `);
+  const answer = await readConfirmationLine(stdin, options.signal);
+  if (answer === null) return false;
+  return /^(?:y|yes)$/iu.test((answer.split("\n")[0] ?? "").trim());
+}
+
+function probeDiagnosis(result: ConfigurationProbeResult): string {
+  const reason = result.reason === null ? "no failure" : result.reason;
+  return `${probeLabel(result)}: ${result.outcome} (${reason}); next step: ${
+    result.action ?? "none"
+  }\n`;
+}
+
 function query(
   text: string | null,
   args: readonly string[] = [],
@@ -177,16 +378,71 @@ function query(
 async function withApplication<T>(
   options: CliOptions,
   action: (application: Application) => Promise<T>,
-  executionSchema?: "upgrade-synthetic" | "require-v2",
+  executionSchema?: "upgrade-synthetic" | "require-v2" | "inspect",
 ): Promise<T> {
-  const application = await createApplication(options.home ?? DEFAULT_HOME(), {
-    ...(executionSchema ? { executionSchema } : {}),
-  });
+  const application = await applicationBootstrap.createApplication(
+    configurationHome(options),
+    { ...(executionSchema ? { executionSchema } : {}) },
+  );
+  return runAndClose(
+    () => action(application),
+    () => application.close(),
+  );
+}
+
+async function runAndClose<T>(
+  action: () => Promise<T>,
+  close: () => Promise<void>,
+  cleanupMessage = "command and application cleanup failed",
+): Promise<T> {
+  let result: T;
   try {
-    return await action(application);
-  } finally {
-    await application.close();
+    result = await action();
+  } catch (error) {
+    try {
+      await close();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], cleanupMessage, {
+        cause: error,
+      });
+    }
+    throw error;
   }
+  await close();
+  return result;
+}
+
+type ReadyQueryApplication = QueryApplication & {
+  readonly query: NonNullable<QueryApplication["query"]>;
+  readonly literatureArtifacts: NonNullable<
+    QueryApplication["literatureArtifacts"]
+  >;
+};
+async function withQueryApplication<T>(
+  options: CliOptions,
+  action: (application: ReadyQueryApplication) => Promise<T>,
+): Promise<T> {
+  const application = await applicationBootstrap.createQueryApplication(
+    configurationHome(options),
+  );
+  return runAndClose(
+    async () => {
+      if (
+        application.readiness.status !== "ready" ||
+        !application.query ||
+        !application.literatureArtifacts
+      ) {
+        throw new QueryApplicationError(
+          application.readiness.status === "ready"
+            ? "unavailable"
+            : application.readiness.status,
+        );
+      }
+      return action(application as ReadyQueryApplication);
+    },
+    () => application.close(),
+    "command and query application cleanup failed",
+  );
 }
 
 async function execute(
@@ -196,6 +452,212 @@ async function execute(
   if (!args.length || args[0] === "--help" || args[0] === "-h")
     return usage(options);
   const [group, command] = args;
+  if (
+    group === "storage" &&
+    (command === "schema-inspect" ||
+      command === "schema-init" ||
+      command === "schema-upgrade")
+  ) {
+    const seen = new Set<string>();
+    for (let index = 2; index < args.length; index++) {
+      const flag = args[index]!;
+      if (seen.has(flag)) invalidInput();
+      seen.add(flag);
+      if (
+        flag === "--catalog" ||
+        (command === "schema-upgrade" && flag === "--backup")
+      ) {
+        if (!args[++index]?.startsWith("/")) invalidInput();
+      } else if (command !== "schema-upgrade" || flag !== "--dry-run") {
+        invalidInput();
+      }
+    }
+    const catalog = argument(args, "--catalog");
+    const backup = argument(args, "--backup");
+    const dryRun = args.includes("--dry-run");
+    if (
+      !catalog?.startsWith("/") ||
+      (dryRun && backup !== null) ||
+      (command === "schema-upgrade" && !dryRun && !backup)
+    )
+      invalidInput();
+    const {
+      inspectCatalogSchema,
+      initializeCatalogSchema,
+      upgradeCatalogSchema,
+    } = await import("../storage/sqlite/catalog-schema.js");
+    try {
+      return output(
+        command === "schema-inspect"
+          ? await inspectCatalogSchema(catalog)
+          : command === "schema-init"
+            ? await initializeCatalogSchema(catalog)
+            : await upgradeCatalogSchema({
+                catalog_path: catalog,
+                ...(backup ? { backup_path: backup } : {}),
+                dry_run: dryRun,
+              }),
+        options,
+      );
+    } catch (error) {
+      if (error instanceof CatalogSchemaError) throw error;
+      throw new CatalogSchemaError(
+        error instanceof WriteAdmissionError
+          ? error.code
+          : "catalog-schema-operation-failed",
+        null,
+        { cause: error },
+      );
+    }
+  }
+  if (group === "document" && command === "parse") {
+    const literatureId = argument(args, "--literature-id");
+    const assetId = argument(args, "--asset-id");
+    const assetSha = argument(args, "--asset-sha256");
+    const mode = argument(args, "--mode");
+    const revision = argument(args, "--expected-default-revision");
+    if (
+      !literatureId ||
+      !assetId ||
+      !assetSha ||
+      (mode !== "reuse-current" && mode !== "reparse")
+    )
+      invalidInput();
+    return output(
+      await withApplication(options, (app) =>
+        app.documentProcessing.parseDocuments(
+          {
+            literature_id: literatureId,
+            asset_id: assetId,
+            asset_sha256: assetSha,
+            mode,
+            expected_default_revision:
+              revision === null
+                ? null
+                : integerOption(args, "--expected-default-revision", 0),
+          },
+          options.signal,
+        ),
+      ),
+      options,
+    );
+  }
+  if (group === "storage" && command === "document-inspect") {
+    const catalog = argument(args, "--catalog");
+    if (!catalog?.startsWith("/")) invalidInput();
+    const { inspectDocumentCatalog } = await import(
+      "../storage/sqlite/document-migration.js"
+    );
+    return output(await inspectDocumentCatalog(catalog), options);
+  }
+  if (group === "storage" && command === "document-migrate") {
+    const catalog = argument(args, "--catalog");
+    if (!catalog?.startsWith("/")) invalidInput();
+    const dryRun = args.includes("--dry-run");
+    if (!dryRun && !args.includes(SYNTHETIC_COPY_DECLARATION_FLAG))
+      throw new MigrationSafetyError("synthetic-copy-declaration-required");
+    const backup = argument(args, "--backup");
+    if (!dryRun && !backup?.startsWith("/")) invalidInput();
+    const { migrateDocumentCatalog } = await import(
+      "../storage/sqlite/document-migration.js"
+    );
+    return output(
+      await migrateDocumentCatalog({
+        catalog_path: catalog,
+        ...(backup ? { backup_path: backup } : {}),
+        dry_run: dryRun,
+      }),
+      options,
+    );
+  }
+  if (group === "storage" && command === "retrieval-inspect") {
+    const catalog = argument(args, "--catalog");
+    if (!catalog?.startsWith("/")) invalidInput();
+    const { inspectRetrievalCatalog } = await import(
+      "../storage/sqlite/retrieval-migration.js"
+    );
+    return output(await inspectRetrievalCatalog(catalog), options);
+  }
+  if (group === "storage" && command === "retrieval-migrate") {
+    const catalog = argument(args, "--catalog");
+    if (!catalog?.startsWith("/")) invalidInput();
+    const dryRun = args.includes("--dry-run");
+    if (!dryRun && !args.includes(SYNTHETIC_COPY_DECLARATION_FLAG))
+      throw new MigrationSafetyError("synthetic-copy-declaration-required");
+    const backup = argument(args, "--backup");
+    if (!dryRun && !backup?.startsWith("/")) invalidInput();
+    const { migrateRetrievalCatalog } = await import(
+      "../storage/sqlite/retrieval-migration.js"
+    );
+    return output(
+      await migrateRetrievalCatalog({
+        catalog_path: catalog,
+        ...(backup ? { backup_path: backup } : {}),
+        dry_run: dryRun,
+      }),
+      options,
+    );
+  }
+  if (group === "storage" && command === "extraction-inspect") {
+    const catalog = argument(args, "--catalog");
+    if (!catalog?.startsWith("/")) invalidInput();
+    const { inspectExtractionCatalog } = await import(
+      "../storage/sqlite/extraction-migration.js"
+    );
+    return output(await inspectExtractionCatalog(catalog), options);
+  }
+  if (group === "storage" && command === "extraction-migrate") {
+    const catalog = argument(args, "--catalog");
+    if (!catalog?.startsWith("/")) invalidInput();
+    const dryRun = args.includes("--dry-run");
+    if (!dryRun && !args.includes(SYNTHETIC_COPY_DECLARATION_FLAG))
+      throw new MigrationSafetyError("synthetic-copy-declaration-required");
+    const backup = argument(args, "--backup");
+    if (!dryRun && !backup?.startsWith("/")) invalidInput();
+    const { migrateExtractionCatalog } = await import(
+      "../storage/sqlite/extraction-migration.js"
+    );
+    return output(
+      await migrateExtractionCatalog({
+        catalog_path: catalog,
+        ...(backup ? { backup_path: backup } : {}),
+        dry_run: dryRun,
+      }),
+      options,
+    );
+  }
+  if (group === "maintenance" && command === "rebuild-index") {
+    if (args.length !== 2) invalidInput();
+    return output(
+      await withApplication(
+        options,
+        async (app) => {
+          if (!app.maintenance)
+            throw new Error("maintenance runtime is unavailable");
+          return app.maintenance.rebuildIndex(options.signal);
+        },
+        "require-v2",
+      ),
+      options,
+    );
+  }
+  if (group === "maintenance" && command === "rebuild-knowledge-index") {
+    if (args.length !== 2) invalidInput();
+    return output(
+      await withApplication(
+        options,
+        async (app) => {
+          if (!app.maintenance?.rebuildKnowledgeIndex)
+            throw new Error(
+              "knowledge index maintenance is unavailable; catalog v8 is required",
+            );
+          return app.maintenance.rebuildKnowledgeIndex(options.signal);
+        },
+        "require-v2",
+      ),
+      options,
+    );
+  }
   if (group === "doctor" && command === undefined)
     return output(await runDoctor(), options);
   if (group === "storage" && command === "inspect") {
@@ -205,20 +667,26 @@ async function execute(
     return output(value, options);
   }
   if (group === "storage" && command === "migrate") {
-    const dryRun = args.includes("--dry-run");
-    if (dryRun) {
+    if (args.includes("--dry-run")) {
+      // `inspect` verifies an already identifiable catalog read-only, so a
+      // dry-run neither creates nor migrates a target.
       const value = await withApplication(
         options,
-        (app) =>
-          app.jobs?.migrate(true) ?? app.database.migrateExecutionRuntime(true),
+        (app) => app.database.migrateExecutionRuntime(true),
+        "inspect",
       );
       return output(value, options);
     }
+    // The command and its declaration are not proof: the assembly gate still
+    // verifies that the target is a synthetic copy before anything is written.
+    if (!args.includes(SYNTHETIC_COPY_DECLARATION_FLAG))
+      throw new MigrationSafetyError("synthetic-copy-declaration-required");
     const value = await withApplication(
       options,
       async (app) => {
-        await app.database.upgradeExecutionSchema();
-        return app.database.migrateExecutionRuntime(false);
+        if (!app.jobs)
+          throw new MigrationSafetyError("migration-target-unverified");
+        return app.jobs.migrate(false);
       },
       "upgrade-synthetic",
     );
@@ -234,14 +702,8 @@ async function execute(
   if (group === "storage" && command === "backup") {
     const path = argument(args, "--path");
     if (!path || !path.startsWith("/")) invalidInput();
-    await withApplication(
-      options,
-      async (app) => {
-        await app.database.upgradeExecutionSchema();
-        await app.database.backup(path);
-      },
-      "upgrade-synthetic",
-    );
+    // Backup never upgrades: the catalog is copied in the state it is in.
+    await withApplication(options, (app) => app.database.backup(path));
     return output({ path, backed_up: true }, options);
   }
   if (group === "storage" && command === "restore-check") {
@@ -253,120 +715,88 @@ async function execute(
     return output(value, options);
   }
   if (group === "config" && command === "status") {
-    const value = await new TypeScriptConfigurationOwner(
-      options.home ?? DEFAULT_HOME(),
-    ).status();
-    return output(value, options);
+    const owner = new TypeScriptConfigurationOwner(configurationHome(options));
+    const status = await owner.status();
+    if (options.json) return output(status, options);
+    const snapshot = await owner.read();
+    options.stdout?.(
+      `${renderStatus(snapshot.configuration, status, themeOption(args))}\n`,
+    );
+    return { code: 0, value: status };
   }
-  if (group === "config" && command === undefined) {
+  if (group === "config" && (command === undefined || command === "--theme")) {
     return {
       code: await runConfigurationCenter(
-        new TypeScriptConfigurationOwner(options.home ?? DEFAULT_HOME()),
-        options,
+        new TypeScriptConfigurationOwner(configurationHome(options)),
+        {
+          ...options,
+          theme: themeOption(args),
+          probeSeams: options.probeSeams,
+        },
       ),
     };
   }
   if (group === "config" && command === "test") {
-    const owner = args[2] ?? null;
-    const browserTarget = owner === "browser" ? (args[3] ?? null) : null;
-    const target =
-      owner === "browser" && browserTarget === "site"
-        ? args[4] && !args[4].startsWith("--")
-          ? args[4]
-          : argument(args, "--target")
-        : args[3] && !args[3].startsWith("--")
-          ? args[3]
-          : argument(args, "--target");
-    const validOwners = new Set([
-      "provider",
-      "model",
-      "search",
-      "download",
-      "parse",
-      "analyze",
-      "browser-model",
-      "browser-site",
-      "all",
-    ]);
-    const normalizedOwner =
-      owner === "browser" && browserTarget === "model"
-        ? "browser-model"
-        : owner === "browser" && browserTarget === "site"
-          ? "browser-site"
-          : owner;
-    if (!normalizedOwner || !validOwners.has(normalizedOwner)) invalidInput();
-    if (
-      ["provider", "model", "browser-site"].includes(normalizedOwner) &&
-      !target
-    )
-      invalidInput();
-    if (
-      ["search", "download"].includes(normalizedOwner) &&
-      !target &&
-      !args.includes("--all")
-    )
-      invalidInput();
-    const value = await withApplication(options, async (app) => {
-      const readiness = await new TypeScriptConfigurationOwner(
-        app.home,
-      ).status();
-      const selected = readiness.items.filter((item) => {
-        if (normalizedOwner === "provider")
-          return item.owner === "model-provider" && item.target === target;
-        if (normalizedOwner === "model")
-          return item.owner === "analyze" && item.target === "content";
-        if (normalizedOwner === "parse") return item.owner === "parsing";
-        if (normalizedOwner === "analyze") return item.owner === "analyze";
-        if (normalizedOwner === "browser-model")
-          return item.owner === "browser";
-        return false;
+    const request = parseProbeRequest(args);
+    const owner = new TypeScriptConfigurationOwner(configurationHome(options));
+    // `--json` is an explicit script invocation; a human invocation confirms
+    // before any probe that could reach the network or consume quota.
+    const authorized =
+      options.json === true
+        ? true
+        : await confirmConfigurationProbe(options, request);
+    if (options.signal?.aborted)
+      throw new ConfigurationProbeError("configuration-test-cancelled");
+    const session = await ConfigurationProbeSession.create(
+      owner,
+      options.probeSeams ?? {},
+    );
+    try {
+      const result = await session.run(request, {
+        authorized,
+        ...(options.signal ? { signal: options.signal } : {}),
       });
-      const sourceStatuses =
-        normalizedOwner === "search"
-          ? app.metadata.statuses
-          : normalizedOwner === "download"
-            ? app.acquisition.statuses
-            : [];
-      const sourceItems = target
-        ? sourceStatuses.filter((item) =>
-            "source_name" in item
-              ? item.source_name === target
-              : item.provider_name === target,
-          )
-        : sourceStatuses;
-      const configured =
-        normalizedOwner === "provider"
-          ? Boolean(target && app.configuration.providers[target])
-          : normalizedOwner === "model"
-            ? Boolean(target && app.configuration.models[target])
-            : normalizedOwner === "search" || normalizedOwner === "download"
-              ? sourceItems.length > 0 &&
-                sourceItems.every((item) => item.ready)
-              : normalizedOwner === "browser-site"
-                ? false
-                : normalizedOwner === "all"
-                  ? readiness.items.every((item) => item.state === "ready")
-                  : selected.length > 0 &&
-                    selected.every((item) => item.state === "ready");
+      if (options.json) {
+        // Machine mode: stdout carries only the stable probe result.
+        options.stdout?.(`${JSON.stringify(result)}\n`);
+      } else if (authorized) {
+        // Plain result goes to stdout; the confirmation prompt and the
+        // diagnosis line are interaction output and stay on stderr. The
+        // readiness snapshot stays visible next to the probe result, but it
+        // never decides the outcome.
+        const readiness = await owner.status();
+        options.stdout?.(
+          `${renderConfigurationTest(
+            { ...result, readiness },
+            themeOption(args),
+          )}\n`,
+        );
+        options.stderr?.(probeDiagnosis(result));
+      } else {
+        // No probe was authorized, so there is no result to pipe: only the
+        // diagnostic on stderr. The stable blocked value stays available to
+        // programmatic callers.
+        options.stderr?.(probeDiagnosis(result));
+      }
       return {
-        owner: normalizedOwner,
-        target,
-        outcome: configured ? "passed" : "blocked",
-        network_performed: false,
-        browser_launched: false,
-        readiness,
+        code: result.outcome === "passed" ? 0 : 3,
+        value: result,
       };
-    });
-    return output(value, options);
+    } finally {
+      session.close();
+    }
   }
   if (group === "discover" && command === "topic") {
     const text = argument(args, "--text") ?? args[2] ?? null;
     if (!text) invalidInput();
-    const limit = integerOption(args, "--scan-limit", 500);
     const yearFrom = argument(args, "--year-from");
     const yearTo = argument(args, "--year-to");
-    const value = await withApplication(options, (app) =>
-      app.discovery.run({
+    const value = await withApplication(options, (app) => {
+      const limit = metadataScanLimit(
+        args,
+        app.configuration.sources.metadata.limit ?? 500,
+      );
+      return app.discovery.run({
         query: text,
         year_from:
           yearFrom === null ? null : integerOption(args, "--year-from", 0),
@@ -375,8 +805,8 @@ async function execute(
           provider_name,
           scan_limit: limit,
         })),
-      }),
-    );
+      });
+    });
     return output(value, options);
   }
   if (
@@ -392,9 +822,12 @@ async function execute(
       .map((item) => item.trim())
       .filter(Boolean);
     if (!seeds.length) invalidInput();
-    const limit = integerOption(args, "--scan-limit", 500);
-    const value = await withApplication(options, (app) =>
-      app.citations.run({
+    const value = await withApplication(options, (app) => {
+      const limit = metadataScanLimit(
+        args,
+        app.configuration.sources.metadata.limit ?? 500,
+      );
+      return app.citations.run({
         seed_literature_ids: seeds,
         direction: (argument(args, "--direction") ?? "both") as
           | "references"
@@ -410,16 +843,16 @@ async function execute(
           provider_name,
           scan_limit: limit,
         })),
-      }),
-    );
+      });
+    });
     return output(value, options);
   }
   if (group === "literature" && command === "search") {
     const positionalText =
       args[2] === undefined || args[2].startsWith("--") ? null : args[2];
     const text = argument(args, "--text") ?? positionalText;
-    const value = await withApplication(options, (app) =>
-      app.library.search({
+    const value = await withQueryApplication(options, (app) =>
+      app.query.search({
         query: query(text, args),
         sort: (argument(args, "--sort") ?? "publication-year-desc") as
           | "publication-year-desc"
@@ -437,7 +870,7 @@ async function execute(
     const id = args[2];
     if (!id) invalidInput();
     return output(
-      await withApplication(options, (app) => app.library.detail(id)),
+      await withQueryApplication(options, (app) => app.query.detail(id)),
       options,
     );
   }
@@ -448,8 +881,8 @@ async function execute(
     const referenceId = argument(args, "--reference-id");
     if (command === "references" && referenceId) {
       return output(
-        await withApplication(options, (app) =>
-          app.library.referenceDetail(referenceId),
+        await withQueryApplication(options, (app) =>
+          app.query.referenceDetail(referenceId),
         ),
         options,
       );
@@ -457,8 +890,8 @@ async function execute(
     const id = args[2] ?? argument(args, "--literature-id");
     if (!id) invalidInput();
     return output(
-      await withApplication(options, (app) =>
-        app.library.references({
+      await withQueryApplication(options, (app) =>
+        app.query.references({
           literature_id: id,
           direction: command === "references" ? "references" : "cited-by",
           limit: Number(argument(args, "--limit") ?? 50),
@@ -494,45 +927,30 @@ async function execute(
     const path = args[3] ?? argument(args, "--path");
     if (!literatureId || !path) invalidInput();
     const bytes = await inputBytes(path, options);
-    const value = await withApplication(
-      options,
-      async (app) => {
-        if (!app.execution) throw new Error("execution runtime is unavailable");
-        const detail = await app.library.detail(literatureId);
-        const transferId = `cli-import-${Date.now()}`;
-        await app.execution.transfers.begin(
-          transferId,
-          Math.max(bytes.byteLength, 1),
-          {
-            session_id: "cli-import",
-            article_id: literatureId,
-            page_id: "cli-import",
-            document_generation: 0,
-            source_url: "https://sciretriever.local/import",
-            captured_at: new Date().toISOString(),
-          },
-        );
-        try {
-          await app.execution.transfers.append(transferId, bytes);
-          await app.execution.transfers.complete(transferId);
-          return await app.execution.acceptance.accept({
-            literature_id: literatureId,
-            transfer_id: transferId,
-            receipt_id: `cli-import-receipt-${Date.now()}`,
-            metadata_snapshot: {
-              revision: detail.metadata_revision,
-              sha256: detail.metadata_sha256,
-            },
-          });
-        } catch (error) {
-          await app.execution.transfers
-            .discard(transferId)
-            .catch(() => undefined);
-          throw error;
-        }
-      },
-      "upgrade-synthetic",
-    );
+    const ingest = async (schema: "require-v2" | "upgrade-synthetic") =>
+      withApplication(
+        options,
+        async (app) => {
+          if (!app.maintenance)
+            throw new Error("maintenance runtime is unavailable");
+          return app.maintenance.ingestPdf(
+            { literature_id: literatureId, bytes },
+            options.signal,
+          );
+        },
+        schema,
+      );
+    let value;
+    try {
+      value = await ingest("require-v2");
+    } catch (error) {
+      if (
+        !(error instanceof MigrationSafetyError) ||
+        error.code !== "migration-target-v1"
+      )
+        throw error;
+      value = await ingest("upgrade-synthetic");
+    }
     return output(value, options);
   }
   if (group === "export" && command === "metadata") {
@@ -566,8 +984,8 @@ async function execute(
                 kind: "query",
                 query: query(argument(args, "--query"), args),
               };
-      const prepared = await withApplication(options, (app) =>
-        prepareBibliographyExport(app.library, selector, format),
+      const prepared = await withQueryApplication(options, (app) =>
+        prepareBibliographyExport(app.query, selector, format),
       );
       if (target === "-") {
         options.stdoutBytes?.(prepared.bytes);
@@ -587,8 +1005,8 @@ async function execute(
     }
     const id = args[2];
     if (!id) invalidInput();
-    const detail = await withApplication(options, (app) =>
-      app.library.detail(id),
+    const detail = await withQueryApplication(options, (app) =>
+      app.query.detail(id),
     );
     return output(
       {
@@ -604,8 +1022,8 @@ async function execute(
     if (!id || !path) invalidInput();
     if (path === "-" && options.json) invalidInput();
     if (path === "-") {
-      await withApplication(options, async (app) => {
-        const detail = await app.library.detail(id);
+      await withQueryApplication(options, async (app) => {
+        const detail = await app.query.detail(id);
         const artifact =
           command === "pdf"
             ? detail.primary_pdf?.asset
@@ -625,8 +1043,8 @@ async function execute(
       });
       return { code: 0 };
     }
-    await withApplication(options, async (app) => {
-      const detail = await app.library.detail(id);
+    await withQueryApplication(options, async (app) => {
+      const detail = await app.query.detail(id);
       const artifact =
         command === "pdf"
           ? detail.primary_pdf?.asset
@@ -699,100 +1117,50 @@ async function execute(
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean);
-    const value = await withApplication(
+    // One Entry-owned orchestration produces the report; the CLI neither owns a
+    // target loop, an acquisition transport, nor an ad-hoc result shape. It reuses
+    // the single Application-built completion service so the CLI, the durable job
+    // runtime and any other frontend share one acquisition port, and it keeps the
+    // t17 migration gate untouched.
+    const report = await withApplication(
       options,
       async (app) => {
-        const selected = await selectLiteratures(app.library, selector);
-        const ids = selected.items.map((item) => item.literature.literature_id);
-        if (!ids.length)
-          return { goal: target, outcome: "selector_empty", items: [] };
-        if (ids.length === 1 && target === "content") {
-          const id = ids[0]!;
-          if (!app.completion)
-            throw new Error("completion runtime is unavailable");
-          return app.completion.complete({
-            literature_id: id,
+        const service = app.databaseCompletion;
+        if (!service)
+          throw new Error("database completion runtime is unavailable");
+        return service.run(
+          {
+            selector,
+            goal: target === "pdf" ? "ASSET_READY" : "CONTENT_READY",
             transfer_ids: transferIds,
-          });
-        }
-        const items: unknown[] = [];
-        for (const id of ids) {
-          if (target === "content") {
-            if (!app.completion)
-              throw new Error("completion runtime is unavailable");
-            items.push(
-              await app.completion.complete({
-                literature_id: id,
-                transfer_ids: transferIds,
-              }),
-            );
-            continue;
-          }
-          const detail = await app.library.detail(id);
-          if (detail.primary_pdf) {
-            items.push({
-              outcome: "pdf_ready",
-              literature_id: id,
-              asset: detail.primary_pdf.asset,
-              attempts: [],
-            });
-            continue;
-          }
-          const attempts: { transfer_id: string; outcome: string }[] = [];
-          let completed: unknown = null;
-          for (const transferId of transferIds) {
-            const candidate = await app.database.getCandidate(transferId);
-            if (!candidate) {
-              attempts.push({
-                transfer_id: transferId,
-                outcome: "candidate_missing",
-              });
-              continue;
-            }
-            try {
-              const accepted = await app.execution!.acceptance.accept({
-                literature_id: id,
-                transfer_id: transferId,
-                receipt_id: `cli-complete:${Date.now()}:${transferId}`,
-                metadata_snapshot: {
-                  revision: detail.metadata_revision,
-                  sha256: detail.metadata_sha256,
-                },
-              });
-              completed = {
-                outcome: "pdf_ready",
-                literature_id: id,
-                asset: {
-                  asset_id: accepted.asset_id,
-                  sha256: accepted.sha256,
-                  path: accepted.reference,
-                },
-                attempts: [
-                  ...attempts,
-                  { transfer_id: transferId, outcome: "accepted" },
-                ],
-              };
-              break;
-            } catch {
-              attempts.push({
-                transfer_id: transferId,
-                outcome: "candidate_failed",
-              });
-            }
-          }
-          items.push(
-            completed ?? {
-              outcome: "supplied_candidates_exhausted",
-              literature_id: id,
-              attempts,
+          },
+          {
+            signal: options.signal,
+            on_progress: (progress) => {
+              options.stderr?.(
+                `${JSON.stringify({
+                  progress: "database-completion",
+                  state: progress.state,
+                  literature_id: progress.literature_id,
+                  failure_code: progress.failure?.code ?? null,
+                })}\n`,
+              );
             },
-          );
-        }
-        return { goal: target, items };
+          },
+        );
       },
       "require-v2",
     );
-    return output(value, options);
+    options.stdout?.(`${JSON.stringify(report, null, options.json ? 0 : 2)}\n`);
+    return {
+      code:
+        report.end.kind === "interrupted"
+          ? 130
+          : report.end.kind === "failed"
+            ? 3
+            : 0,
+      value: report,
+    };
   }
   if (group === "jobs" && command === "create") {
     const idempotency = argument(args, "--idempotency") ?? `cli-${Date.now()}`;
@@ -851,35 +1219,70 @@ export async function runCli(
       error instanceof Error &&
       (error.name === "AbortError" ||
         ("code" in error && error.code === "queue-interrupted"));
+    const probeCancelled =
+      error instanceof ConfigurationProbeError &&
+      error.code === "configuration-test-cancelled";
+    const probeInvalid =
+      error instanceof ConfigurationProbeError &&
+      error.code === "configuration-probe-invalid";
     const input =
       error instanceof CliInputError ||
       error instanceof ContractValidationError ||
-      error instanceof TypeError;
+      error instanceof TypeError ||
+      probeInvalid;
     const configuration = error instanceof ConfigurationOwnerError;
     const business =
       error instanceof CliBusinessError ||
+      error instanceof QueryApplicationError ||
       error instanceof ArtifactExportError ||
       error instanceof BibliographyExportError ||
       error instanceof LiteratureNotFoundError;
-    const code = interrupted
-      ? 130
-      : input
-        ? 2
-        : configuration
-          ? 4
-          : business
-            ? 3
-            : 70;
-    const failure = interrupted
-      ? "operation-interrupted"
-      : input
-        ? "invalid-command-input"
-        : configuration
-          ? "configuration-failed"
-          : business
-            ? "business-failed"
-            : "internal-failed";
-    effective.stderr?.(`${JSON.stringify({ code: failure })}\n`);
+    const document =
+      error instanceof DocumentProcessingError ||
+      error instanceof ParsingFailure;
+    const migration =
+      error instanceof CatalogSchemaError ||
+      error instanceof MigrationSafetyError ||
+      (error instanceof Error &&
+        "code" in error &&
+        error.code === "document-migration");
+    const code =
+      interrupted || probeCancelled
+        ? 130
+        : input
+          ? 2
+          : configuration
+            ? 4
+            : business || migration || document
+              ? 3
+              : 70;
+    const failure =
+      error instanceof DocumentProcessingError ||
+      error instanceof ParsingFailure
+        ? error.code
+        : error instanceof QueryApplicationError
+          ? error.code
+          : probeCancelled
+            ? "configuration-test-cancelled"
+            : interrupted
+              ? "operation-interrupted"
+              : input
+                ? "invalid-command-input"
+                : configuration
+                  ? "configuration-failed"
+                  : migration
+                    ? "migration-refused"
+                    : business
+                      ? "business-failed"
+                      : "internal-failed";
+    effective.stderr?.(
+      `${JSON.stringify({
+        code: failure,
+        ...(error instanceof CatalogSchemaError
+          ? { reason: error.reason, progress: error.progress }
+          : {}),
+      })}\n`,
+    );
     return { code };
   }
 }
@@ -897,11 +1300,17 @@ async function isMainModule(): Promise<boolean> {
 }
 
 if (await isMainModule()) {
+  // SIGINT is the user-controlled stop: it aborts the frozen scope so the
+  // running target becomes `interrupted` and the remaining ones keep their
+  // single `notStarted` partition instead of vanishing from the run.
+  const controller = new AbortController();
+  process.once("SIGINT", () => controller.abort());
   const result = await runCli(process.argv.slice(2), {
     stdout: (text) => process.stdout.write(text),
     stdoutBytes: (bytes) => process.stdout.write(bytes),
     stderr: (text) => process.stderr.write(text),
     stdin: process.stdin,
+    signal: controller.signal,
   });
   process.exitCode = result.code;
 }

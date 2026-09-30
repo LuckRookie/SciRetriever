@@ -1,7 +1,9 @@
+import type { DurableCandidate } from "@sciretriever/contracts";
 import { LiteratureCompletionService } from "../entry/literature-completion.js";
 import { randomUUID } from "node:crypto";
 import { ArtifactRecovery } from "../storage/files/recovery.js";
 import { NoUsableContentService } from "../entry/no-usable-content.js";
+import { ManualPdfIngestionService } from "../entry/manual-pdf.js";
 import {
   AnalysisService,
   AnalysisFailure,
@@ -22,6 +24,21 @@ import {
   type MinerUHttpTransport,
 } from "../parsing/backends/mineru/index.js";
 import { ImmutableParserPublisher } from "../parsing/publication.js";
+import { DocumentProcessingService } from "../document/service.js";
+import { SqliteDocumentStorage } from "../document/storage.js";
+import { DocumentReadService } from "../document/read.js";
+import { KnowledgeAnalysisService } from "../analysis/knowledge.js";
+import { KnowledgeSynthesisService } from "../analysis/synthesis.js";
+import { SynthesisPreparationService } from "../analysis/synthesis-prepare.js";
+import { SqliteKnowledgeStorage } from "../storage/knowledge.js";
+import { SqliteSynthesisStorage } from "../storage/synthesis.js";
+import { ExtractionPreparationService } from "../extraction/prepare.js";
+import { ExtractionDeliveryService } from "../extraction/delivery.js";
+import { RetrievalIndexService } from "../retrieval/index.js";
+import { MaterialContextService } from "../retrieval/query.js";
+import { KnowledgeRetrievalIndexService } from "../retrieval/knowledge-index.js";
+import { KnowledgeContextService } from "../retrieval/knowledge-query.js";
+import { RetrievalStorageClient } from "../storage/sqlite/retrieval-client.js";
 import { acceptPdf } from "../acquisition/pdf-acceptance.js";
 import type { ParserBackend, ParserArtifactRules } from "../parsing/ports.js";
 import { BrowserTransferCollector } from "../browser/transfer.js";
@@ -31,19 +48,24 @@ import { CandidateAbandonmentService } from "../acquisition/candidate-abandonmen
 import { LiteratureQueryService } from "../literature/query.js";
 import { LiteratureIdentityService } from "../literature/identity.js";
 import { LiteratureArtifactService } from "../literature/artifacts.js";
-import { mkdir } from "node:fs/promises";
+import { lstat, mkdir } from "node:fs/promises";
 import { lookup } from "node:dns/promises";
 import { join, resolve } from "node:path";
-import { type OrdinaryConfiguration } from "../configuration/index.js";
+import {
+  loadConfiguration,
+  parseConfiguration,
+  type OrdinaryConfiguration,
+} from "../configuration/index.js";
 import {
   loadCredentialBundle,
-  issueCredentialGrant,
-  readCredential,
   bundlePreview,
   CredentialBoundaryError,
   type CredentialBundle,
+  type CurrentCredentialReader,
 } from "../configuration/credentials.js";
 import { NetworkBudgetCoordinator } from "../network/budget.js";
+import { createBrowserNetworkAdmission } from "../network/browser-admission.js";
+import type { BrowserNetworkProxy } from "../network/browser-proxy.js";
 import { createLogger, type Logger } from "../logging/index.js";
 import {
   AssetRepository,
@@ -82,12 +104,50 @@ import {
   CitationDiscoveryService,
   TopicDiscoveryService,
 } from "../entry/discovery.js";
+import { DatabaseCompletionService } from "../entry/database-completion.js";
+import {
+  EntryPdfAcquisitionService,
+  type PdfAcquisitionPort,
+} from "../entry/pdf-acquisition.js";
 import {
   assemblePublicAcquisitionRegistry,
+  type BrowserRouteAdmission,
   type PublicAcquisitionAssemblyOptions,
 } from "../acquisition/assembly.js";
+import {
+  resolveBrowserHost,
+  type BrowserArticleFlow,
+  type BrowserHostRuntimeSeam,
+  type BrowserSessionHost,
+} from "../browser/boundary.js";
+import type { BrowserHostOptions } from "../browser/host.js";
+import {
+  DEFAULT_FLOW_DEADLINE_MS,
+  DEFAULT_FLOW_MAX_ACTIONS,
+  DEFAULT_FLOW_MAX_MODEL_CALLS,
+  createBrowserArticleFlow,
+  flowUnavailable,
+  type FlowPageHandle,
+  type CollaborativeStepResult,
+} from "../browser/article-flow.js";
+import type {
+  BrowserArticleFlowFactory,
+  BrowserDeliveryRequest,
+} from "../browser/boundary.js";
+import { BrowserObservationStore } from "../browser/observation.js";
+import { createBrowserDecision } from "../browser/decision.js";
+import { BrowserCandidateIntake } from "../acquisition/browser-intake.js";
+import {
+  createProductionBrowserHostFactory,
+  productionBrowserCapability,
+  resolveVerifiedCloakRuntime,
+} from "../browser/production-host.js";
 import type { PublicAcquisitionRegistry } from "../acquisition/sources/public.js";
 import { ExecutionRepository } from "../storage/execution/repository.js";
+import {
+  authorizeExecutionSchema,
+  MigrationSafetyError,
+} from "../storage/execution/migration-gate.js";
 import {
   ExecutionJobService,
   ExecutionQueue,
@@ -103,6 +163,21 @@ export interface Application {
   readonly citations: CitationDiscoveryService;
   readonly identity: LiteratureIdentityService;
   readonly completion: LiteratureCompletionService | null;
+  readonly maintenance: {
+    readonly ingestPdf: ManualPdfIngestionService["ingestPdf"];
+    readonly parseDocuments: DocumentProcessingService["parseDocuments"];
+    readonly documentDefault: SqliteWorker["documentDefault"];
+    readonly rebuildIndex: RetrievalIndexService["build"];
+    readonly rebuildKnowledgeIndex?: KnowledgeRetrievalIndexService["build"];
+    readonly extraction: ExtractionDeliveryService;
+    readonly analyze: KnowledgeAnalysisService["analyze"];
+    readonly analyzeLong: KnowledgeAnalysisService["analyzeLong"];
+    readonly synthesize?: KnowledgeSynthesisService["synthesize"];
+  } | null;
+  readonly documentProcessing: DocumentProcessingService;
+  readonly documentRead: DocumentReadService;
+  readonly extractionPreparation: ExtractionPreparationService;
+  readonly extractionDelivery: ExtractionDeliveryService;
   readonly artifactRecovery: ArtifactRecovery;
   readonly noUsableContent: NoUsableContentService;
   readonly artifactReclaimer: ArtifactReclaimer;
@@ -110,12 +185,18 @@ export interface Application {
   readonly literatureCleanup: LiteratureCleanupService;
   readonly contentAnalysis: ContentAnalysisService | null;
   readonly analysis: AnalysisService | null;
+  readonly knowledgeAnalysis: KnowledgeAnalysisService;
+  readonly synthesisAnalysis: KnowledgeSynthesisService | null;
+  readonly synthesisPreparation: SynthesisPreparationService | null;
+  readonly synthesisRead: SqliteSynthesisStorage | null;
   readonly literatureContent: LiteratureContentService;
   readonly parsing: ParsingService | null;
   readonly literatureArtifacts: LiteratureArtifactService;
   readonly library: LiteratureQueryService;
   readonly home: string;
   readonly configuration: OrdinaryConfiguration;
+  /** Owner revision of the ordinary configuration snapshot loaded at startup. */
+  readonly configuration_revision: string;
   readonly credentials: CredentialBundle;
   readonly database: SqliteWorker;
   readonly files: FileStore;
@@ -144,8 +225,111 @@ export interface Application {
     readonly expired_interventions: number;
     readonly reconciled_publications: number;
   } | null;
+  /**
+   * Entry-owned automatic PDF acquisition over the process-wide acquisition
+   * registry. Bootstrap constructs this exactly once so the CLI, the durable job
+   * runtime and every other caller share one acquisition port instead of each
+   * assembling an isolated `assistance: "never"` loop. Null when the execution
+   * runtime (and therefore the transfer collector) is not assembled.
+   */
+  readonly pdfAcquisition: PdfAcquisitionPort | null;
+  /**
+   * Entry-owned database completion orchestration. Bootstrap constructs this once
+   * and hands the same instance to the CLI; the durable job runtime receives the
+   * same shared ports through its task runtime.
+   */
+  readonly databaseCompletion: DatabaseCompletionService | null;
+  /**
+   * The process-owned controlled Browser session, if one was demanded. Bootstrap is
+   * the only constructor and the only closer; returning the session view keeps Page,
+   * Context and CDP handles out of every caller.
+   */
+  browserHost(): BrowserSessionHost | null;
+  /** Shares one cleanup result; rejects if any owned resource fails to close. */
   close(): Promise<void>;
 }
+
+export interface QueryApplication {
+  readonly readiness: {
+    readonly status: "ready" | "not-initialized" | "unavailable";
+    readonly schema_version: number | null;
+    readonly schema_fingerprint: string | null;
+  };
+  /** Read-only literature and artifact operations. No maintenance or Job port is exposed. */
+  readonly query: Pick<
+    LiteratureQueryService,
+    "search" | "detail" | "references" | "referenceDetail"
+  > | null;
+  readonly literatureArtifacts: LiteratureArtifactService | null;
+  readonly documentRead: DocumentReadService | null;
+  readonly extractionPreparation: ExtractionPreparationService | null;
+  readonly context: MaterialContextService | null;
+  readonly knowledgeContext: KnowledgeContextService | null;
+  readonly knowledgeRead: Pick<
+    SqliteKnowledgeStorage,
+    "byId" | "list" | "default"
+  > | null;
+  readonly synthesisRead: Pick<
+    SqliteSynthesisStorage,
+    "byId" | "sourceById" | "list"
+  > | null;
+  readonly synthesisPreparation: SynthesisPreparationService | null;
+  close(): Promise<void>;
+}
+export interface QueryApplicationOptions {
+  readonly catalog_path?: string;
+  readonly artifact_root?: string;
+}
+export class QueryApplicationError extends Error {
+  readonly code: "query-not-initialized" | "query-unavailable";
+  constructor(status: "not-initialized" | "unavailable") {
+    super("query application is unavailable");
+    this.code =
+      status === "not-initialized"
+        ? "query-not-initialized"
+        : "query-unavailable";
+  }
+}
+
+/**
+ * The hard ceiling on closed Browser actions for one automatic article delivery. The
+ * flow stops as soon as it is reached, so an unproductive page cannot loop forever.
+ */
+/**
+ * Awaits one delivery while honouring cancellation, so a signal that fires before the
+ * PDF response lands cannot leave the flow waiting on a promise that will never settle.
+ */
+function raceWithAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) return Promise.reject(new TypeError("cancelled"));
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => reject(new TypeError("cancelled"));
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/** A flow that always refuses with the stable flow-unavailable reason. */
+function flowUnavailableFlow(): BrowserArticleFlow {
+  return { deliver: async () => flowUnavailable() };
+}
+
+const BROWSER_FLOW_BUDGET = Object.freeze({
+  max_actions: DEFAULT_FLOW_MAX_ACTIONS,
+  max_model_calls: DEFAULT_FLOW_MAX_MODEL_CALLS,
+  deadline_ms: DEFAULT_FLOW_DEADLINE_MS,
+});
 
 export type ApplicationStage =
   | "home"
@@ -165,6 +349,61 @@ export interface ApplicationOptions {
   /** Optional resolver/loopback seam for the shared production metadata Network. */
   readonly metadataAssembly?: MetadataAssemblyOptions;
   readonly acquisitionAssembly?: PublicAcquisitionAssemblyOptions;
+  /**
+   * Deferred controlled-Browser host construction. Bootstrap is the only owner: it
+   * builds the host lazily through the browser boundary factory, holds the instance
+   * for the process lifetime and closes it in `close()`. Tests inject a seam so the
+   * object graph is exercised without launching a real Browser.
+   */
+  readonly browserHost?: (
+    seam: BrowserHostRuntimeSeam,
+  ) => BrowserSessionHost | null;
+  /**
+   * Operator-verified Cloak runtime for the production Browser. When absent (and no
+   * seam is injected) the Browser tier stays stably unavailable.
+   */
+  readonly browserRuntime?: BrowserHostOptions["runtime"];
+  /** Network-owned proxy connection handed to the host. */
+  readonly browserProxy?: BrowserHostOptions["proxy"];
+  /**
+   * Network-approved navigation admission. A controlled Browser must never fall back to
+   * the host's permissive default, so a process without an exact admission does not get
+   * a usable host at all.
+   */
+  readonly browserAdmitNavigation?: BrowserHostOptions["admitNavigation"];
+  /** Intake-owned capture callbacks; Acquisition interprets the bytes, not Browser. */
+  readonly browserTransfers?: BrowserHostOptions["transfers"];
+  /** Explicit "the Browser runtime is available" claim for hosts that report readiness. */
+  readonly browserRuntimeAvailable?: boolean;
+  /**
+   * The bounded Browser article driver. Bootstrap wires it only when the process owns
+   * a real driver; without one the tier keeps an owned host but reports a stable
+   * flow-unavailable refusal instead of a fake delivery.
+   */
+  readonly browserArticleFlow?: BrowserArticleFlow;
+  /** Optional same-page human collaboration port for an explicit live workbench. */
+  readonly browserCollaboration?: {
+    open(
+      request: BrowserDeliveryRequest,
+      page: FlowPageHandle,
+      deadlineAt: number,
+    ): Promise<{
+      step(signal: AbortSignal): Promise<CollaborativeStepResult>;
+      beforeClose?(): Promise<void>;
+      close(failed: boolean): void | Promise<void>;
+    }>;
+    captured(
+      articleId: string,
+      candidate?: {
+        readonly transfer_id: string;
+        readonly sha256: string;
+        readonly size_bytes: number;
+        readonly page_count: number;
+        readonly disposition: "accepted" | "uncertain" | "rejected";
+        readonly publication: null;
+      },
+    ): void;
+  };
   /** Optional timeout seam for the pure TypeScript Analysis owner. */
   readonly analysisRuntime?: Omit<AnalysisOptions, "limits">;
   /** Explicit TS parser seam; transport is injected by the Network owner. */
@@ -173,14 +412,27 @@ export interface ApplicationOptions {
     readonly baseUrl: string;
     readonly modelIdentity: string;
   };
+  /** Offline transport seam; remote credential resolution remains per request. */
+  readonly mineruTransportFactory?: (origin: string) => MinerUHttpTransport;
   readonly parsing?: {
     readonly parser: ParserBackend;
     readonly rules: ParserArtifactRules;
   };
   /** Optional pure TypeScript owner instance for tests and shared frontends. */
   readonly configurationOwner?: TypeScriptConfigurationOwner;
-  /** Explicit opt-in, restricted to synthetic/copy catalogs during migration. */
-  readonly executionSchema?: "upgrade-synthetic" | "require-v2";
+  /** Offline socket seam; the real credential authorization boundary still runs. */
+  readonly agentTransportFactory?: (
+    provider: string,
+    origin: string,
+  ) => AgentTransport;
+  /**
+   * Explicit opt-in for the durable execution runtime. `"upgrade-synthetic"`
+   * requests the v1 -> v2 upgrade and is only accepted for a target that the
+   * migration safety gate independently verifies as a synthetic copy;
+   * `"require-v2"` performs no write and refuses anything that is not already v2;
+   * `"inspect"` only verifies a read-only target for migration dry-runs.
+   */
+  readonly executionSchema?: "upgrade-synthetic" | "require-v2" | "inspect";
   readonly afterStage?: (stage: ApplicationStage) => void | Promise<void>;
 }
 
@@ -200,9 +452,11 @@ function serviceOrigin(value: string): string {
 function assembleConfiguredTypeScriptParser(
   configuration: OrdinaryConfiguration,
   credentials: CredentialBundle,
+  currentCredential: CurrentCredentialReader,
   coordinator: NetworkBudgetCoordinator,
   resolver?: Resolver,
   connection?: ConnectionDependencies,
+  transportFactory?: ApplicationOptions["mineruTransportFactory"],
 ): {
   readonly parser: ParserBackend;
   readonly rules: ParserArtifactRules;
@@ -230,63 +484,67 @@ function assembleConfiguredTypeScriptParser(
     )
   )
     return null;
-  const grant = issueCredentialGrant(
-    credentials,
-    "core",
-    "mineru",
-    "bearer_token",
-    origin,
-    "parser-upload",
-  );
-  const token = readCredential(
-    credentials,
-    grant,
-    "mineru",
-    "bearer_token",
-    origin,
-    "parser-upload",
-  );
   const parsed = new URL(config.base_url);
-  const raw = createAgentTransport({
-    resolver:
-      resolver ??
-      (async (hostname) =>
-        (await lookup(hostname, { all: true })).map((item) => item.address)),
-    policy: {
-      allowed_schemes: ["https"],
-      allowed_classes: ["public"],
-      allowed_origins: [
-        {
-          scheme: "https",
-          hostname: parsed.hostname,
-          port: Number(parsed.port || 443),
+  const raw = transportFactory
+    ? null
+    : createAgentTransport({
+        resolver:
+          resolver ??
+          (async (hostname) =>
+            (await lookup(hostname, { all: true })).map(
+              (item) => item.address,
+            )),
+        policy: {
+          allowed_schemes: ["https"],
+          allowed_classes: ["public"],
+          allowed_origins: [
+            {
+              scheme: "https",
+              hostname: parsed.hostname,
+              port: Number(parsed.port || 443),
+            },
+          ],
+          allowed_ports: [
+            { scheme: "https", port: Number(parsed.port || 443) },
+          ],
         },
-      ],
-      allowed_ports: [{ scheme: "https", port: Number(parsed.port || 443) }],
-    },
-    coordinator,
-    scope: "parser",
-    limits: {
-      maxConcurrency: 1,
-      maxHostConcurrency: 1,
-      maxResponseBytes: 128 * 1024 * 1024,
-      maxRedirects: 0,
-      maxRetries: 0,
-    },
-    ...(connection ? { connection } : {}),
-  });
+        coordinator,
+        scope: "parser",
+        limits: {
+          maxConcurrency: 1,
+          maxHostConcurrency: 1,
+          maxResponseBytes: 128 * 1024 * 1024,
+          maxRedirects: 0,
+          maxRetries: 0,
+        },
+        ...(connection ? { connection } : {}),
+      });
+  const injected = transportFactory?.(origin);
   const transport: MinerUHttpTransport = {
-    request: (url, options) =>
-      raw({
+    request: async (url, options) => {
+      const token = await currentCredential({
+        namespace: "core",
+        provider: "mineru",
+        field: "bearer_token",
+        origin,
+        operation: "parser-upload",
+      });
+      if (token === null) throw new CredentialBoundaryError();
+      const headers = {
+        ...options.headers,
+        authorization: `Bearer ${token}`,
+      };
+      if (injected) return injected.request(url, { ...options, headers });
+      return raw!({
         endpoint: url,
         headers: [
           ["accept", "application/json, application/zip"],
-          ["authorization", `Bearer ${token}`],
-          ...Object.entries(options.headers),
+          ...Object.entries(headers),
         ],
         body: options.body,
         ...(options.signal ? { signal: options.signal } : {}),
-      }),
+      });
+    },
   };
   return {
     parser: new MinerUParser(transport, {
@@ -314,7 +572,8 @@ export async function createApplication(
     options.configurationOwner ?? new TypeScriptConfigurationOwner(home);
   if (configurationOwner.home !== home)
     throw new Error("application operation failed");
-  const configuration = (await configurationOwner.read()).configuration;
+  const configurationSnapshot = await configurationOwner.read();
+  const configuration = configurationSnapshot.configuration;
   await options.afterStage?.("configuration");
   const credentials = await loadCredentialBundle(home);
   await options.afterStage?.("credentials");
@@ -325,9 +584,133 @@ export async function createApplication(
   let analysis: AnalysisService | undefined;
   let contentAnalysis: ContentAnalysisService | undefined;
   let completion: LiteratureCompletionService | undefined;
+  let manualPdf: ManualPdfIngestionService | undefined;
+  let pdfAcquisition: PdfAcquisitionPort | null = null;
+  let execution: Application["execution"] = null;
+  // Deferred callbacks must read the live execution context, but they are created
+  // before it exists. They read this box instead, which is updated as soon as the
+  // execution runtime is assembled; a direct read would also collapse to `never` under
+  // control-flow analysis because the holder stays null until the first delivery.
+  const executionBox: { current: Application["execution"] } = { current: null };
+  const currentExecution = (): NonNullable<Application["execution"]> | null =>
+    executionBox.current;
+  const currentIntakeTarget = (): {
+    article_id: string;
+    identifier: string;
+    version: string;
+  } | null => browserIntakeTargetMutable;
+  const currentPendingCandidate = (): {
+    readonly promise: Promise<DurableCandidate>;
+    resolve: (candidate: DurableCandidate) => void;
+    reject: (error: unknown) => void;
+    settled: boolean;
+  } | null => pendingBrowserCandidateMutable;
+  // One delivery at a time: the Intake target is set when a flow opens a page, and the
+  // candidate it spools is buffered for the same delivery to read back.
+  let browserIntakeTargetMutable: {
+    article_id: string;
+    identifier: string;
+    version: string;
+  } | null = null;
+  // One pending delivery at a time: the PDF response or download can settle before the
+  // driver loop even finishes, so the candidate is resolved through a promise rather
+  // than read from a nullable buffer that races with late bytes.
+  let pendingBrowserCandidateMutable: {
+    readonly promise: Promise<DurableCandidate>;
+    resolve: (candidate: DurableCandidate) => void;
+    reject: (error: unknown) => void;
+    settled: boolean;
+  } | null = null;
+  // The host factory is resolved before the driver exists, so it reads the flow
+  // through this holder. The holder is filled on first demand, which keeps an idle
+  // tier free of both the host and the driver.
+  const browserFlowHolder: { current: BrowserArticleFlow | null } = {
+    current: null,
+  };
+  let browserSessionHost: BrowserSessionHost | null = null;
+  let ownedBrowserProxy: BrowserNetworkProxy | null = null;
+  let databaseCompletion: DatabaseCompletionService | null = null;
+  let documentProcessing: DocumentProcessingService | null = null;
+  let documentRead: DocumentReadService | null = null;
+  let knowledgeAnalysis: KnowledgeAnalysisService | null = null;
+  let synthesisAnalysis: KnowledgeSynthesisService | null = null;
+  let synthesisPreparation: SynthesisPreparationService | null = null;
+  let synthesisRead: SqliteSynthesisStorage | null = null;
+  let extractionPreparation: ExtractionPreparationService | null = null;
+  let extractionDelivery: ExtractionDeliveryService | null = null;
+  let retrievalIndex: RetrievalIndexService | null = null;
+  let knowledgeIndex: KnowledgeRetrievalIndexService | null = null;
   const catalogPath =
     configuration.paths.catalog_path ?? join(home, "catalog.sqlite");
+  // Fail closed before the catalog is created or opened for writing.
+  if (options.executionSchema !== undefined)
+    await authorizeExecutionSchema(options.executionSchema, {
+      catalog_path: catalogPath,
+    });
+  const networkBudget = new NetworkBudgetCoordinator();
   const writes = new CatalogWriteAdmission(catalogPath);
+  let closing: Promise<void> | undefined;
+  const closeApplication = (): Promise<void> => {
+    // Publish the shared result before invoking any resource callback. This also
+    // closes lazy Browser admission immediately, including during reentrant calls.
+    closing ??= Promise.resolve().then(async () => {
+      const failures: unknown[] = [];
+      // Keep dependants before their stores and permits. A failed release must not
+      // stop later owners from releasing resources or erase another cleanup error.
+      const releases: readonly (() => void | Promise<void>)[] = [
+        async () => {
+          const host = browserSessionHost;
+          browserSessionHost = null;
+          // Broker close aborts active work and rejects queued work. Closing the
+          // host concurrently unblocks a page operation that has not returned to
+          // the driver yet; both results settle before the proxy is released.
+          const settled = await Promise.allSettled([
+            Promise.resolve().then(() => pdfAcquisition?.close?.()),
+            Promise.resolve().then(() => host?.close()),
+          ]);
+          for (const result of settled)
+            if (result.status === "rejected") failures.push(result.reason);
+          const proxy = ownedBrowserProxy;
+          ownedBrowserProxy = null;
+          try {
+            await proxy?.close();
+          } catch (error) {
+            failures.push(error);
+          }
+        },
+        () => completion?.close(),
+        () => manualPdf?.close(),
+        () => contentAnalysis?.close(),
+        () => analysis?.close(),
+        () => knowledgeAnalysis?.close(),
+        () => synthesisAnalysis?.close(),
+        () => synthesisPreparation?.close(),
+        () => knowledgeIndex?.close(),
+        () => synthesisRead?.close(),
+        () => retrievalIndex?.close(),
+        () => documentProcessing?.close(),
+        () => extractionDelivery?.shutdown(),
+        () => extractionPreparation?.close(),
+        () => documentRead?.close(),
+        () => parsing?.close(),
+        () => networkBudget.close(),
+        () => writes.close(),
+        () => agents?.close(),
+        () => files?.close(),
+        () => database?.close(),
+      ];
+      for (const release of releases) {
+        try {
+          await release();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length)
+        throw new AggregateError(failures, "application cleanup failed");
+    });
+    return closing;
+  };
   try {
     database = new SqliteWorker(catalogPath, writes);
     await options.afterStage?.("database");
@@ -336,19 +719,327 @@ export async function createApplication(
       writes,
     );
     await options.afterStage?.("files");
-    const networkBudget = new NetworkBudgetCoordinator();
     await options.afterStage?.("network");
+    // The controlled-Browser route is admitted only on the operator's explicit
+    // switch. Bootstrap owns BrowserHost construction through a deferred factory so
+    // an idle route never starts a Browser, profile or Cloak bundle. A disabled
+    // switch does not register the route at all (the tier is legitimately skipped);
+    // an enabled-but-unavailable runtime stays registered as a not-ready source so
+    // its stable reason remains visible instead of silently truncating the attempt.
+    const browserEnabled = configuration.browser.enabled === true;
+    // Bootstrap owns the one controlled Browser. The host is built lazily through the
+    // boundary factory, so an idle tier never creates a profile directory, takes the
+    // profile lock, opens a Network connection or launches Chromium.
+    // The production runtime is resolved and verified *before* any host can be built:
+    // an unverified bundle path must never admit the tier, and a factory without a
+    // verified runtime must never fall back to the default Playwright Chromium. The
+    // verification runs only when the operator enabled Browser and no seam was injected,
+    // so an idle or disabled process touches no bundle at all.
+    const injectedBrowserHostFactory = options.browserHost ?? null;
+    const verifiedBrowserRuntime =
+      options.browserRuntime ??
+      (browserEnabled && injectedBrowserHostFactory === null
+        ? await resolveVerifiedCloakRuntime(
+            process.env.SCIRETRIEVER_CLOAK_BUNDLE,
+          )
+        : undefined);
+    // A verified production runtime receives the Network-owned CONNECT transport
+    // and URL/DNS admission automatically. The injected ports remain explicit
+    // offline seams; ordinary CLI and Job callers need no private bootstrap option.
+    let browserProxy = options.browserProxy;
+    let browserAdmitNavigation = options.browserAdmitNavigation;
+    if (
+      browserEnabled &&
+      verifiedBrowserRuntime &&
+      injectedBrowserHostFactory === null &&
+      browserProxy === undefined &&
+      browserAdmitNavigation === undefined
+    ) {
+      const network = createBrowserNetworkAdmission({ budget: networkBudget });
+      browserProxy = await network.proxy.start();
+      browserAdmitNavigation = network.admitNavigation;
+      ownedBrowserProxy = network.proxy;
+    }
+    const browserHostResolution = resolveBrowserHost(
+      configuration.browser.profile
+        ? {
+            profile: join(home, "profile"),
+            ...(browserProxy ? { proxy: browserProxy } : {}),
+          }
+        : null,
+      injectedBrowserHostFactory ??
+        createProductionBrowserHostFactory({
+          runtime: verifiedBrowserRuntime,
+          ...(browserProxy ? { proxy: browserProxy } : {}),
+          ...(browserAdmitNavigation
+            ? { admitNavigation: browserAdmitNavigation }
+            : {}),
+          // The host is built before any delivery, so its capture callbacks resolve
+          // the live Intake and buffer per delivery rather than capturing a stale one.
+          // The internal callbacks are mandatory for the real flow: they resolve the
+          // live Intake and resolve this delivery's pending candidate. A custom seam may
+          // observe capture context, but it must not displace the receiver.
+          transfers: {
+            captureContext: (
+              pageId: string,
+              generation: number,
+              sourceUrl: string,
+            ) => {
+              const target = currentIntakeTarget();
+              if (target === null) return null;
+              return {
+                session_id: `browser-flow-${bootId}`,
+                article_id: target.article_id,
+                page_id: pageId,
+                document_generation: generation,
+                source_url: sourceUrl,
+                captured_at: new Date().toISOString(),
+              };
+            },
+            receive: async (input) => {
+              const target = currentIntakeTarget();
+              const runtime = currentExecution();
+              if (target === null || runtime === null)
+                throw new TypeError("no browser intake target");
+              const intake = new BrowserCandidateIntake(
+                runtime.transfers,
+                target,
+              );
+              const result = await intake.receive(input);
+              const pending = currentPendingCandidate();
+              if (pending === null || pending.settled)
+                throw new TypeError("no pending browser delivery");
+              pending.settled = true;
+              pending.resolve(result.candidate);
+              options.browserCollaboration?.captured(target.article_id, {
+                transfer_id: result.candidate.transfer_id,
+                sha256: result.candidate.sha256,
+                size_bytes: result.candidate.size_bytes,
+                page_count: result.assessment.page_count,
+                disposition: result.assessment.verdict.disposition,
+                publication: null,
+              });
+            },
+            failed: () => {
+              const pending = currentPendingCandidate();
+              if (pending !== null && !pending.settled) {
+                pending.settled = true;
+                pending.reject(new TypeError("browser transfer failed"));
+              }
+            },
+          },
+          // The host factory owns the raw BrowserHost, so it supplies the real page
+          // source; Bootstrap only builds the driver around it. A missing driver keeps
+          // the stable flow-unavailable refusal instead of faking one.
+          article_flow_factory: (pages) => {
+            const build = demandBrowserFlowFactory();
+            if (build === null) return flowUnavailableFlow();
+            const flow = build(pages);
+            browserFlowHolder.current = flow;
+            return flow;
+          },
+        }),
+    );
+    // Readiness must come from the actual capability, never from the seam alone: a
+    // production factory without a verified runtime builds nothing, so the admission
+    // has to stay unadmitted with a stable runtime reason instead of claiming a
+    // controlled delivery that cannot exist.
+    const browserCapability =
+      injectedBrowserHostFactory !== null
+        ? Object.freeze({
+            available: true as const,
+            reason: null,
+          })
+        : productionBrowserCapability({ runtime: verifiedBrowserRuntime });
+    const browserAdmissionPresent = browserAdmitNavigation !== undefined;
+    const browserRuntimeAvailable =
+      browserEnabled &&
+      browserAdmissionPresent &&
+      browserCapability.available &&
+      browserHostResolution.availability === "available" &&
+      options.browserRuntimeAvailable !== false;
+    // Controlled delivery is admitted only when the process actually owns a Browser
+    // host AND the Entry acquisition port can present a Browser delivery as an
+    // accepted candidate. Entry now runs the locator routes itself and escalates once
+    // to this owned session, so an available host is an admitted route; a missing
+    // runtime stays unadmitted and fails closed instead of faking an acquisition.
+    const browserControlledDelivery = browserRuntimeAvailable;
+    // Only an admitted Browser is expressed as a route. When the operator left
+    // Browser off there is no admission to express, so the registry keeps the
+    // Public -> authorized API order and the tier is skipped, not faked.
+    // Built on first demand and then held for the process lifetime, so Bootstrap
+    // stays the single owner and `close()` can release it deterministically.
+    // The production driver is assembled lazily, at demand time: the Intake collector,
+    // its transfers and the acceptance owner only exist after `execution` is built, and
+    // the flow must read those real instances — never the host callbacks as a
+    // substitute. Because every reference is resolved inside this closure, an idle tier
+    // still constructs nothing and never starts a Browser.
+    // Bootstrap supplies the driver factory, not a page source: the host factory owns
+    // the raw BrowserHost and therefore supplies the pages, so `BrowserSessionHost`
+    // never has to grow `start`/`openPage`.
+    const demandBrowserFlowFactory = (): BrowserArticleFlowFactory | null => {
+      if (!browserEnabled) return null;
+      if (!agents || !agents.readiness("browser").configured) return null;
+      return (pages) =>
+        createBrowserArticleFlow({
+          pages: {
+            openPage: async (request: BrowserDeliveryRequest) => {
+              // Bind this delivery's identity and register its pending candidate before
+              // the page opens: a PDF response or download can settle while the driver
+              // loop is still running, and late bytes must never attribute to the next
+              // target.
+              const target = {
+                article_id: request.literature_id,
+                identifier: request.identifier,
+                version: request.version,
+              };
+              browserIntakeTargetMutable = target;
+              let resolve!: (candidate: DurableCandidate) => void;
+              let reject!: (error: unknown) => void;
+              const promise = new Promise<DurableCandidate>((ok, fail) => {
+                resolve = ok;
+                reject = fail;
+              });
+              promise.catch(() => undefined);
+              const pending = {
+                promise,
+                resolve,
+                reject,
+                settled: false,
+              };
+              pendingBrowserCandidateMutable = pending;
+              let opened: {
+                readonly page: FlowPageHandle;
+                readonly close: () => Promise<void>;
+              };
+              try {
+                opened = await pages.openPage(request);
+              } catch (error) {
+                // A failed open must not leave this delivery's slots behind for the next
+                // target to collide with.
+                if (currentPendingCandidate() === pending)
+                  pendingBrowserCandidateMutable = null;
+                if (currentIntakeTarget() === target)
+                  browserIntakeTargetMutable = null;
+                throw error;
+              }
+              const pendingAtOpen = pending;
+              const targetAtOpen = target;
+              return {
+                page: opened.page,
+                close: async () => {
+                  try {
+                    await opened.close();
+                  } finally {
+                    // Clear only this delivery's own slots: a later delivery may have
+                    // already replaced them, and late bytes must never be attributed to
+                    // the next target.
+                    if (currentPendingCandidate() === pendingAtOpen)
+                      pendingBrowserCandidateMutable = null;
+                    if (currentIntakeTarget() === targetAtOpen)
+                      browserIntakeTargetMutable = null;
+                  }
+                },
+              };
+            },
+          },
+          decide: createBrowserDecision(agents!),
+          ...(options.browserCollaboration
+            ? { collaboration: options.browserCollaboration }
+            : {}),
+          ...BROWSER_FLOW_BUDGET,
+          observations: new BrowserObservationStore(),
+          session_id: `browser-flow-${bootId}`,
+          abandonCandidate: async (candidate, signal: AbortSignal) => {
+            const runtime = currentExecution();
+            const articleId = candidate.capture?.article_id;
+            if (!runtime || !articleId) return;
+            await runtime.abandonment.abandon(
+              {
+                article_id: articleId,
+                transfer_id: candidate.transfer_id,
+                sha256: candidate.sha256,
+              },
+              signal,
+            );
+          },
+          hasCandidate: () => currentPendingCandidate()?.settled === true,
+          awaitCandidate: async (signal: AbortSignal) => {
+            const target = currentIntakeTarget();
+            const pending = currentPendingCandidate();
+            if (target === null || pending === null) return null;
+            const candidate = await raceWithAbort(pending.promise, signal);
+            const runtime = currentExecution();
+            if (runtime === null) return null;
+            const intake = new BrowserCandidateIntake(
+              runtime.transfers,
+              target,
+            );
+            const assessed = await intake.assess(candidate, signal);
+            return {
+              transfer_id: assessed.candidate.transfer_id,
+              candidate: assessed.candidate,
+              accepted: assessed.assessment.verdict.disposition === "accepted",
+            };
+          },
+        });
+    };
+    const demandBrowserHost = (): BrowserSessionHost | null => {
+      if (closing !== undefined) return null;
+      if (!browserEnabled) return null;
+      if (browserSessionHost) return browserSessionHost;
+      // `browserHost()` is the public, process-owned demand surface the acquisition tier
+      // consumes, so it fails closed on exactly the admission the registry reports:
+      // without a Network-owned navigation admission (or without a verified runtime) this
+      // process cannot deliver, and demanding a host must not construct one that can only
+      // be refused later. An injected host factory is an explicit test/operator seam for
+      // host *construction*; it is never an exemption from navigation admission, so the
+      // synthetic owner tests inject an identity admission instead of relying on it.
+      if (!browserRuntimeAvailable) return null;
+      if (browserHostResolution.availability !== "available") return null;
+      try {
+        browserSessionHost = browserHostResolution.create();
+      } catch {
+        // An admitted tier whose runtime cannot actually be built stays stably
+        // unavailable: the caller reports a Browser failure instead of aborting the
+        // target with an internal error.
+        return null;
+      }
+      return browserSessionHost;
+    };
+    const browserAdmission: BrowserRouteAdmission | undefined = browserEnabled
+      ? Object.freeze({
+          enabled: true,
+          controlled_delivery: browserControlledDelivery,
+          unavailable_reason: browserRuntimeAvailable
+            ? null
+            : ("browser-runtime-unavailable" as const),
+        })
+      : undefined;
     const acquisition = assemblePublicAcquisitionRegistry(
       configuration,
       networkBudget,
       {
         ...(options.acquisitionAssembly ?? options.metadataAssembly ?? {}),
+        currentCredential:
+          options.acquisitionAssembly?.currentCredential ??
+          options.metadataAssembly?.currentCredential ??
+          ((request) => configurationOwner.authorizeCurrentCredential(request)),
         credentials,
+        ...(browserAdmission ? { browser_admission: browserAdmission } : {}),
       },
     );
     const logger = createLogger("application");
     agents = new AgentRuntime(
-      buildAgentBindings(configuration, credentials, networkBudget),
+      buildAgentBindings(
+        configuration,
+        credentials,
+        networkBudget,
+        (request) => configurationOwner.authorizeCurrentCredential(request),
+        (namespace, provider, field) =>
+          configurationOwner.hasCurrentCredential(namespace, provider, field),
+        options.agentTransportFactory,
+      ),
     );
     await options.afterStage?.("agents");
     const artifactReclaimer = new ArtifactReclaimer(
@@ -361,7 +1052,6 @@ export async function createApplication(
       artifactReclaimer,
       writes,
     );
-    let execution: Application["execution"] = null;
     let jobs: ExecutionRepository | null = null;
     let queue: ExecutionQueue | null = null;
     let jobService: ExecutionJobService | null = null;
@@ -369,16 +1059,19 @@ export async function createApplication(
     let interventions: InterventionService | null = null;
     if (options.executionSchema === "upgrade-synthetic")
       await database.upgradeExecutionSchema();
-    if (options.executionSchema !== undefined) {
+    if (
+      options.executionSchema === "upgrade-synthetic" ||
+      options.executionSchema === "require-v2"
+    ) {
       const runtime = await database.inspectExecutionRuntime();
       if (!runtime.migrated)
-        throw new Error("execution runtime is unavailable");
+        throw new MigrationSafetyError("migration-target-v1");
       jobs = new ExecutionRepository(database);
       queue = new ExecutionQueue(jobs);
       interventions = new InterventionService(jobs);
       const transfers = new BrowserTransferCollector(files, database);
       const publisher = new CandidatePublisher(transfers, database);
-      execution = {
+      const executionValue: NonNullable<Application["execution"]> = {
         transfers,
         publisher,
         acceptance: new CandidateAcceptanceService(
@@ -393,6 +1086,8 @@ export async function createApplication(
           writes,
         ),
       };
+      execution = executionValue;
+      executionBox.current = executionValue;
     }
     const literatureArtifacts = new LiteratureArtifactService(database, files);
     let parsingPorts = options.parsing;
@@ -428,9 +1123,11 @@ export async function createApplication(
         assembleConfiguredTypeScriptParser(
           configuration,
           credentials,
+          (request) => configurationOwner.authorizeCurrentCredential(request),
           networkBudget,
           options.metadataAssembly?.resolver,
           options.metadataAssembly?.connection,
+          options.mineruTransportFactory,
         ) ?? undefined;
     }
     if (parsingPorts)
@@ -445,8 +1142,73 @@ export async function createApplication(
         parsingPorts.rules,
         new ImmutableParserPublisher(database, files),
       );
+    documentProcessing = new DocumentProcessingService(
+      database,
+      new SqliteDocumentStorage(database, files),
+      parsingPorts?.rules ?? new TypeScriptParserArtifactRules(),
+      parsing ?? null,
+    );
+    documentRead = new DocumentReadService(
+      database,
+      new SqliteDocumentStorage(database, files),
+    );
+    knowledgeAnalysis = new KnowledgeAnalysisService(
+      documentRead,
+      agents,
+      new SqliteKnowledgeStorage(database, files, documentRead),
+    );
     const library = new LiteratureQueryService(database, files);
-    if (jobs) jobService = new ExecutionJobService(jobs, library);
+    if ([7, 8].includes(Number((await database.schema()).schema_version))) {
+      synthesisRead = new SqliteSynthesisStorage(database, files, documentRead);
+      synthesisPreparation = new SynthesisPreparationService(
+        documentRead,
+        library,
+        synthesisRead,
+      );
+      synthesisAnalysis = new KnowledgeSynthesisService(
+        documentRead,
+        agents,
+        synthesisPreparation,
+        synthesisRead,
+      );
+    }
+    extractionPreparation = new ExtractionPreparationService(
+      documentRead,
+      library,
+    );
+    extractionDelivery = new ExtractionDeliveryService(
+      database,
+      documentRead,
+      extractionPreparation,
+    );
+    retrievalIndex = new RetrievalIndexService(
+      new RetrievalStorageClient(database),
+      documentRead,
+      library,
+      writes,
+    );
+    if ((await database.schema()).schema_version === 8 && synthesisRead)
+      knowledgeIndex = new KnowledgeRetrievalIndexService(
+        new RetrievalStorageClient(database),
+        synthesisRead,
+        writes,
+      );
+    // One process-wide acquisition port, built here and shared by every caller: the
+    // CLI, the durable job runtime and any future frontend must not assemble their own
+    // isolated acquisition loop. The completion orchestration is constructed later,
+    // once `completion`/`parsing`/`contentAnalysis` exist, so it cannot capture a
+    // half-built graph.
+    if (execution) {
+      pdfAcquisition = new EntryPdfAcquisitionService({
+        registry: acquisition,
+        network_budget: networkBudget,
+        transfers: execution.transfers,
+        acceptance: execution.acceptance,
+        // The Browser tier is the same owned session the Application exposes, reached
+        // lazily so an idle acquisition never starts one.
+        browser_host: () => demandBrowserHost(),
+      });
+    }
     const analysisConfigured =
       configuration.analyze.model !== null &&
       [
@@ -494,6 +1256,13 @@ export async function createApplication(
       database,
       files,
     );
+    if (execution)
+      manualPdf = new ManualPdfIngestionService(
+        library,
+        execution.transfers,
+        execution.acceptance,
+        execution.abandonment,
+      );
     const literatureCleanup = new LiteratureCleanupService(database, files);
     const noUsableContent = new NoUsableContentService(
       literatureCleanup,
@@ -503,11 +1272,7 @@ export async function createApplication(
       execution?.transfers,
     );
     if (analysis)
-      contentAnalysis = new ContentAnalysisService(
-        analysis,
-        literatureContent,
-        noUsableContent,
-      );
+      contentAnalysis = new ContentAnalysisService(analysis, literatureContent);
     if (execution && parsing && contentAnalysis)
       completion = new LiteratureCompletionService(
         library,
@@ -516,21 +1281,37 @@ export async function createApplication(
         parsing,
         contentAnalysis,
       );
-    if (jobs && queue && interventions)
-      taskService = new ExecutionTaskService(jobs, queue, interventions, {
-        detail: (literatureId) => library.detail(literatureId),
+    // Construct the shared completion orchestration only now that `completion` is
+    // final. Building it earlier would capture `completion: null` forever, so a
+    // configured CONTENT_READY target would wrongly report
+    // `content-completion-unavailable` even with Parsing and Analysis ready.
+    if (execution)
+      databaseCompletion = new DatabaseCompletionService({
+        library,
+        database,
+        writes,
+        max_concurrency: configuration.execution.max_concurrency,
+        automatic_pdf_for_content: true,
         completion: completion ?? null,
+        acquisition: pdfAcquisition,
+      });
+    if (jobs && databaseCompletion)
+      jobService = new ExecutionJobService(jobs, databaseCompletion, library);
+    if (jobs && queue && interventions && databaseCompletion)
+      taskService = new ExecutionTaskService(jobs, queue, interventions, {
+        completion: databaseCompletion,
       });
     const observations = new ObservationRepository(database);
     const references = new ReferenceRepository(database);
     const metadata = options.metadata
       ? buildMetadataRegistry(options.metadata)
-      : assembleMetadataRegistry(
-          configuration,
-          credentials,
-          networkBudget,
-          options.metadataAssembly,
-        );
+      : assembleMetadataRegistry(configuration, credentials, networkBudget, {
+          ...(options.metadataAssembly ?? {}),
+          currentCredential:
+            options.metadataAssembly?.currentCredential ??
+            ((request) =>
+              configurationOwner.authorizeCurrentCredential(request)),
+        });
     const identity = new LiteratureIdentityService(database, writes);
     await database.schema();
     await artifactRecovery.recover();
@@ -566,6 +1347,34 @@ export async function createApplication(
       ),
       identity,
       completion: completion ?? null,
+      maintenance: manualPdf
+        ? {
+            ingestPdf: manualPdf.ingestPdf.bind(manualPdf),
+            parseDocuments:
+              documentProcessing.parseDocuments.bind(documentProcessing),
+            documentDefault: database.documentDefault.bind(database),
+            rebuildIndex: retrievalIndex.build.bind(retrievalIndex),
+            ...(knowledgeIndex
+              ? {
+                  rebuildKnowledgeIndex:
+                    knowledgeIndex.build.bind(knowledgeIndex),
+                }
+              : {}),
+            extraction: extractionDelivery,
+            analyze: knowledgeAnalysis.analyze.bind(knowledgeAnalysis),
+            analyzeLong: knowledgeAnalysis.analyzeLong.bind(knowledgeAnalysis),
+            ...(synthesisAnalysis
+              ? {
+                  synthesize:
+                    synthesisAnalysis.synthesize.bind(synthesisAnalysis),
+                }
+              : {}),
+          }
+        : null,
+      documentProcessing,
+      documentRead,
+      extractionPreparation,
+      extractionDelivery,
       artifactRecovery,
       noUsableContent,
       writes,
@@ -573,6 +1382,10 @@ export async function createApplication(
       literatureCleanup,
       contentAnalysis: contentAnalysis ?? null,
       analysis: analysis ?? null,
+      knowledgeAnalysis,
+      synthesisAnalysis,
+      synthesisPreparation,
+      synthesisRead,
       literatureContent,
       parsing: parsing ?? null,
       literatureArtifacts,
@@ -584,8 +1397,12 @@ export async function createApplication(
       taskService,
       interventions,
       executionRecovery,
+      pdfAcquisition,
+      databaseCompletion,
+      browserHost: demandBrowserHost,
       home,
       configuration,
+      configuration_revision: configurationSnapshot.revision,
       credentials,
       database,
       files,
@@ -595,56 +1412,266 @@ export async function createApplication(
       observations,
       assets: new AssetRepository(database, files),
       references,
-      close: async () => {
-        await completion?.close();
-        await contentAnalysis?.close();
-        analysis?.close();
-        parsing?.close();
-        await writes.close();
-        await closeResources(agents, files, database);
-      },
+      close: closeApplication,
     };
     await options.afterStage?.("schema");
     return application;
   } catch (error) {
-    await completion?.close();
-    await contentAnalysis?.close();
-    analysis?.close();
-    parsing?.close();
-    await writes.close();
-    await closeResources(agents, files, database);
+    try {
+      await closeApplication();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "application startup and cleanup failed",
+        { cause: error },
+      );
+    }
     throw error;
   }
 }
 
-async function closeResources(
-  agents: AgentRuntime | undefined,
-  files: FileStore | undefined,
-  database: SqliteWorker | undefined,
-): Promise<void> {
-  let firstError: unknown;
+/**
+ * Open the existing catalog for query only. This path never creates the home,
+ * catalog, artifact root, schema, recovery tickets, or durable Jobs.
+ */
+export async function createQueryApplication(
+  homeValue: string,
+  options: QueryApplicationOptions = {},
+): Promise<QueryApplication> {
+  if (typeof homeValue !== "string" || !homeValue.startsWith("/"))
+    throw new Error("query application operation failed");
+  const home = resolve(homeValue);
+  const unavailable = (): QueryApplication => ({
+    readiness: {
+      status: "unavailable",
+      schema_version: null,
+      schema_fingerprint: null,
+    },
+    query: null,
+    literatureArtifacts: null,
+    documentRead: null,
+    extractionPreparation: null,
+    context: null,
+    knowledgeContext: null,
+    knowledgeRead: null,
+    synthesisRead: null,
+    synthesisPreparation: null,
+    close: async () => undefined,
+  });
+  let configuration: OrdinaryConfiguration;
   try {
-    agents?.close();
+    try {
+      await lstat(join(home, ".sciretriever"));
+      configuration = await loadConfiguration(home);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      configuration = parseConfiguration("");
+    }
+  } catch {
+    return unavailable();
+  }
+  const catalogPath =
+    options.catalog_path ??
+    configuration.paths.catalog_path ??
+    join(home, "catalog.sqlite");
+  const artifactRoot =
+    options.artifact_root ??
+    configuration.paths.artifact_root ??
+    join(home, "artifacts");
+  if (!catalogPath.startsWith("/") || !artifactRoot.startsWith("/"))
+    return unavailable();
+  let catalogStat;
+  try {
+    catalogStat = await lstat(catalogPath);
   } catch (error) {
-    firstError ??= error;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return {
+        readiness: {
+          status: "not-initialized",
+          schema_version: null,
+          schema_fingerprint: null,
+        },
+        query: null,
+        literatureArtifacts: null,
+        documentRead: null,
+        extractionPreparation: null,
+        context: null,
+        knowledgeContext: null,
+        knowledgeRead: null,
+        synthesisRead: null,
+        synthesisPreparation: null,
+        close: async () => undefined,
+      };
+    return unavailable();
+  }
+  if (!catalogStat.isFile() || catalogStat.isSymbolicLink())
+    return unavailable();
+
+  const database = new SqliteWorker(catalogPath, undefined, {
+    readOnly: true,
+  });
+  let files: FileStore | undefined;
+  let documentRead: DocumentReadService | null = null;
+  let extractionPreparation: ExtractionPreparationService | null = null;
+  let context: MaterialContextService | null = null;
+  let knowledgeContext: KnowledgeContextService | null = null;
+  let knowledgeRead: SqliteKnowledgeStorage | null = null;
+  let synthesisRead: SqliteSynthesisStorage | null = null;
+  let synthesisPreparation: SynthesisPreparationService | null = null;
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    // Publish the shared result before a resource callback can reenter close.
+    closing ??= Promise.resolve().then(async () => {
+      const failures: unknown[] = [];
+      for (const release of [
+        async () => knowledgeContext?.close(),
+        async () => context?.close(),
+        async () => extractionPreparation?.close(),
+        async () => knowledgeRead?.close(),
+        async () => synthesisPreparation?.close(),
+        async () => synthesisRead?.close(),
+        async () => documentRead?.close(),
+        async () => files?.close(),
+        () => database.close(),
+      ]) {
+        try {
+          await release();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length)
+        throw new AggregateError(failures, "query application cleanup failed");
+    });
+    return closing;
+  };
+  const closeAfterStartupFailure = async (error: unknown): Promise<void> => {
+    try {
+      await close();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "query application startup and cleanup failed",
+        { cause: error },
+      );
+    }
+  };
+  let preflight: Awaited<ReturnType<typeof database.queryPreflight>>;
+  try {
+    preflight = await database.queryPreflight();
+  } catch (error) {
+    await closeAfterStartupFailure(error);
+    return unavailable();
+  }
+  if (preflight.status === "not-initialized") {
+    await close();
+    return {
+      readiness: {
+        status: "not-initialized",
+        schema_version: null,
+        schema_fingerprint: null,
+      },
+      query: null,
+      literatureArtifacts: null,
+      documentRead: null,
+      extractionPreparation: null,
+      context: null,
+      knowledgeContext: null,
+      knowledgeRead: null,
+      synthesisRead: null,
+      synthesisPreparation: null,
+      close,
+    };
+  }
+  if (preflight.status !== "ready" || !preflight.schema) {
+    await close();
+    return unavailable();
   }
   try {
-    await files?.close();
+    files = new FileStore(artifactRoot);
+    documentRead = new DocumentReadService(
+      database,
+      new SqliteDocumentStorage(database, files),
+    );
+    const literature = new LiteratureQueryService(database, files);
+    extractionPreparation = new ExtractionPreparationService(
+      documentRead,
+      literature,
+    );
+    context = new MaterialContextService(
+      preflight.schema.schema_version === 4 ||
+      preflight.schema.schema_version === 5 ||
+      preflight.schema.schema_version === 6 ||
+      preflight.schema.schema_version === 7 ||
+      preflight.schema.schema_version === 8
+        ? new RetrievalStorageClient(database)
+        : null,
+      documentRead,
+      literature,
+    );
+    knowledgeRead =
+      preflight.schema.schema_version === 6 ||
+      preflight.schema.schema_version === 7 ||
+      preflight.schema.schema_version === 8
+        ? new SqliteKnowledgeStorage(database, files, documentRead)
+        : null;
+    if (
+      preflight.schema.schema_version === 7 ||
+      preflight.schema.schema_version === 8
+    ) {
+      synthesisRead = new SqliteSynthesisStorage(database, files, documentRead);
+      synthesisPreparation = new SynthesisPreparationService(
+        documentRead,
+        literature,
+        synthesisRead,
+      );
+    }
+    if (preflight.schema.schema_version === 8)
+      knowledgeContext = new KnowledgeContextService(
+        context,
+        new RetrievalStorageClient(database),
+        synthesisRead,
+      );
+    return {
+      readiness: {
+        status: "ready",
+        schema_version:
+          typeof preflight.schema.schema_version === "number"
+            ? preflight.schema.schema_version
+            : null,
+        schema_fingerprint:
+          typeof preflight.schema.schema_fingerprint === "string"
+            ? preflight.schema.schema_fingerprint
+            : null,
+      },
+      query: literature,
+      literatureArtifacts: new LiteratureArtifactService(database, files),
+      documentRead,
+      extractionPreparation,
+      context,
+      knowledgeContext,
+      knowledgeRead,
+      synthesisRead,
+      synthesisPreparation,
+      close,
+    };
   } catch (error) {
-    firstError ??= error;
+    await closeAfterStartupFailure(error);
+    return unavailable();
   }
-  try {
-    await database?.close();
-  } catch (error) {
-    firstError ??= error;
-  }
-  if (firstError !== undefined) throw firstError;
 }
 
 function buildAgentBindings(
   configuration: OrdinaryConfiguration,
   credentials: CredentialBundle,
   networkBudget: NetworkBudgetCoordinator,
+  authorizeCredential: CurrentCredentialReader,
+  hasCredential: (
+    namespace: "provider" | "model" | "core",
+    provider: string,
+    field: string,
+  ) => Promise<boolean>,
+  transportFactory?: ApplicationOptions["agentTransportFactory"],
 ): readonly AgentBinding[] {
   const bindings: AgentBinding[] = [];
   const adapters = new Map<string, AgentAdapter>();
@@ -670,63 +1697,47 @@ function buildAgentBindings(
       const base = new URL(target);
       const origin = base.origin;
       const local = base.protocol === "http:";
-      let credential: string | null = null;
-      if (local) {
-        if (
-          bundlePreview(credentials).sections.some(
-            (section) =>
-              section.section === `providers.${providerName}` &&
-              section.fields.some((field) => field.present),
-          )
-        )
-          throw new CredentialBoundaryError();
-      } else {
-        const grant = issueCredentialGrant(
-          credentials,
-          "model",
-          providerName,
-          "api_key",
-          origin,
-          "model-request",
-        );
-        credential = readCredential(
-          credentials,
-          grant,
-          providerName,
-          "api_key",
-          origin,
-          "model-request",
-        );
-      }
+      const startupCredential = bundlePreview(credentials).sections.find(
+        (section) =>
+          section.section === `providers.${providerName}` &&
+          (local || section.origin === origin) &&
+          section.fields.some(
+            (field) => field.field === "api_key" && field.present,
+          ),
+      );
+      if (local ? startupCredential !== undefined : !startupCredential)
+        throw new CredentialBoundaryError();
       const scheme = local ? "http" : "https";
-      const rawTransport = createAgentTransport({
-        resolver: async (hostname) =>
-          (await lookup(hostname, { all: true })).map((item) => item.address),
-        policy: {
-          allowed_schemes: [scheme],
-          allowed_classes: [local ? "loopback" : "public"],
-          allowed_ports: [
-            { scheme, port: Number(base.port || (local ? 80 : 443)) },
-          ],
-          ...(local
-            ? {
-                allowed_addresses:
-                  base.hostname === "localhost"
-                    ? ["127.0.0.1", "::1"]
-                    : [base.hostname.replace(/^\[|\]$/g, "")],
-              }
-            : {}),
-        },
-        coordinator: networkBudget,
-        scope: "agent-model",
-        limits: {
-          maxConcurrency: 2,
-          maxHostConcurrency: 2,
-          maxResponseBytes: 4_194_304,
-          maxRedirects: 0,
-          maxRetries: 0,
-        },
-      });
+      const rawTransport =
+        transportFactory?.(providerName, origin) ??
+        createAgentTransport({
+          resolver: async (hostname) =>
+            (await lookup(hostname, { all: true })).map((item) => item.address),
+          policy: {
+            allowed_schemes: [scheme],
+            allowed_classes: [local ? "loopback" : "public"],
+            allowed_ports: [
+              { scheme, port: Number(base.port || (local ? 80 : 443)) },
+            ],
+            ...(local
+              ? {
+                  allowed_addresses:
+                    base.hostname === "localhost"
+                      ? ["127.0.0.1", "::1"]
+                      : [base.hostname.replace(/^\[|\]$/g, "")],
+                }
+              : {}),
+          },
+          coordinator: networkBudget,
+          scope: "agent-model",
+          limits: {
+            maxConcurrency: 2,
+            maxHostConcurrency: 2,
+            maxResponseBytes: 4_194_304,
+            maxRedirects: 0,
+            maxRetries: 0,
+          },
+        });
       const transport: AgentTransport = (request) => {
         if (request.endpoint !== target)
           throw new AgentFailure("agent-configuration");
@@ -736,7 +1747,27 @@ function buildAgentBindings(
         provider: providerName,
         model: modelName,
         endpoint: target,
-        credential,
+        credential: null,
+        credentialProvider: async () => {
+          if (local) {
+            if (await hasCredential("model", providerName, "api_key"))
+              throw new CredentialBoundaryError();
+            return null;
+          }
+          try {
+            const current = await authorizeCredential({
+              namespace: "model",
+              provider: providerName,
+              field: "api_key",
+              origin,
+              operation: "model-request",
+            });
+            if (current === null) throw new CredentialBoundaryError();
+            return current;
+          } catch {
+            throw new AgentFailure("agent-credentials");
+          }
+        },
         transport,
       };
       if (provider.api === "openai-responses")
@@ -758,6 +1789,10 @@ function buildAgentBindings(
       stream: config.stream,
       context_window_tokens: 1_000_000,
       max_output_tokens: 1_000_000,
+      nonsecret_transport: {
+        api: provider.api,
+        endpoint: endpoint(provider.base_url, provider.api),
+      },
       adapter,
     });
   }

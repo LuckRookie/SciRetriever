@@ -67,33 +67,65 @@ async function searchAll(
   return page;
 }
 
-/** Expand the six legacy selectors without truncating or changing explicit order. */
-export async function selectLiteratures(
-  service: Pick<LiteratureQueryService, "search">,
+type SelectionService = Pick<LiteratureQueryService, "search"> &
+  Partial<Pick<LiteratureQueryService, "targetedSnapshot">>;
+
+/**
+ * The targets an Entry may treat as an explicit retry that clears the automatic acquisition
+ * exhaustion fact before a PDF-requiring goal: only a selector naming concrete Literatures counts.
+ * Wide selectors (all-pending/query/discovery-run/meta-literatures/import-report) never clear a
+ * fact, not even for the targets they still select (design.md §8, technical/entry.md §5).
+ */
+export function explicitRetryLiteratureIds(
   selector: LiteratureSelector,
-): Promise<LibrarySearchPage> {
+): readonly LiteratureId[] {
+  if (!selector || typeof selector !== "object")
+    throw new TypeError("selector is invalid");
+  if (selector.kind !== "literatures") return Object.freeze([]);
+  return Object.freeze([
+    ...uniqueNonEmpty(selector.literature_ids, "literature_ids"),
+  ]);
+}
+
+function selectorQuery(selector: LiteratureSelector): LibraryQuery | null {
   if (!selector || typeof selector !== "object")
     throw new TypeError("selector is invalid");
   if (selector.kind === "all-pending") {
-    return searchAll(service, {
+    return {
       ...emptyQuery(),
       statuses: ["UNREVIEWED", "ASSET_READY"],
-    });
+      // The default database-completion scope skips a Literature that already carries the
+      // automatic acquisition exhaustion fact; false matches "no such fact" and never promises
+      // that an automatic route can still deliver (technical/model.md §2.5).
+      needs_manual_pdf: false,
+    };
   }
   if (selector.kind === "discovery-run") {
     if (!selector.discovery_run_id.trim())
       throw new TypeError("discovery run is invalid");
-    return searchAll(service, {
+    return {
       ...emptyQuery(),
       discovery_run_ids: [parseDiscoveryRunId(selector.discovery_run_id)],
-    });
+    };
   }
   if (selector.kind === "query") {
-    return searchAll(service, selector.query);
+    return selector.query;
   }
+  return null;
+}
+
+/** Expand concrete Literature selections for query/export without adding sibling versions. */
+export async function selectLiteratures(
+  service: SelectionService,
+  selector: LiteratureSelector,
+): Promise<LibrarySearchPage> {
+  const query = selectorQuery(selector);
+  if (query !== null) return searchAll(service, query);
   if (selector.kind === "literatures") {
     const ids = uniqueNonEmpty(selector.literature_ids, "literature_ids");
-    const snapshot = await searchAll(service, emptyQuery());
+    const snapshot = service.targetedSnapshot
+      ? await service.targetedSnapshot({ literature_ids: ids })
+      : await searchAll(service, emptyQuery());
     const byId = new Map(
       snapshot.items.map((item) => [item.literature.literature_id, item]),
     );
@@ -116,7 +148,9 @@ export async function selectLiteratures(
       selector.meta_literature_ids,
       "meta_literature_ids",
     );
-    const all = await searchAll(service, emptyQuery());
+    const all = service.targetedSnapshot
+      ? await service.targetedSnapshot({ meta_literature_ids: ids })
+      : await searchAll(service, emptyQuery());
     const byMeta = new Map<MetaLiteratureId, typeof all.items>();
     for (const id of ids) byMeta.set(id, []);
     for (const item of all.items) {
@@ -130,4 +164,27 @@ export async function selectLiteratures(
     return { items, total_count: items.length, next_cursor: null };
   }
   throw new TypeError("selector kind is unsupported");
+}
+
+/** Completion scopes select Metas; their full version membership must share the matching snapshot. */
+export async function selectCompletionLiteratures(
+  service: Pick<LiteratureQueryService, "search" | "selectionSnapshot"> &
+    Partial<Pick<LiteratureQueryService, "targetedSnapshot">>,
+  selector: LiteratureSelector,
+): Promise<LibrarySearchPage> {
+  const query = selectorQuery(selector);
+  if (query === null) return selectLiteratures(service, selector);
+  const snapshot = await service.selectionSnapshot(query);
+  const groups = new Map<
+    MetaLiteratureId,
+    (typeof snapshot.members)[number][]
+  >();
+  for (const item of snapshot.matches) {
+    const meta = item.literature.meta_literature_id;
+    if (!groups.has(meta)) groups.set(meta, []);
+  }
+  for (const item of snapshot.members)
+    groups.get(item.literature.meta_literature_id)?.push(item);
+  const items = Object.freeze([...groups.values()].flat());
+  return Object.freeze({ items, total_count: items.length, next_cursor: null });
 }

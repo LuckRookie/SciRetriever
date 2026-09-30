@@ -9,12 +9,30 @@ export type InterventionResolution = "continue" | "skip" | "cancel";
 export class InterventionService {
   constructor(private readonly repository: ExecutionRepository) {}
 
-  async request(input: {
+  request(input: {
     readonly job_id: string;
     readonly target_id?: string | null;
     readonly failure: StableFailure;
     readonly created_at?: string;
-  }): Promise<ExecutionIntervention> {
+  }): Promise<ExecutionIntervention>;
+  request(
+    input: {
+      readonly job_id: string;
+      readonly target_id?: string | null;
+      readonly failure: StableFailure;
+      readonly created_at?: string;
+    },
+    onlyIfActive: true,
+  ): Promise<ExecutionIntervention | null>;
+  async request(
+    input: {
+      readonly job_id: string;
+      readonly target_id?: string | null;
+      readonly failure: StableFailure;
+      readonly created_at?: string;
+    },
+    onlyIfActive = false,
+  ): Promise<ExecutionIntervention | null> {
     const policy = await this.repository.getPolicy(input.job_id);
     if (!policy) throw new TypeError("execution policy is unavailable");
     const createdAt = input.created_at ?? new Date().toISOString();
@@ -30,7 +48,7 @@ export class InterventionService {
     )
       throw new TypeError("execution intervention is invalid");
     const open = policy.mode !== "never";
-    return this.repository.putIntervention({
+    const intervention: ExecutionIntervention = {
       intervention_id: `intervention-${randomUUID()}`,
       job_id: input.job_id,
       target_id: input.target_id ?? null,
@@ -43,7 +61,10 @@ export class InterventionService {
       ).toISOString(),
       resolved_at: open ? null : createdAt,
       resolution: open ? null : { kind: "policy-declined" },
-    });
+    };
+    return onlyIfActive
+      ? this.repository.putInterventionIfActive(intervention)
+      : this.repository.putIntervention(intervention);
   }
 
   async resolve(

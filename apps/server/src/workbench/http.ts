@@ -1,9 +1,45 @@
 import { once } from "node:events";
 import {
   LiteratureNotFoundError,
+  LiteratureQueryError,
   type LiteratureQueryService,
 } from "../literature/query.js";
 import type { LiteratureArtifactService } from "../literature/artifacts.js";
+import type { QueryApplication } from "../bootstrap/application.js";
+import type { ManualPdfIngestionService } from "../entry/manual-pdf.js";
+import { ManualPdfInputError } from "../entry/manual-pdf.js";
+import {
+  DocumentProcessingError,
+  type DocumentProcessingService,
+} from "../document/service.js";
+import { DocumentReadError } from "../document/read.js";
+import { ExtractionPreparationError } from "../extraction/prepare.js";
+import { ExtractionSpecError } from "../extraction/spec.js";
+import {
+  ExtractionDeliveryError,
+  type ExtractionDeliveryService,
+} from "../extraction/delivery.js";
+import { ExtractionStorageError } from "../storage/sqlite/worker.js";
+import { KnowledgeStorageError } from "../storage/sqlite/worker.js";
+import { KnowledgeReadError } from "../storage/knowledge.js";
+import {
+  KnowledgeAnalysisFailure,
+  type KnowledgeAnalysisService,
+} from "../analysis/knowledge.js";
+import {
+  SynthesisExecutionFailure,
+  type KnowledgeSynthesisService,
+} from "../analysis/synthesis.js";
+import { SynthesisPreparationError } from "../analysis/synthesis-prepare.js";
+import { SynthesisReadError } from "../storage/synthesis.js";
+import { MaterialContextError } from "../retrieval/query.js";
+import { RetrievalIndexError } from "../retrieval/index.js";
+import { KnowledgeContextError } from "../retrieval/knowledge-query.js";
+import { KnowledgeIndexError } from "../retrieval/knowledge-index.js";
+import { ParsingFailure } from "../parsing/ports.js";
+import { LiteraturePublicationError } from "../literature/primary-pdf.js";
+import { CandidateAcceptanceError } from "../acquisition/candidate-acceptance.js";
+import { PdfAcceptanceError } from "../acquisition/pdf-acceptance.js";
 import {
   createServer,
   type IncomingMessage,
@@ -11,22 +47,88 @@ import {
 } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { WorkbenchSession, WorkbenchSessionError } from "./session.js";
+import { ProductionWorkbenchSession } from "./production-session.js";
 import type { BrowserPageInfo } from "../browser/host.js";
 import { exportBibliography } from "../literature/bibliography.js";
-import type { ConfigurationReadiness } from "@sciretriever/contracts";
-import type {
-  ConfigurationSection,
-  TypeScriptConfigurationDiff,
-  TypeScriptConfigurationSnapshot,
-  TypeScriptCredentialEdit,
+import {
+  ContractValidationError,
+  parseDocumentReadRequest,
+  parseDocumentReadResult,
+  parseDocumentRequest,
+  parseRetrievalGenerationReceipt,
+  parseStrictJsonObject,
+  EXTRACTION_SUBMISSION_WIRE_MAX_BYTES,
+  parseExtractionAcceptedResult,
+  parseExtractionOperationResult,
+  parseExtractionReceiptResult,
+  parseExtractionSubmission,
+  parseKnowledgeAnalysisRequest,
+  parseKnowledgeLongAnalysisRequest,
+  parseKnowledgeAnalysisReceipt,
+  parseKnowledgeReadSelection,
+  parseKnowledgeListSelection,
+  parseKnowledgeReadResult,
+  parseKnowledgeListResult,
+  parseKnowledgeDefaultResult,
+  parseKnowledgeDefaultSelection,
+  parseKnowledgeSynthesisRequest,
+  parseSynthesisExecutionReceipt,
+  parseSynthesisPreparationRequest,
+  parseSynthesisPreparationResult,
+  parseSynthesisReadSelection,
+  parseSynthesisReadResult,
+  parseSynthesisListSelection,
+  parseSynthesisListResult,
+  parseSynthesisSourceResult,
+  knowledgeQuestionSha256,
+  type ConfigurationReadiness,
+} from "@sciretriever/contracts";
+import {
+  ConfigurationOwnerError,
+  ConfigurationProbeError,
+  isConfigurationProbeOwner,
+  isConfigurationSection,
+  type ConfigurationProbeRequest,
+  type ConfigurationProbeResult,
+  type ConfigurationSection,
+  type TypeScriptConfigurationDiff,
+  type TypeScriptConfigurationSnapshot,
+  type TypeScriptCredentialEdit,
 } from "../configuration/owner.js";
 
 export interface WorkbenchStaticAsset {
   readonly contentType: string;
   readonly body: string | Uint8Array;
 }
+export interface WorkbenchRuntimeCapabilities {
+  readonly parsing: {
+    readonly assembled: boolean;
+    readonly unavailable_reason:
+      | "startup-credential-missing"
+      | "configuration-incomplete"
+      | "assembly-unavailable"
+      | null;
+  };
+  readonly metadata: readonly {
+    readonly provider_name: string;
+    readonly selected: boolean;
+    readonly assembled: boolean;
+    readonly production_available: boolean;
+    readonly ready_at_startup: boolean;
+    readonly failure_code: string | null;
+  }[];
+  readonly acquisition: readonly {
+    readonly source_name: string;
+    readonly selected: boolean;
+    readonly assembled: boolean;
+    readonly ready_at_startup: boolean;
+    readonly failure_code: string | null;
+  }[];
+}
 export interface WorkbenchHttpOptions {
-  readonly session: WorkbenchSession;
+  readonly session: WorkbenchSession | ProductionWorkbenchSession;
+  /** Explicit article completion; absent from the synthetic preview. */
+  readonly acquisition?: { start(articleId: string): void };
   readonly tabs?: {
     list(): Promise<readonly BrowserPageInfo[]>;
     activate(pageId: string): Promise<void>;
@@ -35,7 +137,23 @@ export interface WorkbenchHttpOptions {
     readonly queries: LiteratureQueryService;
     readonly artifacts: LiteratureArtifactService;
   };
+  readonly maintenance?: {
+    readonly ingestPdf: ManualPdfIngestionService["ingestPdf"];
+    readonly parseDocuments: DocumentProcessingService["parseDocuments"];
+    readonly documentDefault?: (
+      literatureId: string,
+      assetId: string,
+      assetSha256: string,
+    ) => Promise<{
+      readonly document_version_id: string;
+      readonly revision: number;
+    } | null>;
+  };
   readonly configuration?: {
+    /** Ordinary configuration revision captured by the owning Application at startup. */
+    readonly runtime_revision?: string;
+    /** Actual process assembly snapshot; null/absent means the caller cannot confirm it. */
+    readonly runtime_capabilities?: WorkbenchRuntimeCapabilities | null;
     status(signal?: AbortSignal): Promise<ConfigurationReadiness>;
     read?(signal?: AbortSignal): Promise<TypeScriptConfigurationSnapshot>;
     diff?(
@@ -49,6 +167,16 @@ export interface WorkbenchHttpOptions {
       sections: readonly ConfigurationSection[],
       signal?: AbortSignal,
     ): Promise<TypeScriptConfigurationSnapshot>;
+    publishConfiguration?(
+      configuration: unknown,
+      baseline: string,
+      sections: readonly ConfigurationSection[],
+      signal?: AbortSignal,
+    ): Promise<TypeScriptConfigurationSnapshot>;
+    probe?(
+      request: ConfigurationProbeRequest,
+      signal?: AbortSignal,
+    ): Promise<ConfigurationProbeResult>;
     credential?(
       edit: TypeScriptCredentialEdit,
       baseline: string,
@@ -83,6 +211,57 @@ interface ClientGrant {
   touched: number;
 }
 const CLIENT_TTL = 180000;
+const UI_SORTS = new Set([
+  "publication-year-desc",
+  "publication-year-asc",
+  "title-asc",
+  "title-desc",
+  "relevance",
+]);
+const CONFIGURATION_ROOT_KEYS = [
+  "paths",
+  "sources",
+  "assets",
+  "parsing",
+  "providers",
+  "models",
+  "analyze",
+  "browser",
+  "execution",
+  "library",
+] as const;
+class WorkbenchInputError extends Error {
+  readonly code = "invalid-command" as const;
+  constructor() {
+    super("invalid workbench command");
+    this.name = "WorkbenchInputError";
+  }
+}
+function invalidInput(): never {
+  throw new WorkbenchInputError();
+}
+function validUiLocation(url: URL): boolean {
+  const keys = [...url.searchParams.keys()];
+  if (
+    new Set(keys).size !== keys.length ||
+    keys.some(
+      (key) => !["workspace", "q", "sort", "literature", "job"].includes(key),
+    )
+  )
+    return false;
+  const workspace = url.searchParams.get("workspace");
+  const sort = url.searchParams.get("sort");
+  const query = url.searchParams.get("q");
+  const literature = url.searchParams.get("literature");
+  const job = url.searchParams.get("job");
+  return (
+    (workspace === null || /^[a-z-]{1,32}$/u.test(workspace)) &&
+    (sort === null || UI_SORTS.has(sort)) &&
+    (query === null || query.length <= 1000) &&
+    (literature === null || /^[A-Za-z0-9._:-]{1,256}$/u.test(literature)) &&
+    (job === null || /^[A-Za-z0-9._:-]{1,128}$/u.test(job))
+  );
+}
 function equal(a: string, b: string): boolean {
   const left = Buffer.from(a),
     right = Buffer.from(b);
@@ -95,32 +274,326 @@ function json(response: ServerResponse, status: number, value: unknown): void {
   });
   response.end(JSON.stringify(value));
 }
+function runtimeConfigurationState(
+  configuration: NonNullable<WorkbenchHttpOptions["configuration"]>,
+  snapshot: TypeScriptConfigurationSnapshot,
+): {
+  readonly runtime_configuration_current: boolean | null;
+  readonly ordinary_configuration_restart_required: boolean | null;
+  readonly application_restart_required: boolean | null;
+  readonly application_restart_reason:
+    | "ordinary-configuration"
+    | "capability-reassembly"
+    | null;
+  readonly runtime_capabilities: WorkbenchRuntimeCapabilities | null;
+} {
+  const current =
+    configuration.runtime_revision === undefined
+      ? null
+      : snapshot.revision === configuration.runtime_revision;
+  const capabilities = configuration.runtime_capabilities ?? null;
+  const capabilityRestartRequired =
+    capabilities === null
+      ? null
+      : capabilities.parsing.unavailable_reason ===
+          "startup-credential-missing" ||
+        capabilities.metadata.some(
+          (item) =>
+            item.selected &&
+            !item.assembled &&
+            item.failure_code === "credential-missing",
+        ) ||
+        capabilities.acquisition.some(
+          (item) =>
+            item.selected &&
+            !item.assembled &&
+            item.failure_code === "missing-credential",
+        );
+  const ordinaryRestartRequired = current === null ? null : current === false;
+  const restartRequired =
+    ordinaryRestartRequired === true || capabilityRestartRequired === true
+      ? true
+      : ordinaryRestartRequired === false && capabilityRestartRequired === false
+        ? false
+        : null;
+  return {
+    runtime_configuration_current: current,
+    ordinary_configuration_restart_required: ordinaryRestartRequired,
+    application_restart_required: restartRequired,
+    application_restart_reason:
+      ordinaryRestartRequired === true
+        ? "ordinary-configuration"
+        : capabilityRestartRequired === true
+          ? "capability-reassembly"
+          : null,
+    runtime_capabilities: capabilities,
+  };
+}
 function object(
   value: unknown,
   keys: readonly string[],
 ): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("invalid command");
+    invalidInput();
   const record = value as Record<string, unknown>;
   if (
     Object.keys(record).length !== keys.length ||
     keys.some((key) => !(key in record))
   )
-    throw new Error("invalid command");
+    invalidInput();
   return record;
 }
 async function body(request: IncomingMessage): Promise<unknown> {
-  if (request.headers["content-type"] !== "application/json")
-    throw new Error("invalid command");
+  if (request.headers["content-type"] !== "application/json") invalidInput();
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const value of request) {
     const chunk = Buffer.from(value as Uint8Array);
     size += chunk.length;
-    if (size > 65536) throw new Error("invalid command");
+    if (size > 65536) invalidInput();
     chunks.push(chunk);
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  } catch {
+    invalidInput();
+  }
+}
+async function extractionBody(
+  request: IncomingMessage,
+  limit = 256 * 1024,
+): Promise<Record<string, unknown>> {
+  if (request.headers["content-type"] !== "application/json") invalidInput();
+  let size = 0;
+  const chunks: Buffer[] = [];
+  for await (const value of request) {
+    const chunk = Buffer.from(value as Uint8Array);
+    size += chunk.length;
+    if (size > limit) invalidInput();
+    chunks.push(chunk);
+  }
+  try {
+    return parseStrictJsonObject(Buffer.concat(chunks));
+  } catch {
+    invalidInput();
+  }
+}
+
+const MAX_MANUAL_PDF_BYTES = 16 * 1024 * 1024;
+
+function maintenanceError(error: unknown): {
+  status: number;
+  code: string;
+  issue?: unknown;
+  reason?: string;
+  retryable?: boolean;
+} {
+  if (error instanceof SynthesisExecutionFailure) {
+    return {
+      code: error.code,
+      ...(error.reason
+        ? { reason: error.reason, retryable: error.retryable }
+        : {}),
+      status:
+        error.code === "synthesis-invalid"
+          ? 400
+          : error.code === "synthesis-stale-binding" ||
+              error.code === "synthesis-cancelled"
+            ? 409
+            : error.code === "synthesis-budget-exhausted" ||
+                error.code === "synthesis-not-applicable" ||
+                error.code === "synthesis-response"
+              ? 422
+              : 503,
+    };
+  }
+  if (
+    error instanceof KnowledgeAnalysisFailure ||
+    error instanceof KnowledgeStorageError
+  ) {
+    const code = error.code;
+    return {
+      code,
+      ...(error instanceof KnowledgeAnalysisFailure && error.reason
+        ? { reason: error.reason, retryable: error.retryable }
+        : {}),
+      status:
+        code === "knowledge-input"
+          ? 400
+          : code === "knowledge-budget-exhausted" ||
+              code === "knowledge-not-applicable" ||
+              code === "catalog-v6-required"
+            ? 422
+            : code === "knowledge-input-invalidated" ||
+                code === "knowledge-cancelled"
+              ? 409
+              : 503,
+    };
+  }
+  if (
+    error instanceof ExtractionDeliveryError ||
+    error instanceof ExtractionStorageError
+  ) {
+    const code = error.code;
+    return {
+      status:
+        code === "unknown-or-expired"
+          ? 404
+          : code === "input-missing"
+            ? 404
+            : code === "invalid-request" ||
+                code === "pointer-invalid" ||
+                code === "coverage-invalid" ||
+                code === "relation-invalid" ||
+                code === "evidence-coverage"
+              ? 400
+              : code.endsWith("capacity")
+                ? 429
+                : code === "catalog-v5-required"
+                  ? 422
+                  : code === "storage-failed" ||
+                      code === "storage-unavailable" ||
+                      code === "storage-invalid" ||
+                      code === "delivery-unavailable" ||
+                      code === "delivery-write-security" ||
+                      code === "delivery-write-closed" ||
+                      code === "delivery-write-expired"
+                    ? 503
+                    : 409,
+      code,
+      ...(error instanceof ExtractionDeliveryError && error.issue
+        ? { issue: error.issue }
+        : {}),
+    };
+  }
+  if (error instanceof ExtractionSpecError)
+    return {
+      status: error.code === "schema-busy" ? 429 : 422,
+      code: error.code,
+    };
+  if (
+    error instanceof RetrievalIndexError ||
+    error instanceof KnowledgeIndexError
+  )
+    return {
+      status: error.code === "index-cancelled" ? 409 : 422,
+      code: error.code,
+    };
+  if (error instanceof DocumentProcessingError)
+    return {
+      status:
+        error.code === "material-missing"
+          ? 404
+          : error.code === "material-stale"
+            ? 409
+            : error.code === "parser-result-missing"
+              ? 424
+              : 503,
+      code: error.code,
+    };
+  if (error instanceof ParsingFailure)
+    return {
+      status: error.code === "parser-stale" ? 409 : 503,
+      code: error.code,
+    };
+  if (error instanceof ManualPdfInputError)
+    return { status: 400, code: error.code };
+  if (error instanceof PdfAcceptanceError)
+    return { status: 400, code: "manual-pdf-invalid" };
+  if (error instanceof LiteraturePublicationError)
+    return {
+      status:
+        error.code === "primary-asset-conflict" ||
+        error.code === "literature-stale"
+          ? 409
+          : 400,
+      code: error.code,
+    };
+  if (error instanceof CandidateAcceptanceError)
+    return {
+      status:
+        error.code === "literature-not-found"
+          ? 404
+          : error.code === "candidate-receipt-conflict"
+            ? 409
+            : 400,
+      code: error.code,
+    };
+  if (error instanceof LiteratureNotFoundError)
+    return { status: 404, code: "literature-not-found" };
+  if (
+    error instanceof WorkbenchInputError ||
+    error instanceof ContractValidationError
+  )
+    return { status: 400, code: "invalid-command" };
+  return { status: 503, code: "maintenance-unavailable" };
+}
+
+async function receiveManualPdf(
+  request: IncomingMessage,
+  response: ServerResponse,
+  literatureId: string,
+  ingestPdf: ManualPdfIngestionService["ingestPdf"],
+  serverSignal: AbortSignal,
+): Promise<unknown> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const responseClosed = () => {
+    if (!response.writableFinished) abort();
+  };
+  request.on("aborted", abort);
+  response.on("close", responseClosed);
+  serverSignal.addEventListener("abort", abort, { once: true });
+  try {
+    if (serverSignal.aborted || request.aborted) abort();
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const value of request) {
+      if (controller.signal.aborted)
+        throw new ManualPdfInputError("manual-pdf-cancelled");
+      const chunk = Buffer.from(value as Uint8Array);
+      size += chunk.byteLength;
+      if (size > MAX_MANUAL_PDF_BYTES) invalidInput();
+      chunks.push(chunk);
+    }
+    if (controller.signal.aborted)
+      throw new ManualPdfInputError("manual-pdf-cancelled");
+    return await ingestPdf(
+      { literature_id: literatureId, bytes: Buffer.concat(chunks) },
+      controller.signal,
+    );
+  } finally {
+    request.off("aborted", abort);
+    response.off("close", responseClosed);
+    serverSignal.removeEventListener("abort", abort);
+  }
+}
+
+async function receiveDocumentRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  parseDocuments: DocumentProcessingService["parseDocuments"],
+  serverSignal: AbortSignal,
+): ReturnType<DocumentProcessingService["parseDocuments"]> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const responseClosed = () => {
+    if (!response.writableFinished) abort();
+  };
+  request.on("aborted", abort);
+  response.on("close", responseClosed);
+  serverSignal.addEventListener("abort", abort, { once: true });
+  try {
+    if (serverSignal.aborted || request.aborted) abort();
+    const value = await body(request);
+    if (controller.signal.aborted)
+      throw new DocumentProcessingError("document-cancelled");
+    return await parseDocuments(value, controller.signal);
+  } finally {
+    request.off("aborted", abort);
+    response.off("close", responseClosed);
+    serverSignal.removeEventListener("abort", abort);
+  }
 }
 
 /** Loopback UI transport. Only opaque per-tab grants leave this authentication boundary. */
@@ -132,6 +605,7 @@ export async function startWorkbenchHttp(
   const cookie = randomBytes(32).toString("hex");
   const clients = new Map<string, ClientGrant>();
   const streams = new Set<ServerResponse>();
+  const stopUploads = new AbortController();
   let origin = "",
     host = "",
     closing = false;
@@ -139,16 +613,67 @@ export async function startWorkbenchHttp(
     { requestTimeout: 5000, headersTimeout: 5000, maxHeaderSize: 8192 },
     (request, response) => {
       void handle(request, response).catch((error: unknown) => {
+        if (
+          request.url?.startsWith("/api/maintenance/ingest-pdf") ||
+          request.url?.startsWith("/api/maintenance/parse-document") ||
+          request.url?.startsWith("/api/v1/maintenance/ingest-pdf")
+        ) {
+          const failure = maintenanceError(error);
+          if (response.headersSent || response.destroyed) response.destroy();
+          else
+            json(response, failure.status, {
+              protocol_version: 1,
+              code: failure.code,
+              ...(failure.issue ? { issue: failure.issue } : {}),
+              ...(failure.reason
+                ? { reason: failure.reason, retryable: failure.retryable }
+                : {}),
+            });
+          return;
+        }
         const code =
           error instanceof WorkbenchSessionError
             ? error.code
-            : "command-rejected";
+            : error instanceof ManualPdfInputError ||
+                error instanceof LiteraturePublicationError ||
+                error instanceof CandidateAcceptanceError
+              ? error.code
+              : error instanceof PdfAcceptanceError
+                ? "manual-pdf-invalid"
+                : error instanceof ConfigurationOwnerError ||
+                    error instanceof ConfigurationProbeError
+                  ? error.code
+                  : error instanceof WorkbenchInputError
+                    ? error.code
+                    : error instanceof ContractValidationError
+                      ? "invalid-command"
+                      : "command-rejected";
+        if (response.destroyed) return;
         if (response.headersSent) {
           response.destroy();
           return;
         }
         response.removeHeader("Content-Disposition");
-        json(response, error instanceof LiteratureNotFoundError ? 404 : 409, {
+        const status =
+          error instanceof LiteratureNotFoundError
+            ? 404
+            : error instanceof ManualPdfInputError ||
+                error instanceof PdfAcceptanceError ||
+                (error instanceof LiteraturePublicationError &&
+                  error.code !== "primary-asset-conflict")
+              ? 400
+              : error instanceof CandidateAcceptanceError &&
+                  error.code === "literature-not-found"
+                ? 404
+                : error instanceof WorkbenchInputError ||
+                    error instanceof ContractValidationError ||
+                    (error instanceof ConfigurationOwnerError &&
+                      error.code === "configuration-invalid") ||
+                    (error instanceof ConfigurationProbeError &&
+                      error.code === "configuration-probe-invalid")
+                  ? 400
+                  : 409;
+        json(response, status, {
           code:
             error instanceof LiteratureNotFoundError
               ? "literature-not-found"
@@ -199,7 +724,11 @@ export async function startWorkbenchHttp(
     const authenticated = cookies.some((part) =>
       equal(part, `${cookieName}=${cookie}`),
     );
-    if (request.method === "GET" && pathname === "/" && !url.search) {
+    if (request.method === "GET" && pathname === "/") {
+      if (!validUiLocation(url)) {
+        json(response, 400, { code: "invalid-ui-location" });
+        return;
+      }
       response.setHeader(
         "Set-Cookie",
         `${cookieName}=${cookie}; Path=/; HttpOnly; SameSite=Strict`,
@@ -403,6 +932,26 @@ export async function startWorkbenchHttp(
       json(response, 404, { code: "endpoint-not-found" });
       return;
     }
+    if (request.method === "GET" && pathname === "/api/configuration/status") {
+      if (!options.configuration) {
+        json(response, 503, { code: "configuration-unavailable" });
+        return;
+      }
+      json(response, 200, { status: await options.configuration.status() });
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/configuration/read") {
+      if (!options.configuration?.read) {
+        json(response, 503, { code: "configuration-unavailable" });
+        return;
+      }
+      const snapshot = await options.configuration.read();
+      json(response, 200, {
+        snapshot,
+        ...runtimeConfigurationState(options.configuration, snapshot),
+      });
+      return;
+    }
     if (
       request.method !== "POST" ||
       requestOrigin !== origin ||
@@ -412,7 +961,72 @@ export async function startWorkbenchHttp(
       json(response, 403, { code: "csrf-required" });
       return;
     }
+    if (pathname === "/api/maintenance/ingest-pdf") {
+      if (!options.maintenance) {
+        json(response, 503, {
+          protocol_version: 1,
+          code: "maintenance-unavailable",
+        });
+        return;
+      }
+      if (
+        request.headers["content-type"] !== "application/pdf" ||
+        request.headers["x-sciretriever-protocol-version"] !== "1"
+      )
+        invalidInput();
+      const literatureId = request.headers["x-literature-id"];
+      if (typeof literatureId !== "string") invalidInput();
+      const receipt = await receiveManualPdf(
+        request,
+        response,
+        literatureId,
+        (input, signal) => options.maintenance!.ingestPdf(input, signal),
+        stopUploads.signal,
+      );
+      json(response, 200, { protocol_version: 1, receipt });
+      return;
+    }
+    if (pathname === "/api/maintenance/parse-document") {
+      if (!options.maintenance) {
+        json(response, 503, { code: "maintenance-unavailable" });
+        return;
+      }
+      if (
+        request.headers["content-type"] !== "application/json" ||
+        request.headers["x-sciretriever-protocol-version"] !== "1"
+      )
+        invalidInput();
+      const receipt = await receiveDocumentRequest(
+        request,
+        response,
+        options.maintenance.parseDocuments,
+        stopUploads.signal,
+      );
+      json(response, 200, { protocol_version: 1, receipt });
+      return;
+    }
     const value = await body(request);
+    if (pathname === "/api/acquisition/start") {
+      if (!options.acquisition) {
+        json(response, 503, { code: "acquisition-unavailable" });
+        return;
+      }
+      const command = object(value, ["article_id"]);
+      if (typeof command.article_id !== "string") invalidInput();
+      options.acquisition.start(command.article_id);
+      json(response, 202, { view: session.view() });
+      return;
+    }
+    if (pathname === "/api/guidance") {
+      const guidance = session.submitGuidance(clientId, value);
+      json(response, 200, { guidance, view: session.view() });
+      return;
+    }
+    if (pathname === "/api/guidance/cancel") {
+      const guidance = session.cancelGuidance(clientId, value);
+      json(response, 200, { guidance, view: session.view() });
+      return;
+    }
     if (pathname === "/api/tabs/activate") {
       if (!options.tabs) {
         json(response, 503, { code: "tabs-unavailable" });
@@ -423,7 +1037,7 @@ export async function startWorkbenchHttp(
         typeof command.page_id !== "string" ||
         !/^[A-Za-z0-9._:-]{1,128}$/u.test(command.page_id)
       )
-        throw new Error("invalid tab command");
+        invalidInput();
       await options.tabs.activate(command.page_id);
       await session.refresh();
       json(response, 200, { view: session.view() });
@@ -448,7 +1062,7 @@ export async function startWorkbenchHttp(
         if (
           !["continue", "skip", "cancel"].includes(command.resolution as string)
         )
-          throw new Error("invalid command");
+          invalidInput();
         json(response, 200, {
           intervention: await options.jobs.resolveIntervention(
             parts[4]!,
@@ -526,9 +1140,8 @@ export async function startWorkbenchHttp(
             command.format !== "ris" &&
             command.format !== "csl-json"
           )
-            throw new Error("invalid bibliography format");
-          if (typeof command.literature_id !== "string")
-            throw new Error("invalid literature id");
+            invalidInput();
+          if (typeof command.literature_id !== "string") invalidInput();
           const detail = await library.queries.detail(command.literature_id);
           const bytes = exportBibliography(detail, command.format);
           const contentType =
@@ -559,7 +1172,7 @@ export async function startWorkbenchHttp(
             command.kind !== "primary-pdf" &&
             command.kind !== "content-markdown"
           )
-            throw new Error("invalid artifact kind");
+            invalidInput();
           const detail = await library.queries.detail(command.literature_id);
           const descriptor =
             command.kind === "primary-pdf"
@@ -619,7 +1232,11 @@ export async function startWorkbenchHttp(
         json(response, 503, { code: "configuration-unavailable" });
         return;
       }
-      json(response, 200, { snapshot: await options.configuration.read() });
+      const snapshot = await options.configuration.read();
+      json(response, 200, {
+        snapshot,
+        ...runtimeConfigurationState(options.configuration, snapshot),
+      });
       return;
     }
     if (pathname === "/api/configuration/diff") {
@@ -632,7 +1249,7 @@ export async function startWorkbenchHttp(
         typeof command.payload !== "string" ||
         typeof command.baseline !== "string"
       )
-        throw new Error("invalid configuration command");
+        invalidInput();
       json(response, 200, {
         diff: await options.configuration.diff(
           command.payload,
@@ -651,14 +1268,59 @@ export async function startWorkbenchHttp(
         typeof command.payload !== "string" ||
         typeof command.baseline !== "string" ||
         !Array.isArray(command.sections) ||
-        command.sections.some((section) => typeof section !== "string")
+        command.sections.some((section) => !isConfigurationSection(section))
       )
-        throw new Error("invalid configuration command");
+        invalidInput();
+      const snapshot = await options.configuration.publish(
+        command.payload,
+        command.baseline,
+        command.sections as ConfigurationSection[],
+      );
       json(response, 200, {
-        snapshot: await options.configuration.publish(
-          command.payload,
-          command.baseline,
-          command.sections as ConfigurationSection[],
+        snapshot,
+        ...runtimeConfigurationState(options.configuration, snapshot),
+      });
+      return;
+    }
+    if (pathname === "/api/configuration/publish-json") {
+      if (!options.configuration?.publishConfiguration) {
+        json(response, 503, { code: "configuration-unavailable" });
+        return;
+      }
+      const command = object(value, ["configuration", "baseline", "sections"]);
+      if (
+        typeof command.baseline !== "string" ||
+        !Array.isArray(command.sections) ||
+        command.sections.some((section) => !isConfigurationSection(section))
+      )
+        invalidInput();
+      object(command.configuration, CONFIGURATION_ROOT_KEYS);
+      const snapshot = await options.configuration.publishConfiguration(
+        command.configuration,
+        command.baseline,
+        command.sections as ConfigurationSection[],
+      );
+      json(response, 200, {
+        snapshot,
+        ...runtimeConfigurationState(options.configuration, snapshot),
+      });
+      return;
+    }
+    if (pathname === "/api/configuration/probe") {
+      if (!options.configuration?.probe) {
+        json(response, 503, { code: "configuration-probe-unavailable" });
+        return;
+      }
+      const command = object(value, ["owner", "target", "image"]);
+      if (
+        !isConfigurationProbeOwner(command.owner) ||
+        (command.target !== null && typeof command.target !== "string") ||
+        typeof command.image !== "boolean"
+      )
+        invalidInput();
+      json(response, 200, {
+        result: await options.configuration.probe(
+          command as unknown as ConfigurationProbeRequest,
         ),
       });
       return;
@@ -669,13 +1331,25 @@ export async function startWorkbenchHttp(
         return;
       }
       const command = object(value, ["edit", "baseline"]);
-      if (typeof command.baseline !== "string")
-        throw new Error("invalid configuration command");
+      if (typeof command.baseline !== "string") invalidInput();
+      const status = await options.configuration.credential(
+        command.edit as TypeScriptCredentialEdit,
+        command.baseline,
+      );
+      const snapshot = await options.configuration.read?.();
       json(response, 200, {
-        status: await options.configuration.credential(
-          command.edit as TypeScriptCredentialEdit,
-          command.baseline,
-        ),
+        status,
+        credential_effective_at: "next-external-request",
+        in_flight_credential_action: "may-complete",
+        ...(snapshot
+          ? runtimeConfigurationState(options.configuration, snapshot)
+          : {
+              runtime_configuration_current: null,
+              ordinary_configuration_restart_required: null,
+              application_restart_required: null,
+              application_restart_reason: null,
+              runtime_capabilities: null,
+            }),
       });
       return;
     }
@@ -696,14 +1370,22 @@ export async function startWorkbenchHttp(
       return;
     }
     if (pathname === "/api/control") {
-      const command = object(value, ["kind", "control_epoch"]);
+      const production = session instanceof ProductionWorkbenchSession;
+      const command = object(
+        value,
+        production
+          ? ["kind", "control_epoch", "session_id", "article_id"]
+          : ["kind", "control_epoch"],
+      );
+      if (production)
+        session.assertBinding(clientId, command.session_id, command.article_id);
       const epoch = command.control_epoch;
       if (
         typeof epoch !== "number" ||
         !Number.isSafeInteger(epoch) ||
         epoch < 0
       )
-        throw new Error("invalid epoch");
+        invalidInput();
       switch (command.kind) {
         case "takeover":
           session.takeover(clientId, epoch);
@@ -726,7 +1408,7 @@ export async function startWorkbenchHttp(
           break;
         }
         default:
-          throw new Error("invalid control command");
+          invalidInput();
       }
       json(response, 200, { view: session.view() });
       return;
@@ -738,7 +1420,7 @@ export async function startWorkbenchHttp(
         typeof command.control_epoch !== "number" ||
         !Number.isSafeInteger(command.control_epoch)
       )
-        throw new Error("invalid target command");
+        invalidInput();
       await session.selectTarget(
         clientId,
         command.control_epoch,
@@ -775,10 +1457,1097 @@ export async function startWorkbenchHttp(
     close: async () => {
       if (closing) return;
       closing = true;
+      stopUploads.abort();
       clearInterval(refreshTimer);
       for (const response of streams) response.end();
       for (const id of clients.keys()) session.detach(id);
       clients.clear();
+      const done = new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+      server.closeAllConnections();
+      await done;
+    },
+  };
+}
+
+export interface QueryOnlyHttpOptions {
+  readonly application: QueryApplication;
+  /** Optional explicit maintenance surface; the query-only composition never supplies it. */
+  readonly maintenance?: {
+    readonly ingestPdf: ManualPdfIngestionService["ingestPdf"];
+    readonly parseDocuments: DocumentProcessingService["parseDocuments"];
+    readonly documentDefault?: (
+      literatureId: string,
+      assetId: string,
+      assetSha256: string,
+    ) => Promise<{
+      readonly document_version_id: string;
+      readonly revision: number;
+    } | null>;
+    readonly rebuildIndex?: (signal?: AbortSignal) => Promise<unknown>;
+    readonly rebuildKnowledgeIndex?: (signal?: AbortSignal) => Promise<unknown>;
+    readonly extraction?: ExtractionDeliveryService;
+    readonly analyze?: KnowledgeAnalysisService["analyze"];
+    readonly analyzeLong?: KnowledgeAnalysisService["analyzeLong"];
+    readonly synthesize?: KnowledgeSynthesisService["synthesize"];
+  };
+  readonly assets?: ReadonlyMap<string, WorkbenchStaticAsset>;
+  readonly port?: number;
+}
+
+/** Loopback HTTP adapter for a query-only Application; it owns no Browser or Jobs. */
+export async function startQueryOnlyHttp(
+  options: QueryOnlyHttpOptions,
+): Promise<{ readonly origin: string; close(): Promise<void> }> {
+  let origin = "";
+  let host = "";
+  let closing = false;
+  const maintenanceCookie = `sr_maintenance_${randomBytes(8).toString("hex")}`;
+  const maintenanceToken = randomBytes(32).toString("hex");
+  const maintenanceCsrf = randomBytes(32).toString("hex");
+  const streams = new Set<ServerResponse>();
+  const verifiedBinaryStreams = new Set<ServerResponse>();
+  const stopUploads = new AbortController();
+  const server = createServer(
+    { requestTimeout: 5000, headersTimeout: 5000, maxHeaderSize: 8192 },
+    (request, response) => {
+      void handle(request, response).catch((error: unknown) => {
+        if (
+          request.url?.startsWith("/api/v1/maintenance/ingest-pdf") ||
+          request.url?.startsWith("/api/v1/maintenance/parse-document") ||
+          request.url?.startsWith("/api/v1/maintenance/document-default") ||
+          request.url?.startsWith("/api/v1/maintenance/rebuild-index") ||
+          request.url?.startsWith(
+            "/api/v1/maintenance/rebuild-knowledge-index",
+          ) ||
+          request.url?.startsWith("/api/v1/maintenance/extraction-") ||
+          request.url?.startsWith("/api/v1/maintenance/analyze-knowledge") ||
+          request.url?.startsWith("/api/v1/maintenance/synthesize")
+        ) {
+          const failure = maintenanceError(error);
+          if (response.headersSent || response.destroyed) response.destroy();
+          else
+            json(response, failure.status, {
+              protocol_version: 1,
+              code: failure.code,
+              ...(failure.issue ? { issue: failure.issue } : {}),
+              ...(failure.reason
+                ? { reason: failure.reason, retryable: failure.retryable }
+                : {}),
+            });
+          return;
+        }
+        if (response.destroyed) return;
+        if (response.headersSent) {
+          response.destroy();
+          return;
+        }
+        const code =
+          error instanceof MaterialContextError ||
+          error instanceof KnowledgeContextError
+            ? error.code
+            : error instanceof SynthesisReadError ||
+                error instanceof SynthesisPreparationError
+              ? error.code
+              : error instanceof KnowledgeReadError
+                ? error.code
+                : error instanceof DocumentReadError
+                  ? error.code
+                  : error instanceof ContractValidationError ||
+                      error instanceof WorkbenchInputError
+                    ? "invalid-command"
+                    : error instanceof ManualPdfInputError ||
+                        error instanceof LiteraturePublicationError ||
+                        error instanceof CandidateAcceptanceError
+                      ? error.code
+                      : error instanceof PdfAcceptanceError
+                        ? "manual-pdf-invalid"
+                        : error instanceof LiteratureNotFoundError
+                          ? "literature-not-found"
+                          : error instanceof LiteratureQueryError
+                            ? "query-reference-invalid"
+                            : "query-unavailable";
+        const status =
+          error instanceof MaterialContextError ||
+          error instanceof KnowledgeContextError
+            ? error.code === "context-cursor-invalid" ||
+              error.code === "context-budget-invalid" ||
+              error.code === "context-tokenizer-unsupported"
+              ? 400
+              : 503
+            : error instanceof KnowledgeReadError
+              ? error.code === "knowledge-invalid"
+                ? 400
+                : error.code === "knowledge-kind-unsupported"
+                  ? 422
+                  : error.code === "knowledge-cancelled"
+                    ? 409
+                    : 503
+              : error instanceof SynthesisReadError ||
+                  error instanceof SynthesisPreparationError
+                ? error.code === "synthesis-invalid"
+                  ? 400
+                  : error.code === "synthesis-cancelled" ||
+                      error.code === "synthesis-stale-binding"
+                    ? 409
+                    : error.code === "synthesis-limit"
+                      ? 422
+                      : 503
+                : error instanceof DocumentReadError
+                  ? error.code === "document-invalid"
+                    ? 400
+                    : error.code === "material-stale"
+                      ? 409
+                      : error.code === "document-missing" ||
+                          error.code === "material-missing"
+                        ? 404
+                        : error.code === "document-v3-required" ||
+                            error.code === "document-unsupported"
+                          ? 422
+                          : 503
+                  : error instanceof ContractValidationError ||
+                      error instanceof WorkbenchInputError
+                    ? 400
+                    : error instanceof ManualPdfInputError ||
+                        error instanceof PdfAcceptanceError ||
+                        (error instanceof LiteraturePublicationError &&
+                          error.code !== "primary-asset-conflict")
+                      ? 400
+                      : error instanceof CandidateAcceptanceError &&
+                          error.code === "literature-not-found"
+                        ? 404
+                        : error instanceof LiteratureNotFoundError
+                          ? 404
+                          : error instanceof LiteratureQueryError
+                            ? 409
+                            : 503;
+        json(response, status, { protocol_version: 1, code });
+      });
+    },
+  );
+
+  async function handle(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> {
+    response.setHeader("Cache-Control", "no-store");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.setHeader("Referrer-Policy", "no-referrer");
+    response.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+    );
+    const requestOrigin = request.headers.origin;
+    if (
+      closing ||
+      request.headers.host !== host ||
+      (requestOrigin !== undefined && requestOrigin !== origin) ||
+      request.headers["sec-fetch-site"] === "cross-site" ||
+      request.headers["sec-fetch-site"] === "same-site" ||
+      !["127.0.0.1", "::ffff:127.0.0.1"].includes(
+        request.socket.remoteAddress ?? "",
+      )
+    ) {
+      json(response, 403, {
+        protocol_version: 1,
+        code: "local-origin-required",
+      });
+      return;
+    }
+    const url = new URL(request.url ?? "/", origin);
+    if (url.origin !== origin) {
+      json(response, 403, {
+        protocol_version: 1,
+        code: "local-origin-required",
+      });
+      return;
+    }
+    if (options.maintenance && request.method === "GET" && url.pathname === "/")
+      response.setHeader(
+        "Set-Cookie",
+        `${maintenanceCookie}=${maintenanceToken}; Path=/; HttpOnly; SameSite=Strict`,
+      );
+    if (url.pathname === "/api/v1/maintenance/session") {
+      if (
+        !options.maintenance ||
+        request.method !== "GET" ||
+        !(request.headers.cookie ?? "")
+          .split(";")
+          .map((part) => part.trim())
+          .some((part) =>
+            equal(part, `${maintenanceCookie}=${maintenanceToken}`),
+          )
+      ) {
+        json(response, 403, {
+          protocol_version: 1,
+          code: "maintenance-auth-required",
+        });
+        return;
+      }
+      json(response, 200, { protocol_version: 1, csrf: maintenanceCsrf });
+      return;
+    }
+    if (url.pathname === "/api/v1/maintenance/ingest-pdf") {
+      if (!options.maintenance) {
+        json(response, 404, {
+          protocol_version: 1,
+          code: "endpoint-not-found",
+        });
+        return;
+      }
+      if (
+        request.method !== "POST" ||
+        requestOrigin !== origin ||
+        request.headers["x-sciretriever-csrf"] !== maintenanceCsrf ||
+        !(request.headers.cookie ?? "")
+          .split(";")
+          .map((part) => part.trim())
+          .some((part) =>
+            equal(part, `${maintenanceCookie}=${maintenanceToken}`),
+          )
+      ) {
+        json(response, 403, {
+          protocol_version: 1,
+          code: "maintenance-auth-required",
+        });
+        return;
+      }
+      if (
+        request.headers["content-type"] !== "application/pdf" ||
+        request.headers["x-sciretriever-protocol-version"] !== "1" ||
+        typeof request.headers["x-literature-id"] !== "string"
+      )
+        invalidInput();
+      const receipt = await receiveManualPdf(
+        request,
+        response,
+        request.headers["x-literature-id"],
+        (input, signal) => options.maintenance!.ingestPdf(input, signal),
+        stopUploads.signal,
+      );
+      json(response, 200, { protocol_version: 1, receipt });
+      return;
+    }
+    const extractionPaths = new Set([
+      "/api/v1/maintenance/extraction-operation",
+      "/api/v1/maintenance/extraction-operation-read",
+      "/api/v1/maintenance/extraction-submit",
+      "/api/v1/maintenance/extraction-close",
+      "/api/v1/maintenance/extraction-cancel",
+      "/api/v1/maintenance/extraction-receipt",
+      "/api/v1/maintenance/extraction-cleanup",
+    ]);
+    if (
+      url.pathname === "/api/v1/maintenance/parse-document" ||
+      url.pathname === "/api/v1/maintenance/document-default" ||
+      url.pathname === "/api/v1/maintenance/rebuild-index" ||
+      url.pathname === "/api/v1/maintenance/rebuild-knowledge-index" ||
+      url.pathname === "/api/v1/maintenance/analyze-knowledge" ||
+      url.pathname === "/api/v1/maintenance/analyze-knowledge-long" ||
+      url.pathname === "/api/v1/maintenance/synthesize" ||
+      extractionPaths.has(url.pathname)
+    ) {
+      if (!options.maintenance) {
+        json(response, 404, {
+          protocol_version: 1,
+          code: "endpoint-not-found",
+        });
+        return;
+      }
+      if (
+        request.method !== "POST" ||
+        requestOrigin !== origin ||
+        request.headers["x-sciretriever-csrf"] !== maintenanceCsrf ||
+        !(request.headers.cookie ?? "")
+          .split(";")
+          .map((part) => part.trim())
+          .some((part) =>
+            equal(part, `${maintenanceCookie}=${maintenanceToken}`),
+          )
+      ) {
+        json(response, 403, {
+          protocol_version: 1,
+          code: "maintenance-auth-required",
+        });
+        return;
+      }
+      if (
+        request.headers["content-type"] !== "application/json" ||
+        request.headers["x-sciretriever-protocol-version"] !== "1"
+      )
+        invalidInput();
+      if (url.pathname === "/api/v1/maintenance/synthesize") {
+        if (!options.maintenance.synthesize) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "maintenance-unavailable",
+          });
+          return;
+        }
+        const envelope = object(await extractionBody(request, 310 * 1024), [
+          "protocol_version",
+          "request",
+        ]);
+        if (envelope.protocol_version !== 1) invalidInput();
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        stopUploads.signal.addEventListener("abort", abort, { once: true });
+        streams.add(response);
+        try {
+          if (response.destroyed || stopUploads.signal.aborted) abort();
+          const fixed = await parseKnowledgeSynthesisRequest(envelope.request);
+          if (stop.signal.aborted) return;
+          const receipt = await options.maintenance.synthesize(
+            fixed,
+            stop.signal,
+          );
+          const result = await parseSynthesisExecutionReceipt(receipt, fixed);
+          json(response, 200, { protocol_version: 1, result });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+          stopUploads.signal.removeEventListener("abort", abort);
+        }
+        return;
+      }
+      if (
+        url.pathname === "/api/v1/maintenance/analyze-knowledge" ||
+        url.pathname === "/api/v1/maintenance/analyze-knowledge-long"
+      ) {
+        const isLong = url.pathname.endsWith("-long");
+        const analyze = isLong
+          ? options.maintenance.analyzeLong
+          : options.maintenance.analyze;
+        if (!analyze) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "maintenance-unavailable",
+          });
+          return;
+        }
+        const envelope = object(await extractionBody(request, 310 * 1024), [
+          "protocol_version",
+          "request",
+        ]);
+        if (envelope.protocol_version !== 1) invalidInput();
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        stopUploads.signal.addEventListener("abort", abort, { once: true });
+        streams.add(response);
+        try {
+          if (response.destroyed || stopUploads.signal.aborted) abort();
+          const analyzed = isLong
+            ? await parseKnowledgeLongAnalysisRequest(envelope.request)
+            : await parseKnowledgeAnalysisRequest(envelope.request);
+          if (stop.signal.aborted) return;
+          const result = parseKnowledgeAnalysisReceipt(
+            await analyze(analyzed, stop.signal),
+            analyzed,
+          );
+          json(response, 200, { protocol_version: 1, result: await result });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+          stopUploads.signal.removeEventListener("abort", abort);
+        }
+        return;
+      }
+      if (extractionPaths.has(url.pathname)) {
+        if (!options.maintenance.extraction) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "maintenance-unavailable",
+          });
+          return;
+        }
+        const envelope = object(
+          await extractionBody(request, EXTRACTION_SUBMISSION_WIRE_MAX_BYTES),
+          ["protocol_version", "request"],
+        );
+        if (envelope.protocol_version !== 1) invalidInput();
+        const delivery = options.maintenance.extraction;
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        stopUploads.signal.addEventListener("abort", abort, { once: true });
+        streams.add(response);
+        try {
+          const input = envelope.request;
+          let result: unknown;
+          switch (url.pathname) {
+            case "/api/v1/maintenance/extraction-operation":
+              result = parseExtractionOperationResult(
+                await delivery.create(input, stop.signal),
+              );
+              break;
+            case "/api/v1/maintenance/extraction-submit":
+              result = parseExtractionAcceptedResult(
+                await delivery.submit(input, stop.signal),
+                parseExtractionSubmission(input),
+              );
+              break;
+            case "/api/v1/maintenance/extraction-operation-read":
+            case "/api/v1/maintenance/extraction-close":
+            case "/api/v1/maintenance/extraction-cancel": {
+              const selection = object(input, ["operation_id"]);
+              if (typeof selection.operation_id !== "string") invalidInput();
+              result = url.pathname.endsWith("operation-read")
+                ? await delivery.operation(selection.operation_id)
+                : url.pathname.endsWith("extraction-close")
+                  ? await delivery.closeOperation(
+                      selection.operation_id,
+                      stop.signal,
+                    )
+                  : await delivery.cancelOperation(
+                      selection.operation_id,
+                      stop.signal,
+                    );
+              if (result !== null)
+                result = parseExtractionOperationResult(result);
+              break;
+            }
+            case "/api/v1/maintenance/extraction-receipt": {
+              const selection = object(input, ["receipt_id"]);
+              if (typeof selection.receipt_id !== "string") invalidInput();
+              result = await delivery.receipt(selection.receipt_id);
+              if (result !== null)
+                result = parseExtractionReceiptResult(result);
+              break;
+            }
+            case "/api/v1/maintenance/extraction-cleanup": {
+              const selection = object(input, ["limit"]);
+              if (typeof selection.limit !== "number") invalidInput();
+              result = await delivery.cleanupExpired(
+                selection.limit,
+                stop.signal,
+              );
+              break;
+            }
+          }
+          json(response, 200, { protocol_version: 1, result });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+          stopUploads.signal.removeEventListener("abort", abort);
+        }
+        return;
+      }
+      if (url.pathname === "/api/v1/maintenance/document-default") {
+        if (!options.maintenance.documentDefault) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "maintenance-unavailable",
+          });
+          return;
+        }
+        const selection = parseDocumentRequest(await body(request));
+        const current = await options.maintenance.documentDefault(
+          selection.literature_id,
+          selection.asset_id,
+          selection.asset_sha256,
+        );
+        json(response, 200, { protocol_version: 1, default: current });
+        return;
+      }
+      if (
+        url.pathname === "/api/v1/maintenance/rebuild-index" ||
+        url.pathname === "/api/v1/maintenance/rebuild-knowledge-index"
+      ) {
+        const rebuild =
+          url.pathname === "/api/v1/maintenance/rebuild-index"
+            ? options.maintenance.rebuildIndex
+            : options.maintenance.rebuildKnowledgeIndex;
+        if (!rebuild) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "maintenance-unavailable",
+          });
+          return;
+        }
+        const command = object(await body(request), [
+          "protocol_version",
+          "request",
+        ]);
+        const intent = object(command.request, ["kind"]);
+        if (command.protocol_version !== 1 || intent.kind !== "rebuild")
+          invalidInput();
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        stopUploads.signal.addEventListener("abort", abort, { once: true });
+        streams.add(response);
+        try {
+          const result = parseRetrievalGenerationReceipt(
+            await rebuild(stop.signal),
+          );
+          json(response, 200, { protocol_version: 1, result });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+          stopUploads.signal.removeEventListener("abort", abort);
+        }
+        return;
+      }
+      const receipt = await receiveDocumentRequest(
+        request,
+        response,
+        options.maintenance.parseDocuments,
+        stopUploads.signal,
+      );
+      json(response, 200, { protocol_version: 1, receipt });
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/api/v1/query/status") {
+      json(response, 200, {
+        protocol_version: 1,
+        readiness: options.application.readiness,
+      });
+      return;
+    }
+    const staticAsset =
+      request.method === "GET" ? options.assets?.get(url.pathname) : undefined;
+    if (staticAsset) {
+      response.writeHead(200, { "Content-Type": staticAsset.contentType });
+      response.end(staticAsset.body);
+      return;
+    }
+    if (request.method !== "POST") {
+      json(response, 405, { protocol_version: 1, code: "method-not-allowed" });
+      return;
+    }
+    const application = options.application;
+    if (!application.query || application.readiness.status !== "ready") {
+      const code =
+        application.readiness.status === "not-initialized"
+          ? "query-not-initialized"
+          : "query-unavailable";
+      json(response, 503, { protocol_version: 1, code });
+      return;
+    }
+    const command = object(
+      await (url.pathname === "/api/v1/query/extraction-prepare" ||
+      url.pathname.startsWith("/api/v1/query/knowledge-") ||
+      url.pathname.startsWith("/api/v1/query/synthesis-")
+        ? extractionBody(
+            request,
+            url.pathname === "/api/v1/query/extraction-prepare" ||
+              url.pathname === "/api/v1/query/synthesis-prepare" ||
+              url.pathname === "/api/v1/query/knowledge-context"
+              ? 310 * 1024
+              : 8192,
+          )
+        : body(request)),
+      ["protocol_version", "request"],
+    );
+    if (command.protocol_version !== 1) invalidInput();
+    switch (url.pathname) {
+      case "/api/v1/query/synthesis-prepare": {
+        if (!application.synthesisPreparation) {
+          json(response, 422, {
+            protocol_version: 1,
+            code: "catalog-v7-required",
+          });
+          return;
+        }
+        const selection = parseSynthesisPreparationRequest(command.request);
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        streams.add(response);
+        try {
+          const result = await parseSynthesisPreparationResult(
+            await application.synthesisPreparation.prepare(
+              selection,
+              stop.signal,
+            ),
+            selection,
+          );
+          json(response, 200, { protocol_version: 1, result });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+        }
+        return;
+      }
+      case "/api/v1/query/synthesis-read":
+      case "/api/v1/query/synthesis-source":
+      case "/api/v1/query/synthesis-list": {
+        const reader = application.synthesisRead;
+        if (!reader) {
+          json(response, 422, {
+            protocol_version: 1,
+            code: "catalog-v7-required",
+          });
+          return;
+        }
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        streams.add(response);
+        try {
+          let result: unknown;
+          if (url.pathname === "/api/v1/query/synthesis-list") {
+            const selection = parseSynthesisListSelection(command.request);
+            result = await parseSynthesisListResult(
+              await reader.list(
+                selection.manifest_sha256,
+                selection.limit,
+                stop.signal,
+              ),
+              selection,
+            );
+          } else {
+            const selection = parseSynthesisReadSelection(command.request);
+            if (url.pathname === "/api/v1/query/synthesis-read") {
+              const read = await reader.byId(
+                selection.artifact_id,
+                stop.signal,
+              );
+              result =
+                read === null
+                  ? null
+                  : await parseSynthesisReadResult(read, selection);
+            } else {
+              const source = await reader.sourceById(
+                selection.artifact_id,
+                stop.signal,
+              );
+              result =
+                source === null
+                  ? null
+                  : await parseSynthesisSourceResult(source, selection);
+            }
+          }
+          if (result === null) {
+            json(response, 404, {
+              protocol_version: 1,
+              code: "synthesis-missing",
+            });
+            return;
+          }
+          json(response, 200, { protocol_version: 1, result });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+        }
+        return;
+      }
+      case "/api/v1/query/knowledge-read":
+      case "/api/v1/query/knowledge-list":
+      case "/api/v1/query/knowledge-default": {
+        const reader = application.knowledgeRead;
+        if (!reader) {
+          json(response, 422, {
+            protocol_version: 1,
+            code: "catalog-v6-required",
+          });
+          return;
+        }
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        streams.add(response);
+        try {
+          let result: unknown;
+          if (url.pathname === "/api/v1/query/knowledge-read") {
+            const selection = parseKnowledgeReadSelection(command.request);
+            result = await reader.byId(selection.artifact_id, stop.signal);
+            if (result !== null)
+              result = await parseKnowledgeReadResult(result, selection);
+          } else if (url.pathname === "/api/v1/query/knowledge-list") {
+            const selection = parseKnowledgeListSelection(command.request);
+            result = await parseKnowledgeListResult(
+              await reader.list(
+                selection.literature_id,
+                selection.limit,
+                stop.signal,
+              ),
+              selection,
+            );
+          } else {
+            const selection = parseKnowledgeDefaultSelection(command.request);
+            const pointer = await reader.default(
+              selection.literature_id,
+              selection.purpose,
+              await knowledgeQuestionSha256(selection.question),
+              stop.signal,
+            );
+            result = pointer
+              ? {
+                  revision: pointer.revision,
+                  artifact: await reader.byId(pointer.artifact_id, stop.signal),
+                }
+              : null;
+            if (result !== null)
+              result = await parseKnowledgeDefaultResult(result, selection);
+          }
+          if (result === null) {
+            json(response, 404, {
+              protocol_version: 1,
+              code: "knowledge-missing",
+            });
+            return;
+          }
+          json(response, 200, { protocol_version: 1, result });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+        }
+        return;
+      }
+      case "/api/v1/query/extraction-prepare": {
+        if (!application.extractionPreparation) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "query-unavailable",
+          });
+          return;
+        }
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        streams.add(response);
+        try {
+          const result = await application.extractionPreparation.prepare(
+            command.request,
+            stop.signal,
+          );
+          json(response, 200, { protocol_version: 1, result });
+        } catch (error) {
+          if (
+            error instanceof ExtractionSpecError ||
+            error instanceof ExtractionPreparationError ||
+            error instanceof ContractValidationError
+          ) {
+            const code =
+              error instanceof ContractValidationError
+                ? "invalid-request"
+                : error.code;
+            json(
+              response,
+              code === "input-missing"
+                ? 404
+                : code === "schema-cancelled" ||
+                    code === "preparation-cancelled"
+                  ? 409
+                  : 422,
+              { protocol_version: 1, code },
+            );
+          } else throw error;
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+        }
+        return;
+      }
+      case "/api/v1/query/context": {
+        if (!application.context) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "query-unavailable",
+          });
+          return;
+        }
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        streams.add(response);
+        try {
+          const result = await application.context.search(
+            command.request,
+            stop.signal,
+          );
+          json(response, 200, { protocol_version: 1, result });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+        }
+        return;
+      }
+      case "/api/v1/query/knowledge-context": {
+        if (!application.knowledgeContext) {
+          json(response, 422, {
+            protocol_version: 1,
+            code: "catalog-v8-required",
+          });
+          return;
+        }
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        streams.add(response);
+        try {
+          const result = await application.knowledgeContext.search(
+            command.request,
+            stop.signal,
+          );
+          json(response, 200, { protocol_version: 1, result });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+        }
+        return;
+      }
+      case "/api/v1/query/document-default":
+      case "/api/v1/query/document-describe":
+      case "/api/v1/query/document-outline":
+      case "/api/v1/query/document-segments":
+      case "/api/v1/query/document-resources":
+      case "/api/v1/query/document-slice":
+      case "/api/v1/query/document-resource":
+      case "/api/v1/query/material-evidence":
+      case "/api/v1/query/evidence-resolve": {
+        const reader = application.documentRead;
+        if (!reader) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "query-unavailable",
+          });
+          return;
+        }
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        streams.add(response);
+        try {
+          const kind =
+            url.pathname === "/api/v1/query/document-default"
+              ? "default"
+              : url.pathname === "/api/v1/query/document-describe"
+                ? "describe"
+                : url.pathname === "/api/v1/query/document-outline"
+                  ? "outline"
+                  : url.pathname === "/api/v1/query/document-segments"
+                    ? "segments"
+                    : url.pathname === "/api/v1/query/document-resources"
+                      ? "resources"
+                      : url.pathname === "/api/v1/query/document-slice"
+                        ? "slice"
+                        : url.pathname === "/api/v1/query/document-resource"
+                          ? "resource"
+                          : url.pathname === "/api/v1/query/material-evidence"
+                            ? "material"
+                            : "evidence";
+          const readRequest =
+            kind === "evidence" &&
+            command.request &&
+            typeof command.request === "object" &&
+            !Array.isArray(command.request) &&
+            !Object.hasOwn(command.request, "evidence")
+              ? {
+                  evidence: command.request,
+                  max_bytes: 65536,
+                  continuation: null,
+                }
+              : command.request;
+          const value =
+            url.pathname === "/api/v1/query/document-default"
+              ? await reader.default(command.request, stop.signal)
+              : url.pathname === "/api/v1/query/document-describe"
+                ? await reader.describe(command.request, stop.signal)
+                : url.pathname === "/api/v1/query/document-outline"
+                  ? await reader.outline(command.request, stop.signal)
+                  : url.pathname === "/api/v1/query/document-segments"
+                    ? await reader.segments(command.request, stop.signal)
+                    : url.pathname === "/api/v1/query/document-resources"
+                      ? await reader.resources(command.request, stop.signal)
+                      : url.pathname === "/api/v1/query/document-slice"
+                        ? await reader.slice(command.request, stop.signal)
+                        : url.pathname === "/api/v1/query/document-resource"
+                          ? await reader.resource(command.request, stop.signal)
+                          : url.pathname === "/api/v1/query/material-evidence"
+                            ? await reader.materialEvidence(
+                                command.request,
+                                stop.signal,
+                              )
+                            : await reader.resolveEvidence(
+                                readRequest,
+                                stop.signal,
+                              );
+          let parsed;
+          try {
+            parsed = parseDocumentReadResult(
+              kind,
+              value,
+              parseDocumentReadRequest(kind, readRequest),
+            );
+          } catch (error) {
+            throw new DocumentReadError("document-integrity", { cause: error });
+          }
+          json(response, 200, { protocol_version: 1, result: parsed });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+        }
+        return;
+      }
+      case "/api/v1/query/search":
+        json(response, 200, {
+          protocol_version: 1,
+          page: await application.query.search(command.request),
+        });
+        return;
+      case "/api/v1/query/read": {
+        const request = object(command.request, ["literature_id"]);
+        json(response, 200, {
+          protocol_version: 1,
+          detail: await application.query.detail(request.literature_id),
+        });
+        return;
+      }
+      case "/api/v1/query/references":
+        json(response, 200, {
+          protocol_version: 1,
+          page: await application.query.references(command.request),
+        });
+        return;
+      case "/api/v1/query/reference": {
+        const request = object(command.request, ["reference_id"]);
+        json(response, 200, {
+          protocol_version: 1,
+          detail: await application.query.referenceDetail(request.reference_id),
+        });
+        return;
+      }
+      case "/api/v1/query/material-bytes": {
+        if (!application.documentRead) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "query-unavailable",
+          });
+          return;
+        }
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        streams.add(response);
+        verifiedBinaryStreams.add(response);
+        try {
+          await application.documentRead.withMaterialBytes(
+            command.request,
+            async (material, chunks) => {
+              response.writeHead(200, {
+                "Content-Type": "application/pdf",
+                "Content-Disposition": `attachment; filename="${material.asset_id}.pdf"`,
+                "X-Sciretriever-Protocol-Version": "1",
+                "X-Sciretriever-Asset-Id": material.asset_id,
+                "X-Sciretriever-Asset-Sha256": material.asset_sha256,
+                "X-Sciretriever-Byte-Size": String(material.byte_size),
+              });
+              for await (const chunk of chunks) {
+                if (stop.signal.aborted)
+                  throw new DocumentReadError("document-cancelled");
+                if (!response.write(chunk))
+                  await once(response, "drain", { signal: stop.signal });
+              }
+            },
+            stop.signal,
+          );
+          response.end();
+        } finally {
+          verifiedBinaryStreams.delete(response);
+          streams.delete(response);
+          response.off("close", abort);
+        }
+        return;
+      }
+      case "/api/v1/query/artifact": {
+        const read = object(command.request, ["literature_id", "kind"]);
+        if (read.kind !== "primary-pdf" && read.kind !== "content-markdown")
+          invalidInput();
+        const detail = await application.query.detail(read.literature_id);
+        const artifact =
+          read.kind === "primary-pdf"
+            ? detail.primary_pdf?.asset
+            : detail.content?.markdown;
+        if (!artifact) {
+          json(response, 200, {
+            protocol_version: 1,
+            gap: {
+              literature_id: detail.literature.literature_id,
+              code:
+                read.kind === "primary-pdf"
+                  ? "missing-primary-pdf"
+                  : "missing-literature-content",
+            },
+          });
+          return;
+        }
+        if (!application.literatureArtifacts) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "artifact-unavailable",
+          });
+          return;
+        }
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        streams.add(response);
+        try {
+          await application.literatureArtifacts.withArtifact(
+            artifact,
+            async (chunks) => {
+              response.writeHead(200, {
+                "Content-Type": artifact.media_type,
+                "Content-Disposition": `attachment; filename="${detail.literature.literature_id}.${read.kind === "primary-pdf" ? "pdf" : "md"}"`,
+                "X-Sciretriever-Protocol-Version": "1",
+              });
+              for await (const chunk of chunks) {
+                if (stop.signal.aborted)
+                  throw new Error("query artifact read cancelled");
+                if (!response.write(chunk))
+                  await once(response, "drain", { signal: stop.signal });
+              }
+            },
+            { signal: stop.signal },
+          );
+          response.end();
+        } catch {
+          if (response.headersSent) response.destroy();
+          else
+            json(response, 503, {
+              protocol_version: 1,
+              code: "artifact-unavailable",
+            });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+        }
+        return;
+      }
+      default:
+        json(response, 404, {
+          protocol_version: 1,
+          code: "endpoint-not-found",
+        });
+    }
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(options.port ?? 0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string")
+    throw new Error("query HTTP listen failed");
+  host = `127.0.0.1:${address.port}`;
+  origin = `http://${host}`;
+  return {
+    origin,
+    close: async () => {
+      if (closing) return;
+      closing = true;
+      stopUploads.abort();
+      for (const response of streams)
+        if (verifiedBinaryStreams.has(response)) response.destroy();
+        else response.end();
       const done = new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
       );

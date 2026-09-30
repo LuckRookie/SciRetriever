@@ -18,6 +18,15 @@ export {
   type ContentAnalysisResult,
 } from "./entry/content-analysis.js";
 export {
+  KnowledgeAnalysisService,
+  KnowledgeAnalysisFailure,
+} from "./analysis/knowledge.js";
+export {
+  ManualPdfIngestionService,
+  ManualPdfInputError,
+  type IngestPdfRequest,
+} from "./entry/manual-pdf.js";
+export {
   ConfigurationBoundaryError,
   configurationPath,
   loadConfiguration,
@@ -42,6 +51,14 @@ export {
 } from "./storage/files/publication.js";
 export { FileStore, FileStoreError } from "./storage/files/store.js";
 export { VerifiedReaderError } from "./storage/files/reader.js";
+export {
+  KnowledgeContextService,
+  KnowledgeContextError,
+} from "./retrieval/knowledge-query.js";
+export {
+  KnowledgeRetrievalIndexService,
+  KnowledgeIndexError,
+} from "./retrieval/knowledge-index.js";
 export {
   LiteratureArtifactService,
   LiteratureArtifactError,
@@ -274,6 +291,7 @@ export {
   ExecutionSchedulerError,
   ExecutionTaskService,
   QueuePausedError,
+  QueueTargetFailureError,
   QueueInterruptedError,
   QueueRetryableError,
   type ExecutionRunResult,
@@ -400,10 +418,23 @@ export {
 } from "./network/http.js";
 export {
   createApplication,
+  createQueryApplication,
+  QueryApplicationError,
   type Application,
   type ApplicationOptions,
+  type QueryApplication,
+  type QueryApplicationOptions,
 } from "./bootstrap/application.js";
-export { loadWorkbenchAssets } from "./workbench/assets.js";
+export {
+  startMaintenanceWorkbench,
+  startProductionWorkbench,
+  startQueryOnlyWorkbench,
+} from "./bootstrap/workbench.js";
+export {
+  loadQueryWorkbenchAssets,
+  loadMaintenanceWorkbenchAssets,
+  loadWorkbenchAssets,
+} from "./workbench/assets.js";
 export {
   runDoctor,
   type DoctorCheck,
@@ -417,6 +448,60 @@ export {
 } from "./logging/index.js";
 
 export { ParsingService, type PreparedParsing } from "./parsing/service.js";
+export {
+  DocumentProcessingService,
+  DocumentProcessingError,
+  type ParseDocumentRequest,
+  type ParseDocumentReceipt,
+} from "./document/service.js";
+export { SqliteDocumentStorage } from "./document/storage.js";
+export {
+  ExtractionPreparationService,
+  ExtractionPreparationError,
+  type ExtractionPreparation,
+} from "./extraction/prepare.js";
+export {
+  ExtractionDeliveryService,
+  ExtractionDeliveryError,
+} from "./extraction/delivery.js";
+export {
+  validateExtractionSpec,
+  ExtractionSpecError,
+} from "./extraction/spec.js";
+export { ExtractionMigrationError } from "./storage/sqlite/extraction-migration-error.js";
+export async function inspectExtractionCatalog(path: string) {
+  const migration = await import("./storage/sqlite/extraction-migration.js");
+  return migration.inspectExtractionCatalog(path);
+}
+export async function migrateExtractionCatalog(
+  input: Parameters<
+    typeof import("./storage/sqlite/extraction-migration.js").migrateExtractionCatalog
+  >[0],
+) {
+  const migration = await import("./storage/sqlite/extraction-migration.js");
+  return migration.migrateExtractionCatalog(input);
+}
+export async function inspectKnowledgeCatalog(path: string) {
+  const migration = await import("./storage/sqlite/knowledge-migration.js");
+  return migration.inspectKnowledgeCatalog(path);
+}
+export async function migrateKnowledgeCatalog(
+  input: Parameters<
+    typeof import("./storage/sqlite/knowledge-migration.js").migrateKnowledgeCatalog
+  >[0],
+) {
+  const migration = await import("./storage/sqlite/knowledge-migration.js");
+  return migration.migrateKnowledgeCatalog(input);
+}
+export {
+  DocumentReadService,
+  DocumentReadError,
+  type DocumentSelector,
+} from "./document/read.js";
+export {
+  documentRepresentationHash,
+  type DocumentStoragePort,
+} from "./document/contract.js";
 export {
   ParsingFailure,
   type ParserBackend,
@@ -486,6 +571,8 @@ export {
 } from "./workbench/session.js";
 export {
   startWorkbenchHttp,
+  startQueryOnlyHttp,
+  type QueryOnlyHttpOptions,
   type WorkbenchHttpOptions,
   type WorkbenchStaticAsset,
 } from "./workbench/http.js";

@@ -272,9 +272,12 @@ describe("TypeScript configuration owner", () => {
     const previous = process.env.SCIRETRIEVER_HOME;
     process.env.SCIRETRIEVER_HOME = home;
     try {
+      const { configurationHome } = await import("../src/cli/main.js");
       // Neither the environment variable nor the working directory selects the
       // production configuration; only an explicit owner seam does.
       expect(fixedConfigurationHome()).toBe(homedir());
+      expect(configurationHome()).toBe(homedir());
+      expect(configurationHome({ home })).toBe(home);
       expect(new TypeScriptConfigurationOwner().home).toBe(homedir());
       expect(configurationPath()).toBe(
         join(homedir(), ".sciretriever", "config.toml"),

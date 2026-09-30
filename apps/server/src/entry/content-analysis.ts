@@ -1,4 +1,3 @@
-import type { NoUsableContentService } from "./no-usable-content.js";
 import {
   parseAnalysisInputIdentity,
   parseLiteratureId,
@@ -7,6 +6,10 @@ import {
 } from "@sciretriever/contracts";
 import type { AnalysisResult } from "../analysis/service.js";
 import type { LiteratureContentService } from "../literature/content.js";
+import {
+  directCompletionCommit,
+  type CompletionCommit,
+} from "./completion-execution.js";
 
 export interface ContentAnalysisPort {
   analyzeContent(
@@ -15,7 +18,6 @@ export interface ContentAnalysisPort {
   ): Promise<AnalysisResult>;
 }
 export type ContentAnalysisResult =
-  | Awaited<ReturnType<NoUsableContentService["cleanup"]>>
   | {
       readonly outcome: "content_accepted";
       readonly literature_id: string;
@@ -43,11 +45,11 @@ export class ContentAnalysisService {
   constructor(
     private readonly analysis: ContentAnalysisPort,
     private readonly literature: Pick<LiteratureContentService, "accept">,
-    private readonly cleanup?: Pick<NoUsableContentService, "cleanup">,
   ) {}
   analyzeCurrent(
     value: unknown,
     signal?: AbortSignal,
+    commit: CompletionCommit = directCompletionCommit,
   ): Promise<ContentAnalysisResult> {
     if (this.stop.signal.aborted)
       return Promise.reject(
@@ -56,7 +58,7 @@ export class ContentAnalysisService {
     const active = signal
       ? AbortSignal.any([signal, this.stop.signal])
       : this.stop.signal;
-    const pending = this.execute(value, active);
+    const pending = this.execute(value, active, commit);
     this.active.add(pending);
     void pending.then(
       () => this.active.delete(pending),
@@ -67,6 +69,7 @@ export class ContentAnalysisService {
   private async execute(
     value: unknown,
     signal: AbortSignal,
+    commit: CompletionCommit,
   ): Promise<ContentAnalysisResult> {
     const id = parseLiteratureId(value);
     const check = () => {
@@ -80,20 +83,13 @@ export class ContentAnalysisService {
       const input = parseAnalysisInputIdentity(result.input);
       if (input.literature_id !== id)
         throw new ContentAnalysisFailure("content-analysis-contract");
-      if (this.cleanup)
-        return this.cleanup.cleanup(
-          { outcome: "no_usable_content", input },
-          signal,
-        );
-      // Standalone Analysis adapters may return the decision for a separately composed caller.
+      // Analysis has no authority to invalidate an accepted material or prior result.
       return Object.freeze({ outcome: "no_usable_content", input });
     }
     if (result.proposal.literature_id !== id)
       throw new ContentAnalysisFailure("content-analysis-contract");
-    const content = await this.literature.accept(
-      result.proposal,
-      result.markdownBytes,
-      signal,
+    const content = await commit(() =>
+      this.literature.accept(result.proposal, result.markdownBytes, signal),
     );
     // Once the Literature transaction starts, report its actual commit even if cancellation races it.
     return Object.freeze({

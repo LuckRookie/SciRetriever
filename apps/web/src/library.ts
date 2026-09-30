@@ -5,6 +5,9 @@ import {
   type LibrarySearchPage,
   type LiteratureDetail,
 } from "@sciretriever/contracts";
+import { record, referencePage } from "./wire.js";
+import { mountDocumentReading } from "./document-reading.js";
+import { navigateWorkspace, onWorkspace } from "./navigation.js";
 const node = <T extends HTMLElement = HTMLElement>(id: string) => {
   const element = document.getElementById(id);
   if (!element) throw new Error("missing library element");
@@ -22,23 +25,28 @@ function element(tag: string, text: string, className?: string): HTMLElement {
   return e;
 }
 export function mountLibrary(options: {
+  /** Mount the reading view without Browser, Jobs or Configuration navigation bindings. */
+  queryOnly?: boolean;
   request(path: string, body: unknown): Promise<Record<string, unknown>>;
   download(id: string, kind: "primary-pdf" | "content-markdown"): Promise<void>;
   currentArticle(): string | undefined;
   selectArticle?(id: string): Promise<void>;
   bibliography?(id: string, format: "bibtex" | "ris"): Promise<void>;
-}): void {
+}): { openArticle(id: string): Promise<void> } {
+  const queryOnly = options.queryOnly === true;
   let cursor: string | null = null,
     searchRevision = 0,
     detailRevision = 0,
     selected: string | undefined,
     searching = false;
+  const relationCursors = new Map<"references" | "cited-by", string | null>();
   let searchInput: { text: string | null; sort: string } = {
     text: null,
     sort: "publication-year-desc",
   };
-  const open = (library: boolean) => {
+  const open = (library: boolean, push = true) => {
     node("jobs-workspace").hidden = true;
+    node("config-workspace").hidden = true;
     node("library-workspace").hidden = !library;
     node("live-workspace").hidden = library;
     node("open-details").hidden = library;
@@ -52,8 +60,13 @@ export function mountLibrary(options: {
     node("live-details").dataset.open = "false";
     node("details-backdrop").hidden = true;
     if (library) {
-      void search();
-      if (selected) void detail(selected);
+      if (push) navigateWorkspace("library");
+      node("library-workspace").focus();
+      void search(false, false);
+      if (selected) void detail(selected, false);
+    } else {
+      if (push) navigateWorkspace("browser");
+      node("live-workspace").focus();
     }
     node(library ? "library-tab" : "browser-tab").setAttribute(
       "aria-current",
@@ -63,19 +76,22 @@ export function mountLibrary(options: {
       "aria-current",
     );
     node("jobs-tab").removeAttribute("aria-current");
+    node("config-tab").removeAttribute("aria-current");
     node("jobs-toggle").textContent = "任务";
   };
-  node("library-toggle").addEventListener("click", () =>
-    open(node("library-workspace").hidden),
-  );
-  node("library-tab").addEventListener("click", (e) => {
-    e.preventDefault();
-    open(true);
-  });
-  node("browser-tab").addEventListener("click", (e) => {
-    e.preventDefault();
-    open(false);
-  });
+  if (!queryOnly) {
+    node("library-toggle").addEventListener("click", () =>
+      open(node("library-workspace").hidden),
+    );
+    node("library-tab").addEventListener("click", (e) => {
+      e.preventDefault();
+      open(true);
+    });
+    node("browser-tab").addEventListener("click", (e) => {
+      e.preventDefault();
+      open(false);
+    });
+  }
   const message = (text: string) => {
     node("library-status").textContent = text;
   };
@@ -139,7 +155,16 @@ export function mountLibrary(options: {
         button.disabled = true;
         void options
           .download(d.literature.literature_id, kind)
-          .catch(() => message("文件暂时无法下载，请刷新详情后重试。"))
+          .catch((error: unknown) => {
+            const code = error instanceof Error ? error.message : "";
+            message(
+              code === "missing-primary-pdf"
+                ? "这篇文献没有已接纳的 PDF；只读查询不会启动获取。"
+                : code === "missing-literature-content"
+                  ? "这篇文献没有已保存的内容；只读查询不会启动解析或生成。"
+                  : "文件暂时无法下载，请刷新详情后重试。",
+            );
+          })
           .finally(() => {
             button.disabled = false;
           });
@@ -148,6 +173,10 @@ export function mountLibrary(options: {
     };
     if (d.primary_pdf) download("下载 PDF", "primary-pdf");
     if (d.content) download("下载 Markdown", "content-markdown");
+    if (queryOnly) {
+      const reader = mountDocumentReading(root, d, options.request, message);
+      if (reader) actions.append(reader);
+    }
     if (options.bibliography) {
       for (const [label, format] of [
         ["导出 BibTeX", "bibtex"],
@@ -186,34 +215,44 @@ export function mountLibrary(options: {
       actions.append(target);
     }
     const relations = element("div", "", "library-actions");
-    const showRelations = async (mode: "references" | "cited-by") => {
+    const showRelations = async (
+      mode: "references" | "cited-by",
+      append = false,
+    ) => {
       const result = await options.request("/api/library/references", {
         literature_id: d.literature.literature_id,
         direction: mode,
         limit: 25,
-        cursor: null,
+        cursor: append ? (relationCursors.get(mode) ?? null) : null,
       });
-      const page = result.page as {
-        items: readonly {
-          reference: { reference_id: string };
-          related_literature: { literature: LiteratureDetail["literature"] };
-          support_count: number;
-        }[];
-      };
-      relations.replaceChildren(
-        element("h3", mode === "references" ? "参考文献" : "被引文献"),
-      );
+      const page = referencePage(result);
+      relationCursors.set(mode, page.next_cursor);
+      if (!append)
+        relations.replaceChildren(
+          element("h3", mode === "references" ? "参考文献" : "被引文献"),
+        );
       if (!page.items.length)
         relations.append(element("p", "暂无记录。", "library-empty"));
       for (const item of page.items) {
+        const related = record(item.related_literature, "related literature");
+        const literature = record(related.literature, "related literature");
+        const metadata = record(literature.metadata, "related metadata");
+        if (typeof metadata.title !== "string" && metadata.title !== null)
+          throw new Error("invalid related title");
         const b = document.createElement("button");
-        b.textContent = `${item.related_literature.literature.metadata.title ?? "未命名文献"} · 支持证据 ${item.support_count}`;
+        b.textContent = `${metadata.title ?? "未命名文献"} · 支持证据 ${String(item.support_count)}`;
         b.addEventListener("click", () => {
           void (async () => {
-            const reference = await options.request("/api/library/reference", {
-              reference_id: item.reference.reference_id,
-            });
-            const evidence = parseReferenceDetail(reference.detail);
+            const referenceValue = record(item.reference, "reference");
+            if (typeof referenceValue.reference_id !== "string")
+              throw new Error("invalid reference id");
+            const referenceResponse = await options.request(
+              "/api/library/reference",
+              {
+                reference_id: referenceValue.reference_id,
+              },
+            );
+            const evidence = parseReferenceDetail(referenceResponse.detail);
             const support = element("div", "", "library-evidence");
             support.append(element("strong", "来源证据"));
             for (const value of evidence.supports) {
@@ -230,6 +269,23 @@ export function mountLibrary(options: {
           })().catch(() => message("引用证据暂时无法读取。"));
         });
         relations.append(b);
+      }
+      const existing = relations.querySelector<HTMLButtonElement>(
+        "[data-more-relations]",
+      );
+      existing?.remove();
+      if (page.next_cursor) {
+        const more = document.createElement("button");
+        more.type = "button";
+        more.dataset.moreRelations = mode;
+        more.textContent = "加载更多引用";
+        more.addEventListener("click", () => {
+          more.disabled = true;
+          void showRelations(mode, true).catch(() =>
+            message("引用关系暂时无法读取。"),
+          );
+        });
+        relations.append(more);
       }
     };
     const relationButton = (label: string, mode: "references" | "cited-by") => {
@@ -294,18 +350,33 @@ export function mountLibrary(options: {
             element("p", subsection.markdown, "library-abstract"),
           );
       }
+    if (!d.primary_pdf)
+      root.append(
+        element(
+          "p",
+          "尚无已接纳的 PDF；只读查询不会启动获取。",
+          "library-empty",
+        ),
+      );
     if (!d.content)
       root.append(
         element(
           "p",
-          d.primary_pdf ? "全文已保存，内容尚未生成。" : "尚未保存全文。",
+          d.primary_pdf
+            ? "PDF 已保存，但文献内容尚未保存。只读查询不会启动解析或生成。"
+            : "尚无已保存的文献内容。",
           "library-empty",
         ),
       );
   };
-  const detail = async (id: string) => {
+  const detail = async (id: string, push = true) => {
     const revision = ++detailRevision;
     selected = id;
+    if (push) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("literature", id);
+      window.history.pushState({ literature: id }, "", url);
+    }
     node("library-detail").replaceChildren(
       element("p", "正在读取文献…", "library-empty"),
     );
@@ -322,14 +393,30 @@ export function mountLibrary(options: {
       });
       const parsed = await parseLiteratureDetail(result.detail);
       if (revision === detailRevision) renderDetail(parsed);
-    } catch {
-      if (revision === detailRevision)
+    } catch (error: unknown) {
+      if (revision === detailRevision) {
+        const code = error instanceof Error ? error.message : "";
         node("library-detail").replaceChildren(
-          element("p", "无法读取文献，请重新选择。", "library-empty"),
+          element(
+            "p",
+            code === "query-not-initialized"
+              ? "文献库尚未初始化；只读查询不会创建 catalog。"
+              : code === "query-unavailable"
+                ? "文献库暂不可用，可能需要显式维护。"
+                : "无法读取文献，请重新选择。",
+            "library-empty",
+          ),
         );
+        selected = undefined;
+        const url = new URL(window.location.href);
+        if (url.searchParams.get("literature") === id) {
+          url.searchParams.delete("literature");
+          window.history.replaceState({}, "", url);
+        }
+      }
     }
   };
-  const search = async (more = false) => {
+  const search = async (more = false, push = true) => {
     if (more && searching) return;
     const revision = ++searchRevision;
     searching = true;
@@ -339,6 +426,17 @@ export function mountLibrary(options: {
         text: node<HTMLInputElement>("library-query").value.trim() || null,
         sort: node<HTMLSelectElement>("library-sort").value,
       };
+      if (push) {
+        const url = new URL(window.location.href);
+        if (searchInput.text) url.searchParams.set("q", searchInput.text);
+        else url.searchParams.delete("q");
+        url.searchParams.set("sort", searchInput.sort);
+        window.history.pushState(
+          { q: searchInput.text, sort: searchInput.sort },
+          "",
+          url,
+        );
+      }
       node("library-more").hidden = true;
       node("library-results").replaceChildren();
     }
@@ -392,18 +490,33 @@ export function mountLibrary(options: {
         });
         node("library-results").append(button);
       }
-      message(`找到 ${page.total_count} 篇文献`);
+      message(
+        !searchInput.text && page.total_count === 0
+          ? "文献库为空，尚无已入库文献。"
+          : `找到 ${page.total_count} 篇文献`,
+      );
       if (!more && !items.length)
         node("library-results").append(
           element(
             "p",
-            "没有找到匹配文献。试试其他标题、作者或关键词。",
+            searchInput.text
+              ? "没有找到匹配文献。试试其他标题、作者或关键词。"
+              : "文献库为空，尚无可读取的文献。",
             "library-empty",
           ),
         );
       node("library-more").hidden = !cursor;
-    } catch {
-      if (revision === searchRevision) message("搜索失败，请检查条件后重试。");
+    } catch (error: unknown) {
+      if (revision === searchRevision) {
+        const code = error instanceof Error ? error.message : "";
+        message(
+          code === "query-not-initialized"
+            ? "文献库尚未初始化；只读查询不会创建 catalog。"
+            : code === "query-unavailable"
+              ? "文献库暂不可用，可能需要显式维护。"
+              : "搜索失败，请检查条件后重试。",
+        );
+      }
     } finally {
       if (revision === searchRevision) {
         searching = false;
@@ -421,5 +534,44 @@ export function mountLibrary(options: {
   node("library-more").addEventListener("click", () => {
     void search(true);
   });
-  void search();
+  window.addEventListener("popstate", () => {
+    const url = new URL(window.location.href);
+    const query = url.searchParams.get("q") ?? "";
+    const sort = url.searchParams.get("sort") ?? "publication-year-desc";
+    node<HTMLInputElement>("library-query").value = query;
+    node<HTMLSelectElement>("library-sort").value = sort;
+    void search(false, false);
+    const id = url.searchParams.get("literature");
+    if (id) void detail(id, false);
+    else {
+      selected = undefined;
+      node("library-detail").replaceChildren(
+        element(
+          "p",
+          "选择一篇文献，查看摘要、当前全文和处理结果。",
+          "library-empty",
+        ),
+      );
+    }
+  });
+  if (!queryOnly)
+    onWorkspace((workspace) => {
+      if (workspace === "library") open(true, false);
+      else if (workspace === "browser" && !node("library-workspace").hidden)
+        open(false, false);
+    });
+  const initial = new URL(window.location.href);
+  node<HTMLInputElement>("library-query").value =
+    initial.searchParams.get("q") ?? "";
+  node<HTMLSelectElement>("library-sort").value =
+    initial.searchParams.get("sort") ?? "publication-year-desc";
+  void search(false, false);
+  const initialId = initial.searchParams.get("literature");
+  if (initialId) void detail(initialId, false);
+  return {
+    openArticle: async (id: string) => {
+      open(true);
+      await detail(id);
+    },
+  };
 }

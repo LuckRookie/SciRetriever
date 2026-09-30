@@ -525,34 +525,23 @@ it("enforces operation budgets before requesting a model and cancels a pending m
   }
 });
 
-it("runs actual Analysis through Entry into no-content catalog and physical cleanup", async () => {
+it("runs actual Analysis through Entry and retains accepted material after no usable content", async () => {
   const env = await setup();
   const a = agent([() => ({ outcome: "no_usable_content", metadata: null })]);
   const s = service(env, a.runtime);
-  const entry = new ContentAnalysisService(
-    s,
-    env.app.literatureContent,
-    env.app.noUsableContent,
-  );
+  const entry = new ContentAnalysisService(s, env.app.literatureContent);
   try {
     const before = await env.app.library.detail(
       FIXTURE_LITERATURE.literature_id,
     );
     const result = await entry.analyzeCurrent(FIXTURE_LITERATURE.literature_id);
-    expect(result.outcome).toBe("no_usable_content_cleaned");
-    if (result.outcome !== "no_usable_content_cleaned")
-      throw new Error("unexpected outcome");
-    expect(result.reclamation.deleted).toHaveLength(2);
+    expect(result.outcome).toBe("no_usable_content");
     expect(a.calls).toHaveLength(1);
-    for (const ref of result.reclamation.deleted)
-      await expect(
-        env.app.files.read(ref, 16 * 1024 * 1024),
-      ).rejects.toBeInstanceOf(Error);
     const after = await env.app.library.detail(
       FIXTURE_LITERATURE.literature_id,
     );
-    expect(after.primary_pdf).toBeNull();
-    expect(after.parser_result).toBeNull();
+    expect(after.primary_pdf).toEqual(before.primary_pdf);
+    expect(after.parser_result).toEqual(before.parser_result);
     expect(after.literature.metadata).toEqual(before.literature.metadata);
   } finally {
     await entry.close();

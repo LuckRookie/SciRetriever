@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mkdtemp, readFile, stat, writeFile, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -10,29 +11,83 @@ import {
 } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
 import { runCli } from "../src/cli/main.js";
+import {
+  probeCatalogIdentity,
+  SYNTHETIC_CATALOG_MARKER_FILE,
+} from "../src/storage/execution/migration-gate.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 
 const id = (n: number) =>
   `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
+
+const digest = async (path: string) => sha256(await readFile(path));
 
 async function* input(bytes: Uint8Array): AsyncIterable<Uint8Array> {
   yield bytes;
 }
 
 describe("TypeScript CLI", () => {
-  it("migrates and inspects the durable runtime without a Python process", async () => {
+  it("gates the synthetic-only migration and inspects the durable runtime", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-"));
+    const catalog = join(home, "catalog.sqlite");
     const output: string[] = [];
+    const errors: string[] = [];
     try {
-      const migrated = await runCli(["storage", "migrate"], {
+      // Declaration and target verification are independent factors: this target
+      // is verified as a synthetic copy below, so the refusal here can only come
+      // from the missing `--synthetic-copy` declaration.
+      const refused = await runCli(["storage", "migrate"], {
         home,
-        stdout: (text) => output.push(text),
+        stderr: (text) => errors.push(text),
       });
+      expect(refused.code).toBe(3);
+      expect(errors.join("")).toContain("migration-refused");
+      expect(existsSync(catalog)).toBe(false);
+
+      const migrated = await runCli(
+        ["storage", "migrate", "--synthetic-copy"],
+        {
+          home,
+          stdout: (text) => output.push(text),
+        },
+      );
       expect(migrated.code).toBe(0);
       expect(migrated.value).toMatchObject({
         action: "migrated",
         migrated: true,
       });
+      const receipt = (
+        migrated.value as {
+          migration: {
+            readonly migration_id: string;
+            readonly action: string;
+            readonly from_version: number;
+            readonly to_version: number;
+            readonly manifest_fingerprint: string;
+          };
+        }
+      ).migration;
+      expect(receipt).toMatchObject({
+        action: "migrate",
+        from_version: 1,
+        to_version: 2,
+      });
+      expect(receipt.manifest_fingerprint).toMatch(/^[0-9a-f]{64}$/);
+
+      const repeated = await runCli(
+        ["storage", "migrate", "--synthetic-copy"],
+        { home },
+      );
+      expect(repeated.code).toBe(0);
+      expect(repeated.value).toMatchObject({
+        action: "migrated",
+        migration: { migration_id: receipt.migration_id },
+      });
+      await expect(probeCatalogIdentity(catalog)).resolves.toMatchObject({
+        state: "v2",
+        migration_receipts: 1,
+      });
+
       const inspected = await runCli(["storage", "inspect"], { home });
       expect(inspected.code).toBe(0);
       expect(inspected.value).toMatchObject({ migrated: true });
@@ -41,10 +96,169 @@ describe("TypeScript CLI", () => {
     }
   });
 
+  it("refuses a declared synthetic copy whose marker is not valid", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-marker-"));
+    const catalog = join(home, "catalog.sqlite");
+    const errors: string[] = [];
+    await writeFile(
+      join(home, SYNTHETIC_CATALOG_MARKER_FILE),
+      JSON.stringify({
+        product: "other-product",
+        kind: "synthetic-catalog",
+        marker_version: 1,
+      }),
+    );
+    try {
+      const refused = await runCli(["storage", "migrate", "--synthetic-copy"], {
+        home,
+        stderr: (text) => errors.push(text),
+      });
+      expect(refused.code).toBe(3);
+      expect(errors.join("")).toContain("migration-refused");
+      expect(existsSync(catalog)).toBe(false);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps backup create-if-absent and refuses unsafe target paths", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-backup-"));
+    const catalog = join(home, "catalog.sqlite");
+    const backup = join(home, "catalog-copy.sqlite");
+    const absent = join(home, "absent.sqlite");
+    try {
+      const app = await createApplication(home);
+      try {
+        await app.database.schema();
+      } finally {
+        await app.close();
+      }
+      const catalogDigest = await digest(catalog);
+
+      const relative = await runCli(
+        ["storage", "backup", "--path", "catalog-copy.sqlite"],
+        { home },
+      );
+      expect(relative.code).toBe(2);
+
+      const selfCopy = await runCli(["storage", "backup", "--path", catalog], {
+        home,
+      });
+      expect(selfCopy.code).not.toBe(0);
+      expect(await digest(catalog)).toBe(catalogDigest);
+
+      await writeFile(backup, "existing-backup-bytes");
+      const existing = await runCli(["storage", "backup", "--path", backup], {
+        home,
+      });
+      expect(existing.code).not.toBe(0);
+      expect(await readFile(backup, "utf8")).toBe("existing-backup-bytes");
+      await rm(backup, { force: true });
+
+      const backed = await runCli(["storage", "backup", "--path", backup], {
+        home,
+      });
+      expect(backed.code).toBe(0);
+      expect(await digest(catalog)).toBe(catalogDigest);
+      const backupDigest = await digest(backup);
+
+      const missing = await runCli(
+        ["storage", "restore-check", "--path", absent],
+        { home },
+      );
+      expect(missing.code).not.toBe(0);
+      expect(existsSync(absent)).toBe(false);
+      expect(
+        (
+          await runCli(["storage", "restore-check", "--path", "missing"], {
+            home,
+          })
+        ).code,
+      ).toBe(2);
+      const selfCheck = await runCli(
+        ["storage", "restore-check", "--path", catalog],
+        { home },
+      );
+      expect(selfCheck.code).not.toBe(0);
+      const checked = await runCli(
+        ["storage", "restore-check", "--path", backup],
+        { home },
+      );
+      expect(checked.code).toBe(0);
+      expect(await digest(backup)).toBe(backupDigest);
+      expect(await digest(catalog)).toBe(catalogDigest);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps dry-run and backup read-only instead of upgrading implicitly", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-dry-"));
+    const catalog = join(home, "catalog.sqlite");
+    const backup = join(home, "catalog-v1-copy.sqlite");
+    try {
+      const absent = await runCli(["storage", "migrate", "--dry-run"], {
+        home,
+      });
+      expect(absent.code).toBe(3);
+      expect(existsSync(catalog)).toBe(false);
+
+      const app = await createApplication(home);
+      try {
+        await app.database.schema();
+      } finally {
+        await app.close();
+      }
+      const catalogDigest = await digest(catalog);
+      const dry = await runCli(["storage", "migrate", "--dry-run"], { home });
+      expect(dry.code).toBe(0);
+      expect(dry.value).toMatchObject({
+        action: "dry-run",
+        from_version: 1,
+        to_version: 2,
+        inspection: { catalog_version: 1, migrated: false },
+      });
+      await expect(probeCatalogIdentity(catalog)).resolves.toMatchObject({
+        state: "v1",
+        migration_receipts: 0,
+        execution_tables: [],
+      });
+      expect(await digest(catalog)).toBe(catalogDigest);
+
+      const backed = await runCli(["storage", "backup", "--path", backup], {
+        home,
+      });
+      expect(backed.code).toBe(0);
+      expect(backed.value).toMatchObject({ path: backup, backed_up: true });
+      await expect(probeCatalogIdentity(catalog)).resolves.toMatchObject({
+        state: "v1",
+        execution_tables: [],
+      });
+      expect(await digest(catalog)).toBe(catalogDigest);
+      const backupDigest = await digest(backup);
+      const checked = await runCli(
+        ["storage", "restore-check", "--path", backup],
+        { home },
+      );
+      expect(checked.code).toBe(0);
+      expect(checked.value).toMatchObject({
+        schema_version: 1,
+        runtime: { catalog_version: 1, migrated: false },
+      });
+      expect(await digest(backup)).toBe(backupDigest);
+      expect(await digest(catalog)).toBe(catalogDigest);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("runs a persisted job through the TypeScript task service", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-jobs-"));
     try {
-      expect((await runCli(["storage", "migrate"], { home })).code).toBe(0);
+      expect(
+        (await runCli(["storage", "migrate", "--synthetic-copy"], { home }))
+          .code,
+      ).toBe(0);
       const created = await runCli(
         ["jobs", "create", "--idempotency", "cli-job-1"],
         { home },
@@ -412,21 +626,238 @@ describe("TypeScript CLI", () => {
     }
   });
 
-  it("runs configuration test selectors through the TypeScript owner without network effects", async () => {
+  it("dispatches configuration test through the read-only probe without Storage effects", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-config-test-"));
     try {
-      const status = await runCli(["config", "test", "parse"], { home });
-      expect(status.code).toBe(0);
-      expect(status.value).toMatchObject({
-        owner: "parse",
-        network_performed: false,
-        browser_launched: false,
-      });
-      const browser = await runCli(["config", "test", "browser", "model"], {
+      const parse = await runCli(["config", "test", "parse", "--json"], {
         home,
       });
-      expect(browser.code).toBe(0);
-      expect(browser.value).toMatchObject({ owner: "browser-model" });
+      expect(parse.code).toBe(3);
+      expect(parse.value).toMatchObject({
+        owner: "parse",
+        outcome: "blocked",
+        reason: "parser-configuration-incomplete",
+        network_performed: false,
+        browser_launched: false,
+        article_entitlement: "not-proven",
+        persisted: false,
+      });
+      const browser = await runCli(
+        ["config", "test", "browser", "model", "--json"],
+        { home },
+      );
+      expect(browser.code).toBe(3);
+      expect(browser.value).toMatchObject({
+        owner: "browser-model",
+        outcome: "skipped",
+        reason: "browser-disabled",
+      });
+      // A probe never constructs the durable runtime or creates a catalog.
+      expect(existsSync(join(home, "catalog.sqlite"))).toBe(false);
+      expect(existsSync(join(home, "artifacts"))).toBe(false);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
+const reportId = (n: number) =>
+  `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
+
+async function seedReportHome(
+  titles: readonly string[],
+): Promise<{ readonly home: string; readonly literatures: readonly string[] }> {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-report-"));
+  expect(
+    (await runCli(["storage", "migrate", "--synthetic-copy"], { home })).code,
+  ).toBe(0);
+  const app = await createApplication(home, { executionSchema: "require-v2" });
+  const literatures: string[] = [];
+  try {
+    for (const [index, title] of titles.entries()) {
+      const literatureId = reportId(1_000 + index);
+      literatures.push(literatureId);
+      await app.database.putLiterature(
+        parseLiterature({
+          ...FIXTURE_LITERATURE,
+          literature_id: literatureId,
+          meta_literature_id: reportId(2_000 + index),
+          metadata: {
+            ...FIXTURE_LITERATURE.metadata,
+            title,
+            // No identifier and no asset hint: every public route is empty, so
+            // the completion run stays fully offline and can only exhaust.
+            identifiers: [],
+          },
+        }),
+      );
+    }
+  } finally {
+    await app.close();
+  }
+  return { home, literatures };
+}
+
+describe("TypeScript CLI database completion report", () => {
+  it("reports the five mutually exclusive partitions instead of an ad-hoc item list", async () => {
+    const { home, literatures } = await seedReportHome(["Report paper"]);
+    const literatureId = literatures[0]!;
+    try {
+      const skipped = await runCli(
+        ["complete", "pdf", "--literature-id", literatureId],
+        { home },
+      );
+      expect(skipped.code).toBe(0);
+      expect(skipped.value).toMatchObject({
+        kind: "database-completion",
+        end: { kind: "finished" },
+        goal: "ASSET_READY",
+        completed: [],
+        failed: [],
+        skipped: [
+          {
+            target: { kind: "literature", literature_id: literatureId },
+            reason: "manual-pdf-required",
+            literature_ids: [literatureId],
+          },
+        ],
+        notStarted: [],
+        interrupted: [],
+        no_usable_content_literature_ids: [],
+      });
+      expect(skipped.value).not.toHaveProperty("items");
+      expect(skipped.value).not.toHaveProperty("outcome");
+      const app = await createApplication(home, {
+        executionSchema: "require-v2",
+      });
+      try {
+        // Only a normally ended automatic route commits the durable fact.
+        expect(await app.database.hasAutomaticPdfExhaustion(literatureId)).toBe(
+          true,
+        );
+      } finally {
+        await app.close();
+      }
+
+      // The all-pending scope keeps excluding the marked Literature: no stale
+      // ASSET_READY target silently re-enters the automatic scope.
+      const allPending = await runCli(["complete", "pdf", "--all-pending"], {
+        home,
+      });
+      expect(allPending.code).toBe(0);
+      expect(allPending.value).toMatchObject({
+        completed: [],
+        failed: [],
+        skipped: [],
+        notStarted: [],
+        interrupted: [],
+      });
+
+      const empty = await runCli(
+        ["complete", "pdf", "--query", "no-such-report-paper"],
+        { home },
+      );
+      expect(empty.code).toBe(0);
+      expect(empty.value).toMatchObject({
+        kind: "database-completion",
+        end: { kind: "finished" },
+        completed: [],
+        failed: [],
+        skipped: [],
+        notStarted: [],
+        interrupted: [],
+      });
+
+      const content = await runCli(
+        ["complete", "content", "--literature-id", literatureId],
+        { home },
+      );
+      expect(content.code).toBe(0);
+      expect(content.value).toMatchObject({
+        kind: "database-completion",
+        end: { kind: "finished" },
+        skipped: [
+          {
+            target: { kind: "literature", literature_id: literatureId },
+            reason: "manual-pdf-required",
+            literature_ids: [literatureId],
+          },
+        ],
+      });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("stops launching chunks on cancellation and distinguishes active targets from notStarted", async () => {
+    const { home, literatures } = await seedReportHome(
+      Array.from({ length: 6 }, (_, n) => `Cancel paper ${n + 1}`),
+    );
+    try {
+      const controller = new AbortController();
+      let started = 0;
+      const result = await runCli(
+        ["complete", "pdf", "--query", "Cancel paper"],
+        {
+          home,
+          signal: controller.signal,
+          stderr: (text) => {
+            const line = JSON.parse(text) as {
+              readonly progress?: string;
+              readonly state?: string;
+            };
+            if (
+              line.progress === "database-completion" &&
+              line.state === "started"
+            )
+              started++;
+            if (
+              line.progress === "database-completion" &&
+              line.state === "skipped"
+            )
+              controller.abort();
+          },
+        },
+      );
+      expect(result.code).toBe(130);
+      const report = result.value as {
+        readonly completed: readonly unknown[];
+        readonly skipped: readonly unknown[];
+        readonly notStarted: readonly unknown[];
+        readonly interrupted: readonly unknown[];
+      };
+      expect(report).toMatchObject({
+        kind: "database-completion",
+        end: { kind: "interrupted" },
+      });
+      expect(report.skipped).toHaveLength(2);
+      expect(started).toBe(4);
+      expect(report.notStarted).toHaveLength(2);
+      expect(report.interrupted).toHaveLength(2);
+      expect(report.completed).toHaveLength(0);
+      const app = await createApplication(home, {
+        executionSchema: "require-v2",
+      });
+      try {
+        // Only the two normally exhausted active targets may commit the durable
+        // fact; interrupted workers and unstarted chunks must not invent it.
+        const exhausted = new Set(
+          report.skipped.flatMap(
+            (item) =>
+              (
+                item as {
+                  readonly literature_ids?: readonly string[];
+                }
+              ).literature_ids ?? [],
+          ),
+        );
+        for (const literatureId of literatures)
+          expect(
+            await app.database.hasAutomaticPdfExhaustion(literatureId),
+          ).toBe(exhausted.has(literatureId));
+      } finally {
+        await app.close();
+      }
     } finally {
       await rm(home, { recursive: true, force: true });
     }

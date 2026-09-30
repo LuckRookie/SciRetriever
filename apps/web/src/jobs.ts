@@ -1,4 +1,12 @@
-type Json = Record<string, unknown>;
+import {
+  envelopeList,
+  envelopeRecord,
+  jobRecord,
+  jobStatus,
+  record,
+  type JsonRecord as Json,
+} from "./wire.js";
+import { navigateWorkspace, onWorkspace } from "./navigation.js";
 
 const node = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const value = document.getElementById(id);
@@ -30,10 +38,13 @@ export function mountJobs(options: {
   request(path: string, body: unknown): Promise<Json>;
 }): void {
   let selected: string | null = null;
+  let refreshRevision = 0;
 
-  const show = (jobs: boolean) => {
+  const show = (jobs: boolean, push = true) => {
     node("jobs-workspace").hidden = !jobs;
+    node("config-workspace").hidden = true;
     if (jobs) {
+      if (push) navigateWorkspace("jobs");
       node("library-workspace").hidden = true;
       node("live-workspace").hidden = true;
       node("open-details").hidden = true;
@@ -41,20 +52,28 @@ export function mountJobs(options: {
       node("jobs-tab").setAttribute("aria-current", "page");
       node("browser-tab").removeAttribute("aria-current");
       node("library-tab").removeAttribute("aria-current");
+      node("config-tab").removeAttribute("aria-current");
       node("jobs-toggle").textContent = "Browser 工作台";
       const skip = document.querySelector<HTMLAnchorElement>(".skip-link");
       if (skip) {
         skip.href = "#jobs-workspace";
         skip.textContent = "跳到任务";
       }
-      void refresh();
+      node("jobs-workspace").focus();
+      void refresh().then(() => {
+        const jobId = new URL(window.location.href).searchParams.get("job");
+        if (jobId) void detail(jobId, false);
+      });
     } else {
+      if (push) navigateWorkspace("browser");
       node("live-workspace").hidden = false;
       node("open-details").hidden = false;
       node("workspace-name").textContent = "Browser 工作台";
       node("browser-tab").setAttribute("aria-current", "page");
       node("jobs-tab").removeAttribute("aria-current");
+      node("config-tab").removeAttribute("aria-current");
       node("jobs-toggle").textContent = "任务";
+      node("live-workspace").focus();
     }
   };
 
@@ -72,13 +91,25 @@ export function mountJobs(options: {
       `${behavior}；批次最多尝试 ${attempts} 次，每个目标最多重试 ${retries} 次。重启不会重置已用预算。`;
   };
 
-  const command = async (jobId: string, action: string) => {
-    await options.request(
-      `/api/v1/jobs/${encodeURIComponent(jobId)}/${action}`,
-      {},
-    );
-    await refresh();
-    await detail(jobId);
+  const command = async (jobId: string, action: string): Promise<boolean> => {
+    try {
+      await options.request(
+        `/api/v1/jobs/${encodeURIComponent(jobId)}/${action}`,
+        {},
+      );
+      await refresh();
+      await detail(jobId);
+      return true;
+    } catch {
+      node("job-detail").prepend(
+        element(
+          "p",
+          "操作未被接受；任务状态保持不变，请刷新后重试。",
+          "library-empty",
+        ),
+      );
+      return false;
+    }
   };
 
   const renderCollection = (
@@ -95,14 +126,19 @@ export function mountJobs(options: {
     const list = document.createElement("ul");
     list.className = "job-facts";
     for (const raw of values) {
-      const item = raw as Json;
+      const item = record(raw, "job item");
       list.append(element("li", describe(item)));
     }
     root.append(list);
   };
 
-  const detail = async (jobId: string) => {
+  const detail = async (jobId: string, push = true) => {
     selected = jobId;
+    if (push) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("job", jobId);
+      window.history.pushState({ job: jobId }, "", url);
+    }
     const root = node("job-detail");
     root.replaceChildren(element("p", "正在读取任务…", "library-empty"));
     try {
@@ -128,19 +164,20 @@ export function mountJobs(options: {
         ),
       ]);
       if (selected !== jobId) return;
-      const job = jobResult.job as Json;
-      const policy = policyResult.policy as Json;
-      const budget = budgetResult.budget as Json;
-      const targets = (targetsResult.targets ?? []) as readonly unknown[];
-      const events = (eventsResult.events ?? []) as readonly unknown[];
-      const interventions = (interventionsResult.interventions ??
-        []) as readonly unknown[];
+      const job = jobRecord(envelopeRecord(jobResult, "job"));
+      const policy = envelopeRecord(policyResult, "policy");
+      const budget = envelopeRecord(budgetResult, "budget");
+      const targets = envelopeList(targetsResult, "targets");
+      const events = envelopeList(eventsResult, "events");
+      const interventions = envelopeList(interventionsResult, "interventions");
+      if (
+        typeof policy.mode !== "string" ||
+        typeof budget.attempts !== "number"
+      )
+        throw new Error("invalid job projection");
+      const status = jobStatus(job);
       root.replaceChildren(
-        element(
-          "p",
-          statusLabel[String(job.status)] ?? String(job.status),
-          "live-eyebrow",
-        ),
+        element("p", statusLabel[status] ?? "状态未知", "live-eyebrow"),
         element("h2", String(job.job_id)),
         element(
           "p",
@@ -153,7 +190,7 @@ export function mountJobs(options: {
       const runButton = document.createElement("button");
       runButton.textContent = "执行";
       runButton.disabled = ["cancelled", "completed", "failed"].includes(
-        String(job.status),
+        status,
       );
       runButton.addEventListener("click", () => {
         runButton.disabled = true;
@@ -162,6 +199,13 @@ export function mountJobs(options: {
           .then(() => detail(jobId))
           .catch(() => {
             runButton.disabled = false;
+            root.prepend(
+              element(
+                "p",
+                "执行未能开始；任务状态保持不变，可以重试。",
+                "library-empty",
+              ),
+            );
           });
       });
       actions.append(runButton);
@@ -172,10 +216,13 @@ export function mountJobs(options: {
       ] as const) {
         const button = document.createElement("button");
         button.textContent = label;
-        button.disabled = ["cancelled", "completed", "failed"].includes(
-          String(job.status),
-        );
-        button.addEventListener("click", () => void command(jobId, action));
+        button.disabled = ["cancelled", "completed", "failed"].includes(status);
+        button.addEventListener("click", () => {
+          button.disabled = true;
+          void command(jobId, action).then((accepted) => {
+            if (!accepted) button.disabled = false;
+          });
+        });
         actions.append(button);
       }
       root.append(actions);
@@ -196,8 +243,8 @@ export function mountJobs(options: {
       if (!interventions.length)
         root.append(element("p", "没有等待你处理的事项。", "library-empty"));
       for (const raw of interventions) {
-        const intervention = raw as Json;
-        const failure = intervention.failure as Json;
+        const intervention = record(raw, "intervention");
+        const failure = record(intervention.failure, "intervention failure");
         const card = document.createElement("section");
         card.className = "intervention-card";
         card.append(
@@ -246,9 +293,12 @@ export function mountJobs(options: {
 
   const refresh = async () => {
     const root = node("jobs-list");
+    const revision = ++refreshRevision;
+    root.setAttribute("aria-busy", "true");
     try {
       const result = await options.read("/api/v1/jobs?limit=100");
-      const jobs = (result.jobs ?? []) as readonly unknown[];
+      const jobs = envelopeList(result, "jobs");
+      if (revision !== refreshRevision) return;
       root.replaceChildren();
       if (!jobs.length)
         root.append(
@@ -259,22 +309,25 @@ export function mountJobs(options: {
           ),
         );
       for (const raw of jobs) {
-        const job = raw as Json;
+        const job = jobRecord(raw);
+        const status = jobStatus(job);
         const button = document.createElement("button");
         button.className = "job-list-item";
         button.setAttribute("aria-pressed", String(job.job_id === selected));
         button.append(
           element("strong", String(job.job_id)),
-          element(
-            "span",
-            statusLabel[String(job.status)] ?? String(job.status),
-          ),
+          element("span", statusLabel[status] ?? "状态未知"),
         );
         button.addEventListener("click", () => void detail(String(job.job_id)));
         root.append(button);
       }
     } catch {
-      root.replaceChildren(element("p", "无法读取任务队列。", "library-empty"));
+      if (revision === refreshRevision)
+        root.replaceChildren(
+          element("p", "无法读取任务队列。请检查连接后重试。", "library-empty"),
+        );
+    } finally {
+      if (revision === refreshRevision) root.removeAttribute("aria-busy");
     }
   };
 
@@ -285,6 +338,11 @@ export function mountJobs(options: {
   node("jobs-toggle").addEventListener("click", () =>
     show(node("jobs-workspace").hidden),
   );
+  onWorkspace((workspace) => {
+    if (workspace === "jobs") show(true, false);
+    else if (workspace === "browser" && !node("jobs-workspace").hidden)
+      show(false, false);
+  });
   node("jobs-refresh").addEventListener("click", () => void refresh());
   for (const id of ["job-assistance", "job-attempts", "job-retries"])
     node(id).addEventListener("change", policySummary);
@@ -340,7 +398,7 @@ export function mountJobs(options: {
         idempotency_key: `workbench-${crypto.randomUUID()}`,
       })
       .then(async (result) => {
-        const job = result.job as Json;
+        const job = jobRecord(result.job);
         confirm.checked = false;
         node("job-create-status").textContent = "任务已持久保存。";
         await refresh();

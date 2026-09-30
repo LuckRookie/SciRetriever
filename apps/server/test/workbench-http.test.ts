@@ -335,7 +335,7 @@ describe("authenticated loopback workbench API", () => {
             { url: "https://attacker.test" },
           )
         ).status,
-      ).toBe(409);
+      ).toBe(400);
       expect(calls).toBe(0);
       expect(
         (

@@ -48,14 +48,77 @@ describe("live workbench on the installed Cloak runtime", () => {
         });
       let workbench = await start();
       const browser = await chromium.launch({
-        executablePath:
-          process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ??
-          "/home/duanjw/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome",
+        ...(process.env.SCIRETRIEVER_BROWSER_EXECUTABLE
+          ? { executablePath: process.env.SCIRETRIEVER_BROWSER_EXECUTABLE }
+          : {}),
         headless: true,
       });
       try {
         const context = await browser.newContext();
         const desktop = await context.newPage();
+        const clickAcceptedAction = async (
+          page: typeof desktop,
+          name: string,
+        ): Promise<void> => {
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const before = workbench.session.view();
+            const responsePromise = page.waitForResponse(
+              (response) => new URL(response.url()).pathname === "/api/action",
+            );
+            await page.getByRole("button", { name, exact: true }).click();
+            const response = await responsePromise;
+            const command = response.request().postDataJSON() as {
+              observation_revision: number;
+              page_id: string;
+              document_generation: number;
+              control_epoch: number;
+            };
+            const result = (await response.json()) as {
+              code?: string;
+              result?: string;
+            };
+            const after = workbench.session.view();
+            if (
+              attempt === 0 &&
+              response.status() === 409 &&
+              result.code === "stale-command"
+            ) {
+              // Only a pre-dispatch stale rejection may be retried from a new observation.
+              expect(after.observation?.remaining.actions).toBe(
+                before.observation?.remaining.actions,
+              );
+              expect(after.candidates.length).toBe(before.candidates.length);
+              expect(after.control.epoch).toBe(command.control_epoch);
+              expect(after.observation?.page_id).toBe(command.page_id);
+              expect(after.observation?.document_generation).toBe(
+                command.document_generation,
+              );
+              expect(after.observation?.observation_revision).toBeGreaterThan(
+                command.observation_revision,
+              );
+              const revision = after.observation!.observation_revision;
+              await expect
+                .poll(async () => {
+                  const text = await page
+                    .locator("#observation-info")
+                    .innerText();
+                  const match = /^观察 (\d+) ·/u.exec(text);
+                  return match ? Number(match[1]) : -1;
+                })
+                .toBeGreaterThanOrEqual(revision);
+              continue;
+            }
+            expect({
+              status: response.status(),
+              result: result.result,
+              code: result.code,
+              requested_revision: command.observation_revision,
+              current_revision: after.observation?.observation_revision,
+              candidates: after.candidates.length,
+            }).toMatchObject({ status: 200, result: "applied" });
+            return;
+          }
+        };
         await desktop.setViewportSize({ width: 1440, height: 1000 });
         const errors: string[] = [];
         desktop.on("pageerror", (error) => errors.push(error.message));
@@ -71,9 +134,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         await expect
           .poll(() => desktop.locator("#owner").innerText())
           .toBe("你正在控制页面");
-        await desktop
-          .getByRole("button", { name: "Download PDF", exact: true })
-          .click();
+        await clickAcceptedAction(desktop, "Download PDF");
         await expect
           .poll(() => desktop.locator("#candidate-count").innerText(), {
             timeout: 15000,
@@ -114,9 +175,7 @@ describe("live workbench on the installed Cloak runtime", () => {
             )
           ).length,
         ).toBe(candidate.size_bytes);
-        await desktop
-          .getByRole("button", { name: "Capture response PDF", exact: true })
-          .click();
+        await clickAcceptedAction(desktop, "Capture response PDF");
         await expect
           .poll(() => desktop.locator("#candidate-count").innerText(), {
             timeout: 15000,
@@ -148,9 +207,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         await mobile
           .getByRole("button", { name: "会话详情", exact: false })
           .click();
-        await mobile
-          .getByRole("button", { name: "Uncertain PDF", exact: true })
-          .click();
+        await clickAcceptedAction(mobile, "Uncertain PDF");
         await expect
           .poll(() => mobile.locator("#candidate-count").innerText(), {
             timeout: 15000,

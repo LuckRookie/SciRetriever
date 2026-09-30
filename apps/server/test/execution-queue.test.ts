@@ -3,6 +3,7 @@ import {
   ExecutionQueue,
   ExecutionScheduler,
   QueueRetryableError,
+  QueueTargetFailureError,
 } from "../src/application/jobs/service.js";
 import { ExecutionRepository } from "../src/storage/execution/repository.js";
 import { SqliteWorker } from "../src/storage/sqlite/worker.js";
@@ -35,6 +36,13 @@ async function setup() {
 }
 
 describe("execution queue recovery semantics", () => {
+  it("rejects operator control after the SQLite worker closes", async () => {
+    const env = await setup();
+    await env.database.close();
+    await expect(env.queue.pause(env.job.job_id)).rejects.toBeDefined();
+    await expect(env.queue.cancel(env.job.job_id)).rejects.toBeDefined();
+  });
+
   it("persists a retryable failure and completes the job on the next bounded attempt", async () => {
     const env = await setup();
     try {
@@ -230,6 +238,119 @@ describe("execution queue recovery semantics", () => {
       release();
       await Promise.all([first, second]);
       expect(scheduler.activeWorkspaces()).toEqual([]);
+    } finally {
+      await env.database.close();
+    }
+  });
+
+  it("allocates event sequence inside SQLite after the public page limit", async () => {
+    const env = await setup();
+    try {
+      for (let index = 0; index < 1_205; index += 1)
+        await env.repository.appendEvent({
+          event_id: `event-long-${index}`,
+          job_id: env.job.job_id,
+          sequence: -1,
+          kind: "fixture",
+          payload: { index },
+          created_at: `2026-09-11T00:00:${String(index % 60).padStart(2, "0")}.000Z`,
+        });
+      const tail = await env.repository.listEvents(env.job.job_id, 1_199, 20);
+      expect(tail.map((event) => event.sequence)).toEqual(
+        Array.from({ length: 5 }, (_, offset) => 1_200 + offset),
+      );
+    } finally {
+      await env.database.close();
+    }
+  });
+
+  it("creates the job and every frozen target atomically and permits a clean idempotent retry", async () => {
+    const database = new SqliteWorker();
+    await database.upgradeExecutionSchema();
+    const repository = new ExecutionRepository(database);
+    const jobInput = {
+      job_id: "job-atomic-create",
+      target_kind: "selector" as const,
+      selector: { schema_version: 1, goal: "content" },
+      policy_version: "policy-atomic-create",
+      policy: {},
+      idempotency_key: "idempotency-atomic-create",
+      created_at: "2026-09-11T00:00:00.000Z",
+    };
+    const target = {
+      target_id: "target-atomic-create",
+      job_id: jobInput.job_id,
+      ordinal: 0,
+      literature_id: null,
+      version_role: null,
+      stage: "queued" as const,
+      disposition: "pending" as const,
+      next_eligible_at: null,
+    };
+    try {
+      // The second insert fails on the target primary key after the first target has
+      // already been attempted. The enclosing worker transaction must roll back the
+      // job, policy, budget and first target together.
+      await expect(
+        repository.createJob({
+          ...jobInput,
+          targets: [target, { ...target, ordinal: 1 }],
+        }),
+      ).rejects.toBeDefined();
+      await expect(repository.getJob(jobInput.job_id)).resolves.toBeNull();
+      await expect(repository.listTargets(jobInput.job_id)).resolves.toEqual(
+        [],
+      );
+
+      const created = await repository.createJob({
+        ...jobInput,
+        targets: [target],
+      });
+      expect(created.job_id).toBe(jobInput.job_id);
+      await expect(repository.listTargets(jobInput.job_id)).resolves.toEqual([
+        target,
+      ]);
+
+      // Repeating the same idempotency key returns the existing durable job and does
+      // not append a second target set.
+      await expect(
+        repository.createJob({ ...jobInput, targets: [target] }),
+      ).resolves.toMatchObject({ job_id: jobInput.job_id });
+      await expect(repository.listTargets(jobInput.job_id)).resolves.toEqual([
+        target,
+      ]);
+    } finally {
+      await database.close();
+    }
+  });
+
+  it("preserves a stable Entry failure on the durable attempt and target", async () => {
+    const env = await setup();
+    const failure = {
+      code: "parser-publication-failed",
+      reason: "The parser result could not be published.",
+      action: "Repair the catalog boundary, then retry the target.",
+      retryable: false,
+    } as const;
+    try {
+      await expect(
+        env.queue.runNext(env.job.job_id, async () => {
+          throw new QueueTargetFailureError(failure);
+        }),
+      ).resolves.toEqual({
+        target_id: "target-queue-test",
+        outcome: "failed",
+        failure,
+      });
+      await expect(
+        env.repository.listAttempts("target-queue-test"),
+      ).resolves.toMatchObject([{ status: "failed", failure }]);
+      await expect(
+        env.repository.getTarget("target-queue-test"),
+      ).resolves.toMatchObject({
+        stage: "failed",
+        disposition: "failed",
+      });
     } finally {
       await env.database.close();
     }

@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runDoctor } from "../src/entry/doctor.js";
 
 describe("installed runtime doctor", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it("reports all local prerequisites without launching a browser or using the network", async () => {
+    vi.stubEnv("SCIRETRIEVER_CLOAK_BUNDLE", "");
     const report = await runDoctor({ cloakBundle: null });
     expect(report).toMatchObject({
       schema_version: 1,

@@ -148,7 +148,7 @@ it("serves real paginated search, detail and references through the existing aut
     );
     expect(
       (await env.post("search", { query: { unexpected: true } })).status,
-    ).toBe(409);
+    ).toBe(400);
   } finally {
     await env.close();
   }
@@ -192,7 +192,7 @@ it("requires cookies, per-client CSRF and same origin even for library reads", a
           reference: "../catalog.sqlite",
         })
       ).status,
-    ).toBe(409);
+    ).toBe(400);
     expect(
       (
         await env.post("detail", {
@@ -200,7 +200,7 @@ it("requires cookies, per-client CSRF and same origin even for library reads", a
           sql: "DELETE FROM assets",
         })
       ).status,
-    ).toBe(409);
+    ).toBe(400);
     expect((await env.app.library.detail(lit)).primary_pdf).not.toBeNull();
   } finally {
     await env.close();

@@ -84,8 +84,13 @@ it("installs packed workspace modules and exercises their public boundaries with
         for (const dependency of Object.keys(manifest.dependencies))
           visit(dependency, packageDirectory);
     };
-    for (const dependency of ["playwright", "playwright-core", "cloakbrowser"])
+    const serverManifest = JSON.parse(
+      readFileSync(join(repository, "apps/server/package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    for (const dependency of Object.keys(serverManifest.dependencies ?? {})) {
+      if (dependency.startsWith("@sciretriever/")) continue;
       visit(dependency, join(repository, "apps/server"));
+    }
     const dependencies = Object.fromEntries(
       ["contracts", "server"].map((name) => {
         const tarball = readdirSync(directory).find(
@@ -136,7 +141,7 @@ it("installs packed workspace modules and exercises their public boundaries with
       import { dirname, join } from 'node:path';
       import { fileURLToPath } from 'node:url';
       import { canonicalJsonBytes, sha256 } from '@sciretriever/contracts';
-      import { ConfigurationBoundaryError, createApplication, loadWorkbenchAssets, parseConfiguration, startWorkbenchHttp, WorkbenchSession } from '@sciretriever/server';
+      import { ConfigurationBoundaryError, createApplication, loadMaintenanceWorkbenchAssets, loadWorkbenchAssets, parseConfiguration, startMaintenanceWorkbench, startWorkbenchHttp, WorkbenchSession } from '@sciretriever/server';
 
       const bytes = canonicalJsonBytes({ z: '末', a: 1 });
       assert.equal(new TextDecoder().decode(bytes), '{"a":1,"z":"末"}');
@@ -165,6 +170,17 @@ it("installs packed workspace modules and exercises their public boundaries with
       await http.close();
       await session.close();
       await application.close();
+      const migrated = await createApplication(home, { executionSchema: 'upgrade-synthetic' });
+      await migrated.close();
+      const maintenanceAssets = await loadMaintenanceWorkbenchAssets();
+      assert.deepEqual([...maintenanceAssets.keys()], ['/', '/query', '/styles.css', '/live.css', '/maintenance.js', '/query.js']);
+      const maintenance = await startMaintenanceWorkbench({ home });
+      const maintenancePage = await fetch(maintenance.origin);
+      assert.equal(maintenancePage.status, 200);
+      assert.match(await maintenancePage.text(), /手动 PDF 接纳/);
+      assert.equal((await fetch(maintenance.origin + '/maintenance.js')).status, 200);
+      assert.equal((await fetch(maintenance.origin + '/query')).status, 200);
+      await maintenance.close();
       rmSync(home, { recursive: true, force: true });
       assert.throws(() => parseConfiguration('[unknown]\\nvalue = 1'), ConfigurationBoundaryError);
       const manifests = {};

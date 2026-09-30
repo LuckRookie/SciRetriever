@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>材料维护 · SciRetriever</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/live.css" />
+    <script type="module" src="/maintenance.js"></script>
+  </head>
+  <body class="live-body">
+    <aside class="live-rail" aria-label="文献维护导航">
+      <a class="wordmark" href="/">sci<span>retriever</span><i></i></a>
+      <p class="live-eyebrow">文献材料</p>
+      <a class="live-nav" href="/query">只读文献库</a>
+      <a class="live-nav" href="/" aria-current="page">材料维护</a>
+    </aside>
+    <div class="live-main">
+      <header class="live-top">
+        <span>材料维护 <b>/</b> 手动 PDF 接纳</span>
+      </header>
+      <main id="maintenance-workspace" tabindex="-1">
+        <div class="live-heading">
+          <p class="live-eyebrow">MANUAL PDF INTAKE</p>
+          <h1>接纳你提供的<span>原始材料。</span></h1>
+          <p>
+            选择已有的具体 Literature ID 和 PDF
+            文件。原文件保留；接纳后可在文献库阅读，解析与分析需另行启动。
+          </p>
+        </div>
+        <form id="manual-pdf-form" class="config-card config-form">
+          <label for="manual-pdf-literature-id">Literature ID</label>
+          <input id="manual-pdf-literature-id" required autocomplete="off" />
+          <label for="manual-pdf-file">PDF 文件</label>
+          <input
+            id="manual-pdf-file"
+            type="file"
+            accept="application/pdf,.pdf"
+            required
+          />
+          <button id="manual-pdf-submit" class="live-primary" type="submit">
+            接纳 PDF
+          </button>
+          <p id="manual-pdf-status" role="status" aria-live="polite"></p>
+        </form>
+        <form id="document-parse-form" class="config-card config-form">
+          <h2>解析已接纳的 PDF</h2>
+          <p>
+            使用文献库中的 Literature ID、Asset ID 和 PDF SHA-256
+            固定输入。复用当前解析结果不会调用 parser；明确重解析会调用已配置的
+            parser。Catalog 须先显式迁移至 v3。
+          </p>
+          <label for="document-literature-id">Literature ID</label>
+          <input id="document-literature-id" required autocomplete="off" />
+          <button id="document-load-material" type="button">
+            从文献库读取当前 PDF
+          </button>
+          <p id="document-material-status" role="status" aria-live="polite">
+            尚未选择材料。
+          </p>
+          <label for="document-asset-id">Asset ID</label>
+          <input id="document-asset-id" required readonly />
+          <label for="document-asset-sha256">PDF SHA-256</label>
+          <input
+            id="document-asset-sha256"
+            required
+            readonly
+            pattern="[0-9a-f]{64}"
+          />
+          <label for="document-parse-mode">解析方式</label>
+          <select id="document-parse-mode">
+            <option value="reuse-current">复用当前解析结果</option>
+            <option value="reparse">明确重解析</option>
+          </select>
+          <label for="document-default-revision"
+            >预期默认版本 revision（首次发布留空）</label
+          >
+          <input
+            id="document-default-revision"
+            type="number"
+            min="1"
+            step="1"
+          />
+          <button id="document-parse-submit" class="live-primary" type="submit">
+            发布可读表示
+          </button>
+          <p id="document-parse-status" role="status" aria-live="polite"></p>
+        </form>
+        <section class="config-card config-form" aria-label="单篇知识分析">
+          <h2>单篇知识分析</h2>
+          <p>
+            明确选择已接纳的 PDF
+            和当前可读文档版本，再生成有证据的概览、详细分析或问题回答。需要
+            Catalog v6
+            和已配置的分析模型；输入超预算会拒绝，不截断。历史知识可在只读文献库按
+            ID 阅读。
+          </p>
+          <label for="knowledge-literature-id">Literature ID</label>
+          <input id="knowledge-literature-id" autocomplete="off" />
+          <label for="knowledge-purpose">用途</label>
+          <select id="knowledge-purpose">
+            <option value="overview">概览</option>
+            <option value="detailed">详细分析</option>
+            <option value="question">针对问题</option>
+          </select>
+          <label for="knowledge-mode">处理方式</label>
+          <select id="knowledge-mode">
+            <option value="single">单次全文（v1）</option>
+            <option value="long">长文局部分析与整合（v2）</option>
+          </select>
+          <label for="knowledge-question">问题（仅“针对问题”填写）</label>
+          <textarea
+            id="knowledge-question"
+            rows="3"
+            spellcheck="false"
+          ></textarea>
+          <label for="knowledge-default-mode">默认视图</label>
+          <select id="knowledge-default-mode">
+            <option value="publish-only">仅发布历史产物</option>
+            <option value="compare-and-set">按 revision 更新默认视图</option>
+          </select>
+          <label for="knowledge-default-revision"
+            >预期 revision（首次设为默认时留空）</label
+          >
+          <input
+            id="knowledge-default-revision"
+            type="number"
+            min="1"
+            step="1"
+          />
+          <label for="knowledge-input-bytes">文档输入上限（UTF-8 字节）</label>
+          <input
+            id="knowledge-input-bytes"
+            type="number"
+            min="1"
+            max="262144"
+            value="262144"
+          />
+          <label for="knowledge-output-tokens">模型输出上限（token）</label>
+          <input
+            id="knowledge-output-tokens"
+            type="number"
+            min="1"
+            max="16384"
+            value="2048"
+          />
+          <div id="knowledge-long-budget" hidden>
+            <p>长文模式下，文档上限最多 8 MiB；模型输出上限是每次调用的预约值。以下为规范化 AgentCall 字节及累计调用预算。</p>
+            <label for="knowledge-call-bytes">单次调用上限（字节）</label>
+            <input id="knowledge-call-bytes" type="number" min="1" max="262144" value="262144" />
+            <label for="knowledge-total-call-bytes">累计调用上限（字节）</label>
+            <input id="knowledge-total-call-bytes" type="number" min="1" max="67108864" value="33554432" />
+            <label for="knowledge-max-calls">最多调用次数</label>
+            <input id="knowledge-max-calls" type="number" min="1" max="256" value="256" />
+            <label for="knowledge-total-output-tokens">累计输出上限（token）</label>
+            <input id="knowledge-total-output-tokens" type="number" min="1" max="1048576" value="524288" />
+          </div>
+          <button id="knowledge-start" class="live-primary" type="button">
+            启动单篇分析
+          </button>
+          <button id="knowledge-cancel" type="button" disabled>
+            取消当前请求
+          </button>
+          <p id="knowledge-status" role="status" aria-live="polite"></p>
+          <pre id="knowledge-result"></pre>
+        </section>
+        <section class="config-card config-form" aria-label="集合知识综合">
+          <h2>集合知识综合</h2>
+          <p>明确填写有序文档或知识来源，再固定版本和缺口。Catalog 需显式迁移至 v7。模型只对已固定集合执行一次有界归并；候选过多会拒绝发布。</p>
+          <label for="synthesis-inputs">来源选择 JSON（1–128 项）</label>
+          <textarea id="synthesis-inputs" rows="8" spellcheck="false" placeholder='[{"kind":"document","input_id":"paper-1","literature_id":"...","asset_id":"...","asset_sha256":"...","document_version_id":null},{"kind":"knowledge","input_id":"prior-1","source_artifact_id":"..."}]'></textarea>
+          <label for="synthesis-policy">覆盖政策</label>
+          <select id="synthesis-policy"><option value="require-all">全部来源必须可用</option><option value="allow-partial">允许部分来源并标明缺口</option></select>
+          <button id="synthesis-prepare" type="button">固定来源与缺口</button>
+          <label for="synthesis-question">集合问题</label>
+          <textarea id="synthesis-question" rows="3" spellcheck="false"></textarea>
+          <label for="synthesis-source-bytes">累计原文与知识内容上限（字节）</label>
+          <input id="synthesis-source-bytes" type="number" min="1" max="8388608" value="8388608" />
+          <label for="synthesis-verification-bytes">来源闭包核验上限（字节）</label>
+          <input id="synthesis-verification-bytes" type="number" min="1" max="67108864" value="67108864" />
+          <label for="synthesis-call-bytes">单次 AgentCall 上限（字节）</label>
+          <input id="synthesis-call-bytes" type="number" min="1" max="262144" value="262144" />
+          <label for="synthesis-total-call-bytes">累计 AgentCall 上限（字节）</label>
+          <input id="synthesis-total-call-bytes" type="number" min="1" max="67108864" value="33554432" />
+          <label for="synthesis-max-calls">最多模型调用</label>
+          <input id="synthesis-max-calls" type="number" min="1" max="256" value="256" />
+          <label for="synthesis-output-tokens">单次输出预约（token）</label>
+          <input id="synthesis-output-tokens" type="number" min="1" max="16384" value="2048" />
+          <label for="synthesis-total-output-tokens">累计输出上限（token）</label>
+          <input id="synthesis-total-output-tokens" type="number" min="1" max="1048576" value="524288" />
+          <button id="synthesis-start" class="live-primary" type="button" disabled>启动集合综合</button>
+          <button id="synthesis-cancel" type="button" disabled>取消当前请求</button>
+          <p id="synthesis-status" role="status" aria-live="polite"></p>
+          <pre id="synthesis-result"></pre>
+        </section>
+        <section class="config-card config-form" aria-label="材料检索索引维护">
+          <h2>材料检索索引</h2>
+          <p>
+            Catalog 显式迁移至 v4
+            后，重建已保存元数据与已发布表示的检索投影。材料变更后需再次明确重建。
+          </p>
+          <button id="retrieval-rebuild" class="live-primary" type="button">
+            重建材料索引
+          </button>
+          <p id="retrieval-rebuild-status" role="status" aria-live="polite"></p>
+          <p>
+            Catalog 显式迁移至 v8
+            后，可独立重建已发布单篇知识与集合综合的检索索引。
+          </p>
+          <button
+            id="knowledge-retrieval-rebuild"
+            class="live-primary"
+            type="button"
+          >
+            重建知识索引
+          </button>
+          <p
+            id="knowledge-retrieval-rebuild-status"
+            role="status"
+            aria-live="polite"
+          ></p>
+        </section>
+        <section class="config-card config-form" aria-label="提取候选交付">
+          <h2>提取候选交付</h2>
+          <p>
+            Catalog v5 上显式创建
+            operation，再提交有证据的候选批次。准备结果可从只读文献库复制；回执只保存检查摘要和证据保护，不托管历史候选载荷。
+          </p>
+          <label for="extraction-caller">调用方 namespace</label>
+          <input
+            id="extraction-caller"
+            autocomplete="off"
+            placeholder="local.research-agent"
+          />
+          <label for="extraction-prepared">输入准备结果 JSON</label>
+          <textarea
+            id="extraction-prepared"
+            rows="8"
+            spellcheck="false"
+          ></textarea>
+          <button id="extraction-create" type="button">创建 operation</button>
+          <label for="extraction-operation-id">Operation ID</label>
+          <input id="extraction-operation-id" autocomplete="off" />
+          <label for="extraction-batch">候选批次 JSON</label>
+          <textarea
+            id="extraction-batch"
+            rows="10"
+            spellcheck="false"
+          ></textarea>
+          <button id="extraction-submit" class="live-primary" type="button">
+            提交候选批次
+          </button>
+          <button id="extraction-close" type="button">关闭 operation</button>
+          <button id="extraction-cancel" type="button">取消 operation</button>
+          <label for="extraction-receipt-id">Receipt ID</label>
+          <input id="extraction-receipt-id" autocomplete="off" />
+          <button id="extraction-receipt" type="button">读取回执与保护</button>
+          <button id="extraction-cleanup" type="button">
+            清理最多 100 项过期记录
+          </button>
+          <p id="extraction-status" role="status" aria-live="polite"></p>
+          <pre id="extraction-result"></pre>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

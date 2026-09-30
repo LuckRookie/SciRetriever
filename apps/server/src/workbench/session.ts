@@ -7,6 +7,7 @@ import {
   type WorkbenchObservation,
   type WorkbenchView,
   type WorkbenchCandidate,
+  type WorkbenchGuidance,
   type CandidatePublicationReceipt,
 } from "@sciretriever/contracts";
 import { BrowserControlCoordinator } from "../browser/control.js";
@@ -19,6 +20,7 @@ import type { BrowserPageHandle } from "../browser/host.js";
 import { ExecutionLoop } from "../acquisition/execution-loop.js";
 import {
   ExecutionPolicy,
+  ExecutionPolicyError,
   type ExecutionBudget,
 } from "../acquisition/execution-policy.js";
 
@@ -46,6 +48,7 @@ export type BrowserDecision = (
   observation: WorkbenchObservation,
   frame: Uint8Array | null,
   signal: AbortSignal,
+  guidance?: readonly string[],
 ) => Promise<unknown>;
 
 /** One fixed article, one page, one command executor. Viewer transport owns no Browser resources. */
@@ -64,6 +67,7 @@ export class WorkbenchSession {
   private stateValue: WorkbenchSessionState = "watching";
   private errorValue: WorkbenchSessionError["code"] | null = null;
   private busy = false;
+  private actionPromise: Promise<unknown> | undefined;
   private refreshPromise: Promise<void> | undefined;
   private agentAbort: AbortController | undefined;
   private agentPromise: Promise<void> | undefined;
@@ -73,6 +77,12 @@ export class WorkbenchSession {
   private abandonmentAbort: AbortController | undefined;
   private abandonmentPromise: Promise<void> | undefined;
   private captureStateValue: BrowserCaptureState = "NONE";
+  private stopResult: "stopped" | "budget" | "cancelled" | undefined;
+  private readonly guidance = new Map<
+    string,
+    WorkbenchGuidance & { owner: string }
+  >();
+  private readonly waiters = new Set<() => void>();
 
   constructor(
     public articleId: string,
@@ -90,6 +100,7 @@ export class WorkbenchSession {
       candidate: WorkbenchCandidate,
       signal: AbortSignal,
     ) => Promise<void>,
+    private readonly production = false,
   ) {
     if (!/^[a-zA-Z0-9._:-]{1,128}$/u.test(articleId))
       throw new WorkbenchSessionError("stale-command");
@@ -146,6 +157,7 @@ export class WorkbenchSession {
     this.busy = true;
     try {
       await this.switchTarget(articleId);
+      this.expireGuidance();
       this.articleId = articleId;
       this.current = undefined;
       this.wire = null;
@@ -156,10 +168,13 @@ export class WorkbenchSession {
       this.busy = false;
     }
   }
-  attach(): string {
+  attach(existingId?: string): string {
     if (this.humans.size >= 16 || this.closePromise)
       throw new WorkbenchSessionError("session-closed");
-    const id = `client-${randomUUID()}`;
+    const id = existingId ?? `client-${randomUUID()}`;
+    if (!/^[a-zA-Z0-9._:-]{1,128}$/u.test(id))
+      throw new WorkbenchSessionError("stale-command");
+    if (this.humans.has(id)) throw new WorkbenchSessionError("stale-command");
     this.humans.add(id);
     this.control.attach({
       client_id: id,
@@ -170,12 +185,22 @@ export class WorkbenchSession {
   }
   detach(clientId: string): void {
     this.human(clientId);
+    const controlled = this.control.state().controller_id === clientId;
     if (this.control.state().controller_id === clientId)
       this.publicationAbort?.abort();
     if (this.control.state().controller_id === clientId)
       this.abandonmentAbort?.abort();
     this.humans.delete(clientId);
     this.control.detach(clientId);
+    if (controlled && this.production) {
+      this.policy.pause();
+      this.stateValue = "paused";
+    }
+    this.wake();
+  }
+  private wake(): void {
+    for (const waiter of this.waiters) waiter();
+    this.waiters.clear();
   }
   private human(clientId: string): void {
     if (!this.humans.has(clientId))
@@ -208,12 +233,19 @@ export class WorkbenchSession {
     this.abandonmentAbort?.abort();
     this.control.takeover(clientId);
     if (this.stateValue === "agent-running") this.stateValue = "watching";
+    this.expireGuidance();
+    this.wake();
   }
   release(clientId: string, epoch: number): void {
     this.human(clientId);
     this.control.release(clientId, epoch);
     this.publicationAbort?.abort();
     this.abandonmentAbort?.abort();
+    if (this.production && this.stateValue === "paused") {
+      this.policy.resume();
+      this.stateValue = "watching";
+    }
+    this.wake();
   }
   pause(clientId: string, epoch: number): void {
     this.human(clientId);
@@ -226,6 +258,7 @@ export class WorkbenchSession {
     this.stateValue = "paused";
     // Revoke even the current human's in-flight low-level input guard.
     this.control.takeover(clientId);
+    this.wake();
   }
   resume(clientId: string, epoch: number): void {
     this.human(clientId);
@@ -233,6 +266,7 @@ export class WorkbenchSession {
     this.control.assertController(clientId, epoch);
     this.policy.resume();
     this.stateValue = "watching";
+    this.wake();
   }
   cancel(clientId: string, epoch: number): void {
     this.human(clientId);
@@ -244,11 +278,23 @@ export class WorkbenchSession {
     this.policy.cancel();
     this.stateValue = "cancelled";
     this.control.release(clientId, this.control.state().epoch);
+    this.wake();
   }
   view(): WorkbenchView {
     const control = this.control.state();
     return Object.freeze({
+      ...(this.production ? { mode: "production" as const } : {}),
       candidates: [...this.candidates.values()],
+      ...(this.production
+        ? {
+            guidance: [...this.guidance.values()].map((item) => ({
+              guidance_id: item.guidance_id,
+              article_id: item.article_id,
+              text: item.text,
+              state: item.state,
+            })),
+          }
+        : {}),
       session_id: this.id,
       article_id: this.articleId,
       state: this.stateValue,
@@ -259,6 +305,7 @@ export class WorkbenchSession {
         ? {
             ...this.wire,
             control_epoch: control.epoch,
+            capture_state: this.captureStateValue,
             remaining: this.policy.remaining(),
           }
         : null,
@@ -275,10 +322,101 @@ export class WorkbenchSession {
   }
   transferStarted(): void {
     if (!this.closePromise) this.captureStateValue = "CANDIDATE";
+    this.wake();
   }
   transferFailed(): void {
     if (!this.closePromise && this.captureStateValue !== "CAPTURED")
       this.captureStateValue = "NONE";
+    this.wake();
+  }
+  notifyCapture(): void {
+    this.captureStateValue = "CAPTURED";
+    this.wake();
+  }
+  private expireGuidance(): void {
+    for (const [id, item] of this.guidance)
+      if (item.state === "accepted")
+        this.guidance.set(id, { ...item, state: "expired" });
+  }
+  submitGuidance(clientId: string, value: unknown): WorkbenchGuidance {
+    this.human(clientId);
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      throw new WorkbenchSessionError("stale-command");
+    const command = value as Record<string, unknown>;
+    if (
+      Object.keys(command).sort().join() !==
+        "article_id,control_epoch,guidance_id,session_id,text" ||
+      command.session_id !== this.id ||
+      command.article_id !== this.articleId ||
+      typeof command.control_epoch !== "number" ||
+      command.control_epoch !== this.control.state().epoch ||
+      typeof command.guidance_id !== "string" ||
+      !/^[a-zA-Z0-9._:-]{1,128}$/u.test(command.guidance_id) ||
+      typeof command.text !== "string" ||
+      command.text.trim().length === 0 ||
+      command.text.length > 2048 ||
+      [...command.text].some(
+        (char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127,
+      )
+    )
+      throw new WorkbenchSessionError("stale-command");
+    const existing = this.guidance.get(command.guidance_id);
+    if (existing) {
+      if (
+        existing.text !== command.text ||
+        existing.article_id !== this.articleId
+      )
+        throw new WorkbenchSessionError("stale-command");
+      return this.guidanceView(existing);
+    }
+    const pending = [...this.guidance.values()].filter(
+      (item) => item.state === "accepted",
+    ).length;
+    if (this.guidance.size >= 64 || pending >= 16)
+      throw new WorkbenchSessionError("session-busy");
+    const state: WorkbenchGuidance["state"] =
+      this.stateValue === "paused" ||
+      (this.control.state().controller_id !== null &&
+        this.control.state().controller_id !== this.agentId) ||
+      ["cancelled", "finished", "failed"].includes(this.stateValue)
+        ? "rejected"
+        : "accepted";
+    const item = {
+      guidance_id: command.guidance_id,
+      article_id: this.articleId,
+      text: command.text,
+      state,
+      owner: clientId,
+    };
+    this.guidance.set(item.guidance_id, item);
+    this.wake();
+    return this.guidanceView(item);
+  }
+  private guidanceView(item: WorkbenchGuidance): WorkbenchGuidance {
+    return {
+      guidance_id: item.guidance_id,
+      article_id: item.article_id,
+      text: item.text,
+      state: item.state,
+    };
+  }
+  cancelGuidance(clientId: string, value: unknown): WorkbenchGuidance {
+    this.human(clientId);
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      throw new WorkbenchSessionError("stale-command");
+    const command = value as Record<string, unknown>;
+    if (
+      Object.keys(command).sort().join() !== "guidance_id,session_id" ||
+      command.session_id !== this.id ||
+      typeof command.guidance_id !== "string"
+    )
+      throw new WorkbenchSessionError("stale-command");
+    const item = this.guidance.get(command.guidance_id);
+    if (!item || item.owner !== clientId || item.state !== "accepted")
+      throw new WorkbenchSessionError("stale-command");
+    const cancelled = { ...item, state: "cancelled" as const };
+    this.guidance.set(item.guidance_id, cancelled);
+    return this.guidanceView(cancelled);
   }
   async acceptCandidate(clientId: string, value: unknown): Promise<void> {
     this.human(clientId);
@@ -380,6 +518,7 @@ export class WorkbenchSession {
     if (
       this.busy ||
       this.closePromise ||
+      (this.production && this.stateValue === "agent-running") ||
       ["cancelled", "finished", "failed"].includes(this.stateValue)
     )
       return;
@@ -473,7 +612,7 @@ export class WorkbenchSession {
       !this.closePromise;
     this.busy = true;
     try {
-      return await this.loop.apply(
+      const action = this.loop.apply(
         {
           client_id: clientId,
           epoch: command.control_epoch,
@@ -488,6 +627,13 @@ export class WorkbenchSession {
             if (input.kind === "stop") {
               this.policy.finish();
               this.stateValue = "finished";
+              this.stopResult =
+                input.reason === "budget"
+                  ? "budget"
+                  : input.reason === "cancel"
+                    ? "cancelled"
+                    : "stopped";
+              this.wake();
             }
           };
           if (human)
@@ -508,9 +654,16 @@ export class WorkbenchSession {
             );
         },
       );
+      this.actionPromise = action;
+      return await action;
     } finally {
+      this.actionPromise = undefined;
       this.busy = false;
     }
+  }
+  /** A capture may settle before its already-dispatched click returns. */
+  async settleActions(): Promise<void> {
+    await this.actionPromise?.catch(() => undefined);
   }
   runAgent(clientId: string, epoch: number): Promise<void> {
     this.human(clientId);
@@ -582,6 +735,184 @@ export class WorkbenchSession {
       this.agentAbort = undefined;
     });
   }
+  /** One production decision point on the same page used by the article flow. */
+  async runAutomaticStep(
+    signal: AbortSignal,
+  ): Promise<
+    "applied" | "retry" | "stopped" | "budget" | "cancelled" | "invalid-action"
+  > {
+    if (!this.production) throw new WorkbenchSessionError("stale-command");
+    if (signal.aborted || this.policy.state() === "cancelled")
+      return "cancelled";
+    if (this.stopResult) return this.stopResult;
+    if (this.policy.remaining().deadline_ms === 0) return "budget";
+    if (
+      this.policy.remaining().actions === 0 ||
+      this.policy.remaining().model_calls === 0
+    )
+      return "budget";
+    if (
+      this.control.state().controller_id !== null ||
+      this.policy.state() === "paused"
+    ) {
+      await this.waitForChange(signal);
+      return signal.aborted
+        ? "cancelled"
+        : (this.stopResult ??
+            (this.policy.remaining().deadline_ms === 0 ? "budget" : "retry"));
+    }
+    if (!this.decide) throw new WorkbenchSessionError("model-unavailable");
+    const expectedEpoch = this.control.state().epoch;
+    await this.refresh();
+    if (signal.aborted || this.policy.state() === "cancelled")
+      return "cancelled";
+    if (this.stopResult) return this.stopResult;
+    if (this.policy.remaining().deadline_ms === 0) return "budget";
+    if (
+      this.policy.state() !== "running" ||
+      this.control.state().controller_id !== null ||
+      this.control.state().epoch !== expectedEpoch
+    )
+      return "retry";
+    const observed = this.view().observation;
+    if (
+      !observed ||
+      this.errorValue === "browser-failed" ||
+      observed.session_id !== this.id ||
+      observed.article_id !== this.articleId ||
+      observed.page_id !== this.page.id ||
+      observed.control_epoch !== expectedEpoch
+    )
+      throw new WorkbenchSessionError("browser-failed");
+    const lease = this.control.takeover(this.agentId);
+    const abort = new AbortController();
+    const onAbort = () => abort.abort();
+    signal.addEventListener("abort", onAbort, { once: true });
+    const deadlineTimer = setTimeout(
+      onAbort,
+      this.policy.remaining().deadline_ms,
+    );
+    this.agentAbort = abort;
+    this.stateValue = "agent-running";
+    try {
+      try {
+        this.policy.consume("model_call");
+      } catch (error) {
+        if (error instanceof ExecutionPolicyError) return "budget";
+        throw error;
+      }
+      const guidance = [...this.guidance.values()]
+        .filter((item) => item.state === "accepted")
+        .map((item) => {
+          this.guidance.set(item.guidance_id, { ...item, state: "consumed" });
+          return item.text;
+        });
+      const decision = this.decide(
+        this.view().observation ?? observed,
+        this.frame(observed.frame_seq),
+        abort.signal,
+        guidance,
+      );
+      // A model adapter may ignore AbortSignal. Revoke the decision promptly and
+      // observe the page anew after a human takeover; its late result is discarded.
+      const result = await Promise.race([
+        decision.then((value) => ({ kind: "result" as const, value })),
+        new Promise<{ kind: "aborted" }>((resolve) => {
+          if (abort.signal.aborted) resolve({ kind: "aborted" });
+          else
+            abort.signal.addEventListener(
+              "abort",
+              () => resolve({ kind: "aborted" }),
+              { once: true },
+            );
+        }),
+      ]);
+      if (
+        result.kind === "aborted" ||
+        signal.aborted ||
+        this.control.state().epoch !== lease.epoch
+      )
+        return signal.aborted
+          ? "cancelled"
+          : this.policy.remaining().deadline_ms === 0
+            ? "budget"
+            : "retry";
+      let input;
+      try {
+        input = parseBrowserAction(result.value);
+      } catch {
+        return "invalid-action";
+      }
+      try {
+        await this.execute(
+          this.agentId,
+          {
+            session_id: observed.session_id,
+            page_id: observed.page_id,
+            document_generation: observed.document_generation,
+            observation_revision: observed.observation_revision,
+            viewport_revision: observed.viewport_revision,
+            control_epoch: lease.epoch,
+            request_id: `agent-${randomUUID()}`,
+            input,
+          },
+          false,
+        );
+      } catch (error) {
+        if (signal.aborted) return "cancelled";
+        if (error instanceof ExecutionPolicyError) return "budget";
+        if (
+          this.control.state().epoch !== lease.epoch ||
+          (error instanceof WorkbenchSessionError &&
+            ["stale-command", "session-busy"].includes(error.code))
+        )
+          return "retry";
+        throw error;
+      }
+      return input.kind === "stop" ? (this.stopResult ?? "stopped") : "applied";
+    } finally {
+      clearTimeout(deadlineTimer);
+      signal.removeEventListener("abort", onAbort);
+      if (this.agentAbort === abort) this.agentAbort = undefined;
+      if (
+        this.control.state().controller_id === this.agentId &&
+        this.control.state().epoch === lease.epoch
+      )
+        this.control.release(this.agentId, lease.epoch);
+      if (this.stateValue === "agent-running") this.stateValue = "watching";
+      this.wake();
+    }
+  }
+  private async waitForChange(signal: AbortSignal): Promise<void> {
+    const waitMs = Math.min(300_000, this.policy.remaining().deadline_ms);
+    if (waitMs <= 0 || signal.aborted) return;
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        signal.removeEventListener("abort", finish);
+        this.waiters.delete(finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, waitMs);
+      this.waiters.add(finish);
+      signal.addEventListener("abort", finish, { once: true });
+    });
+  }
+  finishProduction(outcome: "finished" | "failed" | "cancelled"): void {
+    this.expireGuidance();
+    if (this.production) {
+      this.invalidateAgent();
+      const control = this.control.state();
+      if (control.controller_id)
+        this.control.release(control.controller_id, control.epoch);
+      if (outcome === "cancelled") this.policy.cancel();
+      if (this.stateValue !== "cancelled") this.stateValue = outcome;
+      this.wake();
+    }
+  }
   async close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.invalidateAgent();
@@ -589,6 +920,8 @@ export class WorkbenchSession {
     this.abandonmentAbort?.abort();
     this.policy.cancel();
     this.stateValue = "cancelled";
+    this.expireGuidance();
+    this.wake();
     this.closePromise = (async () => {
       await this.publicationPromise?.catch(() => undefined);
       await this.abandonmentPromise?.catch(() => undefined);

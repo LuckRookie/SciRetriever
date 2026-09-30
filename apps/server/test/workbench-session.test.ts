@@ -3,6 +3,7 @@ import { WorkbenchSession } from "../src/workbench/session.js";
 import type { BrowserPageHandle } from "../src/browser/host.js";
 import {
   parseCandidatePublicationReceipt,
+  parseWorkbenchView,
   type WorkbenchObservation,
 } from "@sciretriever/contracts";
 import { BrowserControlCoordinator } from "../src/browser/control.js";
@@ -48,6 +49,7 @@ function setup(
     b = session.attach();
   return {
     session,
+    page,
     apply,
     a,
     b,
@@ -56,6 +58,24 @@ function setup(
     },
   };
 }
+
+it("keeps the synthetic v1 view's exact serialized field set", () => {
+  const { session } = setup();
+  const view = session.view();
+  expect(Object.keys(view).sort()).toEqual(
+    [
+      "article_id",
+      "candidates",
+      "control",
+      "error",
+      "model_ready",
+      "observation",
+      "session_id",
+      "state",
+    ].sort(),
+  );
+  expect(parseWorkbenchView(view)).toEqual(view);
+});
 
 it("binds publication to the controller and Candidate hash, and aborts validation after takeover", async () => {
   let finish: (() => void) | undefined;
@@ -151,6 +171,49 @@ function command(o: WorkbenchObservation, request_id = "request-1") {
   };
 }
 describe("workbench session", () => {
+  it("rejects a command overtaken by refresh before dispatch and accepts a fresh observation", async () => {
+    const { session, page, a, apply } = setup();
+    await session.refresh();
+    session.takeover(a, session.view().control.epoch);
+    const old = session.view().observation!;
+    const originalSnapshot = page.snapshot;
+    let started!: () => void;
+    let release!: () => void;
+    const snapshotStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const snapshotGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(page, "snapshot").mockImplementation(async () => {
+      started();
+      await snapshotGate;
+      return { ...(await originalSnapshot()), text: "Synthetic changed" };
+    });
+    try {
+      const refresh = session.refresh();
+      await snapshotStarted;
+      const pending = session.command(a, command(old));
+      release();
+      await refresh;
+      await expect(pending).rejects.toMatchObject({ code: "stale-command" });
+      expect(apply).not.toHaveBeenCalled();
+      expect(session.view().observation?.remaining.actions).toBe(
+        old.remaining.actions,
+      );
+      const fresh = session.view().observation!;
+      expect(fresh.observation_revision).toBeGreaterThan(
+        old.observation_revision,
+      );
+      await expect(session.command(a, command(fresh, "fresh"))).resolves.toBe(
+        "applied",
+      );
+      expect(apply).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await session.close();
+    }
+  });
   it("projects Candidate capture progress through the current observation", async () => {
     const { session } = setup();
     session.transferStarted();
