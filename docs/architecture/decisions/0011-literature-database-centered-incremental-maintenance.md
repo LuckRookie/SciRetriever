@@ -2,11 +2,14 @@
 
 - Status: Accepted
 - Date: 2026-08-08
+- Last amended: 2026-09-27
 - Supersedes: none
 - Superseded by: none
-- Amended by: [ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)
+- Amended by: [ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；[ADR 0028](0028-query-and-expansion-separation.md)（查询与显式扩充分离）
 - Amends: [ADR 0001](0001-sciretriever-scope-and-boundary.md)、[ADR 0002](0002-literature-identity-and-incremental-processing.md)、[ADR 0004](0004-requirement-led-literature-collection.md)
-- Related: [产品需求](../requirements.md)、[架构原则](../principles.md)、[设计文档](../design.md)、[技术文档](../technical.md)、[Entry 技术文档](../technical/entry.md)、[Literature 技术文档](../technical/literature.md)、[Storage 技术文档](../technical/storage.md)
+- Related: [产品需求](../requirements.md)、[架构原则](../principles.md)、[设计文档](../design.md)、[技术文档](../technical.md)、[任务与协作控制：数据库补全与阶段协调](../technical/02-task-coordination.md#4-数据库补全与阶段协调)、[文献与材料：文献身份、元数据与引用](../technical/03-literature-materials.md#2-文献身份元数据与引用)、[版本化材料与知识存储：Catalog 与文件组织](../technical/07-versioned-storage.md#2-catalog-与文件组织)
+
+> 2026-09-25 修订：产品目的明确为科研 Agent 知识供给；统一逻辑文献库与 current facts 不变量保留。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
 
 ## 背景
 
@@ -18,7 +21,7 @@ SciRetriever 的需求、身份设计、阶段提交、查询和书目交换都�
 
 ### 1. 文献数据库是产品中心
 
-SciRetriever 的长期产品结果是一个统一逻辑文献数据库。主题收集、引用扩展、元数据补全、资产获取、Parsing、Analysis、查询和书目交换都是建立、查询、补充、校正、组织、交换或维护该数据库的操作，不形成与它并列的产品结果集合。
+SciRetriever 的长期产品目的是为科研 Agent 提供原始知识材料与有证据的压缩知识，并支持调用方定义的提取。统一逻辑文献数据库是这些能力的事实中心。发现、获取、文档/证据、分析/综合、提取候选交付与查询共享文献身份和产物依赖，不各自建立无法对齐的权威文献集合。
 
 “统一逻辑文献数据库”是产品级数据边界，不等同于 SQLite、某组关系表或 Storage 模块。目标实现中，结构化 Catalog 与保存不可变字节的 ArtifactStore 共同构成这套逻辑数据库；Storage 负责技术持久化，不因此拥有文献身份、验收、状态或其它业务含义。
 
@@ -37,13 +40,13 @@ SciRetriever 的长期产品结果是一个统一逻辑文献数据库。主题�
   -> 得到新的数据库状态
 ```
 
-查询和只读导出直接读取一致的当前数据库事实，不调用无关外部能力，也不为了记录一次读取而制造新的文献事实。
+查询和只读导出直接读取一致的已接纳事实。按 ADR 0028，空结果或内容不足不能触发发现、获取、生成或扩库任务；每次元数据/PDF 扩充由用户明确开启，只有该维护操作才能根据 current facts 补齐本次范围内缺口。
 
 新的领域收集、引用扩展或书目导入也必须先结合当前数据库执行身份命中、去重和接纳；它们不要求目标预先存在，但不能绕过已有事实另建结果集合。已有 Literature 则从第一个缺失或明确失效的步骤继续，已经有效的事实得到复用。
 
 ### 3. 只有接纳并需要保留的结果成为数据库事实
 
-当前产品边界内经过业务所有者接纳并按既有设计需要长期保留的结果必须进入同一逻辑数据库，或以稳定关系引用其中的 artifact。这些结果包括文献身份和元数据、来源 observation、资产及其关系、当前 ParserResult、当前 LiteratureContent、引用关系与支持、无法从当前 Literature 反推的 DiscoveryRun provenance，以及会改变未来自动选择的 PDF 自动获取耗尽事实。
+当前产品边界内经过业务所有者接纳并按既有设计需要长期保留的结果必须进入同一逻辑数据库，或以稳定关系引用其中的 artifact。这些结果包括文献身份和元数据、来源 observation、资产及其关系、当前 ParserResult、当前 LiteratureContent、引用关系与支持、无法从当前 Literature 反推的 DiscoveryRun provenance，以及会改变未来自动选择的 PDF 自动获取耗尽事实。ADR 0026/0027 新增独立文档/证据、多用途知识和依规范交付的提取候选产物；其写入 owner、输入版本与生命周期须明确，候选不成为文献固定字段或权威领域数据集。
 
 外部供应商私有响应、下载候选、临时文件、HTTP 请求、浏览器页面、Parser task、LLM 草稿、内存队列、本次 tried set、批量 selector、冻结目标和运行报告只是形成确认事实或向用户说明本次操作的过程数据。除非其它 Accepted 设计明确要求保留其中某项，它们不因为“数据库中心”而自动进入数据库，也不能成为第二真相源。
 
@@ -57,20 +60,20 @@ SciRetriever 的长期产品结果是一个统一逻辑文献数据库。主题�
 
 局部成功立即形成可复用事实，后续失败不撤销已经提交的有效结果。进程中断或崩溃后，新运行重新读取一致的当前数据库事实，重新形成实际目标并从仍然缺失的步骤继续；不恢复旧 HTTP 请求、浏览器页面、Parser/LLM 调用、线程、队列或内存候选现场。
 
-每次操作可以在当前进程内形成报告和日志，说明本轮发生了什么；这些信息不要求持久化，也不能取代当前数据库事实来回答下一步应当做什么。只有确实会改变后续选择的业务事实才进入数据库，例如某个具体 Literature 已经正常耗尽当前全部自动 PDF 获取路径、需要人工提供 PDF。
+既有进程内操作形成报告和日志，说明本轮发生了什么，不能取代文献与产物事实。新任务/人类协作可以另行定义必要执行记录，但关闭客户端后的存续、同任务跨重启恢复、记录保留及迁移尚未冻结；当前 durable Jobs 也不能自动证明这些保证。执行记录说明意图、进度与介入，资产/知识 owner 才决定结果是否有效。自动 PDF 获取耗尽等影响后续选择的业务事实仍按各自合同保存。
 
 ### 6. 后续功能仍受产品边界约束
 
 新功能进入 SciRetriever 前必须说明：它读取哪些当前数据库事实、形成什么新的数据库事实、由哪个业务模块拥有其含义、如何保留 provenance、如何避免第二真相源，以及重试或恢复时如何重新依据当前事实。
 
-只有用于查询、维护、补充、校正、组织或交换当前领域中立文献数据库的功能才属于 SciRetriever。反应、分子、路线、产率、材料性质等特定领域数据和分析继续由下游消费者负责；数据库中心原则不扩大 [ADR 0001](0001-sciretriever-scope-and-boundary.md) 的数据边界。
+SciRetriever 承担材料供给、证据读取、知识压缩与检索，以及 ADR 0027 的通用提取能力。反应、分子、路线、产率、材料性质等记录的含义、领域算法、科学验收和最终数据集归下游；按独立合同托管候选不等于扩展 Literature 固定字段。产品范围按已修订的 [ADR 0001](0001-sciretriever-scope-and-boundary.md) 执行。
 
 ## 后果
 
-- SciRetriever 是以文献数据库为中心的增量维护系统，不是一次性流水线或只产出文件的下载工具。
+- SciRetriever 以知识供给为产品目标、以统一文献库为事实中心，支持可独立使用的材料与知识能力。
 - Metadata Provider、Acquisition、Parser、LLM 和批量 Execution 都可以替换或重跑，而已经接纳的文献事实保持统一和可查询。
 - 查询、导入、导出、收集和内容处理共享同一数据库；导入数据和新发现数据可以共同去重、补全和继续处理。
-- 重复执行优先复用已经有效的事实，只补充缺失或明确失效的部分；可重建派生产物仍按各自 Accepted 设计只保留当前结果。
+- 重复执行优先复用已经有效的事实，只补充缺失或明确失效的部分；旧兼容视图保留 current 语义；新产物按 ADR 0026 保持有效证据的版本可读性，精确保留策略另行设计。
 - Catalog 与 ArtifactStore 必须作为一个逻辑数据库保持引用、hash、事务可见性和对账一致，但其具体表结构、物理目录、备份、缓存配额和清理算法仍由 Storage 技术设计另行确定。
 
 ## 需要新 ADR 的变化

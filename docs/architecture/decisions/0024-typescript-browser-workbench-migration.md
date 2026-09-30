@@ -4,7 +4,7 @@
 - Date: 2026-09-09
 - Supersedes: none
 - Amends: [ADR 0011](0011-literature-database-centered-incremental-maintenance.md)、[ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[ADR 0023](0023-generic-browser-agent-executor.md)
-- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[TypeScript 工作台技术文档](../technical/typescript-workbench.md)、[活动迁移计划](../../plans/2026-09-07-typescript-browser-workbench/README.md)
+- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[任务与协作控制：生产组装与应用生命周期](../technical/02-task-coordination.md#2-生产组装与应用生命周期)、[已归档迁移计划](../../archive/2026-09-07-typescript-browser-workbench/README.md)
 
 ## 背景
 
@@ -57,9 +57,17 @@ Browser Candidate 在 `durable-ready` 后由 FileStore/Acquisition 独立持有�
 
 ### 4. v2 运行事实与 v1 文献事实隔离
 
-job、attempt、event、candidate、receipt 等运行事实只有在后续 execution schema 任务中，于合成副本
-显式升级和回滚验证。它们不能改变 v1 Literature current facts，不能成为第二个文献数据库，不能把
-非持久化报告或动态 Network 状态写入 Catalog。生产库的 schema、数据迁移和双写不在本 ADR 授权范围内。
+job、attempt、event、candidate、receipt 等运行事实按独立 execution schema 保存，不能改变 v1 Literature
+current facts，不能成为第二个文献数据库，不能把非持久化报告或动态 Network 状态写入 Catalog。
+
+2026-09-30 补齐正式 operator 的 Catalog v8 启用能力：`storage schema-init` 只在明确 `--catalog` 的不存在目标
+创建完整 v8；`schema-upgrade` 只在明确精确目标与同目录不存在的 `--backup` 后，把受支持的 v1–v7 升至 v8。
+升级先完整检查版本、fingerprint、DDL、integrity 与外键，再全程持有与业务 writer 相同的独占写锁，发布并校验
+原始版本备份，复用既有迁移。历史 `upgrade-synthetic` 和单步合成入口保持原门禁，不因正式入口存在而放宽。
+
+每个升级步骤各自使用 SQLite 事务；多步失败保留已提交步骤并报告实际版本，不声称文件系统与 SQL 或整条链
+绝对原子，不自动恢复备份而丢弃新事实。普通 Application/Query/Browser 启动不自动升级。全部开发与恢复验收
+使用合成临时目标；提供 operator 工具不代表任何代理已经获得真实用户路径的迁移、回退、切换、双写或发布授权。
 
 ### 5. 合同与验证归属
 

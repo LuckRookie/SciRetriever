@@ -7,7 +7,7 @@
 - Superseded by: [ADR 0008](0008-summarized-markdown-literature-content.md)
 - Amended by: [ADR 0007](0007-reference-resolution-and-authoritative-relations.md)（第 6、7、9 项及对应后果中的引用 observation/Package 规则）
 - Amends: [ADR 0003](0003-operator-managed-mineru-service.md)、[ADR 0005](0005-document-package-2-breaking-contract.md)
-- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Parsing 技术文档](../technical/parsing.md)、[Analysis 技术文档](../technical/analysis.md)
+- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[文档与证据：解析转换与中性结果](../technical/04-document-evidence.md#2-解析转换与中性结果)、[知识加工：分析与综合](../technical/05-knowledge-processing.md#2-分析与综合)
 
 > 本 ADR 保存此前 Parser/LLM 内容边界的历史决策。ADR 0008 延续 ParserResult、文本参考文献和 lineage 边界，但以总结型 Markdown、统一有序章节和一次最终提案替代这里的旧 LiteratureContent 含义。
 
@@ -23,7 +23,7 @@ Owner 当时确认：MinerU 只产生中性的 Parser 中间结果；LLM 判断�
 
 1. Parsing 把当前主 PDF 提交给选定 parser，并把不可信私有输出转换为 parser-neutral `ParserResult`。`ParserResult` 保留后续 LLM 所需的文本、结构线索、source locator、输入 PDF hash、parser identity 和参数，但不是 `LiteratureContent`、文献状态或可独立导出的产品文档。
 2. MinerU 或其它 parser 不产生参考文献文本、临时引用检索线索或权威引用关系，也不决定哪些块在业务上构成参考文献。Parser 返回的章节名称或结构标记只能作为 LLM 的输入线索。
-3. Analysis 消费经过验证且对齐当前 PDF 的 `ParserResult`，先判断是否包含实际文献内容。只有明确的无实际内容判断才能触发清理；Parser 或 LLM 调用失败不能触发删除。
+3. Analysis 消费经过验证且对齐当前 PDF 的 `ParserResult`，先判断是否包含实际文献内容。历史决策曾允许明确无实际内容时触发清理，Parser 或 LLM 调用失败不能触发删除。按后续 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)，当前 TypeScript 生产 Analysis/completion 对明确无内容也只终止本次尝试，保留已接纳材料；材料失效须由独立 owner 决定。
 4. 内容有效时，由 Analysis 使用 LLM 形成领域中立、可独立读取和导出的 `LiteratureContent`。`LiteratureContent` 必须保留回到当前 PDF 的 source locator，并同时记录 parser 与 analysis-model provenance 和 lineage。
 5. `LiteratureContent.references` 的类型固定为 `EvidenceText[]`。每个元素保存一条非空参考文献文本及其 PDF `SourceLocator[]`，保持文献中的引用顺序；允许标题、DOI 或其它结构化字段缺失，不允许补写原文没有表达的信息，也不保存列表完整性声明。
 6. ~~元数据供应商和 LLM 分别产生 `ReferenceObservation`。~~此项由 ADR 0007 替代：原文留在各自来源容器，LLM 只形成临时 `ReferenceLookup`，目标文献正常入库后才形成权威 `Reference`。

@@ -2,11 +2,14 @@
 
 - Status: Accepted
 - Date: 2026-08-06
+- Last amended: 2026-09-26
 - Revised: 2026-08-10
 - Supersedes: [ADR 0005](0005-document-package-2-breaking-contract.md)、[ADR 0006](0006-llm-produced-literature-content.md)
 - Amends: [ADR 0001](0001-sciretriever-scope-and-boundary.md)、[ADR 0002](0002-literature-identity-and-incremental-processing.md)、[ADR 0003](0003-operator-managed-mineru-service.md)、[ADR 0007](0007-reference-resolution-and-authoritative-relations.md)
-- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Analysis 技术文档](../technical/analysis.md)、[Literature 技术文档](../technical/literature.md)
-- Amended by: [ADR 0010](0010-parser-neutral-markdown-current-result.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)
+- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[知识加工：分析与综合](../technical/05-knowledge-processing.md#2-分析与综合)、[文献与材料：文献身份、元数据与引用](../technical/03-literature-materials.md#2-文献身份元数据与引用)
+- Amended by: [ADR 0010](0010-parser-neutral-markdown-current-result.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)
+
+> 2026-09-25 修订：单一最终总结、固定两阶段/七标题作为全部分析模式及 NoUsableContent 自动删除材料的约束，已由多用途有证据压缩和独立材料保留语义修订。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
 
 ## 背景
 
@@ -15,6 +18,8 @@ Parser-neutral `ParserResult` 为 LLM 提供接近原始 PDF 的规范化 Markdo
 Owner 进一步明确：轻结构化文档的目的，是让 LLM 按少量固定一级标题总结文献并保存为可直接读取和导出的 Markdown；固定结构不足时允许补充其它正文一级标题及正文二级标题。最终元数据必须先于正文总结确定，并作为正文总结请求的明确上下文；它和关键词只产生一次，进入权威 `LiteratureMetadata` 后再用于规范化渲染 Markdown。LLM 产生的额外标题必须能够进入封闭、可验证的 Pydantic 合同，不能依靠动态字段或自由 `extra` 字典。
 
 ## 决策
+
+适用范围：下述精确两阶段、七标题、metadata 与 LiteratureContent 格式属于既有单篇兼容合同；ADR 0026 已确认多用途知识与证据，不受该格式穷尽。本文中的 Python/Pydantic 名称记录旧合同背景，当前实现以 TypeScript 合同为准。
 
 ### 1. 撤销 DocumentPackage 2.0 目标合同
 
@@ -26,11 +31,11 @@ ADR 0005 的 `DocumentPackage` 2.0 完整递归 schema、`AnalysisSnapshot`、`T
 
 Parsing 继续把 operator-managed MinerU 或其它 parser 的私有输出转换为 [ADR 0010](0010-parser-neutral-markdown-current-result.md) 定义的 parser-neutral `ParserResult`。`ParserResult` 通过不可变 artifact 提供规范化 Markdown，保留 Markdown 实际引用资源及其 hash，并记录输入 PDF、parser identity、必要参数和结果 hash；不复制 parser 私有 JSON、block、bbox 或 source locator。
 
-`ParserResult` 不是产品文档或 Literature 状态事实，不直接产生参考文献文本、`ReferenceLookup` 或权威 `Reference`。Analysis 是当前唯一拥有 LLM 文献解释行为的功能模块。
+`ParserResult` 不直接成为旧 LiteratureContent 或新增 Literature 状态，不直接产生 `ReferenceLookup` 或权威 `Reference`。其内容可以通过 Document/Evidence 独立读取并供分析、检索和提取消费；无需先完成总结。Analysis 拥有解释/压缩语义，Extraction 的调用方策略按 ADR 0027 独立定义。
 
 ### 3. 一次逻辑分析包含两个有序阶段
 
-对普通长度文献，一次逻辑内容分析使用两次有严格先后关系的核心 LLM 请求：
+对既有单篇 LiteratureContent 用例的普通长度文献，一次逻辑内容分析使用两次有严格先后关系的核心 LLM 请求：
 
 1. **元数据确定**：输入当前统一初始 `LiteratureMetadata` 和经过验证的同一 `ParserResult`，先明确判断是否具有可供分析的实际文献内容；内容有效时形成结构化的最终 `LiteratureMetadata` 提案，其中包括最终关键词和原文摘要。
 2. **内容总结**：只在第一阶段成功且最终元数据通过结构验证后开始；输入同一 `ParserResult` 和第一阶段已经确定的完整元数据，形成研究背景与目标、研究方法、数据、结论与局限性、必要的额外正文标题及按原文顺序排列的参考文献文本。
@@ -50,7 +55,7 @@ MetadataAnalysisResult = NoUsableContent | FinalMetadataProposal
 
 `NoUsableContent` 不保存评分、置信度或详细原因。它只表示当前 `ParserResult` 没有属于目标 `Literature`、足以说明该文献实际研究、论证、综述、讨论或报告了什么的内容。只有封面、目录、标题与元数据、摘要、访问提示、错误页、下载说明，或者内容明确属于另一篇文献时，可以形成该结果。一页 PDF 不自动无效；完整短文、通信、评论、更正或技术说明仍可具有实际内容。
 
-只有结构有效且明确的 `NoUsableContent` 才不执行第二阶段并允许 Entry 触发清理。PDF 可能具有正文但 `ParserResult` 乱码、截断、只剩资源引用或不足以判断，属于 Parsing 或 Analysis 失败，必须保留 PDF；缺字段、拒答、未知结构、输入不对齐和模型调用失败也不能解释为没有实际内容。第二阶段失败时，第一阶段的元数据提案不单独发布。`FinalMetadataProposal` 直接复用公共 `LiteratureMetadata`，不建立平行元数据类型；模型调用的 provenance 由程序形成，不要求 LLM 输出。
+结构有效且明确的 `NoUsableContent` 使本次兼容分析不执行第二阶段，但不能单独授权 Entry 删除已接纳 PDF 或解析表示。PDF 可能具有正文但 `ParserResult` 乱码、截断、只剩资源引用或不足以判断，属于 Parsing 或 Analysis 失败，必须保留 PDF；缺字段、拒答、未知结构、输入不对齐和模型调用失败也不能解释为没有实际内容。第二阶段失败时，第一阶段的元数据提案不单独发布。`FinalMetadataProposal` 直接复用公共 `LiteratureMetadata`，不建立平行元数据类型；模型调用的 provenance 由程序形成，不要求 LLM 输出。
 
 第二阶段只生成正文与参考文献的内容 Markdown 草稿，不重新生成元数据、关键词或摘要。最终用户 Markdown 中的 `# 元数据` 和 `# 摘要` 由程序从第一阶段形成并最终验收的同一 `LiteratureMetadata` 确定性渲染，再与第二阶段解析出的正文和参考文献合并。因此两次请求仍只形成一项逻辑 Analysis、一份最终元数据和一份最终文档，不形成两套平行产品事实。
 
@@ -87,20 +92,20 @@ MetadataAnalysisResult = NoUsableContent | FinalMetadataProposal
 ```markdown
 # 元数据
 
-+ Title:
-+ Authors:
-+ DOI:
-+ Other Identifiers:
-+ Publication Date:
-+ Year:
-+ Document Type:
-+ Language:
-+ Venue:
-+ Publisher:
-+ Volume:
-+ Issue:
-+ Pages:
-+ Keywords:
+- Title:
+- Authors:
+- DOI:
+- Other Identifiers:
+- Publication Date:
+- Year:
+- Document Type:
+- Language:
+- Venue:
+- Publisher:
+- Volume:
+- Issue:
+- Pages:
+- Keywords:
 ```
 
 确定性 renderer 不能增加、删除、改名或重排元数据项。元数据可选字段在结构化对象中使用 `None`，关键词缺失使用空 tuple；渲染到 Markdown 时两者都使用精确字符串“未提供”，不能使用 `N/A`、`null`、`None`、空字符串或其它自然语言。URL、开放获取状态、许可证、引用计数、供应商身份、处理状态和 provenance 不进入该块。`LiteratureMetadata.abstract` 缺失时同样以 `None` 保存，并在 `# 摘要` 下渲染“未提供”。
@@ -109,7 +114,7 @@ MetadataAnalysisResult = NoUsableContent | FinalMetadataProposal
 
 Literature 验收后以该提案全量替换具体 Literature 的统一初始 `LiteratureMetadata`；“全量替换”表示原子安装一份新的完整当前元数据，不表示删除来源 observation 或无依据地丢弃原有可靠字段。一个 Literature 可以长期关联多个不可变 `MetadataObservation`，但只保留一份当前 `LiteratureMetadata`；旧统一元数据不形成历史记录。`metadata_revision` 是当前元数据每次成功替换时递增的并发复检和内容对齐令牌，不是可查询的历史实体。
 
-规范化发布的 Markdown 从已验收的同一 `LiteratureMetadata` 确定性渲染 `# 元数据`，从 `LiteratureMetadata.abstract` 渲染 `# 摘要`。第二阶段只消费该元数据作为总结上下文，不能生成第二份并行元数据或摘要。LLM 最终元数据提案不是 `MetadataObservation`；它只在完整 Analysis 通过 Literature 验收后成为当前统一元数据。当前 metadata、LiteratureContent 和 Markdown 必须绑定同一 revision/hash 并整体替换，失败保留完整旧当前视图；不可变旧 Markdown 字节不原地改写，但失去当前关系后只属于可回收缓存，不构成产品历史。
+规范化发布的 Markdown 从已验收的同一 `LiteratureMetadata` 确定性渲染 `# 元数据`，从 `LiteratureMetadata.abstract` 渲染 `# 摘要`。第二阶段只消费该元数据作为总结上下文，不能生成第二份并行元数据或摘要。LLM 最终元数据提案不是 `MetadataObservation`；它只在完整 Analysis 通过 Literature 验收后成为当前统一元数据。当前 metadata、LiteratureContent 和 Markdown 必须绑定同一 revision/hash 并整体替换，失败保留完整旧当前视图；不可变旧 Markdown 字节不原地改写；旧兼容格式不承诺完整历史，但被有效知识或证据引用的表示不能仅因失去当前关系而回收。
 
 ### 6. 关键词不再建立平行分类或标签
 
@@ -197,7 +202,7 @@ LiteratureContent
 
 ### 9. 内容接纳形成最终内容状态
 
-最终元数据、关键词、结构化章节、参考文献和规范化 Markdown 来自同一次有序两阶段逻辑 Analysis 并整体接纳，不再保留独立的八类分析或第二套标签结果。因此 Literature 状态只有三个有独立事实依据的阶段：
+最终元数据、关键词、结构化章节、参考文献和规范化 Markdown 来自同一次有序两阶段逻辑 Analysis 并整体接纳，不再保留独立的八类分析或第二套标签结果。该兼容用例继续投影为三个有独立事实依据的 Literature 阶段；它们不穷尽新文档、知识或候选产物的状态：
 
 ```text
 UNREVIEWED
@@ -205,21 +210,21 @@ ASSET_READY
 CONTENT_READY
 ```
 
-`CONTENT_READY` 表示当前 Literature 已经具有与当前主 PDF 和已验收最终 metadata 对齐的结构化 `LiteratureContent`、规范化 Markdown 和 Analysis provenance；它已经是本产品内容处理的完成状态。引用目标解析是可独立重试的补充步骤，不参与状态推导。
+`CONTENT_READY` 表示当前 Literature 已经具有与当前主 PDF 和已验收最终 metadata 对齐的结构化 `LiteratureContent`、规范化 Markdown 和 Analysis provenance；它表示旧单篇兼容目标已经完成，不代表全部知识用途或提取任务已经完成。引用目标解析是可独立重试的补充步骤，不参与状态推导。
 
-每个 Literature 只保留一个当前 `LiteratureContent`。重新分析时必须先完整生成、验证并由 Literature 接纳新结果，再原子替换当前关系；失败保留完整旧结果。数据库不保存旧 `LiteratureContent` 历史，旧结构化内容和旧 Markdown 字节成为没有历史保证的可回收缓存。当前内容丢失、损坏或不再与当前 PDF/metadata 对齐时，可以由权威元数据、当前主 PDF 和重新形成的 ParserResult 再生成。
+每个 Literature 的旧兼容视图只保留一个当前 `LiteratureContent`。重新分析时必须先完整生成、验证并由 Literature 接纳新结果，再原子替换当前关系；失败保留完整旧结果。该视图不承诺完整历史；新多用途产物另有明确版本和输入绑定。有效证据依赖必须继续可读，或通过明确失效/重建策略处理，不允许静默回收。当前内容丢失、损坏或不再与当前 PDF/metadata 对齐时，可以由权威元数据、当前主 PDF 和重新形成的 ParserResult 再生成。
 
 ### 10. 文件与内容使用两道不同验收门
 
 Acquisition 在下载完成后只检查文件事实：实际字节非空；按字节确认是 PDF，不能信任扩展名、文件名、HTTP `Content-Type` 或下载事件；标准 PDF reader 能够打开；页面树可读取且至少有一页；需要密码但没有可用密码的加密 PDF 不能接纳。轻微不规范但仍能正常打开并读取页面的 PDF 可以接纳。该阶段不设置固定最小字节数、页数或字符数，也不判断正文、摘要、目录、封面或学术内容。失败候选删除临时文件，不建立 `Asset`/`LiteratureAsset`，不保存候选级原因，并继续下一个候选；只有全部当前自动路径正常耗尽并按 ADR 0013 保存最小耗尽事实后才形成 `NoPrimaryPdf`。用户中断、Network/API/权限/配置错误和无法安全发布文件或提交关系都属于本次运行失败，不能降级成 `NoPrimaryPdf`。
 
-PDF 通过上述检查后成为当前主 PDF 并形成 `ASSET_READY`。Analysis 随后只根据 `ParserResult` 判断是否存在属于当前目标 Literature 的实际文献内容。只有第一阶段返回结构有效、明确的 `NoUsableContent` 时，Entry 才协调 Acquisition/Storage 撤销当前关系并删除 PDF 与对应 ParserResult，然后在本次运行继续其它候选。该 PDF、候选、来源、ParserResult 和无效决定不形成长期记录；本次运行使用临时已尝试集合避免立即重试，后续新运行仍可重新发现候选。Parsing 或 Analysis 失败不能触发清理，且必须保留 PDF。
+PDF 通过上述检查后成为当前主 PDF 并形成 `ASSET_READY`。Analysis 随后只根据 `ParserResult` 判断是否存在属于当前目标 Literature 的实际文献内容。`NoUsableContent`、分析不适用或 Parsing/Analysis 失败均不能单独撤销资产关系或删除已接纳 PDF 与解析表示。错误文件/错误文章的拒绝、已接纳资产的失效或删除需要独立的业务 owner 规则及相应来源证据；分析结果只可作为判断输入，不能替代该决定。当前 TypeScript 生产 completion 已移除自动清理联动；旧清理服务仍可被明确调用，不能由分析结果自行调用。
 
 已经形成有效 `LiteratureContent` 的当前主 PDF 不由其它候选自动替换。补充资产可以保存，但不驱动 Parsing、Analysis 或 Literature 状态。
 
 ### 11. Analysis 拥有 LLM 业务语义
 
-文献总结和从参考文献原文形成临时 `ReferenceLookup` 都属于 Analysis。Analysis 始终拥有两阶段顺序、prompt、请求分类、响应 schema、业务验收和最终 provenance；其它模块只能调用 Analysis 的公开业务 API，不能直接调用这些文献业务用例或通用 prompt 接口。
+文献总结和从参考文献原文形成临时 `ReferenceLookup` 都属于 Analysis。Analysis 拥有各分析用例的顺序、prompt、请求分类、响应 schema、业务验收和最终 provenance；其中两阶段顺序仅约束旧单篇兼容用例，新增分析/综合可使用有界多次调用；其它模块只能调用 Analysis 的公开业务 API，不能直接调用这些文献业务用例或通用 prompt 接口。
 
 [ADR 0017](0017-shared-agents-and-controlled-browser-agent.md) 后来确认 Acquisition/Browser 是第二个独立模型能力消费者，因此把不含文献或 Browser 业务语义的 provider/model、capability、预算、取消和请求级 session 提升到公共 `agents` 基础模块。该修订不改变本 ADR 的 Analysis 业务所有权；Analysis 通过 Agents 的 structured-text capability 调用模型，Browser 不能复用 Analysis 的 request kind、prompt 或结果验收。
 
@@ -231,7 +236,7 @@ PDF 通过上述检查后成为当前主 PDF 并形成 `ASSET_READY`。Analysis 
 
 ### 13. 内容处理链区分权威资产与可重建派生产物
 
-在文献内容处理链中，必须优先、可靠、长期保存的是来源 observation 与当前权威文献元数据，以及原始 PDF 的 `Asset`、关系和来源信息。`ParserResult`、Parser Markdown 与引用资源、`LiteratureContent`、最终总结型 Markdown，以及从当前内容形成的 `ContentReferenceTextSupport` 都是可重新生成的派生产物：它们仍保存一个完整当前结果供查询、阅读与导出，并通过原子发布、hash 和轻量 provenance 防止错配、半成品与静默损坏，但不维护历史，也不获得与元数据和 PDF 相同的不可替代性。
+在文献内容处理链中，必须优先、可靠、长期保存的是来源 observation 与当前权威文献元数据，以及原始 PDF 的 `Asset`、关系和来源信息。`ParserResult`、Parser Markdown 与引用资源、`LiteratureContent`、最终总结型 Markdown，以及从当前内容形成的 `ContentReferenceTextSupport` 都是可重新生成的派生产物：它们仍保存一个完整当前结果供查询、阅读与导出，并通过原子发布、hash 和轻量 provenance 防止错配、半成品与静默损坏，但旧兼容视图不承诺完整历史。按 ADR 0026，新知识及其证据绑定具体版本，被有效产物引用的表示必须保留可读性，或显式失效并按策略重建；可重建不等于可以无条件删除。
 
 该边界只适用于文献内容处理链，不改变 Execution、来源 `MetadataObservation`、`ProviderRelationObservation` 或其它 `ReferenceSupport` 的既有持久化语义。派生产物损坏、清理或丢失不能破坏权威元数据和 PDF。
 
@@ -241,14 +246,14 @@ PDF 通过上述检查后成为当前主 PDF 并形成 `ASSET_READY`。Analysis 
 - 固定 Pydantic schema 通过有序 `LiteratureSection[]` 容纳动态一级标题，不引入自由扩展字典。
 - Markdown 的固定标题和元数据填空格式由 Analysis parser 和确定性 renderer 保证，不能依赖模型自由输出作为最终规范字节。
 - 已接受的 `LiteratureContent` 同时是程序可读取的结构化内容和可直接导出的 Markdown；不再保存独立八类分析、标签快照或完成提案。
-- 每个 Literature 只保留一个可原子替换的当前 `LiteratureContent`；它与 ParserResult 都可以从权威元数据和 PDF 重建，不维护历史结果。
+- 旧兼容视图保留一个可原子替换的当前 `LiteratureContent`；新增多用途知识独立绑定输入与版本，不能用旧 current-only 规则破坏有效证据。
 - 内容级 hash、Markdown 字节 hash 和单一 Analysis provenance 各自具有唯一含义，不保存两次模型调用的平行 lineage。
 - `DocumentPackage` 2.0 不再约束当前设计；未来完整快照必须重新立项和版本化。
 - Analysis 不再私有拥有模型协议 adapter，但仍唯一拥有文献分析业务语义；中性的模型运行基础由 ADR 0017 的 Agents 公用模块提供。
 
 ## 需要新 ADR 的变化
 
-以下变化需要新的 owner 决策：
+以下对旧受支持格式的破坏性变化或超出已接受修订的变化需要新的 owner 决策；ADR 0026 的多用途知识/证据和 ADR 0027 的通用提取无需重复批准：
 
 - 改变七个固定一级标题或封闭元数据填空项；
 - 取消“先确定最终元数据、再以其为上下文总结正文”的两阶段顺序，或让第二阶段重新生成平行元数据；
@@ -256,5 +261,5 @@ PDF 通过上述检查后成为当前主 PDF 并形成 `ASSET_READY`。Analysis 
 - 重新建立独立八类分析、标签或与 `LiteratureMetadata.keywords` 平行的 LLM 关键词；
 - 从 LiteratureContent 删除可独立导出的参考文献文本，或取消 PDF/ParserResult/metadata 输入 hash、内容 hash、Markdown 字节 hash 或 Analysis provenance；
 - 让其它模块绕过 Analysis 直接拥有当前两个 LLM 业务行为；
-- 建立公共 LLM 基础设施模块；
+- 改变 ADR 0017 已接受的公共 Agents 单次无状态运行时边界；
 - 重新引入完整 DocumentPackage 或其它受支持快照合同。

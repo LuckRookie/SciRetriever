@@ -4,7 +4,7 @@
 - Date: 2026-09-06
 - Supersedes: none
 - Amends: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)
-- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Acquisition 技术文档](../technical/acquisition.md)、[Network 技术文档](../technical/network.md)、[PDF 获取指南](../../guides/pdf-acquisition.md)
+- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)、[PDF 获取指南](../../guides/pdf-acquisition.md)
 
 ## 背景
 

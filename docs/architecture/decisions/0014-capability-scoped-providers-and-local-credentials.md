@@ -7,7 +7,7 @@
 - Superseded by: none
 - Amends: [ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)
 - Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[ADR 0022](0022-default-safe-source-selection-and-per-source-limits.md)
-- Related: [ADR 0018](0018-fixed-user-configuration-home.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[配置与凭据技术文档](../technical/configuration.md)、[Metadata 技术文档](../technical/metadata.md)、[Acquisition 技术文档](../technical/acquisition.md)、[Provider Notes](../../notes/providers/README.md)
+- Related: [ADR 0018](0018-fixed-user-configuration-home.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[统一产品接口：共享支撑：配置与凭据](../technical/01-product-interface.md#5-共享支撑配置与凭据)、[文献与材料：元数据来源与供应商适配](../technical/03-literature-materials.md#3-元数据来源与供应商适配)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[Provider Notes](../../notes/providers/README.md)
 
 ## 背景
 
@@ -81,7 +81,7 @@ Agents/MinerU secret 与规范 origin 精确绑定；改变 Base URL 后旧 secr
 
 > [ADR 0021](0021-provider-model-registry-and-direct-task-selection.md) 将本节旧的全局
 > `Providers & API Keys`/role 页面修订为单词级 `Models / Search / Download / Parse / Analyze /
-> Browser / Status / Theme / Quit` 首页，并采用 Model Provider、完整 `provider/model` Model 与任务
+Browser / Status / Theme / Quit` 首页，并采用 Model Provider、完整 `provider/model` Model 与任务
 > 直接选择；模型 key 在 Provider 对象页管理，文献来源的普通设置/key/test 在具体 Source 对象页
 > 管理，MinerU 由 Parse Setup 管理。纯本地 status、只有显式动作才联网以及最小 probe 不形成文献
 > 事实的决定不变。

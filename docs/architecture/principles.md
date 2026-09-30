@@ -1,50 +1,36 @@
 # SciRetriever 架构原则
 
-本文把[产品需求](requirements.md)和[架构决策](decisions/README.md)转换为实现与审查时长期遵守的原则。它不替代[设计文档](design.md)，也不提前决定尚待讨论的 schema、算法、进程模型或用户界面。
+本文把[产品需求](requirements.md)和[架构决策](decisions/README.md)转换为实现与审查时长期遵守的原则；2026-09-25 已按 [ADR 0026](decisions/0026-agent-knowledge-and-human-collaboration.md)同步科研 Agent 知识与人类协作方向。它不替代[设计文档](design.md)，也不提前决定尚待讨论的 schema、算法、进程模型或用户界面。
 
-## 1. 文献数据库是产品中心
+## 1. 统一文献库是事实基础
 
-SciRetriever 的产品是持续积累、查询和维护的统一逻辑文献数据库。它不是一次流水线结束后附带留下的文件集合，也不等同于 SQLite、某组数据表或 Storage 模块；目标实现中的结构化 Catalog 与不可变 ArtifactStore 共同承载这套数据库。
+科研知识供给是产品目的，统一逻辑文献数据库是事实中心。Agent 与人类必须读取同一文献身份、来源、材料与派生知识；Configuration、执行、模型、索引和 UI 不形成第二真相源。
 
-所有产品操作都从“用户输入 + 当前数据库事实”开始。查询和只读导出直接使用一致的当前事实；会改变数据库的操作由 Entry 形成实际范围，各事实所有者判断哪些内容已经有效、仍然缺失或明确失效，只调用必要的外部能力，验证后把新事实提交回同一数据库。新收集也先结合已有数据库进行身份命中和去重；重复运行和崩溃恢复重新读取当前事实，不恢复旧网络、浏览器、Parser、LLM 或内存任务现场。
+操作从意图和当前事实出发，复用有效结果；查询返回一致、有界投影，不修改数据或隐式生成知识。Catalog 保存关系，ArtifactStore 保存不可变字节，各事实业务含义仍由所属模块决定。
 
-Metadata Provider、Acquisition、Parser、LLM、Execution、SQLite 和文件系统都是维护这套数据库的能力或实现，不能各自形成第二真相源。新增功能必须说明它读取哪些当前事实、形成哪些新事实、由谁拥有含义、如何保留 provenance，以及如何根据数据库状态重试或恢复。
+模块重要程度、数据依赖和业务所有权分别表达。PDF 获取需可靠交付真实材料；分析、总结与提取依赖材料合同，不依赖下载流程或 Browser 状态。整体架构完整设计各项能力，不因强调某个模块而重置产品目标。
 
-本地搜索列表、分页结果和单篇详情是从同一已提交 snapshot 临时组装的不可变读取投影，不是需要持久化的新业务实体。它们不获得独立 ID、provenance、revision 或数据库表，也不能作为写入输入；每次读取都从当前权威事实重新形成。投影可以包含低成本派生的状态、第一缺失步骤、人工 PDF 标记和引用数量，但不能因此复制第二份可修改事实。
+### 1.1 发现、材料与分析保持分离
 
-引用正向列表、被引列表和关系详情遵守同一原则：references/cited-by 只是同一权威 `Reference` 的两个读取方向，Provider citation count 不能混入本地关系数量。大型 artifact 字节也不嵌入 Detail；Detail 只给出既有 Asset/ArtifactRef，verified reader 负责在存储根内复核并打开只读 stream。用户文件导出是原子、默认不覆盖的读取侧 I/O，不让 Model 执行 I/O，也不把内部路径、用户目标、副本或结果写回文献数据库或处理 Report。
+发现保留有边界的输入、来源结果和发现原因，不自动全文处理。获取、解析与读取独立可用，Analysis 只有在明确请求时执行。检索/阅读已有结果不隐藏下载、模型成本或用户文件写入。
 
-### 1.1 发现与补全保持分离
+普通范围依既有 MetaLiterature/版本规则冻结目标，前序有效事实独立提交；稳定缺失才触发规定的版本回退，网络/模型失败不代表材料不可用。新知识产物按用途与输入绑定，不要求全部文献达到一个总完成态。
 
-外部发现和数据库补全是两种独立操作：`DiscoveryRun` 长期记录一次有边界的领域搜索或引用扩展；数据库补全从运行时 `BatchSelector` 展开范围，只在当前进程内冻结目标并补齐主 PDF 或最终内容。两者可以关联，但不能共享一份含义混杂、可以漂移的状态。
+查询与扩充具有独立操作边界（[ADR 0028](decisions/0028-query-and-expansion-separation.md)）。空结果/材料或知识缺失只能形成读取反馈，不能发起外部发现、获取或补库 Job。用户明确开启一次元数据/PDF 扩充任务后，任务内部可以自动批量执行；读取预算或分析目标不构成扩库授权。已有材料的加工是显式维护操作，不是查询副作用。
 
-一次发现不自动启动 PDF、Parsing 或 Analysis；本地只读查询不伪装成外部发现。当前产品不建立领域占位符或 Zotero 式人工 Collection，也不预留 membership 或 Collection selector。补全操作从当前事实形成新目标，不保存 BatchRun、目标、候选快照或普通失败，重跑也不恢复旧发现或处理现场。精确边界见 [ADR 0013](decisions/0013-decoupled-discovery-and-database-maintenance.md)。
-
-每个 DiscoveryRun 的 Provider 原始扫描在整个 Run 内分别有界，过滤、最低身份准入和去重前的 item 都消耗 `scan_limit`。元数据阶段只要求标题或 DOI 至少存在一个，不通过 LLM、搜索分数、关键词、摘要分类或低收益启发式判断领域相关性；有实际内容但偏题的文献仍然有效。Run 完成后只保存类型化输入、整体状态、逐来源终止结果、按 MetaLiterature 去重的发现对象及其直接原因，不保存计数、cursor、完整路径或完成时间。
-
-普通 DiscoveryRun、查询、ImportReport 结果或全库范围先按 `MetaLiterature` 去重，默认只要求至少一个具体版本达到目标。ImportReport 只有在调用方明确重新提交其中的 MetaLiterature ID 时才形成范围，不建立 ImportRun。完成度优先于版本角色；只有已经正常耗尽当前自动 PDF 获取路径，或明确无实际内容且本版本候选耗尽时才尝试下一版本。Parser、LLM、Network 或 Storage 系统失败不能冒充版本不可用。成功事实始终归实际处理的具体 `Literature`，`MetaLiterature` 不保存第二份状态。
-
-每次用户发起的处理都形成操作特有的 typed Report 并直接返回入口调用方；纯查询结果不重复套 Report，内部处理阶段归入发起它们的数据库补全报告。报告说明本次选择、完成、缺失、失败、未处理和停止情况，但不持久化、不参与后续选择，也不成为第二真相源。硬崩溃可能来不及生成最终报告；已经提交的当前事实仍然有效。
-
-Logging 是公用基础模块，只提供当前进程的 best-effort 实时进度和安全诊断。具有运行行为的模块通过它的公开 API 获取命名 logger，生产 Bootstrap 通过同一 API 完成一次性配置；Entry 从 typed result 和稳定 failure 独立累计 Report，不能解析日志反向构造。日志缺失、过滤或输出失败不能改变业务结果，稳定 CLI/JSON 结果走 stdout，日志走 stderr；不建立全局 Observer、事件总线、日志 Model、repository 或持久历史。
+运行报告、实时日志与权威事实分开。durable 执行控制、人类介入记录和历史保留只按已明确范围设计；不借知识架构扩张为无限任务/页面历史。
 
 ## 2. 需求先于实现
 
-SciRetriever 的目标是根据用户指定的领域条件或种子文献大批量发现文献，并允许用户基于同一数据库独立补齐资产、Parser 中间解析和 LLM 总结型轻结构化文档，最终形成可查询并可交换书目信息的文献数据库。
+系统主要服务科研 Agent 的原始材料供给与知识压缩，也必须让人类配置、监督/指导 Browser、读取材料与总结。界面形态、后台存续、长期回放未定时保留边界，不从既有 Web/Jobs 反推需求。
 
-`MetaLiterature`、`Literature`、状态、parser、CLI、数据库引擎和其它技术机制只能用于满足该目标，不能反向定义产品需求。当前代码已经存在的能力也不会自动成为长期产品合同。
+先明确用户结果，再确定责任、状态与失败，最后选择具体实现。新目标不能只写入 plans；requirements/Accepted ADR/design/technical 分别拥有需求、决定、设计和技术约束，README/源码/测试反映已实现事实。
 
 ## 3. 领域边界
 
-SciRetriever 只拥有通用文献信息：
+核心范围包括通用文献身份/元数据、原始资产、可读表示、稳定证据、有证据的多粒度知识、检索/上下文、调用方规范下的提取交付和必要来源/处理信息。
 
-- 文献身份和通用元数据；
-- 文献资产及其来源、hash 和关系；
-- 领域中立的轻结构化文档；
-- 同一轻结构化文档中的领域中立结构化章节；
-- 产生上述结果所需的 provenance、处理证据，以及确实会改变后续选择的当前缺失事实。
-
-规范 Markdown 与结构化章节必须来自同一次有序两阶段逻辑分析并能够追溯到同一 ParserResult 和原始资产：先确定最终元数据，再以该元数据为上下文总结正文。两阶段不能形成相互漂移的内容或平行元数据。反应、分子、路线、产率、材料性质等特定领域数据属于下游消费者，不进入 SciRetriever 文献数据库。下游消费者自行决定领域 schema、导出格式和存储方式。
+Analysis 可以比较指定文献的共识、分歧、条件与局限，但不承担整个科研 Agent 的研究规划；领域 schema 与含义归调用方，候选按 ADR 0027 的独立提取产物合同交付，不加入文献固定字段；通用证据不是任意领域知识图谱。书目交换保留兼容并降低主线优先级。
 
 ## 4. 来源事实不能丢失
 
@@ -79,39 +65,29 @@ SciRetriever 只拥有通用文献信息：
 
 ## 6. 原始资产是证据
 
-已接受的原始资产不可原地修改。文件字节由资产存储拥有，文献数据库保存相对引用、hash、角色、来源和关系，不保存大型关系型 BLOB。
+已接纳原始资产不可原地修改，保留来源、hash、关系和规范相对引用。解析表示是派生数据，模型输出是解释，不能混作原始文件。
 
-解析错误通过重新处理原始资产修复，不通过手工修改原文件或伪造来源关系修复。
+手动 PDF 明确绑定具体文献，复制而不移动/修改用户原件，并执行统一基本检查；Browser 中人工取得的文件仍经过该路径的文章归属验收。原始材料不因某次分析不适用、部分解析或模型失败而自动删除；错误文件/错误文章的拒绝、失效和删除必须走独立明确业务规则。旧 NoUsableContent 清理属于待修订实现，不反向改变此目标。
 
-手动 PDF 接纳与自动获取使用相同的基本检查、不可变发布和唯一主资产关系，但它是用户明确选择具体 Literature 的独立操作，不是第四种自动 AcquisitionPath。SciRetriever 只复制用户文件并管理内部副本，不移动、修改或删除用户原文件；机器绝对路径不进入 Catalog。已有主 PDF 时默认拒绝，不能静默替换。
-
-Acquisition 对单次主 PDF 获取只形成“获得”或“没有获得”两个业务结果；正常未命中和候选内容无效不形成长期原因分类。Deferred、Browser action-required、Network/API/权限/配置错误、用户中断以及无法安全发布文件、提交关系或耗尽事实都属于本次操作失败，不能降级成“没有获得”。
-
-只有 Acquisition 正常遍历某个具体 Literature 的全部适用 routes、没有 deferred/action-required/未解决 failure 且仍未获得 PDF，才保存最小的自动获取耗尽事实并在查询中投影为需要人工 PDF。该事实不增加 Literature 状态，也不保存原因或尝试历史；新 MetadataObservation、成功主 PDF 或用户明确重试会清除它。中断、Network/API/权限/配置错误和 Storage 错误不能形成该事实。
-
-Acquisition 的验收只回答字节是否为可用 PDF 文件：按实际字节而不是后缀、HTTP 类型、文件名或下载事件判断，要求非空、标准 reader 可打开、页面树可读取且至少一页，并拒绝没有可用密码而无法读取的加密 PDF。轻微不规范但可正常读取的 PDF 可以接纳；固定最小字节数、页数、字符数以及正文或学术内容判断都不属于这一道门。Analysis 才根据 ParserResult 判断是否存在属于当前目标 Literature 的实际内容；无法判断、解析异常或模型失败必须保留 PDF，不能冒充内容无效。
+文件 create-if-absent 发布，同路径不同字节保留冲突并拒绝覆盖；损坏通过明确恢复处理，不手工改字节伪造来源。
 
 ## 7. 轻结构化文档保持通用、总结型和可追溯
 
-`LiteratureContent` 是 LLM 根据 `ParserResult` 形成的总结型产品文档，不是完整原文副本。它以一组固定一级标题为最小结构，允许在明确边界内补充其它正文一级标题及正文二级标题；最终元数据和关键词先确定，正文总结随后以该元数据为上下文形成。规范 Markdown、最终元数据、关键词、结构化章节和文本参考文献属于同一次逻辑分析，不建立平行分析、分类或标签结果。
+知识产物按概览、详细分析、问题相关或范围内综合表达明确用途/粒度，绑定输入版本、生成方法和证据。旧七标题 Markdown 可兼容保留，不约束全部新结果。
 
-`LiteratureContent` 既能直接导出为 Markdown，也能通过有序 `LiteratureSection` 供程序读取。固定和额外一级章节处于同一有序序列，动态标题不通过自由 `dict` 或动态 Pydantic 字段表达。程序只把 H1/H2 解析为结构；章节与子章节正文继续保存为 Markdown 字符串，不拆成 block、paragraph、list、table 或公式对象。参考文献原文独立有序保存，使文档不依赖目标引用关系即可阅读和导出。
+压缩非无损：保留影响结论的条件、否定信息、数值/单位、局限、分歧和覆盖。证据引用可定位与解释被证据支持分开验证，不用模型自评置信度替代证明。
 
-固定元数据字段、摘要、四个固定正文章节和参考文献缺失时统一渲染精确字符串“未提供”；结构化可选元数据与摘要使用 `None`，关键词和参考文献使用空 tuple，固定正文 section 使用 `markdown = "未提供"`。额外章节没有内容时不创建。“未提供”不能被解析为参考文献或额外内容。
-
-具体 parser 可以替换，但必须转换到以不可变 Markdown artifact 为核心的 parser-neutral `ParserResult`。外部 parser 的 URL、归档、JSON、文本、图片和坐标均作为不可信输入验证；只有输入 Asset 身份与 hash、页数、规范化 Markdown、实际引用资源、结果 hash 和 parser provenance 进入中间合同，私有 block、bbox 和过程文件不得穿透。Parser 不直接形成 `LiteratureContent`、临时 `ReferenceLookup` 或权威 `Reference`。Analysis 先让 LLM 根据经过验证的中间结果形成结构化最终元数据，再把该元数据和同一中间结果交给 LLM 形成内容 Markdown 草稿，随后验证并解析；Literature 验收最终元数据和内容。`LiteratureContent` 只保存一项 Analysis provenance，其输入 hash 绑定 PDF、ParserResult 和最终 metadata；Parser provenance 留在 ParserResult，不复制两次模型调用的独立 lineage。
+支持摘要→片段→章节/原始材料展开。有效产物引用的文档表示不能静默回收或重新定位；版本保留、明确失效和重生成规则由业务生命周期决定，不默认无限历史。
 
 ## 8. 阶段结果独立提交
 
-元数据、资产和最终轻结构化文档分别形成可持久化事实。最终元数据、关键词、结构化章节、文本参考文献和规范 Markdown 整体接纳为一个内容事实；Parser 中间结果本身不推进文献状态。每个输入资产只保存一个当前 ParserResult，每个 Literature 只保存一个当前 `LiteratureContent`；成功重处理必须先完整生成和验收新 artifact，再原子替换当前关系，旧字节成为可回收缓存而不形成数据库历史，失败不能破坏完整旧结果。
+获取、解析、文档表示和分析各自产物完整验证后独立发布；局部失败不撤销前序有效事实。文件先按不可变规则发布，关系在短事务内确认，提交前复核输入绑定，避免过期结果错配。
 
-在文献内容处理链中，全部已接纳的来源 observations、单一当前权威元数据和原始 PDF 是优先长期可靠保存的事实。旧统一元数据不作为历史事实保存；需要重新形成时使用长期 observations、当前 PDF 和既有规则。ParserResult、Parser Markdown 与引用资源、LiteratureContent、总结型 Markdown 和从当前内容形成的引用文本 support 是可从这些输入重新生成的派生产物：仍须保留一个完整当前结果并使用 hash、轻量 provenance 和原子发布防止错配与半成品，但不维护历史。该原则不扩展为对 Execution 或全部 Reference 数据的未决存储设计。
+原始来源、当前文献身份/元数据与原始文件继续可靠保存。新证据/分析产物可重建但不能据此忽略有效引用；当前默认关系更新、引用失效/保留及回收必须一致。
 
-替换当前 LiteratureContent 时，依赖旧内容 hash 的 `ContentReferenceTextSupport` 必须在同一逻辑提交中移除；若 Reference 因此没有任何 support，则删除该 Reference。来源 observation 支持不受影响。局部失败不撤销其它文献或已经成功的前面阶段，后续运行重新读取当前权威事实并补充缺失内容，不恢复外部调用或内存执行现场。
+旧 LiteratureContent/ReferenceSupport 的精确更新仍是现有兼容路径，新科学证据引用不得直接套用文献引用边的删除规则。索引重建不覆盖事实，任务成功必须有业务结果支持。
 
-批量 selector、冻结目标、候选顺序、尝试、普通失败和运行报告只用于当前操作的调度与反馈，不进入数据库，也不能成为文献身份或结果可用程度的第二真相源。
-
-补全操作开始时在内存中冻结实际目标；运行期间数据库新增文献或查询结果变化不动态加入本次操作。每个目标从自己的第一个缺失步骤继续，已经确认的前序事实不重做或回滚。缺 PDF 目标可以组成有界 cohort，按 Public、Authorized API、Browser admission 的风险层级协调；较早提交 PDF 的目标可以继续后续步骤，不要求整批所有处理阶段齐步运行。
+批量冻结实际范围并有界推进。Public/API/Browser cohort 及共享访问准入不变；取消停止新工作，已在途与已提交结果如实记录；重启根据当前事实恢复，不重放旧 Browser/网络现场。
 
 ## 9. 外部访问必须在进程内共享受控
 
@@ -125,7 +101,7 @@ Acquisition 优先解释明确 AssetHint、来源稳定定位、Provider record 
 
 受控 Browser 以 [ADR 0016](decisions/0016-cloakbrowser-fixed-identity-runtime.md) 的 CloakBrowser patched Chromium 作为唯一目标生产 runtime，同时继续使用 Playwright API 作为内部控制协议。一个长期 Profile 必须复用固定设备身份、一个有头 process/context 和服务器原始出口；单一 `browser-generic` 限速串行、CONNECT、origin/DNS/host admission、单次资源上限和统一 PDF 验收不因 runtime 切换而放宽。经证据确认的 challenge dependency 只能在发起页面、frame ancestry、当前文章 permit 和页面生命周期内加载；Challenge 与普通页面使用同一 Observation、动作和 capture 合同，本地资源阻断不能冒充页面拒绝或 Agent 失败。Browser Agent 可以在当前文章获准的页面 surface 中操作可见控件，但不能借此取得任意 Browser/URL/脚本、切换身份或出口、外包验证、自动登录、选择机构或处理 MFA。
 
-模型调用的中性 role、message、capability/readiness、单次技术边界、取消、协议转换和稳定失败由 [ADR 0017](decisions/0017-shared-agents-and-controlled-browser-agent.md) 的无状态 Agents 公用基础拥有。Analysis 继续拥有文献 prompt、两阶段顺序、schema 和结果验收；Acquisition 继续拥有 Browser 目标、唯一 `AgentBrowserController`、允许动作、语义进展、页面结果解释与 PDF 文章归属验收；Network 唯一生成稳定 Browser Observation、执行动作、capture 和 cleanup。生产对象图不存在 Rules controller 或 Publisher-specific fallback；Agent 不获得 Page、Context、CDP、Cookie、任意 URL/selector/JavaScript 或事实写入能力，也不形成跨调用 memory 或持久化页面状态。
+模型调用的中性 role、message、capability/readiness、单次技术边界、取消、协议转换和稳定失败由 [ADR 0017](decisions/0017-shared-agents-and-controlled-browser-agent.md) 的无状态 Agents 公用基础拥有。Analysis 继续拥有文献 prompt、各用例的有界处理顺序、schema 和结果验收，旧两阶段模式只约束现有兼容路径；Acquisition 继续拥有 Browser 目标、唯一 `AgentBrowserController`、允许动作、语义进展、页面结果解释与 PDF 文章归属验收；Network 唯一生成稳定 Browser Observation、执行动作、capture 和 cleanup。生产对象图不存在 Rules controller 或 Publisher-specific fallback；Agent 不获得 Page、Context、CDP、Cookie、任意 URL/selector/JavaScript 或事实写入能力，也不形成跨调用 memory 或持久化页面状态。
 
 等待队列、permit、窗口计数、`next_allowed_at`、`blocked_until` 和当次 `Retry-After` 是当前进程的内存运行状态，不是文献事实，不保存到 Catalog、ArtifactStore、provenance 或独立协调文件，也不参与状态推导。进程结束后这些动态状态自然清空；静态访问政策和 operator 收紧值仍由配置表达。
 
@@ -144,6 +120,20 @@ Provider secret 只存在于当前用户的固定 `~/.sciretriever/credentials.t
 任何当前导出实现都不定义产品边界。ADR 0005 的 `DocumentPackage` 2.0 目标合同已经由 [ADR 0008](decisions/0008-summarized-markdown-literature-content.md) 撤销；当前产品不实现、读取或迁移该格式。未来若出现完整离线快照需求，必须先确认消费方和公开合同，再以新 ADR 重新版本化设计，不能恢复过时合同。
 
 任何下游集成都必须使用文档化的稳定标识符、hash、provenance 和领域中立表示，不得直接依赖内部数据库表。
+
+## 13. 人类与 Agent 共享能力，控制权有唯一 owner
+
+人类配置、真实 Browser 全程观看/指导、材料与知识阅读是正式能力。UI 只展示与提交意图，配置由 Configuration 管理、操作由 Entry 编排、动作权由运行时裁决，知识读取共用领域服务。
+
+同会话动作互斥，指导绑定文章/流程并在安全决策点消费；接管阻止后续旧动作，交还重新观察，在途请求按实际结果处理。人类取得文件仍统一验收。实时全过程可观察不自动等于永久录像或完整事后回放。
+
+## 14. 检索与上下文是有界读取
+
+未分析材料可查询；结果明确原始/解析/生成内容、输入版本、来源、覆盖和截断。索引可重建，相关性不等于真实性；读取没有隐式生成，增量处理须显式表达成本和副作用。
+
+## 15. 通用提取能力与领域策略分离
+
+按 [ADR 0027](decisions/0027-extraction-capabilities-and-caller-defined-records.md)，记录含义与结构由调用方定义；SciRetriever 提供材料/证据、规范绑定及通用交付能力。外部策略可替换，提取不依赖通用总结或内部模型。结构通过、证据可解析与领域接纳分别表达；候选不自动成为文献事实或训练数据。具体接口以[统一产品接口：共享合同、结构解析与版本兼容](technical/01-product-interface.md#6-共享合同结构解析与版本兼容)继续设计。
 
 ## 审查清单
 
@@ -172,10 +162,13 @@ Provider secret 只存在于当前用户的固定 `~/.sciretriever/credentials.t
 - [ ] Acquisition 是否只形成获得/没有获得两个业务结果，且没有把候选失败持久化或把系统提交错误伪装为没有获得？
 - [ ] 自动 PDF 获取耗尽是否只在全部当前路径正常结束后建立，并在新 observation、成功 PDF 或明确重试时清除；临时错误是否不会错误标记为需要人工 PDF？
 - [ ] 手动 PDF 是否明确绑定具体 Literature、复制而不移动用户文件、复用相同基本检查，并保持在自动三阶段之外？
-- [ ] Acquisition 是否只验证实际 PDF 字节、reader 与页面树，而把实际文献内容判断留给 Analysis；不确定或处理失败是否保留 PDF？
-- [ ] 固定内容缺失时是否统一使用“未提供”，且没有把缺失标记解析成参考文献或额外章节？
-- [ ] 每个 Literature 是否只有一个原子替换的当前 LiteratureContent，且旧内容 support 与无支持 Reference 得到一致清理？
-- [ ] 文献内容处理链是否优先保护来源元数据和原始 PDF，同时把 ParserResult 与 LiteratureContent 作为可重建当前结果而非历史资产？
+- [ ] Acquisition 是否统一检查 PDF 字节、可读性和适用的文章归属证据；分析不适用、部分解析或失败是否不会单独触发已接纳材料删除？
+- [ ] 旧七标题兼容格式的缺失内容是否仍统一使用“未提供”；新知识产物是否准确表达缺失、不确定与覆盖，不把缺失标记当作证据？
+- [ ] 多用途知识产物是否按用途和输入版本区分，更新是否保留有效证据；旧 LiteratureContent/ReferenceSupport 兼容更新是否仍保持一致？
+- [ ] 是否保护来源与原始材料，并为派生表示明确保留/失效/回收规则，避免以可重建为由无声断开有效引用？
+- [ ] 解析材料是否无需分析即可读取，知识要点是否能展开到正确版本的证据，检索是否如实表达预算、覆盖和截断？
+- [ ] 人类是否观察同一生产 Browser，指导是否绑定当前流程，接管/交还是否阻止旧动作并重新观察？
+- [ ] Agent 与人类是否共享业务语义，并明确区分读取、生成、材料与模型解释？
 - [ ] 所有外部访问是否经过当前进程的 provider/channel/host 共享准入，网页独占与冷却是否覆盖普通 HTTP 和浏览器，API 是否遵守对应供应商规则？
 - [ ] 生产 Browser 是否只使用一个固定身份 CloakBrowser Profile/process/context，且没有 stock runtime fallback、随机设备身份、环境代理或绕过 CONNECT/Network guard 的第二执行路径？
 - [ ] Challenge 必需资源是否只在已核实 Publisher、frame ancestry、当前文章 permit 和页面生命周期内加载；Challenge 是否使用统一 Observation/Action，且本地阻断没有冒充页面拒绝或 Agent 失败？

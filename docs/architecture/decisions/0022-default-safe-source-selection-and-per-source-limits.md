@@ -5,7 +5,7 @@
 - Supersedes: none
 - Superseded by: none
 - Amends: [ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)
-- Related: [ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[配置技术文档](../technical/configuration.md)
+- Related: [ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[统一产品接口：共享支撑：配置与凭据](../technical/01-product-interface.md#5-共享支撑配置与凭据)
 
 ## 背景
 

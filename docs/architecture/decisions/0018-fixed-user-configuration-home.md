@@ -6,7 +6,7 @@
 - Superseded by: none
 - Amends: none
 - Amended by: [ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)
-- Related: [ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[配置与凭据技术文档](../technical/configuration.md)、[配置手册](../../guides/configuration.md)
+- Related: [ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[统一产品接口：共享支撑：配置与凭据](../technical/01-product-interface.md#5-共享支撑配置与凭据)、[配置手册](../../guides/configuration.md)
 
 ## 背景
 

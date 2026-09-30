@@ -6,7 +6,7 @@
 - Supersedes: none
 - Amends: [ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)
 - Amended by: [ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0023](0023-generic-browser-agent-executor.md)
-- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Acquisition 技术文档](../technical/acquisition.md)、[Network 技术文档](../technical/network.md)、[Entry 技术文档](../technical/entry.md)、[Provider Notes](../../notes/providers/README.md)
+- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)、[任务与协作控制：数据库补全与阶段协调](../technical/02-task-coordination.md#4-数据库补全与阶段协调)、[Provider Notes](../../notes/providers/README.md)
 
 ## 背景
 
@@ -160,7 +160,9 @@ ADR 0023 修订后，Controlled Browser 作业只冻结一个 `AgentBrowserContr
 `BrowserObservation` 起选择封闭动作；不存在确定性规则 controller、Publisher selector/locator 程序
 或失败 fallback。controller 与 CloakBrowser/Profile、Network guard、页面 capture 和 PDF 验收协作。
 每个单次点击、navigation、capture settle 或 wait 都有客观 action timeout，并另设不可由普通用户配置的
-32 次模型 decision safety fuse；不存在累计 token/image 业务预算。补充材料、appendix、supporting
+32 次模型 decision safety fuse；不存在累计 token/image 业务预算。当前通用 TypeScript flow 的
+离线执行上限是 24 次 action、12 次 model call，并额外受 operation deadline/candidate wait 限制；
+完整生产 controller 的 32 次目标 fuse 仍需独立现场证据。补充材料、appendix、supporting
 information 和错文由 Acquisition 的统一 PDF 归属验收排除。短期签名 query 只保留在当前 Browser
 operation 内并交给 Browser 实际访问；guard、DNS key、日志、结果、provenance 和持久事实只接收去除
 query 的 locator。
@@ -169,7 +171,7 @@ Browser 可以从受控 download event、PDF response、允许的 popup/viewer �
 
 ### 7. 升级、暂停与熔断语义
 
-以下低风险终态可以进入 Browser admission：明确不适用、正常未命中、明确无 PDF capability，以及 API 对具体目标无 entitlement 但当前机器网络出口可能具有独立机构 IP 授权。
+以下低风险终态可以进入 Browser admission：route 明确声明不适用、route 明确声明没有 PDF capability，或正常 locator miss/耗尽且 Browser 独立已获准。API 对具体目标的 `no-entitlement` 当前不在自动 Browser rescue 范围内，保持 action-required/fail-closed，等待用户或外部授权。
 
 以下状态不得通过自动切换 Browser 制造替代流量：timeout、临时传输或服务失败、`429`、有效 `Retry-After`、quota exhausted、未到 reset boundary。它们形成延期或稳定失败，并更新共享 scope。支持的 API 未配置时必须明确报告；只有 Browser 已由用户显式启用且 admission policy 允许时才可继续，不能静默跳过。
 

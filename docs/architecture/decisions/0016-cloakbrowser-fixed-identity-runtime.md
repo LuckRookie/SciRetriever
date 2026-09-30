@@ -6,7 +6,7 @@
 - Supersedes: none
 - Amends: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)
 - Amended by: [ADR 0023](0023-generic-browser-agent-executor.md)
-- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Network 技术文档](../technical/network.md)、[Configuration 技术文档](../technical/configuration.md)、[Provider Notes](../../notes/providers/README.md)
+- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)、[统一产品接口：共享支撑：配置与凭据](../technical/01-product-interface.md#5-共享支撑配置与凭据)、[Provider Notes](../../notes/providers/README.md)
 
 ## 背景
 

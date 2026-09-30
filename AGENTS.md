@@ -14,7 +14,7 @@
 
 | 内容 | 权威位置 |
 | --- | --- |
-| 产品问题、范围和 R1-R8 验收 | `docs/architecture/requirements.md` |
+| 产品问题、范围和 R1-R13 验收 | `docs/architecture/requirements.md` |
 | 已接受且长期有效的选择 | `docs/architecture/decisions/` |
 | 模块、数据流和事实所有权 | `docs/architecture/design.md` |
 | 代码结构、Model、Ports 和运行技术 | `docs/architecture/technical.md`、`docs/architecture/technical/` |
@@ -30,7 +30,7 @@
 
 | 字段 | 值 |
 | --- | --- |
-| 项目定位 | 面向用户指定研究领域的大批量文献收集与文献数据库维护工具；产品自身保持领域中立 |
+| 项目定位 | 科研 Agent 的原始论文材料供给与有证据知识压缩组件；提供正式人类配置、Browser 观看/指导和知识阅读，保持领域中立 |
 | 主要语言 | TypeScript/Node 22.19.0；Python 仅为历史维护材料 |
 | 包管理 | `pnpm`，锁文件 `pnpm-lock.yaml` |
 | 活动源码 | `packages/`、`apps/server/src/`、`apps/web/src/` |
@@ -40,24 +40,22 @@
 | 临时文件 | 系统临时目录下的 `sciretriever-*` |
 | 不提交内容 | 个人配置、运行时 catalog、文献资产、用户语料、`.venv/`、`build/`、`dist/`、缓存和临时文件 |
 
-当前实现是按功能模块组织的模块化单体：
+当前活动实现是按功能模块组织的 TypeScript/Node 模块化单体：
 
 ~~~text
-entry/
-metadata/
-literature/
-acquisition/
-parsing/
-analysis/
-model/
-network/
-storage/
-logging/
-configuration/
-bootstrap/
+packages/contracts/          # 跨模块中性合同与解析
+apps/server/src/
+  entry/ application/        # 用户操作边界、生命周期与 durable jobs
+  metadata/ literature/      # 元数据与文献事实
+  acquisition/ parsing/     # 资产获取与解析
+  analysis/ agents/          # 分析与无状态模型运行时
+  network/ storage/ logging/ # 共享访问、持久化与日志
+  configuration/ bootstrap/ # 配置与生产对象图
+  browser/ workbench/ cli/  # Browser 边界、工作台与入口适配
+apps/web/src/                # Web 工作台适配
 ~~~
 
-模块责任和依赖以[设计文档](docs/architecture/design.md)及[技术文档](docs/architecture/technical.md)为准。跨功能模块通过公开 TypeScript API 和中性 Model 协作；外部协议在所属 adapter 边界转换；`configuration/` 与 `bootstrap/` 负责生产组装，不增加新的核心产品模块。迁移前的 Python 源码、测试和工具链快照位于 `archive/2026-09-12-typescript-python-retirement/`，不属于活动源码。
+模块责任、目标依赖和当前状态以[设计文档](docs/architecture/design.md)、[技术文档](docs/architecture/technical.md)和 [TypeScript 架构锚定基线](docs/architecture/typescript-baseline.md) 为准。跨功能模块通过公开 TypeScript API 和 `packages/contracts` 中性合同协作；外部协议在所属 adapter 边界转换；`configuration/` 与 `bootstrap/` 负责生产组装，不增加新的核心产品模块。迁移前的 Python 源码、测试和工具链快照位于 `archive/2026-09-12-typescript-python-retirement/`，不属于活动源码；工作区内其它历史或生成目录不得未经授权清理。
 
 ## 3. 开发与架构演进
 
@@ -72,8 +70,8 @@ bootstrap/
 
 ## 4. 不可协商的产品与数据边界
 
-- SciRetriever 止于通用文献元数据、资产、轻结构化文本、产品规定的通用结构化文献分析结果，以及必要的 provenance、lineage、处理证据和失败信息。
-- 反应、分子、路线、产率、材料性质等特定领域 schema 和数据属于下游消费者，不进入 SciRetriever 文献数据库。
+- SciRetriever 止于通用文献元数据、原始资产、可读文档与证据、产品规定的通用分析/压缩/综合结果、检索上下文及调用方规范下的提取候选，以及必要的 provenance、lineage 和失败信息；Agent 与人类共享知识事实。当前新目标及未决边界见 ADR 0026，新增能力不得当作已实现。
+- 按 ADR 0027，领域记录含义、schema、提取算法及最终数据集由调用方/下游拥有；项目提供通用材料、证据和提取交付能力。领域 payload 只按独立候选产物合同交付或托管，不成为 Literature 固定字段或权威文献事实；精确接口与持久化仍待设计。
 - `MetaLiterature` 和 `Literature` 是当前身份机制；来源 observation 必须保留，身份收敛必须保守、确定且可审计。
 - 系统只有一个统一逻辑文献数据库；每项可变业务事实只有一个业务写入所有者。Storage 保存已确认事实，不自行形成业务决定。
 - SQLite/catalog 不保存大型 BLOB 或机器相关的绝对资产路径；文件系统保存字节，catalog 保存规范相对引用、hash、关系和 provenance。

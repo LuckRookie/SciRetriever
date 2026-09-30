@@ -1,0 +1,603 @@
+# 06 · 知识查询与上下文技术设计
+
+[设计总览](../design.md) · [八模块技术导航](../technical.md)
+
+本模块对应设计中的 **⑥ 知识查询与上下文**，从已有库中检索文献、材料和知识，按范围与预算返回内容、来源、证据和缺口。
+
+内部包括 Library 读取、知识检索/排序、版本与重复处理、上下文组装和证据展开。它通过③④⑤的读取合同和⑦的只读适配取得已提交事实，不持有发现、获取、解析、模型生成或 Job-create 能力。
+
+当前 Library/FTS、元数据/已发布文档检索和 Catalog v8 的已发布知识检索、预算 Context、QueryApplication/HTTP/人类阅读页已接通。查不到、缺 PDF 或缺表示都是查询结果，不会触发维护。M07-T03 的 root 全量验收仍待执行。
+
+本篇目录：
+
+- [1. 模块边界与连接](#1-模块边界与连接)
+- [2. 文献查询与读取合同](#2-文献查询与读取合同)
+- [3. 独立查询应用与只读生命周期](#3-独立查询应用与只读生命周期)
+- [4. 知识检索与上下文组装](#4-知识检索与上下文组装)
+
+## 1. 模块边界与连接
+
+统一接口① → 本模块 → 文献③ / 文档④ / 知识⑤的 read ports 与存储⑦；无维护 writer。
+
+本篇按职责归并已有详细合同；示例中的现有类型与目标类型保持各自状态。文档归属不改变源码目录、事实所有权或当前公开 API。
+
+## 2. 文献查询与读取合同
+
+### 2.1 本地文献数据库查询与详情
+
+本节是本地文献查询输入和主要读取投影的精确合同。它们由 `packages/contracts/src/index.ts` 导出并进行边界解析，使用只读字段并拒绝未知字段，但不是数据库实体。外部 Metadata Provider 搜索继续使用 `TopicDiscoveryInput` 或 `CitationDiscoveryInput`；`LibraryQuery` 只读取已经接纳的 Catalog/ArtifactStore 当前事实，不访问网络、不创建 `DiscoveryRun`、不执行内容处理，也不修改数据库。
+
+#### 2.1.1 LibraryQuery
+
+```text
+LibraryQuery
+  text: str | None
+  title: str | None
+  author: str | None
+  author_orcids: tuple[str, ...]
+  identifiers: tuple[Identifier, ...]
+
+  publication_year_from: int | None
+  publication_year_to: int | None
+  venue: str | None
+  publisher: str | None
+  document_types: tuple[str, ...]
+  languages: tuple[str, ...]
+  keywords: tuple[str, ...]
+
+  version_roles: tuple[VersionRole, ...]
+  statuses: tuple[LiteratureStatus, ...]
+  missing_steps: tuple[LiteratureMissingStep, ...]
+  needs_manual_pdf: bool | None
+
+  discovery_run_ids: tuple[DiscoveryRunId, ...]
+
+LiteratureMissingStep =
+    "primary-pdf"
+  | "parser-result"
+  | "literature-content"
+```
+
+全部可选单值默认为 `None`，全部多值字段默认为空 tuple；完全空的 `LibraryQuery` 表示查询全部具体 `Literature`。字符串去除边界空白后必须非空，多值字段去重并保持调用方顺序。不同字段之间使用 AND；一般多值字段内部使用 OR；`keywords` 内部使用 AND，即当前 metadata 必须同时具有全部给定完整关键词。
+
+`text` 是普通用户文本，只搜索当前权威视图中的：
+
+- title；
+- 当前作者 display/given/family name、ORCID、署名单位名称和 ROR；
+- identifiers；
+- abstract；
+- venue、publisher、volume、issue 和 pages；
+- 当前 `LiteratureMetadata.keywords`；
+- 当前 `LiteratureContent.sections` 的标题和 Markdown 正文。
+
+`text` 不搜索 `MetadataObservation`、provenance、AssetHint/URL、供应商参考文献原文、`LiteratureContent.references`、Provider 原始响应、Discovery/Report/日志/失败、Parser/LLM 型号或文件路径，也不接受裸 SQL 或 FTS5 查询语法。专门字段的语义为：
+
+- `title`、`venue` 和 `publisher`：大小写不敏感的包含匹配；`author` 对当前作者 display/given/family name 做同样匹配，不扩展到单位；
+- `author_orcids`：规范 ORCID 精确匹配，内部 OR；
+- `identifiers`：复用中性 `Identifier`，按规范 namespace/value 精确匹配，内部 OR；
+- 年份范围：`1..9999`、包含边界，两个边界同时存在时必须有序；
+- `document_types`：开放字符串，按当前规范值精确匹配，内部 OR；
+- `languages`：按当前 metadata 规范值精确匹配，内部 OR；
+- `keywords`：按完整规范关键词精确匹配，全部给定关键词必须存在；
+- `version_roles`：只接受 `published | accepted-manuscript | preprint | other`；
+- `statuses`：只接受 `UNREVIEWED | ASSET_READY | CONTENT_READY`。
+
+`missing_steps` 只表达每个 Literature 当前第一个缺失事实，不把一项前置缺失展开成全部后续缺失：
+
+```text
+没有 primary-pdf
+  -> "primary-pdf"
+
+有 primary-pdf、没有与之对齐的当前 ParserResult
+  -> "parser-result"
+
+有 primary-pdf/ParserResult、没有与当前输入对齐的 LiteratureContent
+  -> "literature-content"
+
+CONTENT_READY
+  -> None
+```
+
+`needs_manual_pdf = True` 只匹配当前没有主 PDF 且存在 `AutomaticPdfAcquisitionExhaustion` 的具体 Literature；`False` 匹配没有该耗尽事实的 Literature，不能解释成系统保证仍可自动获得；`None` 不筛选。
+
+`discovery_run_ids` 查询一次或多次 DiscoveryRun 当时实际发现的具体 Literature，内部 OR。Topic cause 通过当时接纳的 `metadata_observation_id` 找到其具体 Literature；Citation cause 使用 source/target 两端中与该 `DiscoveryResult.meta_literature_id` 对应的实际具体 Literature，references 方向通常是 target，cited-by 方向通常是 source。不能把后来加入同一 MetaLiterature 的其它版本反算为该次发现对象。
+
+`LibraryQuery` 不加入 Collection、Provider 私有字段、observation 内容筛选、citation count 范围、URL/OA/license、普通失败/history、Report/log/attempt、Parser/LLM identity、文件路径、sort、pagination、cursor、include flag 或 raw SQL/FTS 字段。`QuerySelector` 只复用这个查询条件，不复用列表请求的排序、limit 或 cursor。
+
+#### 2.1.2 搜索请求与页面
+
+```text
+LibrarySort =
+    "publication-year-desc"
+  | "publication-year-asc"
+  | "title-asc"
+  | "title-desc"
+  | "relevance"
+
+LibrarySearchRequest
+  query: LibraryQuery
+  sort: LibrarySort = "publication-year-desc"
+  limit: int = 50
+  cursor: str | None = None
+
+LiteratureSearchItem
+  literature: Literature
+  metadata_revision: int
+  metadata_sha256: Sha256
+  missing_step: LiteratureMissingStep | None
+  needs_manual_pdf: bool
+
+LibrarySearchPage
+  items: tuple[LiteratureSearchItem, ...]
+  total_count: int
+  next_cursor: str | None
+```
+
+`limit >= 1`；cursor 非空时是调用方不得解释或修改的不透明字符串，并与规范化 query、sort 和稳定位置绑定。cursor 不保存查询或数据库 snapshot；后续翻页重新读取当时的 current facts，数据库在两次请求之间变化时结果和 `total_count` 可以相应变化。`relevance` 只允许在 `query.text` 非空时使用。年份或标题缺失的记录在对应排序中排在具有该值的记录之后；所有排序最后使用 `literature_id` 作为稳定 tie-breaker。`total_count >= 0`，表示忽略本节 cursor/limit 后同一 query 的完整命中数；`items` 不重复且数量不超过 limit，`next_cursor` 只在仍有下一页时存在。
+
+每个 `LiteratureSearchItem` 表示一篇具体 `Literature`，不按 `MetaLiterature` 折叠。不同 Provider 的重复记录已经作为同一 Literature 的多个 observations 收敛，不制造多个列表项；同一 MetaLiterature 下的不同明确版本仍分别出现，并通过 `literature.meta_literature_id` 归组。`Literature` 已经包含当前完整 `LiteratureMetadata` 和派生 `LiteratureStatus`，因此 SearchItem 不在顶层重复 metadata/status；revision/hash、第一缺失步骤和人工 PDF 标记是当前读取上下文的补充。
+
+列表不嵌入 MetadataObservations、资产、ParserResult、LiteratureContent、Reference/Support、Discovery cause 或 artifact 字节。`LibrarySearchPage` 是一次读取结果，不另套 Entry Report。
+
+#### 2.1.3 LiteratureDetail
+
+```text
+LiteratureAssetView
+  asset: Asset
+  literature_asset: LiteratureAsset
+
+LiteratureDetail
+  literature: Literature
+  meta_literature: MetaLiterature
+
+  metadata_revision: int
+  metadata_sha256: Sha256
+
+  missing_step: LiteratureMissingStep | None
+  needs_manual_pdf: bool
+
+  metadata_observations: tuple[MetadataObservation, ...]
+
+  primary_pdf: LiteratureAssetView | None
+  additional_assets: tuple[LiteratureAssetView, ...]
+
+  parser_result: ParserResult | None
+  content: LiteratureContent | None
+
+  other_versions: tuple[LiteratureSearchItem, ...]
+
+  reference_count: int
+  cited_by_count: int
+```
+
+`LiteratureDetail` 是针对一个具体 `LiteratureId`，由当前 Catalog 事实和 ArtifactStore 稳定引用在同一 read-only snapshot 中临时组装的不可变查询投影。它不获得自己的 ID、provenance、hash、revision、数据库表、artifact 或写入生命周期，不能作为更新数据库的输入；每次查询都重新读取当前事实。`LiteratureAssetView` 同样只是把既有不可变 `Asset` 文件事实和 `LiteratureAsset` 归属/来源关系组合起来，不复制成新的持久化对象。
+
+字段语义为：
+
+- `literature` 是当前具体版本，已经携带当前 metadata 与 status；
+- `meta_literature` 必须是当前 Literature 所属聚合，并给出代表 Literature；
+- `metadata_revision/metadata_sha256` 精确描述 `literature.metadata` 的当前绑定；
+- `metadata_observations` 返回已归属当前 Literature 的全部不可变来源事实，按 `provenance.observed_at` 降序、`observation_id` 稳定排序；该顺序只服务展示，不表达字段 precedence；
+- `primary_pdf` 只允许唯一 `role = "primary-pdf"` 的当前关系，`additional_assets` 包含其它角色并按 role、`literature_asset_id` 稳定排序；
+- `parser_result` 只返回 source Asset/hash 与当前主 PDF 对齐的当前结果；
+- `content` 只返回 Literature 已整体接纳、与当前 metadata revision/hash、主 PDF 和 ParserResult 对齐的唯一当前 LiteratureContent；
+- `other_versions` 复用列表项表达同一 MetaLiterature 下除当前 Literature 外的具体版本，按 `published`、`accepted-manuscript`、`preprint`、`other` 和 LiteratureId 稳定排序，不递归嵌套其它 Detail；
+- `reference_count` 是当前 Literature 作为 `Reference.source_literature_id` 的本地权威边数量；
+- `cited_by_count` 是当前 Literature 作为 `Reference.target_literature_id` 的本地权威边数量。
+
+两个引用数量必须非负，只统计至少具有一项有效 `ReferenceSupport` 的本地权威 Reference，不能与 `MetadataObservation` 中某个 Provider 报告的参考文献次数或被引用次数合并。PDF 中的参考文献原文已经位于 `content.references`，Provider 原文位于相应 observation；解析后的完整 references/cited-by 边列表及其 support 使用独立、可分页的关系读取，不无界嵌入 Detail。
+
+下列一致性由 Literature 查询规则和 Storage read-model producer 保证，不由 contracts parser 重新推导身份、状态或缺失步骤：
+
+- `literature.meta_literature_id == meta_literature.meta_literature_id`，其它版本共享该 ID 且不包含当前 Literature；
+- Detail 中的全部 MetadataObservation 都已归属当前 Literature；
+- `primary_pdf` 存在时其关系归属当前 Literature，AssetId/hash 与 ParserResult 输入一致；
+- `content` 存在时其 metadata revision/hash 与 Detail 一致，并与当前主 PDF 和 ParserResult 对齐；
+- `CONTENT_READY` 必须具有对齐的 primary PDF、ParserResult 和 content；`ASSET_READY` 必须具有 primary PDF 且没有有效当前 content；`UNREVIEWED` 不具有 primary PDF；
+- `needs_manual_pdf = True` 时必须没有 primary PDF，且来源只能是当前自动获取耗尽事实；
+- `missing_step` 与上述 current facts 使用同一 truth table。
+
+Detail 可以返回 `LiteratureContent.sections/references` 等已结构化文本，但不嵌入 PDF、Parser Markdown、Parser resources 或规范 LiteratureContent Markdown 的完整 artifact 字节。调用方通过稳定 `Asset`/`ArtifactRef` 使用独立 artifact read 操作取得字节。ProviderRelationObservation 全部待扩展边、完整 Reference/Support、DiscoveryRun 历史、Report/log/failure、Network/Parser/LLM 运行现场和机器绝对路径都不进入 Detail；它们在确有读取需求时使用各自独立查询。
+
+`LibraryQuery`、`LibrarySearchRequest`、`LiteratureSearchItem`、`LibrarySearchPage`、`LiteratureAssetView`、`LiteratureDetail`、`LiteratureReferenceRequest`、`LiteratureReferenceItem`、`LiteratureReferencePage` 和 `ReferenceDetail` 都是 query-side TypeScript contract，不是可持久化业务主体。Storage 只能从当前权威行和 artifact 引用组装它们，不能为这些投影建立第二份可修改事实。
+
+#### 2.1.4 引用关系页面与关系详情
+
+`LiteratureDetail` 只给出本地权威引用数量。实际 references/cited-by 使用同一条
+`Reference` 的正向或反向分页读取，不建立第二套“被引关系”：
+
+```text
+ReferenceDirection = "references" | "cited-by"
+
+LiteratureReferenceRequest
+  literature_id: LiteratureId
+  direction: ReferenceDirection
+  limit: int = 50
+  cursor: str | None = None
+
+LiteratureReferenceItem
+  reference: Reference
+  related_literature: LiteratureSearchItem
+  support_count: int
+
+LiteratureReferencePage
+  items: tuple[LiteratureReferenceItem, ...]
+  total_count: int
+  next_cursor: str | None
+
+ReferenceDetail
+  reference: Reference
+  source: LiteratureSearchItem
+  target: LiteratureSearchItem
+  supports: tuple[ReferenceSupport, ...]
+```
+
+当 `direction = "references"` 时，请求中的 Literature 必须是
+`reference.source_literature_id`，`related_literature` 是被引用的 target；当
+`direction = "cited-by"` 时，请求中的 Literature 必须是 target，相关文献是引用它的
+source。`LiteratureReferenceItem` 不复制 source/target、metadata 或 support；方向由请求和
+`Reference` 本身共同给出。`support_count >= 1`，只统计该 Reference 当前有效的去重 support。
+
+关系列表使用固定排序：相关文献发表年份降序、缺失年份后置，随后按规范化标题升序、缺失
+标题后置，最后用相关 `literature_id` 稳定打破并列。`limit >= 1`；cursor 与
+`literature_id`、direction 和最后一个稳定位置绑定，并保持不透明。`total_count` 只统计当前
+至少具有一项有效 support 的本地权威 Reference。与普通搜索相同，后续页面重新读取届时的
+current facts，不承诺跨请求保存数据库 snapshot。
+
+`ReferenceDetail` 通过一个 `ReferenceId` 读取关系两端和全部当前 support。source/target
+分别复用非递归的 `LiteratureSearchItem`，不能互换；support 按
+`provider_relation`、`metadata_reference_text`、`content_reference_text` 的类型顺序，再按
+各自 observation ID、content hash 和零基 reference index 稳定排序。Detail 不复制
+support 所定位的供应商 observation、参考文献原文或 provenance；调用方需要查看原文时，
+根据 support 定位到 source Literature 的 `LiteratureDetail` 中相应 observation/content。
+
+Provider 报告的 citation count 继续属于 `MetadataObservation`，不进入
+`LiteratureReferencePage.total_count`、`support_count` 或 `ReferenceDetail`。请求、页面、
+列表项和关系详情都是同一 read-only snapshot 中临时组装的 query projection，不持久化、
+不形成 Report，也不允许作为 Reference 写入输入；不存在的 Literature 或 Reference 返回稳定
+not-found 读取错误。
+
+#### 2.1.5 从详情取得 artifact
+
+`LiteratureDetail` 已经给出用户可读取的稳定 artifact 引用：
+
+- 主 PDF 使用 `primary_pdf.asset`；
+- Parser Markdown 使用 `parser_result.markdown`；
+- Parser 实际引用资源使用 `parser_result.resources[].artifact`；
+- 规范轻结构化 Markdown 使用 `content.markdown`。
+
+Artifact 读取直接接受既有 `Asset | ParserArtifactRef | ArtifactRef`，不再建立
+`ArtifactHandle`、artifact 字节 contract、下载 token 或第二套路径对象。只读 binary
+stream、用户目标路径和 context manager 是运行时 I/O 对象，不能进入 contracts、JSON、
+Catalog、Report 或 `LiteratureDetail`。因此 Detail 本身不增加 `open()`、`export()` 等业务
+方法；调用方从 Detail 取得引用，再交给 Entry/Literature 的独立 artifact 操作。
+
+### 2.2 查询
+
+`query.ts` 拥有本地文献查询的业务语义，Storage adapter 实现统一 read-model 边界；精确 TypeScript 合同见 [本地文献数据库查询与详情](#21-本地文献数据库查询与详情)。查询使用 Storage 的 read-only snapshot，不回放身份算法，不访问 Metadata Provider，不创建 DiscoveryRun，不执行 PDF/Parsing/Analysis，也不根据运行报告或日志推导状态。
+
+#### 2.2.1 LibraryQuery 与结果单位
+
+`LibraryQuery` 只表达本地数据库筛选条件。不同字段使用 AND，一般多值字段内部使用 OR，keywords 要求当前 metadata 同时具有全部给定完整关键词。普通 `text` 只搜索当前权威 metadata、作者/单位/标识符和当前 LiteratureContent 正文章节，不搜索来源 observation、参考文献原文、URL、provenance、运行记录、日志、失败或文件路径，也不接受 SQL/FTS 表达式。
+
+搜索结果固定以具体 `Literature` 为单位，不按 MetaLiterature 折叠。多个 Provider observations 已经通过身份规则收敛到同一 Literature，不会制造重复列表项；同一 MetaLiterature 下的预印本、作者接受稿和正式发表版仍是可独立拥有元数据、PDF 和内容的具体版本，因此可以分别出现。`meta_literature_id` 只提供版本归组信息，批量补全随后是否按 MetaLiterature 去重属于 Entry 规则，不能反向改变查询读取语义。
+
+排序、limit 和 cursor 属于 `LibrarySearchRequest`，不进入 `LibraryQuery`。因此 `QuerySelector` 只能复用稳定查询条件，在补全开始时从一致 snapshot 展开全部命中范围；它不能把某一页 UI 结果、relevance 顺序或 cursor 当成处理范围。
+
+当前 TypeScript 为 Entry 提供内部 `selectionSnapshot(LibraryQuery)` 读取，返回不可变的
+`matches`（实际命中的具体版本）与 `members`（这些版本所属 Meta 的全部当前成员）。两者由同一
+SQLite read-only transaction 形成，FTS 和其它过滤条件只决定 `matches`，不把补充的兄弟版本
+变成新的命中对象。此读取不接收 goal、不决定排除目标或候选优先级；这些决定仍属于 Entry。
+现有 `search()` 的具体 Literature 结果、排序、分页、cursor 和书目导出选择语义不变。
+
+#### 2.2.2 搜索列表投影
+
+`LiteratureSearchItem` 复用完整当前 `Literature`，并补充 metadata revision/hash、第一缺失步骤和 `needs_manual_pdf`。`Literature` 已经拥有当前完整 metadata 和派生 status，列表项不得再维护一套摘要 metadata 或独立 status。`LibrarySearchPage` 返回具体 Literature 列表、完整命中总数和可选不透明 next cursor；纯查询结果本身就是输出，不包装 Entry Report。
+
+第一缺失步骤只允许当前最早的一项：没有主 PDF 为 `primary-pdf`，已有主 PDF 但没有对齐 ParserResult 为 `parser-result`，已有两者但没有对齐 LiteratureContent 为 `literature-content`，CONTENT_READY 则为空。`needs_manual_pdf` 只来自最小自动获取耗尽事实；false 只表示没有该事实，不能承诺自动来源一定可用。
+
+#### 2.2.3 LiteratureDetail 临时聚合
+
+`LiteratureDetail` 服务“打开一篇具体 Literature”的读取操作。它在同一个一致 snapshot 中临时聚合：
+
+- 当前 Literature、所属 MetaLiterature、当前 metadata revision/hash、第一缺失步骤和人工 PDF 标记；
+- 已归属该 Literature 的全部不可变 MetadataObservations；
+- 唯一当前主 PDF、补充资产以及各自 Asset/LiteratureAsset 文件与来源事实；
+- 与当前主 PDF 对齐的当前 ParserResult；
+- 与当前 metadata/PDF/ParserResult 对齐且已整体接纳的当前 LiteratureContent；
+- 同一 MetaLiterature 下其它具体版本的列表项；
+- 当前 Literature 作为引用方和被引用方的本地权威 Reference 数量。
+
+Detail、SearchItem、SearchPage 和资产组合 view 都是不可变 query projection，不是新的领域实体或持久化主体。它们没有自己的 ID、provenance、hash、revision、数据库表或写入 API，每次查询都从 current facts 重新组装。Detail 不能成为更新 Literature、资产或内容的输入。
+
+同一个 Detail 不得拼接不同时间点的事实：status、missing step、primary PDF、ParserResult、content 和 metadata revision/hash 必须使用同一 truth table 并相互对齐。MetadataObservations 的展示顺序不表达字段 precedence；当前统一 metadata 始终以 `literature.metadata` 为准。
+
+#### 2.2.4 引用关系页面与关系详情
+
+Detail 的 `reference_count/cited_by_count` 只统计本地、至少具有一项有效 support 的权威 Reference。供应商报告的 reference/cited-by count 仍属于各自 MetadataObservation，可以查看来源差异，但不能与本地已解析关系数量混成一个字段。
+
+完整关系使用 [引用关系页面与关系详情](#214-引用关系页面与关系详情) 的独立读取：
+
+```text
+LiteratureReferenceRequest(literature_id, "references")
+  -> LiteratureReferencePage
+       -> Reference + 被引用 LiteratureSearchItem + support_count
+
+LiteratureReferenceRequest(literature_id, "cited-by")
+  -> LiteratureReferencePage
+       -> Reference + 引用方 LiteratureSearchItem + support_count
+
+ReferenceId
+  -> ReferenceDetail
+       -> source LiteratureSearchItem
+       -> target LiteratureSearchItem
+       -> 当前全部 ReferenceSupport
+```
+
+正向和反向读取始终使用同一条 `Reference`，不能建立 cited-by 边、关系摘要表或第二套计数事实。页面只展开相关 Literature 的非递归 `LiteratureSearchItem`，具体关系打开后才返回 support；普通页面不重复返回全部 support。固定排序、cursor 和 total 均从当前受支持关系与相关 Literature 的 current facts 形成，整页必须来自同一 read-only snapshot。
+
+`ReferenceDetail.supports` 只返回已经存在的精确 locator。它不复制供应商关系 observation、原文或 provenance；文本 support 所指向的原文通过引用方 Detail 中的 `MetadataObservation.reference_texts` 或 `LiteratureContent.references` 读取。Provider relation support 指向的 observation 继续由 Metadata 的独立读取拥有。关系不存在、端点已经不一致或没有任何有效 support 时不能伪造 Detail。
+
+#### 2.2.5 Artifact 读取与导出
+
+Detail 不嵌入 PDF、Parser Markdown/资源或规范 LiteratureContent Markdown 的完整字节。调用方直接从 [从详情取得 artifact](#215-从详情取得-artifact) 列出的字段取得既有 `Asset | ParserArtifactRef | ArtifactRef`，再调用 Literature 公开的 artifact read 操作；Detail 本身仍是无 I/O 的不可变 TypeScript query projection。
+
+Artifact read Port 由 Literature 消费并由 Storage 实现。当前公开读取通过 `LiteratureArtifactService.withArtifact` 在 callback 生命周期内提供受控只读内容，不返回机器绝对路径或长期文件句柄。Storage 在交出 stream 前解析规范相对引用，并复核正式对象是普通文件、byte size、SHA-256 和预期 media type；缺失、越界、大小/hash 冲突或类型不一致时 fail closed。调用方负责在 callback 范围内消费，不能依赖 ArtifactStore 的内部目录布局。
+
+面向用户文件的 artifact 导出由 Entry 使用同一 verified reader 完成：在目标文件同目录建立 owner-only staging，写完后 flush、`fsync` 并再次核对字节数/hash，再原子发布。目标已存在时默认拒绝；只有调用方明确要求覆盖才允许原子替换，不能静默覆盖或暴露半文件。目标路径只是本次外部 I/O 参数，不进入 Detail、contracts、Catalog、provenance 或 Report。
+
+读取和导出 artifact 都是 query-side 操作：不创建 DiscoveryRun，不访问 Provider，不修改文献数据库，也不形成五类处理 Report。打开或导出失败返回稳定读取/文件错误；它不改变 Literature 状态、当前 artifact 关系或下一缺失步骤。
+
+除上述主要读取外，查询 API 仍提供：MetaLiterature 全部成员和代表 Literature、各 Provider citation count observations、ProviderRelationObservation、DiscoveryRun 发现记录，以及 Entry 所需的按 MetaLiterature 聚合成员 current facts。普通运行 failure 只由本次 Report 呈现，日志只提供非权威实时诊断。
+
+### 2.3 Library 的实际读取与导出
+
+`Application.library.search()` 使用闭合 LibrarySearchRequest 和同一只读 snapshot 形成 LiteratureSearchItem。
+状态与 missing step 复用 Literature 的纯推导函数；CONTENT_READY 绑定生成时谱系，重新解析不撤销已接纳内容。
+五种排序的 cursor 保持 Python query 的 canonical JSON 语义。`library.references()` 提供正反向分页，
+`library.referenceDetail()` 返回同一 snapshot 中两端与有效 support locator；查询不生成第二套关系事实。
+Discovery 条件校验结果/cause 的具体 Literature 归属，不能用 MetaLiterature 的所有版本扩大命中。
+`library.detail()` 在同一 catalog snapshot 中组装完整 LiteratureDetail，并按不可变引用验证 structured
+content 的 canonical JSON、hash 与生成谱系；ParserResult 也重算规范 manifest hash。证据见
+[文献详情](../../../migration/evidence/runtime/literature-detail.md)。`Application.literatureArtifacts.withArtifact()`
+提供有作用域、大小预算和取消的只读字节流；Entry `exportArtifact()` 使用同一 verified reader 原子导出，默认
+拒绝已存在目标。具体边界见[artifact 读取与导出](../../../migration/evidence/runtime/literature-artifact.md)。
+当前搜索匹配范围会物化到内存，完整内容容量验收仍待实现；搜索证据见[状态与搜索](../../../migration/evidence/runtime/literature-query.md)。
+
+## 3. 独立查询应用与只读生命周期
+
+### 3.1 两种生产组装与关闭顺序
+
+维护应用由 `createApplication(home, options)` 构造。它读取普通配置、组装已选择的 Metadata/Acquisition/Parser/Agents、写入准入及业务发布者；显式维护启动可以初始化受支持 catalog 并执行对应恢复。其资源按依赖逆序关闭，某个 release 失败不能跳过其它 release。
+
+查询应用由 `createQueryApplication(home)` 构造，公开结果为：
+
+```ts
+interface QueryApplication {
+  readonly readiness: {
+    readonly status: "ready" | "not-initialized" | "unavailable";
+    readonly schema_version: number | null;
+    readonly schema_fingerprint: string | null;
+  };
+  readonly query: Pick<
+    LiteratureQueryService,
+    "search" | "detail" | "references" | "referenceDetail"
+  > | null;
+  readonly literatureArtifacts: LiteratureArtifactService | null;
+  close(): Promise<void>;
+}
+```
+
+此处是已实现接口摘录，类型从 server 包导出。`query` 为空时调用方必须先处理 readiness，不能转调 `createApplication` 补齐。catalog 不存在时不创建 home；未知 fingerprint 不升级；已有待恢复票据/Job/receipt 不在查询启动时被扫描执行。SQLite 以 read-only/query-only 打开，允许其 WAL/SHM 协调文件，但不产生业务写入。一次读取见已提交事实；分页之间可以看到后来显式维护的提交，不假称全旅程 snapshot。
+
+查询关闭先停止和释放文件读者，再关闭 SQLite worker；并发、重复和重入 close 共用同一个 Promise，全部 release 被尝试后统一报告错误。CLI 对操作与清理同时失败保留两项原因，对用户只输出稳定错误码。独立 Web 先停止接收 HTTP/中断响应流，再关闭 QueryApplication。客户端断开不获得启动维护的权限。
+
+查询与维护共同读取配置指定的同一个 catalog/artifact root，分离的是能力与副作用；既不复制库，也不引入新的同步总线。
+
+### 3.2 独立查询操作的实际组装
+
+#### 3.2.1 公开面与能力限制
+
+`createQueryApplication(home)` 从 server 包导出，供 CLI、外部科研 Agent 和 Web adapter 使用。它公开 readiness、query、literatureArtifacts、close；不包含 discovery、completion、Jobs、Parser、Agents 或 Browser。普通配置只用于定位同一 catalog 和 artifact root，不加载凭据或构造外部能力。
+
+| 入口        | 调用                                                      | 成功结果                 |
+| ----------- | --------------------------------------------------------- | ------------------------ |
+| 库内搜索    | `query.search(LibrarySearchRequest)`                      | LibrarySearchPage        |
+| 详情        | `query.detail(literatureId)`                              | LiteratureDetail         |
+| 正/反向引用 | `query.references(LiteratureReferenceRequest)`            | LiteratureReferencePage  |
+| 引用证据    | `query.referenceDetail(referenceId)`                      | ReferenceDetail          |
+| 已有文件    | `literatureArtifacts.withArtifact(ref, consume, options)` | 作用域内验证后的只读字节 |
+
+`ready` 表示受支持 v1/v2 schema 可被读取，不是全库健康认证。缺库/无 schema 返回 not-initialized，配置/存储/未知 schema 返回 unavailable；已打开库的索引或对象错误在实际读取时失败。存在未恢复的 Job、receipt 或回收票据不自动改变它们，也不阻止其它完整已提交资料读取。
+
+CLI `literature search/show/references/cited-by` 与 `export metadata/pdf/content` 使用此图。缺库时退出码 3、code=query-not-initialized，不再隐式建库；已初始化库上的原结果与导出格式保持。导出副本是用户明确请求的文件副作用，不是扩库。
+
+#### 3.2.2 HTTP 与生命周期
+
+`startQueryOnlyWorkbench({ home, port? })` 组装独立阅读页，默认加载安装包中的 query.html/query.js。GET `/api/v1/query/status` 返回 readiness；POST `/api/v1/query/search|read|references|reference|artifact` 使用 `{ protocol_version: 1, request }`。未知输入被拒绝；缺 PDF/内容返回 gap，传输或索引错误不得伪装成空结果。
+
+服务仅监听 loopback并检查 Host/Origin。详情请求只接受稳定 ID，artifact只接受ID与已定义kind，不能从远程参数读取任意本机路径。关闭先停止新HTTP请求/结束响应流，再释放QueryApplication；CLI的operation/cleanup同时失败保留两项cause，stdout不输出原始异常或secret。
+
+### 3.3 独立阅读与共享产品服务
+
+`startQueryOnlyWorkbench` 使用独立 `createQueryApplication`，仅打开支持的已有 Catalog 与 artifact reader；它不创建维护 Application，不恢复 Jobs，也不启动 Browser。`query.html/query.ts` 复用 Library 展示，通过 `/api/v1/query/*` 读取；缺库与损坏分别呈现，刷新、搜索和下载都不会隐式扩库。
+
+混合 live 工作台仍持有完整 Application，不能把它的隔离程度等同于 query-only。配置页调用同一 TypeScript Configuration owner，保存 revision 与运行 snapshot 分别反馈，新的外部请求重新授权凭据。Web 不维护第二份来源默认表或业务状态。
+
+完整连续获取的观察与自然语言指导还需把工作台接到同一生产文章流程。控制 epoch、页面观察 revision、文章 generation 分别校验，接管后旧模型结果失效；人工候选仍经过 Acquisition 的同一字节/身份/发布门。详细子协议与未决生命周期见 Human Interaction，不能从页面按钮存在推导这些旅程已验收。
+
+## 4. 知识检索与上下文组装
+
+明确 Literature 或 Artifact 范围的知识覆盖在固定 generation 内逐 ID 检查，并沿用用途、问题和选择过滤；部分 ID 有结果时，其余 ID 仍以 `knowledge-missing` 精确报告。已有索引但查询词零匹配不等于知识缺失。坏源扩展、缺口、候选位置和最终 Bundle 字节数作为一次分页提案核验，装不下时保持原位置供下页重试；完整项和紧凑引用也遵守同一字节及缺口数量上限。文档闭包在读取首个文件字节前，按已核验的 PDF、Markdown、结构和资源声明大小预留验证预算。材料读取与知识来源读取共享请求级累计限额，但两位读取 owner 各自验证同一资产时会保守重复计量。页面切换查询或离开时会取消在途固定范围续读请求。
+
+### 4.1 子能力和数据所有权
+
+| 子能力         | 职责                                 | 输出                     |
+| -------------- | ------------------------------------ | ------------------------ |
+| 查询规范化     | 验证词句、范围、类型、版本策略和预算 | 内部类型化 QueryRequest  |
+| 候选检索       | 按允许字段访问只读索引/投影          | 带来源类别与版本的命中   |
+| 版本与重复处理 | 对具体版本分组、去除重复片段         | 可说明的排序与分组       |
+| 上下文组装     | 选择片段、预算分配、附邻近上下文     | ContextBundle            |
+| 证据展开       | 调用 Document/Evidence 精确读取      | 原文、资源、引用解析结果 |
+| 索引维护       | 显式维护生成投影、记录覆盖           | 可替换索引 generation    |
+
+索引维护属于单独写入用例，不能注入查询对象。Q 拥有投影与检索规则，不拥有元数据、材料或知识产物；被读事实的有效性仍由原 owner 判断。索引损坏不会使源文献变成“不存在”。
+
+应用组装只向读取服务注入 Literature、Document、Knowledge 和 artifact read ports。Metadata、Acquisition、Parser、AgentRuntime、Job-create 和 schema migration 均不属于此对象图。依赖隔离要由生产入口证明，不能只靠函数内注释。
+
+### 4.2 查询合同
+
+#### 4.2.1 范围和内容种类
+
+```ts
+interface KnowledgeQuery {
+  readonly query: string;
+  readonly scope: QueryScope;
+  readonly kinds: readonly ("metadata" | "document" | "knowledge")[];
+  readonly version_policy: "default" | "explicit";
+  readonly budget: ContextBudget;
+  readonly continuation: string | null;
+}
+type QueryScope =
+  | { kind: "library" }
+  | { kind: "literatures"; literature_ids: readonly string[] }
+  | { kind: "manifest"; manifest: InputManifest };
+interface ContextBudget {
+  readonly max_items: number;
+  readonly max_bytes: number;
+  readonly token_limit?: { tokenizer: string; max_tokens: number };
+}
+```
+
+`library` 指现有逻辑文献库，绝不表示外部互联网。显式 manifest 固定版本；default 在本次读取开始时解析为具体引用后固定。空范围、无效 ID、未知内容类型、超限预算和不支持 tokenizer 分别拒绝，不将无效请求扩大为全库搜索。
+
+源材料的身份按 LiteratureId，而不是标题模糊匹配。用户过滤到某个预印本时，不能自动返回正式版正文充数；允许相关版本展示时必须明确标记不同版本和关系。
+
+#### 4.2.2 结果合同
+
+```ts
+interface ContextBundle {
+  readonly items: readonly ContextItem[];
+  readonly coverage: QueryCoverage;
+  readonly gaps: readonly Gap[];
+  readonly usage: {
+    bytes: number;
+    items: number;
+    tokens: number | null;
+    tokenizer: string | null;
+  };
+  readonly truncated: boolean;
+  readonly continuation: string | null;
+}
+interface ContextItem {
+  readonly kind: "metadata" | "source-text" | "generated-knowledge";
+  readonly literature_id: string;
+  readonly reference: MaterialRef | DocumentRef | KnowledgeArtifactRef;
+  readonly text: string;
+  readonly evidence: readonly EvidenceRef[];
+  readonly rank: number;
+  readonly score: number | null;
+}
+```
+
+`reference` 按 kind 进一步采用判别式 parser，示意 union 不意味着任意组合都合法。元数据命中可以没有 PDF；知识命中必须能追到其输入和证据。压缩产物与原文不可共用一个含义模糊的 `content` 标签。
+
+QueryCoverage 表达已搜索的数据类型、索引 generation、可见范围、排除/失败部分和截断；不等于穷尽了所有相关研究。score 是具体算法的相关性指标，不能标成科学置信度或跨算法通用概率。
+
+### 4.3 索引设计与读取一致性
+
+当前 `literature_search_fts` 只索引允许的 current metadata 和旧内容正文，具体字段见 Literature/Storage。新文档或知识索引需要明确独立投影，不能悄悄把来源 observation、日志、参考文献原文和内部路径加入既有搜索语义。
+
+建议每条新索引记录绑定：源 owner、精确对象/版本 ID、内容 hash、分段规则版本、索引 schema/generation。正文仍从受控 artifact reader 取得，索引不成为唯一内容副本。
+
+查询先取得索引命中，再验证源版本仍可读。遇到陈旧或缺失项可返回其缺口并继续其它命中，但 coverage 必须保留事实；不能因为过滤掉失败项就声称全部结果完整。读取不到源对象时不启动重建。
+
+索引发布由维护入口完成：固定输入范围 → 构建新 generation → 校验覆盖 → 原子切换可读指针。失败保留旧 generation。更新期间 reader 固定自身 generation；继续 cursor 绑定查询规范、范围和 generation，失效时返回需重新查询，不偷偷换页序。
+
+第一版优先验证 SQLite FTS 与显式投影是否满足场景。向量、混合排序、重排与单独索引服务要依据代表性数据和问题评估后选择；架构不预定向量数据库。若未来引入付费模型重排，也不能把它隐藏在目前承诺无模型副作用的查询里，必须另行定义能力与成本合同。
+
+### 4.4 排序、去重与上下文组装
+
+#### 4.4.1 候选检索与稳定顺序
+
+查询语法在 Q/Literature 边界解析，用户文本不直接成为 SQL 或裸 FTS 表达式。过滤条件和搜索范围在候选生成阶段执行，不能先检索全库再在前端隐藏越界项。
+
+排序使用明确的主排序和稳定 tie-breaker，如具体文献/产物/片段 ID。默认结果中可优先展示同一论文的一份适合用途的知识产物，但须保留展开其它版本/用途的入口；不能将“默认展示”变成删除其它结果。
+
+#### 4.4.2 重复与相关版本
+
+相同文本片段可在一次上下文中去重，但保留所有实际来源关联。预印本、正式版、综述转述与原始实验的关系不同；多个重复版本不能被总结成多个独立证据支持。
+
+同一文献有多个问题分析产物时，用途不同不应只按 PDF hash 去重。依据论文 ID 去重也会吞掉一文多项实验；Q 不承担领域记录去重。
+
+#### 4.4.3 预算分配
+
+上下文预算先留出来源标识、证据和缺口的开销，再选择正文片段。每次加入片段后核算实际 UTF-8 字节及可用 tokenizer 的 token；不使用“约四字符一 token”伪装精确计量。
+
+尽量按章节/段落/表格上下文边界裁切，保留否定、单位、脚注和条件。预算容不下关联上下文时，返回可展开引用和明确截断，不能只留下数值。资源字节通过单独受控读取交付，不默认把整个 PDF/base64 塞进 ContextBundle。
+
+Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要求新的问题回答或综合，须明确调用 Analysis 加工已有输入；该请求同样没有自动扩库权限。
+
+### 4.5 缺口与下一步
+
+| 情况           | 结果应说明                     | 用户另行可做的操作      |
+| -------------- | ------------------------------ | ----------------------- |
+| 未初始化库     | not-initialized                | 明确初始化/维护         |
+| 正常零命中     | 实际搜索范围与类型             | 改查询，或明确外部发现  |
+| 有元数据无 PDF | material-missing               | 明确 acquire/ingest     |
+| 有 PDF 无文档  | representation-missing         | 明确 parse              |
+| 无所需用途分析 | knowledge-missing              | 明确 analyze/synthesize |
+| 索引缺失/陈旧  | index-unavailable/stale 与覆盖 | 明确重建索引            |
+| 证据失效/损坏  | 原引用和稳定原因               | 人工核对/维护恢复       |
+
+上述类别说明语义，不强行改名现有 CLI 错误码。Gap 可以携带展示建议，但不得包含自动运行 callback、排队 Job 或“已开始准备”假状态。查询后点击维护入口是新请求，必须重新固定目标和副作用。
+
+“未找到某实验条件”只意味着该查询与覆盖范围没有命中，不能自动生成“原文未报告”领域记录。下游提取器应依据完整读取和自己的缺失规则判断。
+
+### 4.6 并发、取消与性能边界
+
+一次读取内部使用已提交 snapshot 和固定 artifact 引用，不混合两个 current 版本。跨页是否固定数据库 snapshot 取决于协议；现有 Library 分页只保证单页一致，新协议若固定索引 generation也不能假称底层业务永不变化。
+
+取消停止继续扫描和资源展开；已交付的读取片段无需回滚。读失败与数据库不可用不能当成零结果。重复查询通常不要求 durable 幂等键；响应变化可来自新的显式维护提交，结果应带版本和覆盖以供识别。
+
+数据规模未知时不宣称延迟 SLA。实现需有候选扫描上限、有界片段读取和可解释截断；性能评估区分 FTS 候选时间、源内容验证、资源读取与组装成本，避免每次查询读全库所有 artifact。
+
+### 4.7 当前入口与目标映射
+
+当前 `createQueryApplication(home)` 返回本地只读用例、artifact reader、readiness 和可重复关闭的生命周期。CLI 查询与 `startQueryOnlyWorkbench` 消费它；混合工作台仍可持有完整 Application，不能混为同一个隔离证明。
+
+`/api/v1/query/status` 与 search/read/references/reference/artifact 服务于 Library 合同；`/api/v1/query/context` 服务于已实现的 `MaterialContextRequest`，不接受本节仍属目标的 KnowledgeQuery/manifest/knowledge 类型。旧 `LiteratureSelector.kind = "query"` 仅是明确维护任务的目标选择器，不是读取时创建任务的许可。
+
+新增上下文能力应扩展只读对象图与版本化协议，不从 QueryApplication 取完整 Application 再“约定不用 writer”。公共包、HTTP、CLI 和人类页必须共用事实 owner，不能分别实现一套搜索结果解释。
+
+### 4.9 M07-T01/T02 已实现的材料 Context 切片
+
+`packages/contracts/src/retrieval-context.ts` 定义实际 `MaterialContextRequest`/`MaterialContextBundle`。请求固定非空普通文本、`library` 或非空 Literature ID 集、`metadata | document` 类型、默认表示或显式 `{ literature_id, document_version_id, representation_sha256 }` 集，以及最多 20 项、1024–262144 JSON UTF-8 字节的预算。当前没有 tokenizer；`token_limit` 必须为 `null`，否则明确拒绝。它不包含未来的 manifest、KnowledgeArtifact 或向量检索。
+
+Catalog v4 在 v3 完整 manifest 后添加独立 `retrieval_*` 投影：来源 revision 触发器、构建/就绪 generation、原子 active 指针、精确版本和片段引用、FTS5、迁移 receipt。v1/v2/v3 fingerprint 与当前 Library FTS 不变。显式 `maintenance rebuild-index` 或受同源 CSRF 保护的 `/api/v1/maintenance/rebuild-index` 先从当前元数据和全部已发布 DocumentVersion 读/验证源，逐单元分批暂存于系统临时目录，再以有界事务写新 generation、校验计数/FTS、按 source revision CAS 发布；失败保留旧 active generation。健康重建保留旧 ready generation；若仅可重建的检索投影损坏，显式重建在源 schema 与事实校验通过后，先暂存新 FTS 文本，再于单一事务中重建 FTS、切换 active 并移除旧坏 generation。失败或取消不切换 active；源事实损坏则拒绝修复。修复范围是 schema 完整时的检索内容、FTS 正文或倒排损坏；已知检索 DDL 缺失或篡改时 Context 报损坏，业务 writer 拒绝进入，只读 Library/Document 仍可校验源 schema 并读取原材料。普通 Context 查询始终完整校验检索投影。默认检索只取与当前主 PDF 对齐的默认表示；显式版本可读取旧表示。Document 文本按段落/整表格单元索引，查询命中后仍从固定版本受控 reader 复核 Markdown/结构/hash，再返回原文与可解析证据。元数据命中无 PDF、已有 PDF 无表示会分别给出缺口。
+
+Context 使用 `queryTerms` 的 Unicode casefold 与 FTS5 候选匹配；类型、Literature 范围及版本在候选 SQL 阶段约束。一次最多接纳 4097 原始 FTS 候选并标记 `candidate-limit`；命中单元按 `weighted-term-frequency-v1` 排序：仅统计固定 generation 的 title/body 精确词频，title 权重 4、body 权重 1，负值优先，同分按 kind、Literature ID、版本 ID 和片段序号。`score_rule` 随 Bundle 返回并绑定 cursor，score 不是科学置信度。cursor 绑定请求、generation、source revision 与位置；source revision 改变返回 `index-stale`，不会把新旧结果拼页。文档类查询在整个请求范围内检查缺 PDF 和默认表示；library 范围只汇总缺口类型，不枚举全部 ID；显式版本必须与 Literature ID、版本 ID、表示 hash 同时匹配。索引缺失/损坏分别返回 `index-unavailable`/`index-corrupt`，无隐式迁移、重建、解析或模型调用。`usage.bytes` 精确等于最终 Bundle JSON 的 UTF-8 字节数，包含来源、证据、缺口、用量和继续位置；不够容纳完整片段时返回固定范围引用与 `context-too-large`，由 DocumentRead 的 `range` 选择器继续读取。极小预算若连压缩后的首项引用与缺口都容不下，则拒绝请求并返回 `context-budget-invalid`，不能跳过尚未交付的命中；已交付项之后预算耗尽时，继续位置停在最后一个已交付项。
+
+长期 SQLite 读取连接在其它连接提交后可保留旧 FTS5 校验视图：Node 22.19.0 的合成双连接复现中，writer 与新 reader 的 `integrity_check=ok`，旧 reader 却报告 malformed inverted index。v4 worker 与只读 RetrievalStorage 因此仅在命令边界观察 `PRAGMA data_version` 变化时重开连接，并重复原有只读、schema identity/DDL 准入；不跳过损坏检查。`docs/notes/sqlite-fts5-long-reader.md` 保存最小复现与实际结果。当前无向量/模型重排，也不承诺全库语义召回或查询延迟 SLA。
+
+### 4.10 M07-T03 知识 Context 版本合同
+
+旧 `MaterialContextRequest`、`MaterialContextBundle` 和 `/api/v1/query/context` 固定为材料协议 v1，仍只接受 `metadata | document`，其预算、排序、cursor 和旧索引维护回执不变。知识查询另用 `KnowledgeContextRequest.schema_version=2` 和 `/api/v1/query/knowledge-context`；新协议一次请求可以同时选 `metadata`、`document`、`knowledge`，服务端在同一预算内按统一的 `weighted-term-frequency-v1` 词频（title 权重 4、body 权重 1）和稳定的种类、Literature ID、版本/产物 ID、单元序号排序。分数不是科学置信度。未选材料种类时只依赖知识索引；只选材料时也可使用旧材料协议。
+
+v2 请求固定普通文本查询、`library` / 非空 Literature ID 集 / 精确知识 Artifact ID 集范围、非空且去重的内容种类、文档 `default` 或精确版本三元组、知识用途过滤（`overview | detailed | question | synthesis`）、可选完整问题文本和知识选择方式（`all` / `defaults` / 精确 Artifact ID 集）、1–20 项与 1024–262144 最终 JSON UTF-8 字节预算、不透明继续位置。当前没有 tokenizer，非空 token 限额在执行入口明确拒绝。`defaults` 仅适用单篇知识；集合综合没有默认关系，须用 `all` 或精确产物。问题按 trim 后原文精确匹配，不把不同问题的产物折叠；非空问题只可与 `question | synthesis` 用途一起请求。Artifact 范围只允许知识种类，并与知识选择的精确列表及顺序一致，文档版本必须为 `default`。Literature 范围采用保守闭包规则：单篇须属于指定 Literature；综合的**所有实际和声明的源 Literature** 都须在集合内，来源不明则不纳入，不能用综合的一个输入冒充整项归属。`library` 只指现有本地库。目标 §4.2 的 manifest scope 尚未进入本版 wire；固定 Document 三元组与 Artifact ID 范围是首版精确输入机制。
+
+实际 `packages/contracts/src/knowledge-context.ts` 的请求字段为 `{schema_version:2,query,scope,kinds,versions,knowledge,budget,continuation}`，均必需；`scope` 是 `{kind:'library'}`、`{kind:'literatures',literature_ids}` 或 `{kind:'artifacts',artifact_ids}`。`versions` 沿用材料 v1 的 `default` / `explicit.documents`；无知识种类时 `knowledge:null`，有知识种类时 `{purposes,question,selection,artifact_ids}`，`all/defaults` 的 ID 列表为空，`explicit` 必须有 1–1000 个不同 ID。文献范围 1–1000 个不同 ID，查询 UTF-8 不超过 512 字节；问题与 M06 共用 NFC+trim、4096 UTF-8 字节规范，响应问题必须已经规范化。v2 cursor 最多 2048 个 URL 安全字符，独立于材料 v1 的 1024 限制。未知字段拒绝。`budget.token_limit` 保留与 v1 一致的语法解析，但当前无 tokenizer，执行时拒绝非 `null`。
+
+v2 响应字段为 `{schema_version:2,score_rule,items,coverage,generations,gaps,usage,truncated,continuation}`。item 是带判别式的 `metadata`、`source-text` 或 `generated-knowledge`。前两类保留 v1 的精确材料/文档引用和 EvidenceRef；知识项的 `reference` 固定 Artifact ID、content SHA-256、manifest SHA-256、statement ID/完整 canonical statement SHA-256，并带用途、问题、scope kind、原始来源 Literature ID、独立 Literature ID、`source_state`、`source_layers`、压缩深度、coverage status、完整 statement（含逐断言 evidence）、rank、score 和可为空的 `context-too-large`。单条 disagreement 断言可从完整合法综合中分页返回；完整内容仍要求同一冲突组至少两条。来源闭包最多 1024 个不同且排序的 Literature ID，最终仍受 JSON 字节预算约束。知识是模型生成内容，即使引用文档证据也不标为原文。`coverage_status` 是发布时不可变的覆盖结论；`source_state` 与 `source_layers` 只描述目前可读的已纳入来源，逐层保留 `verified | source-only | missing`、Document 或 Knowledge、压缩层级和上游 Artifact ID。历史排除的输入不伪装成当前缺源，其细目仍从固定 Artifact 的 coverage reader 取得；本 v2 摘要用 `coverage-partial` 缺口标明历史覆盖不足。发布时仅 degraded 的 partial 可以没有当前 missing；完整发布后原件缺失也可以变成 source-only。`source-only` 只说明仍可读已存来源，不声称原 PDF/Document 已验证。历史排除输入的当前层保持 `missing`；已纳入且无文档的输入只有在原材料再次验证成功时才给 `source-only`。单篇读取同样通过正式固定产物 reader/来源闭包，缺失、损坏与 source-only 不合并为一个状态。`independent_literature_ids` 由**当前断言的 evidence** 逐条追溯，不能把整份综合的来源数复制给每条断言；多个问题产物、重解析版本或一篇论文的多个摘要，不增加独立科研支持数。
+
+coverage 同时报告材料与知识各自的 generation/source revision、选中类型、候选上限和缺项。知识 `knowledge-missing` 只说明指定范围/用途/问题/选择下没有已发布且已被显式索引纳入的产物；已有索引产物但当前词不匹配时不报此缺口。该判断使用固定 projection 的存在性查询，不扫描产物字节；索引尚未建立、旧 generation、陈旧和损坏分别报告，不能说未分析。混合请求中单支索引不可用、损坏或陈旧时，保留另一支已验证的结果，整体 coverage 为 `partial`，并给失败支 `material-index-*` 或 `knowledge-index-*` 缺口；失败支的 generation 为空，也不能携带该支 item，不把它误写为无产物。当前 `source-only` 用 `source-only` 缺口，发布时 partial 用 `coverage-partial` 缺口，各自独立；不能以 complete 和空 gaps 宣称完整，也不能把历史覆盖不足说成当前 `source-missing`/`source-corrupt`。命中后通过固定 ID 的正式 Knowledge/Synthesis reader 验证内容字节、manifest、精确依赖和证据；同一请求的知识命中共享一个有界读取会话与上游缓存，材料候选先固定 generation、再仅展开入选项，材料与知识验证字节共用 64 MiB 上限。单个来源缺失/损坏给带 Artifact ID 的 `source-missing`/`source-corrupt` 缺口，并继续其它命中；缺口页最多 32 项，超出时用继续位置分页。只验证入选的有界项，不读全库所有产物。cursor 绑定规范请求、实际参与的 generation/revision 和最后已交付项；任一参与索引变化均拒绝旧 cursor。最终 JSON（包括来源、证据、缺口、usage、cursor）按 UTF-8 实测；不足以容纳首项完整内容时可交付无正文的固定引用及 `context-too-large`，连引用都放不下则拒绝，不能推进游标跳过未交付项。取消、缺源或坏源不触发维护、模型、外网、扩库、解析或生成。
+
+知识投影独立于 v4 材料投影。Catalog v8 在冻结的 v7 完整 manifest 后 append `knowledge_retrieval_*` revision/generation/entry/FTS/active/迁移回执及参加投影或筛选的源表触发器；不改写 v1–v7 DDL/fingerprint，也不让知识发布使旧材料 cursor 无故 stale。新知识 generation 按 Artifact/statement 的精确 ID、content hash、用途/问题、source closure 和索引规则版本绑定；派生 FTS 正文包括断言文本、条件及数量的值/单位/比较基准，按 Unicode casefold 规范化。单条派生标题最多 8192 UTF-8 字节、正文最多 65536 UTF-8 字节，批次最多 1 MiB；超限拒绝该次重建，不截断已经发布的来源。FTS 只提供候选，原文仍从正式 reader 取。知识索引维护是独立显式操作，不改变已有 `rebuild-index` 及其 v1 回执。维护分批构建、检查源 revision，以 CAS 原子切换知识 active；正常发布保留旧 ready generation，损坏修复可在事务内替换坏投影和旧 generation，失败或取消保留原 active，源事实不回滚。索引检查在单个 SQLite snapshot 中验证 DDL、revision、计数/hash 和 active；缓存只在相同 data version 与无本连接写入时复用。材料与知识维护可分别成功，分别报告，查询不会隐式重建。v7→v8 只在系统临时目录的合成 catalog 上显式检查、同目录可恢复备份、事务迁移并复核；旧 reader 仅按各自声明的已支持版本读取，未知 v8 不被旧程序悄悄接受。v8 的 Library/Document/Knowledge/Synthesis reader 和材料 Context 仍可读已提交事实；知识投影损坏时 source-only 检查可读取源，知识 Context 报 index-corrupt，业务 writer 严格拒绝未知或被篡改的 DDL。
+
+### 4.8 示例与验证
+
+调用方询问“库内哪些文献讨论催化剂在低温下的稳定性”，选择 metadata/document/knowledge 并给定预算。结果可以同时包含原文片段和已有概览，逐项标注类别；缺 PDF 的论文仍可作为元数据命中，但缺口明确可见。零命中时操作结束，不启动任何 Provider。
+
+调用方进一步展开某个断言时，Q 转交 EvidenceRef 给 Document/Evidence；若旧表示被合法失效，返回该状态，不替换成新的近似段落。用户选择“分析这三篇”后才进入独立 Analysis 请求，并固定三篇实际版本。
+
+验证分两层：行为测试证明无隐式写入/外联、范围隔离、预算准确、重复版本不夸大、截断与取消明确；检索质量评估使用版本固定的合成或获准语料、问题与相关证据标注，记录召回/排序/关键条件保留。测试通过数不能代替召回率，模型自评也不能证明检索完整。

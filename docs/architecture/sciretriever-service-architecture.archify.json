@@ -1,0 +1,416 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "SciRetriever 服务总体架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/LuckRookie/SciRetriever",
+      "revision": "7ad5fb794aeece8af8edec2b7c424b3220ba966d"
+    },
+    "viewBox": [1390, 760],
+    "views": [
+      {
+        "id": "main-path",
+        "label": "主访问路径",
+        "focus": ["users", "surfaces", "application", "literature", "storage"],
+        "note": "从用户入口进入应用编排，读取或提交统一文献事实。"
+      },
+      {
+        "id": "discovery-path",
+        "label": "发现与元数据",
+        "focus": [
+          "application",
+          "metadata",
+          "provider_apis",
+          "literature",
+          "storage"
+        ],
+        "note": "多来源搜索和引用扩展先形成中性元数据，再由 Literature 保守接纳。"
+      },
+      {
+        "id": "completion-path",
+        "label": "全文补全路径",
+        "focus": [
+          "application",
+          "content_pipeline",
+          "browser_engine",
+          "mineru",
+          "llm",
+          "literature",
+          "storage"
+        ],
+        "note": "PDF 获取、解析和分析逐步提交有效事实，后续失败不撤销已确认结果。"
+      },
+      {
+        "id": "runtime-boundary",
+        "label": "运行与外部边界",
+        "focus": [
+          "runtime_foundation",
+          "application",
+          "metadata",
+          "content_pipeline",
+          "provider_apis",
+          "browser_engine",
+          "mineru",
+          "llm"
+        ],
+        "note": "凭据、网络策略和日志由共享基础设施约束；外部系统不拥有产品业务状态。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "users",
+      "type": "external",
+      "label": "用户与下游工具",
+      "sublabel": "研究者 · 自动化脚本",
+      "pos": [20, 300],
+      "size": [160, 76],
+      "sources": [
+        { "path": "docs/architecture/requirements.md", "label": "产品能力" }
+      ]
+    },
+    {
+      "id": "surfaces",
+      "type": "frontend",
+      "label": "交互入口",
+      "sublabel": "Workbench · CLI · SDK",
+      "pos": [210, 300],
+      "size": [190, 76],
+      "sources": [
+        { "path": "apps/web/src/main.ts", "label": "Web Workbench" },
+        { "path": "apps/server/src/cli/main.ts", "label": "CLI" },
+        { "path": "apps/server/src/index.ts", "label": "SDK exports" }
+      ]
+    },
+    {
+      "id": "application",
+      "type": "backend",
+      "label": "Entry 与 Application",
+      "sublabel": "边界解析 · 目标冻结 · 编排",
+      "pos": [425, 300],
+      "size": [205, 76],
+      "sources": [
+        {
+          "path": "apps/server/src/bootstrap/application.ts",
+          "label": "生产组装"
+        },
+        {
+          "path": "apps/server/src/application/jobs/service.ts",
+          "label": "持久任务"
+        },
+        { "path": "apps/server/src/entry/discovery.ts", "label": "发现编排" }
+      ]
+    },
+    {
+      "id": "metadata",
+      "type": "backend",
+      "label": "Metadata",
+      "sublabel": "多来源搜索 · 查找 · 引用扩展",
+      "pos": [685, 88],
+      "size": [210, 78],
+      "sources": [
+        {
+          "path": "apps/server/src/metadata/service.ts",
+          "label": "元数据服务"
+        },
+        {
+          "path": "apps/server/src/metadata/registry.ts",
+          "label": "Provider registry"
+        },
+        { "path": "apps/server/src/metadata/ports.ts", "label": "中性 Ports" }
+      ]
+    },
+    {
+      "id": "literature",
+      "type": "backend",
+      "label": "Literature",
+      "sublabel": "身份 · 当前事实 · 查询 · 接纳",
+      "pos": [685, 299],
+      "size": [210, 78],
+      "sources": [
+        {
+          "path": "apps/server/src/literature/identity.ts",
+          "label": "身份收敛"
+        },
+        { "path": "apps/server/src/literature/state.ts", "label": "文献状态" },
+        { "path": "apps/server/src/literature/query.ts", "label": "一致查询" }
+      ]
+    },
+    {
+      "id": "content_pipeline",
+      "type": "backend",
+      "label": "内容补全流水线",
+      "sublabel": "Acquisition → Parsing → Analysis",
+      "pos": [685, 520],
+      "size": [210, 86],
+      "sources": [
+        {
+          "path": "apps/server/src/acquisition/execution-loop.ts",
+          "label": "PDF 获取"
+        },
+        {
+          "path": "apps/server/src/parsing/service.ts",
+          "label": "Parser-neutral 解析"
+        },
+        { "path": "apps/server/src/analysis/service.ts", "label": "两阶段分析" }
+      ]
+    },
+    {
+      "id": "runtime_foundation",
+      "type": "security",
+      "label": "共享运行基础设施",
+      "sublabel": "配置 · 凭据 · 网络 · 日志",
+      "pos": [425, 520],
+      "size": [205, 86],
+      "sources": [
+        {
+          "path": "apps/server/src/configuration/owner.ts",
+          "label": "配置所有者"
+        },
+        { "path": "apps/server/src/network/policy.ts", "label": "网络准入" },
+        { "path": "apps/server/src/logging/index.ts", "label": "脱敏日志" }
+      ]
+    },
+    {
+      "id": "storage",
+      "type": "database",
+      "label": "统一逻辑文献数据库",
+      "sublabel": "SQLite catalog + immutable file store",
+      "pos": [925, 299],
+      "size": [235, 78],
+      "tag": "单一事实边界",
+      "sources": [
+        {
+          "path": "apps/server/src/storage/sqlite/repositories.ts",
+          "label": "Catalog repositories"
+        },
+        {
+          "path": "apps/server/src/storage/files/store.ts",
+          "label": "文件字节"
+        },
+        {
+          "path": "apps/server/src/storage/write-admission.ts",
+          "label": "写入准入"
+        }
+      ]
+    },
+    {
+      "id": "provider_apis",
+      "type": "external",
+      "label": "文献 Provider APIs",
+      "sublabel": "Crossref · OpenAlex · arXiv 等",
+      "pos": [955, 88],
+      "size": [220, 78],
+      "sources": [
+        {
+          "path": "apps/server/src/metadata/providers.ts",
+          "label": "Provider adapters"
+        },
+        {
+          "path": "apps/server/src/acquisition/sources/public.ts",
+          "label": "公开 PDF 来源"
+        }
+      ]
+    },
+    {
+      "id": "browser_engine",
+      "type": "external",
+      "label": "受控浏览器引擎",
+      "sublabel": "Playwright · CloakBrowser",
+      "pos": [955, 524],
+      "size": [220, 78],
+      "sources": [
+        { "path": "apps/server/src/browser/host.ts", "label": "BrowserHost" },
+        { "path": "apps/server/src/browser/control.ts", "label": "受控动作" },
+        { "path": "apps/server/src/browser/transfer.ts", "label": "字节捕获" }
+      ]
+    },
+    {
+      "id": "mineru",
+      "type": "external",
+      "label": "MinerU Parser Service",
+      "sublabel": "operator-managed parser",
+      "pos": [1190, 410],
+      "size": [180, 82],
+      "tag": "HTTP adapter",
+      "sources": [
+        {
+          "path": "apps/server/src/parsing/backends/mineru/index.ts",
+          "label": "MinerU backend"
+        },
+        {
+          "path": "apps/server/src/parsing/backends/mineru/http.ts",
+          "label": "HTTP 协议"
+        }
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "external",
+      "label": "LLM Services",
+      "sublabel": "OpenAI · Anthropic",
+      "pos": [1190, 570],
+      "size": [180, 82],
+      "sources": [
+        { "path": "apps/server/src/agents/runtime.ts", "label": "模型绑定" },
+        {
+          "path": "apps/server/src/agents/openai.ts",
+          "label": "OpenAI adapter"
+        },
+        {
+          "path": "apps/server/src/agents/anthropic.ts",
+          "label": "Anthropic adapter"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "SciRetriever TypeScript 模块化单体",
+      "wraps": [
+        "surfaces",
+        "application",
+        "metadata",
+        "literature",
+        "content_pipeline",
+        "runtime_foundation",
+        "storage"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "security-group",
+      "label": "外部协议与进程边界",
+      "wraps": ["provider_apis", "browser_engine", "mineru", "llm"],
+      "pad": 20
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-entry",
+      "from": "users",
+      "to": "surfaces",
+      "label": "查询 · 命令 · 人工接管",
+      "variant": "emphasis",
+      "labelAt": [195, 390]
+    },
+    {
+      "id": "surface-app",
+      "from": "surfaces",
+      "to": "application",
+      "label": "typed commands / HTTP",
+      "variant": "emphasis",
+      "labelAt": [418, 390]
+    },
+    {
+      "id": "app-literature",
+      "from": "application",
+      "to": "literature",
+      "label": "目标范围与当前事实",
+      "variant": "emphasis",
+      "route": "straight",
+      "labelAt": [600, 392]
+    },
+    {
+      "id": "literature-storage",
+      "from": "literature",
+      "to": "storage",
+      "label": "原子写入 · 一致读取",
+      "variant": "emphasis",
+      "labelAt": [910, 392]
+    },
+    {
+      "id": "app-metadata",
+      "from": "application",
+      "to": "metadata",
+      "label": "发现 / 引用扩展"
+    },
+    {
+      "id": "metadata-provider",
+      "from": "metadata",
+      "to": "provider_apis",
+      "label": "中性 Port → vendor adapter",
+      "labelAt": [925, 180]
+    },
+    {
+      "id": "metadata-literature",
+      "from": "metadata",
+      "to": "literature",
+      "label": "observation + provenance",
+      "labelAt": [790, 180]
+    },
+    {
+      "id": "app-pipeline",
+      "from": "application",
+      "to": "content_pipeline",
+      "label": "缺失步骤与候选范围"
+    },
+    {
+      "id": "pipeline-literature",
+      "from": "content_pipeline",
+      "to": "literature",
+      "label": "逐阶段提交确认事实",
+      "variant": "emphasis"
+    },
+    {
+      "id": "pipeline-browser",
+      "from": "content_pipeline",
+      "to": "browser_engine",
+      "label": "受控导航与字节捕获",
+      "labelAt": [980, 496]
+    },
+    {
+      "id": "pipeline-mineru",
+      "from": "content_pipeline",
+      "to": "mineru",
+      "label": "PDF → parser result"
+    },
+    {
+      "id": "pipeline-llm",
+      "from": "content_pipeline",
+      "to": "llm",
+      "label": "内容判断与总结",
+      "labelAt": [905, 620]
+    },
+    {
+      "id": "runtime-app",
+      "from": "runtime_foundation",
+      "to": "application",
+      "label": "策略 · 凭据授权 · 诊断",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "统一事实边界",
+      "items": [
+        "MetaLiterature 与 Literature 负责身份和当前业务事实",
+        "SQLite 保存 catalog，文件系统保存不可变资产字节",
+        "Storage 持久化已确认结果，不替业务模块做决定"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "增量处理闭环",
+      "items": [
+        "发现、全文补全、查询和导入导出读取同一数据库",
+        "Acquisition、Parsing、Analysis 可逐阶段提交有效事实",
+        "后续失败保留已接纳资产、provenance 与 lineage"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "外部服务边界",
+      "items": [
+        "Provider、Browser、MinerU 与 LLM 经专属 adapter 访问",
+        "MinerU 是 operator-managed parser backend，不是产品状态所有者",
+        "共享 Network 与 Credential owner 执行准入、限额和凭据隔离"
+      ]
+    }
+  ]
+}

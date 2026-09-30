@@ -2,12 +2,14 @@
 
 - Status: Accepted
 - Date: 2026-08-26
-- Last amended: 2026-09-01
+- Last amended: 2026-09-27
 - Supersedes: none
 - Superseded by: none
 - Amends: [ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)
-- Amended by: none
-- Related: [ADR 0010](0010-parser-neutral-markdown-current-result.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)、[ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[Entry 技术文档](../technical/entry.md)、[Agents 技术文档](../technical/agents.md)、[Network 技术文档](../technical/network.md)
+- Amended by: [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；[ADR 0028](0028-query-and-expansion-separation.md)（查询与显式扩充分离）
+- Related: [ADR 0010](0010-parser-neutral-markdown-current-result.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)、[ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[任务与协作控制：数据库补全与阶段协调](../technical/02-task-coordination.md#4-数据库补全与阶段协调)、[知识加工：共享支撑：无状态模型运行时](../technical/05-knowledge-processing.md#5-共享支撑无状态模型运行时)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)
+
+> 2026-09-25 修订：科研 Agent 成为主要程序消费者，新增证据、知识压缩、检索/上下文及正式人类协作；Entry 薄适配与内部模型运行时边界保留。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
 
 ## 背景
 
@@ -29,14 +31,14 @@ SciRetriever 的产品结果是持续维护的统一文献数据库。外部发�
 
 “Agent”“SDK”和“框架”在这两个问题中含义不同，必须明确区分：
 
-| 概念 | 责任 |
-| --- | --- |
-| 外部 Agent Harness | 面向用户的控制面；选择和组合 SciRetriever 产品操作 |
-| SciRetriever Application API/SDK | 稳定、领域中立、可供 CLI、Python 和 MCP 共用的产品能力合同 |
-| MCP | 把 Application API 映射为外部 Agent 可调用的类型化入口 |
-| Skill | 说明如何组合 MCP/CLI、何时审批以及如何根据结果恢复；不是权威 API |
-| 内嵌模型框架或 Provider SDK | 在 `agents` 私有适配边界内完成模型协议与类型转换 |
-| LangGraph 一类 workflow runtime | 在确有 durable workflow、checkpoint 或 HITL 需求时编排业务节点 |
+| 概念                             | 责任                                                             |
+| -------------------------------- | ---------------------------------------------------------------- |
+| 外部 Agent Harness               | 面向用户的控制面；选择和组合 SciRetriever 产品操作               |
+| SciRetriever Application API/SDK | 稳定、领域中立、可供 CLI、Python 和 MCP 共用的产品能力合同       |
+| MCP                              | 把 Application API 映射为外部 Agent 可调用的类型化入口           |
+| Skill                            | 说明如何组合 MCP/CLI、何时审批以及如何根据结果恢复；不是权威 API |
+| 内嵌模型框架或 Provider SDK      | 在 `agents` 私有适配边界内完成模型协议与类型转换                 |
+| LangGraph 一类 workflow runtime  | 在确有 durable workflow、checkpoint 或 HITL 需求时编排业务节点   |
 
 如果把 SciRetriever 做成只能“一键运行到底”的封闭应用，外部 Agent 无法在成本、审批、失败
 和阶段结果之间进行有意义的编排。如果把内部模块、数据库或文件系统直接交给外部 Agent，又会
@@ -50,23 +52,24 @@ AccessCoordinator、URL/DNS/origin 准入、origin-bound credential、redirect�
 
 ## 决策
 
+适用范围：产品消费边界按 ADR 0026/0027 修订；以下旧 BatchGoal 与 Python/PydanticAI 选型保留其历史/兼容背景。当前活动语言、构建与运行合同以 ADR 0024/0025 和 TS 基线为准，不要求恢复 Python。SDK 的受控网络、类型隔离与无状态约束继续有效。
+
 ### 1. SciRetriever 是 Agent 可编排但不由 Agent 拥有的文献引擎
 
 产品定位固定为：
 
-> SciRetriever 是一个面向大批量、持续维护场景的领域中立文献数据库引擎。它向人类和外部
-> Agent 提供可组合、幂等、可审计的文献操作；外部 Agent 可以决定操作顺序和范围，但身份、
-> 网络访问、资产验收、解析发布、内容接纳和数据库完整性始终由 SciRetriever 负责。
+> SciRetriever 是科研 Agent 的领域中立知识组件，独立供应原始材料、可读证据、压缩知识及
+> 通用提取能力，并为人类提供正式配置、Browser 协作与阅读接口。调用方决定科研目标、提取
+> 记录和领域策略；身份、受控访问、材料/产物验收与存储完整性由 SciRetriever 的业务 owner 负责。
 
-该定位概括为“核心闭合，控制开放；Agent 编排，SciRetriever 裁决”。外部 Agent 是可选控制
-面，不是 SciRetriever 的运行依赖。没有 Codex、DeepSeek Harness、MCP 或任何其它通用 Agent
-时，CLI 和 Python API 仍必须能够完成全部产品能力。
+科研 Agent 是主要程序消费者，但特定 Agent Harness 不是运行依赖。产品能力必须通过稳定应用边界供 Agent 与人类调用；当前以 TypeScript 应用能力和薄 CLI/Web/Agent 适配组织，不要求 Python API。
 
-外部 Agent 可以决定：
+在用户明确的任务范围内，外部 Agent 可以调用下列能力。按 ADR 0028，查询与扩充是独立操作；Agent 不能仅因数据库不足自行启动元数据/PDF 扩充，须由用户明确发起或指示代为执行具体维护任务：
 
 - 发起本地查询、外部领域发现、引用发现、数据库补全、手动 PDF 接纳、导入或导出；
 - 选择明确 ID、DiscoveryRun、导入结果、查询或全库等类型化范围；
-- 把数据库推进到主 PDF、当前 ParserResult 或最终 LiteratureContent；
+- 分别获取材料、准备可读文档与证据、生成指定用途分析/综合，或读取已有结果；旧 PDF/ParserResult/LiteratureContent 目标保留兼容；
+- 按预算检索上下文、展开证据，使用调用方规范与策略提取并提交候选；候选须通过平台通用验收，领域接纳归调用方；
 - 根据稳定 Report 和当前详情决定下一项操作、停止、等待或重新发起操作；
 - 在联网、Browser 升级、批量 Parser/LLM 成本或用户文件写入前请求用户批准。
 
@@ -77,17 +80,17 @@ AccessCoordinator、URL/DNS/origin 准入、origin-bound credential、redirect�
   Provider；
 - 取得任意 Browser/Page/CDP、Cookie、Profile、selector、URL、JavaScript、凭据或内部文件
   路径；
-- 绕过 PDF 验收、ParserResult 对齐、Analysis 两阶段验收、stale 检查或一致提交；
+- 绕过 PDF 验收、输入/证据对齐、产物验收、stale 检查或一致提交；两阶段验收适用于旧单篇兼容用例；
 - 把自身 session、plan、tool history、下载现场或推断结果变成第二套产品状态。
 
 ### 2. Entry 是所有人类和外部 Agent 的唯一应用边界
 
-CLI、Python 调用方、未来 GUI 和 MCP 都调用 `EntryApi` 的产品操作。它们不能直接调用功能模块
+CLI、Web 工作台和 Agent adapter 都调用 Entry/Application 的产品操作。它们不能直接调用功能模块
 的内部 service 或 Port。Entry 继续负责外部值解析、类型化范围、写入准入、目标冻结、当前事实
 重读、跨模块编排、局部失败隔离和操作 Report；业务模块继续拥有各自判断，Storage 只提交已经
 确认的决定。
 
-目标控制使用“推进到所需结果”的语义，而不是“执行一段内部实现”的语义：
+以下“推进到所需结果”描述明确启动的数据库维护命令，不适用于只读查询或独立知识加工。旧 completion 可按其已声明合同补 PDF，但查询/独立分析的缺口不能自动调用它；新材料扩充须遵守 ADR 0028 的启动边界：
 
 ```text
 BatchRequest(selector, goal)
@@ -122,12 +125,11 @@ CONTENT_READY
 
 `PARSER_RESULT_READY` 只是本次补全的目标和成功判定，不增加 `PARSER_READY`、
 `PARSER_RESULT_READY` 或其它第四种 `LiteratureStatus`。具有当前 ParserResult 但尚无最终内容
-的 Literature 仍为 `ASSET_READY`；ParserResult 仍是可替换、可重建的中间结果，不成为独立
-最终文档、文献状态或长期历史。
+的 Literature 仍为 `ASSET_READY`；ParserResult 仍是可替换、可重建的中间结果，不直接成为旧 LiteratureContent 或第四种文献状态。按 ADR 0026，Document/Evidence 可提供独立读取与稳定证据，具体表示版本的保留不受旧 current-only 范围限制。
 
 `BatchRequest` 不因第三个目标而接受 Provider、Parser、model、SDK client、数据库连接、并发
 实现、凭据、任意 `force`、cursor 或自由参数。明确重解析、切换 Parser、导入外部解析结果或把
-ParserResult 变成最终可交换产品属于独立产品变化，不能通过通用参数偷偷加入。
+ParserResult 改为新的公开交换字节格式仍需精确合同与兼容策略，不能通过通用参数偷偷加入；ADR 0026 已确认的独立文档读取不需重复批准。
 
 如果外部 Agent 希望把网络与解析成本分别审批，它先发起 `ASSET_READY`，检查 Report 后再发起
 `PARSER_RESULT_READY`。直接请求后者仍遵循“推进到目标”语义，在缺 PDF 时可以运行必要的
@@ -149,7 +151,8 @@ orchestrator。
 - 纯本地只读：文献搜索、详情、引用页面与详情、当前结果和 artifact 元数据；
 - 外部发现与写入：领域发现、引用发现；
 - 数据库推进：主 PDF、ParserResult、LiteratureContent；
-- 明确输入/输出：手动 PDF、书目导入、artifact 与书目导出。
+- 明确输入/输出：手动 PDF、书目导入、artifact 与书目导出；
+- 新知识能力：文档/证据读取、分析/综合、预算内上下文，以及调用方提取规范和候选交付。
 
 可能联网、打开 Browser、调用 Parser/LLM、修改数据库或写用户目标文件的工具必须在工具描述
 和客户端审批信息中准确声明副作用、成本与可能耗时。客户端审批不能替代服务端的类型校验、
@@ -162,7 +165,7 @@ MCP 不得：
 - 把 PDF、截图或其它大型字节默认塞入模型上下文；应返回稳定 ID、hash、provenance、受控
   artifact reference 和有界摘要，再由明确导出操作取得字节；
 - 建立 MCP 专属 Job、Task、Session、Report 历史或文献状态；长操作只返回或投影 SciRetriever
-  已有的同步结果和权威事实；
+  应用 owner 的执行投影与权威事实，不复制一套 MCP 调度状态；任务存续和恢复保证另行设计；
 - 要求外部 Agent 的 session 才能恢复。重启后 Agent 必须重新查询当前数据库事实。
 
 由于当前 catalog、资产、Profile 和凭据都是单用户本地资源，首个 MCP adapter 采用本地进程
@@ -208,8 +211,7 @@ Model Requests 或等价的低层单次请求 API，只委托 message/schema/too
   仍由消费模块验证并执行；
 - PydanticAI、OpenAI、Anthropic、DeepSeek、`httpx` 或其它 SDK 类型不能进入 Model、Entry、
   Analysis、Acquisition、Configuration 公共合同或持久化数据；
-- Analysis 继续拥有文献 prompt、两阶段顺序、schema 含义、NoUsableContent、Markdown 和
-  ReferenceLookup 验收；Acquisition 继续拥有 Browser controller、Observation/action 含义、
+- Analysis 继续拥有各用例 prompt、调用编排、schema 含义与产物验收；两阶段、NoUsableContent 和 Markdown 属于旧单篇用例，ReferenceLookup 保持按需；Acquisition 继续拥有 Browser controller、Observation/action 含义、
   语义进展和 route outcome；
 - 中性 reasoning、模型目录、capability、usage、failure 和 provenance 由 SciRetriever adapter
   归一化。可使用 SDK 的公开模型目录能力，但不能根据模型名称或缺失字段猜测 capability。
@@ -261,9 +263,7 @@ Network、安全、取消、失败或 provenance 合同来换取 SDK。失败证
 
 ### 7. 业务 workflow 继续使用普通 Python controller，当前不引入 LangGraph
 
-PydanticAI Direct 解决模型协议和类型转换，不拥有产品 workflow。当前 Analysis 两阶段、
-ReferenceLookup、数据库补全、Acquisition cohort 和 Browser controller 都已有明确 owner、终止
-条件、局部提交与当前事实恢复机制，继续由普通 Python controller 组织。
+本节标题保留历史决策索引。当前由 TypeScript 业务 controller 组织 Analysis、ReferenceLookup、材料获取与 Browser 流程，模型 SDK 只解决协议转换。新知识加工和人类协作沿用清晰 owner，不因此指定某个 workflow 框架；任务存续/恢复与部署仍需单独决定。
 
 当前不引入 LangGraph、PydanticAI 高层 Agent、OpenAI Agents SDK 或其它会默认拥有 loop、
 session、handoff、checkpoint、memory 或 tool execution 的通用 Agent runtime。它们既不能替代
@@ -283,14 +283,16 @@ handoff 产品需求时，才重新评估 LangGraph。若采用，它位于业�
   SDK request、Parser task 或 Browser turn；
 - 外部 Agent 只能获得稳定 ID、hash、provenance、typed result/failure、受控 artifact reference
   和必要有界内容；不能获得 secret、内部路径、SQL row、原始 SDK response 或安全敏感对象；
-- prompt、模型原文/reasoning、Browser Observation、screenshot、tool payload 和外部 Agent
-  conversation 不进入 Catalog、ArtifactStore、Report、provenance 或日志；
+- 任意 prompt、模型原始响应/reasoning、Browser 现场和外部 Agent conversation 不因 Agent 集成而进入 Catalog、Report 或日志。ADR 0027 的提取候选是经过独立合同验证的产物，不是任意 tool payload 归档。正式人类实时观察按受控会话提供；长期截图/录像与事后重放的保留政策尚未确定；
 - 日志继续只记录安全 operation、role/provider/model、结果类别、usage、延迟和稳定失败；客户端
   日志或 thread history 不能替代 SciRetriever Report；
+- 当前事实重跑与同一任务跨重启恢复分别设计。必要执行记录可以由应用 owner 按明确合同管理，但不成为第二套文献事实；当前 Jobs 机制不自动承诺新任务的生命周期；
 - 所有写入仍经 Entry 写入准入、业务 owner 验收和 Storage 一致提交；外部 Agent 的用户授权不
   等于绕过这些边界的系统权限。
 
 ## 目标架构
+
+以下为原 Agent/SDK 边界图，PydanticAI 是历史 Python 选型；当前 TS 组装见技术基线，新知识工作流见[工作流与差异说明](../knowledge-service-workflows.md)。
 
 ```text
 User
@@ -315,7 +317,7 @@ User
 - 现有 `ASSET_READY` 与 `CONTENT_READY` 语义保持不变；新增
   `PARSER_RESULT_READY` 是加法扩展，不迁移 Catalog、ArtifactStore 或既有文献数据；
 - `PARSER_RESULT_READY` 不增加 Literature 状态、持久任务或新事实 owner；现有 ParserResult
-  schema、单一当前关系和 replacement 规则保持不变；
+  schema 和兼容 current 关系保留；新 Document/Evidence 按 ADR 0026 提供独立可读表示和有效证据版本，不静默修改旧字节格式；
 - 现有 `AgentRuntime` 继续作为消费者 façade。SDK transport gate、两种真实协议和消费者等价
   测试通过前，不删除当前 Provider adapter；
 - gate 通过后按 Provider/消费者切片迁移，并删除已经替代的 wire encoder/parser、schema/tool
@@ -364,7 +366,7 @@ User
 - **让 MCP 直接调用模块内部 API 或建立自己的 Job/状态库。** 这会形成第二套应用语义和恢复
   机制。
 - **把 ParserResult 提升为第四种 Literature 状态或独立最终文档。** 当前 ParserResult 仍是
-  Analysis 的可替换中间输入；Agent 控制不需要改变其数据性质。
+  旧 Analysis 的可替换输入；ADR 0026 的独立文档/证据层已修订其仅供分析的范围，不把原始 parser 私有输出直接当成产品文档。
 - **把 Codex、DeepSeek Harness 或其它完整 Agent 嵌入核心运行时。** 它们带入 thread、shell、
   filesystem、工具和更大权限面，并使产品依赖特定 Harness。
 - **继续默认手写所有 Provider wire protocol。** 只有 SDK transport gate 失败并留下可审计
@@ -384,7 +386,7 @@ User
 - 外部 Agent 获得 SQL、Storage publication、事实写入、任意 Provider/Browser/Parser/LLM、
   secret、内部路径或未受控文件系统权限；
 - SciRetriever 的核心产品能力开始依赖某个外部 Agent Harness、thread 或持久 conversation；
-- ParserResult 成为新的 Literature 状态、长期历史、独立最终文档或公开交换格式；
+- ParserResult 成为新的 Literature 状态，永久保存全部解析尝试，或破坏其受支持交换格式；ADR 0026 的独立读取和有效证据保留已获接受；
 - MCP 建立持久 Job/Task 状态，或改为远程、多用户、跨租户服务；
 - 引入 LangGraph 或其它 durable workflow/checkpoint/HITL runtime；
 - framework 开始拥有 Analysis/Acquisition workflow、自动执行 Browser tool 或绕过业务验收；

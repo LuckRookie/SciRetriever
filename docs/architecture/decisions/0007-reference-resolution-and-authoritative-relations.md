@@ -6,7 +6,7 @@
 - Supersedes: [ADR 0006](0006-llm-produced-literature-content.md) 中关于 `ReferenceObservation` 的决策
 - Superseded by: none
 - Amended by: [ADR 0008](0008-summarized-markdown-literature-content.md)（撤销 Package 修订；引用关系决策继续有效）、[ADR 0010](0010-parser-neutral-markdown-current-result.md)（参考文献改为有序文本，不保存逐段 locator）
-- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Literature 技术文档](../technical/literature.md)、[Metadata 技术文档](../technical/metadata.md)、[Analysis 技术文档](../technical/analysis.md)
+- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[文献与材料：文献身份、元数据与引用](../technical/03-literature-materials.md#2-文献身份元数据与引用)、[文献与材料：元数据来源与供应商适配](../technical/03-literature-materials.md#3-元数据来源与供应商适配)、[知识加工：分析与综合](../technical/05-knowledge-processing.md#2-分析与综合)
 
 ## 背景
 
@@ -40,6 +40,7 @@ Owner 已确认：参考文献原文、用于检索的临时结构和已经确�
    `ProviderRelationObservation` 不保存本地 `LiteratureId`、目标 `MetadataObservation`、标题、作者、参考文献原文或解析器私有位置。它可以在目标尚未接纳时独立持久化，既是供应商关系的最小保存单位，也是后续引用扩展可以读取的待扩展单位；“待扩展”不增加 status、expanded flag 或任务生命周期。
 
    供应商只返回稳定目标记录 ID 或 DOI 等标识时，不立即为全部目标补查元数据。Entry 只对当前引用扩展方向、深度、数量和其它用户边界实际选中的 observation 解析非本地端点：先精确查询本地 Literature，未命中时才取得普通 `MetadataObservation` 并按统一规则接纳。供应商响应已经内联提供可用目标元数据时，选中目标可以直接使用它，避免重复请求。未选中、元数据不足或接纳失败的 observation 继续独立保留，但不创建占位 Literature、Reference 或 ReferenceSupport。只有参考文献原文而没有稳定目标标识时，仍按第 3 项保存为 `reference_texts`，不能伪装成结构化关系。
+
 5. Analysis 可以根据 `LiteratureContent.references`，或根据 Entry 明确提交的供应商参考文献文本，使用 LLM 形成临时 `ReferenceLookup`：
 
    ```text
@@ -52,6 +53,7 @@ Owner 已确认：参考文献原文、用于检索的临时结构和已经确�
    ```
 
    `reference_index` 只定位本次输入列表中的原文。`identifiers`、`title`、`authors` 和 `publication_year` 只保存 LLM 从原文明确识别的搜索线索；至少存在一个稳定标识符或非空标题时才产生可执行 lookup。代码负责校验和规范化 DOI、PMID、arXiv ID 等明确格式。`ReferenceLookup` 不持久化、不进入 `LiteratureContent` 或权威引用关系，也不能直接创建 `Literature` 或 `Reference`。
+
 6. Entry 先用 `ReferenceLookup` 对本地 Literature 做稳定标识符或其它无歧义的精确查询；本地没有可靠命中时才调用 Metadata 搜索。供应商返回的结果必须先形成普通 `MetadataObservation`，再由 Literature 使用与主题搜索相同的身份和最低入库规则创建或找到目标 `Literature`。LLM 提取值不是目标文献的权威元数据，外部查询也不是本地已经精确命中时的强制步骤。
 7. `Reference` 只表达两个已经入库的具体 Literature 之间已经确认的有向关系：
 
@@ -63,6 +65,7 @@ Owner 已确认：参考文献原文、用于检索的临时结构和已经确�
    ```
 
    `source_literature_id` 是引用方，`target_literature_id` 是被引用方。三个字段全部必填，source 和 target 都必须是已经接纳的具体 `LiteratureId`，且二者不能相同。Reference 不指向供应商记录 ID、原始文本、临时 lookup 或 `MetaLiterature`，也不携带 provenance、标题、作者、年份、标识符或解析器位置。`MetaLiterature` 级引用网络由 Literature 级关系汇总查询。
+
 8. `ReferenceSupport` 独立表达一条权威 Reference 的形成依据，不把来源内容复制进 Reference：
 
    ```text
@@ -91,12 +94,13 @@ Owner 已确认：参考文献原文、用于检索的临时结构和已经确�
    ```
 
    `ProviderRelationSupport` 指向元数据供应商直接返回的 `ProviderRelationObservation`；`MetadataReferenceTextSupport` 指向 `MetadataObservation.reference_texts[reference_index]`；`ContentReferenceTextSupport` 指向由 `literature_content_sha256` 标识的当前 `LiteratureContent.references[reference_index]`。两个 `reference_index` 都从零开始且不得为负。`ProviderRelationObservation` 在 Reference 建立前不是 ReferenceSupport；目标接纳并建立 Reference 后，才用其 `observation_id` 形成 support。
+
 9. `ReferenceSupport` 没有独立业务生命周期，因此不设置 `reference_support_id`；相同 `(reference_id, source)` 只能保存一次。它不重复保存 source/target Literature、原文、目标元数据、解析器位置、临时 `ReferenceLookup`、confidence、status、created_at 或 `Provenance`。Provenance 与文本继续由 support 指向的关系 observation、`MetadataObservation` 或 `LiteratureContent` 拥有。目标如何完成身份接纳属于 Literature 身份事实，不混入关系支持。
 10. Reference 只在来源和目标都已有本地 `LiteratureId`、引用方向明确、目标身份已经可靠确定，并且存在至少一项有效 `ReferenceSupport` 时创建。Reference 与第一项 support 必须整体发布；后续可靠来源只增加 support。相同 `(source_literature_id, target_literature_id)` 只形成一条权威关系，不能制造平行边。
 11. 只有计数、原始文本、临时 `ReferenceLookup`、尚未物化目标的 `ProviderRelationObservation`、相似标题、多个不确定候选或仅有 `MetaLiterature` 身份时，不创建 Reference。原文继续留在其来源容器中，relation observation 继续作为来源事实和待扩展单位保留，后续运行可以重新选择和解析。
 12. 引用解析是可独立重试的补充步骤。保存 `LiteratureContent` 或 `MetadataObservation.reference_texts` 不等待目标解析；lookup、供应商搜索、目标接纳或 Reference publication 失败不撤销已经保存的原文、文献内容或目标 Literature。
 13. 每个 Literature 只保留一个当前 `LiteratureContent`。新内容完整接纳并原子替换旧内容时，同一事务删除指向旧 `literature_content_sha256` 的 `ContentReferenceTextSupport`；某条 Reference 因此不再有任何 support 时一并删除，以维持“每条权威 Reference 至少具有一项 support”的不变量。新 references 后续按普通 lookup 流程重新建立 support；`ProviderRelationSupport` 和 `MetadataReferenceTextSupport` 不受替换影响。
-13. 被引用视图是同一 `Reference` 的反向查询，不建立第二套 cited-by 关系。元数据供应商正向或反向关系查询的返回方向只决定入库后 Reference 的 source/target 方向。
+14. 被引用视图是同一 `Reference` 的反向查询，不建立第二套 cited-by 关系。元数据供应商正向或反向关系查询的返回方向只决定入库后 Reference 的 source/target 方向。
 
 ## 被撤销的 Package 修订
 

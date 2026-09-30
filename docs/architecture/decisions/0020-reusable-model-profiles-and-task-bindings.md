@@ -6,7 +6,7 @@
 - Superseded by: [ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)
 - Amends: [ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)
 - Amended by: none
-- Related: [ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[Configuration 技术文档](../technical/configuration.md)、[Agents 技术文档](../technical/agents.md)
+- Related: [ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[统一产品接口：共享支撑：配置与凭据](../technical/01-product-interface.md#5-共享支撑配置与凭据)、[知识加工：共享支撑：无状态模型运行时](../technical/05-knowledge-processing.md#5-共享支撑无状态模型运行时)
 
 ## 背景
 

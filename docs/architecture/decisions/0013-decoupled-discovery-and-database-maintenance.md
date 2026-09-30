@@ -2,11 +2,14 @@
 
 - Status: Accepted
 - Date: 2026-08-10
+- Last amended: 2026-09-27
 - Supersedes: none
 - Superseded by: none
 - Amends: [ADR 0008](0008-summarized-markdown-literature-content.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)
-- Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)
-- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Entry 技术文档](../technical/entry.md)、[Acquisition 技术文档](../technical/acquisition.md)、[Storage 技术文档](../technical/storage.md)
+- Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；[ADR 0028](0028-query-and-expansion-separation.md)（查询与显式扩充分离）
+- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[任务与协作控制：数据库补全与阶段协调](../technical/02-task-coordination.md#4-数据库补全与阶段协调)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[版本化材料与知识存储：Catalog 与文件组织](../technical/07-versioned-storage.md#2-catalog-与文件组织)
+
+> 2026-09-25 修订：独立操作扩展到文档读取、分析/综合、检索和人类协作；旧目标枚举不能穷尽新知识能力。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
 
 ## 背景
 
@@ -26,13 +29,15 @@ SciRetriever 已经确认以统一逻辑文献数据库为产品中心，但“�
 
 ## 决策
 
+以下 Discovery/数据库补全精确合同保留兼容范围。ADR 0026/0027 已扩展独立文档读取、分析/综合、提取与人类协作；本 ADR 的进程内 Batch/Report 限制不穷尽这些新能力。新的通用任务存续、恢复和持久化 schema 仍待专门决定，不因逻辑架构图自动成立。
+
 ### 1. DiscoveryRun 只表达一次有边界的外部发现
 
 每次会访问外部元数据来源、把发现结果接纳到文献数据库的领域搜索或引用扩展，都形成独立 `DiscoveryRun`。它只负责冻结本次类型化输入和停止边界，作为来源结果、发现结果与原因的稳定关联锚点，并表达本次发现是否完整执行。Run 本体只保存 ID、输入、状态和开始时间；不保存名称、描述、完成时间、cursor、页码、请求、重试现场或结果数组。
 
 `DiscoveryRun` 创建即进入 `RUNNING`，最终状态只有 `COMPLETED`、`PARTIAL`、`FAILED` 或 `INTERRUPTED`。零结果仍可以正常 `COMPLETED`；不存在排队阶段的 `CREATED` 或把零结果解释成无处理目标的 `NO_TARGET`。用户在正常边界前主动停止，或恢复时发现遗留 `RUNNING`，才形成 `INTERRUPTED`；已经接纳的结果绝不回滚，也不保存 cursor 供原地续跑。
 
-本地数据库查询只是当前事实的读取，不形成 `DiscoveryRun`。`DiscoveryRun` 也不是文献处理流水线：运行完成后不自动下载 PDF，不启动 Parsing、Analysis 或下一次引用扩展。`ReferenceLookup` 只在用户明确发起的引用 DiscoveryRun 内按需使用，不能由普通领域结果自动触发。
+本地数据库查询只是当前事实的读取，不形成 `DiscoveryRun`。`DiscoveryRun` 也不是文献处理流水线：运行完成后不自动下载 PDF，不启动 Parsing、Analysis 或下一次引用扩展。`ReferenceLookup` 只在用户明确发起的引用 DiscoveryRun 内按需使用，不能由普通领域结果自动触发。按 ADR 0028，用户须明确开启每次元数据/PDF 扩充；只有明确列出扩充步骤的维护请求才可由协调层组合。普通知识目标、预算或 query miss 不构成扩库启动，单独 DiscoveryRun 仍结束于发现。
 
 ### 2. 领域发现按 Provider 分别有界，不执行逐篇全源补查
 
@@ -56,13 +61,13 @@ SciRetriever 已经确认以统一逻辑文献数据库为产品中心，但“�
 
 ### 4. 当前产品不建立 Collection
 
-当前目标架构删除 `Collection`、`CollectionMembership`、membership cause 和 `CollectionSelector`。外部发现历史由 `DiscoveryRun` 表达；当前动态范围由类型化数据库查询表达；一次明确处理范围可以使用 DiscoveryRun、导入、查询或 MetaLiterature/Literature ID。系统不创建领域占位符，也不根据元数据、搜索条件或 LLM 标签判断文献是否“属于某个 Collection”。
+旧自动归属/文件夹方案中的 `Collection`、`CollectionMembership`、membership cause 和 `CollectionSelector` 不进入当前目标。分析/综合/提取可以绑定明确输入清单，记录实际材料版本及覆盖；输入清单不代表领域归属，也不恢复 Zotero 式文件夹。外部发现历史由 `DiscoveryRun` 表达；当前动态范围由类型化数据库查询表达；一次明确处理范围可以使用 DiscoveryRun、导入、查询或 MetaLiterature/Literature ID。系统不创建领域占位符，也不根据元数据、搜索条件或 LLM 标签判断文献是否“属于某个 Collection”。
 
 未来若确认需要 Zotero 式人工文件夹，必须把它作为独立、显式的用户组织能力重新提出。该能力只能直接锚定用户选中的文献，不得借 Collection 名称恢复自动领域归属、保存查询或强制发现流程；在需求获得确认前不预留目标 Model、表或 selector。
 
 ### 5. 数据库补全是当前进程内的独立操作
 
-Entry 提供两个核心维护目标：
+本 ADR 原有数据库补全合同提供以下两个维护目标（ADR 0019 随后增加解析目标；新知识操作另有合同）：
 
 - `ASSET_READY`：为当前没有可用版本主 PDF 的对象补齐主 PDF；
 - `CONTENT_READY`：从每个对象当前第一个缺失步骤继续，必要时先补 PDF，再完成 Parsing、Analysis 和 Literature 接纳。
@@ -83,7 +88,7 @@ BatchSelector =
 
 Selector 是用户发起本次操作的输入，不保存到 Catalog，也不携带 Provider、并发、Parser、LLM、`force`、重试、cursor 或自由 `details`。Entry 从当前数据库展开 selector、排除已经满足目标或当前不能自动推进的对象，并在当前进程内冻结不可变目标 tuple；运行期间新增文献或后来符合查询的对象不加入本次操作。不同目标可以在资源预算内有界并行，每个目标从自身第一个缺失步骤继续。按 [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)，缺 PDF 的当前具体 Literature 组成有界 cohort，先完成 Public pass，再让未解决目标完成 API pass，最后只让最小剩余集合进入 Browser admission；较早提交 PDF 的目标可以继续后续步骤。该协调不改变冻结范围，也不建立持久化 BatchRun 或队列。
 
-本设计不建立持久化 `BatchRun`、`BatchTarget`、批次状态机、目标结果表、版本候选快照或批次计数。再次执行相同请求时重新展开 selector 并读取最新 current facts，不恢复上一轮目标、队列或执行现场。
+该兼容补全合同本身不建立持久化 `BatchRun`、`BatchTarget` 或候选快照；再次发起请求时重新展开 selector 并读取 current facts。当前 Jobs 已有执行持久化机制，完整操作统一仍有差距。新任务的输入清单、进度和人工介入是否及如何跨重启保留，须另行明确；执行记录不能替代事实 owner，也不保存旧外部调用现场。
 
 ### 6. MetaLiterature 范围默认只取得一个可用版本
 
@@ -107,7 +112,7 @@ published
   > other
 ```
 
-只有已经形成稳定“本版本当前无法自动取得可用内容”的事实时才尝试下一版本：Acquisition 正常遍历全部当前自动路径后返回 `NoPrimaryPdf`，或者 Analysis 明确返回 `NoUsableContent` 且本版本在当前操作中的其余 PDF 候选也已耗尽。Storage/Network 系统错误、Parser 失败、LLM 失败、取消或无法判断只表示本次没有完成，不能证明该版本不可用，也不能触发跨版本回退。
+只有形成稳定“本版本当前无法自动取得可用材料”的事实时才尝试下一版本，例如 Acquisition 正常遍历全部当前自动路径后返回 `NoPrimaryPdf`。`NoUsableContent` 或某个知识用途不适用不能单独证明版本失效；资产失效及后续选择必须依据相应 owner 的独立规则。Storage/Network 系统错误、Parser 失败、LLM 失败、取消或无法判断只表示本次没有完成，不能证明该版本不可用，也不能触发跨版本回退。
 
 成功 PDF 和内容始终归实际成功的具体 Literature，不转移到代表版本。`MetaLiterature` 不保存独立状态；“是否至少有一个可用版本”从成员当前事实推导。
 
@@ -140,11 +145,11 @@ AutomaticPdfAcquisitionExhaustion
 
 手动文件无效是输入验证错误，不是 `NoPrimaryPdf`，也不增加第三种自动 `AcquisitionResult`。手动接纳不进入 `AcquisitionPath`；自动获取仍只有 `public`、`authorized-provider-api` 和 `controlled-browser` 三个阶段。
 
-成功手动接纳只使具体 Literature 达到 `ASSET_READY`，并清除该 Literature 的自动获取耗尽事实。后续内容补全由新的独立操作发起。Analysis 后续明确判断无实际内容时，只清理 SciRetriever 管理的内部副本和派生结果，绝不删除用户原文件。
+成功手动接纳只使具体 Literature 达到 `ASSET_READY`，并清除该 Literature 的自动获取耗尽事实。后续内容补全由新的独立操作发起。Analysis 后续返回 `NoUsableContent` 或不适用时，不单独授权清理已接纳内部副本与派生表示；资产失效/删除另由其 owner 规则决定，用户原文件始终不由 SciRetriever 删除。
 
-### 9. 每次处理型操作形成非持久化运行报告
+### 9. 既有处理型操作的报告与事实分离
 
-DiscoveryRun 继续持久化，因为它的查询条件、种子、发现对象和直接原因无法从当前 Literature 事实反推；它不是为了恢复运行进度而保存。数据库补全、手动 PDF、书目交换和其它处理型 Entry 操作则在当前进程内形成面向用户的 typed Report 并直接返回调用方；PDF 获取、Parsing 和 Analysis 作为数据库补全阶段时汇总到同一报告，不建立持久化运行实体。纯查询直接返回 read result。
+DiscoveryRun 继续持久化，因为它的查询条件、种子、发现对象和直接原因无法从当前 Literature 事实反推；它不是为了恢复运行进度而保存。本 ADR 定义的数据库补全、手动 PDF 与书目交换在当前进程内形成 typed Report 并直接返回调用方；PDF 获取、Parsing 和 Analysis 作为数据库补全阶段时汇总到同一报告，不建立持久化运行实体。纯查询直接返回 read result。新知识产物交付和人类协作的执行投影不能强塞入旧 Report；是否持久化执行记录由独立生命周期合同决定。
 
 运行报告只说明本次实际选择、完成、缺失、失败、未处理和停止情况，不复制文献元数据、PDF 或内容，不参与 Literature 状态或下次目标选择。正常结束、普通异常和用户受控中断应尽可能完成报告；`kill -9`、断电等无法执行收尾逻辑的硬崩溃不保证生成最终报告，但已经原子提交的事实保持有效。
 
@@ -152,7 +157,7 @@ Report 按 Discovery、数据库补全、手动 PDF、导入和导出分别使�
 
 逐条 Logging 是与 Report 正交的 best-effort 实时反馈：Entry 只从 typed result 和稳定 failure 累计 Report，不能解析日志反向生成；日志不持久化、不参与业务决定，缺失或输出失败也不能改变操作结果。Logging 作为第四个公用基础模块，统一项目 logger 获取、生产进程配置、stderr 输出和最终脱敏防线，但不建立 Observer、EventBus、LogEvent Model、repository 或业务状态；精确目录与 API 属于技术合同。
 
-Network permit、Provider cursor、下载 tried set、Parser/LLM 现场、内存目标和候选顺序同样只服务本次操作，不持久化。重跑总是重新读取当前 Catalog 与 ArtifactStore。
+Network permit、Provider cursor、下载 tried set 和 Parser/LLM 外部调用现场只服务本次操作，不持久化；旧补全的内存目标与候选顺序也不作为可恢复现场保存。新知识输入清单固定的是产物依赖，不是这些外部运行现场。重跑总是重新读取当前 Catalog 与 ArtifactStore。
 
 ## 后果
 
@@ -163,10 +168,12 @@ Network permit、Provider cursor、下载 tried set、Parser/LLM 现场、内存
 - 多版本文献默认只需要取得一个可用版本，已完成资产得到优先复用；临时系统故障不会被错误地当成版本缺失。
 - 自动获取耗尽作为最小当前事实阻止全库操作无限重试，同时不保存候选级失败或引入任务状态机。
 - 手动 PDF 与自动获取共享资产质量和发布边界，但不会扩大自动来源顺序或威胁用户原文件。
-- 每次操作都能向用户说明本次结果，但运行报告不会成为数据库历史或第二真相源。
+- 既有操作返回本次报告，新的知识产物和执行投影分别设计；报告或任务进度始终不能成为第二套文献真相源。
 - 目标实现需要把旧 `CollectionRun` 中混合的发现和处理职责拆分为持久化 DiscoveryRun 与内存数据库补全操作，并删除其 Collection 概念残留；这不代表当前代码已经完成迁移。
 
 ## 未采用的方案
+
+本节针对既有 Discovery/补全合同；不撤销 ADR 0026/0027 已接受的知识与提取能力，也不预先决定新任务持久化方案。
 
 - 不保留领域占位符、自动归属集合或尚未确认的 Zotero 式人工文件夹；
 - 不把领域搜索或引用扩展默认连接为自动 PDF、Parsing 和 Analysis 流水线；

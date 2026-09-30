@@ -4,7 +4,7 @@
 - Date: 2026-08-09
 - Supersedes: [ADR 0009：供应商级全局访问调度](0009-provider-scoped-global-access-scheduling.md)
 - Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)
-- Related: [ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[配置与凭据技术文档](../technical/configuration.md)、[Network 技术文档](../technical/network.md)、[Acquisition 技术文档](../technical/acquisition.md)、[Provider Notes](../../notes/providers/README.md)
+- Related: [ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[统一产品接口：共享支撑：配置与凭据](../technical/01-product-interface.md#5-共享支撑配置与凭据)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[Provider Notes](../../notes/providers/README.md)
 
 ## 背景
 

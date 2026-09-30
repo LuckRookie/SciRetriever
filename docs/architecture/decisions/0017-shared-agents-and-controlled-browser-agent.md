@@ -2,11 +2,13 @@
 
 - Status: Accepted
 - Date: 2026-08-21
-- Last amended: 2026-09-04
+- Last amended: 2026-09-26
 - Supersedes: none
 - Amends: [ADR 0008](0008-summarized-markdown-literature-content.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)
-- Amended by: [ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[ADR 0023](0023-generic-browser-agent-executor.md)
-- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[Analysis 技术文档](../technical/analysis.md)、[Agents 技术文档](../technical/agents.md)、[Acquisition 技术文档](../technical/acquisition.md)、[Network 技术文档](../technical/network.md)
+- Amended by: [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[ADR 0023](0023-generic-browser-agent-executor.md)
+- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[知识加工：分析与综合](../technical/05-knowledge-processing.md#2-分析与综合)、[知识加工：共享支撑：无状态模型运行时](../technical/05-knowledge-processing.md#5-共享支撑无状态模型运行时)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)
+
+> 2026-09-25 修订：Analysis 的两阶段描述限定为旧单篇兼容用例；新分析可按用途组织有界多次调用。无状态 Agents、消费模块编排和 Browser 安全责任不变。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。
 
 ## 背景
 
@@ -54,21 +56,21 @@ class AgentRuntime:
 
 责任固定为：
 
-| Owner | 责任 |
-| --- | --- |
-| `agents` | 单次模型执行、capability/readiness、role binding、Provider protocol、稳定失败与安全 usage |
-| `analysis` | 文献 prompt、两阶段顺序、schema、NoUsableContent、Markdown/ReferenceLookup 验收和最终业务 provenance |
-| `acquisition` | “取得当前文章主 PDF”的目标、Browser controller、允许动作、语义进展和 route outcome |
-| `network` | CloakBrowser runtime、Browser snapshot/revision、动作执行、Network guard、capture 和 cleanup |
-| `configuration` | Model Provider/Model 注册表、Analyze/Download 选择、controller、credential 和本地 readiness |
-| `bootstrap` | 按所选 Model Provider 共享构造 adapter/runtime、派生 role bindings 和作业选择的一个 Browser controller |
+| Owner           | 责任                                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------ |
+| `agents`        | 单次模型执行、capability/readiness、role binding、Provider protocol、稳定失败与安全 usage              |
+| `analysis`      | 各分析用例的 prompt、编排、schema、验收与 provenance；两阶段/NoUsableContent 属于旧单篇兼容用例        |
+| `acquisition`   | “取得当前文章主 PDF”的目标、Browser controller、允许动作、语义进展和 route outcome                     |
+| `network`       | CloakBrowser runtime、Browser snapshot/revision、动作执行、Network guard、capture 和 cleanup           |
+| `configuration` | Model Provider/Model 注册表、Analyze/Download 选择、controller、credential 和本地 readiness            |
+| `bootstrap`     | 按所选 Model Provider 共享构造 adapter/runtime、派生 role bindings 和作业选择的一个 Browser controller |
 
 因此：
 
 ```text
 Analysis Agent
   = AgentRuntime
-  + Analysis 两阶段控制器
+  + Analysis 用例控制器（旧单篇兼容用例为两阶段）
   + Analysis schema/validator
 
 Browser Agent
@@ -79,7 +81,7 @@ Browser Agent
 
 ### 3. Analysis 直接执行独立的单次调用
 
-Analysis 直接调用两次 `AgentRuntime.execute`，自己决定第二阶段是否运行。Metadata stage 与 ReferenceLookup 同样发起独立的单次调用。Provider 成功不能替代 Analysis 的结构、来源、对齐和业务验收。
+旧单篇 LiteratureContent 用例直接调用两次 `AgentRuntime.execute`，自己决定第二阶段是否运行。新 Analysis 可按用途组织有界分段、压缩和综合，每次调用仍独立经过同一运行时；Runtime 不获得业务编排权。ReferenceLookup 同样发起独立调用。Extraction 的外部策略不以内部 Runtime 为前提；是否内置模型策略按 ADR 0027 另定。Provider 成功不能替代业务模块的结构、来源、对齐和产物验收。
 
 迁移完成后删除 `AgentSession`、`open_session`、旧 Analysis Provider wrapper、model 透传和双路径测试，不保留“新 Runtime 失败后回到旧 adapter”的兼容层。已经保存的 Literature、Content 和 provenance schema 不迁移。
 
@@ -115,8 +117,7 @@ Publisher access profile 继续拥有并同时服务两种 controller：
 - route 与 canonical landing；
 - allowed origins、challenge dependency、navigation guard 和三态 capture policy；
 - browser risk/rate group、文章间隔、cooldown 和 circuit policy；
-- page-state marker；
--主 PDF 与 supplementary discrimination；
+- page-state marker；-主 PDF 与 supplementary discrimination；
 - popup/viewer admission 和 capture validation。
 
 只有确定性点击序列属于 Rules 模式。Agent 模式不能绕过 Publisher profile，也不能给未知站点获得 arbitrary-site Browser。
