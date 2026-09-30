@@ -19,6 +19,11 @@ export interface AgentBinding {
   readonly context_window_tokens: number;
   readonly max_output_tokens: number;
   readonly adapter: AgentAdapter;
+  /** Effective non-secret wire target; credentials never enter a method identity. */
+  readonly nonsecret_transport?: {
+    readonly api: string;
+    readonly endpoint: string;
+  };
 }
 
 export class AgentRuntime {
@@ -69,6 +74,28 @@ export class AgentRuntime {
       model: binding.model,
       reasoning: binding.reasoning,
       stream: binding.stream,
+    };
+  }
+
+  effectiveIdentity(role: AgentRole): {
+    readonly provider: string;
+    readonly model: string;
+    readonly reasoning: ReasoningEffort;
+    readonly stream: boolean;
+    readonly context_window_tokens: number;
+    readonly max_output_tokens: number;
+    readonly transport: AgentBinding["nonsecret_transport"] | null;
+  } {
+    const binding = this.bindings.get(role);
+    if (!binding) throw new AgentFailure("agent-configuration");
+    return {
+      provider: binding.provider,
+      model: binding.model,
+      reasoning: binding.reasoning,
+      stream: binding.stream,
+      context_window_tokens: binding.context_window_tokens,
+      max_output_tokens: binding.max_output_tokens,
+      transport: binding.nonsecret_transport ?? null,
     };
   }
 

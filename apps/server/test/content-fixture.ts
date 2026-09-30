@@ -47,7 +47,7 @@ export async function setup(execution = false) {
             resources: [],
             provenance: {
               provenance: parseProvenance({
-                provenance_id: id(33),
+                provenance_id: r.source_asset_id,
                 source_kind: "parser",
                 source_name: "fixture",
                 source_record_id: null,

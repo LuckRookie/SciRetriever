@@ -171,6 +171,10 @@ describe("TypeScript MinerU HTTP client", () => {
     });
     expect(converted.result).toMatchObject({
       page_count: 1,
+      provenance: {
+        parser_version: "mineru-ts-archive-v1",
+        provenance: { source_name: "mineru" },
+      },
       resources: [
         {
           reference: "images/figure.png",

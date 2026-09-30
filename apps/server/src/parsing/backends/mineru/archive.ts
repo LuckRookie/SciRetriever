@@ -408,7 +408,7 @@ export async function convertMinerUArchive(
       provenance_id:
         options.provenance_id ?? "00000000-0000-0000-0000-000000000000",
       source_kind: "parser" as const,
-      source_name: "mineru-ts",
+      source_name: "mineru",
       source_record_id: null,
       observed_at: options.observed_at ?? new Date().toISOString(),
       input_sha256: options.source_sha256,

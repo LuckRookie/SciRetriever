@@ -1,5 +1,6 @@
 import {
   parseArtifactRef,
+  parseAssetId,
   parseLiteratureId,
   parseParserResult,
   parserResultSha256,
@@ -105,7 +106,14 @@ export class ParsingService {
   async prepareCurrentPrimary(
     literatureId: string,
     signal?: AbortSignal,
+    expectedSource?: Pick<Asset, "asset_id" | "sha256">,
   ): Promise<PreparedParsing> {
+    const expected = expectedSource
+      ? Object.freeze({
+          asset_id: parseAssetId(expectedSource.asset_id),
+          sha256: expectedSource.sha256,
+        })
+      : null;
     const active = signal
       ? AbortSignal.any([signal, this.stop.signal])
       : this.stop.signal;
@@ -115,6 +123,11 @@ export class ParsingService {
     cancelled(active);
     const asset = facts?.primary_asset;
     if (!asset || asset.media_type !== "application/pdf")
+      throw new ParsingFailure("parser-stale");
+    if (
+      expected &&
+      (asset.asset_id !== expected.asset_id || asset.sha256 !== expected.sha256)
+    )
       throw new ParsingFailure("parser-stale");
     let pdf: Uint8Array;
     let pageCount: number;

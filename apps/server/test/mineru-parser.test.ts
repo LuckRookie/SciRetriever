@@ -282,7 +282,7 @@ it("assembles the TypeScript MinerU client and publishes normalized artifacts", 
         parser_version: "mineru-ts-archive-v1",
         mode: "archive",
         model_identity: "operator-vlm-model@fixture-revision",
-        provenance: { source_name: "mineru-ts", input_sha256: asset.sha256 },
+        provenance: { source_name: "mineru", input_sha256: asset.sha256 },
       },
     });
     expect(result.resources.map((resource) => resource.reference)).toEqual([
