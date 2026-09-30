@@ -6,7 +6,7 @@
 - SciRetriever 审计基线：`6708499`
 - 文档性质：第三方参考实现的许可、provenance 与迁移边界 Notes
 
-本文只记录 ScanSci PDF 当前固定快照对 SciRetriever PDF 获取改革的参考边界，不批准任何 Provider 上线，也不把上游运行记录、selector、URL template 或验证结论变成本项目事实。获取顺序和安全合同仍以 [ADR 0015](../architecture/decisions/0015-publisher-aware-tiered-pdf-acquisition.md)、[Acquisition 技术文档](../architecture/technical/acquisition.md)与 [Network 技术文档](../architecture/technical/network.md)为准。
+本文只记录 ScanSci PDF 当前固定快照对 SciRetriever PDF 获取改革的参考边界，不批准任何 Provider 上线，也不把上游运行记录、selector、URL template 或验证结论变成本项目事实。获取顺序和安全合同仍以 [ADR 0015](../architecture/decisions/0015-publisher-aware-tiered-pdf-acquisition.md)、[文献与材料：材料获取、路线与候选](../architecture/technical/03-literature-materials.md#4-材料获取路线与候选)与 [任务与协作控制：共享支撑：受控网络访问](../architecture/technical/02-task-coordination.md#7-共享支撑受控网络访问)为准。
 
 本次审计只读取仓库外的本地 Git checkout、许可证、源码和静态数据；没有连接真实 Provider、启动 Browser 或机构登录，没有读取 Cookie、凭据或个人会话，也没有执行现场下载。
 
@@ -33,9 +33,9 @@ Copyright 2024-2026 scansci-pdf contributors
 
 截至上述 SciRetriever 审计基线，本专项迁移登记表为空：当前实现没有把 ScanSci PDF 的源码、数据 catalog、selector、URL template 或二进制捆绑进 SciRetriever。现有 Browser foundation 与三层编排按 SciRetriever 的 Accepted ADR、模块合同和本地离线 fixture 清洁实现。
 
-| SciRetriever 文件 | 上游文件/对象 | 方式 | 修改声明 | 独立证据与 fixture |
-| --- | --- | --- | --- | --- |
-| 无 | 无 | 仅参考理念；未复制 | 不适用 | P39-P53 的 SciRetriever 自有合同与离线 fixture |
+| SciRetriever 文件 | 上游文件/对象 | 方式               | 修改声明 | 独立证据与 fixture                             |
+| ----------------- | ------------- | ------------------ | -------- | ---------------------------------------------- |
+| 无                | 无            | 仅参考理念；未复制 | 不适用   | P39-P53 的 SciRetriever 自有合同与离线 fixture |
 
 若后续表中出现条目，单写“参考 ScanSci”不够；必须同时记录上游 commit、精确文件和对象或行、`copy`/`adapt`/`clean rewrite`、SciRetriever 目标文件、修改说明、官方独立证据、fixture revision 与复核日期。
 
@@ -43,33 +43,33 @@ Copyright 2024-2026 scansci-pdf contributors
 
 ### 3.1 只作理念参考并清洁重实现
 
-| 抽象理念 | 可接受的 SciRetriever 表达 | 不能继承的上游事实 |
-| --- | --- | --- |
-| Publisher/access platform 识别 | 使用强弱证据形成无副作用 `PublisherAccessResolution`，只服务 Public/API 与可选首页 probe | 不能按 DOI prefix 或 publisher 字符串决定 `browser:generic` 是否可用 |
-| Publisher Profile | 版本化 stable ID、Public/API capability 与 `browser_probe_enabled` | 不能把上游 profile、selector、origin allowlist、页面模板或调度组复制为 Browser 页面程序 |
-| Browser context reuse | 一个 operator-managed 持久身份 Profile、当前对象图内一个共享有头 process/context、无 GUI Linux 的 Xvfb 与单一 `browser-generic` 调度 | 不接受任意外部 Profile 路径或 Cookie 导入，不读取/导出认证内容，不使用跨进程文件队列；跨命令认证状态只由 Chrome 留在本地 Profile |
-| 页面状态分类 | login、entitlement、paywall、MFA、challenge 的安全有限状态 | 不自动绕过 CAPTCHA、Cloudflare 或 MFA，不自动选择机构 |
-| 多路 PDF 捕获 | 已准入的 download、response、popup、viewer target | 不捕获任意 origin 的 PDF，不执行任意 JavaScript |
-| Verification matrix | 统一证据包、fixture 与明确 production state | 不继承上游 success/failed/unsupported verdict |
-| Health summary | 仅显示唯一 `browser:generic`、总开关、Model、Profile identity/presence、Playwright/CloakBrowser readiness 与 action-required 的安全摘要 | 不检查 Chromium Cookie/登录内容，不声称 Profile 已认证、IP 或具体文章 entitlement |
+| 抽象理念                       | 可接受的 SciRetriever 表达                                                                                                              | 不能继承的上游事实                                                                                                               |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Publisher/access platform 识别 | 使用强弱证据形成无副作用 `PublisherAccessResolution`，只服务 Public/API 与可选首页 probe                                                | 不能按 DOI prefix 或 publisher 字符串决定 `browser:generic` 是否可用                                                             |
+| Publisher Profile              | 版本化 stable ID、Public/API capability 与 `browser_probe_enabled`                                                                      | 不能把上游 profile、selector、origin allowlist、页面模板或调度组复制为 Browser 页面程序                                          |
+| Browser context reuse          | 一个 operator-managed 持久身份 Profile、当前对象图内一个共享有头 process/context、无 GUI Linux 的 Xvfb 与单一 `browser-generic` 调度    | 不接受任意外部 Profile 路径或 Cookie 导入，不读取/导出认证内容，不使用跨进程文件队列；跨命令认证状态只由 Chrome 留在本地 Profile |
+| 页面状态分类                   | login、entitlement、paywall、MFA、challenge 的安全有限状态                                                                              | 不自动绕过 CAPTCHA、Cloudflare 或 MFA，不自动选择机构                                                                            |
+| 多路 PDF 捕获                  | 已准入的 download、response、popup、viewer target                                                                                       | 不捕获任意 origin 的 PDF，不执行任意 JavaScript                                                                                  |
+| Verification matrix            | 统一证据包、fixture 与明确 production state                                                                                             | 不继承上游 success/failed/unsupported verdict                                                                                    |
+| Health summary                 | 仅显示唯一 `browser:generic`、总开关、Model、Profile identity/presence、Playwright/CloakBrowser readiness 与 action-required 的安全摘要 | 不检查 Chromium Cookie/登录内容，不声称 Profile 已认证、IP 或具体文章 entitlement                                                |
 
 ### 3.2 可以评估实质移植，但必须逐项归属
 
 以下文件只能提供待核实线索。若未来确需复制其中任何常量、selector、URL template、匹配表或算法表达，必须先在本文登记，然后再进入代码评审：
 
-| 上游文件 | 可评估线索 | SciRetriever 后续任务 | 独立复核要求 |
-| --- | --- | --- | --- |
-| `publisher_profiles.py` | access key、origin、文章标识和 locator 线索 | P56-P69 | Provider 官方域名/产品资料与本项目 fixture |
-| `institutional/publisher_profiles.py` | login/entitlement/page marker 线索 | P56-P68 | 排除 Tsinghua-specific selector，逐平台核实 |
-| `publisher_pdf_router.py` | primary PDF 与 supplement 路由线索 | P56-P69 | 官方 URL/页面事实与资产归属 fixture |
-| `publisher_access.py` | 有界页面动作和捕获线索 | P56-P68 | SciRetriever per-hop guard、预算和 cleanup 测试 |
-| `browser_login.py` | 第三方的登录与人工介入设计，仅用于理解未采用范围 | 不进入当前 Browser v1 | SciRetriever 的有头 runtime 不向用户开放；不提供人工登录、机构选择、MFA 或 Cookie 复用 |
-| `publisher_strategies.py` | response/download/popup 捕获线索 | P56-P68 | 删除任意 JS、反绕过、固定 sleep 和猜测 fallback |
-| `session_broker.py` | session/risk 分组理念 | P55、P70 | 只允许 SciRetriever 的进程内 broker，不复制文件队列 |
-| `profile_health.py` | 第三方 Profile 健康摘要理念 | 仅参考安全展示 | SciRetriever 只报告本地 runtime readiness，不读取 Cookie DB 或外部 Profile |
-| `data/publisher_access_catalog.json` | Provider 覆盖范围线索 | P56-P70 | 每一项重新取得官方证据和 SciRetriever fixture |
-| `data/publisher_browser_verification_matrix.json` | 证据字段和缺口表达线索 | P56-P70 | 不复用 verdict；不得引用个人运行环境为生产证据 |
-| `data/institutional_identity_policy.json` | session/identity 风险线索 | P55-P70 | 删除机构身份和专属网络事实，重新证明分组 |
+| 上游文件                                          | 可评估线索                                       | SciRetriever 后续任务 | 独立复核要求                                                                           |
+| ------------------------------------------------- | ------------------------------------------------ | --------------------- | -------------------------------------------------------------------------------------- |
+| `publisher_profiles.py`                           | access key、origin、文章标识和 locator 线索      | P56-P69               | Provider 官方域名/产品资料与本项目 fixture                                             |
+| `institutional/publisher_profiles.py`             | login/entitlement/page marker 线索               | P56-P68               | 排除 Tsinghua-specific selector，逐平台核实                                            |
+| `publisher_pdf_router.py`                         | primary PDF 与 supplement 路由线索               | P56-P69               | 官方 URL/页面事实与资产归属 fixture                                                    |
+| `publisher_access.py`                             | 有界页面动作和捕获线索                           | P56-P68               | SciRetriever per-hop guard、预算和 cleanup 测试                                        |
+| `browser_login.py`                                | 第三方的登录与人工介入设计，仅用于理解未采用范围 | 不进入当前 Browser v1 | SciRetriever 的有头 runtime 不向用户开放；不提供人工登录、机构选择、MFA 或 Cookie 复用 |
+| `publisher_strategies.py`                         | response/download/popup 捕获线索                 | P56-P68               | 删除任意 JS、反绕过、固定 sleep 和猜测 fallback                                        |
+| `session_broker.py`                               | session/risk 分组理念                            | P55、P70              | 只允许 SciRetriever 的进程内 broker，不复制文件队列                                    |
+| `profile_health.py`                               | 第三方 Profile 健康摘要理念                      | 仅参考安全展示        | SciRetriever 只报告本地 runtime readiness，不读取 Cookie DB 或外部 Profile             |
+| `data/publisher_access_catalog.json`              | Provider 覆盖范围线索                            | P56-P70               | 每一项重新取得官方证据和 SciRetriever fixture                                          |
+| `data/publisher_browser_verification_matrix.json` | 证据字段和缺口表达线索                           | P56-P70               | 不复用 verdict；不得引用个人运行环境为生产证据                                         |
+| `data/institutional_identity_policy.json`         | session/identity 风险线索                        | P55-P70               | 删除机构身份和专属网络事实，重新证明分组                                               |
 
 “清洁重实现”仍需在提交说明中指出参考过的抽象和独立证据，但只有确实复制或改写了上游表达时才登记为 Apache-2.0 实质移植。不能通过改名、改格式或机械转写把实质移植标成纯理念。
 

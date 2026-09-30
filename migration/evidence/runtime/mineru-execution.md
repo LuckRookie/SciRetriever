@@ -77,6 +77,6 @@ commit/push/PR 或真实数据操作。
 ## 2026-09-12 当前 TS 复验
 
 当前生产路径使用 `MinerUParser` 和 `MinerULoopbackParser`，Parser/ZIP 转换、内容接纳和
-Application 组装均不启动 Python。`pnpm full` 在未设置 Cloak bundle 的环境下通过 119 个测试文件（3 个 skip）
-和 466 个用例（4 个 skip）；依赖 operator-managed Browser bundle 的联合旅程保持 skip，真实 MinerU/LLM/Provider
+Application 组装均不启动 Python。`pnpm full` 在未设置 Cloak bundle 的环境下通过 120 个测试文件（3 个 skip）
+和 576 个用例（4 个 skip）；依赖 operator-managed Browser bundle 的联合旅程保持 skip，真实 MinerU/LLM/Provider
 仍未连接。

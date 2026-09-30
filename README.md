@@ -6,9 +6,13 @@
 
 ## 产品定位
 
-SciRetriever 面向需要持续建立专题文献数据库的研究者和文献整理人员。它把主题发现、引用发现、书目信息导入、手动 PDF、自动补全、本地查询和导出汇入同一个逻辑数据库：关系与运行事实保存在 SQLite Catalog，文献资产和派生产物保存在 ArtifactStore。
+SciRetriever 是科研 Agent 的论文知识组件，目标是独立提供可追溯的原始材料与有证据的压缩知识，并支持检索、按需阅读和证据展开。人类也是正式使用者：配置项目，观看/指导 AI 的浏览器获取，查询阅读材料和总结。具体人类界面形态尚未确定，Zotero 深度集成与完整文献管理体验暂降优先级。
 
-产品边界止于通用文献元数据、原始资产、总结型轻结构化内容及其同源章节、引用关系和 provenance。反应、分子、路线、产率、材料性质等领域数据由下游系统处理。完整目标见[产品需求](docs/architecture/requirements.md)，长期约束见[架构决策索引](docs/architecture/decisions/README.md)。
+新增的通用提取目标允许外部 Agent/程序按自定义记录规范使用材料、证据与结果交付能力；领域算法和最终数据集由下游负责，见 [ADR 0027](docs/architecture/decisions/0027-extraction-capabilities-and-caller-defined-records.md)。当前已提供 v1–v5 Catalog 的只读规范/输入准备，以及 v5 Catalog 上的显式候选批次提交、回执和材料/文档引用保护；候选历史 payload 不托管，科学接纳仍归下游。入口、期限和限制见[独立文献库阅读](docs/guides/library-query.md#候选批次交付catalog-v5-维护)。
+
+统一逻辑文献库仍保存身份、来源、材料和产物，保持领域中立、不可变资产及分阶段提交。反应、分子、路线、产率、材料性质等领域 schema 的含义与维护属于调用方；提取候选不成为文献固定领域字段。已接受目标见[产品需求](docs/architecture/requirements.md)、[设计](docs/architecture/design.md)与[ADR 0026](docs/architecture/decisions/0026-agent-knowledge-and-human-collaboration.md)。
+
+**当前实现边界：** 已有发现/获取、解析、旧单篇总结、查询、配置和工作台基础；文档固定版本证据、已有材料的预算 Context，以及单篇与集合知识产物的显式分析/综合、历史发布和按 ID 阅读已交付。Catalog v8 已提供需显式构建的知识检索索引及材料/生成知识混合 Context；检索分数不是科学置信度，真实语料检索质量尚未评估。正式 MCP adapter 与完整生产人类协作尚未交付。当前 TypeScript 生产 completion 遇 `NoUsableContent` 保留已接纳材料，不再自动清理或重取；旧明确失效服务仍存在。本文下面的命令描述当前行为，完整差距见 [TS 基线](docs/architecture/typescript-baseline.md)。
 
 ## 安装与最小本地启动
 
@@ -74,21 +78,36 @@ pnpm preview:browser
 
 打开 [静态样本](http://127.0.0.1:4173)，体验人工接管、模拟 PDF 获取、候选确认及失败场景。
 
-实时工作台使用已校验的 operator Cloak bundle、真实 Browser Host、JPEG/SSE、持久 Candidate 与临时文献库：
+实时工作台路径需要 operator 提供已校验的 Cloak bundle，并可构造真实 Browser Host、JPEG/SSE、持久 Candidate 与临时文献库：
 
 ```bash
 SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm preview:workbench
 ```
 
-打开 [实时工作台](http://127.0.0.1:4174)。它只访问合成 loopback 页面，支持双 viewer、接管/释放、PDF 捕获、
-accepted 发布、uncertain 放弃、文献搜索/详情/引用/文件下载和 390px 布局。入口使用新的系统临时 home，正常退出
-时清理，不读取用户 catalog、Profile 或凭据；配置、凭据和 readiness 由 TypeScript owner 直接组装。
+固定版本 Cloak bundle 的本机回环测试已运行真实 `verifyInstalledCloakRuntime → new BrowserHost → start/openPage → deliver` 正路径；上面的预览命令仍使用合成页面，不是任意真实站点的验收证据。离线测试支持双 viewer、
+接管/释放、PDF 捕获、accepted 发布、uncertain 放弃、文献搜索/详情/引用分页、任务创建/取消/执行，以及配置读取、
+保存、冲突恢复、显式 Parse/Browser Model probe 和凭据 presence。工作空间、文献筛选/详情和任务详情使用非敏感 URL
+参数恢复，浏览器后退/前进保持上下文；secret 不进入 URL、history 或 DOM。桌面与 390px 布局均由实际 Playwright DOM
+旅程覆盖。入口使用新的系统临时 home，正常退出时清理，不读取用户 catalog、Profile 或凭据；配置、凭据和 readiness
+由 TypeScript owner 直接组装。
 运行依赖、支持边界和验证入口见 [web 工作台说明](apps/web/README.md)及
 [TypeScript 开发入口](docs/development/typescript-foundation.md)。
 
+## 独立只读文献阅读
+
+正式阅读入口可通过 server TypeScript API `startQueryOnlyWorkbench({ home })` 单独启动，只提供文献搜索、详情、引用证据与已保存材料下载。它只读打开既有 Catalog；未初始化时明确提示并保持未创建，PDF/内容等缺口也不会自动启动获取、解析、生成或 Job。常规调用以 Node 用户 home（`homedir()`，与 CLI 同一固定配置身份）作为 home；Catalog 和 ArtifactStore 路径继续取自固定配置。完整 API 启动、就绪状态和关闭方式见[独立文献库阅读指南](docs/guides/library-query.md)。
+
+现有实时 Browser 工作台仍是含 Browser、Jobs、配置的混合入口；它不代表 QueryApplication 的独立只读启动路径。独立查询页已提供文献阅读、固定文档证据、材料和知识混合上下文、提取输入准备、v6 单篇知识和 v7 集合综合历史阅读；v5+ 候选提交、v6 单篇分析、v7 集合综合及 v8 知识索引重建须打开受控维护入口。Agent 可通过 `createQueryApplication(home).knowledgeContext.search` 混合检索，通过 `knowledgeRead` 按 ID、Literature 清单或默认指针读取单篇知识，也可通过 `synthesisPreparation/synthesisRead` 固定集合并按 ID、来源及最近清单只读访问综合。用法见[独立文献库阅读指南](docs/guides/library-query.md#知识与材料混合上下文catalog-v8)。
+
+手动 PDF 维护可通过 `startMaintenanceWorkbench({ home })` 单独启动，页面 `/` 接收用户明确选择的本机文件并传输原始 PDF 字节，`/query` 保持独立阅读视图；这一入口不启动 Browser，要求 home 已有 v2 catalog。公开 TypeScript `createApplication(home, { executionSchema: "require-v2" }).maintenance.ingestPdf({ literature_id, bytes })` 与 CLI `import pdf` 调用同一接纳用例。HTTP 上传和 TypeScript 字节入口均限制为 16 MiB；HTTP 只接受同源会话和 CSRF 授权，不接受远端请求提供本机路径。有效材料接纳后可通过独立 QueryApplication 读取；可执行 Node 启动示例见 [PDF 获取与手动接纳指南](docs/guides/pdf-acquisition.md)。
+
+生产 Browser 观看与指导可通过 `startProductionWorkbench({ home, literature_id })` 启动。打开本机页面只建立观察入口，点击“获取这篇文献的 PDF”才进入同一 Application 的正式补全流程；自动模型与人工控制共用原文章 page，捕获仍由 Acquisition 验收。当前已用固定 Cloak bundle、fake 模型和回环站点验证 HTTP 接管到主 PDF 提交；完整反馈与阅读衔接留待 M04-T03，真实 Publisher 站点未验证。启动和控制语义见 [PDF 获取指南](docs/guides/pdf-acquisition.md#生产观看指导和接管)。
+
 ## 命令行入口
 
-安装包公开且固定的命令树是：
+目标命令合同的六个一级名称是 `discover`、`complete`、`literature`、`import`、`export`、`config`
+（见 [任务与协作控制：数据库补全与阶段协调](docs/architecture/technical/02-task-coordination.md#4-数据库补全与阶段协调) 与
+[技术文档](docs/architecture/technical.md)）：
 
 ```text
 sciretriever discover topic
@@ -111,10 +130,29 @@ sciretriever export content
 
 sciretriever config
 sciretriever config status
-sciretriever config test --help
-sciretriever jobs create
-sciretriever jobs run JOB_ID
+sciretriever config test ...
 ```
+
+显式 `sciretriever document parse --literature-id ID --asset-id ID --asset-sha256 SHA256 --mode reuse-current|reparse` 将已接纳的主 PDF 发布为固定版本的可读表示。此命令要求已显式迁移的 v3 Catalog；复用模式不调用 Parser，重解析模式使用当前配置的 ParserBackend。默认关系切换需要可选 `--expected-default-revision`，回执分别报告版本发布与 CAS 结果。只读 TS/HTTP 和文献库页面现可按固定版本有界阅读目录、片段和资源，并复核原始文件或文档片段证据；原始 PDF 文件证据也支持旧 v1/v2 Catalog。用法与能力缺口见[解析与发布文档版本](docs/guides/document-processing.md)和[独立文献库阅读](docs/guides/library-query.md)。
+
+当前实现还额外提供以下**内部/operator 入口**，它们不属于上述六个一级名称的目标合同，也没有
+进入目标命令树（`apps/server/src/cli/main.ts` 的解析与直接测试覆盖其参数校验）：
+
+```text
+sciretriever storage inspect|migrate|backup|restore-check
+sciretriever storage schema-inspect|schema-init --catalog PATH
+sciretriever storage schema-upgrade --catalog PATH [--dry-run | --backup PATH]
+sciretriever storage document-inspect|document-migrate --catalog PATH
+sciretriever doctor
+sciretriever jobs create|run
+```
+
+`jobs create/run` 是当前 durable-job 调试/实验入口（`application/jobs` 之上），其目标合同归属
+（纳入或移出六个一级名称）仍待 owner 决定，见
+[迁移计划 T047/T048](docs/archive/2026-09-07-typescript-browser-workbench/full-migration-roadmap.md)；
+正式 `storage schema-init` 在精确不存在目标创建 v8，`schema-upgrade` 在精确 v1–v7 目标和同目录未存在备份上显式升级；inspect/dry-run 只读，普通启动不升级。整链持业务写锁，每步独立事务，失败报告实际中间版本并保留原始备份；操作前先停写，恢复须保全资产和切换后增量，见[初始化、升级与恢复](docs/guides/upgrade.md)。工具能力不授权代理执行真实数据迁移。
+历史 `storage migrate` 仍只允许对合成副本执行。
+文档 Catalog v3 的独立合成迁移入口见[文档 Catalog 迁移指南](docs/guides/document-catalog-migration.md)。
 
 每个叶命令都支持 `--json`。稳定主结果写入 stdout；日志、进度和脱敏诊断写入 stderr。日志有两个运行模式：
 
@@ -153,18 +191,28 @@ Debug 图片不写入仓库、Catalog 或普通日志。需要复核时，从 `c
 
 日志是本次运行的非权威诊断，不写入 Catalog，也不用于决定重试、耗尽或文献状态。稳定进程退出码如下：
 
-| 退出码 | 含义 |
-| ---: | --- |
-| `0` | 正常到达操作边界；包括全部目标成功、局部目标失败和全部目标失败，逐目标结果以 Report 为准 |
-| `2` | 命令输入或 usage 错误 |
-| `3` | 操作级失败，或显式 probe 未通过；不表示一个正常结束的批次中存在失败目标 |
-| `4` | 配置或生产 Bootstrap readiness 失败 |
-| `70` | 操作系统或系统级 I/O 失败 |
-| `130` | 受控中断 |
+| 退出码 | 含义                                                                                                      |
+| -----: | --------------------------------------------------------------------------------------------------------- |
+|    `0` | 正常到达操作边界；包括全部目标成功、局部目标失败和全部目标失败，逐目标结果以本次命令的 JSON 输出为准      |
+|    `2` | 命令输入或 usage 错误                                                                                     |
+|    `3` | 操作级业务失败（如导出、书目写入或 `literature show` 目标不存在）；不表示一个正常结束的批次中存在失败目标 |
+|    `4` | 配置或生产 Bootstrap readiness 失败                                                                       |
+|   `70` | 操作系统或系统级 I/O 失败                                                                                 |
+|  `130` | 受控中断                                                                                                  |
 
-批处理自动化不能只用退出码判断“每篇都成功”：`0` 表示命令完整走到正常边界，脚本还必须读取
-JSON Report 中各目标的结果分区；只有整个操作未能到达该边界时才返回 `3`。参数解析失败仍由
-`argparse` 返回 `2`，配置/组装失败返回 `4`，Ctrl+C 或 Report 的受控中断返回 `130`。
+**当前实际输出：** `complete pdf|content --json` 返回统一的 `DatabaseCompletionReport`，包含
+`completed`、`failed`、`skipped`、`notStarted`、`interrupted` 五个互斥分区和 `end`。
+`end.kind` 为 `finished`、`interrupted` 或带稳定 failure 的 `failed`。CLI 不自行维护目标循环：
+Application 构造的 `DatabaseCompletionService` 服务 CLI；durable Jobs 复用同一个
+`DatabaseCompletionTargetRunner`，同时保留逐 target/attempt/event 的持久语义。目标进度以脱敏 JSON
+行写入 stderr，最终完整报告写入 stdout。空 selector 也返回合法的空五分区报告，而不是旧的
+`{ goal, items }` 过渡对象。
+
+`DatabaseCompletionReport` 是当前实现的稳定程序结果。自动化应读取五个分区和 `end`，不能把
+单一退出码解释成“每篇都成功”：`0` 表示操作到达正常边界，仍可能包含逐目标 `failed` 或
+`skipped`；报告级 `failed` 返回 `3`，受控中断返回 `130`。参数解析失败返回 `2`，配置或
+生产 Bootstrap readiness 失败返回 `4`，系统级 I/O 失败返回 `70`（实现见
+`apps/server/src/cli/main.ts`）。
 
 ## 发现与补全是两类操作
 
@@ -186,7 +234,7 @@ sciretriever complete content ...
 - 一个或多个 `--meta-literature-id`
 - 一个或多个 `--literature-id`
 
-实际目标集合只在本次进程内冻结，不会作为新的持久实体写入数据库。重跑会重新读取 current facts，从第一个缺失步骤继续。普通范围按 MetaLiterature 去重，并默认只补一个可用 Literature 版本；只有明确的 `NoPrimaryPdf`，或候选耗尽后的明确 `NoUsableContent`，才会跨版本尝试。网络、存储、Parser、LLM 失败，取消，或无法判断的结果都不会触发跨版本。
+实际目标集合在当前维护操作或 durable Job 中冻结；重跑会重新读取 current facts，从第一个缺失步骤继续。普通范围按 MetaLiterature 去重，并默认只补一个可用 Literature 版本；仅明确的自动 PDF 正常耗尽可支持跨版本尝试。`NoUsableContent`、网络、存储、Parser、LLM 失败，取消或无法判断的结果都不触发跨版本，已接纳材料不会因分析失败被撤销。
 
 ## 本地导入、查询与导出
 
@@ -201,6 +249,8 @@ pnpm sciretriever import pdf LITERATURE_ID input.pdf --json
 ```
 
 该命令要求选择已经存在的具体 Literature。SciRetriever 复制而不移动用户文件，并在内部副本上检查实际 PDF 字节、标准 reader 和页面树；不会保存用户文件的绝对路径，也不会修改或删除原文件。若已有主 PDF，导入会拒绝而不是静默替换。成功只达到 `ASSET_READY`，不会隐式运行 Parsing 或 Analysis；同时会清除该 Literature 先前的自动获取耗尽事实。
+
+CLI、公开 TS `maintenance.ingestPdf` 和本机维护页使用同一接纳规则。错文章或证据不足时按既有保守身份合同拒绝发布；分析后的内容不足不会推翻已经验收的 PDF。独立维护页入口与上传限制见 [PDF 获取指南](docs/guides/pdf-acquisition.md)。
 
 `export metadata`、`export pdf` 和 `export content` 默认拒绝覆盖已有目标；只有显式提供 `--overwrite` 才会替换。三种书目格式都采用原子发布。PDF 和 content 的目标设为 `-` 时可把原始 artifact 写入 stdout，因此不能同时使用 `--json`。
 
@@ -221,11 +271,12 @@ library
 download
 ```
 
-未知组和未知字段会 fail closed。所有正常命令只读取固定的
+未知组和未知字段会 fail closed。生产命令只读取固定的
 `~/.sciretriever/config.toml`；CLI 不提供 `--config`，也不读取配置路径环境变量或当前目录
-`config.toml`。裸 `sciretriever config` 在第一次确认修改时创建并继续管理该文件，直接编辑也
-受支持。完整字段、权限和人工迁移说明见[配置手册](docs/guides/configuration.md)。真实路径、
-Provider 选择、个人运行参数和用户配置文件都不应提交到仓库。
+`config.toml`。内部测试可以注入临时 `home` 进行隔离，但该 seam 不改变生产配置身份。裸
+`sciretriever config` 在第一次确认修改时创建并继续管理该文件，直接编辑也受支持。完整字段、
+权限和人工迁移说明见[配置手册](docs/guides/configuration.md)。真实路径、Provider 选择、个人
+运行参数和用户配置文件都不应提交到仓库。
 
 旧的当前目录配置或旧环境变量曾指向的文件不会被自动读取、复制、移动或删除。迁移时先确认
 `~/.sciretriever/config.toml` 不存在；若已存在，应人工比较并合并，不能直接覆盖。迁移完成后
@@ -235,25 +286,21 @@ Provider 选择、个人运行参数和用户配置文件都不应提交到仓�
 `~/.sciretriever/credentials.toml`。其目录必须是当前用户拥有、权限为 `0700` 的普通
 非符号链接目录；文件必须是当前用户拥有、权限为 `0600` 的普通非符号链接文件。
 
-- 裸运行 `config` 打开统一交互中心，首页固定为单词级 `Models`、`Search`、`Download`、`Parse`、`Analyze`、`Browser`、`Status`、`Theme` 与 `Quit`。首页和 Status 都只读取本地状态，不会因为打开页面而联网。
-- `Models` 只管理两类对象：Model Provider 与完整 `provider/model` Model。Provider 拥有 `api`、`base_url` 和 exact-origin API key；Model 只拥有 `reasoning`、`image` 与 `stream`。`stream` 默认开启，可在具体 Model 的 Add/Edit 流程关闭。`Models → Providers` 独立管理 Provider、Key 和 Provider 测试；Search/Download 在具体 Source 对象页就近管理普通设置、Key 与 Test，Parse 则用一个 `Setup` 连续配置 MinerU 服务、上传授权与所需 token。
-- `Models → Add` 先选择已有 Provider 或 `New`。新增远程 Provider 时，同一流程询问 URL、API 和隐藏 Key；Key 就绪后自动读取一次 `/models`，让用户选择远端 model。只有目录失败、为空或不能安全解析时才出现 `Manual`，目录结果不持久化。
-- `Analyze → Setup` 与 `Browser → Setup` 直接选择已有完整 Model reference，不修改 Model，也不保存 reasoning/stream override。Analyze 的 strict structured output、text-only 和 no-tool 合同由 Analysis 派生；Browser 只展示 `image = true` 的 Model，其当前生产 Observation 使用的 JPEG、单图、字节、tool decision 与调用限制由 Acquisition/Bootstrap 派生。
-- `Search/Download → Sources` 各有 `Auto / Custom` 两层。Auto 使用当前版本离线维护的默认安全集合；Custom 精确冻结用户列表与顺序并允许为空。Auto → Custom 冻结当时有效集合，Custom → Auto 删除固定列表。Search 的 `Limit` 默认 500，分别约束每个 Source 的过滤前原始 item，不是共享总量或 HTTP 请求数；选中 Source 后才显示它实际拥有的 `Setup`、`Key`、`Test`、`Enable` 或 `Disable`，Key 存在不改变集合。当前 Metadata Auto 为 Crossref、Semantic Scholar、arXiv、OpenAlex、Europe PMC、DataCite、CORE、OpenCitations；Acquisition Auto 命名 Source 为 arXiv、Europe PMC，并始终消费安全的 direct/landing hints。
-- Sci-Hub 默认关闭且不进入 Auto；切到 Download Custom 后，`Sources → sci-hub → Enable` 可直接启用当前版本内置列表，Source 页始终就近提供 `Mirrors / Test`，并按当前状态显示 `Enable` 或 `Disable`。镜像编辑器用 `Add / Remove / Save / Reset / Back` 将有效列表保存为 custom override 或恢复跟随 builtin。系统按顺序而非并发尝试，只对 DOI 构造 landing，不自动发现镜像，也不询问 Key/Cookie/代理；配置 Test 不访问镜像或下载任意 PDF。
-- TTY 界面使用 Rich 与 prompt-toolkit，支持方向键、Enter、Esc/左方向键返回、`/` 搜索长列表，以及 `M/S/D/P/A/B/I/T/Q` 首页快捷键；配置、查看、测试、危险、返回和退出动作分别使用 `◆/◇/▶/!/←/×` 及不同颜色，`NO_COLOR` 下仍保留标记。所有下级选择菜单都区分 `Back` 与 `Quit`：前者只返回上一级，后者立即关闭整个配置中心；确认和输入中的取消仍保持操作取消/中断语义，不作为菜单导航。`--theme auto|dark|light|mono` 可选主题；重定向输入时自动使用确定性的编号菜单。全部交互提示写 stderr，stdout 保持为空。
-- `config status` 是纯本地检查，不联网；默认用紧凑表格分别显示 Model Providers/Models、Analyze/Browser 选择、MinerU、凭据 presence 与 readiness，按 Metadata/Acquisition 列出文献 Provider 字段，并明确展示 PDF 的“公开路径 → 授权 API → 受控浏览器”顺序。JSON 顶层使用 `models/analyze/download/browser/parsing/providers/storage/execution/library`；其中 `download` 只表示 Acquisition Source，`browser` 表示唯一通用 Agent route。输出绝不显示 secret、mask、长度、hash 或 fingerprint。
-- `config test` 按配置 owner 分层：`provider <name>` 只读取一次有界 Model 目录；`model <provider/model> [--image]` 验证精确 Model 及其 reasoning/stream，但不改变 Analyze/Browser 选择；`search <source>` 与 `search --all` 执行 Metadata 最小只读请求；`download <source>` 与 `download --all` 只报告 Download 本地 readiness 和外部 probe 是否存在；`parse` 只执行 MinerU health；`analyze` 与 `browser model` 验证当前任务 Model；`browser site <access-key>` 才会显式启动受控 Browser。Model/Search/Analyze/Browser Model 可能消耗少量额度，均不发送用户文献或真实页面。
-- 测试结果使用紧凑的 `Test / Request / Result`：Model、Analyze 和 Browser Model 测试把实际发送的 wire `model` 与本地 Provider 分行显示，并在 Request 中显示实际 method/endpoint 与 `Stream · on/off`；Provider/MinerU 显示实际的无凭据 method/endpoint；完整 `provider/model` 配置引用只保留在结构化 details 中。失败优先说明 HTTP/连接/认证/API/Model/请求或响应合同原因并给出一项下一步，不再只显示内部错误码。`--json` 复用同一 `diagnosis.request/reason/action`。Key、query、header、响应正文、供应商任意 message 和异常不会进入结果；没有更强证据的 404 只说明 Model 或 endpoint 之一不存在。
-- Acquisition 没有安全且与具体文献无关的 probe 时，Download Test 明确返回 `acquisition-probe-unavailable`，不会借用 Metadata、访问 Sci-Hub、下载任意 PDF 或证明文章 entitlement。`config test --all` 汇总启用的 Search Source、Download 的可见限制、Analyze、Parse，并在 Browser 已启用时测试其 Agent Model；它不读取 Provider 目录、不测试任意未选 Model、不启动 Browser Site、不下载或上传 PDF。所有结果只属于当次 CLI，不创建 Catalog、DiscoveryRun、Literature、Asset、Report 或测试历史。
+- 裸运行 `config` 打开统一交互中心，首页固定为 `Models`、`Search`、`Download`、`Parse`、`Analyze`、`Browser`、`Status`、`Theme` 与 `Quit`。首页和 Status 都只读取本地状态，不会因为打开页面而联网。Models 页面可新增或修改 Provider、设置隐藏 API key、新增 Model，并为 Analyze/Browser 选择 Model；Search/Download 页面编辑 Auto/Custom Source 集合和 Search limit；Parse、Analyze、Browser 页面编辑各自的普通配置。
+- 本机 Web 配置工作空间支持 Source Auto/Custom、来源参数、Provider/Model 注册及 Analyze/Browser 模型选择；分区保存保留其它草稿，冲突不覆盖已保存值。普通配置影响已运行工作台时明确提示重启；已组装能力在新外部请求前重新授权凭据。启动时缺凭据而未组装的能力，补齐后需重启重新组装。高级配置仍可使用 CLI 配置中心或固定 TOML，详见[配置手册](docs/guides/configuration.md)。
+- TTY 界面使用 ANSI Rich 风格的 Panel/Table 渲染与 `@inquirer/prompts` 交互，支持方向键、Enter、确认、隐藏输入和 `auto/dark/light/mono` 主题；`NO_COLOR` 强制单色。保存普通配置前会显示 Before/After 差异，确认后通过 TypeScript Configuration Owner 校验并原子发布；凭据始终走同一 owner 的 credential 接口，界面不回显 secret。TTY 交互写 stderr；重定向输入使用确定性的纯文本状态页和 `M/S/D/P/A/B/I/T/Q` 菜单。
+- `config status` 是纯本地检查，不联网；默认 Panel/Table 显示当前区域、选择摘要、凭据 presence 和 readiness，并明确标出不会联网或启动 Browser。`--json` 保留机器可解析的原始结果。输出绝不显示 secret、mask、长度、hash 或 fingerprint。
+- `config status` 是纯本地 readiness 检查，不联网。`config test` 在用户显式确认（或使用 `--json` 的脚本调用）后，通过一个共享 Probe dispatcher 执行有界、只读的最小验证；Provider、Model、Search、Parse、Analyze 会在授权且 adapter 可用时进行一次受控请求。
+- Download 没有安全的 Literature-independent probe，稳定返回 `acquisition-probe-unavailable`；Browser Site 只有显式提供 `browser_site` seam/adapter 时才会运行，否则稳定返回 `browser-site-probe-unavailable`。Probe 结果明确给出 `network_performed`、`browser_launched`、`persisted=false` 和 entitlement `not-proven`。
+- 配置诊断不得创建 Catalog、DiscoveryRun、Literature、Asset、Entry Report 或测试历史，也不得输出 Key、query、header、响应正文、供应商任意 message 或原始异常。真实 Provider、站点和 Browser runtime 仍需单独授权，离线 unavailable 不能解释为通过。
 
 三项核心处理能力的配置入口与验证是：
 
-| 能力 | 在裸 `config` 中的配置路径 | 显式验证 | 本地 ready 还要求 |
-| --- | --- | --- | --- |
-| 文献分析与总结 | `Models → Add` 配置 Model；`Models → Providers` 管理 Provider/Key；`Analyze → Setup` 选择并设置业务预算 | `Analyze → Test` 或 `config test analyze`；真实内容走 `complete content` | 所选 Model、其 Model Provider 与 exact-origin credential、Analyze limits 完整；strict structured output 由模块派生 |
-| Browser Agent 下载 | `Models → Add` 配置 `image = true` 的 Model；`Browser → Setup/Profiles/Runtime` | `Browser → Test → Model` / `config test browser model` 验证模型；`Browser → Test → Site` / `config test browser site ACCESS_KEY` 验证最小站点；真实 PDF 走 `complete pdf` | 所选 image Model、其 Provider/Key、Agent controller、Browser identity Profile、CloakBrowser/Playwright/binary 与 headed display 全部就绪 |
-| MinerU 解析 | `Parse → Setup` | `Parse → Test` 或 `config test parse`；真实 PDF 解析走 `complete content` | endpoint、部署身份，以及 remote 模式的上传授权与 origin-bound token |
+| 能力               | 在裸 `config` 中的配置路径                                                                              | 显式验证                                                                                                                                | 本地 ready 还要求                                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| 文献分析与总结     | `Models → Add` 配置 Model；`Models → Providers` 管理 Provider/Key；`Analyze → Setup` 选择并设置业务预算 | `config test analyze` 执行一次有界 Model probe；真实内容仍走 `complete content`                                                         | 所选 Model、其 Model Provider 与 exact-origin credential、Analyze limits 完整；strict structured output 由模块派生                       |
+| Browser Agent 下载 | `Models → Add` 配置 `image = true` 的 Model；`Browser → Setup` 选择模型和 Profile                       | Browser Model probe 可执行；Browser Site 需要显式 site adapter/seam；生产 `complete pdf` 仍受 verified runtime/admission 与真实环境约束 | 所选 image Model、其 Provider/Key、Agent controller、Browser identity Profile、CloakBrowser/Playwright/binary 与 headed display 全部就绪 |
+| MinerU 解析        | `Parse → Setup`                                                                                         | `config test parse` 使用有界 MinerU health probe；真实 PDF 解析仍走 `complete content`                                                  | endpoint、部署身份，以及 remote 模式的上传授权与 origin-bound token                                                                      |
 
 模型目录结果只是 Provider 当次报告的 setup observation，不会持久化，也不会替代 probe。目录只
 采信安全的模型 ID；`image` 由用户根据模型文档确认，strict output、tool、媒体格式和调用限制由
@@ -280,7 +327,7 @@ Reset、迁移、恢复或 fallback。operator 手工删除旧 section 后，模
 result 或 tool call；具体 Model 可以设置 `stream = false`，此时只请求和解析非流式 JSON。
 Analyze/Browser 只继承所选 Model，不会收到事件流、覆盖 stream，或在失败后触发另一种模式的重发。
 
-自动 PDF 获取固定按“公开来源 → 授权 Provider API → 受控浏览器”逐层升级。当前 Auto 公开
+自动 PDF 获取的 Accepted 目标固定按“公开来源 → 授权 Provider API → 受控浏览器”逐层升级。当前生产 Application 已通过 Entry 接入惰性 Browser host factory、Network admission、统一 Article flow/Intake 和身份验收：一个有界 cohort 先完成 Public 波次，再让未解决目标进入 Authorized API 波次，最后才把最小剩余集合交给 Application 级 `BrowserSessionBroker` 串行处理。locator routes 正常耗尽，或 route 自己显式声明 `not-applicable`/`no-capability` 且 Browser 独立 admitted 时，才允许进入 Browser；timeout、临时网络错误、429、quota、deferred、system、storage、cancel 等不会绕过限制。真实 CloakBrowser 正路径仍未运行，不能把离线 seam 当作现场 Browser 证据。当前 Auto 公开
 阶段包含已保存 direct/landing hints、arXiv 与 Europe PMC；Unpaywall 需要在 Custom 中配置联系
 邮箱，Sci-Hub 默认关闭并在 Custom 显式启用后按
 当前版本 builtin 或普通 `[sources.acquisition.sci-hub].urls` custom override 顺序工作的 DOI-only
@@ -298,22 +345,15 @@ ScienceDirect/linkinghub 才适用。它先从 Article FULL XML 提取显式 `MA
 attachment EID，再用 Object Retrieval 获取 PDF；FULL XML 没有可用 MAIN object 或无法
 安全解释时，才以同一强身份向 Article Retrieval 协商 PDF 表示。可解析的认证、授权、quota
 或服务错误不会被该 fallback 绕过；普通 Scopus EID、任意 object、XML 和 supplement 不会
-冒充主 PDF。Springer 当前全文 API 产品返回 JATS/XML，不是主 PDF API。Controlled Browser
-当前只有一条 `browser:generic` production route。它在公开与授权 API 层完成后，接收仍缺 PDF 且
-具有安全 canonical landing 的文献；无需匹配 Publisher 点击规则或预设站点。用户选择并初始化
+冒充主 PDF。Springer 当前全文 API 产品返回 JATS/XML，不是主 PDF API。Controlled Browser 的生产路线只有一条 `browser:generic` route。它在 locator 正常耗尽或显式低风险 route unavailability 且具有安全 canonical landing 时接收仍缺 PDF 的文献；无需匹配 Publisher 点击规则或预设站点。当前 Entry/Application 已接入这条有界 escalation，并以 Application 共享的 `BrowserSessionBroker` 和 FIFO delivery scheduler 保护 Browser host；真实 verified runtime 仍是未运行边界。用户选择并初始化
 一个持久 Browser Profile、显式启用 Browser，并配置 `image = true` 的 Model 与本地 runtime 后，
 唯一 `AgentBrowserController` 根据稳定页面 Observation 选择封闭动作。总开关、Profile 存在或
 其中保存了浏览器状态都不证明组织合同、登录成功或具体文章有权限，operator 仍须确保实际使用
 符合组织授权和站点条款。
 
-同一批目标会先完成 Public cohort，再只对剩余目标执行 Authorized API cohort；低风险路线
-发生 timeout、临时网络错误、`429`、quota 或 `Retry-After` 时会延期或失败，不会借机切换
-Browser 绕过限制。所有 Browser 文章进入 `browser-generic`，固定 `concurrency = 1`，并按项目
-保守的启动间隔、窗口和 cooldown 串行；`[browser].max_concurrency` 只保护本机 Browser 资源，
-默认 `5`，必须是大于 `1` 的整数且不设上限。较大的值不会启动多个 Browser，也不会改变通用
-执行组的串行语义。
+目标编排要求同一批目标先完成 Public cohort，再只对剩余目标执行 Authorized API cohort，最后才进入 Browser cohort；低风险路线发生 timeout、临时网络错误、`429`、quota 或 `Retry-After` 时不得借机绕过限制。当前实现已经按这个顺序形成三级屏障，逐波按冻结顺序提前交付终态 receipt，并由 Application 共享的 `BrowserSessionBroker` 串行 Browser delivery。以下真实站点时长、现场可达性和外部吞吐仍属于未运行证据，不能从离线测试推断。
 
-Browser 升级前，正常日志会显示剩余篇数、`browser-generic` 的
+（目标合同·当前未实现）Browser 升级前，正常日志应显示剩余篇数、`browser-generic` 的
 `minimum_start_interval`、`next_allowed_in_seconds` 和保守 `minimum_duration_seconds`，仍不包含
 无法预知的网络、页面渲染或服务等待时间。Agent 从第一次统一 Observation 起在元素点击、坐标
 点击、surface 滚动、后退、等待变化和停止六种封闭动作中选择。Controller 只执行
@@ -322,29 +362,30 @@ Browser 升级前，正常日志会显示剩余篇数、`browser-generic` 的
 Blocked / Failed / Cancelled` 交给 Acquisition，页面交接期间不会把半加载界面交给 Agent。第一次
 self-transition 反馈给下一轮，
 重复 self edge 或 `A → B → A` 已知边才停止，可能的下载 Candidate 必须 captured、cleared 或 timeout。
-Challenge 只是普通页面状态，并分别保留 Agent Stop、self、cycle、Candidate timeout 与 resource
-blocked 结果；固定 32 次模型决策 safety fuse 只形成 `controller-safety-limit`，不写入获取耗尽。
+Challenge 只是目标页面状态，并分别保留 Agent Stop、self、cycle、Candidate timeout 与 resource
+blocked 结果；当前通用 flow 使用 24 次 action、12 次 model-call 和 operation deadline/candidate-wait
+上限，达到上限只形成稳定 Browser failure，不写入获取耗尽。真实 Challenge/blocked/denied 正路径仍未运行。
 第一版仍不提供交互式 Browser 登录、机构选择、
 账号/密码输入、MFA、外部 CAPTCHA solver 或 token 注入；登录/MFA/账号警告和 cleanup failure
 会以稳定原因进入本次报告。已提交的其它 Provider 结果不会回滚。Ctrl+C 形成受控中断，重跑会
 重新读取数据库 current facts，只补仍缺失的步骤。
 
-Controlled Browser 使用一个 operator-managed 持久 Profile，并在首次初始化时把 native Linux
+（目标合同·部分接线，真实 runtime 未运行）Controlled Browser 使用一个 operator-managed 持久 Profile，并在首次初始化时把 native Linux
 persona、locale、timezone、screen、Browser version policy 和 fingerprint seed 固化到 owner-only
 identity manifest。同一 Profile 冷启动时复用同一设备身份；seed、Profile 路径和浏览器状态不会
-进入普通配置、日志、Report 或文献数据库。每个生产对象图只启动一个 `headless = false` 的
-CloakBrowser patched Chromium process 和一个 persistent BrowserContext，SciRetriever 仍以
-Playwright API 作为内部控制协议。所有文章共享该 context，并由 `browser-generic` 串行调度；
-每篇文章使用隔离 page、handler、连接绑定和临时下载目录。对象图关闭后 process/context 与临时
-下载工作区会清理，Profile 中由 Chromium 管理的状态
-跨命令保留。无 GUI Linux 使用 Xvfb；出版社请求继续由 Chromium 原生完成 TLS、HTTP、Cookie、
-redirect、页面点击和下载。本机 loopback CONNECT proxy 只把已审核 hostname/port 固定到 Network
-批准的精确 IP，并透传加密字节，不终止 TLS，也不以 Python HTTP 替代浏览器网络栈。
+进入普通配置、日志、Report 或文献数据库。生产 Application 已拥有惰性 host factory、Network
+navigation admission 和唯一 `browser:generic` escalation；完整生产对象图仍要求一个
+`headless = false` 的 CloakBrowser patched Chromium process/context、共享 scheduler/session broker
+和每篇文章隔离 page/handler/临时下载目录。离线 seam 只证明 wiring，不证明真实 Browser 已启动。
+对象图关闭后 process/context 与临时下载工作区应清理，Profile 中由 Chromium 管理的状态跨命令保留。
+无 GUI Linux 使用 Xvfb；出版社请求继续由 Chromium 原生完成 TLS、HTTP、Cookie、redirect、页面点击
+和下载。本机 loopback CONNECT proxy 只把已审核 hostname/port 固定到 Network 批准的精确 IP，并透传
+加密字节，不终止 TLS，也不以 Python HTTP 替代浏览器网络栈。
 
 `sciretriever config` 的 `Browser → Runtime` 用于显式安装、更新或回退经核实的 CloakBrowser
 binary；`Browser → Setup/Profiles` 用于选择 Agent Model、初始化一个不含敏感信息的固定身份
 Profile、删除本地 Profile、禁用自动 Browser 或调整本机资源 cap。普通 Completion 不隐式下载
-binary，wheel 也不嵌入 vendor binary。
+binary，当前 TypeScript portable package 也不嵌入 vendor binary。历史 wheel 说法仅属于迁移材料。
 installer 只在该显式动作中保留并验证本次实际 archive：Ed25519 签名、manifest
 version、仓库固定 SHA-256 与 archive 实际 SHA-256 必须同时一致后才会发布。普通
 Browser 运行使用每次 lease 创建的无凭据临时 cache view，vendor 只能看见已验证的
@@ -352,22 +393,18 @@ Browser 运行使用每次 lease 创建的无凭据临时 cache view，vendor �
 older-free v146 不消费 CloakBrowser license；已保留的凭据 section 在 status 中明确显示为
 `reserved-not-used-by-pinned-free-binary`。
 SciRetriever 不提供 Cookie 导入导出或人工登录窗口，不填写账号/密码、不选择机构、不读取 Cookie
-或登录结果，也不处理 MFA、注入 CAPTCHA solver/token 或切换身份/出口；可见 Challenge 仍可由
-唯一 Agent controller 在相同封闭页面动作内处理。同一 Profile 同时只能由一个 Browser
-process 使用。
+或登录结果，也不处理 MFA、注入 CAPTCHA solver/token 或切换身份/出口；目标合同允许唯一 Agent
+controller 在相同封闭页面动作内处理可见 Challenge，但当前真实 Challenge/blocked/denied 正路径仍是
+未运行残余。同一 Profile 同时只能由一个 Browser process 使用。
 
-CloakBrowser 是普通 Acquisition 与显式 `config test browser site` 唯一的生产 Browser runtime；
-Playwright 只作为 CloakBrowser context 的内部控制 API。源码不再发现或启动 Playwright bundled
-Chromium、系统 Chrome 或其它 stock runtime，也没有用户可选或隐藏的双引擎开关、运行失败自动
-fallback 或 `cutover_pending` 状态。缺少任一 Cloak runtime 前置条件时，Browser route 会以稳定
-原因 fail closed，Public 与 Authorized API 路线仍按各自合同运行。
+按目标合同，CloakBrowser 是普通 Acquisition 与显式 `config test browser site` 唯一的生产 Browser runtime；当前 Application 惰性组装 host factory，固定 bundle 的回环正路径已验证，真实站点仍受授权和具体环境限制。Playwright 只作为 CloakBrowser context 的内部控制 API。源码不再发现或启动 Playwright bundled Chromium、系统 Chrome 或其它 stock runtime，也没有用户可选或隐藏的双引擎开关、运行失败自动 fallback 或 `cutover_pending` 状态。缺少任一 Cloak runtime 前置条件时，Browser route 会以稳定原因 fail closed，Public 与 Authorized API 路线仍按各自合同运行。
 
-生产 Browser route 只有 `browser:generic`。只有 `[browser].enabled = true`、`model` 引用一个
+目标生产 Browser route 只有 `browser:generic`。只有 `[browser].enabled = true`、`model` 引用一个
 `image = true` 的已就绪 Model、`profile` 已选择且固定 identity manifest 安全就绪、CloakBrowser
 wrapper、Playwright API、经签名核实的目标 binary 版本和 headed display（Linux 上
-为 Xvfb）都就绪时，生产 Bootstrap 才会创建可执行 Browser adapter。`sciretriever config status`
-只检查这些本地静态事实，不启动 Browser、不读取 Profile 内容，也不会断言已登录；显式 probe
-每次只能选择一个当前 eligible 目标：
+为 Xvfb）都就绪时，生产 Bootstrap 才会把 Browser capability 标为可用；缺 verified runtime 或
+Network navigation admission 时，`browserHost()` 和 route 都稳定不可用。`sciretriever config status`
+只检查这些本地静态事实，不启动 Browser、不读取 Profile 内容，也不会断言已登录；显式 Browser Site probe 的目标合同如下：
 
 ```text
 sciretriever config test browser site acs-publications
@@ -381,10 +418,7 @@ sciretriever config test browser site springerlink
 sciretriever config test browser site wiley-online-library
 ```
 
-启用 Browser 后，九家都可以成为显式 probe 目标；probe 只使用对应 Profile 的已核实首页与
-deny-all capture guard，检查 Cloak runtime、固定身份和目标可达性。它不调用 Browser Model，
-不使用 Publisher 页面规则，不下载文章 PDF，也不评估 Profile 是否已登录、当前机构 IP 或任意
-文章 entitlement；`config test --all` 不会隐式启动 Browser。
+目标合同规定，启用 Browser 且 runtime 就绪后，九家都可以成为显式 probe 目标；probe 只使用对应 Profile 的已核实首页与 deny-all capture guard，检查 Cloak runtime、固定身份和目标可达性。当前 CLI 已能通过统一 Probe dispatcher 接受显式 Browser Site adapter/seam；没有该 seam 或 verified runtime 时返回稳定 `browser-site-probe-unavailable`，不伪造通过。它不调用 Browser Model，不使用 Publisher 页面规则，不下载文章 PDF，也不评估 Profile 是否已登录、当前机构 IP 或任意文章 entitlement；`config test --all` 不会隐式启动 Browser。
 支持矩阵、等待语义、状态检查和故障处理详见
 [PDF 获取指南](docs/guides/pdf-acquisition.md)。限速只能降低风险，不能保证账号不会被限制；
 用户仍须遵守自己的访问授权和站点规则。
@@ -393,39 +427,22 @@ deny-all capture guard，检查 Cloak runtime、固定身份和目标可达性�
 
 ## 当前验收边界
 
-当前证据严格分为三层，不能互相替代：
+历史迁移证据、当前 TS 机械门禁和真实外部环境证据不能互相替代：
 
-### A. 安装 wheel、真实 console 与生产 Bootstrap
+### 历史迁移验收（非当前 TS 发布门禁）
 
-已在隔离虚拟环境中从 fresh wheel 验证真实 `sciretriever` console script，且没有仓库 `sys.path` 泄漏。该层已经覆盖：固定命令树及旧入口拒绝；生产本地空查询；同一真实 SQLite Catalog/ArtifactStore 上的三种书目导入导出、手动 PDF、search/show、references/cited-by/ReferenceDetail、PDF/content readback 和导出、交互式 `config` 凭据设置/移除及 `config status`；以及外部 scope 未就绪时在 Storage 创建前稳定 fail closed。
+旧 wheel/虚拟环境 A 层曾用于迁移阶段的安装产物、console 和离线对象图验证。它属于历史证据，不应被解释为当前 TS 生产 Browser、真实 Provider 或真实 Catalog 已验收；当前质量入口以 `pnpm quick`、`pnpm test`、`pnpm full` 和直接测试为准。
 
-同一层还用测试自有的离线 resolver/transport 替换最底层真实网络连接，在不替换 CLI、参数解析、配置与凭据加载、生产 Bootstrap、Provider registry、功能模块 API、Entry operation、SQLite/ArtifactStore、报告或退出码的前提下，验证 production Crossref/Semantic Scholar、direct PDF、MinerU protocol 2 和 OpenAI Responses adapter 的受控线级响应。CORE/Elsevier/Wiley 授权 PDF client/registry 另由离线合同与生产组装测试覆盖 endpoint、私有凭据 header、阶段顺序、强访问身份、MAIN object、Article PDF 表示、DOI landing 路由和失败分类；没有发送真实全文 download 请求。该旅程覆盖 Topic/Citation Discovery、多来源与部分失败、scan limit、去重、PDF/Content Completion、明确无内容后的候选替换与物理回收、六类 selector、局部失败与重跑，以及本地查询和 Artifact 导出不触发外部请求。
+迁移阶段的离线 resolver/transport、fake Provider、loopback MinerU 和组件级 Browser fixture 只证明受控 Port、适配器和安全边界；它们不证明真实 Provider、Parser、LLM、Browser 站点或生产 Catalog 已在线成功，也不替代当前 TS Full。
 
-这层证明安装产物、生产对象图和已实现 adapter 的离线接线，不等于真实 Provider、Parser 或 LLM 服务已经在线成功。
+### 历史深度合同与受控协议 QA
 
-### B. 安装包与显式 Port 注入的深度合同验收
+迁移阶段曾在公开 Port 注入 fake，以驱动中断、失败、版本组合、解析和分析边界；这些证据可以作为设计合同的历史参考，但当前生产代码是否满足五分区 Report、统一 Entry 和 Browser route，必须重新以当前 TypeScript 源码与直接测试证明。
 
-补充场景使用安装 wheel 中真实的 Entry、Metadata、Literature、Acquisition、Parsing、Analysis 和 Storage 模块，并在公开 Port 边界注入受控 fake，以精确驱动难以稳定在线重现的中断、失败和版本组合。
+MinerU loopback QA 只验证受控 `health → submit → poll → archive` 协议边界，不代表 operator 的真实 MinerU 部署已经在线验证。
+Browser 组件、workbench fixture 和离线 host seam 证明 Observation、六种封闭动作、capture/cleanup、Network admission、版本化 delivery、Intake/身份验收和稳定拒绝的局部合同；固定 Cloak bundle 的回环测试另证明真实 runtime 正路径与同页人工协作接纳。它们不证明任意站点、机构 IP、真实凭据或具体文章 entitlement 已在线授权。缺少 `SCIRETRIEVER_CLOAK_BUNDLE` 时，依赖 Cloak 的测试应保留 `skipped`/`not-run` 证据。
 
-该层已经覆盖 Topic/Citation Discovery 的多来源、深度、边界、部分失败、去重和关系 publication；PDF/Content Completion 的六类 selector、目标冻结、稳定排序、受控跨版本和 exhaustion；Parser/LLM 局部失败、重跑只补缺失步骤、受控中断、五分区 Report，以及已提交事实保留。它证明这些精细控制流合同，不替代 A 层的真实 console 与 production Bootstrap 证据，也不代表外部服务已经在线验证。
-
-### C. 受控协议与安全组件 QA
-
-MinerU QA 使用安装 wheel 中的 production resolver、policy、transport、client、converter 和 adapter，连接当前测试进程内的受控 loopback HTTP service，验证 `health → submit → poll → archive`，并形成 parser-neutral Markdown、resource 和 provenance；私有 MinerU 中间文件不会泄漏。这不代表 operator 的真实 MinerU 部署已经在线验证。
-
-Browser 已完成受控组件 QA 和真实 CloakBrowser patched Chromium/Playwright API QA；本地 HTTPS
-场景覆盖准入页面发起的外部 JavaScript、受限 Cloudflare iframe/resource、未批准第三方 tracker 在
-DNS 前丢弃、自动 challenge clear、人工控件、settle timeout、普通 response/direct PDF、点击或
-页面脚本触发的跨 origin `3xx`、CDN PDF、HTTP attachment、通用 PDF 发现、native Chromium
-download、TLS/DNS/IP binding、固定身份 Profile 三次冷启动、一个 process/context、通用 session
-reuse 与文章级隔离、临时下载工作区清理、取消/超时和无残留资源清理。Playwright API 与
-CloakBrowser wrapper 是 wheel dependency；定制 Chromium binary 由用户显式安装并独立核实版本，
-不进入 wheel。离线 QA 使用通用 `browser:generic`、真实 Playwright API、真实 patched Chromium、
-本地 HTTPS、fake Model 与多种页面 fixture 验收稳定 Observation、六种动作、popup/viewer/capture、
-错误文章与 supplement 拒绝以及 cleanup；这证明安装产物与对象图接线，不等于当前 IP、真实机构
-协议、任意站点页面策略或具体文章已在线授权。
-
-验收从未使用真实 Provider 在线调用、真实凭据、真实用户 PDF 或真实生产 Catalog；本项目也不据此宣称这些环境已被验证。
+任何验收都不得使用真实 Provider 在线调用、真实凭据、真实用户 PDF 或真实生产 Catalog，除非用户另行授权；离线绿色结果不能替代这些环境的授权和现场证据。
 
 ## 数据与安全边界
 

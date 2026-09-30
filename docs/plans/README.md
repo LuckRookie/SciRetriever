@@ -2,6 +2,12 @@
 
 本目录保存需要跨阶段执行和恢复的活动 Change Plan。计划负责把已经获准的方向组织成可执行、可验证、可恢复的工作，不定义产品需求、架构合同或已经发布的行为。
 
+当前没有未完成的活动实施计划。[2026-09-28 TypeScript 知识架构迁移](../archive/2026-09-28-typescript-knowledge-architecture-migration/README.md)已于 2026-09-30 完成 **27/27** 项任务并归档。代码 Full、实际安装旅程及兼容/恢复交接已验收；当前使用方法见[用户指南](../guides/README.md)。真实环境质量验收、用户数据切换和发布未执行。
+
+[2026-09-25 讨论计划](../archive/2026-09-25-requirements-and-operation-architecture/README.md)保持 **Superseded**，其未执行项已由本次迁移承接，不改写为 Completed。较早的[TypeScript 迁移计划](../archive/2026-09-07-typescript-browser-workbench/README.md)和[架构 UX 计划](../archive/2026-09-16-architecture-and-ux-improvements/README.md)保留各自历史证据。
+
+归档遵循现有本地 `archive/` 忽略策略，不随 Git 默认传递；长期有效事实维护在 requirements、ADR、技术正文及用户指南中。下文继续作为后续计划的组织与验收规范。
+
 ## 1. 权威边界
 
 - 产品范围和验收以 `docs/architecture/requirements.md` 为准；

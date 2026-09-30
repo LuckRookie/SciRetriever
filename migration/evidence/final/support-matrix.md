@@ -1,5 +1,11 @@
 # 第一阶段支持矩阵
 
+> **当前入口（2026-09-30）**：当前安装、Catalog v1–v8 reader 与实际 runtime 验收边界见[安装兼容矩阵](../../../docs/guides/installation.md)；正式初始化/升级与真实切换准备见[升级指南](../../../docs/guides/upgrade.md)、[切换与恢复](../../../docs/guides/cutover.md)。下文的版本、运行结果和 `not-run` 只保留其历史时点含义，没有被本轮软件来源核实或测试追认。
+
+> **历史矩阵（2026-09-10）**：本文记录当日 operator bundle 专项运行的支持切片，不是当前修复快照的
+> 现场验收。当前默认环境未设置该 bundle，真实 `verifyInstalledCloakRuntime → new BrowserHost →
+> start/openPage → deliver` 链保持 `not-run`；请以当前 TS 基线和本轮 Full 输出为准。
+
 更新时间：2026-09-10。矩阵只声明已经在本地离线边界验证的运行组合，不把组件存在、单篇 fixture 成功或
 真实 Provider 授权扩大为普遍支持。
 

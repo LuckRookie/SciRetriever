@@ -2,17 +2,17 @@
 
 本目录记录 SciRetriever 适配外部文献服务时需要长期维护的易变事实：官方入口、认证和限流、endpoint/分页/响应层级、metadata/citation/asset 候选映射、现场验证结果、已知缺口与当前实现边界。
 
-这里是 Notes，不是产品需求或公开能力清单。产品边界以[需求](../../architecture/requirements.md)和 Accepted ADR 为准；Provider 两类能力、目标矩阵、证据路由与本地凭据由 [ADR 0014](../../architecture/decisions/0014-capability-scoped-providers-and-local-credentials.md)决定，进程内供应商访问约束见 [ADR 0012](../../architecture/decisions/0012-process-local-provider-access-scheduling.md)，精确凭据合同见 [Configuration 技术文档](../../architecture/technical/configuration.md)。模块责任与目标合同以 design/technical 为准；当前可运行行为以源码、测试、README 和用户指南为准。新增或实质修改 provider client 时另按[Provider 接入开发手册](../../development/provider-integration.md)完成预算、安全、脱敏、测试和退役设计。
+这里是 Notes，不是产品需求或公开能力清单。产品边界以[需求](../../architecture/requirements.md)和 Accepted ADR 为准；Provider 两类能力、目标矩阵、证据路由与本地凭据由 [ADR 0014](../../architecture/decisions/0014-capability-scoped-providers-and-local-credentials.md)决定，进程内供应商访问约束见 [ADR 0012](../../architecture/decisions/0012-process-local-provider-access-scheduling.md)，精确凭据合同见 [统一产品接口：共享支撑：配置与凭据](../../architecture/technical/01-product-interface.md#5-共享支撑配置与凭据)。模块责任与目标合同以 design/technical 为准；当前可运行行为以源码、测试、README 和用户指南为准。新增或实质修改 provider client 时另按[Provider 接入开发手册](../../development/provider-integration.md)完成预算、安全、脱敏、测试和退役设计。
 
 ## 1. 证据等级
 
-| 等级 | 含义 | 记录要求 |
-|---|---|---|
-| `official` | 供应商当前公开文档、机器可读规范或协议明确说明 | 给出官方 URL 和核对日期；政策变化时更新 |
-| `implementation` | 当前 SciRetriever 代码、配置或直接测试明确表达 | 说明具体当前边界；不能由目标设计代替 |
-| `verified` | 在当前或已注明历史环境中执行最小只读请求直接观察 | 记录日期、状态码/媒体类型和不含敏感信息的 shape；不扩大为 SLA |
-| `support` | 供应商支持、申请回复或用户人工核实，公开资料未载明 | 写来源类型与日期，不复制工单、邮件、账户或敏感正文 |
-| `inferred` | 根据多次故障、对照或字段组合形成的工作假设 | 明确写“推断”，给出下一次复核方法，不写成合同 |
+| 等级             | 含义                                               | 记录要求                                                      |
+| ---------------- | -------------------------------------------------- | ------------------------------------------------------------- |
+| `official`       | 供应商当前公开文档、机器可读规范或协议明确说明     | 给出官方 URL 和核对日期；政策变化时更新                       |
+| `implementation` | 当前 SciRetriever 代码、配置或直接测试明确表达     | 说明具体当前边界；不能由目标设计代替                          |
+| `verified`       | 在当前或已注明历史环境中执行最小只读请求直接观察   | 记录日期、状态码/媒体类型和不含敏感信息的 shape；不扩大为 SLA |
+| `support`        | 供应商支持、申请回复或用户人工核实，公开资料未载明 | 写来源类型与日期，不复制工单、邮件、账户或敏感正文            |
+| `inferred`       | 根据多次故障、对照或字段组合形成的工作假设         | 明确写“推断”，给出下一次复核方法，不写成合同                  |
 
 “待核对/未找到公开依据”不是证据等级，而是主动保留的不确定性。官方页面需要 key、返回 403、依赖 JavaScript 或缺少 schema 时，应保留缺口，不能凭旧代码、字段名或行业经验补全。超过六个月未复核的 `verified`、`support`、`inferred` 条目默认视为需要复核。
 
@@ -20,11 +20,11 @@
 
 ## 2. 三类事实不得混写
 
-| 层次 | 回答的问题 | 本目录如何表达 |
-|---|---|---|
-| 外部服务能力 | 供应商公开或现场观察到什么 endpoint、字段和政策？ | 各 provider 文档的官方入口、请求/响应、限制与 evidence |
-| 已接受目标设计 | 若将来接入，哪些中性 Model、模块责任和安全边界可接纳这些事实？ | “候选映射”只说明可能归属，不宣称代码已实现 |
-| 当前仓库实现 | 现在有哪些选择键、Protocol、adapter、registry 和业务连接？ | 每份文档末尾明确列出当前缺失；以源码/测试为准 |
+| 层次           | 回答的问题                                                     | 本目录如何表达                                         |
+| -------------- | -------------------------------------------------------------- | ------------------------------------------------------ |
+| 外部服务能力   | 供应商公开或现场观察到什么 endpoint、字段和政策？              | 各 provider 文档的官方入口、请求/响应、限制与 evidence |
+| 已接受目标设计 | 若将来接入，哪些中性 Model、模块责任和安全边界可接纳这些事实？ | “候选映射”只说明可能归属，不宣称代码已实现             |
+| 当前仓库实现   | 现在有哪些选择键、Protocol、adapter、registry 和业务连接？     | 每份文档末尾明确列出当前缺失；以源码/测试为准          |
 
 外部 API 存在不等于 SciRetriever 已接入；配置 key 被接受不等于有 concrete client；fake、Protocol、lazy factory 和目标 Model 也不等于用户可运行工作流。Provider 返回 observation/locator 仍不等于 Literature 或资产已被业务规则接纳。
 
@@ -36,22 +36,22 @@ Publisher/Access Provider 使用统一的[Profile 准入与验证矩阵](publish
 
 目标架构只分 Metadata Provider 与 Acquisition Provider，两类能力不互斥。领域搜索、稳定标识符 lookup、引用关系和参考文献原文都属于 Metadata 的不同能力；引用不形成第三类顶级 Provider。`direct` 和用户手动 PDF 不在矩阵中，分别是通用公开 Source 和独立接纳操作。
 
-| 外部服务 | 目标 Metadata 能力 | 目标 Acquisition 能力 |
-|---|---|---|
-| Web of Science | 领域搜索；具体产品与引用深度按 entitlement | 不作为原文来源 |
-| Crossref | 领域搜索、标识符 lookup；可返回参考文献/资产线索 | 消费其 PDF/landing locator；相同 AssetHint 可由通用公开 Source 使用 |
-| Semantic Scholar | 领域搜索、lookup、可选引用能力 | `openAccessPdf` 等 locator |
-| arXiv | 领域搜索与 lookup | 公开 PDF |
-| OpenAlex | 领域搜索、lookup、可选引用能力 | OA/location/content 能力 |
-| Europe PMC | 领域搜索、lookup、可选引用能力 | OA PDF/full-text locator |
-| Elsevier/Scopus | Scopus 等产品的领域搜索与 lookup | 适用且已授权的 Elsevier 内容能力 |
-| Springer Nature | 自身覆盖范围的领域搜索与 lookup | locator 或适用且已授权的全文产品 |
-| DataCite | 领域搜索与 DOI lookup | 记录明确提供的 locator |
-| CORE | 领域搜索与 lookup | 记录明确提供的全文 locator |
-| OpenCitations | 仅稳定标识符 metadata lookup 和可选引用能力；当前不参加主题搜索 | 不作为原文来源 |
-| Unpaywall | 不参加 Metadata 领域搜索 | DOI/title OA locator |
-| Wiley | 不参加 Metadata 领域搜索 | 适用且已授权的 Wiley 内容能力 |
-| Configured Sci-Hub | 不参加 Metadata 能力 | 默认关闭；operator 显式启用的 bundled 或 custom locator |
+| 外部服务           | 目标 Metadata 能力                                              | 目标 Acquisition 能力                                               |
+| ------------------ | --------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Web of Science     | 领域搜索；具体产品与引用深度按 entitlement                      | 不作为原文来源                                                      |
+| Crossref           | 领域搜索、标识符 lookup；可返回参考文献/资产线索                | 消费其 PDF/landing locator；相同 AssetHint 可由通用公开 Source 使用 |
+| Semantic Scholar   | 领域搜索、lookup、可选引用能力                                  | `openAccessPdf` 等 locator                                          |
+| arXiv              | 领域搜索与 lookup                                               | 公开 PDF                                                            |
+| OpenAlex           | 领域搜索、lookup、可选引用能力                                  | OA/location/content 能力                                            |
+| Europe PMC         | 领域搜索、lookup、可选引用能力                                  | OA PDF/full-text locator                                            |
+| Elsevier/Scopus    | Scopus 等产品的领域搜索与 lookup                                | 适用且已授权的 Elsevier 内容能力                                    |
+| Springer Nature    | 自身覆盖范围的领域搜索与 lookup                                 | locator 或适用且已授权的全文产品                                    |
+| DataCite           | 领域搜索与 DOI lookup                                           | 记录明确提供的 locator                                              |
+| CORE               | 领域搜索与 lookup                                               | 记录明确提供的全文 locator                                          |
+| OpenCitations      | 仅稳定标识符 metadata lookup 和可选引用能力；当前不参加主题搜索 | 不作为原文来源                                                      |
+| Unpaywall          | 不参加 Metadata 领域搜索                                        | DOI/title OA locator                                                |
+| Wiley              | 不参加 Metadata 领域搜索                                        | 适用且已授权的 Wiley 内容能力                                       |
+| Configured Sci-Hub | 不参加 Metadata 能力                                            | 默认关闭；operator 显式启用的 bundled 或 custom locator             |
 
 领域 DiscoveryRun 只调用本次普通配置已启用、生产 search adapter 已实现且 readiness 通过的 Metadata 能力，不按 publisher 预先分流。Acquisition 还要针对具体 Literature 依据 AssetHint、稳定来源定位、Provider record identity 和 DOI 安全解析后的 landing origin 判断 Source 适用性。配置 key 被接受不等于每种外部路径都有生产 adapter；具体边界见下节。
 
@@ -66,13 +66,13 @@ Provider。当前 Acquisition 选择键为 `arxiv`、`crossref`、`semantic-scho
 
 Acquisition 当前生产映射如下：
 
-| 机制 | 当前实现 |
-|---|---|
-| 通用公开 hints | 已实现；消费所有已保存且重新通过安全检查的 direct-file/landing-page AssetHint，不把 `direct` 当作 Provider |
-| 独立公开协议 | arXiv、Europe PMC、Unpaywall 已实现；Configured Sci-Hub 默认关闭，启用后从当前版本 bundled 或 operator custom override 构造 DOI resolver，也允许 Python 显式注入 override |
-| 授权主 PDF API | CORE API v3 Work/Output download、Elsevier Article FULL XML → MAIN Object PDF 与 Wiley Online Library TDM API 已实现；分别要求 CORE 强 record identity、Elsevier PII/Article EID 或实际 ScienceDirect landing、Wiley DOI 安全落地到 WOL，并排在全部公开 Source 之后 |
-| Springer 授权 API | 未注册生产主 PDF Source；当前核实 Full Text 产品是 JATS/XML |
-| 受控 Browser | 共享 foundation、正式有头 Playwright adapter、Xvfb/Chrome 原生网络、配置入口与真实 Chromium 离线 QA 已完成；registry 只注册 `browser:generic`；文章流采用稳定 Observation → Agent 单一封闭动作 → Network settle/capture → Acquisition PDF 与文章归属验收，并支持 response、native download 和 popup/viewer capture；本地 client/readiness 由总开关、所选图像 Model、固定 Profile、Playwright、CloakBrowser binary 和 headed display 动态决定 |
+| 机制              | 当前实现                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 通用公开 hints    | 已实现；消费所有已保存且重新通过安全检查的 direct-file/landing-page AssetHint，不把 `direct` 当作 Provider                                                                                                                                                                                                                                                                                                                                   |
+| 独立公开协议      | arXiv、Europe PMC、Unpaywall 已实现；Configured Sci-Hub 默认关闭，启用后从当前版本 bundled 或 operator custom override 构造 DOI resolver，也允许 Python 显式注入 override                                                                                                                                                                                                                                                                    |
+| 授权主 PDF API    | CORE API v3 Work/Output download、Elsevier Article FULL XML → MAIN Object PDF 与 Wiley Online Library TDM API 已实现；分别要求 CORE 强 record identity、Elsevier PII/Article EID 或实际 ScienceDirect landing、Wiley DOI 安全落地到 WOL，并排在全部公开 Source 之后                                                                                                                                                                          |
+| Springer 授权 API | 未注册生产主 PDF Source；当前核实 Full Text 产品是 JATS/XML                                                                                                                                                                                                                                                                                                                                                                                  |
+| 受控 Browser      | 共享 foundation、正式有头 Playwright adapter、Xvfb/Chrome 原生网络、配置入口与真实 Chromium 离线 QA 已完成；registry 只注册 `browser:generic`；文章流采用稳定 Observation → Agent 单一封闭动作 → Network settle/capture → Acquisition PDF 与文章归属验收，并支持 response、native download 和 popup/viewer capture；本地 client/readiness 由总开关、所选图像 Model、固定 Profile、Playwright、CloakBrowser binary 和 headed display 动态决定 |
 
 PLOS 的显式 journals locator 仍走通用公开 hint，不是专属 route；精确 host
 `journals.plos.org` 共享 `plos/web` scope，按官方 robots 至少间隔 30 秒启动请求。Copernicus、

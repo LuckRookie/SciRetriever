@@ -1,5 +1,7 @@
 # CloakBrowser 工作台运行时切片
 
+> **历史证据（2026-09-10）**：本文记录当日 operator bundle 的专项切片，不是当前修复快照的运行证明。当前默认门禁未设置 Cloak bundle，真实 `verifyInstalledCloakRuntime → new BrowserHost → start/openPage → deliver` 正路径仍标记 `not-run`；离线 host seam/stock loopback 测试不能替代它。
+
 日期：2026-09-10。平台 Ubuntu 24.04.3 LTS / Linux x86_64，Node 22.19.0，pnpm 10.32.1。
 
 ## 已验证实现

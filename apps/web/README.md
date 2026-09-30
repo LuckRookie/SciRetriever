@@ -56,7 +56,7 @@ pnpm full
 样本服务器仅返回列出的静态资产，拒绝其它路径和写请求；CSP 禁止外部请求、内联脚本及动态 eval。该服务器不是产品认证控制面，不组装生产 Application，也不读取用户 home、配置、Profile、catalog 或资产。
 
 静态样本测试只证明 4173 的离线布局与交互；真实 Browser stream、权限、Candidate 持久化与入库旅程由下方
-4174 工作台及[阶段 03 证据](../../docs/plans/2026-09-07-typescript-browser-workbench/03-browser-and-acquisition.md)承担。
+4174 工作台及[阶段 03 证据](../../docs/archive/2026-09-07-typescript-browser-workbench/03-browser-and-acquisition.md)承担。
 
 ## 实时 Cloak 工作台
 
@@ -102,3 +102,15 @@ SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm exec vite
 `/api/target` 切换同一 Browser Host 的 Literature 目标；有进行中的 Candidate、Agent 或发布操作时拒绝切换。
 实现为 `src/library.ts`，数据来自同一认证 HTTP 服务与 Application.library，不使用静态示例结果。
 详见[Web 文献库证据](../../migration/evidence/runtime/workbench-library.md)。
+
+## 独立只读文献阅读
+
+`startQueryOnlyWorkbench({ home })` 是另一个正式 API 入口，使用 QueryApplication 和单独的 `query.html`/`query.ts`
+页面，不连接 `/api/connect`、Browser、Jobs、配置或其它混合工作台 API。页面复用 Library 搜索、详情、引用与附件
+下载能力；本地 API 均使用 `/api/v1/query/*` v1 envelope。readiness 将未初始化、不可用与就绪空库/零匹配分开显示；
+缺 PDF/内容显示缺口，不会尝试扩充材料。
+
+源码 Playwright 旅程使用 `esbuild` `write:false` 生成测试 bundle，并把静态资源注入 `startQueryOnlyWorkbench`；安装后
+默认启动则从 server 包内 `dist/web/` 读取随包发布的资源。read-only SQLite 启动不会创建 home/Catalog、升级 schema、
+恢复票据或提交 Jobs；SQLite WAL/SHM 协调文件仍可能出现。API 示例、就绪状态和生命周期见
+[独立文献库阅读指南](../../docs/guides/library-query.md)。

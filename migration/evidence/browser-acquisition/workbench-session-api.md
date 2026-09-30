@@ -62,6 +62,6 @@ Browser 宿主跨进程重建明确 Deferred。
 
 ## 2026-09-12 当前复验
 
-当前 `pnpm full` 在没有 `SCIRETRIEVER_CLOAK_BUNDLE` 的环境下通过 119 个测试文件（3 个 skip）和 466 个用例（4 个
+当前 `pnpm full` 在没有 `SCIRETRIEVER_CLOAK_BUNDLE` 的环境下通过 120 个测试文件（3 个 skip）和 576 个用例（4 个
 skip）。Browser Host、loopback fixture、认证 tabs API、候选发布和持久任务测试均在当前 TypeScript 路径执行；
-依赖 operator-managed bundle 的 live 测试保持 skip。
+依赖 operator-managed bundle 的 live 测试保持 skip，离线 host seam 不替代真实 runtime 正路径证据。

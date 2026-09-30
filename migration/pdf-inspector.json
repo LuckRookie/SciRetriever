@@ -1,9 +1,17 @@
 {
   "schema": "sciretriever-typescript-pdf-inspector-spike.v1",
-  "captured_at": "2026-09-12",
+  "captured_at": "2026-09-17",
   "engine": {
-    "structure": { "command": "pdfinfo", "version": "24.02.0", "status": "available" },
-    "text": { "command": "pdftotext", "version": "24.02.0", "status": "available" },
+    "structure": {
+      "command": "pdfinfo",
+      "version": "24.02.0",
+      "status": "available"
+    },
+    "text": {
+      "command": "pdftotext",
+      "version": "24.02.0",
+      "status": "available"
+    },
     "execution": "bounded prlimit subprocess; stdin bytes only; no PDF script execution or network access",
     "runtime_dependency": "system PDF utilities on the supported Linux package; Python is not required"
   },
@@ -15,15 +23,16 @@
     "large_input_and_output_limits": "implemented",
     "encrypted_fixture": "implemented-as-bounded-trailer-negative",
     "image_only_text_quality": "implemented-as-uncertain-identity-negative",
-    "compression_bomb_fixture": "not-yet-fixtured"
+    "compression_bomb_fixture": "implemented-as-bounded-first-page-output-negative"
   },
   "evidence": [
     "apps/server/src/acquisition/pdf-acceptance.ts",
     "apps/server/src/acquisition/pdf-evidence.ts",
     "apps/server/test/pdf-acceptance.test.ts",
     "apps/server/test/pdf-evidence.test.ts",
+    "apps/server/test/pdf-acceptance.test.ts",
     "apps/server/test/identity-verdict.test.ts",
     "apps/server/src/workbench/synthetic-fixture.ts"
   ],
-  "decision": "Use the bounded system-reader adapter for the current supported path. Encrypted and image-only negatives are covered locally; compression-bomb and platform-specific reader behavior remain outside the supported claim."
+  "decision": "Use the bounded system-reader adapter for the current supported path. Encrypted, image-only and compressed-output negatives are covered locally; platform-specific reader behavior remains outside the supported claim."
 }

@@ -5,7 +5,7 @@
 package、`@sciretriever/server` 的配置、凭据、Network、FileStore、SQLite、Agents、Browser、Literature、
 Parsing/Analysis 切片，以及 `apps/web` 的静态样本和实时 Cloak 工作台。配置 owner bridge、Candidate 发布/放弃、
 Library 与 Browser→MinerU→Analysis source-checkout loopback 旅程均已完成首阶段验收；全量迁移状态见
-[活动计划](../plans/2026-09-07-typescript-browser-workbench/README.md)。
+[已归档迁移计划](../archive/2026-09-07-typescript-browser-workbench/README.md)；当前工作见[活动计划索引](../plans/README.md)。
 
 ## 本地开发
 
@@ -30,6 +30,10 @@ suite。
 该测试没有源码 alias，不连接 Provider、真实 Browser 或用户 home；它证明当前两个开发包可安装并完成 Web 资产与
 最小服务启停，不代表 npm tarball 自带 operator Cloak binary；包内运行不依赖 Python bridge runtime。
 
+SQLite worker 的活动业务实现是 `apps/server/src/storage/sqlite/worker-runtime.ts`。源码模式由 Node 22
+的 type stripping 启动该 TypeScript 文件，build 与 portable 包使用 `worker-runtime.js`；portable
+验证会从生成包实际执行 `literature search --json`，因此同时覆盖 worker 文件清单、ESM URL 与运行入口。
+
 2026-09-10 按项目 owner 决定，后续全量验收只运行 `pnpm full`，不再默认运行 Python Quick、Full 或全量 unittest。既有 Python 测试保留为历史维护入口；仅在用户明确要求时执行。CI 同步采用 TS Quick/Full，具体触发见 HARNESS。
 
 ## 当前边界
@@ -38,8 +42,9 @@ Browser 静态样本运行 `pnpm preview:browser`，在 `http://127.0.0.1:4173` 
 TypeScript project references 和现有 TS 检查范围；没有新增第三方依赖。样本服务器仅提供白名单静态资产，
 不启动生产 Application 或 Browser Host；所有获取和发布都是内存演示。功能、直接测试和构建说明见
 [`apps/web/README.md`](../../apps/web/README.md)。实时入口使用
-`SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm preview:workbench`，在
-`http://127.0.0.1:4174` 运行真实 Browser Host、SSE/JPEG、Candidate 和临时文献库；两者职责不同。
+`SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm preview:workbench`，目标是启动
+`http://127.0.0.1:4174` 的 Browser Host、SSE/JPEG、Candidate 和临时文献库；当前修复快照没有运行真实
+Cloak 正路径，离线测试的 fake/stock loopback 与 host seam 只证明 wiring/边界，两者职责不同。
 
 contracts package 只依赖 Web 标准 `TextEncoder`、`TextDecoder`、Web Crypto 和 base64 API；它不调用 Python
 RPC、不连接真实 Provider、不读取用户 home、Catalog、Profile 或凭据。v1 fixture 位于
@@ -50,9 +55,9 @@ RPC、不连接真实 Provider、不读取用户 home、Catalog、Profile 或凭
 [Browser Host 记录](../../migration/evidence/browser-acquisition/browser-host.md) 记载 2026-09-09 使用
 Chrome for Testing 148.0.7778.96 完成临时 Profile 的 loopback 启动测试；
 [SQLite 记录](../../migration/evidence/runtime/sqlite-compatibility.md)记载 worker 已采用 `node:sqlite` 并验证 v1 兼容行为。
-后续最终 TS Full 已显式设置并实际运行 operator Cloak bundle，完整 source-checkout 工作台与安装包资产 smoke 均通过；
-支持组合见[最终矩阵](../../migration/evidence/final/support-matrix.md)。这些结果仍不构成生产切换或独立安装包自带
-Browser runtime 的承诺。
+历史专项证据曾显式设置并运行 operator Cloak bundle，记录见[历史 runtime 切片](../../migration/evidence/browser-acquisition/cloak-workbench-runtime.md)；
+它不等于当前修复快照的真实正路径证据。当前 `pnpm full` 未设置该 bundle，live runtime 保持 skipped/not-run；离线
+安装包 smoke 仍不构成生产切换或独立安装包自带 Browser runtime 的承诺。
 qpdf 仍只有早期“未安装”记录，按 PDF 验收需要核实，不把历史环境记录当成永久前置门。
 
 Candidate/receipt 已增加显式 SQLite execution extension；合成副本上的新进程恢复、发布对账、升级备份和回滚
@@ -62,8 +67,8 @@ Candidate/receipt 已增加显式 SQLite execution extension；合成副本上�
 
 ## 恢复入口
 
-跨会话继续时先读取活动计划 README、对应阶段任务行的状态与证据、`git status --short` 及源码/直接测试。
-活动计划的 `full-migration-roadmap.md` 是原始 M0–M6、T001–T064 的唯一任务状态源；阶段文档只保留实施说明和证据。旧 Block/Task 台账已归档，不用于推断当前完成度。合同切片的
+跨会话继续时先从[活动计划索引](../plans/README.md)读取当前计划 README、对应块的状态与证据、`git status --short` 及源码/直接测试。
+已归档迁移计划的 `full-migration-roadmap.md` 保留原始 M0–M6、T001–T064 的历史任务状态；阶段文档只保留当时的实施说明和证据，不用于推断当前完成度。合同切片的
 直接证据位于 `migration/evidence/contracts/`；早期运行时盘点位于 `migration/evidence/baseline/`，后续切片记录位于
 `migration/evidence/runtime/` 和 `migration/evidence/browser-acquisition/`。发现 v1 bytes、
 hash、ID 或错误边界差异时，回到 contracts package 的行为测试和 synthetic fixture，保留失败样本并禁止修改

@@ -2,7 +2,7 @@
 
 - 最后核对：2026-08-15
 - 文档性质：外部工具与参考实现 Notes
-- 相关目标设计：[Acquisition 技术设计](../architecture/technical/acquisition.md)、[Network 技术设计](../architecture/technical/network.md)
+- 相关目标设计：[文献与材料：材料获取、路线与候选](../architecture/technical/03-literature-materials.md#4-材料获取路线与候选)、[任务与协作控制：共享支撑：受控网络访问](../architecture/technical/02-task-coordination.md#7-共享支撑受控网络访问)
 
 本文记录两个本地参考项目和 Zotero 官方实现如何发现、下载并验证文献 PDF，重点回答不同访问路径之间是否存在稳定优先级。本文只提供后续讨论的事实依据，不批准新的 provider、浏览器、代理、凭据、配置或产品能力，也不把参考工具的状态、验证阈值和失败模型写成 SciRetriever 合同。
 
@@ -21,12 +21,12 @@ ScanSci PDF 的许可证、逐文件 provenance、`_core` proprietary 例外和�
 
 三个参考实现没有共同遵守一套“公开来源 -> 授权 Provider API -> 浏览器”的现成顺序：
 
-| 参考实现 | 实际主路径 | 是否具有硬阶段优先级 |
-|---|---|---|
-| Zotero Full-Text Downloader 本地快照 | OpenAlex/Unpaywall 正式版候选 -> 持久化 Chrome；Elsevier API 是未接入标准主链的可选 helper | 开放来源到浏览器有硬回退；授权 API 没有闭环成为中间阶段 |
-| ScanSci PDF 当前 checkout `5e4a6f2` | 公开 API/MCP 把 OA、授权 API、出版商直链、浏览器等来源放入并发竞速，失败后再做机构访问；CLI 另有一条近似串行路径 | 公开 API/MCP 没有三段式硬优先级；CLI 有不同但不完全一致的顺序 |
-| Zotero Desktop 9.0.6 | DOI 页面 -> 条目 URL -> OA -> custom resolver；每项内部先 direct URL、后 landing page | 有确定顺序和首个成功短路，但不是 OA 优先，也没有统一授权 Provider API 层 |
-| Zotero Connector 5.0.211 | 当前页面 Translator 附件 -> OA -> automatic custom resolver | 有确定顺序；授权访问主要来自真实浏览器会话，而不是出版商 API 层 |
+| 参考实现                             | 实际主路径                                                                                                       | 是否具有硬阶段优先级                                                     |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Zotero Full-Text Downloader 本地快照 | OpenAlex/Unpaywall 正式版候选 -> 持久化 Chrome；Elsevier API 是未接入标准主链的可选 helper                       | 开放来源到浏览器有硬回退；授权 API 没有闭环成为中间阶段                  |
+| ScanSci PDF 当前 checkout `5e4a6f2`  | 公开 API/MCP 把 OA、授权 API、出版商直链、浏览器等来源放入并发竞速，失败后再做机构访问；CLI 另有一条近似串行路径 | 公开 API/MCP 没有三段式硬优先级；CLI 有不同但不完全一致的顺序            |
+| Zotero Desktop 9.0.6                 | DOI 页面 -> 条目 URL -> OA -> custom resolver；每项内部先 direct URL、后 landing page                            | 有确定顺序和首个成功短路，但不是 OA 优先，也没有统一授权 Provider API 层 |
+| Zotero Connector 5.0.211             | 当前页面 Translator 附件 -> OA -> automatic custom resolver                                                      | 有确定顺序；授权访问主要来自真实浏览器会话，而不是出版商 API 层          |
 
 SciRetriever 当前目标设计已接受：
 
@@ -36,7 +36,7 @@ SciRetriever 当前目标设计已接受：
 第三层：受控浏览器访问
 ```
 
-这是 SciRetriever 自己明确的访问成本和副作用顺序，而不是对 Zotero 或某个下载器现状的直接复制。Acquisition 必须按阶段短路：前一层全部候选耗尽后才启动下一层；仅给所有候选设置不同分数、再同时启动，不能表达这个优先级。正式合同见 [Design 4.4](../architecture/design.md#44-acquisition)与 [Acquisition 技术设计](../architecture/technical/acquisition.md)。
+这是 SciRetriever 自己明确的访问成本和副作用顺序，而不是对 Zotero 或某个下载器现状的直接复制。Acquisition 必须按阶段短路：前一层全部候选耗尽后才启动下一层；仅给所有候选设置不同分数、再同时启动，不能表达这个优先级。正式合同见 [Design 4.4](../architecture/design.md#44-acquisition)与 [文献与材料：材料获取、路线与候选](../architecture/technical/03-literature-materials.md#4-材料获取路线与候选)。
 
 ## 2. 两种优先级不能混写
 

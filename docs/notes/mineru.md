@@ -2,23 +2,23 @@
 
 > 状态：当前外部依赖说明。普通配置与凭据合同以
 > [配置手册](../guides/configuration.md) 和
-> [配置技术文档](../architecture/technical/configuration.md) 为准；本文只记录易变的
+> [统一产品接口：共享支撑：配置与凭据](../architecture/technical/01-product-interface.md#5-共享支撑配置与凭据) 为准；本文只记录易变的
 > MinerU 外部事实和 operator 注意事项。
 
 秘密值、私有 endpoint、用户 PDF 内容、task URL 和模型 token 都不能写入本文。
 
 ## 1. 当前锁定的实现身份
 
-| 项目 | 当前值 |
-| --- | --- |
-| MinerU release | `3.4.4` |
-| API protocol | `2` |
-| profile | `vlm-engine` |
-| archive backend | `vlm` |
-| parse method | `auto` |
-| 服务所有权 | operator-managed persistent service |
-| 主要内容输入 | 归档中的 Markdown |
-| 辅助验证输入 | content list、middle/model JSON、实际引用图片 |
+| 项目            | 当前值                                        |
+| --------------- | --------------------------------------------- |
+| MinerU release  | `3.4.4`                                       |
+| API protocol    | `2`                                           |
+| profile         | `vlm-engine`                                  |
+| archive backend | `vlm`                                         |
+| parse method    | `auto`                                        |
+| 服务所有权      | operator-managed persistent service           |
+| 主要内容输入    | 归档中的 Markdown                             |
+| 辅助验证输入    | content list、middle/model JSON、实际引用图片 |
 
 这些值由当前 `MinerUProtocol2ServiceClient`、归档 adapter 和直接测试共同锁定。它们在
 `sciretriever config`、`config status` 中只读显示，不作为可选 backend。MinerU 4.x 或
@@ -81,13 +81,13 @@ SciRetriever 不读取 MinerU secret 环境变量。Base URL、connection mode�
 
 ## 4. Operator 所有权
 
-| Operator 负责 | SciRetriever 负责 |
-| --- | --- |
-| 部署、启动、停止、升级和容量 | 安全组装 client 与访问准入 |
-| 模型、revision、文件 hash、GPU/driver | 提交有界请求并验证协议 |
-| 并发、队列、task retention | 限制轮询、task ID 和响应预算 |
-| TLS、认证入口和上传政策 | origin-bound token 与 redirect 防泄漏 |
-| 运维日志和部署证明 | parser-neutral 结果、hash、lineage 和脱敏失败 |
+| Operator 负责                         | SciRetriever 负责                             |
+| ------------------------------------- | --------------------------------------------- |
+| 部署、启动、停止、升级和容量          | 安全组装 client 与访问准入                    |
+| 模型、revision、文件 hash、GPU/driver | 提交有界请求并验证协议                        |
+| 并发、队列、task retention            | 限制轮询、task ID 和响应预算                  |
+| TLS、认证入口和上传政策               | origin-bound token 与 redirect 防泄漏         |
+| 运维日志和部署证明                    | parser-neutral 结果、hash、lineage 和脱敏失败 |
 
 SciRetriever 不启动备用 MinerU、不管理 vLLM endpoint，也不把 remote task state 当作第二套
 业务状态。中断本地进程不等于远程 task 已取消；重跑以当前已接纳 PDF/ParserResult 事实为

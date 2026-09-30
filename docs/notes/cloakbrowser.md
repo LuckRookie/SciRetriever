@@ -4,8 +4,8 @@
 >
 > 性质：外部 Browser runtime 的易变事实与接入风险。产品选择以
 > [ADR 0016](../architecture/decisions/0016-cloakbrowser-fixed-identity-runtime.md) 为准，目标技术边界以
-> [Network](../architecture/technical/network.md) 与
-> [Configuration](../architecture/technical/configuration.md) 技术文档为准。当前生产对象图已经切换为
+> [任务与协作控制：共享支撑：受控网络访问](../architecture/technical/02-task-coordination.md#7-共享支撑受控网络访问) 与
+> [统一产品接口：共享支撑：配置与凭据](../architecture/technical/01-product-interface.md#5-共享支撑配置与凭据) 技术文档为准。当前生产对象图已经切换为
 > 唯一 CloakBrowser runtime；本文仍不证明任何 Publisher entitlement 或验证页一定能够自动通过。
 
 秘密值、个人 Profile、Cookie、页面正文、截图、挑战 token、签名下载 URL、真实 Publisher
@@ -13,13 +13,13 @@
 
 ## 1. 当前固定生产基线
 
-| 项目 | 固定值 | 证据边界 |
-| --- | --- | --- |
-| Python wrapper | `cloakbrowser==0.5.8` | PyPI 与 GitHub `v0.5.8`；wrapper wheel 只包含 Python 代码 |
-| Playwright API | `1.55.0` | SciRetriever 当前锁定版本；vendor 只声明 `playwright>=1.40`，没有上限 |
-| Linux x64 binary | `146.0.7680.177.5` | 官方公开 free release；不是当前最新 Pro binary |
-| 目标平台 | Linux x86_64 | 当前服务器平台；其它平台必须单独验证 |
-| vendor service origin | `https://cloakbrowser.dev` | 官方 license/download 源码常量与发布路径 |
+| 项目                  | 固定值                     | 证据边界                                                              |
+| --------------------- | -------------------------- | --------------------------------------------------------------------- |
+| Python wrapper        | `cloakbrowser==0.5.8`      | PyPI 与 GitHub `v0.5.8`；wrapper wheel 只包含 Python 代码             |
+| Playwright API        | `1.55.0`                   | SciRetriever 当前锁定版本；vendor 只声明 `playwright>=1.40`，没有上限 |
+| Linux x64 binary      | `146.0.7680.177.5`         | 官方公开 free release；不是当前最新 Pro binary                        |
+| 目标平台              | Linux x86_64               | 当前服务器平台；其它平台必须单独验证                                  |
+| vendor service origin | `https://cloakbrowser.dev` | 官方 license/download 源码常量与发布路径                              |
 
 生产基线把 wrapper、Playwright API 和 binary 三者一起锁定并完成 characterization。不能因为
 Python 依赖解析成功，就推断 wrapper 对未来 Playwright 私有 API 或未来 Chromium 仍然兼容。

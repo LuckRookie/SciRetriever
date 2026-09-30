@@ -2,7 +2,7 @@
 
 ## 2026-09-12 当前状态
 
-当前 TS Full 已复验通过：119 个测试文件中 3 个跳过，466 个用例通过、4 个跳过；Prettier、ESLint、源码与测试
+当前 TS Full 已复验通过：120 个测试文件中 3 个跳过，576 个用例通过、4 个跳过；Prettier、ESLint、源码与测试
 strict typecheck、contracts/server/web build 和离线安装包 smoke 均通过。`SCIRETRIEVER_CLOAK_BUNDLE` 未设置，
 依赖 operator-managed Cloak bundle 的测试保持准确 skip。后续验收不运行 Python Quick/Full/unittest。
 

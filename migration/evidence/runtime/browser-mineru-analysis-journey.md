@@ -1,7 +1,8 @@
 # Browser → MinerU → Analysis 联合旅程
 
 > 这是迁移期联合旅程的历史记录。当前生产 Parser 与 Analysis 为 TypeScript owner；本文件中的 Python adapter
-> 仅描述当时的 oracle bridge，不代表当前 TS 安装包路径。
+> 仅描述当时的 oracle bridge，不代表当前 TS 安装包路径。当前修复快照未重跑真实 Cloak/MinerU/LLM 链，
+> 离线/loopback 结果不能替代现场证据。
 
 2026-09-10。`apps/server/test/browser-mineru-analysis-journey.test.ts` 在一个临时 home 中组装真实目标
 Cloak Browser、WorkbenchSession、SQLite、FileStore、ConfigurationOwnerBridge、实际 `MinerUParser` 和

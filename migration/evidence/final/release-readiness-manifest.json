@@ -1,6 +1,6 @@
 {
   "schema": "sciretriever-typescript-release-readiness.v1",
-  "captured_at": "2026-09-12",
+  "captured_at": "2026-09-17",
   "decision": "not-ready-for-production-cutover",
   "runtime": {
     "application": "typescript-node",
@@ -13,9 +13,9 @@
     "quick": "passed",
     "full": {
       "status": "passed",
-      "test_files": 119,
+      "test_files": 130,
       "skipped_files": 3,
-      "tests": 466,
+      "tests": 650,
       "skipped_tests": 4
     },
     "diff_check": "passed",
@@ -40,12 +40,13 @@
     "M3 offline acquisition orchestration",
     "M4 business capability migration",
     "M5 durable execution and single-port workbench",
-    "M6 packaging, recovery rehearsal and Python production retirement"
+    "M6 packaging, recovery rehearsal and Python production retirement",
+    "2026-09-17 portable clean-room import/search/export workflow"
   ],
   "explicit_boundaries": [
     "CloakBrowser live bundle probe requires an operator-managed bundle",
     "complex PDF viewer and cross-version HTTP Range reassembly remain deferred",
-    "compression-bomb and non-Linux PDF reader behavior are not supported claims",
+    "non-Linux PDF reader behavior is not a supported claim; compressed-output safety is covered by a bounded negative fixture",
     "macOS, Windows and ARM are not verified",
     "real sites, providers, MinerU/LLM, user Catalog/Profile and credentials were not accessed"
   ],
@@ -62,6 +63,8 @@
     "migration/evidence/final/readiness-report.md",
     "migration/evidence/browser-acquisition/browser-lifecycle-matrix.md",
     "migration/evidence/browser-acquisition/browser-capture-matrix.md",
-    "migration/evidence/runtime/tiered-acquisition-batch.md"
+    "migration/evidence/runtime/tiered-acquisition-batch.md",
+    "migration/evidence/runtime/portable-package.md",
+    "apps/server/test/pdf-acceptance.test.ts"
   ]
 }

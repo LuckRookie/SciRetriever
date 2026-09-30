@@ -2,6 +2,8 @@
 
 SciRetriever 把配置分成两条互不替代的边界：
 
+> 本指南同时记录目标配置合同和当前实现状态。当前 `config status` 是本地 readiness；`config test` 已通过统一 `ConfigurationProbeSession` 执行有界、只读 Probe，并区分真实网络/Browser 动作、不可用和未授权结果。Download 没有安全通用 probe，Browser Site 在缺少显式 adapter/seam 或 verified runtime 时稳定返回 unavailable。非 TTY stdout/stderr 语义以源码和直接测试为准；真实 Provider、站点和 Browser runtime 仍需单独授权，不能把离线 fixture 当作现场证据。目标与现状的统一说明见 [TypeScript 架构锚定基线](../architecture/typescript-baseline.md) 与 [ADR 0025](../architecture/decisions/0025-typescript-entry-and-runtime-contract.md)。
+
 - 普通运行设置固定写在 `~/.sciretriever/config.toml`；
 - 文献 Provider、Model Provider 与远程 MinerU 的 secret 统一写在固定的
   `~/.sciretriever/credentials.toml`。
@@ -97,9 +99,9 @@ browser
 
 ### `[paths]`
 
-| 字段 | 类型 | 默认值 | 用途 |
-| --- | --- | --- | --- |
-| `catalog_path` | 非空字符串或省略 | 未配置 | SQLite Catalog 文件路径。 |
+| 字段            | 类型             | 默认值 | 用途                        |
+| --------------- | ---------------- | ------ | --------------------------- |
+| `catalog_path`  | 非空字符串或省略 | 未配置 | SQLite Catalog 文件路径。   |
 | `artifact_root` | 非空字符串或省略 | 未配置 | 私有 ArtifactStore 根目录。 |
 
 所有本地数据库读取、导入、导出、手动 PDF 和补全入口都需要两个路径同时配置。配置
@@ -127,13 +129,13 @@ limit = 500
 mode = "auto"
 ```
 
-| 位置 | 字段 | 类型 | 默认值 | 用途 |
-| --- | --- | --- | --- | --- |
-| `sources.metadata` | `mode` | `auto` 或 `custom` | `auto` | 选择版本默认集合或用户精确集合。 |
-| `sources.metadata` | `providers` | 有序、不可重复数组 | 空 | 仅 Custom 使用；允许空列表。 |
-| `sources.metadata` | `limit` | 大于等于 1 的整数 | `500` | 分别应用到每个 Metadata Source 的过滤前原始 item 上限。 |
-| `sources.acquisition` | `mode` | `auto` 或 `custom` | `auto` | 选择版本默认集合或用户精确集合。 |
-| `sources.acquisition` | `providers` | 有序、不可重复数组 | 空 | 仅 Custom 使用；允许空列表。 |
+| 位置                  | 字段        | 类型               | 默认值 | 用途                                                    |
+| --------------------- | ----------- | ------------------ | ------ | ------------------------------------------------------- |
+| `sources.metadata`    | `mode`      | `auto` 或 `custom` | `auto` | 选择版本默认集合或用户精确集合。                        |
+| `sources.metadata`    | `providers` | 有序、不可重复数组 | 空     | 仅 Custom 使用；允许空列表。                            |
+| `sources.metadata`    | `limit`     | 大于等于 1 的整数  | `500`  | 分别应用到每个 Metadata Source 的过滤前原始 item 上限。 |
+| `sources.acquisition` | `mode`      | `auto` 或 `custom` | `auto` | 选择版本默认集合或用户精确集合。                        |
+| `sources.acquisition` | `providers` | 有序、不可重复数组 | 空     | 仅 Custom 使用；允许空列表。                            |
 
 Auto 禁止同时保存非空 `providers`，有效集合由当前版本在本地确定，不根据凭据、Network probe
 或临时服务状态变化。Custom 精确保留用户数组与顺序；空列表表示不启用该能力的命名 Provider。
@@ -149,6 +151,8 @@ europe-pmc, datacite, core, opencitations
 
 OpenCitations 不参加主题搜索，因此默认 `limit = 500` 时主题搜索的理论 raw-item ceiling 是
 `7 × 500 = 3500`。`limit` 独立给每个参与 Source，不是共享总量、最终接纳数量或 HTTP 请求数。
+`discover topic` 与 `discover citations` 未显式提供 `--scan-limit` 时使用已保存的 `limit`；显式
+`--scan-limit` 只覆盖当前命令，不改写配置。
 
 当前 Acquisition Auto 的命名 Source 是 `arxiv, europe-pmc`。所有模式都会消费已经保存且安全
 验证通过的 direct/landing `AssetHint`；Crossref、Semantic Scholar、OpenAlex、DataCite 等提供的
@@ -177,29 +181,29 @@ Provider。
 
 #### `[sources.metadata.web-of-science]`
 
-| 字段 | 类型 | 默认值 | 约束 |
-| --- | --- | --- | --- |
-| `product` | `starter` 或 `expanded` | 必需 | 明确选择官方产品；不同产品的引用能力和 AccessPolicy 不同。 |
-| `database` | 非空字符串 | 必需 | 普通产品参数，不属于凭据。 |
-| `edition` | 非空字符串或省略 | 未配置 | 可选普通产品参数。 |
+| 字段       | 类型                    | 默认值 | 约束                                                       |
+| ---------- | ----------------------- | ------ | ---------------------------------------------------------- |
+| `product`  | `starter` 或 `expanded` | 必需   | 明确选择官方产品；不同产品的引用能力和 AccessPolicy 不同。 |
+| `database` | 非空字符串              | 必需   | 普通产品参数，不属于凭据。                                 |
+| `edition`  | 非空字符串或省略        | 未配置 | 可选普通产品参数。                                         |
 
 启用 `web-of-science` 时还必须保留有效的 `sources.metadata.limit`，并在固定凭据文件中
 提供 `api_key`。
 
 #### `[sources.metadata.crossref]`
 
-| 字段 | 类型 | 默认值 | 约束 |
-| --- | --- | --- | --- |
-| `mode` | `anonymous` 或 `polite` | 未写入时 `anonymous` | 选择 public 或 polite pool。 |
-| `mailto` | ASCII 联系邮箱或省略 | 未配置 | `polite` 必需，`anonymous` 禁止。 |
+| 字段     | 类型                    | 默认值               | 约束                              |
+| -------- | ----------------------- | -------------------- | --------------------------------- |
+| `mode`   | `anonymous` 或 `polite` | 未写入时 `anonymous` | 选择 public 或 polite pool。      |
+| `mailto` | ASCII 联系邮箱或省略    | 未配置               | `polite` 必需，`anonymous` 禁止。 |
 
 `mailto` 是公开联系身份，不是 secret，因此不进入 `credentials.toml`。
 
 #### `[sources.acquisition.unpaywall]`
 
-| 字段 | 类型 | 默认值 | 约束 |
-| --- | --- | --- | --- |
-| `contact_email` | ASCII 联系邮箱 | 必需 | 启用 Unpaywall 时必需，属于普通配置。 |
+| 字段            | 类型           | 默认值 | 约束                                  |
+| --------------- | -------------- | ------ | ------------------------------------- |
+| `contact_email` | ASCII 联系邮箱 | 必需   | 启用 Unpaywall 时必需，属于普通配置。 |
 
 #### `[sources.acquisition.sci-hub]`
 
@@ -215,8 +219,8 @@ urls = [
 ]
 ```
 
-| 字段 | 类型 | 默认值 | 约束 |
-| --- | --- | --- | --- |
+| 字段   | 类型               | 默认值                       | 约束                                                                                                                                                                        |
+| ------ | ------------------ | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `urls` | 一到八项字符串数组 | 不写入时使用当前版本 builtin | 可选 custom override；完整覆盖 builtin；有序、规范化后不可重复；只接受 hostname-based HTTPS 默认端口，不接受 userinfo、query、fragment、IP literal、loopback 或不安全路径。 |
 
 Sci-Hub Source 默认关闭。显式启用且没有 `[sources.acquisition.sci-hub]` 时使用当前版本 bundled
@@ -274,12 +278,12 @@ Storage 的固定合同控制，不由自由配置绕过。
 
 ### `[parsing]`
 
-| 字段 | 类型 | 默认值 | 用途与约束 |
-| --- | --- | --- | --- |
-| `base_url` | 非空字符串或省略 | 未配置 | Operator 管理的 MinerU protocol-2 服务 URL。 |
-| `connection_mode` | `loopback`、`remote` 或省略 | 未配置 | 显式选择本机或远程边界。 |
-| `model_identity` | 非空字符串或省略 | 未配置 | 写入 parser-neutral provenance 的部署模型身份。 |
-| `remote_upload_authorized` | Boolean | `false` | 远程上传必须由 operator 明确授权；loopback 模式必须为 `false`。 |
+| 字段                       | 类型                        | 默认值  | 用途与约束                                                      |
+| -------------------------- | --------------------------- | ------- | --------------------------------------------------------------- |
+| `base_url`                 | 非空字符串或省略            | 未配置  | Operator 管理的 MinerU protocol-2 服务 URL。                    |
+| `connection_mode`          | `loopback`、`remote` 或省略 | 未配置  | 显式选择本机或远程边界。                                        |
+| `model_identity`           | 非空字符串或省略            | 未配置  | 写入 parser-neutral provenance 的部署模型身份。                 |
+| `remote_upload_authorized` | Boolean                     | `false` | 远程上传必须由 operator 明确授权；loopback 模式必须为 `false`。 |
 
 `content` 补全要求 `base_url`、`connection_mode` 和 `model_identity` 全部存在；远程
 模式还要求 `remote_upload_authorized = true`。当前固定实现是 MinerU 3.4.4、protocol
@@ -308,10 +312,10 @@ stream = true
 
 Model Provider 字段为：
 
-| 字段 | 类型 | 默认值 | 用途 |
-| --- | --- | --- | --- |
-| `api` | `openai-responses`、`openai-chat-completions` 或 `anthropic-messages` | 必需 | 明确 wire API；实际响应模式由具体 Model 的 `stream` 决定。 |
-| `base_url` | 非空安全 URL | 必需 | Provider 的模型目录与调用 Base URL。 |
+| 字段       | 类型                                                                  | 默认值 | 用途                                                       |
+| ---------- | --------------------------------------------------------------------- | ------ | ---------------------------------------------------------- |
+| `api`      | `openai-responses`、`openai-chat-completions` 或 `anthropic-messages` | 必需   | 明确 wire API；实际响应模式由具体 Model 的 `stream` 决定。 |
+| `base_url` | 非空安全 URL                                                          | 必需   | Provider 的模型目录与调用 Base URL。                       |
 
 Provider name 来自 `[providers.<name>]` 的子表名，只允许以字母或数字开头的 ASCII 字母、数字、
 `-`、`_`、`.`，读取时统一小写。远程 Provider 必须使用 hostname-based HTTPS，并从凭据文件中
@@ -322,11 +326,11 @@ Model 的唯一身份就是 TOML 子表名中的完整 `provider/model` referenc
 已经存在的 Provider，之后是最多 512 bytes 的 NFC、单行 UTF-8 远端 model identity。Model 只
 接受三个字段：
 
-| 字段 | 类型 | 默认值 | 用途 |
-| --- | --- | --- | --- |
-| `reasoning` | `default`、`none`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max` | `default` | 该 Model 的思考程度。 |
-| `image` | Boolean | `false` | 该 Model 是否能读取图片；Download 只允许选择 `true`。 |
-| `stream` | Boolean | `true` | 是否使用该 API 的流式响应；三种当前协议统一遵守。 |
+| 字段        | 类型                                                                    | 默认值    | 用途                                                  |
+| ----------- | ----------------------------------------------------------------------- | --------- | ----------------------------------------------------- |
+| `reasoning` | `default`、`none`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max` | `default` | 该 Model 的思考程度。                                 |
+| `image`     | Boolean                                                                 | `false`   | 该 Model 是否能读取图片；Download 只允许选择 `true`。 |
+| `stream`    | Boolean                                                                 | `true`    | 是否使用该 API 的流式响应；三种当前协议统一遵守。     |
 
 `default` 让 adapter 完全省略 wire reasoning 字段；其它值按适用 API 精确编码，不降级、近似映射
 或失败后重试 default。省略 `stream` 等价于 `stream = true`；开启时 adapter 请求有界 SSE 并在 Agents 内重建完整结果；
@@ -347,17 +351,17 @@ Provider 被任一 Model 引用时不能删除；Model 被 Analyze 或 Browser �
 `[analyze]` 直接选择一个完整 Model reference，并保存文献分析自身的 chunk、阶段和总量预算；
 它不拥有或覆盖 Provider、远端 model、reasoning、image 或 stream。
 
-| 字段 | 类型 | 默认值 | 用途 |
-| --- | --- | --- | --- |
-| `model` | `provider/model` 或省略 | 未配置 | Analyze 使用的 Model。 |
-| `metadata_max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | metadata 阶段输出上限。 |
-| `content_max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | content 阶段输出上限。 |
-| `reference_max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | 引用 lookup 输出上限。 |
-| `max_input_bytes` | 大于等于 1 的整数或省略 | 未配置 | 内容分析总输入字节上限。 |
-| `max_chunk_bytes` | 大于等于 1 的整数或省略 | 未配置 | 单 chunk 字节上限。 |
-| `max_chunk_count` | 大于等于 1 的整数或省略 | 未配置 | chunk 数量上限。 |
-| `max_total_llm_requests` | 大于等于 1 的整数或省略 | 未配置 | 单次内容分析的总 LLM 请求上限。 |
-| `max_total_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | 单次内容分析的总输出 token 上限。 |
+| 字段                          | 类型                    | 默认值 | 用途                              |
+| ----------------------------- | ----------------------- | ------ | --------------------------------- |
+| `model`                       | `provider/model` 或省略 | 未配置 | Analyze 使用的 Model。            |
+| `metadata_max_output_tokens`  | 大于等于 1 的整数或省略 | 未配置 | metadata 阶段输出上限。           |
+| `content_max_output_tokens`   | 大于等于 1 的整数或省略 | 未配置 | content 阶段输出上限。            |
+| `reference_max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | 引用 lookup 输出上限。            |
+| `max_input_bytes`             | 大于等于 1 的整数或省略 | 未配置 | 内容分析总输入字节上限。          |
+| `max_chunk_bytes`             | 大于等于 1 的整数或省略 | 未配置 | 单 chunk 字节上限。               |
+| `max_chunk_count`             | 大于等于 1 的整数或省略 | 未配置 | chunk 数量上限。                  |
+| `max_total_llm_requests`      | 大于等于 1 的整数或省略 | 未配置 | 单次内容分析的总 LLM 请求上限。   |
+| `max_total_output_tokens`     | 大于等于 1 的整数或省略 | 未配置 | 单次内容分析的总输出 token 上限。 |
 
 引用发现需要选中的 Model、其 Provider/exact-origin key 与 `reference_max_output_tokens`；
 `content` 补全还要求全部业务预算字段。程序用 Analysis/Bootstrap 派生的保守 UTF-8 字节与单次
@@ -367,14 +371,14 @@ output 边界检查输入；这些边界不是 Model 用户字段。`Analyze →
 
 ### `[execution]`
 
-| 字段 | 类型 | 默认值 | 约束 |
-| --- | --- | --- | --- |
-| `max_concurrency` | 整数 | `4` | 范围 1 到 64；用于数据库补全目标的进程内并发。 |
+| 字段              | 类型 | 默认值 | 约束                                           |
+| ----------------- | ---- | ------ | ---------------------------------------------- |
+| `max_concurrency` | 整数 | `4`    | 范围 1 到 64；用于数据库补全目标的进程内并发。 |
 
 ### `[library]`
 
-| 字段 | 类型 | 默认值 | 约束 |
-| --- | --- | --- | --- |
+| 字段              | 类型 | 默认值     | 约束                                            |
+| ----------------- | ---- | ---------- | ----------------------------------------------- |
 | `max_input_bytes` | 整数 | `67108864` | 范围 1024 到 1073741824；限制一次书目导入输入。 |
 
 ### `[browser]`
@@ -390,13 +394,13 @@ max_concurrency = 5
 policy_overrides = []
 ```
 
-| 字段 | 类型 | 默认值 | 约束 |
-| --- | --- | --- | --- |
-| `model` | `provider/model` 或省略 | 未配置 | Browser Agent 使用的 Model；必须配置 `image = true`。 |
-| `enabled` | 布尔值 | `false` | Browser 总开关；启用时必须同时选择并初始化 `profile`。 |
-| `profile` | 字符串或省略 | 省略 | 一个不含敏感信息的 Profile identity，不是路径、账号、机构名、URL、UUID、Token 或 Cookie 标签；由 `sciretriever config` 选择和初始化。 |
-| `max_concurrency` | 整数 | `5` | 必须是大于 1 的整数，不设上限；只保护本机 Browser 资源，不改变 `browser-generic` 固定串行。 |
-| `policy_overrides` | inline table 数组 | `[]` | 只能收紧 `browser-generic`；未知、重复或放宽的 group 会拒绝。 |
+| 字段               | 类型                    | 默认值  | 约束                                                                                                                                  |
+| ------------------ | ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `model`            | `provider/model` 或省略 | 未配置  | Browser Agent 使用的 Model；必须配置 `image = true`。                                                                                 |
+| `enabled`          | 布尔值                  | `false` | Browser 总开关；启用时必须同时选择并初始化 `profile`。                                                                                |
+| `profile`          | 字符串或省略            | 省略    | 一个不含敏感信息的 Profile identity，不是路径、账号、机构名、URL、UUID、Token 或 Cookie 标签；由 `sciretriever config` 选择和初始化。 |
+| `max_concurrency`  | 整数                    | `5`     | 必须是大于 1 的整数，不设上限；只保护本机 Browser 资源，不改变 `browser-generic` 固定串行。                                           |
+| `policy_overrides` | inline table 数组       | `[]`    | 只能收紧 `browser-generic`；未知、重复或放宽的 group 会拒绝。                                                                         |
 
 单项 policy override 可以收紧组内并发、文章启动间隔、窗口计数/时长、完成/失败/限速冷却和
 runtime failure threshold。并发、窗口计数和 failure threshold 只能减小；interval、window
@@ -442,16 +446,16 @@ local storage、登录名、机构身份或代理设置；这些认证内容也�
 每个 Provider 最多一个 section，字段值必须是去除边界空白后仍非空且无控制字符的
 字符串。当前允许的 secret 字段是：
 
-| Provider section | 字段 | 当前凭据合同 |
-| --- | --- | --- |
-| `[web-of-science]` | `api_key` | Metadata 必需。 |
-| `[semantic-scholar]` | `api_key` | Metadata 可选；Acquisition 当前公开路线不读取它。 |
-| `[openalex]` | `api_key` | Metadata 可选；Acquisition 当前公开路线不读取它。 |
-| `[elsevier]` | `api_key`、`institution_token` | Metadata 和 authorized primary-PDF object retrieval 使用 `api_key`；`institution_token` 可选。 |
-| `[springer]` | `api_key` | 当前生产 Metadata 使用；尚不受支持的 Acquisition Full Text `api_metric` 不由交互管理器收集，也不会使 authorized route 可执行。 |
-| `[core]` | `api_key` | Metadata 可选；启用 CORE Acquisition 的授权 PDF API 时必需。 |
-| `[opencitations]` | `access_token` | Metadata 可选。 |
-| `[wiley]` | `tdm_api_token` | 启用 Wiley TDM 授权 PDF API 时必需；只有这一项 token。本地检查非空与 header 安全，实际有效性由 Wiley 响应确认。 |
+| Provider section     | 字段                           | 当前凭据合同                                                                                                                   |
+| -------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `[web-of-science]`   | `api_key`                      | Metadata 必需。                                                                                                                |
+| `[semantic-scholar]` | `api_key`                      | Metadata 可选；Acquisition 当前公开路线不读取它。                                                                              |
+| `[openalex]`         | `api_key`                      | Metadata 可选；Acquisition 当前公开路线不读取它。                                                                              |
+| `[elsevier]`         | `api_key`、`institution_token` | Metadata 和 authorized primary-PDF object retrieval 使用 `api_key`；`institution_token` 可选。                                 |
+| `[springer]`         | `api_key`                      | 当前生产 Metadata 使用；尚不受支持的 Acquisition Full Text `api_metric` 不由交互管理器收集，也不会使 authorized route 可执行。 |
+| `[core]`             | `api_key`                      | Metadata 可选；启用 CORE Acquisition 的授权 PDF API 时必需。                                                                   |
+| `[opencitations]`    | `access_token`                 | Metadata 可选。                                                                                                                |
+| `[wiley]`            | `tdm_api_token`                | 启用 Wiley TDM 授权 PDF API 时必需；只有这一项 token。本地检查非空与 header 安全，实际有效性由 Wiley 响应确认。                |
 
 Crossref、arXiv、Europe PMC、DataCite、Unpaywall 没有当前凭据字段；Sci-Hub 不接受
 猜测的凭据 section。未知 Provider、未知字段、空 section、空值和非字符串值
@@ -542,81 +546,76 @@ Models / Search / Download / Parse / Analyze / Browser / Status / Theme / Quit
 `CONFIGURATION AREAS` 表格。顶部 Panel 只保留普通配置/凭据文件位置和 `LOCAL · NO NETWORK
 REQUESTS` 边界。说明过长时按当前终端宽度安全截断，不改变左列标签、快捷键或所选值。
 
-TTY 使用 Rich + prompt-toolkit 的非全屏界面，支持方向键、Enter、Esc/左方向键返回、
-`M/S/D/P/A/B/I/T/Q` 首页快捷键与隐藏输入；模型和 Literature Provider 等长列表还支持 `/`
-搜索。重定向输入或基础终端使用确定性编号菜单。主题支持 `auto/dark/light/mono`，`NO_COLOR`
-始终强制单色。交互内容只写 stderr，stdout 为空；Ctrl+C/EOF 取消不会写文件。公开子命令只有
-`status` 和 `test`，旧 `config set/remove` 作为无效输入拒绝。
+TTY 使用 ANSI Rich 风格的 Panel/Table 渲染与 `@inquirer/prompts` 交互，支持方向键、Enter、确认、
+隐藏输入和 `auto/dark/light/mono` 主题；`NO_COLOR` 始终强制单色。交互内容写 stderr，重定向输入
+使用确定性的纯文本状态页和 `M/S/D/P/A/B/I/T/Q` 菜单；Ctrl+C/EOF 取消不会写文件。公开子命令
+只有 `status` 和 `test`，旧 `config set/remove` 作为无效输入拒绝。
 
-所有二级及更深的选择菜单都在页面动作后保留两种不同的导航语义：`Back`
-只返回上一级，自动追加的 `Quit` 从任意层级直接关闭整个配置中心。Esc/左方向键等价于
-`Back`；Ctrl+C、输入取消和保存确认取消仍只终止当前未保存操作，不会被解释为 `Quit`。
+子页面提供 `Back` 返回首页，首页提供 `Quit` 关闭配置中心。Ctrl+C、Esc、输入取消和保存确认取消
+都不会写入未确认的配置；当前交互库没有把 Esc/左方向键映射为页面返回。
 
 所有普通设置操作都更新固定的 `~/.sciretriever/config.toml`；文献 Provider、Model Provider、
 MinerU 和可选 CloakBrowser secret 操作只更新同目录下的 `credentials.toml`。两者不会被合并。配置
 中心支持当前 Model、Source、Browser、Parser、Analyze 与凭据用例；其它普通字段仍可直接编辑固定
 配置文件。直接编辑后必须保留本手册第 1 节的权限与严格 TOML/schema 合同。
 
-`Models` 页固定为 `Add / <Model> / Providers / Back`；具体 Model 页为
-`Edit / Test / Remove / Back`。
-`Providers` 页固定为 `Add / <Provider> / Back`；具体 Provider 页为
-`Edit / Key / Test / Remove / Back`。Provider 只管理 name、API、Base URL 与 exact-origin Key；
-Model 只管理完整 `provider/model` reference、reasoning、image 与 stream。远程 Key 使用隐藏输入，从不回显
-mask、长度、前后缀、hash 或 fingerprint。任务必须在自己的页面显式选择 Model。
+实时本地工作台还提供 Configuration 工作空间。它通过 authenticated loopback HTTP 调用同一个
+TypeScript owner，可编辑 Sources 的 Auto/Custom、来源和扫描上限、WOS/Unpaywall 参数，管理 Model Provider/Model 注册表，并选择 Browser/Analyze 模型和编辑已有 Parser/Browser 字段。按 revision 校验并发布；冲突时
+保留浏览器中的草稿，刷新最新 snapshot 后允许用户修正或重试。Probe 按请求重读设置和凭据，随后
+重新读取 readiness；页面加载和普通刷新不会隐式联网，probe 结果不写入配置或 Catalog。长寿命
+Workbench Application 仍保留启动时的普通配置：页面会提示 Browser/Jobs 业务操作需要重启服务后应用
+新普通设置。凭据则由每个新外部请求在 Network/adapter 派发边界从固定 credentials 文件重读并按
+origin/operation 重新授权；保存或撤销后，已进入传输的动作可结算，后续动作使用新值或稳定拒绝。
+Probe 也在每次点击时重读配置和凭据。Model Provider、Source 和 MinerU 凭据通过独立 password 输入保存，
+提交后输入立即清空；页面只显示 presence，不回显值，也不会把 secret 放入 URL、history、DOM 或普通错误。
+Sources、Provider/Model 与运行配置分区分别保存，不覆盖其它分区的未保存草稿；切换页面保留草稿，显式刷新会重新载入已保存值。删除或重命名被任务引用的 Model/Provider 前，先调整并保存任务模型。Source 仅改扫描上限时保留已有来源顺序，新选项稳定追加。
 
-`Models → Add` 的顺序固定为：选择已有 Provider 或 `New`；新增时选择内置入口或 Custom URL，
-确认 API；远程 Provider 在同一流程隐藏输入 Key；Key 就绪后自动通过共享 Network 对当前 Base URL
-执行一次有界模型目录读取；选择 model；选择 Reasoning、Image 与 Stream；最后一次确认并原子保存 Provider、
-Model 和必要凭据。loopback Provider 不询问 Key。使用已有远程 Provider 时会复用与当前 origin
-匹配的 Key，缺少时在该流程补录。
+保存后的 readiness 不代表当前进程已组装该能力。启动时因缺凭据未组装的 Parser 或已选来源，补齐凭据后还需重启工作台；已组装能力的凭据轮换不要求重启。页面分别显示普通配置和运行能力的重启需求，未知状态明确报告。高级预算、其它来源参数及未提供字段继续使用 CLI 配置中心或固定 TOML。该工作台仍是本机 operator 界面，不改变 `config` CLI 的支持合同。
 
-目录请求禁止 redirect，只读取第一页最多 100 项并受响应字节与超时边界约束；结果只采信安全的
-model ID，不持久化 catalog、context、capability 或测试状态。认证、timeout、HTTP、格式、大小
-失败，目录为空或不能安全解析时显示脱敏原因，然后才出现 `Manual` 输入；正常目录成功时不额外
-展示手工分支。`config status`、首页、普通命令和进入 Models 本身都不会读取模型目录。Provider
-`Test` 也显式读取同一有界目录，只报告安全数量，不证明任意具体 Model 的调用能力。具体 Model
-对象页的 `Test` 可以选择 Text；`image = true` 时还可选择 Image。它使用该 Model 自己的 reasoning
-与 stream，
-不改变 Analyze 或 Browser 选择；任务合同仍分别由 Analyze 与 Browser 的 Test 验证。
+CLI Configuration TUI 每次显式 Probe 都新建 session，保存配置后下一次 Probe 重新读取当前设置和凭据；
+TUI 进程不持有供普通命令复用的 Application。每次后续 CLI 业务命令则从固定文件组装新的 Application。
 
-Model Edit 只修改 reasoning/image/stream，不改变唯一 reference；Provider Edit 修改 URL/API 并安全处理
-origin-bound Key。Provider 被 Model 引用时不能删除，Model 被 Analyze/Browser 选择时不能删除。
+`Models` 页提供 Add/Edit Provider、设置 Provider Key、Add Model，以及为 Analyze/Browser 选择 Model。
+Provider 只管理 name、API、Base URL 与 exact-origin Key；Model 只管理完整 `provider/model` reference、
+reasoning、image 与 stream。远程 Key 使用隐藏输入，从不回显 mask、长度、前后缀、hash 或 fingerprint。
+`Search`/`Download` 页编辑 Auto/Custom Source 集合和 Search limit；`Parse`、`Analyze`、`Browser` 页编辑
+各自的普通配置。所有保存都在确认后提交给 TypeScript Configuration Owner。
+
+`Models → Add provider` 询问名称、API 协议、Base URL 和隐藏 API key；该流程只做本地校验，不读取远程
+模型目录。`Models → Add model` 选择已有 Provider，填写远程 model 名称，再选择 reasoning、image 和
+stream，最后显示 Before/After 差异并原子保存。`Set provider credential` 可在不改变普通配置的情况下
+单独更新 Provider key。`config status`、首页和进入 Models 本身都不会读取模型目录或联网。
 旧 `[agents]`、`[analysis]`、`[access]`、`[models.services.*]`、`[models.profiles.*]`、
 `[models.entries.*]` 和旧 credentials `[agents]`、`[models.*]` 会在首页前作为未知 schema 直接
 拒绝，不会自动映射、迁移或恢复。operator 手工移除旧 section 后，所需 Key 必须在
 `Models → Providers → Key` 中按 Model Provider 重新保存。
 
-Model reasoning 接受 `default/none/minimal/low/medium/high/xhigh/max`。`default` 省略 wire 字段；
-Model stream 默认开启，也可在 Add/Edit 中关闭；Analyze/Browser 没有 task-level reasoning、stream
-或 capability override。
+Model reasoning 接受 `default/none/minimal/low/medium/high/xhigh/max`。Model stream 默认开启，也可在
+Add 流程中关闭；Analyze/Browser 没有 task-level reasoning、stream 或 capability override。
 
-其它 owner 页固定为：
+其它 owner 页当前提供的动作是：
 
 ```text
-Search:   Sources / Limit / Test / Back
-Download: Sources / Test / Back
-Parse:    Setup / Test / Reset / Back
-Analyze:  Setup / Test / Reset / Back
-Browser:  Setup / Profiles / Runtime / Test / Reset / Back
+Search:   Auto / Custom / Limit / Back
+Download: Auto / Custom / Back
+Parse:    Setup / Test / Back
+Analyze:  Setup / Back
+Browser:  Setup / Test model / Back
 ```
 
 Search/Download 的 Sources 使用 Auto/Custom 两层。Auto → Custom 会冻结当前有效集合与顺序；
-Custom → Auto 会删除固定 providers 并重新跟随版本 catalog。Search 的 Limit 修改唯一逐 Source
-raw-item 上限。选中具体 Source 后，对象页按能力提供 `Setup`、`Key`、`Test`、`Enable` 或
-`Disable`；Search Auto 的 Crossref anonymous/polite 也在 Crossref 的 `Setup` 中配置。凭据和普通
-参数不会改变有效集合。Sources 选择列表的右列同时显示 Active/Off、用途以及当前能力的凭据合同
-和本地存在状态；例如 CORE 在 Search 显示 API key 可选，在 Download 显示 API key 必需。这里
-只读取 secret 是否存在，绝不显示值、长度或特征。Sci-Hub 只提供 `Mirrors` 和配置 Test，不会询问
-Key；该 Test 不访问镜像或下载 PDF。
+Custom → Auto 会恢复内置集合。Search 的 Limit 修改逐 Source raw-item 上限。当前页面只编辑
+集合和 limit；Source 的凭据与远程 Test 仍通过公开 `config test` 命令和 owner 接口处理，状态页只
+显示 secret presence，绝不显示值、长度或特征。
 
-`Analyze → Setup` 选择全部已配置 Model 并连续确认八项业务预算；首次选择 Model 时缺失预算会使用
-产品固定安全初值，已有完整预算保持不变。`Browser → Setup` 只列出 `image = true` 的 Model，并
-连续确认 Profile 与本机资源 cap。两者都只更新完整 Model reference，不
-修改 Model 或另一个任务。
+`Analyze → Setup` 选择已配置 Model，并为缺失预算填入产品固定安全初值；`Browser → Setup` 只列出
+`image = true` 的 Model，确认启用后填写 Profile。两者只更新任务选择，不修改 Model 或另一个任务。
 
-`Parse → Setup` 连续配置当前真实的 MinerU 3.4.4 / protocol 2 / `vlm-engine` 部署。loopback 不询问
-token；remote 在同一流程先明确授权源 PDF 离开本机，再收集 exact-origin bearer token。Reset
-原子清空对应普通 section 与 token，不留下半配置状态。
+`Parse → Setup` 配置 operator-managed MinerU 的 loopback 或 remote endpoint、部署身份和远程上传授权；
+remote 配置完成后可以在隐藏输入中保存 exact-origin token。页面不会启动 MinerU 服务。
+
+下方关于按 Source 管理凭据、远程目录读取、Profile 生命周期和细粒度 Test 的段落保留自原始
+配置设计，作为后续扩展约束；当前轻量 TS TUI 只实现本节前述页面动作，实际行为以源码和直接测试为准。
 
 设置或更新动作按当前可执行 capability 的 credential spec，用不回显输入收集必需和可选
 字段；secret 不能通过普通 option、位置参数或 URL 传入。尚不受支持的 capability 所声明字段
@@ -751,17 +750,19 @@ Storage 分区显示 Catalog/ArtifactStore 是否配置及其当前非 secret �
 远程 bearer token 是否必需/存在/origin 匹配；Models 分区逐项显示 Model Provider 的 API、Base
 URL 与 API key presence/origin match，以及 Model 的完整 reference、reasoning、image 与 stream。
 Analyze/Browser JSON 分区显示各自所选 Model、业务参数和 readiness，并提示
-`config test analyze` 或 `config test browser model` 才能验证本地声明；`download` 分区只显示
-Acquisition Source 选择，不再承载 Browser 配置。
+`config test analyze` 或 `config test browser model` 才能执行对应的最小只读 probe；`download`
+分区只显示 Acquisition Source 选择，不再承载 Browser 配置。
 未启用但已有凭据的 Provider
 仍会显示，便于发现遗留或预配置凭据。这里的 `ready` 只表示本地配置完整，不代表外部
 服务或认证已经成功；任何 secret 值都不会显示或进入 JSON。
 
-### `config test`
+### `config test`（当前实现与目标边界）
 
 配置测试只回答“当前配置是否能完成一个安全、最小的外部握手”，不替代正式业务流程。交互 TUI
-与下列结构化命令调用同一个 `ProductionConfigurationProbeSession`，该 Session 复用生产 adapter、
-共享 Network 和限速，但不构造 Storage：
+与下列结构化命令调用同一个 `ConfigurationProbeSession`，该 Session 复用受控 adapter、
+共享 Network 和限速，但不构造 Storage。非 JSON 人类调用在 probe 前需要显式确认；`--json` 适合
+脚本调用并明确表示用户已选择执行可能联网的最小 probe。每个结果都标出实际是否联网/启动
+Browser、稳定 outcome/code、`persisted=false` 和 entitlement 未证明。
 
 ```text
 sciretriever config test provider <name> [--json]
@@ -792,10 +793,17 @@ sciretriever config test --all [--json]
   不提交 task、不轮询、不取 archive、不上传 PDF。`analyze` 使用当前 Analyze Model 发送最小
   strict-schema 请求。`browser model` 使用当前 Browser Model 发送合成图片与封闭工具，不启动
   Browser 或访问 Publisher。
-- `browser site <publisher-access-key>` 是唯一启动受控有头 Browser 的配置测试。人类模式在启动前
-  再次确认；无 GUI Linux 使用 Xvfb。它只访问一个 production-approved 最小目标并复用自动获取的
-  risk-group scheduler，一次最多导航一次；结果始终保留 `article_entitlement = not-proven` 与
-  `persisted = false`。
+- `browser site <publisher-access-key>` 是唯一允许启动受控有头 Browser 的配置测试；已验证
+  Cloak bundle 缺失时稳定返回 `browser-site-probe-unavailable`。人类模式在启动前再次确认；无 GUI
+  Linux 使用 Xvfb。Browser 已启用但未选择固定身份 Profile 时配置解析即拒绝，
+  不会隐式创建身份。它在选中的
+  Profile 中只准入一个核实首页的顶层文档，禁用脚本与下载并阻断其它请求/跳转，
+  不请求文章 PDF 或发布事实；
+  Chrome 可更新 Profile 的站点状态，`persisted = false` 仅指没有写入产品事实。结果始终保留
+  `article_entitlement = not-proven`。生产 Completion 的 cohort scheduler/session broker 已接线；
+  Site probe 仍只验证明确选择的站点可达性，不证明文章 entitlement 或真实批量获取能力。
+  bundle 验证与 Site probe 组装只在已授权且目标受支持的该项测试中执行；创建配置测试
+  session、其它 Provider/Model/MinerU 测试及未授权 Site 请求不扫描 bundle 或启动 Browser。
 
 `config test --all` 汇总当前启用的 Search Source、Download 的可见限制、Analyze 和 Parse；Browser
 已启用时加入 Browser Model。它不读取 Model Provider 目录、不测试任意
@@ -824,7 +832,8 @@ sciretriever config test browser site springerlink
 sciretriever config test browser site wiley-online-library
 ```
 
-它只打开所选 Profile 已核实的首页，检查 runtime 与目标可达性。它不调用 Browser Model，不
+它只打开所选访问方已核实的首页顶层文档，检查 runtime 与该文档可达性。需要脚本、资源
+或跳转的首页可能返回不可达；它不调用 Browser Model，不
 使用 Publisher 页面规则，不访问任意文章、不下载 PDF，也不评估当前机构 IP 或具体文章
 entitlement，不持久化结果。未支持的 access key 不会导航或猜 URL。开关、Playwright 或
 CloakBrowser binary 未就绪时以稳定原因 `skipped`；只有本地就绪时才会启动 probe。
@@ -932,8 +941,10 @@ enabled = false
 ```
 
 这份文件在结构上合法，但外部能力是否可运行仍取决于统一凭据文件、
-当前生产 capability 与 Network policy。`config status --json` 可做不联网的本地检查；
-只有用户明确需要验证真实服务时才执行 `config test`。
+当前 production capability 与 Network policy。`config status --json` 只做不联网的本地检查；
+用户明确选择 `config test` 后，Probe 才会执行最小只读验证。退出码 `0` 只表示该 Probe
+得到 `passed`，不表示完整业务、文章 entitlement、机构授权或真实 Browser 正路径已验证；
+`unavailable`、`failed` 和未授权结果都必须按稳定 code/action 处理。
 
 上例中的 OpenAI Model Provider 还要求 `Models → Providers → Key` 写入
 `[providers.openai]` exact-origin key；CORE 要求在 `Download → Sources → core → Key` 写入

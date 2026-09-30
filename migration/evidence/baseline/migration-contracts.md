@@ -7,8 +7,8 @@
 已建立并互相链接的权威文件：
 
 - [ADR 0024：TypeScript 与 Browser 工作台迁移边界](../../../docs/architecture/decisions/0024-typescript-browser-workbench-migration.md)
-- [设计文档的 TypeScript 迁移映射](../../../docs/architecture/design.md#56-typescript-迁移映射)
-- [TypeScript 与 Browser 工作台技术边界](../../../docs/architecture/technical/typescript-workbench.md)
+- [生产组装与应用生命周期](../../../docs/architecture/technical/02-task-coordination.md#2-生产组装与应用生命周期)
+- [任务与协作控制：生产组装与应用生命周期](../../../docs/architecture/technical/02-task-coordination.md#2-生产组装与应用生命周期)
 - [产品需求](../../../docs/architecture/requirements.md)、[技术文档索引](../../../docs/architecture/technical.md)
 
 合同明确了 TypeScript 当前生产入口与保留 Python 历史材料的关系，禁止生产双写；明确 Configuration、

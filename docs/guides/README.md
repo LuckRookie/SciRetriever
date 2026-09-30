@@ -1,10 +1,18 @@
 # 用户指南
 
-本目录只描述安装产物已经公开且经过验收的用户行为。当前公开入口是 `sciretriever` console script；主题/引用发现与数据库补全是两类独立操作，书目导入、手动 PDF、补全、查询和导出都作用于同一个 SQLite Catalog 与 ArtifactStore。
+产品目标已扩展为科研 Agent 知识供给和正式人类协作，见[需求](../architecture/requirements.md)与[ADR 0026](../architecture/decisions/0026-agent-knowledge-and-human-collaboration.md)。当前已接通固定文档证据、分层知识、集合综合、材料/知识 Context、外部候选交付和同一生产 Browser 的观看/指导/接管；本目录说明这些可用入口及其实际验证边界。正式 MCP adapter、真实服务/站点与科学质量验收等剩余目标不能写成已发布或生产就绪。
 
-- [项目 README](../../README.md)：安装方式、固定命令树、最小本地旅程、发现与补全边界，以及生产 Bootstrap、离线外部 Port 注入和受控协议/安全 QA 三层验收证据。
-- [SciRetriever 配置手册](configuration.md)：九组普通配置、配置文件选择、固定凭据文件、Provider readiness 和显式只读 probe。
-- [PDF 获取指南](pdf-acquisition.md)：Public → Authorized API → Browser-last 的执行顺序、9 家生产 Browser 路由、共享持久 Profile、Provider 分组限速、逐文章权限检查、失败分类和重跑。
+本目录优先描述当前公开行为，并在能力尚未接线时明确标记“合同目标·未实现”。当前公开入口是 `sciretriever` console script；主题/引用发现与数据库补全是两类独立操作，书目导入、手动 PDF、补全、查询和导出都作用于同一个 SQLite Catalog 与 ArtifactStore。目标/现状总表见 [TypeScript 架构锚定基线](../architecture/typescript-baseline.md)。
+
+- [项目 README](../../README.md)：安装方式、固定命令树、最小本地旅程，以及当前实现与目标合同的证据边界。
+- [TypeScript 安装与兼容矩阵](installation.md)：Linux x64 portable 支持、Catalog v1–v8 reader 和实际安装验收边界。
+- [Catalog 初始化、升级与恢复](upgrade.md)：精确目标的正式 v8 init/upgrade、只读检查、原始备份与中间版本失败语义。
+- [切换与恢复](cutover.md)：待授权目标、停 writer/Jobs/Browser、Catalog 与资产备份、独立恢复及增量保留。
+- [独立文献库阅读](library-query.md)：通过 QueryApplication 启动只读 Web 阅读入口，了解 readiness、缺口反馈、默认 home 与关闭方式。
+- [SciRetriever 配置手册](configuration.md)：普通配置、固定凭据文件、Provider readiness 和显式只读 probe 目标；真实 `config test` 的当前缺口已标注。
+- [PDF 获取指南](pdf-acquisition.md)：目标 Public → Authorized API → Browser-last 执行顺序、Browser 安全边界、Provider 分组限速、逐文章权限检查、失败分类和重跑；生产 Browser route 的当前接线状态已标注。
+- [文档 Catalog 合成迁移指南](document-catalog-migration.md)：保留 v1/v2→v3、v3→v4 历史单步演练门禁；正式 v8 启用走上述 operator 入口。
+- [解析与发布文档版本](document-processing.md)：对固定已接纳主 PDF 显式复用或重解析，发布不可变 DocumentVersion，再按固定版本有界阅读和复核证据。
 
 用户指南只把安装后可观察、且已有对应验收证据的行为写成当前能力。外部 Port 的受控 fake 验收、loopback 协议 QA 或 Chromium 安全 QA 不等于生产环境已经对真实 Provider、Parser、LLM 或出版社开放；具体证据边界以项目 README 的“当前验收边界”为准。
 

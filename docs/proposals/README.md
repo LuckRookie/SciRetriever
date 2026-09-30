@@ -4,7 +4,7 @@
 
 ## 当前提案
 
-当前没有活动提案。已经确认或被替代的材料见 `docs/archive/`；供应商访问调度的当前决策见 [ADR 0012](../architecture/decisions/0012-process-local-provider-access-scheduling.md)。
+本目录当前没有单独的活动提案包。新方向已由ADR接受；尚待定稿的模块交换细节保留在[统一产品接口：共享合同、结构解析与版本兼容](../architecture/technical/01-product-interface.md#6-共享合同结构解析与版本兼容)，其Proposed状态不等于已接受API。执行与恢复归[活动计划](../plans/README.md)，不在这里复制。已经确认或被替代的材料见 `docs/archive/`；供应商访问调度的当前决策见 [ADR 0012](../architecture/decisions/0012-process-local-provider-access-scheduling.md)。
 
 活动提案使用 TOML front matter：
 
@@ -23,4 +23,4 @@ created = "YYYY-MM-DD"
 
 提案一旦确认方向、完成实施、被拒绝或被替代，应及时移入 `docs/archive/<日期-主题>/`，不得继续留在本目录。被接受的长期决策必须先同步到 `docs/architecture/` 或 ADR；当前用户行为必须同步到项目 `README` 和用户教程。
 
-获准实施后，需要跨阶段恢复的实施计划写入 [`../plans/`](../plans/)；Proposal 不兼任执行台账。
+获准实施后，需要跨阶段恢复的实施计划写入 [`../plans/`](../plans)；Proposal 不兼任执行台账。
