@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  parseLibraryQuery,
   parseLibrarySearchRequest,
   parseLiteratureDetail,
   parseLiteratureId,
@@ -19,6 +20,8 @@ import {
   type LibrarySearchPage,
   type LibrarySort,
   type LiteratureSearchItem,
+  type LiteratureId,
+  type MetaLiteratureId,
 } from "@sciretriever/contracts";
 import { normalizeQueryText, ftsIndexText } from "./unicode-casefold.js";
 
@@ -36,6 +39,9 @@ export interface LibraryQueryRepository {
   librarySnapshot(
     ftsQuery: string | null,
     discoveryRunIds?: readonly string[],
+    includeOtherVersions?: boolean,
+    literatureIds?: readonly string[],
+    metaLiteratureIds?: readonly string[],
   ): Promise<readonly SearchSnapshotRow[]>;
   referenceQuerySnapshot(
     selection:
@@ -66,6 +72,11 @@ export interface CurrentContentBinding {
 }
 export interface LiteratureArtifactReader {
   read(reference: string, maxBytes: number): Promise<Uint8Array>;
+}
+/** Matching versions and their complete Meta membership from one read snapshot. */
+export interface LiteratureSelectionSnapshot {
+  readonly matches: readonly LiteratureSearchItem[];
+  readonly members: readonly LiteratureSearchItem[];
 }
 export class LiteratureNotFoundError extends Error {
   readonly code = "literature-not-found";
@@ -517,6 +528,30 @@ export class LiteratureQueryService {
       fail();
     return rows[0]!;
   }
+  /** One targeted, consistent snapshot for explicit Entry/Jobs selection. */
+  async targetedSnapshot(
+    selection:
+      | { readonly literature_ids: readonly LiteratureId[] }
+      | { readonly meta_literature_ids: readonly MetaLiteratureId[] },
+  ): Promise<LibrarySearchPage> {
+    const literatureIds =
+      "literature_ids" in selection ? selection.literature_ids : [];
+    const metaLiteratureIds =
+      "meta_literature_ids" in selection ? selection.meta_literature_ids : [];
+    const rows = await this.repository.librarySnapshot(
+      null,
+      [],
+      false,
+      literatureIds,
+      metaLiteratureIds,
+    );
+    const items = Object.freeze(rows.map((row) => row.item));
+    return Object.freeze({
+      items,
+      total_count: items.length,
+      next_cursor: null,
+    });
+  }
   async references(value: unknown): Promise<LiteratureReferencePage> {
     const request = parseLiteratureReferenceRequest(value);
     const after =
@@ -616,6 +651,45 @@ export class LiteratureQueryService {
               request.sort,
             )
           : null,
+    });
+  }
+
+  /** Entry decides target eligibility; this read only supplies the complete version view. */
+  async selectionSnapshot(
+    value: unknown,
+  ): Promise<LiteratureSelectionSnapshot> {
+    const query = parseLibraryQuery(value);
+    const terms = query.text === null ? null : queryTerms(query.text);
+    if (terms?.length === 0)
+      return Object.freeze({
+        matches: Object.freeze([]),
+        members: Object.freeze([]),
+      });
+    const rows = await this.repository.librarySnapshot(
+      terms === null ? null : terms.map((term) => `"${term}"`).join(" AND "),
+      query.discovery_run_ids,
+      true,
+    );
+    // A sibling included for completeness may not match FTS or the other query
+    // fields. It must not become a new seed for the selected scope.
+    const selected = rows.filter(
+      (row) =>
+        (terms === null || row.relevance !== null) && matches(row, query),
+    );
+    const sort = query.text === null ? "publication-year-desc" : "relevance";
+    selected.sort((a, b) =>
+      compare(position(a, sort), position(b, sort), sort),
+    );
+    const metas = new Set(
+      selected.map((row) => row.item.literature.meta_literature_id),
+    );
+    return Object.freeze({
+      matches: Object.freeze(selected.map((row) => row.item)),
+      members: Object.freeze(
+        rows
+          .filter((row) => metas.has(row.item.literature.meta_literature_id))
+          .map((row) => row.item),
+      ),
     });
   }
 }

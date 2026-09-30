@@ -168,6 +168,37 @@ it.each(["execution_receipts", "execution_candidates", "parser_results"])(
     }
   },
 );
+it("refuses a no-usable-content cleanup while an exhaustion fact exists and commits the same command after it is cleared", async () => {
+  const env = await prepared();
+  try {
+    await env.app.database.setAutomaticPdfExhaustion(lit);
+    await expect(
+      env.app.noUsableContent.cleanup(env.decision),
+    ).rejects.toMatchObject({ code: "content-cleanup-stale" });
+    // A refused cleanup rolls back nothing and never clears the fact.
+    expect(await env.app.database.hasAutomaticPdfExhaustion(lit)).toBe(true);
+    expect(await env.app.library.detail(lit)).toEqual(env.d);
+    expect(await env.app.database.getReceiptIntent("published")).not.toBeNull();
+    expect(await env.app.database.getCandidate("bad-pdf")).toEqual(
+      env.candidate,
+    );
+    expect(
+      (
+        await env.app.files.read(
+          env.candidate.reference,
+          env.candidate.size_bytes,
+        )
+      ).length,
+    ).toBe(env.candidate.size_bytes);
+    // The identical command commits once the exhausted target is explicitly retried.
+    await env.app.database.clearAutomaticPdfExhaustion(lit);
+    const result = await env.app.noUsableContent.cleanup(env.decision);
+    expect(result.outcome).toBe("no_usable_content_cleaned");
+    expect(result.reclamation.deleted).toHaveLength(3);
+  } finally {
+    await env.app.close();
+  }
+});
 it("refuses the lower-level catalog-only cleanup when execution associations need a coordinated decision", async () => {
   const env = await prepared();
   try {

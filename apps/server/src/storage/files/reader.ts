@@ -7,7 +7,7 @@ import { isRelativeArtifactReference } from "./publication.js";
 
 export class VerifiedReaderError extends Error {
   readonly code = "verified-artifact-read";
-  constructor() {
+  constructor(readonly reason: "missing" | "invalid" = "invalid") {
     super("verified artifact read failed");
   }
 }
@@ -42,6 +42,7 @@ interface OpenFile {
 }
 async function openFile(root: string, reference: string): Promise<OpenFile> {
   const handles: FileHandle[] = [];
+  let openingFinalName = false;
   let closing: Promise<void> | undefined;
   const close = () =>
     (closing ??= (async () => {
@@ -76,6 +77,7 @@ async function openFile(root: string, reference: string): Promise<OpenFile> {
       );
       handles.push(directory);
     }
+    openingFinalName = true;
     const file = await open(
       process.platform === "linux"
         ? `/proc/self/fd/${directory.fd}/${parts.at(-1)!}`
@@ -84,8 +86,10 @@ async function openFile(root: string, reference: string): Promise<OpenFile> {
     );
     handles.push(file);
     return { file, close };
-  } catch {
+  } catch (error) {
     await close();
+    if (openingFinalName && (error as NodeJS.ErrnoException).code === "ENOENT")
+      throw new VerifiedReaderError("missing");
     return fail();
   }
 }

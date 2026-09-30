@@ -27,6 +27,8 @@ export interface CreateExecutionJobInput {
   readonly policy: Partial<ExecutionPolicySnapshot>;
   readonly idempotency_key: string;
   readonly created_at?: string;
+  /** Targets are inserted in the same worker transaction as the job when supplied. */
+  readonly targets?: readonly ExecutionTarget[];
 }
 
 const DEFAULT_POLICY: ExecutionPolicySnapshot = Object.freeze({
@@ -77,7 +79,16 @@ export class ExecutionRepository {
     const createdAt = input.created_at ?? new Date().toISOString();
     const policy = normalizeExecutionPolicy(input.policy);
     const selectorBytes = canonicalJsonBytes(input.selector);
-    if (selectorBytes.byteLength > 65_536)
+    // Schema v2 snapshots include the frozen MetaLiterature candidate lists.
+    // Ten thousand bounded targets can exceed the legacy selector-only cap.
+    const selectorLimit =
+      input.selector &&
+      typeof input.selector === "object" &&
+      "schema_version" in input.selector &&
+      input.selector.schema_version === 2
+        ? 4_194_304
+        : 65_536;
+    if (selectorBytes.byteLength > selectorLimit)
       throw new TypeError("execution selector is invalid");
     const job: ExecutionJob = {
       job_id: input.job_id ?? `job-${randomUUID()}`,
@@ -93,6 +104,7 @@ export class ExecutionRepository {
       job,
       await sha256(canonicalJsonBytes(policy)),
       policy,
+      input.targets ?? [],
     );
   }
 
@@ -140,6 +152,24 @@ export class ExecutionRepository {
     return this.database.updateExecutionJob(jobId, status, finishedAt);
   }
 
+  /** Operator control uses a short SQLite transaction outside long Entry admission. */
+  controlJob(
+    jobId: string,
+    status: "paused" | "cancelled",
+    finishedAt: string | null = null,
+  ): Promise<ExecutionJob> {
+    return this.database.controlExecutionJob(jobId, status, finishedAt);
+  }
+
+  /** Preserve an external pause/cancel that wins the race with finalization. */
+  updateJobIfActive(
+    jobId: string,
+    status: ExecutionJobStatus,
+    finishedAt: string | null = null,
+  ): Promise<ExecutionJob> {
+    return this.database.updateExecutionJob(jobId, status, finishedAt, true);
+  }
+
   putTarget(target: ExecutionTarget): Promise<ExecutionTarget> {
     return this.database.putExecutionTarget(target);
   }
@@ -151,8 +181,9 @@ export class ExecutionRepository {
   claimTarget(
     jobId: string,
     now = new Date().toISOString(),
+    targetId: string | null = null,
   ): Promise<ExecutionTarget | null> {
-    return this.database.claimExecutionTarget(jobId, now);
+    return this.database.claimExecutionTarget(jobId, now, targetId);
   }
 
   updateTarget(
@@ -205,6 +236,11 @@ export class ExecutionRepository {
     intervention: ExecutionIntervention,
   ): Promise<ExecutionIntervention> {
     return this.database.putExecutionIntervention(intervention);
+  }
+  putInterventionIfActive(
+    intervention: ExecutionIntervention,
+  ): Promise<ExecutionIntervention | null> {
+    return this.database.putExecutionInterventionIfActive(intervention);
   }
 
   listInterventions(

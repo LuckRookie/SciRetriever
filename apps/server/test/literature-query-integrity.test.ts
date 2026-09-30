@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { parseLiterature, parseAsset } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
+import type { SqliteCommand } from "../src/storage/sqlite/worker.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 const id = (n: number) =>
   `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
@@ -101,9 +102,17 @@ it("matches the existing query filter semantics and rejects incomplete discovery
     raw
       .prepare("INSERT INTO citation_discovery_causes VALUES(?,?,?,?,?,1)")
       .run(id(301), id(102), id(1), id(3), id(3));
-    raw
-      .prepare("INSERT INTO automatic_pdf_acquisition_exhaustions VALUES(?)")
-      .run(id(1));
+    // The exhaustion fact is written through its public API; direct tests never fabricate it.
+    await app.database.setAutomaticPdfExhaustion(id(1));
+    await app.database.setAutomaticPdfExhaustion(id(1));
+    expect(await app.database.hasAutomaticPdfExhaustion(id(1))).toBe(true);
+    expect(
+      raw
+        .prepare(
+          "SELECT count(*) AS n FROM automatic_pdf_acquisition_exhaustions WHERE literature_id=?",
+        )
+        .get(id(1)),
+    ).toEqual({ n: 1 });
     const verify = async (
       cases: readonly {
         query: object;
@@ -232,6 +241,117 @@ it("matches the existing query filter semantics and rejects incomplete discovery
     await expect(
       app.library.search({ query: { text: "STRASSE" } }),
     ).rejects.toMatchObject({ code: "sqlite-worker" });
+  } finally {
+    raw?.close();
+    await app.close();
+    await rm(home, { recursive: true, force: true });
+  }
+}, 30000);
+it("stores the automatic acquisition exhaustion fact only through a validated LiteratureId API", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-exhaustion-api-"));
+  const app = await createApplication(home);
+  let raw: DatabaseSync | undefined;
+  try {
+    for (const n of [1, 2])
+      await app.database.putLiterature(
+        parseLiterature({
+          ...FIXTURE_LITERATURE,
+          literature_id: id(n),
+          meta_literature_id: id(100 + n),
+          metadata: {
+            ...FIXTURE_LITERATURE.metadata,
+            identifiers: [
+              { namespace: "doi", value: `10.5555/exhaustion.${n}` },
+            ],
+          },
+        }),
+      );
+    // Idempotent set: one durable row per Literature and a correct read projection.
+    await app.database.setAutomaticPdfExhaustion(id(1));
+    await app.database.setAutomaticPdfExhaustion(id(1));
+    expect(await app.database.hasAutomaticPdfExhaustion(id(1))).toBe(true);
+    expect(await app.database.hasAutomaticPdfExhaustion(id(2))).toBe(false);
+    expect(
+      (
+        await app.library.search({ query: { needs_manual_pdf: true } })
+      ).items.map((item) => item.literature.literature_id),
+    ).toEqual([id(1)]);
+    expect(
+      (
+        await app.library.search({ query: { needs_manual_pdf: false } })
+      ).items.map((item) => item.literature.literature_id),
+    ).toEqual([id(2)]);
+    // Unknown Literatures, non-identifier values and candidate/failure-shaped pseudo facts are refused.
+    await expect(
+      app.database.setAutomaticPdfExhaustion(id(999)),
+    ).rejects.toMatchObject({ code: "sqlite-worker" });
+    await expect(
+      app.database.setAutomaticPdfExhaustion("first"),
+    ).rejects.toMatchObject({ code: "sqlite-worker" });
+    await expect(
+      app.database.hasAutomaticPdfExhaustion(id(999)),
+    ).rejects.toMatchObject({ code: "sqlite-worker" });
+    await expect(
+      app.database.clearAutomaticPdfExhaustion(id(999)),
+    ).rejects.toMatchObject({ code: "sqlite-worker" });
+    for (const pseudo of [
+      {
+        kind: "set_automatic_pdf_exhaustion",
+        literatureId: id(1),
+        transfer_id: "first",
+      },
+      {
+        kind: "set_automatic_pdf_exhaustion",
+        literatureId: id(1),
+        failure_reason: "network",
+      },
+      { kind: "clear_automatic_pdf_exhaustion", literature_id: id(1) },
+    ])
+      await expect(
+        app.database.run(pseudo as unknown as SqliteCommand),
+      ).rejects.toMatchObject({ code: "sqlite-worker" });
+    expect(await app.database.hasAutomaticPdfExhaustion(id(1))).toBe(true);
+    // Clear is idempotent, and it never touches another Literature's fact.
+    await app.database.setAutomaticPdfExhaustion(id(2));
+    await app.database.clearAutomaticPdfExhaustion(id(1));
+    await app.database.clearAutomaticPdfExhaustion(id(1));
+    expect(await app.database.hasAutomaticPdfExhaustion(id(1))).toBe(false);
+    expect(await app.database.hasAutomaticPdfExhaustion(id(2))).toBe(true);
+    // The fact is owned by the Literature row: deleting the Literature cascades it away.
+    raw = new DatabaseSync(join(home, "catalog.sqlite"));
+    raw.exec("PRAGMA foreign_keys=ON");
+    raw.exec("PRAGMA defer_foreign_keys=ON");
+    raw.exec("BEGIN");
+    raw.prepare("DELETE FROM literatures WHERE literature_id=?").run(id(2));
+    raw
+      .prepare("DELETE FROM meta_literatures WHERE meta_literature_id=?")
+      .run(id(102));
+    raw.exec("COMMIT");
+    expect(
+      raw
+        .prepare(
+          "SELECT count(*) AS n FROM automatic_pdf_acquisition_exhaustions WHERE literature_id=?",
+        )
+        .get(id(2)),
+    ).toEqual({ n: 0 });
+    // A closed application refuses further exhaustion writes and reads.
+    await app.close();
+    for (const operation of [
+      () => app.database.setAutomaticPdfExhaustion(id(1)),
+      () => app.database.clearAutomaticPdfExhaustion(id(1)),
+      () => app.database.hasAutomaticPdfExhaustion(id(1)),
+    ]) {
+      let refusal: unknown;
+      try {
+        await operation();
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal).toBeInstanceOf(Error);
+      expect(["write-admission-closed", "sqlite-worker"]).toContain(
+        (refusal as { readonly code?: string }).code,
+      );
+    }
   } finally {
     raw?.close();
     await app.close();
