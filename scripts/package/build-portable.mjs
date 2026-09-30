@@ -80,8 +80,13 @@ async function packageDependencies(directory) {
     for (const dependency of Object.keys(manifest.dependencies ?? {}))
       await visit(dependency, packageDirectory);
   }
-  for (const dependency of ["playwright", "playwright-core", "cloakbrowser"])
+  const serverManifest = JSON.parse(
+    await readFile(join(repository, "apps/server/package.json"), "utf8"),
+  );
+  for (const dependency of Object.keys(serverManifest.dependencies ?? {})) {
+    if (dependency.startsWith("@sciretriever/")) continue;
     await visit(dependency, join(repository, "apps/server"));
+  }
   const dependencies = {};
   for (const name of ["contracts", "server"]) {
     const tarball = (await readdir(directory)).find(

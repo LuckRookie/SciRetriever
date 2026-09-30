@@ -21,10 +21,15 @@
     }
   },
   "dependencies": {
+    "@inquirer/prompts": "^8.7.2",
     "@sciretriever/contracts": "workspace:*",
+    "ajv": "8.17.1",
+    "chalk": "^6.0.0",
     "cloakbrowser": "0.5.8",
     "playwright": "1.55.0",
-    "playwright-core": "1.55.0"
+    "playwright-core": "1.55.0",
+    "string-width": "^8.2.2",
+    "wrap-ansi": "^10.0.1"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json"
