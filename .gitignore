@@ -26,6 +26,7 @@ page_1.json
 work/*
 
 # Local agent state and personal runtime configuration
+/.agent-teams/
 /config.toml
 
 # Local historical archives (kept on disk, never committed)
