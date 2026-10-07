@@ -29,6 +29,8 @@ await reader.close();
 
 Web 查询使用 `POST /api/v1/query/search|read|references|reference|artifact`，请求封套包含 `protocol_version: 1`。缺 PDF、文献内容或其它产物时，artifact API 返回明确的 `gap`，不会把错误 JSON 当成下载文件。文献列表、详情、搜索条件与浏览器前进/后退都保留在页面 URL 中。
 
+程序查询可用 `query.discovery_run_ids` 限定一个或多个发现批次，返回发现原因实际指向的具体 Literature；同一 MetaLiterature 的其它版本不会自动进入普通搜索结果。该范围在读取元数据前与全文检索条件相交，因此批次外的旧记录合同问题不会阻断本批次列表；所选记录和发现原因仍严格校验。数据库补全则在同一读取 snapshot 中取得所选 MetaLiterature 的全部版本事实，再由 Entry 决定目标与版本回退；必需版本损坏仍会使范围读取失败。
+
 ## 只读边界
 
 独立入口使用 `createQueryApplication` 和 SQLite read-only/query-only 连接，不创建 home、Catalog、schema、恢复票据或 Jobs，不执行恢复、对账或修复。打开已有 Catalog 时可能看到 SQLite WAL/SHM 协调文件；文献事实、Job、ticket 和 publication receipt 不会因此改变。

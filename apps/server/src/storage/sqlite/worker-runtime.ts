@@ -999,44 +999,57 @@ function librarySnapshot(
     )
       fail();
     validateDiscoveryCauses(discoveryRunIds);
-    let rows =
+    // Select IDs before materializing domain rows: an unrelated row must not be
+    // parsed just because it shares the catalog or an FTS term with this scope.
+    const conditions: string[] = [];
+    const parameters: string[] = [];
+    if (ftsQuery !== null) {
+      conditions.push("literature_search_fts MATCH ?");
+      parameters.push(ftsQuery);
+    }
+    if (literatureIds.length) {
+      conditions.push("literature_id IN (SELECT value FROM json_each(?))");
+      parameters.push(JSON.stringify(literatureIds));
+    }
+    if (metaLiteratureIds.length) {
+      conditions.push(
+        "literature_id IN (SELECT literature_id FROM literatures WHERE meta_literature_id IN (SELECT value FROM json_each(?)))",
+      );
+      parameters.push(JSON.stringify(metaLiteratureIds));
+    }
+    if (discoveryRunIds.length) {
+      conditions.push(
+        "literature_id IN (SELECT actual_literature_id FROM topic_discovery_causes WHERE discovery_run_id IN (SELECT value FROM json_each(?)) UNION SELECT actual_literature_id FROM citation_discovery_causes WHERE discovery_run_id IN (SELECT value FROM json_each(?)))",
+      );
+      const json = JSON.stringify(discoveryRunIds);
+      parameters.push(json, json);
+    }
+    const selection =
       ftsQuery === null
-        ? literatureIds.length
-          ? db
-              .prepare(
-                "SELECT literature_id,NULL AS relevance FROM literatures WHERE literature_id IN (SELECT value FROM json_each(?)) ORDER BY literature_id",
-              )
-              .all(JSON.stringify(literatureIds))
-          : metaLiteratureIds.length
-            ? db
-                .prepare(
-                  "SELECT literature_id,NULL AS relevance FROM literatures WHERE meta_literature_id IN (SELECT value FROM json_each(?)) ORDER BY literature_id",
-                )
-                .all(JSON.stringify(metaLiteratureIds))
-            : db
-                .prepare(
-                  "SELECT literature_id,NULL AS relevance FROM literatures ORDER BY literature_id",
-                )
-                .all()
-        : db
-            .prepare(
-              "SELECT literature_id,bm25(literature_search_fts) AS relevance FROM literature_search_fts WHERE literature_search_fts MATCH ? ORDER BY literature_id",
-            )
-            .all(ftsQuery);
+        ? "SELECT literature_id,NULL AS relevance FROM literatures"
+        : "SELECT literature_id,bm25(literature_search_fts) AS relevance FROM literature_search_fts";
+    let rows = db
+      .prepare(
+        `${selection}${conditions.length ? ` WHERE ${conditions.join(" AND ")}` : ""} ORDER BY literature_id`,
+      )
+      .all(...parameters);
     if (
       new Set<Dynamic>(rows.map((row: Dynamic) => row.literature_id)).size !==
       rows.length
     )
       fail();
-    if (includeOtherVersions && ftsQuery !== null) {
+    if (
+      includeOtherVersions &&
+      (ftsQuery !== null || discoveryRunIds.length || literatureIds.length)
+    ) {
       const relevance = new Map<Dynamic, Dynamic>(
         rows.map((row: Dynamic) => [row.literature_id, row.relevance]),
       );
       rows = db
         .prepare(
-          "SELECT literature_id FROM literatures WHERE meta_literature_id IN (SELECT l.meta_literature_id FROM literatures l JOIN literature_search_fts f ON f.literature_id=l.literature_id WHERE literature_search_fts MATCH ?) ORDER BY literature_id",
+          "SELECT literature_id FROM literatures WHERE meta_literature_id IN (SELECT meta_literature_id FROM literatures WHERE literature_id IN (SELECT value FROM json_each(?))) ORDER BY literature_id",
         )
-        .all(ftsQuery)
+        .all(JSON.stringify(rows.map((row: Dynamic) => row.literature_id)))
         .map((row: Dynamic) => ({
           literature_id: row.literature_id,
           relevance: relevance.get(row.literature_id) ?? null,
