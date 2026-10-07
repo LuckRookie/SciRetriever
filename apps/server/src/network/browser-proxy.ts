@@ -5,7 +5,7 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import { createConnection, type Socket } from "node:net";
+import { createConnection, isIP, type Socket } from "node:net";
 import { once } from "node:events";
 import {
   NetworkBudgetCoordinator,
@@ -15,8 +15,10 @@ import {
 import { requestOnce } from "./http.js";
 import {
   resolveDestination,
+  resolveBrowserDestination,
   type DestinationPolicy,
   type Resolver,
+  type ResolvedDestination,
 } from "./policy.js";
 
 export class BrowserProxyError extends Error {
@@ -53,6 +55,24 @@ const HOP_HEADERS = new Set([
   "expect",
 ]);
 
+/** Race only already admitted addresses; no second system DNS lookup is possible. */
+function connectPinned(destination: ResolvedDestination): Socket {
+  return createConnection({
+    host: destination.url.hostname,
+    port: destination.url.port,
+    autoSelectFamily: true,
+    autoSelectFamilyAttemptTimeout: 250,
+    lookup: (_hostname, _options, callback) =>
+      callback(
+        null,
+        destination.addresses.map((address) => ({
+          address,
+          family: isIP(address),
+        })),
+      ),
+  });
+}
+
 /** DNS-pinned CONNECT preserves Chromium's own TLS and the original network exit. */
 export class BrowserNetworkProxy {
   private readonly username = randomBytes(16).toString("hex");
@@ -61,6 +81,7 @@ export class BrowserNetworkProxy {
   private readonly sockets = new Set<Socket>();
   private readonly abort = new AbortController();
   private closed = false;
+  private activeTunnels = 0;
   private readonly timeoutMs: number;
   constructor(private readonly options: BrowserProxyOptions) {
     this.timeoutMs = options.timeoutMs ?? 30000;
@@ -136,7 +157,7 @@ export class BrowserNetworkProxy {
         !request.url?.startsWith("http://")
       )
         throw new BrowserProxyError();
-      const destination = await resolveDestination(
+      const destination = await resolveBrowserDestination(
         request.url,
         this.options.resolver,
         this.options.policy,
@@ -159,28 +180,44 @@ export class BrowserNetworkProxy {
           for (const item of value) headers.push([key, item]);
         else headers.push([key, value]);
       }
-      const result = await requestOnce(destination, destination.addresses[0]!, {
+      clearTimeout(timer);
+      await requestOnce(destination, destination.addresses[0]!, {
         method: request.method ?? "GET",
+        connection: { connect: () => connectPinned(destination) },
         headers,
         body: Buffer.concat(chunks),
         signal: abort.signal,
         timeoutMs: this.timeoutMs,
         maxResponseBytes: this.options.limits.maxResponseBytes,
+        responseSink: {
+          idleTimeoutMs: 120_000,
+          lifetimeMs: 20 * 60_000,
+          headers: (result) => {
+            const outgoing: Record<string, string[]> = {};
+            for (const [key, value] of result.headers)
+              if (!HOP_HEADERS.has(key.toLowerCase()))
+                (outgoing[key] ??= []).push(value);
+            response.writeHead(result.status, outgoing);
+            response.flushHeaders();
+          },
+          write: async (chunk) => {
+            if (!response.write(chunk))
+              await once(response, "drain", { signal: abort.signal });
+          },
+        },
         budget: {
           coordinator: this.options.coordinator,
           scope: "browser",
           limits: this.options.limits,
         },
       });
-      const outgoing: Record<string, string[]> = {};
-      for (const [key, value] of result.headers)
-        if (!HOP_HEADERS.has(key.toLowerCase()))
-          (outgoing[key] ??= []).push(value);
-      response.writeHead(result.status, outgoing);
-      response.end(result.body);
-    } catch {
-      if (!response.headersSent) response.writeHead(502);
       response.end();
+    } catch {
+      if (response.headersSent) response.destroy();
+      else {
+        response.writeHead(502);
+        response.end();
+      }
     } finally {
       clearTimeout(timer);
       response.removeListener("close", cancel);
@@ -200,6 +237,7 @@ export class BrowserNetworkProxy {
     }
     let upstream: Socket | undefined;
     let permit: BudgetPermit | undefined;
+    let counted = false;
     const abort = new AbortController();
     const cancel = () => {
       abort.abort();
@@ -217,6 +255,12 @@ export class BrowserNetworkProxy {
         head.byteLength > 65536
       )
         throw new BrowserProxyError();
+      // Socket capacity and HTTP request capacity are different resources. Never
+      // queue a new origin behind idle keepalive tunnels. The socket ceiling is a
+      // process resource bound; connection establishment still uses Network budget.
+      if (this.activeTunnels >= 128) throw new BrowserProxyError();
+      this.activeTunnels++;
+      counted = true;
       const destination = await resolveDestination(
         `https://${request.url}/`,
         this.options.resolver,
@@ -229,26 +273,17 @@ export class BrowserNetworkProxy {
         { signal: abort.signal, timeoutMs: this.timeoutMs },
       );
       if (abort.signal.aborted) throw new BrowserProxyError();
-      upstream = createConnection({
-        host: destination.addresses[0]!,
-        port: destination.url.port,
-      });
+      upstream = connectPinned(destination);
       this.track(upstream);
       await once(upstream, "connect", { signal: abort.signal });
       if (abort.signal.aborted) throw new BrowserProxyError();
-      const usage = permit;
-      let sent = head.byteLength;
-      upstream.on("data", (chunk: Buffer) => {
-        try {
-          usage.consumeResponse(chunk.byteLength);
-        } catch {
-          cancel();
-        }
-      });
-      client.on("data", (chunk: Buffer) => {
-        sent += chunk.byteLength;
-        if (sent > 1048576) cancel();
-      });
+      permit.release();
+      permit = undefined;
+      clearTimeout(timer);
+      // TLS may multiplex many HTTP responses: per-response/upload byte limits
+      // cannot be applied to encrypted connection totals. Intake bounds PDF bytes.
+      client.setTimeout(120_000, cancel);
+      upstream.setTimeout(120_000, cancel);
       client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head.byteLength) upstream.write(head);
       client.pipe(upstream);
@@ -261,6 +296,7 @@ export class BrowserNetworkProxy {
       this.abort.signal.removeEventListener("abort", cancel);
       client.removeListener("close", cancel);
       permit?.release();
+      if (counted) this.activeTunnels--;
       upstream?.destroy();
       client.destroy();
     }

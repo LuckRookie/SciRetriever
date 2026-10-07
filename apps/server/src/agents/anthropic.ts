@@ -2,6 +2,7 @@ import {
   AgentFailure,
   type AgentAdapter,
   type AgentCall,
+  type AgentCallLifecycle,
   type AgentResult,
   type ReasoningEffort,
 } from "./protocol.js";
@@ -39,6 +40,7 @@ export class AnthropicMessagesAdapter implements AgentAdapter {
     call: AgentCall,
     options: { readonly reasoning: ReasoningEffort; readonly stream: boolean },
     signal?: AbortSignal,
+    lifecycle?: AgentCallLifecycle,
   ): Promise<AgentResult> {
     const request = requestBody(call, "anthropic");
     const body = {
@@ -61,6 +63,7 @@ export class AnthropicMessagesAdapter implements AgentAdapter {
       options.stream,
       signal,
       "anthropic",
+      lifecycle,
     );
     let text = "";
     let toolName: string | undefined;

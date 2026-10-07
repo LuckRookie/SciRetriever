@@ -22,19 +22,52 @@ import {
   type ResolvedDestination,
 } from "./policy.js";
 
+export type NetworkHttpFailureReason =
+  | "invalid-request"
+  | "cancelled"
+  | "timeout"
+  | "response-limit"
+  | "response-protocol"
+  | "response-incomplete"
+  | "request-failed"
+  | "budget"
+  | "redirect-limit";
+
 export class NetworkHttpError extends Error {
   readonly code = "network-http" as const;
-  constructor() {
-    super("network HTTP operation failed");
+  readonly retry_after_ms?: number;
+  constructor(
+    readonly reason: NetworkHttpFailureReason = "request-failed",
+    options: { readonly cause?: unknown; readonly retryAfterMs?: number } = {},
+  ) {
+    super("network HTTP operation failed", { cause: options.cause });
     this.name = "NetworkHttpError";
+    if (options.retryAfterMs !== undefined)
+      this.retry_after_ms = options.retryAfterMs;
   }
 }
 export interface HttpResponse {
   readonly status: number;
   readonly headers: readonly (readonly [string, string])[];
   readonly body: Uint8Array;
+  /** Final admitted URL, without transport-only credential query parameters. */
+  readonly final_url?: string;
+  /** Bounded Retry-After observed on this request, including earlier hops. */
+  readonly retry_after_ms?: number;
+}
+export interface HttpResponseSink {
+  readonly headers: (
+    response: Pick<HttpResponse, "status" | "headers">,
+  ) => void;
+  /** Awaited before reading the next chunk, preserving backpressure. */
+  readonly write: (chunk: Uint8Array) => Promise<void>;
+  readonly idleTimeoutMs: number;
+  readonly lifetimeMs: number;
 }
 export interface HttpRequestOptions {
+  readonly responseSink?: HttpResponseSink;
+  /** Runs after permit/connection acquisition, immediately before sending. */
+  readonly onDispatched?: () => void;
   readonly method?: string;
   readonly headers?: readonly (readonly [string, string])[];
   readonly credentialQuery?: readonly (readonly [string, string])[];
@@ -49,8 +82,13 @@ export interface HttpRequestOptions {
     readonly limits: BudgetLimits;
     readonly signal?: AbortSignal;
     readonly usage?: BudgetUsage;
+    readonly resolveAccess?: AccessResolver;
   };
 }
+export type AccessResolver = (url: string) => {
+  readonly scope: string;
+  readonly limits: Partial<BudgetLimits>;
+};
 export interface AgentTransportOptions {
   readonly resolver: Resolver;
   readonly policy: DestinationPolicy;
@@ -60,6 +98,7 @@ export interface AgentTransportOptions {
   readonly connection?: ConnectionDependencies;
   readonly maxRedirects?: number;
   readonly maxRetries?: number;
+  readonly resolveAccess?: AccessResolver;
 }
 const NETWORK_HEADERS = new Set([
   "connection",
@@ -75,8 +114,11 @@ const NETWORK_HEADERS = new Set([
   "upgrade",
   "expect",
 ]);
-function invalid(): never {
-  throw new NetworkHttpError();
+function invalid(
+  reason: NetworkHttpFailureReason = "invalid-request",
+  cause?: unknown,
+): never {
+  throw new NetworkHttpError(reason, { cause });
 }
 function validateOptions(options: HttpRequestOptions): void {
   if (typeof options !== "object" || options === null) invalid();
@@ -124,7 +166,17 @@ function validateOptions(options: HttpRequestOptions): void {
     timeout > 120_000 ||
     !Number.isSafeInteger(limit) ||
     limit < 1 ||
-    limit > 67_108_864
+    // MinerU's existing bounded archive contract permits 128 MiB. Each caller's
+    // smaller declared allowance is still enforced while consuming the response.
+    limit > (options.responseSink ? Number.MAX_SAFE_INTEGER : 128 * 1024 * 1024)
+  )
+    invalid();
+  if (
+    options.responseSink &&
+    [options.responseSink.idleTimeoutMs, options.responseSink.lifetimeMs].some(
+      (value) =>
+        !Number.isSafeInteger(value) || value < 1 || value > 86_400_000,
+    )
   )
     invalid();
   if (
@@ -147,12 +199,12 @@ export async function requestOnce(
     invalid();
   }
   const signal = options.signal ?? options.budget?.signal;
-  if (signal?.aborted) invalid();
+  if (signal?.aborted) invalid("cancelled");
   const started = performance.now();
   const timeoutMs = options.timeoutMs ?? 10_000;
   const remaining = (): number => {
     const value = Math.ceil(timeoutMs - (performance.now() - started));
-    if (value < 1) invalid();
+    if (value < 1) invalid("timeout");
     return value;
   };
   let permit: BudgetPermit | undefined;
@@ -178,33 +230,53 @@ export async function requestOnce(
     );
   } catch (error) {
     permit?.release();
+    if (signal?.aborted) invalid("cancelled", error);
     if (error instanceof NetworkConnectionError) throw error;
-    invalid();
+    if (error instanceof NetworkHttpError) throw error;
+    invalid("budget", error);
   }
   const socket = connection.socket;
   const agent = new Agent({ keepAlive: false });
   // The Agent can only reuse this already connected, IP-pinned socket.
   agent.createConnection = () => socket;
+  let dispatchFailure: { readonly error: unknown } | undefined;
   try {
     return await new Promise<HttpResponse>((resolve, reject) => {
       let settled = false;
-      const finish = (response?: HttpResponse): void => {
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (
+        response?: HttpResponse,
+        failure = new NetworkHttpError(),
+      ): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(idleTimer);
         signal?.removeEventListener("abort", abort);
         socket.destroy();
         agent.destroy();
         permit?.release();
         if (response) resolve(response);
-        else reject(new NetworkHttpError());
+        else reject(failure);
       };
-      const abort = (): void => finish();
-      const timer = setTimeout(abort, remaining());
+      const fail = (reason: NetworkHttpFailureReason, cause?: unknown): void =>
+        finish(undefined, new NetworkHttpError(reason, { cause }));
+      const abort = (): void => fail("cancelled");
+      const timeout = (): void => fail("timeout");
+      const responseFailure = (cause?: unknown): void =>
+        fail("response-incomplete", cause);
+      const consumeResponse = (bytes: number): void => {
+        try {
+          permit?.consumeResponse(bytes);
+        } catch (error) {
+          invalid("response-limit", error);
+        }
+      };
+      let timer = setTimeout(timeout, remaining());
       signal?.addEventListener("abort", abort, { once: true });
       try {
         if (signal?.aborted) {
-          finish();
+          abort();
           return;
         }
         const body = options.body ?? new Uint8Array();
@@ -228,35 +300,140 @@ export async function requestOnce(
           "Content-Length",
           String(body.byteLength),
         );
-        const query = new URLSearchParams(destination.url.query);
-        for (const [name, value] of options.credentialQuery ?? [])
-          query.append(name, value);
+        // Preserve browser-issued signed query encoding unless credentials must be
+        // appended by the explicit API credential owner.
+        let query = destination.url.query;
+        if (options.credentialQuery?.length) {
+          const parameters = new URLSearchParams(query);
+          for (const [name, value] of options.credentialQuery)
+            parameters.append(name, value);
+          query = parameters.toString();
+        }
         const req = request({
           agent,
           method: options.method ?? "GET",
           host: destination.url.hostname,
           port: destination.url.port,
-          path: `${destination.url.path}${query.size ? `?${query.toString()}` : ""}`,
+          path: `${destination.url.path}${query ? `?${query}` : ""}`,
           headers: rawHeaders,
           maxHeaderSize: 65_536,
           insecureHTTPParser: false,
         });
-        req.on("error", abort);
-        req.on("upgrade", abort);
+        req.on("error", (error) => fail("request-failed", error));
+        req.on("upgrade", () => fail("response-protocol"));
         req.on("response", (res) => {
+          // Apply feedback while this request still owns its permit. A queued
+          // sibling must not slip through between release and response handling.
+          if (options.budget) {
+            try {
+              const budget = options.budget;
+              const value = res.headers["retry-after"];
+              const delay =
+                typeof value === "string"
+                  ? budget.coordinator.retryAfterMilliseconds(
+                      value,
+                      budget.limits,
+                    )
+                  : res.statusCode === 429
+                    ? budget.limits.rateLimitBackoffMs
+                    : undefined;
+              if (delay !== undefined)
+                budget.coordinator.applyRetryAfter(
+                  budget.scope,
+                  destination.url.hostname,
+                  delay / 1000,
+                  budget.limits,
+                );
+            } catch (error) {
+              fail("response-protocol", error);
+              res.destroy();
+              return;
+            }
+          }
+          if (options.responseSink) {
+            const sink = options.responseSink;
+            clearTimeout(timer);
+            timer = setTimeout(timeout, sink.lifetimeMs);
+            const resetIdle = () => {
+              clearTimeout(idleTimer);
+              idleTimer = setTimeout(timeout, sink.idleTimeoutMs);
+            };
+            resetIdle();
+            res.on("error", responseFailure);
+            res.on("aborted", responseFailure);
+            void (async () => {
+              if (
+                !res.statusCode ||
+                res.statusCode < 200 ||
+                res.statusCode > 599
+              )
+                invalid("response-protocol");
+              const headers: (readonly [string, string])[] = [];
+              for (let i = 0; i < res.rawHeaders.length; i += 2)
+                headers.push([
+                  res.rawHeaders[i]!.toLowerCase(),
+                  res.rawHeaders[i + 1]!,
+                ]);
+              const declared = res.headers["content-length"];
+              if (declared !== undefined && !/^\d+$/u.test(declared))
+                invalid("response-protocol");
+              if (
+                declared !== undefined &&
+                Number(declared) > (options.maxResponseBytes ?? 1_048_576)
+              )
+                invalid("response-limit");
+              sink.headers({ status: res.statusCode, headers });
+              let size = 0;
+              for await (const bytes of res) {
+                if (settled) return;
+                const chunk = bytes as Buffer;
+                size += chunk.byteLength;
+                if (size > (options.maxResponseBytes ?? 1_048_576))
+                  invalid("response-limit");
+                consumeResponse(chunk.byteLength);
+                if (chunk.byteLength > 0) resetIdle();
+                await sink.write(chunk);
+              }
+              if (!res.complete || settled) {
+                responseFailure();
+                return;
+              }
+              finish(
+                Object.freeze({
+                  status: res.statusCode,
+                  headers: Object.freeze(headers),
+                  body: new Uint8Array(),
+                }),
+              );
+            })().catch((error: unknown) =>
+              finish(
+                undefined,
+                error instanceof NetworkHttpError
+                  ? error
+                  : new NetworkHttpError("request-failed", { cause: error }),
+              ),
+            );
+            return;
+          }
           const chunks: Buffer[] = [];
           let size = 0;
-          res.on("error", abort);
-          res.on("aborted", abort);
+          res.on("error", responseFailure);
+          res.on("aborted", responseFailure);
           res.on("data", (chunk: Buffer) => {
             if (settled) return;
             try {
               size += chunk.byteLength;
-              if (size > (options.maxResponseBytes ?? 1_048_576)) invalid();
-              permit?.consumeResponse(chunk.byteLength);
+              if (size > (options.maxResponseBytes ?? 1_048_576))
+                invalid("response-limit");
+              consumeResponse(chunk.byteLength);
               chunks.push(chunk);
-            } catch {
-              finish();
+            } catch (error) {
+              finish(
+                undefined,
+                error instanceof NetworkHttpError
+                  ? error
+                  : new NetworkHttpError("request-failed", { cause: error }),
+              );
             }
           });
           res.on("end", () => {
@@ -266,7 +443,7 @@ export async function requestOnce(
               res.statusCode < 200 ||
               res.statusCode > 599
             ) {
-              finish();
+              fail(res.complete ? "response-protocol" : "response-incomplete");
               return;
             }
             const headers: (readonly [string, string])[] = [];
@@ -286,16 +463,31 @@ export async function requestOnce(
             );
           });
           res.on("close", () => {
-            if (!res.complete) finish();
+            if (!res.complete) responseFailure();
           });
         });
+        try {
+          options.onDispatched?.();
+        } catch (error) {
+          dispatchFailure = { error };
+          req.destroy();
+          finish();
+          return;
+        }
         req.end(body);
-      } catch {
-        finish();
+      } catch (error) {
+        finish(
+          undefined,
+          error instanceof NetworkHttpError
+            ? error
+            : new NetworkHttpError("request-failed", { cause: error }),
+        );
       }
     });
-  } catch {
-    return invalid();
+  } catch (error) {
+    if (dispatchFailure) throw dispatchFailure.error;
+    if (error instanceof NetworkHttpError) throw error;
+    return invalid("request-failed", error);
   } finally {
     socket.destroy();
     agent.destroy();
@@ -313,11 +505,17 @@ export function createAgentTransport(
       options.resolver,
       options.policy,
       {
+        ...(input.method !== undefined ? { method: input.method } : {}),
+        ...(input.timeout_ms !== undefined
+          ? { timeoutMs: input.timeout_ms }
+          : {}),
+        maxResponseBytes: options.limits.maxResponseBytes,
         headers: input.headers,
         ...(input.credential_query
           ? { credentialQuery: input.credential_query }
           : {}),
         body: input.body,
+        ...(input.onDispatched ? { onDispatched: input.onDispatched } : {}),
         ...(input.signal ? { signal: input.signal } : {}),
         ...(options.connection ? { connection: options.connection } : {}),
         ...(options.maxRedirects !== undefined
@@ -330,6 +528,9 @@ export function createAgentTransport(
           coordinator: options.coordinator,
           scope: options.scope,
           limits: options.limits,
+          ...(options.resolveAccess
+            ? { resolveAccess: options.resolveAccess }
+            : {}),
         },
       },
     );
@@ -379,79 +580,137 @@ export async function requestFollowingRedirects(
   let credentialQuery = options.credentialQuery ?? [];
   let method = options.method ?? "GET";
   let body = options.body ?? new Uint8Array();
-  for (let hops = 0; ; hops += 1) {
-    const response = await requestOnce(destination, destination.addresses[0]!, {
-      ...options,
-      method,
-      headers,
-      credentialQuery,
-      body,
-      ...(options.budget && usage
-        ? { budget: { ...options.budget, usage } }
-        : {}),
-    });
-    if (
-      [408, 425, 429, 500, 502, 503, 504].includes(response.status) &&
-      retries < retryLimit
-    ) {
-      if (usage) usage.consumeRetry();
-      else retries += 1;
-      if (usage) retries += 1;
+  let observedRetryAfterMs: number | undefined;
+  let redirects = 0;
+  try {
+    for (;;) {
+      const access = options.budget?.resolveAccess?.(destination.url.url);
+      const budget = options.budget
+        ? {
+            ...options.budget,
+            ...(access
+              ? {
+                  scope: access.scope,
+                  limits: { ...options.budget.limits, ...access.limits },
+                }
+              : {}),
+            ...(usage ? { usage } : {}),
+          }
+        : undefined;
+      const response = await requestOnce(
+        destination,
+        destination.addresses[0]!,
+        {
+          ...options,
+          method,
+          headers,
+          credentialQuery,
+          body,
+          ...(budget ? { budget } : {}),
+        },
+      );
       const retryAfter = response.headers.find(
         ([name]) => name === "retry-after",
       )?.[1];
+      let retryDelayMs: number | undefined;
       if (retryAfter !== undefined) {
-        const parser =
-          options.budget?.coordinator ?? new NetworkBudgetCoordinator();
-        const delay = parser.retryAfterMilliseconds(
+        const parser = budget?.coordinator ?? new NetworkBudgetCoordinator();
+        retryDelayMs = parser.retryAfterMilliseconds(
           retryAfter,
-          usage?.limits ?? {
+          budget?.limits ?? {
             maxConcurrency: 1,
             maxResponseBytes: options.maxResponseBytes ?? 1_048_576,
             maxRedirects: redirectLimit,
             maxRetries: retryLimit,
           },
         );
-        if (options.budget) {
-          options.budget.coordinator.applyRetryAfter(
-            options.budget.scope,
-            destination.url.hostname,
-            delay / 1000,
-            usage?.limits ?? options.budget.limits,
-          );
-        } else await waitForRetry(delay, options.signal);
+        observedRetryAfterMs = Math.max(
+          observedRetryAfterMs ?? 0,
+          retryDelayMs,
+        );
       }
-      continue;
+      if (
+        response.status === 429 &&
+        retryDelayMs === undefined &&
+        budget?.limits.rateLimitBackoffMs !== undefined
+      ) {
+        retryDelayMs = Math.min(
+          budget.limits.rateLimitBackoffMs,
+          budget.limits.maxRetryAfterMs ?? 120_000,
+        );
+        observedRetryAfterMs = Math.max(
+          observedRetryAfterMs ?? 0,
+          retryDelayMs,
+        );
+      }
+      if (
+        [408, 425, 429, 500, 502, 503, 504].includes(response.status) &&
+        retries < retryLimit &&
+        (retryDelayMs === undefined ||
+          retryDelayMs < (options.timeoutMs ?? 10_000))
+      ) {
+        if (usage) usage.consumeRetry();
+        retries += 1;
+        if (retryDelayMs !== undefined && !options.budget)
+          await waitForRetry(retryDelayMs, options.signal);
+        continue;
+      }
+      if (![301, 302, 303, 307, 308].includes(response.status))
+        return Object.freeze({
+          ...response,
+          final_url: destination.url.url,
+          ...(observedRetryAfterMs === undefined
+            ? {}
+            : { retry_after_ms: observedRetryAfterMs }),
+        });
+      if (redirects >= redirectLimit) invalid("redirect-limit");
+      try {
+        usage?.consumeRedirect();
+      } catch (error) {
+        invalid("redirect-limit", error);
+      }
+      redirects += 1;
+      const locations = response.headers
+        .filter(([name]) => name === "location")
+        .map(([, value]) => value);
+      if (locations.length !== 1) invalid("response-protocol");
+      const redirect = await evaluateRedirect(
+        destination,
+        locations[0]!,
+        resolver,
+        policy,
+      );
+      if (!redirect.forward_credentials) {
+        headers = [];
+        credentialQuery = [];
+        if (body.byteLength > 0) invalid();
+      }
+      if (response.status === 303 && method !== "HEAD") {
+        method = "GET";
+        body = new Uint8Array();
+      }
+      if (
+        [301, 302].includes(response.status) &&
+        method !== "GET" &&
+        method !== "HEAD"
+      )
+        invalid();
+      // Retry-After on a redirect also postpones following a different host;
+      // releasing the old host's permit must not bypass the announced delay.
+      if (retryDelayMs !== undefined)
+        await waitForRetry(
+          retryDelayMs,
+          options.signal ?? options.budget?.signal,
+        );
+      destination = redirect.destination;
     }
-    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
-    if (usage) usage.consumeRedirect();
-    else if (hops >= redirectLimit) invalid();
-    const locations = response.headers
-      .filter(([name]) => name === "location")
-      .map(([, value]) => value);
-    if (locations.length !== 1) invalid();
-    const redirect = await evaluateRedirect(
-      destination,
-      locations[0]!,
-      resolver,
-      policy,
-    );
-    if (!redirect.forward_credentials) {
-      headers = [];
-      credentialQuery = [];
-      if (body.byteLength > 0) invalid();
-    }
-    if (response.status === 303 && method !== "HEAD") {
-      method = "GET";
-      body = new Uint8Array();
-    }
-    if (
-      [301, 302].includes(response.status) &&
-      method !== "GET" &&
-      method !== "HEAD"
-    )
-      invalid();
-    destination = redirect.destination;
+  } catch (error) {
+    if (error instanceof NetworkHttpError && observedRetryAfterMs !== undefined)
+      throw new NetworkHttpError(error.reason, {
+        cause: error,
+        retryAfterMs: observedRetryAfterMs,
+      });
+    throw error;
   }
 }
 
@@ -470,7 +729,7 @@ async function waitForRetry(
       if (error) reject(error);
       else resolve();
     };
-    const abort = (): void => finish(new NetworkHttpError());
+    const abort = (): void => finish(new NetworkHttpError("cancelled"));
     const timer = setTimeout(() => finish(), delayMs);
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();

@@ -21,6 +21,8 @@ const SAFE_FIELD_NAMES = new Set([
   "status",
   "http_status",
   "code",
+  "cause_code",
+  "session_id",
   "retryable",
   "bytes",
   "attempt",

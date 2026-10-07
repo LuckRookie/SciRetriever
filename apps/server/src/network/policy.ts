@@ -589,6 +589,56 @@ export async function resolveDestination(
   admittedDestinations.add(destination);
   return destination;
 }
+/**
+ * Browser transport URLs are ephemeral capabilities supplied by the visited page.
+ * Admit their origin and resolved IP exactly as other traffic, but do not apply the
+ * credential-free locator grammar to path/query. Never persist this result as a locator.
+ */
+export async function resolveBrowserDestination(
+  value: string,
+  resolver: Resolver,
+  policy?: DestinationPolicy,
+): Promise<ResolvedDestination> {
+  if (
+    typeof value !== "string" ||
+    value.length > 8192 ||
+    /\s|[\p{Cc}\p{Cf}]|\\/u.test(value) ||
+    !/^https?:\/\/[^/?#]+/iu.test(value)
+  )
+    invalid();
+  const authority =
+    value.slice(0, value.indexOf("://") + 3) +
+    value.slice(value.indexOf("://") + 3).split(/[/?#]/u, 1)[0];
+  const admitted = await resolveDestination(`${authority}/`, resolver, policy);
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    invalid();
+  }
+  if (parsed.username || parsed.password) invalid();
+  const path = parsed.pathname || "/";
+  // URL parsing owns path normalization; decoded controls must still fail closed.
+  try {
+    if (/[\p{Cc}\p{Cf}]/u.test(decodeURIComponent(path + parsed.search)))
+      invalid();
+  } catch {
+    invalid();
+  }
+  parsed.hash = "";
+  const destination = Object.freeze({
+    ...admitted,
+    url: Object.freeze({
+      ...admitted.url,
+      url: parsed.toString(),
+      path,
+      query: parsed.search.slice(1),
+    }),
+  });
+  admittedDestinations.add(destination);
+  return destination;
+}
+
 export async function evaluateRedirect(
   current: ResolvedDestination,
   location: string,

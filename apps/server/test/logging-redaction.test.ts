@@ -32,3 +32,19 @@ describe("structured logging redaction", () => {
     expect(lines.join("\n")).not.toContain('{"result"');
   });
 });
+
+it("retains declared Browser cleanup causes and opaque session identity", () => {
+  const lines: string[] = [];
+  createLogger("browser-scheduler", (line) => lines.push(line)).error(
+    "Browser cleanup failed",
+    {
+      code: "browser-flow-close-failed",
+      cause_code: "browser-platform-handoff-stalled",
+      session_id: "browser-fixture",
+      raw_error: "untrusted diagnostic",
+    },
+  );
+  expect(lines[0]).toContain("cause_code=browser-platform-handoff-stalled");
+  expect(lines[0]).toContain("session_id=browser-fixture");
+  expect(lines[0]).not.toContain("untrusted diagnostic");
+});

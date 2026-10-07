@@ -70,6 +70,151 @@ class ManualClock implements BudgetClock {
 }
 
 describe("network budget coordination", () => {
+  it("keeps legacy shared connection-pool feedback local to its host", async () => {
+    const clock = new ManualClock();
+    const coordinator = new NetworkBudgetCoordinator(clock);
+    coordinator.applyRetryAfter("browser", "blocked.test", 1, {
+      ...limits,
+      maxRetryAfterMs: 1000,
+    });
+    const controller = new AbortController();
+    const waiting = coordinator.acquire("browser", "blocked.test", limits, {
+      signal: controller.signal,
+    });
+    const rejected = expect(waiting).rejects.toBeInstanceOf(NetworkBudgetError);
+    const independent = await coordinator.acquire(
+      "browser",
+      "other.test",
+      limits,
+    );
+    independent.release();
+    controller.abort();
+    await rejected;
+    coordinator.close();
+    expect(clock.pendingTimers()).toBe(0);
+  });
+
+  it("paces sequential callers across hosts in one quota group and leaves independent services runnable", async () => {
+    const clock = new ManualClock();
+    const coordinator = new NetworkBudgetCoordinator(clock);
+    const policy = { ...limits, minimumIntervalMs: 1000 };
+    (await coordinator.acquire("shared-api", "a.test", policy)).release();
+    let started = false;
+    const next = coordinator
+      .acquire("shared-api", "b.test", policy)
+      .then((permit) => {
+        started = true;
+        return permit;
+      });
+    const independent = await coordinator.acquire(
+      "separate-api",
+      "a.test",
+      policy,
+    );
+    independent.release();
+    clock.advance(999);
+    await Promise.resolve();
+    expect(started).toBe(false);
+    clock.advance(1);
+    (await next).release();
+    coordinator.close();
+    expect(clock.pendingTimers()).toBe(0);
+  });
+
+  it("enforces simultaneous short and long rolling windows without counting cancelled waiters", async () => {
+    const clock = new ManualClock();
+    const coordinator = new NetworkBudgetCoordinator(clock);
+    const policy = {
+      ...limits,
+      windows: [
+        { requests: 2, durationMs: 1000 },
+        { requests: 3, durationMs: 5000 },
+      ],
+    };
+    for (let i = 0; i < 2; i++)
+      (await coordinator.acquire("api", "a.test", policy)).release();
+    const cancelled = new AbortController();
+    const abandoned = coordinator.acquire("api", "a.test", policy, {
+      signal: cancelled.signal,
+    });
+    cancelled.abort();
+    await expect(abandoned).rejects.toBeInstanceOf(NetworkBudgetError);
+    let started = false;
+    const third = coordinator
+      .acquire("api", "a.test", policy)
+      .then((permit) => {
+        started = true;
+        return permit;
+      });
+    clock.advance(999);
+    await Promise.resolve();
+    expect(started).toBe(false);
+    clock.advance(1);
+    (await third).release();
+    started = false;
+    const fourth = coordinator
+      .acquire("api", "a.test", policy)
+      .then((permit) => {
+        started = true;
+        return permit;
+      });
+    clock.advance(3999);
+    await Promise.resolve();
+    expect(started).toBe(false);
+    clock.advance(1);
+    (await fourth).release();
+    coordinator.close();
+  });
+
+  it("shares Retry-After across hosts of a service and rechecks early timer wakeups", async () => {
+    const clock = new ManualClock();
+    const coordinator = new NetworkBudgetCoordinator(clock);
+    coordinator.applyRetryAfter("api", "a.test", 1, {
+      ...limits,
+      maxRetryAfterMs: 1000,
+      retryAfterScope: "group",
+    });
+    let granted = false;
+    const pending = coordinator
+      .acquire("api", "cdn.test", limits)
+      .then((permit) => {
+        granted = true;
+        return permit;
+      });
+    clock.fireEarly();
+    await Promise.resolve();
+    expect(granted).toBe(false);
+    clock.advance(1000);
+    (await pending).release();
+    coordinator.close();
+    expect(clock.pendingTimers()).toBe(0);
+  });
+
+  it("closes interval/window waiters and their timers", async () => {
+    const clock = new ManualClock();
+    const coordinator = new NetworkBudgetCoordinator(clock);
+    const policy = { ...limits, minimumIntervalMs: 10_000 };
+    (await coordinator.acquire("api", "a.test", policy)).release();
+    const pending = coordinator.acquire("api", "a.test", policy);
+    coordinator.close();
+    await expect(pending).rejects.toBeInstanceOf(NetworkBudgetError);
+    expect(clock.pendingTimers()).toBe(0);
+  });
+
+  it.each([
+    { minimumIntervalMs: -1 },
+    { minimumIntervalMs: NaN },
+    { windows: [{ requests: 0, durationMs: 1000 }] },
+    { windows: [{ requests: 1, durationMs: 0 }] },
+  ])("rejects malformed rate policies %j", (rate) => {
+    expect(() =>
+      new NetworkBudgetCoordinator().acquire("api", "a.test", {
+        ...limits,
+        ...rate,
+      }),
+    ).toThrow(NetworkBudgetError);
+  });
+
   it("shares scope and host permits and releases them idempotently", async () => {
     const coordinator = new NetworkBudgetCoordinator();
     const first = await coordinator.acquire(
@@ -355,7 +500,10 @@ describe("network budget coordination", () => {
             },
           },
         ),
-      ).rejects.toBeInstanceOf(NetworkBudgetError);
+      ).rejects.toMatchObject({
+        code: "network-http",
+        reason: "redirect-limit",
+      });
       expect(requests).toBe(1);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));

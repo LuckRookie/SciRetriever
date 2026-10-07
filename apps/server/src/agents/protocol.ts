@@ -77,11 +77,20 @@ export class AgentFailure extends Error {
 
 export interface AgentTransportResponse {
   readonly status: number;
+  /** Bounded Retry-After observed by Network, including earlier redirect hops. */
+  readonly retry_after_ms?: number;
   readonly headers: readonly (readonly [string, string])[];
   readonly body: Uint8Array;
 }
+/** In-process lifecycle; never serialized into a model request. */
+export interface AgentCallLifecycle {
+  readonly onDispatched: () => void;
+}
 export type AgentTransport = (request: {
+  readonly onDispatched?: () => void;
   readonly endpoint: string;
+  readonly method?: string;
+  readonly timeout_ms?: number;
   readonly headers: readonly (readonly [string, string])[];
   /** Credentials that a legacy provider requires in the request query. */
   readonly credential_query?: readonly (readonly [string, string])[];
@@ -95,6 +104,7 @@ export interface AgentAdapter {
     call: AgentCall,
     options: { readonly reasoning: ReasoningEffort; readonly stream: boolean },
     signal?: AbortSignal,
+    lifecycle?: AgentCallLifecycle,
   ): Promise<AgentResult>;
 }
 

@@ -18,17 +18,21 @@ afterEach(async () => {
 });
 const auth = (connection: BrowserProxyConnection) =>
   `Basic ${Buffer.from(`${connection.username}:${connection.password}`).toString("base64")}`;
-async function proxy(ports: number[], maxResponseBytes = 1024) {
+async function proxy(
+  ports: number[],
+  maxResponseBytes = 1024,
+  addresses = ["127.0.0.1"],
+) {
   const resolved: string[] = [];
   const owner = new BrowserNetworkProxy({
     resolver: (host) => {
       resolved.push(host);
-      return ["127.0.0.1"];
+      return addresses;
     },
     policy: {
       allowed_schemes: ["http", "https"],
       allowed_classes: ["loopback"],
-      allowed_addresses: ["127.0.0.1"],
+      allowed_addresses: addresses,
       allowed_ports: ports.flatMap((port) => [
         { scheme: "http" as const, port },
         { scheme: "https" as const, port },
@@ -94,7 +98,93 @@ async function connect(
 }
 
 describe("browser DNS-pinned network proxy", () => {
-  it("authenticates locally, pins admitted HTTP, and never forwards proxy credentials", async () => {
+  it("streams the first bytes before the origin completes and keeps an active transfer past connection timeout", async () => {
+    let firstByte!: () => void;
+    const observed = new Promise<void>((resolve) => {
+      firstByte = resolve;
+    });
+    let finished = false;
+    const origin = httpServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/pdf" });
+      res.write("%PDF-1.7\n");
+      void observed.then(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+        finished = true;
+        res.end("%%EOF");
+      });
+    });
+    origin.listen(0, "127.0.0.1");
+    await once(origin, "listening");
+    cleanup.push(
+      () =>
+        new Promise<void>((resolve) => {
+          origin.closeAllConnections();
+          origin.close(() => resolve());
+        }),
+    );
+    const address = origin.address();
+    if (!address || typeof address === "string") throw new Error("fixture");
+    const p = await proxy([address.port]);
+    const body = await new Promise<string>((resolve, reject) => {
+      const req = request(
+        p.connection.server,
+        {
+          path: `http://fixture.test:${address.port}/stream`,
+          headers: { "proxy-authorization": auth(p.connection) },
+        },
+        (res) => {
+          let received = "";
+          res.on("error", reject);
+          res.on("data", (chunk: Buffer) => {
+            if (!received) {
+              expect(finished).toBe(false);
+              firstByte();
+            }
+            received += chunk.toString();
+          });
+          res.on("end", () => resolve(received));
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+    expect(body).toBe("%PDF-1.7\n%%EOF");
+  });
+
+  it("aborts the downstream response when a streamed origin truncates instead of completing a partial PDF", async () => {
+    const origin = httpServer((_req, res) => {
+      res.writeHead(200, { "content-length": "128" });
+      res.write("%PDF-1.7\n");
+      setTimeout(() => res.destroy(), 30);
+    });
+    origin.listen(0, "127.0.0.1");
+    await once(origin, "listening");
+    cleanup.push(
+      () => new Promise<void>((resolve) => origin.close(() => resolve())),
+    );
+    const address = origin.address();
+    if (!address || typeof address === "string") throw new Error("fixture");
+    const p = await proxy([address.port]);
+    await expect(
+      new Promise((resolve, reject) => {
+        const req = request(
+          p.connection.server,
+          {
+            path: `http://fixture.test:${address.port}/truncated`,
+            headers: { "proxy-authorization": auth(p.connection) },
+          },
+          (res) => {
+            res.resume();
+            res.on("error", reject);
+            res.on("end", resolve);
+          },
+        );
+        req.on("error", reject);
+        req.end();
+      }),
+    ).rejects.toThrow();
+  });
+  it("authenticates, falls back across admitted address families, and never forwards proxy credentials", async () => {
     let requests = 0;
     const origin = httpServer((req, res) => {
       requests++;
@@ -108,7 +198,7 @@ describe("browser DNS-pinned network proxy", () => {
     );
     const address = origin.address();
     if (!address || typeof address === "string") throw new Error("fixture");
-    const p = await proxy([address.port]);
+    const p = await proxy([address.port], 1024, ["::1", "127.0.0.1"]);
     const url = `http://fixture.test:${address.port}/paper`;
     expect(await through(p.connection, url, false)).toMatchObject({
       status: 407,
@@ -167,4 +257,77 @@ describe("browser DNS-pinned network proxy", () => {
       await through(p.connection, `http://fixture.test:${address.port}/large`),
     ).toMatchObject({ status: 502 });
   });
+});
+
+it("does not let idle CONNECT tunnels occupy all request permits or expire active traffic", async () => {
+  const sockets = new Set<Socket>();
+  const origin = tcpServer((socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    socket.on("data", (bytes) => socket.write(bytes));
+  });
+  origin.listen(0, "127.0.0.1");
+  await once(origin, "listening");
+  cleanup.push(
+    () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) socket.destroy();
+        origin.close(() => resolve());
+      }),
+  );
+  const address = origin.address();
+  if (!address || typeof address === "string") throw new Error("fixture");
+  const p = await proxy([address.port]);
+  const tunnels: Socket[] = [];
+  for (let index = 0; index < 4; index++) {
+    const socket = await connect(p.connection, `fixture.test:${address.port}`);
+    expect(String((await once(socket, "data"))[0])).toContain(
+      "200 Connection Established",
+    );
+    tunnels.push(socket);
+  }
+  const active = tunnels.at(-1)!;
+  // More than a single response limit over a connection, for longer than one
+  // connection timeout: neither limit describes multiplexed/keepalive traffic.
+  for (let index = 0; index < 5; index++) {
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    const response = once(active, "data");
+    active.write(Buffer.alloc(512, 1));
+    expect((await response)[0]).toHaveLength(512);
+  }
+});
+
+it("keeps browser navigation capabilities ephemeral while strict locators still reject them", async () => {
+  const { resolveBrowserDestination, normalizeUrl } = await import(
+    "../src/network/policy.js"
+  );
+  const policy = { allowed_schemes: ["http", "https"] as const };
+  const url =
+    "https://download.example/paper%2Fmain.pdf?token=synthetic%2Fvalue&key=synthetic";
+  expect(() => normalizeUrl(url)).toThrow();
+  expect(
+    (await resolveBrowserDestination(url, () => ["8.8.8.8"], policy)).url.url,
+  ).toBe(url);
+  expect(
+    (
+      await resolveBrowserDestination(
+        "http://article.example/path",
+        () => ["8.8.8.8"],
+        policy,
+      )
+    ).url.scheme,
+  ).toBe("http");
+  for (const unsafe of [
+    "https://user:pass@article.example/",
+    "https://127.0.0.1/",
+    "https://2130706433/",
+    "https://article.example/%0aheader",
+  ]) {
+    await expect(
+      resolveBrowserDestination(unsafe, () => ["8.8.8.8"], policy),
+    ).rejects.toThrow();
+  }
+  await expect(
+    resolveBrowserDestination(url, () => ["10.0.0.1"], policy),
+  ).rejects.toThrow();
 });

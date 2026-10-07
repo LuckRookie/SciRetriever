@@ -59,6 +59,7 @@ it.each(protocols)(
   "assembles %s from saved configuration and sends a credential-free request through real loopback Network",
   async (api) => {
     const received: {
+      method: string;
       path: string;
       headers: IncomingMessage["headers"];
       body: Record<string, unknown>;
@@ -67,6 +68,7 @@ it.each(protocols)(
       const parts: Buffer[] = [];
       for await (const part of req) parts.push(Buffer.from(part as Uint8Array));
       received.push({
+        method: req.method!,
         path: req.url!,
         headers: req.headers,
         body: JSON.parse(Buffer.concat(parts).toString()) as Record<
@@ -74,6 +76,11 @@ it.each(protocols)(
           unknown
         >,
       });
+      if (req.method !== "POST") {
+        res.writeHead(405, { Allow: "POST" });
+        res.end();
+        return;
+      }
       const value =
         api === "openai-chat-completions"
           ? {
@@ -124,6 +131,7 @@ it.each(protocols)(
         provenance: { usage: { input_tokens: 2, output_tokens: 3 } },
       });
       expect(received).toHaveLength(1);
+      expect(received[0]!.method).toBe("POST");
       expect(received[0]!.path).toBe(
         `/v1/${api === "openai-chat-completions" ? "chat/completions" : api === "openai-responses" ? "responses" : "messages"}`,
       );

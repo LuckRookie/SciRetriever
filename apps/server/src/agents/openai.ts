@@ -2,6 +2,7 @@ import {
   AgentFailure,
   type AgentAdapter,
   type AgentCall,
+  type AgentCallLifecycle,
   type AgentResult,
   type ReasoningEffort,
 } from "./protocol.js";
@@ -115,6 +116,7 @@ export class OpenAIResponsesAdapter implements AgentAdapter {
     call: AgentCall,
     options: { readonly reasoning: ReasoningEffort; readonly stream: boolean },
     signal?: AbortSignal,
+    lifecycle?: AgentCallLifecycle,
   ): Promise<AgentResult> {
     const body = {
       ...requestBody(call, "openai-responses"),
@@ -130,6 +132,8 @@ export class OpenAIResponsesAdapter implements AgentAdapter {
       body,
       options.stream,
       signal,
+      "openai-responses",
+      lifecycle,
     );
     if (!options.stream) {
       const value = parseJson(response);
@@ -262,6 +266,7 @@ export class OpenAIChatAdapter implements AgentAdapter {
     call: AgentCall,
     options: { readonly reasoning: ReasoningEffort; readonly stream: boolean },
     signal?: AbortSignal,
+    lifecycle?: AgentCallLifecycle,
   ): Promise<AgentResult> {
     const body = {
       ...requestBody(call, "openai-chat"),
@@ -278,6 +283,8 @@ export class OpenAIChatAdapter implements AgentAdapter {
       body,
       options.stream,
       signal,
+      "openai-chat",
+      lifecycle,
     );
     let text = "";
     let toolName: string | undefined;

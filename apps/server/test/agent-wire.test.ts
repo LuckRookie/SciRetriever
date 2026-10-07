@@ -6,6 +6,7 @@ import {
 import { AnthropicMessagesAdapter } from "../src/agents/anthropic.js";
 import { validateAgentCall, type AgentCall } from "../src/agents/protocol.js";
 import type { AdapterConfig } from "../src/agents/common.js";
+import { AgentRuntime } from "../src/agents/runtime.js";
 
 const schema = {
   type: "object",
@@ -41,6 +42,53 @@ const call: AgentCall = {
   max_output_tokens: 64,
 };
 const variants = ["chat", "responses", "anthropic"] as const;
+it.each(variants)(
+  "forwards the in-process dispatch lifecycle through %s without serializing it",
+  async (variant) => {
+    let dispatched = 0;
+    const adapter = make(variant, {
+      provider: variant,
+      model: "fixture",
+      endpoint: "http://model.example.test/v1",
+      credential: null,
+      transport: async (request) => {
+        expect(Buffer.from(request.body).toString()).not.toContain(
+          "onDispatched",
+        );
+        expect(dispatched).toBe(0);
+        request.onDispatched?.();
+        return {
+          status: 200,
+          headers: [],
+          body: Buffer.from(JSON.stringify(response(variant, { value: "ok" }))),
+        };
+      },
+    });
+    const runtime = new AgentRuntime([
+      {
+        role: "analysis",
+        provider: variant,
+        model: "fixture",
+        capabilities: ["structured_text", "image_input"],
+        reasoning: "default",
+        stream: false,
+        context_window_tokens: 1024,
+        max_output_tokens: 64,
+        adapter,
+      },
+    ]);
+    try {
+      await runtime.execute(call, undefined, {
+        onDispatched: () => {
+          dispatched++;
+        },
+      });
+      expect(dispatched).toBe(1);
+    } finally {
+      runtime.close();
+    }
+  },
+);
 type Variant = (typeof variants)[number];
 function make(variant: Variant, config: AdapterConfig) {
   return variant === "chat"
@@ -108,6 +156,8 @@ function config(
     endpoint: "https://model.example.test/v1",
     credential: "synthetic-key",
     transport: async (request) => {
+      expect(request.method).toBe("POST");
+      expect(request.timeout_ms).toBe(120_000);
       inspect(
         JSON.parse(Buffer.from(request.body).toString()) as Record<
           string,

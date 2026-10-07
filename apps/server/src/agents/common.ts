@@ -1,6 +1,7 @@
 import {
   AgentFailure,
   type AgentCall,
+  type AgentCallLifecycle,
   type AgentResult,
   type AgentTransport,
   type AgentTransportResponse,
@@ -158,6 +159,7 @@ export async function post(
   stream: boolean,
   signal?: AbortSignal,
   protocol: AgentWireProtocol = "openai-chat",
+  lifecycle?: AgentCallLifecycle,
 ): Promise<AgentTransportResponse> {
   const endpoint = new URL(config.endpoint);
   const credential = config.credentialProvider
@@ -178,6 +180,8 @@ export async function post(
     throw new AgentFailure("agent-request-limit");
   const response = await config.transport({
     endpoint: config.endpoint,
+    method: "POST",
+    timeout_ms: 120_000,
     headers: [
       ["content-type", "application/json"],
       ...(protocol === "anthropic" ? [ANTHROPIC_API_VERSION_HEADER] : []),
@@ -185,6 +189,7 @@ export async function post(
       ["accept", stream ? "text/event-stream" : "application/json"],
     ],
     body: encoded,
+    ...(lifecycle ? { onDispatched: lifecycle.onDispatched } : {}),
     ...(signal ? { signal } : {}),
   });
   if (response.body.byteLength > (config.maxResponseBytes ?? 4_194_304))

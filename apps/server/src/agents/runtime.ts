@@ -2,6 +2,7 @@ import {
   AgentFailure,
   type AgentAdapter,
   type AgentCall,
+  type AgentCallLifecycle,
   type AgentCapability,
   type AgentResult,
   type AgentRole,
@@ -99,7 +100,11 @@ export class AgentRuntime {
     };
   }
 
-  async execute(call: AgentCall, signal?: AbortSignal): Promise<AgentResult> {
+  async execute(
+    call: AgentCall,
+    signal?: AbortSignal,
+    lifecycle?: AgentCallLifecycle,
+  ): Promise<AgentResult> {
     if (this.closed) throw new AgentFailure("agent-closed");
     validateAgentCall(call);
     const binding = this.bindings.get(call.role);
@@ -121,6 +126,7 @@ export class AgentRuntime {
         call,
         { reasoning: binding.reasoning, stream: binding.stream },
         active,
+        lifecycle,
       );
       if (active.aborted) throw new AgentFailure("agent-cancelled");
       if (

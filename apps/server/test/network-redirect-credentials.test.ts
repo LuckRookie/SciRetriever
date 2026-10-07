@@ -46,14 +46,16 @@ describe("network redirect credential handling", () => {
       ],
     };
     try {
-      await expect(
-        requestFollowingRedirects(
-          `http://first.example:${firstPort}/start`,
-          () => ["127.0.0.1"],
-          policy,
-          { headers: [["Authorization", "Bearer secret"]] },
-        ),
-      ).resolves.toMatchObject({ status: 200 });
+      const response = await requestFollowingRedirects(
+        `http://first.example:${firstPort}/start`,
+        () => ["127.0.0.1"],
+        policy,
+        { headers: [["Authorization", "Bearer secret"]] },
+      );
+      expect(response).toMatchObject({
+        status: 200,
+        final_url: `http://second.example:${secondPort}/next`,
+      });
       expect(secondAuthorization).toBeUndefined();
     } finally {
       await Promise.all([

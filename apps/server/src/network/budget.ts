@@ -6,7 +6,19 @@ export class NetworkBudgetError extends Error {
   }
 }
 
-export interface BudgetLimits {
+export interface AccessRatePolicy {
+  /** Legacy connection pools use host feedback; a declared quota group shares it. */
+  readonly retryAfterScope?: "host" | "group";
+  readonly minimumIntervalMs?: number;
+  readonly windows?: readonly {
+    readonly requests: number;
+    readonly durationMs: number;
+  }[];
+  /** Backoff when a service returns 429 without Retry-After. */
+  readonly rateLimitBackoffMs?: number;
+}
+
+export interface BudgetLimits extends AccessRatePolicy {
   readonly maxConcurrency: number;
   readonly maxHostConcurrency?: number;
   readonly maxResponseBytes: number;
@@ -69,8 +81,14 @@ interface Waiter {
 interface State {
   active: number;
   maxConcurrency: number;
-  retryAfter: Map<string, number>;
   queue: Waiter[];
+  minimumIntervalMs: number;
+  lastStart: number;
+  starts: number[];
+  windows: Map<number, number>;
+  blockedUntil: number;
+  hostBlockedUntil: Map<string, number>;
+  wake?: ReturnType<typeof setTimeout>;
 }
 
 function invalid(): never {
@@ -110,7 +128,64 @@ function checkLimits(limits: BudgetLimits): BudgetLimits {
       limits.maxRetryAfterMs < 0)
   )
     invalid();
-  return Object.freeze({ ...limits });
+  for (const value of [limits.minimumIntervalMs, limits.rateLimitBackoffMs])
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 0))
+      invalid();
+  if (
+    limits.retryAfterScope !== undefined &&
+    !["host", "group"].includes(limits.retryAfterScope)
+  )
+    invalid();
+  if (limits.windows !== undefined && !Array.isArray(limits.windows)) invalid();
+  for (const window of limits.windows ?? [])
+    if (
+      !window ||
+      !Number.isSafeInteger(window.requests) ||
+      window.requests < 1 ||
+      !Number.isSafeInteger(window.durationMs) ||
+      window.durationMs < 1
+    )
+      invalid();
+  return Object.freeze({
+    ...limits,
+    ...(limits.windows
+      ? {
+          windows: Object.freeze(
+            limits.windows.map((item) => Object.freeze({ ...item })),
+          ),
+        }
+      : {}),
+  });
+}
+
+function newState(limits: BudgetLimits): State {
+  return {
+    active: 0,
+    maxConcurrency: limits.maxConcurrency,
+    queue: [],
+    minimumIntervalMs: 0,
+    lastStart: -Infinity,
+    starts: [],
+    windows: new Map(),
+    blockedUntil: 0,
+    hostBlockedUntil: new Map(),
+  };
+}
+
+function tighten(state: State, limits: BudgetLimits): void {
+  state.maxConcurrency = Math.min(state.maxConcurrency, limits.maxConcurrency);
+  state.minimumIntervalMs = Math.max(
+    state.minimumIntervalMs,
+    limits.minimumIntervalMs ?? 0,
+  );
+  for (const window of limits.windows ?? [])
+    state.windows.set(
+      window.durationMs,
+      Math.min(
+        state.windows.get(window.durationMs) ?? Infinity,
+        window.requests,
+      ),
+    );
 }
 function checkNonnegativeInteger(value: number): void {
   if (!Number.isSafeInteger(value) || value < 0) invalid();
@@ -141,7 +216,6 @@ export class NetworkBudgetCoordinator {
   private readonly states = new Map<string, State>();
   private readonly hostActive = new Map<string, number>();
   private readonly hostLimits = new Map<string, number>();
-  private readonly retryTimers = new Set<ReturnType<typeof setTimeout>>();
   private closed = false;
   private readonly clock: BudgetClock;
 
@@ -170,16 +244,8 @@ export class NetworkBudgetCoordinator {
       !(options.signal instanceof AbortSignal)
     )
       invalid();
-    const state: State = this.states.get(scope) ?? {
-      active: 0,
-      maxConcurrency: checked.maxConcurrency,
-      retryAfter: new Map(),
-      queue: [],
-    };
-    state.maxConcurrency = Math.min(
-      state.maxConcurrency,
-      checked.maxConcurrency,
-    );
+    const state = this.states.get(scope) ?? newState(checked);
+    tighten(state, checked);
     const hostLimit = checked.maxHostConcurrency ?? checked.maxConcurrency;
     this.hostLimits.set(
       host,
@@ -230,43 +296,27 @@ export class NetworkBudgetCoordinator {
       seconds * 1000,
       checked.maxRetryAfterMs ?? 120_000,
     );
-    const state: State = this.states.get(scope) ?? {
-      active: 0,
-      maxConcurrency: checked.maxConcurrency,
-      retryAfter: new Map(),
-      queue: [],
-    };
-    state.retryAfter.set(
-      host,
-      Math.max(state.retryAfter.get(host) ?? 0, this.clock.now() + bounded),
-    );
+    const state = this.states.get(scope) ?? newState(checked);
+    tighten(state, checked);
+    const until = this.clock.now() + bounded;
+    if (checked.retryAfterScope === "group")
+      state.blockedUntil = Math.max(state.blockedUntil, until);
+    else
+      state.hostBlockedUntil.set(
+        host,
+        Math.max(state.hostBlockedUntil.get(host) ?? 0, until),
+      );
     this.states.set(scope, state);
-    const schedule = (delay: number): void => {
-      const timer = this.clock.setTimeout(() => {
-        this.retryTimers.delete(timer);
-        wake();
-      }, delay);
-      this.retryTimers.add(timer);
-    };
-    const wake = (): void => {
-      if (this.closed) return;
-      const remaining = (state.retryAfter.get(host) ?? 0) - this.clock.now();
-      if (remaining > 0) {
-        schedule(Math.max(1, Math.ceil(remaining)));
-        return;
-      }
-      this.pump(scope, state);
-    };
-    schedule(Math.max(1, Math.ceil(bounded)));
+    this.pump(scope, state);
   }
 
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    for (const timer of this.retryTimers) this.clock.clearTimeout(timer);
-    this.retryTimers.clear();
-    for (const state of this.states.values())
+    for (const state of this.states.values()) {
+      if (state.wake !== undefined) this.clock.clearTimeout(state.wake);
       for (const waiter of [...state.queue]) this.cancelWaiter(state, waiter);
+    }
   }
 
   /** Parse a response Retry-After value without allowing an unbounded delay. */
@@ -304,24 +354,66 @@ export class NetworkBudgetCoordinator {
       this.hostLimits.get(waiter.host)!
     )
       return false;
-    return (state.retryAfter.get(waiter.host) ?? 0) <= this.clock.now();
+    return true;
+  }
+
+  private readyAt(state: State, host: string): number {
+    const now = this.clock.now();
+    const retention = Math.max(0, ...state.windows.keys());
+    state.starts = state.starts.filter((at) => at > now - retention);
+    let at = Math.max(
+      state.blockedUntil,
+      state.hostBlockedUntil.get(host) ?? 0,
+      state.lastStart + state.minimumIntervalMs,
+    );
+    for (const [duration, requests] of state.windows) {
+      const starts = state.starts.filter((value) => value > now - duration);
+      if (starts.length >= requests)
+        at = Math.max(at, starts[starts.length - requests]! + duration);
+    }
+    return at;
   }
 
   private pump(scope: string, state: State): void {
+    if (this.closed) return;
+    if (state.wake !== undefined) {
+      this.clock.clearTimeout(state.wake);
+      delete state.wake;
+    }
+    let nextWake = Infinity;
     for (const waiter of [...state.queue]) {
       if (!waiter.active) continue;
       if (!this.canGrant(state, waiter)) continue;
+      const readyAt = this.readyAt(state, waiter.host);
+      const delay = readyAt - this.clock.now();
+      if (delay > 0) {
+        nextWake = Math.min(nextWake, readyAt);
+        continue;
+      }
       state.queue.splice(state.queue.indexOf(waiter), 1);
       waiter.active = false;
       if (waiter.timeout !== undefined) this.clock.clearTimeout(waiter.timeout);
       waiter.signal?.removeEventListener("abort", waiter.abort!);
       state.active += 1;
+      state.lastStart = this.clock.now();
+      if (state.windows.size) state.starts.push(state.lastStart);
       this.hostActive.set(
         waiter.host,
         (this.hostActive.get(waiter.host) ?? 0) + 1,
       );
       waiter.resolve(this.createPermit(scope, state, waiter));
     }
+    if (Number.isFinite(nextWake))
+      state.wake = this.clock.setTimeout(
+        () => {
+          delete state.wake;
+          this.pump(scope, state);
+        },
+        Math.min(
+          2_147_483_647,
+          Math.max(1, Math.ceil(nextWake - this.clock.now())),
+        ),
+      );
   }
 
   private cancelWaiter(state: State, waiter: Waiter): void {
@@ -332,6 +424,10 @@ export class NetworkBudgetCoordinator {
     if (waiter.timeout !== undefined) this.clock.clearTimeout(waiter.timeout);
     waiter.signal?.removeEventListener("abort", waiter.abort!);
     waiter.reject(new NetworkBudgetError());
+    if (!state.queue.length && state.wake !== undefined) {
+      this.clock.clearTimeout(state.wake);
+      delete state.wake;
+    }
   }
 
   private createPermit(
