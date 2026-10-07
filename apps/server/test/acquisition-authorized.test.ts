@@ -1,12 +1,10 @@
-import { describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import {
-  AuthorizedProviderError,
-  CoreAuthorizedPdfClient,
-  ElsevierAuthorizedPdfClient,
-  WileyAuthorizedPdfClient,
-} from "../src/acquisition/providers/authorized.js";
+import { describe, expect, it } from "vitest";
+import { CoreAuthorizedPdfClient } from "../src/providers/core/acquisition.js";
+import { ElsevierAuthorizedPdfClient } from "../src/providers/elsevier/acquisition.js";
+import { AuthorizedProviderError } from "../src/providers/shared/authorized-pdf.js";
+import { WileyAuthorizedPdfClient } from "../src/providers/wiley/acquisition.js";
 
 const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31]);
 
@@ -132,6 +130,38 @@ describe("authorized acquisition providers", () => {
       "x-els-apikey": "elsevier-key",
       "x-els-insttoken": "institution-token",
     });
+  });
+
+  it("retains Retry-After on Elsevier lookup without requesting a MAIN object or a PDF alternative", async () => {
+    const xml = new Uint8Array(
+      await readFile(
+        resolve("tests/fixtures/acquisition/elsevier/article-full-main.xml"),
+      ),
+    );
+    let requests = 0;
+    const client = new ElsevierAuthorizedPdfClient(
+      {
+        async request() {
+          requests++;
+          return {
+            status: 200,
+            headers: [["content-type", "application/xml"]],
+            retry_after_ms: 60_000,
+            body: xml,
+          };
+        },
+      },
+      "fixture-key",
+    );
+    const lookup = client.lookup({
+      namespace: "pii",
+      value: "S0014579301033130",
+    });
+    if (lookup.kind !== "downloads") throw new Error("lookup failed");
+    await expect(client.download(lookup.downloads[0]!)).rejects.toMatchObject({
+      failure: { code: "quota", http_status: 200, retry_after_ms: 60_000 },
+    });
+    expect(requests).toBe(1);
   });
 
   it("fails closed for unsafe Elsevier XML and honours pre-cancelled downloads", async () => {

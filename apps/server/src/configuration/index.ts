@@ -1,15 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import {
-  open,
   lstat,
   mkdir,
+  open,
   rename,
   unlink,
   type FileHandle,
 } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import {
+  ACQUISITION_PROVIDER_NAMES,
+  METADATA_PROVIDER_NAMES,
+} from "../providers/registry.js";
 import { acquireFileLock, type FileLock } from "../storage/locking.js";
 
 export class ConfigurationBoundaryError extends Error {
@@ -117,33 +121,8 @@ const ROOT_KEYS = [
   "execution",
   "library",
 ] as const;
-const METADATA_PROVIDERS = new Set([
-  "web-of-science",
-  "crossref",
-  "semantic-scholar",
-  "arxiv",
-  "openalex",
-  "europe-pmc",
-  "elsevier",
-  "springer",
-  "datacite",
-  "core",
-  "opencitations",
-]);
-const ACQUISITION_PROVIDERS = new Set([
-  "arxiv",
-  "crossref",
-  "semantic-scholar",
-  "openalex",
-  "europe-pmc",
-  "unpaywall",
-  "elsevier",
-  "springer",
-  "wiley",
-  "datacite",
-  "core",
-  "sci-hub",
-]);
+const METADATA_PROVIDERS = new Set(METADATA_PROVIDER_NAMES);
+const ACQUISITION_PROVIDERS = new Set(ACQUISITION_PROVIDER_NAMES);
 const MODEL_APIS = new Set([
   "openai-responses",
   "openai-chat-completions",

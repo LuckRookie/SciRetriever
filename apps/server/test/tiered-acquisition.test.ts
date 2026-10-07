@@ -9,7 +9,7 @@ import {
 import { LiteraturePublicationError } from "../src/literature/primary-pdf.js";
 import { WriteAdmissionError } from "../src/storage/write-admission.js";
 import { safeLocator, PublicAcquisitionRegistry } from "../src/index.js";
-import type { AcquisitionSourcePort } from "../src/acquisition/sources/public.js";
+import type { AcquisitionSourcePort } from "../src/acquisition/ports.js";
 
 function source(
   sourceName: string,
@@ -24,6 +24,92 @@ const item = (key: string) => ({
 });
 
 describe("tiered acquisition batch", () => {
+  it("never lets a later unsupported route erase an unresolved transport failure", async () => {
+    const sources = [
+      source("broken", async () => {
+        throw new AcquisitionRouteError(
+          "network-failed",
+          "Connection timed out.",
+        );
+      }),
+      source("unsupported", async () => {
+        throw new AcquisitionUnavailableError(
+          "download-unavailable",
+          "Public HTTP returned HTML.",
+          "http-route-unavailable",
+        );
+      }),
+    ];
+    const result = await new TieredAcquisitionService(
+      new PublicAcquisitionRegistry(
+        sources,
+        sources.map((s) => s.source_name),
+      ),
+    ).run([item("x")], async () => undefined);
+    expect(result).toMatchObject([
+      {
+        disposition: "failed",
+        failure: { code: "network-failed", unavailability: null },
+      },
+    ]);
+  });
+
+  it.each(["discovery", "delivery"])(
+    "stops alternate requests after a rate limit during %s",
+    async (stage) => {
+      const calls: string[] = [];
+      const limited = source("limited", async () => {
+        calls.push("limited");
+        if (stage === "discovery")
+          throw new AcquisitionRouteError("rate-limited", "HTTP 429.");
+        return [
+          safeLocator("limited", "https://fixture.test/one.pdf"),
+          safeLocator("limited", "https://fixture.test/two.pdf"),
+        ];
+      });
+      const alternate = source("alternate", async () => {
+        calls.push("alternate");
+        return [];
+      });
+      const result = await new TieredAcquisitionService(
+        new PublicAcquisitionRegistry(
+          [limited, alternate],
+          ["limited", "alternate"],
+        ),
+      ).run([item("x")], async () => {
+        calls.push("download");
+        throw new AcquisitionRouteError("rate-limited", "HTTP 429.");
+      });
+      expect(result).toMatchObject([
+        { failure: { code: "rate-limited", source: "limited" } },
+      ]);
+      expect(calls).toEqual(
+        stage === "discovery" ? ["limited"] : ["limited", "download"],
+      );
+    },
+  );
+
+  it("continues a second public candidate after the first needs a browser session", async () => {
+    const calls: string[] = [];
+    const direct = source("direct", async () => [
+      safeLocator("direct", "https://fixture.test/one.pdf"),
+      safeLocator("direct", "https://fixture.test/two.pdf"),
+    ]);
+    const result = await new TieredAcquisitionService(
+      new PublicAcquisitionRegistry([direct], ["direct"]),
+    ).run([item("x")], async (_item, _source, candidate) => {
+      calls.push(candidate.locator);
+      if (calls.length === 1)
+        throw new AcquisitionUnavailableError(
+          "download-unavailable",
+          "Public HTTP returned 403.",
+          "http-route-unavailable",
+        );
+    });
+    expect(result).toMatchObject([{ disposition: "acquired" }]);
+    expect(calls).toHaveLength(2);
+  });
+
   it("keeps mixed success, exhaustion and source errors separate", async () => {
     const first = source("first", async (request) => {
       const key = request.identifiers[0]?.value;

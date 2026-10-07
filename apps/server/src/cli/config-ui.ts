@@ -1,17 +1,17 @@
 import { checkbox, confirm, input, password, select } from "@inquirer/prompts";
-import { Chalk } from "chalk";
-import stringWidth from "string-width";
-import wrapAnsi from "wrap-ansi";
 import type {
   ConfigurationReadiness,
   ConfigurationReadinessItem,
 } from "@sciretriever/contracts";
-import type { OrdinaryConfiguration } from "../configuration/index.js";
+import { Chalk } from "chalk";
+import stringWidth from "string-width";
+import wrapAnsi from "wrap-ansi";
+import { type OrdinaryConfiguration } from "../configuration/index.js";
 import type {
-  ConfigurationSection,
   ConfigurationProbeRequest,
   ConfigurationProbeResult,
   ConfigurationProbeSession,
+  ConfigurationSection,
   TypeScriptConfigurationSnapshot,
 } from "../configuration/owner.js";
 import {
@@ -19,6 +19,13 @@ import {
   renderConfigurationText,
   type TypeScriptConfigurationOwner,
 } from "../configuration/owner.js";
+import {
+  AUTO_ACQUISITION_SOURCES as ACQUISITION_AUTO,
+  ACQUISITION_PROVIDER_NAMES as ACQUISITION_PROVIDERS,
+  LITERATURE_PROVIDERS,
+  METADATA_AUTO_PROVIDERS as METADATA_AUTO,
+  METADATA_PROVIDER_NAMES as METADATA_PROVIDERS,
+} from "../providers/registry.js";
 
 export type ConfigTheme = "auto" | "dark" | "light" | "mono";
 
@@ -43,48 +50,6 @@ interface Palette {
   readonly border: (text: string) => string;
   readonly dim: (text: string) => string;
 }
-
-const METADATA_AUTO = [
-  "crossref",
-  "semantic-scholar",
-  "arxiv",
-  "openalex",
-  "europe-pmc",
-  "datacite",
-  "core",
-  "opencitations",
-] as const;
-
-const ACQUISITION_AUTO = ["arxiv", "europe-pmc"] as const;
-
-const METADATA_PROVIDERS = [
-  "web-of-science",
-  "crossref",
-  "semantic-scholar",
-  "arxiv",
-  "openalex",
-  "europe-pmc",
-  "elsevier",
-  "springer",
-  "datacite",
-  "core",
-  "opencitations",
-] as const;
-
-const ACQUISITION_PROVIDERS = [
-  "arxiv",
-  "crossref",
-  "semantic-scholar",
-  "openalex",
-  "europe-pmc",
-  "unpaywall",
-  "elsevier",
-  "springer",
-  "wiley",
-  "datacite",
-  "core",
-  "sci-hub",
-] as const;
 
 const REASONING = [
   "default",
@@ -858,7 +823,10 @@ async function sourcesPage(
         {
           message: "Select sources (Space toggles)",
           choices: providerChoices.map((value) => ({
-            name: value,
+            name:
+              kind === "metadata"
+                ? `${value} · ${LITERATURE_PROVIDERS[value]!.metadata.join(", ")}`
+                : `${value} · ${LITERATURE_PROVIDERS[value]!.acquisition === "hints" ? "metadata links only; no standalone download adapter" : LITERATURE_PROVIDERS[value]!.acquisition}`,
             value,
             checked: selection.providers.includes(value),
           })),

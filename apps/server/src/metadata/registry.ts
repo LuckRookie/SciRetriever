@@ -1,28 +1,23 @@
-import { MetadataService } from "./service.js";
+import type {
+  OrdinaryConfiguration,
+  SourceMode,
+} from "../configuration/index.js";
+import type { MetadataCapability } from "../providers/contracts.js";
+import {
+  LITERATURE_PROVIDERS,
+  METADATA_AUTO_PROVIDERS,
+  METADATA_PROVIDER_NAMES,
+} from "../providers/registry.js";
 import type {
   MetadataLookupPort,
   ReferenceQueryPort,
   TopicSearchPort,
 } from "./ports.js";
-import type {
-  OrdinaryConfiguration,
-  SourceMode,
-} from "../configuration/index.js";
+import { MetadataService } from "./service.js";
+export type { MetadataCapability } from "../providers/contracts.js";
+export { METADATA_AUTO_PROVIDERS } from "../providers/registry.js";
 
-export type MetadataCapability = "topic-search" | "lookup" | "reference-query";
-export const METADATA_PROVIDER_ORDER = Object.freeze([
-  "web-of-science",
-  "crossref",
-  "semantic-scholar",
-  "arxiv",
-  "openalex",
-  "europe-pmc",
-  "elsevier",
-  "springer",
-  "datacite",
-  "core",
-  "opencitations",
-] as const);
+export const METADATA_PROVIDER_ORDER = METADATA_PROVIDER_NAMES;
 export interface MetadataProviderStatus {
   readonly provider_name: string;
   readonly capabilities: readonly MetadataCapability[];
@@ -42,16 +37,6 @@ export interface MetadataRegistry {
   readonly topic_selection: readonly string[];
   readonly reference_selection: readonly string[];
 }
-
-export const METADATA_AUTO_PROVIDERS = Object.freeze([
-  "crossref",
-  "semantic-scholar",
-  "arxiv",
-  "openalex",
-  "europe-pmc",
-  "datacite",
-  "core",
-] as const);
 
 /** Resolve source order locally; readiness and network state never rewrite it. */
 export function resolveMetadataSelection(
@@ -96,19 +81,12 @@ export function configuredMetadataSelections(
   return Object.freeze({ topic, reference });
 }
 
-const CAPABILITIES: Readonly<Record<string, readonly MetadataCapability[]>> = {
-  "web-of-science": ["topic-search", "lookup"],
-  crossref: ["topic-search", "lookup"],
-  "semantic-scholar": ["topic-search", "lookup", "reference-query"],
-  arxiv: ["topic-search", "lookup"],
-  openalex: ["topic-search", "lookup", "reference-query"],
-  "europe-pmc": ["topic-search", "lookup", "reference-query"],
-  elsevier: ["topic-search", "lookup"],
-  springer: ["topic-search", "lookup"],
-  datacite: ["topic-search", "lookup", "reference-query"],
-  core: ["topic-search", "lookup", "reference-query"],
-  opencitations: ["lookup", "reference-query"],
-};
+const CAPABILITIES: Readonly<Record<string, readonly MetadataCapability[]>> =
+  Object.fromEntries(
+    Object.entries(LITERATURE_PROVIDERS)
+      .filter(([, value]) => value.metadata.length)
+      .map(([name, value]) => [name, value.metadata]),
+  );
 
 /**
  * Assemble only explicitly supplied adapters. Missing adapters remain visible

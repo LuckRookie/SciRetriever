@@ -203,3 +203,12 @@ citations，显式解析请求 fields、分页、Paper/author/externalIds、引�
 可选 API key。OA locator 进入 `AssetHint` 后仍由 Acquisition 通用 Public route 重新做 URL、
 redirect、媒体类型、实际 PDF 字节和归属验证。当前证据为离线 fake/fixture；2026-07-21 的旧 key
 事件不证明当前凭据、容量、单篇 locator 或 entitlement，本轮也没有访问 API/PDF。
+
+## 11. 2026-10-07 TypeScript PMCID 与错误转换修复
+
+Graph API 的 `externalIds.PubMedCentral` 使用纯数字字符串，例如第 6 节的 `7759461`。
+当前 [SemanticScholarRestAdapter](../../../apps/server/src/providers/semantic-scholar/metadata.ts) 在供应商边界
+把它转换为 `PMC7759461`，搜索、lookup 和引用端点共用公共 Identifier canonicalization；
+已有前缀继续有效，畸形值仍拒绝。授权只读复查的 10 条首批结果中，修复前 5 条因此失败，
+修复后 10 条都完成中性转换。API 的真实 `429` 继续报告限流失败，并保留有界 `Retry-After`，
+不会作为无效记录或正常耗尽。该复查没有写入文献库，也没有下载 PDF。

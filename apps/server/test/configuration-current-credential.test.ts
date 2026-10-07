@@ -405,7 +405,11 @@ max_total_output_tokens = 20000
       );
       await expect(
         source!.download_candidate!(candidates[0]!),
-      ).rejects.toMatchObject({ failure: { code: "authentication" } });
+      ).rejects.toMatchObject({
+        code: "http-response-failed",
+        retryable: false,
+        cause: { failure: { code: "authentication" } },
+      });
       expect(requests).toHaveLength(3);
     } finally {
       await application?.close();

@@ -108,6 +108,7 @@ apps/server/src/
   acquisition/   analysis/      agents/        application/
   bootstrap/     browser/       cli/           configuration/
   entry/         literature/    logging/       metadata/
+  providers/     # 外部适配代码按供应商聚合，业务责任仍由原模块拥有
   network/       parsing/        storage/       workbench/
 
 apps/web/src/

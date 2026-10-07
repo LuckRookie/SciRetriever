@@ -81,6 +81,10 @@
 - 错误只在能够增加上下文、完成协议转换或形成稳定用户结果的层处理，并保留异常链。
 - 禁止空 `except` 和无记录吞错；资源使用 context manager 或等价的确定性清理机制。
 
+### 4.4 文献供应商治理
+
+按 ADR 0012/0014，新增或修改文献服务时，在 `providers/<provider>/` 就近维护定义与能力适配器，中央 registry 只负责汇总和查询。URL、能力、认证声明、覆盖证据和默认访问政策不得分别复制到 CLI、registry 与 assembly；协议解析继续由 adapter 负责，动态额度由共享 Network 执行。审查实际消费者与配置显示的一致性，不能只增加配置选项而没有生产实现。具体入口与当前限制见[供应商治理](docs/development/provider-governance.md)。
+
 ## 5. 验证路线与机械门禁
 
 2026-09-10 项目 owner 决定：后续开发以 TypeScript 为主，默认 Quick/Full 分别指 `pnpm quick`/`pnpm full`；不再自动运行 Python Quick、Full 或全量 unittest。5.1–5.3 保留 Python 历史工具说明，仅在用户明确要求时使用；CI 已转向 5.4 的 TS 路线。

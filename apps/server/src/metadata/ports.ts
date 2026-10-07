@@ -78,8 +78,11 @@ export interface ReferenceQueryPort {
 
 export class MetadataProviderFailure extends Error {
   readonly code = "metadata-provider" as const;
-  constructor(readonly failure: StableFailure) {
-    super("metadata provider call failed");
+  constructor(
+    readonly failure: StableFailure,
+    options: ErrorOptions = {},
+  ) {
+    super("metadata provider call failed", options);
     this.name = "MetadataProviderFailure";
   }
 }

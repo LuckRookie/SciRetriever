@@ -212,3 +212,15 @@ DataCite 没有专属 PDF protocol 或授权下载 API；当前 Acquisition 只�
 当前 Acquisition 只通过通用 Public route 消费已保存 locator，
 DataCite DOI、`contentUrl` 或媒体声明都不等于已获得主 PDF。实现证据为离线 fake/fixture；本轮
 没有认证请求、Member API 调用或文件下载。
+
+## 11. 2026-10-07 TypeScript 有界分页与摘要转换修复
+
+当前 [DataCiteRestAdapter](../../../apps/server/src/providers/datacite/metadata.ts) 默认每页 25 条；原始扫描上限
+仍跨页累计，不按接纳条数重置。授权只读比较的 `chemical synthesis` 查询中，100 条页在 30 秒
+单次 timeout 内未完整交付；10 条页约 53 KiB、3.18 秒，25 条页约 113 KiB、3.42 秒。
+这些是当次网络测量，不能视为服务 SLA。较小页避免为小扫描拉取不必要的大页，不放宽响应预算。
+
+该批次另有两条合法摘要带段落换行。当前适配器把摘要的连续空白转为空格再进入单行 Metadata
+合同，保留原始记录的 input hash；NUL 等非空白控制字符仍按合同拒绝。HTTP 200 后 timeout、
+响应超限、无效 JSON 与逐记录合同失败分别报告，不再统一呈现为“无效记录”。此轮只读复查
+使用 Configuration/Credential owner，没有接纳元数据、调用 Member API 或获取资产。

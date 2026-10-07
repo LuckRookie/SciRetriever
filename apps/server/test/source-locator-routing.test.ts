@@ -1,15 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
-  arxivPdf,
   authorizedLocator,
-  configuredMirrors,
   doiLanding,
-  europePmcPdf,
   safeLocator,
   SourceLocatorError,
-  unpaywallLocations,
 } from "../src/acquisition/sources/locators.js";
 import { routeCandidates } from "../src/acquisition/sources/route.js";
+import { normalizeUrl } from "../src/network/policy.js";
+import { arxivPdf } from "../src/providers/arxiv/locators.js";
+import { europePmcPdf } from "../src/providers/europe-pmc/locators.js";
+import { configuredMirrors } from "../src/providers/sci-hub/locators.js";
+import { unpaywallLocations } from "../src/providers/unpaywall/locators.js";
 
 describe("source locator boundaries", () => {
   it("creates neutral locators only from reliable identifiers and safe explicit URLs", () => {
@@ -18,8 +19,15 @@ describe("source locator boundaries", () => {
     );
     expect(europePmcPdf("PMC123").locator).toContain("europepmc.org");
     expect(doiLanding("10.1000/test").locator).toBe(
-      "https://doi.org/10.1000%2Ftest",
+      "https://doi.org/10.1000/test",
     );
+    expect(normalizeUrl(doiLanding("10.1000/section/a:b;c").locator).path).toBe(
+      "/10.1000/section/a%3Ab%3Bc",
+    );
+    expect(europePmcPdf("pmc123").locator).toBe(
+      "https://europepmc.org/articles/PMC123?pdf=render",
+    );
+    expect(() => europePmcPdf("MED123")).toThrow(SourceLocatorError);
     expect(safeLocator("direct", "https://example.test/a.pdf").locator).toBe(
       "https://example.test/a.pdf",
     );

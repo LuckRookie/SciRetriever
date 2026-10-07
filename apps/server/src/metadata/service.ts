@@ -26,6 +26,13 @@ function providerName(value: string): string {
   return normalized;
 }
 function failure(code: string): StableFailure {
+  if (code === "metadata-provider-unexpected")
+    return {
+      code,
+      reason: "The metadata provider session failed unexpectedly.",
+      action: "Retry the request or inspect the provider adapter.",
+      retryable: true,
+    };
   return {
     code,
     reason: "The metadata provider returned an invalid record.",

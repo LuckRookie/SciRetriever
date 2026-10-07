@@ -47,6 +47,7 @@ packages/contracts/          # 跨模块中性合同与解析
 apps/server/src/
   entry/ application/        # 用户操作边界、生命周期与 durable jobs
   metadata/ literature/      # 元数据与文献事实
+  providers/                 # 按供应商组织的外部适配器与静态服务定义
   acquisition/ parsing/     # 资产获取与解析
   analysis/ agents/          # 分析与无状态模型运行时
   network/ storage/ logging/ # 共享访问、持久化与日志

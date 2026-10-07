@@ -1,9 +1,4 @@
 import { lookup } from "node:dns/promises";
-import type { ConnectionDependencies } from "../network/connection.js";
-import { createAgentTransport } from "../network/http.js";
-import type { Resolver } from "../network/policy.js";
-import type { NetworkBudgetCoordinator } from "../network/budget.js";
-import type { OrdinaryConfiguration } from "../configuration/index.js";
 import {
   bundlePreview,
   issueProviderCredentialGrant,
@@ -11,21 +6,42 @@ import {
   type CredentialBundle,
   type CurrentCredentialReader,
 } from "../configuration/credentials.js";
-import type { MetadataTransport } from "./providers.js";
-import { CrossrefRestAdapter } from "./crossref.js";
-import { SemanticScholarRestAdapter } from "./semantic-scholar.js";
-import { ArxivRestAdapter } from "./arxiv.js";
-import { OpenAlexRestAdapter } from "./openalex.js";
-import { EuropePmcRestAdapter } from "./europe-pmc.js";
-import { DataCiteRestAdapter } from "./datacite.js";
-import { CoreRestAdapter } from "./core.js";
-import { OpenCitationsRestAdapter } from "./opencitations.js";
-import { ElsevierRestAdapter } from "./elsevier.js";
-import { SpringerRestAdapter } from "./springer.js";
+import type { OrdinaryConfiguration } from "../configuration/index.js";
+import type { NetworkBudgetCoordinator } from "../network/budget.js";
+import type { ConnectionDependencies } from "../network/connection.js";
+import { createAgentTransport } from "../network/http.js";
+import type { Resolver } from "../network/policy.js";
+import { ArxivRestAdapter } from "../providers/arxiv/metadata.js";
+import { CoreRestAdapter } from "../providers/core/metadata.js";
+import { CrossrefRestAdapter } from "../providers/crossref/metadata.js";
+import { DataCiteRestAdapter } from "../providers/datacite/metadata.js";
+import { ElsevierRestAdapter } from "../providers/elsevier/metadata.js";
+import { EuropePmcRestAdapter } from "../providers/europe-pmc/metadata.js";
+import { OpenAlexRestAdapter } from "../providers/openalex/metadata.js";
+import { OpenCitationsRestAdapter } from "../providers/opencitations/metadata.js";
+import {
+  LITERATURE_PROVIDERS,
+  METADATA_PROVIDER_NAMES,
+  metadataService,
+  PROVIDER_SERVICES,
+} from "../providers/registry.js";
+import { SemanticScholarRestAdapter } from "../providers/semantic-scholar/metadata.js";
+import {
+  METADATA_HTTP_TIMEOUT_MS,
+  requestMetadataResponse,
+  type MetadataTransport,
+} from "../providers/shared/metadata-transport.js";
+import { SpringerRestAdapter } from "../providers/springer/metadata.js";
 import {
   WebOfScienceExpandedRestAdapter,
   WebOfScienceStarterRestAdapter,
-} from "./web-of-science.js";
+} from "../providers/web-of-science/metadata.js";
+import type {
+  MetadataLookupPort,
+  ReferenceQueryPort,
+  TopicSearchPort,
+} from "./ports.js";
+import { MetadataProviderFailure } from "./ports.js";
 import {
   buildMetadataRegistry,
   configuredMetadataSelections,
@@ -33,25 +49,8 @@ import {
   type MetadataCapability,
   type MetadataRegistry,
 } from "./registry.js";
-import type {
-  MetadataLookupPort,
-  ReferenceQueryPort,
-  TopicSearchPort,
-} from "./ports.js";
-import { MetadataProviderFailure } from "./ports.js";
 
-type ProviderName =
-  | "web-of-science"
-  | "crossref"
-  | "semantic-scholar"
-  | "arxiv"
-  | "openalex"
-  | "europe-pmc"
-  | "elsevier"
-  | "springer"
-  | "datacite"
-  | "core"
-  | "opencitations";
+type ProviderName = string;
 
 export interface MetadataAssemblyOptions {
   readonly resolver?: Resolver;
@@ -65,43 +64,32 @@ export interface MetadataAssemblyOptions {
   ) => MetadataTransport;
 }
 
-const ORIGINS: Readonly<
-  Record<Exclude<ProviderName, "web-of-science">, string>
-> = {
-  crossref: "https://api.crossref.org",
-  "semantic-scholar": "https://api.semanticscholar.org/graph/v1",
-  arxiv: "https://export.arxiv.org/api/query",
-  openalex: "https://api.openalex.org",
-  "europe-pmc": "https://www.ebi.ac.uk/europepmc/webservices/rest",
-  elsevier: "https://api.elsevier.com",
-  springer: "https://api.springernature.com/meta/v2/json",
-  datacite: "https://api.datacite.org",
-  core: "https://api.core.ac.uk",
-  opencitations: "https://api.opencitations.net",
-};
-
+const ORIGINS: Readonly<Record<string, string>> = Object.fromEntries(
+  METADATA_PROVIDER_NAMES.filter((name) => name !== "web-of-science").map(
+    (name) => [name, metadataService(name).endpoint],
+  ),
+);
 const CREDENTIAL_HEADERS: Readonly<
-  Partial<Record<ProviderName, Readonly<Record<string, string>>>>
-> = {
-  "web-of-science": { api_key: "x-apikey" },
-  "semantic-scholar": { api_key: "x-api-key" },
-  elsevier: {
-    api_key: "x-els-apikey",
-    institution_token: "x-els-insttoken",
-  },
-  core: { api_key: "authorization" },
-  opencitations: { access_token: "authorization" },
-};
-
-const REQUIRED_METADATA_CREDENTIALS: readonly {
-  readonly provider: ProviderName;
-  readonly field: string;
-  readonly header?: string;
-}[] = [
-  { provider: "web-of-science", field: "api_key", header: "x-apikey" },
-  { provider: "elsevier", field: "api_key", header: "x-els-apikey" },
-  { provider: "springer", field: "api_key" },
-];
+  Record<string, Readonly<Record<string, string>>>
+> = Object.fromEntries(
+  Object.entries(LITERATURE_PROVIDERS).map(([name, value]) => [
+    name,
+    value.metadataHeaders ?? {},
+  ]),
+);
+const REQUIRED_METADATA_CREDENTIALS = Object.entries(
+  LITERATURE_PROVIDERS,
+).flatMap(([provider, value]) =>
+  value.requiredMetadataCredential
+    ? [
+        {
+          provider,
+          field: value.requiredMetadataCredential,
+          header: value.metadataHeaders?.[value.requiredMetadataCredential],
+        },
+      ]
+    : [],
+);
 
 function assertRequiredMetadataCredential(
   provider: ProviderName,
@@ -164,10 +152,7 @@ function providerCredentialHeaders(
     if (!header) continue;
     const grant = issueProviderCredentialGrant(credentials, provider, field);
     const value = readProviderCredential(credentials, grant, provider, field);
-    result[header] =
-      header === "authorization"
-        ? `${provider === "core" ? "Bearer" : "Bearer"} ${value}`
-        : value;
+    result[header] = header === "authorization" ? `Bearer ${value}` : value;
   }
   return result;
 }
@@ -176,18 +161,18 @@ function providerCredentialQuery(
   credentials: CredentialBundle,
   provider: ProviderName,
 ): readonly (readonly [string, string])[] {
-  if (
-    provider !== "springer" ||
-    !credentialFields(credentials, provider).includes("api_key")
-  )
-    return [];
-  const grant = issueProviderCredentialGrant(credentials, provider, "api_key");
-  return [
-    [
-      "api_key",
-      readProviderCredential(credentials, grant, provider, "api_key"),
-    ],
-  ];
+  const result: [string, string][] = [];
+  for (const [field, parameter] of Object.entries(
+    LITERATURE_PROVIDERS[provider]?.metadataQuery ?? {},
+  )) {
+    if (!credentialFields(credentials, provider).includes(field)) continue;
+    const grant = issueProviderCredentialGrant(credentials, provider, field);
+    result.push([
+      parameter,
+      readProviderCredential(credentials, grant, provider, field),
+    ]);
+  }
+  return result;
 }
 
 async function currentProviderCredentialHeaders(
@@ -214,15 +199,20 @@ async function currentProviderCredentialQuery(
   provider: ProviderName,
   options: MetadataAssemblyOptions,
 ): Promise<readonly (readonly [string, string])[]> {
-  if (provider !== "springer") return [];
-  const value = await options.currentCredential?.({
-    namespace: "provider",
-    provider,
-    field: "api_key",
-    origin: null,
-    operation: "provider-request",
-  });
-  return value === null || value === undefined ? [] : [["api_key", value]];
+  const result: [string, string][] = [];
+  for (const [field, parameter] of Object.entries(
+    LITERATURE_PROVIDERS[provider]?.metadataQuery ?? {},
+  )) {
+    const value = await options.currentCredential?.({
+      namespace: "provider",
+      provider,
+      field,
+      origin: null,
+      operation: "provider-request",
+    });
+    if (value !== null && value !== undefined) result.push([parameter, value]);
+  }
+  return result;
 }
 
 function providerTransport(
@@ -252,9 +242,13 @@ function providerTransport(
           ],
         },
         coordinator,
-        scope: `metadata-${provider}`,
+        scope: metadataService(provider, baseUrl).quotaGroup,
+        resolveAccess: (url) => {
+          const service = metadataService(provider, url);
+          return { scope: service.quotaGroup, limits: service.policy };
+        },
         limits: {
-          maxConcurrency: 2,
+          ...metadataService(provider, baseUrl).policy,
           maxHostConcurrency: 2,
           maxResponseBytes: 4_194_304,
           maxRedirects: 0,
@@ -291,29 +285,29 @@ function providerTransport(
             headers,
           },
         );
-      const response = await raw!({
-        endpoint: url,
-        headers: Object.entries({
-          accept:
-            provider === "arxiv" ? "application/atom+xml" : "application/json",
-          ...headers,
-        }),
-        body: new Uint8Array(),
-        ...(credentialQuery.length
-          ? { credential_query: credentialQuery }
-          : {}),
-        ...(requestOptions.signal ? { signal: requestOptions.signal } : {}),
-      });
-      if (response.status < 200 || response.status >= 300)
-        throw new Error("metadata HTTP request failed");
-      if (provider === "arxiv") return response.body;
-      try {
-        return JSON.parse(
-          new TextDecoder("utf-8", { fatal: true }).decode(response.body),
-        ) as unknown;
-      } catch {
-        throw new Error("metadata JSON response is invalid");
-      }
+      return requestMetadataResponse(
+        raw!,
+        {
+          endpoint: url,
+          method: "GET",
+          timeout_ms: METADATA_HTTP_TIMEOUT_MS,
+          headers: Object.entries({
+            accept:
+              LITERATURE_PROVIDERS[provider]?.metadataFormat === "atom"
+                ? "application/atom+xml"
+                : "application/json",
+            ...headers,
+          }),
+          body: new Uint8Array(),
+          ...(credentialQuery.length
+            ? { credential_query: credentialQuery }
+            : {}),
+          ...(requestOptions.signal ? { signal: requestOptions.signal } : {}),
+        },
+        LITERATURE_PROVIDERS[provider]?.metadataFormat === "atom"
+          ? "atom"
+          : "json",
+      );
     },
   };
 }
@@ -346,74 +340,86 @@ export function assembleMetadataRegistry(
   } | null;
   add(
     new CrossrefRestAdapter({
-      transport: transport("crossref", ORIGINS.crossref),
-      origin: ORIGINS.crossref,
+      transport: transport("crossref", metadataService("crossref").endpoint),
+      origin: metadataService("crossref").endpoint,
       mailto: crossref?.mode === "polite" ? (crossref.mailto ?? null) : null,
     }),
   );
   add(
     new SemanticScholarRestAdapter({
-      transport: transport("semantic-scholar", ORIGINS["semantic-scholar"]),
-      origin: ORIGINS["semantic-scholar"],
+      transport: transport(
+        "semantic-scholar",
+        metadataService("semantic-scholar").endpoint,
+      ),
+      origin: metadataService("semantic-scholar").endpoint,
     }),
     true,
   );
   add(
     new ArxivRestAdapter({
-      transport: transport("arxiv", ORIGINS.arxiv),
-      origin: ORIGINS.arxiv,
+      transport: transport("arxiv", metadataService("arxiv").endpoint),
+      origin: metadataService("arxiv").endpoint,
     }),
   );
   add(
     new OpenAlexRestAdapter({
-      transport: transport("openalex", ORIGINS.openalex),
-      origin: ORIGINS.openalex,
+      transport: transport("openalex", metadataService("openalex").endpoint),
+      origin: metadataService("openalex").endpoint,
     }),
     true,
   );
   add(
     new EuropePmcRestAdapter({
-      transport: transport("europe-pmc", ORIGINS["europe-pmc"]),
-      origin: ORIGINS["europe-pmc"],
+      transport: transport(
+        "europe-pmc",
+        metadataService("europe-pmc").endpoint,
+      ),
+      origin: metadataService("europe-pmc").endpoint,
     }),
     true,
   );
   add(
     new DataCiteRestAdapter({
-      transport: transport("datacite", ORIGINS.datacite),
-      origin: ORIGINS.datacite,
+      transport: transport("datacite", metadataService("datacite").endpoint),
+      origin: metadataService("datacite").endpoint,
     }),
     true,
   );
   add(
     new CoreRestAdapter({
-      transport: transport("core", ORIGINS.core),
-      origin: ORIGINS.core,
+      transport: transport("core", metadataService("core").endpoint),
+      origin: metadataService("core").endpoint,
     }),
     true,
   );
   lookups.push(
     new OpenCitationsRestAdapter({
-      transport: transport("opencitations", ORIGINS.opencitations),
-      origin: ORIGINS.opencitations,
+      transport: transport(
+        "opencitations",
+        metadataService("opencitations").endpoint,
+      ),
+      origin: metadataService("opencitations").endpoint,
     }),
   );
   references.push(
     new OpenCitationsRestAdapter({
-      transport: transport("opencitations", ORIGINS.opencitations),
-      origin: ORIGINS.opencitations,
+      transport: transport(
+        "opencitations",
+        metadataService("opencitations").endpoint,
+      ),
+      origin: metadataService("opencitations").endpoint,
     }),
   );
   add(
     new ElsevierRestAdapter({
-      transport: transport("elsevier", ORIGINS.elsevier),
-      origin: ORIGINS.elsevier,
+      transport: transport("elsevier", metadataService("elsevier").endpoint),
+      origin: metadataService("elsevier").endpoint,
     }),
   );
   add(
     new SpringerRestAdapter({
-      transport: transport("springer", ORIGINS.springer),
-      origin: ORIGINS.springer,
+      transport: transport("springer", metadataService("springer").endpoint),
+      origin: metadataService("springer").endpoint,
     }),
   );
 
@@ -425,8 +431,8 @@ export function assembleMetadataRegistry(
   if (web) {
     const base =
       web.product === "expanded"
-        ? "https://wos-api.clarivate.com/api/wos"
-        : "https://api.clarivate.com/apis/wos-starter/v2";
+        ? PROVIDER_SERVICES["wos-expanded"]!.endpoint
+        : PROVIDER_SERVICES["wos-starter"]!.endpoint;
     const webOptions = {
       transport: transport("web-of-science", base),
       origin: base,
@@ -458,9 +464,9 @@ export function assembleMetadataRegistry(
   const endpoints: Record<string, string | null> = { ...ORIGINS };
   endpoints["web-of-science"] =
     web?.product === "expanded"
-      ? "https://wos-api.clarivate.com/api/wos"
+      ? PROVIDER_SERVICES["wos-expanded"]!.endpoint
       : web
-        ? "https://api.clarivate.com/apis/wos-starter/v2"
+        ? PROVIDER_SERVICES["wos-starter"]!.endpoint
         : null;
   const registry = buildMetadataRegistry({
     topic_search_ports: topics,

@@ -1,8 +1,9 @@
-import { open, lstat, mkdir, rename } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
+import { lstat, mkdir, open, rename } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { LITERATURE_PROVIDERS } from "../providers/registry.js";
 
 import { ConfigurationBoundaryError, parseToml } from "./index.js";
 
@@ -103,16 +104,12 @@ const FIELD_NAMES = new Set([
   "bearer_token",
   "license_key",
 ]);
-const PROVIDER_FIELDS: Readonly<Record<string, readonly string[]>> = {
-  "web-of-science": ["api_key"],
-  "semantic-scholar": ["api_key"],
-  openalex: ["api_key"],
-  elsevier: ["api_key", "institution_token"],
-  springer: ["api_key", "api_metric"],
-  core: ["api_key"],
-  opencitations: ["access_token"],
-  wiley: ["tdm_api_token"],
-};
+const PROVIDER_FIELDS: Readonly<Record<string, readonly string[]>> =
+  Object.fromEntries(
+    Object.entries(LITERATURE_PROVIDERS)
+      .filter(([, value]) => value.credentialFields.length)
+      .map(([name, value]) => [name, value.credentialFields]),
+  );
 
 function normalizeModelProviderName(value: unknown): string {
   if (typeof value !== "string") invalid();

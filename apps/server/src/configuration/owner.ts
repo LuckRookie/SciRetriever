@@ -1,55 +1,16 @@
+import {
+  parseConfigurationReadiness,
+  type ConfigurationReadiness,
+} from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
-  parseConfigurationReadiness,
-  type ConfigurationReadiness,
-} from "@sciretriever/contracts";
-import {
-  ConfigurationBoundaryError,
-  configurationPath,
-  loadConfiguration,
-  parseConfiguration,
-  publishConfiguration,
-  type OrdinaryConfiguration,
-} from "./index.js";
-import {
-  CredentialBoundaryError,
-  bundlePreview,
-  editCredentialBundle,
-  issueCredentialGrant,
-  issueProviderCredentialGrant,
-  loadCredentialBundle,
-  publishCredentialText,
-  readCredential,
-  readProviderCredential,
-  type CredentialBundle,
-  type CredentialEdit,
-  type CredentialReadRequest,
-} from "./credentials.js";
-import { acquireFileLock } from "../storage/locking.js";
-import { NetworkBudgetCoordinator } from "../network/budget.js";
-import type { ConnectionDependencies } from "../network/connection.js";
-import { NetworkHttpError } from "../network/http.js";
-import { NetworkPolicyError, type Resolver } from "../network/policy.js";
-import { readOnlyProbeRequest, ProbeRequestError } from "../network/probe.js";
-import {
-  assembleMetadataRegistry,
-  type MetadataAssemblyOptions,
-} from "../metadata/assembly.js";
-import type { MetadataRegistry } from "../metadata/registry.js";
-import {
   assemblePublicAcquisitionRegistry,
   type PublicAcquisitionAssemblyOptions,
 } from "../acquisition/assembly.js";
 import type { PublicAcquisitionRegistry } from "../acquisition/sources/public.js";
-import {
-  AgentFailure,
-  type AgentCapability,
-  type AgentRole,
-  type AgentTransport,
-} from "../agents/protocol.js";
 import {
   ANTHROPIC_API_VERSION_HEADER,
   credentialHeader,
@@ -64,17 +25,57 @@ import {
   type ProbeModelTarget,
 } from "../agents/probe.js";
 import {
-  createMinerUHealthProbe,
-  MinerUHealthError,
-  type MinerUHealthProbe,
-} from "../parsing/backends/mineru/health.js";
-import { ParsingFailure } from "../parsing/ports.js";
+  AgentFailure,
+  type AgentCapability,
+  type AgentRole,
+  type AgentTransport,
+} from "../agents/protocol.js";
 import { resolveVerifiedCloakRuntime } from "../browser/production-host.js";
 import {
   BrowserSiteProbeError,
   createProductionBrowserSiteProbe,
   PRODUCTION_BROWSER_SITE_ACCESS_KEYS,
 } from "../browser/site-probe.js";
+import {
+  assembleMetadataRegistry,
+  type MetadataAssemblyOptions,
+} from "../metadata/assembly.js";
+import type { MetadataRegistry } from "../metadata/registry.js";
+import { NetworkBudgetCoordinator } from "../network/budget.js";
+import type { ConnectionDependencies } from "../network/connection.js";
+import { NetworkHttpError } from "../network/http.js";
+import { NetworkPolicyError, type Resolver } from "../network/policy.js";
+import { ProbeRequestError, readOnlyProbeRequest } from "../network/probe.js";
+import {
+  createMinerUHealthProbe,
+  MinerUHealthError,
+  type MinerUHealthProbe,
+} from "../parsing/backends/mineru/health.js";
+import { ParsingFailure } from "../parsing/ports.js";
+import { LITERATURE_PROVIDERS } from "../providers/registry.js";
+import { acquireFileLock } from "../storage/locking.js";
+import {
+  bundlePreview,
+  CredentialBoundaryError,
+  editCredentialBundle,
+  issueCredentialGrant,
+  issueProviderCredentialGrant,
+  loadCredentialBundle,
+  publishCredentialText,
+  readCredential,
+  readProviderCredential,
+  type CredentialBundle,
+  type CredentialEdit,
+  type CredentialReadRequest,
+} from "./credentials.js";
+import {
+  ConfigurationBoundaryError,
+  configurationPath,
+  loadConfiguration,
+  parseConfiguration,
+  publishConfiguration,
+  type OrdinaryConfiguration,
+} from "./index.js";
 
 export class ConfigurationOwnerError extends Error {
   constructor(
@@ -512,21 +513,14 @@ function readiness(
     browser_launched: false,
     items,
     credentials: {
-      sources: [
-        "web-of-science",
-        "semantic-scholar",
-        "openalex",
-        "elsevier",
-        "springer",
-        "core",
-        "opencitations",
-        "wiley",
-      ].map((provider) => ({
-        target: provider,
-        present: preview.sections.some(
-          (section) => section.section === provider,
-        ),
-      })),
+      sources: Object.keys(LITERATURE_PROVIDERS)
+        .filter((name) => LITERATURE_PROVIDERS[name]!.credentialFields.length)
+        .map((provider) => ({
+          target: provider,
+          present: preview.sections.some(
+            (section) => section.section === provider,
+          ),
+        })),
       models: Object.keys(configuration.providers)
         .sort()
         .map((provider) => ({

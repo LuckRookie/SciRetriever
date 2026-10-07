@@ -209,3 +209,11 @@ scope/policy，并在 polite 模式使用已校验的 contact identity。它解�
 license 资产线索；生产 registry 注入共享 `HttpClient` 与 Access Coordinator。当前不把 Crossref
 计数变成引用边，也不提供独立 PDF downloader：Acquisition 只消费已经保存的中性 hint 并重新
 执行网络与 PDF 验证。实现证据为离线 fake/fixture；本轮没有访问 Crossref 或任何返回的 PDF。
+
+## 11. 2026-10-07 TypeScript 查询排序修复
+
+当前 [CrossrefRestAdapter](../../../apps/server/src/providers/crossref/metadata.ts) 的主题搜索显式携带
+`sort=score&order=desc`，并在后续 cursor 页保留相同参数。本次授权只读比较对同一个
+`chemical synthesis` 查询各读取 10 条：未指定排序时 score 约为 3–5，且首批标题相关性弱；
+明确按 score 降序后，首批 score 约为 13–14。这证明了查询排序转换问题，不证明语义精确匹配；
+结果中仍有期刊题名、书章和补充材料，项目没有增加领域规则或删除这些合法来源记录。

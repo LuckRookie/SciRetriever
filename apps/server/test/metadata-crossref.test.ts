@@ -4,7 +4,7 @@ import {
   MetadataService,
   topicSearchQuery,
 } from "../src/index.js";
-import { parseCrossrefRecord } from "../src/metadata/crossref-fixture.js";
+import { parseCrossrefRecord } from "../src/providers/crossref/record.js";
 
 const record = (doi: string, title: string) => ({
   DOI: doi,
@@ -95,7 +95,11 @@ describe("Crossref REST metadata adapter", () => {
       "from-pub-date:2020-01-01,until-pub-date:2026-12-31",
     );
     expect(firstUrl.searchParams.get("mailto")).toBe("reader@example.test");
+    expect(firstUrl.searchParams.get("sort")).toBe("score");
+    expect(firstUrl.searchParams.get("order")).toBe("desc");
     expect(new URL(calls[1]!).searchParams.get("cursor")).toBe("cursor-2");
+    expect(new URL(calls[1]!).searchParams.get("sort")).toBe("score");
+    expect(new URL(calls[1]!).searchParams.get("order")).toBe("desc");
   });
 
   it("uses DOI lookup and rejects malformed Crossref envelopes", async () => {
@@ -127,7 +131,7 @@ describe("Crossref REST metadata adapter", () => {
       scan_limit: 1,
     });
     expect(result.observations[0]?.metadata.title).toBe("Lookup");
-    expect(new URL(calls[0]!).pathname).toBe("/works/10.1000%2Flookup");
+    expect(new URL(calls[0]!).pathname).toBe("/works/10.1000/lookup");
 
     const invalid = new CrossrefRestAdapter({
       origin: "https://api.crossref.test",

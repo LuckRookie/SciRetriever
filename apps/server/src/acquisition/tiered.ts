@@ -1,10 +1,11 @@
 import { ContractValidationError } from "@sciretriever/contracts";
+import { NetworkHttpError } from "../network/http.js";
 import type { SourceCandidate } from "./sources/locators.js";
 import type {
   AcquisitionSourcePort,
   AcquisitionSourceRequest,
-  PublicAcquisitionRegistry,
-} from "./sources/public.js";
+} from "./ports.js";
+import type { PublicAcquisitionRegistry } from "./sources/public.js";
 
 export type AcquisitionBatchDisposition =
   | "acquired"
@@ -20,25 +21,32 @@ export type AcquisitionFailureCode =
   | "assistance-skipped"
   | "assistance-required"
   | "execution-cancelled"
-  | "source-cooldown";
+  | "source-cooldown"
+  | "http-response-failed"
+  | "rate-limited"
+  | "network-failed";
 
 /**
  * An explicitly declared, low-risk route unavailability.
  *
  * It is a declaration by the route itself — never a code pattern a caller may infer — that
- * it can prove it cannot serve this target: the source does not apply, or it has no PDF
- * capability for this source. Nothing was attempted and no retry would help, so this is
- * neither a temporary nor an unknown failure.
+ * it cannot serve this target by this access method: the source does not apply,
+ * has no PDF capability, or a bounded public HTTP attempt requires a page session.
+ * This is distinct from a temporary or unknown failure.
  *
- * An entitlement/permission problem is deliberately **not** part of this set: gaining access
- * needs operator action, and ADR 0015 §7 forbids turning an action-required state into an
- * automatic Browser run. Such a route keeps reporting an ordinary route failure.
+ * An API entitlement/credential problem is deliberately not part of this set.
+ * Public HTTP 403/HTML or a proven redirect limit only describes the stateless
+ * transport's inability to serve the target; ADR 0015 §7 permits an independently
+ * admitted browser to assess its own current institutional/session access.
  *
  * Only this explicit declaration (or a normal miss) may let an independently admitted
  * Browser take over; retryable, temporary, deferred and unrecognized failures always stay
  * unresolved route failures.
  */
-export type AcquisitionRouteUnavailability = "not-applicable" | "no-capability";
+export type AcquisitionRouteUnavailability =
+  | "not-applicable"
+  | "no-capability"
+  | "http-route-unavailable";
 
 export interface AcquisitionBatchFailure {
   readonly code: AcquisitionFailureCode;
@@ -83,8 +91,9 @@ export class AcquisitionRouteError extends Error {
     readonly code: AcquisitionFailureCode,
     readonly reason: string,
     readonly retryable = true,
+    options: { readonly cause?: unknown } = {},
   ) {
-    super("acquisition route failed");
+    super("acquisition route failed", options);
     this.name = "AcquisitionRouteError";
   }
 }
@@ -267,6 +276,34 @@ function unavailableFailure(
   return failure(error.code, source, error.reason, false, error.unavailability);
 }
 
+/** Keep transport facts in the operation report without exposing URLs or remote text. */
+function routeFailure(
+  error: unknown,
+  source: string,
+  fallback: AcquisitionBatchFailure,
+): AcquisitionBatchFailure {
+  if (error instanceof AcquisitionRouteError)
+    return failure(error.code, source, error.reason, error.retryable);
+  if (error instanceof NetworkHttpError)
+    return failure(
+      error.retry_after_ms !== undefined ? "rate-limited" : "network-failed",
+      source,
+      `HTTP transport failed (${error.reason}).${error.retry_after_ms !== undefined ? ` Retry-After: ${error.retry_after_ms} ms.` : ""}`,
+      true,
+    );
+  if (
+    error instanceof Error &&
+    ["NetworkConnectionError", "NetworkPolicyError"].includes(error.name)
+  )
+    return failure(
+      "network-failed",
+      source,
+      `${error.name}: request could not be completed.`,
+      true,
+    );
+  return fallback;
+}
+
 function copyResult(
   result: Omit<AcquisitionBatchResult, "attempted_sources"> & {
     readonly attempted_sources: readonly string[];
@@ -371,6 +408,15 @@ export class TieredAcquisitionService {
   ): Promise<AcquisitionBatchResult> {
     const attempted: string[] = [];
     let lastFailure: AcquisitionBatchFailure | null = null;
+    const remember = (next: AcquisitionBatchFailure): void => {
+      // A later unsupported route cannot erase an earlier unresolved network failure.
+      if (
+        !lastFailure ||
+        lastFailure.unavailability != null ||
+        next.unavailability == null
+      )
+        lastFailure = next;
+    };
     for (const source of this.registry.sources) {
       if (signal.aborted)
         return this.interrupted(
@@ -381,11 +427,13 @@ export class TieredAcquisitionService {
         );
       const cooldown = this.cooldownUntil.get(source.source_name) ?? 0;
       if (cooldown > this.now()) {
-        lastFailure = failure(
-          "source-cooldown",
-          source.source_name,
-          "The source is cooling down after a bounded discovery failure.",
-          true,
+        remember(
+          failure(
+            "source-cooldown",
+            source.source_name,
+            "The source is cooling down after a bounded discovery failure.",
+            true,
+          ),
         );
         continue;
       }
@@ -399,7 +447,7 @@ export class TieredAcquisitionService {
         // An explicit low-risk unavailability is not a failure at all: it is recorded
         // as-is (non-retryable, no cooldown) so Entry can decide with its own admission.
         if (error instanceof AcquisitionUnavailableError) {
-          lastFailure = unavailableFailure(error, source.source_name);
+          remember(unavailableFailure(error, source.source_name));
           continue;
         }
         const kind = classifyAcquisitionFailure(error, signal, "discovery");
@@ -415,12 +463,19 @@ export class TieredAcquisitionService {
           source.source_name,
           this.now() + this.cooldownMs,
         );
-        lastFailure = failure(
-          "source-discovery-failed",
+        const detail = routeFailure(
+          error,
           source.source_name,
-          "The source did not return a valid discovery result.",
-          true,
+          failure(
+            "source-discovery-failed",
+            source.source_name,
+            "The source did not return a valid discovery result.",
+            true,
+          ),
         );
+        remember(detail);
+        if (detail.code === "rate-limited")
+          return this.policyResult(item.key, attempted, detail);
         continue;
       }
       const bounded = candidates.slice(0, this.maxCandidatesPerSource);
@@ -459,10 +514,11 @@ export class TieredAcquisitionService {
           // Only a route failure continues with the next candidate. A
           // cancellation stops this target; storage, receipt, contract and
           // system failures leave the batch instead of being swallowed.
-          // A declared low-risk unavailability concerns the whole route/target, so the
-          // remaining candidates of this source are skipped and the next route is tried.
+          // HTTP capability is candidate-local; a separate public locator may work.
+          // Other declarations concern the whole route/target.
           if (error instanceof AcquisitionUnavailableError) {
-            lastFailure = unavailableFailure(error, source.source_name);
+            remember(unavailableFailure(error, source.source_name));
+            if (error.unavailability === "http-route-unavailable") continue;
             break;
           }
           if (error instanceof AcquisitionCandidateSkippedError) continue;
@@ -475,12 +531,19 @@ export class TieredAcquisitionService {
               "Acquisition batch was cancelled during candidate delivery.",
             );
           if (kind !== "route") throw error;
-          lastFailure = failure(
-            "candidate-download-failed",
+          const detail = routeFailure(
+            error,
             source.source_name,
-            "The candidate failed delivery or PDF acceptance; the next candidate remains eligible.",
-            true,
+            failure(
+              "candidate-download-failed",
+              source.source_name,
+              "The candidate failed delivery or PDF acceptance; the next candidate remains eligible.",
+              true,
+            ),
           );
+          remember(detail);
+          if (detail.code === "rate-limited")
+            return this.policyResult(item.key, attempted, detail);
           onProgress?.({
             key: item.key,
             source: source.source_name,

@@ -1,37 +1,4 @@
 import { lookup } from "node:dns/promises";
-import type { ConnectionDependencies } from "../network/connection.js";
-import {
-  createAgentTransport,
-  requestFollowingRedirects,
-  type AgentTransportOptions,
-} from "../network/http.js";
-import type { Resolver } from "../network/policy.js";
-import { NetworkBudgetCoordinator } from "../network/budget.js";
-import type { OrdinaryConfiguration } from "../configuration/index.js";
-import {
-  ArxivPdfSource,
-  DirectPdfSource,
-  DoiLandingSource,
-  ConfiguredSciHubSource,
-  EuropePmcPdfSource,
-  PublicAcquisitionRegistry,
-  UnpaywallSource,
-  type AcquisitionSourcePort,
-  type AcquisitionSourceRequest,
-  type PdfDownloadTransport,
-  type PublicAcquisitionTransport,
-} from "./sources/public.js";
-import type { SourceCandidate } from "./sources/locators.js";
-import { AcquisitionRouteError } from "./tiered.js";
-import { AuthorizedPdfSource } from "./sources/public.js";
-import {
-  CoreAuthorizedPdfClient,
-  ElsevierAuthorizedPdfClient,
-  WileyAuthorizedPdfClient,
-  AuthorizedProviderError,
-  type AuthorizedTransport,
-  type AuthorizedProvider,
-} from "./providers/authorized.js";
 import {
   bundlePreview,
   issueProviderCredentialGrant,
@@ -39,6 +6,52 @@ import {
   type CredentialBundle,
   type CurrentCredentialReader,
 } from "../configuration/credentials.js";
+import type { OrdinaryConfiguration } from "../configuration/index.js";
+import { NetworkBudgetCoordinator } from "../network/budget.js";
+import type { ConnectionDependencies } from "../network/connection.js";
+import {
+  createAgentTransport,
+  requestFollowingRedirects,
+  type AgentTransportOptions,
+} from "../network/http.js";
+import type { Resolver } from "../network/policy.js";
+import { ArxivPdfSource } from "../providers/arxiv/acquisition.js";
+import { CoreAuthorizedPdfClient } from "../providers/core/acquisition.js";
+import { ElsevierAuthorizedPdfClient } from "../providers/elsevier/acquisition.js";
+import { EuropePmcPdfSource } from "../providers/europe-pmc/acquisition.js";
+import {
+  AUTO_ACQUISITION_SOURCES,
+  LITERATURE_PROVIDERS,
+  acquisitionService,
+  publicWebService,
+} from "../providers/registry.js";
+import { ConfiguredSciHubSource } from "../providers/sci-hub/acquisition.js";
+import { BUILTIN_SCI_HUB_MIRROR_URLS } from "../providers/sci-hub/definition.js";
+import {
+  AuthorizedProviderError,
+  type AuthorizedProvider,
+  type AuthorizedTransport,
+} from "../providers/shared/authorized-pdf.js";
+import { UnpaywallSource } from "../providers/unpaywall/acquisition.js";
+import { WileyAuthorizedPdfClient } from "../providers/wiley/acquisition.js";
+import {
+  type AcquisitionSourcePort,
+  type AcquisitionSourceRequest,
+  type PublicAcquisitionTransport,
+} from "./ports.js";
+import type { SourceCandidate } from "./sources/locators.js";
+import {
+  AuthorizedPdfSource,
+  DirectPdfSource,
+  DoiLandingSource,
+  PublicAcquisitionRegistry,
+  type PdfDownloadTransport,
+} from "./sources/public.js";
+import {
+  AcquisitionRouteError,
+  AcquisitionUnavailableError,
+} from "./tiered.js";
+export { BUILTIN_SCI_HUB_MIRROR_URLS } from "../providers/sci-hub/definition.js";
 
 export interface PublicAcquisitionAssemblyOptions {
   readonly resolver?: Resolver;
@@ -197,7 +210,7 @@ class UnavailableAcquisitionSource implements AcquisitionSourcePort {
   }
 }
 
-/** Build a credential-free transport bound to one already admitted PDF candidate origin. */
+/** Download public candidates and their redirects/static links through Network admission. */
 export function assemblePublicPdfDownloadTransport(
   candidate: SourceCandidate,
   coordinator: NetworkBudgetCoordinator,
@@ -217,7 +230,6 @@ export function assemblePublicPdfDownloadTransport(
   const policy = {
     allowed_schemes: ["https"] as const,
     allowed_classes: ["public"] as const,
-    allowed_origins: [originParts(target.origin)],
     allowed_ports: [
       { scheme: "https" as const, port: Number(target.port || 443) },
     ],
@@ -230,13 +242,11 @@ export function assemblePublicPdfDownloadTransport(
     maxConcurrency: 1,
     maxHostConcurrency: 1,
     maxResponseBytes: 64 * 1024 * 1024,
-    maxRedirects: 3,
+    maxRedirects: 5,
     maxRetries: 0,
   };
   return {
     request: (url, requestOptions = {}) => {
-      if (new URL(url).origin !== target.origin)
-        throw new TypeError("public PDF candidate changed origin");
       return requestFollowingRedirects(url, resolver, policy, {
         headers: [["accept", "application/pdf,text/html;q=0.8"]],
         body: new Uint8Array(),
@@ -248,7 +258,11 @@ export function assemblePublicPdfDownloadTransport(
         ...(requestOptions.signal ? { signal: requestOptions.signal } : {}),
         budget: {
           coordinator,
-          scope: `acquisition-download-${candidate.source}`,
+          scope: publicWebService(candidate.locator).quotaGroup,
+          resolveAccess: (url) => {
+            const service = publicWebService(url);
+            return { scope: service.quotaGroup, limits: service.policy };
+          },
           limits,
         },
       });
@@ -257,21 +271,11 @@ export function assemblePublicPdfDownloadTransport(
 }
 
 const ORIGINS = Object.freeze({
-  unpaywall: "https://api.unpaywall.org",
-  core: "https://api.core.ac.uk",
-  elsevier: "https://api.elsevier.com",
-  wiley: "https://api.wiley.com",
+  unpaywall: acquisitionService("unpaywall").endpoint,
+  core: acquisitionService("core").endpoint,
+  elsevier: acquisitionService("elsevier").endpoint,
+  wiley: acquisitionService("wiley").endpoint,
 });
-
-export const BUILTIN_SCI_HUB_MIRROR_URLS = Object.freeze([
-  "https://sci-hub.ru",
-  "https://sci-hub.kr",
-] as const);
-
-const AUTO_ACQUISITION_SOURCES = Object.freeze([
-  "arxiv",
-  "europe-pmc",
-] as const);
 
 function originParts(value: string): {
   readonly scheme: "https";
@@ -305,9 +309,9 @@ function unpaywallTransport(
       allowed_ports: [{ scheme: "https", port: 443 }],
     },
     coordinator,
-    scope: "acquisition-unpaywall",
+    scope: acquisitionService("unpaywall").quotaGroup,
     limits: {
-      maxConcurrency: 1,
+      ...acquisitionService("unpaywall").policy,
       maxHostConcurrency: 1,
       maxResponseBytes: 2 * 1024 * 1024,
       maxRedirects: 0,
@@ -318,8 +322,15 @@ function unpaywallTransport(
   const request = createAgentTransport(transportOptions);
   return {
     async request(url, requestOptions = {}) {
+      const endpoint = new URL(url);
+      const contacts = endpoint.searchParams.getAll("email");
+      if (contacts.length !== 1 || !contacts[0])
+        throw new TypeError("Unpaywall contact email is required");
+      endpoint.searchParams.delete("email");
       const response = await request({
-        endpoint: url,
+        endpoint: endpoint.toString(),
+        credential_query: [["email", contacts[0]]],
+        method: "GET",
         headers: [
           ["accept", "application/json"],
           ...Object.entries(requestOptions.headers ?? {}),
@@ -327,8 +338,31 @@ function unpaywallTransport(
         body: new Uint8Array(),
         ...(requestOptions.signal ? { signal: requestOptions.signal } : {}),
       });
+      const retryHint =
+        response.retry_after_ms === undefined
+          ? ""
+          : ` Retry-After: ${response.retry_after_ms} ms.`;
+      if (
+        response.status === 429 ||
+        response.retry_after_ms !== undefined ||
+        response.headers.some(([name]) => name.toLowerCase() === "retry-after")
+      )
+        throw new AcquisitionRouteError(
+          "rate-limited",
+          `Unpaywall HTTP returned ${response.status} with a rate limit or Retry-After.${retryHint}`,
+        );
+      if ([204, 404, 410].includes(response.status))
+        throw new AcquisitionUnavailableError(
+          "download-unavailable",
+          `Unpaywall HTTP returned ${response.status}; this DOI has no lookup entry.`,
+          "not-applicable",
+        );
       if (response.status < 200 || response.status >= 300)
-        throw new Error("acquisition source request failed");
+        throw new AcquisitionRouteError(
+          "http-response-failed",
+          `Unpaywall HTTP returned ${response.status}; no location lookup was delivered.`,
+          ![401, 403].includes(response.status),
+        );
       try {
         return JSON.parse(
           new TextDecoder("utf-8", { fatal: true }).decode(response.body),
@@ -363,9 +397,9 @@ function authorizedTransport(
           allowed_ports: [{ scheme: "https", port: 443 }],
         },
         coordinator,
-        scope: `acquisition-${provider}`,
+        scope: acquisitionService(provider).quotaGroup,
         limits: {
-          maxConcurrency: 1,
+          ...acquisitionService(provider).policy,
           maxHostConcurrency: 1,
           maxResponseBytes: 64 * 1024 * 1024,
           maxRedirects: 0,
@@ -377,6 +411,7 @@ function authorizedTransport(
     request: async (url, requestOptions = {}) => {
       const response = await request!({
         endpoint: url,
+        method: "GET",
         headers: Object.entries(requestOptions.headers ?? {}),
         body: new Uint8Array(),
         ...(requestOptions.signal ? { signal: requestOptions.signal } : {}),
@@ -390,40 +425,25 @@ function authorizedTransport(
       if (new URL(url).origin !== new URL(origin).origin)
         throw new AuthorizedProviderError({ code: "response-schema" });
       const headers = { ...(requestOptions.headers ?? {}) };
-      const apiField = provider === "wiley" ? "tdm_api_token" : "api_key";
-      const apiHeader =
-        provider === "core"
-          ? "authorization"
-          : provider === "elsevier"
-            ? "x-els-apikey"
-            : "wiley-tdm-client-token";
-      for (const name of [
-        apiHeader,
-        ...(provider === "elsevier" ? ["x-els-insttoken"] : []),
-      ])
+      const definition = LITERATURE_PROVIDERS[provider]!;
+      const mapping = definition.pdfHeaders ?? {};
+      for (const name of Object.values(mapping))
         for (const key of Object.keys(headers))
           if (key.toLowerCase() === name) delete headers[key];
       try {
-        const apiKey = await options.currentCredential!({
-          namespace: "provider",
-          provider,
-          field: apiField,
-          origin: null,
-          operation: "provider-request",
-        });
-        if (apiKey === null)
-          throw new AuthorizedProviderError({ code: "authentication" });
-        headers[apiHeader] = provider === "core" ? `Bearer ${apiKey}` : apiKey;
-        if (provider === "elsevier") {
-          const institutionToken = await options.currentCredential!({
+        for (const [field, header] of Object.entries(mapping)) {
+          const value = await options.currentCredential!({
             namespace: "provider",
             provider,
-            field: "institution_token",
+            field,
             origin: null,
             operation: "provider-request",
           });
-          if (institutionToken !== null)
-            headers["x-els-insttoken"] = institutionToken;
+          if (value === null && field === definition.requiredPdfCredential)
+            throw new AuthorizedProviderError({ code: "authentication" });
+          if (value !== null)
+            headers[header] =
+              header === "authorization" ? `Bearer ${value}` : value;
         }
       } catch (error) {
         if (error instanceof AuthorizedProviderError) throw error;
@@ -504,7 +524,7 @@ export function assemblePublicAcquisitionRegistry(
         unavailable[name] = "missing-credential";
         continue;
       }
-      const field = name === "wiley" ? "tdm_api_token" : "api_key";
+      const field = LITERATURE_PROVIDERS[name]!.requiredPdfCredential!;
       const available = hasSourceCredential(credentials, name, field);
       if (!available) {
         unavailable[name] = "missing-credential";

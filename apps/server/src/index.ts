@@ -143,66 +143,69 @@ export {
   type CitationDiscoveryRequest,
   type CitationDiscoveryReport,
 } from "./entry/discovery.js";
+export { ArxivAdapter } from "./providers/arxiv/metadata.js";
+export { CoreAdapter } from "./providers/core/metadata.js";
+export { CrossrefAdapter } from "./providers/crossref/metadata.js";
+export { DataCiteAdapter } from "./providers/datacite/metadata.js";
+export { ElsevierAdapter } from "./providers/elsevier/metadata.js";
+export { EuropePmcAdapter } from "./providers/europe-pmc/metadata.js";
 export {
-  ArxivAdapter,
-  CoreAdapter,
-  CrossrefAdapter,
-  DataCiteAdapter,
-  ElsevierAdapter,
-  EuropePmcAdapter,
   JsonMetadataAdapter,
-  OpenAlexAdapter,
-  OpenCitationsAdapter,
-  SemanticScholarAdapter,
-  SpringerAdapter,
-  WebOfScienceAdapter,
   createMetadataTransport,
   type MetadataRecordDecoder,
   type MetadataTransport,
-} from "./metadata/providers.js";
+} from "./providers/shared/metadata-transport.js";
+export { OpenAlexAdapter } from "./providers/openalex/metadata.js";
+export { OpenCitationsAdapter } from "./providers/opencitations/metadata.js";
+export { SemanticScholarAdapter } from "./providers/semantic-scholar/metadata.js";
+export { SpringerAdapter } from "./providers/springer/metadata.js";
+export { WebOfScienceAdapter } from "./providers/web-of-science/metadata.js";
 export {
   CrossrefRestAdapter,
   type CrossrefAdapterOptions,
-} from "./metadata/crossref.js";
+} from "./providers/crossref/metadata.js";
 export {
   EuropePmcRestAdapter,
   type EuropePmcAdapterOptions,
-} from "./metadata/europe-pmc.js";
+} from "./providers/europe-pmc/metadata.js";
 export {
   DataCiteRestAdapter,
   type DataCiteAdapterOptions,
-} from "./metadata/datacite.js";
+} from "./providers/datacite/metadata.js";
 export {
   OpenAlexRestAdapter,
   type OpenAlexAdapterOptions,
-} from "./metadata/openalex.js";
+} from "./providers/openalex/metadata.js";
 export {
   SemanticScholarRestAdapter,
   type SemanticScholarAdapterOptions,
-} from "./metadata/semantic-scholar.js";
+} from "./providers/semantic-scholar/metadata.js";
 export {
   ArxivRestAdapter,
   type ArxivAdapterOptions,
-} from "./metadata/arxiv.js";
+} from "./providers/arxiv/metadata.js";
 export {
   OpenCitationsRestAdapter,
   type OpenCitationsAdapterOptions,
-} from "./metadata/opencitations.js";
-export { CoreRestAdapter, type CoreAdapterOptions } from "./metadata/core.js";
+} from "./providers/opencitations/metadata.js";
+export {
+  CoreRestAdapter,
+  type CoreAdapterOptions,
+} from "./providers/core/metadata.js";
 export {
   SpringerRestAdapter,
   type SpringerAdapterOptions,
-} from "./metadata/springer.js";
+} from "./providers/springer/metadata.js";
 export {
   ElsevierRestAdapter,
   type ElsevierAdapterOptions,
-} from "./metadata/elsevier.js";
+} from "./providers/elsevier/metadata.js";
 export {
   WebOfScienceRestAdapter,
   WebOfScienceStarterRestAdapter,
   WebOfScienceExpandedRestAdapter,
   type WebOfScienceAdapterOptions,
-} from "./metadata/web-of-science.js";
+} from "./providers/web-of-science/metadata.js";
 export { TypeScriptParserArtifactRules } from "./parsing/artifact-rules.js";
 export {
   MinerUParser,
@@ -328,54 +331,58 @@ export {
   type IdentityEvidence,
   type IdentityVerdict,
 } from "./acquisition/identity-verdict.js";
+export { arxivPdf } from "./providers/arxiv/locators.js";
 export {
-  arxivPdf,
   authorizedLocator,
-  configuredMirrors,
   doiLanding,
-  europePmcPdf,
   safeLocator,
   SourceLocatorError,
-  unpaywallLocations,
-  type OpenLocation,
   type SourceCandidate,
 } from "./acquisition/sources/locators.js";
+export { configuredMirrors } from "./providers/sci-hub/locators.js";
+export { europePmcPdf } from "./providers/europe-pmc/locators.js";
+export {
+  unpaywallLocations,
+  type OpenLocation,
+} from "./providers/unpaywall/locators.js";
 export {
   AuthorizedProviderError,
-  CoreAuthorizedPdfClient,
-  ElsevierAuthorizedPdfClient,
-  WileyAuthorizedPdfClient,
   type AuthorizedProvider,
   type AuthorizedTransport,
   type AuthorizedLookupTarget,
   type AuthorizedLookupResult,
   type AuthorizedDownloadLocator,
   type AuthorizedDownloadResult,
-} from "./acquisition/providers/authorized.js";
+} from "./providers/shared/authorized-pdf.js";
+export { CoreAuthorizedPdfClient } from "./providers/core/acquisition.js";
+export { ElsevierAuthorizedPdfClient } from "./providers/elsevier/acquisition.js";
+export { WileyAuthorizedPdfClient } from "./providers/wiley/acquisition.js";
 export {
   routeCandidates,
   type RouteResult,
 } from "./acquisition/sources/route.js";
+export { ArxivPdfSource } from "./providers/arxiv/acquisition.js";
 export {
-  ArxivPdfSource,
   AuthorizedPdfSource,
-  ConfiguredSciHubSource,
   DirectPdfSource,
   DoiLandingSource,
-  EuropePmcPdfSource,
   downloadPdfCandidate,
   downloadSourceCandidate,
   PublicAcquisitionRegistry,
-  UnpaywallSource,
-  type AcquisitionSourcePort,
-  type AcquisitionSourceRequest,
   type AcquisitionSourceStatus,
   type PdfDownloadOptions,
   type PdfDownloadTransport,
   type SourceDownloadOptions,
+} from "./acquisition/sources/public.js";
+export { ConfiguredSciHubSource } from "./providers/sci-hub/acquisition.js";
+export { EuropePmcPdfSource } from "./providers/europe-pmc/acquisition.js";
+export { UnpaywallSource } from "./providers/unpaywall/acquisition.js";
+export {
+  type AcquisitionSourcePort,
+  type AcquisitionSourceRequest,
   type PublicAcquisitionTransport,
   type AuthorizedPdfClientPort,
-} from "./acquisition/sources/public.js";
+} from "./acquisition/ports.js";
 export {
   TieredAcquisitionService,
   type AcquisitionBatchDisposition,
@@ -527,7 +534,7 @@ export {
   type AnalysisOptions,
   type AnalysisResult,
 } from "./analysis/service.js";
-export { parseCrossrefRecord } from "./metadata/crossref-fixture.js";
+export { parseCrossrefRecord } from "./providers/crossref/record.js";
 export {
   exportBibliography,
   exportBibliographyBatch,

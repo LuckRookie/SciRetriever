@@ -1,7 +1,7 @@
-import { expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { parseCrossrefRecord } from "../src/metadata/crossref-fixture.js";
+import { expect, it } from "vitest";
+import { parseCrossrefRecord } from "../src/providers/crossref/record.js";
 
 it("maps a representative Crossref record into the neutral observation contract", async () => {
   const payload = JSON.parse(

@@ -51,3 +51,24 @@ it("maps arXiv Atom entries and bounded start pagination", async () => {
   );
   expect(new URL(calls[1]!).searchParams.get("start")).toBe("1");
 });
+
+it.each([
+  ["chemical synthesis", "all:chemical AND all:synthesis"],
+  ["  reaction   prediction  ", "all:reaction AND all:prediction"],
+  ['"quantum dots" synthesis', 'all:"quantum dots" AND all:synthesis'],
+  ["quantum", "all:quantum"],
+])("maps topic %s to a fully scoped arXiv query", async (query, expected) => {
+  const calls: string[] = [];
+  const adapter = new ArxivRestAdapter({
+    transport: {
+      async request(url) {
+        calls.push(url);
+        return "<feed></feed>";
+      },
+    },
+  });
+  await new MetadataService({
+    topic_search_ports: [adapter],
+  }).searchTopicProvider("arxiv", topicSearchQuery(query), 10);
+  expect(new URL(calls[0]!).searchParams.get("search_query")).toBe(expected);
+});

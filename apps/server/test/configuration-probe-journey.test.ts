@@ -1,14 +1,20 @@
 import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
 import {
   createServer,
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { credentialHeader } from "../src/agents/common.js";
+import type {
+  AgentTransport,
+  AgentTransportResponse,
+} from "../src/agents/protocol.js";
 import { runCli } from "../src/cli/main.js";
+import { loadCredentialBundle } from "../src/configuration/credentials.js";
 import {
   ConfigurationProbeSession,
   TypeScriptConfigurationOwner,
@@ -17,15 +23,9 @@ import {
   type ConfigurationProbeResult,
   type ConfigurationProbeSeams,
 } from "../src/configuration/owner.js";
-import { credentialHeader } from "../src/agents/common.js";
-import { loadCredentialBundle } from "../src/configuration/credentials.js";
-import { NetworkBudgetCoordinator } from "../src/network/budget.js";
 import { assembleMetadataRegistry } from "../src/metadata/assembly.js";
-import type { MetadataTransport } from "../src/metadata/providers.js";
-import type {
-  AgentTransport,
-  AgentTransportResponse,
-} from "../src/agents/protocol.js";
+import { NetworkBudgetCoordinator } from "../src/network/budget.js";
+import type { MetadataTransport } from "../src/providers/shared/metadata-transport.js";
 
 const SECRET = "synthetic-probe-secret-never-returned";
 

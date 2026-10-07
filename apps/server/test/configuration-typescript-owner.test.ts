@@ -3,17 +3,17 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadCredentialBundle } from "../src/configuration/credentials.js";
+import { configurationPath } from "../src/configuration/index.js";
 import {
-  ConfigurationProbeSession,
   ConfigurationOwnerError,
+  ConfigurationProbeSession,
   TypeScriptConfigurationOwner,
   fixedConfigurationHome,
 } from "../src/configuration/owner.js";
-import { configurationPath } from "../src/configuration/index.js";
-import { loadCredentialBundle } from "../src/configuration/credentials.js";
-import { NetworkBudgetCoordinator } from "../src/network/budget.js";
 import { assembleMetadataRegistry } from "../src/metadata/assembly.js";
-import type { MetadataTransport } from "../src/metadata/providers.js";
+import { NetworkBudgetCoordinator } from "../src/network/budget.js";
+import type { MetadataTransport } from "../src/providers/shared/metadata-transport.js";
 
 describe("TypeScript configuration owner", () => {
   it("reads, validates, diffs and publishes without a Python process", async () => {

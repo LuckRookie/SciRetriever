@@ -2,11 +2,14 @@
 
 - Status: Accepted
 - Date: 2026-08-15
-- Last amended: 2026-08-26
+- Last amended: 2026-10-07
 - Supersedes: none
 - Amends: [ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)
-- Amended by: [ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0023](0023-generic-browser-agent-executor.md)
+- Amended by: [ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0023](0023-generic-browser-agent-executor.md)、[ADR 0030](0030-browser-transport-and-progress.md)（文章平台资格、后台下载与会话 cap）
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)、[任务与协作控制：数据库补全与阶段协调](../technical/02-task-coordination.md#4-数据库补全与阶段协调)、[Provider Notes](../../notes/providers/README.md)
+
+> 2026-10-04：[ADR 0029](0029-unverified-pdf-acquisition.md) 取消下载阶段的文章身份门；有效 PDF
+> 正常发布并标记文章身份未验证，三级路线和 Network 边界继续保留。
 
 ## 背景
 
@@ -47,7 +50,7 @@ PublisherAccessProfile catalog（模块私有静态定义）
   -> AccessRouteHint（当前操作）
 ```
 
-`PublisherAccessProfile` 是无 secret 的静态访问画像，描述访问方和平台 identity、landing/asset origin、稳定文章 ID、公开路径、官方 API capability、Browser rule、正文/补充材料区分、`browser_rate_limit_group`、`browser_session_key` 和政策证据。它不等于 Metadata Provider 配置，也不要求为纯 Browser 出版社创建 API 凭据 section。
+`PublisherAccessProfile` 是无 secret 的静态访问画像，描述访问方和平台 identity、landing/asset origin、稳定文章 ID、公开路径、官方 API capability、正文/补充材料区分、`browser_rate_limit_group`、`browser_session_key` 和政策证据。它不拥有 Browser 页面规则或下载脚本，也不等于 Metadata Provider 配置，不要求为纯 Browser 出版社创建 API 凭据 section。
 
 Resolution 优先消费已有中性事实，只有强证据不足且本次计划需要时，才在公开层安全解析一次 DOI landing。DOI resolver 只对 `doi.org` 发出不跟随 redirect 的第一跳 `GET`，读取并规范化 `Location` 后即停止；Python HTTP 不解析或请求 Publisher 目标，Publisher landing 只有在对应 Browser risk group 获得 permit 后才由 Chromium 访问。证据强度为：
 
@@ -95,24 +98,40 @@ Quota identity 按真实 key、账户、IP、产品、endpoint family 或共享�
 
 API capability 明确区分 metadata/search、locator/resolution、entitlement、structured full text、direct PDF 和 multi-step PDF object retrieval。只有实际 PDF 字节形成 `TemporaryPdf`；XML/JATS 和 locator 不冒充主 PDF。
 
-### 5. Browser 按访问风险组并行
+### 5. Browser 按实际访问平台并行
 
-Browser 调度键是 `browser_rate_limit_group`，不是展示名称、Metadata Provider、DOI 或单篇任务。共享同一网页政策、访问平台、quota 或风控域的品牌进入同一组；有证据证明独立的风险域才可拆分。
+ADR 0023 撤销 Publisher-specific `browser_rate_limit_group` 字段。通用 Browser 的运行时平台键
+来自已核实的 landing/导航关系、稳定 alias 与可靠可注册域名；未知归属可保守进入 unknown 组。
+展示名称、Metadata Provider、Publisher 自由文本、单独 DOI prefix 和前台标签页不能决定调度键。
+共同 CDN、DOI resolver、SSO 与验证服务不自动成为所有文章的平台。
 
-每个 Browser 风险组固定满足：
+每个文章平台按 ADR 0030 满足：
 
 ```text
-max_concurrency = 1
-provider-declared article interval/window policy
+network_active_articles = 1
+network_completion_cooldown = 30 seconds
+stricter declared interval/window/Retry-After policy
 one next_allowed_at / blocked_until
 one session health / circuit state
 ```
 
-不同风险组可以并行运行各自一个文章流程；同一组内严格限速串行。全局 Browser concurrency 只作为本机 CPU、内存和同时活动 Publisher lane 的资源上限，不能把不同供应商重新设计成一个全局业务锁。
+不同平台可以并行运行；同平台浏览与下载共同限速串行。`browser-generic` 是共享聚合政策，
+空 override 不强制全局单 lane；旧显式 `max_concurrency = 1` 继续在聚合层限制整个文章会话寿命。
 
-普通配置 `browser_max_concurrency` 的默认值为 `5`，必须是严格整数且大于 `1`，不设置上限。当前 production Browser route 数量为 `9`，这只是当前 Provider catalog 的实现事实，不是配置边界；以后 route 增加时无需修改该合同。Publisher lane 按实际 Browser work 延迟进入调度，较大的 cap 不会启动多个 Browser process、创建空闲 context，也不会提高同一组固定为 `1` 的文章并发或放宽该组间隔、window、cooldown 与 circuit。
+当前字段为 `[browser].max_concurrency`，表示保留文章会话 cap，默认 5、允许 1，首版有效
+上限 8。旧较大值仍可读取，实际 cap 为 `min(配置, 8)`，展示限制原因且不改写配置文件。
+worker 数为 `min(2, 有效 cap)` 并服从共享模型预算；每 session 最多一个主下载。会话按
+实际可服务任务延迟创建，不启动多个 process/context，也不放宽平台窗口、冷却或共享模型额度。
 
-Browser 限速单位是一篇文章的受控流程。Permit 从 canonical landing 第一次导航前持有，覆盖授权和页面状态检查、页面动作、popup/viewer、response/download 捕获、临时文件和页面资源完整清理。失败重试也重新排队并服从同一政策；多个标签页、redirect、selector fallback 或换入口不能绕过组内串行和间隔。页面子资源由 host admission 与单次导航、请求、popup、下载超时和字节上限约束，不把每个 CSS/JS 请求误当下一篇文章，也不形成整篇 Browser 作业的总时长预算。
+Browser start 的单位是首次获准的一次文章网络尝试，失败恢复重新取得资格也计 start，普通
+5 秒 step 不重复计。平台资格在文章首次请求前取得，覆盖页面与主下载；网络实际结束且保留
+页不能继续后台访问后释放，并开始 30 秒冷却。本地文件检查、hash、publication 与临时文件
+清理不延长网络资格，session/file owner 继续承担清理责任。多个标签页、redirect、popup、
+viewer 或换入口不能绕过平台串行、窗口、间隔、`blocked_until` 或 circuit；CSS/JS 不是独立
+文章 start。累计活跃预算与独立传输/session 寿命见 ADR 0023/0030。
+
+上述配置与调度修订是目标合同，生产并行、后台下载和实际资源 cap 的验证由实施记录说明，
+不能把配置可读取或逻辑 Promise 并发写成已通过运行验收。
 
 ### 6. Browser 使用一个 operator-managed 持久身份 Profile
 
@@ -121,15 +140,20 @@ Browser 的身份状态边界和调度边界明确分离：
 ```text
 一个用户/机构身份 Profile
   -> 一个 Browser process + 一个 persistent BrowserContext
-     -> 多个 Publisher lane
+     -> 多个独立文章 session
 
 Profile = 身份与认证状态边界
-Publisher/rate-limit group = 调度与风险边界
+article platform = 网络调度与风险边界
 ```
 
 普通配置只保存一个不含敏感信息的 `browser_profile` 身份名，不接受 Profile 路径、Cookie、账号、机构名或认证内容。Configuration 把该身份解析到固定的 owner-only 本地目录，验证目录树的 owner、权限和文件类型，并以跨进程独占 lease 保证同一 Profile 同时只能由一个 Browser process 使用。Profile 可以跨命令保留 Browser 自己管理的 Cookie、Local Storage、IndexedDB、SSO 状态、偏好和历史；SciRetriever 不读取、解释、导入、导出、复制或显示这些内容。删除 Profile 只能由用户在配置中心显式执行，正在使用的 Profile 拒绝删除。固定设备身份、identity manifest 与 Profile 迁移由 ADR 0016 修订本段。
 
-生产对象图按需为选中的 Profile 启动一个有头 Browser process 和一个 persistent BrowserContext，并让所有 Publisher lane 共享它。每篇文章仍拥有隔离的 article token、page、route/event handler、连接绑定、单项字节上限和临时下载目录；同一 Publisher 严格串行，不同 Publisher 在 `browser_max_concurrency` 上限内并行。对象图关闭时必须关闭 process/context、Xvfb、CONNECT proxy 和临时下载工作区，但保留持久 Profile。一个 lane 的 runtime/cleanup failure 可以请求在其它活动 lane 排空后淘汰共享 runtime，不能中断或接管另一个 Publisher 正在处理的文章。唯一 CloakBrowser runtime 由 ADR 0016 修订本段。
+生产对象图按需为选中的 Profile 启动一个有头 Browser process 和一个 persistent BrowserContext，
+所有文章 session 共享它。每篇拥有固定 article/session identity、页面及 opener 归属、route/
+event handler、受控传输与临时文件责任；同平台网络活动串行，不同平台在有效会话 cap 内并行。
+对象图关闭时关闭 process/context、Xvfb、CONNECT proxy 和临时下载工作区，保留持久 Profile。
+单篇 cleanup 或页面故障不能关闭或接管另一篇；共享 context/process 崩溃才形成整体 runtime
+故障。唯一 CloakBrowser runtime 由 ADR 0016 修订，具体局部/整体取消见 ADR 0030。
 
 自动流程首先使用当前机器正常网络出口，因此机构 IP entitlement 仍可直接生效。按 ADR 0016/0017，
 产品不提供用户可见 Browser 登录、机构选择、MFA 或 Cookie 导入导出流程。SciRetriever 不自动
@@ -152,32 +176,52 @@ Publisher/rate-limit group = 调度与风险边界
 
 生产 adapter 固定以 `headless = false` 启动 Browser；无 GUI Linux 由进程内共享的 Xvfb 提供虚拟显示。自动运行时的“有头”只表示使用真实浏览器窗口栈，不表示自动流程会等待用户交互。页面、context、Cookie、download、Profile 路径或 Browser vendor object 不越过 Configuration/Network/Acquisition adapter 边界。ADR 0016/0017 后，固定身份 CloakBrowser runtime 取代 stock launcher，并允许受限 challenge dependency、页面自行清除验证状态，以及所选 Agent controller 的可见页面动作；系统仍不提供自动登录、Cookie 导入导出、机构选择、MFA、代理轮换、外部验证码 solver、验证 token 注入或任意规则脚本。
 
-Publisher 请求由 Browser 原生完成 TLS、HTTP、Cookie、redirect、页面脚本、点击和 native download。Playwright route 对 runtime 暴露的每个请求在实际继续前执行 Provider guard、通用 URL/DNS/地址检查和 host admission；本机 loopback CONNECT proxy 只把已经审核的 hostname/port 绑定到精确、已批准的 IP，并透传加密字节，不终止 TLS、不读取 HTTPS 内容，也不以 Python HTTP 替代浏览器网络栈。Browser native redirect 的后续成员若没有再次暴露 route，只能复用同页仍存活的祖先 request proof，且最终 origin 必须已经过有限 Provider origin 审查、DNS prebind，并在 terminal body 读取前取得对应 host admission；跨 page、祖先已结束、循环/超深链或未预绑定 origin 均 fail closed 且不读取 body。
+Publisher 请求由 Browser 原生完成 TLS、HTTP、Cookie、redirect、页面脚本、点击和 native
+download。Browser/Network adapter 在首次请求和每一 redirect 继续前证明文章 session 归属并
+执行平台资格、通用 URL/DNS/地址及 host 准入；若高层 route 未暴露 redirect 后续，adapter
+必须取得请求继续前的可靠底层证据，不能先访问目标再补许可或仅在读取 terminal body 前检查。
+无法证明归属/准入时 fail closed。本机 loopback CONNECT proxy 将已审核 hostname/port
+绑定到已批准 IP并透传加密字节，不终止 TLS、不读取 HTTPS 内容，也不另发脱离当前浏览器
+访问身份的 HTTP 请求代替原传输。
 
-`PublisherAccessProfile` 必须在每次 navigation、popup、viewer、response 和 download 的可观察边界实施封闭 origin/target guard，并同时通过 Network 的通用 URL、DNS、redirect、credential forwarding、host admission、单次 timeout 和单项字节上限。host admission 的所有权单位是“当前文章访问到的 hostname”：第一次准入时取得实际 permit，同篇文章后续已批准请求复用，直到整篇清理后统一释放；其它 API/Browser 流程仍不能并发抢占该 host。它不能退化成每个 CSS/JS 都在 Playwright 单一事件线程中重新等待 permit，否则第二个 route callback 会阻止第一个 response event 派发而使页面自锁。规则明确允许的同源或批准 origin 页面子资源可以执行；未批准的第三方非关键子资源在 DNS 前丢弃而不拖垮正文流程，顶层 navigation、popup 和 PDF capture 仍 fail closed。页面脚本触发的显式 request 重新进入 route 审查，未暴露 route 的 native redirect 只能使用上一段规定的封闭关联。未知站点没有 generic arbitrary-site Browser fallback。
+ADR 0023 撤销 Publisher-specific 页面 guard/profile。通用 Browser 按当前文章的已准入页面/
+opener 关系约束 navigation、popup、viewer、response 与 download，并经过 Network 的
+URL、DNS、redirect、凭据转移、host 与实际资源准入。文章平台资格在网络活动期间持有，
+session/file责任独立保留到发布/收尾，不能让每个 CSS/JS 各自等待一次文章许可形成自锁。
+未准入资源在实际请求前拒绝；顶层与 PDF capture 必须有归属证据。未知站点具有元数据驱动、
+经 Network 准入的起点时可以进入 generic Browser；Agent 仍不能构造任意 URL，起点仅来自
+AssetHint 或受控 DOI landing 入口。
 
 ADR 0023 修订后，Controlled Browser 作业只冻结一个 `AgentBrowserController`。它从第一次统一
 `BrowserObservation` 起选择封闭动作；不存在确定性规则 controller、Publisher selector/locator 程序
 或失败 fallback。controller 与 CloakBrowser/Profile、Network guard、页面 capture 和 PDF 验收协作。
-每个单次点击、navigation、capture settle 或 wait 都有客观 action timeout，并另设不可由普通用户配置的
-32 次模型 decision safety fuse；不存在累计 token/image 业务预算。当前通用 TypeScript flow 的
-离线执行上限是 24 次 action、12 次 model call，并额外受 operation deadline/candidate wait 限制；
-完整生产 controller 的 32 次目标 fuse 仍需独立现场证据。补充材料、appendix、supporting
-information 和错文由 Acquisition 的统一 PDF 归属验收排除。短期签名 query 只保留在当前 Browser
+每个单次点击、navigation、capture settle 或 wait 保留有界保护；本次目标统一为 ADR 0023 的
+300 秒累计活跃时间、50 次真实模型派发、100 次 Agent 动作和至少 5 秒下一轮决策间隔。
+operation 与 transfer/session 总寿命独立计量，不增加累计 token/image 业务预算。此前离线
+flow 的 24/12 上限只是被本次目标替代的旧执行基线，不再保留第二套 32 次目标 fuse。
+Acquisition 只执行 PDF 文件合法性与当前任务关联检查，下载阶段不以 DOI、标题、版本或
+正文/补充材料内容身份匹配阻断接纳（ADR 0029）。短期签名 query 只保留在当前 Browser
 operation 内并交给 Browser 实际访问；guard、DNS key、日志、结果、provenance 和持久事实只接收去除
 query 的 locator。
 
-Browser 可以从受控 download event、PDF response、允许的 popup/viewer 或已核实官方 locator 交付 `TemporaryPdf`。顶层 PDF 由 Chrome 的 PDF 下载偏好和 native download manager 处理；Network 仍以对应已审核 request lease 关联下载并执行单项字节上限。正文与 supplementary material 必须按稳定文章 ID、origin 和 Profile 规则区分；下载事件、扩展名或媒体类型仍不能替代统一 PDF reader/页面树检查。
+Browser 可以从受控 download event、PDF response、允许的 popup/viewer 或已准入 locator
+交付文件候选。顶层 PDF 使用原生 download manager；Browser 保留对应已审核 request/session
+关联并执行实际资源保护。Agent 使用目标元数据选择主 PDF，Acquisition 保留 provenance 与
+任务关联；下载事件、扩展名或媒体类型不能替代统一 PDF reader/页面树检查。
 
 ### 7. 升级、暂停与熔断语义
 
 以下低风险终态可以进入 Browser admission：route 明确声明不适用、route 明确声明没有 PDF capability，或正常 locator miss/耗尽且 Browser 独立已获准。API 对具体目标的 `no-entitlement` 当前不在自动 Browser rescue 范围内，保持 action-required/fail-closed，等待用户或外部授权。
 
+2026-10-07 根据化学合成全链路实测与用户要求修订公共 HTTP 的能力判断：不带限流反馈的公共 HTTP `403`、实际返回 HTML 且静态链接不能交付 PDF、以及明确达到有界重定向上限，都只证明该无会话 HTTP 路线不能完成当前获取，允许声明 `http-route-unavailable`，在已配置的后续 API 和独立获准 Browser 中继续。该声明不证明机构无订阅权限，也不代表 Browser 已通过访问校验；Browser 自己观察到的明确拒绝仍按下文停止。来源所谓“PDF 直链”和 `Content-Type` 不能覆盖实际字节，返回 HTML 时仍可按通用静态链接规则处理。此修订不增加任何出版社专用规则，不因 API key 存在而改变已配置来源集合。
+
+上述声明不能覆盖更早的未解决失败：同一层先发生网络故障，后遇到不适用路线，仍保留原失败。`429` 或携带 `Retry-After` 的响应/异常立即停止该目标的备用候选及后续层级；`401`、临时服务错误、超时、未分类网络错误和系统/存储错误不属于公共 HTTP 能力声明。重定向上限只有在 Network 提供精确原因且该链没有限流反馈时才可声明，不能把任意 `network-http` 当作需要 Browser。
+
 以下状态不得通过自动切换 Browser 制造替代流量：timeout、临时传输或服务失败、`429`、有效 `Retry-After`、quota exhausted、未到 reset boundary。它们形成延期或稳定失败，并更新共享 scope。支持的 API 未配置时必须明确报告；只有 Browser 已由用户显式启用且 admission policy 允许时才可继续，不能静默跳过。
 
 Browser 的 `LOGIN_REQUIRED`、`MFA_REQUIRED`、`RATE_LIMITED`、`IP_BLOCKED` 或账号警告暂停或熔断对应风险组；其它独立 Provider 继续。Challenge 只是统一 Observation 的 `page_state=CHALLENGE`，不是文章默认终态，也不拥有 interaction-required/active/exhausted 生命周期、专属 target、controller 或预算。通用 Agent controller 使用与普通页面相同的六种封闭动作。页面自动或经动作清除 Challenge 后继续 capture、entitlement 与 PDF 检查；controller 停止且页面仍为 Challenge 时，Acquisition 可以形成稳定 `challenge-unresolved` 结果。本地资源策略缺口必须报告为 Network 资源阻断，不能冒充用户无权限或 Agent 失败。
 
-裸 HTTP `403` 在没有更具体页面证据时稳定分类为文章级 `ACCESS_DENIED`，停止当前尝试但不据此推断“无订阅权限”、Challenge 或打开整个 Publisher circuit。只有明确 paywall/购买访问页面才分类为 `NOT_ENTITLED`；只有 Publisher profile 通过经审查 marker/resource/frame 事实识别出 Challenge 或 IP block 时才进入对应页面状态。登录、机构选择和 MFA 是自动流程识别后停止的页面状态。自动策略只能保持或降低速率，不能因连续成功自动提速，也不能通过新 Literature、重试或备用入口绕过 circuit。
+Browser 当前尝试中的裸 HTTP `403` 在没有更具体页面证据时稳定分类为文章级 `ACCESS_DENIED`，停止当前尝试但不据此推断“无订阅权限”、Challenge 或打开整个 Publisher circuit。只有明确 paywall/购买访问页面才分类为 `NOT_ENTITLED`；只有 Publisher profile 通过经审查 marker/resource/frame 事实识别出 Challenge 或 IP block 时才进入对应页面状态。登录、机构选择和 MFA 是自动流程识别后停止的页面状态。自动策略只能保持或降低速率，不能因连续成功自动提速，也不能通过新 Literature、重试或备用入口绕过 circuit。
 
 只有所有适用 routes 正常结束且不存在 deferred、action-required、未解决 route failure、配置/Port/清理/发布/stale 错误时，Acquisition 才能提交 `AutomaticPdfAcquisitionExhaustion` 并返回 `NoPrimaryPdf`。
 
@@ -216,7 +260,7 @@ Resolution、Plan、route hints、tried keys、Browser queue、runtime health、
 - API rate-limit 后立即切 Browser；
 - Rules miss 后自动切到 Agent，或 Agent 失败后回到 Rules；
 - 为 Challenge 建立专属 Observation、target、动作、状态机或重试/turn budget；
-- 任意未知站点 Browser fallback、任意 JavaScript、MFA 绕过、代理或指纹规避；
+- 任意 URL/任意站点的 Browser fallback、任意 JavaScript、MFA 绕过、代理或指纹规避；
 - 自动填写登录凭据、自动选择机构、处理 MFA，或把 challenge 外包给第三方 solver、注入验证 token、切换 IP/Profile；
 - 导入、导出、复制或由 SciRetriever 解释 Cookie/浏览器认证内容；
 - 把 Cookie、页面、候选失败、队列或限速状态写入文献数据库。

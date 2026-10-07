@@ -146,10 +146,10 @@ Auto 禁止同时保存非空 `providers`，有效集合由当前版本在本地
 
 ```text
 crossref, semantic-scholar, arxiv, openalex,
-europe-pmc, datacite, core, opencitations
+europe-pmc, datacite, core
 ```
 
-OpenCitations 不参加主题搜索，因此默认 `limit = 500` 时主题搜索的理论 raw-item ceiling 是
+OpenCitations 当前不在 Auto 集合，也不参加主题搜索。默认 `limit = 500` 时主题搜索的理论 raw-item ceiling 是
 `7 × 500 = 3500`。`limit` 独立给每个参与 Source，不是共享总量、最终接纳数量或 HTTP 请求数。
 `discover topic` 与 `discover citations` 未显式提供 `--scan-limit` 时使用已保存的 `limit`；显式
 `--scan-limit` 只覆盖当前命令，不改写配置。

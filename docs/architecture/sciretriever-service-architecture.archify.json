@@ -206,7 +206,7 @@
       "size": [220, 78],
       "sources": [
         {
-          "path": "apps/server/src/metadata/providers.ts",
+          "path": "apps/server/src/providers/shared/metadata-transport.ts",
           "label": "Provider adapters"
         },
         {

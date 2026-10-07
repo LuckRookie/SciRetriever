@@ -88,3 +88,66 @@ it("maps DataCite JSON:API pages and DOI lookup", async () => {
   });
   expect(lookup.observations[0]?.metadata.title).toBe("Lookup");
 });
+
+it("uses bounded default pages and stops at the raw scan limit across pages", async () => {
+  const calls: string[] = [];
+  const adapter = new DataCiteRestAdapter({
+    transport: {
+      async request(url) {
+        calls.push(url);
+        const start = calls.length === 1 ? 0 : 25;
+        return {
+          data: Array.from({ length: 25 }, (_, index) =>
+            data(`10.5555/page-${start + index}`, `Paper ${start + index}`),
+          ),
+          links: {
+            next: `https://api.datacite.org/dois?page%5Bnumber%5D=${calls.length + 1}`,
+          },
+        };
+      },
+    },
+  });
+  const result = await new MetadataService({
+    topic_search_ports: [adapter],
+  }).searchTopicProvider("datacite", topicSearchQuery("fixture"), 26);
+  expect(result).toMatchObject({
+    outcome: "SCAN_LIMIT_REACHED",
+    raw_item_count: 26,
+    failure: null,
+  });
+  expect(result.observations).toHaveLength(26);
+  expect(calls).toHaveLength(2);
+  expect(
+    calls.map((url) => new URL(url).searchParams.get("page[size]")),
+  ).toEqual(["25", "25"]);
+  expect(new URL(calls[1]!).searchParams.get("page[number]")).toBe("2");
+});
+
+it("normalizes DataCite abstract paragraph whitespace without weakening control validation", async () => {
+  const good = data("10.5555/paragraph", "Paragraph abstract");
+  good.attributes.descriptions = [
+    {
+      description: "First paragraph.\n\nSecond\tparagraph.\r\nEnd.",
+      descriptionType: "Abstract",
+    },
+  ];
+  const bad = data("10.5555/control", "Invalid control");
+  bad.attributes.descriptions = [
+    { description: "Invalid\u0000text", descriptionType: "Abstract" },
+  ];
+  const adapter = new DataCiteRestAdapter({
+    transport: { request: async () => ({ data: [good, bad], links: {} }) },
+  });
+  const result = await new MetadataService({
+    topic_search_ports: [adapter],
+  }).searchTopicProvider("datacite", topicSearchQuery("fixture"), 10);
+  expect(result).toMatchObject({
+    outcome: "FAILED",
+    raw_item_count: 2,
+    failure: { code: "metadata-record-invalid" },
+  });
+  expect(result.observations).toHaveLength(1);
+  expect(result.observations[0]?.metadata.abstract).toBe(
+    "First paragraph. Second paragraph. End.",
+  );
+});

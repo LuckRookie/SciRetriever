@@ -2,6 +2,8 @@
 
 本目录记录 SciRetriever 适配外部文献服务时需要长期维护的易变事实：官方入口、认证和限流、endpoint/分页/响应层级、metadata/citation/asset 候选映射、现场验证结果、已知缺口与当前实现边界。
 
+2026-10-07 治理说明：本目录包含历史 Python 实现和旧 Browser 调度记录，不以旧文中的“当前”证明 TypeScript 已实现。活动静态定义在 `apps/server/src/providers/registry.ts`；Metadata/Acquisition 的间隔与窗口已接到共享 Network，当前政策依据和未覆盖项统一见[供应商治理](../../development/provider-governance.md)。本文后续旧 Browser 九条 route、旧并发阈值、挑战页处理描述仅保留历史语境，当前行为以 [PDF 获取指南](../../guides/pdf-acquisition.md) 为准。
+
 这里是 Notes，不是产品需求或公开能力清单。产品边界以[需求](../../architecture/requirements.md)和 Accepted ADR 为准；Provider 两类能力、目标矩阵、证据路由与本地凭据由 [ADR 0014](../../architecture/decisions/0014-capability-scoped-providers-and-local-credentials.md)决定，进程内供应商访问约束见 [ADR 0012](../../architecture/decisions/0012-process-local-provider-access-scheduling.md)，精确凭据合同见 [统一产品接口：共享支撑：配置与凭据](../../architecture/technical/01-product-interface.md#5-共享支撑配置与凭据)。模块责任与目标合同以 design/technical 为准；当前可运行行为以源码、测试、README 和用户指南为准。新增或实质修改 provider client 时另按[Provider 接入开发手册](../../development/provider-integration.md)完成预算、安全、脱敏、测试和退役设计。
 
 ## 1. 证据等级
