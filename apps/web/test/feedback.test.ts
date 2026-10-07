@@ -83,9 +83,9 @@ describe("candidate feedback shown by the live workbench", () => {
         },
         candidate,
       ),
-    ).toBe("已接纳并提交为当前主 PDF");
+    ).toBe("已接纳并提交为当前主 PDF；文章身份未验证");
     expect(candidateStatus({ ...running, mode: "synthetic" }, candidate)).toBe(
-      "身份与版本已核验",
+      "文件检查已通过，文章身份未验证",
     );
   });
 });

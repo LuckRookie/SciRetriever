@@ -141,7 +141,7 @@ describe("live workbench on the installed Cloak runtime", () => {
           })
           .toBe("1");
         expect(await desktop.locator("#candidates").innerText()).toContain(
-          "身份与版本已核验",
+          "文件检查已通过，文章身份未验证",
         );
         const candidate = workbench.session.view().candidates[0]!;
         expect(
@@ -207,16 +207,14 @@ describe("live workbench on the installed Cloak runtime", () => {
         await mobile
           .getByRole("button", { name: "会话详情", exact: false })
           .click();
-        await clickAcceptedAction(mobile, "Uncertain PDF");
+        await clickAcceptedAction(mobile, "Unverified PDF");
         await expect
           .poll(() => mobile.locator("#candidate-count").innerText(), {
             timeout: 15000,
           })
           .toBe("3");
-        const uncertain = workbench.session
-          .view()
-          .candidates.find((item) => item.disposition === "uncertain")!;
-        expect(uncertain).toBeDefined();
+        const unverified = workbench.session.view().candidates.at(-1)!;
+        expect(unverified.disposition).toBe("accepted");
         await mobile
           .getByRole("button", { name: "放弃候选", exact: true })
           .last()
@@ -226,7 +224,7 @@ describe("live workbench on the installed Cloak runtime", () => {
           .toBe("2");
         expect(
           await workbench.application.execution!.transfers.recover(
-            uncertain.transfer_id,
+            unverified.transfer_id,
           ),
         ).toBeNull();
         expect(await mobile.getByRole("dialog").isVisible()).toBe(true);

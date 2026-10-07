@@ -171,7 +171,11 @@ export function mountLibrary(options: {
       });
       actions.append(button);
     };
-    if (d.primary_pdf) download("下载 PDF", "primary-pdf");
+    if (d.primary_pdf) {
+      download("下载 PDF", "primary-pdf");
+      if (d.primary_pdf.article_identity_status === "unverified")
+        actions.append(element("span", "文章身份未验证", "library-tag"));
+    }
     if (d.content) download("下载 Markdown", "content-markdown");
     if (queryOnly) {
       const reader = mountDocumentReading(root, d, options.request, message);

@@ -281,12 +281,12 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
     await page.locator("#manual-pdf-file").setInputFiles({
       name: "wrong.pdf",
       mimeType: "application/pdf",
-      buffer: Buffer.from(workbenchPdf("10.5555/another.paper")),
+      buffer: Buffer.from("<html>Not a PDF</html>"),
     });
     await page.locator("#manual-pdf-submit").click();
     await expect
       .poll(() => page.locator("#manual-pdf-status").textContent())
-      .toContain("candidate-uncertain");
+      .toContain("manual-pdf-invalid");
     expect(
       (
         await workbench.application.library.detail(
@@ -298,7 +298,7 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
     await page.locator("#manual-pdf-file").setInputFiles({
       name: "paper.pdf",
       mimeType: "application/pdf",
-      buffer: Buffer.from(workbenchPdf()),
+      buffer: Buffer.from(workbenchPdf("", "", false)),
     });
     await page.locator("#manual-pdf-submit").click();
     await expect
@@ -315,6 +315,9 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
     await expect
       .poll(() => page.locator("#library-detail").textContent())
       .toContain("下载 PDF");
+    await expect
+      .poll(() => page.locator("#library-detail").textContent())
+      .toContain("文章身份未验证");
     const read = await page.evaluate(async (literatureId) => {
       const response = await fetch("/api/v1/query/read", {
         method: "POST",
@@ -329,7 +332,7 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
       }>;
     }, FIXTURE_LITERATURE.literature_id);
     expect(read.detail.primary_pdf.asset.sha256).toBe(
-      await sha256(workbenchPdf()),
+      await sha256(workbenchPdf("", "", false)),
     );
 
     await page.goto(workbench.origin);
@@ -339,7 +342,7 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
     await page.locator("#manual-pdf-file").setInputFiles({
       name: "paper.pdf",
       mimeType: "application/pdf",
-      buffer: Buffer.from(workbenchPdf()),
+      buffer: Buffer.from(workbenchPdf("", "", false)),
     });
     await page.locator("#manual-pdf-submit").click();
     await expect

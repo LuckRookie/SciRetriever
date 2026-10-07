@@ -293,12 +293,14 @@ describe("application composition", () => {
     ]);
     const certificate = await readFile(certificatePath);
     let authorization: string | undefined;
+    let method: string | undefined;
     let requests = 0;
     const server = createHttpsServer(
       { key: await readFile(keyPath), cert: certificate },
       async (request, response) => {
         requests += 1;
         authorization = request.headers.authorization;
+        method = request.method;
         for await (const _chunk of request) void _chunk;
         response.writeHead(302, {
           location: "https://redirect.example.test/parse",
@@ -377,6 +379,7 @@ describe("application composition", () => {
         ),
       ).rejects.toMatchObject({ code: "parser-unavailable" });
       expect(authorization).toBe("Bearer synthetic-parser-token");
+      expect(method).toBe("POST");
       expect(requests).toBe(1);
       expect(
         (await application.library.detail(FIXTURE_LITERATURE.literature_id))
@@ -399,8 +402,26 @@ describe("assembly of the unified completion entry", () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-assembly-completion-"),
     );
+    const resolver = vi.fn(() => {
+      throw new Error("Fixture must remain offline");
+    });
+    const discover = vi.fn(async () => {
+      throw new AcquisitionRouteError(
+        "source-discovery-failed",
+        "Synthetic offline route failure.",
+      );
+    });
     const application = await createApplication(home, {
       executionSchema: "upgrade-synthetic",
+      metadataAssembly: { resolver },
+      acquisitionAssembly: {
+        resolver,
+        doiLandingSource: {
+          source_name: "doi-landing",
+          ready: true,
+          discover,
+        },
+      },
     });
     try {
       // Bootstrap owns the only construction of the shared acquisition port and
@@ -467,6 +488,8 @@ describe("assembly of the unified completion entry", () => {
       expect(jobOutcome.failure?.code).toMatch(/^pdf-/u);
       expect(jobOutcome.failure?.code).not.toBe("pdf-acquisition-required");
       expect(jobOutcome.operation_failure).toBe(false);
+      expect(discover).toHaveBeenCalledTimes(1);
+      expect(resolver).not.toHaveBeenCalled();
     } finally {
       await application.close();
       await rm(home, { recursive: true, force: true });
@@ -785,13 +808,13 @@ describe("assembly of the unified completion entry", () => {
       );
       expect(deliveries).toEqual([id]);
 
-      // A delivery whose identity assessment rejected the bytes is also an unresolved
+      // A delivery whose file admission rejected the bytes is also an unresolved
       // failure, never an accepted acquisition.
       mode = "mismatch";
       const mismatched = await runner.runTarget(id, { goal: "ASSET_READY" });
       expect(mismatched).toMatchObject({
         partition: "failed",
-        failure: { code: "pdf-browser-identity-mismatch" },
+        failure: { code: "pdf-browser-candidate-rejected" },
       });
       expect(await application.database.hasAutomaticPdfExhaustion(id)).toBe(
         false,
@@ -799,7 +822,7 @@ describe("assembly of the unified completion entry", () => {
       expect(deliveries).toEqual([id, id]);
 
       // An accepted Browser delivery really reaches the ordinary receipt path and
-      // commits a primary PDF. The identity evidence needs the fixture DOI, so this
+      // commits a primary PDF. File admission uses the readable fixture bytes, so this
       // step drives the Entry port over a hand-built registry whose locator view is
       // empty: no route may fetch the DOI landing page, and the run stays offline.
       mode = "delivered";
@@ -1022,7 +1045,7 @@ describe("assembly of the unified completion entry", () => {
       },
     });
     for (const start_url of [
-      "http://fixture.invalid/article",
+      "file:///fixture/article",
       "https://user:secret@fixture.invalid/article",
       "https://fixture.invalid/article#fragment",
       "not a url",
@@ -1035,6 +1058,12 @@ describe("assembly of the unified completion entry", () => {
           retryable: false,
         });
     }
+    expect(
+      admitBrowserArticleRequest({
+        ...base,
+        start_url: "http://fixture.invalid/article",
+      }).ok,
+    ).toBe(true);
     const admitted = admitBrowserArticleRequest({
       ...base,
       start_url: "https://fixture.invalid/article?q=1",
@@ -1060,14 +1089,14 @@ describe("assembly of the unified completion entry", () => {
     });
     const observation = (asset_hints: readonly unknown[]) =>
       ({ asset_hints }) as never;
-    // Only a plain HTTPS landing page qualifies: a direct-file PDF, a non-HTTPS URL,
-    // an embedded credential and a fragment are all rejected rather than guessed.
+    // HTTP(S) landing hints still pass through Network DNS/socket admission.
+    // Direct files, other schemes, embedded credentials and fragments are not starts.
     expect(
       browserStartUrl(
         [
           observation([
             hint({ kind: "direct-file" }),
-            hint({ url: "http://fixture.invalid/article" }),
+            hint({ url: "file:///fixture/article" }),
             hint({ url: "https://user:secret@fixture.invalid/article" }),
             hint({ url: "https://fixture.invalid/article#x" }),
             hint({ version_role: "preprint" }),
@@ -1076,6 +1105,12 @@ describe("assembly of the unified completion entry", () => {
         "published",
       ),
     ).toBeNull();
+    expect(
+      browserStartUrl(
+        [observation([hint({ url: "http://fixture.invalid/article" })])],
+        "published",
+      ),
+    ).toBe("http://fixture.invalid/article");
     // Version policy: a published target never navigates to a preprint landing page;
     // it uses the unversioned hint when no exact match exists.
     expect(
@@ -1146,6 +1181,13 @@ describe("assembly of the unified completion entry", () => {
       ).toBe(`https://fixture.invalid/unversioned-${role}`);
       expect(browserStartUrl([observation([otherHint])], role)).toBeNull();
     }
+    // A DOI-only metadata target still has a generic, policy-controlled Browser start
+    // point. It is the resolver entry, never a Publisher-specific guessed URL.
+    expect(
+      browserStartUrl([observation([])], "published", [
+        { namespace: "doi", value: "10.1000/example/article" },
+      ]),
+    ).toBe("https://doi.org/10.1000/example/article");
   });
 
   it("hands the target's own concrete version role and landing page to the Browser delivery", async () => {
@@ -1159,13 +1201,29 @@ describe("assembly of the unified completion entry", () => {
       ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
       { mode: 0o600 },
     );
-    const seen: Array<{ version: string; start_url: string | null }> = [];
+    const seen: Array<{
+      version: string;
+      start_url: string | null;
+      article_goal: {
+        title: string | null;
+        publication_year: number | null;
+        authors: readonly string[];
+      };
+    }> = [];
     const application = await createApplication(home, {
       executionSchema: "upgrade-synthetic",
       browserAdmitNavigation: async (url: string) => url,
       browserHost: () => ({
         deliverCandidate: async (request) => {
-          seen.push({ version: request.version, start_url: request.start_url });
+          seen.push({
+            version: request.version,
+            start_url: request.start_url,
+            article_goal: {
+              title: request.article_goal!.title,
+              publication_year: request.article_goal!.publication_year,
+              authors: request.article_goal!.authors,
+            },
+          });
           return {
             kind: "refused" as const,
             code: "browser-flow-unavailable",
@@ -1276,6 +1334,11 @@ describe("assembly of the unified completion entry", () => {
         expect(seen.at(-1)).toEqual({
           version: role,
           start_url: `https://fixture.invalid/exact-${role}`,
+          article_goal: {
+            title: metadata.title,
+            publication_year: metadata.publication_year,
+            authors: [],
+          },
         });
       }
     } finally {
@@ -1399,9 +1462,7 @@ describe("browser intake end-to-end (offline)", () => {
       // Re-assessment reads the published bytes back through the same boundary.
       const assessed = await intake.assess(received.candidate);
       expect(assessed.candidate.sha256).toBe(received.candidate.sha256);
-      expect(["accepted", "uncertain", "rejected"]).toContain(
-        assessed.assessment.verdict.disposition,
-      );
+      expect(assessed.assessment.accepted).toBe(true);
     } finally {
       await application.close();
       await rm(home, { recursive: true, force: true });
@@ -1605,7 +1666,9 @@ describe("browser intake end-to-end (offline)", () => {
       await application.database.putLiterature(FIXTURE_LITERATURE);
       const transfers = application.execution!.transfers;
       const calls: string[] = [];
-      let seenAdmission: unknown = null;
+      let seenAdmission:
+        | ((url: string) => string | Promise<string>)
+        | undefined;
       const factory = createProductionBrowserHostFactory({
         runtime: undefined,
         article_flow_factory: (pages) => ({
@@ -1639,7 +1702,7 @@ describe("browser intake end-to-end (offline)", () => {
             return {
               kind: "delivered" as const,
               candidate: received.candidate,
-              accepted: received.assessment.verdict.disposition === "accepted",
+              accepted: received.assessment.accepted,
             };
           },
         }),
@@ -1650,9 +1713,14 @@ describe("browser intake end-to-end (offline)", () => {
               calls.push("start");
             },
             openPage: async (url?: string) => {
+              expect(
+                await options.admitNavigation?.(
+                  "https://cdn.fixture.invalid/article.pdf",
+                ),
+              ).toBe("https://cdn.fixture.invalid/article.pdf");
               await expect(
-                options.admitNavigation?.("https://other.fixture.invalid/"),
-              ).rejects.toThrow();
+                options.admitNavigation?.("https://127.0.0.1/private"),
+              ).rejects.toThrow("Network destination denied");
               expect(await options.admitNavigation?.(url!)).toBe(url);
               calls.push(`openPage:${url ?? "-"}`);
               return {
@@ -1669,9 +1737,21 @@ describe("browser intake end-to-end (offline)", () => {
       });
       const host = factory({
         profile: join(tmpdir(), "sciretriever-browser-seam"),
-        admitNavigation: async (url: string) => url,
+        admitNavigation: async (url: string) => {
+          if (new URL(url).hostname === "127.0.0.1")
+            throw new Error("Network destination denied");
+          return url;
+        },
       });
       expect(host).not.toBeNull();
+      // Network admission is independent of foreground state. CDP session/document
+      // ownership rejects inactive pages before invoking this destination boundary.
+      await expect(
+        seenAdmission!("https://cdn.fixture.invalid/article.pdf"),
+      ).resolves.toBe("https://cdn.fixture.invalid/article.pdf");
+      await expect(seenAdmission!("https://127.0.0.1/private")).rejects.toThrow(
+        "Network destination denied",
+      );
       const facts = await application.database.currentFacts(
         FIXTURE_LITERATURE.literature_id,
       );
@@ -1685,6 +1765,14 @@ describe("browser intake end-to-end (offline)", () => {
       };
       const delivery = await host!.deliverCandidate(request);
       expect(delivery).toMatchObject({ kind: "delivered", accepted: true });
+      // Network admission is independent of foreground state. CDP session/document
+      // ownership rejects inactive pages before invoking this destination boundary.
+      await expect(
+        seenAdmission!("https://cdn.fixture.invalid/article.pdf"),
+      ).resolves.toBe("https://cdn.fixture.invalid/article.pdf");
+      await expect(seenAdmission!("https://127.0.0.1/private")).rejects.toThrow(
+        "Network destination denied",
+      );
       // The host factory owns the page source: start/openPage run on the raw host, the
       // driver receives the already-admitted URL and the concrete target version, and
       // the page is always released.
@@ -1718,7 +1806,7 @@ describe("browser intake end-to-end (offline)", () => {
       await expect(
         host!.deliverCandidate({
           ...request,
-          start_url: "http://fixture.invalid/x",
+          start_url: "file:///fixture/article",
         }),
       ).resolves.toMatchObject({
         kind: "refused",

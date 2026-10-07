@@ -1,5 +1,5 @@
 import {
-  resolveDestination,
+  resolveBrowserDestination,
   type DestinationPolicy,
   type Resolver,
 } from "./policy.js";
@@ -15,7 +15,7 @@ export function createBrowserNetworkAdmission(options: {
 }) {
   const resolver = options.resolver ?? systemResolver();
   const policy: DestinationPolicy = options.policy ?? {
-    allowed_schemes: ["https"],
+    allowed_schemes: ["http", "https"],
     allowed_classes: ["public"],
   };
   const proxy = new BrowserNetworkProxy({
@@ -25,7 +25,7 @@ export function createBrowserNetworkAdmission(options: {
     limits: {
       maxConcurrency: 4,
       maxHostConcurrency: 4,
-      maxResponseBytes: 16 * 1024 * 1024,
+      maxResponseBytes: Number.MAX_SAFE_INTEGER,
       maxRedirects: 0,
       maxRetries: 0,
     },
@@ -33,6 +33,6 @@ export function createBrowserNetworkAdmission(options: {
   return {
     proxy,
     admitNavigation: async (url: string): Promise<string> =>
-      (await resolveDestination(url, resolver, policy)).url.url,
+      (await resolveBrowserDestination(url, resolver, policy)).url.url,
   };
 }

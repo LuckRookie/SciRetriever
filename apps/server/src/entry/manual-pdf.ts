@@ -6,7 +6,7 @@ import {
 import type { CandidateAcceptanceService } from "../acquisition/candidate-acceptance.js";
 import type { CandidateAbandonmentService } from "../acquisition/candidate-abandonment.js";
 import { CandidatePublicationError } from "../acquisition/candidate-publication.js";
-import { assessPdfIdentity } from "../acquisition/pdf-evidence.js";
+import { acceptPdf } from "../acquisition/pdf-acceptance.js";
 import type { BrowserTransferCollector } from "../browser/transfer.js";
 import type { LiteratureQueryService } from "../literature/query.js";
 import { LiteraturePublicationError } from "../literature/primary-pdf.js";
@@ -80,24 +80,10 @@ export class ManualPdfIngestionService {
     check();
     if (detail.primary_pdf)
       throw new LiteraturePublicationError("primary-asset-conflict");
-    const doi = detail.literature.metadata.identifiers.find(
-      (identifier) => identifier.namespace === "doi",
-    );
-    if (!doi) throw new LiteraturePublicationError("candidate-uncertain");
-    // Reject bad or wrong-article bytes before a durable transfer is created.
-    const assessment = await assessPdfIdentity(
-      input.bytes,
-      `doi:${doi.value}`,
-      detail.literature.version_role,
-      signal,
-    );
+    // Reject invalid files before creating a durable transfer. Article identity
+    // remains unverified, just as for automatic downloads.
+    await acceptPdf(input.bytes, 10000, signal);
     check();
-    if (assessment.verdict.disposition !== "accepted")
-      throw new LiteraturePublicationError(
-        assessment.verdict.disposition === "rejected"
-          ? "candidate-rejected"
-          : "candidate-uncertain",
-      );
     const transferId = `manual-${randomUUID()}`;
     await this.transfers.begin(
       transferId,

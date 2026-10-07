@@ -16,6 +16,7 @@ import {
   loadConfiguration,
   parseToml,
   parseConfiguration,
+  effectiveBrowserConcurrency,
 } from "../src/configuration/index.js";
 import { NetworkBudgetCoordinator } from "../src/network/budget.js";
 import {
@@ -196,7 +197,36 @@ model = "openai/text-model"
     );
     rejects(`[analyze]\nmax_input_bytes = 10\nmax_chunk_bytes = 11`);
     rejects(`[analyze]\nmax_total_llm_requests = 1`);
-    rejects(`[browser]\nmax_concurrency = 1`);
+    rejects(`[browser]\nmax_concurrency = 0`);
+  });
+
+  it("preserves configured Browser capacity while exposing its effective session and worker bounds", () => {
+    for (const [configured, effective] of [
+      [1, 1],
+      [5, 5],
+      [8, 8],
+      [100, 8],
+    ] as const) {
+      const browser = parseConfiguration(
+        `[browser]\nmax_concurrency = ${configured}`,
+      ).browser;
+      expect(browser.max_concurrency).toBe(configured);
+      expect(effectiveBrowserConcurrency(browser)).toEqual({
+        configured_sessions: configured,
+        effective_sessions: effective,
+        decision_workers: Math.min(2, effective),
+        limiting_reason: configured > 8 ? "runtime-session-cap" : null,
+      });
+    }
+    const serial = parseConfiguration(
+      '[browser]\npolicy_overrides = [{ rate_limit_group = "browser-generic", max_concurrency = 1 }]',
+    ).browser;
+    expect(effectiveBrowserConcurrency(serial)).toMatchObject({
+      configured_sessions: 5,
+      effective_sessions: 1,
+      decision_workers: 1,
+      limiting_reason: "explicit-serial-policy",
+    });
   });
 
   it("uses only the injected fixed home and treats a missing file as empty configuration", async () => {

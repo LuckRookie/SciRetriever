@@ -44,7 +44,9 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       const profile = await mkdtemp(
         join(tmpdir(), "sciretriever-cloak-journey-"),
       );
-      const server = createServer((_request, response) => {
+      const requests: string[] = [];
+      const server = createServer((request, response) => {
+        requests.push(request.url ?? "");
         response.writeHead(200, { "content-type": "text/html" });
         response.end(
           '<title>Cloak fixture</title><button>Verify</button><output>pending</output><script>document.querySelector("button").onclick=()=>{const count=Number(localStorage.count||0)+1;localStorage.count=String(count);document.querySelector("output").textContent=[navigator.platform,navigator.webdriver,screen.width,screen.height,count].join("|")}</script>',
@@ -86,9 +88,15 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
           });
           try {
             await host.start();
-            const page = await host.openPage(
-              `http://127.0.0.1:${address.port}/`,
-            );
+            const origin = `http://127.0.0.1:${address.port}`;
+            const page = await host.openPage(`${origin}/?id=article-${count}`);
+            expect(requests).toContain(`/?id=article-${count}`);
+            expect(page.url()).toBe(`${origin}/`);
+            await page.navigate!(`${origin}/?id=next-${count}`);
+            expect(requests).toContain(`/?id=next-${count}`);
+            expect(
+              (await host.listPages()).find((item) => item.id === page.id)?.url,
+            ).toBe(`${origin}/`);
             const observation = await page.snapshot();
             const button = observation.elements!.find(
               (element) => element.name === "Verify",

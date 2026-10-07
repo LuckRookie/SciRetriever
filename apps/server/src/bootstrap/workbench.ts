@@ -283,13 +283,26 @@ export async function startProductionWorkbench(options: {
   let application: Application | undefined;
   const session = new ProductionWorkbenchSession(
     literatureId,
-    (observation, frame, signal, guidance) => {
+    (
+      observation,
+      frame,
+      signal,
+      guidance,
+      target,
+      recentActions,
+      feedback,
+      lifecycle,
+    ) => {
       if (!application) throw new Error("application unavailable");
       return createBrowserDecision(application.agents)(
         observation,
         frame,
         signal,
         guidance,
+        target,
+        recentActions,
+        feedback,
+        lifecycle,
       );
     },
   );
@@ -508,7 +521,7 @@ export async function startSyntheticWorkbench(options: {
             sha256: result.candidate.sha256,
             size_bytes: result.candidate.size_bytes,
             page_count: result.assessment.page_count,
-            disposition: result.assessment.verdict.disposition,
+            disposition: "accepted",
             publication: null,
           });
         },
@@ -618,7 +631,7 @@ export async function startSyntheticWorkbench(options: {
         sha256: candidate.sha256,
         size_bytes: candidate.size_bytes,
         page_count: assessment.page_count,
-        disposition: assessment.verdict.disposition,
+        disposition: "accepted",
         publication,
       });
     }

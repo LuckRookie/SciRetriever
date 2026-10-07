@@ -1,4 +1,3 @@
-import type { DurableCandidate } from "@sciretriever/contracts";
 import { LiteratureCompletionService } from "../entry/literature-completion.js";
 import { randomUUID } from "node:crypto";
 import { ArtifactRecovery } from "../storage/files/recovery.js";
@@ -42,6 +41,12 @@ import { RetrievalStorageClient } from "../storage/sqlite/retrieval-client.js";
 import { acceptPdf } from "../acquisition/pdf-acceptance.js";
 import type { ParserBackend, ParserArtifactRules } from "../parsing/ports.js";
 import { BrowserTransferCollector } from "../browser/transfer.js";
+import { BrowserCaptureBatch } from "../browser/capture-batch.js";
+import { BrowserArticleScheduler } from "../entry/browser-scheduler.js";
+import type {
+  BrowserArticleExecution,
+  BrowserArticleSessionIdentity,
+} from "../browser/article-session.js";
 import { CandidatePublisher } from "../acquisition/candidate-publication.js";
 import { CandidateAcceptanceService } from "../acquisition/candidate-acceptance.js";
 import { CandidateAbandonmentService } from "../acquisition/candidate-abandonment.js";
@@ -53,6 +58,7 @@ import { lookup } from "node:dns/promises";
 import { join, resolve } from "node:path";
 import {
   loadConfiguration,
+  effectiveBrowserConcurrency,
   parseConfiguration,
   type OrdinaryConfiguration,
 } from "../configuration/index.js";
@@ -127,9 +133,9 @@ import {
   DEFAULT_FLOW_MAX_MODEL_CALLS,
   createBrowserArticleFlow,
   flowUnavailable,
-  type FlowPageHandle,
-  type CollaborativeStepResult,
+  type BrowserArticleFlowFactoryOptions,
 } from "../browser/article-flow.js";
+import { DEFAULT_BROWSER_AGENT_ACTION_COOLDOWN_MS } from "../browser/pacing.js";
 import type {
   BrowserArticleFlowFactory,
   BrowserDeliveryRequest,
@@ -295,31 +301,6 @@ export class QueryApplicationError extends Error {
  * The hard ceiling on closed Browser actions for one automatic article delivery. The
  * flow stops as soon as it is reached, so an unproductive page cannot loop forever.
  */
-/**
- * Awaits one delivery while honouring cancellation, so a signal that fires before the
- * PDF response lands cannot leave the flow waiting on a promise that will never settle.
- */
-function raceWithAbort<T>(
-  promise: Promise<T>,
-  signal: AbortSignal,
-): Promise<T> {
-  if (signal.aborted) return Promise.reject(new TypeError("cancelled"));
-  return new Promise<T>((resolve, reject) => {
-    const abort = (): void => reject(new TypeError("cancelled"));
-    signal.addEventListener("abort", abort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener("abort", abort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", abort);
-        reject(error);
-      },
-    );
-  });
-}
-
 /** A flow that always refuses with the stable flow-unavailable reason. */
 function flowUnavailableFlow(): BrowserArticleFlow {
   return { deliver: async () => flowUnavailable() };
@@ -329,6 +310,7 @@ const BROWSER_FLOW_BUDGET = Object.freeze({
   max_actions: DEFAULT_FLOW_MAX_ACTIONS,
   max_model_calls: DEFAULT_FLOW_MAX_MODEL_CALLS,
   deadline_ms: DEFAULT_FLOW_DEADLINE_MS,
+  action_cooldown_ms: DEFAULT_BROWSER_AGENT_ACTION_COOLDOWN_MS,
 });
 
 export type ApplicationStage =
@@ -382,16 +364,9 @@ export interface ApplicationOptions {
    */
   readonly browserArticleFlow?: BrowserArticleFlow;
   /** Optional same-page human collaboration port for an explicit live workbench. */
-  readonly browserCollaboration?: {
-    open(
-      request: BrowserDeliveryRequest,
-      page: FlowPageHandle,
-      deadlineAt: number,
-    ): Promise<{
-      step(signal: AbortSignal): Promise<CollaborativeStepResult>;
-      beforeClose?(): Promise<void>;
-      close(failed: boolean): void | Promise<void>;
-    }>;
+  readonly browserCollaboration?: NonNullable<
+    BrowserArticleFlowFactoryOptions["collaboration"]
+  > & {
     captured(
       articleId: string,
       candidate?: {
@@ -402,6 +377,7 @@ export interface ApplicationOptions {
         readonly disposition: "accepted" | "uncertain" | "rejected";
         readonly publication: null;
       },
+      sessionId?: string,
     ): void;
   };
   /** Optional timeout seam for the pure TypeScript Analysis owner. */
@@ -537,6 +513,7 @@ function assembleConfiguredTypeScriptParser(
       if (injected) return injected.request(url, { ...options, headers });
       return raw!({
         endpoint: url,
+        method: "POST",
         headers: [
           ["accept", "application/json, application/zip"],
           ...Object.entries(headers),
@@ -594,39 +571,33 @@ export async function createApplication(
   const executionBox: { current: Application["execution"] } = { current: null };
   const currentExecution = (): NonNullable<Application["execution"]> | null =>
     executionBox.current;
-  const currentIntakeTarget = (): {
-    article_id: string;
-    identifier: string;
-    version: string;
-  } | null => browserIntakeTargetMutable;
-  const currentPendingCandidate = (): {
-    readonly promise: Promise<DurableCandidate>;
-    resolve: (candidate: DurableCandidate) => void;
-    reject: (error: unknown) => void;
-    settled: boolean;
-  } | null => pendingBrowserCandidateMutable;
-  // One delivery at a time: the Intake target is set when a flow opens a page, and the
-  // candidate it spools is buffered for the same delivery to read back.
-  let browserIntakeTargetMutable: {
-    article_id: string;
-    identifier: string;
-    version: string;
-  } | null = null;
-  // One pending delivery at a time: the PDF response or download can settle before the
-  // driver loop even finishes, so the candidate is resolved through a promise rather
-  // than read from a nullable buffer that races with late bytes.
-  let pendingBrowserCandidateMutable: {
-    readonly promise: Promise<DurableCandidate>;
-    resolve: (candidate: DurableCandidate) => void;
-    reject: (error: unknown) => void;
-    settled: boolean;
-  } | null = null;
-  // The host factory is resolved before the driver exists, so it reads the flow
-  // through this holder. The holder is filled on first demand, which keeps an idle
-  // tier free of both the host and the driver.
-  const browserFlowHolder: { current: BrowserArticleFlow | null } = {
-    current: null,
-  };
+  const browserCapacity = effectiveBrowserConcurrency(configuration.browser);
+  const browserScheduler = new BrowserArticleScheduler({
+    sessions: browserCapacity.effective_sessions,
+    workers: browserCapacity.decision_workers,
+    onQueued: (identity, cancel) =>
+      options.browserCollaboration?.queued?.(identity, cancel),
+    onRemoved: (sessionId, outcome) =>
+      options.browserCollaboration?.removed?.(sessionId, outcome),
+    ...(configuration.browser.policy_overrides[0]
+      ? { policy: configuration.browser.policy_overrides[0] }
+      : {}),
+  });
+  const browserSessions = new Map<
+    string,
+    {
+      readonly request: BrowserDeliveryRequest;
+      readonly execution: BrowserArticleExecution;
+      readonly target: {
+        article_id: string;
+        identifier: string;
+        version: string;
+        session_id: string;
+      };
+      readonly batch: BrowserCaptureBatch;
+      closed: boolean;
+    }
+  >();
   let browserSessionHost: BrowserSessionHost | null = null;
   let ownedBrowserProxy: BrowserNetworkProxy | null = null;
   let databaseCompletion: DatabaseCompletionService | null = null;
@@ -666,6 +637,7 @@ export async function createApplication(
           // the driver yet; both results settle before the proxy is released.
           const settled = await Promise.allSettled([
             Promise.resolve().then(() => pdfAcquisition?.close?.()),
+            Promise.resolve().then(() => browserScheduler.close()),
             Promise.resolve().then(() => host?.close()),
           ]);
           for (const result of settled)
@@ -770,62 +742,132 @@ export async function createApplication(
       injectedBrowserHostFactory ??
         createProductionBrowserHostFactory({
           runtime: verifiedBrowserRuntime,
+          maxSessions: browserCapacity.effective_sessions,
           ...(browserProxy ? { proxy: browserProxy } : {}),
           ...(browserAdmitNavigation
             ? { admitNavigation: browserAdmitNavigation }
             : {}),
-          // The host is built before any delivery, so its capture callbacks resolve
-          // the live Intake and buffer per delivery rather than capturing a stale one.
-          // The internal callbacks are mandatory for the real flow: they resolve the
-          // live Intake and resolve this delivery's pending candidate. A custom seam may
-          // observe capture context, but it must not displace the receiver.
+          beforeRequest: (binding, url, drainPrevious) =>
+            browserScheduler.beforeRequest(binding, url, drainPrevious),
+          navigationRetryFailed: (binding) =>
+            browserScheduler.navigationRetryFailed(binding),
+          documentCommitted: (document) =>
+            browserScheduler.documentCommitted(document),
+          resumeDocument: (document, drainPrevious) =>
+            browserScheduler.resumeDocument(document, drainPrevious),
+          requestEnded: (binding) => browserScheduler.requestEnded(binding),
+          onRuntimeLost: () => browserScheduler.runtimeLost(),
+          rateLimited: (binding, retryAfter) => {
+            let delay: number | undefined;
+            if (retryAfter !== null) {
+              try {
+                delay = networkBudget.retryAfterMilliseconds(retryAfter, {
+                  maxConcurrency: 1,
+                  maxResponseBytes: 1,
+                  maxRedirects: 0,
+                  maxRetries: 0,
+                  maxRetryAfterMs: 86_400_000,
+                });
+              } catch {
+                delay = undefined;
+              }
+            }
+            browserScheduler.rateLimited(binding.session_id, delay);
+          },
           transfers: {
+            resources: () => {
+              const runtime = currentExecution();
+              if (!runtime)
+                throw new Error("Browser transfer resources unavailable");
+              return runtime.transfers.resources;
+            },
             captureContext: (
               pageId: string,
               generation: number,
               sourceUrl: string,
+              sessionId?: string,
             ) => {
-              const target = currentIntakeTarget();
-              if (target === null) return null;
+              const state = sessionId
+                ? browserSessions.get(sessionId)
+                : undefined;
+              if (!state || state.closed) return null;
               return {
-                session_id: `browser-flow-${bootId}`,
-                article_id: target.article_id,
+                session_id: state.target.session_id,
+                article_id: state.target.article_id,
                 page_id: pageId,
                 document_generation: generation,
                 source_url: sourceUrl,
                 captured_at: new Date().toISOString(),
               };
             },
+            started: (transferId, capture) =>
+              browserSessions
+                .get(capture.session_id)
+                ?.execution.transferStarted(transferId),
+            completed: (transferId, capture) =>
+              browserSessions
+                .get(capture.session_id)
+                ?.execution.transferCompleted(transferId),
+            failed: (transferId, capture, code) => {
+              browserScheduler.transferFailed(capture.session_id);
+              browserSessions
+                .get(capture.session_id)
+                ?.execution.transferFailed(
+                  transferId,
+                  code ?? "browser-transfer-failed",
+                );
+            },
             receive: async (input) => {
-              const target = currentIntakeTarget();
+              const state = browserSessions.get(input.capture.session_id);
               const runtime = currentExecution();
-              if (target === null || runtime === null)
+              if (!state || state.closed || !runtime)
                 throw new TypeError("no browser intake target");
               const intake = new BrowserCandidateIntake(
                 runtime.transfers,
-                target,
+                state.target,
               );
               const result = await intake.receive(input);
-              const pending = currentPendingCandidate();
-              if (pending === null || pending.settled)
-                throw new TypeError("no pending browser delivery");
-              pending.settled = true;
-              pending.resolve(result.candidate);
-              options.browserCollaboration?.captured(target.article_id, {
-                transfer_id: result.candidate.transfer_id,
-                sha256: result.candidate.sha256,
-                size_bytes: result.candidate.size_bytes,
-                page_count: result.assessment.page_count,
-                disposition: result.assessment.verdict.disposition,
-                publication: null,
-              });
-            },
-            failed: () => {
-              const pending = currentPendingCandidate();
-              if (pending !== null && !pending.settled) {
-                pending.settled = true;
-                pending.reject(new TypeError("browser transfer failed"));
+              const excluded =
+                state.request.excluded_sha256?.includes(
+                  result.candidate.sha256,
+                ) === true;
+              if (
+                state.closed ||
+                browserSessions.get(input.capture.session_id) !== state ||
+                excluded ||
+                !state.batch.add({
+                  transfer_id: result.candidate.transfer_id,
+                  candidate: result.candidate,
+                  accepted: true,
+                })
+              ) {
+                await runtime.abandonment.abandon(
+                  {
+                    article_id: state.target.article_id,
+                    transfer_id: result.candidate.transfer_id,
+                    sha256: result.candidate.sha256,
+                  },
+                  new AbortController().signal,
+                );
+                if (!state.closed && excluded)
+                  state.execution.candidateRejected(
+                    "browser-candidate-excluded",
+                  );
+                return;
               }
+              state.execution.candidateReady();
+              options.browserCollaboration?.captured(
+                state.target.article_id,
+                {
+                  transfer_id: result.candidate.transfer_id,
+                  sha256: result.candidate.sha256,
+                  size_bytes: result.candidate.size_bytes,
+                  page_count: result.assessment.page_count,
+                  disposition: "accepted",
+                  publication: null,
+                },
+                state.target.session_id,
+              );
             },
           },
           // The host factory owns the raw BrowserHost, so it supplies the real page
@@ -834,9 +876,7 @@ export async function createApplication(
           article_flow_factory: (pages) => {
             const build = demandBrowserFlowFactory();
             if (build === null) return flowUnavailableFlow();
-            const flow = build(pages);
-            browserFlowHolder.current = flow;
-            return flow;
+            return build(pages);
           },
         }),
     );
@@ -882,63 +922,88 @@ export async function createApplication(
       if (!agents || !agents.readiness("browser").configured) return null;
       return (pages) =>
         createBrowserArticleFlow({
-          pages: {
-            openPage: async (request: BrowserDeliveryRequest) => {
-              // Bind this delivery's identity and register its pending candidate before
-              // the page opens: a PDF response or download can settle while the driver
-              // loop is still running, and late bytes must never attribute to the next
-              // target.
-              const target = {
-                article_id: request.literature_id,
+          onSession: (
+            execution: BrowserArticleExecution,
+            request: BrowserDeliveryRequest,
+          ) => {
+            const identity = execution.identity;
+            if (browserSessions.has(identity.session_id))
+              throw new Error("duplicate Browser session");
+            browserSessions.set(identity.session_id, {
+              request,
+              execution,
+              target: {
+                article_id: identity.literature_id,
                 identifier: request.identifier,
                 version: request.version,
-              };
-              browserIntakeTargetMutable = target;
-              let resolve!: (candidate: DurableCandidate) => void;
-              let reject!: (error: unknown) => void;
-              const promise = new Promise<DurableCandidate>((ok, fail) => {
-                resolve = ok;
-                reject = fail;
-              });
-              promise.catch(() => undefined);
-              const pending = {
-                promise,
-                resolve,
-                reject,
-                settled: false,
-              };
-              pendingBrowserCandidateMutable = pending;
-              let opened: {
-                readonly page: FlowPageHandle;
-                readonly close: () => Promise<void>;
-              };
+                session_id: identity.session_id,
+              },
+              batch: new BrowserCaptureBatch(1),
+              closed: false,
+            });
+            browserScheduler.attach(execution, request.signal);
+          },
+          onNetworkEnded: (identity, outcome) =>
+            browserScheduler.networkEnded(identity.session_id, outcome),
+          candidateSource: (identity: BrowserArticleSessionIdentity) => {
+            const state = browserSessions.get(identity.session_id);
+            if (!state)
+              throw new Error("Browser candidate source is unavailable");
+            return {
+              hasCandidate: () => state.batch.hasCandidate(),
+              next: (signal: AbortSignal) => state.batch.next(signal),
+            };
+          },
+          pages: {
+            openPage: async (request: BrowserDeliveryRequest) => {
+              const identity = request.session_identity;
+              const state = identity
+                ? browserSessions.get(identity.session_id)
+                : undefined;
+              if (!state)
+                throw new Error(
+                  "Browser session was not registered before opening",
+                );
+              let opened;
               try {
                 opened = await pages.openPage(request);
               } catch (error) {
-                // A failed open must not leave this delivery's slots behind for the next
-                // target to collide with.
-                if (currentPendingCandidate() === pending)
-                  pendingBrowserCandidateMutable = null;
-                if (currentIntakeTarget() === target)
-                  browserIntakeTargetMutable = null;
+                state.closed = true;
+                state.batch.close();
+                browserSessions.delete(state.target.session_id);
                 throw error;
               }
-              const pendingAtOpen = pending;
-              const targetAtOpen = target;
               return {
-                page: opened.page,
+                ...opened,
                 close: async () => {
+                  state.closed = true;
+                  const failures: unknown[] = [];
                   try {
                     await opened.close();
-                  } finally {
-                    // Clear only this delivery's own slots: a later delivery may have
-                    // already replaced them, and late bytes must never be attributed to
-                    // the next target.
-                    if (currentPendingCandidate() === pendingAtOpen)
-                      pendingBrowserCandidateMutable = null;
-                    if (currentIntakeTarget() === targetAtOpen)
-                      browserIntakeTargetMutable = null;
+                  } catch (error) {
+                    failures.push(error);
                   }
+                  const runtime = currentExecution();
+                  for (const item of state.batch.close()) {
+                    try {
+                      await runtime?.abandonment.abandon(
+                        {
+                          article_id: state.target.article_id,
+                          transfer_id: item.candidate.transfer_id,
+                          sha256: item.candidate.sha256,
+                        },
+                        new AbortController().signal,
+                      );
+                    } catch (error) {
+                      failures.push(error);
+                    }
+                  }
+                  browserSessions.delete(state.target.session_id);
+                  if (failures.length)
+                    throw new AggregateError(
+                      failures,
+                      "Browser session cleanup failed",
+                    );
                 },
               };
             },
@@ -963,25 +1028,9 @@ export async function createApplication(
               signal,
             );
           },
-          hasCandidate: () => currentPendingCandidate()?.settled === true,
-          awaitCandidate: async (signal: AbortSignal) => {
-            const target = currentIntakeTarget();
-            const pending = currentPendingCandidate();
-            if (target === null || pending === null) return null;
-            const candidate = await raceWithAbort(pending.promise, signal);
-            const runtime = currentExecution();
-            if (runtime === null) return null;
-            const intake = new BrowserCandidateIntake(
-              runtime.transfers,
-              target,
-            );
-            const assessed = await intake.assess(candidate, signal);
-            return {
-              transfer_id: assessed.candidate.transfer_id,
-              candidate: assessed.candidate,
-              accepted: assessed.assessment.verdict.disposition === "accepted",
-            };
-          },
+          // Only legacy low-level flow seams consume this fallback; production
+          // always selects the per-session source registered before page creation.
+          awaitCandidate: async () => null,
         });
     };
     const demandBrowserHost = (): BrowserSessionHost | null => {
@@ -998,7 +1047,19 @@ export async function createApplication(
       if (!browserRuntimeAvailable) return null;
       if (browserHostResolution.availability !== "available") return null;
       try {
-        browserSessionHost = browserHostResolution.create();
+        const owned = browserHostResolution.create();
+        const open = owned.openArticle?.bind(owned);
+        browserSessionHost = open
+          ? Object.freeze({
+              deliverCandidate: (request: BrowserDeliveryRequest) =>
+                browserScheduler.deliver(request, open),
+              openArticle: open,
+              ...(owned.applyAction
+                ? { applyAction: owned.applyAction.bind(owned) }
+                : {}),
+              close: () => owned.close(),
+            })
+          : owned;
       } catch {
         // An admitted tier whose runtime cannot actually be built stays stably
         // unavailable: the caller reports a Browser failure instead of aborting the
@@ -1207,6 +1268,7 @@ export async function createApplication(
         // The Browser tier is the same owned session the Application exposes, reached
         // lazily so an idle acquisition never starts one.
         browser_host: () => demandBrowserHost(),
+        browser_scheduler: browserScheduler,
       });
     }
     const analysisConfigured =

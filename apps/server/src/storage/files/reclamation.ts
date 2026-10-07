@@ -35,7 +35,6 @@ export interface ReclamationOptions {
 const DIRECTORY =
   constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
 const FILE = constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW;
-const MAX_BYTES = 512 * 1024 * 1024;
 function fail(): never {
   throw new ArtifactReclamationError();
 }
@@ -133,8 +132,7 @@ export class ArtifactReclaimer {
           if (
             !isRelativeArtifactReference(this.root, value.reference) ||
             !/^(objects|\.objects|\.candidates)\//.test(value.reference) ||
-            artifact.byte_size < 1 ||
-            artifact.byte_size > MAX_BYTES
+            artifact.byte_size < 1
           )
             fail();
           const previous = unique.get(value.reference);

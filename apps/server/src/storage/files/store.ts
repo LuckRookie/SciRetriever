@@ -7,9 +7,11 @@ import {
   openVerifiedFile,
   type VerifiedFileScope,
   type ArtifactReadOptions,
+  type ScopedFileReader,
 } from "./reader.js";
 import {
-  publishStagedFile,
+  PreparedFilePublication,
+  settlePreparedPublication,
   readPublishedFile,
   type PublishedFile,
   type PublicationDependencies,
@@ -37,6 +39,12 @@ export class FileStore {
   private readonly readerStop = new AbortController();
   private readonly opening = new Set<Promise<VerifiedFileScope>>();
   private readonly readers = new Set<VerifiedFileScope>();
+  private readonly preparing = new Set<Promise<PreparedFilePublication>>();
+  private readonly prepared = new Set<PreparedFilePublication>();
+  private readonly preparedStages = new Map<
+    PreparedFilePublication,
+    StagingFile
+  >();
 
   constructor(
     root: string,
@@ -70,15 +78,69 @@ export class FileStore {
   ): Promise<PublishedFile> {
     if (this.closed || !this.stages.has(stage)) throw new FileStoreError();
     try {
-      const result = await this.withWrite(() =>
-        publishStagedFile(this.root, stage, target, dependencies),
+      const prepared = await this.preparePublication(
+        stage,
+        target,
+        dependencies,
       );
-      this.stages.delete(stage);
-      return result;
+      try {
+        return await settlePreparedPublication(prepared, () =>
+          this.withWrite(() => this.commitPrepared(prepared)),
+        );
+      } finally {
+        await this.releasePrepared(prepared);
+      }
     } catch (error) {
       if (error instanceof Error) throw error;
       throw new FileStoreError();
     }
+  }
+
+  async preparePublication(
+    stage: StagingFile,
+    target: string,
+    dependencies?: PublicationDependencies,
+    options: ArtifactReadOptions = {},
+  ): Promise<PreparedFilePublication> {
+    if (this.closed || !this.stages.has(stage)) throw new FileStoreError();
+    const signal = AbortSignal.any([
+      this.readerStop.signal,
+      ...(options.signal ? [options.signal] : []),
+      ...(stage.signal ? [stage.signal] : []),
+    ]);
+    const pending = PreparedFilePublication.create(
+      this.root,
+      stage,
+      target,
+      dependencies,
+      { ...options, signal },
+    );
+    this.preparing.add(pending);
+    try {
+      const prepared = await pending;
+      if (this.closed) {
+        await prepared.close();
+        throw new FileStoreError();
+      }
+      this.prepared.add(prepared);
+      this.preparedStages.set(prepared, stage);
+      return prepared;
+    } finally {
+      this.preparing.delete(pending);
+    }
+  }
+  async commitPrepared(
+    prepared: PreparedFilePublication,
+  ): Promise<PublishedFile> {
+    if (this.closed || !this.prepared.has(prepared)) throw new FileStoreError();
+    const result = await prepared.commit();
+    this.stages.delete(this.preparedStages.get(prepared)!);
+    return result;
+  }
+  async releasePrepared(prepared: PreparedFilePublication): Promise<void> {
+    if (!this.prepared.delete(prepared)) return;
+    this.preparedStages.delete(prepared);
+    await prepared.close();
   }
 
   async read(
@@ -94,6 +156,31 @@ export class FileStore {
     consume: (chunks: AsyncIterable<Uint8Array>) => Promise<T>,
     options: ArtifactReadOptions = {},
   ): Promise<T> {
+    return this.withVerifiedFile(
+      reference,
+      expected,
+      (file) => consume(file.chunks()),
+      options,
+    );
+  }
+  async withVerifiedFile<T>(
+    reference: string,
+    expected: ArtifactRef,
+    consume: (file: ScopedFileReader) => Promise<T>,
+    options: ArtifactReadOptions = {},
+  ): Promise<T> {
+    const scope = await this.openVerifiedScope(reference, expected, options);
+    try {
+      return await scope.useFile(consume);
+    } finally {
+      this.readers.delete(scope);
+    }
+  }
+  async openVerifiedScope(
+    reference: string,
+    expected: ArtifactRef,
+    options: ArtifactReadOptions = {},
+  ): Promise<VerifiedFileScope> {
     if (this.closed) throw new FileStoreError();
     const signal = options.signal
       ? AbortSignal.any([options.signal, this.readerStop.signal])
@@ -113,12 +200,18 @@ export class FileStore {
       await scope.close();
       throw new FileStoreError();
     }
-    this.readers.add(scope);
-    try {
-      return await scope.use(consume);
-    } finally {
-      this.readers.delete(scope);
-    }
+    const managed: VerifiedFileScope = {
+      ...scope,
+      close: async () => {
+        try {
+          await scope.close();
+        } finally {
+          this.readers.delete(managed);
+        }
+      },
+    };
+    this.readers.add(managed);
+    return managed;
   }
 
   async describe(stage: StagingFile): Promise<StagedFile> {
@@ -131,6 +224,17 @@ export class FileStore {
     this.closed = true;
     this.readerStop.abort();
     const opening = await Promise.allSettled([...this.opening]);
+    const preparing = await Promise.allSettled([...this.preparing]);
+    await Promise.allSettled(
+      [
+        ...this.prepared,
+        ...preparing.flatMap((result) =>
+          result.status === "fulfilled" ? [result.value] : [],
+        ),
+      ].map((prepared) => prepared.close()),
+    );
+    this.prepared.clear();
+    this.preparedStages.clear();
     await Promise.allSettled(
       [
         ...this.readers,

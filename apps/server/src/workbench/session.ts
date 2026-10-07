@@ -3,6 +3,7 @@ import {
   parseBrowserAction,
   parseWorkbenchActionCommand,
   parseWorkbenchObservation,
+  type BrowserAction,
   type WorkbenchActionCommand,
   type WorkbenchObservation,
   type WorkbenchView,
@@ -10,6 +11,7 @@ import {
   type WorkbenchGuidance,
   type CandidatePublicationReceipt,
 } from "@sciretriever/contracts";
+import { BrowserPageTransitionError } from "../browser/page-runtime.js";
 import { BrowserControlCoordinator } from "../browser/control.js";
 import {
   BrowserObservationStore,
@@ -17,12 +19,23 @@ import {
   type BrowserObservation,
 } from "../browser/observation.js";
 import type { BrowserPageHandle } from "../browser/host.js";
+import type { BrowserArticleExecution } from "../browser/article-session.js";
+import type {
+  BrowserArticleAutomaticContext,
+  FlowPageHandle,
+} from "../browser/article-flow.js";
 import { ExecutionLoop } from "../acquisition/execution-loop.js";
 import {
   ExecutionPolicy,
   ExecutionPolicyError,
   type ExecutionBudget,
 } from "../acquisition/execution-policy.js";
+import {
+  DEFAULT_BROWSER_AGENT_ACTION_COOLDOWN_MS,
+  DEFAULT_BROWSER_AGENT_CHALLENGE_WAIT_MS,
+  DEFAULT_BROWSER_AGENT_WAIT_FOR_CHANGE_MS,
+  waitForBrowserAgentCooldown,
+} from "../browser/pacing.js";
 
 export class WorkbenchSessionError extends Error {
   constructor(
@@ -44,26 +57,29 @@ export type WorkbenchSessionState =
   | "cancelled"
   | "finished"
   | "failed";
-export type BrowserDecision = (
-  observation: WorkbenchObservation,
-  frame: Uint8Array | null,
-  signal: AbortSignal,
-  guidance?: readonly string[],
-) => Promise<unknown>;
+export type BrowserDecision = import("../browser/article-flow.js").FlowDecision;
 
 /** One fixed article, one page, one command executor. Viewer transport owns no Browser resources. */
 export class WorkbenchSession {
   readonly id: string;
   private readonly control: BrowserControlCoordinator;
   private readonly observations = new BrowserObservationStore();
-  private readonly policy: ExecutionPolicy;
-  private readonly loop: ExecutionLoop;
+  private readonly policy: Pick<
+    ExecutionPolicy,
+    "state" | "remaining" | "pause" | "resume" | "cancel" | "finish" | "consume"
+  >;
+  private readonly loop: ExecutionLoop | undefined;
+  private readonly sharedCommands = new Map<
+    string,
+    { digest: string; completion: Promise<void> }
+  >();
   private readonly humans = new Set<string>();
   private readonly candidates = new Map<string, WorkbenchCandidate>();
   private readonly agentId = `agent-${randomUUID()}`;
   private current: BrowserObservation | undefined;
   private wire: WorkbenchObservation | null = null;
   private observedAt = "";
+  private observationPending = false;
   private stateValue: WorkbenchSessionState = "watching";
   private errorValue: WorkbenchSessionError["code"] | null = null;
   private busy = false;
@@ -101,6 +117,7 @@ export class WorkbenchSession {
       signal: AbortSignal,
     ) => Promise<void>,
     private readonly production = false,
+    private readonly execution?: BrowserArticleExecution,
   ) {
     if (!/^[a-zA-Z0-9._:-]{1,128}$/u.test(articleId))
       throw new WorkbenchSessionError("stale-command");
@@ -111,11 +128,41 @@ export class WorkbenchSession {
       workspace_id: id,
       role: "agent",
     });
-    this.policy = new ExecutionPolicy("browser:generic", "published", budget);
-    this.loop = new ExecutionLoop(
-      this.policy,
-      () => this.control.state().epoch,
-    );
+    if (execution) {
+      if (
+        !production ||
+        execution.session_id !== id ||
+        execution.identity.literature_id !== articleId
+      )
+        throw new WorkbenchSessionError("stale-command");
+      this.policy = {
+        remaining: () => ({ ...execution.clock.remaining(), bytes: 0 }),
+        state: () =>
+          this.stateValue === "paused"
+            ? "paused"
+            : this.stateValue === "cancelled"
+              ? "cancelled"
+              : ["finished", "failed"].includes(this.stateValue)
+                ? "finished"
+                : "running",
+        pause: () => {},
+        resume: () => {},
+        cancel: () => {},
+        finish: () => {},
+        consume: () => {
+          throw new WorkbenchSessionError("stale-command");
+        },
+      };
+      this.loop = undefined;
+    } else {
+      const policy = new ExecutionPolicy(
+        "browser:generic",
+        "published",
+        budget,
+      );
+      this.policy = policy;
+      this.loop = new ExecutionLoop(policy, () => this.control.state().epoch);
+    }
   }
   /** Switch the active tab while retaining the session's article and control lease. */
   async activatePage(page: BrowserPageHandle): Promise<void> {
@@ -196,11 +243,85 @@ export class WorkbenchSession {
       this.policy.pause();
       this.stateValue = "paused";
     }
-    this.wake();
+    if (controlled) this.controlChanged();
+    else this.wake();
   }
   private wake(): void {
     for (const waiter of this.waiters) waiter();
     this.waiters.clear();
+  }
+  private controlChanged(): void {
+    this.execution?.controlEpochChanged();
+    this.wake();
+  }
+
+  /** Production input is projected from the Browser article owner, including its clock. */
+  automaticContext(): BrowserArticleAutomaticContext {
+    if (!this.execution) throw new WorkbenchSessionError("stale-command");
+    let dispatchedGuidance: readonly string[] = [];
+    return {
+      canDecide: () =>
+        !this.closePromise &&
+        this.policy.state() === "running" &&
+        this.control.state().controller_id === null &&
+        !this.busy,
+      controlEpoch: () => this.control.state().epoch,
+      guidance: () => {
+        const accepted = [...this.guidance.values()].filter(
+          (item) => item.state === "accepted",
+        );
+        dispatchedGuidance = accepted.map((item) => item.guidance_id);
+        return accepted.map((item) => item.text);
+      },
+      onDispatched: () => {
+        for (const id of dispatchedGuidance) {
+          const item = this.guidance.get(id);
+          if (item?.state === "accepted")
+            this.guidance.set(id, { ...item, state: "consumed" });
+        }
+      },
+      onObservation: (observation, frame, page) =>
+        this.acceptAutomaticObservation(observation, frame, page),
+      stopReason: () => this.stopResult,
+    };
+  }
+
+  private acceptAutomaticObservation(
+    observation: WorkbenchObservation,
+    frame: Uint8Array | null,
+    page: FlowPageHandle,
+  ): void {
+    if (
+      observation.session_id !== this.id ||
+      observation.article_id !== this.articleId ||
+      observation.control_epoch !== this.control.state().epoch ||
+      !("id" in page) ||
+      typeof page.id !== "string"
+    )
+      throw new WorkbenchSessionError("stale-command");
+    this.page = page as BrowserPageHandle;
+    this.wire = parseWorkbenchObservation(observation);
+    this.current = {
+      article_id: observation.article_id,
+      page_id: observation.page_id,
+      document_generation: observation.document_generation,
+      revision: observation.observation_revision,
+      document_version: observation.document_generation,
+      viewport_version: observation.viewport_revision,
+      url: observation.url,
+      title: observation.title,
+      text: observation.text,
+      viewport: observation.viewport,
+      elements: observation.elements,
+      loading: observation.loading,
+      partial: observation.partial,
+      frame: frame ? new Uint8Array(frame) : null,
+      frame_truncated: observation.frame_dropped,
+      page_state: observation.page_state,
+      capture_state: observation.capture_state,
+    };
+    this.observationPending = false;
+    this.errorValue = null;
   }
   private human(clientId: string): void {
     if (!this.humans.has(clientId))
@@ -234,7 +355,7 @@ export class WorkbenchSession {
     this.control.takeover(clientId);
     if (this.stateValue === "agent-running") this.stateValue = "watching";
     this.expireGuidance();
-    this.wake();
+    this.controlChanged();
   }
   release(clientId: string, epoch: number): void {
     this.human(clientId);
@@ -245,7 +366,7 @@ export class WorkbenchSession {
       this.policy.resume();
       this.stateValue = "watching";
     }
-    this.wake();
+    this.controlChanged();
   }
   pause(clientId: string, epoch: number): void {
     this.human(clientId);
@@ -258,7 +379,7 @@ export class WorkbenchSession {
     this.stateValue = "paused";
     // Revoke even the current human's in-flight low-level input guard.
     this.control.takeover(clientId);
-    this.wake();
+    this.controlChanged();
   }
   resume(clientId: string, epoch: number): void {
     this.human(clientId);
@@ -266,7 +387,7 @@ export class WorkbenchSession {
     this.control.assertController(clientId, epoch);
     this.policy.resume();
     this.stateValue = "watching";
-    this.wake();
+    this.controlChanged();
   }
   cancel(clientId: string, epoch: number): void {
     this.human(clientId);
@@ -278,7 +399,8 @@ export class WorkbenchSession {
     this.policy.cancel();
     this.stateValue = "cancelled";
     this.control.release(clientId, this.control.state().epoch);
-    this.wake();
+    this.execution?.cancel();
+    this.controlChanged();
   }
   view(): WorkbenchView {
     const control = this.control.state();
@@ -297,7 +419,12 @@ export class WorkbenchSession {
         : {}),
       session_id: this.id,
       article_id: this.articleId,
-      state: this.stateValue,
+      state:
+        this.execution &&
+        this.stateValue === "watching" &&
+        this.execution.phase() === "deciding"
+          ? "agent-running"
+          : this.stateValue,
       control: { ...control, viewers: this.humans.size },
       model_ready: !!this.decide,
       error: this.errorValue,
@@ -519,6 +646,17 @@ export class WorkbenchSession {
       this.busy ||
       this.closePromise ||
       (this.production && this.stateValue === "agent-running") ||
+      (this.execution &&
+        this.control.state().controller_id === null &&
+        [
+          "deciding",
+          "waiting",
+          "downloading",
+          "validating",
+          "candidate-ready",
+          "closing",
+          "closed",
+        ].includes(this.execution.phase())) ||
       ["cancelled", "finished", "failed"].includes(this.stateValue)
     )
       return;
@@ -569,12 +707,14 @@ export class WorkbenchSession {
         remaining: this.policy.remaining(),
       });
       this.current = observation;
+      this.observationPending = false;
       this.errorValue = null;
       if (this.stateValue === "watching" && observation.page_state !== "NORMAL")
         this.stateValue = "needs-assistance";
-    } catch {
+    } catch (error) {
+      this.observationPending = error instanceof BrowserPageTransitionError;
       this.errorValue = "browser-failed";
-      // Retain the last intact frame; transient navigation/screenshot failure is recoverable.
+      // Retain the last intact frame; a pending transition must be re-observed before dispatch.
     }
   }
   async command(
@@ -612,48 +752,52 @@ export class WorkbenchSession {
       !this.closePromise;
     this.busy = true;
     try {
-      const action = this.loop.apply(
-        {
-          client_id: clientId,
-          epoch: command.control_epoch,
-          request_id: command.request_id,
-          observation,
-          action: command.input,
-        },
-        async (input) => {
-          const apply = async () => {
-            if (!current()) throw new WorkbenchSessionError("stale-command");
-            await this.page.apply(input, command.document_generation, current);
-            if (input.kind === "stop") {
-              this.policy.finish();
-              this.stateValue = "finished";
-              this.stopResult =
-                input.reason === "budget"
-                  ? "budget"
-                  : input.reason === "cancel"
-                    ? "cancelled"
-                    : "stopped";
-              this.wake();
-            }
-          };
-          if (human)
-            await this.control.dispatchOperator(
-              clientId,
-              command.control_epoch,
-              input,
-              observation,
-              apply,
-            );
-          else
-            await this.control.dispatch(
-              clientId,
-              command.control_epoch,
-              parseBrowserAction(input),
-              observation,
-              apply,
-            );
-        },
-      );
+      const request = {
+        client_id: clientId,
+        epoch: command.control_epoch,
+        request_id: command.request_id,
+        observation,
+        action: command.input,
+      };
+      const applyInput = async (
+        input: import("@sciretriever/contracts").OperatorInput,
+      ) => {
+        const apply = async () => {
+          if (!current()) throw new WorkbenchSessionError("stale-command");
+          await this.page.apply(input, command.document_generation, current);
+          if (input.kind === "stop") {
+            this.policy.finish();
+            this.stateValue = "finished";
+            this.stopResult =
+              input.reason === "budget"
+                ? "budget"
+                : input.reason === "cancel"
+                  ? "cancelled"
+                  : "stopped";
+            this.wake();
+            this.execution?.controlEpochChanged();
+          }
+        };
+        if (human)
+          await this.control.dispatchOperator(
+            clientId,
+            command.control_epoch,
+            input,
+            observation,
+            apply,
+          );
+        else
+          await this.control.dispatch(
+            clientId,
+            command.control_epoch,
+            parseBrowserAction(input),
+            observation,
+            apply,
+          );
+      };
+      const action = this.loop
+        ? this.loop.apply(request, applyInput)
+        : this.applySharedCommand(clientId, command, applyInput);
       this.actionPromise = action;
       return await action;
     } finally {
@@ -661,11 +805,100 @@ export class WorkbenchSession {
       this.busy = false;
     }
   }
+
+  private async applySharedCommand(
+    clientId: string,
+    command: WorkbenchActionCommand,
+    apply: (
+      input: import("@sciretriever/contracts").OperatorInput,
+    ) => Promise<void>,
+  ): Promise<"applied" | "duplicate"> {
+    const key = JSON.stringify([clientId, command.request_id]);
+    const digest = JSON.stringify(command);
+    const previous = this.sharedCommands.get(key);
+    if (previous) {
+      if (previous.digest !== digest)
+        throw new WorkbenchSessionError("stale-command");
+      await previous.completion;
+      return "duplicate";
+    }
+    if (this.sharedCommands.size >= 4096)
+      throw new WorkbenchSessionError("session-busy");
+    const completion = Promise.resolve().then(() => apply(command.input));
+    this.sharedCommands.set(key, { digest, completion });
+    await completion;
+    return "applied";
+  }
   /** A capture may settle before its already-dispatched click returns. */
   async settleActions(): Promise<void> {
     await this.actionPromise?.catch(() => undefined);
   }
+
+  /**
+   * Apply the automatic Agent's post-action hand-off. The internal wait uses the
+   * same ExecutionLoop and page guard as the model action, so navigation/challenge
+   * reactions are observed before the next model request. Human commands never call
+   * this helper.
+   */
+  private async paceAgentAction(
+    input: BrowserAction,
+    observation: WorkbenchObservation,
+    epoch: number,
+    signal: AbortSignal,
+  ): Promise<"ready" | "cancelled" | "budget"> {
+    if (input.kind === "stop" || this.candidates.size > 0) return "ready";
+    if (
+      this.policy.remaining().actions > 0 &&
+      input.kind !== "wait-for-change"
+    ) {
+      const waitInput: BrowserAction = {
+        kind: "wait-for-change",
+        timeout_ms:
+          observation.page_state === "CHALLENGE" &&
+          (input.kind === "click-point" || input.kind === "click-element")
+            ? DEFAULT_BROWSER_AGENT_CHALLENGE_WAIT_MS
+            : DEFAULT_BROWSER_AGENT_WAIT_FOR_CHANGE_MS,
+        revision: observation.observation_revision,
+      };
+      try {
+        await this.execute(
+          this.agentId,
+          {
+            session_id: observation.session_id,
+            page_id: observation.page_id,
+            document_generation: observation.document_generation,
+            observation_revision: observation.observation_revision,
+            viewport_revision: observation.viewport_revision,
+            control_epoch: epoch,
+            request_id: `agent-wait-${randomUUID()}`,
+            input: waitInput,
+          },
+          false,
+        );
+      } catch (error) {
+        if (signal.aborted) return "cancelled";
+        if (error instanceof ExecutionPolicyError) return "budget";
+        throw error;
+      }
+    }
+    if (this.candidates.size > 0) return "ready";
+    // Once the action budget is exhausted there cannot be another model decision,
+    // so do not spend a final delay after the final permitted page action.
+    if (this.policy.remaining().actions === 0) return "ready";
+    const cooled = await waitForBrowserAgentCooldown(
+      DEFAULT_BROWSER_AGENT_ACTION_COOLDOWN_MS,
+      signal,
+    );
+    if (cooled) return "ready";
+    return signal.aborted
+      ? this.policy.remaining().deadline_ms === 0
+        ? "budget"
+        : "cancelled"
+      : "cancelled";
+  }
+
   runAgent(clientId: string, epoch: number): Promise<void> {
+    if (this.execution) throw new WorkbenchSessionError("stale-command");
     this.human(clientId);
     this.live();
     this.control.assertController(clientId, epoch);
@@ -713,6 +946,12 @@ export class WorkbenchSession {
           }),
           false,
         );
+        await this.paceAgentAction(
+          input,
+          observation,
+          lease.epoch,
+          abort.signal,
+        );
       } catch {
         if (
           !abort.signal.aborted &&
@@ -741,6 +980,18 @@ export class WorkbenchSession {
   ): Promise<
     "applied" | "retry" | "stopped" | "budget" | "cancelled" | "invalid-action"
   > {
+    if (this.execution) {
+      if (signal.aborted) return "cancelled";
+      const step = await this.execution.step();
+      if (step.kind === "candidate") return "stopped";
+      if (step.kind !== "terminal") return "retry";
+      if (step.result.kind === "exhausted") return "stopped";
+      return step.result.code === "browser-flow-budget-exhausted"
+        ? "budget"
+        : step.result.code === "browser-flow-cancelled"
+          ? "cancelled"
+          : "invalid-action";
+    }
     if (!this.production) throw new WorkbenchSessionError("stale-command");
     if (signal.aborted || this.policy.state() === "cancelled")
       return "cancelled";
@@ -763,7 +1014,20 @@ export class WorkbenchSession {
     }
     if (!this.decide) throw new WorkbenchSessionError("model-unavailable");
     const expectedEpoch = this.control.state().epoch;
+    const successor = await this.page.successor?.();
+    if (successor) {
+      this.page = successor;
+      this.current = undefined;
+      this.wire = null;
+    }
     await this.refresh();
+    if (this.observationPending) {
+      await waitForBrowserAgentCooldown(
+        DEFAULT_BROWSER_AGENT_ACTION_COOLDOWN_MS,
+        signal,
+      );
+      return signal.aborted ? "cancelled" : "retry";
+    }
     if (signal.aborted || this.policy.state() === "cancelled")
       return "cancelled";
     if (this.stopResult) return this.stopResult;
@@ -858,6 +1122,19 @@ export class WorkbenchSession {
           },
           false,
         );
+        const paced = await this.paceAgentAction(
+          input,
+          observed,
+          lease.epoch,
+          abort.signal,
+        );
+        if (paced === "cancelled")
+          return signal.aborted
+            ? "cancelled"
+            : this.policy.remaining().deadline_ms === 0
+              ? "budget"
+              : "retry";
+        if (paced === "budget") return "budget";
       } catch (error) {
         if (signal.aborted) return "cancelled";
         if (error instanceof ExecutionPolicyError) return "budget";

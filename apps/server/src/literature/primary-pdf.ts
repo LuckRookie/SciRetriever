@@ -37,15 +37,3 @@ export function requireCurrentCandidate(
   )
     throw new LiteraturePublicationError("primary-asset-conflict");
 }
-export function admitPrimaryPdf(
-  facts: LiteratureCurrentFacts,
-  expected: MetadataSnapshot,
-  candidate: DurableCandidate,
-  disposition: "accepted" | "rejected" | "uncertain",
-): void {
-  requireCurrentCandidate(facts, expected, candidate);
-  if (disposition !== "accepted")
-    throw new LiteraturePublicationError(
-      disposition === "rejected" ? "candidate-rejected" : "candidate-uncertain",
-    );
-}

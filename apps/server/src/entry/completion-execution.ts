@@ -3,7 +3,7 @@ export type CompletionCommit = <T>(action: () => Promise<T>) => Promise<T>;
 
 export const directCompletionCommit: CompletionCommit = (action) => action();
 
-/** FIFO, drained by its owner before releasing the operation's write admission. */
+/** FIFO, drained by its owner before returning the operation report. */
 export class CompletionSerialExecutor {
   private tail: Promise<void> = Promise.resolve();
 

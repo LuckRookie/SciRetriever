@@ -1,14 +1,24 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { mkdir, open, lstat, unlink, type FileHandle } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
-import type { RelativeArtifactPath, Sha256 } from "@sciretriever/contracts";
+import {
+  parseArtifactRef,
+  type RelativeArtifactPath,
+  type Sha256,
+} from "@sciretriever/contracts";
+import {
+  openVerifiedFile,
+  type ScopedFileReader,
+  type ArtifactReadOptions,
+} from "./reader.js";
+import type { TemporaryFileBudget, TemporaryFileLease } from "./budget.js";
 
 export class FileStagingError extends Error {
   readonly code = "file-staging" as const;
-  constructor() {
-    super("file staging operation failed");
+  constructor(cause?: unknown) {
+    super("file staging operation failed", { cause });
     this.name = "FileStagingError";
   }
 }
@@ -19,6 +29,7 @@ export interface StagingIdentity {
   readonly size: number;
   readonly links: number;
   readonly mtimeMs: number;
+  readonly ctimeMs: number;
 }
 
 export interface StagedFile {
@@ -28,10 +39,12 @@ export interface StagedFile {
 }
 export interface StagingOptions {
   readonly maxBytes?: number;
+  readonly budget?: TemporaryFileBudget;
+  readonly signal?: AbortSignal;
 }
 
 const STAGING_DIRECTORY = ".staging";
-const MAX_BYTES = 512 * 1024 * 1024;
+const MAX_BYTES = Number.MAX_SAFE_INTEGER;
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 const DIRECTORY_FLAGS =
   constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | NOFOLLOW;
@@ -57,6 +70,7 @@ function identity(
     size: Number(value.size),
     links: Number(value.nlink),
     mtimeMs: Number(value.mtimeMs),
+    ctimeMs: Number(value.ctimeMs),
   };
 }
 function sameIdentity(left: StagingIdentity, right: StagingIdentity): boolean {
@@ -65,7 +79,8 @@ function sameIdentity(left: StagingIdentity, right: StagingIdentity): boolean {
     left.inode === right.inode &&
     left.links === right.links &&
     left.size === right.size &&
-    left.mtimeMs === right.mtimeMs
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
   );
 }
 function directoryIdentity(
@@ -86,6 +101,7 @@ export class StagingFile {
   private readonly maxBytes: number;
   private closed = false;
   private handedOff = false;
+  private sealed = false;
   private operationTail: Promise<void> = Promise.resolve();
 
   private constructor(
@@ -96,6 +112,9 @@ export class StagingFile {
     handle: FileHandle,
     initial: StagingIdentity,
     maxBytes: number,
+    readonly temporaryBudget: TemporaryFileBudget | undefined,
+    private readonly lease: TemporaryFileLease | undefined,
+    readonly signal: AbortSignal | undefined,
   ) {
     this.directory = directory;
     this.directoryHandle = directoryHandle;
@@ -163,6 +182,9 @@ export class StagingFile {
               handle,
               initial,
               maxBytes,
+              options.budget,
+              options.budget?.open(directory, "staging"),
+              options.signal,
             );
           } catch (error) {
             await handle.close().catch(() => undefined);
@@ -230,11 +252,13 @@ export class StagingFile {
   async write(data: Uint8Array): Promise<number> {
     const bytes = checkBytes(data);
     const operation = this.operationTail.then(async () => {
-      if (this.handedOff) invalid();
+      if (this.handedOff || this.sealed) invalid();
       const current = await this.verify();
       if (current.size + bytes.byteLength > this.maxBytes) invalid();
+      await this.lease?.reserve(current.size + bytes.byteLength);
       let offset = 0;
       while (offset < bytes.byteLength) {
+        if (this.signal?.aborted) invalid();
         let written: number;
         try {
           ({ bytesWritten: written } = await this.handle.write(bytes, offset));
@@ -243,6 +267,7 @@ export class StagingFile {
         }
         if (written <= 0) invalid();
         offset += written;
+        this.lease?.written(current.size + offset);
       }
       await this.verify();
       return offset;
@@ -301,13 +326,62 @@ export class StagingFile {
   }
 
   async describe(): Promise<StagedFile> {
-    const bytes = await this.read();
-    const digest = createHash("sha256").update(bytes).digest("hex") as Sha256;
+    await this.operationTail;
+    const before = await this.verify();
+    const digest = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    let size = 0;
+    while (size < before.size) {
+      if (this.signal?.aborted) invalid();
+      const { bytesRead } = await this.handle.read(
+        buffer,
+        0,
+        Math.min(buffer.length, before.size - size),
+        size,
+      );
+      if (!bytesRead) invalid();
+      size += bytesRead;
+      digest.update(buffer.subarray(0, bytesRead));
+    }
+    if (!sameIdentity(before, await this.verify())) invalid();
     return Object.freeze({
       reference: this.reference,
-      size: bytes.byteLength,
-      sha256: digest,
+      size,
+      sha256: digest.digest("hex") as Sha256,
     });
+  }
+
+  async seal(): Promise<StagedFile> {
+    const operation = this.operationTail.then(async () => {
+      if (this.signal?.aborted) invalid();
+      await this.verify();
+      await this.handle.sync();
+      this.sealed = true;
+    });
+    this.operationTail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    await operation;
+    return this.describe();
+  }
+
+  async withFile<T>(
+    consume: (file: ScopedFileReader) => Promise<T>,
+    options: ArtifactReadOptions = {},
+  ): Promise<T> {
+    const description = await this.seal();
+    const scope = await openVerifiedFile(
+      dirname(this.directory),
+      this.reference,
+      parseArtifactRef({
+        sha256: description.sha256,
+        byte_size: description.size,
+        media_type: "application/octet-stream",
+      }),
+      options,
+    );
+    return scope.useFile(consume);
   }
 
   async handoff(): Promise<RelativeArtifactPath> {
@@ -336,6 +410,7 @@ export class StagingFile {
       ? join(this.directory, this.name)
       : this.filePath;
     if (!this.handedOff) {
+      let removed = false;
       try {
         const named = await lstat(cleanupPath);
         if (
@@ -346,11 +421,14 @@ export class StagingFile {
         )
           throw new FileStagingError();
         await unlink(cleanupPath);
+        removed = true;
       } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") removed = true;
         if ((error as NodeJS.ErrnoException).code !== "ENOENT")
           failure ??=
             error instanceof FileStagingError ? error : new FileStagingError();
       }
+      if (removed) this.lease?.release();
     }
     await this.directoryHandle.close().catch(() => {
       failure ??= new FileStagingError();
@@ -372,7 +450,10 @@ export class StagingFile {
         )
           invalid();
         await unlink(join(this.directory, this.name));
+        this.lease?.release();
       } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT")
+          this.lease?.release();
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") invalid();
       }
       return;

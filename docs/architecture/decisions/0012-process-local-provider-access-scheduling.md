@@ -4,6 +4,7 @@
 - Date: 2026-08-09
 - Supersedes: [ADR 0009：供应商级全局访问调度](0009-provider-scoped-global-access-scheduling.md)
 - Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)
+- Amended by: [ADR 0030](0030-browser-transport-and-progress.md)（2026-10-05：Browser 平台网络资格与会话资源分开结算）
 - Related: [ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[统一产品接口：共享支撑：配置与凭据](../technical/01-product-interface.md#5-共享支撑配置与凭据)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[Provider Notes](../../notes/providers/README.md)
 
 ## 背景
@@ -45,9 +46,19 @@ AccessScope
 
 普通 HTTP 获取供应商 landing page 或站内直接文件，以及受控 Browser 的导航、点击、response/download 捕获，都属于该供应商的 `web` 访问；公开来源身份不构成限速豁免。普通 HTTP 的 `web` scope 并发、间隔、窗口额度与失败冷却由 adapter 根据供应商官方规则或已接受审慎政策声明，不固定为并发 1，也不继承 Browser 的文章间隔。
 
-Browser 除了适用 `web`/host policy，还使用 Profile 声明的文章级政策。不再由架构硬编码一个适用于所有供应商的固定 30 秒。缺少可执行网页政策的 production adapter/Profile readiness 不通过；未知普通网页只使用明确标注的审慎默认，不能把猜测冒充供应商官方规则，且未知站点不因此获得 production Browser Profile。
+Browser 除了适用 `web`/host policy，还执行 [ADR 0023](0023-generic-browser-agent-executor.md)
+与 [ADR 0030](0030-browser-transport-and-progress.md) 的通用文章平台政策：同平台网络活动
+文章最多一篇，实际网络结束后冷却 30 秒，更严格的声明政策、operator 收紧值、窗口及
+Retry-After 共同生效。这是项目审慎基线，不冒充供应商官方额度。未知普通网页使用明确标注
+的审慎政策；未知 Publisher 具有合法起点时可以进入唯一通用 Browser，不要求专属 Profile/rule。
 
-Browser 还按照 [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md) 的 `browser_rate_limit_group` 调度：不同风险组可以并行，同一组 `max_concurrency = 1` 并按组内政策限速串行。浏览器 permit 从第一次导航前持有到 page、context、popup、download 和临时文件完整清理；成功、失败、超时、取消和重试都不能绕过仍有效的 `next_allowed_at`、`blocked_until` 或 circuit。API 不继承 Browser 文章间隔，而是遵守对应 API 产品的真实官方政策。
+Browser 的平台资格从首次文章网络访问前持有，覆盖页面、popup/viewer 和主下载；只有本次
+网络实际结束且保留页的后续网络请求已受阻止后才释放并启动冷却。本地文件检查、hash、
+publication 与临时文件清理不延长平台网络资格，文章 session 和文件 owner 继续承担资源责任。
+不同平台可以并行，旧显式聚合串行 override 仍按完整会话寿命限制。成功、失败、超时、取消、
+恢复和换入口都不能绕过当前进程有效的 `next_allowed_at`、`blocked_until`、窗口或 circuit。
+API 不继承 Browser 文章间隔，而是遵守对应 API 产品的真实官方政策。上述修订是目标合同，
+实际并行/后台传输的实现与验证另见实施记录，不能仅凭 Accepted 状态宣称已生效。
 
 ### 5. 动态限速状态只保存在内存中
 
@@ -74,7 +85,7 @@ blocked_until
 
 ### 7. 业务并发与网络准入正交
 
-Entry 可以有界并行等待不同 Literature，Metadata 可以逻辑并行组织多供应商；Acquisition 仍按公开来源、已授权 Provider API、受控浏览器三个风险层级短路，并在批量操作中先让 cohort 完成低风险层，再把最小剩余集合交给 Browser。不同 Browser risk group 可以并行，同一组内严格串行。任何逻辑并发最终都必须在当前进程的真实 HTTP、redirect 或浏览器操作前取得适用 scope 和 Browser group permit。
+Entry 可以有界并行等待不同 Literature，Metadata 可以逻辑并行组织多供应商；Acquisition 仍按公开来源、已授权 Provider API、受控浏览器三个风险层级短路，并在批量操作中先让 cohort 完成低风险层，再把最小剩余集合交给 Browser。不同 Browser 平台可以并行，同平台网络活动严格串行。任何逻辑并发最终都必须在当前进程的真实 HTTP、redirect 或浏览器操作前取得适用 scope 和文章平台资格。
 
 等待 permit 不等同于来源失败，也不产生 Literature、Acquisition 或批量业务状态。取消和 timeout 必须释放当前进程内 permit 并完成资源清理；当前进程仍在运行时，失败不能绕过已经形成的冷却或 `blocked_until`。
 

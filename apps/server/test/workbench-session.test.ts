@@ -59,6 +59,13 @@ function setup(
   };
 }
 
+// These command/ownership tests exercise pacing separately in the article driver tests.
+vi.mock("../src/browser/pacing.js", async (load) => ({
+  ...(await load<typeof import("../src/browser/pacing.js")>()),
+  waitForBrowserAgentCooldown: async (_ms: number, signal: AbortSignal) =>
+    !signal.aborted,
+}));
+
 it("keeps the synthetic v1 view's exact serialized field set", () => {
   const { session } = setup();
   const view = session.view();
@@ -406,7 +413,7 @@ describe("workbench session", () => {
     await session.refresh();
     session.takeover(a, session.view().control.epoch);
     await session.runAgent(a, session.view().control.epoch);
-    expect(apply).toHaveBeenCalledTimes(1);
+    expect(apply).toHaveBeenCalledTimes(2);
     expect(session.view().control.controller_id).toBeNull();
     expect(session.view().state).toBe("watching");
     const missing = setup();

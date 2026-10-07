@@ -73,6 +73,65 @@ describe("browser observation boundary", () => {
       ),
     ).rejects.toThrow("browser observation failed");
   });
+
+  it.each([
+    ["Just a moment...", "Checking your browser before accessing the article"],
+    ["Publisher", "Please verify you are human to continue"],
+    ["Security check", "Complete the security check to proceed"],
+  ])(
+    "marks a human-verification page as CHALLENGE (%s)",
+    async (title, text) => {
+      const store = new BrowserObservationStore();
+      const observation = await store.observe(
+        "article-1",
+        "page-1",
+        source({
+          url: "https://example.test/article",
+          title,
+          text,
+          viewport,
+          screenshot: new Uint8Array([1]),
+        }),
+      );
+      expect(observation.page_state).toBe("CHALLENGE");
+    },
+  );
+
+  it("does not treat passive article navigation as an access gate", async () => {
+    const store = new BrowserObservationStore();
+    const observation = await store.observe(
+      "article-1",
+      "page-1",
+      source({
+        url: "https://example.test/article",
+        title: "Readable article",
+        text: "Sign in as different institution Sign In Abstract This article is readable.",
+        viewport,
+        screenshot: new Uint8Array([1]),
+      }),
+    );
+    expect(observation.page_state).toBe("NORMAL");
+  });
+
+  it.each([
+    "Login required",
+    "Please sign in to continue",
+    "Sign in to access the full text",
+  ])("marks an explicit authentication gate (%s)", async (text) => {
+    const store = new BrowserObservationStore();
+    const observation = await store.observe(
+      "article-1",
+      "page-1",
+      source({
+        url: "https://example.test/article",
+        title: "Publisher",
+        text,
+        viewport,
+        screenshot: new Uint8Array([1]),
+      }),
+    );
+    expect(observation.page_state).toBe("LOGIN_REQUIRED");
+  });
 });
 
 it("retains the binding for identical snapshots but invalidates a same-URL replacement document", async () => {

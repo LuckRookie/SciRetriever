@@ -7,7 +7,10 @@ import { join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { chromium, type Browser } from "playwright";
 import { expect, it, vi } from "vitest";
-import { parseMetadataObservation } from "@sciretriever/contracts";
+import {
+  parseMetadataObservation,
+  type WorkbenchObservation,
+} from "@sciretriever/contracts";
 import type * as Server from "../src/index.js";
 import { BrowserNetworkProxy } from "../src/network/browser-proxy.js";
 import { NetworkBudgetCoordinator } from "../src/network/budget.js";
@@ -214,7 +217,8 @@ async function installedBrowserJourney(
         },
         agentTransportFactory:
           () =>
-          async ({ body }) => {
+          async ({ body, onDispatched }) => {
+            onDispatched?.();
             const index = modelCalls++;
             const wire = JSON.parse(new TextDecoder().decode(body)) as {
               messages: { content: { type: string; text?: string }[] }[];
@@ -222,9 +226,10 @@ async function installedBrowserJourney(
             const parts = wire.messages[1]!.content.filter(
               (part) => part.type === "text",
             );
-            const observation = contracts.parseWorkbenchObservation(
-              JSON.parse(parts[0]!.text!),
-            );
+            const observation = JSON.parse(parts[0]!.text!) as Pick<
+              WorkbenchObservation,
+              "observation_revision" | "elements"
+            >;
             observedGuidance.push(...parts.slice(1).map((part) => part.text!));
             // The first/third late replies intentionally ignore AbortSignal. A
             // takeover must invalidate them before they can click the PDF button.
@@ -260,7 +265,7 @@ async function installedBrowserJourney(
                           {
                             function: {
                               name: "browser_action",
-                              arguments: JSON.stringify(action),
+                              arguments: JSON.stringify({ action }),
                             },
                           },
                         ],
@@ -1028,6 +1033,9 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
       }),
     );
     expect(read.body.detail.primary_pdf!.asset.sha256).toBe(accepted.sha256);
+    expect(read.body.detail.primary_pdf!.article_identity_status).toBe(
+      "unverified",
+    );
     expect(read.body.detail.parser_result).toBeNull();
     expect(read.body.detail.content).toBeNull();
     const assetId = read.body.detail.primary_pdf!.asset.asset_id;
@@ -1076,6 +1084,12 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
       true,
     );
     expect(browserParsed.status, JSON.stringify(browserParsed.body)).toBe(200);
+    const afterParsing = await post("read", {
+      literature_id: browserLiteratureId,
+    });
+    expect(afterParsing.body.detail.primary_pdf?.article_identity_status).toBe(
+      "unverified",
+    );
     expect(parserCalls).toBe(2);
     const browserDocumentId =
       browserParsed.body.receipt.document.document_version_id;

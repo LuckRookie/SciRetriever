@@ -15,6 +15,7 @@ export class IdentityVerdictError extends Error {
   }
 }
 
+/** @deprecated Legacy identifier comparison; acquisition no longer uses this as a download gate. */
 export function judgeIdentity(input: {
   readonly targetIdentifier: string;
   readonly candidateIdentifier?: string;

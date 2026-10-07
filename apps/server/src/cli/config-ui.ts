@@ -6,7 +6,10 @@ import type {
 import { Chalk } from "chalk";
 import stringWidth from "string-width";
 import wrapAnsi from "wrap-ansi";
-import { type OrdinaryConfiguration } from "../configuration/index.js";
+import {
+  effectiveBrowserConcurrency,
+  type OrdinaryConfiguration,
+} from "../configuration/index.js";
 import type {
   ConfigurationProbeRequest,
   ConfigurationProbeResult,
@@ -236,6 +239,7 @@ function summaryRows(
     if (items.some((item) => item.state === "ready")) return "ready";
     return "configured";
   };
+  const browserCapacity = effectiveBrowserConcurrency(config.browser);
   const browserSummary = config.browser.enabled
     ? (config.browser.model ?? "model not selected")
     : "off";
@@ -273,7 +277,7 @@ function summaryRows(
     ],
     [
       colors.accent("◆ Browser"),
-      `${browserSummary} · Profile ${config.browser.profile ?? "not selected"}`,
+      `${browserSummary} · Profile ${config.browser.profile ?? "not selected"} · Sessions ${browserCapacity.effective_sessions}/${browserCapacity.configured_sessions} · Workers ${browserCapacity.decision_workers}${browserCapacity.limiting_reason ? ` · ${browserCapacity.limiting_reason}` : ""}`,
       stateText(
         browser?.state ?? (config.browser.enabled ? "blocked" : "configured"),
         colors,

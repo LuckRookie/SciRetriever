@@ -13,9 +13,16 @@ import {
 } from "../src/entry/pdf-acquisition.js";
 import { CompletionAcquisitionCoordinator } from "../src/entry/completion-execution.js";
 import { createApplication } from "../src/bootstrap/application.js";
-import { PublicAcquisitionRegistry } from "../src/acquisition/sources/public.js";
+import {
+  downloadPdfCandidate,
+  PublicAcquisitionRegistry,
+} from "../src/acquisition/sources/public.js";
+import { type AcquisitionSourcePort } from "../src/acquisition/ports.js";
 import { BROWSER_ROUTE_NAME } from "../src/acquisition/assembly.js";
-import { safeLocator } from "../src/acquisition/sources/locators.js";
+import {
+  doiLanding,
+  safeLocator,
+} from "../src/acquisition/sources/locators.js";
 import {
   FIXTURE_LITERATURE,
   workbenchPdf,
@@ -163,6 +170,151 @@ describe("completion acquisition cohorts", () => {
     ({
       literature_id: id as never,
     }) as never as import("../src/entry/pdf-acquisition.js").PdfAcquisitionRequest;
+
+  it.each([200, 403, 401, 429, 503])(
+    "admits API and Browser for a public-only miss, retaining blocking HTTP %i facts",
+    async (status) => {
+      const home = await mkdtemp(
+        join(tmpdir(), "sciretriever-landing-escalation-"),
+      );
+      const application = await createApplication(home, {
+        executionSchema: "upgrade-synthetic",
+      });
+      const phase: string[] = [];
+      const publicSource: AcquisitionSourcePort = {
+        source_name: "doi-landing",
+        ready: true,
+        acquisition_tier: "public",
+        async discover(request) {
+          const doi = request.identifiers.find(
+            (item) => item.namespace === "doi",
+          )?.value;
+          return doi ? [doiLanding(doi)] : [];
+        },
+        async download_candidate(candidate, signal): Promise<never> {
+          // Keep Entry, the route runner and the public downloader real; only HTTP
+          // is replaced at this existing source-owned delivery seam.
+          await downloadPdfCandidate(
+            candidate,
+            {
+              async request() {
+                phase.push(`public:${status}`);
+                return {
+                  status,
+                  headers: [["content-type", "text/html"]],
+                  body: new TextEncoder().encode(
+                    "<html><body>Article landing</body></html>",
+                  ),
+                };
+              },
+            },
+            {
+              collector: application.execution!.transfers,
+              transfer_id: `static-landing-${status}`,
+              ...(signal ? { signal } : {}),
+            },
+          );
+          throw new Error("fixture landing must not produce a PDF");
+        },
+      };
+      const service = new EntryPdfAcquisitionService({
+        registry: new PublicAcquisitionRegistry(
+          [
+            publicSource,
+            {
+              source_name: "fixture-api",
+              acquisition_tier: "authorized-api",
+              ready: true,
+              async discover() {
+                phase.push("api");
+                return [];
+              },
+            },
+            {
+              source_name: BROWSER_ROUTE_NAME,
+              ready: true,
+              async discover() {
+                throw new Error(
+                  "Browser must remain outside locator execution",
+                );
+              },
+            },
+          ],
+          ["doi-landing", "fixture-api", BROWSER_ROUTE_NAME],
+        ),
+        network_budget: application.networkBudget,
+        transfers: application.execution!.transfers,
+        acceptance: application.execution!.acceptance,
+        browser_host: () => ({
+          async deliverCandidate(request) {
+            expect(request.literature_id).toBe(
+              FIXTURE_LITERATURE.literature_id,
+            );
+            phase.push("browser");
+            const candidate = await downloadPdfCandidate(
+              safeLocator("browser", "https://fixture.test/article.pdf"),
+              {
+                request: async () => ({
+                  status: 200,
+                  headers: [],
+                  body: workbenchPdf(),
+                }),
+              },
+              {
+                collector: application.execution!.transfers,
+                transfer_id: `browser-${status}`,
+                capture: {
+                  session_id: `session-${status}`,
+                  article_id: request.literature_id,
+                  page_id: "fixture-page",
+                  document_generation: 0,
+                  source_url: "https://fixture.test/article.pdf",
+                  captured_at: new Date().toISOString(),
+                },
+              },
+            );
+            return { kind: "delivered" as const, accepted: true, candidate };
+          },
+          close: async () => undefined,
+        }),
+      });
+      try {
+        await application.database.putLiterature(FIXTURE_LITERATURE);
+        const literatureId = FIXTURE_LITERATURE.literature_id;
+        const [outcome] = await service.acquireCohort([
+          {
+            literature_id: literatureId,
+            detail: await application.library.detail(literatureId),
+            metadata_snapshot: (await application.database.currentFacts(
+              literatureId,
+            ))!.metadata_snapshot,
+            signal: new AbortController().signal,
+          },
+        ]);
+        if (status === 200 || status === 403) {
+          expect(outcome).toMatchObject({ kind: "acquired" });
+          expect(
+            (await application.library.detail(literatureId)).primary_pdf
+              ?.article_identity_status,
+          ).toBe("unverified");
+          expect(phase).toEqual([`public:${status}`, "api", "browser"]);
+        } else {
+          expect(outcome).toMatchObject({
+            kind: "route-failure",
+            failure: {
+              code: status === 429 ? "rate-limited" : "http-response-failed",
+              source: status === 401 ? null : "doi-landing",
+            },
+          });
+          expect(phase).toEqual([`public:${status}`]);
+        }
+      } finally {
+        await service.close();
+        await application.close();
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("delivers an ordered early receipt wave before the unresolved API barrier", async () => {
     const calls: string[] = [];

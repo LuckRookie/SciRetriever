@@ -98,6 +98,8 @@ it("captures popup, data and blob downloads under the owning page context", asyn
     const popup = tabs.find((tab) => tab.opener_id === page.id);
     expect(popup?.url).toContain(fixture.origin);
     if (popup) {
+      const successor = await page.successor?.();
+      expect(successor?.id).toBe(popup.id);
       const popupPage = await host.activatePage(popup.id);
       expect(popupPage.id).toBe(popup.id);
       expect(

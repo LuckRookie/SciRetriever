@@ -658,8 +658,14 @@ async function execute(
       options,
     );
   }
-  if (group === "doctor" && command === undefined)
-    return output(await runDoctor(), options);
+  if (group === "doctor" && command === undefined) {
+    const owner = new TypeScriptConfigurationOwner(configurationHome(options));
+    const snapshot = await owner.read(options.signal);
+    return output(
+      await runDoctor({ browser: snapshot.configuration.browser }),
+      options,
+    );
+  }
   if (group === "storage" && command === "inspect") {
     const value = await withApplication(options, (app) =>
       app.database.inspectExecutionRuntime(),

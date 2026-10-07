@@ -21,6 +21,7 @@ import {
 import {
   AcquisitionCandidateSkippedError,
   AcquisitionRouteError,
+  AcquisitionUnavailableError,
   classifyAcquisitionFailure,
   TieredAcquisitionService,
   type AcquisitionBatchFailure,
@@ -31,6 +32,10 @@ import type {
   BrowserDeliveryResult,
   BrowserSessionHost,
 } from "../browser/boundary.js";
+import { createBrowserArticleGoal } from "../browser/boundary.js";
+import type { BrowserArticleCloseOutcome } from "../browser/article-session.js";
+import { createLogger } from "../logging/index.js";
+import { BrowserArticleScheduler } from "./browser-scheduler.js";
 import type { NetworkBudgetCoordinator } from "../network/budget.js";
 import {
   directCompletionCommit,
@@ -130,6 +135,7 @@ export interface EntryPdfAcquisitionPorts {
    * optional: an unwired or disabled tier simply contributes no Browser attempt.
    */
   readonly browser_host?: () => BrowserSessionHost | null;
+  readonly browser_scheduler?: BrowserArticleScheduler;
 }
 
 export class BrowserDeliveryStaleGenerationError extends Error {
@@ -202,7 +208,13 @@ export class BrowserSessionBroker {
   private readonly active = new Set<AbortController>();
   private closed = false;
 
-  constructor(private readonly host: () => BrowserSessionHost | null) {}
+  constructor(
+    private readonly host: () => BrowserSessionHost | null,
+    private readonly articles = new BrowserArticleScheduler({
+      sessions: 5,
+      workers: 2,
+    }),
+  ) {}
 
   async deliver(
     request: PdfAcquisitionRequest,
@@ -215,6 +227,15 @@ export class BrowserSessionBroker {
       throw new DOMException("Browser broker closed", "InvalidStateError");
     const host = this.host();
     if (!host) return null;
+    const open = host.openArticle?.bind(host);
+    if (open)
+      return action(
+        {
+          deliverCandidate: (input) => this.articles.deliver(input, open),
+          close: () => host.close(),
+        },
+        request.signal,
+      );
     return this.scheduler.run(
       request.operation_id ?? "direct",
       request.generation ?? 0,
@@ -235,10 +256,10 @@ export class BrowserSessionBroker {
     );
   }
 
-  close(): Promise<void> {
+  async close(): Promise<void> {
     this.closed = true;
     for (const controller of this.active) controller.abort();
-    return this.scheduler.close();
+    await Promise.all([this.articles.close(), this.scheduler.close()]);
   }
 }
 
@@ -253,6 +274,11 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
   private readonly publicLocator: TieredAcquisitionService;
   private readonly apiLocator: TieredAcquisitionService;
   private readonly browserBroker: BrowserSessionBroker;
+  private readonly lifetime = new AbortController();
+  private readonly active = new Set<
+    Promise<readonly PdfAcquisitionOutcome[]>
+  >();
+  private closing: Promise<void> | undefined;
   /**
    * Operation-local locator evidence. A later generation can reject a locator before
    * downloading it again when its previously delivered bytes are now listed in
@@ -279,17 +305,27 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     );
     this.browserBroker = new BrowserSessionBroker(
       ports.browser_host ?? (() => null),
+      ports.browser_scheduler,
     );
   }
 
-  async close(): Promise<void> {
-    await this.browserBroker.close();
+  close(): Promise<void> {
+    this.closing ??= Promise.resolve().then(async () => {
+      try {
+        await this.browserBroker.close();
+      } finally {
+        // Delivery does not end Entry's ownership of acceptance or its real reader.
+        await Promise.allSettled([...this.active]);
+      }
+    });
+    this.lifetime.abort();
+    return this.closing;
   }
 
   async acquire(
     request: PdfAcquisitionRequest,
   ): Promise<PdfAcquisitionOutcome> {
-    const [outcome] = await this.acquireCohortInternal([request], {}, true);
+    const [outcome] = await this.trackCohort([request], {}, true);
     if (!outcome) throw new TypeError("acquisition cohort returned no result");
     return outcome;
   }
@@ -302,11 +338,27 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
       ) => void;
     } = {},
   ): Promise<readonly PdfAcquisitionOutcome[]> {
-    return this.acquireCohortInternal(requests, options, false);
+    return this.trackCohort(requests, options, false);
+  }
+
+  private trackCohort(
+    requests: readonly PdfAcquisitionRequest[],
+    options: Parameters<EntryPdfAcquisitionService["acquireCohort"]>[1],
+    preserveSinglePriorFailure: boolean,
+  ): Promise<readonly PdfAcquisitionOutcome[]> {
+    const pending = this.acquireCohortInternal(
+      requests,
+      options ?? {},
+      preserveSinglePriorFailure,
+    );
+    this.active.add(pending);
+    const finished = () => this.active.delete(pending);
+    void pending.then(finished, finished);
+    return pending;
   }
 
   private async acquireCohortInternal(
-    requests: readonly PdfAcquisitionRequest[],
+    incoming: readonly PdfAcquisitionRequest[],
     options: {
       readonly on_outcomes?: (
         outcomes: readonly PdfAcquisitionCohortOutcome[],
@@ -314,15 +366,19 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     },
     preserveSinglePriorFailure: boolean,
   ): Promise<readonly PdfAcquisitionOutcome[]> {
-    if (!Array.isArray(requests) || requests.length > 100_000)
+    if (!Array.isArray(incoming) || incoming.length > 100_000)
       throw new TypeError("acquisition cohort request is invalid");
     const ids = new Set<string>();
-    for (const request of requests) {
+    for (const request of incoming) {
       const id = parseLiteratureId(request.literature_id);
       if (ids.has(id))
         throw new TypeError("acquisition cohort Literature is duplicated");
       ids.add(id);
     }
+    const requests = incoming.map((request) => ({
+      ...request,
+      signal: AbortSignal.any([request.signal, this.lifetime.signal]),
+    }));
     const final = new Array<PdfAcquisitionOutcome | undefined>(requests.length);
     const priorFailures = new Map<number, AcquisitionBatchFailure>();
     let active = requests.map((_request, index) => index);
@@ -461,6 +517,12 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
             // A rejected candidate is one route outcome. Cancellation and every
             // storage/receipt/system failure must keep their own identity.
             if (signal.aborted) throw error;
+            if (
+              error instanceof AcquisitionCandidateSkippedError ||
+              error instanceof AcquisitionUnavailableError ||
+              error instanceof AcquisitionRouteError
+            )
+              throw error;
             if (error instanceof Error && /^acquisition /u.test(error.message))
               throw new AcquisitionRouteError(
                 "candidate-download-failed",
@@ -625,13 +687,23 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
             literature_id: literatureId,
             identifier: browserIdentifier(request),
             version: request.detail.literature.version_role,
+            article_goal: createBrowserArticleGoal({
+              literature_id: literatureId,
+              identifier: browserIdentifier(request),
+              version: request.detail.literature.version_role,
+              metadata: request.detail.literature.metadata,
+            }),
             start_url: browserStartUrl(
               request.detail.metadata_observations,
               request.detail.literature.version_role,
+              request.detail.literature.metadata.identifiers,
             ),
             metadata_snapshot: request.metadata_snapshot,
             signal,
             generation: request.generation ?? 0,
+            ...(request.excluded_sha256
+              ? { excluded_sha256: request.excluded_sha256 }
+              : {}),
             ...(request.operation_id !== undefined
               ? { operation_id: request.operation_id }
               : {}),
@@ -665,11 +737,15 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
         return { kind: "cancelled" };
       throw error;
     }
-    if (request.signal.aborted) return { kind: "cancelled" };
     if (delivery.kind === "exhausted")
       return priorFailure !== null
         ? { kind: "route-failure", failure: priorFailure }
         : { kind: "exhausted" };
+    if (
+      delivery.kind === "refused" &&
+      delivery.code === "browser-flow-cancelled"
+    )
+      return { kind: "cancelled" };
     if (delivery.kind === "refused")
       return priorFailure !== null
         ? { kind: "route-failure", failure: priorFailure }
@@ -678,35 +754,82 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
             code: delivery.code,
             reason: delivery.reason,
           };
-    if (!delivery.accepted)
-      return priorFailure !== null
-        ? { kind: "route-failure", failure: priorFailure }
-        : {
-            kind: "browser-failure",
-            code: "browser-identity-mismatch",
-            reason:
-              "The Browser delivery did not match the target article identity.",
-          };
-    if (request.excluded_sha256?.includes(delivery.candidate.sha256)) {
-      await this.ports.transfers.discard(delivery.candidate.transfer_id);
-      return { kind: "exhausted" };
-    }
-    const publication = await (request.commit ?? directCompletionCommit)(() =>
-      this.ports.acceptance.accept(
-        {
-          receipt_id: `entry-browser-${delivery.candidate.transfer_id}`,
-          literature_id: literatureId,
-          transfer_id: delivery.candidate.transfer_id,
-          metadata_snapshot: request.metadata_snapshot,
-        },
-        request.signal,
-      ),
-    );
-    return {
-      kind: "acquired",
-      literature_id: literatureId,
-      receipt: publication,
+    let closeOutcome: BrowserArticleCloseOutcome = {
+      kind: "retained",
+      code: "browser-publication-incomplete",
     };
+    const acceptanceSignal = delivery.lease?.signal
+      ? AbortSignal.any([request.signal, delivery.lease.signal])
+      : request.signal;
+    try {
+      if (acceptanceSignal.aborted) {
+        closeOutcome = { kind: "cancelled" };
+        return { kind: "cancelled" };
+      }
+      if (!delivery.accepted) {
+        closeOutcome = { kind: "retained", code: "browser-candidate-rejected" };
+        return {
+          kind: "browser-failure",
+          code: "browser-candidate-rejected",
+          reason: "The Browser delivery did not pass PDF file admission.",
+        };
+      }
+      if (request.excluded_sha256?.includes(delivery.candidate.sha256)) {
+        // Production rejects this in the live session and continues exploration.
+        // A legacy delivery seam violating that handoff is an error, not exhaustion.
+        closeOutcome = { kind: "retained", code: "browser-candidate-excluded" };
+        return {
+          kind: "browser-failure",
+          code: "browser-candidate-excluded",
+          reason:
+            "The Browser returned an excluded candidate instead of continuing the article session.",
+        };
+      }
+      const publication = await (request.commit ?? directCompletionCommit)(() =>
+        this.ports.acceptance.accept(
+          {
+            receipt_id: `entry-browser-${delivery.candidate.transfer_id}`,
+            literature_id: literatureId,
+            transfer_id: delivery.candidate.transfer_id,
+            metadata_snapshot: request.metadata_snapshot,
+          },
+          acceptanceSignal,
+        ),
+      );
+      closeOutcome = { kind: "published", receipt_id: publication.receipt_id };
+      return {
+        kind: "acquired",
+        literature_id: literatureId,
+        receipt: publication,
+      };
+    } catch (error) {
+      if (classifyAcquisitionFailure(error, acceptanceSignal) === "cancel") {
+        closeOutcome = { kind: "cancelled" };
+        return { kind: "cancelled" };
+      }
+      throw error;
+    } finally {
+      try {
+        await delivery.lease?.close(closeOutcome);
+      } catch (error) {
+        // Cleanup is a separate diagnostic. Never revoke a committed publication
+        // or discard a valid retained candidate to disguise a cleanup failure.
+        createLogger("pdf-acquisition").error(
+          "Browser article cleanup failed",
+          {
+            code: "browser-flow-close-failed",
+            status: closeOutcome.kind,
+            cause_code:
+              error instanceof Error &&
+              "code" in error &&
+              typeof error.code === "string" &&
+              /^browser-[a-z-]{1,80}$/u.test(error.code)
+                ? error.code
+                : "browser-session-cleanup-failed",
+          },
+        );
+      }
+    }
   }
 }
 
@@ -714,14 +837,19 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
  * The one already-admitted landing page the Browser delivery may start from.
  *
  * It comes from the target's own observations (`asset_hints`, `kind =
- * "landing-page"`), is restricted to plain HTTPS without embedded credentials or a
+ * "landing-page"`), is restricted to HTTP(S) without embedded credentials or a
  * fragment, and matches the frozen target version (an unversioned hint is the only
- * fallback). Entry never guesses a URL: when no hint qualifies, the tier reports a
- * stable flow-unavailable refusal instead.
+ * hint fallback). When metadata has a canonical DOI but no landing hint, the generic
+ * DOI resolver is the only additional start point; Entry never asks the Agent to guess
+ * a Publisher URL.
  */
 export function browserStartUrl(
   observations: readonly MetadataObservation[],
   targetVersion: VersionRole,
+  identifiers: readonly {
+    readonly namespace: string;
+    readonly value: string;
+  }[] = [],
 ): string | null {
   const admitted = observations.flatMap(
     (observation) => observation.asset_hints,
@@ -735,8 +863,7 @@ export function browserStartUrl(
       return null;
     }
     if (
-      (url.protocol !== "https:" &&
-        !(url.protocol === "http:" && url.hostname === "127.0.0.1")) ||
+      !["http:", "https:"].includes(url.protocol) ||
       url.username ||
       url.password ||
       url.hash
@@ -755,6 +882,19 @@ export function browserStartUrl(
     const url = safe(hint);
     if (url !== null) return url;
   }
+  const doi = identifiers
+    .find(
+      (identifier) =>
+        identifier.namespace.toLowerCase() === "doi" &&
+        /^10\.\d{4,9}\/.+$/iu.test(identifier.value.trim()) &&
+        !/[\s?#]/u.test(identifier.value.trim()),
+    )
+    ?.value.trim();
+  if (doi)
+    return `https://doi.org/${doi
+      .split("/")
+      .map((part) => encodeURIComponent(part))
+      .join("/")}`;
   return null;
 }
 

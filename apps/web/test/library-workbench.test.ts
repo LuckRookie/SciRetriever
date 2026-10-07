@@ -17,7 +17,10 @@ import {
   type WorkbenchStaticAsset,
 } from "../../server/src/workbench/http.js";
 import { WorkbenchSession } from "../../server/src/workbench/session.js";
-import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
+import {
+  FIXTURE_LITERATURE,
+  workbenchPdf,
+} from "../../server/src/workbench/synthetic-fixture.js";
 
 const uuid = (group: number, ordinal: number) =>
   `00000000-0000-0000-${String(group).padStart(4, "0")}-${String(ordinal).padStart(12, "0")}`;
@@ -54,6 +57,10 @@ describe("literature library workbench", () => {
       executionSchema: "upgrade-synthetic",
     });
     await application.database.putLiterature(FIXTURE_LITERATURE);
+    await application.maintenance!.ingestPdf({
+      literature_id: FIXTURE_LITERATURE.literature_id,
+      bytes: workbenchPdf("", "", false),
+    });
     const references: ReturnType<typeof parseReference>[] = [];
     for (let ordinal = 1; ordinal <= 27; ordinal += 1) {
       const target = parseLiterature({
@@ -213,6 +220,9 @@ describe("literature library workbench", () => {
       await expect
         .poll(() => page.locator("#library-detail h2").textContent())
         .toBe("Synthetic literature workbench");
+      await expect
+        .poll(() => page.locator("#library-detail").textContent())
+        .toContain("文章身份未验证");
       expect(new URL(page.url()).searchParams.get("literature")).toBe(
         FIXTURE_LITERATURE.literature_id,
       );

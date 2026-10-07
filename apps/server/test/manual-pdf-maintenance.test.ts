@@ -52,6 +52,32 @@ async function setup() {
 }
 
 describe("shared manual PDF maintenance", () => {
+  it("accepts an arXiv-only preprint through the same file acceptance and publication boundary", async () => {
+    const env = await setup();
+    try {
+      await env.app.database.putLiterature(
+        parseLiterature({
+          ...FIXTURE_LITERATURE,
+          version_role: "preprint",
+          metadata: {
+            ...FIXTURE_LITERATURE.metadata,
+            identifiers: [{ namespace: "arxiv", value: "2401.12345" }],
+          },
+        }),
+      );
+      const bytes = workbenchPdf("arXiv:2401.12345v2", "preprint");
+      const receipt = await env.app.maintenance!.ingestPdf({
+        literature_id: id,
+        bytes,
+      });
+      expect(receipt.sha256).toBe(await sha256(bytes));
+      expect((await env.app.library.detail(id)).primary_pdf?.asset.sha256).toBe(
+        receipt.sha256,
+      );
+    } finally {
+      await env.close();
+    }
+  });
   it("copies explicit bytes, records user provenance and exposes one fact to independent query", async () => {
     const env = await setup();
     const source = join(env.home, "user-paper.pdf");
@@ -66,6 +92,7 @@ describe("shared manual PDF maintenance", () => {
       expect(await readFile(source)).toEqual(Buffer.from(bytes));
       const detail = await env.app.library.detail(id);
       expect(detail.primary_pdf?.asset.sha256).toBe(receipt.sha256);
+      expect(detail.primary_pdf?.article_identity_status).toBe("unverified");
       expect(
         (await env.app.database.getReceiptIntent(receipt.receipt_id))
           ?.source_url,
@@ -100,7 +127,25 @@ describe("shared manual PDF maintenance", () => {
     }
   });
 
-  it("rejects bad and wrong-article files, cancellation and publication failure without a primary fact", async () => {
+  it("accepts a readable manual PDF without article identifiers as unverified", async () => {
+    const env = await setup();
+    try {
+      const receipt = await env.app.maintenance!.ingestPdf({
+        literature_id: id,
+        bytes: workbenchPdf("", "", false),
+      });
+      const detail = await env.app.library.detail(id);
+      expect(detail.primary_pdf?.asset.sha256).toBe(receipt.sha256);
+      expect(detail.primary_pdf?.article_identity_status).toBe("unverified");
+      expect(
+        (await env.app.database.getReceiptIntent(receipt.receipt_id))?.identity,
+      ).toBe("unverified");
+    } finally {
+      await env.close();
+    }
+  });
+
+  it("rejects invalid files, cancellation and publication failure without a primary fact", async () => {
     const env = await setup();
     const bytes = workbenchPdf();
     try {
@@ -110,10 +155,6 @@ describe("shared manual PDF maintenance", () => {
           bytes: Buffer.from("not a PDF"),
         }),
       ).rejects.toBeInstanceOf(Error);
-      const wrong = workbenchPdf("10.5555/another.paper");
-      await expect(
-        env.app.maintenance!.ingestPdf({ literature_id: id, bytes: wrong }),
-      ).rejects.toMatchObject({ code: "candidate-uncertain" });
       const stop = new AbortController();
       stop.abort();
       await expect(
@@ -373,7 +414,7 @@ describe("shared manual PDF maintenance", () => {
     }
   });
 
-  it("cancels a received upload when the client disconnects during identity inspection", async () => {
+  it("cancels a received upload when the client disconnects during file inspection", async () => {
     const env = await setup();
     await env.app.close();
     const server = await startMaintenanceWorkbench({

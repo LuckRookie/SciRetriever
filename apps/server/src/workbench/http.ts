@@ -601,6 +601,10 @@ export async function startWorkbenchHttp(
   options: WorkbenchHttpOptions,
 ): Promise<{ readonly origin: string; close(): Promise<void> }> {
   const session = options.session;
+  const projectedView = (clientId?: string) =>
+    session instanceof ProductionWorkbenchSession
+      ? session.view(clientId)
+      : session.view();
   const cookieName = `sr_workbench_${randomBytes(8).toString("hex")}`;
   const cookie = randomBytes(32).toString("hex");
   const clients = new Map<string, ClientGrant>();
@@ -778,14 +782,17 @@ export async function startWorkbenchHttp(
       json(response, 201, {
         client_id: clientId,
         csrf: grant.csrf,
-        view: session.view(),
+        view: projectedView(clientId),
       });
       return;
     }
     const queryKeys = [...url.searchParams.keys()];
     if (
       queryKeys.some(
-        (key) => !["client_id", "frame_seq", "limit", "after"].includes(key),
+        (key) =>
+          !["client_id", "session_id", "frame_seq", "limit", "after"].includes(
+            key,
+          ),
       ) ||
       new Set(queryKeys).size !== queryKeys.length
     ) {
@@ -800,7 +807,7 @@ export async function startWorkbenchHttp(
     }
     grant.touched = Date.now();
     if (request.method === "GET" && pathname === "/api/view") {
-      json(response, 200, session.view());
+      json(response, 200, projectedView(clientId));
       return;
     }
     if (request.method === "GET" && pathname === "/api/version") {
@@ -821,7 +828,26 @@ export async function startWorkbenchHttp(
         json(response, 400, { code: "invalid-frame" });
         return;
       }
-      const frame = session.frame(Number(raw));
+      const targetSessionId = url.searchParams.get("session_id");
+      if (
+        targetSessionId !== null &&
+        !/^[A-Za-z0-9._:-]{1,128}$/u.test(targetSessionId)
+      ) {
+        json(response, 400, { code: "invalid-frame" });
+        return;
+      }
+      if (
+        session instanceof ProductionWorkbenchSession &&
+        targetSessionId === null &&
+        (projectedView(clientId).sessions?.length ?? 0) > 1
+      ) {
+        json(response, 400, { code: "frame-session-required" });
+        return;
+      }
+      const frame =
+        session instanceof ProductionWorkbenchSession
+          ? session.frame(Number(raw), clientId, targetSessionId ?? undefined)
+          : session.frame(Number(raw));
       if (!frame) {
         json(response, 409, { code: "frame-replaced" });
         return;
@@ -848,7 +874,7 @@ export async function startWorkbenchHttp(
         // A slow viewer gets the current projection after drain, never an unbounded frame queue.
         if (!response.destroyed && !response.writableNeedDrain)
           response.write(
-            `event: view\ndata: ${JSON.stringify(session.view())}\n\n`,
+            `event: view\ndata: ${JSON.stringify(projectedView(clientId))}\n\n`,
           );
       };
       send();
@@ -1014,17 +1040,25 @@ export async function startWorkbenchHttp(
       const command = object(value, ["article_id"]);
       if (typeof command.article_id !== "string") invalidInput();
       options.acquisition.start(command.article_id);
-      json(response, 202, { view: session.view() });
+      json(response, 202, { view: projectedView(clientId) });
+      return;
+    }
+    if (pathname === "/api/sessions/select") {
+      if (!(session instanceof ProductionWorkbenchSession)) invalidInput();
+      const command = object(value, ["session_id"]);
+      session.selectSession(clientId, command.session_id);
+      await session.refresh(clientId);
+      json(response, 200, { view: projectedView(clientId) });
       return;
     }
     if (pathname === "/api/guidance") {
       const guidance = session.submitGuidance(clientId, value);
-      json(response, 200, { guidance, view: session.view() });
+      json(response, 200, { guidance, view: projectedView(clientId) });
       return;
     }
     if (pathname === "/api/guidance/cancel") {
       const guidance = session.cancelGuidance(clientId, value);
-      json(response, 200, { guidance, view: session.view() });
+      json(response, 200, { guidance, view: projectedView(clientId) });
       return;
     }
     if (pathname === "/api/tabs/activate") {
@@ -1040,7 +1074,7 @@ export async function startWorkbenchHttp(
         invalidInput();
       await options.tabs.activate(command.page_id);
       await session.refresh();
-      json(response, 200, { view: session.view() });
+      json(response, 200, { view: projectedView(clientId) });
       return;
     }
     if (pathname === "/api/jobs") {
@@ -1355,18 +1389,18 @@ export async function startWorkbenchHttp(
     }
     if (pathname === "/api/candidate/accept") {
       await session.acceptCandidate(clientId, value);
-      json(response, 200, { view: session.view() });
+      json(response, 200, { view: projectedView(clientId) });
       return;
     }
     if (pathname === "/api/candidate/abandon") {
       await session.abandonCandidate(clientId, value);
-      json(response, 200, { view: session.view() });
+      json(response, 200, { view: projectedView(clientId) });
       return;
     }
     if (pathname === "/api/action") {
       const result = await session.command(clientId, value);
       await session.refresh();
-      json(response, 200, { result, view: session.view() });
+      json(response, 200, { result, view: projectedView(clientId) });
       return;
     }
     if (pathname === "/api/control") {
@@ -1388,19 +1422,29 @@ export async function startWorkbenchHttp(
         invalidInput();
       switch (command.kind) {
         case "takeover":
-          session.takeover(clientId, epoch);
+          if (production)
+            session.takeover(clientId, epoch, command.session_id as string);
+          else session.takeover(clientId, epoch);
           break;
         case "release":
-          session.release(clientId, epoch);
+          if (production)
+            session.release(clientId, epoch, command.session_id as string);
+          else session.release(clientId, epoch);
           break;
         case "pause":
-          session.pause(clientId, epoch);
+          if (production)
+            session.pause(clientId, epoch, command.session_id as string);
+          else session.pause(clientId, epoch);
           break;
         case "resume":
-          session.resume(clientId, epoch);
+          if (production)
+            session.resume(clientId, epoch, command.session_id as string);
+          else session.resume(clientId, epoch);
           break;
         case "cancel":
-          session.cancel(clientId, epoch);
+          if (production)
+            session.cancel(clientId, epoch, command.session_id as string);
+          else session.cancel(clientId, epoch);
           break;
         case "agent-step": {
           // Respond immediately so a slow model cannot hold the human control channel.
@@ -1410,7 +1454,7 @@ export async function startWorkbenchHttp(
         default:
           invalidInput();
       }
-      json(response, 200, { view: session.view() });
+      json(response, 200, { view: projectedView(clientId) });
       return;
     }
     if (pathname === "/api/target") {
@@ -1426,7 +1470,7 @@ export async function startWorkbenchHttp(
         command.control_epoch,
         command.article_id,
       );
-      json(response, 200, { view: session.view() });
+      json(response, 200, { view: projectedView(clientId) });
       return;
     }
     json(response, 404, { code: "endpoint-not-found" });

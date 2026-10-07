@@ -9,10 +9,12 @@ import {
   writeFile,
   symlink,
   rename,
+  readdir,
+  link,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalJsonBytes,
   sha256,
@@ -154,6 +156,33 @@ describe("durable candidate publication", () => {
       status: "ASSET_READY",
     });
   });
+  it("reconciles a crash between exclusive linking and removal of its private preparation entry", async () => {
+    const s = await setup();
+    await s.database.prepareReceipt(s.input);
+    await s.collector.preparePublication(s.candidate, s.input.target);
+    const privateName = (await readdir(join(s.root, "objects"))).find((name) =>
+      name.startsWith(".sciretriever-publication-"),
+    )!;
+    await link(
+      join(s.root, "objects", privateName),
+      join(s.root, s.input.target),
+    );
+    await s.files.close();
+    await s.database.close();
+    const next = s.open();
+    expect(await next.publisher.reconcile()).toMatchObject([
+      { receipt_id: "receipt-1", created: false },
+    ]);
+    expect(
+      (await readdir(join(s.root, "objects"))).filter((name) =>
+        name.startsWith(".sciretriever-publication-"),
+      ),
+    ).toEqual([]);
+    expect(await next.database.getLiterature(id(1))).toMatchObject({
+      status: "ASSET_READY",
+    });
+    expect([...(await next.files.read(s.input.target, 3))]).toEqual([1, 2, 3]);
+  });
   it("replays a transaction whose response was lost without duplicate facts", async () => {
     const s = await setup();
     const faulty = new CandidatePublisher(s.collector, {
@@ -237,6 +266,112 @@ describe("durable candidate publication", () => {
     expect([...(await readFile(join(s.root, s.input.target)))]).toEqual([
       9, 8, 7,
     ]);
+  });
+  it.each(["initial", "after-preparation", "commit"] as const)(
+    "rejects an unrelated receipt returned at %s even when its target has identical bytes",
+    async (phase) => {
+      const s = await setup();
+      const wrongTarget = "objects/unrelated.pdf";
+      const stage = await s.files.stage();
+      await stage.write(new Uint8Array([1, 2, 3]));
+      await s.files.publish(stage, wrongTarget);
+      const wrongReceipt = {
+        receipt_id: s.input.receipt_id,
+        literature_id: s.input.literature_id,
+        asset_id: s.input.asset_id,
+        sha256: s.candidate.sha256,
+        reference: wrongTarget,
+        created: true,
+      };
+      let prepares = 0;
+      const publisher = new CandidatePublisher(s.collector, {
+        prepareReceipt: async (intent) => {
+          prepares++;
+          const existing = await s.database.prepareReceipt(intent);
+          if (
+            phase === "initial" ||
+            (phase === "after-preparation" && prepares === 2)
+          )
+            return wrongReceipt;
+          return existing;
+        },
+        pendingReceipts: () => s.database.pendingReceipts(),
+        commitReceipt: async (intent, created) => {
+          const result = await s.database.commitReceipt(intent, created);
+          return phase === "commit" ? wrongReceipt : result;
+        },
+      });
+      await expect(publisher.publish(s.input)).rejects.toMatchObject({
+        bytes_published: phase === "commit",
+        cause: { message: "candidate publication receipt mismatch" },
+      });
+      expect([...(await readFile(join(s.root, wrongTarget)))]).toEqual([
+        1, 2, 3,
+      ]);
+      if (phase !== "commit") {
+        expect(await s.database.getAsset(s.input.asset_id)).toBeNull();
+        expect(await s.database.pendingReceipts()).toHaveLength(1);
+        await expect(
+          readFile(join(s.root, s.input.target)),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+    },
+  );
+  it("bounds repeated real destination replacement and preserves the candidate and pending receipt", async () => {
+    const s = await setup();
+    const commit = s.collector.commitPrepared.bind(s.collector);
+    let attempts = 0;
+    const intercepted = vi
+      .spyOn(s.collector, "commitPrepared")
+      .mockImplementation(async (prepared) => {
+        attempts++;
+        const replacement = join(s.root, "objects", `race-${attempts}.pdf`);
+        await writeFile(replacement, new Uint8Array([1, 2, 3]));
+        await rename(replacement, join(s.root, s.input.target));
+        return commit(prepared);
+      });
+    try {
+      await expect(s.publisher.publish(s.input)).rejects.toMatchObject({
+        bytes_published: false,
+        cause: { code: "file-publication", conflict: false },
+      });
+      expect(attempts).toBe(3);
+      expect(await s.collector.recover(s.candidate.transfer_id)).toEqual(
+        s.candidate,
+      );
+      expect(await s.database.pendingReceipts()).toHaveLength(1);
+      expect(await s.database.getAsset(s.input.asset_id)).toBeNull();
+    } finally {
+      intercepted.mockRestore();
+    }
+  });
+  it("rejects a replaced durable candidate after its publication copy has been prepared", async () => {
+    const s = await setup();
+    const commit = s.collector.commitPrepared.bind(s.collector);
+    const intercepted = vi
+      .spyOn(s.collector, "commitPrepared")
+      .mockImplementation(async (prepared) => {
+        const replacement = join(s.root, ".candidates", "replacement.bin");
+        await writeFile(replacement, new Uint8Array([1, 2, 3]));
+        await rename(replacement, join(s.root, s.candidate.reference));
+        return commit(prepared);
+      });
+    try {
+      await expect(s.publisher.publish(s.input)).rejects.toMatchObject({
+        bytes_published: false,
+      });
+      await expect(
+        readFile(join(s.root, s.input.target)),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await s.database.pendingReceipts()).toHaveLength(1);
+      expect(await s.database.getAsset(s.input.asset_id)).toBeNull();
+    } finally {
+      intercepted.mockRestore();
+    }
   });
   it("rejects tampered candidate bytes on recovery and publication", async () => {
     const s = await setup();

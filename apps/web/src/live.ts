@@ -128,6 +128,20 @@ async function transact(
 }
 function accept(value: unknown): void {
   const next = parseWorkbenchView(value);
+  if (
+    next.session_id !== view?.session_id ||
+    (next.sessions &&
+      next.session_phase === undefined &&
+      next.sessions.length > 1)
+  ) {
+    shown = undefined;
+    if (frameUrl) URL.revokeObjectURL(frameUrl);
+    frameUrl = undefined;
+    image.removeAttribute("src");
+    node("frame-empty").hidden = false;
+    node("element-actions").replaceChildren();
+    node("candidates").replaceChildren();
+  }
   if (next.mode === "production" && next.session_id !== view?.session_id) {
     pendingArticleId = next.article_id;
     node<HTMLInputElement>("acquisition-literature").value = next.article_id;
@@ -198,7 +212,13 @@ function action(
   input: OperatorInput,
   observation: WorkbenchObservation | undefined,
 ): void {
-  if (!view || !observation || !mine()) {
+  if (
+    !view ||
+    !observation ||
+    observation.session_id !== view.session_id ||
+    observation.article_id !== view.article_id ||
+    !mine()
+  ) {
     feedback("请先接管页面。");
     return;
   }
@@ -219,7 +239,9 @@ async function loadFrame(): Promise<void> {
   if (
     !observation ||
     !observation.frame_available ||
-    observation.frame_seq === shown?.frame_seq ||
+    (observation.session_id === shown?.session_id &&
+      observation.page_id === shown?.page_id &&
+      observation.frame_seq === shown?.frame_seq) ||
     loadingFrame ||
     busy
   )
@@ -228,13 +250,21 @@ async function loadFrame(): Promise<void> {
   let nextUrl: string | undefined;
   try {
     const response = await fetch(
-      `/api/frame${query()}&frame_seq=${observation.frame_seq}`,
+      `/api/frame${query()}&session_id=${encodeURIComponent(observation.session_id)}&frame_seq=${observation.frame_seq}`,
     );
     if (!response.ok) return;
     nextUrl = URL.createObjectURL(await response.blob());
     const next = new Image();
     next.src = nextUrl;
     await next.decode();
+    const current = view?.observation;
+    if (
+      !current ||
+      current.session_id !== observation.session_id ||
+      current.page_id !== observation.page_id ||
+      current.frame_seq !== observation.frame_seq
+    )
+      return;
     if (frameUrl) URL.revokeObjectURL(frameUrl);
     frameUrl = nextUrl;
     nextUrl = undefined;
@@ -250,10 +280,52 @@ async function loadFrame(): Promise<void> {
     loadingFrame = false;
   }
 }
+function renderSessions(): void {
+  let root = document.getElementById("browser-sessions");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "browser-sessions";
+    root.className = "live-tabs";
+    root.setAttribute("aria-label", "文章会话");
+    node("browser-tabs").before(root);
+  }
+  root.replaceChildren();
+  root.hidden = !view?.sessions?.length;
+  const phases = {
+    queued: "等待执行",
+    ready: "等待观察",
+    deciding: "Agent 推理中",
+    waiting: "等待页面或控制权",
+    downloading: "下载中",
+    validating: "验收文件中",
+    "candidate-ready": "等待入库",
+    closing: "结清资源中",
+    closed: "已结束",
+  };
+  for (const session of view?.sessions ?? []) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "live-tab";
+    button.dataset.sessionId = session.session_id;
+    const selected =
+      view?.session_phase !== undefined &&
+      session.session_id === view.session_id;
+    button.disabled = busy || selected;
+    button.setAttribute("aria-current", selected ? "page" : "false");
+    button.textContent = `${session.article_id} · ${phases[session.phase]}`;
+    button.addEventListener("click", () => {
+      void transact(() =>
+        request("/api/sessions/select", { session_id: session.session_id }),
+      );
+    });
+    root.append(button);
+  }
+}
 function render(): void {
   if (!view) return;
   const observation = view.observation;
   const production = view.mode === "production";
+  renderSessions();
   if (production) {
     node("live-task-kind").textContent = "生产文献获取 · 由用户明确启动";
     node("live-task-title").textContent = view.article_id;
@@ -268,7 +340,8 @@ function render(): void {
     const phaseLabels = {
       idle: "等待你明确开始 PDF 获取。",
       acquiring: "正在执行已启动的获取操作；当前路线及总等待时间尚不可见。",
-      browser: "浏览器文章已打开；操作、人工等待和候选处理共用文章截止时间。",
+      browser:
+        "文章会话已打开。推理、操作及页面反馈共用活跃时间预算；人工控制、排队和下载期间暂停计时。",
       settling: "页面流程已结束，正在结算候选与提交结果。",
       ended: "本次获取操作已结束。",
     };
@@ -291,7 +364,7 @@ function render(): void {
     node("operation-read").hidden = operation.primary_pdf === null;
     if (operation.primary_pdf)
       node("operation-phase").textContent +=
-        ` Library 已确认主 PDF：${operation.primary_pdf.sha256.slice(0, 16)}…（${(operation.primary_pdf.size_bytes / 1024).toFixed(1)} KB）。`;
+        ` Library 已保存主 PDF（文章身份未验证）：${operation.primary_pdf.sha256.slice(0, 16)}…（${(operation.primary_pdf.size_bytes / 1024).toFixed(1)} KB）。`;
   }
   node<HTMLButtonElement>("acquisition-start").disabled =
     busy ||
@@ -317,7 +390,20 @@ function render(): void {
   const terminal = ["cancelled", "finished", "failed"].includes(view.state);
   const canInput = mine() && !busy && !terminal && view.state !== "paused";
   image.dataset.control = String(canInput);
-  node("session-status").textContent = labels[view.state];
+  const articlePhases = {
+    queued: "等待执行",
+    ready: "等待观察",
+    deciding: "Agent 推理中",
+    waiting: "等待页面或控制权",
+    downloading: "下载中",
+    validating: "验收文件中",
+    "candidate-ready": "等待入库",
+    closing: "结清资源中",
+    closed: "已结束",
+  };
+  const outcome = view.session_outcome;
+  node("session-status").textContent =
+    `${labels[view.state]}${view.session_phase ? ` · ${articlePhases[view.session_phase]}` : ""}${outcome?.kind === "published" ? " · PDF 已入库" : outcome?.kind === "retained" ? ` · 候选保留（${outcome.code}）` : ""}${view.session_cleanup_failure ? ` · 资源清理未完成（${view.session_cleanup_failure}）` : ""}`;
   node("owner").textContent = mine()
     ? "你正在控制页面"
     : view.control.controller_id
@@ -441,7 +527,7 @@ function render(): void {
   if (!observation) {
     node("budget").textContent =
       production && operation?.phase !== "idle"
-        ? "Browser 文章截止时间尚不可读；不估算整个获取操作耗时。"
+        ? "选定文章的活跃时间预算尚不可读。"
         : "";
     return;
   }
@@ -454,7 +540,7 @@ function render(): void {
         ? "会话暂停"
         : "真实浏览器";
   node("budget").textContent =
-    `本篇 Browser 剩余 ${observation.remaining.actions} 次操作 · ${Math.ceil(observation.remaining.deadline_ms / 1000)} 秒截止；不含其它获取路线的等待。`;
+    `本篇 Agent 剩余 ${observation.remaining.model_calls} 次模型调用 · ${observation.remaining.actions} 次动作 · ${Math.ceil(observation.remaining.deadline_ms / 1000)} 秒活跃时间。`;
   node("observation-info").textContent =
     `观察 ${observation.observation_revision} · ${observation.loading ? "页面加载中" : "页面已加载"}${observation.partial ? " · 摘要已截断" : ""}${
       observation.capture_state === "CANDIDATE"

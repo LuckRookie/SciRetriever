@@ -223,7 +223,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
                             {
                               function: {
                                 name: "browser_action",
-                                arguments: JSON.stringify(action),
+                                arguments: JSON.stringify({ action }),
                               },
                             },
                           ],

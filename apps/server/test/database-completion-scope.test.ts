@@ -666,34 +666,46 @@ describe("database completion scope and cancellation", () => {
     },
   );
 
-  it("retains the existing catalog write admission through execution and releases it on interruption", async () => {
-    const env = await fixture();
-    const competitor = new CatalogWriteAdmission(env.app.writes.catalogPath);
-    try {
-      await env.put(1);
-      const controller = new AbortController();
-      const report = await env
-        .service(async () => {
+  it.each(["run", "runFrozen"] as const)(
+    "releases catalog admission during %s acquisition while preserving the frozen scope",
+    async (method) => {
+      const env = await fixture();
+      const competitor = new CatalogWriteAdmission(env.app.writes.catalogPath);
+      try {
+        await env.put(1);
+        const controller = new AbortController();
+        const service = env.service(async () => {
           await expect(
             competitor.run(async () => undefined),
-          ).rejects.toMatchObject({ code: "write-admission-conflict" });
+          ).resolves.toBeUndefined();
+          await env.put(2);
           controller.abort();
           return { kind: "cancelled" };
-        })
-        .run(
-          { selector: { kind: "all-pending" }, goal: "ASSET_READY" },
-          { signal: controller.signal },
-        );
-      expect(report.end).toEqual({ kind: "interrupted" });
-      expect(report.interrupted).toHaveLength(1);
-      await expect(
-        competitor.run(async () => undefined),
-      ).resolves.toBeUndefined();
-    } finally {
-      await competitor.close();
-      await env.close();
-    }
-  });
+        });
+        const request = {
+          selector: { kind: "all-pending" as const },
+          goal: "ASSET_READY" as const,
+        };
+        const report =
+          method === "run"
+            ? await service.run(request, { signal: controller.signal })
+            : await service.runFrozen(
+                await service.freezeRequest(request),
+                request.goal,
+                { signal: controller.signal },
+              );
+        expect(report.end).toEqual({ kind: "interrupted" });
+        expect(report.interrupted).toHaveLength(1);
+        expect(partitions(report)).toHaveLength(1);
+        await expect(
+          competitor.run(async () => undefined),
+        ).resolves.toBeUndefined();
+      } finally {
+        await competitor.close();
+        await env.close();
+      }
+    },
+  );
 
   it.each(["locator", "browser"] as const)(
     "preserves storage failure through the real %s acquisition adapter after abort",

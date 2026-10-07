@@ -76,11 +76,7 @@ export class ArtifactRecovery {
         reference: v.reference,
         artifact: parseArtifactRef(v.artifact),
       };
-      if (
-        value.artifact.byte_size < 1 ||
-        value.artifact.byte_size > 512 * 1024 * 1024
-      )
-        fail();
+      if (value.artifact.byte_size < 1) fail();
       const old = unique.get(value.reference);
       if (old && JSON.stringify(old) !== JSON.stringify(value)) fail();
       unique.set(value.reference, value);

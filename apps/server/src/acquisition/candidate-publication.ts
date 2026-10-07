@@ -9,6 +9,7 @@ import {
   BrowserTransferCollector,
   type DurableCandidate,
 } from "../browser/transfer.js";
+import { settlePreparedPublication } from "../storage/files/publication.js";
 
 export interface CandidatePublicationInput {
   readonly metadata_snapshot: MetadataSnapshot;
@@ -20,7 +21,7 @@ export interface CandidatePublicationInput {
   readonly target: string;
   readonly provenance: ObservationProvenance;
   readonly source_url: string | null;
-  readonly identity: "accepted" | "rejected" | "uncertain";
+  readonly identity: "unverified" | "accepted" | "rejected" | "uncertain";
 }
 export type CandidatePublication = CandidatePublicationReceipt;
 export class CandidatePublicationError extends Error {
@@ -44,6 +45,21 @@ export interface CandidatePublicationRepository {
   pendingReceipts(): Promise<readonly CandidatePublicationIntent[]>;
 }
 
+function requireMatchingReceipt(
+  intent: CandidatePublicationIntent,
+  receipt: CandidatePublicationReceipt,
+): CandidatePublicationReceipt {
+  if (
+    receipt.reference !== intent.target ||
+    receipt.sha256 !== intent.candidate.sha256 ||
+    receipt.receipt_id !== intent.receipt_id ||
+    receipt.literature_id !== intent.literature_id ||
+    receipt.asset_id !== intent.asset_id
+  )
+    throw new Error("candidate publication receipt mismatch");
+  return receipt;
+}
+
 /** Acquisition orders immutable bytes before the atomic fact + receipt transaction. */
 export class CandidatePublisher {
   constructor(
@@ -51,18 +67,18 @@ export class CandidatePublisher {
     private readonly repository: CandidatePublicationRepository,
   ) {}
 
-  publish(input: CandidatePublicationInput): Promise<CandidatePublication> {
-    const copy = structuredClone(input);
-    return this.collector.withPublication(() => this.publishAdmitted(copy));
-  }
-  private async publishAdmitted(
+  async publish(
     input: CandidatePublicationInput,
   ): Promise<CandidatePublication> {
+    const copy = structuredClone(input);
     let bytesPublished = false;
     try {
-      const intent = parseCandidatePublicationIntent(input);
-      const previous = await this.repository.prepareReceipt(intent);
+      const intent = parseCandidatePublicationIntent(copy);
+      const previous = await this.collector.withPublication(() =>
+        this.repository.prepareReceipt(intent),
+      );
       if (previous) {
+        requireMatchingReceipt(intent, previous);
         bytesPublished = true;
         await this.collector.verifyPublished(
           intent.candidate,
@@ -70,17 +86,37 @@ export class CandidatePublisher {
         );
         return previous;
       }
-      const published = await this.collector.publish(
+      const prepared = await this.collector.preparePublication(
         intent.candidate,
         intent.target,
       );
-      bytesPublished = true;
-      if (
-        published.sha256 !== intent.candidate.sha256 ||
-        published.size !== intent.candidate.size_bytes
-      )
-        throw new Error("candidate publication integrity mismatch");
-      return await this.repository.commitReceipt(intent, published.created);
+      try {
+        return await settlePreparedPublication(prepared, () =>
+          this.collector.withPublication(async () => {
+            const replay = await this.repository.prepareReceipt(intent);
+            if (replay) {
+              requireMatchingReceipt(intent, replay);
+              bytesPublished = true;
+            }
+            const published = await this.collector.commitPrepared(prepared);
+            bytesPublished = true;
+            if (
+              published.sha256 !== intent.candidate.sha256 ||
+              published.size !== intent.candidate.size_bytes
+            )
+              throw new Error("candidate publication integrity mismatch");
+            return (
+              replay ??
+              requireMatchingReceipt(
+                intent,
+                await this.repository.commitReceipt(intent, published.created),
+              )
+            );
+          }),
+        );
+      } finally {
+        await this.collector.releasePrepared(prepared);
+      }
     } catch (cause) {
       throw new CandidatePublicationError(bytesPublished, cause);
     }

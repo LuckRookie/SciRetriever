@@ -1,9 +1,19 @@
 import { expect, it, vi } from "vitest";
 import { WorkbenchSession } from "../src/workbench/session.js";
 import type { BrowserPageHandle } from "../src/browser/host.js";
-import { BrowserPageRuntimeError } from "../src/browser/page-runtime.js";
+import {
+  BrowserPageRuntimeError,
+  BrowserPageTransitionError,
+} from "../src/browser/page-runtime.js";
 import { createBrowserArticleFlow } from "../src/browser/article-flow.js";
-import type { WorkbenchObservation } from "@sciretriever/contracts";
+import { sha256, type WorkbenchObservation } from "@sciretriever/contracts";
+
+// These command/ownership tests exercise pacing separately in the article driver tests.
+vi.mock("../src/browser/pacing.js", async (load) => ({
+  ...(await load<typeof import("../src/browser/pacing.js")>()),
+  waitForBrowserAgentCooldown: async (_ms: number, signal: AbortSignal) =>
+    !signal.aborted,
+}));
 
 function fixture(
   decide: ConstructorParameters<typeof WorkbenchSession>[3],
@@ -168,7 +178,7 @@ it("does not reacquire AI control after a gated refresh crosses human takeover",
     "applied",
   );
   expect(decide).toHaveBeenCalledTimes(1);
-  expect(committed).toHaveBeenCalledTimes(1);
+  expect(committed).toHaveBeenCalledTimes(2);
   await session.close();
 });
 
@@ -213,7 +223,7 @@ it("pauses on controller disconnect until an explicit takeover and release, whil
   expect(apply).not.toHaveBeenCalled();
   session.release(next, session.view().control.epoch);
   expect(await session.runAutomaticStep(signal.signal)).toBe("applied");
-  expect(apply).toHaveBeenCalledTimes(1);
+  expect(apply).toHaveBeenCalledTimes(2);
   await session.close();
 });
 
@@ -235,6 +245,34 @@ it("keeps the model's observation binding stable while viewers poll frames", asy
   expect(session.view().observation!.observation_revision).toBe(revision);
   decide({ kind: "go-back", revision });
   expect(await pending).toBe("applied");
+  expect(apply).toHaveBeenCalledTimes(2);
+  await session.close();
+});
+
+it("cancels Agent pacing on human takeover and lets the caller retry", async () => {
+  const { session, apply } = fixture(async (observation) => ({
+    kind: "go-back",
+    revision: observation.observation_revision,
+  }));
+  let started!: () => void;
+  let release!: () => void;
+  const startedPromise = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const releasePromise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  apply.mockImplementationOnce(async () => {
+    started();
+    await releasePromise;
+  });
+  const controller = session.attach();
+  await session.refresh();
+  const pending = session.runAutomaticStep(new AbortController().signal);
+  await startedPromise;
+  session.takeover(controller, session.view().control.epoch);
+  release();
+  await expect(pending).resolves.toBe("retry");
   expect(apply).toHaveBeenCalledTimes(1);
   await session.close();
 });
@@ -315,6 +353,9 @@ it("ends the article on the shared page deadline when a model ignores AbortSigna
   });
   const result = await flow.deliver({
     literature_id: session.articleId,
+    identifier: "doi:10.5555/fixture",
+    version: "published",
+    metadata_snapshot: { revision: 1, sha256: await sha256(new Uint8Array()) },
     start_url: "http://127.0.0.1/article",
     signal: new AbortController().signal,
   } as Parameters<typeof flow.deliver>[0]);
@@ -325,4 +366,18 @@ it("ends the article on the shared page deadline when a model ignores AbortSigna
   });
   expect(session.view().state).toBe("failed");
   await session.close();
+});
+
+it("retries a not-yet-visible production page without calling the model on stale data", async () => {
+  const decide = vi.fn(async () => ({ kind: "stop", reason: "user" }));
+  const { session, page } = fixture(decide);
+  const original = page.snapshot.bind(page);
+  vi.spyOn(page, "snapshot")
+    .mockRejectedValueOnce(new BrowserPageTransitionError())
+    .mockImplementation(original);
+  const signal = new AbortController().signal;
+  expect(await session.runAutomaticStep(signal)).toBe("retry");
+  expect(decide).not.toHaveBeenCalled();
+  expect(await session.runAutomaticStep(signal)).toBe("stopped");
+  expect(decide).toHaveBeenCalledTimes(1);
 });

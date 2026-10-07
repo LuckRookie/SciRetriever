@@ -219,19 +219,25 @@ function compareCandidates(
 
 function acquisitionFailure(failure: AcquisitionBatchFailure): StableFailure {
   const code =
-    failure.code === "source-discovery-failed"
-      ? "pdf-route-discovery-failed"
-      : failure.code === "candidate-download-failed"
-        ? "pdf-route-delivery-failed"
-        : failure.code === "source-cooldown"
-          ? "pdf-route-cooling-down"
-          : failure.code === "assistance-required"
-            ? "pdf-assistance-required"
-            : failure.code === "assistance-skipped"
-              ? "pdf-assistance-skipped"
-              : failure.code === "execution-cancelled"
-                ? "pdf-acquisition-cancelled"
-                : "pdf-route-unavailable";
+    failure.code === "rate-limited"
+      ? "pdf-rate-limited"
+      : failure.code === "http-response-failed"
+        ? "pdf-http-response-failed"
+        : failure.code === "network-failed"
+          ? "pdf-network-failed"
+          : failure.code === "source-discovery-failed"
+            ? "pdf-route-discovery-failed"
+            : failure.code === "candidate-download-failed"
+              ? "pdf-route-delivery-failed"
+              : failure.code === "source-cooldown"
+                ? "pdf-route-cooling-down"
+                : failure.code === "assistance-required"
+                  ? "pdf-assistance-required"
+                  : failure.code === "assistance-skipped"
+                    ? "pdf-assistance-skipped"
+                    : failure.code === "execution-cancelled"
+                      ? "pdf-acquisition-cancelled"
+                      : "pdf-route-unavailable";
   return stableFailure(
     code,
     failure.reason,
@@ -532,7 +538,9 @@ export class DatabaseCompletionTargetRunner {
         failure: stableFailure(
           outcome.code.startsWith("browser-")
             ? `pdf-${outcome.code}`
-            : "pdf-browser-unavailable",
+            : /^pdf-reader-[a-z0-9-]{1,96}$/u.test(outcome.code)
+              ? outcome.code
+              : "pdf-browser-unavailable",
           outcome.reason,
           "Resolve the controlled Browser route or provide a verified PDF, then retry the target.",
           false,
@@ -779,7 +787,7 @@ export class DatabaseCompletionTargetRunner {
   }
 }
 
-/** One run owns its workers, acquisition lane and commit executor; none escape its admission. */
+/** One run owns and drains its workers, acquisition lane and commit executor. */
 class DatabaseCompletionOperation {
   constructor(
     readonly max_concurrency: number,
@@ -841,7 +849,7 @@ class DatabaseCompletionOperation {
           this.max_concurrency,
         );
         // Only one bounded chunk exists at a time. Await every worker before
-        // opening another chunk or releasing write admission.
+        // opening another chunk or returning the report.
         const execution: CompletionExecution = {
           commit: commits.run,
           acquire: directCompletionCommit,
@@ -992,17 +1000,12 @@ export class DatabaseCompletionService {
     if (goal !== "ASSET_READY" && goal !== "CONTENT_READY")
       throw new TypeError("completion goal is invalid");
     const transferIds = this.normalizeTransfers(request.transfer_ids ?? []);
-    // Keep the existing reentrant write admission from scope formation through
-    // the final report. Read transactions remain short; stage commits can reuse
-    // this admission without allowing another writer to change the scope.
-    return this.ports.writes.run(async () =>
-      this.runAdmitted(
-        await this.freeze(request.selector, goal),
-        goal,
-        transferIds,
-        options,
-      ),
+    // Freeze once under admission; network/model/file preparation must not hold
+    // the catalog lock. Each publication owns its short admission and CAS.
+    const targets = await this.ports.writes.run(() =>
+      this.freeze(request.selector, goal),
     );
+    return this.runAdmitted(targets, goal, transferIds, options);
   }
 
   /** Snapshot used when a durable Job is created; the returned candidate order is immutable. */
@@ -1042,9 +1045,7 @@ export class DatabaseCompletionService {
         throw new TypeError("frozen completion targets are invalid");
       keys.add(key);
     }
-    return this.ports.writes.run(() =>
-      this.runAdmitted(targets, goal, [], options),
-    );
+    return this.runAdmitted(targets, goal, [], options);
   }
 
   private async runAdmitted(

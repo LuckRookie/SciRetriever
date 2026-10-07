@@ -1075,6 +1075,8 @@ C08 的批次原子性是本方案推荐，不是已发布保证；较大的任�
 
 ### 7.1 实现结构与边界
 
+当前静态供应商/服务声明在各家 `providers/<provider>/definition.ts` 就近维护，由 `providers/registry.ts` 汇总，由生产适配边界将中性 scope 和政策交给 Network。普通 HTTP 的最小间隔、多窗口、同额度组退避与目的地重定向准入已经接线；日/周计数只在进程内，账户专有 quota/reset 头和 Browser 逐子资源政策仍有明确限制。详细当前行为及维护规则见[供应商治理](../../development/provider-governance.md)，本节目标合同不应被当作所有外部政策均已验证的证据。
+
 ```text
 apps/server/src/network/
   policy.ts          # URL/DNS/origin、地址类别、凭据转发与脱敏

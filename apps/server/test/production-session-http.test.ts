@@ -5,6 +5,7 @@ import { ProductionWorkbenchSession } from "../src/workbench/production-session.
 import {
   parseLiteratureId,
   parseWorkbenchView,
+  sha256,
   type DatabaseCompletionReport,
 } from "@sciretriever/contracts";
 
@@ -61,6 +62,43 @@ const page: BrowserPageHandle = {
   }),
   apply: vi.fn(async () => {}),
 };
+
+it("passes the current delivery identity to the workbench model decision", async () => {
+  let decidedTarget: unknown;
+  const session = new ProductionWorkbenchSession(
+    firstArticle,
+    async (_observation, _frame, _signal, _guidance, target) => {
+      decidedTarget = target;
+      return { kind: "stop", reason: "user" };
+    },
+  );
+  const signal = new AbortController().signal;
+  const target = {
+    literature_id: firstArticle,
+    identifier: "doi:10.5555/workbench-target",
+    version: "accepted-manuscript",
+  };
+  try {
+    const opened = await session.open(
+      {
+        ...target,
+        start_url: "https://fixture.example.test/article",
+        metadata_snapshot: {
+          revision: 1,
+          sha256: await sha256(new Uint8Array()),
+        },
+        signal,
+      },
+      { ...page, apply: vi.fn(async () => {}) },
+      Date.now() + 60_000,
+    );
+    expect(await opened.step(signal)).toBe("stopped");
+    expect(decidedTarget).toEqual(target);
+    opened.close(false);
+  } finally {
+    await session.close();
+  }
+});
 
 it("binds production control to each explicit article operation and cancels before Browser admission", async () => {
   const session = new ProductionWorkbenchSession(firstArticle, async () => ({

@@ -1,3 +1,7 @@
+import {
+  effectiveBrowserConcurrency,
+  type BrowserConfig,
+} from "../configuration/index.js";
 import { constants } from "node:fs";
 import { access, lstat } from "node:fs/promises";
 import { delimiter, join } from "node:path";
@@ -50,6 +54,7 @@ function check(name: string, value: string | null): DoctorCheck {
 export async function runDoctor(
   options: {
     readonly cloakBundle?: string | null;
+    readonly browser?: BrowserConfig;
   } = {},
 ): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
@@ -63,20 +68,28 @@ export async function runDoctor(
       detail: `${process.platform}-${process.arch}`,
     }),
   );
-  const [flock, prlimit, pdfinfo, pdftotext, xvfb] = await Promise.all([
+  const [flock, prlimit, pdfinfo, xvfb] = await Promise.all([
     executable("flock"),
     executable("prlimit"),
     executable("pdfinfo"),
-    executable("pdftotext"),
     executable("Xvfb"),
   ]);
   checks.push(
     check("flock", flock),
     check("prlimit", prlimit),
     check("pdfinfo", pdfinfo),
-    check("pdftotext", pdftotext),
     check("Xvfb", xvfb),
   );
+  if (options.browser) {
+    const capacity = effectiveBrowserConcurrency(options.browser);
+    checks.push(
+      Object.freeze({
+        name: "browser-capacity",
+        status: "ready" as const,
+        detail: `configured sessions=${capacity.configured_sessions}; effective sessions=${capacity.effective_sessions}; decision workers=${capacity.decision_workers}; restriction=${capacity.limiting_reason ?? "none"}`,
+      }),
+    );
+  }
   const bundle = options.cloakBundle ?? process.env.SCIRETRIEVER_CLOAK_BUNDLE;
   if (!bundle)
     checks.push(

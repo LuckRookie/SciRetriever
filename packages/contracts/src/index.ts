@@ -68,7 +68,12 @@ export function parseDurableCandidate(value: unknown): DurableCandidate {
     transfer_id: r.transfer_id,
     state: "durable-ready",
     reference: r.reference as RelativeArtifactPath,
-    size_bytes: integer(r.size_bytes, ["size_bytes"], 1, 512 * 1024 * 1024),
+    size_bytes: integer(
+      r.size_bytes,
+      ["size_bytes"],
+      1,
+      Number.MAX_SAFE_INTEGER,
+    ),
     sha256: digest,
   });
 }
@@ -1551,7 +1556,8 @@ export interface CandidatePublicationIntent {
   readonly target: string;
   readonly provenance: Provenance;
   readonly source_url: string | null;
-  readonly identity: "accepted";
+  /** New downloads are unverified; accepted is retained for receipt replay only. */
+  readonly identity: "unverified" | "accepted";
 }
 
 export interface CandidatePublicationReceipt {
@@ -1591,7 +1597,8 @@ export function parseCandidatePublicationIntent(
     if (typeof r[key] !== "string" || !/^[a-zA-Z0-9._:-]{1,128}$/u.test(r[key]))
       fail([key]);
   }
-  if (r.identity !== "accepted") fail(["identity"]);
+  if (r.identity !== "accepted" && r.identity !== "unverified")
+    fail(["identity"]);
   const snapshot = exact(
     r.metadata_snapshot,
     ["revision", "sha256"],
@@ -1644,7 +1651,7 @@ export function parseCandidatePublicationIntent(
     target: asset.path,
     provenance: parseProvenance(r.provenance),
     source_url: source,
-    identity: "accepted",
+    identity: r.identity,
   });
 }
 
@@ -2134,6 +2141,7 @@ export interface WorkbenchCandidate {
   readonly sha256: string;
   readonly size_bytes: number;
   readonly page_count: number;
+  /** Candidate file admission; accepted does not verify article identity. */
   readonly disposition: "accepted" | "uncertain" | "rejected";
   readonly publication: CandidatePublicationReceipt | null;
 }
@@ -2169,6 +2177,75 @@ export interface WorkbenchView {
   readonly guidance?: readonly WorkbenchGuidance[];
   /** Present only for an explicit production PDF operation. No durable run is created. */
   readonly operation_feedback?: WorkbenchOperationFeedback;
+  /** Process-local article sessions; selecting a row grants no control authority. */
+  readonly sessions?: readonly WorkbenchArticleSession[];
+  readonly session_phase?: WorkbenchArticlePhase;
+  readonly session_outcome?: WorkbenchArticleCloseOutcome | null;
+  /** Process-local cleanup diagnosis; never replaces a published receipt or Library fact. */
+  readonly session_cleanup_failure?: string;
+}
+export type WorkbenchArticlePhase =
+  | "queued"
+  | "ready"
+  | "deciding"
+  | "waiting"
+  | "downloading"
+  | "validating"
+  | "candidate-ready"
+  | "closing"
+  | "closed";
+export interface WorkbenchArticleSession {
+  readonly session_id: string;
+  readonly article_id: string;
+  readonly generation: number;
+  readonly phase: WorkbenchArticlePhase;
+}
+export type WorkbenchArticleCloseOutcome =
+  | { readonly kind: "published"; readonly receipt_id: string }
+  | { readonly kind: "retained"; readonly code: string }
+  | { readonly kind: "cancelled" };
+const WORKBENCH_ARTICLE_PHASES = [
+  "queued",
+  "ready",
+  "deciding",
+  "waiting",
+  "downloading",
+  "validating",
+  "candidate-ready",
+  "closing",
+  "closed",
+] as const;
+function parseWorkbenchArticleSession(value: unknown): WorkbenchArticleSession {
+  const row = exact(
+    value,
+    ["session_id", "article_id", "generation", "phase"],
+    [],
+  );
+  return Object.freeze({
+    session_id: workbenchId(row.session_id),
+    article_id: workbenchId(row.article_id),
+    generation: wireCount(row.generation),
+    phase: enumeration(row.phase, WORKBENCH_ARTICLE_PHASES, ["phase"]),
+  });
+}
+function parseWorkbenchArticleCloseOutcome(
+  value: unknown,
+): WorkbenchArticleCloseOutcome {
+  const shape = object(value, []);
+  if (shape.kind === "published") {
+    const row = exact(value, ["kind", "receipt_id"], []);
+    return Object.freeze({
+      kind: "published",
+      receipt_id: workbenchId(row.receipt_id),
+    });
+  }
+  if (shape.kind === "retained") {
+    const row = exact(value, ["kind", "code"], []);
+    return Object.freeze({ kind: "retained", code: workbenchId(row.code) });
+  }
+  exact(value, ["kind"], []);
+  if (shape.kind !== "cancelled") fail(["kind"]);
+  return Object.freeze({ kind: "cancelled" });
 }
 export interface WorkbenchOperationFeedback {
   readonly phase: "idle" | "acquiring" | "browser" | "settling" | "ended";
@@ -2223,6 +2300,12 @@ export function parseWorkbenchView(value: unknown): WorkbenchView {
       ...("guidance" in shape ? ["guidance"] : []),
       ...("mode" in shape ? ["mode"] : []),
       ...("operation_feedback" in shape ? ["operation_feedback"] : []),
+      ...("sessions" in shape ? ["sessions"] : []),
+      ...("session_phase" in shape ? ["session_phase"] : []),
+      ...("session_outcome" in shape ? ["session_outcome"] : []),
+      ...("session_cleanup_failure" in shape
+        ? ["session_cleanup_failure"]
+        : []),
     ],
     [],
   );
@@ -2330,6 +2413,33 @@ export function parseWorkbenchView(value: unknown): WorkbenchView {
       r.observation === null ? null : parseWorkbenchObservation(r.observation),
     model_ready: wireBoolean(r.model_ready),
     error: r.error as WorkbenchView["error"],
+    ...(r.sessions === undefined
+      ? {}
+      : {
+          sessions: Object.freeze(
+            list(r.sessions, ["sessions"], parseWorkbenchArticleSession),
+          ),
+        }),
+    ...(r.session_phase === undefined
+      ? {}
+      : {
+          session_phase: enumeration(
+            r.session_phase,
+            WORKBENCH_ARTICLE_PHASES,
+            ["session_phase"],
+          ),
+        }),
+    ...(r.session_outcome === undefined
+      ? {}
+      : {
+          session_outcome:
+            r.session_outcome === null
+              ? null
+              : parseWorkbenchArticleCloseOutcome(r.session_outcome),
+        }),
+    ...(r.session_cleanup_failure === undefined
+      ? {}
+      : { session_cleanup_failure: workbenchId(r.session_cleanup_failure) }),
     candidates: Object.freeze(candidates),
     ...(guidance ? { guidance: Object.freeze(guidance) } : {}),
     ...(r.operation_feedback === undefined
@@ -2341,6 +2451,19 @@ export function parseWorkbenchView(value: unknown): WorkbenchView {
         }),
   };
   if (
+    (view.sessions &&
+      (view.sessions.length > 64 ||
+        new Set(view.sessions.map((session) => session.session_id)).size !==
+          view.sessions.length)) ||
+    (view.session_phase !== undefined &&
+      view.sessions &&
+      !view.sessions.some(
+        (session) =>
+          session.session_id === view.session_id &&
+          session.article_id === view.article_id &&
+          session.phase === view.session_phase,
+      )) ||
+    (view.session_cleanup_failure !== undefined && !view.session_outcome) ||
     view.control.workspace_id !== view.session_id ||
     view.candidates.some(
       (candidate) =>
@@ -2639,6 +2762,8 @@ export interface LiteratureAsset {
   readonly source_url: string | null;
 }
 export interface LiteratureAssetView {
+  /** No parse-stage identity verdict exists yet; readable PDFs remain unverified. */
+  readonly article_identity_status: "unverified" | null;
   readonly asset: Asset;
   readonly literature_asset: LiteratureAsset;
 }
@@ -2799,7 +2924,18 @@ export function parseMetadataObservation(value: unknown): MetadataObservation {
   });
 }
 export function parseLiteratureAssetView(value: unknown): LiteratureAssetView {
-  const r = exact(value, ["asset", "literature_asset"], []);
+  const raw = object(value, []);
+  const r = exact(
+    raw,
+    [
+      "asset",
+      "literature_asset",
+      ...(Object.hasOwn(raw, "article_identity_status")
+        ? ["article_identity_status"]
+        : []),
+    ],
+    [],
+  );
   const asset = parseAsset(r.asset);
   const l = exact(
     r.literature_asset,
@@ -2822,7 +2958,16 @@ export function parseLiteratureAssetView(value: unknown): LiteratureAssetView {
     provenance: parseProvenance(l.provenance),
     source_url: l.source_url === null ? null : publicSourceUrl(l.source_url),
   });
-  return Object.freeze({ asset, literature_asset });
+  const article_identity_status =
+    asset.media_type === "application/pdf" ? "unverified" : null;
+  // Older snapshots omit the label. Neither missing data nor legacy receipt
+  // acceptance constitutes a parse-stage verification.
+  if (
+    r.article_identity_status !== undefined &&
+    r.article_identity_status !== article_identity_status
+  )
+    fail(["article_identity_status"]);
+  return Object.freeze({ asset, literature_asset, article_identity_status });
 }
 export function parseLiteratureId(value: unknown): LiteratureId {
   return id<"LiteratureId">(value, []);

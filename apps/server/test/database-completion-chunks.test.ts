@@ -62,8 +62,22 @@ async function fixture(count: number) {
     "[execution]\nmax_concurrency = 2\n",
     { mode: 0o600 },
   );
+  const acquisitionResolver = vi.fn(async () => {
+    throw new Error(
+      "Completion fixture forbids external acquisition resolution",
+    );
+  });
+  const discoverDoiLanding = vi.fn(async () => []);
   const app = await createApplication(home, {
     executionSchema: "upgrade-synthetic",
+    acquisitionAssembly: {
+      resolver: acquisitionResolver,
+      doiLandingSource: {
+        source_name: "doi-landing",
+        ready: true,
+        discover: discoverDoiLanding,
+      },
+    },
   });
   const ids = Array.from({ length: count }, (_, n) => id(n + 1));
   for (const literature_id of ids) {
@@ -78,6 +92,8 @@ async function fixture(count: number) {
   return {
     app,
     ids,
+    acquisitionResolver,
+    discoverDoiLanding,
     request: {
       selector: { kind: "literatures" as const, literature_ids: ids },
       goal: "CONTENT_READY" as const,
@@ -117,9 +133,11 @@ describe("bounded database completion operations", () => {
       await vi.waitFor(() => expect(detail).toHaveBeenCalledTimes(2));
       release.resolve();
       const report = await pending;
-      // Production CONTENT_READY first admits the automatic PDF route. The
-      // fixture may expose either a route-local failure or a normal exhaustion,
-      // but it must never fall back to the old null-captured completion failure.
+      // Production CONTENT_READY still admits the automatic PDF route. The
+      // injected source gives each synthetic DOI an offline exhaustion, keeping
+      // this object-graph check independent of the real doi.org download path.
+      expect(env.discoverDoiLanding).toHaveBeenCalledTimes(5);
+      expect(env.acquisitionResolver).not.toHaveBeenCalled();
       expect(report.failed.map((item) => item.failure.code)).not.toContain(
         "content-completion-unavailable",
       );

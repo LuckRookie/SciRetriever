@@ -1,14 +1,11 @@
 import type { DurableCandidate } from "@sciretriever/contracts";
 import type { BrowserTransferInput } from "../browser/transfers.js";
 import { BrowserTransferCollector } from "../browser/transfer.js";
-import {
-  assessPdfIdentity,
-  type PdfIdentityAssessment,
-} from "./pdf-evidence.js";
+import { acceptPdfFile, type PdfAcceptance } from "./pdf-acceptance.js";
 
 export interface AssessedCandidate {
   readonly candidate: DurableCandidate;
-  readonly assessment: PdfIdentityAssessment;
+  readonly assessment: PdfAcceptance;
 }
 export interface IntakeTarget {
   readonly article_id: string;
@@ -22,7 +19,7 @@ export class BrowserCandidateIntake {
   constructor(
     private readonly collector: BrowserTransferCollector,
     private readonly target: IntakeTarget,
-    private readonly maxBytes = 16 * 1024 * 1024,
+    private readonly maxBytes = Number.MAX_SAFE_INTEGER,
   ) {}
   async receive(input: BrowserTransferInput): Promise<AssessedCandidate> {
     const check = () => {
@@ -33,19 +30,24 @@ export class BrowserCandidateIntake {
         throw new Error("candidate intake cancelled or misattributed");
     };
     check();
-    await this.collector.begin(input.transfer_id, this.maxBytes, input.capture);
+    await this.collector.begin(
+      input.transfer_id,
+      this.maxBytes,
+      input.capture,
+      "browser",
+      null,
+      input.signal,
+    );
     try {
       for await (const chunk of input.chunks) {
         check();
         await this.collector.append(input.transfer_id, chunk);
       }
       check();
-      const bytes = await this.collector.bytes(input.transfer_id);
-      const assessment = await assessPdfIdentity(
-        bytes,
-        this.target.identifier,
-        this.target.version,
-        input.signal,
+      const assessment = await this.collector.withStaged(
+        input.transfer_id,
+        (file) => acceptPdfFile(file, 10000, input.signal),
+        { signal: input.signal },
       );
       check();
       const candidate = await this.collector.complete(input.transfer_id);
@@ -61,12 +63,10 @@ export class BrowserCandidateIntake {
   ): Promise<AssessedCandidate> {
     if (candidate.capture?.article_id !== this.target.article_id)
       throw new Error("candidate article mismatch");
-    const bytes = await this.collector.candidateBytes(candidate);
-    const assessment = await assessPdfIdentity(
-      bytes,
-      this.target.identifier,
-      this.target.version,
-      signal,
+    const assessment = await this.collector.withCandidate(
+      candidate,
+      (file) => acceptPdfFile(file, 10000, signal),
+      signal ? { signal } : {},
     );
     return Object.freeze({ candidate, assessment });
   }

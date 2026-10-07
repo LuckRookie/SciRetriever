@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { expect, it } from "vitest";
 import { parseAsset, parseLiterature } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
+import { BrowserCandidateIntake } from "../src/acquisition/browser-intake.js";
 import { CandidateAcceptanceService } from "../src/acquisition/candidate-acceptance.js";
 import {
   workbenchPdf,
@@ -44,14 +45,14 @@ const literature = parseLiterature({
     keywords: [],
   },
 });
-async function setup() {
+async function setup(seed = literature) {
   const home = await mkdtemp(
     join(tmpdir(), "sciretriever-candidate-acceptance-"),
   );
   let application = await createApplication(home, {
     executionSchema: "upgrade-synthetic",
   });
-  await application.database.putLiterature(literature);
+  await application.database.putLiterature(seed);
   return {
     get app() {
       return application;
@@ -91,6 +92,44 @@ async function setup() {
   };
 }
 
+it.each([false, true])(
+  "publishes an unverified preprint without content identity matching, with a metadata DOI: %s",
+  async (withDoi) => {
+    const s = await setup(
+      parseLiterature({
+        ...literature,
+        version_role: "preprint",
+        metadata: {
+          ...literature.metadata,
+          identifiers: [
+            { namespace: "arxiv", value: "2401.12345" },
+            ...(withDoi ? [{ namespace: "doi", value: FIXTURE_DOI }] : []),
+          ],
+        },
+      }),
+    );
+    try {
+      const candidate = await s.candidate(
+        "preprint",
+        workbenchPdf("arXiv:2401.99999v2", "published"),
+      );
+      const receipt = await s.app.execution!.acceptance.accept(
+        await s.command("preprint"),
+      );
+      expect(
+        (await s.app.library.detail(id(1))).primary_pdf
+          ?.article_identity_status,
+      ).toBe("unverified");
+      expect(receipt.sha256).toBe(candidate.sha256);
+      expect(
+        (await s.app.database.currentFacts(id(1)))?.literature.status,
+      ).toBe("ASSET_READY");
+    } finally {
+      await s.close();
+    }
+  },
+);
+
 it("accepts a recovered PDF using current Literature facts, replays the receipt, and deduplicates repeated bytes", async () => {
   const s = await setup();
   try {
@@ -127,6 +166,10 @@ it("accepts a recovered PDF using current Literature facts, replays the receipt,
       await s.app.files.read(result.reference, candidate.size_bytes),
     ).toEqual(workbenchPdf());
     const saved = await s.app.database.getReceiptIntent(command.receipt_id);
+    expect(saved?.identity).toBe("unverified");
+    expect(
+      (await s.app.library.detail(id(1))).primary_pdf?.article_identity_status,
+    ).toBe("unverified");
     expect(saved?.provenance).toMatchObject({
       source_kind: "asset-provider",
       input_sha256: candidate.sha256,
@@ -190,21 +233,13 @@ it("reuses an existing catalog Asset ID and reference for matching PDF bytes", a
   }
 }, 20000);
 
-it("refuses stale, misattributed, ambiguous, conflicting, and caller-asserted identity inputs without losing Candidates", async () => {
+it("refuses stale, misattributed, conflicting and caller-asserted inputs without losing Candidates", async () => {
   const s = await setup();
   try {
     await s.candidate("wrong-article", workbenchPdf(), id(9));
     await expect(
       s.app.execution!.acceptance.accept(await s.command("wrong-article")),
     ).rejects.toMatchObject({ code: "candidate-misattributed" });
-    await s.candidate("wrong-doi", workbenchPdf("10.5555/other"));
-    await expect(
-      s.app.execution!.acceptance.accept(await s.command("wrong-doi")),
-    ).rejects.toMatchObject({ code: "candidate-uncertain" });
-    await s.candidate("wrong-version", workbenchPdf(FIXTURE_DOI, "preprint"));
-    await expect(
-      s.app.execution!.acceptance.accept(await s.command("wrong-version")),
-    ).rejects.toMatchObject({ code: "candidate-uncertain" });
     await s.candidate("transfer-1");
     const command = await s.command();
     await expect(
@@ -230,7 +265,7 @@ it("refuses stale, misattributed, ambiguous, conflicting, and caller-asserted id
       ),
     ).rejects.toMatchObject({ code: "primary-asset-conflict" });
     expect(
-      await s.app.execution!.transfers.recover("wrong-doi"),
+      await s.app.execution!.transfers.recover("different-bytes"),
     ).not.toBeNull();
     expect((await s.app.database.currentFacts(id(1)))?.literature.status).toBe(
       "ASSET_READY",
@@ -278,3 +313,103 @@ it("rechecks the metadata CAS at publication when facts change after the read sn
     await s.close();
   }
 }, 20000);
+
+it.each([
+  { name: "no DOI", pdf: workbenchPdf("", "") },
+  { name: "spaced DOI", pdf: workbenchPdf("10.5555/ 1 2 3", "") },
+  {
+    name: "different DOI and version",
+    pdf: workbenchPdf("10.5555/another", "preprint"),
+  },
+  { name: "no extractable text", pdf: workbenchPdf(FIXTURE_DOI, "", false) },
+])(
+  "publishes Browser bytes with $name as unverified and preserves the label after restart",
+  async ({ pdf }) => {
+    const s = await setup(
+      parseLiterature({
+        ...literature,
+        metadata: { ...literature.metadata, identifiers: [] },
+      }),
+    );
+    try {
+      const intake = new BrowserCandidateIntake(s.app.execution!.transfers, {
+        article_id: id(1),
+        identifier: "literature:" + id(1),
+        version: "published",
+      });
+      const received = await intake.receive({
+        signal: new AbortController().signal,
+        transfer_id: "unverified-browser",
+        capture: {
+          article_id: id(1),
+          session_id: "browser-test",
+          page_id: "page-1",
+          document_generation: 1,
+          source_url: "https://example.test/article/pdf",
+          captured_at: "2026-10-04T00:00:00Z",
+        },
+        chunks: (async function* () {
+          yield pdf;
+        })(),
+      });
+      expect(received.assessment).toEqual({ accepted: true, page_count: 1 });
+      const command = await s.command("unverified-browser");
+      const receipt = await s.app.execution!.acceptance.accept(command);
+      expect(
+        (await s.app.database.getReceiptIntent(command.receipt_id))?.identity,
+      ).toBe("unverified");
+      expect(await s.app.files.read(receipt.reference, pdf.length)).toEqual(
+        pdf,
+      );
+      await s.restart();
+      const detail = await s.app.library.detail(id(1));
+      expect(detail.primary_pdf?.article_identity_status).toBe("unverified");
+      expect(detail.primary_pdf?.asset.sha256).toBe(receipt.sha256);
+      expect(detail.literature.status).toBe("ASSET_READY");
+      expect(detail.missing_step).toBe("parser-result");
+      expect(await s.app.execution!.acceptance.accept(command)).toEqual(
+        receipt,
+      );
+    } finally {
+      await s.close();
+    }
+  },
+);
+
+it("keeps Browser file validity and article-task binding checks without content identity extraction", async () => {
+  const s = await setup();
+  try {
+    const intake = new BrowserCandidateIntake(s.app.execution!.transfers, {
+      article_id: id(1),
+      identifier: "doi:" + FIXTURE_DOI,
+      version: "published",
+    });
+    const input = (bytes: Uint8Array, article = id(1)) => ({
+      signal: new AbortController().signal,
+      transfer_id: "invalid-browser",
+      capture: {
+        article_id: article,
+        session_id: "browser-test",
+        page_id: "page-1",
+        document_generation: 1,
+        source_url: "https://example.test/article/pdf",
+        captured_at: "2026-10-04T00:00:00Z",
+      },
+      chunks: (async function* () {
+        yield bytes;
+      })(),
+    });
+    await expect(
+      intake.receive(input(Buffer.from("<html>Access denied</html>"))),
+    ).rejects.toMatchObject({ code: "pdf-acceptance" });
+    await expect(intake.receive(input(workbenchPdf(), id(2)))).rejects.toThrow(
+      "misattributed",
+    );
+    expect((await s.app.library.detail(id(1))).primary_pdf).toBeNull();
+    expect(
+      await s.app.execution!.transfers.recover("invalid-browser"),
+    ).toBeNull();
+  } finally {
+    await s.close();
+  }
+});

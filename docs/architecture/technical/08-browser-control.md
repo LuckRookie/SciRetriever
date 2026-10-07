@@ -44,23 +44,34 @@ redirect 与 credential forwarding 决定、脱敏）、`budget.ts`（`NetworkBu
 `HumanizedBrowserInput` 与 `createBrowserDecision()`。
 
 **当前接线状态**：生产 `createApplication()`（`bootstrap/application.ts`）在 Browser 显式启用且
-固定 bundle 验证通过后，自动组装 Network-owned loopback CONNECT proxy 与 HTTPS/public-IP
-navigation admission，再惰性构造唯一 Browser host。无 verified runtime 时公开 `browserHost()`
-稳定返回不可用。Entry 的三级 cohort、`BrowserSessionBroker`、article flow、Intake/身份验收与
-统一 acceptance 已接通；取得 PDF 只在 Asset/关系提交得到 receipt 后返回。离线测试覆盖正式
-Entry 与 factory wiring；固定 Cloak bundle 的本机 loopback 测试另覆盖实际
-`verifyInstalledCloakRuntime → createApplication → BrowserHost → capture → Intake → acceptance`
-和 SQLite/FileStore 提交。loopback 只通过测试注入的 Network proxy/admission 进入，默认生产
-HTTPS/public-IP policy 明确拒绝 loopback。当前文章 flow 还把每次页面请求收紧到该篇已接纳
-landing 的精确 origin；跨 origin redirect/CDN 先拒绝，不推断来源许可。被拒绝的文档导航
-会使当前文章流失败，不作为正常无 PDF 耗尽。此收紧是当前未具备跨 origin 关系授权时的
-保守实现范围，不替代下文已接受的受限 dependency/redirect 目标策略。真实 Publisher 站点、具体
-entitlement 与跨站资源仍未核验。
-当前 Host 仅把受阻的顶层文档或当前文章 popup 导航标成文章失败；普通第三方 iframe
-子文档被阻断而不污染已准入文章。候选读取的有界等待超时也是明确失败，只有 Intake
-明确结束且没有候选的正常路径才可能形成自动耗尽事实。
-见 [TS 架构锚定基线 1.2](../typescript-baseline.md) 与
-[ADR 0025 §2](../decisions/0025-typescript-entry-and-runtime-contract.md)。
+固定 bundle 验证通过后，自动组装 Network-owned loopback CONNECT proxy 与公网地址准入，
+惰性构造唯一 Cloak persistent context/Profile。无 verified runtime 时公开 `browserHost()` 稳定返回不可用。
+Entry 的 Public/API/Browser 分层获取、按文章的调度、Intake、PDF 文件检查与不可变 publication 已接通；
+只有资产与关系提交得到 receipt 才算正式入库，文章身份统一标记 `unverified`，不以 DOI/标题匹配阻止下载。
+
+Browser 按 session/page/operation/generation 归属请求、popup 与文件；同篇关联资源与合法重定向可跨 origin，
+每次仍执行 Network 的协议、DNS、公网地址与端口检查。它不再限定起点的单一 origin，也不按出版社配置点击脚本。
+默认2个决策worker与5个保留会话；下载让出决策worker但保留原会话，同平台网络活动串行且真实结束后冷却30秒。
+动作结束到下次实际模型派发至少5秒；单篇累计300秒活跃时间、50次派发、100次动作，排队/传输/本地验证不计活跃时间。
+文件流按块落盘、检查与发布；资源保护和显式串行兼容见[PDF获取指南](../../guides/pdf-acquisition.md)。
+
+普通文档资源的生命周期由精确 CDP session/frame/loader/request 关联。只有默认上下文消失与新loader提交相互印证，
+且 Network/Fetch 类型一致，才将旧文档的 Script/XHR/Image/Stylesheet/Font 判定为文档依附资源；
+Fetch、Other、keepalive、原生下载及PDF流不能仅凭文档替换推断终止。原非PDF响应在旧document失效后仍停在
+Fetch response pause时，可读取它自己的IO流至EOF来结清，不能另发GET。明确取消必须确认原IO关闭与原Fetch取消，
+之后才撤销其待响应IO.read RPC；IO.close失败继续保留所有权和错误，不以本地Promise结束冒充网络终态。
+Renderer的Network终态与target销毁只作为原请求的精确终态证据，不能提前删除尚未结束的managed IO。
+PDF响应头表示下载意图，实际GUID表示writer已启动；活跃文章的popup关闭后仍保留迟到GUID的归属，
+整篇会话确认关闭才回收意图，关闭后迟到writer执行取消/退役。初始open在导航前接通单文章取消信号，
+预算终止不会误标为用户取消，也不会取消其它文章。完整关闭由实际page.close结束页面，同时独立结算writer/IO/worker；
+连接失败重试只允许精确已准入且有失败证据的同URL GET，重定向到其它地址失败不能授权重放原始DOI。
+
+实际本机Cloak测试覆盖正式Application、popup归属、并发、资源/取消和文件发布；真实出版社测试独立记录于
+[2026-10-07最终验收](../../notes/browser-final-acceptance-2026-10-07.md)。单次成功不代表所有文章都有订阅权限，
+也不代表验证码、DNS与限流不会再次发生。生产Network仍拒绝loopback；本地测试仅通过显式fixture adapter准入。
+
+本节为当前TypeScript运行事实。下文保留的Python式 `BrowserFlowSession`、capture-policy及旧预算示例属于历史设计材料；
+如与上述当前行为或Accepted ADR 0023/0029/0030冲突，以Accepted合同与当前TypeScript接口为准，不能据此恢复身份门槛或站点规则。
 
 #### 2.2.2 Session、文章调度与资源所有权
 

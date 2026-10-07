@@ -14,6 +14,8 @@ SciRetriever 是科研 Agent 的论文知识组件，目标是独立提供可追
 
 **当前实现边界：** 已有发现/获取、解析、旧单篇总结、查询、配置和工作台基础；文档固定版本证据、已有材料的预算 Context，以及单篇与集合知识产物的显式分析/综合、历史发布和按 ID 阅读已交付。Catalog v8 已提供需显式构建的知识检索索引及材料/生成知识混合 Context；检索分数不是科学置信度，真实语料检索质量尚未评估。正式 MCP adapter 与完整生产人类协作尚未交付。当前 TypeScript 生产 completion 遇 `NoUsableContent` 保留已接纳材料，不再自动清理或重取；旧明确失效服务仍存在。本文下面的命令描述当前行为，完整差距见 [TS 基线](docs/architecture/typescript-baseline.md)。
 
+开发者可以从[供应商适配目录](apps/server/src/providers/README.md)查找各家的定义、元数据与 PDF 实现；业务模块和共享网络责任见[技术文档](docs/architecture/technical.md)。
+
 ## 安装与最小本地启动
 
 当前 TypeScript 版本使用 Node 22.19.0 和 pnpm 10.32.1；仓库没有声明已经发布到 npm。从源码检出后使用锁定依赖运行：
@@ -98,6 +100,10 @@ SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm preview:w
 正式阅读入口可通过 server TypeScript API `startQueryOnlyWorkbench({ home })` 单独启动，只提供文献搜索、详情、引用证据与已保存材料下载。它只读打开既有 Catalog；未初始化时明确提示并保持未创建，PDF/内容等缺口也不会自动启动获取、解析、生成或 Job。常规调用以 Node 用户 home（`homedir()`，与 CLI 同一固定配置身份）作为 home；Catalog 和 ArtifactStore 路径继续取自固定配置。完整 API 启动、就绪状态和关闭方式见[独立文献库阅读指南](docs/guides/library-query.md)。
 
 现有实时 Browser 工作台仍是含 Browser、Jobs、配置的混合入口；它不代表 QueryApplication 的独立只读启动路径。独立查询页已提供文献阅读、固定文档证据、材料和知识混合上下文、提取输入准备、v6 单篇知识和 v7 集合综合历史阅读；v5+ 候选提交、v6 单篇分析、v7 集合综合及 v8 知识索引重建须打开受控维护入口。Agent 可通过 `createQueryApplication(home).knowledgeContext.search` 混合检索，通过 `knowledgeRead` 按 ID、Literature 清单或默认指针读取单篇知识，也可通过 `synthesisPreparation/synthesisRead` 固定集合并按 ID、来源及最近清单只读访问综合。用法见[独立文献库阅读指南](docs/guides/library-query.md#知识与材料混合上下文catalog-v8)。
+
+PDF 获取只验证实际文件可读取及任务关联，不在下载阶段按 DOI/标题/作者判断内容身份。
+入库 PDF 显示“文章身份未验证”（`article_identity_status: "unverified"`），不阻断下载或后续解析。
+文章身份检验留待解析阶段单独实现，解析成功本身不表示身份已验证，见 [ADR 0029](docs/architecture/decisions/0029-unverified-pdf-acquisition.md)。
 
 手动 PDF 维护可通过 `startMaintenanceWorkbench({ home })` 单独启动，页面 `/` 接收用户明确选择的本机文件并传输原始 PDF 字节，`/query` 保持独立阅读视图；这一入口不启动 Browser，要求 home 已有 v2 catalog。公开 TypeScript `createApplication(home, { executionSchema: "require-v2" }).maintenance.ingestPdf({ literature_id, bytes })` 与 CLI `import pdf` 调用同一接纳用例。HTTP 上传和 TypeScript 字节入口均限制为 16 MiB；HTTP 只接受同源会话和 CSRF 授权，不接受远端请求提供本机路径。有效材料接纳后可通过独立 QueryApplication 读取；可执行 Node 启动示例见 [PDF 获取与手动接纳指南](docs/guides/pdf-acquisition.md)。
 
@@ -327,8 +333,14 @@ Reset、迁移、恢复或 fallback。operator 手工删除旧 section 后，模
 result 或 tool call；具体 Model 可以设置 `stream = false`，此时只请求和解析非流式 JSON。
 Analyze/Browser 只继承所选 Model，不会收到事件流、覆盖 stream，或在失败后触发另一种模式的重发。
 
-自动 PDF 获取的 Accepted 目标固定按“公开来源 → 授权 Provider API → 受控浏览器”逐层升级。当前生产 Application 已通过 Entry 接入惰性 Browser host factory、Network admission、统一 Article flow/Intake 和身份验收：一个有界 cohort 先完成 Public 波次，再让未解决目标进入 Authorized API 波次，最后才把最小剩余集合交给 Application 级 `BrowserSessionBroker` 串行处理。locator routes 正常耗尽，或 route 自己显式声明 `not-applicable`/`no-capability` 且 Browser 独立 admitted 时，才允许进入 Browser；timeout、临时网络错误、429、quota、deferred、system、storage、cancel 等不会绕过限制。真实 CloakBrowser 正路径仍未运行，不能把离线 seam 当作现场 Browser 证据。当前 Auto 公开
-阶段包含已保存 direct/landing hints、arXiv 与 Europe PMC；Unpaywall 需要在 Custom 中配置联系
+自动 PDF 获取按“公开来源 → 授权 Provider API → 受控浏览器”逐层升级。公开文献优先直接下载：
+arXiv 使用 PDF URL，成功后不启动 Browser 或调用 Browser 模型。当前 Auto 公开阶段包含已保存 PDF
+直链、arXiv、Europe PMC 的 PMCID 下载及 DOI landing 的静态 PDF 解析；重定向后的相对链接以实际
+落地页为基准，CDN 请求仍经过 Network 检查。下载阶段检查 PDF 文件有效性及任务/来源关联，
+不以正文 DOI、标题或版本判断文章身份；已接纳 PDF 标注为文章身份未验证。Browser Agent 主要用于剩余出版社文章，通过当前网络出口、机构 IP 和浏览器会话
+完成页面操作；实际导航保留合法查询参数，观察 URL 去除 query，顶层 PDF 通过 Chromium 原生下载交付。
+
+当前生产 Application 已通过 Entry 接入惰性 Browser host factory、Network admission、统一 Article flow/Intake 和文件验收：一个有界 cohort 先完成 Public 波次，再让未解决目标进入 Authorized API 波次，最后才把最小剩余集合交给 Application 共享的 Browser 调度器。调度器保留文章会话，以两个独立 worker 推进不同平台；同平台网络活动限一篇，网络真实结束后冷却 30 秒，模型调用继续服从共享并发预算。locator routes 正常耗尽，或 route 自己显式声明 `not-applicable`/`no-capability`/`http-route-unavailable` 且 Browser 独立 admitted 时，才允许进入 Browser；有效 landing HTML 没有静态 PDF 属于正常未命中；公共 HTTP 的 403、静态链接不能交付 PDF 或明确的重定向上限，在无 Retry-After 等限流反馈时允许后续独立路线评估访问能力。Browser 中的明确拒绝、401、timeout、临时网络错误、429、quota、deferred、system、storage、cancel 等仍保持失败。固定 Cloak bundle 的本机回环已验证完整 PDF 接纳，具体出版社文章权限需逐次验证。Unpaywall 需要在 Custom 中配置联系
 邮箱，Sci-Hub 默认关闭并在 Custom 显式启用后按
 当前版本 builtin 或普通 `[sources.acquisition.sci-hub].urls` custom override 顺序工作的 DOI-only
 Configured Sci-Hub route。custom 完整覆盖 builtin；仓库不自动发现镜像，也不提供 Key、Cookie、
@@ -345,38 +357,43 @@ ScienceDirect/linkinghub 才适用。它先从 Article FULL XML 提取显式 `MA
 attachment EID，再用 Object Retrieval 获取 PDF；FULL XML 没有可用 MAIN object 或无法
 安全解释时，才以同一强身份向 Article Retrieval 协商 PDF 表示。可解析的认证、授权、quota
 或服务错误不会被该 fallback 绕过；普通 Scopus EID、任意 object、XML 和 supplement 不会
-冒充主 PDF。Springer 当前全文 API 产品返回 JATS/XML，不是主 PDF API。Controlled Browser 的生产路线只有一条 `browser:generic` route。它在 locator 正常耗尽或显式低风险 route unavailability 且具有安全 canonical landing 时接收仍缺 PDF 的文献；无需匹配 Publisher 点击规则或预设站点。当前 Entry/Application 已接入这条有界 escalation，并以 Application 共享的 `BrowserSessionBroker` 和 FIFO delivery scheduler 保护 Browser host；真实 verified runtime 仍是未运行边界。用户选择并初始化
+冒充主 PDF。Springer 当前全文 API 产品返回 JATS/XML，不是主 PDF API。Controlled Browser 的生产路线只有一条 `browser:generic` route。它在 locator 正常耗尽或显式低风险 route unavailability 且具有安全 canonical landing 时接收仍缺 PDF 的文献；无需匹配 Publisher 点击规则或预设站点。当前 Entry/Application 已接入这条有界 escalation，并以 Application 共享的 `BrowserSessionBroker` 与文章调度器管理 Browser host、会话和平台资格。用户选择并初始化
 一个持久 Browser Profile、显式启用 Browser，并配置 `image = true` 的 Model 与本地 runtime 后，
 唯一 `AgentBrowserController` 根据稳定页面 Observation 选择封闭动作。总开关、Profile 存在或
 其中保存了浏览器状态都不证明组织合同、登录成功或具体文章有权限，operator 仍须确保实际使用
 符合组织授权和站点条款。
 
-目标编排要求同一批目标先完成 Public cohort，再只对剩余目标执行 Authorized API cohort，最后才进入 Browser cohort；低风险路线发生 timeout、临时网络错误、`429`、quota 或 `Retry-After` 时不得借机绕过限制。当前实现已经按这个顺序形成三级屏障，逐波按冻结顺序提前交付终态 receipt，并由 Application 共享的 `BrowserSessionBroker` 串行 Browser delivery。以下真实站点时长、现场可达性和外部吞吐仍属于未运行证据，不能从离线测试推断。
+目标编排要求同一批目标先完成 Public cohort，再只对剩余目标执行 Authorized API cohort，最后才进入 Browser cohort；低风险路线发生 timeout、临时网络错误、`429`、quota 或 `Retry-After` 时不得借机绕过限制。当前实现已经按这个顺序形成三级屏障，逐波按冻结顺序提前交付终态 receipt。Browser 调度区分决策 worker、保留会话和平台网络资格；后台下载及本地验收/发布不占决策 worker，其它文章可以继续推进。默认两个决策 worker、五个保留会话，同平台真实网络结束后冷却 30 秒；每次动作结束到下一轮模型派发至少 5 秒。实际 Cloak 的并行、大文件和真实站点验证分别记录在[本轮验证记录](docs/notes/browser-parallel-validation-2026-10-05.md)，外部可达性和权限以具体样本为准。
 
 （目标合同·当前未实现）Browser 升级前，正常日志应显示剩余篇数、`browser-generic` 的
 `minimum_start_interval`、`next_allowed_in_seconds` 和保守 `minimum_duration_seconds`，仍不包含
 无法预知的网络、页面渲染或服务等待时间。Agent 从第一次统一 Observation 起在元素点击、坐标
-点击、surface 滚动、后退、等待变化和停止六种封闭动作中选择。Controller 只执行
+点击、surface 滚动、后退、等待变化和停止六种封闭动作中选择。若统一 Observation 标为 `CHALLENGE`，Agent
+只点击截图或元素中可见的 `Verify`、`I'm human`、`Continue` 控件，随后用 `WaitForChange` 重新观察；不使用
+selector、脚本、solver 或验证 token。Controller 只执行
 `start → decide → apply`；Network 在每次返回前把
 当前 article Page/frame/popup/viewer 收敛成语义 quiet 的可操作 Observation，只把 `Ready / Captured /
-Blocked / Failed / Cancelled` 交给 Acquisition，页面交接期间不会把半加载界面交给 Agent。第一次
+Blocked / Failed / Cancelled` 交给 Acquisition；相同页面语义下重复同一动作会形成
+`browser-challenge-no-progress`，不会继续重复点击。页面交接期间不会把半加载界面交给 Agent。第一次
 self-transition 反馈给下一轮，
 重复 self edge 或 `A → B → A` 已知边才停止，可能的下载 Candidate 必须 captured、cleared 或 timeout。
 Challenge 只是目标页面状态，并分别保留 Agent Stop、self、cycle、Candidate timeout 与 resource
-blocked 结果；当前通用 flow 使用 24 次 action、12 次 model-call 和 operation deadline/candidate-wait
-上限，达到上限只形成稳定 Browser failure，不写入获取耗尽。真实 Challenge/blocked/denied 正路径仍未运行。
+blocked 结果；当前文章会话使用 100 次 Agent 动作、50 次真实模型派发和 300 秒累计活跃时间，
+推理、动作和主动页面反馈等待共用这一预算；人工控制、排队、下载及本地验收/发布暂停计时。
+达到上限只形成稳定 Browser failure，不写入获取耗尽。真实验证页和拒绝访问的观察结果见上述记录；进入验证页不等于已证明没有访问权。
 第一版仍不提供交互式 Browser 登录、机构选择、
 账号/密码输入、MFA、外部 CAPTCHA solver 或 token 注入；登录/MFA/账号警告和 cleanup failure
 会以稳定原因进入本次报告。已提交的其它 Provider 结果不会回滚。Ctrl+C 形成受控中断，重跑会
 重新读取数据库 current facts，只补仍缺失的步骤。
 
-（目标合同·部分接线，真实 runtime 未运行）Controlled Browser 使用一个 operator-managed 持久 Profile，并在首次初始化时把 native Linux
+Controlled Browser 使用一个 operator-managed 持久 Profile，并在首次初始化时把 native Linux
 persona、locale、timezone、screen、Browser version policy 和 fingerprint seed 固化到 owner-only
 identity manifest。同一 Profile 冷启动时复用同一设备身份；seed、Profile 路径和浏览器状态不会
 进入普通配置、日志、Report 或文献数据库。生产 Application 已拥有惰性 host factory、Network
 navigation admission 和唯一 `browser:generic` escalation；完整生产对象图仍要求一个
 `headless = false` 的 CloakBrowser patched Chromium process/context、共享 scheduler/session broker
-和每篇文章隔离 page/handler/临时下载目录。离线 seam 只证明 wiring，不证明真实 Browser 已启动。
+和每篇文章隔离 page/handler/临时下载目录。固定 Cloak bundle 的回环测试已验证真实启动与 PDF 接纳；
+仅使用离线 seam 的测试仍只证明接线。
 对象图关闭后 process/context 与临时下载工作区应清理，Profile 中由 Chromium 管理的状态跨命令保留。
 无 GUI Linux 使用 Xvfb；出版社请求继续由 Chromium 原生完成 TLS、HTTP、Cookie、redirect、页面点击
 和下载。本机 loopback CONNECT proxy 只把已审核 hostname/port 固定到 Network 批准的精确 IP，并透传

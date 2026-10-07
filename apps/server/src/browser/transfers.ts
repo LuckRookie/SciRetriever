@@ -1,9 +1,15 @@
 import { randomUUID } from "node:crypto";
-import type { Page, Request, Response } from "playwright";
 import {
   parseCandidateCapture,
   type CandidateCapture,
 } from "@sciretriever/contracts";
+import type {
+  BrowserNativeDownload,
+  BrowserNativeProgress,
+  BrowserOwnedRequest,
+  BrowserPdfResponse,
+} from "./cdp-owner.js";
+import type { BrowserDownloadResources } from "./resources.js";
 
 export interface BrowserTransferInput {
   readonly signal: AbortSignal;
@@ -12,86 +18,162 @@ export interface BrowserTransferInput {
   readonly chunks: AsyncIterable<Uint8Array>;
 }
 export interface BrowserTransferCallbacks {
+  readonly resources?: () => BrowserDownloadResources;
   captureContext(
     pageId: string,
     generation: number,
     sourceUrl: string,
+    sessionId?: string,
   ): CandidateCapture | null;
   receive(input: BrowserTransferInput): Promise<void>;
   started?(transferId: string, capture: CandidateCapture): void;
-  failed(transferId: string, capture: CandidateCapture): void;
-  /** Authorize a popup's first download when its request predates frame creation. */
+  progress?(
+    transferId: string,
+    capture: CandidateCapture,
+    progress: {
+      readonly received_bytes: number;
+      readonly total_bytes: number | null;
+    },
+  ): void;
+  /** Raw network is terminal; Intake may still be validating the durable bytes. */
+  completed?(transferId: string, capture: CandidateCapture): void;
+  failed(transferId: string, capture: CandidateCapture, code?: string): void;
   admitDownload?(url: string, pageId: string): Promise<CandidateCapture | null>;
 }
-interface Binding {
-  preflight: boolean;
-  readonly transferId: string;
+interface ActiveTransfer {
+  readonly id: string;
   readonly capture: CandidateCapture;
-  readonly key: string;
+  readonly controller: AbortController;
+  readonly cancel: () => Promise<void>;
+  readonly done: Promise<void>;
+  readonly refresh: (bytes: number, total: number | null) => void;
+  readonly stop: (code: string) => void;
+}
+interface NativeTransfer {
+  readonly transfer: ActiveTransfer;
+  readonly resources: BrowserDownloadResources | undefined;
+  readonly directory: string;
+  budget: Promise<void>;
 }
 
-/** Admission binds bytes to the article before any asynchronous response/download event. */
+function errorCode(error: unknown): string | null {
+  const visited = new Set<unknown>();
+  let fallback: string | null = null;
+  let current = error;
+  while (
+    typeof current === "object" &&
+    current !== null &&
+    !visited.has(current)
+  ) {
+    visited.add(current);
+    if (
+      "code" in current &&
+      typeof current.code === "string" &&
+      /^(?:browser|pdf|storage|file)-[a-z0-9-]{1,100}$/u.test(current.code)
+    ) {
+      if (
+        ![
+          "browser-transfer",
+          "pdf-acceptance",
+          "file-staging",
+          "file-publication",
+        ].includes(current.code)
+      )
+        return current.code;
+      fallback ??= current.code;
+    }
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return fallback;
+}
+
+/** Session-owned transfers; no global current page, URL match or buffered response. */
 export class BrowserTransferDispatcher {
-  private readonly requests = new WeakMap<Request, Binding>();
-  private readonly downloads = new Map<string, Binding[]>();
-  private readonly pending = new Set<Promise<void>>();
-  private readonly expirations = new Map<
-    Binding,
-    ReturnType<typeof setTimeout>
-  >();
+  private readonly requests = new Map<string, CandidateCapture>();
+  private readonly prepared = new Map<string, CandidateCapture>();
+  private readonly active = new Map<string, ActiveTransfer>();
+  private readonly native = new Map<string, NativeTransfer>();
+  private readonly pending = new Map<Promise<void>, string>();
   private failures = 0;
+  constructor(
+    private readonly callbacks: BrowserTransferCallbacks,
+    private readonly limits: {
+      readonly stall_ms?: number;
+      readonly lifetime_ms?: number;
+    } = {},
+  ) {}
   failureCount(): number {
     return this.failures;
   }
-  constructor(private readonly callbacks: BrowserTransferCallbacks) {}
-  admitted(request: Request, pageId: string, generation: number): void {
-    if (!["document", "fetch", "xhr", "other"].includes(request.resourceType()))
+
+  admitted(identity: BrowserOwnedRequest, url: string): void {
+    if (!["document", "fetch", "xhr", "other"].includes(identity.resource_type))
       return;
-    const key = `${pageId}\n${request.url()}`;
-    const prepared = this.downloads
-      .get(key)
-      ?.find((binding) => binding.preflight);
-    if (prepared) {
-      prepared.preflight = false;
-      this.requests.set(request, prepared);
-      return;
-    }
-    const binding = this.bind(request.url(), pageId, generation, false);
-    if (binding) this.requests.set(request, binding);
+    const capture = this.capture(
+      identity.page_id,
+      identity.document_generation,
+      url,
+      identity.session_id,
+    );
+    if (!capture) return;
+    if (
+      this.requests.size >= 1024 ||
+      [...this.requests.values()].filter(
+        (item) => item.session_id === capture.session_id,
+      ).length >= 256
+    )
+      throw new Error("browser transfer admission limit");
+    this.requests.set(identity.request_id, capture);
+  }
+  ended(identity: BrowserOwnedRequest): void {
+    this.requests.delete(identity.request_id);
+  }
+  rejectedResponse(identity: BrowserOwnedRequest, code: string): void {
+    const capture = this.requests.get(identity.request_id);
+    this.requests.delete(identity.request_id);
+    if (!capture) return;
+    const id = randomUUID();
+    this.callbacks.started?.(id, capture);
+    this.failures++;
+    this.callbacks.failed(id, capture, code);
   }
   prepareDownload(
     url: string,
     pageId: string,
     generation: number,
     sourceUrl = url,
+    sessionId?: string,
   ): void {
-    this.bind(url, pageId, generation, true, sourceUrl);
+    if (this.prepared.size >= 128)
+      throw new Error("browser prepared download limit");
+    const capture = this.capture(pageId, generation, sourceUrl, sessionId);
+    if (capture) this.prepared.set(`${pageId}\n${url}`, capture);
   }
-  private bind(
-    requestedUrl: string,
+  private capture(
     pageId: string,
     generation: number,
-    preflight: boolean,
-    sourceUrl = requestedUrl,
-  ): Binding | null {
-    if (this.expirations.size >= 256)
-      throw new Error("browser transfer admission limit");
-    const requested = new URL(requestedUrl);
-    const source = new URL(sourceUrl);
-    requested.search = "";
-    requested.hash = "";
-    source.search = "";
-    source.hash = "";
+    sourceUrl: string,
+    sessionId?: string,
+  ): CandidateCapture | null {
+    let source: URL;
+    try {
+      source = new URL(sourceUrl);
+    } catch {
+      return null;
+    }
     if (
       !["http:", "https:"].includes(source.protocol) ||
       source.username ||
       source.password
     )
-      throw new Error("browser transfer source unavailable");
+      return null;
+    source.search = "";
+    source.hash = "";
     const capture = this.callbacks.captureContext(
       pageId,
       generation,
       source.toString(),
+      sessionId,
     );
     if (!capture) return null;
     const parsed = parseCandidateCapture(capture);
@@ -101,166 +183,254 @@ export class BrowserTransferDispatcher {
       parsed.source_url !== source.toString()
     )
       throw new Error("browser transfer binding failed");
-    const binding = {
-      transferId: randomUUID(),
-      capture: parsed,
-      key: `${pageId}\n${requestedUrl}`,
-      preflight,
-    };
-    const expiry = setTimeout(() => this.remove(binding), 30000);
-    expiry.unref();
-    this.expirations.set(binding, expiry);
-    const queue = this.downloads.get(binding.key) ?? [];
-    queue.push(binding);
-    this.downloads.set(binding.key, queue);
-    return binding;
+    return parsed;
   }
-
-  track(page: Page, pageId: string): void {
-    page.on("response", (response) => this.response(response));
-    page.on("download", (download) => {
-      const key = `${pageId}\n${download.url()}`;
-      const binding = this.downloads.get(key)?.[0];
-      if (!binding) {
-        void this.recoverDownload(download, pageId);
-        return;
-      }
-      this.remove(binding);
-      this.runDownload(binding, download);
-    });
-    page.on("requestfailed", (request) => {
-      const binding = this.requests.get(request);
-      if (binding && request.failure()?.errorText !== "net::ERR_ABORTED")
-        this.remove(binding);
-    });
-  }
-  private async recoverDownload(
-    download: import("playwright").Download,
-    pageId: string,
+  async pdfResponse(
+    identity: BrowserOwnedRequest,
+    _url: string,
+    response: BrowserPdfResponse,
   ): Promise<void> {
-    try {
-      const capture = await this.callbacks.admitDownload?.(
-        download.url(),
-        pageId,
-      );
-      if (!capture) throw new Error("download admission unavailable");
-      const binding: Binding = {
-        preflight: false,
-        transferId: randomUUID(),
-        capture: parseCandidateCapture(capture),
-        key: `${pageId}\n${download.url()}`,
-      };
-      this.runDownload(binding, download);
-    } catch {
-      this.failures++;
-      await download.cancel().catch(() => undefined);
+    const capture = this.requests.get(identity.request_id);
+    this.requests.delete(identity.request_id);
+    if (!capture || this.active.has(capture.session_id)) {
+      await response.cancel();
+      return;
     }
-  }
-  private runDownload(
-    binding: Binding,
-    download: import("playwright").Download,
-  ): void {
-    this.run(binding, async (signal) => {
-      const stream = await download.createReadStream();
-      if (!stream) throw new Error("download stream unavailable");
-      if (signal.aborted) {
-        stream.destroy();
-        throw new Error("transfer cancelled");
-      }
-      const cancel = () => stream.destroy();
-      signal.addEventListener("abort", cancel, { once: true });
-      async function* chunks(): AsyncIterable<Uint8Array> {
-        for await (const chunk of stream!) {
-          if (!(chunk instanceof Uint8Array))
-            throw new Error("invalid download bytes");
-          yield chunk;
+    const transfer = this.run(
+      capture,
+      response.cancel,
+      async (signal, progress, completed) => {
+        let received = 0;
+        async function* chunks(): AsyncIterable<Uint8Array> {
+          for await (const chunk of response.chunks(signal)) {
+            received += chunk.byteLength;
+            progress(received, response.content_length);
+            yield chunk;
+          }
+          completed();
         }
-      }
-      try {
         await this.callbacks.receive({
           signal,
-          transfer_id: binding.transferId,
-          capture: binding.capture,
+          transfer_id: transfer.id,
+          capture,
           chunks: chunks(),
         });
-      } finally {
-        signal.removeEventListener("abort", cancel);
-        stream.destroy();
-      }
-    });
+      },
+    );
+    await transfer.done;
   }
-  private response(response: Response): void {
-    const binding = this.requests.get(response.request());
-    if (!binding) return;
-    const headers = response.headers();
-    const type = headers["content-type"]?.split(";")[0]?.trim().toLowerCase();
-    if (
-      headers["content-disposition"]?.toLowerCase().includes("attachment") ||
-      type === "application/octet-stream"
-    )
-      return;
-    this.remove(binding);
-    if (type !== "application/pdf" || response.status() !== 200) {
-      // A partial/ranged response is never a complete candidate. Surface a
-      // stable failure instead of allowing its bytes to enter the spool.
-      if (type === "application/pdf" && response.status() === 206) {
-        this.failures++;
-        this.callbacks.failed(binding.transferId, binding.capture);
-      }
+  nativeDownload(
+    download: BrowserNativeDownload,
+    retire: () => Promise<void>,
+    directory: string,
+  ): void {
+    const key = `${download.page.page_id}\n${download.url}`;
+    const capture =
+      this.prepared.get(key) ??
+      this.capture(
+        download.page.page_id,
+        download.page.document_generation,
+        download.url,
+        download.page.session_id,
+      );
+    this.prepared.delete(key);
+    if (!capture || this.active.has(capture.session_id)) {
+      const rejected = download
+        .cancel()
+        .then(retire)
+        .catch(() => {
+          this.failures++;
+        });
+      this.pending.set(
+        rejected,
+        capture?.session_id ?? download.page.session_id,
+      );
+      void rejected.finally(() => {
+        this.pending.delete(rejected);
+      });
       return;
     }
-    this.run(binding, async (signal) => {
-      const bytes = await response.body();
-      if (signal.aborted) throw new Error("transfer cancelled");
-      async function* chunks(): AsyncIterable<Uint8Array> {
-        yield bytes;
-      }
-      await this.callbacks.receive({
-        signal,
-        transfer_id: binding.transferId,
-        capture: binding.capture,
-        chunks: chunks(),
-      });
+    const resources = this.callbacks.resources?.();
+    const transfer = this.run(
+      capture,
+      download.cancel,
+      async (signal, _progress, completed) => {
+        try {
+          await download.completed;
+          await binding.budget;
+          if (signal.aborted)
+            throw new Error("Browser native transfer cancelled");
+          completed();
+          await this.callbacks.receive({
+            signal,
+            transfer_id: transfer.id,
+            capture,
+            chunks: download.chunks(signal),
+          });
+        } finally {
+          try {
+            await download.cancel();
+          } finally {
+            await retire();
+            await retirement;
+          }
+        }
+      },
+    );
+    const binding: NativeTransfer = {
+      transfer,
+      resources,
+      directory,
+      budget: Promise.resolve(),
+    };
+    this.native.set(download.guid, binding);
+    this.accountNative(binding, 0);
+    const retirement: Promise<void> = download.retired.then(async () => {
+      // The terminal CDP event can add bytes while cancellation is settling.
+      // Drain that accounting before releasing the real retired original.
+      await binding.budget.catch(() => undefined);
+      resources?.releaseNative(transfer.id);
+      this.native.delete(download.guid);
     });
   }
-  private remove(binding: Binding): void {
-    clearTimeout(this.expirations.get(binding));
-    this.expirations.delete(binding);
-    const queue =
-      this.downloads.get(binding.key)?.filter((item) => item !== binding) ?? [];
-    if (queue.length) this.downloads.set(binding.key, queue);
-    else this.downloads.delete(binding.key);
+  nativeProgress(progress: BrowserNativeProgress): void {
+    const binding = this.native.get(progress.guid);
+    if (binding) {
+      binding.transfer.refresh(progress.received_bytes, progress.total_bytes);
+      this.accountNative(binding, progress.received_bytes);
+    }
+  }
+  private accountNative(binding: NativeTransfer, bytes: number): void {
+    if (!binding.resources) return;
+    const account = () =>
+      binding.resources!.updateNative(
+        binding.transfer.id,
+        binding.directory,
+        bytes,
+      );
+    binding.budget = binding.budget.then(account, (failure: unknown) => {
+      // A rejected quota/disk check must not poison later real-byte accounting.
+      // Keep the first refusal even if a later disk check passes or fails again.
+      const retainFailure = (): never => {
+        throw failure;
+      };
+      return account().then(retainFailure, retainFailure);
+    });
+    // Quota rejection stops the real writer promptly; cleanup retains its lease
+    // until the adapter confirms retirement, including a late cancel terminal.
+    void binding.budget.catch((error: unknown) => {
+      binding.transfer.stop(
+        errorCode(error) ?? "browser-download-resource-ownership",
+      );
+    });
   }
   private run(
-    binding: Binding,
-    operation: (signal: AbortSignal) => Promise<void>,
-  ): void {
+    capture: CandidateCapture,
+    cancel: () => Promise<void>,
+    operation: (
+      signal: AbortSignal,
+      progress: (bytes: number, total: number | null) => void,
+      completed: () => void,
+    ) => Promise<void>,
+  ): ActiveTransfer {
+    const id = randomUUID();
     const controller = new AbortController();
-    this.callbacks.started?.(binding.transferId, binding.capture);
-    let timer: ReturnType<typeof setTimeout>;
-    const deadline = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        controller.abort();
-        reject(new Error("transfer deadline"));
-      }, 30000);
-    });
-    const pending = Promise.race([operation(controller.signal), deadline])
-      .catch(() => {
+    let bytes = 0;
+    let networkEnded = false;
+    let failureCode = "browser-transfer-failed";
+    let stall: ReturnType<typeof setTimeout>;
+    let cancellation: Promise<void> | undefined;
+    const cancelOnce = () => (cancellation ??= cancel());
+    const stop = (code: string) => {
+      if (controller.signal.aborted) return;
+      failureCode = code;
+      controller.abort();
+      void cancelOnce().catch(() => undefined);
+    };
+    const armStall = () => {
+      clearTimeout(stall);
+      stall = setTimeout(
+        () => stop("browser-transfer-stalled"),
+        this.limits.stall_ms ?? 120000,
+      );
+    };
+    const refresh = (received: number, total: number | null) => {
+      if (received > bytes) {
+        bytes = received;
+        if (!networkEnded) armStall();
+      }
+      this.callbacks.progress?.(id, capture, {
+        received_bytes: bytes,
+        total_bytes: total,
+      });
+    };
+    const completed = () => {
+      if (networkEnded) return;
+      networkEnded = true;
+      clearTimeout(stall);
+      clearTimeout(lifetime);
+      this.callbacks.completed?.(id, capture);
+    };
+    armStall();
+    const lifetime = setTimeout(
+      () => stop("browser-transfer-deadline"),
+      this.limits.lifetime_ms ?? 1200000,
+    );
+    this.callbacks.started?.(id, capture);
+    const done = Promise.resolve()
+      .then(() => operation(controller.signal, refresh, completed))
+      .catch((error: unknown) => {
         this.failures++;
-        this.callbacks.failed(binding.transferId, binding.capture);
+        this.callbacks.failed(
+          id,
+          capture,
+          failureCode === "browser-transfer-failed"
+            ? (errorCode(error) ?? failureCode)
+            : failureCode,
+        );
       })
       .finally(() => {
-        clearTimeout(timer);
-        this.pending.delete(pending);
+        clearTimeout(stall);
+        clearTimeout(lifetime);
+        this.active.delete(capture.session_id);
+        this.pending.delete(done);
       });
-    this.pending.add(pending);
+    const transfer: ActiveTransfer = {
+      id,
+      capture,
+      controller,
+      cancel: cancelOnce,
+      done,
+      refresh,
+      stop,
+    };
+    this.active.set(capture.session_id, transfer);
+    this.pending.set(done, capture.session_id);
+    return transfer;
+  }
+  async cancelSession(sessionId: string): Promise<void> {
+    const transfer = this.active.get(sessionId);
+    if (transfer) {
+      transfer.controller.abort();
+      await transfer.cancel();
+    }
+    await this.settle(sessionId);
+    for (const [key, capture] of this.requests)
+      if (capture.session_id === sessionId) this.requests.delete(key);
+    for (const [key, capture] of this.prepared)
+      if (capture.session_id === sessionId) this.prepared.delete(key);
+  }
+  async settle(sessionId?: string): Promise<void> {
+    for (;;) {
+      const pending = [...this.pending]
+        .filter(([, owner]) => sessionId === undefined || owner === sessionId)
+        .map(([promise]) => promise);
+      if (!pending.length) return;
+      await Promise.all(pending);
+    }
   }
   dispose(): void {
-    for (const timer of this.expirations.values()) clearTimeout(timer);
-    this.expirations.clear();
-    this.downloads.clear();
-  }
-  async settle(): Promise<void> {
-    while (this.pending.size) await Promise.all([...this.pending]);
+    this.requests.clear();
+    this.prepared.clear();
   }
 }

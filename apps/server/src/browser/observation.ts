@@ -17,6 +17,8 @@ export interface BrowserViewport {
   readonly device_scale_factor: number;
 }
 export interface BrowserPageSnapshot {
+  /** Transport fact used to distinguish an incomplete/error document from a normal miss. */
+  readonly http_status?: number;
   readonly document_generation?: number;
   readonly text?: string;
   readonly elements?: readonly BrowserElement[];
@@ -73,11 +75,38 @@ function safeUrl(value: string): string {
   return parsed.toString();
 }
 
-function pageState(title: string): BrowserPageState {
-  const value = title.toLowerCase();
+function pageState(title: string, text: string): BrowserPageState {
+  const titleValue = title.toLowerCase();
+  const textValue = text.toLowerCase();
+  const value = `${titleValue}\n${textValue}`;
   if (/(?:mfa|two-factor|二次验证)/u.test(value)) return "MFA_REQUIRED";
-  if (/(?:login|sign in|登录)/u.test(value)) return "LOGIN_REQUIRED";
-  if (/(?:challenge|验证)/u.test(value)) return "CHALLENGE";
+  // Article pages commonly keep a passive "Sign in" or institutional switcher in
+  // their global navigation even when the requested article is readable. Treat login
+  // as a blocking state only when the copy describes an access gate or the page is
+  // explicitly asking the visitor to authenticate.
+  if (
+    /(?:login|sign in|登录)\s*(?:is\s*)?(?:required|to\s+(?:access|continue|view|read)|才能|后才能)/u.test(
+      value,
+    ) ||
+    /(?:please|must|需要|请)\s*(?:log\s*in|sign\s*in|登录)/u.test(value) ||
+    /(?:access|continue|view|read|全文|访问|查看).{0,80}(?:login|sign in|登录)/u.test(
+      value,
+    )
+  )
+    return "LOGIN_REQUIRED";
+  // Challenge pages commonly use a neutral title such as "Just a moment..." and
+  // put the human-verification copy in the document body or an iframe visible in
+  // the screenshot. Keep this as a page-state hint only: the Agent still acts on
+  // the visible page and never receives a solver/token or frame selector.
+  if (
+    /(?:challenge|验证|just a moment|checking your browser|security check|one more step|attention required)/u.test(
+      titleValue,
+    ) ||
+    /(?:verify (?:you are|that you(?:'re| are)) human|i['’]?m human|checking your browser|performing security verification|complete the security check|press and hold|turnstile|cf[-_ ]?challenge)/u.test(
+      textValue,
+    )
+  )
+    return "CHALLENGE";
   if (/(?:not entitled|subscription required)/u.test(value))
     return "NOT_ENTITLED";
   if (/(?:access denied|forbidden|拒绝访问)/u.test(value))
@@ -190,7 +219,7 @@ export class BrowserObservationStore {
       viewport: this.lastViewport,
       frame,
       frame_truncated: frameTruncated,
-      page_state: pageState(title),
+      page_state: pageState(title, snapshot.text ?? ""),
       capture_state: captureState,
       text: snapshot.text ?? "",
       elements: snapshot.elements ?? [],

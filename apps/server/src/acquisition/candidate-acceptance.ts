@@ -9,13 +9,12 @@ import {
   type MetadataSnapshot,
 } from "@sciretriever/contracts";
 import {
-  admitPrimaryPdf,
   requireCurrentCandidate,
   LiteraturePublicationError,
 } from "../literature/primary-pdf.js";
 import { BrowserTransferCollector } from "../browser/transfer.js";
 import { CandidatePublisher } from "./candidate-publication.js";
-import { assessPdfIdentity } from "./pdf-evidence.js";
+import { acceptPdfFile } from "./pdf-acceptance.js";
 
 export interface AcceptCandidateCommand {
   readonly receipt_id: string;
@@ -114,21 +113,12 @@ export class CandidateAcceptanceService {
     if (candidate.source_name === "manual-pdf" && facts.primary_asset)
       throw new LiteraturePublicationError("primary-asset-conflict");
     check();
-    const doi = facts.literature.metadata.identifiers.find(
-      (identifier) => identifier.namespace === "doi",
-    );
-    if (!doi) throw new LiteraturePublicationError("candidate-uncertain");
-    const assessment = await assessPdfIdentity(
-      await this.collector.candidateBytes(candidate),
-      `doi:${doi.value}`,
-      facts.literature.version_role,
-      signal,
-    );
-    admitPrimaryPdf(
-      facts,
-      input.metadata_snapshot,
+    // Acquisition establishes file validity, not article identity. Parsing may
+    // later verify the association using the complete document and metadata.
+    await this.collector.withCandidate(
       candidate,
-      assessment.verdict.disposition,
+      (file) => acceptPdfFile(file, 10000, signal),
+      signal ? { signal } : {},
     );
     const existing =
       facts.primary_asset ??
@@ -169,7 +159,7 @@ export class CandidateAcceptanceService {
         candidate.source_name === "manual-pdf"
           ? null
           : candidate.capture!.source_url,
-      identity: "accepted",
+      identity: "unverified",
     });
     check();
     // Once publication begins it completes or leaves a durable receipt for reconciliation.

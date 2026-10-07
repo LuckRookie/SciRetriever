@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import type { ScopedFileReader } from "../storage/files/reader.js";
 
 export interface PdfAcceptance {
   readonly accepted: boolean;
@@ -6,10 +7,29 @@ export interface PdfAcceptance {
 }
 export class PdfAcceptanceError extends Error {
   readonly code = "pdf-acceptance" as const;
-  constructor() {
-    super("pdf acceptance failed");
+  constructor(cause?: unknown) {
+    super("pdf acceptance failed", { cause });
     this.name = "PdfAcceptanceError";
   }
+}
+
+export type PdfReaderFailureCode =
+  | "pdf-reader-timeout"
+  | "pdf-reader-cancelled"
+  | "pdf-reader-unavailable"
+  | "pdf-reader-output-limit"
+  | "pdf-reader-resource-limit"
+  | "pdf-reader-io-failed";
+class PdfReaderFailure extends Error {
+  constructor(
+    readonly code: PdfReaderFailureCode,
+    cause?: unknown,
+  ) {
+    super("PDF reader operation failed", { cause });
+  }
+}
+function cancelled(): PdfAcceptanceError {
+  return new PdfAcceptanceError(new PdfReaderFailure("pdf-reader-cancelled"));
 }
 
 /** The two installed PDF readers have bounded input/output, address space, CPU and lifetime. */
@@ -19,21 +39,31 @@ export async function readPdfTool(
   timeoutMs = 10000,
   signal?: AbortSignal,
 ): Promise<string> {
+  if (signal?.aborted) throw cancelled();
   if (
     !(bytes instanceof Uint8Array) ||
     bytes.byteLength === 0 ||
-    bytes.byteLength > 512 * 1024 * 1024 ||
     !Number.isSafeInteger(timeoutMs) ||
     timeoutMs < 1 ||
     timeoutMs > 120000 ||
-    signal?.aborted ||
     !["pdfinfo", "pdftotext"].includes(tool)
   )
     throw new PdfAcceptanceError();
+  return runPdfTool(bytes, tool, timeoutMs, signal);
+}
+
+async function runPdfTool(
+  input: Uint8Array | number,
+  tool: "pdfinfo" | "pdftotext",
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (signal?.aborted) throw cancelled();
+  const source = typeof input === "number" ? "/proc/self/fd/3" : "-";
   const args =
     tool === "pdfinfo"
-      ? ["-"]
-      : ["-f", "1", "-l", "1", "-enc", "UTF-8", "-", "-"];
+      ? [source]
+      : ["-f", "1", "-l", "1", "-enc", "UTF-8", source, "-"];
   const limit = tool === "pdfinfo" ? 65536 : 131072;
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -46,37 +76,88 @@ export async function readPdfTool(
         ...args,
       ],
       {
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio:
+          typeof input === "number"
+            ? ["ignore", "pipe", "pipe", input]
+            : ["pipe", "pipe", "pipe"],
         env: { PATH: process.env.PATH ?? "/usr/bin:/bin", LANG: "C.UTF-8" },
       },
     );
     const chunks: Buffer[] = [];
     let total = 0;
-    let failed = false;
-    const cancel = () => {
-      failed = true;
+    let failure: PdfReaderFailure | undefined;
+    const stop = (code: PdfReaderFailureCode, cause?: unknown) => {
+      failure ??= new PdfReaderFailure(code, cause);
       child.kill("SIGKILL");
     };
-    const timer = setTimeout(cancel, timeoutMs);
+    const cancel = () => stop("pdf-reader-cancelled");
+    const timer = setTimeout(() => stop("pdf-reader-timeout"), timeoutMs);
     signal?.addEventListener("abort", cancel, { once: true });
-    child.stdout.on("data", (chunk: Buffer) => {
+    if (signal?.aborted) cancel();
+    child.stdout!.on("data", (chunk: Buffer) => {
       total += chunk.length;
-      if (total > limit) cancel();
+      if (total > limit) stop("pdf-reader-output-limit");
       else chunks.push(chunk);
     });
-    child.stderr.resume();
-    child.stdin.on("error", cancel);
-    child.on("error", () => {
-      failed = true;
+    child.stderr!.resume();
+    child.stdin?.on("error", (cause: NodeJS.ErrnoException) => {
+      if (cause.code !== "EPIPE") stop("pdf-reader-io-failed", cause);
     });
-    child.on("close", (code) => {
+    child.on("error", (cause) => {
+      failure ??= new PdfReaderFailure("pdf-reader-unavailable", cause);
+    });
+    child.on("close", (code, terminationSignal) => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", cancel);
-      if (failed || code !== 0) reject(new PdfAcceptanceError());
+      if (!failure && code === 127)
+        failure = new PdfReaderFailure("pdf-reader-unavailable");
+      if (!failure && ["SIGXCPU", "SIGKILL"].includes(terminationSignal ?? ""))
+        failure = new PdfReaderFailure("pdf-reader-resource-limit");
+      if (failure || code !== 0) reject(new PdfAcceptanceError(failure));
       else resolve(Buffer.concat(chunks).toString("utf8"));
     });
-    child.stdin.end(bytes);
+    if (input instanceof Uint8Array) child.stdin!.end(input);
   });
+}
+
+function acceptedReport(report: string): PdfAcceptance {
+  const pages = /^Pages:\s+(\d+)$/mu.exec(report);
+  const count = Number(pages?.[1]);
+  if (
+    !Number.isSafeInteger(count) ||
+    count < 1 ||
+    /^Encrypted:\s+yes\b/mu.test(report)
+  )
+    throw new PdfAcceptanceError();
+  return Object.freeze({ accepted: true, page_count: count });
+}
+
+/** The storage scope supplies a seekable read-only descriptor; total input size is not its address-space budget. */
+export async function acceptPdfFile(
+  file: ScopedFileReader,
+  timeoutMs = 10000,
+  signal?: AbortSignal,
+): Promise<PdfAcceptance> {
+  if (signal?.aborted) throw cancelled();
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > 120000 ||
+    file.size < 1
+  )
+    throw new PdfAcceptanceError();
+  const decoder = new TextDecoder();
+  const head = await file.readRange(0, Math.min(8, file.size));
+  if (!decoder.decode(head).startsWith("%PDF-")) throw new PdfAcceptanceError();
+  const length = Math.min(file.size, 2 * 1024 * 1024);
+  const prefix = decoder.decode(await file.readRange(0, length));
+  const tail = decoder.decode(await file.readRange(file.size - length, length));
+  if (/\/Encrypt\b/u.test(prefix) || /\/Encrypt\b/u.test(tail))
+    throw new PdfAcceptanceError();
+  const report = await file.withDescriptor((fd) =>
+    runPdfTool(fd, "pdfinfo", timeoutMs, signal),
+  );
+  return acceptedReport(report);
 }
 
 export async function acceptPdf(
@@ -101,13 +182,5 @@ export async function acceptPdf(
   if (/\/Encrypt\b/u.test(prefix) || /\/Encrypt\b/u.test(tail))
     throw new PdfAcceptanceError();
   const report = await readPdfTool(bytes, "pdfinfo", timeoutMs, signal);
-  const pages = /^Pages:\s+(\d+)$/mu.exec(report);
-  const count = Number(pages?.[1]);
-  if (
-    !Number.isSafeInteger(count) ||
-    count < 1 ||
-    /^Encrypted:\s+yes\b/mu.test(report)
-  )
-    throw new PdfAcceptanceError();
-  return Object.freeze({ accepted: true, page_count: count });
+  return acceptedReport(report);
 }

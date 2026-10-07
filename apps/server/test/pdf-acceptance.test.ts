@@ -1,4 +1,7 @@
 import { deflateSync } from "node:zlib";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   acceptPdf,
@@ -76,6 +79,49 @@ function compressedOutputFixture(): Uint8Array {
 }
 
 describe("bounded PDF acceptance", () => {
+  it("preserves a caller cancellation as a reader cause", async () => {
+    const controller = new AbortController();
+    const reading = readPdfTool(pdf(), "pdfinfo", 10000, controller.signal);
+    controller.abort();
+    await expect(reading).rejects.toMatchObject({
+      code: "pdf-acceptance",
+      cause: { code: "pdf-reader-cancelled" },
+    });
+    await expect(
+      acceptPdf(pdf(), 10000, controller.signal),
+    ).rejects.toMatchObject({
+      cause: { code: "pdf-reader-cancelled" },
+    });
+  });
+  it("preserves an unavailable sandbox launcher without exposing PDF content", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "sciretriever-pdf-tool-unavailable-"),
+    );
+    const prior = process.env.PATH;
+    let reading: Promise<string>;
+    try {
+      process.env.PATH = directory;
+      reading = readPdfTool(pdf(), "pdfinfo");
+    } finally {
+      if (prior === undefined) delete process.env.PATH;
+      else process.env.PATH = prior;
+    }
+    try {
+      await expect(reading).rejects.toMatchObject({
+        code: "pdf-acceptance",
+        cause: { code: "pdf-reader-unavailable", cause: { code: "ENOENT" } },
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it("keeps active reader deadlines distinct from invalid PDF input", async () => {
+    await expect(
+      readPdfTool(compressedOutputFixture(), "pdftotext", 1),
+    ).rejects.toMatchObject({
+      cause: { code: "pdf-reader-timeout" },
+    });
+  });
   it("accepts a readable one-page PDF through the standard reader", async () => {
     await expect(acceptPdf(pdf())).resolves.toEqual({
       accepted: true,

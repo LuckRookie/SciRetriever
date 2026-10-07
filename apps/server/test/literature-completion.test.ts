@@ -419,46 +419,45 @@ it("rejects malformed and pre-cancelled commands before publishing any primary a
     await env.close();
   }
 }, 30000);
-it("preserves differing and missing identity evidence as uncertain without invoking Parser or Analysis", async () => {
-  const env = await fixture();
-  try {
-    await env.app.database.setAutomaticPdfExhaustion(lit);
-    for (const [transferId, identifier] of [
-      ["wrong-identity", "10.5555/other.paper"],
-      ["uncertain-identity", "unknown"],
-    ] as const) {
+it.each(["10.5555/other.paper", "unknown"])(
+  "allows unverified PDF content (%s) into Parsing and preserves the downloaded asset after Analysis declines it",
+  async (identifier) => {
+    const env = await fixture();
+    try {
+      await env.app.database.setAutomaticPdfExhaustion(lit);
+      const transferId = "unverified-content";
+      const bytes = workbenchPdf(identifier);
       await env.app.execution!.transfers.begin(transferId, undefined, {
-        session_id: "identity-session",
+        session_id: "unverified-session",
         article_id: lit,
-        page_id: "identity-page",
+        page_id: "unverified-page",
         document_generation: 1,
         source_url: "https://fixture.invalid/paper",
-        captured_at: "2026-09-10T00:00:00Z",
+        captured_at: "2026-10-04T00:00:00Z",
       });
-      await env.app.execution!.transfers.append(
-        transferId,
-        workbenchPdf(identifier),
-      );
+      await env.app.execution!.transfers.append(transferId, bytes);
       await env.app.execution!.transfers.complete(transferId);
+      const result = await env.app.completion!.complete({
+        literature_id: lit,
+        transfer_ids: [transferId],
+      });
+      expect(result.outcome).toBe("supplied_candidates_exhausted");
+      expect(result.attempts).toEqual([
+        { transfer_id: transferId, outcome: "no_usable_content" },
+      ]);
+      expect(env.calls).toBe(1);
+      expect(env.parses).toBe(1);
+      const detail = await env.app.library.detail(lit);
+      expect(detail.primary_pdf?.asset.sha256).toBe(await sha256(bytes));
+      expect(detail.primary_pdf?.article_identity_status).toBe("unverified");
+      expect(detail.parser_result).not.toBeNull();
+      expect(await env.app.database.hasAutomaticPdfExhaustion(lit)).toBe(false);
+    } finally {
+      await env.close();
     }
-    const result = await env.app.completion!.complete({
-      literature_id: lit,
-      transfer_ids: ["wrong-identity", "uncertain-identity"],
-    });
-    expect(result.outcome).toBe("supplied_candidates_exhausted");
-    expect(result.attempts.map((a) => a.outcome)).toEqual([
-      "candidate_uncertain",
-      "candidate_uncertain",
-    ]);
-    expect(env.calls).toBe(0);
-    expect(env.parses).toBe(0);
-    expect((await env.app.library.detail(lit)).primary_pdf).toBeNull();
-    // An uncertain candidate outcome is not a durable exhaustion fact and never clears one.
-    expect(await env.app.database.hasAutomaticPdfExhaustion(lit)).toBe(true);
-  } finally {
-    await env.close();
-  }
-}, 30000);
+  },
+  30000,
+);
 it("keeps a storage failure from writing the fact and clears it only when a primary PDF is accepted", async () => {
   const storageFailure = await fixture();
   try {

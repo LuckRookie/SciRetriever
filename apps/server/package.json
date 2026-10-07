@@ -29,6 +29,7 @@
     "playwright": "1.55.0",
     "playwright-core": "1.55.0",
     "string-width": "^8.2.2",
+    "tldts": "7.4.16",
     "wrap-ansi": "^10.0.1"
   },
   "scripts": {

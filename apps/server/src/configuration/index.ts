@@ -96,6 +96,32 @@ export interface BrowserConfig {
   readonly max_concurrency: number;
   readonly policy_overrides: readonly BrowserPolicyOverride[];
 }
+/** Process resource support; configured values remain unchanged for round trips. */
+export function effectiveBrowserConcurrency(browser: BrowserConfig): {
+  readonly configured_sessions: number;
+  readonly effective_sessions: number;
+  readonly decision_workers: number;
+  readonly limiting_reason:
+    | "runtime-session-cap"
+    | "explicit-serial-policy"
+    | null;
+} {
+  const explicitSerial = browser.policy_overrides.some(
+    (policy) => policy.max_concurrency === 1,
+  );
+  const sessions = explicitSerial ? 1 : Math.min(browser.max_concurrency, 8);
+  return Object.freeze({
+    configured_sessions: browser.max_concurrency,
+    effective_sessions: sessions,
+    decision_workers: Math.min(2, sessions),
+    limiting_reason: explicitSerial
+      ? "explicit-serial-policy"
+      : browser.max_concurrency > 8
+        ? "runtime-session-cap"
+        : null,
+  });
+}
+
 export interface OrdinaryConfiguration {
   readonly paths: PathsConfig;
   readonly sources: SourcesConfig;
@@ -877,7 +903,7 @@ function parseConfigurationObject(
     max_concurrency:
       browserRaw.max_concurrency === undefined
         ? 5
-        : positiveInteger(browserRaw.max_concurrency, 2),
+        : positiveInteger(browserRaw.max_concurrency, 1),
     policy_overrides: Object.freeze(
       arrayValue(browserRaw.policy_overrides ?? []).map(parsePolicy),
     ),

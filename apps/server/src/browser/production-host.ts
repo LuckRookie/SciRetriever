@@ -1,4 +1,9 @@
 import type { OperatorInput } from "@sciretriever/contracts";
+import { randomUUID } from "node:crypto";
+import type {
+  BrowserArticleExecution,
+  BrowserArticleSessionIdentity,
+} from "./article-session.js";
 import { verifyInstalledCloakRuntime } from "../configuration/cloak-runtime.js";
 import { BrowserHost, type BrowserHostOptions } from "./host.js";
 import {
@@ -82,6 +87,14 @@ export function createProductionBrowserHostFactory(options: {
   /** Intake-owned capture callbacks; this factory never interprets bytes itself. */
   readonly transfers?: BrowserHostOptions["transfers"];
   readonly admitNavigation?: BrowserHostOptions["admitNavigation"];
+  readonly beforeRequest?: BrowserHostOptions["beforeRequest"];
+  readonly navigationRetryFailed?: BrowserHostOptions["navigationRetryFailed"];
+  readonly requestEnded?: BrowserHostOptions["requestEnded"];
+  readonly documentCommitted?: BrowserHostOptions["documentCommitted"];
+  readonly resumeDocument?: BrowserHostOptions["resumeDocument"];
+  readonly onRuntimeLost?: BrowserHostOptions["onRuntimeLost"];
+  readonly rateLimited?: BrowserHostOptions["rateLimited"];
+  readonly maxSessions?: BrowserHostOptions["maxSessions"];
   /**
    * The bounded article driver. Unconfigured processes have none: the host then
    * reports a stable flow-unavailable refusal instead of a fake delivery.
@@ -97,7 +110,10 @@ export function createProductionBrowserHostFactory(options: {
    */
   readonly host_seam?: (
     options: BrowserHostOptions,
-  ) => Pick<BrowserHost, "start" | "openPage" | "close">;
+  ) => Pick<BrowserHost, "start" | "openPage" | "close"> &
+    Partial<
+      Pick<BrowserHost, "setSessionNetworkAccess" | "stopSessionNetwork">
+    >;
 }): BrowserHostFactory {
   return (seam: BrowserHostRuntimeSeam): BrowserSessionHost | null => {
     // No verified runtime means this process cannot provide a controlled Browser at
@@ -117,17 +133,6 @@ export function createProductionBrowserHostFactory(options: {
     // admission is present, so this is the same fail-closed rule at the construction site.
     const networkAdmission = options.admitNavigation ?? seam.admitNavigation;
     if (networkAdmission === undefined) return null;
-    let activeOrigin: string | null = null;
-    const admitNavigation: NonNullable<
-      BrowserHostOptions["admitNavigation"]
-    > = async (url) => {
-      // Network owns DNS/address/transport policy. This article-local gate only
-      // narrows it to the admitted landing origin; a redirect or subresource from
-      // another origin cannot become an implicit source grant.
-      if (activeOrigin === null || new URL(url).origin !== activeOrigin)
-        throw new TypeError("Browser destination outside article origin");
-      return networkAdmission(url);
-    };
     const hostOptions: BrowserHostOptions = {
       profile: seam.profile,
       ...(runtime ? { runtime } : {}),
@@ -135,85 +140,149 @@ export function createProductionBrowserHostFactory(options: {
         ? { proxy: proxy as NonNullable<BrowserHostOptions["proxy"]> }
         : {}),
       ...(options.transfers ? { transfers: options.transfers } : {}),
-      admitNavigation,
+      admitNavigation: networkAdmission,
+      ...(options.beforeRequest
+        ? { beforeRequest: options.beforeRequest }
+        : {}),
+      ...(options.navigationRetryFailed
+        ? { navigationRetryFailed: options.navigationRetryFailed }
+        : {}),
+      ...(options.requestEnded ? { requestEnded: options.requestEnded } : {}),
+      ...(options.documentCommitted
+        ? { documentCommitted: options.documentCommitted }
+        : {}),
+      ...(options.resumeDocument
+        ? { resumeDocument: options.resumeDocument }
+        : {}),
+      ...(options.onRuntimeLost
+        ? { onRuntimeLost: options.onRuntimeLost }
+        : {}),
+      ...(options.rateLimited ? { rateLimited: options.rateLimited } : {}),
+      ...(options.maxSessions !== undefined
+        ? { maxSessions: options.maxSessions }
+        : {}),
     };
-    // Either the real trusted construction, which re-checks the verified-runtime WeakSet
-    // inside `BrowserHost`, or the explicitly injected offline substitute for wiring tests.
     const host =
       options.host_seam === undefined
         ? new BrowserHost(hostOptions)
         : options.host_seam(hostOptions);
-    const close = (): Promise<void> => host.close();
+    const source = {
+      openPage: async (request: BrowserDeliveryRequest) => {
+        const identity = request.session_identity;
+        if (!identity)
+          throw new TypeError("Browser article identity is unavailable");
+        await host.start();
+        const page = await host.openPage(
+          request.start_url ?? undefined,
+          identity,
+          request.signal,
+        );
+        return {
+          page,
+          session_id: identity.session_id,
+          setNetworkAccess: (allowed: boolean) =>
+            host.setSessionNetworkAccess?.(identity.session_id, allowed),
+          stopNetwork: () =>
+            host.stopSessionNetwork?.(identity.session_id) ?? Promise.resolve(),
+          close: () => page.close(),
+        };
+      },
+    };
+    const flowFactory =
+      options.article_flow_factory ?? seam.article_flow_factory;
+    const flow =
+      options.article_flow ?? seam.article_flow ?? flowFactory?.(source);
+    const prepare = (request: BrowserDeliveryRequest) => {
+      const admitted = admitBrowserArticleRequest(request);
+      if (!admitted.ok) return admitted;
+      const identity: BrowserArticleSessionIdentity =
+        request.session_identity ??
+        Object.freeze({
+          session_id: "browser-article-" + randomUUID(),
+          operation_id:
+            request.operation_id ?? "browser-operation-" + randomUUID(),
+          generation: request.generation ?? 0,
+          literature_id: request.literature_id,
+          metadata_snapshot: Object.freeze({ ...request.metadata_snapshot }),
+        });
+      if (
+        request.signal.aborted ||
+        identity.literature_id !== request.literature_id ||
+        identity.metadata_snapshot.revision !==
+          request.metadata_snapshot.revision ||
+        identity.metadata_snapshot.sha256 !==
+          request.metadata_snapshot.sha256 ||
+        (request.generation !== undefined &&
+          identity.generation !== request.generation) ||
+        (request.operation_id !== undefined &&
+          identity.operation_id !== request.operation_id)
+      )
+        return {
+          ok: false as const,
+          refusal: browserRefused(
+            "browser-stale-operation",
+            "The Browser article ownership is no longer current.",
+          ),
+        };
+      return {
+        ok: true as const,
+        request: Object.freeze({
+          ...admitted.request,
+          session_identity: Object.freeze({
+            ...identity,
+            metadata_snapshot: Object.freeze({ ...identity.metadata_snapshot }),
+          }),
+        }),
+      };
+    };
+    const openArticle = flow?.open
+      ? async (
+          request: BrowserDeliveryRequest,
+        ): Promise<BrowserArticleExecution> => {
+          const admitted = prepare(request);
+          if (!admitted.ok)
+            throw new TypeError(
+              admitted.refusal.kind === "refused"
+                ? admitted.refusal.code
+                : "browser-flow-unavailable",
+            );
+          return flow.open!(admitted.request);
+        }
+      : undefined;
     return Object.freeze({
-      // The bounded article flow is supplied by Bootstrap: either a ready driver or a
-      // factory that builds one around the page source this factory owns. Without one
-      // (no Browser decision model, no verified runtime) the tier refuses with a stable
-      // `browser-flow-unavailable` instead of inventing a delivery. It must never return
-      // an empty list or a bare transfer id: an empty result reads as a normal route end
-      // and can be committed as a durable exhaustion fact, and an id cannot prove the
-      // bytes were fetched, attributed and spooled through the Intake boundary.
+      ...(openArticle ? { openArticle } : {}),
       deliverCandidate: async (
         request: BrowserDeliveryRequest,
       ): Promise<BrowserDeliveryResult> => {
-        // The factory owns this raw host, so it — not Bootstrap — supplies the page
-        // source. That keeps `BrowserSessionHost` free of start/openPage while the real
-        // flow can still reach them.
-        let flow = options.article_flow ?? seam.article_flow;
-        const flowFactory =
-          options.article_flow_factory ?? seam.article_flow_factory;
-        if (flow === undefined && flowFactory !== undefined) {
-          // Resolved on first delivery, at which point the factory-owned page source can
-          // reach the raw host it holds.
-          flow = flowFactory({
-            // The seam is request-shaped end to end: the driver owner binds the
-            // delivery context before the page opens, and this closure unwraps the
-            // already-admitted start URL onto the raw host.
-            openPage: async (request) => {
-              await host.start();
-              const page = await host.openPage(request.start_url ?? undefined);
-              return { page, close: () => page.close() };
-            },
-          });
-        }
-        if (flow === undefined)
+        if (!flow)
           return browserRefused(
             "browser-flow-unavailable",
             "The controlled Browser article flow is not wired in this process.",
           );
-        const admitted = admitBrowserArticleRequest(request);
+        const admitted = prepare(request);
         if (!admitted.ok) return admitted.refusal;
-        if (activeOrigin !== null)
-          return browserRefused(
-            "browser-flow-busy",
-            "Another article is active in the controlled Browser.",
-          );
-        activeOrigin = new URL(admitted.request.start_url!).origin;
-        try {
-          return await flow.deliver(admitted.request);
-        } finally {
-          activeOrigin = null;
-        }
+        return flow.deliver(admitted.request);
       },
-      // The host exposes `apply` on a page handle, not on itself: an action only has
-      // meaning inside an open, admitted page.
       applyAction: async (
         input: OperatorInput,
         documentGeneration: number,
         current: () => boolean,
       ) => {
         const page = await host.openPage();
-        const applied = await page.apply(input, documentGeneration, current);
-        await page.close();
-        return applied;
+        try {
+          return await page.apply(input, documentGeneration, current);
+        } finally {
+          await page.close();
+        }
       },
-      close,
+      close: () => host.close(),
     });
   };
 }
 
 /**
  * Validates one delivery request against the admitted-driver contract: a driver may
- * only navigate to one already-admitted landing page. Missing, non-HTTPS,
+ * only navigate to one already-admitted landing page. Missing, non-HTTP(S),
  * credentialed or fragmented targets are refused before the flow is asked, so no
  * arbitrary URL and no guessed locator can ever reach the Browser.
  */
@@ -243,11 +312,9 @@ export function admitBrowserArticleRequest(
       ),
     };
   }
-  // Literal loopback HTTP is syntactically accepted only for an explicitly injected
-  // Network fixture admission. The production HTTPS/public-IP policy still refuses it.
+  // Syntax is checked here. Network owns DNS, address classes and scheme policy.
   if (
-    (target.protocol !== "https:" &&
-      !(target.protocol === "http:" && target.hostname === "127.0.0.1")) ||
+    !["http:", "https:"].includes(target.protocol) ||
     target.username ||
     target.password ||
     target.hash

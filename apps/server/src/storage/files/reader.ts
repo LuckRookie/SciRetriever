@@ -40,6 +40,15 @@ interface OpenFile {
   readonly file: FileHandle;
   close(): Promise<void>;
 }
+export interface ScopedFileReader {
+  readonly size: number;
+  readonly sha256: string;
+  /** Only a bounded range may be materialized, independently of total file size. */
+  readRange(offset: number, length: number): Promise<Uint8Array>;
+  chunks(): AsyncIterable<Uint8Array>;
+  withDescriptor<T>(consume: (descriptor: number) => Promise<T>): Promise<T>;
+  assertUnchanged(): Promise<void>;
+}
 async function openFile(root: string, reference: string): Promise<OpenFile> {
   const handles: FileHandle[] = [];
   let openingFinalName = false;
@@ -148,9 +157,12 @@ async function verifyName(
 
 /** Scope-bound, read-only chunks. No descriptor or machine path crosses this boundary. */
 export interface VerifiedFileScope {
+  readonly file: ScopedFileReader;
+  verify(): Promise<void>;
   use<T>(
     consume: (chunks: AsyncIterable<Uint8Array>) => Promise<T>,
   ): Promise<T>;
+  useFile<T>(consume: (file: ScopedFileReader) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
 export async function openVerifiedFile(
@@ -160,7 +172,7 @@ export async function openVerifiedFile(
   options: ArtifactReadOptions = {},
 ): Promise<VerifiedFileScope> {
   const expected = parseArtifactRef(value);
-  const maxBytes = options.maxBytes ?? 512 * 1024 * 1024;
+  const maxBytes = options.maxBytes ?? Number.MAX_SAFE_INTEGER;
   if (
     !Number.isSafeInteger(maxBytes) ||
     maxBytes < 1 ||
@@ -180,6 +192,12 @@ export async function openVerifiedFile(
   try {
     const identity = await scan(opened.file, expected, options.signal);
     await verifyName(root, reference, identity);
+    const assertUnchanged = async () => {
+      checkSignal(options.signal);
+      if (!active || !same(identity, await opened.file.stat({ bigint: true })))
+        fail();
+      await verifyName(root, reference, identity);
+    };
     const stream: AsyncIterable<Uint8Array> = {
       async *[Symbol.asyncIterator]() {
         if (!active || iteratorStarted) fail();
@@ -214,28 +232,126 @@ export async function openVerifiedFile(
         if (!active) fail();
       },
     };
+    const file: ScopedFileReader = Object.freeze({
+      size: expected.byte_size,
+      sha256: expected.sha256,
+      assertUnchanged,
+      chunks: () => Object.freeze(stream),
+      async readRange(offset: number, length: number) {
+        if (
+          !Number.isSafeInteger(offset) ||
+          !Number.isSafeInteger(length) ||
+          offset < 0 ||
+          length < 0 ||
+          length > 2 * CHUNK ||
+          offset + length > expected.byte_size
+        )
+          fail();
+        await assertUnchanged();
+        const bytes = Buffer.alloc(length);
+        let total = 0;
+        while (total < length) {
+          checkSignal(options.signal);
+          const { bytesRead } = await opened.file.read(
+            bytes,
+            total,
+            length - total,
+            offset + total,
+          );
+          if (!bytesRead) fail();
+          total += bytesRead;
+        }
+        await assertUnchanged();
+        return new Uint8Array(bytes);
+      },
+      async withDescriptor<T>(consume: (descriptor: number) => Promise<T>) {
+        await assertUnchanged();
+        // The inherited descriptor is read-only and belongs to this callback only.
+        const readonly = await open(
+          `/proc/self/fd/${opened.file.fd}`,
+          constants.O_RDONLY,
+        );
+        try {
+          if (!same(identity, await readonly.stat({ bigint: true }))) fail();
+          const result = await consume(readonly.fd);
+          await assertUnchanged();
+          return result;
+        } finally {
+          await readonly.close();
+        }
+      },
+    });
+    const verify = async () => {
+      await assertUnchanged();
+      const final = await scan(opened.file, expected, options.signal);
+      if (!same(identity, final)) fail();
+      await verifyName(root, reference, identity);
+    };
+    const useFile = async <T>(
+      consume: (file: ScopedFileReader) => Promise<T>,
+    ) => {
+      if (!active || used) fail();
+      used = true;
+      try {
+        const result = await consume(file);
+        await verify();
+        return result;
+      } finally {
+        await close();
+      }
+    };
     return {
+      file,
+      verify,
       close,
+      useFile,
       async use<T>(
         consume: (chunks: AsyncIterable<Uint8Array>) => Promise<T>,
       ): Promise<T> {
-        if (!active || used) fail();
-        used = true;
-        try {
-          const result = await consume(Object.freeze(stream));
-          if (!active) fail();
-          active = false;
-          const final = await scan(opened.file, expected, options.signal);
-          if (!same(identity, final)) fail();
-          await verifyName(root, reference, identity);
-          return result;
-        } finally {
-          await close();
-        }
+        return useFile(() => consume(Object.freeze(stream)));
       },
     };
   } catch (error) {
     await close();
     throw error;
+  }
+}
+
+/** Inspect unknown existing bytes without reading them into one array. */
+export async function describeStoredFile(
+  root: string,
+  reference: string,
+  options: ArtifactReadOptions = {},
+): Promise<{ readonly sha256: string; readonly size: number }> {
+  const opened = await openFile(root, reference);
+  try {
+    const before = await opened.file.stat({ bigint: true });
+    if (
+      !before.isFile() ||
+      before.nlink !== 1n ||
+      before.size > BigInt(options.maxBytes ?? Number.MAX_SAFE_INTEGER)
+    )
+      fail();
+    const size = Number(before.size);
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(CHUNK);
+    let offset = 0;
+    while (offset < size) {
+      checkSignal(options.signal);
+      const { bytesRead } = await opened.file.read(
+        buffer,
+        0,
+        Math.min(buffer.length, size - offset),
+        offset,
+      );
+      if (!bytesRead) fail();
+      offset += bytesRead;
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+    if (!same(before, await opened.file.stat({ bigint: true }))) fail();
+    await verifyName(root, reference, before);
+    return { sha256: hash.digest("hex"), size };
+  } finally {
+    await opened.close();
   }
 }

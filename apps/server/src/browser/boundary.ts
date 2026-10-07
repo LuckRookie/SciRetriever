@@ -1,10 +1,16 @@
 import type {
   DurableCandidate,
+  LiteratureMetadata,
   MetadataSnapshot,
   OperatorInput,
 } from "@sciretriever/contracts";
 import type { BrowserNavigationAdmission } from "./host.js";
 import type { FlowPageHandle } from "./article-flow.js";
+import type {
+  BrowserArticleDeliveryLease,
+  BrowserArticleExecution,
+  BrowserArticleSessionIdentity,
+} from "./article-session.js";
 
 /**
  * One bounded Browser acquisition attempt for a concrete Literature.
@@ -24,6 +30,13 @@ export interface BrowserDeliveryRequest {
    */
   readonly version: string;
   /**
+   * A bounded, provider-neutral description of the frozen article target. This is
+   * the only article metadata the Browser Agent receives; it contains no locator,
+   * credential, cookie or vendor response.
+   */
+  /** Required on production Entry requests; optional for legacy low-level seams. */
+  readonly article_goal?: BrowserArticleGoal;
+  /**
    * The one already-admitted landing page this delivery may start from, selected by
    * Entry from the target's own `asset_hints` (never an arbitrary or guessed URL).
    * `null` means no admissible page exists, which the tier reports as unavailable.
@@ -34,7 +47,87 @@ export interface BrowserDeliveryRequest {
   /** Operation-local generation used to reject stale queued deliveries. */
   readonly generation?: number;
   readonly operation_id?: string;
+  /** Operation-local hashes rejected before a candidate can end exploration. */
+  readonly excluded_sha256?: readonly string[];
+  /** Broker freezes this internal identity before page creation; seams may omit it. */
+  readonly session_identity?: BrowserArticleSessionIdentity;
 }
+
+export interface BrowserArticleGoal {
+  readonly literature_id: string;
+  readonly identifier: string;
+  readonly version: string;
+  readonly identifiers: readonly {
+    readonly namespace: string;
+    readonly value: string;
+  }[];
+  readonly title: string | null;
+  readonly authors: readonly string[];
+  readonly abstract_excerpt: string | null;
+  readonly venue: string | null;
+  readonly publisher: string | null;
+  readonly publication_year: number | null;
+  readonly document_type: string | null;
+}
+
+/**
+ * Converts neutral Literature metadata into the small, auditable goal supplied to
+ * the Browser Agent. Bounds are intentional: the goal helps identify the article,
+ * while the page and Network layers remain responsible for navigation and capture.
+ */
+export function createBrowserArticleGoal(input: {
+  readonly literature_id: string;
+  readonly identifier: string;
+  readonly version: string;
+  readonly metadata: LiteratureMetadata;
+}): BrowserArticleGoal {
+  const bounded = (value: string | null, limit: number): string | null => {
+    if (value === null) return null;
+    const normalized = value.trim().replace(/\s+/gu, " ");
+    return normalized.length > 0 ? normalized.slice(0, limit) : null;
+  };
+  const authors = input.metadata.authors
+    .map((author) => bounded(author.display_name, 256))
+    .filter((author): author is string => author !== null)
+    .slice(0, 32);
+  const identifiers = input.metadata.identifiers
+    .map((identifier) => {
+      const namespace = bounded(identifier.namespace, 64);
+      const value = bounded(identifier.value, 512);
+      return namespace && value ? { namespace, value } : null;
+    })
+    .filter(
+      (identifier): identifier is { namespace: string; value: string } =>
+        identifier !== null,
+    )
+    .slice(0, 16);
+  const publicationYear = input.metadata.publication_year;
+  return Object.freeze({
+    literature_id: input.literature_id,
+    identifier: input.identifier,
+    version: input.version,
+    identifiers: Object.freeze(identifiers),
+    title: bounded(input.metadata.title, 512),
+    authors: Object.freeze(authors),
+    abstract_excerpt: bounded(input.metadata.abstract, 1200),
+    venue: bounded(input.metadata.venue, 256),
+    publisher: bounded(input.metadata.publisher, 256),
+    publication_year:
+      publicationYear !== null &&
+      Number.isSafeInteger(publicationYear) &&
+      publicationYear >= 1000 &&
+      publicationYear <= 9999
+        ? publicationYear
+        : null,
+    document_type: bounded(input.metadata.document_type, 128),
+  });
+}
+
+export type BrowserDecisionTarget = Pick<
+  BrowserArticleGoal,
+  "literature_id" | "identifier" | "version"
+> &
+  Partial<Omit<BrowserArticleGoal, "literature_id" | "identifier" | "version">>;
 
 /**
  * The bounded article driver owned by the Browser tier.
@@ -47,10 +140,12 @@ export interface BrowserDeliveryRequest {
  */
 export interface BrowserArticleFlow {
   deliver(request: BrowserDeliveryRequest): Promise<BrowserDeliveryResult>;
+  /** Production workers open once and then atomically claim individual steps. */
+  open?(request: BrowserDeliveryRequest): Promise<BrowserArticleExecution>;
 }
 
 /**
- * A Browser delivery is either a spooled, identity-assessed candidate that the
+ * A Browser delivery is either a spooled, file-validated candidate that the
  * ordinary acceptance path can consume, or a stable, non-retryable refusal.
  *
  * It is deliberately never expressed as an empty candidate list or a bare transfer
@@ -63,8 +158,13 @@ export type BrowserDeliveryResult =
       readonly kind: "delivered";
       /** Bytes already spooled by the Intake-owned collector. */
       readonly candidate: DurableCandidate;
-      /** Identity/version assessment produced by the Intake boundary. */
+      /** PDF file admission produced by Intake; article identity is unverified. */
       readonly accepted: boolean;
+      /**
+       * Production retains the article until Entry acceptance/publication settles.
+       * Older low-level seams may omit this lease and keep their bounded lifetime.
+       */
+      readonly lease?: BrowserArticleDeliveryLease;
     }
   /** A real article flow ended without a captured primary PDF. */
   | { readonly kind: "exhausted" }
@@ -91,13 +191,17 @@ export type BrowserDeliveryResult =
 export interface BrowserSessionHost {
   /**
    * Run one bounded article flow inside the admitted Browser session and return the
-   * spooled, identity-assessed candidate for the caller's acceptance step. The bytes
+   * spooled, file-validated candidate for the caller's acceptance step. The bytes
    * are produced by the Browser's own Network stack and spooled by the Intake owner;
    * no URL is ever handed back for another transport to fetch.
    */
   deliverCandidate(
     request: BrowserDeliveryRequest,
   ): Promise<BrowserDeliveryResult>;
+  /** Production execution boundary; low-level host seams can retain deliverCandidate. */
+  openArticle?(
+    request: BrowserDeliveryRequest,
+  ): Promise<BrowserArticleExecution>;
   /**
    * Apply one already-parsed operator action inside the current session. Optional:
    * only an enabled, available runtime exposes it.
@@ -133,6 +237,11 @@ export type BrowserArticleFlowFactory = (
 export interface BrowserArticleFlowPageSource {
   openPage(request: BrowserDeliveryRequest): Promise<{
     readonly page: FlowPageHandle;
+    readonly session_id?: string;
+    /** Losing network eligibility keeps the page but rejects subsequent requests. */
+    readonly setNetworkAccess?: (allowed: boolean) => void;
+    /** Wait until this article's admitted network work has actually stopped. */
+    readonly stopNetwork?: () => Promise<void>;
     readonly close: () => Promise<void>;
   }>;
 }
@@ -167,7 +276,7 @@ export type BrowserHostAvailability = "available" | "unavailable";
 export function browserRefused(
   code: string,
   reason: string,
-): BrowserDeliveryResult {
+): Extract<BrowserDeliveryResult, { readonly kind: "refused" }> {
   return Object.freeze({
     kind: "refused" as const,
     code,
