@@ -584,3 +584,17 @@ export {
   type WorkbenchStaticAsset,
 } from "./workbench/http.js";
 export { createBrowserDecision } from "./browser/decision.js";
+export {
+  ArticleIdentityService,
+  ArticleIdentityError,
+} from "./parsing/article-identity.js";
+export { compareArticleIdentity } from "./literature/article-identity.js";
+export {
+  inspectArticleIdentityCatalog,
+  migrateArticleIdentityCatalog,
+} from "./storage/sqlite/article-identity-migration.js";
+export {
+  ProcessingTaskService,
+  ProcessingTaskError,
+} from "./application/jobs/processing.js";
+export { createMcpServer, runMcpStdio, type McpOptions } from "./mcp/server.js";

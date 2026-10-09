@@ -1754,3 +1754,38 @@ FileStore、DB Worker、Agents、Browser、Acquisition 与业务。每个切片�
 
 任何 v1 bytes/hash/schema、owner、secret、SSRF、不可变发布、Candidate 对账或恢复差异都阻断下游并回到
 对应 owner；不在后续模块增加长期兼容旁路。
+
+## 已有材料加工任务（2026-10-08 实现合同）
+
+`ProcessingTaskRequest` 是封闭类型联合：独立解析、文章身份核验、单篇分析、长文分析和集合综合。
+最多 100 个独立固定目标；前后依赖由调用方取得前项正式产物后再显式提交，不增加 DAG 引擎。
+目标输入保留对应操作的材料 ID/hash、manifest 和预算。任务执行复用已有业务操作，
+PDF/content completion 保留既有冻结选择和分层获取流程。
+
+Application 复用 ExecutionRepository/ExecutionQueue 的 job、target、attempt、lease 和 event。
+新的 selector payload 版本 3 保存加工请求，旧版本 2 completion 继续兼容。结果 event 仅保存
+正式业务产物引用和发布回执；文献/材料/知识事实仍由各业务 owner 持有，不从日志恢复科学事实。
+幂等键与规范输入相同返回已有任务，不重置目标；输入不同拒绝。完成目标不因重试未完成项而重跑。
+
+操作回执先保存再标记目标完成，崩溃后优先复用；业务已提交但回执未知时依赖业务 owner 的
+输入比较/不可变发布恢复，不承诺模型恰好调用一次。取消/暂停保留已发布结果，后续未开始项停止。
+目标请求执行原有字节/调用预算，任务的 attempt 上限防止无限重试；不声称旧 execution 的
+网络/模型累计字段已完整统计所有加工成本。
+
+CLI submit 只入队，run 前台执行；MCP submit 在服务进程内启动。每个 catalog 的执行 runtime
+由独立 OS 锁保护；锁的共享所有者绑定 catalog 连接，ExecutionQueue、旧 ExecutionTaskService 和
+ProcessingTaskService 都从共同执行边界进入。嵌套/并行运行共享租约，最后一个运行结束才释放，
+异步释放完成前不接纳下一次租约；不跨模型调用持有业务写锁。
+ProcessingTaskService 按 `execution.max_concurrency` 并行（默认 4）：后台 start 超额等待，
+前台 run/runResults 超额只拒绝、不排队，已取消的前台调用不启动任务。
+另一个 Application 启动时若执行 runtime 仍活跃，则跳过崩溃恢复，也不能抢跑任务。
+ProcessingTaskService 执行中每 500 ms 读取控制状态，可观察其它进程发出的 pause/cancel；完成产物保留。
+关闭服务会中断并结算在途任务，进程停止后不继续工作，重启后需要显式 run/resume/retry。
+任务读取保留 skipped 和 failures 历史；settlement event 记录原始 skipped_reason，
+已经满足或不符合条件且无失败的目标不制造 fallback failure，不请求人工协助。
+显式 retry 只重新排入失败、中断及最新结算为失败跳过的目标；已完成、正常耗尽、预算耗尽和人工跳过不重跑。
+旧事件无 skipped_reason 时允许对带 failure 的跳过项显式重试；不改写历史事件、不迁移任务状态枚举。
+completed 仍表示本轮执行结束，不能代替目标结果判定。
+生产组装和生命周期回归见 `processing-tasks.test.ts`、`processing-retry.test.ts`、
+`execution-runtime-owner.test.ts`、`mcp.test.ts`、`mcp-stdio.test.ts`；
+调用见[Agent 接口指南](../../guides/agent-interface.md)。

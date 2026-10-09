@@ -13,19 +13,20 @@
 | 能力 | 当前代码事实 | 剩余边界 |
 | --- | --- | --- |
 | 原始材料/独立解析 | 明确获取/人工接纳、独立解析与 QueryApplication 阅读已接通 | 真实 Provider/Parser/站点未验收，读取缺口不启动维护 |
-| 文档证据 | v3–v8 固定版本、UTF-8 片段、资源与 hash/provenance 可读取和复核 | 表格单元、图注、PDF 页码/bbox 与通用物理回收未开放 |
+| 文档证据 | v3–v9 固定版本、UTF-8 片段、资源与 hash/provenance 可读取和复核 | 表格单元、图注、PDF 页码/bbox 与通用物理回收未开放 |
 | 分析 | v6 单篇多用途/长文分层知识，v7 集合综合已接通；保留旧 Analysis 兼容路径 | fake 模型证明流程和证据约束，不证明真实科学质量 |
 | 检索 | v4 材料 Context、v8 知识/材料混合 Context；显式建索引、有界读取和固定证据展开 | 无 tokenizer；真实语料召回/排序质量未评估，分数不是科学置信度 |
-| Agent adapter | 公开 TS、CLI、HTTP 与适用 Web 入口可消费固定 ID/hash/证据 | 正式 MCP adapter 尚未交付；不把内部导出视作完整 Agent 协议 |
+| 文章身份核验 | v9 显式模型抽取原文证据、Literature 接纳与按 ID 读取；不阻断下载 | 辅助判断，真实语料准确率待独立评估 |
+| Agent adapter | 公开 TS、CLI、HTTP 与适用 Web 入口可消费固定 ID/hash/证据 | 正式 MCP stdio 已接通，任务操作复用公开 Application；科学质量不由协议测试推导 |
 | 人类协作 | 同一生产 Browser 可观看、指导、接管/交还并接纳 PDF；人类和 Agent 共用资料 | 实际 Cloak loopback 已验证，真实 Publisher/机构身份与 entitlement 未验收 |
 | 材料保留 | NoUsableContent 保留已接纳材料；v3 起禁旧物理回收，v5 起有外部候选回执的有限期保护 | 明确失效和跨进程 GC/通用回收仍待设计；旧兼容内容不自动撤销 PDF |
-| 通用提取 | 调用方规范、只读准备、v5–v8 原子候选交付、回执与输入 pin 已接通 | 领域含义/最终数据集归调用方；不托管 payload 或自动科学接纳 |
+| 通用提取 | 调用方规范、只读准备、v5–v9 原子候选交付、回执与输入 pin 已接通 | 领域含义/最终数据集归调用方；不托管 payload 或自动科学接纳 |
 
-旧章节中的单篇内容、目标枚举和精确 schema 描述当前/兼容实现，不穷尽新产品目标。v3–v8 与当前公开入口已有实现及直接验证，正式初始化/升级和 reader 范围见[安装兼容矩阵](../guides/installation.md#当前-catalog-与-reader-兼容)；后台存续、完整历史回放、通用回收及候选 payload 托管不由这些结果推导。本次交接文档同步没有修改生产代码、用户数据或执行真实外部探测。
+旧章节中的单篇内容、目标枚举和精确 schema 描述当前/兼容实现，不穷尽新产品目标。v3–v9 与当前公开入口已有实现及直接验证，正式初始化/升级和 reader 范围见[安装兼容矩阵](../guides/installation.md#当前-catalog-与-reader-兼容)；后台存续、完整历史回放、通用回收及候选 payload 托管不由这些结果推导。2026-10-08 补充 MCP、加工任务及身份判断实现；没有修改用户数据或执行真实外部探测。
 
 2026-09-27 新目标按 [ADR 0028](decisions/0028-query-and-expansion-separation.md)将查询与显式维护分开：新读取/分析接口不得因缺口调用 completion 扩库。显式 complete pdf/content 仍是维护命令，content 的补 PDF 行为不是查询行为；当日只改设计，后续独立 QueryApplication 和只读隔离已实施并验证。
 
-2026-09-28 只读复核当时确认：Jobs仅使用TargetRunner、Analysis两次全文请求、旧cleanup联动与CLI缺省500的差距。该段保留为实施前记录，不代表当前进度。代码/数据/API变化与兼容设计见[迁移映射](evolution-map.md)，执行证据归[迁移计划](../archive/2026-09-28-typescript-knowledge-architecture-migration/README.md)。当时 Catalog v2 仅有 execution 扩展；当前正式 operator 可显式初始化 v8 或升级 v1–v7，普通读取与启动不自动升级。
+2026-09-28 只读复核当时确认：Jobs仅使用TargetRunner、Analysis两次全文请求、旧cleanup联动与CLI缺省500的差距。该段保留为实施前记录，不代表当前进度。代码/数据/API变化与兼容设计见[迁移映射](evolution-map.md)，执行证据归[迁移计划](../archive/2026-09-28-typescript-knowledge-architecture-migration/README.md)。当时 Catalog v2 仅有 execution 扩展；当前正式 operator 可显式初始化 v9 或升级 v1–v8，普通读取与启动不自动升级。
 
 ## 1. 已确认的架构决策
 

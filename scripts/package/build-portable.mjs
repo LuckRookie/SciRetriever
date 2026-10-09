@@ -56,6 +56,7 @@ async function packageDependencies(directory) {
       join(repository, workspace),
     );
   const packed = new Map();
+  const overrides = {};
   async function visit(name, from) {
     let root = from;
     while (!existsSync(join(root, "node_modules", name, "package.json"))) {
@@ -68,24 +69,28 @@ async function packageDependencies(directory) {
     const manifest = JSON.parse(
       await readFile(join(packageDirectory, "package.json"), "utf8"),
     );
-    const prior = packed.get(name);
-    if (prior) {
-      if (prior.version !== manifest.version)
-        throw new Error(`conflicting runtime dependency: ${name}`);
-      return;
-    }
+    const identity = `${name}@${manifest.version}`;
+    const prior = packed.get(identity);
+    if (prior) return prior;
     const tarball = `${name.replace(/^@/u, "").replaceAll("/", "-")}-${manifest.version}.tgz`;
-    packed.set(name, { version: manifest.version, tarball });
+    const entry = { version: manifest.version, tarball };
+    packed.set(identity, entry);
     pnpm(["pack", "--pack-destination", directory], packageDirectory);
-    for (const dependency of Object.keys(manifest.dependencies ?? {}))
-      await visit(dependency, packageDirectory);
+    for (const dependency of Object.keys(manifest.dependencies ?? {})) {
+      const child = await visit(dependency, packageDirectory);
+      overrides[`${identity}>${dependency}`] = `file:./${child.tarball}`;
+    }
+    return entry;
   }
   const serverManifest = JSON.parse(
     await readFile(join(repository, "apps/server/package.json"), "utf8"),
   );
   for (const dependency of Object.keys(serverManifest.dependencies ?? {})) {
     if (dependency.startsWith("@sciretriever/")) continue;
-    await visit(dependency, join(repository, "apps/server"));
+    const child = await visit(dependency, join(repository, "apps/server"));
+    overrides[
+      `${serverManifest.name}@${serverManifest.version}>${dependency}`
+    ] = `file:./${child.tarball}`;
   }
   const dependencies = {};
   for (const name of ["contracts", "server"]) {
@@ -96,8 +101,12 @@ async function packageDependencies(directory) {
     if (!tarball) throw new Error(`workspace package was not packed: ${name}`);
     dependencies[`@sciretriever/${name}`] = `file:./${tarball}`;
   }
-  for (const [name, value] of packed)
-    dependencies[name] = `file:./${value.tarball}`;
+  // Root entries satisfy peer dependencies offline; edge overrides retain each
+  // consumer's resolved version when several versions share a package name.
+  for (const [identity, value] of packed) {
+    const name = identity.slice(0, identity.lastIndexOf("@"));
+    dependencies[name] ??= `file:./${value.tarball}`;
+  }
   await writeFile(
     join(directory, "package.json"),
     `${JSON.stringify(
@@ -105,7 +114,7 @@ async function packageDependencies(directory) {
         private: true,
         type: "module",
         dependencies,
-        pnpm: { overrides: dependencies },
+        pnpm: { overrides: { ...dependencies, ...overrides } },
       },
       null,
       2,

@@ -31,7 +31,7 @@ function tx<T>(db: DatabaseSync, mode: "" | " IMMEDIATE", work: () => T): T {
 }
 function requireV6(db: DatabaseSync): void {
   if (
-    ![6, 7, 8].includes(
+    ![6, 7, 8, 9].includes(
       Number(
         one(db, "SELECT schema_version FROM schema_identity WHERE singleton=1")
           ?.schema_version,
@@ -144,7 +144,7 @@ function publishSynthesis(
 ): { readonly artifact_id: string; readonly published: boolean } {
   return tx(db, " IMMEDIATE", () => {
     if (
-      ![7, 8].includes(
+      ![7, 8, 9].includes(
         Number(
           one(
             db,
@@ -540,7 +540,7 @@ export function runKnowledgeStorage(
   if (action === "list-synthesis") {
     const p = args as { manifest_sha256: string | null; limit: number };
     if (
-      ![7, 8].includes(
+      ![7, 8, 9].includes(
         Number(
           one(
             db,

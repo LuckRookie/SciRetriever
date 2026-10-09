@@ -74,3 +74,10 @@ M06-T01/T02 的当前单篇知识切片横跨 `packages/contracts/src/knowledge.
 4. 运行与变更直接相关的测试；代码变更再按需要运行 `pnpm quick`、`pnpm test` 或 `pnpm full`。
 5. 文档变更检查本地链接/锚点、命令事实、术语一致性和 `git diff --check`。
 6. 交付时列出实际命令、退出码、跳过/未运行项、changed paths 和残余风险；不读取或提交凭据、真实数据、构建产物或无关改动。
+
+### Agent stdio 与文章身份核验
+
+- `apps/server/src/mcp/`：统一产品接口技术文档和 `docs/guides/agent-interface.md`；MCP SDK 是传输适配依赖。
+- `application/jobs/processing.ts`：任务协调技术文档；固定加工请求、幂等和已有执行持久化。
+- `parsing/article-identity.ts`、`literature/article-identity.ts`、contracts 对应文件：文档证据技术文档、ADR 0029 及 Agent 指南。
+- `schema-v9.ts`、`article-identity-migration.ts`：安装/升级指南；显式升级和旧版本读取，禁止隐式用户库迁移。

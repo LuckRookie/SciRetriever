@@ -1,3 +1,16 @@
+import {
+  acquireExecutionRuntime,
+  ExecutionRuntimeOwner,
+} from "../execution/runtime-owner.js";
+import {
+  SCHEMA_V9_FINGERPRINT,
+  SCHEMA_V9_MANIFEST,
+  SCHEMA_V9_VERSION,
+} from "./schema-v9.js";
+import {
+  parseArticleIdentityAssessment,
+  type ArticleIdentityAssessment,
+} from "@sciretriever/contracts";
 import type { CandidateCleanupSnapshot } from "../../acquisition/candidate-cleanup.js";
 import {
   WriteAdmissionError,
@@ -294,6 +307,16 @@ function parseDiscoveryPublication(value: unknown): DiscoveryPublication {
 }
 
 export type SqliteCommand =
+  | {
+      readonly kind: "article_identity_put";
+      readonly assessment: ArticleIdentityAssessment;
+    }
+  | { readonly kind: "article_identity_get"; readonly assessmentId: string }
+  | {
+      readonly kind: "article_identity_current";
+      readonly literatureId: string;
+      readonly assetId: string;
+    }
   | {
       readonly kind: "knowledge";
       readonly action:
@@ -1053,6 +1076,7 @@ export class SqliteWorker {
 
   private initialized = false;
   private readonly readOnly: boolean;
+  private readonly executionRuntime: ExecutionRuntimeOwner;
 
   constructor(
     path = ":memory:",
@@ -1065,6 +1089,11 @@ export class SqliteWorker {
     )
       throw new SqliteWorkerError();
     this.readOnly = options.readOnly ?? false;
+    this.executionRuntime = new ExecutionRuntimeOwner(() =>
+      path === ":memory:"
+        ? Promise.resolve({ release: async () => {} })
+        : acquireExecutionRuntime(path),
+    );
     const runtime = sqliteWorkerRuntimeEntry();
     this.worker = new Worker(runtime.url, {
       execArgv: [
@@ -1099,6 +1128,9 @@ export class SqliteWorker {
         schema_v7_version: SCHEMA_V7_VERSION,
         schema_v7_fingerprint: SCHEMA_V7_FINGERPRINT,
         schema_v7_manifest: SCHEMA_V7_MANIFEST,
+        schema_v9_version: SCHEMA_V9_VERSION,
+        schema_v9_fingerprint: SCHEMA_V9_FINGERPRINT,
+        schema_v9_manifest: SCHEMA_V9_MANIFEST,
         schema_v8_version: SCHEMA_V8_VERSION,
         schema_v8_fingerprint: SCHEMA_V8_FINGERPRINT,
         schema_v8_manifest: SCHEMA_V8_MANIFEST,
@@ -1128,9 +1160,18 @@ export class SqliteWorker {
     });
   }
 
+  /** Protect the full external-work lifetime, independently from short business writes. */
+  withExecutionRuntime<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.closed || this.failed || this.readOnly)
+      return Promise.reject(new SqliteWorkerError());
+    return this.executionRuntime.run(operation);
+  }
+
   run<T>(command: SqliteCommand, signal?: AbortSignal): Promise<T> {
     const copy = structuredClone(command);
     const readOnly = new Set<string>([
+      "article_identity_get",
+      "article_identity_current",
       "schema",
       "execution_runtime_inspect",
       "execution_restore_check",
@@ -1310,7 +1351,7 @@ export class SqliteWorker {
       throw new SqliteWorkerError();
     const result = value as Partial<ExecutionRuntimeInspection>;
     if (
-      ![1, 2, 3, 4, 5, 6, 7, 8].includes(result.catalog_version as number) ||
+      ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(result.catalog_version as number) ||
       typeof result.catalog_fingerprint !== "string" ||
       (result.version !== null && typeof result.version !== "number") ||
       (result.fingerprint !== null && typeof result.fingerprint !== "string") ||
@@ -1874,6 +1915,34 @@ export class SqliteWorker {
     )
       throw new SqliteWorkerError();
     return value;
+  }
+  async publishArticleIdentity(
+    assessment: ArticleIdentityAssessment,
+  ): Promise<boolean> {
+    return this.run<boolean>({
+      kind: "article_identity_put",
+      assessment: parseArticleIdentityAssessment(assessment),
+    });
+  }
+  async articleIdentity(
+    assessmentId: string,
+  ): Promise<ArticleIdentityAssessment | null> {
+    const result = await this.run<unknown>({
+      kind: "article_identity_get",
+      assessmentId,
+    });
+    return result === null ? null : parseArticleIdentityAssessment(result);
+  }
+  async currentArticleIdentity(
+    literatureId: string,
+    assetId: string,
+  ): Promise<ArticleIdentityAssessment | null> {
+    const result = await this.run<unknown>({
+      kind: "article_identity_current",
+      literatureId,
+      assetId,
+    });
+    return result === null ? null : parseArticleIdentityAssessment(result);
   }
   async documentVersion(
     versionId: string,

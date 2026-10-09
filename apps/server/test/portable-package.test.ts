@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
+import { promisify } from "node:util";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +8,7 @@ import { expect, it } from "vitest";
 
 const repository = fileURLToPath(new URL("../../..", import.meta.url));
 
-it("builds a Python-free portable runtime and executes its bundled Node CLI", () => {
+it("builds a Python-free portable runtime and executes its bundled Node CLI", async () => {
   const parent = mkdtempSync(join(tmpdir(), "sciretriever-portable-test-"));
   const output = join(parent, "runtime");
   const home = join(parent, "home");
@@ -26,7 +27,7 @@ it("builds a Python-free portable runtime and executes its bundled Node CLI", ()
     delete sandboxed.SCIRETRIEVER_CLOAK_BUNDLE;
   }
   try {
-    const built = spawnSync(
+    await promisify(execFile)(
       process.execPath,
       ["scripts/package/build-portable.mjs", "--output", output],
       {
@@ -36,7 +37,6 @@ it("builds a Python-free portable runtime and executes its bundled Node CLI", ()
         env: buildEnvironment,
       },
     );
-    expect(built.status, built.stdout + built.stderr).toBe(0);
     const manifest = JSON.parse(
       readFileSync(join(output, "release-manifest.json"), "utf8"),
     ) as {

@@ -12,7 +12,11 @@ import {
 import { LiteratureContentService } from "../literature/content.js";
 import { ArtifactReclaimer } from "../storage/files/reclamation.js";
 import { LiteratureCleanupService } from "../literature/cleanup.js";
-import { CatalogWriteAdmission } from "../storage/write-admission.js";
+import {
+  CatalogWriteAdmission,
+  WriteAdmissionError,
+} from "../storage/write-admission.js";
+import { acquireExecutionRuntime } from "../storage/execution/runtime-owner.js";
 import { ContentAnalysisService } from "../entry/content-analysis.js";
 import { MinerULoopbackParser } from "../parsing/backends/mineru/index.js";
 import { TypeScriptParserArtifactRules } from "../parsing/artifact-rules.js";
@@ -24,6 +28,12 @@ import {
 } from "../parsing/backends/mineru/index.js";
 import { ImmutableParserPublisher } from "../parsing/publication.js";
 import { DocumentProcessingService } from "../document/service.js";
+import { ArticleIdentityService } from "../parsing/article-identity.js";
+import { LiteratureArticleIdentityService } from "../literature/article-identity.js";
+import {
+  ProcessingTaskService,
+  readProcessingTask,
+} from "../application/jobs/processing.js";
 import { SqliteDocumentStorage } from "../document/storage.js";
 import { DocumentReadService } from "../document/read.js";
 import { KnowledgeAnalysisService } from "../analysis/knowledge.js";
@@ -162,6 +172,8 @@ import {
 import { InterventionService } from "../application/jobs/interventions.js";
 
 export interface Application {
+  readonly articleIdentity?: ArticleIdentityService | null;
+  readonly processingTasks?: ProcessingTaskService | null;
   readonly bootId: string;
   readonly metadata: MetadataRegistry;
   readonly acquisition: PublicAcquisitionRegistry;
@@ -256,6 +268,11 @@ export interface Application {
 }
 
 export interface QueryApplication {
+  readonly taskRead?: (jobId: string) => ReturnType<typeof readProcessingTask>;
+  readonly articleIdentityRead?: (assessmentId: string) => Promise<{
+    assessment: import("@sciretriever/contracts").ArticleIdentityAssessment;
+    current: boolean;
+  } | null>;
   readonly readiness: {
     readonly status: "ready" | "not-initialized" | "unavailable";
     readonly schema_version: number | null;
@@ -607,6 +624,8 @@ export async function createApplication(
   let synthesisAnalysis: KnowledgeSynthesisService | null = null;
   let synthesisPreparation: SynthesisPreparationService | null = null;
   let synthesisRead: SqliteSynthesisStorage | null = null;
+  let articleIdentity: ArticleIdentityService | null = null;
+  let processingTasks: ProcessingTaskService | null = null;
   let extractionPreparation: ExtractionPreparationService | null = null;
   let extractionDelivery: ExtractionDeliveryService | null = null;
   let retrievalIndex: RetrievalIndexService | null = null;
@@ -629,6 +648,8 @@ export async function createApplication(
       // Keep dependants before their stores and permits. A failed release must not
       // stop later owners from releasing resources or erase another cleanup error.
       const releases: readonly (() => void | Promise<void>)[] = [
+        async () => processingTasks?.close(),
+        async () => articleIdentity?.close(),
         async () => {
           const host = browserSessionHost;
           browserSessionHost = null;
@@ -1219,7 +1240,15 @@ export async function createApplication(
       new SqliteKnowledgeStorage(database, files, documentRead),
     );
     const library = new LiteratureQueryService(database, files);
-    if ([7, 8].includes(Number((await database.schema()).schema_version))) {
+    if ((await database.schema()).schema_version === 9)
+      articleIdentity = new ArticleIdentityService(
+        documentRead,
+        library,
+        agents,
+        database,
+        new LiteratureArticleIdentityService(library, database),
+      );
+    if ([7, 8, 9].includes(Number((await database.schema()).schema_version))) {
       synthesisRead = new SqliteSynthesisStorage(database, files, documentRead);
       synthesisPreparation = new SynthesisPreparationService(
         documentRead,
@@ -1248,7 +1277,10 @@ export async function createApplication(
       library,
       writes,
     );
-    if ((await database.schema()).schema_version === 8 && synthesisRead)
+    if (
+      [8, 9].includes(Number((await database.schema()).schema_version)) &&
+      synthesisRead
+    )
       knowledgeIndex = new KnowledgeRetrievalIndexService(
         new RetrievalStorageClient(database),
         synthesisRead,
@@ -1364,6 +1396,20 @@ export async function createApplication(
         completion: databaseCompletion,
       });
     const observations = new ObservationRepository(database);
+    if (jobs && queue)
+      processingTasks = new ProcessingTaskService(
+        jobs,
+        queue,
+        {
+          documents: documentProcessing,
+          analysis: knowledgeAnalysis,
+          synthesis: synthesisAnalysis,
+          identity: articleIdentity,
+        },
+        taskService,
+        bootId,
+        configuration.execution.max_concurrency,
+      );
     const references = new ReferenceRepository(database);
     const metadata = options.metadata
       ? buildMetadataRegistry(options.metadata)
@@ -1376,19 +1422,37 @@ export async function createApplication(
         });
     const identity = new LiteratureIdentityService(database, writes);
     await database.schema();
-    await artifactRecovery.recover();
     let executionRecovery: Application["executionRecovery"] = null;
-    if (queue && execution) {
-      const recovered = await queue.recover(bootId);
-      const publications = await execution.publisher.reconcile();
-      executionRecovery = {
-        recovered_attempts: recovered.recovered_attempts,
-        recovered_targets: recovered.recovered_targets,
-        recovered_jobs: recovered.recovered_jobs,
-        released_leases: recovered.released_leases,
-        expired_interventions: recovered.expired_interventions,
-        reconciled_publications: publications.length,
-      };
+    let recoveryLease: Awaited<
+      ReturnType<typeof acquireExecutionRuntime>
+    > | null = null;
+    try {
+      recoveryLease = await acquireExecutionRuntime(catalogPath);
+    } catch (error) {
+      if (
+        !(
+          error instanceof WriteAdmissionError &&
+          error.code === "write-admission-conflict"
+        )
+      )
+        throw error;
+    }
+    try {
+      if (recoveryLease) await artifactRecovery.recover();
+      if (recoveryLease && queue && execution) {
+        const recovered = await queue.recover(bootId);
+        const publications = await execution.publisher.reconcile();
+        executionRecovery = {
+          recovered_attempts: recovered.recovered_attempts,
+          recovered_targets: recovered.recovered_targets,
+          recovered_jobs: recovered.recovered_jobs,
+          released_leases: recovered.released_leases,
+          expired_interventions: recovered.expired_interventions,
+          reconciled_publications: publications.length,
+        };
+      }
+    } finally {
+      await recoveryLease?.release();
     }
     const application: Application = {
       bootId,
@@ -1434,6 +1498,8 @@ export async function createApplication(
           }
         : null,
       documentProcessing,
+      articleIdentity,
+      processingTasks,
       documentRead,
       extractionPreparation,
       extractionDelivery,
@@ -1665,7 +1731,7 @@ export async function createQueryApplication(
       preflight.schema.schema_version === 5 ||
       preflight.schema.schema_version === 6 ||
       preflight.schema.schema_version === 7 ||
-      preflight.schema.schema_version === 8
+      [8, 9].includes(Number(preflight.schema.schema_version))
         ? new RetrievalStorageClient(database)
         : null,
       documentRead,
@@ -1674,12 +1740,12 @@ export async function createQueryApplication(
     knowledgeRead =
       preflight.schema.schema_version === 6 ||
       preflight.schema.schema_version === 7 ||
-      preflight.schema.schema_version === 8
+      [8, 9].includes(Number(preflight.schema.schema_version))
         ? new SqliteKnowledgeStorage(database, files, documentRead)
         : null;
     if (
       preflight.schema.schema_version === 7 ||
-      preflight.schema.schema_version === 8
+      [8, 9].includes(Number(preflight.schema.schema_version))
     ) {
       synthesisRead = new SqliteSynthesisStorage(database, files, documentRead);
       synthesisPreparation = new SynthesisPreparationService(
@@ -1688,7 +1754,7 @@ export async function createQueryApplication(
         synthesisRead,
       );
     }
-    if (preflight.schema.schema_version === 8)
+    if ([8, 9].includes(Number(preflight.schema.schema_version)))
       knowledgeContext = new KnowledgeContextService(
         context,
         new RetrievalStorageClient(database),
@@ -1707,6 +1773,20 @@ export async function createQueryApplication(
             : null,
       },
       query: literature,
+      taskRead: (jobId) =>
+        readProcessingTask(new ExecutionRepository(database), jobId),
+      articleIdentityRead: async (id) => {
+        const assessment = await database.articleIdentity(id);
+        if (!assessment) return null;
+        const current = await database.currentArticleIdentity(
+          assessment.literature_id,
+          assessment.asset_id,
+        );
+        return {
+          assessment,
+          current: current?.assessment_id === assessment.assessment_id,
+        };
+      },
       literatureArtifacts: new LiteratureArtifactService(database, files),
       documentRead,
       extractionPreparation,

@@ -532,3 +532,25 @@ T02 的 `withPinnedVersion` 从 v3 一致快照读取固定版本与完整路径
 之后重解析得到 D2，D1 的引用仍解析到原片段。若 D2 修正了 OCR，调用方可以重新提取并生成新候选，旧候选不会自动被改写。通过引用解析只说明对应内容真实存在，测量值解释与实验归属仍由下游判断。
 
 直接验证覆盖：无模型原始材料读取、结构/资源有界读取、跨 UTF-8 边界、旧 cursor 拒绝、两类 EvidenceRef、资源闭包、hash 冲突、重解析后旧引用、发布/回收竞争和取消。测试用合成文档中已知的具体文本/单元，不能只检查返回了一个 ID。
+
+## 解析后的文章身份核验（2026-10-08 实现合同）
+
+落实 ADR 0029 的后续核验能力，不修改下载原则。`ArticleIdentityService.assess` 是对已有固定
+DocumentVersion 的显式操作，复用 analysis 模型绑定；普通解析和查询不会隐式产生模型费用。
+模型接收完整预算内解析文本及 segment ID，不接收目标元数据，提取文章自身标题、署名及标识符，
+明确排除参考文献、正文引用和无法识别的材料。精确原文、字段值和片段 hash 均须可核对；
+预算不足、模型失败或坏证据属于本次失败，不冒充信息不足。没有出版社专用规则或固定首页门槛。
+
+Parsing 形成证据，`LiteratureArticleIdentityService` 比较当前元数据并接纳判断，Storage 只执行
+不可变插入和绑定检查。同一命名空间的明确标识符冲突为 `conflict`，一致支持 `match-supported`；
+没有稳定标识符时，规范化标题与至少一位完整署名均匹配才能支持。歧义或缺少证据保留
+`insufficient-evidence`。这些是有证据的辅助判断，不是模型语义必然正确或科学结论正确的保证。
+
+Catalog v9 的 `article_identity_assessments` 保存有限证据、模型方法和 provenance，绑定 Literature、
+asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；不保存 PDF/全文 BLOB。
+当前标签仅投影与当前元数据、材料关系和 ParserResult 对齐的判断；输入变化回到 `unverified`，
+历史结果仍可按 assessment ID 读取。旧库和旧详情继续保守读取；新写入需显式 schema 升级，
+普通启动不迁移。判断不修改权威元数据/文献身份，不自动删除、失效或重新下载 PDF，不阻断后续加工。
+
+调用及请求字段见[Agent 接口指南](../../guides/agent-interface.md)。离线流程和证据检查的通过
+不能代替真实文献身份抽取质量验收。

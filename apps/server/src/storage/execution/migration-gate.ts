@@ -1,3 +1,7 @@
+import {
+  SCHEMA_V9_FINGERPRINT,
+  SCHEMA_V9_VERSION,
+} from "../sqlite/schema-v9.js";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -95,6 +99,7 @@ export type CatalogIdentityState =
   | "v6"
   | "v7"
   | "v8"
+  | "v9"
   | "unknown"
   | "drifted";
 
@@ -192,6 +197,11 @@ export async function probeCatalogIdentity(
       execution_tables,
       migration_receipts,
     };
+    if (
+      identity.schema_version === SCHEMA_V9_VERSION &&
+      identity.schema_fingerprint === SCHEMA_V9_FINGERPRINT
+    )
+      return { ...base, state: "v9" };
     if (
       identity.schema_version === SCHEMA_V8_VERSION &&
       identity.schema_fingerprint === SCHEMA_V8_FINGERPRINT
@@ -375,7 +385,8 @@ export async function authorizeExecutionSchema(
       identity.state === "v5" ||
       identity.state === "v6" ||
       identity.state === "v7" ||
-      identity.state === "v8"
+      identity.state === "v8" ||
+      identity.state === "v9"
     )
       return { mode, basis: null, identity };
     if (identity.state === "absent")

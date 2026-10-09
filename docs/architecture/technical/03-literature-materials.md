@@ -1312,9 +1312,10 @@ persistent context 中的文章隔离/临时资源清理和本地 Chromium found
 下载阶段不提取文字或匹配 DOI/标题/作者/版本；Browser Intake、自动及人工接纳和发布都使用
 `pdf-acceptance.ts` 的文件检查。当前任务绑定、metadata snapshot/CAS 和不可变发布继续检查。
 新的 publication intent 保存 `identity: "unverified"`；详情 `LiteratureAssetView.article_identity_status`
-对 PDF 返回 `"unverified"`，非 PDF 返回 `null`。旧详情没有标签时按此规则投影，旧 accepted
-回执可重放但不代表后续解析验证。当前没有解析身份检验事实，解析完成也保持未验证标签；它不阻断
-后续解析处理。本次不新增 catalog 列或迁移；未来实际实现解析检验时再定义 Literature 所有的关联结果。
+在没有后续核验时对 PDF 返回 `"unverified"`，非 PDF 返回 `null`。旧详情没有标签时保守投影，
+旧 accepted 回执可重放但不代表后续解析验证。Catalog v9 的显式核验由 Parsing 提供证据、Literature
+接纳判断，详情展示与当前输入绑定的结果；解析成功本身仍不等于身份核验。详见
+[解析后的文章身份核验](04-document-evidence.md#解析后的文章身份核验2026-10-08-实现合同)。
 
 ### 5.2 发布与并发复检
 

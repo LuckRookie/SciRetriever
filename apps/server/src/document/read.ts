@@ -278,7 +278,8 @@ export class DocumentReadService {
       (await this.database.schema()).schema_version !== 5 &&
       (await this.database.schema()).schema_version !== 6 &&
       (await this.database.schema()).schema_version !== 7 &&
-      (await this.database.schema()).schema_version !== 8
+      (await this.database.schema()).schema_version !== 8 &&
+      (await this.database.schema()).schema_version !== 9
     )
       throw new DocumentReadError("document-v3-required");
     let snapshot;
@@ -374,7 +375,8 @@ export class DocumentReadService {
         (await this.database.schema()).schema_version !== 5 &&
         (await this.database.schema()).schema_version !== 6 &&
         (await this.database.schema()).schema_version !== 7 &&
-        (await this.database.schema()).schema_version !== 8
+        (await this.database.schema()).schema_version !== 8 &&
+        (await this.database.schema()).schema_version !== 9
       )
         throw new DocumentReadError("document-v3-required");
       const material = await this.database.documentMaterial(literature, asset);

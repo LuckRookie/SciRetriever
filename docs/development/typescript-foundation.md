@@ -24,6 +24,10 @@ suite。
 
 `package-entrypoints.test.ts` 构建并打包 contracts/server，在系统临时目录使用独立临时 store/cache 离线安装真实 tarball。
 两个尚未发布的包通过临时 fixture 的 pnpm override 绑定到本次 tarball，并核对包中实际依赖版本一致；不使用远程 registry。
+MCP SDK 引入同名依赖的多版本后，便携包与安装测试按已安装的依赖边固定 tarball；
+不再要求整个图只有一个同名版本。根依赖提供离线 peer resolution，按父包版本的 overrides
+保留各调用方实际使用的版本；安装回归直接核对 SDK 与 body-parser 各自的 `content-type` 版本。
+安装测试的长构建使用异步子进程，避免阻塞 Vitest worker 的控制通道。
 测试通过 Node 的包解析调用 contracts 与配置公开入口，并检查未知配置拒绝、非公开子路径拒绝和源码/测试/构建元数据
 未进入安装包；随后在临时 home 创建真实 Application/SQLite/FileStore 和 WorkbenchSession，在随机 loopback 端口
 启动并关闭 HTTP server。构建步骤把 HTML/CSS/JS 放入 server tarball，smoke 从安装包读取这些资产并核对 MIME。

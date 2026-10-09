@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
+import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -533,7 +534,7 @@ async function installedLegacySchemaJourney(
   const directory = join(root, "legacy-schema");
   await mkdir(directory);
   const catalog = join(directory, "catalog.sqlite");
-  const backup = join(directory, "before-v8.sqlite");
+  const backup = join(directory, "before-v9.sqlite");
   const writer = new server.SqliteWorker(catalog);
   try {
     await writer.putLiterature(FIXTURE_LITERATURE);
@@ -549,7 +550,7 @@ async function installedLegacySchemaJourney(
   expect(dryRun.status, dryRun.stderr).toBe(0);
   expect(JSON.parse(dryRun.stdout)).toMatchObject({
     from_version: 1,
-    to_version: 8,
+    to_version: 9,
   });
   expect(await readFile(catalog)).toEqual(original);
   const upgraded = spawnSync(
@@ -569,11 +570,11 @@ async function installedLegacySchemaJourney(
   expect(JSON.parse(upgraded.stdout)).toMatchObject({
     action: "upgraded",
     from_version: 1,
-    to_version: 8,
+    to_version: 9,
     backup_path: backup,
   });
   for (const [path, version] of [
-    [catalog, 8],
+    [catalog, 9],
     [backup, 1],
   ] as const) {
     const inspected = spawnSync(
@@ -616,7 +617,7 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
     const buildEnvironment: NodeJS.ProcessEnv = { ...process.env };
     delete buildEnvironment.SCIRETRIEVER_HOME;
     delete buildEnvironment.SCIRETRIEVER_CLOAK_BUNDLE;
-    const built = spawnSync(
+    await promisify(execFile)(
       process.execPath,
       [
         "scripts/package/build-portable.mjs",
@@ -633,7 +634,6 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
         env: buildEnvironment,
       },
     );
-    expect(built.status, built.stdout + built.stderr).toBe(0);
     const executable = join(runtime, "bin/sciretriever");
     const environment: NodeJS.ProcessEnv = {
       ...process.env,
@@ -660,8 +660,8 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
     expect(initialized.status, initialized.stderr).toBe(0);
     expect(JSON.parse(initialized.stdout)).toMatchObject({
       action: "initialized",
-      to_version: 8,
-      inspection: { status: "ready", schema_version: 8 },
+      to_version: 9,
+      inspection: { status: "ready", schema_version: 9 },
     });
 
     const packageRoot = join(runtime, "app/node_modules/@sciretriever/server");
@@ -1437,7 +1437,7 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
     await application.close();
     application = undefined;
     query = await server.createQueryApplication(home);
-    expect(query.readiness.schema_version).toBe(8);
+    expect(query.readiness.schema_version).toBe(9);
     const reopened = await query.query!.detail(browserLiteratureId);
     expect(reopened.primary_pdf!.asset.asset_id).toBe(browserAssetId);
     expect(reopened.primary_pdf!.asset.sha256).toBe(browserHash);

@@ -1,3 +1,7 @@
+import {
+  inspectArticleIdentityCatalog,
+  migrateArticleIdentityCatalog,
+} from "./article-identity-migration.js";
 import { constants } from "node:fs";
 import { link, mkdtemp, open, rm, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -37,7 +41,7 @@ import {
   inspectKnowledgeRetrievalCatalog,
   migrateKnowledgeRetrievalCatalog,
 } from "./knowledge-retrieval-migration.js";
-import { SCHEMA_V8_FINGERPRINT, SCHEMA_V8_MANIFEST } from "./schema-v8.js";
+import { SCHEMA_V9_FINGERPRINT, SCHEMA_V9_MANIFEST } from "./schema-v9.js";
 import {
   EXECUTION_RUNTIME_SCHEMA_FINGERPRINT,
   EXECUTION_RUNTIME_SCHEMA_VERSION,
@@ -47,7 +51,7 @@ import {
 
 export { CatalogSchemaError } from "./migration-scope.js";
 export type CatalogSchemaInspection = {
-  readonly target_version: 8;
+  readonly target_version: 9;
   readonly target_fingerprint: string;
 } & (
   | {
@@ -62,9 +66,9 @@ export type CatalogSchemaInspection = {
     }
 );
 export interface CatalogSchemaResult {
-  readonly action: "initialized" | "upgraded" | "already-v8" | "dry-run";
+  readonly action: "initialized" | "upgraded" | "already-v9" | "dry-run";
   readonly from_version: number | null;
-  readonly to_version: 8;
+  readonly to_version: 9;
   readonly completed_versions: readonly number[];
   readonly backup_path: string | null;
   readonly inspection: CatalogSchemaInspection;
@@ -77,8 +81,8 @@ export async function inspectCatalogSchema(
   await schemaTargetPath(catalog);
   const metadata = await schemaTargetFile(catalog);
   const target = {
-    target_version: 8 as const,
-    target_fingerprint: SCHEMA_V8_FINGERPRINT,
+    target_version: 9 as const,
+    target_fingerprint: SCHEMA_V9_FINGERPRINT,
   };
   if (!metadata)
     return {
@@ -113,7 +117,9 @@ export async function inspectCatalogSchema(
                 ? await inspectSynthesisCatalog(catalog)
                 : state === "v8"
                   ? await inspectKnowledgeRetrievalCatalog(catalog)
-                  : null;
+                  : state === "v9"
+                    ? await inspectArticleIdentityCatalog(catalog)
+                    : null;
     if (!inspection) throw new CatalogSchemaError("catalog-unsupported");
     return {
       ...target,
@@ -180,10 +186,10 @@ export async function initializeCatalogSchema(
       db.exec("PRAGMA synchronous=FULL");
       db.exec("BEGIN IMMEDIATE");
       try {
-        for (const sql of SCHEMA_V8_MANIFEST) db.exec(sql);
+        for (const sql of SCHEMA_V9_MANIFEST) db.exec(sql);
         db.prepare(
-          "INSERT INTO schema_identity(singleton,product,schema_version,schema_fingerprint,created_at) VALUES(1,'sciretriever',8,?,?)",
-        ).run(SCHEMA_V8_FINGERPRINT, new Date().toISOString());
+          "INSERT INTO schema_identity(singleton,product,schema_version,schema_fingerprint,created_at) VALUES(1,'sciretriever',9,?,?)",
+        ).run(SCHEMA_V9_FINGERPRINT, new Date().toISOString());
         db.prepare(
           "INSERT INTO execution_schema_identity(singleton,version,fingerprint) VALUES(1,?,?)",
         ).run(EXECUTION_SCHEMA_VERSION, EXECUTION_SCHEMA_FINGERPRINT);
@@ -224,8 +230,8 @@ export async function initializeCatalogSchema(
     return {
       action: "initialized" as const,
       from_version: null,
-      to_version: 8 as const,
-      completed_versions: [8],
+      to_version: 9 as const,
+      completed_versions: [9],
       backup_path: null,
       inspection: published,
     } satisfies CatalogSchemaResult;
@@ -237,9 +243,9 @@ export async function initializeCatalogSchema(
         : "catalog-initialization-failed",
       {
         from_version: null,
-        current_version: current.state === "v8" ? 8 : null,
-        completed_versions: current.state === "v8" ? [8] : [],
-        failed_step: 8,
+        current_version: current.state === "v9" ? 9 : null,
+        completed_versions: current.state === "v9" ? [9] : [],
+        failed_step: 9,
         backup_path: null,
       },
       { cause: error },
@@ -275,7 +281,7 @@ export async function upgradeCatalogSchema(input: {
     return {
       action: "dry-run",
       from_version: preliminary.schema_version,
-      to_version: 8,
+      to_version: 9,
       completed_versions: [],
       backup_path: null,
       inspection: preliminary,
@@ -286,11 +292,11 @@ export async function upgradeCatalogSchema(input: {
     const before = await inspectInitializedCatalog(catalog);
     const from = before.schema_version;
     if (from === null) throw new CatalogSchemaError("catalog-missing");
-    if (from === 8)
+    if (from === 9)
       return {
-        action: "already-v8",
-        from_version: 8,
-        to_version: 8,
+        action: "already-v9",
+        from_version: 9,
+        to_version: 9,
         completed_versions: [],
         backup_path: null,
         inspection: before,
@@ -325,6 +331,7 @@ export async function upgradeCatalogSchema(input: {
         [6, migrateKnowledgeCatalog],
         [7, migrateSynthesisCatalog],
         [8, migrateKnowledgeRetrievalCatalog],
+        [9, migrateArticleIdentityCatalog],
       ] as const) {
         if (version <= from) continue;
         failedStep = version;
@@ -344,7 +351,7 @@ export async function upgradeCatalogSchema(input: {
       return {
         action: "upgraded",
         from_version: from,
-        to_version: 8,
+        to_version: 9,
         completed_versions: completed,
         backup_path: backup,
         inspection: await inspectCatalogSchema(catalog),
@@ -359,7 +366,7 @@ export async function upgradeCatalogSchema(input: {
           : "migration-step-failed",
         {
           from_version: from,
-          current_version: /^v[1-8]$/.test(current.state)
+          current_version: /^v[1-9]$/.test(current.state)
             ? current.schema_version
             : null,
           completed_versions: [...completed],

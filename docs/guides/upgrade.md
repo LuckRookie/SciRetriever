@@ -1,6 +1,6 @@
 # Catalog 初始化、升级与恢复
 
-正式 CLI 提供显式的 Catalog v8 初始化与 v1–v7 升级入口。它只启用已实现的存储能力，不发现、下载、解析、分析或构建索引；普通 Application、Query 和 Browser 启动仍不会自动升级已有库。新库可以直接初始化 v8，已有库必须先检查并指定可恢复备份。本文描述 operator 工具能力，不授权代理将命令指向真实用户数据；本轮开发与恢复验证全部使用合成临时目录。
+正式 CLI 提供显式的 Catalog v9 初始化与 v1–v8 升级入口。它只启用已实现的存储能力，不发现、下载、解析、分析或构建索引；普通 Application、Query 和 Browser 启动仍不会自动升级已有库。新库可以直接初始化 v9，已有库必须先检查并指定可恢复备份。本文描述 operator 工具能力，不授权代理将命令指向真实用户数据；本轮开发与恢复验证全部使用合成临时目录。
 
 当前版本的 reader 与能力范围见[安装兼容矩阵](installation.md#当前-catalog-与-reader-兼容)；真实切换前的精确目标、停 writer/Jobs/Browser、Catalog 与资产备份组合、独立恢复及增量保留见[切换与恢复](cutover.md)。
 
@@ -14,7 +14,7 @@ sciretriever storage schema-init --catalog /absolute/data/catalog.sqlite --json
 sciretriever storage schema-inspect --catalog /absolute/data/catalog.sqlite --json
 ```
 
-不存在的目标在 inspect 中返回 `not-initialized`，不会创建文件。`schema-init` 在同目录私有 staging 中按冻结 v8 manifest 建立完整空库，检查 catalog/execution/runtime identity、两个检索 revision、DDL、完整性和外键后 create-if-absent 发布。目标已有文件或发生竞争创建时拒绝覆盖。初始化不建立文献、知识、Job 或 active index generation；发布后的有效库在后续错误中仍保留，错误 progress 给出实际可识别版本。
+不存在的目标在 inspect 中返回 `not-initialized`，不会创建文件。`schema-init` 在同目录私有 staging 中按冻结 v9 manifest 建立完整空库，检查 catalog/execution/runtime identity、两个检索 revision、DDL、完整性和外键后 create-if-absent 发布。目标已有文件或发生竞争创建时拒绝覆盖。初始化不建立文献、知识、Job 或 active index generation；发布后的有效库在后续错误中仍保留，错误 progress 给出实际可识别版本。
 
 ## 升级已有库
 
@@ -23,16 +23,16 @@ sciretriever storage schema-inspect --catalog /absolute/data/catalog.sqlite --js
 ```bash
 sciretriever storage schema-inspect --catalog /absolute/data/catalog.sqlite --json
 sciretriever storage schema-upgrade --catalog /absolute/data/catalog.sqlite --dry-run --json
-sciretriever storage schema-upgrade --catalog /absolute/data/catalog.sqlite --backup /absolute/data/catalog-before-v8.sqlite --json
+sciretriever storage schema-upgrade --catalog /absolute/data/catalog.sqlite --backup /absolute/data/catalog-before-v9.sqlite --json
 sciretriever storage schema-inspect --catalog /absolute/data/catalog.sqlite --json
-sciretriever storage schema-inspect --catalog /absolute/data/catalog-before-v8.sqlite --json
+sciretriever storage schema-inspect --catalog /absolute/data/catalog-before-v9.sqlite --json
 ```
 
-inspect 与 dry-run 使用只读连接；不创建目录、catalog、备份、写锁 sidecar、receipt 或任务。它们只接受完整的 v1–v8 identity/fingerprint、实际 DDL、SQLite integrity/foreign key 与 execution 子 schema；未知、漂移和损坏拒绝。`--dry-run` 不能同时给 `--backup`。
+inspect 与 dry-run 使用只读连接；不创建目录、catalog、备份、写锁 sidecar、receipt 或任务。它们只接受完整的 v1–v9 identity/fingerprint、实际 DDL、SQLite integrity/foreign key 与 execution 子 schema；未知、漂移和损坏拒绝。`--dry-run` 不能同时给 `--backup`。
 
 真正升级必须给 `--backup`，且备份不能是 catalog 本身、其他目录或已有文件。工具在整条链中持有与业务 writer 相同的规范 catalog 独占 flock，锁内复查源库；先用 SQLite `VACUUM INTO` 在私有 staging 建包含已提交 WAL 事实的一致性备份，读回验证并 fsync 后 create-if-absent 发布。备份目标发生竞争创建时拒绝覆盖。不要自行复制活动 WAL 作为备份。
 
-v1/v2→v3→v4→v5→v6→v7→v8 复用各版本迁移与其完整检查。每步单独使用 SQLite 事务，整链一直持锁，所有步骤使用同一原始版本备份；这不是整条链或文件系统与 SQL 的绝对原子事务。完整 v8 返回 `already-v8`，不创建备份。源文献 ID、元数据与 provenance、原件、相对引用及 hash 保持；升级不生成新的业务产物或默认索引。
+v1/v2→v3→v4→v5→v6→v7→v8→v9 复用各版本迁移与其完整检查。每步单独使用 SQLite 事务，整链一直持锁，所有步骤使用同一原始版本备份；这不是整条链或文件系统与 SQL 的绝对原子事务。完整 v9 返回 `already-v9`，不创建备份。源文献 ID、元数据与 provenance、原件、相对引用及 hash 保持；升级不生成新的业务产物或默认索引。
 
 写锁能拒绝遵守同一 catalog 写入准入的业务 writer；工具不能证明所有外部程序和 Browser 已停止。SQLite 锁与每步 data-version 检查只提供实际执行的检测范围，所以 operator 仍应先停止所有访问该目标的写端。
 

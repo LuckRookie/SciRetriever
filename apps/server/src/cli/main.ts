@@ -56,6 +56,8 @@ import {
 } from "../storage/execution/migration-gate.js";
 import { CatalogSchemaError } from "../storage/sqlite/migration-scope.js";
 import { WriteAdmissionError } from "../storage/write-admission.js";
+import { ProcessingTaskError } from "../application/jobs/processing.js";
+import { ArticleIdentityError } from "../parsing/article-identity.js";
 
 export interface CliOptions {
   readonly home?: string;
@@ -125,7 +127,8 @@ function usage(options: CliOptions): CliResult {
     "  document parse --literature-id ID --asset-id ID --asset-sha256 SHA256 --mode reuse-current|reparse [--expected-default-revision N]\n" +
     "  export metadata FORMAT OUTPUT | export pdf|content ID --path PATH\n" +
     "  config [--theme auto|dark|light|mono] | config status [--json] [--theme ...] | config test ...\n" +
-    "  jobs create [--text QUERY] | jobs run JOB_ID\n" +
+    "  jobs create [--text QUERY] | jobs submit --request FILE|- | jobs run|show|pause|cancel|resume|retry JOB_ID\n" +
+    "  mcp [--maintenance]  # stdio; maintenance tools require this explicit mode\n" +
     "  storage schema-inspect|schema-init --catalog PATH | schema-upgrade --catalog PATH [--dry-run | --backup PATH]\n" +
     "  storage document-inspect|retrieval-inspect|extraction-inspect --catalog PATH | document-migrate|retrieval-migrate|extraction-migrate --catalog PATH [--dry-run | --backup PATH --synthetic-copy]\n" +
     "  maintenance rebuild-index (requires an existing v4 catalog) | rebuild-knowledge-index (requires v8)\n";
@@ -452,6 +455,18 @@ async function execute(
   if (!args.length || args[0] === "--help" || args[0] === "-h")
     return usage(options);
   const [group, command] = args;
+  if (group === "mcp") {
+    if (args.slice(1).some((v) => v !== "--maintenance")) invalidInput();
+    const { runMcpStdio } = await import("../mcp/server.js");
+    await runMcpStdio(
+      {
+        maintenance: args.includes("--maintenance"),
+        ...(options.home ? { home: options.home } : {}),
+      },
+      options.signal,
+    );
+    return { code: 0 };
+  }
   if (
     group === "storage" &&
     (command === "schema-inspect" ||
@@ -1168,6 +1183,66 @@ async function execute(
       value: report,
     };
   }
+  if (group === "jobs" && command === "submit") {
+    const source = argument(args, "--request");
+    if (!source) invalidInput();
+    const bytes = await inputBytes(source, options);
+    if (bytes.byteLength > 1024 * 1024) invalidInput();
+    let request: unknown;
+    try {
+      request = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      );
+    } catch {
+      return invalidInput();
+    }
+    return output(
+      await withApplication(
+        options,
+        async (app) => {
+          if (!app.processingTasks)
+            throw new ProcessingTaskError("processing-unavailable");
+          return app.processingTasks.submit(request);
+        },
+        "require-v2",
+      ),
+      options,
+    );
+  }
+  if (group === "jobs" && command === "show") {
+    const jobId = args[2];
+    if (!jobId) invalidInput();
+    return output(
+      await withQueryApplication(options, async (app) => {
+        if (!app.taskRead)
+          throw new ProcessingTaskError("processing-unavailable");
+        return app.taskRead(jobId);
+      }),
+      options,
+    );
+  }
+  if (
+    group === "jobs" &&
+    ["pause", "cancel", "resume", "retry"].includes(command ?? "")
+  ) {
+    const jobId = args[2];
+    if (!jobId) invalidInput();
+    return output(
+      await withApplication(
+        options,
+        async (app) => {
+          if (!app.processingTasks)
+            throw new ProcessingTaskError("processing-unavailable");
+          return app.processingTasks.control(
+            jobId,
+            command as "pause" | "cancel" | "resume" | "retry",
+          );
+        },
+        "require-v2",
+      ),
+      options,
+    );
+  }
   if (group === "jobs" && command === "create") {
     const idempotency = argument(args, "--idempotency") ?? `cli-${Date.now()}`;
     const value = await withApplication(
@@ -1196,6 +1271,15 @@ async function execute(
     const value = await withApplication(
       options,
       async (app) => {
+        const job = await app.jobs?.getJob(jobId);
+        if (
+          app.processingTasks &&
+          (job?.selector as { schema_version?: unknown } | undefined)
+            ?.schema_version === 3
+        )
+          return app.processingTasks.run(jobId, options.signal);
+        if (app.processingTasks)
+          return app.processingTasks.runResults(jobId, options.signal);
         if (!app.taskService)
           throw new Error("execution runtime is unavailable");
         return app.taskService.runJob(jobId);
@@ -1245,7 +1329,9 @@ export async function runCli(
       error instanceof LiteratureNotFoundError;
     const document =
       error instanceof DocumentProcessingError ||
-      error instanceof ParsingFailure;
+      error instanceof ParsingFailure ||
+      error instanceof ArticleIdentityError ||
+      error instanceof ProcessingTaskError;
     const migration =
       error instanceof CatalogSchemaError ||
       error instanceof MigrationSafetyError ||
@@ -1264,7 +1350,9 @@ export async function runCli(
               : 70;
     const failure =
       error instanceof DocumentProcessingError ||
-      error instanceof ParsingFailure
+      error instanceof ParsingFailure ||
+      error instanceof ArticleIdentityError ||
+      error instanceof ProcessingTaskError
         ? error.code
         : error instanceof QueryApplicationError
           ? error.code

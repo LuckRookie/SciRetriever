@@ -124,7 +124,8 @@ export class DocumentProcessingService {
       schema.schema_version !== 5 &&
       schema.schema_version !== 6 &&
       schema.schema_version !== 7 &&
-      schema.schema_version !== 8
+      schema.schema_version !== 8 &&
+      schema.schema_version !== 9
     )
       throw new DocumentProcessingError("catalog-v3-required");
     const facts = await this.database.currentFacts(value.literature_id);

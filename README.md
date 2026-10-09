@@ -12,7 +12,7 @@ SciRetriever 是科研 Agent 的论文知识组件，目标是独立提供可追
 
 统一逻辑文献库仍保存身份、来源、材料和产物，保持领域中立、不可变资产及分阶段提交。反应、分子、路线、产率、材料性质等领域 schema 的含义与维护属于调用方；提取候选不成为文献固定领域字段。已接受目标见[产品需求](docs/architecture/requirements.md)、[设计](docs/architecture/design.md)与[ADR 0026](docs/architecture/decisions/0026-agent-knowledge-and-human-collaboration.md)。
 
-**当前实现边界：** 已有发现/获取、解析、旧单篇总结、查询、配置和工作台基础；文档固定版本证据、已有材料的预算 Context，以及单篇与集合知识产物的显式分析/综合、历史发布和按 ID 阅读已交付。Catalog v8 已提供需显式构建的知识检索索引及材料/生成知识混合 Context；检索分数不是科学置信度，真实语料检索质量尚未评估。正式 MCP adapter 与完整生产人类协作尚未交付。当前 TypeScript 生产 completion 遇 `NoUsableContent` 保留已接纳材料，不再自动清理或重取；旧明确失效服务仍存在。本文下面的命令描述当前行为，完整差距见 [TS 基线](docs/architecture/typescript-baseline.md)。
+**当前实现边界：** 已有发现/获取、解析、旧单篇总结、查询、配置和工作台基础；文档固定版本证据、已有材料的预算 Context，以及单篇与集合知识产物的显式分析/综合、历史发布和按 ID 阅读已交付。Catalog v8 已提供需显式构建的知识检索索引及材料/生成知识混合 Context；检索分数不是科学置信度，真实语料检索质量尚未评估。MCP stdio 和已有材料的持久加工任务已接入，见[Agent 接口指南](docs/guides/agent-interface.md)；完整生产人类协作仍有独立验收边界。当前 TypeScript 生产 completion 遇 `NoUsableContent` 保留已接纳材料，不再自动清理或重取；旧明确失效服务仍存在。本文下面的命令描述当前行为，完整差距见 [TS 基线](docs/architecture/typescript-baseline.md)。
 
 开发者可以从[供应商适配目录](apps/server/src/providers/README.md)查找各家的定义、元数据与 PDF 实现；业务模块和共享网络责任见[技术文档](docs/architecture/technical.md)。
 
@@ -103,7 +103,7 @@ SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm preview:w
 
 PDF 获取只验证实际文件可读取及任务关联，不在下载阶段按 DOI/标题/作者判断内容身份。
 入库 PDF 显示“文章身份未验证”（`article_identity_status: "unverified"`），不阻断下载或后续解析。
-文章身份检验留待解析阶段单独实现，解析成功本身不表示身份已验证，见 [ADR 0029](docs/architecture/decisions/0029-unverified-pdf-acquisition.md)。
+Catalog v9 可显式核验固定解析文档，返回有证据的 `match-supported`、`conflict` 或 `insufficient-evidence`；输入变化后标签回到 `unverified`。解析成功本身不等于核验完成，判断也不阻断下载和加工，见[调用说明](docs/guides/agent-interface.md#解析后身份核验)。
 
 手动 PDF 维护可通过 `startMaintenanceWorkbench({ home })` 单独启动，页面 `/` 接收用户明确选择的本机文件并传输原始 PDF 字节，`/query` 保持独立阅读视图；这一入口不启动 Browser，要求 home 已有 v2 catalog。公开 TypeScript `createApplication(home, { executionSchema: "require-v2" }).maintenance.ingestPdf({ literature_id, bytes })` 与 CLI `import pdf` 调用同一接纳用例。HTTP 上传和 TypeScript 字节入口均限制为 16 MiB；HTTP 只接受同源会话和 CSRF 授权，不接受远端请求提供本机路径。有效材料接纳后可通过独立 QueryApplication 读取；可执行 Node 启动示例见 [PDF 获取与手动接纳指南](docs/guides/pdf-acquisition.md)。
 
@@ -156,7 +156,7 @@ sciretriever jobs create|run
 `jobs create/run` 是当前 durable-job 调试/实验入口（`application/jobs` 之上），其目标合同归属
 （纳入或移出六个一级名称）仍待 owner 决定，见
 [迁移计划 T047/T048](docs/archive/2026-09-07-typescript-browser-workbench/full-migration-roadmap.md)；
-正式 `storage schema-init` 在精确不存在目标创建 v8，`schema-upgrade` 在精确 v1–v7 目标和同目录未存在备份上显式升级；inspect/dry-run 只读，普通启动不升级。整链持业务写锁，每步独立事务，失败报告实际中间版本并保留原始备份；操作前先停写，恢复须保全资产和切换后增量，见[初始化、升级与恢复](docs/guides/upgrade.md)。工具能力不授权代理执行真实数据迁移。
+正式 `storage schema-init` 在精确不存在目标创建 v9，`schema-upgrade` 在精确 v1–v8 目标和同目录未存在备份上显式升级；inspect/dry-run 只读，普通启动不升级。整链持业务写锁，每步独立事务，失败报告实际中间版本并保留原始备份；操作前先停写，恢复须保全资产和切换后增量，见[初始化、升级与恢复](docs/guides/upgrade.md)。工具能力不授权代理执行真实数据迁移。
 历史 `storage migrate` 仍只允许对合成副本执行。
 文档 Catalog v3 的独立合成迁移入口见[文档 Catalog 迁移指南](docs/guides/document-catalog-migration.md)。
 

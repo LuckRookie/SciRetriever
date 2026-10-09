@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 
 export interface RetrievalSchemaConfig {
-  readonly schema_version?: 4 | 5 | 6 | 7 | 8;
+  readonly schema_version?: 4 | 5 | 6 | 7 | 8 | 9;
   readonly schema_fingerprint: string;
   readonly schema_manifest: readonly string[];
   readonly execution_schema_version: number;
@@ -11,7 +11,7 @@ export interface RetrievalSchemaConfig {
   readonly execution_runtime_schema_fingerprint: string;
 }
 export interface RetrievalCatalogInspection {
-  readonly schema_version: 4 | 5 | 6 | 7 | 8;
+  readonly schema_version: 4 | 5 | 6 | 7 | 8 | 9;
   readonly schema_fingerprint: string;
   readonly integrity: "ok";
   readonly foreign_keys: "ok";
@@ -79,7 +79,10 @@ export function inspectKnowledgeProjectionDdl(
   db: DatabaseSync,
   config: RetrievalSchemaConfig,
 ): void {
-  if (config.schema_version !== 8) fail();
+  if (
+    !([8, 9] as readonly (number | undefined)[]).includes(config.schema_version)
+  )
+    fail();
   for (const sql of config.schema_manifest) {
     const name =
       /^CREATE (?:UNIQUE )?(?:VIRTUAL )?(?:TABLE|INDEX|TRIGGER) (knowledge_retrieval_[a-z_][a-z0-9_]*)/.exec(
@@ -166,21 +169,30 @@ function inspectV4Snapshot(
       .get(name) as { sql?: unknown } | undefined;
     if (
       actual?.sql !== sql &&
-      !(config.schema_version === 8 && name.startsWith("knowledge_retrieval_"))
+      !(
+        ([8, 9] as readonly (number | undefined)[]).includes(
+          config.schema_version,
+        ) && name.startsWith("knowledge_retrieval_")
+      )
     )
       fail();
   }
   for (const table of ["literature_search_fts", "retrieval_fts"])
     for (const suffix of ["data", "idx", "content", "docsize", "config"])
       names.add(`${table}_${suffix}`);
-  if (config.schema_version === 8)
+  if (
+    ([8, 9] as readonly (number | undefined)[]).includes(config.schema_version)
+  )
     for (const suffix of ["data", "idx", "content", "docsize", "config"])
       names.add(`knowledge_retrieval_fts_${suffix}`);
   const actual = db
     .prepare("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
     .all() as { name: string }[];
   if (actual.some((row) => !names.has(row.name))) fail();
-  if (sourceOnly || config.schema_version === 8) {
+  if (
+    sourceOnly ||
+    ([8, 9] as readonly (number | undefined)[]).includes(config.schema_version)
+  ) {
     // The global integrity pragma invokes FTS5's integrity hook. Repair must
     // still be able to read sound source facts when only that index is damaged.
     for (const sql of config.schema_manifest) {
@@ -539,7 +551,9 @@ export class RetrievalStorageEngine {
     db.exec("PRAGMA busy_timeout=5000");
     prepareRetrievalVocab(db);
     if (
-      this.config.schema_version === 8 &&
+      ([8, 9] as readonly (number | undefined)[]).includes(
+        this.config.schema_version,
+      ) &&
       db
         .prepare(
           "SELECT 1 FROM sqlite_master WHERE name='knowledge_retrieval_fts'",
@@ -1045,7 +1059,11 @@ export class RetrievalStorageEngine {
   }
 
   private requireKnowledge(): void {
-    if (this.config.schema_version !== 8)
+    if (
+      !([8, 9] as readonly (number | undefined)[]).includes(
+        this.config.schema_version,
+      )
+    )
       throw new RetrievalStorageError("index-unavailable");
   }
   knowledgeRevision(): number {

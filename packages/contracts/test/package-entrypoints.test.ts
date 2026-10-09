@@ -1,4 +1,5 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
 import {
   existsSync,
   readFileSync,
@@ -16,12 +17,12 @@ import { expect, it } from "vitest";
 
 const repository = fileURLToPath(new URL("../../..", import.meta.url));
 
-it("installs packed workspace modules and exercises their public boundaries without source files", () => {
+it("installs packed workspace modules and exercises their public boundaries without source files", async () => {
   const directory = mkdtempSync(
     join(tmpdir(), "sciretriever-package-entrypoints-"),
   );
-  const runPnpm = (args: string[], cwd: string): string => {
-    const result = spawnSync(
+  const runPnpm = async (args: string[], cwd: string): Promise<string> => {
+    const result = await promisify(execFile)(
       "pnpm",
       [
         "--config.userconfig=/dev/null",
@@ -35,20 +36,22 @@ it("installs packed workspace modules and exercises their public boundaries with
         env: { ...process.env, npm_config_ignore_scripts: "true" },
       },
     );
-    if (result.error) throw result.error;
-    expect(result.status, result.stdout + result.stderr).toBe(0);
     return result.stdout;
   };
   try {
-    runPnpm(["build"], repository);
+    await runPnpm(["build"], repository);
     for (const workspace of ["packages/contracts", "apps/server"]) {
-      runPnpm(
+      await runPnpm(
         ["pack", "--pack-destination", directory],
         join(repository, workspace),
       );
     }
     const packed = new Map<string, { version: string; tarball: string }>();
-    const visit = (name: string, from: string): void => {
+    const overrides: Record<string, string> = {};
+    const visit = async (
+      name: string,
+      from: string,
+    ): Promise<{ version: string; tarball: string }> => {
       let root = from;
       while (!existsSync(join(root, "node_modules", name, "package.json"))) {
         const parent = dirname(root);
@@ -67,29 +70,40 @@ it("installs packed workspace modules and exercises their public boundaries with
         typeof manifest.version !== "string"
       )
         throw new Error("Invalid runtime package manifest");
-      const previous = packed.get(name);
-      if (previous) {
-        if (previous.version !== manifest.version)
-          throw new Error(`Conflicting runtime versions: ${name}`);
-        return;
-      }
+      const identity = `${name}@${manifest.version}`;
+      const previous = packed.get(identity);
+      if (previous) return previous;
       const tarball = `${name.replace(/^@/u, "").replaceAll("/", "-")}-${manifest.version}.tgz`;
-      packed.set(name, { version: manifest.version, tarball });
-      runPnpm(["pack", "--pack-destination", directory], packageDirectory);
+      const entry = { version: manifest.version, tarball };
+      packed.set(identity, entry);
+      await runPnpm(
+        ["pack", "--pack-destination", directory],
+        packageDirectory,
+      );
       if (
         "dependencies" in manifest &&
         manifest.dependencies &&
         typeof manifest.dependencies === "object"
       )
-        for (const dependency of Object.keys(manifest.dependencies))
-          visit(dependency, packageDirectory);
+        for (const dependency of Object.keys(manifest.dependencies)) {
+          const child = await visit(dependency, packageDirectory);
+          overrides[`${identity}>${dependency}`] = `file:./${child.tarball}`;
+        }
+      return entry;
     };
     const serverManifest = JSON.parse(
       readFileSync(join(repository, "apps/server/package.json"), "utf8"),
-    ) as { dependencies?: Record<string, string> };
+    ) as {
+      name: string;
+      version: string;
+      dependencies?: Record<string, string>;
+    };
     for (const dependency of Object.keys(serverManifest.dependencies ?? {})) {
       if (dependency.startsWith("@sciretriever/")) continue;
-      visit(dependency, join(repository, "apps/server"));
+      const child = await visit(dependency, join(repository, "apps/server"));
+      overrides[
+        `${serverManifest.name}@${serverManifest.version}>${dependency}`
+      ] = `file:./${child.tarball}`;
     }
     const dependencies = Object.fromEntries(
       ["contracts", "server"].map((name) => {
@@ -104,7 +118,8 @@ it("installs packed workspace modules and exercises their public boundaries with
     for (const [name, { tarball }] of packed) {
       if (!existsSync(join(directory, tarball)))
         throw new Error(`${name} package was not created`);
-      dependencies[name] = `file:./${tarball}`;
+      dependencies[name.slice(0, name.lastIndexOf("@"))] ??=
+        `file:./${tarball}`;
     }
     writeFileSync(
       join(directory, "package.json"),
@@ -113,11 +128,11 @@ it("installs packed workspace modules and exercises their public boundaries with
         type: "module",
         dependencies,
         pnpm: {
-          overrides: { ...dependencies },
+          overrides: { ...dependencies, ...overrides },
         },
       }),
     );
-    runPnpm(
+    await runPnpm(
       [
         "install",
         "--offline",
@@ -136,12 +151,24 @@ it("installs packed workspace modules and exercises their public boundaries with
         "--eval",
         `
       import assert from 'node:assert/strict';
+      import { createRequire } from 'node:module';
       import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
       import { tmpdir } from 'node:os';
       import { dirname, join } from 'node:path';
       import { fileURLToPath } from 'node:url';
       import { canonicalJsonBytes, sha256 } from '@sciretriever/contracts';
       import { ConfigurationBoundaryError, createApplication, loadMaintenanceWorkbenchAssets, loadWorkbenchAssets, parseConfiguration, startMaintenanceWorkbench, startWorkbenchHttp, WorkbenchSession } from '@sciretriever/server';
+
+      const sdk = import.meta.resolve('@modelcontextprotocol/sdk/server/index.js');
+      const express = createRequire(sdk).resolve('express');
+      const bodyParser = createRequire(express).resolve('body-parser');
+      const dependencyVersion = (from, name) => {
+        let directory = dirname(createRequire(from).resolve(name));
+        while (!existsSync(join(directory, 'package.json'))) directory = dirname(directory);
+        return JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')).version;
+      };
+      assert.equal(dependencyVersion(sdk, 'content-type'), '1.0.5');
+      assert.equal(dependencyVersion(bodyParser, 'content-type'), '2.1.0');
 
       const bytes = canonicalJsonBytes({ z: '末', a: 1 });
       assert.equal(new TextDecoder().decode(bytes), '{"a":1,"z":"末"}');
@@ -204,4 +231,4 @@ it("installs packed workspace modules and exercises their public boundaries with
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
-}, 60_000);
+}, 150_000);

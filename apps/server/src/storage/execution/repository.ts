@@ -67,6 +67,10 @@ export function normalizeExecutionPolicy(
 export class ExecutionRepository {
   constructor(private readonly database: SqliteWorker) {}
 
+  withRuntime<T>(operation: () => Promise<T>): Promise<T> {
+    return this.database.withExecutionRuntime(operation);
+  }
+
   inspect(): Promise<ExecutionRuntimeInspection> {
     return this.database.inspectExecutionRuntime();
   }
@@ -85,7 +89,8 @@ export class ExecutionRepository {
       input.selector &&
       typeof input.selector === "object" &&
       "schema_version" in input.selector &&
-      input.selector.schema_version === 2
+      (input.selector.schema_version === 2 ||
+        input.selector.schema_version === 3)
         ? 4_194_304
         : 65_536;
     if (selectorBytes.byteLength > selectorLimit)

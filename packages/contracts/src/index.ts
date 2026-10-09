@@ -2,6 +2,14 @@
 
 export const CONTRACTS_VERSION = "v1" as const;
 
+export * from "./article-identity.js";
+export * from "./operations.js";
+import {
+  parseArticleIdentityAssessment,
+  type ArticleIdentityAssessment,
+  type ArticleIdentityStatus,
+} from "./article-identity.js";
+
 /** Execution records have their own version; the v1 literature bytes stay frozen. */
 export const EXECUTION_CONTRACT_VERSION = 1 as const;
 
@@ -2762,8 +2770,9 @@ export interface LiteratureAsset {
   readonly source_url: string | null;
 }
 export interface LiteratureAssetView {
-  /** No parse-stage identity verdict exists yet; readable PDFs remain unverified. */
-  readonly article_identity_status: "unverified" | null;
+  /** Advisory parse-stage evidence; never a download acceptance gate. */
+  readonly article_identity_status: "unverified" | ArticleIdentityStatus | null;
+  readonly article_identity_assessment?: ArticleIdentityAssessment;
   readonly asset: Asset;
   readonly literature_asset: LiteratureAsset;
 }
@@ -2933,6 +2942,9 @@ export function parseLiteratureAssetView(value: unknown): LiteratureAssetView {
       ...(Object.hasOwn(raw, "article_identity_status")
         ? ["article_identity_status"]
         : []),
+      ...(Object.hasOwn(raw, "article_identity_assessment")
+        ? ["article_identity_assessment"]
+        : []),
     ],
     [],
   );
@@ -2958,8 +2970,22 @@ export function parseLiteratureAssetView(value: unknown): LiteratureAssetView {
     provenance: parseProvenance(l.provenance),
     source_url: l.source_url === null ? null : publicSourceUrl(l.source_url),
   });
+  const assessment =
+    r.article_identity_assessment === undefined
+      ? undefined
+      : parseArticleIdentityAssessment(r.article_identity_assessment);
+  if (
+    assessment &&
+    (asset.media_type !== "application/pdf" ||
+      assessment.asset_id !== asset.asset_id ||
+      assessment.asset_sha256 !== asset.sha256 ||
+      assessment.literature_id !== literature_asset.literature_id)
+  )
+    fail();
   const article_identity_status =
-    asset.media_type === "application/pdf" ? "unverified" : null;
+    asset.media_type === "application/pdf"
+      ? (assessment?.status ?? "unverified")
+      : null;
   // Older snapshots omit the label. Neither missing data nor legacy receipt
   // acceptance constitutes a parse-stage verification.
   if (
@@ -2967,7 +2993,12 @@ export function parseLiteratureAssetView(value: unknown): LiteratureAssetView {
     r.article_identity_status !== article_identity_status
   )
     fail(["article_identity_status"]);
-  return Object.freeze({ asset, literature_asset, article_identity_status });
+  return Object.freeze({
+    asset,
+    literature_asset,
+    article_identity_status,
+    ...(assessment ? { article_identity_assessment: assessment } : {}),
+  });
 }
 export function parseLiteratureId(value: unknown): LiteratureId {
   return id<"LiteratureId">(value, []);

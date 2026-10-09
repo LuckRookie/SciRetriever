@@ -36,6 +36,22 @@ export type ExecutionTargetHandler = (
   signal: AbortSignal,
 ) => Promise<"completed" | "skipped">;
 
+export interface ExecutionRunOptions {
+  readonly boot_id?: string;
+  readonly workspace_id?: string | null;
+  readonly now?: string;
+  readonly signal?: AbortSignal;
+  readonly max_retries?: number;
+  readonly retry_delay_ms?: number;
+  readonly stage_for_target?: (
+    target: ExecutionTarget,
+  ) => ExecutionAttemptStage;
+}
+
+export interface ExecutionBatchRunOptions extends ExecutionRunOptions {
+  readonly max_targets?: number;
+}
+
 /** A stable handler signal for failures that may consume another bounded attempt. */
 export class QueueRetryableError extends Error {
   constructor(message = "execution target is retryable") {
@@ -84,17 +100,20 @@ export class ExecutionQueue {
     return this.repository.controlJob(jobId, "cancelled", finishedAt);
   }
 
-  async runNext(
+  runNext(
     jobId: string,
     handler: ExecutionTargetHandler,
-    options: {
-      readonly boot_id?: string;
-      readonly workspace_id?: string | null;
-      readonly now?: string;
-      readonly signal?: AbortSignal;
-      readonly max_retries?: number;
-      readonly retry_delay_ms?: number;
-    } = {},
+    options: ExecutionRunOptions = {},
+  ): Promise<ExecutionRunResult | null> {
+    return this.repository.withRuntime(() =>
+      this.runNextOwned(jobId, handler, options),
+    );
+  }
+
+  private async runNextOwned(
+    jobId: string,
+    handler: ExecutionTargetHandler,
+    options: ExecutionRunOptions,
   ): Promise<ExecutionRunResult | null> {
     const bootId = options.boot_id ?? randomUUID();
     const policy = await this.repository.getPolicy(jobId);
@@ -168,16 +187,22 @@ export class ExecutionQueue {
       const controller = new AbortController();
       const abort = () => controller.abort();
       options.signal?.addEventListener("abort", abort, { once: true });
+      if (options.signal?.aborted) abort();
       try {
-        const attemptStage: ExecutionAttemptStage = [
-          "acquisition",
-          "parsing",
-          "analysis",
-          "literature",
-        ].includes(target.stage)
-          ? (target.stage as ExecutionAttemptStage)
-          : "acquisition";
+        const attemptStage: ExecutionAttemptStage =
+          options.stage_for_target?.(target) ??
+          (["acquisition", "parsing", "analysis", "literature"].includes(
+            target.stage,
+          )
+            ? (target.stage as ExecutionAttemptStage)
+            : "acquisition");
         try {
+          if (options.stage_for_target)
+            await this.repository.updateTarget(
+              target.target_id,
+              attemptStage,
+              "pending",
+            );
           await this.repository.startAttempt({
             attempt_id: attemptId,
             target_id: target.target_id,
@@ -338,21 +363,34 @@ export class ExecutionQueue {
       : targets.some((target) => target.stage === "interrupted")
         ? "interrupted"
         : "completed";
-    await this.repository.updateJob(jobId, status, new Date().toISOString());
+    await this.repository.updateJobIfActive(
+      jobId,
+      status,
+      new Date().toISOString(),
+    );
   }
 
-  async runUntilIdle(
+  runUntilIdle(
     jobId: string,
     handler: ExecutionTargetHandler,
-    options: Parameters<ExecutionQueue["runNext"]>[2] & {
-      readonly max_targets?: number;
-    } = {},
+    options: ExecutionBatchRunOptions = {},
+  ): Promise<readonly ExecutionRunResult[]> {
+    return this.repository.withRuntime(() =>
+      this.runUntilIdleOwned(jobId, handler, options),
+    );
+  }
+
+  private async runUntilIdleOwned(
+    jobId: string,
+    handler: ExecutionTargetHandler,
+    options: ExecutionBatchRunOptions,
   ): Promise<readonly ExecutionRunResult[]> {
     const results: ExecutionRunResult[] = [];
     const max = options.max_targets ?? 1000;
     if (!Number.isSafeInteger(max) || max < 1 || max > 10000)
       throw new TypeError("execution queue bound is invalid");
     while (results.length < max) {
+      if (options.signal?.aborted) break;
       const next = await this.runNext(jobId, handler, options);
       if (!next) break;
       results.push(next);
@@ -525,9 +563,16 @@ export class ExecutionTaskService {
     void _queue;
   }
 
-  async runJob(
+  runJob(
     jobId: string,
     options: Parameters<ExecutionQueue["runUntilIdle"]>[2] = {},
+  ): Promise<readonly ExecutionRunResult[]> {
+    return this.repository.withRuntime(() => this.runJobOwned(jobId, options));
+  }
+
+  private async runJobOwned(
+    jobId: string,
+    options: ExecutionBatchRunOptions,
   ): Promise<readonly ExecutionRunResult[]> {
     const job = await this.repository.getJob(jobId);
     if (!job) throw new TypeError("execution job is unavailable");
@@ -748,7 +793,9 @@ export class ExecutionTaskService {
             action: "Retry the target after inspecting its persisted attempt.",
             retryable: true,
           }
-        : outcome.partition === "completed"
+        : outcome.partition === "completed" ||
+            (outcome.partition === "skipped" &&
+              outcome.skipped_reason !== "manual-pdf-required")
           ? null
           : completionFallback(goal));
     const active = ["queued", "running"].includes(
@@ -790,6 +837,12 @@ export class ExecutionTaskService {
       nextEligibleAt = retry
         ? new Date(Date.now() + retryDelay).toISOString()
         : null;
+    } else if (outcome.partition === "skipped" && failure === null) {
+      result = { target_id: row.target_id, outcome: "skipped", failure: null };
+      stage = "skipped";
+      disposition = "skipped";
+      attemptStatus = "completed";
+      eventKind = "attempt-skipped";
     } else {
       // A pause or cancel can arrive while this target runs. Its committed
       // materials survive, but no new operator request is created afterwards.
@@ -839,6 +892,7 @@ export class ExecutionTaskService {
         target_id: row.target_id,
         attempt_id: attemptId,
         failure: result.outcome === "completed" ? null : failure,
+        skipped_reason: outcome.skipped_reason,
       });
     }
     return { result, stopAdmission };
