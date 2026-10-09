@@ -673,7 +673,19 @@ describe("persistent browser profile host", () => {
       const page = await host.openPage(
         `http://fixture.test:${address.port}/article`,
       );
-      const first = await page.snapshot();
+      let initial: Awaited<ReturnType<typeof page.snapshot>> | undefined;
+      await expect
+        .poll(async () => {
+          try {
+            initial = await page.snapshot();
+            return true;
+          } catch (error) {
+            if (error instanceof BrowserPageTransitionError) return false;
+            throw error;
+          }
+        })
+        .toBe(true);
+      const first = initial!;
       expect(first.screenshot!.byteLength).toBeGreaterThan(100);
       expect(first.text).toContain("idle");
       const button = first.elements?.find(
