@@ -268,17 +268,17 @@ function checkRawPath(value: string): void {
   if (authorityOffset < 0) return;
   const path =
     value.slice(schemeEnd + 3 + authorityOffset).split(/[?#]/u, 1)[0] ?? "";
-  if (/%(?![0-9a-f]{2})/iu.test(path) || /%(?:2e|2f|5c)/iu.test(path))
-    invalid();
+  if (/%(?![0-9a-f]{2})/iu.test(path) || /%(?:2e|5c)/iu.test(path)) invalid();
   if (/(?:^|\/)\.{1,2}(?:\/|$)/u.test(path)) invalid();
 }
 function checkRelativePath(value: string): void {
   const path = value.split(/[?#]/u, 1)[0] ?? "";
-  if (/%(?![0-9a-f]{2})/iu.test(path) || /%(?:2e|2f|5c)/iu.test(path))
-    invalid();
+  if (/%(?![0-9a-f]{2})/iu.test(path) || /%(?:2e|5c)/iu.test(path)) invalid();
   if (/(?:^|\/)\.{1,2}(?:\/|$)/u.test(path)) invalid();
 }
 function checkDecodedPath(value: string): void {
+  // Encoded separators are legitimate opaque identifiers (e.g. DOI paths).
+  // Inspect their decoded meaning for hazards without rewriting the wire path.
   let candidate = value;
   for (let round = 0; round < 4; round += 1) {
     if (/%(?![0-9a-f]{2})/iu.test(candidate)) invalid();
@@ -520,8 +520,7 @@ export function normalizeUrl(
     path.split("/").some((part) => part === "." || part === "..")
   )
     invalid();
-  if (/%(?:2e|2f|5c)/iu.test(path) || /%(?![0-9a-f]{2})/iu.test(path))
-    invalid();
+  if (/%(?:2e|5c)/iu.test(path) || /%(?![0-9a-f]{2})/iu.test(path)) invalid();
   checkDecodedPath(path);
   const origin = Object.freeze({ scheme, hostname, port });
   const authority = originText(origin);

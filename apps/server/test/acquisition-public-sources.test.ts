@@ -630,7 +630,7 @@ describe("TypeScript public acquisition sources", () => {
                 status: 200,
                 headers: [["content-type", "text/html"]],
                 body: new TextEncoder().encode(
-                  '<meta name="citation_pdf_url" content="/main.pdf"><a href="https://cdn.example/assets%2Fappendix.pdf">Appendix</a><a href="https://cdn.example/assets%5Cprivate.pdf">Bad path</a>',
+                  '<meta name="citation_pdf_url" content="/main.pdf"><a href="https://cdn.example/assets%2F..%2Fappendix.pdf">Traversal</a><a href="https://cdn.example/assets%5Cprivate.pdf">Bad path</a>',
                 ),
               };
             throw new NetworkHttpError("redirect-limit");

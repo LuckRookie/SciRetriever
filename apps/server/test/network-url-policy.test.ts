@@ -13,6 +13,14 @@ describe("network URL policy", () => {
     );
   });
 
+  it("preserves opaque encoded identifiers without decoding the outbound path", () => {
+    for (const path of [
+      "/works/10.5555%2Fitem",
+      "/works/10.5555%2fpart%2fitem",
+    ])
+      expect(normalizeUrl(`https://example.test${path}`).path).toBe(path);
+  });
+
   it("rejects URL authority, query, path, and control character hazards", () => {
     const invalid = [
       "https://user:password@example.test",
@@ -22,6 +30,12 @@ describe("network URL policy", () => {
       "https://example.test/a/%2f/b",
       "https://example.test/a/%252e%252e/b",
       "https://example.test/a%00/b",
+      "https://example.test/a%2f..%2fb",
+      "https://example.test/a%252f..%252fb",
+      "https://example.test/a%2f%2fb",
+      "https://example.test/a%2f%5cb",
+      "https://example.test/a%2f%2500b",
+      "https://example.test/a%252f%252fhost",
     ];
     for (const value of invalid)
       expect(() => normalizeUrl(value)).toThrow(NetworkPolicyError);
