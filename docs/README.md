@@ -13,6 +13,7 @@ SciRetriever 面向科研 Agent 供应文献材料、知识压缩与通用提取
 | 模块怎样协作       | [design](architecture/design.md)、[工作流](architecture/knowledge-service-workflows.md)                                   | 目标责任与场景，具体提案单独标注             |
 | 各模块如何实现     | [八模块技术导航](architecture/technical.md)、[TS 基线](architecture/typescript-baseline.md)                               | 8 篇详细模块正文与当前实现差距               |
 | 具体合同建议       | [统一产品接口：共享合同、结构解析与版本兼容](architecture/technical/01-product-interface.md#6-共享合同结构解析与版本兼容) | Proposed，未冻结字段/协议不冒充已发布API     |
+| 正在讨论的产品设计 | [活动提案](proposals/README.md)、[Web Agent 工作台](proposals/2026-10-08-agent-workbench.md) | 区分已确认方向、建议和未决问题；不作为实施台账 |
 | 怎样从当前迁到目标 | [迁移映射](architecture/evolution-map.md)、[活动计划](plans/README.md)                                                    | 前者说明改造/兼容，后者组织执行与恢复        |
 | 如何开发与验证     | [开发文档](development/README.md)、[文档影响映射](development/documentation-map.md)                                       | 工程入口与变更检查                           |
 | 外部服务事实       | [notes](notes/README.md)                                                                                                  | 有日期的来源资料，不据此推断当前生产接入     |

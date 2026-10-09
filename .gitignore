@@ -19,6 +19,9 @@ logs
 !/apps/web/public/live.html
 !/apps/web/public/query.html
 !/apps/web/public/maintenance.html
+!/docs/proposals/2026-10-08-agent-workbench/prototype.html
+!/docs/proposals/2026-10-08-agent-workbench/opus-variant.html
+!/docs/proposals/2026-10-08-agent-workbench/comparison.html
 page_1.json
 *.ipynb
 *.txt

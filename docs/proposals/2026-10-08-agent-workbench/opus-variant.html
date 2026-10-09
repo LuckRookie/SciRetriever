@@ -1,0 +1,1544 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <!-- Design authored by Claude Code / claude-opus-5-5, effort xhigh. Codex reviewed prototype interactions; see comparison.md. -->
+    <title>sci retriever · 工作台原型（合成示例）</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      :root {
+        --bg: #f5f5f0;
+        --ink: #263b33;
+        --g: #386d50;
+        --gl: #e3ebe4;
+        --ln: #dcdcd2;
+        --mut: #5d6a63;
+        --cd: #fcfcf9;
+        --am: #8f5508;
+        --amb: #fbf2e1;
+        --aml: #e6c690;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          14px/1.55 system-ui,
+          -apple-system,
+          "Segoe UI",
+          "PingFang SC",
+          "Microsoft YaHei",
+          sans-serif;
+        overflow-x: hidden;
+        overflow-wrap: break-word;
+      }
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+        color: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      :focus-visible {
+        outline: 2px solid var(--g);
+        outline-offset: 2px;
+      }
+      h1 {
+        font-size: 19px;
+        margin: 0;
+        outline: 0;
+      }
+      h2,
+      .lh {
+        font-size: 13px;
+        margin: 0 0 8px;
+        color: var(--mut);
+        font-weight: 600;
+        outline: 0;
+        display: block;
+      }
+      p {
+        margin: 0 0 8px;
+      }
+      .skip {
+        position: absolute;
+        left: -999px;
+      }
+      .skip:focus {
+        left: 12px;
+        top: 8px;
+        z-index: 20;
+        background: #fff;
+        padding: 6px 10px;
+      }
+      .top {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 22px;
+        padding: 9px 24px;
+        background: #fbfbf7;
+        border-bottom: 1px solid var(--ln);
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 15px;
+      }
+      .mark {
+        width: 18px;
+        height: 18px;
+        border-radius: 5px;
+        background: var(--ink);
+        display: grid;
+        place-items: center;
+      }
+      .mark:after {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border: 2px solid #a5c9b0;
+        border-radius: 50%;
+      }
+      .tag {
+        font-size: 12px;
+        color: var(--am);
+        background: var(--amb);
+        border: 1px solid var(--aml);
+        border-radius: 4px;
+        padding: 0 6px;
+      }
+      nav {
+        display: flex;
+        gap: 2px;
+      }
+      nav button {
+        border: 0;
+        background: none;
+        padding: 6px 12px;
+        border-radius: 6px;
+        color: var(--mut);
+        font-size: 14px;
+      }
+      nav button[aria-current] {
+        background: var(--gl);
+        color: var(--ink);
+        font-weight: 600;
+      }
+      .tools {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .seg {
+        display: flex;
+        align-items: center;
+        border: 1px solid var(--ln);
+        border-radius: 7px;
+        background: #fff;
+        font-size: 12px;
+        overflow: hidden;
+      }
+      .seg > span {
+        padding: 0 8px;
+        color: var(--mut);
+      }
+      .seg button {
+        border: 0;
+        border-left: 1px solid var(--ln);
+        background: none;
+        padding: 4px 9px;
+        font-size: 12px;
+      }
+      .seg button[aria-pressed="true"] {
+        background: var(--ink);
+        color: #fff;
+      }
+      .btn {
+        border: 1px solid #cfd0c4;
+        background: #fff;
+        border-radius: 7px;
+        padding: 6px 12px;
+        font-size: 14px;
+        line-height: 1.35;
+      }
+      .btn:hover {
+        border-color: var(--g);
+      }
+      .pri {
+        background: var(--g);
+        border-color: var(--g);
+        color: #fff;
+      }
+      .amb {
+        background: var(--am);
+        border-color: var(--am);
+        color: #fff;
+      }
+      .warn {
+        color: #8a3527;
+      }
+      .dng {
+        background: #8a3527;
+        border-color: #8a3527;
+        color: #fff;
+      }
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      body.off .net {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .chip {
+        display: inline-block;
+        font-size: 12px;
+        line-height: 18px;
+        padding: 0 7px;
+        border-radius: 9px;
+        background: var(--gl);
+        color: var(--g);
+        white-space: nowrap;
+        vertical-align: middle;
+      }
+      .c-h {
+        background: var(--amb);
+        color: var(--am);
+        border: 1px solid var(--aml);
+      }
+      .c-p {
+        background: #e6edf1;
+        color: #2f5670;
+      }
+      .c-q,
+      .c-queue,
+      .c-x,
+      .c-cancel {
+        background: #ebebe4;
+        color: var(--mut);
+      }
+      .ban {
+        background: #f4e4df;
+        color: #7a2f24;
+        border-bottom: 1px solid #e6c7be;
+        padding: 8px 24px;
+        font-size: 13px;
+      }
+      .ban:empty {
+        display: none;
+      }
+      main {
+        max-width: 1260px;
+        margin: 0 auto;
+        padding: 18px 24px 64px;
+        outline: 0;
+      }
+      .phead {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 14px;
+        margin-bottom: 14px;
+      }
+      .sub {
+        color: var(--mut);
+        font-size: 13px;
+      }
+      .lbl {
+        display: block;
+        font-size: 12px;
+        color: var(--mut);
+      }
+      .note {
+        font-size: 12px;
+        color: var(--am);
+      }
+      .strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px 16px;
+        font-size: 13px;
+        background: #fff;
+        border: 1px solid var(--ln);
+        border-radius: 8px;
+        padding: 4px 12px;
+        color: var(--mut);
+        margin: 0;
+      }
+      .strip b {
+        color: var(--ink);
+      }
+      .strip i {
+        display: inline-block;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        margin-right: 6px;
+        background: var(--g);
+        vertical-align: 1px;
+      }
+      .strip .q i {
+        background: #a3a79a;
+      }
+      .strip .h i {
+        background: #c3801f;
+      }
+      .cols {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 280px;
+        gap: 24px;
+        align-items: start;
+      }
+      section {
+        margin-bottom: 18px;
+      }
+      .help {
+        background: var(--amb);
+        border: 1px solid var(--aml);
+        border-left: 4px solid #c3801f;
+        border-radius: 10px;
+        padding: 14px 18px;
+        margin-bottom: 8px;
+      }
+      .help h3 {
+        font-size: 17px;
+        line-height: 1.35;
+        margin: 6px 0;
+      }
+      .acts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .trow {
+        display: grid;
+        grid-template-columns: minmax(0, 1.6fr) minmax(
+            0,
+            1.3fr
+          ) 140px 118px 104px;
+        gap: 16px;
+        align-items: center;
+        background: var(--cd);
+        border: 1px solid var(--ln);
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin-bottom: 8px;
+      }
+      .tlink {
+        border: 0;
+        background: none;
+        padding: 0;
+        font-weight: 600;
+        font-size: 15px;
+        text-align: left;
+        color: var(--ink);
+      }
+      .tlink:hover,
+      .rb:hover {
+        text-decoration: underline;
+      }
+      .trow .sub {
+        margin: 2px 0 0;
+      }
+      .bar {
+        height: 6px;
+        background: #e4e4db;
+        border-radius: 3px;
+        overflow: hidden;
+        margin-bottom: 4px;
+      }
+      .bar i {
+        display: block;
+        height: 100%;
+        background: var(--g);
+      }
+      .thumb {
+        position: relative;
+        width: 104px;
+        height: 66px;
+        border: 1px solid #cfd0c4;
+        border-radius: 6px;
+        background: #fff;
+        padding: 7px 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        overflow: hidden;
+      }
+      .thumb .l {
+        display: block;
+        height: 4px;
+        border-radius: 2px;
+        background: #d7dbd3;
+      }
+      .thumb em {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        font: normal 12px/18px system-ui;
+        background: rgba(38, 59, 51, 0.85);
+        color: #fff;
+        text-align: center;
+      }
+      .card {
+        background: var(--cd);
+        border: 1px solid var(--ln);
+        border-radius: 10px;
+        padding: 14px 16px;
+        margin-bottom: 14px;
+      }
+      .dgrid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 340px;
+        gap: 20px;
+        align-items: start;
+      }
+      .back {
+        border: 0;
+        background: none;
+        color: var(--g);
+        padding: 4px 0;
+        margin-bottom: 6px;
+        font-size: 14px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 8px 6px;
+        border-top: 1px solid var(--ln);
+        vertical-align: top;
+        font-size: 13px;
+      }
+      th {
+        font-size: 12px;
+        color: var(--mut);
+        font-weight: 600;
+        border-top: 0;
+      }
+      tr.on td {
+        background: var(--gl);
+      }
+      .rb {
+        border: 0;
+        background: none;
+        padding: 0;
+        text-align: left;
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--ink);
+        line-height: 1.4;
+      }
+      .log {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .log li {
+        display: flex;
+        gap: 10px;
+        padding: 5px 0;
+        border-top: 1px dashed var(--ln);
+        font-size: 13px;
+      }
+      .log li:first-child {
+        border-top: 0;
+      }
+      .log time {
+        color: var(--mut);
+        flex: none;
+        width: 40px;
+      }
+      .at {
+        font-size: 16px;
+        line-height: 1.35;
+        margin: 4px 0 6px;
+      }
+      #ad .btn {
+        margin: 4px 6px 0 0;
+      }
+      .scope {
+        font-size: 13px;
+        background: #fff;
+        border: 1px solid var(--ln);
+        border-left: 3px solid var(--g);
+        border-radius: 6px;
+        padding: 7px 12px;
+        margin-bottom: 14px;
+      }
+      .bgrid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 320px;
+        gap: 18px;
+        align-items: start;
+      }
+      .frame {
+        border: 1px solid #c9cbbf;
+        border-radius: 10px;
+        overflow: hidden;
+        background: #fff;
+      }
+      .chrome {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 10px;
+        background: #ebebe4;
+        border-bottom: 1px solid #d6d6cc;
+        font-size: 12px;
+      }
+      .url {
+        flex: 1 1 200px;
+        min-width: 0;
+        background: #fff;
+        border-radius: 5px;
+        padding: 2px 8px;
+        color: var(--mut);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .page {
+        position: relative;
+      }
+      .pin {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 170px;
+        gap: 26px;
+        padding: 22px 28px 30px;
+        font-family: Georgia, "Times New Roman", serif;
+        color: #1e2622;
+        min-height: 500px;
+      }
+      .pin small {
+        font: 12px system-ui;
+        color: #28466b;
+        letter-spacing: 0.04em;
+      }
+      .pin h3 {
+        font-size: 23px;
+        line-height: 1.3;
+        margin: 6px 0 8px;
+        font-weight: 600;
+      }
+      .pin h4 {
+        font-size: 14px;
+        margin: 14px 0 4px;
+      }
+      .ln {
+        height: 8px;
+        border-radius: 4px;
+        background: #e5e7e1;
+        margin: 10px 0;
+      }
+      .fig {
+        height: 120px;
+        border: 1px solid #e1e3dc;
+        border-radius: 4px;
+        background: repeating-linear-gradient(
+          45deg,
+          #f6f7f3 0 8px,
+          #eef0ea 8px 16px
+        );
+        display: grid;
+        place-items: center;
+        font: 12px system-ui;
+        color: var(--mut);
+        margin-top: 16px;
+      }
+      .pside {
+        font: 13px system-ui;
+      }
+      .pside details {
+        border: 1px solid #d6dae2;
+        border-radius: 6px;
+        padding: 8px 10px;
+        margin-bottom: 10px;
+      }
+      .pside summary {
+        cursor: pointer;
+        font-weight: 600;
+        color: #28466b;
+      }
+      .dl {
+        display: block;
+        width: 100%;
+        margin-top: 8px;
+        background: #28466b;
+        color: #fff;
+        border: 0;
+        border-radius: 5px;
+        padding: 8px;
+      }
+      .ov {
+        position: absolute;
+        inset: 0;
+        background: rgba(245, 245, 240, 0.5);
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+        padding-top: 18px;
+      }
+      .ov span {
+        background: var(--ink);
+        color: #fff;
+        font-size: 13px;
+        padding: 5px 12px;
+        border-radius: 14px;
+        margin: 0 12px;
+        text-align: center;
+      }
+      .sess {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .sess button {
+        border: 1px solid var(--ln);
+        background: #fff;
+        border-radius: 8px;
+        padding: 7px 10px;
+        text-align: left;
+        font-size: 13px;
+        line-height: 1.35;
+      }
+      .sess button[aria-current] {
+        border-color: var(--g);
+        background: var(--gl);
+      }
+      textarea,
+      input[type="search"],
+      input[type="text"],
+      select {
+        width: 100%;
+        border: 1px solid #cfd0c4;
+        border-radius: 7px;
+        padding: 7px 9px;
+        background: #fff;
+      }
+      textarea {
+        min-height: 70px;
+        resize: vertical;
+        margin: 2px 0 8px;
+      }
+      .lgrid {
+        display: grid;
+        grid-template-columns: 330px minmax(0, 1fr);
+        gap: 20px;
+        align-items: start;
+      }
+      .llist {
+        list-style: none;
+        padding: 0;
+        margin: 10px 0 0;
+      }
+      .llist button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: var(--cd);
+        border: 1px solid var(--ln);
+        border-radius: 8px;
+        padding: 9px 12px;
+        margin-bottom: 6px;
+        font-size: 14px;
+        line-height: 1.4;
+      }
+      .llist button[aria-current] {
+        border-color: var(--g);
+        background: var(--gl);
+      }
+      .pdfph {
+        border: 1px dashed #b9bcae;
+        border-radius: 8px;
+        background: #fff;
+        padding: 16px;
+        margin-top: 12px;
+      }
+      .sgrid {
+        display: grid;
+        grid-template-columns: 190px minmax(0, 1fr);
+        gap: 20px;
+        align-items: start;
+      }
+      .stabs {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .stabs button {
+        border: 1px solid transparent;
+        background: none;
+        border-radius: 7px;
+        padding: 7px 12px;
+        text-align: left;
+        font-size: 14px;
+      }
+      .stabs button[aria-current] {
+        background: #fff;
+        border-color: var(--ln);
+        font-weight: 600;
+      }
+      .srow {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px 12px;
+        padding: 10px 0;
+        border-top: 1px solid var(--ln);
+      }
+      .srow > div {
+        flex: 1 1 220px;
+        min-width: 0;
+      }
+      .sw {
+        flex: none;
+        width: 38px;
+        height: 22px;
+        border-radius: 11px;
+        border: 0;
+        background: #c5c8bc;
+        position: relative;
+      }
+      .sw:after {
+        content: "";
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #fff;
+        transition: left 0.15s;
+      }
+      .sw[aria-pressed="true"] {
+        background: var(--g);
+      }
+      .sw[aria-pressed="true"]:after {
+        left: 19px;
+      }
+      dialog {
+        border: 1px solid var(--ln);
+        border-radius: 12px;
+        padding: 20px 22px;
+        width: min(440px, calc(100vw - 32px));
+        background: var(--cd);
+        color: var(--ink);
+      }
+      dialog::backdrop {
+        background: rgba(38, 59, 51, 0.35);
+      }
+      dialog h2 {
+        font-size: 16px;
+        color: var(--ink);
+        margin-bottom: 12px;
+      }
+      dialog label {
+        display: block;
+        font-size: 13px;
+        margin-bottom: 12px;
+      }
+      dialog label > * {
+        margin-top: 4px;
+      }
+      .err {
+        color: #8a3527;
+        font-size: 13px;
+      }
+      .err:empty {
+        display: none;
+      }
+      #toast {
+        position: fixed;
+        left: 50%;
+        bottom: 22px;
+        transform: translate(-50%, 20px);
+        max-width: calc(100vw - 32px);
+        background: var(--ink);
+        color: #fff;
+        padding: 9px 16px;
+        border-radius: 9px;
+        font-size: 13px;
+        opacity: 0;
+        pointer-events: none;
+        transition: 0.2s;
+        z-index: 30;
+      }
+      #toast.on {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+      @media (max-width: 980px) {
+        .cols,
+        .dgrid,
+        .bgrid,
+        .lgrid,
+        .sgrid {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .trow {
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        }
+      }
+      @media (max-width: 600px) {
+        .top {
+          padding: 8px 14px;
+          gap: 8px;
+        }
+        .tools {
+          margin-left: 0;
+        }
+        main {
+          padding: 14px 14px 60px;
+        }
+        .trow {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .pin {
+          grid-template-columns: minmax(0, 1fr);
+          padding: 16px;
+          min-height: 0;
+        }
+        .pin h3 {
+          font-size: 19px;
+        }
+        .hm {
+          display: none;
+        }
+        .stabs {
+          flex-direction: row;
+          flex-wrap: wrap;
+        }
+        .ban {
+          padding: 8px 14px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip" href="#main">跳到主要内容</a>
+    <header class="top">
+      <div class="brand">
+        <span class="mark" aria-hidden="true"></span><b>sci retriever</b
+        ><span class="tag">合成示例原型</span>
+      </div>
+      <nav aria-label="主导航">
+        <button data-go="home">工作台</button
+        ><button data-go="tasks">任务</button
+        ><button data-go="lib">文献库</button
+        ><button data-go="set">设置</button>
+      </nav>
+      <div class="tools">
+        <div class="seg" role="group" aria-label="评审状态模拟">
+          <span>评审</span><button data-act="mode" data-m="run">运行</button
+          ><button data-act="mode" data-m="ok">正常无需协助</button
+          ><button data-act="mode" data-m="off">断连</button>
+        </div>
+        <button class="btn pri" data-act="new">新建任务</button>
+      </div>
+    </header>
+    <div class="ban" id="ban" role="status"></div>
+    <main id="main" tabindex="-1"></main>
+    <dialog id="dlgNew" aria-labelledby="nh">
+      <form id="fNew" novalidate>
+        <h2 id="nh">新建任务</h2>
+        <label
+          >名称<input
+            type="text"
+            name="nm"
+            maxlength="60"
+            placeholder="例如：有机光催化 · 发现文献"
+        /></label>
+        <label
+          >操作类型<select name="op">
+            <option>发现文献</option>
+            <option>获取 PDF</option>
+            <option>解析已有材料</option>
+            <option>分析已有材料</option>
+          </select></label
+        >
+        <label
+          >范围（示例）<select name="sc">
+            <option value="lib">文献库中的 4 篇合成示例文章</option>
+            <option value="q">示例检索式“C–H activation”的 24 篇</option>
+            <option value="one">选中的 1 篇：Flow chemistry approaches…</option>
+          </select></label
+        >
+        <p class="sub">
+          每种操作独立发起，完成后不会自动开始下一阶段。任务仅保存在本页内存，刷新后重置。
+        </p>
+        <p class="err" id="nErr" role="alert"></p>
+        <div class="acts" style="justify-content: flex-end">
+          <button type="button" class="btn" data-close>取消</button
+          ><button type="submit" class="btn pri net">提交任务</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="dlgC" aria-labelledby="chd">
+      <h2 id="chd">取消本任务？</h2>
+      <p id="cTxt"></p>
+      <p class="err" role="alert"></p>
+      <div class="acts" style="justify-content: flex-end">
+        <button class="btn" data-close>保留任务</button
+        ><button class="btn dng net" data-act="cok">确认取消</button>
+      </div>
+    </dialog>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script>
+      const $ = (s) => document.querySelector(s),
+        E = (s) =>
+          String(s).replace(
+            /[&<>"]/g,
+            (c) =>
+              ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
+          );
+      const now = () => new Date().toTimeString().slice(0, 5);
+      const A = {
+        a1: {
+          t: "Selective C–H activation in organic synthesis",
+          au: "L. Example, M. Sample, K. Placeholder",
+          j: "Journal of Synthetic Examples · 2025",
+          doi: "10.0000/synthetic.0001",
+          kw: "C–H activation, 过渡金属催化, 官能团化",
+          ab: "合成示例摘要：综述过渡金属催化下 C–H 键的选择性活化，比较导向基团与非导向策略，并讨论其在复杂分子后期修饰中的适用范围。",
+          pdf: 0,
+        },
+        a2: {
+          t: "Photoredox catalysis for asymmetric cross-coupling of unactivated alkyl halides under mild and scalable conditions",
+          au: "R. Demo, S. Fixture",
+          j: "Synthetic Letters (Example) · 2024",
+          doi: "10.0000/synthetic.0002",
+          kw: "光氧化还原, 不对称催化, 交叉偶联",
+          ab: "合成示例摘要：描述一种可见光驱动的光氧化还原/镍双催化体系，在温和条件下实现未活化卤代烷的不对称交叉偶联。",
+          pdf: 0,
+        },
+        a3: {
+          t: "Flow chemistry approaches to multistep total synthesis",
+          au: "P. Mock, T. Stub",
+          j: "Example Reviews in Chemistry · 2023",
+          doi: "10.0000/synthetic.0003",
+          kw: "流动化学, 全合成, 连续工艺, flow",
+          ab: "合成示例摘要：总结连续流动技术在多步全合成中的应用，包括在线纯化、危险中间体处理与放大策略。",
+          pdf: 1,
+        },
+        a4: {
+          t: "Enzymatic late-stage functionalization of complex natural products",
+          au: "D. Sample, F. Example",
+          j: "Biocatalysis (Example) · 2025",
+          doi: "10.0000/synthetic.0004",
+          kw: "酶催化, 后期官能团化, 天然产物",
+          ab: "合成示例摘要：讨论细胞色素 P450 等酶在天然产物后期选择性氧化中的作用，以及与化学方法的互补性。",
+          pdf: 1,
+        },
+      };
+      const T = [
+        {
+          id: "t1",
+          n: "化学合成 · PDF 获取",
+          goal: "为示例检索结果中的 24 篇文章获取 PDF",
+          st: "run",
+          tot: 24,
+          c: { s: 18, p: 2, q: 3, h: 1, x: 0 },
+          br: 1,
+          step: "用 Browser 获取剩余 PDF",
+          scope:
+            "范围：示例检索式“C–H activation”已确认的 24 篇文章。只获取 PDF；不解析、不分析，也不会因此加入新文献。",
+          log: [
+            ["10:12", "开始", "读取 24 篇文章元数据"],
+            ["10:15", "获取", "经开放来源保存 16 篇 PDF"],
+            ["10:31", "Browser", "进入出版方页面获取其余文章"],
+            ["10:36", "待协助", "Selective C–H activation… 尚未找到 PDF 入口"],
+          ],
+          rows: [
+            ["a1", "h", "尚未找到 PDF 入口"],
+            ["a2", "p", "Browser 正在加载出版方页面"],
+            ["a3", "s", "PDF 已保存 · sha256 3f9a…（合成）"],
+          ],
+        },
+        {
+          id: "t2",
+          n: "解析已有材料",
+          goal: "把库中 8 份已保存 PDF 解析为可读文档",
+          st: "run",
+          tot: 8,
+          done: 3,
+          step: "解析第 4 份：Flow chemistry approaches…",
+          scope:
+            "范围：文献库中已保存的 8 份 PDF。只解析，不下载新文件，也不自动开始分析。",
+          log: [
+            ["10:20", "开始", "排入 8 份 PDF"],
+            ["10:38", "解析", "完成第 3 份，生成可读文档（合成）"],
+          ],
+          rows: [
+            ["a4", "s", "可读文档已生成 · 14 页（合成）"],
+            ["a3", "p", "解析服务处理中（示例）"],
+          ],
+        },
+        {
+          id: "t3",
+          n: "分析已有材料",
+          goal: "为 6 篇已解析文章生成带证据的摘要",
+          st: "queue",
+          tot: 6,
+          done: 0,
+          step: "排队中，等待开始",
+          scope:
+            "范围：选定的 6 篇已解析文章。只分析已有可读文档，不触发下载或解析。",
+          log: [["10:40", "创建", "已排队，等待开始"]],
+          rows: [
+            ["a4", "q", "排队中"],
+            ["a3", "q", "使用已保存文档，等待分析资源"],
+          ],
+        },
+      ];
+      const SS = {
+          a1: {
+            ctl: "ag",
+            d: "",
+            log: [
+              ["10:36", "Agent", "页面中未找到 PDF 链接，已暂停并请求协助"],
+            ],
+          },
+          a2: {
+            ctl: "ag",
+            d: "",
+            log: [["10:40", "Agent", "正在加载出版方页面"]],
+          },
+        },
+        BRA = ["a1", "a2"];
+      const S = {
+        v: "home",
+        m: "run",
+        t: "t1",
+        a: null,
+        la: "a1",
+        q: "",
+        st: "src",
+        sw: { s1: 1, s2: 1, s3: 1, b1: 1, b2: 1, g1: 1 },
+      };
+      const SL = {
+          s: "已保存",
+          p: "处理中",
+          q: "排队",
+          h: "待协助",
+          x: "已停止",
+        },
+        TL = { run: "执行中", queue: "排队中", cancel: "已取消" };
+      const tk = (id) => T.find((t) => t.id === id),
+        rs = (r) => (S.m === "ok" && r[1] === "h" ? "p" : r[1]);
+      const rt = (r) =>
+        S.m === "ok" && r[1] === "h" ? "Agent 正在出版方页面查找 PDF" : r[2];
+      const cn = (t) => {
+        const c = { ...t.c };
+        if (S.m === "ok" && c.h) {
+          c.p += c.h;
+          c.h = 0;
+        }
+        return c;
+      };
+      const ch = (k, l) => `<span class="chip c-${k}">${l}</span>`;
+      const sh = (id) => {
+        const x = A[id].t;
+        return x.length > 30 ? x.slice(0, 28) + "…" : x;
+      };
+      const helps = () =>
+        T.flatMap((t) =>
+          t.st === "cancel"
+            ? []
+            : t.rows.filter((r) => rs(r) === "h").map((r) => ({ t, r })),
+        );
+      const lg = (l) =>
+        l
+          .map(
+            ([a, b, c]) =>
+              `<li><time>${a}</time><span><b>${E(b)}</b> ${E(c)}</span></li>`,
+          )
+          .join("");
+      function strip() {
+        const r = T.filter((t) => t.st === "run").length,
+          q = T.filter((t) => t.st === "queue").length,
+          h = helps().length;
+        return `<p class="strip"><span><i></i><b>${r}</b> 个任务执行</span><span class="q"><i></i><b>${q}</b> 个排队</span><span class="h"><i></i><b>${h}</b> 项协助</span><span>${S.m === "off" ? "最后同步 10:42" : "已同步"} · 合成示例</span></p>`;
+      }
+      const hc = ({ t, r }) =>
+        `<article class="help"><div class="acts">${ch("h", "待协助")}<span class="sub">任务「${E(t.n)}」· 共 ${t.tot} 篇中的 1 篇 · 合成示例</span></div><h3>${E(A[r[0]].t)}</h3><p>原因：${E(r[2])}。Agent 已暂停这一篇，其余文章继续处理。</p><div class="acts"><button class="btn amb" data-go="art" data-t="${t.id}" data-a="${r[0]}">查看并协助</button><span class="sub">先看文章详情，再从详情进入 Browser 接管</span></div></article>`;
+      function thumb(t) {
+        const id = (t.rows.find((r) => rs(r) === "h") ||
+          t.rows.find((r) => r[1] === "p") ||
+          t.rows[0])[0];
+        return `<button class="thumb" data-go="art" data-t="${t.id}" data-a="${id}" aria-label="Browser 缩略画面（合成）：${E(A[id].t)}。打开文章详情"><span class="l" style="width:55%;background:#28466b"></span><span class="l"></span><span class="l" style="width:80%"></span><span class="l" style="width:68%"></span><em>Browser · 合成</em></button>`;
+      }
+      function row(t) {
+        const h = t.st !== "cancel" && t.rows.find((r) => rs(r) === "h"),
+          c = t.c ? cn(t) : null,
+          d = c ? c.s : t.done,
+          p = Math.round((d / t.tot) * 100);
+        const st =
+          t.st === "cancel"
+            ? "已取消，已保存结果保留"
+            : h
+              ? t.step + " · 1 篇等待你协助"
+              : t.step;
+        const nx =
+          t.st === "cancel"
+            ? "查看结果"
+            : h
+              ? "查看并协助"
+              : t.st === "queue"
+                ? "查看范围"
+                : "查看进度";
+        return `<div class="trow"><div><button class="tlink" data-go="task" data-t="${t.id}">${E(t.n)}</button> ${ch(t.st, TL[t.st])}<p class="sub">目标：${E(t.goal)}</p></div>
+<div><span class="lbl">当前步骤</span>${E(st)}</div>
+<div><div class="bar" role="img" aria-label="进度 ${d}/${t.tot}"><i style="width:${p}%"></i></div><span class="lbl">${d}/${t.tot} ${c ? "已保存" : "已完成"}</span></div>
+<div><button class="btn ${h ? "amb" : ""}" ${h ? `data-go="art" data-t="${t.id}" data-a="${h[0]}"` : `data-go="task" data-t="${t.id}"`}>${nx}</button></div>
+<div>${t.br && t.st !== "cancel" ? thumb(t) : ""}</div></div>`;
+      }
+      function vHome() {
+        const h = helps();
+        return `<div class="phead"><h1 tabindex="-1">工作台</h1>${strip()}</div><div class="cols"><div>
+<section aria-labelledby="hh"><h2 id="hh">需要你介入</h2>${h.length ? h.map(hc).join("") : '<p class="card sub">当前没有需要介入的事项。Agent 遇到找不到入口、需要登录等情况时会出现在这里。</p>'}</section>
+<section aria-labelledby="ht"><h2 id="ht">活动任务</h2>${
+          T.filter((t) => t.st !== "cancel")
+            .map(row)
+            .join("") || '<p class="sub">没有活动任务。</p>'
+        }</section></div>
+<aside><section class="card"><h2>最近保存 · 合成示例</h2><ul class="llist">${Object.keys(
+          A,
+        )
+          .filter((k) => A[k].pdf)
+          .map(
+            (k) =>
+              `<li><button data-go="lib" data-a="${k}">${E(A[k].t)}</button></li>`,
+          )
+          .join("")}</ul></section>
+<section class="card"><h2>工作方式</h2><p class="sub">查询只搜索本地文献库，不会自动扩库。发现、下载、解析、分析需分别显式发起。</p><button class="btn" data-act="new">新建任务</button></section></aside></div>`;
+      }
+      const vTasks = () =>
+        `<div class="phead"><h1 tabindex="-1">任务</h1>${strip()}</div>${T.map(row).join("")}<p class="sub">任务只保存在本页内存，刷新后重置。</p>`;
+      const tbl = (t) =>
+        t.rows.length
+          ? `<table><thead><tr><th>文章</th><th style="width:84px">状态</th><th class="hm" style="width:36%">说明</th></tr></thead><tbody>${t.rows
+              .map((r) => {
+                const s = rs(r),
+                  on = S.a === r[0];
+                return `<tr class="${on ? "on" : ""}"><td><button class="rb" data-act="sel" data-a="${r[0]}" aria-pressed="${on}">${E(A[r[0]].t)}</button></td><td>${ch(s, SL[s])}</td><td class="hm sub">${E(rt(r))}</td></tr>`;
+              })
+              .join("")}</tbody></table>`
+          : '<p class="sub">任务排队中，尚无文章记录。</p>';
+      function ad(t, r) {
+        const id = r[0],
+          a = A[id],
+          s = rs(r),
+          ss = t.br && SS[id];
+        return `<h2 id="adh" tabindex="-1">文章详情</h2><h3 class="at">${E(a.t)}</h3><p>${ch(s, SL[s])}</p><p class="sub">${E(a.au)}<br>${a.j}<br>DOI ${a.doi}（合成）</p><p><span class="lbl">状态说明</span>${E(rt(r))}${s === "h" ? "。Agent 已暂停这一篇，其余文章继续。" : ""}</p>${ss ? `<p><span class="lbl">Browser 会话（只绑定这一篇）</span>${ss.ctl === "me" ? "你正在控制" : "Agent 控制中"}</p><button class="btn ${s === "h" ? "amb" : "pri"}" data-go="br" data-t="${t.id}" data-a="${id}">在 Browser 中观看与协助</button>` : '<p class="sub">这篇文章没有 Browser 会话。</p>'}<button class="btn" data-go="lib" data-a="${id}">在文献库中查看</button>`;
+      }
+      function vTask() {
+        const t = tk(S.t),
+          c = t.c ? cn(t) : null,
+          r = t.rows.find((x) => x[0] === S.a),
+          cx = t.st === "cancel";
+        return `<button class="back" data-go="tasks">← 返回任务列表</button><div class="phead"><h1 tabindex="-1">${E(t.n)}</h1>${ch(t.st, TL[t.st])}</div>
+<p class="sub">${E(t.goal)} · ${c ? `共 ${t.tot} 篇：${c.s} 已保存 · ${c.p} 处理中 · ${c.q} 排队 · ${c.h} 待协助${c.x ? ` · ${c.x} 已停止` : ""}` : `共 ${t.tot} 项，已完成 ${t.done}`}</p>
+<div class="acts" style="margin:10px 0 16px"><button class="btn" data-go="lib">查看结果</button><button class="btn warn net" data-act="cancel" ${cx ? "disabled" : ""}>${cx ? "已取消" : "取消本任务…"}</button></div>
+<div class="dgrid"><div><section class="card"><h2>范围</h2><p>${E(t.scope)}</p></section><section class="card"><h2>文章</h2>${t.rows.length ? `<p class="note">合成示例 · 仅展示 ${t.tot} 篇中的 ${t.rows.length} 篇，非真实文献</p>` : ""}${tbl(t)}</section><section class="card"><h2>阶段记录</h2><ol class="log">${lg(t.log)}</ol></section></div>
+<aside class="card" id="ad">${r ? ad(t, r) : '<h2 id="adh" tabindex="-1">文章详情</h2><p class="sub">选择一篇文章查看详情；用到 Browser 的文章可从详情进入观看与接管。</p>'}</aside></div>`;
+      }
+      function vBr() {
+        const t = tk(S.t);
+        if (!SS[S.a]) S.a = "a1";
+        const id = S.a,
+          a = A[id],
+          ss = SS[id],
+          s = rs(t.rows.find((x) => x[0] === id)),
+          live = t.st !== "cancel",
+          me = ss.ctl === "me",
+          act = me && live && S.m !== "off";
+        return `<button class="back" data-go="art" data-t="${t.id}" data-a="${id}">← 返回文章详情</button><div class="phead"><h1 tabindex="-1">Browser 观看与接管</h1>${ch(s, SL[s])}</div>
+<p class="scope">作用范围：任务「${E(t.n)}」› 文章「${E(a.t)}」。接管、指导和下载只影响这个会话，不会改动其他文章。</p>
+<div class="bgrid"><div class="frame"><div class="chrome"><span class="url">https://publisher.synthetic.example/articles/${a.doi.slice(-4)}</span>${ch("h", "合成画面 · 非真实站点截图")}</div>
+<div class="page"><div class="pin" ${act ? "" : "inert"}><div><small>JOURNAL OF SYNTHETIC EXAMPLES</small><h3>${E(a.t)}</h3><p>${E(a.au)}</p><p class="sub">${a.j} · DOI ${a.doi}</p><h4>Abstract</h4><p>${E(a.ab)}</p><div class="ln"></div><div class="ln" style="width:92%"></div><div class="ln" style="width:84%"></div><div class="fig">Figure 1 · 合成占位图</div><div class="ln"></div><div class="ln" style="width:70%"></div></div>
+<div class="pside"><details ${a.pdf ? "open" : ""}><summary>Access options</summary><p class="sub">Institutional access · 合成</p><button class="dl net" data-act="dl">${a.pdf ? "PDF 已入库（模拟）" : "Download PDF"}</button></details><p class="sub">Cite · Share · Metrics（静态文字）</p></div></div>
+${act ? "" : `<div class="ov"><span>${!live ? "任务已取消 · 会话已结束" : S.m === "off" ? "连接已断开 · 显示最后同步画面，无法控制" : "Agent 正在操作此页面 · 接管后才能点击"}</span></div>`}</div></div>
+<div class="bside"><section class="card"><h2>会话 · 各自绑定一篇文章</h2><div class="sess">${BRA.map(
+          (k) => {
+            const s2 = rs(t.rows.find((x) => x[0] === k));
+            return `<button data-act="sess" data-a="${k}" ${k === id ? 'aria-current="true"' : ""}><b>${E(sh(k))}</b><span class="lbl">${SS[k].ctl === "me" ? "你在控制" : "Agent 控制"} · ${SL[s2]}</span></button>`;
+          },
+        ).join("")}</div></section>
+<section class="card"><h2>控制</h2><p class="sub">${!live ? "任务已取消，会话已结束；已保存结果仍可查看。" : me ? "你正在控制此页面。展开 Access options 可下载；完成后交还 Agent。" : "Agent 控制中。需要点击页面时请先接管。"}</p>${live ? (me ? '<button class="btn net" data-act="give">交还 Agent</button>' : '<button class="btn amb net" data-act="take">接管此页面</button>') : ""}</section>
+<section class="card"><label class="lh" for="gd">发送指导 · 仅「${E(sh(id))}」</label><textarea id="gd" ${!live ? "disabled" : ""} data-a="${id}" placeholder="例如：PDF 链接在 Access options 菜单里">${E(ss.d)}</textarea><button class="btn net" data-act="send" ${!live ? "disabled" : ""}>发送指导</button></section>
+<section class="card"><h2>本会话记录</h2><ol class="log" id="slog">${lg(ss.log)}</ol></section></div></div>`;
+      }
+      function libList() {
+        const q = S.q.trim().toLowerCase(),
+          ks = Object.keys(A).filter((k) =>
+            (A[k].t + A[k].kw).toLowerCase().includes(q),
+          );
+        return (
+          ks
+            .map(
+              (k) =>
+                `<li><button data-act="pick" data-a="${k}" ${k === S.la ? 'aria-current="true"' : ""}>${E(A[k].t)}<span class="lbl">${A[k].pdf ? "PDF 已在库" : "仅元数据"} · ${E(A[k].kw)}</span></button></li>`,
+            )
+            .join("") ||
+          '<li class="sub">没有匹配的本地文献。要查找新文献，请新建「发现文献」任务。</li>'
+        );
+      }
+      function reader() {
+        const a = A[S.la];
+        return `<h2 id="rh" tabindex="-1">阅读 · 合成示例</h2><h3 class="at">${E(a.t)}</h3><p>${a.pdf ? ch("s", "PDF 已在库" + (a.sim ? "（模拟入库）" : "")) + " " + ch("q", "文章身份未验证") : ch("q", "仅元数据")}</p><p class="sub">${E(a.au)} · ${a.j} · DOI ${a.doi}（合成）</p><p class="lbl">关键词：${E(a.kw)}</p><h2 style="margin-top:12px">摘要</h2><p>${E(a.ab)}</p>
+<div class="pdfph">${a.pdf ? `<p>${ch("h", "PDF 阅读区占位")} <span class="sub">合成示例没有真实 PDF 文件，以下仅为版面示意。</span></p><div class="ln"></div><div class="ln" style="width:90%"></div><div class="ln" style="width:76%"></div><div class="ln" style="width:94%"></div><div class="ln" style="width:58%"></div>` : '<p class="sub">尚无 PDF。文献库不会自动下载；如需获取，请新建「获取 PDF」任务显式发起。</p>'}</div>`;
+      }
+      const vLib = () =>
+        `<div class="phead"><h1 tabindex="-1">文献库</h1><span class="sub">合成示例 · 本地 4 篇 · 不联网</span></div><div class="lgrid"><div><label class="lbl" for="q">搜索本地文献库（不联网，不会自动扩库）</label><input id="q" type="search" value="${E(S.q)}" placeholder="标题或关键词，如 flow、酶催化"><ul class="llist" id="ll">${libList()}</ul></div><section class="card" aria-labelledby="rh">${reader()}</section></div>`;
+      const SET = {
+        src: [
+          "来源",
+          [
+            ["Crossref 元数据", "示例来源", "s1"],
+            ["OpenAlex 元数据", "示例来源", "s2"],
+            [
+              "出版方页面（经 Browser）",
+              "在 Browser 分组管理；仅用于获取 PDF 任务",
+            ],
+            ["arXiv", "未接入（示例）"],
+          ],
+          "检索只读取已开启来源；查询不会自动扩充文献库。",
+        ],
+        mdl: [
+          "模型",
+          [
+            ["Browser 控制模型", "qiuzk/gpt-6-luna · 示例配置，未接入"],
+            ["密钥", "原型不收集密钥；真实部署由本机凭据管理"],
+          ],
+          "",
+          1,
+        ],
+        brw: [
+          "Browser",
+          [
+            ["观看画面", "合成示例画面", "b1"],
+            ["需要协助时置顶提醒", "显示在工作台顶部", "b2"],
+            ["同时会话上限", "2（示例）"],
+          ],
+          "接管和指导只作用于当前会话绑定的文章。",
+        ],
+        prs: [
+          "解析",
+          [
+            ["MinerU 解析服务", "由运维方管理 · 未接入（示例）"],
+            ["输出", "可读文档与证据定位（示例）"],
+          ],
+          "解析需单独发起，下载完成后不会自动开始。",
+          1,
+        ],
+        agt: [
+          "Agent 接入",
+          [
+            ["CLI / MCP 接入", "示例 · 未接入"],
+            ["访问令牌", "原型不生成、不显示令牌"],
+            ["与人类共享文献库", "固定原则：Agent 与你读取同一份知识事实"],
+          ],
+          "",
+        ],
+      };
+      function vSet() {
+        const p = SET[S.st];
+        return `<div class="phead"><h1 tabindex="-1">设置</h1><span class="sub">示例配置 · 修改只保存在本页内存</span></div><div class="sgrid"><div class="stabs" role="group" aria-label="设置分组">${Object.keys(
+          SET,
+        )
+          .map(
+            (k) =>
+              `<button data-act="stab" data-k="${k}" ${k === S.st ? 'aria-current="true"' : ""}>${SET[k][0]}</button>`,
+          )
+          .join("")}</div>
+<section class="card" aria-labelledby="sh"><h2 id="sh">${p[0]}</h2>${p[1].map((r) => `<div class="srow"><div><b>${r[0]}</b><span class="lbl">${E(r[1])}${r[2] ? ` · ${S.sw[r[2]] ? "已开启" : "已关闭"}` : ""}</span></div>${r[2] ? `<button class="sw net" data-act="sw" data-k="${r[2]}" aria-pressed="${!!S.sw[r[2]]}" aria-label="${r[0]}"></button>` : ch("q", r[1].includes("未接入") ? "未接入" : "只读")}</div>`).join("")}${p[2] ? `<p class="sub" style="margin-top:8px">${p[2]}</p>` : ""}${p[3] ? '<button class="btn" data-act="test">测试连接</button>' : ""}</section></div>`;
+      }
+      const V = {
+        home: vHome,
+        tasks: vTasks,
+        task: vTask,
+        br: vBr,
+        lib: vLib,
+        set: vSet,
+      };
+      function render(f) {
+        $("#main").innerHTML = V[S.v]();
+        const nv = { task: "tasks", br: "tasks" }[S.v] || S.v;
+        document
+          .querySelectorAll("nav button")
+          .forEach((b) =>
+            b.dataset.go === nv
+              ? b.setAttribute("aria-current", "page")
+              : b.removeAttribute("aria-current"),
+          );
+        document
+          .querySelectorAll(".seg button")
+          .forEach((b) => b.setAttribute("aria-pressed", b.dataset.m === S.m));
+        document
+          .querySelectorAll(".net")
+          .forEach((b) =>
+            S.m === "off"
+              ? b.setAttribute("aria-disabled", "true")
+              : b.removeAttribute("aria-disabled"),
+          );
+        $("#ban").textContent =
+          S.m === "off"
+            ? "连接已断开（模拟）· 显示 10:42 最后同步的结果。提交、取消、接管、指导、下载和设置修改都不会执行。"
+            : "";
+        if (f !== 0) {
+          const el = $(f || "main h1");
+          if (el) el.focus();
+          if (!f) scrollTo(0, 0);
+        }
+      }
+      function go(v, t, a) {
+        if (t) S.t = t;
+        if (v === "art") {
+          v = "task";
+          S.a = a;
+        } else if (v === "task") S.a = null;
+        if (v === "br") S.a = a;
+        if (v === "lib" && a) S.la = a;
+        S.v = v;
+        render(v === "task" && S.a ? "#adh" : undefined);
+      }
+      let tt, lf;
+      function toast(m) {
+        const el = $("#toast");
+        el.textContent = m;
+        el.classList.add("on");
+        clearTimeout(tt);
+        tt = setTimeout(() => el.classList.remove("on"), 3400);
+      }
+      function openD(d) {
+        lf = document.activeElement;
+        d.querySelectorAll(".err").forEach((e) => (e.textContent = ""));
+        d.showModal();
+      }
+      document.querySelectorAll("dialog").forEach((d) =>
+        d.addEventListener("close", () => {
+          const el = lf && lf.isConnected ? lf : $("main h1");
+          el && el.focus();
+        }),
+      );
+      const ACT = {
+        new: () => openD($("#dlgNew")),
+        sel: (b) => {
+          S.a = b.dataset.a;
+          render("#adh");
+        },
+        cancel: () => {
+          const t = tk(S.t);
+          $("#cTxt").textContent =
+            `将停止「${t.n}」中处理中和排队中的部分。已保存的 ${t.c ? t.c.s : t.done} 项结果保留，可在文献库继续查看。`;
+          openD($("#dlgC"));
+        },
+        cok: () => {
+          const t = tk(S.t);
+          t.st = "cancel";
+          t.rows.forEach((r) => {
+            if ("pqh".includes(r[1])) {
+              r[1] = "x";
+              r[2] = "随任务取消而停止";
+            }
+          });
+          if (t.c) {
+            t.c.x = t.c.p + t.c.q + t.c.h;
+            t.c.p = t.c.q = t.c.h = 0;
+          }
+          t.log.push([now(), "取消", "由你取消；已保存结果保留"]);
+          $("#dlgC").close();
+          render();
+          toast(`已取消「${t.n}」。已保存结果保留，可在文献库查看。`);
+        },
+        sess: (b) => {
+          S.a = b.dataset.a;
+          render(".sess [aria-current]");
+        },
+        take: () => {
+          const s = SS[S.a];
+          s.ctl = "me";
+          s.log.push([now(), "你", "接管页面（模拟）"]);
+          render(".bside .btn");
+          toast(
+            `已接管「${sh(S.a)}」的页面。Agent 在这一篇上暂停，其他会话不受影响。`,
+          );
+        },
+        give: () => {
+          const s = SS[S.a];
+          s.ctl = "ag";
+          s.log.push([now(), "你", "交还 Agent（模拟）"]);
+          s.log.push([now(), "Agent", "重新观察当前页面（模拟）"]);
+          render(".bside .btn");
+          toast(`已把「${sh(S.a)}」交还 Agent。`);
+        },
+        send: () => {
+          const id = S.a,
+            s = SS[id],
+            v = s.d.trim();
+          if (!v) {
+            toast("请先输入指导内容。");
+            $("#gd").focus();
+            return;
+          }
+          s.log.push([now(), "你", v]);
+          s.d = "";
+          render("#gd");
+          toast(`指导已送达「${sh(id)}」的会话（模拟）。`);
+          setTimeout(() => {
+            s.log.push([
+              now(),
+              "Agent",
+              tk("t1").st === "cancel"
+                ? "任务已取消，这条指导已过期。"
+                : "收到（模拟）：只在这一篇文章的页面上执行。",
+            ]);
+            if (S.v === "br" && S.a === id) $("#slog").innerHTML = lg(s.log);
+          }, 1300);
+        },
+        dl: () => {
+          const id = S.a,
+            a = A[id],
+            t = tk(S.t),
+            r = t.rows.find((x) => x[0] === id);
+          if (a.pdf) {
+            toast("PDF 已在库中；已入库文件不会被覆盖。");
+            return;
+          }
+          a.pdf = a.sim = 1;
+          if (r[1] !== "s" && t.c[r[1]] != null) {
+            t.c[r[1]]--;
+            t.c.s++;
+          }
+          r[1] = "s";
+          r[2] = "PDF 已保存（模拟入库）· sha256 7c1e…（合成）";
+          SS[id].log.push([
+            now(),
+            "你",
+            "点击 Download PDF，文件已入库（模拟）",
+          ]);
+          t.log.push([now(), "入库", sh(id) + " PDF 已保存（模拟）"]);
+          render(".bside .btn");
+          toast("PDF 已入库（模拟）：未访问真实站点，也没有真实文件。");
+        },
+        pick: (b) => {
+          S.la = b.dataset.a;
+          render("#rh");
+        },
+        stab: (b) => {
+          S.st = b.dataset.k;
+          render(".stabs [aria-current]");
+        },
+        sw: (b) => {
+          const k = b.dataset.k;
+          S.sw[k] = !S.sw[k];
+          render(`.sw[data-k="${k}"]`);
+          toast(
+            `${b.getAttribute("aria-label")}：已${S.sw[k] ? "开启" : "关闭"}（仅本页内存，未写入配置）`,
+          );
+        },
+        test: () => toast("原型不连接外部服务，状态保持“未接入”。"),
+        mode: (b) => {
+          S.m = b.dataset.m;
+          document.body.classList.toggle("off", S.m === "off");
+          render(0);
+          toast(
+            {
+              run: "评审：运行中。",
+              ok: "评审：正常运行，无需协助。",
+              off: "评审：已断连。已有结果仍可查看，提交与控制不会执行。",
+            }[S.m],
+          );
+        },
+      };
+      document.addEventListener("click", (e) => {
+        const b = e.target.closest("[data-go],[data-act],[data-close]");
+        if (!b) return;
+        if (b.disabled) return;
+        if (
+          ["take", "give", "send", "dl"].includes(b.dataset.act) &&
+          tk(S.t).st === "cancel"
+        ) {
+          toast("当前任务已取消，不能继续控制会话。");
+          return;
+        }
+        if (b.hasAttribute("data-close")) return b.closest("dialog").close();
+        if (b.dataset.go) return go(b.dataset.go, b.dataset.t, b.dataset.a);
+        if (S.m === "off" && b.classList.contains("net")) {
+          const d = b.closest("dialog"),
+            er = d && d.querySelector(".err");
+          if (er) er.textContent = "连接已断开：请求未发送，任务状态不变。";
+          else toast("连接已断开：操作未执行。已有结果仍可查看。");
+          return;
+        }
+        ACT[b.dataset.act](b);
+      });
+      document.addEventListener("input", (e) => {
+        const x = e.target;
+        if (x.id === "q") {
+          S.q = x.value;
+          $("#ll").innerHTML = libList();
+        } else if (x.id === "gd") SS[x.dataset.a].d = x.value;
+      });
+      $("#fNew").addEventListener("submit", (e) => {
+        e.preventDefault();
+        const f = e.target,
+          er = $("#nErr");
+        if (S.m === "off") {
+          er.textContent = "连接已断开：任务未提交。恢复连接后重试。";
+          return;
+        }
+        const n = f.nm.value.trim();
+        if (!n) {
+          er.textContent = "请填写任务名称。";
+          f.nm.focus();
+          return;
+        }
+        const op = f.op.value,
+          sc = f.sc.selectedOptions[0].text;
+        T.push({
+          id: "u" + T.length,
+          n,
+          goal: `${op} · ${sc}`,
+          st: "queue",
+          tot: { lib: 4, q: 24, one: 1 }[f.sc.value],
+          done: 0,
+          step: "排队中，等待开始",
+          scope: `范围：${sc}（示例）。只执行「${op}」，完成后不会自动开始下一阶段。`,
+          log: [[now(), "创建", "由你手动提交（仅内存，刷新后重置）"]],
+          rows: [],
+        });
+        render(0);
+        $("#dlgNew").close();
+        f.reset();
+        toast(`已提交「${n}」，排队中（仅内存，刷新后重置）。`);
+      });
+      render(0);
+    </script>
+  </body>
+</html>
