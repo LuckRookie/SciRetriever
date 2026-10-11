@@ -26,6 +26,42 @@ const record = (doi: string, title: string) => ({
 });
 
 describe("Crossref REST metadata adapter", () => {
+  it("normalizes display whitespace without inventing public access or repairing invalid identifiers", async () => {
+    const options = {
+      observation_id: "00000000-0000-4000-8000-000000000001",
+      provenance_id: "00000000-0000-4000-8000-000000000002",
+      observed_at: "2026-09-11T00:00:00Z",
+    };
+    const input = {
+      ...record("10.1000/whitespace", "Photoredox\n  catalysis"),
+      author: [
+        {
+          given: "Ada\tAugusta",
+          family: "Lovelace",
+          affiliation: [{ name: "Institute\r\n of Chemistry" }],
+        },
+      ],
+      link: [
+        {
+          URL: "https://api.wiley.com/onlinelibrary/tdm/v1/articles/10.1000%2Fwhitespace",
+          "content-type": "application/pdf",
+        },
+      ],
+    };
+    const observation = await parseCrossrefRecord(input, options);
+    expect(observation.metadata.title).toBe("Photoredox catalysis");
+    expect(observation.metadata.authors[0]).toMatchObject({
+      given_name: "Ada Augusta",
+      affiliations: [{ name: "Institute of Chemistry" }],
+    });
+    expect(observation.asset_hints[0]?.access_status).toBe("unknown");
+    await expect(
+      parseCrossrefRecord({ ...input, DOI: "10.1000/bad\nidentity" }, options),
+    ).rejects.toThrow();
+    await expect(
+      parseCrossrefRecord({ ...input, title: ["A\u0000B"] }, options),
+    ).resolves.toMatchObject({ metadata: { title: null } });
+  });
   it("maps Crossref work-list pages into neutral observations", async () => {
     await parseCrossrefRecord(record("10.1000/debug", "Debug"), {
       observation_id: "00000000-0000-4000-8000-000000000001",
@@ -148,3 +184,27 @@ describe("Crossref REST metadata adapter", () => {
     ).resolves.toMatchObject({ outcome: "FAILED", raw_item_count: 0 });
   });
 });
+
+it.each([
+  [2020, null, "from-pub-date:2020-01-01"],
+  [null, 2025, "until-pub-date:2025-12-31"],
+] as const)(
+  "keeps a one-sided Crossref year range open (%s, %s)",
+  async (year_from, year_to, expected) => {
+    const adapter = new CrossrefRestAdapter({
+      transport: {
+        request: async (url) => {
+          expect(new URL(url).searchParams.get("filter")).toBe(expected);
+          return {
+            status: "ok",
+            "message-type": "work-list",
+            message: { items: [] },
+          };
+        },
+      },
+    });
+    await adapter
+      .open_topic_search({ query: "chemistry", year_from, year_to })
+      .pull_raw_item();
+  },
+);

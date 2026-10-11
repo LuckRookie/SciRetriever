@@ -1,6 +1,6 @@
+import { parseProviderObservation } from "../shared/metadata-values.js";
 import {
   canonicalJsonBytes,
-  parseMetadataObservation,
   sha256,
   type MetadataObservation,
   type ProviderLiteratureKey,
@@ -30,7 +30,7 @@ export interface EuropePmcAdapterOptions {
   readonly clock?: () => string;
 }
 type RelationEnvelope = {
-  readonly item: Record<string, unknown>;
+  readonly item: unknown;
   readonly task: {
     readonly key: ProviderLiteratureKey;
     readonly source: string;
@@ -116,8 +116,8 @@ function relationKey(
   const source = stringValue(record.source);
   const recordId = stringValue(record.id);
   const identifiers = [
-    id(record.pmid, "pmid"),
-    id(record.pmcid, "pmcid"),
+    id(record.pmid ?? (source === "MED" ? recordId : null), "pmid"),
+    id(record.pmcid ?? (source === "PMC" ? recordId : null), "pmcid"),
     id(record.doi, "doi"),
   ].filter(
     (item): item is { namespace: string; value: string } => item !== null,
@@ -137,22 +137,6 @@ function relationKey(
   }
   return identifiers.length ? { record_id: null, identifiers } : null;
 }
-function inlinePublicationYear(value: unknown): number | null {
-  if (value === null || value === undefined) return null;
-  if (
-    typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value >= 1 &&
-    value <= 9999
-  )
-    return value;
-  const normalized = stringValue(value);
-  if (normalized && /^[0-9]{4}$/u.test(normalized)) {
-    const year = Number(normalized);
-    if (year >= 1 && year <= 9999) return year;
-  }
-  throw new Error("Europe PMC relation publication year is invalid");
-}
 function relationObservation(
   record: Record<string, unknown>,
   options: {
@@ -162,7 +146,7 @@ function relationObservation(
     readonly referenceText?: string;
   },
 ): MetadataObservation {
-  return parseMetadataObservation({
+  return parseProviderObservation({
     observation_id: options.observationId,
     provenance: options.provenance,
     metadata: {
@@ -172,9 +156,7 @@ function relationObservation(
       abstract: null,
       publication_date: null,
       publication_year:
-        options.referenceText === undefined
-          ? inlinePublicationYear(record.pubYear)
-          : null,
+        options.referenceText === undefined ? record.pubYear : null,
       document_type: null,
       language: null,
       venue:
@@ -204,7 +186,7 @@ function relationObservation(
   });
 }
 function parsePage(value: unknown): {
-  readonly items: readonly Record<string, unknown>[];
+  readonly items: readonly unknown[];
   readonly next: string | null;
 } {
   const root = object(value, "Europe PMC response is invalid");
@@ -212,7 +194,9 @@ function parsePage(value: unknown): {
     root.resultList,
     "Europe PMC result list is invalid",
   );
-  const result = list(resultList.result);
+  if (!Array.isArray(resultList.result))
+    throw new Error("Europe PMC results are invalid");
+  const result = resultList.result;
   const next = root.nextCursorMark;
   if (next !== undefined && next !== null && typeof next !== "string")
     throw new Error("Europe PMC cursor is invalid");
@@ -224,10 +208,10 @@ function parsePage(value: unknown): {
 function parseRelationPage(
   root: Record<string, unknown>,
   kind: "references" | "citations",
-  expectedOffset: number,
+  pageNumber: number,
   maximumItems: number,
 ): {
-  readonly items: readonly Record<string, unknown>[];
+  readonly items: readonly unknown[];
   readonly total: number;
 } {
   if (!Number.isSafeInteger(root.hitCount) || (root.hitCount as number) < 0)
@@ -239,12 +223,7 @@ function parseRelationPage(
   const value = container[kind === "references" ? "reference" : "citation"];
   if (!Array.isArray(value))
     throw new Error("Europe PMC relation items are invalid");
-  if (
-    value.length > maximumItems ||
-    value.some(
-      (item) => !item || typeof item !== "object" || Array.isArray(item),
-    )
-  )
+  if (value.length > maximumItems)
     throw new Error("Europe PMC relation page is invalid");
   const request = object(
     root.request,
@@ -253,11 +232,12 @@ function parseRelationPage(
   if (
     request.offSet !== null &&
     request.offSet !== undefined &&
-    (!Number.isSafeInteger(request.offSet) || request.offSet !== expectedOffset)
+    (!Number.isSafeInteger(request.offSet) ||
+      request.offSet !== (kind === "references" ? pageNumber : pageNumber - 1))
   )
     throw new Error("Europe PMC relation offset changed");
   return {
-    items: value as readonly Record<string, unknown>[],
+    items: value,
     total: root.hitCount as number,
   };
 }
@@ -340,7 +320,7 @@ function observationFromRecord(
         ]
       : [];
   });
-  const yearValue = Number.parseInt(stringValue(record.pubYear) ?? "", 10);
+
   const keywordList =
     record.keywordList &&
     typeof record.keywordList === "object" &&
@@ -355,11 +335,15 @@ function observationFromRecord(
         : []
   ).flatMap((item) => {
     const value = stringValue(
-      typeof item === "string" ? item : (item as Record<string, unknown>).value,
+      typeof item === "string"
+        ? item
+        : item && typeof item === "object" && !Array.isArray(item)
+          ? (item as Record<string, unknown>).value
+          : null,
     );
     return value ? [value] : [];
   });
-  return parseMetadataObservation({
+  return parseProviderObservation({
     observation_id: options.observationId,
     provenance: {
       provenance_id: options.provenanceId,
@@ -375,8 +359,7 @@ function observationFromRecord(
       authors,
       abstract: stringValue(record.abstractText),
       publication_date: stringValue(record.firstPublicationDate),
-      publication_year:
-        Number.isSafeInteger(yearValue) && yearValue > 0 ? yearValue : null,
+      publication_year: record.pubYear,
       document_type: stringValue(record.pubType),
       language: stringValue(record.language),
       venue: stringValue(record.journalTitle),
@@ -392,11 +375,7 @@ function observationFromRecord(
     declared_keywords: keywords,
     reference_texts: [],
     reference_count: null,
-    cited_by_count:
-      typeof record.citedByCount === "number" &&
-      Number.isSafeInteger(record.citedByCount)
-        ? record.citedByCount
-        : null,
+    cited_by_count: record.citedByCount,
     asset_hints: hints,
   });
 }
@@ -426,19 +405,41 @@ export class EuropePmcRestAdapter
     this.clock = options.clock ?? (() => new Date().toISOString());
   }
   open_topic_search(query: TopicSearchQuery): RawItemSession {
-    return this.session(query.query, {
-      year_from: query.year_from,
-      year_to: query.year_to,
-    });
+    const bounded = query.year_from !== null || query.year_to !== null;
+    return this.session(
+      bounded
+        ? `(${query.query}) AND PUB_YEAR:[${query.year_from ?? 1} TO ${query.year_to ?? 9999}]`
+        : query.query,
+      {},
+    );
   }
   open_lookup(key: ProviderLiteratureKey): RawItemSession {
-    const value =
-      key.record_id ??
-      key.identifiers.find((item) =>
-        ["pmid", "pmcid", "doi"].includes(item.namespace),
-      )?.value;
-    if (!value) throw new TypeError("Europe PMC lookup key is empty");
-    return this.session(`EXT_ID:${value}`, {});
+    const literal = (value: string) =>
+      `"${value.replace(/([\\"])/gu, "\\$1")}"`;
+    if (key.record_id) {
+      const match = /^([A-Z][A-Z0-9_-]*):(.+)$/iu.exec(key.record_id);
+      return this.session(
+        match
+          ? `EXT_ID:${literal(match[2]!)} AND SRC:${match[1]!.toUpperCase()}`
+          : /^PMC\d+$/iu.test(key.record_id)
+            ? `PMCID:${literal(key.record_id)}`
+            : `EXT_ID:${literal(key.record_id)} AND SRC:MED`,
+        {},
+      );
+    }
+    const identifier = key.identifiers.find((item) =>
+      ["pmid", "pmcid", "doi"].includes(item.namespace),
+    );
+    if (identifier) {
+      const field = { pmid: "EXT_ID", pmcid: "PMCID", doi: "DOI" }[
+        identifier.namespace as "pmid" | "pmcid" | "doi"
+      ];
+      return this.session(
+        `${field}:${literal(identifier.value)}${identifier.namespace === "pmid" ? " AND SRC:MED" : ""}`,
+        {},
+      );
+    }
+    throw new TypeError("Europe PMC lookup key is empty");
   }
   open_reference_query(query: ReferenceQueryContext): RawItemSession {
     if (!query.keys.length)
@@ -452,7 +453,7 @@ export class EuropePmcRestAdapter
       if (!value) return [];
       const [source, id] = value.includes(":")
         ? value.split(":", 2)
-        : ["MED", value];
+        : [/^PMC\d+$/iu.test(value) ? "PMC" : "MED", value];
       const kinds: readonly ("references" | "citations")[] =
         query.direction === "references"
           ? ["references"]
@@ -460,7 +461,7 @@ export class EuropePmcRestAdapter
             ? ["citations"]
             : ["references", "citations"];
       const current = {
-        record_id: `${source!.toUpperCase()}:${id!}`,
+        record_id: key.record_id ?? `${source!.toUpperCase()}:${id!}`,
         identifiers: key.identifiers,
       };
       return kinds.map((kind) => ({
@@ -493,15 +494,18 @@ export class EuropePmcRestAdapter
           );
           url.searchParams.set("format", "json");
           url.searchParams.set("pageSize", String(this.size));
-          url.searchParams.set(
-            "page",
-            String(Math.floor(offset / this.size) + 1),
-          );
+          const pageNumber = Math.floor(offset / this.size) + 1;
+          url.searchParams.set("page", String(pageNumber));
           const root = object(
             await this.options.transport.request(url.toString()),
             "Europe PMC reference response is invalid",
           );
-          const page = parseRelationPage(root, task.kind, offset, this.size);
+          const page = parseRelationPage(
+            root,
+            task.kind,
+            pageNumber,
+            this.size,
+          );
           const values = page.items;
           if (!values.length) {
             if (offset < page.total)
@@ -572,21 +576,21 @@ export class EuropePmcRestAdapter
 
         const target = relationKey(item);
         if (!target) return { observations, relations: [] };
-        const relatedProvenance = target.record_id
-          ? {
-              ...currentProvenance,
-              provenance_id:
-                (await this.provenanceId()) as MetadataObservation["provenance"]["provenance_id"],
-              source_record_id: target.record_id,
-            }
-          : currentProvenance;
-        observations.push(
-          relationObservation(item, {
-            observationId: await this.observationId(),
-            provenance: relatedProvenance,
-            identifiers: target.identifiers,
-          }),
-        );
+        if (target.record_id !== null) {
+          const relatedProvenance = {
+            ...currentProvenance,
+            provenance_id:
+              (await this.provenanceId()) as MetadataObservation["provenance"]["provenance_id"],
+            source_record_id: target.record_id,
+          };
+          observations.push(
+            relationObservation(item, {
+              observationId: await this.observationId(),
+              provenance: relatedProvenance,
+              identifiers: target.identifiers,
+            }),
+          );
+        }
         const outgoing = task.kind === "references";
         const relation: ProviderRelationObservation = {
           observation_id: await this.observationId(),
@@ -608,7 +612,7 @@ export class EuropePmcRestAdapter
     extra: Readonly<Record<string, number | null>>,
   ): RawItemSession {
     let cursor: string | null = "*";
-    let items: readonly Record<string, unknown>[] = [];
+    let items: readonly unknown[] = [];
     let index = 0;
     let exhausted = false;
     let fetched = false;

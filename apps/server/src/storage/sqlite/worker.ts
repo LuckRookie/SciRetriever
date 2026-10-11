@@ -97,6 +97,7 @@ import {
   type LiteratureCurrentFacts,
   parseLiteratureSearchItem,
   parseReferenceDetail,
+  parseReference,
   type ReferenceDetail,
   type LiteratureSearchItem,
   sha256,
@@ -601,6 +602,11 @@ export type SqliteCommand =
     }
   | { readonly kind: "get_literature_content"; readonly literatureId: string }
   | { readonly kind: "put_reference"; readonly reference: Reference }
+  | {
+      readonly kind: "publish_provider_reference";
+      readonly reference: Reference;
+      readonly observationId: string;
+    }
   | {
       readonly kind: "put_provider_relation";
       readonly observation: ProviderRelationObservation;
@@ -2379,6 +2385,18 @@ export class SqliteWorker {
   }
   putReference(reference: Reference): Promise<boolean> {
     return this.run({ kind: "put_reference", reference });
+  }
+  async publishProviderReference(
+    reference: Reference,
+    observationId: string,
+  ): Promise<Reference> {
+    return parseReference(
+      await this.run({
+        kind: "publish_provider_reference",
+        reference: parseReference(reference),
+        observationId,
+      }),
+    );
   }
   putProviderRelation(
     observation: ProviderRelationObservation,

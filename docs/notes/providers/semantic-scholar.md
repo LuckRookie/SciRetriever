@@ -1,5 +1,7 @@
 # Semantic Scholar
 
+> 2026-10-10 TypeScript 修复复验：references/citations 的 fields 使用 paper 字段名，不同时发送 citedPaper.* / citingPaper.*。同一原始关系交付的内嵌 observation 与关系使用一致 provenance；共享一个 provenance ID 时其输入/参数 hash 也必须一致。 证据见[修复验证记录](../live-discovery-acquisition-fixes-2026-10-10.md)。下文较早日期的探测只代表当时状态。
+
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
 - 当前选择键：Metadata `semantic-scholar`；Acquisition `semantic-scholar`；引用是 Metadata 的可选能力，不存在第三类 citation 选择键

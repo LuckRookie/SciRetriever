@@ -4172,9 +4172,19 @@ function getProviderRelation(id: Dynamic): Dynamic {
 function putProviderReferenceSupport(
   referenceId: Dynamic,
   observationId: Dynamic,
+  reference?: Dynamic,
 ): Dynamic {
   try {
     db.exec("BEGIN IMMEDIATE");
+    if (reference) {
+      const existing = db
+        .prepare(
+          "SELECT reference_id FROM literature_references WHERE source_literature_id=? AND target_literature_id=?",
+        )
+        .get(reference.source_literature_id, reference.target_literature_id);
+      if (existing) referenceId = existing.reference_id;
+      else putReference(reference);
+    }
     const edge = db
       .prepare(
         "SELECT reference_id,source_literature_id,target_literature_id FROM literature_references WHERE reference_id=?",
@@ -4182,6 +4192,12 @@ function putProviderReferenceSupport(
       .get(referenceId);
     const observation = getProviderRelation(observationId);
     if (!edge || !observation) fail();
+    if (
+      reference &&
+      (edge.source_literature_id !== reference.source_literature_id ||
+        edge.target_literature_id !== reference.target_literature_id)
+    )
+      fail();
     const matches = (id: Dynamic, endpoint: Dynamic) =>
       endpoint.identifiers.some((identifier: Dynamic) =>
         db
@@ -4205,7 +4221,7 @@ function putProviderReferenceSupport(
       "INSERT INTO provider_relation_reference_supports(reference_id,observation_id) VALUES(?,?) ON CONFLICT DO NOTHING",
     ).run(referenceId, observationId);
     db.exec("COMMIT");
-    return true;
+    return reference ? edge : true;
   } catch (e) {
     try {
       db.exec("ROLLBACK");
@@ -5745,6 +5761,13 @@ port.on("message", (message: WorkerMessage) => {
         break;
       case "put_reference":
         value = putReference(message.command.reference);
+        break;
+      case "publish_provider_reference":
+        value = putProviderReferenceSupport(
+          message.command.reference.reference_id,
+          message.command.observationId,
+          message.command.reference,
+        );
         break;
       case "put_provider_relation":
         value = putProviderRelation(message.command.observation);

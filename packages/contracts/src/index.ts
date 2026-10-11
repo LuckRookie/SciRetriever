@@ -783,9 +783,9 @@ export function parseIdentifier(value: unknown): Identifier {
   }
   return Object.freeze({ namespace, value: identifier });
 }
-function parseAffiliation(
+export function parseAffiliation(
   value: unknown,
-  path: readonly string[],
+  path: readonly string[] = [],
 ): Affiliation {
   const record = exact(value, ["name", "ror"], path);
   const ror = nullableText(record.ror, [...path, "ror"]);
@@ -796,7 +796,10 @@ function parseAffiliation(
     ror: ror?.toLowerCase() ?? null,
   });
 }
-function parseAuthor(value: unknown, path: readonly string[]): Author {
+export function parseAuthor(
+  value: unknown,
+  path: readonly string[] = [],
+): Author {
   const record = exact(
     value,
     [
@@ -2827,6 +2830,38 @@ function observationText(value: unknown): string {
     fail();
   return value.trim().normalize("NFC");
 }
+export function parseAssetHint(value: unknown): AssetHint {
+  const h = exact(
+    value,
+    [
+      "url",
+      "kind",
+      "media_type",
+      "asset_role",
+      "version_role",
+      "access_status",
+      "license",
+    ],
+    [],
+  );
+  return Object.freeze({
+    url: publicSourceUrl(h.url),
+    kind: enumeration<AssetHint["kind"]>(
+      h.kind,
+      ["direct-file", "landing-page"],
+      [],
+    ),
+    media_type: nullableText(h.media_type, []),
+    asset_role:
+      h.asset_role === null ? null : enumeration(h.asset_role, assetRoles, []),
+    version_role:
+      h.version_role === null
+        ? null
+        : enumeration(h.version_role, versionRoles, []),
+    access_status: nullableText(h.access_status, []),
+    license: nullableText(h.license, []),
+  });
+}
 export function parseMetadataObservation(value: unknown): MetadataObservation {
   const r = exact(
     value,
@@ -2871,40 +2906,7 @@ export function parseMetadataObservation(value: unknown): MetadataObservation {
     }),
   );
   const asset_hints = Object.freeze(
-    array(r.asset_hints, []).map((value) => {
-      const h = exact(
-        value,
-        [
-          "url",
-          "kind",
-          "media_type",
-          "asset_role",
-          "version_role",
-          "access_status",
-          "license",
-        ],
-        [],
-      );
-      return Object.freeze({
-        url: publicSourceUrl(h.url),
-        kind: enumeration<AssetHint["kind"]>(
-          h.kind,
-          ["direct-file", "landing-page"],
-          [],
-        ),
-        media_type: nullableText(h.media_type, []),
-        asset_role:
-          h.asset_role === null
-            ? null
-            : enumeration(h.asset_role, assetRoles, []),
-        version_role:
-          h.version_role === null
-            ? null
-            : enumeration(h.version_role, versionRoles, []),
-        access_status: nullableText(h.access_status, []),
-        license: nullableText(h.license, []),
-      });
-    }),
+    array(r.asset_hints, []).map(parseAssetHint),
   );
   return Object.freeze({
     observation_id: text(r.observation_id, [], true),

@@ -24,6 +24,12 @@ describe("metadata citation relation adapters", () => {
       transport: {
         async request(url) {
           const parsed = new URL(url);
+          expect(parsed.searchParams.get("fields")?.split(",")).toContain(
+            "externalIds",
+          );
+          expect(parsed.searchParams.get("fields")).not.toMatch(
+            /citedPaper\.|citingPaper\./u,
+          );
           if (parsed.pathname.endsWith("/references"))
             return {
               offset: 0,
@@ -48,6 +54,9 @@ describe("metadata citation relation adapters", () => {
     );
     expect(result.outcome).toBe("EXHAUSTED");
     expect(result.relations).toHaveLength(2);
+    expect(result.observations[0]?.provenance).toEqual(
+      result.relations[0]?.provenance,
+    );
     expect(result.relations[0]?.citing.record_id).toBe("P1");
     expect(result.relations[0]?.cited.record_id).toBe("P2");
     expect(result.relations[1]?.citing.record_id).toBe("P3");
@@ -65,7 +74,7 @@ describe("metadata citation relation adapters", () => {
           return parsed.pathname.endsWith("/references")
             ? {
                 hitCount: 1,
-                request: { offSet: 0 },
+                request: { offSet: 1 },
                 referenceList: {
                   reference: [
                     {
@@ -132,6 +141,7 @@ describe("metadata citation relation adapters", () => {
     });
     expect(result.observations[2]?.reference_texts).toEqual([]);
     expect(result.observations[2]?.metadata.identifiers).toEqual([
+      { namespace: "pmid", value: "3" },
       { namespace: "doi", value: "10.1000/c" },
     ]);
   });
@@ -145,7 +155,7 @@ describe("metadata citation relation adapters", () => {
         async request() {
           return {
             hitCount: 1,
-            request: { offSet: 0 },
+            request: { offSet: 1 },
             referenceList: {
               reference: [
                 {
@@ -322,10 +332,9 @@ describe("metadata citation relation adapters", () => {
         async request(url) {
           calls.push(url);
           const page = Number(new URL(url).searchParams.get("page"));
-          const offset = page - 1;
           return {
             hitCount: 2,
-            request: { offSet: offset },
+            request: { offSet: page },
             referenceList: {
               reference: [
                 {
@@ -362,7 +371,7 @@ describe("metadata citation relation adapters", () => {
         async request() {
           return {
             hitCount: 1,
-            request: { offSet: 0 },
+            request: { offSet: 1 },
             referenceList: { reference: [] },
           };
         },
@@ -378,4 +387,46 @@ describe("metadata citation relation adapters", () => {
     );
     expect(failed.outcome).toBe("FAILED");
   });
+});
+
+it("preserves DOI-only references for lookup without inventing a target provider record, and accepts missing inline years", async () => {
+  const adapter = new EuropePmcRestAdapter({
+    transport: {
+      request: async () => ({
+        hitCount: 2,
+        request: { offSet: 1 },
+        referenceList: {
+          reference: [
+            {
+              doi: "10.1000/related",
+              pubYear: "",
+              unstructuredInformation: "Related work without a year",
+            },
+            { id: "2", source: "MED", pubYear: "", title: "Related work" },
+          ],
+        },
+      }),
+    },
+  });
+  const result = await new MetadataService({
+    reference_query_ports: [adapter],
+  }).queryReferencesProvider(
+    { direction: "references", providers: [] },
+    "europe-pmc",
+    [{ record_id: "MED:1", identifiers: [{ namespace: "pmid", value: "1" }] }],
+    5,
+  );
+  expect(result.outcome).toBe("EXHAUSTED");
+  expect(result.observations).toHaveLength(2);
+  expect(result.relations[0]!.cited).toEqual({
+    record_id: null,
+    identifiers: [{ namespace: "doi", value: "10.1000/related" }],
+  });
+  expect(result.observations[1]).toMatchObject({
+    provenance: { source_record_id: "MED:2" },
+    metadata: { publication_year: null },
+  });
+  expect(result.observations[1]!.provenance.provenance_id).not.toBe(
+    result.relations[1]!.provenance.provenance_id,
+  );
 });

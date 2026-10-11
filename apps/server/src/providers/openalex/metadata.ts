@@ -1,6 +1,6 @@
+import { parseProviderObservation } from "../shared/metadata-values.js";
 import {
   canonicalJsonBytes,
-  parseMetadataObservation,
   sha256,
   type MetadataObservation,
   type ProviderLiteratureKey,
@@ -67,11 +67,11 @@ function page(
   value: unknown,
   lookup: boolean,
 ): {
-  readonly items: readonly Record<string, unknown>[];
+  readonly items: readonly unknown[];
   readonly next: string | null;
 } {
   const root = object(value, "OpenAlex response is invalid");
-  if (lookup) return { items: root.id ? [root] : [], next: null };
+  if (lookup) return { items: [root], next: null };
   if (!Array.isArray(root.results))
     throw new Error("OpenAlex results are invalid");
   const meta = object(root.meta, "OpenAlex page metadata is invalid");
@@ -83,14 +83,8 @@ function page(
     throw new Error("OpenAlex next cursor is invalid");
   const nextCursor = text(meta.next_cursor);
   const next = nextCursor ? `cursor:${nextCursor}` : null;
-  if (
-    root.results.some(
-      (item) => !item || typeof item !== "object" || Array.isArray(item),
-    )
-  )
-    throw new Error("OpenAlex result item is invalid");
   return {
-    items: root.results as readonly Record<string, unknown>[],
+    items: root.results,
     next,
   };
 }
@@ -167,11 +161,8 @@ function observation(
       : {};
   const location = bestLocation.pdf_url ?? oa.oa_url;
   const pdf = safeUrl(location);
-  const yearValue =
-    typeof record.publication_year === "number"
-      ? record.publication_year
-      : Number.parseInt(text(record.publication_year) ?? "", 10);
-  return parseMetadataObservation({
+
+  return parseProviderObservation({
     observation_id: options.observationId,
     provenance: {
       provenance_id: options.provenanceId,
@@ -187,8 +178,7 @@ function observation(
       authors,
       abstract: null,
       publication_date: text(record.publication_date),
-      publication_year:
-        Number.isSafeInteger(yearValue) && yearValue > 0 ? yearValue : null,
+      publication_year: record.publication_year,
       document_type: text(record.type),
       language: text(record.language),
       venue: text(source.display_name),
@@ -211,11 +201,7 @@ function observation(
     reference_count: Array.isArray(record.referenced_works)
       ? record.referenced_works.length
       : null,
-    cited_by_count:
-      typeof record.cited_by_count === "number" &&
-      Number.isSafeInteger(record.cited_by_count)
-        ? record.cited_by_count
-        : null,
+    cited_by_count: record.cited_by_count,
     asset_hints: pdf
       ? [
           {
@@ -316,7 +302,7 @@ type ReferenceTask = {
   readonly work_id: string | null;
 };
 type RawReference = {
-  readonly record: Record<string, unknown>;
+  readonly record: unknown;
   readonly task: ReferenceTask;
 };
 
@@ -517,7 +503,7 @@ export class OpenAlexRestAdapter
   }
   private session(lookup: boolean, value: string): RawItemSession {
     let next: string | null = null;
-    let items: readonly Record<string, unknown>[] = [];
+    let items: readonly unknown[] = [];
     let index = 0;
     let exhausted = false;
     let fetched = false;

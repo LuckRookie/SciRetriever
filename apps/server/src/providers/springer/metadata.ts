@@ -1,3 +1,4 @@
+import { metadataInteger } from "../shared/metadata-values.js";
 import type { ProviderLiteratureKey } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
 import type {
@@ -14,6 +15,7 @@ import {
   origin,
   pageSize,
   records,
+  rawItems,
   requestWithHeaders,
   safeUrl,
   text,
@@ -35,26 +37,30 @@ export interface SpringerAdapterOptions {
 }
 
 function page(value: unknown): {
-  items: readonly Record<string, unknown>[];
+  items: readonly unknown[];
   total: number;
   start: number;
   length: number;
 } {
   const root = object(value, "Springer response is invalid");
-  const meta = records(root.result)[0] ?? {};
-  const total = Number(text(meta.total) ?? 0);
-  const start = Number(text(meta.start) ?? 1);
-  const length = Number(text(meta.pageLength) ?? records(root.records).length);
+  const meta = object(
+    rawItems(root.result)[0],
+    "Springer page metadata is invalid",
+  );
+  const total = metadataInteger(meta.total);
+  const start = metadataInteger(meta.start);
+  const length = metadataInteger(meta.pageLength);
   if (
-    !Number.isSafeInteger(total) ||
+    total === null ||
     total < 0 ||
-    !Number.isSafeInteger(start) ||
+    start === null ||
     start < 1 ||
-    !Number.isSafeInteger(length) ||
-    length < 1
+    length === null ||
+    length < 0 ||
+    (total > 0 && length === 0)
   )
     throw new Error("Springer response page is invalid");
-  return { items: records(root.records), total, start, length };
+  return { items: rawItems(root.records), total, start, length };
 }
 function recordIdentifiers(
   record: Record<string, unknown>,
@@ -100,7 +106,7 @@ export class SpringerRestAdapter
     expected: ProviderLiteratureKey | null,
   ): RawItemSession {
     let start = 1;
-    let items: readonly Record<string, unknown>[] = [];
+    let items: readonly unknown[] = [];
     let index = 0;
     let exhausted = false;
     let fetched = false;
@@ -125,6 +131,8 @@ export class SpringerRestAdapter
             this.requestHeaders,
           ),
         );
+        if (!result.items.length && start <= result.total)
+          throw new Error("Springer page is unexpectedly empty");
         if (fetched && result.start !== start)
           throw new Error("Springer pagination made no progress");
         fetched = true;

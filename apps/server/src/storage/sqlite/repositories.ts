@@ -205,6 +205,12 @@ export class ReferenceRepository {
   publish(reference: Reference): Promise<boolean> {
     return this.worker.putReference(reference);
   }
+  publishWithProviderObservation(
+    reference: Reference,
+    observationId: string,
+  ): Promise<Reference> {
+    return this.worker.publishProviderReference(reference, observationId);
+  }
   supportWithProviderObservation(
     referenceId: string,
     observationId: string,

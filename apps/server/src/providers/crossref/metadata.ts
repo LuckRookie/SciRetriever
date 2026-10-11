@@ -241,9 +241,14 @@ export class CrossrefRestAdapter
 
   private yearFilter(query: TopicSearchQuery): string | null {
     if (query.year_from === null && query.year_to === null) return null;
-    const from = query.year_from ?? query.year_to!;
-    const to = query.year_to ?? query.year_from!;
-    return `from-pub-date:${from}-01-01,until-pub-date:${to}-12-31`;
+    return [
+      ...(query.year_from === null
+        ? []
+        : [`from-pub-date:${query.year_from}-01-01`]),
+      ...(query.year_to === null
+        ? []
+        : [`until-pub-date:${query.year_to}-12-31`]),
+    ].join(",");
   }
 }
 

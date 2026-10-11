@@ -1,6 +1,10 @@
 import {
+  parseProviderObservation,
+  metadataDate,
+} from "../shared/metadata-values.js";
+import {
   canonicalJsonBytes,
-  parseMetadataObservation,
+  parseIdentifier,
   parseProvenance,
   sha256,
   type MetadataObservation,
@@ -30,13 +34,6 @@ export interface OpenCitationsAdapterOptions {
 }
 const text = (value: unknown): string | null =>
   typeof value === "string" && value.trim() ? value.trim() : null;
-const array = (value: unknown): readonly Record<string, unknown>[] =>
-  Array.isArray(value)
-    ? value.filter(
-        (item): item is Record<string, unknown> =>
-          !!item && typeof item === "object" && !Array.isArray(item),
-      )
-    : [];
 const doiValue = (value: unknown): string | null =>
   text(value)
     ?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//iu, "")
@@ -68,7 +65,7 @@ function endpoint(value: unknown): {
   const doi = doiValue(value);
   return {
     record_id: doi,
-    identifiers: doi ? [{ namespace: "doi", value: doi }] : [],
+    identifiers: doi ? [parseIdentifier({ namespace: "doi", value: doi })] : [],
   };
 }
 function relation(
@@ -115,11 +112,8 @@ function observation(
 ): MetadataObservation {
   const doi = doiValue(record.doi ?? record.id);
   if (!doi) throw new Error("OpenCitations metadata identity is missing");
-  const yearValue = Number.parseInt(
-    text(record.pub_date)?.slice(0, 4) ?? "",
-    10,
-  );
-  return parseMetadataObservation({
+
+  return parseProviderObservation({
     observation_id: options.observationId,
     provenance: {
       provenance_id: options.provenanceId,
@@ -135,8 +129,7 @@ function observation(
       authors: authors(record.author),
       abstract: null,
       publication_date: text(record.pub_date),
-      publication_year:
-        Number.isSafeInteger(yearValue) && yearValue > 0 ? yearValue : null,
+      publication_year: metadataDate(record.pub_date)?.slice(0, 4) ?? null,
       document_type: text(record.type),
       language: null,
       venue: text(record.venue),
@@ -195,26 +188,38 @@ export class OpenCitationsRestAdapter
     return this.session("index", doiValue(value) ?? value);
   }
   private session(kind: "meta" | "index", value: string): RawItemSession {
-    let delivered = false;
+    let items: readonly unknown[] | null = null;
+    let index = 0;
     return {
       pull_raw_item: async () => {
-        if (delivered) return null;
-        delivered = true;
-        const url = new URL(
-          `${this.origin.toString().replace(/\/$/u, "")}/${kind === "meta" ? "meta/v1" : "index/v2"}/${encodeURIComponent(value)}`,
-        );
-        const response = await this.options.transport.request(url.toString());
-        const records = array(response);
-        if (!records.length) return null;
-        return { raw_item: records, source_exhausted_after: true };
+        if (items === null) {
+          const url = new URL(
+            `${this.origin.toString().replace(/\/$/u, "")}/${kind === "meta" ? "meta/v1" : "index/v2"}/${encodeURIComponent(value)}`,
+          );
+          const response = await this.options.transport.request(url.toString());
+          if (!Array.isArray(response))
+            throw new Error("OpenCitations response is invalid");
+          items = response;
+        }
+        if (index >= items.length) return null;
+        return {
+          raw_item: items[index++]!,
+          source_exhausted_after: index === items.length,
+        };
       },
       convert_raw_item: async (raw_item): Promise<NeutralMetadataItem> => {
-        const records = array(raw_item);
+        if (
+          !raw_item ||
+          typeof raw_item !== "object" ||
+          Array.isArray(raw_item)
+        )
+          throw new Error("OpenCitations record is invalid");
+        const record = raw_item as Record<string, unknown>;
         const inputSha256 = await sha256(canonicalJsonBytes(raw_item));
         if (kind === "meta")
           return {
             observations: [
-              observation(records[0]!, {
+              observation(record, {
                 observationId: await this.observationId(),
                 provenanceId: await this.provenanceId(),
                 observedAt: this.clock(),
@@ -223,16 +228,14 @@ export class OpenCitationsRestAdapter
             ],
             relations: [],
           };
-        const relations = await Promise.all(
-          records.map(async (record) =>
-            relation(record, {
-              observationId: await this.observationId(),
-              provenanceId: await this.provenanceId(),
-              observedAt: this.clock(),
-              inputSha256,
-            }),
-          ),
-        );
+        const relations = [
+          relation(record, {
+            observationId: await this.observationId(),
+            provenanceId: await this.provenanceId(),
+            observedAt: this.clock(),
+            inputSha256,
+          }),
+        ];
         return { observations: [], relations };
       },
     };

@@ -1,6 +1,9 @@
 import {
+  parseProviderObservation,
+  metadataDateParts,
+} from "../shared/metadata-values.js";
+import {
   canonicalJsonBytes,
-  parseMetadataObservation,
   sha256,
   type MetadataObservation,
 } from "@sciretriever/contracts";
@@ -17,9 +20,12 @@ export async function parseCrossrefRecord(
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("invalid Crossref record");
   const record = value as Record<string, unknown>;
+  const displayText = (value: unknown): string | null =>
+    typeof value === "string"
+      ? value.replace(/\s+/gu, " ").trim() || null
+      : null;
   const text = (key: string): string | null => {
-    const item = record[key];
-    return typeof item === "string" && item.trim() ? item.trim() : null;
+    return displayText(record[key]);
   };
   const first = (key: string): unknown =>
     Array.isArray(record[key]) ? record[key][0] : null;
@@ -39,17 +45,18 @@ export async function parseCrossrefRecord(
       )
       .replace(/\s+/gu, " ")
       .trim();
-  const doi = text("DOI")?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//iu, "");
+  const doi =
+    typeof record.DOI === "string"
+      ? record.DOI.trim().replace(/^https?:\/\/(?:dx\.)?doi\.org\//iu, "")
+      : null;
   if (!doi) throw new Error("Crossref record has no DOI");
   const authors = (Array.isArray(record.author) ? record.author : []).flatMap(
     (item): readonly unknown[] => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return [];
       const author = item as Record<string, unknown>;
-      const given =
-        typeof author.given === "string" ? author.given.trim() : null;
-      const family =
-        typeof author.family === "string" ? author.family.trim() : null;
-      const name = typeof author.name === "string" ? author.name.trim() : null;
+      const given = displayText(author.given);
+      const family = displayText(author.family);
+      const name = displayText(author.name);
       const display = name ?? [given, family].filter(Boolean).join(" ");
       if (!display) return [];
       const affiliations = (
@@ -57,10 +64,10 @@ export async function parseCrossrefRecord(
       ).flatMap((entry) => {
         if (!entry || typeof entry !== "object" || Array.isArray(entry))
           return [];
-        const affiliation = (entry as Record<string, unknown>).name;
-        return typeof affiliation === "string" && affiliation.trim()
-          ? [{ name: affiliation.trim(), ror: null }]
-          : [];
+        const affiliation = displayText(
+          (entry as Record<string, unknown>).name,
+        );
+        return affiliation ? [{ name: affiliation, ror: null }] : [];
       });
       const orcidValue = typeof author.ORCID === "string" ? author.ORCID : null;
       return [
@@ -78,31 +85,16 @@ export async function parseCrossrefRecord(
       ];
     },
   );
-  const dateParts = (key: string): number[] | null => {
-    const value = record[key];
-    if (!value || typeof value !== "object" || Array.isArray(value))
-      return null;
-    const parts = (value as Record<string, unknown>)["date-parts"];
-    if (!Array.isArray(parts) || !Array.isArray(parts[0])) return null;
-    return (parts[0] as unknown[]).filter(
-      (part): part is number =>
-        typeof part === "number" && Number.isSafeInteger(part) && part > 0,
-    );
-  };
-  const parts =
+  const publicationDate =
     ["published-print", "published-online", "published", "issued"]
-      .map(dateParts)
-      .find((item): item is number[] => !!item?.length) ?? null;
-  const publicationDate = parts
-    ? [parts[0], parts[1], parts[2]]
-        .filter((part) => part !== undefined)
-        .map((part, index) =>
-          index === 0
-            ? String(part).padStart(4, "0")
-            : String(part).padStart(2, "0"),
-        )
-        .join("-")
-    : null;
+      .map((key) => {
+        const value = record[key];
+        if (!value || typeof value !== "object" || Array.isArray(value))
+          return null;
+        const parts = (value as Record<string, unknown>)["date-parts"];
+        return Array.isArray(parts) ? metadataDateParts(parts[0]) : null;
+      })
+      .find((value) => value !== null) ?? null;
   const links = (Array.isArray(record.link) ? record.link : []).flatMap(
     (item) => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return [];
@@ -146,7 +138,7 @@ export async function parseCrossrefRecord(
               : contentVersion === "am"
                 ? "accepted-manuscript"
                 : null,
-          access_status: "open",
+          access_status: "unknown",
           license: null,
         },
       ];
@@ -157,17 +149,14 @@ export async function parseCrossrefRecord(
   ).flatMap((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return [];
     const reference = item as Record<string, unknown>;
-    const raw =
-      typeof reference.unstructured === "string"
-        ? reference.unstructured.trim()
-        : null;
+    const raw = displayText(reference.unstructured);
     const target =
       typeof reference.DOI === "string" ? reference.DOI.trim() : null;
     const value = raw || target;
     return value ? [value] : [];
   });
   const input_sha256 = await sha256(canonicalJsonBytes(record));
-  return parseMetadataObservation({
+  return parseProviderObservation({
     observation_id: options.observation_id,
     provenance: {
       provenance_id: options.provenance_id,
@@ -179,20 +168,17 @@ export async function parseCrossrefRecord(
       parameters_sha256: options.parameters_sha256 ?? null,
     },
     metadata: {
-      title: typeof first("title") === "string" ? first("title") : null,
+      title: displayText(first("title")),
       authors,
       abstract:
         typeof record.abstract === "string"
           ? stripMarkup(record.abstract) || null
           : null,
       publication_date: publicationDate,
-      publication_year: parts?.[0] ?? null,
+      publication_year: publicationDate?.slice(0, 4) ?? null,
       document_type: text("type"),
       language: text("language"),
-      venue:
-        typeof first("container-title") === "string"
-          ? first("container-title")
-          : null,
+      venue: displayText(first("container-title")),
       publisher: text("publisher"),
       volume: text("volume"),
       issue: text("issue"),
@@ -204,14 +190,8 @@ export async function parseCrossrefRecord(
     version_links: [],
     declared_keywords: [],
     reference_texts: references,
-    reference_count:
-      typeof record["reference-count"] === "number"
-        ? record["reference-count"]
-        : null,
-    cited_by_count:
-      typeof record["is-referenced-by-count"] === "number"
-        ? record["is-referenced-by-count"]
-        : null,
+    reference_count: record["reference-count"],
+    cited_by_count: record["is-referenced-by-count"],
     asset_hints: links,
   });
 }

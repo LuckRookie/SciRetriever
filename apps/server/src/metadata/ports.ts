@@ -95,6 +95,20 @@ export interface MetadataProviderInvocation {
   readonly outcome: ProviderInvocationOutcome;
   readonly failure: StableFailure | null;
 }
+/** One scanned raw record, or the final provider outcome; consumers may stop early. */
+export type MetadataScanEvent =
+  | {
+      readonly kind: "item";
+      readonly item: NeutralMetadataItem;
+      readonly failure: StableFailure | null;
+    }
+  | {
+      readonly kind: "end";
+      readonly provider_name: string;
+      readonly raw_item_count: number;
+      readonly outcome: ProviderInvocationOutcome;
+      readonly failure: StableFailure | null;
+    };
 export interface MetadataProviderResult
   extends Omit<MetadataProviderInvocation, "outcome"> {
   readonly outcome: ProviderOutcome;

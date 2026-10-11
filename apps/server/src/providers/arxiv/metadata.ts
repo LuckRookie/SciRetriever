@@ -1,6 +1,9 @@
 import {
+  parseProviderObservation,
+  metadataDate,
+} from "../shared/metadata-values.js";
+import {
   canonicalJsonBytes,
-  parseMetadataObservation,
   sha256,
   type MetadataObservation,
   type ProviderLiteratureKey,
@@ -65,11 +68,19 @@ function pdfLink(body: string): string | null {
 }
 function entries(value: unknown): readonly Record<string, unknown>[] {
   const source = xml(value);
+  if (
+    !/^\s*(?:<\?xml\s[^?]*\?>\s*)?<feed(?:\s[^>]*?)?(?:\s*\/>|>[\s\S]*<\/feed>)\s*$/u.test(
+      source,
+    ) ||
+    /<!DOCTYPE|<!ENTITY/iu.test(source)
+  )
+    throw new Error("arXiv Atom envelope is invalid");
   const result: Record<string, unknown>[] = [];
-  for (const match of source.matchAll(/<entry>([\s\S]*?)<\/entry>/giu)) {
-    const body = match[1]!;
+  for (const match of source.matchAll(
+    /<entry(?:\s[^>]*?)?(?:\s*\/>|>([\s\S]*?)<\/entry>)/gu,
+  )) {
+    const body = match[1] ?? "";
     const id = tag(body, "id");
-    if (!id) continue;
     const authors = [...body.matchAll(/<author>([\s\S]*?)<\/author>/giu)]
       .map((item) => tag(item[1]!, "name"))
       .filter((item): item is string => item !== null);
@@ -84,6 +95,8 @@ function entries(value: unknown): readonly Record<string, unknown>[] {
       pdf: pdfLink(body),
     });
   }
+  if ([...source.matchAll(/<entry(?=\s|\/?>)/gu)].length !== result.length)
+    throw new Error("arXiv Atom entries are incomplete");
   return result;
 }
 function observation(
@@ -106,9 +119,7 @@ function observation(
     ...(doiValue ? [{ namespace: "doi", value: doiValue }] : []),
   ];
   const published = text(record.published);
-  const yearValue = published
-    ? Number.parseInt(published.slice(0, 4), 10)
-    : null;
+
   const pdf = text(record.pdf);
   const title = text(record.title);
   const authors = (Array.isArray(record.authors) ? record.authors : []).flatMap(
@@ -128,7 +139,7 @@ function observation(
         : [];
     },
   );
-  return parseMetadataObservation({
+  return parseProviderObservation({
     observation_id: options.observationId,
     provenance: {
       provenance_id: options.provenanceId,
@@ -143,11 +154,8 @@ function observation(
       title,
       authors,
       abstract: text(record.summary),
-      publication_date: published ? published.slice(0, 10) : null,
-      publication_year:
-        yearValue !== null && Number.isSafeInteger(yearValue) && yearValue > 0
-          ? yearValue
-          : null,
+      publication_date: published,
+      publication_year: metadataDate(published)?.slice(0, 4) ?? null,
       document_type: "preprint",
       language: null,
       venue: text(record.journal),

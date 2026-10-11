@@ -1,3 +1,4 @@
+import { metadataInteger } from "../shared/metadata-values.js";
 import {
   parseProvenance,
   type ProviderLiteratureKey,
@@ -19,6 +20,7 @@ import {
   origin,
   pageSize,
   records,
+  rawItems,
   requestWithHeaders,
   safeUrl,
   text,
@@ -105,25 +107,25 @@ function sourceRecordId(
   return `${entity}:${String(raw).trim()}`;
 }
 function page(value: unknown): {
-  items: readonly Record<string, unknown>[];
+  items: readonly unknown[];
   total: number;
   offset: number;
   limit: number;
 } {
   const root = object(value, "CORE response is invalid");
-  const total = Number(root.totalHits);
-  const offset = Number(root.offset);
-  const limit = Number(root.limit);
+  const total = metadataInteger(root.totalHits);
+  const offset = metadataInteger(root.offset);
+  const limit = metadataInteger(root.limit);
   if (
-    !Number.isSafeInteger(total) ||
+    total === null ||
     total < 0 ||
-    !Number.isSafeInteger(offset) ||
+    offset === null ||
     offset < 0 ||
-    !Number.isSafeInteger(limit) ||
+    limit === null ||
     limit < 1
   )
     throw new Error("CORE response page is invalid");
-  return { items: records(root.results), total, offset, limit };
+  return { items: rawItems(root.results), total, offset, limit };
 }
 
 export class CoreRestAdapter
@@ -178,7 +180,7 @@ export class CoreRestAdapter
     expected: ProviderLiteratureKey | null,
   ): RawItemSession {
     let offset = 0;
-    let items: readonly Record<string, unknown>[] = [];
+    let items: readonly unknown[] = [];
     let index = 0;
     let exhausted = false;
     let fetched = false;
@@ -221,11 +223,9 @@ export class CoreRestAdapter
         items = pageResult.items;
         index = 0;
         offset = pageResult.offset + pageResult.items.length;
-        exhausted =
-          kind === "lookup" ||
-          offset >= pageResult.total ||
-          pageResult.items.length < this.size;
+        exhausted = kind === "lookup" || offset >= pageResult.total;
         if (!items.length) {
+          if (!exhausted) throw new Error("CORE page is unexpectedly empty");
           exhausted = true;
           return null;
         }

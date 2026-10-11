@@ -1,7 +1,7 @@
+import { parseProviderObservation } from "../shared/metadata-values.js";
 import {
   canonicalJsonBytes,
   parseIdentifier,
-  parseMetadataObservation,
   sha256,
   type MetadataObservation,
   type ProviderLiteratureKey,
@@ -45,16 +45,10 @@ const list = (value: unknown): readonly Record<string, unknown>[] =>
           !!item && typeof item === "object" && !Array.isArray(item),
       )
     : [];
-function pageItems(value: unknown): readonly Record<string, unknown>[] {
+function pageItems(value: unknown): readonly unknown[] {
   if (!Array.isArray(value))
     throw new Error("Semantic Scholar page data is invalid");
-  if (
-    value.some(
-      (item) => !item || typeof item !== "object" || Array.isArray(item),
-    )
-  )
-    throw new Error("Semantic Scholar page item is invalid");
-  return value as readonly Record<string, unknown>[];
+  return value;
 }
 function nonnegativeInteger(value: unknown, message: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0)
@@ -166,7 +160,7 @@ function keysOverlap(
   );
 }
 type ReferenceEnvelope = {
-  readonly edge: Record<string, unknown>;
+  readonly edge: unknown;
   readonly task: {
     readonly anchor: ProviderLiteratureKey;
     readonly id: string;
@@ -211,11 +205,8 @@ function observation(
       ? (record.openAccessPdf as Record<string, unknown>).url
       : null;
   const pdf = safeUrl(openPdf);
-  const yearValue =
-    typeof record.year === "number"
-      ? record.year
-      : Number.parseInt(text(record.year) ?? "", 10);
-  return parseMetadataObservation({
+
+  return parseProviderObservation({
     observation_id: options.observationId,
     provenance: {
       provenance_id: options.provenanceId,
@@ -231,8 +222,7 @@ function observation(
       authors,
       abstract: text(record.abstract),
       publication_date: text(record.publicationDate),
-      publication_year:
-        Number.isSafeInteger(yearValue) && yearValue > 0 ? yearValue : null,
+      publication_year: record.year,
       document_type: null,
       language: null,
       venue: text(record.venue),
@@ -248,11 +238,7 @@ function observation(
     declared_keywords: [],
     reference_texts: [],
     reference_count: null,
-    cited_by_count:
-      typeof record.citationCount === "number" &&
-      Number.isSafeInteger(record.citationCount)
-        ? record.citationCount
-        : null,
+    cited_by_count: record.citationCount,
     asset_hints: pdf
       ? [
           {
@@ -341,7 +327,7 @@ export class SemanticScholarRestAdapter
           );
           url.searchParams.set(
             "fields",
-            "citedPaper.paperId,citedPaper.title,citedPaper.abstract,citedPaper.year,citedPaper.publicationDate,citedPaper.authors,citedPaper.externalIds,citedPaper.venue,citedPaper.citationCount,citedPaper.openAccessPdf,citingPaper.paperId,citingPaper.title,citingPaper.abstract,citingPaper.year,citingPaper.publicationDate,citingPaper.authors,citingPaper.externalIds,citingPaper.venue,citingPaper.citationCount,citingPaper.openAccessPdf",
+            "paperId,title,abstract,year,publicationDate,authors,externalIds,venue,citationCount,openAccessPdf",
           );
           url.searchParams.set("limit", String(this.pageSize));
           url.searchParams.set("offset", String(offset));
@@ -419,7 +405,9 @@ export class SemanticScholarRestAdapter
             input_sha256: (await sha256(
               canonicalJsonBytes(raw_item),
             )) as MetadataObservation["provenance"]["input_sha256"],
-            parameters_sha256: null,
+            parameters_sha256: await sha256(
+              canonicalJsonBytes({ kind: task.kind, id: task.id }),
+            ),
           },
           citing: task.kind === "references" ? task.anchor : relatedKey,
           cited: task.kind === "references" ? relatedKey : task.anchor,
@@ -432,9 +420,7 @@ export class SemanticScholarRestAdapter
                   provenanceId: relation.provenance.provenance_id,
                   observedAt: relation.provenance.observed_at,
                   inputSha256: relation.provenance.input_sha256!,
-                  parametersSha256: await sha256(
-                    canonicalJsonBytes({ kind: task.kind, id: task.id }),
-                  ),
+                  parametersSha256: relation.provenance.parameters_sha256!,
                 }),
               ]
             : [];
@@ -449,7 +435,7 @@ export class SemanticScholarRestAdapter
   }
   private session(lookup: boolean, value: string): RawItemSession {
     let offset = 0;
-    let items: readonly Record<string, unknown>[] = [];
+    let items: readonly unknown[] = [];
     let index = 0;
     let exhausted = false;
     let fetched = false;

@@ -1,5 +1,7 @@
 # Europe PMC
 
+> 2026-10-10 TypeScript 修复复验：主题年份通过 PUB_YEAR 查询表达式传递；lookup 区分 DOI、PMCID 和 EXT_ID + SRC。references 的 offSet 是从 1 开始的页序号，citations 从 0 开始；两者均不是记录偏移。缺失/空白年份按 unknown 转换。有目标 record ID 时可交付内嵌元数据；只有 DOI 而无 Provider 记录身份时保留关系供后续 lookup，不冒用种子 record ID。 证据见[修复验证记录](../live-discovery-acquisition-fixes-2026-10-10.md)。下文较早日期的探测只代表当时状态。
+
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
 - 当前选择键：Metadata `europe-pmc`；Acquisition `europe-pmc`

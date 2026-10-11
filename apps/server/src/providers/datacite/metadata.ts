@@ -1,6 +1,6 @@
+import { parseProviderObservation } from "../shared/metadata-values.js";
 import {
   canonicalJsonBytes,
-  parseMetadataObservation,
   sha256,
   type MetadataObservation,
   type ProviderLiteratureKey,
@@ -84,37 +84,33 @@ type DataCiteReferenceTask = {
   readonly value: string;
 };
 type DataCiteReferenceEnvelope = {
-  readonly record: Record<string, unknown>;
+  readonly record: unknown;
   readonly task: DataCiteReferenceTask;
 };
 function page(
   value: unknown,
   lookup: boolean,
 ): {
-  readonly items: readonly Record<string, unknown>[];
+  readonly items: readonly unknown[];
   readonly next: string | null;
 } {
   const root = object(value, "DataCite response is invalid");
   const data = root.data;
   if (lookup)
     return {
-      items:
-        data && typeof data === "object" && !Array.isArray(data)
-          ? [data as Record<string, unknown>]
-          : [],
+      items: data === null ? [] : [object(data, "DataCite data is invalid")],
       next: null,
     };
   if (!Array.isArray(data)) throw new Error("DataCite data is invalid");
   const links =
-    root.links && typeof root.links === "object" && !Array.isArray(root.links)
-      ? (root.links as Record<string, unknown>)
-      : {};
+    root.links === undefined || root.links === null
+      ? {}
+      : object(root.links, "DataCite links are invalid");
   const next = publicUrl(links.next);
+  if (links.next !== undefined && links.next !== null && next === null)
+    throw new Error("DataCite next link is invalid");
   return {
-    items: data.filter(
-      (item): item is Record<string, unknown> =>
-        !!item && typeof item === "object" && !Array.isArray(item),
-    ),
+    items: data,
     next,
   };
 }
@@ -169,7 +165,17 @@ function observationFromRecord(
         display_name: display,
         given_name: stringValue(creator.givenName),
         family_name: stringValue(creator.familyName),
-        orcid: stringValue(creator.nameIdentifiers) ?? null,
+        orcid:
+          array(creator.nameIdentifiers)
+            .flatMap((value) => {
+              if (!value || typeof value !== "object" || Array.isArray(value))
+                return [];
+              const item = value as Record<string, unknown>;
+              return item.nameIdentifierScheme === "ORCID"
+                ? [stringValue(item.nameIdentifier)]
+                : [];
+            })
+            .find((value) => value !== null) ?? null,
         affiliations: [],
       },
     ];
@@ -196,12 +202,9 @@ function observationFromRecord(
         : [],
     )
     .filter((item): item is string => item !== null);
-  const yearValue =
-    typeof attributes.publicationYear === "number"
-      ? attributes.publicationYear
-      : Number.parseInt(stringValue(attributes.publicationYear) ?? "", 10);
+
   const assetUrl = publicUrl(attributes.url);
-  return parseMetadataObservation({
+  return parseProviderObservation({
     observation_id: options.observationId,
     provenance: {
       provenance_id: options.provenanceId,
@@ -221,8 +224,7 @@ function observationFromRecord(
         ? (stringValue(abstract.description)?.replace(/\s+/gu, " ") ?? null)
         : null,
       publication_date: stringValue(attributes.created),
-      publication_year:
-        Number.isSafeInteger(yearValue) && yearValue > 0 ? yearValue : null,
+      publication_year: attributes.publicationYear,
       document_type: stringValue(
         attributes.types &&
           typeof attributes.types === "object" &&
@@ -359,6 +361,8 @@ export class DataCiteRestAdapter
           lookup,
         );
         if (!result.items.length) {
+          if (result.next !== null)
+            throw new Error("DataCite empty page has a next link");
           exhausted = true;
           return null;
         }
@@ -395,7 +399,7 @@ export class DataCiteRestAdapter
           : null;
         const record = envelope
           ? object(envelope.record, "DataCite reference record is invalid")
-          : (raw_item as Record<string, unknown>);
+          : object(raw_item, "DataCite record is invalid");
         const metadata = await observationFromRecord(record, {
           observationId: await this.observationId(),
           provenanceId: await this.provenanceId(),

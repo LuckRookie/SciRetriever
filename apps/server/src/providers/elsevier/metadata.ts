@@ -1,4 +1,5 @@
 import type { ProviderLiteratureKey } from "@sciretriever/contracts";
+import { metadataDate } from "../shared/metadata-values.js";
 import { randomUUID } from "node:crypto";
 import type {
   MetadataLookupPort,
@@ -13,6 +14,7 @@ import {
   origin,
   pageSize,
   records,
+  rawItems,
   requestWithHeaders,
   safeUrl,
   text,
@@ -41,13 +43,11 @@ function nested(value: unknown): Record<string, unknown> {
     "Elsevier response body is invalid",
   );
 }
-function entries(
-  root: Record<string, unknown>,
-): readonly Record<string, unknown>[] {
+function entries(root: Record<string, unknown>): readonly unknown[] {
   const values = root.entry ?? root.coredata;
   return values && !Array.isArray(values) && typeof values === "object"
     ? [values as Record<string, unknown>]
-    : records(values);
+    : rawItems(values);
 }
 function identifierList(
   record: Record<string, unknown>,
@@ -138,7 +138,7 @@ export class ElsevierRestAdapter
     topic: TopicSearchQuery,
   ): RawItemSession {
     let cursor = "*";
-    let items: readonly Record<string, unknown>[] = [];
+    let items: readonly unknown[] = [];
     let index = 0;
     let exhausted = false;
     let fetched = false;
@@ -172,12 +172,19 @@ export class ElsevierRestAdapter
           ),
         );
         const pageItems = entries(root);
-        const cursorValue =
-          root.cursor &&
-          typeof root.cursor === "object" &&
-          !Array.isArray(root.cursor)
-            ? text((root.cursor as Record<string, unknown>)["@next"])
-            : null;
+        const pageCursor =
+          root.cursor === undefined || root.cursor === null
+            ? {}
+            : object(root.cursor, "Elsevier cursor is invalid");
+        const cursorValue = text(pageCursor["@next"]);
+        if (
+          pageCursor["@next"] !== undefined &&
+          pageCursor["@next"] !== null &&
+          cursorValue === null
+        )
+          throw new Error("Elsevier next cursor is invalid");
+        if (!pageItems.length && cursorValue !== null)
+          throw new Error("Elsevier empty page has a next cursor");
         if (fetched && cursorValue === cursor)
           throw new Error("Elsevier pagination made no progress");
         fetched = true;
@@ -287,7 +294,7 @@ export class ElsevierRestAdapter
           abstract: core["dc:description"],
           authors: authorValues(record),
           publicationDate: core["prism:coverDate"],
-          publicationYear: text(core["prism:coverDate"])?.slice(0, 4),
+          publicationYear: metadataDate(core["prism:coverDate"])?.slice(0, 4),
           documentType: core.subtypeDescription,
           venue: core["prism:publicationName"],
           volume: core["prism:volume"],

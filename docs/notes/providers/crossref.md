@@ -1,5 +1,7 @@
 # Crossref
 
+> 2026-10-10 TypeScript 修复复验：Crossref 展示字段折叠换行、回车和连续空白，DOI 身份不作此类修补；链接访问状态为 unknown。年份过滤支持单边范围，规范年份的最终范围检查由主题发现入口完成。 证据见[修复验证记录](../live-discovery-acquisition-fixes-2026-10-10.md)。下文较早日期的探测只代表当时状态。
+
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
 - 当前选择键：Metadata `crossref`；Acquisition `crossref`

@@ -11,6 +11,7 @@ import {
   type MetadataProviderInvocation,
   type MetadataProviderResult,
   type MetadataReferenceQueryRequest,
+  type MetadataScanEvent,
   type NeutralMetadataItem,
   type ProviderRelationObservation,
   type RawItemSession,
@@ -68,40 +69,40 @@ function relationMatches(
       : citing || cited;
 }
 
-async function scan(
+async function* scanItems(
   provider_name: string,
   scan_limit: number,
   open: () => RawItemSession | Promise<RawItemSession>,
   signal?: AbortSignal,
   referenceQuery?: ReferenceQueryContext,
-): Promise<MetadataProviderInvocation> {
+): AsyncGenerator<MetadataScanEvent> {
   if (!Number.isSafeInteger(scan_limit) || scan_limit < 1)
     throw new TypeError("scan_limit must be positive");
-  const observations: MetadataObservation[] = [];
-  const relations: ProviderRelationObservation[] = [];
   let raw_item_count = 0;
   let firstFailure: StableFailure | null = null;
-  if (signal?.aborted)
-    return {
+  if (signal?.aborted) {
+    yield {
+      kind: "end",
       provider_name,
-      observations,
-      relations,
       raw_item_count,
       outcome: "INTERRUPTED",
       failure: null,
     };
+    return;
+  }
   try {
     const session = await open();
     while (raw_item_count < scan_limit) {
-      if (signal?.aborted)
-        return {
+      if (signal?.aborted) {
+        yield {
+          kind: "end",
           provider_name,
-          observations,
-          relations,
           raw_item_count,
           outcome: "INTERRUPTED",
           failure: null,
         };
+        return;
+      }
       const delivery = await session.pull_raw_item();
       if (delivery === null) break;
       raw_item_count += 1;
@@ -126,14 +127,18 @@ async function scan(
           throw new MetadataProviderFailure(
             failure("metadata-reference-direction"),
           );
-        observations.push(...item.observations);
-        relations.push(...item.relations);
+        yield { kind: "item", item, failure: null };
       } catch (error) {
         const detail =
           error instanceof MetadataProviderFailure
             ? error.failure
             : failure("metadata-record-invalid");
         firstFailure ??= detail;
+        yield {
+          kind: "item",
+          item: { observations: [], relations: [] },
+          failure: detail,
+        };
       }
       if (delivery.source_exhausted_after) break;
     }
@@ -142,25 +147,46 @@ async function scan(
       error instanceof MetadataProviderFailure
         ? error.failure
         : failure("metadata-provider-unexpected");
-    return {
+    yield {
+      kind: "end",
       provider_name,
-      observations,
-      relations,
       raw_item_count,
       outcome: "FAILED",
       failure: detail,
     };
+    return;
   }
   const normal: MetadataProviderResult["outcome"] =
     raw_item_count >= scan_limit ? "SCAN_LIMIT_REACHED" : "EXHAUSTED";
-  return {
+  yield {
+    kind: "end",
     provider_name,
-    observations,
-    relations,
     raw_item_count,
-    outcome: firstFailure ? "FAILED" : normal,
+    outcome: signal?.aborted ? "INTERRUPTED" : firstFailure ? "FAILED" : normal,
     failure: firstFailure,
   };
+}
+
+async function scan(
+  ...args: Parameters<typeof scanItems>
+): Promise<MetadataProviderInvocation> {
+  const observations: MetadataObservation[] = [];
+  const relations: ProviderRelationObservation[] = [];
+  for await (const event of scanItems(...args)) {
+    if (event.kind === "end") {
+      return {
+        provider_name: event.provider_name,
+        raw_item_count: event.raw_item_count,
+        outcome: event.outcome,
+        failure: event.failure,
+        observations,
+        relations,
+      };
+    }
+    observations.push(...event.item.observations);
+    relations.push(...event.item.relations);
+  }
+  throw new Error("metadata scan ended without a provider outcome");
 }
 
 export class MetadataService {
@@ -267,6 +293,27 @@ export class MetadataService {
       direction: request.direction,
     };
     return scan(
+      name,
+      scan_limit,
+      () => port.open_reference_query(context),
+      signal,
+      context,
+    );
+  }
+  /** Keep conversion/counting here while Entry admits each relation before requesting more. */
+  streamReferencesProvider(
+    direction: ReferenceQueryContext["direction"],
+    provider: string,
+    keys: readonly ProviderLiteratureKey[],
+    scan_limit: number,
+    signal?: AbortSignal,
+  ): AsyncGenerator<MetadataScanEvent> {
+    const name = providerName(provider);
+    const port = this.references.get(name);
+    if (!port)
+      throw new Error("requested reference-query capability is not assembled");
+    const context: ReferenceQueryContext = { keys, direction };
+    return scanItems(
       name,
       scan_limit,
       () => port.open_reference_query(context),

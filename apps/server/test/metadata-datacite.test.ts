@@ -123,7 +123,7 @@ it("uses bounded default pages and stops at the raw scan limit across pages", as
   expect(new URL(calls[1]!).searchParams.get("page[number]")).toBe("2");
 });
 
-it("normalizes DataCite abstract paragraph whitespace without weakening control validation", async () => {
+it("normalizes DataCite paragraph whitespace and discards only a damaged optional abstract", async () => {
   const good = data("10.5555/paragraph", "Paragraph abstract");
   good.attributes.descriptions = [
     {
@@ -142,11 +142,12 @@ it("normalizes DataCite abstract paragraph whitespace without weakening control 
     topic_search_ports: [adapter],
   }).searchTopicProvider("datacite", topicSearchQuery("fixture"), 10);
   expect(result).toMatchObject({
-    outcome: "FAILED",
+    outcome: "EXHAUSTED",
     raw_item_count: 2,
-    failure: { code: "metadata-record-invalid" },
+    failure: null,
   });
-  expect(result.observations).toHaveLength(1);
+  expect(result.observations).toHaveLength(2);
+  expect(result.observations[1]?.metadata.abstract).toBeNull();
   expect(result.observations[0]?.metadata.abstract).toBe(
     "First paragraph. Second paragraph. End.",
   );

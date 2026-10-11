@@ -124,3 +124,28 @@ describe("topic discovery migration slice", () => {
     }
   });
 });
+
+it("keeps provider date variants outside the requested normalized publication year out of topic results", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-topic-year-"));
+  const app = await createApplication(home, {
+    metadata: {
+      topic_search_ports: [
+        { provider_name: "fixture", open_topic_search: () => session() },
+      ],
+    },
+  });
+  try {
+    const report = await app.discovery.run({
+      query: "retrieval",
+      year_to: 2025,
+      providers: [{ provider_name: "fixture", scan_limit: 5 }],
+    });
+    expect(report.accepted_count).toBe(0);
+    expect(report.source_results[0]!.outcome).toBe("EXHAUSTED");
+    expect(
+      (await app.database.getDiscovery(report.discovery_run_id))!.results,
+    ).toHaveLength(0);
+  } finally {
+    await app.close();
+  }
+});

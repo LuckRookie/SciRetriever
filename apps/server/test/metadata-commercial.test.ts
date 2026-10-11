@@ -206,7 +206,7 @@ describe("commercial metadata REST adapters", () => {
     const calls: string[] = [];
     const responses = new Map<string, unknown>([
       ["/search:1", await fixture("expanded-search-page-1.json")],
-      ["/search:2", await fixture("expanded-search-page-2.json")],
+      ["/search:3", await fixture("expanded-search-page-2.json")],
       ["/references:1", await fixture("expanded-references-page-1.json")],
       ["/references:3", await fixture("expanded-references-page-2.json")],
     ]);
@@ -242,6 +242,7 @@ describe("commercial metadata REST adapters", () => {
     );
     expect(topic.outcome).toBe("SCAN_LIMIT_REACHED");
     expect(topic.observations).toHaveLength(3);
+    expect(new URL(calls[1]!).searchParams.get("firstRecord")).toBe("3");
     expect(topic.observations[0]?.metadata.title).toBe(
       "A Web of Science Expanded article",
     );

@@ -1,3 +1,4 @@
+import { metadataInteger } from "../shared/metadata-values.js";
 import type { ProviderLiteratureKey } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
 import type {
@@ -16,6 +17,7 @@ import {
   origin,
   pageSize,
   records,
+  rawItems,
   requestWithHeaders,
   safeUrl,
   text,
@@ -41,7 +43,7 @@ export interface WebOfScienceAdapterOptions {
 }
 
 function starterPage(value: unknown): {
-  items: readonly Record<string, unknown>[];
+  items: readonly unknown[];
   total: number;
   page: number;
   limit: number;
@@ -51,32 +53,32 @@ function starterPage(value: unknown): {
     root.metadata,
     "Web of Science Starter metadata is invalid",
   );
-  const total = Number(metadata.total);
-  const page = Number(metadata.page);
-  const limit = Number(metadata.limit);
+  const total = metadataInteger(metadata.total);
+  const page = metadataInteger(metadata.page);
+  const limit = metadataInteger(metadata.limit);
   if (
-    !Number.isSafeInteger(total) ||
+    total === null ||
     total < 0 ||
-    !Number.isSafeInteger(page) ||
+    page === null ||
     page < 1 ||
-    !Number.isSafeInteger(limit) ||
+    limit === null ||
     limit < 1
   )
     throw new Error("Web of Science Starter page is invalid");
-  return { items: records(root.hits), total, page, limit };
+  return { items: rawItems(root.hits), total, page, limit };
 }
-function expandedItems(value: unknown): readonly Record<string, unknown>[] {
+function expandedItems(value: unknown): readonly unknown[] {
   const root = object(value, "Web of Science Expanded response is invalid");
   const data = object(root.Data, "Web of Science Expanded data is invalid");
   const recordsRoot = object(
     object(data.Records, "Web of Science Expanded records are invalid").records,
     "Web of Science Expanded record body is invalid",
   );
-  return records(recordsRoot.REC);
+  return rawItems(recordsRoot.REC);
 }
 
 function expandedPage(value: unknown): {
-  items: readonly Record<string, unknown>[];
+  items: readonly unknown[];
   total: number;
 } {
   const root = object(value, "Web of Science Expanded response is invalid");
@@ -84,14 +86,14 @@ function expandedPage(value: unknown): {
     root.QueryResult,
     "Web of Science Expanded query result is invalid",
   );
-  const total = Number(result.RecordsFound);
-  if (!Number.isSafeInteger(total) || total < 0)
+  const total = metadataInteger(result.RecordsFound);
+  if (total === null || total < 0)
     throw new Error("Web of Science Expanded total is invalid");
   return { items: expandedItems(root), total };
 }
 
 function expandedReferencePage(value: unknown): {
-  items: readonly Record<string, unknown>[];
+  items: readonly unknown[];
   total: number;
 } {
   const root = object(
@@ -102,10 +104,10 @@ function expandedReferencePage(value: unknown): {
     root.QueryResult,
     "Web of Science Expanded query result is invalid",
   );
-  const total = Number(result.RecordsFound);
-  if (!Number.isSafeInteger(total) || total < 0)
+  const total = metadataInteger(result.RecordsFound);
+  if (total === null || total < 0)
     throw new Error("Web of Science Expanded reference total is invalid");
-  return { items: records(root.Data), total };
+  return { items: rawItems(root.Data), total };
 }
 
 function expandedKey(record: Record<string, unknown>): {
@@ -268,8 +270,8 @@ function expandedCitedByCount(
   const wanted = (edition ?? database).toLowerCase();
   const values = records(list)
     .filter((item) => text(item.coll_id)?.toLowerCase() === wanted)
-    .map((item) => Number(item.local_count))
-    .filter((value) => Number.isSafeInteger(value) && value >= 0);
+    .map((item) => metadataInteger(item.local_count))
+    .filter((value): value is number => value !== null);
   return values.length && values.every((value) => value === values[0])
     ? values[0]!
     : null;
@@ -294,24 +296,34 @@ function expandedRecord(
   record: Record<string, unknown>,
 ): Record<string, unknown> {
   const uid = text(record.UID);
-  const staticData = object(
-    record.static_data,
-    "Web of Science Expanded static data is invalid",
-  );
-  const summary = object(
-    staticData.summary,
-    "Web of Science Expanded summary is invalid",
-  );
+  const staticData =
+    record.static_data &&
+    typeof record.static_data === "object" &&
+    !Array.isArray(record.static_data)
+      ? (record.static_data as Record<string, unknown>)
+      : {};
+  const summary =
+    staticData.summary &&
+    typeof staticData.summary === "object" &&
+    !Array.isArray(staticData.summary)
+      ? (staticData.summary as Record<string, unknown>)
+      : {};
   const titles = records(
-    object(summary.titles, "Web of Science Expanded titles are invalid").title,
+    summary.titles &&
+      typeof summary.titles === "object" &&
+      !Array.isArray(summary.titles)
+      ? (summary.titles as Record<string, unknown>).title
+      : null,
   );
   const itemTitle = titles.find(
     (item) => text(item.type)?.toLowerCase() === "item",
   );
-  const pub = object(
-    summary.pub_info,
-    "Web of Science Expanded publication info is invalid",
-  );
+  const pub =
+    summary.pub_info &&
+    typeof summary.pub_info === "object" &&
+    !Array.isArray(summary.pub_info)
+      ? (summary.pub_info as Record<string, unknown>)
+      : {};
   const full =
     staticData.fullrecord_metadata &&
     typeof staticData.fullrecord_metadata === "object" &&
@@ -479,7 +491,7 @@ export class WebOfScienceRestAdapter
       throw new TypeError("Web of Science reference key requires WOS UID");
     let taskIndex = 0;
     let firstRecord = 1;
-    let items: readonly Record<string, unknown>[] = [];
+    let items: readonly unknown[] = [];
     let index = 0;
     let exhausted = false;
     return {
@@ -521,7 +533,7 @@ export class WebOfScienceRestAdapter
             continue;
           }
           items = pageResult.items.map((item) => ({
-            ...item,
+            __raw: item,
             __wos_relation_kind: task.kind,
             __wos_anchor: task.key,
           }));
@@ -544,14 +556,18 @@ export class WebOfScienceRestAdapter
       convert_raw_item: async (
         raw_item,
       ): Promise<import("../../metadata/ports.js").NeutralMetadataItem> => {
-        const record = object(
+        const envelope = object(
           raw_item,
+          "Web of Science reference envelope is invalid",
+        );
+        const relationKind = text(envelope.__wos_relation_kind);
+        const anchor = envelope.__wos_anchor as
+          | ProviderLiteratureKey
+          | undefined;
+        const record = object(
+          envelope.__raw,
           "Web of Science Expanded reference record is invalid",
         );
-        const relationKind = text(record.__wos_relation_kind);
-        const anchor = record.__wos_anchor as ProviderLiteratureKey | undefined;
-        delete record.__wos_relation_kind;
-        delete record.__wos_anchor;
         if (!relationKind || !anchor || !anchor.record_id)
           throw new Error(
             "Web of Science Expanded reference context is invalid",
@@ -600,7 +616,7 @@ export class WebOfScienceRestAdapter
     expected: ProviderLiteratureKey | null,
   ): RawItemSession {
     let pageNumber = 1;
-    let items: readonly Record<string, unknown>[] = [];
+    let items: readonly unknown[] = [];
     let index = 0;
     let exhausted = false;
     let fetched = false;
@@ -658,10 +674,7 @@ export class WebOfScienceRestAdapter
           ? (() => {
               const parsed = expandedPage(result);
               return {
-                items: parsed.items.map((item) => ({
-                  ...expandedRecord(item),
-                  __raw: item,
-                })),
+                items: parsed.items,
                 total: parsed.total,
                 page: pageNumber,
                 limit: this.size,
@@ -673,11 +686,13 @@ export class WebOfScienceRestAdapter
         fetched = true;
         items = pageResult.items;
         index = 0;
-        pageNumber += 1;
-        exhausted =
-          kind === "lookup" ||
-          pageResult.items.length === 0 ||
-          pageResult.page * pageResult.limit >= pageResult.total;
+        const consumed = expanded
+          ? pageNumber - 1 + items.length
+          : (pageNumber - 1) * pageResult.limit + items.length;
+        if (!items.length && consumed < pageResult.total)
+          throw new Error("Web of Science page is unexpectedly empty");
+        pageNumber += expanded ? items.length : 1;
+        exhausted = kind === "lookup" || consumed >= pageResult.total;
         if (!items.length) return null;
         const raw_item = items[index++]!;
         return {
@@ -686,13 +701,17 @@ export class WebOfScienceRestAdapter
         };
       },
       convert_raw_item: async (raw_item) => {
-        const record = object(raw_item, "Web of Science record is invalid");
+        const raw = object(raw_item, "Web of Science record is invalid");
+        const record =
+          this.product === "expanded"
+            ? { ...expandedRecord(raw), __raw: raw }
+            : raw;
         const source = text(record.uid ?? record.UID);
         if (!source)
           throw new Error("Web of Science record identity is missing");
         const identifiers =
           this.product === "expanded"
-            ? expandedIdentifiers(record)
+            ? expandedIdentifiers(raw)
             : starterIdentifiers(record);
         if (
           expected &&

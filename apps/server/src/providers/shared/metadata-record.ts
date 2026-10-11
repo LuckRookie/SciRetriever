@@ -1,6 +1,6 @@
+import { parseProviderObservation } from "./metadata-values.js";
 import {
   canonicalJsonBytes,
-  parseMetadataObservation,
   sha256,
   type MetadataObservation,
 } from "@sciretriever/contracts";
@@ -25,6 +25,13 @@ export const records = (value: unknown): readonly Record<string, unknown>[] =>
           !!item && typeof item === "object" && !Array.isArray(item),
       )
     : [];
+
+/** Protocol lists are required and every raw item must reach record-level conversion. */
+export function rawItems(value: unknown): readonly unknown[] {
+  if (!Array.isArray(value))
+    throw new Error("metadata response items are invalid");
+  return value;
+}
 
 export const doi = (value: unknown): string | null =>
   text(value)
@@ -132,10 +139,6 @@ export async function observation(
     readonly parameters?: unknown;
   },
 ): Promise<MetadataObservation> {
-  const year =
-    typeof record.publicationYear === "number"
-      ? record.publicationYear
-      : Number.parseInt(text(record.publicationYear) ?? "", 10);
   const normalizedAuthors = authors(record.authors).map((author) => ({
     kind: "person" as const,
     display_name: author.display as string,
@@ -147,7 +150,7 @@ export async function observation(
     orcid: (author.orcid as string | null | undefined) ?? null,
     affiliations: [],
   }));
-  return parseMetadataObservation({
+  return parseProviderObservation({
     observation_id: record.observationId ?? randomUUID(),
     provenance: {
       provenance_id: record.provenanceId ?? randomUUID(),
@@ -166,7 +169,7 @@ export async function observation(
       authors: normalizedAuthors,
       abstract: text(record.abstract),
       publication_date: text(record.publicationDate),
-      publication_year: Number.isSafeInteger(year) && year > 0 ? year : null,
+      publication_year: record.publicationYear,
       document_type: text(record.documentType),
       language: text(record.language),
       venue: text(record.venue),
@@ -186,25 +189,8 @@ export async function observation(
     version_links: [],
     declared_keywords: [],
     reference_texts: [],
-    reference_count:
-      typeof record.referenceCount === "number" &&
-      Number.isSafeInteger(record.referenceCount) &&
-      record.referenceCount >= 0
-        ? record.referenceCount
-        : Number.isSafeInteger(
-              Number.parseInt(text(record.referenceCount) ?? "", 10),
-            )
-          ? Number.parseInt(text(record.referenceCount)!, 10)
-          : null,
-    cited_by_count:
-      typeof record.citedByCount === "number" &&
-      Number.isSafeInteger(record.citedByCount)
-        ? record.citedByCount
-        : Number.isSafeInteger(
-              Number.parseInt(text(record.citedByCount) ?? "", 10),
-            )
-          ? Number.parseInt(text(record.citedByCount)!, 10)
-          : null,
+    reference_count: record.referenceCount,
+    cited_by_count: record.citedByCount,
     asset_hints: (record.assetHints ?? []).map((hint) => ({
       url: hint.url,
       kind: hint.kind,
