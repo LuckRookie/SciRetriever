@@ -8,6 +8,8 @@
 | --- | --- | --- |
 | [Web Agent 工作台设计](2026-10-08-agent-workbench.md) · [两版 HTML 对比](2026-10-08-agent-workbench/comparison.html) | Draft | 已确认 Agent 工作台优先及四个一级入口；Codex 与 Opus 两版并列保留，本轮收口，配色等后续讨论，收敛后再编写 plans |
 
+2026-10-11：元数据名称治理与 PDF API 路由提案获准实施后已完成；[实施计划与验收记录](../archive/2026-10-11-metadata-governance-pdf-routing/README.md)和[讨论原文](../archive/2026-10-11-metadata-governance-and-pdf-routing/proposal.md)均已归档。Web Agent 工作台提案继续保持 Draft，留在本目录讨论。
+
 既有产品方向由 ADR 约束；尚待定稿的模块交换细节保留在[统一产品接口：共享合同、结构解析与版本兼容](../architecture/technical/01-product-interface.md#6-共享合同结构解析与版本兼容)，其 Proposed 状态不等于已接受 API。执行与恢复归[活动计划](../plans/README.md)，不在这里复制。已经确认或被替代的材料见 `docs/archive/`；供应商访问调度的当前决策见 [ADR 0012](../architecture/decisions/0012-process-local-provider-access-scheduling.md)。
 
 活动提案使用 TOML front matter：

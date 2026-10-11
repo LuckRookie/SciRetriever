@@ -7,11 +7,16 @@
 
 ## 当前计划
 
-本轮已完成：[核心采集兼容、文章身份核验与 Agent 操作闭环](2026-10-08-core-agent-completion/README.md)（Completed；含 2026-10-09 任务生命周期修复，Full 201 文件 / 1,358 项通过，39 项按既有条件跳过）。
+当前没有活动实施计划。2026-10-11 已将以下四个 Completed 计划移入归档；归档不改变各计划的验证范围、条件跳过或真实环境限制。
+
 最近完成的计划已归档：
 
 | 归档计划 | 完成范围 |
 | --- | --- |
+| [元数据名称治理、五层 PDF 获取与 Browser 入口准备](../archive/2026-10-11-metadata-governance-pdf-routing/README.md) | 五层获取、显式名称维护与单任务 Browser 入口准备；Full 210 文件 / 1,606 项通过，39 项按既有条件跳过。 |
+| [Provider 可选字段的有界容错](../archive/2026-10-10-provider-field-boundaries/README.md) | 全部生产 Metadata adapters 接入；Full 205 文件 / 1,448 项通过，39 项按既有条件跳过。 |
+| [真实发现与 PDF 获取缺陷修复](../archive/2026-10-10-live-discovery-acquisition-fixes/README.md) | Full 203 文件 / 1,380 项通过，39 项按既有条件跳过；真实复验与外部限制见记录。 |
+| [核心采集兼容、文章身份核验与 Agent 操作闭环](../archive/2026-10-08-core-agent-completion/README.md) | 含 2026-10-09 任务生命周期修复；Full 201 文件 / 1,358 项通过，39 项按既有条件跳过。 |
 | [按供应商组织适配代码](../archive/2026-10-07-provider-layout/README.md) | 每家供应商独立目录，403 个包根导出保留；Full 194 文件 / 1,334 项通过。 |
 | [供应商能力与访问政策治理](../archive/2026-10-07-provider-governance/README.md) | 统一服务定义与普通 HTTP/API 调度；限制和验收见归档。 |
 | [Browser 独立 worker 与后台下载](../archive/2026-10-05-browser-parallel-downloads/README.md) | 并行 worker、后台下载与正式入库；真实样本和外部访问限制见归档。 |
