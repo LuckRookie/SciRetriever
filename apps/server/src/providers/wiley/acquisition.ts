@@ -2,7 +2,11 @@ import type {
   AuthorizedPdfClientPort,
   AcquisitionSourceRequest,
 } from "../../acquisition/ports.js";
-import { targetsForDefinition } from "../shared/acquisition-locators.js";
+import {
+  targetsForDefinition,
+  articleHintTargets,
+  uniqueTargets,
+} from "../shared/acquisition-locators.js";
 import {
   AuthorizedProviderError,
   download,
@@ -61,7 +65,18 @@ export class WileyAuthorizedPdfClient implements AuthorizedPdfClientPort {
 export function targets(
   request: AcquisitionSourceRequest,
 ): readonly AuthorizedLookupTarget[] {
-  return targetsForDefinition(definition, request);
+  return uniqueTargets([
+    ...targetsForDefinition(definition, request),
+    ...articleHintTargets(request, services["wiley-tdm"].endpoint, (path) => {
+      const match = /^\/onlinelibrary\/tdm\/v1\/articles\/(.+)$/u.exec(path);
+      return match
+        ? {
+            namespace: "doi",
+            value: safeIdentity(decodeURIComponent(match[1]!)),
+          }
+        : null;
+    }),
+  ]);
 }
 export function candidateUrl(locator: AuthorizedDownloadLocator): string {
   const value = encodeURIComponent(locator.value);

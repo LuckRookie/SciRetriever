@@ -19,6 +19,8 @@ import {
 } from "../src/acquisition/sources/public.js";
 import { type AcquisitionSourcePort } from "../src/acquisition/ports.js";
 import { BROWSER_ROUTE_NAME } from "../src/acquisition/assembly.js";
+import { AcquisitionRouteError } from "../src/acquisition/tiered.js";
+import { authorizedTargets } from "../src/providers/acquisition.js";
 import {
   doiLanding,
   safeLocator,
@@ -172,7 +174,7 @@ describe("completion acquisition cohorts", () => {
     }) as never as import("../src/entry/pdf-acquisition.js").PdfAcquisitionRequest;
 
   it.each([200, 403, 401, 429, 503])(
-    "admits API and Browser for a public-only miss, retaining blocking HTTP %i facts",
+    "tries API before public pages and preserves HTTP %i access/rate boundaries on Browser fallback",
     async (status) => {
       const home = await mkdtemp(
         join(tmpdir(), "sciretriever-landing-escalation-"),
@@ -185,6 +187,7 @@ describe("completion acquisition cohorts", () => {
         source_name: "doi-landing",
         ready: true,
         acquisition_tier: "public",
+        acquisition_stage: "public-web",
         async discover(request) {
           const doi = request.identifiers.find(
             (item) => item.namespace === "doi",
@@ -224,6 +227,7 @@ describe("completion acquisition cohorts", () => {
             {
               source_name: "fixture-api",
               acquisition_tier: "authorized-api",
+              acquisition_stage: "publisher-api",
               ready: true,
               async discover() {
                 phase.push("api");
@@ -291,13 +295,13 @@ describe("completion acquisition cohorts", () => {
             signal: new AbortController().signal,
           },
         ]);
-        if (status === 200 || status === 403) {
+        if (status === 200 || status === 403 || status === 503) {
           expect(outcome).toMatchObject({ kind: "acquired" });
           expect(
             (await application.library.detail(literatureId)).primary_pdf
               ?.article_identity_status,
           ).toBe("unverified");
-          expect(phase).toEqual([`public:${status}`, "api", "browser"]);
+          expect(phase).toEqual(["api", `public:${status}`, "browser"]);
         } else {
           expect(outcome).toMatchObject({
             kind: "route-failure",
@@ -306,7 +310,7 @@ describe("completion acquisition cohorts", () => {
               source: status === 401 ? null : "doi-landing",
             },
           });
-          expect(phase).toEqual([`public:${status}`]);
+          expect(phase).toEqual(["api", `public:${status}`]);
         }
       } finally {
         await service.close();
@@ -422,7 +426,7 @@ describe("completion acquisition cohorts", () => {
     await coordinator.close();
   });
 
-  it("runs Public, API and Browser barriers in order and reuses rejected-byte evidence", async () => {
+  it("runs Direct, publisher API and Browser barriers in order and reuses rejected-byte evidence", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-pdf-cohort-"));
     const application = await createApplication(home, {
       executionSchema: "upgrade-synthetic",
@@ -459,6 +463,7 @@ describe("completion acquisition cohorts", () => {
     const publicSource = {
       source_name: "fixture-public",
       ready: true,
+      acquisition_stage: "direct" as const,
       acquisition_tier: "public" as const,
       async discover(request: {
         readonly identifiers: readonly {
@@ -487,6 +492,7 @@ describe("completion acquisition cohorts", () => {
     const apiSource = {
       source_name: "fixture-api",
       ready: true,
+      acquisition_stage: "publisher-api" as const,
       acquisition_tier: "authorized-api" as const,
       async discover(request: {
         readonly identifiers: readonly {
@@ -609,3 +615,103 @@ describe("completion acquisition cohorts", () => {
     }
   });
 });
+
+it.each([302, 429])(
+  "supplies first-hop DOI evidence before the publisher API and preserves resolver HTTP %s boundaries",
+  async (status) => {
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-landing-handoff-"));
+    const app = await createApplication(home, {
+      executionSchema: "upgrade-synthetic",
+    });
+    const assembly = await import("../src/acquisition/assembly.js");
+    const phases: string[] = [];
+    const landing =
+      "https://advanced.onlinelibrary.wiley.com/article?ephemeral=opaque";
+    const transport = vi
+      .spyOn(assembly, "assemblePublicPdfDownloadTransport")
+      .mockReturnValue({
+        request: async () => {
+          phases.push("public:403");
+          return {
+            status: 403,
+            headers: [],
+            body: new Uint8Array(),
+            final_url: landing,
+          };
+        },
+      });
+    const seen: string[][] = [];
+    const service = new EntryPdfAcquisitionService({
+      registry: new PublicAcquisitionRegistry(
+        [
+          {
+            source_name: "doi-landing",
+            acquisition_stage: "public-web",
+            ready: true,
+            discover: async (request) =>
+              request.identifiers
+                .filter((item) => item.namespace === "doi")
+                .map((item) => doiLanding(item.value)),
+          },
+          {
+            source_name: "wiley",
+            acquisition_stage: "publisher-api",
+            acquisition_tier: "authorized-api",
+            ready: true,
+            discover: async (request) => {
+              phases.push("api");
+              expect(authorizedTargets("wiley", request)).toHaveLength(1);
+              seen.push([...(request.landing_origins ?? [])]);
+              return [];
+            },
+          },
+        ],
+        ["doi-landing", "wiley"],
+      ),
+      network_budget: app.networkBudget,
+      transfers: app.execution!.transfers,
+      acceptance: app.execution!.acceptance,
+      resolve_doi_landing: async (url) => {
+        expect(url).toBe(
+          `https://doi.org/${FIXTURE_LITERATURE.metadata.identifiers[0]!.value}`,
+        );
+        phases.push(`doi:${status}`);
+        if (status === 429)
+          throw new AcquisitionRouteError(
+            "rate-limited",
+            "Synthetic DOI resolver rate limit.",
+          );
+        return landing;
+      },
+    });
+    try {
+      await app.database.putLiterature(FIXTURE_LITERATURE);
+      const id = FIXTURE_LITERATURE.literature_id;
+      const outcome = await service.acquire({
+        literature_id: id,
+        detail: await app.library.detail(id),
+        metadata_snapshot: (await app.database.currentFacts(id))!
+          .metadata_snapshot,
+        signal: new AbortController().signal,
+      });
+      expect(outcome.kind).toBe(status === 302 ? "exhausted" : "route-failure");
+      expect(seen).toEqual(
+        status === 302 ? [["https://advanced.onlinelibrary.wiley.com"]] : [],
+      );
+      expect(transport).toHaveBeenCalledTimes(status === 302 ? 1 : 0);
+      expect(phases).toEqual(
+        status === 302 ? ["doi:302", "api", "public:403"] : ["doi:429"],
+      );
+      if (status === 429)
+        expect(outcome).toMatchObject({
+          kind: "route-failure",
+          failure: { source: "doi-resolution", code: "rate-limited" },
+        });
+    } finally {
+      transport.mockRestore();
+      await service.close();
+      await app.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  },
+);

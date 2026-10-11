@@ -16,6 +16,8 @@ export interface AccessRatePolicy {
   }[];
   /** Backoff when a service returns 429 without Retry-After. */
   readonly rateLimitBackoffMs?: number;
+  /** Local shared backoff for HTTP 5xx without Retry-After; not server rate feedback. */
+  readonly serverErrorBackoffMs?: number;
 }
 
 export interface BudgetLimits extends AccessRatePolicy {
@@ -128,7 +130,11 @@ function checkLimits(limits: BudgetLimits): BudgetLimits {
       limits.maxRetryAfterMs < 0)
   )
     invalid();
-  for (const value of [limits.minimumIntervalMs, limits.rateLimitBackoffMs])
+  for (const value of [
+    limits.minimumIntervalMs,
+    limits.rateLimitBackoffMs,
+    limits.serverErrorBackoffMs,
+  ])
     if (value !== undefined && (!Number.isSafeInteger(value) || value < 0))
       invalid();
   if (

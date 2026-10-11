@@ -1,5 +1,7 @@
 # Elsevier
 
+> 2026-10-10 TypeScript 修复复验：Article Retrieval 使用 /content/article/{doi|pii|eid}/{identifier}?view=FULL。Source 接受受信 Article API 的 /pii/ 与 PII: 等类型化提示，Scopus 检索 origin 本身不是 Elsevier 正文归属证据。解析 MAIN web-pdf 时仅取直接子字段，忽略嵌套预览图片的独立 filename/extension/eid。真实样本已通过 FULL XML → MAIN object → 7 页 PDF → 正式入库；不能把 Accept:application/pdf 取得的一页诊断文件当作本次完整交付证据。 证据见[修复验证记录](../live-discovery-acquisition-fixes-2026-10-10.md)。下文较早日期的探测只代表当时状态。
+
 - 官方资料最后在线核对：2026-08-19
 - 当前实现离线对照：2026-08-20
 - 当前选择键：Metadata `elsevier`；Acquisition `elsevier`

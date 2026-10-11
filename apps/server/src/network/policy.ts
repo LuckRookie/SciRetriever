@@ -36,6 +36,8 @@ export interface DestinationPolicy {
   readonly allowed_classes?: readonly AddressClass[];
   readonly allowed_addresses?: readonly string[];
   readonly allowed_origins?: readonly Origin[];
+  /** Optional narrower credential scope; admitted destinations need not receive credentials. */
+  readonly credential_origins?: readonly Origin[];
   readonly allowed_ports?: readonly {
     scheme: "http" | "https";
     port: number;
@@ -408,6 +410,7 @@ function policyValues(
     !Array.isArray(classes) ||
     !Array.isArray(policy?.allowed_addresses ?? []) ||
     !Array.isArray(policy?.allowed_origins ?? []) ||
+    !Array.isArray(policy?.credential_origins ?? []) ||
     schemes.length === 0 ||
     schemes.some((scheme) => scheme !== "http" && scheme !== "https") ||
     classes.length === 0 ||
@@ -430,6 +433,9 @@ function policyValues(
   const rawPorts = policy?.allowed_ports;
   const addresses = rawAddresses.map(canonicalAddress);
   const origins = rawOrigins.map(normalizeOrigin);
+  const credentialOrigins = (policy?.credential_origins ?? rawOrigins).map(
+    normalizeOrigin,
+  );
   const ports =
     rawPorts ??
     schemes.map((scheme: "http" | "https") => ({
@@ -466,6 +472,7 @@ function policyValues(
     allowed_classes: [...new Set(classes)],
     allowed_addresses: [...new Set(addresses)],
     allowed_origins: origins,
+    credential_origins: credentialOrigins,
     allowed_ports: ports,
   };
 }
@@ -671,7 +678,7 @@ export async function evaluateRedirect(
   const same = equalOrigin(current.url.origin, destination.url.origin);
   const forward =
     same ||
-    values.allowed_origins.some((origin) =>
+    values.credential_origins.some((origin) =>
       equalOrigin(origin, destination.url.origin),
     );
   return Object.freeze({

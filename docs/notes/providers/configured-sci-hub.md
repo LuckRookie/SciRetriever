@@ -1,198 +1,80 @@
 # Configured Sci-Hub
 
-- 外部事实最后核对：2026-08-28（Asia/Shanghai）
-- 当前实现离线对照：2026-08-28
-- 当前选择键：Acquisition `sci-hub`
-- 启用语义：Source 默认关闭；operator 显式启用后使用当前版本 bundled mirror set，custom
-  `urls` 完整覆盖 bundled，Python 显式注入 resolver 又优先于两者
-- 当前 bundled 列表：`https://sci-hub.ru`、`https://sci-hub.kr`
-- 当前仓库接入状态：`public:sci-hub` operator-locator route 已接入生产 Acquisition registry
-  与三级 Planner；stock CLI、纯本地 status、TOML custom override 和 Reset 均已接入
+- 外部事实最后核对：2026-10-10（Asia/Shanghai），用户明确授权的低频真实调查与下载验证。
+- 当前选择键：Acquisition `sci-hub`；不提供 Metadata 或引用发现能力。
+- 默认关闭；用户启用后使用版本维护的镜像列表；custom `urls` 完整覆盖 builtin。
+- 当前内置入口：`https://sci-hub.ru`。
+- 生产实现：[定义](../../../apps/server/src/providers/sci-hub/definition.ts)、[Source](../../../apps/server/src/providers/sci-hub/acquisition.ts)、[locator](../../../apps/server/src/providers/sci-hub/locators.ts)。
 
-## 1. 搜索、核验与证据边界
+## 当前外部观察与证据边界
 
-当前没有找到可作为稳定生产合同的公开官方 API 文档，因此不存在可以按 `official` 记录的
-endpoint、认证、响应 schema、分页、限流或错误码。2026-08-28 通过浏览器搜索和搜索结果对照，
-共收集到至少 22 个不同的候选或聚合域名：
+2026-10-10 的真实请求确认如下；这些是当前环境的观察，不是长期服务合同或官方 SLA。
 
-```text
-sci-hub.se       sci-hub.st       sci-hub.ru       sci-hub.kr
-sci-hub.wf       sci-hub.ee       sci-hub.ren      sci-hub.tf
-sci-hub.tw       sci-hub.in       sci-hub.al       scihub.help
-sci-hub.shop     sci-hub.mobi     scihub.wiki      sci-hub.name
-sci-hub.sh       scihub.vip       sci-hub.works    sci-hubse.com
-scihub.ink       sci-hub.run
-```
-
-这个数字是“搜索结果中声称相关的不同域名数”，不是可用镜像数，也不是全球完整总数。搜索摘要中
-的 `official`、`live` 或 `verified` 标签只用于发现候选，不能单独成为接入证据。域名会失效、
-被接管、变成聚合页或随地区和时间呈现不同结果。
-
-本次只对其中 11 个反复出现或由页面重定向暴露的候选执行受限根页面核验。检查范围只有 DNS、
-正常证书验证下的 TLS、HTTPS redirect、最终根页面状态、页面标题/标识以及是否存在 DOI 表单；
-没有提交 DOI、没有搜索或下载论文、没有执行 JavaScript、没有处理 Challenge/CAPTCHA，也没有
-绕过登录、访问控制或地区限制。
-
-| 根入口 | 当前环境 observation | 结论 |
+| 入口 | 实际观察 | 当前处理 |
 | --- | --- | --- |
-| `https://sci-hub.ru/` | TLS 验证通过；HTTP 302 到 `https://sci-hub.kr/`；最终 200，页面标题为 Sci-Hub，存在表单和 DOI 标识 | bundled 第一入口；可跟随镜像轮换 redirect |
-| `https://sci-hub.kr/` | TLS 验证通过；HTTP 200；页面标题为 Sci-Hub，存在表单和 DOI 标识 | bundled 第二入口；当前直接落点 |
-| `https://sci-hub.se/` | 当前网络 TLS 握手失败 | 不内置；不能据此断言全球永久失效 |
-| `https://sci-hub.st/` | 证书为 self-signed，标准校验失败 | 不内置；不得以关闭证书校验绕过 |
-| `https://sci-hub.wf/` | TLS/200，但只返回 “Checking your browser…” Challenge | 不适合当前静态 locator parser |
-| `https://sci-hub.ee/` | TLS/200，但标题为 proxy search links | 聚合/代理页，不作为通用镜像 |
-| `https://sci-hub.ren/` | TLS/200，但表单提交到另一第三方 origin | 不作为稳定通用镜像 |
-| `https://sci-hub.tf/` | 跳转到无关游戏广告页面 | 已劫持或停放，不内置 |
-| `https://sci-hub.tw/` | 当前网络 TLS connection timeout | 不内置；不能据此断言全球永久失效 |
-| `https://sci-hub.in/` | TLS/200，但表单提交到另一第三方 origin | 不作为稳定通用镜像 |
-| `https://sci-hub.al/` | TLS/200，但表单提交到另一第三方 origin | 不作为稳定通用镜像 |
+| `sci-hub.ru/10.1016/s0254-0584(01)00333-9` | 返回 200 Sci-Hub landing，未转到 Sci-Net | 继续通用静态 PDF 获取 |
+| `sci-hub.ru/10.1021/acs.chemmater.4c00597` | HTTP 302，Location 指向同 DOI 的 `sci-net.xyz` 页面 | 由共享 Network 重新检查重定向目的地，再处理 landing |
+| `sci-hub.ru/10.1021/acsomega.5c11075` | 同样转到 Sci-Net；本次返回 200、显示 uploaded | 按页面实际 PDF 声明处理，不把重定向视为拒绝 |
+| `sci-net.xyz/` | 首页自述为论文请求与共享平台，已上传文件可不注册访问 | 仅记录页面声明，不新增账号、上传或请求表单自动化 |
+| `sci-hub.kr/` 与两个新旧 DOI 入口 | 均为同一份 610 字节的 Science Hub 广告占位 HTML，含广告 iframe，没有 DOI 查询表单或 PDF 声明 | 从 builtin 移除；不改写用户 custom 列表 |
 
-上述 `verified` observation 只证明 2026-08-28 当前环境中的根页面形状。它不证明
-`<mirror>/<encoded-doi>` 对任意 DOI 可用，不证明某篇 Literature 有 PDF，不证明服务长期在线，
-也不证明访问者的法律、机构政策、内容许可或服务条款允许使用。产品内置两个入口是当前 release
-维护选择，不是 SLA、官方身份认证或授权声明。
+`.kr` 在 2026-08-28 的根页面核验中曾呈现 Sci-Hub DOI 表单，因而进入早期 builtin。
+本次三个路径返回同一 hash 的占位页，只能证明它当前在本环境不能充当有效镜像，不能据此确认域名被接管的原因。
+不会自动加入搜索到的其它域名，也不会把 Sci-Net 硬编码为新的内置镜像。
 
-## 2. 当前配置与对象图语义
+此前批量日志中，Sci-Net 的 43 次响应均为 502；本次同类入口已恢复到 200。
+新的 302 Location 证据确认跳转由远端发出，并非应用猜出的域名。没有足够证据把早先 502
+归因于账号拒绝、订阅权限不足、请求过快或 IP 封禁；网关更深层故障原因不在客户端日志内。
 
-`sci-hub` 只出现在 Acquisition Provider 允许键中，不是 Metadata Provider，也没有引用能力。
-Source 默认关闭；最小启用配置不需要镜像 table：
+Sci-Net 样本中存在带引号的 `iframe src`，PDF URL 尾部包含 `#view=FitH&navpanes=0`。
+旧共享静态解析器提取了链接，但 `safeLocator` 拒绝 fragment，导致文件被遗漏。
+当前在静态链接进入 locator 检查前删除仅供阅读器显示的 fragment，再保留原 path/query、
+origin、DNS、重定向和文件检查。没有为 Sci-Net 新建 selector、页面程序或文章特例。
+
+真实验证与修复结果见[本次记录](../sci-hub-routing-and-public-fallback-2026-10-10.md)。
+原始请求记录位于 `/tmp/sciretriever-scihub-routing-20261010-ULmT6B/`，未提交原始页面或 PDF。
+
+## 配置与对象图
 
 ```toml
 [sources.acquisition]
+mode = "custom"
 providers = ["sci-hub"]
 ```
 
-此时有效列表来自当前版本 bundled mirror set。operator 需要自己的列表时可以完整覆盖：
+没有 mirror table 时跟随当前版本 builtin。自定义列表完整覆盖 builtin：
 
 ```toml
-[sources.acquisition]
-providers = ["sci-hub"]
-
 [sources.acquisition.sci-hub]
-urls = [
-  "https://mirror-one.example",
-  "https://mirror-two.example/base",
-]
+urls = ["https://mirror-one.example", "https://mirror-two.example/base"]
 ```
 
-`urls` 是一到八个有序、规范化后不可重复的普通非 secret URL。每项必须使用 hostname-based
-HTTPS 默认端口，且不能包含 userinfo、query、fragment、IP literal、loopback、隐藏路径分隔符或
-dot segment。custom table 一旦存在就完整覆盖 bundled，不会在 custom 失败后暗中回退，也不会
-在升级时被改写。Reset 删除整个 custom table，而不是写空数组；Disable 只从 Provider 顺序移除
-Source，并保留 custom。
+`urls` 是一到八个有序且规范化后不重复的普通 HTTPS URL；不接受 userinfo、query、fragment、
+IP literal、隐藏路径分隔符或 dot segment。Reset 删除 custom table；Disable 移除选中的 Source
+但保留 custom。配置读取、状态展示与 Source 组装不发起联网探测，也不根据 mirror 暂时可用性改写配置。
 
-Registry 在纯本地组装中按以下顺序选择 resolver：
+`ConfiguredSciHubSource` 从当前已接纳的 DOI 按镜像顺序生成 landing candidates；没有 DOI 时不适用。
+DOI 逐路径段编码，保留 DOI 的 `/` 分隔。Source 只产生 locator，共享 public transport 负责 HTTP
+与静态 PDF 声明，不读取页面中的题目或作者作为权威元数据。每个实际请求/redirect 按目的地选共享服务政策。
 
-```text
-Python injected resolver
-  > custom [sources.acquisition.sci-hub].urls
-  > current-release bundled mirror set
-```
+## 获取与失败语义
 
-无论选择哪一层，`ConfiguredSciHubLandingResolver` 都只接受当前 Literature 已接纳的规范 DOI，
-按有效列表顺序形成 `<mirror>/<encoded-doi>` landing locator；没有 DOI 时 route 不适用。
-Registry、`config status` 与 Planner 构造不执行 DNS 或 HTTP。未启用时即使 resolver locally
-ready 也不会安装 `public:sci-hub` route。Status 用以下普通字段区分有效来源：
+1. 请求 landing；可以直接返回 PDF，也可以通过 `citation_pdf_url`、PDF 链接或 iframe/embed 声明文件。
+2. 相对 PDF 地址以最终 landing URL 解析，去掉阅读器 fragment，再经过原 URL、DNS、公网地址、端口与重定向检查。
+3. 文件进入统一 Candidate spool 与 PDF reader；实际 PDF 可读、至少一页且满足文件合同后，沿正式 acceptance/publication 入库，文章身份标为未验证。
+4. 普通无候选/404 可以尝试下一镜像；不假称成功。带 Retry-After 或 429 仍停止备用尝试。
+5. 无限流反馈的公共 5xx 或已识别的普通传输故障保留原因，允许后续独立 API/Browser 继续；后续均未命中时不写自动耗尽。具体边界由 [ADR 0015 §7](../../architecture/decisions/0015-publisher-aware-tiered-pdf-acquisition.md#7-升级暂停与熔断语义) 定义。
+6. 无 Retry-After 的 HTTP 5xx 按服务政策共享退避，项目默认 30 秒。重定向到同一个目的地的其它目标共享该退避；它不是远端限流反馈，不伪造 Retry-After。
 
-```json
-{"mode": "builtin", "urls": ["https://sci-hub.ru", "https://sci-hub.kr"]}
-```
+配置不提供 Key、Cookie、session、代理、脚本、验证码 solver 或登录绕过；用户负责确认部署环境的适用授权。
+本次不提交 Sci-Net 请求、不注册账号、不上传文件。运行时不扫描或自动发现镜像；custom 失败后不混入 builtin。
+Catalog 保留统一来源、hash、lineage 与资产关系，不存 landing HTML、候选 URL 或逐镜像运行历史。
 
-或：
+## 维护与验证
 
-```json
-{"mode": "custom", "urls": ["https://mirror-one.example"]}
-```
+当前 TS 自动化测试使用合成 PDF、临时数据库和 fake/loopback 网络，验证 static fragment 归一化、
+目的地安全检查、公共失败的独立 fallback、共享退避和正式 publication。真实探测与下载独立于 Harness，
+不得随安装、状态展示、普通测试或 CI 自动执行。
 
-## 3. Config 交互语义
-
-交互入口固定在 `Download → Sources → sci-hub`：
-
-```text
-disabled: Enable / Edit / Back
-enabled:  Edit / Disable / Back
-editor:   Add / Remove / Save / Reset / Back
-```
-
-- `Enable` 直接使用当前有效列表，不先询问 URL；
-- `Edit` 从 builtin 或已有 custom 的有效列表开始；
-- `Save` 把 draft 写成显式 custom override；
-- `Reset` 删除 custom override 并重新跟随当前版本 builtin；
-- `Disable` 保留 custom override；
-- `Back` 不发布 draft；
-- 整个流程不调用 API Key、Cookie、session、代理或 hidden credential 输入。
-
-## 4. Operator 责任与访问边界
-
-Operator 必须在部署环境之外确认适用法律、机构政策、内容许可和服务使用条件。项目文档不替
-operator 做授权判断，也不因 bundled 域名或 Provider 名称存在而授予访问权限。
-
-1. Bundled 列表由 release 维护者通过受限根页面 observation 更新，不在运行时扫描、探测或自动
-   发现镜像。运行只按当前有效列表逐个尝试，不并发轰炸多个镜像。
-2. 普通配置不接受 API key、header、Cookie、session、代理、selector 或脚本。私有注入 resolver
-   自行拥有环境特定认证，不能把 header、Cookie 或响应对象返回给 SciRetriever；仓库不为
-   Sci-Hub 定义 credentials section。
-3. SciRetriever 对每个 landing 和发现的 PDF locator 执行 HTTPS、URL/DNS/redirect/origin、
-   timeout、响应大小和预算检查；不同 mirror hostname 自动进入各自的共享 Network web scope。
-4. 不跨 origin 自动转发敏感 headers/cookie；redirect 后重新执行安全判断。
-5. 不规避 CAPTCHA、登录、访问控制、robots/服务限制、付费授权或地区限制。
-6. Landing 可以直接返回 PDF，也可以用共享静态解析器声明 `citation_pdf_url`，或在
-   `a/link/embed/object` 上明确声明 `application/pdf`；产品不执行页面脚本、不猜 selector。
-7. HTTP 200、文件名或页面声明都不能证明字节是 PDF。Fetch 后仍执行媒体类型规范化、PDF
-   magic/basic checks、hash、lineage 和 immutable publish。
-8. 无安全候选可以返回“没有获得主 PDF”；无法安全发布或提交关系是系统失败，不能静默降级。
-
-## 5. 最小中性合同
-
-内置 DOI resolver 与环境特定注入 resolver 都只向 Source 输出有限的中性 locator：
-
-```text
-ConfiguredLocatorResolver.resolve(
-  identifiers: tuple[Identifier, ...],
-  cancel_event: threading.Event | None
-)
-
-output:
-  tuple[str, ...]  # zero or more candidate HTTPS locators
-```
-
-Resolver 不返回 header、Cookie、角色、媒体类型、vendor object 或响应正文。内置 resolver 不执行
-HTTP，只把 DOI 的每个 path segment 安全编码；`?`、`#`、百分号和 dot segment 不能改变 URL
-结构。SciRetriever 在本地规范化和去重 locator，以当前请求的已接纳 identifiers 形成不可逆的安全
-candidate identity，再把实际获取交给统一 Public locator fetcher。不得为该 Provider 新建 vendor
-业务 Model、通用关系、额外资产状态或持久 session 表。
-
-## 6. 元数据、响应与持久化边界
-
-当前选择键只用于 Acquisition。即使页面显示标题、作者或参考文献，resolver 也不得写入
-`LiteratureMetadata`、`MetadataObservation`、`ProviderRelationObservation` 或权威
-`Reference`；这些事实应来自相应 Metadata Provider，并经过 Literature 所有者规则接纳。
-
-没有把任一镜像页面提升为 vendor schema。当前实现只复用 Public locator fetcher 已有的有限静态
-PDF 声明解析；Challenge、登录页、验证码页、脚本生成链接和任意 HTML 都不会因为来自 bundled
-域名而得到特殊信任。Catalog/provenance 只保留稳定 `sci-hub` 来源、hash 与 lineage，不保存
-landing HTML、候选 URL、query、redirect 目标或逐镜像细节。
-
-## 7. 失效、排障与退役
-
-- bundled 入口失效：维护者重新执行受限根页面核验并在后续 release 更新列表；operator 当前可
-  保存 custom override 或禁用 Source。旧 release 不在运行时远程更新镜像。
-- custom 全部失效：修改或 Reset custom；系统不会暗中混入 bundled，以免违反用户明确顺序。
-- 注入 resolver 合同无效：修复调用方组装；不能回退 custom/bundled 掩盖显式 override 错误。
-- Network policy 拒绝 URL/DNS/redirect/origin：保持系统失败证据，不关闭 TLS 验证或放宽规则。
-- 某镜像正常 404、没有静态 PDF locator 或候选被拒绝：按顺序尝试下一镜像；不能虚构正常命中。
-- 返回 Challenge、验证码、登录或非 PDF：拒绝候选，不实施绕过。
-- 授权、合法性或可维护性无法继续确认：从 providers 移除 `sci-hub`；不影响其它 Provider
-  已提交事实。
-
-## 8. 当前实现与测试边界
-
-Bundled 列表位于
-`src/sciretriever/acquisition/sources/configured_sci_hub.py`，不是 Pydantic 字段默认值，因此
-编辑其它配置不会把真实 endpoint 意外写入用户 TOML。生产优先级在 Acquisition registry 组装
-边界实现；Config 只保存 custom override 与 enabled Provider，Status 展示 effective mode/list。
-
-仓库没有 Sci-Hub 认证、Browser、translator、镜像发现、动态 selector、脚本执行或并发镜像竞速。
-所有自动化测试继续使用保留域名、fake resolver/transport/fixture，不访问真实服务、读取凭据、
-提交 DOI 或下载文献。本文件的 2026-08-28 observation 是用户明确授权的独立只读维护核验，不由
-Harness、CI、安装后验收或普通 `config status` 自动刷新。
+外部入口失效时由维护者重新核验并随版本更新 builtin；用户可以更改 custom 列表。不得通过关闭 TLS、
+扩大到私网地址或猜测下载路径来恢复服务。文件发布、存储或合同错误不能降级为“镜像无文件”。

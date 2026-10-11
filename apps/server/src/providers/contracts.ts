@@ -1,3 +1,4 @@
+import type { AcquisitionStage } from "../acquisition/ports.js";
 import type { AccessRatePolicy } from "../network/budget.js";
 export type MetadataCapability = "topic-search" | "lookup" | "reference-query";
 export interface ServiceDefinition {
@@ -13,6 +14,8 @@ export interface ProviderDefinition {
   readonly metadataFormat?: "json" | "atom";
   readonly metadataAuto?: boolean;
   readonly acquisition: "public" | "authorized-api" | "hints" | "none";
+  readonly acquisitionStage?: AcquisitionStage;
+  readonly publisherAliases?: readonly string[];
   readonly acquisitionService?: string;
   readonly acquisitionAuto?: boolean;
   readonly credentialFields: readonly string[];
@@ -23,6 +26,8 @@ export interface ProviderDefinition {
   readonly metadataQuery?: Readonly<Record<string, string>>;
   readonly pdfIdentifiers?: readonly string[];
   readonly doiOrigins?: readonly string[];
+  /** Publisher-owned domains including their subdomains, HTTPS on the default port. */
+  readonly doiDomains?: readonly string[];
 }
 export const SECOND = 1000;
 export const MINUTE = 60 * SECOND;
@@ -32,6 +37,7 @@ export const DEFAULT_POLICY = Object.freeze({
   maxConcurrency: 1,
   minimumIntervalMs: SECOND,
   rateLimitBackoffMs: 60 * SECOND,
+  serverErrorBackoffMs: 30 * SECOND,
 });
 export function service(
   endpoint: string,
@@ -71,6 +77,9 @@ export function provider(value: ProviderDefinition): ProviderDefinition {
     ...value,
     metadata: Object.freeze([...value.metadata]),
     credentialFields: Object.freeze([...value.credentialFields]),
+    ...(value.publisherAliases
+      ? { publisherAliases: Object.freeze([...value.publisherAliases]) }
+      : {}),
     ...(value.pdfHeaders
       ? { pdfHeaders: Object.freeze({ ...value.pdfHeaders }) }
       : {}),
@@ -82,6 +91,9 @@ export function provider(value: ProviderDefinition): ProviderDefinition {
       : {}),
     ...(value.pdfIdentifiers
       ? { pdfIdentifiers: Object.freeze([...value.pdfIdentifiers]) }
+      : {}),
+    ...(value.doiDomains
+      ? { doiDomains: Object.freeze([...value.doiDomains]) }
       : {}),
     ...(value.doiOrigins
       ? { doiOrigins: Object.freeze([...value.doiOrigins]) }

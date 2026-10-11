@@ -2,10 +2,15 @@ import type {
   AuthorizedPdfClientPort,
   AcquisitionSourceRequest,
 } from "../../acquisition/ports.js";
-import { targetsForDefinition } from "../shared/acquisition-locators.js";
+import {
+  targetsForDefinition,
+  articleHintTargets,
+  uniqueTargets,
+} from "../shared/acquisition-locators.js";
 import {
   AuthorizedProviderError,
   download,
+  hasPdfHeader,
   interpretDownloadResponse,
   mediaType,
   rateLimitedResponse,
@@ -28,20 +33,42 @@ function elsevierHeaders(
     ...(institutionToken ? { "x-els-insttoken": institutionToken } : {}),
   };
 }
-function xmlField(block: string, name: string): string | null {
-  const values = [
-    ...block.matchAll(
-      new RegExp(
-        `<(?:[a-z][a-z0-9_.-]*:)?${name}\\b[^>]*>([^<]*)<\\/(?:[a-z][a-z0-9_.-]*:)?${name}>`,
-        "giu",
-      ),
-    ),
-  ]
-    .map((match) => match[1]!.trim())
-    .filter(Boolean);
-  if (values.some((value) => value !== values[0]))
+/** Only direct scalar children describe the PDF; nested preview images have their own fields. */
+function xmlFields(block: string): ReadonlyMap<string, string> {
+  const fields = new Map<string, string>();
+  const xml = block.replace(/<!--[\s\S]*?-->/gu, "");
+  const stack: string[] = [];
+  let textStart = 0;
+  let scalar = false;
+  for (const tag of xml.matchAll(
+    /<(\/?)([a-z_][a-z0-9_.:-]*)(?:\s[^<>]*?)?(\/?)>/giu,
+  )) {
+    const name = tag[2]!;
+    if (tag[1] === "/") {
+      if (stack.pop() !== name)
+        throw new AuthorizedProviderError({ code: "response-schema" });
+      if (stack.length === 0 && scalar) {
+        const value = xml.slice(textStart, tag.index).trim();
+        const localName = name.split(":").at(-1)!.toLowerCase();
+        if (!value) continue;
+        if (
+          value.includes("<") ||
+          (fields.has(localName) && fields.get(localName) !== value)
+        )
+          throw new AuthorizedProviderError({ code: "response-schema" });
+        fields.set(localName, value);
+      }
+    } else {
+      if (stack.length === 0) {
+        textStart = tag.index + tag[0].length;
+        scalar = true;
+      } else scalar = false;
+      if (tag[3] !== "/") stack.push(name);
+    }
+  }
+  if (stack.length)
     throw new AuthorizedProviderError({ code: "response-schema" });
-  return values[0] ?? null;
+  return fields;
 }
 function elsevierMainObjects(bytes: Uint8Array): readonly string[] | null {
   if (bytes.byteLength > 4 * 1024 * 1024) return null;
@@ -60,13 +87,13 @@ function elsevierMainObjects(bytes: Uint8Array): readonly string[] | null {
     throw new AuthorizedProviderError({ code: "response-schema" });
   const result: string[] = [];
   for (const match of xml.matchAll(
-    /<(?:[a-z][a-z0-9_.-]*:)?web-pdf\b[^>]*>([\s\S]*?)<\/(?:[a-z][a-z0-9_.-]*:)?web-pdf>/giu,
+    /<(?:[a-z][a-z0-9_.-]*:)?web-pdf(?:\s[^>]*?)?(?<!\/)>([\s\S]*?)<\/(?:[a-z][a-z0-9_.-]*:)?web-pdf>/giu,
   )) {
-    const block = match[1]!;
-    const purpose = xmlField(block, "web-pdf-purpose")?.toLowerCase();
-    const extension = xmlField(block, "extension")?.toLowerCase();
-    const filename = xmlField(block, "filename");
-    const eid = xmlField(block, "attachment-eid");
+    const fields = xmlFields(match[1]!);
+    const purpose = fields.get("web-pdf-purpose")?.toLowerCase();
+    const extension = fields.get("extension")?.toLowerCase();
+    const filename = fields.get("filename");
+    const eid = fields.get("attachment-eid");
     if (
       purpose !== "main" ||
       extension !== "pdf" ||
@@ -142,7 +169,7 @@ export class ElsevierAuthorizedPdfClient implements AuthorizedPdfClientPort {
         elsevierHeaders(this.apiKey, this.institutionToken, "application/pdf"),
         signal,
       );
-    const articleUrl = `${this.origin}/content/article/${kind}?view=FULL&${kind}=${encodeURIComponent(safeIdentity(locator.value))}`;
+    const articleUrl = `${this.origin}/content/article/${kind}/${encodeURIComponent(safeIdentity(locator.value))}?view=FULL`;
     if (signal?.aborted)
       throw new AuthorizedProviderError({ code: "cancelled" });
     const lookup = await this.transport.request(articleUrl, {
@@ -163,11 +190,12 @@ export class ElsevierAuthorizedPdfClient implements AuthorizedPdfClientPort {
       return interpretDownloadResponse(locator, lookup, articleUrl);
     const representation = mediaType(lookup);
     if (
-      representation === "application/pdf" &&
-      !new TextDecoder()
-        .decode(lookup.body.subarray(0, 1024))
-        .trimStart()
-        .startsWith("<")
+      hasPdfHeader(lookup) ||
+      (representation === "application/pdf" &&
+        !new TextDecoder()
+          .decode(lookup.body.subarray(0, 1024))
+          .trimStart()
+          .startsWith("<"))
     )
       return interpretDownloadResponse(locator, lookup, articleUrl);
     const objects = elsevierMainObjects(lookup.body);
@@ -198,7 +226,32 @@ export class ElsevierAuthorizedPdfClient implements AuthorizedPdfClientPort {
 export function targets(
   request: AcquisitionSourceRequest,
 ): readonly AuthorizedLookupTarget[] {
-  return targetsForDefinition(definition, request);
+  return uniqueTargets([
+    ...targetsForDefinition(definition, request),
+    ...articleHintTargets(
+      request,
+      services["elsevier-article"].endpoint,
+      (path) => {
+        const match = /^\/content\/article\/(doi|pii|eid)(?:\/|:)(.+)$/iu.exec(
+          path,
+        );
+        if (!match) return null;
+        const value = safeIdentity(decodeURIComponent(match[2]!));
+        if (
+          match[1]!.toLowerCase() !== "doi" &&
+          !/^[a-zA-Z0-9._()-]+$/u.test(value)
+        )
+          return null;
+        return {
+          namespace:
+            match[1]!.toLowerCase() === "eid"
+              ? "elsevier-article-eid"
+              : match[1]!.toLowerCase(),
+          value,
+        };
+      },
+    ),
+  ]);
 }
 export function candidateUrl(locator: AuthorizedDownloadLocator): string {
   const value = encodeURIComponent(locator.value);
@@ -208,5 +261,5 @@ export function candidateUrl(locator: AuthorizedDownloadLocator): string {
     : locator.namespace.endsWith("-pii")
       ? "pii"
       : "eid";
-  return `${services["elsevier-article"].endpoint}/content/article/${kind}?view=FULL&${kind}=${value}`;
+  return `${services["elsevier-article"].endpoint}/content/article/${kind}/${value}?view=FULL`;
 }

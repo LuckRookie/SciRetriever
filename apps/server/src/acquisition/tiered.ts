@@ -39,9 +39,8 @@ export type AcquisitionFailureCode =
  * transport's inability to serve the target; ADR 0015 §7 permits an independently
  * admitted browser to assess its own current institutional/session access.
  *
- * Only this explicit declaration (or a normal miss) may let an independently admitted
- * Browser take over; retryable, temporary, deferred and unrecognized failures always stay
- * unresolved route failures.
+ * Ordinary public transport failures may also allow an independent fallback, but remain
+ * unresolved failures if no later route delivers (ADR 0015 §7).
  */
 export type AcquisitionRouteUnavailability =
   | "not-applicable"
@@ -55,11 +54,13 @@ export interface AcquisitionBatchFailure {
   readonly retryable: boolean;
   /**
    * Non-null only when the route explicitly declared a low-risk unavailability. Entry reads
-   * this field — never `code` — to decide whether an admitted Browser may take over, so a
-   * provider failure can never be rescued by pattern matching. Producers that do not declare
-   * anything leave it absent/null, which is the fail-closed default.
+   * this declaration, or the explicit public-outage permission below, to decide whether
+   * independent routes may take over. Unknown failures never gain permission from their
+   * message or retryability alone.
    */
   readonly unavailability?: AcquisitionRouteUnavailability | null;
+  /** A recognized transport outage may leave the public tier, without becoming a miss. */
+  readonly allows_independent_fallback?: boolean;
 }
 
 /**
@@ -87,14 +88,22 @@ export type AcquisitionFailureKind =
  * the batch never has to guess.
  */
 export class AcquisitionRouteError extends Error {
+  readonly allows_independent_fallback: boolean;
   constructor(
     readonly code: AcquisitionFailureCode,
     readonly reason: string,
     readonly retryable = true,
-    options: { readonly cause?: unknown } = {},
+    options: {
+      readonly cause?: unknown;
+      readonly allows_independent_fallback?: boolean;
+    } = {},
   ) {
     super("acquisition route failed", options);
     this.name = "AcquisitionRouteError";
+    this.allows_independent_fallback =
+      retryable &&
+      code !== "rate-limited" &&
+      options.allows_independent_fallback === true;
   }
 }
 
@@ -103,8 +112,8 @@ export class AcquisitionRouteError extends Error {
  *
  * Unlike `AcquisitionRouteError` it is not an unresolved failure: the route proved it
  * cannot serve this target, so the batch records it without cooling the source down and
- * Entry may hand the target to an independently admitted Browser. Raising it is the only
- * way to authorize that handover; no failure code is ever interpreted this way.
+ * Entry may hand the target to an independently admitted Browser. Ordinary public outages
+ * use a separate permission and remain failures rather than low-risk declarations.
  */
 export class AcquisitionUnavailableError extends Error {
   constructor(
@@ -219,6 +228,8 @@ export function classifyAcquisitionFailure(
 export interface AcquisitionBatchItem {
   readonly key: string;
   readonly request: AcquisitionSourceRequest;
+  /** Ordering preference only: every configured source keeps its own admission. */
+  readonly preferred_sources?: readonly string[];
 }
 
 export interface AcquisitionBatchResult {
@@ -260,8 +271,16 @@ function failure(
   reason: string,
   retryable: boolean,
   unavailability: AcquisitionRouteUnavailability | null = null,
+  allowsIndependentFallback = false,
 ): AcquisitionBatchFailure {
-  return Object.freeze({ code, source, reason, retryable, unavailability });
+  return Object.freeze({
+    code,
+    source,
+    reason,
+    retryable,
+    unavailability,
+    ...(allowsIndependentFallback ? { allows_independent_fallback: true } : {}),
+  });
 }
 
 /**
@@ -277,19 +296,31 @@ function unavailableFailure(
 }
 
 /** Keep transport facts in the operation report without exposing URLs or remote text. */
-function routeFailure(
+export function routeFailure(
   error: unknown,
   source: string,
   fallback: AcquisitionBatchFailure,
 ): AcquisitionBatchFailure {
   if (error instanceof AcquisitionRouteError)
-    return failure(error.code, source, error.reason, error.retryable);
+    return failure(
+      error.code,
+      source,
+      error.reason,
+      error.retryable,
+      null,
+      error.allows_independent_fallback,
+    );
   if (error instanceof NetworkHttpError)
     return failure(
       error.retry_after_ms !== undefined ? "rate-limited" : "network-failed",
       source,
       `HTTP transport failed (${error.reason}).${error.retry_after_ms !== undefined ? ` Retry-After: ${error.retry_after_ms} ms.` : ""}`,
       true,
+      null,
+      error.retry_after_ms === undefined &&
+        ["timeout", "request-failed", "response-incomplete"].includes(
+          error.reason,
+        ),
     );
   if (
     error instanceof Error &&
@@ -300,6 +331,8 @@ function routeFailure(
       source,
       `${error.name}: request could not be completed.`,
       true,
+      null,
+      error.name === "NetworkConnectionError",
     );
   return fallback;
 }
@@ -316,7 +349,7 @@ function copyResult(
 }
 
 /**
- * Executes public/API/browser source ports in their configured order.
+ * Executes source ports in their configured order, with optional per-item preferences.
  * Discovery, candidate download and policy disposition remain separate so a
  * source failure cannot be mistaken for a permanent exhaustion fact.
  *
@@ -326,7 +359,13 @@ function copyResult(
  * retried on another route.
  */
 export class TieredAcquisitionService {
-  private readonly cooldownUntil = new Map<string, number>();
+  private readonly cooldowns = new Map<
+    string,
+    {
+      readonly until: number;
+      readonly failure: AcquisitionBatchFailure;
+    }
+  >();
   private readonly assistance: "never" | "notify" | "pause";
   private readonly cooldownMs: number;
   private readonly maxItems: number;
@@ -409,15 +448,27 @@ export class TieredAcquisitionService {
     const attempted: string[] = [];
     let lastFailure: AcquisitionBatchFailure | null = null;
     const remember = (next: AcquisitionBatchFailure): void => {
-      // A later unsupported route cannot erase an earlier unresolved network failure.
-      if (
-        !lastFailure ||
-        lastFailure.unavailability != null ||
-        next.unavailability == null
-      )
+      // Keep unresolved failures above misses, and never let a later ordinary outage
+      // erase a failure that prohibits independent fallback.
+      const priority = (value: AcquisitionBatchFailure) =>
+        value.unavailability != null
+          ? 0
+          : value.allows_independent_fallback
+            ? 1
+            : 2;
+      if (!lastFailure || priority(next) > priority(lastFailure))
         lastFailure = next;
     };
-    for (const source of this.registry.sources) {
+    const preferred = new Set(item.preferred_sources ?? []);
+    const sources = [
+      ...this.registry.sources.filter((source) =>
+        preferred.has(source.source_name),
+      ),
+      ...this.registry.sources.filter(
+        (source) => !preferred.has(source.source_name),
+      ),
+    ];
+    for (const source of sources) {
       if (signal.aborted)
         return this.interrupted(
           item.key,
@@ -425,18 +476,19 @@ export class TieredAcquisitionService {
           null,
           "Acquisition batch was cancelled while a target was running.",
         );
-      const cooldown = this.cooldownUntil.get(source.source_name) ?? 0;
-      if (cooldown > this.now()) {
-        remember(
-          failure(
-            "source-cooldown",
-            source.source_name,
-            "The source is cooling down after a bounded discovery failure.",
-            true,
-          ),
-        );
+      const cooldown = this.cooldowns.get(source.source_name);
+      if (cooldown && cooldown.until > this.now()) {
+        const detail = Object.freeze({
+          ...cooldown.failure,
+          code: "source-cooldown" as const,
+          reason: `The source is cooling down after a discovery failure: ${cooldown.failure.reason}`,
+        });
+        remember(detail);
+        if (cooldown.failure.code === "rate-limited")
+          return this.policyResult(item.key, attempted, detail);
         continue;
       }
+      this.cooldowns.delete(source.source_name);
       attempted.push(source.source_name);
       let candidates: readonly SourceCandidate[];
       try {
@@ -459,10 +511,6 @@ export class TieredAcquisitionService {
             "Acquisition batch was cancelled while a source was being discovered.",
           );
         if (kind !== "route") throw error;
-        this.cooldownUntil.set(
-          source.source_name,
-          this.now() + this.cooldownMs,
-        );
         const detail = routeFailure(
           error,
           source.source_name,
@@ -473,6 +521,10 @@ export class TieredAcquisitionService {
             true,
           ),
         );
+        this.cooldowns.set(source.source_name, {
+          until: this.now() + this.cooldownMs,
+          failure: detail,
+        });
         remember(detail);
         if (detail.code === "rate-limited")
           return this.policyResult(item.key, attempted, detail);

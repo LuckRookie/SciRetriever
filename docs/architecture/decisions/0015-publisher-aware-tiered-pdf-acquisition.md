@@ -1,43 +1,59 @@
-# ADR 0015：访问方感知的三级 PDF 获取与 Browser 调度
+# ADR 0015：访问方感知的五层 PDF 获取与 Browser 调度
 
 - Status: Accepted
 - Date: 2026-08-15
-- Last amended: 2026-10-07
+- Last amended: 2026-10-11
 - Supersedes: none
 - Amends: [ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)
 - Amended by: [ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0023](0023-generic-browser-agent-executor.md)、[ADR 0030](0030-browser-transport-and-progress.md)（文章平台资格、后台下载与会话 cap）
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)、[任务与协作控制：数据库补全与阶段协调](../technical/02-task-coordination.md#4-数据库补全与阶段协调)、[Provider Notes](../../notes/providers/README.md)
 
 > 2026-10-04：[ADR 0029](0029-unverified-pdf-acquisition.md) 取消下载阶段的文章身份门；有效 PDF
-> 正常发布并标记文章身份未验证，三级路线和 Network 边界继续保留。
+> 正常发布并标记文章身份未验证，Network 边界继续保留。
+> 2026-10-11：用户接受五层顺序、独立名称治理与首次模型前入口准备；下文替代旧三级执行顺序，
+> 凭据、权限、限流和不可变发布边界不因排序变化放宽。
 
 ## 背景
 
 > **2026-09-06 修订：** ADR 0023 删除了下文的 Publisher-specific Browser route/rule、
-> risk/session group 与 Rules/Agent 二选一。仍有效的是三级风险升级、一个 operator-managed
+> risk/session group 与 Rules/Agent 二选一。仍有效的是 Browser 最后执行、一个 operator-managed
 > Profile、Network 安全边界和 operation-local 失败语义；当前 Browser 设计以 ADR 0023 为准。
 
-SciRetriever 面向用户指定领域批量补全文献。公开仓储和官方 API 通常有明确的批量访问合同与相对宽松的并发/额度；Browser 页面流程则面向交互式访问，成本更高，也更容易触发 challenge、限流或 IP 限制。因此现有“公开来源、授权 Provider API、受控 Browser”三级顺序是风险控制边界，不能因为 Browser 能处理出版社页面就改成默认 Browser-first。
+SciRetriever 面向用户指定领域批量补全文献。公开仓储和官方 API 通常有明确的批量访问合同与相对宽松的并发/额度；Browser 页面流程则面向交互式访问，成本更高，也更容易触发 challenge、限流或 IP 限制。2026-10-11 将原三级顺序细化为“已有直链、出版社专用 API、通用 API、公共网站、Browser”五层，以优先消费已知文件与适用服务；不能因为 Browser 能处理出版社页面就改成默认 Browser-first。
 
-另一方面，逐篇 Literature 让每个 Source 分别判断适用性并完整走完三层，会丢失 DOI 解析、API object locator、canonical landing 和稳定文章 ID 等中间知识，也无法在批量任务中先用低风险路径消化全部目标。Browser 若被当成普通第三个 Source，也无法在同一用户/机构身份 Profile 上复用认证状态，同时按访问供应商独立限速、暂停或熔断。
+另一方面，逐篇 Literature 让每个 Source 分别判断适用性并完整走完各层，会丢失 DOI 解析、API object locator、canonical landing 和稳定文章 ID 等中间知识，也无法在批量任务中先用低风险路径消化全部目标。Browser 若被当成普通 locator Source，也无法在同一用户/机构身份 Profile 上复用认证状态，同时按访问供应商独立限速、暂停或熔断。
 
 元数据来源、原文访问方和页面平台也不是同一身份。Scopus 找到 Wiley 论文不表示 Elsevier 拥有其原文；同一集团可能使用多个独立平台，同一平台也可能托管多个品牌。自由 publisher 字符串、Metadata Provider 名称或单独 DOI prefix 都不足以决定内容 API、Browser 会话或限速范围。
 
 ## 决策
 
-### 1. 保留严格三级风险升级
+### 1. 五层执行顺序与认证边界分别表达
 
 默认自动 PDF 获取固定为：
 
 ```text
-PUBLIC
-  -> AUTHORIZED_PROVIDER_API
-  -> CONTROLLED_BROWSER
+direct
+  -> publisher-api
+  -> general-api
+  -> public-web
+  -> browser
 ```
 
-Planner 可以省略已经确定不适用的路线，但不能把 Browser 自动提升到仍可能成功的公开或官方 API 路线之前。前一层只有正常未命中、明确不适用或按显式 Browser policy 可接受地不可用时，目标才可能进入下一层。任一路线完整提交主 PDF 后，当前 Literature 不再执行后续获取路线。
+| 阶段 | 当前来源归类 |
+| --- | --- |
+| direct | 已有主 PDF 线索；arXiv ID、PMCID 可以确定构造的公开 PDF 地址 |
+| publisher-api | Elsevier Article/Object、Wiley TDM 等有文章级适用证据的专用服务 |
+| general-api | CORE、Unpaywall 等跨出版社聚合或开放获取 API |
+| public-web | DOI/文章落地页的有界 HTTP 与静态 PDF 解析、显式启用的 Sci-Hub 镜像 |
+| browser | 独立准入的通用 Browser Agent |
 
-显式、用户主动发起的 Browser 诊断不改变默认自动获取合同，也不能被普通 Completion 隐式调用。
+每家服务在自己的 Provider 定义中声明阶段；是否需要凭据继续由独立的能力与认证合同决定。来源同阶段以配置顺序为基础，出版社 API 可按唯一名称候选稳定优先，不可用的已选来源必须保留稳定失败，不能静默移出耗尽集合。旧 `public / authorized-api` 认证分组兼容公开调用方，但不再决定五层优先级。
+
+Direct 只消费受支持资产线索与明确稳定定位：供应商明确 PDF 媒体类型/主 PDF 角色，或 URL `pathname` 的大小写不敏感 `.pdf` 后缀可以形成候选；查询参数保留，阅读器 fragment 按网络边界移除。明确补充材料、其它资产角色或目标版本冲突的线索不能仅凭后缀进入主 PDF 获取。无后缀的明确 PDF 地址仍可使用，不扫描任意元数据 URL。已登记需要凭据的 API 地址仍由其适配器取得。
+
+HTTP 类型和 URL 只提供线索，实际字节与统一 PDF reader 决定文件是否有效。任一层取得明确 locator 后立即由原适配器/共享下载器/Browser 获取，不重新排队到 direct；已取得有效 PDF 不重复 GET，本地发布失败保留候选。只有完整提交主 PDF 后，当前 Literature 才结束后续获取。
+
+Planner 可以省略确定不适用的路线，前一层按 §7 保留错误、停止或独立 fallback 语义。显式 Browser 诊断不改变自动顺序，也不能被普通 Completion 隐式调用。
 
 ### 2. 先识别原文访问方，再形成运行时计划
 
@@ -50,9 +66,13 @@ PublisherAccessProfile catalog（模块私有静态定义）
   -> AccessRouteHint（当前操作）
 ```
 
-`PublisherAccessProfile` 是无 secret 的静态访问画像，描述访问方和平台 identity、landing/asset origin、稳定文章 ID、公开路径、官方 API capability、正文/补充材料区分、`browser_rate_limit_group`、`browser_session_key` 和政策证据。它不拥有 Browser 页面规则或下载脚本，也不等于 Metadata Provider 配置，不要求为纯 Browser 出版社创建 API 凭据 section。
+`PublisherAccessProfile` 是无 secret 的静态访问画像，描述访问方和平台 identity、landing/asset origin、稳定文章 ID、公开路径、官方 API capability、正文/补充材料区分与政策证据。它不拥有 Browser 页面规则或下载脚本，也不等于 Metadata Provider 配置，不要求为纯 Browser 出版社创建 API 凭据 section。
 
-Resolution 优先消费已有中性事实，只有强证据不足且本次计划需要时，才在公开层安全解析一次 DOI landing。DOI resolver 只对 `doi.org` 发出不跟随 redirect 的第一跳 `GET`，读取并规范化 `Location` 后即停止；Python HTTP 不解析或请求 Publisher 目标，Publisher landing 只有在对应 Browser risk group 获得 permit 后才由 Chromium 访问。证据强度为：
+Resolution 优先消费已有中性事实；只有本次出版社 API 规划确实缺少文章访问证据时，才执行有界 DOI 定位。定位可以先于出版社 API，但不提前执行公共网站的全部下载策略。初始 DOI 定位只读取受控 resolver 的安全 Location；后续 public-web 层可以通过共享 Network 逐跳访问网页与静态文件，Browser 使用自己的页面网络与平台准入。每次请求已有的实际 landing、状态和 locator 只在当前操作复用，不增加必经 HEAD/GET 预检。证据强度为：
+
+DOI 定位只对 doi.org 发出一次 GET。首跳响应由当前操作保存并复用：实际 PDF 立即交统一下载验收和发布，成功后跳过剩余 API/网页；200 HTML、403/404、缺少可用 Location 或回到同一 DOI 的响应也不重复 GET，后续公共下载器消费原响应并沿原错误/静态解析规则处理。确认了不同且安全的 landing 才丢弃首跳缓存并改用该入口。响应字节预算复用公开 PDF 的默认 64 MiB 上限，状态或敏感响应不进入长期事实；即使已交付 PDF 带 Retry-After，已有字节可以验收，而共享 Network 冷却仍执行。
+
+普通 HTTP landing 可以作为经准入的 Browser 入口；无凭据公共下载器仍只处理 HTTPS，不把 HTTP 地址交给 HTTPS 下载器触发内部类型错误，也不因此放宽网络协议或凭据策略。
 
 ```text
 实际安全解析后的 DOI landing origin
@@ -64,17 +84,23 @@ Resolution 优先消费已有中性事实，只有强证据不足且本次计划
 
 已有明确 direct-file、公开仓储或稳定公开定位时不必为了识别出版社先请求 DOI。弱提示不能独自启用内容 API 或 Browser；多个强证据冲突时保持 unresolved 或稳定失败，不能按 catalog 顺序任选一个。
 
-Plan 将适用动作按三层分组并保持确定顺序。API、DOI landing 或页面步骤可以返回当前运行的脱敏 `AccessRouteHint`，例如 canonical landing、PII/EID 等稳定 ID 或可安全继续的 locator。Hint 不携带 Cookie、header、token、无法脱敏的签名 URL、vendor object 或页面对象，不进入 Catalog、ArtifactStore、provenance 或长期失败历史。
+名称别名与 AI 辅助维护按 ADR 0014 §3.1 执行；原文保留，接纳的映射只提出访问方候选，不能独自证明文章适用性或授权。
+
+名称解析唯一命中一个 Provider ID 时，只把当前 publisher-api 阶段中已选中的同名来源稳定排到前面；其余来源仍保持配置顺序，未知或冲突不改变优先级。此调整不删除来源、不自动启用服务，实际调用仍须通过 `authorizedTargets` 的文章级站点/专用标识证据。
+
+Plan 将适用动作按五层分组并保持确定顺序。API、DOI landing 或页面步骤可以返回当前运行的脱敏 `AccessRouteHint`，例如 canonical landing、PII/EID 等稳定 ID 或可安全继续的 locator。Hint 不携带 Cookie、header、token、无法脱敏的签名 URL、vendor object 或页面对象，不进入 Catalog、ArtifactStore、provenance 或长期失败历史。
 
 ### 3. 批量获取使用层级 cohort
 
 Entry 仍从用户选择和一致 snapshot 冻结本次目标，不建立持久 BatchRun。对一个有界 cohort：
 
-1. 所有缺 PDF 目标先完成适用的 PUBLIC routes；
-2. 使用新 landing/locator/identity hints 重新规划；
-3. 仍未解决的目标完成适用的 AUTHORIZED_PROVIDER_API routes；
-4. 再次规划并执行 Browser admission；
-5. 只有允许升级的最小剩余集合进入 Browser scheduler。
+1. 所有缺 PDF 目标先完成 direct；
+2. 使用已有文章证据与必要的 DOI 定位，对仍未解决目标完成 publisher-api；
+3. 仍未解决且允许继续的目标完成 general-api；
+4. 再完成 public-web，并整理当前操作已有的文章入口与实际访问结果；
+5. 只有通过独立 admission 的最小剩余集合进入一次逻辑 Browser 任务。
+
+每一层结束才启动下一层，阶段内以配置顺序为基础，出版社 API 可按唯一名称候选稳定优先；一层产生的新定位可立即交原下载机制。已完成目标按冻结顺序形成该层结果波次，不必等待全部 Browser 工作结束。
 
 大型目标可以分成多个有界 cohort，但每个 cohort 内不能让较早失败的单篇文献越过尚未完成的低风险层提前打开 Browser。某个 Literature 已提交 PDF 后可以按 Entry 的局部成功边界继续 Parsing/Analysis；层级屏障只约束 PDF 获取风险升级，不撤销已提交事实。
 
@@ -162,15 +188,15 @@ event handler、受控传输与临时文件责任；同平台网络活动串行�
 代理/IP/Profile 或扩张到任意页面控制。Profile 存在、其中保存了浏览器状态或 challenge 清除都
 不构成认证成功或文章 entitlement 的证明。
 
-`production-ready` Browser Profile 表示规则、政策证据、安全边界、生产对象图和离线验收已经
+`production-ready` Browser runtime 表示政策证据、安全边界、生产对象图和离线验收已经
 闭环，可以在保守政策下执行一次机构 IP 文章访问尝试；它不表示当前组织、当前 IP 或具体文章
-已经获得访问权。Operator 通过普通配置中的 `browser_enabled = true` 对整个受控 Browser 第三层
+已经获得访问权。Operator 通过普通配置中的 `[browser].enabled = true` 对整个受控 Browser 第五层
 作一次显式启用。SciRetriever 不再保存或接受逐 Publisher 的本机“机器访问许可”占位声明：
 这样的布尔值无法验证合同，也曾把实际可逐篇判断的机构 IP 路线错误挡在 Browser 启动之前。
 
-启用只允许 production catalog 中的封闭 route 进入逐文章检查，不会扩大许可范围，也不会改写
-固定 origin、正文归属、risk/rate group、限速、Network 安全、Challenge 页面动作边界
-或三级升级顺序。Operator 仍负责确保其使用符合组织授权和 Publisher 条款；程序以真实文章页
+启用只允许唯一 `browser:generic` route 进入逐文章检查，不会扩大许可范围，也不会改写
+文章任务归属、实际平台准入、限速、Network 安全、Challenge 页面动作边界
+或五层执行顺序。Operator 仍负责确保其使用符合组织授权和 Publisher 条款；程序以真实文章页
 结果区分成功、明确付费墙、通用拒绝、challenge、限流和无正文，不能用本地配置字段预先宣称
 文章 entitlement。
 
@@ -192,12 +218,12 @@ session/file责任独立保留到发布/收尾，不能让每个 CSS/JS 各自�
 经 Network 准入的起点时可以进入 generic Browser；Agent 仍不能构造任意 URL，起点仅来自
 AssetHint 或受控 DOI landing 入口。
 
-ADR 0023 修订后，Controlled Browser 作业只冻结一个 `AgentBrowserController`。它从第一次统一
-`BrowserObservation` 起选择封闭动作；不存在确定性规则 controller、Publisher selector/locator 程序
+ADR 0023 修订后，Controlled Browser 作业只冻结一个 `AgentBrowserController`。首次模型请求前，程序可以按 §1 与 ADR 0023 整理的有限入口执行导航、观察与明确失败恢复；需要交互或程序不能确定时，再从当前统一
+`BrowserObservation` 选择封闭动作。首次模型派发后不再后台自动换入口；不存在确定性规则 controller、Publisher selector/locator 程序
 或失败 fallback。controller 与 CloakBrowser/Profile、Network guard、页面 capture 和 PDF 验收协作。
 每个单次点击、navigation、capture settle 或 wait 保留有界保护；本次目标统一为 ADR 0023 的
-300 秒累计活跃时间、50 次真实模型派发、100 次 Agent 动作和至少 5 秒下一轮决策间隔。
-operation 与 transfer/session 总寿命独立计量，不增加累计 token/image 业务预算。此前离线
+300 秒累计活跃时间、100 次真实模型派发、200 次 Agent 动作和至少 5 秒下一轮决策间隔。
+全部初始入口、必要页面恢复与人工交还共享同一文章 clock，不重新取得整篇预算；换入口前结算真实在途 capture，已开始下载优先沿原传输完成。operation 与 transfer/session 总寿命独立计量，不增加累计 token/image 业务预算。此前离线
 flow 的 24/12 上限只是被本次目标替代的旧执行基线，不再保留第二套 32 次目标 fuse。
 Acquisition 只执行 PDF 文件合法性与当前任务关联检查，下载阶段不以 DOI、标题、版本或
 正文/补充材料内容身份匹配阻断接纳（ADR 0029）。短期签名 query 只保留在当前 Browser
@@ -215,9 +241,9 @@ Browser 可以从受控 download event、PDF response、允许的 popup/viewer �
 
 2026-10-07 根据化学合成全链路实测与用户要求修订公共 HTTP 的能力判断：不带限流反馈的公共 HTTP `403`、实际返回 HTML 且静态链接不能交付 PDF、以及明确达到有界重定向上限，都只证明该无会话 HTTP 路线不能完成当前获取，允许声明 `http-route-unavailable`，在已配置的后续 API 和独立获准 Browser 中继续。该声明不证明机构无订阅权限，也不代表 Browser 已通过访问校验；Browser 自己观察到的明确拒绝仍按下文停止。来源所谓“PDF 直链”和 `Content-Type` 不能覆盖实际字节，返回 HTML 时仍可按通用静态链接规则处理。此修订不增加任何出版社专用规则，不因 API key 存在而改变已配置来源集合。
 
-上述声明不能覆盖更早的未解决失败：同一层先发生网络故障，后遇到不适用路线，仍保留原失败。`429` 或携带 `Retry-After` 的响应/异常立即停止该目标的备用候选及后续层级；`401`、临时服务错误、超时、未分类网络错误和系统/存储错误不属于公共 HTTP 能力声明。重定向上限只有在 Network 提供精确原因且该链没有限流反馈时才可声明，不能把任意 `network-http` 当作需要 Browser。
+2026-10-10 根据公共镜像 502 阻断独立 API/Browser 的实测及用户要求，区分“是否存在未解决故障”与“是否可以尝试独立渠道”。公共 HTTP `5xx`（不带限流反馈）、明确的连接失败、请求超时、请求失败或响应中断，可以携带显式的独立 fallback 许可继续后续已配置 API 与独立准入的 Browser；不能把它们改写成正常 miss。后续成功则交付 PDF，后续均未取得 PDF 则保留原故障，单篇和 cohort 一致；不得提交自动获取耗尽。普通故障及之后的不适用声明都不能覆盖更早的阻断性错误；来源冷却保留原故障的许可范围。此修订不提升任意未知异常，也不扩展 API 错误的自动升级权限。
 
-以下状态不得通过自动切换 Browser 制造替代流量：timeout、临时传输或服务失败、`429`、有效 `Retry-After`、quota exhausted、未到 reset boundary。它们形成延期或稳定失败，并更新共享 scope。支持的 API 未配置时必须明确报告；只有 Browser 已由用户显式启用且 admission policy 允许时才可继续，不能静默跳过。
+`429` 或携带 `Retry-After` 的响应/异常仍停止该目标的备用候选及后续层级；`401`、API 认证/权限/临时错误、quota exhausted、未到 reset boundary、Network 安全准入拒绝、未分类异常以及配置/存储/发布/合同错误仍不得通过自动切 Browser 掩盖。用户取消停止操作。明确重定向上限仍只有在该链无任何限流反馈时才能声明 HTTP 路线不可用。普通 HTTP 服务收到无 Retry-After 的 5xx 后按服务政策反馈共享 scope，项目默认退避 30 秒；这不是供应商限流声明，不伪造 Retry-After。退避超过单次请求等待预算时返回实际 5xx，不用内部重试将其覆盖成预算超时。支持的 API 未配置时必须明确报告；只有 Browser 已由用户显式启用且 admission policy 允许时才可继续，不能静默跳过。
 
 Browser 的 `LOGIN_REQUIRED`、`MFA_REQUIRED`、`RATE_LIMITED`、`IP_BLOCKED` 或账号警告暂停或熔断对应风险组；其它独立 Provider 继续。Challenge 只是统一 Observation 的 `page_state=CHALLENGE`，不是文章默认终态，也不拥有 interaction-required/active/exhausted 生命周期、专属 target、controller 或预算。通用 Agent controller 使用与普通页面相同的六种封闭动作。页面自动或经动作清除 Challenge 后继续 capture、entitlement 与 PDF 检查；controller 停止且页面仍为 Challenge 时，Acquisition 可以形成稳定 `challenge-unresolved` 结果。本地资源策略缺口必须报告为 Network 资源阻断，不能冒充用户无权限或 Agent 失败。
 
@@ -233,15 +259,15 @@ Resolution、Plan、route hints、tried keys、Browser queue、runtime health、
 
 ## 后果
 
-- 三级架构继续保护用户的机构网络访问和供应商风控边界，Browser 不成为默认大批量入口。
+- 五层顺序与独立认证边界继续保护用户的机构网络访问和供应商风控边界，Browser 不成为默认大批量入口。
 - Publisher recognition 为公开、API 和 Browser 共享，但识别本身不会启动 Browser。
 - 批次低风险层先消化目标，Browser 只处理最小剩余集合。
 - API 取得的 locator/稳定 ID 可以降低 Browser 导航和无效点击，但不会污染数据库。
-- 不同 Provider Browser 可以并行；同一风险组始终串行并服从自己的政策。
-- 所有 Publisher lane 复用一个用户/机构身份 Profile 和一个 Chrome process/context；Profile 不按 Provider 拆分，也不因命令结束而删除。
+- 不同实际平台的 Browser 文章可以并行；同一平台网络活动始终串行并服从自己的政策。
+- 所有文章复用一个用户/机构身份 Profile 和一个 CloakBrowser process/context；Profile 不按 Provider 拆分，也不因命令结束而删除。
 - Browser 总开关只启用已审查 route 的逐文章 Profile/IP 尝试，不把本地 Profile 或会话状态冒充组织或文章权限证明。
 - 一个 Provider 的页面状态、限速或熔断不会无关阻塞其它 Provider。
-- 新 Provider 必须经过 Profile、官方政策、origin guard、正文归属、fixture 和明确验证门，不能通过 generic fallback 猜测接入。
+- 新 Provider API 需有本地定义、政策、文章级适用证据与离线验证；Browser 对有合法起点的未知站点继续使用通用执行器，不要求预先建立 Publisher 页面规则。
 - Browser 会比公开/API 慢，CLI 和 Report 必须把等待、停止原因和下一步清楚呈现。
 - Requirements R3 的二值结果、最低 PDF 检查、不可变发布、唯一主 PDF 和耗尽边界不改变，不需要新增持久 schema。
 
@@ -253,7 +279,7 @@ Resolution、Plan、route hints、tried keys、Browser queue、runtime health、
 - 每个 Publisher 各自维护一套身份 Profile、Cookie 和 Chrome process；
 - 每次命令使用并删除临时 Profile，使已授权的浏览器状态无法复用；
 - 所有 Provider Browser 全局串行；
-- 同一 Provider 多标签页或多 worker 并发；
+- 同一实际平台多文章网络活动并发；
 - 固定一个数字冒充所有 Provider 的官方 Browser 间隔；
 - 用逐 Publisher 的本地布尔值冒充合同或文章访问权，并在真实页面检查前阻断 route；
 - 未经 Browser 总开关、runtime readiness 与调度准入就构造可执行 Browser adapter；

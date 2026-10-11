@@ -111,3 +111,19 @@ export function publicWebService(endpoint: string): ServiceDefinition {
     "project-default: no verified service-specific rule",
   );
 }
+
+/** Credential-bearing services must never be requested as anonymous PDF hints. */
+export function isAuthorizedAcquisitionUrl(value: string): boolean {
+  try {
+    const origin = new URL(value).origin;
+    return registrations.some(
+      ({ definition, services }) =>
+        definition.acquisition === "authorized-api" &&
+        definition.acquisitionService !== undefined &&
+        new URL(services[definition.acquisitionService]!.endpoint).origin ===
+          origin,
+    );
+  } catch {
+    return false;
+  }
+}

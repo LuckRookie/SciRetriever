@@ -9,6 +9,11 @@ export const services = Object.freeze({
   ),
 });
 export const definition = provider({
+  publisherAliases: [
+    "PLOS",
+    "Public Library of Science (PLoS)",
+    "Public Library of Science",
+  ],
   metadata: [],
   acquisition: "none",
   credentialFields: [],

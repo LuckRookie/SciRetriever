@@ -1,3 +1,4 @@
+import { definition } from "./definition.js";
 import type {
   AcquisitionSourcePort,
   AcquisitionSourceRequest,
@@ -11,6 +12,7 @@ import { configuredMirrors } from "./locators.js";
 export class ConfiguredSciHubSource implements AcquisitionSourcePort {
   readonly source_name = "sci-hub" as const;
   readonly ready = true;
+  readonly acquisition_stage = definition.acquisitionStage!;
   private readonly mirrors: readonly SourceCandidate[];
   constructor(urls: readonly string[]) {
     this.mirrors = configuredMirrors(true, urls);

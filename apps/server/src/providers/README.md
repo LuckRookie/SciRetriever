@@ -6,10 +6,11 @@
 providers/
   contracts.ts           # 静态服务/能力合同与共同默认政策
   registry.ts            # 汇总各家定义，查询能力和访问政策
+  publisher-names.ts     # 就近别名与用户扩展的共享名称匹配
   acquisition.ts         # 授权 PDF 适配器的路由注册
   shared/                # 无供应商专有分支的协议帮助
   elsevier/
-    definition.ts        # URL、凭据要求、覆盖证据、产品额度
+    definition.ts        # URL、阶段、出版社别名、凭据要求、覆盖证据、产品额度
     metadata.ts          # Scopus 搜索、Abstract 查询及记录转换
     acquisition.ts       # Article/Object PDF 获取与定位
   wiley/
@@ -45,8 +46,11 @@ providers/
 ## 接口与责任
 
 - 各家 `metadata.ts` 实现 `metadata/ports.ts` 的搜索、查询、引用窄接口；`acquisition.ts` 实现 `acquisition/ports.ts` 的来源/授权客户端接口。只实现支持的能力，不制造空方法。
-- `definition.ts` 保存静态外部事实，不保存真实 Key、Cookie、用户配置或运行时额度。适配器直接使用本目录定义；registry 汇总这些定义，不维护第二份规则。
+- `definition.ts` 保存静态外部事实，包括独立于认证类别的 `acquisitionStage` 和已知 `publisherAliases`，不保存真实 Key、Cookie、用户配置或运行时额度。适配器直接使用本目录定义；registry 汇总这些定义，不维护第二份规则。
 - `shared/` 保存通用 metadata transport/记录帮助、授权 PDF 响应合同和 locator 帮助。实际厂商 JSON/XML 解析、URL 规则和认证协议留在对应供应商目录。
+- `shared/metadata-values.ts` 统一可选字段的规范化与局部舍弃；文献身份、provenance、响应与分页协议仍严格。各家保留显式字段映射，规则见供应商治理。
+- 名称解析按明确别名和确定性规范化提出候选；用户扩展保存在普通配置 `sources.publisher_aliases`，显式维护/AI 建议与接纳保留原文、冲突和 provenance，不证明文章访问权或覆盖来源。
+- 五层顺序为 direct → publisher-api → general-api → public-web → browser。arXiv/Europe PMC 属于 direct，Elsevier/Wiley 属于 publisher-api，CORE/Unpaywall 属于 general-api，Sci-Hub 属于 public-web；Direct/DOI landing 与 Browser 继续由各自 owner 负责。
 - 搜索操作、身份、PDF 验证入库、Browser 控制与 Network 调度仍在原业务模块。Provider 不能自行写库或实现私有限流器。
 - `metadata.ts` 中保留公开的旧 decoder-shell 类以维持包根 API 兼容；生产组装使用实际 REST/Atom adapter。旧内部目录已移除，调用方直接引用当前路径。
 

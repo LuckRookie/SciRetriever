@@ -1209,3 +1209,94 @@ describe("controlled browser acquisition route", () => {
     ).rejects.toMatchObject({ retryable: false });
   });
 });
+
+it("removes PDF viewer fragments before admitting static links without relaxing URL guards", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-viewer-fragment-"));
+  const app = await createApplication(home, {
+    executionSchema: "upgrade-synthetic",
+  });
+  const pdf = workbenchPdf();
+  const cases = [
+    '<iframe src = "/storage/main.pdf#view=FitH&navpanes=0"></iframe>',
+    '<a href="/storage/main.pdf#page=2">PDF</a>',
+    '<embed src="/storage/main.pdf#toolbar=0">',
+    '<meta content="/storage/main.pdf#view=Fit" name="citation_pdf_url">',
+  ];
+  try {
+    for (const [index, markup] of cases.entries()) {
+      const calls: string[] = [];
+      const candidate = await downloadPdfCandidate(
+        safeLocator("sci-hub", "https://mirror.example/article", "landing"),
+        {
+          async request(url) {
+            calls.push(url);
+            return calls.length === 1
+              ? {
+                  status: 200,
+                  headers: [["content-type", "text/html"]],
+                  final_url: "https://shared.example/article",
+                  body: new TextEncoder().encode(
+                    '<iframe src="https://user:password@blocked.example/file.pdf#view=Fit"></iframe><iframe src="https://blocked.example/file.pdf?token=fixture#view=Fit"></iframe><iframe src="http://blocked.example/file.pdf#page=1"></iframe>' +
+                      markup,
+                  ),
+                }
+              : { status: 200, headers: [], body: pdf };
+          },
+        },
+        {
+          collector: app.execution!.transfers,
+          transfer_id: `fragment-${index}`,
+        },
+      );
+      expect(calls).toEqual([
+        "https://mirror.example/article",
+        "https://shared.example/storage/main.pdf",
+      ]);
+      expect(await app.execution!.transfers.candidateBytes(candidate)).toEqual(
+        pdf,
+      );
+    }
+  } finally {
+    await app.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+it("uses the maintained Sci-Hub entry while preserving an explicit custom mirror list", async () => {
+  const { assemblePublicAcquisitionRegistry } = await import(
+    "../src/acquisition/assembly.js"
+  );
+  const budget = new NetworkBudgetCoordinator();
+  try {
+    const base =
+      '[sources.acquisition]\nmode = "custom"\nproviders = ["sci-hub"]\n';
+    const builtin = assemblePublicAcquisitionRegistry(
+      parseConfiguration(base),
+      budget,
+    );
+    expect(
+      await builtin.sources
+        .find((source) => source.source_name === "sci-hub")!
+        .discover(request),
+    ).toMatchObject([{ locator: "https://sci-hub.ru/10.1000/example" }]);
+    expect(
+      await builtin.sources
+        .find((source) => source.source_name === "sci-hub")!
+        .discover(request),
+    ).toHaveLength(1);
+    const custom = assemblePublicAcquisitionRegistry(
+      parseConfiguration(
+        base +
+          '[sources.acquisition.sci-hub]\nurls = ["https://mirror.example"]\n',
+      ),
+      budget,
+    );
+    expect(
+      await custom.sources
+        .find((source) => source.source_name === "sci-hub")!
+        .discover(request),
+    ).toMatchObject([{ locator: "https://mirror.example/10.1000/example" }]);
+  } finally {
+    budget.close();
+  }
+});

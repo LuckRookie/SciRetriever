@@ -1,3 +1,4 @@
+import { definition } from "./definition.js";
 import type {
   AcquisitionSourcePort,
   AcquisitionSourceRequest,
@@ -8,6 +9,7 @@ import { europePmcPdf } from "./locators.js";
 export class EuropePmcPdfSource implements AcquisitionSourcePort {
   readonly source_name = "europe-pmc" as const;
   readonly ready = true;
+  readonly acquisition_stage = definition.acquisitionStage!;
   async discover(
     request: AcquisitionSourceRequest,
   ): Promise<readonly SourceCandidate[]> {

@@ -1,7 +1,7 @@
 # PDF 获取指南
 
 公开文献优先通过普通 HTTPS 下载；arXiv 直接使用 PDF URL，成功后不启动 Browser 或调用 Browser
-模型。受控 Browser Agent 用于前面的公开来源与授权 API 正常结束后仍缺少的 PDF，通过当前机器
+模型。受控 Browser Agent 用于前四层仍未取得 PDF 且结果允许继续的目标，通过当前机器
 的网络出口、机构 IP 和浏览器会话访问出版社文章页；具体文章是否可读以实际结果为准。
 
 ## 手动 PDF 接纳
@@ -28,38 +28,66 @@ NODE
 分析返回 `NoUsableContent`、解析不足、模型失败或取消时，已接纳的 PDF、来源、hash、ParserResult 和旧有效结果保留。补全报告可在失败分区同时列出 `no_usable_content_literature_ids`；durable Job 沿既有兼容映射将这种非系统目标失败记为 skipped，并保留 `completion-candidates-exhausted` 失败码。当前操作不会把该 PDF 当作坏文件重取，也不会伪报 `CONTENT_READY`；稍后明确重试可在相同 PDF 上继续分析。Acquisition 对非 PDF、损坏或不可读文件的拒绝仍独立生效，文章身份未验证不阻止接纳。
 
 SciRetriever 对数据库中已经存在的具体 Literature 补全主 PDF。主题发现和引用发现只接纳元数据，
-不会顺带下载全文。自动获取的目标合同固定按风险从低到高推进；当前生产接线状态在路线表中单独标记：
+不会顺带下载全文。自动获取使用以下顺序，认证要求与阶段分别表示：
 
 ```text
-Public
-  -> Authorized Provider API
-  -> Controlled Browser Agent
+已有直链 / 稳定公开 PDF 地址（direct）
+  -> 出版社专用 API（publisher-api）
+  -> 聚合 / 开放获取 API（general-api）
+  -> 公共网站（public-web）
+  -> Browser Agent
 ```
 
-前一层正常结束或明确无法通过公共 HTTP 完成后，仍缺 PDF 的文献进入下一层；任一路线成功发布主 PDF 后立即停止。网络超时、
-临时服务错误、`429`、quota 或 `Retry-After` 不会被解释成“没有 PDF”，也不会触发备用路线绕过。
+前一层正常结束、明确公共 HTTP 不可用，或公共渠道发生已识别的普通 5xx/传输故障后，仍缺 PDF 的文献可以进入后续独立渠道；任一路线成功发布主 PDF 后立即停止。公共故障不会被解释成“没有 PDF”：若后续均未取得文件，保留原故障，不记录自动耗尽。`429`、quota、`Retry-After`、认证和安全准入错误仍阻断自动升级；API 故障的原有边界保留。
 
 ## 1. 当前获取路线
 
 供应商、具体服务和能力是不同维度。各服务的 URL、适用证据、认证要求与默认访问政策统一由生产目录提供；只有全文链接能力的元数据来源通过通用 hint 路径下载，不会因此成为独立 PDF API。当前共享限流和维护边界见[供应商治理](../development/provider-governance.md)。
 
-| 层                                 | 当前生产能力                      | 主要条件                                                                                                                                                                                                |
-| ---------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public                             | 已保存的 PDF 直链 `AssetHint`     | URL、redirect、媒体类型和实际 PDF 字节全部重新检查                                                                                                                                                      |
-| Public                             | arXiv、Europe PMC                 | Acquisition Auto 默认启用；arXiv ID 与 PMCID 分别生成直接下载 URL，PMID 本身不生成 PDF 地址；Custom 时按精确列表选择                                                                                    |
-| Public                             | DOI landing                       | 解析 DOI 重定向后的 HTML，从静态 PDF 声明或链接下载；相对地址以实际落地页为基准，后续 CDN 地址仍逐次经过 Network 检查                                                                                   |
-| Public                             | Unpaywall                         | Custom 启用并配置联系邮箱                                                                                                                                                                               |
-| Public                             | Configured Sci-Hub locator        | 默认关闭；显式启用、Literature 有 DOI，并使用 builtin 或 custom 镜像                                                                                                                                    |
-| Authorized API                     | CORE API v3                       | 启用 `core`、配置 `api_key`，并有 CORE 强记录身份                                                                                                                                                       |
-| Authorized API                     | Elsevier Article/Object Retrieval | 启用 `elsevier`、配置 `api_key`，并有 PII、Article EID 或确认过的 landing                                                                                                                               |
-| Authorized API                     | Wiley TDM API v1                  | 启用 `wiley`、配置 `tdm_api_token`，且 DOI 安全落地到 Wiley                                                                                                                                             |
-| Controlled Browser（需逐文章核验） | `browser:generic`                 | 低风险路线正常结束或显式低风险 route declaration、具有安全文章起点，并且 Browser/Model/Profile/runtime/admission 均就绪；使用当前 IP 和浏览器会话，固定 Cloak bundle 的 loopback 证据不代表具体文章权限 |
+| 阶段 | 当前来源 | 主要条件 |
+| --- | --- | --- |
+| direct | 已保存的 PDF 线索 | 明确 PDF 媒体类型/主 PDF 角色或 pathname 的 `.pdf` 后缀；排除补充材料、其它角色与目标版本冲突，实际字节仍须验证 |
+| direct | arXiv、Europe PMC | Auto 默认启用；由 arXiv ID、PMCID 生成公开 PDF 地址，PMID 本身不生成地址 |
+| publisher-api | Elsevier Article/Object | Custom 启用、配置 `api_key`，且有 PII、Article EID、匹配文章提示或确认过的 landing |
+| publisher-api | Wiley TDM | Custom 启用、配置 `tdm_api_token`，唯一 DOI 与 Wiley 文章访问证据绑定 |
+| general-api | CORE | Custom 启用、配置 `api_key`，并有 CORE 强记录身份 |
+| general-api | Unpaywall | Custom 启用并配置联系邮箱；返回的文件 locator 立即下载 |
+| public-web | DOI/文章 landing | Network 逐跳复检后解析静态 PDF 声明或链接，相对地址基于实际落地页 |
+| public-web | Sci-Hub locator | 默认关闭；显式启用、有 DOI，使用 builtin 或 custom 镜像 |
+| browser | `browser:generic` | 前四层结果允许继续、有安全入口且 Browser/Model/Profile/runtime/admission 就绪；本地就绪不证明文章权限 |
+
+Custom 精确选择来源，在同一阶段内以配置顺序为基础，出版社 API 可按唯一名称候选稳定优先；阶段顺序固定。CORE 与 Unpaywall 同层，但凭据要求不同。已选中却缺参数、凭据或适配器的来源会报告失败，不能被静默当作正常耗尽。
+
+`.PDF`、`.pdf?download=1` 都可以形成候选；无后缀但明确为 PDF 的地址同样可用。只处理受支持资产线索，保留 query，移除阅读器 fragment；文件有效性由字节与 PDF reader 决定。任一层取得 locator 后立即沿对应机制下载，有效文件不重新排到 direct，不因错误的 Content-Type 重取；本地发布失败保留有效候选。
+
+已知授权 API 的 PDF 提示不会被 Direct 当作匿名直链请求，既有 observations 中误标为
+`open` 的提示也遵守这条规则。Crossref 链接本身不证明开放获取，新增提示的访问状态为
+`unknown`。出版社 API 缺少定位证据时，可以先做一次有界 DOI 定位；这只确认访问方，不提前执行公共网页全部下载策略。取得的 landing 和实际响应只在本次操作复用，不保存敏感跳转参数。限流、认证、安全准入与未分类错误仍阻止升级。普通公共故障允许后续独立渠道继续，但故障证据保留。
+
+DOI 定位只对 doi.org 发出一次 GET。首跳响应由当前操作保存并复用：实际 PDF 立即交统一下载验收和发布，成功后跳过剩余 API/网页；200 HTML、403/404、缺少可用 Location 或回到同一 DOI 的响应也不重复 GET，后续公共下载器消费原响应并沿原错误/静态解析规则处理。确认了不同且安全的 landing 才丢弃首跳缓存并改用该入口。响应字节预算复用公开 PDF 的默认 64 MiB 上限，状态或敏感响应不进入长期事实；即使已交付 PDF 带 Retry-After，已有字节可以验收，而共享 Network 冷却仍执行。
+
+普通 HTTP landing 可以作为经准入的 Browser 入口；无凭据公共下载器仍只处理 HTTPS，不把 HTTP 地址交给 HTTPS 下载器触发内部类型错误，也不因此放宽网络协议或凭据策略。
+
+Elsevier 可以消费 PII/EID、Article API 提示或确认过的文章 landing 与唯一 DOI，先请求
+`/content/article/{doi|pii|eid}/{identifier}?view=FULL`，再取 FULL XML 中 MAIN PDF 的 attachment
+对象；预览图片的嵌套字段不当作主文件字段。Wiley 可以消费与唯一 DOI 绑定的 TDM 提示、
+Wiley Online Library 及其子域的页面证据；TDM 请求只允许官方 ALM 下载路径的一次跳转，
+跨 origin 不携带 TDM token，下载 locator 不进入 provenance。API key 存在仍不会自动改变
+Auto/Custom 选源。
 
 Springer 当前全文 API 产品返回 JATS/XML，不是主 PDF API。Provider key 已配置、认证成功和单篇
 文章有全文权限始终是不同事实。
 
-有效的 `2xx` landing HTML 没有静态 PDF 链接属于正常未命中。公共 HTTP `403`、静态链接只返回非 PDF 表示、明确的重定向上限且没有限流反馈，表示该 HTTP 路线不能完成，可以继续已配置的 API 与 Browser；不据此判断机构版权。标为 PDF 直链的地址返回 HTML 时也尝试通用静态 PDF 链接，实际 PDF 字节不因错误的 Content-Type 被拒绝。`401`、`429`、Retry-After、网络/临时服务失败仍保留原因并阻止升级，限流还停止同一目标的备用候选。早先网络失败不会被后来的不适用路线覆盖。主 PDF 接纳检查字节、PDF结构、页数与当前非加密可读合同，不匹配正文中的
+有效的 `2xx` landing HTML 没有静态 PDF 链接属于正常未命中。公共 HTTP `403`、静态链接只返回非 PDF 表示、明确的重定向上限且没有限流反馈，表示该 HTTP 路线不能完成，可以继续已配置的 API 与 Browser；不据此判断机构版权。标为 PDF 直链的地址返回 HTML 时也尝试通用静态 PDF 链接，实际 PDF 字节不因错误的 Content-Type 被拒绝。`401`、`429`、Retry-After、安全准入与未分类异常仍保留原因并阻止升级，限流还停止同一目标的备用候选。公共 5xx、明确连接/请求失败、超时或响应中断允许独立 API/Browser 继续；这些失败及冷却仍是未解决结果，后续未命中不能覆盖它们。静态 PDF 声明或链接中的阅读器 fragment（例如 `#view=FitH&navpanes=0`）在请求前去除；实际路径、query、origin 和 DNS 仍经过原安全检查，不执行脚本或任意表单。主 PDF 接纳检查字节、PDF结构、页数与当前非加密可读合同，不匹配正文中的
 DOI、arXiv ID或标题；有效文件正常发布并标为文章身份未验证。后续解析阶段可另行检验身份。
+
+### 出版社名称与维护
+
+已知别名和用户明确接纳的 `sources.publisher_aliases` 帮助提出服务候选。Scopus 返回某篇文章不表示 Elsevier 拥有原文；名称归类也不证明具体文章授权。文章站点、专用标识与实际服务结果仍决定 API 适用性。未知/冲突名称不阻断已知直链或独立可用路线，也不要求先登记期刊。
+
+名称解析唯一命中一个 Provider ID 时，只把当前 publisher-api 阶段中已选中的同名来源稳定排到前面；其余来源仍保持配置顺序，未知或冲突不改变优先级。此调整不删除来源、不自动启用服务，实际调用仍须通过 `authorizedTargets` 的文章级站点/专用标识证据。
+
+需要批量整理名称时，显式运行 `maintenance publisher-names`，可选择 AI 建议后再单独接纳；不会在每次下载中调用治理模型或覆盖来源原文。完整命令、扫描预算和配置示例见[出版社名称维护](../development/provider-governance.md#出版社名称维护)。
 
 ### 补全范围与重试
 
@@ -74,7 +102,7 @@ PDF 时，PDF 补全不会重复下载；普通搜索和书目导出的结果仍
 
 批量补全使用普通配置中的 `[execution].max_concurrency`（默认 4，范围 1–64）限制同时处理的
 目标数，并按冻结顺序分块。缺 PDF 目标在 operation-local bounded acquisition cohort 中准备，已有
-PDF 的目标可以并行准备解析和分析结果，发布事实仍经操作内提交边界完成。每块先完成 Public，再完成剩余目标的 Authorized API，最后才进入 Browser。Application 共享 Browser 调度器默认提供两个决策 worker、最多五个保留文章会话；不同平台可并行，同一平台只允许一篇文章进行网络活动，真实网络结束后冷却 30 秒。`execution.max_concurrency` 决定可交给 Browser 的目标数，Browser 自己的容量与平台政策同时生效。冻结目标后释放 catalog 写锁，网络、模型和文件准备不占用长时间写锁；每次发布仍复核当前事实并遵守不可变发布/CAS。
+PDF 的目标可以并行准备解析和分析结果，发布事实仍经操作内提交边界完成。每块依次完成 direct、publisher-api、general-api、public-web，再让允许继续的最小剩余集合进入 Browser；同阶段以配置顺序为基础，出版社 API 可按唯一名称候选稳定优先。Application 共享 Browser 调度器默认提供两个决策 worker、最多五个保留文章会话；不同平台可并行，同一平台只允许一篇文章进行网络活动，真实网络结束后冷却 30 秒。`execution.max_concurrency` 决定可交给 Browser 的目标数，Browser 自己的容量与平台政策同时生效。冻结目标后释放 catalog 写锁，网络、模型和文件准备不占用长时间写锁；每次发布仍复核当前事实并遵守不可变发布/CAS。
 取消后，已开始且停止的目标进入 `interrupted`，后续块进入 `notStarted`，已提交的 PDF、解析或
 内容结果保留。某篇解析或分析失败不会阻止后续块处理。
 
@@ -123,7 +151,7 @@ NODE
 
 工作台可由多个本机客户端观看，并显式选择文章会话。会话列表区分排队、浏览、下载、文件检查、候选就绪和关闭结果；切换前台视图不会改变下载归属。指导会排入所选会话的有界队列，每条最多 2048 个 UTF-16 码元，在下一次观察时作为不可信建议消费。接管会撤销该会话的旧模型响应；人工动作按文章、会话、页面和控制版本校验，人工下载仍进入同一 Intake 和正式发布。交还后重新观察，控制者断线会暂停该会话的新模型动作。
 
-每篇使用同一个累计预算：300 秒活跃操作、50 次实际模型派发、100 次 Agent 动作。平台排队、后台下载和文件验收/发布不消耗活跃操作时间；恢复不会重置预算。动作结束到下一次模型决策至少 5 秒。可单独取消排队或执行中的文章，其他文章继续；取消整次操作则停止所有未完成目标，已提交事实保留。会话另有 60 分钟保留寿命，避免无限等待。
+每篇使用同一个累计预算：300 秒活跃操作、100 次实际模型派发、200 次 Agent 动作。平台排队、后台下载和文件验收/发布不消耗活跃操作时间；恢复不会重置预算。动作结束到下一次模型决策至少 5 秒。可单独取消排队或执行中的文章，其他文章继续；取消整次操作则停止所有未完成目标，已提交事实保留。会话另有 60 分钟保留寿命，避免无限等待。
 
 本入口复用现有同源 Cookie/CSRF 和 loopback HTTP 边界。生产页面在明确开始后显示获取执行中、Browser 已开页、结算和最终五分区报告；目标冻结后显示总数、当前目标和已完成/失败/跳过/未开始/中断计数，没有可观测的 Public/API 阶段总耗时就不估计完成时间。页面候选状态区分已捕获、文件检查和已提交的当前主 PDF，并显示“文章身份未验证”；失败或取消后，未提交候选不再显示“等待提交”。操作结束后通过 Library 读取并校验主 PDF 字节，只有校验通过才出现按当前 Literature ID 打开的文献库阅读按钮；已登记文件丢失或损坏时显示不可读，不把 catalog 关系当作可读证明。失败、取消或关闭失败可与已经提交的 PDF 同时出现，阅读按钮仍以校验后的 Library 事实为准。生产工作台的配置页复用同一 Configuration owner，保存普通配置后会提示运行中 Application 是否需要重启。文献库的搜索、详情和 PDF 读取只查询已有资料，刷新不会重新发起获取。固定 Cloak bundle、合成模型响应和回环站点用于重复验证这条协作与阅读旅程；真实模型及出版社逐篇结果见[本轮验证记录](../notes/browser-parallel-validation-2026-10-05.md)，单个样本成功不代表该平台所有文献均有权限。
 
@@ -136,12 +164,11 @@ policy      browser-generic
 runtime     one fixed-profile CloakBrowser process/context
 ```
 
-当前生产 `Application` 在 Browser 显式启用且固定 bundle 验证通过后自动组装 Network proxy/admission，并惰性构造 BrowserHost；缺少 runtime 时稳定不可用。locator 正常耗尽或 route 显式声明低风险不可用、Browser 独立 admitted 时，Entry 才进入受控 Browser delivery。bounded cohort 依次完成 Public、Authorized API 和 Browser/final 波次，按冻结顺序交付各波终态。共享 `BrowserSessionBroker` 按 `operation_id + generation` 拒绝过期排队 delivery；关闭时取消在途并与 host 共同结算。固定 Cloak bundle 的本机 loopback 已覆盖正式 Entry 到 PDF 主关系提交。后续请求必须属于当前文章的活动 page/frame；关联资源和重定向可以使用其它 origin，但每次仍经过 Network 的协议、DNS、公网地址和端口检查。离线 Cloak 用例覆盖跨 origin CSS、JavaScript 和 PDF 下载；具体出版社权限仍需逐文章核验。
+当前生产 `Application` 在 Browser 显式启用且固定 bundle 验证通过后自动组装 Network proxy/admission，并惰性构造 BrowserHost；缺少 runtime 时稳定不可用。locator 正常耗尽、route 显式声明低风险不可用，或公共普通故障允许独立 fallback 且 Browser 独立 admitted 时，Entry 进入受控 Browser delivery。bounded cohort 依次完成 direct、publisher-api、general-api、public-web 和 Browser/final 波次，按冻结顺序交付各波终态。共享 `BrowserSessionBroker` 按 `operation_id + generation` 拒绝过期排队 delivery；关闭时取消在途并与 host 共同结算。固定 Cloak bundle 的本机 loopback 已覆盖正式 Entry 到 PDF 主关系提交。后续请求必须属于当前文章的活动 page/frame；关联资源和重定向可以使用其它 origin，但每次仍经过 Network 的协议、DNS、公网地址和端口检查。离线 Cloak 用例覆盖跨 origin CSS、JavaScript 和 PDF 下载；具体出版社权限仍需逐文章核验。
 
-当前 Browser 起点来自已接纳 observation 中适合该版本的 landing `AssetHint`；未知 Publisher 只要
-起点通过 Network admission，也可以进入通用 Browser。公开 DOI 路线取得的临时落地地址当前只用于
-静态 PDF 解析；如果目标没有 landing hint 但有 canonical DOI，Browser 可以从受控 `doi.org` resolver
-入口开始，再由 Network 审查后续 redirect，不会由 Agent 猜测 Publisher URL。
+当前 Browser 入口来自适合目标版本的资产线索、当前操作已经取得的实际 landing，以及受控 DOI resolver。软件复用前四层响应、去重并排序有限入口，未知 Publisher 也可以按同一 Network admission 进入通用 Browser。PDF 下载端点与文章页面分别保留：普通 HTTP 403/404 不会永久禁用 Browser，也不会因下载端点失败丢弃仍可用的文章页面。此准备不增加一轮 HEAD/GET，不由模型猜测 Publisher URL。
+
+所有入口只调用一次逻辑 Browser delivery，共用同一文章 clock、计数与页面。首次实际模型请求前，程序开页、等待、观察；原生下载可以零模型完成。只有 Browser 实际 404/410 或 Host 已分类的 DNS/连接失败，才在有限列表中尝试尚未访问的备用入口；403、验证页或未知 HTML 交给模型。换入口前先结算真实在途捕获，已经开始下载就沿原传输继续；实际到达地址参与去重，保留有意义的 query。首次模型派发后不再后台自动换入口。备用导航继续遵守 5 秒节奏、目标平台准入和冷却，开页与观察消耗同一活跃预算，取消后不启动备用。
 
 实际导航保留通过准入的文章查询参数，例如 `?id=...`；页面观察、对外 URL 和持久证据继续去除 query。
 Browser 使用 Chromium 的原生下载处理顶层 PDF，避免把内置 PDF viewer 的 HTML 当作 PDF 字节。
@@ -186,7 +213,7 @@ Acquisition 负责“捕获文件是否为有效 PDF、是否属于本次任务�
 Challenge、登录要求、MFA、无权限、拒绝和未找到都只是普通 `page_state` 描述，不会自动终止 Agent。
 当 `page_state=CHALLENGE` 时，Agent 只能根据当前 Observation 或截图点击可见的 `Verify`、`I'm human`
 或 `Continue` 控件，然后用 `WaitForChange` 重新观察；它不取得 iframe selector，也不注入 CAPTCHA
-solver/token、脚本或其它绕过。Browser 层会在 challenge 点击后强制先等待一次页面交接；如果页面语义仍未变化，后续重复点击会被抑制为等待，直到新反馈、Agent Stop 或硬预算。普通文章导航里的被动 `Sign in` 文案不会单独判定为登录门禁，只有“登录后才能访问/继续/查看全文”等明确提示才会进入 `LOGIN_REQUIRED`。可跟随页面为当前机构会话提供的访问/继续按钮；不会自动填写登录凭据、选择新的机构身份、处理 MFA 或切换身份/出口。当前通用 flow 使用上述累计 300 秒、50 次模型派发和 100 次 Agent 动作预算。
+solver/token、脚本或其它绕过。Browser 层会在 challenge 点击后强制先等待一次页面交接；如果页面语义仍未变化，后续重复点击会被抑制为等待，直到新反馈、Agent Stop 或硬预算。普通文章导航里的被动 `Sign in` 文案不会单独判定为登录门禁，只有“登录后才能访问/继续/查看全文”等明确提示才会进入 `LOGIN_REQUIRED`。可跟随页面为当前机构会话提供的访问/继续按钮；不会自动填写登录凭据、选择新的机构身份、处理 MFA 或切换身份/出口。当前通用 flow 使用上述累计 300 秒、100 次真实模型派发和 200 次 Agent 动作预算。
 
 浏览器可跟随页面提供的 HTTP/HTTPS、跨域临时下载链接和编码路径；DNS/IP/端口检查仍生效，
 query/fragment 不进入模型或持久来源。页面生成的 multipart 表单可正常提交，Agent 仍不能选择或上传本地文件。新标签页无历史可退时，GoBack 返回打开它的文章标签页。TLS 隧道使用独立连接生命周期；活动流量不会因为长连接
@@ -260,9 +287,10 @@ Chrome 可更新该 Profile 的站点状态，`persisted=false` 只表示没有�
 
 | 情况                                | 含义与处理                                                                                      |
 | ----------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Public 正常未命中                   | 继续 Authorized API，再视条件进入 Browser                                                       |
+| 当前阶段正常未命中 | 按五层顺序继续仍适用的下一阶段，最后独立判断 Browser 准入 |
 | API 未配置或认证失败                | 明确失败；不由 Browser 静默掩盖                                                                 |
-| timeout、临时错误、`429`、quota     | 延期或失败；不写自动获取耗尽                                                                    |
+| 公共 5xx、明确连接/请求失败或超时   | 保留故障，继续独立 API/Browser；后续均未取得 PDF 时返回原失败，不写自动耗尽                         |
+| `429`、Retry-After、quota、API 临时错误 | 延期或失败，保持原准入边界；不写自动获取耗尽                                                   |
 | Browser 尚在加载或换页              | Network 等待稳定 Observation；不会让 Agent 操作半加载页面                                       |
 | stale action                        | 不执行旧动作，返回新稳定 Observation                                                            |
 | 登录/MFA/无权限/拒绝/未找到         | 作为 page state 交给 Agent；只有 Agent Stop 或硬故障后才形成对应稳定结果，不冒充 PDF miss       |
@@ -287,3 +315,11 @@ sciretriever --debug complete pdf --all-pending --json
 capture/identity 验收和 cleanup 线索；实际发给 Agent 的图片保存在系统临时目录
 `sciretriever-agent-debug-*`，并用 `manifest.ndjson` 对齐调用序号。图片、prompt、页面正文、完整 URL、
 Cookie、Profile 路径和 PDF 字节不会进入 Catalog、仓库或普通日志。
+
+### 本轮失败诊断补充
+
+Browser 限流保留 `pdf-browser-rate-limited`，报告提示等待平台 Retry-After 与共享冷却，
+`retryable=true` 表示条件恢复后可重试，不代表立即重发。Agent 在阻塞页主动停止时，失败原因
+带上观察到的 `page_state` 和 HTTP 状态；例如 `LOGIN_REQUIRED` 只说明这次页面要求登录，
+不能推断机构一定没有版权。缺少已验证 runtime 时，报告给出 `SCIRETRIEVER_CLOAK_BUNDLE`
+或 portable 包的恢复入口，不搜索临时目录或切换其它浏览器内核。

@@ -36,6 +36,91 @@ async function fixture(
 }
 
 describe("HTTP diagnostic facts and declared transport limits", () => {
+  it("backs off a redirected 502 across targets without reporting it as a rate limit", async () => {
+    const paths: string[] = [];
+    const site = await fixture((request, response) => {
+      paths.push(request.url!);
+      if (request.url!.startsWith("/mirror"))
+        response.writeHead(302, { location: "/shared/pdf" });
+      else if (request.url === "/shared/pdf") response.writeHead(502);
+      response.end();
+    });
+    const coordinator = new NetworkBudgetCoordinator();
+    const controller = new AbortController();
+    const resolutions: string[] = [];
+    const budget = {
+      coordinator,
+      scope: "mirror",
+      limits: {
+        maxConcurrency: 1,
+        maxResponseBytes: 1024,
+        maxRedirects: 2,
+        maxRetries: 2,
+      },
+      resolveAccess: (url: string) => {
+        const path = new URL(url).pathname;
+        resolutions.push(path);
+        return {
+          scope: path.startsWith("/shared") ? "shared-host" : "mirror",
+          limits: {
+            retryAfterScope: "group" as const,
+            serverErrorBackoffMs: 30_000,
+          },
+        };
+      },
+    };
+    try {
+      const first = await requestFollowingRedirects(
+        `${site.url}/mirror-one`,
+        () => [],
+        site.policy,
+        { budget },
+      );
+      expect(first.status).toBe(502);
+      expect(first.retry_after_ms).toBeUndefined();
+      const pending = requestFollowingRedirects(
+        `${site.url}/mirror-two`,
+        () => [],
+        site.policy,
+        { budget, signal: controller.signal },
+      );
+      const cancelled = expect(pending).rejects.toMatchObject({
+        code: "network-http",
+      });
+      await vi.waitFor(() =>
+        expect(resolutions).toEqual([
+          "/mirror-one",
+          "/shared/pdf",
+          "/mirror-two",
+          "/shared/pdf",
+        ]),
+      );
+      // A different service remains available while the shared redirect host cools down.
+      expect(
+        (
+          await requestFollowingRedirects(
+            `${site.url}/independent`,
+            () => [],
+            site.policy,
+            { budget },
+          )
+        ).status,
+      ).toBe(200);
+      expect(paths).toEqual([
+        "/mirror-one",
+        "/shared/pdf",
+        "/mirror-two",
+        "/independent",
+      ]);
+      controller.abort();
+      await cancelled;
+    } finally {
+      controller.abort();
+      coordinator.close();
+      await site.close();
+    }
+  });
+
   it("re-resolves access at every redirect and never borrows the preceding service quota", async () => {
     const paths: string[] = [];
     const site = await fixture((request, response) => {

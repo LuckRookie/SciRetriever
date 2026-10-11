@@ -15,6 +15,11 @@ import {
   METADATA_PROVIDER_NAMES,
 } from "../providers/registry.js";
 import { acquireFileLock, type FileLock } from "../storage/locking.js";
+import {
+  normalizePublisherName,
+  publisherProviderIds,
+  type PublisherAliases,
+} from "../providers/publisher-names.js";
 
 export class ConfigurationBoundaryError extends Error {
   readonly code = "configuration-boundary" as const;
@@ -35,6 +40,7 @@ export interface SourceSelection {
   readonly limit?: number;
 }
 export interface SourcesConfig {
+  readonly publisher_aliases?: PublisherAliases;
   readonly metadata: SourceSelection & {
     readonly web_of_science: Record<string, unknown> | null;
     readonly crossref: Record<string, unknown> | null;
@@ -778,6 +784,34 @@ function parsePolicy(value: unknown): BrowserPolicyOverride {
   });
 }
 
+function parsePublisherAliases(value: unknown): PublisherAliases {
+  if (!isRecord(value)) invalid();
+  const ids = new Set(publisherProviderIds());
+  return Object.freeze(
+    Object.fromEntries(
+      Object.entries(value).map(([id, names]) => {
+        if (!ids.has(id) || !Array.isArray(names) || names.length > 10_000)
+          invalid();
+        const seen = new Set<string>();
+        const parsed = names.map((name: unknown) => {
+          if (
+            typeof name !== "string" ||
+            name.length > 2_048 ||
+            hasControl(name) ||
+            !normalizePublisherName(name)
+          )
+            invalid();
+          const key = normalizePublisherName(name);
+          if (seen.has(key)) invalid();
+          seen.add(key);
+          return name;
+        });
+        return [id, Object.freeze(parsed)];
+      }),
+    ),
+  );
+}
+
 function parseConfigurationObject(
   raw: Record<string, unknown>,
 ): OrdinaryConfiguration {
@@ -790,7 +824,7 @@ function parseConfigurationObject(
   const sources = exact(
     optionalRecord(raw.sources),
     [],
-    ["metadata", "acquisition"],
+    ["metadata", "acquisition", "publisher_aliases"],
   );
   const parsing = exact(
     optionalRecord(raw.parsing),
@@ -942,6 +976,11 @@ function parseConfigurationObject(
       artifact_root: textOrNull(paths.artifact_root),
     }),
     sources: Object.freeze({
+      ...(sources.publisher_aliases === undefined
+        ? {}
+        : {
+            publisher_aliases: parsePublisherAliases(sources.publisher_aliases),
+          }),
       metadata: parseSource(
         sources.metadata,
         false,

@@ -1,5 +1,7 @@
 # Wiley
 
+> 2026-10-10 TypeScript 修复复验：Source 接受与唯一 DOI 一致的 TDM API 提示以及 onlinelibrary.wiley.com 的受信子域。生产 Network 只允许 api.wiley.com 到 `https://alm.wiley.com/alm/api/v2/download/<opaque>` 的一次跳转，拒绝 query/fragment 与其它路径；ALM 不接收 TDM token。真实样本已经通过 Public → Wiley API → 6 页 PDF → 正式入库，源选择仍由用户配置决定。 证据见[修复验证记录](../live-discovery-acquisition-fixes-2026-10-10.md)。下文较早日期的探测只代表当时状态。
+
 - 官方资料与最小只读链路最后在线核对：2026-08-19
 - 当前实现离线对照：2026-08-20
 - 当前选择键：Acquisition `wiley`

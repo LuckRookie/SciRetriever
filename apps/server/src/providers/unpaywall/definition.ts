@@ -16,6 +16,7 @@ export const services = Object.freeze({
 export const definition = provider({
   metadata: [],
   acquisition: "public",
+  acquisitionStage: "general-api",
   acquisitionService: "unpaywall",
   credentialFields: [],
 });

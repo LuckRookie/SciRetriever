@@ -1,3 +1,4 @@
+import { definition } from "./definition.js";
 import type {
   AcquisitionSourcePort,
   AcquisitionSourceRequest,
@@ -8,6 +9,7 @@ import { arxivPdf } from "./locators.js";
 export class ArxivPdfSource implements AcquisitionSourcePort {
   readonly source_name = "arxiv" as const;
   readonly ready = true;
+  readonly acquisition_stage = definition.acquisitionStage!;
   async discover(
     request: AcquisitionSourceRequest,
   ): Promise<readonly SourceCandidate[]> {

@@ -13,6 +13,13 @@
       <xocs:filename>main.pdf</xocs:filename>
       <xocs:extension>pdf</xocs:extension>
       <xocs:web-pdf-purpose>MAIN</xocs:web-pdf-purpose>
+      <xocs:web-pdf-images>
+        <xocs:web-pdf-image>
+          <xocs:attachment-eid>preview-image</xocs:attachment-eid>
+          <xocs:filename>preview.png</xocs:filename>
+          <xocs:extension>png</xocs:extension>
+        </xocs:web-pdf-image>
+      </xocs:web-pdf-images>
     </xocs:web-pdf>
     <xocs:web-pdf>
       <xocs:attachment-eid>1-s2.0-S0014579301033130-main.pdf</xocs:attachment-eid>

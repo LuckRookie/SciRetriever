@@ -122,6 +122,7 @@ export {
   type MetadataLookupPort,
   type MetadataLookupRequest,
   type MetadataProviderInvocation,
+  type MetadataScanEvent,
   type MetadataProviderResult,
   type MetadataReferenceQueryRequest,
   type NeutralMetadataItem,
@@ -135,6 +136,18 @@ export {
   type TopicSearchQuery,
 } from "./metadata/ports.js";
 export { MetadataService } from "./metadata/service.js";
+export {
+  PublisherGovernanceService,
+  acceptPublisherNameMappings,
+  type PublisherGovernanceSelector,
+  type PublisherGovernanceReport,
+  type PublisherNameEntry,
+} from "./entry/publisher-governance.js";
+export {
+  normalizePublisherName,
+  resolvePublisherNames,
+  type PublisherAliases,
+} from "./providers/publisher-names.js";
 export {
   TopicDiscoveryService,
   CitationDiscoveryService,
@@ -378,6 +391,7 @@ export { ConfiguredSciHubSource } from "./providers/sci-hub/acquisition.js";
 export { EuropePmcPdfSource } from "./providers/europe-pmc/acquisition.js";
 export { UnpaywallSource } from "./providers/unpaywall/acquisition.js";
 export {
+  type AcquisitionStage,
   type AcquisitionSourcePort,
   type AcquisitionSourceRequest,
   type PublicAcquisitionTransport,

@@ -26,6 +26,7 @@ export const definition = provider({
   metadataService: "arxiv-query",
   metadataAuto: true,
   acquisition: "public",
+  acquisitionStage: "direct",
   acquisitionService: "arxiv-pdf",
   acquisitionAuto: true,
   credentialFields: [],

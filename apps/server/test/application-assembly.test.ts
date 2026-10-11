@@ -1099,6 +1099,12 @@ describe("assembly of the unified completion entry", () => {
             hint({ url: "file:///fixture/article" }),
             hint({ url: "https://user:secret@fixture.invalid/article" }),
             hint({ url: "https://fixture.invalid/article#x" }),
+            hint({
+              url: "https://api.elsevier.com/content/article/doi/10.5555/example",
+            }),
+            hint({
+              url: "https://api.wiley.com/onlinelibrary/tdm/v1/articles/10.5555%2Fexample",
+            }),
             hint({ version_role: "preprint" }),
           ]),
         ],
@@ -1143,6 +1149,20 @@ describe("assembly of the unified completion entry", () => {
         "preprint",
       ),
     ).toBe("https://fixture.invalid/preprint");
+    expect(
+      browserStartUrl(
+        [
+          observation([
+            hint({ url: "https://onlinelibrary.wiley.com/doi/unversioned" }),
+            hint({
+              url: "https://repository.example/preprint",
+              version_role: "preprint",
+            }),
+          ]),
+        ],
+        "preprint",
+      ),
+    ).toBe("https://repository.example/preprint");
     // Every other concrete role follows the same rule: its own exact hint wins, an
     // unversioned hint is the only fallback, and a hint naming another version is never
     // navigated to — so a non-published target is never sent to a published page and vice
@@ -1188,6 +1208,19 @@ describe("assembly of the unified completion entry", () => {
         { namespace: "doi", value: "10.1000/example/article" },
       ]),
     ).toBe("https://doi.org/10.1000/example/article");
+    expect(
+      browserStartUrl(
+        [
+          observation([
+            hint({
+              url: "https://api.elsevier.com/content/article/doi/10.1000/example",
+            }),
+          ]),
+        ],
+        "published",
+        [{ namespace: "doi", value: "10.1000/example" }],
+      ),
+    ).toBe("https://doi.org/10.1000/example");
   });
 
   it("hands the target's own concrete version role and landing page to the Browser delivery", async () => {

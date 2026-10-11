@@ -22,6 +22,7 @@ export const definition = provider({
   metadataService: "core-v3",
   metadataAuto: true,
   acquisition: "authorized-api",
+  acquisitionStage: "general-api",
   pdfHeaders: { api_key: "authorization" },
   acquisitionService: "core-v3",
   credentialFields: ["api_key"],

@@ -91,6 +91,7 @@ import {
 import { SqliteWorker } from "../storage/sqlite/worker.js";
 import { FileStore } from "../storage/files/store.js";
 import { AgentRuntime, type AgentBinding } from "../agents/runtime.js";
+import { PublisherGovernanceService } from "../entry/publisher-governance.js";
 import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "../agents/openai.js";
 import { AnthropicMessagesAdapter } from "../agents/anthropic.js";
 import {
@@ -211,6 +212,7 @@ export interface Application {
   readonly parsing: ParsingService | null;
   readonly literatureArtifacts: LiteratureArtifactService;
   readonly library: LiteratureQueryService;
+  readonly publisherGovernance: PublisherGovernanceService;
   readonly home: string;
   readonly configuration: OrdinaryConfiguration;
   /** Owner revision of the ordinary configuration snapshot loaded at startup. */
@@ -1301,6 +1303,9 @@ export async function createApplication(
         // lazily so an idle acquisition never starts one.
         browser_host: () => demandBrowserHost(),
         browser_scheduler: browserScheduler,
+        ...(configuration.sources.publisher_aliases
+          ? { publisher_aliases: configuration.sources.publisher_aliases }
+          : {}),
       });
     }
     const analysisConfigured =
@@ -1519,6 +1524,11 @@ export async function createApplication(
       literatureArtifacts,
       library,
       execution,
+      publisherGovernance: new PublisherGovernanceService(
+        library,
+        configurationOwner,
+        agents,
+      ),
       jobs,
       queue,
       jobService,

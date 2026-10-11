@@ -33,15 +33,21 @@ import {
   type AuthorizedTransport,
 } from "../providers/shared/authorized-pdf.js";
 import { UnpaywallSource } from "../providers/unpaywall/acquisition.js";
+import {
+  allowsDownloadRedirect,
+  downloadOrigin,
+} from "../providers/wiley/definition.js";
 import { WileyAuthorizedPdfClient } from "../providers/wiley/acquisition.js";
 import {
   type AcquisitionSourcePort,
   type AcquisitionSourceRequest,
+  type AcquisitionStage,
   type PublicAcquisitionTransport,
 } from "./ports.js";
 import type { SourceCandidate } from "./sources/locators.js";
 import {
   AuthorizedPdfSource,
+  DEFAULT_PDF_DOWNLOAD_MAX_BYTES,
   DirectPdfSource,
   DoiLandingSource,
   PublicAcquisitionRegistry,
@@ -82,7 +88,7 @@ export interface PublicAcquisitionAssemblyOptions {
 
 /**
  * The controlled-Browser route name. It sits after every public source and
- * authorized provider API route, so the tier order stays Public -> API -> Browser.
+ * authorized provider API route, after all four HTTP acquisition stages.
  */
 export const BROWSER_ROUTE_NAME = "browser";
 
@@ -190,11 +196,15 @@ class BrowserAcquisitionSource implements AcquisitionSourcePort {
  */
 class UnavailableAcquisitionSource implements AcquisitionSourcePort {
   readonly ready = false;
+  readonly acquisition_stage: AcquisitionStage;
   constructor(
     readonly source_name: string,
     private readonly reason: string,
     readonly acquisition_tier: "public" | "authorized-api" = "public",
-  ) {}
+    stage?: AcquisitionStage,
+  ) {
+    this.acquisition_stage = stage ?? acquisitionStage(this);
+  }
 
   async discover(
     request: AcquisitionSourceRequest,
@@ -241,7 +251,7 @@ export function assemblePublicPdfDownloadTransport(
   const limits = {
     maxConcurrency: 1,
     maxHostConcurrency: 1,
-    maxResponseBytes: 64 * 1024 * 1024,
+    maxResponseBytes: DEFAULT_PDF_DOWNLOAD_MAX_BYTES,
     maxRedirects: 5,
     maxRetries: 0,
   };
@@ -362,6 +372,7 @@ function unpaywallTransport(
           "http-response-failed",
           `Unpaywall HTTP returned ${response.status}; no location lookup was delivered.`,
           ![401, 403].includes(response.status),
+          { allows_independent_fallback: response.status >= 500 },
         );
       try {
         return JSON.parse(
@@ -393,18 +404,25 @@ function authorizedTransport(
         policy: {
           allowed_schemes: ["https"],
           allowed_classes: ["public"],
-          allowed_origins: [originParts(origin)],
+          allowed_origins: [
+            originParts(origin),
+            ...(provider === "wiley" ? [originParts(downloadOrigin)] : []),
+          ],
           allowed_ports: [{ scheme: "https", port: 443 }],
+          credential_origins: [originParts(origin)],
         },
         coordinator,
         scope: acquisitionService(provider).quotaGroup,
         limits: {
           ...acquisitionService(provider).policy,
           maxHostConcurrency: 1,
-          maxResponseBytes: 64 * 1024 * 1024,
-          maxRedirects: 0,
+          maxResponseBytes: DEFAULT_PDF_DOWNLOAD_MAX_BYTES,
+          maxRedirects: provider === "wiley" ? 1 : 0,
           maxRetries: 1,
         },
+        ...(provider === "wiley"
+          ? { allowRedirect: allowsDownloadRedirect }
+          : {}),
         ...(options.connection ? { connection: options.connection } : {}),
       });
   const send: AuthorizedTransport = injected ?? {
@@ -611,6 +629,10 @@ export interface AcquisitionRouteSplit {
   readonly public_routes: PublicAcquisitionRegistry;
   /** Credential-bearing official PDF API routes in their frozen order. */
   readonly authorized_api_routes: PublicAcquisitionRegistry;
+  /** Ordered HTTP stages, independent of the legacy authentication grouping. */
+  readonly stages: Readonly<
+    Record<AcquisitionStage, PublicAcquisitionRegistry>
+  >;
   readonly browser: {
     /** The operator admitted the tier (a disabled switch registers no route). */
     readonly enabled: boolean;
@@ -619,6 +641,18 @@ export interface AcquisitionRouteSplit {
     /** Stable reason why an admitted tier cannot deliver, or `null` when it can. */
     readonly unavailable_reason: string | null;
   };
+}
+
+function acquisitionStage(source: AcquisitionSourcePort): AcquisitionStage {
+  return (
+    source.acquisition_stage ??
+    LITERATURE_PROVIDERS[source.source_name]?.acquisitionStage ??
+    (source.source_name === "doi-landing"
+      ? "public-web"
+      : source.acquisition_tier === "authorized-api"
+        ? "publisher-api"
+        : "direct")
+  );
 }
 
 /**
@@ -650,20 +684,25 @@ export function splitAcquisitionRoutes(
   for (const status of registry.statuses) {
     if (status.source_name === BROWSER_ROUTE_NAME) continue;
     const source = sourceByName.get(status.source_name);
-    if (source) {
+    if (source?.ready) {
       routeSources.push(source);
       seen.add(status.source_name);
       continue;
     }
-    const reason = registry.unavailable[status.source_name];
+    const reason =
+      registry.unavailable[status.source_name] ??
+      (source ? (status.failure_code ?? "missing-source-adapter") : undefined);
     if (reason === undefined) continue;
     routeSources.push(
       new UnavailableAcquisitionSource(
         status.source_name,
         reason,
-        ["core", "elsevier", "wiley"].includes(status.source_name)
-          ? "authorized-api"
-          : "public",
+        source?.acquisition_tier ??
+          (LITERATURE_PROVIDERS[status.source_name]?.acquisition ===
+          "authorized-api"
+            ? "authorized-api"
+            : "public"),
+        source ? acquisitionStage(source) : undefined,
       ),
     );
     syntheticUnavailable[status.source_name] = reason;
@@ -685,10 +724,8 @@ export function splitAcquisitionRoutes(
     routeSources.map((item) => item.source_name),
     syntheticUnavailable,
   );
-  const registryFor = (tier: "public" | "authorized-api") => {
-    const selected = routeSources.filter(
-      (source) => (source.acquisition_tier ?? "public") === tier,
-    );
+  const registryFor = (select: (source: AcquisitionSourcePort) => boolean) => {
+    const selected = routeSources.filter(select);
     const selectedNames = new Set(selected.map((source) => source.source_name));
     return new PublicAcquisitionRegistry(
       selected,
@@ -702,8 +739,24 @@ export function splitAcquisitionRoutes(
   };
   return Object.freeze({
     routes,
-    public_routes: registryFor("public"),
-    authorized_api_routes: registryFor("authorized-api"),
+    public_routes: registryFor(
+      (source) => (source.acquisition_tier ?? "public") === "public",
+    ),
+    authorized_api_routes: registryFor(
+      (source) => source.acquisition_tier === "authorized-api",
+    ),
+    stages: Object.freeze({
+      direct: registryFor((source) => acquisitionStage(source) === "direct"),
+      "publisher-api": registryFor(
+        (source) => acquisitionStage(source) === "publisher-api",
+      ),
+      "general-api": registryFor(
+        (source) => acquisitionStage(source) === "general-api",
+      ),
+      "public-web": registryFor(
+        (source) => acquisitionStage(source) === "public-web",
+      ),
+    }),
     browser: Object.freeze({
       enabled: browserSource !== null,
       ready: browserSource?.ready === true,

@@ -9,6 +9,21 @@ import {
   type VersionRole,
 } from "@sciretriever/contracts";
 import { CandidateAcceptanceService } from "../acquisition/candidate-acceptance.js";
+import { resolveDoiLanding } from "../acquisition/doi-resolution.js";
+import type { AcquisitionStage } from "../acquisition/ports.js";
+import { authorizedTargets } from "../providers/acquisition.js";
+import {
+  resolvePublisherNames,
+  type PublisherAliases,
+} from "../providers/publisher-names.js";
+import {
+  articleUrl,
+  browserStartUrls,
+  createAcquisitionContext,
+  doiStartUrl,
+  type AcquisitionContext,
+} from "./acquisition-context.js";
+export { browserStartUrls } from "./acquisition-context.js";
 import {
   assemblePublicPdfDownloadTransport,
   splitAcquisitionRoutes,
@@ -16,13 +31,16 @@ import {
 import {
   downloadPdfCandidate,
   downloadSourceCandidate,
-  type PublicAcquisitionRegistry,
+  DoiLandingSource,
+  hasPdfHeader,
+  PublicAcquisitionRegistry,
 } from "../acquisition/sources/public.js";
 import {
   AcquisitionCandidateSkippedError,
   AcquisitionRouteError,
   AcquisitionUnavailableError,
   classifyAcquisitionFailure,
+  routeFailure,
   TieredAcquisitionService,
   type AcquisitionBatchFailure,
 } from "../acquisition/tiered.js";
@@ -37,6 +55,7 @@ import type { BrowserArticleCloseOutcome } from "../browser/article-session.js";
 import { createLogger } from "../logging/index.js";
 import { BrowserArticleScheduler } from "./browser-scheduler.js";
 import type { NetworkBudgetCoordinator } from "../network/budget.js";
+import type { HttpResponse } from "../network/http.js";
 import {
   directCompletionCommit,
   type CompletionCommit,
@@ -101,7 +120,7 @@ export type PdfAcquisitionOutcome =
 export interface PdfAcquisitionPort {
   acquire(request: PdfAcquisitionRequest): Promise<PdfAcquisitionOutcome>;
   /**
-   * Prepare one bounded generation behind Public/API/Browser barriers. Results
+   * Prepare one bounded generation behind the five acquisition-stage barriers. Results
    * may be emitted in frozen request order after each tier so successful
    * targets can continue while the unresolved remainder enters a riskier tier.
    */
@@ -129,6 +148,13 @@ export interface EntryPdfAcquisitionPorts {
   readonly acceptance: CandidateAcceptanceService;
   readonly assistance?: "never" | "notify" | "pause";
   readonly cooldown_ms?: number;
+  readonly publisher_aliases?: PublisherAliases;
+  /** DOI locator resolution only; never a publisher request or Browser probe. */
+  readonly resolve_doi_landing?: (
+    url: string,
+    signal: AbortSignal,
+    options: { readonly on_response: (response: HttpResponse) => void },
+  ) => Promise<string | null>;
   /**
    * The process-owned controlled Browser session, reached through Bootstrap. It is
    * the last escalation after every public and authorized API route failed, and it is
@@ -271,8 +297,10 @@ export class BrowserSessionBroker {
  */
 export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
   private readonly routes: ReturnType<typeof splitAcquisitionRoutes>;
-  private readonly publicLocator: TieredAcquisitionService;
-  private readonly apiLocator: TieredAcquisitionService;
+  private readonly locators: readonly {
+    readonly stage: AcquisitionStage;
+    readonly service: TieredAcquisitionService;
+  }[];
   private readonly browserBroker: BrowserSessionBroker;
   private readonly lifetime = new AbortController();
   private readonly active = new Set<
@@ -295,18 +323,131 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
       cooldown_ms: ports.cooldown_ms ?? 30_000,
       max_items: 100_000,
     } as const;
-    this.publicLocator = new TieredAcquisitionService(
-      this.routes.public_routes,
-      options,
-    );
-    this.apiLocator = new TieredAcquisitionService(
-      this.routes.authorized_api_routes,
-      options,
-    );
+    this.locators = (
+      ["direct", "publisher-api", "general-api", "public-web"] as const
+    ).map((stage) => ({
+      stage,
+      service: new TieredAcquisitionService(this.routes.stages[stage], options),
+    }));
     this.browserBroker = new BrowserSessionBroker(
       ports.browser_host ?? (() => null),
       ports.browser_scheduler,
     );
+  }
+
+  private async preparePublisherEvidence(
+    request: PdfAcquisitionRequest,
+    context: AcquisitionContext,
+  ): Promise<PdfAcquisitionOutcome | null> {
+    const providers = this.routes.stages["publisher-api"].sources.filter(
+      (source) =>
+        source.ready &&
+        (source.source_name === "elsevier" || source.source_name === "wiley"),
+    );
+    if (!providers.length) return null;
+    const identifiers = request.detail.literature.metadata.identifiers;
+    const observations = request.detail.metadata_observations;
+    const input = {
+      identifiers,
+      observations,
+      target_version: request.detail.literature.version_role,
+      landing_origins: [...context.landing_origins],
+    };
+    if (
+      providers.some(
+        (source) =>
+          authorizedTargets(source.source_name as "elsevier" | "wiley", input)
+            .length > 0,
+      )
+    )
+      return null;
+    const doi = doiStartUrl(identifiers);
+    if (!doi) return null;
+    if (
+      context.attempted_locators.has(
+        createHash("sha256").update(doi).digest("hex"),
+      )
+    )
+      return null;
+    const candidates = this.publisherCandidates(request);
+    createLogger("pdf-acquisition").debug("Resolving article access evidence", {
+      candidate_count: candidates.length,
+      source_count: providers.length,
+      evidence: candidates.length ? "publisher-name" : "doi",
+    });
+    try {
+      if (request.signal.aborted)
+        throw new DOMException("Acquisition cancelled", "AbortError");
+      const target = await (
+        this.ports.resolve_doi_landing ??
+        ((url, signal, options) =>
+          resolveDoiLanding(url, this.ports.network_budget, signal, options))
+      )(doi, request.signal, {
+        on_response: (response) => {
+          context.doi_response = { url: doi, response };
+        },
+      });
+      if (request.signal.aborted)
+        throw new DOMException("Acquisition cancelled", "AbortError");
+      const safe = target === null ? null : articleUrl(target);
+      if (safe && safe !== doi) {
+        context.doi_landing = safe;
+        context.doi_response = null;
+        context.landing_urls.push(safe);
+        context.landing_origins.add(new URL(safe).origin);
+      }
+      if (
+        context.doi_response &&
+        context.doi_response.response.status >= 200 &&
+        context.doi_response.response.status < 300 &&
+        hasPdfHeader(context.doi_response.response)
+      ) {
+        // A resolver that already served PDF bytes needs no API lookup or second GET.
+        const cached = new TieredAcquisitionService(
+          new PublicAcquisitionRegistry(
+            [new DoiLandingSource()],
+            ["doi-landing"],
+          ),
+          { assistance: this.ports.assistance ?? "never" },
+        );
+        return (await this.runLocator(request, cached, context)).outcome;
+      }
+      return null;
+    } catch (error) {
+      const kind = classifyAcquisitionFailure(error, request.signal);
+      if (kind === "cancel") return { kind: "cancelled" };
+      if (kind !== "route" && !(error instanceof AcquisitionRouteError))
+        throw error;
+      return {
+        kind: "route-failure",
+        failure: routeFailure(error, "doi-resolution", {
+          code: "network-failed",
+          source: "doi-resolution",
+          reason: "Article resolution could not be completed.",
+          retryable: false,
+        }),
+      };
+    }
+  }
+
+  private publisherCandidates(
+    request: PdfAcquisitionRequest,
+  ): readonly string[] {
+    const names = [
+      request.detail.literature.metadata.publisher,
+      ...request.detail.metadata_observations.map(
+        (item) => item.metadata.publisher,
+      ),
+    ].filter((name): name is string => name !== null);
+    const candidates = [
+      ...new Set(
+        names.flatMap((name) =>
+          resolvePublisherNames(name, this.ports.publisher_aliases),
+        ),
+      ),
+    ];
+    // Conflicting observations do not override the configured source order.
+    return candidates.length === 1 ? candidates : [];
   }
 
   close(): Promise<void> {
@@ -379,6 +520,7 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
       ...request,
       signal: AbortSignal.any([request.signal, this.lifetime.signal]),
     }));
+    const contexts = requests.map(() => createAcquisitionContext());
     const final = new Array<PdfAcquisitionOutcome | undefined>(requests.length);
     const priorFailures = new Map<number, AcquisitionBatchFailure>();
     let active = requests.map((_request, index) => index);
@@ -389,10 +531,48 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
       );
       options.on_outcomes?.(ordered);
     };
-    for (const locator of [this.publicLocator, this.apiLocator]) {
+    for (const { stage, service: locator } of this.locators) {
       if (!active.length) break;
+      if (stage === "publisher-api") {
+        const prepared = await Promise.all(
+          active.map(async (index) => ({
+            index,
+            outcome: await this.preparePublisherEvidence(
+              requests[index]!,
+              contexts[index]!,
+            ),
+          })),
+        );
+        const stopped: PdfAcquisitionCohortOutcome[] = [];
+        for (const { index, outcome } of prepared) {
+          if (!outcome || outcome.kind === "exhausted") continue;
+          if (
+            outcome.kind === "route-failure" &&
+            outcome.failure.allows_independent_fallback
+          )
+            priorFailures.set(
+              index,
+              priorFailures.get(index) ?? outcome.failure,
+            );
+          else {
+            final[index] = outcome;
+            stopped.push({ index, outcome });
+          }
+        }
+        emit(stopped);
+        active = active.filter((index) => final[index] === undefined);
+      }
       const results = await Promise.all(
-        active.map((index) => this.runLocator(requests[index]!, locator)),
+        active.map((index) =>
+          this.runLocator(
+            requests[index]!,
+            locator,
+            contexts[index]!,
+            stage === "publisher-api"
+              ? this.publisherCandidates(requests[index]!)
+              : [],
+          ),
+        ),
       );
       const wave: PdfAcquisitionCohortOutcome[] = [];
       const unresolved: number[] = [];
@@ -400,9 +580,22 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
         const index = active[position]!;
         const result = results[position]!;
         const outcome = result.outcome;
-        if (preserveSinglePriorFailure && result.priorFailure)
+        if (
+          preserveSinglePriorFailure &&
+          result.priorFailure &&
+          !priorFailures.has(index)
+        )
           priorFailures.set(index, result.priorFailure);
-        if (outcome.kind === "exhausted") unresolved.push(index);
+        if (
+          outcome.kind === "route-failure" &&
+          outcome.failure.allows_independent_fallback === true
+        ) {
+          // An outage of one public service says nothing about an independent API or
+          // publisher session. Retain it for both single and cohort calls: later misses
+          // must not manufacture an automatic exhaustion fact.
+          priorFailures.set(index, outcome.failure);
+          unresolved.push(index);
+        } else if (outcome.kind === "exhausted") unresolved.push(index);
         else {
           final[index] = outcome;
           wave.push(Object.freeze({ index, outcome }));
@@ -420,11 +613,15 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
                 request,
                 parseLiteratureId(request.literature_id),
                 this.routes.browser,
-                preserveSinglePriorFailure
-                  ? (priorFailures.get(index) ?? null)
-                  : null,
+                priorFailures.get(index) ?? null,
+                contexts[index]!,
               )
-            : ({ kind: "exhausted" } as const);
+            : priorFailures.get(index)?.allows_independent_fallback
+              ? ({
+                  kind: "route-failure",
+                  failure: priorFailures.get(index)!,
+                } as const)
+              : ({ kind: "exhausted" } as const);
           final[index] = outcome;
           return Object.freeze({ index, outcome });
         }),
@@ -439,6 +636,8 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
   private async runLocator(
     request: PdfAcquisitionRequest,
     locator: TieredAcquisitionService,
+    context: AcquisitionContext,
+    preferredSources: readonly string[] = [],
   ): Promise<{
     readonly outcome: PdfAcquisitionOutcome;
     readonly priorFailure?: AcquisitionBatchFailure;
@@ -446,12 +645,8 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     const literatureId = parseLiteratureId(request.literature_id);
     if (request.signal.aborted) return { outcome: { kind: "cancelled" } };
     const publications: CandidatePublicationReceipt[] = [];
-    // Single acquisition path: the tiered service only sees the locator routes, and the
-    // controlled Browser is escalated to exactly once afterwards. Leaving the throwing
-    // Browser source inside the batch would abort the run before it could deliver.
-    // The unavailable Browser tier fails closed with a non-retryable route error, which
-    // aborts its own one-item batch. That is the signal to escalate to the controlled
-    // Browser, not an operation-level failure: the public/API tier already concluded.
+    // One locator stage uses the common download/publication path. Entry keeps the
+    // operation context across stages and owns the single final Browser escalation.
     let result:
       | Awaited<ReturnType<TieredAcquisitionService["run"]>>[number]
       | undefined;
@@ -460,7 +655,10 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
         [
           {
             key: literatureId,
+            preferred_sources: preferredSources,
             request: {
+              landing_origins: [...context.landing_origins],
+              target_version: request.detail.literature.version_role,
               identifiers: request.detail.literature.metadata.identifiers,
               observations: request.detail.metadata_observations,
               asset_hints: request.detail.metadata_observations.flatMap(
@@ -470,6 +668,17 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
           },
         ],
         async (_item, source, candidate, signal) => {
+          if (candidate.source === "doi-landing" && context.doi_landing)
+            candidate = { ...candidate, locator: context.doi_landing };
+          if (
+            candidate.source === "doi-landing" &&
+            new URL(candidate.locator).protocol === "http:"
+          )
+            throw new AcquisitionUnavailableError(
+              "download-unavailable",
+              "The resolved article requires browser navigation over HTTP.",
+              "http-route-unavailable",
+            );
           const operationKey = `${request.operation_id ?? "direct"}:${literatureId}`;
           const locatorKey = createHash("sha256")
             .update(candidate.locator)
@@ -479,12 +688,43 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
             ?.get(locatorKey);
           if (knownHash && request.excluded_sha256?.includes(knownHash))
             throw new AcquisitionCandidateSkippedError();
+          if (context.attempted_locators.has(locatorKey))
+            throw new AcquisitionCandidateSkippedError();
+          context.attempted_locators.add(locatorKey);
           const operationId = randomUUID();
           const transferId = `entry-pdf-${operationId}`;
           const sourceUrl = new URL(candidate.locator);
           sourceUrl.search = "";
           sourceUrl.hash = "";
           const downloadOptions = {
+            on_landing: (origin: string) => {
+              context.landing_origins.add(origin);
+            },
+            on_response: (response: {
+              readonly requested_url: string;
+              readonly final_url: string;
+              readonly status: number;
+              readonly media_type: string | null;
+            }) => {
+              const target = articleUrl(response.final_url);
+              if (response.status >= 400) {
+                for (const url of [
+                  response.requested_url,
+                  response.final_url,
+                ]) {
+                  const safe = articleUrl(url);
+                  if (safe) context.failed_urls.add(safe);
+                }
+              }
+              if (
+                candidate.source === "doi-landing" &&
+                target &&
+                response.media_type?.includes("html")
+              ) {
+                context.landing_urls.push(target);
+                context.landing_origins.add(new URL(target).origin);
+              }
+            },
             collector: this.ports.transfers,
             transfer_id: transferId,
             signal,
@@ -504,15 +744,27 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
                 ...downloadOptions,
                 registry: this.ports.registry,
               });
-            else
+            else {
+              const transport = assemblePublicPdfDownloadTransport(
+                candidate,
+                this.ports.network_budget,
+              );
               durable = await downloadPdfCandidate(
                 candidate,
-                assemblePublicPdfDownloadTransport(
-                  candidate,
-                  this.ports.network_budget,
-                ),
+                {
+                  request: async (url, options) => {
+                    options?.signal?.throwIfAborted();
+                    if (context.doi_response?.url === url) {
+                      const { response } = context.doi_response;
+                      context.doi_response = null;
+                      return response;
+                    }
+                    return transport.request(url, options);
+                  },
+                },
                 downloadOptions,
               );
+            }
           } catch (error) {
             // A rejected candidate is one route outcome. Cancellation and every
             // storage/receipt/system failure must keep their own identity.
@@ -625,12 +877,9 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
         outcome: { kind: "exhausted" },
         priorFailure: result.failure,
       };
-    // ADR 0015 §7 is fail-closed: a resolved route failure (timeout, temporary
-    // transport/API failure, 429/Retry-After, quota/deferred, action-required, system,
-    // storage, cancel, or any other unresolved route-local issue) must never be converted
-    // into Browser traffic. Only the two cases above escalate: a normal miss (every
-    // applicable route ended without a candidate) and a route's own explicit low-risk
-    // declaration.
+    // Keep failures distinct from misses. The cohort owner may continue an explicitly
+    // recognized public outage through independent routes, retaining this failure if
+    // they miss. API, admission, rate-limit and unknown errors stay blocking.
     const failure =
       result.failure ??
       Object.freeze({
@@ -662,8 +911,8 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
    * Deliver through the controlled Browser session, then hand the spooled candidate to
    * the ordinary acceptance/receipt path.
    *
-   * `priorFailure` carries the already-recorded explicit low-risk unavailability when this
-   * escalation follows one: the original failure stays the target's stable outcome if the
+   * `priorFailure` carries an earlier public outage or explicit low-risk unavailability:
+   * the original failure stays the target's stable outcome if the
    * Browser cannot deliver, so a rescue attempt never masks the reason the locator routes
    * stopped and never invents a second failure taxonomy.
    *
@@ -677,6 +926,7 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     literatureId: LiteratureId,
     browser: { readonly unavailable_reason: string | null },
     priorFailure: AcquisitionBatchFailure | null,
+    context: AcquisitionContext,
   ): Promise<PdfAcquisitionOutcome> {
     let delivery: BrowserDeliveryResult;
     try {
@@ -693,10 +943,18 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
               version: request.detail.literature.version_role,
               metadata: request.detail.literature.metadata,
             }),
-            start_url: browserStartUrl(
+            start_url:
+              browserStartUrls(
+                request.detail.metadata_observations,
+                request.detail.literature.version_role,
+                request.detail.literature.metadata.identifiers,
+                context,
+              )[0] ?? null,
+            start_urls: browserStartUrls(
               request.detail.metadata_observations,
               request.detail.literature.version_role,
               request.detail.literature.metadata.identifiers,
+              context,
             ),
             metadata_snapshot: request.metadata_snapshot,
             signal,
@@ -833,16 +1091,7 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
   }
 }
 
-/**
- * The one already-admitted landing page the Browser delivery may start from.
- *
- * It comes from the target's own observations (`asset_hints`, `kind =
- * "landing-page"`), is restricted to HTTP(S) without embedded credentials or a
- * fragment, and matches the frozen target version (an unversioned hint is the only
- * hint fallback). When metadata has a canonical DOI but no landing hint, the generic
- * DOI resolver is the only additional start point; Entry never asks the Agent to guess
- * a Publisher URL.
- */
+/** Backward-compatible first entry; production also passes the complete prepared list. */
 export function browserStartUrl(
   observations: readonly MetadataObservation[],
   targetVersion: VersionRole,
@@ -851,58 +1100,14 @@ export function browserStartUrl(
     readonly value: string;
   }[] = [],
 ): string | null {
-  const admitted = observations.flatMap(
-    (observation) => observation.asset_hints,
-  );
-  const safe = (hint: (typeof admitted)[number]): string | null => {
-    if (hint.kind !== "landing-page") return null;
-    let url: URL;
-    try {
-      url = new URL(hint.url);
-    } catch {
-      return null;
-    }
-    if (
-      !["http:", "https:"].includes(url.protocol) ||
-      url.username ||
-      url.password ||
-      url.hash
-    )
-      return null;
-    return url.toString();
-  };
-  // Exact version match wins; an unversioned hint is the only safe fallback (its
-  // landing page is not claimed to belong to a different concrete version). A hint
-  // that names another version is never navigated to.
-  const ordered = [
-    ...admitted.filter((hint) => hint.version_role === targetVersion),
-    ...admitted.filter((hint) => hint.version_role === null),
-  ];
-  for (const hint of ordered) {
-    const url = safe(hint);
-    if (url !== null) return url;
-  }
-  const doi = identifiers
-    .find(
-      (identifier) =>
-        identifier.namespace.toLowerCase() === "doi" &&
-        /^10\.\d{4,9}\/.+$/iu.test(identifier.value.trim()) &&
-        !/[\s?#]/u.test(identifier.value.trim()),
-    )
-    ?.value.trim();
-  if (doi)
-    return `https://doi.org/${doi
-      .split("/")
-      .map((part) => encodeURIComponent(part))
-      .join("/")}`;
-  return null;
+  return browserStartUrls(observations, targetVersion, identifiers)[0] ?? null;
 }
 
 /** The stable identifier the Browser delivery must attribute its bytes to. */
 function browserIdentifier(request: PdfAcquisitionRequest): string {
   const stable = request.detail.literature.metadata.identifiers.find(
     (identifier) =>
-      identifier.namespace === "doi" || identifier.namespace === "arxiv",
+      ["doi", "arxiv", "pmid", "pmcid"].includes(identifier.namespace),
   );
   return stable
     ? `${stable.namespace}:${stable.value}`

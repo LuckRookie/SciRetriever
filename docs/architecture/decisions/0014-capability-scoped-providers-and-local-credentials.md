@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-10
-- Last amended: 2026-08-28
+- Last amended: 2026-10-11
 - Supersedes: none
 - Superseded by: none
 - Amends: [ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)
@@ -49,13 +49,25 @@ SciRetriever 需要尽可能完整地接入已经确认可用的外部文献服�
 
 Acquisition 对具体 Literature 读取已经接纳的稳定标识符、全部 MetadataObservation、Provider record identity 和 AssetHint，在当前进程形成不持久化的 `PublisherAccessResolution` 与 `AcquisitionPlan`。原文访问方、Metadata Provider 和页面平台分别表达；ACS、IEEE、RSC 等纯访问画像不需要伪装成 Metadata Provider 或创建不需要的 API 凭据 section。
 
-Planner 优先使用调用前已有的 direct-file/landing-page `AssetHint`、arXiv ID/PMCID/PII 等稳定定位和 Provider record identity；已有明确公开路径时不为了识别出版社增加 DOI 请求。需要确认访问方且强证据不足时，由公开层安全解析一次 DOI landing。全部证据可用时的确认强度为：实际 landing origin、访问方自有 AssetHint origin、来源明确的稳定文章 ID、Provider record identity；publisher 名称或 DOI prefix 只能产生待核实弱候选，不能单独证明归属、授权、API 或 Browser 适用性。
+Planner 优先使用调用前已有的 direct-file/landing-page `AssetHint`、arXiv ID/PMCID/PII 等稳定定位和 Provider record identity；已有明确公开路径时不为了识别出版社增加 DOI 请求。需要确认访问方且强证据不足时，在出版社 API 规划前按需安全解析一次 DOI landing；该定位不提前执行公共网站全部下载策略。全部证据可用时的确认强度为：实际 landing origin、访问方自有 AssetHint origin、来源明确的稳定文章 ID、Provider record identity；publisher 名称或 DOI prefix 只能产生待核实弱候选，不能单独证明归属、授权、API 或 Browser 适用性。
 
 MetadataObservation 来自 Scopus 不表示文献由 Elsevier 出版；Crossref 返回的文献也可以由 Elsevier、Wiley 或其它访问方获取。`PublisherAccessProfile` 统一描述访问方识别、公开路径、官方 API capability、Browser rule、风险组和会话组，具体 HTTP/API/Browser adapter 仍保持独立。Resolution、Plan 和 API/landing 产生的脱敏 route hint 只服务当前运行，不进入数据库或长期 provenance。用户拥有密钥、认证成功和具体文献全文 entitlement 是三个不同事实。
 
-适用 routes 仍严格按公开来源、已授权 Provider API、受控浏览器三个风险层级短路；批量补全先让本次有界 cohort 完成公开层，再完成未解决目标的 API 层，最后只把允许升级的最小剩余集合交给按 Provider 风险组调度的 Browser。Planner 可以省略确定不适用的路线，不能自动提前 Browser。
+适用 routes 按 `direct → publisher-api → general-api → public-web → browser` 五层短路：已有直链与稳定公开 PDF 地址、出版社专用 API、跨出版社的聚合/开放获取 API、公共网站、受控 Browser。执行阶段与凭据要求独立；Unpaywall 与 CORE 同属通用 API 层，前者无密钥而后者需要凭据。批量补全在有界 cohort 内逐层处理未解决目标，只有前四层允许继续的最小剩余集合进入 Browser。来源同阶段以配置顺序为基础，出版社 API 可按唯一名称候选稳定优先，已选但不可用的来源保留失败标记；Planner 可以省略确定不适用的路线，不能自动提前 Browser。
 
 Readiness 按本次实际 plan 区分项目支持、用户启用、静态配置就绪、当前 Literature 适用和当前 route 实际需要。缺少凭据或 readiness 失败不能形成 `NoPrimaryPdf` 或自动获取耗尽；支持但未配置的低风险 route 是否允许进入 Browser 必须由显式 Browser policy 决定并清楚报告。临时网络/API 错误、`429`、`Retry-After` 和 quota exhausted 不得通过自动切换 Browser 绕过。未启用且不属于本次当前能力的 route 不在耗尽集合中。
+
+### 3.1 出版社名称规则与显式 AI 辅助维护
+
+2026-10-11 接受名称治理与获取任务解耦。来源 observation 保留供应商的出版社与期刊原文；名称映射不覆盖来源、不改变 Literature 身份，也不要求元数据入库或每次下载先调用模型。
+
+Provider 的已知出版社别名就近放在本地静态定义，普通配置 `sources.publisher_aliases` 保存用户显式确认的扩展。确定性解析使用 Unicode NFKC、大小写与空白规范化，以及明确登记的别名；未知和冲突保留状态，不通过相似度或 DOI 前缀猜定归属。
+
+显式维护操作在用户选定范围内汇总不同名称、原文、涉及文献数量与有界站点/标识上下文；用户选择 AI 时复用共享 Agents 和已选 Analysis Model，为未知名称提出已登记 Provider ID 候选，保留输入 hash、模型 provenance 与失败。模型输出、理由或自报置信度不能自行更新配置。接纳是另一个显式动作，检查已注册 ID、原名称/站点及已有别名冲突，并按配置 revision 写入普通配置；用户可以纠正映射，不建立治理 daemon、期刊归属总表或新的文献事实表。
+
+名称结果仅参与服务候选判断。文章 URL、专用标识、当前 DOI landing 与服务覆盖仍决定出版社 API 的具体适用性；名称匹配不证明认证、entitlement 或 Browser 平台。未知名称不阻断已有直链、通用 API、公共网页与已获准 Browser，期刊无需预先登记。
+
+名称解析唯一命中一个 Provider ID 时，只把当前 publisher-api 阶段中已选中的同名来源稳定排到前面；其余来源仍保持配置顺序，未知或冲突不改变优先级。此调整不删除来源、不自动启用服务，实际调用仍须通过 `authorizedTargets` 的文章级站点/专用标识证据。
 
 ### 4. 唯一本地凭据文件
 

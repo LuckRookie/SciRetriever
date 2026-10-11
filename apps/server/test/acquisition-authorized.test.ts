@@ -97,7 +97,11 @@ describe("authorized acquisition providers", () => {
             ? {
                 status: 200,
                 headers: [["content-type", "application/xml"]],
-                body: xml,
+                body: new TextEncoder().encode(
+                  "<full-text-retrieval-response><web-pdf-info><extension>xml</extension></web-pdf-info>" +
+                    new TextDecoder().decode(xml) +
+                    "</full-text-retrieval-response>",
+                ),
               }
             : {
                 status: 200,
@@ -122,7 +126,7 @@ describe("authorized acquisition providers", () => {
       },
     });
     expect(calls.map((call) => call.url)).toEqual([
-      "https://api.elsevier.com/content/article/pii?view=FULL&pii=S0014579301033130",
+      "https://api.elsevier.com/content/article/pii/S0014579301033130?view=FULL",
       "https://api.elsevier.com/content/object/eid/1-s2.0-S0014579301033130-main.pdf",
     ]);
     expect(calls[0]?.headers).toEqual({

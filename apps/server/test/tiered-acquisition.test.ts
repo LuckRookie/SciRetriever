@@ -605,3 +605,84 @@ describe("tiered acquisition failure classification", () => {
     ]);
   });
 });
+
+it.each([false, true])(
+  "preserves independent fallback permission through discovery cooldown (allowed=%s)",
+  async (allowed) => {
+    let discoveries = 0;
+    const route = source("flaky", async () => {
+      discoveries += 1;
+      throw new AcquisitionRouteError(
+        allowed ? "network-failed" : "rate-limited",
+        "Fixture outage.",
+        true,
+        { allows_independent_fallback: allowed },
+      );
+    });
+    const results = await new TieredAcquisitionService(
+      new PublicAcquisitionRegistry([route], ["flaky"]),
+      { cooldown_ms: 30_000, now: () => 0 },
+    ).run([item("first"), item("second")], async () => undefined);
+    expect(discoveries).toBe(1);
+    expect(results[1]).toMatchObject({
+      disposition: "failed",
+      failure: { code: "source-cooldown" },
+    });
+    expect(results[0]?.failure?.allows_independent_fallback === true).toBe(
+      allowed,
+    );
+    expect(results[1]?.failure?.allows_independent_fallback === true).toBe(
+      allowed,
+    );
+  },
+);
+
+it("does not let an ordinary outage erase an earlier blocking route failure", async () => {
+  const sources = [
+    source("blocked", async () => {
+      throw new AcquisitionRouteError(
+        "network-failed",
+        "Unclassified failure.",
+      );
+    }),
+    source("temporary", async () => {
+      throw new AcquisitionRouteError(
+        "http-response-failed",
+        "HTTP 502.",
+        true,
+        { allows_independent_fallback: true },
+      );
+    }),
+  ];
+  const [result] = await new TieredAcquisitionService(
+    new PublicAcquisitionRegistry(
+      sources,
+      sources.map((s) => s.source_name),
+    ),
+  ).run([item("first")], async () => undefined);
+  expect(result?.failure?.source).toBe("blocked");
+  expect(result?.failure?.allows_independent_fallback).not.toBe(true);
+});
+
+it("does not use a later public source while an earlier rate-limited discovery is cooling down", async () => {
+  let alternateCalls = 0;
+  const limited = source("limited", async () => {
+    throw new AcquisitionRouteError("rate-limited", "HTTP 429.");
+  });
+  const alternate = source("alternate", async () => {
+    alternateCalls += 1;
+    return [safeLocator("alternate", "https://fixture.test/file.pdf")];
+  });
+  const results = await new TieredAcquisitionService(
+    new PublicAcquisitionRegistry(
+      [limited, alternate],
+      ["limited", "alternate"],
+    ),
+    { now: () => 0 },
+  ).run([item("first"), item("second")], async () => undefined);
+  expect(results.map((result) => result.failure?.code)).toEqual([
+    "rate-limited",
+    "source-cooldown",
+  ]);
+  expect(alternateCalls).toBe(0);
+});

@@ -23,6 +23,7 @@ export const definition = provider({
   metadataService: "europe-pmc-rest",
   metadataAuto: true,
   acquisition: "public",
+  acquisitionStage: "direct",
   acquisitionService: "europe-pmc-pdf",
   acquisitionAuto: true,
   credentialFields: [],

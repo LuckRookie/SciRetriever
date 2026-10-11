@@ -38,9 +38,17 @@ export const services = Object.freeze({
   ),
 });
 export const definition = provider({
+  publisherAliases: [
+    "Elsevier",
+    "Elsevier BV",
+    "Elsevier B.V.",
+    "Elsevier Ltd",
+    "Elsevier Inc.",
+  ],
   metadata: search,
   metadataService: "elsevier-search",
   acquisition: "authorized-api",
+  acquisitionStage: "publisher-api",
   pdfHeaders: { api_key: "x-els-apikey", institution_token: "x-els-insttoken" },
   acquisitionService: "elsevier-article",
   credentialFields: ["api_key", "institution_token"],

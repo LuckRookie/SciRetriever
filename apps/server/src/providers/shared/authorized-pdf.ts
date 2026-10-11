@@ -39,6 +39,7 @@ export interface AuthorizedClientFailure {
     | "entitlement"
     | "quota"
     | "service"
+    | "request"
     | "response-schema"
     | "non-pdf-product"
     | "ambiguous-primary-pdf"
@@ -85,13 +86,17 @@ export function mediaType(response: HttpResponse): string | null {
   )?.[1];
   return value ? value.split(";", 1)[0]!.trim().toLowerCase() : null;
 }
-export function rateLimitedResponse(response: HttpResponse): boolean {
-  const deliveredPdf =
-    response.status === 200 &&
+/** Candidate evidence only; the shared PDF reader still validates before admission. */
+export function hasPdfHeader(response: HttpResponse): boolean {
+  return (
     response.body instanceof Uint8Array &&
     /%PDF-\d\.\d/u.test(
       new TextDecoder("latin1").decode(response.body.subarray(0, 1024)),
-    );
+    )
+  );
+}
+export function rateLimitedResponse(response: HttpResponse): boolean {
+  const deliveredPdf = response.status === 200 && hasPdfHeader(response);
   return (
     response.status === 429 ||
     (!deliveredPdf &&
@@ -148,12 +153,11 @@ export function interpretDownloadResponse(
   if (response.status === 401) failHttpResponse("authentication", response);
   if (response.status === 403) failHttpResponse("entitlement", response);
   if (response.status >= 500) failHttpResponse("service", response);
-  if (response.status !== 200)
-    throw new AuthorizedProviderError({ code: "response-schema" });
+  if (response.status !== 200) failHttpResponse("request", response);
   if (!(response.body instanceof Uint8Array) || response.body.byteLength === 0)
     throw new AuthorizedProviderError({ code: "response-schema" });
   const type = mediaType(response);
-  if (type !== null && type !== "application/pdf")
+  if (type !== null && type !== "application/pdf" && !hasPdfHeader(response))
     throw new AuthorizedProviderError({ code: "non-pdf-product" });
   return {
     kind: "download",

@@ -58,6 +58,10 @@ import { CatalogSchemaError } from "../storage/sqlite/migration-scope.js";
 import { WriteAdmissionError } from "../storage/write-admission.js";
 import { ProcessingTaskError } from "../application/jobs/processing.js";
 import { ArticleIdentityError } from "../parsing/article-identity.js";
+import {
+  acceptPublisherNameMappings,
+  type PublisherGovernanceSelector,
+} from "../entry/publisher-governance.js";
 
 export interface CliOptions {
   readonly home?: string;
@@ -131,7 +135,9 @@ function usage(options: CliOptions): CliResult {
     "  mcp [--maintenance]  # stdio; maintenance tools require this explicit mode\n" +
     "  storage schema-inspect|schema-init --catalog PATH | schema-upgrade --catalog PATH [--dry-run | --backup PATH]\n" +
     "  storage document-inspect|retrieval-inspect|extraction-inspect --catalog PATH | document-migrate|retrieval-migrate|extraction-migrate --catalog PATH [--dry-run | --backup PATH --synthetic-copy]\n" +
-    "  maintenance rebuild-index (requires an existing v4 catalog) | rebuild-knowledge-index (requires v8)\n";
+    "  maintenance rebuild-index (requires an existing v4 catalog) | rebuild-knowledge-index (requires v8)\n" +
+    "  maintenance publisher-names (--all | --literature-id ID... | --query TEXT) [--ai] [--scan-limit N] [--cursor CURSOR] [--max-ai-requests N] [--output PATH]\n" +
+    "  maintenance publisher-names-accept --report FILE|- --name NAME [--name NAME...]\n";
   options.stdout?.(text);
   return { code: 0 };
 }
@@ -638,6 +644,93 @@ async function execute(
         ...(backup ? { backup_path: backup } : {}),
         dry_run: dryRun,
       }),
+      options,
+    );
+  }
+  if (group === "maintenance" && command === "publisher-names") {
+    const flags = new Set(["--all", "--ai"]);
+    const valued = new Set([
+      "--literature-id",
+      "--query",
+      "--scan-limit",
+      "--cursor",
+      "--max-ai-requests",
+      "--output",
+    ]);
+    for (let index = 2; index < args.length; index += 1) {
+      const option = args[index]!;
+      if (flags.has(option)) continue;
+      if (
+        !valued.has(option) ||
+        !args[index + 1] ||
+        args[index + 1]!.startsWith("--")
+      )
+        invalidInput();
+      index += 1;
+    }
+    const ids = argumentsOf(args, "--literature-id");
+    const text = argument(args, "--query");
+    if (
+      Number(args.includes("--all")) +
+        Number(ids.length > 0) +
+        Number(text !== null) !==
+      1
+    )
+      invalidInput();
+    const selector: PublisherGovernanceSelector = ids.length
+      ? { kind: "literatures", literature_ids: ids.map(parseLiteratureId) }
+      : text !== null
+        ? { kind: "query", query: query(text) }
+        : { kind: "all" };
+    const report = await withApplication(options, (app) =>
+      app.publisherGovernance.report(
+        {
+          selector,
+          ai: args.includes("--ai"),
+          scan_limit: integerOption(args, "--scan-limit", 10_000),
+          max_ai_requests: integerOption(args, "--max-ai-requests", 20),
+          cursor: argument(args, "--cursor"),
+        },
+        options.signal,
+      ),
+    );
+    const path = argument(args, "--output");
+    if (path !== null)
+      await exportBytes(
+        new TextEncoder().encode(`${JSON.stringify(report, null, 2)}\n`),
+        path,
+      );
+    return output(report, options);
+  }
+  if (group === "maintenance" && command === "publisher-names-accept") {
+    for (let index = 2; index < args.length; index += 2) {
+      if (
+        !["--report", "--name"].includes(args[index]!) ||
+        !args[index + 1] ||
+        args[index + 1]!.startsWith("--")
+      )
+        invalidInput();
+    }
+    const paths = argumentsOf(args, "--report");
+    const names = argumentsOf(args, "--name");
+    if (paths.length !== 1 || !names.length) invalidInput();
+    const bytes = await inputBytes(paths[0]!, options);
+    if (bytes.byteLength > 16_777_216) invalidInput();
+    let report: unknown;
+    try {
+      report = JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      );
+    } catch {
+      invalidInput();
+    }
+    return output(
+      await acceptPublisherNameMappings(
+        new TypeScriptConfigurationOwner(configurationHome(options)),
+        report,
+        names,
+        options.signal,
+      ),
       options,
     );
   }

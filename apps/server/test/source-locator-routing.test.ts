@@ -24,6 +24,13 @@ describe("source locator boundaries", () => {
     expect(normalizeUrl(doiLanding("10.1000/section/a:b;c").locator).path).toBe(
       "/10.1000/section/a%3Ab%3Bc",
     );
+    const sici =
+      "10.1002/(SICI)1097-0258(19970615)16:11<1239::AID-SIM541>3.0.CO;2-8";
+    expect(normalizeUrl(doiLanding(sici).locator).path).toBe(
+      `/${sici.split("/").map(encodeURIComponent).join("/")}`,
+    );
+    for (const invalid of ["10.1000/a b", "10.1000/a?key=x", "10.1000/a#view"])
+      expect(() => doiLanding(invalid)).toThrow(SourceLocatorError);
     expect(europePmcPdf("pmc123").locator).toBe(
       "https://europepmc.org/articles/PMC123?pdf=render",
     );

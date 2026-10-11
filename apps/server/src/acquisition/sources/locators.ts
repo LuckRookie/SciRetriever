@@ -58,8 +58,7 @@ export function safeLocator(
 }
 
 export function doiLanding(doi: string): SourceCandidate {
-  if (!/^10\.\d{4,9}\/[._;()/:a-z0-9-]+$/iu.test(doi) || /[\s?#]/u.test(doi))
-    invalid();
+  if (!/^10\.\d{4,9}\/[^\s?#]+$/iu.test(doi)) invalid();
   return candidate(
     "doi-landing",
     `${DOI_RESOLVER_ORIGIN}/${doi.split("/").map(encodeURIComponent).join("/")}`,

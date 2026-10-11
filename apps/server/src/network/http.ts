@@ -99,6 +99,8 @@ export interface AgentTransportOptions {
   readonly maxRedirects?: number;
   readonly maxRetries?: number;
   readonly resolveAccess?: AccessResolver;
+  /** Adapter protocol constraint, checked before redirect DNS or connection. */
+  readonly allowRedirect?: (from: URL, to: URL) => boolean;
 }
 const NETWORK_HEADERS = new Set([
   "connection",
@@ -336,7 +338,9 @@ export async function requestOnce(
                     )
                   : res.statusCode === 429
                     ? budget.limits.rateLimitBackoffMs
-                    : undefined;
+                    : res.statusCode !== undefined && res.statusCode >= 500
+                      ? budget.limits.serverErrorBackoffMs
+                      : undefined;
               if (delay !== undefined)
                 budget.coordinator.applyRetryAfter(
                   budget.scope,
@@ -524,6 +528,9 @@ export function createAgentTransport(
         ...(options.maxRetries !== undefined
           ? { maxRetries: options.maxRetries }
           : {}),
+        ...(options.allowRedirect
+          ? { allowRedirect: options.allowRedirect }
+          : {}),
         budget: {
           coordinator: options.coordinator,
           scope: options.scope,
@@ -546,6 +553,7 @@ export async function requestFollowingRedirects(
   options: HttpRequestOptions & {
     readonly maxRedirects?: number;
     readonly maxRetries?: number;
+    readonly allowRedirect?: (from: URL, to: URL) => boolean;
   } = {},
 ): Promise<HttpResponse> {
   validateOptions(options);
@@ -643,11 +651,23 @@ export async function requestFollowingRedirects(
           retryDelayMs,
         );
       }
+      // A local 5xx backoff also bounds immediate retries, but is not remote
+      // Retry-After evidence. Return the real response instead of timing out while
+      // reacquiring a permit whose cooldown exceeds the next request's budget.
+      const attemptDelayMs =
+        retryDelayMs ??
+        (response.status >= 500 &&
+        budget?.limits.serverErrorBackoffMs !== undefined
+          ? Math.min(
+              budget.limits.serverErrorBackoffMs,
+              budget.limits.maxRetryAfterMs ?? 120_000,
+            )
+          : undefined);
       if (
         [408, 425, 429, 500, 502, 503, 504].includes(response.status) &&
         retries < retryLimit &&
-        (retryDelayMs === undefined ||
-          retryDelayMs < (options.timeoutMs ?? 10_000))
+        (attemptDelayMs === undefined ||
+          attemptDelayMs < (options.timeoutMs ?? 10_000))
       ) {
         if (usage) usage.consumeRetry();
         retries += 1;
@@ -674,6 +694,16 @@ export async function requestFollowingRedirects(
         .filter(([name]) => name === "location")
         .map(([, value]) => value);
       if (locations.length !== 1) invalid("response-protocol");
+      if (options.allowRedirect) {
+        let target: URL;
+        try {
+          target = new URL(locations[0]!, destination.url.url);
+        } catch {
+          invalid("response-protocol");
+        }
+        if (!options.allowRedirect(new URL(destination.url.url), target))
+          invalid("response-protocol");
+      }
       const redirect = await evaluateRedirect(
         destination,
         locations[0]!,

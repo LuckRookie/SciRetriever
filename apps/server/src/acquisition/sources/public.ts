@@ -1,4 +1,8 @@
-import type { AssetHint, CandidateCapture } from "@sciretriever/contracts";
+import type {
+  AssetHint,
+  CandidateCapture,
+  VersionRole,
+} from "@sciretriever/contracts";
 import type {
   BrowserTransferCollector,
   DurableCandidate,
@@ -9,6 +13,10 @@ import {
   authorizedTargets,
   authorizedUrl,
 } from "../../providers/acquisition.js";
+import {
+  isAuthorizedAcquisitionUrl,
+  LITERATURE_PROVIDERS,
+} from "../../providers/registry.js";
 import { dedupe, values } from "../../providers/shared/acquisition-locators.js";
 import {
   AuthorizedProviderError,
@@ -20,6 +28,7 @@ import { acceptPdf } from "../pdf-acceptance.js";
 import type {
   AcquisitionSourcePort,
   AcquisitionSourceRequest,
+  AcquisitionStage,
   AuthorizedPdfClientPort,
 } from "../ports.js";
 import {
@@ -37,11 +46,21 @@ export interface PdfDownloadTransport {
   ): Promise<HttpResponse>;
 }
 
+export const DEFAULT_PDF_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024;
+
 export interface PdfDownloadOptions {
   readonly collector: BrowserTransferCollector;
   readonly transfer_id: string;
   readonly capture?: CandidateCapture | null;
   readonly max_bytes?: number;
+  readonly on_landing?: (origin: string) => void;
+  /** Operation-local observations only; URLs must not be persisted or logged. */
+  readonly on_response?: (response: {
+    readonly requested_url: string;
+    readonly final_url: string;
+    readonly status: number;
+    readonly media_type: string | null;
+  }) => void;
   readonly signal?: AbortSignal;
 }
 
@@ -57,7 +76,7 @@ function responseMediaType(response: HttpResponse): string | null {
   return value ? value.split(";", 1)[0]!.trim().toLowerCase() : null;
 }
 
-function hasPdfHeader(response: HttpResponse): boolean {
+export function hasPdfHeader(response: HttpResponse): boolean {
   return /%PDF-\d\.\d/u.test(
     new TextDecoder("latin1").decode(response.body.subarray(0, 1024)),
   );
@@ -87,10 +106,12 @@ function staticPdfLocators(base: string, bytes: Uint8Array): readonly string[] {
   return Object.freeze(
     raw.flatMap((value) => {
       try {
-        const locator = safeLocator(
-          "landing-pdf",
-          new URL(value.replaceAll(/&amp;/giu, "&").trim(), base).toString(),
-        ).locator;
+        const target = new URL(value.replaceAll(/&amp;/giu, "&").trim(), base);
+        // PDF viewer fragments are client-side display options, never part of the
+        // HTTP request. Normalize them before the credential-free locator guard;
+        // path, query, origin and dispatch-time DNS checks remain unchanged.
+        target.hash = "";
+        const locator = safeLocator("landing-pdf", target.toString()).locator;
         // HTML can advertise paths that the stateless public transport cannot
         // admit. Reject them before they become candidates; DNS/address policy
         // is still checked at dispatch for every syntactically valid link.
@@ -99,7 +120,7 @@ function staticPdfLocators(base: string, bytes: Uint8Array): readonly string[] {
             { scheme: "https", port: Number(new URL(base).port || 443) },
           ],
         });
-        if (seen.has(locator)) return [];
+        if (seen.has(locator) || isAuthorizedAcquisitionUrl(locator)) return [];
         seen.add(locator);
         return [locator];
       } catch {
@@ -113,6 +134,8 @@ async function fetchPdfResponse(
   candidate: SourceCandidate,
   transport: PdfDownloadTransport,
   signal?: AbortSignal,
+  onLanding?: (origin: string) => void,
+  onResponse?: PdfDownloadOptions["on_response"],
 ): Promise<HttpResponse> {
   const fetch = async (url: string): Promise<HttpResponse> => {
     let response: HttpResponse;
@@ -134,6 +157,14 @@ async function fetchPdfResponse(
         );
       throw error;
     }
+    onResponse?.({
+      requested_url: url,
+      final_url: response.final_url ?? url,
+      status: response.status,
+      media_type: responseMediaType(response),
+    });
+    if (candidate.source === "doi-landing" && url === candidate.locator)
+      onLanding?.(new URL(response.final_url ?? url).origin);
     // Keep a successfully delivered candidate; no further request is needed.
     // Its bytes still pass the PDF reader before publication.
     if (
@@ -165,6 +196,7 @@ async function fetchPdfResponse(
         "http-response-failed",
         `Public HTTP returned ${response.status}; no PDF was delivered.`,
         response.status !== 401,
+        { allows_independent_fallback: response.status >= 500 },
       );
     return response;
   };
@@ -230,7 +262,7 @@ export async function downloadPdfCandidate(
 ): Promise<DurableCandidate> {
   if (!candidate || typeof candidate.locator !== "string")
     throw new Error("acquisition download candidate is invalid");
-  const maxBytes = options.max_bytes ?? 64 * 1024 * 1024;
+  const maxBytes = options.max_bytes ?? DEFAULT_PDF_DOWNLOAD_MAX_BYTES;
   if (
     !Number.isSafeInteger(maxBytes) ||
     maxBytes < 1 ||
@@ -238,7 +270,13 @@ export async function downloadPdfCandidate(
     options.signal?.aborted
   )
     throw new Error("acquisition download request is invalid");
-  const response = await fetchPdfResponse(candidate, transport, options.signal);
+  const response = await fetchPdfResponse(
+    candidate,
+    transport,
+    options.signal,
+    options.on_landing,
+    options.on_response,
+  );
   if (!(response.body instanceof Uint8Array) || response.body.byteLength === 0)
     throw new Error("acquisition download body is empty");
   if (response.body.byteLength > maxBytes)
@@ -290,7 +328,7 @@ export async function downloadSourceCandidate(
   );
   if (!source?.download_candidate)
     throw new Error("acquisition source download is unavailable");
-  const maxBytes = options.max_bytes ?? 64 * 1024 * 1024;
+  const maxBytes = options.max_bytes ?? DEFAULT_PDF_DOWNLOAD_MAX_BYTES;
   if (
     !Number.isSafeInteger(maxBytes) ||
     maxBytes < 1 ||
@@ -306,12 +344,6 @@ export async function downloadSourceCandidate(
     throw new Error("acquisition download body is empty");
   if (result.bytes.byteLength > maxBytes)
     throw new Error("acquisition download exceeds byte limit");
-  if (
-    result.media_type &&
-    result.media_type.split(";", 1)[0]!.trim().toLowerCase() !==
-      "application/pdf"
-  )
-    throw new Error("acquisition download media type is not PDF");
   await acceptPdf(result.bytes, 10_000, options.signal);
   const capture = options.capture === undefined ? null : options.capture;
   await options.collector.begin(
@@ -344,14 +376,28 @@ export async function downloadSourceCandidate(
   }
 }
 
-function hintedPdf(hint: AssetHint): SourceCandidate | null {
+function hintedPdf(
+  hint: AssetHint,
+  targetVersion?: VersionRole,
+): SourceCandidate | null {
   if (
-    hint.kind !== "direct-file" ||
-    hint.media_type?.toLowerCase() !== "application/pdf"
+    (hint.asset_role !== null && hint.asset_role !== "primary-pdf") ||
+    (targetVersion !== undefined &&
+      hint.version_role !== null &&
+      hint.version_role !== targetVersion) ||
+    isAuthorizedAcquisitionUrl(hint.url)
   )
     return null;
   try {
-    return safeLocator("direct", hint.url);
+    const url = new URL(hint.url);
+    const explicitPdf =
+      hint.asset_role === "primary-pdf" ||
+      hint.media_type?.split(";", 1)[0]?.trim().toLowerCase() ===
+        "application/pdf";
+    if (!explicitPdf && !/\.pdf$/iu.test(url.pathname)) return null;
+    // Viewer fragments are client-side options. Retain the original path and query.
+    url.hash = "";
+    return safeLocator("direct", url.toString());
   } catch {
     return null;
   }
@@ -359,13 +405,14 @@ function hintedPdf(hint: AssetHint): SourceCandidate | null {
 
 export class DirectPdfSource implements AcquisitionSourcePort {
   readonly source_name = "direct" as const;
+  readonly acquisition_stage = "direct" as const;
   readonly ready = true;
   async discover(
     request: AcquisitionSourceRequest,
   ): Promise<readonly SourceCandidate[]> {
     return dedupe(
       (request.asset_hints ?? []).flatMap((hint) => {
-        const candidate = hintedPdf(hint);
+        const candidate = hintedPdf(hint, request.target_version);
         return candidate ? [candidate] : [];
       }),
     );
@@ -374,6 +421,7 @@ export class DirectPdfSource implements AcquisitionSourcePort {
 
 export class DoiLandingSource implements AcquisitionSourcePort {
   readonly source_name = "doi-landing" as const;
+  readonly acquisition_stage = "public-web" as const;
   readonly ready = true;
   async discover(
     request: AcquisitionSourceRequest,
@@ -409,7 +457,12 @@ function rethrowAuthorizedFailure(
       true,
       { cause: error },
     );
-  if (code === "authentication" || code === "entitlement" || code === "access")
+  if (
+    code === "authentication" ||
+    code === "entitlement" ||
+    code === "access" ||
+    code === "request"
+  )
     throw new AcquisitionRouteError(
       "http-response-failed",
       `${provider} API reported an ${code} failure; operator action is required.${status}`,
@@ -431,11 +484,14 @@ function rethrowAuthorizedFailure(
 /** Credential-bearing source that exposes only an opaque, non-secret locator. */
 export class AuthorizedPdfSource implements AcquisitionSourcePort {
   readonly acquisition_tier = "authorized-api" as const;
+  readonly acquisition_stage: AcquisitionStage;
   readonly source_name: AuthorizedProvider;
   readonly ready = true;
   private readonly locators = new Map<string, AuthorizedDownloadLocator>();
   constructor(private readonly client: AuthorizedPdfClientPort) {
     this.source_name = client.provider;
+    this.acquisition_stage =
+      LITERATURE_PROVIDERS[client.provider]!.acquisitionStage!;
   }
   async discover(
     request: AcquisitionSourceRequest,
@@ -520,23 +576,35 @@ export class PublicAcquisitionRegistry {
     const presentNames = Object.freeze(
       expectedSourceNames
         ? [...expectedSourceNames]
-        : names.filter(
-            (name) =>
-              [
-                "direct",
-                "arxiv",
-                "europe-pmc",
-                "doi-landing",
-                "unpaywall",
-              ].includes(name) || byName.has(name),
-          ),
+        : [
+            ...names.filter(
+              (name) =>
+                [
+                  "direct",
+                  "arxiv",
+                  "europe-pmc",
+                  "doi-landing",
+                  "unpaywall",
+                ].includes(name) || byName.has(name),
+            ),
+            ...[...byName.keys()].filter(
+              (name) => !names.some((known) => known === name),
+            ),
+          ],
     );
     if (
       new Set(presentNames).size !== presentNames.length ||
       presentNames.some((name) => !/^[a-z0-9][a-z0-9-]{0,127}$/u.test(name))
     )
       throw new TypeError("invalid acquisition source order");
-    this.unavailable = Object.freeze({ ...unavailable });
+    this.unavailable = Object.freeze({
+      ...Object.fromEntries(
+        (expectedSourceNames ?? [])
+          .filter((name) => !byName.has(name))
+          .map((name) => [name, "missing-source-adapter"]),
+      ),
+      ...unavailable,
+    });
     this.sources = Object.freeze(
       presentNames.flatMap((name) =>
         byName.has(name) ? [byName.get(name)!] : [],
@@ -551,7 +619,7 @@ export class PublicAcquisitionRegistry {
           failure_code:
             source?.ready === true
               ? null
-              : (unavailable[source_name] ?? "missing-source-adapter"),
+              : (this.unavailable[source_name] ?? "missing-source-adapter"),
         });
       }),
     );

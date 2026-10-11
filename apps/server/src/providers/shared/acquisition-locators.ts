@@ -24,40 +24,72 @@ export function dedupe(
   );
 }
 
+export function requestHints(request: AcquisitionSourceRequest) {
+  return [
+    ...(request.asset_hints ?? []),
+    ...(request.observations ?? []).flatMap((item) => item.asset_hints),
+  ].filter(
+    (hint) =>
+      !["supplementary", "supplementary-pdf"].includes(hint.asset_role ?? "") &&
+      (request.target_version === undefined ||
+        hint.version_role === null ||
+        hint.version_role === request.target_version),
+  );
+}
 function requestOrigins(
   request: AcquisitionSourceRequest,
 ): ReadonlySet<string> {
   const origins = new Set<string>();
-  for (const observation of request.observations ?? [])
-    for (const hint of observation.asset_hints)
-      try {
-        origins.add(new URL(hint.url).origin);
-      } catch {
-        // Invalid persisted hints are ignored at this Source boundary.
-      }
-  for (const hint of request.asset_hints ?? [])
+  for (const value of [
+    ...requestHints(request).map((hint) => hint.url),
+    ...(request.landing_origins ?? []),
+  ]) {
     try {
-      origins.add(new URL(hint.url).origin);
+      const url = new URL(value);
+      if (
+        url.protocol === "https:" &&
+        !url.port &&
+        !url.username &&
+        !url.password
+      )
+        origins.add(url.origin);
     } catch {
-      // Invalid caller hints are ignored at this Source boundary.
+      // Invalid hints cannot establish provider applicability.
     }
+  }
   return origins;
 }
-export function targetsForDefinition(
-  definition: ProviderDefinition,
+/** A provider's documented article API may supply typed targets, never arbitrary URLs. */
+export function articleHintTargets(
   request: AcquisitionSourceRequest,
+  origin: string,
+  parsePath: (path: string) => AuthorizedLookupTarget | null,
 ): readonly AuthorizedLookupTarget[] {
-  const origins = requestOrigins(request);
-  const allowsDoi =
-    definition.doiOrigins?.some((origin) => origins.has(origin)) ?? false;
   const targets: AuthorizedLookupTarget[] = [];
-  for (const identifier of request.identifiers) {
-    const namespace = identifier.namespace.toLowerCase();
-    const supported =
-      definition.pdfIdentifiers?.includes(namespace) ||
-      (namespace === "doi" && allowsDoi);
-    if (supported) targets.push({ namespace, value: identifier.value.trim() });
+  const dois = new Set(
+    values(request, "doi").map((value) => value.toLowerCase()),
+  );
+  for (const hint of requestHints(request)) {
+    try {
+      const url = new URL(hint.url);
+      if (url.origin !== origin || url.username || url.password) continue;
+      const target = parsePath(url.pathname);
+      if (!target || !target.value) continue;
+      if (
+        target.namespace === "doi" &&
+        (dois.size !== 1 || !dois.has(target.value.toLowerCase()))
+      )
+        continue;
+      targets.push(target);
+    } catch {
+      // A malformed vendor locator is not routing evidence.
+    }
   }
+  return targets;
+}
+export function uniqueTargets(
+  targets: readonly AuthorizedLookupTarget[],
+): readonly AuthorizedLookupTarget[] {
   const seen = new Set<string>();
   return Object.freeze(
     targets.filter((target) => {
@@ -67,4 +99,31 @@ export function targetsForDefinition(
       return true;
     }),
   );
+}
+export function targetsForDefinition(
+  definition: ProviderDefinition,
+  request: AcquisitionSourceRequest,
+): readonly AuthorizedLookupTarget[] {
+  const origins = requestOrigins(request);
+  const allowsDoi =
+    new Set(values(request, "doi").map((value) => value.toLowerCase())).size ===
+      1 &&
+    [...origins].some(
+      (origin) =>
+        definition.doiOrigins?.includes(origin) ||
+        definition.doiDomains?.some(
+          (domain) =>
+            new URL(origin).hostname === domain ||
+            new URL(origin).hostname.endsWith(`.${domain}`),
+        ),
+    );
+  const targets: AuthorizedLookupTarget[] = [];
+  for (const identifier of request.identifiers) {
+    const namespace = identifier.namespace.toLowerCase();
+    const supported =
+      definition.pdfIdentifiers?.includes(namespace) ||
+      (namespace === "doi" && allowsDoi);
+    if (supported) targets.push({ namespace, value: identifier.value.trim() });
+  }
+  return uniqueTargets(targets);
 }

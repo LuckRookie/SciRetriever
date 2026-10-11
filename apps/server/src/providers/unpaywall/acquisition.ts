@@ -5,7 +5,7 @@ import type {
 } from "../../acquisition/ports.js";
 import { type SourceCandidate } from "../../acquisition/sources/locators.js";
 import { values } from "../shared/acquisition-locators.js";
-import { services } from "./definition.js";
+import { definition, services } from "./definition.js";
 import { unpaywallLocations } from "./locators.js";
 function email(value: string): string {
   const normalized = value.trim();
@@ -16,6 +16,7 @@ function email(value: string): string {
 export class UnpaywallSource implements AcquisitionSourcePort {
   readonly source_name = "unpaywall" as const;
   readonly ready = true;
+  readonly acquisition_stage = definition.acquisitionStage!;
   private readonly contact: string;
   private readonly origin: URL;
   constructor(
