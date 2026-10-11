@@ -20,8 +20,12 @@ const stopped = { kind: "terminal", result: { kind: "exhausted" } } as const;
 async function fixture(
   committed = true,
   options: Partial<
-    Pick<BrowserArticleExecution, "phase" | "step" | "changed">
+    Pick<
+      BrowserArticleExecution,
+      "phase" | "step" | "changed" | "preparationTarget"
+    >
   > = {},
+  entries?: readonly string[],
 ) {
   const owner = new BrowserArticleScheduler({
     sessions: 2,
@@ -37,6 +41,7 @@ async function fixture(
     version: "published",
     metadata_snapshot: { revision: 1, sha256: await sha256(new Uint8Array()) },
     start_url: "https://publisher-a.test/article",
+    ...(entries ? { start_urls: entries } : {}),
     operation_id: "fixture",
     generation: 1,
     signal: new AbortController().signal,
@@ -587,3 +592,108 @@ it("recognizes an initial browser redirect or HSTS hop by the same exact navigat
     await f.close();
   }
 });
+
+it("hands an explicit pre-model alternate to the existing platform lease owner after an uncommitted failure", async () => {
+  const initial = "https://publisher-a.test/article";
+  const alternate = "https://publisher-b.test/article?version=2";
+  let target: string | null = alternate;
+  const f = await fixture(false, { preparationTarget: () => target }, [
+    initial,
+    alternate,
+  ]);
+  const drain = deferred<void>();
+  const entered = deferred<void>();
+  const exclude = vi.spyOn(f.clock, "exclude");
+  const b: BrowserOwnedRequest = {
+    ...f.binding,
+    request_id: "prepared-b",
+    document_id: "document-b",
+    source_document_id: null,
+  };
+  try {
+    f.owner.requestEnded(f.binding);
+    const admitted = f.owner.beforeRequest(b, alternate, async () => {
+      entered.resolve();
+      await drain.promise;
+    });
+    await entered.promise;
+    expect(exclude).toHaveBeenCalledOnce();
+    expect(f.owner.snapshot().platform_active).toBe(1);
+    drain.resolve();
+    await admitted;
+    target = null;
+    expect(f.owner.snapshot().platform_active).toBe(1);
+    commit(f.owner, b, 1);
+    await f.owner.beforeRequest(
+      subrequest({ ...b, document_generation: 1 }),
+      "https://publisher-b.test/document-resource",
+      async () => {},
+    );
+    await expect(
+      f.owner.beforeRequest(
+        subrequest(f.binding),
+        "https://publisher-a.test/obsolete-resource",
+        async () => {},
+      ),
+    ).rejects.toThrow("browser-document-network-inactive");
+    expect(f.clock.snapshot()).toMatchObject({ model_calls: 0, actions: 0 });
+  } finally {
+    drain.resolve();
+    exclude.mockRestore();
+    await f.close();
+  }
+});
+
+it.each([
+  "unlisted-target",
+  "different-target",
+  "no-target",
+  "after-model",
+  "post",
+  "iframe",
+  "subresource",
+  "legacy-request",
+] as const)(
+  "refuses preparation authority for %s without a committed source",
+  async (scenario) => {
+    const initial = "https://publisher-a.test/article";
+    const alternate = "https://publisher-b.test/article?version=2";
+    const target =
+      scenario === "different-target"
+        ? initial
+        : scenario === "no-target"
+          ? null
+          : alternate;
+    const f = await fixture(
+      false,
+      { preparationTarget: () => target },
+      scenario === "legacy-request"
+        ? undefined
+        : scenario === "unlisted-target"
+          ? [initial]
+          : [initial, alternate],
+    );
+    const drain = vi.fn(async () => {});
+    const b: BrowserOwnedRequest = {
+      ...f.binding,
+      request_id: "unproven-b",
+      document_id: "document-b",
+      source_document_id: null,
+      request_method: scenario === "post" ? "POST" : "GET",
+      parent_document_id: scenario === "iframe" ? "uncommitted-parent" : null,
+      is_navigation: scenario !== "subresource",
+      resource_type: scenario === "subresource" ? "fetch" : "document",
+    };
+    try {
+      f.owner.requestEnded(f.binding);
+      if (scenario === "after-model") f.clock.recordModelDispatch();
+      await expect(f.owner.beforeRequest(b, alternate, drain)).rejects.toThrow(
+        "browser-document-network-inactive",
+      );
+      expect(drain).not.toHaveBeenCalled();
+      expect(f.owner.snapshot().platform_active).toBe(1);
+    } finally {
+      await f.close();
+    }
+  },
+);

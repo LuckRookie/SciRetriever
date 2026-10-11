@@ -14,10 +14,15 @@ import {
   BrowserArticleOpenError,
   createBrowserArticleFlow,
   type BrowserArticleFlowOptions,
+  type BrowserArticleFlowFactoryOptions,
   type FlowPageHandle,
 } from "../src/browser/article-flow.js";
 import { BrowserObservationStore } from "../src/browser/observation.js";
 import { BrowserArticleClock } from "../src/browser/article-session.js";
+import type { BrowserArticleExecution } from "../src/browser/article-session.js";
+import { BrowserHostNavigationError } from "../src/browser/host.js";
+import { admitBrowserArticleRequest } from "../src/browser/production-host.js";
+import type { BrowserDeliveryRequest } from "../src/browser/boundary.js";
 import { BrowserTransferCollector } from "../src/browser/transfer.js";
 import { BrowserCaptureBatch } from "../src/browser/capture-batch.js";
 import { BrowserCandidateIntake } from "../src/acquisition/browser-intake.js";
@@ -145,6 +150,11 @@ describe("formal completion Browser exhaustion boundary (offline)", () => {
         mode: "transfer-stop",
         code: "pdf-browser-transfer-failed",
       },
+      {
+        id: "00000000-0000-0000-0000-000000000709",
+        mode: "rate-limit",
+        code: "pdf-browser-rate-limited",
+      },
     ] as const;
     const modes = new Map<string, (typeof cases)[number]["mode"]>(
       cases.map((item) => [item.id, item.mode]),
@@ -162,6 +172,13 @@ describe("formal completion Browser exhaustion boundary (offline)", () => {
       browserHost: () => ({
         deliverCandidate: (request) => {
           const mode = modes.get(request.literature_id);
+          if (mode === "rate-limit")
+            return Promise.resolve({
+              kind: "refused" as const,
+              code: "browser-rate-limited",
+              reason: "Platform returned HTTP 429.",
+              retryable: false as const,
+            });
           const page = fakePage({}).page;
           const flow = createBrowserArticleFlow({
             pages: {
@@ -253,7 +270,13 @@ describe("formal completion Browser exhaustion boundary (offline)", () => {
         });
         if (item.code) {
           expect(report.failed).toMatchObject([
-            { literature_id: item.id, failure: { code: item.code } },
+            {
+              literature_id: item.id,
+              failure: {
+                code: item.code,
+                retryable: item.mode === "rate-limit",
+              },
+            },
           ]);
           expect(
             await application.database.hasAutomaticPdfExhaustion(item.id),
@@ -872,15 +895,17 @@ describe("browser article flow (offline end-to-end)", () => {
   });
 });
 
-const request = (signal: AbortSignal, startUrl: string | null = null) =>
-  ({
-    literature_id: ARTICLE_ID,
-    identifier: `doi:${FIXTURE_DOI}`,
-    version: "published",
-    start_url: startUrl,
-    metadata_snapshot: METADATA_SNAPSHOT,
-    signal,
-  }) as never;
+const request = (
+  signal: AbortSignal,
+  startUrl: string | null = null,
+): BrowserDeliveryRequest => ({
+  literature_id: ARTICLE_ID,
+  identifier: `doi:${FIXTURE_DOI}`,
+  version: "published",
+  start_url: startUrl,
+  metadata_snapshot: METADATA_SNAPSHOT,
+  signal,
+});
 
 describe("browser article flow port (offline)", () => {
   /** A page source that records how it was opened and closes deterministically. */
@@ -1581,7 +1606,11 @@ it("does not turn an Agent stop on HTTP 202 into normal PDF exhaustion", async (
     await flow.deliver(
       request(new AbortController().signal, "https://fixture.example.test/a"),
     ),
-  ).toMatchObject({ kind: "refused", code: "browser-agent-stopped" });
+  ).toMatchObject({
+    kind: "refused",
+    code: "browser-agent-stopped",
+    reason: expect.stringContaining("HTTP 202"),
+  });
 });
 
 describe("cooperative Browser article lifecycle", () => {
@@ -2370,4 +2399,878 @@ describe("cooperative Browser article lifecycle", () => {
     await driver.close({ kind: "cancelled" });
     expect(ended).toEqual(["failure", "completed"]);
   });
+});
+
+describe("Browser entry preparation before the first model dispatch", () => {
+  const first = "https://fixture.example.test/article?version=1";
+  const alternate = "https://other.example.test/article?version=1";
+
+  function preparationFixture(
+    options: {
+      status?: number;
+      initialFailure?: boolean;
+      entries?: readonly string[];
+      deadline?: number;
+    } = {},
+  ) {
+    const controller = new AbortController();
+    let url = first;
+    let status = options.status ?? 404;
+    let execution!: BrowserArticleExecution;
+    const navigate = vi.fn(async (next: string) => {
+      expect(execution.preparationTarget?.()).toBe(next);
+      expect(execution.clock.snapshot().model_calls).toBe(0);
+      url = next;
+      status = 200;
+    });
+    const settle = vi.fn(async () => undefined);
+    const page: FlowPageHandle = {
+      snapshot: async () => ({ ...snapshot(1), url, http_status: status }),
+      apply: async () => undefined,
+      navigate,
+      navigationUrl: () => url,
+      settleCaptures: settle,
+      ...(options.initialFailure
+        ? { initial_navigation_failure: { recoverable: true } }
+        : {}),
+    };
+    const close = vi.fn(async () => undefined);
+    const opened = vi.fn(async () => ({ page, close }));
+    const decide = vi.fn(
+      async () => ({ kind: "stop", reason: "user" }) as const,
+    );
+    const registered = vi.fn((value: BrowserArticleExecution) => {
+      execution = value;
+    });
+    const flow = createBrowserArticleFlow({
+      session_id: SESSION_ID,
+      pages: { openPage: opened },
+      observations: new BrowserObservationStore(),
+      onSession: registered,
+      now: () => Date.now(),
+      ...(options.deadline ? { deadline_ms: options.deadline } : {}),
+      decide,
+    });
+    return {
+      controller,
+      page,
+      navigate,
+      settle,
+      close,
+      opened,
+      decide,
+      registered,
+      execution: () => execution,
+      setPage: (next: string, nextStatus: number) => {
+        url = next;
+        status = nextStatus;
+      },
+      deliver: () =>
+        flow.deliver({
+          ...request(controller.signal, first),
+          start_urls: options.entries ?? [first, alternate],
+        }),
+    };
+  }
+
+  it.each(["http-404", "transport-failure"])(
+    "recovers %s inside one clock and one page with five-second pacing",
+    async (failure) => {
+      vi.useFakeTimers();
+      const fixture = preparationFixture({
+        initialFailure: failure === "transport-failure",
+      });
+      const delivery = fixture.deliver();
+      try {
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(fixture.navigate).not.toHaveBeenCalled();
+        expect(fixture.decide).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(fixture.navigate).toHaveBeenCalledExactlyOnceWith(alternate);
+        expect(fixture.decide).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(await delivery).toEqual({ kind: "exhausted" });
+        expect(fixture.registered).toHaveBeenCalledOnce();
+        expect(fixture.opened).toHaveBeenCalledOnce();
+        expect(fixture.close).toHaveBeenCalledOnce();
+        expect(fixture.decide).toHaveBeenCalledOnce();
+        expect(fixture.execution().clock.snapshot()).toMatchObject({
+          model_calls: 1,
+          actions: 1,
+          active_elapsed_ms: 10_000,
+        });
+        expect(fixture.execution().preparationTarget?.()).toBeNull();
+      } finally {
+        fixture.controller.abort();
+        await delivery;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([403, 202, 200])(
+    "hands HTTP %i to the model without trying another entry",
+    async (status) => {
+      const fixture = preparationFixture({ status });
+      await fixture.deliver();
+      expect(fixture.navigate).not.toHaveBeenCalled();
+      expect(fixture.decide).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("remembers redirect destinations and keeps meaningful query variants distinct", async () => {
+    vi.useFakeTimers();
+    const second = "https://fixture.example.test/article?version=2";
+    const doi = "https://doi.org/10.5555/synthetic";
+    const fixture = preparationFixture({
+      entries: [first, doi, second, alternate],
+    });
+    fixture.setPage(second, 404);
+    fixture.navigate.mockImplementation(async (next) => {
+      fixture.setPage(next === doi ? first : next, next === doi ? 410 : 200);
+    });
+    const delivery = fixture.deliver();
+    try {
+      await vi.runAllTimersAsync();
+      expect(await delivery).toEqual({ kind: "exhausted" });
+      expect(fixture.navigate.mock.calls.map(([url]) => url)).toEqual([
+        doi,
+        alternate,
+      ]);
+      expect(fixture.decide).toHaveBeenCalledOnce();
+    } finally {
+      fixture.controller.abort();
+      await delivery;
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not collapse distinct query entries or loop back to a failed landing", async () => {
+    vi.useFakeTimers();
+    const second = "https://fixture.example.test/article?version=2";
+    const doi = "https://doi.org/10.5555/synthetic";
+    const fixture = preparationFixture({
+      entries: [first, second, doi, first],
+    });
+    fixture.navigate.mockImplementation(async () => {
+      fixture.setPage(first, 410);
+    });
+    const delivery = fixture.deliver();
+    try {
+      await vi.runAllTimersAsync();
+      expect(await delivery).toMatchObject({
+        kind: "refused",
+        code: "browser-navigation-failed",
+      });
+      expect(fixture.navigate.mock.calls.map(([url]) => url)).toEqual([
+        second,
+        doi,
+      ]);
+      expect(fixture.decide).not.toHaveBeenCalled();
+    } finally {
+      fixture.controller.abort();
+      await delivery;
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles a late initial PDF capture without navigating or calling the model", async () => {
+    await withStore(async (collector) => {
+      const candidate = await captureFixture(collector, "entry-initial-pdf");
+      let captured = false;
+      const decide = vi.fn(async () => ({ kind: "stop", reason: "user" }));
+      const navigate = vi.fn(async () => undefined);
+      const flow = createBrowserArticleFlow({
+        session_id: SESSION_ID,
+        action_cooldown_ms: 0,
+        decide,
+        hasCandidate: () => captured,
+        awaitCandidate: async () => (captured ? candidate : null),
+        pages: {
+          openPage: async () => ({
+            page: {
+              ...fakePage({}).page,
+              initial_navigation_failure: { recoverable: false },
+              settleCaptures: async () => {
+                captured = true;
+              },
+              navigate,
+            },
+            close: async () => undefined,
+          }),
+        },
+      });
+      expect(
+        await flow.deliver({
+          ...request(new AbortController().signal, first),
+          start_urls: [first, alternate],
+        }),
+      ).toMatchObject({ kind: "delivered", candidate: candidate.candidate });
+      expect(navigate).not.toHaveBeenCalled();
+      expect(decide).not.toHaveBeenCalled();
+    });
+  });
+
+  it("parks when capture starts during settlement and never changes its page", async () => {
+    const settled = deferred<void>();
+    const page: FlowPageHandle = {
+      ...fakePage({}).page,
+      initial_navigation_failure: { recoverable: true },
+      settleCaptures: () => settled.promise,
+      navigate: vi.fn(async () => undefined),
+    };
+    const driver = cooperativeDriver({
+      page,
+      start_url: first,
+      start_urls: [first, alternate],
+      decide: vi.fn(async () => ({ kind: "stop", reason: "user" })),
+    });
+    const step = driver.step();
+    driver.transferStarted("pending-initial-pdf");
+    expect(await step).toEqual({
+      kind: "suspended",
+      transfer_id: "pending-initial-pdf",
+    });
+    settled.resolve();
+    expect(page.navigate).not.toHaveBeenCalled();
+    expect(driver.clock.snapshot().model_calls).toBe(0);
+    await driver.close({ kind: "cancelled" });
+  });
+
+  it("retains cancellation, active-time and rate-limit stops during preparation", async () => {
+    for (const stop of ["cancel", "budget", "rate-limit"] as const) {
+      vi.useFakeTimers();
+      const fixture = preparationFixture({
+        deadline: stop === "budget" ? 3_000 : 300_000,
+      });
+      if (stop === "rate-limit")
+        fixture.navigate.mockRejectedValue(
+          Object.assign(new Error("Limited"), { code: "browser-rate-limited" }),
+        );
+      const delivery = fixture.deliver();
+      try {
+        await vi.advanceTimersByTimeAsync(1);
+        if (stop === "cancel") fixture.controller.abort();
+        await vi.runAllTimersAsync();
+        expect(await delivery).toMatchObject({
+          kind: "refused",
+          code:
+            stop === "cancel"
+              ? "browser-flow-cancelled"
+              : stop === "budget"
+                ? "browser-flow-budget-exhausted"
+                : "browser-rate-limited",
+        });
+        expect(fixture.decide).not.toHaveBeenCalled();
+        expect(fixture.navigate).toHaveBeenCalledTimes(
+          stop === "rate-limit" ? 1 : 0,
+        );
+      } finally {
+        fixture.controller.abort();
+        await delivery;
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  it("does not switch to an alternate after the first actual model dispatch", async () => {
+    let status = 200;
+    const navigate = vi.fn(async () => undefined);
+    const decide = vi.fn(async (observation) => {
+      if (status === 200)
+        return { kind: "go-back", revision: observation.observation_revision };
+      return { kind: "stop", reason: "user" };
+    });
+    const driver = cooperativeDriver({
+      page: {
+        snapshot: async () => ({ ...snapshot(1), http_status: status }),
+        apply: async () => {
+          status = 404;
+        },
+        navigate,
+      },
+      start_url: first,
+      start_urls: [first, alternate],
+      dispatch_tracking: "test-seam",
+      action_cooldown_ms: 0,
+      decide,
+    });
+    await driver.run();
+    expect(decide).toHaveBeenCalledTimes(2);
+    expect(navigate).not.toHaveBeenCalled();
+    await driver.close({ kind: "retained", code: "tested" });
+  });
+
+  it("keeps the original entry after an initial throttle is readmitted and retried", async () => {
+    const navigate = vi.fn(async () => undefined);
+    const retry = vi.fn(async () => true);
+    const driver = cooperativeDriver({
+      page: {
+        ...fakePage({}).page,
+        initial_navigation_failure: { recoverable: false },
+        navigate,
+        retryRateLimit: retry,
+      },
+      start_url: first,
+      start_urls: [first, alternate],
+      decide: async (_o, _f, _s, _g, _t, _h, _feedback, lifecycle) => {
+        lifecycle!.onDispatched();
+        return { kind: "stop", reason: "user" };
+      },
+    });
+    driver.rateLimited();
+    driver.setNetworkAccess(true);
+    expect(await driver.step()).toMatchObject({
+      kind: "terminal",
+      result: { kind: "exhausted" },
+    });
+    expect(retry).toHaveBeenCalledOnce();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(driver.clock.snapshot().model_calls).toBe(1);
+    await driver.close({ kind: "retained", code: "tested" });
+  });
+
+  it("ends a hung preparation observation at the article's active-time boundary", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<ReturnType<typeof snapshot>>();
+    const decide = vi.fn(async () => ({ kind: "stop", reason: "user" }));
+    const driver = cooperativeDriver({
+      page: { ...fakePage({}).page, snapshot: () => pending.promise },
+      start_url: first,
+      start_urls: [first, alternate],
+      now: () => Date.now(),
+      deadline_ms: 3_000,
+      decide,
+    });
+    try {
+      const step = driver.step();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(await step).toMatchObject({
+        kind: "terminal",
+        result: { kind: "refused", code: "browser-flow-budget-exhausted" },
+      });
+      pending.resolve(snapshot(1));
+      expect(decide).not.toHaveBeenCalled();
+    } finally {
+      pending.resolve(snapshot(1));
+      await driver.close({ kind: "retained", code: "tested" });
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers a second explicit transport failure without creating another page", async () => {
+    vi.useFakeTimers();
+    const third = "https://third.example.test/article";
+    const fixture = preparationFixture({ entries: [first, alternate, third] });
+    fixture.navigate.mockRejectedValueOnce(
+      new BrowserHostNavigationError(
+        new Error("Synthetic connection failure"),
+        true,
+      ),
+    );
+    const delivery = fixture.deliver();
+    try {
+      await vi.runAllTimersAsync();
+      expect(await delivery).toEqual({ kind: "exhausted" });
+      expect(fixture.navigate.mock.calls.map(([url]) => url)).toEqual([
+        alternate,
+        third,
+      ]);
+      expect(fixture.opened).toHaveBeenCalledOnce();
+    } finally {
+      fixture.controller.abort();
+      await delivery;
+      vi.useRealTimers();
+    }
+  });
+
+  it("validates every admitted entry while preserving the legacy single entry", () => {
+    const base = request(new AbortController().signal, first);
+    expect(admitBrowserArticleRequest(base)).toMatchObject({
+      ok: true,
+      request: { start_url: first },
+    });
+    for (const invalid of [
+      "https://name:password@fixture.invalid/a",
+      "file:///a",
+      first + "#fragment",
+      "invalid",
+    ]) {
+      expect(
+        admitBrowserArticleRequest({ ...base, start_urls: [first, invalid] }),
+      ).toMatchObject({
+        ok: false,
+        refusal: { code: "browser-start-url-invalid" },
+      });
+    }
+    expect(
+      admitBrowserArticleRequest({ ...base, start_urls: [alternate, first] })
+        .ok,
+    ).toBe(false);
+    expect(admitBrowserArticleRequest({ ...base, start_urls: [] }).ok).toBe(
+      false,
+    );
+    expect(
+      admitBrowserArticleRequest({
+        ...base,
+        start_url: "invalid",
+        start_urls: [first],
+      }).ok,
+    ).toBe(false);
+    const admitted = admitBrowserArticleRequest({
+      ...base,
+      start_urls: [first, alternate, first],
+    });
+    expect(admitted).toMatchObject({
+      ok: true,
+      request: { start_urls: [first, alternate] },
+    });
+  });
+});
+
+describe("Browser collaboration initialization lifetime", () => {
+  type CollaborationHandle = Awaited<
+    ReturnType<
+      NonNullable<BrowserArticleFlowFactoryOptions["collaboration"]>["open"]
+    >
+  >;
+
+  it("charges the initial collaborative page observation to the existing article clock", async () => {
+    vi.useFakeTimers();
+    let execution!: BrowserArticleExecution;
+    const flow = createBrowserArticleFlow({
+      session_id: SESSION_ID,
+      now: () => Date.now(),
+      decide: async () => ({ kind: "stop", reason: "user" }),
+      onSession: (value) => {
+        execution = value;
+      },
+      pages: {
+        openPage: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+          return { page: fakePage({}).page, close: async () => undefined };
+        },
+      },
+      collaboration: {
+        open: async (_request, _page, _deadline, supplied) => {
+          expect(supplied).toBe(execution);
+          expect(execution.clock.snapshot().active).toBe(true);
+          expect(execution.clock.snapshot().active_elapsed_ms).toBe(1_000);
+          await new Promise((resolve) => setTimeout(resolve, 2_000));
+          return { step: async () => "stopped", close: async () => undefined };
+        },
+      },
+    });
+    const delivery = flow.deliver(
+      request(
+        new AbortController().signal,
+        "https://fixture.example.test/article",
+      ),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(await delivery).toEqual({ kind: "exhausted" });
+      expect(execution.clock.snapshot()).toMatchObject({
+        active_elapsed_ms: 3_000,
+        remaining_ms: 297_000,
+        model_calls: 0,
+        active: false,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["budget", "cancelled"] as const)(
+    "ends pending initialization on %s and closes a late handle exactly once",
+    async (stop) => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      const entered = deferred<void>();
+      const pending = deferred<CollaborationHandle>();
+      const beforeClose = vi.fn(async () => undefined);
+      const close = vi.fn(async () => undefined);
+      const registeredClose = vi.fn(async () => undefined);
+      const pageClose = vi.fn(async () => undefined);
+      const decide = vi.fn(async () => ({ kind: "stop", reason: "user" }));
+      const flow = createBrowserArticleFlow({
+        session_id: SESSION_ID,
+        deadline_ms: 3_000,
+        now: () => Date.now(),
+        decide,
+        pages: {
+          openPage: async () => ({ page: fakePage({}).page, close: pageClose }),
+        },
+        collaboration: {
+          registered: () => ({ close: registeredClose }),
+          open: async () => {
+            entered.resolve();
+            return pending.promise;
+          },
+        },
+      });
+      const delivery = flow.deliver(
+        request(controller.signal, "https://fixture.example.test/article"),
+      );
+      try {
+        await entered.promise;
+        if (stop === "budget") await vi.advanceTimersByTimeAsync(3_000);
+        else controller.abort();
+        expect(await delivery).toMatchObject({
+          kind: "refused",
+          code:
+            stop === "budget"
+              ? "browser-flow-budget-exhausted"
+              : "browser-flow-cancelled",
+        });
+        const outcome =
+          stop === "budget"
+            ? { kind: "retained", code: "browser-flow-budget-exhausted" }
+            : { kind: "cancelled" };
+        expect(controller.signal.aborted).toBe(stop === "cancelled");
+        expect(pageClose).toHaveBeenCalledOnce();
+        expect(registeredClose).toHaveBeenCalledExactlyOnceWith(outcome);
+        expect(beforeClose).not.toHaveBeenCalled();
+        expect(close).not.toHaveBeenCalled();
+        expect(decide).not.toHaveBeenCalled();
+        pending.resolve({ step: async () => "stopped", beforeClose, close });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(beforeClose).toHaveBeenCalledExactlyOnceWith(outcome);
+        expect(close).toHaveBeenCalledExactlyOnceWith(true, outcome);
+        expect(registeredClose).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        pending.resolve({ step: async () => "stopped", beforeClose, close });
+        controller.abort();
+        await delivery;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("deduplicates late-handle cleanup while the owned page is still closing", async () => {
+    const controller = new AbortController();
+    const entered = deferred<void>();
+    const pending = deferred<CollaborationHandle>();
+    const closingPage = deferred<void>();
+    const pageClosed = deferred<void>();
+    const beforeClose = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+    const flow = createBrowserArticleFlow({
+      session_id: SESSION_ID,
+      decide: async () => ({ kind: "stop", reason: "user" }),
+      pages: {
+        openPage: async () => ({
+          page: fakePage({}).page,
+          close: async () => {
+            closingPage.resolve();
+            await pageClosed.promise;
+          },
+        }),
+      },
+      collaboration: {
+        registered: () => ({ close: async () => undefined }),
+        open: async () => {
+          entered.resolve();
+          return pending.promise;
+        },
+      },
+    });
+    const delivery = flow.deliver(
+      request(controller.signal, "https://fixture.example.test/article"),
+    );
+    await entered.promise;
+    controller.abort();
+    await closingPage.promise;
+    pending.resolve({ step: async () => "stopped", beforeClose, close });
+    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    pageClosed.resolve();
+    expect(await delivery).toMatchObject({
+      kind: "refused",
+      code: "browser-flow-cancelled",
+    });
+    expect(beforeClose).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it.each(["before-close", "close"] as const)(
+    "reports late %s failure through the registered owner after cancellation already returned",
+    async (failure) => {
+      const controller = new AbortController();
+      const entered = deferred<void>();
+      const pending = deferred<CollaborationHandle>();
+      const registeredClose = vi.fn(async () => undefined);
+      const close = vi.fn(async () => {
+        if (failure === "close")
+          throw new Error("Synthetic late close failure");
+      });
+      const flow = createBrowserArticleFlow({
+        session_id: SESSION_ID,
+        decide: async () => ({ kind: "stop", reason: "user" }),
+        pages: {
+          openPage: async () => ({
+            page: fakePage({}).page,
+            close: async () => undefined,
+          }),
+        },
+        collaboration: {
+          registered: () => ({ close: registeredClose }),
+          open: async () => {
+            entered.resolve();
+            return pending.promise;
+          },
+        },
+      });
+      const delivery = flow.deliver(
+        request(controller.signal, "https://fixture.example.test/article"),
+      );
+      await entered.promise;
+      controller.abort();
+      expect(await delivery).toMatchObject({
+        kind: "refused",
+        code: "browser-flow-cancelled",
+      });
+      pending.resolve({
+        step: async () => "stopped",
+        beforeClose: async () => {
+          if (failure === "before-close")
+            throw new Error("Synthetic late beforeClose failure");
+        },
+        close,
+      });
+      await vi.waitFor(() =>
+        expect(registeredClose).toHaveBeenLastCalledWith({
+          kind: "retained",
+          code: "browser-flow-close-failed",
+        }),
+      );
+      expect(registeredClose).toHaveBeenCalledTimes(2);
+      expect(close).toHaveBeenCalledOnce();
+    },
+  );
+});
+
+describe("capture priority during collaborative initialization", () => {
+  type CollaborationHandle = Awaited<
+    ReturnType<
+      NonNullable<BrowserArticleFlowFactoryOptions["collaboration"]>["open"]
+    >
+  >;
+  const handle = (
+    close = vi.fn(async () => undefined),
+  ): CollaborationHandle => ({
+    automatic: {
+      canDecide: () => true,
+      controlEpoch: () => 0,
+      guidance: () => [],
+    },
+    step: async () => "stopped",
+    close,
+  });
+
+  it.each(["download", "candidate", "already-candidate"] as const)(
+    "returns the same execution on %s without waiting for the initial observation",
+    async (phase) => {
+      await withStore(async (collector) => {
+        const candidate = await captureFixture(collector, "initialization-pdf");
+        vi.useFakeTimers();
+        const pending = deferred<CollaborationHandle>();
+        const entered = deferred<void>();
+        let execution!: BrowserArticleExecution;
+        let captured = phase === "already-candidate";
+        const close = vi.fn(async () => undefined);
+        const decide = vi.fn(async () => ({ kind: "stop", reason: "user" }));
+        const flow = createBrowserArticleFlow({
+          session_id: SESSION_ID,
+          deadline_ms: 1_000,
+          now: () => Date.now(),
+          decide,
+          onSession: (value) => {
+            execution = value;
+          },
+          pages: {
+            openPage: async () => ({
+              page: fakePage({}).page,
+              close: async () => undefined,
+            }),
+          },
+          candidateSource: () => ({
+            hasCandidate: () => captured,
+            next: async () => (captured ? candidate : null),
+          }),
+          collaboration: {
+            registered: () => ({ close: async () => undefined }),
+            open: async () => {
+              entered.resolve();
+              return pending.promise;
+            },
+          },
+        });
+        const opening = flow.open!(
+          request(
+            new AbortController().signal,
+            "https://fixture.example.test/article",
+          ),
+        );
+        try {
+          await entered.promise;
+          if (phase === "download")
+            execution.transferStarted(candidate.transfer_id);
+          else if (phase === "candidate") {
+            captured = true;
+            execution.candidateReady();
+          }
+          expect(await opening).toBe(execution);
+          if (phase === "download") {
+            expect(await execution.step()).toEqual({
+              kind: "suspended",
+              transfer_id: candidate.transfer_id,
+            });
+            await vi.advanceTimersByTimeAsync(10_000);
+            expect(execution.clock.snapshot()).toMatchObject({
+              active: false,
+              remaining_ms: 1_000,
+            });
+            execution.transferCompleted(candidate.transfer_id);
+            captured = true;
+            execution.candidateReady();
+          }
+          const delivered = await execution.step();
+          expect(delivered).toMatchObject({
+            kind: "candidate",
+            candidate: candidate.candidate,
+          });
+          expect(execution.clock.snapshot().model_calls).toBe(0);
+          expect(decide).not.toHaveBeenCalled();
+          await execution.close({ kind: "retained", code: "delivered" });
+          expect(close).not.toHaveBeenCalled();
+          pending.resolve(handle(close));
+          await vi.advanceTimersByTimeAsync(0);
+          expect(close).toHaveBeenCalledExactlyOnceWith(false, {
+            kind: "retained",
+            code: "delivered",
+          });
+        } finally {
+          pending.resolve(handle(close));
+          await execution.close({ kind: "cancelled" });
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
+
+  it.each(["ready", "failed", "budget", "immediate-failure"] as const)(
+    "waits for the same initialization after a download failure and handles %s",
+    async (completion) => {
+      vi.useFakeTimers();
+      const pending = deferred<CollaborationHandle>();
+      const entered = deferred<void>();
+      let execution!: BrowserArticleExecution;
+      const decide = vi.fn<
+        NonNullable<BrowserArticleFlowFactoryOptions["decide"]>
+      >(async (_o, _f, _s, _g, _t, _h, _feedback, lifecycle) => {
+        lifecycle!.onDispatched();
+        return { kind: "stop", reason: "user" };
+      });
+      const flow = createBrowserArticleFlow({
+        session_id: SESSION_ID,
+        deadline_ms: 1_000,
+        now: () => Date.now(),
+        observations: new BrowserObservationStore(),
+        decide,
+        onSession: (value) => {
+          execution = value;
+        },
+        pages: {
+          openPage: async () => ({
+            page: fakePage({}).page,
+            close: async () => undefined,
+          }),
+        },
+        candidateSource: () => ({
+          hasCandidate: () => false,
+          next: async () => null,
+        }),
+        collaboration: {
+          registered: () => ({ close: async () => undefined }),
+          open: async () => {
+            entered.resolve();
+            return pending.promise;
+          },
+        },
+      });
+      const opening = flow.open!(
+        request(
+          new AbortController().signal,
+          "https://fixture.example.test/article",
+        ),
+      );
+      try {
+        await entered.promise;
+        execution.transferStarted("initializing-download");
+        if (completion === "immediate-failure")
+          execution.transferFailed(
+            "initializing-download",
+            "browser-download-failed",
+          );
+        expect(await opening).toBe(execution);
+        await vi.advanceTimersByTimeAsync(5_000);
+        execution.transferFailed(
+          "initializing-download",
+          "browser-download-failed",
+        );
+        execution.setNetworkAccess(true);
+        expect(await execution.step()).toEqual({
+          kind: "waiting",
+          reason: "page",
+        });
+        expect(decide).not.toHaveBeenCalled();
+        expect(execution.clock.snapshot()).toMatchObject({
+          active: true,
+          model_calls: 0,
+          remaining_ms: 1_000,
+        });
+        if (completion === "ready" || completion === "immediate-failure") {
+          await vi.advanceTimersByTimeAsync(200);
+          pending.resolve(handle());
+          await vi.advanceTimersByTimeAsync(0);
+          expect(await execution.step()).toMatchObject({ kind: "terminal" });
+          expect(decide).toHaveBeenCalledOnce();
+          expect(execution.clock.snapshot()).toMatchObject({
+            model_calls: 1,
+            active_elapsed_ms: 200,
+          });
+        } else if (completion === "failed") {
+          pending.resolve(
+            Promise.reject(
+              new BrowserArticleOpenError(
+                "browser-collaboration-session-unavailable",
+              ),
+            ),
+          );
+          await vi.advanceTimersByTimeAsync(0);
+          expect(await execution.step()).toMatchObject({
+            kind: "terminal",
+            result: {
+              kind: "refused",
+              code: "browser-collaboration-session-unavailable",
+            },
+          });
+          expect(decide).not.toHaveBeenCalled();
+        } else {
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(await execution.step()).toMatchObject({
+            kind: "terminal",
+            result: { kind: "refused", code: "browser-flow-budget-exhausted" },
+          });
+          expect(decide).not.toHaveBeenCalled();
+        }
+      } finally {
+        pending.resolve(handle());
+        await execution.close({ kind: "cancelled" });
+        await vi.advanceTimersByTimeAsync(0);
+        vi.useRealTimers();
+      }
+    },
+  );
 });

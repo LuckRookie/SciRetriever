@@ -298,9 +298,16 @@ export class BrowserArticleScheduler {
     };
     const navigationAllowed = () => {
       const pending = ticket.navigations.get(binding.page_id);
+      const preparation =
+        binding.request_method === "GET" &&
+        binding.parent_document_id === null &&
+        ticket.execution?.clock.snapshot().model_calls === 0 &&
+        ticket.execution.preparationTarget?.() === url &&
+        ticket.request.start_urls?.includes(url) === true;
       return (
         !ticket.navigationStarted ||
         sourceGranted() ||
+        preparation ||
         Boolean(
           binding.document_id &&
             pending?.document === binding.document_id &&

@@ -62,6 +62,8 @@ export interface BrowserArticleExecution extends BrowserArticleDeliveryLease {
   readonly identity: BrowserArticleSessionIdentity;
   readonly clock: BrowserArticleClock;
   phase(): BrowserArticleSessionPhase;
+  /** Exact software-selected entry while its pre-model navigation is in flight. */
+  preparationTarget?(): string | null;
   step(): Promise<BrowserArticleStepResult>;
   /** Event/deadline wake-up for Broker; this is not an observation polling loop. */
   changed(signal: AbortSignal): Promise<void>;
@@ -91,8 +93,8 @@ export interface BrowserArticleBudget {
 export const DEFAULT_BROWSER_ARTICLE_BUDGET: Readonly<BrowserArticleBudget> =
   Object.freeze({
     active_ms: 300_000,
-    max_model_calls: 50,
-    max_actions: 100,
+    max_model_calls: 100,
+    max_actions: 200,
     min_decision_interval_ms: 5_000,
   });
 

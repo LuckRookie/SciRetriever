@@ -46,8 +46,8 @@ describe("Browser article active clock", () => {
     resumed();
     expect(clock.remaining()).toEqual({
       deadline_ms: 292_000,
-      model_calls: 49,
-      actions: 99,
+      model_calls: 99,
+      actions: 199,
     });
   });
 
@@ -126,25 +126,25 @@ describe("Browser article active clock", () => {
     expect(clock.snapshot().actions).toBe(0);
   });
 
-  it("allows the fiftieth dispatched result to apply and rejects the next dispatch", () => {
+  it("allows the hundredth dispatched result to apply and rejects the next dispatch", () => {
     const { clock } = clockFixture();
-    for (let call = 0; call < 50; call += 1) clock.recordModelDispatch();
+    for (let call = 0; call < 100; call += 1) clock.recordModelDispatch();
     expect(clock.remaining().model_calls).toBe(0);
     expect(() => clock.recordAgentAction()).not.toThrow();
     expect(() => clock.recordModelDispatch()).toThrow(
       BrowserArticleBudgetError,
     );
-    expect(clock.snapshot()).toMatchObject({ model_calls: 50, actions: 1 });
+    expect(clock.snapshot()).toMatchObject({ model_calls: 100, actions: 1 });
   });
 
-  it("rejects the hundred and first Agent action without charging internal waits", () => {
+  it("rejects the two hundred and first Agent action without charging internal waits", () => {
     const { clock } = clockFixture();
     const wait = clock.beginActive("page-wait");
     wait();
-    for (let action = 0; action < 100; action += 1) clock.recordAgentAction();
+    for (let action = 0; action < 200; action += 1) clock.recordAgentAction();
     expect(clock.remaining().actions).toBe(0);
     expect(() => clock.recordAgentAction()).toThrow(BrowserArticleBudgetError);
-    expect(clock.snapshot().actions).toBe(100);
+    expect(clock.snapshot().actions).toBe(200);
   });
 
   it("keeps clocks independent and rejects a non-monotonic time source", () => {

@@ -4,13 +4,14 @@
 - Amended by: [ADR 0029](0029-unverified-pdf-acquisition.md)（下载取消文章身份门，保存未验证标签）
 - Amended by: [ADR 0030](0030-browser-transport-and-progress.md)（临时传输、文章会话、后台下载、候选交接和平台限流）
 - Date: 2026-09-06
-- Updated: 2026-10-05（接受独立 worker、可暂停文章会话与活跃预算）
+- Updated: 2026-10-11（五层获取、首次模型前入口准备与累计 300/100/200 预算）
 - Supersedes: none
 - Amends: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)、[PDF 获取指南](../../guides/pdf-acquisition.md)
 
-> 本次修订定义已接受的目标合同。独立 worker、后台传输和多会话工作台的生产接线与验收由
-> [实施计划](../../archive/2026-10-05-browser-parallel-downloads/README.md)记录；决策被接受不等于能力已经交付。
+> 本次修订定义已接受的目标合同。2026-10-11 的入口准备与预算接线由
+> [本轮实施计划](../../archive/2026-10-11-metadata-governance-pdf-routing/README.md)记录；此前独立 worker、后台传输与多会话工作台见
+> [并行交接记录](../../archive/2026-10-05-browser-parallel-downloads/README.md)。决策被接受不等于能力已经交付。
 
 ## 背景
 
@@ -32,16 +33,17 @@ Browser 的通用性由站点 catalog 决定，且 Rules、Agent、Network settl
 Browser Profile，以及唯一 `AgentBrowserController`。配置不再包含 `rules | agent` 选择，不存在
 规则失败后切换 Agent 或 Agent 失败后回退规则。
 
-Browser 保持在 Public → authorized API → Browser 的最后一层。拥有合法文章起点的目标可以进入
+Browser 保持在 direct → publisher-api → general-api → public-web → browser 的最后一层。拥有合法文章起点的目标可以进入
 通用 Browser，不要求先解析为 catalog 中的 Publisher，也不要求存在站点规则。合法起点来自已经
 接纳的 landing/direct `AssetHint`，或包含 DOI 且已经安全解析的 landing；Publisher 自由文本不能
 单独创建起点。
 
 ### 1.1 Browser 是元数据驱动的慢速兜底通道
 
-PDF 获取统一分为三条路径：公开 URL/仓储与其它无凭据公开路径、已授权 Provider API，以及通用
-Browser Agent。前两条路径承担低成本、低延迟的优先获取；它们未取得当前目标的 PDF 后，仍未解决的
-目标才进入 Browser。Sci-Hub 等 operator 明确启用的公开镜像属于第一条路径，不改变 Browser 的合同。
+PDF 获取依次执行已有直链/稳定公开地址、出版社专用 API、跨出版社通用 API、公共网站与通用
+Browser Agent 五层。前四层承担已有文件与有依据服务的优先获取；它们未取得当前目标的 PDF 且
+结果允许继续时，仍未解决的目标才进入 Browser。Sci-Hub 等显式启用的镜像属于 public-web；
+API 是否需要凭据与阶段顺序分别表达，不改变限流、权限或失败边界。
 
 Browser fallback 的输入只有冻结的目标文献身份与元数据、当前版本、已准入的文章起点和 operation
 边界。起点优先使用 `AssetHint`；目标只有 DOI 而没有 landing hint 时，可以先通过受控 DOI landing
@@ -51,11 +53,19 @@ DOI prefix 或 Sci-Hub 结果选择页面策略，也不要求为当前站点实
 Browser Agent 以人类式观察、动作、等待和页面交接完成一次慢速文章操作。Network/runtime 统一捕获
 页面 response、popup/viewer 和 native download 中的 PDF 候选；Acquisition/Intake 再执行 PDF 字节、
 任务关联和不可变 publication 验收。Browser 候选、按钮文字、媒体类型或 Agent 的“已下载”判断都
-不能直接成为成功结果。三条路径最终都交付同一个 Candidate → Intake → primary-pdf 合同。
+不能直接成为成功结果。五层最终都交付同一个 Candidate → Intake → primary-pdf 合同。
 
 该通道的成功标准是“对未知但具有合法起点的文章也能进行一次受控、可审计的尝试”，而不是覆盖某个
 Publisher 的页面脚本。Browser 可以更慢、更昂贵并受 operation 寿命、活跃预算和用户配置的
 Profile/IP 权限限制，但不能因为低层路线是否存在而改变其页面操作语义。
+
+### 1.2 首次模型前准备有限文章入口
+
+Entry 复用前四层已有的请求结果，按支持的资产角色、目标版本、授权 API 边界及 URL 规则形成有序文章入口。PDF 下载端点与文章落地页分别保留；一次普通 HTTP 403、404、验证页或连接错误不成为跨 Browser 会话的永久坏链判断，不新增必经 HEAD/GET 检查。运行态请求 URL、最终 URL 与媒体类型不进入日志、Catalog 或长期 URL 健康表。
+
+每篇文章只进入一次逻辑 Browser delivery，所有入口使用同一 driver/session、clock 和计数。首次实际模型派发前，程序先开页、等待、观察并结算真实在途捕获；已经触发 PDF 下载时直接沿既有传输/验收链推进，可以零模型调用完成。只有 Browser 实际观察到 404/410，或 Host 已分类为 DNS/连接失败时，才在剩余预算内尝试下一个已记录入口；403、验证页、未知 HTML 等需要判断的页面交给模型。
+
+有限列表逐项最多尝试一次，同时记录实际到达地址以避免重定向回环；保留有意义的 query。首次模型派发之后不在模型背后自动换入口。换入口前结清在途候选，遵守既有 5 秒节奏、目标平台重新准入及网络结束后的冷却；取消后不得启动备用。开页、观察、主动页面等待消耗同一活跃预算；平台/模型队列继续按既有规则排除，不能把整段准备排除计时。页面变更使旧 generation/revision 动作失效，物理页面或会话恢复也不重置文章预算。
 
 ### 2. Publisher profile 不拥有 Browser 页面程序
 
@@ -116,11 +126,11 @@ scope/host 并发；不得为 Browser 建立独立模型限流器来绕过其它
 不能提前派发；到期后页面仍不可观察时继续等待变化。内部观察或等待不是新增 Agent 动作。
 Challenge 等页面与普通页面共用这套规则，不增加独立预算或点击脚本。
 
-每篇文章有 300 秒累计活跃时间、50 次真实模型派发和 100 次 Agent 动作。活跃时间使用同一
+每篇文章默认有 300 秒累计活跃时间、100 次真实模型派发和 200 次 Agent 动作。时间是主要控制边界，调用与动作采用较宽的防失控上限；有效进展、动画或入口切换都不自动延长总预算。活跃时间使用同一
 单调时钟，累计模型实际派发后的推理、动作、主动页面反馈与节奏等待，重叠时间只计一次。
 等 worker、共享模型 permit、平台冷却/Retry-After、人工接管、后台下载及本地验收/发布不计入活跃时间。
 模型请求实际发送前才计一次 call；经 phase、控制 epoch 与页面绑定复检后才派发并计 Agent 动作。
-已合法派发的第 50 次模型调用仍可交付其动作，下一次调用被拒绝；过期或迟到动作不能执行。
+已合法派发的第 100 次模型调用仍可交付其动作，下一次调用被拒绝；过期或迟到动作不能执行。
 
 下载 started 原子暂停该 session 的模型决策并释放 worker，保留页面与独立 transfer 寿命。
 本轮决策可取消，但不能用同一个 signal 切断传输。传输或文件检查失败后，将脱敏反馈带回原页面

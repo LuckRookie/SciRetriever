@@ -542,8 +542,12 @@ export class DatabaseCompletionTargetRunner {
               ? outcome.code
               : "pdf-browser-unavailable",
           outcome.reason,
-          "Resolve the controlled Browser route or provide a verified PDF, then retry the target.",
-          false,
+          outcome.code === "browser-rate-limited"
+            ? "Wait for the platform Retry-After and shared cooldown before retrying; do not switch routes to evade the limit."
+            : outcome.code === "browser-runtime-unavailable"
+              ? "Set SCIRETRIEVER_CLOAK_BUNDLE to a verified installed Cloak bundle (or use the bundled portable runtime), then restart and retry."
+              : "Inspect the reported Browser page state or route availability, then retry when the required condition is resolved.",
+          outcome.code === "browser-rate-limited",
         ),
         literature_id: id,
         operation: false,

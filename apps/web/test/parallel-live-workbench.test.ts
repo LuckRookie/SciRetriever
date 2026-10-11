@@ -168,7 +168,7 @@ it("selects the correct live article without transferring control, while another
       .poll(() => page.locator("#session-status").textContent())
       .toContain("下载中");
     expect(await page.locator("#budget").textContent()).toContain(
-      "49 次模型调用",
+      "99 次模型调用",
     );
     expect(workbench.view().control.controller_id).toBe(client);
     expect(workbench.view().control.epoch).toBe(aEpoch);
@@ -214,7 +214,7 @@ it("selects the correct live article without transferring control, while another
     expect(await page.locator("#candidate-count").textContent()).toBe("0");
     expect(await page.locator("#owner").textContent()).toBe("你正在控制页面");
     expect(await page.locator("#budget").textContent()).toContain(
-      "50 次模型调用",
+      "100 次模型调用",
     );
     const candidateA = parseDurableCandidate({
       ...candidate,

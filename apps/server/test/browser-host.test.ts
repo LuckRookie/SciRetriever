@@ -406,6 +406,57 @@ describe("persistent browser profile host", () => {
     },
     15000,
   );
+  it.skipIf(!browserAvailable && !bundle)(
+    "retains one owned page after an initial transport failure and admits its alternate normally",
+    async () => {
+      const launch = await fixtureLaunch();
+      const reservation = createServer();
+      reservation.listen(0, "127.0.0.1");
+      await once(reservation, "listening");
+      const address = reservation.address();
+      if (!address || typeof address === "string") throw new Error("fixture");
+      await new Promise<void>((resolve) => reservation.close(() => resolve()));
+      const failed = `http://127.0.0.1:${address.port}/missing`;
+      const healthy = (await fixture()) + "?version=2";
+      const admissions: string[] = [];
+      const host = new BrowserHost({
+        profile: await profile(),
+        ...launch.options,
+        admitNavigation: (url) => {
+          if (
+            url !== failed &&
+            url !== healthy &&
+            new URL(url).pathname !== "/favicon.ico"
+          )
+            throw new Error("offline boundary");
+          admissions.push(url);
+          return url;
+        },
+      });
+      try {
+        await host.start();
+        const initialPages = host.diagnostics().page_count;
+        const page = await host.openPage(failed, undefined, undefined, {
+          retainNavigationFailure: true,
+        });
+        expect(page.initial_navigation_failure).toEqual({ recoverable: true });
+        expect(page.navigationUrl?.()).toBe(failed);
+        expect(host.diagnostics().page_count).toBe(initialPages + 1);
+        await page.navigate!(healthy);
+        await expect.poll(() => page.title()).toBe("synthetic browser page");
+        expect(page.navigationUrl?.()).toBe(healthy);
+        expect(page.url()).not.toContain("?version");
+        expect(admissions).toContain(failed);
+        expect(admissions).toContain(healthy);
+        expect(host.diagnostics().page_count).toBe(initialPages + 1);
+        await page.close();
+        expect(host.diagnostics().page_count).toBe(initialPages);
+      } finally {
+        await host.close();
+      }
+    },
+    15000,
+  );
   it.skipIf(!browserAvailable)(
     "rejects a late production model action after real Browser navigation",
     async () => {

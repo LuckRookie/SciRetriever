@@ -176,6 +176,7 @@ export function createProductionBrowserHostFactory(options: {
           request.start_url ?? undefined,
           identity,
           request.signal,
+          { retainNavigationFailure: true },
         );
         return {
           page,
@@ -281,8 +282,7 @@ export function createProductionBrowserHostFactory(options: {
 }
 
 /**
- * Validates one delivery request against the admitted-driver contract: a driver may
- * only navigate to one already-admitted landing page. Missing, non-HTTP(S),
+ * Validates every entry against the admitted-driver contract. Missing, non-HTTP(S),
  * credentialed or fragmented targets are refused before the flow is asked, so no
  * arbitrary URL and no guessed locator can ever reach the Browser.
  */
@@ -300,9 +300,11 @@ export function admitBrowserArticleRequest(
         "No admitted landing page is available for this article.",
       ),
     };
-  let target: URL;
+  let targets: URL[];
+  let initialTarget: URL;
   try {
-    target = new URL(start);
+    initialTarget = new URL(start);
+    targets = (request.start_urls ?? [start]).map((url) => new URL(url));
   } catch {
     return {
       ok: false,
@@ -314,10 +316,15 @@ export function admitBrowserArticleRequest(
   }
   // Syntax is checked here. Network owns DNS, address classes and scheme policy.
   if (
-    !["http:", "https:"].includes(target.protocol) ||
-    target.username ||
-    target.password ||
-    target.hash
+    targets.length === 0 ||
+    targets[0]!.toString() !== initialTarget.toString() ||
+    targets.some(
+      (target) =>
+        !["http:", "https:"].includes(target.protocol) ||
+        target.username ||
+        target.password ||
+        target.hash,
+    )
   )
     return {
       ok: false,
@@ -328,7 +335,17 @@ export function admitBrowserArticleRequest(
     };
   return {
     ok: true,
-    request: Object.freeze({ ...request, start_url: target.toString() }),
+    request: Object.freeze({
+      ...request,
+      start_url: targets[0]!.toString(),
+      ...(request.start_urls
+        ? {
+            start_urls: Object.freeze([
+              ...new Set(targets.map((target) => target.toString())),
+            ]),
+          }
+        : {}),
+    }),
   };
 }
 

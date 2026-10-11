@@ -37,11 +37,13 @@ export interface BrowserDeliveryRequest {
   /** Required on production Entry requests; optional for legacy low-level seams. */
   readonly article_goal?: BrowserArticleGoal;
   /**
-   * The one already-admitted landing page this delivery may start from, selected by
-   * Entry from the target's own `asset_hints` (never an arbitrary or guessed URL).
+   * The first admitted article entry selected by Entry from the frozen target's
+   * supported locators and identifiers (never an arbitrary URL).
    * `null` means no admissible page exists, which the tier reports as unavailable.
    */
   readonly start_url: string | null;
+  /** Complete ordered, admitted article entries, including start_url first. */
+  readonly start_urls?: readonly string[];
   readonly metadata_snapshot: MetadataSnapshot;
   readonly signal: AbortSignal;
   /** Operation-local generation used to reject stale queued deliveries. */
@@ -133,7 +135,7 @@ export type BrowserDecisionTarget = Pick<
  * The bounded article driver owned by the Browser tier.
  *
  * A driver receives exactly the validated request above: it may navigate only to
- * `start_url`, observe within the admitted session and deliver through the
+ * the admitted entries, observe within the session and deliver through the
  * Intake-owned collector. It cannot be reached without an owned host, and an
  * unconfigured process has no driver at all, so the tier stays stably unavailable
  * instead of pretending a flow exists.

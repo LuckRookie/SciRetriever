@@ -12,6 +12,7 @@ import type { BrowserPageSnapshot } from "./observation.js";
 import type { BrowserPageHandle } from "./host.js";
 import type { BrowserCaptureBatchItem } from "./capture-batch.js";
 import type { AgentCallLifecycle } from "../agents/protocol.js";
+import { createLogger } from "../logging/index.js";
 import {
   BrowserArticleBudgetError,
   BrowserArticleClock,
@@ -68,6 +69,8 @@ export interface FlowPageHandle {
   /** Activates and returns a popup/viewer that became the article successor. */
   successor?(): Promise<FlowPageHandle | null>;
   navigate?(url: string): Promise<void>;
+  navigationUrl?(): string | null;
+  readonly initial_navigation_failure?: { readonly recoverable: boolean };
 }
 
 /**
@@ -99,6 +102,8 @@ export interface BrowserArticleFlowOptions {
   readonly page?: BrowserPageHandle | FlowPageHandle;
   /** Omitted only when the caller already knows the page is on the admitted start URL. */
   readonly start_url?: string;
+  /** Entry-owned, already-admitted alternatives; never model-generated URLs. */
+  readonly start_urls?: readonly string[];
   readonly decide: FlowDecision | undefined;
   /** When present, the production workbench owns both model and human dispatch. */
   readonly collaborativeStep?: (
@@ -235,6 +240,13 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
   private unresolvedCaptureFailure: string | null = null;
   private rateLimitPending = false;
   private rateLimitRetried = false;
+  private preparationFailure: { readonly recoverable: boolean } | null = null;
+  private activePreparationTarget: string | null = null;
+  private readonly attemptedEntries = new Set<string>();
+  private initializationPending = false;
+  private initializationCaptureSeen = false;
+  private initializationFailure: string | null = null;
+  private initializationWait: (() => void) | null = null;
   private readonly onOperationAbort: () => void;
   private readonly unsubscribeClock: () => void;
 
@@ -259,6 +271,8 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       this.updateBudgetTimer(),
     );
     this.page = options.page ?? null;
+    if (options.start_url) this.attemptedEntries.add(options.start_url);
+    this.preparationFailure = this.page?.initial_navigation_failure ?? null;
     this.resumePage = this.page;
     this.phaseValue = this.page ? "ready" : "queued";
     this.onOperationAbort = () => this.stop("cancelled");
@@ -282,6 +296,8 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     )
       throw new TypeError("Browser article page identity mismatch");
     this.page = opened.page;
+    this.preparationFailure = opened.page.initial_navigation_failure ?? null;
+    if (this.preparationFailure) this.clock.actionFinished();
     this.resumePage ??= opened.page;
     this.setNetworkAccessCallback = opened.setNetworkAccess;
     this.stopNetworkCallback = opened.stopNetwork;
@@ -295,6 +311,30 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
 
   phase(): BrowserArticleSessionPhase {
     return this.phaseValue;
+  }
+
+  preparationTarget(): string | null {
+    return this.clock.snapshot().model_calls === 0
+      ? this.activePreparationTarget
+      : null;
+  }
+
+  /** The factory's initial workbench observation belongs to this article. */
+  initializationStarted(): void {
+    this.initializationPending = true;
+    this.initializationCaptureSeen = false;
+  }
+
+  initializationCaptured(): boolean {
+    return this.initializationCaptureSeen;
+  }
+
+  initializationSettled(failure?: string): void {
+    this.initializationPending = false;
+    this.initializationFailure = failure ?? null;
+    this.initializationWait?.();
+    this.initializationWait = null;
+    this.notify();
   }
 
   setNetworkAccess(allowed: boolean): void {
@@ -319,6 +359,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     )
       return;
     if (this.transferId === transferId) return;
+    if (this.initializationPending) this.initializationCaptureSeen = true;
     this.transferId = transferId;
     this.resumePage ??= this.page;
     this.phaseValue = "downloading";
@@ -361,6 +402,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       this.phaseValue === "candidate-ready"
     )
       return;
+    if (this.initializationPending) this.initializationCaptureSeen = true;
     this.unresolvedCaptureFailure = null;
     this.phaseValue = "candidate-ready";
     this.revokeDecision();
@@ -569,6 +611,10 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       return this.currentResult();
     }
     const requestedStop = this.options.automatic?.stopReason?.();
+    if (this.initializationFailure) {
+      this.fail(this.initializationFailure);
+      return this.currentResult();
+    }
     if (requestedStop) {
       this.stop(requestedStop);
       return this.currentResult();
@@ -592,6 +638,10 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     }
     if (this.pendingFeedback !== null)
       return { kind: "waiting", reason: "page" };
+    if (this.initializationPending) {
+      this.initializationWait ??= this.beginActive("page-wait");
+      return { kind: "waiting", reason: "page" };
+    }
     const delay = this.clock.decisionDelayMs();
     if (delay > 0) {
       this.ensurePacing();
@@ -647,15 +697,25 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
           this.fail("browser-rate-limited");
           return this.currentResult();
         }
+        this.preparationFailure = null;
       } finally {
         resume();
         if (this.decisionAbort === retryAbort) this.decisionAbort = null;
       }
     }
+    if (this.preparationFailure && this.clock.snapshot().model_calls === 0)
+      return this.recoverEntry(page, current);
+    const observationAbort = new AbortController();
+    this.decisionAbort = observationAbort;
     const endObservation = this.beginActive("page-wait");
     let snapshot: BrowserPageSnapshot;
     try {
-      snapshot = await page.snapshot();
+      const observed = await interruptible(
+        page.snapshot(),
+        observationAbort.signal,
+      );
+      if (observed.kind === "aborted") return this.currentResult();
+      snapshot = observed.value;
     } catch (error) {
       if (!current()) return this.currentResult();
       if (isPageTransitionError(error) || isPageRuntimeError(error)) {
@@ -674,11 +734,23 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       throw error;
     } finally {
       endObservation();
+      if (this.decisionAbort === observationAbort) this.decisionAbort = null;
     }
     if (!current()) return this.currentResult();
     if (this.options.hasCandidate?.() === true) {
       this.candidateReady();
       return this.currentResult();
+    }
+    if (
+      this.clock.snapshot().model_calls === 0 &&
+      (this.options.start_urls?.length ?? 0) > 1 &&
+      (snapshot.http_status === 404 || snapshot.http_status === 410)
+    ) {
+      this.rememberEntry(page, snapshot.url);
+      this.preparationFailure = { recoverable: true };
+      this.clock.actionFinished();
+      this.ensurePacing();
+      return { kind: "waiting", reason: "pacing" };
     }
     this.generation = snapshot.document_generation ?? this.generation;
     if (
@@ -795,6 +867,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
               : parsed.reason === "cancel"
                 ? "cancelled"
                 : "stopped",
+          `The Browser Agent stopped on page state ${observation.page_state}${snapshot.http_status === undefined ? "" : ` (HTTP ${snapshot.http_status})`}; no PDF was captured.`,
         );
         return this.currentResult();
       }
@@ -991,6 +1064,83 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     this.pendingFeedback = work;
   }
 
+  private rememberEntry(page: FlowPageHandle, fallback?: string): void {
+    // Only the private Host seam can retain the query-bearing URL. Observations
+    // intentionally redact query parameters and cannot prove those URLs equal.
+    const reached = page.navigationUrl?.() ?? fallback;
+    if (reached) this.attemptedEntries.add(reached);
+  }
+
+  private async recoverEntry(
+    page: FlowPageHandle,
+    current: () => boolean,
+  ): Promise<BrowserArticleStepResult> {
+    const abort = new AbortController();
+    this.decisionAbort = abort;
+    const endPreparation = this.beginActive("page-wait");
+    try {
+      // A native download may be reported after goto failed. Resolve that ownership
+      // first; a transfer event revokes this wait and lets the Broker release its
+      // worker while the ordinary transfer/validation lifecycle continues.
+      if (page.settleCaptures) {
+        const settled = await interruptible(
+          page.settleCaptures(),
+          abort.signal,
+        );
+        if (settled.kind === "aborted" || !current())
+          return this.currentResult();
+      }
+      if (this.options.hasCandidate?.() === true) {
+        this.candidateReady();
+        return this.currentResult();
+      }
+      if (!current()) return this.currentResult();
+      this.rememberEntry(page);
+      const next = this.options.start_urls?.find(
+        (url) => !this.attemptedEntries.has(url),
+      );
+      if (!this.preparationFailure?.recoverable || !next || !page.navigate) {
+        this.fail("browser-navigation-failed");
+        return this.currentResult();
+      }
+      this.attemptedEntries.add(next);
+      this.activePreparationTarget = next;
+      this.preparationFailure = null;
+      this.usePage(page);
+      try {
+        const navigation = await interruptible(
+          page.navigate(next),
+          abort.signal,
+        );
+        if (navigation.kind === "aborted" || !current())
+          return this.currentResult();
+      } catch (error) {
+        if (!current()) return this.currentResult();
+        if (stableBrowserFlowFailureCode(error) !== "browser-navigation-failed")
+          throw error;
+        this.preparationFailure = {
+          recoverable:
+            error instanceof Error &&
+            "recoverable" in error &&
+            error.recoverable === true,
+        };
+      } finally {
+        this.activePreparationTarget = null;
+      }
+      this.rememberEntry(page);
+      if (this.options.hasCandidate?.() === true) this.candidateReady();
+      else if (current()) {
+        this.clock.actionFinished();
+        this.ensurePacing();
+      }
+      return this.currentResult();
+    } finally {
+      this.activePreparationTarget = null;
+      endPreparation();
+      if (this.decisionAbort === abort) this.decisionAbort = null;
+    }
+  }
+
   private ensurePacing(): void {
     if (this.pendingPacing !== undefined) return;
     const delay = this.clock.decisionDelayMs();
@@ -1028,6 +1178,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
 
   private suspendActive(): void {
     this.clock.suspend();
+    this.initializationWait = null;
     if (this.budgetTimer !== undefined) clearTimeout(this.budgetTimer);
     if (this.pendingPacing !== undefined) clearTimeout(this.pendingPacing);
     this.budgetTimer = undefined;
@@ -1083,7 +1234,10 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     this.previousActionIdentity = null;
   }
 
-  private stop(reason: BrowserArticleFlowResult["stopped_reason"]): void {
+  private stop(
+    reason: BrowserArticleFlowResult["stopped_reason"],
+    diagnostic?: string,
+  ): void {
     if (this.phaseValue === "closed" || this.terminalResult !== null) return;
     if (
       (reason === "stopped" || reason === "no-candidate") &&
@@ -1106,7 +1260,8 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
                   : reason === "invalid-action"
                     ? "browser-action-invalid"
                     : "browser-observation-unavailable",
-            "The controlled Browser flow stopped before a normal no-PDF result.",
+            diagnostic ??
+              "The controlled Browser flow stopped before a normal no-PDF result.",
           );
     this.phaseValue = "closing";
     this.options.onClosing?.();
@@ -1122,7 +1277,9 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     if (this.phaseValue === "closed" || this.terminalResult !== null) return;
     this.terminalResult = browserRefused(
       code,
-      "The controlled Browser flow failed before delivering a document.",
+      code === "browser-rate-limited"
+        ? "The article platform returned a rate limit; this attempt ended without a PDF and the shared platform cooldown remains in force."
+        : "The controlled Browser flow failed before delivering a document.",
     );
     this.stoppedReason = "unavailable-observation";
     this.phaseValue = "closing";
@@ -1142,6 +1299,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       (this.phaseValue === "candidate-ready" &&
         this.options.hasCandidate?.() === true) ||
       (this.phaseValue === "ready" &&
+        !this.initializationPending &&
         this.page !== null &&
         (this.networkAllowed || this.networkEndedSuccessfully) &&
         this.options.automatic?.canDecide() !== false &&
@@ -1555,14 +1713,80 @@ export function createBrowserArticleFlow(
     let collaboration:
       | Awaited<ReturnType<NonNullable<typeof options.collaboration>["open"]>>
       | undefined;
+    let closingOutcome: BrowserArticleCloseOutcome | undefined;
+    let collaborationBeforeClose: Promise<void> | undefined;
+    let collaborationClose: Promise<void> | undefined;
     let registration: {
       close(outcome: BrowserArticleCloseOutcome): void | Promise<void>;
     } | void;
+    const beforeCloseCollaboration = (outcome: BrowserArticleCloseOutcome) => {
+      if (!collaboration) return Promise.resolve();
+      collaborationBeforeClose ??= Promise.resolve().then(() =>
+        collaboration!.beforeClose?.(outcome),
+      );
+      return collaborationBeforeClose;
+    };
+    const closeCollaboration = (outcome: BrowserArticleCloseOutcome) => {
+      if (!collaboration) return Promise.resolve();
+      collaborationClose ??= Promise.resolve().then(() =>
+        collaboration!.close(
+          outcome.kind === "cancelled" ||
+            (outcome.kind === "retained" &&
+              outcome.code !== "delivered" &&
+              outcome.code !== "exhausted"),
+          outcome,
+        ),
+      );
+      return collaborationClose;
+    };
+    const retireLateCollaboration = async (
+      outcome: BrowserArticleCloseOutcome,
+    ) => {
+      let failed = false;
+      try {
+        await beforeCloseCollaboration(outcome);
+      } catch {
+        failed = true;
+      }
+      try {
+        await closeCollaboration(outcome);
+      } catch {
+        failed = true;
+      }
+      if (!failed) return;
+      // The original caller may already have received its budget/cancellation
+      // result. Report late cleanup failure through the registered session owner;
+      // standalone seams and a failing owner still retain a sanitized diagnostic.
+      const failure: BrowserArticleCloseOutcome = {
+        kind: "retained",
+        code: "browser-flow-close-failed",
+      };
+      try {
+        if (registration) {
+          await registration.close(failure);
+          return;
+        }
+        if (options.collaboration?.removed) {
+          options.collaboration.removed(identity.session_id, failure);
+          return;
+        }
+      } catch {
+        // The stable diagnostic below also covers failure to notify the owner.
+      }
+      createLogger("browser").error(
+        "Late Browser collaboration cleanup failed",
+        {
+          code: failure.code,
+          session_id: identity.session_id,
+        },
+      );
+    };
     const decide = options.decide;
     const driver = new BrowserArticleFlowDriver({
       identity,
       clock,
       start_url: request.start_url,
+      ...(request.start_urls ? { start_urls: request.start_urls } : {}),
       decide: (
         observation,
         frame,
@@ -1627,6 +1851,7 @@ export function createBrowserArticleFlow(
         ? { onNetworkEnded: options.onNetworkEnded }
         : {}),
       close: async (outcome) => {
+        closingOutcome = outcome;
         if (outcome.kind === "cancelled") articleAbort.abort();
         const errors: unknown[] = [];
         try {
@@ -1641,7 +1866,7 @@ export function createBrowserArticleFlow(
             errors.push(error);
         }
         try {
-          await collaboration?.beforeClose?.(outcome);
+          await beforeCloseCollaboration(outcome);
         } catch (error) {
           errors.push(error);
         }
@@ -1651,13 +1876,13 @@ export function createBrowserArticleFlow(
           errors.push(error);
         }
         try {
-          await collaboration?.close(
-            outcome.kind === "cancelled" ||
-              (outcome.kind === "retained" &&
-                outcome.code !== "delivered" &&
-                outcome.code !== "exhausted"),
-            outcome,
-          );
+          // A handle can settle while the owned page is closing.
+          await beforeCloseCollaboration(outcome);
+        } catch (error) {
+          if (!errors.includes(error)) errors.push(error);
+        }
+        try {
+          await closeCollaboration(outcome);
         } catch (error) {
           errors.push(error);
         }
@@ -1722,16 +1947,74 @@ export function createBrowserArticleFlow(
       if (signal.aborted)
         throw new BrowserArticleOpenError("browser-flow-cancelled");
       if (options.collaboration) {
-        collaboration = await options.collaboration.open(
-          boundRequest,
-          opened.page,
-          Date.now() + clock.remaining().deadline_ms,
-          driver,
-        );
-        if (tracking === "transport" && collaboration.automatic === undefined)
-          throw new BrowserArticleOpenError(
-            "browser-collaboration-session-unavailable",
+        driver.initializationStarted();
+        const capturing = () =>
+          ["downloading", "validating", "candidate-ready"].includes(
+            driver.phase(),
           );
+        const endCollaborationOpen = capturing()
+          ? () => undefined
+          : clock.beginActive("page-wait");
+        const captured = new AbortController();
+        const initializationSignal = AbortSignal.any([
+          openingAbort.signal,
+          captured.signal,
+        ]);
+        const watchCapture = (async () => {
+          while (!initializationSignal.aborted) {
+            if (capturing() || driver.initializationCaptured()) {
+              captured.abort();
+              return;
+            }
+            await driver.changed(initializationSignal);
+          }
+        })();
+        try {
+          const initialization = options.collaboration
+            .open(
+              boundRequest,
+              opened.page,
+              Date.now() + clock.remaining().deadline_ms,
+              driver,
+            )
+            .then(async (value) => {
+              collaboration = value;
+              if (closingOutcome) await retireLateCollaboration(closingOutcome);
+              else if (
+                tracking === "transport" &&
+                value.automatic === undefined
+              )
+                throw new BrowserArticleOpenError(
+                  "browser-collaboration-session-unavailable",
+                );
+              return value;
+            })
+            .then(
+              (value) => {
+                driver.initializationSettled();
+                return value;
+              },
+              (error: unknown) => {
+                driver.initializationSettled(
+                  error instanceof BrowserArticleOpenError
+                    ? error.code
+                    : stableBrowserFlowFailureCode(error),
+                );
+                throw error;
+              },
+            );
+          const initialized = await interruptible(
+            initialization,
+            initializationSignal,
+          );
+          if (initialized.kind === "aborted" && openingAbort.signal.aborted)
+            throw new BrowserArticleOpenError("browser-flow-cancelled");
+          if (initialized.kind === "result") collaboration = initialized.value;
+        } finally {
+          captured.abort();
+          await watchCapture;
+          endCollaborationOpen();
+        }
       }
       if (signal.aborted)
         throw new BrowserArticleOpenError("browser-flow-cancelled");
@@ -1746,7 +2029,8 @@ export function createBrowserArticleFlow(
           : undefined;
       const failureCode =
         stoppedCode ??
-        (error instanceof BrowserArticleOpenError
+        (error instanceof BrowserArticleOpenError ||
+        error instanceof BrowserArticleBudgetError
           ? error.code
           : stableBrowserFlowFailureCode(error));
       const openFailureCode =
