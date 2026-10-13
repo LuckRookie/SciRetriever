@@ -69,6 +69,15 @@ node apps/server/dist/cli/main.js import pdf LITERATURE_ID article.pdf --json
 node apps/server/dist/cli/main.js export pdf LITERATURE_ID article-copy.pdf --json
 ```
 
+## 正式 Web 工作台
+
+```bash
+pnpm build
+node apps/server/dist/cli/main.js web --port 4174
+```
+
+已安装入口为 `sciretriever web`。蓝白任务工作台提供首页、持久任务、任务内 Browser 协助、文献/PDF/文档/知识与证据阅读、显式加工和设置。启动使用固定配置的 catalog/artifact root，页面显示实际绑定；无需初始文献，不自动获取或升级库。配置路径保存后需重启，不移动数据。完整准备、操作与能力边界见[Web 任务工作台指南](docs/guides/web-workbench.md)。
+
 ## Browser 工作台预览
 
 源码保留两个本地入口。静态交互样本用于快速查看布局与状态，不启动 Browser Host：
@@ -99,7 +108,7 @@ SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm preview:w
 
 正式阅读入口可通过 server TypeScript API `startQueryOnlyWorkbench({ home })` 单独启动，只提供文献搜索、详情、引用证据与已保存材料下载。它只读打开既有 Catalog；未初始化时明确提示并保持未创建，PDF/内容等缺口也不会自动启动获取、解析、生成或 Job。常规调用以 Node 用户 home（`homedir()`，与 CLI 同一固定配置身份）作为 home；Catalog 和 ArtifactStore 路径继续取自固定配置。完整 API 启动、就绪状态和关闭方式见[独立文献库阅读指南](docs/guides/library-query.md)。
 
-现有实时 Browser 工作台仍是含 Browser、Jobs、配置的混合入口；它不代表 QueryApplication 的独立只读启动路径。独立查询页已提供文献阅读、固定文档证据、材料和知识混合上下文、提取输入准备、v6 单篇知识和 v7 集合综合历史阅读；v5+ 候选提交、v6 单篇分析、v7 集合综合及 v8 知识索引重建须打开受控维护入口。Agent 可通过 `createQueryApplication(home).knowledgeContext.search` 混合检索，通过 `knowledgeRead` 按 ID、Literature 清单或默认指针读取单篇知识，也可通过 `synthesisPreparation/synthesisRead` 固定集合并按 ID、来源及最近清单只读访问综合。用法见[独立文献库阅读指南](docs/guides/library-query.md#知识与材料混合上下文catalog-v8)。
+正式任务工作台整合 Browser、持久任务、配置以及全部 query/maintenance 接口；它与 QueryApplication 的独立只读启动保持不同的授权范围。独立查询页已提供文献阅读、固定文档证据、材料和知识混合上下文、提取输入准备、v6 单篇知识和 v7 集合综合历史阅读；v5+ 候选提交、v6 单篇分析、v7 集合综合及 v8 知识索引重建可在正式工作台明确操作，也保留独立受控维护入口。Agent 可通过 `createQueryApplication(home).knowledgeContext.search` 混合检索，通过 `knowledgeRead` 按 ID、Literature 清单或默认指针读取单篇知识，也可通过 `synthesisPreparation/synthesisRead` 固定集合并按 ID、来源及最近清单只读访问综合。用法见[独立文献库阅读指南](docs/guides/library-query.md#知识与材料混合上下文catalog-v8)。
 
 PDF 获取只验证实际文件可读取及任务关联，不在下载阶段按 DOI/标题/作者判断内容身份。
 入库 PDF 显示“文章身份未验证”（`article_identity_status: "unverified"`），不阻断下载或后续解析。

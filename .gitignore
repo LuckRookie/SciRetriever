@@ -22,6 +22,7 @@ logs
 !/docs/proposals/2026-10-08-agent-workbench/prototype.html
 !/docs/proposals/2026-10-08-agent-workbench/opus-variant.html
 !/docs/proposals/2026-10-08-agent-workbench/comparison.html
+!/docs/proposals/2026-10-08-agent-workbench/blue-workbench.html
 page_1.json
 *.ipynb
 *.txt

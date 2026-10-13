@@ -50,6 +50,7 @@ import {
   type ConfigTheme,
 } from "./config-ui.js";
 import { runDoctor } from "../entry/doctor.js";
+import { ConfigurationBoundaryError } from "../configuration/index.js";
 import {
   MigrationSafetyError,
   SYNTHETIC_COPY_DECLARATION_FLAG,
@@ -103,6 +104,16 @@ function invalidInput(): never {
   throw new CliInputError();
 }
 
+function writeWebPathFailure(options: CliOptions): void {
+  options.stderr?.(
+    `${JSON.stringify({
+      code: "paths-not-ready",
+      next_action:
+        "Configure both paths.catalog_path and paths.artifact_root through sciretriever config, then explicitly initialize or upgrade the catalog before starting Web.",
+    })}\n`,
+  );
+}
+
 /**
  * The only production configuration identity is the fixed user home. An
  * explicitly injected `home` remains an internal isolation seam, while
@@ -123,7 +134,8 @@ function output(value: unknown, options: CliOptions): CliResult {
 
 function usage(options: CliOptions): CliResult {
   const text =
-    "Usage: sciretriever <discover|complete|literature|import|export|config|storage|maintenance|jobs> ...\n" +
+    "Usage: sciretriever <web|discover|complete|literature|import|export|config|storage|maintenance|jobs> ...\n" +
+    "  web [--port 4174]  # local task workbench; uses the configured catalog and artifact root\n" +
     "  discover topic QUERY | discover citations --seed-literature-id ID\n" +
     "  complete pdf|content [--literature-id ID] [--transfers ID,...]\n" +
     "  literature search [query options] | show ID | references ID | cited-by ID\n" +
@@ -461,6 +473,51 @@ async function execute(
   if (!args.length || args[0] === "--help" || args[0] === "-h")
     return usage(options);
   const [group, command] = args;
+  if (group === "web") {
+    const port = args.length === 1 ? 4174 : Number(args[2]);
+    if (
+      (args.length !== 1 &&
+        (args.length !== 3 ||
+          command !== "--port" ||
+          !/^\d+$/.test(args[2]!))) ||
+      !Number.isSafeInteger(port) ||
+      port < 0 ||
+      port > 65535
+    )
+      invalidInput();
+    if (options.signal?.aborted) return { code: 130 };
+    const configurationOwner = new TypeScriptConfigurationOwner(
+      configurationHome(options),
+    );
+    const { paths } = (await configurationOwner.read()).configuration;
+    if (!paths.catalog_path || !paths.artifact_root) {
+      writeWebPathFailure(options);
+      return { code: 4 };
+    }
+    const { startProductionWorkbench } = await import(
+      "../bootstrap/workbench.js"
+    );
+    const { loadWorkbenchAssets } = await import("../workbench/assets.js");
+    const running = await startProductionWorkbench({
+      home: configurationHome(options),
+      port,
+      assets: await loadWorkbenchAssets(),
+      applicationOptions: { configurationOwner },
+    });
+    try {
+      output({ mode: "web", url: `${running.origin}/` }, options);
+      await new Promise<void>((resolve) => {
+        if (options.signal?.aborted) resolve();
+        else
+          options.signal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+      });
+      return { code: 0 };
+    } finally {
+      await running.close();
+    }
+  }
   if (group === "mcp") {
     if (args.slice(1).some((v) => v !== "--maintenance")) invalidInput();
     const { runMcpStdio } = await import("../mcp/server.js");
@@ -1413,7 +1470,9 @@ export async function runCli(
       error instanceof ContractValidationError ||
       error instanceof TypeError ||
       probeInvalid;
-    const configuration = error instanceof ConfigurationOwnerError;
+    const configuration =
+      error instanceof ConfigurationOwnerError ||
+      error instanceof ConfigurationBoundaryError;
     const business =
       error instanceof CliBusinessError ||
       error instanceof QueryApplicationError ||
@@ -1465,6 +1524,15 @@ export async function runCli(
     effective.stderr?.(
       `${JSON.stringify({
         code: failure,
+        ...(args[0] === "web"
+          ? {
+              next_action: configuration
+                ? "Check sciretriever config status and the configured catalog/artifact paths."
+                : migration
+                  ? "Inspect the configured catalog with sciretriever storage schema-inspect; initialize or upgrade it explicitly before starting Web."
+                  : "Check the local port, build assets and configuration before restarting Web.",
+            }
+          : {}),
         ...(error instanceof CatalogSchemaError
           ? { reason: error.reason, progress: error.progress }
           : {}),
@@ -1492,6 +1560,7 @@ if (await isMainModule()) {
   // single `notStarted` partition instead of vanishing from the run.
   const controller = new AbortController();
   process.once("SIGINT", () => controller.abort());
+  process.once("SIGTERM", () => controller.abort());
   const result = await runCli(process.argv.slice(2), {
     stdout: (text) => process.stdout.write(text),
     stdoutBytes: (bytes) => process.stdout.write(bytes),

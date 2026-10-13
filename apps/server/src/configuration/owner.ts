@@ -90,6 +90,7 @@ export class ConfigurationOwnerError extends Error {
 }
 
 export type ConfigurationSection =
+  | "paths"
   | "sources"
   | "providers"
   | "models"
@@ -111,6 +112,7 @@ export type TypeScriptCredentialEdit = CredentialEdit;
 
 const MAX_BYTES = 1_048_576;
 const SECTIONS = new Set<ConfigurationSection>([
+  "paths",
   "sources",
   "providers",
   "models",

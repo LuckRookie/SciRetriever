@@ -2504,22 +2504,71 @@ function getExecutionJob(jobId: Dynamic): Dynamic {
     finished_at: row.finished_at,
   };
 }
-function listExecutionJobs(limit: Dynamic): Dynamic {
+function listExecutionJobs(
+  limit: Dynamic,
+  order: Dynamic,
+  before: Dynamic,
+  statuses: Dynamic,
+): Dynamic {
   requireRuntime();
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) fail();
-  return db
-    .prepare("SELECT * FROM execution_jobs ORDER BY created_at,job_id LIMIT ?")
-    .all(limit)
-    .map((row: Dynamic) => ({
-      job_id: row.job_id,
-      target_kind: row.target_kind,
-      selector: JSON.parse(row.selector_json),
-      policy_version: row.policy_version,
-      status: row.status,
-      idempotency_key: row.idempotency_key,
-      created_at: row.created_at,
-      finished_at: row.finished_at,
-    }));
+  if (order !== "oldest" && order !== "newest" && order !== "finished") fail();
+  if (
+    before !== null &&
+    (order === "oldest" ||
+      !before ||
+      typeof before.timestamp !== "string" ||
+      !before.timestamp ||
+      before.timestamp.length > 64 ||
+      typeof before.job_id !== "string" ||
+      !before.job_id ||
+      before.job_id.length > 256)
+  )
+    fail();
+  if (
+    !Array.isArray(statuses) ||
+    statuses.length > 7 ||
+    statuses.some(
+      (status: Dynamic) =>
+        ![
+          "queued",
+          "running",
+          "paused",
+          "interrupted",
+          "completed",
+          "cancelled",
+          "failed",
+        ].includes(status),
+    )
+  )
+    fail();
+  const timeColumn =
+    order === "finished" ? "COALESCE(finished_at,created_at)" : "created_at";
+  const filters: string[] = [];
+  const args: Dynamic[] = [];
+  if (before !== null) {
+    filters.push(`(${timeColumn} < ? OR (${timeColumn} = ? AND job_id < ?))`);
+    args.push(before.timestamp, before.timestamp, before.job_id);
+  }
+  if (statuses.length) {
+    filters.push(`status IN (${statuses.map(() => "?").join(",")})`);
+    args.push(...statuses);
+  }
+  const rows = db
+    .prepare(
+      `SELECT * FROM execution_jobs${filters.length ? ` WHERE ${filters.join(" AND ")}` : ""} ORDER BY ${order === "oldest" ? "created_at,job_id" : `${timeColumn} DESC,job_id DESC`} LIMIT ?`,
+    )
+    .all(...args, limit);
+  return rows.map((row: Dynamic) => ({
+    job_id: row.job_id,
+    target_kind: row.target_kind,
+    selector: JSON.parse(row.selector_json),
+    policy_version: row.policy_version,
+    status: row.status,
+    idempotency_key: row.idempotency_key,
+    created_at: row.created_at,
+    finished_at: row.finished_at,
+  }));
 }
 function getExecutionPolicy(jobId: Dynamic): Dynamic {
   requireRuntime();
@@ -2929,6 +2978,7 @@ function listExecutionEvents(
   jobId: Dynamic,
   after: Dynamic,
   limit: Dynamic,
+  order: Dynamic,
 ): Dynamic {
   requireRuntime();
   if (
@@ -2939,9 +2989,12 @@ function listExecutionEvents(
     limit > 1000
   )
     fail();
+  if (order !== "oldest" && order !== "newest") fail();
   return db
     .prepare(
-      "SELECT * FROM execution_events WHERE job_id=? AND sequence>? ORDER BY sequence LIMIT ?",
+      order === "newest"
+        ? "SELECT * FROM execution_events WHERE job_id=? AND sequence>? ORDER BY sequence DESC LIMIT ?"
+        : "SELECT * FROM execution_events WHERE job_id=? AND sequence>? ORDER BY sequence LIMIT ?",
     )
     .all(jobId, after, limit)
     .map((row: Dynamic) => ({
@@ -5508,7 +5561,12 @@ port.on("message", (message: WorkerMessage) => {
         value = getExecutionJob(message.command.jobId);
         break;
       case "execution_list_jobs":
-        value = listExecutionJobs(message.command.limit);
+        value = listExecutionJobs(
+          message.command.limit,
+          message.command.order,
+          message.command.before,
+          message.command.statuses,
+        );
         break;
       case "execution_list_targets":
         value = listExecutionTargets(
@@ -5594,6 +5652,7 @@ port.on("message", (message: WorkerMessage) => {
           message.command.jobId,
           message.command.after,
           message.command.limit,
+          message.command.order,
         );
         break;
       case "execution_put_intervention":

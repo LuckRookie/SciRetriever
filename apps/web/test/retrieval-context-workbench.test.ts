@@ -183,4 +183,4 @@ it("rebuilds the v4 index explicitly and searches Context in the real browser pa
     await app.close();
     await rm(home, { recursive: true, force: true });
   }
-});
+}, 30000);

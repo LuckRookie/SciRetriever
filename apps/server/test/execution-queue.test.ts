@@ -36,6 +36,120 @@ async function setup() {
 }
 
 describe("execution queue recovery semantics", () => {
+  it("bounds newest task history after ordering while preserving FIFO callers", async () => {
+    const env = await setup();
+    try {
+      for (let index = 0; index < 105; index++)
+        await env.repository.createJob({
+          job_id: `history-${String(index).padStart(3, "0")}`,
+          target_kind: "selector",
+          selector: {},
+          policy_version: "history",
+          policy: {},
+          idempotency_key: `history-${index}`,
+          created_at: new Date(
+            Date.UTC(2026, 9, 1) + index * 1000,
+          ).toISOString(),
+        });
+      expect(
+        (await env.repository.listJobs(3)).map((job) => job.job_id),
+      ).toEqual(["job-queue-test", "history-000", "history-001"]);
+      const recent = await env.repository.listJobs(100, "newest");
+      expect(recent).toHaveLength(100);
+      expect(recent[0]?.job_id).toBe("history-104");
+      expect(recent.at(-1)?.job_id).toBe("history-005");
+      const before = recent.at(-1)!;
+      const older = await env.repository.listJobs(100, "newest", {
+        timestamp: before.created_at,
+        job_id: before.job_id,
+      });
+      expect(older.map((job) => job.job_id)).toEqual([
+        "history-004",
+        "history-003",
+        "history-002",
+        "history-001",
+        "history-000",
+        "job-queue-test",
+      ]);
+      for (let index = 0; index < 105; index++)
+        await env.repository.updateJob(
+          `history-${String(index).padStart(3, "0")}`,
+          "completed",
+        );
+      expect(
+        (
+          await env.repository.listJobs(8, "newest", null, [
+            "queued",
+            "running",
+          ])
+        ).map((job) => job.job_id),
+      ).toEqual(["job-queue-test"]);
+      await env.repository.updateJob("job-queue-test", "paused");
+      expect(
+        (
+          await env.repository.listJobs(8, "newest", null, [
+            "paused",
+            "failed",
+            "interrupted",
+          ])
+        ).map((job) => job.job_id),
+      ).toEqual(["job-queue-test"]);
+      expect(
+        await env.repository.listJobs(5, "newest", null, [
+          "completed",
+          "cancelled",
+          "failed",
+        ]),
+      ).toHaveLength(5);
+      await env.repository.createJob({
+        job_id: "history-tied",
+        target_kind: "selector",
+        selector: {},
+        policy_version: "history",
+        policy: {},
+        idempotency_key: "history-tied",
+        created_at: recent[0]!.created_at,
+      });
+      await env.repository.updateJob(
+        "job-queue-test",
+        "completed",
+        "2026-10-03T00:00:00.000Z",
+      );
+      expect(
+        (await env.repository.listJobs(1, "finished", null, ["completed"]))[0]
+          ?.job_id,
+      ).toBe("job-queue-test");
+      const recentResult = (
+        await env.repository.listJobs(1, "finished", null, ["completed"])
+      )[0]!;
+      expect(
+        (
+          await env.repository.listJobs(
+            1,
+            "finished",
+            {
+              timestamp: recentResult.finished_at!,
+              job_id: recentResult.job_id,
+            },
+            ["completed"],
+          )
+        )[0]?.job_id,
+      ).toBe("history-104");
+      const tied = (await env.repository.listJobs(1, "newest"))[0]!;
+      expect(tied.job_id).toBe("history-tied");
+      expect(
+        (
+          await env.repository.listJobs(1, "newest", {
+            timestamp: tied.created_at,
+            job_id: tied.job_id,
+          })
+        )[0]?.job_id,
+      ).toBe("history-104");
+    } finally {
+      await env.database.close();
+    }
+  });
+
   it("rejects operator control after the SQLite worker closes", async () => {
     const env = await setup();
     await env.database.close();
@@ -255,6 +369,15 @@ describe("execution queue recovery semantics", () => {
           payload: { index },
           created_at: `2026-09-11T00:00:${String(index % 60).padStart(2, "0")}.000Z`,
         });
+      const recent = await env.repository.listEvents(
+        env.job.job_id,
+        -1,
+        1000,
+        "newest",
+      );
+      expect(recent).toHaveLength(1000);
+      expect(recent[0]?.sequence).toBe(1204);
+      expect(recent.at(-1)?.sequence).toBe(205);
       const tail = await env.repository.listEvents(env.job.job_id, 1_199, 20);
       expect(tail.map((event) => event.sequence)).toEqual(
         Array.from({ length: 5 }, (_, offset) => 1_200 + offset),

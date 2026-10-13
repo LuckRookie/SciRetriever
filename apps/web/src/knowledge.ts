@@ -14,8 +14,94 @@ import {
   parseStrictJsonValue,
   type EvidenceRef,
   type KnowledgeArtifact,
+  type ProcessingOperation,
 } from "@sciretriever/contracts";
 import { record } from "./wire.js";
+import { navigateWorkspace } from "./navigation.js";
+
+export type DataFetch = (path: string, init?: RequestInit) => Promise<Response>;
+let transport: DataFetch = (path, init) => globalThis.fetch(path, init);
+let durableTasks = false;
+const pendingSubmissions = new WeakMap<
+  HTMLElement,
+  { input: string; key: string }
+>();
+
+/** The host supplies its same-origin session; standalone readers keep their existing protocol. */
+export function configureDataTransport(options: {
+  fetch?: DataFetch;
+  durableTasks?: boolean;
+}): void {
+  if (options.fetch) transport = options.fetch;
+  if (options.durableTasks !== undefined) durableTasks = options.durableTasks;
+}
+export const dataFetch: DataFetch = (path, init) => transport(path, init);
+export function usesDurableTasks(): boolean {
+  return durableTasks;
+}
+export async function submitProcessingTask(
+  operation: ProcessingOperation,
+  status: HTMLElement,
+  signal?: AbortSignal,
+): Promise<string> {
+  const input = JSON.stringify(operation);
+  const previous = pendingSubmissions.get(status);
+  const key = previous?.input === input ? previous.key : crypto.randomUUID();
+  pendingSubmissions.set(status, { input, key });
+  const response = await dataFetch("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      kind: "processing",
+      request: {
+        schema_version: 1,
+        idempotency_key: key,
+        operations: [operation],
+      },
+    }),
+    ...(signal ? { signal } : {}),
+  });
+  const payload = record(await response.json(), "task submission");
+  if (!response.ok)
+    throw new Error(
+      typeof payload.code === "string"
+        ? payload.code
+        : "task-submission-unknown",
+    );
+  const job = record(payload.task, "task");
+  if (typeof job.job_id !== "string") throw new Error("invalid-task-response");
+  const id = job.job_id;
+  pendingSubmissions.delete(status);
+  status.textContent = "任务已保存；正在请求执行。";
+  const link = document.createElement("a");
+  const url = new URL(window.location.href);
+  url.searchParams.set("workspace", "jobs");
+  url.searchParams.set("job", id);
+  link.href = url.toString();
+  link.textContent = "查看任务进展与已保存结果";
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    navigateWorkspace("jobs", { job: id });
+  });
+  try {
+    const start = await dataFetch(
+      `/api/tasks/${encodeURIComponent(id)}/start`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      },
+    );
+    if (!start.ok) throw new Error("task-start-unconfirmed");
+    status.textContent = "任务已持久保存并提交执行；完成结果请在任务中核对。";
+  } catch {
+    status.textContent =
+      "任务已持久保存，执行状态暂未确认；请打开任务查看后再操作。";
+  }
+  status.append(" ", link);
+  window.dispatchEvent(new CustomEvent("sciretriever:tasks-changed"));
+  return id;
+}
 
 function node<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -65,7 +151,7 @@ export async function post(
 ): Promise<unknown> {
   let csrf: string | null = null;
   if (maintenance) {
-    const session = await fetch("/api/v1/maintenance/session", { signal });
+    const session = await dataFetch("/api/v1/maintenance/session", { signal });
     if (!session.ok) throw new Error("维护会话不可用");
     const grant = exact(await responseObject(session, 4096), [
       "protocol_version",
@@ -75,7 +161,7 @@ export async function post(
       throw new Error("维护会话无效");
     csrf = grant.csrf;
   }
-  const response = await fetch(
+  const response = await dataFetch(
     `/api/v1/${maintenance ? "maintenance" : "query"}/${path}`,
     {
       method: "POST",
@@ -320,6 +406,16 @@ export function mountKnowledgeMaintenance(): void {
           });
       if (current !== generation) return;
       status.textContent = `输入已固定：文档 ${described.document.document_version_id}。正在生成知识…`;
+      if (usesDurableTasks()) {
+        await submitProcessingTask(
+          request.schema_version === 2
+            ? { operation: "analyze-long", request }
+            : { operation: "analyze", request },
+          status,
+          controller.signal,
+        );
+        return;
+      }
       const receipt = await parseKnowledgeAnalysisReceipt(
         await post(
           long ? "analyze-knowledge-long" : "analyze-knowledge",
@@ -620,6 +716,42 @@ export function mountKnowledgeReading(): void {
           readButton.click();
         });
         listRoot.append(button);
+        const synthesisInputs = document.getElementById(
+          "synthesis-inputs",
+        ) as HTMLTextAreaElement | null;
+        if (synthesisInputs) {
+          const add = document.createElement("button");
+          add.type = "button";
+          add.textContent = "加入综合输入";
+          add.addEventListener("click", () => {
+            try {
+              const current: unknown = synthesisInputs.value.trim()
+                ? parseStrictJsonValue(synthesisInputs.value)
+                : [];
+              if (!Array.isArray(current)) throw new Error("输入必须是数组");
+              const inputs = current.filter(
+                (entry: unknown) =>
+                  !entry ||
+                  typeof entry !== "object" ||
+                  !("source_artifact_id" in entry) ||
+                  entry.source_artifact_id !== item.artifact_id,
+              );
+              inputs.push({
+                kind: "knowledge",
+                input_id: `knowledge-${item.artifact_id}`,
+                source_artifact_id: item.artifact_id,
+              });
+              synthesisInputs.value = JSON.stringify(inputs, null, 2);
+              synthesisInputs.dispatchEvent(new Event("input"));
+              status.textContent =
+                "已加入固定知识来源；请在任务页明确准备集合并启动综合。";
+            } catch {
+              status.textContent =
+                "综合输入草稿不是有效 JSON 数组；已保留草稿，请先修正。";
+            }
+          });
+          listRoot.append(add);
+        }
       }
       status.textContent = `找到 ${items.length} 项历史知识。`;
     }),

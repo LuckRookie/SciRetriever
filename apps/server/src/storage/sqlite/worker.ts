@@ -418,7 +418,13 @@ export type SqliteCommand =
       readonly targets?: readonly ExecutionTarget[];
     }
   | { readonly kind: "execution_get_job"; readonly jobId: string }
-  | { readonly kind: "execution_list_jobs"; readonly limit: number }
+  | {
+      readonly kind: "execution_list_jobs";
+      readonly before: ExecutionJobCursor | null;
+      readonly statuses: readonly ExecutionJobStatus[];
+      readonly limit: number;
+      readonly order: "oldest" | "newest" | "finished";
+    }
   | {
       readonly kind: "execution_list_targets";
       readonly jobId: string;
@@ -491,6 +497,7 @@ export type SqliteCommand =
     }
   | {
       readonly kind: "execution_list_events";
+      readonly order: "oldest" | "newest";
       readonly jobId: string;
       readonly after: number;
       readonly limit: number;
@@ -700,6 +707,11 @@ export type ExecutionAttemptStatus =
   | "failed"
   | "interrupted"
   | "unknown";
+export interface ExecutionJobCursor {
+  readonly timestamp: string;
+  readonly job_id: string;
+}
+
 export interface ExecutionJob {
   readonly job_id: string;
   readonly target_kind: "literature" | "selector" | "discovery";
@@ -1467,12 +1479,36 @@ export class SqliteWorker {
       budget: parseExecutionBudget(claim.budget),
     };
   }
-  async listExecutionJobs(limit = 100): Promise<readonly ExecutionJob[]> {
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
+  async listExecutionJobs(
+    limit = 100,
+    order: "oldest" | "newest" | "finished" = "oldest",
+    before: ExecutionJobCursor | null = null,
+    statuses: readonly ExecutionJobStatus[] = [],
+  ): Promise<readonly ExecutionJob[]> {
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 1000 ||
+      !["oldest", "newest", "finished"].includes(order)
+    )
+      throw new SqliteWorkerError();
+    if (before !== null) {
+      if (order === "oldest") throw new SqliteWorkerError();
+      executionText(before.timestamp, 64);
+      executionText(before.job_id);
+    }
+    if (
+      !Array.isArray(statuses) ||
+      statuses.length > 7 ||
+      statuses.some((status) => !executionJobStatuses.has(status))
+    )
       throw new SqliteWorkerError();
     const value = await this.run<unknown>({
       kind: "execution_list_jobs",
+      statuses,
+      before,
       limit,
+      order,
     });
     if (!Array.isArray(value)) throw new SqliteWorkerError();
     return Object.freeze(value.map(parseExecutionJob));
@@ -1667,14 +1703,17 @@ export class SqliteWorker {
     jobId: string,
     after = -1,
     limit = 100,
+    order: "oldest" | "newest" = "oldest",
   ): Promise<readonly ExecutionEvent[]> {
     executionText(jobId);
+    if (!["oldest", "newest"].includes(order)) throw new SqliteWorkerError();
     if (!Number.isSafeInteger(after) || after < -1)
       throw new SqliteWorkerError();
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
       throw new SqliteWorkerError();
     const value = await this.run<unknown>({
       kind: "execution_list_events",
+      order,
       jobId,
       after,
       limit,

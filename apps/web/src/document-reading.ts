@@ -6,7 +6,126 @@ import {
   type DocumentReadResultMap,
   type DocumentSelector,
   type LiteratureDetail,
+  sha256,
 } from "@sciretriever/contracts";
+import { dataFetch } from "./knowledge.js";
+
+/** Open only the explicitly selected, completely verified original PDF. */
+export function mountMaterialReading(
+  root: HTMLElement,
+  detail: LiteratureDetail,
+): HTMLButtonElement | null {
+  const asset = detail.primary_pdf?.asset;
+  if (!asset) return null;
+  const panel = document.createElement("section");
+  panel.className = "library-pdf-reading";
+  let release: (() => void) | null = null;
+  const open = button("阅读原始 PDF", () => {
+    release?.();
+    if (!root.contains(panel)) root.append(panel);
+    open.disabled = true;
+    panel.replaceChildren(element("p", "正在读取并校验固定 PDF…"));
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    const dispose = () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      objectUrl = null;
+      observer.disconnect();
+      window.removeEventListener("pagehide", dispose);
+    };
+    const observer = new MutationObserver(() => {
+      if (!root.contains(panel) || !root.isConnected) dispose();
+    });
+    release = dispose;
+    observer.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener("pagehide", dispose, { once: true });
+    void (async () => {
+      if (asset.size_bytes < 1 || asset.size_bytes > 256 * 1024 * 1024)
+        throw new Error("PDF 超过受控读取上限");
+      const response = await dataFetch("/api/v1/query/material-bytes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          protocol_version: 1,
+          request: {
+            literature_id: detail.literature.literature_id,
+            asset_id: asset.asset_id,
+            asset_sha256: asset.sha256,
+          },
+        }),
+        signal: controller.signal,
+      });
+      if (
+        !response.ok ||
+        response.headers.get("Content-Type")?.split(";")[0] !==
+          "application/pdf" ||
+        response.headers.get("x-sciretriever-asset-id") !== asset.asset_id ||
+        response.headers.get("x-sciretriever-asset-sha256") !== asset.sha256 ||
+        response.headers.get("x-sciretriever-byte-size") !==
+          String(asset.size_bytes)
+      )
+        throw new Error("PDF 响应与所选材料不一致或暂不可用");
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("PDF 响应无字节");
+      const bytes = new Uint8Array(asset.size_bytes);
+      let at = 0;
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        if (at + chunk.value.byteLength > bytes.byteLength) {
+          await reader.cancel();
+          throw new Error("PDF 响应超过声明大小");
+        }
+        bytes.set(chunk.value, at);
+        at += chunk.value.byteLength;
+      }
+      if (at !== asset.size_bytes || (await sha256(bytes)) !== asset.sha256)
+        throw new Error("PDF 完整性校验失败");
+      if (controller.signal.aborted || !root.contains(panel)) return;
+      objectUrl = URL.createObjectURL(
+        new Blob([bytes], { type: "application/pdf" }),
+      );
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `${detail.literature.literature_id}.pdf`;
+      link.textContent = "下载已核验的原始 PDF";
+      const frame = document.createElement("iframe");
+      frame.title = "原始 PDF 预览";
+      frame.className = "library-pdf-frame";
+      // Chromium disables its native PDF viewer inside sandboxed frames.
+      // This frame receives only verified application/pdf bytes, never HTML or a remote URL.
+      frame.referrerPolicy = "no-referrer";
+      frame.width = "100%";
+      frame.height = "680";
+      frame.src = objectUrl;
+      panel.replaceChildren(
+        element("h3", "原始 PDF"),
+        element(
+          "p",
+          `已核验固定材料 · ${asset.size_bytes} 字节 · SHA-256 ${asset.sha256}`,
+        ),
+        link,
+        element("p", "预览由浏览器提供；若无法显示，可下载同一份已核验 PDF。"),
+        frame,
+      );
+    })()
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted && root.contains(panel))
+          panel.replaceChildren(
+            element(
+              "p",
+              `原始 PDF 读取失败：${error instanceof Error ? error.message : "未知错误"}`,
+            ),
+          );
+        dispose();
+      })
+      .finally(() => {
+        open.disabled = false;
+      });
+  });
+  return open;
+}
 
 const route: Record<DocumentReadOperation, string> = {
   default: "/api/document/default",
@@ -45,9 +164,14 @@ export function mountDocumentReading(
   detail: LiteratureDetail,
   send: (path: string, body: unknown) => Promise<Record<string, unknown>>,
   message: (text: string) => void,
+  fixedDocumentVersionId?: string,
 ): HTMLButtonElement | null {
-  const pdf = detail.primary_pdf?.asset;
-  if (!pdf) return null;
+  const primary = detail.primary_pdf?.asset;
+  if (!primary && !fixedDocumentVersionId) return null;
+  const pdf = {
+    asset_id: primary?.asset_id ?? "",
+    sha256: primary?.sha256 ?? "",
+  };
   const literature = detail.literature.literature_id;
   const panel = element("section", "");
   panel.className = "library-reading";
@@ -77,6 +201,17 @@ export function mountDocumentReading(
       root.contains(panel) &&
       generation === launchGeneration;
     panel.replaceChildren(element("h3", "材料证据"));
+    let fixedRepresentation: string | null = null;
+    if (fixedDocumentVersionId) {
+      const fixed = await read(send, "describe", {
+        document_version_id: fixedDocumentVersionId,
+      });
+      if (fixed.document.source_material_ref.literature_id !== literature)
+        throw new Error("document literature mismatch");
+      pdf.asset_id = fixed.document.source_material_ref.asset_id;
+      pdf.sha256 = fixed.document.source_material_ref.asset_sha256;
+      fixedRepresentation = fixed.document.representation_sha256;
+    }
     const material = await read(send, "material", {
       literature_id: literature,
       asset_id: pdf.asset_id,
@@ -93,31 +228,35 @@ export function mountDocumentReading(
         `已复核原始 PDF · 文件级证据 · SHA-256 ${material.evidence.content_sha256}`,
       ),
     );
-    let current: DocumentReadResultMap["default"];
-    try {
-      current = await read(send, "default", {
-        literature_id: literature,
-        asset_id: pdf.asset_id,
-        asset_sha256: pdf.sha256,
-      });
-    } catch (error) {
+    let version = fixedDocumentVersionId;
+    if (!version) {
+      let current: DocumentReadResultMap["default"];
+      try {
+        current = await read(send, "default", {
+          literature_id: literature,
+          asset_id: pdf.asset_id,
+          asset_sha256: pdf.sha256,
+        });
+      } catch (error) {
+        if (!currentPanel()) return;
+        panel.append(
+          element(
+            "p",
+            error instanceof Error && error.message === "document-v3-required"
+              ? "此 catalog 尚未启用文档表示；原始 PDF 仍可阅读。"
+              : "文档表示暂时无法读取。",
+          ),
+        );
+        return;
+      }
       if (!currentPanel()) return;
-      panel.append(
-        element(
-          "p",
-          error instanceof Error && error.message === "document-v3-required"
-            ? "此 catalog 尚未启用文档表示；原始 PDF 仍可阅读。"
-            : "文档表示暂时无法读取。",
-        ),
-      );
-      return;
+      if (!current.default) {
+        panel.append(element("p", "尚无已发布的文档表示；阅读不会启动解析。"));
+        return;
+      }
+      version = current.default.document_version_id;
     }
-    if (!currentPanel()) return;
-    if (!current.default) {
-      panel.append(element("p", "尚无已发布的文档表示；阅读不会启动解析。"));
-      return;
-    }
-    const version = current.default.document_version_id;
+    const selectedVersion = version;
     panel.append(element("p", `固定表示 ${version}`));
     const outline = element("div", "");
     outline.className = "library-reading-sections";
@@ -145,7 +284,7 @@ export function mountDocumentReading(
       element("h3", "资源"),
       resources,
     );
-    let representation: string | null = null;
+    let representation: string | null = fixedRepresentation;
     const bound = (result: {
       readonly document: {
         readonly document_version_id: string;
@@ -159,7 +298,7 @@ export function mountDocumentReading(
     }) => {
       const source = result.document.source_material_ref;
       if (
-        result.document.document_version_id !== version ||
+        result.document.document_version_id !== selectedVersion ||
         source.literature_id !== literature ||
         source.asset_id !== pdf.asset_id ||
         source.asset_sha256 !== pdf.sha256
@@ -191,7 +330,7 @@ export function mountDocumentReading(
     ) => {
       try {
         const result = await read(send, "slice", {
-          document_version_id: version,
+          document_version_id: selectedVersion,
           selector,
           max_bytes: 8192,
           continuation,
@@ -267,7 +406,7 @@ export function mountDocumentReading(
       moreOutline.disabled = true;
       try {
         const page = await read(send, "outline", {
-          document_version_id: version,
+          document_version_id: selectedVersion,
           limit: 50,
           cursor,
         });
@@ -305,7 +444,7 @@ export function mountDocumentReading(
       moreSegments.disabled = true;
       try {
         const page = await read(send, "segments", {
-          document_version_id: version,
+          document_version_id: selectedVersion,
           section_id: null,
           limit: 50,
           cursor,
@@ -342,7 +481,7 @@ export function mountDocumentReading(
       moreResources.disabled = true;
       try {
         const page = await read(send, "resources", {
-          document_version_id: version,
+          document_version_id: selectedVersion,
           limit: 50,
           cursor,
         });
@@ -352,7 +491,7 @@ export function mountDocumentReading(
           const preview = button(`查看 ${resource.reference}`, () => {
             preview.disabled = true;
             void read(send, "resource", {
-              document_version_id: version,
+              document_version_id: selectedVersion,
               resource_id: resource.resource_id,
               max_bytes: 65536,
               continuation: null,

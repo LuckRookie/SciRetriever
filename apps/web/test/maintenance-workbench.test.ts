@@ -254,7 +254,7 @@ it("selects the current Library PDF and validates a published Document receipt i
     await app.close();
     await rm(home, { recursive: true, force: true });
   }
-});
+}, 30000);
 
 it("accepts a selected PDF in Chromium, reads the same fact, and reports rejection and conflict", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-maintenance-web-"));

@@ -422,7 +422,7 @@ it
         });
         expect(takeover.control.controller_id).toBe(client.client_id);
         controlEvidence = {
-          cancelled_article_id: a.article_id,
+          cancelled_article_id: a.article_id!,
           control_epoch_after_takeover: takeover.control.epoch,
           budget_before_cancel: takeover.observation!.remaining,
         };

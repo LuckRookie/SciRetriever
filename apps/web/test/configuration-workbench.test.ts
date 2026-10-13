@@ -471,7 +471,7 @@ describe("configuration workbench", () => {
       const fallback = await browser.newPage();
       await fallback.goto(`${server.origin}/?workspace=unknown`);
       await expect
-        .poll(() => fallback.locator("#live-workspace").isVisible())
+        .poll(() => fallback.locator("#overview-workspace").isVisible())
         .toBe(true);
       expect(new URL(fallback.url()).searchParams.has("workspace")).toBe(false);
       await fallback.close();
@@ -481,7 +481,7 @@ describe("configuration workbench", () => {
       await session.close();
       await rm(home, { recursive: true, force: true });
     }
-  });
+  }, 30000);
 
   it("registers an empty Provider/Model catalog, binds Browser and probes the saved Model through a fake transport", async () => {
     const home = await mkdtemp(

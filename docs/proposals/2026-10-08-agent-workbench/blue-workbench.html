@@ -1,0 +1,3099 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>SciRetriever · 蓝白任务工作台</title>
+    <style>
+      :root {
+        --bg: #f4f7fc;
+        --surface: #fff;
+        --ink: #18243a;
+        --muted: #64748b;
+        --line: #e2e8f2;
+        --blue: #2563eb;
+        --blue-hover: #1d4ed8;
+        --blue-soft: #edf4ff;
+        --blue-line: #c8dcff;
+        --amber: #9a5c0a;
+        --amber-soft: #fff6e6;
+        --green: #187650;
+        --green-soft: #eaf7f0;
+        --red: #bc3f46;
+        --red-soft: #fff0f1;
+        --shadow: 0 16px 60px #18243a1c;
+        --radius: 10px;
+        --row-pad: 19px;
+        --rail: 216px;
+        --font: "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 14px/1.6 var(--font);
+        -webkit-font-smoothing: antialiased;
+      }
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+        color: inherit;
+      }
+      button,
+      a,
+      input,
+      select,
+      textarea {
+        touch-action: manipulation;
+      }
+      button,
+      a {
+        transition:
+          background 0.15s,
+          color 0.15s,
+          border-color 0.15s;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+      }
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+      button:focus-visible,
+      a:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      textarea:focus-visible,
+      summary:focus-visible {
+        outline: 3px solid #85b0ff;
+        outline-offset: 3px;
+      }
+      h1,
+      h2,
+      h3,
+      h4,
+      p {
+        margin: 0;
+        text-wrap: pretty;
+      }
+      h1 {
+        font-size: 27px;
+        line-height: 1.35;
+        letter-spacing: -0.6px;
+        font-weight: 650;
+      }
+      h2 {
+        font-size: 16px;
+        font-weight: 650;
+      }
+      h3 {
+        font-size: 14px;
+        font-weight: 600;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      .icon {
+        display: inline-block;
+        width: 18px;
+        height: 18px;
+        flex: none;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.65;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        vertical-align: middle;
+      }
+      .icon.sm {
+        width: 15px;
+        height: 15px;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .small {
+        font-size: 12px;
+      }
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 12px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .between {
+        justify-content: space-between;
+      }
+      .wrap {
+        flex-wrap: wrap;
+      }
+      .grow {
+        flex: 1;
+        min-width: 0;
+      }
+      .stack {
+        display: grid;
+        gap: 20px;
+      }
+      .blue {
+        color: var(--blue);
+      }
+      .nowrap {
+        white-space: nowrap;
+      }
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: currentColor;
+        display: inline-block;
+        flex: none;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border-radius: 5px;
+        padding: 3px 8px;
+        font-size: 12px;
+        font-weight: 500;
+        line-height: 1.5;
+        white-space: nowrap;
+        background: #f0f3f8;
+        color: var(--muted);
+      }
+      .pill.running {
+        background: var(--blue-soft);
+        color: var(--blue);
+      }
+      .pill.attention {
+        background: var(--amber-soft);
+        color: var(--amber);
+      }
+      .pill.completed {
+        background: var(--green-soft);
+        color: var(--green);
+      }
+      .pill.partial,
+      .pill.cancelled {
+        background: var(--red-soft);
+        color: var(--red);
+      }
+      .btn {
+        border: 1px solid var(--line);
+        background: var(--surface);
+        border-radius: 6px;
+        min-height: 36px;
+        padding: 7px 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        font-size: 13px;
+        font-weight: 500;
+        white-space: nowrap;
+      }
+      .btn:hover {
+        background: #f6f8fc;
+        border-color: #cad5e7;
+      }
+      .btn.primary {
+        background: var(--blue);
+        border-color: var(--blue);
+        color: #fff;
+      }
+      .btn.primary:hover {
+        background: var(--blue-hover);
+        border-color: var(--blue-hover);
+      }
+      .btn.ghost {
+        border-color: transparent;
+        background: transparent;
+        color: var(--muted);
+      }
+      .btn.ghost:hover {
+        background: #edf1f7;
+        color: var(--ink);
+      }
+      .btn.danger {
+        color: var(--red);
+      }
+      .btn.icon-only {
+        padding: 7px;
+        width: 34px;
+        min-height: 34px;
+      }
+      .text-link {
+        color: var(--blue);
+        font-size: 13px;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .text-link:hover {
+        text-decoration: underline;
+      }
+      .empty {
+        padding: 55px 20px;
+        text-align: center;
+        color: var(--muted);
+      }
+      .empty h3 {
+        color: var(--ink);
+        font-size: 16px;
+        margin: 12px 0 7px;
+      }
+      .empty .btn {
+        margin-top: 17px;
+      }
+      .skip {
+        position: absolute;
+        left: 12px;
+        top: -60px;
+        z-index: 100;
+        background: white;
+        padding: 10px;
+      }
+      .skip:focus {
+        top: 12px;
+      }
+      .shell {
+        display: grid;
+        grid-template-columns: var(--rail) minmax(0, 1fr);
+        min-height: 100vh;
+      }
+      .rail {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        background: var(--surface);
+        border-right: 1px solid var(--line);
+        padding: 27px 16px 18px;
+        display: flex;
+        flex-direction: column;
+        z-index: 20;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        font-size: 20px;
+        font-weight: 750;
+        letter-spacing: -1px;
+        padding: 0 12px;
+      }
+      .brand span {
+        color: var(--blue);
+      }
+      .brand-mark {
+        width: 7px;
+        height: 7px;
+        border-radius: 2px;
+        background: var(--blue);
+        margin-left: 3px;
+        align-self: flex-start;
+        margin-top: 9px;
+      }
+      .workspace-label {
+        font-size: 12px;
+        color: var(--muted);
+        padding: 29px 13px 10px;
+      }
+      .nav {
+        display: grid;
+        gap: 5px;
+      }
+      .nav a {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 11px 13px;
+        border-radius: 6px;
+        color: #5a6980;
+        font-size: 14px;
+        font-weight: 500;
+      }
+      .nav a:hover {
+        background: #f5f7fb;
+        color: var(--ink);
+      }
+      .nav a.active {
+        background: var(--blue-soft);
+        color: var(--blue);
+      }
+      .nav-count {
+        margin-left: auto;
+        background: #dce9ff;
+        color: var(--blue);
+        min-width: 19px;
+        text-align: center;
+        padding: 0 5px;
+        border-radius: 4px;
+        font-size: 11px;
+      }
+      .rail-bottom {
+        margin-top: auto;
+      }
+      .library-switch {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        border-top: 1px solid var(--line);
+        padding: 18px 9px 4px;
+      }
+      .library-switch strong {
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .library-switch small {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        margin-top: 2px;
+      }
+      .database-mark {
+        background: #f0f4fa;
+        padding: 8px;
+        border-radius: 7px;
+        color: #607594;
+      }
+      .main-shell {
+        min-width: 0;
+      }
+      .topbar {
+        min-height: 65px;
+        background: var(--surface);
+        border-bottom: 1px solid var(--line);
+        padding: 0 34px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .crumbs {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 12px;
+        min-width: 0;
+      }
+      .crumbs strong {
+        color: var(--ink);
+        font-weight: 500;
+      }
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .preview-label {
+        font-size: 11px;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        padding: 3px 7px;
+        border-radius: 4px;
+      }
+      .avatar {
+        width: 29px;
+        height: 29px;
+        border-radius: 50%;
+        background: #e9f0fc;
+        color: #4567a1;
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .menu-button {
+        display: none;
+      }
+      .content {
+        padding: 34px;
+        max-width: 1580px;
+        margin: auto;
+      }
+      .page-heading {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 23px;
+      }
+      .page-heading p {
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: 8px;
+      }
+      .page-heading > .btn {
+        margin-top: 4px;
+      }
+      .summary-line {
+        display: flex;
+        gap: 20px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 25px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .summary-line b {
+        font-size: 14px;
+        color: var(--ink);
+        font-weight: 600;
+        margin-right: 4px;
+      }
+      .summary-line .sep {
+        width: 1px;
+        height: 13px;
+        background: #d2ddec;
+      }
+      .overview-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 282px;
+        gap: 24px;
+        align-items: start;
+      }
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+      .panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 19px 22px;
+        border-bottom: 1px solid var(--line);
+        gap: 12px;
+      }
+      .panel-header .muted {
+        font-size: 12px;
+      }
+      .panel-footer {
+        padding: 13px 22px;
+        border-top: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .section-label {
+        font-size: 12px;
+        color: var(--muted);
+        font-weight: 500;
+      }
+      .task-head,
+      .task-row {
+        display: grid;
+        grid-template-columns: minmax(180px, 1.6fr) minmax(
+            112px,
+            0.8fr
+          ) 98px 18px;
+        gap: 18px;
+        align-items: center;
+        padding: 11px 22px;
+      }
+      .task-head {
+        font-size: 11px;
+        color: #748198;
+        background: #fbfcfe;
+        border-bottom: 1px solid var(--line);
+      }
+      .task-row {
+        padding-top: var(--row-pad);
+        padding-bottom: var(--row-pad);
+        border-bottom: 1px solid #edf1f7;
+        transition: background 0.15s;
+      }
+      .task-row:last-child {
+        border-bottom: 0;
+      }
+      .task-row:hover {
+        background: #f8faff;
+      }
+      .task-title {
+        font-weight: 600;
+        font-size: 13px;
+        line-height: 1.65;
+        color: var(--ink);
+        display: block;
+      }
+      .task-sub {
+        display: block;
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 5px;
+      }
+      .task-phase {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 5px;
+      }
+      .progress-value {
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+        margin-bottom: 7px;
+      }
+      .progress-value b {
+        font-size: 14px;
+        color: var(--ink);
+        font-weight: 550;
+      }
+      .track {
+        height: 4px;
+        border-radius: 10px;
+        background: #edf1f7;
+        overflow: hidden;
+      }
+      .track i {
+        display: block;
+        height: 100%;
+        background: var(--blue);
+        border-radius: 10px;
+      }
+      .attention-panel {
+        padding: 22px;
+      }
+      .attention-icon {
+        width: 31px;
+        height: 31px;
+        display: grid;
+        place-items: center;
+        background: var(--amber-soft);
+        color: var(--amber);
+        border-radius: 7px;
+      }
+      .attention-panel h3 {
+        margin-top: 19px;
+        font-size: 14px;
+        line-height: 1.7;
+      }
+      .attention-panel p {
+        margin-top: 7px;
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.8;
+      }
+      .attention-paper {
+        font-size: 12px;
+        line-height: 1.6;
+        color: #4b5c75;
+        background: #f7f9fd;
+        padding: 11px 12px;
+        border-radius: 5px;
+        margin: 15px 0;
+      }
+      .attention-panel .btn {
+        width: 100%;
+        margin-top: 4px;
+      }
+      .side-section {
+        padding: 4px 2px;
+      }
+      .side-section h2 {
+        font-size: 14px;
+        margin-bottom: 16px;
+      }
+      .recent-item {
+        display: flex;
+        gap: 11px;
+        padding: 13px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .recent-item:last-child {
+        border-bottom: 0;
+      }
+      .file-mark {
+        width: 31px;
+        height: 35px;
+        border: 1px solid var(--line);
+        background: #fff;
+        display: grid;
+        place-items: center;
+        border-radius: 5px;
+        color: #7990af;
+        flex: none;
+      }
+      .recent-item strong {
+        font-size: 12px;
+        font-weight: 550;
+        display: block;
+      }
+      .recent-item small {
+        font-size: 11px;
+        display: block;
+        color: var(--muted);
+        margin-top: 3px;
+      }
+      .output-list {
+        padding: 0 22px;
+      }
+      .output-row {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        padding: 18px 0;
+        border-bottom: 1px solid #edf1f7;
+      }
+      .output-row:last-child {
+        border-bottom: 0;
+      }
+      .output-row strong {
+        font-size: 13px;
+        font-weight: 550;
+      }
+      .output-row p {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 3px;
+      }
+      .result-icon {
+        width: 36px;
+        height: 36px;
+        background: var(--blue-soft);
+        color: var(--blue);
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        flex: none;
+      }
+      .overview-note {
+        margin-top: 20px;
+        color: var(--muted);
+        font-size: 11px;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 15px;
+        flex-wrap: wrap;
+        margin-bottom: 20px;
+      }
+      .segments {
+        display: flex;
+        align-items: center;
+        background: #eaf0f8;
+        padding: 3px;
+        border-radius: 7px;
+        gap: 3px;
+        flex-wrap: wrap;
+      }
+      .segments button {
+        background: transparent;
+        border: 0;
+        padding: 7px 12px;
+        border-radius: 5px;
+        font-size: 12px;
+        color: #63738b;
+        min-height: 32px;
+      }
+      .segments button.active {
+        background: #fff;
+        color: var(--blue);
+        box-shadow: 0 1px 3px #233c6b13;
+      }
+      .segments small {
+        font-size: 11px;
+        margin-left: 5px;
+      }
+      .search-field {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 7px 11px;
+        background: #fff;
+        color: #8796aa;
+        min-width: 220px;
+      }
+      .search-field input {
+        border: 0;
+        outline: none;
+        min-width: 0;
+        width: 100%;
+        background: transparent;
+        font-size: 12px;
+      }
+      .search-field:focus-within {
+        border-color: var(--blue);
+      }
+      .table-full .task-head,
+      .table-full .task-row {
+        grid-template-columns: minmax(220px, 1.7fr) 130px 130px 100px 18px;
+      }
+      .table-time {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .back-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 20px;
+      }
+      .back-link:hover {
+        color: var(--blue);
+      }
+      .detail-heading {
+        margin-bottom: 23px;
+      }
+      .detail-heading h1 {
+        font-size: 25px;
+      }
+      .detail-meta {
+        font-size: 12px;
+        color: var(--muted);
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+      }
+      .detail-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .detail-summary {
+        display: flex;
+        gap: 30px;
+        padding: 18px 23px;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        margin-bottom: 26px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .summary-item {
+        display: flex;
+        gap: 10px;
+        align-items: baseline;
+      }
+      .summary-item span {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .summary-item strong {
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.4px;
+        font-variant-numeric: tabular-nums;
+      }
+      .detail-summary .summary-progress {
+        margin-left: auto;
+        min-width: 150px;
+      }
+      .tabs {
+        display: flex;
+        gap: 28px;
+        border-bottom: 1px solid #dbe4f0;
+        margin-bottom: 25px;
+      }
+      .tabs a {
+        padding: 0 2px 12px;
+        color: var(--muted);
+        font-size: 13px;
+        border-bottom: 2px solid transparent;
+      }
+      .tabs a.active {
+        border-color: var(--blue);
+        color: var(--blue);
+        font-weight: 600;
+      }
+      .execution-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 260px;
+        gap: 23px;
+        align-items: start;
+      }
+      .stage-line {
+        display: flex;
+        gap: 0;
+        padding: 20px 23px;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        margin-bottom: 20px;
+      }
+      .stage {
+        position: relative;
+        flex: 1;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .stage:not(:last-child):after {
+        content: "";
+        height: 1px;
+        flex: 1;
+        background: var(--line);
+        margin-right: 12px;
+        margin-left: 4px;
+      }
+      .stage-dot {
+        width: 21px;
+        height: 21px;
+        border: 1px solid var(--line);
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        font-size: 11px;
+        background: #f9fbfe;
+      }
+      .stage.done .stage-dot {
+        background: var(--blue-soft);
+        border-color: var(--blue-soft);
+        color: var(--blue);
+      }
+      .stage.current {
+        color: var(--blue);
+        font-weight: 600;
+      }
+      .stage.current .stage-dot {
+        background: var(--blue);
+        border-color: var(--blue);
+        color: white;
+      }
+      .browser-title {
+        padding: 17px 20px;
+        background: white;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .browser-title strong {
+        font-size: 13px;
+      }
+      .browser-location {
+        padding: 9px 16px;
+        background: #f3f6fb;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #748198;
+        font-size: 11px;
+        border-bottom: 1px solid var(--line);
+      }
+      .browser-location code {
+        font-family: inherit;
+        overflow-wrap: anywhere;
+      }
+      .browser-canvas {
+        padding: 25px 32px 28px;
+        background: #fff;
+        min-height: 290px;
+      }
+      .journal-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #6c7c94;
+        font-size: 10px;
+        letter-spacing: 1.4px;
+        padding-bottom: 13px;
+        border-bottom: 2px solid #263f64;
+      }
+      .journal-head b {
+        color: #263f64;
+        letter-spacing: 0;
+        font-family: Georgia, serif;
+        font-size: 16px;
+      }
+      .article-type {
+        margin-top: 20px;
+        font-size: 10px;
+        letter-spacing: 1.1px;
+        color: #8190a5;
+      }
+      .browser-canvas h3 {
+        font-family: Georgia, "Noto Serif CJK SC", serif;
+        font-size: 22px;
+        line-height: 1.45;
+        max-width: 580px;
+        margin: 9px 0 12px;
+        color: #1d3150;
+      }
+      .browser-canvas .authors {
+        font-size: 11px;
+        color: #62748c;
+        margin-bottom: 18px;
+      }
+      .paper-actions {
+        display: flex;
+        gap: 9px;
+        margin-bottom: 22px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .article-copy {
+        font-family: Georgia, "Noto Serif CJK SC", serif;
+        line-height: 1.8;
+        font-size: 13px;
+        color: #516079;
+        max-width: 650px;
+      }
+      .browser-footer {
+        padding: 11px 17px;
+        border-top: 1px solid var(--line);
+        background: #fbfcfe;
+        font-size: 11px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .guidance {
+        padding: 20px;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      .guidance label {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 9px;
+      }
+      .guidance p {
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.8;
+        margin-bottom: 14px;
+      }
+      .guidance textarea {
+        width: 100%;
+        min-height: 100px;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px;
+        font-size: 12px;
+        background: #fcfdff;
+        line-height: 1.7;
+      }
+      .guidance .btn {
+        margin-top: 12px;
+        width: 100%;
+      }
+      .guidance-status {
+        font-size: 11px;
+        margin-top: 12px;
+        color: var(--blue);
+      }
+      .facts {
+        margin-top: 19px;
+        padding: 0 3px;
+      }
+      .facts h3 {
+        font-size: 12px;
+        margin-bottom: 12px;
+      }
+      .fact-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 15px;
+        padding: 8px 0;
+        font-size: 12px;
+        border-bottom: 1px solid #e6edf6;
+      }
+      .fact-row span:first-child {
+        color: var(--muted);
+      }
+      .execution-message {
+        padding: 45px 35px;
+        background: #fff;
+        text-align: center;
+      }
+      .execution-message .large-icon {
+        width: 52px;
+        height: 52px;
+        background: var(--blue-soft);
+        color: var(--blue);
+        display: grid;
+        place-items: center;
+        border-radius: 12px;
+        margin: 0 auto 20px;
+      }
+      .execution-message h3 {
+        font-size: 17px;
+        margin-bottom: 10px;
+      }
+      .execution-message p {
+        font-size: 13px;
+        color: var(--muted);
+        max-width: 480px;
+        margin: auto;
+        line-height: 1.9;
+      }
+      .execution-message .track {
+        max-width: 330px;
+        margin: 23px auto 10px;
+        height: 5px;
+      }
+      .execution-message .btn {
+        margin-top: 20px;
+      }
+      .result-banner {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        background: var(--blue-soft);
+        color: #365e99;
+        border: 1px solid #d6e5fb;
+        border-radius: 7px;
+        padding: 15px 19px;
+        margin-bottom: 21px;
+        font-size: 13px;
+      }
+      .result-banner strong {
+        display: block;
+        font-weight: 600;
+      }
+      .result-banner p {
+        margin-top: 3px;
+        font-size: 12px;
+      }
+      .result-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      .result-table th {
+        text-align: left;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--muted);
+        background: #fbfcfe;
+        padding: 11px 20px;
+        border-bottom: 1px solid var(--line);
+      }
+      .result-table td {
+        padding: 18px 20px;
+        border-bottom: 1px solid #edf1f7;
+      }
+      .result-table tr:last-child td {
+        border-bottom: 0;
+      }
+      .result-table td:first-child {
+        min-width: 220px;
+      }
+      .result-table strong {
+        font-size: 13px;
+        font-weight: 550;
+        display: block;
+      }
+      .result-table small {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        margin-top: 4px;
+      }
+      .activity-list {
+        padding: 5px 25px;
+      }
+      .activity-row {
+        display: grid;
+        grid-template-columns: 55px 16px 1fr;
+        gap: 14px;
+        padding: 22px 0;
+        border-bottom: 1px solid #edf1f7;
+        font-size: 13px;
+      }
+      .activity-row:last-child {
+        border-bottom: 0;
+      }
+      .activity-row time {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .activity-row p {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .activity-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--blue);
+        margin-top: 8px;
+      }
+      .library-list {
+        padding: 0 24px;
+      }
+      .literature-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 17px;
+        padding: 23px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .literature-row:last-child {
+        border-bottom: 0;
+      }
+      .paper-number {
+        width: 31px;
+        height: 39px;
+        background: #f3f7ff;
+        border: 1px solid #d8e5fa;
+        border-radius: 4px;
+        display: grid;
+        place-items: center;
+        color: #7291c3;
+        flex: none;
+        margin-top: 3px;
+      }
+      .literature-row h3 {
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.65;
+      }
+      .literature-row p {
+        font-size: 12px;
+        color: var(--muted);
+        margin: 6px 0 10px;
+      }
+      .resource-tags {
+        display: flex;
+        gap: 7px;
+        flex-wrap: wrap;
+      }
+      .resource-tag {
+        font-size: 11px;
+        border: 1px solid var(--line);
+        padding: 2px 7px;
+        border-radius: 4px;
+        color: #61758e;
+      }
+      .resource-tag.available {
+        border-color: #dae6fa;
+        background: #f6f9ff;
+        color: #4a72af;
+      }
+      .reader-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 290px;
+        gap: 25px;
+        align-items: start;
+      }
+      .reading {
+        padding: 36px 42px;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+      }
+      .reading h2 {
+        font-size: 23px;
+        line-height: 1.5;
+        font-weight: 600;
+        letter-spacing: -0.4px;
+        margin: 15px 0 12px;
+      }
+      .reading .paper-meta {
+        font-size: 12px;
+        color: var(--muted);
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 24px;
+        margin-bottom: 26px;
+      }
+      .reading h3 {
+        font-size: 17px;
+        margin: 25px 0 12px;
+      }
+      .reading p {
+        font-size: 16px;
+        line-height: 1.95;
+        color: #3c4d66;
+        margin: 12px 0;
+      }
+      .reading .source-highlight {
+        background: #edf4ff;
+        box-shadow: 0 0 0 5px #edf4ff;
+        border-radius: 1px;
+      }
+      .evidence-panel {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 22px;
+      }
+      .evidence-panel h3 {
+        margin-bottom: 16px;
+      }
+      .claim {
+        font-size: 13px;
+        line-height: 1.9;
+        color: #41516b;
+        margin-bottom: 16px;
+      }
+      .citation {
+        background: #edf4ff;
+        color: var(--blue);
+        border: 0;
+        padding: 1px 5px;
+        border-radius: 3px;
+        font-size: 11px;
+        margin-left: 4px;
+        vertical-align: baseline;
+      }
+      .evidence-quote {
+        font-size: 12px;
+        color: #536781;
+        line-height: 1.9;
+        border-left: 2px solid #a8c9ff;
+        padding-left: 12px;
+        margin-top: 17px;
+      }
+      .evidence-panel .small {
+        margin-top: 15px;
+      }
+      .reader-tools {
+        display: flex;
+        gap: 8px;
+        margin-top: 22px;
+        flex-wrap: wrap;
+      }
+      .settings-grid {
+        display: grid;
+        grid-template-columns: 180px minmax(0, 1fr);
+        gap: 30px;
+      }
+      .settings-nav {
+        display: grid;
+        gap: 5px;
+        align-content: start;
+      }
+      .settings-nav button {
+        text-align: left;
+        padding: 10px 13px;
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .settings-nav button.active {
+        background: #e7effd;
+        color: var(--blue);
+        font-weight: 550;
+      }
+      .settings-body {
+        max-width: 790px;
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 28px 30px;
+      }
+      .settings-body > p {
+        font-size: 12px;
+        color: var(--muted);
+        margin: 7px 0 25px;
+      }
+      .setting-row {
+        padding: 19px 0;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        align-items: center;
+      }
+      .setting-row:last-child {
+        border-bottom: 0;
+      }
+      .setting-row h3 {
+        font-size: 13px;
+      }
+      .setting-row p {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .field {
+        margin-bottom: 20px;
+      }
+      .field label,
+      .field-label {
+        display: block;
+        font-size: 13px;
+        font-weight: 500;
+        margin-bottom: 7px;
+      }
+      .field input,
+      .field select,
+      .field textarea {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid #d9e2f0;
+        border-radius: 6px;
+        background: #fff;
+        line-height: 1.6;
+        font-size: 13px;
+      }
+      .field input[readonly] {
+        background: #f7f9fc;
+        color: var(--muted);
+      }
+      .field small {
+        font-size: 11px;
+        color: var(--muted);
+        display: block;
+        margin-top: 6px;
+      }
+      .settings-actions {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 12px;
+        margin-top: 24px;
+      }
+      .settings-actions p {
+        font-size: 12px;
+        color: var(--blue);
+      }
+      .check-row {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 11px 0;
+        font-size: 13px;
+      }
+      .check-row input {
+        accent-color: var(--blue);
+        width: 15px;
+        height: 15px;
+      }
+      .notice {
+        background: #f6f9fe;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 12px 14px;
+        font-size: 12px;
+        color: var(--muted);
+        line-height: 1.8;
+      }
+      .settings-notice {
+        margin-top: 23px;
+      }
+      dialog {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 0;
+        width: min(530px, calc(100vw - 32px));
+        max-height: calc(100vh - 48px);
+        box-shadow: var(--shadow);
+        color: var(--ink);
+        background: #fff;
+      }
+      dialog::backdrop {
+        background: #14244055;
+        backdrop-filter: blur(2px);
+      }
+      .dialog-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 22px 25px 18px;
+        border-bottom: 1px solid var(--line);
+      }
+      .dialog-head h2 {
+        font-size: 18px;
+      }
+      .dialog-body {
+        padding: 25px;
+      }
+      .dialog-foot {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        padding: 17px 25px;
+        background: #f8faff;
+        border-top: 1px solid var(--line);
+      }
+      .dialog-body > .muted {
+        font-size: 13px;
+        margin-bottom: 20px;
+      }
+      .operation-options {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 9px;
+        margin-bottom: 22px;
+      }
+      .operation-option {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 12px 8px;
+        text-align: center;
+        background: white;
+        font-size: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+        align-items: center;
+      }
+      .operation-option.active {
+        border-color: #9ebffd;
+        background: #f1f6ff;
+        color: var(--blue);
+      }
+      .toast {
+        position: fixed;
+        bottom: 24px;
+        left: calc(50% + 70px);
+        transform: translateX(-50%);
+        padding: 12px 18px;
+        background: #192b47;
+        color: #fff;
+        box-shadow: 0 4px 18px #192b4729;
+        border-radius: 8px;
+        z-index: 90;
+        font-size: 13px;
+        max-width: min(520px, calc(100vw - 32px));
+        display: flex;
+        gap: 9px;
+        align-items: center;
+      }
+      .design-popover {
+        position: absolute;
+        right: 24px;
+        top: 56px;
+        z-index: 50;
+        width: 260px;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        box-shadow: var(--shadow);
+        padding: 18px;
+      }
+      .design-popover h3 {
+        margin-bottom: 15px;
+      }
+      .design-popover label {
+        display: block;
+        font-size: 12px;
+        margin-top: 12px;
+      }
+      .design-popover select {
+        display: block;
+        width: 100%;
+        margin-top: 6px;
+        padding: 7px;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: #fff;
+        font-size: 12px;
+      }
+      .design-popover p {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 14px;
+      }
+      .mobile-backdrop {
+        display: none;
+      }
+      .figure-placeholder {
+        background: #f8faff;
+        border: 1px solid var(--line);
+        padding: 26px;
+        text-align: center;
+        color: #6b7e9a;
+        margin-top: 25px;
+        font-size: 12px;
+      }
+      .step-examples {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        margin-bottom: 22px;
+      }
+      .step-example {
+        padding: 14px;
+        background: #f7f9fd;
+        border-radius: 6px;
+      }
+      .step-example b {
+        font-size: 12px;
+        font-weight: 550;
+        display: block;
+      }
+      .step-example small {
+        display: block;
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 5px;
+      }
+      body[data-density="compact"] {
+        --row-pad: 12px;
+      }
+      .content[data-layout="focus"] .overview-grid {
+        grid-template-columns: 1fr;
+      }
+      .content[data-layout="focus"] .overview-side {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+      }
+      .content[data-layout="focus"] .attention-panel h3 {
+        margin-top: 12px;
+      }
+      .content[data-layout="focus"] .attention-paper {
+        display: none;
+      }
+      .content[data-layout="focus"] .side-section {
+        padding: 20px;
+        border: 1px solid var(--line);
+        background: white;
+        border-radius: 10px;
+      }
+      @media (min-width: 1600px) {
+        .content {
+          padding: 38px 48px;
+        }
+        .overview-grid {
+          grid-template-columns: minmax(0, 1fr) 310px;
+        }
+        .task-row {
+          padding-top: 24px;
+          padding-bottom: 24px;
+        }
+      }
+      @media (max-width: 1250px) {
+        :root {
+          --rail: 190px;
+        }
+        .content {
+          padding: 28px 25px;
+        }
+        .topbar {
+          padding: 0 25px;
+        }
+        .overview-grid {
+          grid-template-columns: minmax(0, 1fr) 250px;
+          gap: 18px;
+        }
+        .task-head,
+        .task-row {
+          grid-template-columns: minmax(150px, 1fr) 110px 75px 14px;
+          gap: 11px;
+          padding-left: 17px;
+          padding-right: 17px;
+        }
+        .table-full .task-head,
+        .table-full .task-row {
+          grid-template-columns: minmax(180px, 1fr) 125px 100px 90px 16px;
+          gap: 14px;
+        }
+        .attention-panel {
+          padding: 19px;
+        }
+        .execution-layout {
+          grid-template-columns: minmax(0, 1fr) 238px;
+          gap: 18px;
+        }
+        .browser-canvas {
+          padding: 22px;
+        }
+        .reader-layout {
+          grid-template-columns: minmax(0, 1fr) 260px;
+          gap: 20px;
+        }
+        .reading {
+          padding: 29px;
+        }
+        .brand {
+          font-size: 18px;
+        }
+      }
+      @media (max-width: 1050px) {
+        .overview-grid {
+          grid-template-columns: 1fr;
+        }
+        .overview-side {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 23px;
+        }
+        .attention-panel h3 {
+          margin-top: 12px;
+        }
+        .side-section {
+          padding: 18px 5px;
+        }
+        .execution-layout {
+          grid-template-columns: 1fr;
+        }
+        .execution-side {
+          display: grid;
+          grid-template-columns: 1.15fr 1fr;
+          gap: 20px;
+        }
+        .facts {
+          margin-top: 4px;
+        }
+        .reader-layout {
+          grid-template-columns: 1fr;
+        }
+        .evidence-panel {
+          max-width: none;
+        }
+        .table-full .task-head,
+        .table-full .task-row {
+          grid-template-columns: minmax(150px, 1fr) 115px 90px 14px;
+        }
+        .table-time {
+          display: none;
+        }
+      }
+      @media (max-width: 760px) {
+        .shell {
+          display: block;
+        }
+        .rail {
+          position: fixed;
+          left: 0;
+          top: 0;
+          bottom: 0;
+          width: 230px;
+          height: 100dvh;
+          transform: translateX(-100%);
+          transition: transform 0.18s;
+          z-index: 60;
+        }
+        .rail.open {
+          transform: translateX(0);
+        }
+        .mobile-backdrop.visible {
+          display: block;
+          position: fixed;
+          inset: 0;
+          background: #14244055;
+          z-index: 55;
+        }
+        .menu-button {
+          display: inline-flex;
+        }
+        .topbar {
+          padding: 10px 17px;
+          min-height: 61px;
+        }
+        .top-actions {
+          gap: 6px;
+        }
+        .preview-label {
+          display: none;
+        }
+        .content {
+          padding: 24px 18px;
+        }
+        .crumbs {
+          gap: 7px;
+        }
+        .page-heading {
+          gap: 12px;
+        }
+        .page-heading h1 {
+          font-size: 25px;
+        }
+        .page-heading p {
+          font-size: 12px;
+        }
+        .summary-line {
+          gap: 12px;
+        }
+        .overview-grid {
+          gap: 20px;
+        }
+        .overview-side {
+          grid-template-columns: 1fr 1fr;
+          gap: 18px;
+        }
+        .task-head,
+        .task-row {
+          grid-template-columns: minmax(130px, 1fr) 112px 64px 14px;
+          gap: 10px;
+          padding-left: 15px;
+          padding-right: 15px;
+        }
+        .task-title {
+          font-size: 13px;
+        }
+        .task-sub {
+          font-size: 11px;
+        }
+        .panel-header {
+          padding: 16px;
+        }
+        .panel-header h2 {
+          font-size: 15px;
+        }
+        .detail-heading h1 {
+          font-size: 23px;
+        }
+        .detail-heading {
+          flex-direction: column;
+          gap: 15px;
+        }
+        .detail-summary {
+          gap: 15px 25px;
+          padding: 16px;
+        }
+        .detail-summary .summary-progress {
+          min-width: 100px;
+        }
+        .summary-item strong {
+          font-size: 20px;
+        }
+        .stage-line {
+          padding: 15px;
+        }
+        .stage {
+          font-size: 11px;
+          gap: 5px;
+        }
+        .stage:not(:last-child):after {
+          margin-right: 7px;
+          margin-left: 0;
+        }
+        .settings-grid {
+          grid-template-columns: 1fr;
+          gap: 20px;
+        }
+        .settings-nav {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 3px;
+        }
+        .settings-nav button {
+          padding: 8px 11px;
+          font-size: 12px;
+        }
+        .settings-body {
+          padding: 22px;
+        }
+        .toast {
+          left: 50%;
+        }
+        .design-popover {
+          right: 14px;
+          top: 54px;
+        }
+        .reading {
+          padding: 25px;
+        }
+        .browser-canvas h3 {
+          font-size: 20px;
+        }
+      }
+      @media (max-width: 520px) {
+        .overview-side,
+        .content[data-layout="focus"] .overview-side {
+          grid-template-columns: 1fr;
+        }
+        .side-section {
+          padding: 6px 2px;
+        }
+        .summary-line .sep {
+          display: none;
+        }
+        .summary-line {
+          font-size: 11px;
+          gap: 10px;
+        }
+        .summary-line b {
+          font-size: 13px;
+        }
+        .task-head {
+          display: none;
+        }
+        .task-row,
+        .table-full .task-row {
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 10px 13px;
+          padding: 18px 16px;
+        }
+        .task-row > div:first-child {
+          grid-column: 1/-1;
+        }
+        .task-row .row-chevron {
+          display: none;
+        }
+        .task-row .task-state-cell {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          flex-wrap: wrap;
+        }
+        .task-row .task-phase {
+          margin: 0;
+          font-size: 11px;
+        }
+        .task-row .task-progress {
+          width: 72px;
+        }
+        .task-row .progress-value {
+          margin-bottom: 5px;
+        }
+        .task-title {
+          font-size: 14px;
+        }
+        .task-sub {
+          font-size: 11px;
+        }
+        .toolbar {
+          gap: 13px;
+        }
+        .search-field {
+          width: 100%;
+          min-width: 0;
+        }
+        .segments {
+          width: 100%;
+          justify-content: space-between;
+          gap: 0;
+        }
+        .segments button {
+          padding: 7px 8px;
+          font-size: 11px;
+        }
+        .output-row {
+          flex-wrap: wrap;
+        }
+        .output-row > .text-link {
+          margin-left: 51px;
+          font-size: 12px;
+        }
+        .output-list {
+          padding: 0 17px;
+        }
+        .page-heading {
+          align-items: flex-start;
+        }
+        .page-heading .btn {
+          font-size: 12px;
+          padding: 7px 10px;
+        }
+        .page-heading p {
+          max-width: 235px;
+        }
+        .detail-summary .summary-progress {
+          flex-basis: 100%;
+          margin: 0;
+        }
+        .detail-meta {
+          gap: 5px 14px;
+          font-size: 11px;
+        }
+        .detail-actions {
+          width: 100%;
+        }
+        .detail-actions > .pill {
+          margin-right: auto;
+        }
+        .stage-line {
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        .stage {
+          flex: 1 1 40%;
+        }
+        .stage:after {
+          display: none;
+        }
+        .execution-side {
+          grid-template-columns: 1fr;
+        }
+        .browser-title {
+          padding: 14px;
+        }
+        .browser-title > .row {
+          gap: 7px;
+          flex-wrap: wrap;
+        }
+        .browser-title strong {
+          font-size: 12px;
+        }
+        .browser-canvas {
+          padding: 18px;
+        }
+        .journal-head {
+          letter-spacing: 0.3px;
+          flex-wrap: wrap;
+        }
+        .journal-head b {
+          font-size: 14px;
+        }
+        .browser-canvas h3 {
+          font-size: 19px;
+        }
+        .browser-footer {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 4px;
+        }
+        .result-table thead {
+          display: none;
+        }
+        .result-table,
+        .result-table tbody,
+        .result-table tr,
+        .result-table td {
+          display: block;
+        }
+        .result-table tr {
+          padding: 17px;
+          border-bottom: 1px solid var(--line);
+        }
+        .result-table td {
+          padding: 5px 0;
+          border: 0;
+          min-width: 0 !important;
+        }
+        .result-table td:nth-child(2) {
+          display: inline-block;
+          margin-right: 10px;
+        }
+        .result-table td:last-child {
+          display: inline-block;
+        }
+        .library-list {
+          padding: 0 17px;
+        }
+        .literature-row {
+          gap: 11px;
+          flex-wrap: wrap;
+        }
+        .literature-row > .btn {
+          margin-left: 42px;
+        }
+        .literature-row .grow {
+          flex-basis: calc(100% - 44px);
+        }
+        .reading {
+          padding: 23px 20px;
+        }
+        .reading h2 {
+          font-size: 21px;
+        }
+        .reading p {
+          font-size: 15px;
+        }
+        .settings-body {
+          padding: 20px;
+        }
+        .setting-row {
+          gap: 14px;
+          flex-wrap: wrap;
+        }
+        .dialog-head {
+          padding: 18px 20px;
+        }
+        .dialog-body {
+          padding: 20px;
+        }
+        .dialog-foot {
+          padding: 16px 20px;
+        }
+        .operation-options {
+          gap: 6px;
+        }
+        .operation-option {
+          font-size: 11px;
+        }
+        .execution-message {
+          padding: 35px 20px;
+        }
+        .step-examples {
+          grid-template-columns: 1fr;
+        }
+        .topbar .avatar {
+          display: none;
+        }
+        .tabs {
+          gap: 24px;
+        }
+        .detail-heading .page-heading {
+          margin: 0;
+        }
+      }
+      @media (pointer: coarse) {
+        .btn,
+        .nav a,
+        .settings-nav button,
+        .segments button {
+          min-height: 42px;
+        }
+        .search-field input,
+        .field input,
+        .field select,
+        .field textarea,
+        .guidance textarea {
+          font-size: 16px;
+        }
+      }
+      .task-title {
+        font-size: 14px;
+      }
+      .task-sub {
+        font-size: 12px;
+      }
+      @media (max-width: 1050px) {
+        .overview-grid > .stack,
+        .content[data-layout="focus"] .overview-grid > .stack {
+          display: contents;
+        }
+        .overview-grid .attention-panel {
+          order: 0;
+        }
+        .overview-grid > div > .panel:first-child {
+          order: 1;
+        }
+        .overview-grid > div > .panel:nth-child(2) {
+          order: 2;
+        }
+        .overview-grid .side-section {
+          order: 3;
+        }
+        .overview-grid .overview-note {
+          order: 4;
+        }
+        .overview-grid .attention-paper {
+          display: none;
+        }
+        .overview-grid .attention-panel .btn {
+          width: auto;
+          margin-top: 15px;
+        }
+        .overview-grid .attention-panel h3 {
+          margin-top: 10px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *:before,
+        *:after {
+          animation: none !important;
+          transition: none !important;
+          scroll-behavior: auto !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip" href="#page">跳到主要内容</a>
+    <div class="mobile-backdrop" id="mobile-backdrop"></div>
+    <div class="shell">
+      <aside class="rail" id="rail" aria-label="主导航">
+        <a href="#overview" class="brand" aria-label="SciRetriever 工作台"
+          >sci<span>retriever</span><i class="brand-mark" aria-hidden="true"></i
+        ></a>
+        <div class="workspace-label">工作空间</div>
+        <nav class="nav" id="navigation"></nav>
+        <div class="rail-bottom">
+          <a class="library-switch" href="#settings/library"
+            ><span class="database-mark" data-icon="database"></span
+            ><span class="grow"
+              ><strong id="workspace-label">研究文献库</strong
+              ><small>合成示例 · 未连接真实数据</small></span
+            ><span data-icon="chevron" class="muted"></span
+          ></a>
+        </div>
+      </aside>
+      <div class="main-shell">
+        <header class="topbar">
+          <div class="row">
+            <button
+              class="btn ghost icon-only menu-button"
+              id="menu-toggle"
+              aria-label="打开导航"
+              aria-expanded="false"
+              aria-controls="rail"
+              data-icon="menu"
+            ></button>
+            <div class="crumbs" id="crumbs"></div>
+          </div>
+          <div class="top-actions">
+            <span class="preview-label">交互设计稿 · 合成数据</span
+            ><button
+              class="btn ghost icon-only"
+              id="design-toggle"
+              aria-label="设计选项"
+              aria-expanded="false"
+              aria-controls="design-options"
+              data-icon="sliders"
+            ></button
+            ><span class="avatar" aria-label="示例用户">研</span>
+          </div>
+        </header>
+        <main class="content" id="page" tabindex="-1"></main>
+      </div>
+    </div>
+    <section
+      class="design-popover"
+      id="design-options"
+      hidden
+      aria-label="设计选项"
+    >
+      <h3>设计选项</h3>
+      <label for="density">信息密度</label
+      ><select id="density">
+        <option value="comfortable">舒展</option>
+        <option value="compact">紧凑</option></select
+      ><label for="layout">首页布局</label
+      ><select id="layout">
+        <option value="balanced">任务与待处理并列</option>
+        <option value="focus">任务占满主区</option></select
+      ><label for="scenario">首页状态</label
+      ><select id="scenario">
+        <option value="normal">正在工作</option>
+        <option value="empty">初次使用</option>
+        <option value="disconnected">连接中断</option>
+      </select>
+      <p>所有操作仅改变本页示例，刷新后重置。</p>
+    </section>
+    <dialog id="new-task-dialog" aria-labelledby="new-task-title">
+      <form id="new-task-form">
+        <div class="dialog-head">
+          <h2 id="new-task-title">新建任务</h2>
+          <button
+            type="button"
+            class="btn ghost icon-only"
+            data-close-dialog="new-task-dialog"
+            aria-label="关闭新建任务"
+            data-icon="close"
+          ></button>
+        </div>
+        <div class="dialog-body">
+          <p class="muted">选择要完成的工作，并明确这次处理的文献范围。</p>
+          <span class="field-label">处理目标</span>
+          <div class="operation-options" id="operation-options"></div>
+          <div class="field">
+            <label for="new-title">任务名称</label
+            ><input
+              id="new-title"
+              name="title"
+              maxlength="80"
+              required
+              value="补齐选中文献的 PDF"
+            />
+          </div>
+          <div class="field">
+            <label for="new-scope">文献范围</label
+            ><select id="new-scope" name="scope">
+              <option value="6">当前选中的 6 篇文献（示例）</option>
+              <option value="12">
+                已保存集合中的 12 篇文献（示例）
+              </option></select
+            ><small>本次任务只处理选定范围。</small>
+          </div>
+          <div class="notice">
+            这是离线设计稿。创建后可查看示例任务，不会访问数据库、浏览器或外部服务。
+          </div>
+        </div>
+        <div class="dialog-foot">
+          <button type="button" class="btn" data-close-dialog="new-task-dialog">
+            取消</button
+          ><button type="submit" class="btn primary">创建任务</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="cancel-dialog" aria-labelledby="cancel-title">
+      <div class="dialog-head">
+        <h2 id="cancel-title">取消当前任务？</h2>
+        <button
+          class="btn ghost icon-only"
+          data-close-dialog="cancel-dialog"
+          aria-label="关闭取消确认"
+          data-icon="close"
+        ></button>
+      </div>
+      <div class="dialog-body">
+        <p>已经保存的材料和结果会保留，尚未完成的处理将停止。</p>
+        <p class="muted small" style="margin-top: 12px; margin-bottom: 0">
+          本设计稿仅演示取消后的状态。
+        </p>
+      </div>
+      <div class="dialog-foot">
+        <button class="btn" data-close-dialog="cancel-dialog">继续任务</button
+        ><button class="btn danger" id="confirm-cancel">确认取消</button>
+      </div>
+    </dialog>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <script>
+      (() => {
+        "use strict";
+        // All tasks, literature, excerpts and state below are synthetic design fixtures.
+        // No fetch, local storage, credential, filesystem or backend connection is used.
+        const paths = {
+          library: '<path d="M4 4v16M8 4v16M13 5l4-1 4 15-4 1zM3 8h6M3 16h6"/>',
+          browser:
+            '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/>',
+          document:
+            '<path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8zM14 3v5h5M9 12h6M9 16h6"/>',
+          download: '<path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/>',
+          eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+          cursor: '<path d="m5 3 14 10-7 1-3 7z"/>',
+          pause: '<path d="M8 4v16M16 4v16"/>',
+          play: '<path d="m8 4 12 8-12 8z"/>',
+          arrow: '<path d="M4 12h15m-5-5 5 5-5 5"/>',
+          back: '<path d="M20 12H5m5-5-5 5 5 5"/>',
+          chevron: '<path d="m9 5 7 7-7 7"/>',
+          close: '<path d="m6 6 12 12M6 18 18 6"/>',
+          check: '<path d="m5 12 4 4L19 6"/>',
+          plus: '<path d="M12 5v14M5 12h14"/>',
+          search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
+          grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+          tasks:
+            '<rect x="5" y="4" width="15" height="17" rx="2"/><path d="M9 2v4m7-4v4M9 11h7M9 16h5"/>',
+          settings:
+            '<path d="M4 7h4m6 0h6M4 17h10m6 0h0"/><circle cx="11" cy="7" r="3"/><circle cx="17" cy="17" r="3"/>',
+          sliders:
+            '<path d="M4 7h4m6 0h6M4 17h10m6 0h0"/><circle cx="11" cy="7" r="3"/><circle cx="17" cy="17" r="3"/>',
+          database:
+            '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0"/>',
+          help: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 17h.01"/>',
+          clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/>',
+          menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+          layers: '<path d="m3 7 9-4 9 4-9 4zM3 12l9 4 9-4M3 17l9 4 9-4"/>',
+          link: '<path d="m10 13 4-4M8 16l-1 1a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0m0 12a4 4 0 0 0 6 0l5-5a4 4 0 0 0-6-6l-1 1"/>',
+          lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4"/>',
+          refresh:
+            '<path d="M20 8a8 8 0 0 0-14-2L3 9m0-5v5h5M4 16a8 8 0 0 0 14 2l3-3m0 5v-5h-5"/>',
+        };
+        const icon = (name, small = false) =>
+          `<svg class="icon${small ? " sm" : ""}" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.document}</svg>`;
+        const esc = (value) =>
+          String(value).replace(
+            /[&<>"']/g,
+            (c) =>
+              ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;",
+              })[c],
+          );
+        const tasks = [
+          {
+            id: "T-024",
+            title: "补齐本周收集的论文 PDF",
+            kind: "pdf",
+            status: "attention",
+            stage: "获取原文",
+            done: 18,
+            total: 24,
+            time: "今天 09:42",
+            source: "手动创建",
+            human: false,
+            captured: false,
+            guidance: "",
+            events: [],
+          },
+          {
+            id: "T-023",
+            title: "生成已选论文的知识概要",
+            kind: "analysis",
+            status: "running",
+            stage: "知识分析",
+            done: 8,
+            total: 12,
+            time: "今天 09:30",
+            source: "Agent 提交 · 示例",
+            human: false,
+            events: [],
+          },
+          {
+            id: "T-022",
+            title: "解析新增论文全文",
+            kind: "parse",
+            status: "completed",
+            stage: "处理完成",
+            done: 16,
+            total: 16,
+            time: "今天 09:08",
+            source: "手动创建",
+            human: false,
+            events: [],
+          },
+          {
+            id: "T-021",
+            title: "整理主题检索的文献记录",
+            kind: "discover",
+            status: "partial",
+            stage: "部分来源未完成",
+            done: 30,
+            total: 32,
+            time: "昨天 16:35",
+            source: "Agent 提交 · 示例",
+            human: false,
+            events: [],
+          },
+        ];
+        const papers = [
+          {
+            id: "P-001",
+            title: "A reproducible workflow for scientific literature analysis",
+            subtitle: "科研文献分析的可复现工作流程",
+            authors: "Research Group A · 2026 · 合成示例文献",
+            pdf: true,
+            parsed: true,
+            knowledge: true,
+          },
+          {
+            id: "P-002",
+            title: "Evidence tracing across heterogeneous research sources",
+            subtitle: "多来源研究材料中的证据追溯",
+            authors: "Research Group B · 2026 · 合成示例文献",
+            pdf: true,
+            parsed: true,
+            knowledge: false,
+          },
+          {
+            id: "P-003",
+            title: "Reliable acquisition of scholarly documents",
+            subtitle: "学术文献原始材料的可靠获取",
+            authors: "Research Group C · 2025 · 合成示例文献",
+            pdf: false,
+            parsed: false,
+            knowledge: false,
+          },
+          {
+            id: "P-004",
+            title: "Structured summaries with verifiable source references",
+            subtitle: "带可核对来源的结构化概要",
+            authors: "Research Group D · 2025 · 合成示例文献",
+            pdf: true,
+            parsed: true,
+            knowledge: true,
+          },
+        ];
+        const state = {
+          taskFilter: "all",
+          taskQuery: "",
+          libraryQuery: "",
+          libraryFilter: "all",
+          operation: "pdf",
+          settingsTab: "general",
+          workspace: "研究文献库",
+          sources: ["Crossref", "OpenAlex", "arXiv"],
+          density: "comfortable",
+          layout: "balanced",
+          scenario: "normal",
+          returnTo: "#library",
+          cancelId: null,
+          selectedPaper: "P-001",
+          evidence: false,
+        };
+        const page = document.getElementById("page");
+        let toastTimer;
+        const labels = {
+          attention: "需要协助",
+          running: "进行中",
+          completed: "已完成",
+          partial: "部分完成",
+          paused: "已暂停",
+          queued: "排队中",
+          cancelled: "已取消",
+        };
+        const running = (t) =>
+          ["attention", "running", "queued", "paused"].includes(t.status);
+        function badge(status) {
+          return `<span class="pill ${esc(status)}"><i class="dot"></i>${labels[status] || "未知状态"}</span>`;
+        }
+        function toast(message) {
+          const target = document.getElementById("toast");
+          target.innerHTML = `${icon("check", true)}<span>${esc(message)}</span>`;
+          target.hidden = false;
+          clearTimeout(toastTimer);
+          toastTimer = setTimeout(() => {
+            target.hidden = true;
+          }, 4200);
+        }
+        function hydrate() {
+          document.querySelectorAll("[data-icon]").forEach((node) => {
+            node.innerHTML = icon(node.dataset.icon);
+          });
+        }
+        function navigate(hash) {
+          if (location.hash === hash) render();
+          else location.hash = hash;
+          closeNavigation();
+          document.getElementById("design-options").hidden = true;
+          document
+            .getElementById("design-toggle")
+            .setAttribute("aria-expanded", "false");
+        }
+        function taskRow(t, full = false) {
+          return `<a class="task-row" href="#task/${esc(t.id)}/execution" aria-label="查看任务：${esc(t.title)}"><div><span class="task-title">${esc(t.title)}</span><span class="task-sub">${esc(t.id)} <span aria-hidden="true">·</span> ${t.total} 篇文献 <span aria-hidden="true">·</span> ${esc(t.source)}</span></div><div class="task-state-cell">${badge(t.status)}<div class="task-phase">${esc(t.stage)}</div></div><div class="task-progress"><div class="progress-value"><b>${t.done}</b> / ${t.total}</div><div class="track"><i style="width:${Math.round((t.done / t.total) * 100)}%"></i></div></div>${full ? `<div class="table-time">${esc(t.time)}</div>` : ""}<span class="row-chevron muted">${icon("chevron", true)}</span></a>`;
+        }
+        function taskHeader(full = false) {
+          return `<div class="task-head"><span>任务 / 范围</span><span>状态 / 阶段</span><span>已完成</span>${full ? '<span class="table-time">创建时间</span>' : ""}<span></span></div>`;
+        }
+        function empty(title, body, button = "新建任务") {
+          return `<div class="empty">${icon("layers")}<h3>${esc(title)}</h3><p>${esc(body)}</p><button class="btn primary" data-action="new-task">${icon("plus", true)}${esc(button)}</button></div>`;
+        }
+        function heading(title, description, action = true) {
+          return `<div class="page-heading"><div><h1>${title}</h1><p>${description}</p></div>${action ? `<button class="btn primary" data-action="new-task">${icon("plus", true)}新建任务</button>` : ""}</div>`;
+        }
+        function renderOverview() {
+          if (state.scenario === "empty")
+            return (
+              heading("工作台", "从一项明确的文献处理任务开始。") +
+              `<section class="panel">${empty("还没有任务", "选择已有文献，获取材料、解析正文或生成知识结果。")}</section>`
+            );
+          if (state.scenario === "disconnected")
+            return (
+              heading("工作台", "任务状态暂时无法刷新。") +
+              `<section class="panel"><div class="empty">${icon("help")}<h3>工作台连接已中断</h3><p>当前无法确认任务是否仍在执行。恢复连接后再查看最新状态。</p><button class="btn primary" data-action="reconnect">${icon("refresh", true)}恢复示例连接</button></div></section>`
+            );
+          const active = tasks.filter(running),
+            attention = tasks.find((t) => t.status === "attention");
+          return (
+            heading("工作台", "掌握执行进展，处理需要你介入的事项。") +
+            `<div class="summary-line"><span><b>${active.filter((t) => t.status !== "attention").length}</b>项活动任务</span><span class="sep"></span><span><b>${tasks.filter((t) => t.status === "attention").length}</b>项需要协助</span><span class="sep"></span><span>所有数据均为设计示例</span></div><div class="overview-grid"><div class="stack"><section class="panel"><div class="panel-header"><div class="row"><h2>正在进行</h2><span class="muted">${active.length} 项任务</span></div><a href="#tasks" class="text-link">全部任务 ${icon("arrow", true)}</a></div>${active.length ? taskHeader() + active.map((t) => taskRow(t)).join("") : empty("当前没有进行中的任务", "可以查看最近结果，或创建下一项工作。")}<div class="panel-footer"><span>查看任务可进入执行过程与结果</span>${icon("tasks", true)}</div></section><section class="panel"><div class="panel-header"><h2>最近完成</h2><a href="#library" class="text-link">文献库 ${icon("arrow", true)}</a></div><div class="output-list"><a class="output-row" href="#task/T-022/results"><span class="result-icon">${icon("document")}</span><div class="grow"><strong>新增论文全文已解析</strong><p>16 份可读正文 · 可查看原文和定位证据</p></div><span class="text-link">检查结果 ${icon("arrow", true)}</span></a><a class="output-row" href="#task/T-021/results"><span class="result-icon">${icon("library")}</span><div class="grow"><strong>主题检索结果已整理</strong><p>30 条记录已保存 · 2 项来源未完成</p></div><span class="text-link">查看详情 ${icon("arrow", true)}</span></a></div></section><div class="overview-note">${icon("lock", true)}设计稿只演示界面与操作路径，不连接真实文献库。</div></div><aside class="overview-side stack"><section class="panel attention-panel"><div class="row between"><h2>需要你处理</h2><span class="attention-icon">${icon(attention ? "help" : "check")}</span></div>${attention ? `<h3>一篇文献需要人工协助</h3><p>自动获取暂时停在文章页面。可以查看现场，给出指导或接管操作。</p><div class="attention-paper">${esc(attention.title)}<br><span class="muted">当前文章 · Reliable acquisition…</span></div><button class="btn primary" data-action="assist" data-id="${attention.id}">${icon("browser", true)}进入处理 ${icon("arrow", true)}</button>` : "<h3>暂时没有待处理事项</h3><p>需要协助时，会在这里显示具体任务和下一步操作。</p>"}</section><section class="side-section"><h2>最近产物</h2><a href="#paper/P-001" class="recent-item" data-paper-link><span class="file-mark">${icon("document", true)}</span><span><strong>文献工作流程 · 知识概要</strong><small>单篇分析 · 含原文证据</small></span></a><a href="#paper/P-002" class="recent-item" data-paper-link><span class="file-mark">${icon("document", true)}</span><span><strong>多来源证据追溯 · 正文</strong><small>可读文档 · 来自已接纳 PDF</small></span></a></section></aside></div>`
+          );
+        }
+        function filteredTasks() {
+          return tasks.filter(
+            (t) =>
+              (state.taskFilter === "all" ||
+                (state.taskFilter === "active"
+                  ? running(t)
+                  : state.taskFilter === "completed"
+                    ? ["completed", "partial"].includes(t.status)
+                    : t.status === state.taskFilter)) &&
+              `${t.title} ${t.id}`
+                .toLowerCase()
+                .includes(state.taskQuery.toLowerCase()),
+          );
+        }
+        function taskList() {
+          const list = filteredTasks();
+          return list.length
+            ? taskHeader(true) + list.map((t) => taskRow(t, true)).join("")
+            : `<div class="empty">${icon("search")}<h3>没有匹配的任务</h3><p>尝试更换关键词或任务状态。</p><button class="btn" data-action="clear-task-filter">清空筛选</button></div>`;
+        }
+        function renderTasks() {
+          const filters = [
+            ["all", "全部", tasks.length],
+            ["active", "活动任务", tasks.filter(running).length],
+            [
+              "attention",
+              "需要协助",
+              tasks.filter((t) => t.status === "attention").length,
+            ],
+            [
+              "completed",
+              "已完成",
+              tasks.filter((t) => ["completed", "partial"].includes(t.status))
+                .length,
+            ],
+          ];
+          return (
+            heading("任务", "从一次明确的工作，追踪到可检查的结果。") +
+            `<div class="toolbar"><div class="segments" aria-label="任务状态筛选">${filters.map(([value, label, count]) => `<button class="${state.taskFilter === value ? "active" : ""}" data-task-filter="${value}" aria-pressed="${state.taskFilter === value}">${label}<small>${count}</small></button>`).join("")}</div><label class="search-field">${icon("search", true)}<input id="task-search" type="search" aria-label="搜索任务" placeholder="搜索任务名称或编号" value="${esc(state.taskQuery)}"></label></div><section class="panel table-full" id="task-list">${taskList()}</section>`
+          );
+        }
+        function stages(t) {
+          const names = {
+            pdf: ["确认范围", "获取原文", "检查文件", "保存结果"],
+            parse: ["确认材料", "解析正文", "检查表示", "保存结果"],
+            analysis: ["确认正文", "知识分析", "核对证据", "保存结果"],
+            discover: ["确认范围", "查询来源", "合并记录", "保存结果"],
+          }[t.kind];
+          const finished = ["completed", "partial"].includes(t.status);
+          const current = finished ? 4 : t.status === "queued" ? 0 : 1;
+          return `<div class="stage-line" aria-label="执行阶段">${names.map((name, i) => `<div class="stage ${i < current ? "done" : i === current && !["paused", "cancelled", "queued"].includes(t.status) ? "current" : ""}"><span class="stage-dot">${i < current ? icon("check", true) : i + 1}</span>${name}</div>`).join("")}</div>`;
+        }
+        function browser(t) {
+          const stopped = ["cancelled", "paused"].includes(t.status);
+          return `<section class="panel"><div class="browser-title"><div><strong>当前文章 · 浏览器现场</strong><div class="small muted" style="margin-top:4px">Reliable acquisition of scholarly documents</div></div><div class="row"><span class="pill ${t.human ? "running" : ""}">${icon(t.human ? "cursor" : "eye", true)}${t.human ? "你正在控制" : "观看模式"}</span><button class="btn ${t.human ? "" : "primary"}" data-action="takeover" data-id="${t.id}" ${stopped ? "disabled" : ""}>${icon(t.human ? "play" : "cursor", true)}${t.human ? "交还 Agent" : "人工接管"}</button></div></div><div class="browser-location">${icon("lock", true)}<code>journal.example / articles / research-workflow</code><span class="grow"></span><span>合成页面</span></div><div class="browser-canvas"><div class="journal-head"><b>Research Methods</b><span>JOURNAL DEMONSTRATION</span></div><div class="article-type">RESEARCH ARTICLE · OPEN ACCESS</div><h3>Reliable acquisition of scholarly documents</h3><div class="authors">Research Group C &nbsp; · &nbsp; 2025 &nbsp; · &nbsp; 合成文章示意</div><div class="paper-actions"><button class="btn primary" data-action="capture" data-id="${t.id}" ${!t.human || t.captured || stopped ? "disabled" : ""}>${icon(t.captured ? "check" : "download", true)}${t.captured ? "已保存示例 PDF" : "Download PDF"}</button><span class="small muted">${t.human ? "可点击演示文件获取" : "接管后可操作页面"}</span></div><div class="article-copy"><b>Abstract</b><br>This synthetic article illustrates a research document acquisition workflow. It is provided only to demonstrate the browser viewing and handover experience.</div></div><div class="browser-footer"><span>${t.captured ? "示例文件已保存，返回结果页查看。" : t.human ? "人工操作绑定当前文章；交还后重新观察页面。" : "页面画面为本地示意，不连接外部网站。"}</span><span>${icon("eye", true)} ${t.human ? "人工控制" : "只读观看"}</span></div></section>`;
+        }
+        function execution(t) {
+          const terminal = ["completed", "partial", "cancelled"].includes(
+            t.status,
+          );
+          let body;
+          if (
+            t.kind === "pdf" &&
+            !terminal &&
+            t.status !== "queued" &&
+            !t.createdInPreview
+          )
+            body = browser(t);
+          else
+            body = `<section class="panel execution-message"><div class="large-icon">${icon(terminal ? "check" : t.kind === "parse" ? "document" : "layers")}</div><h3>${terminal ? (t.status === "cancelled" ? "任务已取消" : "本次处理已结束") : t.status === "queued" ? "任务已进入示例队列" : t.status === "paused" ? "任务已暂停" : t.kind === "parse" ? "正在生成可读正文" : "正在生成有来源依据的知识概要"}</h3><p>${terminal ? "已保存的材料和结果可以继续查看。请在结果页检查本次完成情况与未完成项。" : "执行过程围绕当前选定的材料展开。结果生成后，可以直接检查内容并回到原文证据。"}</p>${!terminal ? `<div class="track"><i style="width:${Math.round((t.done / t.total) * 100)}%"></i></div><span class="small muted">${t.done} / ${t.total} 篇已完成 · 合成进度</span>` : ""}<div><a class="btn ${terminal ? "primary" : ""}" href="#task/${t.id}/results">检查已有结果 ${icon("arrow", true)}</a></div></section>`;
+          return (
+            stages(t) +
+            `<div class="execution-layout"><div class="stack">${body}</div><aside class="execution-side"><section class="guidance">${t.kind === "pdf" && !terminal && t.status !== "queued" && !t.createdInPreview ? `<form id="guidance-form" data-id="${t.id}"><label for="guidance-input">给当前文章的指导</label><p>补充访问线索或希望尝试的操作。</p><textarea id="guidance-input" maxlength="500" required placeholder="例如：尝试页面中的 PDF 下载入口" ${t.status === "paused" ? "disabled" : ""}>${esc(t.guidance || "")}</textarea><button class="btn" type="submit" ${t.status === "paused" ? "disabled" : ""}>发送指导 ${icon("arrow", true)}</button><div class="guidance-status" role="status">${t.guidance ? "已收到示例指导 · 仅用于当前文章" : ""}</div></form>` : `<h3>本次处理范围</h3><p style="margin-top:10px">明确选中的 ${t.total} 篇文献。已有材料和结果可在文献库查看。</p><a class="text-link" href="#task/${t.id}/results">打开结果 ${icon("arrow", true)}</a>`}</section><section class="facts"><h3>任务信息</h3><div class="fact-row"><span>任务编号</span><span class="mono">${t.id}</span></div><div class="fact-row"><span>发起方式</span><span>${esc(t.source)}</span></div><div class="fact-row"><span>文献范围</span><span>${t.total} 篇</span></div><div class="fact-row"><span>当前阶段</span><span>${esc(t.stage)}</span></div><div class="fact-row"><span>数据环境</span><span>离线合成示例</span></div></section></aside></div>`
+          );
+        }
+        function results(t) {
+          if (t.done === 0)
+            return `<section class="panel"><div class="empty">${icon("layers")}<h3>本次任务尚无结果</h3><p>任务完成处理后，材料与产物会出现在这里。库中已有材料仍可独立查看。</p><a class="btn" href="#library">打开文献库 ${icon("arrow", true)}</a></div></section>`;
+          const available = (p) =>
+            t.kind === "analysis"
+              ? p.knowledge
+              : t.kind === "parse"
+                ? p.parsed
+                : t.kind === "discover"
+                  ? true
+                  : p.pdf;
+          const examples =
+            t.status === "completed" ? papers.filter(available) : papers;
+          const artifact = (p) =>
+            t.kind === "analysis"
+              ? p.knowledge
+                ? "知识概要已生成"
+                : "知识概要尚未生成"
+              : t.kind === "parse"
+                ? p.parsed
+                  ? "可读正文已生成"
+                  : "正文尚未解析"
+                : t.kind === "discover"
+                  ? "文献记录已保存"
+                  : p.pdf
+                    ? "原始 PDF 已保存"
+                    : "原始 PDF 尚未取得";
+          return `<div class="result-banner">${icon("layers")}<div><strong>${t.done} 篇已完成本次目标，已有结果可继续使用</strong><p>${t.total - t.done ? `${t.total - t.done} 篇尚未完成。` : ""}下面展示 ${examples.length} 条合成结果，用于演示当前处理目标的完成情况。</p></div></div><section class="panel"><div class="panel-header"><h2>文献与产物</h2><span class="muted">合成结果示例</span></div><table class="result-table"><thead><tr><th>文献</th><th>本次目标</th><th>操作</th></tr></thead><tbody>${examples.map((p) => `<tr><td><strong>${esc(p.subtitle)}</strong><small>${esc(p.title)}</small></td><td>${badge(available(p) ? "completed" : "attention")}<small>${artifact(p)}</small></td><td><a class="text-link" href="#paper/${p.id}" data-paper-link>${p.pdf ? "检查已有材料" : "查看材料缺口"} ${icon("arrow", true)}</a></td></tr>`).join("")}</tbody></table></section>`;
+        }
+        function activities(t) {
+          const seed = t.createdInPreview
+            ? []
+            : [
+                {
+                  time: "处理中",
+                  title: "已有一批文献完成本次目标",
+                  detail: "可在结果页核对相应材料与产物。",
+                },
+                {
+                  time: "开始时",
+                  title: "开始处理选定文献",
+                  detail: `本次范围固定为 ${t.total} 篇文献。`,
+                },
+              ];
+          const events = [
+            ...t.events,
+            ...seed,
+            {
+              time: "创建时",
+              title: "任务已创建",
+              detail: t.createdInPreview
+                ? "等待开始处理；尚未生成本次结果。"
+                : "以上记录与状态均为合成示例。",
+            },
+          ];
+          return `<section class="panel"><div class="panel-header"><h2>活动记录</h2><span class="muted">与当前任务关联</span></div><div class="activity-list">${events.map((e) => `<div class="activity-row"><time>${esc(e.time)}</time><i class="activity-dot"></i><div><strong>${esc(e.title)}</strong><p>${esc(e.detail)}</p></div></div>`).join("")}</div></section>`;
+        }
+        function renderDetail(id, tab = "execution") {
+          const t = tasks.find((t) => t.id === id);
+          if (!t)
+            return `<div class="empty"><h3>未找到该示例任务</h3><a class="btn" href="#tasks">返回任务列表</a></div>`;
+          const selected = ["execution", "results", "activity"].includes(tab)
+            ? tab
+            : "execution";
+          return `<a class="back-link" href="#tasks">${icon("back", true)}返回任务列表</a><div class="page-heading detail-heading"><div><h1>${esc(t.title)}</h1><div class="detail-meta"><span class="mono">${t.id}</span><span>${esc(t.source)}</span><span>${esc(t.time)}</span></div></div><div class="detail-actions">${badge(t.status)}${running(t) ? `<button class="btn" data-action="pause" data-id="${t.id}">${icon(t.status === "paused" ? "play" : "pause", true)}${t.status === "paused" ? "继续任务" : "暂停任务"}</button><button class="btn ghost" data-action="cancel" data-id="${t.id}">取消</button>` : ""}</div></div><div class="detail-summary"><div class="summary-item"><span>本次范围</span><strong>${t.total}</strong><span>篇</span></div><div class="summary-item"><span>已完成</span><strong>${t.done}</strong><span>篇</span></div><div class="summary-item"><span>待完成</span><strong>${t.total - t.done}</strong><span>篇</span></div><div class="summary-progress"><div class="progress-value">${esc(t.stage)} · ${Math.round((t.done / t.total) * 100)}%</div><div class="track"><i style="width:${Math.round((t.done / t.total) * 100)}%"></i></div></div></div><nav class="tabs" aria-label="任务详情">${[
+            ["execution", "执行过程"],
+            ["results", "结果与材料"],
+            ["activity", "活动记录"],
+          ]
+            .map(
+              ([value, label]) =>
+                `<a class="${selected === value ? "active" : ""}" href="#task/${t.id}/${value}" ${selected === value ? 'aria-current="page"' : ""}>${label}</a>`,
+            )
+            .join(
+              "",
+            )}</nav>${selected === "execution" ? execution(t) : selected === "results" ? results(t) : activities(t)}`;
+        }
+        function libraryList() {
+          const list = papers.filter(
+            (p) =>
+              `${p.title} ${p.subtitle}`
+                .toLowerCase()
+                .includes(state.libraryQuery.toLowerCase()) &&
+              (state.libraryFilter === "all" ||
+                (state.libraryFilter === "knowledge" ? p.knowledge : !p.pdf)),
+          );
+          return list.length
+            ? list
+                .map(
+                  (p, i) =>
+                    `<article class="literature-row"><span class="paper-number">${icon("document", true)}</span><div class="grow"><a href="#paper/${p.id}" data-paper-link><h3>${esc(p.title)}</h3></a><p>${esc(p.authors)}</p><div class="resource-tags"><span class="resource-tag ${p.pdf ? "available" : ""}">${p.pdf ? "PDF 已保存" : "缺少 PDF"}</span>${p.parsed ? '<span class="resource-tag available">可读正文</span>' : ""}${p.knowledge ? '<span class="resource-tag available">知识概要</span>' : ""}</div></div><a class="btn" href="#paper/${p.id}" data-paper-link>${p.pdf ? "打开阅读" : "查看详情"} ${icon("arrow", true)}</a></article>`,
+                )
+                .join("")
+            : `<div class="empty">${icon("search")}<h3>没有匹配的文献</h3><p>库内查询不会自动发起外部检索。</p><button class="btn" data-action="clear-library-filter">清空筛选</button></div>`;
+        }
+        function renderLibrary() {
+          return (
+            heading(
+              "文献库",
+              "查找已有材料、阅读知识结果，并核对来源证据。",
+              false,
+            ) +
+            `<div class="toolbar"><div class="segments" aria-label="文献筛选">${[
+              ["all", "全部文献"],
+              ["knowledge", "已有知识"],
+              ["missing", "材料缺口"],
+            ]
+              .map(
+                ([value, label]) =>
+                  `<button class="${state.libraryFilter === value ? "active" : ""}" data-library-filter="${value}" aria-pressed="${state.libraryFilter === value}">${label}</button>`,
+              )
+              .join(
+                "",
+              )}</div><label class="search-field">${icon("search", true)}<input type="search" id="library-search" placeholder="搜索标题或关键词" aria-label="搜索已有文献" value="${esc(state.libraryQuery)}"></label></div><section class="panel"><div class="panel-header"><h2>研究文献库</h2><span class="muted">4 篇合成示例</span></div><div class="library-list" id="library-list">${libraryList()}</div></section>`
+          );
+        }
+        function renderPaper(id) {
+          const p = papers.find((p) => p.id === id);
+          if (p?.pdf && !p.parsed) return pdfOnlyPaper(p);
+          if (!p)
+            return `<div class="empty"><h3>未找到该示例文献</h3><a class="btn" href="#library">返回文献库</a></div>`;
+          return `<a class="back-link" href="${esc(state.returnTo)}">${icon("back", true)}${state.returnTo.startsWith("#task/") ? "返回任务结果" : "返回文献库"}</a><div class="page-heading"><div><h1>材料与证据</h1><p>阅读已保存的内容，沿引用核对原文。</p></div><span class="pill">合成文献</span></div>${!p.pdf ? `<section class="panel"><div class="empty">${icon("document")}<h3>${esc(p.subtitle)}</h3><p>当前示例文献没有可用 PDF 或正文。查看详情不会自动获取材料。</p><a class="btn primary" href="#task/T-024/execution">查看关联获取任务 ${icon("arrow", true)}</a></div></section>` : `<div class="reader-layout"><article class="reading"><div class="row between"><span class="pill running">可读正文</span><span class="small muted">示例表示 · 第 1 节</span></div><h2>${esc(p.title)}</h2><div class="paper-meta">${esc(p.authors)}</div><h3>研究概要</h3><p>本文为界面设计使用的合成材料，用于展示正文阅读、知识概要和证据定位之间的关系，不代表真实论文或研究结论。</p><p id="source-passage" class="${state.evidence ? "source-highlight" : ""}">示例工作流程将原始文献、可读正文与生成的知识结果分别保存，并通过来源引用关联。阅读知识概要时，可以返回对应的原文片段，核对陈述所依赖的上下文。</p><h3>方法与适用范围</h3><p>材料处理按明确选定的文献范围进行。不同文献可以独立完成处理，部分材料缺失时，已经得到的有效结果仍应清楚可见。</p><p>在本阅读示意中，右侧呈现已有知识与来源线索。点击证据编号会高亮对应段落，不会触发新的分析或修改原文。</p><div class="figure-placeholder">原始 PDF、可读表示、知识产物<br><span class="small">三类内容通过来源引用关联 · 排版示意</span></div></article><aside class="stack"><section class="evidence-panel"><div class="row between"><h3>知识概要</h3>${icon("layers", true)}</div>${p.knowledge ? `<p class="claim">原始材料与知识结果保持独立，通过来源引用连接，便于核对生成内容。<button class="citation" data-action="evidence" aria-label="查看证据 1" aria-pressed="${state.evidence}">1</button></p><p class="claim">部分材料缺失时，已完成结果仍可继续使用。</p><div class="evidence-quote" ${state.evidence ? "" : "hidden"}>“阅读知识概要时，可以返回对应的原文片段，核对陈述所依赖的上下文。”<div class="small blue">来源：当前文献 · 第 1 节</div></div>` : '<p class="claim">这篇文献已有正文，尚未生成知识概要。阅读正文无需先完成分析。</p>'}<div class="small muted">知识与引文均为合成内容。</div></section><section class="evidence-panel"><h3>已有材料</h3><div class="fact-row"><span>原始 PDF</span><span>示例可用</span></div><div class="fact-row"><span>可读正文</span><span>示例可用</span></div><div class="fact-row"><span>知识概要</span><span>${p.knowledge ? "示例可用" : "尚未生成"}</span></div><div class="reader-tools"><button class="btn" data-action="pdf-preview">${icon("document", true)}原始 PDF</button></div></section></aside></div>`}`;
+        }
+        function pdfOnlyPaper(p) {
+          return `<a class="back-link" href="${esc(state.returnTo)}">${icon("back", true)}返回${state.returnTo.startsWith("#task/") ? "任务结果" : "文献库"}</a>${heading("材料与证据", "检查已保存的原始文件与当前内容缺口。", false)}<section class="panel"><div class="execution-message"><div class="large-icon">${icon("document")}</div><h3>${esc(p.subtitle)}</h3><p>示例 PDF 已保存，正文尚未解析。知识概要也尚未生成。阅读这个页面不会自动启动新的处理。</p><div><button class="btn primary" data-action="pdf-preview">${icon("document", true)}原始 PDF</button></div><p class="small muted" style="margin-top:15px">文件与阅读位置均为设计示意，未附带真实文件。</p></div></section>`;
+        }
+        function renderSettings(section = "general") {
+          state.settingsTab = [
+            "general",
+            "sources",
+            "models",
+            "parser",
+            "library",
+          ].includes(section)
+            ? section
+            : "general";
+          let body;
+          if (state.settingsTab === "general")
+            body = `<h2>工作区设置</h2><p>管理工作区名称与界面偏好。</p><form id="settings-form"><div class="field"><label for="workspace-name">文献库显示名称</label><input id="workspace-name" value="${esc(state.workspace)}" maxlength="30" required></div><div class="setting-row"><div><h3>任务优先</h3><p>首页展示活动任务、待处理事项和最近结果。</p></div><span class="pill running">当前布局</span></div><div class="setting-row"><div><h3>蓝白主题</h3><p>蓝色用于主要操作、当前选择和执行状态。</p></div><span class="pill">浅色</span></div><div class="settings-actions"><p id="save-status" role="status"></p><button class="btn primary" type="submit">保存设置</button></div></form>`;
+          else if (state.settingsTab === "library")
+            body = `<h2>当前文献库</h2><p>工作台、Agent 与命令行应使用同一组数据库和资产目录。</p><div class="field"><label for="catalog-example">数据库</label><input id="catalog-example" readonly value="/example/research/catalog.sqlite"><small>示例路径，未读取本机配置。</small></div><div class="field"><label for="artifacts-example">文献资产目录</label><input id="artifacts-example" readonly value="/example/research/artifacts"></div><div class="notice">当前为离线设计稿，未连接实际数据库。这里演示正式界面中“当前连接到哪个文献库”的展示位置。</div>`;
+          else if (state.settingsTab === "sources")
+            body = `<h2>文献来源</h2><p>来源设置归属具体检索与获取能力。</p><form id="sources-form">${["Crossref", "OpenAlex", "arXiv", "Europe PMC"].map((name) => `<label class="check-row"><input type="checkbox" name="source" value="${name}" ${state.sources.includes(name) ? "checked" : ""}>${name}</label>`).join("")}<div class="notice settings-notice">仅演示选中与保存反馈，不发起请求或写入真实配置。</div><div class="settings-actions"><p id="source-save-status" role="status"></p><button class="btn primary" type="submit">保存选择</button></div></form>`;
+          else if (state.settingsTab === "models")
+            body = `<h2>模型与分析</h2><p>模型连接与任务使用分开管理。</p><div class="setting-row"><div><h3>分析模型</h3><p>用于对已有正文生成知识结果。</p></div><span class="pill">示例 · 未连接</span></div><div class="setting-row"><div><h3>Browser 模型</h3><p>用于观察页面并决定下一步操作。</p></div><span class="pill">示例 · 未连接</span></div><div class="notice settings-notice">设计稿不接收或保存 API Key。正式配置能力沿用现有服务。</div>`;
+          else
+            body = `<h2>文档解析</h2><p>管理将原始 PDF 转为可读正文的解析服务。</p><div class="setting-row"><div><h3>MinerU</h3><p>由使用者管理的外部解析服务。</p></div><span class="pill">示例 · 未连接</span></div><div class="notice settings-notice">查看这个页面不会启动解析或调用外部服务。</div>`;
+          return (
+            heading("设置", "管理文献库和任务运行所需的条件。", false) +
+            `<div class="settings-grid"><nav class="settings-nav" aria-label="设置分类">${[
+              ["general", "工作区"],
+              ["sources", "文献来源"],
+              ["models", "模型与分析"],
+              ["parser", "文档解析"],
+              ["library", "当前文献库"],
+            ]
+              .map(
+                ([value, label]) =>
+                  `<button class="${state.settingsTab === value ? "active" : ""}" data-settings="${value}" ${state.settingsTab === value ? 'aria-current="page"' : ""}>${label}</button>`,
+              )
+              .join(
+                "",
+              )}</nav><section class="settings-body">${body}</section></div>`
+          );
+        }
+        function render() {
+          const parts = (location.hash.slice(1) || "overview").split("/");
+          const route = parts[0];
+          const section =
+            route === "task" ? "tasks" : route === "paper" ? "library" : route;
+          const navItems = [
+            ["overview", "grid", "工作台"],
+            ["tasks", "tasks", "任务"],
+            ["library", "library", "文献库"],
+            ["settings", "settings", "设置"],
+          ];
+          document.getElementById("navigation").innerHTML = navItems
+            .map(
+              ([key, symbol, label]) =>
+                `<a href="#${key}" class="${section === key ? "active" : ""}" ${section === key ? 'aria-current="page"' : ""}>${icon(symbol)}${label}${key === "tasks" ? `<span class="nav-count">${tasks.filter(running).length}</span>` : ""}</a>`,
+            )
+            .join("");
+          document.getElementById("workspace-label").textContent =
+            state.workspace;
+          document.getElementById("crumbs").innerHTML =
+            `<span>${esc(state.workspace)}</span>${icon("chevron", true)}<strong>${navItems.find((n) => n[0] === section)?.[2] || "工作台"}</strong>${route === "task" ? `<span class="mono">/ ${esc(parts[1] || "")}</span>` : ""}`;
+          page.dataset.layout = state.layout;
+          document.body.dataset.density = state.density;
+          page.innerHTML =
+            route === "tasks"
+              ? renderTasks()
+              : route === "task"
+                ? renderDetail(parts[1], parts[2])
+                : route === "library"
+                  ? renderLibrary()
+                  : route === "paper"
+                    ? renderPaper(parts[1])
+                    : route === "settings"
+                      ? renderSettings(parts[1])
+                      : renderOverview();
+          hydrate();
+        }
+        function syncNavigation() {
+          const rail = document.getElementById("rail");
+          rail.inert =
+            window.matchMedia("(max-width:760px)").matches &&
+            !rail.classList.contains("open");
+        }
+        function closeNavigation() {
+          const rail = document.getElementById("rail");
+          const restore =
+            rail.contains(document.activeElement) &&
+            window.matchMedia("(max-width:760px)").matches;
+          rail.classList.remove("open");
+          document
+            .getElementById("mobile-backdrop")
+            .classList.remove("visible");
+          document
+            .getElementById("menu-toggle")
+            .setAttribute("aria-expanded", "false");
+          if (restore)
+            document
+              .getElementById("menu-toggle")
+              .focus({ preventScroll: true });
+          syncNavigation();
+        }
+        function operationOptions() {
+          document.getElementById("operation-options").innerHTML = [
+            ["pdf", "download", "获取 PDF"],
+            ["parse", "document", "解析正文"],
+            ["analysis", "layers", "知识分析"],
+          ]
+            .map(
+              ([value, symbol, label]) =>
+                `<button type="button" class="operation-option ${state.operation === value ? "active" : ""}" data-operation="${value}" aria-pressed="${state.operation === value}">${icon(symbol)}${label}</button>`,
+            )
+            .join("");
+        }
+        function currentTask() {
+          return tasks.find((t) => t.id === location.hash.split("/")[1]);
+        }
+        document.addEventListener("click", (event) => {
+          const target = event.target instanceof Element ? event.target : null;
+          if (!target) return;
+          const paperLink = target.closest("[data-paper-link]");
+          if (paperLink) {
+            state.returnTo = location.hash.startsWith("#task/")
+              ? location.hash
+              : "#library";
+            state.evidence = false;
+          }
+          const close = target.closest("[data-close-dialog]");
+          if (close) document.getElementById(close.dataset.closeDialog).close();
+          const filter = target.closest("[data-task-filter]");
+          if (filter) {
+            state.taskFilter = filter.dataset.taskFilter;
+            render();
+          }
+          const libFilter = target.closest("[data-library-filter]");
+          if (libFilter) {
+            state.libraryFilter = libFilter.dataset.libraryFilter;
+            render();
+          }
+          const settings = target.closest("[data-settings]");
+          if (settings) navigate("#settings/" + settings.dataset.settings);
+          const operation = target.closest("[data-operation]");
+          if (operation) {
+            state.operation = operation.dataset.operation;
+            operationOptions();
+            document.getElementById("new-title").value = {
+              pdf: "补齐选中文献的 PDF",
+              parse: "解析选中文献的全文",
+              analysis: "生成选中文献的知识概要",
+            }[state.operation];
+          }
+          const action = target.closest("[data-action]");
+          if (!action) return;
+          const t = tasks.find((item) => item.id === action.dataset.id);
+          switch (action.dataset.action) {
+            case "new-task":
+              operationOptions();
+              document.getElementById("new-task-dialog").showModal();
+              break;
+            case "assist":
+              navigate("#task/" + action.dataset.id + "/execution");
+              break;
+            case "clear-task-filter":
+              state.taskFilter = "all";
+              state.taskQuery = "";
+              render();
+              break;
+            case "clear-library-filter":
+              state.libraryFilter = "all";
+              state.libraryQuery = "";
+              render();
+              break;
+            case "reconnect":
+              state.scenario = "normal";
+              document.getElementById("scenario").value = "normal";
+              render();
+              toast("示例连接已恢复");
+              break;
+            case "pause":
+              if (t) {
+                const paused = t.status === "paused";
+                if (!paused)
+                  t.beforePause = { status: t.status, stage: t.stage };
+                t.status = paused
+                  ? t.beforePause?.status || "running"
+                  : "paused";
+                t.stage = paused
+                  ? t.beforePause?.stage || "处理文献"
+                  : "等待继续";
+                t.human = false;
+                t.events.unshift({
+                  time: "现在",
+                  title: paused ? "继续任务" : "任务已暂停",
+                  detail: "已有结果保持可用。",
+                });
+                render();
+                toast(paused ? "示例任务已继续" : "示例任务已暂停");
+              }
+              break;
+            case "cancel":
+              state.cancelId = action.dataset.id;
+              document.getElementById("cancel-dialog").showModal();
+              break;
+            case "takeover":
+              if (t && !["cancelled", "paused"].includes(t.status)) {
+                t.human = !t.human;
+                t.events.unshift({
+                  time: "现在",
+                  title: t.human ? "人工接管当前文章" : "已交还 Agent",
+                  detail: t.human
+                    ? "页面操作由你控制。"
+                    : "Agent 将重新观察当前页面。",
+                });
+                render();
+                toast(
+                  t.human
+                    ? "已接管当前示例页面"
+                    : "已交还；Agent 将重新观察当前页面",
+                );
+              }
+              break;
+            case "capture":
+              if (
+                t?.human &&
+                !t.captured &&
+                !["cancelled", "paused"].includes(t.status)
+              ) {
+                t.captured = true;
+                t.done++;
+                t.status = "running";
+                papers.find((p) => p.id === "P-003").pdf = true;
+                t.events.unshift({
+                  time: "现在",
+                  title: "示例 PDF 已保存",
+                  detail: "可以前往结果页查看已有材料。",
+                });
+                render();
+                toast("示例 PDF 已保存；已有结果不会因后续失败丢失");
+              }
+              break;
+            case "evidence":
+              state.evidence = !state.evidence;
+              render();
+              page
+                .querySelector('[data-action="evidence"]')
+                ?.focus({ preventScroll: true });
+              break;
+            case "pdf-preview":
+              toast("原始 PDF 阅读位置示意；本设计稿未附带真实文件");
+              break;
+          }
+        });
+        document.addEventListener("input", (event) => {
+          const target = event.target;
+          if (target.id === "task-search") {
+            state.taskQuery = target.value;
+            document.getElementById("task-list").innerHTML = taskList();
+          }
+          if (target.id === "library-search") {
+            state.libraryQuery = target.value;
+            document.getElementById("library-list").innerHTML = libraryList();
+          }
+        });
+        document.addEventListener("submit", (event) => {
+          if (event.target.id === "new-task-form") {
+            event.preventDefault();
+            const title = document.getElementById("new-title").value.trim();
+            if (!title) return;
+            const count = Number(document.getElementById("new-scope").value);
+            const id =
+              "T-" +
+              String(
+                25 + tasks.filter((t) => t.createdInPreview).length,
+              ).padStart(3, "0");
+            tasks.unshift({
+              id,
+              title,
+              kind: state.operation,
+              status: "queued",
+              stage: "等待开始",
+              done: 0,
+              total: count,
+              time: "刚刚",
+              source: "手动创建",
+              human: false,
+              captured: false,
+              guidance: "",
+              createdInPreview: true,
+              events: [],
+            });
+            document.getElementById("new-task-dialog").close();
+            state.scenario = "normal";
+            document.getElementById("scenario").value = "normal";
+            navigate("#task/" + id + "/execution");
+            toast("示例任务已创建，刷新页面后重置");
+          }
+          if (event.target.id === "guidance-form") {
+            event.preventDefault();
+            const t = currentTask(),
+              value = document.getElementById("guidance-input").value.trim();
+            if (!t || !value || ["cancelled", "paused"].includes(t.status))
+              return;
+            t.guidance = value;
+            t.events.unshift({
+              time: "现在",
+              title: "收到当前文章的指导",
+              detail: "指导只绑定当前示例文章。",
+            });
+            render();
+            toast("已收到示例指导，仅用于当前文章");
+          }
+          if (event.target.id === "settings-form") {
+            event.preventDefault();
+            const value = document
+              .getElementById("workspace-name")
+              .value.trim();
+            if (!value) return;
+            state.workspace = value;
+            render();
+            document.getElementById("save-status").textContent =
+              "已保存到本页示例";
+            toast("工作区显示名称已更新；未写入真实配置");
+          }
+          if (event.target.id === "sources-form") {
+            event.preventDefault();
+            state.sources = [
+              ...event.target.querySelectorAll("input:checked"),
+            ].map((input) => input.value);
+            document.getElementById("source-save-status").textContent =
+              "已保存到本页示例";
+            toast("来源选择已确认；未连接外部服务");
+          }
+        });
+        document
+          .getElementById("confirm-cancel")
+          .addEventListener("click", () => {
+            const t = tasks.find((item) => item.id === state.cancelId);
+            if (t) {
+              t.status = "cancelled";
+              t.stage = "处理已停止";
+              t.human = false;
+              t.events.unshift({
+                time: "现在",
+                title: "任务已取消",
+                detail: "已完成材料和结果仍保留。",
+              });
+            }
+            document.getElementById("cancel-dialog").close();
+            render();
+            toast("示例任务已取消，已有结果已保留");
+          });
+        document.getElementById("menu-toggle").addEventListener("click", () => {
+          const open = !document
+            .getElementById("rail")
+            .classList.contains("open");
+          document.getElementById("rail").classList.toggle("open", open);
+          document
+            .getElementById("mobile-backdrop")
+            .classList.toggle("visible", open);
+          document
+            .getElementById("menu-toggle")
+            .setAttribute("aria-expanded", String(open));
+          syncNavigation();
+          if (open)
+            document
+              .querySelector("#navigation a.active")
+              ?.focus({ preventScroll: true });
+        });
+        document
+          .getElementById("mobile-backdrop")
+          .addEventListener("click", closeNavigation);
+        document
+          .getElementById("design-toggle")
+          .addEventListener("click", () => {
+            const popup = document.getElementById("design-options");
+            popup.hidden = !popup.hidden;
+            document
+              .getElementById("design-toggle")
+              .setAttribute("aria-expanded", String(!popup.hidden));
+          });
+        for (const key of ["density", "layout", "scenario"])
+          document.getElementById(key).addEventListener("change", (event) => {
+            state[key] = event.target.value;
+            if (key === "scenario" && !location.hash.startsWith("#overview"))
+              navigate("#overview");
+            else render();
+          });
+        document.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") {
+            closeNavigation();
+            document.getElementById("design-options").hidden = true;
+            document
+              .getElementById("design-toggle")
+              .setAttribute("aria-expanded", "false");
+          }
+        });
+        window.addEventListener("hashchange", () => {
+          render();
+          closeNavigation();
+          window.scrollTo({ top: 0, behavior: "instant" });
+        });
+        window.addEventListener("resize", syncNavigation);
+        render();
+        hydrate();
+        syncNavigation();
+      })();
+    </script>
+  </body>
+</html>

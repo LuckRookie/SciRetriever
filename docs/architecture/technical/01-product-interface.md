@@ -372,7 +372,11 @@ apps/server/src/browser/
 apps/server/src/bootstrap/workbench.ts # 工作台对象图与关闭
 ```
 
-`startQueryOnlyWorkbench` 只组装 QueryApplication；混合 live 工作台仍依赖完整 Application。`startProductionWorkbench({ home, literature_id })` 打开本机工作台时不发起获取；同源 `POST /api/acquisition/start` 接到该 Application 的 `DatabaseCompletionService.run`。进入 Browser 层后，工作台经生产文章 flow 的开页回调观察/控制同一个 Host page；不为画面另启 Browser。生产 `/api/control` 除 `kind`、`control_epoch` 外还要求当前 `session_id` 与 `article_id`；尚未开页的显式操作可用同一绑定的 `cancel` 中止。生产 view 的可选 `operation_feedback` 包含真实阶段、冻结后的目标分区与当前目标、最终报告、稳定失败，以及操作后 Library 校验文件字节才确认的主 PDF hash/大小；文件丢失或损坏时标记 `unreadable`，不提供阅读引用。旧合成预览保留既有控制请求形状和 v1 view 字段集。文献库入口使用同一 Literature ID 和既有 detail/artifact，只读刷新不调用获取。下一篇需要新的明确获取操作，旧文章请求不复用。
+`startQueryOnlyWorkbench` 只组装 QueryApplication；混合 live 工作台仍依赖完整 Application。`startProductionWorkbench({ home, literature_id? })`（CLI `sciretriever web`）打开本机工作台时不发起获取；省略初始文献时投影 `WorkbenchView.article_id:null`，已选文献、文章 session 与动作仍使用非空身份。同源 `POST /api/acquisition/start` 接到该 Application 的 `DatabaseCompletionService.run`。进入 Browser 层后，工作台经生产文章 flow 的开页回调观察/控制同一个 Host page；不为画面另启 Browser。生产 `/api/control` 除 `kind`、`control_epoch` 外还要求当前 `session_id` 与 `article_id`；尚未开页的显式操作可用同一绑定的 `cancel` 中止。生产 view 的可选 `operation_feedback` 包含真实阶段、冻结后的目标分区与当前目标、最终报告、稳定失败，以及操作后 Library 校验文件字节才确认的主 PDF hash/大小；文件丢失或损坏时标记 `unreadable`，不提供阅读引用。旧合成预览保留既有控制请求形状和 v1 view 字段集。文献库入口使用同一 Literature ID 和既有 detail/artifact，只读刷新不调用获取。下一篇需要新的明确获取操作，旧文章请求不复用。
+
+正式蓝白工作台通过 `/api/tasks` 调用同一 `ProcessingTaskService`，PDF 获取复用已有 Job owner，解析/身份核验/知识分析/综合复用固定 `ProcessingTaskRequest`。创建、启动与控制是显式写操作；查询、结果阅读和证据展开不提交任务。任务详情展示结果、跳过、失败及有界活动记录。`/api/workspace` 返回启动时的 catalog/artifact 绑定和能力；`/api/discovery` 与 `/api/import` 是已有 Entry 的显式薄适配，不建立第二套任务事实。
+
+同一正式 HTTP server 在 Host/Origin/Cookie/client/CSRF 验证后复用完整 `/api/v1/query/*` 与 `/api/v1/maintenance/*` handler，QueryApplication 固定到启动时同一数据库/资产目录。配置保存不切换已打开的运行库。独立 query-only 仍仅有读取能力，独立 maintenance 保留原有认证；共用 handler 不扩大只读部署权限。正式启动、配置与运行边界见[Web 指南](../../guides/web-workbench.md)。
 
 合成预览的 `WorkbenchSession.runAgent()` 仍只执行一次决定。生产 flow 则在每次安全点使用同一会话的 `runAutomaticStep()`，可在模型调用之间受理指导、暂停、接管、人工动作与交还。生产工作台的配置 HTTP 接口复用同一 TypeScript Configuration owner；保存普通配置后分别显示已保存 revision 和运行中 Application 的重启需求。当前正式 TS/HTTP/Web 回环测试覆盖真实 Cloak page、统一 PDF 接纳、最终反馈及 Library 阅读衔接；真实 Publisher 站点仍需独立现场证据。
 
@@ -406,7 +410,7 @@ apps/server/src/bootstrap/workbench.ts # 工作台对象图与关闭
 
 [ADR 0026](../decisions/0026-agent-knowledge-and-human-collaboration.md)确认人类配置、Browser 全过程观看/指导和知识阅读为正式能力；现有工作台是可复用基础，不锁定最终界面形式。
 
-下文为当前 TS 迁移/兼容实现记录。生产 Browser 会话已支持连续观察、自然语言指导、安全点消费、控制交接及 PDF 获取报告与既有 Library 原始材料阅读衔接；单步合成预览仍独立保留。新文档、知识与提取候选的阅读和展示属于后续能力，见 [知识查询与上下文：知识检索与上下文组装](06-retrieval-context.md#4-知识检索与上下文组装)。
+下文为当前 TS 迁移/兼容实现记录。生产 Browser 会话已支持连续观察、自然语言指导、安全点消费、控制交接及 PDF 获取报告与既有 Library 原始材料阅读衔接；单步合成预览仍独立保留。新文档、知识与提取候选的阅读和展示已接入正式工作台，精确能力见 [知识查询与上下文：知识检索与上下文组装](06-retrieval-context.md#4-知识检索与上下文组装)。
 
 ## 5. 共享支撑：配置与凭据
 

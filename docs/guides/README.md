@@ -9,6 +9,7 @@
 - [Catalog 初始化、升级与恢复](upgrade.md)：精确目标的正式 v8 init/upgrade、只读检查、原始备份与中间版本失败语义。
 - [切换与恢复](cutover.md)：待授权目标、停 writer/Jobs/Browser、Catalog 与资产备份、独立恢复及增量保留。
 - [独立文献库阅读](library-query.md)：通过 QueryApplication 启动只读 Web 阅读入口，了解 readiness、缺口反馈、默认 home 与关闭方式。
+- [Web 任务工作台](web-workbench.md)：正式蓝白工作台的启动、固定数据库绑定、持久任务、Browser 协助、文献/知识阅读与配置。
 - [SciRetriever 配置手册](configuration.md)：普通配置、固定凭据文件、Provider readiness 和显式只读 probe 目标；真实 `config test` 的当前缺口已标注。
 - [PDF 获取指南](pdf-acquisition.md)：目标 Public → Authorized API → Browser-last 执行顺序、Browser 安全边界、Provider 分组限速、逐文章权限检查、失败分类和重跑；生产 Browser route 的当前接线状态已标注。
 - [文档 Catalog 合成迁移指南](document-catalog-migration.md)：保留 v1/v2→v3、v3→v4 历史单步演练门禁；正式 v8 启用走上述 operator 入口。

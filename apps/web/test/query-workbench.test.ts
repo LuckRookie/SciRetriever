@@ -388,6 +388,48 @@ it("reads, searches, follows references and downloads through the query-only pag
     );
 
     await page
+      .getByRole("button", { name: "阅读原始 PDF", exact: true })
+      .click();
+    await expect
+      .poll(() => page.locator(".library-pdf-reading").textContent())
+      .toContain("已核验固定材料");
+    expect(
+      await page.locator('iframe[title="原始 PDF 预览"]').getAttribute("src"),
+    ).toMatch(/^blob:/u);
+    const [verifiedDownload] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("link", { name: "下载已核验的原始 PDF" }).click(),
+    ]);
+    expect(await readFile((await verifiedDownload.path())!)).toEqual(
+      Buffer.from(expectedPdf),
+    );
+    await page.route("**/api/v1/query/material-bytes", async (route) => {
+      const corrupted = Buffer.from(expectedPdf);
+      corrupted[corrupted.length - 1] = corrupted[corrupted.length - 1]! ^ 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/pdf",
+        headers: {
+          "x-sciretriever-asset-id": source.primary_pdf!.asset.asset_id,
+          "x-sciretriever-asset-sha256": source.primary_pdf!.asset.sha256,
+          "x-sciretriever-byte-size": String(expectedPdf.length),
+        },
+        body: corrupted,
+      });
+    });
+    await page
+      .getByRole("button", { name: "阅读原始 PDF", exact: true })
+      .click();
+    await expect
+      .poll(() => page.locator(".library-pdf-reading").textContent())
+      .toContain("PDF 完整性校验失败");
+    expect(await page.locator('iframe[title="原始 PDF 预览"]').count()).toBe(0);
+    expect(
+      await page.getByRole("link", { name: "下载已核验的原始 PDF" }).count(),
+    ).toBe(0);
+    await page.unroute("**/api/v1/query/material-bytes");
+
+    await page
       .locator("#library-detail")
       .getByRole("button", { name: "查看参考文献", exact: true })
       .click();
@@ -433,8 +475,22 @@ it("reads, searches, follows references and downloads through the query-only pag
       ),
     ).toBe(true);
     expect(
-      requests.every((request) => request.origin === workbench!.origin),
-    ).toBe(true);
+      requests
+        .filter(
+          (request) =>
+            !(
+              request.origin === workbench!.origin ||
+              // Chromium's built-in PDF viewer loads bundled extension resources, not remote services.
+              (request.protocol === "chrome-extension:" &&
+                request.hostname === "mhjfbmdgcfjbbpaeojofohoefgiehjai") ||
+              (request.protocol === "chrome:" &&
+                request.hostname === "resources") ||
+              (request.protocol === "chrome-untrusted:" &&
+                request.hostname === "pdf")
+            ),
+        )
+        .map((request) => request.href),
+    ).toEqual([]);
     expect(apiRequests.map((request) => request.pathname)).toEqual(
       expect.arrayContaining([
         "/api/v1/query/status",

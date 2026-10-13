@@ -188,7 +188,10 @@ it("installs packed workspace modules and exercises their public boundaries with
       const http = await startWorkbenchHttp({ session, assets });
       const rootResponse = await fetch(http.origin);
       assert.equal(rootResponse.status, 200);
-      assert.match(await rootResponse.text(), /实时 Browser 工作台/);
+      const workbenchPage = await rootResponse.text();
+      assert.match(workbenchPage, /科研文献工作台/);
+      assert.match(workbenchPage, /id="overview-workspace"/);
+      assert.match(workbenchPage, /id="jobs-workspace"/);
       const cookie = (rootResponse.headers.get('set-cookie') ?? '').split(';')[0];
       const scriptResponse = await fetch(http.origin + '/live.js', { headers: { cookie } });
       assert.equal(scriptResponse.status, 200);

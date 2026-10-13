@@ -122,7 +122,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         await desktop.setViewportSize({ width: 1440, height: 1000 });
         const errors: string[] = [];
         desktop.on("pageerror", (error) => errors.push(error.message));
-        await desktop.goto(workbench.origin);
+        await desktop.goto(`${workbench.origin}/?workspace=browser`);
         await desktop.waitForFunction(
           () =>
             document.querySelector<HTMLImageElement>("#browser-frame")
@@ -184,7 +184,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         const mobile = await context.newPage();
         await mobile.setViewportSize({ width: 390, height: 844 });
         mobile.on("pageerror", (error) => errors.push(error.message));
-        await mobile.goto(workbench.origin);
+        await mobile.goto(`${workbench.origin}/?workspace=browser`);
         await mobile.waitForFunction(
           () =>
             document.querySelector<HTMLImageElement>("#browser-frame")
@@ -264,7 +264,7 @@ describe("live workbench on the installed Cloak runtime", () => {
             .view()
             .candidates.filter((item) => item.publication),
         ).toHaveLength(1);
-        await desktop.goto(workbench.origin);
+        await desktop.goto(`${workbench.origin}/?workspace=browser`);
         await expect
           .poll(() => desktop.locator("#candidate-count").innerText())
           .toBe("2");
@@ -344,7 +344,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         await desktop.screenshot({
           path: "/tmp/sciretriever-library-desktop.png",
         });
-        await mobile.goto(workbench.origin);
+        await mobile.goto(`${workbench.origin}/?workspace=browser`);
         await mobile.locator("#library-toggle").click();
         await mobile.locator("#library-query").fill("Synthetic literature");
         await mobile

@@ -16,7 +16,12 @@ import {
   type SynthesisPreparationResult,
   type SynthesisReadResult,
 } from "@sciretriever/contracts";
-import { post, verifiedEvidenceEntry } from "./knowledge.js";
+import {
+  post,
+  verifiedEvidenceEntry,
+  usesDurableTasks,
+  submitProcessingTask,
+} from "./knowledge.js";
 
 function node<T extends HTMLElement = HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -445,6 +450,14 @@ export function mountSynthesisMaintenance(): void {
           max_total_output_tokens: number("synthesis-total-output-tokens"),
         },
       });
+      if (usesDurableTasks()) {
+        await submitProcessingTask(
+          { operation: "synthesize", request },
+          status,
+          controller.signal,
+        );
+        return;
+      }
       const receipt = await parseSynthesisExecutionReceipt(
         await post("synthesize", request, controller.signal, true),
         request,

@@ -47,7 +47,7 @@ export class ProductionWorkbenchSession {
   private get session(): WorkbenchSession | undefined {
     return this.sessions.get(this.sessionId)?.session;
   }
-  private articleId: string;
+  private articleId: string | null;
   private sessionId = `session-${randomUUID()}`;
   private operation: Promise<void> | undefined;
   private operationAbort: AbortController | undefined;
@@ -72,10 +72,11 @@ export class ProductionWorkbenchSession {
   private closed = false;
 
   constructor(
-    initialArticleId: string,
+    initialArticleId: string | null,
     private readonly decide: BrowserDecision,
   ) {
-    this.articleId = parseLiteratureId(initialArticleId);
+    this.articleId =
+      initialArticleId === null ? null : parseLiteratureId(initialArticleId);
   }
 
   private startOperation:
@@ -114,7 +115,8 @@ export class ProductionWorkbenchSession {
     if (this.closed || !this.startOperation)
       throw new WorkbenchSessionError("session-closed");
     if (this.operation) throw new WorkbenchSessionError("session-busy");
-    this.articleId = parseLiteratureId(articleId);
+    const selectedArticleId = parseLiteratureId(articleId);
+    this.articleId = selectedArticleId;
     for (const [id, record] of this.sessions) {
       if (this.articlePhase(record) === "closed") {
         this.sessions.delete(id);
@@ -138,7 +140,7 @@ export class ProductionWorkbenchSession {
     this.operationAbort = abort;
     const run = this.startOperation;
     const pending = Promise.resolve().then(() =>
-      run(this.articleId, abort.signal, {
+      run(selectedArticleId, abort.signal, {
         scope: (targets) => this.recordScope(targets),
         progress: (progress) => this.recordProgress(progress),
       }),
@@ -194,7 +196,7 @@ export class ProductionWorkbenchSession {
       .then(async () => {
         try {
           this.primaryPdf =
-            (await this.readPrimaryPdf?.(this.articleId)) ?? null;
+            (await this.readPrimaryPdf?.(selectedArticleId)) ?? null;
           this.primaryPdfStatus = this.primaryPdf ? "verified" : "missing";
         } catch (error) {
           const readFailure = new Error(

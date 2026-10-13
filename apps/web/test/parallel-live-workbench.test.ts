@@ -136,7 +136,7 @@ it("selects the correct live article without transferring control, while another
     });
     const page = await context.newPage();
     page.on("pageerror", (error) => failures.push(error.message));
-    await page.goto(http.origin);
+    await page.goto(`${http.origin}/?workspace=browser`);
     await expect
       .poll(() => page.locator("#browser-sessions button").count())
       .toBe(2);
@@ -160,10 +160,14 @@ it("selects the correct live article without transferring control, while another
         page.locator('[data-session-id="web-session-b"]').textContent(),
       )
       .toContain("下载中");
+    await page
+      .locator("#guidance-text")
+      .fill("This draft only belongs to article A.");
     await page.locator('[data-session-id="web-session-b"]').click();
     await expect
       .poll(() => page.locator("#page-title").textContent())
       .toBe("Synthetic article B");
+    expect(await page.locator("#guidance-text").inputValue()).toBe("");
     await expect
       .poll(() => page.locator("#session-status").textContent())
       .toContain("下载中");

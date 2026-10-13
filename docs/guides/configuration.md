@@ -104,6 +104,8 @@ browser
 | `catalog_path`  | 非空字符串或省略 | 未配置 | SQLite Catalog 文件路径。   |
 | `artifact_root` | 非空字符串或省略 | 未配置 | 私有 ArtifactStore 根目录。 |
 
+正式 `sciretriever web` 启动要求两项同时配置。Web 设置中的“文献数据库”通过同一 Configuration owner 按 `paths` 分区、revision CAS 保存；当前进程仍绑定启动时的库，保存后须重启。保存本身不创建、升级或搬迁 catalog/资产，首页和设置会分别显示实际运行路径与已保存值。用法见[Web 任务工作台](web-workbench.md)。
+
 所有本地数据库读取、导入、导出、手动 PDF 和补全入口都需要两个路径同时配置。配置
 解析只保留字符串，不展开 `~`，也不相对配置文件所在目录改写路径。Bootstrap 把路径
 交给 Storage 绑定时才进行词法绝对化和结构校验：已有祖先必须是真实目录而非符号

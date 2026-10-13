@@ -1,6 +1,10 @@
-# Browser 工作台前端
+# SciRetriever Web 工作台
 
-本目录同时提供 4173 交互样本与 4174 实时 Cloak 工作台（见下方对应章节）。
+本目录提供正式蓝白任务工作台，以及独立只读/维护页面和原有合成预览。正式入口使用 `sciretriever web`（源码构建后 `node apps/server/dist/cli/main.js web`），默认监听本机 4174，连接配置的真实 catalog/资产目录；不会自动初始化或迁移数据库。详见[Web 任务工作台指南](../../docs/guides/web-workbench.md)。
+
+正式页面为 `public/live.html` 与 `src/live.ts`，主导航为工作台、任务、文献库、设置。`navigation.ts` 统一管理导航，`jobs.ts` / `overview.ts` 从同一持久任务服务显示列表、执行、结果和活动，`task-view.ts` 提供展示解析。`workspace-tools.ts` 显示实际库绑定并连接显式发现/书目导入。阅读、加工与配置复用原有模块及同源 HTTP 服务，Browser 位于任务目标的协助视图。蓝白样式仅在 `live.css` 中覆盖共享 tokens，原 4173 静态样本保持独立。
+
+## 合成样本的边界
 
 以下静态交互样本写在 `apps/web` 中，用于确认布局、观看/接管和 Candidate 审核体验。页面、文章、候选和时间线全部是合成示例。它尚未接入 Browser Host、模型、真实画面流或 Literature API；“确认入库”只改变当前页面内存状态，刷新即重置。
 
@@ -30,16 +34,16 @@ pnpm preview:browser
 
 ## 文件与设计
 
-| 文件 | 责任 |
-| --- | --- |
-| `public/index.html` | 工作台壳、合成文章画面、候选/观察/动态面板 |
-| `public/styles.css` | 暖白与松绿设计变量、桌面布局、390px 抽屉与焦点样式 |
-| `src/main.ts` | DOM 事件、受限模拟交互、反馈与定时器取消 |
-| `src/demo.ts` | 仅用于样本的状态与场景，不是服务端 DTO 或业务事实 |
-| `src/icons.ts` | 内联 SVG 图标，避免外部依赖 |
-| `src/preview-server.ts` | 固定资产白名单，只读本地预览服务器 |
-| `src/preview.ts` | 预览启动与停止入口 |
-| `test/browser-workbench.test.ts` | 真实 Chromium 对样本的离线交互与响应式测试 |
+| 文件                             | 责任                                               |
+| -------------------------------- | -------------------------------------------------- |
+| `public/index.html`              | 工作台壳、合成文章画面、候选/观察/动态面板         |
+| `public/styles.css`              | 暖白与松绿设计变量、桌面布局、390px 抽屉与焦点样式 |
+| `src/main.ts`                    | DOM 事件、受限模拟交互、反馈与定时器取消           |
+| `src/demo.ts`                    | 仅用于样本的状态与场景，不是服务端 DTO 或业务事实  |
+| `src/icons.ts`                   | 内联 SVG 图标，避免外部依赖                        |
+| `src/preview-server.ts`          | 固定资产白名单，只读本地预览服务器                 |
+| `src/preview.ts`                 | 预览启动与停止入口                                 |
+| `test/browser-workbench.test.ts` | 真实 Chromium 对样本的离线交互与响应式测试         |
 
 界面以研究者在桌面观看页面为主：暖白 `#f5f5f0`、墨绿 `#263b33` 和松绿 `#386d50`；工作台使用系统无衬线字体，示例文章使用衬线字体；以 4px 间距为基础，6–9px 圆角、细边框和轻阴影。交互过渡约 180ms，遵守 `prefers-reduced-motion`。桌面页面画面为主，右侧集中呈现证据；窄屏改为底部详情抽屉。无需账户、凭据或模型配置。
 
@@ -114,3 +118,11 @@ SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm exec vite
 默认启动则从 server 包内 `dist/web/` 读取随包发布的资源。read-only SQLite 启动不会创建 home/Catalog、升级 schema、
 恢复票据或提交 Jobs；SQLite WAL/SHM 协调文件仍可能出现。API 示例、就绪状态和生命周期见
 [独立文献库阅读指南](../../docs/guides/library-query.md)。
+
+## 子目录导航
+
+- [public/](public/README.md)：Web 页面与样式。
+- [src/](src/README.md)：Web 交互源码。
+- [test/](test/README.md)：Web 回归测试。
+
+[项目 README](../../README.md)

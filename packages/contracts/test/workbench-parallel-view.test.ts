@@ -32,6 +32,26 @@ const sessions = [
 ];
 
 describe("parallel article Workbench view contracts", () => {
+  it("represents an idle workbench without inventing a literature identity", () => {
+    const idle = {
+      ...legacyView,
+      mode: "production",
+      article_id: null,
+      model_ready: false,
+    };
+    expect(parseWorkbenchView(idle).article_id).toBeNull();
+    expect(() => parseWorkbenchView({ ...idle, mode: "synthetic" })).toThrow();
+    expect(() =>
+      parseWorkbenchView({ ...idle, state: "agent-running" }),
+    ).toThrow();
+    expect(() => parseWorkbenchView({ ...idle, article_id: "" })).toThrow();
+    expect(() =>
+      parseWorkbenchView({
+        ...idle,
+        sessions: [{ ...sessions[0], article_id: null }],
+      }),
+    ).toThrow();
+  });
   it("retains the exact legacy single-session shape", () => {
     expect(parseWorkbenchView(legacyView)).toEqual(legacyView);
     expect(() =>

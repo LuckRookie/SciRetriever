@@ -290,7 +290,7 @@ async function installedBrowserJourney(
     const ui = await uiBrowser.newPage();
     const errors: string[] = [];
     ui.on("pageerror", (error) => errors.push(error.message));
-    await ui.goto(origin);
+    await ui.goto(`${origin}/?workspace=browser`);
     await ui.waitForFunction(() => {
       const button =
         document.querySelector<HTMLButtonElement>("#acquisition-start");

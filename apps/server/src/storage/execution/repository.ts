@@ -5,6 +5,7 @@ import {
   type ExecutionAttempt,
   type ExecutionEvent,
   type ExecutionJob,
+  type ExecutionJobCursor,
   type ExecutionJobStatus,
   type ExecutionLease,
   type ExecutionBudget,
@@ -130,8 +131,13 @@ export class ExecutionRepository {
     return this.database.consumeExecutionBudget(jobId, usage, now);
   }
 
-  listJobs(limit = 100): Promise<readonly ExecutionJob[]> {
-    return this.database.listExecutionJobs(limit);
+  listJobs(
+    limit = 100,
+    order: "oldest" | "newest" | "finished" = "oldest",
+    before: ExecutionJobCursor | null = null,
+    statuses: readonly ExecutionJobStatus[] = [],
+  ): Promise<readonly ExecutionJob[]> {
+    return this.database.listExecutionJobs(limit, order, before, statuses);
   }
   listTargets(
     jobId: string,
@@ -233,8 +239,9 @@ export class ExecutionRepository {
     jobId: string,
     after = -1,
     limit = 100,
+    order: "oldest" | "newest" = "oldest",
   ): Promise<readonly ExecutionEvent[]> {
-    return this.database.listExecutionEvents(jobId, after, limit);
+    return this.database.listExecutionEvents(jobId, after, limit, order);
   }
 
   putIntervention(

@@ -1,7 +1,11 @@
 import { mountLibrary } from "./library.js";
 import { record } from "./wire.js";
+import { onWorkspace } from "./navigation.js";
 import {
   mountKnowledgeReading,
+  configureDataTransport,
+  dataFetch,
+  type DataFetch,
   post as knowledgePost,
   renderKnowledgeArtifact,
   verifiedEvidenceEntry,
@@ -145,7 +149,7 @@ function mountExtractionPreparation(): void {
         spec,
         inputs,
       });
-      const response = await fetch("/api/v1/query/extraction-prepare", {
+      const response = await dataFetch("/api/v1/query/extraction-prepare", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -163,6 +167,14 @@ function mountExtractionPreparation(): void {
       if (revision !== started) return;
       status.textContent = `已固定 ${result.manifest.items.length} 项输入 · ${result.missing_required_capabilities.length} 项存在规范能力缺口；候选提交需要 Catalog v5。`;
       output.textContent = JSON.stringify(result, null, 2);
+      const delivery = document.getElementById(
+        "extraction-prepared",
+      ) as HTMLTextAreaElement | null;
+      if (delivery) {
+        delivery.value = JSON.stringify(result, null, 2);
+        delivery.dispatchEvent(new Event("input"));
+        status.textContent += " 输入已填入任务页的提取交付表单。";
+      }
     })()
       .catch((error: unknown) => {
         if (revision === started)
@@ -177,7 +189,7 @@ function mountExtractionPreparation(): void {
 }
 
 async function status(): Promise<QueryReadiness> {
-  const response = await fetch("/api/v1/query/status");
+  const response = await dataFetch("/api/v1/query/status");
   const value = record(await response.json(), "query status");
   const readiness = record(value.readiness, "query readiness");
   if (!response.ok || value.protocol_version !== 1) return "unavailable";
@@ -204,14 +216,14 @@ const endpoints: Record<string, string> = {
   "/api/context/search": "/api/v1/query/context",
 };
 
-async function queryRequest(
+export async function queryRequest(
   path: string,
   request: unknown,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const endpoint = endpoints[path];
   if (!endpoint) throw new Error("query-endpoint-unavailable");
-  const response = await fetch(endpoint, {
+  const response = await dataFetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ protocol_version: 1, request }),
@@ -231,11 +243,11 @@ async function queryRequest(
   return value;
 }
 
-async function download(
+export async function queryDownload(
   id: string,
   kind: "primary-pdf" | "content-markdown",
 ): Promise<void> {
-  const response = await fetch("/api/v1/query/artifact", {
+  const response = await dataFetch("/api/v1/query/artifact", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -777,20 +789,88 @@ function mountKnowledgeContext(): void {
   });
 }
 
-void status()
-  .then((readiness) => {
+function expandReader(field: HTMLElement): void {
+  for (
+    let parent: HTMLElement | null = field;
+    parent;
+    parent = parent.parentElement
+  )
+    if (parent instanceof HTMLDetailsElement) parent.open = true;
+}
+
+export async function mountQueryWorkbench(
+  options: {
+    fetch?: DataFetch;
+    mountLibrary?: boolean;
+  } = {},
+): Promise<void> {
+  configureDataTransport(options);
+  try {
+    const readiness = await status();
     showReadiness(readiness);
     if (readiness !== "ready") return;
-    mountLibrary({
-      queryOnly: true,
-      request: queryRequest,
-      download,
-      currentArticle: () => undefined,
-    });
+    if (options.mountLibrary !== false)
+      mountLibrary({
+        queryOnly: true,
+        request: queryRequest,
+        download: queryDownload,
+        currentArticle: () => undefined,
+      });
     mountContext();
     mountKnowledgeContext();
     mountExtractionPreparation();
     mountKnowledgeReading();
     mountSynthesisReading();
-  })
-  .catch(() => showReadiness("unavailable"));
+    window.addEventListener("sciretriever:literature-selected", (event) => {
+      const id = (event as CustomEvent<string>).detail;
+      for (const name of [
+        "context-literature-id",
+        "knowledge-context-literature-id",
+        "knowledge-list-literature-id",
+      ]) {
+        const field = document.getElementById(name) as HTMLInputElement | null;
+        if (!field) continue;
+        field.value = id;
+        field.dispatchEvent(new Event("input"));
+      }
+      const artifact = new URL(window.location.href).searchParams.get(
+        "knowledge",
+      );
+      if (artifact) {
+        const field = node<HTMLInputElement>("knowledge-read-id");
+        field.value = artifact;
+        field.dispatchEvent(new Event("input"));
+        expandReader(field);
+        node<HTMLButtonElement>("knowledge-read-submit").click();
+      } else node<HTMLButtonElement>("knowledge-list-submit").click();
+    });
+    const readLinkedSynthesis = () => {
+      const parameters = new URL(window.location.href).searchParams;
+      const knowledge = parameters.get("knowledge");
+      if (knowledge && !parameters.has("literature")) {
+        node<HTMLInputElement>("knowledge-list-literature-id").value = "";
+        const field = node<HTMLInputElement>("knowledge-read-id");
+        field.value = knowledge;
+        field.dispatchEvent(new Event("input"));
+        expandReader(field);
+        node<HTMLButtonElement>("knowledge-read-submit").click();
+      }
+      const artifact = parameters.get("synthesis");
+      if (!artifact) return;
+      const field = node<HTMLInputElement>("synthesis-read-id");
+      field.value = artifact;
+      field.dispatchEvent(new Event("input"));
+      expandReader(field);
+      node<HTMLButtonElement>("synthesis-read-submit").click();
+    };
+    onWorkspace((workspace) => {
+      if (workspace === "library") readLinkedSynthesis();
+    });
+    readLinkedSynthesis();
+  } catch {
+    showReadiness("unavailable");
+  }
+}
+
+if (document.querySelector('script[src="/query.js"]'))
+  void mountQueryWorkbench();

@@ -1,6 +1,6 @@
 import { parseConfigurationReadiness } from "@sciretriever/contracts";
 import { record, envelopeRecord, type JsonRecord } from "./wire.js";
-import { navigateWorkspace, onWorkspace } from "./navigation.js";
+import { onWorkspace } from "./navigation.js";
 
 const node = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const value = document.getElementById(id);
@@ -126,6 +126,7 @@ export function mountConfiguration(options: {
     "source-config-save",
     "provider-model-save",
     "config-save",
+    "paths-config-save",
   ];
   const beginPublish = (): boolean => {
     if (publishing) {
@@ -144,24 +145,6 @@ export function mountConfiguration(options: {
     for (const id of publicationButtons)
       node<HTMLButtonElement>(id).disabled = false;
     node<HTMLButtonElement>("config-refresh").disabled = false;
-  };
-  const show = (visible: boolean, push = true) => {
-    node("config-workspace").hidden = !visible;
-    if (!visible) {
-      if (push) navigateWorkspace("browser");
-      return;
-    }
-    if (push) navigateWorkspace("configuration");
-    node("jobs-workspace").hidden = true;
-    node("library-workspace").hidden = true;
-    node("live-workspace").hidden = true;
-    node("open-details").hidden = true;
-    node("workspace-name").textContent = "配置";
-    node("config-tab").setAttribute("aria-current", "page");
-    for (const id of ["browser-tab", "jobs-tab", "library-tab"])
-      node(id).removeAttribute("aria-current");
-    node("config-workspace").focus();
-    if (snapshot === null) void refresh();
   };
   const renderReadiness = (value: unknown) => {
     const status = parseConfigurationReadiness(value);
@@ -606,6 +589,11 @@ export function mountConfiguration(options: {
     snapshot = value;
     const configuration = record(value.configuration, "configuration");
     renderRuntimeControls(configuration);
+    const paths = record(configuration.paths, "configuration paths");
+    node<HTMLInputElement>("config-catalog-path").value =
+      typeof paths.catalog_path === "string" ? paths.catalog_path : "";
+    node<HTMLInputElement>("config-artifact-root").value =
+      typeof paths.artifact_root === "string" ? paths.artifact_root : "";
     renderSourceControls(configuration);
     renderProviderModelRegistry(configuration);
   };
@@ -652,14 +640,45 @@ export function mountConfiguration(options: {
       message("配置读取失败；请检查本地服务后重试。");
     }
   };
-  node("config-tab").addEventListener("click", (event) => {
-    event.preventDefault();
-    show(true);
-  });
   onWorkspace((workspace) => {
-    if (workspace === "configuration") show(true, false);
-    else if (workspace === "browser" && !node("config-workspace").hidden)
-      show(false, false);
+    if (workspace === "configuration" && snapshot === null) void refresh();
+  });
+  node("paths-config-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!snapshot) {
+      message("请先读取当前配置，再保存数据库绑定。");
+      return;
+    }
+    if (!beginPublish()) return;
+    const configuration = structuredClone(snapshot.configuration) as JsonRecord;
+    configuration.paths = {
+      ...record(configuration.paths, "configuration paths"),
+      catalog_path:
+        node<HTMLInputElement>("config-catalog-path").value.trim() || null,
+      artifact_root:
+        node<HTMLInputElement>("config-artifact-root").value.trim() || null,
+    };
+    const baseline =
+      typeof snapshot.revision === "string" ? snapshot.revision : "";
+    message("正在校验并保存数据库绑定…");
+    void options
+      .request("/api/configuration/publish-json", {
+        configuration,
+        baseline,
+        sections: ["paths"],
+      })
+      .then((result) => {
+        snapshot = envelopeRecord(result, "snapshot");
+        renderRuntimeStatus(result);
+        const savedMessage =
+          "数据库绑定已保存。当前进程继续使用启动时的数据库；重启服务后生效。已有数据没有移动。";
+        message(savedMessage);
+        return refreshReadinessAfterPublish(savedMessage);
+      })
+      .catch((error: unknown) =>
+        message(publishFailureMessage("数据库路径", error)),
+      )
+      .finally(finishPublish);
   });
   node("config-refresh").addEventListener("click", () => void refresh());
   for (const kind of ["metadata", "acquisition"] as const)

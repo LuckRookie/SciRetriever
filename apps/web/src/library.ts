@@ -2,12 +2,25 @@ import {
   parseLiteratureDetail,
   parseLiteratureSearchItem,
   parseReferenceDetail,
+  parseStrictJsonValue,
+  parseArticleIdentityRequest,
+  parseDocumentReadRequest,
+  parseDocumentReadResult,
   type LibrarySearchPage,
   type LiteratureDetail,
 } from "@sciretriever/contracts";
 import { record, referencePage } from "./wire.js";
-import { mountDocumentReading } from "./document-reading.js";
+import {
+  mountDocumentReading,
+  mountMaterialReading,
+} from "./document-reading.js";
 import { navigateWorkspace, onWorkspace } from "./navigation.js";
+import {
+  post,
+  submitProcessingTask,
+  usesDurableTasks,
+  verifiedEvidenceEntry,
+} from "./knowledge.js";
 const node = <T extends HTMLElement = HTMLElement>(id: string) => {
   const element = document.getElementById(id);
   if (!element) throw new Error("missing library element");
@@ -27,6 +40,8 @@ function element(tag: string, text: string, className?: string): HTMLElement {
 export function mountLibrary(options: {
   /** Mount the reading view without Browser, Jobs or Configuration navigation bindings. */
   queryOnly?: boolean;
+  reading?: boolean;
+  onProcess?(id: string): void;
   request(path: string, body: unknown): Promise<Record<string, unknown>>;
   download(id: string, kind: "primary-pdf" | "content-markdown"): Promise<void>;
   currentArticle(): string | undefined;
@@ -45,53 +60,24 @@ export function mountLibrary(options: {
     sort: "publication-year-desc",
   };
   const open = (library: boolean, push = true) => {
-    node("jobs-workspace").hidden = true;
-    node("config-workspace").hidden = true;
-    node("library-workspace").hidden = !library;
-    node("live-workspace").hidden = library;
-    node("open-details").hidden = library;
-    node("workspace-name").textContent = library ? "文献库" : "Browser 工作台";
-    const skip = document.querySelector<HTMLAnchorElement>(".skip-link");
-    if (skip) {
-      skip.href = library ? "#library-workspace" : "#live-workspace";
-      skip.textContent = library ? "跳到文献库" : "跳到工作台";
-    }
-    node("library-toggle").textContent = library ? "Browser 工作台" : "文献库";
-    node("live-details").dataset.open = "false";
-    node("details-backdrop").hidden = true;
+    if (push && !queryOnly) navigateWorkspace(library ? "library" : "browser");
     if (library) {
-      if (push) navigateWorkspace("library");
-      node("library-workspace").focus();
       void search(false, false);
-      if (selected) void detail(selected, false);
-    } else {
-      if (push) navigateWorkspace("browser");
-      node("live-workspace").focus();
+      const parameters = new URL(window.location.href).searchParams;
+      const hasLinkedKnowledge =
+        parameters.has("knowledge") || parameters.has("synthesis");
+      const id =
+        parameters.get("literature") ??
+        (hasLinkedKnowledge ? undefined : selected);
+      if (id) void detail(id, false);
+      else if (hasLinkedKnowledge) {
+        selected = undefined;
+        node("library-detail").replaceChildren(
+          element("p", "正在阅读所选任务的固定知识产物。", "library-empty"),
+        );
+      }
     }
-    node(library ? "library-tab" : "browser-tab").setAttribute(
-      "aria-current",
-      "page",
-    );
-    node(library ? "browser-tab" : "library-tab").removeAttribute(
-      "aria-current",
-    );
-    node("jobs-tab").removeAttribute("aria-current");
-    node("config-tab").removeAttribute("aria-current");
-    node("jobs-toggle").textContent = "任务";
   };
-  if (!queryOnly) {
-    node("library-toggle").addEventListener("click", () =>
-      open(node("library-workspace").hidden),
-    );
-    node("library-tab").addEventListener("click", (e) => {
-      e.preventDefault();
-      open(true);
-    });
-    node("browser-tab").addEventListener("click", (e) => {
-      e.preventDefault();
-      open(false);
-    });
-  }
   const message = (text: string) => {
     node("library-status").textContent = text;
   };
@@ -173,13 +159,228 @@ export function mountLibrary(options: {
     };
     if (d.primary_pdf) {
       download("下载 PDF", "primary-pdf");
-      if (d.primary_pdf.article_identity_status === "unverified")
-        actions.append(element("span", "文章身份未验证", "library-tag"));
+      const label = {
+        unverified: "文章身份未验证",
+        "match-supported": "文章身份有证据支持",
+        conflict: "文章身份存在冲突",
+        "insufficient-evidence": "文章身份证据不足",
+      };
+      if (d.primary_pdf.article_identity_status)
+        actions.append(
+          element(
+            "span",
+            label[d.primary_pdf.article_identity_status],
+            "library-tag",
+          ),
+        );
+      const assessment = d.primary_pdf.article_identity_assessment;
+      if (assessment) {
+        const evidence = document.createElement("details");
+        evidence.append(element("summary", "查看已保存的身份判断与证据"));
+        evidence.append(
+          element(
+            "p",
+            `${assessment.reason} · 方法 ${assessment.method.id} ${assessment.method.version} · ${assessment.method.provider}/${assessment.method.model}`,
+          ),
+        );
+        const controller = new AbortController();
+        for (const item of assessment.evidence) {
+          evidence.append(
+            element("p", `${item.field}: ${item.value} · ${item.quote}`),
+          );
+          const list = document.createElement("ul");
+          list.append(
+            verifiedEvidenceEntry(
+              item.evidence,
+              {
+                literature_id: assessment.literature_id,
+                asset_id: assessment.asset_id,
+                asset_sha256: assessment.asset_sha256,
+              },
+              controller.signal,
+            ),
+          );
+          evidence.append(list);
+        }
+        root.append(evidence);
+      }
     }
     if (d.content) download("下载 Markdown", "content-markdown");
-    if (queryOnly) {
-      const reader = mountDocumentReading(root, d, options.request, message);
-      if (reader) actions.append(reader);
+    if (queryOnly || options.reading) {
+      const pdfReader = mountMaterialReading(root, d);
+      if (pdfReader) actions.append(pdfReader);
+      const fixedVersion = new URL(window.location.href).searchParams.get(
+        "document",
+      );
+      const reader = mountDocumentReading(
+        root,
+        d,
+        options.request,
+        message,
+        fixedVersion ?? undefined,
+      );
+      if (reader) {
+        actions.append(reader);
+        if (fixedVersion) queueMicrotask(() => reader.click());
+      }
+    }
+    if (options.onProcess) {
+      const process = document.createElement("button");
+      process.type = "button";
+      process.textContent = "加工这篇文献";
+      process.addEventListener("click", () =>
+        options.onProcess!(d.literature.literature_id),
+      );
+      actions.append(process);
+      if (d.primary_pdf && usesDurableTasks()) {
+        const identity = document.createElement("details");
+        identity.className = "library-identity";
+        identity.append(element("summary", "核验文章身份"));
+        identity.append(
+          element(
+            "p",
+            "使用已保存的解析文档和当前元数据核验文章身份；明确调用模型，不下载材料，不删除或覆盖原 PDF。",
+          ),
+        );
+        const identityStatus = element("p", "");
+        identityStatus.setAttribute("role", "status");
+        const budgets = [
+          ["完整请求字节上限", 65536],
+          ["输出 token 上限", 2048],
+        ].map(([label, value]) => {
+          const wrap = document.createElement("label");
+          wrap.textContent = String(label);
+          const input = document.createElement("input");
+          input.type = "number";
+          input.min = "1";
+          input.step = "1";
+          input.value = String(value);
+          wrap.append(input);
+          identity.append(wrap);
+          return input;
+        });
+        const assess = document.createElement("button");
+        assess.type = "button";
+        assess.textContent = "提交身份核验任务";
+        assess.addEventListener("click", () => {
+          assess.disabled = true;
+          identityStatus.textContent = "正在固定文档与元数据输入…";
+          const controller = new AbortController();
+          void (async () => {
+            const asset = d.primary_pdf!.asset;
+            const selection = parseDocumentReadRequest("default", {
+              literature_id: d.literature.literature_id,
+              asset_id: asset.asset_id,
+              asset_sha256: asset.sha256,
+            });
+            const current = parseDocumentReadResult(
+              "default",
+              await post("document-default", selection, controller.signal),
+              selection,
+            );
+            if (!current.default) throw new Error("请先显式解析已有 PDF");
+            const describe = parseDocumentReadRequest("describe", {
+              document_version_id: current.default.document_version_id,
+            });
+            const document = parseDocumentReadResult(
+              "describe",
+              await post("document-describe", describe, controller.signal),
+              describe,
+            ).document;
+            if (
+              document.source_material_ref.literature_id !==
+                d.literature.literature_id ||
+              document.source_material_ref.asset_id !== asset.asset_id ||
+              document.source_material_ref.asset_sha256 !== asset.sha256
+            )
+              throw new Error("文档输入与当前材料不一致");
+            const request = parseArticleIdentityRequest({
+              schema_version: 1,
+              literature_id: d.literature.literature_id,
+              document_version_id: document.document_version_id,
+              representation_sha256: document.representation_sha256,
+              metadata_revision: d.metadata_revision,
+              metadata_sha256: d.metadata_sha256,
+              budget: {
+                max_input_bytes: Number(budgets[0]!.value),
+                max_output_tokens: Number(budgets[1]!.value),
+              },
+            });
+            await submitProcessingTask(
+              { operation: "assess-article-identity", request },
+              identityStatus,
+              controller.signal,
+            );
+          })()
+            .catch((error: unknown) => {
+              identityStatus.textContent = `身份核验未提交：${error instanceof Error ? error.message : "未知错误"}`;
+            })
+            .finally(() => {
+              assess.disabled = false;
+            });
+        });
+        identity.append(assess, identityStatus);
+        root.append(identity);
+      }
+      const pdf = d.primary_pdf?.asset;
+      if (pdf) {
+        for (const [fieldId, label, kind] of [
+          ["synthesis-inputs", "加入集合综合", "document"],
+          ["extraction-inputs", "加入提取输入", null],
+        ] as const) {
+          const field = document.getElementById(
+            fieldId,
+          ) as HTMLTextAreaElement | null;
+          if (!field) continue;
+          const add = document.createElement("button");
+          add.type = "button";
+          add.textContent = label;
+          add.addEventListener("click", () => {
+            try {
+              const current: unknown = field.value.trim()
+                ? parseStrictJsonValue(field.value)
+                : [];
+              if (!Array.isArray(current)) throw new Error("输入必须是数组");
+              const id = d.literature.literature_id;
+              const values = current.filter(
+                (item: unknown) =>
+                  !item ||
+                  typeof item !== "object" ||
+                  !("literature_id" in item) ||
+                  item.literature_id !== id,
+              );
+              values.push({
+                ...(kind ? { kind } : {}),
+                input_id: `paper-${id}`,
+                literature_id: id,
+                asset_id: pdf.asset_id,
+                asset_sha256: pdf.sha256,
+                document_version_id: null,
+              });
+              field.value = JSON.stringify(values, null, 2);
+              field.dispatchEvent(new Event("input"));
+              message(
+                `已加入${label.slice(2)}（${values.length} 篇）；准备和执行需要另外明确启动。`,
+              );
+            } catch {
+              message(
+                "已有输入不是有效 JSON 数组，已保留草稿；请先修正再加入文献。",
+              );
+            }
+          });
+          actions.append(add);
+        }
+      }
+    }
+    const taskId = new URL(window.location.href).searchParams.get("job");
+    if (taskId && !queryOnly) {
+      const back = document.createElement("button");
+      back.type = "button";
+      back.textContent = "返回任务";
+      back.addEventListener("click", () =>
+        navigateWorkspace("jobs", { job: taskId }),
+      );
+      actions.append(back);
     }
     if (options.bibliography) {
       for (const [label, format] of [
@@ -211,7 +412,14 @@ export function mountLibrary(options: {
         target.disabled = true;
         void options.selectArticle!(d.literature.literature_id)
           .then(() => message("Browser 已切换到这篇文献。"))
-          .catch(() => message("Browser 暂时无法切换目标，请先结束当前操作。"))
+          .catch((error: unknown) =>
+            message(
+              error instanceof Error &&
+                error.message === "browser-session-unavailable"
+                ? "当前文献暂无 Browser 会话。先启动 PDF 获取任务；进入 Browser 阶段后可观看和协助。"
+                : "Browser 暂时无法切换目标，请刷新当前会话后重试。",
+            ),
+          )
           .finally(() => {
             target.disabled = false;
           });
@@ -379,6 +587,8 @@ export function mountLibrary(options: {
     if (push) {
       const url = new URL(window.location.href);
       url.searchParams.set("literature", id);
+      for (const key of ["knowledge", "document", "synthesis"])
+        url.searchParams.delete(key);
       window.history.pushState({ literature: id }, "", url);
     }
     node("library-detail").replaceChildren(
@@ -396,7 +606,14 @@ export function mountLibrary(options: {
         literature_id: id,
       });
       const parsed = await parseLiteratureDetail(result.detail);
-      if (revision === detailRevision) renderDetail(parsed);
+      if (parsed.literature.literature_id !== id)
+        throw new Error("literature binding mismatch");
+      if (revision === detailRevision) {
+        renderDetail(parsed);
+        window.dispatchEvent(
+          new CustomEvent("sciretriever:literature-selected", { detail: id }),
+        );
+      }
     } catch (error: unknown) {
       if (revision === detailRevision) {
         const code = error instanceof Error ? error.message : "";
@@ -574,8 +791,8 @@ export function mountLibrary(options: {
   if (initialId) void detail(initialId, false);
   return {
     openArticle: async (id: string) => {
-      open(true);
-      await detail(id);
+      if (!queryOnly) navigateWorkspace("library", { literature: id });
+      await detail(id, queryOnly);
     },
   };
 }

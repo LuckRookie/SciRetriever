@@ -1,3 +1,4 @@
+import { ProcessingTaskError } from "../application/jobs/processing.js";
 import { once } from "node:events";
 import {
   LiteratureNotFoundError,
@@ -125,8 +126,46 @@ export interface WorkbenchRuntimeCapabilities {
     readonly failure_code: string | null;
   }[];
 }
+export interface WorkbenchWorkspace {
+  readonly catalog_path: string | null;
+  readonly artifact_root: string | null;
+  readonly schema_version: number | null;
+  readonly configuration_revision: string | null;
+  readonly capabilities: {
+    readonly tasks: boolean;
+    readonly query: boolean;
+    readonly maintenance: boolean;
+    readonly discovery: boolean;
+    readonly import: boolean;
+  };
+  readonly runtime_capabilities: WorkbenchRuntimeCapabilities | null;
+}
 export interface WorkbenchHttpOptions {
   readonly session: WorkbenchSession | ProductionWorkbenchSession;
+  readonly workspace?: WorkbenchWorkspace;
+  /** Same catalog read services; shares routes, never creates a second HTTP server. */
+  readonly query?: QueryOnlyHttpOptions;
+  readonly tasks?: {
+    list(
+      limit?: number,
+      cursor?: string,
+      statusGroup?: "active" | "attention" | "ended",
+    ): Promise<unknown>;
+    read(taskId: string): Promise<unknown>;
+    create(value: unknown): Promise<unknown>;
+    start(
+      taskId: string,
+    ): Promise<{ readonly started: boolean; readonly task: unknown }>;
+    control(
+      taskId: string,
+      action: "pause" | "cancel" | "resume" | "retry",
+    ): Promise<unknown>;
+  };
+  readonly discovery?: (
+    value: unknown,
+    signal: AbortSignal,
+  ) => Promise<unknown>;
+  readonly importBibliography?: (value: unknown) => Promise<unknown>;
   /** Explicit article completion; absent from the synthetic preview. */
   readonly acquisition?: { start(articleId: string): void };
   readonly tabs?: {
@@ -193,7 +232,7 @@ export interface WorkbenchHttpOptions {
     policy(jobId: string): Promise<unknown>;
     budget(jobId: string): Promise<unknown>;
     interventions(jobId: string, limit?: number): Promise<unknown>;
-    run(jobId: string): Promise<unknown>;
+    run(jobId: string, signal?: AbortSignal): Promise<unknown>;
     resolveIntervention(
       interventionId: string,
       resolution: "continue" | "skip" | "cancel",
@@ -245,7 +284,18 @@ function validUiLocation(url: URL): boolean {
   if (
     new Set(keys).size !== keys.length ||
     keys.some(
-      (key) => !["workspace", "q", "sort", "literature", "job"].includes(key),
+      (key) =>
+        ![
+          "workspace",
+          "q",
+          "sort",
+          "literature",
+          "job",
+          "document",
+          "knowledge",
+          "synthesis",
+          "task_filter",
+        ].includes(key),
     )
   )
     return false;
@@ -259,7 +309,15 @@ function validUiLocation(url: URL): boolean {
     (sort === null || UI_SORTS.has(sort)) &&
     (query === null || query.length <= 1000) &&
     (literature === null || /^[A-Za-z0-9._:-]{1,256}$/u.test(literature)) &&
-    (job === null || /^[A-Za-z0-9._:-]{1,128}$/u.test(job))
+    (job === null || /^[A-Za-z0-9._:-]{1,128}$/u.test(job)) &&
+    (!url.searchParams.has("task_filter") ||
+      ["all", "active", "attention", "completed", "ended"].includes(
+        url.searchParams.get("task_filter")!,
+      )) &&
+    ["document", "knowledge", "synthesis"].every((key) => {
+      const value = url.searchParams.get(key);
+      return value === null || /^[A-Za-z0-9._:-]{1,128}$/u.test(value);
+    })
   );
 }
 function equal(a: string, b: string): boolean {
@@ -609,14 +667,18 @@ export async function startWorkbenchHttp(
   const cookie = randomBytes(32).toString("hex");
   const clients = new Map<string, ClientGrant>();
   const streams = new Set<ServerResponse>();
+  const pending = new Set<Promise<void>>();
   const stopUploads = new AbortController();
   let origin = "",
     host = "",
     closing = false;
+  const queryHandler = options.query
+    ? createQueryHttpHandler(options.query, () => ({ origin, host }))
+    : undefined;
   const server = createServer(
     { requestTimeout: 5000, headersTimeout: 5000, maxHeaderSize: 8192 },
     (request, response) => {
-      void handle(request, response).catch((error: unknown) => {
+      const operation = handle(request, response).catch((error: unknown) => {
         if (
           request.url?.startsWith("/api/maintenance/ingest-pdf") ||
           request.url?.startsWith("/api/maintenance/parse-document") ||
@@ -636,22 +698,24 @@ export async function startWorkbenchHttp(
           return;
         }
         const code =
-          error instanceof WorkbenchSessionError
+          error instanceof ProcessingTaskError
             ? error.code
-            : error instanceof ManualPdfInputError ||
-                error instanceof LiteraturePublicationError ||
-                error instanceof CandidateAcceptanceError
+            : error instanceof WorkbenchSessionError
               ? error.code
-              : error instanceof PdfAcceptanceError
-                ? "manual-pdf-invalid"
-                : error instanceof ConfigurationOwnerError ||
-                    error instanceof ConfigurationProbeError
-                  ? error.code
-                  : error instanceof WorkbenchInputError
+              : error instanceof ManualPdfInputError ||
+                  error instanceof LiteraturePublicationError ||
+                  error instanceof CandidateAcceptanceError
+                ? error.code
+                : error instanceof PdfAcceptanceError
+                  ? "manual-pdf-invalid"
+                  : error instanceof ConfigurationOwnerError ||
+                      error instanceof ConfigurationProbeError
                     ? error.code
-                    : error instanceof ContractValidationError
-                      ? "invalid-command"
-                      : "command-rejected";
+                    : error instanceof WorkbenchInputError
+                      ? error.code
+                      : error instanceof ContractValidationError
+                        ? "invalid-command"
+                        : "command-rejected";
         if (response.destroyed) return;
         if (response.headersSent) {
           response.destroy();
@@ -659,24 +723,28 @@ export async function startWorkbenchHttp(
         }
         response.removeHeader("Content-Disposition");
         const status =
-          error instanceof LiteratureNotFoundError
-            ? 404
-            : error instanceof ManualPdfInputError ||
-                error instanceof PdfAcceptanceError ||
-                (error instanceof LiteraturePublicationError &&
-                  error.code !== "primary-asset-conflict")
-              ? 400
-              : error instanceof CandidateAcceptanceError &&
-                  error.code === "literature-not-found"
-                ? 404
-                : error instanceof WorkbenchInputError ||
-                    error instanceof ContractValidationError ||
-                    (error instanceof ConfigurationOwnerError &&
-                      error.code === "configuration-invalid") ||
-                    (error instanceof ConfigurationProbeError &&
-                      error.code === "configuration-probe-invalid")
-                  ? 400
-                  : 409;
+          error instanceof ProcessingTaskError
+            ? error.code === "processing-not-found"
+              ? 404
+              : 409
+            : error instanceof LiteratureNotFoundError
+              ? 404
+              : error instanceof ManualPdfInputError ||
+                  error instanceof PdfAcceptanceError ||
+                  (error instanceof LiteraturePublicationError &&
+                    error.code !== "primary-asset-conflict")
+                ? 400
+                : error instanceof CandidateAcceptanceError &&
+                    error.code === "literature-not-found"
+                  ? 404
+                  : error instanceof WorkbenchInputError ||
+                      error instanceof ContractValidationError ||
+                      (error instanceof ConfigurationOwnerError &&
+                        error.code === "configuration-invalid") ||
+                      (error instanceof ConfigurationProbeError &&
+                        error.code === "configuration-probe-invalid")
+                    ? 400
+                    : 409;
         json(response, status, {
           code:
             error instanceof LiteratureNotFoundError
@@ -684,6 +752,14 @@ export async function startWorkbenchHttp(
               : code,
         });
       });
+      pending.add(operation);
+      void operation.then(
+        () => pending.delete(operation),
+        () => {
+          pending.delete(operation);
+          response.destroy();
+        },
+      );
     },
   );
   async function handle(
@@ -695,7 +771,7 @@ export async function startWorkbenchHttp(
     response.setHeader("Referrer-Policy", "no-referrer");
     response.setHeader(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-src blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
     );
     const requestOrigin = request.headers.origin;
     if (
@@ -792,6 +868,10 @@ export async function startWorkbenchHttp(
         (key) =>
           !["client_id", "session_id", "frame_seq", "limit", "after"].includes(
             key,
+          ) &&
+          !(
+            pathname === "/api/tasks" &&
+            ["cursor", "status_group"].includes(key)
           ),
       ) ||
       new Set(queryKeys).size !== queryKeys.length
@@ -806,6 +886,75 @@ export async function startWorkbenchHttp(
       return;
     }
     grant.touched = Date.now();
+    const sharedQueryRoute =
+      queryHandler &&
+      (url.pathname.startsWith("/api/v1/query/") ||
+        url.pathname.startsWith("/api/v1/maintenance/"));
+    if (sharedQueryRoute && request.method === "GET") {
+      await queryHandler.handle(request, response, grant.csrf);
+      return;
+    }
+    if (request.method === "GET" && pathname === "/api/workspace") {
+      json(response, 200, {
+        workspace: options.workspace ?? {
+          catalog_path: null,
+          artifact_root: null,
+          schema_version: null,
+          configuration_revision:
+            options.configuration?.runtime_revision ?? null,
+          capabilities: {
+            tasks: !!options.tasks,
+            query: !!options.query,
+            maintenance: !!options.maintenance,
+            discovery: !!options.discovery,
+            import: !!options.importBibliography,
+          },
+          runtime_capabilities:
+            options.configuration?.runtime_capabilities ?? null,
+        },
+      });
+      return;
+    }
+    if (
+      request.method === "GET" &&
+      (pathname === "/api/tasks" || pathname.startsWith("/api/tasks/"))
+    ) {
+      if (!options.tasks) {
+        json(response, 503, { code: "tasks-unavailable" });
+        return;
+      }
+      const parts = pathname.split("/").filter(Boolean);
+      if (parts.length === 2) {
+        const limit = Number(url.searchParams.get("limit") ?? "100");
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
+          invalidInput();
+        const statusGroup = url.searchParams.get("status_group");
+        if (
+          statusGroup !== null &&
+          !["active", "attention", "ended"].includes(statusGroup)
+        )
+          invalidInput();
+        json(
+          response,
+          200,
+          await options.tasks.list(
+            limit,
+            url.searchParams.get("cursor") ?? undefined,
+            (statusGroup ?? undefined) as
+              | "active"
+              | "attention"
+              | "ended"
+              | undefined,
+          ),
+        );
+      } else if (
+        parts.length === 3 &&
+        /^[A-Za-z0-9._:-]{1,128}$/u.test(parts[2]!)
+      ) {
+        json(response, 200, { task: await options.tasks.read(parts[2]!) });
+      } else json(response, 404, { code: "endpoint-not-found" });
+      return;
+    }
     if (request.method === "GET" && pathname === "/api/view") {
       json(response, 200, projectedView(clientId));
       return;
@@ -987,6 +1136,74 @@ export async function startWorkbenchHttp(
       json(response, 403, { code: "csrf-required" });
       return;
     }
+    if (sharedQueryRoute) {
+      await queryHandler.handle(request, response, grant.csrf);
+      return;
+    }
+    if (pathname === "/api/tasks" || pathname.startsWith("/api/tasks/")) {
+      if (!options.tasks) {
+        json(response, 503, { code: "tasks-unavailable" });
+        return;
+      }
+      const value = await extractionBody(request, 1024 * 1024);
+      const parts = pathname.split("/").filter(Boolean);
+      if (parts.length === 2) {
+        json(response, 201, { task: await options.tasks.create(value) });
+        return;
+      }
+      const id = parts[2] ?? "";
+      if (parts.length !== 4 || !/^[A-Za-z0-9._:-]{1,128}$/u.test(id))
+        invalidInput();
+      object(value, []);
+      if (parts[3] === "start") {
+        json(response, 202, await options.tasks.start(id));
+        return;
+      }
+      if (!["pause", "cancel", "resume", "retry"].includes(parts[3]!))
+        invalidInput();
+      json(response, 200, {
+        task: await options.tasks.control(
+          id,
+          parts[3] as "pause" | "cancel" | "resume" | "retry",
+        ),
+      });
+      return;
+    }
+    if (pathname === "/api/discovery") {
+      if (!options.discovery) {
+        json(response, 503, { code: "discovery-unavailable" });
+        return;
+      }
+      const value = await body(request);
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      response.once("close", abort);
+      streams.add(response);
+      try {
+        json(response, 200, {
+          report: await options.discovery(
+            value,
+            AbortSignal.any([controller.signal, stopUploads.signal]),
+          ),
+        });
+      } finally {
+        streams.delete(response);
+        response.off("close", abort);
+      }
+      return;
+    }
+    if (pathname === "/api/import") {
+      if (!options.importBibliography) {
+        json(response, 503, { code: "import-unavailable" });
+        return;
+      }
+      json(response, 200, {
+        report: await options.importBibliography(
+          await extractionBody(request, 1024 * 1024),
+        ),
+      });
+      return;
+    }
     if (pathname === "/api/maintenance/ingest-pdf") {
       if (!options.maintenance) {
         json(response, 503, {
@@ -1115,7 +1332,19 @@ export async function startWorkbenchHttp(
           return;
         }
         object(value, []);
-        json(response, 200, { results: await options.jobs.run(id) });
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        response.once("close", abort);
+        try {
+          json(response, 200, {
+            results: await options.jobs.run(
+              id,
+              AbortSignal.any([controller.signal, stopUploads.signal]),
+            ),
+          });
+        } finally {
+          response.off("close", abort);
+        }
         return;
       }
       const id = parts[2] ?? "";
@@ -1352,11 +1581,19 @@ export async function startWorkbenchHttp(
         typeof command.image !== "boolean"
       )
         invalidInput();
-      json(response, 200, {
-        result: await options.configuration.probe(
-          command as unknown as ConfigurationProbeRequest,
-        ),
-      });
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      response.once("close", abort);
+      try {
+        json(response, 200, {
+          result: await options.configuration.probe(
+            command as unknown as ConfigurationProbeRequest,
+            AbortSignal.any([controller.signal, stopUploads.signal]),
+          ),
+        });
+      } finally {
+        response.off("close", abort);
+      }
       return;
     }
     if (pathname === "/api/configuration/credential") {
@@ -1502,6 +1739,7 @@ export async function startWorkbenchHttp(
       if (closing) return;
       closing = true;
       stopUploads.abort();
+      queryHandler?.close();
       clearInterval(refreshTimer);
       for (const response of streams) response.end();
       for (const id of clients.keys()) session.detach(id);
@@ -1511,6 +1749,7 @@ export async function startWorkbenchHttp(
       );
       server.closeAllConnections();
       await done;
+      await Promise.allSettled([...pending]);
     },
   };
 }
@@ -1541,11 +1780,10 @@ export interface QueryOnlyHttpOptions {
 }
 
 /** Loopback HTTP adapter for a query-only Application; it owns no Browser or Jobs. */
-export async function startQueryOnlyHttp(
+function createQueryHttpHandler(
   options: QueryOnlyHttpOptions,
-): Promise<{ readonly origin: string; close(): Promise<void> }> {
-  let origin = "";
-  let host = "";
+  address: () => { readonly origin: string; readonly host: string },
+) {
   let closing = false;
   const maintenanceCookie = `sr_maintenance_${randomBytes(8).toString("hex")}`;
   const maintenanceToken = randomBytes(32).toString("hex");
@@ -1553,135 +1791,19 @@ export async function startQueryOnlyHttp(
   const streams = new Set<ServerResponse>();
   const verifiedBinaryStreams = new Set<ServerResponse>();
   const stopUploads = new AbortController();
-  const server = createServer(
-    { requestTimeout: 5000, headersTimeout: 5000, maxHeaderSize: 8192 },
-    (request, response) => {
-      void handle(request, response).catch((error: unknown) => {
-        if (
-          request.url?.startsWith("/api/v1/maintenance/ingest-pdf") ||
-          request.url?.startsWith("/api/v1/maintenance/parse-document") ||
-          request.url?.startsWith("/api/v1/maintenance/document-default") ||
-          request.url?.startsWith("/api/v1/maintenance/rebuild-index") ||
-          request.url?.startsWith(
-            "/api/v1/maintenance/rebuild-knowledge-index",
-          ) ||
-          request.url?.startsWith("/api/v1/maintenance/extraction-") ||
-          request.url?.startsWith("/api/v1/maintenance/analyze-knowledge") ||
-          request.url?.startsWith("/api/v1/maintenance/synthesize")
-        ) {
-          const failure = maintenanceError(error);
-          if (response.headersSent || response.destroyed) response.destroy();
-          else
-            json(response, failure.status, {
-              protocol_version: 1,
-              code: failure.code,
-              ...(failure.issue ? { issue: failure.issue } : {}),
-              ...(failure.reason
-                ? { reason: failure.reason, retryable: failure.retryable }
-                : {}),
-            });
-          return;
-        }
-        if (response.destroyed) return;
-        if (response.headersSent) {
-          response.destroy();
-          return;
-        }
-        const code =
-          error instanceof MaterialContextError ||
-          error instanceof KnowledgeContextError
-            ? error.code
-            : error instanceof SynthesisReadError ||
-                error instanceof SynthesisPreparationError
-              ? error.code
-              : error instanceof KnowledgeReadError
-                ? error.code
-                : error instanceof DocumentReadError
-                  ? error.code
-                  : error instanceof ContractValidationError ||
-                      error instanceof WorkbenchInputError
-                    ? "invalid-command"
-                    : error instanceof ManualPdfInputError ||
-                        error instanceof LiteraturePublicationError ||
-                        error instanceof CandidateAcceptanceError
-                      ? error.code
-                      : error instanceof PdfAcceptanceError
-                        ? "manual-pdf-invalid"
-                        : error instanceof LiteratureNotFoundError
-                          ? "literature-not-found"
-                          : error instanceof LiteratureQueryError
-                            ? "query-reference-invalid"
-                            : "query-unavailable";
-        const status =
-          error instanceof MaterialContextError ||
-          error instanceof KnowledgeContextError
-            ? error.code === "context-cursor-invalid" ||
-              error.code === "context-budget-invalid" ||
-              error.code === "context-tokenizer-unsupported"
-              ? 400
-              : 503
-            : error instanceof KnowledgeReadError
-              ? error.code === "knowledge-invalid"
-                ? 400
-                : error.code === "knowledge-kind-unsupported"
-                  ? 422
-                  : error.code === "knowledge-cancelled"
-                    ? 409
-                    : 503
-              : error instanceof SynthesisReadError ||
-                  error instanceof SynthesisPreparationError
-                ? error.code === "synthesis-invalid"
-                  ? 400
-                  : error.code === "synthesis-cancelled" ||
-                      error.code === "synthesis-stale-binding"
-                    ? 409
-                    : error.code === "synthesis-limit"
-                      ? 422
-                      : 503
-                : error instanceof DocumentReadError
-                  ? error.code === "document-invalid"
-                    ? 400
-                    : error.code === "material-stale"
-                      ? 409
-                      : error.code === "document-missing" ||
-                          error.code === "material-missing"
-                        ? 404
-                        : error.code === "document-v3-required" ||
-                            error.code === "document-unsupported"
-                          ? 422
-                          : 503
-                  : error instanceof ContractValidationError ||
-                      error instanceof WorkbenchInputError
-                    ? 400
-                    : error instanceof ManualPdfInputError ||
-                        error instanceof PdfAcceptanceError ||
-                        (error instanceof LiteraturePublicationError &&
-                          error.code !== "primary-asset-conflict")
-                      ? 400
-                      : error instanceof CandidateAcceptanceError &&
-                          error.code === "literature-not-found"
-                        ? 404
-                        : error instanceof LiteratureNotFoundError
-                          ? 404
-                          : error instanceof LiteratureQueryError
-                            ? 409
-                            : 503;
-        json(response, status, { protocol_version: 1, code });
-      });
-    },
-  );
-
   async function handle(
     request: IncomingMessage,
     response: ServerResponse,
+    workbenchCsrf?: string,
   ): Promise<void> {
     response.setHeader("Cache-Control", "no-store");
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Referrer-Policy", "no-referrer");
     response.setHeader(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-src blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
     );
+    const { origin, host } = address();
     const requestOrigin = request.headers.origin;
     if (
       closing ||
@@ -1716,12 +1838,13 @@ export async function startQueryOnlyHttp(
       if (
         !options.maintenance ||
         request.method !== "GET" ||
-        !(request.headers.cookie ?? "")
-          .split(";")
-          .map((part) => part.trim())
-          .some((part) =>
-            equal(part, `${maintenanceCookie}=${maintenanceToken}`),
-          )
+        (workbenchCsrf === undefined &&
+          !(request.headers.cookie ?? "")
+            .split(";")
+            .map((part) => part.trim())
+            .some((part) =>
+              equal(part, `${maintenanceCookie}=${maintenanceToken}`),
+            ))
       ) {
         json(response, 403, {
           protocol_version: 1,
@@ -1729,7 +1852,10 @@ export async function startQueryOnlyHttp(
         });
         return;
       }
-      json(response, 200, { protocol_version: 1, csrf: maintenanceCsrf });
+      json(response, 200, {
+        protocol_version: 1,
+        csrf: workbenchCsrf ?? maintenanceCsrf,
+      });
       return;
     }
     if (url.pathname === "/api/v1/maintenance/ingest-pdf") {
@@ -1743,13 +1869,14 @@ export async function startQueryOnlyHttp(
       if (
         request.method !== "POST" ||
         requestOrigin !== origin ||
-        request.headers["x-sciretriever-csrf"] !== maintenanceCsrf ||
-        !(request.headers.cookie ?? "")
-          .split(";")
-          .map((part) => part.trim())
-          .some((part) =>
-            equal(part, `${maintenanceCookie}=${maintenanceToken}`),
-          )
+        (workbenchCsrf === undefined &&
+          (request.headers["x-sciretriever-csrf"] !== maintenanceCsrf ||
+            !(request.headers.cookie ?? "")
+              .split(";")
+              .map((part) => part.trim())
+              .some((part) =>
+                equal(part, `${maintenanceCookie}=${maintenanceToken}`),
+              )))
       ) {
         json(response, 403, {
           protocol_version: 1,
@@ -1802,13 +1929,14 @@ export async function startQueryOnlyHttp(
       if (
         request.method !== "POST" ||
         requestOrigin !== origin ||
-        request.headers["x-sciretriever-csrf"] !== maintenanceCsrf ||
-        !(request.headers.cookie ?? "")
-          .split(";")
-          .map((part) => part.trim())
-          .some((part) =>
-            equal(part, `${maintenanceCookie}=${maintenanceToken}`),
-          )
+        (workbenchCsrf === undefined &&
+          (request.headers["x-sciretriever-csrf"] !== maintenanceCsrf ||
+            !(request.headers.cookie ?? "")
+              .split(";")
+              .map((part) => part.trim())
+              .some((part) =>
+                equal(part, `${maintenanceCookie}=${maintenanceToken}`),
+              )))
       ) {
         json(response, 403, {
           protocol_version: 1,
@@ -2571,6 +2699,157 @@ export async function startQueryOnlyHttp(
     }
   }
 
+  return {
+    handle: (
+      request: IncomingMessage,
+      response: ServerResponse,
+      workbenchCsrf?: string,
+    ) =>
+      handle(request, response, workbenchCsrf).catch((error: unknown) => {
+        if (
+          request.url?.startsWith("/api/v1/maintenance/ingest-pdf") ||
+          request.url?.startsWith("/api/v1/maintenance/parse-document") ||
+          request.url?.startsWith("/api/v1/maintenance/document-default") ||
+          request.url?.startsWith("/api/v1/maintenance/rebuild-index") ||
+          request.url?.startsWith(
+            "/api/v1/maintenance/rebuild-knowledge-index",
+          ) ||
+          request.url?.startsWith("/api/v1/maintenance/extraction-") ||
+          request.url?.startsWith("/api/v1/maintenance/analyze-knowledge") ||
+          request.url?.startsWith("/api/v1/maintenance/synthesize")
+        ) {
+          const failure = maintenanceError(error);
+          if (response.headersSent || response.destroyed) response.destroy();
+          else
+            json(response, failure.status, {
+              protocol_version: 1,
+              code: failure.code,
+              ...(failure.issue ? { issue: failure.issue } : {}),
+              ...(failure.reason
+                ? { reason: failure.reason, retryable: failure.retryable }
+                : {}),
+            });
+          return;
+        }
+        if (response.destroyed) return;
+        if (response.headersSent) {
+          response.destroy();
+          return;
+        }
+        const code =
+          error instanceof MaterialContextError ||
+          error instanceof KnowledgeContextError
+            ? error.code
+            : error instanceof SynthesisReadError ||
+                error instanceof SynthesisPreparationError
+              ? error.code
+              : error instanceof KnowledgeReadError
+                ? error.code
+                : error instanceof DocumentReadError
+                  ? error.code
+                  : error instanceof ContractValidationError ||
+                      error instanceof WorkbenchInputError
+                    ? "invalid-command"
+                    : error instanceof ManualPdfInputError ||
+                        error instanceof LiteraturePublicationError ||
+                        error instanceof CandidateAcceptanceError
+                      ? error.code
+                      : error instanceof PdfAcceptanceError
+                        ? "manual-pdf-invalid"
+                        : error instanceof LiteratureNotFoundError
+                          ? "literature-not-found"
+                          : error instanceof LiteratureQueryError
+                            ? "query-reference-invalid"
+                            : "query-unavailable";
+        const status =
+          error instanceof MaterialContextError ||
+          error instanceof KnowledgeContextError
+            ? error.code === "context-cursor-invalid" ||
+              error.code === "context-budget-invalid" ||
+              error.code === "context-tokenizer-unsupported"
+              ? 400
+              : 503
+            : error instanceof KnowledgeReadError
+              ? error.code === "knowledge-invalid"
+                ? 400
+                : error.code === "knowledge-kind-unsupported"
+                  ? 422
+                  : error.code === "knowledge-cancelled"
+                    ? 409
+                    : 503
+              : error instanceof SynthesisReadError ||
+                  error instanceof SynthesisPreparationError
+                ? error.code === "synthesis-invalid"
+                  ? 400
+                  : error.code === "synthesis-cancelled" ||
+                      error.code === "synthesis-stale-binding"
+                    ? 409
+                    : error.code === "synthesis-limit"
+                      ? 422
+                      : 503
+                : error instanceof DocumentReadError
+                  ? error.code === "document-invalid"
+                    ? 400
+                    : error.code === "material-stale"
+                      ? 409
+                      : error.code === "document-missing" ||
+                          error.code === "material-missing"
+                        ? 404
+                        : error.code === "document-v3-required" ||
+                            error.code === "document-unsupported"
+                          ? 422
+                          : 503
+                  : error instanceof ContractValidationError ||
+                      error instanceof WorkbenchInputError
+                    ? 400
+                    : error instanceof ManualPdfInputError ||
+                        error instanceof PdfAcceptanceError ||
+                        (error instanceof LiteraturePublicationError &&
+                          error.code !== "primary-asset-conflict")
+                      ? 400
+                      : error instanceof CandidateAcceptanceError &&
+                          error.code === "literature-not-found"
+                        ? 404
+                        : error instanceof LiteratureNotFoundError
+                          ? 404
+                          : error instanceof LiteratureQueryError
+                            ? 409
+                            : 503;
+        json(response, status, { protocol_version: 1, code });
+      }),
+    close: () => {
+      closing = true;
+      stopUploads.abort();
+      for (const response of streams)
+        if (verifiedBinaryStreams.has(response)) response.destroy();
+        else response.end();
+    },
+  };
+}
+
+/** Loopback HTTP adapter for a query-only Application; it owns no Browser or Jobs. */
+export async function startQueryOnlyHttp(
+  options: QueryOnlyHttpOptions,
+): Promise<{ readonly origin: string; close(): Promise<void> }> {
+  let origin = "";
+  let host = "";
+  let closing = false;
+  const pending = new Set<Promise<void>>();
+  const handler = createQueryHttpHandler(options, () => ({ origin, host }));
+  const server = createServer(
+    { requestTimeout: 5000, headersTimeout: 5000, maxHeaderSize: 8192 },
+    (request, response) => {
+      const operation = handler.handle(request, response);
+      pending.add(operation);
+      void operation.then(
+        () => pending.delete(operation),
+        () => {
+          pending.delete(operation);
+          response.destroy();
+        },
+      );
+    },
+  );
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(options.port ?? 0, "127.0.0.1", () => {
@@ -2588,15 +2867,13 @@ export async function startQueryOnlyHttp(
     close: async () => {
       if (closing) return;
       closing = true;
-      stopUploads.abort();
-      for (const response of streams)
-        if (verifiedBinaryStreams.has(response)) response.destroy();
-        else response.end();
+      handler.close();
       const done = new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
       );
       server.closeAllConnections();
       await done;
+      await Promise.allSettled([...pending]);
     },
   };
 }

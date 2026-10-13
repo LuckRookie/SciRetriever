@@ -2,7 +2,10 @@ import { mountLibrary } from "./library.js";
 import { mountJobs } from "./jobs.js";
 import { mountConfiguration } from "./config.js";
 import { record } from "./wire.js";
-import { mountWorkspaceHistory } from "./navigation.js";
+import { mountQueryWorkbench, queryRequest, queryDownload } from "./query.js";
+import { mountMaintenanceWorkbench } from "./maintenance.js";
+import { mountWorkspaceTools } from "./workspace-tools.js";
+import { mountWorkspaceHistory, navigateWorkspace } from "./navigation.js";
 import { candidateStatus } from "./feedback.js";
 import {
   parseWorkbenchView,
@@ -128,8 +131,15 @@ async function transact(
 }
 function accept(value: unknown): void {
   const next = parseWorkbenchView(value);
-  if (
+  const selectionChanged =
     next.session_id !== view?.session_id ||
+    next.article_id !== view?.article_id;
+  if (selectionChanged) {
+    node<HTMLInputElement>("guidance-text").value = "";
+    node<HTMLInputElement>("operator-text").value = "";
+  }
+  if (
+    selectionChanged ||
     (next.sessions &&
       next.session_phase === undefined &&
       next.sessions.length > 1)
@@ -142,9 +152,10 @@ function accept(value: unknown): void {
     node("element-actions").replaceChildren();
     node("candidates").replaceChildren();
   }
-  if (next.mode === "production" && next.session_id !== view?.session_id) {
-    pendingArticleId = next.article_id;
-    node<HTMLInputElement>("acquisition-literature").value = next.article_id;
+  if (next.mode === "production" && selectionChanged) {
+    pendingArticleId = next.article_id ?? undefined;
+    node<HTMLInputElement>("acquisition-literature").value =
+      next.article_id ?? "";
   }
   view = next;
   render();
@@ -328,12 +339,14 @@ function render(): void {
   renderSessions();
   if (production) {
     node("live-task-kind").textContent = "生产文献获取 · 由用户明确启动";
-    node("live-task-title").textContent = view.article_id;
-    node("live-task-detail").textContent = observation?.title || "等待获取操作";
+    node("live-task-title").textContent = view.article_id ?? "尚未选中文献";
+    node("live-task-detail").textContent =
+      observation?.title ||
+      "从任务目标中打开 Browser，观察获取过程或提供协助。";
     node("live-task-badge").textContent = "生产会话";
   }
   node("acquisition-form").hidden = !production;
-  node("guidance-section").hidden = !production;
+  node("guidance-section").hidden = !production || view.article_id === null;
   const operation = view.operation_feedback;
   node("operation-feedback").hidden = !production || !operation;
   if (production && operation) {
@@ -618,7 +631,7 @@ node("acquisition-literature").addEventListener("input", () => {
   pendingArticleId = node<HTMLInputElement>("acquisition-literature").value;
 });
 node("operation-read").addEventListener("click", () => {
-  if (view?.operation_feedback?.primary_pdf)
+  if (view?.operation_feedback?.primary_pdf && view.article_id)
     void openLibraryArticle(view.article_id);
 });
 node("guidance-form").addEventListener("submit", (event) => {
@@ -740,6 +753,21 @@ document.addEventListener("keydown", (event) => {
     }
   }
 });
+async function openProductionArticle(id: string): Promise<void> {
+  const latest = await read("/api/view");
+  accept(latest);
+  const session = view?.sessions?.find((item) => item.article_id === id);
+  if (!session) throw new Error("browser-session-unavailable");
+  const selected = await request("/api/sessions/select", {
+    session_id: session.session_id,
+  });
+  if (selected.view) accept(selected.view);
+  if (view?.article_id !== id) throw new Error("browser-selection-mismatch");
+  pendingArticleId = id;
+  node<HTMLInputElement>("acquisition-literature").value = id;
+  navigateWorkspace("browser");
+}
+
 async function connect(): Promise<void> {
   const grant = await request("/api/clients", {}, true);
   if (typeof grant.client_id !== "string" || typeof grant.csrf !== "string")
@@ -763,15 +791,51 @@ async function connect(): Promise<void> {
     .catch(() => {
       node("config-status").textContent = "配置状态不可用";
     });
+  const authenticatedFetch = (
+    path: string,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = new URL(path, window.location.origin);
+    if (url.origin !== window.location.origin)
+      throw new Error("cross-origin-request");
+    url.searchParams.set("client_id", clientId);
+    const headers = new Headers(init?.headers);
+    headers.set("X-Workbench-Csrf", csrf);
+    return fetch(url, { ...init, headers });
+  };
+  const capabilities = await mountWorkspaceTools({ read, request });
+  if (capabilities.query)
+    await mountQueryWorkbench({
+      fetch: authenticatedFetch,
+      mountLibrary: false,
+    });
+  if (capabilities.maintenance)
+    mountMaintenanceWorkbench({
+      fetch: authenticatedFetch,
+      durableTasks: true,
+    });
   openLibraryArticle = mountLibrary({
-    request,
-    currentArticle: () => view?.article_id,
+    request: capabilities.query ? queryRequest : request,
+    reading: capabilities.query,
+    ...(capabilities.maintenance
+      ? {
+          onProcess: (id: string) => {
+            navigateWorkspace("jobs");
+            node<HTMLDetailsElement>("processing-tools").open = true;
+            window.dispatchEvent(
+              new CustomEvent("sciretriever:literature-selected", {
+                detail: id,
+              }),
+            );
+            window.dispatchEvent(new Event("sciretriever:process-literature"));
+          },
+        }
+      : {}),
+    currentArticle: () => view?.article_id ?? undefined,
     selectArticle: async (id) => {
       if (!view) throw new Error("workbench unavailable");
       if (view.mode === "production") {
-        pendingArticleId = id;
-        node<HTMLInputElement>("acquisition-literature").value = id;
-        feedback("已选中文献。点击“获取这篇文献的 PDF”后才会启动获取。");
+        await openProductionArticle(id);
         return;
       }
       if (!mine()) {
@@ -807,63 +871,34 @@ async function connect(): Promise<void> {
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     },
-    download: async (id, kind) => {
-      const response = await fetch(`/api/library/artifact${query()}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Workbench-Csrf": csrf,
+    download: capabilities.query
+      ? queryDownload
+      : async (id, kind) => {
+          const response = await fetch(`/api/library/artifact${query()}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Workbench-Csrf": csrf,
+            },
+            body: JSON.stringify({ literature_id: id, kind }),
+          });
+          if (!response.ok) throw new Error("artifact download failed");
+          const blob = await response.blob(),
+            url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = `${id}.${kind === "primary-pdf" ? "pdf" : "md"}`;
+          document.body.append(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 60000);
         },
-        body: JSON.stringify({ literature_id: id, kind }),
-      });
-      if (!response.ok) throw new Error("artifact download failed");
-      const blob = await response.blob(),
-        url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `${id}.${kind === "primary-pdf" ? "pdf" : "md"}`;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-    },
   }).openArticle;
-  node<HTMLFormElement>("manual-pdf-form").addEventListener(
-    "submit",
-    (event) => {
-      event.preventDefault();
-      const file = node<HTMLInputElement>("manual-pdf-file").files?.[0];
-      const id = node<HTMLInputElement>(
-        "manual-pdf-literature-id",
-      ).value.trim();
-      const status = node("manual-pdf-status");
-      if (!file || !id) return;
-      if (file.size < 1 || file.size > 16 * 1024 * 1024) {
-        status.textContent = "文件必须为不超过 16 MiB 的非空 PDF。";
-        return;
-      }
-      status.textContent = "正在检查并接纳 PDF…";
-      void fetch(`/api/v1/maintenance/ingest-pdf${query()}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/pdf",
-          "X-Workbench-Csrf": csrf,
-          "X-Sciretriever-Protocol-Version": "1",
-          "X-Literature-Id": id,
-        },
-        body: file,
-      })
-        .then(async (response) => {
-          const value = record(await response.json(), "PDF 接纳响应");
-          if (!response.ok) throw new Error(String(value.code ?? "接纳失败"));
-          status.textContent = "PDF 已接纳。文献资料可刷新查看。";
-        })
-        .catch((error: unknown) => {
-          status.textContent = `PDF 未接纳：${error instanceof Error ? error.message : "未知错误"}`;
-        });
-    },
-  );
-  mountJobs({ read, request });
+  mountJobs({
+    read,
+    request,
+    openBrowserArticle: openProductionArticle,
+  });
   mountConfiguration({ read, request });
   mountWorkspaceHistory();
   await refreshTabs();

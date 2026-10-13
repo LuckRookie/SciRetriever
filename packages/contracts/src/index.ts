@@ -2159,7 +2159,8 @@ export interface WorkbenchCandidate {
 export interface WorkbenchView {
   readonly mode?: "synthetic" | "production";
   readonly session_id: string;
-  readonly article_id: string;
+  /** Null only for an idle workbench without a selected literature. */
+  readonly article_id: string | null;
   readonly state:
     | "watching"
     | "agent-running"
@@ -2411,7 +2412,7 @@ export function parseWorkbenchView(value: unknown): WorkbenchView {
       ? {}
       : { mode: enumeration(r.mode, ["synthetic", "production"], ["mode"]) }),
     session_id: workbenchId(r.session_id),
-    article_id: workbenchId(r.article_id),
+    article_id: r.article_id === null ? null : workbenchId(r.article_id),
     state: r.state as WorkbenchView["state"],
     control: Object.freeze({
       workspace_id: workbenchId(c.workspace_id),
@@ -2462,6 +2463,14 @@ export function parseWorkbenchView(value: unknown): WorkbenchView {
         }),
   };
   if (
+    (view.article_id === null &&
+      (view.mode !== "production" ||
+        view.state !== "watching" ||
+        view.observation !== null ||
+        view.control.controller_id !== null ||
+        view.candidates.length !== 0 ||
+        (view.guidance?.length ?? 0) !== 0 ||
+        view.session_phase !== undefined)) ||
     (view.sessions &&
       (view.sessions.length > 64 ||
         new Set(view.sessions.map((session) => session.session_id)).size !==
