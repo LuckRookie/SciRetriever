@@ -1,12 +1,19 @@
 import { inflateRawSync } from "node:zlib";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   parseParserResult,
   parseStrictJsonObject,
   parserResultSha256,
   sha256,
   type ParserResult,
+  canonicalJsonBytes,
 } from "@sciretriever/contracts";
+import {
+  MINERU_ARCHIVE_VERSION,
+  MINERU_RELEASE,
+  MINERU_PROTOCOL,
+  MINERU_REQUEST_FIELDS,
+} from "./profile.js";
 import {
   ParsingFailure,
   type ParserArtifactRules,
@@ -200,7 +207,10 @@ function entryBytes(archive: Uint8Array, entry: Entry): Uint8Array {
   const compressed = archive.subarray(start, end);
   let bytes: Uint8Array;
   try {
-    bytes = entry.method === 0 ? compressed : inflateRawSync(compressed);
+    bytes =
+      entry.method === 0
+        ? compressed
+        : inflateRawSync(compressed, { maxOutputLength: MAX_ENTRY_BYTES });
   } catch {
     fail();
   }
@@ -275,7 +285,11 @@ function validateImagePaths(
         continue;
       }
       if (typeof child !== "string") fail();
-      const reference = safePath(`${prefix}${safePath(child)}`);
+      const path = safePath(child);
+      // MinerU middle.json uses image filenames; older exports include images/.
+      const reference = safePath(
+        `${prefix}${path.includes("/") ? path : `images/${path}`}`,
+      );
       if (!files.has(reference) || !mediaType(reference).startsWith("image/"))
         fail();
     }
@@ -284,8 +298,12 @@ function validateImagePaths(
 
 function primaryOutput(
   files: ReadonlyMap<string, Uint8Array>,
-  expectedPageCount: number,
-): { readonly markdownReference: string; readonly markdown: Uint8Array } {
+  expectedPageCount?: number,
+): {
+  readonly markdownReference: string;
+  readonly markdown: Uint8Array;
+  readonly pageCount: number;
+} {
   const middleNames = [...files.keys()].filter((name) =>
     name.endsWith("_middle.json"),
   );
@@ -310,7 +328,13 @@ function primaryOutput(
     fail();
   const middle = record(strictJson(middleBytes));
   if (middle._backend !== "vlm" || !Array.isArray(middle.pdf_info)) fail();
-  if (middle.pdf_info.length !== expectedPageCount) fail();
+  const pageCount = middle.pdf_info.length;
+  if (
+    pageCount < 1 ||
+    pageCount > 10000 ||
+    (expectedPageCount !== undefined && pageCount !== expectedPageCount)
+  )
+    fail();
   middle.pdf_info.forEach((page, index) => {
     const value = record(page);
     if (value.page_idx !== index) fail();
@@ -326,13 +350,13 @@ function primaryOutput(
     if (
       !Number.isSafeInteger(value.page_idx) ||
       (value.page_idx as number) < 0 ||
-      (value.page_idx as number) >= expectedPageCount ||
+      (value.page_idx as number) >= pageCount ||
       (value.page_idx as number) < previousPage
     )
       fail();
     previousPage = value.page_idx as number;
   }
-  return { markdownReference, markdown };
+  return { markdownReference, markdown, pageCount };
 }
 async function artifact(
   bytes: Uint8Array,
@@ -387,15 +411,22 @@ export async function convertMinerUArchive(
   const files = new Map(
     entries.map((entry) => [entry.name, entryBytes(archive, entry)]),
   );
-  const expectedPageCount = options.page_count ?? 1;
-  if (!Number.isSafeInteger(expectedPageCount) || expectedPageCount < 1) fail();
-  const primary = primaryOutput(files, expectedPageCount);
+  if (
+    options.page_count !== undefined &&
+    (!Number.isSafeInteger(options.page_count) || options.page_count < 1)
+  )
+    fail();
+  const primary = primaryOutput(files, options.page_count);
   const markdownBytes = primary.markdown;
   const markdown = text(markdownBytes);
   if (!markdown.trim()) fail();
   const references = markdownReferences(markdown);
+  const prefix = primary.markdownReference.slice(
+    0,
+    primary.markdownReference.lastIndexOf("/") + 1,
+  );
   const resources = references.map(async (reference) => {
-    const direct = files.get(reference);
+    const direct = files.get(safePath(`${prefix}${reference}`));
     if (!direct) fail();
     return {
       reference,
@@ -405,8 +436,7 @@ export async function convertMinerUArchive(
   const resolvedResources = await Promise.all(resources);
   const provenance = {
     provenance: {
-      provenance_id:
-        options.provenance_id ?? "00000000-0000-0000-0000-000000000000",
+      provenance_id: options.provenance_id ?? randomUUID(),
       source_kind: "parser" as const,
       source_name: "mineru",
       source_record_id: null,
@@ -414,16 +444,24 @@ export async function convertMinerUArchive(
       input_sha256: options.source_sha256,
       parameters_sha256:
         options.parameters_sha256 ??
-        hash(new TextEncoder().encode("mineru-ts-archive-v1")),
+        hash(
+          canonicalJsonBytes({
+            adapter: MINERU_ARCHIVE_VERSION,
+            release: MINERU_RELEASE,
+            protocol: MINERU_PROTOCOL,
+            model_identity: options.model_identity,
+            fields: Object.fromEntries(MINERU_REQUEST_FIELDS),
+          }),
+        ),
     },
-    parser_version: "mineru-ts-archive-v1",
+    parser_version: MINERU_ARCHIVE_VERSION,
     mode: "archive",
     model_identity: options.model_identity,
   };
   const core = {
     source_asset_id: options.source_asset_id,
     source_sha256: options.source_sha256,
-    page_count: expectedPageCount,
+    page_count: primary.pageCount,
     markdown: (await artifact(markdownBytes, "text/markdown")).artifact,
     resources: resolvedResources.map((resource) => ({
       reference: resource.reference,

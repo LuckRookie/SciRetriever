@@ -11,9 +11,9 @@ pnpm package:portable -- --output /tmp/sciretriever-portable
 /tmp/sciretriever-portable/bin/sciretriever doctor --json
 ```
 
-`doctor` 只读检查平台和系统依赖，不启动浏览器、不访问网络、不读取凭据。CloakBrowser 未配置时报告 blocked 是预期结果；只有通过 operator bundle 校验后，Browser 工作台才可声明 ready。包内运行使用自带 Node，生产配置和凭据固定在 `~/.sciretriever/`；Catalog/ArtifactStore 由已保存的 `paths` 选择，未指定时当前 Application 使用用户 home 下的 `catalog.sqlite` 和 `artifacts/`。`SCIRETRIEVER_HOME` 不属于用户可见的配置路径选择，当前 CLI 不读取它；显式临时 home 只作为内部测试/隔离 seam。
+`doctor` 只读检查平台和系统依赖，不启动浏览器、不访问网络、不读取凭据。CloakBrowser 未配置时报告 blocked 是预期结果；Browser 获取需要已校验的 runtime，普通 Web 工作台仍可启动。包内运行使用自带 Node，生产配置和凭据固定在 `~/.sciretriever/`；Catalog/ArtifactStore 由已保存的 `paths` 选择。正式 `sciretriever web` 首次启动会把缺失的两条路径保存为 `~/.sciretriever/catalog.sqlite` 和 `~/.sciretriever/artifacts/`，目标不存在时创建 v9 空库，直接进入页面，无需配置向导。之后可在设置中修改位置，重启生效且不自动搬迁数据。CLI/MCP 读取相同配置。`SCIRETRIEVER_HOME` 不属于用户可见的配置路径选择，当前 CLI 不读取它；显式临时 home 只作为内部测试/隔离 seam。
 
-新安装用户在确认精确目录后，通过正式入口启用知识、提取与检索及身份核验所需的 v9：
+需要单独准备新库时，可在确认精确目录后使用显式初始化工具；Web 的首次自动建库已包含知识、提取、检索与身份核验所需的 v9：
 
 ```bash
 sciretriever storage schema-inspect --catalog /absolute/data/catalog.sqlite --json

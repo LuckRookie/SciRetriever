@@ -1,3 +1,4 @@
+import { artifactReference } from "../src/storage/artifact-layout.js";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -84,8 +85,8 @@ it("rolls back metadata, keywords, content and FTS on transaction failure, and r
     ).rejects.toMatchObject({ code: "content-cancelled" });
     const target = join(
       home,
-      "artifacts/objects",
-      `${next.value.markdown.sha256}.bin`,
+      "artifacts",
+      artifactReference("knowledge-summary", next.value.markdown),
     );
     const original = await readFile(target);
     await writeFile(target, "conflicting bytes");

@@ -52,10 +52,7 @@ PDF 字节区分正文、Supporting Information、excluded 与 wrong-article。P
 `browser_probe_enabled = true` 只允许配置中心打开 ACS 首页检查 runtime/目标可达，不下载正文
 或证明 entitlement。
 
-2026-08-21 的 `acs-publications-pdf@3`、独立 lane、Cloudflare dependency 和 Challenge
-子生命周期 fixture，以及 2026-08-22 stock/Cloak 固定样本，均是旧规则执行器的历史证据。该
-样本在有界窗口形成 `settle-timeout` 且未捕获 PDF；它只能说明当时本地没有阻断已审查的
-Turnstile 资源，不能证明当前通用 Agent、组织授权、当前 IP 或文章 entitlement。
+历史现场结果见Browser 切换测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
 
 ACS 普通条款对系统性/聚合下载有限制。operator 显式启用通用 Browser 不构成许可证明，仍须
 确保实际使用符合组织授权和 ACS 条款；付费墙、裸 403、challenge 与正文 capture 继续作为不同

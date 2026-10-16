@@ -24,7 +24,10 @@ import {
   type AgentTransport,
   type ReasoningEffort,
 } from "./protocol.js";
-import { AgentRuntime, type AgentBinding } from "./runtime.js";
+import {
+  DshAgentRuntime as AgentRuntime,
+  type AgentBinding,
+} from "./runtime.js";
 import { AnthropicMessagesAdapter } from "./anthropic.js";
 import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "./openai.js";
 

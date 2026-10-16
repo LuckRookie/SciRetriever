@@ -27,7 +27,7 @@ async function fixture(name: string): Promise<unknown> {
 }
 
 describe("commercial metadata REST adapters", () => {
-  it("maps CORE search records and embedded outgoing references", async () => {
+  it("uses the canonical CORE search endpoint and maps records with outgoing references", async () => {
     const calls: string[] = [];
     const adapter = new CoreRestAdapter({
       origin: "https://api.core.test",
@@ -36,6 +36,7 @@ describe("commercial metadata REST adapters", () => {
       ...ids(),
       transport: {
         async request(url, options) {
+          expect(new URL(url).pathname).toBe("/v3/search/works/");
           calls.push(`${url}|${JSON.stringify(options?.headers ?? {})}`);
           return {
             totalHits: 1,
@@ -67,7 +68,7 @@ describe("commercial metadata REST adapters", () => {
       namespace: "doi",
       value: "10.1000/target",
     });
-    expect(calls[0]).toContain("/v3/search/works");
+    expect(calls[0]).toContain("/v3/search/works/?");
     expect(calls[0]).toContain("Bearer fixture-key");
   });
 

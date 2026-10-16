@@ -357,6 +357,72 @@ async function captureFixture(
 }
 
 describe("browser article flow (offline end-to-end)", () => {
+  it("recognizes a repeated element after DOM replacement without merging distinct controls or changed pages", async () => {
+    let snapshots = 0;
+    let decisions = 0;
+    let changed = false;
+    const clicks: string[] = [];
+    const feedbackAfterClick: string[] = [];
+    const page: FlowPageHandle = {
+      snapshot: async () => ({
+        ...snapshot(++snapshots),
+        text: changed ? "Access options updated" : "Please sign in to continue",
+        document_generation: snapshots,
+        elements: ["first", "second"].map((position) => ({
+          element_id: `${position}-${snapshots}`,
+          role: "button",
+          name: "Continue",
+          editable: false,
+        })),
+      }),
+      apply: async (input) => {
+        if (input.kind === "click-element") clicks.push(input.element_id);
+      },
+    };
+    const driver = new BrowserArticleFlowDriver({
+      identity: FLOW_IDENTITY,
+      page,
+      decide: async (observation, _f, _s, _g, _t, _h, feedback) => {
+        decisions++;
+        if (decisions === 2) feedbackAfterClick.push(...(feedback ?? []));
+        if (decisions === 4) changed = true;
+        if (decisions === 6) {
+          // Suppressed clicks are never described as executed; page/control
+          // meaning survives the short-lived IDs from earlier observations.
+          expect(
+            feedback?.filter((item) => item.startsWith("Executed ")),
+          ).toHaveLength(3);
+          return { kind: "stop", reason: "user" };
+        }
+        return {
+          kind: "click-element",
+          element_id: observation.elements[decisions <= 2 ? 0 : 1]!.element_id,
+          revision: observation.observation_revision,
+        };
+      },
+      max_actions: 10,
+      max_model_calls: 10,
+      deadline_ms: 60_000,
+      started_at: Date.now(),
+      signal: new AbortController().signal,
+      article_id: ARTICLE_ID,
+      session_id: SESSION_ID,
+      observations: new BrowserObservationStore(),
+      awaitCandidate: async () => null,
+      action_cooldown_ms: 0,
+    });
+    await expect(driver.run()).resolves.toMatchObject({
+      stopped_reason: "stopped",
+    });
+    expect(clicks.map((id) => id.split("-")[0])).toEqual([
+      "first",
+      "second",
+      "second",
+    ]);
+    expect(feedbackAfterClick.join(" ")).toContain("Continue");
+    expect(feedbackAfterClick.join(" ")).toContain("unchanged");
+  });
+
   it("suppresses repeated clicks but continues observing an unchanged challenge", async () => {
     let snapshots = 0;
     const applied: unknown[] = [];
@@ -786,12 +852,12 @@ describe("browser article flow (offline end-to-end)", () => {
     const driver = new BrowserArticleFlowDriver({
       identity: FLOW_IDENTITY,
       page,
-      decide: async () => ({
+      decide: async (observation) => ({
         kind: "click-point",
         x: 1,
         y: 2,
-        revision: 1,
-        viewport_version: 1,
+        revision: observation.observation_revision,
+        viewport_version: observation.viewport_revision,
       }),
       max_actions: 3,
       max_model_calls: 99,
@@ -821,12 +887,12 @@ describe("browser article flow (offline end-to-end)", () => {
     const driver = new BrowserArticleFlowDriver({
       identity: FLOW_IDENTITY,
       page,
-      decide: async () => ({
+      decide: async (observation) => ({
         kind: "click-point",
         x: 1,
         y: 2,
-        revision: 1,
-        viewport_version: 1,
+        revision: observation.observation_revision,
+        viewport_version: observation.viewport_revision,
       }),
       max_actions: 99,
       max_model_calls: 2,
@@ -1887,6 +1953,128 @@ describe("cooperative Browser article lifecycle", () => {
     });
   });
 
+  it.each(["delivered", "transfer-failed", "no-download"] as const)(
+    "settles the thirtieth call's delayed download handoff without resetting its budget (%s)",
+    async (outcome) => {
+      await withStore(async (collector) => {
+        const captured = await captureFixture(collector, "last-call-candidate");
+        const source = new BrowserCaptureBatch(1);
+        const feedback = deferred<void>();
+        let calls = 0;
+        vi.useFakeTimers();
+        const driver = new BrowserArticleFlowDriver({
+          identity: FLOW_IDENTITY,
+          page: {
+            snapshot: async () => snapshot(calls + 1),
+            apply: async (input) => {
+              if (calls === 30 && input.kind === "click-point")
+                return { likely_pdf: true };
+              if (calls === 30 && input.kind === "wait-for-change") {
+                expect(input.timeout_ms).toBe(30_000);
+                await feedback.promise;
+              }
+            },
+          },
+          decide: async (_o, _f, _s, _g, _t, _h, _feedback, lifecycle) => {
+            lifecycle!.onDispatched();
+            calls += 1;
+            return {
+              kind: "click-point",
+              x: calls,
+              y: 2,
+              revision: calls,
+              viewport_version: 1,
+            };
+          },
+          max_model_calls: 30,
+          deadline_ms: 300_000,
+          started_at: 0,
+          signal: new AbortController().signal,
+          session_id: SESSION_ID,
+          article_id: ARTICLE_ID,
+          observations: new BrowserObservationStore(),
+          hasCandidate: () => source.hasCandidate(),
+          awaitCandidate: (signal) => source.next(signal),
+          dispatch_tracking: "transport",
+        });
+        try {
+          for (let call = 1; call <= 30; call += 1) {
+            expect(await driver.step()).toMatchObject({ kind: "waiting" });
+            expect(calls).toBe(call);
+            if (call < 30) await vi.advanceTimersByTimeAsync(5_000);
+          }
+          expect(driver.clock.snapshot()).toMatchObject({
+            active_elapsed_ms: 145_000,
+            model_calls: 30,
+            actions: 30,
+          });
+          expect(await driver.step()).toMatchObject({
+            kind: "waiting",
+            reason: "page",
+          });
+          await vi.advanceTimersByTimeAsync(6_000);
+          expect(await driver.step()).toMatchObject({
+            kind: "waiting",
+            reason: "page",
+          });
+
+          if (outcome === "no-download") {
+            feedback.resolve();
+            await vi.advanceTimersByTimeAsync(0);
+          } else {
+            driver.transferStarted(captured.transfer_id);
+            feedback.resolve();
+            expect(await driver.step()).toEqual({
+              kind: "suspended",
+              transfer_id: captured.transfer_id,
+            });
+            await vi.advanceTimersByTimeAsync(600_000);
+            expect(driver.clock.snapshot()).toMatchObject({
+              active_elapsed_ms: 151_000,
+              model_calls: 30,
+              actions: 30,
+            });
+            if (outcome === "delivered") {
+              driver.transferCompleted(captured.transfer_id);
+              expect(source.add(captured)).toBe(true);
+              driver.candidateReady();
+            } else {
+              driver.transferFailed(
+                captured.transfer_id,
+                "browser-transfer-failed",
+              );
+              driver.setNetworkAccess(true);
+            }
+          }
+          expect(await driver.step()).toMatchObject(
+            outcome === "delivered"
+              ? {
+                  kind: "candidate",
+                  candidate: captured.candidate,
+                  lease: driver,
+                }
+              : {
+                  kind: "terminal",
+                  result: {
+                    kind: "refused",
+                    code: "browser-flow-budget-exhausted",
+                  },
+                },
+          );
+          expect(calls).toBe(30);
+          expect(driver.clock.remaining()).toMatchObject({
+            deadline_ms: 149_000,
+            model_calls: 0,
+          });
+        } finally {
+          feedback.resolve();
+          await driver.close({ kind: "cancelled" });
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
+
   it("parks a real throttle and retries the retained URL once after platform readmission", async () => {
     let calls = 0;
     const entered = deferred<void>();
@@ -2087,6 +2275,100 @@ describe("cooperative Browser article lifecycle", () => {
       vi.useRealTimers();
     }
   });
+
+  it("permits a control to be tried again after a frame change invisible in the top-level observation", async () => {
+    let calls = 0;
+    let clicks = 0;
+    const driver = cooperativeDriver({
+      page: {
+        snapshot: async () => snapshot(1),
+        apply: async (input) => {
+          if (input.kind === "click-point") clicks++;
+          return input.kind === "wait-for-change"
+            ? { wait_outcome: "changed", wait_elapsed_ms: 1000 }
+            : undefined;
+        },
+      },
+      decide: async (observation, _f, _s, _g, _t, _h, _feedback, lifecycle) => {
+        lifecycle!.onDispatched();
+        return ++calls <= 2
+          ? {
+              kind: "click-point",
+              x: 200,
+              y: 200,
+              revision: observation.observation_revision,
+              viewport_version: observation.viewport_revision,
+            }
+          : { kind: "stop", reason: "user" };
+      },
+      action_cooldown_ms: 0,
+    });
+    await driver.run();
+    expect(clicks).toBe(2);
+    await driver.close({ kind: "retained", code: "no-candidate" });
+  });
+
+  it.each(["changed", "timeout"] as const)(
+    "keeps five seconds after an explicit wait ends with %s",
+    async (waitOutcome) => {
+      vi.useFakeTimers();
+      try {
+        const settled = deferred<void>();
+        let calls = 0;
+        const driver = cooperativeDriver({
+          page: {
+            snapshot: async () => snapshot(1),
+            apply: async () => {
+              await settled.promise;
+              return { wait_outcome: waitOutcome, wait_elapsed_ms: 1000 };
+            },
+          },
+          decide: async (
+            observation,
+            _f,
+            _s,
+            _g,
+            _t,
+            _h,
+            feedback,
+            lifecycle,
+          ) => {
+            lifecycle!.onDispatched();
+            if (++calls === 1)
+              return {
+                kind: "wait-for-change",
+                timeout_ms: 1000,
+                revision: observation.observation_revision,
+              };
+            expect(feedback?.join(" ")).toContain(
+              waitOutcome === "timeout"
+                ? "timed out without detecting"
+                : "detected a visible page",
+            );
+            return { kind: "stop", reason: "user" };
+          },
+        });
+        expect(await driver.step()).toMatchObject({
+          kind: "waiting",
+          reason: "page",
+        });
+        await vi.advanceTimersByTimeAsync(1000);
+        settled.resolve();
+        await vi.advanceTimersByTimeAsync(4999);
+        expect(await driver.step()).toMatchObject({
+          kind: "waiting",
+          reason: "pacing",
+        });
+        expect(calls).toBe(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await driver.step()).toMatchObject({ kind: "terminal" });
+        expect(calls).toBe(2);
+        await driver.close({ kind: "retained", code: "no-candidate" });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([1_000, 5_100])(
     "overlaps pacing with feedback arriving at %i ms",
@@ -2326,6 +2608,35 @@ describe("cooperative Browser article lifecycle", () => {
     expect(close).toHaveBeenCalledOnce();
     expect(driver.phase()).toBe("closed");
     expect(await driver.step()).toEqual(terminal);
+  });
+
+  it("closes owned pages before awaiting requests that only terminate on page close", async () => {
+    const drained = deferred<void>();
+    const closeEntered = deferred<void>();
+    const ended = vi.fn();
+    const close = vi.fn(async () => {
+      closeEntered.resolve();
+      await drained.promise;
+    });
+    const driver = cooperativeDriver({ close, onNetworkEnded: ended }, false);
+    driver.attachPage({
+      page: fakePage({}).page,
+      stopNetwork: () => drained.promise,
+    });
+    const pending = driver.close({ kind: "published", receipt_id: "receipt" });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await closeEntered.promise;
+    expect(settled).toBe(false);
+    expect(ended).not.toHaveBeenCalled();
+    expect(driver.phase()).toBe("closing");
+    drained.resolve();
+    await expect(pending).resolves.toBeUndefined();
+    expect(close).toHaveBeenCalledOnce();
+    expect(ended).toHaveBeenCalledOnce();
+    expect(driver.phase()).toBe("closed");
   });
 
   it("retains the failed stop and owned-close causes when owned writers cannot be confirmed ended", async () => {
@@ -3274,3 +3585,49 @@ describe("capture priority during collaborative initialization", () => {
     },
   );
 });
+
+it.each(["access-unavailable", "no-viable-path"] as const)(
+  "ends a normal-looking page with the Agent's explicit task reason instead of exhaustion (%s)",
+  async (reason) => {
+    const explanation =
+      "Tried Download PDF; it returned the same purchase page without an alternative article access route.";
+    const decide = vi.fn(async () => ({
+      kind: "stop" as const,
+      reason,
+      explanation,
+    }));
+    const apply = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+    const flow = createBrowserArticleFlow({
+      pages: {
+        openPage: async () => ({
+          page: {
+            snapshot: async () => snapshot(1),
+            apply,
+            settleCaptures: async () => undefined,
+          },
+          close,
+        }),
+      },
+      decide,
+      session_id: SESSION_ID,
+      observations: new BrowserObservationStore(),
+      hasCandidate: () => false,
+      awaitCandidate: async () => null,
+    });
+    const outcome = await flow.deliver(
+      request(
+        new AbortController().signal,
+        "https://fixture.example.test/article",
+      ),
+    );
+    expect(outcome).toMatchObject({
+      kind: "refused",
+      code: `browser-agent-${reason}`,
+      reason: expect.stringContaining(explanation),
+    });
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect(apply).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledTimes(1);
+  },
+);

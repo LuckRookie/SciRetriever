@@ -31,9 +31,6 @@ function node<T extends HTMLElement = HTMLElement>(id: string): T {
 function message(error: unknown): string {
   return error instanceof Error ? error.message : "未知错误";
 }
-function number(id: string): number {
-  return Number(node<HTMLInputElement>(id).value);
-}
 function line(
   parent: HTMLElement,
   tag: "p" | "h3" | "li",
@@ -210,7 +207,7 @@ async function openSource(
   }
   if (live(parent, signal)) parent.append(detail);
 }
-function render(
+export function renderSynthesisResult(
   result: SynthesisReadResult,
   target: HTMLElement,
   signal: AbortSignal,
@@ -338,20 +335,7 @@ export function mountSynthesisMaintenance(): void {
   let fixedSignature = "";
   let active: AbortController | null = null;
   let generation = 0;
-  const fields = [
-    inputs,
-    policy,
-    question,
-    ...[
-      "synthesis-source-bytes",
-      "synthesis-verification-bytes",
-      "synthesis-call-bytes",
-      "synthesis-total-call-bytes",
-      "synthesis-max-calls",
-      "synthesis-output-tokens",
-      "synthesis-total-output-tokens",
-    ].map((id) => node<HTMLInputElement>(id)),
-  ];
+  const fields = [inputs, policy, question];
   const signature = () => JSON.stringify([inputs.value, policy.value]);
   for (const field of [inputs, policy])
     field.addEventListener("input", () => {
@@ -431,7 +415,7 @@ export function mountSynthesisMaintenance(): void {
     start.disabled = true;
     cancel.disabled = false;
     for (const field of fields) field.disabled = true;
-    status.textContent = "正在校验固定集合并执行有界综合…";
+    status.textContent = "正在读取固定集合并生成综合…";
     output.textContent = "";
     void (async () => {
       const request = await parseKnowledgeSynthesisRequest({
@@ -440,15 +424,6 @@ export function mountSynthesisMaintenance(): void {
         purpose: "synthesis",
         question: question.value,
         policy: prepared.policy,
-        budget: {
-          max_source_bytes: number("synthesis-source-bytes"),
-          max_verification_bytes: number("synthesis-verification-bytes"),
-          max_call_bytes: number("synthesis-call-bytes"),
-          max_total_call_bytes: number("synthesis-total-call-bytes"),
-          max_calls: number("synthesis-max-calls"),
-          max_output_tokens_per_call: number("synthesis-output-tokens"),
-          max_total_output_tokens: number("synthesis-total-output-tokens"),
-        },
       });
       if (usesDurableTasks()) {
         await submitProcessingTask(
@@ -522,7 +497,7 @@ export function mountSynthesisReading(): void {
           selection,
         );
         if (!valid(current, signal)) return;
-        render(result, results, signal);
+        renderSynthesisResult(result, results, signal);
         status.textContent = `已核对 ${result.artifact.artifact_id}。`;
       })().catch((error: unknown) => {
         if (valid(current, signal))
@@ -552,7 +527,7 @@ export function mountSynthesisReading(): void {
           button.addEventListener("click", () => {
             const next = begin();
             id.value = result.artifact.artifact_id;
-            render(result, results, next.signal);
+            renderSynthesisResult(result, results, next.signal);
             status.textContent = `已核对 ${result.artifact.artifact_id}。`;
           });
           results.append(button);

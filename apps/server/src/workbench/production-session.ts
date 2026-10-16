@@ -73,7 +73,7 @@ export class ProductionWorkbenchSession {
 
   constructor(
     initialArticleId: string | null,
-    private readonly decide: BrowserDecision,
+    private readonly decide: BrowserDecision | undefined,
   ) {
     this.articleId =
       initialArticleId === null ? null : parseLiteratureId(initialArticleId);
@@ -445,7 +445,10 @@ export class ProductionWorkbenchSession {
       articleId,
       page as BrowserPageHandle,
       {
-        max_actions: execution?.clock.budget.max_actions ?? 100,
+        max_actions:
+          execution?.clock.budget.max_actions ??
+          execution?.clock.budget.max_model_calls ??
+          100,
         max_model_calls: execution?.clock.budget.max_model_calls ?? 50,
         max_retries: 100,
         max_bytes: Number.MAX_SAFE_INTEGER,
@@ -453,8 +456,28 @@ export class ProductionWorkbenchSession {
           execution?.clock.budget.active_ms ??
           Math.max(1, deadlineAt - Date.now()),
       },
-      (observation, frame, signal, guidance) =>
-        this.decide(observation, frame, signal, guidance, target),
+      this.decide
+        ? (
+            observation,
+            frame,
+            signal,
+            guidance,
+            _target,
+            recentActions,
+            feedback,
+            lifecycle,
+          ) =>
+            this.decide!(
+              observation,
+              frame,
+              signal,
+              guidance,
+              target,
+              recentActions,
+              feedback,
+              lifecycle,
+            )
+        : undefined,
       id,
       async () => {},
       undefined,

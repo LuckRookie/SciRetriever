@@ -144,10 +144,8 @@ arXiv 记录代表预印本这一事实很强，但 `MetadataObservation.version
 
 Metadata 与 Acquisition 共用 `arxiv/api` scope 和上述官方政策。当前实现不提供引用扩展、补充材料、许可证推断或 Browser 站点规则。本轮 2026-08-15 只使用 fake transport、fixture 和可注入 clock 复验实现，没有调用真实 arXiv endpoint，也没有下载真实 PDF；第 6 节保留的匿名响应来自 2026-08-07 的既有核对记录。
 
-## 11. 2026-10-07 TypeScript 主题语法修复
+## 11. TypeScript 主题查询转换
 
-当前 [ArxivRestAdapter](../../../apps/server/src/providers/arxiv/metadata.ts) 为主题的每个词或用户明确加引号的
-短语加 `all:`，并以 `AND` 连接。授权只读比较中，`all:chemical synthesis` 的 10 条首批结果含
-语音、图像和可逆函数 synthesis；`all:chemical AND all:synthesis` 排除了这些首批误召回。
-用户显式输入的引号短语继续作为一个查询项；普通多词主题不自动改成精确短语。
-这里修正的是字段范围与布尔连接，仍可能召回在其它字段同时含这些词的文章，不提供语义过滤。
+当前 [ArxivRestAdapter](../../../apps/server/src/providers/arxiv/metadata.ts) 为每个主题词或显式引号短语加 `all:`，以 `AND` 连接；普通多词主题不自动改成精确短语，不提供语义过滤。
+
+测试对照见2026-10-07 Provider 适配测试（本地文件：`sandbox/reports/provider-adapter-validation-2026-10-07.md`，不随仓库分发）。

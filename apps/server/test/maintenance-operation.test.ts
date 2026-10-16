@@ -69,6 +69,9 @@ async function seededHttpCandidate(origin: string) {
     ...FIXTURE_LITERATURE,
     literature_id: first,
     meta_literature_id: meta,
+    // This fixture tests address admission, not external identifier discovery.
+    // Later routes now run after candidate rejection, so keep the fixture offline.
+    metadata: { ...FIXTURE_LITERATURE.metadata, identifiers: [] },
   });
   await app.database.putLiterature(published);
   await app.observations.publish({
@@ -224,8 +227,8 @@ describe("explicit maintenance operation across Application, CLI and durable Job
     }
   });
 
-  it("preserves the HTTPS boundary and maps the same system failure in all three entrances", async () => {
-    const origin = "http://127.0.0.1:9";
+  it("preserves the public-address boundary and reports the same route failure in all three entrances", async () => {
+    const origin = "https://127.0.0.1:9";
     const cli = await seededHttpCandidate(origin);
     const direct = await seededHttpCandidate(origin);
     const durable = await seededHttpCandidate(origin);
@@ -243,32 +246,34 @@ describe("explicit maintenance operation across Application, CLI and durable Job
         target_kind: "selector",
         selector,
         goal: "pdf",
-        policy_version: "maintenance-system-failure",
+        policy_version: "maintenance-network-failure",
         policy: { mode: "never" },
-        idempotency_key: "maintenance-system-failure",
+        idempotency_key: "maintenance-network-failure",
       });
       const jobResults = await durable.app.taskService!.runJob(job.job_id);
-      expect(cliResult.code).toBe(3);
+      // The operation settles with a failed target; only a shared/system
+      // failure terminates the operation and produces CLI exit code 3.
+      expect(cliResult.code).toBe(0);
       expect(cliResult.value).toMatchObject({
         failed: [
           {
             literature_id: first,
-            failure: { code: "pdf-acquisition-contract" },
+            failure: { code: "pdf-network-failed" },
           },
         ],
-        end: { kind: "failed" },
+        end: { kind: "finished" },
       });
       expect(directReport).toMatchObject({
         failed: [
           {
             literature_id: first,
-            failure: { code: "pdf-acquisition-contract" },
+            failure: { code: "pdf-network-failed" },
           },
         ],
-        end: { kind: "failed" },
+        end: { kind: "finished" },
       });
       expect(jobResults).toMatchObject([
-        { outcome: "failed", failure: { code: "pdf-acquisition-contract" } },
+        { outcome: "skipped", failure: { code: "pdf-network-failed" } },
       ]);
       const reopened = await createApplication(cli.home, {
         executionSchema: "require-v2",
@@ -284,11 +289,18 @@ describe("explicit maintenance operation across Application, CLI and durable Job
         await reopened.close();
       }
       expect(await durable.app.jobs!.getJob(job.job_id)).toMatchObject({
-        status: "failed",
+        status: "completed",
       });
       expect(
         await durable.app.jobs!.listInterventions(job.job_id),
-      ).toHaveLength(0);
+      ).toMatchObject([
+        {
+          mode: "never",
+          status: "declined",
+          failure: { code: "pdf-network-failed" },
+          resolution: { kind: "policy-declined" },
+        },
+      ]);
     } finally {
       await Promise.allSettled([direct.app.close(), durable.app.close()]);
       await Promise.all(
@@ -775,6 +787,10 @@ describe("explicit maintenance operation across Application, CLI and durable Job
       release = resolve;
     });
     let secondStarted = false;
+    let entered!: () => void;
+    const secondEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
     try {
       await app.database.putLiterature(literature(later, "preprint"));
       const job = await app.jobService!.create({
@@ -795,16 +811,15 @@ describe("explicit maintenance operation across Application, CLI and durable Job
         completion: null,
         max_concurrency: 2,
         acquisition: {
-          acquire: async () => {
-            throw new TypeError("cohort expected");
-          },
-          acquireCohort: async (requests, options) => {
-            const request = requests[1]!;
+          acquire: async (request) => {
             const literature_id = request.literature_id;
+            if (literature_id === first) {
+              await secondEntered;
+              return { kind: "exhausted" };
+            }
+            expect(literature_id).toBe(second);
             secondStarted = true;
-            options?.on_outcomes?.([
-              { index: 0, outcome: { kind: "exhausted" } },
-            ]);
+            entered();
             await blocked;
             expect(request.signal.aborted).toBe(false);
             const bytes = workbenchPdf();
@@ -849,7 +864,7 @@ describe("explicit maintenance operation across Application, CLI and durable Job
                 created: true,
               },
             } as const;
-            return [{ kind: "exhausted" }, acquired];
+            return acquired;
           },
         },
       });

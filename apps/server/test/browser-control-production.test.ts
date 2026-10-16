@@ -1,3 +1,7 @@
+import {
+  latestBrowserObservationMessage,
+  browserModelToolCallId,
+} from "./browser-model-fixture.js";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { createReadStream } from "node:fs";
@@ -124,7 +128,9 @@ it
           messages: { content: { type: string; text?: string }[] }[];
         };
         const observation = JSON.parse(
-          wire.messages[1]!.content.find((part) => part.type === "text")!.text!,
+          latestBrowserObservationMessage(wire).content.find(
+            (part) => part.type === "text",
+          )!.text!,
         ) as Pick<
           WorkbenchObservation,
           "article_id" | "observation_revision" | "elements"
@@ -169,6 +175,8 @@ it
                 message: {
                   tool_calls: [
                     {
+                      id: browserModelToolCallId(),
+                      type: "function",
                       function: {
                         name: "browser_action",
                         arguments: JSON.stringify({ action }),
@@ -234,7 +242,8 @@ it
       await mkdir(join(home, ".sciretriever"), { mode: 0o700 });
       await writeFile(
         join(home, ".sciretriever", "config.toml"),
-        `[providers.fixture]\napi = "openai-chat-completions"\nbase_url = "http://127.0.0.1:${modelPort}/v1"\n[models."fixture/browser"]\nimage = true\nstream = false\n[browser]\nenabled = true\nmodel = "fixture/browser"\nprofile = "control-fixture"\n[sources.acquisition]\nmode = "custom"\nproviders = []\n`,
+        `[paths]\ncatalog_path=${JSON.stringify(join(home, "catalog.sqlite"))}\nartifact_root=${JSON.stringify(join(home, "artifacts"))}\n` +
+          `[providers.fixture]\napi = "openai-chat-completions"\nbase_url = "http://127.0.0.1:${modelPort}/v1"\n[models."fixture/browser"]\nimage = true\nstream = false\n[browser]\nenabled = true\nmodel = "fixture/browser"\nprofile = "control-fixture"\n[sources.acquisition]\nmode = "custom"\nproviders = []\n`,
         { mode: 0o600 },
       );
       seed = await createApplication(home, {
@@ -451,9 +460,16 @@ it
         expect(cohort.signal.aborted).toBe(false);
       }
       acceptanceA.release();
-      const b = await post("/api/sessions/select", { session_id: sidB });
+      let b = await post("/api/sessions/select", { session_id: sidB });
+      // The fixture receiving a request precedes Chromium's download event.
+      // Assert isolation once the workbench has observed the actual transfer.
+      await expect
+        .poll(async () => {
+          b = await view();
+          return b.session_phase;
+        })
+        .toBe("downloading");
       expect(b.state).not.toBe("cancelled");
-      expect(b.session_phase).toBe("downloading");
       expect(b.observation?.article_id).toBe(
         papers[1]!.literature.literature_id,
       );

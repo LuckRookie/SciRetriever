@@ -14,7 +14,7 @@ const executable =
   process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ??
   "/home/duanjw/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome";
 
-it("captures popup, data and blob downloads under the owning page context", async () => {
+it("leaves background previews visible and captures selected native, popup, data and blob downloads", async () => {
   const root = await mkdtemp(join(tmpdir(), "sciretriever-browser-complex-"));
   const fixture = await startWorkbenchFixture();
   const port = Number(new URL(fixture.origin).port);
@@ -79,9 +79,15 @@ it("captures popup, data and blob downloads under the owning page context", asyn
   });
   try {
     await host.start();
-    const page = await host.openPage(`${fixture.origin}/article`);
+    const page = await host.openPage(`${fixture.origin}/preview-article`);
+    // The renderer must receive its inline fetch; no candidate is produced by
+    // merely loading the article's background PDF preview.
+    await expect
+      .poll(async () => (await page.snapshot()).text, { timeout: 10000 })
+      .toContain("Preview ready");
+    expect(captures).toEqual([]);
     let snapshot = await page.snapshot();
-    for (const name of ["Data PDF", "Blob PDF", "Popup PDF"]) {
+    for (const name of ["Download PDF", "Data PDF", "Blob PDF", "Popup PDF"]) {
       const element = snapshot.elements!.find((item) => item.name === name);
       expect(element, `missing ${name}`).toBeDefined();
       await page.apply(
@@ -107,9 +113,10 @@ it("captures popup, data and blob downloads under the owning page context", asyn
       ).toBe(true);
       await page.activate?.();
     }
-    await expect.poll(() => captures.length, { timeout: 10000 }).toBe(3);
+    await expect.poll(() => captures.length, { timeout: 10000 }).toBe(4);
     expect(failures).toEqual([]);
-    expect(captures).toHaveLength(3);
+    expect(captures).toHaveLength(4);
+    expect(captures[0]!.source).toBe(`${fixture.origin}/paper.pdf`);
     expect(captures.every((item) => item.bytes > 100)).toBe(true);
     expect(
       captures.every((item) => item.source.startsWith(fixture.origin)),

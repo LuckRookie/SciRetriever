@@ -1,3 +1,7 @@
+import {
+  latestBrowserObservationMessage,
+  browserModelToolCallId,
+} from "./browser-model-fixture.js";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
@@ -55,7 +59,9 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         messages: { content: { type: string; text?: string }[] }[];
       };
       const observation = JSON.parse(
-        wire.messages[1]!.content.find((part) => part.type === "text")!.text!,
+        latestBrowserObservationMessage(wire).content.find(
+          (part) => part.type === "text",
+        )!.text!,
       ) as WorkbenchObservation;
       const call = {
         at: performance.now(),
@@ -82,6 +88,8 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
               message: {
                 tool_calls: [
                   {
+                    id: browserModelToolCallId(),
+                    type: "function",
                     function: {
                       name: "browser_action",
                       arguments: JSON.stringify({ action }),

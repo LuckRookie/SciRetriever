@@ -94,10 +94,30 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
             expect(page.url()).toBe(`${origin}/`);
             await page.navigate!(`${origin}/?id=next-${count}`);
             expect(requests).toContain(`/?id=next-${count}`);
-            expect(
-              (await host.listPages()).find((item) => item.id === page.id)?.url,
-            ).toBe(`${origin}/`);
-            const observation = await page.snapshot();
+            // Navigation returns at commit. The tab title projection can still
+            // cross a document transition; wait for its readable observation.
+            await expect
+              .poll(
+                async () =>
+                  (await host.listPages()).find((item) => item.id === page.id)
+                    ?.url,
+              )
+              .toBe(`${origin}/`);
+            let observation:
+              | Awaited<ReturnType<typeof page.snapshot>>
+              | undefined;
+            await expect
+              .poll(
+                async () => {
+                  observation = await page.snapshot();
+                  return observation.elements?.some(
+                    (element) => element.name === "Verify",
+                  );
+                },
+                { timeout: 15_000 },
+              )
+              .toBe(true);
+            if (!observation) throw new Error("readable page unavailable");
             const button = observation.elements!.find(
               (element) => element.name === "Verify",
             )!;
@@ -110,9 +130,9 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
               observation.document_generation!,
               () => true,
             );
-            expect((await page.snapshot()).text).toContain(
-              `Linux x86_64|false|1920|1080|${count}`,
-            );
+            await expect
+              .poll(async () => (await page.snapshot()).text)
+              .toContain(`Linux x86_64|false|1920|1080|${count}`);
             const identity = await readFile(
               join(profile, "identity-manifest.json"),
             );

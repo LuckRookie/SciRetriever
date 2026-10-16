@@ -6,6 +6,8 @@
 - 外部角色：聚合开放获取 repository/journal 的 metadata、全文 locator、文本与解析参考文献
 - 当前仓库接入状态：Metadata Works/Outputs search/lookup/reference/AssetHint adapter 已接入；Acquisition 先消费公开 locator，再可使用注册用户 Work/Output PDF download endpoint
 
+2026-10-12 路径兼容核对：当前 TypeScript 搜索适配使用规范路径 `/v3/search/works/`（包含末尾 `/`），由本家 `definition.ts` 维护。无末尾斜杠的路径会先重定向；受控元数据传输不依赖这次跳转。端点规范化不改变认证、供应商限流或共享 Network 的跳转政策。
+
 ## 1. 官方入口与证据
 
 - [CORE API v3 documentation](https://api.core.ac.uk/docs/v3)：现行 Works/Outputs 实体、字段、查询、认证、限流、PDF policy。

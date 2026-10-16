@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
@@ -19,6 +19,12 @@ it("does not call a catalog primary PDF readable after its verified bytes are da
     | Awaited<ReturnType<typeof startProductionWorkbench>>
     | undefined;
   try {
+    await mkdir(join(home, ".sciretriever"), { mode: 0o700 });
+    await writeFile(
+      join(home, ".sciretriever", "config.toml"),
+      `[paths]\ncatalog_path=${JSON.stringify(join(home, "catalog.sqlite"))}\nartifact_root=${JSON.stringify(join(home, "artifacts"))}\n`,
+      { mode: 0o600 },
+    );
     writer = await createApplication(home, {
       executionSchema: "upgrade-synthetic",
       browserHost: () => null,

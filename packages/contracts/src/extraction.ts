@@ -83,6 +83,8 @@ export function extractionCanonicalJsonBytes(
   limits: {
     readonly maxDepth: number;
     readonly maxNodes: number;
+    /** Different consumers can admit larger arrays without changing Extraction defaults. */
+    readonly maxArrayLength?: number;
   } = {
     maxDepth: EXTRACTION_MAX_JSON_DEPTH,
     maxNodes: EXTRACTION_MAX_JSON_NODES,
@@ -96,7 +98,11 @@ export function extractionCanonicalJsonBytes(
     limits.maxDepth > EXTRACTION_MAX_JSON_DEPTH + 1 ||
     !Number.isSafeInteger(limits.maxNodes) ||
     limits.maxNodes < 1 ||
-    limits.maxNodes > 20480
+    limits.maxNodes > 20480 ||
+    (limits.maxArrayLength !== undefined &&
+      (!Number.isSafeInteger(limits.maxArrayLength) ||
+        limits.maxArrayLength < 1 ||
+        limits.maxArrayLength > 20480))
   )
     fail();
   const encoder = new TextEncoder();
@@ -139,7 +145,7 @@ export function extractionCanonicalJsonBytes(
       return serialized;
     }
     if (Array.isArray(item)) {
-      if (item.length > 256) fail();
+      if (item.length > (limits.maxArrayLength ?? 256)) fail();
       const ownKeys = Reflect.ownKeys(item);
       if (
         ownKeys.length !== item.length + 1 ||

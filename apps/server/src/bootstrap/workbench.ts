@@ -1,19 +1,10 @@
+import { createMetadataOperations } from "../entry/metadata-operations.js";
+import { createTaskOperations } from "../entry/task-operations.js";
 import { randomUUID } from "node:crypto";
-import { ProcessingTaskError } from "../application/jobs/processing.js";
-import { normalizeExecutionPolicy } from "../storage/execution/repository.js";
-import type { ExecutionJobStatus } from "../storage/sqlite/worker.js";
-import type { LiteratureSelector } from "../entry/selectors.js";
-import {
-  decodeBibliography,
-  importBibliography,
-  type BibliographyInputFormat,
-} from "../entry/bibliography.js";
+import { probeCatalogIdentity } from "../storage/execution/migration-gate.js";
+import { initializeCatalogSchema } from "../storage/sqlite/catalog-schema.js";
 import {
   canonicalJsonBytes,
-  ContractValidationError,
-  parseLibraryQuery,
-  parseMetaLiteratureId,
-  parseDiscoveryRunId,
   parseLiteratureId,
   sha256,
   type MetadataSnapshot,
@@ -38,7 +29,6 @@ import {
   type ConfigurationProbeRequest,
   type ConfigurationProbeSeams,
 } from "../configuration/owner.js";
-import { createBrowserDecision } from "../browser/decision.js";
 import { WorkbenchSession } from "../workbench/session.js";
 import { ProductionWorkbenchSession } from "../workbench/production-session.js";
 import {
@@ -169,77 +159,6 @@ function configurationHttpAdapter(
   };
 }
 
-function inputRecord(
-  value: unknown,
-  required: readonly string[],
-  optional: readonly string[] = [],
-): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new ContractValidationError();
-  const record = value as Record<string, unknown>;
-  if (
-    required.some((key) => !(key in record)) ||
-    Object.keys(record).some(
-      (key) => !required.includes(key) && !optional.includes(key),
-    )
-  )
-    throw new ContractValidationError();
-  return record;
-}
-
-function taskSelector(value: unknown): LiteratureSelector {
-  const item = inputRecord(
-    value,
-    ["kind"],
-    ["query", "literature_ids", "meta_literature_ids", "discovery_run_id"],
-  );
-  switch (item.kind) {
-    case "all-pending":
-      inputRecord(value, ["kind"]);
-      return { kind: "all-pending" };
-    case "query":
-      inputRecord(value, ["kind", "query"]);
-      return { kind: "query", query: parseLibraryQuery(item.query) };
-    case "discovery-run":
-      inputRecord(value, ["kind", "discovery_run_id"]);
-      return {
-        kind: "discovery-run",
-        discovery_run_id: parseDiscoveryRunId(item.discovery_run_id),
-      };
-    case "literatures": {
-      inputRecord(value, ["kind", "literature_ids"]);
-      if (
-        !Array.isArray(item.literature_ids) ||
-        !item.literature_ids.length ||
-        item.literature_ids.length > 10000
-      )
-        throw new ContractValidationError();
-      return {
-        kind: "literatures",
-        literature_ids: item.literature_ids.map(parseLiteratureId),
-      };
-    }
-    case "meta-literatures":
-    case "import-report": {
-      inputRecord(value, ["kind", "meta_literature_ids"]);
-      if (
-        !Array.isArray(item.meta_literature_ids) ||
-        !item.meta_literature_ids.length ||
-        item.meta_literature_ids.length > 10000
-      )
-        throw new ContractValidationError();
-      return {
-        kind: item.kind,
-        meta_literature_ids: item.meta_literature_ids.map(
-          parseMetaLiteratureId,
-        ),
-      };
-    }
-    default:
-      throw new ContractValidationError();
-  }
-}
-
 /** HTTP adapters use the one Application-owned durable runtime for both task generations. */
 export function taskHttpAdapters(
   app: Application,
@@ -248,160 +167,10 @@ export function taskHttpAdapters(
   const runtime = app.processingTasks;
   if (!repository || !runtime || !app.jobService || !app.interventions)
     return {};
-  const read = async (id: string) => {
-    const [task, events, interventions, policy, budget] = await Promise.all([
-      runtime.read(id),
-      repository.listEvents(id, -1, 1000, "newest"),
-      repository.listInterventions(id, 1000),
-      repository.getPolicy(id),
-      repository.getBudget(id),
-    ]);
-    return {
-      ...task,
-      events: [...events].reverse(),
-      events_truncated: (events.at(-1)?.sequence ?? 0) > 0,
-      interventions,
-      policy,
-      budget,
-    };
-  };
-  const start = async (id: string) => {
-    const task = await repository.getJob(id);
-    if (!task) throw new ProcessingTaskError("processing-not-found");
-    if (task.status === "cancelled" || task.status === "completed")
-      throw new ProcessingTaskError("processing-terminal");
-    if (
-      task.status === "paused" ||
-      task.status === "interrupted" ||
-      task.status === "failed"
-    )
-      throw new ProcessingTaskError("processing-resume-required");
-    return { started: runtime.start(id), task };
-  };
-  const control = async (
-    id: string,
-    action: "pause" | "cancel" | "resume" | "retry",
-  ) => {
-    if (!(await repository.getJob(id)))
-      throw new ProcessingTaskError("processing-not-found");
-    await runtime.control(id, action);
-    if (action === "resume" || action === "retry") runtime.start(id);
-    return read(id);
-  };
+  const tasks = createTaskOperations(app);
+  if (!tasks) return {};
   return {
-    tasks: {
-      list: async (limit = 100, cursor, statusGroup) => {
-        const groups: Readonly<
-          Record<
-            "active" | "attention" | "ended",
-            readonly ExecutionJobStatus[]
-          >
-        > = {
-          active: ["queued", "running"],
-          attention: ["paused", "interrupted", "failed"],
-          ended: ["completed", "cancelled", "failed"],
-        };
-        const statuses = statusGroup === undefined ? [] : groups[statusGroup];
-        const order = statusGroup === "ended" ? "finished" : "newest";
-        let before: { timestamp: string; job_id: string } | null = null;
-        if (cursor !== undefined) {
-          if (!/^[A-Za-z0-9_-]{1,512}$/u.test(cursor))
-            throw new ContractValidationError();
-          let decoded: unknown;
-          try {
-            decoded = JSON.parse(
-              Buffer.from(cursor, "base64url").toString("utf8"),
-            );
-          } catch {
-            throw new ContractValidationError();
-          }
-          const r = inputRecord(decoded, ["timestamp", "job_id", "order"]);
-          if (
-            r.order !== order ||
-            typeof r.timestamp !== "string" ||
-            !r.timestamp ||
-            r.timestamp.length > 64 ||
-            typeof r.job_id !== "string" ||
-            !/^[A-Za-z0-9._:-]{1,128}$/u.test(r.job_id)
-          )
-            throw new ContractValidationError();
-          before = { timestamp: r.timestamp, job_id: r.job_id };
-        }
-        const tasks = await repository.listJobs(limit, order, before, statuses);
-        const last = tasks.at(-1);
-        const next = last
-          ? {
-              timestamp:
-                order === "finished"
-                  ? (last.finished_at ?? last.created_at)
-                  : last.created_at,
-              job_id: last.job_id,
-            }
-          : null;
-        const hasNext =
-          tasks.length === limit &&
-          next !== null &&
-          (await repository.listJobs(1, order, next, statuses)).length > 0;
-        return {
-          tasks,
-          next_cursor: hasNext
-            ? Buffer.from(JSON.stringify({ ...next, order })).toString(
-                "base64url",
-              )
-            : null,
-        };
-      },
-      read,
-      start,
-      control,
-      create: async (value) => {
-        const r = inputRecord(
-          value,
-          ["kind"],
-          ["idempotency_key", "selector", "policy", "request"],
-        );
-        if (r.kind === "processing") {
-          inputRecord(value, ["kind", "request"]);
-          return runtime.submit(r.request);
-        }
-        if (r.kind !== "acquire-pdf") throw new ContractValidationError();
-        inputRecord(value, ["kind", "idempotency_key", "selector"], ["policy"]);
-        if (
-          typeof r.idempotency_key !== "string" ||
-          !/^[A-Za-z0-9._:-]{1,128}$/u.test(r.idempotency_key)
-        )
-          throw new ContractValidationError();
-        let policy;
-        try {
-          policy = normalizeExecutionPolicy(
-            r.policy === undefined
-              ? {}
-              : inputRecord(
-                  r.policy,
-                  [],
-                  [
-                    "mode",
-                    "max_retries",
-                    "max_attempts",
-                    "max_network_bytes",
-                    "max_model_calls",
-                    "intervention_timeout_ms",
-                  ],
-                ),
-          );
-        } catch {
-          throw new ContractValidationError();
-        }
-        return app.jobService!.create({
-          target_kind: "selector",
-          selector: taskSelector(r.selector),
-          goal: "pdf",
-          policy_version: "workbench-v1",
-          policy,
-          idempotency_key: r.idempotency_key,
-        });
-      },
-    },
+    tasks,
     jobs: {
       list: (limit) => repository.listJobs(limit),
       get: (id) => repository.getJob(id),
@@ -423,77 +192,6 @@ export function taskHttpAdapters(
       pause: async (id) => (await runtime.control(id, "pause")).job,
       resume: async (id) => (await runtime.control(id, "resume")).job,
       cancel: async (id) => (await runtime.control(id, "cancel")).job,
-    },
-  };
-}
-
-function metadataHttpAdapters(
-  app: Application,
-): Pick<WorkbenchHttpOptions, "discovery" | "importBibliography"> {
-  return {
-    discovery: async (value, signal) => {
-      const r = inputRecord(
-        value,
-        ["query"],
-        ["scan_limit", "year_from", "year_to"],
-      );
-      if (
-        typeof r.query !== "string" ||
-        !r.query.trim() ||
-        r.query.length > 8192
-      )
-        throw new ContractValidationError();
-      const limit =
-        r.scan_limit ?? app.configuration.sources.metadata.limit ?? 500;
-      if (
-        typeof limit !== "number" ||
-        !Number.isSafeInteger(limit) ||
-        limit < 1 ||
-        limit > 10000
-      )
-        throw new ContractValidationError();
-      const year = (value: unknown): number | null => {
-        if (value === undefined || value === null) return null;
-        if (
-          typeof value !== "number" ||
-          !Number.isSafeInteger(value) ||
-          value < 1 ||
-          value > 9999
-        )
-          throw new ContractValidationError();
-        return value;
-      };
-      const from = year(r.year_from),
-        to = year(r.year_to);
-      if (from !== null && to !== null && from > to)
-        throw new ContractValidationError();
-      if (!app.metadata.topic_selection.length)
-        throw new ProcessingTaskError("metadata-unavailable");
-      return app.discovery.run({
-        query: r.query,
-        year_from: from,
-        year_to: to,
-        providers: app.metadata.topic_selection.map((provider_name) => ({
-          provider_name,
-          scan_limit: limit,
-        })),
-        signal,
-      });
-    },
-    importBibliography: async (value) => {
-      const r = inputRecord(value, ["format", "content"]);
-      if (
-        typeof r.content !== "string" ||
-        !["bibtex", "biblatex", "ris", "csl-json"].includes(r.format as string)
-      )
-        throw new ContractValidationError();
-      return importBibliography(
-        decodeBibliography(
-          new TextEncoder().encode(r.content),
-          r.format as BibliographyInputFormat,
-        ),
-        app.identity,
-      );
     },
   };
 }
@@ -625,33 +323,11 @@ export async function startProductionWorkbench(options: {
   const configurationOwner =
     options.applicationOptions?.configurationOwner ??
     new TypeScriptConfigurationOwner(options.home);
+  if (configurationOwner.home !== resolve(options.home))
+    throw new Error("workbench configuration identity mismatch");
   let application: Application | undefined;
   let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
-  const session = new ProductionWorkbenchSession(
-    literatureId,
-    (
-      observation,
-      frame,
-      signal,
-      guidance,
-      target,
-      recentActions,
-      feedback,
-      lifecycle,
-    ) => {
-      if (!application) throw new Error("application unavailable");
-      return createBrowserDecision(application.agents)(
-        observation,
-        frame,
-        signal,
-        guidance,
-        target,
-        recentActions,
-        feedback,
-        lifecycle,
-      );
-    },
-  );
+  const session = new ProductionWorkbenchSession(literatureId, undefined);
   let http: Awaited<ReturnType<typeof startWorkbenchHttp>> | undefined;
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
@@ -687,6 +363,14 @@ export async function startProductionWorkbench(options: {
     return closing;
   };
   try {
+    const configuration = await configurationOwner.ensureStoragePaths();
+    const startupCatalog = resolve(
+      configuration.configuration.paths.catalog_path!,
+    );
+    // Only an absent target can be initialized. Existing catalogs retain their
+    // schema and facts; the ordinary Application gate still validates them.
+    if ((await probeCatalogIdentity(startupCatalog)).state === "absent")
+      await initializeCatalogSchema(startupCatalog);
     application = await createApplication(options.home, {
       ...options.applicationOptions,
       configurationOwner,
@@ -733,7 +417,7 @@ export async function startProductionWorkbench(options: {
       session,
       acquisition: session,
       ...taskHttpAdapters(app),
-      ...metadataHttpAdapters(app),
+      ...createMetadataOperations(app),
       query: {
         application: query,
         ...(app.maintenance ? { maintenance: app.maintenance } : {}),
@@ -932,9 +616,7 @@ export async function startSyntheticWorkbench(options: {
         max_bytes: 64 * 1024 * 1024,
         deadline_ms: 3600000,
       },
-      browserReadiness.configured && browserReadiness.missing.length === 0
-        ? createBrowserDecision(application.agents)
-        : undefined,
+      undefined,
       sessionId,
       () => host!.close(),
       async (candidate, signal) => {
@@ -992,6 +674,11 @@ export async function startSyntheticWorkbench(options: {
         }
         snapshots.delete(candidate.transfer_id);
       },
+      false,
+      undefined,
+      browserReadiness.configured && browserReadiness.missing.length === 0
+        ? application.browserCapability
+        : undefined,
     );
     for (const candidate of await application.database.listCandidates(
       target.articleId,

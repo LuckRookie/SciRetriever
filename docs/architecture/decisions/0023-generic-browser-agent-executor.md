@@ -2,9 +2,10 @@
 
 - Status: Accepted
 - Amended by: [ADR 0029](0029-unverified-pdf-acquisition.md)（下载取消文章身份门，保存未验证标签）
-- Amended by: [ADR 0030](0030-browser-transport-and-progress.md)（临时传输、文章会话、后台下载、候选交接和平台限流）
+- Amended by: [ADR 0030](0030-browser-transport-and-progress.md)（临时传输、文章会话、后台下载、候选交接和平台限流）；[ADR 0031](0031-dsh-backed-agent-capabilities.md)（DSH 执行基础与多轮历史）
 - Date: 2026-09-06
-- Updated: 2026-10-11（五层获取、首次模型前入口准备与累计 300/100/200 预算）
+- Last amended: 2026-10-13（DSH 执行基础方向，实施已批准）
+- Updated: 2026-10-13（累计 300 秒与 30 次模型调用预算，取消默认独立动作上限）
 - Supersedes: none
 - Amends: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)、[PDF 获取指南](../../guides/pdf-acquisition.md)
@@ -81,8 +82,9 @@ group、session key、页面状态或正文点击流程。`production-ready` 是
 
 Acquisition 从当前 Literature 事实形成有界 `BrowserArticleGoal`：DOI、版本、标题、作者、摘要片段、
 期刊/出版社、年份和文献类型。已经准入的 landing/asset 起点及其 origin 仍由 Network/Browser 请求
-边界持有，不进入模型目标。每次模型调用只接收这份目标、当前稳定 `BrowserObservation` 和一张当前
-截图，并且必须选择以下一个动作：
+边界持有，不进入模型目标。每次模型调用接收这份目标、当前稳定 `BrowserObservation` 和当前
+截图。按 ADR 0031 的新目标，还保留连贯的观察、工具调用与结果历史，由 DSH 管理对话与压缩；
+该接入尚未实施。每份稳定观察仍必须只许可以下一个动作：
 
 ```text
 ClickElement | ClickPoint | ScrollSurface | GoBack | WaitForChange | Stop
@@ -90,6 +92,20 @@ ClickElement | ClickPoint | ScrollSurface | GoBack | WaitForChange | Stop
 
 Agent 不获得 selector、任意 URL、脚本、文本输入、Page/Context/CDP、Cookie、Profile、文件系统、
 下载确认或事实写入能力。它只能提出下一步动作，不能宣布下载成功。
+
+2026-10-12 用户确认：模型的 `Stop` 只提供 `access-unavailable`（当前访问条件无法继续）和
+`no-viable-path`（已无可行获取路径）两个主动结束原因，并附一句已尝试路径与具体障碍的说明。
+前者需要当前目标文章确实要求付款、不可用凭据/MFA 或身份切换，且无当前会话可用的全文替代入口；
+后者需要根据已有观察和操作历史，确认合理的文章相关路径已尝试且没有新的有效下一步。
+单个登录/购买按钮、慢页面、一次点击失败或出现验证码均不足以停止；先等待、观察、处理遮挡或
+从无关页面返回文章。仍有可行相关路径时继续，重复相同障碍且没有新信息时结束，不为用完预算闲逛。
+不增加最低动作次数、逐站规则、额外评审模型或新的退出选项。
+
+取消、预算、实际网络错误由运行时形成，成功由文件验收与发布确认，不交给 Agent 自行宣称。
+既有 `user/budget/cancel` 控制消息继续可读，以兼容 operator 与已有调用方，但不再列入模型工具选项。
+两个新停止原因形成当次稳定失败码及脱敏说明，不自动写入无版权或全渠道耗尽的永久事实；最终报告保留
+该明确的 Browser 判断，较早的来源失败继续保留在各自诊断中。已经开始的下载与真实 capture 仍先结算，
+有效候选优先交付，实际文件失败也不能被模型停止理由覆盖。
 
 Browser 的文章 session 是操作状态的唯一 owner；Network 负责实际访问准入。底层 `start()` 与
 `apply()` 在返回前吸收 loading、
@@ -126,11 +142,17 @@ scope/host 并发；不得为 Browser 建立独立模型限流器来绕过其它
 不能提前派发；到期后页面仍不可观察时继续等待变化。内部观察或等待不是新增 Agent 动作。
 Challenge 等页面与普通页面共用这套规则，不增加独立预算或点击脚本。
 
-每篇文章默认有 300 秒累计活跃时间、100 次真实模型派发和 200 次 Agent 动作。时间是主要控制边界，调用与动作采用较宽的防失控上限；有效进展、动画或入口切换都不自动延长总预算。活跃时间使用同一
-单调时钟，累计模型实际派发后的推理、动作、主动页面反馈与节奏等待，重叠时间只计一次。
+2026-10-13 用户确认：每篇文章默认有 300 秒累计活跃时间和 30 次真实模型派发，先到上限即停止
+进一步探索。每次模型调用至多产生一个 Agent 动作，因此默认不再设置独立动作上限，动作次数继续统计。
+这项取舍以覆盖大多数正常下载任务、约 90% 的经验验收目标为方向，接受复杂或当前无权限任务未完成；
+90% 不是已证明的成功率或对每批文献的保证。预算耗尽只表示本次探索停止，不推断永久无权限或全渠道耗尽。
+有效进展、动画或入口切换都不自动延长总预算。活跃时间使用同一单调时钟，累计模型实际派发后的
+推理、动作、主动页面反馈与节奏等待，重叠时间只计一次。
 等 worker、共享模型 permit、平台冷却/Retry-After、人工接管、后台下载及本地验收/发布不计入活跃时间。
 模型请求实际发送前才计一次 call；经 phase、控制 epoch 与页面绑定复检后才派发并计 Agent 动作。
-已合法派发的第 100 次模型调用仍可交付其动作，下一次调用被拒绝；过期或迟到动作不能执行。
+已合法派发的第 30 次模型调用仍可交付其动作，并完成既有的有界页面反馈等待及下载交接；
+不能仅因调用次数到限取消这一轮。下一次模型调用被拒绝，累计活跃时间与控制版本检查继续生效，
+过期或迟到动作不能执行。已启动传输使用独立寿命，不因探索预算耗尽而中断。
 
 下载 started 原子暂停该 session 的模型决策并释放 worker，保留页面与独立 transfer 寿命。
 本轮决策可取消，但不能用同一个 signal 切断传输。传输或文件检查失败后，将脱敏反馈带回原页面
@@ -204,6 +226,6 @@ provenance 与自动获取耗尽的持久合同不变，因此不需要数据库
 - 让 Agent 直接持有 Playwright/Page/CDP：会把稳定化、capture correlation 和资源清理重新交给
   模型，无法形成可验证的程序交接。
 - 由 Agent 输出 PDF URL 或“成功”布尔值：任意 URL 与自然语言结论都不能证明下载事实和文章归属。
-- 将 LangGraph 引入 Browser 状态机：当前流程是消费模块拥有的有界反应循环，Network 已拥有页面
-  状态；增加持久图或第二套状态机不会提升交接正确性。共享 Agents Runtime 继续以 PydanticAI
-  Direct/协议 adapter 的无状态单次调用为基础。
+- 将 LangGraph 引入 Browser 状态机：文章和页面状态继续由消费模块拥有，不新增持久图或第二套
+  业务状态机。共享模型层保持无状态单次调用；ADR 0031 的 DSH 执行基础另负责会话与工具交互，
+  不接管文章、下载或发布事实。

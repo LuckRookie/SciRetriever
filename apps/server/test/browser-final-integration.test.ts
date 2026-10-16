@@ -1,3 +1,7 @@
+import {
+  latestBrowserObservationMessage,
+  browserModelToolCallId,
+} from "./browser-model-fixture.js";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { createReadStream } from "node:fs";
@@ -152,7 +156,9 @@ it
           messages: { content: { type: string; text?: string }[] }[];
         };
         const observation = JSON.parse(
-          wire.messages[1]!.content.find((part) => part.type === "text")!.text!,
+          latestBrowserObservationMessage(wire).content.find(
+            (part) => part.type === "text",
+          )!.text!,
         ) as Pick<
           WorkbenchObservation,
           "article_id" | "observation_revision" | "elements"
@@ -183,6 +189,8 @@ it
                   message: {
                     tool_calls: [
                       {
+                        id: browserModelToolCallId(),
+                        type: "function",
                         function: {
                           name: "browser_action",
                           arguments: JSON.stringify({

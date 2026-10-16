@@ -5,6 +5,7 @@ const manifest = [
   ["/", "live.html", "text/html; charset=utf-8"],
   ["/styles.css", "styles.css", "text/css; charset=utf-8"],
   ["/live.css", "live.css", "text/css; charset=utf-8"],
+  ["/workspace.css", "workspace.css", "text/css; charset=utf-8"],
   ["/live.js", "live.js", "text/javascript; charset=utf-8"],
 ] as const;
 const queryManifest = [

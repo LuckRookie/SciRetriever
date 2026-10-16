@@ -1,3 +1,7 @@
+import {
+  latestBrowserObservationMessage,
+  browserModelToolCallId,
+} from "./browser-model-fixture.js";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
@@ -35,14 +39,14 @@ function gate() {
 }
 
 it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
-  "publishes three articles through the production Browser while two real model HTTP calls overlap a native background download",
+  "refills a fourth article while two model workers and an earlier native download retain their ownership",
   async () => {
     const root = await mkdtemp(
       join(tmpdir(), "sciretriever-parallel-production-"),
     );
     const slow = gate();
     const models = gate();
-    const ids = ["c", "a", "b"] as const;
+    const ids = ["c", "a", "b", "d"] as const;
     const papers = ids.map((name, index) => ({
       name,
       literature: parseLiterature({
@@ -61,6 +65,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
     }));
     const requests: { host: string; path: string; at: number }[] = [];
     let slowFinished = false;
+    let slowStarted = false;
     const origin = createServer((request, response) => {
       const host = (request.headers.host ?? "").split(":")[0]!;
       requests.push({ host, path: request.url ?? "", at: performance.now() });
@@ -84,6 +89,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
           "content-length": paper.bytes.length,
         });
         if (paper.name === "c") {
+          slowStarted = true;
           response.write(paper.bytes.slice(0, 100));
           void slow.promise.then(() => {
             slowFinished = true;
@@ -100,6 +106,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
     const port = (origin.address() as AddressInfo).port;
     const calls: { article: string; at: number; end: number | null }[] = [];
     let activeModels = 0;
+    let heldModels = 0;
     let peakModels = 0;
     const handleModel = async (
       request: IncomingMessage,
@@ -111,7 +118,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       const wire = JSON.parse(Buffer.concat(chunks).toString()) as {
         messages: { content: { type: string; text?: string }[] }[];
       };
-      const raw = wire.messages[1]!.content.find(
+      const raw = latestBrowserObservationMessage(wire).content.find(
         (part) => part.type === "text",
       )!.text!;
       const observation = JSON.parse(raw) as WorkbenchObservation;
@@ -126,7 +133,16 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       calls.push(call);
       peakModels = Math.max(peakModels, ++activeModels);
       try {
-        if (paper.name !== "c") await models.promise;
+        // Any page may become readable first. Leave decision workers available
+        // until C actually starts its native transfer, then establish overlap.
+        if (paper.name !== "c" && slowStarted) {
+          heldModels++;
+          try {
+            await models.promise;
+          } finally {
+            heldModels--;
+          }
+        }
         const pdf = observation.elements.find(
           (element) => element.name === "Download PDF",
         );
@@ -135,7 +151,9 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         // A and B deliberately need another observation; the production clock must
         // enforce the five-second action interval, even for a short explicit wait.
         const action =
-          pdf && !(paper.name !== "c" && first)
+          pdf &&
+          (paper.name === "c" || slowStarted) &&
+          !(paper.name !== "c" && first)
             ? {
                 kind: "click-element",
                 element_id: pdf.element_id,
@@ -156,6 +174,8 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
                 message: {
                   tool_calls: [
                     {
+                      id: browserModelToolCallId(),
+                      type: "function",
                       function: {
                         name: "browser_action",
                         arguments: JSON.stringify({ action }),
@@ -209,7 +229,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       });
       await writeFile(
         join(home, ".sciretriever", "config.toml"),
-        `[providers.fixture]\napi = "openai-chat-completions"\nbase_url = "http://127.0.0.1:${modelPort}/v1"\n[models."fixture/browser"]\nimage = true\nstream = false\n[browser]\nenabled = true\nmodel = "fixture/browser"\nprofile = "parallel-fixture"\n[sources.acquisition]\nmode = "custom"\nproviders = []\n`,
+        `[providers.fixture]\napi = "openai-chat-completions"\nbase_url = "http://127.0.0.1:${modelPort}/v1"\n[models."fixture/browser"]\nimage = true\nstream = false\n[browser]\nenabled = true\nmodel = "fixture/browser"\nprofile = "parallel-fixture"\n[execution]\nmax_concurrency = 3\n[sources.acquisition]\nmode = "custom"\nproviders = []\n`,
         { mode: 0o600 },
       );
       app = await createApplication(home, {
@@ -274,7 +294,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       // Surface a rejection immediately while the assertions observe its in-flight work.
       void pending.catch(() => undefined);
       await expect
-        .poll(() => calls.filter((item) => item.article !== "c").length, {
+        .poll(() => heldModels, {
           timeout: 30_000,
         })
         .toBe(2);
@@ -302,7 +322,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
           },
           { timeout: 30_000 },
         )
-        .toBe(2);
+        .toBe(3);
       expect(
         (await app.database.currentFacts(papers[0]!.literature.literature_id))!
           .primary_asset,
@@ -310,7 +330,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       expect(slowFinished).toBe(false);
       slow.release();
       const report = (await pending) as { completed: readonly unknown[] };
-      expect(report.completed).toHaveLength(3);
+      expect(report.completed).toHaveLength(4);
       expect(peakModels).toBe(2);
       for (const paper of papers) {
         const facts = (await app.database.currentFacts(

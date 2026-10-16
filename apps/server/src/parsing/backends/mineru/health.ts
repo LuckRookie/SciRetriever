@@ -14,6 +14,7 @@ import {
   readOnlyProbeRequest,
 } from "../../../network/probe.js";
 import { ParsingFailure } from "../../ports.js";
+import { MINERU_PROTOCOL, MINERU_RELEASE } from "./profile.js";
 
 /** Closed health-only classification: no submit, poll, archive or upload. */
 export class MinerUHealthError extends Error {
@@ -48,7 +49,6 @@ export interface MinerUHealthProbe {
 }
 
 const HEALTH_KEYS = ["protocol_version", "status", "version"];
-const HEALTH_OPTIONAL_KEYS = ["profile"];
 
 function responseObject(body: Uint8Array): Record<string, unknown> {
   let value: unknown;
@@ -62,22 +62,18 @@ function responseObject(body: Uint8Array): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     throw new MinerUHealthError("parser-response-invalid");
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  const allowed = new Set([...HEALTH_KEYS, ...HEALTH_OPTIONAL_KEYS]);
   if (HEALTH_KEYS.some((key) => !(key in record)))
-    throw new MinerUHealthError("parser-response-invalid");
-  if (keys.some((key) => !allowed.has(key)))
     throw new MinerUHealthError("parser-response-invalid");
   return record;
 }
 
-function healthReport(body: Uint8Array): MinerUHealthReport {
+export function parseMinerUHealth(body: Uint8Array): MinerUHealthReport {
   const record = responseObject(body);
   if (record.status !== "healthy")
     throw new MinerUHealthError("parser-unhealthy");
-  if (record.version !== "3.4.4")
+  if (record.version !== MINERU_RELEASE)
     throw new MinerUHealthError("parser-release-mismatch");
-  if (record.protocol_version !== 2)
+  if (record.protocol_version !== MINERU_PROTOCOL)
     throw new MinerUHealthError("parser-protocol-mismatch");
   if (record.profile !== undefined) {
     if (
@@ -200,7 +196,7 @@ export function createMinerUHealthProbe(options: {
         throw new MinerUHealthError("parser-redirect-refused");
       if (response.status !== 200)
         throw new MinerUHealthError("parser-unreachable");
-      return healthReport(response.body);
+      return parseMinerUHealth(response.body);
     },
   };
 }

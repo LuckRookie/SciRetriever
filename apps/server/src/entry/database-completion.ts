@@ -40,7 +40,6 @@ import { ContentCleanupFailure } from "../literature/cleanup.js";
 import { NoUsableContentReclamationFailure } from "./no-usable-content.js";
 import type { PdfAcquisitionPort } from "./pdf-acquisition.js";
 import {
-  CompletionAcquisitionCoordinator,
   CompletionSerialExecutor,
   directCompletionCommit,
   type CompletionExecution,
@@ -66,11 +65,11 @@ export interface DatabaseCompletionOptions {
   /** The immutable scope after selection, before any target starts. Feedback only. */
   readonly on_scope?: (targets: readonly CompletionTarget[]) => void;
   readonly on_progress?: (progress: DatabaseCompletionProgress) => void;
-  /** False stops later admission without cancelling work already in this chunk. */
+  /** False stops later admission without cancelling already running targets. */
   readonly on_target_start?: (
     target: CompletionTarget,
   ) => Promise<boolean | void>;
-  /** Durable policy may stop admission after a settled target; true stops later chunks. */
+  /** Durable policy may stop admission after a settled target; true stops later targets. */
   readonly on_target_finish?: (
     target: CompletionTarget,
     outcome: DatabaseCompletionTargetOutcome,
@@ -490,9 +489,7 @@ export class DatabaseCompletionTargetRunner {
         generation: execution.generation,
         operation_id: execution.operation_id,
       } as const;
-      outcome = execution.acquirePdf
-        ? await execution.acquirePdf(request)
-        : await acquisition.acquire(request);
+      outcome = await acquisition.acquire(request);
     } catch (error) {
       // Only route failures are values here; anything escaping the port is a
       // shared-dependency failure that must stop the remaining schedule.
@@ -795,7 +792,6 @@ export class DatabaseCompletionTargetRunner {
 class DatabaseCompletionOperation {
   constructor(
     readonly max_concurrency: number,
-    private readonly acquisitionPort: PdfAcquisitionPort | null,
     private readonly requestedSignal: AbortSignal,
     private readonly onProgress: DatabaseCompletionOptions["on_progress"],
     private readonly onTargetStart: DatabaseCompletionOptions["on_target_start"],
@@ -833,127 +829,100 @@ class DatabaseCompletionOperation {
     const commits = new CompletionSerialExecutor(signal);
     const outcomes = new Map<FrozenTarget, DatabaseCompletionTargetOutcome>();
     let admissionStopped = false;
-    try {
-      for (
-        let offset = 0;
-        offset < targets.length;
-        offset += this.max_concurrency
-      ) {
-        if (signal.aborted || admissionStopped) break;
-        const chunk = targets.slice(offset, offset + this.max_concurrency);
-        const participantKey = (frozen: FrozenTarget) =>
-          frozen.target.kind === "literature"
-            ? `literature:${frozen.target.literature_id}`
-            : `meta-literature:${frozen.target.meta_literature_id}`;
-        const coordinator = new CompletionAcquisitionCoordinator(
-          chunk.map(participantKey),
-          this.acquisitionPort,
-          signal,
-          operationId,
-          this.max_concurrency,
-        );
-        // Only one bounded chunk exists at a time. Await every worker before
-        // opening another chunk or returning the report.
-        const execution: CompletionExecution = {
-          commit: commits.run,
-          acquire: directCompletionCommit,
-          generation: 0,
-          operation_id: operationId,
-        };
+    const execution: CompletionExecution = {
+      commit: commits.run,
+      acquire: directCompletionCommit,
+      // Ordinary refills and per-target retries share this operation epoch.
+      // Advancing it would invalidate sibling Browser sessions still downloading.
+      generation: 0,
+      operation_id: operationId,
+    };
+    let next = 0;
+    const worker = async () => {
+      while (!signal.aborted && !admissionStopped) {
+        const frozen = targets[next++];
+        if (!frozen) return;
+        if (signal.aborted || admissionStopped) return;
+        let outcome: DatabaseCompletionTargetOutcome;
         try {
-          await Promise.all(
-            chunk.map(async (frozen) => {
-              const key = participantKey(frozen);
-              const participantExecution: CompletionExecution = {
-                ...execution,
-                acquirePdf: (request) => coordinator.request(key, request),
-              };
-              try {
-                if (signal.aborted || admissionStopped) return;
-                let outcome: DatabaseCompletionTargetOutcome;
-                try {
-                  const admitted = await this.onTargetStart?.(frozen.target);
-                  if (admitted === false) {
-                    admissionStopped = true;
-                    return;
-                  }
-                  this.notify({
-                    target: frozen.target,
-                    literature_id: frozen.candidates[0] ?? null,
-                    state: "started",
-                    failure: null,
-                  });
-                  outcome = await execute(frozen, signal, participantExecution);
-                } catch (error) {
-                  const kind = classifyAcquisitionFailure(error, signal);
-                  outcome = {
-                    partition: kind === "cancel" ? "interrupted" : "failed",
-                    literature_id: frozen.candidates[0] ?? null,
-                    stage: "literature",
-                    failure:
-                      kind === "cancel"
-                        ? null
-                        : stableFailure(
-                            kind === "storage" || kind === "receipt"
-                              ? "completion-storage-failed"
-                              : kind === "contract"
-                                ? "completion-contract"
-                                : "completion-operation-failed",
-                            "The completion operation stopped on a shared dependency.",
-                            "Inspect the database and file boundary, then retry the scope.",
-                            false,
-                          ),
-                    operation_failure: kind !== "cancel",
-                    skipped_reason: null,
-                    skipped_literature_ids: [],
-                    no_usable_content: false,
-                  };
-                }
-                let policyStop = false;
-                try {
-                  policyStop =
-                    (await this.onTargetFinish?.(frozen.target, outcome)) ===
-                    true;
-                } catch {
-                  outcome = {
-                    partition: "failed",
-                    literature_id: outcome.literature_id,
-                    stage: "literature",
-                    failure: stableFailure(
-                      "completion-operation-failed",
-                      "The completion operation stopped on a shared dependency.",
-                      "Inspect the database and file boundary, then retry the scope.",
-                      false,
-                    ),
-                    operation_failure: true,
-                    skipped_reason: null,
-                    skipped_literature_ids: [],
-                    no_usable_content: outcome.no_usable_content,
-                  };
-                }
-                outcomes.set(frozen, outcome);
-                // Policy stops later admission but lets already running targets
-                // and receipt waves finish. Shared failures still abort siblings.
-                if (policyStop) admissionStopped = true;
-                if (outcome.operation_failure) stop.abort();
-                this.notify({
-                  target: frozen.target,
-                  literature_id:
-                    outcome.literature_id ?? frozen.candidates[0] ?? null,
-                  state: outcome.partition,
-                  failure: outcome.failure,
-                });
-              } finally {
-                coordinator.retire(key);
-              }
-            }),
-          );
-        } finally {
-          for (const frozen of chunk)
-            coordinator.retire(participantKey(frozen));
-          await coordinator.close();
+          const admitted = await this.onTargetStart?.(frozen.target);
+          if (admitted === false) {
+            admissionStopped = true;
+            return;
+          }
+          this.notify({
+            target: frozen.target,
+            literature_id: frozen.candidates[0] ?? null,
+            state: "started",
+            failure: null,
+          });
+          outcome = await execute(frozen, signal, execution);
+        } catch (error) {
+          const kind = classifyAcquisitionFailure(error, signal);
+          outcome = {
+            partition: kind === "cancel" ? "interrupted" : "failed",
+            literature_id: frozen.candidates[0] ?? null,
+            stage: "literature",
+            failure:
+              kind === "cancel"
+                ? null
+                : stableFailure(
+                    kind === "storage" || kind === "receipt"
+                      ? "completion-storage-failed"
+                      : kind === "contract"
+                        ? "completion-contract"
+                        : "completion-operation-failed",
+                    "The completion operation stopped on a shared dependency.",
+                    "Inspect the database and file boundary, then retry the scope.",
+                    false,
+                  ),
+            operation_failure: kind !== "cancel",
+            skipped_reason: null,
+            skipped_literature_ids: [],
+            no_usable_content: false,
+          };
         }
+        let policyStop = false;
+        try {
+          policyStop =
+            (await this.onTargetFinish?.(frozen.target, outcome)) === true;
+        } catch {
+          outcome = {
+            partition: "failed",
+            literature_id: outcome.literature_id,
+            stage: "literature",
+            failure: stableFailure(
+              "completion-operation-failed",
+              "The completion operation stopped on a shared dependency.",
+              "Inspect the database and file boundary, then retry the scope.",
+              false,
+            ),
+            operation_failure: true,
+            skipped_reason: null,
+            skipped_literature_ids: [],
+            no_usable_content: outcome.no_usable_content,
+          };
+        }
+        outcomes.set(frozen, outcome);
+        // Policy stops later admission but lets already running targets
+        // and receipt waves finish. Shared failures still abort siblings.
+        if (policyStop) admissionStopped = true;
+        if (outcome.operation_failure) stop.abort();
+        this.notify({
+          target: frozen.target,
+          literature_id: outcome.literature_id ?? frozen.candidates[0] ?? null,
+          state: outcome.partition,
+          failure: outcome.failure,
+        });
       }
+    };
+    try {
+      await Promise.all(
+        Array.from(
+          { length: Math.min(this.max_concurrency, targets.length) },
+          worker,
+        ),
+      );
     } finally {
       await commits.drain();
     }
@@ -1089,7 +1058,6 @@ export class DatabaseCompletionService {
     const noUsable: LiteratureId[] = [];
     const operation = new DatabaseCompletionOperation(
       this.maxConcurrency,
-      this.ports.acquisition,
       signal,
       options.on_progress,
       options.on_target_start,

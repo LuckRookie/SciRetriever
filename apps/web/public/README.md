@@ -5,11 +5,12 @@
 ## 内容入口
 
 - [index.html](index.html)：静态样本入口。
-- [live.html](live.html)：正式蓝白任务工作台，含首页、持久任务、Browser 协助、文献/知识阅读、加工与设置。
+- [live.html](live.html)：按定稿原型接入的正式文献库工作空间与共享表单模板。
 - [query.html](query.html)：只读文献查询页面。
 - [maintenance.html](maintenance.html)：显式维护工作台页面。
 - [styles.css](styles.css)：公共样式。
-- [live.css](live.css)：实时工作台样式。
+- [workspace.css](workspace.css)：定稿原型样式及生产功能的样式适配。
+- [live.css](live.css)：独立查询与维护页面使用的共享样式。
 
 ## 放置边界
 

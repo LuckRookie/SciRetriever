@@ -236,15 +236,24 @@ async function oldFetchFixture(
   return { ...result, abort, replace };
 }
 
-it.each(["eof", "stop-session", "abort"] as const)(
-  "drains an original late old-document response with bounded IO and confirms its %s",
-  async (terminal) => {
+it.each([
+  ["eof", "text/plain"],
+  ["stop-session", "text/plain"],
+  ["abort", "text/plain"],
+  ["eof", "application/pdf"],
+  ["stop-session", "application/pdf"],
+  ["abort", "application/pdf"],
+] as const)(
+  "drains an original late old-document response with bounded IO and confirms its %s (%s)",
+  async (terminal, mime) => {
     const ended = vi.fn();
     const failure = vi.fn();
+    const pdfResponse = vi.fn();
     const body = deferred<Record<string, unknown>>();
     const { owner, protocol, abort, replace } = await oldFetchFixture({
       ended,
       failure,
+      pdfResponse,
     });
     let reads = 0;
     protocol.result = (method) => {
@@ -256,7 +265,7 @@ it.each(["eof", "stop-session", "abort"] as const)(
     };
     replace();
     expect(ended).not.toHaveBeenCalled();
-    protocol.response("old-fetch", 200, { "content-type": "text/plain" });
+    protocol.response("old-fetch", 200, { "content-type": mime });
     await vi.waitFor(() => expect(reads).toBe(2));
     let drained = false;
     const drain = owner.drainSession("session-a").then(() => {
@@ -280,6 +289,7 @@ it.each(["eof", "stop-session", "abort"] as const)(
     else if (terminal === "stop-session") await owner.stopSession("session-a");
     else abort.abort();
     await drain;
+    expect(pdfResponse).not.toHaveBeenCalled();
     expect(ended).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ request_id: "old-fetch" }),
     );
@@ -512,7 +522,10 @@ it("hands a late old-document PDF to its original managed writer", async () => {
     pdfResponse: received,
   });
   replace();
-  protocol.response("old-fetch", 200, { "content-type": "application/pdf" });
+  protocol.response("old-fetch", 200, {
+    "content-type": "application/pdf",
+    "content-disposition": "attachment; filename=selected.pdf",
+  });
   await ready.promise;
   expect(ended).not.toHaveBeenCalled();
   expect(
@@ -590,7 +603,10 @@ it.each(["context-first", "commit-first"] as const)(
       ).toHaveLength(9),
     );
     protocol.response("native-pdf", 200, { "content-type": "application/pdf" });
-    protocol.response("stream-pdf", 200, { "content-type": "application/pdf" });
+    protocol.response("stream-pdf", 200, {
+      "content-type": "application/pdf",
+      "content-disposition": "attachment; filename=selected.pdf",
+    });
     await received.promise;
     protocol.emit("Browser.downloadWillBegin", {
       guid: "00000000-0000-0000-0000-000000000003",
@@ -1540,7 +1556,10 @@ it("keeps an owned PDF response running while a later GET waits for its real ter
         }),
       ),
     );
-    protocol.response("pdf-fetch", 200, { "content-type": "application/pdf" });
+    protocol.response("pdf-fetch", 200, {
+      "content-type": "application/pdf",
+      "content-disposition": "attachment; filename=selected.pdf",
+    });
     await consuming.promise;
     protocol.request("next", "a", "Document", "http://127.0.0.1/next");
     await next.promise;
@@ -1606,7 +1625,10 @@ it("preserves a PDF writer admitted while the provisional GET cancellation await
         }),
       ),
     );
-    protocol.response("old-fetch", 200, { "content-type": "application/pdf" });
+    protocol.response("old-fetch", 200, {
+      "content-type": "application/pdf",
+      "content-disposition": "attachment; filename=selected.pdf",
+    });
     await consuming.promise;
     protocol.emit(
       "Network.loadingFailed",
@@ -1652,33 +1674,41 @@ it("preserves a PDF writer admitted while the provisional GET cancellation await
   }
 });
 
-it("refuses partial PDF responses before native or IO transfer can consume them", async () => {
-  const rejectedResponse = vi.fn();
-  const pdfResponse = vi.fn();
-  const nativeDownload = vi.fn();
-  const { owner, protocol } = await fixture({
-    rejectedResponse,
-    pdfResponse,
-    nativeDownload,
-  });
-  protocol.request("partial", "a");
-  await vi.waitFor(() =>
-    expect(
-      protocol.calls.some((call) => call.method === "Fetch.continueRequest"),
-    ).toBe(true),
-  );
-  protocol.response("partial", 206, { "content-type": "application/pdf" });
-  await vi.waitFor(() =>
-    expect(rejectedResponse).toHaveBeenCalledWith(
-      expect.objectContaining({ session_id: "session-a" }),
-      "browser-partial-pdf",
-    ),
-  );
-  expect(pdfResponse).not.toHaveBeenCalled();
-  expect(nativeDownload).not.toHaveBeenCalled();
-  await owner.drainSession("session-a");
-  owner.dispose();
-});
+it.each(["Document", "Fetch", "XHR"])(
+  "refuses partial PDF downloads before %s transfer can consume them",
+  async (resource) => {
+    const rejectedResponse = vi.fn();
+    const pdfResponse = vi.fn();
+    const nativeDownload = vi.fn();
+    const { owner, protocol } = await fixture({
+      rejectedResponse,
+      pdfResponse,
+      nativeDownload,
+    });
+    protocol.request("partial", "a", resource);
+    await vi.waitFor(() =>
+      expect(
+        protocol.calls.some((call) => call.method === "Fetch.continueRequest"),
+      ).toBe(true),
+    );
+    protocol.response("partial", 206, {
+      "content-type": "application/pdf",
+      ...(resource === "Document"
+        ? {}
+        : { "content-disposition": "attachment; filename=selected.pdf" }),
+    });
+    await vi.waitFor(() =>
+      expect(rejectedResponse).toHaveBeenCalledWith(
+        expect.objectContaining({ session_id: "session-a" }),
+        "browser-partial-pdf",
+      ),
+    );
+    expect(pdfResponse).not.toHaveBeenCalled();
+    expect(nativeDownload).not.toHaveBeenCalled();
+    await owner.drainSession("session-a");
+    owner.dispose();
+  },
+);
 
 it("keeps a native writer and its bytes live when cancellation has no terminal event", async () => {
   let download!: BrowserNativeDownload;
@@ -2152,6 +2182,62 @@ it("does not retry an ended redirect hop while its next hop admission is pending
   }
 });
 
+it.each([
+  [200, undefined],
+  [200, 'inline; filename="attachment.pdf"'],
+  [206, "inline"],
+  [429, "inline"],
+] as const)(
+  "leaves a programmatic PDF preview to its renderer (%s, %s)",
+  async (status, disposition) => {
+    const pdfResponse = vi.fn();
+    const rejectedResponse = vi.fn();
+    const rateLimited = vi.fn();
+    const { owner, protocol } = await fixture({
+      pdfResponse,
+      rejectedResponse,
+      rateLimited,
+    });
+    try {
+      protocol.request("preview", "a", "Fetch");
+      await vi.waitFor(() =>
+        expect(protocol.calls).toContainEqual(
+          expect.objectContaining({
+            method: "Fetch.continueRequest",
+            params: { requestId: "preview", interceptResponse: true },
+          }),
+        ),
+      );
+      protocol.response("preview", status, {
+        "content-type": "application/pdf",
+        ...(disposition ? { "content-disposition": disposition } : {}),
+      });
+      await vi.waitFor(() =>
+        expect(protocol.calls).toContainEqual(
+          expect.objectContaining({
+            method: "Fetch.continueResponse",
+            params: { requestId: "preview" },
+          }),
+        ),
+      );
+      expect(pdfResponse).not.toHaveBeenCalled();
+      expect(rejectedResponse).not.toHaveBeenCalled();
+      expect(rateLimited).not.toHaveBeenCalled();
+      expect(
+        protocol.calls.some((call) => call.method === "Fetch.failRequest"),
+      ).toBe(false);
+      protocol.emit(
+        "Network.loadingFinished",
+        { requestId: "network-preview" },
+        "protocol-a",
+      );
+      await owner.drainSession("session-a");
+    } finally {
+      owner.dispose();
+    }
+  },
+);
+
 it("streams an attachment PDF fetch through its original IO response", async () => {
   const pdfResponse = vi.fn(async () => {});
   const nativeDownload = vi.fn();
@@ -2232,7 +2318,10 @@ it("ends IO activity before completed calls stopNetwork while local validation c
     ).toBe(true),
   );
   vi.useFakeTimers();
-  protocol.response("io", 200, { "content-type": "application/pdf" });
+  protocol.response("io", 200, {
+    "content-type": "application/pdf",
+    "content-disposition": "attachment; filename=selected.pdf",
+  });
   await rawComplete.promise;
   await vi.advanceTimersByTimeAsync(3000);
   expect(receiveSignal?.aborted).toBe(false);

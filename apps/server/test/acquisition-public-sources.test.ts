@@ -1123,7 +1123,7 @@ describe("controlled browser acquisition route", () => {
     ]);
   });
 
-  it("keeps a selected but unconfigured route as a fail-closed locator outcome", async () => {
+  it("keeps an unconfigured route failure after trying remaining sources", async () => {
     const { assemblePublicAcquisitionRegistry, splitAcquisitionRoutes } =
       await import("../src/acquisition/assembly.js");
     const { NetworkBudgetCoordinator } = await import(
@@ -1167,10 +1167,15 @@ describe("controlled browser acquisition route", () => {
         [{ key: "unconfigured-route", request: { identifiers: [] } }],
         async () => undefined,
       ),
-    ).rejects.toMatchObject({
-      code: "download-unavailable",
-      retryable: false,
-    });
+    ).resolves.toMatchObject([
+      {
+        disposition: "failed",
+        failure: {
+          code: "download-unavailable",
+          retryable: false,
+        },
+      },
+    ]);
   });
 
   it("fails closed instead of exhausting a target whose browser tier is unavailable", async () => {
@@ -1206,7 +1211,9 @@ describe("controlled browser acquisition route", () => {
           );
         },
       ),
-    ).rejects.toMatchObject({ retryable: false });
+    ).resolves.toMatchObject([
+      { disposition: "failed", failure: { retryable: false } },
+    ]);
   });
 });
 

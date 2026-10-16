@@ -2,11 +2,11 @@
 
 - Status: Accepted
 - Date: 2026-08-26
-- Last amended: 2026-09-27
+- Last amended: 2026-10-15
 - Supersedes: none
 - Superseded by: none
 - Amends: [ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)
-- Amended by: [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；[ADR 0028](0028-query-and-expansion-separation.md)（查询与显式扩充分离）
+- Amended by: [ADR 0033](0033-machine-interfaces-cover-web-capabilities.md)（CLI/MCP 分别覆盖 Web；受控配置和 Browser 协作）；[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；[ADR 0028](0028-query-and-expansion-separation.md)（查询与显式扩充分离）；[ADR 0031](0031-dsh-backed-agent-capabilities.md)（受控 DSH 执行基础）
 - Related: [ADR 0010](0010-parser-neutral-markdown-current-result.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)、[ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[任务与协作控制：数据库补全与阶段协调](../technical/02-task-coordination.md#4-数据库补全与阶段协调)、[知识加工：共享支撑：无状态模型运行时](../technical/05-knowledge-processing.md#5-共享支撑无状态模型运行时)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)
 
 > 2026-09-25 修订：科研 Agent 成为主要程序消费者，新增证据、知识压缩、检索/上下文及正式人类协作；Entry 薄适配与内部模型运行时边界保留。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
@@ -52,7 +52,7 @@ AccessCoordinator、URL/DNS/origin 准入、origin-bound credential、redirect�
 
 ## 决策
 
-适用范围：产品消费边界按 ADR 0026/0027 修订；以下旧 BatchGoal 与 Python/PydanticAI 选型保留其历史/兼容背景。当前活动语言、构建与运行合同以 ADR 0024/0025 和 TS 基线为准，不要求恢复 Python。SDK 的受控网络、类型隔离与无状态约束继续有效。
+适用范围：产品消费边界按 ADR 0026/0027 修订；以下旧 BatchGoal 与 Python/PydanticAI 选型保留其历史/兼容背景。当前活动语言、构建与运行合同以 ADR 0024/0025 和 TS 基线为准，不要求恢复 Python。单次模型层的无状态、受控网络与类型隔离约束继续有效；ADR 0031 另允许私有受控 DSH 会话与工具循环，实施方案已批准。
 
 ### 1. SciRetriever 是 Agent 可编排但不由 Agent 拥有的文献引擎
 
@@ -160,8 +160,7 @@ Network、安全策略和事实 owner。
 
 MCP 不得：
 
-- 暴露 secret 或普通配置编辑、原始 SQL、内部表、Storage path、Provider client、Browser 或
-  任意 prompt API；
+- 暴露 secret 读取、任意配置文件编辑、原始 SQL、内部表、Storage path、Provider client、原始 Browser/Page/CDP 或任意 prompt API；按 ADR 0033，受控普通配置发布、凭据设置/移除及 Browser 协作须经同一 owner 和授权边界提供；
 - 把 PDF、截图或其它大型字节默认塞入模型上下文；应返回稳定 ID、hash、provenance、受控
   artifact reference 和有界摘要，再由明确导出操作取得字节；
 - 建立 MCP 专属 Job、Task、Session、Report 历史或文献状态；长操作只返回或投影 SciRetriever
@@ -207,8 +206,8 @@ Model Requests 或等价的低层单次请求 API，只委托 message/schema/too
   `stream = true` 发送流式请求并消费有界 SSE；具体 Model 可以明确关闭 stream，此时只解析
   非流式 JSON。adapter 或 SDK 必须在私有边界内重建唯一完整结果，`AgentRuntime`、Analysis 和
   Browser 不接收 token/event stream，也不能在任一模式失败后自动切换模式补发请求；
-- framework 不自动执行 tool。Analysis structured output 和 Browser 六动作决定都作为数据返回，
-  仍由消费模块验证并执行；
+- 单次模型 adapter/SDK 不自动执行 tool。Analysis structured output 与 Browser 动作数据仍由
+  消费模块接纳；ADR 0031 的 DSH 执行基础可调度消费模块显式提供的受控工具，不获得其业务所有权；
 - PydanticAI、OpenAI、Anthropic、DeepSeek、`httpx` 或其它 SDK 类型不能进入 Model、Entry、
   Analysis、Acquisition、Configuration 公共合同或持久化数据；
 - Analysis 继续拥有各用例 prompt、调用编排、schema 含义与产物验收；两阶段、NoUsableContent 和 Markdown 属于旧单篇用例，ReferenceLookup 保持按需；Acquisition 继续拥有 Browser controller、Observation/action 含义、
@@ -220,8 +219,9 @@ PydanticAI 是第一个实现选择，不是业务公共合同。未来可以在
 和行为测试的前提下替换为另一成熟 SDK，而不要求业务模块或数据库迁移。只有需要改变这些稳定
 边界时才需要新 ADR。
 
-DeepSeek 模型作为普通模型 Provider 接入，不要求嵌入 DeepSeek Harness。Codex、DeepSeek
-Harness 等完整 Agent runtime 留在 Entry/MCP 外侧，不能成为 `sciretriever.agents` 的生产依赖。
+DeepSeek 模型与 DeepSeek Harness 执行基础分别选型。Codex 等外部 Agent 宿主继续位于 Entry/MCP
+外侧；按 ADR 0031，DSH 的最小 Cordis 组件可以成为 `agents` 私有生产依赖，提供受控会话与工具循环。
+这不允许其默认完整应用、shell、个人配置或第二套网络/业务调度接管 SciRetriever。
 
 ### 6. SDK 接入必须先通过 Network transport gate
 
@@ -249,7 +249,7 @@ bridge 必须：
 
 - 全部 outbound request 只在 fake SciRetriever Network 中可见，没有第二条联网路径；
 - OpenAI 协议和一个非 OpenAI 协议都能完成一次结构化请求；
-- Analysis typed output 与 Browser typed decision 成功，但 framework 不执行 Browser 动作；
+- Analysis typed output 与 Browser typed decision 成功，单次模型 adapter 不执行 Browser 动作；DSH 的受控工具委托另按 ADR 0031 验证；
 - redirect、重复 POST、credential forwarding、响应上限、timeout、cancel、quota 和
   `Retry-After` 保持当前语义；
 - SDK exception、refusal、truncated、tool/schema mismatch 和 usage 能转换为稳定中性结果；
@@ -263,11 +263,11 @@ Network、安全、取消、失败或 provenance 合同来换取 SDK。失败证
 
 ### 7. 业务 workflow 继续使用普通 Python controller，当前不引入 LangGraph
 
-本节标题保留历史决策索引。当前由 TypeScript 业务 controller 组织 Analysis、ReferenceLookup、材料获取与 Browser 流程，模型 SDK 只解决协议转换。新知识加工和人类协作沿用清晰 owner，不因此指定某个 workflow 框架；任务存续/恢复与部署仍需单独决定。
+本节标题保留历史决策索引。当前由 TypeScript 业务 controller 组织 Analysis、ReferenceLookup、材料获取与 Browser 流程。ADR 0031 已选定 DSH 支撑内部受控 Agent 交互，尚未实施；业务阶段与结果 owner 不变，任务存续/恢复与部署仍需单独决定。
 
-当前不引入 LangGraph、PydanticAI 高层 Agent、OpenAI Agents SDK 或其它会默认拥有 loop、
-session、handoff、checkpoint、memory 或 tool execution 的通用 Agent runtime。它们既不能替代
-Provider transport gate，也不能改变业务 owner。
+当前不引入 LangGraph、PydanticAI 高层 Agent、OpenAI Agents SDK 或其它未经选择的运行时。
+ADR 0031 允许 DSH 持有受控交互的会话、循环与工具调度；这不能替代 Provider transport gate，
+也不能改变业务 owner、增加 durable workflow 或扩展模型工具权限。
 
 未来只有出现真实的跨进程 durable workflow、人工中断后恢复、复杂动态并行分支或长期多 Agent
 handoff 产品需求时，才重新评估 LangGraph。若采用，它位于业务 controller 层，节点调用 Entry
@@ -367,8 +367,8 @@ User
   机制。
 - **把 ParserResult 提升为第四种 Literature 状态或独立最终文档。** 当前 ParserResult 仍是
   旧 Analysis 的可替换输入；ADR 0026 的独立文档/证据层已修订其仅供分析的范围，不把原始 parser 私有输出直接当成产品文档。
-- **把 Codex、DeepSeek Harness 或其它完整 Agent 嵌入核心运行时。** 它们带入 thread、shell、
-  filesystem、工具和更大权限面，并使产品依赖特定 Harness。
+- **把未经裁剪的完整 Agent 应用作为核心运行环境。** 默认 shell、filesystem、个人配置和
+  外部工具不因框架接入获得权限；ADR 0031 已明确选择 DSH 的最小受控组件，而非其默认应用。
 - **继续默认手写所有 Provider wire protocol。** 只有 SDK transport gate 失败并留下可审计
   证据时才合理，不能在未比较成熟 SDK 的情况下继续扩张。
 - **只逐家接入官方 Provider SDK 而不使用统一 typed translation layer。** 它可以作为
@@ -389,7 +389,7 @@ User
 - ParserResult 成为新的 Literature 状态，永久保存全部解析尝试，或破坏其受支持交换格式；ADR 0026 的独立读取和有效证据保留已获接受；
 - MCP 建立持久 Job/Task 状态，或改为远程、多用户、跨租户服务；
 - 引入 LangGraph 或其它 durable workflow/checkpoint/HITL runtime；
-- framework 开始拥有 Analysis/Acquisition workflow、自动执行 Browser tool 或绕过业务验收；
+- framework 开始拥有 Analysis/Acquisition 业务 workflow，执行未经消费模块授权的 Browser tool 或绕过业务验收；ADR 0031 已允许受控工具委托；
 - SDK 无法通过公开 transport hook 满足 Network gate 而决定长期保留自研 wire adapter；
 - 允许 SDK 自动 retry、redirect、telemetry 或第二条外部联网路径，或者把任一协议 streaming
   暴露为消费者状态、运行时自动协商或失败后的第二次模型请求；

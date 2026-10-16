@@ -94,7 +94,7 @@
             明确选择已接纳的 PDF
             和当前可读文档版本，再生成有证据的概览、详细分析或问题回答。需要
             Catalog v6
-            和已配置的分析模型；输入超预算会拒绝，不截断。历史知识可在只读文献库按
+            和已配置的分析模型；长文可选择分段处理，不设累计调用或 token 预算。历史知识可在只读文献库按
             ID 阅读。
           </p>
           <label for="knowledge-literature-id">Literature ID</label>
@@ -130,33 +130,7 @@
             min="1"
             step="1"
           />
-          <label for="knowledge-input-bytes">文档输入上限（UTF-8 字节）</label>
-          <input
-            id="knowledge-input-bytes"
-            type="number"
-            min="1"
-            max="262144"
-            value="262144"
-          />
-          <label for="knowledge-output-tokens">模型输出上限（token）</label>
-          <input
-            id="knowledge-output-tokens"
-            type="number"
-            min="1"
-            max="16384"
-            value="2048"
-          />
-          <div id="knowledge-long-budget" hidden>
-            <p>长文模式下，文档上限最多 8 MiB；模型输出上限是每次调用的预约值。以下为规范化 AgentCall 字节及累计调用预算。</p>
-            <label for="knowledge-call-bytes">单次调用上限（字节）</label>
-            <input id="knowledge-call-bytes" type="number" min="1" max="262144" value="262144" />
-            <label for="knowledge-total-call-bytes">累计调用上限（字节）</label>
-            <input id="knowledge-total-call-bytes" type="number" min="1" max="67108864" value="33554432" />
-            <label for="knowledge-max-calls">最多调用次数</label>
-            <input id="knowledge-max-calls" type="number" min="1" max="256" value="256" />
-            <label for="knowledge-total-output-tokens">累计输出上限（token）</label>
-            <input id="knowledge-total-output-tokens" type="number" min="1" max="1048576" value="524288" />
-          </div>
+          <p>处理完整输入并记录实际模型用量；可以随时取消当前请求。</p>
           <button id="knowledge-start" class="live-primary" type="button">
             启动单篇分析
           </button>
@@ -168,7 +142,7 @@
         </section>
         <section class="config-card config-form" aria-label="集合知识综合">
           <h2>集合知识综合</h2>
-          <p>明确填写有序文档或知识来源，再固定版本和缺口。Catalog 需显式迁移至 v7。模型只对已固定集合执行一次有界归并；候选过多会拒绝发布。</p>
+          <p>明确填写有序文档或知识来源，再固定版本和缺口。Catalog 需显式迁移至 v7。模型对已固定集合进行归纳，结果保留来源和实际覆盖。</p>
           <label for="synthesis-inputs">来源选择 JSON（1–128 项）</label>
           <textarea id="synthesis-inputs" rows="8" spellcheck="false" placeholder='[{"kind":"document","input_id":"paper-1","literature_id":"...","asset_id":"...","asset_sha256":"...","document_version_id":null},{"kind":"knowledge","input_id":"prior-1","source_artifact_id":"..."}]'></textarea>
           <label for="synthesis-policy">覆盖政策</label>
@@ -176,20 +150,6 @@
           <button id="synthesis-prepare" type="button">固定来源与缺口</button>
           <label for="synthesis-question">集合问题</label>
           <textarea id="synthesis-question" rows="3" spellcheck="false"></textarea>
-          <label for="synthesis-source-bytes">累计原文与知识内容上限（字节）</label>
-          <input id="synthesis-source-bytes" type="number" min="1" max="8388608" value="8388608" />
-          <label for="synthesis-verification-bytes">来源闭包核验上限（字节）</label>
-          <input id="synthesis-verification-bytes" type="number" min="1" max="67108864" value="67108864" />
-          <label for="synthesis-call-bytes">单次 AgentCall 上限（字节）</label>
-          <input id="synthesis-call-bytes" type="number" min="1" max="262144" value="262144" />
-          <label for="synthesis-total-call-bytes">累计 AgentCall 上限（字节）</label>
-          <input id="synthesis-total-call-bytes" type="number" min="1" max="67108864" value="33554432" />
-          <label for="synthesis-max-calls">最多模型调用</label>
-          <input id="synthesis-max-calls" type="number" min="1" max="256" value="256" />
-          <label for="synthesis-output-tokens">单次输出预约（token）</label>
-          <input id="synthesis-output-tokens" type="number" min="1" max="16384" value="2048" />
-          <label for="synthesis-total-output-tokens">累计输出上限（token）</label>
-          <input id="synthesis-total-output-tokens" type="number" min="1" max="1048576" value="524288" />
           <button id="synthesis-start" class="live-primary" type="button" disabled>启动集合综合</button>
           <button id="synthesis-cancel" type="button" disabled>取消当前请求</button>
           <p id="synthesis-status" role="status" aria-live="polite"></p>

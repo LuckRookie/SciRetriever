@@ -1,0 +1,36 @@
+# 测试目录与本地试验场
+
+`tests/` 保存随 Git 分发的、可复用的离线测试材料。当前主要是 `fixtures/`：自动化回归依赖的合成输入，不能将整个 `tests/` 忽略或移出 Git。
+
+| 位置 | 用途 | Git 管理 |
+| --- | --- | --- |
+| `apps/*/test/`、`packages/*/test/` | 可重复执行的 TypeScript 回归测试（Vitest），使用 fake、合成输入或 loopback 服务 | 是 |
+| [`tests/fixtures/`](fixtures/) | 供回归测试共享的合成响应、兼容样本和协议输入 | 是 |
+| `sandbox/cases/` | 本机真实测试场景、手工步骤和一次性脚本 | 否 |
+| `sandbox/runs/` | 每轮测试的输入、原始日志、截图、下载/解析产物及隔离测试库 | 否 |
+| `sandbox/reports/` | 本机阶段测试、故障诊断和验收报告 | 否 |
+| 系统临时目录 `sciretriever-*` | 自动化回归的临时 home、合成数据库及短期工具中间文件 | 否 |
+
+## 本地真实测试
+
+`sandbox/` 是仓库根目录下的本机试验场，整个目录由 `.gitignore` 忽略，不随 GitHub 仓库分发。新 checkout 可按需要创建：
+
+```bash
+mkdir -p sandbox/cases sandbox/runs sandbox/reports
+```
+
+真实供应商、Browser、MinerU、LLM 或生产数据测试，经用户明确授权后在这里组织；每轮在 `sandbox/runs/` 下使用独立目录，例如 `2026-10-12-mineru/`。这只是存放约定，不增加专用运行器；脚本仍调用项目正式 CLI/SDK，并在用例或报告中写明运行命令和实际数据位置。默认使用隔离测试库，生产库操作仍需明确授权。
+
+`pnpm test`、`pnpm full` 和从仓库根目录直接执行的 `pnpm exec vitest` 都通过 `vitest.config.mjs` 排除 `sandbox/**`，即使文件名是 `*.test.ts` 也不会被自动收集。格式化和 lint 同样忽略该目录。真实测试脚本由操作者显式运行，不挂入 CI；安装包只收录各 workspace 声明的构建产物。
+
+本地报告可以引用本地运行材料。公开文档只引用本说明，或将具体报告路径标注为“不随仓库分发”，不建立指向私有文件的 Markdown 链接。已有系统临时目录中的运行数据保留原位置，后续测试使用本约定；迁移报告不等于迁移运行中的服务、数据库或资产。
+
+从真实测试发现的 bug 应提炼为可共享的合成回归，加入模块 `test/`，需要共享输入时再放入 `tests/fixtures/`。不要将真实响应、凭据、文献正文或本机测试报告直接加入公共测试目录。
+
+测试记录不成为需求、ADR 或当前能力承诺；需要长期维护的结论提炼到所属文档。用户授权和外部访问边界见 [HARNESS](../HARNESS.md)。
+
+## 子目录导航
+
+- [fixtures/](fixtures/README.md)：共享合成测试输入。
+
+[项目目录地图](../README.md#项目目录地图)

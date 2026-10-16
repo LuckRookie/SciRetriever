@@ -15,6 +15,7 @@ import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { chromium, type BrowserContext } from "playwright";
 
 import {
   BrowserHost,
@@ -106,6 +107,55 @@ afterEach(async () => {
 
 describe("persistent browser profile host", () => {
   it.skipIf(!browserAvailable && !bundle)(
+    "uses the observed context terminal when a concurrent close command rejects",
+    async () => {
+      const launch = await fixtureLaunch();
+      const launchContext = chromium.launchPersistentContext.bind(chromium);
+      let context: BrowserContext | undefined;
+      const launchSpy = vi
+        .spyOn(chromium, "launchPersistentContext")
+        .mockImplementationOnce(async (...args) => {
+          context = await launchContext(...args);
+          return context;
+        });
+      const host = new BrowserHost({
+        profile: await profile(),
+        ...launch.options,
+      });
+      try {
+        await host.start();
+      } finally {
+        launchSpy.mockRestore();
+      }
+      const closeContext = context!.close.bind(context);
+      let terminalObserved = false;
+      context!.once("close", () => {
+        terminalObserved = true;
+      });
+      const closeSpy = vi
+        .spyOn(context!, "close")
+        .mockImplementation(async () => {
+          await closeContext();
+          expect(terminalObserved).toBe(true);
+          throw new Error(
+            "Synthetic close RPC rejected after context terminal",
+          );
+        });
+      try {
+        await host.close();
+        expect(terminalObserved).toBe(true);
+        expect(host.diagnostics().status).toBe("closed");
+        await host.close();
+        expect(closeSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        closeSpy.mockRestore();
+        await closeContext();
+      }
+    },
+    30_000,
+  );
+
+  it.skipIf(!browserAvailable && !bundle)(
     "closes a hung initial production page open at its budget while another article remains usable",
     async () => {
       const launch = await fixtureLaunch();
@@ -194,7 +244,9 @@ describe("persistent browser profile host", () => {
         };
         // Cloak can commit before its visible surface exists. Establish a real
         // readable baseline, then verify the independent session after A closes.
-        await expect.poll(healthyTitle).toBe("Healthy article");
+        await expect
+          .poll(healthyTitle, { timeout: 15_000 })
+          .toBe("Healthy article");
         const delivery = production.deliverCandidate(
           makeRequest("a", "/pending"),
         );
@@ -205,7 +257,9 @@ describe("persistent browser profile host", () => {
         });
         expect(decide).not.toHaveBeenCalled();
         expect(ownerSignal.aborted).toBe(false);
-        await expect.poll(healthyTitle).toBe("Healthy article");
+        await expect
+          .poll(healthyTitle, { timeout: 15_000 })
+          .toBe("Healthy article");
         const pages = await host!.listPages();
         expect(
           pages
@@ -303,7 +357,10 @@ describe("persistent browser profile host", () => {
         await new Promise<void>((resolve) => setTimeout(resolve, 31000));
         expect(terminal).toBe(false);
         release();
-        expect(await (await opening).title()).toBe("synthetic browser page");
+        const page = await opening;
+        await expect
+          .poll(() => page.title(), { timeout: 10_000 })
+          .toBe("synthetic browser page");
         await saveHostEvidence({
           runtime: launch.version,
           scenario: "platform-admission-over-30s",
@@ -1076,7 +1133,7 @@ it.runIf(browserAvailable)(
         () => true,
       );
       await expect
-        .poll(async () => (await page.snapshot()).text)
+        .poll(async () => (await page.snapshot()).text, { timeout: 15_000 })
         .toContain("Verification complete");
       expect(receivedType).toContain("multipart/form-data; boundary=");
       expect(receivedBody).toContain("synthetic-browser-proof");

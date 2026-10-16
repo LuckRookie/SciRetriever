@@ -236,7 +236,7 @@ it.each(["cancel", "provider-failure"] as const)(
         signal: abort.signal,
       });
       expect(report.status).toBe(
-        failure === "cancel" ? "INTERRUPTED" : "FAILED",
+        failure === "cancel" ? "INTERRUPTED" : "PARTIAL",
       );
       expect(report.result_count).toBe(1);
       expect(
@@ -418,6 +418,42 @@ it("rolls back a newly proposed reference when its provider evidence does not ma
         })
       ).total_count,
     ).toBe(0);
+  } finally {
+    await app.close();
+  }
+});
+
+it("keeps a provider-native seed key alongside DOI identifiers for reverse citation queries", async () => {
+  let received: ReferenceQueryContext | undefined;
+  const port: ReferenceQueryPort = {
+    provider_name: "fixture",
+    open_reference_query(context) {
+      received = context;
+      if (context.keys[0]?.record_id !== "0")
+        throw new Error("Provider-native key required");
+      return {
+        pull_raw_item: () => ({ raw_item: 1, source_exhausted_after: true }),
+        convert_raw_item: () => item(context, 1, true),
+      };
+    },
+  };
+  const { app, seedId } = await application(port);
+  try {
+    const report = await app.citations.run({
+      seed_literature_ids: [seedId],
+      direction: "cited-by",
+      max_depth: 1,
+      result_limit: 1,
+      providers: [{ provider_name: "fixture", scan_limit: 1 }],
+    });
+    expect(report).toMatchObject({ status: "COMPLETED", result_count: 1 });
+    expect(received?.keys[0]).toEqual({
+      record_id: "0",
+      identifiers: [{ namespace: "doi", value: "10.1000/work-0" }],
+    });
+    const edges = await app.database.referenceSnapshot();
+    expect(edges[0]?.reference.target_literature_id).toBe(seedId);
+    expect(edges[0]?.supports).toHaveLength(1);
   } finally {
     await app.close();
   }

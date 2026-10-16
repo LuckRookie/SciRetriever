@@ -22,10 +22,14 @@ pnpm full
 `contract-validation.test.ts` 和 `canonical-encoding.test.ts`。不要用块、阶段或任务顺序命名测试文件或
 suite。
 
+本机真实/一次性测试使用 Git 忽略的 `sandbox/`；场景、运行材料和报告的约定见[测试目录说明](../../tests/README.md)。
+`vitest.config.mjs` 在默认排除项之外排除 `sandbox/**`，`pnpm test/full` 及根目录直接调用 Vitest 均不收集其中的用例；
+原有模块回归与共享合成 fixture 的发现范围保持不变。
+
 `package-entrypoints.test.ts` 构建并打包 contracts/server，在系统临时目录使用独立临时 store/cache 离线安装真实 tarball。
 两个尚未发布的包通过临时 fixture 的 pnpm override 绑定到本次 tarball，并核对包中实际依赖版本一致；不使用远程 registry。
 MCP SDK 引入同名依赖的多版本后，便携包与安装测试按已安装的依赖边固定 tarball；
-不再要求整个图只有一个同名版本。根依赖提供离线 peer resolution，按父包版本的 overrides
+不再要求整个图只有一个同名版本。打包递归包含运行时 required peer，Optional peer 不变为必需；DSH 组件的精确版本与服务边界见[外部依赖说明](../notes/deepseek-harness.md)。根依赖提供离线 peer resolution，按父包版本的 overrides
 保留各调用方实际使用的版本；安装回归直接核对 SDK 与 body-parser 各自的 `content-type` 版本。
 安装测试的长构建使用异步子进程，避免阻塞 Vitest worker 的控制通道。
 测试通过 Node 的包解析调用 contracts 与配置公开入口，并检查未知配置拒绝、非公开子路径拒绝和源码/测试/构建元数据

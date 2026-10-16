@@ -1,9 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import { chromium } from "playwright";
+import {
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+  describe,
+  expect,
+  it,
+} from "vitest";
 import { BrowserPageRuntime } from "../src/browser/page-runtime.js";
 import type { Page } from "playwright";
 
 function fixture() {
-  const frame = {};
+  const frame = {
+    evaluate: async () => feedback,
+    childFrames: () => [],
+  };
   const listeners = new Map<string, (value: never) => void>();
   let feedback = "unchanged";
   let tick = () => {};
@@ -62,15 +76,21 @@ describe("BrowserPageRuntime feedback and server throttling", () => {
   it("hands off a committed document without waiting for blocked subresources", async () => {
     const f = fixture();
     f.onTick(f.navigate);
-    await f.runtime.apply(wait, 0, () => true);
+    expect(await f.runtime.apply(wait, 0, () => true)).toMatchObject({
+      wait_outcome: "changed",
+    });
     expect(f.ticks()).toBe(1);
-    await f.runtime.apply(wait, 0, () => true);
+    expect(await f.runtime.apply(wait, 0, () => true)).toMatchObject({
+      wait_outcome: "changed",
+    });
     expect(f.ticks()).toBe(1);
   });
   it("ends a wait when visible DOM changes without navigation", async () => {
     const f = fixture();
     f.onTick(f.change);
-    await f.runtime.apply(wait, 0, () => true);
+    expect(await f.runtime.apply(wait, 0, () => true)).toMatchObject({
+      wait_outcome: "changed",
+    });
     expect(f.ticks()).toBe(1);
   });
   it("preserves a stable page-closed cause when its wait RPC rejects before shared runtime loss", async () => {
@@ -149,4 +169,158 @@ describe("BrowserPageRuntime feedback and server throttling", () => {
       expect(f.reloads()).toBe(0);
     },
   );
+});
+
+describe("visible frame feedback on real loopback Chromium", () => {
+  let browser: import("playwright").Browser;
+  let server: import("node:http").Server;
+  let origin: string;
+  let frameOrigin: string;
+  let page: Page;
+  let runtime: BrowserPageRuntime;
+  let generation: number;
+
+  beforeAll(async () => {
+    server = createServer((request, response) => {
+      response.setHeader("Content-Type", "text/html");
+      if (request.url === "/frame") {
+        response.end(
+          `<title>Frame</title><p>Waiting</p><input id="control" type="checkbox" style="display:none"><button id="enable" disabled>Continue</button>`,
+        );
+      } else if (request.url === "/nested") {
+        response.end(
+          `<title>Outer frame</title><iframe src="/frame" style="width:350px;height:200px"></iframe>`,
+        );
+      } else {
+        response.end(
+          `<title>Article</title><style>@keyframes spin{to{transform:rotate(360deg)}}#spinner{width:30px;height:30px;border:3px solid;animation:spin .2s linear infinite}iframe{width:450px;height:300px}</style><p>Stable article</p><div id="spinner"></div><button id="top" style="display:none">New route</button><iframe src="${frameOrigin}${request.url === "/deep" ? "/nested" : "/frame"}"></iframe><iframe id="hidden" style="display:none" src="/frame"></iframe>`,
+        );
+      }
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string")
+      throw new Error("Fixture address missing");
+    origin = `http://127.0.0.1:${address.port}`;
+    frameOrigin = `http://localhost:${address.port}`;
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-proxy-server", "--disable-background-networking"],
+    });
+  });
+  afterAll(async () => {
+    await browser?.close();
+    if (server)
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+  });
+  beforeEach(async () => {
+    page = await browser.newPage({
+      viewport: { width: 800, height: 600 },
+      serviceWorkers: "block",
+    });
+    await page.route("**/*", (route) =>
+      [origin, frameOrigin].includes(new URL(route.request().url()).origin)
+        ? route.continue()
+        : route.abort(),
+    );
+    runtime = new BrowserPageRuntime(page);
+    await page.goto(origin, { waitUntil: "load" });
+    generation = (await runtime.snapshot()).document_generation!;
+  });
+  afterEach(async () => {
+    await page?.context().close();
+  });
+
+  it.each(["main", "cross-origin", "nested"])(
+    "wakes for a newly visible control in %s without waiting for timeout",
+    async (surface) => {
+      if (surface === "nested") {
+        await page.goto(`${origin}/deep`, { waitUntil: "load" });
+        generation = (await runtime.snapshot()).document_generation!;
+      }
+      const target =
+        surface === "main"
+          ? page.mainFrame()
+          : page
+              .frames()
+              .find((frame) => frame.url() === `${frameOrigin}/frame`)!;
+      await target.evaluate(
+        (selector) => {
+          setTimeout(() => {
+            (document.querySelector(selector) as HTMLElement).style.display =
+              "inline-block";
+          }, 200);
+        },
+        surface === "main" ? "#top" : "#control",
+      );
+      const result = await runtime.apply(
+        { ...wait, timeout_ms: 2000 },
+        generation,
+        () => true,
+      );
+      expect(result).toMatchObject({ wait_outcome: "changed" });
+      expect(result?.wait_elapsed_ms).toBeLessThan(1700);
+      expect(
+        await target
+          .locator(surface === "main" ? "#top" : "#control")
+          .isVisible(),
+      ).toBe(true);
+    },
+  );
+
+  it("detects an iframe control becoming enabled without text or frame navigation", async () => {
+    const frame = page
+      .frames()
+      .find((value) => value.url() === `${frameOrigin}/frame`)!;
+    await frame.evaluate(() => {
+      setTimeout(() => {
+        (document.querySelector("#enable") as HTMLButtonElement).disabled =
+          false;
+      }, 200);
+    });
+    expect(
+      await runtime.apply(
+        { ...wait, timeout_ms: 2000 },
+        generation,
+        () => true,
+      ),
+    ).toMatchObject({ wait_outcome: "changed" });
+    expect(await frame.locator("#enable").isEnabled()).toBe(true);
+  });
+
+  it("does not wake on spinner animation or changes inside a hidden frame", async () => {
+    const hidden = page
+      .frames()
+      .find((frame) => frame.url() === `${origin}/frame`)!;
+    await hidden.evaluate(() => {
+      setTimeout(() => {
+        document.body.textContent = "Hidden new controls";
+      }, 100);
+    });
+    const result = await runtime.apply(
+      { ...wait, timeout_ms: 650 },
+      generation,
+      () => true,
+    );
+    expect(result).toMatchObject({ wait_outcome: "timeout" });
+    expect(result?.wait_elapsed_ms).toBeGreaterThanOrEqual(650);
+  });
+
+  it("detects visible frame removal", async () => {
+    await page.evaluate(() => {
+      setTimeout(() => {
+        document.querySelector("iframe")!.remove();
+      }, 200);
+    });
+    expect(
+      await runtime.apply(
+        { ...wait, timeout_ms: 2000 },
+        generation,
+        () => true,
+      ),
+    ).toMatchObject({ wait_outcome: "changed" });
+  });
 });

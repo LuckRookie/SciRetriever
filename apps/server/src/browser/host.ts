@@ -294,6 +294,7 @@ export class BrowserHost {
   private startPromise: Promise<void> | undefined;
   private closePromise: Promise<void> | undefined;
   private runtimeShutdown: Promise<void> | undefined;
+  private readonly closedContexts = new WeakSet<BrowserContext>();
   private closing = false;
   private runtimeLost = false;
 
@@ -462,6 +463,8 @@ export class BrowserHost {
               : { width: 1280, height: 720 },
           },
         );
+        const context = this.context;
+        context.once("close", () => this.closedContexts.add(context));
       } catch {
         this.failure = "launch";
         throw new BrowserHostError();
@@ -1127,12 +1130,21 @@ export class BrowserHost {
     this.runtimeLost = true;
     for (const session of this.sessions.values())
       session.networkAllowed = false;
-    if (context) this.runtimeShutdown ??= context.close();
+    if (context) this.shutdownRuntime(context);
     this.options.onRuntimeLost?.();
     for (const session of this.sessions.values()) session.controller.abort();
     void this.runtimeShutdown?.catch(() => {
       this.failure = "close";
     });
+  }
+  private shutdownRuntime(context: BrowserContext): Promise<void> {
+    this.runtimeShutdown ??= context.close().catch((error: unknown) => {
+      // An external process close can win while Playwright sends its own close
+      // command. Only the observed context terminal supersedes that RPC error;
+      // a disconnected CDP channel alone does not prove that writers stopped.
+      if (!this.closedContexts.has(context)) throw error;
+    });
+    return this.runtimeShutdown;
   }
   private async navigatePage(
     page: Page,
@@ -1367,13 +1379,13 @@ export class BrowserHost {
       try {
         // Closing the persistent context owns its pages and process. Closing its
         // last headed page first races Chromium's own process shutdown.
-        this.runtimeShutdown ??= context!.close();
+        if (context) this.shutdownRuntime(context);
         await this.runtimeShutdown;
         this.context = undefined;
-      } catch {
+      } catch (error) {
         this.failure = "close";
         this.state = "failed";
-        throw new BrowserHostError();
+        throw new BrowserHostError(error);
       }
     }
     this.cdp?.dispose();

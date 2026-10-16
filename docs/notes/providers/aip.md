@@ -82,10 +82,7 @@ AIP 官方站点公开内容的 CSP 曾出现 `aipprc.silverchair.com`，当前�
 PDF 字节区分正文、supplement 与 wrong-article。Profile 的 `browser_probe_enabled = true` 只
 允许配置中心打开 AIP 首页检查 runtime/目标可达，不下载正文或证明 entitlement。
 
-2026-08-21 的 `aip-publishing-pdf@3`、独立 lane、Cloudflare dependency 和 Challenge
-子生命周期 fixture，以及 2026-08-22 stock/Cloak 固定样本，均是旧规则执行器的历史证据。该
-样本在有界窗口形成 `settle-timeout` 且未捕获 PDF；它只能说明当时本地没有阻断已审查的
-Turnstile 资源，不能证明当前通用 Agent、组织授权、当前 IP 或文章 entitlement。
+历史现场结果见Browser 切换测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
 
 由于普通 Terms 明确限制 automated program/tool/process，operator 必须确认其组织授权和实际
 用途符合 AIP 条款。显式启用通用 Browser 不是许可证明；裸 403、challenge、付费墙和正文

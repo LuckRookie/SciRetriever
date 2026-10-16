@@ -18,6 +18,11 @@ import {
   type BrowserCaptureState,
   type BrowserObservation,
 } from "../browser/observation.js";
+import type {
+  BrowserAgentCapability,
+  BrowserAgentEvent,
+  BrowserAgentSession,
+} from "../browser/decision.js";
 import type { BrowserPageHandle } from "../browser/host.js";
 import type { BrowserArticleExecution } from "../browser/article-session.js";
 import type {
@@ -99,6 +104,8 @@ export class WorkbenchSession {
     WorkbenchGuidance & { owner: string }
   >();
   private readonly waiters = new Set<() => void>();
+  private agentSession: BrowserAgentSession | undefined;
+  private readonly pendingAgentEvents: BrowserAgentEvent[] = [];
 
   constructor(
     public articleId: string,
@@ -118,6 +125,7 @@ export class WorkbenchSession {
     ) => Promise<void>,
     private readonly production = false,
     private readonly execution?: BrowserArticleExecution,
+    private readonly capability?: BrowserAgentCapability,
   ) {
     if (!/^[a-zA-Z0-9._:-]{1,128}$/u.test(articleId))
       throw new WorkbenchSessionError("stale-command");
@@ -205,6 +213,9 @@ export class WorkbenchSession {
     try {
       await this.switchTarget(articleId);
       this.expireGuidance();
+      await this.agentSession?.close();
+      this.agentSession = undefined;
+      this.pendingAgentEvents.length = 0;
       this.articleId = articleId;
       this.current = undefined;
       this.wire = null;
@@ -250,8 +261,37 @@ export class WorkbenchSession {
     for (const waiter of this.waiters) waiter();
     this.waiters.clear();
   }
+  private recordAgentEvent(event: BrowserAgentEvent): void {
+    if (this.execution) this.execution.recordAgentEvent?.(event);
+    else if (this.agentSession) this.agentSession.record(event);
+    else if (this.capability) this.pendingAgentEvents.push(event);
+  }
+  private async openAgentSession(): Promise<BrowserAgentSession> {
+    if (!this.agentSession) {
+      if (!this.capability)
+        throw new WorkbenchSessionError("model-unavailable");
+      const opened = await this.capability.open({
+        session_id: this.id,
+        literature_id: this.articleId,
+      });
+      if (this.closePromise || this.policy.state() === "cancelled") {
+        await opened.close();
+        throw new WorkbenchSessionError("session-closed");
+      }
+      this.agentSession = opened;
+      for (const event of this.pendingAgentEvents.splice(0))
+        this.agentSession.record(event);
+    }
+    return this.agentSession;
+  }
   private controlChanged(): void {
     this.execution?.controlEpochChanged();
+    this.recordAgentEvent({
+      kind: "control",
+      control_epoch: this.control.state().epoch,
+      controller:
+        this.control.state().controller_id === null ? "agent" : "human",
+    });
     this.wake();
   }
 
@@ -276,8 +316,15 @@ export class WorkbenchSession {
       onDispatched: () => {
         for (const id of dispatchedGuidance) {
           const item = this.guidance.get(id);
-          if (item?.state === "accepted")
+          if (item?.state === "accepted") {
             this.guidance.set(id, { ...item, state: "consumed" });
+            this.recordAgentEvent({
+              kind: "guidance",
+              guidance_id: id,
+              state: "consumed",
+              control_epoch: this.control.state().epoch,
+            });
+          }
         }
       },
       onObservation: (observation, frame, page) =>
@@ -426,7 +473,7 @@ export class WorkbenchSession {
           ? "agent-running"
           : this.stateValue,
       control: { ...control, viewers: this.humans.size },
-      model_ready: !!this.decide,
+      model_ready: !!(this.decide || this.execution || this.capability),
       error: this.errorValue,
       observation: this.wire
         ? {
@@ -462,8 +509,15 @@ export class WorkbenchSession {
   }
   private expireGuidance(): void {
     for (const [id, item] of this.guidance)
-      if (item.state === "accepted")
+      if (item.state === "accepted") {
         this.guidance.set(id, { ...item, state: "expired" });
+        this.recordAgentEvent({
+          kind: "guidance",
+          guidance_id: id,
+          state: "expired",
+          control_epoch: this.control.state().epoch,
+        });
+      }
   }
   submitGuidance(clientId: string, value: unknown): WorkbenchGuidance {
     this.human(clientId);
@@ -516,6 +570,13 @@ export class WorkbenchSession {
       owner: clientId,
     };
     this.guidance.set(item.guidance_id, item);
+    this.recordAgentEvent({
+      kind: "guidance",
+      guidance_id: item.guidance_id,
+      state,
+      text: item.text,
+      control_epoch: command.control_epoch,
+    });
     this.wake();
     return this.guidanceView(item);
   }
@@ -543,6 +604,12 @@ export class WorkbenchSession {
       throw new WorkbenchSessionError("stale-command");
     const cancelled = { ...item, state: "cancelled" as const };
     this.guidance.set(item.guidance_id, cancelled);
+    this.recordAgentEvent({
+      kind: "guidance",
+      guidance_id: item.guidance_id,
+      state: "cancelled",
+      control_epoch: this.control.state().epoch,
+    });
     return this.guidanceView(cancelled);
   }
   async acceptCandidate(clientId: string, value: unknown): Promise<void> {
@@ -799,7 +866,15 @@ export class WorkbenchSession {
         ? this.loop.apply(request, applyInput)
         : this.applySharedCommand(clientId, command, applyInput);
       this.actionPromise = action;
-      return await action;
+      const result = await action;
+      if (human && result === "applied")
+        this.recordAgentEvent({
+          kind: "human-action",
+          action: command.input.kind,
+          outcome: "applied",
+          control_epoch: command.control_epoch,
+        });
+      return result;
     } finally {
       this.actionPromise = undefined;
       this.busy = false;
@@ -902,7 +977,7 @@ export class WorkbenchSession {
     this.human(clientId);
     this.live();
     this.control.assertController(clientId, epoch);
-    if (!this.decide) {
+    if (!this.decide && !this.capability) {
       this.errorValue = "model-unavailable";
       throw new WorkbenchSessionError("model-unavailable");
     }
@@ -923,29 +998,94 @@ export class WorkbenchSession {
     this.stateValue = "agent-running";
     this.agentPromise = (async () => {
       try {
-        this.policy.consume("model_call");
-        const result = await decide(
-          observation,
-          this.frame(observation.frame_seq),
-          abort.signal,
-        );
-        if (abort.signal.aborted || this.control.state().epoch !== lease.epoch)
+        let input: BrowserAction | undefined;
+        const execute = async (action: BrowserAction) => {
+          if (
+            abort.signal.aborted ||
+            this.control.state().epoch !== lease.epoch
+          )
+            throw new WorkbenchSessionError("stale-command");
+          await this.execute(
+            this.agentId,
+            parseWorkbenchActionCommand({
+              session_id: this.id,
+              page_id: observation.page_id,
+              document_generation: observation.document_generation,
+              observation_revision: observation.observation_revision,
+              viewport_revision: observation.viewport_revision,
+              control_epoch: lease.epoch,
+              request_id: `request-${randomUUID()}`,
+              input: action,
+            }),
+            false,
+          );
+          input = action;
+        };
+        if (this.capability) {
+          const agent = await this.openAgentSession();
+          let accepted = false;
+          await agent.run(
+            {
+              observation,
+              frame: this.frame(observation.frame_seq),
+              admitRequest: (_request, signal) => ({
+                onDispatched: () => {
+                  if (
+                    signal.aborted ||
+                    this.control.state().epoch !== lease.epoch
+                  )
+                    throw new WorkbenchSessionError("stale-command");
+                  this.policy.consume("model_call");
+                },
+              }),
+              executeAction: async (action) => {
+                if (
+                  abort.signal.aborted ||
+                  this.control.state().epoch !== lease.epoch
+                )
+                  return {
+                    status: "cancelled",
+                    code: "browser-action-revoked",
+                  };
+                if (accepted)
+                  return {
+                    status: "rejected",
+                    code: "browser-action-batch-limit",
+                  };
+                accepted = true;
+                try {
+                  await execute(action);
+                  return { status: "success", code: "browser-action-applied" };
+                } catch {
+                  return {
+                    status: "rejected",
+                    code: "browser-action-rejected",
+                  };
+                }
+              },
+            },
+            abort.signal,
+          );
+        } else {
+          this.policy.consume("model_call");
+          const result = await decide!(
+            observation,
+            this.frame(observation.frame_seq),
+            abort.signal,
+          );
+          if (
+            abort.signal.aborted ||
+            this.control.state().epoch !== lease.epoch
+          )
+            return;
+          await execute(parseBrowserAction(result));
+        }
+        if (
+          !input ||
+          abort.signal.aborted ||
+          this.control.state().epoch !== lease.epoch
+        )
           return;
-        const input = parseBrowserAction(result);
-        await this.execute(
-          this.agentId,
-          parseWorkbenchActionCommand({
-            session_id: this.id,
-            page_id: observation.page_id,
-            document_generation: observation.document_generation,
-            observation_revision: observation.observation_revision,
-            viewport_revision: observation.viewport_revision,
-            control_epoch: lease.epoch,
-            request_id: `request-${randomUUID()}`,
-            input,
-          }),
-          false,
-        );
         await this.paceAgentAction(
           input,
           observation,
@@ -1203,7 +1343,21 @@ export class WorkbenchSession {
       await this.publicationPromise?.catch(() => undefined);
       await this.abandonmentPromise?.catch(() => undefined);
       await this.refreshPromise;
-      await (this.closePage ? this.closePage() : this.page.close());
+      const errors: unknown[] = [];
+      try {
+        await (this.closePage ? this.closePage() : this.page.close());
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        await this.agentSession?.close();
+      } catch (error) {
+        errors.push(error);
+      }
+      await this.agentPromise?.catch(() => undefined);
+      this.pendingAgentEvents.length = 0;
+      if (errors.length)
+        throw new AggregateError(errors, "Workbench session cleanup failed");
     })();
     return this.closePromise;
   }

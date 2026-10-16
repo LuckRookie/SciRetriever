@@ -1,3 +1,4 @@
+import { createTaskReader } from "../entry/task-read.js";
 import { LiteratureCompletionService } from "../entry/literature-completion.js";
 import { randomUUID } from "node:crypto";
 import { ArtifactRecovery } from "../storage/files/recovery.js";
@@ -7,7 +8,6 @@ import {
   AnalysisService,
   AnalysisFailure,
   type AnalysisOptions,
-  type AnalysisLimits,
 } from "../analysis/service.js";
 import { LiteratureContentService } from "../literature/content.js";
 import { ArtifactReclaimer } from "../storage/files/reclamation.js";
@@ -24,6 +24,7 @@ import { ParsingFailure } from "../parsing/ports.js";
 import { ParsingService } from "../parsing/service.js";
 import {
   MinerUParser,
+  createMinerUProtocolTransport,
   type MinerUHttpTransport,
 } from "../parsing/backends/mineru/index.js";
 import { ImmutableParserPublisher } from "../parsing/publication.js";
@@ -90,7 +91,10 @@ import {
 } from "../storage/sqlite/repositories.js";
 import { SqliteWorker } from "../storage/sqlite/worker.js";
 import { FileStore } from "../storage/files/store.js";
-import { AgentRuntime, type AgentBinding } from "../agents/runtime.js";
+import {
+  DshAgentRuntime as AgentRuntime,
+  type AgentBinding,
+} from "../agents/runtime.js";
 import { PublisherGovernanceService } from "../entry/publisher-governance.js";
 import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "../agents/openai.js";
 import { AnthropicMessagesAdapter } from "../agents/anthropic.js";
@@ -100,7 +104,7 @@ import {
   type AgentCapability,
 } from "../agents/protocol.js";
 import type { AgentTransport } from "../agents/protocol.js";
-import { createAgentTransport } from "../network/http.js";
+import { createAgentTransport, NetworkHttpError } from "../network/http.js";
 import type { ConnectionDependencies } from "../network/connection.js";
 import type { Resolver } from "../network/policy.js";
 import { TypeScriptConfigurationOwner } from "../configuration/owner.js";
@@ -140,7 +144,6 @@ import {
 import type { BrowserHostOptions } from "../browser/host.js";
 import {
   DEFAULT_FLOW_DEADLINE_MS,
-  DEFAULT_FLOW_MAX_ACTIONS,
   DEFAULT_FLOW_MAX_MODEL_CALLS,
   createBrowserArticleFlow,
   flowUnavailable,
@@ -152,7 +155,10 @@ import type {
   BrowserDeliveryRequest,
 } from "../browser/boundary.js";
 import { BrowserObservationStore } from "../browser/observation.js";
-import { createBrowserDecision } from "../browser/decision.js";
+import {
+  createBrowserCapability,
+  type BrowserAgentCapability,
+} from "../browser/decision.js";
 import { BrowserCandidateIntake } from "../acquisition/browser-intake.js";
 import {
   createProductionBrowserHostFactory,
@@ -221,6 +227,7 @@ export interface Application {
   readonly database: SqliteWorker;
   readonly files: FileStore;
   readonly agents: AgentRuntime;
+  readonly browserCapability: BrowserAgentCapability;
   readonly networkBudget: NetworkBudgetCoordinator;
   readonly logger: Logger;
   readonly observations: ObservationRepository;
@@ -270,6 +277,7 @@ export interface Application {
 }
 
 export interface QueryApplication {
+  readonly tasks?: ReturnType<typeof createTaskReader>;
   readonly taskRead?: (jobId: string) => ReturnType<typeof readProcessingTask>;
   readonly articleIdentityRead?: (assessmentId: string) => Promise<{
     assessment: import("@sciretriever/contracts").ArticleIdentityAssessment;
@@ -316,17 +324,12 @@ export class QueryApplicationError extends Error {
   }
 }
 
-/**
- * The hard ceiling on closed Browser actions for one automatic article delivery. The
- * flow stops as soon as it is reached, so an unproductive page cannot loop forever.
- */
 /** A flow that always refuses with the stable flow-unavailable reason. */
 function flowUnavailableFlow(): BrowserArticleFlow {
   return { deliver: async () => flowUnavailable() };
 }
 
 const BROWSER_FLOW_BUDGET = Object.freeze({
-  max_actions: DEFAULT_FLOW_MAX_ACTIONS,
   max_model_calls: DEFAULT_FLOW_MAX_MODEL_CALLS,
   deadline_ms: DEFAULT_FLOW_DEADLINE_MS,
   action_cooldown_ms: DEFAULT_BROWSER_AGENT_ACTION_COOLDOWN_MS,
@@ -522,7 +525,10 @@ function assembleConfiguredTypeScriptParser(
         provider: "mineru",
         field: "bearer_token",
         origin,
-        operation: "parser-upload",
+        operation:
+          options.method === "GET" && new URL(url).pathname.endsWith("/health")
+            ? "parser-health"
+            : "parser-upload",
       });
       if (token === null) throw new CredentialBoundaryError();
       const headers = {
@@ -532,21 +538,23 @@ function assembleConfiguredTypeScriptParser(
       if (injected) return injected.request(url, { ...options, headers });
       return raw!({
         endpoint: url,
-        method: "POST",
-        headers: [
-          ["accept", "application/json, application/zip"],
-          ...Object.entries(headers),
-        ],
+        method: options.method ?? "POST",
+        headers: Object.entries(headers),
         body: options.body,
         ...(options.signal ? { signal: options.signal } : {}),
       });
     },
   };
   return {
-    parser: new MinerUParser(transport, {
-      baseUrl: config.base_url,
-      modelIdentity: config.model_identity,
-    }),
+    parser: new MinerUParser(
+      createMinerUProtocolTransport(transport, {
+        baseUrl: config.base_url,
+      }),
+      {
+        baseUrl: config.base_url,
+        modelIdentity: config.model_identity,
+      },
+    ),
     rules: new TypeScriptParserArtifactRules(),
   };
 }
@@ -576,6 +584,7 @@ export async function createApplication(
   let database: SqliteWorker | undefined;
   let files: FileStore | undefined;
   let agents: AgentRuntime | undefined;
+  let browserAgentCapability: BrowserAgentCapability | undefined;
   let parsing: ParsingService | undefined;
   let analysis: AnalysisService | undefined;
   let contentAnalysis: ContentAnalysisService | undefined;
@@ -1031,7 +1040,8 @@ export async function createApplication(
               };
             },
           },
-          decide: createBrowserDecision(agents!),
+          decide: undefined,
+          capability: browserAgentCapability!,
           ...(options.browserCollaboration
             ? { collaboration: options.browserCollaboration }
             : {}),
@@ -1125,6 +1135,7 @@ export async function createApplication(
         options.agentTransportFactory,
       ),
     );
+    browserAgentCapability = createBrowserCapability(agents);
     await options.afterStage?.("agents");
     const artifactReclaimer = new ArtifactReclaimer(
       files.root,
@@ -1308,32 +1319,8 @@ export async function createApplication(
           : {}),
       });
     }
-    const analysisConfigured =
-      configuration.analyze.model !== null &&
-      [
-        configuration.analyze.metadata_max_output_tokens,
-        configuration.analyze.content_max_output_tokens,
-        configuration.analyze.max_input_bytes,
-        configuration.analyze.max_chunk_bytes,
-        configuration.analyze.max_chunk_count,
-        configuration.analyze.max_total_llm_requests,
-        configuration.analyze.max_total_output_tokens,
-      ].every((value) => value !== null);
+    const analysisConfigured = configuration.analyze.model !== null;
     if (options.analysisRuntime || analysisConfigured) {
-      const a = configuration.analyze;
-      const required = (value: number | null): number => {
-        if (value === null) throw new AnalysisFailure("analysis-configuration");
-        return value;
-      };
-      const limits: AnalysisLimits = {
-        metadata_max_output_tokens: required(a.metadata_max_output_tokens),
-        content_max_output_tokens: required(a.content_max_output_tokens),
-        max_input_bytes: required(a.max_input_bytes),
-        max_chunk_bytes: required(a.max_chunk_bytes),
-        max_chunk_count: required(a.max_chunk_count),
-        max_total_llm_requests: required(a.max_total_llm_requests),
-        max_total_output_tokens: required(a.max_total_output_tokens),
-      };
       if (
         !agents.readiness("analysis").configured ||
         agents.readiness("analysis").missing.length
@@ -1346,7 +1333,6 @@ export async function createApplication(
         agents,
         {
           ...(options.analysisRuntime ?? {}),
-          limits,
         },
       );
     }
@@ -1545,6 +1531,7 @@ export async function createApplication(
       database,
       files,
       agents,
+      browserCapability: browserAgentCapability,
       networkBudget,
       logger,
       observations,
@@ -1783,6 +1770,7 @@ export async function createQueryApplication(
             : null,
       },
       query: literature,
+      tasks: createTaskReader(new ExecutionRepository(database)),
       taskRead: (jobId) =>
         readProcessingTask(new ExecutionRepository(database), jobId),
       articleIdentityRead: async (id) => {
@@ -1893,7 +1881,17 @@ function buildAgentBindings(
       const transport: AgentTransport = (request) => {
         if (request.endpoint !== target)
           throw new AgentFailure("agent-configuration");
-        return rawTransport(request);
+        return rawTransport(request).catch((error: unknown) => {
+          if (error instanceof NetworkHttpError)
+            throw new AgentFailure(
+              error.reason === "timeout" ? "agent-timeout" : "agent-network",
+              ["timeout", "request-failed", "response-incomplete"].includes(
+                error.reason,
+              ),
+              { cause: error },
+            );
+          throw error;
+        });
       };
       const adapterConfig = {
         provider: providerName,
@@ -1929,9 +1927,11 @@ function buildAgentBindings(
       else adapter = new AnthropicMessagesAdapter(adapterConfig);
       adapters.set(key, adapter);
     }
-    const capabilities: AgentCapability[] = ["structured_text"];
+    const capabilities: AgentCapability[] = [
+      "structured_text",
+      "tool_decision",
+    ];
     if (config.image) capabilities.push("image_input");
-    if (role === "browser") capabilities.push("tool_decision");
     bindings.push({
       role,
       provider: providerName,

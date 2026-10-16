@@ -35,7 +35,12 @@ const response = (status: number, retryAfter = false) => ({
 async function run(options: {
   publicTransport: PdfDownloadTransport;
   api?: "success" | "miss" | "unavailable" | "failure";
-  browser?: "success" | "miss" | "disabled";
+  browser?:
+    | "success"
+    | "miss"
+    | "disabled"
+    | "access-unavailable"
+    | "no-viable-path";
   cohort?: boolean;
   discoveryError?: Error;
 }) {
@@ -118,6 +123,18 @@ async function run(options: {
     browser_host: () => ({
       async deliverCandidate(request) {
         phases.push("browser");
+        if (
+          options.browser === "access-unavailable" ||
+          options.browser === "no-viable-path"
+        )
+          return {
+            kind: "refused",
+            code: `browser-agent-${options.browser}`,
+            reason:
+              "The article PDF link returned to the purchase page; no usable alternative remains.",
+            retryable: false,
+          };
+
         if (options.browser !== "success")
           return { kind: "exhausted", reason: "No PDF in fixture." };
         const candidate = await downloadPdfCandidate(
@@ -240,32 +257,29 @@ it.each([
   [429, false],
   [502, true],
 ] as const)(
-  "keeps HTTP %s / Retry-After %s blocking",
+  "continues independent API delivery after HTTP %s / Retry-After %s",
   async (status, retryAfter) => {
     const result = await run({
       publicTransport: response(status, retryAfter),
       api: "success",
       browser: "success",
     });
-    expect(result.outcome.kind).toBe("route-failure");
-    expect(result.phases).toEqual(["public"]);
+    expect(result.outcome.kind).toBe("acquired");
+    expect(result.phases).toEqual(["public", "api"]);
   },
 );
 
-it("does not promote API outages to automatic Browser traffic", async () => {
+it("continues source outages through independent Browser delivery", async () => {
   const result = await run({
     publicTransport: response(502),
     api: "failure",
     browser: "success",
   });
-  expect(result.outcome).toMatchObject({
-    kind: "route-failure",
-    failure: { source: "fixture-api" },
-  });
-  expect(result.phases).toEqual(["public", "api"]);
+  expect(result.outcome).toMatchObject({ kind: "acquired" });
+  expect(result.phases).toEqual(["public", "api", "browser"]);
 });
 
-it("retains destination policy rejection instead of using independent fallback", async () => {
+it("rejects the unsafe candidate while allowing independent API delivery", async () => {
   const result = await run({
     publicTransport: {
       request: async () => {
@@ -275,11 +289,8 @@ it("retains destination policy rejection instead of using independent fallback",
     api: "success",
     browser: "success",
   });
-  expect(result.outcome).toMatchObject({
-    kind: "route-failure",
-    failure: { code: "network-failed" },
-  });
-  expect(result.phases).toEqual(["public"]);
+  expect(result.outcome).toMatchObject({ kind: "acquired" });
+  expect(result.phases).toEqual(["public", "api"]);
 });
 
 it.each([
@@ -296,3 +307,20 @@ it.each([
     }),
   ).rejects.toBe(discoveryError);
 });
+
+it.each(["access-unavailable", "no-viable-path"] as const)(
+  "retains the Agent task assessment in Entry's result after earlier source failures (%s)",
+  async (browser) => {
+    const result = await run({
+      publicTransport: response(502),
+      api: "failure",
+      browser,
+    });
+    expect(result.outcome).toMatchObject({
+      kind: "browser-failure",
+      code: `browser-agent-${browser}`,
+      reason: expect.stringContaining("purchase page"),
+    });
+    expect(result.phases).toEqual(["public", "api", "browser"]);
+  },
+);

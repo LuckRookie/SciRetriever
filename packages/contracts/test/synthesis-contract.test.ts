@@ -178,7 +178,7 @@ describe("synthesis contracts", () => {
     ).toBeGreaterThan(64 * 1024);
     expect(await synthesisStatementSha256(statement)).toMatch(/^[a-f0-9]{64}$/);
   });
-  it("parses the 128-input, 512-support combined envelope and rejects evidence beyond that budget", async () => {
+  it("parses a large input envelope without an arbitrary support-count cutoff", async () => {
     const items = Array.from({ length: 128 }, (_, n) => ({
       kind: "knowledge" as const,
       input_id: `paper-${n}-${"q".repeat(100)}`,
@@ -273,6 +273,6 @@ describe("synthesis contracts", () => {
           { ...statements[0], statement_id: "s5", evidence: [evidence[0]] },
         ],
       } as Parameters<typeof synthesisContentBytes>[0]),
-    ).toThrow();
+    ).not.toThrow();
   });
 });

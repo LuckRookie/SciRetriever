@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { AgentCall, AgentResult } from "../src/agents/protocol.js";
 import { AgentRuntime } from "../src/agents/runtime.js";
+import { browserAgentStopped } from "../src/browser/boundary.js";
 import { createBrowserDecision } from "../src/browser/decision.js";
 import { parseWorkbenchObservation } from "@sciretriever/contracts";
 
@@ -106,6 +107,16 @@ it("composes an image-bound Browser decision and admits only the six closed acti
     }
   ).action.anyOf;
   expect(variants).toHaveLength(6);
+  const stop = variants.find(
+    (variant) =>
+      (variant.properties.kind as { enum: string[] }).enum[0] === "stop",
+  )!;
+  expect(stop.properties.reason).toEqual({
+    type: "string",
+    enum: ["access-unavailable", "no-viable-path"],
+  });
+  expect(stop.required).toEqual(["kind", "reason", "explanation"]);
+
   for (const variant of variants) {
     expect(variant.additionalProperties).toBe(false);
     expect([...variant.required].sort()).toEqual(
@@ -212,6 +223,18 @@ it.each([
   { kind: "go-back", revision: 2 },
   { kind: "wait-for-change", timeout_ms: 500, revision: 2 },
   { kind: "stop", reason: "user" },
+  {
+    kind: "stop",
+    reason: "access-unavailable",
+    explanation:
+      "The article PDF route requires payment, with no available institutional alternative.",
+  },
+  {
+    kind: "stop",
+    reason: "no-viable-path",
+    explanation:
+      "Checked the article's PDF and full-text links; each returned the same article without a download.",
+  },
 ])("accepts the exact discriminated fields for $kind", async (action) => {
   const agents = runtime(() => decisionResult(action));
   await expect(
@@ -364,4 +387,19 @@ it("binds the model goal and input hash to the article identifier and version", 
     }),
   ).rejects.toThrow("target does not match");
   expect(calls).toHaveLength(5);
+});
+
+it("keeps sensitive locators and credentials out of Agent stop diagnostics", () => {
+  const url = browserAgentStopped(
+    "no-viable-path",
+    "Tried https://example.test/pdf?signature=private and found no usable alternative.",
+  );
+  expect(url.reason).not.toContain("private");
+  expect(url.reason).not.toContain("https://");
+  const secret = browserAgentStopped(
+    "access-unavailable",
+    "Authorization: Bearer private-value",
+  );
+  expect(secret.reason).not.toContain("private-value");
+  expect(secret.code).toBe("browser-agent-access-unavailable");
 });

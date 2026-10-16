@@ -156,12 +156,34 @@ async function server(mode = "valid") {
         status: "healthy",
         version: mode === "version" ? "3.5.0" : "3.4.4",
         protocol_version: 2,
+        queued_tasks: 0,
+        processing_tasks: 0,
+        completed_tasks: 1,
+        failed_tasks: 0,
+        max_concurrent_requests: 1,
+        processing_window_size: 64,
+        task_retention_seconds: 86400,
+        task_cleanup_interval_seconds: 300,
       };
     } else if (request.url === "/tasks" && request.method === "POST") {
+      if (
+        !Buffer.concat(chunks)
+          .toString()
+          .includes('name="return_md"\r\n\r\ntrue')
+      ) {
+        response.writeHead(400);
+        response.end("{}");
+        return;
+      }
       response.statusCode = 202;
       value = {
         task_id: mode === "task-path" ? "../escape" : "fixture-task",
         status: "pending",
+        backend: "vlm-engine",
+        file_names: ["document"],
+        queued_ahead: 0,
+        status_url: "https://untrusted.example.test/escape",
+        result_url: "https://untrusted.example.test/escape",
       };
     } else if (request.url === "/tasks/fixture-task") {
       if (mode === "missing") {
@@ -171,6 +193,9 @@ async function server(mode = "valid") {
         value = {
           task_id: mode === "task-mismatch" ? "other-task" : "fixture-task",
           status: mode === "failed" ? "failed" : "completed",
+          backend: "vlm-engine",
+          error: null,
+          completed_at: "2026-10-12T00:00:00Z",
         };
       }
     } else if (request.url === "/tasks/fixture-task/result") {
@@ -207,6 +232,7 @@ function parser(baseUrl: string, coordinator = new NetworkBudgetCoordinator()) {
     baseUrl,
     modelIdentity: "operator-vlm-model@fixture-revision",
     coordinator,
+    pollIntervalMs: 5,
   });
 }
 
@@ -227,115 +253,154 @@ async function parserRequest() {
   };
 }
 
-it("assembles the TypeScript MinerU client and publishes normalized artifacts", async () => {
-  const fixtureServer = await server();
-  const home = await mkdtemp(join(tmpdir(), "sciretriever-mineru-"));
-  const owner = new TypeScriptConfigurationOwner(home);
-  await owner.publish(
-    `[parsing]\nbase_url = "${fixtureServer.url}"\nconnection_mode = "loopback"\nmodel_identity = "operator-vlm-model@fixture-revision"\n`,
-    "missing",
-    ["parsing"],
-  );
-  await writeFile(
-    join(home, ".sciretriever/credentials.toml"),
-    '[mineru]\nbearer_token = "must-not-reach-loopback"\norigin = "https://parser.example.test"\n',
-    { mode: 0o600 },
-  );
-  const app = await createApplication(home);
-  try {
-    const { pdf } = await fixture();
-    await app.database.putLiterature(FIXTURE_LITERATURE);
-    const stage = await app.files.stage();
-    await stage.write(pdf);
-    await app.files.publish(stage, "objects/source.pdf");
-    const asset = parseAsset({
-      asset_id: (await parserRequest()).source_asset_id,
-      sha256: await sha256(pdf),
-      size_bytes: pdf.length,
-      media_type: "application/pdf",
-      path: "objects/source.pdf",
-    });
-    await app.database.putLiteratureAsset({
-      literature_asset_id: "00000000-0000-0000-0000-000000000031",
-      literature_id: FIXTURE_LITERATURE.literature_id,
-      asset,
-      role: "primary-pdf",
-      source_url: null,
-      provenance: {
-        provenance_id: "00000000-0000-0000-0000-000000000032",
-        source_kind: "asset-provider",
-        source_name: "fixture",
-        source_record_id: null,
-        observed_at: "2026-09-10T00:00:00Z",
-        input_sha256: asset.sha256,
-        parameters_sha256: null,
-      },
-    });
-    const result = await app.parsing!.commitCurrentPrimary(
-      await app.parsing!.prepareCurrentPrimary(
-        FIXTURE_LITERATURE.literature_id,
-      ),
+it.each(["loopback", "remote"] as const)(
+  "assembles the %s MinerU protocol and publishes normalized artifacts",
+  async (connectionMode) => {
+    const fixtureServer = await server();
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-mineru-"));
+    const owner = new TypeScriptConfigurationOwner(home);
+    const remote = connectionMode === "remote";
+    const base = remote
+      ? "https://parser.example.test/mineru"
+      : fixtureServer.url;
+    await owner.publish(
+      `[parsing]\nbase_url = "${base}"\nconnection_mode = "${connectionMode}"\nremote_upload_authorized = ${remote}\nmodel_identity = "operator-vlm-model@fixture-revision"\n`,
+      "missing",
+      ["parsing"],
     );
-    expect(result).toMatchObject({
-      page_count: 1,
-      provenance: {
-        parser_version: "mineru-ts-archive-v1",
-        mode: "archive",
-        model_identity: "operator-vlm-model@fixture-revision",
-        provenance: { source_name: "mineru", input_sha256: asset.sha256 },
-      },
-    });
-    expect(result.resources.map((resource) => resource.reference)).toEqual([
-      "images/figure.png",
-    ]);
-    expect(
-      (await app.library.detail(FIXTURE_LITERATURE.literature_id))
-        .parser_result,
-    ).toEqual(result);
-    expect(fixtureServer.calls.map((call) => [call.method, call.path])).toEqual(
-      [
+    await writeFile(
+      join(home, ".sciretriever/credentials.toml"),
+      '[mineru]\nbearer_token = "must-not-reach-loopback"\norigin = "https://parser.example.test"\n',
+      { mode: 0o600 },
+    );
+    const app = await createApplication(
+      home,
+      remote
+        ? {
+            mineruTransportFactory: () => ({
+              request: async (url, options) => {
+                expect(url.startsWith(base + "/")).toBe(true);
+                const response = await fetch(
+                  fixtureServer.url +
+                    new URL(url).pathname.replace(/^\/mineru/u, ""),
+                  {
+                    method: options.method ?? "POST",
+                    headers: options.headers,
+                    ...(options.method === "GET"
+                      ? {}
+                      : { body: Buffer.from(options.body) }),
+                    ...(options.signal ? { signal: options.signal } : {}),
+                  },
+                );
+                return {
+                  status: response.status,
+                  headers: [...response.headers.entries()],
+                  body: new Uint8Array(await response.arrayBuffer()),
+                };
+              },
+            }),
+          }
+        : {},
+    );
+    try {
+      const { pdf } = await fixture();
+      await app.database.putLiterature(FIXTURE_LITERATURE);
+      const stage = await app.files.stage();
+      await stage.write(pdf);
+      await app.files.publish(stage, "objects/source.pdf");
+      const asset = parseAsset({
+        asset_id: (await parserRequest()).source_asset_id,
+        sha256: await sha256(pdf),
+        size_bytes: pdf.length,
+        media_type: "application/pdf",
+        path: "objects/source.pdf",
+      });
+      await app.database.putLiteratureAsset({
+        literature_asset_id: "00000000-0000-0000-0000-000000000031",
+        literature_id: FIXTURE_LITERATURE.literature_id,
+        asset,
+        role: "primary-pdf",
+        source_url: null,
+        provenance: {
+          provenance_id: "00000000-0000-0000-0000-000000000032",
+          source_kind: "asset-provider",
+          source_name: "fixture",
+          source_record_id: null,
+          observed_at: "2026-09-10T00:00:00Z",
+          input_sha256: asset.sha256,
+          parameters_sha256: null,
+        },
+      });
+      const result = await app.parsing!.commitCurrentPrimary(
+        await app.parsing!.prepareCurrentPrimary(
+          FIXTURE_LITERATURE.literature_id,
+        ),
+      );
+      expect(result).toMatchObject({
+        page_count: 1,
+        provenance: {
+          parser_version: "mineru-ts-archive-v2",
+          mode: "archive",
+          model_identity: "operator-vlm-model@fixture-revision",
+          provenance: { source_name: "mineru", input_sha256: asset.sha256 },
+        },
+      });
+      expect(result.resources.map((resource) => resource.reference)).toEqual([
+        "images/figure.png",
+      ]);
+      expect(
+        (await app.library.detail(FIXTURE_LITERATURE.literature_id))
+          .parser_result,
+      ).toEqual(result);
+      expect(
+        fixtureServer.calls.map((call) => [call.method, call.path]),
+      ).toEqual([
         ["GET", "/health"],
         ["POST", "/tasks"],
         ["GET", "/tasks/fixture-task"],
         ["GET", "/tasks/fixture-task/result"],
-      ],
-    );
-    expect(
-      fixtureServer.calls.every((call) => call.authorization === undefined),
-    ).toBe(true);
-    const submit = fixtureServer.calls[1]!;
-    expect(submit.type).toMatch(
-      /^multipart\/form-data; boundary=sciretriever-/u,
-    );
-    expect(submit.body.includes(pdf)).toBe(true);
-    expect(submit.body.toString("latin1")).toContain(
-      'name="backend"\r\n\r\nvlm-engine',
-    );
-    expect(submit.body.toString("latin1")).toContain(
-      'name="return_original_file"\r\n\r\nfalse',
-    );
-    expect((await app.database.snapshotCounts()).tables.artifact_objects).toBe(
-      3,
-    );
-    await app.literatureArtifacts.withArtifact(
-      result.markdown,
-      async (chunks) => {
-        const parts: Buffer[] = [];
-        for await (const chunk of chunks) parts.push(Buffer.from(chunk));
-        const bytes = Buffer.concat(parts);
-        expect(bytes.toString()).toContain("![Figure](images/figure.png)");
-        expect(bytes.toString()).not.toContain("PRIVATE-ARCHIVE-SENTINEL");
-        expect(createHash("sha256").update(bytes).digest("hex")).toBe(
-          result.markdown.sha256,
-        );
-      },
-    );
-  } finally {
-    await app.close();
-    await fixtureServer.close();
-    await rm(home, { recursive: true, force: true });
-  }
-});
+      ]);
+      expect(
+        fixtureServer.calls.every(
+          (call) =>
+            call.authorization ===
+            (remote ? "Bearer must-not-reach-loopback" : undefined),
+        ),
+      ).toBe(true);
+      const submit = fixtureServer.calls[1]!;
+      expect(submit.type).toMatch(
+        /^multipart\/form-data; boundary=sciretriever-/u,
+      );
+      expect(submit.body.includes(pdf)).toBe(true);
+      expect(submit.body.toString("latin1")).toContain(
+        'name="backend"\r\n\r\nvlm-engine',
+      );
+      expect(submit.body.toString("latin1")).toContain(
+        'name="return_original_file"\r\n\r\nfalse',
+      );
+      expect(
+        (await app.database.snapshotCounts()).tables.artifact_objects,
+      ).toBe(3);
+      await app.literatureArtifacts.withArtifact(
+        result.markdown,
+        async (chunks) => {
+          const parts: Buffer[] = [];
+          for await (const chunk of chunks) parts.push(Buffer.from(chunk));
+          const bytes = Buffer.concat(parts);
+          expect(bytes.toString()).toContain("![Figure](images/figure.png)");
+          expect(bytes.toString()).not.toContain("PRIVATE-ARCHIVE-SENTINEL");
+          expect(createHash("sha256").update(bytes).digest("hex")).toBe(
+            result.markdown.sha256,
+          );
+        },
+      );
+    } finally {
+      await app.close();
+      await fixtureServer.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  },
+);
 
 it("runs the loopback MinerU protocol entirely in TypeScript", async () => {
   const fixtureServer = await server();

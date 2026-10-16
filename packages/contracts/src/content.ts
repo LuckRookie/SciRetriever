@@ -264,15 +264,6 @@ const fixedRoles = [
   "data",
   "conclusions-and-limitations",
 ] as const;
-const reservedTitles = [
-  "元数据",
-  "摘要",
-  "参考文献",
-  "研究背景与目标",
-  "研究方法",
-  "数据",
-  "结论与局限性",
-];
 function parseSection(value: unknown): LiteratureSection {
   const r = exact(value, ["role", "title", "markdown", "subsections"]);
   if (
@@ -290,21 +281,9 @@ function parseSection(value: unknown): LiteratureSection {
       return Object.freeze({ title: nonblank(s.title), markdown });
     }),
   );
-  if (markdown !== "未提供" && markdown.trim() === "未提供") fail();
   if (r.role === "additional") {
-    if (
-      title === null ||
-      reservedTitles.includes(title) ||
-      markdown === "未提供" ||
-      (!markdown.trim() && !subsections.length)
-    )
-      fail();
-  } else if (
-    title !== null ||
-    (markdown === "未提供"
-      ? subsections.length
-      : !markdown.trim() && !subsections.length)
-  )
+    if (title === null || (!markdown.trim() && !subsections.length)) fail();
+  } else if (title !== null || (!markdown.trim() && !subsections.length))
     fail();
   return Object.freeze({
     role: r.role as LiteratureSectionRole,

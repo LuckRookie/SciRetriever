@@ -1,3 +1,4 @@
+import { artifactReference } from "../storage/artifact-layout.js";
 import { ftsIndexText } from "./unicode-casefold.js";
 import { createHash } from "node:crypto";
 import {
@@ -117,7 +118,8 @@ export class LiteratureContentService {
     check();
     const publish = async (artifact: ArtifactRef, bytes: Uint8Array) => {
       const located = await this.repository.locateArtifact(artifact);
-      const path = located?.reference ?? `objects/${artifact.sha256}.bin`;
+      const path =
+        located?.reference ?? artifactReference("knowledge-summary", artifact);
       const stage = await this.files.stage({ maxBytes: artifact.byte_size });
       try {
         await stage.write(bytes);

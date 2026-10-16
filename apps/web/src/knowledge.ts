@@ -238,24 +238,11 @@ export function mountKnowledgeMaintenance(): void {
     "knowledge-question",
     "knowledge-default-mode",
     "knowledge-default-revision",
-    "knowledge-input-bytes",
-    "knowledge-output-tokens",
-    "knowledge-call-bytes",
-    "knowledge-total-call-bytes",
-    "knowledge-max-calls",
-    "knowledge-total-output-tokens",
   ].map((id) =>
     node<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(id),
   );
   let active: AbortController | null = null;
   const mode = node<HTMLSelectElement>("knowledge-mode");
-  mode.addEventListener("change", () => {
-    const long = mode.value === "long";
-    node("knowledge-long-budget").hidden = !long;
-    const sourceLimit = node<HTMLInputElement>("knowledge-input-bytes");
-    sourceLimit.max = long ? "8388608" : "262144";
-    sourceLimit.value = long ? "8388608" : "262144";
-  });
   let generation = 0;
   window.addEventListener("pagehide", () => active?.abort());
   cancel.addEventListener("click", () => {
@@ -369,41 +356,12 @@ export function mountKnowledgeMaintenance(): void {
         question,
         default_update: defaultUpdate,
       };
-      const sourceBytes = Number(
-        node<HTMLInputElement>("knowledge-input-bytes").value,
-      );
-      const outputTokens = Number(
-        node<HTMLInputElement>("knowledge-output-tokens").value,
-      );
       const request = long
         ? await parseKnowledgeLongAnalysisRequest({
             schema_version: 2,
             ...shared,
-            budget: {
-              max_source_bytes: sourceBytes,
-              max_call_bytes: Number(
-                node<HTMLInputElement>("knowledge-call-bytes").value,
-              ),
-              max_total_call_bytes: Number(
-                node<HTMLInputElement>("knowledge-total-call-bytes").value,
-              ),
-              max_calls: Number(
-                node<HTMLInputElement>("knowledge-max-calls").value,
-              ),
-              max_output_tokens_per_call: outputTokens,
-              max_total_output_tokens: Number(
-                node<HTMLInputElement>("knowledge-total-output-tokens").value,
-              ),
-            },
           })
-        : await parseKnowledgeAnalysisRequest({
-            schema_version: 1,
-            ...shared,
-            budget: {
-              max_input_bytes: sourceBytes,
-              max_output_tokens: outputTokens,
-            },
-          });
+        : await parseKnowledgeAnalysisRequest({ schema_version: 1, ...shared });
       if (current !== generation) return;
       status.textContent = `输入已固定：文档 ${described.document.document_version_id}。正在生成知识…`;
       if (usesDurableTasks()) {

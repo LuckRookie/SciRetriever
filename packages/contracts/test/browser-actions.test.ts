@@ -77,3 +77,28 @@ describe("closed browser action contracts", () => {
     ).toThrow();
   });
 });
+
+it.each(["access-unavailable", "no-viable-path"] as const)(
+  "round trips a task Stop with a concrete explanation (%s)",
+  (reason) => {
+    const action = {
+      kind: "stop",
+      reason,
+      explanation:
+        "Tried the article PDF link; it requires payment and no other article access route is available.",
+    };
+    expect(parseBrowserAction(action)).toEqual(action);
+    expect(parseOperatorInput(action)).toEqual(action);
+    expect(
+      parseBrowserAction({
+        ...action,
+        explanation: "Tried PDF.\nNo alternative remains.",
+      }),
+    ).toMatchObject({ explanation: "Tried PDF. No alternative remains." });
+    expect(() => parseBrowserAction({ kind: "stop", reason })).toThrow();
+    expect(() => parseBrowserAction({ ...action, explanation: " " })).toThrow();
+    expect(() =>
+      parseBrowserAction({ ...action, reason: "network-failed" }),
+    ).toThrow();
+  },
+);

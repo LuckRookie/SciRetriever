@@ -111,6 +111,21 @@ it.skipIf(!bundle)(
         client,
         workbench.session.view().control.epoch,
       );
+      // Navigation commits before Cloak necessarily has a readable surface.
+      // Follow the same refresh contract as a connected workbench client.
+      await expect
+        .poll(
+          async () => {
+            await workbench!.session.refresh();
+            return workbench!.session
+              .view()
+              .observation?.elements.some(
+                (element) => element.name === "Download PDF",
+              );
+          },
+          { timeout: 15_000 },
+        )
+        .toBe(true);
       const observation = workbench.session.view().observation!;
       const download = observation.elements.find(
         (element) => element.name === "Download PDF",

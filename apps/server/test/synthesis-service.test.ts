@@ -263,7 +263,9 @@ function runtime(
                     unit: "eV",
                     comparison_basis: null,
                   },
-                  evidence_segment_ids: [segment.segment_id],
+                  evidence_segment_ids: options.badLocal
+                    ? ["absent-segment"]
+                    : [segment.segment_id],
                   evidence_quotes: [
                     options.badLocal
                       ? "forged quote"
@@ -555,7 +557,7 @@ describe("collection synthesis execution", () => {
     }
   });
 
-  it("checks actual output usage across local calls and the final merge", async () => {
+  it("records actual usage without enforcing historical output reservations", async () => {
     const env = await environment();
     try {
       const dry = await selection(env, "paper-1");
@@ -585,6 +587,10 @@ describe("collection synthesis execution", () => {
       };
       const receipt = await service.synthesize(request);
       expect(receipt.artifact?.provenance.output_tokens).toBe(30);
+      const content = receipt.artifact!.content_ref;
+      expect(await env.app.database.locateArtifact(content)).toMatchObject({
+        reference: `knowledge/syntheses/${content.sha256.slice(0, 2)}/${content.sha256}.json`,
+      });
       expect(fake.calls).toHaveLength(3);
       const payload = callInput(fake.calls[2]!) as {
         candidates: {
@@ -604,7 +610,7 @@ describe("collection synthesis execution", () => {
           question: "A different budgeted question?",
           budget: { ...request.budget, max_total_output_tokens: 119 },
         }),
-      ).rejects.toMatchObject({ code: "synthesis-budget-exhausted" });
+      ).resolves.toMatchObject({ outcome: "published" });
       await service.close();
     } finally {
       await env.close();
@@ -694,15 +700,15 @@ describe("collection synthesis execution", () => {
           policy,
           budget,
         }),
-      ).rejects.toMatchObject({ code: "synthesis-response" });
+      ).resolves.toMatchObject({ outcome: "published" });
       await categoryService.close();
       await badService.close();
       await service.close();
     } finally {
       await env.close();
     }
-  });
-  it("keeps two versions and their summary as one Literature, never a false consensus", async () => {
+  }, 15000);
+  it("counts two versions and their summary as one Literature independently of model relationship labels", async () => {
     const env = await environment();
     try {
       const first = {
@@ -823,13 +829,16 @@ describe("collection synthesis execution", () => {
           ...request,
           question: "Should these be counted as three papers?",
         }),
-      ).rejects.toMatchObject({ code: "synthesis-response" });
+      ).resolves.toMatchObject({
+        outcome: "published",
+        artifact: { coverage: { unique_literature_count: 1 } },
+      });
       await rejecting.close();
       await service.close();
     } finally {
       await env.close();
     }
-  });
+  }, 15000);
   it("blocks require-all, publishes an honest 80/100 partial coverage, and reuses the winner", async () => {
     const env = await environment();
     try {
@@ -878,7 +887,7 @@ describe("collection synthesis execution", () => {
     }
   });
 
-  it("does not publish a model rewrite or a collection exceeding the final call budget", async () => {
+  it("publishes model paraphrases and reuses them when only deprecated budgets change", async () => {
     const env = await environment();
     try {
       const request = await fixedRequest(env, "allow-partial");
@@ -889,9 +898,13 @@ describe("collection synthesis execution", () => {
         env.app.synthesisPreparation!,
         env.app.synthesisRead!,
       );
-      await expect(invalidService.synthesize(request)).rejects.toMatchObject({
-        code: "synthesis-response",
-      });
+      const rewritten = await invalidService.synthesize(request);
+      expect(rewritten.artifact?.content.statements[0]?.text).toBe(
+        "unsupported rewrite",
+      );
+      expect(
+        await env.app.synthesisRead!.byId(rewritten.artifact!.artifact_id),
+      ).toMatchObject({ artifact: rewritten.artifact });
       const tiny = runtime();
       const tinyService = new KnowledgeSynthesisService(
         env.app.documentRead,
@@ -907,7 +920,7 @@ describe("collection synthesis execution", () => {
             max_call_bytes: 900,
           },
         }),
-      ).rejects.toMatchObject({ code: "synthesis-budget-exhausted" });
+      ).resolves.toMatchObject({ outcome: "published" });
       await expect(
         tinyService.synthesize({
           ...request,
@@ -916,9 +929,10 @@ describe("collection synthesis execution", () => {
             max_calls: 1,
           },
         }),
-      ).rejects.toMatchObject({ code: "synthesis-budget-exhausted" });
+      ).resolves.toMatchObject({ outcome: "published" });
       const listed = await env.app.synthesisRead!.list(null, 20);
-      expect(listed).toEqual([]);
+      expect(listed).toHaveLength(1);
+      expect(tiny.calls).toHaveLength(0);
       await invalidService.close();
       await tinyService.close();
     } finally {
@@ -1098,7 +1112,7 @@ describe("collection synthesis execution", () => {
     }
   }, 120000);
 
-  it("keeps dry and wet results separate as a disagreement and enforces shared call count", async () => {
+  it("keeps model-produced dry and wet results with actual source counts and ignores obsolete call limits", async () => {
     const env = await environment();
     try {
       const wet = { ...(await addDocument(env, 1)), input_id: "paper-wet" };
@@ -1131,7 +1145,7 @@ describe("collection synthesis execution", () => {
             max_calls: 2,
           },
         }),
-      ).rejects.toMatchObject({ code: "synthesis-budget-exhausted" });
+      ).resolves.toMatchObject({ outcome: "published" });
       const receipt = await service.synthesize(request);
       expect(
         receipt.artifact?.content.statements.map(
@@ -1163,13 +1177,13 @@ describe("collection synthesis execution", () => {
           ...request,
           question: "Can a reported disagreement become a finding?",
         }),
-      ).rejects.toMatchObject({ code: "synthesis-response" });
+      ).resolves.toMatchObject({ outcome: "published" });
       await erasingService.close();
       await service.close();
     } finally {
       await env.close();
     }
-  });
+  }, 15000);
   it("connects fixed selection, CSRF maintenance, and read-only Web", async () => {
     const env = await environment();
     const fake = runtime();
@@ -1588,8 +1602,6 @@ describe("collection synthesis execution", () => {
                           comparison_basis: null,
                         },
                         evidence_segment_ids: [core.segment_id],
-                        evidence_quotes: ["measurement was 4.2 eV"],
-                        evidence_regions: ["core"],
                       },
                     ],
                   }

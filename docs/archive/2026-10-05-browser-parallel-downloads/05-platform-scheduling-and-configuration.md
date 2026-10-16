@@ -96,7 +96,7 @@ pnpm exec vitest run apps/server/test/pdf-acquisition-scheduler.test.ts apps/ser
 - **5.4生产证据**：`browser-parallel-production.test.ts`真实Cloak+正式本地模型HTTP，服务端观测模型并发峰值2；第三篇原生下载持续。A/B在C之前入库，最终三篇导出hash正确、身份unverified、临时额度0。证据 `/tmp/sciretriever-parallel-browser-evidence-i9FQ9s/evidence.json`。
 - `DatabaseCompletion`现在只在freeze短暂持catalog admission，下载和文件准备不持长锁；scope/chunk42项回归全部通过。
 - root审查补充：同平台最多保留两个会话，超出的原始任务只排队；超过会话剩余寿命的限流保留平台冷却并明确报告，不等待一小时后混成耗尽。
-- 首轮真实Nature/Springer PDF成功但发生OOPIF终态丢失导致cleanup failure，已定位并交导航owner；修复前不勾5.2/5.8。详见[本轮验证记录](../../notes/browser-parallel-validation-2026-10-05.md)。
+- 首轮真实Nature/Springer PDF成功但发生OOPIF终态丢失导致cleanup failure，已定位并交导航owner；修复前不勾5.2/5.8。详见本轮验证记录（本地文件：`sandbox/reports/browser-parallel-validation-2026-10-05.md`，不随仓库分发）。
 
 ## 退出条件
 
@@ -112,17 +112,17 @@ pnpm exec vitest run apps/server/test/pdf-acquisition-scheduler.test.ts apps/ser
 
 `browser-policy-production.test.ts` 正式App/Cloak/本地模型HTTP三个场景3/3通过：同平台第二篇在native网络结束29.9秒仍无请求，
 30秒后才准入；429带/不带Retry-After均在59.9秒仍禁止同平台后继访问，60秒后放行，独立平台此前已入库。
-具体header恢复与无header明确限流结果、hash/账本断言见[验证记录](../../notes/browser-parallel-validation-2026-10-05.md#实际平台冷却与限流)。
+具体header恢复与无header明确限流结果、hash/账本断言见验证记录（本地文件：`sandbox/reports/browser-parallel-validation-2026-10-05.md`，不随仓库分发）。
 证据 `/tmp/sciretriever-policy-evidence-cBqrHh/`、`/tmp/sciretriever-policy-evidence-COOcXM/`、`/tmp/sciretriever-policy-evidence-4u9wmu/`。
 
 真实Wiley另暴露了“导航准入与恢复队列同时处理一篇文章”的死锁；root已修复有在途access时不重复restore、
 准入完成唤醒，以及已有平台lease时直接恢复。直接scheduler/document/runtime-loss 19/19通过，
 Wiley真实4次模型调用完成2,927,270字节正式发布/导出/正常收尾。修复不改变30秒限制、不加入站点例外。
-最终Full与全矩阵由Block07收口；取消/停服集成已在Block06补齐。2026-10-07真实矩阵另暴露native意图残留和初始open预算取消缺口，5.8等待这两项补修后的资源收尾审查；最新证据见[最终验收记录](../../notes/browser-final-acceptance-2026-10-07.md)。
+最终Full与全矩阵由Block07收口；取消/停服集成已在Block06补齐。2026-10-07真实矩阵另暴露native意图残留和初始open预算取消缺口，5.8等待这两项补修后的资源收尾审查；最新证据见最终验收记录（本地文件：`sandbox/reports/browser-final-acceptance-2026-10-07.md`，不随仓库分发）。
 
 ## 2026-10-07最终收口
 
 本块实现、直接回归与必要生产对象图证据已并入最终验收；Full189文件/1,266项通过、39项条件跳过、build通过。
 最后源码清单142项、hash55a59148dcabd9d2a8345d8b4c9b689831b92307bcc6f04e1bab726306fc0c01。
-具体版本、影响审查、逐出版社结果和外部未决范围见[最终验收记录](../../notes/browser-final-acceptance-2026-10-07.md)。
+具体版本、影响审查、逐出版社结果和外部未决范围见最终验收记录（本地文件：`sandbox/reports/browser-final-acceptance-2026-10-07.md`，不随仓库分发）。
 此前记录保留其发生时的版本与结论；当前块状态以上述最终收口为准，不将历史失败改写为当时通过。

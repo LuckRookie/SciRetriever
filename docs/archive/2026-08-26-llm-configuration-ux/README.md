@@ -210,3 +210,5 @@ Task 恢复。若事实改变接口、owner、风险或授权，先更新计划�
   ADR 0019 约束，本计划没有提前建立迁移双路径。
 - Git/发布：未 commit、push、创建 PR 或发布；工作树中其它已存在的 Agents/Browser/配置迁移
   改动保持受保护。归档位置为 `docs/archive/2026-08-26-llm-configuration-ux/`。
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

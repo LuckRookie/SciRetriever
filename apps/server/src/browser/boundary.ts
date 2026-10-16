@@ -1,4 +1,5 @@
 import type {
+  BrowserAgentStopReason,
   DurableCandidate,
   LiteratureMetadata,
   MetadataSnapshot,
@@ -285,6 +286,25 @@ export function browserRefused(
     reason,
     retryable: false as const,
   });
+}
+
+/** An Agent assessment of this attempt, never a publisher-wide entitlement fact. */
+export function browserAgentStopped(
+  reason: BrowserAgentStopReason,
+  explanation: string,
+): Extract<BrowserDeliveryResult, { readonly kind: "refused" }> {
+  const safe =
+    /(?:api[_ -]?key|access[_ -]?token|authorization|bearer|cookie|password|secret|token|signature)\s*[:=]|bearer\s+\S+/iu.test(
+      explanation,
+    )
+      ? "[redacted]"
+      : explanation
+          .replace(/https?:\/\/\S+/giu, "[URL omitted]")
+          .slice(0, 1024);
+  return browserRefused(
+    `browser-agent-${reason}`,
+    `Browser Agent assessment (${reason}): ${safe}`,
+  );
 }
 
 /**

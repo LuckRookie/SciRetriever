@@ -10,6 +10,7 @@ import type {
   BrowserPdfResponse,
 } from "./cdp-owner.js";
 import type { BrowserDownloadResources } from "./resources.js";
+import { createLogger, type Logger } from "../logging/index.js";
 
 export interface BrowserTransferInput {
   readonly signal: AbortSignal;
@@ -101,6 +102,7 @@ export class BrowserTransferDispatcher {
       readonly stall_ms?: number;
       readonly lifetime_ms?: number;
     } = {},
+    private readonly logger: Logger = createLogger("browser-transfer"),
   ) {}
   failureCount(): number {
     return this.failures;
@@ -198,6 +200,7 @@ export class BrowserTransferDispatcher {
     }
     const transfer = this.run(
       capture,
+      "response-stream",
       response.cancel,
       async (signal, progress, completed) => {
         let received = 0;
@@ -253,6 +256,7 @@ export class BrowserTransferDispatcher {
     const resources = this.callbacks.resources?.();
     const transfer = this.run(
       capture,
+      "native-download",
       download.cancel,
       async (signal, _progress, completed) => {
         try {
@@ -326,6 +330,7 @@ export class BrowserTransferDispatcher {
   }
   private run(
     capture: CandidateCapture,
+    mode: "response-stream" | "native-download",
     cancel: () => Promise<void>,
     operation: (
       signal: AbortSignal,
@@ -336,6 +341,21 @@ export class BrowserTransferDispatcher {
     const id = randomUUID();
     const controller = new AbortController();
     let bytes = 0;
+    const startedAt = performance.now();
+    let firstByte = false;
+    let lastProgressAt = startedAt;
+    const timing = (phase: string, total: number | null = null) => {
+      this.logger.info("Browser transfer timing", {
+        article_id: capture.article_id,
+        session_id: capture.session_id,
+        transfer_id: id,
+        transfer_mode: mode,
+        phase,
+        elapsed_ms: Math.round(performance.now() - startedAt),
+        bytes,
+        total_bytes: total,
+      });
+    };
     let networkEnded = false;
     let failureCode = "browser-transfer-failed";
     let stall: ReturnType<typeof setTimeout>;
@@ -358,6 +378,14 @@ export class BrowserTransferDispatcher {
       if (received > bytes) {
         bytes = received;
         if (!networkEnded) armStall();
+        if (!firstByte) {
+          firstByte = true;
+          lastProgressAt = performance.now();
+          timing("first-byte", total);
+        } else if (performance.now() - lastProgressAt >= 10_000) {
+          lastProgressAt = performance.now();
+          timing("progress", total);
+        }
       }
       this.callbacks.progress?.(id, capture, {
         received_bytes: bytes,
@@ -369,6 +397,7 @@ export class BrowserTransferDispatcher {
       networkEnded = true;
       clearTimeout(stall);
       clearTimeout(lifetime);
+      timing("network-completed");
       this.callbacks.completed?.(id, capture);
     };
     armStall();
@@ -377,9 +406,12 @@ export class BrowserTransferDispatcher {
       this.limits.lifetime_ms ?? 1200000,
     );
     this.callbacks.started?.(id, capture);
+    timing("started");
     const done = Promise.resolve()
       .then(() => operation(controller.signal, refresh, completed))
+      .then(() => timing("completed"))
       .catch((error: unknown) => {
+        timing(controller.signal.aborted ? "cancelled" : "failed");
         this.failures++;
         this.callbacks.failed(
           id,
@@ -390,6 +422,7 @@ export class BrowserTransferDispatcher {
         );
       })
       .finally(() => {
+        timing("settled");
         clearTimeout(stall);
         clearTimeout(lifetime);
         this.active.delete(capture.session_id);

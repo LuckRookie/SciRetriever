@@ -318,3 +318,5 @@ Primary owner 串行执行五个 Blocks。每个 Task 使用同一循环：精�
 - 未实施/残余风险：未发起真实 Provider、Publisher、CloakBrowser 或 MinerU 请求，也未读取个人凭据/Profile；response model identity 继续 strict equality，真实 alias/snapshot 语义和真实 Publisher 页面变化需用户另行授权验证。SDK/PydanticAI transport migration 仍属于 ADR 0019 下的独立后续计划。
 - Git：未执行 commit、push、PR 或发布；工作树保留为未提交状态。
 - 归档：`docs/archive/2026-09-02-agent-behavior-and-feedback-repair/`；本记录不再作为活动执行入口。
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

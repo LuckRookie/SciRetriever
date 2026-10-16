@@ -103,6 +103,7 @@ export async function startWorkbenchFixture(): Promise<{
     }
     if (
       request.url === "/paper.pdf" ||
+      request.url === "/response.pdf" ||
       request.url === "/inline.pdf" ||
       request.url === "/uncertain.pdf" ||
       request.url === "/range.pdf"
@@ -115,7 +116,7 @@ export async function startWorkbenchFixture(): Promise<{
       response.writeHead(request.url === "/range.pdf" ? 206 : 200, {
         "Content-Type": "application/pdf",
         "Content-Length": bytes.byteLength,
-        ...(request.url !== "/inline.pdf" && request.url !== "/range.pdf"
+        ...(request.url !== "/inline.pdf"
           ? { "Content-Disposition": 'attachment; filename="fixture.pdf"' }
           : {}),
       });
@@ -134,15 +135,19 @@ export async function startWorkbenchFixture(): Promise<{
       );
       return;
     }
-    if (request.url !== "/article") {
+    if (request.url !== "/article" && request.url !== "/preview-article") {
       response.writeHead(404);
       response.end("Not found");
       return;
     }
     response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     const encoded = Buffer.from(workbenchPdf()).toString("base64");
+    const preview =
+      request.url === "/preview-article"
+        ? "fetch('/inline.pdf').then(r=>r.blob()).then(b=>{document.querySelector('#blob-download').href=URL.createObjectURL(b);document.querySelector('output').textContent='Preview ready';});"
+        : "";
     response.end(
-      `<!doctype html><html lang="en"><meta charset="utf-8"><title>${FIXTURE_TITLE}</title><style>body{max-width:820px;margin:80px auto;font:18px/1.65 Georgia,serif;color:#20372d;background:#faf8ef}h1{font-size:44px;line-height:1.15}a,button{display:inline-block;margin:12px 12px 12px 0;padding:12px 20px;background:#235a46;color:white;border:0;border-radius:8px}small{font:14px system-ui;color:#657269}input{padding:12px}</style><main><small>SCIRETRIEVER · LOCAL SYNTHETIC FIXTURE</small><h1>${FIXTURE_TITLE}</h1><p>DOI: ${FIXTURE_DOI} · Version: published</p><p>This offline article exercises real Browser observation, controlled input, PDF capture and durable publication. All content is synthetic.</p><a href="/paper.pdf" download>Download PDF</a><a href="/inline.pdf">View PDF</a><a href="/slow.pdf" download>Slow PDF</a><a href="/uncertain.pdf" download>Unverified PDF</a><a href="/popup" target="_blank">Popup PDF</a><a id="data-download" href="data:application/pdf;base64,${encoded}" download>Data PDF</a><a id="blob-download" download>Blob PDF</a><button onclick="fetch('/range.pdf')">Range PDF</button><button onclick="fetch('/inline.pdf')">Capture response PDF</button><p><label>Notes <input aria-label="Notes"></label><button onclick="document.querySelector('output').textContent='Input received'">Check input</button><output></output></p></main><script>const raw=atob('${encoded}');const bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));document.querySelector('#blob-download').href=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));</script></html>`,
+      `<!doctype html><html lang="en"><meta charset="utf-8"><title>${FIXTURE_TITLE}</title><style>body{max-width:820px;margin:80px auto;font:18px/1.65 Georgia,serif;color:#20372d;background:#faf8ef}h1{font-size:44px;line-height:1.15}a,button{display:inline-block;margin:12px 12px 12px 0;padding:12px 20px;background:#235a46;color:white;border:0;border-radius:8px}small{font:14px system-ui;color:#657269}input{padding:12px}</style><main><small>SCIRETRIEVER · LOCAL SYNTHETIC FIXTURE</small><h1>${FIXTURE_TITLE}</h1><p>DOI: ${FIXTURE_DOI} · Version: published</p><p>This offline article exercises real Browser observation, controlled input, PDF capture and durable publication. All content is synthetic.</p><a href="/paper.pdf" download>Download PDF</a><a href="/inline.pdf">View PDF</a><a href="/slow.pdf" download>Slow PDF</a><a href="/uncertain.pdf" download>Unverified PDF</a><a href="/popup" target="_blank">Popup PDF</a><a id="data-download" href="data:application/pdf;base64,${encoded}" download>Data PDF</a><a id="blob-download" download>Blob PDF</a><button onclick="fetch('/range.pdf')">Range PDF</button><button onclick="fetch('/response.pdf')">Capture response PDF</button><p><label>Notes <input aria-label="Notes"></label><button onclick="document.querySelector('output').textContent='Input received'">Check input</button><output></output></p></main><script>const raw=atob('${encoded}');const bytes=Uint8Array.from(raw,c=>c.charCodeAt(0));document.querySelector('#blob-download').href=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));${preview}</script></html>`,
     );
   });
   server.listen(0, "127.0.0.1");

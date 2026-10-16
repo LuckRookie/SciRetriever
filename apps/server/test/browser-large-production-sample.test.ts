@@ -1,3 +1,7 @@
+import {
+  latestBrowserObservationMessage,
+  browserModelToolCallId,
+} from "./browser-model-fixture.js";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { createReadStream } from "node:fs";
@@ -453,7 +457,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
                 const wire = JSON.parse(new TextDecoder().decode(body)) as {
                   messages: { content: { type: string; text?: string }[] }[];
                 };
-                const text = wire.messages[1]?.content.find(
+                const text = latestBrowserObservationMessage(wire).content.find(
                   (part) => part.type === "text",
                 )?.text;
                 if (!text) throw new Error("observation unavailable");
@@ -492,6 +496,8 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
                           message: {
                             tool_calls: [
                               {
+                                id: browserModelToolCallId(),
+                                type: "function",
                                 function: {
                                   name: "browser_action",
                                   arguments: JSON.stringify({ action }),

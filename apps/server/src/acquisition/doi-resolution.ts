@@ -92,6 +92,8 @@ export async function resolveDoiLanding(
     throw new AcquisitionRouteError(
       "rate-limited",
       "DOI resolution is rate limited.",
+      true,
+      { retry_after_ms: response.retry_after_ms },
     );
   if (response.status === 401)
     throw new AcquisitionRouteError(
@@ -104,7 +106,6 @@ export async function resolveDoiLanding(
       "http-response-failed",
       "DOI resolution service is unavailable.",
       true,
-      { allows_independent_fallback: true },
     );
   if (![301, 302, 303, 307, 308].includes(response.status)) return null;
   const location = response.headers.find(
@@ -120,7 +121,7 @@ export async function resolveDoiLanding(
       "source-discovery-failed",
       "DOI resolution returned an invalid article location.",
       true,
-      { cause: error, allows_independent_fallback: true },
+      { cause: error },
     );
   }
   target.hash = "";

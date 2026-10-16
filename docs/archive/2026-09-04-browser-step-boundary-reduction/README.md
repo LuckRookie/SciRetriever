@@ -47,8 +47,8 @@ return Captured | Blocked | Failed | Cancelled
 - [Acquisition 技术文档](../../architecture/technical/acquisition.md)与
   [Network 技术文档](../../architecture/technical/network.md)；
 - [HARNESS](../../../HARNESS.md) 的开发、安全、验证和 Git 纪律；
-- 已归档的 [Browser Observation readiness](../../archive/2026-09-03-browser-observation-readiness/README.md)、
-  [Capture handoff](../../archive/2026-09-04-browser-capture-handoff/README.md)实施证据。
+- 已归档的 [Browser Observation readiness](../2026-09-03-browser-observation-readiness/README.md)、
+  [Capture handoff](../2026-09-04-browser-capture-handoff/README.md)实施证据。
 
 计划不得改变这些边界：Publisher origin/DNS/host guard、固定 Profile 与串行 lane、PDF 文章归属和字节
 验收、不可变资产发布、Agent 能力封闭、Public → Authorized API → Browser 顺序。
@@ -229,3 +229,5 @@ Completed；Plan 只有 AC-1 至 AC-8、Full 和最终交接全部闭环后才�
 Browser 测试与 `scripts/harness.py full` 均通过，wheel 内容一致，`git diff --check` 通过。没有新增依赖、
 配置/schema 或数据迁移；没有执行真实 Publisher/Model 请求，也没有读取用户凭据、Profile、Catalog、PDF
 或截图。真实站点行为仍会随 Publisher 页面和 entitlement 变化，只能在另行明确授权的小样本回归中验证。
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

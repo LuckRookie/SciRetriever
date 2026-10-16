@@ -42,6 +42,9 @@ parsing/
     mineru/
       index.ts
       http.ts
+      health.ts
+      profile.ts
+      protocol.ts
       loopback.ts
       archive.ts
 ```
@@ -82,6 +85,17 @@ backend `vlm` 与 parse method `auto`。Bootstrap 从严格 `[parsing]` 读取 c
 Base URL、model identity 与 remote upload consent；remote bearer token 从统一凭据文件读取并
 与规范 origin 精确绑定，loopback 不读取 token。`config test parse` 复用同一 production
 client 但只执行 health/release/protocol/profile 检查，不提交 task 或上传 PDF。
+
+当前 TypeScript 接线中，`profile.ts` 就近保存固定版本、请求字段与转换规则版本；
+`protocol.ts` 统一本机与远程的 health、multipart submit、poll 和 ZIP 下载，
+`health.ts` 提供独立诊断和协议 client 共用的必需字段校验。`loopback.ts` 与 Bootstrap
+中的远程运输层分别保持本机网络准入和逐请求凭据授权。未消费的外部扩展字段不会单独
+导致失败；返回的 task URL 不用于导航，后续地址只由配置基址与已校验 task ID 构造。
+
+归档转换从 middle 输出读取连续页数，由 Parsing service 与独立检查的输入 PDF 页数
+交叉校验，不用 PDF 字节正则推测。资源以 Markdown 所在目录解析；公共资源引用继续
+相对于发布的 Markdown。每次新解析观察使用独立 provenance ID；结果 hash 仍不包含
+观察时间或 provenance ID，相同输入与结果可复用。
 
 ### 2.4 Backend 转换
 

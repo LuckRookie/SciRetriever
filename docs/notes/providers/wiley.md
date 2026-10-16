@@ -1,6 +1,6 @@
 # Wiley
 
-> 2026-10-10 TypeScript 修复复验：Source 接受与唯一 DOI 一致的 TDM API 提示以及 onlinelibrary.wiley.com 的受信子域。生产 Network 只允许 api.wiley.com 到 `https://alm.wiley.com/alm/api/v2/download/<opaque>` 的一次跳转，拒绝 query/fragment 与其它路径；ALM 不接收 TDM token。真实样本已经通过 Public → Wiley API → 6 页 PDF → 正式入库，源选择仍由用户配置决定。 证据见[修复验证记录](../live-discovery-acquisition-fixes-2026-10-10.md)。下文较早日期的探测只代表当时状态。
+> 当前 TypeScript 适配行为（2026-10-10 核对）：Source 接受与唯一 DOI 一致的 TDM API 提示以及 onlinelibrary.wiley.com 的受信子域。生产 Network 只允许 api.wiley.com 到 `https://alm.wiley.com/alm/api/v2/download/<opaque>` 的一次跳转，拒绝 query/fragment 与其它路径；ALM 不接收 TDM token。源选择由用户配置决定。 证据见修复验证记录（本地文件：`sandbox/reports/live-discovery-acquisition-fixes-2026-10-10.md`，不随仓库分发）。下文较早日期的探测只代表当时状态。
 
 - 官方资料与最小只读链路最后在线核对：2026-08-19
 - 当前实现离线对照：2026-08-20
@@ -194,14 +194,9 @@ Revision 3 的新增证据日期为 2026-08-21，只为 Wiley 规则声明受限
 停止时仍为 Challenge 会形成文章级 `challenge-unresolved`。该 fixture 只证明旧程序没有自行
 挡住必要资源，不证明当前通用 Agent、当前 IP、机构合同或文章 entitlement。
 
-2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
-均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。这个结果证明当前文章绑定、
-Turnstile 路径和 image 子资源没有再被 SciRetriever 自己误拦；它不证明自动验证已通过、文章有
-权限或 Cloak 提高了下载成功率，也没有触发 CAPTCHA 点击。
+历史现场结果见Browser 切换测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
 
-CBA72 将 Wiley Browser 的本次服务器现场准入记为 `deferred`。这不降低
-`wiley-online-library` 的 `production-ready` Profile 状态，也不影响独立的 TDM API route；它
-只表示固定代表样本在旧规则执行器中停在持续自动验证且没有可验证 PDF。
+历史现场结果见Browser 切换测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
 
 ScanSci PDF revision `5e4a6f20ee32b16c0fcb52e37b66ca7a0b31edc5` 提供了
 `/doi/pdfdirect/`、`/doi/pdf/`、`/doi/epdf/`、若干 supplement marker，以及一次转到

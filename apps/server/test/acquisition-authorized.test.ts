@@ -79,60 +79,98 @@ describe("authorized acquisition providers", () => {
     } satisfies Partial<AuthorizedProviderError>);
   });
 
-  it("resolves Elsevier MAIN PDF objects in order and excludes supplementary objects", async () => {
-    const xml = new Uint8Array(
-      await readFile(
-        resolve("tests/fixtures/acquisition/elsevier/article-full-main.xml"),
-      ),
-    );
-    const calls: {
-      readonly url: string;
-      readonly headers: Readonly<Record<string, string>>;
-    }[] = [];
+  it.each([0, 12_000])(
+    "resolves Elsevier MAIN PDF objects with %i body elements and excludes supplementary objects",
+    async (bodyElements) => {
+      const xml = new Uint8Array(
+        await readFile(
+          resolve("tests/fixtures/acquisition/elsevier/article-full-main.xml"),
+        ),
+      );
+      const calls: {
+        readonly url: string;
+        readonly headers: Readonly<Record<string, string>>;
+      }[] = [];
+      const client = new ElsevierAuthorizedPdfClient(
+        {
+          async request(url, options) {
+            calls.push({ url, headers: options?.headers ?? {} });
+            return calls.length === 1
+              ? {
+                  status: 200,
+                  headers: [["content-type", "application/xml"]],
+                  body: new TextEncoder().encode(
+                    "<full-text-retrieval-response><web-pdf-info><extension>xml</extension></web-pdf-info>" +
+                      "<body><p>Article text.</p></body>".repeat(bodyElements) +
+                      new TextDecoder()
+                        .decode(xml)
+                        .replace(
+                          "<xocs:web-pdf>",
+                          "<xocs:web-pdf><xocs:ucs-locator>https://replica-one.example/paper.pdf</xocs:ucs-locator><xocs:ucs-locator>https://replica-two.example/paper.pdf</xocs:ucs-locator>",
+                        ) +
+                      "</full-text-retrieval-response>",
+                  ),
+                }
+              : {
+                  status: 200,
+                  headers: [["content-type", "application/pdf"]],
+                  body: pdf,
+                };
+          },
+        },
+        "elsevier-key",
+        "institution-token",
+      );
+      const lookup = client.lookup({
+        namespace: "pii",
+        value: "S0014579301033130",
+      });
+      if (lookup.kind !== "downloads") throw new Error("lookup failed");
+      await expect(
+        client.download(lookup.downloads[0]!),
+      ).resolves.toMatchObject({
+        kind: "download",
+        locator: {
+          namespace: "elsevier-main-pdf-object",
+          value: "1-s2.0-S0014579301033130-main.pdf",
+        },
+      });
+      expect(calls.map((call) => call.url)).toEqual([
+        "https://api.elsevier.com/content/article/pii/S0014579301033130?view=FULL",
+        "https://api.elsevier.com/content/object/eid/1-s2.0-S0014579301033130-main.pdf",
+      ]);
+      expect(calls[0]?.headers).toEqual({
+        accept: "application/xml",
+        "x-els-apikey": "elsevier-key",
+        "x-els-insttoken": "institution-token",
+      });
+    },
+  );
+
+  it("rejects conflicting PDF identity fields while ignoring unrelated replica fields", async () => {
     const client = new ElsevierAuthorizedPdfClient(
       {
-        async request(url, options) {
-          calls.push({ url, headers: options?.headers ?? {} });
-          return calls.length === 1
-            ? {
-                status: 200,
-                headers: [["content-type", "application/xml"]],
-                body: new TextEncoder().encode(
-                  "<full-text-retrieval-response><web-pdf-info><extension>xml</extension></web-pdf-info>" +
-                    new TextDecoder().decode(xml) +
-                    "</full-text-retrieval-response>",
-                ),
-              }
-            : {
-                status: 200,
-                headers: [["content-type", "application/pdf"]],
-                body: pdf,
-              };
+        async request() {
+          return {
+            status: 200,
+            headers: [["content-type", "application/xml"]],
+            body: new TextEncoder().encode(
+              "<full-text-retrieval-response><web-pdf>" +
+                "<attachment-eid>main.pdf</attachment-eid>" +
+                "<attachment-eid>different.pdf</attachment-eid>" +
+                "<filename>main.pdf</filename><extension>pdf</extension>" +
+                "<web-pdf-purpose>MAIN</web-pdf-purpose>" +
+                "</web-pdf></full-text-retrieval-response>",
+            ),
+          };
         },
       },
-      "elsevier-key",
-      "institution-token",
+      "fixture-key",
     );
-    const lookup = client.lookup({
-      namespace: "pii",
-      value: "S0014579301033130",
-    });
+    const lookup = client.lookup({ namespace: "pii", value: "S001" });
     if (lookup.kind !== "downloads") throw new Error("lookup failed");
-    await expect(client.download(lookup.downloads[0]!)).resolves.toMatchObject({
-      kind: "download",
-      locator: {
-        namespace: "elsevier-main-pdf-object",
-        value: "1-s2.0-S0014579301033130-main.pdf",
-      },
-    });
-    expect(calls.map((call) => call.url)).toEqual([
-      "https://api.elsevier.com/content/article/pii/S0014579301033130?view=FULL",
-      "https://api.elsevier.com/content/object/eid/1-s2.0-S0014579301033130-main.pdf",
-    ]);
-    expect(calls[0]?.headers).toEqual({
-      accept: "application/xml",
-      "x-els-apikey": "elsevier-key",
-      "x-els-insttoken": "institution-token",
+    await expect(client.download(lookup.downloads[0]!)).rejects.toMatchObject({
+      failure: { code: "response-schema" },
     });
   });
 

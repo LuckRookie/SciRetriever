@@ -4,7 +4,7 @@
 
 当前版本的 reader 与能力范围见[安装兼容矩阵](installation.md#当前-catalog-与-reader-兼容)；真实切换前的精确目标、停 writer/Jobs/Browser、Catalog 与资产备份组合、独立恢复及增量保留见[切换与恢复](cutover.md)。
 
-`--catalog` 是你选择的精确文件目标，必须为规范绝对路径。工具不读取配置来猜测目标。应先确认实际 `paths.catalog_path`；未配置该路径时，当前 Application 默认使用用户 home 下的 `catalog.sqlite`。父目录须已存在，整条父链不能含符号链接；既有 catalog 须为单链接普通文件。同目录可以已有配置和资产，工具不会清空它。
+`--catalog` 是你选择的精确文件目标，必须为规范绝对路径。工具不读取配置来猜测目标。应先确认实际 `paths.catalog_path`；正式 Web 首次启动会将未配置路径保存为 `~/.sciretriever/catalog.sqlite`，并自动创建不存在的目标空库，无需先执行下面的初始化命令。已有自定义路径优先使用。底层 Application 的历史内部缺省位置不是正式 Web 的选库规则。父目录须已存在，整条父链不能含符号链接；既有 catalog 须为单链接普通文件。同目录可以已有配置和资产，工具不会清空它。
 
 ## 初始化新库
 

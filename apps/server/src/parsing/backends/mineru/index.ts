@@ -1,6 +1,7 @@
 /** MinerU backend adapters for the generic parsing contract. */
 export { MinerUParser, type MinerUHttpTransport } from "./http.js";
 export { MinerULoopbackParser } from "./loopback.js";
+export { createMinerUProtocolTransport } from "./protocol.js";
 export { convertMinerUArchive, type MinerUArchiveOptions } from "./archive.js";
 
 /** @deprecated Use MinerUParser; the backend is already identified by its module. */

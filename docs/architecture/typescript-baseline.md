@@ -44,7 +44,7 @@ Public → Authorized API → Controlled Browser
 
 生产 Browser 使用唯一的 `browser:generic` controller、CloakBrowser 固定身份 Profile、共享 process/context、Network admission 和 Acquisition 的 PDF/文章归属验收。Browser 不获得 SQL、Catalog 写入、任意 URL、Cookie、CDP 或事实发布能力。
 
-**当前实现边界：** 生产 Application 已拥有惰性 BrowserHost factory、Network navigation admission 和 Entry 的 Browser escalation 端口；无 verified runtime 或 admission 时会稳定报告不可用，不会构造或启动 host。当前实现覆盖 normal-miss/显式低风险 route declaration 的有界升级、Public/API/Browser cohort barrier、按冻结顺序提前交付的 receipt wave、版本化 landing hint、统一 Intake/身份验收，以及同一 Application 内的 `BrowserSessionBroker` 和 FIFO delivery scheduler。broker 使用 operation-local `generation`/`operation_id` 拒绝过期排队 delivery，并在 close 时停止 admission 后 drain；CONTENT_READY 缺 PDF 时会在生产对象图中先完成自动 acquisition，再重新读取 Literature。真实 Cloak source-checkout 与 portable 副本的 loopback 正路径已实际验证；软件来源核实、synthetic 测试和真实 runtime 行为分别记录，具体范围见[安装验收边界](../guides/installation.md#安装验收边界)。真实 Publisher/机构站点仍未运行。
+**当前实现边界：** 生产 Application 已拥有惰性 BrowserHost factory、Network navigation admission 和 Entry 的 Browser escalation 端口；无 verified runtime 或 admission 时会稳定报告不可用，不会构造或启动 host。当前实现覆盖 normal-miss/显式低风险 route declaration 的有界升级、单篇五层顺序、按完成时刻通知的结果、版本化 landing hint、统一 Intake/身份验收，以及同一 Application 内的 `BrowserSessionBroker` 和文章 scheduler（旧 delivery-only seam 保留 FIFO）。broker 使用 operation-local `generation`/`operation_id` 拒绝过期排队 delivery，并在 close 时停止 admission 后 drain；CONTENT_READY 缺 PDF 时会在生产对象图中先完成自动 acquisition，再重新读取 Literature。真实 Cloak source-checkout 与 portable 副本的 loopback 正路径已实际验证；软件来源核实、synthetic 测试和真实 runtime 行为分别记录，具体范围见[安装验收边界](../guides/installation.md#安装验收边界)。真实 Publisher/机构站点仍未运行。
 
 ### 1.3 固定配置身份
 
@@ -87,14 +87,15 @@ interrupted
 返回严格的 `DatabaseCompletionReport` 与 `ReportEnd`。范围在共享写准入内从一致 snapshot 冻结，
 普通范围会检查全部 Meta 成员是否已满足目标，并冻结完整版本候选；具体 Literature 仍严格单版本。
 已有耗尽事实不会被宽范围自动重试，取消不会掩盖已知 Storage/receipt 失败。
-`DatabaseCompletionOperation` 使用已有 `execution.max_concurrency` 建立固定大小 chunk，
-块内 acquisition/Parsing/Analysis 可并行准备，事实提交由操作内单队列执行；PDF acquisition
-使用 operation-local bounded cohort，Browser delivery 由 Application 共享的串行 lane 保护。
+`DatabaseCompletionOperation` 使用 `execution.max_concurrency` 个有界 worker 持续补位，
+每篇独立保持五层获取顺序；进度按完成时间反馈，最终 Report 按冻结顺序排列。操作身份/代次稳定，
+正常补位不使兄弟 Browser 会话失效，提交仍由操作内单队列执行。Browser 共享文章 scheduler，
+同平台串行、跨平台可并行；旧 delivery-only seam 保留串行兼容。
 取消会排空已启动工作并释放未提交解析准备，已提交内容保留，结果按冻结顺序汇总。
-单目标 Parser/Analysis 失败不会停止后续块；持久化或发布失败停止调度并保留失败原因。
+单目标 Parser/Analysis 失败不会停止后续目标；持久化或发布失败停止调度并保留失败原因。
 durable Jobs 的新建任务复用 `DatabaseCompletionService.freezeRequest()` 冻结目标和版本候选；
 显式运行时把仍可执行目标交给完整 `runFrozen()` 操作，保留既有逐目标 durable 记录和返回格式。
-Browser escalation、版本化 Intake、三级 cohort barrier、receipt wave、稳定不可用结果和 close 时的
+Browser escalation、版本化 Intake、单篇五层顺序、及时结果通知、稳定不可用结果和 close 时的
 broker drain 已接入当前 Application 对象图；durable Jobs 不持久化整个操作级 Report。
 真实 verified CloakBrowser 正路径已在 loopback 执行；Publisher 站点现场验证仍未运行，不能据
 loopback 或 fake fixture 扩大声明。

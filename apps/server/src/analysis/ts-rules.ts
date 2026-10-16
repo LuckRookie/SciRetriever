@@ -3,7 +3,6 @@ import {
   parseLiteratureMetadata,
   type LiteratureMetadata,
   type LiteratureSection,
-  type LiteratureSubsection,
   type ParserResult,
   type Sha256,
 } from "@sciretriever/contracts";
@@ -16,72 +15,12 @@ export class AnalysisRuleError extends Error {
 }
 
 const MISSING = "未提供";
-const MAX_SOURCE_BYTES = 32 * 1024 * 1024;
-const MAX_DRAFT_BYTES = 4 * 1024 * 1024;
-const MAX_FACTS = 16_384;
-const MAX_REFERENCES = 4_096;
-const MAX_REFERENCE_CHARACTERS = 65_536;
-const MAX_REFERENCE_TOTAL_CHARACTERS = 4 * 1024 * 1024;
-const MAX_FORMULA_CHARACTERS = 4_096;
 const FIXED: readonly [string, LiteratureSection["role"]][] = [
   ["研究背景与目标", "background-and-objectives"],
   ["研究方法", "methods"],
   ["数据", "data"],
   ["结论与局限性", "conclusions-and-limitations"],
 ];
-const RESERVED = new Set([
-  "元数据",
-  "摘要",
-  "参考文献",
-  ...FIXED.map(([title]) => title),
-]);
-const PARALLEL = new Set([
-  "abstract",
-  "authors",
-  "document type",
-  "doi",
-  "issue",
-  "keywords",
-  "language",
-  "metadata",
-  "other identifiers",
-  "pages",
-  "publication date",
-  "publisher",
-  "title",
-  "venue",
-  "volume",
-  "year",
-  "作者",
-  "出版商",
-  "出版日期",
-  "卷",
-  "年份",
-  "摘要",
-  "文献类型",
-  "期",
-  "期刊",
-  "标题",
-  "语言",
-  "其他标识符",
-  "页码",
-  "关键词",
-]);
-const MISSING_EXPRESSIONS = new Set([
-  "n/a",
-  "na",
-  "none",
-  "not available",
-  "not provided",
-  "null",
-  "unknown",
-  "无",
-  "无相关信息",
-  "暂无",
-  "未知",
-  "未提及",
-  MISSING,
-]);
 const WRAPPERS: readonly [string, string][] = [
   ["**", "**"],
   ["__", "__"],
@@ -90,15 +29,6 @@ const WRAPPERS: readonly [string, string][] = [
   ["*", "*"],
   ["_", "_"],
 ];
-const DOI = /(?<![A-Za-z0-9])10\.\d{4,9}\/[-._;()/:A-Z0-9]+/giu;
-const ARXIV =
-  /\barxiv[ \t]*:[ \t]*(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z]{2})?\/\d{7})(?:v\d+)?\b/giu;
-const PMID = /\bpmid[ \t]*:?[ \t]*\d{1,9}\b/giu;
-const PMCID = /\b(?:pmcid[ \t]*:?[ \t]*)?PMC\d{1,9}\b/giu;
-const NUMBER_WITH_UNIT =
-  /(?<![\d.])(?:[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)[ \t]*(?:%|‰|ppm|ppb|ppt|°[CFK]?|Å|kg|mg|[µμu]g|ng|pg|km|cm|mm|[µμu]m|nm|pm|m|kL|mL|[µμu]L|L|ms|[µμu]s|ns|min|h|Hz|kHz|MHz|GHz|Pa|kPa|MPa|GPa|mol|mmol|[µμu]mol|mM|[µμu]M|M|mV|V|mA|A|mW|kW|W|mJ|kJ|J|meV|keV|eV)(?:[²³23]|\^[+-]?\d+)?(?:[/·](?:kg|mg|g|mL|L|mol|m|cm|mm|s|min|h|K))?(?![A-Za-z0-9_µμ])/gu;
-const STANDALONE_NUMBER =
-  /(?<![A-Za-z0-9_])[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?![A-Za-z0-9_])/gu;
 const ATX_HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*)|[ \t]*)$/u;
 const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/u;
 const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/u;
@@ -138,189 +68,24 @@ function decodeHtml(value: string): string {
   );
 }
 
-function unwrapVisible(value: string): string {
-  let candidate = decodeHtml(value)
-    .normalize("NFKC")
-    .replace(/<!--[\s\S]*?-->/gu, "")
-    .replace(/<\/?[A-Za-z][^>\n]{0,1024}>/gu, "")
-    .trim();
-  let changed = true;
-  while (changed && candidate) {
-    changed = false;
-    for (const [opening, closing] of WRAPPERS)
-      if (
-        candidate.startsWith(opening) &&
-        candidate.endsWith(closing) &&
-        candidate.length >= opening.length + closing.length
-      ) {
-        candidate = candidate
-          .slice(opening.length, candidate.length - closing.length)
-          .trim();
-        changed = true;
-        break;
-      }
-  }
-  return candidate;
-}
-
-function isMissingExpression(value: string): boolean {
-  return (
-    MISSING_EXPRESSIONS.has(value.trim().toLocaleLowerCase()) ||
-    MISSING_EXPRESSIONS.has(unwrapVisible(value).toLocaleLowerCase())
-  );
-}
-
-function hasVisibleContent(value: string): boolean {
-  return Boolean(value.replace(/<!--[\s\S]*?-->/gu, "").trim());
-}
-
-function hasEvidence(source: string, value: unknown): boolean {
-  const candidate = normalize(decodeHtml(String(value))).toLocaleLowerCase();
-  if (!candidate) return false;
-  return normalize(decodeHtml(source)).toLocaleLowerCase().includes(candidate);
-}
-
-function sameArray(a: readonly unknown[], b: readonly unknown[]): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
 export function metadataHash(metadata: LiteratureMetadata): Sha256 {
   return createHash("sha256")
     .update(contentCanonicalJsonBytes(metadata))
     .digest("hex") as Sha256;
 }
 
-/** Protect accepted metadata and allow only values explicitly visible in parsed text. */
-export function validateMetadataProposal(
+/** Analysis fills gaps; accepted metadata remains owned by Literature. */
+export function mergeMetadataProposal(
   initial: LiteratureMetadata,
   proposal: LiteratureMetadata,
-  markdown: string,
-): void {
-  const scalar = [
-    "title",
-    "abstract",
-    "publication_date",
-    "publication_year",
-    "document_type",
-    "language",
-    "venue",
-    "volume",
-    "issue",
-    "pages",
-  ] as const;
-  for (const key of scalar) {
-    const before = initial[key];
-    const after = proposal[key];
-    if (before !== null && after !== before)
-      throw new AnalysisRuleError("metadata-proposal");
-    if (before === null && after !== null && !hasEvidence(markdown, after))
-      throw new AnalysisRuleError("metadata-alignment");
-  }
-  if (initial.publisher !== null && proposal.publisher !== initial.publisher) {
-    const stem = (value: string) =>
-      normalize(value)
-        .toLocaleLowerCase()
-        .replace(
-          /\b(?:limited|liability|company|corporation|incorporated|corp|inc|ltd|llc|plc|co|gmbh|sarl|pte|pty|sas|ag|bv|nv|sa)\.?\b/gu,
-          "",
-        )
-        .replace(/[^\p{L}\p{N}]+/gu, " ")
-        .trim();
-    if (stem(initial.publisher) !== stem(proposal.publisher ?? ""))
-      throw new AnalysisRuleError("metadata-proposal");
-  } else if (
-    initial.publisher === null &&
-    proposal.publisher !== null &&
-    !hasEvidence(markdown, proposal.publisher)
-  ) {
-    throw new AnalysisRuleError("metadata-alignment");
-  }
-  if (initial.authors.length) {
-    if (proposal.authors.length !== initial.authors.length)
-      throw new AnalysisRuleError("metadata-proposal");
-    for (let i = 0; i < initial.authors.length; i += 1) {
-      const before = initial.authors[i]!,
-        after = proposal.authors[i]!;
-      if (
-        before.kind !== after.kind ||
-        before.display_name !== after.display_name
-      )
-        throw new AnalysisRuleError("metadata-proposal");
-      for (const key of ["given_name", "family_name", "orcid"] as const) {
-        if (before[key] !== null && after[key] !== before[key])
-          throw new AnalysisRuleError("metadata-proposal");
-        if (
-          before[key] === null &&
-          after[key] !== null &&
-          !hasEvidence(markdown, after[key])
-        )
-          throw new AnalysisRuleError("metadata-alignment");
-      }
-      if (after.affiliations.length < before.affiliations.length)
-        throw new AnalysisRuleError("metadata-proposal");
-      for (let j = 0; j < before.affiliations.length; j += 1) {
-        const ba = before.affiliations[j]!,
-          aa = after.affiliations[j]!;
-        if (ba.name !== aa.name || (ba.ror !== null && ba.ror !== aa.ror))
-          throw new AnalysisRuleError("metadata-proposal");
-      }
-      for (const affiliation of after.affiliations.slice(
-        before.affiliations.length,
-      )) {
-        if (
-          !hasEvidence(markdown, affiliation.name) ||
-          (affiliation.ror !== null && !hasEvidence(markdown, affiliation.ror))
-        )
-          throw new AnalysisRuleError("metadata-alignment");
-      }
-    }
-  } else {
-    for (const author of proposal.authors) {
-      if (!hasEvidence(markdown, author.display_name))
-        throw new AnalysisRuleError("metadata-alignment");
-      for (const value of [author.given_name, author.family_name, author.orcid])
-        if (value !== null && !hasEvidence(markdown, value))
-          throw new AnalysisRuleError("metadata-alignment");
-      for (const affiliation of author.affiliations)
-        if (
-          !hasEvidence(markdown, affiliation.name) ||
-          (affiliation.ror !== null && !hasEvidence(markdown, affiliation.ror))
-        )
-          throw new AnalysisRuleError("metadata-alignment");
-    }
-  }
-  if (
-    proposal.identifiers.length < initial.identifiers.length ||
-    !sameArray(
-      proposal.identifiers.slice(0, initial.identifiers.length),
-      initial.identifiers,
-    )
-  )
-    throw new AnalysisRuleError("metadata-proposal");
-  const singleton = new Set(["doi", "arxiv", "pmid", "pmcid"]);
-  for (const item of proposal.identifiers.slice(initial.identifiers.length)) {
-    if (!hasEvidence(markdown, item.value))
-      throw new AnalysisRuleError("metadata-alignment");
-    if (
-      singleton.has(item.namespace) &&
-      initial.identifiers.some(
-        (i) => i.namespace === item.namespace && i.value !== item.value,
-      )
-    )
-      throw new AnalysisRuleError("metadata-proposal");
-  }
-  const seen = new Set<string>();
-  for (const keyword of proposal.keywords) {
-    const key = normalize(keyword).toLocaleLowerCase();
-    if (seen.has(key) || !hasEvidence(markdown, keyword))
-      throw new AnalysisRuleError("metadata-alignment");
-    seen.add(key);
-  }
-  if (
-    proposal.title === null &&
-    !proposal.identifiers.some((i) => i.namespace === "doi")
-  )
-    throw new AnalysisRuleError("metadata-proposal");
+): LiteratureMetadata {
+  const accepted = Object.fromEntries(
+    Object.entries(initial).filter(
+      ([, value]) =>
+        value !== null && (!Array.isArray(value) || value.length > 0),
+    ),
+  );
+  return parseLiteratureMetadata({ ...proposal, ...accepted });
 }
 
 function visibleTitle(title: string): string {
@@ -447,19 +212,6 @@ function protectedMask(value: string): Uint8Array {
   return mask;
 }
 
-function rejectHtmlHeadings(value: string, mask: Uint8Array): void {
-  let index = 0;
-  while ((index = value.indexOf("<", index)) >= 0) {
-    if (mask[index]) {
-      index += 1;
-      continue;
-    }
-    const match = /^<\/?h([1-6])(?:[\t />]|$)/iu.exec(value.slice(index));
-    if (match) throw new AnalysisRuleError("html-heading");
-    index += 1;
-  }
-}
-
 function parseHeading(line: string): { level: number; title: string } | null {
   const match = ATX_HEADING.exec(line);
   if (!match) return null;
@@ -472,7 +224,6 @@ function scanMarkdown(
   value: string,
 ): readonly (string | { level: number; title: string })[] {
   const mask = protectedMask(value);
-  rejectHtmlHeadings(value, mask);
   const tokens: (string | { level: number; title: string })[] = [];
   let offset = 0;
   for (const lineWithEnding of value.match(/[^\n]*(?:\n|$)/gu) ?? []) {
@@ -484,13 +235,16 @@ function scanMarkdown(
     } else {
       const heading = parseHeading(line);
       if (heading) {
-        if (heading.level > 2) throw new AnalysisRuleError("heading-depth");
-        tokens.push(heading);
+        tokens.push(heading.level <= 2 ? heading : line);
       } else if (SETEXT_UNDERLINE.test(line)) {
         const previous = tokens.at(-1);
-        if (typeof previous === "string" && previous.trim())
-          throw new AnalysisRuleError("heading-syntax");
-        tokens.push(line);
+        if (typeof previous === "string" && previous.trim()) {
+          tokens.pop();
+          tokens.push({
+            level: line.trimStart().startsWith("=") ? 1 : 2,
+            title: previous.trim(),
+          });
+        } else tokens.push(line);
       } else tokens.push(line);
     }
     offset += lineWithEnding.length;
@@ -498,161 +252,7 @@ function scanMarkdown(
   return tokens;
 }
 
-function maskText(value: string): string {
-  const mask = protectedMask(value);
-  const chars = value.split("");
-  for (let i = 0; i < chars.length; i += 1) if (mask[i]) chars[i] = " ";
-  return chars.join("");
-}
-
-function boundedMatches(pattern: RegExp, value: string): string[] {
-  const result: string[] = [];
-  pattern.lastIndex = 0;
-  for (const match of value.matchAll(pattern)) {
-    result.push(match[0]!);
-    if (result.length > MAX_FACTS)
-      throw new AnalysisRuleError("alignment-budget");
-  }
-  return result;
-}
-
-function identifiers(value: string): Set<string> {
-  const normalized = decodeHtml(value).normalize("NFKC");
-  const result = new Set<string>();
-  for (const raw of boundedMatches(DOI, normalized)) {
-    let item = raw.replace(/[.,;:]+$/u, "");
-    while (
-      item.endsWith(")") &&
-      (item.match(/\)/gu)?.length ?? 0) > (item.match(/\(/gu)?.length ?? 0)
-    )
-      item = item.slice(0, -1);
-    result.add(`doi:${item.toLocaleLowerCase()}`);
-  }
-  for (const raw of boundedMatches(ARXIV, normalized))
-    result.add(`arxiv:${raw.replace(/[ \t]/gu, "").toLocaleLowerCase()}`);
-  for (const raw of boundedMatches(PMID, normalized))
-    result.add(`pmid:${raw.match(/\d{1,9}$/u)?.[0] ?? ""}`);
-  for (const raw of boundedMatches(PMCID, normalized))
-    result.add(
-      `pmcid:${raw.match(/PMC\d{1,9}$/iu)?.[0]?.toLocaleLowerCase() ?? ""}`,
-    );
-  return result;
-}
-
-function measurements(value: string): Set<string> {
-  const result = new Set<string>();
-  for (const raw of boundedMatches(
-    NUMBER_WITH_UNIT,
-    decodeHtml(value).normalize("NFKC"),
-  ))
-    result.add(raw.replace(/[ \t,]/gu, "").replace(/[µμ]/gu, "u"));
-  return result;
-}
-
-function formulas(value: string): Set<string> {
-  const result = new Set<string>();
-  let count = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    const opening = value.startsWith("$$", index)
-      ? ["$$", "$$"]
-      : value.startsWith("\\(", index)
-        ? ["\\(", "\\)"]
-        : value.startsWith("\\[", index)
-          ? ["\\[", "\\]"]
-          : value[index] === "$" && value[index - 1] !== "\\"
-            ? ["$", "$"]
-            : null;
-    if (!opening) continue;
-    const end = value.indexOf(opening[1]!, index + opening[0]!.length);
-    if (end < 0) continue;
-    const content = value.slice(index + opening[0]!.length, end);
-    if (opening[0] === "$" && content.includes("\n")) {
-      index = end;
-      continue;
-    }
-    if (content.length > MAX_FORMULA_CHARACTERS)
-      throw new AnalysisRuleError("alignment-budget");
-    const normalized = decodeHtml(content)
-      .normalize("NFKC")
-      .replace(/\s+/gu, "");
-    if (normalized) {
-      count += 1;
-      if (count > MAX_FACTS) throw new AnalysisRuleError("alignment-budget");
-      result.add(normalized);
-    }
-    index = end + opening[1]!.length - 1;
-  }
-  return result;
-}
-
-function standaloneNumbers(value: string): Set<string> {
-  let text = maskText(decodeHtml(value).normalize("NFKC"));
-  text = text.replace(/<[^>\n]{0,4096}>/gu, " ");
-  text = text
-    .replace(DOI, " ")
-    .replace(ARXIV, " ")
-    .replace(PMID, " ")
-    .replace(PMCID, " ");
-  text = text.replace(NUMBER_WITH_UNIT, " ");
-  text = text.replace(
-    /\$\$[\s\S]*?\$\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|(?<!\\)\$[^$\n]*\$/gu,
-    " ",
-  );
-  text = text
-    .replace(/^ {0,3}#{1,6}/gmu, " ")
-    .replace(/^(?: {0,3})\d{1,9}(?=[.)][ \t]+)/gmu, " ");
-  const result = new Set<string>();
-  for (const raw of boundedMatches(STANDALONE_NUMBER, text))
-    result.add(raw.replace(/,/gu, "").replace("E", "e"));
-  return result;
-}
-
-function validateAlignment(
-  draftMarkdown: string,
-  source: string,
-  references: readonly string[],
-): void {
-  if (
-    Buffer.byteLength(draftMarkdown, "utf8") > MAX_DRAFT_BYTES ||
-    Buffer.byteLength(source, "utf8") > MAX_SOURCE_BYTES
-  )
-    throw new AnalysisRuleError("alignment-budget");
-  if (references.length > MAX_REFERENCES)
-    throw new AnalysisRuleError("alignment-budget");
-  let total = 0;
-  const sourceText = normalize(decodeHtml(source));
-  for (const reference of references) {
-    if (
-      reference.length > MAX_REFERENCE_CHARACTERS ||
-      (total += reference.length) > MAX_REFERENCE_TOTAL_CHARACTERS
-    )
-      throw new AnalysisRuleError("alignment-budget");
-    if (
-      !normalize(decodeHtml(reference)) ||
-      !sourceText.includes(normalize(decodeHtml(reference)))
-    )
-      throw new AnalysisRuleError("reference-alignment");
-  }
-  const checks: readonly [Set<string>, Set<string>, string][] = [
-    [identifiers(source), identifiers(draftMarkdown), "identifier-alignment"],
-    [
-      measurements(source),
-      measurements(draftMarkdown),
-      "measurement-alignment",
-    ],
-    [formulas(source), formulas(draftMarkdown), "formula-alignment"],
-    [
-      standaloneNumbers(source),
-      standaloneNumbers(draftMarkdown),
-      "number-alignment",
-    ],
-  ];
-  for (const [available, used, code] of checks)
-    for (const item of used)
-      if (!available.has(item)) throw new AnalysisRuleError(code);
-}
-
-/** Parse the deliberately small H1/H2 Markdown dialect used by Analysis. */
+/** Read Markdown structure without trying to prove the model's scientific claims. */
 export function parseContentDraft(
   markdown: string,
   parser: ParserResult,
@@ -665,127 +265,90 @@ export function parseContentDraft(
     createHash("sha256").update(source).digest("hex") !== parser.markdown.sha256
   )
     throw new AnalysisRuleError("content-input");
-  if (
-    Buffer.byteLength(markdown, "utf8") > MAX_DRAFT_BYTES ||
-    Buffer.byteLength(source, "utf8") > MAX_SOURCE_BYTES
-  )
-    throw new AnalysisRuleError("alignment-budget");
-  const sections: {
+  type Section = {
     role: LiteratureSection["role"];
     title: string | null;
     direct: string[];
     subs: { title: string; lines: string[] }[];
-  }[] = [];
-  let current: (typeof sections)[number] | undefined;
-  let sub: { title: string; lines: string[] } | undefined;
-  let references = false;
-  const refs: string[] = [];
-  let expectedFixed = 0;
-  const seen = new Set<string>();
-  const tokens = scanMarkdown(
+  };
+  const sections: Section[] = [];
+  const references: string[] = [];
+  let current: Section | undefined;
+  let sub: Section["subs"][number] | undefined;
+  let inReferences = false;
+  const section = (title: string): Section => {
+    const role = FIXED.find(([name]) => name === title)?.[1] ?? "additional";
+    const existing = sections.find((s) =>
+      role === "additional" ? s.title === title : s.role === role,
+    );
+    if (existing) return existing;
+    const value: Section = {
+      role,
+      title: role === "additional" ? title : null,
+      direct: [],
+      subs: [],
+    };
+    sections.push(value);
+    return value;
+  };
+  for (const token of scanMarkdown(
     markdown.replaceAll("\r\n", "\n").replaceAll("\r", "\n"),
-  );
-  for (const token of tokens) {
-    const raw = typeof token === "string" ? token : "";
-    const h1 = typeof token !== "string" && token.level === 1 ? token : null;
-    const h2 = typeof token !== "string" && token.level === 2 ? token : null;
-    if (h1) {
-      const title = visibleTitle(h1.title);
-      const key = title.toLocaleLowerCase();
-      if (!title || seen.has(key)) throw new AnalysisRuleError("content-draft");
-      seen.add(key);
+  )) {
+    if (typeof token !== "string" && token.level === 1) {
+      const title = visibleTitle(token.title);
+      inReferences = title === "参考文献";
       sub = undefined;
-      if (references) throw new AnalysisRuleError("content-draft");
-      if (title === "参考文献") {
-        if (expectedFixed !== FIXED.length)
-          throw new AnalysisRuleError("content-draft");
-        references = true;
-        current = undefined;
-        continue;
-      }
-      const fixed = FIXED.findIndex(([name]) => name === title);
-      if (fixed >= 0) {
-        if (fixed !== expectedFixed)
-          throw new AnalysisRuleError("content-draft");
-        expectedFixed += 1;
-        current = { role: FIXED[fixed]![1], title: null, direct: [], subs: [] };
-      } else {
-        if (RESERVED.has(title) || PARALLEL.has(key))
-          throw new AnalysisRuleError("content-draft");
-        if (expectedFixed === 0 || title === "参考文献")
-          throw new AnalysisRuleError("content-draft");
-        current = { role: "additional", title, direct: [], subs: [] };
-      }
-      sections.push(current);
+      if (!inReferences) current = section(title);
       continue;
     }
-    if (h2) {
-      if (
-        !current ||
-        references ||
-        PARALLEL.has(visibleTitle(h2.title).toLocaleLowerCase())
-      )
-        throw new AnalysisRuleError("content-draft");
-      sub = { title: visibleTitle(h2.title), lines: [] };
+    const raw =
+      typeof token === "string"
+        ? token
+        : `${"#".repeat(token.level)} ${token.title}`;
+    if (inReferences) {
+      const line = raw.trim();
+      if (!line || line === MISSING) continue;
+      const item = /^(?:\d+[.)]|[-*+])\s+(.+)$/u.exec(line);
+      if (item) references.push(item[1]!);
+      else if (references.length)
+        references[references.length - 1] += `\n${line}`;
+      else references.push(line);
+      continue;
+    }
+    current ??= section("总结");
+    if (typeof token !== "string" && token.level === 2) {
+      sub = { title: visibleTitle(token.title), lines: [] };
       current.subs.push(sub);
-      continue;
-    }
-    if (references) {
-      if (!raw.trim()) continue;
-      const item = /^ {0,3}(\d{1,9})\.[ \t]+(.+?)[ \t]*$/u.exec(raw);
-      if (item) {
-        if (Number(item[1]) !== refs.length + 1)
-          throw new AnalysisRuleError("content-draft");
-        refs.push(item[2]!.trim());
-      } else if (refs.length && /^ {3,}\S/u.test(raw))
-        refs[refs.length - 1] += `\n${raw.trim()}`;
-      else if (raw.trim() !== MISSING)
-        throw new AnalysisRuleError("content-draft");
-      continue;
-    }
-    if (sub) sub.lines.push(raw);
-    else if (current) current.direct.push(raw);
-    else if (raw.trim()) throw new AnalysisRuleError("content-draft");
+    } else (sub?.lines ?? current.direct).push(raw);
   }
   if (
-    !references ||
-    expectedFixed !== FIXED.length ||
-    (!refs.length && !markdown.includes(MISSING))
+    !sections.some(
+      (s) =>
+        s.direct.some((line) => line.trim()) ||
+        s.subs.some((sub) => sub.lines.some((line) => line.trim())),
+    )
   )
     throw new AnalysisRuleError("content-draft");
-  const result = sections.map((s) => {
-    const direct = trimLines(s.direct);
-    const subsections: LiteratureSubsection[] = s.subs
-      .map((item) => ({
-        title: item.title.trim(),
-        markdown: trimLines(item.lines),
-      }))
-      .filter((item) => item.markdown);
-    if (s.role !== "additional" && !direct && !subsections.length)
-      return { role: s.role, title: null, markdown: MISSING, subsections };
-    if (direct === MISSING && subsections.length)
-      throw new AnalysisRuleError("missing-marker");
-    if (s.role === "additional" && !direct && !subsections.length)
-      throw new AnalysisRuleError("content-draft");
-    if (direct !== MISSING && isMissingExpression(direct))
-      throw new AnalysisRuleError("missing-marker");
-    if (
-      subsections.some(
-        (item) =>
-          isMissingExpression(item.markdown) ||
-          !hasVisibleContent(item.markdown),
-      )
-    )
-      throw new AnalysisRuleError("empty-subsection");
-    return {
-      role: s.role,
-      title: s.title,
-      markdown: direct || "",
-      subsections,
-    };
+  const convert = (s: Section): LiteratureSection => ({
+    role: s.role,
+    title: s.title,
+    markdown: trimLines(s.direct),
+    subsections: s.subs
+      .map((v) => ({ title: v.title, markdown: trimLines(v.lines) }))
+      .filter((v) => v.markdown.trim()),
   });
-  validateAlignment(markdown, source, refs);
-  return { sections: result, references: refs };
+  // Keep the published legacy shape while accepting missing/reordered headings.
+  const fixed = FIXED.map(([title]) => {
+    const value = convert(section(title));
+    return !value.markdown && !value.subsections.length
+      ? { ...value, markdown: MISSING }
+      : value;
+  });
+  const additional = sections
+    .filter((s) => s.role === "additional")
+    .map(convert)
+    .filter((s) => s.markdown.trim() || s.subsections.length);
+  return { sections: [...fixed, ...additional], references };
 }
 
 function metadataValue(metadata: LiteratureMetadata, key: string): string {

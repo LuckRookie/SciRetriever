@@ -45,7 +45,7 @@
 
 ### 3.2 临时文件与生成物
 
-- 临时文件、测试数据库和一次性验证材料进入系统临时目录下的 `sciretriever-*`，不散落在仓库根目录。
+- 本机真实测试和一次性实验统一使用 Git 忽略的 `sandbox/`：`cases/` 放场景与脚本，`runs/` 放每轮运行材料和隔离测试库，`reports/` 放阶段报告。自动化回归的临时 home/合成数据库及短期工具中间文件仍使用系统临时目录 `sciretriever-*`，不散落在仓库根目录。
 - 生成物通过项目规定的命令产生，不手工编辑生成文件。
 - 优先使用仓库现有 Node/pnpm 依赖；不创建平行依赖缓存或虚拟环境，除非任务明确需要。Python `.venv` 只属于归档历史复核，不是当前 TS 路线。
 - 构建和测试产物在交付前检查；不提交 `build/`、`dist/`、缓存、运行时 catalog、文献资产或用户语料。
@@ -138,7 +138,7 @@ Full 执行：
 当前 TypeScript workspace 使用 `pnpm quick / test / full`，TS Full 是默认全量验收：
 
 - Quick：Prettier、ESLint、源码 project references 构建类型检查，以及 `tsconfig.tests.json` 的测试 strict 类型检查。
-- Test：Vitest 行为测试；零测试失败。包入口测试会构建两个现有 workspace，将实际 tarball 在系统临时目录离线安装，
+- Test：Vitest 行为测试；零测试失败。`vitest.config.mjs` 在默认排除项之上排除 `sandbox/**`，根目录直接运行 Vitest 也不收集本机真实测试；Quick 的格式化和 lint 同样忽略该目录。包入口测试会构建两个现有 workspace，将实际 tarball 在系统临时目录离线安装，
   使用 Node 验证公开导入、配置拒绝和包内容，结束后清理自己的目录。
 - Full：Quick、Test 和所有已注册 project 的 build。构建元数据进入 ignored `dist/`，不进入源码或安装包。
 
@@ -178,10 +178,12 @@ TS Full 使用 TypeScript Configuration/Credential owner 和合成临时 home，
 
 ## 8. 文档治理
 
+- 按项目 owner 的目录治理要求，项目维护的目录提供 `README.md`，解释职责、内容入口、上下级导航与相邻模块分工。新建、移动目录或改变职责时同步更新；篇幅随目录复杂度变化，不复制整份架构正文。生成物、第三方依赖、原始数据和历史快照内部由上级说明身份，不改动其原始结构。本规则通过文档审查维护，不新增 CI 门禁。
 - 同一事实只指定一个真相源，其它文档通过链接解释，不维护相互漂移的独立定义。
 - requirements 说明用户问题和验收，architecture 说明已接受设计，README 和用户指南说明当前行为，源码与测试提供实现证据。
 - 公开 API、CLI、配置、schema、序列化格式、持久化语义、默认值、模块职责、入口或验证命令变化时，按 `docs/development/documentation-map.md` 检查文档影响。
 - `docs/plans/` 保存需要跨阶段恢复的活动实施计划；它不是产品或架构真相源，计划状态不能替代源码、测试和验收证据。
+- 文档按身份存放：`docs/notes/` 维护外部依赖、许可与兼容性；本机测试报告放 `sandbox/reports/`，真实/一次性用例与人工步骤放 `sandbox/cases/`，运行材料放 `sandbox/runs/`。`tests/` 只放可共享的离线测试材料，合成 fixture 继续由 Git 管理。公开文档不能依赖私有报告链接；目录约定见 [tests/README.md](tests/README.md)。报告不作为长期真相源，可复用结论应提炼到所属文档。
 - 文档-only 修改不要求运行 Python Harness；应检查链接、术语、Markdown 结构、命令事实和 `git diff --check`。
 
 ## 9. Git 与提交

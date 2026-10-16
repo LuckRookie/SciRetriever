@@ -71,8 +71,25 @@ interface CitationProviderState {
   readonly provider_name: string;
   readonly scan_limit: number;
   raw_item_count: number;
+  attempted: boolean;
   terminal: "SCAN_LIMIT_REACHED" | "FAILED" | null;
   failure: StableFailure | null;
+}
+
+/** A missing work or malformed record must not disable unrelated branches. */
+function recordCitationFailure(
+  state: CitationProviderState,
+  failure: StableFailure,
+): void {
+  state.failure ??= failure;
+  if (
+    [
+      "metadata-provider-authentication",
+      "metadata-provider-authorization",
+      "metadata-provider-rate-limited",
+    ].includes(failure.code)
+  )
+    state.terminal = "FAILED";
 }
 
 function consumeCitationInvocation(
@@ -84,10 +101,12 @@ function consumeCitationInvocation(
     throw new Error("citation provider exceeded its run scan limit");
   state.raw_item_count += invocation.raw_item_count;
   if (invocation.outcome === "FAILED") {
-    state.terminal = "FAILED";
-    state.failure =
-      invocation.failure ?? providerFailure("The citation provider failed.");
-  } else if (state.raw_item_count === state.scan_limit) {
+    recordCitationFailure(
+      state,
+      invocation.failure ?? providerFailure("The citation provider failed."),
+    );
+  }
+  if (state.raw_item_count === state.scan_limit) {
     state.terminal = "SCAN_LIMIT_REACHED";
   }
 }
@@ -284,6 +303,7 @@ export class CitationDiscoveryService {
         provider_name: provider.provider_name,
         scan_limit: provider.scan_limit,
         raw_item_count: 0,
+        attempted: false,
         terminal: null,
         failure: null,
       });
@@ -308,9 +328,9 @@ export class CitationDiscoveryService {
           continue;
         const source = await this.database.getLiterature(sourceId);
         if (!source) throw new Error("citation seed Literature was not found");
-        const snapshot = source.metadata.identifiers.length
-          ? null
-          : await this.database.literatureDetailSnapshot(sourceId);
+        // Provider-native record IDs can be required even when a DOI is known
+        // (for example, a provider's reverse-citation query). Keep both forms.
+        const snapshot = await this.database.literatureDetailSnapshot(sourceId);
         const sourceObservations = snapshot
           ? (await parseLiteratureDetail(snapshot.detail)).metadata_observations
           : [];
@@ -330,7 +350,11 @@ export class CitationDiscoveryService {
               )?.provenance.source_record_id ?? null,
             identifiers: source.metadata.identifiers,
           };
+          let complete = false;
+          let usableRelations = 0;
+          let incomplete = false;
           let stream: AsyncGenerator<MetadataScanEvent>;
+          state.attempted = true;
           try {
             stream = this.metadata.streamReferencesProvider(
               request.direction,
@@ -340,9 +364,11 @@ export class CitationDiscoveryService {
               request.signal,
             );
           } catch {
-            state.terminal = "FAILED";
-            state.failure = providerFailure(
-              "The citation provider could not complete expansion.",
+            recordCitationFailure(
+              state,
+              providerFailure(
+                "The citation provider could not complete expansion.",
+              ),
             );
             continue;
           }
@@ -350,9 +376,10 @@ export class CitationDiscoveryService {
             if (event.kind === "end") {
               if (event.outcome === "INTERRUPTED") interrupted = true;
               if (event.failure) {
-                state.failure ??= event.failure;
-                state.terminal = "FAILED";
+                recordCitationFailure(state, event.failure);
+                incomplete = true;
               }
+              complete = event.outcome === "EXHAUSTED";
               break;
             }
             state.raw_item_count += 1;
@@ -360,7 +387,10 @@ export class CitationDiscoveryService {
               interrupted = true;
               break;
             }
-            state.failure ??= event.failure;
+            if (event.failure) {
+              recordCitationFailure(state, event.failure);
+              incomplete = true;
+            }
             // Raw reference text about the anchor remains available even when no
             // related work can yet be identified.
             for (const observation of event.item.observations)
@@ -408,7 +438,16 @@ export class CitationDiscoveryService {
                     targetIdentifiers,
                   )
                 : [];
-              if (local.length > 1) continue;
+              if (local.length > 1) {
+                incomplete = true;
+                recordCitationFailure(
+                  state,
+                  providerFailure(
+                    "A citation target matched multiple local literatures.",
+                  ),
+                );
+                continue;
+              }
               let targetLiterature = local[0] ?? null;
               const inline = event.item.observations.filter((observation) =>
                 observationMatches(
@@ -428,53 +467,91 @@ export class CitationDiscoveryService {
                   );
               }
               if (!targetLiterature) {
-                if (
-                  state.terminal !== null ||
-                  state.raw_item_count >= state.scan_limit
-                )
-                  continue;
-                let lookup: MetadataProviderInvocation;
-                try {
-                  lookup = await this.metadata.lookupProvider(
-                    {
-                      provider_name: provider.provider_name,
-                      key: targetKey,
-                      scan_limit: 1,
-                    },
-                    request.signal,
+                // Native record IDs belong to the relation's provider. Only
+                // neutral identifiers can cross into a fallback provider.
+                const lookupProviders = [
+                  provider,
+                  ...request.providers.filter(
+                    (candidate) =>
+                      candidate.provider_name !== provider.provider_name,
+                  ),
+                ];
+                for (const candidate of lookupProviders) {
+                  if (request.signal?.aborted) {
+                    interrupted = true;
+                    break;
+                  }
+                  const lookupState = states.get(candidate.provider_name)!;
+                  if (
+                    lookupState.terminal !== null ||
+                    lookupState.raw_item_count >= lookupState.scan_limit
+                  )
+                    continue;
+                  const lookupKey =
+                    candidate === provider
+                      ? targetKey
+                      : { record_id: null, identifiers: targetKey.identifiers };
+                  if (!lookupKey.record_id && !lookupKey.identifiers.length)
+                    continue;
+                  let lookup: MetadataProviderInvocation;
+                  lookupState.attempted = true;
+                  try {
+                    lookup = await this.metadata.lookupProvider(
+                      {
+                        provider_name: candidate.provider_name,
+                        key: lookupKey,
+                        scan_limit: 1,
+                      },
+                      request.signal,
+                    );
+                  } catch {
+                    recordCitationFailure(
+                      lookupState,
+                      providerFailure(
+                        "The citation provider could not resolve a relation target.",
+                      ),
+                    );
+                    continue;
+                  }
+                  consumeCitationInvocation(lookupState, lookup);
+                  if (lookup.outcome === "INTERRUPTED") {
+                    interrupted = true;
+                    break;
+                  }
+                  const targetObservation = lookup.observations.find(
+                    (observation) =>
+                      observationMatches(
+                        observation,
+                        candidate.provider_name,
+                        lookupKey,
+                      ),
                   );
-                } catch {
-                  state.terminal = "FAILED";
-                  state.failure = providerFailure(
-                    "The citation provider could not resolve a relation target.",
+                  if (!targetObservation) continue;
+                  const decision =
+                    await this.identity.observe(targetObservation);
+                  if (
+                    decision.disposition !== "accepted" ||
+                    !decision.literature_id
+                  )
+                    continue;
+                  targetLiterature = await this.database.getLiterature(
+                    decision.literature_id,
                   );
-                  continue;
+                  if (targetLiterature) break;
                 }
-                if (lookup.outcome === "INTERRUPTED") {
-                  interrupted = true;
-                  break;
-                }
-                consumeCitationInvocation(state, lookup);
-                const targetObservation = lookup.observations.find(
-                  (observation) =>
-                    observationMatches(
-                      observation,
-                      provider.provider_name,
-                      targetKey,
-                    ),
-                );
-                if (!targetObservation) continue;
-                const decision = await this.identity.observe(targetObservation);
-                if (
-                  decision.disposition !== "accepted" ||
-                  !decision.literature_id
-                )
-                  continue;
-                targetLiterature = await this.database.getLiterature(
-                  decision.literature_id,
-                );
               }
-              if (!targetLiterature) continue;
+              if (interrupted) break;
+              if (!targetLiterature) {
+                incomplete = true;
+                if (state.raw_item_count < state.scan_limit)
+                  recordCitationFailure(
+                    state,
+                    providerFailure(
+                      "A citation target could not be identified within the selected sources and limits.",
+                    ),
+                  );
+                continue;
+              }
               const edgeSource = outgoing
                 ? sourceId
                 : targetLiterature.literature_id;
@@ -482,6 +559,7 @@ export class CitationDiscoveryService {
                 ? targetLiterature.literature_id
                 : sourceId;
               if (edgeSource === edgeTarget) continue;
+              usableRelations += 1;
               const edgeKey = `${edgeSource}\u0000${edgeTarget}`;
               const referenceId = randomUUID();
               await this.references.publishWithProviderObservation(
@@ -494,6 +572,7 @@ export class CitationDiscoveryService {
               );
               if (seenEdges.has(edgeKey)) continue;
               seenEdges.add(edgeKey);
+              if (seeds.includes(targetLiterature.literature_id)) continue;
               results.set(targetLiterature.meta_literature_id, {
                 meta_literature_id: targetLiterature.meta_literature_id,
               });
@@ -525,22 +604,28 @@ export class CitationDiscoveryService {
             )
               break;
           }
+          // Exhaust this source's pages first. Empty, partial or unresolved
+          // responses fall through; success short-circuits only this node.
+          if (complete && usableRelations > 0 && !incomplete) break;
         }
       }
     }
     if (request.signal?.aborted) interrupted = true;
     const sourceResults: Array<DiscoveryPublication["source_results"][number]> =
-      request.providers.map((provider) => {
-        const state = states.get(provider.provider_name)!;
-        return {
-          provider_name: provider.provider_name,
-          outcome: state.failure ? "FAILED" : (state.terminal ?? "EXHAUSTED"),
-          failure: state.failure,
-        };
-      });
+      request.providers
+        .filter((provider) => states.get(provider.provider_name)!.attempted)
+        .map((provider) => {
+          const state = states.get(provider.provider_name)!;
+          return {
+            provider_name: provider.provider_name,
+            outcome: state.failure ? "FAILED" : (state.terminal ?? "EXHAUSTED"),
+            failure: state.failure,
+          };
+        });
     const status: CitationDiscoveryReport["status"] = interrupted
       ? "INTERRUPTED"
-      : sourceResults.length === 0 ||
+      : sourceResults.length > 0 &&
+          results.size === 0 &&
           sourceResults.every((item) => item.outcome === "FAILED")
         ? "FAILED"
         : sourceResults.some((item) => item.outcome === "FAILED")

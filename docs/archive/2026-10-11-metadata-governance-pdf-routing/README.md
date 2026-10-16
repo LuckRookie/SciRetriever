@@ -8,7 +8,7 @@
 
 让已入库文献通过明确且可解释的路线获得 PDF：已有直链及稳定公开地址 → 出版社 API → 聚合/开放获取 API → 公共网站 → Browser。名称差异由规则和显式 AI 辅助维护处理，原始来源记录不被覆盖。Browser 在模型调用前完成程序可以确定的入口准备，同一篇文献不因换入口重置预算；操作空间充裕，重点控制时间和无进展循环。
 
-讨论材料归档到[原提案](../../archive/2026-10-11-metadata-governance-and-pdf-routing/proposal.md)。长期合同由 [ADR 0014](../../architecture/decisions/0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0015](../../architecture/decisions/0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0023](../../architecture/decisions/0023-generic-browser-agent-executor.md)及 requirements/design/technical 拥有；本计划不替代它们。
+讨论材料归档到[原提案](../2026-10-11-metadata-governance-and-pdf-routing/proposal.md)。长期合同由 [ADR 0014](../../architecture/decisions/0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0015](../../architecture/decisions/0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0023](../../architecture/decisions/0023-generic-browser-agent-executor.md)及 requirements/design/technical 拥有；本计划不替代它们。
 
 包含：
 
@@ -78,3 +78,5 @@ VITEST_MAX_FORKS=4 VITEST_MIN_FORKS=1 VITEST_MAX_THREADS=4 VITEST_MIN_THREADS=1 
 | 2026-10-11 | 提案获准进入计划和实施，建立四个按验收结果划分的块；以 ultra 并行执行、主 Agent 集成 |
 | 2026-10-11 | 四块实现、集中审查与 Full 验收完成；标记 Completed，线上效果与条件跳过单独说明 |
 | 2026-10-11 | 用户要求归档完成的提案、计划并提交；按元数据、Browser、PDF 获取与文档归档分块纳入 Git |
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

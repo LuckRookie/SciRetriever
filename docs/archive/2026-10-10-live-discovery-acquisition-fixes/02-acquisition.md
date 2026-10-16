@@ -16,4 +16,4 @@ Outcome：公开与授权链接语义正确；已启用 API 能消费可信目�
 
 退出条件：正式 Source/Entry 测试形成 PDF 发布，不只 client 返回字节。恢复时保持失败证据，不改个人凭据和配置；真实源拒绝保留为外部条件。
 
-执行证据：直接回归与真实复验见[修复验证记录](../../notes/live-discovery-acquisition-fixes-2026-10-10.md)。其中 runtime 配置是环境前提，仅完善诊断；RSC 限流与 Springer 登录页继续保留，不通过其它路线绕过。
+执行证据：直接回归与真实复验见修复验证记录（本地文件：`sandbox/reports/live-discovery-acquisition-fixes-2026-10-10.md`，不随仓库分发）。其中 runtime 配置是环境前提，仅完善诊断；RSC 限流与 Springer 登录页继续保留，不通过其它路线绕过。

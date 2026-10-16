@@ -50,6 +50,18 @@ function xmlFields(block: string): ReadonlyMap<string, string> {
       if (stack.length === 0 && scalar) {
         const value = xml.slice(textStart, tag.index).trim();
         const localName = name.split(":").at(-1)!.toLowerCase();
+        // Only these scalar fields identify the main PDF. Other repeated
+        // fields (for example storage replicas) do not conflict with that
+        // identity and must not make a valid attachment unusable.
+        if (
+          ![
+            "web-pdf-purpose",
+            "extension",
+            "filename",
+            "attachment-eid",
+          ].includes(localName)
+        )
+          continue;
         if (!value) continue;
         if (
           value.includes("<") ||
@@ -82,9 +94,9 @@ function elsevierMainObjects(bytes: Uint8Array): readonly string[] | null {
     throw new AuthorizedProviderError({ code: "response-schema" });
   if (!/<(?:[a-z][a-z0-9_.-]*:)?full-text-retrieval-response\b/iu.test(xml))
     return null;
-  const elementCount = [...xml.matchAll(/<[a-z][^!?/][^>]*>/giu)].length;
-  if (elementCount > 10_000)
-    throw new AuthorizedProviderError({ code: "response-schema" });
+  // The byte limit above bounds this scan. FULL includes the entire article;
+  // its body element count does not determine whether PDF attachment metadata
+  // is valid, especially for long reviews with many references.
   const result: string[] = [];
   for (const match of xml.matchAll(
     /<(?:[a-z][a-z0-9_.-]*:)?web-pdf(?:\s[^>]*?)?(?<!\/)>([\s\S]*?)<\/(?:[a-z][a-z0-9_.-]*:)?web-pdf>/giu,

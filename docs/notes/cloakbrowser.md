@@ -116,13 +116,7 @@ v0.5.8 wrapper 在 Linux 上默认追加 `--fingerprint-platform=windows`。READ
 因此显式使用固定 seed、`--fingerprint-platform=linux`、Profile 语言偏好、`--lang=en-US`、
 `timezone=UTC` 与 1920x1080 Xvfb，而不采用 wrapper 的随机 Windows persona。
 
-2026-08-22 的 CBA64 本地实际验收使用程序创建的临时 Profile 和 v146 binary，连续三次完整
-启动/关闭并证明：webdriver 为 false；UA/Client Hints/platform 为 Linux；plugins、完整 languages、
-screen/window、WebGL、四类字体、locale/timezone 在三次启动间稳定；带有效期的 Cookie、
-LocalStorage 与 IndexedDB 在第二、三次启动可见；不同新 Profile 的 seed 派生安全 hash 不同；
-Profile lease 排他、显式删除有效，结束后没有遗留 Chromium、Xvfb 或 Browser thread。测试只比较
-有界表面、布尔事实与 hash，不把 seed、Profile 路径或浏览数据写入仓库。旧 stock Profile 仍不能
-被当前 binary 静默打开、复制、降级或修改。
+旧 stock Profile 不能被当前 binary 静默打开、复制、降级或修改。历史身份稳定性检查见Browser 测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
 
 ## 6. Humanization 接缝
 
@@ -152,29 +146,7 @@ path、resource type、frame ancestry、article ownership 或 capture source。�
 `service_workers="block"`。普通页面脚本、fetch、iframe 与 challenge 资源仍走可路由的页面网络栈；
 不得把 CONNECT 写成能够检查 Service Worker 的 TLS 内部请求。
 
-实际 characterization 还发现：v146 在默认固定 Linux persona 下暴露 5 个正常 PDF plugin；向
-Profile 写入 `plugins.always_open_pdf_externally=true` 后该表面会降为 0，但 Chromium 会把顶层
-PDF 交给原生 download/response 事件。2026-08-22 的 Springer 真实回归证明，试图用
-`Route.fetch()/fulfill()` 在 Python 中代取顶层 PDF 会把 MIME 误标的 536-byte 非 PDF 当成候选；
-因此最终 Cloak runtime 原子写入 external-PDF preference，并删除该 workaround。普通顶层 PDF、
-服务器 attachment 和页面生成的本地 blob download 都只从 Chromium 原生事件捕获，继续经过
-query-free capture guard、请求/字节预算与文章清理，不由 Python 再发一条 PDF HTTP 请求。
-
-截至该日期，旧 Publisher-specific 执行器的离线 unit/实际 fixture 已证明固定 Linux persona、
-humanized click/Locator seam、共享 process/context、CONNECT、Cookie、redirect、iframe、JS fetch、
-popup、response、blob download、native PDF response、预算、timeout、取消和确定性清理。
-2026-08-22 的固定九家真实串行 A/B 又
-证明：stock 与 Cloak 各自只创建一个 process/context；Springer 两者都取得并验证 PDF；七家
-Cloudflare Publisher 两者都加载 17 个受限资源且本地阻断为 0；IOP 当前两者都未交付，Cloak 对
-未审核 PerfDrive 顶层导航 fail closed 而不破坏共享 runtime。Cloak 的可解释收益是 CBA64 已实测
-的固定 Linux 身份、`webdriver=false`、稳定 Browser surface 和本轮完整 challenge 资源加载，
-不是小样本下载成功率提升。runtime cutover、最终 Full 和使用同一构建产物的 fresh-wheel
-R1-R8 已完成；九家逐家复核将当时的工程规则状态与服务器现场结果分开记录。SpringerLink 的
-最终现场准入为 `ready`；ACS、AIP、Elsevier、IOP、Oxford、RSC、Science 和 Wiley 为
-`deferred`。这些状态只描述旧执行器的固定样本，不是当前 `browser:generic` 的 route、页面策略
-或成功率证据。当前通用执行器仍复用这里已经证明的 CloakBrowser runtime 基础，但由 Agent 选择
-封闭动作，并由 Acquisition 独立验证 PDF 与目标文章归属。逐家历史依据见
-[Publisher 访问矩阵](providers/publisher-access-matrix.md)。
+Chromium 的 `plugins.always_open_pdf_externally=true` 会影响 PDF plugin 展示并将顶层 PDF 交给原生下载事件。顶层 PDF、attachment 与 blob 应沿 Chromium 原生 response/download 事件捕获，不另发代取请求。历史复验见Browser 测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
 
 CloakBrowser 降低自动化表面，但它不保证 Cloudflare 自动完成，也不改变文章 entitlement。
 

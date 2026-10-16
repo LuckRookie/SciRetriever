@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import { parseAsset, parseLiteratureAssetView } from "../src/index.js";
+import {
+  parseAsset,
+  parseCandidatePublicationIntent,
+  parseLiteratureAssetView,
+} from "../src/index.js";
 
 const fixture = JSON.parse(
   readFileSync(
@@ -20,6 +24,45 @@ const view = {
     source_url: null,
   },
 };
+it("accepts classified and legacy PDF publication paths without admitting other namespaces", () => {
+  const intent = {
+    receipt_id: "fixture-receipt",
+    metadata_snapshot: { revision: 1, sha256: asset.sha256 },
+    candidate: {
+      transfer_id: "fixture-transfer",
+      state: "durable-ready",
+      sha256: asset.sha256,
+      size_bytes: asset.size_bytes,
+      reference: `.candidates/${asset.sha256}.bin`,
+      capture: null,
+      source_name: "fixture",
+      source_record_id: null,
+    },
+    literature_id: view.literature_asset.literature_id,
+    asset_id: asset.asset_id,
+    literature_asset_id: view.literature_asset.literature_asset_id,
+    provenance: fixture.provenance,
+    source_url: null,
+    identity: "unverified",
+  };
+  for (const target of [
+    "objects/legacy.pdf",
+    `originals/pdf/${asset.sha256.slice(0, 2)}/${asset.sha256}.pdf`,
+  ])
+    expect(parseCandidatePublicationIntent({ ...intent, target }).target).toBe(
+      target,
+    );
+  for (const target of [
+    ".staging/unpublished.pdf",
+    intent.candidate.reference,
+    "knowledge/summaries/not-an-original.pdf",
+    "originals/pdf/../../../config.toml",
+    "/originals/pdf/absolute.pdf",
+  ])
+    expect(() =>
+      parseCandidatePublicationIntent({ ...intent, target }),
+    ).toThrow();
+});
 it("reads legacy PDF views as unverified without asserting article identity", () => {
   const parsed = parseLiteratureAssetView(view);
   expect(parsed.article_identity_status).toBe("unverified");

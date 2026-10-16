@@ -1,3 +1,7 @@
+import {
+  latestBrowserObservationMessage,
+  browserModelToolCallId,
+} from "./browser-model-fixture.js";
 import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
@@ -224,7 +228,7 @@ async function installedBrowserJourney(
             const wire = JSON.parse(new TextDecoder().decode(body)) as {
               messages: { content: { type: string; text?: string }[] }[];
             };
-            const parts = wire.messages[1]!.content.filter(
+            const parts = latestBrowserObservationMessage(wire).content.filter(
               (part) => part.type === "text",
             );
             const observation = JSON.parse(parts[0]!.text!) as Pick<
@@ -264,6 +268,8 @@ async function installedBrowserJourney(
                       message: {
                         tool_calls: [
                           {
+                            id: browserModelToolCallId(),
+                            type: "function",
                             function: {
                               name: "browser_action",
                               arguments: JSON.stringify({ action }),
@@ -291,11 +297,9 @@ async function installedBrowserJourney(
     const errors: string[] = [];
     ui.on("pageerror", (error) => errors.push(error.message));
     await ui.goto(`${origin}/?workspace=browser`);
-    await ui.waitForFunction(() => {
-      const button =
-        document.querySelector<HTMLButtonElement>("#acquisition-start");
-      return button && !button.disabled;
-    });
+    await expect
+      .poll(() => ui.locator("#browser-sessions").textContent())
+      .toContain("没有正在使用的会话");
     const landing = await fetch(origin);
     const cookie = landing.headers.get("set-cookie")?.split(";")[0];
     expect(cookie).toBeTruthy();
@@ -363,7 +367,15 @@ async function installedBrowserJourney(
     const before = await view();
     expect(before.observation).toBeNull();
     expect(modelCalls).toBe(0);
-    await ui.locator("#acquisition-start").click();
+    expect(
+      (
+        await post(
+          "/api/acquisition/start",
+          { article_id: literatureId },
+          controller,
+        )
+      ).status,
+    ).toBe(202);
     await vi.waitFor(
       async () => {
         expect(modelCalls).toBe(1);
@@ -505,13 +517,12 @@ async function installedBrowserJourney(
     );
     expect(artifact.status).toBe(200);
     expect(sha256(Buffer.from(await artifact.arrayBuffer()))).toBe(hash);
-    await ui.waitForFunction(
-      () =>
-        !document.querySelector<HTMLButtonElement>("#operation-read")?.disabled,
-    );
-    await ui.locator("#operation-read").click();
+    await ui.locator('[data-go="lib"]').click();
+    await ui.locator(`[data-id="${literatureId}"]`).click();
     await expect.poll(() => ui.url()).toContain(`literature=${literatureId}`);
-    expect(new URL(ui.url()).searchParams.get("workspace")).toBe("library");
+    await expect
+      .poll(() => ui.locator("#reader-info").textContent())
+      .toContain("文章身份未验证");
     expect(errors).toEqual([]);
     return hash;
   } finally {
@@ -818,9 +829,10 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
 
     const owner = new server.TypeScriptConfigurationOwner(home);
     await owner.publish(
-      '[providers.fixture]\napi = "openai-chat-completions"\nbase_url = "http://127.0.0.1:9/v1"\n[models."fixture/installed-model"]\nimage = true\nstream = false\n[analyze]\nmodel = "fixture/installed-model"\n[browser]\nenabled = true\nmodel = "fixture/installed-model"\nprofile = "synthetic"\n[sources.acquisition]\nmode = "custom"\nproviders = []\n',
+      `[paths]\ncatalog_path=${JSON.stringify(catalog)}\nartifact_root=${JSON.stringify(join(home, "artifacts"))}\n` +
+        '[providers.fixture]\napi = "openai-chat-completions"\nbase_url = "http://127.0.0.1:9/v1"\n[models."fixture/installed-model"]\nimage = true\nstream = false\n[analyze]\nmodel = "fixture/installed-model"\n[browser]\nenabled = true\nmodel = "fixture/installed-model"\nprofile = "synthetic"\n[sources.acquisition]\nmode = "custom"\nproviders = []\n',
       "missing",
-      ["providers", "models", "analyze", "browser", "sources"],
+      ["paths", "providers", "models", "analyze", "browser", "sources"],
     );
     const browserHash = await installedBrowserJourney(
       server,
@@ -880,12 +892,6 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
                           comparison_basis: null,
                         },
                         evidence_segment_ids: [segment.segment_id],
-                        ...(input.core
-                          ? {
-                              evidence_quotes: ["4.2 eV"],
-                              evidence_regions: ["core"],
-                            }
-                          : {}),
                       },
                     ],
                   }

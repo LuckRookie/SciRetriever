@@ -45,7 +45,7 @@ Configuration 边界管理。普通配置继续跟随当前目录既没有项目
 裸 `sciretriever config` 始终显示并管理固定普通配置文件；目标不存在时，首页仍可打开，首次
 确认的配置修改在固定位置创建目录和文件。仅仅查看或退出配置中心不产生空文件。
 
-CLI 是推荐管理入口，但不是私有格式：用户可以直接创建或编辑同一个 UTF-8 TOML 文件。普通
+Web 是面向人的日常管理入口，CLI 配置中心继续保留；用户也可以直接创建或编辑同一个 UTF-8 TOML 文件。普通
 配置仍只保存非 secret 设置，并继续严格拒绝未知 section、字段和不一致值；文献 Provider、
 Model Provider、远程 MinerU secret 继续只进入独立的 `credentials.toml`。两个文件同目录不改变各自 schema、
 所有权或显示边界。
@@ -73,6 +73,16 @@ Profile 共处的目录具有单一、可审计的安全合同。
 用户主目录。迁移说明属于 README/配置手册；程序不保存“已迁移”状态或旧路径。
 
 ## 结果
+
+### 2026-10-14 补充：Web 默认存储与首次启动
+
+按项目 owner 确认，正式 Web 无需首次配置向导。Configuration owner 在 Web 启动时把缺失的 `paths.catalog_path`、`paths.artifact_root` 分别保存为固定用户目录下的 `~/.sciretriever/catalog.sqlite` 和 `~/.sciretriever/artifacts/`；已有值及其它配置保留，继续采用 revision CAS 与原子发布。保存后的配置由 Web、CLI、MCP 共享，不建立 Web 专用的数据库身份。
+
+Web bootstrap 仅对目标不存在的情况调用 Storage create-if-absent 初始化，使用当前完整 schema；自定义目标的父目录须已存在。已有库仍由原有准入门校验，不自动升级、覆盖或搬迁。修改配置路径在重启后生效，不复制旧库或资产；配置损坏时不会回退到默认库。只读查询及单纯查看配置继续不执行数据库初始化。
+
+这项补充授权正式 Web 首次启动创建默认配置与空库，不改变固定配置文件身份、凭据规则或旧配置的显式迁移边界。
+
+### 决策效果
 
 - 用户从任意目录运行 SciRetriever 都获得同一数据库、Provider、Models、MinerU 和 Browser
   配置，配置中心无需解释路径优先级；

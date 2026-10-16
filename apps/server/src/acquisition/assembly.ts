@@ -191,8 +191,8 @@ class BrowserAcquisitionSource implements AcquisitionSourcePort {
  * source. Entry's locator split must nevertheless preserve the unresolved state: if it
  * dropped the status, a target with a selected-but-unconfigured route could be reported
  * as normally exhausted and acquire a durable `needs_manual_pdf` fact. This marker is
- * therefore a non-retryable route failure, never a candidate and never a Browser-rescue
- * declaration.
+ * therefore a non-retryable route failure, never a candidate or an exhaustion fact.
+ * Independent sources, including an enabled Browser, may still deliver.
  */
 class UnavailableAcquisitionSource implements AcquisitionSourcePort {
   readonly ready = false;
@@ -360,6 +360,8 @@ function unpaywallTransport(
         throw new AcquisitionRouteError(
           "rate-limited",
           `Unpaywall HTTP returned ${response.status} with a rate limit or Retry-After.${retryHint}`,
+          true,
+          { retry_after_ms: response.retry_after_ms },
         );
       if ([204, 404, 410].includes(response.status))
         throw new AcquisitionUnavailableError(
@@ -372,14 +374,18 @@ function unpaywallTransport(
           "http-response-failed",
           `Unpaywall HTTP returned ${response.status}; no location lookup was delivered.`,
           ![401, 403].includes(response.status),
-          { allows_independent_fallback: response.status >= 500 },
         );
       try {
         return JSON.parse(
           new TextDecoder("utf-8", { fatal: true }).decode(response.body),
         ) as unknown;
-      } catch {
-        throw new Error("acquisition source response is invalid");
+      } catch (error) {
+        throw new AcquisitionRouteError(
+          "source-discovery-failed",
+          "Unpaywall returned an invalid JSON response.",
+          false,
+          { cause: error },
+        );
       }
     },
   };

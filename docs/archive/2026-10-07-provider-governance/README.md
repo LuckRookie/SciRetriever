@@ -32,3 +32,5 @@
 审查记录：第一次 Full 因发现通用连接池和真实供应商额度组的退避范围必须分开而主动中断（130）；补上显式 `retryAfterScope` 和跨 host 隔离回归后重新启动最终 Full，旧日志不能计为通过。
 
 最终交接：本轮没有新增依赖、用户配置字段、schema 或迁移，没有真实 Provider 调用、个人配置/凭据写入或 Git 写操作。明确未覆盖供应商账户专有 quota/reset 全量解析及 Browser 子资源级服务政策，现有通用 Browser 平台节奏保持；当前实现与边界见[供应商治理](../../development/provider-governance.md)。
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

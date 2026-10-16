@@ -220,3 +220,5 @@ readiness/settle 是 Network 的同一内部生命周期，不新增第二套 Ag
 - 真实证据：一家 Publisher 完成多轮模型调用和 Browser action 后以已证明的 no-progress 正常结束；另一家完成两次模型调用与一次已 dispatch action，随后规则外顶层跳转被 destination policy 正确阻止。两者均无旧 `browser-control-vendor-failed`/generic settle runtime failure，无 PDF 或附加资产变化，并完成 cleanup。
 - 边界：没有新增公开配置、Catalog/资产 schema、依赖、站点 selector/等待或持久化 Agent 状态；真实日志和快照只保留在系统临时目录，未进入工作树。
 - 归档：`docs/archive/2026-09-03-browser-observation-readiness/`；本记录不再作为活动执行入口。
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

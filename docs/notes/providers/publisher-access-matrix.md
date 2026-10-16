@@ -96,43 +96,13 @@ AssetHint 或 DOI safe resolve 形成文章起点，Network 负责通用准入�
 | `wiley-online-library` | Wiley Online Library TDM API v1 / article platform | 无专属 public route；已有公开 hint 仍由通用 Public Source 消费 | `api:wiley-tdm-v1` | `browser:wiley-online-library` / `wiley-online-library-pdf@3`；以强 DOI/Wiley landing 或 `advanced.onlinelibrary.wiley.com` 第一跳识别正文并排除 supplement/错文 | API 使用 `wiley/api` quota scope；Browser 使用共享 persistent Profile/context 中的 `wiley` lane，同组串行，审慎最小启动间隔 20s | `wiley-api-persistent-browser-pdf-v3-2026-08-21`；2026-08-19 | `production-ready` | API 与 Browser 的离线合同分别闭环；不把 ScanSci/CARSI 历史运行或一次 API 探测扩展为当前 IP、Profile 已登录、机构协议或长期 entitlement |
 | `world-scientific` | World Scientific journals platform | 无专属 route；明确 World Scientific PDF/landing hint 仍由通用 Public Source 验证 | `unsupported`；robots 允许 `showXml` 不构成主 PDF API | `unsupported`；无 executable rule | robots `Crawl-delay: 1` 只是 crawler policy，不是 Browser 许可或账号风险策略；无 group/session | `world-scientific-automated-access-unsupported-2026-08-15`；2026-08-15 | `unsupported` | 条款当前匿名 403；缺页面状态和正文/supplement/reader 归属；不复制机构链、Terms 点击、持久认证或 viewer-capture success |
 
-2026-08-16 经用户明确授权的 SpringerLink 首页 probe 只证明当时的正式 Chromium 可以启动并
-到达 Link/IDP；首页无法判断机构 IP。2026-08-18 后续四个脱敏文章样本均形成非超时终态：三个
-normal miss，一个通过当时机构网段交付 primary PDF；同进程双样本还证明 operation-local session
-可复用。当前 probe 合同不再观察或报告个人登录，只报告 runtime/目标可达，并固定
-`article_entitlement=not-proven`。历史结果没有被扩写成 Nature、其它 Springer Nature 平台、
-当前 IP、任意 DOI 的 entitlement 或长期下载成功率。
-
 因此当前验证矩阵有 23 项，production profile catalog 有 10 项。CORE、Elsevier 与 Wiley 实现
 授权 API route；九个 Profile 另外启用了 reachability-only Browser probe。生产 Browser 下载只有
 `browser:generic`，不会从 Profile 派生九条 route。相似平台、共享 CDN、上游成功记录、OA 属性、
 crawler delay、XML 交付或人工单篇访问都不会自动形成授权 API、文章归属证据或生产授权。后续
 访问方只有在各自 Notes、manifest/fixture 和状态结论闭环后才加入本表。
 
-### 4.1 历史现场结果与当前通用执行器
-
-下面是 2026-08-22 旧规则执行器在同一服务器出口、隔离测试 Profile 和固定代表样本上的历史
-结果。`ready` 只表示该样本当时捕获并验证了正文 PDF，`deferred` 表示旧执行器没有在有界流程中
-交付，`unsupported` 表示当时没有规则。这些结果不再决定当前通用下载准入，也不能被解释成其它
-网络、Profile、文章或当前 Agent 必然成功或失败。
-
-| Publisher（Access key） | 工程状态 | 2026-08-22 最终现场准入 | Cloak 证据与边界 |
-| --- | --- | --- | --- |
-| ACS Publications（`acs-publications`） | `production-ready` | `deferred` | 17 个受限 Cloudflare 资源加载、0 个本地阻断；有界自动 settle 超时，未捕获 PDF，不点击验证控件 |
-| AIP Publishing（`aip-publishing`） | `production-ready` | `deferred` | 17 个受限 Cloudflare 资源加载、0 个本地阻断；有界自动 settle 超时，未捕获 PDF，不点击验证控件 |
-| Elsevier / ScienceDirect（`elsevier-sciencedirect`） | `production-ready` | `deferred` | 17 个受限 Cloudflare 资源加载、0 个本地阻断；同文章绑定保持成立，但有界自动 settle 超时；该结论不影响独立授权 API route |
-| IOPscience（`iopscience`） | `production-ready` | `deferred` | 顶层流程转向未审查的 PerfDrive 验证 origin，Network 正确 fail closed；未捕获 PDF，共享 runtime 未被误退役 |
-| Oxford Academic（`oxford-academic`） | `production-ready` | `deferred` | 17 个受限 Cloudflare 资源加载、0 个本地阻断；有界自动 settle 超时，未捕获 PDF，不点击验证控件 |
-| RSC Publishing（`rsc-publishing`） | `production-ready` | `deferred` | 17 个受限 Cloudflare 资源加载、0 个本地阻断；有界自动 settle 超时，未捕获 PDF，不点击验证控件 |
-| Science / AAAS（`science-aaas`） | `production-ready` | `deferred` | 17 个受限 Cloudflare 资源加载、0 个本地阻断；有界自动 settle 超时，未捕获 PDF，不点击验证控件 |
-| Springer Nature Link（`springerlink`） | `production-ready` | `ready` | Cloak 原生 response/download 捕获目标正文 PDF，并通过 magic、EOF、标准 reader、页面树和大小预算；只证明该代表样本且不外推 entitlement |
-| Wiley Online Library（`wiley-online-library`） | `production-ready` | `deferred` | 17 个受限 Cloudflare 资源加载、0 个本地阻断；有界自动 settle 超时，未捕获 PDF；该结论不影响独立 TDM API route |
-
-stock 结果只是在旧 CloakBrowser cutover 前使用的同轮基线：它同样只在 SpringerLink 成功，并在七家
-Cloudflare 平台形成相同 settle timeout；IOP 也未交付。最终产品不存在 stock launcher 或双引擎
-开关，以上现场准入、后续运行和配置状态都只对应唯一 CloakBrowser 生产 runtime。这个小样本
-证明的是当时已知 Springer 成功链无回归、Cloudflare 资源未被本地策略误拦，以及未知 PerfDrive
-导航继续 fail closed；它没有证明当前通用 Agent 的总体下载成功率。
+历史运行结果见Browser 切换测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发），不作为当前 Profile 或通用 Agent 的长期成功率。
 
 ## 5. 离线验收边界
 
@@ -144,8 +114,4 @@ Cloudflare 平台形成相同 settle timeout；IOP 也未交付。最终产品�
 - 证明通用 route 不由 Publisher profile 派生，并证明总开关关闭或 Model/Profile/runtime 未就绪时不会构造可执行 Browser adapter。
 
 这些测试不连接真实 Provider，也不读取真实用户 Browser Profile、Cookie、凭据或登录状态；测试
-Profile 只创建在系统临时目录中。它们不证明站点长期稳定、用户权限或下载成功率。真实只读核实
-只能按[受控 Browser 现场核实门](browser-live-verification/README.md)为一个明确 access key 建立
-核实单并取得用户另行授权；probe 使用普通配置选中的固定身份 Profile 和当前机器正常网络出口，
-但不执行登录或检查认证。需要登录、机构选择、MFA 或人工 challenge 的样本不属于第一版自动
-Browser 核实范围。结果必须脱敏并单独更新对应 Provider Notes、evidence revision 和状态。
+Profile 只创建在系统临时目录中。它们不证明站点长期稳定、用户权限或下载成功率。真实测试遵循当前用户授权与 [HARNESS](../../../HARNESS.md)。历史 Browser 核实步骤保存在本机 `sandbox/cases/browser/`，不随仓库分发，也不构成当前公共验收的前置文件。用例、运行材料与报告的存放约定见[测试目录说明](../../../tests/README.md)。

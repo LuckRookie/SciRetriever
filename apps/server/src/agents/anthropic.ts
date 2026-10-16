@@ -1,4 +1,11 @@
 import {
+  modelRequestFromAgentCall,
+  validateModelRequest,
+  type ModelRequest,
+  type ModelResponse,
+  type ModelToolCall,
+} from "./model-protocol.js";
+import {
   AgentFailure,
   type AgentAdapter,
   type AgentCall,
@@ -9,10 +16,12 @@ import {
 import {
   post,
   parseJson,
-  requestBody,
-  resultText,
+  modelRequestBody,
+  modelResponse,
+  modelToolCall,
+  projectAgentResult,
+  validateModelContinuations,
   sseEvents,
-  toolResult,
   usage,
   type AdapterConfig,
 } from "./common.js";
@@ -42,7 +51,35 @@ export class AnthropicMessagesAdapter implements AgentAdapter {
     signal?: AbortSignal,
     lifecycle?: AgentCallLifecycle,
   ): Promise<AgentResult> {
-    const request = requestBody(call, "anthropic");
+    return projectAgentResult(
+      call,
+      await this.runModel(
+        modelRequestFromAgentCall(call),
+        options,
+        signal,
+        lifecycle,
+        true,
+      ),
+    );
+  }
+  async executeModel(
+    request: ModelRequest,
+    options: { readonly reasoning: ReasoningEffort; readonly stream: boolean },
+    signal?: AbortSignal,
+    lifecycle?: AgentCallLifecycle,
+  ): Promise<ModelResponse> {
+    validateModelRequest(request);
+    return this.runModel(request, options, signal, lifecycle, false);
+  }
+  private async runModel(
+    call: ModelRequest,
+    options: { readonly reasoning: ReasoningEffort; readonly stream: boolean },
+    signal: AbortSignal | undefined,
+    lifecycle: AgentCallLifecycle | undefined,
+    legacy: boolean,
+  ): Promise<ModelResponse> {
+    validateModelContinuations(call, this.provider, this.model, "anthropic");
+    const request = modelRequestBody(call, "anthropic");
     const body = {
       ...request,
       model: this.model,
@@ -66,11 +103,20 @@ export class AnthropicMessagesAdapter implements AgentAdapter {
       lifecycle,
     );
     let text = "";
-    let toolName: string | undefined;
-    let argumentsText = "";
+    const calls: ModelToolCall[] = [];
+    const orderedBlocks: Record<string, unknown>[] = [];
+    const acceptThinking = (block: Record<string, unknown>): void => {
+      if (
+        block.type === "thinking"
+          ? typeof block.thinking !== "string" ||
+            typeof block.signature !== "string" ||
+            !block.signature
+          : block.type !== "redacted_thinking" || typeof block.data !== "string"
+      )
+        throw new AgentFailure("agent-protocol");
+    };
     let tokenUsage: { input_tokens: number; output_tokens: number };
     let stopReason: string | undefined;
-    let textBlockSeen = false;
     if (!options.stream) {
       const value = parseJson(response);
       if (
@@ -85,25 +131,32 @@ export class AnthropicMessagesAdapter implements AgentAdapter {
       stopReason = value.stop_reason;
       for (const block of value.content) {
         const item = record(block);
-        if (item.type === "text") {
-          if (toolName !== undefined) throw new AgentFailure("agent-tool");
-          textBlockSeen = true;
-          text += textValue(item.text);
-        } else if (item.type === "tool_use") {
-          if (toolName !== undefined || textBlockSeen)
-            throw new AgentFailure("agent-tool");
-          toolName = textValue(item.name);
+        if (item.type === "text") text += textValue(item.text);
+        else if (item.type === "tool_use") {
           if (
-            item.input === null ||
+            !item.input ||
             typeof item.input !== "object" ||
             Array.isArray(item.input)
           )
             throw new AgentFailure("agent-tool");
-          argumentsText = JSON.stringify(item.input);
-        } else throw new AgentFailure("agent-protocol");
+          calls.push(
+            modelToolCall(
+              call,
+              item.id,
+              textValue(item.name),
+              JSON.stringify(item.input),
+              calls.length,
+              legacy,
+            ),
+          );
+        } else if (
+          item.type === "thinking" ||
+          item.type === "redacted_thinking"
+        )
+          acceptThinking(item);
+        else throw new AgentFailure("agent-protocol");
+        orderedBlocks.push(item);
       }
-      if (toolName !== undefined && stopReason !== "tool_use")
-        throw new AgentFailure("agent-tool");
       tokenUsage = usage({
         input_tokens: record(value.usage).input_tokens,
         output_tokens: record(value.usage).output_tokens,
@@ -112,17 +165,27 @@ export class AnthropicMessagesAdapter implements AgentAdapter {
       let started = false;
       let stopped = false;
       let messageDeltaSeen = false;
-      let activeIndex: number | undefined;
-      let activeBlock = false;
       let indexedStream: boolean | undefined;
-      let streamTextBlockSeen = false;
-      const stoppedIndexes = new Set<number>();
-      let inputTokens = 0;
-      let outputTokens = 0;
+      let blockCount = 0;
+      let active:
+        | {
+            index?: number;
+            type: "text" | "tool_use" | "thinking" | "redacted_thinking";
+            wire: Record<string, unknown>;
+            id?: unknown;
+            name: string;
+            arguments: string;
+            initialInput?: Record<string, unknown>;
+          }
+        | undefined;
+      let inputTokens: unknown;
+      let outputTokens: unknown;
       for (const event of sseEvents(response, false)) {
         const type = event.type;
+        if (stopped && type !== "ping")
+          throw new AgentFailure("agent-protocol");
         if (type === "message_start") {
-          if (started || stopped) throw new AgentFailure("agent-protocol");
+          if (started) throw new AgentFailure("agent-protocol");
           const message = record(event.message);
           if (
             (message.model !== undefined && message.model !== this.model) ||
@@ -130,70 +193,116 @@ export class AnthropicMessagesAdapter implements AgentAdapter {
           )
             throw new AgentFailure("agent-model-mismatch");
           started = true;
-          inputTokens = record(message.usage).input_tokens as number;
+          inputTokens = record(message.usage).input_tokens;
         } else if (type === "content_block_start") {
-          if (!started || messageDeltaSeen || activeBlock)
+          if (!started || messageDeltaSeen || active)
             throw new AgentFailure("agent-protocol");
           if (event.index === undefined) {
-            indexedStream = indexedStream ?? false;
+            indexedStream ??= false;
             if (indexedStream) throw new AgentFailure("agent-protocol");
-            activeIndex = undefined;
           } else {
-            indexedStream = indexedStream ?? true;
+            indexedStream ??= true;
             if (
               !indexedStream ||
               !Number.isSafeInteger(event.index) ||
-              event.index !== stoppedIndexes.size
+              event.index !== blockCount
             )
               throw new AgentFailure("agent-protocol");
-            activeIndex = event.index as number;
-            if (stoppedIndexes.has(activeIndex))
-              throw new AgentFailure("agent-protocol");
           }
-          activeBlock = true;
           const block = record(event.content_block);
-          if (block?.type === "tool_use") {
-            if (toolName !== undefined || streamTextBlockSeen)
-              throw new AgentFailure("agent-tool");
-            toolName = textValue(block.name);
-          } else if (block?.type === "text") streamTextBlockSeen = true;
-          else throw new AgentFailure("agent-protocol");
+          if (
+            block.type !== "text" &&
+            block.type !== "tool_use" &&
+            block.type !== "thinking" &&
+            block.type !== "redacted_thinking"
+          )
+            throw new AgentFailure("agent-protocol");
+          active = {
+            ...(event.index !== undefined
+              ? { index: event.index as number }
+              : {}),
+            type: block.type,
+            wire: { ...block },
+            name: block.type === "tool_use" ? textValue(block.name) : "",
+            arguments: "",
+            ...(block.type === "tool_use"
+              ? {
+                  id: block.id,
+                  ...(block.input !== undefined
+                    ? { initialInput: record(block.input) }
+                    : {}),
+                }
+              : {}),
+          };
+          if (block.type === "text" && block.text !== undefined)
+            text += textValue(block.text);
         } else if (type === "content_block_delta") {
-          if (!activeBlock || (indexedStream && event.index !== activeIndex))
+          if (!active || (indexedStream && event.index !== active.index))
             throw new AgentFailure("agent-protocol");
           const delta = record(event.delta);
-          if (delta?.type === "text_delta") text += textValue(delta.text);
-          else if (delta?.type === "input_json_delta")
-            argumentsText += textValue(delta.partial_json);
+          if (delta.type === "text_delta" && active.type === "text") {
+            text += textValue(delta.text);
+            active.wire.text =
+              textValue(active.wire.text ?? "") + textValue(delta.text);
+          } else if (
+            delta.type === "input_json_delta" &&
+            active.type === "tool_use"
+          )
+            active.arguments += textValue(delta.partial_json);
+          else if (
+            delta.type === "thinking_delta" &&
+            active.type === "thinking"
+          )
+            active.wire.thinking =
+              textValue(active.wire.thinking ?? "") + textValue(delta.thinking);
+          else if (
+            delta.type === "signature_delta" &&
+            active.type === "thinking"
+          )
+            active.wire.signature =
+              textValue(active.wire.signature ?? "") +
+              textValue(delta.signature);
           else throw new AgentFailure("agent-protocol");
         } else if (type === "content_block_stop") {
-          if (!activeBlock || (indexedStream && event.index !== activeIndex))
+          if (!active || (indexedStream && event.index !== active.index))
             throw new AgentFailure("agent-protocol");
-          if (activeIndex !== undefined) stoppedIndexes.add(activeIndex);
-          activeIndex = undefined;
-          activeBlock = false;
+          if (active.type === "tool_use")
+            calls.push(
+              modelToolCall(
+                call,
+                active.id,
+                active.name,
+                active.arguments || JSON.stringify(active.initialInput ?? {}),
+                calls.length,
+                legacy,
+              ),
+            );
+          if (active.type === "thinking" || active.type === "redacted_thinking")
+            acceptThinking(active.wire);
+          if (active.type === "tool_use")
+            active.wire.input = calls.at(-1)?.arguments;
+          orderedBlocks.push(active.wire);
+          active = undefined;
+          blockCount++;
         } else if (type === "message_delta") {
-          if (!started || activeBlock || messageDeltaSeen || stopped)
+          if (!started || active || messageDeltaSeen)
             throw new AgentFailure("agent-protocol");
-          const deltaUsage = record(event.usage);
-          outputTokens = deltaUsage.output_tokens as number;
-          const delta = record(event.delta);
-          stopReason = textValue(delta.stop_reason);
+          outputTokens = record(event.usage).output_tokens;
+          stopReason = textValue(record(event.delta).stop_reason);
           messageDeltaSeen = true;
         } else if (type === "message_stop") {
-          if (!started || !messageDeltaSeen || activeBlock || stopped)
+          if (!started || !messageDeltaSeen || active)
             throw new AgentFailure("agent-protocol");
           stopped = true;
         } else if (type === "error")
           throw new AgentFailure("agent-remote", true);
-        else if (type !== "content_block_stop" && type !== "ping")
-          throw new AgentFailure("agent-protocol");
+        else if (type !== "ping") throw new AgentFailure("agent-protocol");
       }
       if (
         !started ||
         !stopped ||
         !messageDeltaSeen ||
-        activeIndex !== undefined ||
+        active ||
         !Number.isSafeInteger(inputTokens) ||
         !Number.isSafeInteger(outputTokens)
       )
@@ -203,31 +312,30 @@ export class AnthropicMessagesAdapter implements AgentAdapter {
         output_tokens: outputTokens,
       });
     }
-    if (toolName !== undefined && stopReason !== "tool_use")
+    if (stopReason === "max_tokens") throw new AgentFailure("agent-truncated");
+    if (stopReason === "refusal") throw new AgentFailure("agent-refusal");
+    if (calls.length && stopReason !== "tool_use")
       throw new AgentFailure("agent-tool");
-    if (toolName === undefined && stopReason === "max_tokens")
-      throw new AgentFailure("agent-truncated");
     if (
-      toolName === undefined &&
+      !calls.length &&
       stopReason !== "end_turn" &&
       stopReason !== "stop_sequence"
     )
       throw new AgentFailure("agent-protocol");
-    if (toolName !== undefined)
-      return toolResult(
-        this.provider,
-        this.model,
-        toolName,
-        argumentsText,
-        tokenUsage,
-        call.tools?.find((tool) => tool.name === toolName)?.parameters,
-      );
-    return resultText(
+    return modelResponse(
       this.provider,
       this.model,
       text,
+      calls,
       tokenUsage,
-      call.response_schema,
+      orderedBlocks.length
+        ? {
+            provider: this.provider,
+            model: this.model,
+            format: "anthropic",
+            opaque: { blocks: orderedBlocks },
+          }
+        : undefined,
     );
   }
 }

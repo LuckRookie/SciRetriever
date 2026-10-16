@@ -6,6 +6,7 @@ import type {
 import { BrowserDownloadResources } from "../src/browser/resources.js";
 import { BrowserTransferDispatcher } from "../src/browser/transfers.js";
 import type { CandidateCapture } from "@sciretriever/contracts";
+import { createLogger } from "../src/logging/index.js";
 
 function deferred() {
   let resolve!: () => void;
@@ -59,6 +60,129 @@ function native() {
   return { completed, retired, cancel, download };
 }
 afterEach(() => vi.useRealTimers());
+
+it.each(["native-download", "response-stream"] as const)(
+  "separates observed network and Intake time without logging locators (%s)",
+  async (mode) => {
+    const lines: string[] = [];
+    let clock = 0;
+    const time = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const reading = deferred(),
+      checked = deferred();
+    const n = native();
+    const failed = vi.fn();
+    const dispatcher = new BrowserTransferDispatcher(
+      {
+        captureContext: capture,
+        failed,
+        receive: async (input) => {
+          for await (const chunk of input.chunks)
+            expect(chunk.length).toBeGreaterThan(0);
+          reading.resolve();
+          await checked.promise;
+        },
+      },
+      {},
+      createLogger("browser-transfer", (line) => lines.push(line)),
+    );
+    let response: Promise<void> | undefined;
+    try {
+      if (mode === "native-download") {
+        dispatcher.nativeDownload(
+          n.download,
+          async () => n.retired.resolve(),
+          "/tmp/sciretriever-timing",
+        );
+        clock = 100;
+        dispatcher.nativeProgress({
+          guid: n.download.guid,
+          received_bytes: 1,
+          total_bytes: 3,
+          state: "inProgress",
+        });
+        clock = 200;
+        dispatcher.nativeProgress({
+          guid: n.download.guid,
+          received_bytes: 1,
+          total_bytes: 3,
+          state: "inProgress",
+        });
+        clock = 11000;
+        dispatcher.nativeProgress({
+          guid: n.download.guid,
+          received_bytes: 3,
+          total_bytes: 3,
+          state: "completed",
+        });
+        n.completed.resolve();
+      } else {
+        const identity: BrowserOwnedRequest = {
+          ...n.download.page,
+          request_id: "timing",
+          resource_type: "fetch",
+          request_method: "GET",
+          is_navigation: false,
+          frame_id: "page-a",
+          document_id: "loader-a",
+          parent_document_id: null,
+          source_document_id: "loader-a",
+          redirected_request_id: null,
+        };
+        const url = "http://127.0.0.1/pdf?signature=private-fixture-value";
+        dispatcher.admitted(identity, url);
+        response = dispatcher.pdfResponse(identity, url, {
+          status: 200,
+          content_length: 3,
+          cancel: async () => {},
+          chunks: async function* () {
+            clock = 100;
+            yield new Uint8Array([1]);
+            clock = 200;
+            yield new Uint8Array([2]);
+            clock = 11000;
+            yield new Uint8Array([3]);
+          },
+        });
+      }
+      await reading.promise;
+      expect(lines.filter((x) => x.includes("phase=first-byte"))).toHaveLength(
+        1,
+      );
+      expect(lines.find((x) => x.includes("phase=first-byte"))).toContain(
+        "elapsed_ms=100",
+      );
+      expect(lines.filter((x) => x.includes("phase=progress"))).toHaveLength(1);
+      expect(
+        lines.find((x) => x.includes("phase=network-completed")),
+      ).toContain("elapsed_ms=11000");
+      expect(lines.some((x) => x.includes("phase=completed"))).toBe(false);
+      clock = 13000;
+      checked.resolve();
+      await response;
+      await dispatcher.settle();
+      expect(lines.find((x) => x.includes("phase=completed"))).toContain(
+        "elapsed_ms=13000",
+      );
+      expect(
+        lines.every(
+          (x) =>
+            x.includes(`transfer_mode=${mode}`) &&
+            x.includes("article_id=article-a"),
+        ),
+      ).toBe(true);
+      expect(lines.join("\n")).not.toMatch(
+        /https?:|private-fixture-value|source_url/,
+      );
+      expect(failed).not.toHaveBeenCalled();
+    } finally {
+      checked.resolve();
+      n.completed.resolve();
+      await response;
+      await dispatcher.settle();
+      time.mockRestore();
+    }
+  },
+);
 
 it("cancels a native quota violation and retains its ledger until real retirement", async () => {
   const resources = new BrowserDownloadResources({

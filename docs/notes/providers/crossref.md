@@ -1,6 +1,6 @@
 # Crossref
 
-> 2026-10-10 TypeScript 修复复验：Crossref 展示字段折叠换行、回车和连续空白，DOI 身份不作此类修补；链接访问状态为 unknown。年份过滤支持单边范围，规范年份的最终范围检查由主题发现入口完成。 证据见[修复验证记录](../live-discovery-acquisition-fixes-2026-10-10.md)。下文较早日期的探测只代表当时状态。
+> 当前 TypeScript 适配行为（2026-10-10 核对）：Crossref 展示字段折叠换行、回车和连续空白，DOI 身份不作此类修补；链接访问状态为 unknown。年份过滤支持单边范围，规范年份的最终范围检查由主题发现入口完成。 证据见修复验证记录（本地文件：`sandbox/reports/live-discovery-acquisition-fixes-2026-10-10.md`，不随仓库分发）。下文较早日期的探测只代表当时状态。
 
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
@@ -212,10 +212,8 @@ license 资产线索；生产 registry 注入共享 `HttpClient` 与 Access Coor
 计数变成引用边，也不提供独立 PDF downloader：Acquisition 只消费已经保存的中性 hint 并重新
 执行网络与 PDF 验证。实现证据为离线 fake/fixture；本轮没有访问 Crossref 或任何返回的 PDF。
 
-## 11. 2026-10-07 TypeScript 查询排序修复
+## 11. TypeScript 查询排序
 
-当前 [CrossrefRestAdapter](../../../apps/server/src/providers/crossref/metadata.ts) 的主题搜索显式携带
-`sort=score&order=desc`，并在后续 cursor 页保留相同参数。本次授权只读比较对同一个
-`chemical synthesis` 查询各读取 10 条：未指定排序时 score 约为 3–5，且首批标题相关性弱；
-明确按 score 降序后，首批 score 约为 13–14。这证明了查询排序转换问题，不证明语义精确匹配；
-结果中仍有期刊题名、书章和补充材料，项目没有增加领域规则或删除这些合法来源记录。
+当前 [CrossrefRestAdapter](../../../apps/server/src/providers/crossref/metadata.ts) 的主题搜索使用 `sort=score&order=desc`，后续 cursor 页保留相同参数。相关性排序不等于语义精确匹配，也不排除书章或补充材料等合法来源。
+
+测试对照见2026-10-07 Provider 适配测试（本地文件：`sandbox/reports/provider-adapter-validation-2026-10-07.md`，不随仓库分发）。

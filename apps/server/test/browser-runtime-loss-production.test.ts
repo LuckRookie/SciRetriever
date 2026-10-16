@@ -1,3 +1,7 @@
+import {
+  latestBrowserObservationMessage,
+  browserModelToolCallId,
+} from "./browser-model-fixture.js";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -33,6 +37,19 @@ import {
   FIXTURE_LITERATURE,
   workbenchPdf,
 } from "../src/workbench/synthetic-fixture.js";
+
+function errorEvidence(error: unknown, depth = 0): unknown {
+  if (!(error instanceof Error) || depth > 5) return null;
+  return {
+    name: error.name,
+    message: error.message,
+    cause: errorEvidence(error.cause, depth + 1),
+    errors:
+      error instanceof AggregateError
+        ? error.errors.map((item: unknown) => errorEvidence(item, depth + 1))
+        : [],
+  };
+}
 
 it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
   "settles production Completion on shared Browser loss during model HTTP and WaitForChange while preserving a published PDF",
@@ -114,7 +131,9 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         messages: { content: { type: string; text?: string }[] }[];
       };
       const observation = JSON.parse(
-        wire.messages[1]!.content.find((part) => part.type === "text")!.text!,
+        latestBrowserObservationMessage(wire).content.find(
+          (part) => part.type === "text",
+        )!.text!,
       ) as WorkbenchObservation;
       const paper = papers.find(
         (item) => item.literature.literature_id === observation.article_id,
@@ -133,9 +152,9 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       if (response.destroyed) return;
       const pdf = observation.elements.find(
         (element) => element.name === "Download PDF",
-      )!;
+      );
       const action =
-        paper.name === "published"
+        paper.name === "published" && pdf
           ? {
               kind: "click-element",
               element_id: pdf.element_id,
@@ -143,7 +162,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
             }
           : {
               kind: "wait-for-change",
-              timeout_ms: 120_000,
+              timeout_ms: paper.name === "published" ? 100 : 120_000,
               revision: observation.observation_revision,
             };
       response.writeHead(200, { "content-type": "application/json" });
@@ -156,6 +175,8 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
               message: {
                 tool_calls: [
                   {
+                    id: browserModelToolCallId(),
+                    type: "function",
                     function: {
                       name: "browser_action",
                       arguments: JSON.stringify({ action }),
@@ -225,6 +246,8 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
     let browserCloseAcknowledged = false;
     let reportAt: number | undefined;
     let passed = false;
+    let primaryFailure: unknown;
+    let closeFailure: unknown;
     try {
       await mkdir(join(home, ".sciretriever"), { mode: 0o700 });
       await writeFile(
@@ -477,11 +500,17 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       }
       expect(fixtureFailures).toEqual([]);
       passed = true;
+    } catch (error) {
+      primaryFailure = error;
     } finally {
       controller.abort();
       releaseModel();
       protocol?.close();
-      await app?.close();
+      try {
+        await app?.close();
+      } catch (error) {
+        closeFailure = error;
+      }
       await pending?.catch(() => undefined);
       vi.restoreAllMocks();
       await proxy.close();
@@ -496,7 +525,9 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         join(evidenceDirectory, "evidence.json"),
         JSON.stringify(
           {
-            passed,
+            passed: passed && closeFailure === undefined,
+            primary_failure: errorEvidence(primaryFailure),
+            close_failure: errorEvidence(closeFailure),
             cloak_version: runtime.version,
             browser_close_requested_at_ms: runtimeLostAt,
             browser_close_acknowledged: browserCloseAcknowledged,
@@ -531,6 +562,12 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       );
       await rm(home, { recursive: true, force: true });
     }
+    if (closeFailure !== undefined)
+      throw new AggregateError(
+        [primaryFailure, closeFailure].filter((error) => error !== undefined),
+        "Runtime loss test cleanup failed; see retained evidence",
+      );
+    if (primaryFailure !== undefined) throw primaryFailure;
   },
   120_000,
 );

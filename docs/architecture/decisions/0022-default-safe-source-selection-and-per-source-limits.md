@@ -72,6 +72,8 @@ Sci-Hub、Unpaywall、CORE/Elsevier/Wiley 授权 PDF API 和其它要求 operato
 entitlement 或风险确认的命名 Source 不进入 Acquisition Auto。Browser 继续由 `[download]`
 独立显式启用；凭据存在不能暗中启用 Search、Download、Sci-Hub 或 Browser。
 
+2026-10-14 Owner 补充引用 API 优先级：引用发现的 Auto 在既有集合内按“已配置凭据、无需密钥”稳定分组，组内仍使用 catalog 顺序；这是执行优先级，不通过 Key 增删有效集合。Custom 精确顺序保持不变。具体逐节点顺延与失败隔离见 [ADR 0014 §2.1](0014-capability-scoped-providers-and-local-credentials.md#21-引用发现的逐节点-api-优先级与失败隔离2026-10-14)。主题搜索的共同查询行为不变。
+
 ### 3. Metadata limit 属于 Metadata Source 配置
 
 原 `[discovery].metadata_scan_limit` 删除，普通配置改为：

@@ -578,7 +578,7 @@ Catalog v4 在 v3 完整 manifest 后添加独立 `retrieval_*` 投影：来源 
 
 Context 使用 `queryTerms` 的 Unicode casefold 与 FTS5 候选匹配；类型、Literature 范围及版本在候选 SQL 阶段约束。一次最多接纳 4097 原始 FTS 候选并标记 `candidate-limit`；命中单元按 `weighted-term-frequency-v1` 排序：仅统计固定 generation 的 title/body 精确词频，title 权重 4、body 权重 1，负值优先，同分按 kind、Literature ID、版本 ID 和片段序号。`score_rule` 随 Bundle 返回并绑定 cursor，score 不是科学置信度。cursor 绑定请求、generation、source revision 与位置；source revision 改变返回 `index-stale`，不会把新旧结果拼页。文档类查询在整个请求范围内检查缺 PDF 和默认表示；library 范围只汇总缺口类型，不枚举全部 ID；显式版本必须与 Literature ID、版本 ID、表示 hash 同时匹配。索引缺失/损坏分别返回 `index-unavailable`/`index-corrupt`，无隐式迁移、重建、解析或模型调用。`usage.bytes` 精确等于最终 Bundle JSON 的 UTF-8 字节数，包含来源、证据、缺口、用量和继续位置；不够容纳完整片段时返回固定范围引用与 `context-too-large`，由 DocumentRead 的 `range` 选择器继续读取。极小预算若连压缩后的首项引用与缺口都容不下，则拒绝请求并返回 `context-budget-invalid`，不能跳过尚未交付的命中；已交付项之后预算耗尽时，继续位置停在最后一个已交付项。
 
-长期 SQLite 读取连接在其它连接提交后可保留旧 FTS5 校验视图：Node 22.19.0 的合成双连接复现中，writer 与新 reader 的 `integrity_check=ok`，旧 reader 却报告 malformed inverted index。v4 worker 与只读 RetrievalStorage 因此仅在命令边界观察 `PRAGMA data_version` 变化时重开连接，并重复原有只读、schema identity/DDL 准入；不跳过损坏检查。`docs/notes/sqlite-fts5-long-reader.md` 保存最小复现与实际结果。当前无向量/模型重排，也不承诺全库语义召回或查询延迟 SLA。
+长期 SQLite 读取连接在其它连接提交后可保留旧 FTS5 校验视图：Node 22.19.0 的合成双连接复现中，writer 与新 reader 的 `integrity_check=ok`，旧 reader 却报告 malformed inverted index。v4 worker 与只读 RetrievalStorage 因此仅在命令边界观察 `PRAGMA data_version` 变化时重开连接，并重复原有只读、schema identity/DDL 准入；不跳过损坏检查。[SQLite 兼容性说明](../../notes/sqlite-fts5-long-reader.md)维护适用版本和处理方式；最小复现与实际结果保存在测试记录（本地文件：`sandbox/reports/sqlite-fts5-long-reader-2026-09-29.md`，不随仓库分发）。当前无向量/模型重排，也不承诺全库语义召回或查询延迟 SLA。
 
 ### 4.10 M07-T03 知识 Context 版本合同
 

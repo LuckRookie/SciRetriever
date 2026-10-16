@@ -173,7 +173,7 @@ async function fetchPdfResponse(
       hasPdfHeader(response)
     )
       return response;
-    // An unsuccessful response must not trigger alternatives while rate-limited.
+    // Stop this source's requests while limited; independent sources remain eligible.
     if (
       response.status === 429 ||
       response.retry_after_ms !== undefined ||
@@ -181,7 +181,9 @@ async function fetchPdfResponse(
     )
       throw new AcquisitionRouteError(
         "rate-limited",
-        `Public HTTP returned ${response.status} with a rate limit or Retry-After; no alternate route was started.${response.retry_after_ms !== undefined ? ` Retry-After: ${response.retry_after_ms} ms.` : ""}`,
+        `Public HTTP returned ${response.status} with a rate limit or Retry-After; this source is deferred.${response.retry_after_ms !== undefined ? ` Retry-After: ${response.retry_after_ms} ms.` : ""}`,
+        true,
+        { retry_after_ms: response.retry_after_ms },
       );
     if ([204, 404, 410].includes(response.status))
       throw new AcquisitionCandidateSkippedError();
@@ -196,7 +198,6 @@ async function fetchPdfResponse(
         "http-response-failed",
         `Public HTTP returned ${response.status}; no PDF was delivered.`,
         response.status !== 401,
-        { allows_independent_fallback: response.status >= 500 },
       );
     return response;
   };
@@ -455,7 +456,7 @@ function rethrowAuthorizedFailure(
       "rate-limited",
       `${provider} API reported a rate limit or quota restriction.${status}${retryHint}`,
       true,
-      { cause: error },
+      { cause: error, retry_after_ms },
     );
   if (
     code === "authentication" ||
@@ -465,7 +466,7 @@ function rethrowAuthorizedFailure(
   )
     throw new AcquisitionRouteError(
       "http-response-failed",
-      `${provider} API reported an ${code} failure; operator action is required.${status}`,
+      `${provider} API reported a ${code} failure for this access route.${status}`,
       false,
       { cause: error },
     );
@@ -476,8 +477,20 @@ function rethrowAuthorizedFailure(
       true,
       { cause: error },
     );
-  // Schema, non-PDF products, cancellation and unknown failures retain their
-  // original identity: none can authorize another route or Browser traffic.
+  if (
+    code === "response-schema" ||
+    code === "non-pdf-product" ||
+    code === "ambiguous-primary-pdf"
+  )
+    throw new AcquisitionRouteError(
+      "candidate-download-failed",
+      `${provider} API did not deliver a usable PDF (${code}).${status}`,
+      false,
+      { cause: error },
+    );
+  if (code === "cancelled")
+    throw new DOMException("Acquisition request cancelled", "AbortError");
+  // Unrecognized internal exceptions keep their original identity.
   throw error;
 }
 

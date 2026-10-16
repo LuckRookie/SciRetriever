@@ -12,7 +12,13 @@ const SECRET_KEY =
   /(?:authorization|api[_-]?key|access[_-]?token|bearer|cookie|password|secret|signature|token)/iu;
 const SECRET_VALUE =
   /(?:bearer\s+|api[_-]?key\s*[:=]|access[_-]?token\s*[:=]|password\s*[:=]|secret\s*[:=])\S+/iu;
+const USAGE_FIELDS = new Set([
+  "input_tokens",
+  "output_tokens",
+  "cached_input_tokens",
+]);
 const SAFE_FIELD_NAMES = new Set([
+  ...USAGE_FIELDS,
   "provider",
   "model",
   "role",
@@ -23,9 +29,17 @@ const SAFE_FIELD_NAMES = new Set([
   "code",
   "cause_code",
   "session_id",
+  "request_id",
+  "purpose",
   "retryable",
   "bytes",
   "attempt",
+  "article_id",
+  "transfer_id",
+  "transfer_mode",
+  "phase",
+  "elapsed_ms",
+  "total_bytes",
 ]);
 function safe(value: string): string {
   if (SECRET_VALUE.test(value)) return "[REDACTED]";
@@ -39,7 +53,11 @@ function safe(value: string): string {
 function fields(value: SafeLogFields | undefined): string {
   if (!value) return "";
   return Object.entries(value)
-    .filter(([key]) => SAFE_FIELD_NAMES.has(key) && !SECRET_KEY.test(key))
+    .filter(([key, item]) =>
+      USAGE_FIELDS.has(key)
+        ? typeof item === "number" && Number.isSafeInteger(item) && item >= 0
+        : SAFE_FIELD_NAMES.has(key) && !SECRET_KEY.test(key),
+    )
     .map(
       ([key, item]) =>
         `${key}=${typeof item === "string" ? safe(item) : String(item)}`,

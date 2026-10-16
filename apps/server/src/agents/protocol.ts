@@ -1,3 +1,5 @@
+import type { ModelRequest, ModelResponse } from "./model-protocol.js";
+
 export type AgentRole = "analysis" | "browser";
 export type AgentCapability =
   | "structured_text"
@@ -40,7 +42,8 @@ export interface AgentCall {
   readonly input_sha256: string;
   readonly response_schema?: Record<string, unknown>;
   readonly tools?: readonly AgentToolDeclaration[];
-  readonly max_output_tokens: number;
+  /** Omit to use the model service's native generation limit. */
+  readonly max_output_tokens?: number;
 }
 export interface AgentUsage {
   readonly input_tokens: number;
@@ -67,8 +70,8 @@ export type AgentResult = AgentStructuredResult | AgentToolCall;
 export class AgentFailure extends Error {
   readonly code: string;
   readonly retryable: boolean;
-  constructor(code: string, retryable = false) {
-    super("agent operation failed");
+  constructor(code: string, retryable = false, options?: ErrorOptions) {
+    super("agent operation failed", options);
     this.name = "AgentFailure";
     this.code = code;
     this.retryable = retryable;
@@ -91,6 +94,7 @@ export type AgentTransport = (request: {
   readonly endpoint: string;
   readonly method?: string;
   readonly timeout_ms?: number;
+  readonly timeout_mode?: "total" | "idle";
   readonly headers: readonly (readonly [string, string])[];
   /** Credentials that a legacy provider requires in the request query. */
   readonly credential_query?: readonly (readonly [string, string])[];
@@ -106,6 +110,13 @@ export interface AgentAdapter {
     signal?: AbortSignal,
     lifecycle?: AgentCallLifecycle,
   ): Promise<AgentResult>;
+  /** Optional for existing public adapters; production wires implement it. */
+  executeModel?(
+    request: ModelRequest,
+    options: { readonly reasoning: ReasoningEffort; readonly stream: boolean },
+    signal?: AbortSignal,
+    lifecycle?: AgentCallLifecycle,
+  ): Promise<ModelResponse>;
 }
 
 const CAPABILITIES = new Set<AgentCapability>([
@@ -225,9 +236,11 @@ export function validateAgentCall(call: AgentCall): void {
     call.required_capabilities.some((item) => !CAPABILITIES.has(item)) ||
     typeof call.input_sha256 !== "string" ||
     !/^[0-9a-f]{64}$/u.test(call.input_sha256) ||
-    !Number.isSafeInteger(call.max_output_tokens) ||
-    call.max_output_tokens < 1 ||
-    call.max_output_tokens > 1_000_000 ||
+    (call.role === "browser" && call.max_output_tokens === undefined) ||
+    (call.max_output_tokens !== undefined &&
+      (!Number.isSafeInteger(call.max_output_tokens) ||
+        call.max_output_tokens < 1 ||
+        call.max_output_tokens > 1_000_000)) ||
     (call.response_schema !== undefined && call.tools !== undefined)
   )
     invalid();

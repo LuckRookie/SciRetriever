@@ -38,6 +38,7 @@ Catalog v6 已为单篇知识产物增加独立表与精确依赖；Catalog v7 �
 
 ```text
 apps/server/src/storage/
+  artifact-layout.ts       # 新产物的分类路径、hash 分桶与扩展名
   locking.ts
   write-admission.ts
   sqlite/worker.ts          # typed IPC client 与 worker 装载
@@ -240,6 +241,34 @@ Catalog v1–v6、candidate/receipt 子 schema 和 execution runtime schema 分�
 - 从同一已验收 metadata/content 确定性渲染的规范 Markdown。
 
 文件使用内容寻址和 create-if-absent 发布。已接受对象不得原地覆盖；相同目标存在相同字节时复用，存在不同字节时保留冲突证据并拒绝发布。
+
+同一个逻辑文献库使用一个配置的 `artifact_root`；搜索、任务和文献不会各自创建资产根。
+新发布文件按职责分类，类别内按 SHA-256 前两位分桶，完整 hash 保留为文件名。路径生成由
+`storage/artifact-layout.ts` 统一负责，业务 owner 传入产物用途与已确认的媒体类型：
+
+```text
+artifacts/
+  originals/pdf/<hh>/<sha256>.pdf
+  parsed/markdown/<hh>/<sha256>.md
+  parsed/structure/<hh>/<sha256>.json
+  parsed/images/<hh>/<sha256>.jpg        # 或 png、webp、svg 等实际图片类型
+  parsed/resources/<hh>/<sha256>.<ext>   # 已支持的非图片 parser 资源
+  knowledge/summaries/<hh>/<sha256>.json # 兼容 LiteratureContent 也可为 md
+  knowledge/syntheses/<hh>/<sha256>.json
+  .staging/                            # 未完成写入
+  .candidates/<sha256>.bin              # 持久下载候选，尚非正式 PDF 路径
+```
+
+目录按写入需要创建。扩展名按已接纳的 `media_type` 选择；未知资源类型继续使用 `.bin`，
+不从供应商文件名猜测类型。Parser Markdown 内的相对资源引用与内容 hash 保持原样，读取
+通过 catalog 的资源映射解析；物理分类目录不是可直接复制发布的文献导出包。
+
+数据库中的既有规范相对路径优先于新命名规则：已登记的同内容文件继续复用原位置，
+旧 `objects/*.pdf`、`objects/*.bin` 及既有回执仍可读取、恢复和重放。路径变化不修改
+文献 ID、artifact ID、字节 hash、证据定位或 catalog schema，也不在启动时搬动旧文件。
+已经生成的新路径需要本版本或之后的 reader；旧版本程序不保证支持新的 PDF intent 路径。
+恢复/回收同时识别新分类目录与既有对象目录，继续按精确引用、实际所有权和依赖保护执行，
+目录分类不授权回收已接纳材料或下载候选。
 
 Storage 不根据文件内容自行决定它是否属于某篇文献。消费模块先形成经过规则确认的发布请求，Storage 再执行物理保存。
 

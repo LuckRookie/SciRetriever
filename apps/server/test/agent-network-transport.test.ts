@@ -231,3 +231,69 @@ describe("agent network transport", () => {
     },
   );
 });
+
+it("allows a progressing model response to outlast the timeout while rejecting a stalled response", async () => {
+  const server = createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write("start\n");
+    if (req.url === "/stall") return;
+    let remaining = 8;
+    const timer = setInterval(() => {
+      res.write("chunk\n");
+      if (--remaining === 0) {
+        clearInterval(timer);
+        res.end();
+      }
+    }, 50);
+    res.on("close", () => clearInterval(timer));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const coordinator = new NetworkBudgetCoordinator();
+  const transport = createAgentTransport({
+    resolver: () => ["127.0.0.1"],
+    policy: {
+      allowed_schemes: ["http"],
+      allowed_classes: ["loopback"],
+      allowed_addresses: ["127.0.0.1"],
+      allowed_ports: [{ scheme: "http", port }],
+    },
+    coordinator,
+    scope: "finite-model-response",
+    limits: {
+      maxConcurrency: 1,
+      maxHostConcurrency: 1,
+      maxResponseBytes: 4096,
+      maxRedirects: 0,
+      maxRetries: 0,
+    },
+  });
+  const input = {
+    endpoint: `http://127.0.0.1:${port}/progress`,
+    headers: [],
+    body: new Uint8Array(),
+    timeout_ms: 250,
+  };
+  try {
+    const started = performance.now();
+    const response = await transport({ ...input, timeout_mode: "idle" });
+    expect(performance.now() - started).toBeGreaterThan(350);
+    expect(Buffer.from(response.body).toString().match(/chunk/gu)).toHaveLength(
+      8,
+    );
+    await expect(
+      transport({
+        ...input,
+        endpoint: `http://127.0.0.1:${port}/stall`,
+        timeout_mode: "idle",
+      }),
+    ).rejects.toMatchObject({ reason: "timeout" });
+    await expect(transport(input)).rejects.toMatchObject({ reason: "timeout" });
+  } finally {
+    coordinator.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) =>
+      server.close((e) => (e ? reject(e) : resolve())),
+    );
+  }
+});

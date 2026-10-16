@@ -32,14 +32,16 @@ const baseConfiguration =
 const legacyBudgets =
   "metadata_max_output_tokens=2048\ncontent_max_output_tokens=4096\nmax_input_bytes=1048576\nmax_chunk_bytes=1048576\nmax_chunk_count=1\nmax_total_llm_requests=2\nmax_total_output_tokens=6144\n";
 export async function coreProcessingFixture(
-  optionsInput: { legacyAnalysis?: boolean } = {},
+  optionsInput: { legacyAnalysis?: boolean; analysisModel?: boolean } = {},
 ) {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-core-processing-"));
   const config = join(home, ".sciretriever");
   await mkdir(config, { mode: 0o700 });
   await writeFile(
     join(config, "config.toml"),
-    baseConfiguration + (optionsInput.legacyAnalysis ? legacyBudgets : ""),
+    (optionsInput.analysisModel === false
+      ? baseConfiguration.replace('[analyze]\nmodel="fixture/model"\n', "")
+      : baseConfiguration) + (optionsInput.legacyAnalysis ? legacyBudgets : ""),
     { mode: 0o600 },
   );
   await initializeCatalogSchema(join(home, "catalog.sqlite"));

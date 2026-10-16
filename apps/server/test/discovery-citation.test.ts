@@ -7,6 +7,7 @@ import {
   parseMetadataObservation,
 } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
+import { SqliteWorker } from "../src/storage/sqlite/worker.js";
 import type {
   MetadataLookupPort,
   RawItemSession,
@@ -141,6 +142,23 @@ describe("citation discovery migration slice", () => {
       });
       expect(durable?.source_results).toHaveLength(2);
       expect(durable?.citation_causes).toHaveLength(1);
+      const reader = new SqliteWorker(join(home, "catalog.sqlite"), undefined, {
+        readOnly: true,
+      });
+      try {
+        expect(await reader.getDiscovery(report.discovery_run_id)).toEqual(
+          durable,
+        );
+        expect(
+          await reader.getDiscovery("00000000-0000-4000-9000-000000000999"),
+        ).toBeNull();
+        await expect(reader.putDiscovery(durable!)).rejects.toMatchObject({
+          code: "sqlite-worker",
+        });
+      } finally {
+        await reader.close();
+      }
+
       expect(
         await application.library.referenceDetail(
           (await application.database.referenceSnapshot())[0]?.reference

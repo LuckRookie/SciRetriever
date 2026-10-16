@@ -7,3 +7,5 @@
 归档内容：
 
 - [多下载源可用性与合理访问限制提案](acquisition-source-availability-and-access-limits.md)：旧提案只讨论 acquisition、建议若干当时数值并把共享预算限制为单进程；这些未决内容已由当前 provider/channel/host 同机全局准入、网页独占与至少 30 秒冷却、API 按真实规则执行的设计取代。
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

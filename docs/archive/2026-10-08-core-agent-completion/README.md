@@ -79,3 +79,5 @@ MCP 索引入口、文件大小限制及 Web 不在本轮范围。
 - 本轮实现、正式 Application/MCP 回归、接口文档和 Full 验收已闭环；文档相对链接与
   `git diff --check` 通过。无需重建因失败而跳过的旧任务，可在修正原因后显式 retry。
 - 本轮无新增依赖、schema 或 ADR，不迁移用户库、不访问真实服务、不执行 Git 写操作；保留既有工作区改动。
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

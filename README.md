@@ -16,6 +16,42 @@ SciRetriever 是科研 Agent 的论文知识组件，目标是独立提供可追
 
 开发者可以从[供应商适配目录](apps/server/src/providers/README.md)查找各家的定义、元数据与 PDF 实现；业务模块和共享网络责任见[技术文档](docs/architecture/technical.md)。
 
+## 项目目录地图
+
+每个由项目维护的目录都有自己的 `README.md`，说明职责、内容入口和相邻目录的分工。从下面进入，再沿各级 README 找到具体模块。目录说明帮助定位；需求、架构决定和当前行为分别由各自真相源维护。
+
+| 目录                                          | 负责的内容                                                                                |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| [apps/](apps/README.md)                       | 应用实现：核心服务、CLI/MCP/HTTP 与 Web 界面                                              |
+| [apps/server/src/](apps/server/src/README.md) | 按业务职责划分的服务端模块地图                                                            |
+| [apps/web/](apps/web/README.md)               | 页面、样式、交互与界面回归                                                                |
+| [packages/](packages/README.md)               | 跨模块、跨应用共享的中性合同包                                                            |
+| [docs/](docs/README.md)                       | 需求、架构、使用指南、维护说明、提案与计划                                                |
+| [tests/](tests/README.md)                     | 随仓库分发的共享合成测试材料；正式回归在各模块的 `test/`                                  |
+| `sandbox/`                                    | 本机真实测试场地：`cases/` 用例、`runs/` 运行材料、`reports/` 报告；整个目录不随 Git 分发 |
+| [scripts/](scripts/README.md)                 | 可复用的构建与打包工具                                                                    |
+| [release/](release/README.md)                 | 构建工具使用的发布运行清单                                                                |
+| [example/](example/README.md)                 | 可共享的配置示例                                                                          |
+| [migration/](migration/README.md)             | 迁移兼容清单、固定 oracle 与历史证据；部分清单仍由测试消费                                |
+| [.github/](.github/README.md)                 | GitHub CI 工作流                                                                          |
+
+### 要做什么，去哪里
+
+| 工作                                            | 起点                                                                                                                                                                      |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 增加或修复一家文献供应商                        | [providers/](apps/server/src/providers/README.md)，定义与协议放在对应供应商目录                                                                                           |
+| 调整发现或批量 PDF 获取流程                     | [entry/](apps/server/src/entry/README.md)；元数据能力看 [metadata/](apps/server/src/metadata/README.md)，PDF 接纳看 [acquisition/](apps/server/src/acquisition/README.md) |
+| 修改 Browser Agent 的观察、动作、等待或下载捕获 | [browser/](apps/server/src/browser/README.md)；共享网络与冷却看 [network/](apps/server/src/network/README.md)                                                             |
+| 修改解析、总结或知识查询                        | [parsing/](apps/server/src/parsing/README.md)、[analysis/](apps/server/src/analysis/README.md)、[retrieval/](apps/server/src/retrieval/README.md)                         |
+| 修改统一数据格式、身份或存储                    | [contracts/](packages/contracts/README.md)、[literature/](apps/server/src/literature/README.md)、[storage/](apps/server/src/storage/README.md)                            |
+| 做真实测试、保存日志和整理结果                  | 本机 `sandbox/`；约定见[测试目录说明](tests/README.md#本地真实测试)                                                                                                       |
+| 给 bug 补可重复回归                             | 对应应用或包的 `test/`；共享合成输入放 [tests/fixtures/](tests/fixtures/README.md)                                                                                        |
+| 讨论设计、执行计划或维护长期说明                | [proposals/](docs/proposals/README.md)、[plans/](docs/plans/README.md)、[notes/](docs/notes/README.md)；接受的长期决定归 [ADR](docs/architecture/decisions/README.md)     |
+
+根目录的 [AGENTS.md](AGENTS.md) 是项目约束入口，[HARNESS.md](HARNESS.md) 是工程与验收规则；[package.json](package.json) 定义开发命令，`pnpm-workspace.yaml` 与 `tsconfig*.json` 定义 workspace 和编译范围。
+
+本机可能还保留 `archive/`（退役代码快照）、`work/`（早期工作材料）、`.agent-teams/`（工具状态）和 `.vscode/`（编辑器配置）；这些目录的说明只保存在本机。它们不作为新业务源码或新测试的落点。`.git/`、`node_modules/`、`build/`、`dist/`、缓存、原始运行数据及历史快照内部由工具或原始材料结构决定，不逐层插入 README；其身份在所属上级目录说明。
+
 ## 安装与最小本地启动
 
 当前 TypeScript 版本使用 Node 22.19.0 和 pnpm 10.32.1；仓库没有声明已经发布到 npm。从源码检出后使用锁定依赖运行：
@@ -53,6 +89,10 @@ catalog_path = "/absolute/private/path/catalog.sqlite3"
 artifact_root = "/absolute/private/path/artifacts"
 ```
 
+同一文献库共用一个资产根目录。新文件按原始 PDF、解析正文/结构/资源、单篇总结和跨篇综合
+分类保存，采用真实扩展名与 hash 前两位子目录；已有文件继续按 catalog 路径读取和复用。
+具体目录与配置见[存储路径](docs/guides/configuration.md#paths)。
+
 从任意工作目录运行都会读取这一个文件；无需选择配置路径：
 
 ```bash
@@ -76,7 +116,7 @@ pnpm build
 node apps/server/dist/cli/main.js web --port 4174
 ```
 
-已安装入口为 `sciretriever web`。蓝白任务工作台提供首页、持久任务、任务内 Browser 协助、文献/PDF/文档/知识与证据阅读、显式加工和设置。启动使用固定配置的 catalog/artifact root，页面显示实际绑定；无需初始文献，不自动获取或升级库。配置路径保存后需重启，不移动数据。完整准备、操作与能力边界见[Web 任务工作台指南](docs/guides/web-workbench.md)。
+已安装入口为 `sciretriever web`。正式 Web 按定稿原型以文献库为首页，提供发现、检索、洞察、综合、提取、持久任务、Browser 会话、阅读标签和设置。首次启动直接可用：未配置的数据库与资产路径分别保存为 `~/.sciretriever/catalog.sqlite` 和 `~/.sciretriever/artifacts/`，缺库时创建完整空库；已有自定义路径优先。页面显示实际绑定，CLI/MCP 共享已保存配置。无需初始文献，不自动获取或升级已有库。可在设置中修改位置，重启后生效；不移动已有资料。操作与能力边界见[Web 文献库工作空间指南](docs/guides/web-workbench.md)。
 
 ## Browser 工作台预览
 
@@ -233,6 +273,10 @@ Application 构造的 `DatabaseCompletionService` 服务 CLI；durable Jobs 复�
 
 `discover topic` 和 `discover citations` 负责有边界的外部发现。它们接纳文献身份、保留来源 observation、去重，并记录 DiscoveryRun、来源结果和直接原因；不会顺带下载 PDF、解析内容、运行分析，也不会对每篇文献逐一调用全部 Provider 做二次补查。
 
+引用扩展对每个节点按优先级尝试来源：Auto 在已启用集合内优先使用配置了凭据的 API，再使用无需密钥的 API；Custom 保留用户指定的顺序。当前来源分页正常结束、返回可用关系且目标均可识别时停止查询该节点的后续来源；空结果、记录错误、分页失败或未识别目标继续顺延。尚未识别的引用目标可通过后续来源按共同稳定标识补查，供应商私有 ID 不跨来源使用。404 或单条坏记录不阻断其他目标及下一层节点；鉴权失败、拒绝访问和限流只暂停受影响来源，其他已选来源继续。取消、数量边界及存储错误仍保留停止语义。
+
+两层引用扩展会在边界内遍历第一层接纳的各篇文献，结果按文献身份去重且不重复计入种子。存在来源失败且已取得结果时报告 `PARTIAL`，不能把中途结果称为完整两层规模；来源结果只列实际尝试过的来源，不把因优先来源成功而未调用的来源标记为已扫描完。API 覆盖之外的参考文献不会自动通过网页或 PDF 提取补齐。
+
 `complete` 从数据库的 current facts 出发补齐已经入库的文献：
 
 ```text
@@ -311,11 +355,11 @@ download
 
 三项核心处理能力的配置入口与验证是：
 
-| 能力               | 在裸 `config` 中的配置路径                                                                              | 显式验证                                                                                                                                | 本地 ready 还要求                                                                                                                        |
-| ------------------ | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| 文献分析与总结     | `Models → Add` 配置 Model；`Models → Providers` 管理 Provider/Key；`Analyze → Setup` 选择并设置业务预算 | `config test analyze` 执行一次有界 Model probe；真实内容仍走 `complete content`                                                         | 所选 Model、其 Model Provider 与 exact-origin credential、Analyze limits 完整；strict structured output 由模块派生                       |
-| Browser Agent 下载 | `Models → Add` 配置 `image = true` 的 Model；`Browser → Setup` 选择模型和 Profile                       | Browser Model probe 可执行；Browser Site 需要显式 site adapter/seam；生产 `complete pdf` 仍受 verified runtime/admission 与真实环境约束 | 所选 image Model、其 Provider/Key、Agent controller、Browser identity Profile、CloakBrowser/Playwright/binary 与 headed display 全部就绪 |
-| MinerU 解析        | `Parse → Setup`                                                                                         | `config test parse` 使用有界 MinerU health probe；真实 PDF 解析仍走 `complete content`                                                  | endpoint、部署身份，以及 remote 模式的上传授权与 origin-bound token                                                                      |
+| 能力               | 在裸 `config` 中的配置路径                                                                    | 显式验证                                                                                                                                | 本地 ready 还要求                                                                                                                        |
+| ------------------ | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| 文献分析与总结     | `Models → Add` 配置 Model；`Models → Providers` 管理 Provider/Key；`Analyze → Setup` 选择模型 | `config test analyze` 执行一次有界 Model probe；真实内容仍走 `complete content`                                                         | 所选 Model、其 Model Provider 与 exact-origin credential 完整；strict structured output 由模块派生                                       |
+| Browser Agent 下载 | `Models → Add` 配置 `image = true` 的 Model；`Browser → Setup` 选择模型和 Profile             | Browser Model probe 可执行；Browser Site 需要显式 site adapter/seam；生产 `complete pdf` 仍受 verified runtime/admission 与真实环境约束 | 所选 image Model、其 Provider/Key、Agent controller、Browser identity Profile、CloakBrowser/Playwright/binary 与 headed display 全部就绪 |
+| MinerU 解析        | `Parse → Setup`                                                                               | `config test parse` 使用有界 MinerU health probe；真实 PDF 解析仍走 `complete content`                                                  | endpoint、部署身份，以及 remote 模式的上传授权与 origin-bound token                                                                      |
 
 模型目录结果只是 Provider 当次报告的 setup observation，不会持久化，也不会替代 probe。目录只
 采信安全的模型 ID；`image` 由用户根据模型文档确认，strict output、tool、媒体格式和调用限制由
@@ -338,9 +382,11 @@ remote 必须是 hostname-based HTTPS、配置 origin-bound bearer token，并�
 Reset、迁移、恢复或 fallback。operator 手工删除旧 section 后，模型 key 需按当前
 `[providers.<provider>]` 重新配置。
 
-三种 LLM API 都默认发送 `stream = true`。Agents 在内部把有界 SSE 重建为一个完整 structured
-result 或 tool call；具体 Model 可以设置 `stream = false`，此时只请求和解析非流式 JSON。
+三种 LLM API 都默认发送 `stream = true`。Agents 在内部把有界 SSE 重建为完整模型结果；Analysis 保留 structured
+result／单工具的兼容入口，Browser 内部保留文本、工具调用 ID 和对应结果；具体 Model 可以设置 `stream = false`，此时只请求和解析非流式 JSON。
 Analyze/Browser 只继承所选 Model，不会收到事件流、覆盖 stream，或在失败后触发另一种模式的重发。
+
+模型调用与持续 Agent 会话统一由进程内 DSH/Cordis 底座执行。DSH 是唯一启用的默认 Agents 后端，无需另行配置后端开关；原内置执行后端不再提供，DSH 失败也不会回退到旧实现。分析、综合、身份核验和模型 probe 的既有结构化请求也进入原生 DSH 模型服务；通用会话支持纯文本、多图、工具反馈与上下文管理。Browser 每篇文章保留独立上下文，显式选择最新截图策略；人工操作和下载失败恢复进入同一会话。Browser owner 仍强制页面/控制版本、动作节奏和文章预算，下载与入库由原 Acquisition/Entry 完成。模型、凭据和 Network 沿用项目配置，不读取本机其它 Agent 的 profile。关闭底座会取消并等待调用及会话释放，不承诺跨进程恢复。此次统一执行基础保留现有分析算法，尚不能据此宣称科研内容质量全面提升。详见 [Agents 模块](apps/server/src/agents/README.md) 与 [DSH 依赖说明](docs/notes/deepseek-harness.md)。
 
 自动 PDF 获取按“公开来源 → 授权 Provider API → 受控浏览器”逐层升级。公开文献优先直接下载：
 arXiv 使用 PDF URL，成功后不启动 Browser 或调用 Browser 模型。当前 Auto 公开阶段包含已保存 PDF
@@ -372,7 +418,7 @@ attachment EID，再用 Object Retrieval 获取 PDF；FULL XML 没有可用 MAIN
 其中保存了浏览器状态都不证明组织合同、登录成功或具体文章有权限，operator 仍须确保实际使用
 符合组织授权和站点条款。
 
-目标编排要求同一批目标先完成 Public cohort，再只对剩余目标执行 Authorized API cohort，最后才进入 Browser cohort；低风险路线发生 timeout、临时网络错误、`429`、quota 或 `Retry-After` 时不得借机绕过限制。当前实现已经按这个顺序形成三级屏障，逐波按冻结顺序提前交付终态 receipt。Browser 调度区分决策 worker、保留会话和平台网络资格；后台下载及本地验收/发布不占决策 worker，其它文章可以继续推进。默认两个决策 worker、五个保留会话，同平台真实网络结束后冷却 30 秒；每次动作结束到下一轮模型派发至少 5 秒。实际 Cloak 的并行、大文件和真实站点验证分别记录在[本轮验证记录](docs/notes/browser-parallel-validation-2026-10-05.md)，外部可达性和权限以具体样本为准。
+目标编排要求同一批目标先完成 Public cohort，再只对剩余目标执行 Authorized API cohort，最后才进入 Browser cohort；低风险路线发生 timeout、临时网络错误、`429`、quota 或 `Retry-After` 时不得借机绕过限制。当前实现已经按这个顺序形成三级屏障，逐波按冻结顺序提前交付终态 receipt。Browser 调度区分决策 worker、保留会话和平台网络资格；后台下载及本地验收/发布不占决策 worker，其它文章可以继续推进。默认两个决策 worker、五个保留会话，同平台真实网络结束后冷却 30 秒；每次动作结束到下一轮模型派发至少 5 秒。实际 Cloak 的并行、大文件和真实站点验证分别记录在本轮验证记录（本地文件：`sandbox/reports/browser-parallel-validation-2026-10-05.md`，不随仓库分发），外部可达性和权限以具体样本为准。
 
 （目标合同·当前未实现）Browser 升级前，正常日志应显示剩余篇数、`browser-generic` 的
 `minimum_start_interval`、`next_allowed_in_seconds` 和保守 `minimum_duration_seconds`，仍不包含
@@ -489,6 +535,8 @@ pnpm full
 
 按项目 owner 于 2026-09-10 的决定，后续默认验收和 CI 采用 TypeScript：Quick 执行 Prettier、ESLint 与 strict 类型检查；Full 追加全部 Vitest 和构建。Python Harness 仅保留为明确要求时使用的历史维护入口，不再默认运行。精确合同见 [`HARNESS.md`](HARNESS.md)。
 
+`tests/` 保存随仓库分发的共享合成测试材料，各模块的 `test/` 保存可重复运行的离线回归；本机真实测试、一次性脚本、运行材料和报告统一放在 Git 忽略的 `sandbox/`，不进入 CI 或 GitHub。目录约定见[测试目录与本地试验场](tests/README.md)。
+
 ## 项目文档
 
 - [当前用户指南](docs/guides/README.md)
@@ -500,4 +548,4 @@ pnpm full
 - [架构与设计](docs/architecture/README.md)
 - [开发手册](docs/development/README.md)
 - [活动提案](docs/proposals/README.md)
-- [历史归档](docs/archive/)
+- [历史归档](docs/archive)

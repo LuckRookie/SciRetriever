@@ -4,7 +4,7 @@ import {
   parseOperatorInput,
   type OperatorInput,
 } from "@sciretriever/contracts";
-import type { ElementHandle, Page } from "playwright";
+import type { ElementHandle, Frame, Page } from "playwright";
 import type { BrowserPageSnapshot } from "./observation.js";
 
 export interface BrowserElement {
@@ -18,6 +18,9 @@ export interface BrowserPageApplyResult {
   readonly likely_pdf?: boolean;
   readonly no_history?: boolean;
   readonly feedback?: string;
+  /** A completed wait is not itself evidence that the page made progress. */
+  readonly wait_outcome?: "changed" | "timeout";
+  readonly wait_elapsed_ms?: number;
 }
 export class BrowserPageRuntimeError extends Error {
   readonly code: string = "browser-page-runtime";
@@ -72,7 +75,7 @@ function redact(value: string, max: number): string {
 export class BrowserPageRuntime {
   private generation = 0;
   private crashed = false;
-  private observedFeedback = "";
+  private observedFeedback: string | null = null;
   private rateLimited = false;
   private navigationStatus: number | undefined;
   private retryAt: number | null = null;
@@ -389,16 +392,117 @@ export class BrowserPageRuntime {
       }
     }
   }
-  private async feedback(): Promise<string> {
-    return this.page
-      .evaluate(() =>
-        JSON.stringify({
-          text: document.body?.innerText.slice(0, 16000) ?? "",
-          state: document.readyState,
-          title: document.title,
+  private async feedback(): Promise<string | null> {
+    // Read each visible frame through Playwright, including cross-origin frames.
+    // Compare semantics, not pixels, CSS classes or continuously moving bounds:
+    // a spinner's animation must not masquerade as a newly available control.
+    const surfaces: string[] = [];
+    const visit = async (frame: Frame): Promise<void> => {
+      if (frame !== this.page.mainFrame()) {
+        const element = await frame.frameElement();
+        try {
+          const visible = await element.evaluate((node) => {
+            if (!(node instanceof Element)) return false;
+            const rect = node.getBoundingClientRect();
+            const style = getComputedStyle(node);
+            return (
+              node.checkVisibility({
+                checkOpacity: true,
+                checkVisibilityCSS: true,
+              }) &&
+              style.display !== "none" &&
+              rect.width > 0 &&
+              rect.height > 0 &&
+              rect.bottom > 0 &&
+              rect.right > 0 &&
+              rect.top < innerHeight &&
+              rect.left < innerWidth
+            );
+          });
+          if (!visible) return;
+        } finally {
+          await element.dispose();
+        }
+      }
+      surfaces.push(
+        await frame.evaluate(() => {
+          const visible = (node: Element): boolean => {
+            const rect = node.getBoundingClientRect();
+            return (
+              node.checkVisibility({
+                checkOpacity: true,
+                checkVisibilityCSS: true,
+              }) &&
+              rect.width > 0 &&
+              rect.height > 0 &&
+              rect.bottom > 0 &&
+              rect.right > 0 &&
+              rect.top < innerHeight &&
+              rect.left < innerWidth
+            );
+          };
+          const walker = document.createTreeWalker(
+            document.body ?? document,
+            NodeFilter.SHOW_TEXT,
+          );
+          let text = "";
+          while (walker.nextNode() && text.length < 16000) {
+            const node = walker.currentNode;
+            const parent = node.parentElement;
+            if (
+              !parent ||
+              parent.closest(
+                "script,style,noscript,input,textarea,select,[contenteditable]",
+              ) ||
+              !visible(parent)
+            )
+              continue;
+            const value = node.textContent?.trim();
+            if (value) text += `${value}\n`;
+          }
+          const controls = Array.from(
+            document.querySelectorAll(
+              "a,button,input,textarea,select,summary,[role],[tabindex],[contenteditable]",
+            ),
+          )
+            .filter(visible)
+            .slice(0, 100)
+            .map((node) => ({
+              tag: node.tagName,
+              role: node.getAttribute("role"),
+              name:
+                node.getAttribute("aria-label") ?? node.getAttribute("title"),
+              disabled:
+                node.matches(":disabled") ||
+                node.getAttribute("aria-disabled") === "true",
+              checked:
+                node.matches(":checked") || node.getAttribute("aria-checked"),
+              expanded: node.getAttribute("aria-expanded"),
+            }));
+          // Values, URLs and DOM content never leave this private comparison.
+          return JSON.stringify({
+            text: text.slice(0, 16000),
+            controls,
+            state: document.readyState,
+            title: document.title,
+          });
         }),
+      );
+      for (const child of frame.childFrames()) await visit(child);
+    };
+    try {
+      await visit(this.page.mainFrame());
+      return JSON.stringify(surfaces);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        /Execution context was destroyed|Cannot find context|frame was detached|Frame has been detached|Target page, context or browser has been closed/iu.test(
+          error.message,
+        )
       )
-      .catch(() => "transition");
+        return null; // An unreadable sample is not observed progress.
+      throw error;
+    }
   }
   private async dispatch(
     check: () => void,
@@ -445,26 +549,36 @@ export class BrowserPageRuntime {
       case "stop":
         return;
       case "wait-for-change": {
-        const baseline = this.observedFeedback || (await this.feedback());
-        const deadline = Date.now() + input.timeout_ms;
-        while (Date.now() < deadline) {
+        const started = performance.now();
+        let baseline = this.observedFeedback ?? (await this.feedback());
+        const deadline = started + input.timeout_ms;
+        const result = (
+          outcome: "changed" | "timeout",
+        ): BrowserPageApplyResult => ({
+          wait_outcome: outcome,
+          wait_elapsed_ms: Math.max(0, performance.now() - started),
+        });
+        while (performance.now() < deadline) {
           check();
           if (this.rateLimited) throw new BrowserPageRateLimitError();
-          if (
-            this.documentGeneration() !== expectedGeneration ||
-            (await this.feedback()) !== baseline
-          )
-            break;
+          if (this.documentGeneration() !== expectedGeneration)
+            return result("changed");
+          const feedback = await this.feedback();
+          check();
+          if (feedback !== null && baseline !== null && feedback !== baseline)
+            return result("changed");
+          baseline ??= feedback;
           try {
             await this.page.waitForTimeout(
-              Math.min(100, Math.max(1, deadline - Date.now())),
+              Math.min(250, Math.max(1, deadline - performance.now())),
             );
           } catch (error) {
             check();
             throw error;
           }
         }
-        return;
+        check();
+        return result("timeout");
       }
       case "go-back": {
         const before = this.page.url();

@@ -64,6 +64,7 @@ export function configuredMetadataSelections(
   capabilities: Readonly<
     Record<string, readonly MetadataCapability[]>
   > = CAPABILITIES,
+  credentialedProviders: readonly string[] = [],
 ): {
   readonly topic: readonly string[];
   readonly reference: readonly string[];
@@ -73,11 +74,21 @@ export function configuredMetadataSelections(
     "topic-search",
     capabilities,
   );
-  const reference = resolveMetadataSelection(
+  const selectedReferences = resolveMetadataSelection(
     configuration.sources.metadata,
     "reference-query",
     capabilities,
   );
+  // Credentials prioritize already-enabled Auto sources; they never enable a
+  // new source or override an operator's explicit Custom order.
+  const credentialed = new Set(credentialedProviders);
+  const reference =
+    configuration.sources.metadata.mode === "auto"
+      ? Object.freeze([
+          ...selectedReferences.filter((name) => credentialed.has(name)),
+          ...selectedReferences.filter((name) => !credentialed.has(name)),
+        ])
+      : selectedReferences;
   return Object.freeze({ topic, reference });
 }
 

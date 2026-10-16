@@ -166,3 +166,5 @@ Primary owner 串行完成 Blocks 01–04。每个 Block 按“最小切片 → 
 | 2026-09-07 | 创建 outcome-first Browser 下载计划 | 现场验证显示 response 已捕获 PDF 候选，但 snapshot 失败导致候选丢失；用户确认采用最接近人工的单 Agent + Browser 方案 |
 | 2026-09-07 | 完成 candidate 与 Agent 解耦 | response 保存资源并可直接读取；候选超时恢复可执行 Ready；Stop 不再因 pending candidate 的临时 snapshot 失败而 stale；补充 capture/snapshot race 回归 |
 | 2026-09-07 | 完成离线门禁与真实单篇复测 | Full 全部通过；真实 Browser + Agent 能观察和操作挑战页面，但目标站点最终返回 403，未产生可验证 PDF；记录为外部现场失败，不伪装成代码成功 |
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

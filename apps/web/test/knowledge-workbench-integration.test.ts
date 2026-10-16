@@ -11,7 +11,7 @@ import {
 } from "../../server/src/workbench/http.js";
 import { ProductionWorkbenchSession } from "../../server/src/workbench/production-session.js";
 
-it("uses the authenticated blue workbench to read original bytes, run durable parsing and analysis, and reopen verified knowledge", async () => {
+it("uses the authenticated library workspace to read original bytes, run durable parsing and analysis, and reopen verified knowledge", async () => {
   const env = await coreProcessingFixture();
   const query = await createQueryApplication(env.home);
   const session = new ProductionWorkbenchSession(null, async () => {
@@ -22,6 +22,7 @@ it("uses the authenticated blue workbench to read original bytes, run durable pa
     ["/", "live.html", "text/html"],
     ["/styles.css", "styles.css", "text/css"],
     ["/live.css", "live.css", "text/css"],
+    ["/workspace.css", "workspace.css", "text/css"],
   ] as const)
     assets.set(route, {
       contentType,
@@ -61,19 +62,16 @@ it("uses the authenticated blue workbench to read original bytes, run durable pa
     });
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
+    page.setDefaultTimeout(5000);
     await page.goto(server.origin);
-    await page.locator("#library-tab").click();
-    await expect.poll(() => page.locator(".library-result").count()).toBe(1);
-    await page.locator(".library-result").click();
+    await expect.poll(() => page.locator(".prow").count()).toBe(1);
+    await page.locator(".prow").click();
     await expect
-      .poll(() => page.locator("#library-detail h2").textContent())
+      .poll(() => page.locator("#reader-info h2").textContent())
       .toContain("Synthetic literature workbench");
     expect(env.parseCalls).toBe(0);
     expect(env.modelCalls).toBe(0);
     expect(await env.app.jobs!.listJobs(10)).toHaveLength(0);
-    await page
-      .getByRole("button", { name: "阅读原始 PDF", exact: true })
-      .click();
     await expect
       .poll(() => page.locator(".library-pdf-reading").textContent())
       .toContain(env.asset.sha256);
@@ -81,40 +79,29 @@ it("uses the authenticated blue workbench to read original bytes, run durable pa
       await page.locator('iframe[title="原始 PDF 预览"]').getAttribute("src"),
     ).toMatch(/^blob:/u);
     await page
-      .getByRole("button", { name: "加入集合综合", exact: true })
-      .click();
-    expect(
-      JSON.parse(await page.locator("#synthesis-inputs").inputValue()),
-    ).toMatchObject([
-      {
-        literature_id: env.parseRequest.literature_id,
-        asset_sha256: env.asset.sha256,
-      },
-    ]);
-    await page
       .getByRole("button", { name: "加入提取输入", exact: true })
       .click();
-    expect(
-      JSON.parse(await page.locator("#extraction-inputs").inputValue()),
-    ).toMatchObject([
-      {
-        literature_id: env.parseRequest.literature_id,
-        asset_sha256: env.asset.sha256,
-      },
-    ]);
     await page
-      .getByRole("button", { name: "加工这篇文献", exact: true })
+      .getByRole("button", { name: "使用库中选定范围", exact: true })
       .click();
     await expect
-      .poll(() => page.locator("#document-material-status").textContent())
-      .toContain("尚无默认版本");
-    expect(await page.locator("#document-literature-id").inputValue()).toBe(
-      env.parseRequest.literature_id,
-    );
-    await page.locator("#document-parse-submit").click();
+      .poll(async () => {
+        const value = await page.locator("#extraction-inputs").inputValue();
+        return value ? JSON.parse(value) : null;
+      })
+      .toMatchObject([
+        {
+          literature_id: env.parseRequest.literature_id,
+          asset_sha256: env.asset.sha256,
+        },
+      ]);
+    await page.locator("[data-paper]").click();
+    await page.getByRole("button", { name: "解析", exact: true }).click();
+    expect(env.parseCalls).toBe(0);
+    await page.locator("#op-confirm").click();
     await expect
-      .poll(() => page.locator("#document-parse-status").textContent())
-      .toContain("任务已持久保存");
+      .poll(() => page.locator("#op-status").textContent())
+      .toContain("已提交 1 项");
     await expect
       .poll(
         async () => {
@@ -131,8 +118,7 @@ it("uses the authenticated blue workbench to read original bytes, run durable pa
       .toEqual({ status: "completed", failures: [] });
     expect(env.parseCalls).toBe(1);
     expect(env.modelCalls).toBe(0);
-    await page.locator("#document-parse-status a").click();
-    await page.getByRole("tab", { name: "结果与材料" }).click();
+    await page.locator("#op-results [data-task]").click();
     await page
       .getByRole("button", { name: "打开解析 PDF结果", exact: true })
       .click();
@@ -146,12 +132,23 @@ it("uses the authenticated blue workbench to read original bytes, run durable pa
       .toContain("A synthetic finding.");
     expect(env.parseCalls).toBe(1);
     await page
-      .getByRole("button", { name: "加工这篇文献", exact: true })
+      .getByRole("button", { name: "加入集合综合", exact: true })
       .click();
-    await page.locator("#knowledge-start").click();
+    await page.locator("#new-synthesis").click();
+    await page
+      .locator("#workspace-synthesis-question")
+      .fill("Compare the synthetic finding");
+    await page.locator("#workspace-synthesis-prepare").click();
     await expect
-      .poll(() => page.locator("#knowledge-status").textContent())
-      .toContain("任务已持久保存");
+      .poll(() => page.locator("#workspace-synthesis-status").textContent())
+      .toContain("已固定 1 项");
+    expect(env.modelCalls).toBe(0);
+    await page.locator("[data-paper]").click();
+    await page.getByRole("button", { name: "分析", exact: true }).click();
+    await page.locator("#op-confirm").click();
+    await expect
+      .poll(() => page.locator("#op-status").textContent())
+      .toContain("已提交 1 项");
     await expect
       .poll(
         async () =>
@@ -163,31 +160,28 @@ it("uses the authenticated blue workbench to read original bytes, run durable pa
       .toBe(2);
     expect(env.modelCalls).toBeGreaterThan(0);
     const callsAfterAnalysis = env.modelCalls;
-    await page.locator("#knowledge-status a").click();
-    await page.getByRole("tab", { name: "结果与材料" }).click();
+    await page.locator("#op-results [data-task]").click();
     await page
       .getByRole("button", { name: "打开单篇知识分析结果", exact: true })
       .click();
     expect(new URL(page.url()).searchParams.get("knowledge")).toBeTruthy();
     await expect
-      .poll(() => page.locator("#knowledge-read-result").textContent())
+      .poll(() => page.locator("#reader-body").textContent())
       .toContain("A synthetic finding.");
     await page
-      .locator("#knowledge-read-result")
+      .locator("#reader-body")
       .getByRole("button", { name: "展开证据" })
       .first()
       .click();
     await expect
-      .poll(() => page.locator("#knowledge-read-result").textContent())
+      .poll(() => page.locator("#reader-body").textContent())
       .toContain("已读取完整证据");
     expect(env.modelCalls).toBe(callsAfterAnalysis);
-    await page.locator(".library-identity summary").click();
-    await page
-      .getByRole("button", { name: "提交身份核验任务", exact: true })
-      .click();
+    await page.getByRole("button", { name: "核验身份", exact: true }).click();
+    await page.locator("#op-confirm").click();
     await expect
-      .poll(() => page.locator(".library-identity").textContent())
-      .toContain("任务已持久保存");
+      .poll(() => page.locator("#op-status").textContent())
+      .toContain("已提交 1 项");
     await expect
       .poll(
         async () =>
@@ -198,16 +192,14 @@ it("uses the authenticated blue workbench to read original bytes, run durable pa
       )
       .toBe(3);
     await page.reload();
-    await page.locator("#library-tab").click();
-    await expect.poll(() => page.locator(".library-result").count()).toBe(1);
-    await page.locator(".library-result").click();
     await expect
-      .poll(() => page.locator("#library-detail").textContent())
+      .poll(() => page.locator("#reader-info").textContent())
       .toContain("文章身份有证据支持");
+    await page.locator('[data-rm="know"]').click();
     await expect
       .poll(() =>
         page
-          .locator("#knowledge-list-results button")
+          .locator("#reader-body .vbar button")
           .filter({ hasText: "overview ·" })
           .count(),
       )

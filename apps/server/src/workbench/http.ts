@@ -1,3 +1,12 @@
+import {
+  executeExtraction,
+  type ExtractionOperation,
+} from "../entry/maintenance-operations.js";
+import {
+  executeQuery,
+  type QueryOperation,
+} from "../entry/query-operations.js";
+import { parseLibrarySearchRequest } from "@sciretriever/contracts";
 import { ProcessingTaskError } from "../application/jobs/processing.js";
 import { once } from "node:events";
 import {
@@ -53,35 +62,15 @@ import type { BrowserPageInfo } from "../browser/host.js";
 import { exportBibliography } from "../literature/bibliography.js";
 import {
   ContractValidationError,
-  parseDocumentReadRequest,
-  parseDocumentReadResult,
   parseDocumentRequest,
   parseRetrievalGenerationReceipt,
   parseStrictJsonObject,
   EXTRACTION_SUBMISSION_WIRE_MAX_BYTES,
-  parseExtractionAcceptedResult,
-  parseExtractionOperationResult,
-  parseExtractionReceiptResult,
-  parseExtractionSubmission,
   parseKnowledgeAnalysisRequest,
   parseKnowledgeLongAnalysisRequest,
   parseKnowledgeAnalysisReceipt,
-  parseKnowledgeReadSelection,
-  parseKnowledgeListSelection,
-  parseKnowledgeReadResult,
-  parseKnowledgeListResult,
-  parseKnowledgeDefaultResult,
-  parseKnowledgeDefaultSelection,
   parseKnowledgeSynthesisRequest,
   parseSynthesisExecutionReceipt,
-  parseSynthesisPreparationRequest,
-  parseSynthesisPreparationResult,
-  parseSynthesisReadSelection,
-  parseSynthesisReadResult,
-  parseSynthesisListSelection,
-  parseSynthesisListResult,
-  parseSynthesisSourceResult,
-  knowledgeQuestionSha256,
   type ConfigurationReadiness,
 } from "@sciretriever/contracts";
 import {
@@ -287,6 +276,13 @@ function validUiLocation(url: URL): boolean {
       (key) =>
         ![
           "workspace",
+          "view",
+          "query",
+          "reader",
+          "task",
+          "artifact",
+          "scope",
+          "advanced",
           "q",
           "sort",
           "literature",
@@ -299,6 +295,30 @@ function validUiLocation(url: URL): boolean {
     )
   )
     return false;
+  const filters = url.searchParams.get("query");
+  if (filters !== null) {
+    if (filters.length > 16384) return false;
+    try {
+      parseLibrarySearchRequest({
+        query: JSON.parse(filters),
+        sort: "title-asc",
+        limit: 50,
+        cursor: null,
+      });
+    } catch {
+      return false;
+    }
+  }
+  for (const [key, values] of [
+    ["view", ["lib", "disc", "ins", "ask", "syn", "ext", "task", "web", "set"]],
+    ["reader", ["pdf", "doc", "know"]],
+    ["scope", ["selection"]],
+    ["advanced", ["all"]],
+  ] as const) {
+    const value = url.searchParams.get(key);
+    if (value !== null && !(values as readonly string[]).includes(value))
+      return false;
+  }
   const workspace = url.searchParams.get("workspace");
   const sort = url.searchParams.get("sort");
   const query = url.searchParams.get("q");
@@ -314,7 +334,7 @@ function validUiLocation(url: URL): boolean {
       ["all", "active", "attention", "completed", "ended"].includes(
         url.searchParams.get("task_filter")!,
       )) &&
-    ["document", "knowledge", "synthesis"].every((key) => {
+    ["document", "knowledge", "synthesis", "task", "artifact"].every((key) => {
       const value = url.searchParams.get(key);
       return value === null || /^[A-Za-z0-9._:-]{1,128}$/u.test(value);
     })
@@ -458,7 +478,7 @@ function maintenanceError(error: unknown): {
           : error.code === "synthesis-stale-binding" ||
               error.code === "synthesis-cancelled"
             ? 409
-            : error.code === "synthesis-budget-exhausted" ||
+            : error.code === "synthesis-request-limit" ||
                 error.code === "synthesis-not-applicable" ||
                 error.code === "synthesis-response"
               ? 422
@@ -478,7 +498,7 @@ function maintenanceError(error: unknown): {
       status:
         code === "knowledge-input"
           ? 400
-          : code === "knowledge-budget-exhausted" ||
+          : code === "knowledge-request-limit" ||
               code === "knowledge-not-applicable" ||
               code === "catalog-v6-required"
             ? 422
@@ -771,7 +791,7 @@ export async function startWorkbenchHttp(
     response.setHeader("Referrer-Policy", "no-referrer");
     response.setHeader(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-src blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-src blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
     );
     const requestOrigin = request.headers.origin;
     if (
@@ -1019,6 +1039,10 @@ export async function startWorkbenchHttp(
       });
       streams.add(response);
       const send = () => {
+        if (!clients.has(clientId)) {
+          response.end();
+          return;
+        }
         grant.touched = Date.now();
         // A slow viewer gets the current projection after drain, never an unbounded frame queue.
         if (!response.destroyed && !response.writableNeedDrain)
@@ -1258,6 +1282,13 @@ export async function startWorkbenchHttp(
       if (typeof command.article_id !== "string") invalidInput();
       options.acquisition.start(command.article_id);
       json(response, 202, { view: projectedView(clientId) });
+      return;
+    }
+    if (pathname === "/api/clients/disconnect") {
+      object(value, []);
+      session.detach(clientId);
+      clients.delete(clientId);
+      json(response, 200, { disconnected: true });
       return;
     }
     if (pathname === "/api/sessions/select") {
@@ -2047,58 +2078,14 @@ function createQueryHttpHandler(
         stopUploads.signal.addEventListener("abort", abort, { once: true });
         streams.add(response);
         try {
-          const input = envelope.request;
-          let result: unknown;
-          switch (url.pathname) {
-            case "/api/v1/maintenance/extraction-operation":
-              result = parseExtractionOperationResult(
-                await delivery.create(input, stop.signal),
-              );
-              break;
-            case "/api/v1/maintenance/extraction-submit":
-              result = parseExtractionAcceptedResult(
-                await delivery.submit(input, stop.signal),
-                parseExtractionSubmission(input),
-              );
-              break;
-            case "/api/v1/maintenance/extraction-operation-read":
-            case "/api/v1/maintenance/extraction-close":
-            case "/api/v1/maintenance/extraction-cancel": {
-              const selection = object(input, ["operation_id"]);
-              if (typeof selection.operation_id !== "string") invalidInput();
-              result = url.pathname.endsWith("operation-read")
-                ? await delivery.operation(selection.operation_id)
-                : url.pathname.endsWith("extraction-close")
-                  ? await delivery.closeOperation(
-                      selection.operation_id,
-                      stop.signal,
-                    )
-                  : await delivery.cancelOperation(
-                      selection.operation_id,
-                      stop.signal,
-                    );
-              if (result !== null)
-                result = parseExtractionOperationResult(result);
-              break;
-            }
-            case "/api/v1/maintenance/extraction-receipt": {
-              const selection = object(input, ["receipt_id"]);
-              if (typeof selection.receipt_id !== "string") invalidInput();
-              result = await delivery.receipt(selection.receipt_id);
-              if (result !== null)
-                result = parseExtractionReceiptResult(result);
-              break;
-            }
-            case "/api/v1/maintenance/extraction-cleanup": {
-              const selection = object(input, ["limit"]);
-              if (typeof selection.limit !== "number") invalidInput();
-              result = await delivery.cleanupExpired(
-                selection.limit,
-                stop.signal,
-              );
-              break;
-            }
-          }
+          const result = await executeExtraction(
+            delivery,
+            url.pathname.slice(
+              "/api/v1/maintenance/extraction-".length,
+            ) as ExtractionOperation,
+            envelope.request,
+            stop.signal,
+          );
           json(response, 200, { protocol_version: 1, result });
         } finally {
           streams.delete(response);
@@ -2224,18 +2211,16 @@ function createQueryHttpHandler(
           });
           return;
         }
-        const selection = parseSynthesisPreparationRequest(command.request);
         const stop = new AbortController();
         const abort = () => stop.abort();
         response.once("close", abort);
         streams.add(response);
         try {
-          const result = await parseSynthesisPreparationResult(
-            await application.synthesisPreparation.prepare(
-              selection,
-              stop.signal,
-            ),
-            selection,
+          const result = await executeQuery(
+            application,
+            "synthesis-prepare",
+            command.request,
+            stop.signal,
           );
           json(response, 200, { protocol_version: 1, result });
         } finally {
@@ -2260,39 +2245,12 @@ function createQueryHttpHandler(
         response.once("close", abort);
         streams.add(response);
         try {
-          let result: unknown;
-          if (url.pathname === "/api/v1/query/synthesis-list") {
-            const selection = parseSynthesisListSelection(command.request);
-            result = await parseSynthesisListResult(
-              await reader.list(
-                selection.manifest_sha256,
-                selection.limit,
-                stop.signal,
-              ),
-              selection,
-            );
-          } else {
-            const selection = parseSynthesisReadSelection(command.request);
-            if (url.pathname === "/api/v1/query/synthesis-read") {
-              const read = await reader.byId(
-                selection.artifact_id,
-                stop.signal,
-              );
-              result =
-                read === null
-                  ? null
-                  : await parseSynthesisReadResult(read, selection);
-            } else {
-              const source = await reader.sourceById(
-                selection.artifact_id,
-                stop.signal,
-              );
-              result =
-                source === null
-                  ? null
-                  : await parseSynthesisSourceResult(source, selection);
-            }
-          }
+          const result = await executeQuery(
+            application,
+            url.pathname.slice("/api/v1/query/".length) as QueryOperation,
+            command.request,
+            stop.signal,
+          );
           if (result === null) {
             json(response, 404, {
               protocol_version: 1,
@@ -2323,39 +2281,12 @@ function createQueryHttpHandler(
         response.once("close", abort);
         streams.add(response);
         try {
-          let result: unknown;
-          if (url.pathname === "/api/v1/query/knowledge-read") {
-            const selection = parseKnowledgeReadSelection(command.request);
-            result = await reader.byId(selection.artifact_id, stop.signal);
-            if (result !== null)
-              result = await parseKnowledgeReadResult(result, selection);
-          } else if (url.pathname === "/api/v1/query/knowledge-list") {
-            const selection = parseKnowledgeListSelection(command.request);
-            result = await parseKnowledgeListResult(
-              await reader.list(
-                selection.literature_id,
-                selection.limit,
-                stop.signal,
-              ),
-              selection,
-            );
-          } else {
-            const selection = parseKnowledgeDefaultSelection(command.request);
-            const pointer = await reader.default(
-              selection.literature_id,
-              selection.purpose,
-              await knowledgeQuestionSha256(selection.question),
-              stop.signal,
-            );
-            result = pointer
-              ? {
-                  revision: pointer.revision,
-                  artifact: await reader.byId(pointer.artifact_id, stop.signal),
-                }
-              : null;
-            if (result !== null)
-              result = await parseKnowledgeDefaultResult(result, selection);
-          }
+          const result = await executeQuery(
+            application,
+            url.pathname.slice("/api/v1/query/".length) as QueryOperation,
+            command.request,
+            stop.signal,
+          );
           if (result === null) {
             json(response, 404, {
               protocol_version: 1,
@@ -2383,7 +2314,9 @@ function createQueryHttpHandler(
         response.once("close", abort);
         streams.add(response);
         try {
-          const result = await application.extractionPreparation.prepare(
+          const result = await executeQuery(
+            application,
+            "extraction-prepare",
             command.request,
             stop.signal,
           );
@@ -2428,7 +2361,9 @@ function createQueryHttpHandler(
         response.once("close", abort);
         streams.add(response);
         try {
-          const result = await application.context.search(
+          const result = await executeQuery(
+            application,
+            "context",
             command.request,
             stop.signal,
           );
@@ -2452,7 +2387,9 @@ function createQueryHttpHandler(
         response.once("close", abort);
         streams.add(response);
         try {
-          const result = await application.knowledgeContext.search(
+          const result = await executeQuery(
+            application,
+            "knowledge-context",
             command.request,
             stop.signal,
           );
@@ -2515,40 +2452,12 @@ function createQueryHttpHandler(
                   continuation: null,
                 }
               : command.request;
-          const value =
-            url.pathname === "/api/v1/query/document-default"
-              ? await reader.default(command.request, stop.signal)
-              : url.pathname === "/api/v1/query/document-describe"
-                ? await reader.describe(command.request, stop.signal)
-                : url.pathname === "/api/v1/query/document-outline"
-                  ? await reader.outline(command.request, stop.signal)
-                  : url.pathname === "/api/v1/query/document-segments"
-                    ? await reader.segments(command.request, stop.signal)
-                    : url.pathname === "/api/v1/query/document-resources"
-                      ? await reader.resources(command.request, stop.signal)
-                      : url.pathname === "/api/v1/query/document-slice"
-                        ? await reader.slice(command.request, stop.signal)
-                        : url.pathname === "/api/v1/query/document-resource"
-                          ? await reader.resource(command.request, stop.signal)
-                          : url.pathname === "/api/v1/query/material-evidence"
-                            ? await reader.materialEvidence(
-                                command.request,
-                                stop.signal,
-                              )
-                            : await reader.resolveEvidence(
-                                readRequest,
-                                stop.signal,
-                              );
-          let parsed;
-          try {
-            parsed = parseDocumentReadResult(
-              kind,
-              value,
-              parseDocumentReadRequest(kind, readRequest),
-            );
-          } catch (error) {
-            throw new DocumentReadError("document-integrity", { cause: error });
-          }
+          const parsed = await executeQuery(
+            application,
+            `document-${kind}` as QueryOperation,
+            readRequest,
+            stop.signal,
+          );
           json(response, 200, { protocol_version: 1, result: parsed });
         } finally {
           streams.delete(response);
@@ -2559,28 +2468,32 @@ function createQueryHttpHandler(
       case "/api/v1/query/search":
         json(response, 200, {
           protocol_version: 1,
-          page: await application.query.search(command.request),
+          page: await executeQuery(
+            application,
+            "library-search",
+            command.request,
+          ),
         });
         return;
       case "/api/v1/query/read": {
         const request = object(command.request, ["literature_id"]);
         json(response, 200, {
           protocol_version: 1,
-          detail: await application.query.detail(request.literature_id),
+          detail: await executeQuery(application, "literature-read", request),
         });
         return;
       }
       case "/api/v1/query/references":
         json(response, 200, {
           protocol_version: 1,
-          page: await application.query.references(command.request),
+          page: await executeQuery(application, "references", command.request),
         });
         return;
       case "/api/v1/query/reference": {
         const request = object(command.request, ["reference_id"]);
         json(response, 200, {
           protocol_version: 1,
-          detail: await application.query.referenceDetail(request.reference_id),
+          detail: await executeQuery(application, "reference-read", request),
         });
         return;
       }

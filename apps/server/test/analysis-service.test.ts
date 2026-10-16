@@ -41,7 +41,7 @@ const limits: AnalysisLimits = {
 };
 const draft =
   "# 研究背景与目标\n\nThe fixture studies spectroscopy.\n\n# 研究方法\n\n未提供\n\n# 数据\n\n未提供\n\n# 结论与局限性\n\n未提供\n\n# 参考文献\n\n1. Fixture reference.\n";
-it("assembles Analysis from the actual configuration owner and refuses incomplete budgets", async () => {
+it("assembles Analysis from the selected model without requiring budget configuration", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-analysis-assembly-"));
   const owner = new TypeScriptConfigurationOwner(home);
   const payload =
@@ -62,23 +62,7 @@ it("assembles Analysis from the actual configuration owner and refuses incomplet
       },
       baseline.revision,
     );
-    await expect(
-      createApplication(home, {
-        configurationOwner: owner,
-        analysisRuntime: {},
-      }),
-    ).rejects.toMatchObject({ code: "analysis-configuration" });
-    await owner.publish(
-      payload +
-        Object.entries(limits)
-          .map(([key, value]) => `${key} = ${value}\n`)
-          .join(""),
-      baseline.revision,
-      ["analyze"],
-    );
-    app = await createApplication(home, {
-      configurationOwner: owner,
-    });
+    app = await createApplication(home, { configurationOwner: owner });
     expect(app.analysis).toBeInstanceOf(AnalysisService);
     expect(app.agents.identity("analysis")).toMatchObject({
       provider: "fixture",
@@ -405,7 +389,7 @@ it.each(["metadata", "content", "no-content"] as const)(
                 ...(mode === "metadata" ? { title: "fabricated title" } : {}),
               },
             },
-      () => ({ markdown: "# Invalid content\n" }),
+      () => ({ markdown: mode === "metadata" ? draft : "# Invalid content\n" }),
     ]);
     const s = service(env, a.runtime);
     try {
@@ -422,14 +406,18 @@ it.each(["metadata", "content", "no-content"] as const)(
             input_metadata_sha256: before.metadata_sha256,
           },
         });
-      else
+      else if (mode === "metadata") {
+        const result = await pending;
+        expect(result.outcome).toBe("proposal");
+        if (result.outcome === "proposal")
+          expect(result.proposal.final_metadata.title).toBe(
+            before.literature.metadata.title,
+          );
+      } else
         await expect(pending).rejects.toMatchObject({
-          code:
-            mode === "metadata"
-              ? "analysis-metadata-proposal"
-              : "analysis-content-draft",
+          code: "analysis-content-draft",
         });
-      expect(a.calls).toHaveLength(mode === "content" ? 2 : 1);
+      expect(a.calls).toHaveLength(mode === "no-content" ? 1 : 2);
       expect(
         await env.app.library.detail(FIXTURE_LITERATURE.literature_id),
       ).toEqual(before);
@@ -481,9 +469,13 @@ it("rechecks current inputs around the model stages and rejects a changed parser
     await env.close();
   }
 });
-it("enforces operation budgets before requesting a model and cancels a pending model call on close", async () => {
+it("ignores deprecated budgets while cancellation still interrupts a pending model call", async () => {
   const env = await setup();
-  const empty = agent([]);
+  const before = await env.app.library.detail(FIXTURE_LITERATURE.literature_id);
+  const empty = agent([
+    () => ({ outcome: "usable", metadata: before.literature.metadata }),
+    () => ({ markdown: draft }),
+  ]);
   const bounded = service(env, empty.runtime, { max_total_llm_requests: 1 });
   let started: () => void = () => {};
   const waiting = new Promise<void>((r) => {
@@ -502,8 +494,11 @@ it("enforces operation budgets before requesting a model and cancels a pending m
   try {
     await expect(
       bounded.analyzeContent(FIXTURE_LITERATURE.literature_id),
-    ).rejects.toMatchObject({ code: "analysis-content-budget" });
-    expect(empty.calls).toHaveLength(0);
+    ).resolves.toMatchObject({ outcome: "proposal" });
+    expect(empty.calls).toHaveLength(2);
+    expect(
+      empty.calls.every((call) => !("max_completion_tokens" in call)),
+    ).toBe(true);
     const pending = s.analyzeContent(FIXTURE_LITERATURE.literature_id);
     await Promise.race([
       waiting,

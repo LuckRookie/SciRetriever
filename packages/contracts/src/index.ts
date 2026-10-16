@@ -1632,7 +1632,11 @@ export function parseCandidatePublicationIntent(
     size_bytes: candidate.size_bytes,
     media_type: "application/pdf",
   });
-  if (!asset.path.startsWith("objects/") || asset.path.length > 1024)
+  if (
+    (!asset.path.startsWith("objects/") &&
+      !asset.path.startsWith("originals/pdf/")) ||
+    asset.path.length > 1024
+  )
     fail(["target"]);
   let source: string | null = null;
   if (r.source_url !== null) {
@@ -1699,6 +1703,13 @@ export function parseCandidatePublicationReceipt(
   });
 }
 
+export const BROWSER_AGENT_STOP_REASONS = [
+  "access-unavailable",
+  "no-viable-path",
+] as const;
+export type BrowserAgentStopReason =
+  (typeof BROWSER_AGENT_STOP_REASONS)[number];
+
 export type BrowserAction =
   | {
       readonly kind: "click-element";
@@ -1724,7 +1735,14 @@ export type BrowserAction =
       readonly revision: number;
       readonly timeout_ms: number;
     }
-  | { readonly kind: "stop"; readonly reason: "user" | "budget" | "cancel" };
+  // Existing operator/older caller commands remain readable. The Agent wire only
+  // offers the two task outcomes below; runtime cancellation/budgets are not choices.
+  | { readonly kind: "stop"; readonly reason: "user" | "budget" | "cancel" }
+  | {
+      readonly kind: "stop";
+      readonly reason: BrowserAgentStopReason;
+      readonly explanation: string;
+    };
 
 export type OperatorInput =
   | BrowserAction
@@ -1825,6 +1843,23 @@ export function parseBrowserAction(value: unknown): BrowserAction {
       });
     }
     case "stop": {
+      const reason = object(value, []).reason;
+      if (reason === "access-unavailable" || reason === "no-viable-path") {
+        const stopped = exact(value, ["kind", "reason", "explanation"], []);
+        return Object.freeze({
+          kind,
+          reason: enumeration(stopped.reason, BROWSER_AGENT_STOP_REASONS, [
+            "reason",
+          ]),
+          explanation: text(
+            typeof stopped.explanation === "string"
+              ? stopped.explanation.replace(/\s+/gu, " ")
+              : stopped.explanation,
+            ["explanation"],
+            true,
+          ),
+        });
+      }
       const r = exact(value, ["kind", "reason"], []);
       return Object.freeze({
         kind,

@@ -1,6 +1,7 @@
+import { artifactReference } from "../src/storage/artifact-layout.js";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
+import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
@@ -268,9 +269,10 @@ it("checks current primary inside the commit transaction and preserves previous 
     const conflict = await app.parsing!.prepareCurrentPrimary(lit);
     const target = join(
       home,
-      "artifacts/objects",
-      `${conflict.result.markdown.sha256}.bin`,
+      "artifacts",
+      artifactReference("parser-markdown", conflict.result.markdown),
     );
+    await mkdir(dirname(target), { recursive: true });
     await writeFile(target, "preexisting conflicting evidence");
     await expect(
       app.parsing!.commitCurrentPrimary(conflict),

@@ -20,14 +20,11 @@
 | 主要内容输入    | 归档中的 Markdown                             |
 | 辅助验证输入    | content list、middle/model JSON、实际引用图片 |
 
-这些值由当前 `MinerUProtocol2ServiceClient`、归档 adapter 和直接测试共同锁定。它们在
+这些值由当前 `backends/mineru/profile.ts`、protocol client、归档 adapter 和直接测试共同锁定。它们在
 `sciretriever config`、`config status` 中只读显示，不作为可选 backend。MinerU 4.x 或
 其它 profile 不能在未重跑协议/归档/科学 PDF corpus 前替换当前实现。
 
-2026-07-24 的本机对比使用 MinerU 3.4.4 对 4 篇、共 49 页 PDF 测试 `pipeline`、
-`vlm-engine`、`hybrid-medium` 和 `hybrid-high`。四种模式均产生 Markdown、content list、
-middle JSON 和图片；人工抽查中 VLM 阅读性最好，但出现过把 `151.41 ℃` 识别为
-`151.41%` 的数值错误。这个证据支持当前质量优先选择，不构成自动双跑或 fallback 合同。
+后端比较与文本质量抽查见2026-07-24 测试记录（本地文件：`sandbox/reports/mineru-backend-comparison-2026-07-24.md`，不随仓库分发）。解析文本可能存在数值识别错误，不代表原始 PDF 的字节或科学结论。
 
 最后核对的官方资料：
 
@@ -39,8 +36,10 @@ middle JSON 和图片；人工抽查中 VLM 阅读性最好，但出现过把 `1
 
 ## 2. 当前生产接线
 
-根级 Bootstrap 已经根据 `[parsing]` 构造 production protocol-2 client、
-`MinerUArchiveAdapter` 与 Parsing service。内容补全按下面的有界顺序运行：
+解析测试与复验见[本地测试目录说明](../../tests/README.md#本地真实测试)。
+
+根级 Bootstrap 根据 `[parsing]` 构造共用的 `createMinerUProtocolTransport`、
+`MinerUParser` 与 Parsing service；ZIP 由 `convertMinerUArchive` 转换。内容补全按下面的有界顺序运行：
 
 ```text
 health -> submit PDF -> poll task -> fetch archive -> validate/convert -> publish ParserResult
@@ -50,6 +49,16 @@ client 校验 health、release、protocol、task ID、状态和响应预算；�
 验证路径、重复文件、大小、JSON 深度/类型、Markdown、实际引用资源、backend 与输入 PDF
 对齐。公共结果只保留 parser-neutral Markdown、实际引用资源、输入/result hash 和 provenance；
 原始归档、私有 JSON、未引用图片和调试输出在尝试结束后清理。
+
+当前默认不设置整篇任务 deadline，轮询间隔 2 秒，等到服务完成、明确失败或用户取消；
+取消会终止当前网络等待或轮询等待，不自动重提任务。已有构造参数允许 operator 集成层
+传入有界 timeout，这不是新增的 TOML 配置项。单次网络请求还受 Network 的独立超时约束。
+
+服务正常返回的队列、并发和时间字段不影响必需字段校验。请求明确开启 Markdown；
+middle 的图片文件名相对 `images/`，Markdown 资源相对其文件所在目录解析。归档布局
+不会进入公共资源引用。转换规则版本为 `mineru-ts-archive-v2`，有效参数 hash 覆盖固定
+服务版本、协议、输出参数、转换规则和部署模型身份。新 provenance ID 不参与结果 hash；
+旧解析结果保持可读，显式重解析成功后才替换当前关系。
 
 `config test parse` 是独立的 health-only 诊断：它只执行 `GET /health` 并验证 healthy、
 release `3.4.4`、protocol `2` 和固定 profile；不会 submit、poll、fetch archive、上传 PDF，

@@ -159,7 +159,7 @@ describe("Browser to durable Candidate journey", () => {
           started: 2,
           failures: [],
         });
-      const expectedHops = ["/article", "/inline.pdf", "/paper.pdf"].map(
+      const expectedHops = ["/article", "/response.pdf", "/paper.pdf"].map(
         (path) => fixture.origin + path,
       );
       expect(admittedUrls).toEqual(expect.arrayContaining(expectedHops));

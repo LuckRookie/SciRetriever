@@ -60,11 +60,11 @@ SQLite 与文件系统组成一个逻辑文献数据库，但拥有不同物理�
 
 Provider 的目标能力集合、领域发现启用边界、Acquisition 证据路由以及本地凭据合同由 [ADR 0014](../decisions/0014-capability-scoped-providers-and-local-credentials.md) 约束。Metadata 与 Acquisition 是两个不互斥的 Provider 能力，不建立第三类 Citation Provider；Provider、Agents 模型服务、可选 CloakBrowser Pro 与远程 MinerU 密钥只从 `~/.sciretriever/credentials.toml` 注入，核心服务 secret 与规范 origin 精确绑定，凭据状态与连接测试都不是文献数据库事实。
 
-[ADR 0015](../decisions/0015-publisher-aware-tiered-pdf-acquisition.md)进一步把原文访问方识别、运行时计划与执行分开。缺 PDF 目标按有界 cohort 严格执行 direct → publisher-api → general-api → public-web → Browser admission；API 按官方 quota policy，Browser 使用一个 operator-managed 持久身份 Profile、一个共享 Browser process/context，以及 `browser-generic` 聚合政策与实际平台文章网络准入。Resolution、Plan、route hint、Browser queue/runtime/circuit 只属于当前操作，不进入文献数据库；Browser 自己管理的认证状态只留在 owner-only Profile 中。具体唯一 runtime 与固定身份由 ADR 0016 修订，通用 Agent route 由 ADR 0023 修订。
+[ADR 0015](../decisions/0015-publisher-aware-tiered-pdf-acquisition.md)进一步把原文访问方识别、运行时计划与执行分开。缺 PDF 目标各自依次执行 direct → publisher-api → general-api → public-web → Browser admission；API 按官方 quota policy，Browser 使用一个 operator-managed 持久身份 Profile、一个共享 Browser process/context，以及 `browser-generic` 聚合政策与实际平台文章网络准入。Resolution、Plan、route hint、Browser queue/runtime/circuit 只属于当前操作，不进入文献数据库；Browser 自己管理的认证状态只留在 owner-only Profile 中。具体唯一 runtime 与固定身份由 ADR 0016 修订，通用 Agent route 由 ADR 0023 修订。
 
 [ADR 0016](../decisions/0016-cloakbrowser-fixed-identity-runtime.md)把生产 Browser runtime 切换为 CloakBrowser patched Chromium，同时保留 Playwright API、一个长期 Profile/process/context、原始出口、Provider 调度和 Network guard。Profile 使用固定设备身份；经证据确认的 challenge dependency 只在发起页面、frame ancestry、当前文章 permit 和页面生命周期内加载，Challenge 与普通页面使用同一 Observation/Action/capture 合同。
 
-[ADR 0017](../decisions/0017-shared-agents-and-controlled-browser-agent.md)把 Analysis 与 Browser 共用的 Agents 基础收敛为 Provider-neutral、无状态、一次只执行一个模型调用的 Runtime。每个 role binding 冻结 model、capability 与默认 reasoning effort；显式配置模型目录读取短生命周期经过 Network 且不持久化。Analysis 保留各分析用例的编排、prompt/schema 和验收，旧两阶段 controller 继续约束兼容路径；Acquisition 保留唯一 `AgentBrowserController`、动作语义和进展判断；Network 唯一生成 Observation、执行动作、capture 和 cleanup。ADR 0023 已删除 Publisher 规则 controller 与双路径选择。
+[ADR 0017](../decisions/0017-shared-agents-and-controlled-browser-agent.md)把共享单次模型层收敛为 Provider-neutral、无状态 Runtime。每个 role binding 冻结 model、capability 与默认 reasoning effort；显式配置模型目录读取短生命周期经过 Network 且不持久化。[ADR 0031](../decisions/0031-dsh-backed-agent-capabilities.md)已选定在 Agents 内增加受控 DSH 会话与工具循环，尚未实施。Analysis 保留用例编排、prompt/schema 和验收；Browser/Acquisition 保留文章、动作语义、进展和文件接纳；原 Network/Browser 边界继续执行准入、观察、动作、捕获与清理。ADR 0023 的唯一通用 Browser 路线不变。
 
 #### 2.2.1 活动代码结构
 
@@ -165,15 +165,15 @@ bootstrap ------------------> logging public API/configuration
 
 Port 由消费能力的模块所有：
 
-| 消费模块      | Port 范围                                                                                                                                                                                                                                 |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `entry`       | DiscoveryRun repository、selector/current-facts read、write admission、clock、literature metadata codec、原子用户文件输出；目标、候选和 Report 只在内存形成                                                                               |
-| `metadata`    | metadata search、metadata reference query、observation publication                                                                                                                                                                        |
-| `literature`  | literature repository、read model、artifact read、identity transaction、reference/support publication、content acceptance publication、import/export publication                                                                          |
-| `acquisition` | route adapter、临时获取、Asset 与 LiteratureAsset 原子 publication、自动获取耗尽事实 publication/clear；Resolution、Plan、route hint 和 Browser queue 只在模块/Entry 当前运行内存中形成                                                   |
-| `parsing`     | parser                                                                                                                                                                                                                                    |
-| `analysis`    | Agents structured-text capability；第一阶段元数据提案、第二阶段内容 Markdown 草稿和完整待验收提案都是临时结果，不拥有持久化 publication                                                                                                   |
-| `agents`      | 从任务所选 Model 与 Provider 解析出的 role binding、provider/model 协议的单次执行、capability/readiness、有界非持久模型目录读取、客观单次 limits、取消和稳定失败；不拥有用户 Model 配置、任务级模型覆盖、文献或 Browser workflow/业务结果 |
+| 消费模块      | Port 范围                                                                                                                                                                                                        |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `entry`       | DiscoveryRun repository、selector/current-facts read、write admission、clock、literature metadata codec、原子用户文件输出；目标、候选和 Report 只在内存形成                                                      |
+| `metadata`    | metadata search、metadata reference query、observation publication                                                                                                                                               |
+| `literature`  | literature repository、read model、artifact read、identity transaction、reference/support publication、content acceptance publication、import/export publication                                                 |
+| `acquisition` | route adapter、临时获取、Asset 与 LiteratureAsset 原子 publication、自动获取耗尽事实 publication/clear；Resolution、Plan、route hint 和 Browser queue 只在模块/Entry 当前运行内存中形成                          |
+| `parsing`     | parser                                                                                                                                                                                                           |
+| `analysis`    | Agents structured-text capability；第一阶段元数据提案、第二阶段内容 Markdown 草稿和完整待验收提案都是临时结果，不拥有持久化 publication                                                                          |
+| `agents`      | 当前单次模型层拥有 role binding、协议执行、capability/readiness、显式模型目录、单次 limits、取消和失败；ADR 0031 另选定受控 DSH 执行基础（接入中）。不拥有用户 Model 配置、文献/页面事实、任务调度或业务结果接纳 |
 
 禁止建立顶层共享 `ports/`、`repositories/`、`utils/` 或笼统 `integrations/` package。
 
@@ -183,9 +183,9 @@ Bootstrap 边界（`apps/server/src/bootstrap/application.ts`、`workbench.ts` �
 - `node:sqlite` repository 与 publisher；
 - 文件系统不可变发布、verified artifact reader 与原子用户文件输出；
 - metadata search、metadata reference query 和 Acquisition route adapters；
-- 当前进程共享的 Access Coordinator、secure HTTP、Publisher access profile catalog/Planner、tiered cohort orchestrator 与 Browser scheduler/session broker；只有存在经过生产准入的 Browser route 时才注入受控浏览器 adapter；
+- 当前进程共享的 Access Coordinator、secure HTTP、Publisher access profile catalog/Planner、单篇层级获取编排 与 Browser scheduler/session broker；只有存在经过生产准入的 Browser route 时才注入受控浏览器 adapter；
 - `parsing/backends/mineru/` 中按 ParserBackend 构造的 MinerU parser backend；
-- 一个共享无状态 Agents runtime，并按 Analyze/Browser 所选 Model 的 Provider 构造一或两个具体模型 adapter 与 role binding；同一 Provider 复用 adapter，不同 Provider 分别绑定，再向 Analysis 和唯一 Agent Browser controller 注入同一调用面；
+- 当前一个共享无状态单次 Agents runtime，并按 Analyze/Browser 所选 Model 的 Provider 构造 adapter 与 role binding；DSH 执行基础获准实施后也由此 Bootstrap 组装并复用相同模型配置和 Network，具体对象图见待审接入提案；
 - BibTeX、RIS 和 CSL JSON codec；
 - 本机写锁、时钟和资源预算。
 
@@ -475,100 +475,37 @@ AutomaticPdfAcquisitionExhaustion
 
 普通范围先形成 `MetaLiterature` 目标，再按[处理范围与目标](#42-处理范围与目标)在内存中冻结具体 Literature 候选；用户明确选择具体 Literature 时直接形成单版本目标。以下流程始终作用于当前选中的具体 Literature，形成的事实不会转移到其它版本。
 
-Entry 对每个目标仍从第一个缺失步骤继续，但不会让缺 PDF 的每篇 Literature 各自完整跑完
-五层路线后才处理下一篇。它先重读当前事实：已有主 PDF 的目标可以直接进入后续
-Parsing/Analysis；缺少主 PDF 的当前具体 Literature 组成有界 PDF cohort。大型范围可以拆成
-多个有界 cohort，但一个 cohort 内的风险层级屏障固定为：
+按 2026-10-13 用户确认及 [ADR 0015 §3](../decisions/0015-publisher-aware-tiered-pdf-acquisition.md#3-单篇保持五层顺序批量有界持续补位)，
+生产 Completion 采用有界持续补位。`execution.max_concurrency`（默认 4，范围 1–64）限制实际运行的目标数，
+worker 完成一篇立即领取冻结序列中的下一篇。没有为全部待办创建 Promise、页面或网络请求。
+每个目标从自己的第一个缺失步骤继续，已有 PDF 可直接进入后续加工，缺 PDF 的单篇顺序为：
 
 ```text
-冻结并重读当前具体 Literature
-  -> 初步 PublisherAccessResolution / AcquisitionPlan
-  -> direct：全部缺 PDF 目标完成已有文件/稳定公开定位
-  -> publisher-api：用文章证据与必要 DOI 定位处理未解决目标
-  -> general-api：继续适用聚合/开放获取 API
-  -> public-web：继续有界公共网页与静态 PDF 获取
-  -> 复用实际响应与有序入口，执行 Browser admission
-  -> 只有允许升级的最小剩余集合进入 Browser scheduler
-       └─ browser-generic 聚合政策与每平台文章网络串行/冷却
+当前事实 → direct → publisher-api → general-api → public-web → Browser admission
+                         任一阶段成功即检查并发布 PDF，停止该篇后续获取
 ```
 
-较早在前四层获得并完整提交主 PDF 的 Literature 不必等待整个 cohort 的 Browser
-层结束，便可以在本机并发与单次资源边界内继续自己的 Parsing/Analysis；层级屏障只限制尚未获得 PDF
-目标的风险升级。任何单篇都不能因为自己较早 miss，就在同 cohort 的低风险层尚未结束时
-提前打开 Browser。Resolution、Plan、实际响应、有限 Browser 入口、route hint、Browser queue 和 scheduler 状态都只属于
-当前操作。每篇 Browser 准备与恢复共用 300 秒活跃/100 次真实模型派发/200 次动作的 clock，
-首次模型派发前按明确导航失败恢复，5 秒节奏和平台准入继续执行。
+不同文章可以处于不同阶段，单篇不能跨层竞速或跳过适用来源。Resolution、Plan、实际响应、入口和候选历史
+由原 owner 在该篇操作内保留。Provider 与模型请求仍受共享 Network 配额限制。
 
-> **当前实现（chunk/cohort 编排）**：当前 `DatabaseCompletionOperation` 已按既有
-> `execution.max_concurrency`（默认 4，范围 1–64）分割冻结目标，一块全部结束后才启动下一块。
-> 块内 PDF acquisition preparation 使用 operation-local bounded cohort；主 PDF 接纳、
-> ParserResult 发布、内容接纳、NoUsableContent 清理及耗尽标记修改经过同一个 operation-local
-> 串行提交执行者。每个 chunk 带有 operation-local `generation` 与 `operation_id`，取消会拒绝
-> 尚未开始的 cohort action；Browser delivery 另外经过 Application 共享的 FIFO lane，并在排队
-> 期间检查 generation，关闭时先停止 admission 再 drain。缺 PDF 的 `CONTENT_READY` 目标在
-> 生产对象图中会先走同一自动 PDF acquisition，成功后重新读取 Literature 才进入 Parsing/Analysis。
-> `EntryPdfAcquisitionService.acquireCohort()` 按 direct、publisher-api、general-api、public-web
-> 依次处理 participant，再将允许继续的最小剩余集合交给 Browser；每一波终态按冻结索引排序后立即
-> 交付，已经安全提交 PDF 的目标可以继续 Parsing/Analysis。该协调与共享 session broker 已由
-> 离线 fake/loopback 直接测试覆盖；真实外部吞吐与 CloakBrowser 现场能力仍需独立证据。见
-> [TS 架构锚定基线 1.5](../typescript-baseline.md) 与
-> [ADR 0025 §5](../decisions/0025-typescript-entry-and-runtime-contract.md)。
+`DatabaseCompletionOperation` 为整次操作保留一个串行提交执行者、operation_id 和稳定 generation。
+补入新目标、同目标选择下一版本或兼容链清理后的串行重试不递增全操作代次，避免取消兄弟 Browser 下载。
+独立调用 TargetRunner/单篇服务仍保留原形式。生产使用 `PdfAcquisitionPort.acquire`，不再依赖
+participant 全员到齐的 coordinator；显式 `acquireCohort` 保留 HTTP 阶段波次和最终数组顺序，Browser
+结果逐篇通知，不为排序延迟已完成任务。最终五分区 Report 由冻结目标顺序生成。
 
-当前操作会等待块内全部已启动 worker 和提交队列收束后释放写准入。取消时未启动块进入
-`notStarted`，已启动并受控停止的目标进入 `interrupted`；排队的提交不会开始，已进入提交边界的
-事实按 owner 的实际结果报告。Parser/Analysis 普通失败保留为单目标失败；发布、持久化或清理
-完整性失败停止调度并优先于取消。报告各分区维持冻结顺序，进度 sink 失败不改变结果。
-独立调用 TargetRunner/单篇服务保留原调用形式；只有批量操作注入共享提交执行者。
+停止后续准入让已启动目标收尾；取消停止新目标、唤醒运行者并等待确定性清理，已提交事实保留。
+普通解析/模型/来源失败按原合同隔离，存储、发布及其他共享完整性错误停止相关运行并优先于取消。
+进度 sink 失败不改变事实或终态。目标一旦取得 PDF 可继续自己的后续阶段，无需等待其他文章。
 
-目标合同要求 Entry 按 `DatabaseCompletionOperation.max_concurrency` 将冻结目标的确定顺序切成
-固定大小 chunk；最后一个 chunk 可以更小。一个 chunk 是一次进程内 cohort 协调范围，不是
-持久 BatchRun，也不会跨进程恢复。每个 target worker 先绑定稳定 participant identity：缺
-PDF 的 participant 提交当代 `AcquisitionRequest`，已有 PDF、已经满足目标、失败、取消或完成
-的 participant 退出本代等待集合，因此已有 PDF 的 Literature 可以直接继续 Parsing/Analysis，
-不会被同 chunk 的 Acquisition 等待阻塞。其余请求全部到齐后才调用一次
-`prepare_primary_pdf_cohort()`。operation-local 单 worker coordinator 独立执行 cohort，target
-worker 只等待自己的终态；因此触发 cohort 的最后一个 participant 也能在任一 HTTP 阶段结束
-时消费自己的早期 receipt，不会被 coordinator 同步占住。receipt 按层级形成 direct、publisher-api、general-api、public-web、
-Browser/final 波次，每个波次内按冻结 target 顺序交付，而不是按 route 完成或 worker 唤醒
-顺序交付；前一波已经安全提交的目标可以继续下游，后续波仍受 acquisition 层级屏障约束。
-coordinator 在 chunk 退出前确定性关闭，内部错误会解除所有等待者并清理尚未交付 receipt，
-不能留下后台线程或永久等待。
+Browser 使用唯一 Profile/process/context，文章有独立页面、预算和 transfer。共享 Broker 与
+BrowserArticleScheduler 提供两个决策 worker 和受配置限制的保留会话；同平台一篇文章有网络活动，
+结束后冷却 30 秒，不同平台可并行。下载 started 暂停该篇模型、归还 worker，保留会话和平台网络资格。
+5 秒动作节奏及 300 秒活跃/30 次模型派发上限继续生效，默认不设独立动作上限；等待平台和后台传输不消耗活跃预算。
 
-MetaLiterature 的首选版本正常耗尽后，下一版本在同一 target 的下一代重新加入 cohort；
-在旧兼容链中，`NoUsableContent` 完成原子清理后，同一 Literature 也在本次操作的下一代重新加入，并继续
-携带 operation-local tried candidate keys。每一代的 prepare 可以有界并行，但所有
-publication/exhaustion commit 仍经过一个 operation-scoped 串行 commit executor。预取消的
-chunk 会让全部 participant 形成 `notStarted` 而不调用 Acquisition；已经形成的 receipt
-必须 commit 或 discard，清理失败不能被中断结果掩盖。重复操作重新读取数据库当前事实，
-不依赖上一轮 chunk、generation、request、receipt 或 route hint。
-
-> **当前实现（Browser lane 与共享 runtime）**：生产 Completion 共享同一
-> Planner/Profile catalog、tiered cohort executor、Browser scheduler 和 session broker。
-> 当前生产 Application 已构造惰性 `BrowserHost` factory，并通过统一 acquisition port 接入
-> Browser escalation、Network navigation admission、版本化 landing hint、Browser flow 和
-> Intake/身份接纳；`BrowserDeliveryScheduler` 在同一 Application 内串行 delivery，使用
-> `operation_id + generation` 拒绝过期排队请求，并在 Application close 时 drain；
-> `BrowserSessionBroker` 是 Application 内唯一 Browser delivery admission。缺少 verified runtime
-> 或 admission 时仍稳定 fail closed。真实 CloakBrowser 正路径和站点验证仍未运行；**offline seam 证据不能替代真实 runtime
-> 证据**。见 [TS 架构锚定基线 1.2](../typescript-baseline.md)、
-> [ADR 0025 §2](../decisions/0025-typescript-entry-and-runtime-contract.md)。
->
-> 配置中心已实现 Browser 总开关、一个 operator-managed 持久 Profile、Agent Model、显式可见
-> Browser 入口与本机资源 cap（由 Configuration owner 的直接测试覆盖）。该 cap 默认 `5`，只接受大于 `1` 的整数且不设上限。
-
-`browser-generic` 自身始终并发 1。目标合同要求：总开关、Model、选中且安全存在的固定身份 Profile、CloakBrowser
-wrapper/经验证 binary、Playwright API 与 headed display 同时就绪时，Bootstrap 才创建唯一
-`browser:generic` client 并将 execution confirmation/runtime readiness 传入 Admission。目标合同规定 Browser 使用
-当前机器正常网络出口和一个共享有头 CloakBrowser Chromium process/persistent context；无 GUI
-Linux 由 Xvfb 提供虚拟显示，broker 关闭后清理 runtime 与临时下载工作区但保留 Profile。所有文章
-由 `browser-generic` 限速串行；每篇文章使用隔离 page/handler。Entry 仍只消费 Acquisition 返回的中性
-receipt 或脱敏 escalation summary，不接触 page、Cookie、Profile 路径/内容、CloakBrowser 或 Playwright 对象；
-production catalog、Profile presence 或本地 runtime 就绪都不能证明已登录、机构 IP 或具体文章
-具有 entitlement。目标对象图只构造唯一 `AgentBrowserController`，Agent 从第一次稳定
-Observation 起决策；不存在 Publisher rule 或 fallback controller。Challenge 只是普通 page state；自动 clear、controller
-动作、资源阻断、未解决页面和普通拒绝分别映射为稳定进度或 failure。Entry 只看到 route 的中性
-结果，不读取页面证据，也不让 Agent 处理 login 或 MFA。产品没有用户可见 Browser 认证用例；
-Entry 不自动登录或选择机构，页面动作仍完全由 Acquisition 决策、Network 执行。
+正式 Host 通过 verified Cloak bundle 和独立准入构造；没有 runtime 时报告不可用。旧 delivery-only seam
+保留串行兼容路径，生产 openArticle 使用共享文章 scheduler。内部代次仍用于真正的操作失效，不能用普通
+补位触发失效。Entry 不获得页面、Cookie、Profile 或凭据；运行就绪不代表具有某篇文章的版权。
 
 `createApplication()`（`bootstrap/application.ts`）返回的 `Application` 是显式可关闭资源
 （`Application.close()`）；需要 Application 的 CLI 操作（如 `complete`、文献查询与资产导出）
@@ -588,7 +525,7 @@ Entry 不自动登录或选择机构，页面动作仍完全由 Acquisition 决�
 
 ```text
 缺少当前主 PDF
-  -> 进入当前有界 PDF cohort
+  -> 在当前有界目标 worker 中独立获取
   -> 分层 Acquisition
        ├─ AcquiredPrimaryPdf：继续 Parsing
        ├─ NoPrimaryPdf：自动获取耗尽事实已经安全提交；本版本稳定缺失
@@ -609,11 +546,11 @@ Entry 不自动登录或选择机构，页面动作仍完全由 Acquisition 决�
   -> 可独立、按需尝试参考文献 lookup
 ```
 
-Entry 不自行判断 route、候选、Parser 中间结果、最终 metadata、内容 Markdown 草稿、LiteratureContent 或引用目标是否有效，只按模块公开结果决定下一次调用。Acquisition 对候选的实际 PDF 字节、reader 和页面树检查失败会自行删除临时文件并继续候选。Entry 只在 Acquisition 已正常结束全部适用 routes、不存在 deferred/action-required/未解决 route failure，并已安全提交 `AutomaticPdfAcquisitionExhaustion(literature_id)` 后接收无字段 `NoPrimaryPdf`；候选级原因不读取或保存。用户中断、timeout、临时服务错误、`429`/`Retry-After`/quota、Browser 登录/MFA/Challenge 未解决、Network/API/权限/配置错误、文件发布、数据库提交或 stale 复检错误不能降级为缺失或建立耗尽事实。按 ADR 0015 §7，公共普通服务/传输故障可保留原因并继续独立 API/Browser，后续均未取得 PDF 时仍返回失败；其余阻断边界保留，不能通过备用 Browser 入口绕开。
+Entry 不自行判断 route、候选、Parser 中间结果、最终 metadata、内容 Markdown 草稿、LiteratureContent 或引用目标是否有效，只按模块公开结果决定下一次调用。Acquisition 对候选的实际 PDF 字节、reader 和页面树检查失败会自行删除临时文件并继续候选。Entry 只在 Acquisition 已正常结束全部适用 routes、不存在 deferred/action-required/未解决 route failure，并已安全提交 `AutomaticPdfAcquisitionExhaustion(literature_id)` 后接收无字段 `NoPrimaryPdf`；候选级原因不读取或保存。用户中断、timeout、临时服务错误、`429`/`Retry-After`/quota、Browser 登录/MFA/Challenge 未解决、Network/API/权限/配置错误、文件发布、数据库提交或 stale 复检错误不能降级为缺失或建立耗尽事实。按 ADR 0015 §7，已识别 HTTP/API/外部响应格式与候选拒绝可保留原因并继续独立来源；限流只停止该来源并保留共享 scope/平台冷却。后续均未取得 PDF 时仍返回失败，取消、存储/发布与内部合同错误继续停止执行。
 
 以下描述旧单篇兼容链与待修订实现，不作为新知识架构的清理授权：两阶段内容分析由 Analysis 保证顺序，Entry 不直接调用通用 prompt。当前代码仅在结构有效的 `NoUsableContent` 后进入清理；该联动需按 ADR 0026 拆除，已接纳材料的失效由独立 owner 决定。ParserResult 乱码、截断、只剩资源引用、无法判断、拒答、未知结构或调用失败都进入失败分支并保留 PDF。`ParserResult` 和第一阶段元数据提案本身都不推进状态；每个输入 Asset 只有一个当前 ParserResult，每个 Literature 只有一个当前 LiteratureContent。成功重处理在新结果完整接纳后原子替换当前关系但不建立历史，失败保留旧结果。替换 content 时同一提交清理旧 `ContentReferenceTextSupport`，并删除因此失去全部 support 的 Reference。Literature 整体接纳最终 metadata/content 后才达到 `CONTENT_READY`，这表示旧单篇兼容目标完成，不代表全部新知识用途完成。Reference lookup 和连接不参与三级状态推导。每个可持久化阶段成功后立即形成独立事实，后续失败不撤销权威元数据或 PDF。
 
-旧同步 completion 对每个 Literature 维护内存中的 candidate tried set。旧清理路径在明确 `NoUsableContent` 时，当前 PDF、来源关系、ParserResult 和待验收结果直接删除，候选和无效决定不长期保存；该 Literature 在需要其它 PDF 时重新进入后续有界 acquisition cohort，tried set 只防止本次运行立即再次选择同一候选。新运行不恢复这个集合，允许根据当前元数据重新发现来源。已经达到 `CONTENT_READY` 的主 PDF 不自动被其它候选替换，补充资产也不进入本流程。
+旧同步 completion 对每个 Literature 维护内存中的 candidate tried set。旧清理路径在明确 `NoUsableContent` 时，当前 PDF、来源关系、ParserResult 和待验收结果直接删除，候选和无效决定不长期保存；该 Literature 在需要其它 PDF 时在同一目标 worker 中重新执行获取，tried set 只防止本次运行立即再次选择同一候选。新运行不恢复这个集合，允许根据当前元数据重新发现来源。已经达到 `CONTENT_READY` 的主 PDF 不自动被其它候选替换，补充资产也不进入本流程。
 
 当前 Literature 的 Acquisition 最终返回 `NoPrimaryPdf` 并建立耗尽事实，或明确 `NoUsableContent` 后本版本候选全部耗尽时，MetaLiterature 目标才进入内存候选列表的下一 Literature。Network/Storage 系统错误、Parser/LLM 失败、取消或无法判断直接进入本次 Report 并停止该 Meta 目标，不能切换版本。
 
@@ -658,13 +595,13 @@ BatchSelector =
 真正开始候选前重读 current facts，已满足目标时归 `skipped(already-satisfied)`。
 宽范围遇到已有耗尽事实时保留事实且不重新请求获取，继续其它冻结的未耗尽版本；
 只有具体 Literature 的明确重试允许在开始获取前清除。取消在读取后、清除前和获取前再次检查，
-不把尚未启动的目标或尚未发起的获取悄悄推进。chunk 与 cohort 的当前实现见[内容处理编排](#41-内容处理编排)。
+不把尚未启动的目标或尚未发起的获取悄悄推进。持续补位与单篇顺序的当前实现见[内容处理编排](#41-内容处理编排)。
 
 ## 5. 报告、取消、并发与恢复
 
 ### 5.1 运行报告
 
-目标架构要求每次有效的处理型 Entry 请求都在当前进程内形成 [非持久化 Entry Report](#55-非持久化-entry-report) 定义的 typed Report，并直接返回程序内调用方。纯查询的 typed read result 已经是完整结果，不再包装 Report；Acquisition、Parsing 和 Analysis 作为数据库补全阶段时返回各自公开结果，由 Entry 汇总到一个 `DatabaseCompletionReport`，不制造嵌套报告。当前 TypeScript CLI 与 Application 使用 `DatabaseCompletionService` 返回五分区报告；durable Jobs 在创建时保存同一服务冻结的目标和 MetaLiterature 版本候选，在显式运行时把仍可执行的目标交给完整 completion 操作，包含 chunk、cohort、层级屏障、回执波次与串行提交。Jobs 将操作结果映射到原有 target/attempt/event、预算和干预策略，仍返回自身的逐目标结果，不把同步 Report 持久化或改写既有 CLI/HTTP wire。旧 `schema_version: 1` Job 的已存单篇目标可继续运行。真实 Browser runtime 仍需独立现场验收。
+目标架构要求每次有效的处理型 Entry 请求都在当前进程内形成 [非持久化 Entry Report](#55-非持久化-entry-report) 定义的 typed Report，并直接返回程序内调用方。纯查询的 typed read result 已经是完整结果，不再包装 Report；Acquisition、Parsing 和 Analysis 作为数据库补全阶段时返回各自公开结果，由 Entry 汇总到一个 `DatabaseCompletionReport`，不制造嵌套报告。当前 TypeScript CLI 与 Application 使用 `DatabaseCompletionService` 返回五分区报告；durable Jobs 在创建时保存同一服务冻结的目标和 MetaLiterature 版本候选，在显式运行时把仍可执行的目标交给完整 completion 操作，包含有界持续补位、单篇五层顺序、即时进度与串行提交。Jobs 将操作结果映射到原有 target/attempt/event、预算和干预策略，仍返回自身的逐目标结果，不把同步 Report 持久化或改写既有 CLI/HTTP wire。旧 `schema_version: 1` Job 的已存单篇目标可继续运行。真实 Browser runtime 仍需独立现场验收。
 
 生产 Browser 工作台只订阅当前显式获取操作：Entry 在冻结选择器后报告目标范围，并在目标开始和结算时投影当前目标与各分区计数；操作结束后投影同一个最终 `DatabaseCompletionReport`。这些会话反馈不创建持久 Job，也不改变报告对冻结目标的五分区归属。
 
@@ -710,9 +647,9 @@ Entry 编排可以并行等待不同 `Literature` 的网络、浏览器、Parser
 
 - 遵守模块和 Network 的单次资源上限、取消与真实 timeout；
 - 让所有外部访问经过 ADR 0012 的进程内共享 Access Coordinator，不把批量并发直接等同于供应商请求并发；
-- 把缺 PDF 目标分成有界 cohort，并在 cohort 内依次执行 direct、publisher-api、general-api、public-web 和最小剩余集合的 Browser admission，不允许单篇提前跨越层级屏障；
-- 让 API 请求按官方 quota scope、并发、间隔、window 和 `Retry-After` 门控；让所有 Browser 文章进入单一 `browser-generic` group，并固定 `concurrency=1` 串行；
-- 允许已经提交主 PDF 的目标继续后续阶段，但不因此撤销其它未解决目标的层级屏障；
+- 在有界目标 worker 中独立推进每篇的 direct、publisher-api、general-api、public-web 和 Browser admission，单篇不跨层竞速；
+- 让 API 按官方 quota 门控；Browser 复用共享聚合政策，同平台文章网络串行并冷却，不同平台可并行；
+- 已提交主 PDF 的目标继续后续阶段，其他目标沿各自顺序独立推进；
 - 通过单一提交队列串行 SQLite commit；
 - 停止信号到达后不再启动新目标；
 - 保留全部已提交阶段事实；
@@ -969,17 +906,17 @@ ExportReport
 - DiscoveryRun 本体只保存 ID、类型化输入、五态 status 和开始时间。每个 Provider 在整个 Run 内按过滤和去重前原始 item 执行 scan limit，只持久化自然耗尽、达到上限或失败；扫描/接纳/拒绝计数、cursor、完整路径和完成时间不进入合同。
 - Metadata 只应用标题或 DOI 的最低入库条件，不通过 LLM、搜索分数、关键词、摘要分类或低收益启发式判断领域相关性；偏题但有实际内容的 Literature 不属于 `NoUsableContent`。
 - 领域 DiscoveryRun 调用本次全部已启用、生产 adapter 已实现且 readiness 通过的 Metadata search 能力，不按 publisher 预先筛选；明确启用但缺少 adapter、必需普通参数、Provider 凭据或 AccessPolicy 时在开始前返回配置错误。引用查询只是 Metadata Provider 的可选能力，不建立 Citation Provider。
-- 同步数据库补全以运行时 `BatchSelector + BatchGoal` 为输入，在当前进程内冻结实际目标；selector、目标、候选与 Report 不持久化。运行期间新增文献或查询结果变化不动态加入。按操作的 `max_concurrency` 将冻结顺序切成固定大小 chunk；不同目标可以有界并行，每个目标从自己的第一个缺失步骤继续，缺 PDF participant 按代组成有界 cohort，已有 PDF 目标可以直接进入后续步骤。Receipt 按 direct、publisher-api、general-api、public-web、Browser/final 层级波次提前交付，波内保持冻结顺序，并经 operation-scoped 串行提交边界消费；chunk、generation、coordinator 和 receipt 不跨进程恢复。TS 源码已实现 `DatabaseCompletionOperation`、固定大小 chunk、operation-local coordinator、五层 barrier、receipt wave、generation/operation metadata、Application 共享 `BrowserSessionBroker` 和五分区 Report。真实 Provider/CloakBrowser 现场运行仍是独立证据边界，标注见 [任务与协作控制：数据库补全与阶段协调](#4-数据库补全与阶段协调) 与 [TS 架构锚定基线 1.5](../typescript-baseline.md)。
+- 同步补全冻结目标后以 `execution.max_concurrency` 限制目标 worker，完成一篇即补入下一篇。单篇保持五层获取顺序；发布经操作内串行提交，进度逐篇通知，最终五分区按冻结顺序形成。操作身份、队列和模型/浏览器现场不跨进程恢复。实际编排以本篇 §4.1 和 ADR 0015 §3 为准。
 - 普通范围按 MetaLiterature 去重并冻结有序 Literature 候选；先按 `CONTENT_READY`、已有 ParserResult、已有主 PDF 的完成度排序，同等完成度再按 `published`、`accepted-manuscript`、`preprint`、`other` 排序。只有稳定缺失才尝试下一版本，系统、Parser、LLM、取消或无法判断的失败不得触发回退。
 - Provider 私有响应、PublisherAccessResolution、AcquisitionPlan、AccessRouteHint、下载候选、HTTP/Browser 现场、session health/circuit、Parser task、LLM 草稿、内存队列、冻结目标、运行报告和缓存不是文献事实，不得形成第二真相源；只有适用 ADR 明确接纳的中性结果进入 Catalog 或 ArtifactStore。
 - 一个 Literature 可以关联多个长期保存的不可变 MetadataObservation，但只拥有一份当前 LiteratureMetadata；新增 observation 不覆盖来源事实，当前 metadata revision 只作为单调并发与内容对齐令牌，不形成旧统一元数据历史。LLM 最终提案只在完整内容接纳时替换当前元数据，不成为 MetadataObservation。
-- 同步 completion 重跑重新读取 current facts，不保存它的内存 selector、波次与 Report。已有 durable Jobs 单独保存授权任务、冻结目标及版本候选、尝试和 receipt；运行时只对仍可执行的持久目标启动新的操作局部 cohort，不能恢复上一进程的波次或 Browser/网络/模型现场。这些执行记录不等于文献事实，也不授权纯查询恢复任务。
+- 同步 completion 重跑重新读取 current facts，不保存它的内存 selector、波次与 Report。已有 durable Jobs 单独保存授权任务、冻结目标及版本候选、尝试和 receipt；运行时只对仍可执行的持久目标启动新的有界连续操作，不能恢复上一进程的波次或 Browser/网络/模型现场。这些执行记录不等于文献事实，也不授权纯查询恢复任务。
 - 文献版本状态只从已提交的权威事实推导，不维护第二个可修改状态；具体规则见 [文献与材料：文献身份、元数据与引用](03-literature-materials.md#2-文献身份元数据与引用)。
 - 现有 Literature 兼容状态为 `UNREVIEWED`、`ASSET_READY`、`CONTENT_READY`，文献引用解析不参与状态。新文档/知识能力按所请求产物、输入版本和有效性表达可用性，不能把全部用途压成旧单一内容完成态。
 - Acquisition 正常业务结果只有已经完整提交主 PDF 和本次没有获得主 PDF；候选问题不形成长期原因，文件或数据库提交问题按系统错误传播。唯一 `primary-pdf` 关系就是当前主 PDF，不建立平行 `is_current`。
 - 只有 Acquisition 正常遍历具体 Literature 的全部当前自动路径时才建立最小 `AutomaticPdfAcquisitionExhaustion`，提交成功后才返回 `NoPrimaryPdf`；该事实只保存 LiteratureId，不改变三级状态。`AllPendingSelector` 排除需要 PDF 且已有该事实的对象；新 MetadataObservation、成功主 PDF 或用户明确重试会清除它。中断、Network/API/权限/配置错误和 Storage 错误不得形成耗尽事实。
 - Acquisition 分别执行字节/可读页面树检查与文章归属验收，不信任后缀、文件名或 HTTP 类型，也不判断学术内容；Analysis 的不适用判断、部分解析或失败不能单独触发已接纳材料删除；旧 `NoUsableContent` 清理链需按 ADR 0026 修订。错误文件/文章的失效由独立规则裁决。
-- Acquisition 先形成访问方 Resolution 和按 direct、publisher-api、general-api、public-web、browser 分组的确定性 Plan；认证要求与执行阶段独立。Planner 可以省略不适用 route，但不能自动提前 Browser。一个 cohort 逐层完成前四层，最后只有 admission 允许的最小集合进入 Browser；同一 Literature 不跨层竞速，较早提交 PDF 的目标可以继续后续步骤。
+- Acquisition 先形成访问方 Resolution 和按 direct、publisher-api、general-api、public-web、browser 分组的确定性 Plan；认证要求与执行阶段独立。Planner 可以省略不适用 route，但不能自动提前 Browser。每篇逐层完成前四层，最后只有 admission 允许的最小集合进入 Browser；同一 Literature 不跨层竞速，较早提交 PDF 的目标可以继续后续步骤。
 - Resolution 依据明确 AssetHint origin、arXiv ID/PMCID/PII 等来源稳定定位、Provider record identity 和必要时 DOI 安全解析后的实际 landing origin；publisher 字符串、已确认别名和 DOI prefix 只能作为弱提示；名称治理不替代文章级证据或 entitlement。Metadata Provider、Publication/Access Provider 与 Access Platform 分开表达，凭据存在、认证成功和具体文献 entitlement 也必须分别判断。
 - DOI/API/页面产生的 canonical landing、稳定文章 ID 或 locator 只形成当前运行的安全 `AccessRouteHint`；Cookie、token、签名 URL、vendor/page object 不进入 hint、日志、Report 或数据库。
 - 手动 PDF 接纳要求 Entry 明确指定具体 Literature，复制而不移动用户文件，复用相同基本检查和唯一主资产 publication；它不进入 `AcquisitionPath`，无效输入不成为第三种自动 AcquisitionResult，已有主 PDF 时默认拒绝。
@@ -1001,7 +938,7 @@ ExportReport
 
 新增维护 facade 的每个操作必须先冻结意图和范围，再调用所需 owner。discoverMetadata只发现；acquirePdf只获取；ingestPdf仅消费受控用户字节；parseDocuments只处理已有材料；analyze/synthesize与submitExtractionBatch分别拥有自己的输入和结果。只有用户明确列出的组合步骤才能串联，不从知识缺口推导获取授权。
 
-现有 `complete content` 的已声明语义可以包含PDF获取、解析和旧Analysis，继续作为兼容维护入口。它不能被新的独立解析/分析/提取当作依赖补齐器。同步 complete 与 durable Jobs 共用冻结目标、Meta 候选顺序、cohort 波次和取消的执行语义；同步入口给出五分区 Report，Jobs 保留持久 target/attempt/event 与逐目标结果。纯查询不会调用此维护操作。
+现有 `complete content` 的已声明语义可以包含PDF获取、解析和旧Analysis，继续作为兼容维护入口。它不能被新的独立解析/分析/提取当作依赖补齐器。同步 complete 与 durable Jobs 共用冻结目标、Meta 候选顺序、有界补位、单篇顺序与取消语义；同步入口给出五分区 Report，Jobs 保留持久 target/attempt/event 与逐目标结果。纯查询不会调用此维护操作。
 
 自然语言问题属于查询/分析意图，不默认构成增加元数据或PDF的命令。Agent adapter须明确区分读取与维护工具；人类工作台的建议按钮只有用户显式发起后才进入维护入口。
 
@@ -1469,7 +1406,7 @@ Debug 的“逐步骤”按责任边界记录，而不是给每个函数做调�
 - Network 的无凭据请求开始、最终 HTTP status/响应字节数/耗时、API quota feedback、risk-group permit/circuit 状态，或 `policy`、`timeout`、`TLS`、`transport`、`admission`、`resource-limit` 等中性失败分类；
 - Metadata 的 Provider session 与耗时、逐 raw item 的 `accepted/empty/rejected` disposition、observation/relation 增量和稳定 reason；Provider 汇总满足 raw = accepted + empty + rejected；
 - Topic/Citation Discovery 的深度、observation 接纳/拒绝、关系和结果发布；Literature 拒绝 observation 时保留其拥有的稳定 `decision_reason`，但不记录 Provider 原始记录或正文；
-- Database Completion 的冻结目标、有界 PDF cohort、tier barrier、并发目标进度、current facts、Acquisition、Parsing、Analysis 和 Literature 接纳阶段；Analysis 的 metadata/content/publication started/finished 在 INFO 有单一 owner，stale/input hash 证据留在 Debug；
+- Database Completion 的冻结目标、有界持续补位、单篇五层顺序、并发目标进度、current facts、Acquisition、Parsing、Analysis 和 Literature 接纳阶段；Analysis 的 metadata/content/publication started/finished 在 INFO 有单一 owner，stale/input hash 证据留在 Debug；
 - Acquisition 的 plan revision、resolution evidence kind、route readiness/applicability、route key、public/API route hint 类别、候选匿名 ID、route 的 `disposition/next`、授权 target/lookup/download、Browser eligible/admitted/attempted/delivered、group queue/pacing、article-handle reuse、页面 observation/marker 检查、state/capture/cleanup、PDF 验证/准备、提交与正常耗尽。Browser marker 事件只记录静态 rule/marker ID、selector 数量、matched/miss 和 `elapsed_ms`；不记录 selector 或页面文本。
 - Agents Runtime 在 INFO 记录 role、provider、实际 wire model、stream/reasoning、单次 structured-result/
   tool-call 类别、usage、延迟和稳定失败；Debug 才增加 protocol、required capabilities 与输入/输出/
@@ -1490,7 +1427,7 @@ Elsevier Authorized lookup/download 的 response classification 在 Debug 中额
 真正未知状态；即使 failure kind 为 response-schema，也不记录供应商 status text、header、
 response body、URL/query 或 credential。
 
-这些 Browser 字段属于 route、scheduler、Completion 的日志合同；当前生产 Application 已接入惰性 `browser:generic` escalation、Network admission、统一 flow/Intake、五层 cohort、共享 `BrowserSessionBroker` 和稳定失败映射，离线 fixture 覆盖其中的 wiring、字段和分类。真实 `verifyInstalledCloakRuntime`/CloakBrowser 执行仍未运行。实际日志只证明已执行的步骤与结果分类，不能把 production catalog、本地 runtime 就绪或 probe 成功写成组织授权或任意文章 entitlement。
+这些 Browser 字段属于 route、scheduler、Completion 的日志合同；当前生产 Application 已接入惰性 `browser:generic` escalation、Network admission、统一 flow/Intake、五层获取、共享 `BrowserSessionBroker` 和稳定失败映射，离线 fixture 覆盖其中的 wiring、字段和分类。真实 `verifyInstalledCloakRuntime`/CloakBrowser 执行仍未运行。实际日志只证明已执行的步骤与结果分类，不能把 production catalog、本地 runtime 就绪或 probe 成功写成组织授权或任意文章 entitlement。
 
 携带 credential header/query 的 Network 调用不在 Network 层生成 LogRecord，避免凭据对象或别名进入日志系统；它们仍由 Provider/route/Agents adapter 在更高边界记录不含 endpoint、凭据或响应正文的安全步骤和稳定失败。这项抑制在 Debug 模式下也不放宽。Browser 日志只能记录无 secret 的 generic controller/group identity、Cloak runtime/version readiness、固定身份是否稳定和统一状态类别，不能记录 seed、完整导航目标、selector、页面文本、截图字节、Cookie、Profile 路径/内容、登录细节或签名 locator。
 
@@ -1649,7 +1586,7 @@ logging -X-> business facts / SQL / artifact publication
 - DiscoveryResult 按 MetaLiterature 去重且不包含 citation seeds；topic cause 指向实际 observation，citation cause 保存 source/target Literature 与 depth，不依赖长期 ReferenceId，也不保存完整 DiscoveryPath；
 - 多供应商部分失败；
 - 多家 Metadata 供应商可以逻辑并发，但同一 provider/API quota 在当前进程跨调用方共享并精确执行官方政策；所有 Browser 文章共用 `browser-generic` 聚合政策，同平台始终只有一篇文章具有网络活动，跨平台可并行并遵守各自 interval/window/cooldown；
-- 缺 PDF 目标按有界 cohort 执行 direct → publisher-api → general-api → public-web → Browser admission 层级屏障；同一 Literature 不跨层竞速，较早成功并已提交 PDF 的目标可继续 Parsing/Analysis，等待 Network/Browser permit 不产生新的 Literature 状态或持久失败事实；
+- 缺 PDF 目标各自依次执行 direct → publisher-api → general-api → public-web → Browser admission 层级屏障；同一 Literature 不跨层竞速，较早成功并已提交 PDF 的目标可继续 Parsing/Analysis，等待 Network/Browser permit 不产生新的 Literature 状态或持久失败事实；
 - Browser deferred/action-required 进入当前目标稳定 failure/action，不能建立自动耗尽；运行摘要不泄露 Cookie、profile 内容、完整 URL、selector 或页面动作，也不建立 BatchRun；
 - `AllPendingSelector`、`DiscoveryRunSelector`、`ImportReportSelector`、`QuerySelector`、`MetaLiteratureSelector` 和 `LiteratureSelector` 六类 selector 都使用类型化 Model，不使用 selected IDs/details JSON；`ImportReportSelector` 只接受调用方从非持久化 Report 明确重新提交的有序 MetaLiterature ID，不存在 ImportRunId；
 - Entry 在一致 snapshot 中把实际目标与 MetaLiterature 候选顺序冻结为内存 tuple，不保存 BatchRun、BatchTarget 或候选 snapshot；运行期间新增文献或查询结果变化不动态加入；
@@ -1718,7 +1655,7 @@ logging -X-> business facts / SQL / artifact publication
 - `network` 和 `storage` 不形成文献身份、业务验收、状态或导出资格决定；
 - Metadata、Acquisition、Parsing 和 Analysis 的外部请求在当前进程共享 provider/channel/host 准入；API 精确遵守官方 quota scope 与反馈，`browser-generic` 聚合政策与同平台网络活动上限 1/结束后 30 秒冷却共同执行；
 - Acquisition 的 Resolution/Plan 由 AssetHint、稳定定位、Provider record identity 和必要时安全解析后的 DOI landing origin 决定；不能按 publisher 字符串、单独 DOI prefix 或 MetadataObservation 来源硬编码内容 API/Browser，readiness/权限错误也不能形成 `NoPrimaryPdf` 或自动获取耗尽；
-- 缺 PDF 目标按有界 cohort 完成 direct → publisher-api → general-api → public-web → Browser admission，单篇不能提前跨层；`429`/Retry-After、quota、API 认证/权限/临时失败与安全准入错误不因改顺序放宽。公共传输故障按 ADR 0015 §7 保留原失败并允许独立后备；Browser 仅在首次模型派发前按 ADR 0023 的明确导航失败条件恢复有限入口，所有入口共用同一 clock/准入；
+- 缺 PDF 目标各自依次完成 direct → publisher-api → general-api → public-web → Browser admission，单篇不能提前跨层；`429`/Retry-After、quota、API 认证/权限/临时失败与安全准入错误不因改顺序放宽。已识别来源失败按 ADR 0015 §7 保留原因并继续独立渠道，共享 scope/平台冷却仍生效；Browser 仅在首次模型派发前按 ADR 0023 的明确导航失败条件恢复有限入口，所有入口共用同一 clock/准入；
 - 每次 Browser navigation、popup、viewer、response 和 download 在访问前同时通过 Profile guard 与 Network policy；重试、多标签页和备用入口不能绕过组内串行、interval、cooldown 或 circuit；
 - 一个 operator-managed 固定身份 Browser Profile 同时只由一个 CloakBrowser Chromium process 使用；所有文章
   在当前对象图共享一个 persistent context，Browser 按实际平台准入且服从 `browser-generic` 聚合政策，每篇

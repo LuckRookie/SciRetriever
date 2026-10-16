@@ -1,3 +1,4 @@
+import { artifactReference } from "./artifact-layout.js";
 import {
   ContractValidationError,
   extractionCanonicalJsonBytes,
@@ -216,7 +217,10 @@ export class SqliteKnowledgeStorage implements KnowledgeStoragePort {
     )
       fail();
     const bytes = knowledgeContentBytes(parsed.content);
-    const reference = `objects/${parsed.content_ref.sha256}.bin`;
+    const located = await this.database.locateArtifact(parsed.content_ref);
+    const reference =
+      located?.reference ??
+      artifactReference("knowledge-summary", parsed.content_ref);
     const stage = await this.files.stage({ maxBytes: bytes.length });
     try {
       await stage.write(bytes);

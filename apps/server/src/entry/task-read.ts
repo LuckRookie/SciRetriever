@@ -1,0 +1,90 @@
+import type { ExecutionRepository } from "../storage/execution/repository.js";
+import type { ExecutionJobStatus } from "../storage/sqlite/worker.js";
+import { readProcessingTask } from "../application/jobs/processing.js";
+import { ContractValidationError } from "@sciretriever/contracts";
+import { operationRecord as inputRecord } from "./query-operations.js";
+/** Read-only task projections; no recovery or runtime lock is started. */
+export function createTaskReader(repository: ExecutionRepository) {
+  const read = async (id: string) => {
+    const [task, events, interventions, policy, budget] = await Promise.all([
+      readProcessingTask(repository, id),
+      repository.listEvents(id, -1, 1000, "newest"),
+      repository.listInterventions(id, 1000),
+      repository.getPolicy(id),
+      repository.getBudget(id),
+    ]);
+    return {
+      ...task,
+      events: [...events].reverse(),
+      events_truncated: (events.at(-1)?.sequence ?? 0) > 0,
+      interventions,
+      policy,
+      budget,
+    };
+  };
+  return {
+    list: async (
+      limit = 100,
+      cursor?: string,
+      statusGroup?: "active" | "attention" | "ended",
+    ) => {
+      const groups: Readonly<
+        Record<"active" | "attention" | "ended", readonly ExecutionJobStatus[]>
+      > = {
+        active: ["queued", "running"],
+        attention: ["paused", "interrupted", "failed"],
+        ended: ["completed", "cancelled", "failed"],
+      };
+      const statuses = statusGroup === undefined ? [] : groups[statusGroup];
+      const order = statusGroup === "ended" ? "finished" : "newest";
+      let before: { timestamp: string; job_id: string } | null = null;
+      if (cursor !== undefined) {
+        if (!/^[A-Za-z0-9_-]{1,512}$/u.test(cursor))
+          throw new ContractValidationError();
+        let decoded: unknown;
+        try {
+          decoded = JSON.parse(
+            Buffer.from(cursor, "base64url").toString("utf8"),
+          );
+        } catch {
+          throw new ContractValidationError();
+        }
+        const r = inputRecord(decoded, ["timestamp", "job_id", "order"]);
+        if (
+          r.order !== order ||
+          typeof r.timestamp !== "string" ||
+          !r.timestamp ||
+          r.timestamp.length > 64 ||
+          typeof r.job_id !== "string" ||
+          !/^[A-Za-z0-9._:-]{1,128}$/u.test(r.job_id)
+        )
+          throw new ContractValidationError();
+        before = { timestamp: r.timestamp, job_id: r.job_id };
+      }
+      const tasks = await repository.listJobs(limit, order, before, statuses);
+      const last = tasks.at(-1);
+      const next = last
+        ? {
+            timestamp:
+              order === "finished"
+                ? (last.finished_at ?? last.created_at)
+                : last.created_at,
+            job_id: last.job_id,
+          }
+        : null;
+      const hasNext =
+        tasks.length === limit &&
+        next !== null &&
+        (await repository.listJobs(1, order, next, statuses)).length > 0;
+      return {
+        tasks,
+        next_cursor: hasNext
+          ? Buffer.from(JSON.stringify({ ...next, order })).toString(
+              "base64url",
+            )
+          : null,
+      };
+    },
+    read,
+  };
+}

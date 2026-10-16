@@ -16,7 +16,7 @@ import {
 } from "../../server/src/workbench/http.js";
 import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
 
-it("selects the correct live article without transferring control, while another article downloads and retains its file", async () => {
+it("selects the correct live article, explicitly returns control on close, while another article downloads and retains its file", async () => {
   const aId = FIXTURE_LITERATURE.literature_id;
   const bId = "00000000-0000-0000-0000-000000000003";
   const metadata = parseLiteratureCurrentFacts({
@@ -102,6 +102,7 @@ it("selects the correct live article without transferring control, while another
     ["/", "live.html", "text/html"],
     ["/styles.css", "styles.css", "text/css"],
     ["/live.css", "live.css", "text/css"],
+    ["/workspace.css", "workspace.css", "text/css"],
   ] as const)
     assets.set(route, {
       contentType,
@@ -140,15 +141,16 @@ it("selects the correct live article without transferring control, while another
     await expect
       .poll(() => page.locator("#browser-sessions button").count())
       .toBe(2);
-    expect(await page.locator("#takeover").isDisabled()).toBe(true);
-    await page.locator('[data-session-id="web-session-a"]').click();
+    expect(await page.locator("#watch-takeover").count()).toBe(0);
+    await page.locator('[data-session="web-session-a"]').click();
     await expect
-      .poll(() => page.locator("#page-title").textContent())
+      .poll(() => page.locator(".wt").textContent())
       .toBe("Synthetic article A");
-    await page.locator("#takeover").click();
+    await page.getByText("页面文字与可选指导", { exact: true }).click();
+    await page.locator("#watch-takeover").click();
     await expect
-      .poll(() => page.locator("#owner").textContent())
-      .toBe("你正在控制页面");
+      .poll(() => page.locator("#watch-control").textContent())
+      .toBe("你正在操作 · Agent 已暂停");
     const client = workbench.view().control.controller_id!;
     const aEpoch = workbench.view().control.epoch;
     const step = b.step();
@@ -156,26 +158,33 @@ it("selects the correct live article without transferring control, while another
     b.transferStarted("web-transfer-b");
     expect(await step).toMatchObject({ kind: "suspended" });
     await expect
-      .poll(() =>
-        page.locator('[data-session-id="web-session-b"]').textContent(),
-      )
+      .poll(() => page.locator('[data-session="web-session-b"]').textContent())
       .toContain("下载中");
     await page
-      .locator("#guidance-text")
+      .locator("#watch-guidance-text")
       .fill("This draft only belongs to article A.");
-    await page.locator('[data-session-id="web-session-b"]').click();
+    await page.locator("#watch-close").click();
     await expect
-      .poll(() => page.locator("#page-title").textContent())
+      .poll(() => workbench.view().control.controller_id)
+      .not.toBe(client);
+    await page.locator('[data-session="web-session-b"]').click();
+    await expect
+      .poll(() => page.locator(".wt").textContent())
       .toBe("Synthetic article B");
-    expect(await page.locator("#guidance-text").inputValue()).toBe("");
+    expect(await page.locator("#watch-guidance-text").inputValue()).toBe("");
     await expect
-      .poll(() => page.locator("#session-status").textContent())
+      .poll(() => page.locator("#watch-state").textContent())
       .toContain("下载中");
-    expect(await page.locator("#budget").textContent()).toContain(
-      "99 次模型调用",
+    expect(await page.locator("#watch-budget").textContent()).toContain(
+      "29 次模型调用",
     );
-    expect(workbench.view().control.controller_id).toBe(client);
-    expect(workbench.view().control.epoch).toBe(aEpoch);
+    expect(await page.locator("#watch-budget").textContent()).not.toContain(
+      "次动作",
+    );
+    await expect
+      .poll(() => workbench.view().control.controller_id)
+      .not.toBe(client);
+    expect(workbench.view().control.epoch).toBeGreaterThan(aEpoch);
     const candidate = parseDurableCandidate({
       transfer_id: "web-transfer-b",
       state: "durable-ready",
@@ -206,19 +215,26 @@ it("selects the correct live article without transferring control, while another
     expect(await b.step()).toMatchObject({ kind: "candidate", candidate });
     await b.close({ kind: "retained", code: "publication-disk-full" });
     await expect
-      .poll(() => page.locator("#candidate-count").textContent())
-      .toBe("1");
+      .poll(() => page.locator("#watch-candidates .browser-candidate").count())
+      .toBe(1);
     await expect
-      .poll(() => page.locator("#session-status").textContent())
+      .poll(() => page.locator("#watch-state").textContent())
       .toContain("publication-disk-full");
-    await page.locator('[data-session-id="web-session-a"]').click();
+    await page.locator("#watch-close").click();
+    await page.locator('[data-session="web-session-a"]').click();
     await expect
-      .poll(() => page.locator("#page-title").textContent())
+      .poll(() => page.locator(".wt").textContent())
       .toBe("Synthetic article A");
-    expect(await page.locator("#candidate-count").textContent()).toBe("0");
-    expect(await page.locator("#owner").textContent()).toBe("你正在控制页面");
-    expect(await page.locator("#budget").textContent()).toContain(
-      "100 次模型调用",
+    expect(
+      await page.locator("#watch-candidates .browser-candidate").count(),
+    ).toBe(0);
+    await page.getByText("页面文字与可选指导", { exact: true }).click();
+    await page.locator("#watch-takeover").click();
+    await expect
+      .poll(() => page.locator("#watch-control").textContent())
+      .toBe("你正在操作 · Agent 已暂停");
+    expect(await page.locator("#watch-budget").textContent()).toContain(
+      "30 次模型调用",
     );
     const candidateA = parseDurableCandidate({
       ...candidate,
@@ -254,10 +270,10 @@ it("selects the correct live article without transferring control, while another
       code: "browser-network-drain-timeout",
     });
     await expect
-      .poll(() => page.locator("#session-status").textContent())
+      .poll(() => page.locator("#watch-state").textContent())
       .toContain("PDF 已入库");
     await expect
-      .poll(() => page.locator("#session-status").textContent())
+      .poll(() => page.locator("#watch-state").textContent())
       .toContain("资源清理未完成（browser-network-drain-timeout）");
     expect(workbench.view().session_outcome).toEqual({
       kind: "published",

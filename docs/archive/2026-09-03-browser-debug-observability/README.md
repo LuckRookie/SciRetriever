@@ -408,3 +408,5 @@ git diff --check: passed
 | 2026-09-04 | 同一 ACS 文章会话复测复现 PDF 被 guard 拒绝 | 关联成功的 200 PDF 顶层导航早于 controller 首次观察到达；随后页面已为 normal，capture 仍为 0 | 根因方向收敛到导航与 capture permission 初始化时序，而非只归因于残留 Challenge DOM |
 | 2026-09-04 | 调查与可观测性计划完成并移入归档 | 真实样本已经区分 Agent、页面、Network、capture guard 和 cleanup，原计划诊断目标闭环 | 不在旧计划内扩张实现；Browser capture handoff 作为独立后续变化重新计划和验收 |
 | 2026-09-04 | 建立 [Browser Capture 交接修复计划](../2026-09-04-browser-capture-handoff/README.md) | 归档交接最初只有文字、没有活动执行入口；用户指出遗漏 | 后续合同、实现、验证与授权状态均由新计划追踪，本归档停止更新实施状态 |
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

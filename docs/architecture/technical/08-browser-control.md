@@ -4,7 +4,7 @@
 
 本模块对应设计中的 **⑧ 浏览器会话与控制**，管理同一生产浏览器的会话、页面、观察、受控动作和下载捕获，支持人类观看、指导、接管与交还。
 
-内部区分 Host/Page 生命周期、文章流程、观察与动作、控制权交接。③决定何时需要浏览器并验收下载候选；②负责操作级范围、队列和介入协调；①提供人类界面；共享 Network 与 Agents 分别按②和⑤中的技术合同使用。
+内部区分 Host/Page 生命周期、文章流程、观察与动作、控制权交接。③决定何时需要浏览器并验收下载候选；②负责操作级范围、队列和介入协调；①提供人类界面；共享 Network 与 Agents 分别按②和⑤中的技术合同使用。[ADR 0031](../decisions/0031-dsh-backed-agent-capabilities.md)的 DSH/Cordis 执行基础通过中性能力接口支撑同篇多轮工具交互；文章、控制、下载和发布 owner 不变。
 
 当前已有 Browser 组件、生产 factory、文章流程和工作台控制基础；真实 runtime 旅程、连续生产协作与自然语言指导的完成程度在本篇区分。捕获文件不等于资产已接纳，过期控制动作不能派发。
 
@@ -30,6 +30,8 @@
 
 新动作派发必须同时验证当前文章、页面 revision 与控制权；接管使旧决定失效，已在途请求按实际结果处理，交还重新观察。自然语言指导交由 controller 消费，不进入通用 Network 的业务判断。实时画面使用受控会话读取，不进入普通日志或文献数据库；长期录像/历史策略未定。自动登录/MFA 等权限不因人类接口而扩大。当前生产工作台已接通同页观看、指导、控制、操作反馈和 Library 阅读衔接；真实站点仍需独立验证。
 
+[ADR 0032](../decisions/0032-library-centered-web-workspace.md)确定新的交互方向：画面默认观看，用户在画面上直接操作可以触发控制权交接；无人介入时自动获取仍按实际结果结束，不以等待人工为默认阶段。该方向尚需前端和服务端联合适配，不表示当前已支持任意直接输入。服务端必须先确认控制权和当前文章/页面绑定，才派发输入；首次点击期间页面变化、多窗口竞争不能通过盲目重放事件处理。已存在的显式接管、交还和自然语言指导能力保留。
+
 ### 2.2 浏览器实现
 
 #### 2.2.1 当前 TypeScript surface 与接线状态
@@ -41,7 +43,7 @@ redirect 与 credential forwarding 决定、脱敏）、`budget.ts`（`NetworkBu
 （`BrowserNetworkProxy` 的 loopback CONNECT proxy）。Browser runtime 位于
 `apps/server/src/browser/`：`BrowserHost`、`BrowserControlCoordinator`、`BrowserObservationStore`、
 `BrowserPageRuntime`、`BrowserTransferDispatcher`/`BrowserTransferCollector`、`BrowserDisplay`、
-`HumanizedBrowserInput` 与 `createBrowserDecision()`。
+`HumanizedBrowserInput` 与 `createBrowserCapability()`；`createBrowserDecision()` 保留单次兼容入口。
 
 **当前接线状态**：生产 `createApplication()`（`bootstrap/application.ts`）在 Browser 显式启用且
 固定 bundle 验证通过后，自动组装 Network-owned loopback CONNECT proxy 与公网地址准入，
@@ -52,23 +54,37 @@ Entry 的 Public/API/Browser 分层获取、按文章的调度、Intake、PDF �
 Browser 按 session/page/operation/generation 归属请求、popup 与文件；同篇关联资源与合法重定向可跨 origin，
 每次仍执行 Network 的协议、DNS、公网地址与端口检查。它不再限定起点的单一 origin，也不按出版社配置点击脚本。
 默认2个决策worker与5个保留会话；下载让出决策worker但保留原会话，同平台网络活动串行且真实结束后冷却30秒。
-动作结束到下次实际模型派发至少5秒；单篇累计300秒活跃时间、50次派发、100次动作，排队/传输/本地验证不计活跃时间。
+动作结束到下次实际模型派发至少5秒；单篇累计300秒活跃时间、30次派发，先到上限停止进一步探索，动作保留统计而默认不独立设限。排队/传输/本地验证不计活跃时间。
+最后一次合法调用可完成动作与既有有界页面反馈、下载交接；时间及控制版本检查继续生效，已启动传输使用独立寿命，恢复不重置预算。
 文件流按块落盘、检查与发布；资源保护和显式串行兼容见[PDF获取指南](../../guides/pdf-acquisition.md)。
+
+动作执行继续绑定当前 revision 与短期 element ID；重复点击检测比较可见页面内容、viewport 和当前控件位置，
+不把 DOM 重绘后同一控件的新 ID 当成新动作。模型通过独立文章会话收到连贯的工具调用/真实结果、当前观察与人工/下载反馈，最近动作摘要只作为补充；
+重复动作改为观察等待，不因页面不变或登录状态提示自动认定无权限或结束。页面内容变化、不同控件与人工控制边界仍按原合同处理。
+
+`BrowserPageRuntime` 对主文档与可见 frame 的文本/控件语义作有界内容采样，跨 origin 与嵌套 iframe 同样参与反馈；不比较动画像素或连续变化的坐标。等待结果区分 `changed` 与 `timeout`，并报告实际等待时长；frame 读取的过渡失败不冒称变化。Driver 向同篇 Agent 工具结果及下一观察提供连续未检测到变化的等待次数/累计等待毫秒，变化、执行其它动作或控制权失效后重置。`success` 仅表示动作执行结束，不能暗示页面已取得进展；旧低层 seam 未报告结果时保留未知含义。既有停止理由、活跃预算、worker 释放、平台租约与动作后 5 秒节奏保持。该采样不覆盖纯 canvas/图片像素变化，仍须重新观察截图。
 
 普通文档资源的生命周期由精确 CDP session/frame/loader/request 关联。只有默认上下文消失与新loader提交相互印证，
 且 Network/Fetch 类型一致，才将旧文档的 Script/XHR/Image/Stylesheet/Font 判定为文档依附资源；
-Fetch、Other、keepalive、原生下载及PDF流不能仅凭文档替换推断终止。原非PDF响应在旧document失效后仍停在
+Fetch、Other、keepalive、原生下载及PDF流不能仅凭文档替换推断终止。未接管的渲染响应在旧document失效后仍停在
 Fetch response pause时，可读取它自己的IO流至EOF来结清，不能另发GET。明确取消必须确认原IO关闭与原Fetch取消，
 之后才撤销其待响应IO.read RPC；IO.close失败继续保留所有权和错误，不以本地Promise结束冒充网络终态。
 Renderer的Network终态与target销毁只作为原请求的精确终态证据，不能提前删除尚未结束的managed IO。
-PDF响应头表示下载意图，实际GUID表示writer已启动；活跃文章的popup关闭后仍保留迟到GUID的归属，
+普通Fetch/XHR的inline PDF继续交给renderer，不作为主下载；后台预览可以来自主frame，
+请求发生在点击之后也不能证明其为Agent选中的正文。明确attachment的Fetch/XHR仍取原响应IO流；
+顶层PDF导航、原生下载及页面后续发起的blob下载保留。这里区分网页渲染与文件交付，不进行文章身份解析。
+可下载响应头保留原生下载意图，实际GUID表示writer已启动；活跃文章的popup关闭后仍保留迟到GUID的归属，
 整篇会话确认关闭才回收意图，关闭后迟到writer执行取消/退役。初始open在导航前接通单文章取消信号，
 预算终止不会误标为用户取消，也不会取消其它文章。完整关闭由实际page.close结束页面，同时独立结算writer/IO/worker；
 连接失败重试只允许精确已准入且有失败证据的同URL GET，重定向到其它地址失败不能授权重放原始DOI。
 
 实际本机Cloak测试覆盖正式Application、popup归属、并发、资源/取消和文件发布；真实出版社测试独立记录于
-[2026-10-07最终验收](../../notes/browser-final-acceptance-2026-10-07.md)。单次成功不代表所有文章都有订阅权限，
+2026-10-07最终验收（本地文件：`sandbox/reports/browser-final-acceptance-2026-10-07.md`，不随仓库分发）。单次成功不代表所有文章都有订阅权限，
 也不代表验证码、DNS与限流不会再次发生。生产Network仍拒绝loopback；本地测试仅通过显式fixture adapter准入。
+
+当前生产 `createApplication()` 注入唯一 `DshAgentRuntime`，`createBrowserCapability()` 通过其 `createSession()` 按文章 session/Literature 身份打开 DSH scope，并显式提供最新图片投影、必须选择工具及动作输出限制。工具只暴露 `browser_action`，封闭动作仍由 `article-flow.ts` 执行并复核页面、控制 epoch 与观察版本；一批多个调用对同一观察至多接纳一个动作，其余记录拒绝。工具批次结算后让出本轮，取得新观察才继续。人工指导、接管/交还、人工动作及传输/验收反馈追加至原文章历史，前台选择不改变归属。下载暂停保留会话；取消/关闭释放 scope、模型路由与图片。
+
+每个普通推理或压缩请求具有独立 request identity 和文章准入生命周期，通过同一配置/Credential/Network 派发。排队取消或预算拒绝不发送请求，真实发送后失败仍计一次；文章累计预算不因 worker 调度、人工交还或恢复而重置。模型输入只发送最新图片，旧图片用引用说明替代，原事件与图片仍保留至会话关闭。压缩改变模型可见投影，不接纳文献事实，也不等于释放全部历史内存。真实模型/站点效果与这些离线边界测试分开验收。
 
 本节为当前TypeScript运行事实。下文保留的Python式 `BrowserFlowSession`、capture-policy及旧预算示例属于历史设计材料；
 如与上述当前行为或Accepted ADR 0023/0029/0030冲突，以Accepted合同与当前TypeScript接口为准，不能据此恢复身份门槛或站点规则。
@@ -479,6 +495,8 @@ Browser Host 使用一个 operator-managed CloakBrowser process/persistent conte
 
 ## 3. 获取准入、调度与进展判断
 
+2026-10-13：Entry 采用有界持续补位，单篇保持五层顺序，完成即时通知；普通补位不改变整次操作代次。Browser 的 worker、保留会话和平台网络资格仍分别结算。传输、Intake、发布与关闭各自记录单调时钟计时及字节，不记录页面 URL 或凭据；分段定义见 [ADR 0030](../decisions/0030-browser-transport-and-progress.md#有界文件与传输保护)。计时不参与成功/失败决定。
+
 ### 3.1 Browser admission、会话与调度（目标合同；当前仅部分接线）
 
 Browser admission 在启动任何 Browser runtime 前检查：
@@ -527,9 +545,9 @@ Stop
 
 `ClickElement` 绑定当前 revision 的短期 element ID。`ClickPoint` 绑定当前 article/page/surface/viewport/screenshot/revision，用于 closed Shadow DOM、canvas、图片控件或 Challenge 等只能从当前截图定位的可见目标；Network 在执行前验证 revision、surface、viewport 与坐标范围。`GoBack` 不接受 URL，`WaitForChange` 只使用单次 action timeout，`Stop` 不调用 Browser vendor API。Agent 不获得任意 URL、JavaScript、selector、跨 revision/raw coordinate、键盘文本、文件上传、Cookie、Profile、CDP、文件系统或创建额外 Browser/context 的能力。
 
-`AgentBrowserController` 不保存模型 Session、跨作业 history、累计 token/image/time 或用户可配置的
-repeat/step budget；实现只保留固定的 controller safety fuse。它取得一个 article-local
-`BrowserStepSession`，唯一循环是：
+以下保留接入 DSH 前单次动作决定的历史示意；旧 controller 不保存完整模型 Session。当前文章预算、
+worker、节奏与下载暂停以本篇当前文章流程及 ADR 0023/0030 为准，不由该简化循环穷尽。
+当前 DSH 对话与工具执行的接线见 §2.2.1，下面只用于理解原 article-local `BrowserStepSession` 的执行边界：
 
 ```text
 step = steps.start()
@@ -538,7 +556,7 @@ while step is Ready:
     step = steps.apply(action)
 ```
 
-每次 `Ready` 都重新构造独立 `AgentCall`；一次模型决定只对应一次 `apply`。安全绑定与机械无进展判断
+历史示意中每次 `Ready` 都重建独立 `AgentCall`；当前会话复用工具历史，但仍对每份观察至多接纳一次 `apply`。安全绑定与机械无进展判断
 使用两类不可互换的 fingerprint：
 
 ```text
@@ -569,6 +587,12 @@ Agent 尚未开始探索时已有一项有界捕获；Agent 已开始探索后�
 用户取消是 `Cancelled`。`BrowserAgentResult` 只保存这一项终态以及 action/model count 和 last
 action，不重复保存业务验收结论。不可配置的 32 次 model-decision safety fuse 防止实现缺陷无限运行；
 触发时形成 non-retryable `controller-safety-limit`，不能写成正常未命中或自动获取耗尽。
+
+2026-10-12 的模型工具仅提供两类主动 Stop：`access-unavailable`、`no-viable-path`，均要求
+`explanation` 简述尝试与障碍。中性 `BrowserAction` 兼容已有 operator 的 `user/budget/cancel`，
+生产模型 schema 不提供这三个运行控制选项。Driver 保留新原因，经 `browser-agent-*` 失败码与脱敏
+说明交付 Entry；若已有较早来源错误，最终报告仍显示这项明确的 Agent 判断，不写全渠道耗尽事实。
+此变化不增加模型请求、停止评审器或出版社页面规则，具体停止与继续条件见 ADR 0023 §3。
 
 route 只把这一项稳定终态映射为 Acquisition evidence，而不重建第二套状态机：完整 capture batch 先
 进入既有 PDF candidate 验收；没有可接纳 capture 时保留取消与具体 Network/Agent failure；只有没有
@@ -650,6 +674,10 @@ lease 由 Browser broker/runtime 独立拥有，单篇文章不能关闭仍服�
 timeout 后未在本机 cleanup timeout 内确认停止的 runtime 不交付晚到候选；即使此前已经捕获 PDF，也转换
 为 cleanup 系统失败，请求在其它活动 lane 排空后淘汰共享 runtime，并阻断同组后续任务。这个
 本机单次 cleanup timeout 不属于 Provider policy，不能用来缩短文章间隔。
+共享 runtime 意外退出时，关闭命令可能与实际 context 关闭竞争。只有已经观察到
+context 的关闭事件，才可以用这个终态结算竞态中失败的关闭命令；单独的 CDP
+断线或错误文本不证明 native writer 已经停止。尚未确认关闭的错误保留异常链并继续
+作为 cleanup failure；已确认的关闭不会覆盖原始 runtime-lost 原因。
 如果不可变资产与 catalog 关系已经成功提交，之后 receipt/staging cleanup 失败仍必须传播稳定
 系统失败，但不得删除、覆盖或回滚已经发布的资产和关系，也不得转而提交自动获取耗尽。
 
@@ -803,9 +831,11 @@ interface ControlBinding {
 
 当前生产政策：观察者断开不改变操作；控制者断开撤销租约并暂停新模型动作，等待新连接显式接管并交还，或操作截止/取消。没有后台 daemon 或跨重启回放。生产文章的 120 秒硬截止从准入页面打开后、协作挂接前起算；页面步骤和人工等待共用该截止，一次等待最多取 `min(5 分钟, 文章剩余时间)`。先行的 Public/API 阶段不计入这只文章时钟，但同属可取消的显式补全操作。取消/关闭立即唤醒。模型请求若在接管后才返回，其决定不派发；已经派发的动作与捕获仍按真实结果结算。
 
+ADR 0032 的 10-15 定稿原型将用户主动关闭观看界面时交还 Agent 作为目标体验，服务端交还确认及失败处理仍待落实。主动交还、正常关闭、切换文章与意外断线须分别设计和验证，不从关闭回调推导交还成功或断线自动恢复；在此之前继续使用上述生产政策。可选人工介入不允许把等待超时、Browser 失败或取消记录成自动获取正常耗尽。
+
 多个人同时接管时以服务端版本化结果为准，失败客户端重新读取控制状态；不能靠最后渲染页面的按钮决定赢家。过期命令返回 conflict/stale 而不是静默忽略，让用户知道动作没有生效。
 
-遇到特殊下载情况可创建帮助请求，显示目标、阻碍和可行人工动作。等待人工与永久挂起不同，具体等待时限、持久化和恢复遵循 Application/Jobs 合同，不从现有 intervention 表推导所有行为已实现。
+帮助请求和介入等待只用于明确启用的协作策略或用户主动介入，不是普通自动获取失败后的默认阶段。需要显示目标、阻碍和可行人工动作时，具体等待时限、持久化和恢复仍遵循 Application/Jobs 合同，不从现有 intervention 表推导所有行为已实现，也不因界面调整静默删除这些能力。
 
 登录、机构选择、MFA、验证码等允许的人类操作范围仍需独立确认。它们不自动授权 AI 获取凭据、读取 Profile 或绕过访问控制。
 

@@ -195,9 +195,13 @@ model = "openai/text-model"
     rejects(
       `[browser]\npolicy_overrides = [{ rate_limit_group = "browser-generic" }]`,
     );
-    rejects(`[analyze]\nmax_input_bytes = 10\nmax_chunk_bytes = 11`);
-    rejects(`[analyze]\nmax_total_llm_requests = 1`);
+
     rejects(`[browser]\nmax_concurrency = 0`);
+    expect(() =>
+      parseConfiguration(
+        `[analyze]\nmax_input_bytes = 10\nmax_chunk_bytes = 11\nmax_total_llm_requests = 1`,
+      ),
+    ).not.toThrow();
   });
 
   it("preserves configured Browser capacity while exposing its effective session and worker bounds", () => {

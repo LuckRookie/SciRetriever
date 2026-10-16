@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   AgentFailure,
   type AgentCall,
@@ -6,7 +7,18 @@ import {
   type AgentTransport,
   type AgentTransportResponse,
 } from "./protocol.js";
-import { parseStrictJsonObject } from "@sciretriever/contracts";
+import {
+  modelRequestFromAgentCall,
+  type ModelRequest,
+  type ModelResponse,
+  type ModelToolCall,
+  type ModelContinuation,
+  type ModelAssistantMessage,
+} from "./model-protocol.js";
+import {
+  canonicalJsonBytes,
+  parseStrictJsonObject,
+} from "@sciretriever/contracts";
 
 export interface AdapterConfig {
   readonly provider: string;
@@ -60,43 +72,171 @@ export function requestBody(
   call: AgentCall,
   protocol: AgentWireProtocol,
 ): Record<string, unknown> {
-  const messages = call.messages.map((message) => ({
-    role: message.role,
-    content: message.parts.map((part) => {
-      if (
-        part.media_type === "text/plain" ||
-        part.media_type === "application/json"
-      )
-        return {
-          type:
-            protocol === "openai-responses"
-              ? message.role === "assistant"
-                ? "output_text"
-                : "input_text"
-              : "text",
-          text: part.text,
+  return modelRequestBody(modelRequestFromAgentCall(call), protocol);
+}
+
+export function modelRequestBody(
+  call: ModelRequest,
+  protocol: AgentWireProtocol,
+): Record<string, unknown> {
+  const chatImages: Record<string, unknown>[] = [];
+  const messages = call.messages.flatMap(
+    (message, messageIndex): Record<string, unknown>[] => {
+      const content = message.parts.map((part) => {
+        if (
+          part.media_type === "text/plain" ||
+          part.media_type === "application/json"
+        )
+          return {
+            type:
+              protocol === "openai-responses"
+                ? message.role === "assistant"
+                  ? "output_text"
+                  : "input_text"
+                : "text",
+            text: part.text,
+          };
+        if (!("data" in part)) throw new AgentFailure("agent-input");
+        const encoded = Buffer.from(part.data).toString("base64");
+        if (protocol === "anthropic")
+          return {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: part.media_type,
+              data: encoded,
+            },
+          };
+        const url = `data:${part.media_type};base64,${encoded}`;
+        return protocol === "openai-responses"
+          ? { type: "input_image", image_url: url }
+          : { type: "image_url", image_url: { url } };
+      });
+      if (message.role === "tool") {
+        const status = {
+          type: protocol === "openai-responses" ? "input_text" : "text",
+          text: JSON.stringify({ status: message.status }),
         };
-      if (!("data" in part)) throw new AgentFailure("agent-input");
-      const encoded = Buffer.from(part.data).toString("base64");
-      if (protocol === "anthropic")
-        return {
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: part.media_type,
-            data: encoded,
+        if (protocol === "anthropic")
+          return [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: message.tool_call_id,
+                  is_error: message.status !== "success",
+                  content: [status, ...content],
+                },
+              ],
+            },
+          ];
+        if (protocol === "openai-responses")
+          return [
+            {
+              type: "function_call_output",
+              call_id: message.tool_call_id,
+              output: [status, ...content],
+            },
+          ];
+        // Chat tool messages accept text only. Images stay attached to an explicit
+        // user message tied to this tool result, rather than being dropped.
+        const texts = content.filter((part) => part.type === "text");
+        const images = content.filter((part) => part.type !== "text");
+        if (images.length)
+          chatImages.push({
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `Images returned by tool call ${message.tool_call_id}`,
+              },
+              ...images,
+            ],
+          });
+        const finishedBatch = call.messages[messageIndex + 1]?.role !== "tool";
+        return [
+          {
+            role: "tool",
+            tool_call_id: message.tool_call_id,
+            content: JSON.stringify({
+              status: message.status,
+              content: texts.map((part) => part.text),
+            }),
           },
-        };
-      const url = `data:${part.media_type};base64,${encoded}`;
-      return protocol === "openai-responses"
-        ? { type: "input_image", image_url: url }
-        : { type: "image_url", image_url: { url } };
-    }),
-  }));
+          ...(finishedBatch ? chatImages.splice(0) : []),
+        ];
+      }
+      const calls =
+        message.role === "assistant" ? (message.tool_calls ?? []) : [];
+      const replay =
+        message.role === "assistant" ? message.continuation?.opaque : undefined;
+      if (protocol === "openai-responses")
+        return replay?.items
+          ? (replay.items as Record<string, unknown>[])
+          : [
+              ...(content.length ? [{ role: message.role, content }] : []),
+              ...calls.map((call) => ({
+                type: "function_call",
+                call_id: call.id,
+                name: call.name,
+                arguments: JSON.stringify(call.arguments),
+              })),
+            ];
+      if (protocol === "anthropic")
+        return [
+          {
+            role: message.role,
+            content: replay?.blocks ?? [
+              ...content,
+              ...calls.map((call) => ({
+                type: "tool_use",
+                id: call.id,
+                name: call.name,
+                input: call.arguments,
+              })),
+            ],
+          },
+        ];
+      return [
+        {
+          role: message.role,
+          ...(replay?.reasoning_content !== undefined
+            ? { reasoning_content: replay.reasoning_content }
+            : {}),
+          content: content.length ? content : null,
+          ...(calls.length
+            ? {
+                tool_calls: calls.map((call) => ({
+                  id: call.id,
+                  type: "function",
+                  function: {
+                    name: call.name,
+                    arguments: JSON.stringify(call.arguments),
+                  },
+                })),
+              }
+            : {}),
+        },
+      ];
+    },
+  );
   const schema = call.response_schema;
-  if (protocol === "anthropic")
+  if (protocol === "anthropic") {
+    const turns: Record<string, unknown>[] = [];
+    for (const message of messages.filter((m) => m.role !== "system")) {
+      const previous = turns.at(-1);
+      if (
+        previous &&
+        previous.role === message.role &&
+        Array.isArray(previous.content) &&
+        Array.isArray(message.content)
+      )
+        previous.content.push(...message.content);
+      else turns.push(message);
+    }
     return {
-      messages: messages.filter((m) => m.role !== "system"),
+      messages: turns,
       ...(messages.some((m) => m.role === "system")
         ? {
             system: messages
@@ -104,7 +244,8 @@ export function requestBody(
               .flatMap((m) => m.content),
           }
         : {}),
-      max_tokens: call.max_output_tokens,
+      // Messages requires max_tokens; this protocol default is not a publication budget.
+      max_tokens: call.max_output_tokens ?? 16384,
       ...(schema
         ? { output_config: { format: { type: "json_schema", schema } } }
         : {}),
@@ -115,10 +256,16 @@ export function requestBody(
               description: t.description,
               input_schema: t.parameters,
             })),
-            tool_choice: { type: "any" },
+            tool_choice: {
+              type:
+                call.tool_choice === "required"
+                  ? "any"
+                  : (call.tool_choice ?? "auto"),
+            },
           }
         : {}),
     };
+  }
   const format = {
     type: "json_schema",
     name: "sciretriever_structured_result",
@@ -127,8 +274,18 @@ export function requestBody(
   };
   return {
     ...(protocol === "openai-responses"
-      ? { input: messages, max_output_tokens: call.max_output_tokens }
-      : { messages, max_completion_tokens: call.max_output_tokens }),
+      ? {
+          input: messages,
+          ...(call.max_output_tokens === undefined
+            ? {}
+            : { max_output_tokens: call.max_output_tokens }),
+        }
+      : {
+          messages,
+          ...(call.max_output_tokens === undefined
+            ? {}
+            : { max_completion_tokens: call.max_output_tokens }),
+        }),
     ...(schema
       ? protocol === "openai-responses"
         ? { text: { format } }
@@ -146,7 +303,7 @@ export function requestBody(
               ? { type: "function", ...t, strict: true }
               : { type: "function", function: { ...t, strict: true } },
           ),
-          tool_choice: "required",
+          tool_choice: call.tool_choice ?? "auto",
         }
       : {}),
   };
@@ -154,7 +311,7 @@ export function requestBody(
 
 export async function post(
   config: AdapterConfig,
-  call: AgentCall,
+  call: Pick<AgentCall, "role">,
   body: Record<string, unknown>,
   stream: boolean,
   signal?: AbortSignal,
@@ -182,6 +339,7 @@ export async function post(
     endpoint: config.endpoint,
     method: "POST",
     timeout_ms: 120_000,
+    ...(call.role === "analysis" ? { timeout_mode: "idle" as const } : {}),
     headers: [
       ["content-type", "application/json"],
       ...(protocol === "anthropic" ? [ANTHROPIC_API_VERSION_HEADER] : []),
@@ -339,7 +497,7 @@ export function toolResult(
   };
 }
 
-function matchesSchema(
+export function matchesSchema(
   value: unknown,
   schema: Record<string, unknown>,
   depth = 0,
@@ -420,4 +578,172 @@ function matchesSchema(
   if (schema.type === "boolean") return typeof value === "boolean";
   if (schema.type === "null") return value === null;
   return false;
+}
+
+/** Shared strict tool argument parser; missing IDs are tolerated only by the
+ * legacy single-call projection, which never exposes or replays those IDs. */
+export function modelToolCall(
+  request: ModelRequest,
+  id: unknown,
+  name: string,
+  argumentsText: string,
+  index: number,
+  legacy: boolean,
+): ModelToolCall {
+  if (id === undefined && legacy) id = `legacy-tool-${index}`;
+  if (typeof id !== "string" || !id.trim() || id.length > 256)
+    throw new AgentFailure("agent-tool");
+  const tool = request.tools?.find((tool) => tool.name === name);
+  if (!tool && !legacy) throw new AgentFailure("agent-tool");
+  const parsed = toolResult(
+    "internal",
+    "internal",
+    name,
+    argumentsText,
+    { input_tokens: 0, output_tokens: 0 },
+    tool?.parameters,
+  );
+  if (parsed.kind !== "tool") throw new AgentFailure("agent-tool");
+  return { id, name, arguments: parsed.arguments };
+}
+
+export function modelResponse(
+  provider: string,
+  model: string,
+  text: string,
+  calls: readonly ModelToolCall[],
+  tokenUsage: { input_tokens: number; output_tokens: number },
+  continuation?: ModelContinuation,
+): ModelResponse {
+  if (new Set(calls.map((call) => call.id)).size !== calls.length)
+    throw new AgentFailure("agent-tool");
+  if ((!text && !calls.length) || text.length > 4_194_304)
+    throw new AgentFailure("agent-result-limit");
+  const message: ModelAssistantMessage = {
+    role: "assistant",
+    parts: text ? [{ media_type: "text/plain", text }] : [],
+    ...(calls.length ? { tool_calls: calls } : {}),
+  };
+  return {
+    message: {
+      ...message,
+      ...(continuation
+        ? {
+            continuation: {
+              ...continuation,
+              opaque: {
+                ...continuation.opaque,
+                binding_sha256: replayBinding(message, continuation.opaque),
+              },
+            },
+          }
+        : {}),
+    },
+    stop_reason: calls.length ? "tool_calls" : "complete",
+    provenance: { provider, model, usage: tokenUsage },
+  };
+}
+
+function replayBinding(
+  message: ModelAssistantMessage,
+  opaque: Record<string, unknown>,
+): string {
+  const payload = Object.fromEntries(
+    Object.entries(opaque).filter(([key]) => key !== "binding_sha256"),
+  );
+  return createHash("sha256")
+    .update(
+      canonicalJsonBytes({
+        parts: message.parts.map((part) =>
+          "text" in part
+            ? part
+            : { ...part, data: Buffer.from(part.data).toString("base64") },
+        ),
+        tool_calls: message.tool_calls ?? [],
+        payload,
+      }),
+    )
+    .digest("hex");
+}
+
+/** Replay envelopes are bound to the exact adapter route that produced them. */
+export function validateModelContinuations(
+  request: ModelRequest,
+  provider: string,
+  model: string,
+  format: AgentWireProtocol,
+): void {
+  for (const message of request.messages) {
+    if (message.role !== "assistant" || !message.continuation) continue;
+    const state = message.continuation;
+    if (
+      state.provider !== provider ||
+      state.model !== model ||
+      state.format !== format
+    )
+      throw new AgentFailure("agent-model-mismatch");
+    if (state.opaque.binding_sha256 !== replayBinding(message, state.opaque))
+      throw new AgentFailure("agent-history-continuation");
+    const field =
+      format === "openai-responses"
+        ? "items"
+        : format === "anthropic"
+          ? "blocks"
+          : "reasoning_content";
+    if (
+      Object.keys(state.opaque).some(
+        (key) => key !== field && key !== "binding_sha256",
+      )
+    )
+      throw new AgentFailure("agent-input");
+    const content = state.opaque[field];
+    if (format === "openai-chat") {
+      if (typeof content !== "string") throw new AgentFailure("agent-input");
+    } else if (
+      !Array.isArray(content) ||
+      content.some(
+        (item: unknown) =>
+          !item ||
+          typeof item !== "object" ||
+          !("type" in item) ||
+          (format === "openai-responses"
+            ? !["reasoning", "message", "function_call"].includes(
+                String(item.type),
+              )
+            : !["thinking", "redacted_thinking", "text", "tool_use"].includes(
+                String(item.type),
+              )),
+      )
+    )
+      throw new AgentFailure("agent-input");
+  }
+}
+
+export function projectAgentResult(
+  call: AgentCall,
+  result: ModelResponse,
+): AgentResult {
+  const calls = result.message.tool_calls ?? [];
+  const text = result.message.parts
+    .map((part) => ("text" in part ? part.text : ""))
+    .join("");
+  if (calls.length) {
+    if (calls.length !== 1 || result.message.parts.length)
+      throw new AgentFailure("agent-tool");
+    const selected = calls[0];
+    if (!selected) throw new AgentFailure("agent-tool");
+    return {
+      kind: "tool",
+      name: selected.name,
+      arguments: selected.arguments,
+      provenance: result.provenance,
+    };
+  }
+  return resultText(
+    result.provenance.provider,
+    result.provenance.model,
+    text,
+    result.provenance.usage,
+    call.response_schema,
+  );
 }

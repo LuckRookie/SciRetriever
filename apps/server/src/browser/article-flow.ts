@@ -1,5 +1,6 @@
 import type {
   DurableCandidate,
+  BrowserAgentStopReason,
   OperatorInput,
   WorkbenchObservation,
 } from "@sciretriever/contracts";
@@ -11,7 +12,14 @@ import { BrowserObservationStore } from "./observation.js";
 import type { BrowserPageSnapshot } from "./observation.js";
 import type { BrowserPageHandle } from "./host.js";
 import type { BrowserCaptureBatchItem } from "./capture-batch.js";
-import type { AgentCallLifecycle } from "../agents/protocol.js";
+import { AgentFailure, type AgentCallLifecycle } from "../agents/protocol.js";
+import type { AgentCapabilityRequestLifecycle } from "../agents/capability.js";
+import type {
+  BrowserAgentActionResult,
+  BrowserAgentCapability,
+  BrowserAgentEvent,
+  BrowserAgentSession,
+} from "./decision.js";
 import { createLogger } from "../logging/index.js";
 import {
   BrowserArticleBudgetError,
@@ -34,6 +42,7 @@ import {
 } from "./pacing.js";
 import {
   browserRefused,
+  browserAgentStopped,
   type BrowserArticleFlow,
   type BrowserDecisionTarget,
   type BrowserDeliveryRequest,
@@ -105,13 +114,14 @@ export interface BrowserArticleFlowOptions {
   /** Entry-owned, already-admitted alternatives; never model-generated URLs. */
   readonly start_urls?: readonly string[];
   readonly decide: FlowDecision | undefined;
+  readonly agent?: BrowserAgentSession;
   /** When present, the production workbench owns both model and human dispatch. */
   readonly collaborativeStep?: (
     signal: AbortSignal,
   ) => Promise<CollaborativeStepResult>;
   readonly useCollaborativeStep?: () => boolean;
-  /** Actions still allowed; the loop stops as soon as this reaches zero. */
-  readonly max_actions: number;
+  /** Legacy explicit action ceiling; automatic articles use time and calls. */
+  readonly max_actions?: number;
   /** Model calls still allowed; bounds an unproductive loop as well as actions. */
   readonly max_model_calls: number;
   /** Cumulative active-time budget; queued permits and downloads are excluded. */
@@ -175,6 +185,7 @@ export interface BrowserArticleFlowOptions {
 export interface BrowserArticleFlowResult {
   readonly actions: number;
   readonly stopped_reason:
+    | BrowserAgentStopReason
     | "stopped"
     | "blocked"
     | "no-progress"
@@ -211,11 +222,17 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
   private epoch = 0;
   private transferId: string | null = null;
   private recentActions: OperatorInput[] = [];
+  private recentActionSummaries: string[] = [];
   private feedback: string[] = [];
+  private waitFeedback: string[] = [];
+  private unchangedWaits = 0;
+  private unchangedWaitMs = 0;
   private previousObservationIdentity: string | null = null;
   private previousActionIdentity: string | null = null;
   private decisionAbort: AbortController | null = null;
-  private pendingFeedback: Promise<void> | null = null;
+  private pendingFeedback: Promise<BrowserAgentActionResult> | null = null;
+  private agentTurn: Promise<void> | null = null;
+  private agentYield: (() => void) | undefined;
   private pendingPacing: ReturnType<typeof setTimeout> | undefined;
   private budgetTimer: ReturnType<typeof setTimeout> | undefined;
   private networkAllowed = true;
@@ -261,7 +278,9 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
         budget: {
           active_ms: Math.max(1, options.deadline_ms),
           max_model_calls: Math.max(1, options.max_model_calls),
-          max_actions: Math.max(1, options.max_actions),
+          ...(options.max_actions === undefined
+            ? {}
+            : { max_actions: Math.max(1, options.max_actions) }),
           min_decision_interval_ms: cooldownMs,
         },
       });
@@ -360,6 +379,10 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       return;
     if (this.transferId === transferId) return;
     if (this.initializationPending) this.initializationCaptureSeen = true;
+    this.recordAgentEvent({
+      kind: "transfer-started",
+      transfer_id: transferId,
+    });
     this.transferId = transferId;
     this.resumePage ??= this.page;
     this.phaseValue = "downloading";
@@ -371,6 +394,10 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
   transferCompleted(transferId: string): void {
     if (this.transferId !== transferId || this.phaseValue !== "downloading")
       return;
+    this.recordAgentEvent({
+      kind: "transfer-completed",
+      transfer_id: transferId,
+    });
     this.phaseValue = "validating";
     this.suspendActive();
     this.endNetwork({ kind: "completed" });
@@ -385,6 +412,11 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       this.phaseValue === "candidate-ready"
     )
       return;
+    this.recordAgentEvent({
+      kind: "transfer-failed",
+      transfer_id: transferId,
+      code: stableCaptureFailureCode(code),
+    });
     this.transferId = null;
     this.unresolvedCaptureFailure = stableCaptureFailureCode(code);
     if (isLocalCaptureFailure(this.unresolvedCaptureFailure)) {
@@ -403,6 +435,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     )
       return;
     if (this.initializationPending) this.initializationCaptureSeen = true;
+    this.recordAgentEvent({ kind: "candidate-ready" });
     this.unresolvedCaptureFailure = null;
     this.phaseValue = "candidate-ready";
     this.revokeDecision();
@@ -418,6 +451,10 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       this.delivered !== null
     )
       return;
+    this.recordAgentEvent({
+      kind: "candidate-rejected",
+      code: stableCaptureFailureCode(code),
+    });
     this.transferId = null;
     this.unresolvedCaptureFailure = stableCaptureFailureCode(code);
     if (isLocalCaptureFailure(this.unresolvedCaptureFailure)) {
@@ -439,6 +476,10 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     )
       this.phaseValue = "ready";
     this.notify();
+  }
+
+  recordAgentEvent(event: BrowserAgentEvent): void {
+    this.options.agent?.record(event);
   }
 
   cancel(): void {
@@ -570,7 +611,6 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       this.unsubscribeClock();
       const errors: unknown[] = [];
       try {
-        await this.networkStopping;
         let ownedCloseConfirmed = false;
         try {
           if (this.options.close) {
@@ -580,6 +620,16 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
         } catch (error) {
           errors.push(error);
         }
+        // Closing the owned pages can be what terminates their outstanding
+        // requests. Start that close before waiting for cooperative drain, or
+        // a published download can hold the cohort until the drain times out.
+        await this.networkStopping;
+        try {
+          await this.options.agent?.close();
+        } catch (error) {
+          errors.push(error);
+        }
+        await this.agentTurn?.catch(() => undefined);
         if (!ownedCloseConfirmed && this.networkCleanupError !== undefined)
           errors.unshift(this.networkCleanupError);
         if (errors.length)
@@ -606,6 +656,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       this.terminalResult !== null
     )
       return this.currentResult();
+    if (this.agentTurn !== null) return { kind: "waiting", reason: "page" };
     if (this.options.signal.aborted) {
       this.stop("cancelled");
       return this.currentResult();
@@ -623,9 +674,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       this.options.max_actions === 0 ||
       this.options.max_model_calls === 0 ||
       this.options.deadline_ms === 0 ||
-      this.clock.remaining().deadline_ms === 0 ||
-      this.clock.remaining().actions === 0 ||
-      this.clock.remaining().model_calls === 0
+      this.clock.remaining().deadline_ms === 0
     ) {
       this.stop("budget");
       return this.currentResult();
@@ -647,6 +696,16 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       this.ensurePacing();
       return { kind: "waiting", reason: "pacing", delay_ms: delay };
     }
+    // The last admitted action retains its existing feedback/download window.
+    // These ceilings reject a new decision, not the preceding action's handoff.
+    if (
+      this.clock.remaining().model_calls === 0 ||
+      (this.clock.budget.max_actions !== undefined &&
+        this.clock.remaining().actions === 0)
+    ) {
+      this.stop("budget");
+      return this.currentResult();
+    }
     if (
       this.options.collaborativeStep &&
       this.options.useCollaborativeStep?.() !== false
@@ -656,7 +715,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       else if (result !== "applied" && result !== "retry") this.stop(result);
       return this.currentResult();
     }
-    if (!this.options.decide) {
+    if (!this.options.decide && !this.options.agent) {
       this.stop("no-candidate");
       return this.currentResult();
     }
@@ -787,11 +846,105 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       pageId,
       controlEpoch,
     );
+    const observationIdentity = stableObservationIdentity(observation);
     if (!current()) return this.currentResult();
     this.options.automatic?.onObservation?.(observation, observed.frame, page);
     const abort = new AbortController();
     this.decisionAbort = abort;
     this.phaseValue = "deciding";
+    if (this.options.agent) {
+      let accepted = false;
+      const yieldTurn = new Promise<void>((resolve) => {
+        this.agentYield = resolve;
+      });
+      const turn = this.options.agent.run(
+        {
+          observation,
+          frame: observed.frame,
+          guidance: this.options.automatic?.guidance() ?? [],
+          feedback: [...this.feedback, ...this.waitFeedback],
+          admitRequest: (request, signal): AgentCapabilityRequestLifecycle => {
+            if (!current() || signal.aborted)
+              throw new DOMException("Browser decision revoked", "AbortError");
+            if (request.session_id !== this.session_id)
+              throw new TypeError("Browser request identity mismatch");
+            let dispatched = false;
+            let end: (() => void) | undefined;
+            return {
+              onDispatched: () => {
+                if (dispatched)
+                  throw new TypeError("Browser request dispatched twice");
+                if (!current() || signal.aborted)
+                  throw new DOMException(
+                    "Browser decision revoked",
+                    "AbortError",
+                  );
+                try {
+                  this.clock.recordModelDispatch();
+                } catch (error) {
+                  if (error instanceof BrowserArticleBudgetError)
+                    throw new AgentFailure(error.code);
+                  throw error;
+                }
+                dispatched = true;
+                if (request.purpose === "inference")
+                  this.options.automatic?.onDispatched?.();
+                end = this.beginActive("inference");
+              },
+              onSettled: () => {
+                end?.();
+                end = undefined;
+              },
+            };
+          },
+          executeAction: async (action) => {
+            try {
+              return await this.applyDecision(
+                action,
+                page,
+                observation,
+                snapshot,
+                current,
+                () => {
+                  if (accepted) return false;
+                  accepted = true;
+                  return true;
+                },
+              );
+            } catch (error) {
+              if (!current())
+                return { status: "cancelled", code: "browser-action-revoked" };
+              const code = stableBrowserFlowFailureCode(error);
+              this.fail(code);
+              return { status: "error", code };
+            }
+          },
+        },
+        abort.signal,
+      );
+      this.agentTurn = turn;
+      void turn
+        .catch((error: unknown) => {
+          if (!current()) return;
+          if (this.options.hasCandidate?.() === true) this.candidateReady();
+          else if (
+            stableBrowserFlowFailureCode(error) ===
+            "browser-flow-budget-exhausted"
+          )
+            this.stop("budget");
+          else this.fail(stableBrowserFlowFailureCode(error));
+        })
+        .finally(() => {
+          if (this.agentTurn === turn) this.agentTurn = null;
+          if (this.decisionAbort === abort) this.decisionAbort = null;
+          this.agentYield = undefined;
+          if (this.phaseValue === "deciding") this.phaseValue = "ready";
+          this.notify();
+        })
+        .catch(() => undefined);
+      await interruptible(Promise.race([turn, yieldTurn]), abort.signal);
+      return this.currentResult();
+    }
     let endInference: (() => void) | undefined;
     let dispatched = false;
     const lifecycle: AgentCallLifecycle = {
@@ -810,14 +963,23 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       // This is an explicit scripted-call seam. Production open() sets transport.
       if ((this.options.dispatch_tracking ?? "test-seam") === "test-seam")
         lifecycle.onDispatched();
-      const decision = this.options.decide(
+      const decision = this.options.decide!(
         observation,
         snapshot.screenshot,
         abort.signal,
         this.options.automatic?.guidance() ?? [],
         undefined,
         this.recentActions.slice(-6),
-        this.feedback,
+        [
+          ...this.recentActionSummaries,
+          ...this.feedback,
+          ...this.waitFeedback,
+          ...(observationIdentity === this.previousObservationIdentity
+            ? [
+                "The visible page is unchanged from the last executed non-wait action. Inspect the available controls and access requirements before repeating it.",
+              ]
+            : []),
+        ],
         lifecycle,
       );
       const result = await interruptible(decision, abort.signal);
@@ -832,155 +994,212 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
         this.stop("budget");
         return this.currentResult();
       }
-      const parsed = parseActionOrNull(result.value);
-      if (parsed === null) {
-        this.stop("invalid-action");
-        return this.currentResult();
-      }
-      if (
-        parsed.kind === "click-point" &&
-        (parsed.x >= observation.viewport.width ||
-          parsed.y >= observation.viewport.height)
-      ) {
-        this.feedback = [
-          "ClickPoint was rejected before dispatch: coordinates must be inside " +
-            observation.viewport.width +
-            " x " +
-            observation.viewport.height +
-            " CSS pixels. Choose current visible coordinates or an element.",
-        ];
-        this.phaseValue = "ready";
-        return { kind: "waiting", reason: "page" };
-      }
-      if (parsed.kind === "stop") {
-        this.clock.recordAgentAction();
-        this.stop(
-          observation.page_state !== "NORMAL" ||
-            (snapshot.http_status !== undefined &&
-              snapshot.http_status !== 200) ||
-            (!observation.title.trim() &&
-              !observation.text.trim() &&
-              observation.elements.length === 0)
-            ? "blocked"
-            : parsed.reason === "budget"
-              ? "budget"
-              : parsed.reason === "cancel"
-                ? "cancelled"
-                : "stopped",
-          `The Browser Agent stopped on page state ${observation.page_state}${snapshot.http_status === undefined ? "" : ` (HTTP ${snapshot.http_status})`}; no PDF was captured.`,
-        );
-        return this.currentResult();
-      }
-      const observationIdentity = stableObservationIdentity(observation);
-      const actionIdentity = stableActionIdentity(parsed);
-      const repeated =
-        parsed.kind !== "wait-for-change" &&
-        observationIdentity === this.previousObservationIdentity &&
-        actionIdentity === this.previousActionIdentity;
-      if (repeated) {
-        this.feedback = [
-          "Repeated input was suppressed; WaitForChange was executed instead. Inspect the page before choosing another action.",
-        ];
-        this.scheduleFeedback(
-          {
-            kind: "wait-for-change",
-            revision: observation.observation_revision,
-            timeout_ms:
-              observation.page_state === "CHALLENGE"
-                ? DEFAULT_BROWSER_AGENT_CHALLENGE_WAIT_MS
-                : DEFAULT_BROWSER_AGENT_WAIT_FOR_CHANGE_MS,
-          },
-          false,
-        );
-        return { kind: "waiting", reason: "page" };
-      }
-      const input = parsed;
-      if (input.kind === "wait-for-change") {
-        this.recentActions.push(input);
-        this.scheduleFeedback(input, true);
-        return { kind: "waiting", reason: "page" };
-      }
-      const endAction = this.beginActive("action");
-      let applied: unknown;
-      try {
-        const application = page
-          .apply(input, this.generation, current)
-          .then((value) => {
-            this.clock.recordAgentAction(true);
-            this.clock.actionFinished();
-            return value;
-          });
-        const result = await interruptible(application, abort.signal);
-        if (result.kind === "aborted" || !current())
-          return this.currentResult();
-        applied = result.value;
-      } catch (error) {
-        if (!current()) return this.currentResult();
-        if (isStaleActionError(error) || isPageTransitionError(error)) {
-          this.previousObservationIdentity = null;
-          this.previousActionIdentity = null;
-          this.phaseValue = "ready";
-          return { kind: "waiting", reason: "page" };
-        }
-        throw error;
-      } finally {
-        endAction();
-      }
-      this.feedback =
-        typeof applied === "object" &&
-        applied !== null &&
-        "feedback" in applied &&
-        typeof applied.feedback === "string"
-          ? [applied.feedback]
-          : [];
-      this.previousObservationIdentity = observationIdentity;
-      this.previousActionIdentity = actionIdentity;
-      this.recentActions.push(input);
-      if (this.options.hasCandidate?.() === true) {
-        this.candidateReady();
-        return this.currentResult();
-      }
-      const successor = await page.successor?.();
-      if (successor) this.usePage(successor);
-      const selectedElement =
-        input.kind === "click-element"
-          ? observation.elements.find(
-              (element) => element.element_id === input.element_id,
-            )
-          : undefined;
-      const likelyPdfAction =
-        (input.kind === "click-element" &&
-          /(?:\bpdf\b|download)/iu.test(selectedElement?.name ?? "")) ||
-        (input.kind === "click-point" &&
-          typeof applied === "object" &&
-          applied !== null &&
-          "likely_pdf" in applied &&
-          applied.likely_pdf === true);
-      this.scheduleFeedback(
-        {
-          kind: "wait-for-change",
-          timeout_ms:
-            observation.page_state === "CHALLENGE" &&
-            (input.kind === "click-point" || input.kind === "click-element")
-              ? DEFAULT_BROWSER_AGENT_CHALLENGE_WAIT_MS
-              : likelyPdfAction
-                ? DEFAULT_BROWSER_AGENT_PDF_WAIT_FOR_CHANGE_MS
-                : DEFAULT_BROWSER_AGENT_WAIT_FOR_CHANGE_MS,
-          revision: observation.observation_revision,
-        },
-        false,
+      await interruptible(
+        this.applyDecision(
+          result.value,
+          page,
+          observation,
+          snapshot,
+          current,
+          () => true,
+        ),
+        abort.signal,
       );
-      this.ensurePacing();
-      return {
-        kind: "waiting",
-        reason: "page",
-        delay_ms: this.clock.decisionDelayMs(),
-      };
+      return this.currentResult();
     } finally {
       endInference?.();
       if (this.decisionAbort === abort) this.decisionAbort = null;
       if (this.phaseValue === "deciding") this.phaseValue = "ready";
     }
+  }
+
+  /** The tool callback and legacy seam share the exact Browser action owner. */
+  private async applyDecision(
+    value: unknown,
+    page: FlowPageHandle,
+    observation: WorkbenchObservation,
+    snapshot: BrowserPageSnapshot,
+    current: () => boolean,
+    accept: () => boolean,
+  ): Promise<BrowserAgentActionResult> {
+    const outcome = (
+      status: BrowserAgentActionResult["status"],
+      code: string,
+    ): BrowserAgentActionResult => ({
+      status,
+      code,
+      feedback: [...this.feedback, ...this.waitFeedback],
+    });
+    if (!current()) return outcome("cancelled", "browser-action-revoked");
+    if (this.options.hasCandidate?.() === true) {
+      this.candidateReady();
+      return outcome("cancelled", "browser-candidate-ready");
+    }
+    if (this.clock.remaining().deadline_ms === 0) {
+      this.stop("budget");
+      return outcome("cancelled", "browser-budget-exhausted");
+    }
+    const observationIdentity = stableObservationIdentity(observation);
+    const parsed = parseActionOrNull(value);
+    if (parsed === null) {
+      this.stop("invalid-action");
+      return outcome("rejected", "browser-invalid-action");
+    }
+    if (
+      parsed.kind !== "stop" &&
+      (parsed.revision !== observation.observation_revision ||
+        (parsed.kind === "click-point" &&
+          parsed.viewport_version !== observation.viewport_revision) ||
+        (parsed.kind === "click-element" &&
+          !observation.elements.some(
+            (element) => element.element_id === parsed.element_id,
+          )))
+    )
+      return outcome("rejected", "browser-action-stale-observation");
+    if (
+      parsed.kind === "click-point" &&
+      (parsed.x >= observation.viewport.width ||
+        parsed.y >= observation.viewport.height)
+    ) {
+      this.feedback = [
+        "ClickPoint was rejected before dispatch: coordinates must be inside " +
+          observation.viewport.width +
+          " x " +
+          observation.viewport.height +
+          " CSS pixels. Choose current visible coordinates or an element.",
+      ];
+      this.phaseValue = "ready";
+      return outcome("rejected", "browser-action-rejected");
+    }
+    if (!accept()) return outcome("rejected", "browser-action-batch-limit");
+    if (parsed.kind === "stop") {
+      this.clock.recordAgentAction();
+      if ("explanation" in parsed) {
+        this.stop(parsed.reason, parsed.explanation);
+        return outcome("success", "browser-action-completed");
+      }
+      this.stop(
+        observation.page_state !== "NORMAL" ||
+          (snapshot.http_status !== undefined &&
+            snapshot.http_status !== 200) ||
+          (!observation.title.trim() &&
+            !observation.text.trim() &&
+            observation.elements.length === 0)
+          ? "blocked"
+          : parsed.reason === "budget"
+            ? "budget"
+            : parsed.reason === "cancel"
+              ? "cancelled"
+              : "stopped",
+        `The Browser Agent stopped on page state ${observation.page_state}${snapshot.http_status === undefined ? "" : ` (HTTP ${snapshot.http_status})`}; no PDF was captured.`,
+      );
+      return outcome("success", "browser-action-completed");
+    }
+    const actionIdentity = stableActionIdentity(parsed, observation);
+    const repeated =
+      parsed.kind !== "wait-for-change" &&
+      observationIdentity === this.previousObservationIdentity &&
+      actionIdentity === this.previousActionIdentity;
+    if (repeated) {
+      this.feedback = [
+        "Repeated input was suppressed; WaitForChange was executed instead. Inspect the page before choosing another action.",
+      ];
+      this.scheduleFeedback(
+        {
+          kind: "wait-for-change",
+          revision: observation.observation_revision,
+          timeout_ms:
+            observation.page_state === "CHALLENGE"
+              ? DEFAULT_BROWSER_AGENT_CHALLENGE_WAIT_MS
+              : DEFAULT_BROWSER_AGENT_WAIT_FOR_CHANGE_MS,
+        },
+        false,
+      );
+      return outcome("rejected", "browser-action-rejected");
+    }
+    const input = parsed;
+    if (input.kind === "wait-for-change") {
+      this.recentActions.push(input);
+      const feedback = this.scheduleFeedback(input, true);
+      return this.options.agent
+        ? feedback
+        : outcome("success", "browser-wait-started");
+    }
+    const endAction = this.beginActive("action");
+    this.resetWaitFeedback();
+    let applied: unknown;
+    try {
+      const application = page
+        .apply(input, this.generation, current)
+        .then((value) => {
+          this.clock.recordAgentAction(true);
+          this.clock.actionFinished();
+          return value;
+        });
+      applied = await application;
+    } catch (error) {
+      if (!current()) return outcome("cancelled", "browser-action-revoked");
+      if (isStaleActionError(error) || isPageTransitionError(error)) {
+        this.previousObservationIdentity = null;
+        this.previousActionIdentity = null;
+        this.phaseValue = "ready";
+        return outcome("rejected", "browser-action-rejected");
+      }
+      throw error;
+    } finally {
+      endAction();
+    }
+    const selectedElement =
+      input.kind === "click-element"
+        ? observation.elements.find(
+            (element) => element.element_id === input.element_id,
+          )
+        : undefined;
+    this.recentActionSummaries = [
+      ...this.recentActionSummaries.slice(-5),
+      `Executed ${input.kind}${selectedElement ? ` on ${JSON.stringify(selectedElement.name)} (${selectedElement.role})` : input.kind === "click-point" ? ` at (${input.x}, ${input.y})` : ""} on page ${JSON.stringify(observation.title)} (${observation.url}).`,
+    ];
+    this.feedback =
+      typeof applied === "object" &&
+      applied !== null &&
+      "feedback" in applied &&
+      typeof applied.feedback === "string"
+        ? [applied.feedback]
+        : [];
+    this.previousObservationIdentity = observationIdentity;
+    this.previousActionIdentity = actionIdentity;
+    this.recentActions.push(input);
+    if (this.options.hasCandidate?.() === true) {
+      this.candidateReady();
+      return outcome("success", "browser-action-completed");
+    }
+    if (!current()) return outcome("success", "browser-action-applied");
+    const successor = await page.successor?.();
+    if (successor) this.usePage(successor);
+    const likelyPdfAction =
+      (input.kind === "click-element" &&
+        /(?:\bpdf\b|download)/iu.test(selectedElement?.name ?? "")) ||
+      (input.kind === "click-point" &&
+        typeof applied === "object" &&
+        applied !== null &&
+        "likely_pdf" in applied &&
+        applied.likely_pdf === true);
+    this.scheduleFeedback(
+      {
+        kind: "wait-for-change",
+        timeout_ms:
+          observation.page_state === "CHALLENGE" &&
+          (input.kind === "click-point" || input.kind === "click-element")
+            ? DEFAULT_BROWSER_AGENT_CHALLENGE_WAIT_MS
+            : likelyPdfAction
+              ? DEFAULT_BROWSER_AGENT_PDF_WAIT_FOR_CHANGE_MS
+              : DEFAULT_BROWSER_AGENT_WAIT_FOR_CHANGE_MS,
+        revision: observation.observation_revision,
+      },
+      false,
+    );
+    this.ensurePacing();
+    return outcome("success", "browser-action-applied");
   }
 
   private async currentResult(): Promise<BrowserArticleStepResult> {
@@ -1014,9 +1233,16 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     return { kind: "waiting", reason: "page" };
   }
 
-  private scheduleFeedback(input: OperatorInput, agentWait: boolean): void {
+  private scheduleFeedback(
+    input: OperatorInput,
+    agentWait: boolean,
+  ): Promise<BrowserAgentActionResult> {
     const page = this.page;
-    if (!page) return;
+    if (!page)
+      return Promise.resolve({
+        status: "rejected",
+        code: "browser-page-unavailable",
+      });
     const expectedEpoch = this.epoch;
     const endWait = this.beginActive("page-wait");
     this.phaseValue = "waiting";
@@ -1029,28 +1255,92 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
           this.phaseValue === "waiting" &&
           !this.options.signal.aborted,
       )
-      .then(async () => {
-        if (this.epoch !== expectedEpoch || this.phaseValue !== "waiting")
-          return;
+      .then(async (applied): Promise<BrowserAgentActionResult> => {
+        if (
+          this.epoch !== expectedEpoch ||
+          this.phaseValue !== "waiting" ||
+          this.options.signal.aborted
+        )
+          return { status: "cancelled", code: "browser-wait-revoked" };
         if (agentWait) {
           this.clock.recordAgentAction(true);
           this.clock.actionFinished();
         }
         const successor = await page.successor?.();
+        if (
+          this.epoch !== expectedEpoch ||
+          this.phaseValue !== "waiting" ||
+          this.options.signal.aborted
+        )
+          return { status: "cancelled", code: "browser-wait-revoked" };
         if (successor) this.usePage(successor);
+        const waitOutcome = successor
+          ? "changed"
+          : typeof applied === "object" &&
+              applied !== null &&
+              "wait_outcome" in applied
+            ? applied.wait_outcome
+            : undefined;
+        const elapsed =
+          typeof applied === "object" &&
+          applied !== null &&
+          "wait_elapsed_ms" in applied &&
+          typeof applied.wait_elapsed_ms === "number" &&
+          Number.isFinite(applied.wait_elapsed_ms)
+            ? Math.max(0, applied.wait_elapsed_ms)
+            : 0;
+        if (waitOutcome === "changed") {
+          this.resetWaitFeedback();
+          this.previousObservationIdentity = null;
+          this.previousActionIdentity = null;
+          this.waitFeedback = [
+            "The wait detected a visible page or document change. Inspect the new observation; this does not prove the access obstacle is resolved.",
+          ];
+        } else if (waitOutcome === "timeout") {
+          this.unchangedWaits++;
+          this.unchangedWaitMs += elapsed;
+          this.waitFeedback = [
+            `The wait timed out without detecting a visible page change. Consecutive unchanged waits: ${this.unchangedWaits}; measured waiting time: ${Math.round(this.unchangedWaitMs)} ms.`,
+            "Waiting completed, but progress was not observed. Inspect the current screenshot and available controls; wait again only when there is a concrete pending transition to observe. If reasonable article-related routes have been tried and no new actionable route remains, use the existing no-viable-path Stop reason. An unchanged page alone does not prove access is unavailable.",
+          ];
+        } else {
+          this.resetWaitFeedback();
+          this.waitFeedback = [
+            "The wait ended without a reported change outcome; inspect the new observation before inferring progress.",
+          ];
+        }
+        return {
+          status: "success",
+          code:
+            waitOutcome === "changed"
+              ? "browser-wait-changed"
+              : waitOutcome === "timeout"
+                ? "browser-wait-timeout"
+                : "browser-wait-completed",
+          feedback: [...this.feedback, ...this.waitFeedback],
+        };
       })
-      .catch((error: unknown) => {
+      .catch((error: unknown): BrowserAgentActionResult => {
         if (this.epoch !== expectedEpoch || this.phaseValue !== "waiting")
-          return;
+          return { status: "cancelled", code: "browser-wait-revoked" };
         if (
           isStaleActionError(error) ||
           isPageTransitionError(error) ||
           isPageRuntimeError(error)
         ) {
-          this.feedback = ["The page changed while waiting; observe it again."];
-          return;
+          this.resetWaitFeedback();
+          this.waitFeedback = [
+            "The wait was interrupted before a reliable change outcome; observe the page again.",
+          ];
+          return {
+            status: "rejected",
+            code: "browser-wait-stale",
+            feedback: [...this.feedback, ...this.waitFeedback],
+          };
         }
-        this.fail(stableBrowserFlowFailureCode(error));
+        const code = stableBrowserFlowFailureCode(error);
+        this.fail(code);
+        return { status: "error", code };
       })
       .finally(() => {
         endWait();
@@ -1062,6 +1352,8 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
         this.notify();
       });
     this.pendingFeedback = work;
+    this.agentYield?.();
+    return work;
   }
 
   private rememberEntry(page: FlowPageHandle, fallback?: string): void {
@@ -1188,6 +1480,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
 
   private revokeDecision(): void {
     this.epoch += 1;
+    this.resetWaitFeedback();
     this.decisionAbort?.abort();
   }
 
@@ -1232,6 +1525,13 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     this.generation = 0;
     this.previousObservationIdentity = null;
     this.previousActionIdentity = null;
+    this.resetWaitFeedback();
+  }
+
+  private resetWaitFeedback(): void {
+    this.waitFeedback = [];
+    this.unchangedWaits = 0;
+    this.unchangedWaitMs = 0;
   }
 
   private stop(
@@ -1239,8 +1539,10 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     diagnostic?: string,
   ): void {
     if (this.phaseValue === "closed" || this.terminalResult !== null) return;
+    const agentStopped =
+      reason === "access-unavailable" || reason === "no-viable-path";
     if (
-      (reason === "stopped" || reason === "no-candidate") &&
+      (reason === "stopped" || reason === "no-candidate" || agentStopped) &&
       this.unresolvedCaptureFailure !== null
     ) {
       this.fail(this.unresolvedCaptureFailure);
@@ -1250,19 +1552,24 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     this.terminalResult =
       reason === "stopped" || reason === "no-candidate"
         ? { kind: "exhausted" }
-        : browserRefused(
-            reason === "cancelled"
-              ? "browser-flow-cancelled"
-              : reason === "budget"
-                ? "browser-flow-budget-exhausted"
-                : reason === "blocked"
-                  ? "browser-agent-stopped"
-                  : reason === "invalid-action"
-                    ? "browser-action-invalid"
-                    : "browser-observation-unavailable",
-            diagnostic ??
-              "The controlled Browser flow stopped before a normal no-PDF result.",
-          );
+        : agentStopped
+          ? browserAgentStopped(
+              reason,
+              diagnostic ?? "No viable next action was identified.",
+            )
+          : browserRefused(
+              reason === "cancelled"
+                ? "browser-flow-cancelled"
+                : reason === "budget"
+                  ? "browser-flow-budget-exhausted"
+                  : reason === "blocked"
+                    ? "browser-agent-stopped"
+                    : reason === "invalid-action"
+                      ? "browser-action-invalid"
+                      : "browser-observation-unavailable",
+              diagnostic ??
+                "The controlled Browser flow stopped before a normal no-PDF result.",
+            );
     this.phaseValue = "closing";
     this.options.onClosing?.();
     this.revokeDecision();
@@ -1304,6 +1611,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
         (this.networkAllowed || this.networkEndedSuccessfully) &&
         this.options.automatic?.canDecide() !== false &&
         this.pendingFeedback === null &&
+        this.agentTurn === null &&
         this.clock.decisionDelayMs() === 0)
     );
   }
@@ -1335,9 +1643,9 @@ async function interruptible<T>(
   }
 }
 
-/** One source for the accepted article action/call/active-time ceilings. */
-export const DEFAULT_FLOW_MAX_ACTIONS =
-  DEFAULT_BROWSER_ARTICLE_BUDGET.max_actions;
+/** @deprecated Automatic articles do not have a separate action ceiling. */
+export const DEFAULT_FLOW_MAX_ACTIONS = 200;
+/** One source for the accepted article call/active-time ceilings. */
 export const DEFAULT_FLOW_MAX_MODEL_CALLS =
   DEFAULT_BROWSER_ARTICLE_BUDGET.max_model_calls;
 export const DEFAULT_FLOW_DEADLINE_MS =
@@ -1477,6 +1785,7 @@ function stableBrowserFlowFailureCode(error: unknown): string {
   )
     return code;
   switch (code) {
+    case "browser-flow-budget-exhausted":
     case "browser-navigation-failed":
     case "browser-rate-limited":
     case "browser-page-runtime":
@@ -1511,6 +1820,7 @@ function stableObservationIdentity(observation: WorkbenchObservation): string {
     loading: observation.loading,
     partial: observation.partial,
     page_state: observation.page_state,
+    viewport: observation.viewport,
     elements: observation.elements.map(({ role, name, editable }) => ({
       role,
       name,
@@ -1520,7 +1830,20 @@ function stableObservationIdentity(observation: WorkbenchObservation): string {
 }
 
 /** Revisions bind execution; they are excluded when detecting a repeated action. */
-function stableActionIdentity(action: OperatorInput): string {
+function stableActionIdentity(
+  action: OperatorInput,
+  observation: WorkbenchObservation,
+): string {
+  if (action.kind === "click-element") {
+    // Execution IDs are intentionally short-lived. Within the same semantic
+    // observation, position distinguishes two identically named visible controls
+    // while a DOM replacement must not make the same click appear new.
+    const index = observation.elements.findIndex(
+      (element) => element.element_id === action.element_id,
+    );
+    if (index !== -1)
+      return JSON.stringify({ kind: action.kind, element_index: index });
+  }
   return JSON.stringify(action, (key, value: unknown) =>
     key === "revision" || key === "viewport_version" ? undefined : value,
   );
@@ -1571,6 +1894,7 @@ export interface BrowserArticleAutomaticContext {
 export interface BrowserArticleFlowFactoryOptions {
   readonly pages: ArticleFlowPageSource;
   readonly decide: FlowDecision | undefined;
+  readonly capability?: BrowserAgentCapability;
   readonly session_id: string;
   readonly max_actions?: number;
   readonly max_model_calls?: number;
@@ -1650,7 +1974,7 @@ export function createBrowserArticleFlow(
   }> => {
     if (request.signal.aborted)
       throw new BrowserArticleOpenError("browser-flow-cancelled");
-    if (options.decide === undefined)
+    if (options.decide === undefined && options.capability === undefined)
       throw new BrowserArticleOpenError("browser-model-unavailable");
     const target: BrowserDecisionTarget = request.article_goal ?? {
       literature_id: request.literature_id,
@@ -1696,10 +2020,9 @@ export function createBrowserArticleFlow(
           1,
           options.max_model_calls ?? DEFAULT_FLOW_MAX_MODEL_CALLS,
         ),
-        max_actions: Math.max(
-          1,
-          options.max_actions ?? DEFAULT_FLOW_MAX_ACTIONS,
-        ),
+        ...(options.max_actions === undefined
+          ? {}
+          : { max_actions: Math.max(1, options.max_actions) }),
         min_decision_interval_ms:
           options.action_cooldown_ms ??
           DEFAULT_BROWSER_AGENT_ACTION_COOLDOWN_MS,
@@ -1782,31 +2105,35 @@ export function createBrowserArticleFlow(
       );
     };
     const decide = options.decide;
+    const agent = await options.capability?.open(identity, target);
     const driver = new BrowserArticleFlowDriver({
       identity,
       clock,
       start_url: request.start_url,
       ...(request.start_urls ? { start_urls: request.start_urls } : {}),
-      decide: (
-        observation,
-        frame,
-        signal,
-        guidance,
-        _target,
-        recentActions,
-        feedback,
-        lifecycle,
-      ) =>
-        decide(
-          observation,
-          frame,
-          signal,
-          guidance,
-          target,
-          recentActions,
-          feedback,
-          lifecycle,
-        ),
+      ...(agent ? { agent } : {}),
+      decide: decide
+        ? (
+            observation,
+            frame,
+            signal,
+            guidance,
+            _target,
+            recentActions,
+            feedback,
+            lifecycle,
+          ) =>
+            decide(
+              observation,
+              frame,
+              signal,
+              guidance,
+              target,
+              recentActions,
+              feedback,
+              lifecycle,
+            )
+        : undefined,
       ...(tracking === "test-seam" && options.collaboration
         ? {
             collaborativeStep: (signal: AbortSignal) =>
@@ -1832,7 +2159,9 @@ export function createBrowserArticleFlow(
           }
         : {}),
       dispatch_tracking: tracking,
-      max_actions: options.max_actions ?? DEFAULT_FLOW_MAX_ACTIONS,
+      ...(options.max_actions === undefined
+        ? {}
+        : { max_actions: options.max_actions }),
       max_model_calls: options.max_model_calls ?? DEFAULT_FLOW_MAX_MODEL_CALLS,
       deadline_ms: options.deadline_ms ?? DEFAULT_FLOW_DEADLINE_MS,
       started_at: 0,

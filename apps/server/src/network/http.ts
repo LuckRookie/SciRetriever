@@ -73,6 +73,8 @@ export interface HttpRequestOptions {
   readonly credentialQuery?: readonly (readonly [string, string])[];
   readonly body?: Uint8Array;
   readonly timeoutMs?: number;
+  /** Idle response timeout for finite, potentially long model calls. */
+  readonly timeoutMode?: "total" | "idle";
   readonly maxResponseBytes?: number;
   readonly connection?: ConnectionDependencies;
   readonly signal?: AbortSignal;
@@ -166,6 +168,9 @@ function validateOptions(options: HttpRequestOptions): void {
     !Number.isSafeInteger(timeout) ||
     timeout < 1 ||
     timeout > 120_000 ||
+    (options.timeoutMode !== undefined &&
+      options.timeoutMode !== "total" &&
+      options.timeoutMode !== "idle") ||
     !Number.isSafeInteger(limit) ||
     limit < 1 ||
     // MinerU's existing bounded archive contract permits 128 MiB. Each caller's
@@ -202,7 +207,7 @@ export async function requestOnce(
   }
   const signal = options.signal ?? options.budget?.signal;
   if (signal?.aborted) invalid("cancelled");
-  const started = performance.now();
+  let started = performance.now();
   const timeoutMs = options.timeoutMs ?? 10_000;
   const remaining = (): number => {
     const value = Math.ceil(timeoutMs - (performance.now() - started));
@@ -218,11 +223,12 @@ export async function requestOnce(
         destination.url.hostname,
         options.budget.limits,
         {
-          timeoutMs: remaining(),
+          ...(options.timeoutMode === "idle" ? {} : { timeoutMs: remaining() }),
           ...(signal ? { signal } : {}),
           ...(options.budget.usage ? { usage: options.budget.usage } : {}),
         },
       );
+    if (options.timeoutMode === "idle") started = performance.now();
     connection = await connectVerified(
       destination,
       address,
@@ -275,6 +281,12 @@ export async function requestOnce(
         }
       };
       let timer = setTimeout(timeout, remaining());
+      const responseProgress = () => {
+        if (options.timeoutMode === "idle" && !options.responseSink) {
+          clearTimeout(timer);
+          timer = setTimeout(timeout, timeoutMs);
+        }
+      };
       signal?.addEventListener("abort", abort, { once: true });
       try {
         if (signal?.aborted) {
@@ -324,6 +336,7 @@ export async function requestOnce(
         req.on("error", (error) => fail("request-failed", error));
         req.on("upgrade", () => fail("response-protocol"));
         req.on("response", (res) => {
+          responseProgress();
           // Apply feedback while this request still owns its permit. A queued
           // sibling must not slip through between release and response handling.
           if (options.budget) {
@@ -431,6 +444,7 @@ export async function requestOnce(
                 invalid("response-limit");
               consumeResponse(chunk.byteLength);
               chunks.push(chunk);
+              if (chunk.byteLength > 0) responseProgress();
             } catch (error) {
               finish(
                 undefined,
@@ -513,6 +527,9 @@ export function createAgentTransport(
         ...(input.timeout_ms !== undefined
           ? { timeoutMs: input.timeout_ms }
           : {}),
+        ...(input.timeout_mode === undefined
+          ? {}
+          : { timeoutMode: input.timeout_mode }),
         maxResponseBytes: options.limits.maxResponseBytes,
         headers: input.headers,
         ...(input.credential_query

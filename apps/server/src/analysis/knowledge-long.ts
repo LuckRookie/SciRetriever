@@ -23,16 +23,15 @@ const decoder = new TextDecoder("utf-8", { fatal: true });
 const CORE_BYTES = 64 * 1024;
 const CONTEXT_BYTES = 4 * 1024;
 const CORE_SEGMENTS = 64;
-const MAX_SEGMENTS = 8192;
 const MERGE_FAN_IN = 16;
 const LOCAL_PROMPT =
-  "Analyze the core ranges for the requested purpose. Before/after are bounded adjacent context with segment and byte-range identity; they do not count as covered core. Return not_applicable only if the core has no relevant assertion. Return 1-8 statements when completed, each with 1-8 cited ranges and at least one core range; additional before/after citations may support conditions. Use at most 8 conditions per statement. Preserve conditions, negation, quantities with units, limitations and disagreements. For every cited range return its region, segment ID and an exact nonempty quote present in that supplied range. Do not invent evidence. Return only JSON.";
+  "Analyze the core text for the requested purpose, using before/after text as context. Summarize useful findings, conditions, quantities, limitations and disagreements in your own words. Cite the supplied segment IDs supporting each statement. Return not_applicable only when this part has no relevant content. Return only JSON.";
 const MERGE_PROMPT =
-  "Integrate every supplied candidate into 1-64 statements. Each output has 1-16 source_ids; every supplied candidate ID must appear exactly once across all source_ids, whether retained or combined. Each output must fit at most 8 inherited evidence references and 8 conditions. Preserve the complete text of each source candidate verbatim within the merged statement; identical text may be shared and short linking words may be added. Preserve conditions, quantities with units, epistemic status, limitations and disagreements; keep incompatible facts separate. Evidence is inherited from source_ids, never invented. Return only JSON.";
+  "Synthesize the supplied candidates into a concise account for the requested purpose. Paraphrase, combine related findings and remove repetition. Preserve important conditions, quantities, uncertainty and disagreements in meaning; verbatim copying is not required. source_ids must name supplied candidates that support each output statement. A candidate can support more than one statement. Return only JSON.";
 export const LONG_METHOD_ID = "single-document-knowledge-long";
-export const LONG_METHOD_VERSION = "2";
+export const LONG_METHOD_VERSION = "3";
 export function longMethodParameters(
-  budget: KnowledgeLongAnalysisRequest["budget"],
+  _legacyBudget: KnowledgeLongAnalysisRequest["budget"],
   bindingHash: string,
 ): object {
   return {
@@ -45,14 +44,10 @@ export function longMethodParameters(
     core_bytes: CORE_BYTES,
     context_bytes: CONTEXT_BYTES,
     core_segments: CORE_SEGMENTS,
-    max_segments: MAX_SEGMENTS,
     merge_fan_in: MERGE_FAN_IN,
     final_merge_fan_in: 64,
-    final_statement_limit: 64,
-    evidence_per_statement_limit: 8,
-    merge_text_policy: "retain-each-source-text-verbatim-v1",
-    context_evidence_policy: "core-required-context-optional-v1",
-    budget,
+    merge_text_policy: "model-semantic-synthesis-v2",
+    context_evidence_policy: "supplied-segment-identity-v2",
     model_binding_sha256: bindingHash,
   };
 }
@@ -91,12 +86,10 @@ interface LongNotApplicable extends Omit<LongResult, "content"> {
   readonly content: null;
 }
 
-/** Optional shared accounting for a multi-document caller; v2 single-document
- * execution continues to use its original local budget semantics. */
+/** Shared usage accounting only; never a processing cutoff. */
 export interface SharedLongCallBudget {
   calls: number;
   canonical_call_bytes: number;
-  reserved_output_tokens: number;
   reported_calls: number;
   reported_input_tokens: number;
   reported_output_tokens: number;
@@ -113,20 +106,17 @@ function exact(
     !value ||
     typeof value !== "object" ||
     Array.isArray(value) ||
-    Object.keys(value).sort().join("\0") !== [...keys].sort().join("\0")
+    keys.some((key) => !Object.hasOwn(value, key))
   )
     fail("knowledge-response");
   return value as Record<string, unknown>;
 }
 function canonical(value: unknown, limit: number): Uint8Array {
-  return extractionCanonicalJsonBytes(value, limit);
-}
-function responseQuantity(value: unknown): string {
-  try {
-    return decoder.decode(canonical(value, 1024));
-  } catch (error) {
-    throw new KnowledgeAnalysisFailure("knowledge-response", { cause: error });
-  }
+  return extractionCanonicalJsonBytes(value, limit, {
+    maxDepth: 32,
+    maxNodes: 20480,
+    maxArrayLength: 20480,
+  });
 }
 function statementSchema(
   extra: "evidence" | "sources",
@@ -143,7 +133,7 @@ function statementSchema(
     conditions: {
       type: "array",
       items: str,
-      description: "At most 8 conditions; preserve all source conditions.",
+      description: "Relevant conditions and limitations.",
     },
     quantity: {
       anyOf: [
@@ -166,25 +156,13 @@ function statementSchema(
       type: "array",
       items: str,
       description:
-        "1-8 segment IDs, aligned with evidence_quotes and evidence_regions; at least one core citation.",
-    };
-    fields.evidence_quotes = {
-      type: "array",
-      items: str,
-      description: "1-8 exact nonempty quotes, one per cited segment range.",
-    };
-    fields.evidence_regions = {
-      type: "array",
-      items: { type: "string", enum: ["core", "before", "after"] },
-      description:
-        "1-8 regions aligned with segment IDs and quotes; at least one core.",
+        "IDs of the supplied core or adjacent segments supporting this statement.",
     };
   } else
     fields.source_ids = {
       type: "array",
       items: str,
-      description:
-        "1-16 candidate IDs; each input candidate occurs exactly once across all output statements.",
+      description: "IDs of supplied candidates supporting this statement.",
     };
   return {
     type: "object",
@@ -205,8 +183,8 @@ function schema(extra: "evidence" | "sources"): Record<string, unknown> {
         items: statementSchema(extra),
         description:
           extra === "evidence"
-            ? "1-8 statements when completed; empty only for not_applicable."
-            : "1-64 statements when completed; every input candidate must be mapped.",
+            ? "Useful statements when completed; empty only for not_applicable."
+            : "Synthesized statements supported by supplied candidates.",
       },
     },
     required: ["outcome", "title", "statements"],
@@ -301,7 +279,6 @@ function response(result: AgentResult): Record<string, unknown> {
     if (
       typeof r.title !== "string" ||
       !r.title.trim() ||
-      encoder.encode(r.title).length > 512 ||
       !Array.isArray(r.statements)
     )
       fail("knowledge-response");
@@ -363,11 +340,6 @@ export async function analyzeLongDocument(
         version.source_material_ref.literature_id !== item.literature_id
       )
         fail("knowledge-input-invalidated");
-      if (
-        bytes.length > request.budget.max_source_bytes ||
-        structure.segments.length > MAX_SEGMENTS
-      )
-        return { budget_exhausted: true as const };
       let cursor = 0;
       const segments: Segment[] = [];
       for (const segment of structure.segments) {
@@ -390,7 +362,6 @@ export async function analyzeLongDocument(
     },
     signal,
   );
-  if ("budget_exhausted" in source) fail("knowledge-budget-exhausted");
   let calls = 0;
   let totalBytes = 0;
   let reportedCalls = 0;
@@ -408,26 +379,11 @@ export async function analyzeLongDocument(
       responseSchema: Record<string, unknown>,
     ): Promise<Record<string, unknown>> => {
       if (signal.aborted) fail("knowledge-cancelled");
-      if (
-        request.budget.max_output_tokens_per_call > binding.max_output_tokens ||
-        calls >= request.budget.max_calls ||
-        outputTokens + request.budget.max_output_tokens_per_call >
-          request.budget.max_total_output_tokens ||
-        (shared !== undefined &&
-          (shared.calls >= request.budget.max_calls ||
-            shared.reported_output_tokens +
-              shared.reserved_output_tokens +
-              request.budget.max_output_tokens_per_call >
-              request.budget.max_total_output_tokens))
-      )
-        fail("knowledge-budget-exhausted");
       let user: string;
       let call: AgentCall;
       let bytes: Uint8Array;
       try {
-        user = decoder.decode(
-          canonical(payload, request.budget.max_call_bytes),
-        );
+        user = decoder.decode(canonical(payload, 1024 * 1024));
         const userBytes = encoder.encode(user);
         call = {
           role: "analysis",
@@ -444,28 +400,18 @@ export async function analyzeLongDocument(
             },
           ],
           response_schema: responseSchema,
-          max_output_tokens: request.budget.max_output_tokens_per_call,
         };
-        bytes = canonical(call, request.budget.max_call_bytes);
+        bytes = canonical(call, 2 * 1024 * 1024);
       } catch (error) {
-        throw new KnowledgeAnalysisFailure("knowledge-budget-exhausted", {
+        throw new KnowledgeAnalysisFailure("knowledge-request-limit", {
           cause: error,
         });
       }
-      if (
-        totalBytes + bytes.length > request.budget.max_total_call_bytes ||
-        (shared !== undefined &&
-          shared.canonical_call_bytes + bytes.length >
-            request.budget.max_total_call_bytes)
-      )
-        fail("knowledge-budget-exhausted");
       calls++;
       totalBytes += bytes.length;
       if (shared) {
         shared.calls++;
         shared.canonical_call_bytes += bytes.length;
-        shared.reserved_output_tokens +=
-          request.budget.max_output_tokens_per_call;
       }
       let result: AgentResult;
       try {
@@ -499,18 +445,7 @@ export async function analyzeLongDocument(
         shared.reported_calls++;
         shared.reported_input_tokens += result.provenance.usage.input_tokens;
         shared.reported_output_tokens += result.provenance.usage.output_tokens;
-        shared.reserved_output_tokens -=
-          request.budget.max_output_tokens_per_call;
       }
-      if (
-        result.provenance.usage.output_tokens >
-          request.budget.max_output_tokens_per_call ||
-        outputTokens > request.budget.max_total_output_tokens ||
-        (shared !== undefined &&
-          shared.reported_output_tokens >
-            request.budget.max_total_output_tokens)
-      )
-        fail("knowledge-budget-exhausted");
       if (
         result.provenance.provider !== binding.provider ||
         result.provenance.model !== binding.model
@@ -561,14 +496,12 @@ export async function analyzeLongDocument(
         if ((r.statements as unknown[]).length) fail("knowledge-response");
         continue;
       }
-      if (
-        r.outcome !== "completed" ||
-        !(r.statements as unknown[]).length ||
-        (r.statements as unknown[]).length > 8
-      )
+      if (r.outcome !== "completed" || !(r.statements as unknown[]).length)
         fail("knowledge-response");
       title = r.title as string;
-      const byRegion = { core: chunk.core, before, after } as const;
+      const availableSegments = new Set(
+        [...chunk.core, ...before, ...after].map((part) => part.segment_id),
+      );
       for (const entry of r.statements as unknown[]) {
         const s = exact(entry, [
           "statement_id",
@@ -578,35 +511,15 @@ export async function analyzeLongDocument(
           "conditions",
           "quantity",
           "evidence_segment_ids",
-          "evidence_quotes",
-          "evidence_regions",
         ]);
         if (
           !Array.isArray(s.evidence_segment_ids) ||
-          !Array.isArray(s.evidence_quotes) ||
-          !Array.isArray(s.evidence_regions) ||
-          s.evidence_segment_ids.length < 1 ||
-          s.evidence_segment_ids.length > 8 ||
-          s.evidence_quotes.length !== s.evidence_segment_ids.length ||
-          s.evidence_regions.length !== s.evidence_segment_ids.length ||
-          !s.evidence_regions.includes("core")
+          !s.evidence_segment_ids.length
         )
           fail("knowledge-invalid-evidence");
         const evidence = new Map<string, EvidenceRef>();
-        for (let index = 0; index < s.evidence_segment_ids.length; index++) {
-          const id = s.evidence_segment_ids[index];
-          const quote = s.evidence_quotes[index];
-          const region: unknown = s.evidence_regions[index];
-          if (
-            typeof id !== "string" ||
-            typeof quote !== "string" ||
-            (region !== "core" && region !== "before" && region !== "after") ||
-            !quote.trim() ||
-            encoder.encode(quote).length > 2048 ||
-            !byRegion[region].some(
-              (part) => part.segment_id === id && part.text.includes(quote),
-            )
-          )
+        for (const id of s.evidence_segment_ids) {
+          if (typeof id !== "string" || !availableSegments.has(id))
             fail("knowledge-invalid-evidence");
           const segment = bySegment.get(id)!;
           evidence.set(
@@ -682,14 +595,9 @@ export async function analyzeLongDocument(
         },
         schema("sources"),
       );
-      if (
-        r.outcome !== "completed" ||
-        !(r.statements as unknown[]).length ||
-        (r.statements as unknown[]).length > 64
-      )
+      if (r.outcome !== "completed" || !(r.statements as unknown[]).length)
         fail("knowledge-response");
       const byId = new Map(group.map((candidate) => [candidate.id, candidate]));
-      const used = new Set<string>();
       const merged: Candidate[] = [];
       for (const entry of r.statements as unknown[]) {
         const s = exact(entry, [
@@ -701,58 +609,14 @@ export async function analyzeLongDocument(
           "quantity",
           "source_ids",
         ]);
-        if (
-          !Array.isArray(s.source_ids) ||
-          !s.source_ids.length ||
-          s.source_ids.length > MERGE_FAN_IN
-        )
+        if (!Array.isArray(s.source_ids) || !s.source_ids.length)
           fail("knowledge-response");
         const sources: Candidate[] = [];
         for (const id of s.source_ids) {
-          if (typeof id !== "string" || used.has(id) || !byId.has(id))
+          if (typeof id !== "string" || !byId.has(id))
             fail("knowledge-response");
-          used.add(id);
           sources.push(byId.get(id)!);
         }
-        const requiredConditions = new Set(
-          sources.flatMap((source) => source.statement.conditions),
-        );
-        const categories = new Set(
-          sources.map((source) => source.statement.category),
-        );
-        if (
-          categories.has("disagreement")
-            ? s.category !== "disagreement"
-            : categories.size === 1
-              ? s.category !== sources[0]!.statement.category &&
-                s.category !== "disagreement"
-              : s.category !== "disagreement"
-        )
-          fail("knowledge-response");
-        const text = s.text;
-        if (
-          typeof text !== "string" ||
-          sources.some((source) => !text.includes(source.statement.text))
-        )
-          fail("knowledge-response");
-        const conditions = s.conditions;
-        if (
-          !Array.isArray(conditions) ||
-          [...requiredConditions].some(
-            (condition) => !conditions.includes(condition),
-          )
-        )
-          fail("knowledge-response");
-        const quantity = responseQuantity(sources[0]!.statement.quantity);
-        if (
-          sources.some(
-            (source) =>
-              source.statement.epistemic !== s.epistemic ||
-              responseQuantity(source.statement.quantity) !== quantity,
-          ) ||
-          responseQuantity(s.quantity) !== quantity
-        )
-          fail("knowledge-response");
         const evidence = [
           ...new Map(
             sources
@@ -760,8 +624,6 @@ export async function analyzeLongDocument(
               .map((item) => [JSON.stringify(item), item]),
           ).values(),
         ];
-        if (evidence.length > 8 || requiredConditions.size > 8)
-          fail("knowledge-content-limit");
         try {
           const id = `c${nextId++}`;
           const parsed = parseKnowledgeContent({
@@ -786,7 +648,6 @@ export async function analyzeLongDocument(
           });
         }
       }
-      if (used.size !== group.length) fail("knowledge-response");
       return { title: r.title as string, candidates: merged };
     };
     while (current.length > 64) {
@@ -798,10 +659,15 @@ export async function analyzeLongDocument(
         title = result.title;
         next.push(...result.candidates);
       }
-      if (next.length >= current.length) fail("knowledge-content-limit");
+      // A non-shrinking summary is still usable; never repeat the same reduction indefinitely.
+      const reduced = next.length < current.length;
       current = next;
+      if (!reduced) break;
     }
-    if (allChunks.length > 1 || current.length !== candidates.length) {
+    if (
+      current.length <= 64 &&
+      (allChunks.length > 1 || current.length !== candidates.length)
+    ) {
       const result = await merge(current);
       title = result.title;
       current = result.candidates;

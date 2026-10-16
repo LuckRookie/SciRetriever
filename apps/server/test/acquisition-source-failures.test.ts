@@ -82,9 +82,10 @@ describe("source-owned acquisition failure conversion", () => {
   );
 
   it.each(["core", "elsevier", "wiley"] as const)(
-    "keeps known %s API access, rate and service outcomes out of automatic Browser rescue",
+    "continues independent sources after known %s API access, rate and service failures",
     async (provider) => {
       for (const [status, retryAfterMs] of [
+        [400, undefined],
         [401, undefined],
         [403, undefined],
         [429, undefined],
@@ -126,53 +127,32 @@ describe("source-owned acquisition failure conversion", () => {
             await route.download_candidate!(candidate, signal);
           },
         );
-        if ((status === 401 || status === 403) && retryAfterMs === undefined) {
-          let thrown: unknown;
-          try {
-            await run;
-          } catch (error) {
-            thrown = error;
-          }
-          expect(thrown).toBeInstanceOf(AcquisitionRouteError);
-          expect(thrown).toMatchObject({
-            code: "http-response-failed",
-            retryable: false,
-            cause: { failure: { http_status: status } },
-          });
-          expect(Object.keys(thrown!)).not.toContain("cause");
-          expect(discover).not.toHaveBeenCalled();
-        } else {
-          const [result] = await run;
-          const limited = status === 429 || retryAfterMs !== undefined;
-          expect(result).toMatchObject({
-            disposition: "failed",
-            failure: {
-              code: limited ? "rate-limited" : "http-response-failed",
-              source: provider,
-              unavailability: null,
-              retryable: true,
-            },
-          });
-          expect(result!.failure!.reason).toContain(`HTTP ${status}`);
-          expect(result!.failure!.reason).not.toContain(
-            "private remote response",
+        const [result] = await run;
+        const limited = status === 429 || retryAfterMs !== undefined;
+        expect(result).toMatchObject({
+          disposition: "failed",
+          failure: {
+            code: limited ? "rate-limited" : "http-response-failed",
+            source: provider,
+            unavailability: null,
+            retryable: limited || status >= 500,
+          },
+        });
+        expect(result!.failure!.reason).toContain(`HTTP ${status}`);
+        expect(JSON.stringify(result)).not.toMatch(
+          /private remote response|fixture-key/u,
+        );
+        if (retryAfterMs !== undefined)
+          expect(result!.failure!.reason).toContain(
+            `Retry-After: ${retryAfterMs} ms`,
           );
-          if (retryAfterMs !== undefined)
-            expect(result!.failure!.reason).toContain(
-              `Retry-After: ${retryAfterMs} ms`,
-            );
-          expect(discover).toHaveBeenCalledTimes(limited ? 0 : 1);
-        }
+        expect(discover).toHaveBeenCalledTimes(1);
         expect(transport.request).toHaveBeenCalledTimes(1);
       }
     },
   );
 
   it.each([
-    new AuthorizedProviderError({ code: "response-schema" }),
-    new AuthorizedProviderError({ code: "non-pdf-product" }),
-    new AuthorizedProviderError({ code: "ambiguous-primary-pdf" }),
-    new AuthorizedProviderError({ code: "cancelled" }),
     new WriteAdmissionError("write-admission-closed"),
     new TypeError("fixture schema failure"),
     new Error("fixture unknown failure"),
@@ -191,6 +171,47 @@ describe("source-owned acquisition failure conversion", () => {
       );
       const [candidate] = await source.discover(fixtureRequest("core"));
       await expect(source.download_candidate(candidate!)).rejects.toBe(error);
+    },
+  );
+
+  it.each([
+    "response-schema",
+    "non-pdf-product",
+    "ambiguous-primary-pdf",
+    "cancelled",
+  ] as const)(
+    "isolates a recognized provider outcome while preserving cancellation (%s)",
+    async (code) => {
+      const original = new AuthorizedProviderError({ code });
+      const route = new AuthorizedPdfSource(
+        new CoreAuthorizedPdfClient(
+          {
+            request: async () => {
+              throw original;
+            },
+          },
+          "fixture-key",
+        ),
+      );
+      const [candidate] = await route.discover(fixtureRequest("core"));
+      const error: unknown = await route
+        .download_candidate(candidate!)
+        .catch((value: unknown) => value);
+      if (code === "cancelled") {
+        expect(
+          classifyAcquisitionFailure(error, new AbortController().signal),
+        ).toBe("cancel");
+      } else {
+        expect(error).toBeInstanceOf(AcquisitionRouteError);
+        expect(error).toMatchObject({
+          code: "candidate-download-failed",
+          cause: original,
+        });
+        expect(
+          classifyAcquisitionFailure(error, new AbortController().signal),
+        ).toBe("route");
+        expect(Object.keys(error!)).not.toContain("cause");
+      }
     },
   );
 
@@ -326,7 +347,7 @@ describe("source-owned acquisition failure conversion", () => {
             expect(result!.failure!.reason).not.toMatch(
               /private remote response|fixture@example/u,
             );
-            expect(alternate.discover).toHaveBeenCalledTimes(limited ? 0 : 1);
+            expect(alternate.discover).toHaveBeenCalledTimes(1);
           }
           if (status === 200 && !throttled) {
             responseBody = "private malformed response";
@@ -343,7 +364,7 @@ describe("source-owned acquisition failure conversion", () => {
                 new AbortController().signal,
                 "discovery",
               ),
-            ).toBe("system");
+            ).toBe("route");
           }
         } finally {
           coordinator.close();

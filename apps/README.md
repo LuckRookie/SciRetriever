@@ -1,0 +1,16 @@
+# 应用实现
+
+组织可运行的服务端和 Web 应用。server 包含核心业务、CLI/MCP/HTTP 入口及生产组装；web 实现浏览器界面。
+
+## 下级目录
+
+| 目录 | 职责 |
+| --- | --- |
+| [server/](server/README.md) | 服务端与核心应用 |
+| [web/](web/README.md) | Browser 工作台前端 |
+
+## 放置边界
+
+跨应用共享的中性合同放在 packages/contracts；本目录各应用的 test/ 保存对应回归。
+
+[项目目录地图](../README.md#项目目录地图)

@@ -4,6 +4,7 @@ import type {
   WorkbenchArticlePhase,
   WorkbenchArticleCloseOutcome,
 } from "@sciretriever/contracts";
+import type { BrowserAgentEvent } from "./decision.js";
 import type { BrowserDeliveryResult } from "./boundary.js";
 
 /** Immutable article ownership; foreground selection is never an ownership signal. */
@@ -77,6 +78,8 @@ export interface BrowserArticleExecution extends BrowserArticleDeliveryLease {
   setNetworkAccess(allowed: boolean): void;
   /** Revoke a late decision on human takeover/release without cancelling a transfer. */
   controlEpochChanged(): void;
+  /** Accepted human/control events join this article's ephemeral Agent context. */
+  recordAgentEvent?(event: BrowserAgentEvent): void;
   /** Cancels this article's outstanding work; other article sessions are untouched. */
   cancel(): void;
   /** A real 429 parks this article under the shared platform policy. */
@@ -86,15 +89,15 @@ export interface BrowserArticleExecution extends BrowserArticleDeliveryLease {
 export interface BrowserArticleBudget {
   readonly active_ms: number;
   readonly max_model_calls: number;
-  readonly max_actions: number;
+  /** Legacy explicit override; automatic articles only bound time and calls. */
+  readonly max_actions?: number;
   readonly min_decision_interval_ms: number;
 }
 
 export const DEFAULT_BROWSER_ARTICLE_BUDGET: Readonly<BrowserArticleBudget> =
   Object.freeze({
     active_ms: 300_000,
-    max_model_calls: 100,
-    max_actions: 200,
+    max_model_calls: 30,
     min_decision_interval_ms: 5_000,
   });
 
@@ -108,6 +111,7 @@ export interface BrowserArticleBudgetRemaining {
   /** Projection for the existing observation contract, not a wall-clock deadline. */
   readonly deadline_ms: number;
   readonly model_calls: number;
+  /** Compatibility projection, not an independent default action budget. */
   readonly actions: number;
 }
 
@@ -161,9 +165,11 @@ export class BrowserArticleClock {
   ) {
     const budget = options.budget ?? DEFAULT_BROWSER_ARTICLE_BUDGET;
     if (
-      [budget.active_ms, budget.max_model_calls, budget.max_actions].some(
-        (value) => !Number.isSafeInteger(value) || value < 1,
-      ) ||
+      [
+        budget.active_ms,
+        budget.max_model_calls,
+        ...(budget.max_actions === undefined ? [] : [budget.max_actions]),
+      ].some((value) => !Number.isSafeInteger(value) || value < 1) ||
       !Number.isSafeInteger(budget.min_decision_interval_ms) ||
       budget.min_decision_interval_ms < 0
     )
@@ -240,7 +246,10 @@ export class BrowserArticleClock {
    */
   recordAgentAction(completed = false): void {
     if (!completed) this.requireActiveTime(this.readNow());
-    if (this.actions >= this.budget.max_actions)
+    if (
+      this.budget.max_actions !== undefined &&
+      this.actions >= this.budget.max_actions
+    )
       throw new BrowserArticleBudgetError("actions");
     this.actions += 1;
   }
@@ -259,7 +268,10 @@ export class BrowserArticleClock {
     return Object.freeze({
       deadline_ms: this.remainingActive(at),
       model_calls: Math.max(0, this.budget.max_model_calls - this.modelCalls),
-      actions: Math.max(0, this.budget.max_actions - this.actions),
+      actions: Math.max(
+        0,
+        (this.budget.max_actions ?? this.budget.max_model_calls) - this.actions,
+      ),
     });
   }
 

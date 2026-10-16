@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-15
-- Last amended: 2026-10-11
+- Last amended: 2026-10-13
 - Supersedes: none
 - Amends: [ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)
 - Amended by: [ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0023](0023-generic-browser-agent-executor.md)、[ADR 0030](0030-browser-transport-and-progress.md)（文章平台资格、后台下载与会话 cap）
@@ -90,19 +90,23 @@ DOI 定位只对 doi.org 发出一次 GET。首跳响应由当前操作保存并
 
 Plan 将适用动作按五层分组并保持确定顺序。API、DOI landing 或页面步骤可以返回当前运行的脱敏 `AccessRouteHint`，例如 canonical landing、PII/EID 等稳定 ID 或可安全继续的 locator。Hint 不携带 Cookie、header、token、无法脱敏的签名 URL、vendor object 或页面对象，不进入 Catalog、ArtifactStore、provenance 或长期失败历史。
 
-### 3. 批量获取使用层级 cohort
+### 3. 单篇保持五层顺序，批量有界持续补位
 
-Entry 仍从用户选择和一致 snapshot 冻结本次目标，不建立持久 BatchRun。对一个有界 cohort：
+2026-10-13 用户确认优化 Browser 吞吐，替代固定 chunk 与跨文章层级屏障：Entry 从一致 snapshot
+冻结目标，由 `execution.max_concurrency` 个有界 worker 持续领取目标。完成一篇即可补入下一篇，
+不等待一整块；没有占用执行槽的目标只保存冻结记录，不预先创建页面或无限量 Promise。
 
-1. 所有缺 PDF 目标先完成 direct；
-2. 使用已有文章证据与必要的 DOI 定位，对仍未解决目标完成 publisher-api；
-3. 仍未解决且允许继续的目标完成 general-api；
-4. 再完成 public-web，并整理当前操作已有的文章入口与实际访问结果；
-5. 只有通过独立 admission 的最小剩余集合进入一次逻辑 Browser 任务。
+每篇依次完成 direct、publisher-api、general-api、public-web，仍未取得 PDF 且通过独立准入时
+才进入 Browser。同一篇不跨层竞速，不跳过适用来源；不同文章可处于不同阶段。各自 Resolution、
+Plan、实际响应与入口在单篇流程内保留，Provider quota 与平台准入始终由原 owner 执行。
 
-每一层结束才启动下一层，阶段内以配置顺序为基础，出版社 API 可按唯一名称候选稳定优先；一层产生的新定位可立即交原下载机制。已完成目标按冻结顺序形成该层结果波次，不必等待全部 Browser 工作结束。
+单篇完成或失败立即通知；最终五分区 Report 仍按冻结顺序排列。已提交 PDF 可以继续自己的
+Parsing/Analysis，普通单篇失败不阻止补位；取消、停止后续准入和共享完整性错误仍按原合同结算。
+操作 ID 和 epoch 在一次执行内保持稳定；普通补位及串行的单目标恢复不使兄弟 Browser 会话过期。
 
-大型目标可以分成多个有界 cohort，但每个 cohort 内不能让较早失败的单篇文献越过尚未完成的低风险层提前打开 Browser。某个 Literature 已提交 PDF 后可以按 Entry 的局部成功边界继续 Parsing/Analysis；层级屏障只约束 PDF 获取风险升级，不撤销已提交事实。
+既有显式 `acquireCohort` 接口保留前四层的批量阶段顺序，Browser 结果按单篇返回及时通知，最终
+数组仍保持请求顺序。生产 Completion 使用单篇 `acquire`，不再依赖全员到齐的 participant coordinator。
+后台下载继续释放模型 worker，但仍占用保留会话和真实平台网络资格；本地/模型/平台容量均不因补位放宽。
 
 ### 4. 公开协议和 API 按官方政策限速
 
@@ -222,7 +226,7 @@ ADR 0023 修订后，Controlled Browser 作业只冻结一个 `AgentBrowserContr
 `BrowserObservation` 选择封闭动作。首次模型派发后不再后台自动换入口；不存在确定性规则 controller、Publisher selector/locator 程序
 或失败 fallback。controller 与 CloakBrowser/Profile、Network guard、页面 capture 和 PDF 验收协作。
 每个单次点击、navigation、capture settle 或 wait 保留有界保护；本次目标统一为 ADR 0023 的
-300 秒累计活跃时间、100 次真实模型派发、200 次 Agent 动作和至少 5 秒下一轮决策间隔。
+300 秒累计活跃时间、30 次真实模型派发和至少 5 秒下一轮决策间隔；默认不设独立动作上限，保留动作统计。
 全部初始入口、必要页面恢复与人工交还共享同一文章 clock，不重新取得整篇预算；换入口前结算真实在途 capture，已开始下载优先沿原传输完成。operation 与 transfer/session 总寿命独立计量，不增加累计 token/image 业务预算。此前离线
 flow 的 24/12 上限只是被本次目标替代的旧执行基线，不再保留第二套 32 次目标 fuse。
 Acquisition 只执行 PDF 文件合法性与当前任务关联检查，下载阶段不以 DOI、标题、版本或
@@ -237,13 +241,16 @@ Browser 可以从受控 download event、PDF response、允许的 popup/viewer �
 
 ### 7. 升级、暂停与熔断语义
 
-以下低风险终态可以进入 Browser admission：route 明确声明不适用、route 明确声明没有 PDF capability，或正常 locator miss/耗尽且 Browser 独立已获准。API 对具体目标的 `no-entitlement` 当前不在自动 Browser rescue 范围内，保持 action-required/fail-closed，等待用户或外部授权。
+2026-10-12 根据用户确认的顺序获取目标，统一来源失败隔离，替代之前仅允许部分公共 HTTP 故障进入后续渠道的规则：
 
-2026-10-07 根据化学合成全链路实测与用户要求修订公共 HTTP 的能力判断：不带限流反馈的公共 HTTP `403`、实际返回 HTML 且静态链接不能交付 PDF、以及明确达到有界重定向上限，都只证明该无会话 HTTP 路线不能完成当前获取，允许声明 `http-route-unavailable`，在已配置的后续 API 和独立获准 Browser 中继续。该声明不证明机构无订阅权限，也不代表 Browser 已通过访问校验；Browser 自己观察到的明确拒绝仍按下文停止。来源所谓“PDF 直链”和 `Content-Type` 不能覆盖实际字节，返回 HTML 时仍可按通用静态链接规则处理。此修订不增加任何出版社专用规则，不因 API key 存在而改变已配置来源集合。
+- `retryable` 只表示是否适合重试当前来源，不决定其它来源是否可以执行。HTTP/API 的请求、认证、权限、服务及响应格式错误只属于该来源；无可用 PDF、候选文件不可读或 URL 未通过网络准入只拒绝当前来源/候选。保留失败原因，继续所有独立且已配置的后续来源，最后进入已启用且独立准入的 Browser。
+- API 无权限不证明当前机构 IP 的网页访问无权限，DOI 定位失败也不阻止直接用 DOI 查询其它服务。Browser 仍独立判断文章页，不能继承 API 的失败来宣称全文权限。
+- `429`、quota 和 `Retry-After` 停止当前来源的剩余候选并执行该服务的冷却；其它独立服务可以继续。共享 Network 及 Browser 平台准入仍在每次请求前执行，不能借切换来源、入口或标签页绕过同一额度组/平台的限制。普通 5xx 的退避与服务明确限流继续分别记录。
+- 成功下载的字节即使带有 Retry-After 也可以继续本地检查和发布，无需再发请求。候选验收保留最低 PDF 文件检查与当前任务关联，不恢复下载阶段的文章内容身份校验。
+- 取消、数据库/文件系统故障、发布/receipt 冲突和未识别的内部合同异常仍保留其原始身份并停止相关执行。适配器必须在外部响应边界把可识别的协议/格式错误转换为来源失败，不能把任意内部异常一律吞成未命中。
+- 人工协助策略在自动渠道尝试结束后应用，不能在某一层失败时提前阻止后续层。所有渠道未交付时保留未解决故障；来源未配置、限流或响应失败不能伪装成正常耗尽。后续渠道成功则发布该 PDF，不重复前面的失败来源。若 Browser Agent 按 ADR 0023 返回明确的两类主动停止判断，最终报告保留其失败码和说明；较早来源错误仍留在各自诊断中。
 
-2026-10-10 根据公共镜像 502 阻断独立 API/Browser 的实测及用户要求，区分“是否存在未解决故障”与“是否可以尝试独立渠道”。公共 HTTP `5xx`（不带限流反馈）、明确的连接失败、请求超时、请求失败或响应中断，可以携带显式的独立 fallback 许可继续后续已配置 API 与独立准入的 Browser；不能把它们改写成正常 miss。后续成功则交付 PDF，后续均未取得 PDF 则保留原故障，单篇和 cohort 一致；不得提交自动获取耗尽。普通故障及之后的不适用声明都不能覆盖更早的阻断性错误；来源冷却保留原故障的许可范围。此修订不提升任意未知异常，也不扩展 API 错误的自动升级权限。
-
-`429` 或携带 `Retry-After` 的响应/异常仍停止该目标的备用候选及后续层级；`401`、API 认证/权限/临时错误、quota exhausted、未到 reset boundary、Network 安全准入拒绝、未分类异常以及配置/存储/发布/合同错误仍不得通过自动切 Browser 掩盖。用户取消停止操作。明确重定向上限仍只有在该链无任何限流反馈时才能声明 HTTP 路线不可用。普通 HTTP 服务收到无 Retry-After 的 5xx 后按服务政策反馈共享 scope，项目默认退避 30 秒；这不是供应商限流声明，不伪造 Retry-After。退避超过单次请求等待预算时返回实际 5xx，不用内部重试将其覆盖成预算超时。支持的 API 未配置时必须明确报告；只有 Browser 已由用户显式启用且 admission policy 允许时才可继续，不能静默跳过。
+公共 HTTP `403`、实际返回 HTML 且静态链接不能交付 PDF、明确的有界重定向上限等仍可记录为 `http-route-unavailable`。这种能力判断不证明机构无版权；静态解析与 Browser 都使用通用规则，不新增出版社专用页面分支。
 
 Browser 的 `LOGIN_REQUIRED`、`MFA_REQUIRED`、`RATE_LIMITED`、`IP_BLOCKED` 或账号警告暂停或熔断对应风险组；其它独立 Provider 继续。Challenge 只是统一 Observation 的 `page_state=CHALLENGE`，不是文章默认终态，也不拥有 interaction-required/active/exhausted 生命周期、专属 target、controller 或预算。通用 Agent controller 使用与普通页面相同的六种封闭动作。页面自动或经动作清除 Challenge 后继续 capture、entitlement 与 PDF 检查；controller 停止且页面仍为 Challenge 时，Acquisition 可以形成稳定 `challenge-unresolved` 结果。本地资源策略缺口必须报告为 Network 资源阻断，不能冒充用户无权限或 Agent 失败。
 
@@ -283,7 +290,7 @@ Resolution、Plan、route hints、tried keys、Browser queue、runtime health、
 - 固定一个数字冒充所有 Provider 的官方 Browser 间隔；
 - 用逐 Publisher 的本地布尔值冒充合同或文章访问权，并在真实页面检查前阻断 route；
 - 未经 Browser 总开关、runtime readiness 与调度准入就构造可执行 Browser adapter；
-- API rate-limit 后立即切 Browser；
+- 通过切换来源或 Browser 入口绕过同一服务/平台的限流；
 - Rules miss 后自动切到 Agent，或 Agent 失败后回到 Rules；
 - 为 Challenge 建立专属 Observation、target、动作、状态机或重试/turn budget；
 - 任意 URL/任意站点的 Browser fallback、任意 JavaScript、MFA 绕过、代理或指纹规避；

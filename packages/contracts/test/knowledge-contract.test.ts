@@ -7,6 +7,7 @@ import {
   parseDocumentReadingRef,
   parseKnowledgeContent,
   parseKnowledgeAnalysisReceipt,
+  parseKnowledgeAnalysisRequest,
   parseKnowledgeLongAnalysisRequest,
   parseKnowledgeArtifact,
   parseKnowledgeDefaultResult,
@@ -172,6 +173,49 @@ describe("single-document knowledge contracts", () => {
     ).rejects.toThrow();
   });
 
+  it("accepts larger readable content without per-field or statement-count gates", async () => {
+    const original = await fixture();
+    const description = "A quantitative comparison with context. ".repeat(50);
+    const statement = {
+      ...original.content.statements[0]!,
+      text: description.repeat(3),
+      quantity: {
+        value: description,
+        unit: "relative yield",
+        comparison_basis: description,
+      },
+      conditions: [description + "\nAdditional context"],
+    };
+    const parsed = parseKnowledgeContent({
+      ...original.content,
+      statements: [statement],
+    });
+    expect(parsed.statements[0]!.quantity?.value).toBe(description);
+    const many = parseKnowledgeContent({
+      ...original.content,
+      statements: Array.from({ length: 300 }, (_, i) => ({
+        ...original.content.statements[0]!,
+        statement_id: `s${i}`,
+      })),
+    });
+    expect(
+      parseKnowledgeContent(
+        JSON.parse(new TextDecoder().decode(knowledgeContentBytes(many))),
+      ).statements,
+    ).toHaveLength(300);
+    expect(() =>
+      parseKnowledgeContent({
+        ...original.content,
+        statements: [
+          {
+            ...statement,
+            quantity: { value: 5, unit: "g", comparison_basis: null },
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
   it("rejects selector and result misbinding, including default and receipt", async () => {
     const artifact = await fixture();
     const read = parseKnowledgeReadSelection({
@@ -234,7 +278,7 @@ describe("single-document knowledge contracts", () => {
       }),
     ).rejects.toThrow();
   });
-  it("keeps v2 long budgets separate while reading method-neutral v1 artifacts", async () => {
+  it("accepts budget-free requests and historical budget fields while reading old artifacts", async () => {
     const original = await fixture();
     const request = await parseKnowledgeLongAnalysisRequest({
       schema_version: 2,
@@ -251,7 +295,15 @@ describe("single-document knowledge contracts", () => {
         max_total_output_tokens: 524288,
       },
     });
-    expect(request.budget.max_source_bytes).toBe(8 * 1024 * 1024);
+    expect(request.budget?.max_source_bytes).toBe(8 * 1024 * 1024);
+    const { budget: legacy, ...unbudgeted } = request;
+    expect(legacy).toBeDefined();
+    expect(
+      await parseKnowledgeLongAnalysisRequest(unbudgeted),
+    ).not.toHaveProperty("budget");
+    expect(
+      await parseKnowledgeAnalysisRequest({ ...unbudgeted, schema_version: 1 }),
+    ).not.toHaveProperty("budget");
     await expect(
       parseKnowledgeLongAnalysisRequest({ ...request, schema_version: 1 }),
     ).rejects.toThrow();

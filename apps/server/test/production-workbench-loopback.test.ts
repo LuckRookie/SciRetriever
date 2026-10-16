@@ -1,3 +1,7 @@
+import {
+  latestBrowserObservationMessage,
+  browserModelToolCallId,
+} from "./browser-model-fixture.js";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -41,7 +45,8 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
     await mkdir(configHome, { mode: 0o700 });
     await writeFile(
       join(configHome, "config.toml"),
-      '[providers.fixture]\napi = "openai-chat-completions"\nbase_url = "http://127.0.0.1:9/v1"\n[models."fixture/browser-model"]\nimage = true\nstream = false\n[browser]\nenabled = true\nmodel = "fixture/browser-model"\nprofile = "synthetic"\n[sources.acquisition]\nmode = "custom"\nproviders = []\n',
+      `[paths]\ncatalog_path=${JSON.stringify(join(home, "catalog.sqlite"))}\nartifact_root=${JSON.stringify(join(home, "artifacts"))}\n` +
+        '[providers.fixture]\napi = "openai-chat-completions"\nbase_url = "http://127.0.0.1:9/v1"\n[models."fixture/browser-model"]\nimage = true\nstream = false\n[browser]\nenabled = true\nmodel = "fixture/browser-model"\nprofile = "synthetic"\n[sources.acquisition]\nmode = "custom"\nproviders = []\n',
       { mode: 0o600 },
     );
     const fixture = await startWorkbenchFixture();
@@ -139,6 +144,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         ["/", "live.html", "text/html"],
         ["/styles.css", "styles.css", "text/css"],
         ["/live.css", "live.css", "text/css"],
+        ["/workspace.css", "workspace.css", "text/css"],
       ] as const)
         assets.set(route, {
           contentType,
@@ -185,7 +191,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
                   content: Array<{ type: string; text?: string }>;
                 }>;
               };
-              const text = wire.messages[1]?.content.find(
+              const text = latestBrowserObservationMessage(wire).content.find(
                 (part) => part.type === "text",
               )?.text;
               const observation = JSON.parse(text ?? "{}") as {
@@ -221,6 +227,8 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
                         message: {
                           tool_calls: [
                             {
+                              id: browserModelToolCallId(),
+                              type: "function",
                               function: {
                                 name: "browser_action",
                                 arguments: JSON.stringify({ action }),
@@ -249,16 +257,10 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       });
       const pageErrors: string[] = [];
       ui.on("pageerror", (error) => pageErrors.push(error.message));
-      await ui.goto(origin);
+      await ui.goto(`${origin}/?workspace=browser`);
       await expect
-        .poll(() => ui.locator("#config-status").innerText())
-        .not.toContain("不可用");
-      await ui.waitForFunction(() => {
-        const button =
-          document.querySelector<HTMLButtonElement>("#acquisition-start");
-        return button && !button.disabled;
-      });
-      expect(await ui.locator("#acquisition-form").isVisible()).toBe(true);
+        .poll(() => ui.locator("#browser-sessions").textContent())
+        .toContain("没有正在使用的会话");
       expect(
         (
           await workbench.application.library.detail(
@@ -322,7 +324,15 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
           )
         ).primary_pdf,
       ).toBeNull();
-      await ui.locator("#acquisition-start").click();
+      expect(
+        (
+          await post(
+            "/api/acquisition/start",
+            { article_id: FIXTURE_LITERATURE.literature_id },
+            c1,
+          )
+        ).status,
+      ).toBe(202);
       await vi.waitFor(
         () => {
           expect(modelCalls).toBe(1);
@@ -470,27 +480,25 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       expect(artifact.status).toBe(200);
       expect(artifact.headers.get("content-type")).toBe("application/pdf");
       expect((await artifact.arrayBuffer()).byteLength).toBeGreaterThan(100);
-      await ui.locator("#operation-read").click();
+      await ui.locator('[data-go="lib"]').click();
+      await ui
+        .locator(`[data-id="${FIXTURE_LITERATURE.literature_id}"]`)
+        .click();
       await expect
         .poll(() => ui.url())
         .toContain(`literature=${FIXTURE_LITERATURE.literature_id}`);
-      expect(new URL(ui.url()).searchParams.get("workspace")).toBe("library");
       const completionRun = vi.spyOn(
         workbench.application.databaseCompletion!,
         "run",
       );
       await ui.reload();
-      await ui.locator("#library-detail h2").waitFor();
+      await ui.locator("#reader-info h2").waitFor();
+      await ui.locator('[data-go="lib"]').click();
       await ui
-        .locator(
-          `#library-results button[data-literature-id="${SECOND_LITERATURE.literature_id}"]`,
-        )
+        .locator(`[data-id="${SECOND_LITERATURE.literature_id}"]`)
         .click();
-      await ui.getByRole("button", { name: "在 Browser 中打开" }).click();
-      await ui.waitForTimeout(2300);
-      expect(await ui.locator("#acquisition-literature").inputValue()).toBe(
-        SECOND_LITERATURE.literature_id,
-      );
+      await ui.locator("#reader-info h2").waitFor();
+      await ui.locator('[data-go="web"]').click();
       expect(completionRun).not.toHaveBeenCalled();
       completionRun.mockRestore();
       expect(
@@ -498,8 +506,15 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
           FIXTURE_LITERATURE.literature_id,
         ),
       ).toBe(false);
-      await ui.locator("#library-toggle").click();
-      await ui.locator("#acquisition-start").click();
+      expect(
+        (
+          await post(
+            "/api/acquisition/start",
+            { article_id: SECOND_LITERATURE.literature_id },
+            c1,
+          )
+        ).status,
+      ).toBe(202);
       await vi.waitFor(() => expect(modelCalls).toBeGreaterThanOrEqual(3), {
         timeout: 30_000,
       });
@@ -564,6 +579,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       await expect
         .poll(() => ui.locator("#config-runtime-status").innerText())
         .toContain("当前普通配置");
+      await ui.locator('[data-setting="parser"]').click();
       await ui.locator("#config-browser-enabled").uncheck();
       await ui.locator("#config-save").click();
       await expect

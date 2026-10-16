@@ -922,7 +922,6 @@ function parseConfigurationObject(
   const analyzeModel =
     analyze.model === null ? null : normalizeModelReference(analyze.model);
   if (analyzeModel !== null && !(analyzeModel in models)) invalid();
-  validateAnalysisBudgets(analyze);
   const browserModel = textOrNull(browserRaw.model);
   const browser: BrowserConfig = Object.freeze({
     model: browserModel === null ? null : normalizeModelReference(browserModel),
@@ -1018,30 +1017,6 @@ function parseConfigurationObject(
 }
 function nullablePositive(value: unknown): number | null {
   return value === undefined || value === null ? null : positiveInteger(value);
-}
-function validateAnalysisBudgets(value: AnalyzeConfig): void {
-  if (
-    value.max_input_bytes !== null &&
-    value.max_chunk_bytes !== null &&
-    value.max_chunk_bytes > value.max_input_bytes
-  )
-    invalid();
-  if (value.max_total_llm_requests !== null && value.max_total_llm_requests < 2)
-    invalid();
-  const outputs = [
-    value.metadata_max_output_tokens,
-    value.content_max_output_tokens,
-    value.reference_max_output_tokens,
-  ].filter((item): item is number => item !== null);
-  if (
-    value.max_total_output_tokens !== null &&
-    (outputs.some((item) => item > value.max_total_output_tokens!) ||
-      (value.metadata_max_output_tokens !== null &&
-        value.content_max_output_tokens !== null &&
-        value.metadata_max_output_tokens + value.content_max_output_tokens >
-          value.max_total_output_tokens))
-  )
-    invalid();
 }
 export function parseConfiguration(
   input: string | Uint8Array,

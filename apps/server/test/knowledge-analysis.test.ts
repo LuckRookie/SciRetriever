@@ -1189,9 +1189,7 @@ describe("single-document knowledge analysis", () => {
       await page.goto(http.origin);
       await page.locator("#knowledge-literature-id").fill(literatureId);
       await page.locator("#knowledge-mode").selectOption("long");
-      expect(
-        await page.locator("#knowledge-input-bytes").getAttribute("max"),
-      ).toBe("8388608");
+      expect(await page.locator("#knowledge-input-bytes").count()).toBe(0);
       await page.locator("#knowledge-start").click();
       await expect
         .poll(() => page.locator("#knowledge-status").textContent())
@@ -1501,6 +1499,10 @@ describe("single-document knowledge analysis", () => {
         published: true,
         default_updated: false,
         artifact: { purpose: "overview", coverage: { status: "complete" } },
+      });
+      const content = first.artifact.content_ref;
+      expect(await env.app.database.locateArtifact(content)).toMatchObject({
+        reference: `knowledge/summaries/${content.sha256.slice(0, 2)}/${content.sha256}.json`,
       });
       expect(first.artifact.content.statements[0]?.evidence[0]).toMatchObject({
         target_kind: "document",
@@ -2035,9 +2037,13 @@ describe("single-document knowledge analysis", () => {
           compression_depth: 2,
         });
       };
-      await expect(
-        synth.publish(await consensusArtifact(sameLiteratureId)),
-      ).rejects.toMatchObject({ code: "synthesis-integrity" });
+      const samePaper = await synth.publish(
+        await consensusArtifact(sameLiteratureId),
+      );
+      expect(
+        (await synth.byId(samePaper.artifact.artifact_id))
+          ?.independent_literature_ids,
+      ).toEqual([literatureId]);
       const realConsensus = await synth.publish(
         await consensusArtifact(secondKnowledge.artifact.artifact_id),
       );
@@ -2952,7 +2958,71 @@ describe("single-document knowledge analysis", () => {
     }
   });
 
-  it("rejects insufficient budget and forged evidence before publication", async () => {
+  it("preserves more than eight valid citations and coalesces repeated segment IDs", async () => {
+    const env = await environment(
+      Array.from({ length: 12 }, (_, i) => `Paragraph ${i}.\n\n`).join(""),
+    );
+    const ids = await env.app.documentRead.withVerifiedVersion(
+      env.first.document.document_version_id,
+      async (_document, _bytes, structure) =>
+        structure.segments.map((segment) => segment.segment_id),
+    );
+    expect(ids.length).toBeGreaterThan(8);
+    const fake = runtime({
+      response: {
+        outcome: "completed",
+        title: "Evidence across the document",
+        statements: [
+          {
+            statement_id: "result-1",
+            category: "result",
+            epistemic: "reported",
+            text: "The result draws on multiple source paragraphs.",
+            conditions: [],
+            quantity: null,
+            evidence_segment_ids: [...ids, ids[0]],
+          },
+        ],
+      },
+    });
+    const storage = new SqliteKnowledgeStorage(
+      env.app.database,
+      env.app.files,
+      env.app.documentRead,
+    );
+    const service = new KnowledgeAnalysisService(
+      env.app.documentRead,
+      fake.agent,
+      storage,
+    );
+    try {
+      const receipt = await service.analyze(request(env.manifest));
+      const stored = await storage.byId(receipt.artifact.artifact_id);
+      const evidence = stored!.content.statements[0]!.evidence;
+      expect(
+        evidence.map((item) =>
+          item.target_kind === "document" ? item.locator.segment_id : null,
+        ),
+      ).toEqual(ids);
+      for (const item of evidence) {
+        const resolved = await env.app.documentRead.resolveEvidence({
+          evidence: item,
+          max_bytes: 1024,
+          continuation: null,
+        });
+        if (!("text" in resolved))
+          throw new Error("Expected document evidence");
+        expect(resolved.content_sha256).toBe(item.content_sha256);
+        expect(resolved.text).not.toBe("");
+      }
+    } finally {
+      await service.close();
+      fake.agent.close();
+      await env.close();
+    }
+  }, 15000);
+
+  it("rejects nonexistent evidence even when historical budgets are present", async () => {
     const env = await environment();
     const fake = runtime({ badEvidence: true });
     const storage = new SqliteKnowledgeStorage(
@@ -2972,8 +3042,8 @@ describe("single-document knowledge analysis", () => {
             budget: { max_input_bytes: 1, max_output_tokens: 2048 },
           }),
         ),
-      ).rejects.toMatchObject({ code: "knowledge-budget-exhausted" });
-      expect(fake.calls).toHaveLength(0);
+      ).rejects.toMatchObject({ code: "knowledge-invalid-evidence" });
+      expect(fake.calls).toHaveLength(1);
       await expect(
         service.analyze(request(env.manifest)),
       ).rejects.toMatchObject({ code: "knowledge-invalid-evidence" });
@@ -2984,7 +3054,7 @@ describe("single-document knowledge analysis", () => {
       await env.close();
     }
   });
-  it("reports budget exhaustion for more than 256 short segments", async () => {
+  it("processes more than 256 short segments without truncating the source", async () => {
     const source = Array.from(
       { length: 300 },
       (_, index) => `# Part ${index}\nText ${index}.\n\n`,
@@ -3008,8 +3078,8 @@ describe("single-document knowledge analysis", () => {
       expect(described.segment_count).toBeGreaterThan(256);
       await expect(
         service.analyze(request(env.manifest)),
-      ).rejects.toMatchObject({ code: "knowledge-budget-exhausted" });
-      expect(fake.calls).toHaveLength(0);
+      ).resolves.toMatchObject({ published: true });
+      expect(fake.calls).toHaveLength(1);
     } finally {
       await service.close();
       fake.agent.close();
@@ -3119,8 +3189,6 @@ describe("single-document knowledge analysis", () => {
                     conditions: [],
                     quantity: null,
                     evidence_segment_ids: [input.core[0]!.segment_id],
-                    evidence_quotes: [input.core[0]!.text.slice(0, 12)],
-                    evidence_regions: ["core"],
                   },
                 ],
               }
@@ -3181,7 +3249,7 @@ describe("single-document knowledge analysis", () => {
       const long = await firstApp.maintenance!.analyzeLong(
         longRequest(env.manifest),
       );
-      expect(long.artifact.method.version).toBe("2");
+      expect(long.artifact.method.version).toBe("3");
       expect(long.artifact.provenance).toMatchObject({
         provider: "fixture",
         model: "model",
@@ -3284,7 +3352,7 @@ describe("long-document knowledge analysis", () => {
       expect(receipt.published).toBe(true);
       expect(receipt.artifact.method).toMatchObject({
         id: "single-document-knowledge-long",
-        version: "2",
+        version: "3",
       });
       expect(receipt.artifact.coverage).toMatchObject({
         status: "complete",
@@ -3368,7 +3436,7 @@ describe("long-document knowledge analysis", () => {
             budget: { max_input_bytes: 256 * 1024, max_output_tokens: 2048 },
           }),
         );
-        expect(old.artifact.method.version).toBe("1");
+        expect(old.artifact.method.version).toBe("2");
         expect(await storage.byId(old.artifact.artifact_id)).toEqual(
           old.artifact,
         );
@@ -3387,10 +3455,10 @@ describe("long-document knowledge analysis", () => {
   });
 
   it.each([
-    ["local quote", { badQuote: true }, {}, "knowledge-invalid-evidence"],
+    ["local quote", { badQuote: true }, {}, null],
     ["merge mapping", { badMerge: true }, {}, "knowledge-response"],
-    ["merge source text", { badText: true }, {}, "knowledge-response"],
-    ["merge disagreement", { badCategory: true }, {}, "knowledge-response"],
+    ["merge source text", { badText: true }, {}, null],
+    ["merge disagreement", { badCategory: true }, {}, null],
     ["local failure", { failAt: 2 }, {}, "knowledge-model-failed"],
     [
       "all not applicable",
@@ -3398,33 +3466,18 @@ describe("long-document knowledge analysis", () => {
       {},
       "knowledge-not-applicable",
     ],
-    [
-      "actual output exceeds reservation",
-      { outputTokens: 3000 },
-      {},
-      "knowledge-budget-exhausted",
-    ],
-    [
-      "per-call bytes",
-      {},
-      { max_call_bytes: 100 },
-      "knowledge-budget-exhausted",
-    ],
-    ["call count", {}, { max_calls: 1 }, "knowledge-budget-exhausted"],
-    [
-      "source bytes",
-      {},
-      { max_source_bytes: 100 },
-      "knowledge-budget-exhausted",
-    ],
+    ["actual output exceeds reservation", { outputTokens: 3000 }, {}, null],
+    ["per-call bytes", {}, { max_call_bytes: 100 }, null],
+    ["call count", {}, { max_calls: 1 }, null],
+    ["source bytes", {}, { max_source_bytes: 100 }, null],
     [
       "total call bytes",
       {},
       { max_total_call_bytes: 1000, max_call_bytes: 1000 },
-      "knowledge-budget-exhausted",
+      null,
     ],
   ] as const)(
-    "rejects %s without publishing",
+    "applies format and source checks to %s without business budgets",
     async (_name, fakeOptions, budgetOverride, code) => {
       const env = await environment(source);
       const fake = longRuntime(fakeOptions);
@@ -3443,11 +3496,20 @@ describe("long-document knowledge analysis", () => {
           ...longRequest(env.manifest).budget,
           ...budgetOverride,
         };
-        await expect(
-          service.analyzeLong(longRequest(env.manifest, { budget })),
-        ).rejects.toMatchObject({ code });
-        if (_name === "source bytes") expect(fake.calls).toHaveLength(0);
-        expect(await storage.list(literatureId)).toHaveLength(0);
+        const pending = service.analyzeLong(
+          longRequest(env.manifest, { budget }),
+        );
+        if (code === null) {
+          const result = await pending;
+          expect(result.published).toBe(true);
+          expect(fake.calls).toHaveLength(4);
+          expect(await storage.byId(result.artifact.artifact_id)).toEqual(
+            result.artifact,
+          );
+        } else {
+          await expect(pending).rejects.toMatchObject({ code });
+          expect(await storage.list(literatureId)).toHaveLength(0);
+        }
       } finally {
         await service.close();
         fake.agent.close();
@@ -3457,7 +3519,7 @@ describe("long-document knowledge analysis", () => {
   );
 
   it.each(["oversize", "shape"] as const)(
-    "maps malformed merge quantity (%s) to response failure without invalidating the source",
+    "accepts long quantity text and rejects malformed quantity objects (%s)",
     async (kind) => {
       const env = await environment(source);
       const fake = longRuntime({ badMergeQuantity: kind });
@@ -3472,6 +3534,15 @@ describe("long-document knowledge analysis", () => {
         storage,
       );
       try {
+        if (kind === "oversize") {
+          const result = await service.analyzeLong(longRequest(env.manifest));
+          expect(result.published).toBe(true);
+          expect(
+            result.artifact.content.statements[0]!.quantity?.value,
+          ).toHaveLength(2000);
+          expect(await storage.byId(result.artifact.artifact_id)).toBeDefined();
+          return;
+        }
         let rejection: unknown;
         try {
           await service.analyzeLong(longRequest(env.manifest));
@@ -3627,7 +3698,7 @@ describe("long-document knowledge analysis", () => {
     },
   );
 
-  it("reports the 8192-segment budget without dispatching a model call", async () => {
+  it("processes the complete tail beyond the former 8192-segment cutoff", async () => {
     const env = await environment(`${"x\n".repeat(8193)}DRY_RESULT_4.2_eV\n`);
     const fake = longRuntime();
     const storage = new SqliteKnowledgeStorage(
@@ -3643,14 +3714,19 @@ describe("long-document knowledge analysis", () => {
     try {
       await expect(
         service.analyzeLong(longRequest(env.manifest)),
-      ).rejects.toMatchObject({ code: "knowledge-budget-exhausted" });
-      expect(fake.calls).toHaveLength(0);
+      ).resolves.toMatchObject({
+        published: true,
+        artifact: {
+          coverage: { total_segments: 8194, covered_segments: 8194 },
+        },
+      });
+      expect(fake.calls.length).toBeGreaterThan(128);
     } finally {
       await service.close();
       fake.agent.close();
       await env.close();
     }
-  });
+  }, 15000);
   it("does not mark invalid or missing usage as fully reported", async () => {
     const env = await environment(source);
     const fake = longRuntime({ outputTokens: Number.NaN });
@@ -3752,7 +3828,7 @@ describe("long-document knowledge analysis", () => {
             question: "What was measured?",
           }),
         ),
-      ).rejects.toMatchObject({ code: "knowledge-invalid-evidence" });
+      ).resolves.toMatchObject({ published: true });
     } finally {
       await badService.close();
       bad.agent.close();
@@ -3803,7 +3879,7 @@ describe("long-document knowledge analysis", () => {
             question: "What changed?",
           }),
         ),
-      ).rejects.toMatchObject({ code: "knowledge-response" });
+      ).resolves.toMatchObject({ published: true });
     } finally {
       await badService.close();
       bad.agent.close();
@@ -3811,7 +3887,7 @@ describe("long-document knowledge analysis", () => {
     }
   });
 
-  it("runs an intermediate and final merge for 65 candidates, then rejects an inner omission or cumulative call limit", async () => {
+  it("completes finite hierarchical synthesis and reuses it despite obsolete call limits", async () => {
     const marker = "DRY_RESULT_4.2_eV";
     const text = `${"A".repeat(65536 - marker.length - 2)} ${marker}\n`.repeat(
       65,
@@ -3854,8 +3930,8 @@ describe("long-document knowledge analysis", () => {
             question: "Which result?",
           }),
         ),
-      ).rejects.toMatchObject({ code: "knowledge-response" });
-      expect(missing.calls).toHaveLength(66);
+      ).resolves.toMatchObject({ published: true });
+      expect(missing.calls).toHaveLength(71);
     } finally {
       await missingService.close();
       missing.agent.close();
@@ -3870,8 +3946,8 @@ describe("long-document knowledge analysis", () => {
       const budget = { ...longRequest(env.manifest).budget, max_calls: 66 };
       await expect(
         limitedService.analyzeLong(longRequest(env.manifest, { budget })),
-      ).rejects.toMatchObject({ code: "knowledge-budget-exhausted" });
-      expect(limited.calls).toHaveLength(66);
+      ).resolves.toMatchObject({ published: false });
+      expect(limited.calls).toHaveLength(0);
     } finally {
       await limitedService.close();
       limited.agent.close();

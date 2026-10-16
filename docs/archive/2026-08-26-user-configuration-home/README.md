@@ -207,3 +207,5 @@ diff 和最近完成证据。最近恢复点是最后一个标为 Completed 的 
   访问，均属于明确非目标。没有独立 reviewer 授权，R5 由 Primary owner 串行完成。
 - Git/发布：未 commit、push、创建 PR 或发布；工作树中既有 Agents/Browser 改动保持原样。
 - 归档位置：`docs/archive/2026-08-26-user-configuration-home/`。
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

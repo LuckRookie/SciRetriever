@@ -80,15 +80,21 @@ it("installs packed workspace modules and exercises their public boundaries with
         ["pack", "--pack-destination", directory],
         packageDirectory,
       );
-      if (
-        "dependencies" in manifest &&
-        manifest.dependencies &&
-        typeof manifest.dependencies === "object"
-      )
-        for (const dependency of Object.keys(manifest.dependencies)) {
-          const child = await visit(dependency, packageDirectory);
-          overrides[`${identity}>${dependency}`] = `file:./${child.tarball}`;
-        }
+      const runtimeManifest = manifest as {
+        dependencies?: Record<string, string>;
+        peerDependencies?: Record<string, string>;
+        peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+      };
+      const runtimeDependencies = new Set([
+        ...Object.keys(runtimeManifest.dependencies ?? {}),
+        ...Object.keys(runtimeManifest.peerDependencies ?? {}).filter(
+          (name) => !runtimeManifest.peerDependenciesMeta?.[name]?.optional,
+        ),
+      ]);
+      for (const dependency of runtimeDependencies) {
+        const child = await visit(dependency, packageDirectory);
+        overrides[`${identity}>${dependency}`] = `file:./${child.tarball}`;
+      }
       return entry;
     };
     const serverManifest = JSON.parse(
@@ -184,19 +190,19 @@ it("installs packed workspace modules and exercises their public boundaries with
       }, { max_actions: 2, max_model_calls: 1, max_retries: 1, max_bytes: 1024, deadline_ms: 10000 });
       await session.refresh();
       const assets = await loadWorkbenchAssets();
-      assert.deepEqual([...assets.keys()], ['/', '/styles.css', '/live.css', '/live.js']);
+      assert.deepEqual([...assets.keys()], ['/', '/styles.css', '/live.css', '/workspace.css', '/live.js']);
       const http = await startWorkbenchHttp({ session, assets });
       const rootResponse = await fetch(http.origin);
       assert.equal(rootResponse.status, 200);
       const workbenchPage = await rootResponse.text();
-      assert.match(workbenchPage, /科研文献工作台/);
-      assert.match(workbenchPage, /id="overview-workspace"/);
-      assert.match(workbenchPage, /id="jobs-workspace"/);
+      assert.match(workbenchPage, /SciRetriever 文献库/);
+      assert.match(workbenchPage, /id="side"/);
+      assert.match(workbenchPage, /id="main"/);
       const cookie = (rootResponse.headers.get('set-cookie') ?? '').split(';')[0];
       const scriptResponse = await fetch(http.origin + '/live.js', { headers: { cookie } });
       assert.equal(scriptResponse.status, 200);
       assert.ok((scriptResponse.headers.get('content-type') ?? '').includes('text/javascript'));
-      assert.ok((await scriptResponse.text()).includes('candidate/abandon'));
+      assert.ok((await scriptResponse.text()).includes('/api/candidate/'));
       await http.close();
       await session.close();
       await application.close();

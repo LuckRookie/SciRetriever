@@ -51,8 +51,8 @@ commit/push 或发布。
 - [Acquisition 技术文档](../../architecture/technical/acquisition.md)；
 - [Network 技术文档](../../architecture/technical/network.md)；
 - [HARNESS](../../../HARNESS.md) 的工程、真实访问和 Git 边界；
-- [无 PDF 调查与可观测性归档](../../archive/2026-09-03-browser-debug-observability/README.md) 第 6.6、6.7 节的真实 ACS 证据；
-- [Agents 行为修复归档](../../archive/2026-09-02-agent-behavior-and-feedback-repair/README.md)与[Observation readiness 归档](../../archive/2026-09-03-browser-observation-readiness/README.md)的既有完成边界。
+- [无 PDF 调查与可观测性归档](../2026-09-03-browser-debug-observability/README.md) 第 6.6、6.7 节的真实 ACS 证据；
+- [Agents 行为修复归档](../2026-09-02-agent-behavior-and-feedback-repair/README.md)与[Observation readiness 归档](../2026-09-03-browser-observation-readiness/README.md)的既有完成边界。
 
 ADR 0017 已在 2026-09-04 amendment 中把一次性布尔判断修订为唯一三态
 `BrowserCapturePolicy`，并冻结 Candidate、重新判定、exact-start redirect lineage 与 cleanup 合同。
@@ -312,3 +312,5 @@ wheel 构建和内容核对。长期行为已进入 ADR 0017、Network technical
 Profile、文件系统或入库权限。最终 diff 检查未发现凭据、个人配置、Profile、PDF、数据库、截图或构建
 产物。真实 ACS 单篇因未获 Publisher/Model/用户 Catalog 授权而没有运行，不能宣称真实站点已经形成
 `primary-pdf`；这是唯一接受的残余风险。Git commit、push、PR 和发布均未执行。
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

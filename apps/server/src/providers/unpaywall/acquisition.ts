@@ -7,6 +7,7 @@ import { type SourceCandidate } from "../../acquisition/sources/locators.js";
 import { values } from "../shared/acquisition-locators.js";
 import { definition, services } from "./definition.js";
 import { unpaywallLocations } from "./locators.js";
+import { AcquisitionRouteError } from "../../acquisition/tiered.js";
 function email(value: string): string {
   const normalized = value.trim();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/u.test(normalized))
@@ -50,7 +51,11 @@ export class UnpaywallSource implements AcquisitionSourcePort {
       headers: { accept: "application/json" },
     });
     if (!response || typeof response !== "object" || Array.isArray(response))
-      throw new Error("Unpaywall response is invalid");
+      throw new AcquisitionRouteError(
+        "source-discovery-failed",
+        "Unpaywall returned an invalid location response.",
+        false,
+      );
     const record = response as Record<string, unknown>;
     const locations = [
       ...(Array.isArray(record.best_oa_location)

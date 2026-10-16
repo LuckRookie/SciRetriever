@@ -14,7 +14,7 @@ async function connected(host: ReturnType<typeof createMcpServer>) {
 }
 describe("formal MCP product adapter", () => {
   it("exposes a legacy skipped failure and completes the same task after configuration repair and explicit retry", async () => {
-    const env = await coreProcessingFixture();
+    const env = await coreProcessingFixture({ analysisModel: false });
     const host = createMcpServer({
       maintenance: true,
       applicationFactory: async () => env.app,
@@ -193,8 +193,6 @@ describe("formal MCP product adapter", () => {
                 conditions: [],
                 quantity: null,
                 evidence_segment_ids: [core[0]!.segment_id],
-                evidence_quotes: [core[0]!.text],
-                evidence_regions: ["core"],
               },
             ],
           };

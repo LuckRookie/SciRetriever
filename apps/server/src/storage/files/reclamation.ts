@@ -1,3 +1,4 @@
+import { hasManagedArtifactPrefix } from "../artifact-layout.js";
 import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import {
@@ -131,7 +132,7 @@ export class ArtifactReclaimer {
           const artifact = parseArtifactRef(value.artifact);
           if (
             !isRelativeArtifactReference(this.root, value.reference) ||
-            !/^(objects|\.objects|\.candidates)\//.test(value.reference) ||
+            !hasManagedArtifactPrefix(value.reference) ||
             artifact.byte_size < 1
           )
             fail();

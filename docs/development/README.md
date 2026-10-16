@@ -4,7 +4,10 @@
 
 ## 常用入口
 
+- [项目目录地图](../../README.md#项目目录地图)：按目录或工作类型定位责任模块。
+
 - [代码与文档同步映射](documentation-map.md)：代码变化需要同步核对哪些当前文档。
+- [测试材料与阶段记录](../../tests/README.md)：测试源码、合成 fixture、人工验收说明和临时结果的存放边界。
 - [TypeScript 基础开发入口](typescript-foundation.md)：TS workspace、合同包、离线验证和当前运行时阻断。
 - [Provider 接入开发手册](provider-integration.md)：新增或实质修改 Metadata Provider 或 Acquisition Provider client/adapter 时的安全与验收检查。
 - [Publisher Access Profile 准入与验证矩阵](../notes/providers/publisher-access-matrix.md)：Publisher/Access Provider 的统一证据包、三态状态、Browser rule 对齐和当前生产矩阵。
@@ -21,4 +24,6 @@ pnpm full
 
 按项目 owner 于 2026-09-10 的决定，后续全量验收采用 TS Full：Prettier、ESLint、源码与测试 strict 类型检查、Vitest 和构建。Python Harness 保留为历史维护入口，只有明确要求时才运行。精确规则见根目录 `HARNESS.md`。
 
-测试、构建和 harness 不得连接真实供应商、生产数据库或用户语料。
+自动化回归、构建和 Harness 不得连接真实供应商、生产数据库或用户语料。经用户明确授权的本机真实测试使用 Git 忽略的 `sandbox/`，目录职责见[测试目录说明](../../tests/README.md)。
+
+[上级目录](../README.md) · [项目 README](../../README.md)

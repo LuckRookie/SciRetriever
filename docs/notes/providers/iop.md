@@ -76,20 +76,4 @@ Network guard 和 Acquisition 文章归属验收，不联系其它 IOP 服务、
 也不证明当前文章 entitlement。
 本轮没有执行真实 IOP 文章 probe 或正文下载。
 
-## 6. 2026-08-22 Cloak 切换门现场证据
-
-以下内容是旧规则执行器的历史现场证据，不是当前 `browser:generic` 的成功率。固定单篇、
-stock/Cloak 交替且同 Publisher 启动间隔至少 30 秒的真实 A/B 中，两套引擎都没有
-取得 PDF：stock 形成 `no-download`；Cloak 观察到 IOP 顶层流程三次转向
-`validate.perfdrive.com` 后，因该 origin 不属于已审核 IOP 规则而 fail closed 为 `policy`。
-定向诊断只保留 hostname、导航形状和有界结果，没有记录完整 URL、path/query、页面正文、
-Cookie、Profile 或 challenge token；它确认该结果不是 cleanup/runtime 故障，Cloak 共享
-process/context 仍可被后续 Publisher 复用。
-
-这次结果不能复现 2026-08-21 的 IOP 成功样本，也不能据此宣称是 CloakBrowser 提高或降低了
-文章 entitlement：同轮 stock 同样没有交付，差异只是 Cloak 对未审核顶层 challenge 导航明确
-拒绝。SciRetriever 不把 PerfDrive origin 临时加入普通 `allowed_origins`，不自动点击或破解
-CAPTCHA，也不以放宽 top-frame/文章绑定换取成功。CBA72 的本次服务器现场准入已将 IOP 记为
-`deferred`；它不改变 `production-ready` Profile 状态，也不等于其它机构/Profile 全局
-unsupported。旧 IOP PDF response/download fixture 只作为通用 capture、错误分类与文章身份回归
-用例的来源，不再是生产页面规则。
+历史切换测试见2026-08-22 Browser 测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。

@@ -18,6 +18,7 @@ export interface MinerUHttpTransport {
   request(
     url: string,
     options: {
+      readonly method?: "GET" | "POST";
       readonly body: Uint8Array;
       readonly headers: Readonly<Record<string, string>>;
       readonly signal?: AbortSignal;
@@ -29,12 +30,6 @@ function fail(): never {
   throw new ParsingFailure("parser-unavailable");
 }
 
-/** Count ordinary PDF page objects without executing a parser or reading paths. */
-function pageCount(pdf: Uint8Array): number {
-  const text = Buffer.from(pdf).toString("latin1");
-  const matches = text.match(/\/Type\s*\/Page(?:\s|\/|>)/gu) ?? [];
-  return Math.max(1, matches.length);
-}
 function object(
   value: unknown,
   keys: readonly string[],
@@ -172,7 +167,6 @@ export class MinerUParser implements ParserBackend {
         ? await convertMinerUArchive(response.body, {
             source_asset_id: request.source_asset_id,
             source_sha256: request.source_sha256,
-            page_count: pageCount(pdf),
             model_identity: this.modelIdentity,
           })
         : await decode(response);

@@ -31,6 +31,32 @@ describe("structured logging redaction", () => {
     ]);
     expect(lines.join("\n")).not.toContain('{"result"');
   });
+
+  it("records numeric model usage without treating credential tokens as usage", () => {
+    const lines: string[] = [];
+    const logger = createLogger("agent-capability", (line) => lines.push(line));
+    logger.info("Model request settled", {
+      session_id: "article-session-a",
+      request_id: "request-a",
+      purpose: "compaction",
+      input_tokens: 120,
+      output_tokens: 30,
+      cached_input_tokens: 60,
+      access_token: "private-credential",
+      prompt: "private-page-text",
+    });
+    logger.info("Invalid usage", {
+      input_tokens: "private-credential",
+      output_tokens: Number.NaN,
+      cached_input_tokens: -1,
+    });
+    expect(lines[0]).toContain("request_id=request-a purpose=compaction");
+    expect(lines[0]).toContain(
+      "input_tokens=120 output_tokens=30 cached_input_tokens=60",
+    );
+    expect(lines.join("\n")).not.toContain("private-");
+    expect(lines[1]).toBe("INFO component=agent-capability Invalid usage");
+  });
 });
 
 it("retains declared Browser cleanup causes and opaque session identity", () => {

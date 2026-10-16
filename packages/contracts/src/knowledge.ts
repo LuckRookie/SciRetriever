@@ -26,19 +26,21 @@ export interface KnowledgeAnalysisRequest {
   readonly purpose: "overview" | "detailed" | "question";
   readonly question: string | null;
   readonly default_update: null | { readonly expected_revision: number | null };
-  readonly budget: {
+  /** @deprecated Accepted for existing callers; fixed-input processing does not enforce it. */
+  readonly budget?: {
     readonly max_input_bytes: number;
     readonly max_output_tokens: number;
   };
 }
-/** Separate long-document operation; v1 max_input_bytes keeps its original meaning. */
+/** Finite chunked processing of an already fixed document. */
 export interface KnowledgeLongAnalysisRequest {
   readonly schema_version: 2;
   readonly input: InputManifest;
   readonly purpose: KnowledgeAnalysisRequest["purpose"];
   readonly question: string | null;
   readonly default_update: KnowledgeAnalysisRequest["default_update"];
-  readonly budget: {
+  /** @deprecated Accepted for existing callers; fixed-input processing does not enforce it. */
+  readonly budget?: {
     readonly max_source_bytes: number;
     /** Canonical AgentCall bytes, including messages and response schema. */
     readonly max_call_bytes: number;
@@ -147,7 +149,10 @@ function string(value: unknown, maxBytes: number, allowEmpty = false): string {
     typeof value !== "string" ||
     Array.from(value).some((character) => {
       const code = character.codePointAt(0)!;
-      return code <= 31 || (code >= 127 && code <= 159);
+      return (
+        (code <= 31 && ![9, 10, 13].includes(code)) ||
+        (code >= 127 && code <= 159)
+      );
     }) ||
     (!allowEmpty && !value.trim()) ||
     new TextEncoder().encode(value).length > maxBytes
@@ -170,7 +175,13 @@ function integer(value: unknown, max: number, min = 0): number {
 }
 function boundedSnapshot(value: unknown, limit: number): unknown {
   return JSON.parse(
-    new TextDecoder().decode(extractionCanonicalJsonBytes(value, limit)),
+    new TextDecoder().decode(
+      extractionCanonicalJsonBytes(value, limit, {
+        maxDepth: 32,
+        maxNodes: 20480,
+        maxArrayLength: 20480,
+      }),
+    ),
   ) as unknown;
 }
 export function normalizeKnowledgeQuestion(value: unknown): string {
@@ -229,13 +240,15 @@ function artifactId(comparisonHash: string): string {
 export async function parseKnowledgeAnalysisRequest(
   value: unknown,
 ): Promise<KnowledgeAnalysisRequest> {
-  const r = exact(boundedSnapshot(value, KNOWLEDGE_MAX_REQUEST_BYTES), [
+  const snapshot = boundedSnapshot(value, KNOWLEDGE_MAX_REQUEST_BYTES);
+  if (!snapshot || typeof snapshot !== "object") fail();
+  const r = exact(snapshot, [
     "schema_version",
     "input",
     "purpose",
     "question",
     "default_update",
-    "budget",
+    ...(Object.hasOwn(snapshot, "budget") ? ["budget"] : []),
   ]);
   if (
     r.schema_version !== 1 ||
@@ -261,7 +274,10 @@ export async function parseKnowledgeAnalysisRequest(
       : defaultUpdate.expected_revision === null
         ? null
         : integer(defaultUpdate.expected_revision, 2147483647, 1);
-  const budget = exact(r.budget, ["max_input_bytes", "max_output_tokens"]);
+  const budget =
+    r.budget === undefined
+      ? undefined
+      : exact(r.budget, ["max_input_bytes", "max_output_tokens"]);
   return Object.freeze({
     schema_version: 1 as const,
     input,
@@ -271,22 +287,36 @@ export async function parseKnowledgeAnalysisRequest(
       defaultUpdate === null
         ? null
         : Object.freeze({ expected_revision: revision }),
-    budget: Object.freeze({
-      max_input_bytes: integer(budget.max_input_bytes, 256 * 1024, 1),
-      max_output_tokens: integer(budget.max_output_tokens, 16384, 1),
-    }),
+    ...(budget === undefined
+      ? {}
+      : {
+          budget: Object.freeze({
+            max_input_bytes: integer(
+              budget.max_input_bytes,
+              Number.MAX_SAFE_INTEGER,
+              1,
+            ),
+            max_output_tokens: integer(
+              budget.max_output_tokens,
+              Number.MAX_SAFE_INTEGER,
+              1,
+            ),
+          }),
+        }),
   });
 }
 export async function parseKnowledgeLongAnalysisRequest(
   value: unknown,
 ): Promise<KnowledgeLongAnalysisRequest> {
-  const r = exact(boundedSnapshot(value, KNOWLEDGE_MAX_REQUEST_BYTES), [
+  const snapshot = boundedSnapshot(value, KNOWLEDGE_MAX_REQUEST_BYTES);
+  if (!snapshot || typeof snapshot !== "object") fail();
+  const r = exact(snapshot, [
     "schema_version",
     "input",
     "purpose",
     "question",
     "default_update",
-    "budget",
+    ...(Object.hasOwn(snapshot, "budget") ? ["budget"] : []),
   ]);
   if (
     r.schema_version !== 2 ||
@@ -312,40 +342,48 @@ export async function parseKnowledgeLongAnalysisRequest(
       : defaultUpdate.expected_revision === null
         ? null
         : integer(defaultUpdate.expected_revision, 2147483647, 1);
-  const budget = exact(r.budget, [
-    "max_source_bytes",
-    "max_call_bytes",
-    "max_total_call_bytes",
-    "max_calls",
-    "max_output_tokens_per_call",
-    "max_total_output_tokens",
-  ]);
-  const parsedBudget = Object.freeze({
-    max_source_bytes: integer(budget.max_source_bytes, 8 * 1024 * 1024, 1),
-    max_call_bytes: integer(budget.max_call_bytes, 256 * 1024, 1),
-    max_total_call_bytes: integer(
-      budget.max_total_call_bytes,
-      64 * 1024 * 1024,
-      1,
-    ),
-    max_calls: integer(budget.max_calls, 256, 1),
-    max_output_tokens_per_call: integer(
-      budget.max_output_tokens_per_call,
-      16384,
-      1,
-    ),
-    max_total_output_tokens: integer(
-      budget.max_total_output_tokens,
-      1024 * 1024,
-      1,
-    ),
-  });
-  if (
-    parsedBudget.max_call_bytes > parsedBudget.max_total_call_bytes ||
-    parsedBudget.max_output_tokens_per_call >
-      parsedBudget.max_total_output_tokens
-  )
-    fail();
+  const legacy =
+    r.budget === undefined
+      ? undefined
+      : exact(r.budget, [
+          "max_source_bytes",
+          "max_call_bytes",
+          "max_total_call_bytes",
+          "max_calls",
+          "max_output_tokens_per_call",
+          "max_total_output_tokens",
+        ]);
+  const budget =
+    legacy === undefined
+      ? undefined
+      : Object.freeze({
+          max_source_bytes: integer(
+            legacy.max_source_bytes,
+            Number.MAX_SAFE_INTEGER,
+            1,
+          ),
+          max_call_bytes: integer(
+            legacy.max_call_bytes,
+            Number.MAX_SAFE_INTEGER,
+            1,
+          ),
+          max_total_call_bytes: integer(
+            legacy.max_total_call_bytes,
+            Number.MAX_SAFE_INTEGER,
+            1,
+          ),
+          max_calls: integer(legacy.max_calls, Number.MAX_SAFE_INTEGER, 1),
+          max_output_tokens_per_call: integer(
+            legacy.max_output_tokens_per_call,
+            Number.MAX_SAFE_INTEGER,
+            1,
+          ),
+          max_total_output_tokens: integer(
+            legacy.max_total_output_tokens,
+            Number.MAX_SAFE_INTEGER,
+            1,
+          ),
+        });
   return Object.freeze({
     schema_version: 2 as const,
     input,
@@ -355,7 +393,7 @@ export async function parseKnowledgeLongAnalysisRequest(
       defaultUpdate === null
         ? null
         : Object.freeze({ expected_revision: revision }),
-    budget: parsedBudget,
+    ...(budget === undefined ? {} : { budget }),
   });
 }
 export function parseKnowledgeContent(value: unknown): KnowledgeContent {
@@ -367,8 +405,7 @@ export function parseKnowledgeContent(value: unknown): KnowledgeContent {
   if (
     r.schema_version !== 1 ||
     !Array.isArray(r.statements) ||
-    r.statements.length < 1 ||
-    r.statements.length > 64
+    r.statements.length < 1
   )
     fail();
   const ids = new Set<string>();
@@ -391,10 +428,8 @@ export function parseKnowledgeContent(value: unknown): KnowledgeContent {
       ) ||
       !["reported", "inference"].includes(s.epistemic as string) ||
       !Array.isArray(s.conditions) ||
-      s.conditions.length > 8 ||
       !Array.isArray(s.evidence) ||
-      s.evidence.length < 1 ||
-      s.evidence.length > 8
+      s.evidence.length < 1
     )
       fail();
     ids.add(id);
@@ -406,25 +441,30 @@ export function parseKnowledgeContent(value: unknown): KnowledgeContent {
       statement_id: id,
       category: s.category as KnowledgeStatement["category"],
       epistemic: s.epistemic as KnowledgeStatement["epistemic"],
-      text: string(s.text, 4096),
-      conditions: Object.freeze(s.conditions.map((item) => string(item, 1024))),
+      text: string(s.text, KNOWLEDGE_MAX_CONTENT_BYTES),
+      conditions: Object.freeze(
+        s.conditions.map((item) => string(item, KNOWLEDGE_MAX_CONTENT_BYTES)),
+      ),
       quantity:
         quantity === null
           ? null
           : Object.freeze({
-              value: string(quantity.value, 128),
-              unit: string(quantity.unit, 128),
+              value: string(quantity.value, KNOWLEDGE_MAX_CONTENT_BYTES),
+              unit: string(quantity.unit, KNOWLEDGE_MAX_CONTENT_BYTES),
               comparison_basis:
                 quantity.comparison_basis === null
                   ? null
-                  : string(quantity.comparison_basis, 512),
+                  : string(
+                      quantity.comparison_basis,
+                      KNOWLEDGE_MAX_CONTENT_BYTES,
+                    ),
             }),
       evidence: Object.freeze(s.evidence.map((item) => parseEvidenceRef(item))),
     });
   });
   return Object.freeze({
     schema_version: 1,
-    title: string(r.title, 512),
+    title: string(r.title, KNOWLEDGE_MAX_CONTENT_BYTES),
     statements: Object.freeze(statements),
   });
 }
@@ -432,6 +472,7 @@ export function knowledgeContentBytes(value: KnowledgeContent): Uint8Array {
   return extractionCanonicalJsonBytes(
     parseKnowledgeContent(value),
     KNOWLEDGE_MAX_CONTENT_BYTES,
+    { maxDepth: 32, maxNodes: 20480, maxArrayLength: 20480 },
   );
 }
 /** Canonical identity for one complete knowledge statement. */
@@ -444,7 +485,11 @@ export async function knowledgeStatementSha256(
     statements: [value],
   }).statements[0]!;
   return sha256(
-    extractionCanonicalJsonBytes(statement, KNOWLEDGE_MAX_CONTENT_BYTES),
+    extractionCanonicalJsonBytes(statement, KNOWLEDGE_MAX_CONTENT_BYTES, {
+      maxDepth: 32,
+      maxNodes: 20480,
+      maxArrayLength: 20480,
+    }),
   );
 }
 export async function parseKnowledgeArtifact(

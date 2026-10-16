@@ -1,6 +1,6 @@
 # Provider 外部接口 Notes
 
-本目录记录 SciRetriever 适配外部文献服务时需要长期维护的易变事实：官方入口、认证和限流、endpoint/分页/响应层级、metadata/citation/asset 候选映射、现场验证结果、已知缺口与当前实现边界。
+本目录记录 SciRetriever 适配外部文献服务时需要长期维护的易变事实：官方入口、认证和限流、endpoint/分页/响应层级、metadata/citation/asset 候选映射、已知兼容性、已知缺口与当前实现边界。
 
 2026-10-07 治理说明：本目录包含历史 Python 实现和旧 Browser 调度记录，不以旧文中的“当前”证明 TypeScript 已实现。活动静态定义在 `apps/server/src/providers/registry.ts`；Metadata/Acquisition 的间隔与窗口已接到共享 Network，当前政策依据和未覆盖项统一见[供应商治理](../../development/provider-governance.md)。本文后续旧 Browser 九条 route、旧并发阈值、挑战页处理描述仅保留历史语境，当前行为以 [PDF 获取指南](../../guides/pdf-acquisition.md) 为准。
 
@@ -18,7 +18,7 @@
 
 “待核对/未找到公开依据”不是证据等级，而是主动保留的不确定性。官方页面需要 key、返回 403、依赖 JavaScript 或缺少 schema 时，应保留缺口，不能凭旧代码、字段名或行业经验补全。超过六个月未复核的 `verified`、`support`、`inferred` 条目默认视为需要复核。
 
-`sciretriever config test` 是用户显式发起的当次配置诊断，不自动成为本目录的 `verified` 证据。只有在维护者明确记录核对日期、脱敏 shape、测试边界并完成文档审查后，才能把独立现场观察写回 Notes；Harness、CI 和安装后离线验收不得用真实连接刷新这里的事实。
+`sciretriever config test` 是用户显式发起的当次配置诊断，不自动成为本目录的 `verified` 证据。只有在维护者明确记录核对日期、脱敏 shape、测试边界并完成文档审查后，才能把可长期维护的接口或兼容性结论提炼到 Notes；具体请求、样本、耗时和结果表保存在 `sandbox/reports/`（本地保存，不随仓库分发）；Harness、CI 和安装后离线验收不得用真实连接刷新这里的事实。
 
 ## 2. 三类事实不得混写
 
@@ -32,7 +32,7 @@
 
 截至 2026-09-06，目标 Metadata/Acquisition provider 模型、统一安全 HTTP、进程内共享 Access Coordinator、固定配置/凭据边界、生产 registry 与 `sciretriever` CLI 均已接入。完整及 capability-scoped Completion 对象图共享同一 Profile catalog/Planner、tiered cohort executor、Browser scheduler/session broker 和 admission controller。Browser 下载不再注册 Publisher-specific rule 或 route；所有具有合法文章起点的目标统一进入 `browser:generic`，由 Agent 选择封闭页面动作，Network 提供稳定观察、执行、capture 与清理，Acquisition 独立验证 PDF 字节和目标文章归属。总开关、固定 identity manifest、Cloak wrapper、Playwright API、经核实 binary 和 headed display 同时就绪时，Bootstrap 才构造 Browser client。Browser 固定 `headless = false`，无 GUI Linux 使用 Xvfb，网页请求由 Chromium 原生网络栈完成；它不向用户开放交互登录。总开关不证明组织授权或文章 entitlement。旧九站点规则、SpringerLink/IOP 小样本及其它现场结果只作为历史工程证据，不决定当前 route，也不证明当前通用 Agent 的成功率。
 
-Publisher/Access Provider 使用统一的[Profile 准入与验证矩阵](publisher-access-matrix.md)：状态只有 `production-ready`、`fixture-verified` 和 `unsupported`，实际 public/API capability 与可选 Browser 首页 probe 另列。当前 production Profile 共 10 项；CORE、Elsevier/ScienceDirect 与 Wiley 提供授权 API，九家访问平台启用 reachability-only Browser probe。Profile 状态和 probe 都不控制 `browser:generic` 下载准入。任何真实 Browser 核实还必须经过[受控现场核实门](browser-live-verification/README.md)，没有完整单项核实单和用户另行授权时不得执行。
+Publisher/Access Provider 使用统一的[Profile 准入与验证矩阵](publisher-access-matrix.md)：状态只有 `production-ready`、`fixture-verified` 和 `unsupported`，实际 public/API capability 与可选 Browser 首页 probe 另列。当前 production Profile 共 10 项；CORE、Elsevier/ScienceDirect 与 Wiley 提供授权 API，九家访问平台启用 reachability-only Browser probe。Profile 状态和 probe 都不控制 `browser:generic` 下载准入。真实 Browser 测试遵循当前用户授权与 [HARNESS](../../../HARNESS.md)；旧现场核实规程仅作为本机历史用例保留在 `sandbox/cases/browser/`，不成为公共运行前置条件。
 
 ## 3. 已接受的目标能力矩阵
 
@@ -102,7 +102,7 @@ OpenCitations Meta/Index 是两类数据，Web of Science Starter/Expanded 是�
   [Science / AAAS](science-aaas.md)、[PNAS](pnas.md)、
   [World Scientific](world-scientific.md)；
 - [Publisher Access Profile 准入与验证矩阵](publisher-access-matrix.md)、
-  [受控 Browser 现场核实门](browser-live-verification/README.md)。
+  受控 Browser 现场核实门（本地文件：`sandbox/cases/browser/README.md`，不随仓库分发）。
 
 ## 5. `direct` 不是供应商
 
@@ -121,7 +121,7 @@ OpenCitations Meta/Index 是两类数据，Web of Science Starter/Expanded 是�
 5. metadata、citation、asset 各自能力与明确“不适用”项。
 6. 一份精简且脱敏的代表性 response shape；公开资料不足时明确不伪造。
 7. 外部字段到中性 Model 的候选映射，以及明确不进入 Model 的字段。
-8. 已知限制、待核对项、现场验证范围和当前实现缺口。
+8. 已知限制、待核对项、适用范围和当前实现缺口，测试过程保存在 `sandbox/reports/`（本地保存，不随仓库分发）。
 
 响应样例只保留理解层级所需字段，不复制大段 vendor payload，不保留受限正文、用户数据或真实凭据。
 
@@ -168,3 +168,5 @@ OpenCitations Meta/Index 是两类数据，Web of Science Starter/Expanded 是�
 - [ ] 凭据字段与 `config status/test` 边界符合 ADR 0014；没有把本地字段存在、认证成功和具体全文 entitlement 混成同一状态，也没有用 Harness/CI 做真实连通性测试。
 - [ ] 同步日期、证据等级、已知缺口、直接测试/fixture 和退役条件。
 - [ ] 运行 Markdown link、冲突标记、尾随空白与最终 diff 检查。
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

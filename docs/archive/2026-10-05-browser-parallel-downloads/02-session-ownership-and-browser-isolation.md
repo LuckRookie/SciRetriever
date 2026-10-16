@@ -156,5 +156,5 @@ transfer dispatcher 6、terminal cleanup 2；最后 Cloak 两文件 4/4。最终
 
 本块实现、直接回归与必要生产对象图证据已并入最终验收；Full189文件/1,266项通过、39项条件跳过、build通过。
 最后源码清单142项、hash55a59148dcabd9d2a8345d8b4c9b689831b92307bcc6f04e1bab726306fc0c01。
-具体版本、影响审查、逐出版社结果和外部未决范围见[最终验收记录](../../notes/browser-final-acceptance-2026-10-07.md)。
+具体版本、影响审查、逐出版社结果和外部未决范围见最终验收记录（本地文件：`sandbox/reports/browser-final-acceptance-2026-10-07.md`，不随仓库分发）。
 此前记录保留其发生时的版本与结论；当前块状态以上述最终收口为准，不将历史失败改写为当时通过。

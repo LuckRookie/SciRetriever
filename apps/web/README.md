@@ -1,8 +1,10 @@
 # SciRetriever Web 工作台
 
-本目录提供正式蓝白任务工作台，以及独立只读/维护页面和原有合成预览。正式入口使用 `sciretriever web`（源码构建后 `node apps/server/dist/cli/main.js web`），默认监听本机 4174，连接配置的真实 catalog/资产目录；不会自动初始化或迁移数据库。详见[Web 任务工作台指南](../../docs/guides/web-workbench.md)。
+本目录提供以文献库为首页的正式 Web、独立只读/维护页面和合成预览。正式入口为 `sciretriever web`，默认监听本机 4174，存储默认位于 `~/.sciretriever/`，已有自定义路径优先；设置修改路径后重启生效，不自动搬迁已有库。详见[Web 使用指南](../../docs/guides/web-workbench.md)。
 
-正式页面为 `public/live.html` 与 `src/live.ts`，主导航为工作台、任务、文献库、设置。`navigation.ts` 统一管理导航，`jobs.ts` / `overview.ts` 从同一持久任务服务显示列表、执行、结果和活动，`task-view.ts` 提供展示解析。`workspace-tools.ts` 显示实际库绑定并连接显式发现/书目导入。阅读、加工与配置复用原有模块及同源 HTTP 服务，Browser 位于任务目标的协助视图。蓝白样式仅在 `live.css` 中覆盖共享 tokens，原 4173 静态样本保持独立。
+正式页面 `public/live.html` 与 `public/workspace.css` 直接取自[已确认原型](../../docs/architecture/web/README.md)的外框与样式；`src/live.ts` 挂载 [workspace/](src/workspace/README.md)。分组导航、文献列表、预览、阅读标签、活动与浏览器画廊连接同源真实接口。共享文档/知识证据渲染、配置、维护和提取模块继续复用。`live.css` 保留供独立查询/维护页面使用，4173 静态样本独立。
+
+[PRODUCT.md](PRODUCT.md) 为 Impeccable 提供已确认的用户场景、产品边界和设计依据索引，不替代需求、ADR 或当前使用指南。[.impeccable/config.json](.impeccable/config.json) 保存本 Web 应用的设计工作方式默认值；该目录属于工具配置，不保存产品业务数据或凭据。
 
 ## 合成样本的边界
 
@@ -76,19 +78,13 @@ TypeScript Application 组装，不需要 Python。Linux x64 需要已安装并�
 prlimit、pdfinfo 和 pdftotext。入口创建全新的临时 Profile/catalog/资产目录，正常 Ctrl+C 时清理自己的
 临时目录。此一次性预览用于验证合成旅程；不要把真实材料放入该临时目录。
 
-接管后可点击画面，或在「页面操作」选择 Download PDF。候选面板显示实际 PDF hash、字节数、页数及
-身份/版本 verdict；Uncertain PDF 保留候选并显示身份待确认。可用另一个 tab 接管并使旧 tab 转为观看，
-390px 下通过底部按钮打开详情。已核验候选可点击「发布到当前文献」，通过实际接纳服务写入临时文献库，
-显示「已发布到当前文献」。暂停/取消保留已有候选；取消页面操作后仍可重新接管并审核候选。该入口的启动
-配置已使用 TypeScript owner，模型未配置时可继续人工操作。uncertain Candidate 可以显式放弃并删除 durable
-Candidate 字节；accepted Candidate 可以发布到当前文献。文献库查询与 Browser Agent 的封闭模型决策已经
-接入同一 Application，预览默认仍允许用户在未配置模型时完成人工旅程。
+从浏览器会话画廊打开真实画面；点击画面可申请控制权，或在“页面文字与可选指导”中明确接管并选择页面元素。合成预览在“下载与接纳”详情中提供发布与放弃候选，用于验证接纳与不可变发布；生产获取流程仍自动验收，不要求人工确认。390px 下同一观看界面可滚动阅读详情。暂停/取消保留已有候选，已发布结果继续留在库内。
 
 同一合成 home 上关闭并重新组装工作台，会恢复当前文章的候选和已提交 receipt；恢复时核对候选和正式文件
 字节。面板当前最多读取 100 项。一次性 `preview:workbench` 正常退出会删除自己的临时 home，下一次启动
 创建新的示例；跨重启恢复由保留同一合成 home 的测试验证，不能把一次性预览当作用户资料存储入口。
 
-新增 `public/live.html`、`public/live.css`、`src/live.ts`；服务端会话、认证 API 和组装分别位于
+正式页面使用 `public/live.html`、`public/workspace.css`、`src/live.ts`；服务端会话、认证 API 和组装分别位于
 `apps/server/src/workbench/` 与 `apps/server/src/bootstrap/workbench.ts`。浏览器 bundle 由开发依赖
 `esbuild 0.28.2` 构建，版本与已有 Vite 间接依赖一致；共享 DTO 使用 workspace contracts，不加载外部 CDN。
 
@@ -101,11 +97,7 @@ SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm exec vite
 
 ## 实时文献库视图
 
-4174 实时工作台新增“文献库”入口。可搜索临时 catalog、切换五种排序、加载更多并选择真实详情；正式 PDF 和
-内容 Markdown 可下载。桌面与手机均提供视图切换，详情内容以安全文本展示。选择其它文献可以通过受控
-`/api/target` 切换同一 Browser Host 的 Literature 目标；有进行中的 Candidate、Agent 或发布操作时拒绝切换。
-实现为 `src/library.ts`，数据来自同一认证 HTTP 服务与 Application.library，不使用静态示例结果。
-详见[Web 文献库证据](../../migration/evidence/runtime/workbench-library.md)。
+正式首页直接读取同一认证 HTTP 服务的文献库，参考文献式列表、按需预览、阅读标签、分面筛选和多选操作由 `src/workspace/library.ts` 适配。引用来源、不可变 PDF、解析文档、知识证据和导出复用共享合同，页面切换不会隐式获取或加工。详细行为和未接入的原型扩展见[使用指南](../../docs/guides/web-workbench.md)。
 
 ## 独立只读文献阅读
 
@@ -125,4 +117,4 @@ SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm exec vite
 - [src/](src/README.md)：Web 交互源码。
 - [test/](test/README.md)：Web 回归测试。
 
-[项目 README](../../README.md)
+[上级目录](../README.md) · [项目 README](../../README.md)

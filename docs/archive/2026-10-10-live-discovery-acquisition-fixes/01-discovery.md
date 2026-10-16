@@ -16,4 +16,4 @@ Outcome：主题年份约束有效；真实协议形状的 references/citations 
 
 退出条件：预算内能实际接纳目标并查询来源关系，而不是只有零结果报告。恢复时保留未提交改动，先重跑本块相关测试；无网络情况下可完成离线实现，但真实结果由 03 负责。
 
-执行证据：直接回归与真实复验见[修复验证记录](../../notes/live-discovery-acquisition-fixes-2026-10-10.md)。其中 runtime 配置是环境前提，仅完善诊断；RSC 限流与 Springer 登录页继续保留，不通过其它路线绕过。
+执行证据：直接回归与真实复验见修复验证记录（本地文件：`sandbox/reports/live-discovery-acquisition-fixes-2026-10-10.md`，不随仓库分发）。其中 runtime 配置是环境前提，仅完善诊断；RSC 限流与 Springer 登录页继续保留，不通过其它路线绕过。

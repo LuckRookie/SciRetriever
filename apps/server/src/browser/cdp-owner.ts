@@ -1133,7 +1133,23 @@ export class BrowserCdpOwner {
       ?.trim()
       .toLowerCase();
     const status = params.responseStatusCode;
-    if (mime === "application/pdf" && status === 206) {
+    const programmatic = ["fetch", "xhr"].includes(
+      request.identity.resource_type,
+    );
+    const attachment =
+      headers
+        .get("content-disposition")
+        ?.split(";", 1)[0]
+        ?.trim()
+        .toLowerCase() === "attachment";
+    // Inline Fetch/XHR bytes belong to the renderer: they may be an unrelated
+    // background preview, even in the main frame or after a real click. Let the
+    // page render them and the operator choose its download control. A later
+    // blob/native download has its own capture; explicit attachment responses
+    // can be handed off directly without buffering or replaying their request.
+    const pdfDownload =
+      mime === "application/pdf" && (!programmatic || attachment);
+    if (pdfDownload && status === 206) {
       this.options.rejectedResponse?.(request.identity, "browser-partial-pdf");
       await this.options.protocol.send("Fetch.failRequest", {
         requestId,
@@ -1142,29 +1158,21 @@ export class BrowserCdpOwner {
       this.end(requestId);
       return;
     }
-    if (
-      status === 429 &&
-      (request.identity.is_navigation || mime === "application/pdf")
-    )
+    if (status === 429 && (request.identity.is_navigation || pdfDownload))
       this.options.rateLimited?.(
         request.identity,
         headers.get("retry-after") ?? null,
       );
     // Content-Disposition does not create a Browser native download for fetch
     // or XHR. Those original responses must remain on the IO-stream path.
-    const native = !["fetch", "xhr"].includes(request.identity.resource_type);
     request.native_response =
       ["document", "other"].includes(request.identity.resource_type) &&
       status === 200 &&
-      (mime === "application/pdf" ||
-        headers
-          .get("content-disposition")
-          ?.toLowerCase()
-          .includes("attachment") === true);
+      (pdfDownload || attachment);
     if (request.native_response) this.nativeResponses.set(requestId, request);
     if (
-      !native &&
-      mime === "application/pdf" &&
+      programmatic &&
+      pdfDownload &&
       status === 200 &&
       this.options.pdfResponse
     ) {
@@ -1191,7 +1199,7 @@ export class BrowserCdpOwner {
       request.document_replaced &&
       !request.native_response &&
       !request.stream_response &&
-      mime !== "application/pdf" &&
+      !pdfDownload &&
       typeof status === "number" &&
       !(status >= 300 && status < 400)
     ) {

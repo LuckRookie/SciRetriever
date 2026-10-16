@@ -1,4 +1,11 @@
 import {
+  modelRequestFromAgentCall,
+  validateModelRequest,
+  type ModelRequest,
+  type ModelResponse,
+  type ModelToolCall,
+} from "./model-protocol.js";
+import {
   AgentFailure,
   type AgentAdapter,
   type AgentCall,
@@ -9,10 +16,12 @@ import {
 import {
   post,
   parseJson,
-  requestBody,
-  resultText,
+  modelRequestBody,
+  modelResponse,
+  modelToolCall,
+  projectAgentResult,
+  validateModelContinuations,
   sseEvents,
-  toolResult,
   usage,
   type AdapterConfig,
 } from "./common.js";
@@ -62,45 +71,52 @@ function completedResponse(
   if (!Array.isArray(value.output)) throw new AgentFailure("agent-protocol");
   return value;
 }
-function responseOutput(value: Record<string, unknown>): {
+function responseOutput(
+  value: Record<string, unknown>,
+  request: ModelRequest,
+  legacy: boolean,
+): {
   text: string;
-  tool?: { name: string; arguments: string };
+  calls: ModelToolCall[];
+  items: Record<string, unknown>[];
 } {
-  const messages: Record<string, unknown>[] = [];
-  const calls: Record<string, unknown>[] = [];
+  let text = "";
+  const calls: ModelToolCall[] = [];
+  const items: Record<string, unknown>[] = [];
   for (const itemValue of value.output as unknown[]) {
     const item = record(itemValue);
+    items.push(item);
     if (item.type === "reasoning") continue;
-    if (item.type === "message") messages.push(item);
-    else if (item.type === "function_call") calls.push(item);
-    else throw new AgentFailure("agent-protocol");
+    if (item.type === "function_call") {
+      if (item.status !== undefined && item.status !== "completed")
+        throw new AgentFailure("agent-protocol");
+      calls.push(
+        modelToolCall(
+          request,
+          item.call_id,
+          string(item.name),
+          string(item.arguments),
+          calls.length,
+          legacy,
+        ),
+      );
+    } else if (item.type === "message") {
+      if (
+        (item.status !== undefined && item.status !== "completed") ||
+        (item.role !== undefined && item.role !== "assistant") ||
+        !Array.isArray(item.content)
+      )
+        throw new AgentFailure("agent-protocol");
+      for (const partValue of item.content) {
+        const part = record(partValue);
+        if (part.type === "refusal") throw new AgentFailure("agent-refusal");
+        if (part.type !== "output_text")
+          throw new AgentFailure("agent-protocol");
+        text += string(part.text);
+      }
+    } else throw new AgentFailure("agent-protocol");
   }
-  if (calls.length > 1 || (calls.length === 1 && messages.length > 0))
-    throw new AgentFailure("agent-tool");
-  if (calls.length === 1) {
-    const call = calls[0];
-    if (!call) throw new AgentFailure("agent-protocol");
-    const name = call.name;
-    const args = call.arguments;
-    if (typeof name !== "string" || typeof args !== "string")
-      throw new AgentFailure("agent-tool");
-    return { text: "", tool: { name, arguments: args } };
-  }
-  const message = messages[0];
-  if (!message || messages.length !== 1)
-    throw new AgentFailure("agent-protocol");
-  if (message.status !== undefined && message.status !== "completed")
-    throw new AgentFailure("agent-protocol");
-  if (message.role !== undefined && message.role !== "assistant")
-    throw new AgentFailure("agent-protocol");
-  const content = message.content;
-  if (!Array.isArray(content) || content.length !== 1)
-    throw new AgentFailure("agent-protocol");
-  const part = record(content[0]);
-  if (part.type === "refusal") throw new AgentFailure("agent-refusal");
-  if (part.type !== "output_text" || typeof part.text !== "string")
-    throw new AgentFailure("agent-protocol");
-  return { text: part.text };
+  return { text, calls, items };
 }
 
 export class OpenAIResponsesAdapter implements AgentAdapter {
@@ -118,8 +134,42 @@ export class OpenAIResponsesAdapter implements AgentAdapter {
     signal?: AbortSignal,
     lifecycle?: AgentCallLifecycle,
   ): Promise<AgentResult> {
+    return projectAgentResult(
+      call,
+      await this.runModel(
+        modelRequestFromAgentCall(call),
+        options,
+        signal,
+        lifecycle,
+        true,
+      ),
+    );
+  }
+  async executeModel(
+    request: ModelRequest,
+    options: { readonly reasoning: ReasoningEffort; readonly stream: boolean },
+    signal?: AbortSignal,
+    lifecycle?: AgentCallLifecycle,
+  ): Promise<ModelResponse> {
+    validateModelRequest(request);
+    return this.runModel(request, options, signal, lifecycle, false);
+  }
+  private async runModel(
+    call: ModelRequest,
+    options: { readonly reasoning: ReasoningEffort; readonly stream: boolean },
+    signal: AbortSignal | undefined,
+    lifecycle: AgentCallLifecycle | undefined,
+    legacy: boolean,
+  ): Promise<ModelResponse> {
+    validateModelContinuations(
+      call,
+      this.provider,
+      this.model,
+      "openai-responses",
+    );
     const body = {
-      ...requestBody(call, "openai-responses"),
+      ...modelRequestBody(call, "openai-responses"),
+      ...(!legacy ? { include: ["reasoning.encrypted_content"] } : {}),
       model: this.model,
       ...(options.stream ? { stream: true } : {}),
       ...(options.reasoning !== "default"
@@ -138,23 +188,21 @@ export class OpenAIResponsesAdapter implements AgentAdapter {
     if (!options.stream) {
       const value = parseJson(response);
       const parsed = completedResponse(value, this.model);
-      const output = responseOutput(parsed);
-      if (output.tool)
-        return toolResult(
-          this.provider,
-          this.model,
-          output.tool.name,
-          output.tool.arguments,
-          modelUsage(parsed),
-          call.tools?.find((tool) => tool.name === output.tool?.name)
-            ?.parameters,
-        );
-      return resultText(
+      const output = responseOutput(parsed, call, legacy);
+      return modelResponse(
         this.provider,
         this.model,
         output.text,
+        output.calls,
         modelUsage(parsed),
-        call.response_schema,
+        output.items.length
+          ? {
+              provider: this.provider,
+              model: this.model,
+              format: "openai-responses",
+              opaque: { items: output.items },
+            }
+          : undefined,
       );
     }
     let terminal: Record<string, unknown> | undefined;
@@ -232,23 +280,21 @@ export class OpenAIResponsesAdapter implements AgentAdapter {
         ],
       };
     const parsed = completedResponse(terminal, this.model);
-    const outputValue = responseOutput(parsed);
-    if (outputValue.tool)
-      return toolResult(
-        this.provider,
-        this.model,
-        outputValue.tool.name,
-        outputValue.tool.arguments,
-        modelUsage(parsed),
-        call.tools?.find((tool) => tool.name === outputValue.tool?.name)
-          ?.parameters,
-      );
-    return resultText(
+    const outputValue = responseOutput(parsed, call, legacy);
+    return modelResponse(
       this.provider,
       this.model,
       outputValue.text,
+      outputValue.calls,
       modelUsage(parsed),
-      call.response_schema,
+      outputValue.items.length
+        ? {
+            provider: this.provider,
+            model: this.model,
+            format: "openai-responses",
+            opaque: { items: outputValue.items },
+          }
+        : undefined,
     );
   }
 }
@@ -268,8 +314,36 @@ export class OpenAIChatAdapter implements AgentAdapter {
     signal?: AbortSignal,
     lifecycle?: AgentCallLifecycle,
   ): Promise<AgentResult> {
+    return projectAgentResult(
+      call,
+      await this.runModel(
+        modelRequestFromAgentCall(call),
+        options,
+        signal,
+        lifecycle,
+        true,
+      ),
+    );
+  }
+  async executeModel(
+    request: ModelRequest,
+    options: { readonly reasoning: ReasoningEffort; readonly stream: boolean },
+    signal?: AbortSignal,
+    lifecycle?: AgentCallLifecycle,
+  ): Promise<ModelResponse> {
+    validateModelRequest(request);
+    return this.runModel(request, options, signal, lifecycle, false);
+  }
+  private async runModel(
+    call: ModelRequest,
+    options: { readonly reasoning: ReasoningEffort; readonly stream: boolean },
+    signal: AbortSignal | undefined,
+    lifecycle: AgentCallLifecycle | undefined,
+    legacy: boolean,
+  ): Promise<ModelResponse> {
+    validateModelContinuations(call, this.provider, this.model, "openai-chat");
     const body = {
-      ...requestBody(call, "openai-chat"),
+      ...modelRequestBody(call, "openai-chat"),
       ...(options.stream ? { stream_options: { include_usage: true } } : {}),
       model: this.model,
       ...(options.stream ? { stream: true } : {}),
@@ -287,9 +361,17 @@ export class OpenAIChatAdapter implements AgentAdapter {
       lifecycle,
     );
     let text = "";
-    let toolName: string | undefined;
-    let toolArguments = "";
+    let reasoningContent: string | undefined;
+    let finishReason: string | undefined;
+    const calls: ModelToolCall[] = [];
     let tokenUsage: { input_tokens: number; output_tokens: number };
+    const finish = (reason: unknown): void => {
+      finishReason = String(reason);
+      if (reason === "length") throw new AgentFailure("agent-truncated");
+      if (reason === "content_filter") throw new AgentFailure("agent-refusal");
+      if (!["stop", "tool_calls", "function_call"].includes(String(reason)))
+        throw new AgentFailure("agent-protocol");
+    };
     if (!options.stream) {
       const value = parseJson(response);
       if (
@@ -303,58 +385,48 @@ export class OpenAIChatAdapter implements AgentAdapter {
         throw new AgentFailure("agent-protocol");
       if (typeof choice.finish_reason !== "string" || !choice.finish_reason)
         throw new AgentFailure("agent-truncated");
+      finish(choice.finish_reason);
       const message = record(choice.message);
       if (message.role !== undefined && message.role !== "assistant")
         throw new AgentFailure("agent-protocol");
+      if (message.refusal !== undefined && message.refusal !== null)
+        throw new AgentFailure("agent-refusal");
       if (
-        message.content !== undefined &&
-        typeof message.content !== "string" &&
-        message.content !== null
+        message.reasoning_content !== undefined &&
+        message.reasoning_content !== null
       )
-        throw new AgentFailure("agent-protocol");
+        reasoningContent = string(message.reasoning_content);
+      if (message.content !== undefined && message.content !== null)
+        text = string(message.content);
       if (
         message.tool_calls !== undefined &&
         !Array.isArray(message.tool_calls)
       )
         throw new AgentFailure("agent-protocol");
-      if (Array.isArray(message.tool_calls) && message.tool_calls.length > 1)
-        throw new AgentFailure("agent-tool");
-      if (
-        Array.isArray(message.tool_calls) &&
-        message.tool_calls.length === 1
-      ) {
-        const tool = message.tool_calls[0] as Record<string, unknown>;
-        const functionValue = record(tool.function);
-        toolName = string(functionValue.name);
-        toolArguments = string(functionValue.arguments);
+      for (const toolValue of (message.tool_calls ?? []) as unknown[]) {
+        const tool = record(toolValue);
+        if (tool.type !== undefined && tool.type !== "function")
+          throw new AgentFailure("agent-tool");
+        const fn = record(tool.function);
+        calls.push(
+          modelToolCall(
+            call,
+            tool.id,
+            string(fn.name),
+            string(fn.arguments),
+            calls.length,
+            legacy,
+          ),
+        );
       }
-      if (
-        toolName !== undefined &&
-        message.content !== undefined &&
-        message.content !== null
-      )
-        throw new AgentFailure("agent-tool");
-      if (message.refusal !== undefined && message.refusal !== null)
-        throw new AgentFailure("agent-refusal");
-      if (typeof message.content === "string") text = message.content;
-      if (choice.finish_reason === "length")
-        throw new AgentFailure("agent-truncated");
-      if (
-        !["stop", "tool_calls", "function_call", "content_filter"].includes(
-          choice.finish_reason as string,
-        ) &&
-        choice.finish_reason !== "length"
-      )
-        throw new AgentFailure("agent-protocol");
       tokenUsage = modelUsage(value);
     } else {
       let terminal = false;
-      let terminalCount = 0;
-      let usageCount = 0;
-      let choiceIndex: number | undefined;
-      let toolId: string | undefined;
-      let toolCount = 0;
       let usageValue: unknown;
+      const chunks = new Map<
+        number,
+        { id?: string; name: string; arguments: string; count: number }
+      >();
       for (const chunk of sseEvents(response)) {
         if (
           chunk.object !== undefined &&
@@ -365,101 +437,129 @@ export class OpenAIChatAdapter implements AgentAdapter {
           throw new AgentFailure("agent-model-mismatch");
         if (chunk.choices !== undefined && !Array.isArray(chunk.choices))
           throw new AgentFailure("agent-protocol");
+        if (Array.isArray(chunk.choices) && chunk.choices.length > 1)
+          throw new AgentFailure("agent-protocol");
         const choice =
           Array.isArray(chunk.choices) && chunk.choices.length === 1
             ? record(chunk.choices[0])
             : undefined;
         if (terminal && choice) throw new AgentFailure("agent-protocol");
-        if (Array.isArray(chunk.choices) && chunk.choices.length > 1)
+        if (
+          choice?.index !== undefined &&
+          choice.index !== null &&
+          choice.index !== 0
+        )
           throw new AgentFailure("agent-protocol");
-        if (choice && choice.index !== undefined && choice.index !== null) {
-          if (
-            !Number.isSafeInteger(choice.index) ||
-            (choiceIndex !== undefined && choice.index !== choiceIndex)
-          )
-            throw new AgentFailure("agent-protocol");
-          choiceIndex = choice.index as number;
-        }
         const delta =
           choice?.delta === undefined ? undefined : record(choice.delta);
-        if (typeof delta?.content === "string") text += delta.content;
-        const calls = delta?.tool_calls;
-        if (Array.isArray(calls) && calls.length > 1)
+        if (delta?.role !== undefined && delta.role !== "assistant")
+          throw new AgentFailure("agent-protocol");
+        if (delta?.refusal !== undefined && delta.refusal !== null)
+          throw new AgentFailure("agent-refusal");
+        if (
+          delta?.reasoning_content !== undefined &&
+          delta.reasoning_content !== null
+        )
+          reasoningContent =
+            (reasoningContent ?? "") + string(delta.reasoning_content);
+        if (delta?.content !== undefined && delta.content !== null)
+          text += string(delta.content);
+        if (delta?.tool_calls !== undefined && !Array.isArray(delta.tool_calls))
           throw new AgentFailure("agent-tool");
-        if (Array.isArray(calls) && calls.length === 1) {
-          const tool = record(calls[0]);
+        for (const toolValue of (delta?.tool_calls ?? []) as unknown[]) {
+          const tool = record(toolValue);
+          const index = tool.index ?? (legacy ? 0 : undefined);
           if (
-            tool.index !== undefined &&
-            (!Number.isSafeInteger(tool.index) || tool.index !== 0)
+            !Number.isSafeInteger(index) ||
+            (index as number) < 0 ||
+            (index as number) > 63
           )
             throw new AgentFailure("agent-tool");
+          const item = chunks.get(index as number) ?? {
+            name: "",
+            arguments: "",
+            count: 0,
+          };
           if (tool.id !== undefined) {
             const id = string(tool.id);
-            if (toolId !== undefined && id !== toolId)
+            if (item.id !== undefined && item.id !== id)
               throw new AgentFailure("agent-tool");
-            toolId = id;
+            item.id = id;
           }
-          toolCount += 1;
-          if (toolCount > 1 && toolId === undefined)
+          item.count++;
+          if (legacy && item.count > 1 && item.id === undefined)
             throw new AgentFailure("agent-tool");
-          const functionValue = record(tool.function);
-          if (functionValue.name !== undefined)
-            toolName = string(functionValue.name);
-          if (functionValue.arguments !== undefined)
-            toolArguments += string(functionValue.arguments);
+          if (tool.type !== undefined && tool.type !== "function")
+            throw new AgentFailure("agent-tool");
+          const fn = record(tool.function);
+          if (fn.name !== undefined) {
+            const name = string(fn.name);
+            if (item.name && item.name !== name)
+              throw new AgentFailure("agent-tool");
+            item.name = name;
+          }
+          if (fn.arguments !== undefined)
+            item.arguments += string(fn.arguments);
+          chunks.set(index as number, item);
         }
         if (
           choice?.finish_reason !== undefined &&
           choice.finish_reason !== null
         ) {
-          if (terminal) throw new AgentFailure("agent-protocol");
           terminal = true;
-          terminalCount += 1;
-          if (choice.finish_reason === "length")
-            throw new AgentFailure("agent-truncated");
-          if (
-            !["stop", "tool_calls", "function_call", "content_filter"].includes(
-              String(choice.finish_reason),
-            )
-          )
-            throw new AgentFailure("agent-protocol");
+          finish(choice.finish_reason);
         }
         if (chunk.usage !== undefined && chunk.usage !== null) {
-          if (!terminal) throw new AgentFailure("agent-protocol");
-          usageCount += 1;
-          if (usageCount > 1) throw new AgentFailure("agent-protocol");
           if (
-            chunk.choices === undefined ||
+            !terminal ||
+            usageValue !== undefined ||
             !Array.isArray(chunk.choices) ||
             chunk.choices.length !== 0
           )
             throw new AgentFailure("agent-protocol");
           usageValue = chunk.usage;
-        } else if (Array.isArray(chunk.choices) && chunk.choices.length === 0) {
+        } else if (Array.isArray(chunk.choices) && chunk.choices.length === 0)
           throw new AgentFailure("agent-protocol");
-        }
       }
-      if (terminalCount !== 1 || usageValue === undefined)
+      if (!terminal || usageValue === undefined)
         throw new AgentFailure("agent-truncated");
+      for (const [index, item] of [...chunks.entries()].sort(
+        ([a], [b]) => a - b,
+      )) {
+        if (index !== calls.length) throw new AgentFailure("agent-tool");
+        calls.push(
+          modelToolCall(
+            call,
+            item.id,
+            item.name,
+            item.arguments,
+            index,
+            legacy,
+          ),
+        );
+      }
       tokenUsage = modelUsage({ usage: usageValue });
     }
-    if (toolName !== undefined) {
-      if (text) throw new AgentFailure("agent-tool");
-      return toolResult(
-        this.provider,
-        this.model,
-        toolName,
-        toolArguments,
-        tokenUsage,
-        call.tools?.find((tool) => tool.name === toolName)?.parameters,
-      );
-    }
-    return resultText(
+    if (
+      calls.length
+        ? finishReason !== "tool_calls" && finishReason !== "function_call"
+        : finishReason !== "stop"
+    )
+      throw new AgentFailure("agent-tool");
+    return modelResponse(
       this.provider,
       this.model,
       text,
+      calls,
       tokenUsage,
-      call.response_schema,
+      reasoningContent !== undefined
+        ? {
+            provider: this.provider,
+            model: this.model,
+            format: "openai-chat",
+            opaque: { reasoning_content: reasoningContent },
+          }
+        : undefined,
     );
   }
 }

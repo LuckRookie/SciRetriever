@@ -185,3 +185,74 @@ it("maps Europe PMC JSON search pages and lookup records", async () => {
   });
   expect(lookup.observations[0]?.provenance.source_record_id).toBe("1");
 });
+
+it.each(["references", "cited-by"] as const)(
+  "continues past an empty %s response with an omitted list",
+  async (direction) => {
+    const requested: string[] = [];
+    const adapter = new EuropePmcRestAdapter({
+      transport: {
+        async request(url) {
+          const id = new URL(url).pathname.split("/").at(-2)!;
+          requested.push(id);
+          const request = { offSet: direction === "references" ? 1 : 0 };
+          return id === "1"
+            ? { hitCount: 0, request }
+            : {
+                hitCount: 1,
+                request,
+                [direction === "references" ? "referenceList" : "citationList"]:
+                  {
+                    [direction === "references" ? "reference" : "citation"]: [
+                      { source: "MED", id: "3", title: "Related work" },
+                    ],
+                  },
+              };
+        },
+      },
+    });
+    const output = await new MetadataService({
+      reference_query_ports: [adapter],
+    }).queryReferencesProvider(
+      { direction, providers: [] },
+      "europe-pmc",
+      [
+        { record_id: "MED:1", identifiers: [] },
+        { record_id: "MED:2", identifiers: [] },
+      ],
+      5,
+    );
+    expect(output.outcome).toBe("EXHAUSTED");
+    expect(output.raw_item_count).toBe(1);
+    expect(output.relations).toHaveLength(1);
+    expect(requested).toEqual(["1", "2"]);
+  },
+);
+
+it.each([
+  { hitCount: 1, request: { offSet: 1 } },
+  { request: { offSet: 1 } },
+  {
+    hitCount: 0,
+    referenceList: { reference: [{ id: "3", source: "MED" }] },
+    request: { offSet: 1 },
+  },
+  { hitCount: 0, request: { offSet: 9 } },
+])(
+  "rejects malformed or contradictory empty relation pages: %j",
+  async (response) => {
+    const adapter = new EuropePmcRestAdapter({
+      transport: { request: async () => response },
+    });
+    const result = await new MetadataService({
+      reference_query_ports: [adapter],
+    }).queryReferencesProvider(
+      { direction: "references", providers: [] },
+      "europe-pmc",
+      [{ record_id: "MED:1", identifiers: [] }],
+      5,
+    );
+    expect(result.outcome).toBe("FAILED");
+    expect(result.relations).toEqual([]);
+  },
+);

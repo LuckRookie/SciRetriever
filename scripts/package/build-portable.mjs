@@ -76,7 +76,16 @@ async function packageDependencies(directory) {
     const entry = { version: manifest.version, tarball };
     packed.set(identity, entry);
     pnpm(["pack", "--pack-destination", directory], packageDirectory);
-    for (const dependency of Object.keys(manifest.dependencies ?? {})) {
+    // Plugin libraries can import their required peers at runtime. Package the
+    // resolved peer closure as well, so offline installation never consults a
+    // registry to complete the application graph. Optional peers stay optional.
+    const runtimeDependencies = new Set([
+      ...Object.keys(manifest.dependencies ?? {}),
+      ...Object.keys(manifest.peerDependencies ?? {}).filter(
+        (name) => !manifest.peerDependenciesMeta?.[name]?.optional,
+      ),
+    ]);
+    for (const dependency of runtimeDependencies) {
       const child = await visit(dependency, packageDirectory);
       overrides[`${identity}>${dependency}`] = `file:./${child.tarball}`;
     }

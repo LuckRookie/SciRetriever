@@ -1,6 +1,7 @@
 import { parseProviderObservation } from "../shared/metadata-values.js";
 import {
   canonicalJsonBytes,
+  parseIdentifier,
   sha256,
   type MetadataObservation,
   type ProviderLiteratureKey,
@@ -102,13 +103,13 @@ function id(
 ): { readonly namespace: string; readonly value: string } | null {
   const normalized = stringValue(value);
   if (!normalized) return null;
-  return {
+  return parseIdentifier({
     namespace,
     value:
       namespace === "doi"
         ? normalized.replace(/^https?:\/\/(?:dx\.)?doi\.org\//iu, "")
         : normalized,
-  };
+  });
 }
 function relationKey(
   record: Record<string, unknown>,
@@ -216,14 +217,18 @@ function parseRelationPage(
 } {
   if (!Number.isSafeInteger(root.hitCount) || (root.hitCount as number) < 0)
     throw new Error("Europe PMC relation hit count is invalid");
-  const container = object(
-    root[kind === "references" ? "referenceList" : "citationList"],
-    "Europe PMC relation list is invalid",
-  );
-  const value = container[kind === "references" ? "reference" : "citation"];
+  const list = root[kind === "references" ? "referenceList" : "citationList"];
+  // Europe PMC omits the list entirely for a confirmed zero-hit relation query.
+  // A missing list with positive/unknown hits remains a malformed response.
+  const value =
+    root.hitCount === 0 && list === undefined
+      ? []
+      : object(list, "Europe PMC relation list is invalid")[
+          kind === "references" ? "reference" : "citation"
+        ];
   if (!Array.isArray(value))
     throw new Error("Europe PMC relation items are invalid");
-  if (value.length > maximumItems)
+  if (value.length > maximumItems || value.length > (root.hitCount as number))
     throw new Error("Europe PMC relation page is invalid");
   const request = object(
     root.request,

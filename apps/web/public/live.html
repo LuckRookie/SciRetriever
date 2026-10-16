@@ -1,602 +1,23 @@
 <!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light" />
-    <title>SciRetriever · 科研文献工作台</title>
-    <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="/styles.css" />
-    <link rel="stylesheet" href="/live.css" />
-    <script type="module" src="/live.js"></script>
-  </head>
-  <body class="live-body">
-    <a class="skip-link" href="#overview-workspace">跳到工作台</a>
-    <aside id="workspace-navigation" class="live-rail" aria-label="主导航">
-      <a class="wordmark" href="/">sci<span>retriever</span><i></i></a>
-      <div class="live-space">
-        <span class="space-mark">S</span
-        ><span>本地研究空间<small>文献与知识工作台</small></span>
-      </div>
-      <button
-        id="new-task-button"
-        class="live-primary rail-create"
-        type="button"
-      >
-        ＋ 新建任务
-      </button>
-      <p class="live-eyebrow">工作空间</p>
-      <nav class="workspace-nav">
-        <a
-          id="overview-tab"
-          class="live-nav"
-          href="/?workspace=overview"
-          aria-current="page"
-          ><span class="nav-glyph" aria-hidden="true">▦</span>工作台</a
-        >
-        <a id="jobs-tab" class="live-nav" href="/?workspace=jobs"
-          ><span class="nav-glyph" aria-hidden="true">☷</span>任务</a
-        >
-        <a id="library-tab" class="live-nav" href="/?workspace=library"
-          ><span class="nav-glyph" aria-hidden="true">▤</span>文献库</a
-        >
-        <a id="config-tab" class="live-nav" href="/?workspace=configuration"
-          ><span class="nav-glyph" aria-hidden="true">⚙</span>设置</a
-        >
-      </nav>
-      <div class="live-rail-note">
-        <span class="local-indicator"></span> 本地服务<small
-          id="rail-library-status"
-          >正在读取工作空间…</small
-        >
-      </div>
-    </aside>
-    <div class="live-main">
-      <header class="live-top">
-        <button
-          id="mobile-navigation"
-          type="button"
-          aria-controls="workspace-navigation"
-          aria-expanded="false"
-          aria-label="打开导航"
-        >
-          ☰
-        </button>
-        <span class="breadcrumbs"
-          >工作空间 <b>/</b> <span id="workspace-name">工作台</span></span
-        >
-        <div class="top-status">
-          <span id="config-status" role="status">读取配置</span
-          ><span id="connection" role="status">正在连接</span>
-        </div>
-        <button id="jobs-toggle" class="library-toggle" hidden>任务</button
-        ><button id="library-toggle" class="library-toggle" hidden>
-          文献库
-        </button>
-      </header>
-      <main id="overview-workspace" tabindex="-1">
-        <div class="page-heading">
-          <div>
-            <p class="live-eyebrow">WORKSPACE</p>
-            <h1>工作台</h1>
-            <p>跟进文献处理，查看结果，处理需要你介入的事项。</p>
-          </div>
-          <button id="overview-refresh" type="button">刷新状态</button>
-        </div>
-        <div class="workspace-context">
-          <span class="local-indicator"></span
-          ><span id="workspace-binding">正在读取数据库绑定…</span
-          ><a href="/?workspace=configuration" data-workspace="configuration"
-            >查看设置 →</a
-          >
-        </div>
-        <div class="overview-grid">
-          <section class="work-panel">
-            <div class="panel-heading">
-              <h2>进行中的任务</h2>
-              <a href="/?workspace=jobs" data-workspace="jobs">查看全部 →</a>
-            </div>
-            <div id="overview-active">
-              <p class="library-empty">正在读取任务…</p>
-            </div>
-          </section>
-          <section class="work-panel attention-panel">
-            <div class="panel-heading">
-              <h2>需要你处理</h2>
-              <span class="attention-dot"></span>
-            </div>
-            <div id="overview-attention">
-              <p class="library-empty">正在读取协助请求…</p>
-            </div>
-          </section>
-          <section class="work-panel recent-panel">
-            <div class="panel-heading">
-              <h2>最近的结果</h2>
-              <span>已保存的任务产物</span>
-            </div>
-            <div id="overview-recent">
-              <p class="library-empty">正在读取结果…</p>
-            </div>
-          </section>
-        </div>
-        <p class="workspace-footnote">
-          关闭页面后，任务仍由本地服务运行。停止本地服务后，可在重启时检查并恢复未完成任务。
-        </p>
-      </main>
-      <main id="jobs-workspace" tabindex="-1" hidden>
-        <div class="live-heading">
-          <p class="live-eyebrow">DURABLE TASKS</p>
-          <h1>任务</h1>
-          <p>发起明确的文献处理操作，跟进执行、结果与失败原因。</p>
-        </div>
-        <details id="task-create-panel" class="tool-drawer">
-          <summary>新建任务<span>选定文献范围与处理目标</span></summary>
-          <form id="job-form" class="job-form">
-            <h2>新建任务</h2>
-            <div id="job-pdf-fields">
-              <label for="job-query">文献查询</label
-              ><input
-                id="job-query"
-                type="search"
-                placeholder="留空表示全部文献"
-              /><label for="job-literature-ids">指定文献（可选）</label>
-              <textarea
-                id="job-literature-ids"
-                rows="2"
-                placeholder="多个 Literature ID 用逗号或换行分隔"
-              ></textarea>
-            </div>
-            <label for="job-goal">处理目标</label
-            ><select id="job-goal">
-              <option value="pdf">获取 PDF</option>
-              <option value="processing">固定材料加工 · 高级请求</option>
-            </select>
-            <div id="job-processing-fields" hidden>
-              <label for="job-processing-json">固定加工请求 JSON</label>
-              <textarea
-                id="job-processing-json"
-                rows="6"
-                spellcheck="false"
-                placeholder="ProcessingTaskRequest"
-              ></textarea>
-              <p>也可通过下方材料加工表单选择解析、分析与综合。</p>
-            </div>
-            <div id="job-policy-fields">
-              <label for="job-assistance">需要协助时</label
-              ><select id="job-assistance">
-                <option value="never">跳过并继续</option>
-                <option value="notify">通知，但继续批次</option>
-                <option value="pause">暂停任务等待处理</option>
-              </select>
-              <div class="job-limits">
-                <label for="job-attempts"
-                  >最多尝试<input
-                    id="job-attempts"
-                    type="number"
-                    min="1"
-                    max="10000"
-                    value="100" /></label
-                ><label for="job-retries"
-                  >单项重试<input
-                    id="job-retries"
-                    type="number"
-                    min="0"
-                    max="10"
-                    value="2"
-                /></label>
-              </div>
-            </div>
-            <p id="job-policy-summary" class="job-policy-summary"></p>
-            <label class="job-confirm"
-              ><input
-                id="job-confirm"
-                type="checkbox"
-              />我已确认任务范围与以上处理方式</label
-            ><button class="live-primary" type="submit">创建持久任务</button>
-            <p id="job-create-status" role="status"></p>
-          </form>
-        </details>
-        <div class="jobs-grid">
-          <section>
-            <section class="job-list-card">
-              <div class="job-card-heading">
-                <h2>任务队列</h2>
-                <button id="jobs-refresh" type="button">刷新</button>
-              </div>
-              <div class="task-list-filters">
-                <label for="jobs-search">搜索任务</label
-                ><input
-                  id="jobs-search"
-                  type="search"
-                  placeholder="任务类型或 ID"
-                />
-                <label for="jobs-filter">状态</label
-                ><select id="jobs-filter">
-                  <option value="all">全部状态</option>
-                  <option value="active">正在处理</option>
-                  <option value="attention">需要处理</option>
-                  <option value="completed">已完成</option>
-                </select>
-              </div>
-              <div id="jobs-list">
-                <p class="library-empty">正在读取任务…</p>
-              </div>
-            </section>
-          </section>
-          <article id="job-detail" class="job-detail">
-            <p class="library-empty">
-              选择一个任务，查看预算、目标、失败原因和协助请求。
-            </p>
-          </article>
-        </div>
-        <details id="processing-tools" class="tool-drawer">
-          <summary>
-            材料加工与交付<span>解析、知识分析、综合、索引与提取</span>
-          </summary>
-          <div id="maintenance-workspace" class="tool-grid">
-            <form id="document-parse-form" class="config-card config-form">
-              <h2>解析已接纳的 PDF</h2>
-              <p>
-                使用文献库中的 Literature ID、Asset ID 和 PDF SHA-256
-                固定输入。复用当前解析结果不会调用
-                parser；明确重解析会调用已配置的 parser。Catalog 须先显式迁移至
-                v3。
-              </p>
-              <label for="document-literature-id">Literature ID</label>
-              <input id="document-literature-id" required autocomplete="off" />
-              <button id="document-load-material" type="button">
-                从文献库读取当前 PDF
-              </button>
-              <p id="document-material-status" role="status" aria-live="polite">
-                尚未选择材料。
-              </p>
-              <label for="document-asset-id">Asset ID</label>
-              <input id="document-asset-id" required readonly />
-              <label for="document-asset-sha256">PDF SHA-256</label>
-              <input
-                id="document-asset-sha256"
-                required
-                readonly
-                pattern="[0-9a-f]{64}"
-              />
-              <label for="document-parse-mode">解析方式</label>
-              <select id="document-parse-mode">
-                <option value="reparse">
-                  调用解析服务（首次解析或重新解析）
-                </option>
-                <option value="reuse-current">复用已保存的解析结果</option>
-              </select>
-              <label for="document-default-revision"
-                >预期默认版本 revision（首次发布留空）</label
-              >
-              <input
-                id="document-default-revision"
-                type="number"
-                min="1"
-                step="1"
-              />
-              <button
-                id="document-parse-submit"
-                class="live-primary"
-                type="submit"
-              >
-                发布可读表示
-              </button>
-              <p
-                id="document-parse-status"
-                role="status"
-                aria-live="polite"
-              ></p>
-            </form>
-            <section class="config-card config-form" aria-label="单篇知识分析">
-              <h2>单篇知识分析</h2>
-              <p>
-                明确选择已接纳的 PDF
-                和当前可读文档版本，再生成有证据的概览、详细分析或问题回答。需要
-                Catalog v6
-                和已配置的分析模型；输入超预算会拒绝，不截断。历史知识可在只读文献库按
-                ID 阅读。
-              </p>
-              <label for="knowledge-literature-id">Literature ID</label>
-              <input id="knowledge-literature-id" autocomplete="off" />
-              <label for="knowledge-purpose">用途</label>
-              <select id="knowledge-purpose">
-                <option value="overview">概览</option>
-                <option value="detailed">详细分析</option>
-                <option value="question">针对问题</option>
-              </select>
-              <label for="knowledge-mode">处理方式</label>
-              <select id="knowledge-mode">
-                <option value="single">单次全文（v1）</option>
-                <option value="long">长文局部分析与整合（v2）</option>
-              </select>
-              <label for="knowledge-question">问题（仅“针对问题”填写）</label>
-              <textarea
-                id="knowledge-question"
-                rows="3"
-                spellcheck="false"
-              ></textarea>
-              <label for="knowledge-default-mode">默认视图</label>
-              <select id="knowledge-default-mode">
-                <option value="publish-only">仅发布历史产物</option>
-                <option value="compare-and-set">
-                  按 revision 更新默认视图
-                </option>
-              </select>
-              <label for="knowledge-default-revision"
-                >预期 revision（首次设为默认时留空）</label
-              >
-              <input
-                id="knowledge-default-revision"
-                type="number"
-                min="1"
-                step="1"
-              />
-              <label for="knowledge-input-bytes"
-                >文档输入上限（UTF-8 字节）</label
-              >
-              <input
-                id="knowledge-input-bytes"
-                type="number"
-                min="1"
-                max="262144"
-                value="262144"
-              />
-              <label for="knowledge-output-tokens">模型输出上限（token）</label>
-              <input
-                id="knowledge-output-tokens"
-                type="number"
-                min="1"
-                max="16384"
-                value="2048"
-              />
-              <div id="knowledge-long-budget" hidden>
-                <p>
-                  长文模式下，文档上限最多 8
-                  MiB；模型输出上限是每次调用的预约值。以下为规范化 AgentCall
-                  字节及累计调用预算。
-                </p>
-                <label for="knowledge-call-bytes">单次调用上限（字节）</label>
-                <input
-                  id="knowledge-call-bytes"
-                  type="number"
-                  min="1"
-                  max="262144"
-                  value="262144"
-                />
-                <label for="knowledge-total-call-bytes"
-                  >累计调用上限（字节）</label
-                >
-                <input
-                  id="knowledge-total-call-bytes"
-                  type="number"
-                  min="1"
-                  max="67108864"
-                  value="33554432"
-                />
-                <label for="knowledge-max-calls">最多调用次数</label>
-                <input
-                  id="knowledge-max-calls"
-                  type="number"
-                  min="1"
-                  max="256"
-                  value="256"
-                />
-                <label for="knowledge-total-output-tokens"
-                  >累计输出上限（token）</label
-                >
-                <input
-                  id="knowledge-total-output-tokens"
-                  type="number"
-                  min="1"
-                  max="1048576"
-                  value="524288"
-                />
-              </div>
-              <button id="knowledge-start" class="live-primary" type="button">
-                启动单篇分析
-              </button>
-              <button id="knowledge-cancel" type="button" disabled>
-                取消当前请求
-              </button>
-              <p id="knowledge-status" role="status" aria-live="polite"></p>
-              <pre id="knowledge-result"></pre>
-            </section>
-            <section class="config-card config-form" aria-label="集合知识综合">
-              <h2>集合知识综合</h2>
-              <p>
-                明确填写有序文档或知识来源，再固定版本和缺口。Catalog
-                需显式迁移至
-                v7。模型只对已固定集合执行一次有界归并；候选过多会拒绝发布。
-              </p>
-              <label for="synthesis-inputs">来源选择 JSON（1–128 项）</label>
-              <textarea
-                id="synthesis-inputs"
-                rows="8"
-                spellcheck="false"
-                placeholder='[{"kind":"document","input_id":"paper-1","literature_id":"...","asset_id":"...","asset_sha256":"...","document_version_id":null},{"kind":"knowledge","input_id":"prior-1","source_artifact_id":"..."}]'
-              ></textarea>
-              <label for="synthesis-policy">覆盖政策</label>
-              <select id="synthesis-policy">
-                <option value="require-all">全部来源必须可用</option>
-                <option value="allow-partial">允许部分来源并标明缺口</option>
-              </select>
-              <button id="synthesis-prepare" type="button">
-                固定来源与缺口
-              </button>
-              <label for="synthesis-question">集合问题</label>
-              <textarea
-                id="synthesis-question"
-                rows="3"
-                spellcheck="false"
-              ></textarea>
-              <label for="synthesis-source-bytes"
-                >累计原文与知识内容上限（字节）</label
-              >
-              <input
-                id="synthesis-source-bytes"
-                type="number"
-                min="1"
-                max="8388608"
-                value="8388608"
-              />
-              <label for="synthesis-verification-bytes"
-                >来源闭包核验上限（字节）</label
-              >
-              <input
-                id="synthesis-verification-bytes"
-                type="number"
-                min="1"
-                max="67108864"
-                value="67108864"
-              />
-              <label for="synthesis-call-bytes"
-                >单次 AgentCall 上限（字节）</label
-              >
-              <input
-                id="synthesis-call-bytes"
-                type="number"
-                min="1"
-                max="262144"
-                value="262144"
-              />
-              <label for="synthesis-total-call-bytes"
-                >累计 AgentCall 上限（字节）</label
-              >
-              <input
-                id="synthesis-total-call-bytes"
-                type="number"
-                min="1"
-                max="67108864"
-                value="33554432"
-              />
-              <label for="synthesis-max-calls">最多模型调用</label>
-              <input
-                id="synthesis-max-calls"
-                type="number"
-                min="1"
-                max="256"
-                value="256"
-              />
-              <label for="synthesis-output-tokens">单次输出预约（token）</label>
-              <input
-                id="synthesis-output-tokens"
-                type="number"
-                min="1"
-                max="16384"
-                value="2048"
-              />
-              <label for="synthesis-total-output-tokens"
-                >累计输出上限（token）</label
-              >
-              <input
-                id="synthesis-total-output-tokens"
-                type="number"
-                min="1"
-                max="1048576"
-                value="524288"
-              />
-              <button
-                id="synthesis-start"
-                class="live-primary"
-                type="button"
-                disabled
-              >
-                启动集合综合
-              </button>
-              <button id="synthesis-cancel" type="button" disabled>
-                取消当前请求
-              </button>
-              <p id="synthesis-status" role="status" aria-live="polite"></p>
-              <pre id="synthesis-result"></pre>
-            </section>
-            <section
-              class="config-card config-form"
-              aria-label="材料检索索引维护"
-            >
-              <h2>材料检索索引</h2>
-              <p>
-                Catalog 显式迁移至 v4
-                后，重建已保存元数据与已发布表示的检索投影。材料变更后需再次明确重建。
-              </p>
-              <button id="retrieval-rebuild" class="live-primary" type="button">
-                重建材料索引
-              </button>
-              <p
-                id="retrieval-rebuild-status"
-                role="status"
-                aria-live="polite"
-              ></p>
-              <p>
-                Catalog 显式迁移至 v8
-                后，可独立重建已发布单篇知识与集合综合的检索索引。
-              </p>
-              <button
-                id="knowledge-retrieval-rebuild"
-                class="live-primary"
-                type="button"
-              >
-                重建知识索引
-              </button>
-              <p
-                id="knowledge-retrieval-rebuild-status"
-                role="status"
-                aria-live="polite"
-              ></p>
-            </section>
-            <section class="config-card config-form" aria-label="提取候选交付">
-              <h2>提取候选交付</h2>
-              <p>
-                Catalog v5 上显式创建
-                operation，再提交有证据的候选批次。准备结果可从只读文献库复制；回执只保存检查摘要和证据保护，不托管历史候选载荷。
-              </p>
-              <label for="extraction-caller">调用方 namespace</label>
-              <input
-                id="extraction-caller"
-                autocomplete="off"
-                placeholder="local.research-agent"
-              />
-              <label for="extraction-prepared">输入准备结果 JSON</label>
-              <textarea
-                id="extraction-prepared"
-                rows="8"
-                spellcheck="false"
-              ></textarea>
-              <button id="extraction-create" type="button">
-                创建 operation
-              </button>
-              <label for="extraction-operation-id">Operation ID</label>
-              <input id="extraction-operation-id" autocomplete="off" />
-              <label for="extraction-batch">候选批次 JSON</label>
-              <textarea
-                id="extraction-batch"
-                rows="10"
-                spellcheck="false"
-              ></textarea>
-              <button id="extraction-submit" class="live-primary" type="button">
-                提交候选批次
-              </button>
-              <button id="extraction-close" type="button">
-                关闭 operation
-              </button>
-              <button id="extraction-cancel" type="button">
-                取消 operation
-              </button>
-              <label for="extraction-receipt-id">Receipt ID</label>
-              <input id="extraction-receipt-id" autocomplete="off" />
-              <button id="extraction-receipt" type="button">
-                读取回执与保护
-              </button>
-              <button id="extraction-cleanup" type="button">
-                清理最多 100 项过期记录
-              </button>
-              <p id="extraction-status" role="status" aria-live="polite"></p>
-              <pre id="extraction-result"></pre>
-            </section>
-          </div>
-        </details>
-      </main>
-      <main id="config-workspace" tabindex="-1" hidden>
+<html lang="zh-CN" data-ui="library"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>SciRetriever 文献库</title><link rel="stylesheet" href="/workspace.css"></head><body>
+<div class="app">
+  <aside class="side" id="side"></aside>
+  <div class="main">
+    <div class="tbar">
+      <button class="btn q sm menu" id="menuBtn" aria-label="菜单">☰</button>
+      <nav class="tabs" id="tabs" aria-label="标签页"></nav>
+      <button class="actpill" id="actBtn"><span class="d"></span><span id="actTxt">正在连接</span></button>
+    </div>
+    <main class="view" id="main"></main>
+  </div>
+</div>
+
+<input type="file" id="pdfInput" accept="application/pdf" hidden>
+
+<div id="overlay"></div>
+<div class="tip" id="tip" hidden></div>
+
+<template id="configuration-template"><section id="config-workspace">
         <div class="live-heading">
           <p class="live-eyebrow">CONFIGURATION</p>
           <h1>设置</h1>
@@ -622,6 +43,7 @@
           <p id="current-database-binding">
             正在读取当前进程使用的数据库与资产目录…
           </p>
+          <p>默认保存在 ~/.sciretriever/ 下，可按需修改以下位置。</p>
           <label for="config-catalog-path">Catalog 路径</label
           ><input
             id="config-catalog-path"
@@ -634,7 +56,8 @@
             placeholder="文献资产目录的绝对路径"
           />
           <p>
-            保存后重启服务生效。保存路径不会创建、迁移或搬动已有数据库与资产。
+            保存后重启服务生效。新数据库文件所在目录须已存在；重启时目标文件不存在则创建空库。
+            修改位置不会搬迁已有文献；使用已有库时，请同时选择其对应的资产目录。
           </p>
           <button id="paths-config-save" class="live-primary" type="submit">
             保存数据库绑定
@@ -817,19 +240,7 @@
             <button id="config-credential-save" type="submit">保存凭据</button>
           </div>
         </form>
-      </main>
-      <main id="library-workspace" tabindex="-1" hidden>
-        <div class="live-heading">
-          <p class="live-eyebrow">LITERATURE LIBRARY</p>
-          <h1>文献库</h1>
-          <p>检索已保存的文献，阅读原始材料、知识结果与证据。</p>
-        </div>
-        <details class="tool-drawer" id="library-intake">
-          <summary>
-            添加文献与材料<span>外部发现、书目导入、手动 PDF</span>
-          </summary>
-          <div class="tool-grid">
-            <form id="manual-pdf-form" class="config-card config-form">
+      </section></template><template id="advanced-template"><div id="maintenance-workspace"><form id="manual-pdf-form">
               <h2>手动接纳 PDF</h2>
               <p>
                 选择已存在的具体文献和本机
@@ -853,167 +264,240 @@
               </button>
               <p id="manual-pdf-status" role="status" aria-live="polite"></p>
             </form>
-            <form id="discovery-form" class="config-card config-form">
-              <h2>发现外部文献</h2>
-              <p>从配置的元数据来源发现文献并入库；PDF 获取需要单独发起。</p>
-              <label for="discovery-query">主题或检索式</label
-              ><input id="discovery-query" required /><label
-                for="discovery-limit"
-                >扫描上限</label
-              ><input
-                id="discovery-limit"
+            <form id="document-parse-form" class="config-card config-form">
+              <h2>解析已接纳的 PDF</h2>
+              <p>
+                使用文献库中的 Literature ID、Asset ID 和 PDF SHA-256
+                固定输入。复用当前解析结果不会调用
+                parser；明确重解析会调用已配置的 parser。Catalog 须先显式迁移至
+                v3。
+              </p>
+              <label for="document-literature-id">Literature ID</label>
+              <input id="document-literature-id" required autocomplete="off" />
+              <button id="document-load-material" type="button">
+                从文献库读取当前 PDF
+              </button>
+              <p id="document-material-status" role="status" aria-live="polite">
+                尚未选择材料。
+              </p>
+              <label for="document-asset-id">Asset ID</label>
+              <input id="document-asset-id" required readonly />
+              <label for="document-asset-sha256">PDF SHA-256</label>
+              <input
+                id="document-asset-sha256"
+                required
+                readonly
+                pattern="[0-9a-f]{64}"
+              />
+              <label for="document-parse-mode">解析方式</label>
+              <select id="document-parse-mode">
+                <option value="reparse">
+                  调用解析服务（首次解析或重新解析）
+                </option>
+                <option value="reuse-current">复用已保存的解析结果</option>
+              </select>
+              <label for="document-default-revision"
+                >预期默认版本 revision（首次发布留空）</label
+              >
+              <input
+                id="document-default-revision"
                 type="number"
                 min="1"
-                max="10000"
-                value="50"
-                required
-              /><button class="live-primary" type="submit">发现元数据</button>
-              <p id="discovery-status" role="status"></p>
-              <div id="discovery-result"></div>
-            </form>
-            <form id="bibliography-import-form" class="config-card config-form">
-              <h2>导入书目</h2>
-              <label for="bibliography-format">文件格式</label
-              ><select id="bibliography-format">
-                <option value="bibtex">BibTeX</option>
-                <option value="ris">RIS</option>
-                <option value="csl-json">CSL JSON</option></select
-              ><label for="bibliography-file">书目文件</label
-              ><input
-                id="bibliography-file"
-                type="file"
-                accept=".bib,.ris,.json"
-                required
-              /><button type="submit">导入文献元数据</button>
-              <p id="bibliography-import-status" role="status"></p>
-            </form>
-          </div>
-        </details>
-        <form id="library-form" class="library-search">
-          <label for="library-query">搜索文献</label
-          ><input
-            id="library-query"
-            type="search"
-            placeholder="标题、作者、关键词或 DOI"
-          /><button class="live-primary" type="submit">搜索</button
-          ><label for="library-sort">排序</label
-          ><select id="library-sort">
-            <option value="publication-year-desc">年份：从新到旧</option>
-            <option value="publication-year-asc">年份：从旧到新</option>
-            <option value="title-asc">标题：升序</option>
-            <option value="title-desc">标题：降序</option>
-            <option value="relevance">相关性</option>
-          </select>
-        </form>
-        <p id="library-status" role="status" aria-live="polite">
-          正在连接文献库
-        </p>
-        <div class="library-grid">
-          <section aria-label="搜索结果">
-            <div id="library-results"></div>
-            <button id="library-more" hidden>加载更多</button>
-          </section>
-          <article id="library-detail" aria-label="文献详情">
-            <p class="library-empty">
-              选择一篇文献，查看摘要、当前全文和处理结果。
-            </p>
-          </article>
-        </div>
-        <details id="query-tools" class="tool-drawer">
-          <summary>
-            知识与材料检索<span>上下文、证据、知识产物与集合综合</span>
-          </summary>
-          <div class="tool-grid">
-            <form id="context-form" class="config-card config-form">
-              <h2>材料上下文</h2>
-              <p>
-                从已建索引的元数据和可读表示中查找原文片段；索引需要在材料维护页明确重建。
-              </p>
-              <label for="context-query">问题或关键词</label>
-              <input
-                id="context-query"
-                required
-                autocomplete="off"
-                placeholder="例如：剂量、方法或结果"
-              />
-              <label for="context-literature-id"
-                >Literature ID 范围（留空为整个文献库）</label
-              >
-              <input
-                id="context-literature-id"
-                autocomplete="off"
-                placeholder="可选：一个 Literature ID"
-              />
-              <label for="context-max-bytes"
-                >上下文上限（JSON UTF-8 字节）</label
-              >
-              <input
-                id="context-max-bytes"
-                type="number"
-                min="1024"
-                max="262144"
-                value="16384"
-                required
-              />
-              <button id="context-submit" class="live-primary" type="submit">
-                查找材料
-              </button>
-              <p id="context-status" role="status" aria-live="polite"></p>
-              <div id="context-results" aria-live="polite"></div>
-              <button id="context-more" type="button" hidden>继续查找</button>
-            </form>
-            <form id="knowledge-context-form" class="config-card config-form">
-              <h2>材料与知识上下文</h2>
-              <p>
-                在已明确构建的材料和知识索引中查找；生成知识会显示来源层级、覆盖与固定产物引用。
-              </p>
-              <label for="knowledge-context-query">问题或关键词</label>
-              <input id="knowledge-context-query" required autocomplete="off" />
-              <label for="knowledge-context-literature-id"
-                >Literature ID 范围（留空为整个文献库）</label
-              >
-              <input id="knowledge-context-literature-id" autocomplete="off" />
-              <label for="knowledge-context-purpose">知识用途</label>
-              <select id="knowledge-context-purpose">
-                <option value="all">全部用途</option>
-                <option value="overview">概览</option>
-                <option value="detailed">详细</option>
-                <option value="question">问题</option>
-                <option value="synthesis">综合</option>
-              </select>
-              <label for="knowledge-context-question"
-                >产物原始问题（可选，精确匹配）</label
-              >
-              <input id="knowledge-context-question" autocomplete="off" />
-              <label for="knowledge-context-max-bytes"
-                >上下文上限（JSON UTF-8 字节）</label
-              >
-              <input
-                id="knowledge-context-max-bytes"
-                type="number"
-                min="1024"
-                max="262144"
-                value="16384"
-                required
+                step="1"
               />
               <button
-                id="knowledge-context-submit"
+                id="document-parse-submit"
                 class="live-primary"
                 type="submit"
               >
-                查找材料与知识
+                发布可读表示
               </button>
               <p
-                id="knowledge-context-status"
+                id="document-parse-status"
                 role="status"
                 aria-live="polite"
               ></p>
-              <div id="knowledge-context-results" aria-live="polite"></div>
-              <button id="knowledge-context-more" type="button" hidden>
-                继续查找
-              </button>
             </form>
-            <form id="extraction-prepare-form" class="config-card config-form">
+            <section class="config-card config-form" aria-label="单篇知识分析">
+              <h2>单篇知识分析</h2>
+              <p>
+                明确选择已接纳的 PDF
+                和当前可读文档版本，再生成有证据的概览、详细分析或问题回答。需要
+                Catalog v6
+                和已配置的分析模型；长文可选择分段处理，不设累计调用或 token
+                预算。历史知识可在只读文献库按 ID 阅读。
+              </p>
+              <label for="knowledge-literature-id">Literature ID</label>
+              <input id="knowledge-literature-id" autocomplete="off" />
+              <label for="knowledge-purpose">用途</label>
+              <select id="knowledge-purpose">
+                <option value="overview">概览</option>
+                <option value="detailed">详细分析</option>
+                <option value="question">针对问题</option>
+              </select>
+              <label for="knowledge-mode">处理方式</label>
+              <select id="knowledge-mode">
+                <option value="single">单次全文（v1）</option>
+                <option value="long">长文局部分析与整合（v2）</option>
+              </select>
+              <label for="knowledge-question">问题（仅“针对问题”填写）</label>
+              <textarea
+                id="knowledge-question"
+                rows="3"
+                spellcheck="false"
+              ></textarea>
+              <label for="knowledge-default-mode">默认视图</label>
+              <select id="knowledge-default-mode">
+                <option value="publish-only">仅发布历史产物</option>
+                <option value="compare-and-set">
+                  按 revision 更新默认视图
+                </option>
+              </select>
+              <label for="knowledge-default-revision"
+                >预期 revision（首次设为默认时留空）</label
+              >
+              <input
+                id="knowledge-default-revision"
+                type="number"
+                min="1"
+                step="1"
+              />
+              <p>处理完整输入并记录实际模型用量；可以随时取消当前请求。</p>
+              <button id="knowledge-start" class="live-primary" type="button">
+                启动单篇分析
+              </button>
+              <button id="knowledge-cancel" type="button" disabled>
+                取消当前请求
+              </button>
+              <p id="knowledge-status" role="status" aria-live="polite"></p>
+              <pre id="knowledge-result"></pre>
+            </section>
+            <section class="config-card config-form" aria-label="集合知识综合">
+              <h2>集合知识综合</h2>
+              <p>
+                明确填写有序文档或知识来源，再固定版本和缺口。Catalog
+                需显式迁移至
+                v7。模型对已固定集合进行归纳，结果保留来源和实际覆盖。
+              </p>
+              <label for="synthesis-inputs">来源选择 JSON（1–128 项）</label>
+              <textarea
+                id="synthesis-inputs"
+                rows="8"
+                spellcheck="false"
+                placeholder='[{"kind":"document","input_id":"paper-1","literature_id":"...","asset_id":"...","asset_sha256":"...","document_version_id":null},{"kind":"knowledge","input_id":"prior-1","source_artifact_id":"..."}]'
+              ></textarea>
+              <label for="synthesis-policy">覆盖政策</label>
+              <select id="synthesis-policy">
+                <option value="require-all">全部来源必须可用</option>
+                <option value="allow-partial">允许部分来源并标明缺口</option>
+              </select>
+              <button id="synthesis-prepare" type="button">
+                固定来源与缺口
+              </button>
+              <label for="synthesis-question">集合问题</label>
+              <textarea
+                id="synthesis-question"
+                rows="3"
+                spellcheck="false"
+              ></textarea>
+              <button
+                id="synthesis-start"
+                class="live-primary"
+                type="button"
+                disabled
+              >
+                启动集合综合
+              </button>
+              <button id="synthesis-cancel" type="button" disabled>
+                取消当前请求
+              </button>
+              <p id="synthesis-status" role="status" aria-live="polite"></p>
+              <pre id="synthesis-result"></pre>
+            </section>
+            <section
+              class="config-card config-form"
+              aria-label="材料检索索引维护"
+            >
+              <h2>材料检索索引</h2>
+              <p>
+                Catalog 显式迁移至 v4
+                后，重建已保存元数据与已发布表示的检索投影。材料变更后需再次明确重建。
+              </p>
+              <button id="retrieval-rebuild" class="live-primary" type="button">
+                重建材料索引
+              </button>
+              <p
+                id="retrieval-rebuild-status"
+                role="status"
+                aria-live="polite"
+              ></p>
+              <p>
+                Catalog 显式迁移至 v8
+                后，可独立重建已发布单篇知识与集合综合的检索索引。
+              </p>
+              <button
+                id="knowledge-retrieval-rebuild"
+                class="live-primary"
+                type="button"
+              >
+                重建知识索引
+              </button>
+              <p
+                id="knowledge-retrieval-rebuild-status"
+                role="status"
+                aria-live="polite"
+              ></p>
+            </section>
+            <section class="config-card config-form" aria-label="提取候选交付">
+              <h2>提取候选交付</h2>
+              <p>
+                Catalog v5 上显式创建
+                operation，再提交有证据的候选批次。准备结果可从只读文献库复制；回执只保存检查摘要和证据保护，不托管历史候选载荷。
+              </p>
+              <label for="extraction-caller">调用方 namespace</label>
+              <input
+                id="extraction-caller"
+                autocomplete="off"
+                placeholder="local.research-agent"
+              />
+              <label for="extraction-prepared">输入准备结果 JSON</label>
+              <textarea
+                id="extraction-prepared"
+                rows="8"
+                spellcheck="false"
+              ></textarea>
+              <button id="extraction-create" type="button">
+                创建 operation
+              </button>
+              <label for="extraction-operation-id">Operation ID</label>
+              <input id="extraction-operation-id" autocomplete="off" />
+              <label for="extraction-batch">候选批次 JSON</label>
+              <textarea
+                id="extraction-batch"
+                rows="10"
+                spellcheck="false"
+              ></textarea>
+              <button id="extraction-submit" class="live-primary" type="button">
+                提交候选批次
+              </button>
+              <button id="extraction-close" type="button">
+                关闭 operation
+              </button>
+              <button id="extraction-cancel" type="button">
+                取消 operation
+              </button>
+              <label for="extraction-receipt-id">Receipt ID</label>
+              <input id="extraction-receipt-id" autocomplete="off" />
+              <button id="extraction-receipt" type="button">
+                读取回执与保护
+              </button>
+              <button id="extraction-cleanup" type="button">
+                清理最多 100 项过期记录
+              </button>
+              <p id="extraction-status" role="status" aria-live="polite"></p>
+              <pre id="extraction-result"></pre>
+            </section>
+          <form id="extraction-prepare-form">
               <h2>提取输入准备</h2>
               <p>
                 检查调用方规范，绑定已接纳的原 PDF
@@ -1053,200 +537,6 @@
                 id="extraction-prepare-result"
                 aria-label="提取输入绑定结果"
               ></pre>
-            </form>
-            <section class="config-card config-form" aria-label="知识产物阅读">
-              <h2>已发布知识</h2>
-              <p>
-                按 Literature ID
-                列出历史产物；每项断言保留精确文档版本与片段证据。此处只读，不启动分析。
-              </p>
-              <label for="knowledge-list-literature-id">Literature ID</label>
-              <input id="knowledge-list-literature-id" autocomplete="off" />
-              <button id="knowledge-list-submit" type="button">
-                列出知识产物
-              </button>
-              <label for="knowledge-read-id">Artifact ID</label>
-              <input id="knowledge-read-id" autocomplete="off" />
-              <button id="knowledge-read-submit" type="button">
-                按 ID 阅读
-              </button>
-              <p
-                id="knowledge-read-status"
-                role="status"
-                aria-live="polite"
-              ></p>
-              <div id="knowledge-list-results"></div>
-              <article id="knowledge-read-result" aria-live="polite"></article>
-            </section>
-            <section class="config-card config-form" aria-label="集合知识阅读">
-              <h2>集合知识综合</h2>
-              <p>
-                只读核对覆盖、共识与分歧、逐条证据以及当前来源状态。已发布产物的来源变为
-                source-only 时会明确显示。
-              </p>
-              <button id="synthesis-list-submit" type="button">
-                列出最近 20 项综合
-              </button>
-              <label for="synthesis-read-id">综合 Artifact ID</label>
-              <input id="synthesis-read-id" autocomplete="off" />
-              <button id="synthesis-read-submit" type="button">
-                按 ID 阅读
-              </button>
-              <p
-                id="synthesis-read-status"
-                role="status"
-                aria-live="polite"
-              ></p>
-              <article id="synthesis-read-results" aria-live="polite"></article>
-            </section>
-          </div>
-        </details>
-      </main>
-      <main id="live-workspace" tabindex="-1" hidden>
-        <button id="browser-back" class="browser-context-link" type="button">
-          ← 返回任务</button
-        ><span id="browser-tab" hidden>Browser 协助</span>
-        <div class="live-heading">
-          <p class="live-eyebrow">BROWSER WORKBENCH / LIVE</p>
-          <h1>Browser 协助</h1>
-          <p>真实页面，实时观察。人工接管后，可在页面中操作并获取候选 PDF。</p>
-        </div>
-        <section class="live-task">
-          <div>
-            <small id="live-task-kind">文献获取会话</small>
-            <h2 id="live-task-title">尚未选中文献</h2>
-            <p id="live-task-detail">
-              从任务目标中选择一篇文献，查看 Browser 获取过程。
-            </p>
-          </div>
-          <span id="live-task-badge" class="live-badge">等待会话</span>
-        </section>
-        <div class="live-grid">
-          <section class="live-browser" aria-label="浏览器画面">
-            <header>
-              <span id="page-title">正在准备页面</span
-              ><span id="frame-status">等待画面</span>
-            </header>
-            <div class="live-address" id="page-url">本地页面</div>
-            <div class="live-screen">
-              <img
-                id="browser-frame"
-                alt="远端浏览器当前页面；接管后可点击画面"
-                tabindex="0"
-                draggable="false"
-              />
-              <p id="frame-empty">正在获取浏览器画面…</p>
-            </div>
-            <div class="live-caption">
-              <span id="session-status" role="status" aria-live="polite"
-                >正在连接会话</span
-              ><span id="frame-time"></span>
-            </div>
-            <div id="operation-feedback" class="live-operation" hidden>
-              <p id="operation-phase" role="status" aria-live="polite"></p>
-              <p id="operation-targets"></p>
-              <p id="operation-failure" role="alert"></p>
-              <button id="operation-read" type="button" hidden>
-                在文献库读取当前 PDF
-              </button>
-            </div>
-            <form id="acquisition-form" hidden>
-              <label for="acquisition-literature">文献 ID</label>
-              <input id="acquisition-literature" autocomplete="off" required />
-              <button id="acquisition-start" type="submit">
-                获取这篇文献的 PDF
-              </button>
-            </form>
-            <div class="live-controls">
-              <button id="takeover" class="live-primary">人工接管</button
-              ><button id="pause">暂停</button
-              ><button id="agent">让 Agent 执行一步</button
-              ><button id="cancel" class="live-danger">取消会话</button>
-            </div>
-            <p class="live-input-note">
-              接管后：点击画面、滚轮滚动，或在详情面板选择页面元素。文件选择、拖放和剪贴板暂不支持。
-            </p>
-          </section>
-          <aside id="live-details" class="live-details" aria-label="会话详情">
-            <div class="live-details-heading">
-              <h2>会话详情</h2>
-              <button id="close-details" aria-label="关闭详情">关闭</button>
-            </div>
-            <section>
-              <h3>控制权</h3>
-              <strong id="owner">等待连接</strong>
-              <p id="owner-note">其他客户端可以观看同一页面。</p>
-              <p id="budget"></p>
-            </section>
-            <section id="guidance-section" hidden>
-              <h3>给 Agent 的指导</h3>
-              <form id="guidance-form">
-                <label for="guidance-text">下一次观察时参考</label>
-                <input id="guidance-text" maxlength="2048" autocomplete="off" />
-                <button type="submit">提交指导</button>
-              </form>
-              <div id="guidance-list" aria-live="polite"></div>
-            </section>
-            <section>
-              <h3>候选文献 <span id="candidate-count">0</span></h3>
-              <div id="candidates">
-                <p>尚未收到候选。接管页面后，点击论文的 PDF 入口。</p>
-              </div>
-            </section>
-            <section>
-              <h3>页面标签</h3>
-              <div id="browser-tabs" class="live-tabs" aria-live="polite">
-                <p>正在读取标签…</p>
-              </div>
-            </section>
-            <section>
-              <h3>页面操作</h3>
-              <div id="element-actions" class="live-elements"></div>
-              <form id="text-form">
-                <label for="text-target">输入位置</label
-                ><select id="text-target" aria-label="输入位置"></select
-                ><label for="operator-text">输入内容</label
-                ><input
-                  id="operator-text"
-                  type="password"
-                  autocomplete="off"
-                  placeholder="输入内容不回显"
-                /><button type="submit">发送输入</button>
-              </form>
-              <div class="live-key-buttons">
-                <button data-key="Tab">Tab</button
-                ><button data-key="Enter">Enter</button
-                ><button data-key="Escape">Esc</button
-                ><button id="back">返回上一页</button>
-              </div>
-            </section>
-            <section>
-              <h3>页面观察</h3>
-              <p id="observation-info">等待观察</p>
-              <details>
-                <summary>查看页面摘要</summary>
-                <p id="page-text"></p>
-              </details>
-            </section>
-          </aside>
-        </div>
-        <div
-          id="feedback"
-          class="live-feedback"
-          role="status"
-          aria-live="polite"
-          hidden
-        ></div>
-      </main>
-    </div>
-    <button
-      id="open-details"
-      class="live-mobile-details"
-      aria-controls="live-details"
-      aria-expanded="false"
-    >
-      会话详情 · 候选 <span id="mobile-count">0</span>
-    </button>
-    <div id="details-backdrop" class="live-backdrop" hidden></div>
-  </body>
-</html>
+            </form></div></template>
+<script type="module" src="/live.js"></script>
+</body></html>

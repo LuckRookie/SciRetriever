@@ -117,7 +117,7 @@ flowchart LR
 | 16MiB Intake、512MiB多层限制、接纳/发布重复整块读取               | Acquisition、collector、Storage、contracts                                  | 超旧边界文件全链路可用且内存有界         |
 | FileStore和SqliteWorker共用写入admission                          | `bootstrap/application.ts`、`storage/files/`                                | 大文件准备不长时间堵住其它catalog写入    |
 | 平台政策字段存在，但生产Browser调度没有消费                       | configuration、Entry                                                        | 旧配置与新政策一起执行、可解释且可验证   |
-| 前轮串行真实样本与Full记录                                        | [通用修复记录](../../notes/browser-generic-repair-validation-2026-10-05.md) | 不能替代新对象图、并行、恢复或大文件证据 |
+| 前轮串行真实样本与Full记录                                        | 通用修复记录（本地文件：`sandbox/reports/browser-generic-repair-validation-2026-10-05.md`，不随仓库分发） | 不能替代新对象图、并行、恢复或大文件证据 |
 
 两轮 `claude --print --model opus` 讨论已完成，运行报告为 `claude-opus-5-5`。
 讨论原始记录位于 `/tmp/sciretriever-browser-parallel-plan-m7huoumy/`，关键取舍已分配到01和各结果块，
@@ -175,7 +175,7 @@ IEEE中间一次零模型generic异常缺少raw cause，后续成功不被当成
 下载/网络事实由通用owner维护，本轮没有新增出版社选择器或URL模式补丁。
 Full另发现旧并发测试未隔离DOI下载，已用既有离线端口修复fixture；未修改生产或延长timeout。
 
-完整逐样本、版本、命令、skip、审查与资源证据见[最终验收记录](../../notes/browser-final-acceptance-2026-10-07.md)。
+完整逐样本、版本、命令、skip、审查与资源证据见最终验收记录（本地文件：`sandbox/reports/browser-final-acceptance-2026-10-07.md`，不随仓库分发）。
 计划完成不包含Git提交/发布、系统DNS修复、真实catalog迁移、个人Cookie使用或新的真实Public/API/解析验收。
 
 ## 2026-10-05暂停时的历史恢复记录
@@ -210,7 +210,7 @@ Scheduler四项与文件额度全0。它**不证明**旧文档keepalive在EOF后
 2. 用冻结构建定点验证Elsevier及受影响真实路径，沿用真实模型`qiuzk/gpt-6-luna`，区分内部问题与外部限制。
 3. 运行最终Full并完成07集中验收；更新真实矩阵、最终patch与各块退出条件后才可标整计划Completed。
 
-详细新旧证据和每篇结果见[本轮验证记录](../../notes/browser-parallel-validation-2026-10-05.md)。
+详细新旧证据和每篇结果见本轮验证记录（本地文件：`sandbox/reports/browser-parallel-validation-2026-10-05.md`，不随仓库分发）。
 当前原计划任务保留，不用已通过的局部回归代替未执行的最终验收；本轮依据用户恢复指令继续上述工作。
 
 ## 变更与最终交接
@@ -229,3 +229,5 @@ Scheduler四项与文件额度全0。它**不证明**旧文档keepalive在EOF后
 - 2026-10-07：用户要求继续完成最终全链路验收，恢复 In progress；保持既有授权边界和已有工作树。
 
 - 2026-10-07：最终Full exit0与Browser实际验收收口，01–07标记Completed；外部访问条件和历史诊断限制保留在最终报告。
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

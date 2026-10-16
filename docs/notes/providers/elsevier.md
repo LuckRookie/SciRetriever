@@ -1,8 +1,8 @@
 # Elsevier
 
-> 2026-10-10 TypeScript 修复复验：Article Retrieval 使用 /content/article/{doi|pii|eid}/{identifier}?view=FULL。Source 接受受信 Article API 的 /pii/ 与 PII: 等类型化提示，Scopus 检索 origin 本身不是 Elsevier 正文归属证据。解析 MAIN web-pdf 时仅取直接子字段，忽略嵌套预览图片的独立 filename/extension/eid。真实样本已通过 FULL XML → MAIN object → 7 页 PDF → 正式入库；不能把 Accept:application/pdf 取得的一页诊断文件当作本次完整交付证据。 证据见[修复验证记录](../live-discovery-acquisition-fixes-2026-10-10.md)。下文较早日期的探测只代表当时状态。
+> 当前 TypeScript 适配行为（2026-10-10 核对）：Article Retrieval 使用 /content/article/{doi|pii|eid}/{identifier}?view=FULL。Source 接受受信 Article API 的 /pii/ 与 PII: 等类型化提示，Scopus 检索 origin 本身不是 Elsevier 正文归属证据。解析 MAIN web-pdf 时仅取直接子字段，忽略嵌套预览图片的独立 filename/extension/eid。正文获取沿 FULL XML → MAIN object 定位；仅有 PDF 媒体类型不能证明收到正文。 证据见修复验证记录（本地文件：`sandbox/reports/live-discovery-acquisition-fixes-2026-10-10.md`，不随仓库分发）。下文较早日期的探测只代表当时状态。
 
-- 官方资料最后在线核对：2026-08-19
+- 官方资料最后在线核对：Article/Object Retrieval WADL 于 2026-10-13 复核；其它资料保持 2026-08-19 的核对范围
 - 当前实现离线对照：2026-08-20
 - 当前选择键：Metadata `elsevier`；Acquisition `elsevier`
 - 供应商角色：Scopus/Elsevier 元数据查询，以及受产品订阅和授权约束的文章全文/对象获取
@@ -21,7 +21,7 @@
 - [Authentication error example](https://dev.elsevier.com/payloads/authError.xml)、[quota error example](https://dev.elsevier.com/payloads/quotaExceeded.xml)、[resource-not-found example](https://dev.elsevier.com/payloads/resourceNotFound.xml) 与 [generic error example](https://dev.elsevier.com/payloads/genericError.xml)：官方 `service-error/status/statusCode` 错误 envelope。
 - [Abstract Citation API WADL](https://dev.elsevier.com/documentation/AbstractCitationAPI.wadl)：按年引用计数/overview。
 
-均为 `official`，2026-08-18 核对。公开 WADL、配额页和 payload example 可匿名读取；实际内容 API 要求 key，本轮只读取这些静态官方资料，没有读取本地凭据，也没有向内容 API 发送认证请求。
+上述资料最初于 2026-08-18 按 `official` 核对，公开 WADL、配额页和 payload example 可匿名读取；实际内容 API 要求 key。最初复核只读取静态官方资料。2026-10-13 再次核对 Article/Object Retrieval WADL；同日经用户授权的内容 API 观察另按 `verified` 记录于 5.2，不扩大其它资料的核对范围。
 
 ## 2. 认证、授权、配额与 throttle
 
@@ -62,7 +62,7 @@ Acquisition 的 Article Retrieval 与 Object Retrieval 使用第三个独立 sco
 10 req/s 上限。`X-RateLimit-*`、`Retry-After`、429 和 5xx 只反馈到这个内容 scope，
 不会借用 Scopus Search/Abstract 的额度，也不会因额度或临时错误切换 Browser 绕过。
 
-历史 `verified`，2026-07-21：当时配置的一枚 key 对官方 API 最小请求返回 HTTP 200；与此同时，旧分层 acquisition 路径在两个真实样本上均超过外层 90 秒限制。这只证明该时间点 key/API 可达，以及历史 client/transport 存在 timeout 问题；不证明当前凭据仍有效、内容已授权，也不作为当前生产对象图或 route 准入的实现证据。本轮没有读取或复用该 key。
+历史可达性与超时观察见2026-07-21 测试记录（本地文件：`sandbox/reports/elsevier-probe-2026-07-21.md`，不随仓库分发），不证明当前凭据或文章权限。
 
 ## 3. 元数据接口
 
@@ -223,10 +223,31 @@ full-text-retrieval-response {
 2026-08-18 的合同复核只读取公开 WADL/静态样例；没有为本次修复调用带凭据的 Article/Object
 API、验证真实账户 entitlement 或读取响应正文。
 
+### 5.2 XML、直接 PDF 与正文对象的兼容性
+
+`official`，2026-10-13 复核：Article Retrieval 的原生全文格式是 XML，但支持的响应格式不止 XML；WADL 同时列出 `application/pdf`。Object Retrieval 是另一个正式接口，用于取回文章关联的文件对象，也支持 PDF。`Accept` 选择返回格式，`view` 选择返回字段集合；`view=FULL` 不是保证下载完整 PDF 的开关。内容和格式的可访问范围还受 API entitlement 与调用方内容权限约束。
+
+`verified`，2026-10-13：在同一凭据与服务器网络下，对同一组文章观察到以下差异：
+
+| 路径 | 已观察到的行为 | 可成立的结论 |
+| --- | --- | --- |
+| Article Retrieval，`Accept: application/pdf` | 带与不带 `view=FULL` 均返回 HTTP 200、合法但仅含文章首页的 PDF | 直接 Article PDF 可能是首页表示；状态码、媒体类型和 reader 可读性不能单独证明正文完整 |
+| Article Retrieval，XML FULL → 显式 MAIN attachment EID → Object Retrieval | Object API 返回完整的出版社 PDF | XML 提供文件定位信息，随后取回现成的 PDF；没有把 XML 转换成 PDF |
+| Article Retrieval，XML 省略 `view` | 此组响应仍包含与 FULL 请求相同的正文附件 EID | 这组首页响应不能归因于省略 view；不据此将所有文章的默认 view 视为 FULL |
+
+这些观察不代表 Article API 永远只返回首页，也不代表 Object API 对任意文章都可下载。Article PDF 与 Object PDF 在同一环境下出现差异的服务端原因尚未确认，不能直接归为无订阅、无版权或全局 API 格式限制。返回 XML 也不保证包含可用的结构化正文或 MAIN PDF 附件，应分别检查正文内容与显式附件字段。
+
+同日还观察到某些记录的 `view=FULL` 请求返回 HTTP 400 / `INVALID_INPUT`，信息为 `View parameter specified in request is not valid`；省略 view 后可返回 HTTP 200 的 XML，但其中 `originalText` 只有 `doc/meta` 元信息，没有正文或 `web-pdf`。因此，根节点名 `full-text-retrieval-response`、`originalText` 标签存在和 HTTP 200 均不能单独证明取得了结构化全文。当前实现遇到该 400 会报告 request failure，尚未自动尝试无 view 的 XML；此次人工探测也未因此发现 MAIN PDF 入口。
+
+当前 TypeScript 适配器仍使用 5.1 的 XML FULL → MAIN Object 优先路径。上述事实不引入统一的最小页数、文件大小或文章身份硬门槛；完整性检查应避免把正常的一页文章当作预览。具体样本、耗时、文件及逐次请求证据保存在本机 Git 忽略的 sandbox，本文仅维护接口差异与兼容性结论。
+
 ## 6. 代表性响应结构
 
 Acquisition 的官方 FULL XML 证据只需下列脱敏层级；实际 parser 使用 namespace 的 local
-name，并拒绝 DTD/ENTITY、畸形 XML、冲突字段和无界 element 数量：
+name，以 4 MiB 响应字节限制约束扫描，并拒绝 DTD/ENTITY、附件字段中的畸形 XML 和冲突字段。
+FULL 响应含整篇正文，不以全文标签数量判断 PDF 附件是否有效。只消费主文件身份所需的
+`attachment-eid`、`filename`、`extension`、`web-pdf-purpose`；这些字段冲突仍拒绝，重复的
+存储副本地址等未消费字段不影响 MAIN PDF 对象定位：
 
 ```text
 full-text-retrieval-response
@@ -346,17 +367,9 @@ ScienceDirect 页面在 `body` 中明确显示机构“不订阅此内容”时�
 `challenge-unresolved`。这些 fixture 只证明旧程序没有自行挡住必要资源，不证明当前 IP、机构
 合同、文章 entitlement 或当前通用 Agent 的行为。
 
-2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
-均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。ScienceDirect 在 challenge
-加载期间改变了同篇文章的 Publisher path；当前 guard 只有在精确 Publisher origin 与既有文章
-identity 同时成立时才更新绑定，跨文章和未知 origin 仍拒绝。这个结果证明 article binding、
-Turnstile 路径和 image 子资源没有再被本地策略误拦；它不证明自动验证已通过、文章有权限或
-Cloak 提高了下载成功率，也没有触发 CAPTCHA 点击。
+历史现场结果见Browser 切换测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
 
-CBA72 将 ScienceDirect Browser 的本次服务器现场准入记为 `deferred`。这不降低
-`elsevier-sciencedirect` 的 `production-ready` Profile 状态，也不影响独立的授权
-Article/Object API route；它只表示固定代表样本在旧规则执行器中停在持续自动验证且没有可验证
-PDF。
+历史现场结果见Browser 切换测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
 
 Browser 使用当前机器正常网络出口和共享固定身份 Profile/context，所有文章共用
 `browser-generic` policy，不再建立 Elsevier lane。无 GUI Linux 使用 Xvfb。自动流程不导入或

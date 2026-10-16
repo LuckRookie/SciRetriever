@@ -55,3 +55,24 @@ providers/
 - `metadata.ts` 中保留公开的旧 decoder-shell 类以维持包根 API 兼容；生产组装使用实际 REST/Atom adapter。旧内部目录已移除，调用方直接引用当前路径。
 
 新增供应商时，从对应 capability 的现有适配器入手；维护自己的 definition、实现和直接测试，然后在注册/生产组装入口接线。详细规范见[供应商治理](../../../../docs/development/provider-governance.md)。
+
+## 子目录导航
+
+- [arxiv/](arxiv/README.md)：arXiv 适配器。
+- [core/](core/README.md)：CORE 适配器。
+- [crossref/](crossref/README.md)：Crossref 适配器。
+- [datacite/](datacite/README.md)：DataCite 适配器。
+- [elsevier/](elsevier/README.md)：Elsevier 适配器。
+- [europe-pmc/](europe-pmc/README.md)：Europe PMC 适配器。
+- [openalex/](openalex/README.md)：OpenAlex 适配器。
+- [opencitations/](opencitations/README.md)：OpenCitations 适配器。
+- [plos/](plos/README.md)：PLOS 适配器。
+- [sci-hub/](sci-hub/README.md)：Configured Sci-Hub 适配器。
+- [semantic-scholar/](semantic-scholar/README.md)：Semantic Scholar 适配器。
+- [shared/](shared/README.md)：供应商共享协议帮助。
+- [springer/](springer/README.md)：Springer Nature 适配器。
+- [unpaywall/](unpaywall/README.md)：Unpaywall 适配器。
+- [web-of-science/](web-of-science/README.md)：Web of Science 适配器。
+- [wiley/](wiley/README.md)：Wiley 适配器。
+
+[上级目录](../README.md) · [项目 README](../../../../README.md)

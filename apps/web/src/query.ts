@@ -107,7 +107,7 @@ function showReadiness(status: QueryReadiness): void {
   }
 }
 
-function mountExtractionPreparation(): void {
+export function mountExtractionPreparation(): void {
   const form = node<HTMLFormElement>("extraction-prepare-form");
   const status = node<HTMLElement>("extraction-prepare-status");
   const output = node<HTMLElement>("extraction-prepare-result");

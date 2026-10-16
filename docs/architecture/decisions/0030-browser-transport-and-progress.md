@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-10-04
-- Updated: 2026-10-05（接受独立文章会话、后台下载与发布交接）
+- Updated: 2026-10-13（持续补位与传输分段计时）
 - Amends: [ADR 0023](0023-generic-browser-agent-executor.md)、[ADR 0012](0012-process-local-provider-access-scheduling.md)（Browser 网络资格生命周期）、[ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)（平台调度与会话 cap）
 - Related: [ADR 0029](0029-unverified-pdf-acquisition.md)
 
@@ -46,6 +46,11 @@
    合法并放入所属 session 的候选队列，生产 flow 结束探索并将 candidate 交给 Entry 的原 acceptance/publication。无需再等模型说 Stop。
    已接纳候选优先于随后 viewer/runtime 故障；取消、当前输入复检与不可变发布边界仍保留。
    无候选时只收敛真实进行中的 capture，不在空队列上等待后用 timeout 覆盖原始失败。
+   捕获以真实下载事件或明确的 attachment 响应为依据。普通 Fetch/XHR 的 inline PDF 属于页面
+   渲染资源，即使位于主 frame 或发生在点击之后也不自动升格为主下载；它可能只是后台补充材料
+   预览，应继续交给 renderer。Agent 可继续选择正文链接或 viewer 下载控件，后续 blob/native
+   下载沿原归属接纳。明确 attachment 的 Fetch/XHR 仍从原响应取流，不重复 GET；不增加出版社
+   规则、文件名推断或正文 DOI/标题匹配门槛。
 6. **外部结果可区分。** HTTP 429 是限流；只在主页面 GET 返回可用 Retry-After、剩余预算允许
    且本页未重试时等待后重试一次，否则保留限流原因，留待后续显式重试。连接失败、模型停止在
    验证/登录页面和预算耗尽分别报告，不能当作正常无 PDF 或自动获取耗尽。
@@ -100,6 +105,16 @@ acceptance 前等待 session close。候选交付后不占 worker 或模型 perm
 旧平台网络停稳后重新排队。聚合显式串行配置、窗口和共享 Retry-After 仍照常生效。
 
 ### 有界文件与传输保护
+
+2026-10-13 按 ADR 0015 §3，Entry 以有界持续补位为已释放 worker 提供后续任务。新目标与
+单篇正常恢复不递增整次操作 epoch，不取消仍在传输的兄弟会话；模型 worker、保留会话与平台资格分别结算。
+
+传输 owner 以单调时钟记录 native-download / response-stream 的 started、first-byte、
+低频 progress、network-completed 与完成/失败；first-byte 是首次观测值，不冒充真实 socket
+首字节。Intake 记录 receiving、file-received、file-checked、candidate-ready；Entry 记录
+publication-started、published、closing、closed。各 owner 的 elapsed_ms 从自己的开始点计时，
+通过 article/session/transfer ID 关联，不直接相加成墙钟。INFO 只包含这些 ID、阶段、时长和字节，
+不记录 URL、页面内容、Cookie 或凭据；不形成新的持久业务事实。
 
 字节获取、hash、reader、candidate 恢复、publication 和导出使用受控文件/分块边界，不以旧
 16 MiB/512 MiB 常量决定正常大文件能否获得。每 session 最多一个主下载；临时资源仍有

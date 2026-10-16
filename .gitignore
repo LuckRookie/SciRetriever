@@ -19,6 +19,7 @@ logs
 !/apps/web/public/live.html
 !/apps/web/public/query.html
 !/apps/web/public/maintenance.html
+!/docs/architecture/web/prototype.html
 !/docs/proposals/2026-10-08-agent-workbench/prototype.html
 !/docs/proposals/2026-10-08-agent-workbench/opus-variant.html
 !/docs/proposals/2026-10-08-agent-workbench/comparison.html
@@ -33,5 +34,58 @@ work/*
 /.agent-teams/
 /config.toml
 
+# Private live tests, one-off cases, reports, and runtime artifacts
+/sandbox/
+
 # Local historical archives (kept on disk, never committed)
 archive/
+
+# Document the tracked routing proposal without exposing local archive snapshots.
+!/docs/archive/
+/docs/archive/*
+!/docs/archive/2026-10-11-metadata-governance-and-pdf-routing/
+/docs/archive/2026-10-11-metadata-governance-and-pdf-routing/*
+!/docs/archive/2026-10-11-metadata-governance-and-pdf-routing/README.md
+
+# Reviewed Agent backend selection history; keep other local archives private.
+!/docs/archive/2026-10-13-agent-runtime-options/
+/docs/archive/2026-10-13-agent-runtime-options/*
+!/docs/archive/2026-10-13-agent-runtime-options/README.md
+!/docs/archive/2026-10-13-agent-runtime-options/proposal.md
+
+# Completed plans and accepted proposals archived on 2026-10-13.
+!/docs/archive/2026-10-08-agent-workbench/
+/docs/archive/2026-10-08-agent-workbench/*
+!/docs/archive/2026-10-08-agent-workbench/README.md
+!/docs/archive/2026-10-08-agent-workbench/blue-workbench-design.md
+!/docs/archive/2026-10-08-agent-workbench/blue-workbench.html
+!/docs/archive/2026-10-08-agent-workbench/comparison.html
+!/docs/archive/2026-10-08-agent-workbench/comparison.md
+!/docs/archive/2026-10-08-agent-workbench/opus-variant.html
+!/docs/archive/2026-10-08-agent-workbench/proposal.md
+!/docs/archive/2026-10-08-agent-workbench/prototype.html
+!/docs/archive/2026-10-12-knowledge-processing-simplification/
+/docs/archive/2026-10-12-knowledge-processing-simplification/*
+!/docs/archive/2026-10-12-knowledge-processing-simplification/README.md
+!/docs/archive/2026-10-12-mineru-parsing/
+/docs/archive/2026-10-12-mineru-parsing/*
+!/docs/archive/2026-10-12-mineru-parsing/01-adapter.md
+!/docs/archive/2026-10-12-mineru-parsing/02-acceptance.md
+!/docs/archive/2026-10-12-mineru-parsing/README.md
+!/docs/archive/2026-10-13-browser-throughput/
+/docs/archive/2026-10-13-browser-throughput/*
+!/docs/archive/2026-10-13-browser-throughput/README.md
+!/docs/archive/2026-10-13-dsh-agent-backend/
+/docs/archive/2026-10-13-dsh-agent-backend/*
+!/docs/archive/2026-10-13-dsh-agent-backend/01-runtime-and-model-transport.md
+!/docs/archive/2026-10-13-dsh-agent-backend/02-browser-session-and-tools.md
+!/docs/archive/2026-10-13-dsh-agent-backend/03-production-handoff-and-control.md
+!/docs/archive/2026-10-13-dsh-agent-backend/04-verification-and-retirement.md
+!/docs/archive/2026-10-13-dsh-agent-backend/README.md
+!/docs/archive/2026-10-13-dsh-agent-backend/proposal.md
+!/docs/archive/2026-10-13-web-workbench/
+/docs/archive/2026-10-13-web-workbench/*
+!/docs/archive/2026-10-13-web-workbench/01-service.md
+!/docs/archive/2026-10-13-web-workbench/02-workflows.md
+!/docs/archive/2026-10-13-web-workbench/03-verification.md
+!/docs/archive/2026-10-13-web-workbench/README.md

@@ -25,6 +25,49 @@ function emptyCredentials(): CredentialBundle {
 }
 
 describe("metadata provider assembly", () => {
+  it("prioritizes credentialed Auto citation APIs without enabling new sources or changing Custom order", () => {
+    const budget = new NetworkBudgetCoordinator();
+    const credentials = parseCredentialText(
+      '[openalex]\napi_key="fixture-key"\n[web-of-science]\napi_key="fixture-wos-key"',
+    );
+    const options = {
+      transportFactory: () => ({
+        request: async () => {
+          throw new Error("assembly must stay offline");
+        },
+      }),
+    };
+    try {
+      const auto = assembleMetadataRegistry(
+        parseConfiguration(""),
+        credentials,
+        budget,
+        options,
+      );
+      expect(auto.reference_selection).toEqual([
+        "openalex",
+        "semantic-scholar",
+        "europe-pmc",
+        "datacite",
+        "core",
+      ]);
+      expect(auto.topic_selection[0]).toBe("crossref");
+      expect(auto.reference_selection).not.toContain("web-of-science");
+      const custom = assembleMetadataRegistry(
+        parseConfiguration(
+          '[sources.metadata]\nmode="custom"\nproviders=["europe-pmc","openalex"]',
+        ),
+        credentials,
+        budget,
+        options,
+      );
+      expect(custom.reference_selection).toEqual(["europe-pmc", "openalex"]);
+      expect(JSON.stringify(auto.statuses)).not.toContain("fixture-key");
+    } finally {
+      budget.close();
+    }
+  });
+
   it("uses a configured OpenAlex key through the private query seam and does not publish it", async () => {
     const values: (string | null)[] = [];
     const budget = new NetworkBudgetCoordinator();

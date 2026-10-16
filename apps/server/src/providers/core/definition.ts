@@ -5,6 +5,10 @@ import {
   service,
   type ProviderRegistration,
 } from "../contracts.js";
+
+// CORE redirects the slashless search route before returning metadata.
+export const CORE_SEARCH_WORKS_PATH = "/v3/search/works/";
+
 export const services = Object.freeze({
   "core-v3": service(
     "https://api.core.ac.uk",

@@ -476,7 +476,13 @@ export function assembleMetadataRegistry(
     endpoints,
     capabilities,
   });
-  const selected = configuredMetadataSelections(configuration, capabilities);
+  const selected = configuredMetadataSelections(
+    configuration,
+    capabilities,
+    Object.keys(capabilities).filter(
+      (provider) => credentialFields(credentials, provider).length > 0,
+    ),
+  );
   return Object.freeze({
     ...registry,
     topic_selection: selected.topic,

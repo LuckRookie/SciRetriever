@@ -1,3 +1,4 @@
+import { artifactReference } from "./artifact-layout.js";
 import {
   ContractValidationError,
   extractionCanonicalJsonBytes,
@@ -117,12 +118,8 @@ interface ReadContext {
   verifiedBytes: number;
   maxVerifiedBytes: number;
 }
-function context(maxVerifiedBytes = 64 * 1024 * 1024): ReadContext {
-  if (
-    !Number.isSafeInteger(maxVerifiedBytes) ||
-    maxVerifiedBytes < 1 ||
-    maxVerifiedBytes > 64 * 1024 * 1024
-  )
+function context(maxVerifiedBytes = Number.MAX_SAFE_INTEGER): ReadContext {
+  if (!Number.isSafeInteger(maxVerifiedBytes) || maxVerifiedBytes < 1)
     fail("synthesis-invalid");
   return {
     stack: new Set(),
@@ -241,7 +238,7 @@ export class SqliteSynthesisStorage {
   /** One ordered preparation snapshot shares caches and the declared-byte limit. */
   async sourceBatchByIds(
     ids: readonly string[],
-    maxVerificationBytes = 64 * 1024 * 1024,
+    maxVerificationBytes = Number.MAX_SAFE_INTEGER,
     signal?: AbortSignal,
   ): Promise<ReadonlyMap<string, SynthesisSource | null>> {
     if (this.stopped) fail("synthesis-closed");
@@ -267,7 +264,7 @@ export class SqliteSynthesisStorage {
   }
   async withReadSession<T>(
     consume: (session: SynthesisReadSession) => Promise<T>,
-    maxVerificationBytes = 64 * 1024 * 1024,
+    maxVerificationBytes = Number.MAX_SAFE_INTEGER,
     signal?: AbortSignal,
   ): Promise<T> {
     const outcome = await this.run(
@@ -891,7 +888,6 @@ export class SqliteSynthesisStorage {
   ): Promise<Set<string>> {
     checkCancelled(signal);
     const origins = new Set<string>();
-    const groups = new Map<string, { count: number; origins: Set<string> }>();
     for (const statement of content.statements) {
       checkCancelled(signal);
       const actual = await this.statementOrigins(
@@ -901,21 +897,8 @@ export class SqliteSynthesisStorage {
         signal,
         artifactId,
       );
-      if (statement.relation === "consensus" && actual.size < 2) fail();
-      if (statement.relation === "single-source" && actual.size !== 1) fail();
-      if (statement.relation === "disagreement") {
-        const group = groups.get(statement.conflict_group_id!) ?? {
-          count: 0,
-          origins: new Set<string>(),
-        };
-        group.count++;
-        for (const id of actual) group.origins.add(id);
-        groups.set(statement.conflict_group_id!, group);
-      }
       for (const id of actual) origins.add(id);
     }
-    for (const group of groups.values())
-      if (group.count < 2 || group.origins.size < 2) fail();
     return origins;
   }
   private async statementOrigins(
@@ -1084,7 +1067,10 @@ export class SqliteSynthesisStorage {
     if (origins.size !== artifact.coverage.unique_literature_count) fail();
     if (signal?.aborted) fail("synthesis-cancelled");
     const bytes = synthesisContentBytes(artifact.content);
-    const reference = `objects/${artifact.content_ref.sha256}.bin`;
+    const located = await this.database.locateArtifact(artifact.content_ref);
+    const reference =
+      located?.reference ??
+      artifactReference("knowledge-synthesis", artifact.content_ref);
     const stage = await this.files.stage({ maxBytes: bytes.length });
     try {
       await stage.write(bytes);

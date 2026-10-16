@@ -27,6 +27,7 @@ import {
 } from "@sciretriever/contracts";
 
 import { createApplication } from "../src/bootstrap/application.js";
+import { DshAgentRuntime } from "../src/agents/runtime.js";
 import { BROWSER_ROUTE_NAME } from "../src/acquisition/assembly.js";
 import {
   AcquisitionRouteError,
@@ -106,6 +107,7 @@ describe("application composition", () => {
         ["springer", "credential-missing"],
       ]);
       expect(application.agents.readiness("analysis").configured).toBe(false);
+      expect(application.agents).toBeInstanceOf(DshAgentRuntime);
       // Bootstrap is the only Browser owner, and with Browser left off it registers
       // no Browser route and starts nothing.
       expect(application.configuration.browser.enabled).toBe(false);
@@ -164,6 +166,7 @@ describe("application composition", () => {
         reasoning: "medium",
         stream: false,
       });
+      expect(application.agents).toBeInstanceOf(DshAgentRuntime);
     } finally {
       await application.close();
     }
@@ -267,134 +270,157 @@ describe("application composition", () => {
     }
   });
 
-  it("sends the MinerU token only to its configured TLS origin and rejects redirect before another request", async () => {
-    const home = await mkdtemp(join(tmpdir(), "sciretriever-parser-origin-"));
-    const certificateDirectory = await mkdtemp(
-      join(tmpdir(), "sciretriever-parser-tls-"),
-    );
-    const keyPath = join(certificateDirectory, "key.pem");
-    const certificatePath = join(certificateDirectory, "cert.pem");
-    await execFileAsync("openssl", [
-      "req",
-      "-x509",
-      "-newkey",
-      "rsa:2048",
-      "-nodes",
-      "-subj",
-      "/CN=parser.example.test",
-      "-addext",
-      "subjectAltName=DNS:parser.example.test",
-      "-days",
-      "1",
-      "-keyout",
-      keyPath,
-      "-out",
-      certificatePath,
-    ]);
-    const certificate = await readFile(certificatePath);
-    let authorization: string | undefined;
-    let method: string | undefined;
-    let requests = 0;
-    const server = createHttpsServer(
-      { key: await readFile(keyPath), cert: certificate },
-      async (request, response) => {
-        requests += 1;
-        authorization = request.headers.authorization;
-        method = request.method;
-        for await (const _chunk of request) void _chunk;
-        response.writeHead(302, {
-          location: "https://redirect.example.test/parse",
-        });
-        response.end();
-      },
-    );
-    await new Promise<void>((resolveListen, rejectListen) => {
-      server.once("error", rejectListen);
-      server.listen(0, "127.0.0.1", resolveListen);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string")
-      throw new Error("TLS fixture unavailable");
-    const origin = `https://parser.example.test:${address.port}`;
-    const owner = new TypeScriptConfigurationOwner(home);
-    const published = await owner.publish(
-      `[parsing]\nbase_url = "${origin}/v1"\nconnection_mode = "remote"\nmodel_identity = "mineru-fixture"\nremote_upload_authorized = true\n`,
-      "missing",
-      ["parsing"],
-    );
-    await owner.credential(
-      {
-        namespace: "mineru",
-        target: "mineru",
-        kind: "set",
-        value: "synthetic-parser-token",
-      },
-      published.revision,
-    );
-    const application = await createApplication(home, {
-      metadataAssembly: {
-        resolver: () => ["93.184.216.34"],
-        connection: {
-          connect: (options) =>
-            createConnection({
-              ...(options as { port: number }),
-              host: "127.0.0.1",
-            }),
-          tlsConnect: (options) => tlsConnect({ ...options, ca: certificate }),
-        },
-      },
-    });
-    try {
-      const pdf = workbenchPdf();
-      await application.database.putLiterature(FIXTURE_LITERATURE);
-      const stage = await application.files.stage();
-      await stage.write(pdf);
-      await application.files.publish(stage, "objects/remote-source.pdf");
-      const asset = parseAsset({
-        asset_id: "00000000-0000-0000-0000-000000000301",
-        sha256: await sha256(pdf),
-        size_bytes: pdf.byteLength,
-        media_type: "application/pdf",
-        path: "objects/remote-source.pdf",
-      });
-      await application.database.putLiteratureAsset({
-        literature_asset_id: "00000000-0000-0000-0000-000000000302",
-        literature_id: FIXTURE_LITERATURE.literature_id,
-        asset,
-        role: "primary-pdf",
-        source_url: null,
-        provenance: {
-          provenance_id: "00000000-0000-0000-0000-000000000303",
-          source_kind: "asset-provider",
-          source_name: "fixture",
-          source_record_id: null,
-          observed_at: "2026-09-11T00:00:00Z",
-          input_sha256: asset.sha256,
-          parameters_sha256: null,
-        },
-      });
-      await expect(
-        application.parsing!.prepareCurrentPrimary(
-          FIXTURE_LITERATURE.literature_id,
-        ),
-      ).rejects.toMatchObject({ code: "parser-unavailable" });
-      expect(authorization).toBe("Bearer synthetic-parser-token");
-      expect(method).toBe("POST");
-      expect(requests).toBe(1);
-      expect(
-        (await application.library.detail(FIXTURE_LITERATURE.literature_id))
-          .parser_result,
-      ).toBeNull();
-    } finally {
-      await application.close();
-      server.closeAllConnections();
-      await new Promise<void>((resolveClose) =>
-        server.close(() => resolveClose()),
+  it.each(["health", "submit"] as const)(
+    "sends the MinerU token only to its configured TLS origin and rejects a %s redirect",
+    async (redirectAt) => {
+      const home = await mkdtemp(join(tmpdir(), "sciretriever-parser-origin-"));
+      const certificateDirectory = await mkdtemp(
+        join(tmpdir(), "sciretriever-parser-tls-"),
       );
-      await rm(home, { recursive: true, force: true });
-      await rm(certificateDirectory, { recursive: true, force: true });
-    }
-  });
+      const keyPath = join(certificateDirectory, "key.pem");
+      const certificatePath = join(certificateDirectory, "cert.pem");
+      await execFileAsync("openssl", [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-subj",
+        "/CN=parser.example.test",
+        "-addext",
+        "subjectAltName=DNS:parser.example.test",
+        "-days",
+        "1",
+        "-keyout",
+        keyPath,
+        "-out",
+        certificatePath,
+      ]);
+      const certificate = await readFile(certificatePath);
+      let authorization: string | undefined;
+      let method: string | undefined;
+      let requests = 0;
+      const requestPaths: string[] = [];
+      const server = createHttpsServer(
+        { key: await readFile(keyPath), cert: certificate },
+        async (request, response) => {
+          requests += 1;
+          requestPaths.push(request.url!);
+          authorization = request.headers.authorization;
+          method = request.method;
+          for await (const _chunk of request) void _chunk;
+          if (redirectAt === "submit" && request.url === "/v1/health") {
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(
+              JSON.stringify({
+                status: "healthy",
+                version: "3.4.4",
+                protocol_version: 2,
+                queued_tasks: 0,
+              }),
+            );
+            return;
+          }
+          response.writeHead(302, {
+            location: "https://redirect.example.test/parse",
+          });
+          response.end();
+        },
+      );
+      await new Promise<void>((resolveListen, rejectListen) => {
+        server.once("error", rejectListen);
+        server.listen(0, "127.0.0.1", resolveListen);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string")
+        throw new Error("TLS fixture unavailable");
+      const origin = `https://parser.example.test:${address.port}`;
+      const owner = new TypeScriptConfigurationOwner(home);
+      const published = await owner.publish(
+        `[parsing]\nbase_url = "${origin}/v1"\nconnection_mode = "remote"\nmodel_identity = "mineru-fixture"\nremote_upload_authorized = true\n`,
+        "missing",
+        ["parsing"],
+      );
+      await owner.credential(
+        {
+          namespace: "mineru",
+          target: "mineru",
+          kind: "set",
+          value: "synthetic-parser-token",
+        },
+        published.revision,
+      );
+      const application = await createApplication(home, {
+        metadataAssembly: {
+          resolver: () => ["93.184.216.34"],
+          connection: {
+            connect: (options) =>
+              createConnection({
+                ...(options as { port: number }),
+                host: "127.0.0.1",
+              }),
+            tlsConnect: (options) =>
+              tlsConnect({ ...options, ca: certificate }),
+          },
+        },
+      });
+      try {
+        const pdf = workbenchPdf();
+        await application.database.putLiterature(FIXTURE_LITERATURE);
+        const stage = await application.files.stage();
+        await stage.write(pdf);
+        await application.files.publish(stage, "objects/remote-source.pdf");
+        const asset = parseAsset({
+          asset_id: "00000000-0000-0000-0000-000000000301",
+          sha256: await sha256(pdf),
+          size_bytes: pdf.byteLength,
+          media_type: "application/pdf",
+          path: "objects/remote-source.pdf",
+        });
+        await application.database.putLiteratureAsset({
+          literature_asset_id: "00000000-0000-0000-0000-000000000302",
+          literature_id: FIXTURE_LITERATURE.literature_id,
+          asset,
+          role: "primary-pdf",
+          source_url: null,
+          provenance: {
+            provenance_id: "00000000-0000-0000-0000-000000000303",
+            source_kind: "asset-provider",
+            source_name: "fixture",
+            source_record_id: null,
+            observed_at: "2026-09-11T00:00:00Z",
+            input_sha256: asset.sha256,
+            parameters_sha256: null,
+          },
+        });
+        await expect(
+          application.parsing!.prepareCurrentPrimary(
+            FIXTURE_LITERATURE.literature_id,
+          ),
+        ).rejects.toMatchObject({ code: "parser-unavailable" });
+        expect(authorization).toBe("Bearer synthetic-parser-token");
+        expect(method).toBe(redirectAt === "health" ? "GET" : "POST");
+        expect(requests).toBe(redirectAt === "health" ? 1 : 2);
+        expect(requestPaths).toEqual(
+          redirectAt === "health"
+            ? ["/v1/health"]
+            : ["/v1/health", "/v1/tasks"],
+        );
+        expect(
+          (await application.library.detail(FIXTURE_LITERATURE.literature_id))
+            .parser_result,
+        ).toBeNull();
+      } finally {
+        await application.close();
+        server.closeAllConnections();
+        await new Promise<void>((resolveClose) =>
+          server.close(() => resolveClose()),
+        );
+        await rm(home, { recursive: true, force: true });
+        await rm(certificateDirectory, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("assembly of the unified completion entry", () => {
@@ -1854,7 +1880,7 @@ describe("browser intake end-to-end (offline)", () => {
     }
   });
 
-  it("never converts a resolved route failure into Browser traffic (ADR0015 §7)", async () => {
+  it("tries Browser after source failures and applies assistance only after automatic routes", async () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-assembly-fail-closed-"),
     );
@@ -1868,8 +1894,7 @@ describe("browser intake end-to-end (offline)", () => {
     let deliveries = 0;
     const application = await createApplication(home, {
       executionSchema: "upgrade-synthetic",
-      // The Browser tier must be genuinely admitted here — otherwise this test could not
-      // prove "no escalation" — so the synthetic owner injects an identity admission.
+      // A real Entry/Broker path with an offline Browser delivery boundary.
       browserAdmitNavigation: async (url: string) => url,
       browserHost: () => ({
         deliverCandidate: async () => {
@@ -1877,7 +1902,7 @@ describe("browser intake end-to-end (offline)", () => {
           return {
             kind: "refused" as const,
             code: "browser-flow-unavailable",
-            reason: "the Browser must never be reached here",
+            reason: "the synthetic Browser also cannot deliver",
             retryable: false as const,
           };
         },
@@ -1931,8 +1956,8 @@ describe("browser intake end-to-end (offline)", () => {
           browser_host: () => application.browserHost(),
         });
 
-      // Paired evidence: a temporary (retryable) failure and an explicitly
-      // non-retryable route error both stay fail-closed, and neither writes a fact.
+      // Both retryable and non-retryable failures try Browser; an unsuccessful
+      // Browser retains the source error rather than recording exhaustion.
       await expect(
         withRoute({ code: "source-discovery-failed", retryable: true }).acquire(
           acquireRequest,
@@ -1949,11 +1974,11 @@ describe("browser intake end-to-end (offline)", () => {
         kind: "route-failure",
         failure: { code: "download-unavailable", retryable: false },
       });
-      expect(deliveries).toBe(0);
+      expect(deliveries).toBe(2);
       expect(await application.database.hasAutomaticPdfExhaustion(id)).toBe(
         false,
       );
-      // A policy pause also stops before Browser admission.
+      // A policy pause applies only after Browser has also tried.
       const paused = new EntryPdfAcquisitionService({
         registry: new PublicAcquisitionRegistry(
           [
@@ -1994,7 +2019,7 @@ describe("browser intake end-to-end (offline)", () => {
           signal: cancelled.signal,
         }),
       ).resolves.toMatchObject({ kind: "cancelled" });
-      expect(deliveries).toBe(0);
+      expect(deliveries).toBe(3);
     } finally {
       await application.close();
       await rm(home, { recursive: true, force: true });
@@ -2110,7 +2135,7 @@ describe("browser intake end-to-end (offline)", () => {
     }
   });
 
-  it("keeps the declared low-risk failure when the rescue Browser cannot deliver", async () => {
+  it("reports Browser refusal instead of an earlier route's missing capability", async () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-assembly-rescue-failed-"),
     );
@@ -2175,8 +2200,8 @@ describe("browser intake end-to-end (offline)", () => {
         acceptance: application.execution!.acceptance,
         browser_host: () => application.browserHost(),
       });
-      // The rescue was attempted, and its refusal keeps the original declared failure as
-      // the target's stable outcome: no second failure taxonomy, no exhaustion fact.
+      // Missing capability only led to the rescue. Its real refusal is the final
+      // failure; neither outcome justifies writing an automatic exhaustion fact.
       await expect(
         port.acquire({
           literature_id: parseLiteratureId(id),
@@ -2185,12 +2210,9 @@ describe("browser intake end-to-end (offline)", () => {
           signal: new AbortController().signal,
         }),
       ).resolves.toMatchObject({
-        kind: "route-failure",
-        failure: {
-          code: "download-unavailable",
-          retryable: false,
-          unavailability: "no-capability",
-        },
+        kind: "browser-failure",
+        code: "browser-flow-unavailable",
+        reason: "no article flow in this fixture",
       });
       expect(deliveries).toBe(1);
       expect(await application.database.hasAutomaticPdfExhaustion(id)).toBe(
@@ -2202,7 +2224,7 @@ describe("browser intake end-to-end (offline)", () => {
     }
   });
 
-  it("never rescues when the batch's last recorded outcome is a temporary failure", async () => {
+  it("tries Browser and retains the unresolved source failure when Browser also fails", async () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-assembly-rescue-last-wins-"),
     );
@@ -2277,9 +2299,7 @@ describe("browser intake end-to-end (offline)", () => {
         acceptance: application.execution!.acceptance,
         browser_host: () => application.browserHost(),
       });
-      // A preceding low-risk declaration never survives a later temporary outcome, and a
-      // retryable policy result never escalates: the target stays a stable route failure
-      // with no Browser traffic and no exhaustion fact.
+      // A later miss cannot erase the unresolved failure; Browser still gets a turn.
       await expect(
         port.acquire({
           literature_id: parseLiteratureId(id),
@@ -2295,7 +2315,7 @@ describe("browser intake end-to-end (offline)", () => {
           unavailability: null,
         },
       });
-      expect(deliveries).toBe(0);
+      expect(deliveries).toBe(1);
       expect(await application.database.hasAutomaticPdfExhaustion(id)).toBe(
         false,
       );

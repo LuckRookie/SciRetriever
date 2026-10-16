@@ -1,3 +1,4 @@
+import { artifactReference } from "../storage/artifact-layout.js";
 import {
   canonicalJsonBytes,
   parseCandidatePublicationIntent,
@@ -141,7 +142,12 @@ export class CandidateAcceptanceService {
         literature_id: input.literature_id,
         asset_id: assetId,
       }),
-      target: existing?.path ?? `objects/${candidate.sha256}.pdf`,
+      target:
+        existing?.path ??
+        artifactReference("original-pdf", {
+          sha256: candidate.sha256,
+          media_type: "application/pdf",
+        }),
       provenance: {
         provenance_id: await stableId("candidate-publication", input),
         source_kind:

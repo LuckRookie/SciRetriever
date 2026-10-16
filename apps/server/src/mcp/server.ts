@@ -1,3 +1,15 @@
+import {
+  executeConfiguration,
+  type ConfigurationOperation,
+} from "../entry/configuration-operations.js";
+import {
+  TypeScriptConfigurationOwner,
+  type ConfigurationProbeSeams,
+} from "../configuration/owner.js";
+import {
+  executeMaintenance,
+  type MaintenanceOperation,
+} from "../entry/maintenance-operations.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -8,12 +20,13 @@ import {
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import {
-  createInputManifest,
   parseLiteratureId,
   ContractValidationError,
-  type InputManifestItem,
-  type DocumentReadOperation,
 } from "@sciretriever/contracts";
+import {
+  executeQuery,
+  type QueryOperation,
+} from "../entry/query-operations.js";
 import {
   createApplication,
   createQueryApplication,
@@ -21,10 +34,25 @@ import {
   type QueryApplication,
 } from "../bootstrap/application.js";
 import { fixedConfigurationHome } from "../configuration/owner.js";
-import { QUERY_TOOLS, MAINTENANCE_TOOLS } from "./tools.js";
+import {
+  QUERY_TOOLS,
+  MAINTENANCE_TOOLS,
+  BROWSER_QUERY_TOOLS,
+  BROWSER_MAINTENANCE_TOOLS,
+} from "./tools.js";
+import { PdfUploads } from "./pdf-upload.js";
+import {
+  MachineWorkbenchClient,
+  workbenchOrigin,
+  type WorkbenchOperation,
+} from "../workbench/machine-client.js";
 
 export interface McpOptions {
+  /** Explicit local owner of live Browser sessions; no discovery through shared storage. */
+  readonly workbenchUrl?: string;
   readonly maintenance?: boolean;
+  readonly configurationOwner?: TypeScriptConfigurationOwner;
+  readonly probeSeams?: ConfigurationProbeSeams;
   /** Internal isolation seam; the ordinary command always uses the configuration owner's fixed home. */
   readonly home?: string;
   readonly applicationFactory?: () => Promise<Application>;
@@ -35,10 +63,20 @@ function unavailable(): never {
     code: "capability-unavailable",
   });
 }
-function result(value: unknown): CallToolResult {
+function result(value: unknown, name?: string): CallToolResult {
+  if (name === "browser_frame") {
+    const frame = value as { bytes_base64: string; media_type: string };
+    const { bytes_base64, ...descriptor } = frame;
+    return {
+      content: [
+        { type: "image", data: bytes_base64, mimeType: frame.media_type },
+      ],
+      structuredContent: { protocol_version: 1, result: descriptor },
+    };
+  }
   const structuredContent = { protocol_version: 1, result: value };
   const text = JSON.stringify(structuredContent);
-  if (Buffer.byteLength(text) > 1024 * 1024)
+  if (Buffer.byteLength(text) > 4 * 1024 * 1024)
     throw Object.assign(new Error("response too large"), {
       code: "response-budget",
     });
@@ -46,6 +84,10 @@ function result(value: unknown): CallToolResult {
 }
 /** Only protocol adaptation lives here. All operations go through the production Application. */
 export function createMcpServer(options: McpOptions = {}) {
+  const browserOrigin = options.workbenchUrl
+    ? workbenchOrigin(options.workbenchUrl)
+    : null;
+  let browser: MachineWorkbenchClient | undefined;
   const server = new Server(
     { name: "sciretriever", version: "0.1.0" },
     { capabilities: { tools: {} } },
@@ -53,6 +95,12 @@ export function createMcpServer(options: McpOptions = {}) {
   const tools = [
     ...QUERY_TOOLS,
     ...(options.maintenance ? MAINTENANCE_TOOLS : []),
+    ...(browserOrigin
+      ? [
+          ...BROWSER_QUERY_TOOLS,
+          ...(options.maintenance ? BROWSER_MAINTENANCE_TOOLS : []),
+        ]
+      : []),
   ];
   const ajv = new Ajv2020({ strict: false, allErrors: false });
   const validators = new Map(
@@ -63,6 +111,7 @@ export function createMcpServer(options: McpOptions = {}) {
   let closing: Promise<void> | undefined;
   const active = new Set<Promise<unknown>>();
   const stop = new AbortController();
+  const uploads = new PdfUploads();
   const application = () => {
     if (!options.maintenance || stop.signal.aborted) unavailable();
     app ??= (
@@ -88,6 +137,110 @@ export function createMcpServer(options: McpOptions = {}) {
     args: Record<string, unknown>,
     signal: AbortSignal,
   ): Promise<unknown> => {
+    if (name.startsWith("browser_") || name.startsWith("runtime_")) {
+      if (!browserOrigin) unavailable();
+      if (name === "browser_disconnect") {
+        await browser?.close();
+        browser = undefined;
+        return { disconnected: true };
+      }
+      browser ??= new MachineWorkbenchClient(
+        browserOrigin,
+        options.maintenance,
+      );
+      const routes: Record<string, WorkbenchOperation> = {
+        runtime_list_tasks: "task-list",
+        runtime_read_task: "task-read",
+        runtime_create_task: "task-create",
+        runtime_control_task: "task-control",
+      };
+      const operation = Object.hasOwn(routes, name)
+        ? routes[name]!
+        : (name
+            .slice("browser_".length)
+            .replaceAll("_", "-") as WorkbenchOperation);
+      return browser.execute(
+        operation,
+        name === "runtime_create_task" ? args.request : args,
+        signal,
+      );
+    }
+    if (
+      [
+        "begin_pdf_upload",
+        "append_pdf_upload",
+        "commit_pdf_upload",
+        "discard_pdf_upload",
+      ].includes(name)
+    ) {
+      if (!options.maintenance) unavailable();
+      switch (name) {
+        case "begin_pdf_upload":
+          return uploads.begin(args);
+        case "append_pdf_upload":
+          return uploads.append(args);
+        case "commit_pdf_upload":
+          return uploads.commit(args, application, signal);
+        case "discard_pdf_upload":
+          return uploads.discard(args);
+      }
+    }
+    const configurationRoutes: Readonly<
+      Record<string, ConfigurationOperation>
+    > = {
+      configuration_read: "read",
+      configuration_status: "status",
+      configuration_preview: "preview",
+      configuration_publish: "publish",
+      configuration_credential: "credential",
+      configuration_probe: "probe",
+    };
+    if (Object.hasOwn(configurationRoutes, name)) {
+      if (
+        !options.maintenance &&
+        ![
+          "configuration_read",
+          "configuration_status",
+          "configuration_preview",
+        ].includes(name)
+      )
+        unavailable();
+      return executeConfiguration(
+        options.configurationOwner ??
+          new TypeScriptConfigurationOwner(
+            options.home ?? fixedConfigurationHome(),
+          ),
+        configurationRoutes[name]!,
+        args,
+        signal,
+        options.probeSeams,
+      );
+    }
+    const maintenanceRoutes: Readonly<Record<string, MaintenanceOperation>> = {
+      import_bibliography: "import-bibliography",
+      discover_citations: "discover",
+      create_task: "task-create",
+      resolve_intervention: "resolve-intervention",
+      rebuild_index: "rebuild-index",
+      rebuild_knowledge_index: "rebuild-knowledge-index",
+      create_extraction: "extraction-operation",
+      read_extraction: "extraction-operation-read",
+      submit_extraction: "extraction-submit",
+      read_extraction_receipt: "extraction-receipt",
+      close_extraction: "extraction-close",
+      cancel_extraction: "extraction-cancel",
+      cleanup_extractions: "extraction-cleanup",
+    };
+    if (Object.hasOwn(maintenanceRoutes, name)) {
+      const a = await application();
+      const input =
+        name === "discover_citations"
+          ? { kind: "citation", ...args }
+          : Object.hasOwn(args, "request")
+            ? args.request
+            : args;
+      return executeMaintenance(a, maintenanceRoutes[name]!, input, signal);
+    }
     if (name === "submit_processing") {
       const a = await application();
       if (!a.processingTasks) unavailable();
@@ -141,130 +294,67 @@ export function createMcpServer(options: McpOptions = {}) {
       return a.processingTasks.read(id);
     }
     const q = await reading();
-    if (name === "status") return q.readiness;
-    if (q.readiness.status !== "ready" || !q.query) unavailable();
-    switch (name) {
-      case "search_library":
-        return q.query.search({
-          query: { text: args.text },
-          limit: args.limit,
-          cursor: args.cursor,
-          sort: args.text ? "relevance" : "publication-year-desc",
-        });
-      case "read_literature":
-        return q.query.detail(args.literature_id);
-      case "read_task":
-        if (!q.taskRead) unavailable();
-        return q.taskRead(args.job_id as string);
-      case "read_article_identity":
-        if (!q.articleIdentityRead) unavailable();
-        return q.articleIdentityRead(args.assessment_id as string);
-      case "document_read": {
-        if (!q.documentRead) unavailable();
-        const operation = args.operation as DocumentReadOperation;
-        switch (operation) {
-          case "default":
-            return q.documentRead.default(args.request, signal);
-          case "describe":
-            return q.documentRead.describe(args.request, signal);
-          case "outline":
-            return q.documentRead.outline(args.request, signal);
-          case "segments":
-            return q.documentRead.segments(args.request, signal);
-          case "slice":
-            return q.documentRead.slice(args.request, signal);
-          case "resources":
-            return q.documentRead.resources(args.request, signal);
-          case "resource":
-            return q.documentRead.resource(args.request, signal);
-          case "evidence":
-            return q.documentRead.resolveEvidence(args.request, signal);
-          case "material":
-            return q.documentRead.materialEvidence(args.request, signal);
-        }
-        return unavailable();
-      }
-      case "prepare_analysis_inputs": {
-        if (!q.documentRead) unavailable();
-        const items: InputManifestItem[] = [];
-        const identities = [];
-        for (const [i, id] of (args.literature_ids as string[]).entries()) {
-          if (signal.aborted)
-            throw Object.assign(new Error("cancelled"), {
-              code: "operation-cancelled",
-            });
-          const detail = await q.query.detail(id);
-          const asset = detail.primary_pdf?.asset;
-          identities.push({
-            literature_id: id,
-            metadata_revision: detail.metadata_revision,
-            metadata_sha256: detail.metadata_sha256,
-          });
-          if (!asset) {
-            items.push({
-              input_id: `paper-${i + 1}`,
-              literature_id: id,
-              material: null,
-              document: null,
-              capabilities: [],
-              gaps: ["material-missing"],
-            });
-            continue;
-          }
-          const current = await q.documentRead.default(
-            {
-              literature_id: id,
-              asset_id: asset.asset_id,
-              asset_sha256: asset.sha256,
+    if (name === "search_library")
+      return executeQuery(
+        q,
+        "library-search",
+        Object.hasOwn(args, "query")
+          ? args
+          : {
+              query: { text: args.text },
+              limit: args.limit,
+              cursor: args.cursor,
+              sort: args.text ? "relevance" : "publication-year-desc",
             },
-            signal,
-          );
-          const described = current.default
-            ? await q.documentRead.describe(
-                { document_version_id: current.default.document_version_id },
-                signal,
-              )
-            : null;
-          items.push({
-            input_id: `paper-${i + 1}`,
-            literature_id: id,
-            material: current.material,
-            document: described?.document ?? null,
-            capabilities: described
-              ? [
-                  "material-file-v1",
-                  "document-segment-v1",
-                  "document-text-v1",
-                  "document-outline-v1",
-                  "document-resources-v1",
-                ]
-              : ["material-file-v1"],
-            gaps: described ? [] : ["document-missing"],
-          });
-        }
-        return { input: await createInputManifest(items), identities };
-      }
-      case "prepare_synthesis":
-        if (!q.synthesisPreparation) unavailable();
-        return q.synthesisPreparation.prepare(args.request, signal);
-      case "read_knowledge": {
-        if (args.kind === "synthesis") {
-          if (!q.synthesisRead) unavailable();
-          return q.synthesisRead.byId(args.artifact_id as string, signal);
-        }
-        if (!q.knowledgeRead) unavailable();
-        return q.knowledgeRead.byId(args.artifact_id as string, signal);
-      }
-      case "search_context":
-        if (args.kind === "knowledge") {
-          if (!q.knowledgeContext) unavailable();
-          return q.knowledgeContext.search(args.request, signal);
-        }
-        if (!q.context) unavailable();
-        return q.context.search(args.request, signal);
-      default:
-        return unavailable();
-    }
+        signal,
+      );
+    if (name === "document_read")
+      return executeQuery(
+        q,
+        `document-${args.operation}` as QueryOperation,
+        args.request,
+        signal,
+      );
+    if (name === "read_knowledge")
+      return executeQuery(
+        q,
+        args.kind === "synthesis" ? "synthesis-read" : "knowledge-read",
+        { artifact_id: args.artifact_id },
+        signal,
+      );
+    if (name === "search_context")
+      return executeQuery(
+        q,
+        args.kind === "knowledge" ? "knowledge-context" : "context",
+        args.request,
+        signal,
+      );
+    const routes: Readonly<Record<string, QueryOperation>> = {
+      list_tasks: "task-list",
+      read_artifact_chunk: "artifact-chunk",
+      export_bibliography: "bibliography-export",
+      inspect_task: "task-detail",
+      status: "status",
+      read_literature: "literature-read",
+      read_task: "task-read",
+      read_article_identity: "article-identity",
+      prepare_analysis_inputs: "analysis-inputs",
+      prepare_synthesis: "synthesis-prepare",
+      read_references: "references",
+      read_reference: "reference-read",
+      list_knowledge: "knowledge-list",
+      default_knowledge: "knowledge-default",
+      list_syntheses: "synthesis-list",
+      read_synthesis_source: "synthesis-source",
+      prepare_extraction: "extraction-prepare",
+    };
+    if (!Object.hasOwn(routes, name)) unavailable();
+    return executeQuery(
+      q,
+      routes[name]!,
+      Object.hasOwn(args, "request") ? args.request : args,
+      signal,
+    );
   };
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const execute = async (): Promise<CallToolResult> => {
@@ -272,7 +362,7 @@ export function createMcpServer(options: McpOptions = {}) {
         if (stop.signal.aborted) unavailable();
         const args = request.params.arguments ?? {};
         if (
-          Buffer.byteLength(JSON.stringify(args)) > 1024 * 1024 ||
+          Buffer.byteLength(JSON.stringify(args)) > 1024 * 1024 + 4096 ||
           !validators.get(request.params.name)?.(args)
         )
           throw Object.assign(new Error("invalid request"), {
@@ -284,6 +374,7 @@ export function createMcpServer(options: McpOptions = {}) {
             args,
             AbortSignal.any([extra.signal, stop.signal]),
           ),
+          request.params.name,
         );
       } catch (error) {
         const code =
@@ -320,9 +411,15 @@ export function createMcpServer(options: McpOptions = {}) {
   const close = (): Promise<void> => {
     closing ??= (async () => {
       stop.abort();
+      uploads.close();
       await Promise.allSettled([...active]);
       const opened = await Promise.allSettled([app, query]);
       const failures: unknown[] = [];
+      try {
+        await browser?.close();
+      } catch (error) {
+        failures.push(error);
+      }
       for (const value of opened)
         if (value.status === "fulfilled" && value.value) {
           try {

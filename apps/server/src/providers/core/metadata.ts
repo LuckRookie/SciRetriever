@@ -30,7 +30,7 @@ import {
   JsonMetadataAdapter,
   type MetadataRecordDecoder,
 } from "../shared/metadata-transport.js";
-import { services } from "./definition.js";
+import { CORE_SEARCH_WORKS_PATH, services } from "./definition.js";
 export interface CoreAdapterOptions {
   readonly transport: MetadataTransport;
   readonly origin?: string;
@@ -195,7 +195,7 @@ export class CoreRestAdapter
         }
         if (exhausted) return null;
         const url = new URL(this.base);
-        url.pathname = `${url.pathname.replace(/\/$/u, "")}${kind === "lookup" ? `/v3/${value.startsWith("output:") ? "outputs" : "works"}/${encodeURIComponent(value.split(":")[1]!)}` : "/v3/search/works"}`;
+        url.pathname = `${url.pathname.replace(/\/$/u, "")}${kind === "lookup" ? `/v3/${value.startsWith("output:") ? "outputs" : "works"}/${encodeURIComponent(value.split(":")[1]!)}` : CORE_SEARCH_WORKS_PATH}`;
         if (kind === "search") {
           url.searchParams.set("q", value);
           url.searchParams.set("offset", String(offset));

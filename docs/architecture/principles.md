@@ -6,6 +6,8 @@
 
 科研知识供给是产品目的，统一逻辑文献数据库是事实中心。Agent 与人类必须读取同一文献身份、来源、材料与派生知识；Configuration、执行、模型、索引和 UI 不形成第二真相源。
 
+按 [ADR 0032](decisions/0032-library-centered-web-workspace.md)，文献库也是 Web 的主空间；获取、解析、分析与检索等能力围绕文献及明确范围组织，不以固定处理管线替代库。保存视图、活动和主题等 UI 投影不新增文献事实，其持久化仍须明确 owner 和合同。
+
 操作从意图和当前事实出发，复用有效结果；查询返回一致、有界投影，不修改数据或隐式生成知识。Catalog 保存关系，ArtifactStore 保存不可变字节，各事实业务含义仍由所属模块决定。
 
 模块重要程度、数据依赖和业务所有权分别表达。PDF 获取需可靠交付真实材料；分析、总结与提取依赖材料合同，不依赖下载流程或 Browser 状态。整体架构完整设计各项能力，不因强调某个模块而重置产品目标。
@@ -22,7 +24,7 @@
 
 ## 2. 需求先于实现
 
-系统主要服务科研 Agent 的原始材料供给与知识压缩，也必须让人类配置、监督/指导 Browser、读取材料与总结。界面形态、后台存续、长期回放未定时保留边界，不从既有 Web/Jobs 反推需求。
+系统主要服务科研 Agent 的原始材料供给与知识压缩，也提供以文献库为中心的独立完整 Web，让人类操作、配置、观看并自愿介入 Browser、读取材料与总结。阅读器细节、后台存续、长期回放未定时保留边界，不从既有 Web/Jobs 反推需求。
 
 先明确用户结果，再确定责任、状态与失败，最后选择具体实现。新目标不能只写入 plans；requirements/Accepted ADR/design/technical 分别拥有需求、决定、设计和技术约束，README/源码/测试反映已实现事实。
 
@@ -101,7 +103,7 @@ Acquisition 优先解释明确 AssetHint、来源稳定定位、Provider record 
 
 受控 Browser 以 [ADR 0016](decisions/0016-cloakbrowser-fixed-identity-runtime.md) 的 CloakBrowser patched Chromium 作为唯一目标生产 runtime，同时继续使用 Playwright API 作为内部控制协议。一个长期 Profile 必须复用固定设备身份、一个有头 process/context 和服务器原始出口；`browser-generic` 聚合政策、同平台网络资格、CONNECT、origin/DNS/host admission、实际资源保护和统一 PDF 验收不因 runtime 切换而放宽。经证据确认的 challenge dependency 只能在发起页面、frame ancestry、当前文章网络资格和页面生命周期内加载；Challenge 与普通页面使用同一 Observation、动作和 capture 合同，本地资源阻断不能冒充页面拒绝或 Agent 失败。Browser Agent 可以在当前文章获准的页面 surface 中操作可见控件，但不能借此取得任意 Browser/URL/脚本、切换身份或出口、外包验证、自动登录、选择机构或处理 MFA。
 
-模型调用的中性 role、message、capability/readiness、单次技术边界、取消、协议转换和稳定失败由 [ADR 0017](decisions/0017-shared-agents-and-controlled-browser-agent.md) 的无状态 Agents 公用基础拥有。Analysis 继续拥有文献 prompt、各用例的有界处理顺序、schema 和结果验收，旧两阶段模式只约束现有兼容路径；Acquisition 继续拥有 Browser 目标、唯一 `AgentBrowserController`、允许动作、语义进展、页面结果解释与 PDF 文件验收/任务绑定；按 ADR 0029，下载不检查 PDF 内容身份，入库标签为文章身份未验证；Network 唯一生成稳定 Browser Observation、执行动作、capture 和 cleanup。生产对象图不存在 Rules controller 或 Publisher-specific fallback；Agent 不获得 Page、Context、CDP、Cookie、任意 URL/selector/JavaScript 或事实写入能力，也不形成跨调用 memory 或持久化页面状态。
+按 [ADR 0031](decisions/0031-dsh-backed-agent-capabilities.md)，DSH/Cordis 是 `agents` 的唯一执行基础，统一承接单次模型调用、受控会话、工具循环与上下文管理；中性 role/message、配置绑定、capability/readiness、协议转换及稳定失败由项目适配边界维持。普通推理和压缩共用 Configuration/Credential 与 Network，按实际请求准入和计量；原 AgentRuntime 名称只保留为同一实现的兼容入口。Analysis 继续拥有文献 prompt、各用例处理顺序、schema 和结果验收；Browser/Acquisition 继续拥有文章目标、页面与控制版本、允许动作、下载归属与文件接纳。临时对话历史服务于本次能力执行，不成为跨任务长期 memory、持久化页面现场或文献事实。Agent 不获得 Page、Context、CDP、Cookie、任意 URL/selector/JavaScript 或事实写入能力。既有唯一通用 Browser、Network 准入、ADR 0029 的 PDF 未验证标签与 ADR 0030 的捕获/发布分工继续有效。
 
 等待队列、permit、窗口计数、`next_allowed_at`、`blocked_until` 和当次 `Retry-After` 是当前进程的内存运行状态，不是文献事实，不保存到 Catalog、ArtifactStore、provenance 或独立协调文件，也不参与状态推导。进程结束后这些动态状态自然清空；静态访问政策和 operator 收紧值仍由配置表达。
 
@@ -126,6 +128,8 @@ Provider secret 只存在于当前用户的固定 `~/.sciretriever/credentials.t
 人类配置、真实 Browser 全程观看/指导、材料与知识阅读是正式能力。UI 只展示与提交意图，配置由 Configuration 管理、操作由 Entry 编排、动作权由运行时裁决，知识读取共用领域服务。
 
 同会话动作互斥，指导绑定文章/流程并在安全决策点消费；接管阻止后续旧动作，交还重新观察，在途请求按实际结果处理。人类取得文件仍统一验收。实时全过程可观察不自动等于永久录像或完整事后回放。
+
+观看不改变控制权；直接点击/输入可以触发接管，但必须先由服务端确认控制权和当前页面绑定。自动获取不以人工响应为前提，无人介入时仍按真实结果结束；界面精简不合并正常耗尽、临时失败、取消与未尝试，也不默认离开画面即可安全恢复 Agent。
 
 ## 14. 检索与上下文是有界读取
 
@@ -172,7 +176,7 @@ Provider secret 只存在于当前用户的固定 `~/.sciretriever/credentials.t
 - [ ] 所有外部访问是否经过当前进程的 provider/channel/host 共享准入，网页独占与冷却是否覆盖普通 HTTP 和浏览器，API 是否遵守对应供应商规则？
 - [ ] 生产 Browser 是否只使用一个固定身份 CloakBrowser Profile/process/context，且没有 stock runtime fallback、随机设备身份、环境代理或绕过 CONNECT/Network guard 的第二执行路径？
 - [ ] Challenge 必需资源是否只在已核实 Publisher、frame ancestry、当前文章 permit 和页面生命周期内加载；Challenge 是否使用统一 Observation/Action，且本地阻断没有冒充页面拒绝或 Agent 失败？
-- [ ] Analysis 与 Browser 是否共用无状态单次 Agents Runtime，同时分别保留业务 workflow、prompt、动作语义和结果验收；Browser 作业是否只构造一个 controller，并由 Network 执行全部封闭动作？
+- [ ] 单次调用与持续会话是否统一进入 DSH 并共享配置和 Network，消费模块是否仍掌握业务 workflow、prompt、工具语义与结果验收；Browser 控制版本、封闭动作和下载交接是否由原 owner 强制执行？
 - [ ] Provider secret 是否只来自固定 owner-only 凭据文件并保持在适配边界；status/test 是否不泄漏或持久化 secret/测试结果，离线门禁是否没有真实联网？
 - [ ] 限速是否在当前进程的模块、用户操作和文献目标之间共享，且全部动态状态只留在内存，没有污染业务 Model、Catalog、ArtifactStore、provenance 或 Literature 状态？
 - [ ] 外部 provider 和 parser 输出是否在边界验证并转换为中性合同？

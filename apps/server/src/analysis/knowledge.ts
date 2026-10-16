@@ -32,7 +32,7 @@ import {
 } from "./knowledge-long.js";
 
 const METHOD_ID = "single-document-knowledge";
-const METHOD_VERSION = "1";
+const METHOD_VERSION = "2";
 const SYSTEM_PROMPT =
   "Analyze the entire supplied document for the stated purpose. Preserve source conditions, negation, quantities, units, limitations, and disagreements. Distinguish author reports from your inference. Cite only supplied segment IDs. If the document cannot answer the purpose, return not_applicable. Return only the required JSON object.";
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -69,7 +69,11 @@ function fail(code: string): never {
   throw new KnowledgeAnalysisFailure(code);
 }
 function canonical(value: unknown, maxBytes = 1024 * 1024): Uint8Array {
-  return extractionCanonicalJsonBytes(value, maxBytes);
+  return extractionCanonicalJsonBytes(value, maxBytes, {
+    maxDepth: 32,
+    maxNodes: 20480,
+    maxArrayLength: 20480,
+  });
 }
 function uuid(hash: string): string {
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
@@ -82,7 +86,7 @@ function shape(
     !value ||
     typeof value !== "object" ||
     Array.isArray(value) ||
-    Object.keys(value).sort().join() !== [...keys].sort().join()
+    keys.some((key) => !Object.hasOwn(value, key))
   )
     fail("knowledge-response");
   return value as Record<string, unknown>;
@@ -218,8 +222,6 @@ export class KnowledgeAnalysisService {
       method_version: METHOD_VERSION,
       prompt: SYSTEM_PROMPT,
       response_schema: schema,
-      max_input_bytes: request.budget.max_input_bytes,
-      max_output_tokens: request.budget.max_output_tokens,
       model_binding_sha256: bindingHash,
     };
     const parametersHash = await sha256(canonical(parameters, 32768));
@@ -266,11 +268,6 @@ export class KnowledgeAnalysisService {
             version.source_material_ref.literature_id !== item.literature_id
           )
             fail("knowledge-input-invalidated");
-          if (
-            bytes.length > request.budget.max_input_bytes ||
-            structure.segments.length > 256
-          )
-            return { budget_exhausted: true as const };
           const segments = await Promise.all(
             structure.segments.map(async (segment) => ({
               id: segment.segment_id,
@@ -294,8 +291,8 @@ export class KnowledgeAnalysisService {
               representation_sha256: document.representation_sha256,
               segments: texts,
             });
-          } catch {
-            return { budget_exhausted: true as const };
+          } catch (error) {
+            return { request_error: error };
           }
           return {
             text: decoder.decode(prompt),
@@ -311,7 +308,10 @@ export class KnowledgeAnalysisService {
         },
         active,
       );
-      if ("budget_exhausted" in read) fail("knowledge-budget-exhausted");
+      if ("request_error" in read)
+        throw new KnowledgeAnalysisFailure("knowledge-request-limit", {
+          cause: read.request_error,
+        });
       documentInput = read;
     } catch (error) {
       if (error instanceof KnowledgeAnalysisFailure) throw error;
@@ -327,10 +327,9 @@ export class KnowledgeAnalysisService {
     if (
       userBytes.length > 1024 * 1024 ||
       systemBytes.length > 1024 * 1024 ||
-      schemaBytes.length > 32768 ||
-      request.budget.max_output_tokens > binding.max_output_tokens
+      schemaBytes.length > 32768
     )
-      fail("knowledge-budget-exhausted");
+      fail("knowledge-request-limit");
     const call: AgentCall = {
       role: "analysis",
       required_capabilities: ["structured_text"],
@@ -346,7 +345,6 @@ export class KnowledgeAnalysisService {
         },
       ],
       response_schema: schema,
-      max_output_tokens: request.budget.max_output_tokens,
     };
     let result;
     try {
@@ -384,7 +382,6 @@ export class KnowledgeAnalysisService {
       if (
         typeof response.title !== "string" ||
         !response.title.trim() ||
-        encoder.encode(response.title).length > 512 ||
         !Array.isArray(response.statements) ||
         response.statements.length !== 0
       )
@@ -394,8 +391,7 @@ export class KnowledgeAnalysisService {
     if (
       response.outcome !== "completed" ||
       !Array.isArray(response.statements) ||
-      response.statements.length < 1 ||
-      response.statements.length > 64
+      response.statements.length < 1
     )
       fail("knowledge-response");
     const byId = new Map(
@@ -416,26 +412,25 @@ export class KnowledgeAnalysisService {
           ]);
           if (
             !Array.isArray(statement.evidence_segment_ids) ||
-            statement.evidence_segment_ids.length < 1 ||
-            statement.evidence_segment_ids.length > 8 ||
-            new Set(statement.evidence_segment_ids).size !==
-              statement.evidence_segment_ids.length
+            statement.evidence_segment_ids.length < 1
           )
             fail("knowledge-invalid-evidence");
-          const evidence = statement.evidence_segment_ids.map((id) => {
-            if (typeof id !== "string") fail("knowledge-invalid-evidence");
-            const segment = byId.get(id);
-            if (!segment) fail("knowledge-invalid-evidence");
-            return parseEvidenceRef({
-              schema_version: 1,
-              target_kind: "document",
-              locator_scheme: "utf8-segment-v1",
-              document_version_id: document.document_version_id,
-              representation_sha256: document.representation_sha256,
-              locator: { kind: "segment", segment_id: id },
-              content_sha256: segment.hash,
-            });
-          });
+          const evidence = [...new Set(statement.evidence_segment_ids)].map(
+            (id) => {
+              if (typeof id !== "string") fail("knowledge-invalid-evidence");
+              const segment = byId.get(id);
+              if (!segment) fail("knowledge-invalid-evidence");
+              return parseEvidenceRef({
+                schema_version: 1,
+                target_kind: "document",
+                locator_scheme: "utf8-segment-v1",
+                document_version_id: document.document_version_id,
+                representation_sha256: document.representation_sha256,
+                locator: { kind: "segment", segment_id: id },
+                content_sha256: segment.hash,
+              });
+            },
+          );
           return {
             statement_id: statement.statement_id,
             category: statement.category,

@@ -148,6 +148,9 @@ it("accepts a recovered PDF using current Literature facts, replays the receipt,
       s.app.execution!.acceptance.accept(command),
     ]);
     expect(replay).toEqual(result);
+    expect(result.reference).toBe(
+      `originals/pdf/${candidate.sha256.slice(0, 2)}/${candidate.sha256}.pdf`,
+    );
     const facts = await s.app.database.currentFacts(id(1));
     expect(facts?.literature.status).toBe("ASSET_READY");
     expect(facts?.primary_asset?.sha256).toBe(candidate.sha256);

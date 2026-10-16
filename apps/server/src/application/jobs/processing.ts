@@ -449,7 +449,14 @@ export class ProcessingTaskService {
               : "processing-failed";
           throw new QueueTargetFailureError({
             code,
-            reason: "The requested product operation did not complete.",
+            reason:
+              error &&
+              typeof error === "object" &&
+              "reason" in error &&
+              typeof error.reason === "string" &&
+              /^agent-[a-z-]{1,56}$/u.test(error.reason)
+                ? error.reason
+                : "The requested product operation did not complete.",
             action:
               "Read the failure and retained artifacts before explicitly retrying.",
             retryable: !!(

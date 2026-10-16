@@ -705,8 +705,8 @@ it("projects the same hard active deadline used by the production decision loop"
     await vi.advanceTimersByTimeAsync(199);
     expect(workbench.view(client).observation!.remaining).toMatchObject({
       deadline_ms: 1,
-      model_calls: 99,
-      actions: 200,
+      model_calls: 29,
+      actions: 30,
     });
     await vi.advanceTimersByTimeAsync(1);
     expect(await step).toMatchObject({

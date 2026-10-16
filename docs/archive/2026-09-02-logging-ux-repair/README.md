@@ -240,3 +240,5 @@ Primary owner 逐 Task 执行“精确预检 → 最小完整切片 → 直接�
 本次未运行真实 Provider、MinerU、Browser 或用户凭据测试，也未执行 commit、push、PR 或发布；后续真实整体测试仍需新的明确授权，并不能由离线通过推断外部服务可用。
 
 归档位置为 `docs/archive/2026-09-02-logging-ux-repair/`。
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

@@ -1,3 +1,4 @@
+import { artifactReference } from "../storage/artifact-layout.js";
 import { createHash } from "node:crypto";
 import type { ArtifactRef, ParserResult } from "@sciretriever/contracts";
 import type { FileStore } from "../storage/files/store.js";
@@ -33,7 +34,10 @@ export class ImmutableParserPublisher implements ParserResultPublisher {
   private async publishAdmitted(
     command: ParserPublication,
   ): Promise<ParserResult> {
-    const publish = async (value: StagedParserArtifact) => {
+    const publish = async (
+      value: StagedParserArtifact,
+      kind: "parser-markdown" | "parser-resource",
+    ) => {
       const a = value.artifact;
       if (
         value.bytes.length !== a.byte_size ||
@@ -41,7 +45,7 @@ export class ImmutableParserPublisher implements ParserResultPublisher {
       )
         throw new ParsingFailure("parser-publication");
       const located = await this.repository.locateArtifact(a);
-      const path = located?.reference ?? `objects/${a.sha256}.bin`;
+      const path = located?.reference ?? artifactReference(kind, a);
       const stage = await this.files.stage({
         maxBytes: Math.max(1, a.byte_size),
       });
@@ -59,10 +63,13 @@ export class ImmutableParserPublisher implements ParserResultPublisher {
         artifact_media_type: a.media_type,
       };
     };
-    const markdown = await publish(command.markdown);
+    const markdown = await publish(command.markdown, "parser-markdown");
     const resources = [];
     for (const r of command.resources)
-      resources.push({ reference: r.reference, ...(await publish(r.content)) });
+      resources.push({
+        reference: r.reference,
+        ...(await publish(r.content, "parser-resource")),
+      });
     const r = command.result;
     const accepted = await this.repository.commitCurrentParser(
       command.literature_id,

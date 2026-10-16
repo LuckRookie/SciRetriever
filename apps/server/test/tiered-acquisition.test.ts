@@ -55,7 +55,7 @@ describe("tiered acquisition batch", () => {
   });
 
   it.each(["discovery", "delivery"])(
-    "stops alternate requests after a rate limit during %s",
+    "stops the limited source but continues independent discovery after a rate limit during %s",
     async (stage) => {
       const calls: string[] = [];
       const limited = source("limited", async () => {
@@ -84,7 +84,9 @@ describe("tiered acquisition batch", () => {
         { failure: { code: "rate-limited", source: "limited" } },
       ]);
       expect(calls).toEqual(
-        stage === "discovery" ? ["limited"] : ["limited", "download"],
+        stage === "discovery"
+          ? ["limited", "alternate"]
+          : ["limited", "download", "alternate"],
       );
     },
   );
@@ -328,47 +330,33 @@ describe("tiered acquisition failure classification", () => {
     ).toBe("system");
   });
 
-  it("records the fail-closed choice: a non-retryable route error is surfaced, never retried on another route", async () => {
-    let discovers = 0;
-    const first = source("first", async () => {
-      discovers += 1;
-      return [safeLocator("first", "https://fixture.test/first.pdf")];
-    });
-    const fallback = source("fallback", async () => {
-      discovers += 1;
-      return [safeLocator("fallback", "https://fixture.test/fallback.pdf")];
-    });
-    const service = new TieredAcquisitionService(
-      new PublicAcquisitionRegistry([first, fallback], ["first", "fallback"]),
-      { cooldown_ms: 0 },
-    );
-    const nonRetryable = new AcquisitionRouteError(
-      "download-unavailable",
-      "the route needs operator action",
+  it("continues independent delivery after a non-retryable API rejection", async () => {
+    const calls: string[] = [];
+    const first = source("api", async () => [
+      safeLocator("api", "https://fixture.test/first.pdf"),
+      safeLocator("api", "https://fixture.test/second.pdf"),
+    ]);
+    const fallback = source("fallback", async () => [
+      safeLocator("fallback", "https://other.test/file.pdf"),
+    ]);
+    const rejected = new AcquisitionRouteError(
+      "http-response-failed",
+      "HTTP 400.",
       false,
     );
-    // The classifier itself treats a non-retryable route error as a system
-    // failure, so the batch never gets a disposition Entry could read as a
-    // route outcome or as a normal exhaustion.
     expect(
-      classifyAcquisitionFailure(nonRetryable, new AbortController().signal),
-    ).toBe("system");
-    await expect(
-      service.run([item("x")], async () => {
-        throw nonRetryable;
-      }),
-    ).rejects.toBe(nonRetryable);
-    expect(discovers).toBe(1);
-    // A retryable route error, by contrast, is the documented opt-in for
-    // fallback and ends as one bounded route failure instead of a rejection.
-    const retryable = new AcquisitionRouteError(
-      "candidate-download-failed",
-      "candidate was rejected",
-      true,
-    );
-    expect(
-      classifyAcquisitionFailure(retryable, new AbortController().signal),
+      classifyAcquisitionFailure(rejected, new AbortController().signal),
     ).toBe("route");
+    const service = new TieredAcquisitionService(
+      new PublicAcquisitionRegistry([first, fallback], ["api", "fallback"]),
+    );
+    await expect(
+      service.run([item("x")], async (_item, route) => {
+        calls.push(route.source_name);
+        if (route === first) throw rejected;
+      }),
+    ).resolves.toMatchObject([{ disposition: "acquired", source: "fallback" }]);
+    expect(calls).toEqual(["api", "fallback"]);
   });
 
   it("treats an unrecognized discovery exception as a system failure with no fallback", async () => {
@@ -606,18 +594,13 @@ describe("tiered acquisition failure classification", () => {
   });
 });
 
-it.each([false, true])(
-  "preserves independent fallback permission through discovery cooldown (allowed=%s)",
-  async (allowed) => {
+it.each(["network-failed", "rate-limited"] as const)(
+  "preserves a source failure through discovery cooldown (%s)",
+  async (code) => {
     let discoveries = 0;
     const route = source("flaky", async () => {
       discoveries += 1;
-      throw new AcquisitionRouteError(
-        allowed ? "network-failed" : "rate-limited",
-        "Fixture outage.",
-        true,
-        { allows_independent_fallback: allowed },
-      );
+      throw new AcquisitionRouteError(code, "Fixture outage.", true);
     });
     const results = await new TieredAcquisitionService(
       new PublicAcquisitionRegistry([route], ["flaky"]),
@@ -629,15 +612,15 @@ it.each([false, true])(
       failure: { code: "source-cooldown" },
     });
     expect(results[0]?.failure?.allows_independent_fallback === true).toBe(
-      allowed,
+      true,
     );
     expect(results[1]?.failure?.allows_independent_fallback === true).toBe(
-      allowed,
+      true,
     );
   },
 );
 
-it("does not let an ordinary outage erase an earlier blocking route failure", async () => {
+it("keeps the first unresolved failure when independent sources also fail", async () => {
   const sources = [
     source("blocked", async () => {
       throw new AcquisitionRouteError(
@@ -661,10 +644,10 @@ it("does not let an ordinary outage erase an earlier blocking route failure", as
     ),
   ).run([item("first")], async () => undefined);
   expect(result?.failure?.source).toBe("blocked");
-  expect(result?.failure?.allows_independent_fallback).not.toBe(true);
+  expect(result?.failure?.allows_independent_fallback).toBe(true);
 });
 
-it("does not use a later public source while an earlier rate-limited discovery is cooling down", async () => {
+it("uses an independent source while an earlier rate-limited source is cooling down", async () => {
   let alternateCalls = 0;
   const limited = source("limited", async () => {
     throw new AcquisitionRouteError("rate-limited", "HTTP 429.");
@@ -680,9 +663,53 @@ it("does not use a later public source while an earlier rate-limited discovery i
     ),
     { now: () => 0 },
   ).run([item("first"), item("second")], async () => undefined);
-  expect(results.map((result) => result.failure?.code)).toEqual([
-    "rate-limited",
-    "source-cooldown",
+  expect(results.map((result) => result.disposition)).toEqual([
+    "acquired",
+    "acquired",
   ]);
-  expect(alternateCalls).toBe(0);
+  expect(alternateCalls).toBe(2);
 });
+
+it.each(["discovery", "delivery"] as const)(
+  "honors a longer Retry-After only for the failed source (%s)",
+  async (stage) => {
+    let now = 0;
+    let limitedCalls = 0;
+    let deliveries = 0;
+    const limitedError = () =>
+      new AcquisitionRouteError("rate-limited", "HTTP 429.", true, {
+        retry_after_ms: 120_000,
+      });
+    const limited = source("limited", async () => {
+      limitedCalls++;
+      if (limitedCalls === 1 && stage === "discovery") throw limitedError();
+      return [
+        safeLocator("limited", "https://fixture.test/a.pdf"),
+        safeLocator("limited", "https://fixture.test/b.pdf"),
+      ];
+    });
+    const alternate = source("alternate", async () => [
+      safeLocator("alternate", "https://independent.test/file.pdf"),
+    ]);
+    const service = new TieredAcquisitionService(
+      new PublicAcquisitionRegistry(
+        [limited, alternate],
+        ["limited", "alternate"],
+      ),
+      { now: () => now, cooldown_ms: 30_000 },
+    );
+    const run = () =>
+      service.run([item("fixture")], async (_item, route) => {
+        if (route === limited && stage === "delivery" && ++deliveries === 1)
+          throw limitedError();
+      });
+    expect((await run())[0]?.source).toBe("alternate");
+    now = 60_000;
+    expect((await run())[0]?.source).toBe("alternate");
+    expect(limitedCalls).toBe(1);
+    now = 120_001;
+    expect((await run())[0]?.source).toBe("limited");
+    expect(limitedCalls).toBe(2);
+    if (stage === "delivery") expect(deliveries).toBe(2);
+  },
+);

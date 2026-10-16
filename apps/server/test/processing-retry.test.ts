@@ -42,7 +42,7 @@ describe("processing skip diagnostics and explicit retry", () => {
   });
 
   it("preserves an explicit operator skip and a cancelled terminal task", async () => {
-    const env = await coreProcessingFixture();
+    const env = await coreProcessingFixture({ analysisModel: false });
     try {
       const job = await env.app.jobService!.create({
         target_kind: "selector",

@@ -12,15 +12,16 @@
 4. 模块责任、数据所有权、依赖、持久化或外部访问问题读取[架构原则](docs/architecture/principles.md)、[设计文档](docs/architecture/design.md)及对应[技术文档](docs/architecture/technical.md)。
 5. 再读取当前实现、公开调用方、直接测试和必要的[代码与文档映射](docs/development/documentation-map.md)。
 
-| 内容 | 权威位置 |
-| --- | --- |
-| 产品问题、范围和 R1-R13 验收 | `docs/architecture/requirements.md` |
-| 已接受且长期有效的选择 | `docs/architecture/decisions/` |
-| 模块、数据流和事实所有权 | `docs/architecture/design.md` |
-| 代码结构、Model、Ports 和运行技术 | `docs/architecture/technical.md`、`docs/architecture/technical/` |
-| 当前已经实现的安装与用户行为 | `README.md`、`docs/guides/`、源码和测试 |
-| 易变 Provider、MinerU 等外部事实 | `docs/notes/` |
-| 活动实施计划 | `docs/plans/`；用于执行与恢复，不属于产品或架构真相源 |
+| 内容                              | 权威位置                                                                                                                            |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| 产品问题、范围和 R1-R13 验收      | `docs/architecture/requirements.md`                                                                                                 |
+| 已接受且长期有效的选择            | `docs/architecture/decisions/`                                                                                                      |
+| 模块、数据流和事实所有权          | `docs/architecture/design.md`                                                                                                       |
+| 代码结构、Model、Ports 和运行技术 | `docs/architecture/technical.md`、`docs/architecture/technical/`                                                                    |
+| 当前已经实现的安装与用户行为      | `README.md`、`docs/guides/`、源码和测试                                                                                             |
+| 易变 Provider、MinerU 等外部事实  | `docs/notes/`；只维护接口、版本与兼容性等说明                                                                                       |
+| 本机真实测试、诊断与验收          | `sandbox/cases/`、`sandbox/runs/`、`sandbox/reports/`；整个 `sandbox/` 被 Git 忽略，不随仓库分发，见[测试目录说明](tests/README.md) |
+| 活动实施计划                      | `docs/plans/`；用于执行与恢复，不属于产品或架构真相源                                                                               |
 
 目标文档说明应当实现什么，README、源码和测试说明当前行为。不得用当前实现否定已接受设计，也不得把尚未实现的能力写成已发布行为。
 
@@ -28,33 +29,33 @@
 
 ## 2. 项目画像
 
-| 字段 | 值 |
-| --- | --- |
-| 项目定位 | 科研 Agent 的原始论文材料供给与有证据知识压缩组件；提供正式人类配置、Browser 观看/指导和知识阅读，保持领域中立 |
-| 主要语言 | TypeScript/Node 22.19.0；Python 仅为历史维护材料 |
-| 包管理 | `pnpm`，锁文件 `pnpm-lock.yaml` |
-| 活动源码 | `packages/`、`apps/server/src/`、`apps/web/src/` |
-| 测试 | `packages/*/test/`、`apps/*/test/`，Vitest；`tests/fixtures/` 仅保存合成兼容 fixture |
-| 质量入口 | `pnpm quick / test / full`；Python Harness 仅为历史维护入口 |
-| CI | 普通非 master 分支 push 运行 TS Quick；PR、master 和手动运行执行 TS Full（Node 22.19.0） |
-| 临时文件 | 系统临时目录下的 `sciretriever-*` |
-| 不提交内容 | 个人配置、运行时 catalog、文献资产、用户语料、`.venv/`、`build/`、`dist/`、缓存和临时文件 |
+| 字段       | 值                                                                                                             |
+| ---------- | -------------------------------------------------------------------------------------------------------------- |
+| 项目定位   | 科研 Agent 的原始论文材料供给与有证据知识压缩组件；提供正式人类配置、Browser 观看/指导和知识阅读，保持领域中立 |
+| 主要语言   | TypeScript/Node 22.19.0；Python 仅为历史维护材料                                                               |
+| 包管理     | `pnpm`，锁文件 `pnpm-lock.yaml`                                                                                |
+| 活动源码   | `packages/`、`apps/server/src/`、`apps/web/src/`                                                               |
+| 测试       | `packages/*/test/`、`apps/*/test/`，Vitest；`tests/fixtures/` 仅保存合成兼容 fixture                           |
+| 质量入口   | `pnpm quick / test / full`；Python Harness 仅为历史维护入口                                                    |
+| CI         | 普通非 master 分支 push 运行 TS Quick；PR、master 和手动运行执行 TS Full（Node 22.19.0）                       |
+| 临时文件   | 本机真实/一次性测试用 `sandbox/`；自动化回归的临时 home/合成库及短期工具文件用系统临时目录 `sciretriever-*`    |
+| 不提交内容 | `sandbox/`、个人配置、运行时 catalog、文献资产、用户语料、`.venv/`、`build/`、`dist/`、缓存和临时文件          |
 
 当前活动实现是按功能模块组织的 TypeScript/Node 模块化单体：
 
-~~~text
+```text
 packages/contracts/          # 跨模块中性合同与解析
 apps/server/src/
   entry/ application/        # 用户操作边界、生命周期与 durable jobs
   metadata/ literature/      # 元数据与文献事实
   providers/                 # 按供应商组织的外部适配器与静态服务定义
   acquisition/ parsing/     # 资产获取与解析
-  analysis/ agents/          # 分析与无状态模型运行时
+  analysis/ agents/          # 分析与共享模型/受控 Agent 执行
   network/ storage/ logging/ # 共享访问、持久化与日志
   configuration/ bootstrap/ # 配置与生产对象图
   browser/ workbench/ cli/  # Browser 边界、工作台与入口适配
 apps/web/src/                # Web 工作台适配
-~~~
+```
 
 模块责任、目标依赖和当前状态以[设计文档](docs/architecture/design.md)、[技术文档](docs/architecture/technical.md)和 [TypeScript 架构锚定基线](docs/architecture/typescript-baseline.md) 为准。跨功能模块通过公开 TypeScript API 和 `packages/contracts` 中性合同协作；外部协议在所属 adapter 边界转换；`configuration/` 与 `bootstrap/` 负责生产组装，不增加新的核心产品模块。迁移前的 Python 源码、测试和工具链快照位于 `archive/2026-09-12-typescript-python-retirement/`，不属于活动源码；工作区内其它历史或生成目录不得未经授权清理。
 
@@ -85,16 +86,16 @@ apps/web/src/                # Web 工作台适配
 
 依据项目 owner 于 2026-09-10 的决定，后续开发和全量验收转向 TypeScript，不再默认运行 Python Quick、Full 或全量 unittest。从仓库根目录执行：
 
-~~~bash
+```bash
 pnpm install --frozen-lockfile
 pnpm exec vitest run <相关测试文件>
 pnpm quick
 pnpm full
-~~~
+```
 
 - 相关测试：开发循环和单个能力切片的首选反馈。
 - Quick：Prettier、ESLint、源码和测试 strict 类型检查。
-- Full：Quick、全部 Vitest 与所有已注册 TS project 的构建；代码交付默认必须通过。
+- Full：Quick、全部 Vitest 与所有已注册 TS project 的构建；代码交付默认必须通过。`vitest.config.mjs` 排除本机 `sandbox/**`，保留原有回归发现范围。
 - Python Harness、Python 源码和既有 Python 测试已归档到 `archive/2026-09-12-typescript-python-retirement/`，不作为 TS 交付的阻断项；只有用户明确要求历史复核时才处理归档快照。
 - 文档-only 修改检查 diff、链接、术语、命令事实和 Markdown 结构。
 - Full 未通过或未运行时不得声称代码修改已经完成质量验收；确因环境无法运行时，准确说明原因、已运行检查和残余风险。
@@ -111,12 +112,14 @@ TS Full 使用 TypeScript Configuration/Credential owner 和合成临时 home，
 - 测试和 Harness 不连接真实 Provider、真实凭据、生产数据库或用户语料。
 - 不读取、打印、硬编码或提交 secret、Cookie、Token、签名 URL、个人 `config.toml` 或用户凭据文件。
 - 不修改、迁移或删除用户资产、真实 catalog 或仓库外材料，除非任务明确授权并先解析精确目标。
-- 临时文件和测试数据库进入系统临时目录，不散落到仓库根目录。
+- 本机真实/一次性测试的用例、运行材料和报告进入 Git 忽略的 `sandbox/`；自动化回归的临时 home/合成数据库及短期工具文件进入系统临时目录 `sciretriever-*`，不散落到仓库根目录。
 - 依赖或 `pnpm-lock.yaml` 只在当前实现明确需要时修改，不顺手升级无关依赖；交付时说明原因和影响。
 - 外部 HTTP、浏览器、MinerU 和 LLM 测试使用 fake、fixture 或明确的离线边界；真实只读探测也必须由用户明确要求。
 - 产品边界、事实所有权、不可变资产、凭据和网络安全由 requirements 与 Accepted ADR 约束，任何工作方式都不能绕过。
 
 ## 7. 文档与交付
+
+项目维护的每个目录都应有 `README.md`，说明本目录职责、主要内容和下级分工，并指向上级导航或相关真相源；整体地图在[根 README](README.md#项目目录地图)。新建、移动或改变目录职责时同步维护说明，不只列文件名。第三方依赖、构建产物、工具状态内部、原始运行数据与历史快照不逐层插入 README，由上级说明其身份；本机目录的说明同样留在 Git 忽略范围。
 
 `docs/development/documentation-map.md` 是影响分析索引，不是要求每个内部文件变化都改写所有关联文档的阻断清单。公开行为、配置、schema、持久化语义、模块责任、入口和验证命令变化时，必须同步相应真相源与当前行为文档。
 

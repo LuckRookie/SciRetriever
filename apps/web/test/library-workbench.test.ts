@@ -31,6 +31,7 @@ async function assets(): Promise<Map<string, WorkbenchStaticAsset>> {
     ["/", "live.html", "text/html"],
     ["/styles.css", "styles.css", "text/css"],
     ["/live.css", "live.css", "text/css"],
+    ["/workspace.css", "workspace.css", "text/css"],
   ] as const)
     values.set(route, {
       contentType,
@@ -202,33 +203,27 @@ describe("literature library workbench", () => {
       page.on("pageerror", (error) => failures.push(error.message));
       await page.goto(`${server.origin}/?workspace=library`);
       await expect
-        .poll(() => page.locator("#library-workspace").isVisible())
+        .poll(() => page.locator('[data-page="lib"]').isVisible())
         .toBe(true);
-      await page
-        .locator("#library-query")
-        .fill("Synthetic literature workbench");
-      await page
-        .locator("#library-form")
-        .getByRole("button", { name: "搜索" })
-        .click();
+      await page.locator("#q").fill("Synthetic literature workbench");
       const source = page
-        .locator(".library-result")
+        .locator(".prow")
         .filter({ hasText: "Synthetic literature workbench" })
         .first();
       await expect.poll(() => source.count()).toBe(1);
       await source.click();
       await expect
-        .poll(() => page.locator("#library-detail h2").textContent())
+        .poll(() => page.locator("#reader-info h2").textContent())
         .toBe("Synthetic literature workbench");
       await expect
-        .poll(() => page.locator("#library-detail").textContent())
+        .poll(() => page.locator("#reader-info").textContent())
         .toContain("文章身份未验证");
       expect(new URL(page.url()).searchParams.get("literature")).toBe(
         FIXTURE_LITERATURE.literature_id,
       );
 
       await page
-        .locator("#library-detail")
+        .locator("#reader-info")
         .getByRole("button", { name: "查看参考文献", exact: true })
         .click();
       await expect
@@ -238,19 +233,17 @@ describe("literature library workbench", () => {
         .toBe(true);
       expect(
         await page
-          .locator("#library-detail")
+          .locator("#reader-info")
           .getByRole("button", { name: /Reference target/u })
           .count(),
       ).toBe(25);
       await page
-        .locator("#library-detail")
+        .locator("#reader-info")
         .getByRole("button", { name: /Reference target/u })
         .first()
         .click();
       await page.waitForTimeout(100);
-      expect(await page.locator("#library-status").textContent()).not.toContain(
-        "引用证据暂时无法读取",
-      );
+
       await expect
         .poll(() => page.locator(".library-evidence").count())
         .toBe(1);
@@ -258,7 +251,7 @@ describe("literature library workbench", () => {
       await expect
         .poll(() =>
           page
-            .locator("#library-detail")
+            .locator("#reader-info")
             .getByRole("button", { name: /Reference target/u })
             .count(),
         )
@@ -272,11 +265,14 @@ describe("literature library workbench", () => {
         .poll(() => new URL(page.url()).searchParams.has("literature"))
         .toBe(false);
       await expect
-        .poll(() => page.locator("#library-detail").textContent())
-        .toContain("选择一篇文献");
+        .poll(() => page.locator('[data-page="lib"]').isVisible())
+        .toBe(true);
+      expect(await page.locator("#q").inputValue()).toBe(
+        "Synthetic literature workbench",
+      );
       await page.goForward();
       await expect
-        .poll(() => page.locator("#library-detail h2").textContent())
+        .poll(() => page.locator("#reader-info h2").textContent())
         .toBe("Synthetic literature workbench");
       await page.setViewportSize({ width: 390, height: 844 });
       await expect
@@ -293,11 +289,11 @@ describe("literature library workbench", () => {
         `${server.origin}/?workspace=library&literature=${uuid(99, 99)}`,
       );
       await expect
-        .poll(() => missing.locator("#library-detail").textContent())
-        .toContain("无法读取文献");
+        .poll(() => missing.locator("#main [role=alert]").textContent())
+        .toContain("暂时无法读取");
       await expect
-        .poll(() => new URL(missing.url()).searchParams.has("literature"))
-        .toBe(false);
+        .poll(() => new URL(missing.url()).searchParams.get("literature"))
+        .toBe(uuid(99, 99));
       await missing.close();
     } finally {
       await browser.close();

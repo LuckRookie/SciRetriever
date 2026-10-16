@@ -286,7 +286,9 @@ it("preserves a pending receipt target even when its incoming hash differs", asy
   const env = await prepared();
   try {
     await env.app.database.upgradeExecutionSchema();
-    const a = env.retired[0]!;
+    const a = env.retired.find(
+      (artifact) => artifact.reference === env.primary.path,
+    )!;
     const candidate = parseDurableCandidate({
       transfer_id: "receipt-protected",
       state: "durable-ready",

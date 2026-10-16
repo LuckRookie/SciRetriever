@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   parseLiteratureId,
+  BROWSER_AGENT_STOP_REASONS,
   type CandidatePublicationReceipt,
   type LiteratureDetail,
   type LiteratureId,
@@ -121,8 +122,8 @@ export interface PdfAcquisitionPort {
   acquire(request: PdfAcquisitionRequest): Promise<PdfAcquisitionOutcome>;
   /**
    * Prepare one bounded generation behind the five acquisition-stage barriers. Results
-   * may be emitted in frozen request order after each tier so successful
-   * targets can continue while the unresolved remainder enters a riskier tier.
+   * are emitted after each HTTP tier; Browser results are emitted individually.
+   * The final array preserves request order without delaying fast Browser feedback.
    */
   acquireCohort?(
     requests: readonly PdfAcquisitionRequest[],
@@ -319,7 +320,8 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
   constructor(private readonly ports: EntryPdfAcquisitionPorts) {
     this.routes = splitAcquisitionRoutes(ports.registry);
     const options = {
-      assistance: ports.assistance ?? "never",
+      // Operator assistance is considered after all automatic stages, not between them.
+      assistance: "never",
       cooldown_ms: ports.cooldown_ms ?? 30_000,
       max_items: 100_000,
     } as const;
@@ -408,7 +410,7 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
             [new DoiLandingSource()],
             ["doi-landing"],
           ),
-          { assistance: this.ports.assistance ?? "never" },
+          { assistance: "never" },
         );
         return (await this.runLocator(request, cached, context)).outcome;
       }
@@ -546,10 +548,7 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
         const stopped: PdfAcquisitionCohortOutcome[] = [];
         for (const { index, outcome } of prepared) {
           if (!outcome || outcome.kind === "exhausted") continue;
-          if (
-            outcome.kind === "route-failure" &&
-            outcome.failure.allows_independent_fallback
-          )
+          if (outcome.kind === "route-failure")
             priorFailures.set(
               index,
               priorFailures.get(index) ?? outcome.failure,
@@ -586,14 +585,12 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
           !priorFailures.has(index)
         )
           priorFailures.set(index, result.priorFailure);
-        if (
-          outcome.kind === "route-failure" &&
-          outcome.failure.allows_independent_fallback === true
-        ) {
-          // An outage of one public service says nothing about an independent API or
-          // publisher session. Retain it for both single and cohort calls: later misses
-          // must not manufacture an automatic exhaustion fact.
-          priorFailures.set(index, outcome.failure);
+        if (outcome.kind === "route-failure") {
+          // A source failure does not decide another source's access. Keep the first
+          // unresolved failure if subsequent independent routes also fail to deliver.
+          const prior = priorFailures.get(index);
+          if (!prior || prior.unavailability != null)
+            priorFailures.set(index, outcome.failure);
           unresolved.push(index);
         } else if (outcome.kind === "exhausted") unresolved.push(index);
         else {
@@ -605,32 +602,77 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
       active = unresolved;
     }
     if (active.length) {
-      const browserWave = await Promise.all(
+      const browserAbort = new AbortController();
+      const browserFailures: unknown[] = [];
+      await Promise.allSettled(
         active.map(async (index) => {
-          const request = requests[index]!;
-          const outcome = this.routes.browser.enabled
-            ? await this.attemptBrowserEscalation(
-                request,
-                parseLiteratureId(request.literature_id),
-                this.routes.browser,
-                priorFailures.get(index) ?? null,
-                contexts[index]!,
-              )
-            : priorFailures.get(index)?.allows_independent_fallback
-              ? ({
-                  kind: "route-failure",
-                  failure: priorFailures.get(index)!,
-                } as const)
-              : ({ kind: "exhausted" } as const);
-          final[index] = outcome;
-          return Object.freeze({ index, outcome });
+          const request = {
+            ...requests[index]!,
+            signal: AbortSignal.any([
+              requests[index]!.signal,
+              browserAbort.signal,
+            ]),
+          };
+          try {
+            const automaticOutcome = this.routes.browser.enabled
+              ? await this.attemptBrowserEscalation(
+                  request,
+                  parseLiteratureId(request.literature_id),
+                  this.routes.browser,
+                  priorFailures.get(index) ?? null,
+                  contexts[index]!,
+                )
+              : priorFailures.get(index)?.unavailability == null &&
+                  priorFailures.has(index)
+                ? ({
+                    kind: "route-failure",
+                    failure: priorFailures.get(index)!,
+                  } as const)
+                : ({ kind: "exhausted" } as const);
+            const outcome = this.applyAssistance(automaticOutcome);
+            final[index] = outcome;
+            // Completion feedback follows each result. Final report ordering does
+            // not require a fast article to wait for an unrelated slow transfer.
+            emit([Object.freeze({ index, outcome })]);
+          } catch (error) {
+            // An immediate observer/internal failure cannot leave sibling
+            // deliveries running after this cohort has returned to its caller.
+            browserFailures.push(error);
+            browserAbort.abort();
+            throw error;
+          }
         }),
       );
-      emit(browserWave);
+      if (browserFailures.length) throw browserFailures[0];
     }
     if (final.some((outcome) => outcome === undefined))
       throw new TypeError("acquisition cohort partition is incomplete");
     return Object.freeze(final as PdfAcquisitionOutcome[]);
+  }
+
+  private applyAssistance(
+    outcome: PdfAcquisitionOutcome,
+  ): PdfAcquisitionOutcome {
+    if (outcome.kind !== "route-failure") return outcome;
+    if (this.ports.assistance === "pause")
+      return {
+        kind: "assistance-required",
+        failure: {
+          ...outcome.failure,
+          code: "assistance-required",
+          retryable: false,
+        },
+      };
+    if (this.ports.assistance === "notify")
+      return {
+        kind: "policy-skip",
+        failure: {
+          ...outcome.failure,
+          code: "assistance-skipped",
+          retryable: false,
+        },
+      };
+    return outcome;
   }
 
   private async runLocator(
@@ -670,13 +712,13 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
         async (_item, source, candidate, signal) => {
           if (candidate.source === "doi-landing" && context.doi_landing)
             candidate = { ...candidate, locator: context.doi_landing };
-          if (
-            candidate.source === "doi-landing" &&
-            new URL(candidate.locator).protocol === "http:"
-          )
+          // Metadata PDF hints can also use HTTP. The stateless downloader is
+          // HTTPS-only; leave this route without turning a valid external hint
+          // into a contract failure that aborts the whole completion cohort.
+          if (new URL(candidate.locator).protocol === "http:")
             throw new AcquisitionUnavailableError(
               "download-unavailable",
-              "The resolved article requires browser navigation over HTTP.",
+              "The candidate requires browser navigation over HTTP.",
               "http-route-unavailable",
             );
           const operationKey = `${request.operation_id ?? "direct"}:${literatureId}`;
@@ -812,22 +854,7 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     } catch (error) {
       if (classifyAcquisitionFailure(error, request.signal) === "cancel")
         return { outcome: { kind: "cancelled" } };
-      if (!(error instanceof AcquisitionRouteError) || error.retryable)
-        throw error;
-      // A non-retryable route error is surfaced with its own stable code. It is never
-      // escalated on the strength of its code: only a route that declared an explicit
-      // low-risk unavailability can authorize the Browser, and an action-required or
-      // deferred state must never become an automatic Browser run (ADR 0015 §7).
-      const failure = Object.freeze({
-        code: error.code,
-        source: null,
-        reason: error.reason,
-        retryable: false,
-      });
-      return {
-        outcome: { kind: "route-failure", failure },
-        priorFailure: failure,
-      };
+      throw error;
     }
     if (!result) throw new TypeError("acquisition batch returned no result");
     if (result.disposition === "interrupted")
@@ -877,9 +904,7 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
         outcome: { kind: "exhausted" },
         priorFailure: result.failure,
       };
-    // Keep failures distinct from misses. The cohort owner may continue an explicitly
-    // recognized public outage through independent routes, retaining this failure if
-    // they miss. API, admission, rate-limit and unknown errors stay blocking.
+    // Keep source failures distinct from misses while continuing independent stages.
     const failure =
       result.failure ??
       Object.freeze({
@@ -1005,7 +1030,15 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     )
       return { kind: "cancelled" };
     if (delivery.kind === "refused")
-      return priorFailure !== null
+      // Keep an explicit Agent assessment visible in the final report. Earlier
+      // source failures remain in their route diagnostics; they must not erase it.
+      // An unavailable cheap route is also weaker than a real Browser failure:
+      // e.g. an HTTP hint must not hide the later article budget exhaustion.
+      return priorFailure !== null &&
+        priorFailure.unavailability == null &&
+        !BROWSER_AGENT_STOP_REASONS.some(
+          (reason) => delivery.code === `browser-agent-${reason}`,
+        )
         ? { kind: "route-failure", failure: priorFailure }
         : {
             kind: "browser-failure",
@@ -1019,6 +1052,16 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     const acceptanceSignal = delivery.lease?.signal
       ? AbortSignal.any([request.signal, delivery.lease.signal])
       : request.signal;
+    const publicationStartedAt = performance.now();
+    const timing = (phase: string) =>
+      createLogger("pdf-acquisition").info("Browser publication timing", {
+        article_id: literatureId,
+        transfer_id: delivery.candidate.transfer_id,
+        phase,
+        elapsed_ms: Math.round(performance.now() - publicationStartedAt),
+        bytes: delivery.candidate.size_bytes,
+      });
+    timing("publication-started");
     try {
       if (acceptanceSignal.aborted) {
         closeOutcome = { kind: "cancelled" };
@@ -1055,6 +1098,7 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
         ),
       );
       closeOutcome = { kind: "published", receipt_id: publication.receipt_id };
+      timing("published");
       return {
         kind: "acquired",
         literature_id: literatureId,
@@ -1068,7 +1112,9 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
       throw error;
     } finally {
       try {
+        timing("closing");
         await delivery.lease?.close(closeOutcome);
+        timing("closed");
       } catch (error) {
         // Cleanup is a separate diagnostic. Never revoke a committed publication
         // or discard a valid retained candidate to disguise a cleanup failure.

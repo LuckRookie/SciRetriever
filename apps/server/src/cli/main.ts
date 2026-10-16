@@ -1,4 +1,28 @@
+import {
+  executeConfiguration,
+  CONFIGURATION_OPERATIONS,
+  type ConfigurationOperation,
+} from "../entry/configuration-operations.js";
+import {
+  executeMaintenance,
+  isMaintenanceFailure,
+  type MaintenanceOperation,
+} from "../entry/maintenance-operations.js";
+import {
+  executeQuery,
+  isQueryFailure,
+  type QueryOperation,
+} from "../entry/query-operations.js";
+import { parseStrictJsonValue } from "@sciretriever/contracts";
 import { readFile, realpath } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import {
+  MachineWorkbenchClient,
+  MachineWorkbenchError,
+  type WorkbenchOperation,
+} from "../workbench/machine-client.js";
+import { operationRecord } from "../entry/query-operations.js";
+import { runBrowserSession } from "./browser-session.js";
 import { fileURLToPath } from "node:url";
 import * as applicationBootstrap from "../bootstrap/application.js";
 import { DocumentProcessingError } from "../document/service.js";
@@ -104,16 +128,6 @@ function invalidInput(): never {
   throw new CliInputError();
 }
 
-function writeWebPathFailure(options: CliOptions): void {
-  options.stderr?.(
-    `${JSON.stringify({
-      code: "paths-not-ready",
-      next_action:
-        "Configure both paths.catalog_path and paths.artifact_root through sciretriever config, then explicitly initialize or upgrade the catalog before starting Web.",
-    })}\n`,
-  );
-}
-
 /**
  * The only production configuration identity is the fixed user home. An
  * explicitly injected `home` remains an internal isolation seam, while
@@ -134,7 +148,7 @@ function output(value: unknown, options: CliOptions): CliResult {
 
 function usage(options: CliOptions): CliResult {
   const text =
-    "Usage: sciretriever <web|discover|complete|literature|import|export|config|storage|maintenance|jobs> ...\n" +
+    "Usage: sciretriever <web|discover|complete|literature|document|analysis|knowledge|synthesis|context|extraction|import|export|config|storage|maintenance|jobs|browser|mcp> ...\n" +
     "  web [--port 4174]  # local task workbench; uses the configured catalog and artifact root\n" +
     "  discover topic QUERY | discover citations --seed-literature-id ID\n" +
     "  complete pdf|content [--literature-id ID] [--transfers ID,...]\n" +
@@ -144,7 +158,17 @@ function usage(options: CliOptions): CliResult {
     "  export metadata FORMAT OUTPUT | export pdf|content ID --path PATH\n" +
     "  config [--theme auto|dark|light|mono] | config status [--json] [--theme ...] | config test ...\n" +
     "  jobs create [--text QUERY] | jobs submit --request FILE|- | jobs run|show|pause|cancel|resume|retry JOB_ID\n" +
-    "  mcp [--maintenance]  # stdio; maintenance tools require this explicit mode\n" +
+    "  document default|describe|outline|segments|slice|resources|resource|evidence|material --request FILE|-\n" +
+    "  knowledge read|list|default --request FILE|-; synthesis prepare|read|source|list --request FILE|-\n" +
+    "  context search|knowledge --request FILE|-; analysis prepare --request FILE|-; extraction prepare --request FILE|-\n" +
+    "  literature status; literature search|read|references|reference|identity|artifact-chunk|bibliography --request FILE|-\n" +
+    "  jobs list|inspect|create-request|resolve --request FILE|- (create-request only saves)\n" +
+    "  extraction create|read|submit|receipt|close|cancel|cleanup --request FILE|-\n" +
+    "  config read; config preview|publish|credential|probe --request FILE|-\n" +
+    "  import bibliography --request FILE|-; discover request --request FILE|-\n" +
+    "  mcp [--maintenance] [--workbench-url http://127.0.0.1:PORT]\n" +
+    "  browser session --workbench-url URL --request FILE|- [--maintenance] # NDJSON connection\n" +
+    "  jobs runtime --workbench-url URL --request FILE|- [--maintenance] # operate in the Web owner\n" +
     "  storage schema-inspect|schema-init --catalog PATH | schema-upgrade --catalog PATH [--dry-run | --backup PATH]\n" +
     "  storage document-inspect|retrieval-inspect|extraction-inspect --catalog PATH | document-migrate|retrieval-migrate|extraction-migrate --catalog PATH [--dry-run | --backup PATH --synthetic-copy]\n" +
     "  maintenance rebuild-index (requires an existing v4 catalog) | rebuild-knowledge-index (requires v8)\n" +
@@ -157,11 +181,21 @@ function usage(options: CliOptions): CliResult {
 async function inputBytes(
   path: string,
   options: CliOptions,
+  maxBytes?: number,
 ): Promise<Uint8Array> {
-  if (path !== "-") return readFile(path);
-  const input = options.stdin ?? (process.stdin as AsyncIterable<Uint8Array>);
+  if (path !== "-" && maxBytes === undefined) return readFile(path);
+  const input =
+    path !== "-"
+      ? createReadStream(path)
+      : (options.stdin ?? (process.stdin as AsyncIterable<Uint8Array>));
   const chunks: Buffer[] = [];
-  for await (const chunk of input) chunks.push(Buffer.from(chunk));
+  let size = 0;
+  for await (const chunk of input) {
+    options.signal?.throwIfAborted();
+    size += chunk.byteLength;
+    if (maxBytes !== undefined && size > maxBytes) invalidInput();
+    chunks.push(Buffer.from(chunk));
+  }
   return Buffer.concat(chunks);
 }
 
@@ -473,6 +507,208 @@ async function execute(
   if (!args.length || args[0] === "--help" || args[0] === "-h")
     return usage(options);
   const [group, command] = args;
+  if (group === "jobs" && command === "runtime") {
+    const origin = argument(args, "--workbench-url");
+    const source = argument(args, "--request");
+    const flags = args.slice(2).filter((v) => v !== "--maintenance");
+    if (
+      !origin ||
+      !source ||
+      flags.length !== 4 ||
+      flags[0] !== "--workbench-url" ||
+      flags[2] !== "--request"
+    )
+      invalidInput();
+    const r = operationRecord(
+      parseStrictJsonValue(
+        await inputBytes(source, options, 1024 * 1024 + 4096),
+      ),
+      ["operation", "request"],
+    );
+    if (
+      typeof r.operation !== "string" ||
+      !["list", "read", "create", "control"].includes(r.operation)
+    )
+      invalidInput();
+    const client = new MachineWorkbenchClient(
+      origin,
+      args.includes("--maintenance"),
+    );
+    const result = await runAndClose(
+      () =>
+        client.execute(
+          `task-${r.operation}` as WorkbenchOperation,
+          r.request,
+          options.signal,
+        ),
+      () => client.close(),
+      "runtime connection cleanup failed",
+    );
+    return output({ protocol_version: 1, result }, options);
+  }
+  if (group === "browser" && command === "session") {
+    const origin = argument(args, "--workbench-url");
+    const source = argument(args, "--request");
+    const flags = args.slice(2).filter((v) => v !== "--maintenance");
+    if (
+      !origin ||
+      !source ||
+      flags.length !== 4 ||
+      flags[0] !== "--workbench-url" ||
+      flags[2] !== "--request"
+    )
+      invalidInput();
+    const client = new MachineWorkbenchClient(
+      origin,
+      args.includes("--maintenance"),
+    );
+    const input =
+      source === "-"
+        ? (options.stdin ?? process.stdin)
+        : createReadStream(
+            source,
+            options.signal ? { signal: options.signal } : {},
+          );
+    const result = await runAndClose(
+      () =>
+        runBrowserSession(
+          client,
+          input,
+          options.stdout ??
+            ((text) => {
+              process.stdout.write(text);
+            }),
+          options.signal,
+        ),
+      () => client.close(),
+      "browser connection cleanup failed",
+    );
+    return { code: result.failed ? 3 : 0, value: result };
+  }
+  if (
+    group === "config" &&
+    CONFIGURATION_OPERATIONS.includes(command as ConfigurationOperation) &&
+    command !== "status"
+  ) {
+    const noInput = command === "read";
+    const source = argument(args, "--request");
+    if (
+      noInput
+        ? args.length !== 2
+        : !source || args.length !== 4 || args[2] !== "--request"
+    )
+      invalidInput();
+    const bytes = source
+      ? await inputBytes(source, options, 1024 * 1024 + 4096)
+      : Buffer.from("{}");
+    if (bytes.byteLength > 1024 * 1024 + 4096) invalidInput();
+    const result = await executeConfiguration(
+      new TypeScriptConfigurationOwner(configurationHome(options)),
+      command as ConfigurationOperation,
+      parseStrictJsonValue(bytes),
+      options.signal,
+      options.probeSeams,
+    );
+    return output({ protocol_version: 1, result }, options);
+  }
+  const queryRoutes: Readonly<Record<string, QueryOperation>> = {
+    "jobs list": "task-list",
+    "jobs inspect": "task-detail",
+    "literature status": "status",
+    "literature search": "library-search",
+    "literature read": "literature-read",
+    "literature artifact-chunk": "artifact-chunk",
+    "literature bibliography": "bibliography-export",
+    "literature references": "references",
+    "literature reference": "reference-read",
+    "literature identity": "article-identity",
+    "document default": "document-default",
+    "document describe": "document-describe",
+    "document outline": "document-outline",
+    "document segments": "document-segments",
+    "document slice": "document-slice",
+    "document resources": "document-resources",
+    "document resource": "document-resource",
+    "document evidence": "document-evidence",
+    "document material": "document-material",
+    "analysis prepare": "analysis-inputs",
+    "knowledge read": "knowledge-read",
+    "knowledge list": "knowledge-list",
+    "knowledge default": "knowledge-default",
+    "synthesis prepare": "synthesis-prepare",
+    "synthesis read": "synthesis-read",
+    "synthesis source": "synthesis-source",
+    "synthesis list": "synthesis-list",
+    "context search": "context",
+    "context knowledge": "knowledge-context",
+    "extraction prepare": "extraction-prepare",
+  };
+  const queryKey = `${group} ${command}`;
+  if (
+    Object.hasOwn(queryRoutes, queryKey) &&
+    (!(group === "literature" && ["search", "references"].includes(command!)) ||
+      args.includes("--request"))
+  ) {
+    const source = argument(args, "--request");
+    if (
+      queryRoutes[queryKey] !== "status" &&
+      (!source || args.length !== 4 || args[2] !== "--request")
+    )
+      invalidInput();
+    if (queryRoutes[queryKey] === "status" && args.length !== 2) invalidInput();
+    const bytes = source
+      ? await inputBytes(source, options, 1024 * 1024 + 4096)
+      : new TextEncoder().encode("{}");
+    if (bytes.byteLength > 1024 * 1024 + 4096) invalidInput();
+    const request = parseStrictJsonValue(bytes);
+    const application = await applicationBootstrap.createQueryApplication(
+      configurationHome(options),
+    );
+    const value = await runAndClose(
+      () =>
+        executeQuery(
+          application,
+          queryRoutes[queryKey]!,
+          request,
+          options.signal,
+        ),
+      () => application.close(),
+      "query cleanup failed",
+    );
+    return output({ protocol_version: 1, result: value }, options);
+  }
+  const maintenanceRoutes: Readonly<Record<string, MaintenanceOperation>> = {
+    "import bibliography": "import-bibliography",
+    "discover request": "discover",
+    "jobs create-request": "task-create",
+    "jobs resolve": "resolve-intervention",
+    "extraction create": "extraction-operation",
+    "extraction read": "extraction-operation-read",
+    "extraction submit": "extraction-submit",
+    "extraction receipt": "extraction-receipt",
+    "extraction close": "extraction-close",
+    "extraction cancel": "extraction-cancel",
+    "extraction cleanup": "extraction-cleanup",
+  };
+  if (Object.hasOwn(maintenanceRoutes, queryKey)) {
+    const source = argument(args, "--request");
+    if (!source || args.length !== 4 || args[2] !== "--request") invalidInput();
+    const bytes = await inputBytes(source, options, 1024 * 1024 + 4096);
+    if (bytes.byteLength > 1024 * 1024 + 4096) invalidInput();
+    const request = parseStrictJsonValue(bytes);
+    const result = await withApplication(
+      options,
+      (app) =>
+        executeMaintenance(
+          app,
+          maintenanceRoutes[queryKey]!,
+          request,
+          options.signal,
+        ),
+      "require-v2",
+    );
+    return output({ protocol_version: 1, result }, options);
+  }
   if (group === "web") {
     const port = args.length === 1 ? 4174 : Number(args[2]);
     if (
@@ -489,11 +725,6 @@ async function execute(
     const configurationOwner = new TypeScriptConfigurationOwner(
       configurationHome(options),
     );
-    const { paths } = (await configurationOwner.read()).configuration;
-    if (!paths.catalog_path || !paths.artifact_root) {
-      writeWebPathFailure(options);
-      return { code: 4 };
-    }
     const { startProductionWorkbench } = await import(
       "../bootstrap/workbench.js"
     );
@@ -519,11 +750,18 @@ async function execute(
     }
   }
   if (group === "mcp") {
-    if (args.slice(1).some((v) => v !== "--maintenance")) invalidInput();
+    const origin = argument(args, "--workbench-url");
+    const flags = args.slice(1).filter((v) => v !== "--maintenance");
+    if (
+      flags.length &&
+      (flags.length !== 2 || flags[0] !== "--workbench-url" || !origin)
+    )
+      invalidInput();
     const { runMcpStdio } = await import("../mcp/server.js");
     await runMcpStdio(
       {
         maintenance: args.includes("--maintenance"),
+        ...(origin ? { workbenchUrl: origin } : {}),
         ...(options.home ? { home: options.home } : {}),
       },
       options.signal,
@@ -1097,7 +1335,7 @@ async function execute(
     const literatureId = args[2];
     const path = args[3] ?? argument(args, "--path");
     if (!literatureId || !path) invalidInput();
-    const bytes = await inputBytes(path, options);
+    const bytes = await inputBytes(path, options, 16 * 1024 * 1024);
     const ingest = async (schema: "require-v2" | "upgrade-synthetic") =>
       withApplication(
         options,
@@ -1336,8 +1574,8 @@ async function execute(
   if (group === "jobs" && command === "submit") {
     const source = argument(args, "--request");
     if (!source) invalidInput();
-    const bytes = await inputBytes(source, options);
-    if (bytes.byteLength > 1024 * 1024) invalidInput();
+    const bytes = await inputBytes(source, options, 1024 * 1024 + 4096);
+    if (bytes.byteLength > 1024 * 1024 + 4096) invalidInput();
     let request: unknown;
     try {
       request = JSON.parse(
@@ -1458,6 +1696,10 @@ export async function runCli(
     const interrupted =
       error instanceof Error &&
       (error.name === "AbortError" ||
+        (error instanceof MachineWorkbenchError &&
+          error.code === "operation-cancelled") ||
+        ((isQueryFailure(error) || isMaintenanceFailure(error)) &&
+          error.code.endsWith("-cancelled")) ||
         ("code" in error && error.code === "queue-interrupted"));
     const probeCancelled =
       error instanceof ConfigurationProbeError &&
@@ -1474,6 +1716,9 @@ export async function runCli(
       error instanceof ConfigurationOwnerError ||
       error instanceof ConfigurationBoundaryError;
     const business =
+      error instanceof MachineWorkbenchError ||
+      isQueryFailure(error) ||
+      isMaintenanceFailure(error) ||
       error instanceof CliBusinessError ||
       error instanceof QueryApplicationError ||
       error instanceof ArtifactExportError ||
@@ -1501,26 +1746,32 @@ export async function runCli(
               ? 3
               : 70;
     const failure =
-      error instanceof DocumentProcessingError ||
-      error instanceof ParsingFailure ||
-      error instanceof ArticleIdentityError ||
-      error instanceof ProcessingTaskError
-        ? error.code
-        : error instanceof QueryApplicationError
+      error instanceof LiteratureNotFoundError && !args.includes("--request")
+        ? "business-failed"
+        : isQueryFailure(error) ||
+            isMaintenanceFailure(error) ||
+            error instanceof MachineWorkbenchError
           ? error.code
-          : probeCancelled
-            ? "configuration-test-cancelled"
-            : interrupted
-              ? "operation-interrupted"
-              : input
-                ? "invalid-command-input"
-                : configuration
-                  ? "configuration-failed"
-                  : migration
-                    ? "migration-refused"
-                    : business
-                      ? "business-failed"
-                      : "internal-failed";
+          : error instanceof DocumentProcessingError ||
+              error instanceof ParsingFailure ||
+              error instanceof ArticleIdentityError ||
+              error instanceof ProcessingTaskError
+            ? error.code
+            : error instanceof QueryApplicationError
+              ? error.code
+              : probeCancelled
+                ? "configuration-test-cancelled"
+                : interrupted
+                  ? "operation-interrupted"
+                  : input
+                    ? "invalid-command-input"
+                    : configuration
+                      ? "configuration-failed"
+                      : migration
+                        ? "migration-refused"
+                        : business
+                          ? "business-failed"
+                          : "internal-failed";
     effective.stderr?.(
       `${JSON.stringify({
         code: failure,
@@ -1529,7 +1780,7 @@ export async function runCli(
               next_action: configuration
                 ? "Check sciretriever config status and the configured catalog/artifact paths."
                 : migration
-                  ? "Inspect the configured catalog with sciretriever storage schema-inspect; initialize or upgrade it explicitly before starting Web."
+                  ? "Check the configured catalog parent directory and inspect any existing catalog with sciretriever storage schema-inspect; upgrades require an explicit backup."
                   : "Check the local port, build assets and configuration before restarting Web.",
             }
           : {}),

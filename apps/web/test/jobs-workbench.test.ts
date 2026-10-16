@@ -21,6 +21,7 @@ async function taskAssets(): Promise<Map<string, WorkbenchStaticAsset>> {
     ["/", "live.html", "text/html"],
     ["/styles.css", "styles.css", "text/css"],
     ["/live.css", "live.css", "text/css"],
+    ["/workspace.css", "workspace.css", "text/css"],
   ] as const)
     assets.set(route, {
       contentType,
@@ -116,129 +117,86 @@ describe("durable task workbench", () => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(server.origin);
-      await expect
-        .poll(() => page.locator("#overview-workspace").isVisible())
-        .toBe(true);
-      await expect
-        .poll(() => page.locator("#overview-active").textContent())
-        .toContain("当前没有运行中的任务");
+      await expect.poll(() => page.locator(".prow").count()).toBe(1);
       await page.locator("#jobs-tab").click();
-      expect(await page.locator("#jobs-workspace").isVisible()).toBe(true);
       await expect
-        .poll(() => page.locator("#jobs-list").textContent())
-        .toContain("还没有任务");
-      expect(await page.locator("#job-policy-summary").textContent()).toContain(
-        "重启不会重置已用预算",
-      );
-      await page.locator("#new-task-button").click();
-      await page.locator("#job-attempts").fill("12");
-      await page.locator("#job-retries").fill("1");
-      await page.locator("#job-assistance").selectOption("pause");
-      await page.locator("#job-confirm").check();
-      await page.getByRole("button", { name: "创建持久任务" }).click();
+        .poll(() => page.locator("#tasks-list").textContent())
+        .toContain("当前没有任务");
+      const create = async () => {
+        await page.locator("#library-tab").click();
+        await page.locator("#ckAll").check();
+        await page.locator('[data-op="acquire"]').click();
+        await page.locator("#overlay summary").click();
+        await page.locator("#acquire-attempts").fill("12");
+        await page.locator("#acquire-retries").fill("1");
+        await page.locator("#acquire-policy").selectOption("pause");
+        await page.locator("#acquire-start").uncheck();
+        await page.locator("#op-confirm").click();
+        await expect
+          .poll(() => page.locator("#op-status").textContent())
+          .toBe("任务已保存");
+        await page.locator("#op-results [data-task]").click();
+        await expect
+          .poll(() => page.locator("#task-content").textContent())
+          .toContain("已尝试 0/12");
+      };
+      const control = (name: string) =>
+        page
+          .locator("#task-controls")
+          .getByRole("button", { name, exact: true });
+      await create();
+      expect(runCalls).toBe(0);
+      await control("暂停").click();
       await expect
-        .poll(() => page.locator("#job-create-status").textContent())
-        .toBe("任务已持久保存。点击执行开始处理。");
-      await expect.poll(() => page.locator(".job-list-item").count()).toBe(1);
-      await expect
-        .poll(() => page.locator("#job-detail").textContent())
-        .toContain("已尝试 0/12");
-      await expect
-        .poll(() => page.locator("#job-detail").textContent())
-        .toContain(FIXTURE_LITERATURE.literature_id);
-      await page
-        .locator("#job-detail")
-        .getByRole("button", { name: "暂停" })
-        .click();
-      await expect
-        .poll(() => page.locator("#job-detail").textContent())
+        .poll(() => page.locator("#task-content").textContent())
         .toContain("等待处理");
-      expect(
-        await page
-          .locator("#job-detail")
-          .getByRole("button", { name: "继续" })
-          .isEnabled(),
-      ).toBe(true);
-      await page
-        .locator("#job-detail")
-        .getByRole("button", { name: "取消" })
-        .click();
+      expect(await control("继续").isEnabled()).toBe(true);
+      await control("取消").click();
       await expect
-        .poll(() => page.locator("#job-detail").textContent())
+        .poll(() => page.locator("#task-content").textContent())
         .toContain("已取消");
-      expect(
-        await page
-          .locator("#job-detail > .job-actions > button")
-          .evaluateAll((buttons) =>
-            buttons.every((button) => (button as HTMLButtonElement).disabled),
-          ),
-      ).toBe(true);
-
-      await page.locator("#new-task-button").click();
-      await page.locator("#job-confirm").check();
-      await page.getByRole("button", { name: "创建持久任务" }).click();
-      await expect.poll(() => page.locator(".job-list-item").count()).toBe(2);
-      const runButton = page
-        .locator("#job-detail")
-        .getByRole("button", { name: "执行" });
-      await runButton.click();
+      expect(await page.locator("#task-controls button").count()).toBe(0);
+      await create();
+      await control("启动").click();
       await expect
-        .poll(() => page.locator("#job-detail").textContent())
-        .toContain("执行未能开始");
-      expect(await runButton.isEnabled()).toBe(true);
-
+        .poll(() => page.locator(".toast").textContent())
+        .toContain("command-rejected");
+      expect(await control("启动").isEnabled()).toBe(true);
       runGate = new Promise<void>((resolve) => {
         releaseRun = resolve;
       });
-      await runButton.evaluate((button) => {
+      await control("启动").evaluate((button) => {
         (button as HTMLButtonElement).click();
         (button as HTMLButtonElement).click();
       });
       await expect.poll(() => runCalls).toBe(2);
       releaseRun();
       await expect
-        .poll(() => page.locator("#job-detail > .live-eyebrow").textContent())
+        .poll(() => page.locator("#task-content > .tag").textContent())
         .toBe("已完成");
-      expect(
-        await page
-          .locator("#job-detail > .job-actions > button")
-          .evaluateAll((buttons) =>
-            buttons.every((button) => (button as HTMLButtonElement).disabled),
-          ),
-      ).toBe(true);
-
-      const completedId = new URL(page.url()).searchParams.get("job")!;
+      expect(await page.locator("#task-controls button").count()).toBe(0);
+      const completedId = new URL(page.url()).searchParams.get("task")!;
       await page.reload();
       await expect
-        .poll(() => page.locator("#job-detail").textContent())
+        .poll(() => page.locator("#task-content").textContent())
         .toContain(completedId);
+      await page.locator("#actBtn").click();
       await expect
-        .poll(() => page.locator("#job-detail > .live-eyebrow").textContent())
-        .toBe("已完成");
-      await page.locator("#overview-tab").click();
-      await expect
-        .poll(() => page.locator("#overview-recent").textContent())
+        .poll(() => page.locator("#activity-list").textContent())
         .toContain("已完成");
+      await page.locator(`#activity-list [data-task="${completedId}"]`).click();
       await page
-        .locator('#overview-recent button[data-status="completed"]')
-        .first()
+        .locator("#task-content")
+        .getByRole("button", { name: "打开文献", exact: true })
         .click();
       await expect
-        .poll(() => page.locator("#job-detail").textContent())
-        .toContain(completedId);
-      await page.getByRole("tab", { name: "结果与材料" }).click();
-      await page
-        .getByRole("button", { name: "查看文献与结果", exact: true })
-        .click();
-      await expect
-        .poll(() => page.locator("#library-workspace").isVisible())
-        .toBe(true);
-      expect(new URL(page.url()).searchParams.get("job")).toBe(completedId);
+        .poll(() => page.locator("#reader-info h2").textContent())
+        .toContain("Synthetic literature");
+      expect(new URL(page.url()).searchParams.get("task")).toBe(completedId);
       await page.goBack();
       await expect
-        .poll(() => page.locator("#jobs-workspace").isVisible())
+        .poll(() => page.locator('[data-page="task"]').isVisible())
         .toBe(true);
-
       let releaseStale!: () => void;
       let staleStarted!: () => void;
       const staleGate = new Promise<void>((resolve) => {
@@ -254,49 +212,41 @@ describe("durable task workbench", () => {
           staleStarted();
           await staleGate;
           await route.fulfill({ json: { tasks: [] } });
-          return;
-        }
-        await route.continue();
+        } else await route.continue();
       };
       await page.route("**/api/tasks?limit=100*", staleRoute);
-      await page.locator("#jobs-refresh").click();
+      await page.locator("#tasks-refresh").click();
       await staleRequest;
-      await page.locator("#jobs-refresh").click();
-      await expect.poll(() => page.locator(".job-list-item").count()).toBe(2);
+      await page.locator("#tasks-refresh").click();
+      await expect
+        .poll(() => page.locator("#tasks-list [data-task]").count())
+        .toBe(2);
       releaseStale();
       await expect.poll(() => listCalls).toBeGreaterThanOrEqual(2);
-      await expect.poll(() => page.locator(".job-list-item").count()).toBe(2);
+      await expect
+        .poll(() => page.locator("#tasks-list [data-task]").count())
+        .toBe(2);
       await page.unroute("**/api/tasks?limit=100*", staleRoute);
-
       await page.route(
         "**/api/tasks?limit=100*",
         (route) => route.fulfill({ status: 503, json: { code: "fixture" } }),
         { times: 1 },
       );
-      await page.locator("#jobs-refresh").click();
+      await page.locator("#tasks-refresh").click();
       await expect
-        .poll(() => page.locator("#jobs-list").textContent())
-        .toContain("无法读取任务队列");
-      await page.locator("#jobs-refresh").click();
-      await expect.poll(() => page.locator(".job-list-item").count()).toBe(2);
+        .poll(() => page.locator("#tasks-list").textContent())
+        .toContain("暂时无法读取");
+      await page.locator("#tasks-refresh").click();
+      await expect
+        .poll(() => page.locator("#tasks-list [data-task]").count())
+        .toBe(2);
       expect(
         await application.jobs!.listTargets(
           (await application.jobs!.listJobs())[0]!.job_id,
         ),
       ).toHaveLength(1);
-      const olderActive = await application.jobService!.create({
-        target_kind: "selector",
-        goal: "pdf",
-        selector: {
-          kind: "literatures",
-          literature_ids: [FIXTURE_LITERATURE.literature_id],
-        },
-        policy_version: "history-fixture",
-        policy: { mode: "never", max_retries: 0 },
-        idempotency_key: "history-active-before-completed-history",
-      });
-      for (let index = 0; index < 102; index += 1) {
-        const history = await application.jobService!.create({
+      const createHistory = (key: string) =>
+        application.jobService!.create({
           target_kind: "selector",
           goal: "pdf",
           selector: {
@@ -305,68 +255,60 @@ describe("durable task workbench", () => {
           },
           policy_version: "history-fixture",
           policy: { mode: "never", max_retries: 0 },
-          idempotency_key: `history-fixture-${index}`,
+          idempotency_key: key,
         });
-        await application.queue!.cancel(history.job_id);
-      }
-      await page.locator("#overview-tab").click();
+      const olderActive = await createHistory(
+        "history-active-before-completed-history",
+      );
+      for (let index = 0; index < 102; index += 1)
+        await application.queue!.cancel(
+          (await createHistory(`history-fixture-${index}`)).job_id,
+        );
+      await page.locator("#actBtn").click();
       await expect
         .poll(() =>
-          page.locator('#overview-active button[data-status="queued"]').count(),
+          page
+            .locator(`#activity-list [data-task="${olderActive.job_id}"]`)
+            .count(),
         )
         .toBe(1);
       await page
-        .locator('#overview-active button[data-status="queued"]')
+        .locator(`#activity-list [data-task="${olderActive.job_id}"]`)
         .click();
-      expect(new URL(page.url()).searchParams.get("job")).toBe(
-        olderActive.job_id,
-      );
-      await page.locator("#jobs-refresh").click();
-      await expect.poll(() => page.locator(".job-list-item").count()).toBe(100);
-      await page.locator("#jobs-more").click();
-      await expect.poll(() => page.locator(".job-list-item").count()).toBe(105);
-      expect(await page.locator("#jobs-more").isHidden()).toBe(true);
-      await application.jobService!.create({
-        target_kind: "selector",
-        goal: "pdf",
-        selector: {
-          kind: "literatures",
-          literature_ids: [FIXTURE_LITERATURE.literature_id],
-        },
-        policy_version: "history-fixture",
-        policy: { mode: "never", max_retries: 0 },
-        idempotency_key: "history-new-arrival",
-      });
-      await page.locator("#jobs-refresh").click();
-      await expect.poll(() => page.locator(".job-list-item").count()).toBe(106);
+      await expect
+        .poll(() => new URL(page.url()).searchParams.get("task"))
+        .toBe(olderActive.job_id);
+      await page.locator("#tasks-refresh").click();
+      await expect
+        .poll(() => page.locator("#tasks-list [data-task]").count())
+        .toBe(100);
+      await page.locator("#tasks-more").click();
+      await expect
+        .poll(() => page.locator("#tasks-list [data-task]").count())
+        .toBe(105);
+      expect(await page.locator("#tasks-more").isHidden()).toBe(true);
+      await createHistory("history-new-arrival");
+      await page.locator("#tasks-refresh").click();
+      await expect
+        .poll(() => page.locator("#tasks-list [data-task]").count())
+        .toBe(106);
       const loaded = await page
-        .locator(".job-list-item small")
-        .allTextContents();
+        .locator("#tasks-list [data-task]")
+        .evaluateAll((rows) =>
+          rows.map((row) => (row as HTMLElement).dataset.task),
+        );
       expect(new Set(loaded).size).toBe(106);
       expect(loaded).toContain(completedId);
-      await page.locator("#jobs-search").fill(completedId);
-      await expect.poll(() => page.locator(".job-list-item").count()).toBe(1);
-      await page.locator("#jobs-search").fill("");
-      await expect.poll(() => page.locator(".job-list-item").count()).toBe(106);
+      await page.locator("#tasks-search").fill(completedId);
+      await expect
+        .poll(() => page.locator("#tasks-list [data-task]").count())
+        .toBe(1);
+      await page.locator("#tasks-search").fill("");
+      await expect
+        .poll(() => page.locator("#tasks-list [data-task]").count())
+        .toBe(106);
       expect(errors).toEqual([]);
       await page.setViewportSize({ width: 390, height: 844 });
-      const overflow = await page.evaluate(() =>
-        [...document.querySelectorAll<HTMLElement>("body *")]
-          .filter((element) => {
-            if (element.closest("[inert]")) return false;
-            const box = element.getBoundingClientRect();
-            return box.right > window.innerWidth + 1 || box.left < -1;
-          })
-          .map((element) => ({
-            id: element.id,
-            className: element.className,
-            tag: element.tagName,
-            left: element.getBoundingClientRect().left,
-            right: element.getBoundingClientRect().right,
-            scrollWidth: element.scrollWidth,
-          })),
-      );
-      expect(overflow).toEqual([]);
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth),
       ).toBeLessThanOrEqual(390);
@@ -432,121 +374,106 @@ describe("durable task workbench", () => {
       page.setDefaultTimeout(5000);
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
-      await page.goto(server.origin);
-      await page.locator("#new-task-button").click();
-      await page.locator("#job-goal").selectOption("processing");
-      await page.locator("#job-processing-json").fill(
-        JSON.stringify({
-          schema_version: 1,
-          idempotency_key: "web-partial-processing",
-          operations: [
-            { operation: "parse-documents", request: env.parseRequest },
-            { operation: "parse-documents", request: env.parseRequest },
-          ],
-        }),
-      );
-      await page.locator("#job-confirm").check();
-      await page.getByRole("button", { name: "创建持久任务" }).click();
-      await expect
-        .poll(() => page.locator("#job-detail").textContent())
-        .toContain("解析 PDF · 2 项");
+      await page.goto(`${server.origin}/?view=ext&advanced=all`);
+      const submit = async (key: string, count: number) => {
+        await page.locator('[data-go="ext"]').click();
+        await page.locator('[data-tools="all"]').click();
+        await page
+          .locator("details")
+          .filter({ has: page.locator("#raw-processing") })
+          .locator("summary")
+          .click();
+        await page.locator("#raw-processing").fill(
+          JSON.stringify({
+            schema_version: 1,
+            idempotency_key: key,
+            operations: Array.from({ length: count }, () => ({
+              operation: "parse-documents",
+              request: env.parseRequest,
+            })),
+          }),
+        );
+        await page.locator("#raw-submit").click();
+        await page
+          .locator("#raw-status")
+          .getByRole("button", { name: "查看任务" })
+          .click();
+        await expect
+          .poll(() => page.locator("#task-content > .tag").textContent())
+          .toBe("等待执行");
+        return new URL(page.url()).searchParams.get("task")!;
+      };
+      const control = (name: string) =>
+        page
+          .locator("#task-controls")
+          .getByRole("button", { name, exact: true });
+      const jobId = await submit("web-partial-processing", 2);
       expect(env.parseCalls).toBe(0);
-      const jobId = (await env.app.jobs!.listJobs())[0]!.job_id;
-      await page
-        .locator("#job-detail")
-        .getByRole("button", { name: "执行", exact: true })
-        .click();
+      await control("启动").click();
       await expect
         .poll(
           async () => (await env.app.processingTasks!.read(jobId)).job.status,
         )
         .toBe("failed");
-      await page.locator("#jobs-refresh").click();
       await expect
-        .poll(() => page.locator("#job-detail").textContent())
+        .poll(() => page.locator("#task-content").textContent(), {
+          timeout: 5000,
+        })
         .toContain("1/2 项已完成");
-      await page.getByRole("tab", { name: "结果与材料" }).click();
       await expect
-        .poll(() => page.locator("#task-detail-panel").textContent())
-        .toContain("结果已保存");
-      await expect
-        .poll(() => page.locator("#task-detail-panel").textContent())
-        .toContain("失败与缺口（1）");
+        .poll(() => page.locator("#task-results").textContent())
+        .toContain("失败 1 项");
       const firstResult = (await env.app.processingTasks!.read(jobId))
         .results[0];
       await page.reload();
       await expect
-        .poll(() => page.locator("#job-detail").textContent())
+        .poll(() => page.locator("#task-content").textContent())
         .toContain("1/2 项已完成");
-      await page
-        .locator("#job-detail")
-        .getByRole("button", { name: "重试未完成项" })
-        .click();
+      await control("重试").click();
       await expect
         .poll(
           async () => (await env.app.processingTasks!.read(jobId)).job.status,
         )
         .toBe("completed");
-      await page.locator("#jobs-refresh").click();
       await expect
-        .poll(() => page.locator("#job-detail").textContent())
+        .poll(() => page.locator("#task-content").textContent(), {
+          timeout: 5000,
+        })
         .toContain("2/2 项已完成");
       const result = await env.app.processingTasks!.read(jobId);
       expect(result.results).toHaveLength(2);
       expect(result.results[0]).toEqual(firstResult);
       expect(env.parseCalls).toBe(3);
-      await page.getByRole("tab", { name: "活动记录" }).click();
-      await expect
-        .poll(() => page.locator("#task-detail-panel").textContent())
-        .toContain("processing-result");
-      await page.locator("#new-task-button").click();
-      await page.locator("#job-goal").selectOption("processing");
-      await page.locator("#job-processing-json").fill(
-        JSON.stringify({
-          schema_version: 1,
-          idempotency_key: "web-pause-resume",
-          operations: [
-            { operation: "parse-documents", request: env.parseRequest },
-          ],
-        }),
+      expect(await page.locator("#task-content .tl").textContent()).toContain(
+        "processing-result",
       );
-      await page.locator("#job-confirm").check();
-      await page.getByRole("button", { name: "创建持久任务" }).click();
+      const resumedId = await submit("web-pause-resume", 1);
+      await control("暂停").click();
       await expect
-        .poll(() => page.locator("#job-detail > .live-eyebrow").textContent())
-        .toBe("等待执行");
-      const resumedId = new URL(page.url()).searchParams.get("job")!;
-      await page
-        .locator("#job-detail")
-        .getByRole("button", { name: "暂停", exact: true })
-        .click();
-      await expect
-        .poll(() => page.locator("#job-detail > .live-eyebrow").textContent())
+        .poll(() => page.locator("#task-content > .tag").textContent())
         .toBe("等待处理");
       expect(env.parseCalls).toBe(3);
-      await page
-        .locator("#job-detail")
-        .getByRole("button", { name: "继续", exact: true })
-        .click();
+      await control("继续").click();
       await expect
         .poll(
           async () =>
             (await env.app.processingTasks!.read(resumedId)).job.status,
         )
         .toBe("completed");
-      await page.locator("#jobs-refresh").click();
       await expect
-        .poll(() => page.locator("#job-detail > .live-eyebrow").textContent())
+        .poll(() => page.locator("#task-content > .tag").textContent(), {
+          timeout: 5000,
+        })
         .toBe("已完成");
       expect(env.parseCalls).toBe(4);
       await page.setViewportSize({ width: 390, height: 844 });
-      await page.locator("#mobile-navigation").click();
+      await page.locator("#menuBtn").click();
       await page.keyboard.press("Escape");
       expect(
         await page
-          .locator("#workspace-navigation")
-          .evaluate((element) => (element as HTMLElement).inert),
-      ).toBe(true);
+          .locator("#side")
+          .evaluate((element) => element.classList.contains("open")),
+      ).toBe(false);
       expect(errors).toEqual([]);
     } finally {
       await browser.close();

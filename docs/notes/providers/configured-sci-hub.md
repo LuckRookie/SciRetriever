@@ -6,33 +6,11 @@
 - 当前内置入口：`https://sci-hub.ru`。
 - 生产实现：[定义](../../../apps/server/src/providers/sci-hub/definition.ts)、[Source](../../../apps/server/src/providers/sci-hub/acquisition.ts)、[locator](../../../apps/server/src/providers/sci-hub/locators.ts)。
 
-## 当前外部观察与证据边界
+## 入口维护与兼容性
 
-2026-10-10 的真实请求确认如下；这些是当前环境的观察，不是长期服务合同或官方 SLA。
+镜像和重定向目的地会随时间变化；一次可用性结果不构成服务 SLA。内置列表由版本维护，当前已移除不能提供有效 DOI/PDF 流程的 `.kr` 入口，不改写用户 custom 列表，也不自动发现其它域名。
 
-| 入口 | 实际观察 | 当前处理 |
-| --- | --- | --- |
-| `sci-hub.ru/10.1016/s0254-0584(01)00333-9` | 返回 200 Sci-Hub landing，未转到 Sci-Net | 继续通用静态 PDF 获取 |
-| `sci-hub.ru/10.1021/acs.chemmater.4c00597` | HTTP 302，Location 指向同 DOI 的 `sci-net.xyz` 页面 | 由共享 Network 重新检查重定向目的地，再处理 landing |
-| `sci-hub.ru/10.1021/acsomega.5c11075` | 同样转到 Sci-Net；本次返回 200、显示 uploaded | 按页面实际 PDF 声明处理，不把重定向视为拒绝 |
-| `sci-net.xyz/` | 首页自述为论文请求与共享平台，已上传文件可不注册访问 | 仅记录页面声明，不新增账号、上传或请求表单自动化 |
-| `sci-hub.kr/` 与两个新旧 DOI 入口 | 均为同一份 610 字节的 Science Hub 广告占位 HTML，含广告 iframe，没有 DOI 查询表单或 PDF 声明 | 从 builtin 移除；不改写用户 custom 列表 |
-
-`.kr` 在 2026-08-28 的根页面核验中曾呈现 Sci-Hub DOI 表单，因而进入早期 builtin。
-本次三个路径返回同一 hash 的占位页，只能证明它当前在本环境不能充当有效镜像，不能据此确认域名被接管的原因。
-不会自动加入搜索到的其它域名，也不会把 Sci-Net 硬编码为新的内置镜像。
-
-此前批量日志中，Sci-Net 的 43 次响应均为 502；本次同类入口已恢复到 200。
-新的 302 Location 证据确认跳转由远端发出，并非应用猜出的域名。没有足够证据把早先 502
-归因于账号拒绝、订阅权限不足、请求过快或 IP 封禁；网关更深层故障原因不在客户端日志内。
-
-Sci-Net 样本中存在带引号的 `iframe src`，PDF URL 尾部包含 `#view=FitH&navpanes=0`。
-旧共享静态解析器提取了链接，但 `safeLocator` 拒绝 fragment，导致文件被遗漏。
-当前在静态链接进入 locator 检查前删除仅供阅读器显示的 fragment，再保留原 path/query、
-origin、DNS、重定向和文件检查。没有为 Sci-Net 新建 selector、页面程序或文章特例。
-
-真实验证与修复结果见[本次记录](../sci-hub-routing-and-public-fallback-2026-10-10.md)。
-原始请求记录位于 `/tmp/sciretriever-scihub-routing-20261010-ULmT6B/`，未提交原始页面或 PDF。
+服务端可能跳转到其它公开文件页面；每跳仍由 Network 检查。静态 PDF 链接的阅读器 fragment 只影响展示，获取前应剥离 fragment 并保留 path/query。历史请求表、故障诊断与复验见测试记录（本地文件：`sandbox/reports/sci-hub-endpoint-observations-2026-10-10.md`，不随仓库分发）。
 
 ## 配置与对象图
 

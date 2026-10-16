@@ -1,3 +1,7 @@
+import {
+  latestBrowserObservationMessage,
+  browserModelToolCallId,
+} from "./browser-model-fixture.js";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
@@ -483,7 +487,9 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         messages: { content: { type: string; text?: string }[] }[];
       };
       const observation = JSON.parse(
-        wire.messages[1]!.content.find((part) => part.type === "text")!.text!,
+        latestBrowserObservationMessage(wire).content.find(
+          (part) => part.type === "text",
+        )!.text!,
       ) as WorkbenchObservation;
       const paper = papers.find(
         (item) => item.literature.literature_id === observation.article_id,
@@ -525,6 +531,8 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
               message: {
                 tool_calls: [
                   {
+                    id: browserModelToolCallId(),
+                    type: "function",
                     function: {
                       name: "browser_action",
                       arguments: JSON.stringify({ action }),

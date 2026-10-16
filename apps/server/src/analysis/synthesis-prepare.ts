@@ -65,7 +65,7 @@ export class SynthesisPreparationService {
   async prepare(
     value: unknown,
     signal?: AbortSignal,
-    maxVerificationBytes = 64 * 1024 * 1024,
+    maxVerificationBytes = Number.MAX_SAFE_INTEGER,
   ): Promise<SynthesisPreparation> {
     if (this.stopped) fail("synthesis-closed");
     if (signal?.aborted) fail("synthesis-cancelled");

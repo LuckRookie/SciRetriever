@@ -42,6 +42,15 @@ async function fixture() {
     applicationOptions: {
       browserHost: () => null,
       metadata: {
+        reference_query_ports: [
+          {
+            provider_name: "crossref",
+            open_reference_query: () => ({
+              pull_raw_item: async () => null,
+              convert_raw_item: () => ({ observations: [], relations: [] }),
+            }),
+          },
+        ],
         topic_search_ports: [
           {
             provider_name: "crossref",
@@ -189,6 +198,64 @@ async function fixture() {
 }
 
 describe("production task workbench composition", () => {
+  it("validates workspace deep links and adapts explicit citation discovery to its existing owner", async () => {
+    const env = await fixture();
+    try {
+      const valid = new URL(env.server.origin);
+      valid.searchParams.set("view", "lib");
+      valid.searchParams.set("reader", "doc");
+      valid.searchParams.set("query", JSON.stringify({ text: "synthetic" }));
+      valid.searchParams.set("task", "task-1");
+      expect((await fetch(valid)).status).toBe(200);
+      for (const suffix of [
+        "?view=unknown",
+        "?reader=invalid",
+        "?query=%7Bbroken",
+        "?view=lib&view=set",
+        "?query=%7B%22unknown%22:1%7D",
+      ])
+        expect((await fetch(`${env.server.origin}/${suffix}`)).status).toBe(
+          400,
+        );
+      const run = vi
+        .spyOn(env.server.application.citations, "run")
+        .mockResolvedValue({
+          discovery_run_id: randomUUID(),
+          status: "COMPLETED",
+          result_count: 0,
+          source_results: [],
+        });
+      const request = {
+        kind: "citation",
+        seed_literature_id: FIXTURE_LITERATURE.literature_id,
+        direction: "references",
+        scan_limit: 25,
+      };
+      expect(
+        (await env.call("/api/discovery", { ...request, direction: "invalid" }))
+          .status,
+      ).toBe(400);
+      expect(run).not.toHaveBeenCalled();
+      const response = await env.call("/api/discovery", request);
+      expect(response.status).toBe(200);
+      expect(run).toHaveBeenCalledWith(
+        expect.objectContaining({
+          seed_literature_ids: [FIXTURE_LITERATURE.literature_id],
+          direction: "references",
+          max_depth: 1,
+          result_limit: 25,
+          providers: expect.arrayContaining([
+            expect.objectContaining({ scan_limit: 25 }),
+          ]),
+        }),
+      );
+      expect(env.discoveryCalls).toBe(0);
+      run.mockRestore();
+    } finally {
+      await env.close();
+    }
+  });
+
   it("starts without a literature, binds the configured database, shares authenticated reader routes and imports metadata", async () => {
     const env = await fixture();
     try {
@@ -658,16 +725,32 @@ describe("production task workbench composition", () => {
     },
   );
 
-  it("refuses an absent database without creating or migrating it", async () => {
+  it("starts an empty home with the default library without opening Browser", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-empty-workbench-"));
+    const browserHost = vi.fn(() => null);
+    let server:
+      | Awaited<ReturnType<typeof startProductionWorkbench>>
+      | undefined;
     try {
-      await expect(startProductionWorkbench({ home })).rejects.toMatchObject({
-        code: "migration-target-missing",
+      server = await startProductionWorkbench({
+        home,
+        port: 0,
+        assets: new Map([["/", { contentType: "text/html", body: "ok" }]]),
+        applicationOptions: { browserHost, metadata: {} },
       });
+      expect(server.application.configuration.paths).toEqual({
+        catalog_path: join(home, ".sciretriever", "catalog.sqlite"),
+        artifact_root: join(home, ".sciretriever", "artifacts"),
+      });
+      expect(server.application.processingTasks).not.toBeNull();
+      expect(server.application.knowledgeAnalysis).not.toBeNull();
+      expect(browserHost).not.toHaveBeenCalled();
+      expect((await fetch(server.origin)).status).toBe(200);
       await expect(
         readFile(join(home, "catalog.sqlite")),
       ).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
+      await server?.close();
       await rm(home, { recursive: true, force: true });
     }
   });

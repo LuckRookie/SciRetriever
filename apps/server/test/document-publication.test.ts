@@ -1,3 +1,4 @@
+import { artifactReference } from "../src/storage/artifact-layout.js";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
@@ -406,7 +407,13 @@ describe("v3 document publication", () => {
       );
       expect(version?.structure_artifact_path).toBe(alternate);
       await expect(
-        readFile(join(env.home, "artifacts", `objects/${built.sha256}.bin`)),
+        readFile(
+          join(
+            env.home,
+            "artifacts",
+            artifactReference("document-structure", receipt.document.structure),
+          ),
+        ),
       ).rejects.toThrow();
     } finally {
       await env.close();
@@ -661,6 +668,15 @@ describe("v3 document publication", () => {
       });
       expect(env.calls).toBe(1);
       const files = new SqliteDocumentStorage(env.app.database, env.app.files);
+      for (const [artifact, directory, extension] of [
+        [first.document.markdown, "parsed/markdown", "md"],
+        [first.document.structure, "parsed/structure", "json"],
+        [first.document.resources[0]!.artifact, "parsed/images", "png"],
+      ] as const) {
+        expect(await env.app.database.locateArtifact(artifact)).toMatchObject({
+          reference: `${directory}/${artifact.sha256.slice(0, 2)}/${artifact.sha256}.${extension}`,
+        });
+      }
       const input = {
         source_material_ref: first.document.source_material_ref,
         parser_result_sha256: first.document.parser_result_sha256,
@@ -677,7 +693,10 @@ describe("v3 document publication", () => {
           expect(version).toEqual(first.document);
         },
       );
-      const structurePath = `objects/${first.document.structure.sha256}.bin`;
+      const structurePath = artifactReference(
+        "document-structure",
+        first.document.structure,
+      );
       const structure = JSON.parse(
         (await readFile(join(env.home, "artifacts", structurePath))).toString(
           "utf8",
@@ -722,7 +741,10 @@ describe("v3 document publication", () => {
           source_artifact_path: parserSnapshot!.source_artifact_path,
           markdown_artifact_path:
             parserSnapshot!.parser!.markdown_artifact_path,
-          structure_artifact_path: `objects/${second.document.structure.sha256}.bin`,
+          structure_artifact_path: artifactReference(
+            "document-structure",
+            second.document.structure,
+          ),
           resource_artifact_paths: { "fig.png": "objects/missing-resource" },
           expected_default_revision: 1,
         }),
@@ -799,7 +821,10 @@ describe("v3 document publication", () => {
         env.request("reuse-current", 1),
       );
       expect(duplicate.published).toBe(false);
-      const resourcePath = `objects/${first.document.resources[0]!.artifact.sha256}.bin`;
+      const resourcePath = artifactReference(
+        "parser-resource",
+        first.document.resources[0]!.artifact,
+      );
       const fullPath = join(env.home, "artifacts", resourcePath);
       const original = await readFile(fullPath);
       await writeFile(fullPath, Buffer.from("corrupt"));

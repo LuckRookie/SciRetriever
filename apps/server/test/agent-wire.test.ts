@@ -5,7 +5,7 @@ import {
 } from "../src/agents/openai.js";
 import { AnthropicMessagesAdapter } from "../src/agents/anthropic.js";
 import { validateAgentCall, type AgentCall } from "../src/agents/protocol.js";
-import type { AdapterConfig } from "../src/agents/common.js";
+import { requestBody, type AdapterConfig } from "../src/agents/common.js";
 import { AgentRuntime } from "../src/agents/runtime.js";
 
 const schema = {
@@ -414,4 +414,21 @@ it("accepts native Chat nullable usage chunks and Responses completion without a
       provenance: { usage: { input_tokens: 2, output_tokens: 3 } },
     });
   }
+});
+
+it("omits optional output limits for fixed-input OpenAI analysis", () => {
+  const unlimited = { ...call };
+  delete unlimited.max_output_tokens;
+  validateAgentCall(unlimited);
+  expect(requestBody(unlimited, "openai-responses")).not.toHaveProperty(
+    "max_output_tokens",
+  );
+  expect(requestBody(unlimited, "openai-chat")).not.toHaveProperty(
+    "max_completion_tokens",
+  );
+  expect(requestBody(unlimited, "anthropic")).toHaveProperty(
+    "max_tokens",
+    16384,
+  );
+  expect(() => validateAgentCall({ ...unlimited, role: "browser" })).toThrow();
 });

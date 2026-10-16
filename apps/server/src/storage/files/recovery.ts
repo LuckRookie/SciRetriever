@@ -1,3 +1,4 @@
+import { hasManagedArtifactPrefix } from "../artifact-layout.js";
 import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import {
@@ -69,7 +70,7 @@ export class ArtifactRecovery {
         !v ||
         Object.keys(v).sort().join() !== "artifact,reference" ||
         !isRelativeArtifactReference(this.files.root, v.reference) ||
-        !/^(objects|\.objects|\.candidates)\//.test(v.reference)
+        !hasManagedArtifactPrefix(v.reference)
       )
         fail();
       const value = {

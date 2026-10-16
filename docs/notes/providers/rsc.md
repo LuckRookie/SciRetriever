@@ -69,14 +69,9 @@ RSC article page 可能同时提供 Electronic Supplementary Information（ESI�
 `challenge-unresolved`。该 fixture 只证明旧程序没有自行挡住必要资源，不证明当前通用 Agent、
 当前 IP、机构合同或文章 entitlement。
 
-2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
-均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。这个结果证明当前文章绑定、
-Turnstile 路径和 image 子资源没有再被 SciRetriever 自己误拦；它不证明自动验证已通过、文章有
-权限或 Cloak 提高了下载成功率，也没有触发 CAPTCHA 点击。
+历史现场结果见Browser 切换测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
 
-CBA72 将 RSC 的本次服务器现场准入记为 `deferred`。这不降低其 `production-ready` 工程状态、
-也不等于其它机构/Profile 全局 unsupported；它只表示固定代表样本在旧执行器中停在持续自动
-验证且没有可验证 PDF。
+历史现场结果见Browser 切换测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
 
 现有来源若明确提供安全的 RSC PDF/landing `AssetHint`，仍可在第一层通过通用 Public Source 获取，并接受实际字节、PDF reader、页面树、来源依据与不可变发布检查。该路径不会因为存在 RSC Profile 而跳过授权判断，也不会把第一层失败自动升级到 Browser。
 

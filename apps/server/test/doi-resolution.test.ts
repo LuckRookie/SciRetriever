@@ -231,9 +231,9 @@ describe("DOI first-hop acquisition resolution", () => {
   });
 
   it.each([
-    { status: 429, retry: undefined, code: "rate-limited", independent: false },
-    { status: 302, retry: "60", code: "rate-limited", independent: false },
-    { status: 503, retry: "60", code: "rate-limited", independent: false },
+    { status: 429, retry: undefined, code: "rate-limited", independent: true },
+    { status: 302, retry: "60", code: "rate-limited", independent: true },
+    { status: 503, retry: "60", code: "rate-limited", independent: true },
     {
       status: 503,
       retry: undefined,
@@ -268,7 +268,7 @@ describe("DOI first-hop acquisition resolution", () => {
     },
   );
 
-  it("preserves authentication failures without admitting another route", async () => {
+  it("preserves authentication failure evidence while allowing independent sources", async () => {
     respond = (_request, response) => {
       response.writeHead(401);
       response.end();
@@ -277,7 +277,7 @@ describe("DOI first-hop acquisition resolution", () => {
     await expect(resolve(observed)).rejects.toMatchObject({
       code: "http-response-failed",
       retryable: false,
-      allows_independent_fallback: false,
+      allows_independent_fallback: true,
     });
     expect(observed).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ status: 401 }),

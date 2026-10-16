@@ -76,57 +76,43 @@ function draft(
   ].join("\n");
 }
 
-it("enforces source alignment for identifiers, measurements, formulas and numbers", async () => {
-  const source =
-    "Reference DOI 10.1000/source reports 12 mg and $E=mc^2$ with value 42.";
+it("accepts model paraphrases without lexical fact checking and preserves source binding", async () => {
+  const source = "The measurement was 0.012 g. Reference DOI 10.1000/source.";
   const parser = await parserFor(source);
+  const parsed = parseContentDraft(
+    draft("The mass was 12 mg.", "Reformatted citation"),
+    parser,
+    source,
+  );
+  expect(parsed.sections[0]!.markdown).toBe("The mass was 12 mg.");
+  expect(parsed.references).toEqual(["Reformatted citation"]);
   expect(() =>
-    parseContentDraft(
-      draft("The result is 12 mg, $E=mc^2$, and value 42."),
-      parser,
-      source,
-    ),
-  ).not.toThrow();
-  expect(() =>
-    parseContentDraft(draft("The result is 13 mg."), parser, source),
-  ).toThrowError(expect.objectContaining({ code: "measurement-alignment" }));
-  expect(() =>
-    parseContentDraft(draft("The result is value 43."), parser, source),
-  ).toThrowError(expect.objectContaining({ code: "number-alignment" }));
-  expect(() =>
-    parseContentDraft(draft("The result cites another study."), parser, source),
-  ).not.toThrow();
-  expect(() =>
-    parseContentDraft(
-      draft("The result cites another study.", "Unknown reference"),
-      parser,
-      source,
-    ),
-  ).toThrowError(expect.objectContaining({ code: "reference-alignment" }));
+    parseContentDraft(draft("Summary"), parser, source + "changed"),
+  ).toThrowError(expect.objectContaining({ code: "content-input" }));
 });
 
-it("rejects unsafe HTML and deep headings while allowing headings in fenced code", async () => {
-  const source = "A reference sentence.";
+it("accepts ordinary Markdown and fills the legacy wrappers without dropping content", async () => {
+  const source = "A source paragraph.";
   const parser = await parserFor(source);
+  const body =
+    "An introduction.\n\n# Findings\n\nUseful finding.\n\n### Detail\n\nAdditional context.\n\n```\n# Code heading\n```";
+  const result = parseContentDraft(body, parser, source);
+  expect(result.sections.filter((s) => s.role !== "additional")).toHaveLength(
+    4,
+  );
+  expect(result.sections.find((s) => s.title === "总结")?.markdown).toBe(
+    "An introduction.",
+  );
+  expect(
+    result.sections.find((s) => s.title === "Findings")?.markdown,
+  ).toContain("### Detail");
+  expect(
+    result.sections.find((s) => s.title === "Findings")?.markdown,
+  ).toContain("# Code heading");
+  expect(result.references).toEqual([]);
+  expect(() => parseContentDraft("", parser, source)).toThrow();
+  expect(() => parseContentDraft("# Empty heading", parser, source)).toThrow();
   expect(() =>
-    parseContentDraft(
-      draft("<h1>Injected</h1>", "A reference sentence."),
-      parser,
-      source,
-    ),
-  ).toThrowError(expect.objectContaining({ code: "html-heading" }));
-  expect(() =>
-    parseContentDraft(
-      draft("### Deep heading", "A reference sentence."),
-      parser,
-      source,
-    ),
-  ).toThrowError(expect.objectContaining({ code: "heading-depth" }));
-  expect(() =>
-    parseContentDraft(
-      draft("```\n# This is code\n```", "A reference sentence."),
-      parser,
-      source,
-    ),
-  ).not.toThrow();
+    parseContentDraft("Broken\u0000content", parser, source),
+  ).toThrow();
 });

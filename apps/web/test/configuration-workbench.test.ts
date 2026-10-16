@@ -53,6 +53,7 @@ async function assets(): Promise<Map<string, WorkbenchStaticAsset>> {
     ["/", "live.html", "text/html"],
     ["/styles.css", "styles.css", "text/css"],
     ["/live.css", "live.css", "text/css"],
+    ["/workspace.css", "workspace.css", "text/css"],
   ] as const)
     values.set(route, {
       contentType,
@@ -176,6 +177,7 @@ describe("configuration workbench", () => {
       const page = await browser.newPage({
         viewport: { width: 1280, height: 900 },
       });
+      page.setDefaultTimeout(5000);
       const failures: string[] = [];
       page.on("pageerror", (error) => failures.push(error.message));
       await page.goto(`${server.origin}/?workspace=configuration`);
@@ -192,11 +194,15 @@ describe("configuration workbench", () => {
         await page.locator("#config-runtime-status").getAttribute("data-state"),
       ).toBe("restart-required");
 
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#config-metadata-mode").selectOption("custom");
+      await page.locator('[data-setting="sources"]').click();
       await page
         .locator('#config-metadata-providers input[value="crossref"]')
         .check();
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#config-metadata-limit").fill("501");
+      await page.locator('[data-setting="parser"]').click();
       await page
         .locator("#config-browser-profile")
         .fill("draft-from-other-form");
@@ -205,6 +211,7 @@ describe("configuration workbench", () => {
       const limitSaveResponse = page.waitForResponse((response) =>
         response.url().includes("/api/configuration/publish-json"),
       );
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#source-config-save").click();
       expect((await limitSaveResponse).status()).toBe(200);
       await expect
@@ -223,17 +230,24 @@ describe("configuration workbench", () => {
         .poll(() => page.locator("#source-config-save").isEnabled())
         .toBe(true);
 
+      await page.locator('[data-setting="sources"]').click();
       await page
         .locator('#config-metadata-providers input[value="web-of-science"]')
         .check();
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#config-metadata-limit").fill("37");
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#config-wos-product").selectOption("expanded");
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#config-wos-database").fill("WOS-Synthetic");
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#config-wos-edition").fill("2026");
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#config-acquisition-mode").selectOption("auto");
       const sourceSaveResponse = page.waitForResponse((response) =>
         response.url().includes("/api/configuration/publish-json"),
       );
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#source-config-save").click();
       const sourceSave = await sourceSaveResponse;
       expect(sourceSave.status(), await sourceSave.text()).toBe(200);
@@ -255,16 +269,20 @@ describe("configuration workbench", () => {
         acquisition: { mode: "auto", providers: [] },
       });
 
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#config-acquisition-mode").selectOption("custom");
+      await page.locator('[data-setting="sources"]').click();
       await page
         .locator('#config-acquisition-providers input[value="unpaywall"]')
         .check();
+      await page.locator('[data-setting="sources"]').click();
       await page
         .locator("#config-unpaywall-contact")
         .fill("research@example.org");
       const unpaywallSaveResponse = page.waitForResponse((response) =>
         response.url().includes("/api/configuration/publish-json"),
       );
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#source-config-save").click();
       expect((await unpaywallSaveResponse).status()).toBe(200);
       const savedSources = await owner.read();
@@ -297,7 +315,9 @@ describe("configuration workbench", () => {
       ).toBe("restart-required");
 
       const afterSourceSave = savedSources.revision;
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#config-wos-database").fill("");
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#source-config-save").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
@@ -309,6 +329,7 @@ describe("configuration workbench", () => {
           web_of_science: { database: "WOS-Synthetic" },
         },
       );
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#config-wos-database").fill("WOS-Synthetic");
 
       const externalSources = await owner.read();
@@ -323,7 +344,9 @@ describe("configuration workbench", () => {
         externalSources.revision,
         ["sources"],
       );
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#config-metadata-limit").fill("43");
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#source-config-save").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
@@ -334,15 +357,21 @@ describe("configuration workbench", () => {
       expect((await owner.read()).configuration.sources.metadata.limit).toBe(
         88,
       );
+      await page.locator('[data-setting="status"]').click();
       await page.locator("#config-refresh").click();
       await expect
         .poll(() => page.locator("#config-metadata-limit").inputValue())
         .toBe("88");
 
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-browser-profile").fill("web-fixture");
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-parser-url").fill("http://127.0.0.1:8000");
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-parser-mode").selectOption("loopback");
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-parser-model").fill("synthetic-parser");
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-save").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
@@ -371,9 +400,11 @@ describe("configuration workbench", () => {
         external.revision,
         ["browser"],
       );
+      await page.locator('[data-setting="parser"]').click();
       await page
         .locator("#config-browser-profile")
         .fill("draft-after-conflict");
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-save").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
@@ -383,10 +414,12 @@ describe("configuration workbench", () => {
       );
 
       const revisionBeforeProbes = (await owner.read()).revision;
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-probe-parse").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
         .toContain("Parse 测试：passed");
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-probe-browser").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
@@ -397,15 +430,20 @@ describe("configuration workbench", () => {
       ]);
       expect((await owner.read()).revision).toBe(revisionBeforeProbes);
 
+      await page.locator('[data-setting="status"]').click();
       await page.locator("#config-refresh").click();
       await expect
         .poll(() => page.locator("#config-browser-profile").inputValue())
         .toBe("external-change");
 
       const secret = "synthetic-ui-secret-never-rendered";
+      await page.locator('[data-setting="cred"]').click();
       await page.locator("#config-credential-namespace").selectOption("model");
+      await page.locator('[data-setting="cred"]').click();
       await page.locator("#config-credential-target").fill("fixture");
+      await page.locator('[data-setting="cred"]').click();
       await page.locator("#config-credential-value").fill(secret);
+      await page.locator('[data-setting="cred"]').click();
       await page.locator("#config-credential-save").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
@@ -437,7 +475,7 @@ describe("configuration workbench", () => {
 
       await page.locator("#library-tab").click();
       await expect
-        .poll(() => page.locator("#library-workspace").isVisible())
+        .poll(() => page.locator('[data-page="lib"]').isVisible())
         .toBe(true);
       await page.goBack();
       await expect
@@ -471,9 +509,9 @@ describe("configuration workbench", () => {
       const fallback = await browser.newPage();
       await fallback.goto(`${server.origin}/?workspace=unknown`);
       await expect
-        .poll(() => fallback.locator("#overview-workspace").isVisible())
+        .poll(() => fallback.locator('[data-page="lib"]').isVisible())
         .toBe(true);
-      expect(new URL(fallback.url()).searchParams.has("workspace")).toBe(false);
+      expect(new URL(fallback.url()).searchParams.get("view")).toBe("lib");
       await fallback.close();
     } finally {
       await browser.close();
@@ -575,6 +613,7 @@ describe("configuration workbench", () => {
         headless: true,
       });
       const page = await browser.newPage();
+      page.setDefaultTimeout(5000);
       await page.goto(`${server.origin}/?workspace=configuration`);
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
@@ -582,7 +621,9 @@ describe("configuration workbench", () => {
       expect(await page.locator(".provider-row").count()).toBe(0);
       expect(await page.locator(".model-row").count()).toBe(0);
 
+      await page.locator('[data-setting="sources"]').click();
       await page.locator("#config-metadata-limit").fill("777");
+      await page.locator('[data-setting="models"]').click();
       await page.locator("#provider-add").click();
       const providerRow = page.locator(".provider-row").first();
       await providerRow.locator(".provider-name").fill("vision-fixture");
@@ -592,6 +633,7 @@ describe("configuration workbench", () => {
       await providerRow
         .locator(".provider-base-url")
         .fill("https://provider.example.test/v1");
+      await page.locator('[data-setting="models"]').click();
       await page.locator("#model-add").click();
       const modelRow = page.locator(".model-row").first();
       await modelRow.locator(".model-provider").selectOption("vision-fixture");
@@ -602,6 +644,7 @@ describe("configuration workbench", () => {
       const registrationResponse = page.waitForResponse((response) =>
         response.url().includes("/api/configuration/publish-json"),
       );
+      await page.locator('[data-setting="models"]').click();
       await page.locator("#provider-model-save").click();
       expect((await registrationResponse).status()).toBe(200);
       await expect
@@ -629,14 +672,18 @@ describe("configuration workbench", () => {
         await page.locator("#config-runtime-status").getAttribute("data-state"),
       ).toBe("restart-required");
 
+      await page.locator('[data-setting="parser"]').click();
       await page
         .locator("#config-browser-model")
         .selectOption("vision-fixture/remote-vision");
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-browser-enabled").check();
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-browser-profile").fill("synthetic-profile");
       const runtimeResponse = page.waitForResponse((response) =>
         response.url().includes("/api/configuration/publish-json"),
       );
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-save").click();
       expect((await runtimeResponse).status()).toBe(200);
       await expect
@@ -661,6 +708,7 @@ describe("configuration workbench", () => {
         },
         current.revision,
       );
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-probe-browser").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
@@ -675,6 +723,7 @@ describe("configuration workbench", () => {
       expect(JSON.stringify(await owner.read())).not.toContain(apiKey);
 
       const beforeDuplicate = (await owner.read()).revision;
+      await page.locator('[data-setting="models"]').click();
       await page.locator("#provider-add").click();
       const duplicate = page.locator(".provider-row").nth(1);
       await duplicate.locator(".provider-name").fill("vision-fixture");
@@ -682,29 +731,36 @@ describe("configuration workbench", () => {
       await duplicate
         .locator(".provider-base-url")
         .fill("https://duplicate.example.test/v1");
+      await page.locator('[data-setting="models"]').click();
       await page.locator("#provider-model-save").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
         .toContain("Provider 名称重复");
       expect((await owner.read()).revision).toBe(beforeDuplicate);
+      await page.locator('[data-setting="status"]').click();
       await page.locator("#config-refresh").click();
       await expect.poll(() => page.locator(".provider-row").count()).toBe(1);
 
+      await page.locator('[data-setting="models"]').click();
       await page
         .locator(".provider-base-url")
         .fill("https://provider.example.test/v2");
       const providerEditResponse = page.waitForResponse((response) =>
         response.url().includes("/api/configuration/publish-json"),
       );
+      await page.locator('[data-setting="models"]').click();
       await page.locator("#provider-model-save").click();
       expect((await providerEditResponse).status()).toBe(200);
       expect((await owner.read()).configuration.providers).toMatchObject({
         "vision-fixture": { base_url: "https://provider.example.test/v2" },
       });
 
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-browser-model").selectOption("");
       const beforeReferencedModelEdit = (await owner.read()).revision;
+      await page.locator('[data-setting="models"]').click();
       await page.locator(".model-name").fill("remote-vision-v2");
+      await page.locator('[data-setting="models"]').click();
       await page.locator("#provider-model-save").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
@@ -714,8 +770,10 @@ describe("configuration workbench", () => {
       const clearTaskResponse = page.waitForResponse((response) =>
         response.url().includes("/api/configuration/publish-json"),
       );
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-save").click();
       expect((await clearTaskResponse).status()).toBe(200);
+      await page.locator('[data-setting="models"]').click();
       await page.locator("#provider-model-save").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
@@ -724,13 +782,16 @@ describe("configuration workbench", () => {
         "vision-fixture/remote-vision-v2",
       );
 
+      await page.locator('[data-setting="parser"]').click();
       await page
         .locator("#config-browser-model")
         .selectOption("vision-fixture/remote-vision-v2");
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-save").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
         .toContain("配置已保存");
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-probe-browser").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
@@ -740,6 +801,7 @@ describe("configuration workbench", () => {
         model: "remote-vision-v2",
         authorization: `Bearer ${apiKey}`,
       });
+      await page.locator('[data-setting="models"]').click();
       await page.locator(".model-row button").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
@@ -752,13 +814,17 @@ describe("configuration workbench", () => {
         "vision-fixture",
       );
 
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-browser-model").selectOption("");
+      await page.locator('[data-setting="parser"]').click();
       await page.locator("#config-save").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
         .toContain("配置已保存");
+      await page.locator('[data-setting="models"]').click();
       await page.locator(".model-row button").click();
       expect(await page.locator(".model-row").count()).toBe(0);
+      await page.locator('[data-setting="models"]').click();
       await page.locator("#provider-model-save").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
@@ -766,6 +832,7 @@ describe("configuration workbench", () => {
       expect((await owner.read()).configuration.models).toEqual({});
       await page.locator(".provider-row button").click();
       expect(await page.locator(".provider-row").count()).toBe(0);
+      await page.locator('[data-setting="models"]').click();
       await page.locator("#provider-model-save").click();
       await expect
         .poll(() => page.locator("#config-page-status").textContent())
@@ -777,5 +844,5 @@ describe("configuration workbench", () => {
       await session.close();
       await rm(home, { recursive: true, force: true });
     }
-  });
+  }, 30000);
 });

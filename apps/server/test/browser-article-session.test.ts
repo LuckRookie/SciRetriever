@@ -46,8 +46,8 @@ describe("Browser article active clock", () => {
     resumed();
     expect(clock.remaining()).toEqual({
       deadline_ms: 292_000,
-      model_calls: 99,
-      actions: 199,
+      model_calls: 29,
+      actions: 29,
     });
   });
 
@@ -126,19 +126,30 @@ describe("Browser article active clock", () => {
     expect(clock.snapshot().actions).toBe(0);
   });
 
-  it("allows the hundredth dispatched result to apply and rejects the next dispatch", () => {
+  it("allows the thirtieth dispatched result to apply and rejects the next dispatch", () => {
     const { clock } = clockFixture();
-    for (let call = 0; call < 100; call += 1) clock.recordModelDispatch();
+    for (let call = 0; call < 30; call += 1) clock.recordModelDispatch();
     expect(clock.remaining().model_calls).toBe(0);
     expect(() => clock.recordAgentAction()).not.toThrow();
     expect(() => clock.recordModelDispatch()).toThrow(
       BrowserArticleBudgetError,
     );
-    expect(clock.snapshot()).toMatchObject({ model_calls: 100, actions: 1 });
+    expect(clock.snapshot()).toMatchObject({ model_calls: 30, actions: 1 });
   });
 
-  it("rejects the two hundred and first Agent action without charging internal waits", () => {
+  it("records default Agent actions without enforcing a separate action ceiling", () => {
     const { clock } = clockFixture();
+    for (let action = 0; action < 30; action += 1) clock.recordAgentAction();
+    expect(clock.remaining().actions).toBe(0);
+    expect(() => clock.recordAgentAction()).not.toThrow();
+    expect(clock.snapshot()).toMatchObject({ model_calls: 0, actions: 31 });
+    expect(clock.remaining()).toMatchObject({ model_calls: 30, actions: 0 });
+  });
+
+  it("preserves an explicit legacy action ceiling without charging internal waits", () => {
+    const clock = new BrowserArticleClock({
+      budget: { ...DEFAULT_BROWSER_ARTICLE_BUDGET, max_actions: 200 },
+    });
     const wait = clock.beginActive("page-wait");
     wait();
     for (let action = 0; action < 200; action += 1) clock.recordAgentAction();

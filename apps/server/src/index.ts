@@ -243,7 +243,19 @@ export {
   assembleMetadataRegistry,
   type MetadataAssemblyOptions,
 } from "./metadata/assembly.js";
-export { AgentRuntime, type AgentBinding } from "./agents/runtime.js";
+export {
+  AgentRuntime,
+  DshAgentRuntime,
+  type AgentBinding,
+} from "./agents/runtime.js";
+export type {
+  AgentSessionRequest,
+  AgentCapabilitySession,
+  AgentCapabilityInput,
+  AgentCapabilityRunOptions,
+  AgentCapabilityResult,
+  AgentCapabilityToolResult,
+} from "./agents/capability.js";
 export {
   BrowserHost,
   BrowserHostError,

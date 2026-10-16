@@ -297,7 +297,7 @@ function mergeConfigurationText(
       const path = header[1]!.split(".")[0]!.replace(/^['"]|['"]$/gu, "");
       removing = owned.has(path as ConfigurationSection);
     }
-    if (!removing) kept.push(line);
+    if (!removing || /^\s*#/u.test(line)) kept.push(line);
   }
   const prefix = kept.join("").replace(/\s*$/u, "");
   const update = renderSections(candidate, sections);
@@ -631,6 +631,29 @@ export class TypeScriptConfigurationOwner {
   async read(signal?: AbortSignal): Promise<TypeScriptConfigurationSnapshot> {
     cancelled(signal);
     return snapshot(this.home);
+  }
+
+  /** Persist missing storage paths for Web startup so every entry uses the same library. */
+  async ensureStoragePaths(
+    signal?: AbortSignal,
+  ): Promise<TypeScriptConfigurationSnapshot> {
+    const current = await this.read(signal);
+    const paths = current.configuration.paths;
+    if (paths.catalog_path !== null && paths.artifact_root !== null)
+      return current;
+    const root = join(resolve(this.home), ".sciretriever");
+    return this.publishConfiguration(
+      {
+        ...current.configuration,
+        paths: {
+          catalog_path: paths.catalog_path ?? join(root, "catalog.sqlite"),
+          artifact_root: paths.artifact_root ?? join(root, "artifacts"),
+        },
+      },
+      current.revision,
+      ["paths"],
+      signal,
+    );
   }
 
   validate(payload: string, signal?: AbortSignal): OrdinaryConfiguration {
@@ -1111,16 +1134,6 @@ function modelErrorAction(code: ProbeModelError["code"]): string {
   return "configure-model";
 }
 
-const ANALYSIS_BUDGET_KEYS = [
-  "metadata_max_output_tokens",
-  "content_max_output_tokens",
-  "max_input_bytes",
-  "max_chunk_bytes",
-  "max_chunk_count",
-  "max_total_llm_requests",
-  "max_total_output_tokens",
-] as const;
-
 /**
  * One operation-scoped probe session for the TUI and structured CLI. It answers
  * one question only: can the configuration and credentials read at creation
@@ -1547,18 +1560,6 @@ export class ConfigurationProbeSession {
     options: { readonly authorized: boolean; readonly signal?: AbortSignal },
   ): Promise<ProbeDraft> {
     this.checkCancelled(options.signal);
-    if (owner === "analyze") {
-      const analyze = this.configuration.analyze;
-      if (
-        analyze.model === null ||
-        ANALYSIS_BUDGET_KEYS.some((key) => analyze[key] === null)
-      )
-        return draft(
-          "blocked",
-          "analysis-configuration-incomplete",
-          "configure-analysis",
-        );
-    }
     if (owner === "browser-model") {
       if (!this.configuration.browser.enabled)
         return draft("skipped", "browser-disabled", "enable-browser");
@@ -1646,7 +1647,7 @@ export class ConfigurationProbeSession {
       this.checkCancelled(options.signal);
       return this.agentFailure(error, described);
     } finally {
-      runtime.close();
+      await runtime.close();
     }
   }
 

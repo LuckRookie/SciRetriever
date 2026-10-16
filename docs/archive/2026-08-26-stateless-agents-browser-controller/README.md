@@ -322,3 +322,5 @@ finding 处理：
 - 最终任务 diff 已检查凭据、Token/Cookie/Profile 内容、真实 PDF/数据库/日志、个人配置、构建产物、缓存、旧兼容层和任务无关文件，未发现进入变更集的违规内容；
 - `pyproject.toml`/`uv.lock` 无变化，忽略的 `build/`/`dist/` 仅为本地 Harness 产物；
 - 工作树仍未提交；没有执行 commit、amend、rebase、push、PR、release 或其它 Git/发布写操作。
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

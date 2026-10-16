@@ -1012,14 +1012,14 @@ async function analyzePage(
   const current = snapshot.configuration.analyze;
   const modelChoices = Object.keys(snapshot.configuration.models).sort();
   options.write(
-    `${panel("Analyze · Content and references", [colors.muted("Analysis uses the selected Model and bounded budgets. Existing facts remain if a later stage fails."), `Model             ${current.model ?? "not selected"}`, `Metadata output   ${current.metadata_max_output_tokens ?? "not set"}`, `Content output    ${current.content_max_output_tokens ?? "not set"}`, `Requests          ${current.max_total_llm_requests ?? "not set"}`, `Input limit       ${current.max_input_bytes ?? "not set"}`], colors)}\n`,
+    `${panel("Analyze · Content and references", [colors.muted("Analysis processes the selected inputs and records actual usage. Existing facts remain if a later stage fails."), `Model             ${current.model ?? "not selected"}`], colors)}\n`,
   );
   const action = await select(
     {
       message: "Analyze action",
       choices: [
         {
-          name: "Setup model and safe budgets",
+          name: "Select analysis model",
           value: "setup",
           disabled: modelChoices.length === 0,
         },
@@ -1042,14 +1042,6 @@ async function analyzePage(
     analyze: {
       ...current,
       model,
-      metadata_max_output_tokens: current.metadata_max_output_tokens ?? 1024,
-      content_max_output_tokens: current.content_max_output_tokens ?? 4096,
-      reference_max_output_tokens: current.reference_max_output_tokens ?? 1024,
-      max_input_bytes: current.max_input_bytes ?? 1_048_576,
-      max_chunk_bytes: current.max_chunk_bytes ?? 262_144,
-      max_chunk_count: current.max_chunk_count ?? 4,
-      max_total_llm_requests: current.max_total_llm_requests ?? 6,
-      max_total_output_tokens: current.max_total_output_tokens ?? 12_288,
     },
   };
   await publishWithReview(

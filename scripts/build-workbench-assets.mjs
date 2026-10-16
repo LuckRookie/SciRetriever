@@ -44,6 +44,10 @@ await Promise.all([
     resolve(serverAssets, "live.css"),
   ),
   copyFile(
+    resolve(repository, "apps/web/public/workspace.css"),
+    resolve(serverAssets, "workspace.css"),
+  ),
+  copyFile(
     resolve(repository, "apps/web/public/query.html"),
     resolve(serverAssets, "query.html"),
   ),

@@ -169,3 +169,5 @@
 | 2026-09-07 | 完成一次真实 Browser/Agent 现场验证但未通过 | Browser 捕获到 PDF 候选后在 snapshot settle 阶段 runtime 失败；独立 Browser Model 探针返回 `agent-protocol`，两者需分别处理 |
 
 完成后交接内容：实现范围、直接测试/Quick/Full 结果、现场测试授权与结果、文档/ADR 变化、未运行检查、残余风险和未提交 Git 状态。计划完成或被替代后移入 `docs/archive/`，不作为产品或架构真相源。
+
+[上级目录](../README.md) · [项目 README](../../../README.md)

@@ -1,3 +1,7 @@
+import {
+  latestBrowserObservationMessage,
+  browserModelToolCallId,
+} from "./browser-model-fixture.js";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { createReadStream } from "node:fs";
@@ -389,6 +393,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       action: string | null;
     }[] = [];
     let activeModels = 0;
+    let heldModels = 0;
     let peakModels = 0;
     const handleModel = async (
       request: IncomingMessage,
@@ -405,7 +410,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       const wire = JSON.parse(Buffer.concat(chunks).toString()) as {
         messages: { content: { type: string; text?: string }[] }[];
       };
-      const raw = wire.messages[1]!.content.find(
+      const raw = latestBrowserObservationMessage(wire).content.find(
         (part) => part.type === "text",
       )!.text!;
       const observation = JSON.parse(raw) as WorkbenchObservation;
@@ -424,14 +429,27 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       calls.push(call);
       peakModels = Math.max(peakModels, ++activeModels);
       try {
-        if (paper.name !== "a") await models.promise;
+        // Initial page readiness is independent of article order. Do not occupy
+        // both decision workers until the large article has started its writer.
+        const overlap =
+          paper.name !== "a" &&
+          sourceTransfers.some(
+            (source) =>
+              source.article === "a" && source.written_bytes >= 2 * MIB,
+          );
+        if (overlap) {
+          heldModels++;
+          try {
+            await models.promise;
+          } finally {
+            heldModels--;
+          }
+        }
         const pdf = observation.elements.find(
           (element) => element.name === "Download PDF",
         );
-        const first =
-          calls.filter((item) => item.article === paper.name).length === 1;
         const action =
-          pdf && !(paper.name !== "a" && first)
+          pdf && (paper.name === "a" || overlap)
             ? {
                 kind: "click-element",
                 element_id: pdf.element_id,
@@ -453,6 +471,8 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
                 message: {
                   tool_calls: [
                     {
+                      id: browserModelToolCallId(),
+                      type: "function",
                       function: {
                         name: "browser_action",
                         arguments: JSON.stringify({ action }),
@@ -620,11 +640,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         { signal: controller.signal },
       );
       void pending.catch(() => undefined);
-      await expect
-        .poll(() => calls.filter((call) => call.article !== "a").length, {
-          timeout: 30_000,
-        })
-        .toBe(2);
+      await expect.poll(() => heldModels, { timeout: 30_000 }).toBe(2);
       await expect
         .poll(() => resources.snapshot().native_bytes, { timeout: 30_000 })
         .toBeGreaterThanOrEqual(2 * MIB);
@@ -672,7 +688,11 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       expect(sourceA.written_bytes).toBe(largeSize);
       expect(modelOverlap.at_ms).toBeGreaterThan(sourceA.started_ms);
       expect(smallPublications.at_ms).toBeLessThan(sourceA.finished_ms!);
-      expect(calls.filter((call) => call.article === "a")).toHaveLength(1);
+      expect(
+        calls.filter(
+          (call) => call.article === "a" && call.action === "click-element",
+        ),
+      ).toHaveLength(1);
       await mkdir(join(home, "exports"));
       for (const paper of papers) {
         const facts = (await app.database.currentFacts(

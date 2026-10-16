@@ -82,14 +82,9 @@ source。这里记录的 `resource-blocked`、`settling`、`cleared`、`interact
 `challenge-unresolved`。这些 fixture 只证明旧程序没有自行挡住必要资源，不证明当前 IP、机构
 合同、文章 entitlement 或当前通用 Agent 的行为。
 
-2026-08-22 的固定单篇真实串行 A/B 中，stock 与 Cloak 各自加载 17 个上述受限资源，本地阻断
-均为 0，随后都在有界窗口形成 `settle-timeout`，没有捕获 PDF。这个结果证明当前文章绑定、
-Turnstile 路径和 image 子资源没有再被 SciRetriever 自己误拦；它不证明自动验证已通过、文章有
-权限或 Cloak 提高了下载成功率，也没有触发 CAPTCHA 点击。
+历史现场结果见Browser 切换测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
 
-CBA72 将 Oxford Academic 的本次服务器现场准入记为 `deferred`。这不降低其
-`production-ready` Profile 状态，也不等于其它机构/Profile 全局 unsupported；它只表示固定
-代表样本在旧执行器中停在持续自动验证且没有可验证 PDF。
+历史现场结果见Browser 切换测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
 
 Profile 的 `production-ready` 表示访问画像、证据 fixture 与首页 probe 合同闭环；不表示
 Oxford 拥有专属 Browser 下载实现，也不表示当前 IP、机构协议或任意文章 entitlement 已经在线

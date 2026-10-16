@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { build } from "esbuild";
-import { chromium } from "playwright";
+import { chromium, type Page } from "playwright";
 import { describe, expect, it } from "vitest";
 import { startSyntheticWorkbench } from "../../server/src/bootstrap/workbench.js";
 import { verifyInstalledCloakRuntime } from "../../server/src/configuration/cloak-runtime.js";
@@ -22,6 +22,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         ["/", "live.html", "text/html"],
         ["/styles.css", "styles.css", "text/css"],
         ["/live.css", "live.css", "text/css"],
+        ["/workspace.css", "workspace.css", "text/css"],
       ] as const)
         assets.set(route, {
           contentType,
@@ -100,7 +101,7 @@ describe("live workbench on the installed Cloak runtime", () => {
               await expect
                 .poll(async () => {
                   const text = await page
-                    .locator("#observation-info")
+                    .locator("#watch-observation")
                     .innerText();
                   const match = /^观察 (\d+) ·/u.exec(text);
                   return match ? Number(match[1]) : -1;
@@ -119,10 +120,19 @@ describe("live workbench on the installed Cloak runtime", () => {
             return;
           }
         };
+        const openWatch = async (page: Page) => {
+          await page.locator("[data-session]").first().click();
+          await page.getByText("页面文字与可选指导", { exact: true }).click();
+          await page
+            .locator(".watch summary")
+            .filter({ hasText: "下载与接纳" })
+            .click();
+        };
         await desktop.setViewportSize({ width: 1440, height: 1000 });
         const errors: string[] = [];
         desktop.on("pageerror", (error) => errors.push(error.message));
         await desktop.goto(`${workbench.origin}/?workspace=browser`);
+        await openWatch(desktop);
         await desktop.waitForFunction(
           () =>
             document.querySelector<HTMLImageElement>("#browser-frame")
@@ -132,17 +142,17 @@ describe("live workbench on the installed Cloak runtime", () => {
           .getByRole("button", { name: "人工接管", exact: true })
           .click();
         await expect
-          .poll(() => desktop.locator("#owner").innerText())
-          .toBe("你正在控制页面");
+          .poll(() => desktop.locator("#watch-control").innerText())
+          .toBe("你正在操作 · Agent 已暂停");
         await clickAcceptedAction(desktop, "Download PDF");
         await expect
-          .poll(() => desktop.locator("#candidate-count").innerText(), {
+          .poll(() => desktop.locator("#watch-candidate-count").innerText(), {
             timeout: 15000,
           })
           .toBe("1");
-        expect(await desktop.locator("#candidates").innerText()).toContain(
-          "文件检查已通过，文章身份未验证",
-        );
+        expect(
+          await desktop.locator("#watch-candidates").innerText(),
+        ).toContain("文件检查已通过，文章身份未验证");
         const candidate = workbench.session.view().candidates[0]!;
         expect(
           await workbench.application.execution!.transfers.recover(
@@ -153,10 +163,10 @@ describe("live workbench on the installed Cloak runtime", () => {
           .getByRole("button", { name: "发布到当前文献", exact: true })
           .click();
         await expect
-          .poll(() => desktop.locator("#candidates").innerText())
+          .poll(() => desktop.locator("#watch-candidates").innerText())
           .toContain("已发布到当前文献");
         await expect
-          .poll(() => desktop.locator("#observation-info").innerText())
+          .poll(() => desktop.locator("#watch-observation").innerText())
           .toContain("已捕获候选 PDF");
         const published = workbench.session.view().candidates[0]!.publication!;
         expect(published.sha256).toBe(candidate.sha256);
@@ -177,7 +187,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         ).toBe(candidate.size_bytes);
         await clickAcceptedAction(desktop, "Capture response PDF");
         await expect
-          .poll(() => desktop.locator("#candidate-count").innerText(), {
+          .poll(() => desktop.locator("#watch-candidate-count").innerText(), {
             timeout: 15000,
           })
           .toBe("2");
@@ -185,6 +195,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         await mobile.setViewportSize({ width: 390, height: 844 });
         mobile.on("pageerror", (error) => errors.push(error.message));
         await mobile.goto(`${workbench.origin}/?workspace=browser`);
+        await openWatch(mobile);
         await mobile.waitForFunction(
           () =>
             document.querySelector<HTMLImageElement>("#browser-frame")
@@ -194,7 +205,7 @@ describe("live workbench on the installed Cloak runtime", () => {
           .getByRole("button", { name: "人工接管", exact: true })
           .click();
         await expect
-          .poll(() => desktop.locator("#owner").innerText())
+          .poll(() => desktop.locator("#watch-control").innerText())
           .toBe("另一个操作者正在控制");
         expect(
           await desktop
@@ -202,14 +213,11 @@ describe("live workbench on the installed Cloak runtime", () => {
             .isDisabled(),
         ).toBe(true);
         await expect
-          .poll(() => mobile.locator("#observation-info").innerText())
+          .poll(() => mobile.locator("#watch-observation").innerText())
           .toContain("已捕获候选 PDF");
-        await mobile
-          .getByRole("button", { name: "会话详情", exact: false })
-          .click();
         await clickAcceptedAction(mobile, "Unverified PDF");
         await expect
-          .poll(() => mobile.locator("#candidate-count").innerText(), {
+          .poll(() => mobile.locator("#watch-candidate-count").innerText(), {
             timeout: 15000,
           })
           .toBe("3");
@@ -220,7 +228,7 @@ describe("live workbench on the installed Cloak runtime", () => {
           .last()
           .click();
         await expect
-          .poll(() => mobile.locator("#candidate-count").innerText())
+          .poll(() => mobile.locator("#watch-candidate-count").innerText())
           .toBe("2");
         expect(
           await workbench.application.execution!.transfers.recover(
@@ -228,15 +236,15 @@ describe("live workbench on the installed Cloak runtime", () => {
           ),
         ).toBeNull();
         expect(await mobile.getByRole("dialog").isVisible()).toBe(true);
-        expect(await mobile.locator("#candidates").innerText()).toContain(
+        expect(await mobile.locator("#watch-candidates").innerText()).toContain(
           candidate.sha256.slice(0, 16),
         );
         await mobile.keyboard.press("Escape");
-        expect(
-          await mobile
-            .locator("#open-details")
-            .evaluate((element) => element === document.activeElement),
-        ).toBe(true);
+        await expect.poll(() => mobile.locator(".watch").count()).toBe(0);
+        await openWatch(mobile);
+        await mobile
+          .getByRole("button", { name: "人工接管", exact: true })
+          .click();
         expect(
           await mobile.evaluate(
             () => document.documentElement.scrollWidth <= innerWidth,
@@ -244,8 +252,8 @@ describe("live workbench on the installed Cloak runtime", () => {
         ).toBe(true);
         await mobile.getByRole("button", { name: "暂停", exact: true }).click();
         await expect
-          .poll(() => mobile.locator("#session-status").innerText())
-          .toBe("会话已暂停");
+          .poll(() => mobile.locator("#watch-state").innerText())
+          .toBe("已暂停");
         await mobile
           .getByRole("button", { name: "继续会话", exact: true })
           .click();
@@ -253,8 +261,8 @@ describe("live workbench on the installed Cloak runtime", () => {
           .getByRole("button", { name: "取消会话", exact: true })
           .click();
         await expect
-          .poll(() => mobile.locator("#session-status").innerText())
-          .toContain("会话已取消");
+          .poll(() => mobile.locator("#watch-state").innerText())
+          .toContain("已取消");
         expect(workbench.session.view().candidates).toHaveLength(2);
         await workbench.close();
         workbench = await start();
@@ -265,8 +273,9 @@ describe("live workbench on the installed Cloak runtime", () => {
             .candidates.filter((item) => item.publication),
         ).toHaveLength(1);
         await desktop.goto(`${workbench.origin}/?workspace=browser`);
+        await openWatch(desktop);
         await expect
-          .poll(() => desktop.locator("#candidate-count").innerText())
+          .poll(() => desktop.locator("#watch-candidate-count").innerText())
           .toBe("2");
         await desktop
           .getByRole("button", { name: "人工接管", exact: true })
@@ -285,7 +294,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         expect(
           (await workbench.application.database.snapshotCounts()).tables,
         ).toMatchObject({ assets: 1, literature_assets: 1 });
-        for (let n = 0; n < 28; n++)
+        for (let n = 0; n < 53; n++)
           await workbench.application.database.putLiterature(
             parseLiterature({
               ...FIXTURE_LITERATURE,
@@ -302,40 +311,29 @@ describe("live workbench on the installed Cloak runtime", () => {
             }),
           );
         await desktop.locator("#library-tab").click();
-        await desktop.locator("#library-query").fill("QueryBank");
-        await desktop
-          .locator("#library-form")
-          .getByRole("button", { name: "搜索", exact: true })
-          .click();
+        await desktop.locator("#q").fill("QueryBank");
+
         await expect
           .poll(() => desktop.locator("#library-status").innerText())
-          .toBe("找到 28 篇文献");
-        expect(await desktop.locator(".library-result").count()).toBe(25);
+          .toContain("53 篇");
+        expect(await desktop.locator(".prow").count()).toBe(50);
         await desktop.locator("#library-more").click();
-        await expect
-          .poll(() => desktop.locator(".library-result").count())
-          .toBe(28);
+        await expect.poll(() => desktop.locator(".prow").count()).toBe(53);
         await desktop
-          .locator(
-            '[data-literature-id="10000000-0000-0000-0000-000000000000"]',
-          )
+          .locator('[data-id="10000000-0000-0000-0000-000000000000"]')
           .click();
         await expect
-          .poll(() => desktop.locator("#library-detail h2").innerText())
+          .poll(() => desktop.locator("#reader-info h2").innerText())
           .toContain("<img src=x onerror=alert(1)>");
-        expect(await desktop.locator("#library-detail img").count()).toBe(0);
-        await desktop.locator("#library-query").fill("Synthetic literature");
-        await desktop
-          .locator("#library-form")
-          .getByRole("button", { name: "搜索", exact: true })
-          .click();
-        await expect
-          .poll(() => desktop.locator(".library-result").count())
-          .toBe(1);
-        await desktop.locator(".library-result").click();
+        expect(await desktop.locator("#reader-info img").count()).toBe(0);
+        await desktop.locator("#library-tab").click();
+        await desktop.locator("#q").fill("Synthetic literature");
+
+        await expect.poll(() => desktop.locator(".prow").count()).toBe(1);
+        await desktop.locator(".prow").click();
         const downloading = desktop.waitForEvent("download");
         await desktop
-          .getByRole("button", { name: "下载 PDF", exact: true })
+          .getByRole("link", { name: "下载已核验的原始 PDF", exact: true })
           .click();
         const download = await downloading;
         expect(await sha256(await readFile((await download.path())!))).toBe(
@@ -345,18 +343,22 @@ describe("live workbench on the installed Cloak runtime", () => {
           path: "/tmp/sciretriever-library-desktop.png",
         });
         await mobile.goto(`${workbench.origin}/?workspace=browser`);
-        await mobile.locator("#library-toggle").click();
-        await mobile.locator("#library-query").fill("Synthetic literature");
-        await mobile
-          .locator("#library-form")
-          .getByRole("button", { name: "搜索", exact: true })
-          .click();
+        await openWatch(mobile);
+        await mobile.locator("#watch-close").click();
+        await mobile.locator("#menuBtn").click();
+        await mobile.locator("#library-tab").click();
+        expect(new URL(mobile.url()).searchParams.get("view")).toBe("lib");
+        expect(
+          await mobile
+            .locator("#side")
+            .evaluate((element) => element.classList.contains("open")),
+        ).toBe(false);
+        await mobile.locator("#q").fill("Synthetic literature");
+
+        await expect.poll(() => mobile.locator(".prow").count()).toBe(1);
+        await mobile.locator(".prow").click();
         await expect
-          .poll(() => mobile.locator(".library-result").count())
-          .toBe(1);
-        await mobile.locator(".library-result").click();
-        await expect
-          .poll(() => mobile.locator("#library-detail h2").innerText())
+          .poll(() => mobile.locator("#reader-info h2").innerText())
           .toBe(FIXTURE_LITERATURE.metadata.title);
         expect(
           await mobile.evaluate(

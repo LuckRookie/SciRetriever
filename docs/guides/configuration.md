@@ -26,10 +26,10 @@ fallback。
 
 Configuration 是该路径规则的唯一 owner。CLI 不提供 `--config`，不读取配置路径环境变量，
 也不检查当前工作目录或项目根的 `config.toml`。因此从不同目录运行会得到同一配置身份。
-固定文件缺失时，业务命令、`config status` 和 `config test` 会给出初始化提示，不会猜测或
-回退到旧位置。
+固定文件缺失时，不会猜测或回退到旧位置。`sciretriever web` 可直接启动，由 Configuration
+owner 保存默认存储路径并建立缺失的空库；无需先运行配置中心。其它入口读取同一份已保存配置。
 
-推荐执行 `sciretriever config` 进入统一配置中心。打开后不做修改可以安全退出；第一次确认
+人类可直接使用 Web，并在“设置”中管理配置；CLI 配置中心仍可通过 `sciretriever config` 打开。打开后不做修改可以安全退出；第一次确认
 普通配置修改时，Configuration 会创建 `~/.sciretriever/` 和 `config.toml`。用户也可以直接
 创建或编辑同一个文件，例如从公开模板开始：
 
@@ -60,8 +60,7 @@ Browser Profile 共用的用户目录边界。
 
 一个零字节文件是合法 TOML，并等价于十个使用字段默认值的配置组；这只证明结构可解析。
 空配置具有 Metadata/Acquisition Auto 选择和默认逐 Source `limit = 500`，但没有 Storage 路径、
-Parser 或 Analysis 参数。`config status` 仍可据此输出本地 capability 矩阵，但所有当前业务 Entry scope
-都会先返回 `paths-not-ready`，不会把空结构解释成完整默认运行环境。
+Parser 或 Analysis 参数。`config status` 仍可据此输出本地 capability 矩阵。Web 启动会仅补齐存储路径并准备空库，直接提供文献管理与设置；Parser、模型和 Browser 仍须按需配置，不会为了启动页面而访问外部服务。其它业务 Entry 所需路径可由 Web 首次启动或配置中心保存。
 
 若固定 `config.toml` 是 malformed TOML、包含未知 section/key，或字段值不符合当前 schema，
 裸 `sciretriever config` 会在首页前返回退出码 4，并显示不含配置值的固定原因；它不显示菜单，
@@ -104,7 +103,17 @@ browser
 | `catalog_path`  | 非空字符串或省略 | 未配置 | SQLite Catalog 文件路径。   |
 | `artifact_root` | 非空字符串或省略 | 未配置 | 私有 ArtifactStore 根目录。 |
 
-正式 `sciretriever web` 启动要求两项同时配置。Web 设置中的“文献数据库”通过同一 Configuration owner 按 `paths` 分区、revision CAS 保存；当前进程仍绑定启动时的库，保存后须重启。保存本身不创建、升级或搬迁 catalog/资产，首页和设置会分别显示实际运行路径与已保存值。用法见[Web 任务工作台](web-workbench.md)。
+解析配置时两项仍可省略；正式 `sciretriever web` 启动会把缺失项补齐为 `~/.sciretriever/catalog.sqlite` 与 `~/.sciretriever/artifacts/`，通过同一 Configuration owner、`paths` 分区和 revision CAS 保存，供 Web、CLI、MCP 共享。已有值保留。目标数据库不存在时在启动阶段创建完整空库，自定义文件的父目录须已存在；已有数据库不自动升级或覆盖。
+
+Web 设置中的“文献数据库”使用同一发布边界。当前进程仍绑定启动时的库，保存后须重启；保存本身不创建、升级或搬迁 catalog/资产。重启后新目标不存在则创建空库，不自动搬迁原资料；使用已有库时应选择对应资产目录。首页和设置分别显示实际运行路径与已保存值。用法见[Web 任务工作台](web-workbench.md)。
+
+一个文献库共用一个 `artifact_root`。新文件在该根下按 `originals/pdf`、
+`parsed/markdown`、`parsed/structure`、`parsed/images`、`parsed/resources`、
+`knowledge/summaries` 和 `knowledge/syntheses` 分类，文件名使用完整 hash 和实际格式后缀，
+并按 hash 前两位分桶。分类是内置存储布局，不需要额外配置字段；目录按需创建。
+旧 `objects/` 文件继续按 catalog 中登记的路径读取和复用，不会在启动时自动搬迁。
+临时写入和持久下载候选分别保留在 `.staging/`、`.candidates/`；精确布局与兼容边界见
+[Catalog 与文件组织](../architecture/technical/07-versioned-storage.md#24-文件责任)。
 
 所有本地数据库读取、导入、导出、手动 PDF 和补全入口都需要两个路径同时配置。配置
 解析只保留字符串，不展开 `~`，也不相对配置文件所在目录改写路径。Bootstrap 把路径
@@ -155,6 +164,8 @@ OpenCitations 当前不在 Auto 集合，也不参加主题搜索。默认 `limi
 `7 × 500 = 3500`。`limit` 独立给每个参与 Source，不是共享总量、最终接纳数量或 HTTP 请求数。
 `discover topic` 与 `discover citations` 未显式提供 `--scan-limit` 时使用已保存的 `limit`；显式
 `--scan-limit` 只覆盖当前命令，不改写配置。
+
+引用发现的 Auto 执行顺序在上述已启用集合内稳定分组：已配置凭据的 API 在前，无需密钥的 API 在后，组内保持默认顺序；凭据存在只影响已选引用来源的优先级，不启用额外来源，也不证明凭据在线有效或具有订阅权限。Custom 的 `providers` 顺序就是精确优先级，不再按凭据重排。主题搜索继续查询所选搜索来源，不采用引用扩展的成功短路。引用扩展每个节点重新按优先级开始，空结果或局部失败顺延，取得正常完成且可识别的引用结果后停止该节点的后续来源。
 
 当前 Acquisition Auto 的命名 Source 是 `arxiv, europe-pmc`。所有模式都会消费已经保存且安全
 验证通过的 direct/landing `AssetHint`；Crossref、Semantic Scholar、OpenAlex、DataCite 等提供的
@@ -339,7 +350,7 @@ Model 的唯一身份就是 TOML 子表名中的完整 `provider/model` referenc
 `stream = false` 时只请求和解析非流式 JSON。两种模式失败后都不会切换模式补发请求。
 Model 不保存 context window、max output、structured output、tool
 decision、图片 MIME、数量或字节上限。这些是消费模块的调用合同：Analyze 派生 strict structured
-output、text-only、no-tool 和业务预算，Download 派生当前生产 Observation 的 `image/jpeg`、单图、tool
+output、text-only 和 no-tool 合同，Download 派生当前生产 Observation 的 `image/jpeg`、单图、tool
 decision 与内部安全上限。
 模型目录也只提供 model ID；`image` 与具体 reasoning 支持由用户依据 Provider 文档确认，并通过
 显式 probe 验证，不能根据 model 名称猜测。
@@ -350,26 +361,16 @@ Provider 被任一 Model 引用时不能删除；Model 被 Analyze 或 Browser �
 
 ### `[analyze]`
 
-`[analyze]` 直接选择一个完整 Model reference，并保存文献分析自身的 chunk、阶段和总量预算；
-它不拥有或覆盖 Provider、远端 model、reasoning、image 或 stream。
+`[analyze]` 只需选择完整的 `provider/model` 引用；reasoning、image 和 stream 由该 Model 配置决定。固定输入的内容总结和知识分析不设置业务 token、调用数、输入总量或总时长预算。
 
-| 字段                          | 类型                    | 默认值 | 用途                              |
-| ----------------------------- | ----------------------- | ------ | --------------------------------- |
-| `model`                       | `provider/model` 或省略 | 未配置 | Analyze 使用的 Model。            |
-| `metadata_max_output_tokens`  | 大于等于 1 的整数或省略 | 未配置 | metadata 阶段输出上限。           |
-| `content_max_output_tokens`   | 大于等于 1 的整数或省略 | 未配置 | content 阶段输出上限。            |
-| `reference_max_output_tokens` | 大于等于 1 的整数或省略 | 未配置 | 引用 lookup 输出上限。            |
-| `max_input_bytes`             | 大于等于 1 的整数或省略 | 未配置 | 内容分析总输入字节上限。          |
-| `max_chunk_bytes`             | 大于等于 1 的整数或省略 | 未配置 | 单 chunk 字节上限。               |
-| `max_chunk_count`             | 大于等于 1 的整数或省略 | 未配置 | chunk 数量上限。                  |
-| `max_total_llm_requests`      | 大于等于 1 的整数或省略 | 未配置 | 单次内容分析的总 LLM 请求上限。   |
-| `max_total_output_tokens`     | 大于等于 1 的整数或省略 | 未配置 | 单次内容分析的总输出 token 上限。 |
+```toml
+[analyze]
+model = "openai/operator-selected-model"
+```
 
-引用发现需要选中的 Model、其 Provider/exact-origin key 与 `reference_max_output_tokens`；
-`content` 补全还要求全部业务预算字段。程序用 Analysis/Bootstrap 派生的保守 UTF-8 字节与单次
-output 边界检查输入；这些边界不是 Model 用户字段。`Analyze → Setup` 会在业务预算缺失时生成
-安全初值，已有完整值原样保留，并在同一流程提供 Conservative、Balanced、Large 与逐项 Custom；
-最终写入明确数值，不保存 preset name。
+旧配置中的 `metadata_max_output_tokens`、`content_max_output_tokens`、`reference_max_output_tokens`、`max_input_bytes`、`max_chunk_bytes`、`max_chunk_count`、`max_total_llm_requests`、`max_total_output_tokens` 仍可读取，作为弃用字段保留，内容总结不执行它们。`Analyze → Setup` 只选择模型，不再生成或展示这些预算。`reference_max_output_tokens` 同为历史保留字段，当前不用于固定输入正文加工。
+
+调用使用模型实际能力及正常网络/协议边界，保留取消、失败原因和真实 usage；有可读结果时不以历史预算拒绝发布。Browser 探索、Provider 速率、检索上下文与调用方 Extraction 规范仍各按所属合同运行。
 
 ### `[execution]`
 
@@ -921,14 +922,6 @@ image = false
 
 [analyze]
 model = "openai/operator-selected-model"
-metadata_max_output_tokens = 1024
-content_max_output_tokens = 4096
-reference_max_output_tokens = 1024
-max_input_bytes = 1048576
-max_chunk_bytes = 262144
-max_chunk_count = 4
-max_total_llm_requests = 6
-max_total_output_tokens = 12288
 
 [execution]
 max_concurrency = 4

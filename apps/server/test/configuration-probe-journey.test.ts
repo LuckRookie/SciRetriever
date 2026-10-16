@@ -170,13 +170,6 @@ stream = false
 
 [analyze]
 model = "fixture/model"
-metadata_max_output_tokens = 512
-content_max_output_tokens = 2048
-max_input_bytes = 1000000
-max_chunk_bytes = 100000
-max_chunk_count = 16
-max_total_llm_requests = 8
-max_total_output_tokens = 20000
 
 [parsing]
 base_url = "${base}"
@@ -422,19 +415,16 @@ max_total_output_tokens = 20000
     servers.push(server);
     const { home: directory } = await home(probeConfiguration(server.url));
     const textRequests: Record<string, unknown>[] = [];
-    const text = await runCli(
-      ["config", "test", "model", "fixture/model", "--json"],
-      {
-        home: directory,
-        json: true,
-        probeSeams: await seams(directory, {
-          agent: agentTransport("text", textRequests),
-        }),
-      },
-    );
+    const text = await runCli(["config", "test", "analyze", "--json"], {
+      home: directory,
+      json: true,
+      probeSeams: await seams(directory, {
+        agent: agentTransport("text", textRequests),
+      }),
+    });
     expect(text.code).toBe(0);
     expect(text.value).toMatchObject({
-      owner: "model",
+      owner: "analyze",
       outcome: "passed",
       method: "POST",
       provider: "fixture",

@@ -39,7 +39,8 @@ export interface KnowledgeSynthesisRequest {
   readonly purpose: "synthesis";
   readonly question: string;
   readonly policy: SynthesisPolicy;
-  readonly budget: {
+  /** @deprecated Ignored by fixed-input processing; retained for request compatibility. */
+  readonly budget?: {
     readonly max_source_bytes: number;
     readonly max_verification_bytes: number;
     readonly max_call_bytes: number;
@@ -176,11 +177,15 @@ function bounded(
   value: unknown,
   maxBytes: number,
   maxDepth = 32,
-  maxNodes = 8192,
+  maxNodes = 20480,
 ): unknown {
   return JSON.parse(
     new TextDecoder().decode(
-      extractionCanonicalJsonBytes(value, maxBytes, { maxDepth, maxNodes }),
+      extractionCanonicalJsonBytes(value, maxBytes, {
+        maxDepth,
+        maxNodes,
+        maxArrayLength: 20480,
+      }),
     ),
   ) as unknown;
 }
@@ -190,7 +195,10 @@ function string(value: unknown, maxBytes: number): string {
     !value.trim() ||
     Array.from(value).some((c) => {
       const code = c.codePointAt(0)!;
-      return code <= 31 || (code >= 127 && code <= 159);
+      return (
+        (code <= 31 && ![9, 10, 13].includes(code)) ||
+        (code >= 127 && code <= 159)
+      );
     }) ||
     new TextEncoder().encode(value).length > maxBytes
   )
@@ -263,13 +271,15 @@ function provenance(value: unknown): KnowledgeProvenance {
 export async function parseKnowledgeSynthesisRequest(
   value: unknown,
 ): Promise<KnowledgeSynthesisRequest> {
-  const r = exact(bounded(value, SYNTHESIS_MAX_REQUEST_BYTES, 33, 10240), [
+  const snapshot = bounded(value, SYNTHESIS_MAX_REQUEST_BYTES, 33, 10240);
+  if (!snapshot || typeof snapshot !== "object") fail();
+  const r = exact(snapshot, [
     "schema_version",
     "input",
     "purpose",
     "question",
     "policy",
-    "budget",
+    ...(Object.hasOwn(snapshot, "budget") ? ["budget"] : []),
   ]);
   if (
     r.schema_version !== 3 ||
@@ -278,40 +288,57 @@ export async function parseKnowledgeSynthesisRequest(
   )
     fail();
   const input = await parseSynthesisInputManifest(r.input);
-  const b = exact(r.budget, [
-    "max_source_bytes",
-    "max_verification_bytes",
-    "max_call_bytes",
-    "max_total_call_bytes",
-    "max_calls",
-    "max_output_tokens_per_call",
-    "max_total_output_tokens",
-  ]);
-  const budget = Object.freeze({
-    max_source_bytes: integer(b.max_source_bytes, 8 * 1024 * 1024, 1),
-    max_verification_bytes: integer(
-      b.max_verification_bytes,
-      64 * 1024 * 1024,
-      1,
-    ),
-    max_call_bytes: integer(b.max_call_bytes, 256 * 1024, 1),
-    max_total_call_bytes: integer(b.max_total_call_bytes, 64 * 1024 * 1024, 1),
-    max_calls: integer(b.max_calls, 256, 1),
-    max_output_tokens_per_call: integer(b.max_output_tokens_per_call, 16384, 1),
-    max_total_output_tokens: integer(b.max_total_output_tokens, 1024 * 1024, 1),
-  });
-  if (
-    budget.max_call_bytes > budget.max_total_call_bytes ||
-    budget.max_output_tokens_per_call > budget.max_total_output_tokens
-  )
-    fail();
+  const b =
+    r.budget === undefined
+      ? undefined
+      : exact(r.budget, [
+          "max_source_bytes",
+          "max_verification_bytes",
+          "max_call_bytes",
+          "max_total_call_bytes",
+          "max_calls",
+          "max_output_tokens_per_call",
+          "max_total_output_tokens",
+        ]);
+  const budget =
+    b === undefined
+      ? undefined
+      : Object.freeze({
+          max_source_bytes: integer(
+            b.max_source_bytes,
+            Number.MAX_SAFE_INTEGER,
+            1,
+          ),
+          max_verification_bytes: integer(
+            b.max_verification_bytes,
+            Number.MAX_SAFE_INTEGER,
+            1,
+          ),
+          max_call_bytes: integer(b.max_call_bytes, Number.MAX_SAFE_INTEGER, 1),
+          max_total_call_bytes: integer(
+            b.max_total_call_bytes,
+            Number.MAX_SAFE_INTEGER,
+            1,
+          ),
+          max_calls: integer(b.max_calls, Number.MAX_SAFE_INTEGER, 1),
+          max_output_tokens_per_call: integer(
+            b.max_output_tokens_per_call,
+            Number.MAX_SAFE_INTEGER,
+            1,
+          ),
+          max_total_output_tokens: integer(
+            b.max_total_output_tokens,
+            Number.MAX_SAFE_INTEGER,
+            1,
+          ),
+        });
   return Object.freeze({
     schema_version: 3,
     input,
     purpose: "synthesis",
     question: question(r.question),
     policy: r.policy as SynthesisPolicy,
-    budget,
+    ...(budget === undefined ? {} : { budget }),
   });
 }
 export function parseSynthesisContent(value: unknown): SynthesisContent {
@@ -323,35 +350,23 @@ export function parseSynthesisContent(value: unknown): SynthesisContent {
   if (
     r.schema_version !== 2 ||
     !Array.isArray(r.statements) ||
-    r.statements.length < 1 ||
-    r.statements.length > 64
+    r.statements.length < 1
   )
     fail();
   const ids = new Set<string>();
-  let totalEvidence = 0;
   const statements = r.statements.map((entry) => {
     const statement = parseSynthesisStatement(entry);
     if (ids.has(statement.statement_id)) fail();
     ids.add(statement.statement_id);
-    totalEvidence += statement.evidence.length;
-    if (totalEvidence > 512) fail();
     return statement;
   });
-  const groups = new Map<string, number>();
-  for (const statement of statements)
-    if (statement.relation === "disagreement")
-      groups.set(
-        statement.conflict_group_id!,
-        (groups.get(statement.conflict_group_id!) ?? 0) + 1,
-      );
-  if ([...groups.values()].some((count) => count < 2)) fail();
   return Object.freeze({
     schema_version: 2,
-    title: string(r.title, 512),
+    title: string(r.title, SYNTHESIS_MAX_CONTENT_BYTES),
     statements: Object.freeze(statements),
   });
 }
-/** Parse one indexed statement without the whole-content conflict-group rule. */
+/** Parse one indexed statement with the same content contract as publication. */
 export function parseSynthesisStatement(entry: unknown): SynthesisStatement {
   // The single-statement budget is no wider than the full content budget.
   bounded(entry, SYNTHESIS_MAX_CONTENT_BYTES);
@@ -377,10 +392,8 @@ export function parseSynthesisStatement(entry: unknown): SynthesisStatement {
     ) ||
     (s.relation === "disagreement") !== (s.conflict_group_id !== null) ||
     !Array.isArray(s.conditions) ||
-    s.conditions.length > 8 ||
     !Array.isArray(s.evidence) ||
-    s.evidence.length < 1 ||
-    s.evidence.length > 128
+    s.evidence.length < 1
   )
     fail();
   const q =
@@ -425,18 +438,20 @@ export function parseSynthesisStatement(entry: unknown): SynthesisStatement {
     relation: s.relation as SynthesisStatement["relation"],
     conflict_group_id:
       s.conflict_group_id === null ? null : id(s.conflict_group_id),
-    text: string(s.text, 4096),
-    conditions: Object.freeze(s.conditions.map((x) => string(x, 1024))),
+    text: string(s.text, SYNTHESIS_MAX_CONTENT_BYTES),
+    conditions: Object.freeze(
+      s.conditions.map((x) => string(x, SYNTHESIS_MAX_CONTENT_BYTES)),
+    ),
     quantity:
       q === null
         ? null
         : Object.freeze({
-            value: string(q.value, 128),
-            unit: string(q.unit, 128),
+            value: string(q.value, SYNTHESIS_MAX_CONTENT_BYTES),
+            unit: string(q.unit, SYNTHESIS_MAX_CONTENT_BYTES),
             comparison_basis:
               q.comparison_basis === null
                 ? null
-                : string(q.comparison_basis, 512),
+                : string(q.comparison_basis, SYNTHESIS_MAX_CONTENT_BYTES),
           }),
     evidence: Object.freeze(evidence),
   });
@@ -445,6 +460,7 @@ export function synthesisContentBytes(value: SynthesisContent): Uint8Array {
   return extractionCanonicalJsonBytes(
     parseSynthesisContent(value),
     SYNTHESIS_MAX_CONTENT_BYTES,
+    { maxDepth: 32, maxNodes: 20480, maxArrayLength: 20480 },
   );
 }
 /** The same canonical statement identity is used by producers and recursive readers. */
@@ -454,7 +470,8 @@ export async function synthesisStatementSha256(
   return sha256(
     extractionCanonicalJsonBytes(value, SYNTHESIS_MAX_CONTENT_BYTES, {
       maxDepth: 32,
-      maxNodes: 8192,
+      maxNodes: 20480,
+      maxArrayLength: 20480,
     }),
   );
 }
@@ -777,12 +794,9 @@ export async function parseSynthesisPreparationResult(
   request: SynthesisPreparationRequest,
 ): Promise<SynthesisPreparationResult> {
   // Manifest v2 permits 8193 nodes; the wrapper adds policy, readiness and up to 128 gaps.
-  const r = exact(bounded(value, SYNTHESIS_MAX_REQUEST_BYTES, 33, 10240), [
-    "manifest",
-    "policy",
-    "ready",
-    "gaps",
-  ]);
+  const snapshot = bounded(value, SYNTHESIS_MAX_REQUEST_BYTES, 33, 10240);
+  if (!snapshot || typeof snapshot !== "object") fail();
+  const r = exact(snapshot, ["manifest", "policy", "ready", "gaps"]);
   if (
     r.policy !== request.policy ||
     typeof r.ready !== "boolean" ||

@@ -28,6 +28,19 @@ export function navigateWorkspace(
   workspace: Workspace,
   parameters: Readonly<Record<string, string | null>> = {},
 ): void {
+  if (document.documentElement.dataset.ui === "library") {
+    window.dispatchEvent(
+      new CustomEvent("sciretriever:navigate", {
+        detail: {
+          workspace,
+          parameters: Object.fromEntries(
+            Object.entries(parameters).filter(([, value]) => value !== null),
+          ),
+        },
+      }),
+    );
+    return;
+  }
   const url = new URL(window.location.href);
   if (workspace === "overview") url.searchParams.delete("workspace");
   else url.searchParams.set("workspace", workspace);

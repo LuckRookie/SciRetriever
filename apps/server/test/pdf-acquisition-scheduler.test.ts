@@ -2,16 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { parseLiterature, parseLiteratureId } from "@sciretriever/contracts";
 import {
   BrowserDeliveryScheduler,
   BrowserDeliveryStaleGenerationError,
   EntryPdfAcquisitionService,
-  type PdfAcquisitionOutcome,
-  type PdfAcquisitionPort,
   type PdfAcquisitionRequest,
 } from "../src/entry/pdf-acquisition.js";
-import { CompletionAcquisitionCoordinator } from "../src/entry/completion-execution.js";
 import { createApplication } from "../src/bootstrap/application.js";
 import {
   downloadPdfCandidate,
@@ -168,13 +166,207 @@ describe("shared Browser delivery scheduler", () => {
 });
 
 describe("completion acquisition cohorts", () => {
-  const request = (id: string) =>
-    ({
-      literature_id: id as never,
-    }) as never as import("../src/entry/pdf-acquisition.js").PdfAcquisitionRequest;
+  it.each([false, true])(
+    "notifies a fast Browser result and drains siblings when observer fails=%s",
+    async (failObserver) => {
+      const home = await mkdtemp(
+        join(tmpdir(), "sciretriever-browser-notify-"),
+      );
+      const app = await createApplication(home, {
+        executionSchema: "upgrade-synthetic",
+      });
+      const slow = deferred(),
+        fast = deferred();
+      const observerFailure = new Error("fixture observer failed");
+      const ids = [1, 2].map((n) =>
+        parseLiteratureId(`00000000-0000-0000-0000-00000000890${n}`),
+      );
+      const source = {
+        source_name: BROWSER_ROUTE_NAME,
+        ready: false,
+        discover: async () => [],
+      };
+      const service = new EntryPdfAcquisitionService({
+        registry: new PublicAcquisitionRegistry([source], [BROWSER_ROUTE_NAME]),
+        network_budget: app.networkBudget,
+        transfers: app.execution!.transfers,
+        acceptance: app.execution!.acceptance,
+        browser_host: () => ({
+          deliverCandidate: async (request) => {
+            if (request.literature_id === ids[1]) {
+              await new Promise<void>((resolve) => {
+                const done = () => {
+                  request.signal.removeEventListener("abort", done);
+                  resolve();
+                };
+                if (request.signal.aborted) done();
+                else {
+                  request.signal.addEventListener("abort", done, {
+                    once: true,
+                  });
+                  void slow.promise.then(done);
+                }
+              });
+            }
+            return {
+              kind: "refused",
+              code: "browser-agent-no-viable-path",
+              reason: "No route in fixture",
+              retryable: false,
+            };
+          },
+          close: async () => {},
+        }),
+      });
+      let pending: ReturnType<typeof service.acquireCohort> | undefined;
+      try {
+        for (const id of ids)
+          await app.database.putLiterature(
+            parseLiterature({
+              ...FIXTURE_LITERATURE,
+              literature_id: id,
+              meta_literature_id: randomUUID(),
+            }),
+          );
+        const requests = await Promise.all(
+          ids.map(async (id) => ({
+            literature_id: id,
+            detail: await app.library.detail(id),
+            metadata_snapshot: (await app.database.currentFacts(id))!
+              .metadata_snapshot,
+            signal: new AbortController().signal,
+          })),
+        );
+        const notified: number[] = [];
+        pending = service.acquireCohort(requests, {
+          on_outcomes: (outcomes) => {
+            notified.push(...outcomes.map((x) => x.index));
+            if (notified.includes(0)) fast.resolve();
+            if (failObserver && outcomes.some((x) => x.index === 0))
+              throw observerFailure;
+          },
+        });
+        void pending.catch(() => undefined);
+        await fast.promise;
+        if (failObserver) {
+          await expect(pending).rejects.toBe(observerFailure);
+        } else {
+          expect(notified).toEqual([0]);
+          slow.resolve();
+          expect((await pending).map((x) => x.kind)).toEqual([
+            "browser-failure",
+            "browser-failure",
+          ]);
+          expect(notified).toEqual([0, 1]);
+        }
+      } finally {
+        slow.resolve();
+        await pending?.catch(() => undefined);
+        await service.close();
+        await app.close();
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
 
-  it.each([200, 403, 401, 429, 503])(
-    "tries API before public pages and preserves HTTP %i access/rate boundaries on Browser fallback",
+  it.each(["single", "cohort"] as const)(
+    "continues HTTP PDF hints and reports the actual Browser terminal (%s)",
+    async (mode) => {
+      const home = await mkdtemp(join(tmpdir(), "sciretriever-http-pdf-hint-"));
+      const application = await createApplication(home, {
+        executionSchema: "upgrade-synthetic",
+      });
+      const phases: string[] = [];
+      const service = new EntryPdfAcquisitionService({
+        registry: new PublicAcquisitionRegistry([
+          {
+            source_name: "direct",
+            acquisition_stage: "direct",
+            ready: true,
+            async discover() {
+              return [
+                safeLocator("direct", "http://repository.example/paper.pdf"),
+              ];
+            },
+          },
+          {
+            source_name: "fixture-api",
+            acquisition_stage: "publisher-api",
+            ready: true,
+            async discover() {
+              phases.push("api");
+              return [];
+            },
+          },
+          {
+            source_name: BROWSER_ROUTE_NAME,
+            ready: true,
+            async discover() {
+              throw new Error("Browser must not run as a locator");
+            },
+          },
+        ]),
+        network_budget: application.networkBudget,
+        transfers: application.execution!.transfers,
+        acceptance: application.execution!.acceptance,
+        browser_host: () => ({
+          async deliverCandidate() {
+            phases.push("browser");
+            return {
+              kind: "refused",
+              code: "browser-flow-budget-exhausted",
+              reason: "The offline browser completed its attempt.",
+              retryable: false,
+            };
+          },
+          close: async () => undefined,
+        }),
+      });
+      try {
+        const requests: PdfAcquisitionRequest[] = [];
+        for (const id of [randomUUID(), randomUUID()]) {
+          const literature = parseLiterature({
+            ...FIXTURE_LITERATURE,
+            literature_id: id,
+            meta_literature_id: randomUUID(),
+          });
+          await application.database.putLiterature(literature);
+          requests.push({
+            literature_id: literature.literature_id,
+            detail: await application.library.detail(literature.literature_id),
+            metadata_snapshot: (await application.database.currentFacts(
+              literature.literature_id,
+            ))!.metadata_snapshot,
+            signal: new AbortController().signal,
+          });
+        }
+        const outcomes =
+          mode === "cohort"
+            ? await service.acquireCohort(requests)
+            : await Promise.all(
+                requests.map((request) => service.acquire(request)),
+              );
+        expect(outcomes).toEqual([
+          expect.objectContaining({
+            kind: "browser-failure",
+            code: "browser-flow-budget-exhausted",
+          }),
+          expect.objectContaining({
+            kind: "browser-failure",
+            code: "browser-flow-budget-exhausted",
+          }),
+        ]);
+        expect(phases).toEqual(["api", "api", "browser", "browser"]);
+      } finally {
+        await service.close();
+        await application.close();
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([200, 400, 403, 401, 429, 503])(
+    "continues API and public HTTP %i failures through independent Browser delivery",
     async (status) => {
       const home = await mkdtemp(
         join(tmpdir(), "sciretriever-landing-escalation-"),
@@ -231,6 +423,12 @@ describe("completion acquisition cohorts", () => {
               ready: true,
               async discover() {
                 phase.push("api");
+                if (status !== 200)
+                  throw new AcquisitionRouteError(
+                    status === 429 ? "rate-limited" : "http-response-failed",
+                    `API HTTP ${status}.`,
+                    status >= 500 || status === 429,
+                  );
                 return [];
               },
             },
@@ -246,6 +444,8 @@ describe("completion acquisition cohorts", () => {
           ],
           ["doi-landing", "fixture-api", BROWSER_ROUTE_NAME],
         ),
+        assistance:
+          status === 401 ? "pause" : status === 429 ? "notify" : "never",
         network_budget: application.networkBudget,
         transfers: application.execution!.transfers,
         acceptance: application.execution!.acceptance,
@@ -295,23 +495,12 @@ describe("completion acquisition cohorts", () => {
             signal: new AbortController().signal,
           },
         ]);
-        if (status === 200 || status === 403 || status === 503) {
-          expect(outcome).toMatchObject({ kind: "acquired" });
-          expect(
-            (await application.library.detail(literatureId)).primary_pdf
-              ?.article_identity_status,
-          ).toBe("unverified");
-          expect(phase).toEqual(["api", `public:${status}`, "browser"]);
-        } else {
-          expect(outcome).toMatchObject({
-            kind: "route-failure",
-            failure: {
-              code: status === 429 ? "rate-limited" : "http-response-failed",
-              source: status === 401 ? null : "doi-landing",
-            },
-          });
-          expect(phase).toEqual(["api", `public:${status}`]);
-        }
+        expect(outcome).toMatchObject({ kind: "acquired" });
+        expect(
+          (await application.library.detail(literatureId)).primary_pdf
+            ?.article_identity_status,
+        ).toBe("unverified");
+        expect(phase).toEqual(["api", `public:${status}`, "browser"]);
       } finally {
         await service.close();
         await application.close();
@@ -319,112 +508,6 @@ describe("completion acquisition cohorts", () => {
       }
     },
   );
-
-  it("delivers an ordered early receipt wave before the unresolved API barrier", async () => {
-    const calls: string[] = [];
-    let releaseApi!: () => void;
-    const apiReleased = new Promise<void>((resolve) => {
-      releaseApi = resolve;
-    });
-    const acquired = (id: string): PdfAcquisitionOutcome => ({
-      kind: "acquired",
-      literature_id: id as never,
-      receipt: {} as never,
-    });
-    const port: PdfAcquisitionPort = {
-      acquire: async () => ({ kind: "exhausted" }),
-      acquireCohort: async (requests, options) => {
-        calls.push(
-          `cohort:${requests.map((item) => item.literature_id).join(",")}`,
-        );
-        options?.on_outcomes?.([
-          { index: 1, outcome: acquired("b") },
-          { index: 0, outcome: acquired("a") },
-        ]);
-        await apiReleased;
-        return [acquired("a"), acquired("b")];
-      },
-    };
-    const coordinator = new CompletionAcquisitionCoordinator(
-      ["a", "b"],
-      port,
-      new AbortController().signal,
-      "operation",
-      2,
-    );
-    const outcomes: string[] = [];
-    const first = coordinator.request("a", request("a")).then((value) => {
-      outcomes.push(`a:${value.kind}`);
-      return value;
-    });
-    const second = coordinator.request("b", request("b")).then((value) => {
-      outcomes.push(`b:${value.kind}`);
-      return value;
-    });
-    await vi.waitFor(() =>
-      expect(outcomes).toEqual(["a:acquired", "b:acquired"]),
-    );
-    expect(calls).toEqual(["cohort:a,b"]);
-    releaseApi();
-    await Promise.all([first, second]);
-    await coordinator.close();
-  });
-
-  it("opens a new generation only after the active participants rejoin", async () => {
-    const generations: number[] = [];
-    const port: PdfAcquisitionPort = {
-      acquire: async () => ({ kind: "exhausted" }),
-      acquireCohort: async (requests) => {
-        generations.push(requests[0]?.generation ?? -1);
-        return requests.map(() => ({ kind: "exhausted" as const }));
-      },
-    };
-    const coordinator = new CompletionAcquisitionCoordinator(
-      ["a", "b"],
-      port,
-      new AbortController().signal,
-      "operation",
-      2,
-    );
-    const first = Promise.all([
-      coordinator.request("a", request("a")),
-      coordinator.request("b", request("b")),
-    ]);
-    await first;
-    const next = coordinator.request("a", request("a"));
-    let bRequested = false;
-    await Promise.resolve();
-    expect(generations).toEqual([1]);
-    coordinator.request("b", request("b")).then(() => {
-      bRequested = true;
-    });
-    await next;
-    await vi.waitFor(() => expect(bRequested).toBe(true));
-    expect(generations).toEqual([1, 2]);
-    await coordinator.close();
-  });
-
-  it("retires a participant without blocking the remaining generation", async () => {
-    const port: PdfAcquisitionPort = {
-      acquire: async () => ({ kind: "exhausted" }),
-      acquireCohort: async (requests) =>
-        requests.map(() => ({ kind: "exhausted" as const })),
-    };
-    const coordinator = new CompletionAcquisitionCoordinator(
-      ["a", "b"],
-      port,
-      new AbortController().signal,
-      "operation",
-      2,
-    );
-    coordinator.retire("b");
-    await expect(coordinator.request("a", request("a"))).resolves.toMatchObject(
-      {
-        kind: "exhausted",
-      },
-    );
-    await coordinator.close();
-  });
 
   it("runs Direct, publisher API and Browser barriers in order and reuses rejected-byte evidence", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-pdf-cohort-"));
@@ -660,7 +743,9 @@ it.each([302, 429])(
             ready: true,
             discover: async (request) => {
               phases.push("api");
-              expect(authorizedTargets("wiley", request)).toHaveLength(1);
+              expect(authorizedTargets("wiley", request)).toHaveLength(
+                status === 302 ? 1 : 0,
+              );
               seen.push([...(request.landing_origins ?? [])]);
               return [];
             },
@@ -696,12 +781,10 @@ it.each([302, 429])(
       });
       expect(outcome.kind).toBe(status === 302 ? "exhausted" : "route-failure");
       expect(seen).toEqual(
-        status === 302 ? [["https://advanced.onlinelibrary.wiley.com"]] : [],
+        status === 302 ? [["https://advanced.onlinelibrary.wiley.com"]] : [[]],
       );
-      expect(transport).toHaveBeenCalledTimes(status === 302 ? 1 : 0);
-      expect(phases).toEqual(
-        status === 302 ? ["doi:302", "api", "public:403"] : ["doi:429"],
-      );
+      expect(transport).toHaveBeenCalledTimes(1);
+      expect(phases).toEqual([`doi:${status}`, "api", "public:403"]);
       if (status === 429)
         expect(outcome).toMatchObject({
           kind: "route-failure",

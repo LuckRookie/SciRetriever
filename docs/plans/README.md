@@ -7,21 +7,33 @@
 
 ## 当前计划
 
-已完成[蓝白任务工作台的正式功能接入](2026-10-13-web-workbench/README.md)：统一 Web 入口、任务运行、材料/知识阅读与配置；Full 214 文件、1,676 项通过，39 项按既有条件跳过。
+- [DSH 统一 Agents 底座](2026-10-16-dsh-agents-foundation/README.md)：已完成执行底座与 Full 验收；统一单次调用和通用会话，保留现有业务合同，内容质量对照另行验证。
 
-当前没有活动实施计划。2026-10-11 已将以下四个 Completed 计划移入归档；归档不改变各计划的验证范围、条件跳过或真实环境限制。
+- [CLI/MCP 覆盖 Web 业务能力](2026-10-15-interface-capability-parity/README.md)：已完成当前 Web 业务范围的接口补齐与 Full 验收；两个机器入口共用应用合同，支持结构化调用与活运行时协作。
+
+- [定稿 Web 原型接入](2026-10-15-library-web-adaptation/README.md)：实施中；直接复用定稿 HTML 的结构与样式，逐项接入现有业务并完成离线验证。
+
+2026-10-13 核对以下五个计划的结果块、完成证据和残余限制后移入归档；历史 Full 与真实测试记录保持原口径，不作为后续代码修改的验收。
+
+| 最近归档 | 完成范围与限制 |
+| --- | --- |
+| [DSH/Cordis 受控 Agent 后端](../archive/2026-10-13-dsh-agent-backend/README.md) | Completed；Full 234 文件 / 1768 项；固定 50 篇对照 baseline 34、DSH 29 篇主文 PDF，不证明普遍提速或成功率提升。 |
+| [蓝白任务工作台](../archive/2026-10-13-web-workbench/README.md) | Completed；集成 Full 214 文件 / 1676 项通过，39 项按既有条件跳过；真实服务验收不在该计划范围。 |
+| [Browser 持续补位与传输计时](../archive/2026-10-13-browser-throughput/README.md) | Completed；含预览误捕获与失败归因修复，Full 226 文件 / 1697 项通过；真实总耗时未改善。 |
+| [固定输入加工与宽容结果接纳](../archive/2026-10-12-knowledge-processing-simplification/README.md) | Completed；Full 211 文件 / 1626 项通过、39 项跳过；真实加工和读取完成，不背书科学正确性。 |
+| [MinerU 正式解析修复](../archive/2026-10-12-mineru-parsing/README.md) | Completed；Full 1622 项通过、39 项跳过；四篇正式解析验证完成，未迁移生产库。 |
 
 最近完成的计划已归档：
 
-| 归档计划 | 完成范围 |
-| --- | --- |
+| 归档计划                                                                                                            | 完成范围                                                                                             |
+| ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | [元数据名称治理、五层 PDF 获取与 Browser 入口准备](../archive/2026-10-11-metadata-governance-pdf-routing/README.md) | 五层获取、显式名称维护与单任务 Browser 入口准备；Full 210 文件 / 1,606 项通过，39 项按既有条件跳过。 |
-| [Provider 可选字段的有界容错](../archive/2026-10-10-provider-field-boundaries/README.md) | 全部生产 Metadata adapters 接入；Full 205 文件 / 1,448 项通过，39 项按既有条件跳过。 |
-| [真实发现与 PDF 获取缺陷修复](../archive/2026-10-10-live-discovery-acquisition-fixes/README.md) | Full 203 文件 / 1,380 项通过，39 项按既有条件跳过；真实复验与外部限制见记录。 |
-| [核心采集兼容、文章身份核验与 Agent 操作闭环](../archive/2026-10-08-core-agent-completion/README.md) | 含 2026-10-09 任务生命周期修复；Full 201 文件 / 1,358 项通过，39 项按既有条件跳过。 |
-| [按供应商组织适配代码](../archive/2026-10-07-provider-layout/README.md) | 每家供应商独立目录，403 个包根导出保留；Full 194 文件 / 1,334 项通过。 |
-| [供应商能力与访问政策治理](../archive/2026-10-07-provider-governance/README.md) | 统一服务定义与普通 HTTP/API 调度；限制和验收见归档。 |
-| [Browser 独立 worker 与后台下载](../archive/2026-10-05-browser-parallel-downloads/README.md) | 并行 worker、后台下载与正式入库；真实样本和外部访问限制见归档。 |
+| [Provider 可选字段的有界容错](../archive/2026-10-10-provider-field-boundaries/README.md)                            | 全部生产 Metadata adapters 接入；Full 205 文件 / 1,448 项通过，39 项按既有条件跳过。                 |
+| [真实发现与 PDF 获取缺陷修复](../archive/2026-10-10-live-discovery-acquisition-fixes/README.md)                     | Full 203 文件 / 1,380 项通过，39 项按既有条件跳过；真实复验与外部限制见记录。                        |
+| [核心采集兼容、文章身份核验与 Agent 操作闭环](../archive/2026-10-08-core-agent-completion/README.md)                | 含 2026-10-09 任务生命周期修复；Full 201 文件 / 1,358 项通过，39 项按既有条件跳过。                  |
+| [按供应商组织适配代码](../archive/2026-10-07-provider-layout/README.md)                                             | 每家供应商独立目录，403 个包根导出保留；Full 194 文件 / 1,334 项通过。                               |
+| [供应商能力与访问政策治理](../archive/2026-10-07-provider-governance/README.md)                                     | 统一服务定义与普通 HTTP/API 调度；限制和验收见归档。                                                 |
+| [Browser 独立 worker 与后台下载](../archive/2026-10-05-browser-parallel-downloads/README.md)                        | 并行 worker、后台下载与正式入库；真实样本和外部访问限制见归档。                                      |
 
 ### 历史计划
 
@@ -156,3 +168,5 @@ Partial 必须指出具体完成的 Task 与剩余退出条件，不能用模糊
 历史按 SciRetriever 现有归档和 Git 约定处理，不引入另一套 archive 规则。
 
 本规范不新增固定文件数检查或机械门禁。合格计划的判断依据是结果、责任、依赖、证据和恢复是否具体可执行。
+
+[上级目录](../README.md) · [项目 README](../../README.md)

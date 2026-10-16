@@ -11,3 +11,5 @@ The `document_*` files model the selected `vlm-engine` archive profile.  The
 test suite builds a ZIP in memory, treats every member as untrusted input, and
 verifies that only normalized Markdown plus actually referenced resources
 survive conversion.
+
+[上级目录](../README.md) · [项目 README](../../../../README.md)

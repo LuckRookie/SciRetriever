@@ -40,31 +40,22 @@ import {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const METHOD_ID = "collection-knowledge-synthesis";
-const METHOD_VERSION = "1";
+const METHOD_VERSION = "2";
 const PROMPT =
-  "Synthesize every supplied verified candidate for the question. Return 1-64 statements. Each candidate ID must occur exactly once across source_ids. Keep every source text verbatim in its resulting statement, preserve conditions, negation, quantities, units, epistemic status and limitations. independent_literature_ids are verified through the actual statement evidence chain; two versions or a summary of one Literature are one independent source. source_layers identify original documents and prior knowledge, including degraded source-only material. Mark consensus only when at least two distinct independent Literature IDs support compatible claims. Preserve existing disagreement categories and separate incompatible results in a disagreement group. Source IDs select already verified evidence; do not invent citations or infer an uncited fact. Return only JSON.";
+  "Synthesize the supplied candidates for the question in your own words. Combine related findings and remove repetition. Preserve important conditions, quantities, uncertainty, limitations and disagreements in meaning. source_ids must name supplied candidates supporting each statement. independent_literature_ids give the actual independent papers; multiple versions or summaries of one paper are one source. A single statement may describe a disagreement. Return only JSON.";
 
 export async function synthesisMethodParameters(
-  budget: KnowledgeSynthesisRequest["budget"],
+  _legacyBudget: KnowledgeSynthesisRequest["budget"],
   bindingHash: string,
 ): Promise<object> {
-  const localBudget: KnowledgeLongAnalysisRequest["budget"] = {
-    max_source_bytes: budget.max_source_bytes,
-    max_call_bytes: budget.max_call_bytes,
-    max_total_call_bytes: budget.max_total_call_bytes,
-    max_calls: budget.max_calls,
-    max_output_tokens_per_call: budget.max_output_tokens_per_call,
-    max_total_output_tokens: budget.max_total_output_tokens,
-  };
   return {
     method_id: METHOD_ID,
     method_version: METHOD_VERSION,
     local_method_parameters_sha256: await sha256(
-      canonical(longMethodParameters(localBudget, bindingHash), 32768),
+      canonical(longMethodParameters(undefined, bindingHash), 32768),
     ),
     merge_prompt: PROMPT,
     merge_schema: responseSchema(),
-    budget,
     model_binding_sha256: bindingHash,
   };
 }
@@ -74,7 +65,7 @@ export class SynthesisExecutionFailure extends Error {
     readonly code:
       | "synthesis-invalid"
       | "synthesis-stale-binding"
-      | "synthesis-budget-exhausted"
+      | "synthesis-request-limit"
       | "synthesis-model-failed"
       | "synthesis-response"
       | "synthesis-not-applicable"
@@ -99,7 +90,11 @@ function fail(code: SynthesisExecutionFailure["code"]): never {
   throw new SynthesisExecutionFailure(code);
 }
 function canonical(value: unknown, limit: number): Uint8Array {
-  return extractionCanonicalJsonBytes(value, limit);
+  return extractionCanonicalJsonBytes(value, limit, {
+    maxDepth: 32,
+    maxNodes: 20480,
+    maxArrayLength: 20480,
+  });
 }
 function uuid(hash: string): string {
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
@@ -112,7 +107,7 @@ function exact(
     !value ||
     typeof value !== "object" ||
     Array.isArray(value) ||
-    Object.keys(value).sort().join("\0") !== [...keys].sort().join("\0")
+    keys.some((key) => !Object.hasOwn(value, key))
   )
     fail("synthesis-response");
   return value as Record<string, unknown>;
@@ -246,21 +241,6 @@ function coverageItems(input: readonly SynthesisInputItem[]) {
     };
   });
 }
-function sameQuantity(
-  left: SynthesisStatement["quantity"],
-  right: unknown,
-): boolean {
-  if (left === null) return right === null;
-  if (!right || typeof right !== "object" || Array.isArray(right)) return false;
-  const value = right as Record<string, unknown>;
-  return (
-    Object.keys(value).sort().join("\0") ===
-      ["comparison_basis", "unit", "value"].join("\0") &&
-    value.value === left.value &&
-    value.unit === left.unit &&
-    value.comparison_basis === left.comparison_basis
-  );
-}
 
 /** Execution owns one fixed collection, never publishes per-document intermediates. */
 export class KnowledgeSynthesisService {
@@ -315,14 +295,14 @@ export class KnowledgeSynthesisService {
       prepared = await this.preparation.prepare(
         { policy: request.policy, inputs: selections(request.input.items) },
         active,
-        request.budget.max_verification_bytes,
+        Number.MAX_SAFE_INTEGER,
       );
     } catch (error) {
       if (active.aborted) fail("synthesis-cancelled");
       if (error instanceof SynthesisPreparationError) {
         const code =
           error.code === "synthesis-limit"
-            ? "synthesis-budget-exhausted"
+            ? "synthesis-request-limit"
             : error.code;
         throw new SynthesisExecutionFailure(code, { cause: error });
       }
@@ -395,7 +375,6 @@ export class KnowledgeSynthesisService {
       source_bytes: 0,
       calls: 0,
       canonical_call_bytes: 0,
-      reserved_output_tokens: 0,
       reported_calls: 0,
       reported_input_tokens: 0,
       reported_output_tokens: 0,
@@ -406,7 +385,7 @@ export class KnowledgeSynthesisService {
       ({ content, literatureIds } = await this.storage.withReadSession(
         (session) =>
           this.generate(request, session, binding, schema, ledger, active),
-        request.budget.max_verification_bytes,
+        Number.MAX_SAFE_INTEGER,
         active,
       ));
     } catch (error) {
@@ -414,9 +393,9 @@ export class KnowledgeSynthesisService {
       if (active.aborted) fail("synthesis-cancelled");
       if (error instanceof KnowledgeAnalysisFailure) {
         const code =
-          error.code === "knowledge-budget-exhausted" ||
+          error.code === "knowledge-request-limit" ||
           error.code === "knowledge-content-limit"
-            ? "synthesis-budget-exhausted"
+            ? "synthesis-request-limit"
             : error.code === "knowledge-model-failed"
               ? "synthesis-model-failed"
               : error.code === "knowledge-input-invalidated"
@@ -432,7 +411,7 @@ export class KnowledgeSynthesisService {
       if (error instanceof SynthesisReadError) {
         const code =
           error.code === "synthesis-limit"
-            ? "synthesis-budget-exhausted"
+            ? "synthesis-request-limit"
             : error.code === "synthesis-invalid" ||
                 error.code === "synthesis-kind-unsupported"
               ? "synthesis-stale-binding"
@@ -565,8 +544,6 @@ export class KnowledgeSynthesisService {
         )
           fail("synthesis-stale-binding");
         ledger.source_bytes += source.artifact.content_ref.byte_size;
-        if (ledger.source_bytes > request.budget.max_source_bytes)
-          fail("synthesis-budget-exhausted");
         for (const statement of source.artifact.content.statements)
           candidates.push({
             id: `c${candidates.length + 1}`,
@@ -627,8 +604,6 @@ export class KnowledgeSynthesisService {
         verified.representation_sha256 !== item.document.representation_sha256
       )
         fail("synthesis-stale-binding");
-      if (ledger.source_bytes >= request.budget.max_source_bytes)
-        fail("synthesis-budget-exhausted");
       const single = await createInputManifest([
         {
           input_id: item.input_id,
@@ -645,15 +620,6 @@ export class KnowledgeSynthesisService {
         purpose: "question",
         question: request.question,
         default_update: null,
-        budget: {
-          max_source_bytes:
-            request.budget.max_source_bytes - ledger.source_bytes,
-          max_call_bytes: request.budget.max_call_bytes,
-          max_total_call_bytes: request.budget.max_total_call_bytes,
-          max_calls: request.budget.max_calls,
-          max_output_tokens_per_call: request.budget.max_output_tokens_per_call,
-          max_total_output_tokens: request.budget.max_total_output_tokens,
-        },
       };
       const analyzed = await analyzeLongDocument(
         longRequest,
@@ -758,18 +724,7 @@ export class KnowledgeSynthesisService {
     ledger: Ledger,
     signal: AbortSignal,
   ): Promise<SynthesisContent> {
-    if (
-      signal.aborted ||
-      request.budget.max_output_tokens_per_call > binding.max_output_tokens ||
-      ledger.calls >= request.budget.max_calls ||
-      ledger.reported_output_tokens +
-        ledger.reserved_output_tokens +
-        request.budget.max_output_tokens_per_call >
-        request.budget.max_total_output_tokens
-    )
-      fail(
-        signal.aborted ? "synthesis-cancelled" : "synthesis-budget-exhausted",
-      );
+    if (signal.aborted) fail("synthesis-cancelled");
     let call: AgentCall;
     let bytes: Uint8Array;
     try {
@@ -788,7 +743,7 @@ export class KnowledgeSynthesisService {
               source_layers: candidate.source_layers,
             })),
           },
-          request.budget.max_call_bytes,
+          1024 * 1024,
         ),
       );
       const userBytes = encoder.encode(user);
@@ -807,22 +762,15 @@ export class KnowledgeSynthesisService {
           },
         ],
         response_schema: schema,
-        max_output_tokens: request.budget.max_output_tokens_per_call,
       };
-      bytes = canonical(call, request.budget.max_call_bytes);
+      bytes = canonical(call, 1024 * 1024);
     } catch (error) {
-      throw new SynthesisExecutionFailure("synthesis-budget-exhausted", {
+      throw new SynthesisExecutionFailure("synthesis-request-limit", {
         cause: error,
       });
     }
-    if (
-      ledger.canonical_call_bytes + bytes.length >
-      request.budget.max_total_call_bytes
-    )
-      fail("synthesis-budget-exhausted");
     ledger.calls++;
     ledger.canonical_call_bytes += bytes.length;
-    ledger.reserved_output_tokens += request.budget.max_output_tokens_per_call;
     let result;
     try {
       result = await this.agents.execute(call, signal);
@@ -854,12 +802,6 @@ export class KnowledgeSynthesisService {
     ledger.reported_calls++;
     ledger.reported_input_tokens += usage.input_tokens;
     ledger.reported_output_tokens += usage.output_tokens;
-    ledger.reserved_output_tokens -= request.budget.max_output_tokens_per_call;
-    if (
-      usage.output_tokens > request.budget.max_output_tokens_per_call ||
-      ledger.reported_output_tokens > request.budget.max_total_output_tokens
-    )
-      fail("synthesis-budget-exhausted");
     if (result.kind !== "structured") fail("synthesis-response");
     let response: Record<string, unknown>;
     try {
@@ -874,16 +816,11 @@ export class KnowledgeSynthesisService {
         cause: error,
       });
     }
-    if (
-      !Array.isArray(response.statements) ||
-      response.statements.length < 1 ||
-      response.statements.length > 64
-    )
+    if (!Array.isArray(response.statements) || response.statements.length < 1)
       fail("synthesis-response");
     const byId = new Map(
       candidates.map((candidate) => [candidate.id, candidate]),
     );
-    const used = new Set<string>();
     const statements = response.statements.map((entry) => {
       const r = exact(entry, [
         "statement_id",
@@ -896,49 +833,14 @@ export class KnowledgeSynthesisService {
         "quantity",
         "source_ids",
       ]);
-      if (
-        !Array.isArray(r.source_ids) ||
-        r.source_ids.length < 1 ||
-        r.source_ids.length > 128
-      )
+      if (!Array.isArray(r.source_ids) || r.source_ids.length < 1)
         fail("synthesis-response");
       const sources: AnnotatedCandidate[] = [];
       for (const id of r.source_ids) {
-        if (typeof id !== "string" || used.has(id) || !byId.has(id))
-          fail("synthesis-response");
-        used.add(id);
+        if (typeof id !== "string" || !byId.has(id)) fail("synthesis-response");
         sources.push(byId.get(id)!);
       }
       if (typeof r.text !== "string") fail("synthesis-response");
-      const categories = new Set(sources.map((source) => source.category));
-      if (
-        categories.has("disagreement")
-          ? r.category !== "disagreement"
-          : categories.size === 1
-            ? r.category !== sources[0]!.category &&
-              r.category !== "disagreement"
-            : r.category !== "disagreement"
-      )
-        fail("synthesis-response");
-      if (
-        r.relation === "consensus" &&
-        new Set(sources.flatMap((source) => source.independent_literature_ids))
-          .size < 2
-      )
-        fail("synthesis-response");
-      const text = r.text;
-      if (
-        sources.some((source) => !text.includes(source.text)) ||
-        sources.some((source) => source.epistemic !== r.epistemic) ||
-        sources.some((source) => !sameQuantity(source.quantity, r.quantity)) ||
-        sources.some((source) =>
-          source.conditions.some(
-            (condition) =>
-              !Array.isArray(r.conditions) || !r.conditions.includes(condition),
-          ),
-        )
-      )
-        fail("synthesis-response");
       const evidence = [
         ...new Map(
           sources
@@ -946,7 +848,6 @@ export class KnowledgeSynthesisService {
             .map((item) => [JSON.stringify(item), item]),
         ).values(),
       ];
-      if (evidence.length > 128) fail("synthesis-budget-exhausted");
       return {
         statement_id: r.statement_id,
         category: r.category,
@@ -959,7 +860,6 @@ export class KnowledgeSynthesisService {
         evidence,
       };
     });
-    if (used.size !== candidates.length) fail("synthesis-response");
     try {
       return parseSynthesisContent({
         schema_version: 2,

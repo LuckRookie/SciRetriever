@@ -14,6 +14,7 @@ import { dataFetch } from "./knowledge.js";
 export function mountMaterialReading(
   root: HTMLElement,
   detail: LiteratureDetail,
+  legacyArtifact = false,
 ): HTMLButtonElement | null {
   const asset = detail.primary_pdf?.asset;
   if (!asset) return null;
@@ -43,27 +44,41 @@ export function mountMaterialReading(
     void (async () => {
       if (asset.size_bytes < 1 || asset.size_bytes > 256 * 1024 * 1024)
         throw new Error("PDF 超过受控读取上限");
-      const response = await dataFetch("/api/v1/query/material-bytes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          protocol_version: 1,
-          request: {
-            literature_id: detail.literature.literature_id,
-            asset_id: asset.asset_id,
-            asset_sha256: asset.sha256,
-          },
-        }),
-        signal: controller.signal,
-      });
+      const response = await dataFetch(
+        legacyArtifact
+          ? "/api/library/artifact"
+          : "/api/v1/query/material-bytes",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            legacyArtifact
+              ? {
+                  literature_id: detail.literature.literature_id,
+                  kind: "primary-pdf",
+                }
+              : {
+                  protocol_version: 1,
+                  request: {
+                    literature_id: detail.literature.literature_id,
+                    asset_id: asset.asset_id,
+                    asset_sha256: asset.sha256,
+                  },
+                },
+          ),
+          signal: controller.signal,
+        },
+      );
       if (
         !response.ok ||
         response.headers.get("Content-Type")?.split(";")[0] !==
           "application/pdf" ||
-        response.headers.get("x-sciretriever-asset-id") !== asset.asset_id ||
-        response.headers.get("x-sciretriever-asset-sha256") !== asset.sha256 ||
-        response.headers.get("x-sciretriever-byte-size") !==
-          String(asset.size_bytes)
+        (!legacyArtifact &&
+          (response.headers.get("x-sciretriever-asset-id") !== asset.asset_id ||
+            response.headers.get("x-sciretriever-asset-sha256") !==
+              asset.sha256 ||
+            response.headers.get("x-sciretriever-byte-size") !==
+              String(asset.size_bytes)))
       )
         throw new Error("PDF 响应与所选材料不一致或暂不可用");
       const reader = response.body?.getReader();

@@ -1,6 +1,6 @@
 # Semantic Scholar
 
-> 2026-10-10 TypeScript 修复复验：references/citations 的 fields 使用 paper 字段名，不同时发送 citedPaper.* / citingPaper.*。同一原始关系交付的内嵌 observation 与关系使用一致 provenance；共享一个 provenance ID 时其输入/参数 hash 也必须一致。 证据见[修复验证记录](../live-discovery-acquisition-fixes-2026-10-10.md)。下文较早日期的探测只代表当时状态。
+> 当前 TypeScript 适配行为（2026-10-10 核对）：references/citations 的 fields 使用 paper 字段名，不同时发送 citedPaper.* / citingPaper.*。同一原始关系交付的内嵌 observation 与关系使用一致 provenance；共享一个 provenance ID 时其输入/参数 hash 也必须一致。 证据见修复验证记录（本地文件：`sandbox/reports/live-discovery-acquisition-fixes-2026-10-10.md`，不随仓库分发）。下文较早日期的探测只代表当时状态。
 
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
@@ -206,11 +206,8 @@ citations，显式解析请求 fields、分页、Paper/author/externalIds、引�
 redirect、媒体类型、实际 PDF 字节和归属验证。当前证据为离线 fake/fixture；2026-07-21 的旧 key
 事件不证明当前凭据、容量、单篇 locator 或 entitlement，本轮也没有访问 API/PDF。
 
-## 11. 2026-10-07 TypeScript PMCID 与错误转换修复
+## 11. TypeScript PMCID 与错误转换
 
-Graph API 的 `externalIds.PubMedCentral` 使用纯数字字符串，例如第 6 节的 `7759461`。
-当前 [SemanticScholarRestAdapter](../../../apps/server/src/providers/semantic-scholar/metadata.ts) 在供应商边界
-把它转换为 `PMC7759461`，搜索、lookup 和引用端点共用公共 Identifier canonicalization；
-已有前缀继续有效，畸形值仍拒绝。授权只读复查的 10 条首批结果中，修复前 5 条因此失败，
-修复后 10 条都完成中性转换。API 的真实 `429` 继续报告限流失败，并保留有界 `Retry-After`，
-不会作为无效记录或正常耗尽。该复查没有写入文献库，也没有下载 PDF。
+Graph API 的 `externalIds.PubMedCentral` 可为纯数字字符串；[SemanticScholarRestAdapter](../../../apps/server/src/providers/semantic-scholar/metadata.ts) 在供应商边界补 `PMC` 前缀。搜索、lookup 与引用端点共用 Identifier 规范化；已有前缀保持，畸形值拒绝。`429` 保留限流含义和 `Retry-After`。
+
+测试对照见2026-10-07 Provider 适配测试（本地文件：`sandbox/reports/provider-adapter-validation-2026-10-07.md`，不随仓库分发）。

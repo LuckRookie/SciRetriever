@@ -1,3 +1,4 @@
+import { artifactReference } from "../storage/artifact-layout.js";
 import { createHash } from "node:crypto";
 import {
   parseDocumentMaterialRef,
@@ -303,7 +304,8 @@ export class DocumentProcessingService {
       });
       const locatedStructure = await this.database.locateArtifact(structure);
       const structurePath =
-        locatedStructure?.reference ?? `objects/${structure.sha256}.bin`;
+        locatedStructure?.reference ??
+        artifactReference("document-structure", structure);
       if (locatedStructure)
         await this.storage.withVerifiedArtifact(
           structurePath,

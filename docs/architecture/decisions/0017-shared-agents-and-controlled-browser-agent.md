@@ -2,10 +2,10 @@
 
 - Status: Accepted
 - Date: 2026-08-21
-- Last amended: 2026-09-26
+- Last amended: 2026-10-13
 - Supersedes: none
 - Amends: [ADR 0008](0008-summarized-markdown-literature-content.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)
-- Amended by: [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[ADR 0023](0023-generic-browser-agent-executor.md)
+- Amended by: [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[ADR 0023](0023-generic-browser-agent-executor.md)、[ADR 0031](0031-dsh-backed-agent-capabilities.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[知识加工：分析与综合](../technical/05-knowledge-processing.md#2-分析与综合)、[知识加工：共享支撑：无状态模型运行时](../technical/05-knowledge-processing.md#5-共享支撑无状态模型运行时)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)
 
 > 2026-09-25 修订：Analysis 的两阶段描述限定为旧单篇兼容用例；新分析可按用途组织有界多次调用。无状态 Agents、消费模块编排和 Browser 安全责任不变。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。
@@ -24,9 +24,13 @@ Analysis 与受控 Browser 是两个需要模型能力的真实消费者，但�
 
 ## 决策
 
-### 1. `agents` 是无状态、Provider-neutral 的单次模型运行时
+> 2026-10-13 修订：按 ADR 0031，单次模型层保持无状态，`agents` 另可提供基于 DSH/Cordis 的受控会话与工具循环。后端方向已接受，实施已批准；下文单次合同不再限制整个模块只能无状态。
 
-`agents` 只拥有：
+> 2026-10-16 修订：按 [ADR 0031](0031-dsh-backed-agent-capabilities.md#2-唯一-dsh-底座按任务使用单次调用或持续会话)，DSH 统一承接单次调用与持续会话，原 `AgentRuntime` 仅保留同一实现的 API 名称。下文无状态限制只描述单次操作语义，不再规定保留独立自研运行时；具体完成状态见当前 Agents 文档。
+
+### 1. `AgentRuntime` 是无状态、Provider-neutral 的单次模型运行时
+
+`agents` 中的单次模型层拥有：
 
 - 中性 role、message、图像、严格 response schema 和 tool declaration；
 - model capability、role readiness、role-to-model binding 和角色默认 reasoning effort；
@@ -50,20 +54,20 @@ class AgentRuntime:
 
 消费者提交 role、messages、required capabilities、严格 response schema 或 tools，以及本次 `max_output_tokens`。消费者不选择 Provider、Base URL、model 或 reasoning effort；Runtime 根据 Bootstrap 已冻结的 role binding 选择 model 与角色默认 effort，并在外部 I/O 前验证 capability。中性配置值为 `default`、`none`、`minimal`、`low`、`medium`、`high`、`xhigh` 与 `max`。`default` 不向 wire request 增加 effort 参数；其它值由具体协议 adapter 原样编码并进入参数 hash，不能降级、近似映射或在失败后静默重试为 default。配置向导对三种 API 提供同一完整集合；模型是否实际支持所选值仍由显式 probe 验证，不能根据模型名称猜测。
 
-`agents` 不拥有业务 workflow、工具执行、Browser loop、Analysis 阶段顺序、长期 memory、Planner、Tool Registry、后台任务、事实写入或持久化运行记录。它不提供 `AgentSession`、`open_session`、session history、turn 计数或跨调用累计预算。
+单次 `AgentRuntime` 不拥有业务 workflow、工具执行、Browser loop、Analysis 阶段顺序、session history 或跨调用累计预算。按 ADR 0031，独立的 DSH 执行基础可持有受控能力执行所需的临时会话、工具注册、循环和压缩；业务工具语义、文章控制、预算、下载与事实写入仍归消费模块。跨任务长期 memory、后台自主任务和持久 Agent workflow 不因该修订获得授权。
 
 ### 2. 完整 Agent 由共享 Runtime 与消费模块控制器组成
 
 责任固定为：
 
-| Owner           | 责任                                                                                                   |
-| --------------- | ------------------------------------------------------------------------------------------------------ |
-| `agents`        | 单次模型执行、capability/readiness、role binding、Provider protocol、稳定失败与安全 usage              |
-| `analysis`      | 各分析用例的 prompt、编排、schema、验收与 provenance；两阶段/NoUsableContent 属于旧单篇兼容用例        |
-| `acquisition`   | “取得当前文章主 PDF”的目标、Browser controller、允许动作、语义进展和 route outcome                     |
-| `network`       | CloakBrowser runtime、Browser snapshot/revision、动作执行、Network guard、capture 和 cleanup           |
-| `configuration` | Model Provider/Model 注册表、Analyze/Download 选择、controller、credential 和本地 readiness            |
-| `bootstrap`     | 按所选 Model Provider 共享构造 adapter/runtime、派生 role bindings 和作业选择的一个 Browser controller |
+| Owner           | 责任                                                                                                                                      |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `agents`        | 单次模型执行、capability/readiness、role binding、Provider protocol、稳定失败与 usage；ADR 0031 新增受控 DSH 执行基础的目标责任，尚未实施 |
+| `analysis`      | 各分析用例的 prompt、编排、schema、验收与 provenance；两阶段/NoUsableContent 属于旧单篇兼容用例                                           |
+| `acquisition`   | “取得当前文章主 PDF”的目标、Browser controller、允许动作、语义进展和 route outcome                                                        |
+| `network`       | CloakBrowser runtime、Browser snapshot/revision、动作执行、Network guard、capture 和 cleanup                                              |
+| `configuration` | Model Provider/Model 注册表、Analyze/Download 选择、controller、credential 和本地 readiness                                               |
+| `bootstrap`     | 按所选 Model Provider 共享构造 adapter/runtime、派生 role bindings 和作业选择的一个 Browser controller                                    |
 
 因此：
 
@@ -74,7 +78,7 @@ Analysis Agent
   + Analysis schema/validator
 
 Browser Agent
-  = AgentRuntime
+  = 共享单次模型层 + 受控 DSH 执行基础（ADR 0031 目标，尚未实施）
   + Acquisition Browser Agent controller
   + Network Browser action executor
 ```
@@ -83,7 +87,7 @@ Browser Agent
 
 旧单篇 LiteratureContent 用例直接调用两次 `AgentRuntime.execute`，自己决定第二阶段是否运行。新 Analysis 可按用途组织有界分段、压缩和综合，每次调用仍独立经过同一运行时；Runtime 不获得业务编排权。ReferenceLookup 同样发起独立调用。Extraction 的外部策略不以内部 Runtime 为前提；是否内置模型策略按 ADR 0027 另定。Provider 成功不能替代业务模块的结构、来源、对齐和产物验收。
 
-迁移完成后删除 `AgentSession`、`open_session`、旧 Analysis Provider wrapper、model 透传和双路径测试，不保留“新 Runtime 失败后回到旧 adapter”的兼容层。已经保存的 Literature、Content 和 provenance schema 不迁移。
+本次历史单次运行时迁移删除旧 `AgentSession`、`open_session`、Analysis Provider wrapper、model 透传和双路径测试，不保留“新 Runtime 失败后回到旧 adapter”的兼容层；这不禁止 ADR 0031 的独立受控执行基础。已经保存的 Literature、Content 和 provenance schema 不迁移。
 
 ### 4. 历史决策：Controlled Browser 在作业开始前选择一个 controller
 
@@ -321,8 +325,8 @@ Analysis 继续形成一项业务 provenance。Browser Observation、screenshot�
 
 ## 不采用的方案
 
-- 继续保留 `AgentSession`、多 turn history 或累计 session/job budget；
-- 建立 GenericAgent、Planner、Memory、Workflow、Tool Registry 或持久 AgentRun/AgentTurn；
+- 在单次模型层继续保留旧 `AgentSession`、多 turn history 或累计 session/job budget；ADR 0031 的受控执行基础可以维护必要会话历史；
+- 建立不受业务能力约束的 GenericAgent、Planner、Memory、Workflow 或持久 AgentRun/AgentTurn；ADR 0031 允许内部受控工具注册与调度；
 - Rules miss 后自动 fallback 到 Agent，或 Agent 失败后回到 Rules；
 - Browser 页面先跑确定性点击，再由 Agent 接管剩余步骤；
 - 为 Challenge 建立专属 Observation、target、动作、budget 或状态机；

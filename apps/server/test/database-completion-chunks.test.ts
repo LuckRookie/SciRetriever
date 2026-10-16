@@ -118,6 +118,65 @@ async function fixture(count: number) {
 }
 
 describe("bounded database completion operations", () => {
+  it("refills independent PDF targets with one stable Browser epoch and immediate progress", async () => {
+    const env = await fixture(4);
+    const slow = deferred();
+    const requests: {
+      id: string;
+      operation: string | undefined;
+      generation: number | undefined;
+    }[] = [];
+    const finished: string[] = [];
+    const fastFinished = deferred();
+    const service = new DatabaseCompletionService({
+      library: env.app.library,
+      database: env.app.database,
+      writes: env.app.writes,
+      completion: null,
+      max_concurrency: 2,
+      acquisition: {
+        acquire: async (request) => {
+          requests.push({
+            id: request.literature_id,
+            operation: request.operation_id,
+            generation: request.generation,
+          });
+          if (request.literature_id === env.ids[0]) await slow.promise;
+          expect(request.signal.aborted).toBe(false);
+          return { kind: "exhausted" };
+        },
+      },
+    });
+    const pending = service.run(
+      { ...env.request, goal: "ASSET_READY" },
+      {
+        on_progress: (event) => {
+          if (event.state === "skipped") {
+            finished.push(event.literature_id!);
+            if (finished.length === 3) fastFinished.resolve();
+          }
+        },
+      },
+    );
+    try {
+      await fastFinished.promise;
+      expect(finished).toEqual(env.ids.slice(1));
+      expect(requests.map((x) => x.id)).toEqual(env.ids);
+      expect(new Set(requests.map((x) => x.operation)).size).toBe(1);
+      expect(requests.every((x) => x.operation && x.generation === 0)).toBe(
+        true,
+      );
+      slow.resolve();
+      const report = await pending;
+      expect(targets(report)).toEqual(env.ids);
+      expect(report.end.kind).toBe("finished");
+    } finally {
+      slow.resolve();
+      await pending;
+      await env.close();
+    }
+  });
+
   it("uses the configured bound in the production Application object graph", async () => {
     const env = await fixture(5);
     const release = deferred();
@@ -159,7 +218,7 @@ describe("bounded database completion operations", () => {
     }
   });
 
-  it("runs one bounded PDF cohort while every target obtains exactly one exhaustion fact", async () => {
+  it("bounds independent PDF flows while every target obtains exactly one exhaustion fact", async () => {
     const env = await fixture(7);
     const release = deferred();
     const calls: string[] = [];
@@ -219,6 +278,8 @@ describe("bounded database completion operations", () => {
       const calls: string[] = [];
       let active = 0,
         peak = 0;
+      const fastFinished = deferred();
+      let finished = 0;
       const service = env.service(async ({ literature_id }) => {
         calls.push(literature_id);
         peak = Math.max(peak, ++active);
@@ -233,23 +294,25 @@ describe("bounded database completion operations", () => {
           active--;
         }
       });
-      const pending = service.run(env.request);
+      const pending = service.run(env.request, {
+        on_progress: (event) => {
+          if (event.state !== "started" && ++finished === count - 1)
+            fastFinished.resolve();
+        },
+      });
       try {
         await vi.waitFor(() => expect(calls).toHaveLength(3));
         rest.resolve();
-        await vi.waitFor(() => expect(active).toBe(1));
-        // The chunk boundary does not refill slots while its slowest target remains
-        // active. Worker start order within the chunk is intentionally unspecified.
-        expect(calls).toHaveLength(3);
-        expect(new Set(calls)).toEqual(new Set(env.ids.slice(0, 3)));
+        await fastFinished.promise;
+        expect(active).toBe(1);
+        // The slow first target stays active while the other slots drain all
+        // remaining work, including what used to belong to later chunks.
+        expect(calls).toHaveLength(count);
+        expect(new Set(calls)).toEqual(new Set(env.ids));
         first.resolve();
         const report = await pending;
         expect(peak).toBe(3);
         expect(active).toBe(0);
-        for (let offset = 0; offset < count; offset += 3)
-          expect(new Set(calls.slice(offset, offset + 3))).toEqual(
-            new Set(env.ids.slice(offset, offset + 3)),
-          );
         expect(report.failed.map((item) => item.literature_id)).toEqual(
           env.ids,
         );
@@ -264,7 +327,7 @@ describe("bounded database completion operations", () => {
     },
   );
 
-  it("keeps chunk and report order when independent detail reads finish out of order", async () => {
+  it("keeps report order while a slow detail read does not block later targets", async () => {
     const env = await fixture(7);
     const release = deferred();
     const original = env.app.library.detail.bind(env.app.library);
@@ -281,13 +344,13 @@ describe("bounded database completion operations", () => {
     });
     const pending = service.run(env.request);
     try {
-      await vi.waitFor(() => expect(calls).toHaveLength(5));
-      expect(new Set(calls.slice(3))).toEqual(new Set(env.ids.slice(4, 6)));
-      expect(calls).not.toContain(env.ids[6]);
+      await vi.waitFor(() => expect(calls).toHaveLength(6));
+      expect(new Set(calls)).toEqual(
+        new Set(env.ids.filter((id) => id !== env.ids[3])),
+      );
       release.resolve();
       const report = await pending;
-      expect(calls[5]).toBe(env.ids[3]);
-      expect(calls[6]).toBe(env.ids[6]);
+      expect(calls[6]).toBe(env.ids[3]);
       expect(report.failed.map((item) => item.literature_id)).toEqual(env.ids);
     } finally {
       release.resolve();
@@ -328,11 +391,24 @@ describe("bounded database completion operations", () => {
     }
   });
 
-  it("does no work for a pre-cancelled operation or the next cancelled chunk", async () => {
+  it("does no work for a pre-cancelled operation and stops refilling after cancellation", async () => {
     const env = await fixture(5);
+    const secondStarted = deferred();
     const complete = vi.fn(
-      async ({ literature_id }: { literature_id: string }) =>
-        exhausted(literature_id),
+      async (
+        { literature_id }: { literature_id: string },
+        signal?: AbortSignal,
+      ) => {
+        if (literature_id === env.ids[1]) {
+          secondStarted.resolve();
+          await new Promise<void>((resolve) =>
+            signal!.addEventListener("abort", () => resolve(), { once: true }),
+          );
+          throw new DOMException("fixture cancelled", "AbortError");
+        }
+        await secondStarted.promise;
+        return exhausted(literature_id);
+      },
     );
     const service = env.service(complete, 2);
     try {
@@ -346,13 +422,13 @@ describe("bounded database completion operations", () => {
       const report = await service.run(env.request, {
         signal: stop.signal,
         on_progress: (event) => {
-          if (event.state === "failed" && ++finished === 2) stop.abort();
+          if (event.state === "failed" && ++finished === 1) stop.abort();
         },
       });
       expect(complete).toHaveBeenCalledTimes(2);
-      expect(report.failed).toHaveLength(2);
+      expect(report.failed).toHaveLength(1);
       expect(report.notStarted).toHaveLength(3);
-      expect(report.interrupted).toHaveLength(0);
+      expect(report.interrupted).toHaveLength(1);
       expect(targets(report).sort()).toEqual([...env.ids].sort());
     } finally {
       await env.close();

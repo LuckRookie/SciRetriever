@@ -16,6 +16,60 @@ import { NetworkBudgetCoordinator } from "../src/network/budget.js";
 import type { MetadataTransport } from "../src/providers/shared/metadata-transport.js";
 
 describe("TypeScript configuration owner", () => {
+  it("persists default storage paths without creating a database and leaves them stable", async () => {
+    const home = await mkdtemp(join(tmpdir(), "sciretriever-default-paths-"));
+    try {
+      const owner = new TypeScriptConfigurationOwner(home);
+      const saved = await owner.ensureStoragePaths();
+      expect(saved.configuration.paths).toEqual({
+        catalog_path: join(home, ".sciretriever", "catalog.sqlite"),
+        artifact_root: join(home, ".sciretriever", "artifacts"),
+      });
+      expect(saved.revision).not.toBe("missing");
+      expect((await owner.ensureStoragePaths()).revision).toBe(saved.revision);
+      expect(existsSync(saved.configuration.paths.catalog_path!)).toBe(false);
+      expect(existsSync(saved.configuration.paths.artifact_root!)).toBe(false);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["catalog_path", "artifact_root"] as const)(
+    "fills only the missing path while preserving custom %s and other settings",
+    async (field) => {
+      const home = await mkdtemp(join(tmpdir(), "sciretriever-partial-paths-"));
+      try {
+        const owner = new TypeScriptConfigurationOwner(home);
+        await owner.read();
+        const custom = join(home, "custom-location");
+        const settings =
+          '# Keep the source policy.\n[sources.metadata]\nmode="custom"\nproviders=[]\n';
+        await writeFile(
+          configurationPath(home),
+          `[paths]\n${field}=${JSON.stringify(custom)}\n${settings}`,
+          { mode: 0o600 },
+        );
+        const saved = await owner.ensureStoragePaths();
+        expect(saved.configuration.paths[field]).toBe(custom);
+        expect(Object.values(saved.configuration.paths).every(Boolean)).toBe(
+          true,
+        );
+        expect(saved.configuration.sources.metadata).toMatchObject({
+          mode: "custom",
+          providers: [],
+        });
+        expect(await readFile(configurationPath(home), "utf8")).toContain(
+          settings,
+        );
+        const bytes = await readFile(configurationPath(home));
+        await owner.ensureStoragePaths();
+        expect(await readFile(configurationPath(home))).toEqual(bytes);
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("reads, validates, diffs and publishes without a Python process", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-ts-owner-"));
     try {
