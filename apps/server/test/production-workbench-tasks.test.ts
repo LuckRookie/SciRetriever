@@ -306,7 +306,7 @@ describe("production task workbench composition", () => {
           workspace: {
             catalog_path: env.catalog,
             artifact_root: env.artifacts,
-            schema_version: 9,
+            schema_version: 10,
             capabilities: { tasks: true, query: true, maintenance: true },
           },
         },

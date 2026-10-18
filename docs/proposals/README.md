@@ -4,7 +4,8 @@
 
 ## 当前提案
 
-当前没有尚待讨论或评审的提案。
+- [文献知识加工平台提案](../archive/2026-10-18-knowledge-processing-platform/proposal.md)：2026-10-18 已完成精简首版并与计划归档；当前合同见 ADR 0034。完整版仍是未执行参考。
+- [文献知识加工平台：完整版设计](2026-10-17-knowledge-processing-full-design/README.md)：参考设计，不作为首版实施范围；保存提案原文副本、算子抽象设计与九块计划副本，以及按需引入各项能力的触发条件。
 
 - [DSH 接入提案](../archive/2026-10-13-dsh-agent-backend/proposal.md)：已获批准并完成首期实施，和[实施计划](../archive/2026-10-13-dsh-agent-backend/README.md)一同归档；长期决定仍见 [ADR 0031](../architecture/decisions/0031-dsh-backed-agent-capabilities.md)。
 - [Web Agent 工作台提案与原型](../archive/2026-10-08-agent-workbench/README.md)：已由蓝白设计与[正式工作台实施](../archive/2026-10-13-web-workbench/README.md)承接；原探索及未选择的原型作为历史保留，不把全部设想标为已实现。

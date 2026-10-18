@@ -1,3 +1,8 @@
+import { ProcessorQueryError } from "../storage/processor-results.js";
+import {
+  queryProcessors,
+  submitProcessor,
+} from "../entry/processor-operations.js";
 import {
   executeConfiguration,
   type ConfigurationOperation,
@@ -241,6 +246,26 @@ export function createMcpServer(options: McpOptions = {}) {
             : args;
       return executeMaintenance(a, maintenanceRoutes[name]!, input, signal);
     }
+    if (name === "processor_query")
+      return queryProcessors(
+        await reading(),
+        String(args.action),
+        args.request,
+      );
+    if (name === "retain_extraction") {
+      const a = await application();
+      if (!a.processorRetention) unavailable();
+      return a.processorRetention.retain(args.request, signal);
+    }
+    if (name === "submit_processor")
+      return submitProcessor(await application(), args.request, true, signal);
+    if (name === "rebuild_processor_index") {
+      const a = await application();
+      if (!a.processors) unavailable();
+      return a.processors.rebuild(
+        args.result_ids === null ? undefined : (args.result_ids as string[]),
+      );
+    }
     if (name === "submit_processing") {
       const a = await application();
       if (!a.processingTasks) unavailable();
@@ -393,6 +418,9 @@ export function createMcpServer(options: McpOptions = {}) {
           ...result({
             failure: {
               code,
+              ...(error instanceof ProcessorQueryError
+                ? { fields: error.fields }
+                : {}),
               message:
                 "The requested operation could not complete. Inspect readiness, fixed inputs or the durable task result.",
             },

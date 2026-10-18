@@ -3,6 +3,7 @@ import {
   parseProcessingTaskRequest,
   sha256,
   type ProcessingOperation,
+  type ProcessingTaskRequest,
 } from "@sciretriever/contracts";
 import type { ArticleIdentityService } from "../../parsing/article-identity.js";
 import type { DocumentProcessingService } from "../../document/service.js";
@@ -27,6 +28,13 @@ export class ProcessingTaskError extends Error {
   }
 }
 export interface ProcessingRuntime {
+  readonly processors?: {
+    execute(
+      value: unknown,
+      signal?: AbortSignal,
+    ): Promise<Record<string, unknown>>;
+    finish(jobId: string, request: ProcessingTaskRequest): Promise<void>;
+  };
   readonly documents: Pick<DocumentProcessingService, "parseDocuments">;
   readonly analysis: Pick<KnowledgeAnalysisService, "analyze" | "analyzeLong">;
   readonly synthesis: Pick<KnowledgeSynthesisService, "synthesize"> | null;
@@ -60,6 +68,9 @@ export async function readProcessingTask(
     targets,
     results: events
       .filter((e) => e.kind === "processing-result")
+      .map((e) => e.payload),
+    collections: events
+      .filter((e) => e.kind === "processor-collection")
       .map((e) => e.payload),
     skipped: events
       .filter(
@@ -95,6 +106,10 @@ function hasFailure(payload: unknown): boolean {
   );
 }
 
+export async function processingJobId(key: string) {
+  return `processing-${(await sha256(canonicalJsonBytes({ idempotency_key: key }))).slice(0, 32)}`;
+}
+
 /** Typed product operations on the existing durable queue; no second execution store. */
 export class ProcessingTaskService {
   private readonly running = new Map<
@@ -126,10 +141,7 @@ export class ProcessingTaskService {
   async submit(value: unknown) {
     if (this.stopped) throw new ProcessingTaskError("processing-closed");
     const request = await parseProcessingTaskRequest(value);
-    const hash = await sha256(
-      canonicalJsonBytes({ idempotency_key: request.idempotency_key }),
-    );
-    const jobId = `processing-${hash.slice(0, 32)}`;
+    const jobId = await processingJobId(request.idempotency_key);
     const selector = { schema_version: 3, request };
     const existing = async () => {
       const saved = await this.repository.getJob(jobId);
@@ -400,7 +412,7 @@ export class ProcessingTaskService {
       return this.legacy.runJob(jobId, { signal, boot_id: this.bootId });
     }
     const request = await parseProcessingTaskRequest(snapshot.request);
-    return this.queue.runUntilIdle(
+    const results = await this.queue.runUntilIdle(
       jobId,
       async (target, active) => {
         const resultId = `${target.target_id}:result`;
@@ -473,7 +485,7 @@ export class ProcessingTaskService {
         boot_id: this.bootId,
         workspace_id: `processing:${jobId}`,
         max_retries: 0,
-        max_targets: 100,
+        max_targets: request.schema_version === 2 ? 10000 : 100,
         stage_for_target: (target) =>
           request.operations[target.ordinal]?.operation === "parse-documents"
             ? "parsing"
@@ -483,12 +495,23 @@ export class ProcessingTaskService {
               : "analysis",
       },
     );
+    if (request.schema_version === 2) {
+      if (!this.runtime.processors)
+        throw new ProcessingTaskError("processor-unavailable");
+      await this.runtime.processors.finish(jobId, request);
+    }
+    return results;
   }
   private async perform(
     operation: ProcessingOperation,
     signal: AbortSignal,
   ): Promise<Record<string, unknown>> {
     switch (operation.operation) {
+      case "run-processor": {
+        if (!this.runtime.processors)
+          throw new ProcessingTaskError("processor-unavailable");
+        return this.runtime.processors.execute(operation.request, signal);
+      }
       case "parse-documents": {
         const r = await this.runtime.documents.parseDocuments(
           operation.request,

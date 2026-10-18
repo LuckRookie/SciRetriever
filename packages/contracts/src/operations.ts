@@ -1,3 +1,7 @@
+import {
+  parseProcessorInvocation,
+  type ProcessorInvocation,
+} from "./processors.js";
 import { ContractValidationError, canonicalJsonBytes } from "./index.js";
 import { parseDocumentRequest, type ParseDocumentRequest } from "./document.js";
 import {
@@ -16,6 +20,10 @@ import {
 } from "./synthesis.js";
 
 export type ProcessingOperation =
+  | {
+      readonly operation: "run-processor";
+      readonly request: ProcessorInvocation;
+    }
   | {
       readonly operation: "parse-documents";
       readonly request: ParseDocumentRequest;
@@ -37,7 +45,9 @@ export type ProcessingOperation =
       readonly request: KnowledgeSynthesisRequest;
     };
 export interface ProcessingTaskRequest {
-  readonly schema_version: 1;
+  readonly schema_version: 1 | 2;
+  readonly collection_name?: string;
+  readonly source_request_sha256?: string;
   readonly idempotency_key: string;
   readonly operations: readonly ProcessingOperation[];
 }
@@ -53,6 +63,11 @@ export async function parseProcessingOperation(
     throw new ContractValidationError();
   const r = value as Record<string, unknown>;
   switch (r.operation) {
+    case "run-processor":
+      return {
+        operation: r.operation,
+        request: parseProcessorInvocation(r.request),
+      };
     case "parse-documents":
       return {
         operation: r.operation,
@@ -87,7 +102,7 @@ export async function parseProcessingTaskRequest(
 ): Promise<ProcessingTaskRequest> {
   // Copy before awaiting any nested validation. The persisted snapshot cannot track caller mutations.
   const bytes = canonicalJsonBytes(value);
-  if (bytes.length > 1024 * 1024) throw new ContractValidationError();
+  if (bytes.length > 4 * 1024 * 1024) throw new ContractValidationError();
   const r = JSON.parse(new TextDecoder().decode(bytes)) as Record<
     string,
     unknown
@@ -96,21 +111,42 @@ export async function parseProcessingTaskRequest(
     !r ||
     typeof r !== "object" ||
     Array.isArray(r) ||
-    Object.keys(r).sort().join() !==
-      "idempotency_key,operations,schema_version" ||
-    r.schema_version !== 1 ||
+    ![1, 2].includes(Number(r.schema_version)) ||
+    (r.schema_version === 1
+      ? Object.keys(r).sort().join() !==
+          "idempotency_key,operations,schema_version" ||
+        bytes.length > 1024 * 1024
+      : Object.keys(r).sort().join() !==
+          "collection_name,idempotency_key,operations,schema_version,source_request_sha256" ||
+        typeof r.collection_name !== "string" ||
+        !r.collection_name.trim() ||
+        r.collection_name.length > 1024 ||
+        typeof r.source_request_sha256 !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(r.source_request_sha256)) ||
     typeof r.idempotency_key !== "string" ||
     !/^[A-Za-z0-9._:-]{1,128}$/u.test(r.idempotency_key) ||
     !Array.isArray(r.operations) ||
     r.operations.length < 1 ||
-    r.operations.length > 100
+    r.operations.length > (r.schema_version === 2 ? 10000 : 100)
+  )
+    throw new ContractValidationError();
+  const operations = await Promise.all(
+    r.operations.map(parseProcessingOperation),
+  );
+  if (
+    r.schema_version === 2 &&
+    operations.some((o) => o.operation !== "run-processor")
   )
     throw new ContractValidationError();
   return Object.freeze({
-    schema_version: 1,
+    schema_version: r.schema_version as 1 | 2,
+    ...(r.schema_version === 2
+      ? {
+          collection_name: r.collection_name as string,
+          source_request_sha256: r.source_request_sha256 as string,
+        }
+      : {}),
     idempotency_key: r.idempotency_key,
-    operations: Object.freeze(
-      await Promise.all(r.operations.map(parseProcessingOperation)),
-    ),
+    operations: Object.freeze(operations),
   });
 }

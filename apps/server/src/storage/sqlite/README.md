@@ -16,3 +16,5 @@
 schema-v*.ts 与 *-migration.ts 维护版本/迁移；真实数据库不进入本目录，兼容变更遵守迁移合同。
 
 [上级目录](../README.md) · [项目 README](../../../../../README.md)
+
+- `schema-v10.ts`、`processor-migration.ts`、`processor-engine.ts`：显式 v9→v10 迁移、结果依赖保护与记录/FTS 投影。

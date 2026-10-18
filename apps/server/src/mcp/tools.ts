@@ -247,6 +247,28 @@ export const BROWSER_MAINTENANCE_TOOLS: readonly Tool[] = [
 ];
 export const QUERY_TOOLS: readonly Tool[] = [
   tool(
+    "processor_query",
+    "Read saved processor results, records, evidence, collections or exports. Never invokes models. Use action list for processor schemas.",
+    object({
+      action: {
+        enum: [
+          "list",
+          "read",
+          "results",
+          "collections",
+          "collection",
+          "search",
+          "search-collections",
+          "query",
+          "evidence",
+          "export",
+        ],
+      },
+      request: { type: "object" },
+    }),
+    true,
+  ),
+  tool(
     "read_artifact_chunk",
     "Explicitly read a bounded chunk of catalog-owned PDF or Markdown bytes. Start with offset 0 and expected_sha256 null; bind every following chunk to the returned sha256. No server file paths. Document resources use document_read/resource.",
     object({
@@ -459,6 +481,24 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
 ];
 export const MAINTENANCE_TOOLS: readonly Tool[] = [
+  tool(
+    "submit_processor",
+    "Freeze existing document/result inputs and enqueue a registered processor. Returns a durable job; use read_task for progress and collections.",
+    object({ request: { type: "object" } }),
+    false,
+  ),
+  tool(
+    "rebuild_processor_index",
+    "Explicitly rebuild processor search projections from verified immutable results.",
+    object({ result_ids: { type: ["array", "null"], items: id } }),
+    false,
+  ),
+  tool(
+    "retain_extraction",
+    "Validate the complete external candidate through extraction delivery, then explicitly retain its content and evidence beyond receipt expiry.",
+    object({ request: { type: "object" } }),
+    false,
+  ),
   tool(
     "begin_pdf_upload",
     "Reserve a connection-local PDF upload, at most 16 MiB. Expires after 10 minutes or disconnect; no file paths. Supply full byte size/hash before sending bounded chunks. Does not publish literature.",

@@ -363,3 +363,29 @@ export async function validateExtractionPayloads(
     true,
   );
 }
+
+/** Shared bounded schema validation for durable, caller-defined result records. */
+export async function validateRecordPayloads(
+  schema: object,
+  payloads: readonly unknown[],
+  signal?: AbortSignal,
+): Promise<void> {
+  const output = { ...schema, $schema: EXTRACTION_SCHEMA_URI };
+  checkSchema(output);
+  if (!payloads.length) {
+    if (!(await runWorker(output, undefined, signal)).valid)
+      throw new ExtractionSpecError("invalid-spec");
+  }
+  for (let offset = 0; offset < payloads.length; offset += 64) {
+    const bytes = extractionCanonicalJsonBytes(
+      payloads.slice(offset, offset + 64),
+    );
+    const checked = await runWorker(
+      output,
+      JSON.parse(new TextDecoder().decode(bytes)),
+      signal,
+      true,
+    );
+    if (!checked.valid) throw new ExtractionSpecError("invalid-spec");
+  }
+}

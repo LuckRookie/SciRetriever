@@ -18,3 +18,5 @@
 相关说明：[所属技术文档](../../../../docs/architecture/technical/01-product-interface.md)。
 
 [上级目录](../README.md) · [项目 README](../../../../README.md)
+
+`processors` 命令族提供 list/submit/run、结果与集合查询、字段证据、导出、rebuild 和 retain；精确参数见[统一知识加工指南](../../../../docs/guides/knowledge-processors.md)。

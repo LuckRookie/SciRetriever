@@ -17,3 +17,5 @@
 相关说明：[所属技术文档](../../../../docs/architecture/technical/01-product-interface.md)。
 
 [上级目录](../README.md) · [项目 README](../../../../README.md)
+
+`processor_query` 提供纯读取；`submit_processor`、`rebuild_processor_index`、`retain_extraction` 只在 maintenance 模式暴露。共享行为在 `entry/processor-operations.ts` 和 Application，任务控制复用既有工具。

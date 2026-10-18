@@ -47,7 +47,7 @@ describe("Web default storage", () => {
       const catalog = join(home, ".sciretriever", "catalog.sqlite");
       expect(await inspectCatalogSchema(catalog)).toMatchObject({
         status: "ready",
-        schema_version: 9,
+        schema_version: 10,
       });
       expect((await stat(catalog)).mode & 0o777).toBe(0o600);
       expect((await stat(configuration)).mode & 0o777).toBe(0o600);
@@ -106,7 +106,7 @@ describe("Web default storage", () => {
       web = await open(home);
       expect(web.application.configuration.paths).toEqual(paths);
       expect(await inspectCatalogSchema(paths.catalog_path)).toMatchObject({
-        schema_version: 9,
+        schema_version: 10,
       });
       expect(
         await readFile(join(home, ".sciretriever", "config.toml")),

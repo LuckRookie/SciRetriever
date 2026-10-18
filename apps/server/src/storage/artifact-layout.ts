@@ -7,6 +7,8 @@ const directories = {
   "document-structure": "parsed/structure",
   "knowledge-summary": "knowledge/summaries",
   "knowledge-synthesis": "knowledge/syntheses",
+  "processor-result": "knowledge/results",
+  "processor-collection": "knowledge/collections",
 } as const;
 
 const extensions: Readonly<Record<string, string>> = {

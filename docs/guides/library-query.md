@@ -165,3 +165,5 @@ Catalog 显式初始化或升级至 v8 后，在受控维护页分别点击“�
 现有 `literature search/show/references/cited-by` 和 `export metadata/pdf/content` 改用独立查询组装；已初始化数据库上的成功结果与报告格式保留。未初始化时不再由查询顺便建库，而是退出码 `3`、错误码 `query-not-initialized`；不可用库为 `query-unavailable`。需要新增数据时先显式执行导入或维护命令。资产导出仍会按用户指定目标写出导出副本，但不会因此改写库内资料。
 
 QueryApplication 的并发、重复或关闭回调中的再次关闭共用一个关闭结果。某个资源关闭失败仍会尝试关闭其他资源，CLI 的操作与关闭同时失败时保留两项原因，对外仍只报告稳定错误码。
+
+Catalog v10 另有通用处理器结果与记录内容查询，不改变旧回执行为。长期保存候选必须显式 retain，见[统一知识加工指南](knowledge-processors.md)。

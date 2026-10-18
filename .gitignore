@@ -89,3 +89,12 @@ archive/
 !/docs/archive/2026-10-13-web-workbench/02-workflows.md
 !/docs/archive/2026-10-13-web-workbench/03-verification.md
 !/docs/archive/2026-10-13-web-workbench/README.md
+
+# Completed knowledge-processing plan and accepted scoped proposal.
+!/docs/archive/2026-10-18-knowledge-processing-platform/
+/docs/archive/2026-10-18-knowledge-processing-platform/*
+!/docs/archive/2026-10-18-knowledge-processing-platform/README.md
+!/docs/archive/2026-10-18-knowledge-processing-platform/01-processor-and-result.md
+!/docs/archive/2026-10-18-knowledge-processing-platform/02-batch-store-query.md
+!/docs/archive/2026-10-18-knowledge-processing-platform/03-new-processors-and-acceptance.md
+!/docs/archive/2026-10-18-knowledge-processing-platform/proposal.md

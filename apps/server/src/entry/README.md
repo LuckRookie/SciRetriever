@@ -24,3 +24,5 @@ CLI/MCP/HTTP 只适配请求；供应商协议、材料验收和事实写入仍�
 相关说明：[所属技术文档](../../../../docs/architecture/technical/02-task-coordination.md)。
 
 [上级目录](../README.md) · [项目 README](../../../../README.md)
+
+- `processor-operations.ts`：CLI/MCP 共用的处理器查询、证据展开和便携导出边界。

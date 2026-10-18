@@ -20,3 +20,5 @@
 普通配置与统一用户级凭据文件是两个分离边界；Provider、LLM 和远程 MinerU secret 都由后一边界管理。个人配置、凭据、运行时 Catalog、文献资产和用户语料都不属于仓库内容，也不能作为示例或测试数据提交。
 
 [上级目录](../README.md) · [项目 README](../../README.md)
+
+- [统一知识加工](knowledge-processors.md)：处理器规范、批量复用、内容查询、证据、组合和导出。

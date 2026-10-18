@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 
 export interface RetrievalSchemaConfig {
-  readonly schema_version?: 4 | 5 | 6 | 7 | 8 | 9;
+  readonly schema_version?: 4 | 5 | 6 | 7 | 8 | 9 | 10;
   readonly schema_fingerprint: string;
   readonly schema_manifest: readonly string[];
   readonly execution_schema_version: number;
@@ -11,7 +11,7 @@ export interface RetrievalSchemaConfig {
   readonly execution_runtime_schema_fingerprint: string;
 }
 export interface RetrievalCatalogInspection {
-  readonly schema_version: 4 | 5 | 6 | 7 | 8 | 9;
+  readonly schema_version: 4 | 5 | 6 | 7 | 8 | 9 | 10;
   readonly schema_fingerprint: string;
   readonly integrity: "ok";
   readonly foreign_keys: "ok";
@@ -80,7 +80,9 @@ export function inspectKnowledgeProjectionDdl(
   config: RetrievalSchemaConfig,
 ): void {
   if (
-    !([8, 9] as readonly (number | undefined)[]).includes(config.schema_version)
+    !([8, 9, 10] as readonly (number | undefined)[]).includes(
+      config.schema_version,
+    )
   )
     fail();
   for (const sql of config.schema_manifest) {
@@ -170,9 +172,16 @@ function inspectV4Snapshot(
     if (
       actual?.sql !== sql &&
       !(
-        ([8, 9] as readonly (number | undefined)[]).includes(
+        ([8, 9, 10] as readonly (number | undefined)[]).includes(
           config.schema_version,
-        ) && name.startsWith("knowledge_retrieval_")
+        ) &&
+        (name.startsWith("knowledge_retrieval_") ||
+          [
+            "processor_record_projection",
+            "processor_projection_state",
+            "processor_result_fts",
+            "processor_collection_fts",
+          ].includes(name))
       )
     )
       fail();
@@ -181,17 +190,25 @@ function inspectV4Snapshot(
     for (const suffix of ["data", "idx", "content", "docsize", "config"])
       names.add(`${table}_${suffix}`);
   if (
-    ([8, 9] as readonly (number | undefined)[]).includes(config.schema_version)
+    ([8, 9, 10] as readonly (number | undefined)[]).includes(
+      config.schema_version,
+    )
   )
     for (const suffix of ["data", "idx", "content", "docsize", "config"])
       names.add(`knowledge_retrieval_fts_${suffix}`);
+  if (config.schema_version === 10)
+    for (const prefix of ["processor_result_fts", "processor_collection_fts"])
+      for (const suffix of ["data", "idx", "content", "docsize", "config"])
+        names.add(`${prefix}_${suffix}`);
   const actual = db
     .prepare("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
     .all() as { name: string }[];
   if (actual.some((row) => !names.has(row.name))) fail();
   if (
     sourceOnly ||
-    ([8, 9] as readonly (number | undefined)[]).includes(config.schema_version)
+    ([8, 9, 10] as readonly (number | undefined)[]).includes(
+      config.schema_version,
+    )
   ) {
     // The global integrity pragma invokes FTS5's integrity hook. Repair must
     // still be able to read sound source facts when only that index is damaged.
@@ -202,7 +219,13 @@ function inspectV4Snapshot(
       if (
         !table ||
         (sourceOnly && table.startsWith("retrieval_")) ||
-        table.startsWith("knowledge_retrieval_")
+        table.startsWith("knowledge_retrieval_") ||
+        [
+          "processor_record_projection",
+          "processor_projection_state",
+          "processor_result_fts",
+          "processor_collection_fts",
+        ].includes(table)
       )
         continue;
       if (
@@ -551,7 +574,7 @@ export class RetrievalStorageEngine {
     db.exec("PRAGMA busy_timeout=5000");
     prepareRetrievalVocab(db);
     if (
-      ([8, 9] as readonly (number | undefined)[]).includes(
+      ([8, 9, 10] as readonly (number | undefined)[]).includes(
         this.config.schema_version,
       ) &&
       db
@@ -1060,7 +1083,7 @@ export class RetrievalStorageEngine {
 
   private requireKnowledge(): void {
     if (
-      !([8, 9] as readonly (number | undefined)[]).includes(
+      !([8, 9, 10] as readonly (number | undefined)[]).includes(
         this.config.schema_version,
       )
     )

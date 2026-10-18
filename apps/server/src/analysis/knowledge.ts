@@ -38,6 +38,16 @@ const SYSTEM_PROMPT =
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const encoder = new TextEncoder();
 
+/** The processor adapter fingerprints the same policy as the legacy entry. */
+export function knowledgeMethodDefinition(): object {
+  return {
+    method_id: METHOD_ID,
+    method_version: METHOD_VERSION,
+    prompt: SYSTEM_PROMPT,
+    response_schema: modelSchema(),
+  };
+}
+
 export interface KnowledgeCallAccounting {
   readonly calls_dispatched: number;
   readonly canonical_call_bytes: number;

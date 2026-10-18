@@ -1,6 +1,6 @@
 # 解析已接纳 PDF 并发布文档版本
 
-当前入口处理**已有、已接纳的主 PDF**。先从文献详情取得 Literature ID、Asset ID 和 PDF SHA-256，并确保对应 Catalog 为完整 v3–v9；普通解析命令不会升级 catalog。新库可通过[正式初始化/升级入口](upgrade.md)启用 v9，版本范围见[安装兼容矩阵](installation.md#当前-catalog-与-reader-兼容)。真实用户数据迁移仍需单独授权；历史单步合成演练见[文档 Catalog 迁移指南](document-catalog-migration.md)。
+当前入口处理**已有、已接纳的主 PDF**。先从文献详情取得 Literature ID、Asset ID 和 PDF SHA-256，并确保对应 Catalog 为完整 v3–v10；普通解析命令不会升级 catalog。新库可通过[正式初始化/升级入口](upgrade.md)启用 v10，版本范围见[安装兼容矩阵](installation.md#当前-catalog-与-reader-兼容)。真实用户数据迁移仍需单独授权；历史单步合成演练见[文档 Catalog 迁移指南](document-catalog-migration.md)。
 
 从源码构建后，明确重解析并发布表示：
 

@@ -599,6 +599,23 @@ export class ExtractionDeliveryService {
       return row ? receiptRow(row) : null;
     });
   }
+  async acceptedForRetention(value: unknown, signal?: AbortSignal) {
+    const request = parseExtractionSubmission(value);
+    return this.run(async (stop) => {
+      const accepted = await this.submit(request, stop);
+      const raw = await this.database.extraction<unknown>(
+        "operation",
+        request.operation_id,
+      );
+      if (!raw) fail("unknown-or-expired");
+      const row = operationRow(raw);
+      return {
+        accepted,
+        spec: await parseExtractionSpec(storedJson(row.spec_json)),
+        manifest: await parseInputManifest(storedJson(row.manifest_json)),
+      };
+    }, signal);
+  }
   submit(value: unknown, signal?: AbortSignal) {
     const request = parseExtractionSubmission(value);
     return this.run(async (stop) => {

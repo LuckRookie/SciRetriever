@@ -4,11 +4,11 @@
 
 ## 下级目录
 
-| 目录 | 职责 |
-| --- | --- |
-| [execution/](execution/README.md) | 执行记录存储 |
-| [files/](files/README.md) | 不可变文件存储 |
-| [sqlite/](sqlite/README.md) | SQLite catalog 与迁移 |
+| 目录                              | 职责                  |
+| --------------------------------- | --------------------- |
+| [execution/](execution/README.md) | 执行记录存储          |
+| [files/](files/README.md)         | 不可变文件存储        |
+| [sqlite/](sqlite/README.md)       | SQLite catalog 与迁移 |
 
 ## 内容入口
 
@@ -25,3 +25,5 @@
 相关说明：[所属技术文档](../../../../docs/architecture/technical/07-versioned-storage.md)。
 
 [上级目录](../README.md) · [项目 README](../../../../README.md)
+
+- `processor-results.ts`：通用不可变结果/集合文件、精确依赖及可重建查询投影；原知识正文仍由原 owner 保管。

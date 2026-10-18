@@ -492,12 +492,20 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         "run",
       );
       await ui.reload();
-      await ui.locator("#reader-info h2").waitFor();
+      await ui
+        .locator(
+          `[data-page="paper:${FIXTURE_LITERATURE.literature_id}"] #reader-info h2`,
+        )
+        .waitFor();
       await ui.locator('[data-go="lib"]').click();
       await ui
         .locator(`[data-id="${SECOND_LITERATURE.literature_id}"]`)
         .click();
-      await ui.locator("#reader-info h2").waitFor();
+      await ui
+        .locator(
+          `[data-page="paper:${SECOND_LITERATURE.literature_id}"] #reader-info h2`,
+        )
+        .waitFor();
       await ui.locator('[data-go="web"]').click();
       expect(completionRun).not.toHaveBeenCalled();
       completionRun.mockRestore();

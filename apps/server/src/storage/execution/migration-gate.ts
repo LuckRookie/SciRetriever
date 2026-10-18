@@ -1,4 +1,8 @@
 import {
+  SCHEMA_V10_VERSION,
+  SCHEMA_V10_FINGERPRINT,
+} from "../sqlite/schema-v10.js";
+import {
   SCHEMA_V9_FINGERPRINT,
   SCHEMA_V9_VERSION,
 } from "../sqlite/schema-v9.js";
@@ -99,6 +103,7 @@ export type CatalogIdentityState =
   | "v6"
   | "v7"
   | "v8"
+  | "v10"
   | "v9"
   | "unknown"
   | "drifted";
@@ -197,6 +202,11 @@ export async function probeCatalogIdentity(
       execution_tables,
       migration_receipts,
     };
+    if (
+      identity.schema_version === SCHEMA_V10_VERSION &&
+      identity.schema_fingerprint === SCHEMA_V10_FINGERPRINT
+    )
+      return { ...base, state: "v10" };
     if (
       identity.schema_version === SCHEMA_V9_VERSION &&
       identity.schema_fingerprint === SCHEMA_V9_FINGERPRINT
@@ -386,7 +396,8 @@ export async function authorizeExecutionSchema(
       identity.state === "v6" ||
       identity.state === "v7" ||
       identity.state === "v8" ||
-      identity.state === "v9"
+      identity.state === "v9" ||
+      identity.state === "v10"
     )
       return { mode, basis: null, identity };
     if (identity.state === "absent")

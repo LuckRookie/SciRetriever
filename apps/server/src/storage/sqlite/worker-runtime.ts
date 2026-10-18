@@ -32,6 +32,9 @@ interface WorkerRuntimeData {
   readonly schema_v7_version: number;
   readonly schema_v7_fingerprint: string;
   readonly schema_v7_manifest: readonly string[];
+  readonly schema_v10_version: number;
+  readonly schema_v10_fingerprint: string;
+  readonly schema_v10_manifest: readonly string[];
   readonly schema_v9_version: number;
   readonly schema_v9_fingerprint: string;
   readonly schema_v9_manifest: readonly string[];
@@ -52,6 +55,14 @@ interface WorkerMessage {
 }
 
 const data = workerData as WorkerRuntimeData;
+const processorModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./processor-engine.ts"
+      : "./processor-engine.js",
+    import.meta.url,
+  ).href
+);
 const port = parentPort;
 if (!port) throw new Error("sqlite worker parent port is unavailable");
 const CASE_FOLD = data.case_fold;
@@ -75,6 +86,9 @@ const SCHEMA_V6_MANIFEST = data.schema_v6_manifest;
 const SCHEMA_V7_VERSION = data.schema_v7_version;
 const SCHEMA_V7_FINGERPRINT = data.schema_v7_fingerprint;
 const SCHEMA_V7_MANIFEST = data.schema_v7_manifest;
+const SCHEMA_V10_VERSION = data.schema_v10_version;
+const SCHEMA_V10_FINGERPRINT = data.schema_v10_fingerprint;
+const SCHEMA_V10_MANIFEST = data.schema_v10_manifest;
 const SCHEMA_V9_VERSION = data.schema_v9_version;
 const SCHEMA_V9_FINGERPRINT = data.schema_v9_fingerprint;
 const SCHEMA_V9_MANIFEST = data.schema_v9_manifest;
@@ -119,6 +133,7 @@ function getRetrievalEngine(): RetrievalStorageEngine {
     .get();
   const v6 = identity?.schema_version === SCHEMA_V6_VERSION;
   const v7 = identity?.schema_version === SCHEMA_V7_VERSION;
+  const v10 = identity?.schema_version === SCHEMA_V10_VERSION;
   const v9 = identity?.schema_version === SCHEMA_V9_VERSION;
   const v8 = identity?.schema_version === SCHEMA_V8_VERSION;
   const v5 = identity?.schema_version === SCHEMA_V5_VERSION;
@@ -126,29 +141,33 @@ function getRetrievalEngine(): RetrievalStorageEngine {
     data.path,
     data.read_only,
     {
-      schema_version: v9 ? 9 : v8 ? 8 : v7 ? 7 : v6 ? 6 : v5 ? 5 : 4,
-      schema_fingerprint: v9
-        ? SCHEMA_V9_FINGERPRINT
-        : v8
-          ? SCHEMA_V8_FINGERPRINT
-          : v7
-            ? SCHEMA_V7_FINGERPRINT
-            : v6
-              ? SCHEMA_V6_FINGERPRINT
-              : v5
-                ? SCHEMA_V5_FINGERPRINT
-                : SCHEMA_V4_FINGERPRINT,
-      schema_manifest: v9
-        ? SCHEMA_V9_MANIFEST
-        : v8
-          ? SCHEMA_V8_MANIFEST
-          : v7
-            ? SCHEMA_V7_MANIFEST
-            : v6
-              ? SCHEMA_V6_MANIFEST
-              : v5
-                ? SCHEMA_V5_MANIFEST
-                : SCHEMA_V4_MANIFEST,
+      schema_version: v10 ? 10 : v9 ? 9 : v8 ? 8 : v7 ? 7 : v6 ? 6 : v5 ? 5 : 4,
+      schema_fingerprint: v10
+        ? SCHEMA_V10_FINGERPRINT
+        : v9
+          ? SCHEMA_V9_FINGERPRINT
+          : v8
+            ? SCHEMA_V8_FINGERPRINT
+            : v7
+              ? SCHEMA_V7_FINGERPRINT
+              : v6
+                ? SCHEMA_V6_FINGERPRINT
+                : v5
+                  ? SCHEMA_V5_FINGERPRINT
+                  : SCHEMA_V4_FINGERPRINT,
+      schema_manifest: v10
+        ? SCHEMA_V10_MANIFEST
+        : v9
+          ? SCHEMA_V9_MANIFEST
+          : v8
+            ? SCHEMA_V8_MANIFEST
+            : v7
+              ? SCHEMA_V7_MANIFEST
+              : v6
+                ? SCHEMA_V6_MANIFEST
+                : v5
+                  ? SCHEMA_V5_MANIFEST
+                  : SCHEMA_V4_MANIFEST,
       execution_schema_version: EXECUTION_SCHEMA_VERSION,
       execution_schema_fingerprint: EXECUTION_SCHEMA_FINGERPRINT,
       execution_runtime_schema_version: EXECUTION_RUNTIME_SCHEMA_VERSION,
@@ -226,21 +245,23 @@ function validDocumentSchema(version: number): boolean {
   try {
     const names = new Set<string>();
     const manifest =
-      version === SCHEMA_V9_VERSION
-        ? SCHEMA_V9_MANIFEST
-        : version === SCHEMA_V3_VERSION
-          ? SCHEMA_V3_MANIFEST
-          : version === SCHEMA_V4_VERSION
-            ? SCHEMA_V4_MANIFEST
-            : version === SCHEMA_V5_VERSION
-              ? SCHEMA_V5_MANIFEST
-              : version === SCHEMA_V6_VERSION
-                ? SCHEMA_V6_MANIFEST
-                : version === SCHEMA_V7_VERSION
-                  ? SCHEMA_V7_MANIFEST
-                  : version === SCHEMA_V8_VERSION
-                    ? SCHEMA_V8_MANIFEST
-                    : null;
+      version === SCHEMA_V10_VERSION
+        ? SCHEMA_V10_MANIFEST
+        : version === SCHEMA_V9_VERSION
+          ? SCHEMA_V9_MANIFEST
+          : version === SCHEMA_V3_VERSION
+            ? SCHEMA_V3_MANIFEST
+            : version === SCHEMA_V4_VERSION
+              ? SCHEMA_V4_MANIFEST
+              : version === SCHEMA_V5_VERSION
+                ? SCHEMA_V5_MANIFEST
+                : version === SCHEMA_V6_VERSION
+                  ? SCHEMA_V6_MANIFEST
+                  : version === SCHEMA_V7_VERSION
+                    ? SCHEMA_V7_MANIFEST
+                    : version === SCHEMA_V8_VERSION
+                      ? SCHEMA_V8_MANIFEST
+                      : null;
     if (!manifest) return false;
     for (const sql of manifest) {
       const name =
@@ -254,15 +275,31 @@ function validDocumentSchema(version: number): boolean {
       // names whitelisted so a missing/damaged projection index cannot hide
       // otherwise valid Literature and Document facts.
       if (
+        [
+          "processor_record_projection",
+          "processor_projection_state",
+          "processor_result_fts",
+          "processor_collection_fts",
+        ].includes(name)
+      )
+        continue;
+      if (
         data.read_only &&
         (version === SCHEMA_V4_VERSION ||
           version === SCHEMA_V5_VERSION ||
           version === SCHEMA_V6_VERSION ||
           version === SCHEMA_V7_VERSION ||
           version === SCHEMA_V8_VERSION ||
-          version === SCHEMA_V9_VERSION) &&
+          version === SCHEMA_V9_VERSION ||
+          version === SCHEMA_V10_VERSION) &&
         (name.startsWith("retrieval_") ||
-          name.startsWith("knowledge_retrieval_"))
+          name.startsWith("knowledge_retrieval_") ||
+          [
+            "processor_record_projection",
+            "processor_projection_state",
+            "processor_result_fts",
+            "processor_collection_fts",
+          ].includes(name))
       )
         continue;
       if (
@@ -279,13 +316,22 @@ function validDocumentSchema(version: number): boolean {
       version === SCHEMA_V6_VERSION ||
       version === SCHEMA_V7_VERSION ||
       version === SCHEMA_V8_VERSION ||
-      version === SCHEMA_V9_VERSION
+      version === SCHEMA_V9_VERSION ||
+      version === SCHEMA_V10_VERSION
     )
       for (const suffix of ["data", "idx", "content", "docsize", "config"])
         names.add(`retrieval_fts_${suffix}`);
-    if (version === SCHEMA_V8_VERSION || version === SCHEMA_V9_VERSION)
+    if (
+      version === SCHEMA_V8_VERSION ||
+      version === SCHEMA_V9_VERSION ||
+      version === SCHEMA_V10_VERSION
+    )
       for (const suffix of ["data", "idx", "content", "docsize", "config"])
         names.add(`knowledge_retrieval_fts_${suffix}`);
+    if (version === SCHEMA_V10_VERSION)
+      for (const prefix of ["processor_result_fts", "processor_collection_fts"])
+        for (const suffix of ["data", "idx", "content", "docsize", "config"])
+          names.add(`${prefix}_${suffix}`);
     if (
       db
         .prepare(
@@ -301,7 +347,8 @@ function validDocumentSchema(version: number): boolean {
       version === SCHEMA_V6_VERSION ||
       version === SCHEMA_V7_VERSION ||
       version === SCHEMA_V8_VERSION ||
-      version === SCHEMA_V9_VERSION
+      version === SCHEMA_V9_VERSION ||
+      version === SCHEMA_V10_VERSION
     ) {
       // Retrieval is a rebuildable projection. Its damaged FTS postings must
       // not block Library and Document source reads needed to repair it.
@@ -312,7 +359,13 @@ function validDocumentSchema(version: number): boolean {
         if (
           !table ||
           table.startsWith("retrieval_") ||
-          table.startsWith("knowledge_retrieval_")
+          table.startsWith("knowledge_retrieval_") ||
+          [
+            "processor_record_projection",
+            "processor_projection_state",
+            "processor_result_fts",
+            "processor_collection_fts",
+          ].includes(table)
         )
           continue;
         if (
@@ -402,7 +455,9 @@ function initialize(): Dynamic {
       (existing.schema_version === SCHEMA_V8_VERSION &&
         existing.schema_fingerprint === SCHEMA_V8_FINGERPRINT) ||
       (existing.schema_version === SCHEMA_V9_VERSION &&
-        existing.schema_fingerprint === SCHEMA_V9_FINGERPRINT)
+        existing.schema_fingerprint === SCHEMA_V9_FINGERPRINT) ||
+      (existing.schema_version === SCHEMA_V10_VERSION &&
+        existing.schema_fingerprint === SCHEMA_V10_FINGERPRINT)
     )
   )
     fail();
@@ -413,7 +468,8 @@ function initialize(): Dynamic {
       existing?.schema_version === SCHEMA_V6_VERSION ||
       existing?.schema_version === SCHEMA_V7_VERSION ||
       existing?.schema_version === SCHEMA_V8_VERSION ||
-      existing?.schema_version === SCHEMA_V9_VERSION) &&
+      existing?.schema_version === SCHEMA_V9_VERSION ||
+      existing?.schema_version === SCHEMA_V10_VERSION) &&
     !validDocumentSchema(existing.schema_version)
   )
     fail();
@@ -470,7 +526,9 @@ function inspectQueryCatalog(): {
         (identity.schema_version === SCHEMA_V8_VERSION &&
           identity.schema_fingerprint === SCHEMA_V8_FINGERPRINT) ||
         (identity.schema_version === SCHEMA_V9_VERSION &&
-          identity.schema_fingerprint === SCHEMA_V9_FINGERPRINT)
+          identity.schema_fingerprint === SCHEMA_V9_FINGERPRINT) ||
+        (identity.schema_version === SCHEMA_V10_VERSION &&
+          identity.schema_fingerprint === SCHEMA_V10_FINGERPRINT)
       )
     )
       return { status: "unavailable", schema: null };
@@ -481,7 +539,8 @@ function inspectQueryCatalog(): {
         identity.schema_version === SCHEMA_V6_VERSION ||
         identity.schema_version === SCHEMA_V7_VERSION ||
         identity.schema_version === SCHEMA_V8_VERSION ||
-        identity.schema_version === SCHEMA_V9_VERSION) &&
+        identity.schema_version === SCHEMA_V9_VERSION ||
+        identity.schema_version === SCHEMA_V10_VERSION) &&
       !validDocumentSchema(identity.schema_version)
     )
       return { status: "unavailable", schema: null };
@@ -2144,7 +2203,9 @@ function runtimeInspect(): Dynamic {
         (catalog.schema_version === SCHEMA_V8_VERSION &&
           catalog.schema_fingerprint === SCHEMA_V8_FINGERPRINT) ||
         (catalog.schema_version === SCHEMA_V9_VERSION &&
-          catalog.schema_fingerprint === SCHEMA_V9_FINGERPRINT)) &&
+          catalog.schema_fingerprint === SCHEMA_V9_FINGERPRINT) ||
+        (catalog.schema_version === SCHEMA_V10_VERSION &&
+          catalog.schema_fingerprint === SCHEMA_V10_FINGERPRINT)) &&
       !!identity &&
       identity.version === EXECUTION_RUNTIME_SCHEMA_VERSION &&
       identity.fingerprint === EXECUTION_RUNTIME_SCHEMA_FINGERPRINT,
@@ -2270,7 +2331,9 @@ function restoreCheck(path: Dynamic): Dynamic {
         (schema.schema_version === SCHEMA_V8_VERSION &&
           schema.schema_fingerprint === SCHEMA_V8_FINGERPRINT) ||
         (schema.schema_version === SCHEMA_V9_VERSION &&
-          schema.schema_fingerprint === SCHEMA_V9_FINGERPRINT)
+          schema.schema_fingerprint === SCHEMA_V9_FINGERPRINT) ||
+        (schema.schema_version === SCHEMA_V10_VERSION &&
+          schema.schema_fingerprint === SCHEMA_V10_FINGERPRINT)
       )
     )
       fail();
@@ -2327,7 +2390,9 @@ function restoreCheck(path: Dynamic): Dynamic {
             (schema.schema_version === SCHEMA_V8_VERSION &&
               schema.schema_fingerprint === SCHEMA_V8_FINGERPRINT) ||
             (schema.schema_version === SCHEMA_V9_VERSION &&
-              schema.schema_fingerprint === SCHEMA_V9_FINGERPRINT)) &&
+              schema.schema_fingerprint === SCHEMA_V9_FINGERPRINT) ||
+            (schema.schema_version === SCHEMA_V10_VERSION &&
+              schema.schema_fingerprint === SCHEMA_V10_FINGERPRINT)) &&
           !!identity &&
           identity.version === EXECUTION_RUNTIME_SCHEMA_VERSION &&
           identity.fingerprint === EXECUTION_RUNTIME_SCHEMA_FINGERPRINT,
@@ -3378,7 +3443,9 @@ function requireDocumentV3(): void {
       (row?.schema_version === SCHEMA_V8_VERSION &&
         row.schema_fingerprint === SCHEMA_V8_FINGERPRINT) ||
       (row?.schema_version === SCHEMA_V9_VERSION &&
-        row.schema_fingerprint === SCHEMA_V9_FINGERPRINT)
+        row.schema_fingerprint === SCHEMA_V9_FINGERPRINT) ||
+      (row?.schema_version === SCHEMA_V10_VERSION &&
+        row.schema_fingerprint === SCHEMA_V10_FINGERPRINT)
     ) ||
     !validDocumentSchema(row.schema_version)
   )
@@ -3389,9 +3456,15 @@ function articleIdentityCurrent(
   assetId: Dynamic,
 ): Dynamic {
   if (
-    db
-      .prepare("SELECT schema_version FROM schema_identity WHERE singleton=1")
-      .get()?.schema_version !== SCHEMA_V9_VERSION
+    ![SCHEMA_V9_VERSION, SCHEMA_V10_VERSION].includes(
+      Number(
+        db
+          .prepare(
+            "SELECT schema_version FROM schema_identity WHERE singleton=1",
+          )
+          .get()?.schema_version,
+      ),
+    )
   )
     return null;
   const row = db
@@ -3403,9 +3476,15 @@ function articleIdentityCurrent(
 }
 function articleIdentityGet(id: Dynamic): Dynamic {
   if (
-    db
-      .prepare("SELECT schema_version FROM schema_identity WHERE singleton=1")
-      .get()?.schema_version !== SCHEMA_V9_VERSION
+    ![SCHEMA_V9_VERSION, SCHEMA_V10_VERSION].includes(
+      Number(
+        db
+          .prepare(
+            "SELECT schema_version FROM schema_identity WHERE singleton=1",
+          )
+          .get()?.schema_version,
+      ),
+    )
   )
     return null;
   const row = db
@@ -3417,9 +3496,15 @@ function articleIdentityGet(id: Dynamic): Dynamic {
 }
 function articleIdentityPut(a: Dynamic): Dynamic {
   if (
-    db
-      .prepare("SELECT schema_version FROM schema_identity WHERE singleton=1")
-      .get()?.schema_version !== SCHEMA_V9_VERSION
+    ![SCHEMA_V9_VERSION, SCHEMA_V10_VERSION].includes(
+      Number(
+        db
+          .prepare(
+            "SELECT schema_version FROM schema_identity WHERE singleton=1",
+          )
+          .get()?.schema_version,
+      ),
+    )
   )
     fail();
   return transaction(() => {
@@ -5062,7 +5147,9 @@ function catalogHasDocuments(): boolean {
     (identity?.schema_version === SCHEMA_V8_VERSION &&
       identity?.schema_fingerprint === SCHEMA_V8_FINGERPRINT) ||
     (identity?.schema_version === SCHEMA_V9_VERSION &&
-      identity?.schema_fingerprint === SCHEMA_V9_FINGERPRINT)
+      identity?.schema_fingerprint === SCHEMA_V9_FINGERPRINT) ||
+    (identity?.schema_version === SCHEMA_V10_VERSION &&
+      identity?.schema_fingerprint === SCHEMA_V10_FINGERPRINT)
   );
 }
 function artifactReclamationSnapshot(reference: Dynamic): Dynamic {
@@ -5445,6 +5532,30 @@ port.on("message", (message: WorkerMessage) => {
       fail();
     let value;
     switch (message.command.kind) {
+      case "processor":
+        try {
+          value = {
+            ok: true,
+            value: processorModule.runProcessorStorage(
+              db,
+              message.command.action,
+              message.command.args,
+              SCHEMA_V10_MANIFEST,
+            ),
+          };
+        } catch (error) {
+          value = {
+            ok: false,
+            code:
+              error &&
+              typeof error === "object" &&
+              "code" in error &&
+              typeof error.code === "string"
+                ? error.code
+                : "processor-storage-failed",
+          };
+        }
+        break;
       case "knowledge":
         try {
           value = {

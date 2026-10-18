@@ -1,3 +1,11 @@
+import { ProcessorExternalRetention } from "../analysis/processor-external.js";
+import {
+  ProcessorBatchService,
+  processorRuntime,
+} from "../application/jobs/processors.js";
+import { ProcessorService } from "../analysis/processor.js";
+import { createProcessorRegistry } from "../analysis/processor-registry.js";
+import { SqliteProcessorStorage } from "../storage/processor-results.js";
 import { createTaskReader } from "../entry/task-read.js";
 import { LiteratureCompletionService } from "../entry/literature-completion.js";
 import { randomUUID } from "node:crypto";
@@ -179,6 +187,9 @@ import {
 import { InterventionService } from "../application/jobs/interventions.js";
 
 export interface Application {
+  readonly processors?: ProcessorBatchService | null;
+  readonly processorRetention?: ProcessorExternalRetention | null;
+  readonly processorRead?: ProcessorReader | null;
   readonly articleIdentity?: ArticleIdentityService | null;
   readonly processingTasks?: ProcessingTaskService | null;
   readonly bootId: string;
@@ -276,7 +287,20 @@ export interface Application {
   close(): Promise<void>;
 }
 
+export type ProcessorReader = Pick<
+  SqliteProcessorStorage,
+  | "byId"
+  | "list"
+  | "collections"
+  | "collection"
+  | "query"
+  | "search"
+  | "searchCollections"
+  | "verifyCitation"
+  | "records"
+>;
 export interface QueryApplication {
+  readonly processorRead?: ProcessorReader | null;
   readonly tasks?: ReturnType<typeof createTaskReader>;
   readonly taskRead?: (jobId: string) => ReturnType<typeof readProcessingTask>;
   readonly articleIdentityRead?: (assessmentId: string) => Promise<{
@@ -635,8 +659,12 @@ export async function createApplication(
   let synthesisAnalysis: KnowledgeSynthesisService | null = null;
   let synthesisPreparation: SynthesisPreparationService | null = null;
   let synthesisRead: SqliteSynthesisStorage | null = null;
+  let processorRead: SqliteProcessorStorage | null = null;
   let articleIdentity: ArticleIdentityService | null = null;
   let processingTasks: ProcessingTaskService | null = null;
+  let processorService: ProcessorService | null = null;
+  let processorRetention: ProcessorExternalRetention | null = null;
+  let processors: ProcessorBatchService | null = null;
   let extractionPreparation: ExtractionPreparationService | null = null;
   let extractionDelivery: ExtractionDeliveryService | null = null;
   let retrievalIndex: RetrievalIndexService | null = null;
@@ -660,6 +688,9 @@ export async function createApplication(
       // stop later owners from releasing resources or erase another cleanup error.
       const releases: readonly (() => void | Promise<void>)[] = [
         async () => processingTasks?.close(),
+        async () => processorService?.close(),
+        async () => processorRetention?.close(),
+        async () => processorRead?.close(),
         async () => articleIdentity?.close(),
         async () => {
           const host = browserSessionHost;
@@ -1253,7 +1284,7 @@ export async function createApplication(
       new SqliteKnowledgeStorage(database, files, documentRead),
     );
     const library = new LiteratureQueryService(database, files);
-    if ((await database.schema()).schema_version === 9)
+    if ([9, 10].includes(Number((await database.schema()).schema_version)))
       articleIdentity = new ArticleIdentityService(
         documentRead,
         library,
@@ -1261,7 +1292,9 @@ export async function createApplication(
         database,
         new LiteratureArticleIdentityService(library, database),
       );
-    if ([7, 8, 9].includes(Number((await database.schema()).schema_version))) {
+    if (
+      [7, 8, 9, 10].includes(Number((await database.schema()).schema_version))
+    ) {
       synthesisRead = new SqliteSynthesisStorage(database, files, documentRead);
       synthesisPreparation = new SynthesisPreparationService(
         documentRead,
@@ -1275,6 +1308,22 @@ export async function createApplication(
         synthesisRead,
       );
     }
+    if ((await database.schema()).schema_version === 10 && synthesisRead) {
+      processorRead = new SqliteProcessorStorage(
+        database,
+        files,
+        documentRead,
+        synthesisRead,
+      );
+      processorService = new ProcessorService(
+        createProcessorRegistry(knowledgeAnalysis),
+        documentRead,
+        agents,
+        library,
+        processorRead,
+        synthesisRead,
+      );
+    }
     extractionPreparation = new ExtractionPreparationService(
       documentRead,
       library,
@@ -1284,6 +1333,11 @@ export async function createApplication(
       documentRead,
       extractionPreparation,
     );
+    if (processorRead)
+      processorRetention = new ProcessorExternalRetention(
+        extractionDelivery,
+        processorRead,
+      );
     retrievalIndex = new RetrievalIndexService(
       new RetrievalStorageClient(database),
       documentRead,
@@ -1291,7 +1345,7 @@ export async function createApplication(
       writes,
     );
     if (
-      [8, 9].includes(Number((await database.schema()).schema_version)) &&
+      [8, 9, 10].includes(Number((await database.schema()).schema_version)) &&
       synthesisRead
     )
       knowledgeIndex = new KnowledgeRetrievalIndexService(
@@ -1396,10 +1450,26 @@ export async function createApplication(
           analysis: knowledgeAnalysis,
           synthesis: synthesisAnalysis,
           identity: articleIdentity,
+          ...(processorService && processorRead
+            ? {
+                processors: processorRuntime(
+                  processorService,
+                  processorRead,
+                  jobs,
+                ),
+              }
+            : {}),
         },
         taskService,
         bootId,
         configuration.execution.max_concurrency,
+      );
+    if (processorService && processorRead && jobs && processingTasks)
+      processors = new ProcessorBatchService(
+        processorService,
+        processorRead,
+        jobs,
+        processingTasks,
       );
     const references = new ReferenceRepository(database);
     const metadata = options.metadata
@@ -1491,6 +1561,9 @@ export async function createApplication(
       documentProcessing,
       articleIdentity,
       processingTasks,
+      processors,
+      processorRetention,
+      processorRead,
       documentRead,
       extractionPreparation,
       extractionDelivery,
@@ -1642,6 +1715,7 @@ export async function createQueryApplication(
   let knowledgeContext: KnowledgeContextService | null = null;
   let knowledgeRead: SqliteKnowledgeStorage | null = null;
   let synthesisRead: SqliteSynthesisStorage | null = null;
+  let processorRead: SqliteProcessorStorage | null = null;
   let synthesisPreparation: SynthesisPreparationService | null = null;
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
@@ -1649,6 +1723,7 @@ export async function createQueryApplication(
     closing ??= Promise.resolve().then(async () => {
       const failures: unknown[] = [];
       for (const release of [
+        async () => processorRead?.close(),
         async () => knowledgeContext?.close(),
         async () => context?.close(),
         async () => extractionPreparation?.close(),
@@ -1728,7 +1803,7 @@ export async function createQueryApplication(
       preflight.schema.schema_version === 5 ||
       preflight.schema.schema_version === 6 ||
       preflight.schema.schema_version === 7 ||
-      [8, 9].includes(Number(preflight.schema.schema_version))
+      [8, 9, 10].includes(Number(preflight.schema.schema_version))
         ? new RetrievalStorageClient(database)
         : null,
       documentRead,
@@ -1737,12 +1812,12 @@ export async function createQueryApplication(
     knowledgeRead =
       preflight.schema.schema_version === 6 ||
       preflight.schema.schema_version === 7 ||
-      [8, 9].includes(Number(preflight.schema.schema_version))
+      [8, 9, 10].includes(Number(preflight.schema.schema_version))
         ? new SqliteKnowledgeStorage(database, files, documentRead)
         : null;
     if (
       preflight.schema.schema_version === 7 ||
-      [8, 9].includes(Number(preflight.schema.schema_version))
+      [8, 9, 10].includes(Number(preflight.schema.schema_version))
     ) {
       synthesisRead = new SqliteSynthesisStorage(database, files, documentRead);
       synthesisPreparation = new SynthesisPreparationService(
@@ -1751,7 +1826,14 @@ export async function createQueryApplication(
         synthesisRead,
       );
     }
-    if ([8, 9].includes(Number(preflight.schema.schema_version)))
+    if (preflight.schema.schema_version === 10 && synthesisRead)
+      processorRead = new SqliteProcessorStorage(
+        database,
+        files,
+        documentRead,
+        synthesisRead,
+      );
+    if ([8, 9, 10].includes(Number(preflight.schema.schema_version)))
       knowledgeContext = new KnowledgeContextService(
         context,
         new RetrievalStorageClient(database),
@@ -1769,6 +1851,7 @@ export async function createQueryApplication(
             ? preflight.schema.schema_fingerprint
             : null,
       },
+      processorRead,
       query: literature,
       tasks: createTaskReader(new ExecutionRepository(database)),
       taskRead: (jobId) =>

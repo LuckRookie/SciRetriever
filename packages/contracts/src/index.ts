@@ -3115,3 +3115,5 @@ export {
   analysisInputSha256,
   type LiteratureContentProposal,
 } from "./content.js";
+
+export * from "./processors.js";

@@ -1149,3 +1149,27 @@ Analysis 组合验证见[模型 loopback 证据](../../../migration/evidence/run
 
 单次模型入口保持无状态。三种协议的 JSON/SSE 经过有界完整 body 读取后重建中性结果，再交给 DSH 事件接口；不是逐 token 网络转发。stream 失败不改模式重发，普通推理和压缩均不隐式重试。模型不获得 Browser 或事实写入权限。Metadata/Acquisition adapter 只转换供应商协议并发布
 observation；Literature、Analysis 和 Entry 分别拥有 identity/current facts、内容分析和用户协议。
+
+## 6. ADR 0034：统一处理器与结果（实施合同）
+
+中性合同位于 `packages/contracts/src/processors.ts`，运行接口与注册表位于 `analysis/processor.ts`。Processor 具有 id/version、文献或集合范围、输入种类、规范 schema、方法定义和执行函数。规范在准备时正规化；处理器方法定义、输出 schema 与真实模型绑定参与身份，不能只凭函数名或文献 ID 复用。
+
+冻结输入支持精确文档、上游 Result、既有 Knowledge 和显式缺口。文献级输入的标识与其在批次中的位置无关；记录子集必须固定记录 ID。ProcessorInvocation 保存完整输入、规范和非秘密执行配置；运行恢复时绑定不一致会报告错误，不自动换模型/版本。
+
+ProcessorResult 保存稳定 ID、比较身份、内容、字段证据、覆盖和实际来源。内容支持 records、text 或旧知识的稳定引用。结果 ID 不等于比较键，partial 尝试和后续完整结果可以并存；只有校验通过且完整的内部结果可自动复用。外部生产者信息是声明，不能当作平台实际观测。字段证据引用原文、已保存结果的记录/路径或旧知识要点；读取应检查 hash、范围及递归引用，不把任意 JSON 冒充旧知识格式。
+
+`ok/empty` 是可发布结果，失败进入现有 Jobs；coverage 独立说明 complete/partial/none、实际读取片段与缺口。empty 仅用于完整处理且零记录，检索未命中不等于处理完整。结果集合保存精确成员引用与缺口，运行进度和已发布清单分离，更新发布新清单。
+
+旧单篇/长文调用保留其发布 owner、方法和证据；新的综合适配接受记录引用并保留字段来源及上游覆盖，旧综合接口保持兼容。新结果内容使用不可变文件，catalog 记录精确依赖和可重建记录/全文投影；长期证据保护独立于外部回执。具体落地与离线证据由关联[实施计划](../../archive/2026-10-18-knowledge-processing-platform/README.md)记录。
+
+### 6.1 已实现的执行与持久化
+
+`application/jobs/processors.ts` 在提交阶段冻结 ProcessorBatchRequest，保存到既有 ProcessingTaskRequest v2（最多 10000 个目标，完整快照最多 4 MiB）。v1 的 100 目标/1 MiB 限制保持。用户请求 hash 与冻结后的执行快照分开保存；重复 key 先比较原请求身份，不因当前默认文档或模型改变而重建原运行。队列逐目标执行，进程并发与共享模型限速沿用原底座；首版没有分布式执行，也没有任务内部并行分片调度。
+
+有效结果先发布并登记依赖，再建立查询投影。索引失败保留有效结果，retry 复用已发布内容并补建索引。任务结束、暂停或取消后保存当时的集合清单；再重试产生新清单。清单 ID 基于运行和成员内容确定，同一清单重发不改变字节。新结果 ID 是独立 UUID，完整比较身份唯一约束只覆盖 internal/complete，partial 不占用这个键。并发争用保留实际赢家的来源，不保证远端模型恰好调用一次。
+
+Catalog v10 的 `processor_results` 与 `processor_collections` 保存不可变文件引用；正文在 `knowledge/results/`、`knowledge/collections/`。依赖表保护文档、材料、旧知识及上游结果；外部 material-only 候选同样保留资产 hash。`processor_record_projection`、`processor_projection_state` 与两种 FTS 从已校验结果重建，不是内容真相源。原 Knowledge 文件没有被复制为另一份权威正文。初始化、迁移使用现有显式 schema 工具，旧 catalog 仍能使用原版本能力。
+
+外部长期接纳是独立 `ProcessorExternalRetention`：要求完整 ExtractionSubmission，先走原交付校验，再保存完整 candidate/relations/spec/manifest/receipt 及独立长期引用。其通用记录 payload 包装为 `{record: 原 payload}`，字段指针相应加 `/record`。请求 key 的持久判同包含完整原请求 hash；回执到期后仍能返回已托管结果，不能以新内容改写同 key。
+
+`entry/processor-operations.ts` 是 CLI/MCP 共用的只读查询/证据/导出边界；QueryApplication 不实例化模型。数字保存原串与原单位，不默默做领域换算。标签和提取按文本片段分批，保留 missing、partial 和能力限制。精确请求格式见[统一加工指南](../../guides/knowledge-processors.md)。没有加入自动修订传播、Unit 依赖、表格坐标、文档修复、全局实体库或新 Web 页面。

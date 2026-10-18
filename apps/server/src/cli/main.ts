@@ -1,3 +1,10 @@
+import { ProcessorQueryError } from "../storage/processor-results.js";
+import {
+  queryProcessors,
+  submitProcessor,
+  PROCESSOR_QUERIES,
+} from "../entry/processor-operations.js";
+import { processorError, ProcessorError } from "../analysis/processor.js";
 import {
   executeConfiguration,
   CONFIGURATION_OPERATIONS,
@@ -1571,6 +1578,69 @@ async function execute(
       value: report,
     };
   }
+  if (group === "processors") {
+    const source = argument(args, "--request");
+    const request: unknown = source
+      ? parseStrictJsonValue(await inputBytes(source, options, 4 * 1024 * 1024))
+      : {};
+    if (command === "list")
+      return output(await queryProcessors({}, "list", request), options);
+    if (command === "retain")
+      return output(
+        await withApplication(
+          options,
+          async (app) => {
+            if (!app.processorRetention) processorError("catalog-v10-required");
+            return app.processorRetention.retain(request, options.signal);
+          },
+          "require-v2",
+        ),
+        options,
+      );
+    if (command === "submit" || command === "run")
+      return output(
+        await withApplication(
+          options,
+          async (app) => {
+            const job = await submitProcessor(
+              app,
+              request,
+              false,
+              options.signal,
+            );
+            if (command === "run") {
+              if (!app.processingTasks) processorError("processor-unavailable");
+              return app.processingTasks.run(job.job_id, options.signal);
+            }
+            return job;
+          },
+          "require-v2",
+        ),
+        options,
+      );
+    if (command === "rebuild")
+      return output(
+        await withApplication(
+          options,
+          async (app) => {
+            if (!app.processors) processorError("catalog-v10-required");
+            return app.processors.rebuild();
+          },
+          "require-v2",
+        ),
+        options,
+      );
+    if (
+      PROCESSOR_QUERIES.includes(command as (typeof PROCESSOR_QUERIES)[number])
+    )
+      return output(
+        await withQueryApplication(options, (app) =>
+          queryProcessors(app, command!, request),
+        ),
+        options,
+      );
+    return invalidInput();
+  }
   if (group === "jobs" && command === "submit") {
     const source = argument(args, "--request");
     if (!source) invalidInput();
@@ -1728,7 +1798,9 @@ export async function runCli(
       error instanceof DocumentProcessingError ||
       error instanceof ParsingFailure ||
       error instanceof ArticleIdentityError ||
-      error instanceof ProcessingTaskError;
+      error instanceof ProcessingTaskError ||
+      error instanceof ProcessorError ||
+      error instanceof ProcessorQueryError;
     const migration =
       error instanceof CatalogSchemaError ||
       error instanceof MigrationSafetyError ||
@@ -1755,7 +1827,9 @@ export async function runCli(
           : error instanceof DocumentProcessingError ||
               error instanceof ParsingFailure ||
               error instanceof ArticleIdentityError ||
-              error instanceof ProcessingTaskError
+              error instanceof ProcessingTaskError ||
+              error instanceof ProcessorError ||
+              error instanceof ProcessorQueryError
             ? error.code
             : error instanceof QueryApplicationError
               ? error.code
@@ -1783,6 +1857,9 @@ export async function runCli(
                   ? "Check the configured catalog parent directory and inspect any existing catalog with sciretriever storage schema-inspect; upgrades require an explicit backup."
                   : "Check the local port, build assets and configuration before restarting Web.",
             }
+          : {}),
+        ...(error instanceof ProcessorQueryError
+          ? { fields: error.fields }
           : {}),
         ...(error instanceof CatalogSchemaError
           ? { reason: error.reason, progress: error.progress }

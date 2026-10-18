@@ -561,7 +561,7 @@ async function installedLegacySchemaJourney(
   expect(dryRun.status, dryRun.stderr).toBe(0);
   expect(JSON.parse(dryRun.stdout)).toMatchObject({
     from_version: 1,
-    to_version: 9,
+    to_version: 10,
   });
   expect(await readFile(catalog)).toEqual(original);
   const upgraded = spawnSync(
@@ -581,11 +581,11 @@ async function installedLegacySchemaJourney(
   expect(JSON.parse(upgraded.stdout)).toMatchObject({
     action: "upgraded",
     from_version: 1,
-    to_version: 9,
+    to_version: 10,
     backup_path: backup,
   });
   for (const [path, version] of [
-    [catalog, 9],
+    [catalog, 10],
     [backup, 1],
   ] as const) {
     const inspected = spawnSync(
@@ -671,8 +671,8 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
     expect(initialized.status, initialized.stderr).toBe(0);
     expect(JSON.parse(initialized.stdout)).toMatchObject({
       action: "initialized",
-      to_version: 9,
-      inspection: { status: "ready", schema_version: 9 },
+      to_version: 10,
+      inspection: { status: "ready", schema_version: 10 },
     });
 
     const packageRoot = join(runtime, "app/node_modules/@sciretriever/server");
@@ -1443,7 +1443,7 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
     await application.close();
     application = undefined;
     query = await server.createQueryApplication(home);
-    expect(query.readiness.schema_version).toBe(9);
+    expect(query.readiness.schema_version).toBe(10);
     const reopened = await query.query!.detail(browserLiteratureId);
     expect(reopened.primary_pdf!.asset.asset_id).toBe(browserAssetId);
     expect(reopened.primary_pdf!.asset.sha256).toBe(browserHash);

@@ -44,30 +44,30 @@ Browser 获取在一篇文章内保留模型工具历史、人工指导和真实
 
 新增 CLI 命令使用 `--request /absolute/path/request.json` 或 `--request -` 从 stdin 读取严格 JSON，支持 `--json`。结果封套为 `{protocol_version:1,result}`；空查询不会启动加工。原有命令和工具格式继续支持。
 
-| CLI（请求命令加 `--request FILE\|-`） | MCP | 请求与效果 |
-| --- | --- | --- |
-| `literature status` | `status` | 本地库状态，不初始化 |
-| `literature search` | `search_library` | 完整 LibrarySearchRequest：query、sort、limit、cursor；MCP 旧 text/limit/cursor 格式保留 |
-| `literature read`、`reference`、`references`、`identity` | `read_literature`、`read_reference`、`read_references`、`read_article_identity` | 稳定 ID 或既有关系分页合同；read_references 通过 request 字段提交 |
-| `document default/describe/outline/segments/slice/resources/resource/evidence/material` | `document_read` | 对应既有 DocumentReadRequest，不下载或解析 |
-| `literature artifact-chunk` | `read_artifact_chunk` | 有界读取主 PDF / 内容 Markdown，固定 hash 与 offset；完整原始导出仍可用 CLI `export pdf/content` |
-| `literature bibliography` | `export_bibliography` | `{literature_ids,format}`，最多 100 个 ID；返回文本、字节数与 hash |
-| `import pdf ID SOURCE` | `begin_pdf_upload/append_pdf_upload/commit_pdf_upload/discard_pdf_upload` | PDF 字节显式接纳；MCP 分块上传，提交后走同一验收 owner |
-| `analysis prepare` | `prepare_analysis_inputs` | `{literature_ids:[...]}`，固定已有材料与身份元数据快照 |
-| `knowledge read/list/default` | `read_knowledge`、`list_knowledge`、`default_knowledge` | ID、文献/limit，或文献/purpose/question；缺默认结果返回 null |
-| `synthesis prepare/read/source/list` | `prepare_synthesis`、`read_knowledge(kind=synthesis)`、`read_synthesis_source`、`list_syntheses` | 固定输入、产物 ID、来源状态，或 manifest_sha256/limit |
-| `context search/knowledge` | `search_context` | MaterialContextRequest / KnowledgeContextRequest |
-| `jobs list/inspect` | `list_tasks`、`inspect_task` | 列表支持 limit/cursor/status_group；详情提供任务结果、活动、策略、预算和干预；均为只读 |
-| `jobs create-request` | `create_task` | Web 任务请求：`{kind:"processing",request:...}` 或 `{kind:"acquire-pdf",idempotency_key,selector,policy?}`；只保存，随后显式运行 |
-| `jobs resolve` | `resolve_intervention` | `{job_id,intervention_id,resolution:"continue"\|"skip"\|"cancel"}`，核对干预归属，不自动运行 |
-| `import bibliography` | `import_bibliography` | `{format,content}`；书目接纳不自动获取 PDF |
-| `discover request` | `discover_citations` | CLI 接收 Web 发现请求；MCP 引用扩展使用 seed_literature_id/direction/scan_limit，复用配置来源 |
-| `extraction prepare` | `prepare_extraction` | 只读提取准备，MCP 使用 request 字段 |
-| `extraction create/read/submit/receipt/close/cancel/cleanup` | `create_extraction/read_extraction/submit_extraction/read_extraction_receipt/close_extraction/cancel_extraction/cleanup_extractions` | 复用候选验收、幂等回执与保留策略；create/submit 的 MCP 参数置于 request；没有内置自动提取执行器 |
-| `config read`、原有 `config status --json` | `configuration_read`、`configuration_status` | 固定用户配置和凭据存在状态，无密钥值、无外部请求 |
-| `config preview/publish` | `configuration_preview`、`configuration_publish` | baseline 加 payload（完整 TOML）或 configuration（完整普通配置投影），二者选一；publish 另给 sections，过期 revision 拒绝 |
-| `config credential` | `configuration_credential` | baseline 与受控 edit；通过 stdin/文件输入，不把密钥写进命令参数，不回显秘密 |
-| `config probe` | `configuration_probe` | `{owner,target,image}`；明确外部请求与可能配额；与既有 config test 共用 probe owner |
+| CLI（请求命令加 `--request FILE\|-`）                                                   | MCP                                                                                                                                  | 请求与效果                                                                                                                       |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `literature status`                                                                     | `status`                                                                                                                             | 本地库状态，不初始化                                                                                                             |
+| `literature search`                                                                     | `search_library`                                                                                                                     | 完整 LibrarySearchRequest：query、sort、limit、cursor；MCP 旧 text/limit/cursor 格式保留                                         |
+| `literature read`、`reference`、`references`、`identity`                                | `read_literature`、`read_reference`、`read_references`、`read_article_identity`                                                      | 稳定 ID 或既有关系分页合同；read_references 通过 request 字段提交                                                                |
+| `document default/describe/outline/segments/slice/resources/resource/evidence/material` | `document_read`                                                                                                                      | 对应既有 DocumentReadRequest，不下载或解析                                                                                       |
+| `literature artifact-chunk`                                                             | `read_artifact_chunk`                                                                                                                | 有界读取主 PDF / 内容 Markdown，固定 hash 与 offset；完整原始导出仍可用 CLI `export pdf/content`                                 |
+| `literature bibliography`                                                               | `export_bibliography`                                                                                                                | `{literature_ids,format}`，最多 100 个 ID；返回文本、字节数与 hash                                                               |
+| `import pdf ID SOURCE`                                                                  | `begin_pdf_upload/append_pdf_upload/commit_pdf_upload/discard_pdf_upload`                                                            | PDF 字节显式接纳；MCP 分块上传，提交后走同一验收 owner                                                                           |
+| `analysis prepare`                                                                      | `prepare_analysis_inputs`                                                                                                            | `{literature_ids:[...]}`，固定已有材料与身份元数据快照                                                                           |
+| `knowledge read/list/default`                                                           | `read_knowledge`、`list_knowledge`、`default_knowledge`                                                                              | ID、文献/limit，或文献/purpose/question；缺默认结果返回 null                                                                     |
+| `synthesis prepare/read/source/list`                                                    | `prepare_synthesis`、`read_knowledge(kind=synthesis)`、`read_synthesis_source`、`list_syntheses`                                     | 固定输入、产物 ID、来源状态，或 manifest_sha256/limit                                                                            |
+| `context search/knowledge`                                                              | `search_context`                                                                                                                     | MaterialContextRequest / KnowledgeContextRequest                                                                                 |
+| `jobs list/inspect`                                                                     | `list_tasks`、`inspect_task`                                                                                                         | 列表支持 limit/cursor/status_group；详情提供任务结果、活动、策略、预算和干预；均为只读                                           |
+| `jobs create-request`                                                                   | `create_task`                                                                                                                        | Web 任务请求：`{kind:"processing",request:...}` 或 `{kind:"acquire-pdf",idempotency_key,selector,policy?}`；只保存，随后显式运行 |
+| `jobs resolve`                                                                          | `resolve_intervention`                                                                                                               | `{job_id,intervention_id,resolution:"continue"\|"skip"\|"cancel"}`，核对干预归属，不自动运行                                     |
+| `import bibliography`                                                                   | `import_bibliography`                                                                                                                | `{format,content}`；书目接纳不自动获取 PDF                                                                                       |
+| `discover request`                                                                      | `discover_citations`                                                                                                                 | CLI 接收 Web 发现请求；MCP 引用扩展使用 seed_literature_id/direction/scan_limit，复用配置来源                                    |
+| `extraction prepare`                                                                    | `prepare_extraction`                                                                                                                 | 只读提取准备，MCP 使用 request 字段                                                                                              |
+| `extraction create/read/submit/receipt/close/cancel/cleanup`                            | `create_extraction/read_extraction/submit_extraction/read_extraction_receipt/close_extraction/cancel_extraction/cleanup_extractions` | 复用候选验收、幂等回执与保留策略；create/submit 的 MCP 参数置于 request；没有内置自动提取执行器                                  |
+| `config read`、原有 `config status --json`                                              | `configuration_read`、`configuration_status`                                                                                         | 固定用户配置和凭据存在状态，无密钥值、无外部请求                                                                                 |
+| `config preview/publish`                                                                | `configuration_preview`、`configuration_publish`                                                                                     | baseline 加 payload（完整 TOML）或 configuration（完整普通配置投影），二者选一；publish 另给 sections，过期 revision 拒绝        |
+| `config credential`                                                                     | `configuration_credential`                                                                                                           | baseline 与受控 edit；通过 stdin/文件输入，不把密钥写进命令参数，不回显秘密                                                      |
+| `config probe`                                                                          | `configuration_probe`                                                                                                                | `{owner,target,image}`；明确外部请求与可能配额；与既有 config test 共用 probe owner                                              |
 
 `config publish` 不改动运行中 Application 的启动快照，需重启相应 runtime。凭据变更于后续外部请求生效，已派发请求可能完成。配置操作不需要初始化文献库。MCP 的写入、凭据编辑和 probe 仅在 `--maintenance` 下声明；`configuration_preview` 只验证、不写入。
 
@@ -87,7 +87,13 @@ PDF 上传按以下顺序调用，仅在 `--maintenance` 下提供：
 这些工具不接收服务器文件路径；调用方选择和读取自己的输入文件。`read_artifact_chunk` / `literature artifact-chunk` 使用：
 
 ```json
-{"literature_id":"文献 UUID","kind":"primary-pdf","expected_sha256":null,"offset":0,"max_bytes":196608}
+{
+  "literature_id": "文献 UUID",
+  "kind": "primary-pdf",
+  "expected_sha256": null,
+  "offset": 0,
+  "max_bytes": 196608
+}
 ```
 
 首次读取返回完整 `sha256`、`byte_size`、`chunk_sha256`、`bytes_base64` 和 `next_offset`。后续请求必须带回完整 hash，直到 `next_offset:null`；版本不同返回 `artifact-changed`。`kind` 还支持 `content-markdown`；固定文档资源继续使用 `document_read/resource` 的既有 continuation 合同。每次读取经过目录引用和文件完整性校验，不接受任意资产路径。分块会重复校验文件；同机大文件批量导出可优先用 CLI 的原始文件导出。
@@ -108,21 +114,21 @@ sciretriever jobs runtime --workbench-url http://127.0.0.1:4174 --request /absol
 
 配置了 `--workbench-url` 后，MCP 增加以下工具；普通模式只可观察，变更仍需 `--maintenance`：
 
-| 范围 | 工具 | 行为 |
-| --- | --- | --- |
-| 观察 | `browser_view/select/tabs/frame` | 当前会话/观察、选择文章、列出页面、读取确切 frame_seq；观看不暂停 Agent |
-| 控制 | `browser_control/action/activate_tab` | 取得/交还/暂停/恢复/取消控制，以及带页面绑定的 OperatorInput；不暴露 JS/CDP |
-| 指导 | `browser_guidance/cancel_guidance` | 提交或撤销当前连接的待处理指导 |
-| 候选 | `browser_accept_candidate/abandon_candidate` | 既有候选操作，仍校验当前控制权与 transfer hash |
-| 生命周期 | `browser_disconnect` | 撤销当前连接，不停止 Web 服务 |
-| 服务任务 | `runtime_list_tasks/read_task/create_task/control_task` | 在连接的 Web 服务内读、保存、启动、暂停、取消、恢复或重试任务 |
+| 范围     | 工具                                                    | 行为                                                                        |
+| -------- | ------------------------------------------------------- | --------------------------------------------------------------------------- |
+| 观察     | `browser_view/select/tabs/frame`                        | 当前会话/观察、选择文章、列出页面、读取确切 frame_seq；观看不暂停 Agent     |
+| 控制     | `browser_control/action/activate_tab`                   | 取得/交还/暂停/恢复/取消控制，以及带页面绑定的 OperatorInput；不暴露 JS/CDP |
+| 指导     | `browser_guidance/cancel_guidance`                      | 提交或撤销当前连接的待处理指导                                              |
+| 候选     | `browser_accept_candidate/abandon_candidate`            | 既有候选操作，仍校验当前控制权与 transfer hash                              |
+| 生命周期 | `browser_disconnect`                                    | 撤销当前连接，不停止 Web 服务                                               |
+| 服务任务 | `runtime_list_tasks/read_task/create_task/control_task` | 在连接的 Web 服务内读、保存、启动、暂停、取消、恢复或重试任务               |
 
 `browser_view` 返回既有 WorkbenchView，并补充 `controlled_by_client`。先观察，再用返回的 `session_id/article_id/control.epoch` 请求 takeover；取得控制后重新读取观察，用确切的 session/page/document/observation/viewport/epoch 和唯一 `request_id` 发送动作。支持 `click-element`、`click-point`、`scroll-surface`、`go-back`、`wait-for-change`、`type-text`、`press-key`、`stop`，字段使用既有 OperatorInput 合同；旧 epoch/页面版本拒绝，不自动重放。调用 action 超时不代表动作被撤销，应重新观察再判断。
 
 CLI `browser session` 是持续连接，输入为 NDJSON，每行 `{operation,request}`，每行输出 `{protocol_version:1,result}`。可用操作：`view/select/tabs/frame/control/action/guidance/cancel-guidance/activate-tab/accept-candidate/abandon-candidate`；也支持 `task-list/task-read/task-create/task-control`。单行不超过 256 KiB。Agent 可以边读回复边生成下一行，无需人类交互。错误行返回稳定 failure.code，后续行可继续；有错误时最终退出码为 3。例：
 
 ```json
-{"operation":"view","request":{}}
+{ "operation": "view", "request": {} }
 ```
 
 连接的观察请求维持 viewer 生命周期，但不隐式获取/恢复控制。明确结束介入时先 `release`，确认成功再关闭连接；CLI EOF、MCP 关闭或 disconnect 会撤销连接，仍持有控制权时遵守服务端暂停政策。异常断线最终由服务端三分钟 grant 过期撤销，不推断已经交还成功。
@@ -130,7 +136,7 @@ CLI `browser session` 是持续连接，输入为 NDJSON，每行 `{operation,re
 `runtime_create_task` 的 `request` 与 `create_task` 相同且只保存。`runtime_control_task` 接收 `{job_id,action}`，action 为 `run/pause/cancel/resume/retry`；后台执行由 Web 服务持有，机器客户端退出后服务可以继续工作。CLI `jobs runtime` 使用一次性 JSON：
 
 ```json
-{"operation":"control","request":{"job_id":"任务 ID","action":"run"}}
+{ "operation": "control", "request": { "job_id": "任务 ID", "action": "run" } }
 ```
 
 operation 还支持 `list/read/create`。这条路径操作明确连接的服务所绑定的库，不使用另一份本地配置重新组装执行器。普通 `jobs run` / `control_task` 仍在自己的进程运行，共享 catalog 不会绕过执行锁；存在活 Web 执行器时，应使用 runtime 入口。
@@ -254,3 +260,5 @@ sciretriever maintenance publisher-names-accept --report /absolute/path/publishe
 扫描默认不调用模型，也不下载或改变来源。`--ai` 复用 Analysis Model，只产出带输入 hash/provenance 的建议；通过 `--output` 保存建议报告，再按所选名称显式接纳。接纳按所选规范名称和配置 revision 核对冲突并写入 `sources.publisher_aliases`，不会覆盖出版社/期刊原文或新增 Literature 字段。范围、分页与限制见[出版社名称维护](../development/provider-governance.md#出版社名称维护)。
 
 Browser 复用前四层的实际响应准备有限文章入口，不增加 HEAD/GET 预检。普通 HTTP 403/404 不构成 Browser 永久拒绝；首次模型派发前，只有 Browser 实际 404/410 或明确 DNS/连接失败才自动尝试备用入口，已有在途下载优先结算，模型接管后不自动换页。每篇默认共享 300 秒活跃时间与 30 次实际模型派发预算，先到上限停止进一步探索，动作保留统计而默认不独立设限；5 秒节奏、平台准入/冷却继续执行，换入口或恢复不重置预算。最后一次合法调用可以完成动作及有界页面反馈与下载交接，时间和控制版本检查仍有效；已开始的文件传输使用独立寿命。预算耗尽不推断永久无权限或全渠道耗尽。此能力的离线验证不证明真实站点成功率或机构 entitlement。
+
+统一处理器由 `submit_processor`、`processor_query`、`rebuild_processor_index`、`retain_extraction` 提供；任务控制沿用 `read_task/control_task`，见[完整合同与例子](knowledge-processors.md)。

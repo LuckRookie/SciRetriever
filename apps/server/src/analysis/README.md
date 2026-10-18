@@ -16,3 +16,5 @@
 相关说明：[所属技术文档](../../../../docs/architecture/technical/05-knowledge-processing.md)。
 
 [上级目录](../README.md) · [项目 README](../../../../README.md)
+
+- `processor*.ts`：可信处理器注册、冻结输入、结果接纳、旧分析适配与默认标签/记录提取；只读取已有材料。批量生命周期在 `application/jobs/`。

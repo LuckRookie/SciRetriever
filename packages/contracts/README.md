@@ -4,9 +4,9 @@
 
 ## 下级目录
 
-| 目录 | 职责 |
-| --- | --- |
-| [src/](src/README.md) | 共享合同源码 |
+| 目录                    | 职责         |
+| ----------------------- | ------------ |
+| [src/](src/README.md)   | 共享合同源码 |
 | [test/](test/README.md) | 合同回归测试 |
 
 ## 内容入口
@@ -21,3 +21,5 @@
 相关说明：[公共接口与版本兼容](../../docs/architecture/technical/01-product-interface.md)。
 
 [上级目录](../README.md) · [项目 README](../../README.md)
+
+- `src/processors.ts`：冻结加工输入、规范、记录/文本/旧知识引用、覆盖与集合合同；ProcessingTaskRequest v2 承载批量处理器快照。

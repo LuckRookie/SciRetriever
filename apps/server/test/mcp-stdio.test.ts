@@ -27,7 +27,7 @@ it("starts the compiled CLI MCP command over actual stdio without touching the u
     const status = await client.callTool({ name: "status", arguments: {} });
     expect(status.structuredContent).toMatchObject({
       protocol_version: 1,
-      result: { status: "ready", schema_version: 9 },
+      result: { status: "ready", schema_version: 10 },
     });
     expect(
       (await client.listTools()).tools.some(

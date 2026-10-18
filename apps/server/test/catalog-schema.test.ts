@@ -1,4 +1,8 @@
 import {
+  SCHEMA_V10_FINGERPRINT,
+  SCHEMA_V10_MANIFEST,
+} from "../src/storage/sqlite/schema-v10.js";
+import {
   SCHEMA_V9_FINGERPRINT,
   SCHEMA_V9_MANIFEST,
 } from "../src/storage/sqlite/schema-v9.js";
@@ -83,6 +87,7 @@ const versions = [
   [7, SCHEMA_V7_FINGERPRINT, SCHEMA_V7_MANIFEST],
   [8, SCHEMA_V8_FINGERPRINT, SCHEMA_V8_MANIFEST],
   [9, SCHEMA_V9_FINGERPRINT, SCHEMA_V9_MANIFEST],
+  [10, SCHEMA_V10_FINGERPRINT, SCHEMA_V10_MANIFEST],
 ] as const;
 const assetBytes = Buffer.from(
   "%PDF-1.4\n% synthetic schema migration asset\n%%EOF\n",
@@ -216,9 +221,9 @@ describe("explicit catalog schema activation", () => {
             throw new Error("synthetic postpublication failure");
         }),
       ).rejects.toMatchObject({
-        progress: { current_version: 9, completed_versions: [9] },
+        progress: { current_version: 10, completed_versions: [10] },
       });
-      expect((await inspectCatalogSchema(catalog)).schema_version).toBe(9);
+      expect((await inspectCatalogSchema(catalog)).schema_version).toBe(10);
       expect(
         (await readdir(root)).filter((name) =>
           name.startsWith(".sciretriever-init-"),
@@ -228,7 +233,7 @@ describe("explicit catalog schema activation", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-  it("keeps inspect/dry-run read-only and initializes all v9 owners without touching siblings", async () => {
+  it("keeps inspect/dry-run read-only and initializes all v10 owners without touching siblings", async () => {
     const root = await mkdtemp(join(tmpdir(), "sciretriever-schema-init-"));
     const catalog = join(root, "catalog.sqlite");
     try {
@@ -257,8 +262,8 @@ describe("explicit catalog schema activation", () => {
         stdout: {
           action: "initialized",
           inspection: {
-            schema_version: 9,
-            schema_fingerprint: SCHEMA_V9_FINGERPRINT,
+            schema_version: 10,
+            schema_fingerprint: SCHEMA_V10_FINGERPRINT,
           },
         },
       });
@@ -333,7 +338,7 @@ describe("explicit catalog schema activation", () => {
           ]),
         ).toMatchObject({
           code: 0,
-          stdout: { action: "dry-run", from_version: version, to_version: 9 },
+          stdout: { action: "dry-run", from_version: version, to_version: 10 },
         });
         expect(await bytesHash(catalog)).toBe(originalBytes);
         expect(await readdir(root)).toEqual(entries);
@@ -349,14 +354,14 @@ describe("explicit catalog schema activation", () => {
         ).toMatchObject({
           code: 0,
           stdout: {
-            action: version === 9 ? "already-v9" : "upgraded",
+            action: version === 10 ? "already-v10" : "upgraded",
             from_version: version,
-            to_version: 9,
+            to_version: 10,
           },
         });
         expect(sourceFacts(catalog)).toEqual(before);
-        expect((await inspectCatalogSchema(catalog)).schema_version).toBe(9);
-        if (version < 9) {
+        expect((await inspectCatalogSchema(catalog)).schema_version).toBe(10);
+        if (version < 10) {
           expect((await inspectCatalogSchema(backup)).schema_version).toBe(
             version,
           );
@@ -539,8 +544,8 @@ describe("explicit catalog schema activation", () => {
       });
       expect(retried).toMatchObject({
         from_version: 5,
-        to_version: 9,
-        completed_versions: [6, 7, 8, 9],
+        to_version: 10,
+        completed_versions: [6, 7, 8, 9, 10],
       });
       expect(await bytesHash(backup)).toBe(backupBytes);
       const writer = new SqliteWorker(catalog);
@@ -555,7 +560,7 @@ describe("explicit catalog schema activation", () => {
         await writer.close();
       }
       expect(sourceFacts(catalog)).not.toEqual(sourceFacts(backup));
-      expect((await inspectCatalogSchema(catalog)).schema_version).toBe(9);
+      expect((await inspectCatalogSchema(catalog)).schema_version).toBe(10);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -625,7 +630,7 @@ describe("explicit catalog schema activation", () => {
           "--backup",
           backup,
         ]),
-      ).toMatchObject({ code: 0, stdout: { to_version: 9 } });
+      ).toMatchObject({ code: 0, stdout: { to_version: 10 } });
     } finally {
       vi.unstubAllEnvs();
       await rm(root, { recursive: true, force: true });

@@ -281,6 +281,8 @@ describe("live workbench on the installed Cloak runtime", () => {
           .getByRole("button", { name: "人工接管", exact: true })
           .click();
         await desktop
+          .locator("#watch-candidates .browser-candidate")
+          .filter({ hasText: "文件检查已通过，文章身份未验证" })
           .getByRole("button", { name: "发布到当前文献", exact: true })
           .click();
         await expect
@@ -310,6 +312,8 @@ describe("live workbench on the installed Cloak runtime", () => {
               },
             }),
           );
+        await desktop.keyboard.press("Escape");
+        await expect.poll(() => desktop.locator(".watch").count()).toBe(0);
         await desktop.locator("#library-tab").click();
         await desktop.locator("#q").fill("QueryBank");
 

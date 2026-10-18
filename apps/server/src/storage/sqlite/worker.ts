@@ -1,4 +1,9 @@
 import {
+  SCHEMA_V10_VERSION,
+  SCHEMA_V10_FINGERPRINT,
+  SCHEMA_V10_MANIFEST,
+} from "./schema-v10.js";
+import {
   acquireExecutionRuntime,
   ExecutionRuntimeOwner,
 } from "../execution/runtime-owner.js";
@@ -308,6 +313,11 @@ function parseDiscoveryPublication(value: unknown): DiscoveryPublication {
 }
 
 export type SqliteCommand =
+  | {
+      readonly kind: "processor";
+      readonly action: import("./processor-engine.js").ProcessorStorageAction;
+      readonly args: unknown;
+    }
   | {
       readonly kind: "article_identity_put";
       readonly assessment: ArticleIdentityAssessment;
@@ -1146,6 +1156,9 @@ export class SqliteWorker {
         schema_v7_version: SCHEMA_V7_VERSION,
         schema_v7_fingerprint: SCHEMA_V7_FINGERPRINT,
         schema_v7_manifest: SCHEMA_V7_MANIFEST,
+        schema_v10_version: SCHEMA_V10_VERSION,
+        schema_v10_fingerprint: SCHEMA_V10_FINGERPRINT,
+        schema_v10_manifest: SCHEMA_V10_MANIFEST,
         schema_v9_version: SCHEMA_V9_VERSION,
         schema_v9_fingerprint: SCHEMA_V9_FINGERPRINT,
         schema_v9_manifest: SCHEMA_V9_MANIFEST,
@@ -1362,6 +1375,39 @@ export class SqliteWorker {
     return read ? send() : this.admission!.run(send, signal);
   }
 
+  async processor<T>(
+    action: import("./processor-engine.js").ProcessorStorageAction,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const read = ![
+      "publish",
+      "project",
+      "collection-put",
+      "repair-projections",
+      "collection-project",
+    ].includes(action);
+    if (this.readOnly && !read) throw new KnowledgeStorageError("read-only");
+    if (!read && !this.admission)
+      throw new KnowledgeStorageError("write-admission-required");
+    const copy = structuredClone(args);
+    const send = async () => {
+      if (signal?.aborted)
+        throw new WriteAdmissionError("write-admission-cancelled");
+      const reply = await this.send<{ ok: boolean; value?: T; code?: string }>({
+        kind: "processor",
+        action,
+        args: copy,
+      });
+      if (!reply.ok)
+        throw new KnowledgeStorageError(
+          reply.code ?? "processor-storage-failed",
+        );
+      return reply.value as T;
+    };
+    return read ? send() : this.admission!.run(send, signal);
+  }
+
   async upgradeExecutionSchema(): Promise<void> {
     await this.run({ kind: "execution_upgrade" });
   }
@@ -1373,7 +1419,9 @@ export class SqliteWorker {
       throw new SqliteWorkerError();
     const result = value as Partial<ExecutionRuntimeInspection>;
     if (
-      ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(result.catalog_version as number) ||
+      ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(
+        result.catalog_version as number,
+      ) ||
       typeof result.catalog_fingerprint !== "string" ||
       (result.version !== null && typeof result.version !== "number") ||
       (result.fingerprint !== null && typeof result.fingerprint !== "string") ||

@@ -1005,7 +1005,9 @@ export class SqliteSynthesisStorage {
     readonly published: boolean;
   }> {
     if (
-      ![7, 8, 9].includes(Number((await this.database.schema()).schema_version))
+      ![7, 8, 9, 10].includes(
+        Number((await this.database.schema()).schema_version),
+      )
     )
       fail();
     const ctx = context();

@@ -105,7 +105,7 @@ describe("formal Web launch and database binding", () => {
         await expect.poll(() => address).not.toBe("");
         expect(await inspectCatalogSchema(catalog)).toMatchObject({
           status: "ready",
-          schema_version: 9,
+          schema_version: 10,
         });
         expect((await owner.read()).configuration.paths).toEqual({
           catalog_path: catalog,

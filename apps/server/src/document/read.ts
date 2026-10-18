@@ -273,13 +273,9 @@ export class DocumentReadService {
   ): Promise<T> {
     check(signal);
     if (
-      (await this.database.schema()).schema_version !== 3 &&
-      (await this.database.schema()).schema_version !== 4 &&
-      (await this.database.schema()).schema_version !== 5 &&
-      (await this.database.schema()).schema_version !== 6 &&
-      (await this.database.schema()).schema_version !== 7 &&
-      (await this.database.schema()).schema_version !== 8 &&
-      (await this.database.schema()).schema_version !== 9
+      ![3, 4, 5, 6, 7, 8, 9, 10].includes(
+        Number((await this.database.schema()).schema_version),
+      )
     )
       throw new DocumentReadError("document-v3-required");
     let snapshot;
@@ -370,13 +366,9 @@ export class DocumentReadService {
       const asset = r.asset_id;
       check(signal);
       if (
-        (await this.database.schema()).schema_version !== 3 &&
-        (await this.database.schema()).schema_version !== 4 &&
-        (await this.database.schema()).schema_version !== 5 &&
-        (await this.database.schema()).schema_version !== 6 &&
-        (await this.database.schema()).schema_version !== 7 &&
-        (await this.database.schema()).schema_version !== 8 &&
-        (await this.database.schema()).schema_version !== 9
+        ![3, 4, 5, 6, 7, 8, 9, 10].includes(
+          Number((await this.database.schema()).schema_version),
+        )
       )
         throw new DocumentReadError("document-v3-required");
       const material = await this.database.documentMaterial(literature, asset);

@@ -152,7 +152,7 @@ SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm preview:w
 
 PDF 获取只验证实际文件可读取及任务关联，不在下载阶段按 DOI/标题/作者判断内容身份。
 入库 PDF 显示“文章身份未验证”（`article_identity_status: "unverified"`），不阻断下载或后续解析。
-Catalog v9 可显式核验固定解析文档，返回有证据的 `match-supported`、`conflict` 或 `insufficient-evidence`；输入变化后标签回到 `unverified`。解析成功本身不等于核验完成，判断也不阻断下载和加工，见[调用说明](docs/guides/agent-interface.md#解析后身份核验)。
+Catalog v9 及以上可显式核验固定解析文档，返回有证据的 `match-supported`、`conflict` 或 `insufficient-evidence`；输入变化后标签回到 `unverified`。解析成功本身不等于核验完成，判断也不阻断下载和加工，见[调用说明](docs/guides/agent-interface.md#解析后身份核验)。
 
 手动 PDF 维护可通过 `startMaintenanceWorkbench({ home })` 单独启动，页面 `/` 接收用户明确选择的本机文件并传输原始 PDF 字节，`/query` 保持独立阅读视图；这一入口不启动 Browser，要求 home 已有 v2 catalog。公开 TypeScript `createApplication(home, { executionSchema: "require-v2" }).maintenance.ingestPdf({ literature_id, bytes })` 与 CLI `import pdf` 调用同一接纳用例。HTTP 上传和 TypeScript 字节入口均限制为 16 MiB；HTTP 只接受同源会话和 CSRF 授权，不接受远端请求提供本机路径。有效材料接纳后可通过独立 QueryApplication 读取；可执行 Node 启动示例见 [PDF 获取与手动接纳指南](docs/guides/pdf-acquisition.md)。
 
@@ -205,7 +205,7 @@ sciretriever jobs create|run
 `jobs create/run` 是当前 durable-job 调试/实验入口（`application/jobs` 之上），其目标合同归属
 （纳入或移出六个一级名称）仍待 owner 决定，见
 [迁移计划 T047/T048](docs/archive/2026-09-07-typescript-browser-workbench/full-migration-roadmap.md)；
-正式 `storage schema-init` 在精确不存在目标创建 v9，`schema-upgrade` 在精确 v1–v8 目标和同目录未存在备份上显式升级；inspect/dry-run 只读，普通启动不升级。整链持业务写锁，每步独立事务，失败报告实际中间版本并保留原始备份；操作前先停写，恢复须保全资产和切换后增量，见[初始化、升级与恢复](docs/guides/upgrade.md)。工具能力不授权代理执行真实数据迁移。
+正式 `storage schema-init` 在精确不存在目标创建 v10，`schema-upgrade` 在精确 v1–v9 目标和同目录未存在备份上显式升级；inspect/dry-run 只读，普通启动不升级。整链持业务写锁，每步独立事务，失败报告实际中间版本并保留原始备份；操作前先停写，恢复须保全资产和切换后增量，见[初始化、升级与恢复](docs/guides/upgrade.md)。工具能力不授权代理执行真实数据迁移。
 历史 `storage migrate` 仍只允许对合成副本执行。
 文档 Catalog v3 的独立合成迁移入口见[文档 Catalog 迁移指南](docs/guides/document-catalog-migration.md)。
 
@@ -549,3 +549,5 @@ pnpm full
 - [开发手册](docs/development/README.md)
 - [活动提案](docs/proposals/README.md)
 - [历史归档](docs/archive)
+
+统一加工入口支持标签、记录提取、旧知识分析适配和跨结果综合。任务冻结输入并复用完整结果，结果持久保存、可检索和展开证据；CLI/MCP 共用接口，详见[统一知识加工指南](docs/guides/knowledge-processors.md)。新功能要求 Catalog v10，不自动升级已有库。

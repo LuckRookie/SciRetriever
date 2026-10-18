@@ -7,21 +7,25 @@
 
 ## 当前计划
 
+- [Web 日常能力与阅读体验完善](2026-10-18-web-capability-and-reading/README.md)：Ready，计划已按审查修订、代码未开始；先建立可恢复基线并修复检索/补中文提示，表单、结果表和阅读分别确认具体设计后实施，包含共享大结果合同与可观测阅读验收。
+
 - [DSH 统一 Agents 底座](2026-10-16-dsh-agents-foundation/README.md)：已完成执行底座与 Full 验收；统一单次调用和通用会话，保留现有业务合同，内容质量对照另行验证。
 
 - [CLI/MCP 覆盖 Web 业务能力](2026-10-15-interface-capability-parity/README.md)：已完成当前 Web 业务范围的接口补齐与 Full 验收；两个机器入口共用应用合同，支持结构化调用与活运行时协作。
 
-- [定稿 Web 原型接入](2026-10-15-library-web-adaptation/README.md)：实施中；直接复用定稿 HTML 的结构与样式，逐项接入现有业务并完成离线验证。
+- [定稿 Web 原型接入](2026-10-15-library-web-adaptation/README.md)：已完成当时既有能力的原型适配与离线验收；新增处理器接入与阅读目标由 2026-10-18 的 Web 完善计划承接，原计划记录保留。
+
+2026-10-18 已归档[文献知识加工首版](../archive/2026-10-18-knowledge-processing-platform/README.md)：01–03 Completed；统一处理器、持久结果、复用/恢复、CLI/MCP、标签与提取均完成离线验收；Full 1,809 项通过、40 项按既有条件跳过，补充适配回归和 Quick 通过。真实质量方案未执行，完整版仍为参考。
 
 2026-10-13 核对以下五个计划的结果块、完成证据和残余限制后移入归档；历史 Full 与真实测试记录保持原口径，不作为后续代码修改的验收。
 
-| 最近归档 | 完成范围与限制 |
-| --- | --- |
-| [DSH/Cordis 受控 Agent 后端](../archive/2026-10-13-dsh-agent-backend/README.md) | Completed；Full 234 文件 / 1768 项；固定 50 篇对照 baseline 34、DSH 29 篇主文 PDF，不证明普遍提速或成功率提升。 |
-| [蓝白任务工作台](../archive/2026-10-13-web-workbench/README.md) | Completed；集成 Full 214 文件 / 1676 项通过，39 项按既有条件跳过；真实服务验收不在该计划范围。 |
-| [Browser 持续补位与传输计时](../archive/2026-10-13-browser-throughput/README.md) | Completed；含预览误捕获与失败归因修复，Full 226 文件 / 1697 项通过；真实总耗时未改善。 |
-| [固定输入加工与宽容结果接纳](../archive/2026-10-12-knowledge-processing-simplification/README.md) | Completed；Full 211 文件 / 1626 项通过、39 项跳过；真实加工和读取完成，不背书科学正确性。 |
-| [MinerU 正式解析修复](../archive/2026-10-12-mineru-parsing/README.md) | Completed；Full 1622 项通过、39 项跳过；四篇正式解析验证完成，未迁移生产库。 |
+| 最近归档                                                                                          | 完成范围与限制                                                                                                  |
+| ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| [DSH/Cordis 受控 Agent 后端](../archive/2026-10-13-dsh-agent-backend/README.md)                   | Completed；Full 234 文件 / 1768 项；固定 50 篇对照 baseline 34、DSH 29 篇主文 PDF，不证明普遍提速或成功率提升。 |
+| [蓝白任务工作台](../archive/2026-10-13-web-workbench/README.md)                                   | Completed；集成 Full 214 文件 / 1676 项通过，39 项按既有条件跳过；真实服务验收不在该计划范围。                  |
+| [Browser 持续补位与传输计时](../archive/2026-10-13-browser-throughput/README.md)                  | Completed；含预览误捕获与失败归因修复，Full 226 文件 / 1697 项通过；真实总耗时未改善。                          |
+| [固定输入加工与宽容结果接纳](../archive/2026-10-12-knowledge-processing-simplification/README.md) | Completed；Full 211 文件 / 1626 项通过、39 项跳过；真实加工和读取完成，不背书科学正确性。                       |
+| [MinerU 正式解析修复](../archive/2026-10-12-mineru-parsing/README.md)                             | Completed；Full 1622 项通过、39 项跳过；四篇正式解析验证完成，未迁移生产库。                                    |
 
 最近完成的计划已归档：
 

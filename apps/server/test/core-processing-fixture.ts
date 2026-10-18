@@ -32,7 +32,11 @@ const baseConfiguration =
 const legacyBudgets =
   "metadata_max_output_tokens=2048\ncontent_max_output_tokens=4096\nmax_input_bytes=1048576\nmax_chunk_bytes=1048576\nmax_chunk_count=1\nmax_total_llm_requests=2\nmax_total_output_tokens=6144\n";
 export async function coreProcessingFixture(
-  optionsInput: { legacyAnalysis?: boolean; analysisModel?: boolean } = {},
+  optionsInput: {
+    legacyAnalysis?: boolean;
+    analysisModel?: boolean;
+    inspectResponseSchema?: (schema: unknown) => void;
+  } = {},
 ) {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-core-processing-"));
   const config = join(home, ".sciretriever");
@@ -133,7 +137,11 @@ export async function coreProcessingFixture(
       modelCalls++;
       const wire = JSON.parse(new TextDecoder().decode(request.body)) as {
         messages: { content: { text: string }[] }[];
+        response_format?: { json_schema?: { schema?: unknown } };
       };
+      optionsInput.inspectResponseSchema?.(
+        wire.response_format?.json_schema?.schema,
+      );
       const input = JSON.parse(
         wire.messages[1]!.content[0]!.text,
       ) as ModelInput;
