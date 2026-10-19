@@ -4,6 +4,7 @@
 
 ## 当前提案
 
+- [可信全文、文献档案与算子](2026-10-19-trusted-fulltext-and-processor-inputs/proposal.md)：草案，2026-10-19 Owner 已确认核心规则。文献先建档（两份 MinerU 识别加分歧仲裁形成校订稿，再处理结构、元数据、参考文献和领域级标签），就绪后才进入单篇或多篇算子。需要修订 ADR 0008/0026、0010 和 0034。
 - [文献知识加工平台提案](../archive/2026-10-18-knowledge-processing-platform/proposal.md)：2026-10-18 已完成精简首版并与计划归档；当前合同见 ADR 0034。完整版仍是未执行参考。
 - [文献知识加工平台：完整版设计](2026-10-17-knowledge-processing-full-design/README.md)：参考设计，不作为首版实施范围；保存提案原文副本、算子抽象设计与九块计划副本，以及按需引入各项能力的触发条件。
 
