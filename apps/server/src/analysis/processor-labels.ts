@@ -9,7 +9,7 @@ import {
   type Processor,
   type ProcessorSegment,
 } from "./processor.js";
-import { onlyDocument } from "./processor-legacy.js";
+import { onlyDocument } from "./processor-knowledge.js";
 import {
   readingSpec,
   READING_SCHEMA,

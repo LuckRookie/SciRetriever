@@ -7,7 +7,7 @@ import {
   type LiteratureDetail,
 } from "@sciretriever/contracts";
 import type { AgentProvenance } from "../agents/protocol.js";
-import type { AgentRuntime } from "../agents/runtime.js";
+import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
 import {
   ConfigurationOwnerError,
   type TypeScriptConfigurationOwner,
@@ -181,7 +181,7 @@ export class PublisherGovernanceService {
     private readonly library: Pick<LiteratureQueryService, "search" | "detail">,
     private readonly configuration: ConfigurationOwner,
     private readonly agents: Pick<
-      AgentRuntime,
+      DshAgentRuntime,
       "execute" | "readiness"
     > | null = null,
   ) {}

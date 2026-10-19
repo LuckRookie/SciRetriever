@@ -10,7 +10,7 @@ import {
   sha256,
   type LiteratureDetail,
 } from "@sciretriever/contracts";
-import { AgentRuntime } from "../src/agents/runtime.js";
+import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
 import type { AgentCall, AgentResult } from "../src/agents/protocol.js";
 import { createApplication } from "../src/bootstrap/application.js";
 import { runCli } from "../src/cli/main.js";
@@ -113,7 +113,7 @@ function library(items: readonly LiteratureDetail[]) {
 }
 function runtime(reply: (call: AgentCall) => AgentResult) {
   const execute = vi.fn(async (call: AgentCall) => reply(call));
-  const agent = new AgentRuntime([
+  const agent = new DshAgentRuntime([
     {
       role: "analysis",
       provider: "fixture",

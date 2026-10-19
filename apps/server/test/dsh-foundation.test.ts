@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import LlmRuntime from "@deepseek-ai/dsh-llm";
 import {
-  AgentRuntime,
   DshAgentRuntime,
   type AgentBinding,
-} from "../src/agents/runtime.js";
+} from "../src/agents/dsh/runtime.js";
 import {
   AgentFailure,
   type AgentAdapter,
@@ -137,7 +136,7 @@ describe("one DSH foundation for model calls and application sessions", () => {
   });
 
   it("routes legacy structured calls and full-history calls through native DSH without changing schema or settings", async () => {
-    expect(AgentRuntime).toBe(DshAgentRuntime);
+    expect(DshAgentRuntime).toBe(DshAgentRuntime);
     const native = vi.spyOn(LlmRuntime.prototype, "stream");
     const observed: AgentCall[] = [];
     const transport = adapter(async (request) => {

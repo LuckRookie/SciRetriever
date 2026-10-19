@@ -10,7 +10,7 @@ import {
   type ModelMessage,
   validateModelRequest,
 } from "../src/agents/model-protocol.js";
-import { AgentRuntime } from "../src/agents/runtime.js";
+import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
 import {
   type AgentCall,
   type AgentTransportResponse,
@@ -334,7 +334,7 @@ function createRuntime(
     credential: null,
     transport,
   });
-  return new AgentRuntime([
+  return new DshAgentRuntime([
     {
       role: "browser",
       provider: "synthetic",
@@ -861,3 +861,39 @@ it.each([
     }
   },
 );
+
+it("validates long DSH histories beyond the atomic message count without relaxing tool pairing or image limits", () => {
+  const messages: ModelMessage[] = [...request.messages];
+  for (let n = 0; n < 70; n++) {
+    messages.push({
+      role: "assistant",
+      parts: [],
+      tool_calls: [
+        { id: `long-${n}`, name: "inspect", arguments: { target: "paper" } },
+      ],
+    });
+    messages.push({
+      role: "tool",
+      tool_call_id: `long-${n}`,
+      name: "inspect",
+      status: "success",
+      parts: [{ media_type: "text/plain", text: "Verified source fragment" }],
+    });
+  }
+  expect(() => validateModelRequest({ ...request, messages })).not.toThrow();
+  expect(() =>
+    validateModelRequest({ ...request, messages: messages.slice(0, -1) }),
+  ).toThrow();
+  const images = Array.from({ length: 17 }, () => ({
+    media_type: "image/png" as const,
+    data: new Uint8Array([1]),
+    width: 1,
+    height: 1,
+  }));
+  expect(() =>
+    validateModelRequest({
+      ...request,
+      messages: [...messages, { role: "user", parts: images }],
+    }),
+  ).toThrow();
+});

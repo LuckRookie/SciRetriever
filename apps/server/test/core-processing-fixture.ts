@@ -1,3 +1,4 @@
+import { dshChatReply } from "./dsh-analysis-fixture.js";
 import type { StagedParserResource } from "../src/parsing/ports.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -137,13 +138,31 @@ export async function coreProcessingFixture(
     },
     agentTransportFactory: () => async (request) => {
       modelCalls++;
+      request.onDispatched?.();
       const wire = JSON.parse(new TextDecoder().decode(request.body)) as {
-        messages: { content: { text: string }[] }[];
+        messages: { role: string; content: { text: string }[] }[];
+        tools?: {
+          function: {
+            name: string;
+            description: string;
+            parameters: Record<string, unknown>;
+          };
+        }[];
         response_format?: { json_schema?: { schema?: unknown } };
       };
       optionsInput.inspectResponseSchema?.(
         wire.response_format?.json_schema?.schema,
       );
+      if (wire.tools?.some((t) => t.function.name === "submit_result")) {
+        const value = await dshChatReply(wire, (input) =>
+          modelReply(input, request.signal),
+        );
+        return {
+          status: 200,
+          headers: [],
+          body: Buffer.from(JSON.stringify(value)),
+        };
+      }
       const input = JSON.parse(
         wire.messages[1]!.content[0]!.text,
       ) as ModelInput;

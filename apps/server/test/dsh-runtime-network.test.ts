@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import { createDshCapabilityRuntime } from "../src/agents/dsh/index.js";
 import { OpenAIChatAdapter } from "../src/agents/openai.js";
-import { AgentRuntime } from "../src/agents/runtime.js";
+import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
 import { AgentFailure } from "../src/agents/protocol.js";
 import type { AgentCapabilityAdmission } from "../src/agents/capability.js";
 import { createAgentTransport } from "../src/network/http.js";
@@ -68,7 +68,7 @@ describe("DSH shared Network transport", () => {
       maxRetries: 0,
     };
     let credentials = 0;
-    const model = new AgentRuntime([
+    const model = new DshAgentRuntime([
       {
         role: "browser",
         provider: "fixture",

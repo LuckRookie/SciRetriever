@@ -9,7 +9,7 @@ import {
   type ArticleIdentityEvidence,
   type LiteratureDetail,
 } from "@sciretriever/contracts";
-import type { AgentRuntime } from "../agents/runtime.js";
+import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
 import { AgentFailure, type AgentCall } from "../agents/protocol.js";
 import type { DocumentReadService } from "../document/read.js";
 import type { LiteratureArticleIdentityService } from "../literature/article-identity.js";
@@ -69,7 +69,7 @@ export class ArticleIdentityService {
       "withVerifiedVersion"
     >,
     private readonly library: { detail(id: string): Promise<LiteratureDetail> },
-    private readonly agents: AgentRuntime,
+    private readonly agents: DshAgentRuntime,
     private readonly repository: ArticleIdentityRepository,
     private readonly acceptance: LiteratureArticleIdentityService,
   ) {}

@@ -7,7 +7,7 @@ import type {
   OperatorInput,
   WorkbenchObservation,
 } from "@sciretriever/contracts";
-import { AgentRuntime } from "../src/agents/runtime.js";
+import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
 import type {
   ModelRequest,
   ModelResponse,
@@ -83,7 +83,7 @@ async function fixture(
   } = {},
 ) {
   const requests: ModelRequest[] = [];
-  const models = new AgentRuntime([
+  const models = new DshAgentRuntime([
     {
       role: "browser",
       provider: "fixture",

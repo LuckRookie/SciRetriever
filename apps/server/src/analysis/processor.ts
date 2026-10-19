@@ -21,7 +21,7 @@ import {
   type ProcessorRecord,
   type ProcessorCollection,
 } from "@sciretriever/contracts";
-import type { AgentRuntime } from "../agents/runtime.js";
+import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
 import type { DocumentReadService } from "../document/read.js";
 import type { LiteratureQueryService } from "../literature/query.js";
 import type { SqliteSynthesisStorage } from "../storage/synthesis.js";
@@ -167,7 +167,7 @@ export class ProcessorService {
   constructor(
     readonly registry: ProcessorRegistry,
     private readonly documents: DocumentReadService,
-    private readonly agents: AgentRuntime,
+    private readonly agents: DshAgentRuntime,
     private readonly literature: LiteratureQueryService,
     readonly store: ProcessorStore,
     private readonly knowledge: Pick<SqliteSynthesisStorage, "sourceById">,

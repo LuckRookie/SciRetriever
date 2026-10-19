@@ -6,7 +6,7 @@ import {
 import { AnthropicMessagesAdapter } from "../src/agents/anthropic.js";
 import { validateAgentCall, type AgentCall } from "../src/agents/protocol.js";
 import { requestBody, type AdapterConfig } from "../src/agents/common.js";
-import { AgentRuntime } from "../src/agents/runtime.js";
+import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
 
 const schema = {
   type: "object",
@@ -64,7 +64,7 @@ it.each(variants)(
         };
       },
     });
-    const runtime = new AgentRuntime([
+    const runtime = new DshAgentRuntime([
       {
         role: "analysis",
         provider: variant,

@@ -26,7 +26,7 @@ Analysis 与受控 Browser 是两个需要模型能力的真实消费者，但�
 
 > 2026-10-13 修订：按 ADR 0031，单次模型层保持无状态，`agents` 另可提供基于 DSH/Cordis 的受控会话与工具循环。后端方向已接受，实施已批准；下文单次合同不再限制整个模块只能无状态。
 
-> 2026-10-16 修订：按 [ADR 0031](0031-dsh-backed-agent-capabilities.md#2-唯一-dsh-底座按任务使用单次调用或持续会话)，DSH 统一承接单次调用与持续会话，原 `AgentRuntime` 仅保留同一实现的 API 名称。下文无状态限制只描述单次操作语义，不再规定保留独立自研运行时；具体完成状态见当前 Agents 文档。
+> 2026-10-16 修订：按 [ADR 0031](0031-dsh-backed-agent-capabilities.md#2-唯一-dsh-底座按任务使用单次调用或持续会话)，DSH 统一承接单次调用与持续会话，原 `AgentRuntime` 名称在 2026-10-19 经 Owner 授权删除，统一使用 `DshAgentRuntime`。下文无状态限制只描述单次操作语义，不再规定保留独立自研运行时；具体完成状态见当前 Agents 文档。
 
 ### 1. `AgentRuntime` 是无状态、Provider-neutral 的单次模型运行时
 

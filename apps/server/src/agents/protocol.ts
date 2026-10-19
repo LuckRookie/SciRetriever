@@ -225,13 +225,16 @@ function validateSchema(value: Record<string, unknown>, depth = 0): void {
       invalid();
   }
 }
-export function validateAgentCall(call: AgentCall): void {
+export function validateAgentCall(
+  call: AgentCall,
+  history: "atomic" | "session" = "atomic",
+): void {
   if (call === null || typeof call !== "object") invalid();
   if (
     (call.role !== "analysis" && call.role !== "browser") ||
     !Array.isArray(call.messages) ||
     call.messages.length === 0 ||
-    call.messages.length > 128 ||
+    (history === "atomic" && call.messages.length > 128) ||
     !Array.isArray(call.required_capabilities) ||
     call.required_capabilities.some((item) => !CAPABILITIES.has(item)) ||
     typeof call.input_sha256 !== "string" ||

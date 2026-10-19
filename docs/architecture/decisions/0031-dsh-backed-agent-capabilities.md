@@ -2,7 +2,7 @@
 
 - Status: Accepted（后端选型与责任边界；实施方案已获 Owner 批准，首期接入已完成）
 - Date: 2026-10-13
-- Last amended: 2026-10-16（Owner 确认 DSH 为唯一 Agents 底座，授权实施统一接入）
+- Last amended: 2026-10-19（Owner 要求移除旧 Agents 兼容入口，单篇/长文与综合交由 DSH 持续阅读）
 - Amends: [ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0023](0023-generic-browser-agent-executor.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)
 - Related: [ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[ADR 0027](0027-extraction-capabilities-and-caller-defined-records.md)、[ADR 0030](0030-browser-transport-and-progress.md)、[接入提案](../../archive/2026-10-13-dsh-agent-backend/proposal.md)、[实施计划](../../archive/2026-10-13-dsh-agent-backend/README.md)
 
@@ -30,9 +30,13 @@ DSH 默认应用组件按需要选择，不隐式加载其 CLI、Web、shell、�
 
 ### 2. 唯一 DSH 底座，按任务使用单次调用或持续会话
 
-2026-10-16，Owner 明确 DSH 应完整覆盖自建 Agents 并作为全项目唯一执行基础，不维持多个 Agents 后端。单次文本/结构化/图像/工具调用也进入 DSH 的原生模型服务，持续会话使用同一底座的工具循环与上下文管理。既有 `AgentRuntime` 名称可以作为 SDK 兼容入口，但不能保留独立自研执行路径或隐藏回退。
+2026-10-16，Owner 明确 DSH 应完整覆盖自建 Agents 并作为全项目唯一执行基础，不维持多个 Agents 后端。单次文本/结构化/图像/工具调用也进入 DSH 的原生模型服务，持续会话使用同一底座的工具循环与上下文管理。2026-10-19 Owner 明确撤销兼容入口：删除 `AgentRuntime` 别名和 `createBrowserDecision()` 单次兼容入口，公开消费者改用 `DshAgentRuntime` 与 Browser capability；不保留独立自研执行路径或隐藏回退。历史产物格式与证据引用继续可读。
 
 同日完成内容对照讨论后，Owner 再次确认停用原内置 Agents 后端，今后默认使用 DSH。此处“默认”表示唯一启用的执行后端，不提供旧后端切换项；DSH 初始化或执行失败时按既有失败合同返回，不绕过底座直接调用模型。保留供应商 wire adapter、Analysis 的业务算法和结果验收不等于保留第二个 Agents 后端；持续阅读、查证与修订策略是否接入某项业务，须由该业务实现与测试明确，不能以底座切换代替。
+
+2026-10-19，Owner 指出默认单篇分析一次提交全部文字并未实现持续阅读，要求将分析实际交由 DSH。单篇/长文的旧分块提取、固定层级归并控制器退役，二者使用同一 DSH 阅读会话。Analysis 只注册固定版本正文分页、片段回读、全文搜索、保存图片读取及结果提交工具；DSH 掌握后续工具选择与上下文。集合综合对原始文档使用同一阅读能力，在综合会话中允许回查候选和原文证据。最终结构、输入版本、证据来源、不可变发布与默认视图 CAS 仍由业务 owner 验收。
+
+执行与数据兼容分开：旧方法的结果可继续读取，但新分析使用新的方法身份，不能把旧结果当成新会话执行结果。公开 `analyze/analyzeLong` 请求作为用途入口汇入同一实现，既有字段不重新启用旧 Agent。身份核验、记录/标签等有明确输入输出的原子模型操作仍通过 DSH 原生模型服务；它们不是第二套 Agent 引擎。实际阅读、图片可用性和科研内容质量分开验收，不以成功工具调用证明科学理解。
 
 迁移必须保留模型选择、reasoning/stream、结构化结果、完整图片、取消、失败和 provenance 等既有能力。Browser 的“只投影最新截图”、动作选择与探索政策由 Browser 明确提供；不能成为通用分析或多图任务的底座默认。消费者可通过统一中性接口创建纯文本、视觉或工具会话。
 

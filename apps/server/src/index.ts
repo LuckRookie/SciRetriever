@@ -243,11 +243,7 @@ export {
   assembleMetadataRegistry,
   type MetadataAssemblyOptions,
 } from "./metadata/assembly.js";
-export {
-  AgentRuntime,
-  DshAgentRuntime,
-  type AgentBinding,
-} from "./agents/runtime.js";
+export { DshAgentRuntime, type AgentBinding } from "./agents/dsh/runtime.js";
 export type {
   AgentSessionRequest,
   AgentCapabilitySession,
@@ -609,7 +605,6 @@ export {
   type WorkbenchHttpOptions,
   type WorkbenchStaticAsset,
 } from "./workbench/http.js";
-export { createBrowserDecision } from "./browser/decision.js";
 export {
   ArticleIdentityService,
   ArticleIdentityError,

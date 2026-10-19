@@ -1,3 +1,4 @@
+import { dshAnalysisAdapter, dshChatReply } from "./dsh-analysis-fixture.js";
 import {
   mkdtemp,
   readFile,
@@ -39,7 +40,7 @@ import {
 } from "../src/bootstrap/application.js";
 import { KnowledgeAnalysisService } from "../src/analysis/knowledge.js";
 import type { KnowledgeStoragePort } from "../src/analysis/knowledge-port.js";
-import { AgentRuntime } from "../src/agents/runtime.js";
+import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
 import { AgentFailure } from "../src/agents/protocol.js";
 import type {
   AgentAdapter,
@@ -271,211 +272,80 @@ function longRequest(
 }
 function longRuntime(
   options: {
-    failAt?: number;
-    badQuote?: boolean;
-    badMerge?: boolean;
-    badText?: boolean;
-    badCategory?: boolean;
-    badMergeQuantity?: "oversize" | "shape";
     outputTokens?: number;
-    cancelAt?: number;
-    stop?: AbortController;
+    invalidEvidence?: boolean;
+    invalidQuantity?: boolean;
     notApplicable?: boolean;
-    crossContext?: boolean;
-    contextOnly?: boolean;
-    layered?: "good" | "missing";
+    onModel?: (
+      request: import("../src/agents/model-protocol.js").ModelRequest,
+      index: number,
+    ) => void;
   } = {},
 ) {
   const calls: AgentCall[] = [];
-  const adapter: AgentAdapter = {
+  const modelCalls: import("../src/agents/model-protocol.js").ModelRequest[] =
+    [];
+  const adapter = dshAnalysisAdapter({
     provider: "fixture",
     model: "synthetic",
     execute: async (call): Promise<AgentResult> => {
       calls.push(call);
-      if (options.failAt === calls.length)
-        throw new AgentFailure("agent-quota", true);
-      if (options.cancelAt === calls.length) options.stop?.abort();
-      const part = call.messages[1]?.parts[0];
-      if (!part || part.media_type !== "application/json")
-        throw new Error("missing input");
+      const part = call.messages[1]!.parts[0]!;
+      if (!("text" in part)) throw new Error("Missing text");
       const input = JSON.parse(part.text) as {
-        core?: { segment_id: string; text: string }[];
-        before?: { segment_id: string; text: string }[];
-        after?: { segment_id: string; text: string }[];
-        candidates?: {
-          id: string;
-          category: string;
-          epistemic: string;
-          text: string;
-          conditions: string[];
-          quantity: unknown;
-        }[];
+        segments: { segment_id: string; text: string }[];
       };
-      let value: Record<string, unknown>;
-      if (input.core) {
-        const core = input.core;
-        const text = core.map((item) => item.text).join("");
-        const entries = [
-          {
-            marker: "CANNOT_REDUCE",
-            description: "It cannot reduce energy",
-            conditions: [],
-            quantity: null,
-          },
-          {
-            marker: "CHINESE_NEGATION",
-            description: "结果未显著改善",
-            conditions: [],
-            quantity: null,
-          },
-          {
-            marker: "AFFIRMATIVE_CONTROL",
-            description: "The control improved yield",
-            conditions: [],
-            quantity: null,
-          },
-          {
-            marker: "measurement was 4.2 eV",
-            description: "4.2 eV under dry conditions",
-            conditions: ["dry conditions"],
-            quantity: { value: "4.2", unit: "eV", comparison_basis: null },
-          },
-          {
-            marker: "DRY_RESULT_4.2_eV",
-            description: "4.2 eV under dry conditions",
-            conditions: ["dry conditions"],
-            quantity: { value: "4.2", unit: "eV", comparison_basis: null },
-          },
-          {
-            marker: "NEGATED_IMPROVEMENT",
-            description: "The treatment did not improve yield",
-            conditions: ["treated sample"],
-            quantity: null,
-          },
-          {
-            marker: "WET_CONTRADICTION_5.1_eV",
-            description: "5.1 eV under wet conditions contradicts dry result",
-            conditions: ["wet conditions"],
-            quantity: { value: "5.1", unit: "eV", comparison_basis: null },
-          },
-        ];
-        const found = entries.find((entry) => text.includes(entry.marker));
-        const beforeCondition = input.before?.find((item) =>
-          item.text.includes("CONDITION_DRY_ONLY"),
-        );
-        const measurement = core.find((item) =>
-          item.text.includes("MEASURE_4.2_eV"),
-        );
-        if (options.crossContext && measurement && beforeCondition) {
-          value = {
-            outcome: "completed",
-            title: "Cross-chunk result",
-            statements: [
+      const markers = [
+        ["DRY_RESULT_4.2_eV", "4.2 eV under dry conditions"],
+        ["NEGATED_IMPROVEMENT", "The treatment did not improve yield"],
+        [
+          "WET_CONTRADICTION_5.1_eV",
+          "5.1 eV under wet conditions contradicts dry result",
+        ],
+        ["CANNOT_REDUCE", "It cannot reduce energy"],
+        ["CHINESE_NEGATION", "结果未显著改善"],
+        ["AFFIRMATIVE_CONTROL", "The control improved yield"],
+        ["measurement was 4.2 eV", "4.2 eV under dry conditions"],
+        ["MEASURE_4.2_eV", "4.2 eV under dry-only conditions"],
+      ];
+      const statements = options.notApplicable
+        ? []
+        : markers.flatMap(([marker, text]) => {
+            const segment = input.segments.find((s) =>
+              s.text.includes(marker!),
+            );
+            if (!segment) return [];
+            const condition = input.segments.find((s) =>
+              s.text.includes("CONDITION_DRY_ONLY"),
+            );
+            return [
               {
-                statement_id: "local-1",
-                category: "result",
+                statement_id: `s${markers.findIndex((m) => m[0] === marker)}`,
+                category: marker!.includes("WET") ? "disagreement" : "result",
                 epistemic: "reported",
-                text: "4.2 eV under dry-only conditions",
-                conditions: ["dry only"],
-                quantity: { value: "4.2", unit: "eV", comparison_basis: null },
-                evidence_segment_ids: options.contextOnly
-                  ? [beforeCondition.segment_id]
-                  : [measurement.segment_id, beforeCondition.segment_id],
-                evidence_quotes: options.contextOnly
-                  ? ["CONDITION_DRY_ONLY"]
-                  : ["MEASURE_4.2_eV", "CONDITION_DRY_ONLY"],
-                evidence_regions: options.contextOnly
-                  ? ["before"]
-                  : ["core", "before"],
+                text,
+                conditions: condition ? ["dry only"] : [],
+                quantity: options.invalidQuantity
+                  ? { value: "4.2", unit: "eV" }
+                  : null,
+                evidence_segment_ids: options.invalidEvidence
+                  ? ["forged"]
+                  : [
+                      ...new Set([
+                        segment.segment_id,
+                        ...(condition ? [condition.segment_id] : []),
+                      ]),
+                    ],
               },
-            ],
-          };
-        } else if (options.notApplicable || !found)
-          value = {
-            outcome: "not_applicable",
-            title: "No relevant assertion",
-            statements: [],
-          };
-        else {
-          const segment = core.find((item) =>
-            item.text.includes(found.marker),
-          )!;
-          value = {
-            outcome: "completed",
-            title: "Synthetic analysis",
-            statements: [
-              {
-                statement_id: "local-1",
-                category: found.marker.includes("WET")
-                  ? "disagreement"
-                  : "result",
-                epistemic: "reported",
-                text: found.description,
-                conditions: found.conditions,
-                quantity: found.quantity,
-                evidence_segment_ids: [segment.segment_id],
-                evidence_quotes: [
-                  options.badQuote ? "forged quote" : found.marker,
-                ],
-                evidence_regions: ["core"],
-              },
-            ],
-          };
-        }
-      } else if (input.candidates) {
-        const joinFirst =
-          options.layered &&
-          input.candidates.length === 16 &&
-          calls.length === 66;
-        const sourceCandidates = input.candidates;
-        const outputs = joinFirst
-          ? [
-              {
-                ...sourceCandidates[0]!,
-                source_ids:
-                  options.layered === "missing"
-                    ? [sourceCandidates[0]!.id]
-                    : [sourceCandidates[0]!.id, sourceCandidates[1]!.id],
-              },
-              ...sourceCandidates.slice(2).map((candidate) => ({
-                ...candidate,
-                source_ids: [candidate.id],
-              })),
-            ]
-          : sourceCandidates.map((candidate) => ({
-              ...candidate,
-              source_ids: [candidate.id],
-            }));
-        value = {
-          outcome: "completed",
-          title: "Integrated synthetic analysis",
-          statements: outputs.map((candidate, index) => ({
-            statement_id: `merged-${index + 1}`,
-            category:
-              options.badCategory && candidate.category === "disagreement"
-                ? "finding"
-                : candidate.category,
-            epistemic: candidate.epistemic,
-            text: options.badText ? "Rewritten claim" : candidate.text,
-            conditions: candidate.conditions,
-            quantity:
-              options.badMergeQuantity && index === 0
-                ? options.badMergeQuantity === "oversize"
-                  ? {
-                      value: "9".repeat(2000),
-                      unit: "eV",
-                      comparison_basis: null,
-                    }
-                  : { value: "4.2", unit: "eV" }
-                : candidate.quantity,
-            source_ids:
-              options.badMerge && index === 0 ? [] : candidate.source_ids,
-          })),
-        };
-      } else throw new Error("unknown stage");
+            ];
+          });
       return {
         kind: "structured",
-        value,
+        value: {
+          outcome: statements.length ? "completed" : "not_applicable",
+          title: "Synthetic analysis",
+          statements,
+        },
         provenance: {
           provider: "fixture",
           model: "synthetic",
@@ -486,20 +356,28 @@ function longRuntime(
         },
       };
     },
-  };
+  });
   return {
     calls,
-    agent: new AgentRuntime([
+    modelCalls,
+    agent: new DshAgentRuntime([
       {
         role: "analysis",
         provider: "fixture",
         model: "synthetic",
-        capabilities: ["structured_text"],
+        capabilities: ["structured_text", "tool_decision"],
         reasoning: "default",
         stream: false,
         context_window_tokens: 1000000,
         max_output_tokens: 10000,
-        adapter,
+        adapter: {
+          ...adapter,
+          executeModel: async (request, ...args) => {
+            modelCalls.push(request);
+            options.onModel?.(request, modelCalls.length);
+            return adapter.executeModel!(request, ...args);
+          },
+        },
       },
     ]),
   };
@@ -558,17 +436,17 @@ function runtime(
   };
   return {
     calls,
-    agent: new AgentRuntime([
+    agent: new DshAgentRuntime([
       {
         role: "analysis",
         provider: "fixture",
         model: "synthetic",
-        capabilities: ["structured_text"],
+        capabilities: ["structured_text", "tool_decision"],
         reasoning: options.reasoning ?? "default",
         stream: false,
         context_window_tokens: 1000000,
         max_output_tokens: 10000,
-        adapter,
+        adapter: dshAnalysisAdapter(adapter),
       },
     ]),
   };
@@ -3145,87 +3023,80 @@ describe("single-document knowledge analysis", () => {
     });
     let calls = 0;
     const transportFactory =
-      () => async (request: { readonly body: Uint8Array }) => {
+      () =>
+      async (request: {
+        readonly body: Uint8Array;
+        readonly onDispatched?: () => void;
+      }) => {
         calls++;
-        const wire = JSON.parse(new TextDecoder().decode(request.body)) as {
-          messages: { content: { text: string }[] }[];
-        };
-        const input = JSON.parse(wire.messages[1]!.content[0]!.text) as {
-          segments?: { segment_id: string }[];
-          core?: { segment_id: string; text: string }[];
-          candidates?: {
-            id: string;
-            category: string;
-            epistemic: string;
-            text: string;
-            conditions: string[];
-            quantity: unknown;
-          }[];
-        };
-        const value = input.candidates
-          ? {
-              outcome: "completed",
-              title: "Production long merge",
-              statements: input.candidates.map((candidate, index) => ({
-                statement_id: `m${index + 1}`,
-                category: candidate.category,
-                epistemic: candidate.epistemic,
-                text: candidate.text,
-                conditions: candidate.conditions,
-                quantity: candidate.quantity,
-                source_ids: [candidate.id],
-              })),
-            }
-          : input.core
+        request.onDispatched?.();
+        const wire = JSON.parse(
+          new TextDecoder().decode(request.body),
+        ) as Parameters<typeof dshChatReply>[0];
+        const reply = await dshChatReply(wire, (raw) => {
+          const input = raw as {
+            segments?: { segment_id: string }[];
+            core?: { segment_id: string; text: string }[];
+            candidates?: {
+              id: string;
+              category: string;
+              epistemic: string;
+              text: string;
+              conditions: string[];
+              quantity: unknown;
+            }[];
+          };
+          const value = input.candidates
             ? {
                 outcome: "completed",
-                title: "Production long finding",
-                statements: [
-                  {
-                    statement_id: "s1",
-                    category: "result",
-                    epistemic: "reported",
-                    text: "The synthetic result",
-                    conditions: [],
-                    quantity: null,
-                    evidence_segment_ids: [input.core[0]!.segment_id],
-                  },
-                ],
+                title: "Production long merge",
+                statements: input.candidates.map((candidate, index) => ({
+                  statement_id: `m${index + 1}`,
+                  category: candidate.category,
+                  epistemic: candidate.epistemic,
+                  text: candidate.text,
+                  conditions: candidate.conditions,
+                  quantity: candidate.quantity,
+                  source_ids: [candidate.id],
+                })),
               }
-            : {
-                outcome: "completed",
-                title: "Production adapter finding",
-                statements: [
-                  {
-                    statement_id: "s1",
-                    category: "result",
-                    epistemic: "reported",
-                    text: "The synthetic result",
-                    conditions: [],
-                    quantity: null,
-                    evidence_segment_ids: [input.segments![0]!.segment_id],
-                  },
-                ],
-              };
+            : input.core
+              ? {
+                  outcome: "completed",
+                  title: "Production long finding",
+                  statements: [
+                    {
+                      statement_id: "s1",
+                      category: "result",
+                      epistemic: "reported",
+                      text: "The synthetic result",
+                      conditions: [],
+                      quantity: null,
+                      evidence_segment_ids: [input.core[0]!.segment_id],
+                    },
+                  ],
+                }
+              : {
+                  outcome: "completed",
+                  title: "Production adapter finding",
+                  statements: [
+                    {
+                      statement_id: "s1",
+                      category: "result",
+                      epistemic: "reported",
+                      text: "The synthetic result",
+                      conditions: [],
+                      quantity: null,
+                      evidence_segment_ids: [input.segments![0]!.segment_id],
+                    },
+                  ],
+                };
+          return value;
+        });
         return {
           status: 200,
           headers: [],
-          body: new TextEncoder().encode(
-            JSON.stringify({
-              model: "model",
-              choices: [
-                {
-                  index: 0,
-                  finish_reason: "stop",
-                  message: {
-                    role: "assistant",
-                    content: JSON.stringify(value),
-                  },
-                },
-              ],
-              usage: { prompt_tokens: 100, completion_tokens: 50 },
-            }),
-          ),
+          body: Buffer.from(JSON.stringify(reply)),
         };
       };
     let firstApp: Application | undefined;
@@ -3245,16 +3116,16 @@ describe("single-document knowledge analysis", () => {
         provider: "fixture",
         model: "model",
       });
-      expect(calls).toBe(1);
+      expect(calls).toBe(2);
       const long = await firstApp.maintenance!.analyzeLong(
         longRequest(env.manifest),
       );
-      expect(long.artifact.method.version).toBe("3");
+      expect(long.artifact.method.version).toBe("1");
       expect(long.artifact.provenance).toMatchObject({
         provider: "fixture",
         model: "model",
       });
-      expect(calls).toBe(2);
+      expect(calls).toBe(4);
       const query = await createQueryApplication(env.home);
       try {
         expect(
@@ -3279,7 +3150,7 @@ describe("single-document knowledge analysis", () => {
         first.artifact.method.model_binding_sha256,
       );
       expect(changed.artifact.artifact_id).not.toBe(first.artifact.artifact_id);
-      expect(calls).toBe(3);
+      expect(calls).toBe(6);
     } finally {
       await firstApp?.close();
       await secondApp?.close();
@@ -3328,15 +3199,18 @@ describe("single-document knowledge analysis", () => {
   });
 });
 
-describe("long-document knowledge analysis", () => {
+describe("DSH document reading sessions", () => {
   const source = [
     `${"A".repeat(64000)} DRY_RESULT_4.2_eV\n`,
     `${"B".repeat(64000)} NEGATED_IMPROVEMENT\n`,
     `${"C".repeat(64000)} WET_CONTRADICTION_5.1_eV\n`,
   ].join("");
-  it("sends every bounded core including the tail, merges all candidates, and preserves v1 history", async () => {
-    const env = await environment(source);
-    const fake = longRuntime();
+  async function setup(
+    text: string,
+    options: Parameters<typeof longRuntime>[0] = {},
+  ) {
+    const env = await environment(text);
+    const fake = longRuntime(options);
     const storage = new SqliteKnowledgeStorage(
       env.app.database,
       env.app.files,
@@ -3347,611 +3221,198 @@ describe("long-document knowledge analysis", () => {
       fake.agent,
       storage,
     );
+    return {
+      env,
+      fake,
+      storage,
+      service,
+      async close() {
+        await service.close();
+        await fake.agent.close();
+        await env.close();
+      },
+    };
+  }
+  it("reads every range in one DSH conversation, retains tail/negation and reuses immutable results", async () => {
+    const f = await setup(source);
     try {
-      const receipt = await service.analyzeLong(longRequest(env.manifest));
-      expect(receipt.published).toBe(true);
+      const receipt = await f.service.analyzeLong(longRequest(f.env.manifest));
       expect(receipt.artifact.method).toMatchObject({
-        id: "single-document-knowledge-long",
-        version: "3",
+        id: "dsh-document-analysis",
+        version: "1",
       });
       expect(receipt.artifact.coverage).toMatchObject({
         status: "complete",
-        total_utf8_bytes: Buffer.byteLength(source),
         covered_utf8_bytes: Buffer.byteLength(source),
         total_segments: 3,
         covered_segments: 3,
       });
-      expect(fake.calls).toHaveLength(4);
-      const local = fake.calls.slice(0, 3).map((call) => {
-        const part = call.messages[1]!.parts[0]!;
-        if (part.media_type !== "application/json")
-          throw new Error("invalid test call");
-        return JSON.parse(part.text) as {
-          core_start_utf8: number;
-          core_end_utf8: number;
-          before: { text: string }[];
-          after: { text: string }[];
-          core: { text: string }[];
-        };
-      });
-      expect(
-        local.map((item) => [item.core_start_utf8, item.core_end_utf8]),
-      ).toEqual([
-        [0, local[0]!.core_end_utf8],
-        [local[0]!.core_end_utf8, local[1]!.core_end_utf8],
-        [local[1]!.core_end_utf8, Buffer.byteLength(source)],
-      ]);
-      expect(local[0]!.after.map((item) => item.text).join("")).toContain("B");
-      expect(local[1]!.before.map((item) => item.text).join("")).toContain(
-        "DRY_RESULT_4.2_eV",
+      expect(f.fake.modelCalls.length).toBeGreaterThan(3);
+      const final = f.fake.modelCalls.at(-1)!;
+      const pages = final.messages
+        .filter((m) => m.role === "tool" && m.name === "read_document")
+        .map(
+          (m) =>
+            JSON.parse((m.parts[0] as { text: string }).text) as {
+              segments: { text: string }[];
+            },
+        );
+      expect(pages.flatMap((p) => p.segments.map((s) => s.text)).join("")).toBe(
+        source,
       );
-      expect(local[2]!.core.map((item) => item.text).join("")).toContain(
-        "WET_CONTRADICTION_5.1_eV",
-      );
-      expect(
-        fake.calls.every(
-          (call) =>
-            call.messages[1]!.parts[0]!.media_type === "application/json",
-        ),
-      ).toBe(true);
-      const texts = receipt.artifact.content.statements.map(
-        (item) => item.text,
-      );
-      expect(texts).toEqual([
+      expect(receipt.artifact.content.statements.map((s) => s.text)).toEqual([
         "4.2 eV under dry conditions",
         "The treatment did not improve yield",
         "5.1 eV under wet conditions contradicts dry result",
       ]);
       expect(
-        receipt.artifact.content.statements.map((item) => item.quantity?.unit),
-      ).toEqual(["eV", undefined, "eV"]);
+        receipt.artifact.content.statements.map((s) => s.evidence[0]?.locator),
+      ).toEqual(
+        [1, 2, 3].map((n) => ({ kind: "segment", segment_id: `p${n}` })),
+      );
+      const count = f.fake.modelCalls.length;
       expect(
-        receipt.artifact.content.statements.map(
-          (item) => item.evidence[0]?.locator,
-        ),
-      ).toEqual([
-        { kind: "segment", segment_id: "p1" },
-        { kind: "segment", segment_id: "p2" },
-        { kind: "segment", segment_id: "p3" },
-      ]);
-      expect(receipt.artifact.provenance).toMatchObject({
-        input_tokens: 400,
-        output_tokens: 200,
-      });
-      const reused = await service.analyzeLong(longRequest(env.manifest));
-      expect(reused.published).toBe(false);
-      expect(fake.calls).toHaveLength(4);
-      expect(await storage.byId(receipt.artifact.artifact_id)).toEqual(
+        (
+          await f.service.analyzeLong(
+            longRequest(f.env.manifest, {
+              budget: {
+                ...longRequest(f.env.manifest).budget,
+                max_calls: 1,
+                max_source_bytes: 1,
+              },
+            }),
+          )
+        ).published,
+      ).toBe(false);
+      expect(f.fake.modelCalls).toHaveLength(count);
+      expect(await f.storage.byId(receipt.artifact.artifact_id)).toEqual(
         receipt.artifact,
       );
-      const oldFake = runtime();
-      const oldService = new KnowledgeAnalysisService(
-        env.app.documentRead,
-        oldFake.agent,
-        storage,
-      );
-      try {
-        const old = await oldService.analyze(
-          request(env.manifest, {
-            budget: { max_input_bytes: 256 * 1024, max_output_tokens: 2048 },
-          }),
-        );
-        expect(old.artifact.method.version).toBe("2");
-        expect(await storage.byId(old.artifact.artifact_id)).toEqual(
-          old.artifact,
-        );
-        expect(await storage.byId(receipt.artifact.artifact_id)).toEqual(
-          receipt.artifact,
-        );
-      } finally {
-        await oldService.close();
-        oldFake.agent.close();
-      }
     } finally {
-      await service.close();
-      fake.agent.close();
-      await env.close();
+      await f.close();
     }
   });
-
   it.each([
-    ["local quote", { badQuote: true }, {}, null],
-    ["merge mapping", { badMerge: true }, {}, "knowledge-response"],
-    ["merge source text", { badText: true }, {}, null],
-    ["merge disagreement", { badCategory: true }, {}, null],
-    ["local failure", { failAt: 2 }, {}, "knowledge-model-failed"],
-    [
-      "all not applicable",
-      { notApplicable: true },
-      {},
-      "knowledge-not-applicable",
-    ],
-    ["actual output exceeds reservation", { outputTokens: 3000 }, {}, null],
-    ["per-call bytes", {}, { max_call_bytes: 100 }, null],
-    ["call count", {}, { max_calls: 1 }, null],
-    ["source bytes", {}, { max_source_bytes: 100 }, null],
-    [
-      "total call bytes",
-      {},
-      { max_total_call_bytes: 1000, max_call_bytes: 1000 },
-      null,
-    ],
+    `${"中".repeat(30000)}DRY_RESULT_4.2_eV`,
+    `${"a".repeat(23999)}😀${"😀".repeat(15000)}DRY_RESULT_4.2_eV`,
+    `${"a".repeat(23999)}\n${"中".repeat(30000)}DRY_RESULT_4.2_eV`,
+  ])("preserves UTF-8 bytes across paged reads (%#)", async (text) => {
+    const f = await setup(text);
+    try {
+      const r = await f.service.analyzeLong(longRequest(f.env.manifest));
+      const pages = f.fake.modelCalls
+        .at(-1)!
+        .messages.filter(
+          (m) => m.role === "tool" && m.name === "read_document",
+        );
+      const actual = pages
+        .flatMap(
+          (m) =>
+            (
+              JSON.parse((m.parts[0] as { text: string }).text) as {
+                segments: { text: string }[];
+              }
+            ).segments,
+        )
+        .map((s) => s.text)
+        .join("");
+      expect(actual).toBe(text);
+      expect(actual).not.toContain("�");
+      expect(r.artifact.coverage.covered_utf8_bytes).toBe(
+        Buffer.byteLength(text),
+      );
+      for (const evidence of r.artifact.content.statements[0]!.evidence) {
+        const resolved = await f.env.app.documentRead.resolveEvidence(evidence);
+        expect(resolved.evidence.content_sha256).toBe(evidence.content_sha256);
+      }
+    } finally {
+      await f.close();
+    }
+  });
+  it("reads the complete tail after 8192 segments", async () => {
+    const f = await setup(`${"x\n".repeat(8193)}DRY_RESULT_4.2_eV\n`);
+    try {
+      const r = await f.service.analyzeLong(longRequest(f.env.manifest));
+      expect(r.artifact.coverage).toMatchObject({
+        total_segments: 8194,
+        covered_segments: 8194,
+      });
+      expect(r.artifact.content.statements[0]!.evidence[0]!.locator).toEqual({
+        kind: "segment",
+        segment_id: "p8194",
+      });
+    } finally {
+      await f.close();
+    }
+  });
+  it.each([
+    [{ invalidEvidence: true }, "knowledge-invalid-evidence"],
+    [{ invalidQuantity: true }, "knowledge-response"],
+    [{ notApplicable: true }, "knowledge-not-applicable"],
+    [{ outputTokens: Number.NaN }, "knowledge-response"],
   ] as const)(
-    "applies format and source checks to %s without business budgets",
-    async (_name, fakeOptions, budgetOverride, code) => {
-      const env = await environment(source);
-      const fake = longRuntime(fakeOptions);
-      const storage = new SqliteKnowledgeStorage(
-        env.app.database,
-        env.app.files,
-        env.app.documentRead,
-      );
-      const service = new KnowledgeAnalysisService(
-        env.app.documentRead,
-        fake.agent,
-        storage,
-      );
+    "rejects invalid submissions and usage without publishing (%#)",
+    async (options, code) => {
+      const f = await setup(source, options);
       try {
-        const budget = {
-          ...longRequest(env.manifest).budget,
-          ...budgetOverride,
-        };
-        const pending = service.analyzeLong(
-          longRequest(env.manifest, { budget }),
-        );
-        if (code === null) {
-          const result = await pending;
-          expect(result.published).toBe(true);
-          expect(fake.calls).toHaveLength(4);
-          expect(await storage.byId(result.artifact.artifact_id)).toEqual(
-            result.artifact,
-          );
-        } else {
-          await expect(pending).rejects.toMatchObject({ code });
-          expect(await storage.list(literatureId)).toHaveLength(0);
-        }
+        await expect(
+          f.service.analyzeLong(longRequest(f.env.manifest)),
+        ).rejects.toMatchObject({ code });
+        expect(await f.storage.list(literatureId)).toHaveLength(0);
       } finally {
-        await service.close();
-        fake.agent.close();
-        await env.close();
+        await f.close();
       }
     },
   );
-
-  it.each(["oversize", "shape"] as const)(
-    "accepts long quantity text and rejects malformed quantity objects (%s)",
-    async (kind) => {
-      const env = await environment(source);
-      const fake = longRuntime({ badMergeQuantity: kind });
-      const storage = new SqliteKnowledgeStorage(
-        env.app.database,
-        env.app.files,
-        env.app.documentRead,
-      );
-      const service = new KnowledgeAnalysisService(
-        env.app.documentRead,
-        fake.agent,
-        storage,
-      );
-      try {
-        if (kind === "oversize") {
-          const result = await service.analyzeLong(longRequest(env.manifest));
-          expect(result.published).toBe(true);
-          expect(
-            result.artifact.content.statements[0]!.quantity?.value,
-          ).toHaveLength(2000);
-          expect(await storage.byId(result.artifact.artifact_id)).toBeDefined();
-          return;
-        }
-        let rejection: unknown;
-        try {
-          await service.analyzeLong(longRequest(env.manifest));
-        } catch (error) {
-          rejection = error;
-        }
-        expect(rejection).toMatchObject({
-          code: "knowledge-response",
-          accounting: {
-            calls_dispatched: 4,
-            reported_calls: 4,
-            usage_complete: true,
-          },
-        });
-        expect((rejection as Error).cause).toBeDefined();
-        const described = await env.app.documentRead.describe({
-          document_version_id: env.first.document.document_version_id,
-        });
-        expect(described.document.document_version_id).toBe(
-          env.first.document.document_version_id,
-        );
-        expect(await storage.list(literatureId)).toHaveLength(0);
-      } finally {
-        await service.close();
-        fake.agent.close();
-        await env.close();
-      }
-    },
-  );
-
-  it("cancels between chunks without publishing", async () => {
-    const env = await environment(source);
+  it("cancels a DSH continuation before publication and releases the session", async () => {
     const stop = new AbortController();
-    const fake = longRuntime({ cancelAt: 2, stop });
-    const storage = new SqliteKnowledgeStorage(
-      env.app.database,
-      env.app.files,
-      env.app.documentRead,
-    );
-    const service = new KnowledgeAnalysisService(
-      env.app.documentRead,
-      fake.agent,
-      storage,
-    );
+    const f = await setup(source, {
+      onModel: (_request, index) => {
+        if (index === 3) stop.abort();
+      },
+    });
     try {
       await expect(
-        service.analyzeLong(longRequest(env.manifest), stop.signal),
+        f.service.analyzeLong(longRequest(f.env.manifest), stop.signal),
       ).rejects.toMatchObject({ code: "knowledge-cancelled" });
-      expect(fake.calls).toHaveLength(2);
-      expect(await storage.list(literatureId)).toHaveLength(0);
+      expect(f.fake.modelCalls).toHaveLength(3);
+      expect(await f.storage.list(literatureId)).toHaveLength(0);
     } finally {
-      await service.close();
-      fake.agent.close();
-      await env.close();
+      await f.close();
     }
   });
-  it("splits an oversized UTF-8 segment only at code point boundaries and cites the whole segment", async () => {
-    const text = `${"😀".repeat(20000)} DRY_RESULT_4.2_eV\n`;
-    const env = await environment(text);
-    const fake = longRuntime();
-    const storage = new SqliteKnowledgeStorage(
-      env.app.database,
-      env.app.files,
-      env.app.documentRead,
-    );
-    const service = new KnowledgeAnalysisService(
-      env.app.documentRead,
-      fake.agent,
-      storage,
+  it("binds a distant condition and result to two original evidence references", async () => {
+    const f = await setup(
+      `CONDITION_DRY_ONLY${"A".repeat(65536)}\nMEASURE_4.2_eV\n`,
     );
     try {
-      const receipt = await service.analyzeLong(longRequest(env.manifest));
-      const local = fake.calls.filter((call) => {
-        const part = call.messages[1]!.parts[0]!;
-        return (
-          part.media_type === "application/json" &&
-          Object.hasOwn(JSON.parse(part.text), "core")
-        );
-      });
-      expect(local.length).toBe(2);
-      const cores = local.flatMap((call) => {
-        const part = call.messages[1]!.parts[0]!;
-        if (part.media_type !== "application/json")
-          throw new Error("invalid test call");
-        return (JSON.parse(part.text) as { core: { text: string }[] }).core.map(
-          (item) => item.text,
-        );
-      });
-      expect(cores.join("")).toBe(text);
-      expect(cores.every((part) => !part.includes("\ufffd"))).toBe(true);
-      expect(receipt.artifact.coverage.total_segments).toBe(1);
+      const r = await f.service.analyzeLong(longRequest(f.env.manifest));
+      expect(r.artifact.content.statements[0]!.conditions).toEqual([
+        "dry only",
+      ]);
       expect(
-        receipt.artifact.content.statements[0]!.evidence[0]?.locator,
-      ).toEqual({ kind: "segment", segment_id: "p1" });
-    } finally {
-      await service.close();
-      fake.agent.close();
-      await env.close();
-    }
-  });
-
-  it.each([
-    [
-      "three-byte Chinese",
-      `${"汉".repeat(24000)} DRY_RESULT_4.2_eV\n`,
-      1,
-      "p1",
-    ],
-    ["ASCII then emoji", `a${"😀".repeat(17000)} DRY_RESULT_4.2_eV\n`, 1, "p1"],
-    [
-      "cross-segment boundary",
-      `${"汉".repeat(21844)}\n${"😀".repeat(1000)} DRY_RESULT_4.2_eV\n`,
-      2,
-      "p2",
-    ],
-  ] as const)(
-    "preserves every byte across %s chunk cuts",
-    async (_name, text, segmentCount, cited) => {
-      const env = await environment(text);
-      const fake = longRuntime();
-      const storage = new SqliteKnowledgeStorage(
-        env.app.database,
-        env.app.files,
-        env.app.documentRead,
-      );
-      const service = new KnowledgeAnalysisService(
-        env.app.documentRead,
-        fake.agent,
-        storage,
-      );
-      try {
-        const receipt = await service.analyzeLong(longRequest(env.manifest));
-        const cores = fake.calls.flatMap((call) => {
-          const part = call.messages[1]!.parts[0]!;
-          if (part.media_type !== "application/json")
-            throw new Error("invalid test call");
-          const payload = JSON.parse(part.text) as {
-            core?: { text: string }[];
-          };
-          return payload.core?.map((item) => item.text) ?? [];
-        });
-        expect(cores.join("")).toBe(text);
-        expect(cores.every((part) => !part.includes("\ufffd"))).toBe(true);
-        expect(receipt.artifact.coverage.total_segments).toBe(segmentCount);
-        expect(
-          receipt.artifact.content.statements[0]!.evidence[0]?.locator,
-        ).toEqual({ kind: "segment", segment_id: cited });
-      } finally {
-        await service.close();
-        fake.agent.close();
-        await env.close();
-      }
-    },
-  );
-
-  it("processes the complete tail beyond the former 8192-segment cutoff", async () => {
-    const env = await environment(`${"x\n".repeat(8193)}DRY_RESULT_4.2_eV\n`);
-    const fake = longRuntime();
-    const storage = new SqliteKnowledgeStorage(
-      env.app.database,
-      env.app.files,
-      env.app.documentRead,
-    );
-    const service = new KnowledgeAnalysisService(
-      env.app.documentRead,
-      fake.agent,
-      storage,
-    );
-    try {
-      await expect(
-        service.analyzeLong(longRequest(env.manifest)),
-      ).resolves.toMatchObject({
-        published: true,
-        artifact: {
-          coverage: { total_segments: 8194, covered_segments: 8194 },
-        },
-      });
-      expect(fake.calls.length).toBeGreaterThan(128);
-    } finally {
-      await service.close();
-      fake.agent.close();
-      await env.close();
-    }
-  }, 15000);
-  it("does not mark invalid or missing usage as fully reported", async () => {
-    const env = await environment(source);
-    const fake = longRuntime({ outputTokens: Number.NaN });
-    const storage = new SqliteKnowledgeStorage(
-      env.app.database,
-      env.app.files,
-      env.app.documentRead,
-    );
-    const service = new KnowledgeAnalysisService(
-      env.app.documentRead,
-      fake.agent,
-      storage,
-    );
-    try {
-      await expect(
-        service.analyzeLong(longRequest(env.manifest)),
-      ).rejects.toMatchObject({
-        code: "knowledge-response",
-        accounting: {
-          calls_dispatched: 1,
-          reported_calls: 0,
-          reported_input_tokens: 0,
-          reported_output_tokens: 0,
-          usage_complete: false,
-        },
-      });
-      expect(await storage.list(literatureId)).toHaveLength(0);
-    } finally {
-      await service.close();
-      fake.agent.close();
-      await env.close();
-    }
-  });
-
-  it("binds a previous segment condition and current core result to two verified EvidenceRefs", async () => {
-    const marker = "CONDITION_DRY_ONLY";
-    const first = `${"A".repeat(65536 - marker.length - 1)}${marker}\n`;
-    const text = `${first}MEASURE_4.2_eV\n`;
-    const env = await environment(text);
-    const storage = new SqliteKnowledgeStorage(
-      env.app.database,
-      env.app.files,
-      env.app.documentRead,
-    );
-    const fake = longRuntime({ crossContext: true });
-    const service = new KnowledgeAnalysisService(
-      env.app.documentRead,
-      fake.agent,
-      storage,
-    );
-    try {
-      const receipt = await service.analyzeLong(longRequest(env.manifest));
-      expect(fake.calls).toHaveLength(3);
-      const part = fake.calls[1]!.messages[1]!.parts[0]!;
-      if (part.media_type !== "application/json")
-        throw new Error("invalid test call");
-      const input = JSON.parse(part.text) as {
-        before: {
-          segment_id: string;
-          start_utf8: number;
-          end_utf8: number;
-          text: string;
-        }[];
-      };
-      expect(
-        input.before.some(
-          (item) =>
-            item.segment_id === "p1" &&
-            item.text.includes(marker) &&
-            item.end_utf8 === Buffer.byteLength(first),
-        ),
-      ).toBe(true);
-      expect(
-        receipt.artifact.content.statements[0]!.evidence.map(
-          (item) => item.locator,
-        ),
+        r.artifact.content.statements[0]!.evidence.map((e) => e.locator),
       ).toEqual([
         { kind: "segment", segment_id: "p2" },
         { kind: "segment", segment_id: "p1" },
       ]);
-      expect(receipt.artifact.coverage.covered_utf8_bytes).toBe(
-        Buffer.byteLength(text),
-      );
     } finally {
-      await service.close();
-      fake.agent.close();
-    }
-    const bad = longRuntime({ crossContext: true, contextOnly: true });
-    const badService = new KnowledgeAnalysisService(
-      env.app.documentRead,
-      bad.agent,
-      storage,
-    );
-    try {
-      await expect(
-        badService.analyzeLong(
-          longRequest(env.manifest, {
-            purpose: "question",
-            question: "What was measured?",
-          }),
-        ),
-      ).resolves.toMatchObject({ published: true });
-    } finally {
-      await badService.close();
-      bad.agent.close();
-      await env.close();
+      await f.close();
     }
   });
-
-  it("retains cannot, Chinese negation and affirmative source text by one merge rule", async () => {
-    const text = ["CANNOT_REDUCE", "CHINESE_NEGATION", "AFFIRMATIVE_CONTROL"]
-      .map((marker) => `${"A".repeat(64000)} ${marker}\n`)
-      .join("");
-    const env = await environment(text);
-    const storage = new SqliteKnowledgeStorage(
-      env.app.database,
-      env.app.files,
-      env.app.documentRead,
-    );
-    const fake = longRuntime();
-    const service = new KnowledgeAnalysisService(
-      env.app.documentRead,
-      fake.agent,
-      storage,
+  it("preserves English and Chinese negation without deterministic rewriting", async () => {
+    const f = await setup(
+      "CANNOT_REDUCE\nCHINESE_NEGATION\nAFFIRMATIVE_CONTROL\n",
     );
     try {
-      const receipt = await service.analyzeLong(longRequest(env.manifest));
-      expect(
-        receipt.artifact.content.statements.map((item) => item.text),
-      ).toEqual([
+      const r = await f.service.analyzeLong(longRequest(f.env.manifest));
+      expect(r.artifact.content.statements.map((s) => s.text)).toEqual([
         "It cannot reduce energy",
         "结果未显著改善",
         "The control improved yield",
       ]);
     } finally {
-      await service.close();
-      fake.agent.close();
-    }
-    const bad = longRuntime({ badText: true });
-    const badService = new KnowledgeAnalysisService(
-      env.app.documentRead,
-      bad.agent,
-      storage,
-    );
-    try {
-      await expect(
-        badService.analyzeLong(
-          longRequest(env.manifest, {
-            purpose: "question",
-            question: "What changed?",
-          }),
-        ),
-      ).resolves.toMatchObject({ published: true });
-    } finally {
-      await badService.close();
-      bad.agent.close();
-      await env.close();
-    }
-  });
-
-  it("completes finite hierarchical synthesis and reuses it despite obsolete call limits", async () => {
-    const marker = "DRY_RESULT_4.2_eV";
-    const text = `${"A".repeat(65536 - marker.length - 2)} ${marker}\n`.repeat(
-      65,
-    );
-    const env = await environment(text);
-    const storage = new SqliteKnowledgeStorage(
-      env.app.database,
-      env.app.files,
-      env.app.documentRead,
-    );
-    const good = longRuntime({ layered: "good" });
-    const service = new KnowledgeAnalysisService(
-      env.app.documentRead,
-      good.agent,
-      storage,
-    );
-    try {
-      const receipt = await service.analyzeLong(longRequest(env.manifest));
-      expect(good.calls).toHaveLength(71);
-      expect(receipt.artifact.content.statements).toHaveLength(64);
-      expect(receipt.artifact.coverage).toMatchObject({
-        total_segments: 65,
-        covered_segments: 65,
-      });
-    } finally {
-      await service.close();
-      good.agent.close();
-    }
-    const missing = longRuntime({ layered: "missing" });
-    const missingService = new KnowledgeAnalysisService(
-      env.app.documentRead,
-      missing.agent,
-      storage,
-    );
-    try {
-      await expect(
-        missingService.analyzeLong(
-          longRequest(env.manifest, {
-            purpose: "question",
-            question: "Which result?",
-          }),
-        ),
-      ).resolves.toMatchObject({ published: true });
-      expect(missing.calls).toHaveLength(71);
-    } finally {
-      await missingService.close();
-      missing.agent.close();
-    }
-    const limited = longRuntime({ layered: "good" });
-    const limitedService = new KnowledgeAnalysisService(
-      env.app.documentRead,
-      limited.agent,
-      storage,
-    );
-    try {
-      const budget = { ...longRequest(env.manifest).budget, max_calls: 66 };
-      await expect(
-        limitedService.analyzeLong(longRequest(env.manifest, { budget })),
-      ).resolves.toMatchObject({ published: false });
-      expect(limited.calls).toHaveLength(0);
-    } finally {
-      await limitedService.close();
-      limited.agent.close();
-      await env.close();
+      await f.close();
     }
   });
 });

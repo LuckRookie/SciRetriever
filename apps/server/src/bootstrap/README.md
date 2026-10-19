@@ -9,7 +9,7 @@
 
 ## 模型与能力运行时
 
-`createApplication()` 通过现有配置与 Network 构造 `AgentRuntime`，同时组装最小进程内 DSH capability runtime。Browser factory 注入绑定文章身份的能力；Analysis 继续共享单次模型入口。创建 Application 不会因此发送模型请求、读取 DSH 个人配置或打开 Browser 页面。普通推理与压缩的实际派发都使用相同模型绑定与 Network；关闭先结清 Browser/业务工作和能力会话，再关闭共享网络与底层资源。
+`createApplication()` 通过现有配置与 Network 构造唯一的 `DshAgentRuntime`，惰性组装最小进程内 DSH 基础。Browser factory 注入绑定文章身份的能力；单篇/长文 Analysis 与综合使用固定材料阅读会话，原子模型消费者共享同一底座。创建 Application 不会因此发送模型请求、读取 DSH 个人配置或打开 Browser 页面。普通推理与压缩的实际派发都使用相同模型绑定与 Network；关闭先结清 Browser/业务工作和能力会话，再关闭共享网络与底层资源。
 
 ## 工作台启动
 

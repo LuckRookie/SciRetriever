@@ -20,7 +20,7 @@ import {
   createApplication,
   type Application,
 } from "../src/bootstrap/application.js";
-import { createBrowserDecision } from "../src/browser/decision.js";
+import { browserDecisionFixture } from "./browser-decision-fixture.js";
 import { exportArtifact } from "../src/entry/artifact-export.js";
 import { BrowserArticleScheduler } from "../src/entry/browser-scheduler.js";
 import { verifyInstalledCloakRuntime } from "../src/configuration/cloak-runtime.js";
@@ -220,7 +220,7 @@ it
     const workbench = new ProductionWorkbenchSession(
       papers[0]!.literature.literature_id,
       (o, f, s, g, t, h, feedback, lifecycle) =>
-        createBrowserDecision(app!.agents)(
+        browserDecisionFixture(app!.agents)(
           o,
           f,
           s,

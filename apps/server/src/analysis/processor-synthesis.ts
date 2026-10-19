@@ -8,8 +8,8 @@ import {
   type ProcessorRecord,
 } from "@sciretriever/contracts";
 import { type KnowledgeAnalysisService } from "./knowledge.js";
-import { longMethodParameters } from "./knowledge-long.js";
-import { documentManifest, questionSpec } from "./processor-legacy.js";
+import { documentAnalysisParameters } from "./knowledge-session.js";
+import { documentManifest, questionSpec } from "./processor-knowledge.js";
 import { processorError, type Processor } from "./processor.js";
 
 const PROMPT =
@@ -49,7 +49,10 @@ export function synthesisProcessor(
     definition: processorJson({
       prompt: PROMPT,
       response_schema: SCHEMA,
-      document_method: longMethodParameters(undefined, "bound-separately"),
+      document_method: documentAnalysisParameters(
+        undefined,
+        "bound-separately",
+      ),
     }),
     spec_schema: {
       type: "object",

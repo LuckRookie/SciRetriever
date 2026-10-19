@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { runDshTask, taskAccounting } from "../agents/dsh/task.js";
 import {
   createInputManifest,
   extractionCanonicalJsonBytes,
@@ -18,14 +18,14 @@ import {
   type SynthesisInputItem,
   type SynthesisStatement,
 } from "@sciretriever/contracts";
-import type { AgentRuntime } from "../agents/runtime.js";
-import { AgentFailure, type AgentCall } from "../agents/protocol.js";
+import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
+import { AgentFailure } from "../agents/protocol.js";
 import type { DocumentReadService } from "../document/read.js";
 import {
-  analyzeLongDocument,
-  longMethodParameters,
-  type SharedLongCallBudget,
-} from "./knowledge-long.js";
+  analyzeDocumentSession,
+  documentAnalysisParameters,
+  type AnalysisAccounting,
+} from "./knowledge-session.js";
 import { KnowledgeAnalysisFailure } from "./knowledge.js";
 import {
   SynthesisPreparationError,
@@ -37,12 +37,11 @@ import {
   type SynthesisReadSession,
 } from "../storage/synthesis.js";
 
-const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const METHOD_ID = "collection-knowledge-synthesis";
-const METHOD_VERSION = "2";
+const METHOD_VERSION = "3";
 const PROMPT =
-  "Synthesize the supplied candidates for the question in your own words. Combine related findings and remove repetition. Preserve important conditions, quantities, uncertainty, limitations and disagreements in meaning. source_ids must name supplied candidates supporting each statement. independent_literature_ids give the actual independent papers; multiple versions or summaries of one paper are one source. A single statement may describe a disagreement. Return only JSON.";
+  "Synthesize the supplied candidates for the question in your own words. Combine related findings and remove repetition. Preserve important conditions, quantities, uncertainty, limitations and disagreements in meaning. source_ids must name supplied candidates supporting each statement. independent_literature_ids give the actual independent papers; multiple versions or summaries of one paper are one source. A single statement may describe a disagreement. Write coherent Chinese prose with original scientific terms and units. Use read_candidate and read_evidence to verify uncertain claims. Submit the final synthesis with submit_result.";
 
 export async function synthesisMethodParameters(
   _legacyBudget: KnowledgeSynthesisRequest["budget"],
@@ -52,7 +51,7 @@ export async function synthesisMethodParameters(
     method_id: METHOD_ID,
     method_version: METHOD_VERSION,
     local_method_parameters_sha256: await sha256(
-      canonical(longMethodParameters(undefined, bindingHash), 32768),
+      canonical(documentAnalysisParameters(undefined, bindingHash), 32768),
     ),
     merge_prompt: PROMPT,
     merge_schema: responseSchema(),
@@ -198,7 +197,7 @@ interface AnnotatedCandidate extends Candidate {
     readonly compression_depth: number;
   }[];
 }
-interface Ledger extends SharedLongCallBudget {
+interface Ledger extends AnalysisAccounting {
   source_bytes: number;
 }
 function selections(items: readonly SynthesisInputItem[]) {
@@ -249,7 +248,7 @@ export class KnowledgeSynthesisService {
   private closing: Promise<void> | undefined;
   constructor(
     private readonly documents: DocumentReadService,
-    private readonly agents: AgentRuntime,
+    private readonly agents: DshAgentRuntime,
     private readonly preparation: SynthesisPreparationService,
     private readonly storage: SqliteSynthesisStorage,
   ) {}
@@ -621,7 +620,7 @@ export class KnowledgeSynthesisService {
         question: request.question,
         default_update: null,
       };
-      const analyzed = await analyzeLongDocument(
+      const analyzed = await analyzeDocumentSession(
         longRequest,
         this.documents,
         this.agents,
@@ -725,68 +724,213 @@ export class KnowledgeSynthesisService {
     signal: AbortSignal,
   ): Promise<SynthesisContent> {
     if (signal.aborted) fail("synthesis-cancelled");
-    let call: AgentCall;
-    let bytes: Uint8Array;
-    try {
-      const user = decoder.decode(
-        canonical(
-          {
-            question: request.question,
-            candidates: candidates.map((candidate) => ({
-              id: candidate.id,
-              category: candidate.category,
-              epistemic: candidate.epistemic,
-              text: candidate.text,
-              conditions: candidate.conditions,
-              quantity: candidate.quantity,
-              independent_literature_ids: candidate.independent_literature_ids,
-              source_layers: candidate.source_layers,
-            })),
-          },
-          1024 * 1024,
-        ),
+    const payload = {
+      question: request.question,
+      candidates: candidates.map((candidate) => ({
+        id: candidate.id,
+        category: candidate.category,
+        epistemic: candidate.epistemic,
+        text: candidate.text,
+        conditions: candidate.conditions,
+        quantity: candidate.quantity,
+        independent_literature_ids: candidate.independent_literature_ids,
+        source_layers: candidate.source_layers,
+      })),
+    };
+    const bytes = canonical(payload, 1024 * 1024);
+    let accepted: SynthesisContent | undefined;
+    const accounting = taskAccounting();
+    const acceptContent = (
+      value: Record<string, unknown>,
+    ): SynthesisContent => {
+      let response: Record<string, unknown>;
+      try {
+        response = exact(
+          JSON.parse(decoder.decode(canonical(value, 512 * 1024))) as unknown,
+          ["title", "statements"],
+        );
+      } catch (error) {
+        throw new SynthesisExecutionFailure("synthesis-response", {
+          cause: error,
+        });
+      }
+      if (!Array.isArray(response.statements) || response.statements.length < 1)
+        fail("synthesis-response");
+      const byId = new Map(
+        candidates.map((candidate) => [candidate.id, candidate]),
       );
-      const userBytes = encoder.encode(user);
-      call = {
-        role: "analysis",
-        required_capabilities: ["structured_text"],
-        input_sha256: createHash("sha256").update(userBytes).digest("hex"),
-        messages: [
-          {
-            role: "system",
-            parts: [{ media_type: "text/plain", text: PROMPT }],
-          },
-          {
-            role: "user",
-            parts: [{ media_type: "application/json", text: user }],
-          },
-        ],
-        response_schema: schema,
-      };
-      bytes = canonical(call, 1024 * 1024);
-    } catch (error) {
-      throw new SynthesisExecutionFailure("synthesis-request-limit", {
-        cause: error,
+      const statements = response.statements.map((entry) => {
+        const r = exact(entry, [
+          "statement_id",
+          "category",
+          "epistemic",
+          "relation",
+          "conflict_group_id",
+          "text",
+          "conditions",
+          "quantity",
+          "source_ids",
+        ]);
+        if (!Array.isArray(r.source_ids) || r.source_ids.length < 1)
+          fail("synthesis-response");
+        const sources: AnnotatedCandidate[] = [];
+        for (const id of r.source_ids) {
+          if (typeof id !== "string" || !byId.has(id))
+            fail("synthesis-response");
+          sources.push(byId.get(id)!);
+        }
+        if (typeof r.text !== "string") fail("synthesis-response");
+        const evidence = [
+          ...new Map(
+            sources
+              .flatMap((source) => source.evidence)
+              .map((item) => [JSON.stringify(item), item]),
+          ).values(),
+        ];
+        return {
+          statement_id: r.statement_id,
+          category: r.category,
+          epistemic: r.epistemic,
+          relation: r.relation,
+          conflict_group_id: r.conflict_group_id,
+          text: r.text,
+          conditions: r.conditions,
+          quantity: r.quantity,
+          evidence,
+        };
       });
-    }
-    ledger.calls++;
-    ledger.canonical_call_bytes += bytes.length;
+      try {
+        return parseSynthesisContent({
+          schema_version: 2,
+          title: response.title,
+          statements,
+        });
+      } catch (error) {
+        throw new SynthesisExecutionFailure("synthesis-response", {
+          cause: error,
+        });
+      }
+    };
     let result;
     try {
-      result = await this.agents.execute(call, signal);
+      result = await runDshTask(
+        this.agents,
+        {
+          system: PROMPT,
+          accounting,
+          accept(value) {
+            accepted = acceptContent(value);
+          },
+          input: payload,
+          input_sha256: await sha256(bytes),
+          schema,
+          tools: [
+            {
+              name: "read_candidate",
+              description:
+                "Reread a candidate with its fixed source references and source layer. Knowledge-only inputs remain generated evidence, not the original paper.",
+              parameters: {
+                type: "object",
+                properties: { id: { type: "string" } },
+                required: ["id"],
+                additionalProperties: false,
+              },
+            },
+            {
+              name: "read_evidence",
+              description:
+                "Read a candidate's original fixed document evidence. Use the returned continuation to read more. Knowledge-only candidates cannot be passed off as direct original evidence.",
+              parameters: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  index: { type: "integer" },
+                  continuation: {
+                    anyOf: [{ type: "string" }, { type: "null" }],
+                  },
+                },
+                required: ["id", "index", "continuation"],
+                additionalProperties: false,
+              },
+            },
+          ],
+          executeTool: async (call, context) => {
+            const candidate = candidates.find(
+              (c) => c.id === call.arguments.id,
+            );
+            let value: unknown;
+            if (!candidate)
+              return {
+                status: "rejected",
+                parts: [
+                  {
+                    media_type: "application/json",
+                    text: '{"error":"unknown-candidate"}',
+                  },
+                ],
+              };
+            if (call.name === "read_candidate") value = candidate;
+            else if (call.name === "read_evidence") {
+              const index = call.arguments.index,
+                continuation = call.arguments.continuation;
+              const evidence =
+                typeof index === "number" && Number.isSafeInteger(index)
+                  ? candidate.evidence[index]
+                  : undefined;
+              if (
+                !evidence ||
+                (continuation !== null && typeof continuation !== "string")
+              )
+                return {
+                  status: "rejected",
+                  parts: [
+                    {
+                      media_type: "application/json",
+                      text: '{"error":"invalid-evidence-selection"}',
+                    },
+                  ],
+                };
+              value =
+                evidence.target_kind === "document"
+                  ? await this.documents.resolveEvidence(
+                      {
+                        evidence: evidence.evidence,
+                        max_bytes: 16384,
+                        continuation,
+                      },
+                      context.signal,
+                    )
+                  : {
+                      status: "knowledge-source-only",
+                      evidence,
+                      claim: candidate.text,
+                    };
+            } else throw new AgentFailure("agent-tool-input");
+            return {
+              status: "success",
+              parts: [
+                { media_type: "application/json", text: JSON.stringify(value) },
+              ],
+            };
+          },
+        },
+        signal,
+      );
     } catch (error) {
       if (signal.aborted) fail("synthesis-cancelled");
+      if (error instanceof SynthesisExecutionFailure) throw error;
       throw new SynthesisExecutionFailure("synthesis-model-failed", {
         cause: error,
         ...(error instanceof AgentFailure
-          ? {
-              reason: /^agent-[a-z-]{1,56}$/.test(error.code)
-                ? error.code
-                : "agent-internal",
-              retryable: error.retryable,
-            }
+          ? { reason: error.code, retryable: error.retryable }
           : {}),
       });
+    } finally {
+      ledger.calls += accounting.calls_dispatched;
+      ledger.canonical_call_bytes += accounting.canonical_call_bytes;
+      ledger.reported_calls += accounting.reported_calls;
+      ledger.reported_input_tokens += accounting.reported_input_tokens;
+      ledger.reported_output_tokens += accounting.reported_output_tokens;
     }
     if (signal.aborted) fail("synthesis-cancelled");
     const usage = result.provenance.usage;
@@ -799,77 +943,7 @@ export class KnowledgeSynthesisService {
       result.provenance.model !== binding.model
     )
       fail("synthesis-response");
-    ledger.reported_calls++;
-    ledger.reported_input_tokens += usage.input_tokens;
-    ledger.reported_output_tokens += usage.output_tokens;
     if (result.kind !== "structured") fail("synthesis-response");
-    let response: Record<string, unknown>;
-    try {
-      response = exact(
-        JSON.parse(
-          decoder.decode(canonical(result.value, 512 * 1024)),
-        ) as unknown,
-        ["title", "statements"],
-      );
-    } catch (error) {
-      throw new SynthesisExecutionFailure("synthesis-response", {
-        cause: error,
-      });
-    }
-    if (!Array.isArray(response.statements) || response.statements.length < 1)
-      fail("synthesis-response");
-    const byId = new Map(
-      candidates.map((candidate) => [candidate.id, candidate]),
-    );
-    const statements = response.statements.map((entry) => {
-      const r = exact(entry, [
-        "statement_id",
-        "category",
-        "epistemic",
-        "relation",
-        "conflict_group_id",
-        "text",
-        "conditions",
-        "quantity",
-        "source_ids",
-      ]);
-      if (!Array.isArray(r.source_ids) || r.source_ids.length < 1)
-        fail("synthesis-response");
-      const sources: AnnotatedCandidate[] = [];
-      for (const id of r.source_ids) {
-        if (typeof id !== "string" || !byId.has(id)) fail("synthesis-response");
-        sources.push(byId.get(id)!);
-      }
-      if (typeof r.text !== "string") fail("synthesis-response");
-      const evidence = [
-        ...new Map(
-          sources
-            .flatMap((source) => source.evidence)
-            .map((item) => [JSON.stringify(item), item]),
-        ).values(),
-      ];
-      return {
-        statement_id: r.statement_id,
-        category: r.category,
-        epistemic: r.epistemic,
-        relation: r.relation,
-        conflict_group_id: r.conflict_group_id,
-        text: r.text,
-        conditions: r.conditions,
-        quantity: r.quantity,
-        evidence,
-      };
-    });
-    try {
-      return parseSynthesisContent({
-        schema_version: 2,
-        title: response.title,
-        statements,
-      });
-    } catch (error) {
-      throw new SynthesisExecutionFailure("synthesis-response", {
-        cause: error,
-      });
-    }
+    return accepted!;
   }
 }

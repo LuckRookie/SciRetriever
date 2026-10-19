@@ -1,8 +1,10 @@
-import { expect, it } from "vitest";
-import type { AgentCall, AgentResult } from "../src/agents/protocol.js";
-import { AgentRuntime } from "../src/agents/runtime.js";
+import { randomUUID } from "node:crypto";
+import type { ModelRequest } from "../src/agents/model-protocol.js";
+import { afterEach, expect, it } from "vitest";
+import type { AgentResult } from "../src/agents/protocol.js";
+import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
 import { browserAgentStopped } from "../src/browser/boundary.js";
-import { createBrowserDecision } from "../src/browser/decision.js";
+import { browserDecisionFixture } from "./browser-decision-fixture.js";
 import { parseWorkbenchObservation } from "@sciretriever/contracts";
 
 const observation = parseWorkbenchObservation({
@@ -36,8 +38,12 @@ const observation = parseWorkbenchObservation({
   remaining: { actions: 5, model_calls: 2, bytes: 1000, deadline_ms: 5000 },
 });
 
-function runtime(result: (call: AgentCall) => AgentResult): AgentRuntime {
-  return new AgentRuntime([
+const opened: DshAgentRuntime[] = [];
+afterEach(async () => {
+  await Promise.all(opened.splice(0).map((a) => a.close()));
+});
+function runtime(result: (call: ModelRequest) => AgentResult): DshAgentRuntime {
+  const agent = new DshAgentRuntime([
     {
       role: "browser",
       provider: "fixture-provider",
@@ -50,14 +56,38 @@ function runtime(result: (call: AgentCall) => AgentResult): AgentRuntime {
       adapter: {
         provider: "fixture-provider",
         model: "fixture-model",
-        execute: async (call) => result(call),
+        execute: async () => {
+          throw new Error("Unexpected atomic call");
+        },
+        executeModel: async (call, _options, _signal, lifecycle) => {
+          lifecycle?.onDispatched();
+          const value = result(call);
+          if (value.kind !== "tool") throw new Error("Expected tool");
+          return {
+            message: {
+              role: "assistant",
+              parts: [],
+              tool_calls: [
+                {
+                  id: randomUUID(),
+                  name: value.name,
+                  arguments: value.arguments,
+                },
+              ],
+            },
+            stop_reason: "tool_calls",
+            provenance: value.provenance,
+          };
+        },
       },
     },
   ]);
+  opened.push(agent);
+  return agent;
 }
 
 it("composes an image-bound Browser decision and admits only the six closed actions", async () => {
-  let captured: AgentCall | undefined;
+  let captured: ModelRequest | undefined;
   const agents = runtime((call) => {
     captured = call;
     return {
@@ -78,7 +108,7 @@ it("composes an image-bound Browser decision and admits only the six closed acti
     };
   });
   await expect(
-    createBrowserDecision(agents)(
+    browserDecisionFixture(agents)(
       observation,
       new Uint8Array([1, 2]),
       new AbortController().signal,
@@ -165,7 +195,7 @@ it("composes an image-bound Browser decision and admits only the six closed acti
     },
   }));
   await expect(
-    createBrowserDecision(unsafe)(
+    browserDecisionFixture(unsafe)(
       observation,
       null,
       new AbortController().signal,
@@ -187,11 +217,15 @@ function decisionResult(arguments_: Record<string, unknown>): AgentResult {
 }
 
 it("omits the legacy byte projection from the Agent budget and hashes only the actual model input", async () => {
-  const calls: AgentCall[] = [];
-  const decide = createBrowserDecision(
+  const calls: ModelRequest[] = [];
+  const decide = browserDecisionFixture(
     runtime((call) => {
       calls.push(call);
-      return decisionResult({ kind: "stop", reason: "user" });
+      return decisionResult({
+        kind: "stop",
+        reason: "no-viable-path",
+        explanation: "No available article route.",
+      });
     }),
   );
   for (const bytes of [0, 16 * 1024 * 1024]) {
@@ -202,9 +236,8 @@ it("omits the legacy byte projection from the Agent budget and hashes only the a
     await decide(publicObservation, null, new AbortController().signal);
     expect(publicObservation.remaining.bytes).toBe(bytes);
     const payload = calls.at(-1)!.messages[1]!.parts[0]!;
-    expect(payload.media_type).toBe("application/json");
-    if (payload.media_type !== "application/json")
-      throw new Error("Missing Agent observation");
+    expect(payload.media_type).toBe("text/plain");
+    if (!("text" in payload)) throw new Error("Missing Agent observation");
     expect(
       (JSON.parse(payload.text) as { remaining: unknown }).remaining,
     ).toEqual({
@@ -222,7 +255,11 @@ it.each([
   { kind: "scroll-surface", delta_x: 0, delta_y: 500, revision: 2 },
   { kind: "go-back", revision: 2 },
   { kind: "wait-for-change", timeout_ms: 500, revision: 2 },
-  { kind: "stop", reason: "user" },
+  {
+    kind: "stop",
+    reason: "no-viable-path",
+    explanation: "No available article route.",
+  },
   {
     kind: "stop",
     reason: "access-unavailable",
@@ -238,7 +275,7 @@ it.each([
 ])("accepts the exact discriminated fields for $kind", async (action) => {
   const agents = runtime(() => decisionResult(action));
   await expect(
-    createBrowserDecision(agents)(
+    browserDecisionFixture(agents)(
       observation,
       null,
       new AbortController().signal,
@@ -255,7 +292,7 @@ it("accepts a parsed action without wire-only null fields", async () => {
     }),
   );
   await expect(
-    createBrowserDecision(agents)(
+    browserDecisionFixture(agents)(
       observation,
       null,
       new AbortController().signal,
@@ -269,17 +306,31 @@ it("accepts a parsed action without wire-only null fields", async () => {
 
 it.each([
   { kind: "type-text", element_id: "element-1", revision: 2 },
-  { kind: "stop", reason: "user", url: null },
-  { kind: "stop", reason: "user", revision: 2 },
+  {
+    kind: "stop",
+    reason: "no-viable-path",
+    explanation: "No available article route.",
+    url: null,
+  },
+  {
+    kind: "stop",
+    reason: "no-viable-path",
+    explanation: "No available article route.",
+    revision: 2,
+  },
   { kind: "click-element", revision: 2 },
   { kind: "click-point", x: -1, y: 2, revision: 2, viewport_version: 3 },
-  { kind: null, reason: "user" },
+  {
+    kind: null,
+    reason: "no-viable-path",
+    explanation: "No available article route.",
+  },
 ])(
   "rejects undeclared, incomplete or invalid strict actions (%j)",
   async (action) => {
     const agents = runtime(() => decisionResult(action));
     await expect(
-      createBrowserDecision(agents)(
+      browserDecisionFixture(agents)(
         observation,
         null,
         new AbortController().signal,
@@ -289,13 +340,19 @@ it.each([
 );
 
 it("binds the model goal and input hash to the article identifier and version", async () => {
-  const calls: AgentCall[] = [];
+  const calls: ModelRequest[] = [];
   const agents = runtime((call) => {
     calls.push(call);
     return {
       kind: "tool",
       name: "browser_action",
-      arguments: { action: { kind: "stop", reason: "user" } },
+      arguments: {
+        action: {
+          kind: "stop",
+          reason: "no-viable-path",
+          explanation: "No available article route.",
+        },
+      },
       provenance: {
         provider: "fixture-provider",
         model: "fixture-model",
@@ -303,7 +360,7 @@ it("binds the model goal and input hash to the article identifier and version", 
       },
     };
   });
-  const decide = createBrowserDecision(agents);
+  const decide = browserDecisionFixture(agents);
   const target = {
     literature_id: observation.article_id,
     identifier: "doi:10.5555/target",
@@ -313,9 +370,7 @@ it("binds the model goal and input hash to the article identifier and version", 
   const signal = new AbortController().signal;
   await decide(observation, null, signal, [], target);
   const context = calls[0]!.messages[1]!.parts.flatMap((part) =>
-    part.media_type === "application/json"
-      ? [JSON.parse(part.text) as unknown]
-      : [],
+    "text" in part ? [JSON.parse(part.text) as unknown] : [],
   );
   expect(context).toHaveLength(2);
   expect(context[0]).toEqual({
@@ -348,10 +403,10 @@ it("binds the model goal and input hash to the article identifier and version", 
   await decide(observation, null, signal, [], metadataTarget);
   const metadataContext = calls
     .at(-1)!
-    .messages[1]!.parts.filter((part) => part.media_type === "application/json")
+    .messages[1]!.parts.filter((part) => "text" in part)
     .at(-1);
   expect(
-    metadataContext && metadataContext.media_type === "application/json"
+    metadataContext && "text" in metadataContext
       ? JSON.parse(metadataContext.text)
       : null,
   ).toEqual({
@@ -379,13 +434,15 @@ it("binds the model goal and input hash to the article identifier and version", 
     version: "preprint",
   });
   await decide(observation, null, signal, ["Use the PDF button"], target);
-  expect(new Set(calls.map((call) => call.input_sha256)).size).toBe(5);
+  expect(new Set(calls.map((call) => JSON.stringify(call.messages))).size).toBe(
+    5,
+  );
   await expect(
     decide(observation, null, signal, [], {
       ...target,
       literature_id: "other-article",
     }),
-  ).rejects.toThrow("target does not match");
+  ).rejects.toMatchObject({ code: "browser-agent-identity" });
   expect(calls).toHaveLength(5);
 });
 

@@ -18,7 +18,7 @@ import {
   type ProcessorStore,
   type StoredProcessorResult,
 } from "../src/analysis/processor.js";
-import { registerLegacyProcessors } from "../src/analysis/processor-legacy.js";
+import { registerKnowledgeProcessors } from "../src/analysis/processor-knowledge.js";
 import { synthesisProcessor } from "../src/analysis/processor-synthesis.js";
 
 describe("processor adapters", () => {
@@ -114,7 +114,7 @@ describe("processor adapters", () => {
         publishCollection: async () => randomUUID(),
       };
       const registry = new ProcessorRegistry();
-      registerLegacyProcessors(registry, env.app.knowledgeAnalysis);
+      registerKnowledgeProcessors(registry, env.app.knowledgeAnalysis);
       registry.register(synthesisProcessor(env.app.knowledgeAnalysis));
       service = new ProcessorService(
         registry,

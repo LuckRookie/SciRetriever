@@ -12,7 +12,7 @@ import {
   type LiteratureDetail,
   type LiteratureMetadata,
 } from "@sciretriever/contracts";
-import type { AgentRuntime } from "../agents/runtime.js";
+import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
 import type { AgentCall } from "../agents/protocol.js";
 import type { LiteratureArtifactService } from "../literature/artifacts.js";
 import type { FileStore } from "../storage/files/store.js";
@@ -73,7 +73,7 @@ export class AnalysisService {
     private readonly library: { detail(id: string): Promise<LiteratureDetail> },
     private readonly artifacts: LiteratureArtifactService,
     private readonly files: FileStore,
-    private readonly agents: AgentRuntime,
+    private readonly agents: DshAgentRuntime,
     options: AnalysisOptions = {},
   ) {
     if (

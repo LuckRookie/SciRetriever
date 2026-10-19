@@ -148,5 +148,7 @@ export function validateModelRequest(request: ModelRequest): void {
     });
   }
   if (pending.size) invalid();
-  validateAgentCall({ ...request, messages: projected });
+  // DSH manages session length through model context and native compaction.
+  // Keep part, image, tool and pairing limits; do not apply the atomic message count.
+  validateAgentCall({ ...request, messages: projected }, "session");
 }

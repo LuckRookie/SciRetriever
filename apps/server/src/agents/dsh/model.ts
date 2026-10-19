@@ -195,46 +195,47 @@ export class ControlledModelAdapter extends LlmAdapter {
           role: "system",
           parts: [{ media_type: "text/plain", text: options.system }],
         });
-      const result = await this.options.modelCall(
-        {
-          role: this.options.role,
-          messages,
-          required_capabilities: [
-            ...(messages.some((message) =>
-              message.parts.some((part) => "data" in part),
-            )
-              ? ["image_input" as const]
-              : []),
-            ...(options.tools?.length ? ["tool_decision" as const] : []),
-          ],
-          input_sha256: this.options.input_sha256,
-          ...(options.tools?.length ? { tools: options.tools } : {}),
-          ...(options.maxTokens === undefined
-            ? {}
-            : {
-                max_output_tokens: Math.min(
-                  options.maxTokens,
-                  options.purpose === "compaction"
-                    ? this.options.modelContext.max_output_tokens
-                    : (this.options.max_output_tokens ??
-                        this.options.modelContext.max_output_tokens),
-                ),
-              }),
-          tool_choice:
-            options.purpose === "compaction"
-              ? "none"
-              : (this.options.tool_choice ?? "auto"),
+      const request = {
+        role: this.options.role,
+        messages,
+        required_capabilities: [
+          ...(messages.some((message) =>
+            message.parts.some((part) => "data" in part),
+          )
+            ? ["image_input" as const]
+            : []),
+          ...(options.tools?.length ? ["tool_decision" as const] : []),
+        ],
+        input_sha256: this.options.input_sha256,
+        ...(options.tools?.length ? { tools: options.tools } : {}),
+        ...(options.maxTokens === undefined ||
+        (this.options.role === "analysis" &&
+          this.options.max_output_tokens === undefined)
+          ? {}
+          : {
+              max_output_tokens: Math.min(
+                options.maxTokens,
+                options.purpose === "compaction"
+                  ? this.options.modelContext.max_output_tokens
+                  : (this.options.max_output_tokens ??
+                      this.options.modelContext.max_output_tokens),
+              ),
+            }),
+        tool_choice:
+          options.purpose === "compaction"
+            ? "none"
+            : (this.options.tool_choice ?? "auto"),
+      } satisfies import("../model-protocol.js").ModelRequest;
+      lifecycle?.onRequest?.(request);
+      const result = await this.options.modelCall(request, signal, {
+        onDispatched: () => {
+          lifecycle?.onDispatched();
+          dispatchedAt = Date.now();
+          logger.info("model_request_dispatched", identity);
         },
-        signal,
-        {
-          onDispatched: () => {
-            lifecycle?.onDispatched();
-            dispatchedAt = Date.now();
-            logger.info("model_request_dispatched", identity);
-          },
-        },
-      );
+      });
       tokens = result.provenance.usage;
+      lifecycle?.onUsage?.(tokens);
       signal.throwIfAborted();
       const batchIds = new Set<string>();
       for (const call of result.message.tool_calls ?? []) {

@@ -11,7 +11,7 @@ import {
   knowledgeMethodDefinition,
   type KnowledgeAnalysisService,
 } from "./knowledge.js";
-import { longMethodParameters } from "./knowledge-long.js";
+import { documentAnalysisParameters } from "./knowledge-session.js";
 import {
   processorError,
   type Processor,
@@ -44,7 +44,7 @@ export function onlyDocument(
     processorError("processor-document-required");
   return input;
 }
-export function registerLegacyProcessors(
+export function registerKnowledgeProcessors(
   registry: ProcessorRegistry,
   service: KnowledgeAnalysisService | null,
 ): void {
@@ -59,7 +59,7 @@ export function registerLegacyProcessors(
       output_kind: "knowledge",
       definition: processorJson(
         long
-          ? longMethodParameters(undefined, "bound-separately")
+          ? documentAnalysisParameters(undefined, "bound-separately")
           : knowledgeMethodDefinition(),
       ),
       spec_schema: {

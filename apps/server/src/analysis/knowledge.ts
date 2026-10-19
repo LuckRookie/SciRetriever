@@ -1,53 +1,41 @@
-import { createHash } from "node:crypto";
 import {
   extractionCanonicalJsonBytes,
   knowledgeComparisonSha256,
   knowledgeContentBytes,
   knowledgeQuestionSha256,
-  parseEvidenceRef,
   parseKnowledgeAnalysisRequest,
   parseKnowledgeLongAnalysisRequest,
   parseKnowledgeAnalysisReceipt,
   parseKnowledgeArtifact,
-  parseKnowledgeContent,
   sha256,
   type KnowledgeAnalysisReceipt,
   type KnowledgeAnalysisRequest,
   type KnowledgeLongAnalysisRequest,
-  type KnowledgeContent,
   type KnowledgeArtifact,
-  type KnowledgeStatement,
 } from "@sciretriever/contracts";
-import type { AgentRuntime } from "../agents/runtime.js";
-import type { AgentCall } from "../agents/protocol.js";
-import { AgentFailure } from "../agents/protocol.js";
+import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
 import type { DocumentReadService } from "../document/read.js";
 import type { KnowledgeStoragePort } from "./knowledge-port.js";
 import { WriteAdmissionError } from "../storage/write-admission.js";
 import {
-  analyzeLongDocument,
-  LONG_METHOD_ID,
-  LONG_METHOD_VERSION,
-  longMethodParameters,
-} from "./knowledge-long.js";
-
-const METHOD_ID = "single-document-knowledge";
-const METHOD_VERSION = "2";
-const SYSTEM_PROMPT =
-  "Analyze the entire supplied document for the stated purpose. Preserve source conditions, negation, quantities, units, limitations, and disagreements. Distinguish author reports from your inference. Cite only supplied segment IDs. If the document cannot answer the purpose, return not_applicable. Return only the required JSON object.";
-const decoder = new TextDecoder("utf-8", { fatal: true });
-const encoder = new TextEncoder();
-
-/** The processor adapter fingerprints the same policy as the legacy entry. */
+  analyzeDocumentSession,
+  documentAnalysisParameters,
+  DOCUMENT_ANALYSIS_METHOD,
+  DOCUMENT_ANALYSIS_VERSION,
+} from "./knowledge-session.js";
 export function knowledgeMethodDefinition(): object {
-  return {
-    method_id: METHOD_ID,
-    method_version: METHOD_VERSION,
-    prompt: SYSTEM_PROMPT,
-    response_schema: modelSchema(),
-  };
+  return documentAnalysisParameters(undefined, "bound-separately");
 }
-
+function canonical(value: unknown, maxBytes = 1024 * 1024): Uint8Array {
+  return extractionCanonicalJsonBytes(value, maxBytes, {
+    maxDepth: 32,
+    maxNodes: 20480,
+    maxArrayLength: 20480,
+  });
+}
+function uuid(hash: string): string {
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
+}
 export interface KnowledgeCallAccounting {
   readonly calls_dispatched: number;
   readonly canonical_call_bytes: number;
@@ -78,30 +66,7 @@ export class KnowledgeAnalysisFailure extends Error {
 function fail(code: string): never {
   throw new KnowledgeAnalysisFailure(code);
 }
-function canonical(value: unknown, maxBytes = 1024 * 1024): Uint8Array {
-  return extractionCanonicalJsonBytes(value, maxBytes, {
-    maxDepth: 32,
-    maxNodes: 20480,
-    maxArrayLength: 20480,
-  });
-}
-function uuid(hash: string): string {
-  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
-}
-function shape(
-  value: unknown,
-  keys: readonly string[],
-): Record<string, unknown> {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    keys.some((key) => !Object.hasOwn(value, key))
-  )
-    fail("knowledge-response");
-  return value as Record<string, unknown>;
-}
-function modelSchema(): Record<string, unknown> {
+export function knowledgeResponseSchema(): Record<string, unknown> {
   const string = { type: "string" };
   const nullableString = { anyOf: [string, { type: "null" }] };
   return {
@@ -162,38 +127,31 @@ function modelSchema(): Record<string, unknown> {
     required: ["outcome", "title", "statements"],
   };
 }
-
 export class KnowledgeAnalysisService {
   private readonly stop = new AbortController();
   private readonly active = new Set<Promise<unknown>>();
   private closing: Promise<void> | undefined;
   constructor(
     private readonly documents: DocumentReadService,
-    private readonly agents: AgentRuntime,
+    private readonly agents: DshAgentRuntime,
     private readonly storage: KnowledgeStoragePort,
   ) {}
-
   analyze(
     value: unknown,
     signal?: AbortSignal,
   ): Promise<KnowledgeAnalysisReceipt> {
-    if (this.stop.signal.aborted)
-      return Promise.reject(new KnowledgeAnalysisFailure("knowledge-closed"));
-    // Own the supplied request before the first suspension, including nested arrays.
-    const operation = this.execute(value, signal);
-    this.active.add(operation);
-    void operation
-      .finally(() => this.active.delete(operation))
-      .catch(() => undefined);
-    return operation;
+    return this.start(value, false, signal);
   }
   analyzeLong(
     value: unknown,
     signal?: AbortSignal,
   ): Promise<KnowledgeAnalysisReceipt> {
+    return this.start(value, true, signal);
+  }
+  private start(value: unknown, long: boolean, signal?: AbortSignal) {
     if (this.stop.signal.aborted)
       return Promise.reject(new KnowledgeAnalysisFailure("knowledge-closed"));
-    const operation = this.executeLong(value, signal);
+    const operation = this.execute(value, long, signal);
     this.active.add(operation);
     void operation
       .finally(() => this.active.delete(operation))
@@ -209,11 +167,14 @@ export class KnowledgeAnalysisService {
   }
   private async execute(
     value: unknown,
+    long: boolean,
     signal?: AbortSignal,
   ): Promise<KnowledgeAnalysisReceipt> {
-    let request: KnowledgeAnalysisRequest;
+    let request: KnowledgeAnalysisRequest | KnowledgeLongAnalysisRequest;
     try {
-      request = await parseKnowledgeAnalysisRequest(value);
+      request = long
+        ? await parseKnowledgeLongAnalysisRequest(value)
+        : await parseKnowledgeAnalysisRequest(value);
     } catch (error) {
       throw new KnowledgeAnalysisFailure("knowledge-input", { cause: error });
     }
@@ -222,23 +183,28 @@ export class KnowledgeAnalysisService {
       : this.stop.signal;
     if (active.aborted) fail("knowledge-cancelled");
     const readiness = this.agents.readiness("analysis");
-    if (!readiness.configured || readiness.missing.length)
+    if (
+      !readiness.configured ||
+      readiness.missing.length ||
+      !this.agents.supports("analysis", "tool_decision")
+    )
       fail("knowledge-unconfigured");
     const binding = this.agents.effectiveIdentity("analysis");
-    const bindingHash = await sha256(canonical(binding, 16384));
-    const schema = modelSchema();
-    const parameters = {
-      method_id: METHOD_ID,
-      method_version: METHOD_VERSION,
-      prompt: SYSTEM_PROMPT,
-      response_schema: schema,
-      model_binding_sha256: bindingHash,
-    };
-    const parametersHash = await sha256(canonical(parameters, 32768));
+    const bindingHash = await sha256(
+      canonical(
+        {
+          ...binding,
+          image_input: this.agents.supports("analysis", "image_input"),
+        },
+        16384,
+      ),
+    );
     const method = {
-      id: METHOD_ID,
-      version: METHOD_VERSION,
-      parameters_sha256: parametersHash,
+      id: DOCUMENT_ANALYSIS_METHOD,
+      version: DOCUMENT_ANALYSIS_VERSION,
+      parameters_sha256: await sha256(
+        canonical(documentAnalysisParameters(undefined, bindingHash), 32768),
+      ),
       model_binding_sha256: bindingHash,
     };
     const comparisonHash = await knowledgeComparisonSha256({
@@ -247,224 +213,22 @@ export class KnowledgeAnalysisService {
       question: request.question,
       method,
     });
-    const item = request.input.items[0]!;
     const questionHash = await knowledgeQuestionSha256(request.question);
     const existing = await this.storage.byComparison(comparisonHash, active);
     if (existing)
       return this.finish(existing, false, request, questionHash, active);
-    if (active.aborted) fail("knowledge-cancelled");
-    const document = item.document!;
-    const material = item.material!;
-    let documentInput: {
-      readonly text: string;
-      readonly source_bytes: Uint8Array;
-      readonly segments: readonly {
-        id: string;
-        start: number;
-        end: number;
-        hash: string;
-      }[];
-      readonly gaps: readonly string[];
-    };
-    try {
-      const read = await this.documents.withVerifiedVersion(
-        document.document_version_id,
-        async (version, bytes, structure) => {
-          if (
-            version.representation_sha256 !== document.representation_sha256 ||
-            version.source_material_ref.asset_id !== material.asset_id ||
-            version.source_material_ref.asset_sha256 !==
-              material.asset_sha256 ||
-            version.source_material_ref.literature_id !== item.literature_id
-          )
-            fail("knowledge-input-invalidated");
-          const segments = await Promise.all(
-            structure.segments.map(async (segment) => ({
-              id: segment.segment_id,
-              start: segment.start_utf8,
-              end: segment.end_utf8,
-              hash: await sha256(
-                bytes.subarray(segment.start_utf8, segment.end_utf8),
-              ),
-            })),
-          );
-          const texts = segments.map((segment) => ({
-            segment_id: segment.id,
-            text: decoder.decode(bytes.subarray(segment.start, segment.end)),
-          }));
-          let prompt: Uint8Array;
-          try {
-            prompt = canonical({
-              purpose: request.purpose,
-              question: request.question,
-              document_version_id: document.document_version_id,
-              representation_sha256: document.representation_sha256,
-              segments: texts,
-            });
-          } catch (error) {
-            return { request_error: error };
-          }
-          return {
-            text: decoder.decode(prompt),
-            source_bytes: bytes,
-            segments,
-            gaps: [
-              "table-structure-unavailable",
-              "figure-caption-unavailable",
-              "page-location-unavailable",
-              "bbox-unavailable",
-            ],
-          };
-        },
-        active,
-      );
-      if ("request_error" in read)
-        throw new KnowledgeAnalysisFailure("knowledge-request-limit", {
-          cause: read.request_error,
-        });
-      documentInput = read;
-    } catch (error) {
-      if (error instanceof KnowledgeAnalysisFailure) throw error;
-      if (active.aborted) fail("knowledge-cancelled");
-      throw new KnowledgeAnalysisFailure("knowledge-input-invalidated", {
-        cause: error,
-      });
-    }
-    if (active.aborted) fail("knowledge-cancelled");
-    const userBytes = encoder.encode(documentInput.text);
-    const schemaBytes = canonical(schema, 32768);
-    const systemBytes = encoder.encode(SYSTEM_PROMPT);
-    if (
-      userBytes.length > 1024 * 1024 ||
-      systemBytes.length > 1024 * 1024 ||
-      schemaBytes.length > 32768
-    )
-      fail("knowledge-request-limit");
-    const call: AgentCall = {
-      role: "analysis",
-      required_capabilities: ["structured_text"],
-      input_sha256: createHash("sha256").update(userBytes).digest("hex"),
-      messages: [
-        {
-          role: "system",
-          parts: [{ media_type: "text/plain", text: SYSTEM_PROMPT }],
-        },
-        {
-          role: "user",
-          parts: [{ media_type: "application/json", text: documentInput.text }],
-        },
-      ],
-      response_schema: schema,
-    };
-    let result;
-    try {
-      result = await this.agents.execute(call, active);
-    } catch (error) {
-      if (active.aborted) fail("knowledge-cancelled");
-      throw new KnowledgeAnalysisFailure("knowledge-model-failed", {
-        cause: error,
-        ...(error instanceof AgentFailure
-          ? {
-              reason: /^agent-[a-z-]{1,56}$/.test(error.code)
-                ? error.code
-                : "agent-internal",
-              retryable: error.retryable,
-            }
-          : {}),
-      });
-    }
-    if (active.aborted) fail("knowledge-cancelled");
-    if (result.kind !== "structured") fail("knowledge-response");
-    let response: Record<string, unknown>;
-    try {
-      response = shape(
-        JSON.parse(
-          decoder.decode(canonical(result.value, 512 * 1024)),
-        ) as unknown,
-        ["outcome", "title", "statements"],
-      );
-    } catch (error) {
-      throw new KnowledgeAnalysisFailure("knowledge-response", {
-        cause: error,
-      });
-    }
-    if (response.outcome === "not_applicable") {
-      if (
-        typeof response.title !== "string" ||
-        !response.title.trim() ||
-        !Array.isArray(response.statements) ||
-        response.statements.length !== 0
-      )
-        fail("knowledge-response");
-      fail("knowledge-not-applicable");
-    }
-    if (
-      response.outcome !== "completed" ||
-      !Array.isArray(response.statements) ||
-      response.statements.length < 1
-    )
-      fail("knowledge-response");
-    const byId = new Map(
-      documentInput.segments.map((segment) => [segment.id, segment]),
+    const analysis = await analyzeDocumentSession(
+      request,
+      this.documents,
+      this.agents,
+      binding,
+      active,
     );
-    let content: KnowledgeContent;
-    try {
-      const statements: KnowledgeStatement[] = response.statements.map(
-        (entry) => {
-          const statement = shape(entry, [
-            "statement_id",
-            "category",
-            "epistemic",
-            "text",
-            "conditions",
-            "quantity",
-            "evidence_segment_ids",
-          ]);
-          if (
-            !Array.isArray(statement.evidence_segment_ids) ||
-            statement.evidence_segment_ids.length < 1
-          )
-            fail("knowledge-invalid-evidence");
-          const evidence = [...new Set(statement.evidence_segment_ids)].map(
-            (id) => {
-              if (typeof id !== "string") fail("knowledge-invalid-evidence");
-              const segment = byId.get(id);
-              if (!segment) fail("knowledge-invalid-evidence");
-              return parseEvidenceRef({
-                schema_version: 1,
-                target_kind: "document",
-                locator_scheme: "utf8-segment-v1",
-                document_version_id: document.document_version_id,
-                representation_sha256: document.representation_sha256,
-                locator: { kind: "segment", segment_id: id },
-                content_sha256: segment.hash,
-              });
-            },
-          );
-          return {
-            statement_id: statement.statement_id,
-            category: statement.category,
-            epistemic: statement.epistemic,
-            text: statement.text,
-            conditions: statement.conditions,
-            quantity: statement.quantity,
-            evidence,
-          } as KnowledgeStatement;
-        },
-      );
-      content = parseKnowledgeContent({
-        schema_version: 1,
-        title: response.title,
-        statements,
-      });
-    } catch (error) {
-      if (error instanceof KnowledgeAnalysisFailure) throw error;
-      throw new KnowledgeAnalysisFailure("knowledge-response", {
-        cause: error,
-      });
-    }
-    const contentBytes = knowledgeContentBytes(content);
-    const contentHash = await sha256(contentBytes);
+    if (active.aborted) fail("knowledge-cancelled");
+    if (!analysis.content) fail("knowledge-not-applicable");
+    const item = request.input.items[0]!,
+      document = item.document!,
+      contentBytes = knowledgeContentBytes(analysis.content);
     const artifact = await parseKnowledgeArtifact({
       schema_version: 1,
       artifact_id: uuid(comparisonHash),
@@ -474,27 +238,27 @@ export class KnowledgeAnalysisService {
       input: request.input,
       method,
       content_ref: {
-        sha256: contentHash,
+        sha256: await sha256(contentBytes),
         byte_size: contentBytes.length,
         media_type: "application/vnd.sciretriever.knowledge+json",
       },
-      content,
+      content: analysis.content,
       coverage: {
         status: "complete",
         input_id: item.input_id,
         document_version_id: document.document_version_id,
-        total_segments: documentInput.segments.length,
-        covered_segments: documentInput.segments.length,
-        total_utf8_bytes: documentInput.source_bytes.length,
-        covered_utf8_bytes: documentInput.source_bytes.length,
-        capability_gaps: documentInput.gaps,
+        total_segments: analysis.segment_count,
+        covered_segments: analysis.segment_count,
+        total_utf8_bytes: analysis.source_bytes,
+        covered_utf8_bytes: analysis.source_bytes,
+        capability_gaps: analysis.gaps,
       },
       provenance: {
-        provider: result.provenance.provider,
-        model: result.provenance.model,
+        provider: analysis.provider,
+        model: analysis.model,
         generated_at: new Date().toISOString(),
-        input_tokens: result.provenance.usage.input_tokens,
-        output_tokens: result.provenance.usage.output_tokens,
+        input_tokens: analysis.input_tokens,
+        output_tokens: analysis.output_tokens,
       },
     });
     let published;
@@ -570,117 +334,5 @@ export class KnowledgeAnalysisService {
       default_update_outcome: outcome,
       default_update_failure: defaultFailure,
     });
-  }
-  private async executeLong(
-    value: unknown,
-    signal?: AbortSignal,
-  ): Promise<KnowledgeAnalysisReceipt> {
-    let request: KnowledgeLongAnalysisRequest;
-    try {
-      request = await parseKnowledgeLongAnalysisRequest(value);
-    } catch (error) {
-      throw new KnowledgeAnalysisFailure("knowledge-input", { cause: error });
-    }
-    const active = signal
-      ? AbortSignal.any([signal, this.stop.signal])
-      : this.stop.signal;
-    if (active.aborted) fail("knowledge-cancelled");
-    const readiness = this.agents.readiness("analysis");
-    if (!readiness.configured || readiness.missing.length)
-      fail("knowledge-unconfigured");
-    const binding = this.agents.effectiveIdentity("analysis");
-    const bindingHash = await sha256(canonical(binding, 16384));
-    const method = {
-      id: LONG_METHOD_ID,
-      version: LONG_METHOD_VERSION,
-      parameters_sha256: await sha256(
-        canonical(longMethodParameters(request.budget, bindingHash), 32768),
-      ),
-      model_binding_sha256: bindingHash,
-    };
-    const comparisonHash = await knowledgeComparisonSha256({
-      manifest_sha256: request.input.manifest_sha256,
-      purpose: request.purpose,
-      question: request.question,
-      method,
-    });
-    const questionHash = await knowledgeQuestionSha256(request.question);
-    const existing = await this.storage.byComparison(comparisonHash, active);
-    if (existing)
-      return this.finish(existing, false, request, questionHash, active);
-    if (active.aborted) fail("knowledge-cancelled");
-    let analysis: Awaited<ReturnType<typeof analyzeLongDocument>>;
-    try {
-      analysis = await analyzeLongDocument(
-        request,
-        this.documents,
-        this.agents,
-        binding,
-        active,
-      );
-    } catch (error) {
-      if (error instanceof KnowledgeAnalysisFailure) throw error;
-      if (active.aborted) fail("knowledge-cancelled");
-      throw new KnowledgeAnalysisFailure("knowledge-input-invalidated", {
-        cause: error,
-      });
-    }
-    if (active.aborted) fail("knowledge-cancelled");
-    const item = request.input.items[0]!;
-    const document = item.document!;
-    const contentBytes = knowledgeContentBytes(analysis.content);
-    const artifact = await parseKnowledgeArtifact({
-      schema_version: 1,
-      artifact_id: uuid(comparisonHash),
-      comparison_sha256: comparisonHash,
-      purpose: request.purpose,
-      question: request.question,
-      input: request.input,
-      method,
-      content_ref: {
-        sha256: await sha256(contentBytes),
-        byte_size: contentBytes.length,
-        media_type: "application/vnd.sciretriever.knowledge+json",
-      },
-      content: analysis.content,
-      coverage: {
-        status: "complete",
-        input_id: item.input_id,
-        document_version_id: document.document_version_id,
-        total_segments: analysis.segment_count,
-        covered_segments: analysis.segment_count,
-        total_utf8_bytes: analysis.source_bytes,
-        covered_utf8_bytes: analysis.source_bytes,
-        capability_gaps: [
-          "table-structure-unavailable",
-          "figure-caption-unavailable",
-          "page-location-unavailable",
-          "bbox-unavailable",
-        ],
-      },
-      provenance: {
-        provider: analysis.provider,
-        model: analysis.model,
-        generated_at: new Date().toISOString(),
-        input_tokens: analysis.input_tokens,
-        output_tokens: analysis.output_tokens,
-      },
-    });
-    let published;
-    try {
-      published = await this.storage.publish(artifact, active);
-    } catch (error) {
-      if (active.aborted) fail("knowledge-cancelled");
-      throw new KnowledgeAnalysisFailure("knowledge-publication", {
-        cause: error,
-      });
-    }
-    return this.finish(
-      published.artifact,
-      published.published,
-      request,
-      questionHash,
-      active,
-    );
   }
 }

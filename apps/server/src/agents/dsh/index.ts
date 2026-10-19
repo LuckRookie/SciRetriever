@@ -240,6 +240,9 @@ class CapabilitySession implements AgentCapabilitySession {
         ),
         ...(status === "failed"
           ? {
+              retryable:
+                binding.error instanceof AgentFailure &&
+                binding.error.retryable,
               error_code:
                 binding.error instanceof AgentFailure
                   ? binding.error.code

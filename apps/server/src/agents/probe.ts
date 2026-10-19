@@ -24,10 +24,7 @@ import {
   type AgentTransport,
   type ReasoningEffort,
 } from "./protocol.js";
-import {
-  DshAgentRuntime as AgentRuntime,
-  type AgentBinding,
-} from "./runtime.js";
+import { DshAgentRuntime, type AgentBinding } from "./dsh/runtime.js";
 import { AnthropicMessagesAdapter } from "./anthropic.js";
 import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "./openai.js";
 
@@ -205,7 +202,7 @@ export interface ProbeAgentRuntimeOptions {
 export function createProbeAgentRuntime(
   target: ProbeModelTarget,
   options: ProbeAgentRuntimeOptions,
-): AgentRuntime {
+): DshAgentRuntime {
   let transport: AgentTransport;
   if (options.transport) transport = options.transport;
   else {
@@ -269,7 +266,7 @@ export function createProbeAgentRuntime(
     max_output_tokens: 1_000_000,
     adapter: adapterFor(target, transport),
   };
-  return new AgentRuntime([binding]);
+  return new DshAgentRuntime([binding]);
 }
 
 function adapterFor(
@@ -296,7 +293,7 @@ function fixedInputSha256(): string {
 
 /** Send the fixed strict-schema Text probe and require exactly `{"ok":true}`. */
 export async function executeProbeText(
-  runtime: AgentRuntime,
+  runtime: DshAgentRuntime,
   role: AgentRole,
   signal?: AbortSignal,
 ): Promise<AgentStructuredResult> {
@@ -325,7 +322,7 @@ export async function executeProbeText(
 
 /** Send the synthetic 1x1 image plus one closed stop tool. */
 export async function executeProbeImage(
-  runtime: AgentRuntime,
+  runtime: DshAgentRuntime,
   role: AgentRole,
   signal?: AbortSignal,
 ): Promise<AgentToolCall> {

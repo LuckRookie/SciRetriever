@@ -99,10 +99,7 @@ import {
 } from "../storage/sqlite/repositories.js";
 import { SqliteWorker } from "../storage/sqlite/worker.js";
 import { FileStore } from "../storage/files/store.js";
-import {
-  DshAgentRuntime as AgentRuntime,
-  type AgentBinding,
-} from "../agents/runtime.js";
+import { DshAgentRuntime, type AgentBinding } from "../agents/dsh/runtime.js";
 import { PublisherGovernanceService } from "../entry/publisher-governance.js";
 import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "../agents/openai.js";
 import { AnthropicMessagesAdapter } from "../agents/anthropic.js";
@@ -237,7 +234,7 @@ export interface Application {
   readonly credentials: CredentialBundle;
   readonly database: SqliteWorker;
   readonly files: FileStore;
-  readonly agents: AgentRuntime;
+  readonly agents: DshAgentRuntime;
   readonly browserCapability: BrowserAgentCapability;
   readonly networkBudget: NetworkBudgetCoordinator;
   readonly logger: Logger;
@@ -607,7 +604,7 @@ export async function createApplication(
   await options.afterStage?.("credentials");
   let database: SqliteWorker | undefined;
   let files: FileStore | undefined;
-  let agents: AgentRuntime | undefined;
+  let agents: DshAgentRuntime | undefined;
   let browserAgentCapability: BrowserAgentCapability | undefined;
   let parsing: ParsingService | undefined;
   let analysis: AnalysisService | undefined;
@@ -1155,7 +1152,7 @@ export async function createApplication(
       },
     );
     const logger = createLogger("application");
-    agents = new AgentRuntime(
+    agents = new DshAgentRuntime(
       buildAgentBindings(
         configuration,
         credentials,

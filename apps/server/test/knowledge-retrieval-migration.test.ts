@@ -1,3 +1,4 @@
+import { dshAnalysisAdapter } from "./dsh-analysis-fixture.js";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -43,7 +44,7 @@ import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js"
 import { SqliteKnowledgeStorage } from "../src/storage/knowledge.js";
 import { SqliteSynthesisStorage } from "../src/storage/synthesis.js";
 import { KnowledgeAnalysisService } from "../src/analysis/knowledge.js";
-import { AgentRuntime } from "../src/agents/runtime.js";
+import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
 import type { AgentAdapter, AgentResult } from "../src/agents/protocol.js";
 import { SynthesisPreparationService } from "../src/analysis/synthesis-prepare.js";
 import type { ExtractionPreparation } from "../src/extraction/prepare.js";
@@ -341,17 +342,17 @@ async function populatedCatalogV7(
         };
       },
     };
-    const agent = new AgentRuntime([
+    const agent = new DshAgentRuntime([
       {
         role: "analysis",
         provider: "fixture",
         model: "synthetic",
-        capabilities: ["structured_text"],
+        capabilities: ["structured_text", "tool_decision"],
         reasoning: "default",
         stream: false,
         context_window_tokens: 1000000,
         max_output_tokens: 10000,
-        adapter,
+        adapter: dshAnalysisAdapter(adapter),
       },
     ]);
     const storage = new SqliteKnowledgeStorage(

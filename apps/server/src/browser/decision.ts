@@ -7,12 +7,8 @@ import {
   type OperatorInput,
   type WorkbenchObservation,
 } from "@sciretriever/contracts";
-import type { AgentRuntime } from "../agents/runtime.js";
-import {
-  AgentFailure,
-  type AgentCall,
-  type AgentCallLifecycle,
-} from "../agents/protocol.js";
+import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
+import { AgentFailure, type AgentCall } from "../agents/protocol.js";
 import type {
   AgentCapabilityAdmission,
   AgentCapabilityToolResult,
@@ -224,40 +220,6 @@ function browserCall(
   };
 }
 
-export function createBrowserDecision(runtime: AgentRuntime) {
-  return async (
-    observation: WorkbenchObservation,
-    frame: Uint8Array | null,
-    signal: AbortSignal,
-    guidance: readonly string[] = [],
-    target?: BrowserDecisionTarget,
-    recentActions: readonly OperatorInput[] = [],
-    feedback: readonly string[] = [],
-    lifecycle?: AgentCallLifecycle,
-  ): Promise<BrowserAction> => {
-    const result = await runtime.execute(
-      browserCall(
-        observation,
-        frame,
-        guidance,
-        target,
-        recentActions,
-        feedback,
-      ),
-      signal,
-      lifecycle,
-    );
-    if (result.kind !== "tool" || result.name !== "browser_action")
-      throw new Error("Browser model returned no action");
-    if (
-      Object.keys(result.arguments).length !== 1 ||
-      !Object.hasOwn(result.arguments, "action")
-    )
-      throw new Error("Browser model returned an invalid action envelope");
-    return parseBrowserAction(result.arguments.action);
-  };
-}
-
 /** Browser-owned, short-lived facts. Human text entry is deliberately not retained. */
 export type BrowserAgentEvent =
   | {
@@ -329,9 +291,9 @@ export interface BrowserAgentCapability {
   ): Promise<BrowserAgentSession>;
 }
 
-/** Stateful production capability; the public single-call decision above remains available. */
+/** Browser delegates its tool conversation to the sole DSH runtime. */
 export function createBrowserCapability(
-  models: AgentRuntime,
+  models: DshAgentRuntime,
 ): BrowserAgentCapability {
   return {
     async open(identity, target) {

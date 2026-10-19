@@ -23,6 +23,11 @@ export interface AgentCapabilityRequest {
 
 export interface AgentCapabilityRequestLifecycle extends AgentCallLifecycle {
   readonly onSettled?: () => void;
+  readonly onRequest?: (request: ModelRequest) => void;
+  readonly onUsage?: (usage: {
+    readonly input_tokens: number;
+    readonly output_tokens: number;
+  }) => void;
 }
 
 export interface AgentCapabilityAdmission {
@@ -61,6 +66,7 @@ export interface AgentCapabilityResult {
   readonly message: ModelAssistantMessage | null;
   readonly tool_results: readonly ModelToolMessage[];
   readonly error_code?: string;
+  readonly retryable?: boolean;
 }
 
 export interface AgentCapabilitySessionOptions {

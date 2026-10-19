@@ -177,7 +177,7 @@ describe("formal MCP product adapter", () => {
         primary_pdf: { article_identity_status: "match-supported" },
       });
       expect(env.parseCalls).toBe(1);
-      expect(env.modelCalls).toBe(2);
+      expect(env.modelCalls).toBe(3);
       env.setModel((input) => {
         if (Array.isArray(input.core)) {
           const core = input.core as { segment_id: string; text: string }[];

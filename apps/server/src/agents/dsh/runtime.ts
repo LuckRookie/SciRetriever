@@ -78,6 +78,10 @@ export class DshAgentRuntime {
     };
   }
 
+  supports(role: AgentRole, capability: AgentCapability): boolean {
+    return this.bindings.get(role)?.capabilities.includes(capability) ?? false;
+  }
+
   identity(
     role: AgentRole,
   ): Pick<

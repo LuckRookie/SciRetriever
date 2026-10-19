@@ -4,8 +4,9 @@
 
 `index.ts` 组合 LlmRuntime、SessionStore、SessionProjectionRegistry、SystemPrompt、ToolRuntime、AgentRegistry、AgentLoop 七个服务，并挂载 TokenMeter 与 BasicCompactionEngine。单次调用和任务会话共享该基础；工具含义、执行准入与实际动作由调用方提供。
 
-- `runtime.ts`：`DshAgentRuntime` 配置门面、role/capability、统一调用及关闭；原 `AgentRuntime` 导出为同一类的兼容名称。
+- `runtime.ts`：`DshAgentRuntime` 配置门面、role/capability、统一调用及关闭；不再导出 `AgentRuntime` 别名。
 - `calls.ts`：单次请求通过原生 `ctx.llm.stream()` 的隔离路由派发；保留严格 response schema、JSON 媒体类型、完整图像、模型设置、错误和 provenance。每次结束释放路由与附件，不执行工具或自行追加请求。
+- `task.ts`：注册受控任务工具与最终提交，复用原生会话循环；结构/业务拒绝回到会话，逐次计量实际派发和 usage，结束时释放会话。
 - `model.ts`：持续会话与中性模型协议的适配，推理和压缩均在 DSH 的模型服务内进入受控协议/Network adapter，不再调用另一套模型运行时。
 - `attachments.ts`：调用/会话拥有的不可变图片引用与字节校验。
 

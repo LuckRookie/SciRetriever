@@ -7,7 +7,7 @@ import {
   type ProcessorRecord,
 } from "@sciretriever/contracts";
 import { processorError, type Processor } from "./processor.js";
-import { onlyDocument } from "./processor-legacy.js";
+import { onlyDocument } from "./processor-knowledge.js";
 import { reportedNumber } from "./processor-number.js";
 import {
   readingSpec,

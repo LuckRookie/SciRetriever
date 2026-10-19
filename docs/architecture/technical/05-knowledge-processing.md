@@ -26,7 +26,7 @@ Agents 的共享单次模型合同集中在本篇；Browser 复用同一模型�
 
 ### 2.1 当前目标：有证据的知识压缩
 
-依据 [ADR 0026](../decisions/0026-agent-knowledge-and-human-collaboration.md)，Analysis 的目标扩展为单篇概览/详细分析、问题相关分析和指定集合的综合。它消费 [文档与证据：可读表示与有界读取](04-document-evidence.md#3-可读表示与有界读取)，产物绑定输入版本、用途、生成方法、证据与覆盖，保留条件/局限/分歧；长文真实执行有界局部分析与整合。
+依据 [ADR 0026](../decisions/0026-agent-knowledge-and-human-collaboration.md)，Analysis 的目标扩展为单篇概览/详细分析、问题相关分析和指定集合的综合。它消费 [文档与证据：可读表示与有界读取](04-document-evidence.md#3-可读表示与有界读取)，产物绑定输入版本、用途、生成方法、证据与覆盖，保留条件/局限/分歧；长文通过 DSH 分页读取完整原文并按需回查。
 
 不同用途/粒度可共存，默认视图不等于唯一结果。元数据修正仍交 Literature 验收，分析不适用不直接删除材料；模型运行时不获得业务写入权。当前 TS 已交付单篇 `KnowledgeArtifact` v1、长文独立请求 v2、Catalog v6/v7 的单篇历史发布和只读读取，以及 v7 集合综合的有界执行、发布、来源读取和工作台入口；知识产物索引尚未实现。
 
@@ -45,10 +45,10 @@ apps/server/src/analysis/
   service.ts   # AnalysisService、输入读取、两阶段调用与结果
   ts-rules.ts  # 元数据保护、草稿解析、sections 与规范 Markdown 渲染
   knowledge.ts # 单篇用途、完整文档读取、证据检查、知识发布
-  knowledge-long.ts # 单篇长文的有界局部分析与整合
+  knowledge-session.ts # 单篇/长文共用 DSH 正文与图片阅读会话
   knowledge-port.ts # Analysis 消费的知识存储 Port
   synthesis-prepare.ts # 显式集合选择与固定来源缺口
-  synthesis.ts # 集合局部调用、一次集合归并与发布
+  synthesis.ts # 文档阅读会话、集合回查会话与发布
 apps/server/src/entry/content-analysis.ts  # 用例协调与旧内容发布
 apps/server/src/agents/                   # 模型协议与单次执行
 packages/contracts/src/content.ts        # 内容合同、规范化与 hash
@@ -106,21 +106,21 @@ manifest v1 恰好一项，绑定已验证的原 PDF 与精确文档表示，无
 
 按 ADR 0026 的 2026-10-12 修订，固定输入解析、总结、长文分析和综合不设置业务 token、累计调用数、累计输入字节或总时长预算。v1、长文请求 v2、综合请求 v3 均允许省略 `budget`；旧字段仍可读取，但不执行，也不影响方法复用身份。请求/响应的物理序列化边界、真实模型上下文、连接失败、取消与文件完整性仍由所属边界处理，不以这些检查证明语义正确。
 
-方法身份包含 prompt/schema 版本、片段与整合策略、实际模型绑定和影响结果的参数。当前单次全文方法版本为 `2`、长文为 `3`、综合为 `2`；旧产物保持可读。复用键同时包含 manifest、purpose、question、method 与参数 hash，同一比较域并发首次发布者获胜，后来者读取实际已存内容与 provenance。
+方法身份包含 prompt/schema 版本、片段与整合策略、实际模型绑定和影响结果的参数。当前单篇和长文共用 `dsh-document-analysis` v1、综合方法为 v3；旧产物保持可读。复用键同时包含 manifest、purpose、question、method 与参数 hash，同一比较域并发首次发布者获胜，后来者读取实际已存内容与 provenance。
 
-长文执行记录派发次数、规范 AgentCall 字节及 Provider 报告的 usage；失败或缺少 usage 不伪称成本为零。计量用于解释成本，不作为停止条件。`KnowledgeAnalysisFailure.accounting` 是进程内明细，当前维护 HTTP 错误只返回安全 reason/retryable。
+长文执行记录派发次数、序列化 ModelRequest 字节（含历史与图像 base64）及 Provider 报告的 usage；失败或缺少 usage 不伪称成本为零。计量用于解释成本，不作为停止条件。`KnowledgeAnalysisFailure.accounting` 是进程内明细，当前维护 HTTP 错误只返回安全 reason/retryable。
 
 #### 2.4.2 输入读取与真实长文处理
 
-旧 `service.ts` 的两个固定阶段各接收完整 Markdown；单次全文 v1 一次传入固定版本的全部片段。两者不会因旧 chunk 配置拒绝输入。长文 v2 按输入结构构造连续、无洞、无重复的核心范围，每块最多 64 KiB 和 64 个结构片段，前后各最多 4 KiB 邻接上下文；超大单段只在 UTF-8 码点边界拆开。这些是每次调用的分块方式，不是整篇长度或调用次数预算。
+旧 `service.ts` 的 LiteratureContent 阶段保留业务合同，原子请求也经 DSH 原生模型服务。知识分析的 v1/v2 请求均进入 `knowledge-session.ts`，不再执行旧单次全文或固定分块/层级归并算法。
 
-1. 从 Document/Evidence 读取并验证精确版本，按结构边界规划全部核心范围；表格、图注、页码、bbox 不可定位时记录能力缺口。
-2. 每块按顺序调用一次模型，允许归纳改写。模型给出已提供的核心或邻接 segment ID；Analysis 验证 ID 存在，并构造绑定完整原片段 SHA-256 的 EvidenceRef，不做引文逐字匹配或强制核心引文。邻接文本不重复计入覆盖。
-3. 合法 `not_applicable` 表示该块没有相关内容；坏格式、拒答或调用失败不冒充不适用。取消后不派发新调用。
-4. 依稳定候选顺序整合：中间每组最多 16 项，最终一次最多 64 项。模型可以合并、改写、复用来源及省略重复候选；程序验证来源 ID，不要求输出逐字包含输入断言、条件或数值。每条输出的证据由所引用候选求并集。
-5. 候选较多时有限分层整合；某层没有缩小候选数即停止继续压缩，保留该层结果，不重复调用直到满足任意条数。全部核心处理完成、最终格式与证据绑定有效后发布 `coverage.status=complete`。覆盖表示输入范围已处理，不承诺总结无损。
+1. 读取并验证固定文档、源材料、结构与资源身份。DSH 初始输入为任务、目录和资源清单，正文由工具读取。
+2. `read_document` 按 UTF-8 安全边界返回至多 24,000 字节；`search_document` 定位片段，`read_segments` 回读选中片段及相邻内容。完整正文读取是提交前置条件，搜索预览不计覆盖。
+3. `view_image` 只读取文档绑定的 PNG/JPEG/WebP，核验实际字节、长度与 hash。没有图像能力、资源不支持或超出单个 16 MiB/会话 16 图与 64 MiB 协议边界时明确报告缺口，不冒充已经看图。重复看图同样计入上下文图片容量。
+4. DSH 原生循环掌握工具调用与后续阅读；`submit_result` 验证 schema、文本/图片覆盖和 segment ID，并构造绑定完整原片段 SHA-256 的 EvidenceRef。业务验收拒绝回到同一会话修正，取消或坏资源不能发布。
+5. Provider 协议层拒绝畸形工具响应时结束并报告失败，不绕过安全解析。历史由 DSH 管理与压缩，保留每次推理/压缩实际派发和 usage；不以固定调用次数代替有限材料处理。
 
-不以 256/8192 个文档片段、64 条最终断言或每条 8 项证据拒绝工作。单篇全文与长文路径都保留全部有效证据，并按片段 ID 合并重复引用；不存在的 ID 与空证据仍不接纳。内容总序列化上限仍为 512 KiB，HTTP、存储和模型协议有各自技术边界。科学语义、重要条件和分歧表达由模型及后续质量评价负责，机器引用检查只证明能够回到原材料。局部往返默认不长期持久化。
+返回的结构化知识保留条件、量值、局限和分歧；中文阅读性由任务提示指导，原始材料不会被模型覆盖。覆盖只说明材料被工具返回，不保证科学准确性。
 
 #### 2.4.3 产物结构与科学信息
 
@@ -152,7 +152,7 @@ Analysis 可以提出书目修正候选；Literature 单独验收。不允许知
 
 当前合同以 `SynthesisInputManifest` v2 固定 1–128 个有序文档/知识输入及其 hash、层级和 `verified/source-only/missing` 状态；`KnowledgeSynthesisRequest` v3 固定非空问题与覆盖政策，历史 `budget` 可省略且不执行。准备服务固定清单，执行前重新核对；`require-all` 缺项或 `allow-partial` 零可用返回 blocked。精确重复来源复用局部候选，逐项保留证据关系；无相关断言的输入照实计覆盖与 usage，全集不适用返回 `synthesis-not-applicable`。
 
-最终执行一次集合归并。模型负责共识、分歧、条件与数值的语义表达，可以改写、压缩及让一个来源支持多条结论；程序只要求来源 ID 真实且输出结构可读。单条分歧或同一论文内的共识不因数量规则被拒绝。坏引用、坏结构、取消、模型失败或实际协议大小超限仍不发布。发布时按引用链计算实际独立 Literature 数，不从模型的关系标签推断论文数。
+最终由 DSH 综合会话整合候选，可用 `read_candidate` 和 `read_evidence` 回读固定原文；knowledge-only 输入明确标记来源层级。模型负责共识、分歧、条件与数值的语义表达，可以改写、压缩及让一个来源支持多条结论；程序只要求来源 ID 真实且输出结构可读。单条分歧或同一论文内的共识不因数量规则被拒绝。坏引用、坏结构、取消、模型失败或实际协议大小超限仍不发布。发布时按引用链计算实际独立 Literature 数，不从模型的关系标签推断论文数。
 
 `SqliteSynthesisStorage` 对合成库 v7 的已发布综合按 ID 验证内容、SQL 依赖与递归证据闭包，并支持经证实原 PDF 文件缺失时的 `source-only` 投影。此状态还要求派生 Markdown、结构和资源文件完整；派生文件缺失、路径异常、权限错误或 hash 损坏均拒绝。`source-only` 不改变旧单篇严格 reader 的成功条件，也不代表原文已经复核。来源计数沿每条候选实际引用的断言链去重，表达实际支持来源数，不等于已处理文献篇数；同一 Literature 的重复版本或其摘要不能充作独立支持。模型归并输入显式列出经证据验证的独立 Literature ID、原文/知识来源、压缩层级与 source-only 状态。原文字节完整性、模型输出遵循结构约束、断言确由证据支持、科研结论质量是逐层不同的判断；当前结构与引用验证不等于后两层科研语义验收。正式 Application、HTTP 和 Web 入口见[产品接口](01-product-interface.md)。
 
@@ -439,7 +439,7 @@ ReferenceLookup
 
 ### 3.9 Agents、Network 与失败
 
-Analysis 把元数据确定、内容总结和 ReferenceLookup 三种私有请求语义分别转换为带 Analysis role、messages、strict response schema、input hash 的 `AgentCall`，不要求业务 `max_output_tokens`；前两种仍属于同一个文献内容分析用例的有序内部阶段。Analysis 直接调用 `AgentRuntime.execute`，先验收第一阶段，再决定是否构造第二阶段。Runtime 负责 role-to-model binding、凭据附着、capability、连接/停滞 timeout 与协议大小边界、quota、协议响应和安全 provider/model/usage 身份；Analysis 负责把这些安全身份与 prompt/参数 hash 组成一项业务 provenance。单次调用和两个阶段的临时信息只用于当前业务调用，不形成两项持久化 provenance。
+Analysis 把元数据确定、内容总结和 ReferenceLookup 三种私有请求语义分别转换为带 Analysis role、messages、strict response schema、input hash 的 `AgentCall`，不要求业务 `max_output_tokens`；前两种仍属于同一个文献内容分析用例的有序内部阶段。Analysis 直接调用 `DshAgentRuntime.execute`，先验收第一阶段，再决定是否构造第二阶段。Runtime 负责 role-to-model binding、凭据附着、capability、连接/停滞 timeout 与协议大小边界、quota、协议响应和安全 provider/model/usage 身份；Analysis 负责把这些安全身份与 prompt/参数 hash 组成一项业务 provenance。单次调用和两个阶段的临时信息只用于当前业务调用，不形成两项持久化 provenance。
 
 Analysis 不拥有 `AnalysisLLMPort`、provider adapter、model 选择、Session、重复配置或旧兼容导入。Agents 请求成功只说明协议边界完成；Analysis 仍解析 duplicate-free finite JSON、验证 LiteratureMetadata/Markdown/ReferenceLookup schema、复检输入 hash 和 stale 状态。所有外部访问由 Agents adapter 经过 Network 的 URL、TLS、redirect、共享 quota、单次响应上限和脱敏政策；Analysis 和 Browser 使用同一 provider/account scope 时不能各自建立 limiter。
 
@@ -578,7 +578,7 @@ LiteratureSectionRole =
 ### 3.12 Analysis 两阶段执行
 
 显式 `analysisRuntime` 从配置组装 `app.analysis`；只要求有效的 analysis 模型。
-`analyzeContent(literatureId, signal?)` 读取正式 Parser Markdown，调用 TypeScript AnalysisService，保留已有 metadata、规范化普通 Markdown 并使用 canonical Markdown renderer。AgentRuntime 直接执行中性模型 adapter 和不可变 Markdown 发布，不启动子进程。
+`analyzeContent(literatureId, signal?)` 读取正式 Parser Markdown，调用 TypeScript AnalysisService，保留已有 metadata、规范化普通 Markdown 并使用 canonical Markdown renderer。DshAgentRuntime 直接执行中性模型 adapter 和不可变 Markdown 发布，不启动子进程。
 `app.contentAnalysis.analyzeCurrent(id, signal?)` 已连接 Analysis Proposal 与 Literature owner 接纳，成功返回
 正式内容；明确无可用内容返回独立结果与闭合 `AnalysisInputIdentity`，保留 PDF 与 ParserResult；普通失败也保留原事实。关闭入口取消并
 等待当前调用。旧清理服务可显式调用，但生产 Analysis 不调用，见
@@ -844,7 +844,7 @@ producer: { method_id, method_version: string | null,
 ```text
 apps/server/src/agents/
   protocol.ts   # 中性 AgentCall/Result、严格 schema 与输入校验
-  runtime.ts    # AgentRuntime/DshAgentRuntime 同一实现的公开兼容入口
+  dsh/runtime.ts # 唯一 DshAgentRuntime 公开门面
   model-protocol.ts # 内部完整消息、工具 ID/结果、私有续接状态
   capability.ts # 中性能力会话、工具与逐请求生命周期
   dsh/          # 唯一运行实现、原生单次模型派发、会话、图片和压缩适配
@@ -854,7 +854,7 @@ apps/server/src/agents/
   probe.ts      # 用户显式的模型目录/最小调用
 ```
 
-单次消费方通过 `AgentRuntime` 与 `protocol.ts` 的中性类型协作；受控能力通过 `capability.ts` 创建、追加、运行、压缩和关闭会话。`common.ts` 和 vendor wire 数据属于 adapter 内部；Browser/Analysis 不能导入供应商响应结构。目录读取仅为显式配置服务，不形成模型目录缓存或业务状态。
+单次消费方通过 `DshAgentRuntime` 与 `protocol.ts` 的中性类型协作；受控能力通过 `capability.ts` 创建、追加、运行、压缩和关闭会话。`common.ts` 和 vendor wire 数据属于 adapter 内部；Browser/Analysis 不能导入供应商响应结构。目录读取仅为显式配置服务，不形成模型目录缓存或业务状态。
 
 ### 5.3 公共执行合同
 
@@ -882,7 +882,7 @@ interface AgentRuntimeSurface {
 
 `AgentCall` 不包含 Provider、Base URL、model、credential、AccessScope、session、history、turn、job deadline 或 Analysis/Browser 业务枚举。`signal` 是 `execute` 的执行参数，不成为可复用 Call 状态。
 
-`AgentRuntime` 保存 Analysis/Browser role bindings，并为每个 role 保存对应 Provider adapter；
+`DshAgentRuntime` 保存 Analysis/Browser role bindings，并为每个 role 保存对应 Provider adapter；
 两个 binding 解析到同一 Model Provider 时复用同一 adapter，解析到不同 Provider 时分别使用两个
 adapter。每个 binding 包含 role、model、模块派生的 capabilities、Model reasoning effort、Model
 stream 与适用单次 limits。消费者不能在 `AgentCall` 中临时覆盖 model、effort 或 stream。Runtime
@@ -1000,7 +1000,7 @@ Agents 保留以下单次限制：
 
 OpenAI Analysis 请求省略 `max_output_tokens` / `max_completion_tokens`，由模型协议决定输出；Anthropic 协议必须携带 `max_tokens`，缺省使用 adapter 的 16384，不作为累计业务预算。
 
-这些是单次调用或 Provider transport 的客观边界，不是业务作业预算。单次 `AgentRuntime` 不累计多个调用的 token、输入、图片、response、result、wall-clock 或 turn，也不保存历史结果。Analysis 继续为每个有限阶段建立独立 `AgentCall`；DSH 从会话投影生成每个完整 `ModelRequest`。普通推理和压缩分别取得新的 request identity 和调用方准入生命周期，Network 获取许可后、实际发送前复核取消/预算并派发计数，完成时结清活跃区间。排队取消不计派发，发送后失败计一次；整个 turn 不复用只允许 dispatch 一次的旧生命周期。
+这些是单次调用或 Provider transport 的客观边界，不是业务作业预算。单次 `DshAgentRuntime` 不累计多个调用的 token、输入、图片、response、result、wall-clock 或 turn，也不保存历史结果。Analysis 继续为每个有限阶段建立独立 `AgentCall`；DSH 从会话投影生成每个完整 `ModelRequest`。普通推理和压缩分别取得新的 request identity 和调用方准入生命周期，Network 获取许可后、实际发送前复核取消/预算并派发计数，完成时结清活跃区间。排队取消不计派发，发送后失败计一次；整个 turn 不复用只允许 dispatch 一次的旧生命周期。
 
 ### 5.7 Provider Port 与 adapter
 
@@ -1026,7 +1026,7 @@ Adapter 不选择 role model，不理解 Literature、Analysis stage、Publisher
 
 ### 5.8 Analysis 消费
 
-Analysis 为每个阶段构造一个独立 `AgentCall`，直接调用 `AgentRuntime.execute`。两阶段 controller、prompt/schema、输入 hash、NoUsableContent、Markdown/Metadata/ReferenceLookup validation 和最终业务 provenance 全部留在 Analysis。
+Analysis 为每个阶段构造一个独立 `AgentCall`，直接调用 `DshAgentRuntime.execute`。两阶段 controller、prompt/schema、输入 hash、NoUsableContent、Markdown/Metadata/ReferenceLookup validation 和最终业务 provenance 全部留在 Analysis。
 
 第一阶段结果验收后才构造第二阶段 Call。ReferenceLookup 空输入不调用 Runtime。Provider 返回成功后检查结果结构、真实来源 ID、版本/hash 与序列化边界；不进行语义逐字对齐。
 
@@ -1040,7 +1040,7 @@ Analysis 为每个阶段构造一个独立 `AgentCall`，直接调用 `AgentRunt
 
 DSH 的模型输入投影保留完整文本/工具关系并只发送最新图片，原事件和图片留在会话内存直到关闭。TokenMeter/BasicCompactionEngine 可以压缩模型可见上下文；不加载默认 CLI、Web、home/settings、凭据发现、shell、SDK 子进程或自动重试插件。压缩不删除原始事件，也不声称立即释放整份历史的内存。
 
-保留 `createBrowserDecision()` 单次兼容入口供明确调用方使用；生产文章流程注入有状态 capability。Challenge、登录、MFA、拒绝、未授权和未找到继续作为 Observation 的页面描述，由封闭动作与程序预算/取消处理，不自动形成文献权限事实。
+删除 `createBrowserDecision()` 单次兼容入口；文章流程使用有状态 capability。Challenge、登录、MFA、拒绝、未授权和未找到继续作为 Observation 的页面描述，由封闭动作与程序预算/取消处理，不自动形成文献权限事实。
 Agents 不取得 Browser runtime、Page、Context、Profile、Cookie、selector、CDP、任意 URL/JavaScript、capture 或 PDF 发布能力。
 
 ### 5.10 Configuration 与 Bootstrap
@@ -1063,10 +1063,10 @@ Configuration 保存 Model Provider/Model 两个直接注册表：
 配置不新增 session turns、session deadline、累计 token/image 或 repeated-action budget；Browser 的文章探索预算仍由 Browser owner 执行。
 
 Bootstrap 先把当前 scope 需要的 Analyze/Download 选择解析为 Model 与 Provider，再按唯一 Provider
-name 构造一或两个 adapter、一个 `AgentRuntime` 和最多两个 role bindings。Analysis 获得
-同一 DshAgentRuntime（AgentRuntime 为兼容别名）；Browser 通过该对象创建文章会话，不再另组装独立 capability runtime。首次使用时惰性组装 DSH，单次调用经原生 LlmRuntime、会话经 AgentLoop；仅构造对象不请求模型、不加载 DSH 用户配置。close() 返回 Promise，取消并等待模型请求和会话释放，调用方须等待后再完成资源关闭。
+name 构造一或两个 adapter、一个 `DshAgentRuntime` 和最多两个 role bindings。Analysis 获得
+同一 DshAgentRuntime（无旧类名别名）；Browser 通过该对象创建文章会话，不再另组装独立 capability runtime。首次使用时惰性组装 DSH，单次调用经原生 LlmRuntime、会话经 AgentLoop；仅构造对象不请求模型、不加载 DSH 用户配置。close() 返回 Promise，取消并等待模型请求和会话释放，调用方须等待后再完成资源关闭。
 
-配置向导的 model discovery 是另一条显式、短生命周期读取路径，不进入生产 `AgentRuntime`：
+配置向导的 model discovery 是另一条显式、短生命周期读取路径，不进入生产 `DshAgentRuntime`：
 
 1. Entry 在 `Models → Add` 选定 Provider 后取得其规范 origin 精确绑定 credential；新远程 Provider
    在同一流程隐藏输入 key，已有 key 直接复用，loopback 不需要 key；
@@ -1144,7 +1144,7 @@ credential scope，Model 持有 reasoning/image/stream，模块 capability/limit
 
 模型 transport 按配置端点限定地址类、端口与精确 URL，使用共享 NetworkBudget。HTTP loopback 只允许
 127.0.0.1/::1 或解析到这两个地址的 localhost，且不得携带或保有该 provider 的凭据；HTTPS 继续使用
-public admission 与 exact-origin grant。关闭 AgentRuntime 取消进行中的网络请求。实际三种协议及
+public admission 与 exact-origin grant。关闭 DshAgentRuntime 取消进行中的网络请求。实际三种协议及
 Analysis 组合验证见[模型 loopback 证据](../../../migration/evidence/runtime/model-loopback.md)。
 
 单次模型入口保持无状态。三种协议的 JSON/SSE 经过有界完整 body 读取后重建中性结果，再交给 DSH 事件接口；不是逐 token 网络转发。stream 失败不改模式重发，普通推理和压缩均不隐式重试。模型不获得 Browser 或事实写入权限。Metadata/Acquisition adapter 只转换供应商协议并发布

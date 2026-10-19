@@ -1,3 +1,4 @@
+import { dshAnalysisAdapter, dshChatReply } from "./dsh-analysis-fixture.js";
 import {
   mkdir,
   mkdtemp,
@@ -32,10 +33,10 @@ import {
 } from "../src/bootstrap/application.js";
 import { KnowledgeSynthesisService } from "../src/analysis/synthesis.js";
 import { synthesisMethodParameters } from "../src/analysis/synthesis.js";
-import { longMethodParameters } from "../src/analysis/knowledge-long.js";
+import { documentAnalysisParameters } from "../src/analysis/knowledge-session.js";
 import { KnowledgeAnalysisService } from "../src/analysis/knowledge.js";
 import { SqliteKnowledgeStorage } from "../src/storage/knowledge.js";
-import { AgentRuntime } from "../src/agents/runtime.js";
+import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
 import type {
   AgentAdapter,
   AgentCall,
@@ -266,12 +267,6 @@ function runtime(
                   evidence_segment_ids: options.badLocal
                     ? ["absent-segment"]
                     : [segment.segment_id],
-                  evidence_quotes: [
-                    options.badLocal
-                      ? "forged quote"
-                      : `measurement was ${valueNumber} eV`,
-                  ],
-                  evidence_regions: ["core"],
                 },
               ],
             }
@@ -320,17 +315,17 @@ function runtime(
   };
   return {
     calls,
-    agents: new AgentRuntime([
+    agents: new DshAgentRuntime([
       {
         role: "analysis",
         provider: "fixture",
         model: "synthetic",
-        capabilities: ["structured_text"],
+        capabilities: ["structured_text", "tool_decision"],
         reasoning: "default",
         stream: false,
         context_window_tokens: 1000000,
         max_output_tokens: 10000,
-        adapter,
+        adapter: dshAnalysisAdapter(adapter),
       },
     ]),
   };
@@ -341,7 +336,7 @@ function callInput(call: AgentCall): unknown {
     throw new Error("missing model input");
   return JSON.parse(part.text) as unknown;
 }
-function singleRuntime(): AgentRuntime {
+function singleRuntime(): DshAgentRuntime {
   const adapter: AgentAdapter = {
     provider: "fixture",
     model: "synthetic",
@@ -381,17 +376,17 @@ function singleRuntime(): AgentRuntime {
       };
     },
   };
-  return new AgentRuntime([
+  return new DshAgentRuntime([
     {
       role: "analysis",
       provider: "fixture",
       model: "synthetic",
-      capabilities: ["structured_text"],
+      capabilities: ["structured_text", "tool_decision"],
       reasoning: "default",
       stream: false,
       context_window_tokens: 1000000,
       max_output_tokens: 10000,
-      adapter,
+      adapter: dshAnalysisAdapter(adapter),
     },
   ]);
 }
@@ -1551,84 +1546,77 @@ describe("collection synthesis execution", () => {
       app = await createApplication(env.home, {
         executionSchema: "require-v2",
         agentTransportFactory:
-          () => async (request: { readonly body: Uint8Array }) => {
+          () =>
+          async (request: {
+            readonly body: Uint8Array;
+            readonly onDispatched?: () => void;
+          }) => {
             calls++;
-            const wire = JSON.parse(new TextDecoder().decode(request.body)) as {
-              messages: { content: { text: string }[] }[];
-            };
-            const input = JSON.parse(wire.messages[1]!.content[0]!.text) as {
-              core?: { segment_id: string; text: string }[];
-              candidates?: {
-                id: string;
-                category: string;
-                epistemic: string;
-                text: string;
-                conditions: string[];
-                quantity: unknown;
-              }[];
-            };
-            const core = input.core?.find((item) =>
-              item.text.includes("measurement was 4.2 eV"),
-            );
-            const value = input.candidates
-              ? {
-                  title: "Production synthesis",
-                  statements: input.candidates.map((candidate, index) => ({
-                    statement_id: `m${index + 1}`,
-                    category: candidate.category,
-                    epistemic: candidate.epistemic,
-                    relation: "single-source",
-                    conflict_group_id: null,
-                    text: candidate.text,
-                    conditions: candidate.conditions,
-                    quantity: candidate.quantity,
-                    source_ids: [candidate.id],
-                  })),
-                }
-              : core
+            request.onDispatched?.();
+            const wire = JSON.parse(
+              new TextDecoder().decode(request.body),
+            ) as Parameters<typeof dshChatReply>[0];
+            const reply = await dshChatReply(wire, (raw) => {
+              const input = raw as {
+                core?: { segment_id: string; text: string }[];
+                candidates?: {
+                  id: string;
+                  category: string;
+                  epistemic: string;
+                  text: string;
+                  conditions: string[];
+                  quantity: unknown;
+                }[];
+              };
+              const core = input.core?.find((item) =>
+                item.text.includes("measurement was 4.2 eV"),
+              );
+              const value = input.candidates
                 ? {
-                    outcome: "completed",
-                    title: "Production local",
-                    statements: [
-                      {
-                        statement_id: "s1",
-                        category: "result",
-                        epistemic: "reported",
-                        text: "4.2 eV under dry conditions",
-                        conditions: ["dry conditions"],
-                        quantity: {
-                          value: "4.2",
-                          unit: "eV",
-                          comparison_basis: null,
-                        },
-                        evidence_segment_ids: [core.segment_id],
-                      },
-                    ],
+                    title: "Production synthesis",
+                    statements: input.candidates.map((candidate, index) => ({
+                      statement_id: `m${index + 1}`,
+                      category: candidate.category,
+                      epistemic: candidate.epistemic,
+                      relation: "single-source",
+                      conflict_group_id: null,
+                      text: candidate.text,
+                      conditions: candidate.conditions,
+                      quantity: candidate.quantity,
+                      source_ids: [candidate.id],
+                    })),
                   }
-                : {
-                    outcome: "not_applicable",
-                    title: "No claim",
-                    statements: [],
-                  };
+                : core
+                  ? {
+                      outcome: "completed",
+                      title: "Production local",
+                      statements: [
+                        {
+                          statement_id: "s1",
+                          category: "result",
+                          epistemic: "reported",
+                          text: "4.2 eV under dry conditions",
+                          conditions: ["dry conditions"],
+                          quantity: {
+                            value: "4.2",
+                            unit: "eV",
+                            comparison_basis: null,
+                          },
+                          evidence_segment_ids: [core.segment_id],
+                        },
+                      ],
+                    }
+                  : {
+                      outcome: "not_applicable",
+                      title: "No claim",
+                      statements: [],
+                    };
+              return value;
+            });
             return {
               status: 200,
               headers: [],
-              body: new TextEncoder().encode(
-                JSON.stringify({
-                  model: "model",
-                  choices: [
-                    {
-                      index: 0,
-                      finish_reason: "stop",
-                      message: {
-                        role: "assistant",
-                        content: JSON.stringify(value),
-                      },
-                    },
-                  ],
-                  usage: { prompt_tokens: 10, completion_tokens: 10 },
-                }),
-              ),
+              body: Buffer.from(JSON.stringify(reply)),
             };
           },
       });
@@ -1668,7 +1656,7 @@ describe("collection synthesis execution", () => {
       expect(parameters).toMatchObject({
         local_method_parameters_sha256: await sha256(
           extractionCanonicalJsonBytes(
-            longMethodParameters(longBudget, method.model_binding_sha256),
+            documentAnalysisParameters(longBudget, method.model_binding_sha256),
             32768,
           ),
         ),

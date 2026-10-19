@@ -27,7 +27,7 @@ import {
 } from "@sciretriever/contracts";
 
 import { createApplication } from "../src/bootstrap/application.js";
-import { DshAgentRuntime } from "../src/agents/runtime.js";
+import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
 import { BROWSER_ROUTE_NAME } from "../src/acquisition/assembly.js";
 import {
   AcquisitionRouteError,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AgentRuntime } from "../src/agents/runtime.js";
+import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
 import {
   AgentFailure,
   type AgentAdapter,
@@ -40,7 +40,7 @@ describe("provider-neutral agent runtime", () => {
   it("checks role capabilities before adapter I/O and exposes binding identity", async () => {
     let calls = 0;
     const wrapped = adapter();
-    const runtime = new AgentRuntime([
+    const runtime = new DshAgentRuntime([
       {
         role: "analysis",
         provider: "test-provider",
@@ -74,7 +74,7 @@ describe("provider-neutral agent runtime", () => {
   });
 
   it("returns readiness gaps and converts unknown adapter failures", async () => {
-    const runtime = new AgentRuntime([
+    const runtime = new DshAgentRuntime([
       {
         role: "analysis",
         provider: "p",

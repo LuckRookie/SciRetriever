@@ -24,7 +24,7 @@ import {
   AnalysisService,
   type AnalysisLimits,
 } from "../src/analysis/service.js";
-import { AgentRuntime } from "../src/agents/runtime.js";
+import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
 import { OpenAIChatAdapter } from "../src/agents/openai.js";
 import { DatabaseSync } from "node:sqlite";
 import { TypeScriptConfigurationOwner } from "../src/configuration/owner.js";
@@ -204,7 +204,7 @@ function agent(
   });
   return {
     calls,
-    runtime: new AgentRuntime([
+    runtime: new DshAgentRuntime([
       {
         role: "analysis",
         provider: "fixture",
@@ -221,7 +221,7 @@ function agent(
 }
 function service(
   env: Awaited<ReturnType<typeof setup>>,
-  runtime: AgentRuntime,
+  runtime: DshAgentRuntime,
   override: Partial<AnalysisLimits> = {},
   library?: { detail(id: string): Promise<LiteratureDetail> },
 ) {
@@ -320,7 +320,7 @@ it("runs configured Analysis through actual loopback model HTTP and accepts the 
     await new Promise<void>((r, j) => http.close((e) => (e ? j(e) : r())));
   }
 }, 30000);
-it("executes both actual Analysis stages through TS AgentRuntime and OpenAI wire adapter, renders canonical Markdown and accepts the proposal", async () => {
+it("executes both actual Analysis stages through TS DshAgentRuntime and OpenAI wire adapter, renders canonical Markdown and accepts the proposal", async () => {
   const env = await setup();
   const before = await env.app.library.detail(FIXTURE_LITERATURE.literature_id);
   const a = agent([

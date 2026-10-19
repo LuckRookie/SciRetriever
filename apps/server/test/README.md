@@ -13,3 +13,5 @@
 相关说明：[测试目录与本机试验场](../../../tests/README.md)；[测试与验收规则](../../../HARNESS.md)。
 
 [上级目录](../README.md) · [项目 README](../../../README.md)
+
+`dsh-document-session.test.ts` 使用合成正文和栅格资源，验证真实 DSH 会话的未读提交拒绝、看图、回查、错误引用修正和完整 usage。`dsh-analysis-fixture.ts` 只提供 fake 模型政策，保留实际 DSH 工具循环；`browser-decision-fixture.ts` 驱动正式 Browser capability，不保留生产单次兼容入口。
