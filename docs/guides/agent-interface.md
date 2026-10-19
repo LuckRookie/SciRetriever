@@ -110,7 +110,9 @@ sciretriever browser session --workbench-url http://127.0.0.1:4174 --request - -
 sciretriever jobs runtime --workbench-url http://127.0.0.1:4174 --request /absolute/path/runtime-task.json --maintenance
 ```
 
-地址只接受本机 HTTP origin 与明确端口（`localhost` 规范为 `127.0.0.1`）；不接受用户信息、路径、查询串，不跟随重定向。连接内部完成现有 Cookie/客户端/CSRF 握手，不返回或持久化这些授权材料。不会从 catalog 自动发现或接管其它进程。
+地址接受显式 IPv4 HTTP origin 与明确端口（`localhost` 规范为 `127.0.0.1`）；不接受域名、HTTPS、用户信息、路径、查询串，不跟随重定向。按 [ADR 0035](../architecture/decisions/0035-authenticated-remote-web-access.md)，所有 Web 连接均须在 CLI/MCP 进程环境中设置 `SCIRETRIEVER_WEB_PASSWORD`，值为服务的固定密码或启动终端显示的 API key；本机连接也不免除认证。客户端拒绝连接未提供统一登录协议的服务。认证材料不进入工具结果或持久化文件；退出客户端撤销自己的登录，不影响其它登录者。不会从 catalog 自动发现或接管其它进程。
+
+例如 `sciretriever mcp --maintenance --workbench-url http://192.0.2.10:4174` 连接指定服务器；先通过环境变量提供密码或启动密钥，不把密码放进参数、请求 JSON 或 URL。HTTP 不加密传输，应在可信网络使用。普通不带 `--workbench-url` 的 CLI/MCP 仍直接使用本机业务 owner，无需 Web 密码。
 
 配置了 `--workbench-url` 后，MCP 增加以下工具；普通模式只可观察，变更仍需 `--maintenance`：
 

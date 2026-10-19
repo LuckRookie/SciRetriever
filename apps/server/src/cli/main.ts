@@ -30,6 +30,8 @@ import {
 } from "../workbench/machine-client.js";
 import { operationRecord } from "../entry/query-operations.js";
 import { runBrowserSession } from "./browser-session.js";
+import { parseWebOptions, webAccessOptions } from "./web-access.js";
+import { WorkbenchAccessError } from "../workbench/access.js";
 import { fileURLToPath } from "node:url";
 import * as applicationBootstrap from "../bootstrap/application.js";
 import { DocumentProcessingError } from "../document/service.js";
@@ -156,7 +158,7 @@ function output(value: unknown, options: CliOptions): CliResult {
 function usage(options: CliOptions): CliResult {
   const text =
     "Usage: sciretriever <web|discover|complete|literature|document|analysis|knowledge|synthesis|context|extraction|import|export|config|storage|maintenance|jobs|browser|mcp> ...\n" +
-    "  web [--port 4174]  # local task workbench; uses the configured catalog and artifact root\n" +
+    "  web [--port 4174] [--host IPv4]  # login required; generates an API key unless SCIRETRIEVER_WEB_PASSWORD is set\n" +
     "  discover topic QUERY | discover citations --seed-literature-id ID\n" +
     "  complete pdf|content [--literature-id ID] [--transfers ID,...]\n" +
     "  literature search [query options] | show ID | references ID | cited-by ID\n" +
@@ -717,17 +719,10 @@ async function execute(
     return output({ protocol_version: 1, result }, options);
   }
   if (group === "web") {
-    const port = args.length === 1 ? 4174 : Number(args[2]);
-    if (
-      (args.length !== 1 &&
-        (args.length !== 3 ||
-          command !== "--port" ||
-          !/^\d+$/.test(args[2]!))) ||
-      !Number.isSafeInteger(port) ||
-      port < 0 ||
-      port > 65535
-    )
-      invalidInput();
+    const parsed = parseWebOptions(args.slice(1));
+    const port = parsed.port;
+    if (options.signal?.aborted) return { code: 130 };
+    const access = webAccessOptions(parsed.access);
     if (options.signal?.aborted) return { code: 130 };
     const configurationOwner = new TypeScriptConfigurationOwner(
       configurationHome(options),
@@ -739,11 +734,25 @@ async function execute(
     const running = await startProductionWorkbench({
       home: configurationHome(options),
       port,
+      access,
       assets: await loadWorkbenchAssets(),
       applicationOptions: { configurationOwner },
     });
     try {
-      output({ mode: "web", url: `${running.origin}/` }, options);
+      output(
+        {
+          mode: "web",
+          listen: running.listenAddress,
+          url: running.urls[0],
+          urls: running.urls,
+          ...(running.apiKey === undefined ? {} : { api_key: running.apiKey }),
+          login:
+            running.apiKey === undefined
+              ? "Log in with the configured password."
+              : "Log in with api_key. This key changes when the service restarts.",
+        },
+        options,
+      );
       await new Promise<void>((resolve) => {
         if (options.signal?.aborted) resolve();
         else
@@ -1779,6 +1788,7 @@ export async function runCli(
       error.code === "configuration-probe-invalid";
     const input =
       error instanceof CliInputError ||
+      error instanceof WorkbenchAccessError ||
       error instanceof ContractValidationError ||
       error instanceof TypeError ||
       probeInvalid;
@@ -1818,44 +1828,52 @@ export async function runCli(
               ? 3
               : 70;
     const failure =
-      error instanceof LiteratureNotFoundError && !args.includes("--request")
-        ? "business-failed"
-        : isQueryFailure(error) ||
-            isMaintenanceFailure(error) ||
-            error instanceof MachineWorkbenchError
-          ? error.code
-          : error instanceof DocumentProcessingError ||
-              error instanceof ParsingFailure ||
-              error instanceof ArticleIdentityError ||
-              error instanceof ProcessingTaskError ||
-              error instanceof ProcessorError ||
-              error instanceof ProcessorQueryError
+      error instanceof WorkbenchAccessError
+        ? error.code
+        : error instanceof LiteratureNotFoundError &&
+            !args.includes("--request")
+          ? "business-failed"
+          : isQueryFailure(error) ||
+              isMaintenanceFailure(error) ||
+              error instanceof MachineWorkbenchError
             ? error.code
-            : error instanceof QueryApplicationError
+            : error instanceof DocumentProcessingError ||
+                error instanceof ParsingFailure ||
+                error instanceof ArticleIdentityError ||
+                error instanceof ProcessingTaskError ||
+                error instanceof ProcessorError ||
+                error instanceof ProcessorQueryError
               ? error.code
-              : probeCancelled
-                ? "configuration-test-cancelled"
-                : interrupted
-                  ? "operation-interrupted"
-                  : input
-                    ? "invalid-command-input"
-                    : configuration
-                      ? "configuration-failed"
-                      : migration
-                        ? "migration-refused"
-                        : business
-                          ? "business-failed"
-                          : "internal-failed";
+              : error instanceof QueryApplicationError
+                ? error.code
+                : probeCancelled
+                  ? "configuration-test-cancelled"
+                  : interrupted
+                    ? "operation-interrupted"
+                    : input
+                      ? "invalid-command-input"
+                      : configuration
+                        ? "configuration-failed"
+                        : migration
+                          ? "migration-refused"
+                          : business
+                            ? "business-failed"
+                            : "internal-failed";
     effective.stderr?.(
       `${JSON.stringify({
         code: failure,
         ...(args[0] === "web"
           ? {
-              next_action: configuration
-                ? "Check sciretriever config status and the configured catalog/artifact paths."
-                : migration
-                  ? "Check the configured catalog parent directory and inspect any existing catalog with sciretriever storage schema-inspect; upgrades require an explicit backup."
-                  : "Check the local port, build assets and configuration before restarting Web.",
+              next_action:
+                error instanceof WorkbenchAccessError
+                  ? error.code === "web-password-required"
+                    ? "Set SCIRETRIEVER_WEB_PASSWORD to at least 12 characters, or unset it to generate an API key."
+                    : "Use web --port 4174. Optional --host accepts an IPv4 listening address. --origin is no longer needed or supported."
+                  : configuration
+                    ? "Check sciretriever config status and the configured catalog/artifact paths."
+                    : migration
+                      ? "Check the configured catalog parent directory and inspect any existing catalog with sciretriever storage schema-inspect; upgrades require an explicit backup."
+                      : "Check the local port, build assets and configuration before restarting Web.",
             }
           : {}),
         ...(error instanceof ProcessorQueryError

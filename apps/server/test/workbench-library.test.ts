@@ -1,3 +1,7 @@
+import {
+  workbenchLogin,
+  workbenchTestAccess,
+} from "./workbench-auth-fixture.js";
 import { expect, it } from "vitest";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -33,6 +37,7 @@ async function fixture() {
     },
   );
   const http = await startWorkbenchHttp({
+    access: workbenchTestAccess,
     session,
     assets: new Map([
       ["/", { contentType: "text/html", body: "<html></html>" }],
@@ -42,8 +47,9 @@ async function fixture() {
       artifacts: env.app.literatureArtifacts,
     },
   });
-  const root = await fetch(http.origin),
-    cookie = root.headers.get("set-cookie")!.split(";")[0]!;
+  const authCookie = await workbenchLogin(http.origin);
+  const root = await fetch(http.origin, { headers: { Cookie: authCookie } }),
+    cookie = `${authCookie}; ${root.headers.get("set-cookie")!.split(";")[0]!}`;
   const granted = await fetch(`${http.origin}/api/clients`, {
     method: "POST",
     headers: {

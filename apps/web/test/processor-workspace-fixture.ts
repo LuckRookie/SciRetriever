@@ -1,6 +1,8 @@
+import {
+  workbenchTestAccess,
+  loginWorkbenchPage,
+} from "../../server/test/workbench-auth-fixture.js";
 import { readingAssets } from "./reading-assets-fixture.js";
-import { readFile } from "node:fs/promises";
-import { build } from "esbuild";
 import { chromium } from "playwright";
 import {
   parseLiterature,
@@ -15,6 +17,7 @@ import {
 import {
   startWorkbenchHttp,
   type WorkbenchStaticAsset,
+  type WorkbenchHttpOptions,
 } from "../../server/src/workbench/http.js";
 import { ProductionWorkbenchSession } from "../../server/src/workbench/production-session.js";
 import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
@@ -25,7 +28,17 @@ export async function workspace(
   setup?: (
     env: Awaited<ReturnType<typeof coreProcessingFixture>>,
   ) => Promise<void>,
+  options?: {
+    assets: ReadonlyMap<string, WorkbenchStaticAsset>;
+    path?: string;
+    ready?: string;
+    configuration?: (
+      env: Awaited<ReturnType<typeof coreProcessingFixture>>,
+    ) => NonNullable<WorkbenchHttpOptions["configuration"]>;
+  },
 ) {
+  if (!options?.assets)
+    throw new Error("Workspace fixture requires production React assets");
   const env = await coreProcessingFixture({ analysisModel });
   const dispose: (() => Promise<void>)[] = [() => env.close()];
   const close = async () => {
@@ -63,28 +76,9 @@ export async function workspace(
     });
     dispose.push(() => session.close());
     const assets = new Map<string, WorkbenchStaticAsset>(await readingAssets());
-    for (const [route, file, contentType] of [
-      ["/", "live.html", "text/html"],
-      ["/styles.css", "styles.css", "text/css"],
-      ["/live.css", "live.css", "text/css"],
-      ["/workspace.css", "workspace.css", "text/css"],
-    ] as const)
-      assets.set(route, {
-        contentType,
-        body: await readFile(new URL(`../public/${file}`, import.meta.url)),
-      });
-    const bundle = await build({
-      entryPoints: [new URL("../src/live.ts", import.meta.url).pathname],
-      bundle: true,
-      format: "esm",
-      platform: "browser",
-      write: false,
-    });
-    assets.set("/live.js", {
-      contentType: "text/javascript",
-      body: bundle.outputFiles[0]!.contents,
-    });
+    for (const [path, asset] of options.assets) assets.set(path, asset);
     const server = await startWorkbenchHttp({
+      access: workbenchTestAccess,
       ...taskHttpAdapters(env.app),
       session,
       maintenance: env.app.maintenance!,
@@ -98,6 +92,9 @@ export async function workspace(
         artifacts: env.app.literatureArtifacts,
       },
       assets,
+      ...(options?.configuration
+        ? { configuration: options.configuration(env) }
+        : {}),
     });
     dispose.push(() => server.close());
     const browser = await chromium.launch({
@@ -109,6 +106,10 @@ export async function workspace(
     dispose.push(() => browser.close());
     const page = await browser.newPage({
       viewport: { width: 1440, height: 1000 },
+      reducedMotion:
+        process.env.SCIRETRIEVER_REDUCED_MOTION === "reduce"
+          ? "reduce"
+          : "no-preference",
     });
     page.setDefaultTimeout(5000);
     const errors: string[] = [],
@@ -124,11 +125,22 @@ export async function workspace(
             .request,
         );
     });
-    await page.goto(server.origin);
+    await loginWorkbenchPage(page, server.origin);
+    await page.goto(server.origin + (options?.path ?? ""));
     await page
-      .locator(`[data-ck="${env.parseRequest.literature_id}"]`)
+      .locator(options.ready ?? ".paper-row")
+      .first()
       .waitFor();
-    return { env, page, parsed, submissions, errors, close };
+    return {
+      env,
+      page,
+      parsed,
+      submissions,
+      errors,
+      close,
+      origin: server.origin,
+      browser,
+    };
   } catch (error) {
     await close();
     throw error;

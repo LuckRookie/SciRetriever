@@ -1,3 +1,9 @@
+import { dshChatReply } from "./dsh-analysis-fixture.js";
+import {
+  workbenchLogin,
+  workbenchTestAccess,
+  loginWorkbenchPage,
+} from "./workbench-auth-fixture.js";
 import {
   latestBrowserObservationMessage,
   browserModelToolCallId,
@@ -207,6 +213,7 @@ async function installedBrowserJourney(
     );
     const connection = await proxy.start();
     workbench = await server.startProductionWorkbench({
+      access: workbenchTestAccess,
       home,
       literature_id: literatureId,
       applicationOptions: {
@@ -296,13 +303,12 @@ async function installedBrowserJourney(
     const ui = await uiBrowser.newPage();
     const errors: string[] = [];
     ui.on("pageerror", (error) => errors.push(error.message));
-    await ui.goto(`${origin}/?workspace=browser`);
+    await loginWorkbenchPage(ui, origin);
+    await ui.goto(`${origin}/?view=web`);
     await expect
-      .poll(() => ui.locator("#browser-sessions").textContent())
+      .poll(() => ui.getByRole("main").textContent())
       .toContain("没有正在使用的会话");
     for (const path of [
-      "/reader.js",
-      "/reading.css",
       "/reader/pdf.worker.mjs",
       "/reader/katex.css",
       "/reader/text-layer.css",
@@ -312,8 +318,30 @@ async function installedBrowserJourney(
       expect(resource.status(), path).toBe(200);
       expect((await resource.body()).byteLength, path).toBeGreaterThan(100);
     }
-    const landing = await fetch(origin);
-    const cookie = landing.headers.get("set-cookie")?.split(";")[0];
+
+    const entryResources = await ui.evaluate(() =>
+      [
+        ...Array.from(document.scripts, (script) => script.src),
+        ...Array.from(
+          document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'),
+          (link) => link.href,
+        ),
+      ].filter(Boolean),
+    );
+    expect(entryResources.some((url) => /\/assets\/.*\.js$/.test(url))).toBe(
+      true,
+    );
+    expect(entryResources.some((url) => /\/assets\/.*\.css$/.test(url))).toBe(
+      true,
+    );
+    for (const url of entryResources) {
+      const resource = await ui.request.get(url);
+      expect(resource.status(), url).toBe(200);
+      expect((await resource.body()).byteLength, url).toBeGreaterThan(0);
+    }
+    const authCookie = await workbenchLogin(origin);
+    const landing = await fetch(origin, { headers: { Cookie: authCookie } });
+    const cookie = `${authCookie}; ${landing.headers.get("set-cookie")?.split(";")[0]}`;
     expect(cookie).toBeTruthy();
     type Client = { id: string; csrf: string };
     const post = async (path: string, body: unknown, client?: Client) => {
@@ -529,11 +557,16 @@ async function installedBrowserJourney(
     );
     expect(artifact.status).toBe(200);
     expect(sha256(Buffer.from(await artifact.arrayBuffer()))).toBe(hash);
-    await ui.locator('[data-go="lib"]').click();
-    await ui.locator(`[data-id="${literatureId}"]`).click();
+    await ui
+      .getByRole("complementary", { name: "主导航" })
+      .getByRole("button", { name: /^文献库/ })
+      .click();
+    await ui
+      .locator(`[data-literature-id="${literatureId}"] .paper-open`)
+      .click();
     await expect.poll(() => ui.url()).toContain(`literature=${literatureId}`);
     await expect
-      .poll(() => ui.locator("#reader-info").textContent())
+      .poll(() => ui.locator(".reader-information").textContent())
       .toContain("文章身份未验证");
     await ui
       .locator('.reading-pdf-page[data-rendered="true"]')
@@ -868,87 +901,79 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
       executionSchema: "require-v2",
       agentTransportFactory:
         () =>
-        async ({ body }) => {
+        async ({ body, onDispatched }) => {
           try {
             modelCalls++;
-            const wire = JSON.parse(new TextDecoder().decode(body)) as {
-              messages: { content: { type: string; text?: string }[] }[];
-            };
-            const input = JSON.parse(
-              wire.messages[1]?.content.find((part) => part.type === "text")
-                ?.text ?? "{}",
-            ) as {
-              core?: { segment_id: string; text: string }[];
-              segments?: { segment_id: string; text: string }[];
-              candidates?: {
-                id: string;
-                category: string;
-                epistemic: string;
-                text: string;
-                conditions: string[];
-                quantity: unknown;
-              }[];
-            };
-            let value: Record<string, unknown>;
-            if (input.core || input.segments) {
-              const segment = (input.core ?? input.segments)!.find((item) =>
-                item.text.includes("4.2 eV"),
-              );
-              value = segment
-                ? {
-                    outcome: "completed",
-                    title: "Installed result",
-                    statements: [
-                      {
-                        statement_id: "local-1",
-                        category: "result",
-                        epistemic: "reported",
-                        text: "The measured result was 4.2 eV in dry conditions",
-                        conditions: ["dry conditions"],
-                        quantity: {
-                          value: "4.2",
-                          unit: "eV",
-                          comparison_basis: null,
-                        },
-                        evidence_segment_ids: [segment.segment_id],
-                      },
-                    ],
-                  }
-                : {
-                    outcome: "not_applicable",
-                    title: "No measurement",
-                    statements: [],
-                  };
-            } else if (input.candidates) {
-              value = {
-                title: "Installed synthesis",
-                statements: input.candidates.map((candidate, index) => ({
-                  statement_id: `merged-${index + 1}`,
-                  category: candidate.category,
-                  epistemic: candidate.epistemic,
-                  relation: "single-source",
-                  conflict_group_id: null,
-                  text: candidate.text,
-                  conditions: candidate.conditions,
-                  quantity: candidate.quantity,
-                  source_ids: [candidate.id],
-                })),
+            onDispatched?.();
+            const wire = JSON.parse(
+              new TextDecoder().decode(body),
+            ) as Parameters<typeof dshChatReply>[0];
+            const reply = await dshChatReply(wire, (raw) => {
+              const input = raw as {
+                core?: { segment_id: string; text: string }[];
+                segments?: { segment_id: string; text: string }[];
+                candidates?: {
+                  id: string;
+                  category: string;
+                  epistemic: string;
+                  text: string;
+                  conditions: string[];
+                  quantity: unknown;
+                }[];
               };
-            } else throw new Error("unexpected synthetic model input");
+              let value: Record<string, unknown>;
+              if (input.core || input.segments) {
+                const segment = (input.core ?? input.segments)!.find((item) =>
+                  item.text.includes("4.2 eV"),
+                );
+                value = segment
+                  ? {
+                      outcome: "completed",
+                      title: "Installed result",
+                      statements: [
+                        {
+                          statement_id: "local-1",
+                          category: "result",
+                          epistemic: "reported",
+                          text: "The measured result was 4.2 eV in dry conditions",
+                          conditions: ["dry conditions"],
+                          quantity: {
+                            value: "4.2",
+                            unit: "eV",
+                            comparison_basis: null,
+                          },
+                          evidence_segment_ids: [segment.segment_id],
+                        },
+                      ],
+                    }
+                  : {
+                      outcome: "not_applicable",
+                      title: "No measurement",
+                      statements: [],
+                    };
+              } else if (input.candidates) {
+                value = {
+                  title: "Installed synthesis",
+                  statements: input.candidates.map((candidate, index) => ({
+                    statement_id: `merged-${index + 1}`,
+                    category: candidate.category,
+                    epistemic: candidate.epistemic,
+                    relation: "single-source",
+                    conflict_group_id: null,
+                    text: candidate.text,
+                    conditions: candidate.conditions,
+                    quantity: candidate.quantity,
+                    source_ids: [candidate.id],
+                  })),
+                };
+              } else throw new Error("unexpected synthetic model input");
+              return value;
+            });
             return {
               status: 200,
               headers: [],
               body: Buffer.from(
-                JSON.stringify({
-                  model: "installed-model",
-                  choices: [
-                    {
-                      finish_reason: "stop",
-                      message: { content: JSON.stringify(value) },
-                    },
-                  ],
-                  usage: { prompt_tokens: 20, completion_tokens: 30 },
-                }),
+                JSON.stringify({ ...reply, model: "installed-model" }),
               ),
             };
           } catch (error) {

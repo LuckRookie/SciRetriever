@@ -4,6 +4,7 @@ import {
   parseSynthesisSourceResult,
   knowledgeStatementSha256,
   sha256,
+  type EvidenceRef,
   type DocumentReadOperation,
   type DocumentReadRequestMap,
   type DocumentReadResultMap,
@@ -11,8 +12,8 @@ import {
   type DocumentReadingRef,
   type LiteratureDetail,
 } from "@sciretriever/contracts";
-import type { AppContext } from "../workspace/types.js";
-import type { FixedSource } from "../workspace/source-navigation.js";
+import type { ReadingContext } from "./contract.js";
+import type { FixedSource } from "./source.js";
 
 const operations: Record<DocumentReadOperation, string> = {
   default: "document-default",
@@ -26,7 +27,7 @@ const operations: Record<DocumentReadOperation, string> = {
   evidence: "evidence-resolve",
 };
 export async function readDocument<K extends DocumentReadOperation>(
-  ctx: AppContext,
+  ctx: ReadingContext,
   kind: K,
   request: DocumentReadRequestMap[K],
 ): Promise<DocumentReadResultMap[K]> {
@@ -34,7 +35,7 @@ export async function readDocument<K extends DocumentReadOperation>(
   return parseDocumentReadResult(kind, reply.result, request);
 }
 export async function resolveReadingSources(
-  ctx: AppContext,
+  ctx: ReadingContext,
   detail: LiteratureDetail,
   source: FixedSource | null,
   mode: "pdf" | "doc",
@@ -120,10 +121,21 @@ export async function resolveReadingSources(
         })
       ).document;
   }
+  if (material && document) {
+    const original = document.source_material_ref;
+    if (
+      original.literature_id !== material.literature_id ||
+      original.asset_id !== material.asset_id ||
+      original.asset_sha256 !== material.asset_sha256 ||
+      original.byte_size !== material.byte_size ||
+      original.media_type !== material.media_type
+    )
+      throw new Error("固定文档与原始材料不匹配，未打开其他来源。");
+  }
   return { material, document };
 }
 export async function readPdfBytes(
-  ctx: AppContext,
+  ctx: ReadingContext,
   material: DocumentMaterialRef,
 ): Promise<Uint8Array<ArrayBuffer>> {
   if (
@@ -180,4 +192,37 @@ export async function readPdfBytes(
     throw new Error("PDF 完整性校验失败");
   ctx.signal.throwIfAborted();
   return bytes;
+}
+
+export interface EvidencePageCursor {
+  continuation: string | null;
+  expectedStart: number | null;
+}
+/** Continuations are bound both to the evidence identity and the preceding byte range. */
+export async function readEvidencePage(
+  ctx: ReadingContext,
+  evidence: EvidenceRef,
+  cursor: EvidencePageCursor,
+) {
+  const result = await readDocument(ctx, "evidence", {
+    evidence,
+    max_bytes: 65536,
+    continuation: cursor.continuation,
+  });
+  if (
+    cursor.expectedStart !== null &&
+    result.actual_range?.start_utf8 !== cursor.expectedStart
+  )
+    throw new Error("证据续读范围不连续，已读取内容仍保留。");
+  return result;
+}
+export function nextEvidencePage(
+  result: DocumentReadResultMap["evidence"],
+): EvidencePageCursor | null {
+  return result.continuation
+    ? {
+        continuation: result.continuation,
+        expectedStart: result.actual_range?.end_utf8 ?? null,
+      }
+    : null;
 }

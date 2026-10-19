@@ -97,19 +97,20 @@ it("installs packed workspace modules and exercises their public boundaries with
       }
       return entry;
     };
-    const serverManifest = JSON.parse(
-      readFileSync(join(repository, "apps/server/package.json"), "utf8"),
-    ) as {
-      name: string;
-      version: string;
-      dependencies?: Record<string, string>;
-    };
-    for (const dependency of Object.keys(serverManifest.dependencies ?? {})) {
-      if (dependency.startsWith("@sciretriever/")) continue;
-      const child = await visit(dependency, join(repository, "apps/server"));
-      overrides[
-        `${serverManifest.name}@${serverManifest.version}>${dependency}`
-      ] = `file:./${child.tarball}`;
+    for (const workspace of ["packages/contracts", "apps/server"]) {
+      const manifest = JSON.parse(
+        readFileSync(join(repository, workspace, "package.json"), "utf8"),
+      ) as {
+        name: string;
+        version: string;
+        dependencies?: Record<string, string>;
+      };
+      for (const dependency of Object.keys(manifest.dependencies ?? {})) {
+        if (dependency.startsWith("@sciretriever/")) continue;
+        const child = await visit(dependency, join(repository, workspace));
+        overrides[`${manifest.name}@${manifest.version}>${dependency}`] =
+          `file:./${child.tarball}`;
+      }
     }
     const dependencies = Object.fromEntries(
       ["contracts", "server"].map((name) => {
@@ -179,6 +180,11 @@ it("installs packed workspace modules and exercises their public boundaries with
       const bytes = canonicalJsonBytes({ z: '末', a: 1 });
       assert.equal(new TextDecoder().decode(bytes), '{"a":1,"z":"末"}');
       assert.match(await sha256(bytes), /^[0-9a-f]{64}$/);
+      const nativeHash = await sha256(bytes);
+      const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+      Object.defineProperty(globalThis, 'crypto', { configurable: true, value: {} });
+      assert.equal(await sha256(bytes), nativeHash);
+      Object.defineProperty(globalThis, 'crypto', cryptoDescriptor);
       assert.equal(parseConfiguration('').sources.metadata.limit, 500);
       const home = mkdtempSync(join(tmpdir(), 'sciretriever-installed-smoke-'));
       const application = await createApplication(home);
@@ -190,40 +196,75 @@ it("installs packed workspace modules and exercises their public boundaries with
       }, { max_actions: 2, max_model_calls: 1, max_retries: 1, max_bytes: 1024, deadline_ms: 10000 });
       await session.refresh();
       const assets = await loadWorkbenchAssets();
-      assert.deepEqual([...assets.keys()].slice(0, 5), ['/', '/styles.css', '/live.css', '/workspace.css', '/live.js']);
-      const readerFiles = ['/reader.js', '/reading.css', '/reader/pdf.worker.mjs', '/reader/katex.css', '/reader/text-layer.css', '/reader/third-party-notices.txt', '/reader/fonts/KaTeX_Main-Regular.woff2', '/reader/standard_fonts/LiberationSans-Regular.ttf'];
+      assert.match(assets.get('/').body.toString(), /id="root"/);
+      for (const route of ['/live.js', '/workspace.css', '/reader.js', '/reading.css']) assert.equal(assets.has(route), false, route);
+      for (const route of ['/auth', '/auth.js', '/auth.css']) assert.ok(assets.get(route)?.body.length > 100, route);
+      assert.equal(assets.get('/auth').contentType, 'text/html; charset=utf-8');
+      const readerFiles = ['/reader/pdf.worker.mjs', '/reader/katex.css', '/reader/text-layer.css', '/reader/third-party-notices.txt', '/reader/fonts/KaTeX_Main-Regular.woff2', '/reader/standard_fonts/LiberationSans-Regular.ttf'];
       for (const route of readerFiles) assert.ok(assets.get(route)?.body.length > 100, route);
-      for (const route of [...assets.keys()].slice(5)) assert.ok(route === '/reader.js' || route === '/reading.css' || route.startsWith('/reader/'), route);
+      const serverRoot = dirname(fileURLToPath(import.meta.resolve('@sciretriever/server')));
+      const reactFiles = JSON.parse(readFileSync(join(serverRoot, 'web/react/assets.json'), 'utf8'));
+      assert.ok(reactFiles.includes('index.html'));
+      assert.ok(reactFiles.includes('third-party-notices.txt'));
+      for (const name of reactFiles) assert.ok(assets.get(name === 'index.html' ? '/' : '/' + name)?.body.length > 0, name);
+      for (const route of assets.keys()) assert.ok(['/', '/auth', '/auth.js', '/auth.css'].includes(route) || route.startsWith('/reader/') || reactFiles.includes(route.slice(1)), route);
+      assert.ok(reactFiles.some(name => name.endsWith('.woff2')));
+      assert.ok(reactFiles.some(name => name.endsWith('.css')));
+      assert.match(assets.get('/third-party-notices.txt').body.toString(), /react-aria-components@/);
+      assert.match(assets.get('/third-party-notices.txt').body.toString(), /Apache License/);
+      assert.match(assets.get('/third-party-notices.txt').body.toString(), /SIL OPEN FONT LICENSE/);
+      assert.equal(assets.has('/assets.json'), false);
+      assert.equal(existsSync(join(serverRoot, 'web/next')), false);
       assert.equal(assets.get('/reader/pdf.worker.mjs').contentType, 'text/javascript');
       assert.equal(assets.get('/reader/fonts/KaTeX_Main-Regular.woff2').contentType, 'font/woff2');
       assert.ok([...assets.keys()].some(route => route.startsWith('/reader/cmaps/') && route.endsWith('.bcmap')));
       assert.ok([...assets.keys()].some(route => route.startsWith('/reader/wasm/') && route.endsWith('.wasm')));
       assert.equal(assets.has('/package.json'), false);
 
-      const http = await startWorkbenchHttp({ session, assets });
-      const rootResponse = await fetch(http.origin);
+      const http = await startWorkbenchHttp({ session, assets, access: { host: '127.0.0.1' } });
+      assert.equal(typeof http.apiKey, 'string');
+      const anonymous = await fetch(http.origin, { redirect: 'manual' });
+      assert.equal(anonymous.status, 303);
+      const login = await fetch(http.origin + '/auth/login', {
+        method: 'POST', headers: { Origin: http.origin, 'Content-Type': 'application/json', 'X-Workbench-Init': '1' },
+        body: JSON.stringify({ password: http.apiKey }),
+      });
+      assert.equal(login.status, 200);
+      const authCookie = login.headers.getSetCookie().map(value => value.split(';')[0]).join('; ');
+      const rootResponse = await fetch(http.origin, { headers: { Cookie: authCookie } });
       assert.equal(rootResponse.status, 200);
       const workbenchPage = await rootResponse.text();
-      assert.match(workbenchPage, /SciRetriever 文献库/);
-      assert.match(workbenchPage, /id="side"/);
-      assert.match(workbenchPage, /id="main"/);
-      const cookie = (rootResponse.headers.get('set-cookie') ?? '').split(';')[0];
-      const scriptResponse = await fetch(http.origin + '/live.js', { headers: { cookie } });
-      assert.equal(scriptResponse.status, 200);
-      assert.ok((scriptResponse.headers.get('content-type') ?? '').includes('text/javascript'));
-      assert.ok((await scriptResponse.text()).includes('/api/candidate/'));
+      assert.match(workbenchPage, /SciRetriever · 文献库/);
+      assert.match(workbenchPage, /id="root"/);
+      const cookie = authCookie + '; ' + (rootResponse.headers.get('set-cookie') ?? '').split(';')[0];
+      for (const path of ['/next', '/next/', '/next/index.html']) {
+        const alias = await fetch(http.origin + path + '?view=web&session=installed-page', { headers: { cookie }, redirect: 'manual' });
+        assert.equal(alias.status, 404);
+        assert.equal(alias.headers.has('location'), false);
+      }
+      const reactScript = reactFiles.find(name => name.startsWith('assets/index-') && name.endsWith('.js'));
+      assert.ok(reactScript);
+      const chunk = await fetch(http.origin + '/' + reactScript, { headers: { cookie } });
+      assert.equal(chunk.status, 200);
+      assert.ok((chunk.headers.get('content-type') ?? '').includes('text/javascript'));
+      assert.ok((await chunk.arrayBuffer()).byteLength > 100);
       await http.close();
       await session.close();
       await application.close();
       const migrated = await createApplication(home, { executionSchema: 'upgrade-synthetic' });
       await migrated.close();
       const maintenanceAssets = await loadMaintenanceWorkbenchAssets();
-      assert.deepEqual([...maintenanceAssets.keys()], ['/', '/query', '/styles.css', '/live.css', '/maintenance.js', '/query.js']);
+      for (const route of ['/', '/query', '/reader/pdf.worker.mjs']) assert.ok(maintenanceAssets.has(route), route);
+      assert.match(maintenanceAssets.get('/').body.toString(), /data-entry="maintenance"/);
+      assert.match(maintenanceAssets.get('/query').body.toString(), /data-entry="query"/);
+      for (const name of reactFiles) assert.ok(maintenanceAssets.has(name === 'index.html' ? '/' : '/' + name), name);
       const maintenance = await startMaintenanceWorkbench({ home });
       const maintenancePage = await fetch(maintenance.origin);
       assert.equal(maintenancePage.status, 200);
-      assert.match(await maintenancePage.text(), /手动 PDF 接纳/);
-      assert.equal((await fetch(maintenance.origin + '/maintenance.js')).status, 200);
+      assert.match(await maintenancePage.text(), /data-entry="maintenance"/);
+      const oldQuery = await fetch(maintenance.origin + '/next/query?view=lib', { redirect: 'manual' });
+      assert.equal(oldQuery.status, 404);
+      assert.equal(oldQuery.headers.has('location'), false);
       assert.equal((await fetch(maintenance.origin + '/query')).status, 200);
       await maintenance.close();
       rmSync(home, { recursive: true, force: true });

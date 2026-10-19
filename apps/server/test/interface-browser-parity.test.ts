@@ -1,8 +1,12 @@
+import {
+  workbenchTestAccess,
+  WORKBENCH_TEST_PASSWORD,
+} from "./workbench-auth-fixture.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { PassThrough } from "node:stream";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { sha256, type WorkbenchView } from "@sciretriever/contracts";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMcpServer } from "../src/mcp/server.js";
 import { runCli } from "../src/cli/main.js";
 import {
@@ -15,6 +19,11 @@ import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
 import type { BrowserPageHandle } from "../src/browser/host.js";
 import { createTaskOperations } from "../src/entry/task-operations.js";
+
+beforeEach(() =>
+  vi.stubEnv("SCIRETRIEVER_WEB_PASSWORD", WORKBENCH_TEST_PASSWORD),
+);
+afterEach(() => vi.unstubAllEnvs());
 
 async function fixture() {
   const session = new ProductionWorkbenchSession(
@@ -55,6 +64,7 @@ async function fixture() {
   );
   const tabs = vi.fn(async () => undefined);
   const http = await startWorkbenchHttp({
+    access: workbenchTestAccess,
     session,
     assets: new Map([
       ["/", { contentType: "text/html", body: "offline fixture" }],
@@ -106,6 +116,7 @@ describe("machine connections to the live Web owner", () => {
     const session = new ProductionWorkbenchSession(null, undefined);
     const tasks = createTaskOperations(env.app)!;
     const web = await startWorkbenchHttp({
+      access: workbenchTestAccess,
       session,
       tasks,
       assets: new Map([

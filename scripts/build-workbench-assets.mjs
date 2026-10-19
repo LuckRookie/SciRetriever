@@ -1,73 +1,63 @@
 import { buildReaderAssets } from "./build-reader-assets.mjs";
-import { build } from "esbuild";
-import { copyFile, mkdir } from "node:fs/promises";
+import {
+  buildAuthAssets,
+  buildReactAssets,
+  buildSampleAssets,
+} from "./build-react-assets.mjs";
+import { lstat, mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const repository = resolve(new URL("..", import.meta.url).pathname);
 const serverAssets = resolve(repository, "apps/server/dist/web");
 const webDist = resolve(repository, "apps/web/dist");
+for (const directory of [serverAssets, webDist]) {
+  const metadata = await lstat(directory).catch((error) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (metadata && !metadata.isDirectory())
+    throw new Error("Workbench build output must be a real directory");
+}
 await Promise.all([
   mkdir(serverAssets, { recursive: true }),
   mkdir(webDist, { recursive: true }),
 ]);
-await build({
-  entryPoints: [resolve(repository, "apps/web/src/live.ts")],
-  bundle: true,
-  format: "esm",
-  platform: "browser",
-  outfile: resolve(serverAssets, "live.js"),
-});
-await build({
-  entryPoints: [resolve(repository, "apps/web/src/query.ts")],
-  bundle: true,
-  format: "esm",
-  platform: "browser",
-  outfile: resolve(serverAssets, "query.js"),
-});
-await build({
-  entryPoints: [resolve(repository, "apps/web/src/maintenance.ts")],
-  bundle: true,
-  format: "esm",
-  platform: "browser",
-  outfile: resolve(serverAssets, "maintenance.js"),
-});
-await Promise.all([
-  copyFile(
-    resolve(repository, "apps/web/public/live.html"),
-    resolve(serverAssets, "live.html"),
-  ),
-  copyFile(
-    resolve(repository, "apps/web/public/styles.css"),
-    resolve(serverAssets, "styles.css"),
-  ),
-  copyFile(
-    resolve(repository, "apps/web/public/live.css"),
-    resolve(serverAssets, "live.css"),
-  ),
-  copyFile(
-    resolve(repository, "apps/web/public/workspace.css"),
-    resolve(serverAssets, "workspace.css"),
-  ),
-  copyFile(
-    resolve(repository, "apps/web/public/query.html"),
-    resolve(serverAssets, "query.html"),
-  ),
-  copyFile(
-    resolve(repository, "apps/web/public/maintenance.html"),
-    resolve(serverAssets, "maintenance.html"),
-  ),
-  copyFile(
-    resolve(serverAssets, "live.js"),
-    resolve(webDist, "live.bundle.js"),
-  ),
-  copyFile(
-    resolve(serverAssets, "query.js"),
-    resolve(webDist, "query.bundle.js"),
-  ),
-  copyFile(
-    resolve(serverAssets, "maintenance.js"),
-    resolve(webDist, "maintenance.bundle.js"),
-  ),
-]);
-
+await buildAuthAssets(serverAssets);
+await buildSampleAssets(webDist);
 await buildReaderAssets(serverAssets);
+await buildReactAssets(resolve(serverAssets, "react"), {
+  readerNotices: resolve(serverAssets, "reader/third-party-notices.txt"),
+});
+
+// The retired parallel bundle must not enter packages through the JS file glob.
+const retiredReact = resolve(serverAssets, "next");
+const retiredMetadata = await lstat(retiredReact).catch((error) => {
+  if (error.code === "ENOENT") return null;
+  throw error;
+});
+if (retiredMetadata && !retiredMetadata.isDirectory())
+  throw new Error("Retired React build output must be a real directory");
+if (retiredMetadata) await rm(retiredReact, { recursive: true });
+
+// Retired UI files are generated outputs; remove only this known legacy set.
+for (const name of [
+  "live.js",
+  "query.js",
+  "maintenance.js",
+  "reader.js",
+  "live.html",
+  "query.html",
+  "maintenance.html",
+  "index.html",
+  "styles.css",
+  "live.css",
+  "workspace.css",
+  "reading.css",
+])
+  await rm(resolve(serverAssets, name), { force: true });
+for (const name of [
+  "live.bundle.js",
+  "query.bundle.js",
+  "maintenance.bundle.js",
+])
+  await rm(resolve(webDist, name), { force: true });

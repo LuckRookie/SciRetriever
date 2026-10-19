@@ -5,6 +5,10 @@ import { randomUUID } from "node:crypto";
 import { probeCatalogIdentity } from "../storage/execution/migration-gate.js";
 import { initializeCatalogSchema } from "../storage/sqlite/catalog-schema.js";
 import {
+  validateWorkbenchAccess,
+  type WorkbenchAccessOptions,
+} from "../workbench/access.js";
+import {
   canonicalJsonBytes,
   parseLiteratureId,
   sha256,
@@ -36,6 +40,7 @@ import {
   startQueryOnlyHttp,
   type QueryOnlyHttpOptions,
   startWorkbenchHttp,
+  type WorkbenchHttpServer,
   type WorkbenchStaticAsset,
   type WorkbenchRuntimeCapabilities,
   type WorkbenchHttpOptions,
@@ -313,6 +318,7 @@ export async function startMaintenanceWorkbench(options: {
 /** Explicit production Browser workbench. A view alone never starts acquisition. */
 export async function startProductionWorkbench(options: {
   readonly home: string;
+  readonly access?: WorkbenchAccessOptions;
   readonly literature_id?: string;
   readonly assets?: ReadonlyMap<string, WorkbenchStaticAsset>;
   readonly port?: number;
@@ -322,12 +328,13 @@ export async function startProductionWorkbench(options: {
   >;
   /** Test/operator probe seam; production defaults to the Configuration owner probe. */
   readonly configurationProbeSeams?: ConfigurationProbeSeams;
-}): Promise<{
-  readonly origin: string;
-  readonly session: ProductionWorkbenchSession;
-  readonly application: Application;
-  close(): Promise<void>;
-}> {
+}): Promise<
+  WorkbenchHttpServer & {
+    readonly session: ProductionWorkbenchSession;
+    readonly application: Application;
+  }
+> {
+  validateWorkbenchAccess(options.access ?? {});
   const literatureId =
     options.literature_id === undefined
       ? null
@@ -426,6 +433,7 @@ export async function startProductionWorkbench(options: {
     if (query.readiness.status !== "ready")
       throw new Error("workbench query unavailable");
     http = await startWorkbenchHttp({
+      ...(options.access ? { access: options.access } : {}),
       session,
       acquisition: session,
       ...taskHttpAdapters(app),
@@ -463,7 +471,7 @@ export async function startProductionWorkbench(options: {
         options.configurationProbeSeams,
       ),
     });
-    return { origin: http.origin, session, application: app, close };
+    return { ...http, session, application: app, close };
   } catch (error) {
     try {
       await close();
@@ -481,6 +489,7 @@ export async function startProductionWorkbench(options: {
 /** Explicit synthetic composition: one Application and Network budget, no real Provider or user Profile. */
 export async function startSyntheticWorkbench(options: {
   readonly home: string;
+  readonly access?: WorkbenchAccessOptions;
   readonly runtime: VerifiedCloakRuntime;
   readonly assets: ReadonlyMap<string, WorkbenchStaticAsset>;
   readonly port?: number;
@@ -489,12 +498,12 @@ export async function startSyntheticWorkbench(options: {
     ApplicationOptions,
     "configurationOwner" | "executionSchema"
   >;
-}): Promise<{
-  readonly origin: string;
-  readonly session: WorkbenchSession;
-  readonly application: Application;
-  close(): Promise<void>;
-}> {
+}): Promise<
+  WorkbenchHttpServer & {
+    readonly session: WorkbenchSession;
+    readonly application: Application;
+  }
+> {
   const configurationOwner =
     options.configurationOwner ??
     new TypeScriptConfigurationOwner(options.home);
@@ -504,6 +513,7 @@ export async function startSyntheticWorkbench(options: {
     configurationOwner,
   });
   let fixture: Awaited<ReturnType<typeof startWorkbenchFixture>> | undefined;
+  let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
   let proxy: BrowserNetworkProxy | undefined;
   let host: BrowserHost | undefined;
   let session: WorkbenchSession | undefined;
@@ -519,6 +529,7 @@ export async function startSyntheticWorkbench(options: {
         host,
         proxy,
         fixture,
+        query,
         application,
       ]) {
         try {
@@ -725,8 +736,11 @@ export async function startSyntheticWorkbench(options: {
       });
     }
     await session.refresh();
+    query = await createQueryApplication(options.home);
     http = await startWorkbenchHttp({
+      ...(options.access ? { access: options.access } : {}),
       session,
+      query: { application: query },
       ...(application.maintenance
         ? { maintenance: application.maintenance }
         : {}),
@@ -746,7 +760,7 @@ export async function startSyntheticWorkbench(options: {
       assets: options.assets,
       ...(options.port === undefined ? {} : { port: options.port }),
     });
-    return { origin: http.origin, session, application, close };
+    return { ...http, session, application, close };
   } catch (error) {
     await close();
     throw error;

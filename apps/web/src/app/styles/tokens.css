@@ -1,0 +1,138 @@
+@layer tokens, base, components, pages;
+@layer tokens {
+  :root {
+    color-scheme: light;
+    --bg: #fff;
+    --side: #f4f5f3;
+    --fg: #1d2125;
+    --fg2: #5f6670;
+    --fg3: #5c646e;
+    --line: rgba(29, 33, 37, 0.09);
+    --line2: rgba(29, 33, 37, 0.17);
+    --line3: rgba(29, 33, 37, 0.34);
+    --control-border: #7d858e;
+    --hover: rgba(29, 33, 37, 0.05);
+    --active: rgba(29, 33, 37, 0.09);
+    --sel: rgba(47, 75, 168, 0.09);
+    --sel-line: rgba(47, 75, 168, 0.45);
+    --blue: #2f4ba8;
+    --blue-fg: #fff;
+    --focus: #2f4ba8;
+    --callout: #f4f5f3;
+    --pdfbg: #eceeeb;
+    --hl: rgba(247, 205, 40, 0.42);
+    --mark: #fbe7a1;
+    --mark-fg: #5a4505;
+    --mark-soft: rgba(247, 205, 40, 0.16);
+    --t-gray-bg: #e3e2e0;
+    --t-gray: #5a5955;
+    --t-blue-bg: #d3e5ef;
+    --t-blue: #28456c;
+    --t-green-bg: #dbeddb;
+    --t-green: #2b593f;
+    --t-yellow-bg: #fdecc8;
+    --t-yellow: #76541f;
+    --t-red-bg: #ffe2dd;
+    --t-red: #a03a33;
+    --t-purple-bg: #e8deee;
+    --t-purple: #492f64;
+    --surface: var(--bg);
+    --surface-raised: var(--bg);
+    --surface-sunken: var(--side);
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --space-7: 48px;
+    --radius-xs: 4px;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-round: 50%;
+    --radius-pill: 999px;
+    --control-height: 40px;
+    --control-small-height: 36px;
+    --control-inline-height: 28px;
+    --text-interface: 18px;
+    --text-literature: 20px;
+    --text-reading: 20px;
+    --text-secondary: 17px;
+    --text-caption: 16px;
+    --sans:
+      "Source Sans 3", -apple-system, BlinkMacSystemFont, "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --serif: "Source Serif 4", "Noto Serif SC", "Songti SC", Georgia, serif;
+    --mono: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+    --shadow-1: 0 3px 10px rgba(15, 15, 15, 0.07);
+    --shadow-pop: 0 5px 18px rgba(15, 15, 15, 0.14);
+    --shadow-modal: 0 16px 48px rgba(15, 15, 15, 0.2);
+    --dur-1: 120ms;
+    --dur-2: 180ms;
+    --dur-3: 240ms;
+    --dur-highlight: 900ms;
+    --dur-spin: 800ms;
+    --ease-out: cubic-bezier(0.2, 0, 0, 1);
+    --ease-in: cubic-bezier(0.4, 0, 1, 1);
+    --disabled-opacity: 0.45;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #17191c;
+    --side: #1d2024;
+    --fg: #e3e5e8;
+    --fg2: #9aa1a9;
+    --fg3: #929aa4;
+    --line: rgba(255, 255, 255, 0.09);
+    --line2: rgba(255, 255, 255, 0.16);
+    --line3: rgba(255, 255, 255, 0.36);
+    --control-border: #969fa9;
+    --hover: rgba(255, 255, 255, 0.05);
+    --active: rgba(255, 255, 255, 0.09);
+    --sel: rgba(142, 162, 240, 0.16);
+    --sel-line: rgba(142, 162, 240, 0.55);
+    --blue: #8ea2f0;
+    --blue-fg: #11141b;
+    --focus: #8ea2f0;
+    --callout: #1f2226;
+    --pdfbg: #111315;
+    --surface-raised: #22262b;
+    --hl: rgba(247, 205, 40, 0.32);
+    --mark: rgba(247, 213, 71, 0.22);
+    --mark-fg: #f3df8a;
+    --t-gray-bg: #373737;
+    --t-gray: #d0d0d0;
+    --t-blue-bg: #28456c;
+    --t-blue: #cfe3f5;
+    --t-green-bg: #2b593f;
+    --t-green: #cfe8d6;
+    --t-yellow-bg: #59482a;
+    --t-yellow: #f2d79e;
+    --t-red-bg: #6e3630;
+    --t-red: #ffd5cf;
+    --t-purple-bg: #492f64;
+    --t-purple: #e5d6f2;
+    --shadow-pop: 0 5px 18px rgba(0, 0, 0, 0.24);
+    --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.3);
+  }
+  :root[data-theme="green"] {
+    --bg: #fbfcf8;
+    --side: #edf1e9;
+    --blue: #285b4b;
+    --blue-fg: #fff;
+    --focus: #285b4b;
+    --sel: rgba(40, 91, 75, 0.09);
+    --sel-line: rgba(40, 91, 75, 0.45);
+  }
+  :root[data-theme="warm"] {
+    --bg: #fffdf6;
+    --side: #f3efe4;
+    --blue: #35558a;
+    --blue-fg: #fff;
+    --focus: #35558a;
+    --fg: #29261f;
+    --fg2: #746c60;
+    --fg3: #746c60;
+  }
+}

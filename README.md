@@ -24,7 +24,7 @@ SciRetriever 是科研 Agent 的论文知识组件，目标是独立提供可追
 | --------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | [apps/](apps/README.md)                       | 应用实现：核心服务、CLI/MCP/HTTP 与 Web 界面                                              |
 | [apps/server/src/](apps/server/src/README.md) | 按业务职责划分的服务端模块地图                                                            |
-| [apps/web/](apps/web/README.md)               | 页面、样式、交互与界面回归                                                                |
+| [apps/web/](apps/web/README.md)               | React 工作台、共享组件与动效、框架无关阅读引擎和界面回归                                    |
 | [packages/](packages/README.md)               | 跨模块、跨应用共享的中性合同包                                                            |
 | [docs/](docs/README.md)                       | 需求、架构、使用指南、维护说明、提案与计划                                                |
 | [tests/](tests/README.md)                     | 随仓库分发的共享合成测试材料；正式回归在各模块的 `test/`                                  |
@@ -115,6 +115,8 @@ node apps/server/dist/cli/main.js export pdf LITERATURE_ID article-copy.pdf --js
 pnpm build
 node apps/server/dist/cli/main.js web --port 4174
 ```
+
+Web 默认监听所有 IPv4 网卡。本机和其他电脑都需登录；未指定密码时，启动终端显示自动生成的 `api_key`，在浏览器登录框输入即可。固定密码通过 `SCIRETRIEVER_WEB_PASSWORD` 提供。无需 `--origin`，直接打开 `http://服务器IP:4174/`；HTTP 登录不加密传输。详见[Web 启动与登录](docs/guides/web-workbench.md#在服务器运行从自己的电脑访问)。
 
 已安装入口为 `sciretriever web`。正式 Web 按定稿原型以文献库为首页，提供发现、检索、洞察、综合、提取、持久任务、Browser 会话、阅读标签和设置。首次启动直接可用：未配置的数据库与资产路径分别保存为 `~/.sciretriever/catalog.sqlite` 和 `~/.sciretriever/artifacts/`，缺库时创建完整空库；已有自定义路径优先。页面显示实际绑定，CLI/MCP 共享已保存配置。无需初始文献，不自动获取或升级已有库。可在设置中修改位置，重启后生效；不移动已有资料。操作与能力边界见[Web 文献库工作空间指南](docs/guides/web-workbench.md)。
 
@@ -386,7 +388,7 @@ Reset、迁移、恢复或 fallback。operator 手工删除旧 section 后，模
 result／单工具的兼容入口，Browser 内部保留文本、工具调用 ID 和对应结果；具体 Model 可以设置 `stream = false`，此时只请求和解析非流式 JSON。
 Analyze/Browser 只继承所选 Model，不会收到事件流、覆盖 stream，或在失败后触发另一种模式的重发。
 
-模型调用与持续 Agent 会话统一由进程内 DSH/Cordis 底座执行。DSH 是唯一启用的默认 Agents 后端，无需另行配置后端开关；原内置执行后端不再提供，DSH 失败也不会回退到旧实现。分析、综合、身份核验和模型 probe 的既有结构化请求也进入原生 DSH 模型服务；通用会话支持纯文本、多图、工具反馈与上下文管理。Browser 每篇文章保留独立上下文，显式选择最新截图策略；人工操作和下载失败恢复进入同一会话。Browser owner 仍强制页面/控制版本、动作节奏和文章预算，下载与入库由原 Acquisition/Entry 完成。模型、凭据和 Network 沿用项目配置，不读取本机其它 Agent 的 profile。关闭底座会取消并等待调用及会话释放，不承诺跨进程恢复。此次统一执行基础保留现有分析算法，尚不能据此宣称科研内容质量全面提升。详见 [Agents 模块](apps/server/src/agents/README.md) 与 [DSH 依赖说明](docs/notes/deepseek-harness.md)。
+模型调用与持续 Agent 会话统一由进程内 DSH/Cordis 底座执行。DSH 是唯一启用的默认 Agents 后端，无需另行配置后端开关；原内置执行后端不再提供，DSH 失败也不会回退到旧实现。分析、综合、身份核验和模型 probe 的既有结构化请求也进入原生 DSH 模型服务；通用会话支持纯文本、多图、工具反馈与上下文管理。Browser 每篇文章保留独立上下文，显式选择最新截图策略；人工操作和下载失败恢复进入同一会话。Browser owner 仍强制页面/控制版本、动作节奏和文章预算，下载与入库由原 Acquisition/Entry 完成。模型、凭据和 Network 沿用项目配置，不读取本机其它 Agent 的 profile。关闭底座会取消并等待调用及会话释放，不承诺跨进程恢复。单篇/长文分析使用同一 DSH 阅读会话，支持分页读完整正文、回读与检索、查看已保存图片，并在引用校验拒绝后继续修正；集合综合也能回查来源。旧分块归并算法和 `AgentRuntime`/`createBrowserDecision` 兼容入口已删除，历史产物仍可读。新方法身份防止复用旧总结；工具读取和结构验收不能代替科学内容核对。详见 [Agents 模块](apps/server/src/agents/README.md) 与 [DSH 依赖说明](docs/notes/deepseek-harness.md)。
 
 自动 PDF 获取按“公开来源 → 授权 Provider API → 受控浏览器”逐层升级。公开文献优先直接下载：
 arXiv 使用 PDF URL，成功后不启动 Browser 或调用 Browser 模型。当前 Auto 公开阶段包含已保存 PDF

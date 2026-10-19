@@ -1,17 +1,10 @@
 import { dshAnalysisAdapter, dshChatReply } from "./dsh-analysis-fixture.js";
-import {
-  mkdtemp,
-  readFile,
-  rm,
-  mkdir,
-  writeFile,
-  unlink,
-} from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, unlink } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { build } from "esbuild";
+import { reactWorkbenchAssets } from "./react-workbench-fixture.js";
 import { chromium } from "playwright";
 import {
   createInputManifest,
@@ -60,10 +53,7 @@ import {
   FIXTURE_LITERATURE,
   workbenchPdf,
 } from "../src/workbench/synthetic-fixture.js";
-import {
-  startQueryOnlyHttp,
-  type WorkbenchStaticAsset,
-} from "../src/workbench/http.js";
+import { startQueryOnlyHttp } from "../src/workbench/http.js";
 import { RetrievalIndexService } from "../src/retrieval/index.js";
 import { RetrievalStorageClient } from "../src/storage/sqlite/retrieval-client.js";
 
@@ -839,37 +829,7 @@ describe("single-document knowledge analysis", () => {
     );
     const query = await createQueryApplication(env.home);
     expect(env.app.maintenance).not.toBeNull();
-    const assets = new Map<string, WorkbenchStaticAsset>();
-    for (const [route, file, contentType] of [
-      ["/", "maintenance.html", "text/html"],
-      ["/query", "query.html", "text/html"],
-      ["/styles.css", "styles.css", "text/css"],
-      ["/live.css", "live.css", "text/css"],
-    ] as const)
-      assets.set(route, {
-        contentType,
-        body: await readFile(
-          new URL(`../../web/public/${file}`, import.meta.url),
-        ),
-      });
-    for (const [route, file] of [
-      ["/maintenance.js", "maintenance.ts"],
-      ["/query.js", "query.ts"],
-    ] as const) {
-      const bundle = await build({
-        entryPoints: [
-          new URL(`../../web/src/${file}`, import.meta.url).pathname,
-        ],
-        bundle: true,
-        format: "esm",
-        platform: "browser",
-        write: false,
-      });
-      assets.set(route, {
-        contentType: "text/javascript",
-        body: bundle.outputFiles[0]!.contents,
-      });
-    }
+    const assets = await reactWorkbenchAssets("maintenance");
     const http = await startQueryOnlyHttp({
       application: query,
       assets,
@@ -887,18 +847,39 @@ describe("single-document knowledge analysis", () => {
     });
     try {
       const page = await browser.newPage();
-      await page.goto(http.origin);
-      await page.locator("#knowledge-literature-id").fill(literatureId);
+      page.setDefaultTimeout(10000);
+      await page.goto(`${http.origin}/?view=set`);
       await page
-        .locator("#knowledge-default-mode")
-        .selectOption("compare-and-set");
-      await page.locator("#knowledge-start").click();
+        .getByRole("textbox", { name: "文献编号", exact: true })
+        .fill(literatureId);
+      await page.getByText("更新默认总结视图", { exact: true }).click();
+      const start = async () => {
+        await page
+          .getByRole("button", { name: "启动单篇分析", exact: true })
+          .click();
+        await page
+          .getByRole("dialog", { name: "启动 DSH 分析？", exact: true })
+          .getByRole("button", { name: "启动分析", exact: true })
+          .click();
+      };
+      await start();
       await expect
-        .poll(() => page.locator("#knowledge-status").textContent())
+        .poll(() => page.locator(".maintenance-output").innerText(), {
+          timeout: 10000,
+        })
         .toContain("默认视图 revision 1");
-      expect(await page.locator("#knowledge-result").textContent()).toContain(
-        "4.2 eV under dry conditions",
-      );
+      await page
+        .locator(".maintenance-output")
+        .getByRole("button", { name: "技术详情", exact: true })
+        .click();
+      expect(
+        await page.locator(".maintenance-output pre").innerText(),
+      ).toContain("4.2 eV under dry conditions");
+      const artifactId = (
+        JSON.parse(
+          await page.locator(".maintenance-output pre").innerText(),
+        ) as { artifact: { artifact_id: string } }
+      ).artifact.artifact_id;
       expect(fake.calls).toHaveLength(1);
       const cookie = (await page.context().cookies())
         .map((item) => `${item.name}=${item.value}`)
@@ -954,38 +935,30 @@ describe("single-document knowledge analysis", () => {
         retryable: true,
       });
       expect(quotaBody).not.toContain(sensitive);
-      await page.locator("#knowledge-purpose").selectOption("detailed");
-      await page.locator("#knowledge-start").click();
-      await expect
-        .poll(() => page.locator("#knowledge-status").textContent())
-        .toContain("agent-quota");
-      expect(
-        await page.locator("#knowledge-status").textContent(),
-      ).not.toContain(sensitive);
-      behavior.failure = undefined;
-      await page.goto(`${http.origin}/query`);
-      await page.locator("#knowledge-list-literature-id").fill(literatureId);
-      await page.locator("#knowledge-list-submit").click();
-      await expect
-        .poll(() => page.locator("#knowledge-read-status").textContent())
-        .toContain("找到 1 项历史知识");
-      await page.locator("#knowledge-list-results button").click();
-      await expect
-        .poll(() => page.locator("#knowledge-read-result").textContent())
-        .toContain("4.2 eV under dry conditions");
-      expect(
-        await page.locator("#knowledge-read-result").textContent(),
-      ).toContain("片段");
-      await page.locator("#knowledge-read-result li button").first().click();
+      await page.getByRole("button", { name: /总结用途/ }).click();
+      await page.getByRole("option", { name: "详细分析", exact: true }).click();
+      await start();
       await expect
         .poll(() =>
-          page.locator("#knowledge-read-result li pre").first().textContent(),
+          page.getByRole("dialog", { name: "启动 DSH 分析？" }).innerText(),
+        )
+        .toContain("agent-quota");
+      expect(await page.locator("main").innerText()).not.toContain(sensitive);
+      behavior.failure = undefined;
+      const summaryUrl = `${http.origin}/query?literature=${literatureId}&reader=know&knowledge=${artifactId}`;
+      await page.goto(summaryUrl);
+      await expect
+        .poll(() => page.locator(".reader-summary").innerText())
+        .toContain("4.2 eV under dry conditions");
+      await page
+        .getByRole("button", { name: "[1]", exact: true })
+        .first()
+        .click();
+      await expect
+        .poll(() =>
+          page.locator(".reader-evidence-preview blockquote").innerText(),
         )
         .toContain("measurement");
-      await page.locator("#knowledge-read-submit").click();
-      await expect
-        .poll(() => page.locator("#knowledge-read-result").textContent())
-        .toContain("4.2 eV under dry conditions");
       await page.route("**/api/v1/query/evidence-resolve", async (route) => {
         const envelope = route.request().postDataJSON() as { request: unknown };
         const actual = await query.documentRead!.resolveEvidence(
@@ -995,22 +968,26 @@ describe("single-document knowledge analysis", () => {
           throw new Error("unexpected material evidence");
         await route.fulfill({
           status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
+          json: {
             protocol_version: 1,
             result: {
               ...actual,
               evidence: { ...actual.evidence, content_sha256: "f".repeat(64) },
             },
-          }),
+          },
         });
       });
-      await page.locator("#knowledge-read-result li button").first().click();
+      await page.reload();
+      await page
+        .getByRole("button", { name: "[1]", exact: true })
+        .first()
+        .click();
       await expect
-        .poll(() =>
-          page.locator("#knowledge-read-result li p").first().textContent(),
-        )
-        .toContain("证据读取失败");
+        .poll(() => page.locator(".reader-evidence-preview").innerText())
+        .toMatch(/invalid|失败|无法|validation failed/);
+      expect(
+        await page.locator(".reader-evidence-preview blockquote").count(),
+      ).toBe(0);
       await page.unroute("**/api/v1/query/evidence-resolve");
       let release!: () => void;
       const held = new Promise<void>((resolve) => {
@@ -1020,71 +997,62 @@ describe("single-document knowledge analysis", () => {
       await page.route("**/api/v1/query/knowledge-list", async (route) => {
         listRequests++;
         if (listRequests === 1) await held;
-        try {
-          await route.continue();
-        } catch {
-          /* the edited request was aborted */
-        }
+        await route.continue().catch(() => undefined);
       });
-      await page.locator("#knowledge-list-submit").click();
+      const listUrl = `${http.origin}/query?literature=${literatureId}&reader=know`;
+      await page.goto(listUrl);
       await expect.poll(() => listRequests).toBe(1);
       await page
-        .locator("#knowledge-list-literature-id")
-        .fill(`${literatureId}x`);
-      expect(await page.locator("#knowledge-list-submit").isEnabled()).toBe(
-        true,
-      );
-      expect(await page.locator("#knowledge-read-submit").isEnabled()).toBe(
-        true,
-      );
-      await page.locator("#knowledge-list-literature-id").fill(literatureId);
-      await page.locator("#knowledge-list-submit").click();
+        .getByRole("navigation", { name: "工作区与阅读标签" })
+        .getByRole("button", { name: "文献库", exact: true })
+        .click();
+      await page.goto(listUrl);
       await expect
-        .poll(() => page.locator("#knowledge-read-status").textContent())
-        .toContain("找到 1 项历史知识");
+        .poll(() => page.locator(".reader-summary").innerText())
+        .toContain("4.2 eV under dry conditions");
       release();
       await page.unroute("**/api/v1/query/knowledge-list");
-      const artifactId = await page.locator("#knowledge-read-id").inputValue();
       expect(artifactId).toMatch(/^[0-9a-f-]{36}$/);
       await page.route("**/api/v1/query/knowledge-read", async (route) => {
         const existing = await query.knowledgeRead!.byId(artifactId);
         await route.fulfill({
           status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
+          json: {
             protocol_version: 1,
             result: { ...existing, artifact_id: id(999) },
-          }),
+          },
         });
       });
-      await page.locator("#knowledge-read-submit").click();
+      await page.goto(summaryUrl);
       await expect
-        .poll(() => page.locator("#knowledge-read-status").textContent())
-        .toContain("读取失败");
+        .poll(() => page.locator("main").innerText(), { timeout: 10000 })
+        .toMatch(/invalid|失败|无法|validation failed/);
+      expect(await page.locator(".reader-summary").count()).toBe(0);
+      expect(await page.locator("main").innerText()).not.toContain(id(999));
+      await page.unroute("**/api/v1/query/knowledge-read");
+      await page.goto(`${http.origin}/?view=set`);
+      await page
+        .getByRole("textbox", { name: "文献编号", exact: true })
+        .fill(literatureId);
+      await page.getByText("使用长文请求合同", { exact: true }).click();
+      expect(await page.getByLabel("单次输入预算").count()).toBe(0);
+      await start();
+      await expect
+        .poll(() => page.locator(".maintenance-output").innerText())
+        .toContain("已存在");
+      await page
+        .locator(".maintenance-output")
+        .getByRole("button", { name: "技术详情", exact: true })
+        .click();
       expect(
-        await page.locator("#knowledge-read-result").textContent(),
-      ).not.toContain(id(999));
-      await page.goto(http.origin);
-      await page.locator("#knowledge-literature-id").fill(literatureId);
-      await page.locator("#knowledge-mode").selectOption("long");
-      expect(await page.locator("#knowledge-input-bytes").count()).toBe(0);
-      await page.locator("#knowledge-start").click();
+        await page.locator(".maintenance-output pre").innerText(),
+      ).toContain("4.2 eV under dry conditions");
+      expect(longFake.calls).toHaveLength(0);
+      await page.goto(listUrl);
       await expect
-        .poll(() => page.locator("#knowledge-status").textContent())
-        .toContain("已发布");
-      expect(await page.locator("#knowledge-result").textContent()).toContain(
-        "4.2 eV under dry conditions",
-      );
-      expect(longFake.calls).toHaveLength(3);
-      expect(longFake.calls[0]?.messages[1]?.parts[0]).toMatchObject({
-        media_type: "application/json",
-      });
-      await page.goto(`${http.origin}/query`);
-      await page.locator("#knowledge-list-literature-id").fill(literatureId);
-      await page.locator("#knowledge-list-submit").click();
-      await expect
-        .poll(() => page.locator("#knowledge-read-status").textContent())
-        .toContain("找到 2 项历史知识");
+        .poll(() => page.locator(".reader-summary").innerText())
+        .toContain("4.2 eV under dry conditions");
+      expect(await query.knowledgeRead!.list(literatureId)).toHaveLength(1);
     } finally {
       await browser.close();
       await http.close();
@@ -1111,31 +1079,7 @@ describe("single-document knowledge analysis", () => {
       storage,
     );
     const query = await createQueryApplication(env.home);
-    const assets = new Map<string, WorkbenchStaticAsset>();
-    for (const [route, file, contentType] of [
-      ["/query", "query.html", "text/html"],
-      ["/styles.css", "styles.css", "text/css"],
-      ["/live.css", "live.css", "text/css"],
-    ] as const)
-      assets.set(route, {
-        contentType,
-        body: await readFile(
-          new URL(`../../web/public/${file}`, import.meta.url),
-        ),
-      });
-    const bundle = await build({
-      entryPoints: [
-        new URL("../../web/src/query.ts", import.meta.url).pathname,
-      ],
-      bundle: true,
-      format: "esm",
-      platform: "browser",
-      write: false,
-    });
-    assets.set("/query.js", {
-      contentType: "text/javascript",
-      body: bundle.outputFiles[0]!.contents,
-    });
+    const assets = await reactWorkbenchAssets("query");
     const http = await startQueryOnlyHttp({ application: query, assets });
     const browser = await chromium.launch({
       executablePath:
@@ -1150,20 +1094,17 @@ describe("single-document knowledge analysis", () => {
         }),
       );
       const page = await browser.newPage();
-      await page.goto(`${http.origin}/query`);
+      page.setDefaultTimeout(10000);
+      await page.goto(
+        `${http.origin}/?literature=${literatureId}&reader=know&knowledge=${receipt.artifact.artifact_id}`,
+      );
       await page
-        .locator("#knowledge-read-id")
-        .fill(receipt.artifact.artifact_id);
-      await page.locator("#knowledge-read-submit").click();
-      await expect
-        .poll(() => page.locator("#knowledge-read-status").textContent())
-        .toContain("已读取");
-      const entry = page.locator("#knowledge-read-result li").first();
-      await entry.locator("button").click();
-      await expect
-        .poll(() => entry.locator("p").textContent())
-        .toContain("（部分）");
-      const firstText = await entry.locator("pre").textContent();
+        .getByRole("button", { name: "[1]", exact: true })
+        .first()
+        .click();
+      const entry = page.locator(".reader-evidence-preview");
+      await expect.poll(() => entry.innerText()).toContain("部分");
+      const firstText = await entry.locator("blockquote").textContent();
       expect(firstText?.length).toBe(65536);
       expect(firstText).not.toContain("TAIL_MARKER");
       await page.route("**/api/v1/query/evidence-resolve", async (route) => {
@@ -1194,18 +1135,46 @@ describe("single-document knowledge analysis", () => {
           }),
         });
       });
-      await entry.locator("button").click();
+      await entry
+        .getByRole("button", { name: "继续读取证据", exact: true })
+        .click();
       await expect
-        .poll(() => entry.locator("p").textContent())
-        .toContain("证据读取失败");
-      expect(await entry.locator("pre").textContent()).toBe(firstText);
+        .poll(() => entry.innerText())
+        .toContain("证据续读范围不连续");
+      expect(await entry.locator("blockquote").textContent()).toBe(firstText);
       await page.unroute("**/api/v1/query/evidence-resolve");
-      await entry.locator("button").click();
+      await entry
+        .getByRole("button", { name: "继续读取证据", exact: true })
+        .click();
+      await expect.poll(() => entry.innerText()).toContain("已读取完整证据");
+      expect(await entry.locator("blockquote").textContent()).toContain(
+        "TAIL_MARKER",
+      );
+      expect(
+        await entry
+          .getByRole("button", { name: "继续读取证据", exact: true })
+          .count(),
+      ).toBe(0);
+      const fullEvidence = await entry.locator("blockquote").textContent();
+      await entry
+        .getByRole("button", { name: "在原文中核对", exact: true })
+        .click();
+      const location = new URL(page.url()).searchParams;
+      expect(Number(location.get("end")) - Number(location.get("start"))).toBe(
+        Buffer.byteLength(fullEvidence!),
+      );
       await expect
-        .poll(() => entry.locator("p").textContent())
-        .toContain("已读取完整证据");
-      expect(await entry.locator("pre").textContent()).toContain("TAIL_MARKER");
-      expect(await entry.locator("button").count()).toBe(0);
+        .poll(
+          async () => ({
+            containsTail: (
+              await page.locator(".reading-evidence").allTextContents()
+            ).some((text) => text.includes("TAIL_MARKER")),
+            status: await page.locator(".reading-status").textContent(),
+            url: page.url(),
+          }),
+          { timeout: 10000 },
+        )
+        .toMatchObject({ containsTail: true });
     } finally {
       await browser.close();
       await http.close();

@@ -1346,13 +1346,18 @@ export function canonicalJsonBytes(value: unknown): Uint8Array {
   return new TextEncoder().encode(encoded);
 }
 export async function sha256(value: Uint8Array): Promise<Sha256> {
-  const digest = await globalThis.crypto.subtle.digest(
-    "SHA-256",
-    value as unknown as BufferSource,
-  );
-  return Array.from(new Uint8Array(digest), (item) =>
-    item.toString(16).padStart(2, "0"),
-  ).join("") as Sha256;
+  // HTTP IP workbenches lack SubtleCrypto. Preserve the exact hash contract there.
+  const digest = globalThis.crypto?.subtle
+    ? new Uint8Array(
+        await globalThis.crypto.subtle.digest(
+          "SHA-256",
+          value as unknown as BufferSource,
+        ),
+      )
+    : (await import("@noble/hashes/sha2.js")).sha256(value);
+  return Array.from(digest, (item) => item.toString(16).padStart(2, "0")).join(
+    "",
+  ) as Sha256;
 }
 export function parseStrictJsonValue(value: string | Uint8Array): unknown {
   let source: string;

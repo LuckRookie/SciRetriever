@@ -1,3 +1,7 @@
+import {
+  workbenchLogin,
+  workbenchTestAccess,
+} from "./workbench-auth-fixture.js";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
@@ -256,6 +260,7 @@ it.runIf(Boolean(process.env.SCIRETRIEVER_CLOAK_BUNDLE))(
       await seed.close();
       seed = undefined;
       workbench = await startProductionWorkbench({
+        access: workbenchTestAccess,
         home,
         literature_id: papers[0]!.literature.literature_id,
         assets: new Map([
@@ -287,9 +292,11 @@ it.runIf(Boolean(process.env.SCIRETRIEVER_CLOAK_BUNDLE))(
         },
       });
       const app = workbench.application;
-      const cookie = (await fetch(workbench.origin)).headers
-        .get("set-cookie")!
-        .split(";")[0]!;
+      const authCookie = await workbenchLogin(workbench.origin);
+      const root = await fetch(workbench.origin, {
+        headers: { Cookie: authCookie },
+      });
+      const cookie = `${authCookie}; ${root.headers.get("set-cookie")!.split(";")[0]!}`;
       const clientResponse = await fetch(`${workbench.origin}/api/clients`, {
         method: "POST",
         headers: {

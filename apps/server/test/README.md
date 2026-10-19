@@ -1,6 +1,6 @@
 # 服务端回归测试
 
-保存 核心业务、适配边界、SQLite/文件持久化、应用组装与安装后旅程 的可重复离线回归。测试以 *.test.ts 命名，fixture/helper 与测试就近存放。
+保存 核心业务、适配边界、SQLite/文件持久化、应用组装与安装后旅程 的可重复离线回归。测试以 \*.test.ts 命名，fixture/helper 与测试就近存放。
 
 `dsh-foundation.test.ts` 使用真实 DSH 服务与合成模型响应，验证单次请求确经原生 LlmRuntime、schema/模型设置保留、纯文本和多图会话、证据工具反馈、会话隔离、稳定失败与关闭结算。现有 `dsh-runtime` 和 Browser/Analysis/综合/配置回归继续覆盖各消费者；fake 反馈正确不表示真实模型的科研内容质量已提升。
 
@@ -14,4 +14,8 @@
 
 [上级目录](../README.md) · [项目 README](../../../README.md)
 
+`workbench-auth-fixture.ts` 只服务隔离回归：使用合成密码、绑定 loopback，并经真实 `/auth/login` 为 HTTP/浏览器旅程取得会话，不绕过统一认证。默认对外监听和自动密钥由 `web-remote-access.test.ts` 验证。
+
 `dsh-document-session.test.ts` 使用合成正文和栅格资源，验证真实 DSH 会话的未读提交拒绝、看图、回查、错误引用修正和完整 usage。`dsh-analysis-fixture.ts` 只提供 fake 模型政策，保留实际 DSH 工具循环；`browser-decision-fixture.ts` 驱动正式 Browser capability，不保留生产单次兼容入口。
+
+`react-workbench-fixture.ts` 将实际 Vite 与阅读资源装入既有独立查询/维护 HTTP 服务。`document-read`、`knowledge-analysis`、`synthesis-service` 和 `knowledge-retrieval-migration` 的浏览器部分通过这个入口继续验证固定版本、来源绑定、证据续读、迟到响应隔离和历史 schema 读取；不另造测试专用业务 API。

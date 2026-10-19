@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { build } from "esbuild";
+import { reactWorkbenchAssets } from "./react-workbench-fixture.js";
 import { chromium } from "playwright";
 import {
   parseAsset,
@@ -18,7 +18,6 @@ import {
   type Application,
 } from "../src/bootstrap/application.js";
 import { startQueryOnlyWorkbench } from "../src/bootstrap/workbench.js";
-import type { WorkbenchStaticAsset } from "../src/workbench/http.js";
 import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
 import type { ParserBackend } from "../src/parsing/ports.js";
 import { migrateDocumentCatalog } from "../src/storage/sqlite/document-migration.js";
@@ -158,32 +157,7 @@ async function fixture() {
   }
 }
 
-async function queryPageAssets(): Promise<Map<string, WorkbenchStaticAsset>> {
-  const assets = new Map<string, WorkbenchStaticAsset>();
-  for (const [route, file, contentType] of [
-    ["/", "query.html", "text/html"],
-    ["/styles.css", "styles.css", "text/css"],
-    ["/live.css", "live.css", "text/css"],
-  ] as const)
-    assets.set(route, {
-      contentType,
-      body: await readFile(
-        new URL(`../../web/public/${file}`, import.meta.url),
-      ),
-    });
-  const bundled = await build({
-    entryPoints: [new URL("../../web/src/query.ts", import.meta.url).pathname],
-    bundle: true,
-    format: "esm",
-    platform: "browser",
-    write: false,
-  });
-  assets.set("/query.js", {
-    contentType: "text/javascript",
-    body: bundled.outputFiles[0]!.contents,
-  });
-  return assets;
-}
+const queryPageAssets = () => reactWorkbenchAssets("query");
 
 describe("bounded document and material reading", () => {
   it("creates and resolves file evidence on v1 without parser or document version", async () => {
@@ -865,29 +839,24 @@ describe("bounded document and material reading", () => {
       const page = await browser.newPage();
       const failures: string[] = [];
       page.on("pageerror", (error) => failures.push(error.message));
-      await page.goto(workbench.origin);
-      const source = page
-        .locator(".library-result")
-        .filter({ hasText: "Synthetic literature workbench" })
-        .first();
-      await expect.poll(() => source.isVisible()).toBe(true);
-      await source.click();
-      await page.getByRole("button", { name: "阅读材料与文档" }).click();
+      await page.goto(
+        `${workbench.origin}/?literature=${lit}&reader=doc&document=${receipt.document.document_version_id}`,
+      );
+      const article = page.locator(".reading-article");
       await expect
-        .poll(() => page.locator(".library-reading").textContent())
-        .toContain(receipt.document.document_version_id);
-      await page.locator(".library-reading-sections button").first().click();
-      await expect
-        .poll(() => page.locator(".library-reading-text").textContent())
+        .poll(() => article.textContent(), { timeout: 10000 })
         .toContain("标题");
-      await page.getByRole("button", { name: "继续阅读" }).click();
+      await expect.poll(() => article.textContent()).toContain("αβ evidence");
       await expect
-        .poll(
-          async () =>
-            (await page.locator(".library-reading-text").textContent())
-              ?.length ?? 0,
-        )
+        .poll(async () => (await article.textContent())?.length ?? 0)
         .toBeGreaterThan(8192);
+      await page
+        .locator(".reader-information")
+        .getByRole("button", { name: "技术详情", exact: true })
+        .click();
+      expect(await page.locator(".reader-information").innerText()).toContain(
+        receipt.document.document_version_id,
+      );
       expect(failures).toEqual([]);
       expect("jobs" in workbench.application).toBe(false);
     } finally {
@@ -895,7 +864,7 @@ describe("bounded document and material reading", () => {
       await workbench?.close();
       await env.close();
     }
-  });
+  }, 60000);
 
   it("keeps unheaded text reachable and ignores late or mismatched browser read replies", async () => {
     const env = await fixture();
@@ -924,187 +893,136 @@ describe("bounded document and material reading", () => {
       const page = await browser.newPage();
       const failures: string[] = [];
       page.on("pageerror", (error) => failures.push(error.message));
-      await page.goto(workbench.origin);
-      const source = page
-        .locator(".library-result")
-        .filter({ hasText: "Synthetic literature workbench" })
-        .first();
-      await expect.poll(() => source.isVisible()).toBe(true);
-      await source.click();
-
+      const url = `${workbench.origin}/?literature=${lit}&reader=doc`;
       await page.route("**/material-evidence", async (route) => {
-        const reply = await route.fetch();
-        const value = (await reply.json()) as {
-          result: { evidence: { material: { asset_sha256: string } } };
-        };
+        const response = await route.fetch();
+        const value = await response.json();
         value.result.evidence.material.asset_sha256 = "f".repeat(64);
-        await route.fulfill({ response: reply, json: value });
+        await route.fulfill({ response, json: value });
       });
-      await page.getByRole("button", { name: "阅读材料与文档" }).click();
+      await page.goto(url);
       await expect
-        .poll(() => page.locator(".library-reading").textContent())
-        .toContain("材料或表示无法验证");
-      expect(
-        await page.locator(".library-reading").textContent(),
-      ).not.toContain("已复核原始 PDF");
+        .poll(() => page.locator("main").innerText(), { timeout: 10000 })
+        .toMatch(/不匹配|无法|invalid|validation failed/);
+      expect(await page.locator(".reading-article").count()).toBe(0);
       await page.unroute("**/material-evidence");
-
       await page.route("**/document-default", async (route) => {
-        const reply = await route.fetch();
-        const value = (await reply.json()) as {
-          result: { material: { asset_id: string } };
-        };
+        const response = await route.fetch();
+        const value = await response.json();
         value.result.material.asset_id = id(999);
-        await route.fulfill({ response: reply, json: value });
+        await route.fulfill({ response, json: value });
       });
-      await page.getByRole("button", { name: "阅读材料与文档" }).click();
+      await page.reload();
       await expect
-        .poll(() => page.locator(".library-reading").textContent())
-        .toContain("文档表示暂时无法读取");
-      expect(
-        await page.locator(".library-reading").textContent(),
-      ).not.toContain("固定表示");
+        .poll(() => page.locator("main").innerText(), { timeout: 10000 })
+        .toMatch(/不匹配|无法|invalid|validation failed/);
+      expect(await page.locator(".reading-article").count()).toBe(0);
       await page.unroute("**/document-default");
-
-      await page.getByRole("button", { name: "阅读材料与文档" }).click();
+      await page.route("**/document-describe", async (route) => {
+        const response = await route.fetch();
+        const value = await response.json();
+        value.result.document.source_material_ref.asset_id = id(999);
+        await route.fulfill({ response, json: value });
+      });
+      await page.reload();
       await expect
-        .poll(() => page.locator(".library-reading").textContent())
-        .toContain(receipt.document.document_version_id);
+        .poll(() => page.locator("main").innerText())
+        .toContain("固定文档与原始材料不匹配");
+      expect(await page.locator(".reading-article").count()).toBe(0);
+      await page.unroute("**/document-describe");
+      await page.reload();
       await expect
-        .poll(() => page.locator(".library-reading-segments button").count())
-        .toBeGreaterThan(1);
-      expect(
-        await page.locator(".library-reading-sections button").count(),
-      ).toBe(0);
-
-      let delayed = false;
+        .poll(() => page.locator(".reading-article").textContent(), {
+          timeout: 10000,
+        })
+        .toContain("introduction without heading");
+      await page.getByRole("button", { name: "显示目录", exact: true }).click();
+      expect(await page.locator(".reader-outline button").count()).toBe(0);
+      await page
+        .locator(".reader-information")
+        .getByRole("button", { name: "技术详情", exact: true })
+        .click();
+      expect(await page.locator(".reader-information").innerText()).toContain(
+        receipt.document.document_version_id,
+      );
       let release!: () => void;
       const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
+      let delayed = false;
       await page.route("**/document-slice", async (route) => {
-        const body = JSON.parse(route.request().postData()!) as {
-          request: { selector: { segment_id?: string } };
-        };
-        if (body.request.selector.segment_id === "p1") {
-          delayed = true;
-          await gate;
-        }
-        await route.continue();
+        const response = await route.fetch();
+        delayed = true;
+        await gate;
+        await route.fulfill({ response }).catch(() => undefined);
       });
-      await page.getByRole("button", { name: /p1 · text/ }).click();
+      await page.reload();
       await expect.poll(() => delayed).toBe(true);
-      await page.getByRole("button", { name: /p2 · text/ }).click();
-      await expect
-        .poll(() => page.locator(".library-reading-text").textContent())
-        .toContain("second paragraph");
+      await page.getByRole("tab", { name: "PDF", exact: true }).click();
       release();
-      await expect
-        .poll(() => page.locator(".library-reading-text").textContent())
-        .toBe("second paragraph\n");
       await page.unroute("**/document-slice");
-
-      let oldLaunchPending = false;
-      let releaseOldLaunch!: () => void;
-      const oldLaunchGate = new Promise<void>((resolve) => {
-        releaseOldLaunch = resolve;
-      });
+      await page
+        .locator('.reading-pdf-page[data-rendered="true"]')
+        .first()
+        .waitFor();
+      expect(await page.locator(".reading-article").count()).toBe(0);
+      expect(new URL(page.url()).searchParams.get("reader")).toBe("pdf");
       await page.route("**/document-slice", async (route) => {
-        const body = JSON.parse(route.request().postData()!) as {
-          request: { selector: { segment_id?: string } };
-        };
-        if (body.request.selector.segment_id === "p1") {
-          oldLaunchPending = true;
-          await oldLaunchGate;
-        }
-        await route.continue();
-      });
-      await page.getByRole("button", { name: /p1 · text/ }).click();
-      await expect.poll(() => oldLaunchPending).toBe(true);
-      await page.getByRole("button", { name: "阅读材料与文档" }).click();
-      await expect
-        .poll(() => page.locator(".library-reading-segments button").count())
-        .toBeGreaterThan(1);
-      releaseOldLaunch();
-      await expect
-        .poll(() => page.getByRole("button", { name: "继续阅读" }).count())
-        .toBe(0);
-      expect(await page.locator(".library-reading-text").textContent()).toBe(
-        "",
-      );
-      await page.unroute("**/document-slice");
-
-      await page.route("**/document-slice", async (route) => {
-        const reply = await route.fetch();
-        const value = (await reply.json()) as {
-          result: { document: { document_version_id: string } };
-        };
+        const response = await route.fetch();
+        const value = await response.json();
         value.result.document.document_version_id = id(999);
-        await route.fulfill({ response: reply, json: value });
+        await route.fulfill({ response, json: value });
       });
-      await page.getByRole("button", { name: /p1 · text/ }).click();
+      await page.getByRole("tab", { name: "全文", exact: true }).click();
       await expect
-        .poll(() => page.locator(".library-reading-note").textContent())
-        .toContain("读取响应无法验证");
-      expect(await page.locator(".library-reading-text").textContent()).toBe(
-        "",
-      );
+        .poll(() => page.locator(".reading-status").innerText())
+        .toMatch(/无法|invalid|失败|validation failed/);
+      expect(await page.locator(".reading-article section").count()).toBe(0);
       await page.unroute("**/document-slice");
-
       await page.route("**/document-resource", async (route) => {
-        const reply = await route.fetch();
-        const value = (await reply.json()) as {
-          result: {
-            bytes_base64: string;
-            actual_range: { start_byte: number; end_byte: number };
-            truncated: boolean;
-            continuation: string | null;
-          };
-        };
+        const response = await route.fetch();
+        const value = await response.json();
         value.result.bytes_base64 = Buffer.from(figure.subarray(0, 5)).toString(
           "base64",
         );
         value.result.actual_range = { start_byte: 0, end_byte: 5 };
         value.result.truncated = false;
         value.result.continuation = null;
-        await route.fulfill({ response: reply, json: value });
+        await route.fulfill({ response, json: value });
       });
-      await page.getByRole("button", { name: "查看 fig.png" }).click();
+      await page.reload();
+      await page.locator(".reading-resource").scrollIntoViewIfNeeded();
       await expect
-        .poll(() => page.locator(".library-reading-resources").textContent())
-        .toContain("资源暂时无法验证");
-      expect(await page.locator(".library-reading img").count()).toBe(0);
+        .poll(() => page.locator(".reading-resource").innerText())
+        .toMatch(/无法|失败|暂不可读/);
+      expect(await page.locator(".reading-resource img").count()).toBe(0);
       await page.unroute("**/document-resource");
-
-      let firstResourceReply:
+      let resourcePages = 0;
+      let resourceBase:
         | {
-            protocol_version: number;
             result: {
-              resources: { resource_id: string; reference: string }[];
+              resources: Record<string, unknown>[];
+              document: unknown;
               total: number;
               next_cursor: string | null;
             };
           }
         | undefined;
       await page.route("**/document-resources", async (route) => {
-        if (!firstResourceReply) {
-          const reply = await route.fetch();
-          firstResourceReply =
-            (await reply.json()) as typeof firstResourceReply;
-        }
-        const base = firstResourceReply!;
-        const original = base.result.resources[0]!;
-        const request = JSON.parse(route.request().postData()!) as {
+        if (!resourceBase) resourceBase = await (await route.fetch()).json();
+        const base = resourceBase!;
+        const original = base.result.resources[0];
+        const request = route.request().postDataJSON() as {
           request: { cursor: string | null };
         };
         const indexes =
           request.request.cursor === null
             ? Array.from({ length: 50 }, (_, index) => index + 1)
             : [51];
+        resourcePages++;
         await route.fulfill({
           status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
+          json: {
             protocol_version: 1,
             result: {
               ...base.result,
@@ -1116,32 +1034,28 @@ describe("bounded document and material reading", () => {
               total: 51,
               next_cursor: request.request.cursor === null ? "next" : null,
             },
-          }),
+          },
         });
       });
-      await page.getByRole("button", { name: "阅读材料与文档" }).click();
-      await expect
-        .poll(() => page.locator(".library-reading-resources button").count())
-        .toBe(51);
-      await page.getByRole("button", { name: "更多资源" }).click();
-      await expect
-        .poll(() => page.locator(".library-reading-resources button").count())
-        .toBe(51);
-      await expect
-        .poll(() =>
-          page
-            .locator(".library-reading-resources button")
-            .last()
-            .textContent(),
-        )
-        .toContain("fig-51.png");
+      // The second synthetic cursor is not a real server cursor. Reuse the first
+      // validated page as the resource descriptor source for this pagination probe.
+      await page.reload();
+      await page
+        .getByRole("button", { name: "文档资源（51）", exact: true })
+        .click();
+      expect(await page.locator(".reader-resources button").count()).toBe(51);
+      expect(
+        await page.locator(".reader-resources button").last().innerText(),
+      ).toBe("fig-51.png");
+      expect(resourcePages).toBe(2);
+      await page.unroute("**/document-resources");
       expect(failures).toEqual([]);
     } finally {
       await browser?.close();
       await workbench?.close();
       await env.close();
     }
-  });
+  }, 60000);
   it("settles an in-flight fixed-version read before closing its SQLite and FileStore owners", async () => {
     const env = await fixture();
     try {

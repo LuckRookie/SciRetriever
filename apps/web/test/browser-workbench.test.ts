@@ -1,4 +1,10 @@
 import { once } from "node:events";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import { type Server } from "node:http";
 import {
   chromium,
@@ -16,9 +22,17 @@ let context: BrowserContext;
 let page: Page;
 let origin: string;
 let failures: string[];
+let directory: string;
 
 beforeAll(async () => {
-  server = createPreviewServer();
+  directory = await mkdtemp(join(tmpdir(), "sciretriever-sample-"));
+  await promisify(execFile)(process.execPath, [
+    "--input-type=module",
+    "-e",
+    "import { buildSampleAssets } from './scripts/build-react-assets.mjs'; await buildSampleAssets(process.argv[1]);",
+    directory,
+  ]);
+  server = createPreviewServer(pathToFileURL(`${directory}/`));
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -45,6 +59,7 @@ beforeEach(async () => {
     } else await route.continue();
   });
   page = await context.newPage();
+  page.setDefaultTimeout(5_000);
   page.on("pageerror", (error) => failures.push(error.message));
   page.on("console", (message) => {
     if (message.type() === "error" || message.type() === "warning")
@@ -64,6 +79,7 @@ afterAll(async () => {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     );
+  if (directory) await rm(directory, { recursive: true, force: true });
 });
 
 it("serves only sample assets and refuses filesystem paths and mutations", async () => {
@@ -166,11 +182,13 @@ it("supports the 390px drawer and keyboard without horizontal overflow", async (
   expect(
     await page.locator("#mobile-details-button").getAttribute("aria-expanded"),
   ).toBe("false");
-  expect(
-    await page
-      .locator("#mobile-details-button")
-      .evaluate((node) => node === document.activeElement),
-  ).toBe(true);
+  await expect
+    .poll(() =>
+      page
+        .locator("#mobile-details-button")
+        .evaluate((node) => node === document.activeElement),
+    )
+    .toBe(true);
   await page.locator("#run-button").click();
   await expect
     .poll(() => page.locator("#candidate-count").textContent())

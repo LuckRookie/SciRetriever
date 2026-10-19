@@ -23,7 +23,7 @@
 - 仅对不存在的目标执行 create-if-absent 初始化；已有库继续通过迁移门验证，不自动升级、替换或搬迁。自定义目标父目录须已存在。
 - 关闭时先停止并排空 HTTP 请求，再停止 Browser/任务运行时、查询 reader 和 Application；各入口返回的 `close()` 应由调用方释放。
 
-`startQueryOnlyWorkbench` 仍只构造只读应用；`startMaintenanceWorkbench` 保留独立维护入口；`startSyntheticWorkbench` 使用合成预览和临时 home，其示例数据不能代表正式文献库。
+`startQueryOnlyWorkbench` 仍只构造只读应用；`startMaintenanceWorkbench` 保留独立维护入口；`startSyntheticWorkbench` 使用合成预览和临时 home，其示例数据不能代表正式文献库。合成 Browser 对象图也绑定同一临时库的 QueryApplication，使新旧界面都能通过已有固定材料查询读取已接纳 PDF；关闭时一并释放该只读应用。
 
 相关说明：[任务与协作控制](../../../../docs/architecture/technical/02-task-coordination.md) · [工作台 HTTP](../workbench/README.md) · [CLI 入口](../cli/README.md)。
 

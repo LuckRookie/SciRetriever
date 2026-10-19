@@ -1,21 +1,9 @@
-# Web 页面与样式
+# Web 第三方许可源文件
 
-保存可维护的 HTML/CSS 页面源文件。
+本目录维护阅读器兼容构建所需的许可材料。正式HTML入口位于[entry/](../entry/README.md)，样式与组件位于[src/app/](../src/app/README.md)，不在这里维护第二套页面。
 
-## 内容入口
+[core-js-LICENSE.txt](core-js-LICENSE.txt) 是PDF.js官方兼容构建内含core-js 3.50.0的上游许可，构建时并入第三方声明；版本与来源见[阅读依赖说明](../../../docs/notes/web-reading-dependencies.md)。
 
-- [index.html](index.html)：静态样本入口。
-- [live.html](live.html)：按定稿原型接入的正式文献库工作空间与共享表单模板。
-- [query.html](query.html)：只读文献查询页面。
-- [maintenance.html](maintenance.html)：显式维护工作台页面。
-- [styles.css](styles.css)：公共样式。
-- [workspace.css](workspace.css)：定稿原型样式及生产功能的样式适配。
-- [reading.css](reading.css)：连续阅读、全文排版、PDF 页与文字层的布局。
-- [live.css](live.css)：独立查询与维护页面使用的共享样式。
-- [core-js-LICENSE.txt](core-js-LICENSE.txt)：PDF.js 官方兼容构建内含的 core-js 3.50.0 上游许可，构建时并入第三方声明；来源见[依赖说明](../../../docs/notes/web-reading-dependencies.md)。
-
-## 放置边界
-
-交互逻辑放 ../src；构建后的 bundle 由 scripts/build-workbench-assets.mjs 生成，不手工编辑 dist。
+构建产物由仓库脚本生成到ignored dist，不手工编辑或提交。
 
 [上级目录](../README.md) · [项目 README](../../../README.md)

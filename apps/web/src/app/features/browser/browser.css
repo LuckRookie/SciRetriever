@@ -1,0 +1,103 @@
+@layer pages {
+  .browser-page {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: var(--space-6);
+    display: grid;
+    gap: var(--space-5);
+  }
+  .browser-sessions {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+    gap: var(--space-4);
+  }
+  .browser-session-preview {
+    background: var(--surface-sunken);
+    padding: var(--space-5);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-3);
+  }
+  .browser-watch.ui-modal {
+    width: min(1540px, 96vw);
+    max-width: none;
+  }
+  .browser-watch .ui-dialog-body {
+    max-height: 85dvh;
+  }
+  .browser-watch-header,
+  .browser-page-tabs,
+  .browser-controls,
+  .browser-elements,
+  .browser-input {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .browser-watch-header {
+    padding-bottom: var(--space-4);
+  }
+  .browser-watch-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+    gap: var(--space-5);
+  }
+  .browser-stage {
+    min-width: 0;
+  }
+  .browser-address {
+    overflow-wrap: anywhere;
+    color: var(--fg2);
+    margin-top: 0;
+    font-size: var(--text-secondary);
+  }
+  .browser-frame {
+    width: auto;
+    max-width: 100%;
+    max-height: 62dvh;
+    object-fit: contain;
+    object-position: top left;
+    display: block;
+    cursor: pointer;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    margin-top: var(--space-3);
+  }
+  .browser-frame:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 3px;
+  }
+  .browser-feedback {
+    min-height: 1.5em;
+    padding: var(--space-2) 0;
+    margin: 0;
+  }
+  .browser-input > .ui-field {
+    flex: 1 1 180px;
+  }
+  .browser-log {
+    min-width: 0;
+    border-left: 1px solid var(--line);
+    padding-left: var(--space-4);
+  }
+  .browser-log h2 {
+    font-size: var(--text-interface);
+    margin-top: 0;
+  }
+  .browser-page-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 280px;
+    overflow: auto;
+  }
+  @media (max-width: 1024px) {
+    .browser-watch-layout {
+      grid-template-columns: 1fr;
+    }
+    .browser-log {
+      border-left: 0;
+      border-top: 1px solid var(--line);
+      padding: var(--space-4) 0 0;
+    }
+  }
+}

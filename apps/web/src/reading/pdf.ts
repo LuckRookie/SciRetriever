@@ -6,10 +6,11 @@ import {
   type RenderTask,
   type PDFPageProxy,
 } from "pdfjs-dist/legacy/build/pdf.mjs";
-import { button, node } from "../workspace/dom.js";
-import type { AppContext } from "../workspace/types.js";
+import { button, node } from "./dom.js";
+import type { ReadingContext } from "./contract.js";
 import type { ReadingPosition } from "./state.js";
-import { readerProblem, type ReaderFrame } from "./frame.js";
+import { readerProblem } from "./dom.js";
+import type { ReaderFrame } from "./contract.js";
 
 type RenderedPage = {
   canvas: HTMLCanvasElement;
@@ -21,7 +22,7 @@ type RenderedPage = {
 };
 /** Only visible and adjacent pages own canvas/text layers. The PDF worker belongs to this mount. */
 export async function renderPdf(
-  ctx: AppContext,
+  ctx: ReadingContext,
   frame: ReaderFrame,
   state: ReadingPosition,
   bytes: Uint8Array<ArrayBuffer>,
@@ -33,7 +34,7 @@ export async function renderPdf(
   controls.className = "reading-controls";
   controls.innerHTML =
     '<button class="btn q sm" id="reader-previous">上一页</button><input id="reader-page" type="number" min="1" value="1" aria-label="PDF 页码"><span id="reader-page-count"></span><button class="btn q sm" id="reader-next">下一页</button><select id="reader-zoom" aria-label="PDF 缩放"><option value="fit">适宽</option><option value="0.75">75%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option></select>';
-  frame.controls.prepend(controls);
+  if (!frame.onPdfControls) frame.controls.prepend(controls);
   const pageInput = node<HTMLInputElement>("#reader-page", controls),
     zoom = node<HTMLSelectElement>("#reader-zoom", controls);
   zoom.value = String(state.zoom);
@@ -80,7 +81,13 @@ export async function renderPdf(
     placeholders[n - 1]?.removeAttribute("data-rendered");
   };
   const capture = () => {
-    if (closed || !placeholders.length) return;
+    if (
+      closed ||
+      !placeholders.length ||
+      !frame.body.isConnected ||
+      frame.body.clientHeight === 0
+    )
+      return;
     const top = frame.body.getBoundingClientRect().top;
     const index = placeholders.findIndex(
       (p) => p.getBoundingClientRect().bottom > top + 12,
@@ -148,6 +155,17 @@ export async function renderPdf(
     node<HTMLButtonElement>("#reader-next", controls).disabled =
       state.page >= pdf.numPages;
     frame.status.textContent = `固定 PDF · 第 ${state.page} / ${pdf.numPages} 页 · ${state.zoom === "fit" ? "适宽" : `${Math.round(state.zoom * 100)}%`}`;
+    frame.onPdfControls?.({
+      page: state.page,
+      total: pdf.numPages,
+      zoom: state.zoom,
+      go,
+      zoomTo: (value) => {
+        capture();
+        state.zoom = value;
+        reflow();
+      },
+    });
   };
   const highlight = (root: HTMLElement) => {
     for (const el of root.querySelectorAll<HTMLElement>("span"))
@@ -363,11 +381,13 @@ export async function renderPdf(
     const outline = await pdf.getOutline();
     if (closed) return;
     frame.outline.replaceChildren();
-    if (!outline?.length)
+    if (!outline?.length) {
       frame.outline.textContent = "此 PDF 没有内嵌目录。可使用页码或查找。";
+      frame.onOutlineEmpty?.(frame.outline.textContent);
+    }
     const appendOutline = (items: NonNullable<typeof outline>, level = 0) => {
       for (const item of items) {
-        const b = button(item.title || "未命名章节", async () => {
+        const activate = async () => {
           if (!pdf || closed) return;
           const dest =
             typeof item.dest === "string"
@@ -381,9 +401,18 @@ export async function renderPdf(
           const index =
             typeof value === "number" ? value : await pdf.getPageIndex(value);
           if (!closed) go(index + 1);
-        });
-        b.style.paddingInlineStart = `${8 + Math.min(level, 6) * 12}px`;
-        frame.outline.append(b);
+        };
+        if (frame.onOutline)
+          frame.onOutline({
+            title: item.title || "未命名章节",
+            level,
+            activate,
+          });
+        else {
+          const b = button(item.title || "未命名章节", activate);
+          b.style.paddingInlineStart = `${8 + Math.min(level, 6) * 12}px`;
+          frame.outline.append(b);
+        }
         if (item.items?.length) appendOutline(item.items, level + 1);
       }
     };
@@ -393,6 +422,7 @@ export async function renderPdf(
         matches: number[] = [];
       let hasText = false;
       query = text;
+      frame.onFindNext?.(null);
       frame.findStatus.textContent = "正在查找 PDF 文字层…";
       for (let n = 1; pdf && n <= pdf.numPages; n++) {
         if (closed || revision !== searchRevision) return;
@@ -414,11 +444,12 @@ export async function renderPdf(
           : "此 PDF 没有可检索文字层，可能是扫描文件。";
       if (matches.length) {
         go(matches[0]!);
-        const next = button("下一处命中", () => {
+        const next = () => {
           const i = matches.indexOf(state.page);
           go(matches[(i + 1) % matches.length]!);
-        });
-        frame.findStatus.append(next);
+        };
+        if (frame.onFindNext) frame.onFindNext(next);
+        else frame.findStatus.append(button("下一处命中", next));
       }
       for (const entry of rendered.values()) highlight(entry.text);
     };

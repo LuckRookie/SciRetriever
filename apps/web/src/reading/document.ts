@@ -4,16 +4,16 @@ import {
   type DocumentResource,
   type DocumentReadResultMap,
 } from "@sciretriever/contracts";
-import type { AppContext } from "../workspace/types.js";
-import type { FixedSource } from "../workspace/source-navigation.js";
-import { button } from "../workspace/dom.js";
-import type { ReaderFrame } from "./frame.js";
+import type { ReadingContext } from "./contract.js";
+import type { FixedSource } from "./source.js";
+import { button } from "./dom.js";
+import type { ReaderFrame } from "./contract.js";
 import type { ReadingPosition } from "./state.js";
 import { readDocument } from "./transport.js";
-import { markdown, markdownBlocks } from "./markdown.js";
+import { documentMarkdown as markdown, markdownBlocks } from "./markdown.js";
 
 export async function renderDocument(
-  ctx: AppContext,
+  ctx: ReadingContext,
   frame: ReaderFrame,
   state: ReadingPosition,
   ref: DocumentReadingRef,
@@ -69,6 +69,12 @@ export async function renderDocument(
   } while (cursor);
   const article = document.createElement("article");
   article.className = "reading-article library-reading-text";
+  if (frame.documentTitle) {
+    const title = document.createElement("h1");
+    title.className = "reading-document-title";
+    title.textContent = frame.documentTitle;
+    article.append(title);
+  }
   frame.body.append(article);
   const urls = new Map<string, string>(),
     inFlight = new Map<string, Promise<string>>();
@@ -136,6 +142,16 @@ export async function renderDocument(
       inFlight.delete(resource.resource_id);
     }
   };
+  frame.onResources?.(
+    [...resources.values()].map((resource) => ({
+      reference: resource.reference,
+      open: async () => {
+        const url = await imageUrl(resource);
+        ctx.signal.throwIfAborted();
+        frame.onImage?.(url, resource.reference);
+      },
+    })),
+  );
   const observer = new IntersectionObserver(
     (entries) => {
       for (const entry of entries)
@@ -154,6 +170,21 @@ export async function renderDocument(
               image.alt = resource.reference;
               image.src = url;
               image.loading = "lazy";
+              if (frame.onImage) {
+                image.tabIndex = 0;
+                image.setAttribute("role", "button");
+                image.setAttribute(
+                  "aria-label",
+                  `放大图片：${resource.reference}`,
+                );
+                image.onclick = () => frame.onImage?.(url, resource.reference);
+                image.onkeydown = (event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    image.click();
+                  }
+                };
+              }
               image.onerror = () => {
                 el.textContent = "图片无法解码，原正文仍可阅读。";
               };
@@ -172,14 +203,21 @@ export async function renderDocument(
     rangeStart = 0,
     continuation: string | null = null,
     finished = false,
-    restoring = true;
+    restoring = true,
+    autoFailed = false;
   let pending: Promise<void> | null = null,
     jumpRevision = 0;
   const blocks = () => [
     ...article.querySelectorAll<HTMLElement>("[data-byte-start]"),
   ];
   const capture = (closing = false) => {
-    if (restoring || (!closing && ctx.signal.aborted)) return;
+    if (
+      restoring ||
+      (!closing && ctx.signal.aborted) ||
+      !frame.body.isConnected ||
+      frame.body.clientHeight === 0
+    )
+      return;
     const top = frame.body.getBoundingClientRect().top;
     const block = blocks().find((b) => b.getBoundingClientRect().bottom > top);
     if (block) {
@@ -193,16 +231,27 @@ export async function renderDocument(
     state.loadedEnd = end;
     state.scroll = frame.body.scrollTop;
   };
-  const go = (offset: number, ratio = 0) => {
+  const go = (offset: number, ratio = 0, animate = false) => {
     const block =
       blocks().find((b) => Number(b.dataset.byteEnd) > offset) ??
       blocks().at(-1);
-    if (block)
-      frame.body.scrollTop +=
+    if (block) {
+      const delta =
         block.getBoundingClientRect().top -
         frame.body.getBoundingClientRect().top +
         ratio * block.clientHeight -
         12;
+      if (
+        animate &&
+        frame.animateNavigation?.() &&
+        Math.abs(delta) <= frame.body.clientHeight * 1.5
+      )
+        frame.body.scrollTo({
+          top: frame.body.scrollTop + delta,
+          behavior: "smooth",
+        });
+      else frame.body.scrollTop += delta;
+    }
   };
   frame.beforeLayout = () => {
     capture();
@@ -210,63 +259,175 @@ export async function renderDocument(
       ratio = state.blockOffset;
     return () => go(offset, ratio);
   };
-  const onScroll = () => capture();
+  const onScroll = () => {
+    capture();
+    void prefetch();
+  };
   frame.body.addEventListener("scroll", onScroll, { passive: true });
   ctx.signal.addEventListener(
     "abort",
     () => {
       capture(true);
       observer.disconnect();
+      continuationObserver.disconnect();
       frame.body.removeEventListener("scroll", onScroll);
       for (const url of urls.values()) URL.revokeObjectURL(url);
       urls.clear();
       inFlight.clear();
       text = "";
       article.replaceChildren();
+      rendered.length = 0;
     },
     { once: true },
   );
-  const more = button("继续加载正文", async () => {
-    const revision = ++jumpRevision;
-    capture();
-    const offset = state.textOffset,
-      ratio = state.blockOffset;
-    await load();
-    if (!ctx.signal.aborted && revision === jumpRevision) go(offset, ratio);
+  const tail = document.createElement("div");
+  tail.className = "reading-continuation";
+  const more = button("重试加载正文", async () => {
+    autoFailed = false;
+    await append();
+    void prefetch();
   });
   more.id = "reader-load-more";
-  frame.body.append(more);
+  more.hidden = true;
+  frame.body.append(tail, more);
+  const rendered: { html: string; element: HTMLElement }[] = [];
+  const wireDocumentLinks = () => {
+    // Only an explicit fragment link resolving to a rendered Markdown heading
+    // is navigable. Bare reference numbers and unverified PDF page maps stay text.
+    const headings = new Map<string, HTMLElement>();
+    const occurrences = new Map<string, number>();
+    for (const heading of article.querySelectorAll<HTMLElement>(
+      "section h1,section h2,section h3,section h4,section h5,section h6",
+    )) {
+      const slug = (heading.textContent ?? "")
+        .trim()
+        .toLocaleLowerCase()
+        .replace(/[^\p{L}\p{N} _-]/gu, "")
+        .replace(/\s/g, "-");
+      const occurrence = occurrences.get(slug) ?? 0;
+      occurrences.set(slug, occurrence + 1);
+      headings.set(occurrence ? `${slug}-${occurrence}` : slug, heading);
+    }
+    for (const link of article.querySelectorAll<HTMLAnchorElement>(
+      "a[data-reading-fragment]",
+    )) {
+      let fragment = link.dataset.readingFragment!;
+      try {
+        fragment = decodeURIComponent(fragment);
+      } catch {
+        /* Invalid escapes cannot resolve. */
+      }
+      const heading = headings.get(fragment);
+      link.onclick = (event) => event.preventDefault();
+      if (!heading) {
+        link.onmouseenter = null;
+        link.onfocus = null;
+        link.title = "目标尚未加载或无法核对，未推测引用位置";
+        link.setAttribute("aria-disabled", "true");
+        continue;
+      }
+      link.removeAttribute("aria-disabled");
+      const section = heading.closest<HTMLElement>("[data-byte-start]")!;
+      const snippets = [section.textContent ?? ""];
+      let next = section.nextElementSibling;
+      while (
+        next &&
+        !next.querySelector("h1,h2,h3,h4,h5,h6") &&
+        snippets.join("\n").length < 1200
+      ) {
+        snippets.push(next.textContent ?? "");
+        next = next.nextElementSibling;
+      }
+      const preview = {
+        anchor: link,
+        title: heading.textContent ?? "文内引用",
+        text: snippets.join("\n").slice(0, 1200),
+        activate: () => go(Number(section.dataset.byteStart), 0, true),
+      };
+      link.title = preview.text;
+      const show = () => frame.onDocumentLink?.(preview);
+      link.onmouseenter = show;
+      link.onfocus = show;
+      link.onclick = (event) => {
+        event.preventDefault();
+        if (frame.onDocumentLink) show();
+        else preview.activate();
+      };
+    }
+  };
   const paint = () => {
-    observer.disconnect();
-    article.replaceChildren();
+    let index = 0;
     for (const block of markdownBlocks(text)) {
       if (block.token.type === "space") continue;
+      const html = markdown.parser([block.token]);
+      const previous = rendered[index];
+      // Keep stable DOM (including decoded images and tables) when more bytes
+      // arrive. Reparse the tail so Markdown crossing a read boundary recovers.
+      if (
+        previous &&
+        previous.html === html &&
+        previous.element.dataset.byteStart === String(block.start) &&
+        previous.element.dataset.byteEnd === String(block.end)
+      ) {
+        index++;
+        continue;
+      }
       const el = document.createElement("section");
       el.dataset.byteStart = String(block.start);
       el.dataset.byteEnd = String(block.end);
-      el.innerHTML = markdown.parser([block.token]);
+      el.innerHTML = html;
+      if (frame.documentTitle) {
+        for (const heading of el.querySelectorAll("h1,h2,h3,h4,h5")) {
+          const presentation = document.createElement(
+            `h${Number(heading.tagName.slice(1)) + 1}`,
+          );
+          presentation.replaceChildren(...heading.childNodes);
+          heading.replaceWith(presentation);
+        }
+      }
       if (
         source?.kind === "document" &&
         source.start_utf8 < block.end &&
         source.end_utf8 > block.start
       )
         el.classList.add("reading-evidence");
-      article.append(el);
+      for (const table of el.querySelectorAll("table")) {
+        const wrap = document.createElement("div");
+        wrap.className = "reading-table";
+        table.before(wrap);
+        wrap.append(table);
+      }
+      if (previous) {
+        for (const resource of previous.element.querySelectorAll(
+          "[data-resource]",
+        ))
+          observer.unobserve(resource);
+        previous.element.replaceWith(el);
+      } else article.append(el);
+      rendered[index++] = { html, element: el };
+      for (const resource of el.querySelectorAll<HTMLElement>(
+        "[data-resource]",
+      ))
+        observer.observe(resource);
     }
-    for (const table of article.querySelectorAll("table")) {
-      const wrap = document.createElement("div");
-      wrap.className = "reading-table";
-      table.before(wrap);
-      wrap.append(table);
+    for (const previous of rendered.splice(index)) {
+      for (const resource of previous.element.querySelectorAll(
+        "[data-resource]",
+      ))
+        observer.unobserve(resource);
+      previous.element.remove();
     }
-    for (const el of article.querySelectorAll<HTMLElement>("[data-resource]"))
-      observer.observe(el);
-    more.hidden = finished;
-    frame.status.textContent = `${finished ? "全文已加载" : "已加载部分正文"} · ${end.toLocaleString()}${segmentCursor ? " 字节，后续正文可继续加载" : ` / ${total.toLocaleString()} 字节`}${source?.kind === "document" ? " · 高亮为证据所在原文块；无可靠 PDF 坐标" : ""}`;
+    wireDocumentLinks();
+    more.hidden = true;
+    tail.hidden = finished;
+    tail.textContent = finished ? "" : "继续向下阅读，正文将自动加载";
+    frame.status.textContent = `${finished ? "全文已加载" : "已加载部分正文 · 继续向下滚动自动加载"}${source?.kind === "document" ? " · 高亮为证据所在段落；无可靠 PDF 页码" : ""}`;
+    frame.onIssue?.(null);
     ctx.root.dataset.readingReady = "true";
   };
   const loadChunk = async () => {
     more.disabled = true;
+    tail.textContent = "正在加载后续正文…";
     try {
       if (!continuation && segmentCursor && end === total) {
         rangeStart = end;
@@ -285,18 +446,36 @@ export async function renderDocument(
         result.actual_range.end_utf8 <= end
       )
         throw new Error("正文续读范围不连续");
+      const nextEnd = result.actual_range.end_utf8;
+      if (nextEnd > total) throw new Error("正文续读超出固定范围");
+      if (!result.continuation && nextEnd !== total)
+        throw new Error("正文尚未完整，缺少续读游标");
+      if (result.continuation && nextEnd === total)
+        throw new Error("完整正文范围不应仍有续读游标");
+      // Commit progress only after all range checks, so a rejected response
+      // cannot poison the cursor or make an explicit retry a no-op.
       text += result.text;
-      end = result.actual_range.end_utf8;
+      end = nextEnd;
       continuation = result.continuation;
       finished = !continuation && !segmentCursor;
-      if (finished && end !== total)
-        throw new Error("正文尚未完整，缺少续读游标");
+      capture();
+      const offset = state.textOffset,
+        ratio = state.blockOffset;
       paint();
+      if (!restoring) go(offset, ratio);
       state.loadedEnd = end;
     } catch (error) {
       if (!ctx.signal.aborted) {
         frame.status.textContent = `正文未加载完成：${error instanceof Error ? error.message : "请重试"}`;
-        more.textContent = "重试加载正文";
+        autoFailed = true;
+        more.hidden = !!frame.onIssue;
+        frame.onIssue?.("加载暂停，已读正文保留。", async () => {
+          autoFailed = false;
+          await append();
+          void prefetch();
+        });
+        tail.hidden = false;
+        tail.textContent = "加载暂停，已读正文保留。请重试。";
       }
       throw error;
     } finally {
@@ -311,6 +490,42 @@ export async function renderDocument(
     });
     return pending;
   };
+  const append = async () => {
+    await load();
+  };
+  let prefetching = false;
+  const prefetch = async () => {
+    if (
+      prefetching ||
+      restoring ||
+      autoFailed ||
+      finished ||
+      ctx.signal.aborted
+    )
+      return;
+    prefetching = true;
+    try {
+      while (
+        !finished &&
+        !autoFailed &&
+        !ctx.signal.aborted &&
+        tail.getBoundingClientRect().top <
+          frame.body.getBoundingClientRect().bottom + 800
+      ) {
+        await append();
+      }
+    } catch {
+      // loadChunk publishes the recoverable failure. Only explicit retry resumes.
+    } finally {
+      prefetching = false;
+    }
+  };
+  const continuationObserver = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) void prefetch();
+    },
+    { root: frame.body, rootMargin: "800px" },
+  );
   // Show the first body chunk before waiting for the auxiliary outline.
   const target =
     source?.kind === "document" ? source.start_utf8 : state.textOffset;
@@ -330,29 +545,39 @@ export async function renderDocument(
       },
     );
     bound(page);
-    for (const section of page.sections)
-      frame.outline.append(
-        button(section.title || "未命名章节", async () => {
-          const revision = ++jumpRevision;
-          while (!finished && end < section.start_utf8 + 4096) {
-            await load();
-            if (ctx.signal.aborted || revision !== jumpRevision) return;
-          }
-          if (!ctx.signal.aborted && revision === jumpRevision)
-            go(section.start_utf8);
-        }),
-      );
+    for (const section of page.sections) {
+      const activate = async () => {
+        const revision = ++jumpRevision;
+        while (!finished && end < section.start_utf8 + 4096) {
+          await load();
+          if (ctx.signal.aborted || revision !== jumpRevision) return;
+        }
+        if (!ctx.signal.aborted && revision === jumpRevision)
+          go(section.start_utf8, 0, true);
+      };
+      if (frame.onOutline)
+        frame.onOutline({
+          title: section.title || "未命名章节",
+          level: section.level,
+          activate,
+        });
+      else
+        frame.outline.append(button(section.title || "未命名章节", activate));
+    }
     cursor = page.next_cursor;
   } while (cursor);
-  if (!frame.outline.childElementCount)
+  if (!frame.onOutline && !frame.outline.childElementCount)
     frame.outline.textContent = "没有可靠章节目录；正文仍可连续阅读。";
   const initialRevision = jumpRevision;
   while (!finished && end < targetEnd && initialRevision === jumpRevision)
     await load();
   if (initialRevision === jumpRevision)
-    go(target, source?.kind === "document" ? 0 : state.blockOffset);
+    go(target, source?.kind === "document" ? 0 : state.blockOffset, true);
   restoring = false;
+  continuationObserver.observe(tail);
+  void prefetch();
   frame.onFind = (query) => {
+    frame.onFindNext?.(null);
     const matches = blocks().filter((b) =>
       b.textContent?.toLocaleLowerCase().includes(query.toLocaleLowerCase()),
     );
@@ -362,11 +587,12 @@ export async function renderDocument(
     let index = 0;
     const jump = () => {
       const block = matches[index++ % matches.length];
-      if (block) go(Number(block.dataset.byteStart));
+      if (block) go(Number(block.dataset.byteStart), 0, true);
     };
     if (matches.length) {
       jump();
-      frame.findStatus.append(button("下一处命中", jump));
+      if (frame.onFindNext) frame.onFindNext(jump);
+      else frame.findStatus.append(button("下一处命中", jump));
     }
   };
 }

@@ -6,16 +6,17 @@
     "preview:browser": "pnpm --filter @sciretriever/web preview",
     "build": "tsc -b && node scripts/build-workbench-assets.mjs",
     "package:portable": "node scripts/package/build-portable.mjs",
-    "format": "prettier --write package.json pnpm-workspace.yaml tsconfig*.json eslint.config.mjs vitest.config.mjs scripts/**/*.mjs packages/**/*.ts apps/**/*.ts",
-    "format:check": "prettier --check package.json pnpm-workspace.yaml tsconfig*.json eslint.config.mjs vitest.config.mjs scripts/**/*.mjs packages/**/*.ts apps/**/*.ts",
-    "lint": "eslint vitest.config.mjs \"scripts/**/*.mjs\" \"packages/**/*.ts\" \"apps/**/*.ts\" --no-error-on-unmatched-pattern",
+    "format": "prettier --write package.json pnpm-workspace.yaml tsconfig*.json eslint.config.mjs vitest.config.mjs scripts/**/*.mjs packages/**/*.ts \"apps/**/*.{ts,tsx}\" apps/web/*.mjs",
+    "format:check": "prettier --check package.json pnpm-workspace.yaml tsconfig*.json eslint.config.mjs vitest.config.mjs scripts/**/*.mjs packages/**/*.ts \"apps/**/*.{ts,tsx}\" apps/web/*.mjs",
+    "lint": "eslint vitest.config.mjs \"scripts/**/*.mjs\" \"packages/**/*.ts\" \"apps/**/*.{ts,tsx}\" \"apps/web/*.mjs\" --no-error-on-unmatched-pattern",
     "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
     "test": "vitest run --passWithNoTests=false",
     "quick": "pnpm format:check && pnpm lint && pnpm typecheck",
     "full": "pnpm quick && pnpm test && pnpm build",
     "build:workbench": "pnpm build",
     "preview:workbench": "pnpm build:workbench && node apps/server/dist/entry/workbench-preview.js",
-    "sciretriever": "node apps/server/dist/cli/main.js"
+    "sciretriever": "node apps/server/dist/cli/main.js",
+    "dev:web": "pnpm --filter @sciretriever/web dev"
   },
   "devDependencies": {
     "@eslint/js": "9.35.0",
@@ -26,6 +27,7 @@
     "prettier": "3.6.2",
     "typescript": "5.9.2",
     "typescript-eslint": "8.42.0",
-    "vitest": "3.2.4"
+    "vitest": "3.2.4",
+    "eslint-plugin-react-hooks": "7.1.1"
   }
 }

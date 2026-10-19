@@ -1,120 +1,67 @@
 # SciRetriever Web 工作台
 
-本目录提供以文献库为首页的正式 Web、独立只读/维护页面和合成预览。正式入口为 `sciretriever web`，默认监听本机 4174，存储默认位于 `~/.sciretriever/`，已有自定义路径优先；设置修改路径后重启生效，不自动搬迁已有库。详见[Web 使用指南](../../docs/guides/web-workbench.md)。
+本目录提供以文献库为核心的人类界面、独立只读/维护页面和合成预览。正式入口为 `sciretriever web`，默认监听 `0.0.0.0:4174`，所有连接统一输入密码或启动时输出的 API key。默认存储在 `~/.sciretriever/`；自定义路径优先，修改后重启生效，不自动搬迁已有库。详见[Web 使用指南](../../docs/guides/web-workbench.md)。
 
-正式页面 `public/live.html` 与 `public/workspace.css` 直接取自[已确认原型](../../docs/architecture/web/README.md)的外框与样式；`src/live.ts` 挂载 [workspace/](src/workspace/README.md)。分组导航、文献列表、预览、阅读标签、活动与浏览器画廊连接同源真实接口。共享文档/知识证据渲染、配置、维护和提取模块继续复用。`live.css` 保留供独立查询/维护页面使用，4173 静态样本独立。
+## 当前实施状态
 
-[PRODUCT.md](PRODUCT.md) 为 Impeccable 提供已确认的用户场景、产品边界和设计依据索引，不替代需求、ADR 或当前使用指南。[.impeccable/config.json](.impeccable/config.json) 保存本 Web 应用的设计工作方式默认值；该目录属于工具配置，不保存产品业务数据或凭据。
+正式 `/` 已使用 [src/app/](src/app/README.md) 中的 React 工作台。静态资源使用 `/assets/`，维护服务保留 `/query`。迁移期 `/next` 入口、旧 URL 别名与旧偏好兼容已经取消，界面只使用当前 React 路由和偏好。登录页、独立查询/维护与 4173 合成样本都使用同一 React 工程，各自认证和能力边界保持。Owner 已确认本版定稿；最终 Full 与离线安装结果见[Web 体验计划](../../docs/plans/2026-10-19-web-experience/README.md)。
 
-## 合成样本的边界
+新界面以 React、React Aria、Motion、TanStack Query/Virtual/Table 和自有 CSS 实现，Vite 生成离线资源。Source Sans 3 / Source Serif 4 拉丁字体随包发布，中文使用本机字体回退，不加载 CDN；许可证、版本与 CSP 结论见[前端依赖说明](../../docs/notes/web-frontend-dependencies.md)。`script-src 'self'`、`style-src 'self'` 保持，不注入运行时 `<style>`。
 
-以下静态交互样本写在 `apps/web` 中，用于确认布局、观看/接管和 Candidate 审核体验。页面、文章、候选和时间线全部是合成示例。它尚未接入 Browser Host、模型、真实画面流或 Literature API；“确认入库”只改变当前页面内存状态，刷新即重置。
+布局继续以[定稿原型与设计基准](../../docs/architecture/web/README.md)为准；原型文件字节不变。阅读工具栏、分层信息、证据预览和公共控件按 2026-10-19 的 G4/G5 确认调整。[PRODUCT.md](PRODUCT.md) 与 [.impeccable/config.json](.impeccable/config.json) 是设计工作上下文，不替代需求、ADR 或当前行为指南，也不保存业务数据或凭据。
 
-## 启动预览
+## 实现分工
 
-在仓库根目录执行：
+| 目录/入口                                 | 责任                                                                                |
+| ----------------------------------------- | ----------------------------------------------------------------------------------- |
+| [src/app/](src/app/README.md)             | React 数据层、应用壳、共享组件、动效和功能页面；只持有展示/草稿，不产生第二套库事实 |
+| [src/reading/](src/reading/README.md)     | PDF.js、Markdown/KaTeX、固定来源/字节验证、有界续读与会话位置；通过 ref 接入 React  |
+| [entry/](entry/README.md)                   | React 主入口、登录、样本 HTML 和受控静态样式                                        |
+| [public/](public/README.md)               | 阅读器兼容构建所需的第三方许可源文件                                                |
+| `src/browser-platform.ts`                 | 普通 HTTP 下的明确复制和安全随机 ID 适配                                            |
+| `src/preview-server.ts`、`src/preview.ts` | 只读合成样本服务器及启动/停止                                                       |
+| [test/](test/README.md)                   | 临时合成库、生产静态资源与实际浏览器的离线回归                                      |
+
+页面复用同一读取、任务、维护、配置与 Browser owner。读文献、检索和证据展开不隐式调用获取、解析或模型；加工从确认后的固定范围生成任务。独立 query/maintenance 入口保留其既有 HTTP 能力，不因共享 React 页面而获得混合工作台权限；例如独立读取支持 PDF/Markdown 下载，书目导出仍使用主工作台、CLI 或 MCP。
+
+## 开发和预览
+
+仓库根目录执行：
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm preview:browser
 ```
 
-打开 [本地预览](http://127.0.0.1:4173)。服务只绑定 `127.0.0.1:4173`；按 `Ctrl+C` 停止。端口被占用时会明确退出，不会结束其它进程。修改 HTML/CSS 后直接刷新；修改 TS 后运行 `pnpm --filter @sciretriever/web build` 再刷新。
+4173 的 [合成样本](http://127.0.0.1:4173) 只绑定 loopback。React 页面提供接管、暂停/取消、模拟候选及显式确认的交互；所有文章、画面、状态和时间线都是样本，刷新即重置，没有 Application、Provider、模型、用户 home 或 catalog。静态服务器拒绝未知路径、写请求与外部连接。修改样本后重新执行预览命令构建资源；按 `Ctrl+C` 停止，不结束其它占用端口的进程。
 
-静态样本本身不需要额外第三方依赖，使用原生 DOM、CSS 和现有 TypeScript 编译器，字体与图标无需外网加载。根 workspace 的 build/typecheck、lint 和 Vitest 会覆盖新增 TS 源码与测试；锁文件仅增加 web workspace 项。
-
-## 体验路径
-
-1. 点击「演示获取」，查看模拟获取进度、候选与匹配证据，再点击「确认入库（演示）」。
-2. 点击「人工接管」后，操作文章画面中的「View PDF」；释放控制后可以继续自动演示。
-3. 底部切换「身份待确认」：候选保留，发布按钮禁用；可查看原因或放弃。
-4. 切换「网络拒绝」：不会产生候选，观察面板说明拒绝原因和下一步。
-5. 获取过程中暂停、接管、取消或切换场景，待执行的模拟结果不会继续落入新状态。
-6. 窄屏使用「候选与观察详情」打开底部抽屉；支持 Enter、Escape、可见焦点和减少动画偏好。
-
-画面是本地 HTML 文章，滚动和 PDF 按钮是模拟交互；不提供任意 URL 输入、真实键盘转发、外部网站浏览或多观看者控制。取消时已有候选继续保留在本次页面会话中；这不代表持久化或重启恢复。
-
-## 文件与设计
-
-| 文件                             | 责任                                               |
-| -------------------------------- | -------------------------------------------------- |
-| `public/index.html`              | 工作台壳、合成文章画面、候选/观察/动态面板         |
-| `public/styles.css`              | 暖白与松绿设计变量、桌面布局、390px 抽屉与焦点样式 |
-| `src/main.ts`                    | DOM 事件、受限模拟交互、反馈与定时器取消           |
-| `src/demo.ts`                    | 仅用于样本的状态与场景，不是服务端 DTO 或业务事实  |
-| `src/icons.ts`                   | 内联 SVG 图标，避免外部依赖                        |
-| `src/preview-server.ts`          | 固定资产白名单，只读本地预览服务器                 |
-| `src/preview.ts`                 | 预览启动与停止入口                                 |
-| `test/browser-workbench.test.ts` | 真实 Chromium 对样本的离线交互与响应式测试         |
-
-界面以研究者在桌面观看页面为主：暖白 `#f5f5f0`、墨绿 `#263b33` 和松绿 `#386d50`；工作台使用系统无衬线字体，示例文章使用衬线字体；以 4px 间距为基础，6–9px 圆角、细边框和轻阴影。交互过渡约 180ms，遵守 `prefers-reduced-motion`。桌面页面画面为主，右侧集中呈现证据；窄屏改为底部详情抽屉。无需账户、凭据或模型配置。
-
-## 验证
+主界面开发先运行正常工作台，再启动 Vite：
 
 ```bash
-pnpm --filter @sciretriever/web build
-pnpm exec vitest run apps/web/test/browser-workbench.test.ts
-pnpm full
+pnpm --filter @sciretriever/web dev
 ```
 
-浏览器测试使用现有缓存的 Chromium，或通过 `SCIRETRIEVER_BROWSER_EXECUTABLE` 指向测试用本机二进制；仅访问测试创建的 loopback 服务。缺少二进制时测试失败，不自动下载或跳过。测试覆盖受限资产访问、人工接管、显式确认入库、身份不确定、网络拒绝、迟到结果取消、390px 布局与键盘操作，并拒绝页面外部请求和控制台错误。
+`SCIRETRIEVER_WEB_API_ORIGIN` 可指定已运行工作台的 loopback HTTP 地址。Vite 开发入口仍经过同一登录/grant 代理，HMR 的开发能力不改变生产 CSP。开发入口、API 代理和登录回跳由 `next-development.test.ts` 直接验收。
 
-样本服务器仅返回列出的静态资产，拒绝其它路径和写请求；CSP 禁止外部请求、内联脚本及动态 eval。该服务器不是产品认证控制面，不组装生产 Application，也不读取用户 home、配置、Profile、catalog 或资产。
-
-静态样本测试只证明 4173 的离线布局与交互；真实 Browser stream、权限、Candidate 持久化与入库旅程由下方
-4174 工作台及[阶段 03 证据](../../docs/archive/2026-09-07-typescript-browser-workbench/03-browser-and-acquisition.md)承担。
-
-## 实时 Cloak 工作台
-
-静态样本继续使用 4173。新增入口使用真实 Browser Host、JPEG 和有界 SSE、双观看者控制权及
-持久 Candidate；所有网页和 PDF 仍是本机合成材料。
+## 实时合成 Browser 预览
 
 ```bash
 SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm preview:workbench
 ```
 
-打开 [实时本地预览](http://127.0.0.1:4174)。配置、Catalog、Browser Host 与业务流程均由同一个
-TypeScript Application 组装，不需要 Python。Linux x64 需要已安装并校验的目标 Cloak bundle、Xvfb、
-prlimit、pdfinfo 和 pdftotext。入口创建全新的临时 Profile/catalog/资产目录，正常 Ctrl+C 时清理自己的
-临时目录。此一次性预览用于验证合成旅程；不要把真实材料放入该临时目录。
+4174 预览组装真实 Browser Host、JPEG、有界 SSE 和多观看者控制，但页面与 PDF 仍来自本机合成材料。入口创建自己的临时 home/Profile/catalog/资产目录，正常退出后清理；不要把真实文献放进此一次性目录。目标 Linux 运行依赖与 bundle 验证见[开发入口](../../docs/development/typescript-foundation.md)。
 
-从浏览器会话画廊打开真实画面；点击画面可申请控制权，或在“页面文字与可选指导”中明确接管并选择页面元素。合成预览在“下载与接纳”详情中提供发布与放弃候选，用于验证接纳与不可变发布；生产获取流程仍自动验收，不要求人工确认。390px 下同一观看界面可滚动阅读详情。暂停/取消保留已有候选，已发布结果继续留在库内。
+跨重启恢复、Candidate 持久化、不可变发布、并行文章和控制权失效由保留同一合成 home 的回归验证；静态 4173 样本不能证明这些能力。生产获取自动验收，人工确认样本不成为生产必经步骤。
 
-同一合成 home 上关闭并重新组装工作台，会恢复当前文章的候选和已提交 receipt；恢复时核对候选和正式文件
-字节。面板当前最多读取 100 项。一次性 `preview:workbench` 正常退出会删除自己的临时 home，下一次启动
-创建新的示例；跨重启恢复由保留同一合成 home 的测试验证，不能把一次性预览当作用户资料存储入口。
-
-正式页面使用 `public/live.html`、`public/workspace.css`、`src/live.ts`；服务端会话、认证 API 和组装分别位于
-`apps/server/src/workbench/` 与 `apps/server/src/bootstrap/workbench.ts`。浏览器 bundle 由开发依赖
-`esbuild 0.28.2` 构建，版本与已有 Vite 间接依赖一致；共享 DTO 使用 workspace contracts，不加载外部 CDN。
+## 验证
 
 ```bash
-SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm exec vitest run apps/web/test/live-workbench.test.ts
+pnpm exec vitest run apps/web/test/next-reader.test.ts
+pnpm exec vitest run apps/web/test/browser-workbench.test.ts
+pnpm quick
+pnpm full
 ```
 
-该测试只在明确提供目标 bundle 时运行，未配置时报告 skipped。实际运行范围与 Deferred 边界见
-[会话/API 验证证据](../../migration/evidence/browser-acquisition/workbench-session-api.md)。
-
-## 实时文献库视图
-
-正式首页直接读取同一认证 HTTP 服务的文献库，参考文献式列表、按需预览、阅读标签、分面筛选和多选操作由 `src/workspace/library.ts` 适配。引用来源、不可变 PDF、解析文档、知识证据和导出复用共享合同，页面切换不会隐式获取或加工。详细行为和未接入的原型扩展见[使用指南](../../docs/guides/web-workbench.md)。
-
-## 独立只读文献阅读
-
-`startQueryOnlyWorkbench({ home })` 是另一个正式 API 入口，使用 QueryApplication 和单独的 `query.html`/`query.ts`
-页面，不连接 `/api/connect`、Browser、Jobs、配置或其它混合工作台 API。页面复用 Library 搜索、详情、引用与附件
-下载能力；本地 API 均使用 `/api/v1/query/*` v1 envelope。readiness 将未初始化、不可用与就绪空库/零匹配分开显示；
-缺 PDF/内容显示缺口，不会尝试扩充材料。
-
-源码 Playwright 旅程使用 `esbuild` `write:false` 生成测试 bundle，并把静态资源注入 `startQueryOnlyWorkbench`；安装后
-默认启动则从 server 包内 `dist/web/` 读取随包发布的资源。read-only SQLite 启动不会创建 home/Catalog、升级 schema、
-恢复票据或提交 Jobs；SQLite WAL/SHM 协调文件仍可能出现。API 示例、就绪状态和生命周期见
-[独立文献库阅读指南](../../docs/guides/library-query.md)。
-
-## 子目录导航
-
-- [public/](public/README.md)：Web 页面与样式。
-- [src/](src/README.md)：Web 交互源码。
-- [test/](test/README.md)：Web 回归测试。
+浏览器测试仅访问合成 loopback 服务，使用 Playwright 测试 Chromium，或由 `SCIRETRIEVER_BROWSER_EXECUTABLE` 指定已安装测试二进制；不得改用真实库、凭据、Provider 或模型。截图、性能与一次性报告写入 Git 忽略的 `sandbox/`，不随包分发。Full 尚未完成时，局部绿色测试不代表整体迁移已验收。
 
 [上级目录](../README.md) · [项目 README](../../README.md)

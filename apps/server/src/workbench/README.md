@@ -1,10 +1,11 @@
 # 工作台服务端适配
 
-提供同源本机 HTTP、页面资产、Browser 会话观看与控制，以及统一任务、文献阅读、配置和维护操作的传输边界。页面交互代码在 [apps/web](../../../web/README.md)，生产接线在 [bootstrap/workbench.ts](../bootstrap/workbench.ts)。
+提供默认对外监听、所有连接统一登录的 HTTP、页面资产、Browser 会话观看与控制，以及统一任务、文献阅读、配置和维护操作的传输边界。页面交互代码在 [apps/web](../../../web/README.md)，生产接线在 [bootstrap/workbench.ts](../bootstrap/workbench.ts)。
 
 ## 内容入口
 
-- [machine-client.ts](machine-client.ts)：CLI/MCP 到显式本机 runtime 的受控适配；内部持有客户端授权材料，复用会话/epoch 和任务 owner。
+- [access.ts](access.ts)：单用户 IP 直连的地址准入、scrypt 密码验证、有界临时登录与撤销；不持久化或拥有文献事实。
+- [machine-client.ts](machine-client.ts)：CLI/MCP 到显式 IPv4 runtime 的受控适配；所有连接采用同一登录边界，内部持有客户端授权材料，复用会话/epoch 和任务 owner。
 - [http.ts](http.ts)：工作台认证、任务与配置接口，以及正式工作台和独立阅读入口共享的查询/维护路由。
 - [production-session.ts](production-session.ts)：正式 Browser 会话投影与人工协作；无初始文章时 `article_id` 为 `null`，选择和执行真实文章操作时仍验证 Literature ID。
 - [session.ts](session.ts)：单个文章页面的观看、接管、交还、指导与动作边界。
@@ -31,7 +32,7 @@
 | `POST /api/import`                              | 显式导入 BibTeX、BibLaTeX、RIS 或 CSL JSON 文本；复用 Bibliography Entry 与 Identity 接纳。                                                                                                                                                                                                                                                             |
 | `/api/configuration/*`                          | 配置、凭据状态、显式保存与 probe；连接测试仅由用户明确操作触发。                                                                                                                                                                                                                                                                                        |
 
-工作台先通过同源 `POST /api/clients` 取得 tab grant，后续请求携带 `client_id`；POST 同时携带 `x-workbench-csrf`。Host、Origin、loopback 来源、cookie 与 grant 在调用共享路由前验证。正式工作台的 `/api/v1/maintenance/session` 返回同一 tab 的 CSRF；独立阅读/维护 HTTP 入口继续使用自己的原有安全边界。
+工作台先通过同源 `POST /api/clients` 取得 tab grant，后续请求携带 `client_id`；POST 同时携带 `x-workbench-csrf`。所有连接先经 `/auth/login` 取得 HttpOnly 会话，tab grant 绑定该会话；不提供本机免登录。Host 接受 IPv4 字面地址或 localhost，Origin 按当前 Host 校验，无需公开 origin 配置。Host、Origin、cookie 与 grant 在调用共享路由前验证；共享 query handler 继承已验证的请求 origin，不再次要求 loopback。`/auth/status` 固定声明需要认证，并显示是否已登录；`/auth/logout` 撤销当前登录及其 tab grants。正式工作台的 `/api/v1/maintenance/session` 返回同一 tab 的 CSRF；独立阅读/维护 HTTP 入口继续使用自己的原有本机安全边界。
 
 Browser 指导、接管/交还和人工动作继续经过当前文章的控制 epoch。有效事件由 Browser owner 记录到该文章的临时 Agent 历史；切换前台所选文章不改变后台会话归属，也不授予旧工具调用新的动作资格。工作台不展示或持久化模型的私有续接数据。
 

@@ -1,3 +1,7 @@
+import {
+  workbenchLogin,
+  workbenchTestAccess,
+} from "./workbench-auth-fixture.js";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -562,13 +566,17 @@ describe("shared manual PDF maintenance", () => {
     );
     await session.refresh();
     const http = await startWorkbenchHttp({
+      access: workbenchTestAccess,
       session,
       maintenance: env.app.maintenance!,
       assets: pageAssets,
     });
     try {
-      const root = await fetch(http.origin);
-      const cookie = root.headers.get("set-cookie")!.split(";")[0]!;
+      const authCookie = await workbenchLogin(http.origin);
+      const root = await fetch(http.origin, {
+        headers: { Cookie: authCookie },
+      });
+      const cookie = `${authCookie}; ${root.headers.get("set-cookie")!.split(";")[0]!}`;
       const client = await fetch(`${http.origin}/api/clients`, {
         method: "POST",
         headers: {

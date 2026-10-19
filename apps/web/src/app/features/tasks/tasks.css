@@ -1,0 +1,42 @@
+@layer pages {
+  .tasks-page {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: var(--space-6);
+    display: grid;
+    gap: var(--space-4);
+  }
+  .tasks-page > .ui-field {
+    max-width: 440px;
+  }
+  .tasks-list {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+  .tasks-list .ui-list-row + .ui-list-row {
+    border-top: 1px solid var(--line);
+  }
+  .task-detail {
+    display: grid;
+    gap: var(--space-4);
+  }
+  .task-detail h2 {
+    margin: 0;
+  }
+  .task-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .task-events {
+    padding-left: var(--space-5);
+    display: grid;
+    gap: var(--space-4);
+  }
+  .task-events time {
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+  }
+}

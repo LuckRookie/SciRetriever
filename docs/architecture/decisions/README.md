@@ -14,6 +14,12 @@ ADR 记录已经接受并会长期约束后续设计的重要选择。ADR 不替
 
 ## 当前 ADR
 
+- [ADR 0036：Web 前端采用 React 重建](0036-react-web-frontend.md)：**Accepted**，2026-10-19 起草；React 19、React Aria Components、Motion、TanStack、Vite，不放宽 CSP，新旧界面并行后再切换。待 Owner 在 Web 体验计划的 GA 确认。
+
+- [ADR 0031](0031-dsh-backed-agent-capabilities.md) 于 2026-10-19 修订：移除旧 Agents 兼容入口，单篇/长文与综合采用 DSH 阅读工具会话；材料、证据与发布仍由业务 owner 验收。
+
+- [ADR 0035：统一登录的单用户 Web 服务](0035-authenticated-remote-web-access.md)：Accepted，2026-10-19；默认 IP/端口直连、统一登录与自动启动密钥，保留同源和业务授权边界。
+
 - [ADR 0034：统一处理器接口与结果格式](0034-unified-processors-and-results.md)：Accepted，2026-10-18；精简知识加工、默认提取、长期候选托管、冻结输入与可靠复用。实施状态见关联计划。
 
 | ADR                                                                                                               | 状态                                                       | 负责主题                                                                                                                                                                                                                                                                                               | 不负责                                                                                                                                  |
@@ -51,6 +57,7 @@ ADR 记录已经接受并会长期约束后续设计的重要选择。ADR 不替
 | [ADR 0031：基于 DSH/Cordis 的受控 Agent 能力](0031-dsh-backed-agent-capabilities.md)                              | Accepted（选型已定，实施已批准）                           | 唯一进程内 DSH Agents 底座、单次调用与通用会话、完整能力覆盖及独立内容质量验收、共享配置/Network 与业务 owner 边界                                                                                                                                                                                     | 精确接口与包版本、会话粒度、压缩/图像策略、实现完成度和实际性能                                                                         |
 | [ADR 0032：以文献库为中心的 Web 与可选 Browser 直接交互](0032-library-centered-web-workspace.md)                  | Accepted，2026-10-18 修订                                  | 库中心与定稿原型、日常加工和阅读独立验收、连续阅读与证据核对、可选 Browser 直接交互、UI 状态与用户数据边界                                                                                                                                                                                             | 能力数据支持、阅读器实现、保存视图存储、批次扩展、精确 URL、跨入口活会话与控制恢复合同                                                  |
 | [ADR 0033：CLI 与 MCP 分别覆盖 Web 业务能力](0033-machine-interfaces-cover-web-capabilities.md)                   | Accepted，2026-10-18 修订                                  | CLI/MCP 分别覆盖 Web 业务、Web 专有视觉交互、日常业务与维护诊断分工、共同应用边界及受控调用                                                                                                                                                                                                            | 纯 UI 偏好、新领域能力、当前实现完成度和真实环境验收                                                                                    |
+| [ADR 0036：Web 前端采用 React 重建](0036-react-web-frontend.md) | Accepted，2026-10-19 | Web 前端框架与组件行为、动画、数据请求、长列表的库选择，样式与 CSP 约束，构建方式，URL 与偏好兼容，阅读引擎包装，新旧界面并行与切换 | 产品与布局（ADR 0032）、服务端 API 与认证、具体依赖版本与体积（见依赖说明）、实现完成度 |
 
 当前产品方向及旧合同修订首先核对 ADR 0026，通用提取与调用方记录边界核对 ADR 0027，查询与维护启动条件核对 ADR 0028，DSH 执行基础选型与旧无状态范围修订核对 ADR 0031，库中心 Web、日常加工与阅读服务及可选直接交互核对 ADR 0032，业务超集与 Web 视觉交互分工核对 ADR 0033，统一处理器与结果边界核对 ADR 0034；被修订 ADR 保留不冲突的不变量和历史上下文，直接冲突的正文已收口。详见[适配对照](../knowledge-service-workflows.md#8-旧-adr-怎样适配)。除 ADR 已明确接受的方向外，具体新接口、会话与迁移策略仍须按对应提案审定，不能仅凭架构图撤销部署、身份、配置或访问决定。
 

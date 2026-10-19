@@ -1,3 +1,4 @@
+import { workbenchTestAccess } from "./workbench-auth-fixture.js";
 import { createServer } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -61,6 +62,7 @@ it.skipIf(!bundle)(
       | undefined;
     try {
       workbench = await startSyntheticWorkbench({
+        access: workbenchTestAccess,
         home,
         runtime,
         assets: new Map(),

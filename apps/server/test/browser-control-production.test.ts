@@ -1,4 +1,8 @@
 import {
+  workbenchLogin,
+  workbenchTestAccess,
+} from "./workbench-auth-fixture.js";
+import {
   latestBrowserObservationMessage,
   browserModelToolCallId,
 } from "./browser-model-fixture.js";
@@ -289,6 +293,7 @@ it
       await seed.close();
       seed = undefined;
       workbench = await startProductionWorkbench({
+        access: workbenchTestAccess,
         home,
         literature_id: papers[0]!.literature.literature_id,
         assets: new Map([
@@ -333,8 +338,11 @@ it
           },
         );
       }
-      const homeResponse = await fetch(workbench.origin);
-      const cookie = homeResponse.headers.get("set-cookie")!.split(";")[0]!;
+      const authCookie = await workbenchLogin(workbench.origin);
+      const homeResponse = await fetch(workbench.origin, {
+        headers: { Cookie: authCookie },
+      });
+      const cookie = `${authCookie}; ${homeResponse.headers.get("set-cookie")!.split(";")[0]!}`;
       const clientResponse = await fetch(`${workbench.origin}/api/clients`, {
         method: "POST",
         headers: {

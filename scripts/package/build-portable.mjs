@@ -91,15 +91,16 @@ async function packageDependencies(directory) {
     }
     return entry;
   }
-  const serverManifest = JSON.parse(
-    await readFile(join(repository, "apps/server/package.json"), "utf8"),
-  );
-  for (const dependency of Object.keys(serverManifest.dependencies ?? {})) {
-    if (dependency.startsWith("@sciretriever/")) continue;
-    const child = await visit(dependency, join(repository, "apps/server"));
-    overrides[
-      `${serverManifest.name}@${serverManifest.version}>${dependency}`
-    ] = `file:./${child.tarball}`;
+  for (const workspace of ["packages/contracts", "apps/server"]) {
+    const manifest = JSON.parse(
+      await readFile(join(repository, workspace, "package.json"), "utf8"),
+    );
+    for (const dependency of Object.keys(manifest.dependencies ?? {})) {
+      if (dependency.startsWith("@sciretriever/")) continue;
+      const child = await visit(dependency, join(repository, workspace));
+      overrides[`${manifest.name}@${manifest.version}>${dependency}`] =
+        `file:./${child.tarball}`;
+    }
   }
   const dependencies = {};
   for (const name of ["contracts", "server"]) {

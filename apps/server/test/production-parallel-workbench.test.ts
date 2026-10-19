@@ -1,3 +1,7 @@
+import {
+  workbenchLogin,
+  workbenchTestAccess,
+} from "./workbench-auth-fixture.js";
 import { expect, it, vi } from "vitest";
 import {
   parseDurableCandidate,
@@ -122,12 +126,16 @@ it("routes HTTP selection, takeover, guidance, frames and cancellation to one ar
   const a = await flow.open!(request(articleA, "article-session-a"));
   const b = await flow.open!(request(articleB, "article-session-b"));
   const http = await startWorkbenchHttp({
+    access: workbenchTestAccess,
     session: workbench,
     assets: new Map([["/", { contentType: "text/html", body: "offline" }]]),
   });
   try {
-    const landing = await fetch(http.origin);
-    const cookie = landing.headers.get("set-cookie")!.split(";")[0]!;
+    const authCookie = await workbenchLogin(http.origin);
+    const landing = await fetch(http.origin, {
+      headers: { Cookie: authCookie },
+    });
+    const cookie = `${authCookie}; ${landing.headers.get("set-cookie")!.split(";")[0]!}`;
     const create = await fetch(`${http.origin}/api/clients`, {
       method: "POST",
       headers: {
@@ -534,12 +542,16 @@ it("selects and cancels an initial queued article through HTTP without opening i
   const b = await flow.open!(request(articleB, "queued-session-b"));
   b.transferStarted("queued-http-transfer-b");
   const http = await startWorkbenchHttp({
+    access: workbenchTestAccess,
     session: workbench,
     assets: new Map([["/", { contentType: "text/html", body: "offline" }]]),
   });
   try {
-    const landing = await fetch(http.origin);
-    const cookie = landing.headers.get("set-cookie")!.split(";")[0]!;
+    const authCookie = await workbenchLogin(http.origin);
+    const landing = await fetch(http.origin, {
+      headers: { Cookie: authCookie },
+    });
+    const cookie = `${authCookie}; ${landing.headers.get("set-cookie")!.split(";")[0]!}`;
     const create = await fetch(`${http.origin}/api/clients`, {
       method: "POST",
       headers: {

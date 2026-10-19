@@ -1,0 +1,105 @@
+diff --git a/dist/private/overlays/usePreventScroll.cjs b/dist/private/overlays/usePreventScroll.cjs
+--- a/dist/private/overlays/usePreventScroll.cjs
++++ b/dist/private/overlays/usePreventScroll.cjs
+@@ -103,17 +103,10 @@
+     // Prevent scrolling up when at the top and scrolling down when at the bottom
+     // of a nested scrollable area, otherwise mobile Safari will start scrolling
+     // the window instead.
+-    // This must be applied before the touchstart event as of iOS 26, so inject it as a <style> element.
+-    let style = document.createElement('style');
+-    let nonce = (0, $a9ae3cc70c0e2090$exports.getNonce)();
+-    if (nonce) style.nonce = nonce;
+-    style.textContent = `
+-@layer {
+-  * {
+-    overscroll-behavior: contain;
+-  }
+-}`.trim();
+-    document.head.prepend(style);
++    // SciRetriever: the same fixed rule ships in external react-aria.css.
++    // Keep CSP style-src 'self' and restore the previous state on cleanup.
++    const previousScrollLock = document.documentElement.getAttribute('data-react-aria-scroll-lock');
++    document.documentElement.setAttribute('data-react-aria-scroll-lock', '');
+     let onTouchMove = (e)=>{
+         // Allow pinch-zooming.
+         if (e.touches.length === 2 || allowTouchMove) return;
+@@ -178,7 +171,8 @@
+     return ()=>{
+         restoreOverflow();
+         removeEvents();
+-        style.remove();
++        if (previousScrollLock === null) document.documentElement.removeAttribute('data-react-aria-scroll-lock');
++        else document.documentElement.setAttribute('data-react-aria-scroll-lock', previousScrollLock);
+         Reflect.defineProperty(HTMLElement.prototype, 'focus', {
+             configurable: true,
+             writable: true,
+diff --git a/dist/private/overlays/usePreventScroll.js b/dist/private/overlays/usePreventScroll.js
+--- a/dist/private/overlays/usePreventScroll.js
++++ b/dist/private/overlays/usePreventScroll.js
+@@ -97,17 +97,10 @@
+     // Prevent scrolling up when at the top and scrolling down when at the bottom
+     // of a nested scrollable area, otherwise mobile Safari will start scrolling
+     // the window instead.
+-    // This must be applied before the touchstart event as of iOS 26, so inject it as a <style> element.
+-    let style = document.createElement('style');
+-    let nonce = (0, $fb5d33e131fca75a$export$2b85b721e524d74b)();
+-    if (nonce) style.nonce = nonce;
+-    style.textContent = `
+-@layer {
+-  * {
+-    overscroll-behavior: contain;
+-  }
+-}`.trim();
+-    document.head.prepend(style);
++    // SciRetriever: the same fixed rule ships in external react-aria.css.
++    // Keep CSP style-src 'self' and restore the previous state on cleanup.
++    const previousScrollLock = document.documentElement.getAttribute('data-react-aria-scroll-lock');
++    document.documentElement.setAttribute('data-react-aria-scroll-lock', '');
+     let onTouchMove = (e)=>{
+         // Allow pinch-zooming.
+         if (e.touches.length === 2 || allowTouchMove) return;
+@@ -173,7 +166,8 @@
+     return ()=>{
+         restoreOverflow();
+         removeEvents();
+-        style.remove();
++        if (previousScrollLock === null) document.documentElement.removeAttribute('data-react-aria-scroll-lock');
++        else document.documentElement.setAttribute('data-react-aria-scroll-lock', previousScrollLock);
+         Reflect.defineProperty(HTMLElement.prototype, 'focus', {
+             configurable: true,
+             writable: true,
+diff --git a/dist/private/overlays/usePreventScroll.mjs b/dist/private/overlays/usePreventScroll.mjs
+--- a/dist/private/overlays/usePreventScroll.mjs
++++ b/dist/private/overlays/usePreventScroll.mjs
+@@ -97,17 +97,10 @@
+     // Prevent scrolling up when at the top and scrolling down when at the bottom
+     // of a nested scrollable area, otherwise mobile Safari will start scrolling
+     // the window instead.
+-    // This must be applied before the touchstart event as of iOS 26, so inject it as a <style> element.
+-    let style = document.createElement('style');
+-    let nonce = (0, $2b2d34ff061957fb$export$2b85b721e524d74b)();
+-    if (nonce) style.nonce = nonce;
+-    style.textContent = `
+-@layer {
+-  * {
+-    overscroll-behavior: contain;
+-  }
+-}`.trim();
+-    document.head.prepend(style);
++    // SciRetriever: the same fixed rule ships in external react-aria.css.
++    // Keep CSP style-src 'self' and restore the previous state on cleanup.
++    const previousScrollLock = document.documentElement.getAttribute('data-react-aria-scroll-lock');
++    document.documentElement.setAttribute('data-react-aria-scroll-lock', '');
+     let onTouchMove = (e)=>{
+         // Allow pinch-zooming.
+         if (e.touches.length === 2 || allowTouchMove) return;
+@@ -172,7 +165,8 @@
+     return ()=>{
+         restoreOverflow();
+         removeEvents();
+-        style.remove();
++        if (previousScrollLock === null) document.documentElement.removeAttribute('data-react-aria-scroll-lock');
++        else document.documentElement.setAttribute('data-react-aria-scroll-lock', previousScrollLock);
+         Reflect.defineProperty(HTMLElement.prototype, 'focus', {
+             configurable: true,
+             writable: true,

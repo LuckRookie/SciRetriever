@@ -1,13 +1,18 @@
 import {
+  workbenchTestAccess,
+  loginWorkbenchPage,
+} from "./workbench-auth-fixture.js";
+import {
   latestBrowserObservationMessage,
   browserModelToolCallId,
 } from "./browser-model-fixture.js";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { build } from "esbuild";
+import { nextAssets } from "../../web/test/next-workspace-fixture.js";
+import { readingAssets } from "../../web/test/reading-assets-fixture.js";
 import { chromium, type Browser } from "playwright";
 import {
   parseLiterature,
@@ -136,36 +141,10 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       }
       await seed.close();
       seed = undefined;
-      const assets = new Map<
-        string,
-        { contentType: string; body: Uint8Array }
-      >();
-      for (const [route, file, contentType] of [
-        ["/", "live.html", "text/html"],
-        ["/styles.css", "styles.css", "text/css"],
-        ["/live.css", "live.css", "text/css"],
-        ["/workspace.css", "workspace.css", "text/css"],
-      ] as const)
-        assets.set(route, {
-          contentType,
-          body: await readFile(
-            new URL(`../../web/public/${file}`, import.meta.url),
-          ),
-        });
-      const bundled = await build({
-        entryPoints: [
-          new URL("../../web/src/live.ts", import.meta.url).pathname,
-        ],
-        bundle: true,
-        format: "esm",
-        platform: "browser",
-        write: false,
-      });
-      assets.set("/live.js", {
-        contentType: "text/javascript",
-        body: bundled.outputFiles[0]!.contents,
-      });
+      const assets = new Map(await readingAssets());
+      for (const [path, value] of await nextAssets()) assets.set(path, value);
       workbench = await startProductionWorkbench({
+        access: workbenchTestAccess,
         home,
         literature_id: FIXTURE_LITERATURE.literature_id,
         assets,
@@ -257,9 +236,10 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       });
       const pageErrors: string[] = [];
       ui.on("pageerror", (error) => pageErrors.push(error.message));
-      await ui.goto(`${origin}/?workspace=browser`);
+      await loginWorkbenchPage(ui, origin);
+      await ui.goto(`${origin}/?view=web`);
       await expect
-        .poll(() => ui.locator("#browser-sessions").textContent())
+        .poll(() => ui.locator("main").textContent())
         .toContain("没有正在使用的会话");
       expect(
         (
@@ -268,8 +248,11 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
           )
         ).primary_pdf,
       ).toBeNull();
-      const root = await fetch(origin);
-      const cookie = root.headers.get("set-cookie")?.split(";")[0];
+      // Share the authenticated synthetic browser session; signing in again
+      // would intentionally revoke its grant under the production contract.
+      const cookie = (await ui.context().cookies(origin))
+        .map((value) => `${value.name}=${value.value}`)
+        .join("; ");
       expect(cookie).toBeTruthy();
       const post = async (
         path: string,
@@ -480,9 +463,14 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       expect(artifact.status).toBe(200);
       expect(artifact.headers.get("content-type")).toBe("application/pdf");
       expect((await artifact.arrayBuffer()).byteLength).toBeGreaterThan(100);
-      await ui.locator('[data-go="lib"]').click();
       await ui
-        .locator(`[data-id="${FIXTURE_LITERATURE.literature_id}"]`)
+        .getByLabel("主导航")
+        .getByRole("button", { name: /^文献库/ })
+        .click();
+      await ui
+        .locator(
+          `[data-literature-id="${FIXTURE_LITERATURE.literature_id}"] .paper-open`,
+        )
         .click();
       await expect
         .poll(() => ui.url())
@@ -492,21 +480,21 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         "run",
       );
       await ui.reload();
+      await ui.locator(".reader-information h2").waitFor();
       await ui
-        .locator(
-          `[data-page="paper:${FIXTURE_LITERATURE.literature_id}"] #reader-info h2`,
-        )
-        .waitFor();
-      await ui.locator('[data-go="lib"]').click();
-      await ui
-        .locator(`[data-id="${SECOND_LITERATURE.literature_id}"]`)
+        .getByLabel("主导航")
+        .getByRole("button", { name: /^文献库/ })
         .click();
       await ui
         .locator(
-          `[data-page="paper:${SECOND_LITERATURE.literature_id}"] #reader-info h2`,
+          `[data-literature-id="${SECOND_LITERATURE.literature_id}"] .paper-open`,
         )
-        .waitFor();
-      await ui.locator('[data-go="web"]').click();
+        .click();
+      await ui.locator(".reader-information h2").waitFor();
+      await ui
+        .getByLabel("主导航")
+        .getByRole("button", { name: "浏览器", exact: true })
+        .click();
       expect(completionRun).not.toHaveBeenCalled();
       completionRun.mockRestore();
       expect(
@@ -583,17 +571,30 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
           )
         ).primary_pdf?.asset.sha256,
       ).toBe(finished.operation_feedback?.primary_pdf?.sha256);
-      await ui.locator("#config-tab").click();
+      await ui.getByRole("button", { name: "设置", exact: true }).click();
+      await ui.getByRole("tab", { name: "运行状态", exact: true }).click();
       await expect
-        .poll(() => ui.locator("#config-runtime-status").innerText())
+        .poll(() => ui.locator(".settings-section").innerText())
         .toContain("当前普通配置");
-      await ui.locator('[data-setting="parser"]').click();
-      await ui.locator("#config-browser-enabled").uncheck();
-      await ui.locator("#config-save").click();
+      await ui
+        .getByRole("tab", { name: "解析与 Browser", exact: true })
+        .click();
+      const browserEnabled = ui.getByRole("checkbox", {
+        name: "启用 Browser",
+        exact: true,
+      });
+      expect(await browserEnabled.isChecked()).toBe(true);
+      await browserEnabled.focus();
+      await browserEnabled.press("Space");
+      expect(await browserEnabled.isChecked()).toBe(false);
+      await ui
+        .getByRole("button", { name: "保存运行配置", exact: true })
+        .click();
       await expect
-        .poll(() => ui.locator("#config-page-status").innerText())
-        .toContain("需要重启");
-      expect(await ui.locator("#config-runtime-status").innerText()).toContain(
+        .poll(() => ui.getByRole("status").allTextContents())
+        .toContainEqual(expect.stringContaining("当前服务需重启"));
+      await ui.getByRole("tab", { name: "运行状态", exact: true }).click();
+      expect(await ui.locator(".settings-section").innerText()).toContain(
         "需重启服务后生效",
       );
       expect(pageErrors).toEqual([]);

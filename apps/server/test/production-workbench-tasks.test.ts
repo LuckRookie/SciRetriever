@@ -1,3 +1,7 @@
+import {
+  workbenchLogin,
+  workbenchTestAccess,
+} from "./workbench-auth-fixture.js";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -35,6 +39,7 @@ async function fixture() {
   let parseCalls = 0;
   let parseHook: (signal?: AbortSignal) => Promise<void> = async () => {};
   const server = await startProductionWorkbench({
+    access: workbenchTestAccess,
     home,
     assets: new Map([
       ["/", { contentType: "text/html", body: "<main>Workbench</main>" }],
@@ -109,8 +114,9 @@ async function fixture() {
       },
     },
   });
-  const index = await fetch(server.origin);
-  const cookie = index.headers.get("set-cookie")!.split(";")[0]!;
+  const authCookie = await workbenchLogin(server.origin);
+  const index = await fetch(server.origin, { headers: { Cookie: authCookie } });
+  const cookie = `${authCookie}; ${index.headers.get("set-cookie")!.split(";")[0]!}`;
   const init = await fetch(`${server.origin}/api/clients`, {
     method: "POST",
     headers: {
@@ -206,7 +212,9 @@ describe("production task workbench composition", () => {
       valid.searchParams.set("reader", "doc");
       valid.searchParams.set("query", JSON.stringify({ text: "synthetic" }));
       valid.searchParams.set("task", "task-1");
-      expect((await fetch(valid)).status).toBe(200);
+      expect(
+        (await fetch(valid, { headers: { Cookie: env.cookie } })).status,
+      ).toBe(200);
       for (const suffix of [
         "?view=unknown",
         "?reader=invalid",
@@ -214,9 +222,13 @@ describe("production task workbench composition", () => {
         "?view=lib&view=set",
         "?query=%7B%22unknown%22:1%7D",
       ])
-        expect((await fetch(`${env.server.origin}/${suffix}`)).status).toBe(
-          400,
-        );
+        expect(
+          (
+            await fetch(`${env.server.origin}/${suffix}`, {
+              headers: { Cookie: env.cookie },
+            })
+          ).status,
+        ).toBe(400);
       const run = vi
         .spyOn(env.server.application.citations, "run")
         .mockResolvedValue({
@@ -260,35 +272,58 @@ describe("production task workbench composition", () => {
     const env = await fixture();
     try {
       expect(parseWorkbenchView(env.grant.view).article_id).toBeNull();
-      for (const key of ["document", "knowledge", "synthesis"])
+      for (const key of ["document", "knowledge", "artifact"])
         expect(
           (
             await fetch(
-              `${env.server.origin}/?workspace=library&job=job-1&literature=${FIXTURE_LITERATURE.literature_id}&${key}=${randomUUID()}`,
+              `${env.server.origin}/?view=lib&task=job-1&literature=${FIXTURE_LITERATURE.literature_id}&${key}=${randomUUID()}`,
+              { headers: { Cookie: env.cookie } },
             )
           ).status,
         ).toBe(200);
       expect(
-        (await fetch(`${env.server.origin}/?workspace=jobs&task_filter=active`))
-          .status,
+        (
+          await fetch(`${env.server.origin}/?view=task`, {
+            headers: { Cookie: env.cookie },
+          })
+        ).status,
       ).toBe(200);
       expect(
         (
-          await fetch(
-            `${env.server.origin}/?workspace=jobs&task_filter=unknown`,
-          )
+          await fetch(`${env.server.origin}/?view=unknown`, {
+            headers: { Cookie: env.cookie },
+          })
         ).status,
       ).toBe(400);
       expect(
         (
-          await fetch(
-            `${env.server.origin}/?workspace=library&knowledge=%3Cscript%3E`,
-          )
+          await fetch(`${env.server.origin}/?view=lib&knowledge=%3Cscript%3E`, {
+            headers: { Cookie: env.cookie },
+          })
         ).status,
       ).toBe(400);
       expect(
-        (await fetch(`${env.server.origin}/?document=one&document=two`)).status,
+        (
+          await fetch(`${env.server.origin}/?document=one&document=two`, {
+            headers: { Cookie: env.cookie },
+          })
+        ).status,
       ).toBe(400);
+      for (const key of [
+        "workspace",
+        "q",
+        "job",
+        "synthesis",
+        "task_filter",
+        "advanced",
+      ])
+        expect(
+          (
+            await fetch(`${env.server.origin}/?${key}=retired`, {
+              headers: { Cookie: env.cookie },
+            })
+          ).status,
+        ).toBe(400);
       expect(
         await env.call("/api/control", {
           kind: "takeover",
@@ -519,6 +554,7 @@ describe("production task workbench composition", () => {
       });
       await env.server.close();
       const reopened = await startProductionWorkbench({
+        access: workbenchTestAccess,
         home: env.home,
         assets: new Map([
           ["/", { contentType: "text/html", body: "Workbench" }],
@@ -644,6 +680,7 @@ describe("production task workbench composition", () => {
       );
       const recorded = publications.mock.calls[0]![0];
       const reopened = await startProductionWorkbench({
+        access: workbenchTestAccess,
         home: env.home,
         assets: new Map([
           ["/", { contentType: "text/html", body: "Workbench" }],
@@ -700,6 +737,7 @@ describe("production task workbench composition", () => {
         await vi.waitFor(() => expect(env.parseCalls).toBe(1));
         await env.server.close();
         const reopened = await startProductionWorkbench({
+          access: workbenchTestAccess,
           home: env.home,
           assets: new Map([
             ["/", { contentType: "text/html", body: "Workbench" }],
@@ -733,6 +771,7 @@ describe("production task workbench composition", () => {
       | undefined;
     try {
       server = await startProductionWorkbench({
+        access: workbenchTestAccess,
         home,
         port: 0,
         assets: new Map([["/", { contentType: "text/html", body: "ok" }]]),
@@ -745,7 +784,14 @@ describe("production task workbench composition", () => {
       expect(server.application.processingTasks).not.toBeNull();
       expect(server.application.knowledgeAnalysis).not.toBeNull();
       expect(browserHost).not.toHaveBeenCalled();
-      expect((await fetch(server.origin)).status).toBe(200);
+      expect((await fetch(server.origin, { redirect: "manual" })).status).toBe(
+        303,
+      );
+      const authCookie = await workbenchLogin(server.origin);
+      expect(
+        (await fetch(server.origin, { headers: { Cookie: authCookie } }))
+          .status,
+      ).toBe(200);
       await expect(
         readFile(join(home, "catalog.sqlite")),
       ).rejects.toMatchObject({ code: "ENOENT" });

@@ -26,7 +26,7 @@ SciRetriever 为科研 Agent 和人提供同一逻辑文献库中的元数据、
 
 ## Operating Context
 
-- 正式入口是 `sciretriever web`，默认绑定本机 `127.0.0.1`。打开后直接使用文献库，无首次启动配置向导。
+- 正式入口是 `sciretriever web`，默认监听 `0.0.0.0`，通过密码或启动时输出的临时 API key 登录。登录后直接使用文献库，无首次启动配置向导；测试也沿用相同认证边界。
 - 配置与默认库、资产位置在 `~/.sciretriever/` 下，已有显式配置优先；设置中修改存储路径后重启生效，不隐式搬迁已有数据。
 - 用户先确定文献或范围，再按需执行操作。查询和阅读可以独立于材料获取与加工进行。
 - 产品面向长期积累、万篇文献起步并持续增长的库。单次视图或批次上限不等于库容量目标；此规模要求不代表当前实现已经通过相应验收，须以指南和测试证据核实。
@@ -42,7 +42,7 @@ SciRetriever 为科研 Agent 和人提供同一逻辑文献库中的元数据、
 - Browser 默认用于观看 Agent 操作。用户明确点击或输入时申请控制权，取得控制权后才发送操作；页面版本、会话和控制状态必须有效。交还须确认成功，意外断线不能等同于主动交还。具体边界见 [ADR 0032](../../docs/architecture/decisions/0032-library-centered-web-workspace.md)。
 - 三端共用业务 owner 和文献事实；保留来源、稳定引用、hash 与 lineage，已接纳原始资产和发布产物不可原地覆盖。接纳 PDF 不等于已经核验文章身份。
 - 凭据不回显秘密值；不提供任意服务器文件、SQL、JavaScript 或 CDP 访问。常规人类流程无需手写 JSON 或 CLI 命令。
-- 保存视图与主题属于界面偏好，不产生另一份文献事实。提取按调用方规范交付候选与证据，领域 schema 和最终数据集归调用方所有；当前准备与候选交付能力不等于已有内置自动提取执行器。
+- 保存视图与主题属于界面偏好，不产生另一份文献事实。通用处理器可以按调用方规范生成记录或标签，也支持外部提取交付；结果始终是带证据的候选，领域 schema 和最终数据集归调用方所有。
 
 阅读体验允许继续深化，但须单独设计。现有 PDF、全文与知识阅读不代表已提供阅读批注、笔记、完整精确定位或 Zotero 插件兼容；本轮不作这些承诺。正式无障碍验收标准尚未单独确认。
 
@@ -58,7 +58,7 @@ Owner 允许蓝白、墨绿、暖白等色系切换；主题扩展遵循同一�
 
 - [产品需求](../../docs/architecture/requirements.md)、[ADR 0032](../../docs/architecture/decisions/0032-library-centered-web-workspace.md)与 [ADR 0033](../../docs/architecture/decisions/0033-machine-interfaces-cover-web-capabilities.md)：产品边界、库中心 Web 和三端能力关系。
 - [当前 Web 设计说明与定稿原型](../../docs/architecture/web/README.md)：Owner 确认的布局、视觉和交互依据；原型中的文献、统计、任务与 Browser 画面是示例，不是科学内容、运行结果或产品能力证明。
-- [Web 使用指南](../../docs/guides/web-workbench.md)、[生产页面](public/live.html)、[生产样式](public/workspace.css)和 [workspace 实现](src/workspace/README.md)：当前界面与能力的实现依据。4173 静态样本不替代正式入口和定稿原型。
+- [Web 使用指南](../../docs/guides/web-workbench.md)和 [React 应用实现](src/app/README.md)：当前功能与界面的实现依据。正式 `/` 使用React；只保留当前界面入口与偏好，不维护迁移期 `/next` 或旧前端兼容。最终验收见[实施计划](../../docs/plans/2026-10-19-web-experience/README.md)。4173合成样本不替代正式入口和定稿原型。
 
 ## Product Principles
 

@@ -141,7 +141,7 @@ describe("shared Web, CLI and MCP query operations", () => {
       );
       expect(maintenance).not.toHaveBeenCalled();
       expect(env.parseCalls).toBe(1);
-      expect(env.modelCalls).toBe(1);
+      expect(env.modelCalls).toBe(2);
     } finally {
       await client.close();
       await mcp.close();

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 import {
   ContractValidationError,
   parseStrictJsonValue,
@@ -38,7 +39,7 @@ function identifier(value: unknown): asserts value is string {
   if (typeof value !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/u.test(value))
     throw new ContractValidationError();
 }
-/** Only a deliberately selected local runtime; never follows redirects or accepts arbitrary paths. */
+/** Explicit IPv4 runtime only; no credentials in URLs, redirects or arbitrary paths. */
 export function workbenchOrigin(value: string): string {
   let url: URL;
   try {
@@ -48,7 +49,8 @@ export function workbenchOrigin(value: string): string {
   }
   if (
     url.protocol !== "http:" ||
-    !["127.0.0.1", "localhost"].includes(url.hostname) ||
+    (url.hostname !== "localhost" && isIP(url.hostname) !== 4) ||
+    url.hostname === "0.0.0.0" ||
     !url.port ||
     url.username ||
     url.password ||
@@ -57,7 +59,7 @@ export function workbenchOrigin(value: string): string {
     url.hash
   )
     throw new ContractValidationError();
-  url.hostname = "127.0.0.1";
+  if (url.hostname === "localhost") url.hostname = "127.0.0.1";
   return url.origin;
 }
 /** Private HTTP adapter to the process that owns the Browser. Grants never leave this object. */
@@ -73,6 +75,7 @@ export class MachineWorkbenchClient {
   private timer: ReturnType<typeof setInterval> | undefined;
   private heartbeat: Promise<unknown> | undefined;
   private lost = false;
+  private authenticated = false;
   constructor(
     origin: string,
     private readonly maintenance = false,
@@ -156,6 +159,23 @@ export class MachineWorkbenchClient {
     return r;
   }
   private async connect(signal?: AbortSignal) {
+    const password = process.env.SCIRETRIEVER_WEB_PASSWORD;
+    if (!password) throw new MachineWorkbenchError("web-password-required");
+    const status = await this.json(
+      await this.request("/auth/status", undefined, signal),
+    );
+    if (status.required !== true)
+      throw new MachineWorkbenchError("workbench-auth-unavailable");
+    const login = await this.request("/auth/login", { password }, signal, true);
+    await this.json(login);
+    const authCookie = login.headers
+      .getSetCookie()
+      .find((s) => /^sr_auth_[0-9a-f]+=/.test(s))
+      ?.split(";")[0];
+    if (!authCookie || !/^sr_auth_[0-9a-f]+=[0-9a-f]{64}$/u.test(authCookie))
+      throw new MachineWorkbenchError("workbench-protocol");
+    this.cookie = authCookie;
+    this.authenticated = true;
     const page = await this.request("/", undefined, signal);
     if (!page.ok) {
       await this.bytes(page);
@@ -168,7 +188,7 @@ export class MachineWorkbenchClient {
     await this.bytes(page, 1024 * 1024);
     if (!cookie || !/^sr_workbench_[0-9a-f]+=[0-9a-f]{64}$/u.test(cookie))
       throw new MachineWorkbenchError("workbench-protocol");
-    this.cookie = cookie;
+    this.cookie = [this.cookie, cookie].filter(Boolean).join("; ");
     const grant = await this.json(
       await this.request("/api/clients", {}, signal, true),
     );
@@ -404,8 +424,8 @@ export class MachineWorkbenchClient {
       this.stop.abort();
       clearInterval(this.timer);
       await Promise.allSettled([this.tail, this.heartbeat]);
-      if (this.clientId) {
-        try {
+      try {
+        if (this.clientId) {
           await this.json(
             await this.request(
               "/api/clients/disconnect",
@@ -415,10 +435,18 @@ export class MachineWorkbenchClient {
               true,
             ),
           );
+        }
+      } finally {
+        try {
+          if (this.authenticated)
+            await this.json(
+              await this.request("/auth/logout", {}, undefined, true, true),
+            );
         } finally {
           this.cookie = "";
           this.csrf = "";
           this.clientId = "";
+          this.authenticated = false;
         }
       }
     })();

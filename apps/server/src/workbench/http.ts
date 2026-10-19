@@ -65,6 +65,11 @@ import {
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { WorkbenchSession, WorkbenchSessionError } from "./session.js";
 import { ProductionWorkbenchSession } from "./production-session.js";
+import {
+  WorkbenchAccess,
+  isLoopbackPeer,
+  type WorkbenchAccessOptions,
+} from "./access.js";
 import type { BrowserPageInfo } from "../browser/host.js";
 import { exportBibliography } from "../literature/bibliography.js";
 import {
@@ -137,6 +142,7 @@ export interface WorkbenchWorkspace {
   readonly runtime_capabilities: WorkbenchRuntimeCapabilities | null;
 }
 export interface WorkbenchHttpOptions {
+  readonly access?: WorkbenchAccessOptions;
   readonly session: WorkbenchSession | ProductionWorkbenchSession;
   readonly workspace?: WorkbenchWorkspace;
   /** Same catalog read services; shares routes, never creates a second HTTP server. */
@@ -243,6 +249,7 @@ export interface WorkbenchHttpOptions {
 }
 interface ClientGrant {
   readonly csrf: string;
+  readonly authSessionId: string;
   touched: number;
 }
 const CLIENT_TTL = 180000;
@@ -282,22 +289,16 @@ function validUiLocation(url: URL): boolean {
     keys.some(
       (key) =>
         ![
-          "workspace",
           "view",
           "query",
           "reader",
           "task",
           "artifact",
           "scope",
-          "advanced",
-          "q",
           "sort",
           "literature",
-          "job",
           "document",
           "knowledge",
-          "synthesis",
-          "task_filter",
           "result",
           "resultHash",
           "results",
@@ -316,6 +317,9 @@ function validUiLocation(url: URL): boolean {
           "statementHash",
           "metadataHash",
           "metadataRevision",
+          "session",
+          "article",
+          "setting",
         ].includes(key),
     )
   )
@@ -335,34 +339,51 @@ function validUiLocation(url: URL): boolean {
     }
   }
   for (const [key, values] of [
-    ["view", ["lib", "disc", "ins", "ask", "syn", "ext", "task", "web", "set"]],
+    [
+      "view",
+      [
+        "lib",
+        "disc",
+        "ins",
+        "ask",
+        "syn",
+        "ext",
+        "task",
+        "web",
+        "set",
+        "lab",
+        "gallery",
+      ],
+    ],
     ["reader", ["pdf", "doc", "know"]],
-    ["scope", ["selection"]],
-    ["advanced", ["all"]],
+    ["scope", ["selection", "all"]],
     ["source", ["metadata", "document", "knowledge"]],
-    ["from", ["ask", "ext"]],
+    ["from", ["ask", "ext", "syn"]],
     ["results", ["all"]],
     ["tools", ["delivery"]],
+    [
+      "setting",
+      [
+        "paths",
+        "sources",
+        "models",
+        "parser",
+        "cred",
+        "status",
+        "advanced",
+        "appearance",
+      ],
+    ],
   ] as const) {
     const value = url.searchParams.get(key);
     if (value !== null && !(values as readonly string[]).includes(value))
       return false;
   }
-  const workspace = url.searchParams.get("workspace");
   const sort = url.searchParams.get("sort");
-  const query = url.searchParams.get("q");
   const literature = url.searchParams.get("literature");
-  const job = url.searchParams.get("job");
   return (
-    (workspace === null || /^[a-z-]{1,32}$/u.test(workspace)) &&
     (sort === null || UI_SORTS.has(sort)) &&
-    (query === null || query.length <= 1000) &&
     (literature === null || /^[A-Za-z0-9._:-]{1,256}$/u.test(literature)) &&
-    (job === null || /^[A-Za-z0-9._:-]{1,128}$/u.test(job)) &&
-    (!url.searchParams.has("task_filter") ||
-      ["all", "active", "attention", "completed", "ended"].includes(
-        url.searchParams.get("task_filter")!,
-      )) &&
     [
       "assetHash",
       "representation",
@@ -385,13 +406,14 @@ function validUiLocation(url: URL): boolean {
     [
       "document",
       "knowledge",
-      "synthesis",
       "task",
       "artifact",
       "asset",
       "statement",
       "result",
       "collection",
+      "session",
+      "article",
     ].every((key) => {
       const value = url.searchParams.get(key);
       return value === null || /^[A-Za-z0-9._:-]{1,128}$/u.test(value);
@@ -786,10 +808,20 @@ async function receiveDocumentRequest(
   }
 }
 
-/** Loopback UI transport. Only opaque per-tab grants leave this authentication boundary. */
+export interface WorkbenchHttpServer {
+  readonly origin: string;
+  readonly listenAddress: string;
+  readonly urls: readonly string[];
+  /** Generated startup credential; absent when a password was supplied. Never serve over HTTP. */
+  readonly apiKey: string | undefined;
+  close(): Promise<void>;
+}
+
+/** Authenticated UI transport. Startup credentials stay with the process owner. */
 export async function startWorkbenchHttp(
-  options: WorkbenchHttpOptions,
-): Promise<{ readonly origin: string; close(): Promise<void> }> {
+  input: WorkbenchHttpOptions,
+): Promise<WorkbenchHttpServer> {
+  const { access: accessOptions, ...options } = input;
   const session = options.session;
   const projectedView = (clientId?: string) =>
     session instanceof ProductionWorkbenchSession
@@ -798,14 +830,27 @@ export async function startWorkbenchHttp(
   const cookieName = `sr_workbench_${randomBytes(8).toString("hex")}`;
   const cookie = randomBytes(32).toString("hex");
   const clients = new Map<string, ClientGrant>();
+  const access = await WorkbenchAccess.create(accessOptions ?? {}, (id) => {
+    for (const [clientId, grant] of clients) {
+      if (grant.authSessionId === id) {
+        clients.delete(clientId);
+        session.detach(clientId);
+      }
+    }
+  });
   const streams = new Set<ServerResponse>();
   const pending = new Set<Promise<void>>();
   const stopUploads = new AbortController();
-  let origin = "",
-    host = "",
-    closing = false;
+  let closing = false;
   const queryHandler = options.query
-    ? createQueryHttpHandler(options.query, () => ({ origin, host }))
+    ? createQueryHttpHandler(
+        options.query,
+        (request) =>
+          access.address(request) ?? {
+            origin: access.origin,
+            host: new URL(access.origin).host,
+          },
+      )
     : undefined;
   const server = createServer(
     { requestTimeout: 5000, headersTimeout: 5000, maxHeaderSize: 8192 },
@@ -905,20 +950,18 @@ export async function startWorkbenchHttp(
       "Content-Security-Policy",
       "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; font-src 'self' blob:; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-src blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
     );
-    const requestOrigin = request.headers.origin;
-    if (
-      closing ||
-      request.headers.host !== host ||
-      (requestOrigin !== undefined && requestOrigin !== origin) ||
-      request.headers["sec-fetch-site"] === "cross-site" ||
-      request.headers["sec-fetch-site"] === "same-site" ||
-      !["127.0.0.1", "::ffff:127.0.0.1"].includes(
-        request.socket.remoteAddress ?? "",
-      )
-    ) {
-      json(response, 403, { code: "local-origin-required" });
+    if (closing) {
+      json(response, 503, { code: "workbench-closing" });
       return;
     }
+    const authorization = await access.authorize(
+      request,
+      response,
+      options.assets,
+    );
+    if (!authorization) return;
+    const { origin, sessionId: authSessionId } = authorization;
+    const requestOrigin = request.headers.origin;
     const url = new URL(request.url ?? "/", origin);
     const pathname = url.pathname.startsWith("/api/v1/")
       ? `/api/${url.pathname.slice("/api/v1/".length)}`
@@ -945,7 +988,7 @@ export async function startWorkbenchHttp(
         "Set-Cookie",
         `${cookieName}=${cookie}; Path=/; HttpOnly; SameSite=Strict`,
       );
-      const asset = options.assets.get("/");
+      const asset = options.assets.get(pathname);
       if (!asset) {
         json(response, 404, { code: "ui-unavailable" });
         return;
@@ -984,6 +1027,7 @@ export async function startWorkbenchHttp(
       const clientId = session.attach();
       const grant = {
         csrf: randomBytes(32).toString("hex"),
+        authSessionId,
         touched: Date.now(),
       };
       clients.set(clientId, grant);
@@ -992,6 +1036,10 @@ export async function startWorkbenchHttp(
         csrf: grant.csrf,
         view: projectedView(clientId),
       });
+      return;
+    }
+    if (request.method === "GET" && !pathname.startsWith("/api/")) {
+      json(response, 404, { code: "endpoint-not-found" });
       return;
     }
     const queryKeys = [...url.searchParams.keys()];
@@ -1013,7 +1061,7 @@ export async function startWorkbenchHttp(
     }
     const clientId = url.searchParams.get("client_id") ?? "";
     const grant = clients.get(clientId);
-    if (!grant) {
+    if (!grant || grant.authSessionId !== authSessionId) {
       json(response, 401, { code: "client-required" });
       return;
     }
@@ -1151,7 +1199,7 @@ export async function startWorkbenchHttp(
       });
       streams.add(response);
       const send = () => {
-        if (!clients.has(clientId)) {
+        if (!clients.has(clientId) || !access.valid(grant.authSessionId)) {
           response.end();
           return;
         }
@@ -1857,7 +1905,7 @@ export async function startWorkbenchHttp(
   }
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(options.port ?? 0, "127.0.0.1", () => {
+    server.listen(options.port ?? 0, access.host, () => {
       server.off("error", reject);
       resolve();
     });
@@ -1865,9 +1913,9 @@ export async function startWorkbenchHttp(
   const address = server.address();
   if (!address || typeof address === "string")
     throw new Error("workbench listen failed");
-  host = `127.0.0.1:${address.port}`;
-  origin = `http://${host}`;
+  access.listening(address.port);
   const refreshTimer = setInterval(() => {
+    access.sweep();
     if (clients.size) void session.refresh();
     for (const [id, grant] of clients)
       if (Date.now() - grant.touched > CLIENT_TTL) {
@@ -1877,10 +1925,14 @@ export async function startWorkbenchHttp(
   }, 750);
   refreshTimer.unref();
   return {
-    origin,
+    origin: access.origin,
+    listenAddress: access.listenAddress,
+    urls: access.urls,
+    apiKey: access.apiKey,
     close: async () => {
       if (closing) return;
       closing = true;
+      access.close();
       stopUploads.abort();
       queryHandler?.close();
       clearInterval(refreshTimer);
@@ -1931,7 +1983,10 @@ export interface QueryOnlyHttpOptions {
 /** Loopback HTTP adapter for a query-only Application; it owns no Browser or Jobs. */
 function createQueryHttpHandler(
   options: QueryOnlyHttpOptions,
-  address: () => { readonly origin: string; readonly host: string },
+  address: (request: IncomingMessage) => {
+    readonly origin: string;
+    readonly host: string;
+  },
 ) {
   let closing = false;
   const maintenanceCookie = `sr_maintenance_${randomBytes(8).toString("hex")}`;
@@ -1952,7 +2007,7 @@ function createQueryHttpHandler(
       "Content-Security-Policy",
       "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-src blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
     );
-    const { origin, host } = address();
+    const { origin, host } = address(request);
     const requestOrigin = request.headers.origin;
     if (
       closing ||
@@ -1960,9 +2015,7 @@ function createQueryHttpHandler(
       (requestOrigin !== undefined && requestOrigin !== origin) ||
       request.headers["sec-fetch-site"] === "cross-site" ||
       request.headers["sec-fetch-site"] === "same-site" ||
-      !["127.0.0.1", "::ffff:127.0.0.1"].includes(
-        request.socket.remoteAddress ?? "",
-      )
+      (workbenchCsrf === undefined && !isLoopbackPeer(request))
     ) {
       json(response, 403, {
         protocol_version: 1,
@@ -2337,6 +2390,10 @@ function createQueryHttpHandler(
       return;
     }
     if (request.method !== "POST") {
+      if (request.method === "GET" && !url.pathname.startsWith("/api/")) {
+        json(response, 404, { protocol_version: 1, code: "not-found" });
+        return;
+      }
       json(response, 405, { protocol_version: 1, code: "method-not-allowed" });
       return;
     }

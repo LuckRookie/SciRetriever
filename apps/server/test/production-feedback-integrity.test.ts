@@ -1,3 +1,4 @@
+import { workbenchTestAccess } from "./workbench-auth-fixture.js";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +42,7 @@ it("does not call a catalog primary PDF readable after its verified bytes are da
     writer = undefined;
     const file = join(home, "artifacts", asset.path);
     workbench = await startProductionWorkbench({
+      access: workbenchTestAccess,
       home,
       literature_id: FIXTURE_LITERATURE.literature_id,
       assets: new Map([["/", { contentType: "text/html", body: "ok" }]]),

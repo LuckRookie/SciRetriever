@@ -17,10 +17,12 @@ pnpm full
 ```
 
 `quick` 执行 Prettier、ESLint、源码 project-reference typecheck 和 `tsconfig.tests.json` 的测试 strict typecheck；
-`test` 执行 Vitest；`full` 追加所有已注册 TypeScript project 的 build。Lint 扫描 `packages/**/*.ts` 和
-`apps/**/*.ts`。构建元数据保存在各包的 ignored `dist/`。测试文件按行为命名，例如
+`test` 执行 Vitest；`full` 追加所有已注册 TypeScript project 的 build。Lint 扫描 `packages/**/*.ts`、
+`apps/**/*.ts` 与 `apps/**/*.tsx`。构建元数据保存在各包的 ignored `dist/`。测试文件按行为命名，例如
 `contract-validation.test.ts` 和 `canonical-encoding.test.ts`。不要用块、阶段或任务顺序命名测试文件或
 suite。
+
+Web前端按[ADR 0036](../architecture/decisions/0036-react-web-frontend.md)采用React、React Aria、Motion、TanStack及自有CSS；Quick同时覆盖 `.ts` / `.tsx` 与测试strict类型。`pnpm --filter @sciretriever/web dev` 启动Vite热更新，`SCIRETRIEVER_WEB_API_ORIGIN` 指向已经正常启动并认证的loopback工作台。开发代理仍走同一登录与client grant；测试不增加免认证模式。生产资源、阅读worker和字体离线随包交付；精确版本、补丁及许可见[前端依赖说明](../notes/web-frontend-dependencies.md)。默认入口和旧代码清理的当前阶段见[Web计划](../plans/2026-10-19-web-experience/README.md)。
 
 本机真实/一次性测试使用 Git 忽略的 `sandbox/`；场景、运行材料和报告的约定见[测试目录说明](../../tests/README.md)。
 `vitest.config.mjs` 在默认排除项之外排除 `sandbox/**`，`pnpm test/full` 及根目录直接调用 Vitest 均不收集其中的用例；
@@ -47,14 +49,14 @@ SQLite worker 的活动业务实现是 `apps/server/src/storage/sqlite/worker-ru
 ## 当前边界
 
 Browser 静态样本运行 `pnpm preview:browser`，在 `http://127.0.0.1:4173` 查看。web project 已进入根
-TypeScript project references 和现有 TS 检查范围；没有新增第三方依赖。样本服务器仅提供白名单静态资产，
+TypeScript project references 和现有 TS 检查范围；当前使用上述React组件依赖。样本服务器仅提供白名单静态资产，
 不启动生产 Application 或 Browser Host；所有获取和发布都是内存演示。功能、直接测试和构建说明见
 [`apps/web/README.md`](../../apps/web/README.md)。实时入口使用
 `SCIRETRIEVER_CLOAK_BUNDLE=/absolute/path/to/verified/cloak/bundle pnpm preview:workbench`，目标是启动
 `http://127.0.0.1:4174` 的 Browser Host、SSE/JPEG、Candidate 和临时文献库；当前修复快照没有运行真实
 Cloak 正路径，离线测试的 fake/stock loopback 与 host seam 只证明 wiring/边界，两者职责不同。
 
-contracts package 只依赖 Web 标准 `TextEncoder`、`TextDecoder`、Web Crypto 和 base64 API；它不调用 Python
+contracts package 使用 Web 标准 `TextEncoder`、`TextDecoder`、Web Crypto 和 base64 API；普通 HTTP 浏览器缺少 SubtleCrypto 时，SHA-256 使用固定 `@noble/hashes` 本地后备实现，输出合同不变，离线包同时包含该依赖。它不调用 Python
 RPC、不连接真实 Provider、不读取用户 home、Catalog、Profile 或凭据。v1 fixture 位于
 `tests/fixtures/compat-v1/`，只包含固定的 synthetic 数据，用于检查 Model、canonical bytes 和 hash。
 

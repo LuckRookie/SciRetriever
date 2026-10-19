@@ -9,6 +9,7 @@ export interface ReadingPosition {
   loadedEnd: number;
   fontSize: number;
   wide: boolean;
+  fullWidth?: boolean;
   outline: boolean;
   information: boolean;
   query: string;

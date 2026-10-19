@@ -1,3 +1,7 @@
+import {
+  workbenchLogin,
+  workbenchTestAccess,
+} from "./workbench-auth-fixture.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +36,7 @@ async function workspace(submit?: QueryOnlyHttpOptions["submitProcessor"]) {
     throw new Error("unexpected action");
   });
   const web = await startWorkbenchHttp({
+    access: workbenchTestAccess,
     ...taskHttpAdapters(env.app),
     session,
     query: {
@@ -42,8 +47,9 @@ async function workspace(submit?: QueryOnlyHttpOptions["submitProcessor"]) {
     },
     assets: new Map([["/", { contentType: "text/html", body: "synthetic" }]]),
   });
-  const home = await fetch(web.origin);
-  const cookie = home.headers.get("set-cookie")!.split(";")[0]!;
+  const authCookie = await workbenchLogin(web.origin);
+  const home = await fetch(web.origin, { headers: { Cookie: authCookie } });
+  const cookie = `${authCookie}; ${home.headers.get("set-cookie")!.split(";")[0]!}`;
   const attached = await fetch(`${web.origin}/api/clients`, {
     method: "POST",
     headers: {

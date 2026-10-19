@@ -1,3 +1,7 @@
+import {
+  workbenchLogin,
+  workbenchTestAccess,
+} from "./workbench-auth-fixture.js";
 import { request as httpRequest } from "node:http";
 import { describe, expect, it } from "vitest";
 import { startWorkbenchHttp } from "../src/workbench/http.js";
@@ -71,6 +75,7 @@ describe("authenticated loopback workbench API", () => {
     );
     await session.refresh();
     const server = await startWorkbenchHttp({
+      access: workbenchTestAccess,
       session,
       tabs: {
         list: async () => [
@@ -148,10 +153,11 @@ describe("authenticated loopback workbench API", () => {
           })
         ).status,
       ).toBe(403);
-      const root = await request(server.origin, "/");
-      const cookie = (root.headers["set-cookie"] as string[])[0]!.split(
-        ";",
-      )[0]!;
+      const authCookie = await workbenchLogin(server.origin);
+      const root = await request(server.origin, "/", "GET", {
+        Cookie: authCookie,
+      });
+      const cookie = `${authCookie}; ${(root.headers["set-cookie"] as string[])[0]!.split(";")[0]!}`;
       expect(root.headers["set-cookie"]![0]).toContain("HttpOnly");
       const headers = {
         Cookie: cookie,

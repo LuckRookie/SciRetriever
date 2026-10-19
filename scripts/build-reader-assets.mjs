@@ -1,4 +1,3 @@
-import { build } from "esbuild";
 import {
   cp,
   mkdir,
@@ -66,13 +65,6 @@ async function prepareReaderAssets(outdir) {
   const dependency = (name) =>
     resolve(repository, "apps/web/node_modules", name);
   await mkdir(resolve(outdir, "reader"), { recursive: true });
-  await build({
-    entryPoints: [resolve(repository, "apps/web/src/reading/entry.ts")],
-    bundle: true,
-    format: "esm",
-    platform: "browser",
-    outfile: resolve(outdir, "reader.js"),
-  });
   await copyFile(
     dependency("pdfjs-dist/legacy/build/pdf.worker.mjs"),
     resolve(outdir, "reader/pdf.worker.mjs"),
@@ -110,6 +102,7 @@ async function prepareReaderAssets(outdir) {
     ),
   );
   licenses.push(
+    `@noble/hashes 2.4.0\n${await readFile(resolve(repository, "packages/contracts/node_modules/@noble/hashes/LICENSE"), "utf8")}`,
     `core-js 3.50.0 (bundled by PDF.js legacy build)\n${await readFile(
       resolve(repository, "apps/web/public/core-js-LICENSE.txt"),
       "utf8",
@@ -118,10 +111,6 @@ async function prepareReaderAssets(outdir) {
   await writeFile(
     resolve(outdir, "reader/third-party-notices.txt"),
     licenses.join("\n\n"),
-  );
-  await copyFile(
-    resolve(repository, "apps/web/public/reading.css"),
-    resolve(outdir, "reading.css"),
   );
 }
 if (

@@ -5,9 +5,10 @@
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
-    "dist/web/*.html",
-    "dist/web/*.css",
-    "dist/web/reader/**"
+    "dist/web/reader/**",
+    "dist/web/react/**",
+    "dist/web/auth.html",
+    "dist/web/auth.css"
   ],
   "type": "module",
   "main": "./dist/index.js",

@@ -5,8 +5,13 @@
     "outDir": "dist",
     "composite": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
+    "jsx": "react-jsx"
   },
-  "include": ["src/**/*.ts"],
-  "references": [{ "path": "../../packages/contracts" }]
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "references": [
+    {
+      "path": "../../packages/contracts"
+    }
+  ]
 }

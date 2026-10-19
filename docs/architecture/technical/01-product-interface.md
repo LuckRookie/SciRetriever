@@ -104,7 +104,7 @@ QueryApplication 的状态为 ready、not-initialized、unavailable。缺库不�
 
 该协议服务当前 Library；不能向它传入未来 KnowledgeQuery 然后声称支持文档片段。artifact 成功可以是二进制响应，失败/缺口为结构化 JSON；客户端不能无条件按 JSON 解码所有响应。`material-bytes` 按显式稳定资产 ID/hash 读取主件或补充件，不按 current 重选；流正常结束后客户端仍应校验完整 hash。它不暴露内部文件路径，也不提供任意 range 或持久读取会话。
 
-本地服务检查 loopback、Host/Origin 等既有边界；这不等于已经设计远程多租户身份与权限系统。MCP 传输和远程部署不由本节自动引入。
+按 [ADR 0035](../decisions/0035-authenticated-remote-web-access.md)，正式 Web 默认监听所有 IPv4 网卡，所有连接统一登录，不存在本机免登录分支或固定公开 origin 配置。使用操作者指定的密码，或将自动生成的 256 位 API key 仅返回启动调用方显示。HTTP access owner 在业务路由之前保护 HTML、资料、配置与流；Host 只接受 IPv4 字面地址/localhost，Origin 必须与请求 Host 一致，不信任转发头。tab grant 绑定登录会话，注销/过期撤销观看连接。没有远程多租户身份与权限系统；MCP 仍使用原有传输，显式工作台连接复用同一登录协议。
 
 ### 2.5 新请求与结果语义
 
@@ -354,19 +354,19 @@ Web 面向人的独立日常操作，CLI/MCP 主要服务 Agent 与自动化。�
 
 UI 只持有展示与交互草稿。配置默认值、来源排序、材料有效性、任务终态和控制权都由服务端 owner 返回；前端不能根据按钮是否禁用推断获得了操作权限。
 
-Web 重构目标见 [ADR 0032](../decisions/0032-library-centered-web-workspace.md)，具体界面以 2026-10-15 [定稿原型](../web/README.md)为基准：文献列表为主空间，预览按需展开，点击文献打开阅读标签；侧栏按资料/使用/运行分组，任务与浏览器有独立入口，全局活动用于快速查看，设置和低层技术工具独立收纳。查询与写操作围绕同一对象显式区分，不默认展示缺 PDF/需人工待办或把后台用例逐个平铺为表单。此处的功能/owner 对照不是页面菜单；下节仍记录当前实现，不表示目标布局已经落地。
+Web架构见[ADR 0032](../decisions/0032-library-centered-web-workspace.md)，正式React界面以[定稿原型及设计语言v2](../web/README.md)为基准：文献列表为主空间，预览按需展开，点击文献打开阅读标签；侧栏按资料/使用/运行分组，任务与浏览器有独立入口，全局活动用于快速查看，设置和低层技术工具独立收纳。查询与写操作围绕同一对象显式区分，不默认展示缺PDF/需人工待办，也不把后台用例逐个平铺为表单。此处的功能/owner对照说明业务归属，页面与组件分工见下节。
 
 ### 4.2 当前代码与连接
 
 ```text
 apps/web/src/
-  config.ts       # 配置草稿、保存、probe、生效反馈
-  library.ts      # Library 搜索、详情、引用、下载
-  query.ts        # 独立只读页面与 v1 query adapter
-  live.ts         # Browser 画面与控制交互
-  jobs.ts         # durable Job 状态和操作
-  navigation.ts   # 页面导航
-  wire.ts         # 边界响应解析
+  app/data/       # HTTP封套、Query缓存、URL、固定来源和本机偏好
+  app/components/ # React Aria控件、焦点、弹层和统一状态
+  app/motion/     # Motion预设与减少动效
+  app/shell/      # 侧栏、阅读标签、活动与错误边界
+  app/features/   # 库/阅读/检索/处理/任务/Browser/设置及独立入口
+  reading/        # PDF.js、Markdown/KaTeX、续读与证据框架无关引擎
+  browser-platform.ts # 普通HTTP下的随机ID与主动复制
 apps/server/src/workbench/
   http.ts         # 本地 HTTP、配置/阅读/会话边界
   session.ts      # WorkbenchSession、目标、控制与观察
@@ -380,7 +380,9 @@ apps/server/src/bootstrap/workbench.ts # 工作台对象图与关闭
 
 `startQueryOnlyWorkbench` 只组装 QueryApplication；混合 live 工作台仍依赖完整 Application。`startProductionWorkbench({ home, literature_id? })`（CLI `sciretriever web`）打开本机工作台时不发起获取；省略初始文献时投影 `WorkbenchView.article_id:null`，已选文献、文章 session 与动作仍使用非空身份。同源 `POST /api/acquisition/start` 接到该 Application 的 `DatabaseCompletionService.run`。进入 Browser 层后，工作台经生产文章 flow 的开页回调观察/控制同一个 Host page；不为画面另启 Browser。生产 `/api/control` 除 `kind`、`control_epoch` 外还要求当前 `session_id` 与 `article_id`；尚未开页的显式操作可用同一绑定的 `cancel` 中止。生产 view 的可选 `operation_feedback` 包含真实阶段、冻结后的目标分区与当前目标、最终报告、稳定失败，以及操作后 Library 校验文件字节才确认的主 PDF hash/大小；文件丢失或损坏时标记 `unreadable`，不提供阅读引用。旧合成预览保留既有控制请求形状和 v1 view 字段集。文献库入口使用同一 Literature ID 和既有 detail/artifact，只读刷新不调用获取。下一篇需要新的明确获取操作，旧文章请求不复用。
 
-正式库中心 Web（`apps/web/src/workspace/`）直接使用 ADR 0032 指定原型的外框与样式，通过 `/api/tasks` 调用同一 `ProcessingTaskService`，PDF 获取复用已有 Job owner，解析/身份核验/知识分析/综合复用固定 `ProcessingTaskRequest`。创建、启动与控制是显式写操作；查询、结果阅读和证据展开不提交任务。任务详情展示结果、跳过、失败及有界活动记录。`/api/workspace` 返回启动时的 catalog/artifact 绑定和能力；`/api/discovery`（主题与引用扩展）与 `/api/import` 是已有 Entry 的显式薄适配，不建立第二套任务事实。
+正式库中心Web由 `apps/web/src/app/` 在 `/` 提供，通过 `/api/tasks` 调用同一 `ProcessingTaskService`，PDF获取复用已有Job owner，解析/身份核验/知识分析/综合复用固定 `ProcessingTaskRequest`。创建、启动与控制是显式写操作；查询、结果阅读和证据展开不提交任务。任务详情展示结果、跳过、失败及有界活动记录。`/api/workspace` 返回启动时的catalog/artifact绑定和能力；`/api/discovery`（主题与引用扩展）与 `/api/import` 是已有Entry的显式薄适配，不建立第二套任务事实。
+
+React以React Aria管理键盘/焦点/浮层，TanStack Query管理请求生命周期，Virtual/Table管理长列表与结果，Motion和集中CSS tokens管理交互呈现。Vite声明式资源清单随server安装包交付；生产CSP不增加JavaScript eval、内联脚本或运行时style标签。共享纯读取投影在 `app/data/`，固定PDF/Markdown引擎在框架无关的 `reading/`。正式入口仅 `/` 及维护服务所需 `/query`，静态资源前缀为 `/assets/`。`/next` 路由与旧 `workspace` URL 别名已经撤销，不提供兼容跳转。
 
 同一正式 HTTP server 在 Host/Origin/Cookie/client/CSRF 验证后复用完整 `/api/v1/query/*` 与 `/api/v1/maintenance/*` handler，QueryApplication 固定到启动时同一数据库/资产目录。配置保存不切换已打开的运行库。独立 query-only 仍仅有读取能力，独立 maintenance 保留原有认证；共用 handler 不扩大只读部署权限。正式启动、配置与运行边界见[Web 指南](../../guides/web-workbench.md)。
 
@@ -1480,12 +1482,20 @@ MCP 服务进程存续期间任务可在工具调用之间继续；关闭进程�
 
 ### 显式连接现有运行时
 
-CLI/MCP 的 `--workbench-url` 仅接受本机 HTTP origin，通过 `workbench/machine-client.ts` 连接已存在的工作台 HTTP owner。认证材料仅保留在进程内，动作沿用 WorkbenchActionCommand、session/article、epoch 和 lease 校验；工具只映射封闭业务操作。`runtime_*` 任务入口在该服务的同一个 Application 执行，独立机器进程不再争用执行锁。断开需确认服务端 detach；若仍持控制租约则遵守既有暂停政策。Web、CLI、MCP 的材料字节均经 LiteratureArtifactService 或 ManualPdfIngestionService，MCP 分块缓冲不构成持久业务事实。传输限额和命令见[Agent 指南](../../guides/agent-interface.md)。
+CLI/MCP 的 `--workbench-url` 接受显式 IPv4 HTTP origin（所有连接须提供同一 Web 密码或启动 API key），通过 `workbench/machine-client.ts` 连接已存在的工作台 HTTP owner。认证材料仅保留在进程内，动作沿用 WorkbenchActionCommand、session/article、epoch 和 lease 校验；工具只映射封闭业务操作。`runtime_*` 任务入口在该服务的同一个 Application 执行，独立机器进程不再争用执行锁。断开需确认服务端 detach；若仍持控制租约则遵守既有暂停政策。Web、CLI、MCP 的材料字节均经 LiteratureArtifactService 或 ManualPdfIngestionService，MCP 分块缓冲不构成持久业务事实。传输限额和命令见[Agent 指南](../../guides/agent-interface.md)。
 
 ### Web 结果与阅读接入（2026-10-19）
 
 正式工作台使用共享处理器 `query/evidence/transfer`；`results` 增加可选 `literature_id`，Storage 在既有固定文档、材料、知识和结果输入关系上递归投影，排序和 next_after 语义不变，不新增业务表。无字段证据的未知记录仍按其固定输入关联文献。CLI/MCP 使用同一 Entry 验证与实现。
 
-阅读入口按需加载 `/reader.js`。`build-reader-assets.mjs` 与正式构建共用 PDF.js worker、cMaps、标准字体、wasm、KaTeX 字体和文字层 CSS；静态服务只枚举随包资源，不把 HTTP 路径映射成任意文件路径。主工作台 CSP 增加本地 worker 与 font Blob，仍拒绝 unsafe-eval 和外部连接。现有独立查询/维护入口保持原有呈现与边界。
+React入口由Vite按需加载阅读模块，保留框架无关引擎；不再提供旧 `/reader.js` bundle。`build-reader-assets.mjs` 交付PDF.js worker、cMaps、标准字体、wasm、KaTeX字体和文字层CSS；静态服务只枚举随包资源，不把HTTP路径映射成任意文件路径。主工作台允许本地worker与受控Blob，仍拒绝JavaScript eval和外部连接。独立查询/维护使用相同React外壳，各自原有读取、CSRF和能力边界保持。
 
 PDF 原字节仍按固定 asset_id/hash、大小与 SHA-256 校验，受 256 MiB 读取上限约束；可见页及邻近页才持有 canvas/文字层。全文使用有界 document-slice 续读，按原始 UTF-8 与 Markdown 块映射保存位置、定位证据；CRLF 与 Unicode 不按 DOM 字符索引混算。图片通过 document-resource 分块读取并校验，不请求 Markdown 的远程图片 URL；内嵌支持 PNG/JPEG/GIF/WebP，单图超过 16 MiB 时显示不支持预览。会话 UI 状态按库和固定版本隔离，关闭文献释放状态。阅读没有模型、加工或索引重建副作用。
+
+### React适配与证据读取边界（ADR 0036）
+
+`apps/web/src/app/data/` 负责已有HTTP封套、固定来源解析、Query缓存和失效；`features/` 只保留页面展示与草稿，文献选择、任务、结果和持久事实仍由既有业务owner提供。TanStack Query消费AbortSignal，离开页面中止在途读取；Browser心跳和控制epoch变化不触发全库重读，真实发布和重连才失效材料查询。URL参数沿用既有格式，不引入另一套路由合同。
+
+处理结果使用既有processor `query/evidence/transfer`；文档证据使用 `evidence-resolve`，知识与综合使用 `synthesis-source`。旧知识库因此不需要处理器schema才能核对综合。综合递归来源保留并验证内容、输入清单和断言hash；只剩已存产物时明确“原PDF未复核”。分段证据验证实际UTF-8范围连续，跳转使用完整 `target_range`，不把首个传输块冒充完整证据。
+
+本机UI偏好包括主题、栏宽、默认阅读字号/行宽与按catalog隔离的保存筛选；它们不成为文献事实。它们只读写当前React命名空间，不读取旧键、不执行偏好迁移；不读取或复制凭据、Cookie、文献正文或其它应用数据。

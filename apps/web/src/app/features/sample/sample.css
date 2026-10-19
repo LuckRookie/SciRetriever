@@ -1,0 +1,58 @@
+@layer pages {
+  .sample-workspace {
+    padding: var(--space-6);
+    max-width: 1540px;
+    margin: 0 auto;
+  }
+  .sample-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    margin: var(--space-4) 0;
+  }
+  .sample-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    gap: var(--space-5);
+  }
+  .sample-stage,
+  .sample-inspection {
+    min-width: 0;
+  }
+  .sample-inspection {
+    display: grid;
+    gap: var(--space-4);
+  }
+  .sample-article {
+    margin-top: var(--space-4);
+    padding: var(--space-6);
+    background: var(--surface-sunken);
+    border-radius: var(--radius-md);
+  }
+  .sample-article h2 {
+    font: 600 32px/1.25 var(--serif);
+  }
+  .sample-article > p:first-child {
+    color: var(--fg2);
+    font-size: var(--text-caption);
+    letter-spacing: 0.06em;
+  }
+  .sample-inspection li {
+    margin-bottom: var(--space-3);
+  }
+  @media (max-width: 700px) {
+    .sample-workspace {
+      padding: var(--space-4);
+    }
+    .sample-layout {
+      grid-template-columns: 1fr;
+    }
+    .sample-article {
+      padding: var(--space-4);
+    }
+    .sample-article h2 {
+      font-size: 26px;
+    }
+  }
+}

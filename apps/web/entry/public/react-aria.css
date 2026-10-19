@@ -1,0 +1,12 @@
+/* React Aria 3.52.1, Adobe, Apache-2.0. Fixed upstream rules are delivered
+   externally to preserve style-src 'self'. See third-party-notices.txt. */
+@layer {
+  [data-react-aria-pressable] {
+    touch-action: pan-x pan-y pinch-zoom;
+  }
+
+  html[data-react-aria-scroll-lock],
+  html[data-react-aria-scroll-lock] * {
+    overscroll-behavior: contain;
+  }
+}

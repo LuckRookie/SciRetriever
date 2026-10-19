@@ -2,31 +2,25 @@ import { createServer, type Server } from "node:http";
 import { readFile } from "node:fs/promises";
 
 /** Local sample assets only. No application, configuration or Browser Host. */
-export function createPreviewServer(): Server {
+export function createPreviewServer(
+  base = new URL("../dist/", import.meta.url),
+): Server {
   const assets = new Map<string, { file: URL; type: string }>([
     [
       "/",
+      { file: new URL("sample.html", base), type: "text/html; charset=utf-8" },
+    ],
+    [
+      "/sample.js",
       {
-        file: new URL("../public/index.html", import.meta.url),
-        type: "text/html; charset=utf-8",
+        file: new URL("sample.js", base),
+        type: "text/javascript; charset=utf-8",
       },
     ],
     [
-      "/styles.css",
-      {
-        file: new URL("../public/styles.css", import.meta.url),
-        type: "text/css; charset=utf-8",
-      },
+      "/sample.css",
+      { file: new URL("sample.css", base), type: "text/css; charset=utf-8" },
     ],
-    ...["main", "demo", "icons"].map(
-      (name): [string, { file: URL; type: string }] => [
-        `/${name}.js`,
-        {
-          file: new URL(`../dist/${name}.js`, import.meta.url),
-          type: "text/javascript; charset=utf-8",
-        },
-      ],
-    ),
   ]);
   return createServer((request, response) => {
     response.setHeader(

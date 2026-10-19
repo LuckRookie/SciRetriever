@@ -1,10 +1,10 @@
 import { dshAnalysisAdapter } from "./dsh-analysis-fixture.js";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { build } from "esbuild";
+import { reactWorkbenchAssets } from "./react-workbench-fixture.js";
 import { chromium } from "playwright";
 import { SqliteWorker } from "../src/storage/sqlite/worker.js";
 import { migrateDocumentCatalog } from "../src/storage/sqlite/document-migration.js";
@@ -98,39 +98,7 @@ async function catalogV7(root: string): Promise<string> {
   return catalog;
 }
 
-async function queryWebAssets() {
-  const assets = new Map<
-    string,
-    { contentType: string; body: string | Uint8Array }
-  >();
-  for (const [route, name] of [
-    ["/", "maintenance.html"],
-    ["/query", "query.html"],
-  ] as const)
-    assets.set(route, {
-      contentType: "text/html",
-      body: await readFile(
-        new URL(`../../web/public/${name}`, import.meta.url),
-      ),
-    });
-  for (const [route, name] of [
-    ["/maintenance.js", "maintenance.ts"],
-    ["/query.js", "query.ts"],
-  ] as const) {
-    const bundle = await build({
-      entryPoints: [new URL(`../../web/src/${name}`, import.meta.url).pathname],
-      bundle: true,
-      format: "esm",
-      platform: "browser",
-      write: false,
-    });
-    assets.set(route, {
-      contentType: "text/javascript",
-      body: bundle.outputFiles[0]!.contents,
-    });
-  }
-  return assets;
-}
+const queryWebAssets = () => reactWorkbenchAssets("maintenance");
 const config = {
   schema_version: 8 as const,
   schema_fingerprint: SCHEMA_V8_FINGERPRINT,
@@ -1621,89 +1589,103 @@ describe("knowledge retrieval catalog v8", () => {
         browser = await chromium.launch({
           executablePath:
             process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ??
-            "/home/duanjw/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome",
+            chromium.executablePath(),
           headless: true,
         });
         const page = await browser.newPage();
-        await page.goto(http.origin);
-        await page.locator("#knowledge-retrieval-rebuild").click();
+        page.setDefaultTimeout(10000);
+        await page.goto(`${http.origin}/?view=set`);
+        await page
+          .getByRole("tab", { name: "索引与请求", exact: true })
+          .click();
+        await page
+          .getByRole("button", { name: "重建知识索引", exact: true })
+          .click();
+        await page
+          .getByRole("dialog", { name: "重建知识索引？" })
+          .getByRole("button", { name: "重建知识索引", exact: true })
+          .click();
         await expect
-          .poll(() =>
-            page.locator("#knowledge-retrieval-rebuild-status").textContent(),
-          )
-          .toContain("索引已发布");
-        await page.goto(`${http.origin}/query`);
-        await page.locator("#knowledge-context-query").fill("4.2");
-        await page.locator("#knowledge-context-submit").click();
+          .poll(() => page.getByRole("status").allTextContents())
+          .toContainEqual(expect.stringContaining("索引已发布"));
+        await page.goto(`${http.origin}/query?view=ask`);
+        const search = async (term: string) => {
+          await page
+            .getByRole("searchbox", { name: "问题或关键词", exact: true })
+            .fill(term);
+          await page
+            .getByRole("main")
+            .getByRole("button", { name: "检索", exact: true })
+            .click();
+          await expect
+            .poll(() => page.getByTestId("retrieval-status").textContent())
+            .toContain("条结果");
+        };
+        await search("4.2");
         await expect
-          .poll(() =>
-            page.locator("#knowledge-context-results article").count(),
-          )
+          .poll(() => page.getByTestId("retrieval-result").count())
           .toBeGreaterThanOrEqual(3);
-        const generated = page
-          .locator("#knowledge-context-results article")
-          .filter({ hasText: `产物 ${fixture.knowledgeId} · overview` });
+        const resultOf = (kind: string) =>
+          page
+            .getByTestId("retrieval-result")
+            .filter({
+              has: page
+                .getByTestId("retrieval-kind")
+                .filter({ hasText: new RegExp(`^${kind}$`) }),
+            })
+            .first();
+        const generated = resultOf("知识");
         await expect
           .poll(() => generated.textContent())
           .toContain("4.2 eV under dry conditions");
-        await generated
-          .getByRole("button", { name: "按固定产物阅读并展开证据" })
-          .click();
+        await generated.getByTestId("retrieval-source").click();
+        expect(new URL(page.url()).searchParams.get("knowledge")).toBe(
+          fixture.knowledgeId,
+        );
         await expect
-          .poll(() => generated.textContent())
+          .poll(() => page.locator(".reader-summary").textContent())
           .toContain("4.2 eV under dry conditions");
-        await expect
-          .poll(() =>
-            generated.getByRole("button", { name: "展开证据" }).count(),
-          )
-          .toBeGreaterThan(0);
-        await generated
-          .getByRole("button", { name: "展开证据" })
+        await page
+          .getByRole("button", { name: "[1]", exact: true })
           .first()
           .click();
         await expect
-          .poll(() => generated.textContent())
+          .poll(() => page.locator(".reader-evidence-preview").textContent())
           .toContain("The measurement was 4.2 eV under dry conditions.");
-        const synthesisCard = page
-          .locator("#knowledge-context-results article")
-          .filter({ hasText: `产物 ${fixture.synthesisId} · synthesis` });
-        await synthesisCard
-          .getByRole("button", { name: "按固定产物阅读并展开证据" })
+        await page.keyboard.press("Escape");
+        await page
+          .getByRole("button", { name: "返回检索", exact: true })
           .click();
-        await expect
-          .poll(() =>
-            synthesisCard.getByRole("button", { name: /核对来源/ }).count(),
-          )
-          .toBeGreaterThan(0);
-        await synthesisCard
-          .getByRole("button", { name: /核对来源/ })
+        await resultOf("综合").getByTestId("retrieval-source").click();
+        expect(new URL(page.url()).searchParams.get("artifact")).toBe(
+          fixture.synthesisId,
+        );
+        await page
+          .getByRole("button", { name: "证据 [1]", exact: true })
           .first()
           .click();
         await expect
-          .poll(() => synthesisCard.textContent())
-          .toContain("Synthetic finding");
-        const sourceCard = page
-          .locator("#knowledge-context-results article")
-          .filter({ hasText: `文档版本 ${fixture.documentId}` })
-          .first();
+          .poll(() =>
+            page.getByRole("dialog", { name: "综合证据" }).textContent(),
+          )
+          .toContain("4.2 eV under dry conditions");
+        await page.keyboard.press("Escape");
+        await page
+          .getByRole("button", { name: "返回检索", exact: true })
+          .click();
+        const sourceCard = resultOf("原文");
         await sourceCard
-          .getByRole("button", { name: "按固定范围继续读取" })
+          .getByRole("button", { name: "固定来源", exact: true })
           .click();
         await expect
-          .poll(() => sourceCard.locator("pre").allTextContents())
-          .toContain("The measurement was 4.2 eV under dry conditions.\n");
-        await page.locator("#knowledge-context-submit").click();
-        const renewedSource = page
-          .locator("#knowledge-context-results article")
-          .filter({ hasText: `文档版本 ${fixture.documentId}` })
-          .first();
+          .poll(() => sourceCard.locator(".fixed-quote").textContent())
+          .toBe("The measurement was 4.2 eV under dry conditions.\n");
+        await page.reload();
+        await search("4.2");
+        const renewedSource = resultOf("原文");
         await expect
-          .poll(() =>
-            renewedSource
-              .getByRole("button", { name: "按固定范围继续读取" })
-              .count(),
-          )
-          .toBe(1);
+          .poll(() => renewedSource.locator(".fixed-source").count())
+          .toBe(0);
         let releaseSlice!: () => void;
         const heldSlice = new Promise<void>((resolve) => {
           releaseSlice = resolve;
@@ -1727,20 +1709,19 @@ describe("knowledge retrieval catalog v8", () => {
               request.url().endsWith("/api/v1/query/document-slice"),
           });
           await renewedSource
-            .getByRole("button", { name: "按固定范围继续读取" })
+            .getByRole("button", { name: "固定来源", exact: true })
             .click();
           await arrived;
-          await page.locator("#knowledge-context-query").fill("dry");
-          await page.locator("#knowledge-context-submit").click();
+          await search("dry");
           releaseSlice();
           expect((await aborted).failure()?.errorText).toMatch(
             /ABORTED|FAILED/,
           );
           await expect
-            .poll(() => page.locator("#knowledge-context-status").textContent())
-            .toContain("覆盖：");
+            .poll(() => page.getByTestId("retrieval-status").textContent())
+            .toContain("条结果");
           expect(
-            await page.locator("#knowledge-context-results").textContent(),
+            await page.locator(".retrieval-results").textContent(),
           ).not.toContain("固定范围读取失败");
         } finally {
           releaseSlice();

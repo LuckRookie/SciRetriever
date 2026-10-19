@@ -1,3 +1,7 @@
+import {
+  workbenchLogin,
+  workbenchTestAccess,
+} from "./workbench-auth-fixture.js";
 import { expect, it, vi } from "vitest";
 import type { BrowserPageHandle } from "../src/browser/host.js";
 import { startWorkbenchHttp } from "../src/workbench/http.js";
@@ -131,13 +135,15 @@ it("binds production control to each explicit article operation and cancels befo
     return interruptedReport(articleId);
   });
   const http = await startWorkbenchHttp({
+    access: workbenchTestAccess,
     session,
     acquisition: session,
     assets: new Map([["/", { contentType: "text/html", body: "ok" }]]),
   });
   try {
-    const home = await fetch(http.origin);
-    const cookie = home.headers.get("set-cookie")!.split(";")[0]!;
+    const authCookie = await workbenchLogin(http.origin);
+    const home = await fetch(http.origin, { headers: { Cookie: authCookie } });
+    const cookie = `${authCookie}; ${home.headers.get("set-cookie")!.split(";")[0]!}`;
     const create = await fetch(`${http.origin}/api/clients`, {
       method: "POST",
       headers: {

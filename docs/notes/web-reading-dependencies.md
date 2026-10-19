@@ -4,6 +4,7 @@
 
 | 组件 | 固定版本 | 许可 | 作用与运行边界 |
 | --- | --- | --- | --- |
+| `@noble/hashes` | 2.4.0 | MIT | 共享合同的 SHA-256：普通 HTTP 浏览器没有 SubtleCrypto 时使用本地 JS 实现；Node/HTTPS 仍优先原生摘要。固定 ID/hash 与校验规则不变。随 reader 声明交付许可，离线包包含该依赖。 |
 | `pdfjs-dist` | 6.4.299 | Apache-2.0 | 浏览器端固定 PDF 字节渲染、文字层、页码、目录和查找；Node engine 为 >=22.13.0 或 >=24，当前 Node 22.19.0 可构建 |
 | `marked` | 18.1.1 | MIT | Markdown 词法/语法解析；**本身不消毒 HTML**，必须禁用原始 HTML、过滤链接并受控解析资源 |
 | `fflate` | 0.8.2 | MIT | 在浏览器中把 CSV/Markdown 正文和来源说明打包为单个 ZIP，无外部请求 |

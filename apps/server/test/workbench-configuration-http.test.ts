@@ -1,3 +1,7 @@
+import {
+  workbenchLogin,
+  workbenchTestAccess,
+} from "./workbench-auth-fixture.js";
 import { request as httpRequest } from "node:http";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -105,6 +109,7 @@ describe("workbench configuration HTTP boundary", () => {
       },
     }));
     const server = await startWorkbenchHttp({
+      access: workbenchTestAccess,
       session,
       configuration: {
         runtime_revision: "missing",
@@ -121,10 +126,11 @@ describe("workbench configuration HTTP boundary", () => {
       ]),
     });
     try {
-      const root = await exchange(server.origin, "/", "GET");
-      const cookie = (root.headers["set-cookie"] as string[])[0]!.split(
-        ";",
-      )[0]!;
+      const authCookie = await workbenchLogin(server.origin);
+      const root = await exchange(server.origin, "/", "GET", {
+        Cookie: authCookie,
+      });
+      const cookie = `${authCookie}; ${(root.headers["set-cookie"] as string[])[0]!.split(";")[0]!}`;
       const init = await exchange(
         server.origin,
         "/api/clients",
@@ -344,6 +350,7 @@ describe("workbench configuration HTTP boundary", () => {
         unavailable_reason: "startup-credential-missing",
       });
       server = await startWorkbenchHttp({
+        access: workbenchTestAccess,
         session,
         configuration: {
           runtime_revision: application.configuration_revision,
@@ -381,10 +388,11 @@ describe("workbench configuration HTTP boundary", () => {
         ]),
       });
 
-      const root = await exchange(server.origin, "/", "GET");
-      const cookie = (root.headers["set-cookie"] as string[])[0]!.split(
-        ";",
-      )[0]!;
+      const authCookie = await workbenchLogin(server.origin);
+      const root = await exchange(server.origin, "/", "GET", {
+        Cookie: authCookie,
+      });
+      const cookie = `${authCookie}; ${(root.headers["set-cookie"] as string[])[0]!.split(";")[0]!}`;
       const init = await exchange(
         server.origin,
         "/api/clients",
@@ -511,6 +519,7 @@ describe("workbench configuration HTTP boundary", () => {
         failure_code: null,
       });
       server = await startWorkbenchHttp({
+        access: workbenchTestAccess,
         session,
         configuration: {
           runtime_revision: application.configuration_revision,
@@ -524,10 +533,11 @@ describe("workbench configuration HTTP boundary", () => {
           ["/", { contentType: "text/html", body: "<html></html>" }],
         ]),
       });
-      const root = await exchange(server.origin, "/", "GET");
-      const cookie = (root.headers["set-cookie"] as string[])[0]!.split(
-        ";",
-      )[0]!;
+      const authCookie = await workbenchLogin(server.origin);
+      const root = await exchange(server.origin, "/", "GET", {
+        Cookie: authCookie,
+      });
+      const cookie = `${authCookie}; ${(root.headers["set-cookie"] as string[])[0]!.split(";")[0]!}`;
       const init = await exchange(
         server.origin,
         "/api/clients",

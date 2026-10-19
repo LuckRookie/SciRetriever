@@ -603,6 +603,7 @@ export {
   startQueryOnlyHttp,
   type QueryOnlyHttpOptions,
   type WorkbenchHttpOptions,
+  type WorkbenchHttpServer,
   type WorkbenchStaticAsset,
 } from "./workbench/http.js";
 export {

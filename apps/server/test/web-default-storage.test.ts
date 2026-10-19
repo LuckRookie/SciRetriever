@@ -1,3 +1,4 @@
+import { workbenchTestAccess } from "./workbench-auth-fixture.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
@@ -25,6 +26,7 @@ const assets = new Map([
 ]);
 const open = (home: string) =>
   startProductionWorkbench({
+    access: workbenchTestAccess,
     home,
     port: 0,
     assets,

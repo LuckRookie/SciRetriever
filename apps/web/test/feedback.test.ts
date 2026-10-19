@@ -4,7 +4,7 @@ import {
   type WorkbenchCandidate,
   type WorkbenchView,
 } from "@sciretriever/contracts";
-import { candidateStatus } from "../src/feedback.js";
+import { candidateStatus } from "../src/app/data/candidate-status.js";
 
 const candidate: WorkbenchCandidate = {
   transfer_id: "transfer-1",

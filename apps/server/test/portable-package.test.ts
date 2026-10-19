@@ -56,19 +56,29 @@ it("builds a Python-free portable runtime and executes its bundled Node CLI", as
         ),
       ),
     ).toBe(true);
-    expect(
-      manifest.files.some((file) =>
-        file.path.endsWith("/dist/web/maintenance.html"),
-      ),
-    ).toBe(true);
-    expect(
-      manifest.files.some((file) =>
-        file.path.endsWith("/dist/web/maintenance.js"),
-      ),
-    ).toBe(true);
-    for (const resource of [
+    for (const retired of [
+      "live.html",
+      "live.js",
+      "query.html",
+      "query.js",
+      "maintenance.html",
+      "maintenance.js",
       "reader.js",
       "reading.css",
+      "workspace.css",
+      "styles.css",
+      "live.css",
+    ])
+      expect(
+        manifest.files.some((file) =>
+          file.path.endsWith(`/dist/web/${retired}`),
+        ),
+        retired,
+      ).toBe(false);
+    for (const resource of [
+      "auth.html",
+      "auth.js",
+      "auth.css",
       "reader/pdf.worker.mjs",
       "reader/katex.css",
       "reader/text-layer.css",
@@ -92,6 +102,43 @@ it("builds a Python-free portable runtime and executes its bundled Node CLI", as
         /\/dist\/web\/reader\/wasm\/.*\.wasm$/.test(file.path),
       ),
     ).toBe(true);
+
+    const serverRoot = join(
+      output,
+      "app/node_modules/@sciretriever/server/dist/web",
+    );
+    const reactFiles: string[] = JSON.parse(
+      readFileSync(join(serverRoot, "react/assets.json"), "utf8"),
+    );
+    expect(reactFiles).toContain("index.html");
+    expect(reactFiles).toContain("third-party-notices.txt");
+    expect(reactFiles.some((name) => name.endsWith(".js"))).toBe(true);
+    expect(reactFiles.some((name) => name.endsWith(".css"))).toBe(true);
+    expect(reactFiles.some((name) => name.endsWith(".woff2"))).toBe(true);
+    for (const name of reactFiles) {
+      expect(
+        manifest.files.some((file) =>
+          file.path.endsWith(`/dist/web/react/${name}`),
+        ),
+        name,
+      ).toBe(true);
+      expect(
+        readFileSync(join(serverRoot, "react", name)).byteLength,
+        name,
+      ).toBeGreaterThan(0);
+    }
+    expect(
+      manifest.files
+        .filter((file) => file.path.includes("/dist/web/react/"))
+        .map((file) => file.path.split("/dist/web/react/")[1])
+        .sort(),
+    ).toEqual([...reactFiles, "assets.json"].sort());
+    expect(
+      manifest.files.some((file) => file.path.includes("/dist/web/next/")),
+    ).toBe(false);
+    expect(
+      readFileSync(join(serverRoot, "react/third-party-notices.txt"), "utf8"),
+    ).toContain("react-aria-components@");
     const doctor = spawnSync(
       join(output, "bin", "sciretriever"),
       ["doctor", "--json"],

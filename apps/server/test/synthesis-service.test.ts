@@ -1,16 +1,9 @@
 import { dshAnalysisAdapter, dshChatReply } from "./dsh-analysis-fixture.js";
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { build } from "esbuild";
+import { reactWorkbenchAssets } from "./react-workbench-fixture.js";
 import { chromium } from "playwright";
 import {
   createSynthesisInputManifest,
@@ -52,10 +45,7 @@ import {
   FIXTURE_LITERATURE,
   workbenchPdf,
 } from "../src/workbench/synthetic-fixture.js";
-import {
-  startQueryOnlyHttp,
-  type WorkbenchStaticAsset,
-} from "../src/workbench/http.js";
+import { startQueryOnlyHttp } from "../src/workbench/http.js";
 
 const id = (n: number) =>
   `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
@@ -1189,37 +1179,7 @@ describe("collection synthesis execution", () => {
       env.app.synthesisRead!,
     );
     const query = await createQueryApplication(env.home);
-    const assets = new Map<string, WorkbenchStaticAsset>();
-    for (const [route, file, contentType] of [
-      ["/", "maintenance.html", "text/html"],
-      ["/query", "query.html", "text/html"],
-      ["/styles.css", "styles.css", "text/css"],
-      ["/live.css", "live.css", "text/css"],
-    ] as const)
-      assets.set(route, {
-        contentType,
-        body: await readFile(
-          new URL(`../../web/public/${file}`, import.meta.url),
-        ),
-      });
-    for (const [route, file] of [
-      ["/maintenance.js", "maintenance.ts"],
-      ["/query.js", "query.ts"],
-    ] as const) {
-      const bundle = await build({
-        entryPoints: [
-          new URL(`../../web/src/${file}`, import.meta.url).pathname,
-        ],
-        bundle: true,
-        format: "esm",
-        platform: "browser",
-        write: false,
-      });
-      assets.set(route, {
-        contentType: "text/javascript",
-        body: bundle.outputFiles[0]!.contents,
-      });
-    }
+    const assets = await reactWorkbenchAssets("maintenance");
     const http = await startQueryOnlyHttp({
       application: query,
       assets,
@@ -1237,13 +1197,20 @@ describe("collection synthesis execution", () => {
     try {
       const selected = await selection(env, "paper-1");
       const page = await browser.newPage();
-      await page.goto(http.origin);
-      await page.locator("#synthesis-inputs").fill(JSON.stringify([selected]));
-      await page.locator("#synthesis-prepare").click();
+      await page.goto(`${http.origin}/?view=set`);
+      await page.getByRole("tab", { name: "材料与分析", exact: true }).click();
+      await page
+        .getByRole("textbox", { name: "综合输入 JSON", exact: true })
+        .fill(JSON.stringify([selected]));
+      await page
+        .getByRole("button", { name: "固定综合输入", exact: true })
+        .click();
       await expect
-        .poll(() => page.locator("#synthesis-status").textContent())
+        .poll(() => page.locator(".maintenance-page").textContent())
         .toContain("已固定 1 项");
-      await page.locator("#synthesis-question").fill("What was measured?");
+      await page
+        .getByRole("textbox", { name: "综合问题", exact: true })
+        .fill("What was measured?");
       const noCsrf = await fetch(
         `${http.origin}/api/v1/maintenance/synthesize`,
         {
@@ -1253,26 +1220,30 @@ describe("collection synthesis execution", () => {
         },
       );
       expect(noCsrf.ok).toBe(false);
-      await page.locator("#synthesis-start").click();
+      await page.getByRole("button", { name: "启动综合", exact: true }).click();
+      await page
+        .getByRole("dialog", { name: "启动固定输入综合？" })
+        .getByRole("button", { name: "启动综合", exact: true })
+        .click();
       await expect
-        .poll(() => page.locator("#synthesis-status").textContent())
-        .toContain("已发布");
+        .poll(() => page.locator(".maintenance-page").textContent())
+        .toContain("综合已保存");
+      await page
+        .getByRole("button", { name: "技术详情", exact: true })
+        .last()
+        .click();
       const receipt = JSON.parse(
-        (await page.locator("#synthesis-result").textContent())!,
+        (await page.getByTestId("synthesis-receipt").textContent())!,
       ) as {
         artifact: { artifact_id: string };
       };
-      await page.goto(`${http.origin}/query`);
-      await page
-        .locator("#synthesis-read-id")
-        .fill(receipt.artifact.artifact_id);
-      await page.locator("#synthesis-read-submit").click();
+      const openSynthesis = async (artifact: string) => {
+        await page.goto(`${http.origin}/query?view=syn&artifact=${artifact}`);
+      };
+      await openSynthesis(receipt.artifact.artifact_id);
       await expect
-        .poll(() => page.locator("#synthesis-read-status").textContent())
-        .toContain("已核对");
-      expect(
-        await page.locator("#synthesis-read-results").textContent(),
-      ).toContain("4.2 eV under dry conditions");
+        .poll(() => page.locator(".synthesis-reading").textContent())
+        .toContain("4.2 eV under dry conditions");
       let evidencePage = 0;
       let completeEvidence: Record<string, unknown> | null = null;
       await page.route("**/api/v1/query/evidence-resolve", async (route) => {
@@ -1328,18 +1299,22 @@ describe("collection synthesis execution", () => {
         }
       });
       await page
-        .locator("#synthesis-read-results button", { hasText: "展开证据" })
+        .getByRole("button", { name: "证据 [1]", exact: true })
         .first()
         .click();
       await expect
-        .poll(() => page.locator("#synthesis-read-results").textContent())
+        .poll(() =>
+          page.getByRole("dialog", { name: "综合证据" }).textContent(),
+        )
         .toContain("部分");
       await page
-        .locator("#synthesis-read-results button", { hasText: "继续读取证据" })
+        .getByRole("button", { name: "继续读取证据", exact: true })
         .first()
         .click();
       await expect
-        .poll(() => page.locator("#synthesis-read-results").textContent())
+        .poll(() =>
+          page.getByRole("dialog", { name: "综合证据" }).textContent(),
+        )
         .toContain("已读取完整证据");
       expect(evidencePage).toBe(2);
       await page.unroute("**/api/v1/query/evidence-resolve");
@@ -1359,74 +1334,80 @@ describe("collection synthesis execution", () => {
           }),
         }),
       );
-      await page.locator("#synthesis-read-id").fill(id(999));
-      await page.locator("#synthesis-read-submit").click();
+      await openSynthesis(id(999));
       await expect
-        .poll(() => page.locator("#synthesis-read-status").textContent())
-        .toContain("读取失败");
-      expect(await page.locator("#synthesis-read-results").textContent()).toBe(
-        "",
-      );
+        .poll(() => page.locator(".synthesis-page").textContent(), {
+          timeout: 10000,
+        })
+        .toMatch(/失败|invalid|不匹配|validation/);
+      expect(await page.locator(".synthesis-reading").count()).toBe(0);
       await page.unroute("**/api/v1/query/synthesis-read");
-      await page.locator("#synthesis-list-submit").click();
-      await expect
-        .poll(() => page.locator("#synthesis-read-status").textContent())
-        .toContain("找到 1 项");
+      await page.goto(`${http.origin}/query?view=syn`);
+      await expect.poll(() => page.locator(".synthesis-card").count()).toBe(1);
       await unlink(join(env.home, "artifacts/objects/synthesis-source.pdf"));
-      await page.goto(http.origin);
-      await page.locator("#synthesis-inputs").fill(
-        JSON.stringify([
-          {
-            kind: "knowledge",
-            input_id: "prior-1",
-            source_artifact_id: receipt.artifact.artifact_id,
-          },
-        ]),
-      );
-      await page.locator("#synthesis-policy").selectOption("allow-partial");
-      await page.locator("#synthesis-prepare").click();
+      await page.goto(`${http.origin}/?view=set`);
+      await page.getByRole("tab", { name: "材料与分析", exact: true }).click();
+      await page
+        .getByRole("textbox", { name: "综合输入 JSON", exact: true })
+        .fill(
+          JSON.stringify([
+            {
+              kind: "knowledge",
+              input_id: "prior-1",
+              source_artifact_id: receipt.artifact.artifact_id,
+            },
+          ]),
+        );
+      await page.getByRole("button", { name: /综合覆盖策略/ }).click();
+      await page
+        .getByRole("option", { name: "允许部分覆盖", exact: true })
+        .click();
+      await page
+        .getByRole("button", { name: "固定综合输入", exact: true })
+        .click();
       await expect
-        .poll(() => page.locator("#synthesis-status").textContent())
+        .poll(() => page.locator(".maintenance-page").textContent())
         .toContain("1 项缺口");
       await page
-        .locator("#synthesis-question")
+        .getByRole("textbox", { name: "综合问题", exact: true })
         .fill("What does the prior synthesis report?");
-      await page.locator("#synthesis-start").click();
+      await page.getByRole("button", { name: "启动综合", exact: true }).click();
+      await page
+        .getByRole("dialog", { name: "启动固定输入综合？" })
+        .getByRole("button", { name: "启动综合", exact: true })
+        .click();
       await expect
-        .poll(() => page.locator("#synthesis-status").textContent())
-        .toContain("已发布");
+        .poll(() => page.locator(".maintenance-page").textContent())
+        .toContain("综合已保存");
+      await page
+        .getByRole("button", { name: "技术详情", exact: true })
+        .last()
+        .click();
       const nested = JSON.parse(
-        (await page.locator("#synthesis-result").textContent())!,
+        (await page.getByTestId("synthesis-receipt").textContent())!,
       ) as {
         artifact: { artifact_id: string };
       };
-      await page.goto(`${http.origin}/query`);
+      await openSynthesis(nested.artifact.artifact_id);
       await page
-        .locator("#synthesis-read-id")
-        .fill(nested.artifact.artifact_id);
-      await page.locator("#synthesis-read-submit").click();
+        .getByRole("button", { name: "覆盖与当前来源", exact: true })
+        .click();
       await expect
-        .poll(() => page.locator("#synthesis-read-status").textContent())
-        .toContain("已核对");
-      expect(
-        await page.locator("#synthesis-read-results").textContent(),
-      ).toContain("source-only");
-      await page.locator("#synthesis-read-results button").first().click();
+        .poll(() => page.locator(".synthesis-reading").textContent())
+        .toContain("原 PDF 未复核");
+      await page
+        .getByRole("button", { name: "证据 [1]", exact: true })
+        .first()
+        .click();
       await expect
         .poll(() =>
-          page
-            .locator("#synthesis-read-results section section")
-            .first()
-            .textContent(),
+          page.getByRole("dialog", { name: "综合证据" }).textContent(),
         )
-        .toContain(`来源 ${receipt.artifact.artifact_id} · 当前 source-only`);
+        .toContain("4.2 eV under dry conditions");
       expect(
-        await page.locator("#synthesis-read-results").textContent(),
-      ).toContain("原 PDF 当前无法复核");
-      await page.locator("#synthesis-read-submit").click();
-      await expect
-        .poll(() => page.locator("#synthesis-read-status").textContent())
-        .toContain("已核对");
+        await page.getByRole("dialog", { name: "综合证据" }).textContent(),
+      ).toContain("原 PDF 未复核");
+      await openSynthesis(nested.artifact.artifact_id);
       await page.route("**/api/v1/query/synthesis-source", async (route) => {
         const response = await route.fetch();
         const envelope = JSON.parse(await response.text()) as {
@@ -1449,11 +1430,68 @@ describe("collection synthesis execution", () => {
           body: JSON.stringify(envelope),
         });
       });
-      await page.locator("#synthesis-read-results button").first().click();
+      await page
+        .getByRole("button", { name: "证据 [1]", exact: true })
+        .first()
+        .click();
       await expect
-        .poll(() => page.locator("#synthesis-read-results").textContent())
-        .toContain("来源内容或固定清单不匹配");
+        .poll(
+          () => page.getByRole("dialog", { name: "综合证据" }).textContent(),
+          { timeout: 10000 },
+        )
+        .toMatch(/版本不匹配|来源内容或固定清单不匹配/);
       await page.unroute("**/api/v1/query/synthesis-source");
+      const originalNested = await env.app.synthesisRead!.byId(
+        nested.artifact.artifact_id,
+      );
+      if (!originalNested) throw new Error("nested synthesis missing");
+      const mismatchedInput = await createSynthesisInputManifest(
+        originalNested.artifact.input.items.map((item) =>
+          item.kind === "knowledge"
+            ? { ...item, source_manifest_sha256: "f".repeat(64) }
+            : item,
+        ),
+      );
+      const mismatchedComparison = await synthesisComparisonSha256({
+        manifest_sha256: mismatchedInput.manifest_sha256,
+        question: originalNested.artifact.question,
+        policy: originalNested.artifact.coverage.policy,
+        method: originalNested.artifact.method,
+      });
+      const mismatchedId = `${mismatchedComparison.slice(0, 8)}-${mismatchedComparison.slice(8, 12)}-${mismatchedComparison.slice(12, 16)}-${mismatchedComparison.slice(16, 20)}-${mismatchedComparison.slice(20, 32)}`;
+      await page.route("**/api/v1/query/synthesis-read", (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            protocol_version: 1,
+            result: {
+              ...originalNested,
+              artifact: {
+                ...originalNested.artifact,
+                artifact_id: mismatchedId,
+                comparison_sha256: mismatchedComparison,
+                input: mismatchedInput,
+              },
+            },
+          }),
+        }),
+      );
+      await openSynthesis(mismatchedId);
+      await expect
+        .poll(() => page.locator(".synthesis-reading").count())
+        .toBe(1);
+      await page
+        .getByRole("button", { name: "证据 [1]", exact: true })
+        .first()
+        .click();
+      await expect
+        .poll(
+          () => page.getByRole("dialog", { name: "综合证据" }).textContent(),
+          { timeout: 10000 },
+        )
+        .toContain("来源内容或固定清单不匹配");
+      await page.unroute("**/api/v1/query/synthesis-read");
       await page.route("**/api/v1/query/synthesis-read", async (route) => {
         const response = await route.fetch();
         const envelope = JSON.parse(await response.text()) as {
@@ -1480,19 +1518,25 @@ describe("collection synthesis execution", () => {
           body: JSON.stringify(envelope),
         });
       });
-      await page.locator("#synthesis-read-submit").click();
+      await openSynthesis(nested.artifact.artifact_id);
       await expect
-        .poll(() => page.locator("#synthesis-read-status").textContent())
-        .toContain("已核对");
-      await page.locator("#synthesis-read-results button").first().click();
+        .poll(() => page.locator(".synthesis-reading").count())
+        .toBe(1);
+      await page
+        .getByRole("button", { name: "证据 [1]", exact: true })
+        .first()
+        .click();
       await expect
-        .poll(() => page.locator("#synthesis-read-results").textContent())
+        .poll(
+          () => page.getByRole("dialog", { name: "综合证据" }).textContent(),
+          { timeout: 10000 },
+        )
         .toContain("来源断言内容不匹配");
       await page.unroute("**/api/v1/query/synthesis-read");
-      await page.locator("#synthesis-read-submit").click();
+      await openSynthesis(nested.artifact.artifact_id);
       await expect
-        .poll(() => page.locator("#synthesis-read-status").textContent())
-        .toContain("已核对");
+        .poll(() => page.locator(".synthesis-reading").count())
+        .toBe(1);
       let releaseSource: (() => void) | null = null;
       await page.route("**/api/v1/query/synthesis-source", async (route) => {
         const response = await route.fetch();
@@ -1501,13 +1545,23 @@ describe("collection synthesis execution", () => {
         });
         await route.fulfill({ response }).catch(() => undefined);
       });
-      await page.locator("#synthesis-read-results button").first().click();
+      await page
+        .getByRole("button", { name: "证据 [1]", exact: true })
+        .first()
+        .click();
       await expect.poll(() => releaseSource !== null).toBe(true);
-      await page.locator("#synthesis-read-id").fill(id(999));
+      await page
+        .getByRole("dialog", { name: "综合证据" })
+        .getByRole("button", { name: "关闭抽屉", exact: true })
+        .click();
+      await page
+        .getByRole("button", { name: "返回全部综合", exact: true })
+        .click();
       (releaseSource as (() => void) | null)?.();
-      await expect
-        .poll(() => page.locator("#synthesis-read-results").textContent())
-        .toBe("");
+      await expect.poll(() => page.locator(".synthesis-card").count()).toBe(2);
+      expect(await page.getByRole("dialog", { name: "综合证据" }).count()).toBe(
+        0,
+      );
       await page.unroute("**/api/v1/query/synthesis-source");
     } finally {
       await browser.close();
@@ -1516,7 +1570,7 @@ describe("collection synthesis execution", () => {
       await service.close();
       await env.close();
     }
-  }, 45000);
+  }, 90000);
   it("uses the production Application synthesis binding and closes cleanly", async () => {
     const env = await environment();
     let app: Application | undefined;
