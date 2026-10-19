@@ -7,7 +7,7 @@
 - [profile.ts](profile.ts)：锁定的协议与解析 profile。
 - [protocol.ts](protocol.ts)：服务协议字段与响应转换。
 - [http.ts](http.ts)：HTTP 请求与任务执行。
-- [archive.ts](archive.ts)：输出归档到中性文档材料的转换。
+- [archive.ts](archive.ts)：输出归档到中性文档材料的转换；使用 Parsing 共用资源规则，支持行内/引用式图片与 HTML 资源，忽略代码和注释中的示例。
 - [health.ts](health.ts)：健康与版本检查。
 
 ## 放置边界

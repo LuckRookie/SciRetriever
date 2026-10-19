@@ -339,7 +339,7 @@ it.each(["loopback", "remote"] as const)(
       expect(result).toMatchObject({
         page_count: 1,
         provenance: {
-          parser_version: "mineru-ts-archive-v2",
+          parser_version: "mineru-ts-archive-v3",
           mode: "archive",
           model_identity: "operator-vlm-model@fixture-revision",
           provenance: { source_name: "mineru", input_sha256: asset.sha256 },

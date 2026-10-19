@@ -6,6 +6,8 @@ import {
   sha256,
 } from "@sciretriever/contracts";
 import { MinerUParser } from "../src/parsing/backends/mineru/http.js";
+import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
+import { buildDocumentStructure } from "../src/document/builder.js";
 import { convertMinerUArchive } from "../src/parsing/backends/mineru/archive.js";
 
 const source = new Uint8Array([1, 2, 3]);
@@ -176,7 +178,7 @@ describe("TypeScript MinerU HTTP client", () => {
     expect(converted.result).toMatchObject({
       page_count: 1,
       provenance: {
-        parser_version: "mineru-ts-archive-v2",
+        parser_version: "mineru-ts-archive-v3",
         provenance: { source_name: "mineru" },
       },
       resources: [
@@ -393,4 +395,79 @@ it("gives each parsing observation a fresh provenance ID while keeping identical
   expect(changedModel.provenance.provenance.parameters_sha256).not.toBe(
     first.provenance.provenance.parameters_sha256,
   );
+});
+
+it.each([
+  "![figure][figure-ref]\n\n[figure-ref]: images/figure.jpg\n",
+  "![figure][]\n\n[figure]: images/figure.jpg\n",
+  '<picture><source srcset="images/figure.jpg 1x"><img src=images/figure.jpg></picture>\n',
+  "![figure](images/figure.jpg)\n\n`![code](images/missing.jpg)`\n<!-- ![comment](images/missing.jpg) -->\n```md\n![example](images/missing.jpg)\n```\n",
+])(
+  "uses the same resource closure for archive conversion and admission: %s",
+  async (markdown) => {
+    const converted = await convertMinerUArchive(
+      nestedArchive({ markdown }),
+      archiveOptions,
+      new TypeScriptParserArtifactRules(),
+    );
+    expect(converted.resources.map((resource) => resource.reference)).toEqual([
+      "images/figure.jpg",
+    ]);
+    expect(Buffer.from(converted.markdown.bytes).toString()).toBe(markdown);
+  },
+);
+
+it.each([
+  "![figure][ref]\n\n[ref]: images/missing.jpg\n",
+  '<img srcset="images/figure.jpg 1x, images/missing.jpg 2x">',
+  "![figure][ref]\n\n[ref]: https://example.test/private.jpg\n",
+  "![figure][ref]\n\n[ref]: ../private.jpg\n",
+])(
+  "rejects missing or escaping resources in all supported forms: %s",
+  async (markdown) => {
+    await expect(
+      convertMinerUArchive(
+        nestedArchive({ markdown }),
+        archiveOptions,
+        new TypeScriptParserArtifactRules(),
+      ),
+    ).rejects.toMatchObject({ code: "parser-structure" });
+  },
+);
+
+it("preserves supplied scientific text and heading decisions through conversion and document construction", async () => {
+  // This is a synthetic parser OUTPUT, not a claim about real PDF OCR quality.
+  const markdown = [
+    "# Synthetic multi-column article",
+    "Left-column paragraph α, then right-column paragraph β.",
+    "# Supporting Information",
+    "A publisher marker supplied as a heading by the parser.",
+    "## Formula and table",
+    "$$E = mc^2$$",
+    "| Compound | Yield |",
+    "| --- | --- |",
+    "| 3m | 67% |",
+    "![Scheme][scheme]",
+    "[scheme]: images/figure.jpg",
+    "",
+  ].join("\n");
+  const converted = await convertMinerUArchive(
+    nestedArchive({ markdown }),
+    archiveOptions,
+    new TypeScriptParserArtifactRules(),
+  );
+  const built = await buildDocumentStructure(converted.markdown.bytes);
+  expect(Buffer.from(converted.markdown.bytes)).toEqual(Buffer.from(markdown));
+  expect(built.structure.sections.map((section) => section.title)).toEqual([
+    "Synthetic multi-column article",
+    "Supporting Information",
+    "Formula and table",
+  ]);
+  const reconstructed = Buffer.concat(
+    built.structure.segments.map((segment) =>
+      converted.markdown.bytes.subarray(segment.start_utf8, segment.end_utf8),
+    ),
+  );
+  expect(reconstructed).toEqual(Buffer.from(markdown));
+  expect(converted.resources).toHaveLength(1);
 });

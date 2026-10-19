@@ -1,4 +1,5 @@
 import { inflateRawSync } from "node:zlib";
+import { parserMarkdownReferences } from "../../markdown-resources.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   parseParserResult,
@@ -371,20 +372,6 @@ async function artifact(
     },
   };
 }
-function markdownReferences(markdown: string): readonly string[] {
-  const values = new Set<string>();
-  for (const match of markdown.matchAll(
-    /!\[[^\]\r\n]*\]\((<[^>\r\n]+>|[^)\s]+)(?:\s+[^)]*)?\)/gu,
-  )) {
-    const raw = match[1]!.replace(/^<|>$/gu, "");
-    values.add(safePath(decodeURIComponent(raw)));
-  }
-  for (const match of markdown.matchAll(
-    /<(?:img|source)\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/giu,
-  ))
-    values.add(safePath(decodeURIComponent(match[1]!)));
-  return Object.freeze([...values].sort());
-}
 
 export interface MinerUArchiveOptions {
   readonly source_asset_id: string;
@@ -420,7 +407,7 @@ export async function convertMinerUArchive(
   const markdownBytes = primary.markdown;
   const markdown = text(markdownBytes);
   if (!markdown.trim()) fail();
-  const references = markdownReferences(markdown);
+  const references = parserMarkdownReferences(markdown);
   const prefix = primary.markdownReference.slice(
     0,
     primary.markdownReference.lastIndexOf("/") + 1,

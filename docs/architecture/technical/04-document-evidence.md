@@ -94,7 +94,8 @@ client 但只执行 health/release/protocol/profile 检查，不提交 task 或�
 
 归档转换从 middle 输出读取连续页数，由 Parsing service 与独立检查的输入 PDF 页数
 交叉校验，不用 PDF 字节正则推测。资源以 Markdown 所在目录解析；公共资源引用继续
-相对于发布的 Markdown。每次新解析观察使用独立 provenance ID；结果 hash 仍不包含
+相对于发布的 Markdown。归档转换和 P2 接纳复用 Parsing 内部的资源发现与规范路径规则，
+覆盖行内/引用式图片以及 HTML `src`/`srcset`，忽略代码与注释里的示例；正文与标题字节不因此改变。每次新解析观察使用独立 provenance ID；结果 hash 仍不包含
 观察时间或 provenance ID，相同输入与结果可复用。
 
 ### 2.4 Backend 转换

@@ -56,7 +56,9 @@ client 校验 health、release、protocol、task ID、状态和响应预算；�
 
 服务正常返回的队列、并发和时间字段不影响必需字段校验。请求明确开启 Markdown；
 middle 的图片文件名相对 `images/`，Markdown 资源相对其文件所在目录解析。归档布局
-不会进入公共资源引用。转换规则版本为 `mineru-ts-archive-v2`，有效参数 hash 覆盖固定
+不会进入公共资源引用。Markdown 资源发现与 Parsing 接纳使用同一套规则：行内与引用式图片、HTML `src`/`srcset`，并屏蔽代码和注释中的示例。转换不重写正文、标题或科学数值；没有被 Markdown 引用的归档图像仍不会作为公共资源发布。
+
+转换规则版本为 `mineru-ts-archive-v3`，有效参数 hash 覆盖固定
 服务版本、协议、输出参数、转换规则和部署模型身份。新 provenance ID 不参与结果 hash；
 旧解析结果保持可读，显式重解析成功后才替换当前关系。
 
