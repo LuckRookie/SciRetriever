@@ -2,7 +2,7 @@
 
 2026-10-19 核查并安装，**当前锁定依赖；整站及最终便携包验收完成**。
 
-本文配合 [ADR 0036](../architecture/decisions/0036-react-web-frontend.md)与 [Web 体验计划 02](../plans/2026-10-19-web-experience/02-architecture-and-scaffold.md)使用。
+本文配合 [ADR 0036](../architecture/decisions/0036-react-web-frontend.md)与 [Web 体验计划 02](../archive/2026-10-19-web-experience/02-architecture-and-scaffold.md)使用。
 
 - 版本、许可证、发布日期来自 2026-10-19 对 npm registry 的只读查询。
 - 版本、发布日期与许可证已经 registry 复核，12 个候选均存在；保守保持候选精确版本。
@@ -93,7 +93,7 @@
 
 升级任何一个依赖，都要按照同样的规则重新评估。
 
-[Notes 导航](README.md) · [ADR 0036](../architecture/decisions/0036-react-web-frontend.md) · [Web 体验计划](../plans/2026-10-19-web-experience/README.md)
+[Notes 导航](README.md) · [ADR 0036](../architecture/decisions/0036-react-web-frontend.md) · [Web 体验计划](../archive/2026-10-19-web-experience/README.md)
 
 ## 最终单一入口产物
 

@@ -40,7 +40,7 @@ Browser 获取在一篇文章内保留模型工具历史、人工指导和真实
 
 ## 三端能力覆盖与结构化入口
 
-目标是 CLI 与 MCP 分别覆盖 Web 的业务能力，见 [ADR 0033](../architecture/decisions/0033-machine-interfaces-cover-web-capabilities.md)。当前常规业务、材料传输、配置和活会话均有机器入口；逐项范围与验收见[能力矩阵](../plans/2026-10-15-interface-capability-parity/capability-matrix.md)。纯 UI 偏好不做机器接口，未实现的自动提取执行器也不在覆盖声明内。
+目标是 CLI 与 MCP 分别覆盖 Web 的业务能力，见 [ADR 0033](../architecture/decisions/0033-machine-interfaces-cover-web-capabilities.md)。当前常规业务、材料传输、配置和活会话均有机器入口；2026-10-15 的接口适配范围与验收见[历史能力矩阵](../archive/2026-10-15-interface-capability-parity/capability-matrix.md)。纯 UI 偏好不做机器接口，未实现的自动提取执行器也不在覆盖声明内。
 
 新增 CLI 命令使用 `--request /absolute/path/request.json` 或 `--request -` 从 stdin 读取严格 JSON，支持 `--json`。结果封套为 `{protocol_version:1,result}`；空查询不会启动加工。原有命令和工具格式继续支持。
 

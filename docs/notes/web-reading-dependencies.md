@@ -26,4 +26,4 @@ PDF.js 的主模块与 worker 必须同版本、从本地静态白名单提供�
 
 参考：[PDF.js](https://github.com/mozilla/pdf.js) · [PDF.js 发行包](https://github.com/mozilla/pdfjs-dist) · [Marked 安全说明](https://marked.js.org/) · [KaTeX 安全选项](https://katex.org/docs/options.html)。
 
-[Notes 导航](README.md) · [Web 设计](../architecture/web/README.md) · [阅读计划](../plans/2026-10-18-web-capability-and-reading/04-reading-workspace.md)
+[Notes 导航](README.md) · [Web 设计](../architecture/web/README.md) · [阅读计划](../archive/2026-10-18-web-capability-and-reading/04-reading-workspace.md)

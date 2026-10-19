@@ -1,5 +1,7 @@
 # Web 日常能力与阅读体验完善
 
+> 归档记录（2026-10-20）：Owner 已授权分组提交并归档完成计划。对应实现提交：`debfa19`。以下保留该轮完成范围、授权语境和验收记录；历史限制不因归档消失，也不作为当前行为的真相源。当前入口见[活动计划](../../plans/README.md)和[归档导航](../README.md)。
+
 状态：Completed（01–05 已完成，最终 Full 与安装验证通过）。建立日期：2026-10-18，状态更新：2026-10-19。
 
 本目录把已接受的 Web 职责转为可执行任务，承接统一处理器首版之后的 Web 接入与阅读完善。根 README 管理范围、依赖和恢复点；编号文件分别管理可验收结果。实施状态不替代产品需求或当前使用指南。
@@ -14,7 +16,7 @@
 - [ADR 0032](../../architecture/decisions/0032-library-centered-web-workspace.md)：定稿原型、日常加工与阅读服务的独立验收。
 - [ADR 0033](../../architecture/decisions/0033-machine-interfaces-cover-web-capabilities.md)：机器入口的业务超集、共享应用边界及视觉交互例外。
 - [ADR 0034](../../architecture/decisions/0034-unified-processors-and-results.md)：处理器、不可变结果、覆盖、复用和证据。
-- [ADR 0028](../../architecture/decisions/0028-query-and-expansion-separation.md)、[当前 Web 设计](../../architecture/web/README.md)、[HARNESS](../../../HARNESS.md)及[计划规范](../README.md)。
+- [ADR 0028](../../architecture/decisions/0028-query-and-expansion-separation.md)、[当前 Web 设计](../../architecture/web/README.md)、[HARNESS](../../../HARNESS.md)及[计划规范](../../plans/README.md)。
 
 ## 当前事实与计划关系
 
@@ -25,7 +27,7 @@
 - 基线时主工作台对含知识的检索提交空 `purposes`，客户端合同拒绝；本轮 01 已修复并保留“仅原文”路径。随后按已确认 G3 接入独立 PDF.js 阅读模块、排版正文及会话位置；当前验收记录见 04/05。
 - 当前检索是词法匹配，`unicode61` 不提供中文词级切分，也不把中文转换为英文。同一中文 token 可以命中，连续中文长串中的子词和跨语言含义不保证命中；具体产品表现由 1.5 的合成回归核实，不能概括成“所有中文都不可检索”。
 - 前轮评估的 10 文件 / 24 项定向回归及 1 项浏览器探针只作为调查线索；探针包含对已知缺陷的断言，不是修复验收，本计划须新增正向回归。
-- [三端能力计划](../2026-10-15-interface-capability-parity/README.md)与[处理器首版](../../archive/2026-10-18-knowledge-processing-platform/README.md)的完成状态均不覆盖本轮新增的 Web 和阅读目标；不改写或归档其历史证据。
+- [三端能力计划](../2026-10-15-interface-capability-parity/README.md)与[处理器首版](../2026-10-18-knowledge-processing-platform/README.md)的完成状态均不覆盖本轮新增的 Web 和阅读目标；不改写或归档其历史证据。
 
 ## 范围与不变量
 
@@ -125,7 +127,7 @@ Owner 已授权先提交当前工作区，再实施本计划。代码工作按�
 
 下一轮重点检查：设计确认记录是否存在，实际编辑基线能否重建，中文提示是否阻断合法查询，资源与性能是否按已确认口径验收。这些检查已进入任务，不依赖重新粘贴本次审查。
 
-[上级计划目录](../README.md) · [当前 Web 指南](../../guides/web-workbench.md)
+[上级计划目录](../../plans/README.md) · [当前 Web 指南](../../guides/web-workbench.md)
 
 ## 2026-10-19 前轮切片验收（01/02 与 3.6）
 

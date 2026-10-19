@@ -22,7 +22,7 @@ React 阅读的直接行为回归在 `next-reader.test.ts` / `next-reader-bounda
 
 ## React 验证
 
-生产 Vite bundle 由 `next-workspace-fixture.ts` 装入真实同源服务；保留正常认证与 CSRF，数据仅写入系统临时的合成 home。`next-*.test.ts` 对应旧用例的业务断言，定位优先采用角色、标签及用户文字；固定引擎边界或虚拟列表测量使用明确测试标识/容器。不得通过删除业务断言、替换固定来源、自动补材料或吞掉失败来获得通过。新旧映射见 [功能对等清单](../../../docs/plans/2026-10-19-web-experience/parity.md)。
+生产 Vite bundle 由 `next-workspace-fixture.ts` 装入真实同源服务；保留正常认证与 CSRF，数据仅写入系统临时的合成 home。`next-*.test.ts` 对应旧用例的业务断言，定位优先采用角色、标签及用户文字；固定引擎边界或虚拟列表测量使用明确测试标识/容器。不得通过删除业务断言、替换固定来源、自动补材料或吞掉失败来获得通过。新旧映射见 [功能对等清单](../../../docs/archive/2026-10-19-web-experience/parity.md)。
 
 - `next-library` 在临时 catalog 中一次性生成 30,000 条有效合成元数据，验证真实查询分页、虚拟列表、范围上限、筛选、滚动与选择恢复。批量写入仅用于建立 UI 测试 fixture，不是生产入库入口或入库吞吐测试。
 - `next-knowledge-journey` 覆盖从原始 PDF、显式持久解析 / DSH 分析 / 身份核验到固定结果和证据阅读的链路，以及默认解析发布和缺模型时的恢复说明。模型与解析器均为 fake。

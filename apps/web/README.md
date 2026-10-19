@@ -4,7 +4,7 @@
 
 ## 当前实施状态
 
-正式 `/` 已使用 [src/app/](src/app/README.md) 中的 React 工作台。静态资源使用 `/assets/`，维护服务保留 `/query`。迁移期 `/next` 入口、旧 URL 别名与旧偏好兼容已经取消，界面只使用当前 React 路由和偏好。登录页、独立查询/维护与 4173 合成样本都使用同一 React 工程，各自认证和能力边界保持。Owner 已确认本版定稿；最终 Full 与离线安装结果见[Web 体验计划](../../docs/plans/2026-10-19-web-experience/README.md)。
+正式 `/` 已使用 [src/app/](src/app/README.md) 中的 React 工作台。静态资源使用 `/assets/`，维护服务保留 `/query`。迁移期 `/next` 入口、旧 URL 别名与旧偏好兼容已经取消，界面只使用当前 React 路由和偏好。登录页、独立查询/维护与 4173 合成样本都使用同一 React 工程，各自认证和能力边界保持。Owner 已确认本版定稿；最终 Full 与离线安装结果见[Web 体验计划](../../docs/archive/2026-10-19-web-experience/README.md)。
 
 新界面以 React、React Aria、Motion、TanStack Query/Virtual/Table 和自有 CSS 实现，Vite 生成离线资源。Source Sans 3 / Source Serif 4 拉丁字体随包发布，中文使用本机字体回退，不加载 CDN；许可证、版本与 CSP 结论见[前端依赖说明](../../docs/notes/web-frontend-dependencies.md)。`script-src 'self'`、`style-src 'self'` 保持，不注入运行时 `<style>`。
 

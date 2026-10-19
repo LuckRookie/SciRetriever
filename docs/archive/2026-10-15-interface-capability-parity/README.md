@@ -1,5 +1,7 @@
 # CLI / MCP 覆盖 Web 业务能力实施计划
 
+> 归档记录（2026-10-20）：Owner 已授权分组提交并归档完成计划。对应实现提交：`0f976f5`。以下保留该轮完成范围、授权语境和验收记录；历史限制不因归档消失，也不作为当前行为的真相源。当前入口见[活动计划](../../plans/README.md)和[归档导航](../README.md)。
+
 状态：已完成（当前正式 Web 业务能力范围）。日期：2026-10-15。Owner 已确认目标并授权实施。
 
 ## 目标与完成条件
@@ -43,4 +45,4 @@
 - 没有更改依赖或持久化 schema，没有执行 Git commit/push。工作区原有改动保留。未连接真实 Provider、用户 catalog、凭据或语料；离线通过不代表真实网络、MinerU、模型和机构权限已验收。
 - 已构建新代码；已有 Web/MCP 进程需重启后使用新增入口。独立命令使用本地固定配置，runtime 命令必须显式连接实际持有活任务/Browser 的服务。
 
-[上级计划目录](../README.md) · [架构决策](../../architecture/decisions/README.md) · [产品接口技术设计](../../architecture/technical/01-product-interface.md)
+[上级计划目录](../../plans/README.md) · [架构决策](../../architecture/decisions/README.md) · [产品接口技术设计](../../architecture/technical/01-product-interface.md)

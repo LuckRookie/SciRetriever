@@ -58,7 +58,7 @@ Owner 允许蓝白、墨绿、暖白等色系切换；主题扩展遵循同一�
 
 - [产品需求](../../docs/architecture/requirements.md)、[ADR 0032](../../docs/architecture/decisions/0032-library-centered-web-workspace.md)与 [ADR 0033](../../docs/architecture/decisions/0033-machine-interfaces-cover-web-capabilities.md)：产品边界、库中心 Web 和三端能力关系。
 - [当前 Web 设计说明与定稿原型](../../docs/architecture/web/README.md)：Owner 确认的布局、视觉和交互依据；原型中的文献、统计、任务与 Browser 画面是示例，不是科学内容、运行结果或产品能力证明。
-- [Web 使用指南](../../docs/guides/web-workbench.md)和 [React 应用实现](src/app/README.md)：当前功能与界面的实现依据。正式 `/` 使用React；只保留当前界面入口与偏好，不维护迁移期 `/next` 或旧前端兼容。最终验收见[实施计划](../../docs/plans/2026-10-19-web-experience/README.md)。4173合成样本不替代正式入口和定稿原型。
+- [Web 使用指南](../../docs/guides/web-workbench.md)和 [React 应用实现](src/app/README.md)：当前功能与界面的实现依据。正式 `/` 使用React；只保留当前界面入口与偏好，不维护迁移期 `/next` 或旧前端兼容。最终验收见[实施计划](../../docs/archive/2026-10-19-web-experience/README.md)。4173合成样本不替代正式入口和定稿原型。
 
 ## Product Principles
 

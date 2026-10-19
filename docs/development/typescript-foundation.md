@@ -22,7 +22,7 @@ pnpm full
 `contract-validation.test.ts` 和 `canonical-encoding.test.ts`。不要用块、阶段或任务顺序命名测试文件或
 suite。
 
-Web前端按[ADR 0036](../architecture/decisions/0036-react-web-frontend.md)采用React、React Aria、Motion、TanStack及自有CSS；Quick同时覆盖 `.ts` / `.tsx` 与测试strict类型。`pnpm --filter @sciretriever/web dev` 启动Vite热更新，`SCIRETRIEVER_WEB_API_ORIGIN` 指向已经正常启动并认证的loopback工作台。开发代理仍走同一登录与client grant；测试不增加免认证模式。生产资源、阅读worker和字体离线随包交付；精确版本、补丁及许可见[前端依赖说明](../notes/web-frontend-dependencies.md)。默认入口和旧代码清理的当前阶段见[Web计划](../plans/2026-10-19-web-experience/README.md)。
+Web前端按[ADR 0036](../architecture/decisions/0036-react-web-frontend.md)采用React、React Aria、Motion、TanStack及自有CSS；Quick同时覆盖 `.ts` / `.tsx` 与测试strict类型。`pnpm --filter @sciretriever/web dev` 启动Vite热更新，`SCIRETRIEVER_WEB_API_ORIGIN` 指向已经正常启动并认证的loopback工作台。开发代理仍走同一登录与client grant；测试不增加免认证模式。生产资源、阅读worker和字体离线随包交付；精确版本、补丁及许可见[前端依赖说明](../notes/web-frontend-dependencies.md)。默认入口和旧代码清理的实施记录见[归档计划](../archive/2026-10-19-web-experience/README.md)。
 
 本机真实/一次性测试使用 Git 忽略的 `sandbox/`；场景、运行材料和报告的约定见[测试目录说明](../../tests/README.md)。
 `vitest.config.mjs` 在默认排除项之外排除 `sandbox/**`，`pnpm test/full` 及根目录直接调用 Vitest 均不收集其中的用例；

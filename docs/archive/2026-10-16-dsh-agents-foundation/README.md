@@ -1,5 +1,7 @@
 # DSH 统一 Agents 底座
 
+> 归档记录（2026-10-20）：Owner 已授权分组提交并归档完成计划。对应实现提交：`0f976f5`。以下保留该轮完成范围、授权语境和验收记录；历史限制不因归档消失，也不作为当前行为的真相源。当前入口见[活动计划](../../plans/README.md)和[归档导航](../README.md)。
+
 状态：Completed（执行底座范围；真实内容质量对照未包含）。日期：2026-10-16。Primary owner：当前执行者。
 
 Owner 已确认 DSH 应作为全项目唯一 Agents 底座，并授权先完成基础接入。目标是完整承接原单次文本/结构化/图像/工具调用，统一受控多轮会话，移除 Browser 专用默认与旧运行时生产路径。依据 [ADR 0031](../../architecture/decisions/0031-dsh-backed-agent-capabilities.md)、[需求](../../architecture/requirements.md)及 [HARNESS](../../../HARNESS.md)。
@@ -27,6 +29,6 @@ Owner 已确认 DSH 应作为全项目唯一 Agents 底座，并授权先完成�
 
 当前进度：统一底座及所有既有消费者接入完成。相关 16 文件 / 197 项、Quick 和最终 Full 通过；Full 为 226 文件 / 1793 项通过、40 项按既有环境条件跳过，包含最终构建。精确结果见结果块和 `/tmp/sciretriever-dsh-foundation-UxPNgY/full.log`。文档链接与 diff 检查通过，依赖/锁文件无本轮变化，无 schema、真实数据或配置迁移，无 Git 提交。
 
-[上级计划目录](../README.md)
+[上级计划目录](../../plans/README.md)
 
 交付边界：DshAgentRuntime 是唯一实现，AgentRuntime 为同一类的兼容别名；close() 现在可等待底座清理，消费者应 await。现有分析仍按原有单次/分段算法执行，但全部模型调用进入 DSH；通用会话可供后续业务能力接入。没有把本次框架与协议验证写成科研内容质量全面提升。

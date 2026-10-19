@@ -9,6 +9,6 @@
 
 旧 DOM 工作台、旧阅读框架和根入口已经删除。共享协议解析、任务投影及候选状态在 `app/data/`，合成样本状态在 `app/features/sample/`，不通过旧路径兼容导出。
 
-布局与设计见 [Web 基准](../../../docs/architecture/web/README.md)，当前功能见 [使用指南](../../../docs/guides/web-workbench.md)，切换状态见 [活动计划](../../../docs/plans/2026-10-19-web-experience/README.md)。
+布局与设计见 [Web 基准](../../../docs/architecture/web/README.md)，当前功能见 [使用指南](../../../docs/guides/web-workbench.md)，切换验收见 [归档记录](../../../docs/archive/2026-10-19-web-experience/README.md)。
 
 [上级目录](../README.md) · [项目 README](../../../README.md)

@@ -2,6 +2,24 @@
 
 本目录保存已完成、被替代或历史设计材料，不定义当前产品行为。不要把归档日期或计划状态当成当前能力已经验收。
 
+## 2026-10-20 新归档
+
+Owner 已授权将当前工作区分组提交，并归档已完成计划。以下 9 份计划共 29 份文档已移入本目录；归档保留历史证据及限制，不移动定稿原型、现行 ADR 或尚未实施的提案。
+
+| 归档计划 | 完成范围与验收 |
+| --- | --- |
+| [Web 体验重建](2026-10-19-web-experience/README.md) | React 唯一根入口、旧前端与 `/next` 兼容删除、阅读/加工/Browser/设置及性能修复；最终 Full 285 文件 / 1,981 项无跳过，减少动效 36 文件 / 84 项、144 组页面矩阵及便携包离线验收通过。 |
+| [DSH 分析会话与旧执行路径退役](2026-10-19-dsh-analysis-sessions/README.md) | 持续阅读、看图与回查；指定论文真实验收及 Owner 授权的 8 项旧结果清理完成；当轮 Full 247 文件 / 1,880 项通过。 |
+| [Web 远程访问与认证](2026-10-19-web-remote-access/README.md) | 默认对外监听、统一登录与自动密钥；当轮 Full 245 文件 / 1,885 项通过。 |
+| [Web 后续审查修复](2026-10-19-web-followup-fixes/README.md) | 18 项审查问题及复核边界修复；当轮 Full 242 文件 / 1,874 项通过。 |
+| [Web 大库读取与可靠性修复](2026-10-19-web-large-library-fixes/README.md) | 35,177 篇隔离副本复测、分页/文档/会话问题修复；当轮 Full 241 文件 / 1,867 项通过。 |
+| [Web 日常能力与阅读体验完善](2026-10-18-web-capability-and-reading/README.md) | G1/G2/G3 确认，检索、加工、结果与阅读生产接入；三端一致性、安装及当轮 Full 240 文件 / 1,861 项通过。 |
+| [DSH 统一 Agents 底座](2026-10-16-dsh-agents-foundation/README.md) | 单次调用与通用会话统一；当轮 Full 226 文件 / 1,793 项通过，真实质量对照未包含在该计划。 |
+| [CLI/MCP 覆盖 Web 业务能力](2026-10-15-interface-capability-parity/README.md) | 两个机器入口分别覆盖当时的 Web 业务范围；当轮 Full 225 文件 / 1,785 项通过。 |
+| [定稿 Web 原型接入](2026-10-15-library-web-adaptation/README.md) | 当时既有能力按定稿原型适配；当轮 Full 221 文件 / 1,769 项通过。后续处理器与阅读由后续计划承接。 |
+
+活动实施入口见[计划规范](../plans/README.md)，可信全文提案仍留在[活动提案](../proposals/2026-10-19-trusted-fulltext-and-processor-inputs/README.md)。
+
 - [文献知识加工首版](2026-10-18-knowledge-processing-platform/README.md)：2026-10-18 Completed；三块精简计划与提案归档，Full 1,809 项通过、40 项条件跳过，补充适配回归通过；真实质量评估未执行。
 
 - [Agent 能力工具化与执行基础选型](2026-10-13-agent-runtime-options/README.md)：2026-10-13 已收敛为 DSH/Cordis，原比较提案由 ADR 0031 与已完成的 DSH 接入承接；该目录仅保留选型阶段的证据。

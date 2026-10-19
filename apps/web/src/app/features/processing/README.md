@@ -6,4 +6,4 @@ G1 记录/标签表单固定选择范围，校验字段、单位与读取策略�
 
 `Evidence.tsx` 按来源走现有读取边界：处理结果使用 processors，文档使用 evidence-resolve，知识与综合使用 synthesis-source。综合的来源内容、输入清单和断言 hash 在递归核对时全部保留；原 PDF 不可复核时明示来源降级。旧知识库的证据读取不依赖处理器 schema。
 
-[应用源码](../../README.md) · [Web 体验计划08](../../../../../../docs/plans/2026-10-19-web-experience/08-use-and-processing.md)
+[应用源码](../../README.md) · [加工迁移记录（归档）](../../../../../../docs/archive/2026-10-19-web-experience/08-use-and-processing.md)
