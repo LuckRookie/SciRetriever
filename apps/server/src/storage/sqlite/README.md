@@ -21,3 +21,5 @@ schema-v*.ts 与 *-migration.ts 维护版本/迁移；真实数据库不进入�
 [上级目录](../README.md) · [项目 README](../../../../../README.md)
 
 - `schema-v10.ts`、`processor-migration.ts`、`processor-engine.ts`：显式 v9→v10 迁移、结果依赖保护与记录/FTS 投影。
+
+只读对象图由 `bootstrap/application.ts` 固定组装普通查询 worker 与共享检索 worker，隔离冷索引校验对文献读取的排队影响；材料与知识 Context 共用一个检索连接 owner。校验规则、显式重建和写入 admission 不变，服务 drain 后由应用统一关闭。

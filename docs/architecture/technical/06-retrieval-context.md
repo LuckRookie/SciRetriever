@@ -556,6 +556,8 @@ Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要
 
 ### 4.6 并发、取消与性能边界
 
+当前 QueryApplication 为普通材料／库读取和检索各持有一个只读 SQLite worker；材料与知识检索共用后者，数量不随请求增加。冷检索的同步完整性校验及 `data_version` 变化后的再校验保持原义，不再占用库读取队列。应用关闭先 drain 两个 Context service，再关闭检索 worker 和材料 reader；启动失败复用同一清理路径。维护 Application 的索引写入继续使用原写 worker 与 admission，不跨连接移动 generation/repair 状态。HTTP 取消不终止共享 worker，已发送的同步 SQLite 工作仍需结算。
+
 一次读取内部使用已提交 snapshot 和固定 artifact 引用，不混合两个 current 版本。跨页是否固定数据库 snapshot 取决于协议；现有 Library 分页只保证单页一致，新协议若固定索引 generation也不能假称底层业务永不变化。
 
 取消停止继续扫描和资源展开；已交付的读取片段无需回滚。读失败与数据库不可用不能当成零结果。重复查询通常不要求 durable 幂等键；响应变化可来自新的显式维护提交，结果应带版本和覆盖以供识别。

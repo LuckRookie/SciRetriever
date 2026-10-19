@@ -5,7 +5,16 @@ import { mountExtractionPreparation } from "../query.js";
 import { node, click, button } from "./dom.js";
 import type { AppContext } from "./types.js";
 export function renderSettings(ctx: AppContext): void {
-  if (ctx.root.dataset.mounted === "true") return;
+  const requested = new URL(location.href).searchParams.get("setting");
+  if (ctx.root.dataset.mounted === "true") {
+    if (requested)
+      ctx.root
+        .querySelector<HTMLButtonElement>(
+          `[data-setting="${CSS.escape(requested)}"]`,
+        )
+        ?.click();
+    return;
+  }
   ctx.root.innerHTML =
     '<div class="pg"><div class="pgin settings-page"><h1 class="ptitle">设置</h1><div class="vtabs" id="setting-tabs"></div><div id="settings-content"></div></div></div>';
   const template = node<HTMLTemplateElement>("#configuration-template");
@@ -64,7 +73,7 @@ export function renderSettings(ctx: AppContext): void {
       /* The selected appearance still applies for this tab. */
     }
   };
-  choose("paths");
+  choose(tabs.some(([id]) => id === requested) ? requested! : "paths");
   ctx.root.dataset.mounted = "true";
 }
 export function renderAdvanced(ctx: AppContext): void {

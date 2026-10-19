@@ -459,6 +459,12 @@ export class ProcessingTaskService {
             /^[a-z][a-z0-9-]{1,95}$/u.test(error.code)
               ? error.code
               : "processing-failed";
+          const unconfigured = [
+            "knowledge-unconfigured",
+            "agent-role-unconfigured",
+            "agent-unconfigured",
+            "agent-configuration",
+          ].includes(code);
           throw new QueueTargetFailureError({
             code,
             reason:
@@ -468,9 +474,12 @@ export class ProcessingTaskService {
               typeof error.reason === "string" &&
               /^agent-[a-z-]{1,56}$/u.test(error.reason)
                 ? error.reason
-                : "The requested product operation did not complete.",
-            action:
-              "Read the failure and retained artifacts before explicitly retrying.",
+                : unconfigured
+                  ? "The analysis model binding is missing or unavailable."
+                  : "The requested product operation did not complete.",
+            action: unconfigured
+              ? "Configure the analysis model, restart the service, then explicitly retry the task."
+              : "Read the failure and retained artifacts before explicitly retrying.",
             retryable: !!(
               error &&
               typeof error === "object" &&

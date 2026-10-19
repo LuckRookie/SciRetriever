@@ -22,6 +22,7 @@ import {
   processorExportFile,
   type ResultDescription,
 } from "./processor-data.js";
+import { title as literatureTitle } from "./library.js";
 import { renderProcessorEvidence } from "./processor-evidence.js";
 import type { AppContext } from "./types.js";
 
@@ -35,6 +36,7 @@ interface SelectedRecord {
   ref: ProcessorResultRef;
   recordId: string;
   literatureIds: string[];
+  associated: boolean;
 }
 interface ResultViewState {
   offset: number;
@@ -49,6 +51,7 @@ interface ResultViewState {
   };
   selected: Map<string, SelectedRecord>;
   descriptions: Map<string, ResultDescription>;
+  recordSources: Map<string, string[]>;
   question: string;
   policy: string;
   submission: null | {
@@ -93,6 +96,7 @@ function createView(): ResultViewState {
     applied: { filters: [], sort: null },
     selected: new Map(),
     descriptions: new Map(),
+    recordSources: new Map(),
     question: "",
     policy: "require-all",
     submission: null,
@@ -472,6 +476,7 @@ async function renderDetail(
     fields: string[] = [],
     schema: Record<string, unknown> = {},
     nextOffset: number | null = null;
+  let visibleSources = new Map<string, string[]>();
   let selectionBusy = false;
   const status = node("#result-status", host);
   const describe = async (id: string, signal: AbortSignal) => {
@@ -569,7 +574,7 @@ async function renderDetail(
       [...state.selected.values()].flatMap((s) => s.literatureIds),
     );
     node("#result-selection-count", host).textContent =
-      `已选 ${state.selected.size} 条记录 · 来自 ${sources.size} 篇文献（跨页保留）`;
+      `已选 ${state.selected.size} 条记录 · 来自 ${sources.size} 篇文献（${[...state.selected.values()].some((s) => s.associated) ? "含无证据记录的关联输入；" : ""}跨页保留）`;
     for (const input of host.querySelectorAll<HTMLInputElement>(
       "[data-select-record]",
     )) {
@@ -597,18 +602,15 @@ async function renderDetail(
           continue;
         }
         const ref = refs.get(row.result_id)!;
-        const resolved = await resolveProcessorEvidence(
-          ctx.api,
-          { kind: "result", ...ref, record_id: row.record_id, pointer: "" },
-          ctx.signal,
-        );
+        const literatureIds = await rowSources(row, ctx.signal);
         if (ctx.signal.aborted) return;
         state.selected.set(rowKey(row), {
           ref,
           recordId: row.record_id,
-          literatureIds: resolved.literatureIds.length
-            ? resolved.literatureIds
+          literatureIds: literatureIds.length
+            ? literatureIds
             : [...state.descriptions.get(row.result_id)!.literatureIds],
+          associated: !literatureIds.length,
         });
       }
     } catch (error) {
@@ -830,6 +832,32 @@ async function renderDetail(
     state.direction = sortControl.value;
   };
   const sourceTitles = new Map<string, string>();
+  const sourceKey = (row: ResultRow) =>
+    JSON.stringify([
+      row.result_id,
+      refs.get(row.result_id)!.content_sha256,
+      row.record_id,
+    ]);
+  const rowSources = async (row: ResultRow, signal: AbortSignal) => {
+    const key = sourceKey(row);
+    const cached = state.recordSources.get(key);
+    if (cached) return cached;
+    const resolved = await resolveProcessorEvidence(
+      ctx.api,
+      {
+        kind: "result",
+        ...refs.get(row.result_id)!,
+        record_id: row.record_id,
+        pointer: "",
+      },
+      signal,
+    );
+    signal.throwIfAborted();
+    if (state.recordSources.size >= 200)
+      state.recordSources.delete(state.recordSources.keys().next().value!);
+    state.recordSources.set(key, resolved.literatureIds);
+    return resolved.literatureIds;
+  };
   const sourceTitle = async (id: string, signal: AbortSignal) => {
     const cached = sourceTitles.get(id);
     if (cached) return cached;
@@ -841,7 +869,7 @@ async function renderDetail(
         ));
       if (detail.literature.literature_id !== id)
         throw new Error("文献身份不匹配");
-      const title = detail.literature.metadata.title || "未命名文献";
+      const title = literatureTitle(detail);
       if (!signal.aborted) {
         ctx.details.set(id, detail);
         sourceTitles.set(id, title);
@@ -859,7 +887,8 @@ async function renderDetail(
       rows
         .map((row, index) => {
           const d = state.descriptions.get(row.result_id)!;
-          return `<tr><td><input type="checkbox" data-select-record="${e(rowKey(row))}" aria-label="选择记录 ${e(row.record_id)}"></td><td><span class="result-source-title">${e(d.literatureIds[0] ? (sourceTitles.get(d.literatureIds[0]) ?? d.literatureIds[0]) : "没有关联文献")}</span><span class="sub">${d.literatureIds.length} 篇来源文献 · ${e(row.record_id)}</span>${d.literatureIds.length > 1 ? `<details data-result-sources="${e(row.result_id)}"><summary>查看全部来源</summary><div></div></details>` : ""}<div class="row-tools"><button class="btn q sm" data-result-export="${e(row.result_id)}">完整结果</button></div></td>${columns.map((field) => `<td>${Object.hasOwn(row.payload, field) ? `<button class="value" data-result-evidence="${index}" data-result-field="${e(field)}" data-evidence-key="${e(JSON.stringify([row.result_id, row.record_id, field]))}">${e(display(row.payload[field]!))}</button>${row.missing[field] || row.missing[pointerFor(field)] ? `<span class="sub">${e(row.missing[field] ?? row.missing[pointerFor(field)])}</span>` : ""}` : '<span class="sub">无此字段</span>'}</td>`).join("")}<td><span class="tag ${d.coverage.some((c) => c.status !== "complete") ? "yellow" : "gray"}">${d.coverage.some((c) => c.status !== "complete") ? "部分覆盖" : "完整"}</span><details><summary>字段详情</summary><pre>${e(JSON.stringify({ payload: row.payload, missing: row.missing }, null, 2).slice(0, 8000))}</pre></details></td></tr>`;
+          const sources = visibleSources.get(sourceKey(row))!;
+          return `<tr><td><input type="checkbox" data-select-record="${e(rowKey(row))}" aria-label="选择记录 ${e(row.record_id)}"></td><td><span class="result-source-title">${e(sources[0] ? (sourceTitles.get(sources[0]) ?? sources[0]) : "没有已验证来源")}</span><span class="sub">${sources.length} 篇来源文献 · ${e(row.record_id)}</span>${sources.length > 1 ? `<details data-result-sources="${index}"><summary>查看全部来源</summary><div></div></details>` : ""}<div class="row-tools"><button class="btn q sm" data-result-export="${e(row.result_id)}">完整结果</button></div></td>${columns.map((field) => `<td>${Object.hasOwn(row.payload, field) ? `<button class="value" data-result-evidence="${index}" data-result-field="${e(field)}" data-evidence-key="${e(JSON.stringify([row.result_id, row.record_id, field]))}">${e(display(row.payload[field]!))}</button>${row.missing[field] || row.missing[pointerFor(field)] ? `<span class="sub">${e(row.missing[field] ?? row.missing[pointerFor(field)])}</span>` : ""}` : '<span class="sub">无此字段</span>'}</td>`).join("")}<td><span class="tag ${d.coverage.some((c) => c.status !== "complete") ? "yellow" : "gray"}">${d.coverage.some((c) => c.status !== "complete") ? "部分覆盖" : "完整"}</span><details><summary>字段详情</summary><pre>${e(JSON.stringify({ payload: row.payload, missing: row.missing }, null, 2).slice(0, 8000))}</pre></details></td></tr>`;
         })
         .join("") ||
       `<tr><td colspan="${columns.length + 3}">当前范围没有匹配记录；空结果不代表全文没有相关信息。</td></tr>`
@@ -870,8 +899,9 @@ async function renderDetail(
       sources.ontoggle = () => {
         const list = sources.querySelector("div")!;
         if (!sources.open || list.childNodes.length) return;
-        for (const id of state.descriptions.get(sources.dataset.resultSources!)!
-          .literatureIds) {
+        for (const id of visibleSources.get(
+          sourceKey(rows[Number(sources.dataset.resultSources)]!),
+        )!) {
           const link = button(sourceTitles.get(id) ?? id, () =>
             ctx.openPaper(id),
           );
@@ -976,11 +1006,19 @@ async function renderDetail(
       for (const id of descriptions) await describe(id, signal);
       if (!schema.properties && refs.size)
         schema = (await describe(refs.keys().next().value!, signal)).schema;
+      let sourceOffset = 0;
+      const pageSources = new Map<string, string[]>();
+      await Promise.all(
+        Array.from({ length: Math.min(4, page.length) }, async () => {
+          while (sourceOffset < page.length && !signal.aborted) {
+            const row = page[sourceOffset++]!;
+            pageSources.set(sourceKey(row), await rowSources(row, signal));
+          }
+        }),
+      );
       const firstSources = [
         ...new Set(
-          descriptions.flatMap(
-            (id) => state.descriptions.get(id)?.literatureIds.slice(0, 1) ?? [],
-          ),
+          page.flatMap((row) => pageSources.get(sourceKey(row))!.slice(0, 1)),
         ),
       ];
       await Promise.all(
@@ -991,6 +1029,7 @@ async function renderDetail(
       );
       if (signal.aborted) return;
       rows = page;
+      visibleSources = pageSources;
       fields = listField(response, "fields").map((v) => {
         if (typeof v !== "string") throw new Error("字段回执无效");
         return v;

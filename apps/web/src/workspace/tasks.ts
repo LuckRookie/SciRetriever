@@ -319,6 +319,17 @@ export async function showTask(
     }
     for (const result of task.results) {
       const saved = record(result.result, "processing result");
+      if (
+        result.operation === "parse-documents" &&
+        typeof saved.default_updated === "boolean"
+      ) {
+        const note = document.createElement("p");
+        note.className = "parse-default-status";
+        note.textContent = saved.default_updated
+          ? "解析版本已保存，并已设为默认全文。"
+          : "解析版本已保存；默认全文未切换（默认版本已变化或本次未请求切换）。可打开本次固定结果核对；如需切换，请重新读取当前版本后操作。";
+        results.append(note);
+      }
       const target = task.targets.find(
         (item) => item.target_id === result.target_id,
       );
@@ -374,6 +385,27 @@ export async function showTask(
       section.open = label === "失败";
       section.innerHTML = `<summary>${label} ${values.length} 项</summary>`;
       for (const value of values) {
+        if (label === "失败") {
+          const serialized = JSON.stringify(value);
+          if (
+            [
+              "knowledge-unconfigured",
+              "agent-role-unconfigured",
+              "agent-unconfigured",
+              "agent-configuration",
+            ].some((code) => serialized.includes(`"${code}"`))
+          ) {
+            const guidance = document.createElement("p");
+            guidance.textContent =
+              "分析模型尚未配置或配置不可用。请在设置的模型与角色绑定中配置分析模型，保存后重启 Web 服务，再回到此任务显式重试。直接重试不会修复配置。";
+            section.append(
+              guidance,
+              button("前往模型设置", () =>
+                ctx.navigate("set", { setting: "models" }),
+              ),
+            );
+          }
+        }
         const pre = document.createElement("pre");
         pre.textContent = JSON.stringify(value, null, 2);
         section.append(pre);

@@ -50,11 +50,17 @@ export const emptyQuery = (): LibraryQuery =>
 export function title(item: LiteratureSearchItem): string {
   // Bibliographic sources may retain inline formatting. Only strip known
   // formatting tags for this plain-text label; never insert source HTML.
+  // Only decode entity tokens, never parse source markup as DOM.
+  const decoder = document.createElement("textarea");
+  const decoded = item.literature.metadata.title?.replace(
+    /&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);/giu,
+    (entity) => {
+      decoder.innerHTML = entity;
+      return decoder.value;
+    },
+  );
   return (
-    item.literature.metadata.title?.replace(
-      /<\/?(?:i|b|em|strong|sub|sup)\s*>/giu,
-      "",
-    ) || "未命名文献"
+    decoded?.replace(/<\/?(?:i|b|em|strong|sub|sup)\s*>/giu, "") || "未命名文献"
   );
 }
 export function authors(item: LiteratureSearchItem): string {
@@ -184,8 +190,14 @@ export async function renderLibrary(ctx: AppContext): Promise<void> {
   const root = node("#library-results", ctx.root),
     count = node("#library-status", ctx.root),
     more = node<HTMLButtonElement>("#library-more", ctx.root);
+  const scroll = node(".pg", ctx.root);
+  scroll.onscroll = () => {
+    if (!ctx.signal.aborted) s.scroll = scroll.scrollTop;
+  };
+  const queryKey = () => JSON.stringify([s.query, s.sort]);
   let generation = 0;
   const syncSelection = () => {
+    history.replaceState({ ...history.state, selected: [...s.selected] }, "");
     root.classList.toggle("selecting", s.selected.size > 0);
     for (const box of all<HTMLInputElement>("[data-ck]", root)) {
       const selected = s.selected.has(box.dataset.ck!);
@@ -269,19 +281,41 @@ export async function renderLibrary(ctx: AppContext): Promise<void> {
       url,
     );
   };
-  const reload = async (append: boolean) => {
+  const reload = async (append: boolean, restore = false) => {
     if (ctx.signal.aborted) return;
     rememberQuery();
     const revision = ++generation;
+    const key = queryKey();
+    const visibleCount = restore ? s.items.length : 0;
+    if (!append && !restore) {
+      s.scroll = 0;
+      scroll.scrollTop = 0;
+      s.loadedKey = null;
+    }
     more.disabled = true;
     count.textContent = "正在读取文献…";
     try {
       const page = await search(ctx, append ? s.cursor : null);
+      while (
+        restore &&
+        page.cursor &&
+        page.items.length < visibleCount &&
+        !ctx.signal.aborted &&
+        generation === revision
+      ) {
+        const next = await search(ctx, page.cursor);
+        page.items.push(...next.items);
+        page.cursor = next.cursor;
+        page.total = next.total;
+      }
       if (ctx.signal.aborted || generation !== revision) return;
       s.items = append ? [...s.items, ...page.items] : page.items;
       s.total = page.total;
       s.cursor = page.cursor;
+      s.loadedKey = key;
+      const position = s.scroll;
       renderRows();
+      if (restore) scroll.scrollTop = position;
       ctx.updateNavigation();
     } catch (error) {
       if (!ctx.signal.aborted && generation === revision) {
@@ -414,7 +448,11 @@ export async function renderLibrary(ctx: AppContext): Promise<void> {
     },
     ctx.root,
   );
-  await reload(false);
+  if (s.loadedKey === queryKey()) {
+    renderRows();
+    scroll.scrollTop = s.scroll;
+    await reload(false, true);
+  } else await reload(false);
   if (s.peek && !ctx.signal.aborted) await openPeek(ctx, s.peek);
 }
 function renderSelection(ctx: AppContext): void {
@@ -433,6 +471,7 @@ function renderSelection(ctx: AppContext): void {
     "#clr",
     () => {
       ctx.library.selected.clear();
+      history.replaceState({ ...history.state, selected: [] }, "");
       ctx.refresh();
     },
     host,

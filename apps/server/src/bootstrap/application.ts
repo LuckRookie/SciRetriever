@@ -1708,6 +1708,7 @@ export async function createQueryApplication(
   const database = new SqliteWorker(catalogPath, undefined, {
     readOnly: true,
   });
+  let retrievalDatabase: SqliteWorker | undefined;
   let files: FileStore | undefined;
   let documentRead: DocumentReadService | null = null;
   let extractionPreparation: ExtractionPreparationService | null = null;
@@ -1726,6 +1727,7 @@ export async function createQueryApplication(
         async () => processorRead?.close(),
         async () => knowledgeContext?.close(),
         async () => context?.close(),
+        async () => retrievalDatabase?.close(),
         async () => extractionPreparation?.close(),
         async () => knowledgeRead?.close(),
         async () => synthesisPreparation?.close(),
@@ -1798,14 +1800,20 @@ export async function createQueryApplication(
       documentRead,
       literature,
     );
+    // Retrieval performs synchronous index integrity inspection. Isolate its
+    // reader from ordinary library/material reads; share one bounded worker
+    // between both retrieval services, never one worker per request.
+    const retrievalStorage = [4, 5, 6, 7, 8, 9, 10].includes(
+      Number(preflight.schema.schema_version),
+    )
+      ? new RetrievalStorageClient(
+          (retrievalDatabase = new SqliteWorker(catalogPath, undefined, {
+            readOnly: true,
+          })),
+        )
+      : null;
     context = new MaterialContextService(
-      preflight.schema.schema_version === 4 ||
-      preflight.schema.schema_version === 5 ||
-      preflight.schema.schema_version === 6 ||
-      preflight.schema.schema_version === 7 ||
-      [8, 9, 10].includes(Number(preflight.schema.schema_version))
-        ? new RetrievalStorageClient(database)
-        : null,
+      retrievalStorage,
       documentRead,
       literature,
     );
@@ -1836,7 +1844,7 @@ export async function createQueryApplication(
     if ([8, 9, 10].includes(Number(preflight.schema.schema_version)))
       knowledgeContext = new KnowledgeContextService(
         context,
-        new RetrievalStorageClient(database),
+        retrievalStorage!,
         synthesisRead,
       );
     return {

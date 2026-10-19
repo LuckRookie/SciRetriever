@@ -37,6 +37,8 @@ export interface LibraryState {
   peek: string | null;
   views: SavedView[];
   viewId: string;
+  loadedKey: string | null;
+  scroll: number;
 }
 export interface AppContext {
   api: WorkbenchApi;
@@ -47,6 +49,13 @@ export interface AppContext {
   processor: ProcessorFormState;
   processorResults: ProcessorResultsState;
   reading: ReadingState;
+  synthesis: {
+    open: boolean;
+    question: string;
+    policy: string;
+    ids: string[];
+    scopeKey: string;
+  };
   details: Map<string, LiteratureDetail>;
   navigate(section: Section, parameters?: Record<string, string>): void;
   openPaper(

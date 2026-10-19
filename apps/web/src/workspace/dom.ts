@@ -109,3 +109,92 @@ export function dismissOverlay(): boolean {
   overlay.replaceChildren();
   return true;
 }
+
+/** One lifecycle for dialogs, drawers and Browser overlays, including async content. */
+export function installOverlayFocus(): void {
+  const overlay = node("#overlay");
+  let dialog: HTMLElement | null = null;
+  let previous: HTMLElement | null = null;
+  let lastOutside =
+    document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+  const inert = new Map<HTMLElement, boolean>();
+  const focusable = () =>
+    dialog
+      ? all<HTMLElement>(
+          "button,input,select,textarea,a[href],summary,[tabindex]",
+          dialog,
+        ).filter(
+          (el) =>
+            el.tabIndex >= 0 &&
+            !el.matches(":disabled") &&
+            el.getClientRects().length > 0,
+        )
+      : [];
+  const focus = () =>
+    (focusable()[0] ?? dialog)?.focus({ preventScroll: true });
+  new MutationObserver(() => {
+    const next = overlay.querySelector<HTMLElement>('[role="dialog"]');
+    if (next === dialog) return;
+    if (next) {
+      if (!dialog) {
+        previous =
+          document.activeElement instanceof HTMLElement &&
+          !overlay.contains(document.activeElement)
+            ? document.activeElement
+            : lastOutside;
+        for (const sibling of all<HTMLElement>("body > *")) {
+          if (sibling === overlay || sibling.contains(overlay)) continue;
+          inert.set(sibling, sibling.inert);
+          sibling.inert = true;
+        }
+      }
+      dialog = next;
+      dialog.setAttribute("aria-modal", "true");
+      dialog.tabIndex = -1;
+      if (!dialog.contains(document.activeElement)) focus();
+    } else {
+      dialog = null;
+      for (const [el, value] of inert) el.inert = value;
+      inert.clear();
+      const target = previous?.isConnected
+        ? previous
+        : previous?.id
+          ? document.getElementById(previous.id)
+          : null;
+      (target ?? document.querySelector<HTMLElement>("[data-module]"))?.focus({
+        preventScroll: true,
+      });
+      previous = null;
+    }
+  }).observe(overlay, { childList: true, subtree: true });
+  document.addEventListener("keydown", (event) => {
+    if (!dialog || event.key !== "Tab") return;
+    const items = focusable();
+    const first = items[0],
+      last = items.at(-1);
+    if (!first) {
+      event.preventDefault();
+      focus();
+    } else if (
+      event.shiftKey &&
+      (document.activeElement === first || document.activeElement === dialog)
+    ) {
+      event.preventDefault();
+      last!.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  document.addEventListener("focusin", (event) => {
+    if (
+      !dialog &&
+      event.target instanceof HTMLElement &&
+      !overlay.contains(event.target)
+    )
+      lastOutside = event.target;
+    if (dialog && !dialog.contains(event.target as Node)) focus();
+  });
+}

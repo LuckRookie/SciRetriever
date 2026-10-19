@@ -339,16 +339,34 @@ export async function operate(
                 const d = await detail(ctx, id),
                   asset = d.primary_pdf?.asset;
                 if (!asset) throw new Error("缺少 PDF");
+                const source = {
+                  literature_id: id,
+                  asset_id: asset.asset_id,
+                  asset_sha256: asset.sha256,
+                };
+                const current =
+                  operation === "parse"
+                    ? parseDocumentReadResult(
+                        "default",
+                        (
+                          await ctx.api.query(
+                            "document-default",
+                            source,
+                            ctx.signal,
+                          )
+                        ).result,
+                        source,
+                      )
+                    : null;
                 operations.push(
                   operation === "parse"
                     ? {
                         operation: "parse-documents",
                         request: parseDocumentRequest({
-                          literature_id: id,
-                          asset_id: asset.asset_id,
-                          asset_sha256: asset.sha256,
+                          ...source,
                           mode: "reparse",
-                          expected_default_revision: null,
+                          expected_default_revision:
+                            current?.default?.revision ?? null,
                         }),
                       }
                     : await identityOperation(ctx, id),

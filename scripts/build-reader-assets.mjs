@@ -1,9 +1,67 @@
 import { build } from "esbuild";
-import { cp, mkdir, copyFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  copyFile,
+  mkdtemp,
+  readdir,
+  rename,
+  rm,
+} from "node:fs/promises";
 import { resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 
 export async function buildReaderAssets(outdir) {
+  await mkdir(outdir, { recursive: true });
+  // Concurrent package tests may read the existing output while another build
+  // refreshes it. fs.cp removes overwritten files first, exposing a missing
+  // asset window. Build outside the published paths, then replace whole files.
+  const staging = await mkdtemp(
+    resolve(tmpdir(), "sciretriever-reader-build-"),
+  );
+  let publication;
+  let sequence = 0;
+  const publish = async (source, target) => {
+    await mkdir(target, { recursive: true });
+    for (const entry of await readdir(source, { withFileTypes: true })) {
+      const from = resolve(source, entry.name),
+        to = resolve(target, entry.name);
+      if (entry.isDirectory()) await publish(from, to);
+      else {
+        // Extensionless, outside reader/** and the package's *.js/css/html
+        // globs. This also keeps rename on the destination filesystem.
+        const file = resolve(publication, String(sequence++));
+        await copyFile(from, file);
+        await rename(file, to);
+      }
+    }
+  };
+  const failures = [];
+  try {
+    await prepareReaderAssets(staging);
+    publication = await mkdtemp(resolve(outdir, ".reader-publish-"));
+    await publish(staging, outdir);
+  } catch (error) {
+    failures.push(error);
+  }
+  const cleanup = await Promise.allSettled(
+    [staging, publication]
+      .filter(Boolean)
+      .map((path) => rm(path, { recursive: true, force: true })),
+  );
+  for (const result of cleanup)
+    if (result.status === "rejected") failures.push(result.reason);
+  if (failures.length === 1) throw failures[0];
+  if (failures.length)
+    throw new AggregateError(
+      failures,
+      "Reader asset build and cleanup failed",
+      { cause: failures[0] },
+    );
+}
+
+async function prepareReaderAssets(outdir) {
   const repository = resolve(new URL("..", import.meta.url).pathname);
   const dependency = (name) =>
     resolve(repository, "apps/web/node_modules", name);

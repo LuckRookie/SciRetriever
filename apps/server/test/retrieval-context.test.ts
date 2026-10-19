@@ -10,6 +10,7 @@ import {
   parseMaterialContextRequest,
   parseLiteratureId,
   parseLiterature,
+  parseLibrarySearchRequest,
   parseMetaLiteratureId,
   parseProvenance,
   sha256,
@@ -88,6 +89,46 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   });
   return { promise, resolve };
 }
+
+it("isolates cold retrieval from library reads with one reusable read-only worker and closes both owners exactly once", async () => {
+  const env = await fixture();
+  let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
+  try {
+    await env.app.maintenance!.rebuildIndex();
+    const retrieval = vi.spyOn(SqliteWorker.prototype, "retrieval");
+    const library = vi.spyOn(SqliteWorker.prototype, "librarySearchPage");
+    const close = vi.spyOn(SqliteWorker.prototype, "close");
+    try {
+      query = await createQueryApplication(env.home);
+      const list = parseLibrarySearchRequest({ query: {}, limit: 20 });
+      const [bundle, page] = await Promise.all([
+        query.context!.search(request(["metadata"])),
+        query.query!.search(list),
+      ]);
+      expect(bundle.items.length).toBeGreaterThan(0);
+      expect(page.items).toHaveLength(1);
+      await query.context!.search(request(["metadata"]));
+      const retrievalWorkers = new Set(retrieval.mock.contexts);
+      const libraryWorkers = new Set(library.mock.contexts);
+      expect(retrievalWorkers.size).toBe(1);
+      expect(libraryWorkers.size).toBe(1);
+      for (const worker of retrievalWorkers)
+        expect(libraryWorkers.has(worker)).toBe(false);
+      await Promise.all([query.close(), query.close()]);
+      for (const worker of [...retrievalWorkers, ...libraryWorkers])
+        expect(
+          close.mock.contexts.filter((owner) => owner === worker),
+        ).toHaveLength(1);
+    } finally {
+      await query?.close();
+      retrieval.mockRestore();
+      library.mockRestore();
+      close.mockRestore();
+    }
+  } finally {
+    await env.close();
+  }
+}, 30000);
 
 async function fixture(document = false, publishBeforeV4 = false) {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-retrieval-context-"));

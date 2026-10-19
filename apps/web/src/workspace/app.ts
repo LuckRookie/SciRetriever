@@ -9,6 +9,7 @@ import {
   failure,
   overlayBusy,
   dismissOverlay,
+  installOverlayFocus,
 } from "./dom.js";
 import {
   emptyQuery,
@@ -16,6 +17,7 @@ import {
   renderLibrary,
   renderReader,
   search,
+  title as literatureTitle,
 } from "./library.js";
 import { operate, uploadPdf } from "./actions.js";
 import { renderTasks, taskList, openActivity } from "./tasks.js";
@@ -68,6 +70,8 @@ export async function mountLibraryWorkspace(): Promise<void> {
     peek: null,
     views: [],
     viewId: "",
+    loadedKey: null,
+    scroll: 0,
   };
   const tabs = new Map<
     string,
@@ -77,6 +81,14 @@ export async function mountLibraryWorkspace(): Promise<void> {
   const processor = createProcessorFormState();
   const processorResults = createProcessorResultsState();
   const reading = createReadingState();
+  const synthesis = {
+    open: false,
+    question: "",
+    policy: "require-all",
+    ids: [] as string[],
+    scopeKey: "",
+  };
+  installOverlayFocus();
   const roots = new Map<string, HTMLElement>();
   const persistentContexts = new Map<string, AppContext>();
   let currentSection: Section = "lib",
@@ -103,7 +115,7 @@ export async function mountLibraryWorkspace(): Promise<void> {
     );
     click("#gsearch", () => openSearch(), node("#side"));
     node("#tabs").innerHTML =
-      `<button class="tab ${currentPaper ? "" : "on"}" data-module>${icon(currentSection, true)}<span>${sections.find((s) => s[0] === currentSection)![1]}</span></button>${[...tabs].map(([id, t]) => `<button class="tab ${id === currentPaper ? "on" : ""}" data-paper="${e(id)}" title="${e(t.title)}">${icon("file", true)}<span>${e(t.title)}</span><span class="x" data-close-tab="${e(id)}" role="button" aria-label="关闭文献">✕</span></button>`).join("")}`;
+      `<button class="tab ${currentPaper ? "" : "on"}" data-module>${icon(currentSection, true)}<span>${sections.find((s) => s[0] === currentSection)![1]}</span></button>${[...tabs].map(([id, t]) => `<div class="tab paper-tab ${id === currentPaper ? "on" : ""}"><button class="tab-switch" data-paper="${e(id)}" title="${e(t.title)}">${icon("file", true)}<span>${e(t.title)}</span></button><button class="x" data-close-tab="${e(id)}" aria-label="关闭文献 ${e(t.title)}">✕</button></div>`).join("")}`;
     click("[data-module]", () => navigate(currentSection), node("#tabs"));
     click(
       "[data-paper]",
@@ -123,8 +135,17 @@ export async function mountLibraryWorkspace(): Promise<void> {
         closeReadingState(reading, id);
         roots.get(`paper:${id}`)?.remove();
         roots.delete(`paper:${id}`);
-        if (currentPaper === id) navigate(currentSection);
-        else navigation();
+        if (currentPaper === id)
+          void navigate(currentSection).then(() =>
+            node("[data-module]").focus(),
+          );
+        else {
+          navigation();
+          (
+            document.querySelector<HTMLElement>(`[data-close-tab]`) ??
+            node("[data-module]")
+          ).focus();
+        }
       },
       node("#tabs"),
     );
@@ -141,6 +162,7 @@ export async function mountLibraryWorkspace(): Promise<void> {
     processor,
     processorResults,
     reading,
+    synthesis,
     details,
     navigate: (section, parameters) => {
       void navigate(section, parameters);
@@ -203,7 +225,9 @@ export async function mountLibraryWorkspace(): Promise<void> {
         if (revision !== renderRevision) return;
         const entry = tabs.get(id);
         if (entry)
-          entry.title = details.get(id)?.literature.metadata.title ?? id;
+          entry.title = details.has(id)
+            ? literatureTitle(details.get(id)!)
+            : id;
         navigation();
       } else {
         if (
@@ -282,8 +306,7 @@ export async function mountLibraryWorkspace(): Promise<void> {
       source,
       title:
         previous?.title ??
-        details.get(id)?.literature.metadata.title ??
-        "正在读取…",
+        (details.has(id) ? literatureTitle(details.get(id)!) : "正在读取…"),
     });
     const url = new URL(location.href);
     url.search = "";

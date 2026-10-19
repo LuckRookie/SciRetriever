@@ -108,7 +108,7 @@ CLI 统一为 `processors <action> --request <JSON 文件>`；MCP 为 `processor
 }
 ```
 
-`collection_id:null` 时使用 `result_ids`。支持 `eq/ne/gt/ge/lt/le`，字段可为顶层名称或 schema 声明的嵌套 JSON Pointer；字段拼错会返回可用字段。筛选、排序和分页由服务端执行。FTS 是词法检索，不是语义或自动翻译；不同语言或同义词需要调用方调整查询。索引陈旧时显式报错，通过 `processors rebuild` 或 MCP `rebuild_processor_index` 重建，不调用模型。
+`collection_id:null` 时使用 `result_ids`。支持 `eq/ne/gt/ge/lt/le`，字段可为顶层名称或 schema 声明的嵌套 JSON Pointer；字段拼错会返回可用字段。`eq/ne` 的 `value:null` 表示路径为空／非空测试，同时覆盖 JSON null、路径缺失及可空父对象；零、false 和空字符串仍是非空值。非空比较仍校验字段类型，未知字段仍拒绝。筛选、排序和分页由服务端执行。FTS 是词法检索，不是语义或自动翻译；不同语言或同义词需要调用方调整查询。索引陈旧时显式报错，通过 `processors rebuild` 或 MCP `rebuild_processor_index` 重建，不调用模型。
 
 ```json
 {

@@ -28,6 +28,7 @@ const failureText: Readonly<Record<string, string>> = {
     "此文献库需要显式升级后才能使用处理器；已有文献仍可阅读。",
   "agent-role-unconfigured": "尚未配置分析模型，请在设置中配置后重启服务。",
   "agent-unconfigured": "尚未配置分析模型，请在设置中配置后重启服务。",
+  "knowledge-unconfigured": "尚未配置分析模型，请在设置中配置后重启服务。",
   "agent-configuration": "分析模型配置不可用，请在设置中核对后重启服务。",
   "processor-unknown": "当前服务不支持所选处理器版本，请刷新后核对。",
   "processor-spec": "处理规范不受支持，请核对问题、字段类型与读取范围。",
@@ -324,8 +325,12 @@ async function renderForm(ctx: AppContext): Promise<void> {
         node("#processor-gaps", ctx.root).innerHTML =
           `<p class="processor-partial">${gaps.length} 篇缺少解析正文，将保留为缺口。${gaps.length === ids.length ? "当前范围没有可处理正文，可先到文献库显式启动解析。" : "其余已有文档可继续处理。"}</p><details><summary>查看缺少材料的文献</summary><ul>${gaps.map((g) => `<li>${e(g)}</li>`).join("")}</ul></details>`;
     } catch (error) {
-      if (!ctx.signal.aborted && revision === scopeRevision)
-        status.textContent = processorMessage(error);
+      if (!ctx.signal.aborted && revision === scopeRevision) {
+        status.textContent = `${failureText[message(error)] ?? `范围读取未完成：${message(error)}。`} 尚未提交任务，草稿已保留。`;
+        node("#processor-gaps", ctx.root).append(
+          button("重新读取范围", refreshScope),
+        );
+      }
     } finally {
       if (!ctx.signal.aborted && revision === scopeRevision)
         node<HTMLButtonElement>("#processor-submit", ctx.root).disabled =

@@ -96,103 +96,125 @@ export async function renderSyntheses(ctx: AppContext): Promise<void> {
     }
   };
   click("#refresh-syntheses", load, ctx.root);
-  click(
-    "#new-synthesis",
-    async () => {
-      const ids = ctx.library.selected.size
+  const draft = ctx.synthesis;
+  const compose = async () => {
+    const scopeKey = JSON.stringify(
+      ctx.library.selected.size
+        ? [...ctx.library.selected].sort()
+        : ctx.library.query,
+    );
+    if (!draft.open || draft.scopeKey !== scopeKey) {
+      draft.ids = ctx.library.selected.size
         ? [...ctx.library.selected]
         : await ctx.scopeIds();
-      const root = node("#synthesis-composer", ctx.root);
-      root.hidden = false;
-      root.innerHTML = `<form id="workspace-synthesis-form" class="composer"><p>输入范围：${ids.length} 篇文献。准备阶段固定当前文档版本，不自动获取或解析。</p><label>研究问题<textarea id="workspace-synthesis-question" required placeholder="希望比较什么共识、分歧或条件？"></textarea></label><label>缺口策略<select id="workspace-synthesis-policy"><option value="require-all">全部输入就绪后执行</option><option value="allow-partial">允许部分覆盖，明确记录缺口</option></select></label><div class="acts"><button class="btn" id="workspace-synthesis-prepare">固定输入</button><button class="btn blue" id="workspace-synthesis-start" type="button" disabled>开始综合</button></div><p id="workspace-synthesis-status" role="status"></p></form>`;
-      const submissionKey = crypto.randomUUID();
-      let prepared: SynthesisPreparationResult | null = null;
-      const status = node("#workspace-synthesis-status", root);
-      node<HTMLSelectElement>("#workspace-synthesis-policy", root).onchange =
-        () => {
-          prepared = null;
-          node<HTMLButtonElement>("#workspace-synthesis-start", root).disabled =
-            true;
-        };
-      node<HTMLFormElement>("#workspace-synthesis-form", root).onsubmit = (
-        event,
-      ) => {
-        event.preventDefault();
-        const button = node<HTMLButtonElement>(
-          "#workspace-synthesis-prepare",
-          root,
-        );
-        button.disabled = true;
-        status.textContent = "正在固定已有输入…";
-        void (async () => {
-          const inputs = [];
-          for (const [index, id] of ids.entries()) {
-            const paper = await detail(ctx, id),
-              asset = paper.primary_pdf?.asset;
-            inputs.push({
-              kind: "document",
-              input_id: `source-${index + 1}`,
-              literature_id: id,
-              asset_id: asset?.asset_id ?? null,
-              asset_sha256: asset?.sha256 ?? null,
-              document_version_id: null,
-            });
-          }
-          const request = parseSynthesisPreparationRequest({
-            policy: node<HTMLSelectElement>("#workspace-synthesis-policy", root)
-              .value,
-            inputs,
-          });
-          prepared = await parseSynthesisPreparationResult(
-            (await ctx.api.query("synthesis-prepare", request, ctx.signal))
-              .result,
-            request,
-          );
-          if (ctx.signal.aborted) return;
-          status.textContent = `已固定 ${prepared.manifest.items.length} 项 · ${prepared.ready ? "可以综合" : "输入不足"}${prepared.gaps.length ? " · " + prepared.gaps.map((g) => `${g.input_id}: ${g.code}`).join("；") : ""}`;
-          node<HTMLButtonElement>("#workspace-synthesis-start", root).disabled =
-            !prepared.ready;
-        })()
-          .catch((error) => {
-            status.textContent = message(error);
-          })
-          .finally(() => {
-            button.disabled = false;
-          });
+      if (ctx.signal.aborted) return;
+      draft.scopeKey = scopeKey;
+    }
+    draft.open = true;
+    const ids = draft.ids;
+    const root = node("#synthesis-composer", ctx.root);
+    root.hidden = false;
+    root.innerHTML = `<form id="workspace-synthesis-form" class="composer"><p>输入范围：${ids.length} 篇文献。准备阶段固定当前文档版本，不自动获取或解析。</p><label>研究问题<textarea id="workspace-synthesis-question" required placeholder="希望比较什么共识、分歧或条件？"></textarea></label><label>缺口策略<select id="workspace-synthesis-policy"><option value="require-all">全部输入就绪后执行</option><option value="allow-partial">允许部分覆盖，明确记录缺口</option></select></label><div class="acts"><button class="btn" id="workspace-synthesis-prepare">固定输入</button><button class="btn blue" id="workspace-synthesis-start" type="button" disabled>开始综合</button></div><p id="workspace-synthesis-status" role="status"></p></form>`;
+    const question = node<HTMLTextAreaElement>(
+      "#workspace-synthesis-question",
+      root,
+    );
+    const policy = node<HTMLSelectElement>("#workspace-synthesis-policy", root);
+    question.value = draft.question;
+    question.oninput = () => {
+      draft.question = question.value;
+    };
+    policy.value = draft.policy;
+    const submissionKey = crypto.randomUUID();
+    let prepared: SynthesisPreparationResult | null = null;
+    const status = node("#workspace-synthesis-status", root);
+    node<HTMLSelectElement>("#workspace-synthesis-policy", root).onchange =
+      () => {
+        draft.policy = policy.value;
+        prepared = null;
+        node<HTMLButtonElement>("#workspace-synthesis-start", root).disabled =
+          true;
       };
-      click(
-        "#workspace-synthesis-start",
-        async (el) => {
-          if (!prepared?.ready) return;
-          (el as HTMLButtonElement).disabled = true;
-          try {
-            const request = await parseKnowledgeSynthesisRequest({
-              schema_version: 3,
-              input: prepared.manifest,
-              purpose: "synthesis",
-              question: node<HTMLTextAreaElement>(
-                "#workspace-synthesis-question",
-                root,
-              ).value,
-              policy: prepared.policy,
-            });
-            const id = await processingTask(
-              ctx,
-              [{ operation: "synthesize", request }],
-              submissionKey,
-            );
-            ctx.navigate("task", { task: id });
-          } catch (error) {
-            status.textContent = message(error);
-            (el as HTMLButtonElement).disabled = false;
-          }
-        },
+    node<HTMLFormElement>("#workspace-synthesis-form", root).onsubmit = (
+      event,
+    ) => {
+      event.preventDefault();
+      const button = node<HTMLButtonElement>(
+        "#workspace-synthesis-prepare",
         root,
       );
-    },
-    ctx.root,
-  );
+      button.disabled = true;
+      status.textContent = "正在固定已有输入…";
+      void (async () => {
+        const inputs = [];
+        for (const [index, id] of ids.entries()) {
+          const paper = await detail(ctx, id),
+            asset = paper.primary_pdf?.asset;
+          inputs.push({
+            kind: "document",
+            input_id: `source-${index + 1}`,
+            literature_id: id,
+            asset_id: asset?.asset_id ?? null,
+            asset_sha256: asset?.sha256 ?? null,
+            document_version_id: null,
+          });
+        }
+        const request = parseSynthesisPreparationRequest({
+          policy: node<HTMLSelectElement>("#workspace-synthesis-policy", root)
+            .value,
+          inputs,
+        });
+        prepared = await parseSynthesisPreparationResult(
+          (await ctx.api.query("synthesis-prepare", request, ctx.signal))
+            .result,
+          request,
+        );
+        if (ctx.signal.aborted) return;
+        status.textContent = `已固定 ${prepared.manifest.items.length} 项 · ${prepared.ready ? "可以综合" : "输入不足"}${prepared.gaps.length ? " · " + prepared.gaps.map((g) => `${g.input_id}: ${g.code}`).join("；") : ""}`;
+        node<HTMLButtonElement>("#workspace-synthesis-start", root).disabled =
+          !prepared.ready;
+      })()
+        .catch((error) => {
+          status.textContent = message(error);
+        })
+        .finally(() => {
+          button.disabled = false;
+        });
+    };
+    click(
+      "#workspace-synthesis-start",
+      async (el) => {
+        if (!prepared?.ready) return;
+        (el as HTMLButtonElement).disabled = true;
+        try {
+          const request = await parseKnowledgeSynthesisRequest({
+            schema_version: 3,
+            input: prepared.manifest,
+            purpose: "synthesis",
+            question: node<HTMLTextAreaElement>(
+              "#workspace-synthesis-question",
+              root,
+            ).value,
+            policy: prepared.policy,
+          });
+          const id = await processingTask(
+            ctx,
+            [{ operation: "synthesize", request }],
+            submissionKey,
+          );
+          draft.open = false;
+          ctx.navigate("task", { task: id });
+        } catch (error) {
+          status.textContent = message(error);
+          (el as HTMLButtonElement).disabled = false;
+        }
+      },
+      root,
+    );
+  };
+  click("#new-synthesis", compose, ctx.root);
   await load();
+  if (draft.open && !ctx.signal.aborted) await compose();
   const linked = new URL(location.href).searchParams.get("artifact");
   if (linked && !ctx.signal.aborted) await open(linked);
 }

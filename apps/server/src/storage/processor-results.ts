@@ -940,6 +940,9 @@ export class SqliteProcessorStorage implements ProcessorStore {
           types = fieldTypes.get(String(f.field));
         if (
           types?.size &&
+          // Null equality tests presence, including absent paths and children
+          // of nullable objects; it is not a typed scalar comparison.
+          !(f.value === null && (f.operator === "eq" || f.operator === "ne")) &&
           !types.has(f.value === null ? "null" : typeof f.value) &&
           !(
             typeof f.value === "number" &&

@@ -356,6 +356,36 @@ describe("processor application acceptance", () => {
       expect(
         (response.structuredContent as { result: unknown }).result,
       ).toEqual(cli.value);
+      for (const operator of ["eq", "ne"]) {
+        const presence = {
+          collection_id: null,
+          result_ids: [extracted.refs[0]!.result_id],
+          filters: [{ field: "/temperature/value", operator, value: null }],
+          sort: null,
+          limit: 20,
+          offset: 0,
+        };
+        await writeFile(requestPath, JSON.stringify(presence));
+        const filtered = await runCli(
+          ["processors", "query", "--request", requestPath],
+          { home: env.home, json: true },
+        );
+        expect(filtered.code).toBe(0);
+        expect(filtered.value).toMatchObject({
+          items:
+            operator === "eq"
+              ? []
+              : [expect.objectContaining({ record_id: expect.any(String) })],
+        });
+        const machine = await client.callTool({
+          name: "processor_query",
+          arguments: { action: "query", request: presence },
+        });
+        expect(machine.isError).not.toBe(true);
+        expect(
+          (machine.structuredContent as { result: unknown }).result,
+        ).toEqual(filtered.value);
+      }
       const bad = await client.callTool({
         name: "processor_query",
         arguments: {
