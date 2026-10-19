@@ -202,10 +202,13 @@ export class SqliteSynthesisStorage {
   private async run<T>(
     work: () => Promise<T>,
     signal?: AbortSignal,
+    reuseVerified = true,
   ): Promise<T> {
     if (this.stopped) fail("synthesis-closed");
     if (signal?.aborted) fail("synthesis-cancelled");
-    const pending = Promise.resolve().then(work);
+    const pending = reuseVerified
+      ? this.documents.withReadScope(work)
+      : Promise.resolve().then(work);
     this.active.add(pending);
     try {
       return await pending;
@@ -995,6 +998,7 @@ export class SqliteSynthesisStorage {
     return this.run(
       async () => this.publishInner(await parsed, signal),
       signal,
+      false,
     );
   }
   private async publishInner(

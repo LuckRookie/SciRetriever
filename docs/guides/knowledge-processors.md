@@ -6,6 +6,8 @@
 
 `sciretriever processors list` 或 MCP `processor_query`（`action: "list", request: {}`）返回处理器版本、输入类型、规范 schema 与方法描述。
 
+正式 HTTP 也提供 `POST /api/v1/query/processors`（`{protocol_version:1, operation:action, request}`）和受认证保护的 `POST /api/v1/maintenance/processor-submit`（`{protocol_version:1, request:ProcessorBatchRequest, start}`），使用同一应用边界。Web 的“提取”提供标签/记录表单、持久任务、已有结果/集合、字段筛选与证据，以及选定记录综合和完整结果导出。接口认证、请求／响应上限和只读边界见[产品接口技术说明](../architecture/technical/01-product-interface.md#421-统一处理器-http-适配2026-10-18)。
+
 | id（version 均为 `1`）                      | 范围     | 规范与行为                                                                              |
 | ------------------------------------------- | -------- | --------------------------------------------------------------------------------------- |
 | `knowledge-overview` / `knowledge-detailed` | 单文档   | `spec: {}`；沿用现有知识分析产物和证据                                                  |
@@ -85,7 +87,7 @@ CLI 统一为 `processors <action> --request <JSON 文件>`；MCP 为 `processor
 | action                          | request                                                    |
 | ------------------------------- | ---------------------------------------------------------- |
 | `list`                          | `{}`                                                       |
-| `results`                       | 可选 `limit`（1–200）、`after`                             |
+| `results`                       | 可选 `limit`（1–200）、`after`、`literature_id`                             |
 | `collections`                   | 可选 `run_id`、`limit`、`offset`                           |
 | `collection`                    | `{collection_id}`，返回精确成员、输入、规范与缺口          |
 | `read`                          | `{result_id}`，返回不可变内容、schema、执行身份及覆盖      |
@@ -93,6 +95,7 @@ CLI 统一为 `processors <action> --request <JSON 文件>`；MCP 为 `processor
 | `query`                         | 下列固定查询格式；SQL 不对外开放                           |
 | `evidence`                      | 完整 citation（例如下列字段引用）                          |
 | `export`                        | `{result_id,format:"json" / "csv" / "markdown"}`           |
+| `transfer` | `{result_id,content_sha256,format:"result" / "json" / "csv" / "markdown",max_bytes,continuation}` |
 
 ```json
 {
@@ -123,7 +126,9 @@ CLI 统一为 `processors <action> --request <JSON 文件>`；MCP 为 `processor
 
 外部提取交付仍只产生原来的回执。要长期托管，显式使用 `processors retain --request <完整 ExtractionSubmission>` 或 MCP `retain_extraction`。平台经原交付校验后保存候选、关系、规范、manifest 与来源，登记独立保护关系；回执过期不会解除长期结果的证据保护。记录包装在 `record` 字段，原候选完整保存在 provenance；历史回执本身没有正文，不能凭回执重建候选。
 
-单份结果文件最多 8 MiB，MCP 单次响应仍受 4 MiB 预算约束；大结果优先用记录分页与字段证据，完整导出可使用 CLI。
+`results.literature_id` 通过已有的固定材料、文档、知识及上游结果输入查找关联产物，不推断标签含义，也不以缺少字段证据排除“无法判断”结果。结果仍按 result_id 排序，用 next_after 续读；它是只读投影，不新增 catalog schema。Web 阅读辅助区、CLI 和 MCP 共用此参数。
+
+单份结果文件最多 8 MiB，MCP 单次响应仍受 4 MiB 预算约束；查找局部内容优先用记录分页与字段证据。完整大结果和导出使用三端共有的 `transfer`：固定 result_id/hash，首次 continuation:null、max_bytes:262144，逐次把 next 传为 continuation，直到 next:null。按 start/end 拼接 text，校验 total_bytes 与 transfer_sha256 后解析 JSON。format:result 返回完整 read 对象；json/csv/markdown 返回完整 export 封套，CSV/Markdown 的 metadata 必须一起保存。每块是有效 UTF-8，不会把截断当成完整结果。
 
 当前离线测试证明执行、保存、复用、恢复和证据链机制；真实语料的抽取准确率、漏抽率和领域适用性仍须单独评估。
 

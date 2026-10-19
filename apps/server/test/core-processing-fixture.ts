@@ -1,3 +1,4 @@
+import type { StagedParserResource } from "../src/parsing/ports.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -50,6 +51,7 @@ export async function coreProcessingFixture(
   );
   await initializeCatalogSchema(join(home, "catalog.sqlite"));
   let text = `# ${FIXTURE_TITLE}\nDOI: ${FIXTURE_DOI}\nA synthetic finding.\n`;
+  let resources: readonly StagedParserResource[] = [];
   let parseCalls = 0;
   let parseHook: (signal?: AbortSignal) => Promise<void> = async () => {};
   let modelCalls = 0;
@@ -114,7 +116,7 @@ export async function coreProcessingFixture(
               } as ArtifactRef,
               bytes,
             },
-            resources: [],
+            resources,
             provenance: {
               provenance: parseProvenance({
                 provenance_id: randomUUID(),
@@ -196,6 +198,9 @@ export async function coreProcessingFixture(
       },
       get modelCalls() {
         return modelCalls;
+      },
+      setResources: (value: readonly StagedParserResource[]) => {
+        resources = value;
       },
       setText: (value: string) => {
         text = value;

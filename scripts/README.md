@@ -10,6 +10,7 @@
 
 ## 内容入口
 
+- [build-reader-assets.mjs](build-reader-assets.mjs)：与正式构建及测试共用的阅读模块、worker、字体/样式和许可文件打包。
 - [build-workbench-assets.mjs](build-workbench-assets.mjs)：从 Web 源码构建 bundle，将指定页面/样式放入应用构建目录。
 
 ## 放置边界

@@ -9,6 +9,7 @@
 - [DeepSeek Harness 组件与兼容性](deepseek-harness.md)：固定组件版本、required peer、许可、安装闭包及运行服务边界。
 - [MinerU 接入注意事项](mineru.md)：外部 MinerU 服务的固定目标、所有权、安全、恢复和升级注意事项。
 - [Node SQLite / FTS5 兼容性](sqlite-fts5-long-reader.md)：长期连接的已知问题、处理方式及适用版本。
+- [Web 阅读渲染依赖与兼容性](web-reading-dependencies.md)：PDF.js、Markdown、数学排版的固定版本、许可、本地资源与 CSP 边界。
 - [工具中立性声明](tool-neutrality.md)：项目对来源和工具的中立立场及工程安全边界。
 
 Provider 名称、adapter、Profile 或外部协议存在，不等于它已经进入生产 registry、当前 route plan 或 readiness。当前入口和已组装能力以项目 README、配置手册、Bootstrap 生产对象图、源码与直接测试为准；fixture-verified 也不能写成 production-ready。

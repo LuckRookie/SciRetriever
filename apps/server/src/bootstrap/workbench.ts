@@ -1,5 +1,6 @@
 import { createMetadataOperations } from "../entry/metadata-operations.js";
 import { createTaskOperations } from "../entry/task-operations.js";
+import { submitProcessor } from "../entry/processor-operations.js";
 import { randomUUID } from "node:crypto";
 import { probeCatalogIdentity } from "../storage/execution/migration-gate.js";
 import { initializeCatalogSchema } from "../storage/sqlite/catalog-schema.js";
@@ -196,6 +197,16 @@ export function taskHttpAdapters(
   };
 }
 
+/** Explicit writes share the same processor application boundary as CLI and MCP. */
+export function processorHttpAdapters(
+  app: Application,
+): Pick<QueryOnlyHttpOptions, "submitProcessor"> {
+  return {
+    submitProcessor: (request, start, signal) =>
+      submitProcessor(app, request, start, signal),
+  };
+}
+
 /** Explicit query-only Web entry. It never constructs the Browser/Jobs Application. */
 export async function startQueryOnlyWorkbench(options: {
   readonly home: string;
@@ -280,6 +291,7 @@ export async function startMaintenanceWorkbench(options: {
     http = await startQueryOnlyHttp({
       application: query,
       maintenance: application.maintenance,
+      ...processorHttpAdapters(application),
       assets: options.assets ?? (await loadMaintenanceWorkbenchAssets()),
       ...(options.port === undefined ? {} : { port: options.port }),
     });
@@ -420,7 +432,12 @@ export async function startProductionWorkbench(options: {
       ...createMetadataOperations(app),
       query: {
         application: query,
-        ...(app.maintenance ? { maintenance: app.maintenance } : {}),
+        ...(app.maintenance
+          ? {
+              maintenance: app.maintenance,
+              ...processorHttpAdapters(app),
+            }
+          : {}),
       },
       workspace: {
         catalog_path: catalogPath,

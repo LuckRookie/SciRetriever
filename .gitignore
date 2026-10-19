@@ -27,6 +27,7 @@ logs
 page_1.json
 *.ipynb
 *.txt
+!/apps/web/public/core-js-LICENSE.txt
 
 work/*
 

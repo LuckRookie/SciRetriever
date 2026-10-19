@@ -136,6 +136,7 @@ export async function showTask(
   clearTimeout(detailTimers.get(host));
   if (!polling) {
     host.dataset.selection = crypto.randomUUID();
+    delete host.dataset.publicationAttempts;
     const url = new URL(location.href);
     url.searchParams.set("task", id);
     history.replaceState(history.state, "", url);
@@ -168,14 +169,35 @@ export async function showTask(
     )
       return;
     const content = node("#task-content", host);
+    const processorTask =
+      record(task.job.selector, "selector").schema_version === 3 &&
+      record(record(task.job.selector, "selector").request, "request")
+        .schema_version === 2;
+    const terminal = [
+      "completed",
+      "cancelled",
+      "failed",
+      "paused",
+      "interrupted",
+    ].includes(String(task.job.status));
+    const waitingForCollection =
+      processorTask && terminal && task.collections.length === 0;
+    const attempts =
+      Number(host.dataset.publicationAttempts ?? "0") +
+      (waitingForCollection ? 1 : 0);
+    host.dataset.publicationAttempts = waitingForCollection
+      ? String(attempts)
+      : "0";
+    const shouldPoll = !terminal || (waitingForCollection && attempts < 5);
     const fingerprint = JSON.stringify(task);
-    if (host.dataset.fingerprint === fingerprint && polling) {
-      detailTimers.set(
-        host,
-        setTimeout(() => {
-          void showTask(ctx, id, true);
-        }, 2000),
-      );
+    if (host.dataset.fingerprint === fingerprint && polling && attempts !== 5) {
+      if (shouldPoll)
+        detailTimers.set(
+          host,
+          setTimeout(() => {
+            void showTask(ctx, id, true);
+          }, 2000),
+        );
       return;
     }
     host.dataset.fingerprint = fingerprint;
@@ -212,13 +234,43 @@ export async function showTask(
           await showTask(ctx, id);
         }),
       );
-    if (task.budget && task.policy) {
+    if (!processorTask && task.budget && task.policy) {
       const policy = document.createElement("p");
       policy.className = "job-policy-summary";
       policy.textContent = `策略：${String(task.policy.mode)} · 已尝试 ${String(task.budget.attempts)}/${String(task.budget.max_attempts)} · 模型调用 ${String(task.budget.model_calls)}/${String(task.budget.max_model_calls)}`;
       controls.after(policy);
     }
     const results = node("#task-results", host);
+    if (processorTask) {
+      const summary = task.collections.at(-1);
+      if (summary && typeof summary.collection_id === "string") {
+        const count = (key: string) => {
+          const value = summary[key];
+          if (
+            typeof value !== "number" ||
+            !Number.isSafeInteger(value) ||
+            value < 0
+          )
+            throw new Error("处理结果计数无效");
+          return value;
+        };
+        const text = document.createElement("p");
+        text.textContent = `新生成 ${count("computed")} 项 / 复用 ${count("reused")} 项 · 部分覆盖 ${count("partial")} 项 · 未形成结果 ${count("failed")} 项`;
+        results.append(
+          text,
+          button("查看本次结果", () =>
+            ctx.navigate("ext", { collection: String(summary.collection_id) }),
+          ),
+        );
+      } else if (terminal) {
+        const note = document.createElement("p");
+        note.textContent =
+          attempts < 5
+            ? "执行状态已更新，正在等待结果集合发布…"
+            : "暂未取得结果集合。可刷新任务核对，已保存的逐项结果仍可读取。";
+        results.append(note);
+      }
+    }
     for (const intervention of task.interventions.filter(
       (item) => item.status === "open",
     )) {
@@ -272,6 +324,22 @@ export async function showTask(
       );
       const literature = target ? taskLiteratureId(task.job, target) : null;
       if (
+        result.operation === "run-processor" &&
+        typeof saved.result_id === "string" &&
+        typeof saved.content_sha256 === "string"
+      ) {
+        results.append(
+          button("打开处理结果摘要", () =>
+            ctx.navigate("ext", {
+              result: String(saved.result_id),
+              resultHash: String(saved.content_sha256),
+              task: id,
+            }),
+          ),
+        );
+        continue;
+      }
+      if (
         typeof saved.artifact_id === "string" ||
         (literature && typeof saved.document_version_id === "string")
       )
@@ -314,7 +382,11 @@ export async function showTask(
     }
     if (!task.targets.length && !task.results.length)
       results.append("任务尚未形成逐项结果。");
-    if (!ctx.signal.aborted && host.dataset.selection === selection)
+    if (
+      !ctx.signal.aborted &&
+      host.dataset.selection === selection &&
+      shouldPoll
+    )
       detailTimers.set(
         host,
         setTimeout(() => {

@@ -248,7 +248,7 @@ export const BROWSER_MAINTENANCE_TOOLS: readonly Tool[] = [
 export const QUERY_TOOLS: readonly Tool[] = [
   tool(
     "processor_query",
-    "Read saved processor results, records, evidence, collections or exports. Never invokes models. Use action list for processor schemas.",
+    "Read saved processor results, records, evidence, collections or exports. Never invokes models. Use action list for processor schemas. For complete large results or exports use action transfer with result_id, content_sha256, format result/json/csv/markdown, max_bytes (4–262144) and continuation null; follow next until null and verify transfer_sha256 on concatenated UTF-8 text.",
     object({
       action: {
         enum: [
@@ -262,6 +262,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
           "query",
           "evidence",
           "export",
+          "transfer",
         ],
       },
       request: { type: "object" },

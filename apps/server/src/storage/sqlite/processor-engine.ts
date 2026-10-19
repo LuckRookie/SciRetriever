@@ -390,7 +390,35 @@ export function runProcessorStorage(
           .all(String(args)),
       };
     case "list": {
-      const q = args as { after: string; limit: number };
+      const q = args as {
+        after: string;
+        limit: number;
+        literature_id?: string | null;
+      };
+      if (q.literature_id)
+        return db
+          .prepare(
+            `
+        WITH RECURSIVE knowledge(artifact_id) AS (
+          SELECT artifact_id FROM knowledge_input_materials WHERE literature_id=?
+          UNION SELECT i.artifact_id FROM knowledge_input_artifacts i JOIN knowledge k ON i.source_artifact_id=k.artifact_id
+        ), related(result_id) AS (
+          SELECT result_id FROM processor_result_documents WHERE literature_id=?
+          UNION SELECT result_id FROM processor_result_materials WHERE literature_id=?
+          UNION SELECT p.result_id FROM processor_result_knowledge p JOIN knowledge k ON p.artifact_id=k.artifact_id
+          UNION SELECT i.result_id FROM processor_result_inputs i JOIN related r ON i.source_result_id=r.result_id
+        )
+        SELECT p.* FROM processor_results p JOIN related r ON r.result_id=p.result_id
+        WHERE p.result_id>? ORDER BY p.result_id LIMIT ?
+      `,
+          )
+          .all(
+            q.literature_id,
+            q.literature_id,
+            q.literature_id,
+            q.after,
+            q.limit,
+          );
       return db
         .prepare(
           "SELECT * FROM processor_results WHERE result_id>? ORDER BY result_id LIMIT ?",

@@ -1,10 +1,6 @@
 import {
   parseKnowledgeContextRequest,
   parseKnowledgeContextBundle,
-  parseSynthesisReadSelection,
-  parseSynthesisSourceResult,
-  knowledgeStatementSha256,
-  synthesisStatementSha256,
   parseDocumentReadRequest,
   parseDocumentReadResult,
   type KnowledgeContextItem,
@@ -20,25 +16,74 @@ import {
   toast,
   download,
 } from "./dom.js";
-import { renderKnowledgeArtifact } from "../knowledge.js";
-import { renderSynthesisSource } from "../synthesis.js";
-import type { AppContext } from "./types.js";
+import {
+  openContextSource,
+  renderFixedKnowledge,
+} from "./source-navigation.js";
+import type { AppContext, RetrievalState } from "./types.js";
 const textOf = (item: KnowledgeContextItem): string =>
   item.kind === "generated-knowledge"
     ? (item.statement?.text ?? "该知识片段超过本次预算")
     : item.text;
+export const createRetrievalState = (): RetrievalState => ({
+  draft: {
+    query: "",
+    scope: "library",
+    kinds: "all",
+    count: "10",
+    bytes: "32768",
+  },
+  items: [],
+  next: null,
+  current: null,
+  basket: new Map(),
+  status: "输入关键词后检索已有材料。",
+});
 export async function renderRetrieval(ctx: AppContext): Promise<void> {
-  let items: KnowledgeContextItem[] = [],
-    next: string | null = null,
-    current: KnowledgeContextRequest | null = null;
-  const basket = new Map<string, KnowledgeContextItem>();
+  const state = ctx.retrieval;
+  let { items, next, current } = state;
+  const basket = state.basket;
   let busy = false;
   ctx.root.innerHTML = `<div class="split"><div class="pg"><div class="pgin"><h1 class="ptitle">检索</h1><p class="pdesc">在库内的正文和知识里找答案。只读，不会下载或加工新材料。</p><form id="ask-form"><div class="ask"><div class="box">${icon("ask")}<input id="askIn" aria-label="问题" placeholder="输入要查找的问题或关键词" required></div><button class="btn blue" id="askGo">检索</button></div><div class="opts"><span class="chipsel">范围<select id="askScope" aria-label="范围"><option value="library">全部文献</option><option value="selection" ${ctx.library.selected.size ? "" : "disabled"}>已选 ${ctx.library.selected.size} 篇</option><option value="query">当前筛选结果</option></select></span><span class="chipsel"><select id="askKinds" aria-label="内容"><option value="all">原文与知识</option><option value="source">仅原文</option><option value="knowledge">仅知识</option></select></span><label class="chipsel">数量<select id="askCount"><option>10</option><option>5</option><option>20</option></select></label><label class="chipsel">字节预算<input id="askBytes" type="number" min="1024" max="262144" value="32768" required></label></div></form><h3 class="h">结果</h3><p id="ask-status" role="status">输入问题后检索已有材料。</p><div id="ask-results"></div><button class="btn" id="ask-more" hidden>继续查找</button></div></div><aside class="panel"><div class="pin"><h4 class="h" style="margin-top:0">上下文</h4><p id="basket-count" class="f2">尚未选择片段</p><ul class="basket" id="basket"></ul><div class="acts"><button class="btn blue" id="cpMd">复制为 Markdown</button><button class="btn" id="cpJson">导出 JSON</button></div><p class="f2 caption">保留文献、固定版本和证据引用，可交给 Agent。</p></div></aside></div>`;
   if (
     new URL(location.href).searchParams.get("scope") === "selection" &&
     ctx.library.selected.size
   )
-    node<HTMLSelectElement>("#askScope", ctx.root).value = "selection";
+    state.draft.scope = "selection";
+  if (state.draft.scope === "selection" && !ctx.library.selected.size)
+    state.draft.scope = "library";
+  const fields = {
+    query: node<HTMLInputElement>("#askIn", ctx.root),
+    scope: node<HTMLSelectElement>("#askScope", ctx.root),
+    kinds: node<HTMLSelectElement>("#askKinds", ctx.root),
+    count: node<HTMLSelectElement>("#askCount", ctx.root),
+    bytes: node<HTMLInputElement>("#askBytes", ctx.root),
+  };
+  const explanation = document.createElement("p");
+  explanation.className = "f2 caption";
+  explanation.textContent =
+    "按词法关键词匹配，多关键词须同时命中；不自动翻译或扩展含义。";
+  const languageHint = document.createElement("p");
+  languageHint.id = "ask-language-hint";
+  languageHint.className = "f2 caption";
+  languageHint.setAttribute("role", "note");
+  languageHint.textContent =
+    "当前不会自动跨语言匹配；检索英文原文可尝试原文关键词。中文按连续词串匹配，子词不保证命中。";
+  const hint = () => {
+    languageHint.hidden = !/\p{Script=Han}/u.test(fields.query.value);
+  };
+  node("#ask-form", ctx.root).append(explanation, languageHint);
+  fields.query.setAttribute("aria-describedby", languageHint.id);
+  for (const [key, field] of Object.entries(fields)) {
+    field.value = state.draft[key as keyof typeof fields];
+    field.addEventListener("input", () => {
+      state.draft[key as keyof typeof fields] = field.value;
+      hint();
+    });
+  }
+  hint();
+  node("#ask-status", ctx.root).textContent = state.status;
+  node("#ask-more", ctx.root).hidden = !next;
   const key = (item: KnowledgeContextItem) => JSON.stringify(item.reference);
   const renderBasket = () => {
     node("#basket", ctx.root).innerHTML = [...basket]
@@ -64,7 +109,7 @@ export async function renderRetrieval(ctx: AppContext): Promise<void> {
     root.innerHTML = items
       .map(
         (it, index) =>
-          `<div class="blk ${it.kind === "generated-knowledge" ? "k" : ""}"><span class="bar"></span><div style="min-width:0"><div class="tx">${e(textOf(it) || "片段超出本次预算，可展开固定来源。")}</div><div class="src"><span class="tag ${it.kind === "generated-knowledge" ? "purple" : "gray"}">${it.kind === "generated-knowledge" ? "知识" : it.kind === "metadata" ? "元数据" : "原文"}</span><button class="lk" data-source="${index}">${e(it.kind === "generated-knowledge" ? it.source_literature_ids.join(", ") : it.literature_id)}</button><button class="ev" data-fixed="${index}">固定来源</button></div><div id="fixed-${index}"></div></div><div><button class="btn sm ${basket.has(key(it)) ? "" : "q"}" data-basket="${index}">${basket.has(key(it)) ? "已加入" : "+ 上下文"}</button></div></div>`,
+          `<div class="blk ${it.kind === "generated-knowledge" ? "k" : ""}"><span class="bar"></span><div style="min-width:0"><div class="tx">${e(textOf(it) || "片段超出本次预算，可展开固定来源。")}</div><div class="src"><span class="tag ${it.kind === "generated-knowledge" ? "purple" : "gray"}">${it.kind === "generated-knowledge" ? (it.purpose === "synthesis" ? "综合" : "知识") : it.kind === "metadata" ? "元数据" : "原文"}</span><button class="lk" data-source="${index}">${e(it.kind === "generated-knowledge" ? it.source_literature_ids.join(", ") : it.literature_id)}</button><button class="ev" data-fixed="${index}">固定来源</button></div><div id="fixed-${index}"></div></div><div><button class="btn sm ${basket.has(key(it)) ? "" : "q"}" data-basket="${index}">${basket.has(key(it)) ? "已加入" : "+ 上下文"}</button></div></div>`,
       )
       .join("");
     click(
@@ -83,12 +128,7 @@ export async function renderRetrieval(ctx: AppContext): Promise<void> {
       "[data-source]",
       (el) => {
         const it = items[Number(el.dataset.source)]!;
-        const id =
-          it.kind === "generated-knowledge"
-            ? it.source_literature_ids[0]
-            : it.literature_id;
-        if (id)
-          ctx.openPaper(id, it.kind === "generated-knowledge" ? "know" : "doc");
+        openContextSource(ctx, it);
       },
       root,
     );
@@ -155,52 +195,14 @@ export async function renderRetrieval(ctx: AppContext): Promise<void> {
           target.append(output, more);
           await load();
         } else if (it.kind === "generated-knowledge") {
-          const selection = parseSynthesisReadSelection({
-            artifact_id: it.reference.artifact_id,
-          });
-          const source = await parseSynthesisSourceResult(
-            (await ctx.api.query("synthesis-source", selection, ctx.signal))
-              .result,
-            selection,
-          );
-          const artifact = source.artifact;
-          const statement = artifact.content.statements.find(
-            (candidate) => candidate.statement_id === it.reference.statement_id,
-          );
-          if (
-            artifact.content_ref.sha256 !== it.reference.content_sha256 ||
-            artifact.input.manifest_sha256 !== it.reference.manifest_sha256 ||
-            artifact.purpose !== it.purpose ||
-            artifact.question !== it.question ||
-            !statement ||
-            (await (artifact.schema_version === 1
-              ? knowledgeStatementSha256(statement)
-              : synthesisStatementSha256(statement))) !==
-              it.reference.statement_sha256
-          )
-            throw new Error("固定产物或断言与检索引用不匹配");
-          if (ctx.signal.aborted || !target.isConnected) return;
-          if (artifact.schema_version === 1)
-            renderKnowledgeArtifact(
-              artifact,
-              target,
-              ctx.signal,
-              statement.statement_id,
-            );
-          else
-            renderSynthesisSource(
-              artifact,
-              statement.statement_id,
-              target,
-              ctx.signal,
-            );
+          await renderFixedKnowledge(ctx, it.reference, target);
         }
       },
       root,
     );
   };
   const run = async (req: KnowledgeContextRequest, append = false) => {
-    if (busy) return;
+    if (busy || ctx.signal.aborted) return;
     busy = true;
     node<HTMLButtonElement>("#askGo", ctx.root).disabled = true;
     node<HTMLButtonElement>("#ask-more", ctx.root).disabled = true;
@@ -212,34 +214,64 @@ export async function renderRetrieval(ctx: AppContext): Promise<void> {
         req,
       );
       if (ctx.signal.aborted) return;
-      current = req;
-      next = bundle.continuation;
-      items = append ? [...items, ...bundle.items] : [...bundle.items];
-      status.textContent = `${items.length} 条结果 · 本页 ${bundle.usage.bytes} 字节 · 覆盖：${bundle.coverage}${bundle.truncated ? " · 已截断" : ""}${
-        bundle.gaps.length
-          ? " · " +
-            bundle.gaps
-              .map((g) => g.code)
-              .filter((v, i, a) => a.indexOf(v) === i)
-              .join("、")
-          : ""
-      }`;
+      state.current = current = req;
+      state.next = next = bundle.continuation;
+      state.items = items = append
+        ? [...items, ...bundle.items]
+        : [...bundle.items];
+      const codes = [bundle.coverage, ...bundle.gaps.map((g) => g.code)];
+      const indexIssue = [
+        ["index-unavailable", "检索索引尚未建立"],
+        ["index-stale", "检索索引已过期"],
+        ["index-corrupt", "检索索引不可用"],
+      ]
+        .filter(([code]) => codes.some((value) => value.endsWith(code!)))
+        .map(([, text]) => text)
+        .join("；");
+      const emptyNote = indexIssue
+        ? ` · ${indexIssue}，请在设置 → 高级中显式重建对应的材料／知识索引；当前结果不代表完整检索`
+        : items.length
+          ? ""
+          : " · 未匹配当前关键词，可尝试原文用词或调整范围";
+      state.status =
+        status.textContent = `${items.length} 条结果${emptyNote} · 本页 ${bundle.usage.bytes} 字节 · 覆盖：${bundle.coverage}${bundle.truncated ? " · 已截断" : ""}${
+          bundle.gaps.length
+            ? " · " +
+              bundle.gaps
+                .map((g) => g.code)
+                .filter((v, i, a) => a.indexOf(v) === i)
+                .join("、")
+            : ""
+        }`;
       renderResults();
       node("#ask-more", ctx.root).hidden = !next;
     } catch (error) {
       if (!ctx.signal.aborted)
-        status.textContent = `检索未完成：${message(error)}`;
+        state.status = status.textContent = `检索未完成：${message(error)}`;
     } finally {
       busy = false;
-      node<HTMLButtonElement>("#askGo", ctx.root).disabled = false;
-      node<HTMLButtonElement>("#ask-more", ctx.root).disabled = false;
+      if (!ctx.signal.aborted) {
+        node<HTMLButtonElement>("#askGo", ctx.root).disabled = false;
+        node<HTMLButtonElement>("#ask-more", ctx.root).disabled = false;
+      }
     }
   };
+  ctx.signal.addEventListener(
+    "abort",
+    () => {
+      if (busy) state.status = "检索已中止；保留上次结果，可重新检索。";
+    },
+    { once: true },
+  );
+  let preparing = false;
   node<HTMLFormElement>("#ask-form", ctx.root).onsubmit = (event) => {
     event.preventDefault();
+    if (busy || preparing || ctx.signal.aborted) return;
+    preparing = true;
+    const draft = { ...state.draft };
     void (async () => {
-      const scope = node<HTMLSelectElement>("#askScope", ctx.root).value,
-        kind = node<HTMLSelectElement>("#askKinds", ctx.root).value;
+      const scope = draft.scope,
+        kind = draft.kinds;
       const ids =
         scope === "selection"
           ? [...ctx.library.selected]
@@ -248,7 +280,7 @@ export async function renderRetrieval(ctx: AppContext): Promise<void> {
             : [];
       const req = parseKnowledgeContextRequest({
         schema_version: 2,
-        query: node<HTMLInputElement>("#askIn", ctx.root).value,
+        query: draft.query,
         scope:
           scope === "library"
             ? { kind: "library" }
@@ -264,24 +296,28 @@ export async function renderRetrieval(ctx: AppContext): Promise<void> {
           kind === "source"
             ? null
             : {
-                purposes: [],
+                purposes: ["overview", "detailed", "question", "synthesis"],
                 question: null,
                 selection: "all",
                 artifact_ids: [],
               },
         budget: {
-          max_items: Number(
-            node<HTMLSelectElement>("#askCount", ctx.root).value,
-          ),
-          max_bytes: Number(
-            node<HTMLInputElement>("#askBytes", ctx.root).value,
-          ),
+          max_items: Number(draft.count),
+          max_bytes: Number(draft.bytes),
           token_limit: null,
         },
         continuation: null,
       });
       await run(req);
-    })().catch((error) => toast(message(error)));
+    })()
+      .catch((error) => {
+        if (!ctx.signal.aborted)
+          node("#ask-status", ctx.root).textContent =
+            state.status = `检索未完成：${message(error)}`;
+      })
+      .finally(() => {
+        preparing = false;
+      });
   };
   click(
     "#ask-more",
@@ -330,4 +366,6 @@ export async function renderRetrieval(ctx: AppContext): Promise<void> {
     },
     ctx.root,
   );
+  renderResults();
+  renderBasket();
 }

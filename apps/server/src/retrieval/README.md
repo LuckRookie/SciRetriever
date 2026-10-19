@@ -4,7 +4,7 @@
 
 ## 内容入口
 
-- [index.ts](index.ts)：材料索引构建。
+- [index.ts](index.ts)：材料索引构建。已核验来源先暂存，再跨来源合并有界批次写入，避免逐篇提交事务；保留空来源计数、取消与发布前 revision 校验。
 - [query.ts](query.ts)：材料上下文查询。
 - [knowledge-index.ts](knowledge-index.ts)：知识索引构建。
 - [knowledge-query.ts](knowledge-query.ts)：知识与材料查询。

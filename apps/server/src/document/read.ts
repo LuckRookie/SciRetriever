@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
   ContractValidationError,
@@ -20,10 +21,6 @@ import {
 } from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import { SqliteDocumentStorage } from "./storage.js";
-import {
-  buildDocumentStructure,
-  MAX_DOCUMENT_MARKDOWN_BYTES,
-} from "./builder.js";
 
 const MAX_MATERIAL_BYTES = 256 * 1024 * 1024;
 const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -236,6 +233,17 @@ function resourceContext(
 }
 
 export class DocumentReadService {
+  private readonly verificationScope = new AsyncLocalStorage<{
+    bytes: number;
+    versions: Map<
+      string,
+      {
+        version: DocumentRef;
+        markdown: Uint8Array;
+        structure: DocumentStructureV1;
+      }
+    >;
+  }>();
   private readonly active = new Set<Promise<unknown>>();
   private stopped = false;
   private closing: Promise<void> | undefined;
@@ -261,6 +269,32 @@ export class DocumentReadService {
       this.active.delete(operation);
     }
   }
+  /** One logical result read may cite a fixed document many times. Keep only
+   * its verified immutable bytes for this operation, never across requests. */
+  withReadScope<T>(work: () => Promise<T>): Promise<T> {
+    if (this.verificationScope.getStore()) return work();
+    const scope = {
+      bytes: 0,
+      versions: new Map<
+        string,
+        {
+          version: DocumentRef;
+          markdown: Uint8Array;
+          structure: DocumentStructureV1;
+        }
+      >(),
+    };
+    return this.run(() =>
+      this.verificationScope.run(scope, async () => {
+        try {
+          return await work();
+        } finally {
+          scope.versions.clear();
+          scope.bytes = 0;
+        }
+      }),
+    );
+  }
   private async version<T>(
     id: string,
     signal: AbortSignal | undefined,
@@ -272,6 +306,28 @@ export class DocumentReadService {
     reserveVerifiedBytes?: (bytes: number) => void,
   ): Promise<T> {
     check(signal);
+    // Budgeted retrieval keeps its own accounting and bypasses this reuse.
+    const scope = reserveVerifiedBytes
+      ? undefined
+      : this.verificationScope.getStore();
+    const verified = scope?.versions.get(id);
+    if (verified) {
+      try {
+        const result = await consume(
+          verified.version,
+          verified.markdown,
+          verified.structure,
+        );
+        check(signal);
+        return result;
+      } catch (error) {
+        if (error instanceof DocumentReadError) throw error;
+        throw new DocumentReadError(
+          signal?.aborted ? "document-cancelled" : "document-integrity",
+          { cause: error },
+        );
+      }
+    }
     if (
       ![3, 4, 5, 6, 7, 8, 9, 10].includes(
         Number((await this.database.schema()).schema_version),
@@ -286,9 +342,9 @@ export class DocumentReadService {
     }
     if (!snapshot) throw new DocumentReadError("document-missing");
     try {
-      const result = await this.storage.withPinnedVersion(
+      const result = await this.storage.withVerifiedDocument(
         id,
-        async (version) => {
+        async (version, bytes, structure) => {
           if (
             version.document_version_id !==
               snapshot.version.document_version_id ||
@@ -296,25 +352,18 @@ export class DocumentReadService {
               snapshot.version.representation_sha256
           )
             throw new Error("document snapshot changed");
-          if (version.markdown.byte_size > MAX_DOCUMENT_MARKDOWN_BYTES)
-            throw new Error("document markdown limit");
-          const bytes = await this.storage.withVerifiedArtifact(
-            snapshot.markdown_artifact_path,
-            version.markdown,
-            async (chunks) => {
-              const parts: Uint8Array[] = [];
-              for await (const part of chunks) {
-                check(signal);
-                parts.push(part);
-              }
-              return Buffer.concat(parts.map((part) => Buffer.from(part)));
-            },
-          );
           check(signal);
-          const built = await buildDocumentStructure(bytes, signal);
-          if (built.sha256 !== version.structure.sha256)
-            throw new Error("document structure mismatch");
-          return consume(version, bytes, built.structure);
+          const weight = bytes.byteLength + version.structure.byte_size;
+          if (
+            scope &&
+            !scope.versions.has(id) &&
+            scope.versions.size < 16 &&
+            scope.bytes + weight <= 32 * 1024 * 1024
+          ) {
+            scope.bytes += weight;
+            scope.versions.set(id, { version, markdown: bytes, structure });
+          }
+          return consume(version, bytes, structure);
         },
         signal,
         reserveVerifiedBytes,

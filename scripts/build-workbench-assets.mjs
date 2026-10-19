@@ -1,3 +1,4 @@
+import { buildReaderAssets } from "./build-reader-assets.mjs";
 import { build } from "esbuild";
 import { copyFile, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -68,3 +69,5 @@ await Promise.all([
     resolve(webDist, "maintenance.bundle.js"),
   ),
 ]);
+
+await buildReaderAssets(serverAssets);

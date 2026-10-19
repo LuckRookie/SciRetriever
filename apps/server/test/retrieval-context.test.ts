@@ -3,12 +3,13 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   parseAsset,
   parseMaterialContextBundle,
   parseMaterialContextRequest,
   parseLiteratureId,
+  parseLiterature,
   parseMetaLiteratureId,
   parseProvenance,
   sha256,
@@ -220,6 +221,108 @@ async function fixture(document = false, publishBeforeV4 = false) {
 }
 
 describe("explicit retrieval projection and bounded Context", () => {
+  it("batches metadata sources without losing source counts or searchable entries", async () => {
+    const env = await fixture();
+    let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
+    const insert = vi.spyOn(RetrievalStorageClient.prototype, "insertEntries");
+    try {
+      for (let n = 1; n <= 256; n++) {
+        await env.app.database.putLiterature(
+          parseLiterature({
+            ...FIXTURE_LITERATURE,
+            literature_id: id(10_000 + n),
+            metadata: {
+              ...FIXTURE_LITERATURE.metadata,
+              title: `Batchneedle ${n}`,
+            },
+          }),
+        );
+      }
+      const generation = await env.app.maintenance!.rebuildIndex();
+      expect(generation).toMatchObject({ entry_count: 257, source_count: 257 });
+      expect(insert.mock.calls.length).toBeLessThanOrEqual(3);
+      expect(insert.mock.calls.length).toBeGreaterThan(1);
+      expect(
+        insert.mock.calls.every(
+          ([, entries, count]) => entries.length <= 128 && count <= 128,
+        ),
+      ).toBe(true);
+      expect(insert.mock.calls.reduce((n, [, , count]) => n + count, 0)).toBe(
+        257,
+      );
+      query = await createQueryApplication(env.home);
+      const context = await query.context!.search({
+        ...request(["metadata"]),
+        query: "batchneedle",
+        scope: { kind: "literatures", literature_ids: [id(10_256)] },
+      });
+      expect(context.items).toHaveLength(1);
+      expect(context.items[0]?.literature_id).toBe(id(10_256));
+      const db = new DatabaseSync(env.catalog, { readOnly: true });
+      try {
+        expect(
+          db
+            .prepare(
+              "SELECT count(DISTINCT literature_id) AS n FROM retrieval_entries WHERE generation_id=?",
+            )
+            .get(generation.generation_id),
+        ).toEqual({ n: 257 });
+      } finally {
+        db.close();
+      }
+    } finally {
+      insert.mockRestore();
+      await query?.close();
+      await env.close();
+    }
+  }, 30_000);
+
+  it("bounds replay bytes and counts a fragmented document only once", async () => {
+    const env = await fixture(true);
+    let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
+    const insert = vi.spyOn(RetrievalStorageClient.prototype, "insertEntries");
+    try {
+      env.setText(`# Results\n\n${"Dose ".repeat(300_000)}\n`);
+      await env.app.documentProcessing.parseDocuments({
+        literature_id: FIXTURE_LITERATURE.literature_id,
+        asset_id: env.asset!.asset_id,
+        asset_sha256: env.asset!.sha256,
+        mode: "reparse",
+        expected_default_revision: null,
+      });
+      const generation = await env.app.maintenance!.rebuildIndex();
+      expect(generation.source_count).toBe(2);
+      expect(generation.entry_count).toBeGreaterThan(32);
+      expect(insert.mock.calls.length).toBeGreaterThan(1);
+      for (const [, entries] of insert.mock.calls) {
+        expect(entries.length).toBeLessThanOrEqual(128);
+        expect(
+          entries.reduce(
+            (n, e) =>
+              n + Buffer.byteLength(e.title) + Buffer.byteLength(e.body),
+            0,
+          ),
+        ).toBeLessThanOrEqual(1024 * 1024);
+      }
+      expect(insert.mock.calls.reduce((n, [, , count]) => n + count, 0)).toBe(
+        2,
+      );
+      expect(
+        insert.mock.calls.reduce((n, [, entries]) => n + entries.length, 0),
+      ).toBe(generation.entry_count);
+      query = await createQueryApplication(env.home);
+      const context = await query.context!.search({
+        ...request(["document"]),
+        query: "dose",
+      });
+      expect(context.items.length).toBeGreaterThan(0);
+    } finally {
+      insert.mockRestore();
+      await query?.close();
+      await env.close();
+    }
+  }, 30_000);
+
   it("rejects queued cancellation but settles a publish already sent to SQLite", async () => {
     const env = await fixture();
     try {

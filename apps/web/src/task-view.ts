@@ -42,6 +42,7 @@ export const operationLabels: Readonly<Record<string, string>> = {
   analyze: "单篇知识分析",
   "analyze-long": "长文分段分析",
   synthesize: "集合综合",
+  "run-processor": "知识处理",
 };
 
 export function taskTitle(job: Json): string {
@@ -51,6 +52,11 @@ export function taskTitle(job: Json): string {
     const operations = listField(request, "operations").map((item) =>
       record(item, "operation"),
     );
+    if (
+      request.schema_version === 2 &&
+      typeof request.collection_name === "string"
+    )
+      return `${request.collection_name} · ${operations.length} 项`;
     const names = [
       ...new Set(
         operations.map(
@@ -79,6 +85,7 @@ export interface TaskDetail {
   readonly job: Json;
   readonly targets: readonly Json[];
   readonly results: readonly Json[];
+  readonly collections: readonly Json[];
   readonly skipped: readonly Json[];
   readonly failures: readonly Json[];
   readonly events: readonly Json[];
@@ -99,6 +106,7 @@ export function parseTaskDetail(value: unknown): TaskDetail {
     job,
     targets: list("targets"),
     results: list("results"),
+    collections: task.collections == null ? [] : list("collections"),
     skipped: list("skipped"),
     failures: list("failures"),
     events: list("events"),
@@ -120,6 +128,26 @@ export function taskLiteratureId(job: Json, target: Json): string | null {
   const operation = listField(request, "operations")[Number(target.ordinal)];
   if (!operation) return null;
   const item = record(operation, "processing operation");
+  if (item.operation === "run-processor") {
+    const inputs = listField(
+      record(item.request, "processor invocation"),
+      "inputs",
+    );
+    if (inputs.length !== 1) return null;
+    const source = record(inputs[0], "processor input");
+    if (source.kind === "missing")
+      return typeof source.literature_id === "string"
+        ? source.literature_id
+        : null;
+    if (source.kind !== "document") return null;
+    const material = record(
+      record(source.document, "processor document").source_material_ref,
+      "processor material",
+    );
+    return typeof material.literature_id === "string"
+      ? material.literature_id
+      : null;
+  }
   if (item.operation !== "analyze" && item.operation !== "analyze-long")
     return null;
   const input = record(

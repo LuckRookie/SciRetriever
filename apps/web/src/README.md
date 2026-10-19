@@ -5,6 +5,7 @@
 ## 内容入口
 
 - [live.ts](live.ts)、[workspace/](workspace/README.md)：正式文献库工作空间入口，包含原型导航、阅读标签、任务和 Browser 接入。
+- [reading/](reading/README.md)：固定版本 PDF/全文/已有知识阅读，按需装载与会话位置恢复。
 - [query.ts](query.ts)：只读查询入口。
 - [maintenance.ts](maintenance.ts)：显式维护入口。
 - [library.ts](library.ts)：文献浏览。

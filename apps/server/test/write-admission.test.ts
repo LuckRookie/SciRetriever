@@ -6,6 +6,9 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { AsyncResource } from "node:async_hooks";
 import { expect, it } from "vitest";
+import { setup, proposal, lit } from "./content-fixture.js";
+import { LiteratureContentService } from "../src/literature/content.js";
+import { createApplication } from "../src/bootstrap/application.js";
 import {
   acquireCatalogWriteLock,
   CatalogWriteAdmission,
@@ -192,10 +195,6 @@ it("releases a subprocess-held admission on process death without stale lock-dir
   }
 });
 it("keeps content files and their SQL publication in one admission, then lets a queued maintenance read observe the commit", async () => {
-  const { setup, proposal, lit } = await import("./content-fixture.js");
-  const { LiteratureContentService } = await import(
-    "../src/literature/content.js"
-  );
   const env = await setup();
   let entered: () => void = () => {},
     release: () => void = () => {};
@@ -243,11 +242,6 @@ it("keeps content files and their SQL publication in one admission, then lets a 
   }
 });
 it("application shutdown waits for an already admitted content publication to finish its SQL commit", async () => {
-  const { setup, proposal, lit } = await import("./content-fixture.js");
-  const { LiteratureContentService } = await import(
-    "../src/literature/content.js"
-  );
-  const { createApplication } = await import("../src/bootstrap/application.js");
   const env = await setup();
   let entered: () => void = () => {},
     release: () => void = () => {};

@@ -4,6 +4,7 @@ import {
   type ArtifactRef,
   type DocumentRef,
   type DocumentRepresentationInput,
+  type DocumentStructureV1,
 } from "@sciretriever/contracts";
 import type { FileStore } from "../storage/files/store.js";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
@@ -124,9 +125,27 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     return this.database.commitDocumentVersion(input, signal);
   }
 
-  async withPinnedVersion<T>(
+  withPinnedVersion<T>(
     documentVersionId: string,
     consume: (version: DocumentRef) => Promise<T>,
+    signal?: AbortSignal,
+    reserveVerifiedBytes?: (bytes: number) => void,
+  ): Promise<T> {
+    return this.withVerifiedDocument(
+      documentVersionId,
+      consume,
+      signal,
+      reserveVerifiedBytes,
+    );
+  }
+
+  async withVerifiedDocument<T>(
+    documentVersionId: string,
+    consume: (
+      version: DocumentRef,
+      markdown: Uint8Array,
+      structure: DocumentStructureV1,
+    ) => Promise<T>,
     signal?: AbortSignal,
     reserveVerifiedBytes?: (bytes: number) => void,
   ): Promise<T> {
@@ -176,21 +195,35 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     );
     const closure: [string, ArtifactRef][] = [
       [snapshot.source_artifact_path, v.source_material_ref.artifact],
-      [snapshot.markdown_artifact_path, v.markdown],
-      [snapshot.structure_artifact_path, v.structure],
     ];
     for (const resource of v.resources) {
       const path = snapshot.resource_artifact_paths[resource.reference];
       if (!path) throw new Error("document resource missing");
       closure.push([path, resource.artifact]);
     }
-    for (const [path, expected] of closure)
-      await this.withVerifiedArtifact(path, expected, async (chunks) => {
-        for await (const chunk of chunks) {
-          void chunk;
-          if (signal?.aborted) throw new Error("document read cancelled");
+    // Bounded independent reads preserve every byte/path check without walking
+    // hundreds of image paths serially. Settle all readers before returning.
+    let next = 0;
+    const checks = await Promise.allSettled(
+      Array.from({ length: Math.min(8, closure.length) }, async () => {
+        while (next < closure.length) {
+          const [path, expected] = closure[next++]!;
+          await this.withVerifiedArtifact(
+            path,
+            expected,
+            async (chunks) => {
+              for await (const chunk of chunks) {
+                void chunk;
+                if (signal?.aborted) throw new Error("document read cancelled");
+              }
+            },
+            signal,
+          );
         }
-      });
+      }),
+    );
+    const failure = checks.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
     const markdown = await this.readBytes(
       snapshot.markdown_artifact_path,
       v.markdown,
@@ -203,16 +236,13 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
       MAX_DOCUMENT_STRUCTURE_BYTES,
       signal,
     );
-    if (
-      !Buffer.from(
-        (await buildDocumentStructure(markdown, signal)).bytes,
-      ).equals(Buffer.from(structure))
-    )
+    const built = await buildDocumentStructure(markdown, signal);
+    if (!Buffer.from(built.bytes).equals(Buffer.from(structure)))
       throw new Error("document structure mismatch");
     // Catalog v3 has no physical reclamation writer; this fixed version remains
     // durable through the callback. Future GC must add a cross-process read pin.
     if (signal?.aborted) throw new Error("document read cancelled");
-    return consume(v);
+    return consume(v, markdown, built.structure);
   }
   withVerifiedArtifact<T>(
     reference: string,
@@ -233,15 +263,20 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
   ): Promise<Uint8Array> {
     if (expected.byte_size > limit)
       throw new Error("document artifact limit exceeded");
-    return this.withVerifiedArtifact(reference, expected, async (chunks) => {
-      const parts: Uint8Array[] = [];
-      for await (const part of chunks) {
-        if (signal?.aborted) throw new Error("document read cancelled");
-        parts.push(part);
-      }
-      return new Uint8Array(
-        Buffer.concat(parts.map((part) => Buffer.from(part))),
-      );
-    });
+    return this.withVerifiedArtifact(
+      reference,
+      expected,
+      async (chunks) => {
+        const parts: Uint8Array[] = [];
+        for await (const part of chunks) {
+          if (signal?.aborted) throw new Error("document read cancelled");
+          parts.push(part);
+        }
+        return new Uint8Array(
+          Buffer.concat(parts.map((part) => Buffer.from(part))),
+        );
+      },
+      signal,
+    );
   }
 }

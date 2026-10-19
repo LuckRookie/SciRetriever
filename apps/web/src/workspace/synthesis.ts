@@ -19,13 +19,27 @@ import {
   message,
   failure,
   download,
+  button,
 } from "./dom.js";
 import type { AppContext } from "./types.js";
+import { readFixedSource, renderFixedKnowledge } from "./source-navigation.js";
 export async function renderSyntheses(ctx: AppContext): Promise<void> {
   ctx.root.innerHTML = `<div class="pg"><div class="pgin"><div class="crumb">使用 / 综合</div><h1 class="ptitle">综合</h1><p class="pdesc">围绕明确文献范围，比较共识、分歧、条件与局限。</p><div class="vtabs"><button class="btn blue" id="new-synthesis">${icon("plus", true)}新建综合</button><button class="btn q sm" id="refresh-syntheses">刷新</button></div><div id="synthesis-composer" hidden></div><div id="synthesis-gallery" class="gal"></div><div id="synthesis-content" class="doc"></div></div></div>`;
   const gallery = node("#synthesis-gallery", ctx.root),
     content = node("#synthesis-content", ctx.root);
   const open = async (id: string) => {
+    const parameters = new URL(location.href).searchParams;
+    const fixed = readFixedSource(parameters);
+    if (fixed?.kind === "knowledge" && fixed.artifact_id === id) {
+      gallery.hidden = true;
+      content.replaceChildren();
+      if (parameters.get("from") === "ask")
+        content.append(button("返回检索", () => ctx.navigate("ask")));
+      const body = document.createElement("div");
+      content.append(body);
+      await renderFixedKnowledge(ctx, fixed, body);
+      return;
+    }
     const selection = parseSynthesisReadSelection({ artifact_id: id });
     const result = await parseSynthesisReadResult(
       (await ctx.api.query("synthesis-read", selection, ctx.signal)).result,

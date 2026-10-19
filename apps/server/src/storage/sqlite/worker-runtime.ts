@@ -63,6 +63,20 @@ const processorModule = await import(
     import.meta.url,
   ).href
 );
+const libraryPageModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts") ? "./library-page.ts" : "./library-page.js",
+    import.meta.url,
+  ).href
+);
+const queryTextModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "../../literature/unicode-casefold.ts"
+      : "../../literature/unicode-casefold.js",
+    import.meta.url,
+  ).href
+);
 const port = parentPort;
 if (!port) throw new Error("sqlite worker parent port is unavailable");
 const CASE_FOLD = data.case_fold;
@@ -241,7 +255,24 @@ const EXHAUSTION_LITERATURE_RE =
 function fail(): never {
   throw new Error("sqlite worker operation failed");
 }
+let verifiedDocumentSchema: string | null = null;
 function validDocumentSchema(version: number): boolean {
+  // Reuse a full health check only while this connection's database state is
+  // unchanged. External commits, local writes (including rolled-back writes),
+  // DDL and reopening the connection all invalidate this proof.
+  const identity = JSON.stringify([
+    version,
+    db.prepare("PRAGMA data_version").get().data_version,
+    db.prepare("PRAGMA schema_version").get().schema_version,
+    db.prepare("SELECT total_changes() AS changes").get().changes,
+  ]);
+  if (verifiedDocumentSchema === identity) return true;
+  verifiedDocumentSchema = null;
+  const valid = inspectDocumentSchema(version);
+  if (valid) verifiedDocumentSchema = identity;
+  return valid;
+}
+function inspectDocumentSchema(version: number): boolean {
   try {
     const names = new Set<string>();
     const manifest =
@@ -403,9 +434,13 @@ function validDocumentSchema(version: number): boolean {
   }
 }
 function initialize(): Dynamic {
+  verifiedDocumentSchema = null;
   db = data.read_only
     ? new DatabaseSync(data.path, { readOnly: true })
     : new DatabaseSync(data.path);
+  db.function("sr_normalize", { deterministic: true }, (value: Dynamic) =>
+    value === null ? null : queryTextModule.normalizeQueryText(value),
+  );
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA busy_timeout = 5000");
   if (data.read_only) {
@@ -901,6 +936,14 @@ function stateEvidence(id: Dynamic): Dynamic {
         "SELECT c.metadata_revision,c.metadata_sha256,c.primary_asset_id,c.primary_asset_sha256,c.parser_result_sha256,p.source_kind,p.input_sha256 FROM literature_contents c JOIN provenances p ON p.provenance_id=c.analysis_provenance_id WHERE c.literature_id=?",
       )
       .get(id) || null;
+  return stateFromFacts(metadata, primary, parser, content);
+}
+function stateFromFacts(
+  metadata: Dynamic,
+  primary: Dynamic,
+  parser: Dynamic,
+  content: Dynamic,
+): Dynamic {
   if (content)
     content.expected_input_sha256 = createHash("sha256")
       .update(
@@ -1210,6 +1253,105 @@ function librarySnapshot(
     db.exec("ROLLBACK");
     throw error;
   }
+}
+function librarySearchPage(request: Dynamic): Dynamic {
+  return readTransaction(() => {
+    validateDiscoveryCauses(request.query.discovery_run_ids);
+    const q = request.query;
+    if (
+      q.statuses.length ||
+      q.missing_steps.length ||
+      q.needs_manual_pdf === true
+    ) {
+      // Only state filters need these scalar facts; no authors, observations or
+      // content bytes are materialized. Reuse the existing state truth table.
+      const states = new Map<Dynamic, Dynamic>();
+      for (const row of db
+        .prepare(
+          `SELECT m.literature_id,m.metadata_revision,m.metadata_sha256,
+        a.asset_id,a.sha256,a.media_type,pr.source_asset_id,pr.source_sha256,
+        c.metadata_revision AS content_revision,c.metadata_sha256 AS content_metadata,
+        c.primary_asset_id,c.primary_asset_sha256,c.parser_result_sha256,
+        p.source_kind,p.input_sha256
+        FROM literature_metadata m
+        LEFT JOIN literature_assets la ON la.literature_id=m.literature_id AND la.role='primary-pdf'
+        LEFT JOIN assets a ON a.asset_id=la.asset_id
+        LEFT JOIN parser_results pr ON pr.source_asset_id=a.asset_id
+        LEFT JOIN literature_contents c ON c.literature_id=m.literature_id
+        LEFT JOIN provenances p ON p.provenance_id=c.analysis_provenance_id`,
+        )
+        .all()) {
+        const primary =
+          row.asset_id === null
+            ? null
+            : {
+                asset_id: row.asset_id,
+                sha256: row.sha256,
+                media_type: row.media_type,
+              };
+        const parser =
+          row.source_asset_id === null
+            ? null
+            : {
+                source_asset_id: row.source_asset_id,
+                source_sha256: row.source_sha256,
+              };
+        const content =
+          row.content_revision === null
+            ? null
+            : {
+                metadata_revision: row.content_revision,
+                metadata_sha256: row.content_metadata,
+                primary_asset_id: row.primary_asset_id,
+                primary_asset_sha256: row.primary_asset_sha256,
+                source_kind: row.source_kind,
+                input_sha256: row.input_sha256,
+                parser_result_sha256: row.parser_result_sha256,
+              };
+        states.set(
+          row.literature_id,
+          stateFromFacts(
+            {
+              metadata_revision: row.metadata_revision,
+              metadata_sha256: row.metadata_sha256,
+            },
+            primary,
+            parser,
+            content,
+          ),
+        );
+      }
+      db.function(
+        "sr_status",
+        { deterministic: true },
+        (id: Dynamic) => states.get(id)?.status ?? null,
+      );
+      db.function(
+        "sr_missing",
+        { deterministic: true },
+        (id: Dynamic) => states.get(id)?.missing_step ?? null,
+      );
+    }
+    const page = libraryPageModule.libraryPageIds(db, request);
+    return {
+      total_count: page.total_count,
+      rows: page.rows.map((row: Dynamic) => ({
+        item: searchItem(row.literature_id),
+        relevance: row.relevance,
+        has_pdf_exhaustion: !!db
+          .prepare(
+            "SELECT 1 FROM automatic_pdf_acquisition_exhaustions WHERE literature_id=?",
+          )
+          .get(row.literature_id),
+        discovery_run_ids: db
+          .prepare(
+            "SELECT discovery_run_id FROM topic_discovery_causes WHERE actual_literature_id=? UNION SELECT discovery_run_id FROM citation_discovery_causes WHERE actual_literature_id=?",
+          )
+          .all(row.literature_id, row.literature_id)
+          .map((r: Dynamic) => r.discovery_run_id),
+      })),
+    };
+  });
 }
 function listLiterature(afterId: Dynamic, limit: Dynamic): Dynamic {
   const rows = db
@@ -5812,6 +5954,9 @@ port.on("message", (message: WorkerMessage) => {
         break;
       case "get_receipt_result":
         value = getReceiptResult(message.command.receiptId);
+        break;
+      case "library_search_page":
+        value = librarySearchPage(message.command.request);
         break;
       case "library_snapshot":
         value = librarySnapshot(

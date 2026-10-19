@@ -1,3 +1,4 @@
+import { readingAssets } from "./reading-assets-fixture.js";
 import { readFile } from "node:fs/promises";
 import { build } from "esbuild";
 import { chromium } from "playwright";
@@ -17,7 +18,7 @@ it("uses the authenticated library workspace to read original bytes, run durable
   const session = new ProductionWorkbenchSession(null, async () => {
     throw new Error("unexpected browser action");
   });
-  const assets = new Map<string, WorkbenchStaticAsset>();
+  const assets = new Map<string, WorkbenchStaticAsset>(await readingAssets());
   for (const [route, file, contentType] of [
     ["/", "live.html", "text/html"],
     ["/styles.css", "styles.css", "text/css"],
@@ -51,9 +52,9 @@ it("uses the authenticated library workspace to read original bytes, run durable
     assets,
   });
   const browser = await chromium.launch({
-    executablePath:
-      process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ??
-      "/home/duanjw/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome",
+    ...(process.env.SCIRETRIEVER_BROWSER_EXECUTABLE
+      ? { executablePath: process.env.SCIRETRIEVER_BROWSER_EXECUTABLE }
+      : {}),
     headless: true,
   });
   try {
@@ -72,15 +73,22 @@ it("uses the authenticated library workspace to read original bytes, run durable
     expect(env.parseCalls).toBe(0);
     expect(env.modelCalls).toBe(0);
     expect(await env.app.jobs!.listJobs(10)).toHaveLength(0);
-    await expect
-      .poll(() => page.locator(".library-pdf-reading").textContent())
-      .toContain(env.asset.sha256);
+    await page
+      .locator('.reading-pdf-page[data-rendered="true"]')
+      .first()
+      .waitFor();
+    expect(await page.locator(".textLayer").first().textContent()).toContain(
+      "Synthetic",
+    );
     expect(
-      await page.locator('iframe[title="原始 PDF 预览"]').getAttribute("src"),
+      await page
+        .getByRole("link", { name: "下载已核验的原始 PDF" })
+        .getAttribute("href"),
     ).toMatch(/^blob:/u);
     await page
       .getByRole("button", { name: "加入提取输入", exact: true })
       .click();
+    await page.locator("#processor-delivery").click();
     await page
       .getByRole("button", { name: "使用库中选定范围", exact: true })
       .click();
@@ -123,9 +131,10 @@ it("uses the authenticated library workspace to read original bytes, run durable
       .getByRole("button", { name: "打开解析 PDF结果", exact: true })
       .click();
     await expect
-      .poll(() => page.locator(".library-reading").textContent())
-      .toContain("固定表示");
+      .poll(() => page.locator("#reader-status").textContent())
+      .toContain("全文已加载");
     expect(new URL(page.url()).searchParams.get("document")).toBeTruthy();
+    await page.locator("#reader-outline-toggle").click();
     await page.locator(".library-reading-sections button").first().click();
     await expect
       .poll(() => page.locator(".library-reading-text").textContent())
@@ -197,13 +206,9 @@ it("uses the authenticated library workspace to read original bytes, run durable
       .toContain("文章身份有证据支持");
     await page.locator('[data-rm="know"]').click();
     await expect
-      .poll(() =>
-        page
-          .locator("#reader-body .vbar button")
-          .filter({ hasText: "overview ·" })
-          .count(),
-      )
-      .toBe(1);
+      .poll(() => page.locator("#reader-body .reading-article").textContent())
+      .toContain("overview ·");
+    expect(await page.locator("#reader-body .config-card").count()).toBe(1);
     expect(await env.app.jobs!.listJobs(10)).toHaveLength(3);
     expect(errors).toEqual([]);
   } finally {

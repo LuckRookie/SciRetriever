@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -557,6 +558,34 @@ describe("bounded document and material reading", () => {
     }
   });
 
+  it("invalidates warmed schema checks after external DDL changes", async () => {
+    const env = await fixture();
+    let raw: DatabaseSync | undefined;
+    try {
+      await env.migrate();
+      const receipt = await env.app.documentProcessing.parseDocuments(
+        env.request("reparse"),
+      );
+      const request = {
+        document_version_id: receipt.document.document_version_id,
+      };
+      const first = await env.app.documentRead.describe(request);
+      expect(await env.app.documentRead.describe(request)).toEqual(first);
+      raw = new DatabaseSync(join(env.home, "catalog.sqlite"));
+      raw.exec(
+        "CREATE INDEX unexpected_document_index ON literatures(meta_literature_id)",
+      );
+      await expect(
+        env.app.documentRead.describe(request),
+      ).rejects.toBeInstanceOf(Error);
+      raw.exec("DROP INDEX unexpected_document_index");
+      expect(await env.app.documentRead.describe(request)).toEqual(first);
+    } finally {
+      raw?.close();
+      await env.close();
+    }
+  });
+
   it("separates invalid locators, unsupported schemes and corrupt resource bytes", async () => {
     const env = await fixture();
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
@@ -634,7 +663,15 @@ describe("bounded document and material reading", () => {
       ).rejects.toMatchObject({ code: "document-integrity" });
       const snapshot = await env.app.database.documentVersion(version);
       const path = snapshot!.resource_artifact_paths["fig.png"]!;
+      await reader.withReadScope(() =>
+        reader.describe({ document_version_id: version }),
+      );
       await writeFile(join(env.app.files.root, path), Buffer.from("tampered"));
+      await expect(
+        reader.withReadScope(() =>
+          reader.describe({ document_version_id: version }),
+        ),
+      ).rejects.toMatchObject({ code: "document-integrity" });
       await expect(
         reader.resource({
           document_version_id: version,

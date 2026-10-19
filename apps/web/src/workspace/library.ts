@@ -34,6 +34,11 @@ import {
   failure,
 } from "./dom.js";
 import type { AppContext, ReaderMode, SavedView } from "./types.js";
+import {
+  readFixedSource,
+  sourceParameterKeys,
+  renderFixedKnowledge,
+} from "./source-navigation.js";
 
 export const emptyQuery = (): LibraryQuery =>
   parseLibrarySearchRequest({
@@ -43,7 +48,14 @@ export const emptyQuery = (): LibraryQuery =>
     cursor: null,
   }).query;
 export function title(item: LiteratureSearchItem): string {
-  return item.literature.metadata.title || "未命名文献";
+  // Bibliographic sources may retain inline formatting. Only strip known
+  // formatting tags for this plain-text label; never insert source HTML.
+  return (
+    item.literature.metadata.title?.replace(
+      /<\/?(?:i|b|em|strong|sub|sup)\s*>/giu,
+      "",
+    ) || "未命名文献"
+  );
 }
 export function authors(item: LiteratureSearchItem): string {
   return (
@@ -173,6 +185,22 @@ export async function renderLibrary(ctx: AppContext): Promise<void> {
     count = node("#library-status", ctx.root),
     more = node<HTMLButtonElement>("#library-more", ctx.root);
   let generation = 0;
+  const syncSelection = () => {
+    root.classList.toggle("selecting", s.selected.size > 0);
+    for (const box of all<HTMLInputElement>("[data-ck]", root)) {
+      const selected = s.selected.has(box.dataset.ck!);
+      box.checked = selected;
+      box.parentElement?.classList.toggle("on", selected);
+      box.closest(".prow")?.classList.toggle("on", selected);
+    }
+    const selected = s.items.filter((p) =>
+      s.selected.has(p.literature.literature_id),
+    ).length;
+    const allBox = node<HTMLInputElement>("#ckAll", ctx.root);
+    allBox.checked = s.items.length > 0 && selected === s.items.length;
+    allBox.indeterminate = selected > 0 && selected < s.items.length;
+    renderSelection(ctx);
+  };
   const renderRows = () => {
     node<HTMLInputElement>("#ckAll", ctx.root).disabled = false;
     root.classList.toggle("selecting", s.selected.size > 0);
@@ -189,11 +217,8 @@ export async function renderLibrary(ctx: AppContext): Promise<void> {
         })
         .join("") ||
       '<div class="empty"><b>没有符合条件的文献</b><p>调整筛选，或从“入库”添加文献。</p></div>';
-    count.textContent = `${s.total} 篇 · 已显示 ${s.items.length} 篇`;
+    count.textContent = `${s.total ?? "—"} 篇 · 已显示 ${s.items.length} 篇`;
     more.hidden = !s.cursor;
-    node<HTMLInputElement>("#ckAll", ctx.root).checked =
-      s.items.length > 0 &&
-      s.items.every((p) => s.selected.has(p.literature.literature_id));
     for (const row of all(".prow", root)) {
       row.onclick = (event) => {
         if ((event.target as HTMLElement).closest("[data-ck],[data-peek]"))
@@ -229,10 +254,10 @@ export async function renderLibrary(ctx: AppContext): Promise<void> {
       box.onchange = () => {
         if (box.checked) s.selected.add(box.dataset.ck!);
         else s.selected.delete(box.dataset.ck!);
-        renderRows();
+        syncSelection();
       };
     click("[data-peek]", (el) => openPeek(ctx, el.dataset.peek!), root);
-    renderSelection(ctx);
+    syncSelection();
   };
   const rememberQuery = () => {
     const url = new URL(location.href);
@@ -302,7 +327,7 @@ export async function renderLibrary(ctx: AppContext): Promise<void> {
         s.selected.add(p.literature.literature_id);
       else s.selected.delete(p.literature.literature_id);
     }
-    renderRows();
+    syncSelection();
   };
   more.onclick = () => void reload(true);
   click("#toDisc", () => ctx.navigate("disc"), ctx.root);
@@ -542,6 +567,17 @@ export async function renderReader(
     '<div class="reader"><section class="viewer"><div class="vbar" id="reader-status">正在读取文献…</div><div class="vscroll" id="reader-body"></div></section><aside class="rside"><div class="rsin" id="reader-info"></div></aside></div>';
   const d = await detail(ctx, id);
   if (ctx.signal.aborted) return;
+  const parameters = new URL(location.href).searchParams;
+  const source = readFixedSource(parameters);
+  if (
+    source?.kind === "metadata" &&
+    (source.literature_id !== id ||
+      source.metadata_revision !== d.metadata_revision ||
+      source.metadata_sha256 !== d.metadata_sha256)
+  )
+    throw new Error(
+      "元数据已变化，无法将当前内容当作原检索命中。请返回重新检索。",
+    );
   const info = node("#reader-info", ctx.root),
     body = node("#reader-body", ctx.root),
     label = node("#reader-status", ctx.root);
@@ -559,10 +595,39 @@ export async function renderReader(
     )}</div><h2>${e(title(d))}</h2><div class="f2 bibliography">${citation(d)}</div>${properties(d)}<div class="acts" id="reader-actions"></div><div class="more-info"><div class="hr"></div><details class="tg"><summary>摘要与溯源</summary><p>${e(d.literature.metadata.abstract || "未提供摘要")}</p><pre>${e(JSON.stringify(d.metadata_observations, null, 2))}</pre></details><div id="reader-relations"></div></div>`;
   click(
     "[data-rm]",
-    (el) => ctx.openPaper(id, el.dataset.rm as ReaderMode),
+    (el) =>
+      ctx.openPaper(
+        id,
+        el.dataset.rm as ReaderMode,
+        Object.fromEntries(
+          sourceParameterKeys.flatMap((key) =>
+            parameters.has(key) ? [[key, parameters.get(key)!]] : [],
+          ),
+        ),
+      ),
     info,
   );
   const actions = node("#reader-actions", info);
+  if (parameters.get("from") === "ask")
+    actions.append(button("返回检索", () => ctx.navigate("ask")));
+  if (parameters.get("from") === "ext")
+    actions.append(
+      button("返回结果", () =>
+        ctx.navigate(
+          "ext",
+          parameters.has("collection")
+            ? { collection: parameters.get("collection")! }
+            : parameters.has("result")
+              ? {
+                  result: parameters.get("result")!,
+                  ...(parameters.has("resultHash")
+                    ? { resultHash: parameters.get("resultHash")! }
+                    : {}),
+                }
+              : { results: "all" },
+        ),
+      ),
+    );
   actions.append(button("导出书目", () => ctx.operate("export", [id])));
   if (!d.primary_pdf) {
     actions.append(
@@ -690,7 +755,24 @@ export async function renderReader(
       );
     info.append(versions);
   }
+  if (ctx.api.workspace.capabilities.query && source?.kind !== "metadata") {
+    const moduleUrl = "/reader.js";
+    const reader = (await import(
+      moduleUrl
+    )) as typeof import("../reading/entry.js");
+    if (!ctx.signal.aborted) await reader.mountReader(ctx, d, mode, source);
+    return;
+  }
   if (mode === "pdf") {
+    if (
+      source?.kind === "document" &&
+      (source.literature_id !== id ||
+        source.asset_id !== d.primary_pdf?.asset.asset_id ||
+        source.asset_sha256 !== d.primary_pdf.asset.sha256)
+    )
+      throw new Error(
+        "固定来源的 PDF 与当前主 PDF 不匹配；无法用当前材料替代原检索来源。请返回原文核对。",
+      );
     label.textContent = d.primary_pdf
       ? "原始 PDF · 按固定资产校验读取"
       : "暂无 PDF";
@@ -722,15 +804,21 @@ export async function renderReader(
       };
     }
   } else if (mode === "doc") {
+    if (source?.kind === "metadata") {
+      label.textContent = "元数据 · 已核对检索命中的版本";
+      body.innerHTML = `<div class="doc"><h2>${e(title(d))}</h2><p>${citation(d)}</p><p>${e(d.literature.metadata.abstract ?? "未提供摘要")}</p></div>`;
+      return;
+    }
     label.textContent = "解析文档 · 固定版本读取";
     const launch = mountDocumentReading(
       body,
       d,
-      queryRequest,
+      (path, request) => queryRequest(path, request, ctx.signal),
       (text) => {
         label.textContent = text;
       },
       new URL(location.href).searchParams.get("document") ?? undefined,
+      source?.kind === "document" ? source : undefined,
     );
     if (launch) {
       body.append(launch);
@@ -741,6 +829,10 @@ export async function renderReader(
         '<div class="empty">需要先取得 PDF，才能读取解析文档。</div>';
   } else {
     label.textContent = "总结 · 读取已发布的知识";
+    if (source?.kind === "knowledge") {
+      await renderFixedKnowledge(ctx, source, body, id);
+      return;
+    }
     const fixed = new URL(location.href).searchParams.get("knowledge");
     if (fixed) {
       const selection = parseKnowledgeReadSelection({ artifact_id: fixed });

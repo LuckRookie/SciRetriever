@@ -377,6 +377,7 @@ describe("durable task workbench", () => {
       await page.goto(`${server.origin}/?view=ext&advanced=all`);
       const submit = async (key: string, count: number) => {
         await page.locator('[data-go="ext"]').click();
+        await page.locator("#processor-delivery").click();
         await page.locator('[data-tools="all"]').click();
         await page
           .locator("details")

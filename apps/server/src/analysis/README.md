@@ -18,3 +18,5 @@
 [上级目录](../README.md) · [项目 README](../../../../README.md)
 
 - `processor*.ts`：可信处理器注册、冻结输入、结果接纳、旧分析适配与默认标签/记录提取；只读取已有材料。批量生命周期在 `application/jobs/`。
+
+`processor-export.ts` 保持完整结果导出封套，并向三个入口提供固定引用的有界只读传输；字节读取与完整性校验仍由 Storage 提供。

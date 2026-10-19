@@ -6,7 +6,8 @@
     "dist/**/*.js",
     "dist/**/*.d.ts",
     "dist/web/*.html",
-    "dist/web/*.css"
+    "dist/web/*.css",
+    "dist/web/reader/**"
   ],
   "type": "module",
   "main": "./dist/index.js",

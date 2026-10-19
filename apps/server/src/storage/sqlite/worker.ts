@@ -37,6 +37,10 @@ import {
 import { Worker } from "node:worker_threads";
 import { RetrievalStorageError } from "../../retrieval/model.js";
 import { CASE_FOLD } from "../../literature/unicode-casefold.js";
+import type {
+  LibraryPageQuery,
+  SearchSnapshotRow,
+} from "../../literature/query.js";
 import { SCHEMA_FINGERPRINT, SCHEMA_MANIFEST } from "./schema.js";
 import {
   SCHEMA_IDENTITY_V2,
@@ -579,6 +583,7 @@ export type SqliteCommand =
   | { readonly kind: "close" }
   | { readonly kind: "schema" }
   | { readonly kind: "query_preflight" }
+  | { readonly kind: "library_search_page"; readonly request: LibraryPageQuery }
   | {
       readonly kind: "library_snapshot";
       readonly ftsQuery: string | null;
@@ -1237,6 +1242,7 @@ export class SqliteWorker {
       "pending_receipts",
       "reference_query_snapshot",
       "library_snapshot",
+      "library_search_page",
       "content_cleanup_snapshot",
       "artifact_reclamation_snapshot",
       "candidate_cleanup_snapshot",
@@ -2311,6 +2317,21 @@ export class SqliteWorker {
       artifact: parseArtifactRef(result.artifact),
     };
   }
+  async librarySearchPage(request: LibraryPageQuery): Promise<{
+    readonly rows: readonly SearchSnapshotRow[];
+    readonly total_count: number;
+  }> {
+    const page = await this.run<{ rows: unknown; total_count: number }>({
+      kind: "library_search_page",
+      request,
+    });
+    if (!Number.isSafeInteger(page.total_count) || page.total_count < 0)
+      throw new SqliteWorkerError();
+    const rows = this.parseSearchRows(page.rows);
+    if (rows.length > request.limit + 1 || rows.length > page.total_count)
+      throw new SqliteWorkerError();
+    return { rows, total_count: page.total_count };
+  }
   async librarySnapshot(
     ftsQuery: string | null,
     discoveryRunIds: readonly string[] = [],
@@ -2341,6 +2362,9 @@ export class SqliteWorker {
       literatureIds,
       metaLiteratureIds,
     });
+    return this.parseSearchRows(value);
+  }
+  private parseSearchRows(value: unknown): readonly SearchSnapshotRow[] {
     if (!Array.isArray(value)) throw new SqliteWorkerError();
     return value.map((row) => {
       if (

@@ -1,6 +1,7 @@
 import {
   canonicalJsonBytes,
   parseAssetId,
+  parseLiteratureId,
   parseArtifactRef,
   parseProcessorResult,
   parseProcessorCollection,
@@ -87,6 +88,9 @@ export class SqliteProcessorStorage implements ProcessorStore {
       this.active.delete(p);
     }
   }
+  private readWork<T>(work: () => Promise<T>): Promise<T> {
+    return this.work(() => this.documents.withReadScope(work));
+  }
   private async bytes(row: Row, signal?: AbortSignal): Promise<unknown> {
     return this.files.withVerified(
       String(row.content_reference),
@@ -111,7 +115,7 @@ export class SqliteProcessorStorage implements ProcessorStore {
     id: string,
     signal?: AbortSignal,
   ): Promise<StoredProcessorResult | null> {
-    return this.work(() =>
+    return this.readWork(() =>
       this.read(String(parseAssetId(id)), verification(), new Set(), signal),
     );
   }
@@ -278,7 +282,7 @@ export class SqliteProcessorStorage implements ProcessorStore {
     hash: string,
     signal?: AbortSignal,
   ): Promise<StoredProcessorResult | null> {
-    return this.work(async () => {
+    return this.readWork(async () => {
       const row = await this.database.processor<Row | null>(
         "comparison",
         hash,
@@ -395,7 +399,7 @@ export class SqliteProcessorStorage implements ProcessorStore {
     input: Extract<ProcessorInput, { kind: "result" | "knowledge" }>,
     signal?: AbortSignal,
   ): Promise<readonly ProcessorSourceRecord[]> {
-    return this.work(async () => {
+    return this.readWork(async () => {
       const cache = verification();
       let content: ProcessorResult["content"];
       let ref: { result_id: string; content_sha256: string } | null = null;
@@ -450,7 +454,7 @@ export class SqliteProcessorStorage implements ProcessorStore {
     citation: ProcessorCitation,
     signal?: AbortSignal,
   ): Promise<ResolvedProcessorEvidence> {
-    return this.work(() =>
+    return this.readWork(() =>
       this.resolve(citation, verification(), new Set(), signal),
     );
   }
@@ -459,7 +463,7 @@ export class SqliteProcessorStorage implements ProcessorStore {
     citations: readonly ProcessorCitation[],
     signal?: AbortSignal,
   ): Promise<readonly ResolvedProcessorEvidence[]> {
-    return this.work(async () => {
+    return this.readWork(async () => {
       const cache = verification();
       const results: ResolvedProcessorEvidence[] = [];
       for (const citation of citations) {
@@ -669,7 +673,7 @@ export class SqliteProcessorStorage implements ProcessorStore {
     id: string,
     signal?: AbortSignal,
   ): Promise<ProcessorCollection | null> {
-    return this.work(async () => {
+    return this.readWork(async () => {
       const row = await this.database.processor<Row | null>(
         "collection-get",
         String(parseAssetId(id)),
@@ -712,12 +716,18 @@ export class SqliteProcessorStorage implements ProcessorStore {
       return c;
     });
   }
-  list(limit = 50, after = "", signal?: AbortSignal) {
-    return this.work(async () => {
+  list(
+    limit = 50,
+    after = "",
+    signal?: AbortSignal,
+    literatureId: string | null = null,
+  ) {
+    return this.readWork(async () => {
       this.page(limit, 0);
+      if (literatureId !== null) parseLiteratureId(literatureId);
       const rows = await this.database.processor<Row[]>(
         "list",
-        { limit, after },
+        { limit, after, literature_id: literatureId },
         signal,
       );
       return {
@@ -736,7 +746,7 @@ export class SqliteProcessorStorage implements ProcessorStore {
   }
   collections(runId: string | null = null, limit = 50, offset = 0) {
     this.page(limit, offset);
-    return this.work(() =>
+    return this.readWork(() =>
       this.database.processor<Row[]>("collections", {
         run_id: runId,
         limit,
@@ -764,7 +774,7 @@ export class SqliteProcessorStorage implements ProcessorStore {
   }
   search(query: string, limit = 20, offset = 0) {
     this.page(limit, offset);
-    return this.work(async () => {
+    return this.readWork(async () => {
       await this.indexStatus();
       const rows = await this.database.processor<Row[]>("search", {
         query: this.fts(query),
@@ -797,7 +807,7 @@ export class SqliteProcessorStorage implements ProcessorStore {
   }
   searchCollections(query: string, limit = 20, offset = 0) {
     this.page(limit, offset);
-    return this.work(async () => {
+    return this.readWork(async () => {
       await this.indexStatus(true);
       return this.database.processor<Row[]>("collection-search", {
         query: this.fts(query),
@@ -820,7 +830,7 @@ export class SqliteProcessorStorage implements ProcessorStore {
       throw new ProcessorQueryError("processor-index-stale");
   }
   query(value: unknown) {
-    return this.work(async () => {
+    return this.readWork(async () => {
       const q = processorExact(value, [
         "collection_id",
         "result_ids",

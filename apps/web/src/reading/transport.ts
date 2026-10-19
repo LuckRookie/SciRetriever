@@ -1,0 +1,183 @@
+import {
+  parseDocumentReadResult,
+  parseSynthesisReadSelection,
+  parseSynthesisSourceResult,
+  knowledgeStatementSha256,
+  sha256,
+  type DocumentReadOperation,
+  type DocumentReadRequestMap,
+  type DocumentReadResultMap,
+  type DocumentMaterialRef,
+  type DocumentReadingRef,
+  type LiteratureDetail,
+} from "@sciretriever/contracts";
+import type { AppContext } from "../workspace/types.js";
+import type { FixedSource } from "../workspace/source-navigation.js";
+
+const operations: Record<DocumentReadOperation, string> = {
+  default: "document-default",
+  describe: "document-describe",
+  outline: "document-outline",
+  segments: "document-segments",
+  resources: "document-resources",
+  slice: "document-slice",
+  resource: "document-resource",
+  material: "material-evidence",
+  evidence: "evidence-resolve",
+};
+export async function readDocument<K extends DocumentReadOperation>(
+  ctx: AppContext,
+  kind: K,
+  request: DocumentReadRequestMap[K],
+): Promise<DocumentReadResultMap[K]> {
+  const reply = await ctx.api.query(operations[kind], request, ctx.signal);
+  return parseDocumentReadResult(kind, reply.result, request);
+}
+export async function resolveReadingSources(
+  ctx: AppContext,
+  detail: LiteratureDetail,
+  source: FixedSource | null,
+  mode: "pdf" | "doc",
+) {
+  const params = new URL(location.href).searchParams,
+    id = detail.literature.literature_id;
+  let document: DocumentReadingRef | null = null,
+    material: DocumentMaterialRef | null = null;
+  if (source?.kind === "document" || params.has("document")) {
+    const version =
+      source?.kind === "document"
+        ? source.document_version_id
+        : params.get("document")!;
+    document = (
+      await readDocument(ctx, "describe", { document_version_id: version })
+    ).document;
+    material = document.source_material_ref;
+    if (
+      material.literature_id !== id ||
+      (source?.kind === "document" &&
+        (document.representation_sha256 !== source.representation_sha256 ||
+          material.asset_id !== source.asset_id ||
+          material.asset_sha256 !== source.asset_sha256))
+    )
+      throw new Error("固定文档与原来源不匹配，未使用默认材料替代。");
+  } else if (params.has("knowledge")) {
+    const selection = parseSynthesisReadSelection({
+      artifact_id: params.get("knowledge"),
+    });
+    const result = await parseSynthesisSourceResult(
+      (await ctx.api.query("synthesis-source", selection, ctx.signal)).result,
+      selection,
+    );
+    const artifact = result.artifact;
+    if (artifact.schema_version !== 1)
+      throw new Error("集合综合应从它的固定文献证据打开原文。");
+    const input = artifact.input.items.find(
+      (item) => item.literature_id === id,
+    );
+    if (!input) throw new Error("知识产物不属于当前文献");
+    if (source?.kind === "knowledge") {
+      const statement = artifact.content.statements.find(
+        (s) => s.statement_id === source.statement_id,
+      );
+      if (
+        artifact.content_ref.sha256 !== source.content_sha256 ||
+        artifact.input.manifest_sha256 !== source.manifest_sha256 ||
+        !statement ||
+        (await knowledgeStatementSha256(statement)) !== source.statement_sha256
+      )
+        throw new Error("固定知识来源无法验证");
+    }
+    material = input.material;
+    document = input.document;
+  } else {
+    const assetId = params.get("asset") ?? detail.primary_pdf?.asset.asset_id;
+    const expectedHash =
+      params.get("assetHash") ?? detail.primary_pdf?.asset.sha256;
+    if (assetId) {
+      const result = await readDocument(ctx, "material", {
+        literature_id: id,
+        asset_id: assetId,
+      });
+      if (result.evidence.target_kind !== "material")
+        throw new Error("原始材料回执无效");
+      material = result.evidence.material;
+      if (!expectedHash || material.asset_sha256 !== expectedHash)
+        throw new Error("固定 PDF 与来源 hash 不匹配");
+    }
+  }
+  if (material && material.literature_id !== id)
+    throw new Error("固定材料不属于当前文献");
+  if (mode === "doc" && material && !document && !params.has("knowledge")) {
+    const current = await readDocument(ctx, "default", {
+      literature_id: id,
+      asset_id: material.asset_id,
+      asset_sha256: material.asset_sha256,
+    });
+    if (current.default)
+      document = (
+        await readDocument(ctx, "describe", {
+          document_version_id: current.default.document_version_id,
+        })
+      ).document;
+  }
+  return { material, document };
+}
+export async function readPdfBytes(
+  ctx: AppContext,
+  material: DocumentMaterialRef,
+): Promise<Uint8Array<ArrayBuffer>> {
+  if (
+    material.media_type !== "application/pdf" ||
+    material.byte_size < 1 ||
+    material.byte_size > 256 * 1024 * 1024
+  )
+    throw new Error("PDF 超过受控读取上限或材料类型不符");
+  const response = await ctx.api.fetch("/api/v1/query/material-bytes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      protocol_version: 1,
+      request: {
+        literature_id: material.literature_id,
+        asset_id: material.asset_id,
+        asset_sha256: material.asset_sha256,
+      },
+    }),
+    signal: ctx.signal,
+  });
+  if (
+    !response.ok ||
+    response.headers.get("Content-Type")?.split(";")[0] !== "application/pdf" ||
+    response.headers.get("x-sciretriever-asset-id") !== material.asset_id ||
+    response.headers.get("x-sciretriever-asset-sha256") !==
+      material.asset_sha256 ||
+    response.headers.get("x-sciretriever-byte-size") !==
+      String(material.byte_size)
+  )
+    throw new Error("PDF 响应与固定材料不一致");
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("PDF 响应无字节");
+  const bytes = new Uint8Array(material.byte_size);
+  let offset = 0;
+  try {
+    for (;;) {
+      ctx.signal.throwIfAborted();
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      if (offset + chunk.value.byteLength > bytes.length)
+        throw new Error("PDF 响应超过声明大小");
+      bytes.set(chunk.value, offset);
+      offset += chunk.value.byteLength;
+    }
+  } finally {
+    await reader.cancel();
+    reader.releaseLock();
+  }
+  if (
+    offset !== bytes.length ||
+    (await sha256(bytes)) !== material.asset_sha256
+  )
+    throw new Error("PDF 完整性校验失败");
+  ctx.signal.throwIfAborted();
+  return bytes;
+}

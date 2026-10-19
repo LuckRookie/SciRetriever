@@ -342,20 +342,45 @@ export class RetrievalIndexService {
           crlfDelay: Infinity,
         });
         try {
+          // Spool lines follow source boundaries, often one metadata entry
+          // each. Coalesce them so durability does not cost one transaction
+          // per literature, while keeping memory and cancellation bounded.
+          let entries: RetrievalEntry[] = [];
+          let bytes = 0;
+          let sources = 0;
+          const flush = async () => {
+            if (!entries.length && !sources) return;
+            check(signal);
+            await store.insertEntries(generation, entries, sources, signal);
+            entries = [];
+            bytes = 0;
+            sources = 0;
+            await yieldToEventLoop();
+          };
           for await (const line of reader) {
             check(signal);
             const batch = JSON.parse(line) as {
               entries: RetrievalEntry[];
               source_count: number;
             };
-            await store.insertEntries(
-              generation,
-              batch.entries,
-              batch.source_count,
-              signal,
+            const batchBytes = batch.entries.reduce(
+              (sum, entry) =>
+                sum +
+                encoder.encode(entry.title).length +
+                encoder.encode(entry.body).length,
+              0,
             );
-            await yieldToEventLoop();
+            if (
+              entries.length + batch.entries.length > BATCH ||
+              bytes + batchBytes > MAX_SPOOL_BATCH_BYTES ||
+              sources + batch.source_count > BATCH
+            )
+              await flush();
+            entries.push(...batch.entries);
+            bytes += batchBytes;
+            sources += batch.source_count;
           }
+          await flush();
         } finally {
           reader.close();
           input.destroy();

@@ -66,6 +66,32 @@ it("builds a Python-free portable runtime and executes its bundled Node CLI", as
         file.path.endsWith("/dist/web/maintenance.js"),
       ),
     ).toBe(true);
+    for (const resource of [
+      "reader.js",
+      "reading.css",
+      "reader/pdf.worker.mjs",
+      "reader/katex.css",
+      "reader/text-layer.css",
+      "reader/fonts/KaTeX_Main-Regular.woff2",
+      "reader/standard_fonts/LiberationSans-Regular.ttf",
+    ]) {
+      expect(
+        manifest.files.some((file) =>
+          file.path.endsWith(`/dist/web/${resource}`),
+        ),
+        resource,
+      ).toBe(true);
+    }
+    expect(
+      manifest.files.some((file) =>
+        /\/dist\/web\/reader\/cmaps\/.*\.bcmap$/.test(file.path),
+      ),
+    ).toBe(true);
+    expect(
+      manifest.files.some((file) =>
+        /\/dist\/web\/reader\/wasm\/.*\.wasm$/.test(file.path),
+      ),
+    ).toBe(true);
     const doctor = spawnSync(
       join(output, "bin", "sciretriever"),
       ["doctor", "--json"],

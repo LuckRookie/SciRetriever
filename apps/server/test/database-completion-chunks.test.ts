@@ -121,6 +121,7 @@ describe("bounded database completion operations", () => {
   it("refills independent PDF targets with one stable Browser epoch and immediate progress", async () => {
     const env = await fixture(4);
     const slow = deferred();
+    const slowStarted = deferred();
     const requests: {
       id: string;
       operation: string | undefined;
@@ -136,12 +137,18 @@ describe("bounded database completion operations", () => {
       max_concurrency: 2,
       acquisition: {
         acquire: async (request) => {
+          // Establish the fixture's slow-first scenario explicitly: concurrent
+          // catalog detail reads are allowed to reach acquisition out of order.
+          if (request.literature_id !== env.ids[0]) await slowStarted.promise;
           requests.push({
             id: request.literature_id,
             operation: request.operation_id,
             generation: request.generation,
           });
-          if (request.literature_id === env.ids[0]) await slow.promise;
+          if (request.literature_id === env.ids[0]) {
+            slowStarted.resolve();
+            await slow.promise;
+          }
           expect(request.signal.aborted).toBe(false);
           return { kind: "exhausted" };
         },
@@ -171,6 +178,7 @@ describe("bounded database completion operations", () => {
       expect(targets(report)).toEqual(env.ids);
       expect(report.end.kind).toBe("finished");
     } finally {
+      slowStarted.resolve();
       slow.resolve();
       await pending;
       await env.close();

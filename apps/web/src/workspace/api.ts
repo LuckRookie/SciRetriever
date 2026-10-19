@@ -1,5 +1,6 @@
 import {
   parseWorkbenchView,
+  parseProcessorBatchRequest,
   type WorkbenchView,
 } from "@sciretriever/contracts";
 import { record, type JsonRecord } from "../wire.js";
@@ -16,6 +17,7 @@ export class WorkbenchApi {
   view: WorkbenchView | null = null;
   workspace: Workspace = { catalog: null, artifacts: null, capabilities: {} };
   private stream: EventSource | null = null;
+  private released = false;
   readonly listeners = new Set<(view: WorkbenchView) => void>();
   async connect(): Promise<void> {
     const response = await fetch("/api/clients", {
@@ -28,6 +30,7 @@ export class WorkbenchApi {
       throw new Error("工作台会话无效");
     this.clientId = grant.client_id;
     this.csrf = grant.csrf;
+    this.released = false;
     this.accept(grant.view);
     const w = record(
         (await this.read("/api/workspace")).workspace,
@@ -60,6 +63,10 @@ export class WorkbenchApi {
       }
     };
     window.addEventListener("pagehide", () => this.close(), { once: true });
+    window.addEventListener("pageshow", (event) => {
+      // A page restored from bfcache must obtain a fresh grant after pagehide.
+      if (event.persisted && this.released) location.reload();
+    });
   }
   url(path: string): string {
     const url = new URL(path, location.origin);
@@ -119,6 +126,41 @@ export class WorkbenchApi {
     const value = await this.read("/api/view");
     this.accept(value);
   }
+  async processors(
+    operation: string,
+    request: unknown,
+    signal?: AbortSignal,
+  ): Promise<JsonRecord> {
+    const value = await this.request(
+      "/api/v1/query/processors",
+      { protocol_version: 1, operation, request },
+      signal,
+    );
+    if (value.protocol_version !== 1) throw new Error("处理器协议版本不匹配");
+    return value;
+  }
+  async submitProcessor(
+    request: unknown,
+    start: boolean,
+    signal?: AbortSignal,
+  ): Promise<JsonRecord> {
+    const response = await this.fetch("/api/v1/maintenance/processor-submit", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Sciretriever-Protocol-Version": "1",
+      },
+      body: JSON.stringify({
+        protocol_version: 1,
+        request: parseProcessorBatchRequest(request),
+        start,
+      }),
+      ...(signal ? { signal } : {}),
+    });
+    const value = await this.json(response);
+    if (value.protocol_version !== 1) throw new Error("处理器协议版本不匹配");
+    return value;
+  }
   accept(value: unknown): void {
     this.view = parseWorkbenchView(value);
     for (const listener of this.listeners) listener(this.view);
@@ -126,5 +168,18 @@ export class WorkbenchApi {
   close(): void {
     this.stream?.close();
     this.stream = null;
+    if (this.released || !this.clientId || !this.csrf) return;
+    this.released = true;
+    void this.fetch("/api/clients/disconnect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+      keepalive: true,
+    }).catch(() => {
+      // Unloading can fail offline; the server's bounded TTL remains the fallback.
+      console.warn(
+        "Workbench disconnect was not delivered; the grant will expire.",
+      );
+    });
   }
 }

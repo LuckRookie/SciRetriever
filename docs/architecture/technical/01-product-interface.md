@@ -384,6 +384,37 @@ apps/server/src/bootstrap/workbench.ts # 工作台对象图与关闭
 
 同一正式 HTTP server 在 Host/Origin/Cookie/client/CSRF 验证后复用完整 `/api/v1/query/*` 与 `/api/v1/maintenance/*` handler，QueryApplication 固定到启动时同一数据库/资产目录。配置保存不切换已打开的运行库。独立 query-only 仍仅有读取能力，独立 maintenance 保留原有认证；共用 handler 不扩大只读部署权限。正式启动、配置与运行边界见[Web 指南](../../guides/web-workbench.md)。
 
+#### 4.2.1 统一处理器 HTTP 适配（2026-10-18）
+
+处理器沿用 `entry/processor-operations.ts` 的 `queryProcessors` 与 `submitProcessor`，与 CLI/MCP 共用冻结、执行与结果 owner。生产工作台和独立维护入口通过 `processorHttpAdapters` 显式组装提交能力；只读入口没有该适配。维护对象保持原 owner 引用，新增提交适配单独传入 HTTP handler。
+
+| 路由 | 请求 | 成功回执 |
+| --- | --- | --- |
+| `POST /api/v1/query/processors` | `{protocol_version:1, operation, request}`，operation 为 list/read/results/collections/collection/search/search-collections/query/evidence/export/transfer | `{protocol_version:1, result}` |
+| `POST /api/v1/maintenance/processor-submit` | `{protocol_version:1, request:ProcessorBatchRequest, start:boolean}` | HTTP 202，`{protocol_version:1, task}`；task 包含持久 job_id，不表示执行完成 |
+
+两端严格解析 JSON 封套、拒绝重复键和未知字段；查询参数复用对应 action 合同。正式工作台要求同源 Cookie、client grant 与 `X-Workbench-Csrf`；维护请求另带 `X-Sciretriever-Protocol-Version:1`，独立维护部署继续使用自身 Cookie/CSRF。仅查询部署的提交路由返回 404，不会因读取 registry 组装写入能力。旧 catalog 可读取离线 registry，读取 v10 结果返回 `catalog-v10-required`，不会隐式升级。
+
+处理器查询 wire body 限 310 KiB，批量提交 wire body 限 1 MiB，普通 HTTP 命令的 64 KiB 上限保持不变；业务规范和输入数量另由共享 parser 校验。该 HTTP 结果封套最多 16 MiB，超限返回 `processor-response-too-large`，不截断后冒充完整结果。此上限不改变结果文件的 8 MiB 限制、MCP 的 4 MiB 响应限制；完整大结果通过下面的 `transfer` 有界读取，三个入口不截断后冒充完成。
+
+提交在客户端断连／服务关闭时取消未完成的输入准备；已经保存的任务仍由持久任务 owner 管理，重试使用原幂等键核对。`start:true` 请求保存后在所属 runtime 启动，状态和结果仍通过任务服务读取。HTTP 错误携带稳定 code，不暴露内部异常或任意文件路径。新路由为现有处理器能力的适配，不新增 catalog schema、领域字段或执行引擎。
+
+#### 4.2.2 处理器大结果传输（2026-10-19）
+
+新增只读 action `transfer`，CLI `processors transfer --request …`、MCP `processor_query {action:"transfer",request}`、HTTP query/processors 共用 Analysis 的导出/传输实现，Storage 仍负责完整性核验。既有 `read/export` 的小结果合同保持兼容，不改变 catalog schema、8 MiB 文件上限和 4 MiB MCP 回执上限；ADR 0033 的共享能力与受控资源边界不变。
+
+请求严格为 `{result_id,content_sha256,format,max_bytes,continuation}`。固定引用来自 `results` 或集合成员；format 为 `result/json/csv/markdown`，max_bytes 为 4–262144，首次 continuation 为 null。`result` 传输 `read` 的完整 JSON 对象；其余格式传输 `export` 的完整 JSON 封套，因此 CSV/Markdown 的 metadata 不丢失，而非只切下载正文。
+
+回执为 `{schema_version:1,result_id,content_sha256,format,transfer_sha256,total_bytes,start,end,text,next}`。start/end 为传输对象的 UTF-8 字节范围，text 始终在完整 Unicode 字符边界切分；按 next 顺序续读到 null，再对拼接后的 UTF-8 字节校验 total_bytes 与 transfer_sha256，最后解析 JSON。content_sha256 是不可变结果自身的 hash，不与传输封套 hash 混用。max_bytes 只约束本块 text，JSON 转义后的响应仍有界且低于 MCP 预算；不持久化读取会话。
+
+续读 token 绑定结果 ID/hash、格式、完整传输 hash 与下一偏移，拒绝变更身份、格式、非字符边界、畸形或无效游标。它是位置校验而非授权凭据，每次请求继续执行原认证和固定结果校验。取消信号穿过 HTTP/MCP、共享读取及 Storage；断连不产生后台加工、写入或租约。缺失结果、hash 不符、无效续读分别返回 `processor-result-missing`、`processor-input-changed`、`processor-continuation-invalid`，不会退回最新结果。超过 4 MiB 的合成结果已通过三端逐块重组，Unicode、引用和换行导出、错误身份与取消有直接验证。
+
+#### 4.2.3 检索来源与临时导航状态
+
+工作区将命中映射为有类型的固定来源：文档保留 literature/document/asset ID、表示与资产 hash、UTF-8 范围；旧知识／综合保留 artifact、content/manifest/statement hash；元数据保留 literature、revision/hash。URL 的 `source` 区分来源种类，`from=ask` 表达返回入口；服务端只接受有界 scalar 字段，客户端重新解析并在读取时校验。它们不是处理器 result ID，后续结果导航必须另行绑定 result 引用。
+
+`RetrievalState` 由单个工作区实例持有，保存检索草稿、已返回结果、continuation 与上下文篮子；离开页面 abort 当前请求，旧回执不能覆盖新页面。浏览器后退和“返回检索”使用会话内状态；刷新仍可读取固定来源，但不承诺恢复整份结果篮子或自动重发检索。UI 状态不写 catalog，也不成为另一份知识事实。
+
 合成预览的 `WorkbenchSession.runAgent()` 仍只执行一次决定。生产 flow 则在每次安全点使用同一会话的 `runAutomaticStep()`，可在模型调用之间受理指导、暂停、接管、人工动作与交还。生产工作台的配置 HTTP 接口复用同一 TypeScript Configuration owner；保存普通配置后分别显示已保存 revision 和运行中 Application 的重启需求。当前正式 TS/HTTP/Web 回环测试覆盖真实 Cloak page、统一 PDF 接纳、最终反馈及 Library 阅读衔接；真实 Publisher 站点仍需独立现场证据。
 
 ### 4.3 配置交互
@@ -1450,3 +1481,11 @@ MCP 服务进程存续期间任务可在工具调用之间继续；关闭进程�
 ### 显式连接现有运行时
 
 CLI/MCP 的 `--workbench-url` 仅接受本机 HTTP origin，通过 `workbench/machine-client.ts` 连接已存在的工作台 HTTP owner。认证材料仅保留在进程内，动作沿用 WorkbenchActionCommand、session/article、epoch 和 lease 校验；工具只映射封闭业务操作。`runtime_*` 任务入口在该服务的同一个 Application 执行，独立机器进程不再争用执行锁。断开需确认服务端 detach；若仍持控制租约则遵守既有暂停政策。Web、CLI、MCP 的材料字节均经 LiteratureArtifactService 或 ManualPdfIngestionService，MCP 分块缓冲不构成持久业务事实。传输限额和命令见[Agent 指南](../../guides/agent-interface.md)。
+
+### Web 结果与阅读接入（2026-10-19）
+
+正式工作台使用共享处理器 `query/evidence/transfer`；`results` 增加可选 `literature_id`，Storage 在既有固定文档、材料、知识和结果输入关系上递归投影，排序和 next_after 语义不变，不新增业务表。无字段证据的未知记录仍按其固定输入关联文献。CLI/MCP 使用同一 Entry 验证与实现。
+
+阅读入口按需加载 `/reader.js`。`build-reader-assets.mjs` 与正式构建共用 PDF.js worker、cMaps、标准字体、wasm、KaTeX 字体和文字层 CSS；静态服务只枚举随包资源，不把 HTTP 路径映射成任意文件路径。主工作台 CSP 增加本地 worker 与 font Blob，仍拒绝 unsafe-eval 和外部连接。现有独立查询/维护入口保持原有呈现与边界。
+
+PDF 原字节仍按固定 asset_id/hash、大小与 SHA-256 校验，受 256 MiB 读取上限约束；可见页及邻近页才持有 canvas/文字层。全文使用有界 document-slice 续读，按原始 UTF-8 与 Markdown 块映射保存位置、定位证据；CRLF 与 Unicode 不按 DOM 字符索引混算。图片通过 document-resource 分块读取并校验，不请求 Markdown 的远程图片 URL；内嵌支持 PNG/JPEG/GIF/WebP，单图超过 16 MiB 时显示不支持预览。会话 UI 状态按库和固定版本隔离，关闭文献释放状态。阅读没有模型、加工或索引重建副作用。

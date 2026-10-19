@@ -32,6 +32,10 @@ export interface SearchSnapshotRow {
   readonly has_pdf_exhaustion: boolean;
 }
 export interface LibraryQueryRepository {
+  librarySearchPage(request: LibraryPageQuery): Promise<{
+    readonly rows: readonly SearchSnapshotRow[];
+    readonly total_count: number;
+  }>;
   literatureDetailSnapshot(literatureId: string): Promise<{
     readonly detail: unknown;
     readonly content: CurrentContentBinding | null;
@@ -172,9 +176,16 @@ export function queryFingerprint(query: LibraryQuery): string {
     version_roles: unique(query.version_roles),
   });
 }
-interface Position {
+export interface Position {
   readonly literature_id: string;
   readonly value: string | number | null;
+}
+export interface LibraryPageQuery {
+  readonly query: LibraryQuery;
+  readonly ftsQuery: string | null;
+  readonly sort: LibrarySort;
+  readonly after: Position | null;
+  readonly limit: number;
 }
 function position(row: SearchSnapshotRow, sort: LibrarySort): Position {
   const l = row.item.literature;
@@ -619,32 +630,20 @@ export class LiteratureQueryService {
       request.query.text === null ? null : queryTerms(request.query.text);
     if (terms?.length === 0)
       return Object.freeze({ items: [], total_count: 0, next_cursor: null });
-    const rows = (
-      await this.repository.librarySnapshot(
+    const result = await this.repository.librarySearchPage({
+      query: request.query,
+      ftsQuery:
         terms === null ? null : terms.map((term) => `"${term}"`).join(" AND "),
-        request.query.discovery_run_ids,
-      )
-    ).filter((row) => matches(row, request.query));
-    rows.sort((a, b) =>
-      compare(
-        position(a, request.sort),
-        position(b, request.sort),
-        request.sort,
-      ),
-    );
-    const remaining =
-      after === null
-        ? rows
-        : rows.filter(
-            (row) =>
-              compare(position(row, request.sort), after, request.sort) > 0,
-          );
-    const page = remaining.slice(0, request.limit);
+      sort: request.sort,
+      after,
+      limit: request.limit,
+    });
+    const page = result.rows.slice(0, request.limit);
     return Object.freeze({
       items: Object.freeze(page.map((row) => row.item)),
-      total_count: rows.length,
+      total_count: result.total_count,
       next_cursor:
-        remaining.length > request.limit && page.length
+        result.rows.length > request.limit && page.length
           ? encodePosition(
               position(page.at(-1)!, request.sort),
               request.query,

@@ -7,6 +7,13 @@ import {
   type QueryOperation,
 } from "../entry/query-operations.js";
 import { parseLibrarySearchRequest } from "@sciretriever/contracts";
+import {
+  queryProcessors,
+  PROCESSOR_QUERIES,
+} from "../entry/processor-operations.js";
+import { ProcessorError } from "../analysis/processor.js";
+import { ProcessorQueryError } from "../storage/processor-results.js";
+import { AgentFailure } from "../agents/protocol.js";
 import { ProcessingTaskError } from "../application/jobs/processing.js";
 import { once } from "node:events";
 import {
@@ -291,6 +298,24 @@ function validUiLocation(url: URL): boolean {
           "knowledge",
           "synthesis",
           "task_filter",
+          "result",
+          "resultHash",
+          "results",
+          "collection",
+          "tools",
+          "source",
+          "from",
+          "asset",
+          "assetHash",
+          "representation",
+          "start",
+          "end",
+          "contentHash",
+          "manifest",
+          "statement",
+          "statementHash",
+          "metadataHash",
+          "metadataRevision",
         ].includes(key),
     )
   )
@@ -314,6 +339,10 @@ function validUiLocation(url: URL): boolean {
     ["reader", ["pdf", "doc", "know"]],
     ["scope", ["selection"]],
     ["advanced", ["all"]],
+    ["source", ["metadata", "document", "knowledge"]],
+    ["from", ["ask", "ext"]],
+    ["results", ["all"]],
+    ["tools", ["delivery"]],
   ] as const) {
     const value = url.searchParams.get(key);
     if (value !== null && !(values as readonly string[]).includes(value))
@@ -334,7 +363,36 @@ function validUiLocation(url: URL): boolean {
       ["all", "active", "attention", "completed", "ended"].includes(
         url.searchParams.get("task_filter")!,
       )) &&
-    ["document", "knowledge", "synthesis", "task", "artifact"].every((key) => {
+    [
+      "assetHash",
+      "representation",
+      "contentHash",
+      "manifest",
+      "statementHash",
+      "metadataHash",
+      "resultHash",
+    ].every((key) => {
+      const value = url.searchParams.get(key);
+      return value === null || /^[a-f0-9]{64}$/u.test(value);
+    }) &&
+    ["start", "end", "metadataRevision"].every((key) => {
+      const value = url.searchParams.get(key);
+      return (
+        value === null ||
+        (/^\d{1,16}$/u.test(value) && Number.isSafeInteger(Number(value)))
+      );
+    }) &&
+    [
+      "document",
+      "knowledge",
+      "synthesis",
+      "task",
+      "artifact",
+      "asset",
+      "statement",
+      "result",
+      "collection",
+    ].every((key) => {
       const value = url.searchParams.get(key);
       return value === null || /^[A-Za-z0-9._:-]{1,128}$/u.test(value);
     })
@@ -458,6 +516,60 @@ async function extractionBody(
 }
 
 const MAX_MANUAL_PDF_BYTES = 16 * 1024 * 1024;
+// Scoped to processor envelopes; ordinary commands retain their 64 KiB bound.
+const PROCESSOR_SUBMIT_WIRE_BYTES = 1024 * 1024;
+const PROCESSOR_QUERY_WIRE_BYTES = 310 * 1024;
+const PROCESSOR_RESPONSE_BYTES = 16 * 1024 * 1024;
+
+function processorFailure(error: unknown): { status: number; code: string } {
+  if (
+    error instanceof ContractValidationError ||
+    error instanceof WorkbenchInputError
+  )
+    return { status: 400, code: "invalid-command" };
+  if (error instanceof ProcessingTaskError)
+    return { status: 409, code: error.code };
+  if (error instanceof AgentFailure) return { status: 503, code: error.code };
+  if (error instanceof ProcessorError || error instanceof ProcessorQueryError)
+    return {
+      code: error.code,
+      status:
+        error.code === "catalog-v10-required"
+          ? 422
+          : error.code.endsWith("missing")
+            ? 404
+            : error.code.includes("cancel") ||
+                error.code.includes("changed") ||
+                error.code.includes("conflict")
+              ? 409
+              : error.code.includes("unavailable") ||
+                  error.code.includes("unconfigured") ||
+                  error.code.includes("closed")
+                ? 503
+                : 422,
+    };
+  return { status: 503, code: "processor-unavailable" };
+}
+function processorReply(
+  response: ServerResponse,
+  status: number,
+  value: unknown,
+): void {
+  if (response.destroyed) return;
+  const bytes = Buffer.from(JSON.stringify(value));
+  if (bytes.length > PROCESSOR_RESPONSE_BYTES) {
+    json(response, 413, {
+      protocol_version: 1,
+      code: "processor-response-too-large",
+    });
+    return;
+  }
+  response.writeHead(status, {
+    "Content-Type": "application/json",
+    "Content-Length": bytes.length,
+  });
+  response.end(bytes);
+}
 
 function maintenanceError(error: unknown): {
   status: number;
@@ -791,7 +903,7 @@ export async function startWorkbenchHttp(
     response.setHeader("Referrer-Policy", "no-referrer");
     response.setHeader(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-src blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; font-src 'self' blob:; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-src blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
     );
     const requestOrigin = request.headers.origin;
     if (
@@ -1787,6 +1899,12 @@ export async function startWorkbenchHttp(
 
 export interface QueryOnlyHttpOptions {
   readonly application: QueryApplication;
+  /** Explicit processor submission adapter; available only with maintenance authorization. */
+  readonly submitProcessor?: (
+    request: unknown,
+    start: boolean,
+    signal?: AbortSignal,
+  ) => Promise<unknown>;
   /** Optional explicit maintenance surface; the query-only composition never supplies it. */
   readonly maintenance?: {
     readonly ingestPdf: ManualPdfIngestionService["ingestPdf"];
@@ -1948,6 +2066,7 @@ function createQueryHttpHandler(
       url.pathname === "/api/v1/maintenance/analyze-knowledge" ||
       url.pathname === "/api/v1/maintenance/analyze-knowledge-long" ||
       url.pathname === "/api/v1/maintenance/synthesize" ||
+      url.pathname === "/api/v1/maintenance/processor-submit" ||
       extractionPaths.has(url.pathname)
     ) {
       if (!options.maintenance) {
@@ -1980,6 +2099,50 @@ function createQueryHttpHandler(
         request.headers["x-sciretriever-protocol-version"] !== "1"
       )
         invalidInput();
+      if (url.pathname === "/api/v1/maintenance/processor-submit") {
+        if (!options.submitProcessor) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "processor-submit-unavailable",
+          });
+          return;
+        }
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        const signal = AbortSignal.any([stop.signal, stopUploads.signal]);
+        streams.add(response);
+        try {
+          const envelope = object(
+            await extractionBody(request, PROCESSOR_SUBMIT_WIRE_BYTES),
+            ["protocol_version", "request", "start"],
+          );
+          if (
+            envelope.protocol_version !== 1 ||
+            typeof envelope.start !== "boolean"
+          )
+            invalidInput();
+          if (response.destroyed || signal.aborted) return;
+          const task = await options.submitProcessor(
+            envelope.request,
+            envelope.start,
+            signal,
+          );
+          if (!signal.aborted)
+            processorReply(response, 202, { protocol_version: 1, task });
+        } catch (error) {
+          const failure = processorFailure(error);
+          if (!signal.aborted)
+            json(response, failure.status, {
+              protocol_version: 1,
+              code: failure.code,
+            });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+        }
+        return;
+      }
       if (url.pathname === "/api/v1/maintenance/synthesize") {
         if (!options.maintenance.synthesize) {
           json(response, 503, {
@@ -2178,6 +2341,45 @@ function createQueryHttpHandler(
       return;
     }
     const application = options.application;
+    if (url.pathname === "/api/v1/query/processors") {
+      const stop = new AbortController();
+      const abort = () => stop.abort();
+      response.once("close", abort);
+      const signal = AbortSignal.any([stop.signal, stopUploads.signal]);
+      streams.add(response);
+      try {
+        const envelope = object(
+          await extractionBody(request, PROCESSOR_QUERY_WIRE_BYTES),
+          ["protocol_version", "operation", "request"],
+        );
+        if (
+          envelope.protocol_version !== 1 ||
+          !(PROCESSOR_QUERIES as readonly unknown[]).includes(
+            envelope.operation,
+          )
+        )
+          invalidInput();
+        if (response.destroyed || signal.aborted) return;
+        const result = await queryProcessors(
+          application,
+          String(envelope.operation),
+          envelope.request,
+          signal,
+        );
+        processorReply(response, 200, { protocol_version: 1, result });
+      } catch (error) {
+        const failure = processorFailure(error);
+        if (!response.destroyed)
+          json(response, failure.status, {
+            protocol_version: 1,
+            code: failure.code,
+          });
+      } finally {
+        streams.delete(response);
+        response.off("close", abort);
+      }
+      return;
+    }
     if (!application.query || application.readiness.status !== "ready") {
       const code =
         application.readiness.status === "not-initialized"

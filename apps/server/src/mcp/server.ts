@@ -251,6 +251,7 @@ export function createMcpServer(options: McpOptions = {}) {
         await reading(),
         String(args.action),
         args.request,
+        signal,
       );
     if (name === "retain_extraction") {
       const a = await application();

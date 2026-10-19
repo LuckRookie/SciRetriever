@@ -6,6 +6,7 @@ import {
   type DocumentReadResultMap,
   type DocumentSelector,
   type LiteratureDetail,
+  type MaterialContextReference,
   sha256,
 } from "@sciretriever/contracts";
 import { dataFetch } from "./knowledge.js";
@@ -180,6 +181,7 @@ export function mountDocumentReading(
   send: (path: string, body: unknown) => Promise<Record<string, unknown>>,
   message: (text: string) => void,
   fixedDocumentVersionId?: string,
+  fixedSource?: Extract<MaterialContextReference, { kind: "document" }>,
 ): HTMLButtonElement | null {
   const primary = detail.primary_pdf?.asset;
   if (!primary && !fixedDocumentVersionId) return null;
@@ -223,6 +225,19 @@ export function mountDocumentReading(
       });
       if (fixed.document.source_material_ref.literature_id !== literature)
         throw new Error("document literature mismatch");
+      if (
+        fixedSource &&
+        (fixedSource.document_version_id !==
+          fixed.document.document_version_id ||
+          fixedSource.representation_sha256 !==
+            fixed.document.representation_sha256 ||
+          fixedSource.literature_id !== literature ||
+          fixedSource.asset_id !==
+            fixed.document.source_material_ref.asset_id ||
+          fixedSource.asset_sha256 !==
+            fixed.document.source_material_ref.asset_sha256)
+      )
+        throw new Error("fixed search source mismatch");
       pdf.asset_id = fixed.document.source_material_ref.asset_id;
       pdf.sha256 = fixed.document.source_material_ref.asset_sha256;
       fixedRepresentation = fixed.document.representation_sha256;
@@ -586,6 +601,15 @@ export function mountDocumentReading(
       loadResources(null),
     ]);
     if (!currentPanel()) return;
+    if (fixedSource)
+      select(
+        {
+          kind: "range",
+          start_utf8: fixedSource.start_utf8,
+          end_utf8: fixedSource.end_utf8,
+        },
+        fixedSource.start_utf8,
+      );
     if (!outline.childElementCount)
       outline.append(element("p", "没有可靠标题；可从全部片段阅读正文。"));
   };

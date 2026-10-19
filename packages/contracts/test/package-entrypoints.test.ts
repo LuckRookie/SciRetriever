@@ -190,7 +190,16 @@ it("installs packed workspace modules and exercises their public boundaries with
       }, { max_actions: 2, max_model_calls: 1, max_retries: 1, max_bytes: 1024, deadline_ms: 10000 });
       await session.refresh();
       const assets = await loadWorkbenchAssets();
-      assert.deepEqual([...assets.keys()], ['/', '/styles.css', '/live.css', '/workspace.css', '/live.js']);
+      assert.deepEqual([...assets.keys()].slice(0, 5), ['/', '/styles.css', '/live.css', '/workspace.css', '/live.js']);
+      const readerFiles = ['/reader.js', '/reading.css', '/reader/pdf.worker.mjs', '/reader/katex.css', '/reader/text-layer.css', '/reader/third-party-notices.txt', '/reader/fonts/KaTeX_Main-Regular.woff2', '/reader/standard_fonts/LiberationSans-Regular.ttf'];
+      for (const route of readerFiles) assert.ok(assets.get(route)?.body.length > 100, route);
+      for (const route of [...assets.keys()].slice(5)) assert.ok(route === '/reader.js' || route === '/reading.css' || route.startsWith('/reader/'), route);
+      assert.equal(assets.get('/reader/pdf.worker.mjs').contentType, 'text/javascript');
+      assert.equal(assets.get('/reader/fonts/KaTeX_Main-Regular.woff2').contentType, 'font/woff2');
+      assert.ok([...assets.keys()].some(route => route.startsWith('/reader/cmaps/') && route.endsWith('.bcmap')));
+      assert.ok([...assets.keys()].some(route => route.startsWith('/reader/wasm/') && route.endsWith('.wasm')));
+      assert.equal(assets.has('/package.json'), false);
+
       const http = await startWorkbenchHttp({ session, assets });
       const rootResponse = await fetch(http.origin);
       assert.equal(rootResponse.status, 200);

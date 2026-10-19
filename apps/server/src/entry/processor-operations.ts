@@ -3,6 +3,7 @@ import {
   processorExact,
   processorText,
   parseAssetId,
+  parseLiteratureId,
   processorJson,
 } from "@sciretriever/contracts";
 import type {
@@ -11,6 +12,10 @@ import type {
 } from "../bootstrap/application.js";
 import { createProcessorRegistry } from "../analysis/processor-registry.js";
 import { processorError } from "../analysis/processor.js";
+import {
+  exportProcessorResult,
+  transferProcessorResult,
+} from "../analysis/processor-export.js";
 export const PROCESSOR_QUERIES = [
   "list",
   "read",
@@ -22,6 +27,7 @@ export const PROCESSOR_QUERIES = [
   "query",
   "evidence",
   "export",
+  "transfer",
 ] as const;
 export type ProcessorQuery = (typeof PROCESSOR_QUERIES)[number];
 /** Shared human/Agent boundary; all queries stay independent of model execution. */
@@ -29,8 +35,19 @@ export async function queryProcessors(
   app: Pick<QueryApplication, "processorRead">,
   action: string,
   value: unknown,
+  signal?: AbortSignal,
 ) {
+  if (signal?.aborted) processorError("processor-cancelled");
   const q = processorJson(value);
+  const optionalKeys: Record<string, readonly string[]> = {
+    results: ["limit", "after", "literature_id"],
+    collections: ["run_id", "limit", "offset"],
+    search: ["query", "limit", "offset"],
+    "search-collections": ["query", "limit", "offset"],
+  };
+  const allowed = optionalKeys[action];
+  if (allowed && Object.keys(q).some((key) => !allowed.includes(key)))
+    processorError("processor-query-invalid");
   if (action === "list") {
     processorExact(q, []);
     return createProcessorRegistry().list();
@@ -46,11 +63,15 @@ export async function queryProcessors(
   switch (action) {
     case "read":
       processorExact(q, ["result_id"]);
-      return store.byId(String(parseAssetId(q.result_id)));
+      return store.byId(String(parseAssetId(q.result_id)), signal);
     case "results":
       return store.list(
         integer(q.limit, 50),
         q.after === undefined ? "" : processorText(q.after, 256),
+        signal,
+        q.literature_id === undefined
+          ? null
+          : String(parseLiteratureId(q.literature_id)),
       );
     case "collections":
       return store.collections(
@@ -76,53 +97,17 @@ export async function queryProcessors(
     case "query":
       return store.query(q);
     case "evidence":
-      return store.verifyCitation(parseProcessorCitation(q));
+      return store.verifyCitation(parseProcessorCitation(q), signal);
+    case "transfer":
+      return transferProcessorResult(store, q, signal);
     case "export": {
       processorExact(q, ["result_id", "format"]);
-      const stored = await store.byId(String(parseAssetId(q.result_id)));
+      const stored = await store.byId(
+        String(parseAssetId(q.result_id)),
+        signal,
+      );
       if (!stored) processorError("processor-result-missing");
-      const records = await store.records({
-        kind: "result",
-        input_id: "export",
-        ...stored.ref,
-        record_ids: null,
-      });
-      const metadata = {
-        ...stored.ref,
-        invocation: stored.result.invocation,
-        coverage: stored.result.coverage,
-        provenance: stored.result.provenance,
-      };
-      const cell = (v: unknown) =>
-        `"${(typeof v === "string" ? v : JSON.stringify(v)).replace(/"/g, '""')}"`;
-      if (q.format === "json")
-        return {
-          media_type: "application/json",
-          content: JSON.stringify(stored, null, 2),
-        };
-      if (q.format === "csv")
-        return {
-          media_type: "text/csv",
-          metadata,
-          content: [
-            "record_id,payload_json,evidence_json",
-            ...records.map((r) =>
-              [r.record_id, r.payload, r.citation].map(cell).join(","),
-            ),
-          ].join("\r\n"),
-        };
-      if (q.format === "markdown")
-        return {
-          media_type: "text/markdown",
-          metadata,
-          content: records
-            .map(
-              (r) =>
-                `- ${typeof r.payload.text === "string" ? r.payload.text : JSON.stringify(r.payload)}\n\n  Evidence: \`${JSON.stringify(r.citation)}\``,
-            )
-            .join("\n\n"),
-        };
-      return processorError("processor-export-format");
+      return exportProcessorResult(store, stored, q.format, signal);
     }
     default:
       processorError("processor-query-invalid");

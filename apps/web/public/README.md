@@ -10,7 +10,9 @@
 - [maintenance.html](maintenance.html)：显式维护工作台页面。
 - [styles.css](styles.css)：公共样式。
 - [workspace.css](workspace.css)：定稿原型样式及生产功能的样式适配。
+- [reading.css](reading.css)：连续阅读、全文排版、PDF 页与文字层的布局。
 - [live.css](live.css)：独立查询与维护页面使用的共享样式。
+- [core-js-LICENSE.txt](core-js-LICENSE.txt)：PDF.js 官方兼容构建内含的 core-js 3.50.0 上游许可，构建时并入第三方声明；来源见[依赖说明](../../../docs/notes/web-reading-dependencies.md)。
 
 ## 放置边界
 

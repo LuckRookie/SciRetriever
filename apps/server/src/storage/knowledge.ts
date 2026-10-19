@@ -65,7 +65,7 @@ export class SqliteKnowledgeStorage implements KnowledgeStoragePort {
   ): Promise<T> {
     if (this.stopped) throw new KnowledgeReadError("knowledge-closed");
     if (signal?.aborted) throw new KnowledgeReadError("knowledge-cancelled");
-    const operation = Promise.resolve().then(work);
+    const operation = this.documentRead.withReadScope(work);
     this.active.add(operation);
     try {
       return await operation;

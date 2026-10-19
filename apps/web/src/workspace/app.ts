@@ -21,10 +21,14 @@ import { operate, uploadPdf } from "./actions.js";
 import { renderTasks, taskList, openActivity } from "./tasks.js";
 import { renderBrowser, closeWatch } from "./browser.js";
 import { renderIntake } from "./intake.js";
-import { renderRetrieval } from "./retrieval.js";
+import { renderRetrieval, createRetrievalState } from "./retrieval.js";
+import { sourceParameterKeys } from "./source-navigation.js";
 import { renderSyntheses } from "./synthesis.js";
 import { renderInsights } from "./insights.js";
-import { renderSettings, renderAdvanced } from "./settings.js";
+import { renderSettings } from "./settings.js";
+import { renderProcessors, createProcessorFormState } from "./processors.js";
+import { createProcessorResultsState } from "./processor-results.js";
+import { createReadingState, closeReadingState } from "../reading/state.js";
 import type { AppContext, Section, ReaderMode, LibraryState } from "./types.js";
 import {
   parseLibrarySearchRequest,
@@ -58,7 +62,7 @@ export async function mountLibraryWorkspace(): Promise<void> {
     query: emptyQuery(),
     sort: "publication-year-desc",
     items: [],
-    total: 0,
+    total: null,
     cursor: null,
     selected: new Set(),
     peek: null,
@@ -69,6 +73,10 @@ export async function mountLibraryWorkspace(): Promise<void> {
     string,
     { mode: ReaderMode; title: string; source: Record<string, string> }
   >();
+  const retrieval = createRetrievalState();
+  const processor = createProcessorFormState();
+  const processorResults = createProcessorResultsState();
+  const reading = createReadingState();
   const roots = new Map<string, HTMLElement>();
   const persistentContexts = new Map<string, AppContext>();
   let currentSection: Section = "lib",
@@ -85,7 +93,7 @@ export async function mountLibraryWorkspace(): Promise<void> {
   }
   const navigation = () => {
     const link = (id: Section, label: string) =>
-      `<button class="si ${!currentPaper && currentSection === id ? "on" : ""}" data-go="${id}" id="${id === "lib" ? "library-tab" : id === "task" ? "jobs-tab" : id === "set" ? "config-tab" : `nav-${id}`}" ${!currentPaper && currentSection === id ? 'aria-current="page"' : ""}>${icon(id)}<span class="lb">${label}</span>${id === "lib" ? `<span class="ct">${library.total}</span>` : ""}</button>`;
+      `<button class="si ${!currentPaper && currentSection === id ? "on" : ""}" data-go="${id}" id="${id === "lib" ? "library-tab" : id === "task" ? "jobs-tab" : id === "set" ? "config-tab" : `nav-${id}`}" ${!currentPaper && currentSection === id ? 'aria-current="page"' : ""}>${icon(id)}<span class="lb">${label}</span>${id === "lib" ? `<span class="ct">${library.total ?? "—"}</span>` : ""}</button>`;
     node("#side").innerHTML =
       `<div class="ws"><span class="logo">S</span>SciRetriever</div><div class="sscroll"><button class="si" id="gsearch">${icon("srch")}<span class="lb">搜索</span><span class="ct mono">⌘K</span></button><div class="kh" style="padding-top:14px">资料</div>${link("lib", "文献库")}${link("disc", "发现")}<div class="kh" style="padding-top:14px">使用</div>${link("ins", "洞察")}${link("ask", "检索")}${link("syn", "综合")}${link("ext", "提取")}<div class="kh" style="padding-top:14px">运行</div>${link("task", "任务")}${link("web", "浏览器")}</div><div class="sfoot">${link("set", "设置")}</div>`;
     click(
@@ -112,6 +120,7 @@ export async function mountLibraryWorkspace(): Promise<void> {
       (el) => {
         const id = el.dataset.closeTab!;
         tabs.delete(id);
+        closeReadingState(reading, id);
         roots.get(`paper:${id}`)?.remove();
         roots.delete(`paper:${id}`);
         if (currentPaper === id) navigate(currentSection);
@@ -128,6 +137,10 @@ export async function mountLibraryWorkspace(): Promise<void> {
     root,
     signal: controller.signal,
     library,
+    retrieval,
+    processor,
+    processorResults,
+    reading,
     details,
     navigate: (section, parameters) => {
       void navigate(section, parameters);
@@ -204,7 +217,7 @@ export async function mountLibraryWorkspace(): Promise<void> {
           ins: renderInsights,
           ask: renderRetrieval,
           syn: renderSyntheses,
-          ext: renderAdvanced,
+          ext: renderProcessors,
           task: renderTasks,
           web: renderBrowser,
           set: renderSettings,
@@ -405,7 +418,7 @@ export async function mountLibraryWorkspace(): Promise<void> {
           : "pdf") as ReaderMode,
         title: currentPaper,
         source: Object.fromEntries(
-          ["document", "knowledge", "task"].flatMap((key) =>
+          sourceParameterKeys.flatMap((key) =>
             p.has(key) ? [[key, p.get(key)!]] : [],
           ),
         ),

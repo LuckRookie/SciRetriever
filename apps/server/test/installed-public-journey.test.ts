@@ -300,6 +300,18 @@ async function installedBrowserJourney(
     await expect
       .poll(() => ui.locator("#browser-sessions").textContent())
       .toContain("没有正在使用的会话");
+    for (const path of [
+      "/reader.js",
+      "/reading.css",
+      "/reader/pdf.worker.mjs",
+      "/reader/katex.css",
+      "/reader/text-layer.css",
+      "/reader/fonts/KaTeX_Main-Regular.woff2",
+    ]) {
+      const resource = await ui.request.get(`${origin}${path}`);
+      expect(resource.status(), path).toBe(200);
+      expect((await resource.body()).byteLength, path).toBeGreaterThan(100);
+    }
     const landing = await fetch(origin);
     const cookie = landing.headers.get("set-cookie")?.split(";")[0];
     expect(cookie).toBeTruthy();
@@ -523,6 +535,13 @@ async function installedBrowserJourney(
     await expect
       .poll(() => ui.locator("#reader-info").textContent())
       .toContain("文章身份未验证");
+    await ui
+      .locator('.reading-pdf-page[data-rendered="true"]')
+      .first()
+      .waitFor();
+    expect(
+      (await ui.locator(".textLayer").first().textContent())!.trim().length,
+    ).toBeGreaterThan(0);
     expect(errors).toEqual([]);
     return hash;
   } finally {
