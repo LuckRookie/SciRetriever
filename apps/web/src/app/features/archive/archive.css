@@ -1,0 +1,103 @@
+.archive-page {
+  padding: var(--space-6, 24px);
+  overflow: auto;
+  min-width: 0;
+}
+.archive-toolbar,
+.archive-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3, 12px);
+  margin-block: 16px;
+}
+.archive-issue {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 16px;
+  padding-block: 20px;
+  border-bottom: 1px solid var(--line);
+}
+.archive-issue h3 {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+.archive-fields {
+  max-width: 72ch;
+}
+.archive-field {
+  padding-block: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.archive-field > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.archive-field p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-block: 8px;
+}
+.archive-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.archive-table th,
+.archive-table td {
+  padding: 12px;
+  text-align: start;
+  border-bottom: 1px solid var(--line);
+}
+.archive-table caption {
+  text-align: start;
+  margin-block: 16px;
+}
+.archive-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+}
+.archive-compare-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 50vh;
+  overflow: auto;
+  line-height: 1.7;
+}
+@media (max-width: 760px) {
+  .archive-page {
+    padding: 16px;
+  }
+  .archive-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .archive-table {
+    display: block;
+    overflow: auto;
+  }
+  .archive-issue {
+    gap: 8px;
+  }
+}
+
+.paper-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: var(--text-caption);
+}
+.paper-tag {
+  color: var(--muted);
+}
+.paper-tag.primary {
+  color: var(--ink);
+  font-weight: 600;
+}
+.paper-status small {
+  display: block;
+  margin-top: 4px;
+}

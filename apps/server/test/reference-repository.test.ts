@@ -16,7 +16,8 @@ const makeLiterature = (id: string) => ({
     abstract: null,
     publication_date: null,
     publication_year: 2026,
-    document_type: "article",
+    publication_form: "journal-article" as const,
+    article_kind: null,
     language: "en",
     venue: null,
     publisher: null,
@@ -80,6 +81,8 @@ describe("literature reference repository", () => {
       ).resolves.toBe(true);
       const metadata = new ObservationRepository(worker);
       await metadata.publish({
+        source_type: null,
+        source_type_mapping_version: null,
         observation_id: "00000000-0000-0000-0000-000000000062",
         literature_id: edge.source_literature_id,
         provenance: {
@@ -100,7 +103,8 @@ describe("literature reference repository", () => {
           abstract: null,
           publication_date: null,
           publication_year: 2026,
-          document_type: "article",
+          publication_form: "journal-article" as const,
+          article_kind: null,
           language: "en",
           venue: null,
           publisher: null,

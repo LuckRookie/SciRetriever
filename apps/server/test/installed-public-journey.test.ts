@@ -1,3 +1,8 @@
+import { SCHEMA_VERSION } from "../src/storage/sqlite/schema.js";
+import { archiveModel } from "./archive-fixture.js";
+import type { ModelInput } from "./core-processing-fixture.js";
+
+import { withRawParserFixture } from "./raw-parser-fixture.js";
 import { dshChatReply } from "./dsh-analysis-fixture.js";
 import {
   workbenchLogin,
@@ -77,40 +82,10 @@ type Responses = {
       Awaited<ReturnType<Server.Application["extractionDelivery"]["receipt"]>>
     >
   >;
-  "analyze-knowledge": Result<Awaited<ReturnType<Maintenance["analyze"]>>>;
-  "knowledge-read": Result<
-    NonNullable<
-      Awaited<
-        ReturnType<
-          NonNullable<Server.QueryApplication["knowledgeRead"]>["byId"]
-        >
-      >
-    >
-  >;
-  "rebuild-knowledge-index": Result<unknown>;
   "knowledge-context": Result<
     Awaited<
       ReturnType<
         NonNullable<Server.QueryApplication["knowledgeContext"]>["search"]
-      >
-    >
-  >;
-  "synthesis-prepare": Result<
-    Awaited<
-      ReturnType<
-        NonNullable<Server.QueryApplication["synthesisPreparation"]>["prepare"]
-      >
-    >
-  >;
-  synthesize: Result<
-    Awaited<ReturnType<NonNullable<Maintenance["synthesize"]>>>
-  >;
-  "synthesis-read": Result<
-    NonNullable<
-      Awaited<
-        ReturnType<
-          NonNullable<Server.QueryApplication["synthesisRead"]>["byId"]
-        >
       >
     >
   >;
@@ -561,6 +536,8 @@ async function installedBrowserJourney(
       .getByRole("complementary", { name: "主导航" })
       .getByRole("button", { name: /^文献库/ })
       .click();
+    await ui.getByRole("button", { name: "材料状态" }).click();
+    await ui.getByRole("option", { name: "全部状态", exact: true }).click();
     await ui
       .locator(`[data-literature-id="${literatureId}"] .paper-open`)
       .click();
@@ -587,17 +564,26 @@ async function installedBrowserJourney(
   }
 }
 
-/** A separate legacy catalog uses the installed public CLI; core capability uses init. */
-async function installedLegacySchemaJourney(
+/** Installed schema commands only initialize/inspect the single current layout. */
+async function installedCurrentSchemaJourney(
   server: typeof Server,
   executable: string,
   root: string,
   environment: NodeJS.ProcessEnv,
 ) {
-  const directory = join(root, "legacy-schema");
+  const directory = join(root, "current-schema");
   await mkdir(directory);
   const catalog = join(directory, "catalog.sqlite");
-  const backup = join(directory, "before-v9.sqlite");
+  const initialized = spawnSync(
+    executable,
+    ["storage", "schema-init", "--catalog", catalog, "--json"],
+    { encoding: "utf8", env: environment },
+  );
+  expect(initialized.status, initialized.stderr).toBe(0);
+  expect(JSON.parse(initialized.stdout)).toMatchObject({
+    action: "initialized",
+    to_version: SCHEMA_VERSION,
+  });
   const writer = new server.SqliteWorker(catalog);
   try {
     await writer.putLiterature(FIXTURE_LITERATURE);
@@ -605,59 +591,34 @@ async function installedLegacySchemaJourney(
     await writer.close();
   }
   const original = await readFile(catalog);
-  const dryRun = spawnSync(
+  const retired = spawnSync(
     executable,
     ["storage", "schema-upgrade", "--catalog", catalog, "--dry-run", "--json"],
     { encoding: "utf8", env: environment },
   );
-  expect(dryRun.status, dryRun.stderr).toBe(0);
-  expect(JSON.parse(dryRun.stdout)).toMatchObject({
-    from_version: 1,
-    to_version: 10,
-  });
-  expect(await readFile(catalog)).toEqual(original);
-  const upgraded = spawnSync(
+  expect(retired.status).toBe(2);
+  expect(JSON.parse(retired.stderr)).toEqual({ code: "invalid-command-input" });
+  const inspected = spawnSync(
     executable,
-    [
-      "storage",
-      "schema-upgrade",
-      "--catalog",
-      catalog,
-      "--backup",
-      backup,
-      "--json",
-    ],
+    ["storage", "schema-inspect", "--catalog", catalog, "--json"],
     { encoding: "utf8", env: environment },
   );
-  expect(upgraded.status, upgraded.stderr).toBe(0);
-  expect(JSON.parse(upgraded.stdout)).toMatchObject({
-    action: "upgraded",
-    from_version: 1,
-    to_version: 10,
-    backup_path: backup,
+  expect(inspected.status, inspected.stderr).toBe(0);
+  expect(JSON.parse(inspected.stdout)).toMatchObject({
+    status: "ready",
+    schema_version: SCHEMA_VERSION,
   });
-  for (const [path, version] of [
-    [catalog, 10],
-    [backup, 1],
-  ] as const) {
-    const inspected = spawnSync(
-      executable,
-      ["storage", "schema-inspect", "--catalog", path, "--json"],
-      { encoding: "utf8", env: environment },
-    );
-    expect(inspected.status, inspected.stderr).toBe(0);
-    expect(JSON.parse(inspected.stdout)).toMatchObject({
-      schema_version: version,
-    });
-    const reader = new server.SqliteWorker(path, undefined, { readOnly: true });
-    try {
-      expect(
-        await reader.getLiterature(FIXTURE_LITERATURE.literature_id),
-      ).toMatchObject(FIXTURE_LITERATURE);
-    } finally {
-      await reader.close();
-    }
+  const reader = new server.SqliteWorker(catalog, undefined, {
+    readOnly: true,
+  });
+  try {
+    expect(
+      await reader.getLiterature(FIXTURE_LITERATURE.literature_id),
+    ).toMatchObject(FIXTURE_LITERATURE);
+  } finally {
+    await reader.close();
   }
+  expect(await readFile(catalog)).toEqual(original);
 }
 
 it("passes producer IDs, hashes and evidence through installed public SDK, CLI and HTTP entrypoints", async () => {
@@ -723,15 +684,15 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
     expect(initialized.status, initialized.stderr).toBe(0);
     expect(JSON.parse(initialized.stdout)).toMatchObject({
       action: "initialized",
-      to_version: 10,
-      inspection: { status: "ready", schema_version: 10 },
+      to_version: SCHEMA_VERSION,
+      inspection: { status: "ready", schema_version: SCHEMA_VERSION },
     });
 
     const packageRoot = join(runtime, "app/node_modules/@sciretriever/server");
     const server = (await import(
       pathToFileURL(join(packageRoot, "dist/index.js")).href
     )) as typeof Server;
-    await installedLegacySchemaJourney(server, executable, root, environment);
+    await installedCurrentSchemaJourney(server, executable, root, environment);
     if (process.env.SCIRETRIEVER_INSTALLED_CLOAK_BUNDLE) {
       // This invocation tests the copied portable operator bundle, not its source.
       vi.stubEnv(
@@ -746,6 +707,8 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
     )) as typeof import("@sciretriever/contracts");
     site = await startWorkbenchFixture();
     const observation = parseMetadataObservation({
+      source_type: null,
+      source_type_mapping_version: null,
       observation_id: id(101),
       provenance: {
         provenance_id: id(102),
@@ -762,7 +725,8 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
         abstract: null,
         publication_date: "2026-01-01",
         publication_year: 2026,
-        document_type: "article",
+        publication_form: "journal-article" as const,
+        article_kind: null,
         language: "en",
         venue: "Synthetic Journal",
         publisher: null,
@@ -806,7 +770,6 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
       ],
     });
     application = await server.createApplication(home, {
-      executionSchema: "require-v2",
       metadata: {
         topic_search_ports: [
           {
@@ -895,20 +858,58 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
       browserLiteratureId,
     );
     let parserCalls = 0;
-    let modelCalls = 0;
     let modelError: string | null = null;
+    const legacyParserPorts = {
+      rules: new server.TypeScriptParserArtifactRules(),
+      parser: {
+        parse: async (
+          request: import("../src/parsing/ports.js").ParserRequest,
+        ) => {
+          parserCalls++;
+          const bytes = Buffer.from(
+            "# Abstract\n\nFixture Author reports installed spectroscopy.\n\n# Results\n\nThe installed paper measured 4.2 eV in dry conditions.\n\n# Conclusion\n\nA synthetic measurement.\n\n# References\n\n[1] Synthetic reference.\n",
+          );
+          return {
+            source_asset_id: request.source_asset_id,
+            source_sha256: request.source_sha256,
+            page_count: 1,
+            markdown: {
+              bytes,
+              artifact: contracts.parseArtifactRef({
+                sha256: sha256(bytes),
+                byte_size: bytes.length,
+                media_type: "text/markdown",
+              }),
+            },
+            resources: [],
+            provenance: {
+              provenance: contracts.parseProvenance({
+                provenance_id: id(200 + parserCalls),
+                source_kind: "parser",
+                source_name: "fixture",
+                source_record_id: null,
+                observed_at: "2026-09-29T00:00:00Z",
+                input_sha256: request.source_sha256,
+                parameters_sha256: "b".repeat(64),
+              }),
+              parser_version: "fixture",
+              mode: null,
+              model_identity: null,
+            },
+          };
+        },
+      },
+    };
     application = await server.createApplication(home, {
-      executionSchema: "require-v2",
       agentTransportFactory:
         () =>
         async ({ body, onDispatched }) => {
           try {
-            modelCalls++;
             onDispatched?.();
             const wire = JSON.parse(
               new TextDecoder().decode(body),
             ) as Parameters<typeof dshChatReply>[0];
-            const reply = await dshChatReply(wire, (raw) => {
+            const answer = (raw: Record<string, unknown>) => {
               const input = raw as {
                 core?: { segment_id: string; text: string }[];
                 segments?: { segment_id: string; text: string }[];
@@ -921,6 +922,14 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
                   quantity: unknown;
                 }[];
               };
+              const role = raw as ModelInput;
+              if (role.method === "section-role-dsh-v1")
+                return { role: "body" };
+              if (
+                role.method === "archive-metadata-dsh-v1" ||
+                ["topics", "select", "consolidate"].includes(String(role.task))
+              )
+                return archiveModel(role);
               let value: Record<string, unknown>;
               if (input.core || input.segments) {
                 const segment = (input.core ?? input.segments)!.find((item) =>
@@ -953,22 +962,47 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
                     };
               } else if (input.candidates) {
                 value = {
-                  title: "Installed synthesis",
-                  statements: input.candidates.map((candidate, index) => ({
-                    statement_id: `merged-${index + 1}`,
-                    category: candidate.category,
-                    epistemic: candidate.epistemic,
-                    relation: "single-source",
-                    conflict_group_id: null,
-                    text: candidate.text,
-                    conditions: candidate.conditions,
-                    quantity: candidate.quantity,
-                    source_ids: [candidate.id],
-                  })),
+                  claims: [
+                    {
+                      text: "The measured result was 4.2 eV in dry conditions",
+                      source_ids: input.candidates.map((c) => c.id),
+                    },
+                  ],
                 };
               } else throw new Error("unexpected synthetic model input");
               return value;
-            });
+            };
+            const content = wire.messages[1]!.content as
+              | string
+              | { type: string; text: string }[];
+            const reply = wire.tools?.some(
+              (tool) => tool.function.name === "submit_result",
+            )
+              ? await dshChatReply(wire, answer)
+              : {
+                  choices: [
+                    {
+                      index: 0,
+                      finish_reason: "stop",
+                      message: {
+                        role: "assistant",
+                        content: JSON.stringify(
+                          answer(
+                            JSON.parse(
+                              typeof content === "string"
+                                ? content
+                                : content!
+                                    .filter((part) => part.type === "text")
+                                    .map((part) => part.text)
+                                    .join(""),
+                            ),
+                          ),
+                        ),
+                      },
+                    },
+                  ],
+                  usage: { prompt_tokens: 100, completion_tokens: 50 },
+                };
             return {
               status: 200,
               headers: [],
@@ -984,46 +1018,9 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
             throw error;
           }
         },
-      parsing: {
-        rules: new server.TypeScriptParserArtifactRules(),
-        parser: {
-          parse: async (request) => {
-            parserCalls++;
-            const bytes = Buffer.from(
-              "# Results\nThe installed paper measured 4.2 eV in dry conditions.\n",
-            );
-            return {
-              source_asset_id: request.source_asset_id,
-              source_sha256: request.source_sha256,
-              page_count: 1,
-              markdown: {
-                bytes,
-                artifact: contracts.parseArtifactRef({
-                  sha256: sha256(bytes),
-                  byte_size: bytes.length,
-                  media_type: "text/markdown",
-                }),
-              },
-              resources: [],
-              provenance: {
-                provenance: contracts.parseProvenance({
-                  provenance_id: id(200 + parserCalls),
-                  source_kind: "parser",
-                  source_name: "fixture",
-                  source_record_id: null,
-                  observed_at: "2026-09-29T00:00:00Z",
-                  input_sha256: request.source_sha256,
-                  parameters_sha256: "b".repeat(64),
-                }),
-                parser_version: "fixture",
-                mode: null,
-                model_identity: null,
-              },
-            };
-          },
-        },
-      },
+      parsing: withRawParserFixture(legacyParserPorts),
     });
+
     query = await server.createQueryApplication(home);
     http = await server.startQueryOnlyHttp({
       application: query,
@@ -1086,8 +1083,8 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
     expect(read.body.detail.primary_pdf!.article_identity_status).toBe(
       "unverified",
     );
-    expect(read.body.detail.parser_result).toBeNull();
-    expect(read.body.detail.content).toBeNull();
+    expect(read.body.detail).not.toHaveProperty("parser_result");
+    expect(read.body.detail).not.toHaveProperty("content");
     const assetId = read.body.detail.primary_pdf!.asset.asset_id;
     expect(assetId).toBe(accepted.asset_id);
     const browserRead = await post("read", {
@@ -1108,18 +1105,55 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
         literature_id: literatureId,
         asset_id: assetId,
         asset_sha256: accepted.sha256,
-        mode: "reparse",
-        expected_default_revision: null,
+        profiles: ["pipeline", "vlm-engine"],
+        force: false,
       },
       true,
     );
     expect(parsed.status, JSON.stringify(parsed.body)).toBe(200);
-    expect(parserCalls).toBe(1);
-    const documentId = parsed.body.receipt.document.document_version_id;
-    expect(parsed.body.receipt.document.source_material_ref.asset_id).toBe(
+    expect(parserCalls).toBe(2);
+    expect(parsed.body.receipt).toMatchObject({
+      asset_id: assetId,
+      asset_sha256: accepted.sha256,
+      profiles: [
+        { profile: "pipeline", status: "published" },
+        { profile: "vlm-engine", status: "published" },
+      ],
+    });
+    const buildArchive = async (
+      literature_id: string,
+      asset_id: string,
+      asset_sha256: string,
+    ) => {
+      const job = await application!.processingTasks!.submit({
+        schema_version: 1,
+        idempotency_key: `archive-${literature_id}`,
+        operations: [
+          {
+            operation: "build-archive",
+            request: { literature_id, mode: "full", from_step: null },
+          },
+        ],
+      });
+      await application!.processingTasks!.run(job.job_id);
+      expect(
+        (await application!.processingTasks!.read(job.job_id)).failures,
+        modelError ?? "",
+      ).toEqual([]);
+      expect((await application!.archive.status(literature_id)).status).toBe(
+        "READY",
+      );
+      return (
+        await application!.documentRead.default({
+          literature_id,
+          asset_id,
+          asset_sha256,
+        })
+      ).default!.document_version_id;
+    };
+    const documentId = await buildArchive(
+      literatureId,
       assetId,
-    );
-    expect(parsed.body.receipt.document.source_material_ref.asset_sha256).toBe(
       accepted.sha256,
     );
     const browserParsed = await post(
@@ -1128,8 +1162,8 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
         literature_id: browserLiteratureId,
         asset_id: browserAssetId,
         asset_sha256: browserHash,
-        mode: "reparse",
-        expected_default_revision: null,
+        profiles: ["pipeline", "vlm-engine"],
+        force: false,
       },
       true,
     );
@@ -1140,12 +1174,13 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
     expect(afterParsing.body.detail.primary_pdf?.article_identity_status).toBe(
       "unverified",
     );
-    expect(parserCalls).toBe(2);
-    const browserDocumentId =
-      browserParsed.body.receipt.document.document_version_id;
-    expect(
-      browserParsed.body.receipt.document.source_material_ref.asset_sha256,
-    ).toBe(browserHash);
+    expect(parserCalls).toBe(4);
+    expect(browserParsed.body.receipt.asset_sha256).toBe(browserHash);
+    const browserDocumentId = await buildArchive(
+      browserLiteratureId,
+      browserAssetId,
+      browserHash,
+    );
     const described = await post("document-describe", {
       document_version_id: documentId,
     });
@@ -1333,151 +1368,107 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
       accepted.sha256,
     );
 
-    const manifest = await contracts.createInputManifest([
-      {
-        input_id: "paper-1",
-        literature_id: literatureId,
-        material: material.body.result.evidence.material,
-        document: described.body.result.document,
-        capabilities: [
-          "material-file-v1",
-          "document-segment-v1",
-          "document-text-v1",
-          "document-outline-v1",
-          "document-resources-v1",
-        ],
-        gaps: [],
-      },
-    ]);
-    const analyzed = await post(
-      "analyze-knowledge",
-      {
+    const runProcessor = async (
+      processor: string,
+      inputs: unknown[],
+      spec: unknown,
+    ) => {
+      const job = await application!.processors!.submit({
         schema_version: 1,
-        input: manifest,
-        purpose: "overview",
-        question: null,
-        default_update: null,
-        budget: { max_input_bytes: 65536, max_output_tokens: 2048 },
-      },
-      true,
+        idempotency_key: `installed-${processor}`,
+        name: processor,
+        processor: { id: processor, version: "2" },
+        spec,
+        inputs,
+      });
+      await application!.processingTasks!.run(job.job_id);
+      const state = await application!.processingTasks!.read(job.job_id);
+      expect(state.failures, modelError ?? "").toEqual([]);
+      return (state.results[0] as { result: { result_id: string } }).result
+        .result_id;
+    };
+    const readResult = async (result_id: string) => {
+      const response = await fetch(http!.origin + "/api/v1/query/processors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          protocol_version: 1,
+          operation: "read",
+          request: { result_id },
+        }),
+      });
+      expect(response.status).toBe(200);
+      return (
+        (await response.json()) as {
+          result: NonNullable<
+            Awaited<
+              ReturnType<
+                NonNullable<Server.QueryApplication["processorRead"]>["byId"]
+              >
+            >
+          >;
+        }
+      ).result;
+    };
+    const knowledgeId = await runProcessor(
+      "summary",
+      [{ kind: "literature", literature_id: literatureId }],
+      { purpose: "overview", question: null },
     );
-    expect(
-      analyzed.status,
-      `${JSON.stringify(analyzed.body)} ${modelCalls} ${modelError ?? ""}`,
-    ).toBe(200);
-    expect(modelCalls).toBeGreaterThan(0);
-    const knowledgeId = analyzed.body.result.artifact!.artifact_id;
-    const knowledge = await post("knowledge-read", {
-      artifact_id: knowledgeId,
-    });
-    expect(knowledge.status, JSON.stringify(knowledge.body)).toBe(200);
-    expect(knowledge.body.result.artifact_id).toBe(knowledgeId);
-    expect(knowledge.body.result.input).toEqual(manifest);
-    expect(
-      knowledge.body.result.content.statements[0]!.evidence,
-    ).toContainEqual(
+    const knowledge = await readResult(knowledgeId);
+    expect(knowledge.ref.result_id).toBe(knowledgeId);
+    if (knowledge.result.content.kind !== "report")
+      throw new Error("summary must be a report");
+    expect(knowledge.result.content.claims[0]!.sources).toContainEqual(
       expect.objectContaining({
-        target_kind: "document",
-        document_version_id: documentId,
+        kind: "document",
+        evidence: expect.objectContaining({ document_version_id: documentId }),
       }),
     );
-    const knowledgeIndex = await post(
-      "rebuild-knowledge-index",
-      { kind: "rebuild" },
-      true,
-    );
-    expect(knowledgeIndex.status, JSON.stringify(knowledgeIndex.body)).toBe(
-      200,
-    );
     const mixed = await post("knowledge-context", {
-      schema_version: 2,
+      schema_version: 3,
       query: "4.2",
       scope: { kind: "library" },
       kinds: ["metadata", "document", "knowledge"],
       versions: { kind: "default" },
-      knowledge: {
-        purposes: ["overview"],
-        question: null,
-        selection: "all",
-        artifact_ids: [],
-      },
       budget: { max_items: 20, max_bytes: 262144, token_limit: null },
       continuation: null,
     });
     expect(mixed.status, JSON.stringify(mixed.body)).toBe(200);
     expect(mixed.body.result.items).toContainEqual(
       expect.objectContaining({
-        kind: "generated-knowledge",
+        kind: "generated-result",
         reference: expect.objectContaining({
-          artifact_id: knowledgeId,
-          content_sha256: knowledge.body.result.content_ref.sha256,
-          manifest_sha256: manifest.manifest_sha256,
+          result_id: knowledgeId,
+          content_sha256: knowledge.ref.content_sha256,
         }),
-        source_state: "verified",
+        gap: null,
+        evidence: expect.arrayContaining([
+          expect.objectContaining({
+            target_kind: "document",
+            document_version_id: documentId,
+          }),
+        ]),
         source_literature_ids: [literatureId],
       }),
     );
-    const synthesisPrepared = await post("synthesis-prepare", {
-      policy: "require-all",
-      inputs: [
-        {
-          kind: "document",
-          input_id: "paper-1",
-          literature_id: literatureId,
-          asset_id: assetId,
-          asset_sha256: accepted.sha256,
-          document_version_id: documentId,
-        },
-        {
-          kind: "document",
-          input_id: "browser-paper",
-          literature_id: browserLiteratureId,
-          asset_id: browserAssetId,
-          asset_sha256: browserHash,
-          document_version_id: browserDocumentId,
-        },
-      ],
+    const snapshot = await application!.snapshots.create({
+      kind: "literatures",
+      literature_ids: [literatureId, browserLiteratureId],
     });
-    expect(
-      synthesisPrepared.status,
-      JSON.stringify(synthesisPrepared.body),
-    ).toBe(200);
-    const synthesis = await post(
-      "synthesize",
-      {
-        schema_version: 3,
-        input: synthesisPrepared.body.result.manifest,
-        purpose: "synthesis",
-        question: "What was measured?",
-        policy: "require-all",
-        budget: {
-          max_source_bytes: 8 * 1024 * 1024,
-          max_verification_bytes: 64 * 1024 * 1024,
-          max_call_bytes: 256 * 1024,
-          max_total_call_bytes: 32 * 1024 * 1024,
-          max_calls: 256,
-          max_output_tokens_per_call: 2048,
-          max_total_output_tokens: 524288,
-        },
-      },
-      true,
+    const synthesisId = await runProcessor(
+      "knowledge-synthesis",
+      [{ kind: "snapshot", snapshot_id: snapshot.snapshot_id }],
+      { question: "What was measured?", policy: "require-all" },
     );
-    expect(synthesis.status, JSON.stringify(synthesis.body)).toBe(200);
-    if (!synthesis.body.result.artifact)
-      throw new Error("synthesis returned no artifact");
-    const synthesisId = synthesis.body.result.artifact.artifact_id;
-    const synthesisRead = await post("synthesis-read", {
-      artifact_id: synthesisId,
-    });
-    expect(synthesisRead.status, JSON.stringify(synthesisRead.body)).toBe(200);
-    expect(synthesisRead.body.result.artifact.artifact_id).toBe(synthesisId);
-    expect(synthesisRead.body.result.artifact.coverage.items).toHaveLength(2);
-    expect(synthesisRead.body.result.artifact.input).toEqual(
-      synthesisPrepared.body.result.manifest,
-    );
-    expect(synthesisRead.body.result.independent_literature_ids).toEqual(
+    const synthesis = await readResult(synthesisId);
+    expect(synthesis.result.literature_ids).toEqual(
       expect.arrayContaining([literatureId, browserLiteratureId]),
     );
+    expect(synthesis.result.invocation.inputs[0]).toMatchObject({
+      kind: "snapshot",
+      snapshot_id: snapshot.snapshot_id,
+    });
     // Close every writer. A fresh, installed query application consumes the
     // newly committed IDs without rebuilding, upgrading or recovering anything.
     await http.close();
@@ -1487,16 +1478,16 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
     await application.close();
     application = undefined;
     query = await server.createQueryApplication(home);
-    expect(query.readiness.schema_version).toBe(10);
+    expect(query.readiness.schema_version).toBe(SCHEMA_VERSION);
     const reopened = await query.query!.detail(browserLiteratureId);
     expect(reopened.primary_pdf!.asset.asset_id).toBe(browserAssetId);
     expect(reopened.primary_pdf!.asset.sha256).toBe(browserHash);
-    expect((await query.knowledgeRead!.byId(knowledgeId))!.artifact_id).toBe(
+    expect((await query.processorRead!.byId(knowledgeId))!.ref.result_id).toBe(
       knowledgeId,
     );
-    expect(
-      (await query.synthesisRead!.byId(synthesisId))!.artifact.artifact_id,
-    ).toBe(synthesisId);
+    expect((await query.processorRead!.byId(synthesisId))!.ref.result_id).toBe(
+      synthesisId,
+    );
     expect(
       (
         await query.documentRead!.describe({

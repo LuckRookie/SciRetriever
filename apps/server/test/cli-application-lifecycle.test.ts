@@ -64,9 +64,9 @@ describe("CLI application lifecycle", () => {
         );
         expect(create).toHaveBeenCalledExactlyOnceWith(home);
         expect(fileCleanup).toHaveBeenCalledTimes(1);
-        expect(databaseCleanup).toHaveBeenCalledTimes(1);
+        expect(databaseCleanup).toHaveBeenCalledTimes(2);
         expect(closedFiles).toHaveLength(1);
-        expect(closedDatabases).toHaveLength(1);
+        expect(closedDatabases).toHaveLength(2);
         await expect(closedFiles[0]!.stage()).rejects.toMatchObject({
           code: "file-store",
         });
@@ -186,9 +186,9 @@ describe("CLI application lifecycle", () => {
       expect(settled[1]).toEqual(settled[0]);
       expect(application.close()).toBe(first);
       expect(files).toHaveBeenCalledTimes(1);
-      expect(database).toHaveBeenCalledTimes(1);
+      expect(database).toHaveBeenCalledTimes(2);
       expect(closedFiles).toHaveLength(1);
-      expect(closedDatabases).toHaveLength(1);
+      expect(closedDatabases).toHaveLength(2);
       await expect(closedFiles[0]!.stage()).rejects.toMatchObject({
         code: "file-store",
       });
@@ -277,9 +277,9 @@ describe("CLI application lifecycle", () => {
       expect(errors).toEqual(['{"code":"internal-failed"}\n']);
       expect(create).toHaveBeenCalledExactlyOnceWith(home);
       expect(fileCleanup).toHaveBeenCalledTimes(1);
-      expect(databaseCleanup).toHaveBeenCalledTimes(1);
+      expect(databaseCleanup).toHaveBeenCalledTimes(2);
       expect(closedFiles).toHaveLength(1);
-      expect(closedDatabases).toHaveLength(1);
+      expect(closedDatabases).toHaveLength(2);
       await expect(closedFiles[0]!.stage()).rejects.toMatchObject({
         code: "file-store",
       });

@@ -1,3 +1,4 @@
+import { DocumentProcessingError } from "../document/service.js";
 import {
   parseDatabaseCompletionReport,
   parseLiteratureId,
@@ -34,10 +35,6 @@ import {
   type LiteratureCompletionService,
 } from "./literature-completion.js";
 import { ParsingFailure } from "../parsing/ports.js";
-import { AnalysisFailure } from "../analysis/service.js";
-import { ContentAcceptanceError } from "../literature/content.js";
-import { ContentCleanupFailure } from "../literature/cleanup.js";
-import { NoUsableContentReclamationFailure } from "./no-usable-content.js";
 import type { PdfAcquisitionPort } from "./pdf-acquisition.js";
 import {
   CompletionSerialExecutor,
@@ -56,7 +53,7 @@ import { randomUUID } from "node:crypto";
 export interface DatabaseCompletionRequest {
   readonly selector: LiteratureSelector;
   readonly goal: BatchGoal;
-  /** Supplied durable candidate transfers, only meaningful for `CONTENT_READY`. */
+  /** Supplied durable candidate transfers, only meaningful for `PARSER_RESULT_READY`. */
   readonly transfer_ids?: readonly string[];
 }
 
@@ -98,11 +95,14 @@ export interface DatabaseCompletionTargetPorts {
     | "setAutomaticPdfExhaustion"
     | "clearAutomaticPdfExhaustion"
   > | null;
-  readonly completion: Pick<LiteratureCompletionService, "complete"> | null;
+  readonly completion: Pick<
+    LiteratureCompletionService,
+    "complete" | "isReady"
+  > | null;
   /** `null` means the automatic route set is not wired for this caller. */
   readonly acquisition: PdfAcquisitionPort | null;
-  /** Production enables automatic PDF acquisition before CONTENT_READY analysis. */
-  readonly automatic_pdf_for_content?: boolean;
+  /** Production enables automatic PDF acquisition before PARSER_RESULT_READY parsing. */
+  readonly automatic_pdf_for_parsing?: boolean;
 }
 
 export interface DatabaseCompletionPorts extends DatabaseCompletionTargetPorts {
@@ -113,8 +113,8 @@ export interface DatabaseCompletionPorts extends DatabaseCompletionTargetPorts {
   readonly writes: Pick<CatalogWriteAdmission, "run">;
   /** Bootstrap supplies the existing execution setting; direct callers default to one. */
   readonly max_concurrency?: number;
-  /** Production enables automatic PDF acquisition before CONTENT_READY analysis. */
-  readonly automatic_pdf_for_content?: boolean;
+  /** Production enables automatic PDF acquisition before PARSER_RESULT_READY parsing. */
+  readonly automatic_pdf_for_parsing?: boolean;
 }
 
 /** The single final partition of one frozen target. */
@@ -127,7 +127,6 @@ export interface DatabaseCompletionTargetOutcome {
   readonly skipped_literature_ids: readonly LiteratureId[];
   /** An unrecoverable shared-dependency failure stops the remaining schedule. */
   readonly operation_failure: boolean;
-  readonly no_usable_content: boolean;
 }
 
 export interface FrozenCompletionTarget {
@@ -141,7 +140,6 @@ type CandidateOutcome =
   | {
       readonly kind: "completed";
       readonly literature_id: LiteratureId;
-      readonly no_usable_content: boolean;
     }
   | { readonly kind: "exhausted"; readonly literature_id: LiteratureId }
   | { readonly kind: "satisfied"; readonly literature_id: LiteratureId }
@@ -161,7 +159,6 @@ type CandidateOutcome =
       readonly failure: StableFailure;
       readonly literature_id: LiteratureId | null;
       readonly operation: boolean;
-      readonly no_usable_content: boolean;
     };
 
 const TRANSFER_ID_RE = /^[a-zA-Z0-9._:-]{1,128}$/;
@@ -181,18 +178,21 @@ function stableFailure(
   return Object.freeze({ code, reason, action, retryable });
 }
 
-function goalSatisfied(item: LiteratureSearchItem, goal: BatchGoal): boolean {
-  // `missing_step` is the next missing step of the current facts: `null` means
-  // CONTENT_READY, anything but `primary-pdf` already has a current main PDF.
-  return goal === "CONTENT_READY"
-    ? item.missing_step === null
-    : item.missing_step !== "primary-pdf";
+async function goalSatisfied(
+  item: LiteratureSearchItem,
+  goal: BatchGoal,
+  completion: DatabaseCompletionTargetPorts["completion"],
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (goal === "ASSET_READY") return item.missing_step !== "primary-pdf";
+  return completion
+    ? completion.isReady(item.literature.literature_id, signal)
+    : false;
 }
 
 function stepRank(step: LiteratureSearchItem["missing_step"]): number {
   if (step === null) return 0;
-  if (step === "literature-content") return 1;
-  return step === "parser-result" ? 2 : 3;
+  return step === "primary-pdf" ? 3 : step === "raw-parse" ? 2 : 1;
 }
 
 function candidateRank(item: LiteratureSearchItem): readonly number[] {
@@ -263,7 +263,7 @@ export class DatabaseCompletionTargetRunner {
   ): Promise<DatabaseCompletionTargetOutcome> {
     const id = parseLiteratureId(literatureId);
     const goal = options.goal;
-    if (goal !== "ASSET_READY" && goal !== "CONTENT_READY")
+    if (goal !== "ASSET_READY" && goal !== "PARSER_RESULT_READY")
       throw new TypeError("completion goal is invalid");
     const signal = options.signal ?? new AbortController().signal;
     const transfers = options.transfer_ids ?? [];
@@ -297,7 +297,6 @@ export class DatabaseCompletionTargetRunner {
         skipped_reason: null,
         skipped_literature_ids: [],
         operation_failure: false,
-        no_usable_content: outcome.no_usable_content,
       };
     if (outcome.kind === "exhausted")
       return {
@@ -308,7 +307,6 @@ export class DatabaseCompletionTargetRunner {
         skipped_reason: "manual-pdf-required",
         skipped_literature_ids: [outcome.literature_id],
         operation_failure: false,
-        no_usable_content: false,
       };
     if (outcome.kind === "satisfied")
       return {
@@ -319,7 +317,6 @@ export class DatabaseCompletionTargetRunner {
         skipped_reason: "already-satisfied",
         skipped_literature_ids: [outcome.literature_id],
         operation_failure: false,
-        no_usable_content: false,
       };
     if (outcome.kind === "skipped")
       return {
@@ -332,7 +329,6 @@ export class DatabaseCompletionTargetRunner {
           ? [outcome.literature_id]
           : [],
         operation_failure: false,
-        no_usable_content: false,
       };
     if (outcome.kind === "interrupted")
       return {
@@ -343,7 +339,6 @@ export class DatabaseCompletionTargetRunner {
         skipped_reason: null,
         skipped_literature_ids: [],
         operation_failure: false,
-        no_usable_content: false,
       };
     return {
       partition: "failed",
@@ -353,7 +348,6 @@ export class DatabaseCompletionTargetRunner {
       skipped_reason: null,
       skipped_literature_ids: [],
       operation_failure: outcome.operation,
-      no_usable_content: outcome.no_usable_content,
     };
   }
 
@@ -383,14 +377,13 @@ export class DatabaseCompletionTargetRunner {
           ),
           literature_id: id,
           operation: false,
-          no_usable_content: false,
         };
       throw error;
     }
     if (signal.aborted) return { kind: "interrupted", literature_id: id };
-    if (goalSatisfied(detail, goal)) {
+    if (await goalSatisfied(detail, goal, this.ports.completion, signal)) {
       if (explicitTarget) return { kind: "satisfied", literature_id: id };
-      return { kind: "completed", literature_id: id, no_usable_content: false };
+      return { kind: "completed", literature_id: id };
     }
     if (
       !detail.primary_pdf &&
@@ -412,16 +405,15 @@ export class DatabaseCompletionTargetRunner {
           execution,
         ),
       );
-    // CONTENT_READY with no supplied durable candidate first uses the same
+    // PARSER_RESULT_READY with no supplied durable candidate first uses the same
     // admitted automatic PDF path as ASSET_READY. Once the receipt is committed,
-    // re-read the concrete Literature and continue through the normal parsing/
-    // analysis owner. A stable automatic exhaustion remains a manual intervention;
+    // re-read the concrete Literature and continue through the raw parsing owner. A stable automatic exhaustion remains a manual intervention;
     // it is never passed to the content service as if a PDF existed.
     if (
       !detail.primary_pdf &&
       transfer_ids.length === 0 &&
       this.ports.acquisition &&
-      this.ports.automatic_pdf_for_content === true
+      this.ports.automatic_pdf_for_parsing === true
     ) {
       const acquired = await execution.acquire(() =>
         this.acquirePdf(
@@ -437,7 +429,7 @@ export class DatabaseCompletionTargetRunner {
       detail = await this.ports.library.detail(id);
       if (signal.aborted) return { kind: "interrupted", literature_id: id };
     }
-    return this.completeContent(id, transfer_ids, signal, execution.commit);
+    return this.completeParsing(id, transfer_ids, signal, execution.commit);
   }
 
   private async acquirePdf(
@@ -448,8 +440,7 @@ export class DatabaseCompletionTargetRunner {
     commit: CompletionCommit,
     execution: CompletionExecution,
   ): Promise<CandidateOutcome> {
-    if (detail.primary_pdf)
-      return { kind: "completed", literature_id: id, no_usable_content: false };
+    if (detail.primary_pdf) return { kind: "completed", literature_id: id };
     const acquisition = this.ports.acquisition;
     if (!acquisition)
       // The automatic route set is not wired for this caller. A durable job
@@ -466,7 +457,6 @@ export class DatabaseCompletionTargetRunner {
         ),
         literature_id: id,
         operation: false,
-        no_usable_content: false,
       };
     const database = this.ports.database;
     if (!database)
@@ -510,14 +500,12 @@ export class DatabaseCompletionTargetRunner {
         ),
         literature_id: id,
         operation: true,
-        no_usable_content: false,
       };
     }
     if (outcome.kind === "acquired")
       return {
         kind: "completed",
         literature_id: outcome.literature_id,
-        no_usable_content: false,
       };
     if (outcome.kind === "exhausted") {
       // Every current automatic route finished normally without an unresolved
@@ -548,7 +536,6 @@ export class DatabaseCompletionTargetRunner {
         ),
         literature_id: id,
         operation: false,
-        no_usable_content: false,
       };
     if (outcome.kind === "assistance-required")
       // Action required is a target failure, never a user-controlled stop.
@@ -558,7 +545,6 @@ export class DatabaseCompletionTargetRunner {
         failure: acquisitionFailure(outcome.failure),
         literature_id: id,
         operation: false,
-        no_usable_content: false,
       };
     if (outcome.kind === "policy-skip")
       // The notify policy did not continue this eligible target: it is an explicit,
@@ -579,11 +565,10 @@ export class DatabaseCompletionTargetRunner {
       failure: acquisitionFailure(outcome.failure),
       literature_id: id,
       operation: false,
-      no_usable_content: false,
     };
   }
 
-  private async completeContent(
+  private async completeParsing(
     id: LiteratureId,
     transfer_ids: readonly string[],
     signal: AbortSignal,
@@ -595,14 +580,13 @@ export class DatabaseCompletionTargetRunner {
         kind: "failed",
         stage: "literature",
         failure: stableFailure(
-          "content-completion-unavailable",
+          "parser-completion-unavailable",
           "The target cannot continue without the configured completion services.",
-          "Configure Parsing and Analysis, then retry the target.",
+          "Configure raw Parsing, then retry the target.",
           false,
         ),
         literature_id: id,
         operation: false,
-        no_usable_content: false,
       };
     let result;
     try {
@@ -614,47 +598,24 @@ export class DatabaseCompletionTargetRunner {
     } catch (error) {
       if (
         error instanceof ParsingFailure ||
-        error instanceof AnalysisFailure ||
-        error instanceof ContentAcceptanceError ||
-        error instanceof ContentCleanupFailure ||
-        error instanceof NoUsableContentReclamationFailure
+        error instanceof DocumentProcessingError
       ) {
-        const publication =
-          error instanceof NoUsableContentReclamationFailure ||
-          error.code === "parser-publication" ||
-          error.code === "content-publication" ||
-          error.code === "content-cleanup-storage" ||
-          error.code === "content-cleanup-integrity";
-        const cancelled =
-          error.code === "parser-cancelled" ||
-          error.code === "analysis-cancelled" ||
-          error.code === "content-cancelled" ||
-          error.code === "content-cleanup-cancelled";
-        if (cancelled && signal.aborted)
+        const publication = error.code === "parser-publication";
+        if (!publication && signal.aborted)
           return { kind: "interrupted", literature_id: id };
-        const parser = error instanceof ParsingFailure;
-        const analysis = error instanceof AnalysisFailure;
         return {
           kind: "failed",
           literature_id: id,
-          stage: parser ? "parsing" : analysis ? "analysis" : "literature",
+          stage: "parsing",
           failure: stableFailure(
             publication
               ? "completion-storage-failed"
-              : parser
-                ? "completion-parsing-failed"
-                : analysis
-                  ? "completion-analysis-failed"
-                  : "completion-contract",
-            "The content stage did not reach its acceptance boundary.",
-            "Review the current facts and stage configuration, then retry the target.",
-            !publication && (parser || analysis),
+              : "completion-parsing-failed",
+            "The raw parsing stage did not reach both profile publication boundaries.",
+            "Inspect raw parsing status and retry the target; successful profiles and the PDF are preserved.",
+            !publication,
           ),
-          operation:
-            publication ||
-            (!parser && !analysis) ||
-            error.code === "analysis-configuration",
-          no_usable_content: false,
+          operation: publication,
         };
       }
       if (error instanceof LiteratureCompletionFailure) {
@@ -672,7 +633,6 @@ export class DatabaseCompletionTargetRunner {
                 ),
                 literature_id: id,
                 operation: false,
-                no_usable_content: false,
               };
         if (error.code === "completion-command" && transfer_ids.length > 0)
           // A supplied candidate belongs to another concrete version; that is
@@ -734,7 +694,6 @@ export class DatabaseCompletionTargetRunner {
           ),
           literature_id: id,
           operation: entry.operation,
-          no_usable_content: false,
         };
       }
       const kind = classifyAcquisitionFailure(error, signal);
@@ -757,33 +716,40 @@ export class DatabaseCompletionTargetRunner {
         // dependencies: they stop the remaining schedule instead of being
         // hidden inside one target.
         operation: true,
-        no_usable_content: false,
       };
     }
-    if (result.outcome === "content_ready")
+    if (result.outcome === "parser_results_ready")
+      return { kind: "completed", literature_id: id };
+    if (result.outcome === "parsing_failed") {
+      const storage = result.receipt.profiles.some(
+        (p) => p.failure_code === "parser-publication",
+      );
+      if (!storage && signal.aborted)
+        return { kind: "interrupted", literature_id: id };
       return {
-        kind: "completed",
-        literature_id: id,
-        // A cleanup before the accepted result is still this run's feedback and
-        // may overlap the `completed` partition.
-        no_usable_content: result.attempts.some(
-          (attempt) => attempt.outcome === "no_usable_content",
+        kind: "failed",
+        stage: "parsing",
+        failure: stableFailure(
+          storage ? "completion-storage-failed" : "completion-parsing-failed",
+          "One or more raw parsing profiles could not be published.",
+          "Inspect raw parsing status and retry; successful profiles are reused.",
+          !storage,
         ),
+        literature_id: id,
+        operation: storage,
       };
+    }
     return {
       kind: "failed",
-      stage: "literature",
+      stage: "acquisition",
       failure: stableFailure(
         "completion-candidates-exhausted",
-        "No supplied or current PDF produced usable content for this target.",
+        "No supplied or current primary PDF is available.",
         "Provide an eligible PDF or run automatic PDF acquisition, then retry.",
         false,
       ),
       literature_id: id,
       operation: false,
-      no_usable_content: result.attempts.some(
-        (attempt) => attempt.outcome === "no_usable_content",
-      ),
     };
   }
 }
@@ -879,7 +845,6 @@ class DatabaseCompletionOperation {
             operation_failure: kind !== "cancel",
             skipped_reason: null,
             skipped_literature_ids: [],
-            no_usable_content: false,
           };
         }
         let policyStop = false;
@@ -900,7 +865,6 @@ class DatabaseCompletionOperation {
             operation_failure: true,
             skipped_reason: null,
             skipped_literature_ids: [],
-            no_usable_content: outcome.no_usable_content,
           };
         }
         outcomes.set(frozen, outcome);
@@ -970,7 +934,7 @@ export class DatabaseCompletionService {
     options: DatabaseCompletionOptions = {},
   ): Promise<DatabaseCompletionReport> {
     const goal = request.goal;
-    if (goal !== "ASSET_READY" && goal !== "CONTENT_READY")
+    if (goal !== "ASSET_READY" && goal !== "PARSER_RESULT_READY")
       throw new TypeError("completion goal is invalid");
     const transferIds = this.normalizeTransfers(request.transfer_ids ?? []);
     // Freeze once under admission; network/model/file preparation must not hold
@@ -985,7 +949,10 @@ export class DatabaseCompletionService {
   async freezeRequest(
     request: DatabaseCompletionRequest,
   ): Promise<readonly FrozenCompletionTarget[]> {
-    if (request.goal !== "ASSET_READY" && request.goal !== "CONTENT_READY")
+    if (
+      request.goal !== "ASSET_READY" &&
+      request.goal !== "PARSER_RESULT_READY"
+    )
       throw new TypeError("completion goal is invalid");
     this.normalizeTransfers(request.transfer_ids ?? []);
     return this.ports.writes.run(() =>
@@ -999,7 +966,7 @@ export class DatabaseCompletionService {
     goal: BatchGoal,
     options: DatabaseCompletionOptions = {},
   ): Promise<DatabaseCompletionReport> {
-    if (goal !== "ASSET_READY" && goal !== "CONTENT_READY")
+    if (goal !== "ASSET_READY" && goal !== "PARSER_RESULT_READY")
       throw new TypeError("completion goal is invalid");
     const keys = new Set<string>();
     for (const frozen of targets) {
@@ -1055,7 +1022,6 @@ export class DatabaseCompletionService {
     const skipped: SkippedCompletionTarget[] = [];
     const notStarted: NotStartedCompletionTarget[] = [];
     const interrupted: InterruptedCompletionTarget[] = [];
-    const noUsable: LiteratureId[] = [];
     const operation = new DatabaseCompletionOperation(
       this.maxConcurrency,
       signal,
@@ -1077,12 +1043,6 @@ export class DatabaseCompletionService {
       }
       const literatureId =
         outcome.literature_id ?? frozen.candidates[0] ?? null;
-      if (
-        outcome.no_usable_content &&
-        literatureId &&
-        !noUsable.includes(literatureId)
-      )
-        noUsable.push(literatureId);
       if (outcome.partition === "completed")
         completed.push({ target: frozen.target, literature_id: literatureId! });
       else if (outcome.partition === "failed")
@@ -1113,7 +1073,6 @@ export class DatabaseCompletionService {
       skipped,
       notStarted,
       interrupted,
-      no_usable_content_literature_ids: noUsable,
     });
   }
 
@@ -1171,7 +1130,16 @@ export class DatabaseCompletionService {
     }
     const targets: FrozenTarget[] = [];
     for (const [meta, members] of groups) {
-      if (members.some((item) => goalSatisfied(item, goal))) continue;
+      if (
+        (
+          await Promise.all(
+            members.map((item) =>
+              goalSatisfied(item, goal, this.ports.completion),
+            ),
+          )
+        ).some(Boolean)
+      )
+        continue;
       const ordered = members
         .filter(
           (item) => selector.kind !== "all-pending" || !item.needs_manual_pdf,
@@ -1202,7 +1170,6 @@ export class DatabaseCompletionService {
     execution: CompletionExecution,
   ): Promise<DatabaseCompletionTargetOutcome> {
     let exhausted: LiteratureId[] = [];
-    let observedNoUsable = false;
     for (const candidate of frozen.candidates) {
       if (signal.aborted)
         return {
@@ -1213,7 +1180,6 @@ export class DatabaseCompletionService {
           skipped_reason: null,
           skipped_literature_ids: [],
           operation_failure: false,
-          no_usable_content: observedNoUsable,
         };
       const outcome = await this.runner.runTarget(candidate, {
         goal,
@@ -1223,20 +1189,15 @@ export class DatabaseCompletionService {
         explicit_target: true,
         execution,
       });
-      observedNoUsable = observedNoUsable || outcome.no_usable_content;
-      const withHistory = {
-        ...outcome,
-        no_usable_content: observedNoUsable,
-      };
       if (
         outcome.partition === "completed" ||
         outcome.partition === "interrupted"
       )
-        return withHistory;
+        return outcome;
       if (outcome.partition === "failed")
-        // A failed analysis never invalidates its PDF or advances to another version.
+        // A failed parse never invalidates its PDF or advances to another version.
         return {
-          ...withHistory,
+          ...outcome,
           literature_id: outcome.literature_id ?? candidate,
         };
       if (outcome.skipped_reason === "manual-pdf-required") {
@@ -1244,7 +1205,7 @@ export class DatabaseCompletionService {
         continue;
       }
       // A deliberately skipped candidate ends the target.
-      return withHistory;
+      return outcome;
     }
     if (exhausted.length > 0)
       return {
@@ -1255,7 +1216,6 @@ export class DatabaseCompletionService {
         skipped_reason: "manual-pdf-required",
         skipped_literature_ids: exhausted,
         operation_failure: false,
-        no_usable_content: observedNoUsable,
       };
     return {
       partition: "skipped",
@@ -1265,7 +1225,6 @@ export class DatabaseCompletionService {
       skipped_reason: "not-eligible",
       skipped_literature_ids: [],
       operation_failure: false,
-      no_usable_content: observedNoUsable,
     };
   }
 }

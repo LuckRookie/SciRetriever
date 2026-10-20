@@ -9,7 +9,7 @@ import {
   type ParserArtifactRules,
   type StagedParserArtifact,
   type StagedParserResource,
-  type StagedParserOutput,
+  type ParserArtifacts,
 } from "./ports.js";
 
 const MAX_MARKDOWN_BYTES = 8 * 1024 * 1024;
@@ -124,8 +124,9 @@ function mediaMatches(
 /** Pure TypeScript P2 gate for already-normalized parser artifacts. */
 export class TypeScriptParserArtifactRules implements ParserArtifactRules {
   async validate(
-    output: Pick<StagedParserOutput, "markdown" | "resources">,
+    output: ParserArtifacts,
     signal?: AbortSignal,
+    blockReferences: readonly string[] = [],
   ): Promise<void> {
     if (signal?.aborted) throw new ParsingFailure("parser-cancelled");
     if (
@@ -136,7 +137,12 @@ export class TypeScriptParserArtifactRules implements ParserArtifactRules {
       throw new ParsingFailure("parser-structure");
     const markdown = verifyArtifact(output.markdown, true, MAX_MARKDOWN_BYTES);
     if (!markdown.trim()) throw new ParsingFailure("parser-structure");
-    const references = parserMarkdownReferences(markdown);
+    const references = [
+      ...new Set([
+        ...parserMarkdownReferences(markdown),
+        ...blockReferences.map(canonicalParserResourceReference),
+      ]),
+    ];
     const byReference = new Map<string, StagedParserResource>();
     let total = 0;
     for (const resource of output.resources) {

@@ -51,16 +51,17 @@ function recordsOutputSchema(spec: ProcessorObject): ProcessorObject {
 }
 export const recordsProcessor: Processor = {
   id: "records",
-  version: "1",
+  version: "2",
   scope: "document",
-  accepts: ["document"],
+  accepts: ["archive-document"],
+  reads: { parts: "main", roles: "all" },
   model: true,
   output_kind: "records",
   outputSchema: recordsOutputSchema,
   definition: {
     prompt: PROMPT,
     chunking: "whole-segment-bounded-v1",
-    number_policy: "original-string-and-unit-scientific-v2",
+    number_policy: "original-string-and-unit-scientific-v3-platform-check",
     record_identity: "result-local-observations-v1",
   },
   spec_schema: {
@@ -184,6 +185,8 @@ export const recordsProcessor: Processor = {
             segments: segments.map((s) => ({
               segment_id: s.segment_id,
               text: s.text,
+              basis: s.basis ?? null,
+              uncertainty: s.uncertainty ?? null,
             })),
           }),
           responseSchema,
@@ -228,15 +231,8 @@ export const recordsProcessor: Processor = {
             )
               processorError("processor-number-invalid");
             if (number.unit !== null) processorText(number.unit, 128);
-            const cited = segments
-              .filter((s) => (e[name] as unknown[]).includes(s.segment_id))
-              .map((s) => s.text)
-              .join("\n");
-            if (
-              !cited.includes(text) ||
-              (typeof number.unit === "string" && !cited.includes(number.unit))
-            )
-              processorError("processor-number-not-in-evidence");
+            // Presence in the cited source is checked by the platform. A valid
+            // candidate with an unsupported value is delivered as uncertain.
           }
         }
         records.push({

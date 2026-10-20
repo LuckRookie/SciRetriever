@@ -1,55 +1,46 @@
-import type { LiteratureStatus, MissingStep } from "@sciretriever/contracts";
+import type {
+  ArchiveState,
+  LiteratureStatus,
+  MissingStep,
+} from "@sciretriever/contracts";
 
-export interface CurrentStateEvidence {
-  readonly metadata_revision: number;
-  readonly metadata_sha256: string;
-  readonly primary: {
-    readonly asset_id: string;
-    readonly sha256: string;
-    readonly media_type: string;
-  } | null;
-  readonly parser: {
-    readonly source_asset_id: string;
-    readonly source_sha256: string;
-  } | null;
-  readonly content: {
-    readonly metadata_revision: number;
-    readonly metadata_sha256: string;
-    readonly primary_asset_id: string;
-    readonly primary_asset_sha256: string;
-    readonly source_kind: string;
-    readonly input_sha256: string | null;
-    readonly expected_input_sha256: string;
-  } | null;
-}
-
-/** Shared pure truth table; the worker invokes this same function on one read snapshot. */
-export function deriveCurrentState(facts: CurrentStateEvidence): {
-  status: LiteratureStatus;
-  missing_step: MissingStep | null;
-} {
-  const primary = facts.primary;
-  if (!primary || primary.media_type !== "application/pdf")
-    return { status: "UNREVIEWED", missing_step: "primary-pdf" };
-  const content = facts.content;
-  const ready =
-    !!content &&
-    content.metadata_revision === facts.metadata_revision &&
-    content.metadata_sha256 === facts.metadata_sha256 &&
-    content.primary_asset_id === primary.asset_id &&
-    content.primary_asset_sha256 === primary.sha256 &&
-    content.source_kind === "analysis" &&
-    content.input_sha256 === content.expected_input_sha256;
-  const parser = facts.parser;
-  return {
-    status: ready ? "CONTENT_READY" : "ASSET_READY",
-    missing_step:
-      !parser ||
-      parser.source_asset_id !== primary.asset_id ||
-      parser.source_sha256 !== primary.sha256
-        ? "parser-result"
-        : ready
-          ? null
-          : "literature-content",
-  };
+/** Current evidence, never the presence of an old summary, defines readiness. */
+export function deriveCurrentState(
+  facts: ArchiveState,
+  maxTags = 6,
+  archiveProfile: "pipeline" | "vlm-engine" = "vlm-engine",
+): { status: LiteratureStatus; missing_step: MissingStep | null } {
+  const main = facts.parts.find((p) => p.part === "main");
+  if (!main) return { status: "UNREVIEWED", missing_step: "primary-pdf" };
+  const accepted =
+    facts.mode === "full"
+      ? [archiveProfile, "vlm-engine-markdown-only"]
+      : ["vlm-engine-markdown-only"];
+  if (!accepted.some((p) => main.raw_profiles.includes(p)))
+    return { status: "ASSET_READY", missing_step: "raw-parse" };
+  if (!facts.started)
+    return { status: "ASSET_READY", missing_step: "proofread" };
+  const missing: MissingStep | null = !main.proofread_complete
+    ? "proofread"
+    : !main.document_version_id
+      ? "document"
+      : !main.structure_satisfied
+        ? "structure"
+        : facts.metadata_missing.length
+          ? "metadata"
+          : facts.tag_count < 1 || facts.tag_count > maxTags
+            ? "tags"
+            : null;
+  if (facts.running) return { status: "ARCHIVING", missing_step: missing };
+  if (
+    ["correction-or-editorial", "perspective-or-commentary"].includes(
+      facts.article_kind ?? "",
+    )
+  )
+    return { status: "EXCLUDED", missing_step: null };
+  const failure = facts.issues.find(
+    (i) => i.affects_readiness && i.resolution !== "continue",
+  );
+  if (failure) return { status: "ARCHIVE_FAILED", missing_step: failure.step };
+  return { status: missing ? "ASSET_READY" : "READY", missing_step: missing };
 }

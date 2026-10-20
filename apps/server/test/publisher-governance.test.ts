@@ -43,6 +43,8 @@ async function detail(
     metadata: { ...FIXTURE_LITERATURE.metadata, publisher },
   });
   const observation = parseMetadataObservation({
+    source_type: null,
+    source_type_mapping_version: null,
     observation_id: id(2000 + n),
     metadata: { ...literature.metadata, publisher: observationPublisher },
     provenance: {
@@ -83,8 +85,6 @@ async function detail(
     metadata_observations: [observation],
     primary_pdf: null,
     additional_assets: [],
-    parser_result: null,
-    content: null,
     other_versions: [],
     reference_count: 0,
     cited_by_count: 0,

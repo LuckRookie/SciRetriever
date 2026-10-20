@@ -20,6 +20,8 @@ function observation(
   } = {},
 ) {
   return parseMetadataObservation({
+    source_type: null,
+    source_type_mapping_version: null,
     observation_id: id(700 + n),
     provenance: {
       provenance_id: id(800 + n),
@@ -140,7 +142,7 @@ it("uses the identifier index beyond ten thousand Literatures", async () => {
       "INSERT INTO literatures(literature_id,meta_literature_id,version_role) VALUES(?,?,?)",
     );
     const metadata = raw.prepare(
-      "INSERT INTO literature_metadata(literature_id,metadata_revision,metadata_sha256,title,abstract,publication_date,publication_year,document_type,language,venue,publisher,volume,issue,pages) VALUES(?,1,?,?,NULL,NULL,2026,'article','en',NULL,NULL,NULL,NULL,NULL)",
+      "INSERT INTO literature_metadata(literature_id,metadata_revision,metadata_sha256,title,abstract,publication_date,publication_year,publication_form,language,venue,publisher,volume,issue,pages) VALUES(?,1,?,?,NULL,NULL,2026,'journal-article','en',NULL,NULL,NULL,NULL,NULL)",
     );
     const identifier = raw.prepare(
       "INSERT INTO literature_metadata_identifiers(literature_id,ordinal,namespace,value) VALUES(?,0,'doi',?)",

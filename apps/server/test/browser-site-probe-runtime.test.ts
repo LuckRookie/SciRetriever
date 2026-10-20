@@ -54,9 +54,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         | Awaited<ReturnType<typeof createApplication>>
         | undefined;
       try {
-        application = await createApplication(home, {
-          executionSchema: "upgrade-synthetic",
-        });
+        application = await createApplication(home, {});
         expect(application.browserHost()).not.toBeNull();
         expect(
           application.acquisition.statuses.find(

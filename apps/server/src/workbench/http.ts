@@ -1,90 +1,27 @@
 import {
-  executeExtraction,
-  type ExtractionOperation,
-} from "../entry/maintenance-operations.js";
-import {
-  executeQuery,
-  type QueryOperation,
-} from "../entry/query-operations.js";
-import { parseLibrarySearchRequest } from "@sciretriever/contracts";
-import {
-  queryProcessors,
-  PROCESSOR_QUERIES,
-} from "../entry/processor-operations.js";
-import { ProcessorError } from "../analysis/processor.js";
-import { ProcessorQueryError } from "../storage/processor-results.js";
-import { AgentFailure } from "../agents/protocol.js";
-import { ProcessingTaskError } from "../application/jobs/processing.js";
+  ContractValidationError,
+  EXTRACTION_SUBMISSION_WIRE_MAX_BYTES,
+  parseDocumentRequest,
+  parseLibrarySearchRequest,
+  parsePageRegion,
+  parseRetrievalGenerationReceipt,
+  parseStrictJsonObject,
+  type ConfigurationReadiness,
+} from "@sciretriever/contracts";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
-import {
-  LiteratureNotFoundError,
-  LiteratureQueryError,
-  type LiteratureQueryService,
-} from "../literature/query.js";
-import type { LiteratureArtifactService } from "../literature/artifacts.js";
-import type { QueryApplication } from "../bootstrap/application.js";
-import type { ManualPdfIngestionService } from "../entry/manual-pdf.js";
-import { ManualPdfInputError } from "../entry/manual-pdf.js";
-import {
-  DocumentProcessingError,
-  type DocumentProcessingService,
-} from "../document/service.js";
-import { DocumentReadError } from "../document/read.js";
-import { ExtractionPreparationError } from "../extraction/prepare.js";
-import { ExtractionSpecError } from "../extraction/spec.js";
-import {
-  ExtractionDeliveryError,
-  type ExtractionDeliveryService,
-} from "../extraction/delivery.js";
-import { ExtractionStorageError } from "../storage/sqlite/worker.js";
-import { KnowledgeStorageError } from "../storage/sqlite/worker.js";
-import { KnowledgeReadError } from "../storage/knowledge.js";
-import {
-  KnowledgeAnalysisFailure,
-  type KnowledgeAnalysisService,
-} from "../analysis/knowledge.js";
-import {
-  SynthesisExecutionFailure,
-  type KnowledgeSynthesisService,
-} from "../analysis/synthesis.js";
-import { SynthesisPreparationError } from "../analysis/synthesis-prepare.js";
-import { SynthesisReadError } from "../storage/synthesis.js";
-import { MaterialContextError } from "../retrieval/query.js";
-import { RetrievalIndexError } from "../retrieval/index.js";
-import { KnowledgeContextError } from "../retrieval/knowledge-query.js";
-import { KnowledgeIndexError } from "../retrieval/knowledge-index.js";
-import { ParsingFailure } from "../parsing/ports.js";
-import { LiteraturePublicationError } from "../literature/primary-pdf.js";
-import { CandidateAcceptanceError } from "../acquisition/candidate-acceptance.js";
-import { PdfAcceptanceError } from "../acquisition/pdf-acceptance.js";
 import {
   createServer,
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { randomBytes, timingSafeEqual } from "node:crypto";
-import { WorkbenchSession, WorkbenchSessionError } from "./session.js";
-import { ProductionWorkbenchSession } from "./production-session.js";
-import {
-  WorkbenchAccess,
-  isLoopbackPeer,
-  type WorkbenchAccessOptions,
-} from "./access.js";
+import { CandidateAcceptanceError } from "../acquisition/candidate-acceptance.js";
+import { PdfAcceptanceError } from "../acquisition/pdf-acceptance.js";
+import { AgentFailure } from "../agents/protocol.js";
+import { ProcessorError } from "../analysis/processor.js";
+import { ProcessingTaskError } from "../application/jobs/processing.js";
+import type { QueryApplication } from "../bootstrap/application.js";
 import type { BrowserPageInfo } from "../browser/host.js";
-import { exportBibliography } from "../literature/bibliography.js";
-import {
-  ContractValidationError,
-  parseDocumentRequest,
-  parseRetrievalGenerationReceipt,
-  parseStrictJsonObject,
-  EXTRACTION_SUBMISSION_WIRE_MAX_BYTES,
-  parseKnowledgeAnalysisRequest,
-  parseKnowledgeLongAnalysisRequest,
-  parseKnowledgeAnalysisReceipt,
-  parseKnowledgeSynthesisRequest,
-  parseSynthesisExecutionReceipt,
-  type ConfigurationReadiness,
-} from "@sciretriever/contracts";
 import {
   ConfigurationOwnerError,
   ConfigurationProbeError,
@@ -97,6 +34,53 @@ import {
   type TypeScriptConfigurationSnapshot,
   type TypeScriptCredentialEdit,
 } from "../configuration/owner.js";
+import { DocumentReadError } from "../document/read.js";
+import {
+  DocumentProcessingError,
+  type DocumentProcessingService,
+} from "../document/service.js";
+import {
+  executeExtraction,
+  isMaintenanceFailure,
+  type ExtractionOperation,
+} from "../entry/maintenance-operations.js";
+import type { ManualPdfIngestionService } from "../entry/manual-pdf.js";
+import { ManualPdfInputError } from "../entry/manual-pdf.js";
+import {
+  PROCESSOR_QUERIES,
+  queryProcessors,
+} from "../entry/processor-operations.js";
+import {
+  executeQuery,
+  isQueryFailure,
+  type QueryOperation,
+} from "../entry/query-operations.js";
+import {
+  ExtractionDeliveryError,
+  type ExtractionDeliveryService,
+} from "../extraction/delivery.js";
+import { ExtractionSpecError } from "../extraction/spec.js";
+import type { LiteratureArtifactService } from "../literature/artifacts.js";
+import { exportBibliography } from "../literature/bibliography.js";
+import { LiteraturePublicationError } from "../literature/primary-pdf.js";
+import {
+  LiteratureNotFoundError,
+  LiteratureQueryError,
+  type LiteratureQueryService,
+} from "../literature/query.js";
+import { ParsingFailure } from "../parsing/ports.js";
+import { RetrievalIndexError } from "../retrieval/index.js";
+import { KnowledgeContextError } from "../retrieval/knowledge-query.js";
+import { MaterialContextError } from "../retrieval/query.js";
+import { ProcessorQueryError } from "../storage/processor-results.js";
+import { ExtractionStorageError } from "../storage/sqlite/worker.js";
+import {
+  WorkbenchAccess,
+  isLoopbackPeer,
+  type WorkbenchAccessOptions,
+} from "./access.js";
+import { ProductionWorkbenchSession } from "./production-session.js";
+import { WorkbenchSession, WorkbenchSessionError } from "./session.js";
 
 export interface WorkbenchStaticAsset {
   readonly contentType: string;
@@ -268,6 +252,8 @@ const CONFIGURATION_ROOT_KEYS = [
   "providers",
   "models",
   "analyze",
+  "proofread",
+  "tags",
   "browser",
   "execution",
   "library",
@@ -320,6 +306,12 @@ function validUiLocation(url: URL): boolean {
           "session",
           "article",
           "setting",
+          "inspect",
+          "page",
+          "region",
+          "snapshot",
+          "processor",
+          "tag",
         ].includes(key),
     )
   )
@@ -329,7 +321,14 @@ function validUiLocation(url: URL): boolean {
     if (filters.length > 16384) return false;
     try {
       parseLibrarySearchRequest({
-        query: JSON.parse(filters),
+        query: (() => {
+          const value: unknown = JSON.parse(filters);
+          if (value && typeof value === "object" && !Array.isArray(value)) {
+            delete (value as Record<string, unknown>).document_type;
+            delete (value as Record<string, unknown>).document_types;
+          }
+          return value;
+        })(),
         sort: "title-asc",
         limit: 50,
         cursor: null,
@@ -353,9 +352,14 @@ function validUiLocation(url: URL): boolean {
         "set",
         "lab",
         "gallery",
+        "archive",
+        "tags",
+        "snapshots",
       ],
     ],
     ["reader", ["pdf", "doc", "know"]],
+    ["inspect", ["1"]],
+    ["processor", ["summary", "knowledge-synthesis", "labels", "records"]],
     ["scope", ["selection", "all"]],
     ["source", ["metadata", "document", "knowledge"]],
     ["from", ["ask", "ext", "syn"]],
@@ -372,12 +376,19 @@ function validUiLocation(url: URL): boolean {
         "status",
         "advanced",
         "appearance",
+        "archive",
       ],
     ],
   ] as const) {
     const value = url.searchParams.get(key);
     if (value !== null && !(values as readonly string[]).includes(value))
       return false;
+  }
+  try {
+    const region = url.searchParams.get("region");
+    if (region !== null) parsePageRegion(JSON.parse(region));
+  } catch {
+    return false;
   }
   const sort = url.searchParams.get("sort");
   const literature = url.searchParams.get("literature");
@@ -396,7 +407,7 @@ function validUiLocation(url: URL): boolean {
       const value = url.searchParams.get(key);
       return value === null || /^[a-f0-9]{64}$/u.test(value);
     }) &&
-    ["start", "end", "metadataRevision"].every((key) => {
+    ["start", "end", "metadataRevision", "page"].every((key) => {
       const value = url.searchParams.get(key);
       return (
         value === null ||
@@ -414,6 +425,8 @@ function validUiLocation(url: URL): boolean {
       "collection",
       "session",
       "article",
+      "snapshot",
+      "tag",
     ].every((key) => {
       const value = url.searchParams.get(key);
       return value === null || /^[A-Za-z0-9._:-]{1,128}$/u.test(value);
@@ -600,48 +613,6 @@ function maintenanceError(error: unknown): {
   reason?: string;
   retryable?: boolean;
 } {
-  if (error instanceof SynthesisExecutionFailure) {
-    return {
-      code: error.code,
-      ...(error.reason
-        ? { reason: error.reason, retryable: error.retryable }
-        : {}),
-      status:
-        error.code === "synthesis-invalid"
-          ? 400
-          : error.code === "synthesis-stale-binding" ||
-              error.code === "synthesis-cancelled"
-            ? 409
-            : error.code === "synthesis-request-limit" ||
-                error.code === "synthesis-not-applicable" ||
-                error.code === "synthesis-response"
-              ? 422
-              : 503,
-    };
-  }
-  if (
-    error instanceof KnowledgeAnalysisFailure ||
-    error instanceof KnowledgeStorageError
-  ) {
-    const code = error.code;
-    return {
-      code,
-      ...(error instanceof KnowledgeAnalysisFailure && error.reason
-        ? { reason: error.reason, retryable: error.retryable }
-        : {}),
-      status:
-        code === "knowledge-input"
-          ? 400
-          : code === "knowledge-request-limit" ||
-              code === "knowledge-not-applicable" ||
-              code === "catalog-v6-required"
-            ? 422
-            : code === "knowledge-input-invalidated" ||
-                code === "knowledge-cancelled"
-              ? 409
-              : 503,
-    };
-  }
   if (
     error instanceof ExtractionDeliveryError ||
     error instanceof ExtractionStorageError
@@ -683,10 +654,7 @@ function maintenanceError(error: unknown): {
       status: error.code === "schema-busy" ? 429 : 422,
       code: error.code,
     };
-  if (
-    error instanceof RetrievalIndexError ||
-    error instanceof KnowledgeIndexError
-  )
+  if (error instanceof RetrievalIndexError)
     return {
       status: error.code === "index-cancelled" ? 409 : 422,
       code: error.code,
@@ -698,9 +666,7 @@ function maintenanceError(error: unknown): {
           ? 404
           : error.code === "material-stale"
             ? 409
-            : error.code === "parser-result-missing"
-              ? 424
-              : 503,
+            : 503,
       code: error.code,
     };
   if (error instanceof ParsingFailure)
@@ -1213,8 +1179,42 @@ export async function startWorkbenchHttp(
       send();
       const timer = setInterval(send, 750);
       timer.unref();
+      const archiveStop = new AbortController();
+      let archiveBusy = false,
+        lastRevision: string | null = null;
+      const archiveTimer = setInterval(() => {
+        const reader = options.query?.application.archive;
+        if (
+          !reader ||
+          archiveBusy ||
+          response.destroyed ||
+          response.writableNeedDrain
+        )
+          return;
+        archiveBusy = true;
+        void reader
+          .query({ operation: "revision", request: {} }, archiveStop.signal)
+          .then((value) => {
+            const revision = (value as { revision: string }).revision;
+            if (!archiveStop.signal.aborted && revision !== lastRevision) {
+              lastRevision = revision;
+              response.write(
+                `event: materials\ndata: ${JSON.stringify({ revision })}\n\n`,
+              );
+            }
+          })
+          .catch(() => {
+            if (!archiveStop.signal.aborted) response.end();
+          })
+          .finally(() => {
+            archiveBusy = false;
+          });
+      }, 3000);
+      archiveTimer.unref();
       response.once("close", () => {
         clearInterval(timer);
+        clearInterval(archiveTimer);
+        archiveStop.abort();
         streams.delete(response);
       });
       return;
@@ -1622,16 +1622,9 @@ export async function startWorkbenchHttp(
         }
         case "/api/library/artifact": {
           const command = object(value, ["literature_id", "kind"]);
-          if (
-            command.kind !== "primary-pdf" &&
-            command.kind !== "content-markdown"
-          )
-            invalidInput();
+          if (command.kind !== "primary-pdf") invalidInput();
           const detail = await library.queries.detail(command.literature_id);
-          const descriptor =
-            command.kind === "primary-pdf"
-              ? detail.primary_pdf?.asset
-              : detail.content?.markdown;
+          const descriptor = detail.primary_pdf?.asset;
           if (!descriptor) {
             json(response, 404, { code: "artifact-not-found" });
             return;
@@ -1949,7 +1942,38 @@ export async function startWorkbenchHttp(
   };
 }
 
+const ARCHIVE_HTTP_WRITES = [
+  "archive",
+  "tags",
+  "snapshots",
+  "metadata-edit",
+  "document-role",
+  "document-annotate",
+  "document-publish-proofread",
+  "proofread-build",
+  "proofread-decide",
+  "proofread-revoke",
+  "archive-references",
+] as const;
+const ARCHIVE_HTTP_READS = [
+  "archive",
+  "tags",
+  "snapshots",
+  "metadata-fields",
+  "document-parts",
+  "document-corrections",
+  "document-annotation",
+  "document-figures",
+  "document-reference-texts",
+  "proofread-inspect",
+  "proofread-page",
+] as const;
 export interface QueryOnlyHttpOptions {
+  readonly archiveOperation?: (
+    operation: (typeof ARCHIVE_HTTP_WRITES)[number],
+    request: unknown,
+    signal: AbortSignal,
+  ) => Promise<unknown>;
   readonly application: QueryApplication;
   /** Explicit processor submission adapter; available only with maintenance authorization. */
   readonly submitProcessor?: (
@@ -1970,11 +1994,7 @@ export interface QueryOnlyHttpOptions {
       readonly revision: number;
     } | null>;
     readonly rebuildIndex?: (signal?: AbortSignal) => Promise<unknown>;
-    readonly rebuildKnowledgeIndex?: (signal?: AbortSignal) => Promise<unknown>;
     readonly extraction?: ExtractionDeliveryService;
-    readonly analyze?: KnowledgeAnalysisService["analyze"];
-    readonly analyzeLong?: KnowledgeAnalysisService["analyzeLong"];
-    readonly synthesize?: KnowledgeSynthesisService["synthesize"];
   };
   readonly assets?: ReadonlyMap<string, WorkbenchStaticAsset>;
   readonly port?: number;
@@ -2115,12 +2135,11 @@ function createQueryHttpHandler(
       url.pathname === "/api/v1/maintenance/parse-document" ||
       url.pathname === "/api/v1/maintenance/document-default" ||
       url.pathname === "/api/v1/maintenance/rebuild-index" ||
-      url.pathname === "/api/v1/maintenance/rebuild-knowledge-index" ||
-      url.pathname === "/api/v1/maintenance/analyze-knowledge" ||
-      url.pathname === "/api/v1/maintenance/analyze-knowledge-long" ||
-      url.pathname === "/api/v1/maintenance/synthesize" ||
       url.pathname === "/api/v1/maintenance/processor-submit" ||
-      extractionPaths.has(url.pathname)
+      extractionPaths.has(url.pathname) ||
+      ARCHIVE_HTTP_WRITES.some(
+        (name) => url.pathname === `/api/v1/maintenance/${name}`,
+      )
     ) {
       if (!options.maintenance) {
         json(response, 404, {
@@ -2152,6 +2171,39 @@ function createQueryHttpHandler(
         request.headers["x-sciretriever-protocol-version"] !== "1"
       )
         invalidInput();
+      const archiveOperation = ARCHIVE_HTTP_WRITES.find(
+        (name) => url.pathname === `/api/v1/maintenance/${name}`,
+      );
+      if (archiveOperation) {
+        if (!options.archiveOperation) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "operation-unavailable",
+          });
+          return;
+        }
+        const stop = new AbortController(),
+          abort = () => stop.abort();
+        response.once("close", abort);
+        streams.add(response);
+        try {
+          const command = object(await extractionBody(request, 1024 * 1024), [
+            "protocol_version",
+            "request",
+          ]);
+          if (command.protocol_version !== 1) invalidInput();
+          const result = await options.archiveOperation(
+            archiveOperation,
+            command.request,
+            AbortSignal.any([stop.signal, stopUploads.signal]),
+          );
+          processorReply(response, 200, { protocol_version: 1, result });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+        }
+        return;
+      }
       if (url.pathname === "/api/v1/maintenance/processor-submit") {
         if (!options.submitProcessor) {
           json(response, 503, {
@@ -2193,84 +2245,6 @@ function createQueryHttpHandler(
         } finally {
           streams.delete(response);
           response.off("close", abort);
-        }
-        return;
-      }
-      if (url.pathname === "/api/v1/maintenance/synthesize") {
-        if (!options.maintenance.synthesize) {
-          json(response, 503, {
-            protocol_version: 1,
-            code: "maintenance-unavailable",
-          });
-          return;
-        }
-        const envelope = object(await extractionBody(request, 310 * 1024), [
-          "protocol_version",
-          "request",
-        ]);
-        if (envelope.protocol_version !== 1) invalidInput();
-        const stop = new AbortController();
-        const abort = () => stop.abort();
-        response.once("close", abort);
-        stopUploads.signal.addEventListener("abort", abort, { once: true });
-        streams.add(response);
-        try {
-          if (response.destroyed || stopUploads.signal.aborted) abort();
-          const fixed = await parseKnowledgeSynthesisRequest(envelope.request);
-          if (stop.signal.aborted) return;
-          const receipt = await options.maintenance.synthesize(
-            fixed,
-            stop.signal,
-          );
-          const result = await parseSynthesisExecutionReceipt(receipt, fixed);
-          json(response, 200, { protocol_version: 1, result });
-        } finally {
-          streams.delete(response);
-          response.off("close", abort);
-          stopUploads.signal.removeEventListener("abort", abort);
-        }
-        return;
-      }
-      if (
-        url.pathname === "/api/v1/maintenance/analyze-knowledge" ||
-        url.pathname === "/api/v1/maintenance/analyze-knowledge-long"
-      ) {
-        const isLong = url.pathname.endsWith("-long");
-        const analyze = isLong
-          ? options.maintenance.analyzeLong
-          : options.maintenance.analyze;
-        if (!analyze) {
-          json(response, 503, {
-            protocol_version: 1,
-            code: "maintenance-unavailable",
-          });
-          return;
-        }
-        const envelope = object(await extractionBody(request, 310 * 1024), [
-          "protocol_version",
-          "request",
-        ]);
-        if (envelope.protocol_version !== 1) invalidInput();
-        const stop = new AbortController();
-        const abort = () => stop.abort();
-        response.once("close", abort);
-        stopUploads.signal.addEventListener("abort", abort, { once: true });
-        streams.add(response);
-        try {
-          if (response.destroyed || stopUploads.signal.aborted) abort();
-          const analyzed = isLong
-            ? await parseKnowledgeLongAnalysisRequest(envelope.request)
-            : await parseKnowledgeAnalysisRequest(envelope.request);
-          if (stop.signal.aborted) return;
-          const result = parseKnowledgeAnalysisReceipt(
-            await analyze(analyzed, stop.signal),
-            analyzed,
-          );
-          json(response, 200, { protocol_version: 1, result: await result });
-        } finally {
-          streams.delete(response);
-          response.off("close", abort);
-          stopUploads.signal.removeEventListener("abort", abort);
         }
         return;
       }
@@ -2327,14 +2301,8 @@ function createQueryHttpHandler(
         json(response, 200, { protocol_version: 1, default: current });
         return;
       }
-      if (
-        url.pathname === "/api/v1/maintenance/rebuild-index" ||
-        url.pathname === "/api/v1/maintenance/rebuild-knowledge-index"
-      ) {
-        const rebuild =
-          url.pathname === "/api/v1/maintenance/rebuild-index"
-            ? options.maintenance.rebuildIndex
-            : options.maintenance.rebuildKnowledgeIndex;
+      if (url.pathname === "/api/v1/maintenance/rebuild-index") {
+        const rebuild = options.maintenance.rebuildIndex;
         if (!rebuild) {
           json(response, 503, {
             protocol_version: 1,
@@ -2461,154 +2429,40 @@ function createQueryHttpHandler(
       ["protocol_version", "request"],
     );
     if (command.protocol_version !== 1) invalidInput();
+    const archiveRead = ARCHIVE_HTTP_READS.find(
+      (name) => url.pathname === `/api/v1/query/${name}`,
+    );
+    if (archiveRead) {
+      const stop = new AbortController(),
+        abort = () => stop.abort();
+      response.once("close", abort);
+      streams.add(response);
+      try {
+        const result = await executeQuery(
+          application,
+          archiveRead,
+          command.request,
+          AbortSignal.any([stop.signal, stopUploads.signal]),
+        );
+        processorReply(response, 200, { protocol_version: 1, result });
+      } finally {
+        streams.delete(response);
+        response.off("close", abort);
+      }
+      return;
+    }
     switch (url.pathname) {
-      case "/api/v1/query/synthesis-prepare": {
-        if (!application.synthesisPreparation) {
-          json(response, 422, {
-            protocol_version: 1,
-            code: "catalog-v7-required",
-          });
-          return;
-        }
-        const stop = new AbortController();
-        const abort = () => stop.abort();
-        response.once("close", abort);
-        streams.add(response);
-        try {
-          const result = await executeQuery(
-            application,
-            "synthesis-prepare",
-            command.request,
-            stop.signal,
-          );
-          json(response, 200, { protocol_version: 1, result });
-        } finally {
-          streams.delete(response);
-          response.off("close", abort);
-        }
-        return;
-      }
-      case "/api/v1/query/synthesis-read":
-      case "/api/v1/query/synthesis-source":
-      case "/api/v1/query/synthesis-list": {
-        const reader = application.synthesisRead;
-        if (!reader) {
-          json(response, 422, {
-            protocol_version: 1,
-            code: "catalog-v7-required",
-          });
-          return;
-        }
-        const stop = new AbortController();
-        const abort = () => stop.abort();
-        response.once("close", abort);
-        streams.add(response);
-        try {
-          const result = await executeQuery(
-            application,
-            url.pathname.slice("/api/v1/query/".length) as QueryOperation,
-            command.request,
-            stop.signal,
-          );
-          if (result === null) {
-            json(response, 404, {
-              protocol_version: 1,
-              code: "synthesis-missing",
-            });
-            return;
-          }
-          json(response, 200, { protocol_version: 1, result });
-        } finally {
-          streams.delete(response);
-          response.off("close", abort);
-        }
-        return;
-      }
-      case "/api/v1/query/knowledge-read":
-      case "/api/v1/query/knowledge-list":
-      case "/api/v1/query/knowledge-default": {
-        const reader = application.knowledgeRead;
-        if (!reader) {
-          json(response, 422, {
-            protocol_version: 1,
-            code: "catalog-v6-required",
-          });
-          return;
-        }
-        const stop = new AbortController();
-        const abort = () => stop.abort();
-        response.once("close", abort);
-        streams.add(response);
-        try {
-          const result = await executeQuery(
-            application,
-            url.pathname.slice("/api/v1/query/".length) as QueryOperation,
-            command.request,
-            stop.signal,
-          );
-          if (result === null) {
-            json(response, 404, {
-              protocol_version: 1,
-              code: "knowledge-missing",
-            });
-            return;
-          }
-          json(response, 200, { protocol_version: 1, result });
-        } finally {
-          streams.delete(response);
-          response.off("close", abort);
-        }
-        return;
-      }
-      case "/api/v1/query/extraction-prepare": {
-        if (!application.extractionPreparation) {
-          json(response, 503, {
-            protocol_version: 1,
-            code: "query-unavailable",
-          });
-          return;
-        }
-        const stop = new AbortController();
-        const abort = () => stop.abort();
-        response.once("close", abort);
-        streams.add(response);
-        try {
-          const result = await executeQuery(
-            application,
-            "extraction-prepare",
-            command.request,
-            stop.signal,
-          );
-          json(response, 200, { protocol_version: 1, result });
-        } catch (error) {
-          if (
-            error instanceof ExtractionSpecError ||
-            error instanceof ExtractionPreparationError ||
-            error instanceof ContractValidationError
-          ) {
-            const code =
-              error instanceof ContractValidationError
-                ? "invalid-request"
-                : error.code;
-            json(
-              response,
-              code === "input-missing"
-                ? 404
-                : code === "schema-cancelled" ||
-                    code === "preparation-cancelled"
-                  ? 409
-                  : 422,
-              { protocol_version: 1, code },
-            );
-          } else throw error;
-        } finally {
-          streams.delete(response);
-          response.off("close", abort);
-        }
-        return;
-      }
+      case "/api/v1/query/extraction-prepare":
       case "/api/v1/query/context": {
-        if (!application.context) {
+        const operation =
+          url.pathname === "/api/v1/query/extraction-prepare"
+            ? "extraction-prepare"
+            : "context";
+        if (
+          operation === "context"
+            ? !application.context
+            : !application.extractionPreparation
+        ) {
           json(response, 503, {
             protocol_version: 1,
             code: "query-unavailable",
@@ -2622,9 +2476,9 @@ function createQueryHttpHandler(
         try {
           const result = await executeQuery(
             application,
-            "context",
+            operation,
             command.request,
-            stop.signal,
+            AbortSignal.any([stop.signal, stopUploads.signal]),
           );
           json(response, 200, { protocol_version: 1, result });
         } finally {
@@ -2657,6 +2511,15 @@ function createQueryHttpHandler(
           streams.delete(response);
           response.off("close", abort);
         }
+        return;
+      }
+      case "/api/v1/query/document-parsing-status": {
+        const result = await executeQuery(
+          application,
+          "document-parsing-status",
+          command.request,
+        );
+        json(response, 200, { protocol_version: 1, result });
         return;
       }
       case "/api/v1/query/document-default":
@@ -2800,22 +2663,15 @@ function createQueryHttpHandler(
       }
       case "/api/v1/query/artifact": {
         const read = object(command.request, ["literature_id", "kind"]);
-        if (read.kind !== "primary-pdf" && read.kind !== "content-markdown")
-          invalidInput();
+        if (read.kind !== "primary-pdf") invalidInput();
         const detail = await application.query.detail(read.literature_id);
-        const artifact =
-          read.kind === "primary-pdf"
-            ? detail.primary_pdf?.asset
-            : detail.content?.markdown;
+        const artifact = detail.primary_pdf?.asset;
         if (!artifact) {
           json(response, 200, {
             protocol_version: 1,
             gap: {
               literature_id: detail.literature.literature_id,
-              code:
-                read.kind === "primary-pdf"
-                  ? "missing-primary-pdf"
-                  : "missing-literature-content",
+              code: "missing-primary-pdf",
             },
           });
           return;
@@ -2878,17 +2734,36 @@ function createQueryHttpHandler(
       workbenchCsrf?: string,
     ) =>
       handle(request, response, workbenchCsrf).catch((error: unknown) => {
+        const route = (request.url ?? "").split("?")[0]!;
+        if (
+          ARCHIVE_HTTP_READS.some((n) => route === `/api/v1/query/${n}`) ||
+          ARCHIVE_HTTP_WRITES.some((n) => route === `/api/v1/maintenance/${n}`)
+        ) {
+          const code =
+            isMaintenanceFailure(error) || isQueryFailure(error)
+              ? error.code
+              : error instanceof ContractValidationError
+                ? "invalid-request"
+                : "operation-unavailable";
+          if (response.headersSent || response.destroyed) response.destroy();
+          else
+            json(
+              response,
+              /conflict|stale|busy/.test(code)
+                ? 409
+                : /invalid/.test(code)
+                  ? 400
+                  : 422,
+              { protocol_version: 1, code },
+            );
+          return;
+        }
         if (
           request.url?.startsWith("/api/v1/maintenance/ingest-pdf") ||
           request.url?.startsWith("/api/v1/maintenance/parse-document") ||
           request.url?.startsWith("/api/v1/maintenance/document-default") ||
           request.url?.startsWith("/api/v1/maintenance/rebuild-index") ||
-          request.url?.startsWith(
-            "/api/v1/maintenance/rebuild-knowledge-index",
-          ) ||
-          request.url?.startsWith("/api/v1/maintenance/extraction-") ||
-          request.url?.startsWith("/api/v1/maintenance/analyze-knowledge") ||
-          request.url?.startsWith("/api/v1/maintenance/synthesize")
+          request.url?.startsWith("/api/v1/maintenance/extraction-")
         ) {
           const failure = maintenanceError(error);
           if (response.headersSent || response.destroyed) response.destroy();
@@ -2912,27 +2787,22 @@ function createQueryHttpHandler(
           error instanceof MaterialContextError ||
           error instanceof KnowledgeContextError
             ? error.code
-            : error instanceof SynthesisReadError ||
-                error instanceof SynthesisPreparationError
+            : error instanceof DocumentReadError
               ? error.code
-              : error instanceof KnowledgeReadError
-                ? error.code
-                : error instanceof DocumentReadError
+              : error instanceof ContractValidationError ||
+                  error instanceof WorkbenchInputError
+                ? "invalid-command"
+                : error instanceof ManualPdfInputError ||
+                    error instanceof LiteraturePublicationError ||
+                    error instanceof CandidateAcceptanceError
                   ? error.code
-                  : error instanceof ContractValidationError ||
-                      error instanceof WorkbenchInputError
-                    ? "invalid-command"
-                    : error instanceof ManualPdfInputError ||
-                        error instanceof LiteraturePublicationError ||
-                        error instanceof CandidateAcceptanceError
-                      ? error.code
-                      : error instanceof PdfAcceptanceError
-                        ? "manual-pdf-invalid"
-                        : error instanceof LiteratureNotFoundError
-                          ? "literature-not-found"
-                          : error instanceof LiteratureQueryError
-                            ? "query-reference-invalid"
-                            : "query-unavailable";
+                  : error instanceof PdfAcceptanceError
+                    ? "manual-pdf-invalid"
+                    : error instanceof LiteratureNotFoundError
+                      ? "literature-not-found"
+                      : error instanceof LiteratureQueryError
+                        ? "query-reference-invalid"
+                        : "query-unavailable";
         const status =
           error instanceof MaterialContextError ||
           error instanceof KnowledgeContextError
@@ -2941,52 +2811,34 @@ function createQueryHttpHandler(
               error.code === "context-tokenizer-unsupported"
               ? 400
               : 503
-            : error instanceof KnowledgeReadError
-              ? error.code === "knowledge-invalid"
+            : error instanceof DocumentReadError
+              ? error.code === "document-invalid"
                 ? 400
-                : error.code === "knowledge-kind-unsupported"
-                  ? 422
-                  : error.code === "knowledge-cancelled"
-                    ? 409
-                    : 503
-              : error instanceof SynthesisReadError ||
-                  error instanceof SynthesisPreparationError
-                ? error.code === "synthesis-invalid"
-                  ? 400
-                  : error.code === "synthesis-cancelled" ||
-                      error.code === "synthesis-stale-binding"
-                    ? 409
-                    : error.code === "synthesis-limit"
+                : error.code === "material-stale"
+                  ? 409
+                  : error.code === "document-missing" ||
+                      error.code === "material-missing"
+                    ? 404
+                    : error.code === "document-v3-required" ||
+                        error.code === "document-unsupported"
                       ? 422
                       : 503
-                : error instanceof DocumentReadError
-                  ? error.code === "document-invalid"
-                    ? 400
-                    : error.code === "material-stale"
-                      ? 409
-                      : error.code === "document-missing" ||
-                          error.code === "material-missing"
-                        ? 404
-                        : error.code === "document-v3-required" ||
-                            error.code === "document-unsupported"
-                          ? 422
-                          : 503
-                  : error instanceof ContractValidationError ||
-                      error instanceof WorkbenchInputError
-                    ? 400
-                    : error instanceof ManualPdfInputError ||
-                        error instanceof PdfAcceptanceError ||
-                        (error instanceof LiteraturePublicationError &&
-                          error.code !== "primary-asset-conflict")
-                      ? 400
-                      : error instanceof CandidateAcceptanceError &&
-                          error.code === "literature-not-found"
-                        ? 404
-                        : error instanceof LiteratureNotFoundError
-                          ? 404
-                          : error instanceof LiteratureQueryError
-                            ? 409
-                            : 503;
+              : error instanceof ContractValidationError ||
+                  error instanceof WorkbenchInputError
+                ? 400
+                : error instanceof ManualPdfInputError ||
+                    error instanceof PdfAcceptanceError ||
+                    (error instanceof LiteraturePublicationError &&
+                      error.code !== "primary-asset-conflict")
+                  ? 400
+                  : error instanceof CandidateAcceptanceError &&
+                      error.code === "literature-not-found"
+                    ? 404
+                    : error instanceof LiteratureNotFoundError
+                      ? 404
+                      : error instanceof LiteratureQueryError
+                        ? 409
+                        : 503;
         json(response, status, { protocol_version: 1, code });
       }),
     close: () => {

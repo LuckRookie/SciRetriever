@@ -19,6 +19,8 @@ import type {
 
 function observation(n: number): MetadataObservation {
   return parseMetadataObservation({
+    source_type: null,
+    source_type_mapping_version: null,
     observation_id: randomUUID(),
     provenance: {
       provenance_id: randomUUID(),
@@ -35,7 +37,8 @@ function observation(n: number): MetadataObservation {
       abstract: null,
       publication_date: null,
       publication_year: 2025,
-      document_type: null,
+      publication_form: null,
+      article_kind: null,
       language: null,
       venue: null,
       publisher: null,

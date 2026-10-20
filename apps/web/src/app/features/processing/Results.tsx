@@ -1,3 +1,5 @@
+import { ResultState } from "../archive/ResultState.js";
+import { archiveWrite } from "../../data/archive.js";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -112,26 +114,48 @@ export default function Results() {
   const route = useUrlState(),
     collection = route.parameters.get("collection"),
     result = route.parameters.get("result");
-  return collection || result ? (
-    <Detail
-      key={collection ?? `${result}:${route.parameters.get("resultHash")}`}
-      collectionId={collection}
-      resultId={result}
-      resultHash={route.parameters.get("resultHash")}
-    />
-  ) : (
-    <ResultList />
+  return (
+    <>
+      {route.parameters.get("from") === "ask" ? (
+        <Button
+          variant="text"
+          onPress={() =>
+            navigate({ view: "ask", literature: null }, { clearSource: true })
+          }
+        >
+          返回检索
+        </Button>
+      ) : null}
+      {collection || result ? (
+        <Detail
+          key={collection ?? `${result}:${route.parameters.get("resultHash")}`}
+          collectionId={collection}
+          resultId={result}
+          resultHash={route.parameters.get("resultHash")}
+        />
+      ) : (
+        <ResultList />
+      )}
+    </>
   );
 }
 function ResultList() {
   const api = useApi();
   const [query, setQuery] = useState(""),
     [scope, setScope] = useState("collections"),
+    [stale, setStale] = useState(false),
     [applied, setApplied] = useState({ query: "", scope: "collections" }),
     [offset, setOffset] = useState(0),
     [cursors, setCursors] = useState<Record<number, string>>({});
   const data = useQuery({
-    queryKey: ["processors", "list", applied, offset, cursors[offset] ?? ""],
+    queryKey: [
+      "processors",
+      "list",
+      applied,
+      offset,
+      cursors[offset] ?? "",
+      stale,
+    ],
     queryFn: async ({ signal }) => {
       const results = applied.scope === "results";
       const response = await api.processors(
@@ -147,6 +171,7 @@ function ResultList() {
           : results
             ? {
                 limit: 20,
+                ...(stale ? { stale: true } : {}),
                 ...(cursors[offset] ? { after: cursors[offset] } : {}),
               }
             : { limit: 20, offset },
@@ -184,6 +209,19 @@ function ResultList() {
             { value: "results", label: "结果正文" },
           ]}
         />
+        <Button
+          variant="text"
+          aria-pressed={stale}
+          onPress={() => {
+            setStale((v) => !v);
+            setScope("results");
+            setApplied({ query: "", scope: "results" });
+            setOffset(0);
+            setCursors({});
+          }}
+        >
+          只看过时结果
+        </Button>
         <SearchField label="检索已有结果" value={query} onChange={setQuery} />
         <Button type="submit">检索</Button>
       </form>
@@ -229,6 +267,9 @@ function ResultList() {
                         ? row.processor_id
                         : "已保存集合"}
                   </p>
+                  {row.freshness === "stale" ? (
+                    <p role="status">已过时</p>
+                  ) : null}
                   <Button
                     onPress={() =>
                       navigate(
@@ -612,6 +653,29 @@ function Detail({
                 >
                   {display(row.payload[name]!)}
                 </Button>
+                {row.value_checks
+                  .filter(
+                    (c) =>
+                      c.pointer === pointerFor(name) ||
+                      c.pointer.startsWith(`${pointerFor(name)}/`),
+                  )
+                  .map((c) => (
+                    <span
+                      key={c.pointer}
+                      className="ui-description"
+                      title={c.reason}
+                    >
+                      {" "}
+                      ·{" "}
+                      {
+                        {
+                          "text-layer": "文字核对",
+                          "image-checked": "图像核对",
+                          uncertain: "存疑",
+                        }[c.status]
+                      }
+                    </span>
+                  ))}
                 {row.missing[name] || row.missing[pointerFor(name)] ? (
                   <p className="ui-description">
                     {row.missing[name] ?? row.missing[pointerFor(name)]}
@@ -666,39 +730,47 @@ function Detail({
         new TextEncoder().encode(state.question.trim()).length > 4096
       )
         throw new Error("请填写简短的研究问题并选择记录。");
-      const groups = new Map<string, string[]>();
-      for (const item of synthesis)
-        groups.set(item.ref.result_id, [
-          ...(groups.get(item.ref.result_id) ?? []),
-          item.recordId,
-        ]);
+      const fingerprint = JSON.stringify({
+        ids: [...new Set(synthesis.flatMap((i) => i.literatureIds))].sort(),
+        question: state.question.trim(),
+        policy: state.policy,
+      });
+      const previous =
+        state.submission?.fingerprint === fingerprint ? state.submission : null;
+      const snapshot = previous
+        ? {
+            snapshot_id: (previous.request.inputs[0] as { snapshot_id: string })
+              .snapshot_id,
+          }
+        : record(
+            await archiveWrite(api, "snapshots", {
+              kind: "literatures",
+              literature_ids: [
+                ...new Set(synthesis.flatMap((i) => i.literatureIds)),
+              ],
+            }),
+            "snapshot",
+          );
       const payload = {
         schema_version: 1,
-        name: `结果综合 · ${state.question.trim().slice(0, 80)}`,
-        processor: { id: "knowledge-synthesis", version: "1" },
+        name: `文献综合 · ${state.question.trim().slice(0, 80)}`,
+        processor: { id: "knowledge-synthesis", version: "2" },
         spec: { question: state.question.trim(), policy: state.policy },
-        inputs: [...groups]
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([id, ids]) => ({
-            kind: "result",
-            result_id: id,
-            record_ids: ids.sort(),
-          })),
+        inputs: [{ kind: "snapshot", snapshot_id: snapshot.snapshot_id }],
       };
-      const fingerprint = JSON.stringify(payload),
-        submission =
-          state.submission?.fingerprint === fingerprint
-            ? state.submission
-            : {
-                fingerprint,
-                request: parseProcessorBatchRequest({
-                  ...payload,
-                  idempotency_key: randomId(),
-                }),
-                jobId: null,
-                started: false,
-                note: "",
-              };
+      const submission =
+        state.submission?.fingerprint === fingerprint
+          ? state.submission
+          : {
+              fingerprint,
+              request: parseProcessorBatchRequest({
+                ...payload,
+                idempotency_key: randomId(),
+              }),
+              jobId: null,
+              started: false,
+              note: "",
+            };
       patch({ submission });
       try {
         if (!submission.jobId)
@@ -759,14 +831,43 @@ function Detail({
       <h2>
         {collection?.name ??
           (standalone?.result.invocation.processor.id === "labels"
-            ? "文献标签"
-            : "记录提取")}
+            ? "问答标注"
+            : standalone?.result.invocation.processor.id === "summary"
+              ? "文献总结"
+              : standalone?.result.invocation.processor.id ===
+                  "knowledge-synthesis"
+                ? "文献综合"
+                : "记录提取")}
       </h2>
       <p>
         {collection
           ? `${collection.members.length} 项输入 · ${collection.members.filter((item) => item.result).length} 项已有结果 · ${collection.members.filter((item) => !item.result).length} 项缺口`
           : `${describeResult(standalone!).literatureIds.length} 篇关联文献 · ${standalone!.result.coverage.some((item) => item.status !== "complete") ? "部分覆盖" : "完整覆盖"}`}
       </p>
+      {standalone ? (
+        <>
+          <ResultState
+            coverage={standalone.result.coverage}
+            freshness={standalone.freshness}
+          />
+          {standalone.freshness.state === "stale" ? (
+            <Button
+              onPress={() => {
+                shell.setSelected(new Set(standalone.result.literature_ids));
+                navigate({
+                  view: "snapshots",
+                  literature: null,
+                  result: null,
+                  resultHash: null,
+                  collection: null,
+                });
+              }}
+            >
+              基于当前文献生成新快照
+            </Button>
+          ) : null}
+        </>
+      ) : null}
       <TechDetails
         title="本次规范与缺口"
         copyText={JSON.stringify(
@@ -808,7 +909,7 @@ function Detail({
           </p>
         ))}
       </TechDetails>
-      {standalone?.result.content.kind === "text" ? (
+      {standalone?.result.content.kind === "report" ? (
         <section>
           <h3>已保存的结果正文</h3>
           <p className="result-text">
@@ -821,21 +922,6 @@ function Detail({
           ) : null}
           <Button onPress={() => setExportRef(standalone.ref)}>完整结果</Button>
         </section>
-      ) : null}
-      {standalone?.result.content.kind === "knowledge" ? (
-        <Button
-          onPress={() =>
-            navigate({
-              view: "syn",
-              artifact:
-                standalone.result.content.kind === "knowledge"
-                  ? standalone.result.content.artifact_id
-                  : null,
-            })
-          }
-        >
-          打开知识产物
-        </Button>
       ) : null}
       <div className="result-toolbar">
         <Select
@@ -927,7 +1013,7 @@ function Detail({
             isDisabled={api.kind !== "workspace"}
             onPress={() => setSynthesis([...state.selected.values()])}
           >
-            用所选记录综合
+            按来源文献综合
           </Button>
           <Button
             onPress={() => {
@@ -1060,7 +1146,7 @@ function Detail({
         </Button>
       </Dialog>
       <Dialog
-        title="用所选记录继续综合"
+        title="按来源文献生成新综合"
         isOpen={synthesis !== null}
         onOpenChange={(open) => {
           if (!open && !synthesize.isPending) setSynthesis(null);

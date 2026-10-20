@@ -1,3 +1,4 @@
+import { SCHEMA_VERSION } from "../src/storage/sqlite/schema.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -27,7 +28,7 @@ it("starts the compiled CLI MCP command over actual stdio without touching the u
     const status = await client.callTool({ name: "status", arguments: {} });
     expect(status.structuredContent).toMatchObject({
       protocol_version: 1,
-      result: { status: "ready", schema_version: 10 },
+      result: { status: "ready", schema_version: SCHEMA_VERSION },
     });
     expect(
       (await client.listTools()).tools.some(

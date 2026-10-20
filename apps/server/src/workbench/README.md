@@ -1,6 +1,6 @@
 # 工作台服务端适配
 
-提供默认对外监听、所有连接统一登录的 HTTP、页面资产、Browser 会话观看与控制，以及统一任务、文献阅读、配置和维护操作的传输边界。页面交互代码在 [apps/web](../../../web/README.md)，生产接线在 [bootstrap/workbench.ts](../bootstrap/workbench.ts)。
+提供默认对外监听、所有连接统一登录的 HTTP、页面资产、Browser 会话观看与控制，以及统一任务、文献阅读、配置和维护操作的传输边界。页面交互代码在 Web 前端源码，生产接线在 [bootstrap/workbench.ts](../bootstrap/workbench.ts)。
 
 ## 内容入口
 
@@ -38,8 +38,6 @@ Browser 指导、接管/交还和人工动作继续经过当前文章的控制 e
 
 HTTP 关闭先取消并排空正在处理的请求；生产组装随后停止 durable runtime 与 Browser owner，再释放数据库资源。关闭浏览器标签不等于关闭 server，也不承诺进程退出后继续执行。重启读取持久任务与已提交事实，不恢复外部 Browser 页面或自动重新执行旧任务。
 
-相关说明：[统一产品接口](../../../../docs/architecture/technical/01-product-interface.md) · [任务与协作控制](../../../../docs/architecture/technical/02-task-coordination.md)。
+[上级目录](../README.md)
 
-[上级目录](../README.md) · [项目 README](../../../../README.md)
-
-机器连接使用现有 HTTP 授权边界，`POST /api/clients/disconnect` 需要当前 Cookie、client_id 与 CSRF，显式撤销连接；仍控制页面时按既有 detach/pause 政策处理。该客户端的事件流随撤销结束。具体调用见 [Agent 指南](../../../../docs/guides/agent-interface.md#连接正在运行的-web-服务)。
+机器连接使用现有 HTTP 授权边界，`POST /api/clients/disconnect` 需要当前 Cookie、client_id 与 CSRF，显式撤销连接；仍控制页面时按既有 detach/pause 政策处理。该客户端的事件流随撤销结束。

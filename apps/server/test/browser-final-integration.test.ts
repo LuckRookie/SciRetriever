@@ -316,7 +316,6 @@ it
       );
       cloakVersion = runtime.version;
       app = await createApplication(home, {
-        executionSchema: "upgrade-synthetic",
         browserRuntime: runtime,
         browserProxy: await proxy.start(),
         browserAdmitNavigation: async (url) =>
@@ -333,6 +332,8 @@ it
         await app.database.putLiterature(paper.literature);
         await app.observations.publish({
           ...parseMetadataObservation({
+            source_type: null,
+            source_type_mapping_version: null,
             observation_id: `20000000-0000-0000-0000-00000000990${index}`,
             provenance: {
               provenance_id: `30000000-0000-0000-0000-00000000990${index}`,

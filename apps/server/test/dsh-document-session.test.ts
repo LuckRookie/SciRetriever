@@ -1,15 +1,14 @@
+import { createInputManifest, sha256 } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
-import { createInputManifest, sha256 } from "@sciretriever/contracts";
-import { coreProcessingFixture } from "./core-processing-fixture.js";
 import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
-import { KnowledgeAnalysisService } from "../src/analysis/knowledge.js";
-import { SqliteKnowledgeStorage } from "../src/storage/knowledge.js";
 import type {
   ModelRequest,
   ModelResponse,
 } from "../src/agents/model-protocol.js";
+import { analyzeDocumentSession } from "../src/analysis/knowledge-session.js";
 import { readingImage } from "../src/analysis/reading-image.js";
+import { coreProcessingFixture } from "./core-processing-fixture.js";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9e0AAAAASUVORK5CYII=",
@@ -31,10 +30,9 @@ const tool = (name: string, args: Record<string, unknown>): ModelResponse => ({
 it("requires full reading and saved images, then corrects forged citations in the same DSH conversation", async () => {
   const env = await coreProcessingFixture();
   let runtime: DshAgentRuntime | undefined;
-  let service: KnowledgeAnalysisService | undefined;
   try {
     env.setText(
-      "# Synthetic paper\nA measured yield of 60%.\n![Yield chart](images/chart.png)\n",
+      "# Synthetic paper\n\nA measured yield of 60%.\n\n![Yield chart](images/chart.png)\n",
     );
     env.setResources([
       {
@@ -49,9 +47,16 @@ it("requires full reading and saved images, then corrects forged citations in th
         },
       },
     ]);
-    const parsed = await env.app.documentProcessing.parseDocuments(
-      env.parseRequest,
-    );
+    await env.app.documentProcessing.parseDocuments(env.rawParseRequest);
+    const corrected = await env.app.proofreading!.build({
+      asset_id: env.asset.asset_id,
+    });
+    const parsed = await env.app.proofreadDocuments.publish({
+      literature_id: env.parseRequest.literature_id,
+      asset_id: env.asset.asset_id,
+      proofread_id: corrected.version.proofread_id,
+      expected_default_revision: null,
+    });
     const described = await env.app.documentRead.describe({
       document_version_id: parsed.document.document_version_id,
     });
@@ -70,6 +75,23 @@ it("requires full reading and saved images, then corrects forged citations in th
         gaps: [],
       },
     ]);
+    const segments = await env.app.documentRead.segments({
+      document_version_id: parsed.document.document_version_id,
+      section_id: null,
+      limit: 200,
+      cursor: null,
+    });
+    const measured = segments.segments[1]!.segment_id;
+    expect(
+      (
+        await env.app.documentRead.slice({
+          document_version_id: parsed.document.document_version_id,
+          selector: { kind: "segment", segment_id: measured },
+          max_bytes: 65536,
+          continuation: null,
+        })
+      ).text,
+    ).toContain("60%");
     const requests: ModelRequest[] = [];
     const draft = (id: string) => ({
       outcome: "completed",
@@ -118,12 +140,12 @@ it("requires full reading and saved images, then corrects forged citations in th
               .join("");
             switch (requests.length) {
               case 1:
-                return tool("submit_result", draft("p2"));
+                return tool("submit_result", draft(measured));
               case 2:
                 expect(text).toContain("knowledge-text-unread");
                 return tool("read_document", { start_utf8: 0 });
               case 3:
-                return tool("submit_result", draft("p2"));
+                return tool("submit_result", draft(measured));
               case 4:
                 expect(text).toContain("knowledge-images-unread");
                 return tool("view_image", {
@@ -142,14 +164,14 @@ it("requires full reading and saved images, then corrects forged citations in th
                 return tool("search_document", { query: "60%" });
               }
               case 6:
-                expect(text).toContain("p2");
-                return tool("read_segments", { ids: ["p2"] });
+                expect(text).toContain(measured);
+                return tool("read_segments", { ids: [measured] });
               case 7:
                 expect(text).toContain("60%");
                 return tool("submit_result", draft("forged"));
               case 8:
                 expect(text).toContain("knowledge-invalid-evidence");
-                return tool("submit_result", draft("p2"));
+                return tool("submit_result", draft(measured));
               default:
                 throw new Error("Unexpected continuation");
             }
@@ -157,36 +179,18 @@ it("requires full reading and saved images, then corrects forged citations in th
         },
       },
     ]);
-    const storage = new SqliteKnowledgeStorage(
-      env.app.database,
-      env.app.files,
-      env.app.documentRead,
-    );
-    service = new KnowledgeAnalysisService(
+    const receipt = await analyzeDocumentSession(
+      { input: manifest, purpose: "overview", question: null },
       env.app.documentRead,
       runtime,
-      storage,
+      { provider: "fixture", model: "vision", max_output_tokens: 4096 },
+      new AbortController().signal,
     );
-    const receipt = await service.analyze({
-      schema_version: 1,
-      input: manifest,
-      purpose: "overview",
-      question: null,
-      default_update: null,
-    });
-    expect(receipt.published).toBe(true);
+    expect(receipt.content?.statements[0]?.text).toContain("60%");
     expect(requests).toHaveLength(8);
     expect(requests.every((r) => r.max_output_tokens === undefined)).toBe(true);
-    expect(receipt.artifact.provenance).toMatchObject({
-      input_tokens: 80,
-      output_tokens: 40,
-    });
-    expect(receipt.artifact.coverage.capability_gaps).not.toContain(
-      "some-resource-content-unread",
-    );
-    expect(await storage.byId(receipt.artifact.artifact_id)).toEqual(
-      receipt.artifact,
-    );
+    expect(receipt).toMatchObject({ input_tokens: 80, output_tokens: 40 });
+    expect(receipt.gaps).not.toContain("some-resource-content-unread");
     expect(
       requests
         .at(-1)!
@@ -195,7 +199,6 @@ it("requires full reading and saved images, then corrects forged citations in th
         ),
     ).toHaveLength(3);
   } finally {
-    await service?.close();
     await runtime?.close();
     await env.close();
   }

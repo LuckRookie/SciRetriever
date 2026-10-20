@@ -1,3 +1,4 @@
+import { coreProcessingFixture } from "./core-processing-fixture.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,16 +15,13 @@ import {
 import { createApplication } from "../src/bootstrap/application.js";
 import { DatabaseCompletionService } from "../src/entry/database-completion.js";
 import { LiteratureCompletionService } from "../src/entry/literature-completion.js";
-import { ContentAnalysisService } from "../src/entry/content-analysis.js";
 import { ParsingFailure } from "../src/parsing/ports.js";
-import { AnalysisFailure } from "../src/analysis/service.js";
-import { ContentAcceptanceError } from "../src/literature/content.js";
 import { WriteAdmissionError } from "../src/storage/write-admission.js";
 import {
   FIXTURE_LITERATURE,
   workbenchPdf,
 } from "../src/workbench/synthetic-fixture.js";
-import { setup, proposal, lit } from "./content-fixture.js";
+import { lit } from "./content-fixture.js";
 
 const id = (n: number) =>
   parseLiteratureId(`00000000-0000-4000-9000-${String(n).padStart(12, "0")}`);
@@ -69,7 +67,6 @@ async function fixture(count: number) {
   });
   const discoverDoiLanding = vi.fn(async () => []);
   const app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
     acquisitionAssembly: {
       resolver: acquisitionResolver,
       doiLandingSource: {
@@ -96,7 +93,7 @@ async function fixture(count: number) {
     discoverDoiLanding,
     request: {
       selector: { kind: "literatures" as const, literature_ids: ids },
-      goal: "CONTENT_READY" as const,
+      goal: "PARSER_RESULT_READY" as const,
     },
     service: (
       complete: LiteratureCompletionService["complete"],
@@ -106,7 +103,7 @@ async function fixture(count: number) {
         library: app.library,
         database: app.database,
         writes: app.writes,
-        completion: { complete },
+        completion: { complete, isReady: async () => false },
         acquisition: null,
         max_concurrency,
       }),
@@ -200,13 +197,13 @@ describe("bounded database completion operations", () => {
       await vi.waitFor(() => expect(detail).toHaveBeenCalledTimes(2));
       release.resolve();
       const report = await pending;
-      // Production CONTENT_READY still admits the automatic PDF route. The
+      // Production PARSER_RESULT_READY still admits the automatic PDF route. The
       // injected source gives each synthetic DOI an offline exhaustion, keeping
       // this object-graph check independent of the real doi.org download path.
       expect(env.discoverDoiLanding).toHaveBeenCalledTimes(5);
       expect(env.acquisitionResolver).not.toHaveBeenCalled();
       expect(report.failed.map((item) => item.failure.code)).not.toContain(
-        "content-completion-unavailable",
+        "parser-completion-unavailable",
       );
       expect(
         report.completed.length +
@@ -494,7 +491,7 @@ describe("bounded database completion operations", () => {
 
   it.each([
     [new ParsingFailure("parser-unavailable"), "parsing"],
-    [new AnalysisFailure("analysis-model"), "analysis"],
+    [new ParsingFailure("parser-structure"), "parsing"],
   ] as const)(
     "isolates %s without stopping other chunks",
     async (error, stage) => {
@@ -508,7 +505,7 @@ describe("bounded database completion operations", () => {
             return exhausted(literature_id);
           }, 2)
           .run(env.request);
-        expect(calls).toEqual(env.ids);
+        expect([...calls].sort()).toEqual([...env.ids].sort());
         expect(report.failed[0]).toMatchObject({ stage });
         expect(report.end.kind).toBe("finished");
       } finally {
@@ -517,10 +514,10 @@ describe("bounded database completion operations", () => {
     },
   );
 
-  it("keeps mixed acquisition, parsing and analysis failures isolated while preserving committed facts", async () => {
-    const env = await setup(true);
+  it("keeps mixed acquisition and parsing failures isolated while preserving committed facts", async () => {
+    const env = await coreProcessingFixture();
     const literatureIds = [11, 12, 13, 14, 15].map(id);
-    const [acquisitionId, parsingId, analysisId, completedId, exhaustedId] =
+    const [acquisitionId, parsingId, structureId, completedId, exhaustedId] =
       literatureIds as [
         (typeof literatureIds)[number],
         (typeof literatureIds)[number],
@@ -538,39 +535,20 @@ describe("bounded database completion operations", () => {
           }),
         );
 
-      const analysis = new ContentAnalysisService(
-        {
-          analyzeContent: async (literatureId) => {
-            const prepared = await proposal(
-              await env.app.library.detail(literatureId),
-              80,
-            );
-            return {
-              outcome: "proposal",
-              proposal: prepared.value,
-              markdownBytes: prepared.bytes,
-            };
-          },
+      const completion = env.app.completion!;
+      const scriptedCompletion: Pick<
+        LiteratureCompletionService,
+        "complete" | "isReady"
+      > = {
+        isReady: (id, signal) => completion.isReady(id, signal),
+        complete: async (command, signal, commit) => {
+          if (command.literature_id === parsingId)
+            throw new ParsingFailure("parser-unavailable");
+          if (command.literature_id === structureId)
+            throw new ParsingFailure("parser-structure");
+          return completion.complete(command, signal, commit);
         },
-        env.app.literatureContent,
-      );
-      const completion = new LiteratureCompletionService(
-        env.app.library,
-        env.app.database,
-        env.app.execution!.acceptance,
-        env.app.parsing!,
-        analysis,
-      );
-      const scriptedCompletion: Pick<LiteratureCompletionService, "complete"> =
-        {
-          complete: async (command, signal, commit) => {
-            if (command.literature_id === parsingId)
-              throw new ParsingFailure("parser-unavailable");
-            if (command.literature_id === analysisId)
-              throw new AnalysisFailure("analysis-model");
-            return completion.complete(command, signal, commit);
-          },
-        };
+      };
       const publishPdf = async (
         literatureId: (typeof literatureIds)[number],
       ) => {
@@ -639,13 +617,13 @@ describe("bounded database completion operations", () => {
             return publishPdf(literature_id);
           },
         },
-        automatic_pdf_for_content: true,
+        automatic_pdf_for_parsing: true,
         max_concurrency: 5,
       });
 
       const report = await service.run({
         selector: { kind: "literatures", literature_ids: literatureIds },
-        goal: "CONTENT_READY",
+        goal: "PARSER_RESULT_READY",
       });
 
       expect(report.completed.map((item) => item.literature_id)).toEqual([
@@ -660,7 +638,7 @@ describe("bounded database completion operations", () => {
       ).toEqual([
         [acquisitionId, "acquisition", "pdf-route-delivery-failed"],
         [parsingId, "parsing", "completion-parsing-failed"],
-        [analysisId, "analysis", "completion-analysis-failed"],
+        [structureId, "parsing", "completion-parsing-failed"],
       ]);
       expect(report.skipped).toMatchObject([
         {
@@ -677,11 +655,12 @@ describe("bounded database completion operations", () => {
         (await env.app.library.detail(parsingId)).primary_pdf,
       ).not.toBeNull();
       expect(
-        (await env.app.library.detail(analysisId)).primary_pdf,
+        (await env.app.library.detail(structureId)).primary_pdf,
       ).not.toBeNull();
-      expect(
-        (await env.app.library.detail(completedId)).content,
-      ).not.toBeNull();
+      expect(await env.app.completion!.isReady(completedId)).toBe(true);
+      expect(await env.app.library.detail(completedId)).not.toHaveProperty(
+        "content",
+      );
       expect(
         await env.app.database.hasAutomaticPdfExhaustion(exhaustedId),
       ).toBe(true);
@@ -693,10 +672,7 @@ describe("bounded database completion operations", () => {
     }
   });
 
-  it.each([
-    new ParsingFailure("parser-publication"),
-    new ContentAcceptanceError("content-publication"),
-  ])(
+  it.each([new ParsingFailure("parser-publication")])(
     "keeps publication failure %s when cancellation races it",
     async (error) => {
       const env = await fixture(4);
@@ -737,8 +713,8 @@ describe("bounded database completion operations", () => {
     }
   });
 
-  it("automatically acquires a missing PDF before CONTENT_READY completion", async () => {
-    const env = await setup(true);
+  it("automatically acquires a missing PDF before PARSER_RESULT_READY completion", async () => {
+    const env = await coreProcessingFixture();
     const second = id(2);
     const transferId = "auto-content-transfer";
     const bytes = workbenchPdf();
@@ -763,29 +739,7 @@ describe("bounded database completion operations", () => {
       await env.app.execution!.transfers.append(transferId, bytes);
       await env.app.execution!.transfers.complete(transferId);
 
-      const analysis = new ContentAnalysisService(
-        {
-          analyzeContent: async (literatureId) => {
-            const prepared = await proposal(
-              await env.app.library.detail(literatureId),
-              61,
-            );
-            return {
-              outcome: "proposal",
-              proposal: prepared.value,
-              markdownBytes: prepared.bytes,
-            };
-          },
-        },
-        env.app.literatureContent,
-      );
-      const completion = new LiteratureCompletionService(
-        env.app.library,
-        env.app.database,
-        env.app.execution!.acceptance,
-        env.app.parsing!,
-        analysis,
-      );
+      const completion = env.app.completion!;
       const accepted = vi.spyOn(env.app.execution!.acceptance, "accept");
       const complete = vi.spyOn(completion, "complete");
       const service = new DatabaseCompletionService({
@@ -812,14 +766,14 @@ describe("bounded database completion operations", () => {
             };
           },
         },
-        automatic_pdf_for_content: true,
+        automatic_pdf_for_parsing: true,
         max_concurrency: 1,
       });
 
       const report = await service.run(
         {
           selector: { kind: "literatures", literature_ids: [second] },
-          goal: "CONTENT_READY",
+          goal: "PARSER_RESULT_READY",
         },
         { signal: stop.signal },
       );
@@ -832,8 +786,9 @@ describe("bounded database completion operations", () => {
         expect.any(Function),
       );
       expect(detail.primary_pdf).not.toBeNull();
-      expect(detail.parser_result).not.toBeNull();
-      expect(detail.content).not.toBeNull();
+      expect(detail).not.toHaveProperty("parser_result");
+      expect(detail).not.toHaveProperty("content");
+      expect(await completion.isReady(second)).toBe(true);
       expect(report.completed).toMatchObject([{ literature_id: second }]);
       expect(report.failed).toEqual([]);
       expect(report.skipped).toEqual([]);
@@ -863,8 +818,9 @@ describe("bounded database completion operations", () => {
 it.each([false, true])(
   "serializes actual publications and disposes prepared work when cancelled=%s",
   async (cancel) => {
-    const env = await setup(true);
+    const env = await coreProcessingFixture();
     const hold = deferred();
+    const committed = deferred();
     const stop = new AbortController();
     const app = env.app;
     const second = id(2);
@@ -907,108 +863,77 @@ it.each([false, true])(
     });
     let writes = 0,
       peak = 0,
-      analyses = 0;
-    const accept = app.literatureContent.accept.bind(app.literatureContent);
-    const publish = app.parsing!.commitCurrentPrimary.bind(app.parsing!);
-    const prepared = vi.spyOn(app.parsing!, "prepareCurrentPrimary");
-    const discarded = vi.spyOn(app.parsing!, "discardPrepared");
-    vi.spyOn(app.literatureContent, "accept").mockImplementation(
+      publications = 0;
+    const publish = app.rawParseStorage!.publish.bind(app.rawParseStorage!);
+    vi.spyOn(app.rawParseStorage!, "publish").mockImplementation(
       async (...args) => {
         peak = Math.max(peak, ++writes);
+        publications++;
         try {
-          const accepted = await accept(...args);
-          await hold.promise;
-          return accepted;
+          const result = await publish(...args);
+          if (publications === 1) {
+            committed.resolve();
+            await hold.promise;
+          }
+          return result;
         } finally {
           writes--;
         }
       },
-    );
-    const publications = vi
-      .spyOn(app.parsing!, "commitCurrentPrimary")
-      .mockImplementation(async (...args) => {
-        peak = Math.max(peak, ++writes);
-        try {
-          return await publish(...args);
-        } finally {
-          writes--;
-        }
-      });
-    const analysis = new ContentAnalysisService(
-      {
-        analyzeContent: async (literatureId) => {
-          analyses++;
-          const p = await proposal(
-            await app.library.detail(literatureId),
-            literatureId === lit ? 50 : 51,
-          );
-          return {
-            outcome: "proposal",
-            proposal: p.value,
-            markdownBytes: p.bytes,
-          };
-        },
-      },
-      app.literatureContent,
-    );
-    const completion = new LiteratureCompletionService(
-      app.library,
-      app.database,
-      app.execution!.acceptance,
-      app.parsing!,
-      analysis,
     );
     const service = new DatabaseCompletionService({
       library: app.library,
       database: app.database,
       writes: app.writes,
-      completion,
+      completion: app.completion,
       acquisition: null,
       max_concurrency: 2,
     });
     const pending = service.run(
       {
         selector: { kind: "literatures", literature_ids: [lit, second] },
-        goal: "CONTENT_READY",
+        goal: "PARSER_RESULT_READY",
       },
       { signal: stop.signal },
     );
     try {
-      await vi.waitFor(() => expect(writes).toBe(1));
-      await vi.waitFor(() => expect(prepared).toHaveResolved());
-      await vi.waitFor(async () =>
-        expect((await app.library.detail(lit)).content).not.toBeNull(),
-      );
-      expect(publications).not.toHaveBeenCalled();
+      await Promise.race([
+        committed.promise,
+        pending.then(() => {
+          throw new Error("Completion settled before the first publication");
+        }),
+      ]);
+      expect(writes).toBe(1);
+      await vi.waitFor(() => expect(env.parseCalls).toBe(4));
       if (cancel) stop.abort();
       hold.resolve();
       const report = await pending;
-      expect(report.completed.map((item) => item.literature_id)).toEqual([
-        lit,
-        ...(cancel ? [] : [second]),
-      ]);
+      expect(report.completed.map((r) => r.literature_id)).toEqual(
+        cancel ? [] : [lit, second],
+      );
       expect(report.end.kind).toBe(cancel ? "interrupted" : "finished");
-      expect(analyses).toBe(cancel ? 1 : 2);
       expect(peak).toBe(1);
       expect(writes).toBe(0);
-      expect(discarded).toHaveBeenCalledTimes(1);
-      const detail = await app.library.detail(second);
-      expect(detail.primary_pdf).not.toBeNull();
-      if (cancel) {
-        expect(report.interrupted.map((item) => item.literature_id)).toEqual([
+      expect(env.modelCalls).toBe(0);
+      const first = (await app.library.detail(lit)).primary_pdf!.asset;
+      const states = [
+        ...(await app.rawParseStorage!.current(first.asset_id)),
+        ...(await app.rawParseStorage!.current(asset.asset_id)),
+      ];
+      expect(states.filter((s) => s.result)).toHaveLength(cancel ? 1 : 4);
+      expect((await app.library.detail(second)).primary_pdf).not.toBeNull();
+      expect(await app.library.detail(second)).not.toHaveProperty("content");
+      if (cancel)
+        expect(report.interrupted.map((r) => r.literature_id)).toEqual([
+          lit,
           second,
         ]);
-        expect(detail.parser_result).toBeNull();
-        expect(detail.content).toBeNull();
-        expect(publications).not.toHaveBeenCalled();
-      } else expect(detail.content).not.toBeNull();
     } finally {
       hold.resolve();
+      stop.abort();
       await pending;
-      await completion.close();
-      await analysis.close();
-      vi.restoreAllMocks();
       await env.close();
     }
   },
+  30000,
 );

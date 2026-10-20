@@ -15,6 +15,8 @@ import type {
 } from "../src/metadata/ports.js";
 
 const targetObservation = parseMetadataObservation({
+  source_type: null,
+  source_type_mapping_version: null,
   observation_id: "00000000-0000-4000-9000-000000000001",
   provenance: {
     provenance_id: "00000000-0000-4000-9000-000000000002",
@@ -32,7 +34,8 @@ const targetObservation = parseMetadataObservation({
     abstract: null,
     publication_date: "2025-01-01",
     publication_year: 2025,
-    document_type: "article",
+    publication_form: "journal-article" as const,
+    article_kind: null,
     language: null,
     venue: null,
     publisher: null,

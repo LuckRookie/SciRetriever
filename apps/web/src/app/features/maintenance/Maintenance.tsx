@@ -1,21 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import {
   extractionSpecHash,
+  parseDocumentReceipt,
+  parseDocumentRequest,
   parseExtractionPreparationRequest,
   parseExtractionPreparationResult,
-  parseStrictJsonValue,
-  parseRetrievalGenerationReceipt,
   parseProcessingTaskRequest,
-  parseDocumentReadRequest,
-  parseDocumentReadResult,
-  parseDocumentRequest,
-  parseDocumentReceipt,
-  parseKnowledgeAnalysisRequest,
-  parseKnowledgeLongAnalysisRequest,
-  parseKnowledgeAnalysisReceipt,
+  parseRetrievalGenerationReceipt,
+  parseStrictJsonValue,
   type ExtractionSpec,
 } from "@sciretriever/contracts";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { randomId } from "../../../browser-platform.js";
 import {
   Button,
   Card,
@@ -28,22 +24,21 @@ import {
   TextArea,
   TextField,
 } from "../../components/index.js";
-import { useApi } from "../../data/query.js";
-import { navigate, useUrlState } from "../../data/url.js";
-import { useShell } from "../../shell/context.js";
 import { readLiterature, scopeIds } from "../../data/library.js";
 import {
-  analysisOperation,
   createTask,
   processingTask,
   type OperationContext,
 } from "../../data/operations.js";
+import { useApi } from "../../data/query.js";
+import { navigate, useUrlState } from "../../data/url.js";
 import { record } from "../../data/wire.js";
+import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
+import Snapshots from "../archive/Snapshots.js";
 import { boundedResponseBytes, extractionTransport } from "./delivery.js";
-import { maintain } from "./transport.js";
-import { SynthesisMaintenance } from "./SynthesisMaintenance.js";
 import "./maintenance.css";
+import { maintain } from "./transport.js";
 
 export default function Maintenance({
   deliveryOnly = false,
@@ -416,14 +411,11 @@ function Materials() {
       literature_id: string;
       asset_id: string;
       asset_sha256: string;
-      revision: number | null;
     } | null>(null),
     [status, setStatus] = useState(""),
     [purpose, setPurpose] = useState("overview"),
-    [question, setQuestion] = useState(""),
-    [long, setLong] = useState(false),
-    [updateDefault, setUpdateDefault] = useState(false),
-    [revision, setRevision] = useState("");
+    [question, setQuestion] = useState("");
+  const submission = useRef<{ draft: string; key: string } | null>(null);
   const [active, setActive] = useState<AbortController | null>(null),
     [result, setResult] = useState<unknown>(null);
   const lock = useRef(false);
@@ -530,23 +522,12 @@ function Materials() {
                 ),
                 asset = detail.primary_pdf?.asset;
               if (!asset) throw new Error("该文献没有已接纳的主 PDF");
-              const request = parseDocumentReadRequest("default", {
-                literature_id: literature.trim(),
-                asset_id: asset.asset_id,
-                asset_sha256: asset.sha256,
-              });
-              const current = parseDocumentReadResult(
-                "default",
-                (await api.query("document-default", request, signal)).result,
-                request,
-              );
               setMaterial({
                 literature_id: literature.trim(),
                 asset_id: asset.asset_id,
                 asset_sha256: asset.sha256,
-                revision: current.default?.revision ?? null,
               });
-              return "已选择当前 PDF 与默认文档版本。";
+              return "已选择当前 PDF。";
             })
           }
         >
@@ -556,7 +537,6 @@ function Materials() {
           <TechDetails>
             <p>PDF：{material.asset_id}</p>
             <p>SHA-256：{material.asset_sha256}</p>
-            <p>默认版本：{material.revision ?? "首次发布"}</p>
           </TechDetails>
         ) : null}
         <Select
@@ -565,19 +545,19 @@ function Materials() {
           onChange={setMode}
           isDisabled={!!active}
           options={[
-            { value: "reuse-current", label: "复用当前解析结果" },
+            { value: "reuse-current", label: "补齐解析（复用已有结果）" },
             { value: "reparse", label: "明确重解析" },
           ]}
         />
         <Button
           isDisabled={!!active || !material}
           confirm={{
-            title: mode === "reparse" ? "重新解析这个 PDF？" : "发布可读表示？",
+            title: mode === "reparse" ? "重新解析这个 PDF？" : "解析这个 PDF？",
             description:
               mode === "reparse"
                 ? "将调用已配置的解析服务，并保留已有解析版本。"
-                : "复用已有解析结果；缺少结果时按服务合同处理。",
-            confirmLabel: "发布可读表示",
+                : "复用已有成功结果，只调用解析服务补齐缺失模式。完成后可另行发起建档。",
+            confirmLabel: "解析 PDF",
           }}
           onPress={() =>
             run(async (signal) => {
@@ -587,8 +567,7 @@ function Materials() {
                 literature_id: material.literature_id,
                 asset_id: material.asset_id,
                 asset_sha256: material.asset_sha256,
-                mode,
-                expected_default_revision: material.revision,
+                force: mode === "reparse",
               });
               if (api.kind === "workspace") {
                 const id = await processingTask({ ...context, signal }, [
@@ -601,25 +580,29 @@ function Materials() {
                   .receipt,
               );
               if (
-                receipt.document.source_material_ref.literature_id !==
-                  request.literature_id ||
-                receipt.document.source_material_ref.asset_sha256 !==
-                  request.asset_sha256
+                receipt.literature_id !== request.literature_id ||
+                receipt.asset_sha256 !== request.asset_sha256
               )
                 throw new Error("解析回执与当前材料不匹配");
               setResult(receipt);
               context.onTasksChanged();
-              return receipt.default_updated
-                ? "解析表示已保存；默认版本已更新。"
-                : "解析表示已保存；默认版本未更新，请核对当前 revision。";
+              return receipt.profiles
+                .map(
+                  (p) =>
+                    `${p.profile}：${p.status === "failed" ? p.failure_code : p.status === "reused" ? "已复用" : "已保存"}`,
+                )
+                .join("；");
             })
           }
         >
-          发布可读表示
+          解析 PDF
         </Button>
       </Card>
       <Card title="DSH 单篇分析">
-        <p>使用左侧选定文献的已有解析材料。调用模型必须显式确认。</p>
+        <p>
+          使用所选文献的已建档校订稿。DSH
+          持续读取正文和图片；调用模型必须显式确认。
+        </p>
         <Select
           label="总结用途"
           value={purpose}
@@ -637,24 +620,6 @@ function Materials() {
           onChange={setQuestion}
           isDisabled={!!active || purpose !== "question"}
         />
-        <Checkbox isSelected={long} onChange={setLong} isDisabled={!!active}>
-          使用长文请求合同
-        </Checkbox>
-        <Checkbox
-          isSelected={updateDefault}
-          onChange={setUpdateDefault}
-          isDisabled={!!active}
-        >
-          更新默认总结视图
-        </Checkbox>
-        {updateDefault ? (
-          <TextField
-            label="预期默认总结 revision（首次留空）"
-            value={revision}
-            onChange={setRevision}
-            isDisabled={!!active}
-          />
-        ) : null}
         <Button
           isDisabled={!!active || !literature}
           confirm={{
@@ -665,71 +630,40 @@ function Materials() {
           }}
           onPress={() =>
             run(async (signal) => {
-              const operation = await analysisOperation(
-                { ...context, signal },
+              const draft = JSON.stringify([
                 literature.trim(),
                 purpose,
                 purpose === "question" ? question : null,
-                long,
-              );
-              if (
-                operation.operation !== "analyze" &&
-                operation.operation !== "analyze-long"
-              )
-                throw new Error("分析请求无效");
-              const value = {
-                ...operation.request,
-                default_update: updateDefault
-                  ? {
-                      expected_revision: revision.trim()
-                        ? Number(revision)
-                        : null,
-                    }
-                  : null,
-              };
-              const request =
-                operation.operation === "analyze-long"
-                  ? await parseKnowledgeLongAnalysisRequest(value)
-                  : await parseKnowledgeAnalysisRequest(value);
-              if (api.kind === "workspace") {
-                const id = await processingTask({ ...context, signal }, [
-                  request.schema_version === 2
-                    ? { operation: "analyze-long", request }
-                    : { operation: "analyze", request },
-                ]);
-                return `任务已提交：${id}`;
-              }
-              const receipt = await parseKnowledgeAnalysisReceipt(
-                (
-                  await maintain(
-                    api,
-                    long ? "analyze-knowledge-long" : "analyze-knowledge",
-                    request,
-                    signal,
-                  )
-                ).result,
-                request,
+              ]);
+              if (submission.current?.draft !== draft)
+                submission.current = { draft, key: randomId() };
+              const receipt = await api.submitProcessor(
+                {
+                  schema_version: 1,
+                  idempotency_key: submission.current.key,
+                  name: "文献总结",
+                  processor: { id: "summary", version: "2" },
+                  spec: {
+                    purpose,
+                    question: purpose === "question" ? question : null,
+                  },
+                  inputs: [
+                    { kind: "literature", literature_id: literature.trim() },
+                  ],
+                },
+                true,
+                signal,
               );
               setResult(receipt);
               context.onTasksChanged();
-              const defaultStatus =
-                receipt.default_update_outcome === "updated"
-                  ? `默认视图 revision ${receipt.default_revision}`
-                  : receipt.default_update_outcome === "conflict"
-                    ? `默认视图 CAS 冲突（当前 revision ${receipt.default_revision ?? "无"}）`
-                    : receipt.default_update_outcome === "cancelled"
-                      ? "默认视图更新已取消"
-                      : receipt.default_update_outcome === "failed"
-                        ? `默认视图更新失败（${receipt.default_update_failure}）`
-                        : "未请求更新默认视图";
-              return `DSH 分析结果已保存，可在文献阅读页核对。${receipt.published ? "已生成" : "已存在"}；${defaultStatus}`;
+              return "总结任务已提交，使用已建档校订稿，进度可在任务页查看。";
             })
           }
         >
           启动单篇分析
         </Button>
       </Card>
-      <SynthesisMaintenance />
+      <Snapshots />
       <div className="maintenance-output">
         <p role="status">{status}</p>
         {active ? (
@@ -764,12 +698,7 @@ function Indexes() {
     <div className="maintenance-grid">
       <Card title="检索索引">
         <p>只重建已保存材料的检索投影，不下载 PDF、解析材料或调用模型。</p>
-        {(
-          [
-            ["rebuild-index", "重建材料索引"],
-            ["rebuild-knowledge-index", "重建知识索引"],
-          ] as const
-        ).map(([path, label]) => (
+        {([["rebuild-index", "重建材料索引"]] as const).map(([path, label]) => (
           <Button
             key={path}
             confirm={{

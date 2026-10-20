@@ -218,13 +218,13 @@ it.runIf(Boolean(process.env.SCIRETRIEVER_CLOAK_BUNDLE))(
           `[providers.fixture]\napi = "openai-chat-completions"\nbase_url = "http://127.0.0.1:${modelPort}/v1"\n[models."fixture/browser"]\nimage = true\nstream = false\n[browser]\nenabled = true\nmodel = "fixture/browser"\nprofile = "dsh-fixture"\n[sources.acquisition]\nmode = "custom"\nproviders = []\n`,
         { mode: 0o600 },
       );
-      seed = await createApplication(home, {
-        executionSchema: "upgrade-synthetic",
-      });
+      seed = await createApplication(home, {});
       for (const [index, paper] of papers.entries()) {
         await seed.database.putLiterature(paper.literature);
         await seed.observations.publish({
           ...parseMetadataObservation({
+            source_type: null,
+            source_type_mapping_version: null,
             observation_id: `20000000-0000-0000-0000-00000000870${index}`,
             provenance: {
               provenance_id: `30000000-0000-0000-0000-00000000870${index}`,

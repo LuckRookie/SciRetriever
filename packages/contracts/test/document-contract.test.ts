@@ -14,7 +14,6 @@ const literatureId = "00000000-0000-0000-0000-000000000951";
 const assetId = "00000000-0000-0000-0000-000000000953";
 const documentId = "00000000-0000-0000-0000-000000000956";
 const versionId = "00000000-0000-0000-0000-000000000957";
-const provenanceId = "00000000-0000-0000-0000-000000000954";
 const hash = (digit: string) => digit.repeat(64);
 const artifact = (digit: string, media_type: string) => ({
   sha256: hash(digit),
@@ -231,9 +230,10 @@ const material = {
   artifact: artifact("a", "application/pdf"),
 };
 const representation = {
+  proofread_id: "00000000-0000-0000-0000-000000000951",
   source_material_ref: material,
-  parser_result_sha256: hash("b"),
-  builder_version: "builder/1",
+  proofread_content_sha256: hash("b"),
+  builder_version: "proofread-blocks-v1",
   locator_scheme: "utf8-segment-v1",
   markdown: artifact("c", "text/markdown"),
   structure: artifact("d", "application/json"),
@@ -259,38 +259,75 @@ describe("Document and Evidence boundary parsers", () => {
       literature_id: literatureId,
       asset_id: assetId,
       asset_sha256: hash("a"),
-      mode: "reuse-current",
-      expected_default_revision: null,
+      profiles: ["pipeline", "vlm-engine"],
+      force: false,
     };
     const request = parseDocumentRequest(mutable);
-    mutable.mode = "reparse";
-    expect(request.mode).toBe("reuse-current");
-    expect(Object.isFrozen(request)).toBe(true);
-    expect(() => parseDocumentRequest({ ...mutable, extra: true })).toThrow();
-    const document = parseDocumentRef({
-      schema_version: 1,
-      document_id: documentId,
-      document_version_id: versionId,
-      representation_sha256: hash("1"),
-      parser_provenance_id: provenanceId,
-      ...representation,
+    mutable.profiles.pop();
+    mutable.force = true;
+    expect(request.profiles).toEqual(["pipeline", "vlm-engine"]);
+    expect(request.force).toBe(false);
+    expect(Object.isFrozen(request.profiles)).toBe(true);
+    expect(
+      parseDocumentRequest({
+        literature_id: literatureId,
+        asset_id: assetId,
+        asset_sha256: hash("a"),
+      }),
+    ).toEqual({
+      literature_id: literatureId,
+      asset_id: assetId,
+      asset_sha256: hash("a"),
+      force: false,
     });
-    const receipt = {
-      document,
-      parser_result_sha256: hash("b"),
-      parser_provenance_id: provenanceId,
-      parser_mode: "reuse-current",
-      published: false,
-      default_updated: true,
-      default_revision: 1,
+    expect(() =>
+      parseDocumentRequest({ ...mutable, mode: "reuse-current" }),
+    ).toThrow();
+    expect(() =>
+      parseDocumentRequest({ ...mutable, profiles: ["pipeline", "pipeline"] }),
+    ).toThrow();
+    const outcome = {
+      profile: "pipeline",
+      status: "published",
+      raw_parse_id: versionId,
+      result_sha256: hash("b"),
+      failure_code: null,
+      failure_source_type: null,
     };
-    expect(parseDocumentReceipt(receipt).document).toEqual(document);
+    const receipt = {
+      literature_id: literatureId,
+      asset_id: assetId,
+      asset_sha256: hash("a"),
+      profiles: [outcome],
+    };
+    expect(parseDocumentReceipt(receipt).profiles).toEqual([outcome]);
+    expect(() => parseDocumentReceipt({ ...receipt, document: {} })).toThrow();
     expect(() =>
-      parseDocumentReceipt({ ...receipt, parser_provenance_id: assetId }),
+      parseDocumentReceipt({
+        ...receipt,
+        profiles: [{ ...outcome, raw_parse_id: null }],
+      }),
     ).toThrow();
     expect(() =>
-      parseDocumentReceipt({ ...receipt, default_revision: null }),
+      parseDocumentReceipt({
+        ...receipt,
+        profiles: [{ ...outcome, status: "failed" }],
+      }),
     ).toThrow();
+    expect(
+      parseDocumentReceipt({
+        ...receipt,
+        profiles: [
+          {
+            ...outcome,
+            status: "failed",
+            raw_parse_id: null,
+            result_sha256: null,
+            failure_code: "parser-unavailable",
+          },
+        ],
+      }).profiles[0]?.status,
+    ).toBe("failed");
   });
   it("normalizes resource order and rejects open or inconsistent representation fields", () => {
     const parsed = parseDocumentRepresentationInput(representation);
@@ -335,11 +372,10 @@ describe("Document and Evidence boundary parsers", () => {
 
   it("rejects invalid IDs and parses both closed evidence variants", () => {
     const document = {
-      schema_version: 1,
+      schema_version: 2,
       document_id: documentId,
       document_version_id: versionId,
       representation_sha256: hash("1"),
-      parser_provenance_id: provenanceId,
       ...representation,
     };
     expect(parseDocumentRef(document).document_version_id).toBe(versionId);

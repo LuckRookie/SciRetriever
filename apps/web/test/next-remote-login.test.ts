@@ -1,3 +1,4 @@
+import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
 import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -151,6 +152,7 @@ describe("IP-address HTTP login and workspace", () => {
         "text",
       );
       await page.locator("#login-submit").click();
+      await showAllLibraryStatuses(page);
       await page.locator(".paper-row").waitFor();
       expect(new URL(page.url()).searchParams.get("view")).toBe("lib");
       expect(await page.evaluate(() => document.cookie)).not.toContain(

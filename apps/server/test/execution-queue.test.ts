@@ -10,7 +10,7 @@ import { SqliteWorker } from "../src/storage/sqlite/worker.js";
 
 async function setup() {
   const database = new SqliteWorker();
-  await database.upgradeExecutionSchema();
+
   const repository = new ExecutionRepository(database);
   const queue = new ExecutionQueue(repository);
   const job = await repository.createJob({
@@ -389,7 +389,7 @@ describe("execution queue recovery semantics", () => {
 
   it("creates the job and every frozen target atomically and permits a clean idempotent retry", async () => {
     const database = new SqliteWorker();
-    await database.upgradeExecutionSchema();
+
     const repository = new ExecutionRepository(database);
     const jobInput = {
       job_id: "job-atomic-create",

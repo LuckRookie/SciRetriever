@@ -857,7 +857,7 @@ credential 和原始异常不会显示。
 证据也不能解释成生产在线服务当前成功。
 
 需要验证真实产品能力时使用正式命令：Search 走 `discover topic`，PDF 获取走 `complete pdf`，
-Parse 与 Analyze 的真实内容链路走 `complete content`。这些命令会按正常合同创建或更新业务事实，
+Parse 使用 `document parse`（已有 PDF）或 `complete parser`（允许先获取 PDF），分析通过 `jobs submit --request FILE` 单独提交加工任务。补全不再触发分析或建档。这些命令会按正常合同创建或更新业务事实，
 与不持久化的配置 Probe 不是同一类操作。
 
 ## 6. 能力、启用与 readiness
@@ -946,3 +946,19 @@ enabled = false
 `api_key`。
 两类 key 都不能写进普通配置。启用 CORE 只注册
 授权 API Source，不保证任意文献都有 CORE `work:`/`output:` 身份或具体下载 entitlement。
+
+## 校订与用时核对
+
+`[proofread]` 配置单一解析初稿的 DSH 看图矫正，以及算子输出值的视觉核对。`model` 未设置时使用 `analyze.model`，必须具有结构化输出、图片及工具能力；未配置矫正模型时版本保持 incomplete，未配置用时核对模型时对应值标为 uncertain。
+
+```toml
+[proofread]
+# model = "provider/vision-model"
+max_calls_per_document = 64
+```
+
+调用上限按一份 PDF 部分的一次校订执行计算，合法范围为 1–10000。相同初稿、疑点、截图、模型配置及方法的缓存不再次调用模型；调整上限后可重试未完成版本。这个默认上限是执行保护，不是质量阈值，也不承诺整库的调用成本。总调用与 token 以运行记录为准，传输失败的未知用量不能算作已知的零用量。
+
+截图复用安装包内的 PDF.js 和受控浏览器；未安装可验证的浏览器运行时会报告截图不可用。截图使用隔离上下文，不复用用户 Cookie，不允许页面发起外部请求。
+
+部署解析配置 `[parsing].archive_profile` 取 `pipeline` 或 `vlm-engine`，默认 `vlm-engine`。解析默认只运行这一种；显式 profiles 可查看另一种，但不参与校订。Web 建档设置只读显示部署 profile。`[proofread].value_check_model` 未设置时沿用校订模型，再沿用分析模型；`max_value_check_calls` 是每个算子结果的视觉核对调用上限，默认 64，独立于单篇校订预算。

@@ -8,7 +8,7 @@
 
 PDF 页码输入保留尚未提交的编辑值，滚动通知不回写覆盖；确认页码后更新实际位置，切换文献继续按各自固定材料恢复。
 
-[上级源码目录](../README.md) · [Web 设计](../../../../docs/architecture/web/README.md)
+[上级源码目录](../README.md)
 
 React 阅读入口通过 `contract.ts` 的 `ReadingContext` / `ReaderFrame` 接入；`source.ts` 是固定来源 URL 与身份解析。`dom.ts` 提供引擎内部的安全 DOM 控件。旧 DOM 入口 `entry.ts` / `frame.ts` 已删除，正式阅读引擎由 Vite 按需 chunk 装载。框架卸载后不再读取已脱离布局的滚动几何，避免把有效页码覆盖成末页。
 

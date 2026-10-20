@@ -97,7 +97,6 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
     try {
       const connection = await proxy.start();
       seed = await createApplication(home, {
-        executionSchema: "upgrade-synthetic",
         browserHost: () => null,
       });
       for (const [index, literature] of [
@@ -107,6 +106,8 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         await seed.database.putLiterature(literature);
         await seed.observations.publish({
           ...parseMetadataObservation({
+            source_type: null,
+            source_type_mapping_version: null,
             observation_id: `00000000-0000-0000-0000-00000000020${index * 2 + 1}`,
             provenance: {
               provenance_id: `00000000-0000-0000-0000-00000000020${index * 2 + 2}`,

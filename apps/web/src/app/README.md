@@ -4,4 +4,4 @@
 
 生产路径只消费真实 API；实验台与测试使用明确的合成材料。不更改 API、CSP 或 catalog。
 
-[源码目录](../README.md) · [实施计划](../../../../docs/archive/2026-10-19-web-experience/README.md)
+[源码目录](../README.md)

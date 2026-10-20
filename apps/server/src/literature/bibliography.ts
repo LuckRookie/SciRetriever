@@ -79,7 +79,7 @@ export function exportBibliography(
       .map(([key, value]) => `  ${key} = {${bibValue(value)}},`)
       .join("\n");
     return new TextEncoder().encode(
-      `@article{${citationKey(detail)},\n${body}\n}\n`,
+      `@${metadata.publication_form ? ({ "journal-article": "article", "conference-paper": "inproceedings", "book-or-chapter": "book", thesis: "phdthesis", patent: "misc", "report-or-standard": "techreport", dataset: "misc" } as const)[metadata.publication_form] : "misc"}{${citationKey(detail)},\n${body}\n}\n`,
     );
   }
   if (format === "csl-json") {
@@ -99,7 +99,19 @@ export function exportBibliography(
     });
     const value = {
       id: detail.literature.literature_id,
-      type: metadata.document_type ?? "article-journal",
+      type: metadata.publication_form
+        ? (
+            {
+              "journal-article": "article-journal",
+              "conference-paper": "paper-conference",
+              "book-or-chapter": "book",
+              thesis: "thesis",
+              patent: "patent",
+              "report-or-standard": "report",
+              dataset: "dataset",
+            } as const
+          )[metadata.publication_form]
+        : "article",
       ...(metadata.title ? { title: metadata.title } : {}),
       ...(primaryAuthor.length ? { author: primaryAuthor } : {}),
       ...(metadata.publication_year !== null
@@ -119,7 +131,20 @@ export function exportBibliography(
     return new TextEncoder().encode(`${JSON.stringify(value, null, 2)}\n`);
   }
   if (format !== "ris") throw new Error("unsupported bibliography format");
-  const lines = ["TY  - JOUR"];
+  const risType = metadata.publication_form
+    ? (
+        {
+          "journal-article": "JOUR",
+          "conference-paper": "CPAPER",
+          "book-or-chapter": "BOOK",
+          thesis: "THES",
+          patent: "PAT",
+          "report-or-standard": "RPRT",
+          dataset: "DATA",
+        } as const
+      )[metadata.publication_form]
+    : "GEN";
+  const lines = [`TY  - ${risType}`];
   const add = (tag: string, value: string | null | undefined) => {
     if (value && oneLine(value)) lines.push(`${tag}  - ${oneLine(value)}`);
   };

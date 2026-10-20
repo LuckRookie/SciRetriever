@@ -6,15 +6,9 @@ import {
   parseAsset,
   parseArtifactRef,
   parseProvenance,
-  parseLiteratureContentProposal,
-  contentCanonicalJsonBytes,
-  literatureContentSha256,
-  analysisInputSha256,
   sha256,
-  type LiteratureSection,
-  type LiteratureDetail,
 } from "@sciretriever/contracts";
-import { createApplication } from "../src/bootstrap/application.js";
+import { createParserFixtureApplication as createApplication } from "./parser-application-fixture.js";
 import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
 import {
   FIXTURE_LITERATURE,
@@ -30,10 +24,9 @@ export function artifact(bytes: Uint8Array, media_type = "text/markdown") {
     media_type,
   });
 }
-export async function setup(execution = false) {
+export async function setup() {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-content-"));
   const app = await createApplication(home, {
-    ...(execution ? { executionSchema: "upgrade-synthetic" as const } : {}),
     parsing: {
       rules: new TypeScriptParserArtifactRules(),
       parser: {
@@ -92,9 +85,13 @@ export async function setup(execution = false) {
       parameters_sha256: null,
     },
   });
-  await app.parsing!.commitCurrentPrimary(
-    await app.parsing!.prepareCurrentPrimary(lit),
-  );
+  await app.documentProcessing.parseDocuments({
+    literature_id: lit,
+    asset_id: asset.asset_id,
+    asset_sha256: asset.sha256,
+    profiles: ["pipeline", "vlm-engine"],
+    force: false,
+  });
   return {
     home,
     app,
@@ -103,58 +100,4 @@ export async function setup(execution = false) {
       await rm(home, { recursive: true, force: true });
     },
   };
-}
-export async function proposal(
-  detail: LiteratureDetail,
-  n = 40,
-  body = "Cafe\u0301 spectroscopy",
-  keywords = ["spectroscopy"],
-) {
-  const metadata = { ...detail.literature.metadata, keywords };
-  const metadata_sha256 = await sha256(contentCanonicalJsonBytes(metadata));
-  const sections: LiteratureSection[] = [
-    {
-      role: "background-and-objectives",
-      title: null,
-      markdown: body,
-      subsections: [],
-    },
-    ...(["methods", "data", "conclusions-and-limitations"] as const).map(
-      (role) => ({ role, title: null, markdown: "未提供", subsections: [] }),
-    ),
-  ];
-  const bytes = Buffer.from(`# Canonical fixture\n\n${body}\n`);
-  const primary = detail.primary_pdf!.asset;
-  const value = await parseLiteratureContentProposal({
-    literature_id: detail.literature.literature_id,
-    primary_asset_id: primary.asset_id,
-    primary_pdf_sha256: primary.sha256,
-    parser_result_sha256: detail.parser_result!.result_sha256,
-    input_metadata_revision: detail.metadata_revision,
-    input_metadata_sha256: detail.metadata_sha256,
-    final_metadata: metadata,
-    metadata_sha256,
-    sections,
-    references: ["Fixture reference"],
-    literature_content_sha256: await literatureContentSha256({
-      metadata_sha256,
-      sections,
-      references: ["Fixture reference"],
-    }),
-    markdown: artifact(bytes),
-    provenance: {
-      provenance_id: id(n),
-      source_kind: "analysis",
-      source_name: "fixture-analysis",
-      source_record_id: null,
-      observed_at: "2026-09-10T00:00:00Z",
-      input_sha256: await analysisInputSha256(
-        primary.sha256,
-        detail.parser_result!.result_sha256,
-        metadata_sha256,
-      ),
-      parameters_sha256: "b".repeat(64),
-    },
-  });
-  return { value, bytes };
 }

@@ -171,7 +171,7 @@ sciretriever discover topic
 sciretriever discover citations
 
 sciretriever complete pdf
-sciretriever complete content
+sciretriever complete parser
 
 sciretriever literature search
 sciretriever literature show
@@ -190,16 +190,14 @@ sciretriever config status
 sciretriever config test ...
 ```
 
-显式 `sciretriever document parse --literature-id ID --asset-id ID --asset-sha256 SHA256 --mode reuse-current|reparse` 将已接纳的主 PDF 发布为固定版本的可读表示。此命令要求已显式迁移的 v3 Catalog；复用模式不调用 Parser，重解析模式使用当前配置的 ParserBackend。默认关系切换需要可选 `--expected-default-revision`，回执分别报告版本发布与 CAS 结果。只读 TS/HTTP 和文献库页面现可按固定版本有界阅读目录、片段和资源，并复核原始文件或文档片段证据；原始 PDF 文件证据也支持旧 v1/v2 Catalog。用法与能力缺口见[解析与发布文档版本](docs/guides/document-processing.md)和[独立文献库阅读](docs/guides/library-query.md)。
+显式 `sciretriever document parse --literature-id ID --asset-id ID --asset-sha256 SHA256` 运行两种原始解析，逐 profile 返回结果与失败；默认复用匹配的成功结果，`--force` 明确重解析。解析不生成默认全文。`proofread build/inspect/decide/revoke` 已提供确定性校订与人工锁定，可显式将完整校订版本发布为默认全文，读取页码区域证据与区块对照；已接入独立结构注释、章节角色、图表/引用文本和人工角色锁定；完整建档与新版 Web 接入仍在实施。见[解析与校订](docs/guides/document-processing.md)。
 
 当前实现还额外提供以下**内部/operator 入口**，它们不属于上述六个一级名称的目标合同，也没有
 进入目标命令树（`apps/server/src/cli/main.ts` 的解析与直接测试覆盖其参数校验）：
 
 ```text
-sciretriever storage inspect|migrate|backup|restore-check
+sciretriever storage inspect|backup|restore-check
 sciretriever storage schema-inspect|schema-init --catalog PATH
-sciretriever storage schema-upgrade --catalog PATH [--dry-run | --backup PATH]
-sciretriever storage document-inspect|document-migrate --catalog PATH
 sciretriever doctor
 sciretriever jobs create|run
 ```
@@ -207,9 +205,7 @@ sciretriever jobs create|run
 `jobs create/run` 是当前 durable-job 调试/实验入口（`application/jobs` 之上），其目标合同归属
 （纳入或移出六个一级名称）仍待 owner 决定，见
 [迁移计划 T047/T048](docs/archive/2026-09-07-typescript-browser-workbench/full-migration-roadmap.md)；
-正式 `storage schema-init` 在精确不存在目标创建 v10，`schema-upgrade` 在精确 v1–v9 目标和同目录未存在备份上显式升级；inspect/dry-run 只读，普通启动不升级。整链持业务写锁，每步独立事务，失败报告实际中间版本并保留原始备份；操作前先停写，恢复须保全资产和切换后增量，见[初始化、升级与恢复](docs/guides/upgrade.md)。工具能力不授权代理执行真实数据迁移。
-历史 `storage migrate` 仍只允许对合成副本执行。
-文档 Catalog v3 的独立合成迁移入口见[文档 Catalog 迁移指南](docs/guides/document-catalog-migration.md)。
+正式 `storage schema-init` 在不存在的精确目标创建唯一当前结构；`schema-inspect` 只读检查当前结构和完整性。生产程序只支持这一份 schema，不再保留逐级升级、历史 schema 或隐式迁移路径。已有旧库的转换先备份、在副本处理并核对，最后停写切换；原始资产保持不可变。见[数据库初始化与恢复](docs/guides/upgrade.md)。
 
 每个叶命令都支持 `--json`。稳定主结果写入 stdout；日志、进度和脱敏诊断写入 stderr。日志有两个运行模式：
 
@@ -257,7 +253,7 @@ Debug 图片不写入仓库、Catalog 或普通日志。需要复核时，从 `c
 |   `70` | 操作系统或系统级 I/O 失败                                                                                 |
 |  `130` | 受控中断                                                                                                  |
 
-**当前实际输出：** `complete pdf|content --json` 返回统一的 `DatabaseCompletionReport`，包含
+**当前实际输出：** `complete pdf|parser --json` 返回统一的 `DatabaseCompletionReport`，包含
 `completed`、`failed`、`skipped`、`notStarted`、`interrupted` 五个互斥分区和 `end`。
 `end.kind` 为 `finished`、`interrupted` 或带稳定 failure 的 `failed`。CLI 不自行维护目标循环：
 Application 构造的 `DatabaseCompletionService` 服务 CLI；durable Jobs 复用同一个
@@ -283,10 +279,10 @@ Application 构造的 `DatabaseCompletionService` 服务 CLI；durable Jobs 复�
 
 ```text
 sciretriever complete pdf ...
-sciretriever complete content ...
+sciretriever complete parser ...
 ```
 
-`pdf` 的目标是达到 `ASSET_READY`，`content` 的目标是达到 `CONTENT_READY`。每次运行必须通过以下一种 selector 明确选择范围：
+`pdf` 的目标是达到 `ASSET_READY`，`parser` 的目标是达到 `PARSER_RESULT_READY`：主 PDF 的两种 profile 都有当前原始解析。显式 `complete parser` 可以先获取缺少的 PDF，再解析；它不建档、不总结，也不发布默认阅读文档。旧 `complete content` 已删除。每次运行必须通过以下一种 selector 明确选择范围：
 
 - `--all-pending`
 - `--discovery-run-id`
@@ -295,7 +291,7 @@ sciretriever complete content ...
 - 一个或多个 `--meta-literature-id`
 - 一个或多个 `--literature-id`
 
-实际目标集合在当前维护操作或 durable Job 中冻结；重跑会重新读取 current facts，从第一个缺失步骤继续。普通范围按 MetaLiterature 去重，并默认只补一个可用 Literature 版本；仅明确的自动 PDF 正常耗尽可支持跨版本尝试。`NoUsableContent`、网络、存储、Parser、LLM 失败，取消或无法判断的结果都不触发跨版本，已接纳材料不会因分析失败被撤销。
+实际目标集合在当前维护操作或 durable Job 中冻结；重跑会重新读取 current facts，从第一个缺失步骤继续。普通范围按 MetaLiterature 去重，并默认只补一个可用 Literature 版本；仅明确的自动 PDF 正常耗尽可支持跨版本尝试。网络、存储、Parser 失败，取消或无法判断的结果都不触发跨版本，已接纳 PDF 和已成功的 profile 会保留。重试复用成功的解析结果。
 
 ## 本地导入、查询与导出
 
@@ -359,9 +355,9 @@ download
 
 | 能力               | 在裸 `config` 中的配置路径                                                                    | 显式验证                                                                                                                                | 本地 ready 还要求                                                                                                                        |
 | ------------------ | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| 文献分析与总结     | `Models → Add` 配置 Model；`Models → Providers` 管理 Provider/Key；`Analyze → Setup` 选择模型 | `config test analyze` 执行一次有界 Model probe；真实内容仍走 `complete content`                                                         | 所选 Model、其 Model Provider 与 exact-origin credential 完整；strict structured output 由模块派生                                       |
+| 文献分析与总结     | `Models → Add` 配置 Model；`Models → Providers` 管理 Provider/Key；`Analyze → Setup` 选择模型 | `config test analyze` 执行一次有界 Model probe；单篇分析通过 `jobs submit --request FILE` 单独提交加工任务                                                         | 所选 Model、其 Model Provider 与 exact-origin credential 完整；strict structured output 由模块派生                                       |
 | Browser Agent 下载 | `Models → Add` 配置 `image = true` 的 Model；`Browser → Setup` 选择模型和 Profile             | Browser Model probe 可执行；Browser Site 需要显式 site adapter/seam；生产 `complete pdf` 仍受 verified runtime/admission 与真实环境约束 | 所选 image Model、其 Provider/Key、Agent controller、Browser identity Profile、CloakBrowser/Playwright/binary 与 headed display 全部就绪 |
-| MinerU 解析        | `Parse → Setup`                                                                               | `config test parse` 使用有界 MinerU health probe；真实 PDF 解析仍走 `complete content`                                                  | endpoint、部署身份，以及 remote 模式的上传授权与 origin-bound token                                                                      |
+| MinerU 解析        | `Parse → Setup`                                                                               | `config test parse` 使用有界 MinerU health probe；PDF 解析使用 `document parse` 或 `complete parser`                                                  | endpoint、部署身份，以及 remote 模式的上传授权与 origin-bound token                                                                      |
 
 模型目录结果只是 Provider 当次报告的 setup observation，不会持久化，也不会替代 probe。目录只
 采信安全的模型 ID；`image` 由用户根据模型文档确认，strict output、tool、媒体格式和调用限制由

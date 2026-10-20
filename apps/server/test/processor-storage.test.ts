@@ -5,26 +5,24 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { runCli } from "../src/cli/main.js";
 import { describe, it, expect, vi } from "vitest";
-import { coreProcessingFixture } from "./core-processing-fixture.js";
+import { processorFixture as coreProcessingFixture } from "./processor-fixture.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
 import { queryProcessors } from "../src/entry/processor-operations.js";
 describe("durable processor batches", () => {
   it("publishes legacy references, immutable member collections and searchable content through the production graph", async () => {
     const env = await coreProcessingFixture();
     try {
-      const parsed = await env.app.documentProcessing.parseDocuments(
-        env.parseRequest,
-      );
+      await env.build(env.parseRequest);
       const request = {
         schema_version: 1,
         idempotency_key: "processor-first",
         name: "fixture collection",
-        processor: { id: "knowledge-overview", version: "1" },
+        processor: { id: "summary", version: "2" },
         spec: {},
         inputs: [
           {
-            kind: "document",
-            document_version_id: parsed.document.document_version_id,
+            kind: "literature",
+            literature_id: env.parseRequest.literature_id,
           },
         ],
       };
@@ -46,7 +44,7 @@ describe("durable processor batches", () => {
       expect(collection!.members).toHaveLength(1);
       const member = collection!.members[0]!.result!;
       const result = await env.app.processorRead!.byId(member.result_id);
-      expect(result!.result.content.kind).toBe("knowledge");
+      expect(result!.result.content.kind).toBe("report");
       const calls = env.modelCalls;
       const reused = await env.app.processors!.runBatch({
         ...request,
@@ -88,9 +86,7 @@ describe("durable processor batches", () => {
     let host: ReturnType<typeof createMcpServer> | undefined;
     let client: Client | undefined;
     try {
-      const parsed = await env.app.documentProcessing.parseDocuments(
-        env.parseRequest,
-      );
+      await env.build(env.parseRequest);
       env.setModel((input) => ({
         answer: true,
         source_ids: [input.segments![0]!.segment_id],
@@ -100,12 +96,12 @@ describe("durable processor batches", () => {
         schema_version: 1,
         idempotency_key: "cli-processor",
         name: "interface batch",
-        processor: { id: "labels", version: "1" },
+        processor: { id: "labels", version: "2" },
         spec: { question: "a finding", answer_type: "boolean" },
         inputs: [
           {
-            kind: "document",
-            document_version_id: parsed.document.document_version_id,
+            kind: "literature",
+            literature_id: env.parseRequest.literature_id,
           },
         ],
       };
@@ -165,91 +161,36 @@ describe("durable processor batches", () => {
       await env.close();
     }
   }, 30000);
-  it.each([
-    ["knowledge-overview", {}, "overview"],
-    ["knowledge-detailed", {}, "detailed"],
-    ["knowledge-question", { question: "What was measured?" }, "question"],
-    ["knowledge-long", { purpose: "overview" }, "overview"],
-  ] as const)(
-    "keeps the legacy owner and readable evidence for %s",
-    async (id, spec, purpose) => {
+  it.each(["overview", "detailed", "question"] as const)(
+    "publishes summary %s with readable evidence",
+    async (purpose) => {
       const env = await coreProcessingFixture();
       try {
-        const doc = await env.app.documentProcessing.parseDocuments(
-          env.parseRequest,
-        );
-        if (id === "knowledge-long")
-          env.setModel((input) => {
-            if (Array.isArray(input.core))
-              return {
-                outcome: "completed",
-                title: "Long fixture",
-                statements: [
-                  {
-                    statement_id: "s1",
-                    category: "finding",
-                    epistemic: "reported",
-                    text: "A synthetic finding.",
-                    conditions: [],
-                    quantity: null,
-                    evidence_segment_ids: [
-                      (input.core as { segment_id: string }[])[0]!.segment_id,
-                    ],
-                  },
-                ],
-              };
-            const candidates = input.candidates as {
-              id: string;
-              category: string;
-              epistemic: string;
-              text: string;
-              conditions: string[];
-              quantity: unknown;
-            }[];
-            return {
-              outcome: "completed",
-              title: "Merged fixture",
-              statements: candidates.map((c, i) => ({
-                statement_id: `s${i}`,
-                category: c.category,
-                epistemic: c.epistemic,
-                text: c.text,
-                conditions: c.conditions,
-                quantity: c.quantity,
-                source_ids: [c.id],
-              })),
-            };
-          });
+        await env.build(env.parseRequest);
         const state = await env.app.processors!.runBatch({
           schema_version: 1,
-          idempotency_key: id,
-          name: id,
-          processor: { id, version: "1" },
-          spec,
+          idempotency_key: purpose,
+          name: purpose,
+          processor: { id: "summary", version: "2" },
+          spec: {
+            purpose,
+            question: purpose === "question" ? "What was measured?" : null,
+          },
           inputs: [
             {
-              kind: "document",
-              document_version_id: doc.document.document_version_id,
+              kind: "literature",
+              literature_id: env.parseRequest.literature_id,
             },
           ],
         });
-        expect(state.failures, JSON.stringify(state.failures)).toEqual([]);
+        expect(state.failures).toEqual([]);
         const ref = (
           state.results[0] as {
             result: { result_id: string; content_sha256: string };
           }
         ).result;
         const saved = await env.app.processorRead!.byId(ref.result_id);
-        expect(saved!.result.content.kind).toBe("knowledge");
-        if (saved!.result.content.kind !== "knowledge")
-          throw new Error("expected legacy reference");
-        const source = await env.app.synthesisRead!.sourceById(
-          saved!.result.content.artifact_id,
-        );
-        expect(source!.artifact.purpose).toBe(purpose);
-        expect(source!.artifact.content_ref.sha256).toBe(
-          saved!.result.content.content_sha256,
-        );
+        expect(saved!.result.content.kind).toBe("report");
         const records = await env.app.processorRead!.records({
           kind: "result",
           input_id: "r",
@@ -268,6 +209,5 @@ describe("durable processor batches", () => {
         await env.close();
       }
     },
-    30000,
   );
 });

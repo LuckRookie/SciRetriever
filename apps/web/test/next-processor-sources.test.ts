@@ -32,7 +32,6 @@ it("shows verified record sources separately from whole-result inputs and filter
     w.env.app.database,
     w.env.app.files,
     w.env.app.documentRead,
-    w.env.app.synthesisRead!,
   );
   try {
     await w.env.app.maintenance!.ingestPdf({
@@ -52,14 +51,22 @@ it("shows verified record sources separately from whole-result inputs and filter
     }
     const invocation = parseProcessorInvocation({
       schema_version: 1,
-      processor: { id: "synthetic-sources", version: "1" },
+      processor: { id: "external-extraction", version: "2" },
       spec: {},
       inputs: evidence.map((ev, i) => ({
-        kind: "material",
+        kind: "external",
         input_id: `source-${i}`,
+        literature_id: ev.material.literature_id,
         material: ev.material,
+        document: null,
       })),
-      execution: { method_sha256: "a".repeat(64), model: null },
+      execution: {
+        method_sha256: "a".repeat(64),
+        model: null,
+        reads: { parts: "main", roles: "all" },
+        uses_description: false,
+        map: null,
+      },
     });
     const saved = await store.publish(
       await parseProcessorResult({
@@ -119,6 +126,7 @@ it("shows verified record sources separately from whole-result inputs and filter
         coverage: invocation.inputs.map((input) => ({
           input_id: input.input_id,
           status: "partial",
+          parts: [],
           read_segments: [],
           gaps: ["synthetic-material-only"],
         })),

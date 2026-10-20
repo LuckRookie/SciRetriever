@@ -71,7 +71,9 @@ it.each(["no-preference", "reduce"] as const)(
     const w = await nextWorkspace();
     try {
       await w.page.emulateMedia({ reducedMotion });
-      const filter = w.page.getByRole("button", { name: /^筛选(?: · 收起)?$/ });
+      const filter = w.page.getByRole("button", {
+        name: /^筛选(?: · \d+)?(?: · 收起)?$/,
+      });
       await filter.click();
       await w.page
         .getByRole("textbox", { name: "年份起", exact: true })
@@ -138,7 +140,7 @@ it.each(["no-preference", "reduce"] as const)(
       // is not a calibrated benchmark; HARNESS does not add a timing gate here.
       expect(filters.feedback.length).toBe(20);
       expect(panels.feedback.length).toBe(20);
-      expect(w.env.parseCalls).toBe(1);
+      expect(w.env.parseCalls).toBe(w.setupCalls.parser);
       expect(w.env.modelCalls).toBe(0);
       expect(w.errors).toEqual([]);
     } finally {

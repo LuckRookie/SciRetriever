@@ -1,3 +1,4 @@
+import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
 import { parseLiteratureId } from "@sciretriever/contracts";
 import { expect, it } from "vitest";
 import type { Page } from "playwright";
@@ -89,7 +90,7 @@ it("opens keyboard search and live activity without starting work, and preserves
       .toBe("task");
     expect((await w.env.app.jobs!.getJob(job.job_id))?.status).toBe("queued");
     expect(w.env.modelCalls).toBe(0);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(w.setupCalls.parser);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
@@ -277,6 +278,7 @@ it("requires confirmation before a PDF dropped on a library row is accepted and 
   try {
     const page = w.page,
       row = page.getByRole("article", { name: "Unparsed source", exact: true });
+    await showAllLibraryStatuses(page);
     const pdf = [...workbenchPdf("10.1234/library-drop")];
     await row.evaluate((element, bytes) => {
       const transfer = new DataTransfer();
@@ -302,7 +304,7 @@ it("requires confirmation before a PDF dropped on a library row is accepted and 
       )
       .toBe(true);
     expect(w.env.modelCalls).toBe(0);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(w.setupCalls.parser);
     expect(await w.env.app.jobs!.listJobs(10)).toHaveLength(0);
     expect(w.errors).toEqual([]);
   } finally {

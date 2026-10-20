@@ -27,7 +27,6 @@ it("does not call a catalog primary PDF readable after its verified bytes are da
       { mode: 0o600 },
     );
     writer = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
       browserHost: () => null,
     });
     await writer.database.putLiterature(FIXTURE_LITERATURE);

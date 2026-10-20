@@ -8,6 +8,9 @@ import {
 
 export const sections = [
   "lib",
+  "archive",
+  "tags",
+  "snapshots",
   "disc",
   "ins",
   "ask",
@@ -25,8 +28,6 @@ const eventName = "sciretriever:react-navigation";
 export const sourceParameterKeys = [
   "source",
   "document",
-  "knowledge",
-  "artifact",
   "task",
   "from",
   "asset",
@@ -34,15 +35,15 @@ export const sourceParameterKeys = [
   "representation",
   "start",
   "end",
-  "contentHash",
-  "manifest",
-  "statement",
-  "statementHash",
   "metadataHash",
   "metadataRevision",
   "result",
   "resultHash",
+  "record",
+  "returnReader",
   "collection",
+  "page",
+  "region",
 ] as const;
 export interface UrlState {
   section: Section;
@@ -52,13 +53,15 @@ export interface UrlState {
   sort: LibrarySort;
   parameters: URLSearchParams;
   error: string | null;
+  warning?: string | null;
 }
 export function parseUrl(search: string): UrlState {
   const parameters = new URLSearchParams(search);
   const view = parameters.get("view");
   const section = sections.find((item) => item === view) ?? "lib";
   const reader = parameters.get("reader");
-  let error: string | null = null;
+  let error: string | null = null,
+    warning: string | null = null;
   const fallback = parseLibrarySearchRequest({
     query: {},
     sort: "publication-year-desc",
@@ -69,8 +72,18 @@ export function parseUrl(search: string): UrlState {
     sort = fallback.sort,
     literature: string | null = null;
   try {
+    const raw: unknown = JSON.parse(
+      parameters.get("query") ?? '{"statuses":["READY"]}',
+    );
+    if (raw && typeof raw === "object" && !Array.isArray(raw))
+      for (const key of ["document_type", "document_types"]) {
+        if (Object.hasOwn(raw, key)) {
+          delete (raw as Record<string, unknown>)[key];
+          warning = "旧的文献类型筛选已忽略，请使用出版形式和文章性质。";
+        }
+      }
     const request = parseLibrarySearchRequest({
-      query: JSON.parse(parameters.get("query") ?? "{}"),
+      query: raw,
       sort: parameters.get("sort") ?? fallback.sort,
       limit: 50,
       cursor: null,
@@ -88,6 +101,7 @@ export function parseUrl(search: string): UrlState {
   }
   return {
     section,
+    warning,
     literature,
     reader: reader === "doc" || reader === "know" ? reader : "pdf",
     query,

@@ -1,3 +1,4 @@
+import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
 import { expect, it } from "vitest";
 import { canonicalJsonBytes } from "@sciretriever/contracts";
 import { DatabaseSync } from "node:sqlite";
@@ -26,7 +27,7 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
           "INSERT INTO literatures(literature_id,meta_literature_id,version_role) VALUES(?,?,?)",
         );
         const metadata = db.prepare(
-          "INSERT INTO literature_metadata(literature_id,metadata_revision,metadata_sha256,title,abstract,publication_date,publication_year,document_type,language,venue,publisher,volume,issue,pages) VALUES(?,1,?,?,?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO literature_metadata(literature_id,metadata_revision,metadata_sha256,title,abstract,publication_date,publication_year,publication_form,article_kind,language,venue,publisher,volume,issue,pages) VALUES(?,1,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         );
         const fts = db.prepare(
           "INSERT INTO literature_search_fts(literature_id,title,abstract,authors,affiliations,identifiers,keywords,venue,publisher,volume,issue,pages,content_body) VALUES(?,?,?,'','','','',?,?,?,?,?,'')",
@@ -48,7 +49,8 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
             m.abstract,
             m.publication_date,
             m.publication_year,
-            m.document_type,
+            m.publication_form,
+            m.article_kind,
             m.language,
             m.venue,
             m.publisher,
@@ -76,6 +78,10 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
   });
   try {
     const p = w.page;
+    await showAllLibraryStatuses(p);
+    await expect
+      .poll(() => p.locator(".library-list-heading").textContent())
+      .toContain("30,002");
     expect(await p.locator(".library-list-heading").textContent()).toContain(
       "30,002",
     );

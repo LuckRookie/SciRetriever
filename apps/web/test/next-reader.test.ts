@@ -10,10 +10,7 @@ import {
 import { recordReading } from "./reading-capture-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { expect, it } from "vitest";
-import {
-  createInputManifest,
-  parseKnowledgeAnalysisRequest,
-} from "@sciretriever/contracts";
+
 import { nextWorkspace } from "./next-workspace-fixture.js";
 
 async function captureReader(page: Page, name: string) {
@@ -162,54 +159,38 @@ it("groups existing statements, hides technical IDs, verifies nearby evidence an
         },
       ],
     }));
-    const result = await env.app.knowledgeAnalysis.analyze(
-      await parseKnowledgeAnalysisRequest({
-        schema_version: 1,
-        input: await createInputManifest([
-          {
-            input_id: "source-1",
-            literature_id: id,
-            material: material.evidence.material,
-            document,
-            capabilities: [
-              "material-file-v1",
-              "document-text-v1",
-              "document-segment-v1",
-            ],
-            gaps: [],
-          },
-        ]),
-        purpose: "overview",
-        question: null,
-        default_update: null,
-      }),
-    );
+    const job = await env.app.processors!.submit({
+      schema_version: 1,
+      idempotency_key: "reader-summary",
+      name: "Reader summary",
+      processor: { id: "summary", version: "2" },
+      spec: { purpose: "overview", question: null },
+      inputs: [{ kind: "literature", literature_id: id }],
+    });
+    await env.app.processingTasks!.run(job.job_id);
+    const state = await env.app.processingTasks!.read(job.job_id);
+    expect(state.failures).toEqual([]);
+    const result = (await env.app.processorRead!.byId(
+      (state.results[0] as { result: { result_id: string } }).result.result_id,
+    ))!;
     const counts = { parser: env.parseCalls, model: env.modelCalls };
     await w.page.goto(
-      `${w.origin}/?literature=${id}&reader=know&knowledge=${result.artifact.artifact_id}`,
+      `${w.origin}/?literature=${id}&reader=know&result=${result.ref.result_id}&resultHash=${result.ref.content_sha256}`,
     );
-    await w.page
-      .getByRole("heading", { name: "Synthetic evidence summary", exact: true })
-      .waitFor();
+    await expect
+      .poll(() => w.page.locator(".reader-summary").textContent())
+      .toContain("4.2 eV");
+    expect(await w.page.locator(".reader-statement").count()).toBe(2);
     expect(
-      await w.page
-        .getByRole("heading", { name: "主要发现", exact: true })
-        .count(),
-    ).toBe(1);
-    expect(
-      await w.page
-        .getByRole("heading", { name: "局限与资料缺口", exact: true })
-        .count(),
-    ).toBe(1);
+      await w.page.locator(".reader-statement").last().textContent(),
+    ).toContain("wider applicability");
     const summary = w.page.locator(".reader-summary");
-    expect(await summary.innerText()).not.toContain(
-      result.artifact.artifact_id,
-    );
-    expect(await summary.innerText()).not.toContain(
-      result.artifact.content_ref.sha256,
-    );
-    await w.page.getByRole("button", { name: "[1]", exact: true }).click();
-    await w.page.getByRole("dialog", { name: "证据 1", exact: true }).waitFor();
+    expect(await summary.innerText()).not.toContain(result.ref.result_id);
+    expect(await summary.innerText()).not.toContain(result.ref.content_sha256);
+    await w.page.getByRole("button", { name: "[1.1]", exact: true }).click();
+    await w.page
+      .getByRole("dialog", { name: "证据 1.1", exact: true })
+      .waitFor();
     await expect
       .poll(() =>
         w.page.locator(".reader-evidence-preview blockquote").textContent(),
@@ -223,14 +204,14 @@ it("groups existing statements, hides technical IDs, verifies nearby evidence an
       document.document_version_id,
     );
     await w.page.getByRole("button", { name: "返回总结", exact: true }).click();
-    await w.page
-      .getByRole("heading", { name: "Synthetic evidence summary", exact: true })
-      .waitFor();
+    await expect
+      .poll(() => w.page.locator(".reader-summary").textContent())
+      .toContain("4.2 eV");
     await captureReader(w.page, "react-summary");
     await summary
       .getByRole("button", { name: "技术详情", exact: true })
       .click();
-    expect(await summary.innerText()).toContain(result.artifact.artifact_id);
+    expect(await summary.innerText()).toContain(result.ref.result_id);
     expect(env.parseCalls).toBe(counts.parser);
     expect(env.modelCalls).toBe(counts.model);
     expect(w.errors).toEqual([]);
@@ -253,6 +234,8 @@ it("keeps a 100-page PDF bounded over ten React reader switches and releases its
   try {
     await trackReadingResources(w.page);
     await w.page.reload();
+    await w.page.getByRole("button", { name: "材料状态" }).click();
+    await w.page.getByRole("option", { name: "全部状态", exact: true }).click();
     const open = async (id: string) => {
       const title =
         id === missingId ? "Unparsed source" : "Synthetic literature workbench";

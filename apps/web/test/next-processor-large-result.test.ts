@@ -18,7 +18,6 @@ it("downloads a complete large result in the browser and rejects altered transfe
       w.env.app.database,
       w.env.app.files,
       w.env.app.documentRead,
-      w.env.app.synthesisRead!,
     );
     const material = await w.env.app.documentRead.materialEvidence({
       literature_id: w.env.parseRequest.literature_id,
@@ -28,16 +27,24 @@ it("downloads a complete large result in the browser and rejects altered transfe
       throw new Error("expected material");
     const invocation = parseProcessorInvocation({
       schema_version: 1,
-      processor: { id: "synthetic-transfer", version: "1" },
+      processor: { id: "external-extraction", version: "2" },
       spec: {},
       inputs: [
         {
-          kind: "material",
+          kind: "external",
           input_id: "source",
+          literature_id: material.evidence.material.literature_id,
           material: material.evidence.material,
+          document: null,
         },
       ],
-      execution: { method_sha256: "a".repeat(64), model: null },
+      execution: {
+        method_sha256: "a".repeat(64),
+        model: null,
+        reads: { parts: "main", roles: "all" },
+        uses_description: false,
+        map: null,
+      },
     });
     const saved = await store.publish(
       await parseProcessorResult({
@@ -69,6 +76,7 @@ it("downloads a complete large result in the browser and rejects altered transfe
           {
             input_id: "source",
             status: "partial",
+            parts: [],
             read_segments: [],
             gaps: ["synthetic-material-only"],
           },
@@ -124,7 +132,7 @@ it("downloads a complete large result in the browser and rejects altered transfe
         .count(),
     ).toBe(0);
     expect(w.env.modelCalls).toBe(0);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(w.setupCalls.parser);
     expect(w.errors).toEqual([]);
   } finally {
     await w.page.unrouteAll({ behavior: "wait" });

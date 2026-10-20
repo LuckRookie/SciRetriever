@@ -1,4 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { METADATA_FIELDS } from "@sciretriever/contracts";
 
 const text = { type: "string" };
 const id = {
@@ -19,42 +20,31 @@ const object = (
   required,
   additionalProperties: false,
 });
-const processingRequest = (properties: Record<string, object>) =>
-  object(
-    properties,
-    Object.keys(properties).filter((key) => key !== "budget"),
-  );
-const fixedInput = {
-  type: "object",
-  description:
-    "Copy the complete fixed InputManifest returned by prepare_analysis_inputs, or the SynthesisInputManifest from prepare_synthesis. Do not invent IDs or hashes.",
-};
-const analysis = {
-  schema_version: { const: 1 },
-  input: fixedInput,
-  purpose: { enum: ["overview", "detailed", "question"] },
-  question: nullable(text),
-  default_update: nullable(object({ expected_revision: nullable(positive) })),
-  budget: object({ max_input_bytes: positive, max_output_tokens: positive }),
-};
-const longBudget = object({
-  max_source_bytes: positive,
-  max_call_bytes: positive,
-  max_total_call_bytes: positive,
-  max_calls: positive,
-  max_output_tokens_per_call: positive,
-  max_total_output_tokens: positive,
-});
 const operations = [
   object({
     operation: { const: "parse-documents" },
-    request: object({
-      literature_id: id,
-      asset_id: id,
-      asset_sha256: hash,
-      mode: { enum: ["reuse-current", "reparse"] },
-      expected_default_revision: nullable(positive),
-    }),
+    request: object(
+      {
+        literature_id: id,
+        asset_id: id,
+        asset_sha256: hash,
+        profiles: {
+          type: "array",
+          items: { enum: ["pipeline", "vlm-engine"] },
+          minItems: 1,
+          maxItems: 2,
+          uniqueItems: true,
+          description:
+            "Two raw sources for archiving, not alternative parser backends. Defaults to both.",
+        },
+        force: {
+          type: "boolean",
+          description:
+            "Explicitly rerun selected profiles. False reuses matching successful results.",
+        },
+      },
+      ["literature_id", "asset_id", "asset_sha256"],
+    ),
   }),
   object({
     operation: { const: "assess-article-identity" },
@@ -72,30 +62,32 @@ const operations = [
     }),
   }),
   object({
-    operation: { const: "analyze" },
-    request: processingRequest(analysis),
+    operation: { const: "build-archive" },
+    request: {
+      type: "object",
+      description:
+        "ArchiveBuildRequest: selector, mode, from_step, idempotency_key. Requires existing raw parses.",
+    },
   }),
   object({
-    operation: { const: "analyze-long" },
-    request: processingRequest({
-      ...analysis,
-      schema_version: { const: 2 },
-      budget: longBudget,
+    operation: { const: "backfill-tags" },
+    request: object({
+      tag_ids: {
+        type: "array",
+        items: id,
+        minItems: 1,
+        maxItems: 200,
+        uniqueItems: true,
+      },
     }),
   }),
   object({
-    operation: { const: "synthesize" },
-    request: processingRequest({
-      schema_version: { const: 3 },
-      input: fixedInput,
-      purpose: { const: "synthesis" },
-      question: text,
-      policy: { enum: ["require-all", "allow-partial"] },
-      budget: object({
-        ...longBudget.properties,
-        max_verification_bytes: positive,
-      }),
-    }),
+    operation: { const: "run-processor" },
+    request: {
+      type: "object",
+      description:
+        "A fixed ProcessorInvocation returned by processor submission preparation; uses archive-document or collection-snapshot inputs.",
+    },
   }),
 ];
 function tool(
@@ -247,8 +239,94 @@ export const BROWSER_MAINTENANCE_TOOLS: readonly Tool[] = [
 ];
 export const QUERY_TOOLS: readonly Tool[] = [
   tool(
+    "snapshots_query",
+    "Read frozen archive snapshots (read {snapshot_id,offset,limit,max_bytes}; list {after:null|snapshot_id,limit}; diff {before,after}). Read pages are bounded; follow next_offset. Differences separate membership, content versions and descriptions. No models or implicit recomputation.",
+    object({
+      operation: { enum: ["read", "list", "diff"] },
+      request: { type: "object" },
+    }),
+  ),
+  tool(
+    "archive_query",
+    "Read archive status, issues, stats or persisted version events without starting work. Requests: status {literature_id}; issues {reason?,part?,offset?,limit?}; stats {}; events {after,limit}.",
+    object({
+      operation: { enum: ["status", "issues", "stats", "events"] },
+      request: { type: "object" },
+    }),
+  ),
+  tool(
+    "tags_query",
+    "Read the library tag vocabulary (list/search/show/state/changes/undo-preview), ordered literature assignment or a model-free backfill-preview. Parent and merged tags resolve to active children. Preview reports candidates and estimated calls; old assignments may need explicit backfill.",
+    object({
+      operation: {
+        enum: [
+          "list",
+          "search",
+          "show",
+          "state",
+          "changes",
+          "assignment",
+          "backfill-preview",
+          "undo-preview",
+        ],
+      },
+      request: { type: "object" },
+    }),
+  ),
+  tool(
+    "metadata_fields",
+    "Read accepted metadata with field sources, conflicts and manual locks. Does not run models.",
+    object({ literature_id: id }),
+    true,
+  ),
+
+  tool(
+    "document_annotation",
+    "Read fixed structure annotation, figures or references in bounded UTF-8 JSON chunks. Concatenate text chunks and parse JSON after continuation=null. Figures output uses one-based pages; all returns the immutable artifact with zero-based pages. Reads never call a model.",
+    object({
+      document_version_id: id,
+      annotation_id: nullable(hash),
+      field: { enum: ["all", "figures", "references"] },
+      max_bytes: { type: "integer", minimum: 4, maximum: 65536 },
+      continuation: nullable(text),
+    }),
+  ),
+  tool(
+    "proofread_page",
+    "Read an original PDF page or region as bounded PNG base64 without model calls or catalog writes. Pages are zero-based.",
+    object(
+      {
+        asset_id: id,
+        page: epoch,
+        region: {
+          anyOf: [
+            { type: "array", items: { type: "number" } },
+            { type: "null" },
+          ],
+        },
+      },
+      ["asset_id", "page"],
+    ),
+  ),
+  tool(
+    "proofread_inspect",
+    "Read bounded single-source drafts, corrections, unresolved questions, uncertainty and manual locks. No parsing or model calls.",
+    object(
+      {
+        asset_id: id,
+        offset: epoch,
+        page_offset: epoch,
+        page_limit: positive,
+        block_id: id,
+        limit: positive,
+        unresolved_only: { type: "boolean" },
+      },
+      ["asset_id"],
+    ),
+  ),
+  tool(
     "processor_query",
-    "Read saved processor results, records, evidence, collections or exports. Never invokes models. Use action list for processor schemas. For complete large results or exports use action transfer with result_id, content_sha256, format result/json/csv/markdown, max_bytes (4–262144) and continuation null; follow next until null and verify transfer_sha256 on concatenated UTF-8 text.",
+    "Read saved processor results, four part outcome counts, freshness reasons, records, evidence, collections or exports. Use action results with stale:true to list stale results. Never invokes models. Use action list for processor schemas. For complete large results or exports use action transfer with result_id, content_sha256, format result/json/csv/markdown, max_bytes (4–262144) and continuation null; follow next until null and verify transfer_sha256 on concatenated UTF-8 text.",
     object({
       action: {
         enum: [
@@ -274,7 +352,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
     "Explicitly read a bounded chunk of catalog-owned PDF or Markdown bytes. Start with offset 0 and expected_sha256 null; bind every following chunk to the returned sha256. No server file paths. Document resources use document_read/resource.",
     object({
       literature_id: id,
-      kind: { enum: ["primary-pdf", "content-markdown"] },
+      kind: { enum: ["primary-pdf"] },
       expected_sha256: nullable(hash),
       offset: { type: "integer", minimum: 0 },
       max_bytes: { type: "integer", minimum: 1, maximum: 196608 },
@@ -315,7 +393,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
             query: {
               type: "object",
               description:
-                "LibraryQuery: text, title, author, author_orcids, identifiers, publication_year_from/to, venue, publisher, document_types, languages, keywords, version_roles, statuses, missing_steps, needs_manual_pdf, discovery_run_ids.",
+                "LibraryQuery: text, title, author, author_orcids, identifiers, publication_year_from/to, venue, publisher, publication_forms, article_kinds, languages, keywords, version_roles, statuses, missing_steps, needs_manual_pdf, discovery_run_ids.",
             },
             limit: { type: "integer", minimum: 1, maximum: 100 },
             cursor: nullable(text),
@@ -341,10 +419,15 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "document_read",
-    "Read existing document data. request follows the named operation's closed document-read contract. Uses bounded pagination; does not parse or download.",
+    "Read figures/reference-texts with {document_version_id,annotation_id,max_bytes,continuation} as a bounded JSON stream. Read parts with {literature_id,offset,limit}; corrections with {document_version_id,segment_id,max_bytes,continuation} returns a bounded resumable JSON UTF-8 stream for human audit. Outline and segments accept annotation_id to pin role interpretation; segments also accepts roles to filter corrected blocks. Read raw parsing status with operation parsing-status and {literature_id, asset_id}. Read existing document data. request follows the named operation's closed document-read contract. Uses bounded pagination; does not parse or download.",
     object({
       operation: {
         enum: [
+          "figures",
+          "reference-texts",
+          "parts",
+          "corrections",
+          "parsing-status",
           "default",
           "describe",
           "outline",
@@ -373,16 +456,6 @@ export const QUERY_TOOLS: readonly Tool[] = [
     }),
   ),
   tool(
-    "prepare_synthesis",
-    "Prepare a fixed synthesis manifest from existing knowledge/documents. request: {policy: require-all|allow-partial, inputs: SynthesisSelection[]}. Does not call models.",
-    object({ request: { type: "object" } }),
-  ),
-  tool(
-    "read_knowledge",
-    "Read a previously published single-paper or synthesis artifact by stable ID.",
-    object({ artifact_id: id, kind: { enum: ["single", "synthesis"] } }),
-  ),
-  tool(
     "search_context",
     "Retrieve existing source or mixed knowledge context. request is the MaterialContextRequest or KnowledgeContextRequest contract, including scope/version/budget/continuation. Never rebuilds an index or generates content.",
     object({
@@ -409,36 +482,6 @@ export const QUERY_TOOLS: readonly Tool[] = [
     "read_reference",
     "Read one existing reference and its supporting observations.",
     object({ reference_id: id }),
-  ),
-  tool(
-    "list_knowledge",
-    "List verified knowledge for one literature, latest first.",
-    object({
-      literature_id: id,
-      limit: { type: "integer", minimum: 1, maximum: 20 },
-    }),
-  ),
-  tool(
-    "default_knowledge",
-    "Read the current default knowledge for a purpose/question; null means missing, never generates.",
-    object({
-      literature_id: id,
-      purpose: { enum: ["overview", "detailed", "question"] },
-      question: nullable(text),
-    }),
-  ),
-  tool(
-    "list_syntheses",
-    "List existing synthesis artifacts and coverage, latest first.",
-    object({
-      manifest_sha256: nullable(hash),
-      limit: { type: "integer", minimum: 1, maximum: 20 },
-    }),
-  ),
-  tool(
-    "read_synthesis_source",
-    "Read a synthesis source artifact with its current verified/source-only classification.",
-    object({ artifact_id: id }),
   ),
   tool(
     "prepare_extraction",
@@ -483,8 +526,127 @@ export const QUERY_TOOLS: readonly Tool[] = [
 ];
 export const MAINTENANCE_TOOLS: readonly Tool[] = [
   tool(
+    "snapshot_create",
+    "Freeze READY literature IDs with their corrected part versions and descriptions. Supply {kind:'literatures',literature_ids} or {kind:'query',query:LibraryQuery}. Reports non-ready exclusions, never builds or analyzes them.",
+    object(
+      {
+        kind: { enum: ["literatures", "query"] },
+        literature_ids: { type: "array", items: id },
+        query: { type: "object" },
+      },
+      ["kind"],
+    ),
+    false,
+  ),
+  tool(
+    "archive_manage",
+    "Explicit build {selector:{kind:'literatures',literature_ids} or {kind:'query',query},mode:'full'|'legacy-vlm-markdown',from_step:null|step,idempotency_key}; resume {literature_id}; resolve {issue_ids,resolution:'continue'|'skip'|'cancel'}. Requires pre-existing raw parses and never calls MinerU. Correct failed facts using proofread, metadata, structure or tag commands before resume; acknowledgement cannot establish readiness.",
+    object({
+      operation: { enum: ["build", "resume", "resolve"] },
+      request: { type: "object" },
+    }),
+    false,
+  ),
+  tool(
+    "tags_manage",
+    "Explicitly change/undo the vocabulary, assign or lock literature tags, build tags from corrected main-document evidence, consolidate, or backfill. Requires expected revisions for edits. Run tags_query backfill-preview before executing backfill. Main themes only; compounds require literal title/abstract support; no conditions, reagents or publication-kind tags. Automation respects manual locks. Uses the shared DSH runtime for model work.",
+    object({
+      operation: {
+        enum: ["change", "assign", "lock", "build", "consolidate", "backfill"],
+      },
+      request: { type: "object" },
+    }),
+    false,
+  ),
+  tool(
+    "archive_references",
+    "Explicitly resolve existing corrected main-paper references against the local library. Preserves unmatched text; does not query providers, download, parse or call models.",
+    object({ literature_id: id, document_version_id: id, annotation_id: hash }),
+    false,
+  ),
+  tool(
+    "metadata_edit",
+    "Explicitly edit and lock metadata fields or unlock fields, with an expected metadata revision. Does not run models or archive the paper.",
+    object({
+      literature_id: id,
+      expected_revision: positive,
+      set: {
+        type: "array",
+        items: object({ field: { enum: [...METADATA_FIELDS] }, value: {} }),
+      },
+      unlock: { type: "array", items: { enum: [...METADATA_FIELDS] } },
+    }),
+    false,
+  ),
+
+  tool(
+    "document_annotate",
+    "Explicitly identify section roles, figures and references from a fixed proofread document. Uses configured DSH for unknown top-level headings; preserves human role locks.",
+    object({
+      document_version_id: id,
+      max_prefix_characters: { type: "integer", minimum: 0, maximum: 65536 },
+    }),
+  ),
+  tool(
+    "document_role",
+    "Set a section role lock, or revoke it with role=null. Atomically publishes a new annotation and retains the prior version and audit history. Supply the current manual revision.",
+    object({
+      document_version_id: id,
+      section_id: id,
+      role: nullable(text),
+      expected_manual_revision: epoch,
+      actor: text,
+    }),
+  ),
+
+  tool(
+    "document_publish_proofread",
+    "Explicitly publish a complete immutable proofreading version as the default readable document. No parser or model call.",
+    object({
+      literature_id: id,
+      asset_id: id,
+      proofread_id: id,
+      expected_default_revision: nullable({ type: "integer", minimum: 1 }),
+    }),
+  ),
+  tool(
+    "proofread_build",
+    "Explicitly correct one existing parser draft against PDF pages and publish an immutable proofreading version; never invokes MinerU. Unresolved work remains incomplete; documented uncertainty does not block completion.",
+    object({ asset_id: id }),
+  ),
+  tool(
+    "proofread_decide",
+    "Explicit human correction of a fixed draft block. Locks the decision; use inspect to copy the current revision and hash, then explicitly build again.",
+    object({
+      asset_id: id,
+      proofread_id: id,
+      block_id: id,
+      draft_sha256: hash,
+      expected_manual_revision: epoch,
+      action: {
+        enum: ["replace", "resolve-suspect", "clear-uncertainty", "no-body"],
+      },
+      reason: text,
+      suspect_id: nullable(id),
+      disposition: { anyOf: [{ type: "object" }, { type: "null" }] },
+      text: nullable(text),
+      actor: text,
+      page: nullable(epoch),
+    }),
+  ),
+  tool(
+    "proofread_revoke",
+    "Explicitly revoke an active human correction using its fixed decision ID and current manual revision. Retains the audit record.",
+    object({
+      asset_id: id,
+      decision_id: id,
+      expected_manual_revision: epoch,
+      actor: text,
+    }),
+  ),
+  tool(
     "submit_processor",
-    "Freeze existing document/result inputs and enqueue a registered processor. Returns a durable job; use read_task for progress and collections.",
+    "Enqueue an explicitly chosen processor on READY corrected archive documents or a frozen snapshot. Single-paper processors cannot consume other results or raw parsing. Reuse depends on selected content versions, processor, spec and model; description edits do not invalidate single-paper results. Collection map results are reused; no automatic rebuild. Returns a durable job; use read_task for progress.",
     object({ request: { type: "object" } }),
     false,
   ),
@@ -534,7 +696,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   ),
   tool(
     "submit_processing",
-    "Submit explicitly USER-REQUESTED processing of EXISTING fixed materials. Operations are independent frozen targets, not an implicit dependency pipeline. Use result IDs to submit a later stage. Persists an idempotent job, then starts it in this process; returns its ID immediately. Read_task provides results. No implicit discovery or download.",
+    "Submit explicitly USER-REQUESTED processing of EXISTING fixed materials. Operations are independent frozen targets, not an implicit dependency pipeline. Omit parse-documents profiles to use the deployment profile; another explicit profile is for inspection and does not participate in proofreading. Use result IDs to submit a later stage. Persists an idempotent job, then starts it in this process; returns its ID immediately. Read_task provides results. No implicit discovery or download.",
     object({
       schema_version: { const: 1 },
       idempotency_key: { type: "string", pattern: "^[A-Za-z0-9._:-]{1,128}$" },
@@ -628,12 +790,6 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   tool(
     "rebuild_index",
     "Explicitly rebuild the original-document search index from existing material; does not download or parse.",
-    object({}),
-    false,
-  ),
-  tool(
-    "rebuild_knowledge_index",
-    "Explicitly rebuild the knowledge search index from existing artifacts; does not call models.",
     object({}),
     false,
   ),

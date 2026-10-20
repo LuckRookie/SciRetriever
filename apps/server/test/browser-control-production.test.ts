@@ -251,13 +251,14 @@ it
         { mode: 0o600 },
       );
       seed = await createApplication(home, {
-        executionSchema: "upgrade-synthetic",
         browserHost: () => null,
       });
       for (const [index, paper] of papers.entries()) {
         await seed.database.putLiterature(paper.literature);
         await seed.observations.publish({
           ...parseMetadataObservation({
+            source_type: null,
+            source_type_mapping_version: null,
             observation_id: `20000000-0000-0000-0000-00000000980${index}`,
             provenance: {
               provenance_id: `30000000-0000-0000-0000-00000000980${index}`,

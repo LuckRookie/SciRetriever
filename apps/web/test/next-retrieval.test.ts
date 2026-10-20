@@ -5,17 +5,19 @@ import {
 import { motionOptions, nextAssets } from "./next-workspace-fixture.js";
 import { readingAssets } from "./reading-assets-fixture.js";
 import { chromium, type Page } from "playwright";
+import { DatabaseSync } from "node:sqlite";
+import { join } from "node:path";
 import { expect, it } from "vitest";
 import {
-  createInputManifest,
-  parseKnowledgeAnalysisRequest,
-  parseKnowledgeSynthesisRequest,
   parseLiterature,
   type KnowledgeContextRequest,
 } from "@sciretriever/contracts";
-import { coreProcessingFixture } from "../../server/test/core-processing-fixture.js";
+import { processorFixture } from "../../server/test/processor-fixture.js";
 import { createQueryApplication } from "../../server/src/bootstrap/application.js";
-import { taskHttpAdapters } from "../../server/src/bootstrap/workbench.js";
+import {
+  taskHttpAdapters,
+  processorHttpAdapters,
+} from "../../server/src/bootstrap/workbench.js";
 import {
   startWorkbenchHttp,
   type WorkbenchStaticAsset,
@@ -24,7 +26,7 @@ import { ProductionWorkbenchSession } from "../../server/src/workbench/productio
 import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
 
 async function workspace(withSynthesis = false, indexes = true) {
-  const env = await coreProcessingFixture();
+  const env = await processorFixture();
   await env.app.database.putLiterature(
     parseLiterature({
       ...FIXTURE_LITERATURE,
@@ -44,34 +46,9 @@ async function workspace(withSynthesis = false, indexes = true) {
         (_, i) =>
           `\n## Study ${i + 1}\nnanocrystal synthesis original observation ${i + 1}.\n`,
       ).join("") +
-      "\n## 中文\n纳米晶 合成 nanocrystal\n\n钙钛矿纳米晶合成\n",
+      "\n## 中文\n纳米晶 合成 nanocrystal.\n\n钙钛矿纳米晶合成\n",
   );
-  const parsed = await env.app.documentProcessing.parseDocuments(
-    env.parseRequest,
-  );
-  const material = await env.app.documentRead.materialEvidence({
-    literature_id: env.parseRequest.literature_id,
-    asset_id: env.asset.asset_id,
-  });
-  if (material.evidence.target_kind !== "material")
-    throw new Error("invalid fixture");
-  const described = await env.app.documentRead.describe({
-    document_version_id: parsed.document.document_version_id,
-  });
-  const input = await createInputManifest([
-    {
-      input_id: "source-1",
-      literature_id: env.parseRequest.literature_id,
-      material: material.evidence.material,
-      document: described.document,
-      capabilities: [
-        "material-file-v1",
-        "document-text-v1",
-        "document-segment-v1",
-      ],
-      gaps: [],
-    },
-  ]);
+  const parsed = await env.build(env.parseRequest);
   env.setModel((request) => ({
     outcome: "completed",
     title: "Nanocrystal overview",
@@ -90,63 +67,59 @@ async function workspace(withSynthesis = false, indexes = true) {
       },
     ],
   }));
-  const knowledge = await env.app.knowledgeAnalysis.analyze(
-    await parseKnowledgeAnalysisRequest({
+  const run = async (processor: string, inputs: unknown[], spec: unknown) => {
+    const job = await env.app.processors!.submit({
       schema_version: 1,
-      input,
-      purpose: "overview",
-      question: null,
-      default_update: null,
-    }),
+      idempotency_key: processor,
+      name: processor,
+      processor: { id: processor, version: "2" },
+      spec,
+      inputs,
+    });
+    await env.app.processingTasks!.run(job.job_id);
+    const state = await env.app.processingTasks!.read(job.job_id);
+    expect(state.failures).toEqual([]);
+    return (await env.app.processorRead!.byId(
+      (state.results[0] as { result: { result_id: string } }).result.result_id,
+    ))!;
+  };
+  const knowledge = await run(
+    "summary",
+    [{ kind: "literature", literature_id: env.parseRequest.literature_id }],
+    { purpose: "overview", question: null },
   );
   if (withSynthesis) {
-    const prepared = await env.app.synthesisPreparation!.prepare({
-      policy: "require-all",
-      inputs: [
+    const snapshot = await env.app.snapshots.create({
+      kind: "literatures",
+      literature_ids: [env.parseRequest.literature_id],
+    });
+    env.setModel((request) => ({
+      claims: [
         {
-          kind: "knowledge",
-          input_id: "overview",
-          source_artifact_id: knowledge.artifact!.artifact_id,
+          text: "nanocrystal 纳米晶 合成 synthesis",
+          source_ids: (request.candidates as { id: string }[]).map((c) => c.id),
         },
       ],
-    });
-    env.setModel((request) => {
-      const candidates = request.candidates as {
-        id: string;
-        text: string;
-        category: string;
-        epistemic: string;
-        conditions: string[];
-        quantity: unknown;
-      }[];
-      return {
-        title: "Synthetic synthesis",
-        statements: candidates.map((candidate, index) => ({
-          statement_id: `synth-${index}`,
-          category: candidate.category,
-          epistemic: candidate.epistemic,
-          relation: "single-source",
-          conflict_group_id: null,
-          text: candidate.text,
-          conditions: candidate.conditions,
-          quantity: candidate.quantity,
-          source_ids: [candidate.id],
-        })),
-      };
-    });
-    await env.app.maintenance!.synthesize!(
-      await parseKnowledgeSynthesisRequest({
-        schema_version: 3,
-        input: prepared.manifest,
-        purpose: "synthesis",
-        question: "Compare nanocrystal evidence",
-        policy: "require-all",
-      }),
+    }));
+    await run(
+      "knowledge-synthesis",
+      [{ kind: "snapshot", snapshot_id: snapshot.snapshot_id }],
+      { question: "Compare nanocrystal evidence", policy: "require-all" },
     );
   }
-  if (indexes) {
-    await env.app.maintenance!.rebuildIndex();
-    await env.app.maintenance!.rebuildKnowledgeIndex!();
+  if (indexes) await env.app.maintenance!.rebuildIndex();
+  else {
+    // Document publication creates a material index; explicitly remove its
+    // active pointer to exercise an unavailable index in this synthetic home.
+    const db = new DatabaseSync(
+      env.app.configuration.paths.catalog_path ??
+        join(env.home, "catalog.sqlite"),
+    );
+    try {
+      db.exec("DELETE FROM retrieval_active_generation");
+    } finally {
+      db.close();
+    }
   }
   const query = await createQueryApplication(env.home);
   const session = new ProductionWorkbenchSession(null, async () => {
@@ -157,6 +130,7 @@ async function workspace(withSynthesis = false, indexes = true) {
   const server = await startWorkbenchHttp({
     access: workbenchTestAccess,
     ...taskHttpAdapters(env.app),
+    ...processorHttpAdapters(env.app),
     session,
     query: { application: query, maintenance: env.app.maintenance! },
     library: {
@@ -190,17 +164,21 @@ async function workspace(withSynthesis = false, indexes = true) {
   await page.goto(`${server.origin}/?view=ask`);
   await page.locator('input[placeholder="输入要查找的问题或关键词"]').waitFor();
   const calls = { model: env.modelCalls, parse: env.parseCalls };
+  let jobs = await env.app.jobs!.listJobs(10);
   return {
     env,
     page,
     requests,
     parsed,
     knowledge,
+    async recordSetup() {
+      jobs = await env.app.jobs!.listJobs(10);
+    },
     async close() {
       try {
         expect(errors).toEqual([]);
         expect(env.modelCalls).toBe(calls.model);
-        expect(await env.app.jobs!.listJobs(10)).toEqual([]);
+        expect(await env.app.jobs!.listJobs(10)).toEqual(jobs);
       } finally {
         await browser.close();
         await server.close();
@@ -252,17 +230,16 @@ it("searches source and knowledge in all three modes, paginates, and explains Ch
   const w = await workspace();
   try {
     await search(w.page, "nanocrystal");
-    expect(w.requests.at(-1)?.knowledge?.purposes).toEqual([
-      "overview",
-      "detailed",
-      "question",
-      "synthesis",
+    expect(w.requests.at(-1)?.kinds).toEqual([
+      "metadata",
+      "document",
+      "knowledge",
     ]);
     expect(
       await w.page.locator('[data-testid="retrieval-kind"]').allTextContents(),
     ).toEqual(expect.arrayContaining(["原文", "知识"]));
     await search(w.page, "nanocrystal", "source");
-    expect(w.requests.at(-1)?.knowledge).toBeNull();
+    expect(w.requests.at(-1)?.kinds).toEqual(["metadata", "document"]);
     expect(
       await w.page.locator('[data-testid="retrieval-kind"]').allTextContents(),
     ).not.toContain("知识");
@@ -292,7 +269,7 @@ it("searches source and knowledge in all three modes, paginates, and explains Ch
     await search(w.page, "纳米晶", "source");
     expect(
       await w.page.locator('[data-testid="retrieval-text"]').allTextContents(),
-    ).toEqual(["纳米晶 合成 nanocrystal\n"]);
+    ).toEqual(["纳米晶 合成 nanocrystal.\n\n"]);
     await search(w.page, "钙钛矿", "source");
     expect(
       await w.page.locator('[data-testid="retrieval-result"]').count(),
@@ -308,7 +285,7 @@ it("searches source and knowledge in all three modes, paginates, and explains Ch
     expect(
       await w.page.locator('[data-testid="retrieval-result"]').count(),
     ).toBe(1);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(2);
   } finally {
     await w.close();
   }
@@ -328,15 +305,15 @@ it("opens a synthesis hit as its own fixed artifact and returns to the same quer
       })
       .locator('[data-testid="retrieval-source"]')
       .click();
-    expect(new URL(w.page.url()).searchParams.get("view")).toBe("syn");
+    expect(new URL(w.page.url()).searchParams.get("view")).toBe("ext");
     await expect
-      .poll(() => w.page.locator(".synthesis-reading").textContent())
+      .poll(() => w.page.locator(".result-text").textContent())
       .toContain("nanocrystal 纳米晶");
-    expect(new URL(w.page.url()).searchParams.get("statement")).toBe("synth-0");
+    expect(new URL(w.page.url()).searchParams.get("result")).toBeTruthy();
     await w.page.reload();
     await expect
-      .poll(() => w.page.locator(".synthesis-reading").textContent())
-      .toContain("Synthetic synthesis");
+      .poll(() => w.page.locator(".result-text").textContent())
+      .toContain("nanocrystal 纳米晶");
     // Reloaded links retain source identity; in-session return restores the query without re-querying.
     await w.page.getByRole("button", { name: "返回检索", exact: true }).click();
     await search(w.page, "nanocrystal", "knowledge");
@@ -349,7 +326,7 @@ it("opens a synthesis hit as its own fixed artifact and returns to the same quer
         .inputValue(),
     ).toBe("nanocrystal");
     expect(w.requests.length).toBe(before);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(2);
   } finally {
     await w.close();
   }
@@ -434,7 +411,7 @@ it("keeps late or failed searches from replacing a newer page and permits an exp
     expect(
       await w.page.locator('[data-testid="retrieval-result"]').count(),
     ).toBeGreaterThan(1);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(2);
   } finally {
     release();
     await w.close();
@@ -447,27 +424,12 @@ it("opens the fixed hit after a new default is published and restores the query 
     await search(w.page, "纳米晶", "knowledge");
     await w.page.locator('[data-testid="retrieval-source"]').first().click();
     await expect
-      .poll(() => w.page.locator(".reader-summary-scroll").textContent())
+      .poll(() => w.page.locator(".result-text").textContent())
       .toContain("nanocrystal 纳米晶");
-    expect(new URL(w.page.url()).searchParams.get("statement")).toBe(
-      "finding-1",
+    expect(new URL(w.page.url()).searchParams.get("result")).toBe(
+      w.knowledge.ref.result_id,
     );
     const knowledgeUrl = w.page.url();
-    await w.page
-      .getByRole("button", { name: "[1]", exact: true })
-      .first()
-      .click();
-    await w.page
-      .getByRole("button", { name: "在原文中核对", exact: true })
-      .click();
-    await w.page.locator(".reading-evidence").first().waitFor();
-    await w.page.getByRole("button", { name: "返回总结", exact: true }).click();
-    await expect
-      .poll(() => w.page.locator(".reader-summary-scroll").textContent())
-      .toContain("nanocrystal 纳米晶");
-    expect(new URL(w.page.url()).searchParams.get("statement")).toBe(
-      "finding-1",
-    );
     await w.page.getByRole("button", { name: "返回检索", exact: true }).click();
     expect(
       await w.page
@@ -482,10 +444,9 @@ it("opens the fixed hit after a new default is published and restores the query 
     w.env.setText(
       "# Revised\nA newer version that must not replace an old search hit.\n",
     );
-    await w.env.app.documentProcessing.parseDocuments({
-      ...w.env.parseRequest,
-      expected_default_revision: 1,
-    });
+    await w.env.build(w.env.parseRequest);
+    const parseCallsAfterSetup = w.env.parseCalls;
+    await w.recordSetup();
     await w.page.locator('[data-testid="retrieval-source"]').first().click();
     await expect
       .poll(() => w.page.locator(".reading-article").textContent())
@@ -512,8 +473,8 @@ it("opens the fixed hit after a new default is published and restores the query 
     await expect
       .poll(() => w.page.locator("main").textContent())
       .toContain("nanocrystal 纳米晶");
-    expect(new URL(w.page.url()).searchParams.get("statement")).toBe(
-      "finding-1",
+    expect(new URL(w.page.url()).searchParams.get("result")).toBe(
+      w.knowledge.ref.result_id,
     );
     const tampered = new URL(fixedUrl);
     tampered.searchParams.set("representation", "0".repeat(64));
@@ -552,16 +513,16 @@ it("opens the fixed hit after a new default is published and restores the query 
         },
       },
     ]);
-    expect(w.env.parseCalls).toBe(2);
+    expect(w.env.parseCalls).toBe(parseCallsAfterSetup);
   } finally {
     await w.close();
   }
 }, 60000);
 
-it("explains unavailable indexes without claiming a keyword miss or starting maintenance", async () => {
+it("explains an unavailable material index while retaining result searches without starting maintenance", async () => {
   const w = await workspace(false, false);
   try {
-    for (const kind of ["all", "source", "knowledge"]) {
+    for (const kind of ["all", "source"]) {
       await search(w.page, "nanocrystal", kind);
       const status = await w.page
         .locator('[data-testid="retrieval-status"]')
@@ -570,6 +531,13 @@ it("explains unavailable indexes without claiming a keyword miss or starting mai
       expect(status).toContain("显式重建");
       expect(status).not.toContain("未匹配当前关键词");
     }
+    await search(w.page, "nanocrystal", "knowledge");
+    expect(
+      await w.page.locator('[data-testid="retrieval-status"]').textContent(),
+    ).toBe("1 条结果");
+    expect(
+      await w.page.locator('[data-testid="retrieval-kind"]').allTextContents(),
+    ).toEqual(["知识"]);
   } finally {
     await w.close();
   }

@@ -1,4 +1,8 @@
 import {
+  mapSourceType,
+  SOURCE_TYPE_MAPPING_VERSION,
+} from "../../literature/metadata-types.js";
+import {
   ContractValidationError,
   parseAffiliation,
   parseAssetHint,
@@ -183,7 +187,6 @@ export function parseProviderObservation(
   for (const name of [
     "title",
     "abstract",
-    "document_type",
     "language",
     "venue",
     "publisher",
@@ -223,8 +226,18 @@ export function parseProviderObservation(
       const parsed = fields.checked(path, () => parseAssetHint(hint));
       return parsed ? [parsed] : [];
     });
+  const source_type = fields.text(input.source_type, "source_type");
+  const mapping = mapSourceType(
+    String(object(input.provenance)?.source_name ?? ""),
+    source_type,
+  );
+  metadata.publication_form = mapping.publication_form;
+  metadata.article_kind = mapping.article_kind_hint;
   const result = parseMetadataObservation({
     ...input,
+    source_type,
+    source_type_mapping_version: SOURCE_TYPE_MAPPING_VERSION,
+    version_role: mapping.version_role_hint ?? input.version_role,
     metadata,
     asset_hints,
     declared_keywords: fields.strings(

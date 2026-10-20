@@ -1,3 +1,4 @@
+import { SCHEMA_VERSION } from "../src/storage/sqlite/schema.js";
 import { workbenchTestAccess } from "./workbench-auth-fixture.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -18,7 +19,7 @@ import { runCli } from "../src/cli/main.js";
 import { TypeScriptConfigurationOwner } from "../src/configuration/owner.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { inspectCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
-import { SqliteWorker } from "../src/storage/sqlite/worker.js";
+import { DatabaseSync } from "node:sqlite";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 
 const assets = new Map([
@@ -49,7 +50,7 @@ describe("Web default storage", () => {
       const catalog = join(home, ".sciretriever", "catalog.sqlite");
       expect(await inspectCatalogSchema(catalog)).toMatchObject({
         status: "ready",
-        schema_version: 10,
+        schema_version: SCHEMA_VERSION,
       });
       expect((await stat(catalog)).mode & 0o777).toBe(0o600);
       expect((await stat(configuration)).mode & 0o777).toBe(0o600);
@@ -108,7 +109,7 @@ describe("Web default storage", () => {
       web = await open(home);
       expect(web.application.configuration.paths).toEqual(paths);
       expect(await inspectCatalogSchema(paths.catalog_path)).toMatchObject({
-        schema_version: 10,
+        schema_version: SCHEMA_VERSION,
       });
       expect(
         await readFile(join(home, ".sciretriever", "config.toml")),
@@ -132,11 +133,16 @@ describe("Web default storage", () => {
         const catalog = join(directory, "catalog.sqlite");
         let original = catalog;
         if (kind === "v1") {
-          const worker = new SqliteWorker(catalog);
+          const db = new DatabaseSync(catalog);
           try {
-            await worker.putLiterature(FIXTURE_LITERATURE);
+            db.exec(
+              "CREATE TABLE schema_identity(singleton INTEGER,product TEXT,schema_version INTEGER,schema_fingerprint TEXT)",
+            );
+            db.prepare(
+              "INSERT INTO schema_identity VALUES(1,'sciretriever',1,?)",
+            ).run("a".repeat(64));
           } finally {
-            await worker.close();
+            db.close();
           }
         } else if (kind === "symlink") {
           original = join(home, "untouched.sqlite");
@@ -145,8 +151,7 @@ describe("Web default storage", () => {
         } else await writeFile(catalog, "not a database");
         const before = await readFile(original);
         await expect(open(home)).rejects.toMatchObject({
-          code:
-            kind === "v1" ? "migration-target-v1" : "migration-target-unknown",
+          code: "catalog-schema-refused",
         });
         expect(await readFile(original)).toEqual(before);
         await expect(stat(join(directory, "artifacts"))).rejects.toMatchObject({

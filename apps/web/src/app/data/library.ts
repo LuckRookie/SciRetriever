@@ -31,6 +31,7 @@ export async function searchLibrary(
   return {
     items: page.items.map(parseLiteratureSearchItem),
     total: Number(page.total_count),
+    backfillPending: Number(page.tag_backfill_pending ?? 0),
     cursor: page.next_cursor as string | null,
   };
 }

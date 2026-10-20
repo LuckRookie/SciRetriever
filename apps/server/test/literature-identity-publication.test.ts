@@ -12,7 +12,7 @@ import {
 } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
-import { id, lit, proposal, setup } from "./content-fixture.js";
+import { id, lit, setup } from "./content-fixture.js";
 
 const metadata = (
   title: string,
@@ -33,7 +33,8 @@ const metadata = (
   abstract: null,
   publication_date: null,
   publication_year: 2026,
-  document_type: "article",
+  publication_form: "journal-article" as const,
+  article_kind: null,
   language: "en",
   venue: null,
   publisher: null,
@@ -63,6 +64,8 @@ function observation(
 ) {
   const kind = options.kind ?? "metadata-provider";
   return parseMetadataObservation({
+    source_type: null,
+    source_type_mapping_version: null,
     observation_id: id(1_000 + n),
     provenance: {
       provenance_id: id(2_000 + n),
@@ -166,7 +169,8 @@ it("keeps provider record ownership scoped by provider", async () => {
       metadata: metadata("Sparse provider snapshot", [], {
         authors: [],
         publication_year: null,
-        document_type: null,
+        publication_form: null,
+        article_kind: null,
       }),
     });
     await expect(env.app.identity.observe(snapshot)).resolves.toEqual({
@@ -182,7 +186,8 @@ it("keeps provider record ownership scoped by provider", async () => {
       metadata: metadata("Independent provider snapshot", [], {
         authors: [],
         publication_year: null,
-        document_type: null,
+        publication_form: null,
+        article_kind: null,
       }),
     });
     const independent = await env.app.identity.observe(otherProvider);
@@ -317,6 +322,7 @@ it("rolls back the observation and projection when the identity CAS is stale", a
             metadata_revision: 2,
             metadata_sha256: metadataSha256,
             fallback_identity_sha256: null,
+            field_states: [],
           },
         ],
         meta_literatures: [],
@@ -347,12 +353,9 @@ it("rolls back the observation and projection when the identity CAS is stale", a
   }
 });
 
-it("retains a new observation but preserves current metadata once content is ready", async () => {
+it("projects provider metadata independently of stored PDF material", async () => {
   const env = await setup();
   try {
-    const initial = await env.app.library.detail(lit);
-    const content = await proposal(initial);
-    await env.app.literatureContent.accept(content.value, content.bytes);
     const before = await env.app.library.detail(lit);
     const incoming = observation(50, {
       title: "Provider replacement",
@@ -368,8 +371,11 @@ it("retains a new observation but preserves current metadata once content is rea
       created: false,
     });
     const after = await env.app.library.detail(lit);
-    expect(after.literature.metadata).toEqual(before.literature.metadata);
-    expect(after.metadata_revision).toBe(before.metadata_revision);
+    expect(after.literature.metadata.title).toBe("Provider replacement");
+    expect(after.primary_pdf).toEqual(before.primary_pdf);
+    expect(after.metadata_revision).toBe(before.metadata_revision + 1);
+    expect(after).not.toHaveProperty("content");
+    expect(after.literature.status).toBe("ASSET_READY");
     expect(
       (await env.app.observations.get(incoming.observation_id))!.literature_id,
     ).toBe(lit);

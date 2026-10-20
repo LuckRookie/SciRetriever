@@ -21,6 +21,7 @@ type Reader = Pick<ApiClient, "processors">;
 export interface WebProcessorResult {
   ref: ProcessorResultRef;
   result: ProcessorResult;
+  freshness: { state: "current" | "stale"; reasons: readonly unknown[] };
 }
 export interface ResultDescription {
   ref: ProcessorResultRef;
@@ -109,7 +110,20 @@ export async function readProcessorResult(
     (await sha256(processorResultBytes(result))) !== ref.content_sha256
   )
     throw new Error("固定处理结果无法验证");
-  return { ref: actual, result };
+  const freshness = record(value.freshness, "result freshness");
+  if (
+    !["current", "stale"].includes(String(freshness.state)) ||
+    !Array.isArray(freshness.reasons)
+  )
+    throw new Error("结果版本状态无效");
+  return {
+    ref: actual,
+    result,
+    freshness: {
+      state: freshness.state as "current" | "stale",
+      reasons: freshness.reasons,
+    },
+  };
 }
 
 export function describeResult(stored: WebProcessorResult): ResultDescription {
@@ -121,13 +135,7 @@ export function describeResult(stored: WebProcessorResult): ResultDescription {
       ...new Set([
         ...result.literature_ids,
         ...result.invocation.inputs.flatMap((input) =>
-          input.kind === "document"
-            ? [input.document.source_material_ref.literature_id]
-            : input.kind === "material"
-              ? [input.material.literature_id]
-              : input.kind === "missing"
-                ? [input.literature_id]
-                : [],
+          input.kind === "snapshot" ? [] : [input.literature_id],
         ),
       ]),
     ],

@@ -108,3 +108,5 @@ Parsing、MinerU 和 Analysis 均由 TypeScript 生产实现；`parsing-artifact
 `model-loopback.test.ts` 通过临时配置和本地 HTTP 服务验证三种模型 adapter 的实际网络组装；Analysis
 另有从正式 ParserResult 经两次实际 loopback 模型 HTTP 到 Literature 接纳的组合测试。loopback 模型
 使用无凭据 HTTP，配置明确端口；旧 provider 凭据必须由 owner 显式移除后才可组装本地端点。
+
+`pnpm build` 在 TypeScript 增量编译后执行 `scripts/prune-retired-runtime.mjs`，精确清理已退役解析模块的旧输出，再构建 Web/阅读资源。脚本只处理已知退役文件并拒绝符号链接，不改动文献资产或其它生成物；无需手工清空整个 dist。

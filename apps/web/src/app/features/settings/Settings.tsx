@@ -11,6 +11,7 @@ import {
   Tabs,
   TechDetails,
   TextField,
+  NumberField,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import { useUrlState, registerNavigationGuard } from "../../data/url.js";
@@ -34,6 +35,7 @@ const tabs = [
   { id: "sources", label: "文献来源" },
   { id: "models", label: "模型" },
   { id: "parser", label: "解析与 Browser" },
+  { id: "archive", label: "建档" },
   { id: "cred", label: "凭据" },
   { id: "status", label: "运行状态" },
   { id: "appearance", label: "外观" },
@@ -655,6 +657,36 @@ export default function Settings() {
                 </div>
                 <h2>角色绑定</h2>
                 <Select
+                  label="校订矫正模型"
+                  value={str(value("proofread", "model"))}
+                  onChange={(v) => edit("proofread", "model", v || null)}
+                  options={modelOptions}
+                />
+                <Select
+                  label="用时核对模型"
+                  value={str(value("proofread", "value_check_model"))}
+                  onChange={(v) =>
+                    edit("proofread", "value_check_model", v || null)
+                  }
+                  options={modelOptions}
+                />
+                {[
+                  ["model", "文献打标模型"],
+                  ["consolidation_model", "词表整理模型"],
+                  ["backfill_model", "标签回溯模型"],
+                ].map(([key, label]) => (
+                  <Select
+                    key={key}
+                    label={label!}
+                    value={str(value("tags", key!))}
+                    onChange={(v) => edit("tags", key!, v || null)}
+                    options={modelOptions}
+                  />
+                ))}
+                <p className="muted">
+                  标签任务未单独指定时使用分析模型；元数据与章节角色也使用分析模型。
+                </p>
+                <Select
                   label="分析模型"
                   value={str(value("analyze", "model"))}
                   onChange={(value) => edit("analyze", "model", value || null)}
@@ -677,9 +709,66 @@ export default function Settings() {
                 <Button
                   variant="primary"
                   isPending={publish.isPending}
-                  onPress={() => save(["browser", "parsing", "analyze"])}
+                  onPress={() =>
+                    save(["browser", "parsing", "analyze", "tags", "proofread"])
+                  }
                 >
                   保存角色绑定
+                </Button>
+              </div>
+            )}
+            {section === "archive" && (
+              <div className="settings-section">
+                <h2>建档与标签</h2>
+                <p>
+                  元数据和章节判定使用“模型”页的分析模型。矫正与用时核对未单独指定时沿用分析模型，必须支持图片和工具；存疑内容会保留说明。
+                </p>
+                {[
+                  ["max_per_literature", "每篇标签上限", 1, 32],
+                  ["candidate_k", "候选检索数量", 1, 64],
+                  ["backfill_batch", "回溯批量", 1, 64],
+                ].map(([key, label, min, max]) => (
+                  <NumberField
+                    key={String(key)}
+                    label={String(label)}
+                    minValue={Number(min)}
+                    maxValue={Number(max)}
+                    value={Number(value("tags", String(key)) ?? min)}
+                    onChange={(v) => edit("tags", String(key), v)}
+                  />
+                ))}
+                <NumberField
+                  label="每篇矫正调用上限"
+                  minValue={1}
+                  maxValue={10000}
+                  value={Number(
+                    value("proofread", "max_calls_per_document") ?? 64,
+                  )}
+                  onChange={(v) =>
+                    edit("proofread", "max_calls_per_document", v)
+                  }
+                />
+                <p className="ui-description">
+                  部署解析 profile：
+                  {str(value("parsing", "archive_profile")) || "vlm-engine"}
+                  （部署配置，只读）
+                </p>
+                <NumberField
+                  label="每次算子的用时核对调用上限"
+                  minValue={1}
+                  maxValue={10000}
+                  value={Number(
+                    value("proofread", "max_value_check_calls") ?? 64,
+                  )}
+                  onChange={(v) =>
+                    edit("proofread", "max_value_check_calls", v)
+                  }
+                />
+                <Button
+                  isPending={publish.isPending}
+                  onPress={() => save(["tags", "proofread"])}
+                >
+                  保存建档设置
                 </Button>
               </div>
             )}
@@ -734,7 +823,15 @@ export default function Settings() {
                   <Button
                     variant="primary"
                     isPending={publish.isPending}
-                    onPress={() => save(["browser", "parsing", "analyze"])}
+                    onPress={() =>
+                      save([
+                        "browser",
+                        "parsing",
+                        "analyze",
+                        "tags",
+                        "proofread",
+                      ])
+                    }
                   >
                     保存运行配置
                   </Button>

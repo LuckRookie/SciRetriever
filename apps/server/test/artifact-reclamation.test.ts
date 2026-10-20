@@ -1,47 +1,21 @@
-import { expect, it } from "vitest";
-import { DatabaseSync } from "node:sqlite";
-import { join, dirname } from "node:path";
+import { parseDurableCandidate } from "@sciretriever/contracts";
 import {
+  link,
+  mkdir,
+  readdir,
   readFile,
-  unlink,
-  writeFile,
   rename,
   symlink,
-  link,
-  readdir,
-  mkdir,
+  unlink,
+  writeFile,
 } from "node:fs/promises";
-import {
-  parseAnalysisInputIdentity,
-  parseDurableCandidate,
-} from "@sciretriever/contracts";
+import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { expect, it } from "vitest";
 import { createApplication } from "../src/bootstrap/application.js";
-import { setup, proposal, lit } from "./content-fixture.js";
+import { lit, reclamationFixture as prepared } from "./reclamation-fixture.js";
 
-async function prepared() {
-  const env = await setup();
-  const p = await proposal(await env.app.library.detail(lit));
-  await env.app.literatureContent.accept(p.value, p.bytes);
-  const d = await env.app.library.detail(lit);
-  const result = await env.app.literatureCleanup.cleanup({
-    outcome: "no_usable_content",
-    input: parseAnalysisInputIdentity({
-      literature_id: lit,
-      primary_asset_id: d.primary_pdf!.asset.asset_id,
-      primary_pdf_sha256: d.primary_pdf!.asset.sha256,
-      parser_result_sha256: d.parser_result!.result_sha256,
-      input_metadata_revision: d.metadata_revision,
-      input_metadata_sha256: d.metadata_sha256,
-    }),
-  });
-  return {
-    ...env,
-    retired: result.retired_artifacts,
-    before: d,
-    primary: d.primary_pdf!.asset,
-  };
-}
-it("reclaims retired PDF, Parser and content bytes, preserving metadata and replaying after restart", async () => {
+it("reclaims unregistered publication bytes while preserving accepted material and replaying after restart", async () => {
   const env = await prepared();
   let reopened: Awaited<ReturnType<typeof createApplication>> | undefined;
   try {
@@ -54,7 +28,7 @@ it("reclaims retired PDF, Parser and content bytes, preserving metadata and repl
       ).rejects.toMatchObject({ code: "ENOENT" });
     const after = await env.app.library.detail(lit);
     expect(after.literature.metadata).toEqual(env.before.literature.metadata);
-    expect(after.content).toBeNull();
+    expect(after.primary_pdf).toEqual(env.before.primary_pdf);
     await env.app.close();
     reopened = await createApplication(env.home);
     expect(await reopened.artifactReclaimer.reclaim(env.retired)).toEqual({
@@ -117,7 +91,6 @@ it("preserves a descriptor re-registered after catalog cleanup", async () => {
 it("preserves bytes protected by Candidate identity even when the formal target differs", async () => {
   const env = await prepared();
   try {
-    await env.app.database.upgradeExecutionSchema();
     const a = env.retired[0]!;
     await env.app.database.putCandidate(
       parseDurableCandidate({
@@ -285,7 +258,6 @@ it("cancels before mutation and rejects references outside the managed object na
 it("preserves a pending receipt target even when its incoming hash differs", async () => {
   const env = await prepared();
   try {
-    await env.app.database.upgradeExecutionSchema();
     const a = env.retired.find(
       (artifact) => artifact.reference === env.primary.path,
     )!;

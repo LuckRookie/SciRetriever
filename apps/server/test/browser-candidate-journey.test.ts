@@ -74,7 +74,7 @@ describe("Browser to durable Candidate journey", () => {
     const connection = await proxy.start();
     const files = new FileStore(join(root, "files"));
     const db = new SqliteWorker(join(root, "catalog.sqlite"));
-    await db.upgradeExecutionSchema();
+
     const collector = new BrowserTransferCollector(files, db);
     const intake = new BrowserCandidateIntake(collector, {
       article_id: "article-1",

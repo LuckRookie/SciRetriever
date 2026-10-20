@@ -1,3 +1,5 @@
+import { inspectFixtureRetrieval } from "./current-catalog-fixture.js";
+import { correctedDocumentFixture } from "./corrected-document-fixture.js";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -5,11 +7,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  canonicalJsonBytes,
   parseAsset,
   parseMaterialContextBundle,
   parseMaterialContextRequest,
   parseLiteratureId,
-  parseLiterature,
   parseLibrarySearchRequest,
   parseMetaLiteratureId,
   parseProvenance,
@@ -18,30 +20,23 @@ import {
   type EvidenceRef,
   type MaterialContextBundle,
 } from "@sciretriever/contracts";
-import {
-  createApplication,
-  createQueryApplication,
-} from "../src/bootstrap/application.js";
+import { createParserFixtureApplication as createApplication } from "./parser-application-fixture.js";
+import { createQueryApplication } from "../src/bootstrap/application.js";
 import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
-import type { ParserBackend } from "../src/parsing/ports.js";
+import type { ParserBackend } from "./parser-fixture-types.js";
 import { runCli } from "../src/cli/main.js";
 import { startQueryOnlyHttp } from "../src/workbench/http.js";
-import { migrateDocumentCatalog } from "../src/storage/sqlite/document-migration.js";
-import {
-  inspectRetrievalCatalog,
-  migrateRetrievalCatalog,
-} from "../src/storage/sqlite/retrieval-migration.js";
 import { RetrievalStorage } from "../src/retrieval/storage.js";
 import { RetrievalStorageClient } from "../src/storage/sqlite/retrieval-client.js";
 import { SqliteWorker } from "../src/storage/sqlite/worker.js";
 import {
-  inspectV4,
+  inspectCatalogWithRetrieval,
   prepareRetrievalVocab,
 } from "../src/storage/sqlite/retrieval-engine.js";
 import {
-  SCHEMA_V4_FINGERPRINT,
-  SCHEMA_V4_MANIFEST,
-} from "../src/storage/sqlite/schema-v4.js";
+  SCHEMA_FINGERPRINT,
+  SCHEMA_MANIFEST,
+} from "../src/storage/sqlite/schema.js";
 import {
   EXECUTION_SCHEMA_VERSION,
   EXECUTION_SCHEMA_FINGERPRINT,
@@ -130,12 +125,10 @@ it("isolates cold retrieval from library reads with one reusable read-only worke
   }
 }, 30000);
 
-async function fixture(document = false, publishBeforeV4 = false) {
+async function fixture(document = false, publishBeforeReopen = false) {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-retrieval-context-"));
   const catalog = join(home, "catalog.sqlite");
-  let app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  let app = await createApplication(home, {});
   let text =
     "# Results\nDose 5 mg increased yield.\n\n| group | value |\n| A | 2 mg |\n";
   let parses = 0;
@@ -201,17 +194,12 @@ async function fixture(document = false, publishBeforeV4 = false) {
       });
     }
     await app.close();
-    await migrateDocumentCatalog({
-      catalog_path: catalog,
-      backup_path: join(home, "before-v3.sqlite"),
-    });
-    if (publishBeforeV4) {
-      if (!asset) throw new Error("pre-v4 document requires material");
+    if (publishBeforeReopen) {
+      if (!asset) throw new Error("earlier document requires material");
       app = await createApplication(home, {
-        executionSchema: "require-v2",
         parsing: { parser, rules: new TypeScriptParserArtifactRules() },
       });
-      const old = await app.documentProcessing.parseDocuments({
+      const old = await correctedDocumentFixture(app).parseDocuments({
         literature_id: FIXTURE_LITERATURE.literature_id,
         asset_id: asset.asset_id,
         asset_sha256: asset.sha256,
@@ -219,21 +207,25 @@ async function fixture(document = false, publishBeforeV4 = false) {
         expected_default_revision: null,
       });
       oldVersionId = old.document.document_version_id;
+      const segments = await app.documentRead.segments({
+        document_version_id: oldVersionId,
+        section_id: null,
+        limit: 200,
+        cursor: null,
+      });
+      const textSegment = segments.segments.find(
+        (segment) => segment.kind === "text",
+      )!;
       const slice = await app.documentRead.slice({
         document_version_id: oldVersionId,
-        selector: { kind: "segment", segment_id: "p2" },
+        selector: { kind: "segment", segment_id: textSegment.segment_id },
         max_bytes: 128,
         continuation: null,
       });
       oldEvidence = slice.evidence[0] ?? null;
       await app.close();
     }
-    await migrateRetrievalCatalog({
-      catalog_path: catalog,
-      backup_path: join(home, "before-v4.sqlite"),
-    });
     app = await createApplication(home, {
-      executionSchema: "require-v2",
       parsing: { parser, rules: new TypeScriptParserArtifactRules() },
     });
     return {
@@ -267,17 +259,55 @@ describe("explicit retrieval projection and bounded Context", () => {
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
     const insert = vi.spyOn(RetrievalStorageClient.prototype, "insertEntries");
     try {
-      for (let n = 1; n <= 256; n++) {
-        await env.app.database.putLiterature(
-          parseLiterature({
-            ...FIXTURE_LITERATURE,
-            literature_id: id(10_000 + n),
-            metadata: {
-              ...FIXTURE_LITERATURE.metadata,
-              title: `Batchneedle ${n}`,
-            },
-          }),
+      // Retrieval batching is the subject; seed its isolated current catalog in
+      // one transaction rather than timing 256 unrelated per-record write leases.
+      const seed = new DatabaseSync(env.catalog);
+      try {
+        seed.exec(
+          "PRAGMA foreign_keys=ON; BEGIN; PRAGMA defer_foreign_keys=ON",
         );
+        const meta = seed.prepare("INSERT INTO meta_literatures VALUES(?,?)");
+        const lit = seed.prepare("INSERT INTO literatures VALUES(?,?,?)");
+        const row = seed.prepare(
+          "INSERT INTO literature_metadata(literature_id,metadata_revision,metadata_sha256,title,abstract,publication_date,publication_year,publication_form,article_kind,language,venue,publisher,volume,issue,pages) VALUES(?,1,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        );
+        const fts = seed.prepare(
+          "INSERT INTO literature_search_fts(literature_id,title,abstract,authors,affiliations,identifiers,keywords,venue,publisher,volume,issue,pages,content_body) VALUES(?,?,NULL,'','','','',NULL,NULL,NULL,NULL,NULL,'')",
+        );
+        for (let n = 1; n <= 256; n++) {
+          const m = {
+            ...FIXTURE_LITERATURE.metadata,
+            title: `Batchneedle ${n}`,
+            authors: [],
+            identifiers: [],
+            keywords: [],
+          };
+          const lid = id(10_000 + n),
+            mid = id(20_000 + n);
+          meta.run(mid, lid);
+          lit.run(lid, mid, "published");
+          row.run(
+            lid,
+            await sha256(canonicalJsonBytes(m)),
+            m.title,
+            m.abstract,
+            m.publication_date,
+            m.publication_year,
+            m.publication_form,
+            m.article_kind,
+            m.language,
+            m.venue,
+            m.publisher,
+            m.volume,
+            m.issue,
+            m.pages,
+          );
+          fts.run(lid, m.title);
+        }
+        expect(seed.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        seed.exec("COMMIT");
+      } finally {
+        seed.close();
       }
       const generation = await env.app.maintenance!.rebuildIndex();
       expect(generation).toMatchObject({ entry_count: 257, source_count: 257 });
@@ -324,13 +354,14 @@ describe("explicit retrieval projection and bounded Context", () => {
     const insert = vi.spyOn(RetrievalStorageClient.prototype, "insertEntries");
     try {
       env.setText(`# Results\n\n${"Dose ".repeat(300_000)}\n`);
-      await env.app.documentProcessing.parseDocuments({
+      await correctedDocumentFixture(env.app).parseDocuments({
         literature_id: FIXTURE_LITERATURE.literature_id,
         asset_id: env.asset!.asset_id,
         asset_sha256: env.asset!.sha256,
         mode: "reparse",
         expected_default_revision: null,
       });
+      insert.mockClear();
       const generation = await env.app.maintenance!.rebuildIndex();
       expect(generation.source_count).toBe(2);
       expect(generation.entry_count).toBeGreaterThan(32);
@@ -489,7 +520,7 @@ describe("explicit retrieval projection and bounded Context", () => {
       await Promise.all([disconnected, finished.promise]);
       expect(failure).toMatchObject({ code: "index-cancelled" });
       expect(
-        (await inspectRetrievalCatalog(env.catalog)).active_generation,
+        (await inspectFixtureRetrieval(env.catalog)).active_generation,
       ).toBe(before.generation_id);
       const after = await env.app.maintenance!.rebuildIndex();
       expect(after.generation_id).not.toBe(before.generation_id);
@@ -502,7 +533,7 @@ describe("explicit retrieval projection and bounded Context", () => {
     }
   }, 10_000);
 
-  it("keeps a v3 DocumentVersion and its evidence readable after v4 migration and rebuild", async () => {
+  it("keeps a pinned DocumentVersion and its evidence readable after reopening and index rebuild", async () => {
     const env = await fixture(true, true);
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
     try {
@@ -512,7 +543,7 @@ describe("explicit retrieval projection and bounded Context", () => {
       expect(
         await query.documentRead!.resolveEvidence(env.oldEvidence!),
       ).toMatchObject({
-        text: "Dose 5 mg increased yield.\n",
+        text: "Dose 5 mg increased yield.\n\n",
       });
       const generation = await env.app.maintenance!.rebuildIndex();
       const result = await query.context!.search({
@@ -529,7 +560,7 @@ describe("explicit retrieval projection and bounded Context", () => {
       expect(
         await query.documentRead!.resolveEvidence(env.oldEvidence!),
       ).toMatchObject({
-        text: "Dose 5 mg increased yield.\n",
+        text: "Dose 5 mg increased yield.\n\n",
       });
     } finally {
       await query?.close();
@@ -548,7 +579,7 @@ describe("explicit retrieval projection and bounded Context", () => {
             { home: env.home },
           )
         ).value,
-      ).toMatchObject({ schema_version: 4, active_generation: null });
+      ).toMatchObject({ schema_version: 11, active_generation: null });
       const published = (
         await runCli(["maintenance", "rebuild-index"], { home: env.home })
       ).value as {
@@ -820,11 +851,12 @@ describe("explicit retrieval projection and bounded Context", () => {
         const next = writer.beginGeneration(revision);
         prepareRetrievalVocab(reader);
         reader.exec("PRAGMA query_only=ON");
-        const inspected = inspectV4(
+        const inspected = inspectCatalogWithRetrieval(
           reader,
           {
-            schema_fingerprint: SCHEMA_V4_FINGERPRINT,
-            schema_manifest: SCHEMA_V4_MANIFEST,
+            schema_version: 11,
+            schema_fingerprint: SCHEMA_FINGERPRINT,
+            schema_manifest: SCHEMA_MANIFEST,
             execution_schema_version: EXECUTION_SCHEMA_VERSION,
             execution_schema_fingerprint: EXECUTION_SCHEMA_FINGERPRINT,
             execution_runtime_schema_version: EXECUTION_RUNTIME_SCHEMA_VERSION,
@@ -938,7 +970,7 @@ describe("explicit retrieval projection and bounded Context", () => {
         generation_id: repaired.generation_id,
       });
       expect(
-        (await inspectRetrievalCatalog(env.catalog)).active_generation,
+        (await inspectFixtureRetrieval(env.catalog)).active_generation,
       ).toBe(repaired.generation_id);
     } finally {
       await query?.close();
@@ -1061,7 +1093,7 @@ describe("explicit retrieval projection and bounded Context", () => {
   it("rolls back an in-transaction repair failure and permits a clean explicit retry", async () => {
     const env = await fixture(true);
     try {
-      const document = await env.app.documentProcessing.parseDocuments({
+      const document = await correctedDocumentFixture(env.app).parseDocuments({
         literature_id: FIXTURE_LITERATURE.literature_id,
         asset_id: env.asset!.asset_id,
         asset_sha256: env.asset!.sha256,
@@ -1121,14 +1153,14 @@ describe("explicit retrieval projection and bounded Context", () => {
           "injected repair failure",
         );
         expect(snapshot()).toEqual(damaged);
-        await expect(inspectRetrievalCatalog(env.catalog)).rejects.toThrow();
+        await expect(inspectFixtureRetrieval(env.catalog)).rejects.toThrow();
       } finally {
         store.close();
       }
       const repaired = await env.app.maintenance!.rebuildIndex();
       expect(repaired.generation_id).not.toBe(before.generation_id);
       expect(
-        (await inspectRetrievalCatalog(env.catalog)).active_generation,
+        (await inspectFixtureRetrieval(env.catalog)).active_generation,
       ).toBe(repaired.generation_id);
       expect(snapshot().metadata).toEqual(damaged.metadata);
       expect(snapshot().document).toEqual(damaged.document);
@@ -1142,9 +1174,9 @@ describe("explicit retrieval projection and bounded Context", () => {
     try {
       const before = await env.app.maintenance!.rebuildIndex();
       env.setText(
-        `# ${"A".repeat(4 * 1024 * 1024)}\n\n${Array.from({ length: 17 }, (_, n) => `Dose ${n} mg.\n`).join("\n")}`,
+        `# ${"A".repeat(65536)}\n\n${Array.from({ length: 1025 }, (_, n) => `Dose ${n} mg.\n`).join("\n")}`,
       );
-      await env.app.documentProcessing.parseDocuments({
+      await correctedDocumentFixture(env.app).parseDocuments({
         literature_id: FIXTURE_LITERATURE.literature_id,
         asset_id: env.asset!.asset_id,
         asset_sha256: env.asset!.sha256,
@@ -1180,7 +1212,7 @@ describe("explicit retrieval projection and bounded Context", () => {
       env.setText(
         `# Results\nDose 5 mg did not improve yield.\n\n| compound | dose | response |\n| A | 5 mg | no effect |\n| B | 10 mg | improvement |\n\n${"αβ ".repeat(500)}\n`,
       );
-      await env.app.documentProcessing.parseDocuments({
+      await correctedDocumentFixture(env.app).parseDocuments({
         literature_id: FIXTURE_LITERATURE.literature_id,
         asset_id: env.asset!.asset_id,
         asset_sha256: env.asset!.sha256,
@@ -1265,13 +1297,13 @@ describe("explicit retrieval projection and bounded Context", () => {
         mode: "reparse" as const,
         expected_default_revision: revision,
       });
-      const old = await env.app.documentProcessing.parseDocuments(
+      const old = await correctedDocumentFixture(env.app).parseDocuments(
         selection(null),
       );
       env.setText(
         "# Results\nDose 10 mg increased yield.\n\n| group | value |\n| B | 4 mg |\n",
       );
-      const current = await env.app.documentProcessing.parseDocuments(
+      const current = await correctedDocumentFixture(env.app).parseDocuments(
         selection(old.default_revision),
       );
       expect(current.document.document_version_id).not.toBe(
@@ -1285,7 +1317,7 @@ describe("explicit retrieval projection and bounded Context", () => {
       expect(latest.items).toHaveLength(1);
       expect(latest.items[0]).toMatchObject({
         kind: "source-text",
-        text: "Dose 10 mg increased yield.\n",
+        text: "Dose 10 mg increased yield.\n\n",
         reference: {
           document_version_id: current.document.document_version_id,
         },
@@ -1309,7 +1341,7 @@ describe("explicit retrieval projection and bounded Context", () => {
       expect(
         resolved.some(
           (item) =>
-            "text" in item && item.text === "Dose 10 mg increased yield.\n",
+            "text" in item && item.text === "Dose 10 mg increased yield.\n\n",
         ),
       ).toBe(true);
       const historical = await query.context!.search({
@@ -1327,7 +1359,7 @@ describe("explicit retrieval projection and bounded Context", () => {
       });
       expect(historical.items).toHaveLength(1);
       expect(historical.items[0]).toMatchObject({
-        text: "Dose 5 mg increased yield.\n",
+        text: "Dose 5 mg increased yield.\n\n",
         reference: { document_version_id: old.document.document_version_id },
       });
       await expect(
@@ -1354,14 +1386,14 @@ describe("explicit retrieval projection and bounded Context", () => {
         generation_id: nextGeneration.generation_id,
         coverage: "complete",
       });
-      expect(repeated.items[0]?.text).toBe("Dose 10 mg increased yield.\n");
+      expect(repeated.items[0]?.text).toBe("Dose 10 mg increased yield.\n\n");
       const repeatedEvidence = await query.documentRead!.resolveEvidence(
         repeated.items[0]!.evidence.at(-1)!,
       );
       expect("text" in repeatedEvidence && repeatedEvidence.text).toBe(
-        "Dose 10 mg increased yield.\n",
+        "Dose 10 mg increased yield.\n\n",
       );
-      expect(env.parses).toBe(2);
+      expect(env.parses).toBe(4);
     } finally {
       await query?.close();
       await env.close();
@@ -1371,11 +1403,13 @@ describe("explicit retrieval projection and bounded Context", () => {
   it("reports evidence-limit for a matching unit with more than 32 source segments", async () => {
     const env = await fixture(true);
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
+    const originalSearch = RetrievalStorageClient.prototype.search;
+    let restoreSearch = () => {};
     try {
       env.setText(
-        `# Results\n${Array.from({ length: 40 }, (_, i) => `Dose line ${i}.\n`).join("")}`,
+        `# Results\n${Array.from({ length: 40 }, (_, i) => `Dose line ${i}.\n\n`).join("")}`,
       );
-      await env.app.documentProcessing.parseDocuments({
+      await correctedDocumentFixture(env.app).parseDocuments({
         literature_id: FIXTURE_LITERATURE.literature_id,
         asset_id: env.asset!.asset_id,
         asset_sha256: env.asset!.sha256,
@@ -1384,6 +1418,42 @@ describe("explicit retrieval projection and bounded Context", () => {
       });
       await env.app.maintenance!.rebuildIndex();
       query = await createQueryApplication(env.home);
+      const current = await env.app.documentRead.default({
+        literature_id: FIXTURE_LITERATURE.literature_id,
+        asset_id: env.asset!.asset_id,
+        asset_sha256: env.asset!.sha256,
+      });
+      const bytes = await env.app.documentRead.withVerifiedVersion(
+        current.default!.document_version_id,
+        async (_version, markdown, structure) => {
+          expect(structure.segments.length).toBeGreaterThan(32);
+          return markdown;
+        },
+      );
+      // Exercise the context reader's evidence cap with one verified wide hit;
+      // current per-block indexing no longer happens to group 40 source lines.
+      const search = vi
+        .spyOn(RetrievalStorageClient.prototype, "search")
+        .mockImplementation(async function (
+          this: RetrievalStorageClient,
+          ...args
+        ) {
+          const found = await originalSearch.apply(this, args);
+          expect(found.hits.length).toBeGreaterThan(0);
+          return {
+            candidateLimit: false,
+            hits: [
+              {
+                ...found.hits[0]!,
+                unit_start_utf8: 0,
+                unit_end_utf8: bytes.length,
+                unit_sha256: await sha256(bytes),
+              },
+            ],
+          };
+        });
+
+      restoreSearch = () => search.mockRestore();
       const bundle = await query.context!.search({
         ...request(["document"]),
         query: "dose",
@@ -1400,6 +1470,7 @@ describe("explicit retrieval projection and bounded Context", () => {
         literature_id: FIXTURE_LITERATURE.literature_id,
       });
     } finally {
+      restoreSearch();
       await query?.close();
       await env.close();
     }
@@ -1412,7 +1483,7 @@ describe("explicit retrieval projection and bounded Context", () => {
       env.setText(
         `# Results\n${Array.from({ length: 4100 }, (_, i) => `Dose evidence ${i}.\n\n`).join("")}`,
       );
-      await env.app.documentProcessing.parseDocuments({
+      await correctedDocumentFixture(env.app).parseDocuments({
         literature_id: FIXTURE_LITERATURE.literature_id,
         asset_id: env.asset!.asset_id,
         asset_sha256: env.asset!.sha256,
@@ -1443,5 +1514,5 @@ describe("explicit retrieval projection and bounded Context", () => {
       await query?.close();
       await env.close();
     }
-  });
+  }, 30_000);
 });

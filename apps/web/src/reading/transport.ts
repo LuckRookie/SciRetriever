@@ -1,15 +1,12 @@
 import {
   parseDocumentReadResult,
-  parseSynthesisReadSelection,
-  parseSynthesisSourceResult,
-  knowledgeStatementSha256,
   sha256,
-  type EvidenceRef,
+  type DocumentMaterialRef,
+  type DocumentReadingRef,
   type DocumentReadOperation,
   type DocumentReadRequestMap,
   type DocumentReadResultMap,
-  type DocumentMaterialRef,
-  type DocumentReadingRef,
+  type EvidenceRef,
   type LiteratureDetail,
 } from "@sciretriever/contracts";
 import type { ReadingContext } from "./contract.js";
@@ -61,35 +58,10 @@ export async function resolveReadingSources(
           material.asset_sha256 !== source.asset_sha256))
     )
       throw new Error("固定文档与原来源不匹配，未使用默认材料替代。");
-  } else if (params.has("knowledge")) {
-    const selection = parseSynthesisReadSelection({
-      artifact_id: params.get("knowledge"),
-    });
-    const result = await parseSynthesisSourceResult(
-      (await ctx.api.query("synthesis-source", selection, ctx.signal)).result,
-      selection,
+  } else if (source?.kind === "result") {
+    throw new Error(
+      "请从固定处理结果的证据打开原文，不能以当前默认材料替代历史输入。",
     );
-    const artifact = result.artifact;
-    if (artifact.schema_version !== 1)
-      throw new Error("集合综合应从它的固定文献证据打开原文。");
-    const input = artifact.input.items.find(
-      (item) => item.literature_id === id,
-    );
-    if (!input) throw new Error("知识产物不属于当前文献");
-    if (source?.kind === "knowledge") {
-      const statement = artifact.content.statements.find(
-        (s) => s.statement_id === source.statement_id,
-      );
-      if (
-        artifact.content_ref.sha256 !== source.content_sha256 ||
-        artifact.input.manifest_sha256 !== source.manifest_sha256 ||
-        !statement ||
-        (await knowledgeStatementSha256(statement)) !== source.statement_sha256
-      )
-        throw new Error("固定知识来源无法验证");
-    }
-    material = input.material;
-    document = input.document;
   } else {
     const assetId = params.get("asset") ?? detail.primary_pdf?.asset.asset_id;
     const expectedHash =
@@ -108,7 +80,7 @@ export async function resolveReadingSources(
   }
   if (material && material.literature_id !== id)
     throw new Error("固定材料不属于当前文献");
-  if (mode === "doc" && material && !document && !params.has("knowledge")) {
+  if (mode === "doc" && material && !document) {
     const current = await readDocument(ctx, "default", {
       literature_id: id,
       asset_id: material.asset_id,

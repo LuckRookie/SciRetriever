@@ -170,7 +170,7 @@ it("continues fixed Unicode Markdown without rebuilding stable blocks and recove
     expect(await w.page.locator(".reading-status").innerText()).toContain(
       "全文已加载",
     );
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(w.setupCalls.parser);
     expect(w.env.modelCalls).toBe(0);
     expect(w.errors).toEqual([]);
   } finally {
@@ -300,7 +300,7 @@ it("keeps the latest outline target, text settings and reading position across a
     expect(requests.every((url) => new URL(url).origin === w.origin)).toBe(
       true,
     );
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(w.setupCalls.parser);
     expect(w.env.modelCalls).toBe(0);
     expect(w.errors).toEqual([]);
   } finally {
@@ -403,7 +403,7 @@ it("keeps a verified PDF download available when its worker fails and supports r
     await w.page.unrouteAll({ behavior: "wait" });
     await w.page.getByRole("button", { name: "重试", exact: true }).click();
     await ready(w);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(w.setupCalls.parser);
     expect(w.env.modelCalls).toBe(0);
     expect(w.errors).toEqual([]);
   } finally {
@@ -463,6 +463,8 @@ it("renders metadata provenance as human fields and preserves a keyboard- and po
         value.detail.metadata_observations = [
           {
             observation_id: "00000000-0000-0000-0000-000000009901",
+            source_type: null,
+            source_type_mapping_version: null,
             provenance: {
               provenance_id: "00000000-0000-0000-0000-000000009902",
               source_kind: "metadata-provider",
@@ -596,7 +598,7 @@ it.each(["no-preference", "reduce"] as const)(
           () => document.documentElement.scrollWidth <= innerWidth,
         ),
       ).toBe(true);
-      expect(w.env.parseCalls).toBe(1);
+      expect(w.env.parseCalls).toBe(w.setupCalls.parser);
       expect(w.env.modelCalls).toBe(0);
       expect(w.errors).toEqual([]);
     } finally {

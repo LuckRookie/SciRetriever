@@ -12,7 +12,6 @@
 - [Web 文献库工作空间](web-workbench.md)：按定稿原型接入的库首页、阅读标签、发现与加工、任务与 Browser、配置和固定数据库绑定。
 - [SciRetriever 配置手册](configuration.md)：普通配置、固定凭据文件、Provider readiness 和显式只读 probe 目标；真实 `config test` 的当前缺口已标注。
 - [PDF 获取指南](pdf-acquisition.md)：目标 Public → Authorized API → Browser-last 执行顺序、Browser 安全边界、Provider 分组限速、逐文章权限检查、失败分类和重跑；生产 Browser route 的当前接线状态已标注。
-- [文档 Catalog 合成迁移指南](document-catalog-migration.md)：保留 v1/v2→v3、v3→v4 历史单步演练门禁；正式 v8 启用走上述 operator 入口。
 - [解析与发布文档版本](document-processing.md)：对固定已接纳主 PDF 显式复用或重解析，发布不可变 DocumentVersion，再按固定版本有界阅读和复核证据。
 
 用户指南只把安装后可观察、且已有对应验收证据的行为写成当前能力。外部 Port 的受控 fake 验收、loopback 协议 QA 或 Chromium 安全 QA 不等于生产环境已经对真实 Provider、Parser、LLM 或出版社开放；具体证据边界以项目 README 的“当前验收边界”为准。
@@ -22,3 +21,7 @@
 [上级目录](../README.md) · [项目 README](../../README.md)
 
 - [统一知识加工](knowledge-processors.md)：处理器规范、批量复用、内容查询、证据、组合和导出。
+
+- [标签词表与文献打标](tags.md)：浏览、两步打标、人工锁定、可逆整理和回溯。
+
+- [文献建档](literature-archive.md)：独立建档任务、六种状态、失败恢复、版本事件与统计。

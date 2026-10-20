@@ -46,7 +46,8 @@ const query = (values: Partial<LibraryQuery> = {}) =>
     publication_year_to: null,
     venue: null,
     publisher: null,
-    document_types: [],
+    publication_forms: [],
+    article_kinds: [],
     languages: [],
     keywords: [],
     version_roles: [],
@@ -59,9 +60,7 @@ const query = (values: Partial<LibraryQuery> = {}) =>
 
 async function fixture() {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-completion-scope-"));
-  const app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  const app = await createApplication(home, {});
   const put = async (
     n: number,
     meta = n,
@@ -127,6 +126,8 @@ async function fixture() {
   const discovery = async (n: number) => {
     const literature = await app.database.getLiterature(id(n));
     const observation = parseMetadataObservation({
+      source_type: null,
+      source_type_mapping_version: null,
       observation_id: randomUUID(),
       metadata: literature!.metadata,
       version_role: literature!.version_role,

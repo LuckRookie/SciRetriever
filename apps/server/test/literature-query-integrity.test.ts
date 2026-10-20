@@ -27,7 +27,8 @@ it("matches the existing query filter semantics and rejects incomplete discovery
             title: n === 1 ? "Straße Alpha" : "Beta",
             publication_year: n === 3 ? null : 2020 + n,
             language: n === 1 ? "de" : "en",
-            document_type: n === 1 ? "article" : "book",
+            publication_form: n === 1 ? "journal-article" : "book-or-chapter",
+            article_kind: null,
             venue: n === 1 ? "Science Journal" : null,
             publisher: n === 1 ? "Example Press" : null,
             keywords: n === 1 ? ["alpha", "beta"] : ["beta"],
@@ -60,6 +61,8 @@ it("matches the existing query filter semantics and rejects incomplete discovery
       parameters_sha256: null,
     });
     await app.observations.publish({
+      source_type: null,
+      source_type_mapping_version: null,
       observation_id: id(200),
       literature_id: id(1),
       provenance: provenance(201),
@@ -155,7 +158,7 @@ it("matches the existing query filter semantics and rejects incomplete discovery
       { query: { publisher: "press" }, expected: [id(1)] },
       { query: { languages: ["en"] }, expected: [id(2), id(3)] },
       {
-        query: { document_types: ["book", "article"] },
+        query: { publication_forms: ["book-or-chapter", "journal-article"] },
         expected: [id(1), id(2), id(3)],
       },
       { query: { keywords: ["alpha", "beta"] }, expected: [id(1)] },
@@ -202,7 +205,7 @@ it("matches the existing query filter semantics and rejects incomplete discovery
       { query: { needs_manual_pdf: true }, expected: [] },
       { query: { needs_manual_pdf: false }, expected: [id(2), id(3)] },
       { query: { statuses: ["ASSET_READY"] }, expected: [id(1)] },
-      { query: { missing_steps: ["parser-result"] }, expected: [id(1)] },
+      { query: { missing_steps: ["raw-parse"] }, expected: [id(1)] },
     ]);
     raw
       .prepare("DELETE FROM topic_discovery_causes WHERE discovery_run_id=?")

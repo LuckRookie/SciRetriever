@@ -25,6 +25,7 @@ export async function renderDocument(
       throw new Error("文档版本校验失败，未替换为当前默认文档。");
     ctx.signal.throwIfAborted();
   };
+  const segments: DocumentReadResultMap["segments"]["segments"][number][] = [];
   let total = 0,
     segmentCursor: string | null = null;
   const extendSegments = async () => {
@@ -39,8 +40,10 @@ export async function renderDocument(
       },
     );
     bound(page);
-    for (const segment of page.segments)
+    for (const segment of page.segments) {
+      segments.push(segment);
       total = Math.max(total, segment.end_utf8);
+    }
     segmentCursor = page.next_cursor;
   };
   // Start with one known contiguous range; discover subsequent segment pages
@@ -376,6 +379,35 @@ export async function renderDocument(
       el.dataset.byteStart = String(block.start);
       el.dataset.byteEnd = String(block.end);
       el.innerHTML = html;
+      const segment = segments.find(
+        (s) => s.start_utf8 < block.end && s.end_utf8 > block.start,
+      );
+      if (segment && frame.onSegment) {
+        const source = document.createElement("button");
+        source.className = "reading-block-source";
+        source.type = "button";
+        source.textContent =
+          (
+            {
+              "text-layer": "文字层核对",
+              "image-only": "原图核对",
+              uncertain: "存疑",
+              manual: "人工核对",
+            } as Record<string, string>
+          )[segment.basis ?? ""] ?? "查看来源";
+        if (segment.basis === "uncertain") {
+          source.classList.add("reading-block-uncertain");
+          source.title =
+            segment.uncertainty?.reason ?? "存在未能确定的抄录内容";
+        }
+        if (segment.locate === "page") source.textContent += " · 仅页级定位";
+        source.setAttribute(
+          "aria-label",
+          `查看区块来源：${source.textContent}`,
+        );
+        source.onclick = () => frame.onSegment?.(segment.segment_id);
+        el.prepend(source);
+      }
       if (frame.documentTitle) {
         for (const heading of el.querySelectorAll("h1,h2,h3,h4,h5")) {
           const presentation = document.createElement(

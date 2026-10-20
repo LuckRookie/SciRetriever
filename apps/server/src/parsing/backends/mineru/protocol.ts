@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { parseStrictJsonObject } from "@sciretriever/contracts";
+import {
+  parseStrictJsonObject,
+  parseRawParseProfile,
+} from "@sciretriever/contracts";
 import { ParsingFailure } from "../../ports.js";
 import type { MinerUHttpTransport } from "./http.js";
 import { parseMinerUHealth } from "./health.js";
-import { MINERU_REQUEST_FIELDS } from "./profile.js";
+import { mineruRequestFields } from "./profile.js";
 
 function fail(): never {
   throw new ParsingFailure("parser-unavailable");
@@ -102,10 +105,13 @@ export function createMinerUProtocolTransport(
         return response;
       };
       try {
+        const profile = parseRawParseProfile(
+          input.headers["x-sciretriever-profile"] ?? "vlm-engine",
+        );
         parseMinerUHealth((await request("health", "GET")).body);
         const boundary = `sciretriever-${randomUUID().replaceAll("-", "")}`;
         const body = Buffer.concat([
-          ...MINERU_REQUEST_FIELDS.map(([key, value]) =>
+          ...mineruRequestFields(profile).map(([key, value]) =>
             Buffer.from(
               `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`,
             ),

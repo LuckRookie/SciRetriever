@@ -1,27 +1,103 @@
-# 解析已接纳 PDF 并发布文档版本
+# PDF 解析与校订
 
-当前入口处理**已有、已接纳的主 PDF**。先从文献详情取得 Literature ID、Asset ID 和 PDF SHA-256，并确保对应 Catalog 为完整 v3–v10；普通解析命令不会升级 catalog。新库可通过[正式初始化/升级入口](upgrade.md)启用 v10，版本范围见[安装兼容矩阵](installation.md#当前-catalog-与-reader-兼容)。真实用户数据迁移仍需单独授权；历史单步合成演练见[文档 Catalog 迁移指南](document-catalog-migration.md)。
+解析处理已经接纳的正文或补充 PDF，要求当前单一 catalog schema（内部标识 11）。先从文献详情取得 Literature ID、Asset ID 和 PDF SHA-256。普通解析命令不转换 catalog；新库与隔离转换见[升级指南](upgrade.md)。
 
-从源码构建后，明确重解析并发布表示：
+## 显式解析
 
 ```bash
-node apps/server/dist/cli/main.js document parse --literature-id LITERATURE_ID --asset-id ASSET_ID --asset-sha256 PDF_SHA256 --mode reparse --json
+sciretriever document parse --literature-id LITERATURE_ID --asset-id ASSET_ID --asset-sha256 PDF_SHA256 --json
 ```
 
-如已有同一主 PDF 的 current ParserResult，可选 `--mode reuse-current`。此模式只读取已保存解析结果，不调用 Parser；缺结果会返回 `parser-result-missing`。`reparse` 总调用启动时已配置的 ParserBackend，未组装时返回 `parser-unavailable`；CLI 不接受临时 parser 参数。两种模式均不下载 PDF、不调用 Analysis/模型、不扩充文献库。输入 ID/hash 不匹配或 current 主 PDF 已变化时拒绝，不改用新主 PDF 重试。
+默认只运行部署配置 `[parsing].archive_profile`，未指定时为 `vlm-engine`。已有相同输入、参数、parser/model identity 的成功结果时复用，只补缺失或失败的模式。`--profiles pipeline` 可以指定这次要执行的来源；`--force` 明确重新执行选定模式。另一个 profile 可显式解析供人工查看；校订只消费部署 profile 的一份初稿。修改部署 profile 不会覆盖已发布校订版本。
 
-第一次发布不传 `--expected-default-revision`，期望当前尚无默认版本。切换已有默认版本时传回执中的 revision，例如 `--expected-default-revision 1`。常规 Web 解析入口先固定当前 PDF 的 ID/hash 并读取默认 revision，随持久任务提交 CAS 参数；任务页说明默认是否切换。高级维护 Web 表单从文献库读取当前主 PDF，再通过受控维护读取自动填入当前默认 revision；用户明确选择复用或重解析。版本先按不可变字节和依赖发布，再尝试独立默认关系 CAS；若别人先更新了默认版本，回执仍返回已发布的精确 `document_version_id`，并以 `default_updated: false` 和当前 `default_revision` 表示冲突。重试相同表示返回 `published: false`，沿用首次发布版本的 parser provenance；不会覆盖旧版本。Parser 失败或表示构建失败保留 PDF 和此前有效文档版本。若 SQLite 已提交但调用回执丢失，入口仍报告带原因的发布失败；须明确重试并读取持久状态，不能把事前已存在的版本误报成本次发布或默认切换成功。
+回执包含固定 PDF 身份，以及每个 profile 的 `published/reused/failed`、原始解析 ID/hash、稳定失败代码。一种失败不会撤销另一种已提交的产物。任务保留部分结果，并将该目标标为失败；显式重试默认只补失败项。强制重解析的任务重试仍保留原始 force 请求语义。
 
-TS 入口为 `Application.documentProcessing.parseDocuments(request, signal?)`；完整维护对象图也暴露 `Application.maintenance.parseDocuments`。维护工作台 `/` 有同一操作的表单；其 `POST /api/v1/maintenance/parse-document` 采用协议 v1、JSON 请求、同源会话 Cookie、`X-Sciretriever-Csrf` 和 `X-Sciretriever-Protocol-Version: 1`。同一认证下的 `POST /api/v1/maintenance/document-default` 读取已选材料的默认版本 ID/revision，不修改数据。受控 Browser 工作台使用对应 `/api/maintenance/parse-document` 路由、协议头和该工作台自身的 CSRF。只读 QueryApplication 不提供加工入口。公开请求只包含五个固定字段：
+解析不生成可读 DocumentVersion、不修改默认全文，也不会触发建档或总结。旧 `--mode`、`--expected-default-revision` 和必填 Document 回执已移除，不提供旧合同兼容。
+
+```bash
+sciretriever document parsing-status --request request.json --json
+```
+
+`request.json` 为 `{"literature_id":"…","asset_id":"…"}`。此查询只读，显示各 profile 的原始解析与失败代码，并标出 `archive_profile`；不会调用 MinerU。MCP 使用 `document_read` 的 `parsing-status` 操作；执行解析使用 `submit_processing` 中的 `parse-documents` 操作，请求如下：
 
 ```json
 {
-  "literature_id": "00000000-0000-0000-0000-000000000001",
-  "asset_id": "00000000-0000-0000-0000-000000000002",
-  "asset_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "mode": "reuse-current",
-  "expected_default_revision": null
+  "literature_id": "LITERATURE_ID",
+  "asset_id": "ASSET_ID",
+  "asset_sha256": "PDF_SHA256",
+  "force": false
 }
 ```
 
-当前结构 builder 只识别代码围栏和缩进代码以外的 ATX 标题，发布可验证的文本片段及其 UTF-8 byte 范围，并固定实际引用资源的 hash/大小。单次输入上限为 PDF 256 MiB、Markdown 8 MiB、资源 4096 个、单资源 32 MiB、资源合计 128 MiB；结构最多 100000 个片段、规范 JSON 16 MiB。已发布表示可从[独立文献库阅读](library-query.md)按固定版本阅读和复核证据。表格单元、图注关系、页码和 bbox 尚无定位能力。v3 起禁止旧已接纳材料清理和物理回收，v5 起的外部候选回执登记有限期输入保护；通用回收协议与明确失效入口仍待设计，不应把当前读取回调称作跨进程 GC 锁。
+## 校订服务
+
+校订读取已经解析的材料。文字层用于找疑点，DSH 通过原图与放大工具矫正抄录；不总结、不润色。每页疑点都处置且扫描页都检查后为 `complete`，存疑保留在区块上、不阻断完成；模型未配置或预算耗尽为 `incomplete`，可以继续；异常中止或非空页面没有对应内容且没有无正文处置则失败。
+
+```bash
+sciretriever proofread build --request request.json --json
+sciretriever proofread inspect --request request.json --json
+sciretriever proofread page --request request.json --json
+sciretriever proofread decide --request decision.json --json
+sciretriever proofread revoke --request decision.json --json
+```
+
+- `build`：`{"asset_id":"…"}`，读取部署 profile 的原始解析；旧 Markdown 登记可以按唯一、顺序一致的文字层页归属复用，不能确定则返回 `proofread-needs-parse`。不会代为解析。
+- `inspect`：按 `offset/limit` 读取初稿、校订区块、疑点、编辑与 `decisions`；按 `page_offset/page_limit` 读取页面状态及页面决定，分别跟随 `next_offset` / `next_page_offset`。每次响应有字节上限。
+- `page`：`{"asset_id":"…","page":0,"region":null}`。返回原 PDF 页面 PNG 与固定资产 hash；这里页码从 0 开始，region 可为 0–1000 归一化区域。只读，不启动模型或解析。
+- `decide`：填写 inspect 的 `proofread_id`、`block_id`、`draft_sha256`、`expected_manual_revision`，以及 `asset_id`、`actor`、`reason`、`action` 和 `text`。action 为 `replace`（text 为修订文字）、`resolve-suspect`（附 suspect_id 与 disposition）、`clear-uncertainty` 或 `no-body`（附 page）；其余动作 text 为 null。页无区块时使用 inspect.pages 中的页面身份。决定锁定，旧 revision 或已改变的初稿被拒绝。
+- `revoke`：`{asset_id, decision_id, expected_manual_revision, actor}`；只撤销所选决定，随后显式重新建档应用。重新解析不会自动丢弃人工冲突。
+
+MCP 对应 `proofread_build/inspect/page/decide/revoke`，HTTP 与 CLI 复用同一业务边界。只有显式写操作才会调用矫正模型。校订使用 `[proofread].model`（未指定时沿用分析模型）和 `max_calls_per_document`；必须具备图片与工具能力。调用次数与 token 单独记录，不作为质量分数。
+
+## 校订稿发布与读取
+
+完整校订版本可以显式发布为该 PDF 的默认全文，正文和补充材料分别拥有固定文档。此操作不调用 MinerU 或模型；`expected_default_revision` 来自 `document default`，没有默认版本时为 `null`。
+
+```sh
+sciretriever document publish-proofread --request request.json --json
+sciretriever document parts --request parts.json --json
+sciretriever document corrections --request corrections.json --json
+```
+
+发布请求：`{literature_id, asset_id, proofread_id, expected_default_revision}`。回执给出固定文档、`published`、默认版本 CAS 结果与 `index_status`（updated / unchanged / failed）。默认版本冲突不覆盖另一操作的选择，已发布固定版本仍保留；索引刷新失败也不撤销全文，可显式重建索引。
+
+部分列表请求：`{literature_id, offset, limit}`，每页最多 200 项。返回正文与补充材料的资产 ID/hash、默认版本和校订状态，不读取全文或图片。
+
+对照请求：`{document_version_id, segment_id, max_bytes, continuation}`，`max_bytes` 不超过 65536，首次 continuation 为 null。响应 `encoding=json-utf8` 的 `text` 是固定对照记录的有界 JSON 字节片段；按 continuation 收集后再解析，可以无损读取超大区块。记录包含固定初稿、最终区块、疑点及处置、编辑记录，以及原图页/区域引用；这个接口用于人工追查，不加入算子的阅读工具。
+
+MCP 对应 `document_publish_proofread` 与 `document_read` 的 `parts` / `corrections` 操作；HTTP 使用同名 query/maintenance 操作。原有 describe/outline/segments/slice/evidence 仍是统一读取入口。校订稿片段的公开页码从 1 开始，结构存储从 0 开始；证据同时保留片段 hash 与 `page-region-v1` 定位。篡改页码或区域会被拒绝，旧固定版本仍可读取到退役阶段，解析入口不会生产旧文档。
+
+显式校订/发布不等同于文献已就绪；仍须完成结构、必填元数据与标签。参考文献缺失会形成不阻断就绪的问题。真实服务验证与库转换分别需要授权。
+
+## 结构注释与角色
+
+对一份已发布的校订全文显式执行：
+
+```bash
+sciretriever document annotate --request /absolute/annotation-request.json --json
+```
+
+请求为 `{"document_version_id":"固定全文版本 ID","max_prefix_characters":512}`。已知标题按规则识别；未知顶层章节交给已配置的 analysis DSH，输入仅包含标题、限定长度的首段和相邻角色。未配置模型或调用失败时，角色为 `body` 并记录原因。相同文档、方法配置和人工 revision 复用已发布注释。
+
+返回 `annotation_id`、`manual_revision`、章节/参考文献数量和 `structure_satisfied`。它是结构步骤的结果，不等同于文献整体已就绪。图表与引用文本由校订稿片段确定；库内引用关系由建档参考文献步骤更新。
+
+- `document outline` 可附带 `annotation_id` 固定角色解释，响应章节包含 `role` 和 `role_source`。
+- `document segments` 可附带 `roles`（如 `["methods","references"]`）和 `annotation_id`；只返回对应的校订稿片段。没有注释时不假装完成角色筛选。
+- `document role --request FILE|-` 请求为 `{"document_version_id":"…","section_id":"s1","role":"methods","expected_manual_revision":0,"actor":"本人"}`。设置角色即锁定；`role:null` 解除锁定。人工决定和新注释在同一事务发布，旧 revision 被拒绝，旧注释仍可读取。重新识别同一全文不会覆盖锁定角色。人工修正只沿用已有判断和重算继承，不调用模型；解除一个没有规则可识别的角色锁定时，先使用 `body` 并记录 `role-reclassification-needed`，需要时再显式 `document annotate`。
+- `document annotation --request FILE|-` 使用 `{"document_version_id":"…","annotation_id":null,"field":"all","max_bytes":65536,"continuation":null}`；`field` 也可为 `figures` 或 `references`。逐段拼接响应的 `text`，到 `continuation:null` 后解析 JSON。续读固定第一段的注释版本，期间人工修改不影响已有读取。
+- `document figures`、`document references` 使用相同请求去掉 `field`。它们读取图表清单和有序引用文本；figures 的公开页码从 1 起计，`all` 返回的不可变注释内部页码从 0 起计。
+
+MCP 的 `document_annotate`、`document_role`、`document_annotation` 和 `document_read` 的 `outline/segments/figures/reference-texts` 操作使用同一业务实现。读取不会触发解析、模型调用或建档。角色与注释保存在全文之外，修改角色不会改写原始 PDF、校订文字或已有证据定位。
+
+
+## 元数据字段与人工校正（ADR 0037 实施中）
+
+当前只维护 schema.ts 的一份结构，内部标识为 11。元数据的出版形式 `publication_form` 与文章性质 `article_kind` 是不同的封闭枚举；旧 `document_type` / `document_types` 已移除。CLI 搜索用 `--publication-form` 和 `--article-kind`；JSON 查询用 `publication_forms` 和 `article_kinds`。原始来源类型保留在 observation 的 `source_type` 与 `source_type_mapping_version` 中。
+
+`literature metadata-fields --request FILE` 读取 `{ "literature_id": "…" }` 的当前元数据、revision、字段来源、冲突与锁定。`literature metadata-edit --request FILE` 接受 `{ "literature_id": "…", "expected_revision": 1, "set": [{ "field": "article_kind", "value": "review" }], "unlock": [] }`；设置会锁定字段，包括显式空值。解锁用同一请求的 `unlock` 数组，`set` 置空。MCP 对应 `metadata_fields`、`metadata_edit`。这些人工操作不调用模型，也不隐式启动建档。
+
+既有真实 catalog 不自动转换，必须先备份、在隔离副本转换并核对，再单独确认切换。旧总结、知识与算子结果及旧 Markdown Document 的清理范围以既定转换决定为准，不保留多版本迁移阶梯。
+
+建档显式处理元数据、结构与标签。Web 的字段编辑使用同一锁定机制。
+
+校订预算耗尽后，重新发起建档/校订会复用已接受的页面提交，再处理剩余疑点；应用编辑后新发现的差异也进入这一步。没有进展或没有足够预算时仍保持未完成，不把缓存命中当作处置完成。存疑范围是当前区块的字符位置，表格以 HTML 内容计；自动替换不会悄悄清除先前的存疑。

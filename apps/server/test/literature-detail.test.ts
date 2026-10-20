@@ -1,7 +1,9 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { stageLegacyRawParse } from "../src/parsing/legacy-raw.js";
+import { SqliteRawParseStorage } from "../src/storage/raw-parsing.js";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   parseAsset,
   parseLiterature,
@@ -10,14 +12,9 @@ import {
   parseProvenance,
   parseReference,
   parserResultSha256,
-  parseLiteratureContent,
-  literatureContentSha256,
-  contentCanonicalJsonBytes,
   sha256,
-  type LiteratureSection,
 } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
-import { LiteratureQueryService } from "../src/literature/query.js";
 import {
   FIXTURE_LITERATURE,
   workbenchPdf,
@@ -25,7 +22,7 @@ import {
 const id = (n: number) =>
   `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 
-it("opens a complete literature detail from one catalog snapshot and verifies canonical structured content against immutable bytes", async () => {
+it("opens literature detail from one catalog snapshot and verifies artifact and metadata identities", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-detail-"));
   const app = await createApplication(home);
   try {
@@ -57,6 +54,8 @@ it("opens a complete literature detail from one catalog snapshot and verifies ca
       parameters_sha256: null,
     });
     const observation = parseMetadataObservation({
+      source_type: null,
+      source_type_mapping_version: null,
       observation_id: id(20),
       provenance: provenance(21),
       metadata: {
@@ -91,7 +90,10 @@ it("opens a complete literature detail from one catalog snapshot and verifies ca
       literature_id: literatureId,
     });
     await expect(
-      app.observations.publish({ ...observation, literature_id: literatureId }),
+      app.observations.publish({
+        ...observation,
+        literature_id: literatureId,
+      }),
     ).resolves.toBe(true);
     await expect(
       app.observations.publish({
@@ -112,7 +114,10 @@ it("opens a complete literature detail from one catalog snapshot and verifies ca
       observation_id: id(19),
       provenance: { ...provenance(22), observed_at: "2026-09-09T00:00:00Z" },
     });
-    await app.observations.publish({ ...older, literature_id: literatureId });
+    await app.observations.publish({
+      ...older,
+      literature_id: literatureId,
+    });
     const before = await app.library.detail(literatureId);
     expect(before.metadata_observations).toEqual([observation, older]);
     expect(before.literature.metadata.title).toBe(
@@ -162,15 +167,13 @@ it("opens a complete literature detail from one catalog snapshot and verifies ca
       provenance: { ...provenance(52), source_kind: "asset-provider" },
     });
     const parserBytes = new TextEncoder().encode(
-      "# Synthetic parser\nCafe\u0301 content\n[one](assets/😀.txt) [two](assets/\uffff.txt)\n",
+      "# Synthetic parser\nCafe\u0301 content\n![one](assets/😀.png) ![two](assets/\uffff.png)\n",
     );
     const parserArtifact = await publish("objects/parser.md", parserBytes);
+    const resourceBytes = Buffer.from("89504e470d0a1a0a00", "hex");
     const resource = {
-      ...(await publish(
-        "objects/resource.txt",
-        new TextEncoder().encode("synthetic resource"),
-      )),
-      media_type: "text/plain",
+      ...(await publish("objects/resource.png", resourceBytes)),
+      media_type: "image/png",
     };
     const parserCore = {
       source_asset_id: asset.asset_id,
@@ -178,8 +181,8 @@ it("opens a complete literature detail from one catalog snapshot and verifies ca
       page_count: 1,
       markdown: { ...parserArtifact, media_type: "text/markdown" },
       resources: [
-        { reference: "assets/😀.txt", artifact: resource },
-        { reference: "assets/\uffff.txt", artifact: resource },
+        { reference: "assets/😀.png", artifact: resource },
+        { reference: "assets/\uffff.png", artifact: resource },
       ],
       provenance: {
         provenance: parseProvenance({
@@ -229,148 +232,22 @@ it("opens a complete literature detail from one catalog snapshot and verifies ca
       { ...parser, debug: true },
     ])
       await expect(parseParserResult(invalid)).rejects.toThrow();
-    await app.database.putParserResult({
-      source_asset_id: asset.asset_id,
-      source_sha256: asset.sha256,
-      result_sha256: parser.result_sha256,
-      page_count: 1,
-      markdown_artifact_id: id(33),
-      markdown_artifact_path: "objects/parser.md",
-      markdown_sha256: parser.markdown.sha256,
-      markdown_byte_size: parser.markdown.byte_size,
-      markdown_media_type: "text/markdown",
-      provenance: parser.provenance.provenance,
-      parser_version: parser.provenance.parser_version,
-      mode: null,
-      model_identity: null,
-      resources: parser.resources.map((r) => ({
-        reference: r.reference,
-        artifact_id: id(35),
-        artifact_path: "objects/resource.txt",
-        artifact_sha256: resource.sha256,
-        artifact_byte_size: resource.byte_size,
-        artifact_media_type: resource.media_type,
-      })),
-    });
-    expect((await app.library.detail(literatureId)).parser_result).toEqual(
-      parser,
+    const raw = await stageLegacyRawParse(parser, async (a) =>
+      a.sha256 === parser.markdown.sha256 ? parserBytes : resourceBytes,
     );
-    const markdown = {
-      ...(await publish(
-        "objects/content.md",
-        new TextEncoder().encode("# Synthetic content\n"),
-      )),
-      media_type: "text/markdown",
-    };
-    const sections: readonly LiteratureSection[] = [
-      "background-and-objectives",
-      "methods",
-      "data",
-      "conclusions-and-limitations",
-    ].map((role) => ({
-      role: role as LiteratureSection["role"],
-      title: null,
-      markdown: role === "data" ? "未提供" : "Synthetic Cafe\u0301\nparagraph.",
-      subsections: [],
-    }));
-    const metadata = (await app.database.currentFacts(literatureId))!
-      .metadata_snapshot;
-    const inputHash = await sha256(
-      contentCanonicalJsonBytes({
-        metadata_sha256: metadata.sha256,
-        parser_result_sha256: parser.result_sha256,
-        primary_pdf_sha256: asset.sha256,
-        schema: "sciretriever-literature-content-input-v1",
-      }),
+    await new SqliteRawParseStorage(app.database, app.files).publish(raw);
+    expect(await app.database.rawParse("current", asset.asset_id)).toHaveLength(
+      1,
     );
-    const contentCore = {
-      metadata_sha256: metadata.sha256,
-      sections,
-      references: ["Synthetic reference"],
-    };
-    const content = await parseLiteratureContent({
-      ...contentCore,
-      literature_content_sha256: await literatureContentSha256(contentCore),
-      metadata_revision: metadata.revision,
-      markdown,
-      provenance: {
-        ...provenance(40),
-        source_kind: "analysis",
-        source_record_id: null,
-        input_sha256: inputHash,
-        parameters_sha256: "c".repeat(64),
-      },
-    });
-    const bytes = contentCanonicalJsonBytes(content);
-    for (const invalid of [
-      { ...content, sections: content.sections.slice(1) },
-      { ...content, sections: [...content.sections, content.sections[0]] },
-      {
-        ...content,
-        sections: content.sections.map((s, i) =>
-          i === 0 ? { ...s, markdown: " 未提供 " } : s,
-        ),
-      },
-      {
-        ...content,
-        sections: content.sections.map((s, i) =>
-          i === 0 ? { ...s, title: "Changed fixed title" } : s,
-        ),
-      },
-      {
-        ...content,
-        sections: [
-          ...content.sections,
-          {
-            role: "additional",
-            title: "元数据",
-            markdown: "Reserved",
-            subsections: [],
-          },
-        ],
-      },
-      { ...content, references: ["未提供"] },
-      { ...content, markdown: { ...content.markdown, byte_size: 0 } },
-      {
-        ...content,
-        provenance: { ...content.provenance, parameters_sha256: null },
-      },
-      { ...content, literature_content_sha256: "0".repeat(64) },
-    ])
-      await expect(parseLiteratureContent(invalid)).rejects.toThrow();
-    const structured = await publish("objects/content.json", bytes);
-    const binding = {
-      literature_id: literatureId,
-      literature_content_sha256: content.literature_content_sha256,
-      metadata_revision: metadata.revision,
-      metadata_sha256: metadata.sha256,
-      primary_asset_id: asset.asset_id,
-      primary_asset_sha256: asset.sha256,
-      parser_result_sha256: parser.result_sha256,
-      structured_artifact_id: id(41),
-      structured_artifact_path: "objects/content.json",
-      structured_artifact_sha256: structured.sha256,
-      structured_artifact_byte_size: structured.byte_size,
-      structured_artifact_media_type: "application/json",
-      markdown_artifact_id: id(42),
-      markdown_artifact_path: "objects/content.md",
-      markdown_artifact_sha256: markdown.sha256,
-      markdown_artifact_byte_size: markdown.byte_size,
-      markdown_artifact_media_type: "text/markdown" as const,
-      provenance: content.provenance,
-      reference_texts: content.references,
-    };
-    await app.database.putLiteratureContent(binding);
     const detail = await app.library.detail(literatureId);
-    expect(detail.content).toEqual(content);
-    expect(detail.literature.status).toBe("CONTENT_READY");
-    expect(detail.missing_step).toBeNull();
+    expect(detail).not.toHaveProperty("content");
+    expect(detail.literature.status).toBe("ASSET_READY");
+    expect(detail.missing_step).toBe("raw-parse");
     expect(detail.primary_pdf?.asset).toEqual(asset);
     for (const artifact of [
       detail.primary_pdf!.asset,
-      detail.parser_result!.markdown,
-      ...detail.parser_result!.resources.map((resource) => resource.artifact),
-      detail.content!.markdown,
+      parser.markdown,
+      ...parser.resources.map((resource) => resource.artifact),
     ]) {
       const actual = await app.literatureArtifacts.withArtifact(
         artifact,
@@ -387,42 +264,39 @@ it("opens a complete literature detail from one catalog snapshot and verifies ca
       "supplementary-pdf",
     );
     expect(JSON.stringify(detail)).not.toContain(home);
-    expect(Object.isFrozen(detail.content?.sections[0])).toBe(true);
-    await expect(
-      app.database.putLiteratureContent({ ...binding, metadata_revision: 2 }),
-    ).rejects.toThrow();
-    expect(await app.library.detail(literatureId)).toEqual(detail);
-    expect(await parserResultSha256(parserCore)).toBe(parser.result_sha256);
-    expect(Buffer.from(contentCanonicalJsonBytes(content))).toEqual(
-      Buffer.from(bytes),
-    );
-    expect(detail.literature.literature_id).toBe(literatureId);
-    // Change the catalog after its snapshot, during the immutable artifact read.
-    // The response must retain the old complete metadata/content binding.
-    const concurrent = new LiteratureQueryService(app.database, {
-      read: async (reference, maxBytes) => {
+    expect(Object.isFrozen(detail.literature.metadata)).toBe(true);
+    const original = app.database.literatureDetailSnapshot.bind(app.database);
+    vi.spyOn(app.database, "literatureDetailSnapshot").mockImplementationOnce(
+      async (id) => {
+        const snapshot = await original(id);
         await app.observations.publish({
           ...observation,
-          observation_id: id(60),
+          observation_id:
+            id === literatureId ? "00000000-0000-0000-0000-000000000060" : id,
           literature_id: literatureId,
           provenance: provenance(61),
         });
-        return app.files.read(reference, maxBytes);
+        return snapshot;
       },
-    });
-    await expect(concurrent.detail(literatureId)).resolves.toEqual(detail);
+    );
+    expect(await app.library.detail(literatureId)).toEqual(detail);
     expect(
       (await app.library.detail(literatureId)).metadata_observations,
     ).toHaveLength(3);
-    await writeFile(
-      join(app.files.root, "objects/content.json"),
-      new Uint8Array(bytes.length).fill(32),
+    vi.spyOn(app.database, "literatureDetailSnapshot").mockImplementationOnce(
+      async (id) => {
+        const captured = await original(id);
+        return {
+          detail: {
+            ...(captured!.detail as Record<string, unknown>),
+            metadata_sha256: "0".repeat(64),
+          },
+        };
+      },
     );
     await expect(app.library.detail(literatureId)).rejects.toMatchObject({
       code: "literature-query",
     });
-    await rm(join(app.files.root, "objects/content.json"));
-    await expect(app.library.detail(literatureId)).rejects.toThrow();
   } finally {
     await app.close();
     await rm(home, { recursive: true, force: true });

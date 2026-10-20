@@ -932,6 +932,7 @@ async function parsePage(
     candidate = {
       ...candidate,
       parsing: {
+        archive_profile: current.archive_profile,
         base_url: null,
         connection_mode: null,
         model_identity: null,
@@ -970,6 +971,7 @@ async function parsePage(
     candidate = {
       ...candidate,
       parsing: {
+        archive_profile: current.archive_profile,
         base_url: baseUrl,
         connection_mode: mode,
         model_identity: modelIdentity,

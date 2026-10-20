@@ -48,7 +48,8 @@ const literature = parseLiterature({
     abstract: null,
     publication_date: null,
     publication_year: 2026,
-    document_type: "article",
+    publication_form: "journal-article" as const,
+    article_kind: null,
     language: "en",
     venue: null,
     publisher: null,
@@ -84,7 +85,7 @@ async function setup() {
     };
   };
   const state = open();
-  await state.database.upgradeExecutionSchema();
+
   await state.database.putLiterature(literature);
   await state.collector.begin("transfer-1");
   await state.collector.append("transfer-1", new Uint8Array([1, 2, 3]));
@@ -431,35 +432,29 @@ describe("durable candidate publication", () => {
       receipts: [{ receipt_id: "receipt-1" }],
     });
   });
-  it("backs up and rolls back only the execution extension, preserving confirmed v1 facts and evidence", async () => {
+  it("backs up confirmed facts, candidates and receipts without changing the current catalog", async () => {
     const s = await setup();
-    const v2 = await s.database.schema();
     await s.publisher.publish(s.input);
-    const backupPath = join(s.root, "execution-backup.sqlite");
-    await s.database.rollbackExecutionSchema(backupPath);
-    expect(await s.database.schema()).toMatchObject({ schema_version: 1 });
-    expect(await s.database.getLiterature(id(1))).toMatchObject({
-      status: "ASSET_READY",
-    });
-    await expect(s.database.getCandidate("transfer-1")).rejects.toBeDefined();
+    const schema = await s.database.schema();
+    const backupPath = join(s.root, "catalog-backup.sqlite");
+    await s.database.backup(backupPath);
     const restored = new SqliteWorker(backupPath);
     cleanups.push(() => restored.close());
-    expect(await restored.schema()).toEqual(v2);
+    expect(await restored.schema()).toEqual(schema);
+    expect(await restored.getLiterature(id(1))).toEqual(
+      await s.database.getLiterature(id(1)),
+    );
     expect(await restored.getCandidate("transfer-1")).toEqual(s.candidate);
     expect(await restored.prepareReceipt(s.input)).toMatchObject({
       receipt_id: "receipt-1",
     });
-    await s.database.upgradeExecutionSchema();
-    expect(await s.database.getCandidate("transfer-1")).toBeNull();
+    expect(await s.database.getCandidate("transfer-1")).toEqual(s.candidate);
     await expect(s.database.backup(backupPath)).rejects.toBeDefined();
   });
-  it("does not create execution tables implicitly in a v1 catalog", async () => {
+  it("initializes the complete current catalog including execution tables", async () => {
     const database = new SqliteWorker();
     cleanups.push(() => database.close());
     await database.schema();
-    await expect(database.getCandidate("missing")).rejects.toBeDefined();
-    await database.upgradeExecutionSchema();
-    await database.upgradeExecutionSchema();
     expect(await database.getCandidate("missing")).toBeNull();
   });
 });

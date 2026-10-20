@@ -1,16 +1,16 @@
 import { labelsProcessor } from "./processor-labels.js";
 import { recordsProcessor } from "./processor-records.js";
-import type { KnowledgeAnalysisService } from "./knowledge.js";
-import { ProcessorRegistry } from "./processor.js";
-import { registerKnowledgeProcessors } from "./processor-knowledge.js";
+import { summaryProcessor } from "./processor-knowledge.js";
 import { synthesisProcessor } from "./processor-synthesis.js";
-export function createProcessorRegistry(
-  analysis: KnowledgeAnalysisService | null = null,
-) {
+import { ProcessorRegistry } from "./processor.js";
+export function createProcessorRegistry() {
   const registry = new ProcessorRegistry();
-  registerKnowledgeProcessors(registry, analysis);
-  registry.register(synthesisProcessor(analysis));
-  registry.register(labelsProcessor);
-  registry.register(recordsProcessor);
+  for (const processor of [
+    summaryProcessor,
+    synthesisProcessor,
+    labelsProcessor,
+    recordsProcessor,
+  ])
+    registry.register(processor);
   return registry;
 }

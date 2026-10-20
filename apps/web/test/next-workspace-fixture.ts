@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -63,4 +64,11 @@ export async function independentNextAssets(kind: "query" | "maintenance") {
   await nextAssets();
   if (!directory) throw new Error("React fixture directory is unavailable");
   return loadIndependentReactAssets(kind, pathToFileURL(`${directory}/`));
+}
+
+/** Raw and imported papers are outside the default READY view. */
+export async function showAllLibraryStatuses(page: Page) {
+  await page.getByRole("button", { name: "材料状态" }).click();
+  await page.getByRole("option", { name: "全部状态", exact: true }).click();
+  await page.getByRole("listbox").waitFor({ state: "hidden" });
 }

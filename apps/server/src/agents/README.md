@@ -23,6 +23,4 @@ DSH 管理会话和模型—工具循环；Browser 掌握文章、控制版本�
 
 普通推理与压缩都经过同一模型绑定、凭据和 Network，并分别触发真实请求派发生命周期。完整 SSE body 经有界读取后重建响应，再转成 DSH 事件；这里不提供逐 token 网络交付。
 
-相关说明：[知识加工与共享模型](../../../../docs/architecture/technical/05-knowledge-processing.md) · [Browser 控制](../../../../docs/architecture/technical/08-browser-control.md)。
-
-[上级目录](../README.md) · [项目 README](../../../../README.md)
+[上级目录](../README.md)

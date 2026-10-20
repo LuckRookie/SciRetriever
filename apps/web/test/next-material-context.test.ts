@@ -1,3 +1,4 @@
+import { correctedDocumentFixture } from "../../server/test/corrected-document-fixture.js";
 import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -9,10 +10,8 @@ import {
 import { readingAssets } from "./reading-assets-fixture.js";
 import { chromium } from "playwright";
 import { expect, it } from "vitest";
-import { createApplication } from "../../server/src/bootstrap/application.js";
+import { createParserFixtureApplication as createApplication } from "../../server/test/parser-application-fixture.js";
 import { startMaintenanceWorkbench } from "../../server/src/bootstrap/workbench.js";
-import { migrateDocumentCatalog } from "../../server/src/storage/sqlite/document-migration.js";
-import { migrateRetrievalCatalog } from "../../server/src/storage/sqlite/retrieval-migration.js";
 import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
 import { workbenchPdf } from "../../server/src/workbench/synthetic-fixture.js";
 import {
@@ -22,7 +21,7 @@ import {
   type ArtifactRef,
 } from "@sciretriever/contracts";
 import { TypeScriptParserArtifactRules } from "../../server/src/parsing/artifact-rules.js";
-import type { ParserBackend } from "../../server/src/parsing/ports.js";
+import type { ParserBackend } from "../../server/test/parser-fixture-types.js";
 import type { WorkbenchStaticAsset } from "../../server/src/workbench/http.js";
 
 async function assets(): Promise<Map<string, WorkbenchStaticAsset>> {
@@ -34,23 +33,12 @@ async function assets(): Promise<Map<string, WorkbenchStaticAsset>> {
 
 it("rebuilds the v4 index explicitly and searches Context in the real browser pages", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-context-web-"));
-  const catalog = join(home, "catalog.sqlite");
-  const app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  const app = await createApplication(home, {});
   let web: Awaited<ReturnType<typeof startMaintenanceWorkbench>> | undefined;
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
     await app.database.putLiterature(FIXTURE_LITERATURE);
     await app.close();
-    await migrateDocumentCatalog({
-      catalog_path: catalog,
-      backup_path: join(home, "before-v3.sqlite"),
-    });
-    await migrateRetrievalCatalog({
-      catalog_path: catalog,
-      backup_path: join(home, "before-v4.sqlite"),
-    });
     const markdown = Buffer.from("# Results\nSynthetic evidence paragraph.\n");
     const parser: ParserBackend = {
       parse: async (input) => ({
@@ -85,7 +73,6 @@ it("rebuilds the v4 index explicitly and searches Context in the real browser pa
       }),
     };
     const documentApp = await createApplication(home, {
-      executionSchema: "require-v2",
       parsing: { parser, rules: new TypeScriptParserArtifactRules() },
     });
     try {
@@ -116,7 +103,7 @@ it("rebuilds the v4 index explicitly and searches Context in the real browser pa
           parameters_sha256: null,
         },
       });
-      await documentApp.documentProcessing.parseDocuments({
+      await correctedDocumentFixture(documentApp).parseDocuments({
         literature_id: FIXTURE_LITERATURE.literature_id,
         asset_id: asset.asset_id,
         asset_sha256: asset.sha256,
@@ -179,7 +166,7 @@ it("rebuilds the v4 index explicitly and searches Context in the real browser pa
     expect(
       await page.locator('[data-testid="retrieval-status"]').textContent(),
     ).toContain("2 条结果");
-    expect(await page.locator(".retrieval-page").textContent()).toContain(
+    expect(await page.locator(".retrieval-page").textContent()).not.toContain(
       "此版本的库尚不提供知识检索",
     );
     const document = page.locator('[data-testid="retrieval-result"]').filter({
@@ -221,7 +208,7 @@ it("rebuilds the v4 index explicitly and searches Context in the real browser pa
     expect(exported.items[0]).toMatchObject({
       kind: "source-text",
       literature_id: FIXTURE_LITERATURE.literature_id,
-      text: "Synthetic evidence paragraph.\n",
+      text: "Synthetic evidence paragraph.\n\n",
       reference: {
         kind: "document",
         literature_id: FIXTURE_LITERATURE.literature_id,

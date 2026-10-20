@@ -6,7 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { coreProcessingFixture } from "./core-processing-fixture.js";
+import { processorFixture as coreProcessingFixture } from "./processor-fixture.js";
 import {
   createApplication,
   createQueryApplication,
@@ -25,7 +25,7 @@ import { queryProcessors } from "../src/entry/processor-operations.js";
 
 async function workspace(submit?: QueryOnlyHttpOptions["submitProcessor"]) {
   const env = await coreProcessingFixture();
-  await env.app.documentProcessing.parseDocuments(env.parseRequest);
+  await env.build(env.parseRequest);
   env.setModel((input) => ({
     answer: true,
     source_ids: [input.segments![0]!.segment_id],
@@ -79,7 +79,7 @@ async function workspace(submit?: QueryOnlyHttpOptions["submitProcessor"]) {
     schema_version: 1,
     idempotency_key: "web-labels",
     name: "Synthetic labels",
-    processor: { id: "labels", version: "1" },
+    processor: { id: "labels", version: "2" },
     spec: { question: "Is a finding reported?", answer_type: "boolean" },
     inputs: [
       { kind: "literature", literature_id: env.parseRequest.literature_id },
@@ -87,6 +87,7 @@ async function workspace(submit?: QueryOnlyHttpOptions["submitProcessor"]) {
   };
   return {
     env,
+    setupParseCalls: env.parseCalls,
     query,
     web,
     post,
@@ -176,7 +177,7 @@ it("submits through the authenticated shared processor owner and reads results, 
     });
     expect(await w.env.app.jobs!.listJobs(10)).toHaveLength(1);
     expect(w.env.modelCalls).toBe(calls);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(w.setupParseCalls);
   } finally {
     await w.close();
   }
@@ -295,7 +296,7 @@ it("enforces authentication, exact requests and scoped sizes while retaining dra
       request: {
         ...w.request,
         idempotency_key: "large-records",
-        processor: { id: "records", version: "1" },
+        processor: { id: "records", version: "2" },
         spec: {
           record_meaning: "Synthetic observations",
           fields: Array.from({ length: 34 }, (_, i) => ({
@@ -363,14 +364,14 @@ it("cancels input preparation on disconnect without acknowledging a task that wa
   }
 }, 30000);
 
-it("serves the offline registry on an old catalog, reports unsupported results and exposes no write operation", async () => {
+it("serves the offline registry and current result reads without exposing a write operation", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-old-processor-web-"));
   const app = await createApplication(home);
   await app.close();
   const query = await createQueryApplication(home);
   const web = await startQueryOnlyHttp({ application: query });
   try {
-    expect(query.readiness.schema_version).toBeLessThan(10);
+    expect(query.readiness.status).toBe("ready");
     const post = (path: string, value: unknown) =>
       fetch(web.origin + path, {
         method: "POST",
@@ -388,10 +389,7 @@ it("serves the offline registry on an old catalog, reports unsupported results a
       operation: "results",
       request: {},
     });
-    expect(results.status).toBe(422);
-    expect(await results.json()).toMatchObject({
-      code: "catalog-v10-required",
-    });
+    expect(results.status).toBe(200);
     expect(
       (await post("/api/v1/maintenance/processor-submit", {})).status,
     ).toBe(404);

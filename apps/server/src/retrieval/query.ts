@@ -1,9 +1,10 @@
+import { segmentPageRegion } from "../document/location.js";
 import { createHash } from "node:crypto";
 import {
   parseMaterialContextBundle,
   parseMaterialContextRequest,
   type DocumentRef,
-  type DocumentStructureV1,
+  type DocumentStructure,
   type EvidenceRef,
   type MaterialContextBundle,
   type MaterialContextItem,
@@ -163,7 +164,7 @@ function check(signal?: AbortSignal): void {
 }
 function documentEvidence(
   version: DocumentRef,
-  structure: DocumentStructureV1,
+  structure: DocumentStructure,
   bytes: Uint8Array,
   hit: RetrievalHit,
 ): readonly EvidenceRef[] | null {
@@ -192,6 +193,9 @@ function documentEvidence(
     document_version_id: version.document_version_id,
     representation_sha256: version.representation_sha256,
     locator: { kind: "segment", segment_id: segment.segment_id },
+    ...(segmentPageRegion(segment)
+      ? { page_region: segmentPageRegion(segment)! }
+      : {}),
     content_sha256: digest(
       bytes.subarray(segment.start_utf8, segment.end_utf8),
     ) as Sha256,
@@ -279,7 +283,7 @@ export class MaterialContextService {
         {
           version: DocumentRef;
           markdown: Uint8Array;
-          structure: DocumentStructureV1;
+          structure: DocumentStructure;
         }
       >();
       let localVerifiedBytes = 0;

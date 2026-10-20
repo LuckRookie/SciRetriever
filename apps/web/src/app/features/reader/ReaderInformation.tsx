@@ -1,3 +1,5 @@
+import { Assignment } from "../tags/Assignment.js";
+import { MetadataFields } from "../archive/MetadataFields.js";
 import { useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
@@ -128,7 +130,7 @@ function Relations({
                   ? "由元数据供应商提供的关系"
                   : support.source.kind === "metadata_reference_text"
                     ? `元数据参考文献第 ${support.source.reference_index + 1} 项`
-                    : `已保存正文参考文献第 ${support.source.reference_index + 1} 项`}
+                    : `校订稿参考文献第 ${support.source.reference_index + 1} 项`}
               </li>
             ))}
           </ul>
@@ -373,6 +375,12 @@ export function ReaderInformation({
           </div>
         </section>
       )}
+      <Disclosure title="编辑文献标签">
+        <Assignment id={id} />
+      </Disclosure>
+      <Disclosure title="编辑字段、来源与锁定">
+        <MetadataFields id={id} />
+      </Disclosure>
       {detail.primary_pdf?.article_identity_assessment && (
         <Disclosure title="已保存的身份核验">
           <p>{detail.primary_pdf.article_identity_assessment.reason}</p>

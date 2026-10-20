@@ -1,9 +1,13 @@
+import { executeMaintenance } from "../entry/maintenance-operations.js";
 import { createMetadataOperations } from "../entry/metadata-operations.js";
 import { createTaskOperations } from "../entry/task-operations.js";
 import { submitProcessor } from "../entry/processor-operations.js";
 import { randomUUID } from "node:crypto";
-import { probeCatalogIdentity } from "../storage/execution/migration-gate.js";
-import { initializeCatalogSchema } from "../storage/sqlite/catalog-schema.js";
+import { authorizeSyntheticCatalog } from "../storage/synthetic-scope.js";
+import {
+  initializeCatalogSchema,
+  inspectCatalogSchema,
+} from "../storage/sqlite/catalog-schema.js";
 import {
   validateWorkbenchAccess,
   type WorkbenchAccessOptions,
@@ -82,7 +86,7 @@ export function describeWorkbenchRuntime(
         ),
     );
   })();
-  const parsingAssembled = application.parsing !== null;
+  const parsingAssembled = application.rawParsing !== null;
   const parsingReason: WorkbenchRuntimeCapabilities["parsing"]["unavailable_reason"] =
     parsingAssembled
       ? null
@@ -205,8 +209,10 @@ export function taskHttpAdapters(
 /** Explicit writes share the same processor application boundary as CLI and MCP. */
 export function processorHttpAdapters(
   app: Application,
-): Pick<QueryOnlyHttpOptions, "submitProcessor"> {
+): Pick<QueryOnlyHttpOptions, "submitProcessor" | "archiveOperation"> {
   return {
+    archiveOperation: (operation, request, signal) =>
+      executeMaintenance(app, operation, request, signal),
     submitProcessor: (request, start, signal) =>
       submitProcessor(app, request, start, signal),
   };
@@ -258,9 +264,7 @@ export async function startMaintenanceWorkbench(options: {
   readonly application: Application;
   close(): Promise<void>;
 }> {
-  const application = await createApplication(options.home, {
-    executionSchema: "require-v2",
-  });
+  const application = await createApplication(options.home, {});
   let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
   let http: Awaited<ReturnType<typeof startQueryOnlyHttp>> | undefined;
   let closing: Promise<void> | undefined;
@@ -324,7 +328,7 @@ export async function startProductionWorkbench(options: {
   readonly port?: number;
   readonly applicationOptions?: Omit<
     ApplicationOptions,
-    "executionSchema" | "browserCollaboration"
+    "browserCollaboration"
   >;
   /** Test/operator probe seam; production defaults to the Configuration owner probe. */
   readonly configurationProbeSeams?: ConfigurationProbeSeams;
@@ -388,12 +392,14 @@ export async function startProductionWorkbench(options: {
     );
     // Only an absent target can be initialized. Existing catalogs retain their
     // schema and facts; the ordinary Application gate still validates them.
-    if ((await probeCatalogIdentity(startupCatalog)).state === "absent")
+    if (
+      (await inspectCatalogSchema(startupCatalog)).status === "not-initialized"
+    )
       await initializeCatalogSchema(startupCatalog);
     application = await createApplication(options.home, {
       ...options.applicationOptions,
       configurationOwner,
-      executionSchema: "require-v2",
+
       browserCollaboration: session,
     });
     const app = application;
@@ -494,10 +500,7 @@ export async function startSyntheticWorkbench(options: {
   readonly assets: ReadonlyMap<string, WorkbenchStaticAsset>;
   readonly port?: number;
   readonly configurationOwner?: ApplicationOptions["configurationOwner"];
-  readonly applicationOptions?: Omit<
-    ApplicationOptions,
-    "configurationOwner" | "executionSchema"
-  >;
+  readonly applicationOptions?: Omit<ApplicationOptions, "configurationOwner">;
 }): Promise<
   WorkbenchHttpServer & {
     readonly session: WorkbenchSession;
@@ -507,9 +510,16 @@ export async function startSyntheticWorkbench(options: {
   const configurationOwner =
     options.configurationOwner ??
     new TypeScriptConfigurationOwner(options.home);
+  const configuration = await configurationOwner.ensureStoragePaths();
+  const catalog = resolve(configuration.configuration.paths.catalog_path!);
+  // Fixture startup retains the independent synthetic-location check, then uses
+  // the same current catalog initialization and runtime path as the formal Web.
+  await authorizeSyntheticCatalog(catalog);
+  if ((await inspectCatalogSchema(catalog)).status === "not-initialized")
+    await initializeCatalogSchema(catalog);
   const application = await createApplication(options.home, {
     ...options.applicationOptions,
-    executionSchema: "upgrade-synthetic",
+
     configurationOwner,
   });
   let fixture: Awaited<ReturnType<typeof startWorkbenchFixture>> | undefined;

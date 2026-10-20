@@ -1,3 +1,4 @@
+import { ResultState, SourceBadge } from "../archive/ResultState.js";
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Badge,
@@ -131,6 +132,19 @@ export default function Gallery() {
         description="与文献库共用的控件、状态与主题。这里的交互仅使用合成示例，不访问服务。"
       />
       <AppearanceControls />
+      <Example
+        title="校订来源与结果状态"
+        usage="明确区分原文未报告、缺少部分和读取不完整。此处为合成展示数据。"
+      >
+        <SourceBadge source="manual" pageOnly />
+        <ResultState
+          coverage={[]}
+          freshness={{
+            state: "stale",
+            reasons: [{ kind: "content-version-changed" }],
+          }}
+        />
+      </Example>
       <Example
         title="动作"
         usage="主操作、次要操作与显式加工使用同一尺寸；加工会先确认，取消不执行。"

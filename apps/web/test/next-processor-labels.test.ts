@@ -1,11 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import type { Page } from "playwright";
-import {
-  parseProcessorBatchRequest,
-  type ProcessorResultRef,
-  type ProcessorRecord,
-} from "@sciretriever/contracts";
+import { parseProcessorBatchRequest } from "@sciretriever/contracts";
 import { nextWorkspace } from "./next-workspace-fixture.js";
 async function choose(page: Page, label: string, option: string) {
   await page.getByRole("button", { name: new RegExp(label) }).click();
@@ -41,7 +37,6 @@ it("keeps false distinct from unknown labels, restores associated papers, and ex
     ready: '[aria-label="文献列表"] .paper-row:first-child',
   });
   try {
-    const saved: { ref: ProcessorResultRef; row: ProcessorRecord }[] = [];
     for (const answer of [false, null] as const) {
       w.env.setModel((input) => ({
         answer,
@@ -53,7 +48,7 @@ it("keeps false distinct from unknown labels, restores associated papers, and ex
           schema_version: 1,
           idempotency_key: randomUUID(),
           name: `Label ${answer}`,
-          processor: { id: "labels", version: "1" },
+          processor: { id: "labels", version: "2" },
           spec: {
             question: `Does the source support query ${answer}?`,
             answer_type: "boolean",
@@ -72,15 +67,35 @@ it("keeps false distinct from unknown labels, restores associated papers, and ex
       const result = (await w.env.app.processorRead!.byId(ref.result_id))!
         .result;
       if (result.content.kind !== "records") throw new Error("expected label");
-      saved.push({ ref, row: result.content.records[0]! });
       await enter(w, { collection: collection.collection_id });
+      if (answer === null) {
+        await enter(w, {
+          result: ref.result_id,
+          resultHash: ref.content_sha256,
+        });
+        expect(result.status).toBe("empty");
+        expect(result.content.records).toEqual([]);
+        expect(result.coverage[0]!.parts).toContainEqual(
+          expect.objectContaining({ outcome: "not-reported" }),
+        );
+        await expect
+          .poll(() =>
+            w.page
+              .getByRole("region", { name: "结果覆盖与版本" })
+              .textContent(),
+          )
+          .toContain("原文未报告 1");
+        expect(
+          await w.page
+            .getByRole("checkbox", { name: "选择第 1 条结果", exact: true })
+            .count(),
+        ).toBe(0);
+        continue;
+      }
+
       await choose(w.page, "筛选字段", "answer");
-      await choose(
-        w.page,
-        "筛选操作",
-        answer === null ? "空值 / 无法判断" : "等于",
-      );
-      if (answer !== null) await choose(w.page, "筛选值", "否");
+      await choose(w.page, "筛选操作", "等于");
+      await choose(w.page, "筛选值", "否");
       await w.page
         .getByRole("button", { name: "应用筛选", exact: true })
         .click();
@@ -91,11 +106,11 @@ it("keeps false distinct from unknown labels, restores associated papers, and ex
         await w.page
           .getByRole("table", { name: "提取结果" })
           .getByRole("button", {
-            name: answer === null ? "无法判断 / 未报告" : "否",
+            name: "否",
             exact: true,
           })
           .textContent(),
-      ).toBe(answer === null ? "无法判断 / 未报告" : "否");
+      ).toBe("否");
       await w.page
         .getByRole("checkbox", { name: "选择第 1 条结果", exact: true })
         .focus();
@@ -165,7 +180,7 @@ it("keeps false distinct from unknown labels, restores associated papers, and ex
       "不会自动跨语言",
     );
     expect(w.env.modelCalls).toBe(calls);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(w.setupCalls.parser);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

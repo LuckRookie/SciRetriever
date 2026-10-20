@@ -1,18 +1,28 @@
 import {
   ContractValidationError,
-  parseExtractionOperationResult,
   parseExtractionAcceptedResult,
-  parseExtractionSubmission,
+  parseExtractionOperationResult,
   parseExtractionReceiptResult,
+  parseExtractionSubmission,
+  parseLiteratureId,
 } from "@sciretriever/contracts";
+import { SnapshotError } from "../analysis/snapshots.js";
+import { ArchiveError } from "../archive/orchestrator.js";
 import type { Application } from "../bootstrap/application.js";
+import { AnnotationError } from "../document/annotations.js";
+import { ProofreadDocumentError } from "../document/proofread-publication.js";
 import {
   ExtractionDeliveryError,
   type ExtractionDeliveryService,
 } from "../extraction/delivery.js";
-import { createTaskOperations } from "./task-operations.js";
+import { ArchiveReferenceError } from "../literature/archive-references.js";
+import { MetadataFieldError } from "../literature/metadata-service.js";
+import { ProofreadError } from "../proofread/service.js";
+import { TagError } from "../tags/rules.js";
 import { createMetadataOperations } from "./metadata-operations.js";
 import { operationRecord, ProductOperationError } from "./query-operations.js";
+import { manageTags } from "./tag-operations.js";
+import { createTaskOperations } from "./task-operations.js";
 
 export const EXTRACTION_OPERATIONS = [
   "operation",
@@ -75,12 +85,22 @@ export async function executeExtraction(
   }
 }
 export const MAINTENANCE_OPERATIONS = [
+  "snapshots",
+  "archive",
+  "tags",
+  "archive-references",
+  "metadata-edit",
+  "document-annotate",
+  "document-role",
+  "document-publish-proofread",
+  "proofread-build",
+  "proofread-decide",
+  "proofread-revoke",
   "discover",
   "import-bibliography",
   "task-create",
   "resolve-intervention",
   "rebuild-index",
-  "rebuild-knowledge-index",
   ...EXTRACTION_OPERATIONS.map((name) => `extraction-${name}` as const),
 ] as const;
 export type MaintenanceOperation = (typeof MAINTENANCE_OPERATIONS)[number];
@@ -91,6 +111,60 @@ export async function executeMaintenance(
   signal?: AbortSignal,
 ): Promise<unknown> {
   if (signal?.aborted) throw new ProductOperationError("operation-cancelled");
+  if (operation === "snapshots") return app.snapshots.create(input, signal);
+  if (operation === "archive") {
+    const r = operationRecord(input, ["operation", "request"]);
+    if (r.operation === "build") return app.archive.build(r.request, signal);
+    if (r.operation === "resolve")
+      return app.archive.resolve(r.request, signal);
+    if (r.operation === "resume") {
+      const q = operationRecord(r.request, ["literature_id"]);
+      return app.archive.resume(parseLiteratureId(q.literature_id), signal);
+    }
+    throw new ContractValidationError();
+  }
+  if (operation === "tags") return manageTags(app.tags, input, signal);
+  if (operation === "archive-references")
+    return app.archiveReferences.build(input, signal);
+  if (operation === "metadata-edit") {
+    const result = await app.metadataFields.edit(input, signal);
+    return {
+      literature_id: result.literature.literature_id,
+      metadata: result.literature.metadata,
+      metadata_revision: result.metadata_revision,
+      metadata_sha256: result.metadata_sha256,
+      fields: result.field_states,
+    };
+  }
+  if (operation === "document-annotate" || operation === "document-role") {
+    if (!app.structureAnnotations)
+      throw new ProductOperationError("annotation-unavailable");
+    return operation === "document-annotate"
+      ? app.structureAnnotations.build(input, signal)
+      : app.structureAnnotations.setRole(input, signal);
+  }
+  if (operation === "document-publish-proofread")
+    return app.proofreadDocuments.publish(input, signal);
+  if (operation.startsWith("proofread-")) {
+    if (!app.proofreading)
+      throw new ProductOperationError("proofread-unavailable");
+    if (operation === "proofread-build") {
+      const r = await app.proofreading.build(input, signal);
+      return {
+        proofread_id: r.version.proofread_id,
+        content_sha256: r.version.content_sha256,
+        status: r.version.status,
+        stats: r.version.stats,
+        failure: r.version.failure,
+        pending_pages: r.version.pages.filter((p) => !p.checked),
+        published: r.published,
+        revision: r.revision,
+      };
+    }
+    if (operation === "proofread-decide")
+      return app.proofreading.decide(input, signal);
+    return app.proofreading.revoke(input, signal);
+  }
   if (operation.startsWith("extraction-"))
     return executeExtraction(
       app.extractionDelivery,
@@ -130,13 +204,9 @@ export async function executeMaintenance(
         r.resolution as "continue" | "skip" | "cancel",
       );
     }
-    case "rebuild-index":
-    case "rebuild-knowledge-index": {
+    case "rebuild-index": {
       operationRecord(input, []);
-      const rebuild =
-        operation === "rebuild-index"
-          ? app.maintenance?.rebuildIndex
-          : app.maintenance?.rebuildKnowledgeIndex;
+      const rebuild = app.maintenance?.rebuildIndex;
       if (!rebuild) throw new ProductOperationError("maintenance-unavailable");
       return rebuild(signal);
     }
@@ -147,6 +217,23 @@ export async function executeMaintenance(
 
 export function isMaintenanceFailure(
   error: unknown,
-): error is ExtractionDeliveryError {
-  return error instanceof ExtractionDeliveryError;
+): error is
+  | ExtractionDeliveryError
+  | ProofreadError
+  | SnapshotError
+  | ArchiveError
+  | TagError
+  | MetadataFieldError
+  | ArchiveReferenceError {
+  return (
+    error instanceof ExtractionDeliveryError ||
+    error instanceof ProofreadError ||
+    error instanceof SnapshotError ||
+    error instanceof ArchiveError ||
+    error instanceof TagError ||
+    error instanceof MetadataFieldError ||
+    error instanceof ArchiveReferenceError ||
+    error instanceof AnnotationError ||
+    error instanceof ProofreadDocumentError
+  );
 }

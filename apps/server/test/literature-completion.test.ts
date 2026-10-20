@@ -1,16 +1,16 @@
+import { initializeCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
+import { rawParseArchive } from "./raw-parse-fixture.js";
+import { parseRawParseProfile } from "@sciretriever/contracts";
 import { describe, expect, it } from "vitest";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer } from "node:http";
 import {
-  parseArtifactRef,
   parseAsset,
   parseLibrarySearchRequest,
   parseLiterature,
   parseLiteratureId,
   parseMetaLiteratureId,
-  parseProvenance,
   sha256,
 } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
@@ -29,110 +29,61 @@ import { AcquisitionRouteError } from "../src/acquisition/tiered.js";
 import { WriteAdmissionError } from "../src/storage/write-admission.js";
 import { PublicAcquisitionRegistry } from "../src/index.js";
 import { TypeScriptConfigurationOwner } from "../src/configuration/owner.js";
-import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
 import { ParsingFailure } from "../src/parsing/ports.js";
 import {
   FIXTURE_LITERATURE,
   workbenchPdf,
 } from "../src/workbench/synthetic-fixture.js";
 const lit = FIXTURE_LITERATURE.literature_id;
-const draft =
-  "# 研究背景与目标\n\nThe fixture studies spectroscopy.\n\n# 研究方法\n\n未提供\n\n# 数据\n\n未提供\n\n# 结论与局限性\n\n未提供\n\n# 参考文献\n\n1. Fixture reference.\n";
 async function fixture(
-  mode:
-    | "retry"
-    | "parser-failure"
-    | "model-failure"
-    | "unusable"
-    | "wait-model" = "retry",
+  mode: "retry" | "parser-failure" | "wait-parser" = "retry",
 ) {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-completion-"));
-  let modelEntered: () => void = () => {};
-  const modelStarted = new Promise<void>((r) => {
-    modelEntered = r;
-  });
-  let calls = 0,
-    parses = 0;
-  const http = createServer(async (req, res) => {
-    for await (const part of req) void part;
-    calls++;
-    modelEntered();
-    if (mode === "wait-model") return;
-    if (mode === "model-failure") {
-      res.writeHead(503);
-      res.end("unavailable");
-      return;
-    }
-    const result =
-      mode === "unusable" || calls === 1
-        ? { outcome: "no_usable_content", metadata: null }
-        : calls === 2
-          ? { outcome: "usable", metadata: FIXTURE_LITERATURE.metadata }
-          : { markdown: draft };
-    res.setHeader("content-type", "application/json");
-    res.end(
-      JSON.stringify({
-        model: "model",
-        choices: [
-          {
-            finish_reason: "stop",
-            message: { content: JSON.stringify(result) },
-          },
-        ],
-        usage: { prompt_tokens: 20, completion_tokens: 40 },
-      }),
-    );
-  });
-  await new Promise<void>((r) => http.listen(0, "127.0.0.1", r));
-  const address = http.address();
-  if (!address || typeof address === "string")
-    throw new Error("fixture listen failed");
   const owner = new TypeScriptConfigurationOwner(home);
   await owner.publish(
-    `[providers.fixture]\napi = "openai-chat-completions"\nbase_url = "http://127.0.0.1:${address.port}/v1"\n[models."fixture/model"]\nstream = false\n[analyze]\nmodel = "fixture/model"\nmetadata_max_output_tokens = 2048\ncontent_max_output_tokens = 4096\nmax_input_bytes = 1048576\nmax_chunk_bytes = 1048576\nmax_chunk_count = 1\nmax_total_llm_requests = 2\nmax_total_output_tokens = 6144\n`,
+    '[providers.fixture]\napi="openai-chat-completions"\nbase_url="http://127.0.0.1:9/v1"\n[models."fixture/model"]\nstream=false\n[analyze]\nmodel="fixture/model"\n',
     "missing",
     ["providers", "models", "analyze"],
   );
+  await initializeCatalogSchema(join(home, "catalog.sqlite"));
+  let calls = 0,
+    parses = 0,
+    started!: () => void;
+  const parserStarted = new Promise<void>((r) => {
+    started = r;
+  });
   const app = await createApplication(home, {
     configurationOwner: owner,
-    executionSchema: "upgrade-synthetic",
-    parsing: {
-      rules: new TypeScriptParserArtifactRules(),
-      parser: {
-        parse: async (request) => {
+
+    agentTransportFactory: () => async () => {
+      calls++;
+      throw new Error("Completion must not call a model");
+    },
+    typescriptParserRuntime: {
+      baseUrl: "http://127.0.0.1:9",
+      modelIdentity: "synthetic-model",
+      transport: {
+        request: async (_, input) => {
           parses++;
+          started();
+          if (mode === "wait-parser")
+            await new Promise<void>((_, reject) => {
+              if (input.signal?.aborted) reject(new Error("aborted"));
+              else
+                input.signal?.addEventListener(
+                  "abort",
+                  () => reject(new Error("aborted")),
+                  { once: true },
+                );
+            });
           if (mode === "parser-failure")
             throw new ParsingFailure("parser-unavailable");
-          const bytes = Buffer.from(
-            `# ${FIXTURE_LITERATURE.metadata.title}\n\nThe fixture studies spectroscopy.\n\n# References\n\n1. Fixture reference.\n`,
-          );
           return {
-            source_asset_id: request.source_asset_id,
-            source_sha256: request.source_sha256,
-            page_count: 1,
-            markdown: {
-              bytes,
-              artifact: parseArtifactRef({
-                sha256: await sha256(bytes),
-                byte_size: bytes.length,
-                media_type: "text/markdown",
-              }),
-            },
-            resources: [],
-            provenance: {
-              provenance: parseProvenance({
-                provenance_id: `00000000-0000-0000-0000-${String(100 + parses).padStart(12, "0")}`,
-                source_kind: "parser",
-                source_name: "fixture",
-                source_record_id: null,
-                observed_at: "2026-09-10T00:00:00Z",
-                input_sha256: request.source_sha256,
-                parameters_sha256: "a".repeat(64),
-              }),
-              parser_version: "fixture",
-              mode: null,
-              model_identity: null,
-            },
+            status: 200,
+            headers: [["content-type", "application/zip"]],
+            body: rawParseArchive(
+              parseRawParseProfile(input.headers["x-sciretriever-profile"]),
+            ),
           };
         },
       },
@@ -152,7 +103,7 @@ async function fixture(
       page_id: "fixture-page",
       document_generation: 1,
       source_url: "https://fixture.invalid/paper",
-      captured_at: "2026-09-10T00:00:00Z",
+      captured_at: "2026-10-20T00:00:00Z",
     });
     await app.execution!.transfers.append(id, bytes);
     await app.execution!.transfers.complete(id);
@@ -160,9 +111,9 @@ async function fixture(
   return {
     app,
     home,
-    modelStarted,
     bad,
     good,
+    parserStarted,
     get calls() {
       return calls;
     },
@@ -171,352 +122,202 @@ async function fixture(
     },
     close: async () => {
       await app.close();
-      await new Promise<void>((res, reject) =>
-        http.close((e) => (e ? reject(e) : res())),
-      );
       await rm(home, { recursive: true, force: true });
     },
   };
 }
-it("retains the first accepted PDF after no usable Analysis and never tries a replacement candidate", async () => {
-  const env = await fixture();
-  let reopened: Awaited<ReturnType<typeof createApplication>> | undefined;
+it("accepts one PDF, publishes the deployment raw profile, reuses it and never invokes the old analysis chain", async () => {
+  const e = await fixture();
   try {
-    const result = await env.app.completion!.complete({
+    const result = await e.app.completion!.complete({
       literature_id: lit,
       transfer_ids: ["first", "duplicate", "next"],
     });
-    expect(result.outcome).toBe("supplied_candidates_exhausted");
+    expect(result.outcome).toBe("parser_results_ready");
     expect(result.attempts).toEqual([
-      { transfer_id: "first", outcome: "no_usable_content" },
+      { transfer_id: "first", outcome: "accepted" },
     ]);
-    expect(env.parses).toBe(1);
-    expect(env.calls).toBe(1);
-    const detail = await env.app.library.detail(lit);
-    expect(detail.primary_pdf!.asset.sha256).toBe(await sha256(env.bad));
-    expect(detail.parser_result).not.toBeNull();
-    expect(detail.content).toBeNull();
-    expect(await env.app.database.getCandidate("first")).not.toBeNull();
-    expect(
-      await sha256(
-        await readFile(
-          join(env.app.files.root, `.candidates/${await sha256(env.bad)}.bin`),
-        ),
-      ),
-    ).toBe(await sha256(env.bad));
-    const repeated = await env.app.completion!.complete({
-      literature_id: lit,
-      transfer_ids: ["first", "next"],
-    });
-    expect(repeated.outcome).toBe("content_ready");
-    expect(repeated.attempts).toEqual([
-      { transfer_id: null, outcome: "content_accepted" },
-    ]);
-    expect(env.calls).toBe(3);
-    expect(env.parses).toBe(1);
-    const accepted = await env.app.library.detail(lit);
-    expect(accepted.primary_pdf).toEqual(detail.primary_pdf);
-    expect(accepted.parser_result).toEqual(detail.parser_result);
-    expect(accepted.content).not.toBeNull();
-    await env.app.close();
-    reopened = await createApplication(env.home, {
-      executionSchema: "upgrade-synthetic",
-    });
-    expect(await reopened.library.detail(lit)).toEqual(accepted);
-    expect(await reopened.execution!.publisher.reconcile()).toEqual([]);
-  } finally {
-    await reopened?.close();
-    await env.close();
-  }
-}, 30000);
-it.each(["parser-failure", "model-failure"] as const)(
-  "retains the current PDF and stops on %s without trying the next candidate",
-  async (mode) => {
-    const env = await fixture(mode);
-    try {
-      await expect(
-        env.app.completion!.complete({
-          literature_id: lit,
-          transfer_ids: ["first", "next"],
-        }),
-      ).rejects.toBeInstanceOf(Error);
-      const detail = await env.app.library.detail(lit);
-      expect(detail.primary_pdf!.asset.sha256).toBe(await sha256(env.bad));
-      expect(detail.content).toBeNull();
-      expect(detail.parser_result === null).toBe(mode === "parser-failure");
-      expect(env.parses).toBe(1);
-      expect(await env.app.database.getCandidate("first")).not.toBeNull();
-      expect(await env.app.database.getCandidate("next")).not.toBeNull();
-      // A Parser or model failure never becomes a durable exhaustion fact.
-      expect(await env.app.database.hasAutomaticPdfExhaustion(lit)).toBe(false);
-    } finally {
-      await env.close();
-    }
-  },
-  30000,
-);
-it("returns only supplied-list exhaustion and allows a fresh invocation to rediscover the same hash", async () => {
-  const env = await fixture("unusable");
-  try {
-    const result = await env.app.completion!.complete({
-      literature_id: lit,
-      transfer_ids: ["first", "duplicate", "missing"],
-    });
-    expect(result.outcome).toBe("supplied_candidates_exhausted");
-    expect(result.attempts.map((a) => a.outcome)).toEqual([
-      "no_usable_content",
-    ]);
-    // A bounded invocation discards its attempt memory: neither the supplied-list exhaustion nor
-    // the durable candidate miss becomes an automatic acquisition exhaustion fact.
-    expect(await env.app.database.hasAutomaticPdfExhaustion(lit)).toBe(false);
-    expect((await env.app.library.detail(lit)).primary_pdf?.asset.sha256).toBe(
-      await sha256(env.bad),
-    );
-    expect(env.calls).toBe(1);
-    await env.app.execution!.transfers.begin("rediscovered", undefined, {
-      session_id: "second-session",
-      article_id: lit,
-      page_id: "second-page",
-      document_generation: 1,
-      source_url: "https://fixture.invalid/paper",
-      captured_at: "2026-09-10T00:00:00Z",
-    });
-    await env.app.execution!.transfers.append("rediscovered", env.bad);
-    await env.app.execution!.transfers.complete("rediscovered");
+    expect(e.parses).toBe(1);
+    expect(e.calls).toBe(0);
+    const detail = await e.app.library.detail(lit);
+    expect(detail.primary_pdf!.asset.sha256).toBe(await sha256(e.bad));
+    expect(detail).not.toHaveProperty("parser_result");
+    expect(detail).not.toHaveProperty("content");
+    expect(await e.app.completion!.isReady(lit)).toBe(true);
     expect(
       (
-        await env.app.completion!.complete({
+        await e.app.documentRead.default({
           literature_id: lit,
-          transfer_ids: ["rediscovered"],
+          asset_id: detail.primary_pdf!.asset.asset_id,
+          asset_sha256: detail.primary_pdf!.asset.sha256,
         })
-      ).attempts.map((a) => a.outcome),
-    ).toEqual(["no_usable_content"]);
-    expect(env.calls).toBe(2);
+      ).default,
+    ).toBeNull();
+    const again = await e.app.completion!.complete({
+      literature_id: lit,
+      transfer_ids: ["next"],
+    });
+    expect(again).toMatchObject({
+      outcome: "parser_results_ready",
+      attempts: [],
+      receipt: { profiles: [{ profile: "vlm-engine", status: "reused" }] },
+    });
+    expect(e.parses).toBe(1);
+    expect(e.calls).toBe(0);
+    await e.app.close();
+    const reopened = await createApplication(e.home, {});
+    try {
+      expect(await reopened.completion!.isReady(lit)).toBe(true);
+      expect(await reopened.library.detail(lit)).toEqual(detail);
+    } finally {
+      await reopened.close();
+    }
   } finally {
-    await env.close();
+    await e.close();
   }
 }, 30000);
-it("uses an already published current PDF and skips its duplicate in the supplied list", async () => {
-  const env = await fixture();
+it("retains a valid PDF and all candidates after parser failure without recording automatic acquisition exhaustion", async () => {
+  const e = await fixture("parser-failure");
   try {
-    const current = await env.app.database.currentFacts(lit);
-    await env.app.execution!.acceptance.accept({
-      literature_id: lit,
-      transfer_id: "first",
-      receipt_id: "preexisting",
-      metadata_snapshot: current!.metadata_snapshot,
-    });
-    const result = await env.app.completion!.complete({
-      literature_id: lit,
-      transfer_ids: ["duplicate", "next"],
-    });
-    expect(result.outcome).toBe("supplied_candidates_exhausted");
-    expect(result.attempts).toEqual([
-      { transfer_id: null, outcome: "no_usable_content" },
-    ]);
-    expect(env.parses).toBe(1);
-    expect(env.calls).toBe(1);
-  } finally {
-    await env.close();
-  }
-}, 30000);
-it("keeps the accepted PDF when a durable content Job receives no usable Analysis", async () => {
-  const env = await fixture("unusable");
-  try {
-    const facts = await env.app.database.currentFacts(lit);
-    await env.app.execution!.acceptance.accept({
-      literature_id: lit,
-      transfer_id: "first",
-      receipt_id: "job-primary",
-      metadata_snapshot: facts!.metadata_snapshot,
-    });
-    const before = await env.app.library.detail(lit);
-    const job = await env.app.jobService!.create({
-      target_kind: "selector",
-      selector: {
-        kind: "literatures",
-        literature_ids: [parseLiteratureId(lit)],
-      },
-      goal: "content",
-      policy_version: "material-protection",
-      policy: { mode: "never", max_retries: 0 },
-      idempotency_key: "material-protection",
-    });
-    const results = await env.app.taskService!.runJob(job.job_id);
-    expect(results).toMatchObject([
-      {
-        outcome: "skipped",
-        failure: { code: "completion-candidates-exhausted" },
-      },
-    ]);
-    const after = await env.app.library.detail(lit);
-    expect(after.primary_pdf).toEqual(before.primary_pdf);
-    expect(after.parser_result).not.toBeNull();
-    expect(after.content).toBeNull();
-    expect(await env.app.database.hasAutomaticPdfExhaustion(lit)).toBe(false);
-    expect(env.calls).toBe(1);
-  } finally {
-    await env.close();
-  }
-}, 30000);
-it("rejects overlapping work for the same Literature and shutdown cancels the pending model while preserving its PDF", async () => {
-  const env = await fixture("wait-model");
-  try {
-    const pending = env.app.completion!.complete({
+    const result = await e.app.completion!.complete({
       literature_id: lit,
       transfer_ids: ["first", "next"],
     });
-    const rejected = expect(pending).rejects.toBeInstanceOf(Error);
-    await env.modelStarted;
+    expect(result).toMatchObject({
+      outcome: "parsing_failed",
+      receipt: { profiles: [{ profile: "vlm-engine", status: "failed" }] },
+    });
+    const detail = await e.app.library.detail(lit);
+    expect(detail.primary_pdf!.asset.sha256).toBe(await sha256(e.bad));
+    expect(detail).not.toHaveProperty("content");
+    expect(detail).not.toHaveProperty("parser_result");
+    expect(await e.app.database.hasAutomaticPdfExhaustion(lit)).toBe(false);
+    expect(await e.app.database.getCandidate("next")).not.toBeNull();
+    expect(e.calls).toBe(0);
+  } finally {
+    await e.close();
+  }
+}, 30000);
+it("treats supplied-list exhaustion as transient feedback and permits a later supplied candidate", async () => {
+  const e = await fixture();
+  try {
+    expect(
+      await e.app.completion!.complete({
+        literature_id: lit,
+        transfer_ids: ["missing"],
+      }),
+    ).toMatchObject({
+      outcome: "supplied_candidates_exhausted",
+      attempts: [{ transfer_id: "missing", outcome: "candidate_missing" }],
+    });
+    expect(await e.app.database.hasAutomaticPdfExhaustion(lit)).toBe(false);
+    expect(e.parses).toBe(0);
+    expect(
+      (
+        await e.app.completion!.complete({
+          literature_id: lit,
+          transfer_ids: ["first"],
+        })
+      ).outcome,
+    ).toBe("parser_results_ready");
+  } finally {
+    await e.close();
+  }
+}, 30000);
+it("rejects overlapping work and cancels pending profiles on shutdown while preserving the accepted PDF", async () => {
+  const e = await fixture("wait-parser");
+  try {
+    const pending = e.app.completion!.complete({
+      literature_id: lit,
+      transfer_ids: ["first"],
+    });
+    const rejected = expect(pending).rejects.toMatchObject({
+      code: "completion-cancelled",
+    });
+    await e.parserStarted;
     await expect(
-      env.app.completion!.complete({
+      e.app.completion!.complete({
         literature_id: lit,
         transfer_ids: ["next"],
       }),
     ).rejects.toMatchObject({ code: "completion-active" });
-    await env.app.completion!.close();
+    await e.app.completion!.close();
     await rejected;
-    expect(env.calls).toBe(1);
-    expect(env.parses).toBe(1);
-    expect((await env.app.library.detail(lit)).primary_pdf!.asset.sha256).toBe(
-      await sha256(env.bad),
-    );
-    await expect(
-      env.app.completion!.complete({ literature_id: lit, transfer_ids: [] }),
-    ).rejects.toMatchObject({ code: "completion-closed" });
+    expect((await e.app.library.detail(lit)).primary_pdf).not.toBeNull();
+    expect(e.calls).toBe(0);
+    expect(await e.app.database.hasAutomaticPdfExhaustion(lit)).toBe(false);
   } finally {
-    await env.close();
+    await e.close();
   }
 }, 30000);
-it("rejects malformed and pre-cancelled commands before publishing any primary asset", async () => {
-  const env = await fixture();
+it("rejects malformed and pre-cancelled completion before accepting a PDF", async () => {
+  const e = await fixture();
   try {
-    await env.app.database.setAutomaticPdfExhaustion(lit);
     await expect(
-      env.app.completion!.complete({
+      e.app.completion!.complete({
         literature_id: lit,
         transfer_ids: ["../invalid"],
       }),
     ).rejects.toMatchObject({ code: "completion-command" });
     await expect(
-      env.app.completion!.complete({
-        literature_id: lit,
-        transfer_ids: Array.from({ length: 1001 }, () => "first"),
-      }),
-    ).rejects.toMatchObject({ code: "completion-command" });
-    await expect(
-      env.app.completion!.complete(
+      e.app.completion!.complete(
         { literature_id: lit, transfer_ids: ["first"] },
         AbortSignal.abort(),
       ),
     ).rejects.toMatchObject({ code: "completion-cancelled" });
-    expect(env.calls).toBe(0);
-    expect(env.parses).toBe(0);
-    expect((await env.app.library.detail(lit)).primary_pdf).toBeNull();
-    // Rejected commands and a cancellation neither create nor clear the fact.
-    expect(await env.app.database.hasAutomaticPdfExhaustion(lit)).toBe(true);
+    expect((await e.app.library.detail(lit)).primary_pdf).toBeNull();
+    expect(e.parses).toBe(0);
   } finally {
-    await env.close();
+    await e.close();
   }
 }, 30000);
-it.each(["10.5555/other.paper", "unknown"])(
-  "allows unverified PDF content (%s) into Parsing and preserves the downloaded asset after Analysis declines it",
-  async (identifier) => {
-    const env = await fixture();
-    try {
-      await env.app.database.setAutomaticPdfExhaustion(lit);
-      const transferId = "unverified-content";
-      const bytes = workbenchPdf(identifier);
-      await env.app.execution!.transfers.begin(transferId, undefined, {
-        session_id: "unverified-session",
-        article_id: lit,
-        page_id: "unverified-page",
-        document_generation: 1,
-        source_url: "https://fixture.invalid/paper",
-        captured_at: "2026-10-04T00:00:00Z",
-      });
-      await env.app.execution!.transfers.append(transferId, bytes);
-      await env.app.execution!.transfers.complete(transferId);
-      const result = await env.app.completion!.complete({
-        literature_id: lit,
-        transfer_ids: [transferId],
-      });
-      expect(result.outcome).toBe("supplied_candidates_exhausted");
-      expect(result.attempts).toEqual([
-        { transfer_id: transferId, outcome: "no_usable_content" },
-      ]);
-      expect(env.calls).toBe(1);
-      expect(env.parses).toBe(1);
-      const detail = await env.app.library.detail(lit);
-      expect(detail.primary_pdf?.asset.sha256).toBe(await sha256(bytes));
-      expect(detail.primary_pdf?.article_identity_status).toBe("unverified");
-      expect(detail.parser_result).not.toBeNull();
-      expect(await env.app.database.hasAutomaticPdfExhaustion(lit)).toBe(false);
-    } finally {
-      await env.close();
-    }
-  },
-  30000,
-);
-it("keeps a storage failure from writing the fact and clears it only when a primary PDF is accepted", async () => {
-  const storageFailure = await fixture();
+it("clears an existing exhaustion marker only when a PDF is accepted, even if parsing subsequently fails", async () => {
+  const e = await fixture("parser-failure");
   try {
-    await storageFailure.app.database.setAutomaticPdfExhaustion(lit);
-    storageFailure.app.database.commitReceipt = async () => {
-      throw new Error("fixture storage failure");
-    };
-    await expect(
-      storageFailure.app.completion!.complete({
-        literature_id: lit,
-        transfer_ids: ["first"],
-      }),
-    ).rejects.toBeInstanceOf(Error);
-    expect(
-      await storageFailure.app.database.hasAutomaticPdfExhaustion(lit),
-    ).toBe(true);
+    await e.app.database.setAutomaticPdfExhaustion(lit);
+    await e.app.completion!.complete({
+      literature_id: lit,
+      transfer_ids: ["missing"],
+    });
+    expect(await e.app.database.hasAutomaticPdfExhaustion(lit)).toBe(true);
+    await e.app.completion!.complete({
+      literature_id: lit,
+      transfer_ids: ["first"],
+    });
+    expect(await e.app.database.hasAutomaticPdfExhaustion(lit)).toBe(false);
+    expect(e.calls).toBe(0);
   } finally {
-    await storageFailure.close();
+    await e.close();
   }
-  const accepted = await fixture("parser-failure");
+}, 30000);
+
+it("refuses a candidate captured for a different article without consuming it", async () => {
+  const e = await fixture();
   try {
-    await accepted.app.database.setAutomaticPdfExhaustion(lit);
-    await expect(
-      accepted.app.completion!.complete({
-        literature_id: lit,
-        transfer_ids: ["first"],
+    const other = "00000000-0000-4000-9000-000000001234";
+    await e.app.database.putLiterature(
+      parseLiterature({
+        ...FIXTURE_LITERATURE,
+        literature_id: other,
+        meta_literature_id: "00000000-0000-4000-9000-000000001235",
+        metadata: { ...FIXTURE_LITERATURE.metadata, identifiers: [] },
       }),
-    ).rejects.toBeInstanceOf(Error);
-    // Accepting a valid primary PDF clears the fact even though Parsing then fails.
-    expect((await accepted.app.library.detail(lit)).primary_pdf).not.toBeNull();
-    expect(await accepted.app.database.hasAutomaticPdfExhaustion(lit)).toBe(
-      false,
     );
+    await expect(
+      e.app.completion!.complete({
+        literature_id: other,
+        transfer_ids: ["first"],
+      }),
+    ).rejects.toMatchObject({ code: "completion-command" });
+    expect((await e.app.library.detail(other)).primary_pdf).toBeNull();
+    expect((await e.app.library.detail(lit)).primary_pdf).toBeNull();
+    expect(await e.app.database.getCandidate("first")).not.toBeNull();
+    expect(e.parses).toBe(0);
+    expect(e.calls).toBe(0);
   } finally {
-    await accepted.close();
+    await e.close();
   }
-  const ready = await fixture();
-  try {
-    await ready.app.database.setAutomaticPdfExhaustion(lit);
-    expect(
-      (
-        await ready.app.completion!.complete({
-          literature_id: lit,
-          transfer_ids: ["first", "next"],
-        })
-      ).outcome,
-    ).toBe("supplied_candidates_exhausted");
-    expect(await ready.app.database.hasAutomaticPdfExhaustion(lit)).toBe(false);
-    expect(
-      (
-        await ready.app.library.search({
-          query: { needs_manual_pdf: true },
-        })
-      ).total_count,
-    ).toBe(0);
-  } finally {
-    await ready.close();
-  }
-}, 60000);
+});
 
 const orchestrationId = (n: number) =>
   `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
@@ -564,9 +365,7 @@ async function orchestrationFixture(
   readonly publishPdf: (literatureId: string, name: string) => Promise<void>;
 }> {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-orchestration-"));
-  const app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  const app = await createApplication(home, {});
   const literatures: string[] = [];
   for (const [groupIndex, group] of metaGroups.entries()) {
     for (const value of group) {
@@ -660,7 +459,10 @@ function scriptedAcquisition(
 function completionService(
   env: Awaited<ReturnType<typeof orchestrationFixture>>,
   acquisition: ScriptedAcquisition["port"],
-  completion: Pick<LiteratureCompletionService, "complete"> | null = null,
+  completion: Pick<
+    LiteratureCompletionService,
+    "complete" | "isReady"
+  > | null = null,
 ): DatabaseCompletionService {
   return new DatabaseCompletionService({
     library: env.app.library,
@@ -672,7 +474,7 @@ function completionService(
 }
 
 describe("database completion report orchestration", () => {
-  it("retries explicit supplied content and excludes its unfinished sibling from broad content scopes", async () => {
+  it("retries explicit supplied PDFs and excludes its unfinished sibling from broad parsing scopes", async () => {
     const env = await fixture();
     let acquisitions = 0;
     const service = new DatabaseCompletionService({
@@ -694,17 +496,12 @@ describe("database completion report orchestration", () => {
           kind: "literatures",
           literature_ids: [parseLiteratureId(lit)],
         },
-        goal: "CONTENT_READY",
+        goal: "PARSER_RESULT_READY",
         transfer_ids: ["first", "duplicate", "next"],
       });
-      expect(explicit.completed).toHaveLength(0);
-      expect(explicit.failed).toMatchObject([
-        {
-          literature_id: lit,
-          failure: { code: "completion-candidates-exhausted" },
-        },
-      ]);
-      expect(explicit.no_usable_content_literature_ids).toEqual([lit]);
+      expect(explicit.completed).toMatchObject([{ literature_id: lit }]);
+      expect(explicit.failed).toEqual([]);
+
       expect(await env.app.database.hasAutomaticPdfExhaustion(lit)).toBe(false);
       await env.app.database.putLiterature(
         parseLiterature({
@@ -720,7 +517,7 @@ describe("database completion report orchestration", () => {
           },
         }),
       );
-      for (const [index, selector] of [
+      for (const selector of [
         { kind: "all-pending" as const },
         {
           kind: "query" as const,
@@ -728,8 +525,11 @@ describe("database completion report orchestration", () => {
             query: { text: "Unfinished sibling" },
           }).query,
         },
-      ].entries()) {
-        const report = await service.run({ selector, goal: "CONTENT_READY" });
+      ]) {
+        const report = await service.run({
+          selector,
+          goal: "PARSER_RESULT_READY",
+        });
         expect(report.end).toEqual({ kind: "finished" });
         expect([
           report.completed,
@@ -737,15 +537,11 @@ describe("database completion report orchestration", () => {
           report.skipped,
           report.notStarted,
           report.interrupted,
-        ]).toMatchObject(
-          index === 0
-            ? [[{ literature_id: lit }], [], [], [], []]
-            : [[], [], [], [], []],
-        );
+        ]).toMatchObject([[], [], [], [], []]);
       }
       expect(acquisitions).toBe(0);
       expect(env.parses).toBe(1);
-      expect(env.calls).toBe(3);
+      expect(env.calls).toBe(0);
     } finally {
       await env.close();
     }
@@ -968,12 +764,16 @@ describe("database completion report orchestration", () => {
     }
   });
 
-  it("isolates content failures and records cleanup feedback without touching other targets", async () => {
+  it("isolates supplied-candidate and stale-input failures without touching other targets", async () => {
     const env = await orchestrationFixture([[41], [42]]);
     try {
       const [cleanedId, staleId] = env.literatures;
       const calls: string[] = [];
-      const completion: Pick<LiteratureCompletionService, "complete"> = {
+      const completion: Pick<
+        LiteratureCompletionService,
+        "complete" | "isReady"
+      > = {
+        isReady: async () => false,
         async complete(command) {
           calls.push(command.literature_id);
           if (command.literature_id === cleanedId)
@@ -981,7 +781,7 @@ describe("database completion report orchestration", () => {
               outcome: "supplied_candidates_exhausted",
               literature_id: cleanedId!,
               attempts: [
-                { transfer_id: "first", outcome: "no_usable_content" },
+                { transfer_id: "first", outcome: "candidate_missing" },
               ],
             };
           throw new LiteratureCompletionFailure("completion-stale");
@@ -996,14 +796,14 @@ describe("database completion report orchestration", () => {
           kind: "literatures",
           literature_ids: env.literatures.map(parseLiteratureId),
         },
-        goal: "CONTENT_READY",
+        goal: "PARSER_RESULT_READY",
       });
       expect(calls).toEqual([cleanedId, staleId]);
       expect(report.end).toEqual({ kind: "finished" });
       expect(report.failed).toMatchObject([
         {
           literature_id: cleanedId,
-          stage: "literature",
+          stage: "acquisition",
           failure: { code: "completion-candidates-exhausted" },
         },
         {
@@ -1012,7 +812,6 @@ describe("database completion report orchestration", () => {
           failure: { code: "completion-stale", retryable: true },
         },
       ]);
-      expect(report.no_usable_content_literature_ids).toEqual([cleanedId]);
     } finally {
       await env.close();
     }

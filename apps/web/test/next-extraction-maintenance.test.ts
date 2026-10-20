@@ -1,3 +1,4 @@
+import { externalManifestFixture } from "../../server/test/external-manifest-fixture.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,9 +17,6 @@ import {
 } from "@sciretriever/contracts";
 import { createApplication } from "../../server/src/bootstrap/application.js";
 import { startMaintenanceWorkbench } from "../../server/src/bootstrap/workbench.js";
-import { migrateDocumentCatalog } from "../../server/src/storage/sqlite/document-migration.js";
-import { migrateRetrievalCatalog } from "../../server/src/storage/sqlite/retrieval-migration.js";
-import { migrateExtractionCatalog } from "../../server/src/storage/sqlite/extraction-migration.js";
 import {
   FIXTURE_LITERATURE,
   workbenchPdf,
@@ -29,9 +27,7 @@ const id = (n: number) =>
 // Budget covers the complete real-browser migration, delivery, retry and rejection journey.
 it("delivers a v5 extraction batch through the real Chromium maintenance form and refuses forged responses", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-extraction-web-"));
-  const app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  const app = await createApplication(home, {});
   let workbench:
     | Awaited<ReturnType<typeof startMaintenanceWorkbench>>
     | undefined;
@@ -66,15 +62,6 @@ it("delivers a v5 extraction batch through the real Chromium maintenance form an
       }),
     });
     await app.close();
-    for (const [migrate, backup] of [
-      [migrateDocumentCatalog, "before-v3.sqlite"],
-      [migrateRetrievalCatalog, "before-v4.sqlite"],
-      [migrateExtractionCatalog, "before-v5.sqlite"],
-    ] as const)
-      await migrate({
-        catalog_path: join(home, "catalog.sqlite"),
-        backup_path: join(home, backup),
-      });
     workbench = await startMaintenanceWorkbench({
       home,
       assets: await independentNextAssets("maintenance"),
@@ -102,18 +89,21 @@ it("delivers a v5 extraction batch through the real Chromium maintenance form an
       required_capabilities: ["material-file-v1" as const],
     };
     const spec = { ...content, spec_sha256: await extractionSpecHash(content) };
-    const prepared = await workbench.application.extractionPreparation.prepare({
-      spec,
-      inputs: [
-        {
-          input_id: "source-1",
-          literature_id: FIXTURE_LITERATURE.literature_id,
-          asset_id: asset.asset_id,
-          asset_sha256: asset.sha256,
-          document_version_id: null,
-        },
-      ],
-    });
+    const prepared = await externalManifestFixture(
+      workbench.application.documentRead,
+      {
+        spec,
+        inputs: [
+          {
+            input_id: "source-1",
+            literature_id: FIXTURE_LITERATURE.literature_id,
+            asset_id: asset.asset_id,
+            asset_sha256: asset.sha256,
+            document_version_id: null,
+          },
+        ],
+      },
+    );
     const evidence = (
       await workbench.application.documentRead.materialEvidence({
         literature_id: FIXTURE_LITERATURE.literature_id,

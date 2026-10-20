@@ -66,6 +66,28 @@ it("preserves drafts across section publications and conflicts, explains restart
   });
   try {
     const page = w.page;
+    await page.getByRole("tab", { name: "建档", exact: true }).click();
+    await page.getByText(/部署解析 profile：/).waitFor();
+    expect(await page.getByText(/部署解析 profile：/).textContent()).toContain(
+      "vlm-engine",
+    );
+    await page
+      .getByRole("textbox", { name: "每次算子的用时核对调用上限", exact: true })
+      .fill("9");
+    const publication = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/configuration/publish-json",
+    );
+    await page
+      .getByRole("button", { name: "保存建档设置", exact: true })
+      .click();
+    expect((await publication).status()).toBe(200);
+    await expect
+      .poll(
+        async () =>
+          (await owner!.read()).configuration.proofread.max_value_check_calls,
+      )
+      .toBe(9);
     await page.getByRole("tab", { name: "运行状态", exact: true }).click();
     const runtime = page.locator(".settings-section [data-state]");
     await expect.poll(() => runtime.textContent()).toContain("core");

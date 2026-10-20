@@ -11,38 +11,22 @@ pnpm package:portable -- --output /tmp/sciretriever-portable
 /tmp/sciretriever-portable/bin/sciretriever doctor --json
 ```
 
-`doctor` 只读检查平台和系统依赖，不启动浏览器、不访问网络、不读取凭据。CloakBrowser 未配置时报告 blocked 是预期结果；Browser 获取需要已校验的 runtime，普通 Web 工作台仍可启动。包内运行使用自带 Node，生产配置和凭据固定在 `~/.sciretriever/`；Catalog/ArtifactStore 由已保存的 `paths` 选择。正式 `sciretriever web` 首次启动会把缺失的两条路径保存为 `~/.sciretriever/catalog.sqlite` 和 `~/.sciretriever/artifacts/`，目标不存在时创建 v10 空库，直接进入页面，无需配置向导。之后可在设置中修改位置，重启生效且不自动搬迁数据。CLI/MCP 读取相同配置。`SCIRETRIEVER_HOME` 不属于用户可见的配置路径选择，当前 CLI 不读取它；显式临时 home 只作为内部测试/隔离 seam。
+`doctor` 只读检查平台和系统依赖，不启动浏览器、不访问网络、不读取凭据。CloakBrowser 未配置时报告 blocked 是预期结果；Browser 获取需要已校验的 runtime，普通 Web 工作台仍可启动。包内运行使用自带 Node，生产配置和凭据固定在 `~/.sciretriever/`；Catalog/ArtifactStore 由已保存的 `paths` 选择。正式 `sciretriever web` 首次启动会把缺失的两条路径保存为 `~/.sciretriever/catalog.sqlite` 和 `~/.sciretriever/artifacts/`，目标不存在时创建当前结构的空库，直接进入页面，无需配置向导。之后可在设置中修改位置，重启生效且不自动搬迁数据。CLI/MCP 读取相同配置。`SCIRETRIEVER_HOME` 不属于用户可见的配置路径选择，当前 CLI 不读取它；显式临时 home 只作为内部测试/隔离 seam。
 
-需要单独准备新库时，可在确认精确目录后使用显式初始化工具；Web 的首次自动建库已包含知识、提取、检索与身份核验所需的 v10：
+需要单独准备新库时，可在确认精确目录后使用显式初始化工具；Web 的首次自动建库使用同一份当前结构：
 
 ```bash
 sciretriever storage schema-inspect --catalog /absolute/data/catalog.sqlite --json
 sciretriever storage schema-init --catalog /absolute/data/catalog.sqlite --json
 ```
 
-目标父目录必须已存在，目标文件必须不存在；已有 v1–v7 使用 `schema-upgrade --catalog PATH --backup PATH`，先停写并保留资产。命令与失败恢复见[初始化、升级与恢复](upgrade.md)。只读查询不创建 catalog，启用 schema 也不下载、解析、分析或暗中构建索引。
+目标父目录必须已存在，目标文件必须不存在。`schema-init` 不覆盖已有文件，读取入口不创建数据库，初始化也不获取、解析或分析文献。已有旧库不由普通启动自动转换。
 
-## 当前 Catalog 与 reader 兼容
+## 当前 Catalog
 
-下表指**当前安装版本**对完整、已知 schema 的能力；新增版本累积保留旧文献事实和 reader。Catalog 版本与 Document/Knowledge/HTTP 等产物协议版本是不同合同。
+生产代码只维护 `schema.ts` 中的一份当前结构及其指纹。结构不匹配时明确拒绝，不依据历史版本号选择旧逻辑，也不提供逐级迁移命令。旧库需要经过备份、副本转换和核对后再切换；见[数据库初始化与恢复](upgrade.md)。数据库布局标识与 Document、HTTP 等数据合同的协议标识相互独立。
 
-| Catalog    | 当前只读能力                                          | 此版本增加的存储能力                                           | 正式 operator 路径                 |
-| ---------- | ----------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------- |
-| v1         | Library、元数据、原始材料及旧兼容内容；文件级材料证据 | 基础文献事实                                                   | `schema-upgrade` → v10，需原始备份 |
-| v2         | 同 v1                                                 | execution / durable runtime；不代表新文档或知识能力            | `schema-upgrade` → v10，需原始备份 |
-| v3         | 以上及固定 DocumentVersion、片段/资源、文档证据       | 独立解析/文档版本发布与默认关系 CAS                            | `schema-upgrade` → v10，需原始备份 |
-| v4         | 以上及材料 Context                                    | 可重建的材料检索投影                                           | `schema-upgrade` → v10，需原始备份 |
-| v5         | 同 v4；外部提取准备仍按实际材料能力报告缺口           | 候选 operation、原子交付回执与输入保护 pin；不保存领域 payload | `schema-upgrade` → v10，需原始备份 |
-| v6         | 以上及单篇 Knowledge 按固定 ID 阅读、证据复核         | 多用途单篇知识及分层压缩产物                                   | `schema-upgrade` → v10，需原始备份 |
-| v7         | 以上及集合 Synthesis 阅读与准备                       | 固定范围的版本化集合综合                                       | `schema-upgrade` → v10，需原始备份 |
-| v8         | 以上及知识/材料混合 Context                           | 独立知识检索投影                                               | `schema-upgrade` → v10，需原始备份 |
-| v9         | 以上及文章身份核验结果                                | 与材料、解析和元数据绑定的辅助判断                             | `schema-upgrade` → v10，需原始备份 |
-| v10        | 以上及统一处理器结果、集合和证据                      | 默认加工、长期候选托管、可重建记录/全文投影                    | 返回 `already-v10`；不创建备份     |
-| 不存在目标 | Query 返回 `not-initialized`，不建库                  | 无                                                             | `schema-init` 直接创建 v10         |
-
-`schema-init` 拒绝所有已存在目标。CLI 的实际 `schema-upgrade` 必须给 `--backup`，即使完整 v10 最终返回 `already-v10`。operator inspect/dry-run 检查完整 identity/fingerprint、DDL、integrity/FK 和子 schema；未知版本、漂移和损坏拒绝。普通源 reader 与检索投影的错误边界分别处理，完整检索 DDL 下的损坏投影不会被解释为零命中，也不能据 Library 可读绕过 operator 校验。缺索引、陈旧或不可用源按[阅读指南](library-query.md)反馈；索引需另一次明确重建。
-
-这里的兼容是新程序读取旧事实和继续使用旧兼容 API，不保证旧二进制能打开新库，也不提供自动降级或无损增量回退。切换、Catalog 与资产备份、独立恢复和开放 writer 的步骤见[切换与恢复](cutover.md)。
+源数据和检索投影分别校验。检索投影损坏时不能伪装成零命中；只读查询不自动修复，索引需要显式重建。
 
 ## 安装验收边界
 

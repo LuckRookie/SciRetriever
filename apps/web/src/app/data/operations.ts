@@ -1,106 +1,19 @@
-import { randomId } from "../../browser-platform.js";
 import {
-  createInputManifest,
+  parseArticleIdentityRequest,
   parseDocumentReadRequest,
   parseDocumentReadResult,
-  parseKnowledgeAnalysisRequest,
-  parseKnowledgeLongAnalysisRequest,
   parseProcessingTaskRequest,
-  parseArticleIdentityRequest,
   type ProcessingOperation,
 } from "@sciretriever/contracts";
-import { record } from "./wire.js";
+import { randomId } from "../../browser-platform.js";
 import type { ApiClient } from "./api.js";
 import { readLiterature } from "./library.js";
+import { record } from "./wire.js";
 export interface OperationContext {
   api: ApiClient;
   signal: AbortSignal;
   onTasksChanged(): void;
   notify(message: string): void;
-}
-export async function analysisOperation(
-  ctx: OperationContext,
-  id: string,
-  purpose = "overview",
-  question: string | null = null,
-  long = false,
-): Promise<ProcessingOperation> {
-  const d = await readLiterature(ctx.api, id, ctx.signal),
-    pdf = d.primary_pdf?.asset;
-  if (!pdf) throw new Error("没有已接纳的 PDF");
-  const mreq = parseDocumentReadRequest("material", {
-    literature_id: id,
-    asset_id: pdf.asset_id,
-  });
-  const material = parseDocumentReadResult(
-    "material",
-    (await ctx.api.query("material-evidence", mreq, ctx.signal)).result,
-    mreq,
-  );
-  if (
-    material.evidence.target_kind !== "material" ||
-    material.evidence.material.asset_sha256 !== pdf.sha256
-  )
-    throw new Error("材料证据与当前 PDF 不一致");
-  const req = parseDocumentReadRequest("default", {
-    literature_id: id,
-    asset_id: pdf.asset_id,
-    asset_sha256: pdf.sha256,
-  });
-  const current = parseDocumentReadResult(
-    "default",
-    (await ctx.api.query("document-default", req, ctx.signal)).result,
-    req,
-  );
-  if (!current.default) throw new Error("该材料尚无解析文档");
-  const dreq = parseDocumentReadRequest("describe", {
-    document_version_id: current.default.document_version_id,
-  });
-  const doc = parseDocumentReadResult(
-    "describe",
-    (await ctx.api.query("document-describe", dreq, ctx.signal)).result,
-    dreq,
-  );
-  if (
-    doc.document.source_material_ref.literature_id !== id ||
-    doc.document.source_material_ref.asset_sha256 !== pdf.sha256 ||
-    !doc.capabilities.text
-  )
-    throw new Error("文档与当前材料不匹配或没有可读正文");
-  const input = await createInputManifest([
-    {
-      input_id: "source-1",
-      literature_id: id,
-      material: material.evidence.material,
-      document: doc.document,
-      capabilities: [
-        "material-file-v1",
-        "document-segment-v1",
-        "document-text-v1",
-        ...(doc.capabilities.outline ? ["document-outline-v1" as const] : []),
-        ...(doc.capabilities.resources
-          ? ["document-resources-v1" as const]
-          : []),
-      ],
-      gaps: [],
-    },
-  ]);
-  const common = { input, purpose, question, default_update: null };
-  return long
-    ? {
-        operation: "analyze-long",
-        request: await parseKnowledgeLongAnalysisRequest({
-          schema_version: 2,
-          ...common,
-        }),
-      }
-    : {
-        operation: "analyze",
-        request: await parseKnowledgeAnalysisRequest({
-          schema_version: 1,
-          ...common,
-        }),
-      };
 }
 export async function createTask(
   ctx: OperationContext,

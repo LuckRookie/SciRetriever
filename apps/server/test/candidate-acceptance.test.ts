@@ -34,7 +34,8 @@ const literature = parseLiterature({
     abstract: null,
     publication_date: null,
     publication_year: 2026,
-    document_type: "article",
+    publication_form: "journal-article" as const,
+    article_kind: null,
     language: "en",
     venue: null,
     publisher: null,
@@ -49,9 +50,7 @@ async function setup(seed = literature) {
   const home = await mkdtemp(
     join(tmpdir(), "sciretriever-candidate-acceptance-"),
   );
-  let application = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  let application = await createApplication(home, {});
   await application.database.putLiterature(seed);
   return {
     get app() {
@@ -59,9 +58,7 @@ async function setup(seed = literature) {
     },
     async restart() {
       await application.close();
-      application = await createApplication(home, {
-        executionSchema: "upgrade-synthetic",
-      });
+      application = await createApplication(home, {});
     },
     async candidate(transfer: string, bytes = workbenchPdf(), article = id(1)) {
       const collector = application.execution!.transfers;
@@ -369,7 +366,7 @@ it.each([
       expect(detail.primary_pdf?.article_identity_status).toBe("unverified");
       expect(detail.primary_pdf?.asset.sha256).toBe(receipt.sha256);
       expect(detail.literature.status).toBe("ASSET_READY");
-      expect(detail.missing_step).toBe("parser-result");
+      expect(detail.missing_step).toBe("raw-parse");
       expect(await s.app.execution!.acceptance.accept(command)).toEqual(
         receipt,
       );

@@ -1,10 +1,9 @@
 import {
   parseAssetId,
-  parseLiteratureId,
   parseDocumentSelector,
-  parseSynthesisReadSelection,
-  type MaterialContextReference,
+  parseLiteratureId,
   type GeneratedKnowledgeContextItem,
+  type MaterialContextReference,
 } from "@sciretriever/contracts";
 
 export type FixedDocumentSource = Extract<
@@ -19,8 +18,6 @@ export type FixedSource =
 export const sourceParameterKeys = [
   "source",
   "document",
-  "knowledge",
-  "artifact",
   "task",
   "from",
   "asset",
@@ -28,15 +25,15 @@ export const sourceParameterKeys = [
   "representation",
   "start",
   "end",
-  "contentHash",
-  "manifest",
-  "statement",
-  "statementHash",
   "metadataHash",
   "metadataRevision",
   "result",
   "resultHash",
+  "record",
+  "returnReader",
   "collection",
+  "page",
+  "region",
 ] as const;
 
 export function sourceParameters(source: FixedSource): Record<string, string> {
@@ -50,14 +47,12 @@ export function sourceParameters(source: FixedSource): Record<string, string> {
       start: String(source.start_utf8),
       end: String(source.end_utf8),
     };
-  if (source.kind === "knowledge")
+  if (source.kind === "result")
     return {
-      source: source.kind,
-      knowledge: source.artifact_id,
-      contentHash: source.content_sha256,
-      manifest: source.manifest_sha256,
-      statement: source.statement_id,
-      statementHash: source.statement_sha256,
+      source: "result",
+      result: source.result_id,
+      resultHash: source.content_sha256,
+      ...(source.record_id ? { record: source.record_id } : {}),
     };
   return {
     source: source.kind,
@@ -89,7 +84,7 @@ export function readFixedSource(
   };
   switch (parameters.get("source")) {
     case null:
-      return null; // Supported historical document/artifact links.
+      return null;
     case "document": {
       const range = parseDocumentSelector({
         kind: "range",
@@ -108,16 +103,12 @@ export function readFixedSource(
         end_utf8: range.end_utf8,
       };
     }
-    case "knowledge":
+    case "result":
       return {
-        kind: "knowledge",
-        artifact_id: parseSynthesisReadSelection({
-          artifact_id: get("knowledge"),
-        }).artifact_id,
-        content_sha256: hash("contentHash"),
-        manifest_sha256: hash("manifest"),
-        statement_id: get("statement"),
-        statement_sha256: hash("statementHash"),
+        kind: "result",
+        result_id: String(parseAssetId(get("result"))),
+        content_sha256: hash("resultHash"),
+        record_id: parameters.get("record"),
       };
     case "metadata": {
       const revision = integer("metadataRevision");

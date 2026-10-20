@@ -13,6 +13,4 @@
 
 只声明并实现实际支持的能力；元数据返回 PDF 线索不等于有独立 PDF API。共享限流/网络由 network 执行，身份与入库由业务模块处理；真实凭据不写入这里。
 
-相关说明：[供应商治理与接线](../../../../../docs/development/provider-governance.md)；[外部接口与兼容说明](../../../../../docs/notes/providers/europe-pmc.md)。
-
-[上级目录](../README.md) · [项目 README](../../../../../README.md)
+[上级目录](../README.md)

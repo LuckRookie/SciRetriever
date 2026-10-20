@@ -1,3 +1,4 @@
+import { SCHEMA_VERSION } from "../src/storage/sqlite/schema.js";
 import { describe, expect, it } from "vitest";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -27,7 +28,8 @@ const literature = {
     abstract: null,
     publication_date: null,
     publication_year: 2026,
-    document_type: "article",
+    publication_form: "journal-article" as const,
+    article_kind: null,
     language: "en",
     venue: null,
     publisher: null,
@@ -45,7 +47,7 @@ describe("typed sqlite worker", () => {
     try {
       await expect(worker.schema()).resolves.toMatchObject({
         product: "sciretriever",
-        schema_version: 1,
+        schema_version: SCHEMA_VERSION,
       });
       await expect(worker.putLiterature(literature)).resolves.toBe(true);
       await expect(

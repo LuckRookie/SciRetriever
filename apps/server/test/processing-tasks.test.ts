@@ -1,3 +1,8 @@
+import { parseLiterature } from "@sciretriever/contracts";
+import {
+  FIXTURE_LITERATURE,
+  workbenchPdf,
+} from "../src/workbench/synthetic-fixture.js";
 import { describe, expect, it, vi } from "vitest";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
@@ -12,7 +17,7 @@ describe("durable product processing tasks", () => {
         schema_version: 1,
         idempotency_key: "write-after-admission",
         operations: [
-          { operation: "parse-documents", request: env.parseRequest },
+          { operation: "parse-documents", request: env.rawParseRequest },
         ],
       });
       vi.spyOn(env.app.jobs!, "acquireLease").mockRejectedValueOnce(
@@ -31,7 +36,7 @@ describe("durable product processing tasks", () => {
       expect((await env.app.processingTasks!.run(job.job_id)).job.status).toBe(
         "completed",
       );
-      expect(env.parseCalls).toBe(1);
+      expect(env.parseCalls).toBe(2);
     } finally {
       await env.close();
     }
@@ -39,7 +44,7 @@ describe("durable product processing tasks", () => {
   it.each(["task-service", "queue"] as const)(
     "protects an active direct %s run from another Application's recovery",
     async (entry) => {
-      const env = await coreProcessingFixture({ legacyAnalysis: true });
+      const env = await coreProcessingFixture();
       const controller = new AbortController();
       let release!: () => void;
       const held = new Promise<void>((resolve) => {
@@ -55,7 +60,7 @@ describe("durable product processing tasks", () => {
             kind: "literatures",
             literature_ids: [env.parseRequest.literature_id],
           },
-          goal: "content",
+          goal: "parser",
           policy_version: "fixture",
           policy: { mode: "never", max_retries: 0 },
           idempotency_key: `direct-${entry}`,
@@ -90,12 +95,36 @@ describe("durable product processing tasks", () => {
           other.processingTasks!.control(job.job_id, "retry"),
         ).rejects.toMatchObject({ code: "processing-busy" });
 
-        // A different entry on the owning connection shares the lock without deadlocking.
+        // A different target on the owning connection shares admission without deadlocking.
+        // The same asset/profile is intentionally serialized by the raw parser.
+        const siblingId = "00000000-0000-4000-9000-000000009876";
+        await env.app.database.putLiterature(
+          parseLiterature({
+            ...FIXTURE_LITERATURE,
+            literature_id: siblingId,
+            meta_literature_id: "00000000-0000-4000-9000-000000009877",
+            metadata: { ...FIXTURE_LITERATURE.metadata, identifiers: [] },
+          }),
+        );
+        await env.app.maintenance!.ingestPdf({
+          literature_id: siblingId,
+          bytes: workbenchPdf("Independent sibling"),
+        });
+        const siblingAsset = (await env.app.library.detail(siblingId))
+          .primary_pdf!.asset;
         const sibling = await env.app.processingTasks!.submit({
           schema_version: 1,
           idempotency_key: "sibling",
           operations: [
-            { operation: "parse-documents", request: env.parseRequest },
+            {
+              operation: "parse-documents",
+              request: {
+                ...env.rawParseRequest,
+                literature_id: siblingId,
+                asset_id: siblingAsset.asset_id,
+                asset_sha256: siblingAsset.sha256,
+              },
+            },
           ],
         });
         env.setParseHook(async () => {});
@@ -132,8 +161,6 @@ describe("durable product processing tasks", () => {
       env.app.queue!,
       {
         documents: env.app.documentProcessing,
-        analysis: env.app.knowledgeAnalysis,
-        synthesis: env.app.synthesisAnalysis,
         identity: env.app.articleIdentity ?? null,
       },
       null,
@@ -150,7 +177,7 @@ describe("durable product processing tasks", () => {
           schema_version: 1,
           idempotency_key: key,
           operations: [
-            { operation: "parse-documents", request: env.parseRequest },
+            { operation: "parse-documents", request: env.rawParseRequest },
           ],
         });
       const first = await submit("capacity-first");
@@ -158,7 +185,7 @@ describe("durable product processing tasks", () => {
       const background = await submit("capacity-background");
       env.setParseHook(() => held);
       const running = service.run(first.job_id);
-      await vi.waitFor(() => expect(env.parseCalls).toBe(1));
+      await vi.waitFor(() => expect(env.parseCalls).toBe(2));
       const controller = new AbortController();
       await expect(
         service.run(refused.job_id, controller.signal),
@@ -183,7 +210,7 @@ describe("durable product processing tasks", () => {
         schema_version: 1,
         idempotency_key: "already-aborted",
         operations: [
-          { operation: "parse-documents", request: env.parseRequest },
+          { operation: "parse-documents", request: env.rawParseRequest },
         ],
       });
       await expect(
@@ -215,11 +242,11 @@ describe("durable product processing tasks", () => {
         schema_version: 1,
         idempotency_key: "live-owner",
         operations: [
-          { operation: "parse-documents", request: env.parseRequest },
+          { operation: "parse-documents", request: env.rawParseRequest },
         ],
       });
       const running = env.app.processingTasks!.run(first.job_id);
-      await vi.waitFor(() => expect(env.parseCalls).toBe(1));
+      await vi.waitFor(() => expect(env.parseCalls).toBe(2));
       other = await env.openAnother();
       expect(other.executionRecovery).toBeNull();
       expect((await other.jobs!.getJob(first.job_id))?.status).toBe("running");
@@ -232,7 +259,7 @@ describe("durable product processing tasks", () => {
       ).toContainEqual({ code: "processing-runtime-owned" });
       await other.processingTasks!.control(first.job_id, "pause");
       expect((await running).job.status).toBe("paused");
-      expect(env.parseCalls).toBe(1);
+      expect(env.parseCalls).toBe(2);
     } finally {
       await other?.close();
       await env.close();
@@ -249,8 +276,22 @@ describe("durable product processing tasks", () => {
         schema_version: 1,
         idempotency_key: "partial",
         operations: [
-          { operation: "parse-documents", request: env.parseRequest },
-          { operation: "parse-documents", request: env.parseRequest },
+          {
+            operation: "parse-documents",
+            request: {
+              ...env.rawParseRequest,
+              profiles: ["pipeline"],
+              force: true,
+            },
+          },
+          {
+            operation: "parse-documents",
+            request: {
+              ...env.rawParseRequest,
+              profiles: ["pipeline"],
+              force: true,
+            },
+          },
         ],
       };
       const job = await env.app.processingTasks!.submit(request);
@@ -319,12 +360,12 @@ describe("durable product processing tasks", () => {
         schema_version: 1,
         idempotency_key: "pause",
         operations: [
-          { operation: "parse-documents", request: env.parseRequest },
-          { operation: "parse-documents", request: env.parseRequest },
+          { operation: "parse-documents", request: env.rawParseRequest },
+          { operation: "parse-documents", request: env.rawParseRequest },
         ],
       });
       env.app.processingTasks!.start(job.job_id);
-      await vi.waitFor(() => expect(env.parseCalls).toBe(1));
+      await vi.waitFor(() => expect(env.parseCalls).toBe(2));
       const paused = await env.app.processingTasks!.control(
         job.job_id,
         "pause",
@@ -340,7 +381,7 @@ describe("durable product processing tasks", () => {
       expect((await env.app.processingTasks!.run(job.job_id)).job.status).toBe(
         "completed",
       );
-      expect(env.parseCalls).toBe(3);
+      expect(env.parseCalls).toBe(4);
     } finally {
       await env.close();
     }

@@ -1,3 +1,10 @@
+import type * as Tags from "./tag-engine.js";
+const { resolveLibraryTagIds, tagBackfillPending }: typeof Tags = await import(
+  new URL(
+    import.meta.url.endsWith(".ts") ? "./tag-engine.ts" : "./tag-engine.js",
+    import.meta.url,
+  ).href
+);
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { LibraryPageQuery } from "../../literature/query.js";
 
@@ -41,7 +48,8 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
     add("m.publication_year >= ?", q.publication_year_from);
   if (q.publication_year_to !== null)
     add("m.publication_year <= ?", q.publication_year_to);
-  any("m.document_type", q.document_types);
+  any("m.publication_form", q.publication_forms);
+  any("m.article_kind", q.article_kinds);
   any("m.language", q.languages);
   any("l.version_role", q.version_roles);
   for (const keyword of q.keywords)
@@ -64,6 +72,12 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
       ids,
     );
   }
+  const tagIds = q.tags?.ids.length ? resolveLibraryTagIds(db, q.tags.ids) : [];
+  if (tagIds.length)
+    add(
+      `EXISTS(SELECT 1 FROM literature_tag_items i WHERE i.literature_id=l.literature_id AND i.tag_id IN (SELECT value FROM json_each(?)) ${q.tags?.mode === "primary" ? "AND i.rank=1" : ""})`,
+      JSON.stringify(tagIds),
+    );
   if (ftsQuery !== null) add("literature_search_fts MATCH ?", ftsQuery);
   const from = `FROM literatures l JOIN literature_metadata m ON m.literature_id=l.literature_id${ftsQuery === null ? "" : " JOIN literature_search_fts ON literature_search_fts.literature_id=l.literature_id"}`;
   const where = terms.length ? `WHERE ${terms.join(" AND ")}` : "";
@@ -97,5 +111,11 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
       `WITH matches AS MATERIALIZED (SELECT l.literature_id, ${value} AS sort_value, ${relevance} AS relevance ${from} ${where}) SELECT literature_id,relevance FROM matches ${cursor} ORDER BY sort_value IS NULL, sort_value ${sort.endsWith("desc") ? "DESC" : "ASC"}, literature_id ASC LIMIT ?`,
     )
     .all(...pageArgs, limit + 1);
-  return { rows, total_count: Number(counts.total) };
+  return {
+    rows,
+    total_count: Number(counts.total),
+    ...(tagIds.length
+      ? { tag_backfill_pending: tagBackfillPending(db, tagIds, q.tags!.mode) }
+      : {}),
+  };
 }

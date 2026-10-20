@@ -75,9 +75,7 @@ async function fixture(configurationText?: string) {
       "missing",
       ["sources"],
     );
-  const app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  const app = await createApplication(home, {});
   const transport = vi
     .spyOn(assembly, "assemblePublicPdfDownloadTransport")
     .mockReturnValue({
@@ -137,6 +135,8 @@ async function fixture(configurationText?: string) {
       await app.database.putLiterature(literature);
       if (options.hints?.length) {
         const observation = parseMetadataObservation({
+          source_type: null,
+          source_type_mapping_version: null,
           observation_id: id(2000 + n),
           metadata: literature.metadata,
           provenance: {

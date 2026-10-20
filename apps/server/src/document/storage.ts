@@ -1,23 +1,27 @@
+import { parseProofreadBlocksV1 } from "@sciretriever/contracts";
+import { SqliteProofreadStorage } from "../storage/proofread.js";
+import {
+  buildProofreadStructure,
+  PROOFREAD_DOCUMENT_BUILDER_VERSION,
+} from "./proofread-builder.js";
 import {
   sha256,
   parseDocumentRepresentationInput,
   type ArtifactRef,
   type DocumentRef,
   type DocumentRepresentationInput,
-  type DocumentStructureV1,
+  type DocumentStructure,
 } from "@sciretriever/contracts";
 import type { FileStore } from "../storage/files/store.js";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import type { DocumentStoragePort } from "./contract.js";
 import { documentRepresentationHash } from "./contract.js";
 import {
-  buildDocumentStructure,
-  DOCUMENT_BUILDER_VERSION,
   MAX_DOCUMENT_MARKDOWN_BYTES,
   MAX_DOCUMENT_STRUCTURE_BYTES,
 } from "./builder.js";
 
-/** The v3 deletion paths remain disabled; this pin freezes and verifies one exact closure. */
+/** Verifies the immutable closure of a corrected Document. */
 export class SqliteDocumentStorage implements DocumentStoragePort {
   constructor(
     private readonly database: SqliteWorker,
@@ -55,67 +59,35 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     input: DocumentRepresentationInput,
   ): Promise<"available" | "stale" | "missing" | "integrity-failure"> {
     const parsed = parseDocumentRepresentationInput(input);
-    const snapshot = await this.database.documentInput(
-      parsed.source_material_ref,
-    );
-    if (!snapshot) return "missing";
-    if (
-      !snapshot.parser ||
-      snapshot.parser.result.result_sha256 !== parsed.parser_result_sha256 ||
-      snapshot.parser.result.markdown.sha256 !== parsed.markdown.sha256 ||
-      snapshot.parser.result.resources.length !== parsed.resources.length
-    )
-      return "stale";
-    for (const resource of parsed.resources)
-      if (
-        !snapshot.parser.result.resources.some(
-          (item) =>
-            item.reference === resource.reference &&
-            item.artifact.sha256 === resource.artifact.sha256 &&
-            item.artifact.byte_size === resource.artifact.byte_size &&
-            item.artifact.media_type === resource.artifact.media_type,
+    if ("proofread_id" in parsed) {
+      try {
+        const output = await new SqliteProofreadStorage(
+          this.database,
+          this.files,
+        ).load(parsed.proofread_id);
+        if (
+          output.version.content_sha256 !== parsed.proofread_content_sha256 ||
+          output.version.part_asset_id !==
+            parsed.source_material_ref.asset_id ||
+          output.version.part_sha256 !==
+            parsed.source_material_ref.asset_sha256 ||
+          output.version.status !== "complete"
         )
-      )
-        return "stale";
-    try {
-      const closure: [string, ArtifactRef][] = [
-        [snapshot.source_artifact_path, parsed.source_material_ref.artifact],
-        [snapshot.parser.markdown_artifact_path, parsed.markdown],
-      ];
-      for (const resource of parsed.resources) {
-        const path =
-          snapshot.parser.resource_artifact_paths[resource.reference];
-        if (!path) return "integrity-failure";
-        closure.push([path, resource.artifact]);
+          return "stale";
+        const built = await buildProofreadStructure(
+          output.version,
+          output.blocks.bytes,
+          output.markdown.bytes,
+        );
+        return built.sha256 === parsed.structure.sha256 &&
+          output.version.markdown.sha256 === parsed.markdown.sha256
+          ? "available"
+          : "integrity-failure";
+      } catch {
+        return "integrity-failure";
       }
-      for (const [path, expected] of closure)
-        await this.withVerifiedArtifact(path, expected, async (chunks) => {
-          for await (const chunk of chunks) void chunk;
-        });
-      if (parsed.builder_version !== DOCUMENT_BUILDER_VERSION)
-        return "integrity-failure";
-      const structure = await this.database.locateArtifact(parsed.structure);
-      if (!structure) return "integrity-failure";
-      const markdown = await this.readBytes(
-        snapshot.parser.markdown_artifact_path,
-        parsed.markdown,
-        MAX_DOCUMENT_MARKDOWN_BYTES,
-      );
-      const structureBytes = await this.readBytes(
-        structure.reference,
-        parsed.structure,
-        MAX_DOCUMENT_STRUCTURE_BYTES,
-      );
-      if (
-        !Buffer.from((await buildDocumentStructure(markdown)).bytes).equals(
-          Buffer.from(structureBytes),
-        )
-      )
-        return "integrity-failure";
-    } catch {
-      return "integrity-failure";
     }
-    return "available";
+    return "integrity-failure";
   }
 
   commitVersion(
@@ -144,7 +116,7 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     consume: (
       version: DocumentRef,
       markdown: Uint8Array,
-      structure: DocumentStructureV1,
+      structure: DocumentStructure,
     ) => Promise<T>,
     signal?: AbortSignal,
     reserveVerifiedBytes?: (bytes: number) => void,
@@ -168,12 +140,16 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
       v.structure.byte_size > MAX_DOCUMENT_STRUCTURE_BYTES
     )
       throw new Error("document artifact limit exceeded");
-    if (v.builder_version !== DOCUMENT_BUILDER_VERSION)
+    if (
+      v.schema_version !== 2 ||
+      v.builder_version !== PROOFREAD_DOCUMENT_BUILDER_VERSION
+    )
       throw new Error("document builder unsupported");
     if (
       (await documentRepresentationHash({
         source_material_ref: v.source_material_ref,
-        parser_result_sha256: v.parser_result_sha256,
+        proofread_id: v.proofread_id,
+        proofread_content_sha256: v.proofread_content_sha256,
         builder_version: v.builder_version,
         locator_scheme: v.locator_scheme,
         markdown: v.markdown,
@@ -236,14 +212,78 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
       MAX_DOCUMENT_STRUCTURE_BYTES,
       signal,
     );
-    const built = await buildDocumentStructure(markdown, signal);
+    const built = await this.verifiedProofreadStructure(
+      v,
+      markdown,
+      signal,
+      reserveVerifiedBytes,
+    );
     if (!Buffer.from(built.bytes).equals(Buffer.from(structure)))
       throw new Error("document structure mismatch");
-    // Catalog v3 has no physical reclamation writer; this fixed version remains
+    // The current catalog protects published artifacts; this fixed version remains
     // durable through the callback. Future GC must add a cross-process read pin.
     if (signal?.aborted) throw new Error("document read cancelled");
     return consume(v, markdown, built.structure);
   }
+  private async verifiedProofreadStructure(
+    v: Extract<DocumentRef, { schema_version: 2 }>,
+    markdown: Uint8Array,
+    signal?: AbortSignal,
+    reserveVerifiedBytes?: (bytes: number) => void,
+  ) {
+    const output = await new SqliteProofreadStorage(
+      this.database,
+      this.files,
+    ).documentSource(v.proofread_id, signal, reserveVerifiedBytes);
+    if (
+      output.version.content_sha256 !== v.proofread_content_sha256 ||
+      output.version.part_asset_id !== v.source_material_ref.asset_id ||
+      output.version.part_sha256 !== v.source_material_ref.asset_sha256
+    )
+      throw new Error("document proofread binding mismatch");
+    return buildProofreadStructure(output.version, output.blocks, markdown);
+  }
+  async corrections(
+    document: DocumentRef,
+    segmentId: string,
+    signal?: AbortSignal,
+  ) {
+    if (document.schema_version !== 2)
+      throw new Error("document corrections unsupported");
+    const output = await new SqliteProofreadStorage(
+      this.database,
+      this.files,
+    ).load(document.proofread_id, signal);
+    const draft = output.drafts.find((d) => d.block_id === segmentId);
+    const block = parseProofreadBlocksV1(
+      JSON.parse(new TextDecoder().decode(output.blocks.bytes)),
+      output.resources.map((r) => r.reference),
+    ).blocks.find((b) => b.block_id === segmentId);
+    if (!block) throw new Error("document correction record missing");
+    return {
+      proofread_id: document.proofread_id,
+      block_id: segmentId,
+      draft: draft ?? null,
+      block,
+      page_image: {
+        asset_id: document.source_material_ref.asset_id,
+        asset_sha256: document.source_material_ref.asset_sha256,
+        page: block.page,
+        region: block.region,
+      },
+      suspects: output.version.suspects.filter((s) =>
+        s.block_ids.includes(segmentId),
+      ),
+      edits: output.version.edits.filter(
+        (e) =>
+          block.edit_refs.includes(e.edit_id) ||
+          (e.edit.kind === "insert_after"
+            ? e.edit.after_block_id === segmentId
+            : e.edit.block_id === segmentId),
+      ),
+    };
+  }
+
   withVerifiedArtifact<T>(
     reference: string,
     expected: ArtifactRef,

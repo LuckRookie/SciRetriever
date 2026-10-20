@@ -19,6 +19,4 @@
 
 供应商 URL/协议放 providers；页面动作放 browser；共享网络放 network；文献事实由 literature 接纳。下载阶段不因文章身份未验证拒绝可用 PDF。
 
-相关说明：[所属技术文档](../../../../docs/architecture/technical/03-literature-materials.md)。
-
-[上级目录](../README.md) · [项目 README](../../../../README.md)
+[上级目录](../README.md)

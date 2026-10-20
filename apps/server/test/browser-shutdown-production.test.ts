@@ -150,7 +150,6 @@ it("cancels an Entry PDF reader before Application.close returns after a durable
       { mode: 0o600 },
     );
     app = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
       browserAdmitNavigation: async (url) => url,
       browserHost: () => ({
         deliverCandidate: async () => {
@@ -613,7 +612,6 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         { mode: 0o600 },
       );
       app = await createApplication(home, {
-        executionSchema: "upgrade-synthetic",
         browserRuntime: runtime,
         browserProxy: await proxy.start(),
         browserAdmitNavigation: async (url) =>
@@ -665,6 +663,8 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         await app.database.putLiterature(paper.literature);
         await app.observations.publish({
           ...parseMetadataObservation({
+            source_type: null,
+            source_type_mapping_version: null,
             observation_id: `00000000-0000-0000-0000-00000001000${index}`,
             provenance: {
               provenance_id: `00000000-0000-0000-0000-00000001010${index}`,

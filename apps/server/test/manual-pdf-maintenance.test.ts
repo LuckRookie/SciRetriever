@@ -16,11 +16,6 @@ import { CandidatePublicationError } from "../src/acquisition/candidate-publicat
 import { startMaintenanceWorkbench } from "../src/bootstrap/workbench.js";
 import { startWorkbenchHttp } from "../src/workbench/http.js";
 import { WorkbenchSession } from "../src/workbench/session.js";
-import { SqliteWorker } from "../src/storage/sqlite/worker.js";
-import {
-  authorizeExecutionSchema,
-  SYNTHETIC_CATALOG_MARKER_FILE,
-} from "../src/storage/execution/migration-gate.js";
 import {
   FIXTURE_LITERATURE,
   workbenchPdf,
@@ -33,9 +28,7 @@ const pageAssets = new Map([
 ]);
 async function setup() {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-manual-pdf-"));
-  let app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  let app = await createApplication(home, {});
   await app.database.putLiterature(parseLiterature(FIXTURE_LITERATURE));
   return {
     home,
@@ -44,9 +37,7 @@ async function setup() {
     },
     async restart() {
       await app.close();
-      app = await createApplication(home, {
-        executionSchema: "upgrade-synthetic",
-      });
+      app = await createApplication(home, {});
     },
     async close() {
       await app.close();
@@ -101,7 +92,7 @@ describe("shared manual PDF maintenance", () => {
         (await env.app.database.getReceiptIntent(receipt.receipt_id))
           ?.source_url,
       ).toBeNull();
-      expect(detail.content).toBeNull();
+      expect(detail).not.toHaveProperty("content");
       const intent = await env.app.database.getReceiptIntent(
         receipt.receipt_id,
       );
@@ -212,51 +203,6 @@ describe("shared manual PDF maintenance", () => {
       }
     } finally {
       await env.close();
-    }
-  });
-
-  it("lets CLI import upgrade an isolated v1 catalog but refuses an invalid synthetic marker without changing bytes", async () => {
-    const home = await mkdtemp(join(tmpdir(), "sciretriever-manual-v1-"));
-    const catalog = join(home, "catalog.sqlite");
-    const source = join(home, "paper.pdf");
-    const database = new SqliteWorker(catalog);
-    try {
-      await database.schema();
-      await database.putLiterature(parseLiterature(FIXTURE_LITERATURE));
-    } finally {
-      await database.close();
-    }
-    try {
-      await writeFile(source, workbenchPdf());
-      await expect(
-        authorizeExecutionSchema("upgrade-synthetic", {
-          catalog_path: catalog,
-          scope: { user_home: home },
-        }),
-      ).rejects.toMatchObject({ code: "migration-target-production" });
-      await writeFile(join(home, SYNTHETIC_CATALOG_MARKER_FILE), "invalid");
-      const before = await sha256(await readFile(catalog));
-      expect((await runCli(["import", "pdf", id, source], { home })).code).toBe(
-        3,
-      );
-      expect(await sha256(await readFile(catalog))).toBe(before);
-      await rm(join(home, SYNTHETIC_CATALOG_MARKER_FILE));
-      expect((await runCli(["import", "pdf", id, source], { home })).code).toBe(
-        0,
-      );
-      const query = await createQueryApplication(home);
-      try {
-        expect((await query.query!.detail(id)).primary_pdf?.asset.sha256).toBe(
-          await sha256(workbenchPdf()),
-        );
-      } finally {
-        await query.close();
-      }
-      expect(await sha256(await readFile(source))).toBe(
-        await sha256(workbenchPdf()),
-      );
-    } finally {
-      await rm(home, { recursive: true, force: true });
     }
   });
 

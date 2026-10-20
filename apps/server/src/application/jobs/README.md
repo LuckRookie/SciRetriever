@@ -12,6 +12,6 @@
 
 持久执行数据由 storage/execution 保存，业务操作复用 entry 和相应业务模块。
 
-[上级目录](../README.md) · [项目 README](../../../../../README.md)
+[上级目录](../README.md)
 
 - `processors.ts`：把处理器请求冻结成现有队列目标，发布不可变结果集合与运行统计；不维护第二套调度器。

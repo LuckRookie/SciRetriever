@@ -1,122 +1,132 @@
-import { ProcessorExternalRetention } from "../analysis/processor-external.js";
-import {
-  ProcessorBatchService,
-  processorRuntime,
-} from "../application/jobs/processors.js";
-import { ProcessorService } from "../analysis/processor.js";
-import { createProcessorRegistry } from "../analysis/processor-registry.js";
-import { SqliteProcessorStorage } from "../storage/processor-results.js";
-import { createTaskReader } from "../entry/task-read.js";
-import { LiteratureCompletionService } from "../entry/literature-completion.js";
+import { ProcessorValueVerifier } from "../analysis/value-check.js";
+import { canonicalJsonBytes, sha256 } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
-import { ArtifactRecovery } from "../storage/files/recovery.js";
-import { NoUsableContentService } from "../entry/no-usable-content.js";
-import { ManualPdfIngestionService } from "../entry/manual-pdf.js";
-import {
-  AnalysisService,
-  AnalysisFailure,
-  type AnalysisOptions,
-} from "../analysis/service.js";
-import { LiteratureContentService } from "../literature/content.js";
-import { ArtifactReclaimer } from "../storage/files/reclamation.js";
-import { LiteratureCleanupService } from "../literature/cleanup.js";
-import {
-  CatalogWriteAdmission,
-  WriteAdmissionError,
-} from "../storage/write-admission.js";
-import { acquireExecutionRuntime } from "../storage/execution/runtime-owner.js";
-import { ContentAnalysisService } from "../entry/content-analysis.js";
-import { MinerULoopbackParser } from "../parsing/backends/mineru/index.js";
-import { TypeScriptParserArtifactRules } from "../parsing/artifact-rules.js";
-import { ParsingFailure } from "../parsing/ports.js";
-import { ParsingService } from "../parsing/service.js";
-import {
-  MinerUParser,
-  createMinerUProtocolTransport,
-  type MinerUHttpTransport,
-} from "../parsing/backends/mineru/index.js";
-import { ImmutableParserPublisher } from "../parsing/publication.js";
-import { DocumentProcessingService } from "../document/service.js";
-import { ArticleIdentityService } from "../parsing/article-identity.js";
-import { LiteratureArticleIdentityService } from "../literature/article-identity.js";
-import {
-  ProcessingTaskService,
-  readProcessingTask,
-} from "../application/jobs/processing.js";
-import { SqliteDocumentStorage } from "../document/storage.js";
-import { DocumentReadService } from "../document/read.js";
-import { KnowledgeAnalysisService } from "../analysis/knowledge.js";
-import { KnowledgeSynthesisService } from "../analysis/synthesis.js";
-import { SynthesisPreparationService } from "../analysis/synthesis-prepare.js";
-import { SqliteKnowledgeStorage } from "../storage/knowledge.js";
-import { SqliteSynthesisStorage } from "../storage/synthesis.js";
-import { ExtractionPreparationService } from "../extraction/prepare.js";
-import { ExtractionDeliveryService } from "../extraction/delivery.js";
-import { RetrievalIndexService } from "../retrieval/index.js";
-import { MaterialContextService } from "../retrieval/query.js";
-import { KnowledgeRetrievalIndexService } from "../retrieval/knowledge-index.js";
-import { KnowledgeContextService } from "../retrieval/knowledge-query.js";
-import { RetrievalStorageClient } from "../storage/sqlite/retrieval-client.js";
-import { acceptPdf } from "../acquisition/pdf-acceptance.js";
-import type { ParserBackend, ParserArtifactRules } from "../parsing/ports.js";
-import { BrowserTransferCollector } from "../browser/transfer.js";
-import { BrowserCaptureBatch } from "../browser/capture-batch.js";
-import { BrowserArticleScheduler } from "../entry/browser-scheduler.js";
-import type {
-  BrowserArticleExecution,
-  BrowserArticleSessionIdentity,
-} from "../browser/article-session.js";
-import { CandidatePublisher } from "../acquisition/candidate-publication.js";
-import { CandidateAcceptanceService } from "../acquisition/candidate-acceptance.js";
-import { CandidateAbandonmentService } from "../acquisition/candidate-abandonment.js";
-import { LiteratureQueryService } from "../literature/query.js";
-import { LiteratureIdentityService } from "../literature/identity.js";
-import { LiteratureArtifactService } from "../literature/artifacts.js";
-import { lstat, mkdir } from "node:fs/promises";
 import { lookup } from "node:dns/promises";
+import { lstat, mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
-  loadConfiguration,
-  effectiveBrowserConcurrency,
-  parseConfiguration,
-  type OrdinaryConfiguration,
-} from "../configuration/index.js";
-import {
-  loadCredentialBundle,
-  bundlePreview,
-  CredentialBoundaryError,
-  type CredentialBundle,
-  type CurrentCredentialReader,
-} from "../configuration/credentials.js";
-import { NetworkBudgetCoordinator } from "../network/budget.js";
-import { createBrowserNetworkAdmission } from "../network/browser-admission.js";
-import type { BrowserNetworkProxy } from "../network/browser-proxy.js";
-import { createLogger, type Logger } from "../logging/index.js";
-import {
-  AssetRepository,
-  ObservationRepository,
-  ReferenceRepository,
-} from "../storage/sqlite/repositories.js";
-import { SqliteWorker } from "../storage/sqlite/worker.js";
-import { FileStore } from "../storage/files/store.js";
-import { DshAgentRuntime, type AgentBinding } from "../agents/dsh/runtime.js";
-import { PublisherGovernanceService } from "../entry/publisher-governance.js";
-import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "../agents/openai.js";
+  assemblePublicAcquisitionRegistry,
+  type BrowserRouteAdmission,
+  type PublicAcquisitionAssemblyOptions,
+} from "../acquisition/assembly.js";
+import { BrowserCandidateIntake } from "../acquisition/browser-intake.js";
+import { CandidateAbandonmentService } from "../acquisition/candidate-abandonment.js";
+import { CandidateAcceptanceService } from "../acquisition/candidate-acceptance.js";
+import { CandidatePublisher } from "../acquisition/candidate-publication.js";
+import { acceptPdf } from "../acquisition/pdf-acceptance.js";
+import type { PublicAcquisitionRegistry } from "../acquisition/sources/public.js";
 import { AnthropicMessagesAdapter } from "../agents/anthropic.js";
+import { DshAgentRuntime, type AgentBinding } from "../agents/dsh/runtime.js";
+import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "../agents/openai.js";
+import type { AgentTransport } from "../agents/protocol.js";
 import {
   AgentFailure,
   type AgentAdapter,
   type AgentCapability,
 } from "../agents/protocol.js";
-import type { AgentTransport } from "../agents/protocol.js";
-import { createAgentTransport, NetworkHttpError } from "../network/http.js";
-import type { ConnectionDependencies } from "../network/connection.js";
-import type { Resolver } from "../network/policy.js";
-import { TypeScriptConfigurationOwner } from "../configuration/owner.js";
+import { ProcessorArchiveSource } from "../analysis/processor-archive.js";
+import { ProcessorExternalRetention } from "../analysis/processor-external.js";
+import { createProcessorRegistry } from "../analysis/processor-registry.js";
+import { ProcessorService } from "../analysis/processor.js";
+import { SnapshotService } from "../analysis/snapshots.js";
+import { InterventionService } from "../application/jobs/interventions.js";
 import {
-  buildMetadataRegistry,
-  type MetadataRegistry,
-} from "../metadata/registry.js";
+  ProcessingTaskService,
+  readProcessingTask,
+} from "../application/jobs/processing.js";
+import {
+  ProcessorBatchService,
+  processorRuntime,
+} from "../application/jobs/processors.js";
+import {
+  ExecutionJobService,
+  ExecutionQueue,
+  ExecutionTaskService,
+} from "../application/jobs/service.js";
+import { ArchiveOrchestrator } from "../archive/orchestrator.js";
+import { ArchiveReader, ArchiveService } from "../archive/service.js";
+import {
+  createBrowserArticleFlow,
+  DEFAULT_FLOW_DEADLINE_MS,
+  DEFAULT_FLOW_MAX_MODEL_CALLS,
+  flowUnavailable,
+  type BrowserArticleFlowFactoryOptions,
+} from "../browser/article-flow.js";
+import type {
+  BrowserArticleExecution,
+  BrowserArticleSessionIdentity,
+} from "../browser/article-session.js";
+import type {
+  BrowserArticleFlowFactory,
+  BrowserDeliveryRequest,
+} from "../browser/boundary.js";
+import {
+  resolveBrowserHost,
+  type BrowserArticleFlow,
+  type BrowserHostRuntimeSeam,
+  type BrowserSessionHost,
+} from "../browser/boundary.js";
+import { BrowserCaptureBatch } from "../browser/capture-batch.js";
+import {
+  createBrowserCapability,
+  type BrowserAgentCapability,
+} from "../browser/decision.js";
+import type { BrowserHostOptions } from "../browser/host.js";
+import { BrowserObservationStore } from "../browser/observation.js";
+import { DEFAULT_BROWSER_AGENT_ACTION_COOLDOWN_MS } from "../browser/pacing.js";
+import { PdfRegionRenderer } from "../browser/pdf-region.js";
+import {
+  createProductionBrowserHostFactory,
+  productionBrowserCapability,
+  resolveVerifiedCloakRuntime,
+} from "../browser/production-host.js";
+import { BrowserTransferCollector } from "../browser/transfer.js";
+import {
+  bundlePreview,
+  CredentialBoundaryError,
+  loadCredentialBundle,
+  type CredentialBundle,
+  type CurrentCredentialReader,
+} from "../configuration/credentials.js";
+import {
+  effectiveBrowserConcurrency,
+  loadConfiguration,
+  parseConfiguration,
+  type OrdinaryConfiguration,
+} from "../configuration/index.js";
+import { TypeScriptConfigurationOwner } from "../configuration/owner.js";
+import { AnnotationReadService } from "../document/annotation-read.js";
+import { StructureAnnotationService } from "../document/annotations.js";
+import { ProofreadDocumentService } from "../document/proofread-publication.js";
+import { DocumentReadService } from "../document/read.js";
+import { dshSectionClassifier } from "../document/section-classifier.js";
+import { DocumentProcessingService } from "../document/service.js";
+import { SqliteDocumentStorage } from "../document/storage.js";
+import { BrowserArticleScheduler } from "../entry/browser-scheduler.js";
+import { DatabaseCompletionService } from "../entry/database-completion.js";
+import {
+  CitationDiscoveryService,
+  TopicDiscoveryService,
+} from "../entry/discovery.js";
+import { LiteratureCompletionService } from "../entry/literature-completion.js";
+import { ManualPdfIngestionService } from "../entry/manual-pdf.js";
+import {
+  EntryPdfAcquisitionService,
+  type PdfAcquisitionPort,
+} from "../entry/pdf-acquisition.js";
+import { PublisherGovernanceService } from "../entry/publisher-governance.js";
+import { createTaskReader } from "../entry/task-read.js";
+import { ExtractionDeliveryService } from "../extraction/delivery.js";
+import { ExtractionPreparationService } from "../extraction/prepare.js";
+import { ArchiveMetadataService } from "../literature/archive-metadata.js";
+import { ArchiveReferenceService } from "../literature/archive-references.js";
+import { LiteratureArticleIdentityService } from "../literature/article-identity.js";
+import { LiteratureArtifactService } from "../literature/artifacts.js";
+import { LiteratureIdentityService } from "../literature/identity.js";
+import { dshMetadataProposer } from "../literature/metadata-agent.js";
+import { LiteratureMetadataService } from "../literature/metadata-service.js";
+import { LiteratureQueryService } from "../literature/query.js";
+import { createLogger, type Logger } from "../logging/index.js";
 import {
   assembleMetadataRegistry,
   type MetadataAssemblyOptions,
@@ -127,63 +137,61 @@ import type {
   TopicSearchPort,
 } from "../metadata/ports.js";
 import {
-  CitationDiscoveryService,
-  TopicDiscoveryService,
-} from "../entry/discovery.js";
-import { DatabaseCompletionService } from "../entry/database-completion.js";
+  buildMetadataRegistry,
+  type MetadataRegistry,
+} from "../metadata/registry.js";
+import { createBrowserNetworkAdmission } from "../network/browser-admission.js";
+import type { BrowserNetworkProxy } from "../network/browser-proxy.js";
+import { NetworkBudgetCoordinator } from "../network/budget.js";
+import type { ConnectionDependencies } from "../network/connection.js";
+import { createAgentTransport, NetworkHttpError } from "../network/http.js";
+import type { Resolver } from "../network/policy.js";
+import { ArticleIdentityService } from "../parsing/article-identity.js";
 import {
-  EntryPdfAcquisitionService,
-  type PdfAcquisitionPort,
-} from "../entry/pdf-acquisition.js";
-import {
-  assemblePublicAcquisitionRegistry,
-  type BrowserRouteAdmission,
-  type PublicAcquisitionAssemblyOptions,
-} from "../acquisition/assembly.js";
-import {
-  resolveBrowserHost,
-  type BrowserArticleFlow,
-  type BrowserHostRuntimeSeam,
-  type BrowserSessionHost,
-} from "../browser/boundary.js";
-import type { BrowserHostOptions } from "../browser/host.js";
-import {
-  DEFAULT_FLOW_DEADLINE_MS,
-  DEFAULT_FLOW_MAX_MODEL_CALLS,
-  createBrowserArticleFlow,
-  flowUnavailable,
-  type BrowserArticleFlowFactoryOptions,
-} from "../browser/article-flow.js";
-import { DEFAULT_BROWSER_AGENT_ACTION_COOLDOWN_MS } from "../browser/pacing.js";
-import type {
-  BrowserArticleFlowFactory,
-  BrowserDeliveryRequest,
-} from "../browser/boundary.js";
-import { BrowserObservationStore } from "../browser/observation.js";
-import {
-  createBrowserCapability,
-  type BrowserAgentCapability,
-} from "../browser/decision.js";
-import { BrowserCandidateIntake } from "../acquisition/browser-intake.js";
-import {
-  createProductionBrowserHostFactory,
-  productionBrowserCapability,
-  resolveVerifiedCloakRuntime,
-} from "../browser/production-host.js";
-import type { PublicAcquisitionRegistry } from "../acquisition/sources/public.js";
+  createMinerUProtocolTransport,
+  MinerULoopbackParser,
+  MinerUParser,
+  type MinerUHttpTransport,
+} from "../parsing/backends/mineru/index.js";
+import type { RawParserBackend } from "../parsing/ports.js";
+import { ParsingFailure } from "../parsing/ports.js";
+import { RawParsingService } from "../parsing/raw-service.js";
+import { dshCorrector } from "../proofread/correction.js";
+import { pdfPages } from "../proofread/pdf-pages.js";
+import type { PdfPages } from "../proofread/contract.js";
+import { ProofreadService } from "../proofread/service.js";
+import { RetrievalIndexService } from "../retrieval/index.js";
+import { KnowledgeContextService } from "../retrieval/knowledge-query.js";
+import { MaterialContextService } from "../retrieval/query.js";
 import { ExecutionRepository } from "../storage/execution/repository.js";
+import { acquireExecutionRuntime } from "../storage/execution/runtime-owner.js";
+import { ArtifactReclaimer } from "../storage/files/reclamation.js";
+import { ArtifactRecovery } from "../storage/files/recovery.js";
+import { FileStore } from "../storage/files/store.js";
+import { SqliteProcessorStorage } from "../storage/processor-results.js";
+import { SqliteProofreadStorage } from "../storage/proofread.js";
+import { SqliteRawParseStorage } from "../storage/raw-parsing.js";
 import {
-  authorizeExecutionSchema,
-  MigrationSafetyError,
-} from "../storage/execution/migration-gate.js";
+  AssetRepository,
+  ObservationRepository,
+  ReferenceRepository,
+} from "../storage/sqlite/repositories.js";
+import { RetrievalStorageClient } from "../storage/sqlite/retrieval-client.js";
+import { SqliteWorker } from "../storage/sqlite/worker.js";
+import { SqliteAnnotationStorage } from "../storage/structure-annotations.js";
 import {
-  ExecutionJobService,
-  ExecutionQueue,
-  ExecutionTaskService,
-} from "../application/jobs/service.js";
-import { InterventionService } from "../application/jobs/interventions.js";
-
+  CatalogWriteAdmission,
+  WriteAdmissionError,
+} from "../storage/write-admission.js";
+import { dshTagModel } from "../tags/model.js";
+import { TagService } from "../tags/service.js";
 export interface Application {
+  readonly snapshots: SnapshotService;
+  readonly archive: ArchiveService;
+  readonly tags: TagService;
+  readonly metadataFields: LiteratureMetadataService;
+  readonly archiveMetadata: ArchiveMetadataService;
+  readonly archiveReferences: ArchiveReferenceService;
   readonly processors?: ProcessorBatchService | null;
   readonly processorRetention?: ProcessorExternalRetention | null;
   readonly processorRead?: ProcessorReader | null;
@@ -201,29 +209,20 @@ export interface Application {
     readonly parseDocuments: DocumentProcessingService["parseDocuments"];
     readonly documentDefault: SqliteWorker["documentDefault"];
     readonly rebuildIndex: RetrievalIndexService["build"];
-    readonly rebuildKnowledgeIndex?: KnowledgeRetrievalIndexService["build"];
     readonly extraction: ExtractionDeliveryService;
-    readonly analyze: KnowledgeAnalysisService["analyze"];
-    readonly analyzeLong: KnowledgeAnalysisService["analyzeLong"];
-    readonly synthesize?: KnowledgeSynthesisService["synthesize"];
   } | null;
   readonly documentProcessing: DocumentProcessingService;
   readonly documentRead: DocumentReadService;
   readonly extractionPreparation: ExtractionPreparationService;
   readonly extractionDelivery: ExtractionDeliveryService;
   readonly artifactRecovery: ArtifactRecovery;
-  readonly noUsableContent: NoUsableContentService;
   readonly artifactReclaimer: ArtifactReclaimer;
   readonly writes: CatalogWriteAdmission;
-  readonly literatureCleanup: LiteratureCleanupService;
-  readonly contentAnalysis: ContentAnalysisService | null;
-  readonly analysis: AnalysisService | null;
-  readonly knowledgeAnalysis: KnowledgeAnalysisService;
-  readonly synthesisAnalysis: KnowledgeSynthesisService | null;
-  readonly synthesisPreparation: SynthesisPreparationService | null;
-  readonly synthesisRead: SqliteSynthesisStorage | null;
-  readonly literatureContent: LiteratureContentService;
-  readonly parsing: ParsingService | null;
+  readonly rawParsing: RawParsingService | null;
+  readonly proofreading: ProofreadService | null;
+  readonly proofreadDocuments: ProofreadDocumentService;
+  readonly structureAnnotations: StructureAnnotationService | null;
+  readonly rawParseStorage: SqliteRawParseStorage | null;
   readonly literatureArtifacts: LiteratureArtifactService;
   readonly library: LiteratureQueryService;
   readonly publisherGovernance: PublisherGovernanceService;
@@ -283,7 +282,6 @@ export interface Application {
   /** Shares one cleanup result; rejects if any owned resource fails to close. */
   close(): Promise<void>;
 }
-
 export type ProcessorReader = Pick<
   SqliteProcessorStorage,
   | "byId"
@@ -297,6 +295,20 @@ export type ProcessorReader = Pick<
   | "records"
 >;
 export interface QueryApplication {
+  readonly archiveProfile?: "pipeline" | "vlm-engine";
+  readonly snapshots?: Pick<
+    SnapshotService,
+    "query" | "read" | "list" | "diff"
+  >;
+  readonly archive?: ArchiveReader;
+  readonly tags?: TagService;
+  readonly metadataFields?: Pick<LiteratureMetadataService, "read">;
+  readonly annotationRead?: AnnotationReadService | null;
+  readonly proofreadRead?: Pick<
+    ProofreadService,
+    "inspect" | "status" | "page"
+  > | null;
+  readonly rawParseRead?: Pick<SqliteRawParseStorage, "current"> | null;
   readonly processorRead?: ProcessorReader | null;
   readonly tasks?: ReturnType<typeof createTaskReader>;
   readonly taskRead?: (jobId: string) => ReturnType<typeof readProcessingTask>;
@@ -319,18 +331,10 @@ export interface QueryApplication {
   readonly extractionPreparation: ExtractionPreparationService | null;
   readonly context: MaterialContextService | null;
   readonly knowledgeContext: KnowledgeContextService | null;
-  readonly knowledgeRead: Pick<
-    SqliteKnowledgeStorage,
-    "byId" | "list" | "default"
-  > | null;
-  readonly synthesisRead: Pick<
-    SqliteSynthesisStorage,
-    "byId" | "sourceById" | "list"
-  > | null;
-  readonly synthesisPreparation: SynthesisPreparationService | null;
   close(): Promise<void>;
 }
 export interface QueryApplicationOptions {
+  readonly proofreadPages?: PdfPages;
   readonly catalog_path?: string;
   readonly artifact_root?: string;
 }
@@ -344,18 +348,15 @@ export class QueryApplicationError extends Error {
         : "query-unavailable";
   }
 }
-
 /** A flow that always refuses with the stable flow-unavailable reason. */
 function flowUnavailableFlow(): BrowserArticleFlow {
   return { deliver: async () => flowUnavailable() };
 }
-
 const BROWSER_FLOW_BUDGET = Object.freeze({
   max_model_calls: DEFAULT_FLOW_MAX_MODEL_CALLS,
   deadline_ms: DEFAULT_FLOW_DEADLINE_MS,
   action_cooldown_ms: DEFAULT_BROWSER_AGENT_ACTION_COOLDOWN_MS,
 });
-
 export type ApplicationStage =
   | "home"
   | "configuration"
@@ -366,6 +367,8 @@ export type ApplicationStage =
   | "agents"
   | "schema";
 export interface ApplicationOptions {
+  /** Explicit PDF inspection/rendering port for isolated integrations; production uses verified bundled PDF.js. */
+  readonly proofreadPages?: PdfPages;
   readonly metadata?: {
     readonly topic_search_ports?: readonly TopicSearchPort[];
     readonly lookup_ports?: readonly MetadataLookupPort[];
@@ -424,7 +427,6 @@ export interface ApplicationOptions {
     ): void;
   };
   /** Optional timeout seam for the pure TypeScript Analysis owner. */
-  readonly analysisRuntime?: Omit<AnalysisOptions, "limits">;
   /** Explicit TS parser seam; transport is injected by the Network owner. */
   readonly typescriptParserRuntime?: {
     readonly transport: MinerUHttpTransport;
@@ -434,8 +436,7 @@ export interface ApplicationOptions {
   /** Offline transport seam; remote credential resolution remains per request. */
   readonly mineruTransportFactory?: (origin: string) => MinerUHttpTransport;
   readonly parsing?: {
-    readonly parser: ParserBackend;
-    readonly rules: ParserArtifactRules;
+    readonly rawParser: RawParserBackend;
   };
   /** Optional pure TypeScript owner instance for tests and shared frontends. */
   readonly configurationOwner?: TypeScriptConfigurationOwner;
@@ -444,17 +445,9 @@ export interface ApplicationOptions {
     provider: string,
     origin: string,
   ) => AgentTransport;
-  /**
-   * Explicit opt-in for the durable execution runtime. `"upgrade-synthetic"`
-   * requests the v1 -> v2 upgrade and is only accepted for a target that the
-   * migration safety gate independently verifies as a synthetic copy;
-   * `"require-v2"` performs no write and refuses anything that is not already v2;
-   * `"inspect"` only verifies a read-only target for migration dry-runs.
-   */
-  readonly executionSchema?: "upgrade-synthetic" | "require-v2" | "inspect";
+  /** Observes assembly stages without selecting a catalog layout. */
   readonly afterStage?: (stage: ApplicationStage) => void | Promise<void>;
 }
-
 function serviceOrigin(value: string): string {
   const parsed = new URL(value);
   if (
@@ -467,7 +460,6 @@ function serviceOrigin(value: string): string {
     throw new ParsingFailure("parser-unavailable");
   return parsed.origin;
 }
-
 function assembleConfiguredTypeScriptParser(
   configuration: OrdinaryConfiguration,
   credentials: CredentialBundle,
@@ -477,8 +469,7 @@ function assembleConfiguredTypeScriptParser(
   connection?: ConnectionDependencies,
   transportFactory?: ApplicationOptions["mineruTransportFactory"],
 ): {
-  readonly parser: ParserBackend;
-  readonly rules: ParserArtifactRules;
+  readonly rawParser: RawParserBackend;
 } | null {
   const config = configuration.parsing;
   if (
@@ -566,20 +557,19 @@ function assembleConfiguredTypeScriptParser(
       });
     },
   };
+  const parser = new MinerUParser(
+    createMinerUProtocolTransport(transport, {
+      baseUrl: config.base_url,
+    }),
+    {
+      baseUrl: config.base_url,
+      modelIdentity: config.model_identity,
+    },
+  );
   return {
-    parser: new MinerUParser(
-      createMinerUProtocolTransport(transport, {
-        baseUrl: config.base_url,
-      }),
-      {
-        baseUrl: config.base_url,
-        modelIdentity: config.model_identity,
-      },
-    ),
-    rules: new TypeScriptParserArtifactRules(),
+    rawParser: parser,
   };
 }
-
 export async function createApplication(
   homeValue: string,
   options: ApplicationOptions = {},
@@ -606,9 +596,16 @@ export async function createApplication(
   let files: FileStore | undefined;
   let agents: DshAgentRuntime | undefined;
   let browserAgentCapability: BrowserAgentCapability | undefined;
-  let parsing: ParsingService | undefined;
-  let analysis: AnalysisService | undefined;
-  let contentAnalysis: ContentAnalysisService | undefined;
+  let rawParsing: RawParsingService | undefined;
+  let proofreadDocuments: ProofreadDocumentService | undefined;
+  let structureAnnotations: StructureAnnotationService | undefined;
+  let proofreading: ProofreadService | undefined;
+  let valueVerifier: ProcessorValueVerifier | undefined;
+  let verificationPorts:
+    | { pages: PdfPages; cache: SqliteProofreadStorage }
+    | undefined;
+  let rawParseStorage: SqliteRawParseStorage | undefined;
+  let regionRenderer: PdfRegionRenderer | undefined;
   let completion: LiteratureCompletionService | undefined;
   let manualPdf: ManualPdfIngestionService | undefined;
   let pdfAcquisition: PdfAcquisitionPort | null = null;
@@ -617,7 +614,9 @@ export async function createApplication(
   // before it exists. They read this box instead, which is updated as soon as the
   // execution runtime is assembled; a direct read would also collapse to `never` under
   // control-flow analysis because the holder stays null until the first delivery.
-  const executionBox: { current: Application["execution"] } = { current: null };
+  const executionBox: {
+    current: Application["execution"];
+  } = { current: null };
   const currentExecution = (): NonNullable<Application["execution"]> | null =>
     executionBox.current;
   const browserCapacity = effectiveBrowserConcurrency(configuration.browser);
@@ -652,10 +651,6 @@ export async function createApplication(
   let databaseCompletion: DatabaseCompletionService | null = null;
   let documentProcessing: DocumentProcessingService | null = null;
   let documentRead: DocumentReadService | null = null;
-  let knowledgeAnalysis: KnowledgeAnalysisService | null = null;
-  let synthesisAnalysis: KnowledgeSynthesisService | null = null;
-  let synthesisPreparation: SynthesisPreparationService | null = null;
-  let synthesisRead: SqliteSynthesisStorage | null = null;
   let processorRead: SqliteProcessorStorage | null = null;
   let articleIdentity: ArticleIdentityService | null = null;
   let processingTasks: ProcessingTaskService | null = null;
@@ -665,14 +660,8 @@ export async function createApplication(
   let extractionPreparation: ExtractionPreparationService | null = null;
   let extractionDelivery: ExtractionDeliveryService | null = null;
   let retrievalIndex: RetrievalIndexService | null = null;
-  let knowledgeIndex: KnowledgeRetrievalIndexService | null = null;
   const catalogPath =
     configuration.paths.catalog_path ?? join(home, "catalog.sqlite");
-  // Fail closed before the catalog is created or opened for writing.
-  if (options.executionSchema !== undefined)
-    await authorizeExecutionSchema(options.executionSchema, {
-      catalog_path: catalogPath,
-    });
   const networkBudget = new NetworkBudgetCoordinator();
   const writes = new CatalogWriteAdmission(catalogPath);
   let closing: Promise<void> | undefined;
@@ -712,19 +701,18 @@ export async function createApplication(
         },
         () => completion?.close(),
         () => manualPdf?.close(),
-        () => contentAnalysis?.close(),
-        () => analysis?.close(),
-        () => knowledgeAnalysis?.close(),
-        () => synthesisAnalysis?.close(),
-        () => synthesisPreparation?.close(),
-        () => knowledgeIndex?.close(),
-        () => synthesisRead?.close(),
+        () => regionRenderer?.close(),
+
         () => retrievalIndex?.close(),
         () => documentProcessing?.close(),
         () => extractionDelivery?.shutdown(),
         () => extractionPreparation?.close(),
         () => documentRead?.close(),
-        () => parsing?.close(),
+        () => proofreading?.close(),
+        () => structureAnnotations?.close(),
+        () => proofreadDocuments?.close(),
+        () => rawParsing?.close(),
+        () => rawParseStorage?.close(),
         () => networkBudget.close(),
         () => writes.close(),
         () => agents?.close(),
@@ -744,7 +732,10 @@ export async function createApplication(
     return closing;
   };
   try {
-    database = new SqliteWorker(catalogPath, writes);
+    database = new SqliteWorker(catalogPath, writes, {
+      maxTags: configuration.tags.max_per_literature,
+      archiveProfile: configuration.parsing.archive_profile,
+    });
     await options.afterStage?.("database");
     files = new FileStore(
       configuration.paths.artifact_root ?? join(home, "artifacts"),
@@ -826,7 +817,7 @@ export async function createApplication(
                   maxResponseBytes: 1,
                   maxRedirects: 0,
                   maxRetries: 0,
-                  maxRetryAfterMs: 86_400_000,
+                  maxRetryAfterMs: 86400000,
                 });
               } catch {
                 delay = undefined;
@@ -1180,15 +1171,9 @@ export async function createApplication(
     let jobService: ExecutionJobService | null = null;
     let taskService: ExecutionTaskService | null = null;
     let interventions: InterventionService | null = null;
-    if (options.executionSchema === "upgrade-synthetic")
-      await database.upgradeExecutionSchema();
-    if (
-      options.executionSchema === "upgrade-synthetic" ||
-      options.executionSchema === "require-v2"
-    ) {
+    {
       const runtime = await database.inspectExecutionRuntime();
-      if (!runtime.migrated)
-        throw new MigrationSafetyError("migration-target-v1");
+      if (!runtime.migrated) throw new Error("execution-runtime-integrity");
       jobs = new ExecutionRepository(database);
       queue = new ExecutionQueue(jobs);
       interventions = new InterventionService(jobs);
@@ -1215,12 +1200,15 @@ export async function createApplication(
     const literatureArtifacts = new LiteratureArtifactService(database, files);
     let parsingPorts = options.parsing;
     if (options.typescriptParserRuntime) {
-      parsingPorts = {
-        parser: new MinerUParser(options.typescriptParserRuntime.transport, {
+      const parser = new MinerUParser(
+        options.typescriptParserRuntime.transport,
+        {
           baseUrl: options.typescriptParserRuntime.baseUrl,
           modelIdentity: options.typescriptParserRuntime.modelIdentity,
-        }),
-        rules: new TypeScriptParserArtifactRules(),
+        },
+      );
+      parsingPorts = {
+        rawParser: parser,
       };
     }
     if (!parsingPorts && !options.parsing) {
@@ -1230,13 +1218,13 @@ export async function createApplication(
         configuration.parsing.model_identity
       ) {
         try {
+          const parser = new MinerULoopbackParser({
+            baseUrl: configuration.parsing.base_url,
+            modelIdentity: configuration.parsing.model_identity,
+            coordinator: networkBudget,
+          });
           parsingPorts = {
-            parser: new MinerULoopbackParser({
-              baseUrl: configuration.parsing.base_url,
-              modelIdentity: configuration.parsing.model_identity,
-              coordinator: networkBudget,
-            }),
-            rules: new TypeScriptParserArtifactRules(),
+            rawParser: parser,
           };
         } catch (error) {
           if (!(error instanceof ParsingFailure)) throw error;
@@ -1253,83 +1241,112 @@ export async function createApplication(
           options.mineruTransportFactory,
         ) ?? undefined;
     }
-    if (parsingPorts)
-      parsing = new ParsingService(
-        {
-          currentFacts: (id) => database!.currentFacts(id),
-          withArtifact: (asset, consume, readOptions) =>
-            literatureArtifacts.withArtifact(asset, consume, readOptions),
-          inspectPdf: (bytes, signal) => acceptPdf(bytes, 10000, signal),
-        },
-        parsingPorts.parser,
-        parsingPorts.rules,
-        new ImmutableParserPublisher(database, files),
+    {
+      rawParseStorage = new SqliteRawParseStorage(database, files);
+      if (parsingPorts?.rawParser)
+        rawParsing = new RawParsingService(
+          {
+            asset: (id) => database!.getAsset(id),
+            currentFacts: (id) => database!.currentFacts(id),
+            withArtifact: (asset, consume, readOptions) =>
+              literatureArtifacts.withArtifact(asset, consume, readOptions),
+            inspectPdf: (bytes, signal) => acceptPdf(bytes, 10000, signal),
+          },
+          parsingPorts.rawParser,
+          rawParseStorage,
+          configuration.parsing.archive_profile,
+        );
+    }
+    if (rawParseStorage) {
+      const proofreadStorage = new SqliteProofreadStorage(database, files);
+      const pages =
+        options.proofreadPages ??
+        pdfPages(database, files, proofreadStorage, async () => {
+          if (!regionRenderer) {
+            const runtime =
+              verifiedBrowserRuntime ??
+              (await resolveVerifiedCloakRuntime(
+                process.env.SCIRETRIEVER_CLOAK_BUNDLE,
+              ));
+            if (!runtime) throw new Error("proofread-renderer-unavailable");
+            regionRenderer = new PdfRegionRenderer(runtime.executablePath);
+          }
+          return regionRenderer;
+        });
+      verificationPorts = { pages, cache: proofreadStorage };
+      proofreading = new ProofreadService(
+        rawParseStorage,
+        proofreadStorage,
+        pages,
+        await dshCorrector(
+          agents,
+          proofreadStorage,
+          pages,
+          configuration.proofread.max_calls_per_document,
+        ),
+        configuration.parsing.archive_profile,
       );
+    }
+    proofreadDocuments = new ProofreadDocumentService(
+      database,
+      files,
+      async (signal) => {
+        if (!retrievalIndex) throw new Error("index-unavailable");
+        return retrievalIndex.build(signal);
+      },
+    );
+    structureAnnotations = new StructureAnnotationService(
+      new SqliteDocumentStorage(database, files),
+      new SqliteAnnotationStorage(database, files),
+      dshSectionClassifier(agents),
+    );
     documentProcessing = new DocumentProcessingService(
       database,
-      new SqliteDocumentStorage(database, files),
-      parsingPorts?.rules ?? new TypeScriptParserArtifactRules(),
-      parsing ?? null,
+      rawParsing ?? null,
     );
     documentRead = new DocumentReadService(
       database,
       new SqliteDocumentStorage(database, files),
+      new SqliteAnnotationStorage(database, files),
     );
-    knowledgeAnalysis = new KnowledgeAnalysisService(
+    if (verificationPorts)
+      valueVerifier = new ProcessorValueVerifier(
+        documentRead,
+        agents,
+        verificationPorts.pages,
+        verificationPorts.cache,
+        configuration.proofread.max_value_check_calls,
+      );
+    const library = new LiteratureQueryService(database);
+    articleIdentity = new ArticleIdentityService(
       documentRead,
+      library,
       agents,
-      new SqliteKnowledgeStorage(database, files, documentRead),
+      database,
+      new LiteratureArticleIdentityService(library, database),
     );
-    const library = new LiteratureQueryService(database, files);
-    if ([9, 10].includes(Number((await database.schema()).schema_version)))
-      articleIdentity = new ArticleIdentityService(
-        documentRead,
-        library,
-        agents,
-        database,
-        new LiteratureArticleIdentityService(library, database),
-      );
-    if (
-      [7, 8, 9, 10].includes(Number((await database.schema()).schema_version))
-    ) {
-      synthesisRead = new SqliteSynthesisStorage(database, files, documentRead);
-      synthesisPreparation = new SynthesisPreparationService(
-        documentRead,
-        library,
-        synthesisRead,
-      );
-      synthesisAnalysis = new KnowledgeSynthesisService(
-        documentRead,
-        agents,
-        synthesisPreparation,
-        synthesisRead,
-      );
-    }
-    if ((await database.schema()).schema_version === 10 && synthesisRead) {
-      processorRead = new SqliteProcessorStorage(
-        database,
-        files,
-        documentRead,
-        synthesisRead,
-      );
+    {
+      processorRead = new SqliteProcessorStorage(database, files, documentRead);
       processorService = new ProcessorService(
-        createProcessorRegistry(knowledgeAnalysis),
+        createProcessorRegistry(),
         documentRead,
         agents,
         library,
         processorRead,
-        synthesisRead,
+        new ProcessorArchiveSource(
+          new ArchiveReader(database),
+          new SnapshotService(database, library),
+          new SqliteAnnotationStorage(database, files),
+          documentRead,
+        ),
+        valueVerifier,
       );
     }
     extractionPreparation = new ExtractionPreparationService(
       documentRead,
       library,
     );
-    extractionDelivery = new ExtractionDeliveryService(
-      database,
-      documentRead,
-      extractionPreparation,
-    );
+    extractionDelivery = new ExtractionDeliveryService(database, documentRead);
     if (processorRead)
       processorRetention = new ProcessorExternalRetention(
         extractionDelivery,
@@ -1341,19 +1358,10 @@ export async function createApplication(
       library,
       writes,
     );
-    if (
-      [8, 9, 10].includes(Number((await database.schema()).schema_version)) &&
-      synthesisRead
-    )
-      knowledgeIndex = new KnowledgeRetrievalIndexService(
-        new RetrievalStorageClient(database),
-        synthesisRead,
-        writes,
-      );
     // One process-wide acquisition port, built here and shared by every caller: the
     // CLI, the durable job runtime and any future frontend must not assemble their own
     // isolated acquisition loop. The completion orchestration is constructed later,
-    // once `completion`/`parsing`/`contentAnalysis` exist, so it cannot capture a
+    // once `completion`/`rawParsing` exist, so it cannot capture a
     // half-built graph.
     if (execution) {
       pdfAcquisition = new EntryPdfAcquisitionService({
@@ -1370,28 +1378,6 @@ export async function createApplication(
           : {}),
       });
     }
-    const analysisConfigured = configuration.analyze.model !== null;
-    if (options.analysisRuntime || analysisConfigured) {
-      if (
-        !agents.readiness("analysis").configured ||
-        agents.readiness("analysis").missing.length
-      )
-        throw new AnalysisFailure("analysis-configuration");
-      analysis = new AnalysisService(
-        library,
-        literatureArtifacts,
-        files,
-        agents,
-        {
-          ...(options.analysisRuntime ?? {}),
-        },
-      );
-    }
-    const literatureContent = new LiteratureContentService(
-      library,
-      database,
-      files,
-    );
     if (execution)
       manualPdf = new ManualPdfIngestionService(
         library,
@@ -1399,35 +1385,23 @@ export async function createApplication(
         execution.acceptance,
         execution.abandonment,
       );
-    const literatureCleanup = new LiteratureCleanupService(database, files);
-    const noUsableContent = new NoUsableContentService(
-      literatureCleanup,
-      database,
-      artifactRecovery,
-      writes,
-      execution?.transfers,
-    );
-    if (analysis)
-      contentAnalysis = new ContentAnalysisService(analysis, literatureContent);
-    if (execution && parsing && contentAnalysis)
+    if (execution && rawParseStorage)
       completion = new LiteratureCompletionService(
         library,
         database,
         execution.acceptance,
-        parsing,
-        contentAnalysis,
+        documentProcessing,
+        rawParseStorage,
+        configuration.parsing.archive_profile,
       );
-    // Construct the shared completion orchestration only now that `completion` is
-    // final. Building it earlier would capture `completion: null` forever, so a
-    // configured CONTENT_READY target would wrongly report
-    // `content-completion-unavailable` even with Parsing and Analysis ready.
+    // Explicit completion may acquire a missing PDF, then stop at the raw parser boundary.
     if (execution)
       databaseCompletion = new DatabaseCompletionService({
         library,
         database,
         writes,
         max_concurrency: configuration.execution.max_concurrency,
-        automatic_pdf_for_content: true,
+        automatic_pdf_for_parsing: true,
         completion: completion ?? null,
         acquisition: pdfAcquisition,
       });
@@ -1437,15 +1411,53 @@ export async function createApplication(
       taskService = new ExecutionTaskService(jobs, queue, interventions, {
         completion: databaseCompletion,
       });
+    const tags = new TagService(
+      database,
+      new SqliteDocumentStorage(database, files),
+      new SqliteAnnotationStorage(database, files),
+      new LiteratureMetadataService(database),
+      await dshTagModel(agents),
+      configuration.tags,
+    );
+    const metadataFields = new LiteratureMetadataService(database);
+    const archiveReferences = new ArchiveReferenceService(
+      database,
+      new SqliteAnnotationStorage(database, files),
+    );
+    const archiveMetadata = new ArchiveMetadataService(
+      database,
+      metadataFields,
+      new SqliteDocumentStorage(database, files),
+      new SqliteAnnotationStorage(database, files),
+      dshMetadataProposer(agents),
+    );
+    const archiveOrchestrator = new ArchiveOrchestrator(database, {
+      archiveProfile: configuration.parsing.archive_profile,
+      proofread: proofreading!,
+      documents: proofreadDocuments,
+      structure: structureAnnotations,
+      metadata: archiveMetadata,
+      references: archiveReferences,
+      tags,
+      metadataFields,
+      method_sha256: await sha256(
+        canonicalJsonBytes({
+          method: "archive-v1",
+          models: configuration.models,
+          analyze: configuration.analyze,
+          tags: configuration.tags,
+        }),
+      ),
+    });
     const observations = new ObservationRepository(database);
     if (jobs && queue)
       processingTasks = new ProcessingTaskService(
         jobs,
         queue,
         {
+          archive: archiveOrchestrator,
+          tags,
           documents: documentProcessing,
-          analysis: knowledgeAnalysis,
-          synthesis: synthesisAnalysis,
           identity: articleIdentity,
           ...(processorService && processorRead
             ? {
@@ -1513,6 +1525,12 @@ export async function createApplication(
       await recoveryLease?.release();
     }
     const application: Application = {
+      snapshots: new SnapshotService(database, library),
+      archive: new ArchiveService(database, processingTasks, library),
+      tags,
+      metadataFields,
+      archiveReferences,
+      archiveMetadata,
       bootId,
       metadata,
       acquisition,
@@ -1538,21 +1556,7 @@ export async function createApplication(
               documentProcessing.parseDocuments.bind(documentProcessing),
             documentDefault: database.documentDefault.bind(database),
             rebuildIndex: retrievalIndex.build.bind(retrievalIndex),
-            ...(knowledgeIndex
-              ? {
-                  rebuildKnowledgeIndex:
-                    knowledgeIndex.build.bind(knowledgeIndex),
-                }
-              : {}),
             extraction: extractionDelivery,
-            analyze: knowledgeAnalysis.analyze.bind(knowledgeAnalysis),
-            analyzeLong: knowledgeAnalysis.analyzeLong.bind(knowledgeAnalysis),
-            ...(synthesisAnalysis
-              ? {
-                  synthesize:
-                    synthesisAnalysis.synthesize.bind(synthesisAnalysis),
-                }
-              : {}),
           }
         : null,
       documentProcessing,
@@ -1565,18 +1569,14 @@ export async function createApplication(
       extractionPreparation,
       extractionDelivery,
       artifactRecovery,
-      noUsableContent,
       writes,
       artifactReclaimer,
-      literatureCleanup,
-      contentAnalysis: contentAnalysis ?? null,
-      analysis: analysis ?? null,
-      knowledgeAnalysis,
-      synthesisAnalysis,
-      synthesisPreparation,
-      synthesisRead,
-      literatureContent,
-      parsing: parsing ?? null,
+
+      rawParsing: rawParsing ?? null,
+      proofreading: proofreading ?? null,
+      proofreadDocuments,
+      structureAnnotations: structureAnnotations ?? null,
+      rawParseStorage: rawParseStorage ?? null,
       literatureArtifacts,
       library,
       execution,
@@ -1624,7 +1624,6 @@ export async function createApplication(
     throw error;
   }
 }
-
 /**
  * Open the existing catalog for query only. This path never creates the home,
  * catalog, artifact root, schema, recovery tickets, or durable Jobs.
@@ -1648,9 +1647,7 @@ export async function createQueryApplication(
     extractionPreparation: null,
     context: null,
     knowledgeContext: null,
-    knowledgeRead: null,
-    synthesisRead: null,
-    synthesisPreparation: null,
+
     close: async () => undefined,
   });
   let configuration: OrdinaryConfiguration;
@@ -1692,29 +1689,28 @@ export async function createQueryApplication(
         extractionPreparation: null,
         context: null,
         knowledgeContext: null,
-        knowledgeRead: null,
-        synthesisRead: null,
-        synthesisPreparation: null,
+
         close: async () => undefined,
       };
     return unavailable();
   }
   if (!catalogStat.isFile() || catalogStat.isSymbolicLink())
     return unavailable();
-
   const database = new SqliteWorker(catalogPath, undefined, {
     readOnly: true,
+    maxTags: configuration.tags.max_per_literature,
+    archiveProfile: configuration.parsing.archive_profile,
   });
   let retrievalDatabase: SqliteWorker | undefined;
   let files: FileStore | undefined;
   let documentRead: DocumentReadService | null = null;
+  let rawParseRead: SqliteRawParseStorage | null = null;
+  let proofreadRead: ProofreadService | null = null;
+  let proofreadRenderer: PdfRegionRenderer | undefined;
   let extractionPreparation: ExtractionPreparationService | null = null;
   let context: MaterialContextService | null = null;
   let knowledgeContext: KnowledgeContextService | null = null;
-  let knowledgeRead: SqliteKnowledgeStorage | null = null;
-  let synthesisRead: SqliteSynthesisStorage | null = null;
   let processorRead: SqliteProcessorStorage | null = null;
-  let synthesisPreparation: SynthesisPreparationService | null = null;
   let closing: Promise<void> | undefined;
   const close = (): Promise<void> => {
     // Publish the shared result before a resource callback can reenter close.
@@ -1726,10 +1722,11 @@ export async function createQueryApplication(
         async () => context?.close(),
         async () => retrievalDatabase?.close(),
         async () => extractionPreparation?.close(),
-        async () => knowledgeRead?.close(),
-        async () => synthesisPreparation?.close(),
-        async () => synthesisRead?.close(),
+
         async () => documentRead?.close(),
+        async () => proofreadRead?.close(),
+        () => proofreadRenderer?.close(),
+        async () => rawParseRead?.close(),
         async () => files?.close(),
         () => database.close(),
       ]) {
@@ -1776,9 +1773,7 @@ export async function createQueryApplication(
       extractionPreparation: null,
       context: null,
       knowledgeContext: null,
-      knowledgeRead: null,
-      synthesisRead: null,
-      synthesisPreparation: null,
+
       close,
     };
   }
@@ -1791,8 +1786,35 @@ export async function createQueryApplication(
     documentRead = new DocumentReadService(
       database,
       new SqliteDocumentStorage(database, files),
+      new SqliteAnnotationStorage(database, files),
     );
-    const literature = new LiteratureQueryService(database, files);
+    const literature = new LiteratureQueryService(database);
+    rawParseRead = new SqliteRawParseStorage(database, files);
+    if (rawParseRead) {
+      const storage = new SqliteProofreadStorage(database, files);
+      const pages =
+        options.proofreadPages ??
+        pdfPages(
+          database,
+          files,
+          {
+            read: (key, signal) => storage.read(key, signal),
+            // Query rendering remains ephemeral; it never creates a cache row.
+            save: async () => "",
+          },
+          async () => {
+            if (!proofreadRenderer) {
+              const runtime = await resolveVerifiedCloakRuntime(
+                process.env.SCIRETRIEVER_CLOAK_BUNDLE,
+              );
+              if (!runtime) throw new Error("proofread-renderer-unavailable");
+              proofreadRenderer = new PdfRegionRenderer(runtime.executablePath);
+            }
+            return proofreadRenderer;
+          },
+        );
+      proofreadRead = new ProofreadService(rawParseRead, storage, pages);
+    }
     extractionPreparation = new ExtractionPreparationService(
       documentRead,
       literature,
@@ -1800,50 +1822,20 @@ export async function createQueryApplication(
     // Retrieval performs synchronous index integrity inspection. Isolate its
     // reader from ordinary library/material reads; share one bounded worker
     // between both retrieval services, never one worker per request.
-    const retrievalStorage = [4, 5, 6, 7, 8, 9, 10].includes(
-      Number(preflight.schema.schema_version),
-    )
-      ? new RetrievalStorageClient(
-          (retrievalDatabase = new SqliteWorker(catalogPath, undefined, {
-            readOnly: true,
-          })),
-        )
-      : null;
+    const retrievalStorage = new RetrievalStorageClient(
+      (retrievalDatabase = new SqliteWorker(catalogPath, undefined, {
+        readOnly: true,
+        maxTags: configuration.tags.max_per_literature,
+        archiveProfile: configuration.parsing.archive_profile,
+      })),
+    );
     context = new MaterialContextService(
       retrievalStorage,
       documentRead,
       literature,
     );
-    knowledgeRead =
-      preflight.schema.schema_version === 6 ||
-      preflight.schema.schema_version === 7 ||
-      [8, 9, 10].includes(Number(preflight.schema.schema_version))
-        ? new SqliteKnowledgeStorage(database, files, documentRead)
-        : null;
-    if (
-      preflight.schema.schema_version === 7 ||
-      [8, 9, 10].includes(Number(preflight.schema.schema_version))
-    ) {
-      synthesisRead = new SqliteSynthesisStorage(database, files, documentRead);
-      synthesisPreparation = new SynthesisPreparationService(
-        documentRead,
-        literature,
-        synthesisRead,
-      );
-    }
-    if (preflight.schema.schema_version === 10 && synthesisRead)
-      processorRead = new SqliteProcessorStorage(
-        database,
-        files,
-        documentRead,
-        synthesisRead,
-      );
-    if ([8, 9, 10].includes(Number(preflight.schema.schema_version)))
-      knowledgeContext = new KnowledgeContextService(
-        context,
-        retrievalStorage!,
-        synthesisRead,
-      );
+    processorRead = new SqliteProcessorStorage(database, files, documentRead);
+    knowledgeContext = new KnowledgeContextService(context, processorRead);
     return {
       readiness: {
         status: "ready",
@@ -1857,6 +1849,22 @@ export async function createQueryApplication(
             : null,
       },
       processorRead,
+      rawParseRead,
+      archiveProfile: configuration.parsing.archive_profile,
+      proofreadRead,
+      annotationRead: new AnnotationReadService(
+        new SqliteAnnotationStorage(database, files),
+      ),
+      snapshots: new SnapshotService(database, literature),
+      archive: new ArchiveReader(database),
+      tags: new TagService(
+        database,
+        new SqliteDocumentStorage(database, files),
+        new SqliteAnnotationStorage(database, files),
+        new LiteratureMetadataService(database),
+        null,
+      ),
+      metadataFields: new LiteratureMetadataService(database),
       query: literature,
       tasks: createTaskReader(new ExecutionRepository(database)),
       taskRead: (jobId) =>
@@ -1878,9 +1886,7 @@ export async function createQueryApplication(
       extractionPreparation,
       context,
       knowledgeContext,
-      knowledgeRead,
-      synthesisRead,
-      synthesisPreparation,
+
       close,
     };
   } catch (error) {
@@ -1888,7 +1894,6 @@ export async function createQueryApplication(
     return unavailable();
   }
 }
-
 function buildAgentBindings(
   configuration: OrdinaryConfiguration,
   credentials: CredentialBundle,
@@ -1903,8 +1908,34 @@ function buildAgentBindings(
 ): readonly AgentBinding[] {
   const bindings: AgentBinding[] = [];
   const adapters = new Map<string, AgentAdapter>();
-  const roleModels: readonly ["analysis" | "browser", string | null][] = [
+  const roleModels: readonly [
+    import("../agents/protocol.js").AgentRole,
+    string | null,
+  ][] = [
     ["analysis", configuration.analyze.model],
+    [
+      "proofreading",
+      configuration.proofread.model ?? configuration.analyze.model,
+    ],
+    [
+      "value-checking",
+      configuration.proofread.value_check_model ??
+        configuration.proofread.model ??
+        configuration.analyze.model,
+    ],
+    ["tagging", configuration.tags.model ?? configuration.analyze.model],
+    [
+      "tag-consolidation",
+      configuration.tags.consolidation_model ??
+        configuration.tags.model ??
+        configuration.analyze.model,
+    ],
+    [
+      "tag-backfill",
+      configuration.tags.backfill_model ??
+        configuration.tags.model ??
+        configuration.analyze.model,
+    ],
     [
       "browser",
       configuration.browser.enabled ? configuration.browser.model : null,
@@ -1961,7 +1992,7 @@ function buildAgentBindings(
           limits: {
             maxConcurrency: 2,
             maxHostConcurrency: 2,
-            maxResponseBytes: 4_194_304,
+            maxResponseBytes: 4194304,
             maxRedirects: 0,
             maxRetries: 0,
           },
@@ -2027,8 +2058,8 @@ function buildAgentBindings(
       capabilities,
       reasoning: config.reasoning,
       stream: config.stream,
-      context_window_tokens: 1_000_000,
-      max_output_tokens: 1_000_000,
+      context_window_tokens: 1000000,
+      max_output_tokens: 1000000,
       nonsecret_transport: {
         api: provider.api,
         endpoint: endpoint(provider.base_url, provider.api),
@@ -2038,7 +2069,6 @@ function buildAgentBindings(
   }
   return bindings;
 }
-
 function endpoint(baseUrl: string, api: string): string {
   const suffix =
     api === "openai-responses"

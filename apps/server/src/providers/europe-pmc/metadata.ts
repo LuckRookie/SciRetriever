@@ -150,6 +150,7 @@ function relationObservation(
   return parseProviderObservation({
     observation_id: options.observationId,
     provenance: options.provenance,
+    source_type: null,
     metadata: {
       title:
         options.referenceText === undefined ? stringValue(record.title) : null,
@@ -158,7 +159,6 @@ function relationObservation(
       publication_date: null,
       publication_year:
         options.referenceText === undefined ? record.pubYear : null,
-      document_type: null,
       language: null,
       venue:
         options.referenceText === undefined
@@ -359,13 +359,13 @@ function observationFromRecord(
       input_sha256: options.inputSha256,
       parameters_sha256: options.parametersSha256,
     },
+    source_type: stringValue(record.pubType),
     metadata: {
       title: stringValue(record.title),
       authors,
       abstract: stringValue(record.abstractText),
       publication_date: stringValue(record.firstPublicationDate),
       publication_year: record.pubYear,
-      document_type: stringValue(record.pubType),
       language: stringValue(record.language),
       venue: stringValue(record.journalTitle),
       publisher: null,

@@ -1,8 +1,10 @@
+import type { ModelInput } from "./core-processing-fixture.js";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { ProofreadDocumentService } from "../src/document/proofread-publication.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
@@ -14,9 +16,9 @@ import {
   EXTRACTION_SCHEMA_URI,
 } from "@sciretriever/contracts";
 import {
-  coreProcessingFixture,
-  type ModelInput,
-} from "./core-processing-fixture.js";
+  processorFixture as coreProcessingFixture,
+  processorSelection,
+} from "./processor-fixture.js";
 import {
   FIXTURE_LITERATURE,
   workbenchPdf,
@@ -32,7 +34,7 @@ const label = (
   schema_version: 1,
   idempotency_key: key,
   name: "synthetic labels",
-  processor: { id: "labels", version: "1" },
+  processor: { id: "labels", version: "2" },
   spec: { question: "Was an exposure test reported?", answer_type: "boolean" },
   inputs,
 });
@@ -61,52 +63,51 @@ const yes = (input: ModelInput) => ({
   source_ids: [input.segments![0]!.segment_id],
   reason: null,
 });
-const parsedInput = (id: string) => ({
-  kind: "document" as const,
-  document_version_id: id,
-});
+const parsedInput = processorSelection;
 async function addDocument(env: Env, index: number) {
-  const literature_id = parseLiteratureId(randomUUID()),
-    doi = `10.1234/processor.${index}`;
-  await env.app.database.putLiterature({
-    ...FIXTURE_LITERATURE,
-    literature_id,
-    meta_literature_id: parseMetaLiteratureId(randomUUID()),
-    metadata: {
-      ...FIXTURE_LITERATURE.metadata,
-      title: `Synthetic paper ${index}`,
-      identifiers: [{ namespace: "doi", value: doi }],
-    },
+  // Arrange one real immutable archive under one reentrant catalog lease.
+  // The batch under test below still acquires its own production write leases.
+  return env.app.writes.run(async () => {
+    const literature_id = parseLiteratureId(randomUUID()),
+      doi = `10.1234/processor.${index}`;
+    await env.app.database.putLiterature({
+      ...FIXTURE_LITERATURE,
+      literature_id,
+      meta_literature_id: parseMetaLiteratureId(randomUUID()),
+      metadata: {
+        ...FIXTURE_LITERATURE.metadata,
+        title: `Synthetic paper ${index}`,
+        identifiers: [{ namespace: "doi", value: doi }],
+      },
+    });
+    await env.app.maintenance!.ingestPdf({
+      literature_id,
+      bytes: workbenchPdf(doi),
+    });
+    const asset = (await env.app.library.detail(literature_id)).primary_pdf!
+      .asset;
+    env.setText(`Synthetic observation ${index}: exposure measured at 25 C.`);
+    const request = {
+      literature_id,
+      asset_id: asset.asset_id,
+      asset_sha256: asset.sha256,
+      mode: "reparse" as const,
+      expected_default_revision: null,
+    };
+    const parsed = await env.build(request);
+    return {
+      literature_id,
+      request,
+      input: parsedInput(parsed.document.document_version_id),
+    };
   });
-  await env.app.maintenance!.ingestPdf({
-    literature_id,
-    bytes: workbenchPdf(doi),
-  });
-  const asset = (await env.app.library.detail(literature_id)).primary_pdf!
-    .asset;
-  env.setText(`Synthetic observation ${index}: exposure measured at 25 C.`);
-  const request = {
-    literature_id,
-    asset_id: asset.asset_id,
-    asset_sha256: asset.sha256,
-    mode: "reparse" as const,
-    expected_default_revision: null,
-  };
-  const parsed = await env.app.documentProcessing.parseDocuments(request);
-  return {
-    literature_id,
-    request,
-    input: parsedInput(parsed.document.document_version_id),
-  };
 }
 describe("processor application acceptance", () => {
-  it("preserves scientific numeric typography and rejects changed magnitudes or invented raw strings", async () => {
+  it("preserves numeric typography, rejects invalid magnitudes and marks unsupported raw values uncertain", async () => {
     const env = await coreProcessingFixture();
     try {
       env.setText("The measured conductivity is 7.25 \\times 10^{-3} S/cm.");
-      const parsed = await env.app.documentProcessing.parseDocuments(
-        env.parseRequest,
-      );
+      const parsed = await env.build(env.parseRequest);
       for (const [key, number, code] of [
         [
           "reported",
@@ -121,7 +122,7 @@ describe("processor application acceptance", () => {
         [
           "invented-raw",
           { value: 0.00725, raw: "0.00725", unit: "S/cm" },
-          "processor-number-not-in-evidence",
+          null,
         ],
       ] as const) {
         env.setModel((input) => ({
@@ -135,7 +136,7 @@ describe("processor application acceptance", () => {
         }));
         const state = await env.app.processors!.runBatch({
           ...label(key, [parsedInput(parsed.document.document_version_id)]),
-          processor: { id: "records", version: "1" },
+          processor: { id: "records", version: "2" },
           spec: {
             record_meaning: "one measurement",
             fields: [
@@ -165,6 +166,12 @@ describe("processor application acceptance", () => {
           expect(stored!.result.content).toMatchObject({
             records: [{ payload: { conductivity: number } }],
           });
+          expect(stored!.result.value_checks).toEqual([
+            expect.objectContaining({
+              pointer: "/conductivity",
+              status: key === "invented-raw" ? "uncertain" : "text-layer",
+            }),
+          ]);
         }
       }
     } finally {
@@ -182,9 +189,7 @@ describe("processor application acceptance", () => {
       env.setText(
         "The sample was exposed to air at 25 C. Conductivity was measured.",
       );
-      const parsed = await env.app.documentProcessing.parseDocuments(
-          env.parseRequest,
-        ),
+      const parsed = await env.build(env.parseRequest),
         inputs = [parsedInput(parsed.document.document_version_id)];
       env.setModel(yes);
       const tagged = await output(env, label("tag", inputs));
@@ -230,7 +235,7 @@ describe("processor application acceptance", () => {
       }));
       const extracted = await output(env, {
         ...label("records", inputs),
-        processor: { id: "records", version: "1" },
+        processor: { id: "records", version: "2" },
         spec: {
           record_meaning: "One reported observation",
           fields: [
@@ -280,8 +285,28 @@ describe("processor application acceptance", () => {
         offset: 0,
       });
       expect(recordRows.items).toHaveLength(1);
+      const snapshot = await env.app.snapshots.create({
+        kind: "literatures",
+        literature_ids: [env.parseRequest.literature_id],
+      });
       let literatureIds: string[] = [];
       env.setModel((input) => {
+        if (input.purpose)
+          return {
+            outcome: "completed",
+            title: "Synthetic summary",
+            statements: [
+              {
+                statement_id: "s1",
+                category: "finding",
+                epistemic: "reported",
+                text: "Measured exposure.",
+                conditions: [],
+                quantity: null,
+                evidence_segment_ids: [input.segments![0]!.segment_id],
+              },
+            ],
+          };
         const candidates = input.candidates as {
           id: string;
           independent_literature_ids: string[];
@@ -290,7 +315,7 @@ describe("processor application acceptance", () => {
           ...new Set(candidates.flatMap((c) => c.independent_literature_ids)),
         ];
         return {
-          statements: [
+          claims: [
             {
               text: "summarybodytoken",
               source_ids: candidates.map((c) => c.id),
@@ -300,13 +325,9 @@ describe("processor application acceptance", () => {
       });
       const synthesis = await output(env, {
         ...label("synthesis", []),
-        processor: { id: "knowledge-synthesis", version: "1" },
+        processor: { id: "knowledge-synthesis", version: "2" },
         spec: { question: "Compare the measurements", policy: "require-all" },
-        inputs: [...tagged.refs, ...extracted.refs].map((r) => ({
-          kind: "result",
-          result_id: r.result_id,
-          record_ids: null,
-        })),
+        inputs: [{ kind: "snapshot", snapshot_id: snapshot.snapshot_id }],
       });
       expect(literatureIds).toEqual([env.parseRequest.literature_id]);
       const report = (await env.app.processorRead!.byId(
@@ -316,19 +337,15 @@ describe("processor application acceptance", () => {
       const evidence = await env.app.processorRead!.verifyCitation({
         kind: "result",
         ...synthesis.refs[0]!,
-        record_id: "s0",
+        record_id: "claim0",
         pointer: "/text",
       });
       expect(evidence.evidence.length).toBeGreaterThan(0);
       const reused = await output(env, {
         ...label("synthesis-again", []),
-        processor: { id: "knowledge-synthesis", version: "1" },
+        processor: { id: "knowledge-synthesis", version: "2" },
         spec: { question: "Compare the measurements", policy: "require-all" },
-        inputs: [...tagged.refs, ...extracted.refs].map((r) => ({
-          kind: "result",
-          result_id: r.result_id,
-          record_ids: null,
-        })),
+        inputs: [{ kind: "snapshot", snapshot_id: snapshot.snapshot_id }],
       });
       expect(reused.refs).toEqual(synthesis.refs);
       await env.reopen();
@@ -336,11 +353,16 @@ describe("processor application acceptance", () => {
       const query = { query: "bodyonlytoken", limit: 20, offset: 0 };
       const requestPath = join(env.home, "query.json");
       await writeFile(requestPath, JSON.stringify(query));
+      const cliErrors: string[] = [];
       const cli = await runCli(
         ["processors", "search", "--request", requestPath],
-        { home: env.home, json: true },
+        {
+          home: env.home,
+          json: true,
+          stderr: (message) => cliErrors.push(message),
+        },
       );
-      expect(cli.code).toBe(0);
+      expect(cli.code, JSON.stringify({ cli, cliErrors })).toBe(0);
       host = createMcpServer({
         queryFactory: () => createQueryApplication(env.home),
       });
@@ -445,9 +467,7 @@ describe("processor application acceptance", () => {
       env.setText(
         `First exposure observation ${"alpha ".repeat(30)}.\n\nSecond exposure observation ${"beta ".repeat(30)}.`,
       );
-      const parsed = await env.app.documentProcessing.parseDocuments(
-          env.parseRequest,
-        ),
+      const parsed = await env.build(env.parseRequest),
         inputs = [parsedInput(parsed.document.document_version_id)];
       let failSecond = true;
       env.setModel((input) => {
@@ -468,7 +488,7 @@ describe("processor application acceptance", () => {
       });
       const request = {
         ...label("partial", inputs),
-        processor: { id: "records", version: "1" },
+        processor: { id: "records", version: "2" },
         spec: {
           record_meaning: "observations",
           fields: [{ name: "note", description: "observation" }],
@@ -505,10 +525,13 @@ describe("processor application acceptance", () => {
       const result = (await env.app.processorRead!.byId(
         absent.refs[0]!.result_id,
       ))!.result;
-      expect(result.content).toMatchObject({
-        records: [{ payload: { answer: null } }],
+      expect(result.status).toBe("ok");
+      expect(result.content).toMatchObject({ kind: "records", records: [] });
+      expect(result.coverage[0]!).toMatchObject({
+        status: "none",
+        read_segments: [],
+        parts: [{ outcome: "incomplete", gaps: ["unread-segments"] }],
       });
-      expect(result.coverage[0]!.status).toBe("none");
     } finally {
       await env.close();
     }
@@ -518,18 +541,15 @@ describe("processor application acceptance", () => {
     const env = await coreProcessingFixture();
     try {
       env.setText("Original exposure observation.");
-      const old = await env.app.documentProcessing.parseDocuments(
-        env.parseRequest,
-      );
+      const old = await env.build(env.parseRequest);
       const job = await env.app.processors!.submit(
         label("frozen", [
           { kind: "literature", literature_id: env.parseRequest.literature_id },
         ]),
       );
       env.setText("Changed document now reports another result.");
-      const updated = await env.app.documentProcessing.parseDocuments({
+      const updated = await env.build({
         ...env.parseRequest,
-        expected_default_revision: old.default_revision,
       });
       expect(updated.default_updated).toBe(true);
       expect(
@@ -559,7 +579,11 @@ describe("processor application acceptance", () => {
         (await env.app.processorRead!.byId(original.result_id))!.result
           .invocation.inputs[0],
       ).toMatchObject({
-        document: { document_version_id: old.document.document_version_id },
+        parts: [
+          expect.objectContaining({
+            document_version_id: old.document.document_version_id,
+          }),
+        ],
       });
       await expect(
         env.app.processors!.submit({
@@ -658,6 +682,7 @@ describe("processor application acceptance", () => {
         },
         required_capabilities: ["material-file-v1" as const],
       };
+      await env.build(env.parseRequest);
       const prepared = await env.app.extractionPreparation.prepare({
         spec: { ...base, spec_sha256: await extractionSpecHash(base) },
         inputs: [
@@ -740,7 +765,7 @@ describe("processor application acceptance", () => {
         ).toThrow();
         expect(
           check
-            .prepare("SELECT count(*) AS n FROM processor_result_materials")
+            .prepare("SELECT count(*) AS n FROM processor_result_documents")
             .get(),
         ).toMatchObject({ n: 1 });
       } finally {
@@ -753,6 +778,17 @@ describe("processor application acceptance", () => {
 
   it("reuses exactly overlapping unchanged documents for 100→120, 80-overlap and five revised inputs", async () => {
     const env = await coreProcessingFixture();
+    // This test verifies processor reuse, not full-library material indexing.
+    // Keep real immutable publication, defaults, archives and processor reads;
+    // document-publication and retrieval tests exercise the index callback.
+    const documents = new ProofreadDocumentService(
+      env.app.database,
+      env.app.files,
+      async () => undefined,
+    );
+    const publication = vi
+      .spyOn(env.app.proofreadDocuments, "publish")
+      .mockImplementation((value, signal) => documents.publish(value, signal));
     try {
       const docs = [];
       for (let i = 0; i < 200; i++) docs.push(await addDocument(env, i));
@@ -791,17 +827,13 @@ describe("processor application acceptance", () => {
       expect(
         overlap.collection.members.flatMap((m) =>
           m.inputs.flatMap((i) =>
-            i.kind === "document"
-              ? [i.document.source_material_ref.literature_id]
-              : [],
+            i.kind === "archive-document" ? [i.literature_id] : [],
           ),
         ),
       ).toEqual(overlapDocs.map((d) => d.literature_id));
       for (let i = 20; i < 25; i++) {
         env.setText(`Revised exposure observation ${i}.`);
-        const revised = await env.app.documentProcessing.parseDocuments(
-          docs[i]!.request,
-        );
+        const revised = await env.build(docs[i]!.request);
         docs[i]!.input = parsedInput(revised.document.document_version_id);
       }
       const changed = await output(
@@ -820,9 +852,11 @@ describe("processor application acceptance", () => {
         changed.refs[0]!.result_id,
       ))!.result.invocation.inputs;
       expect(savedInputs[0]).toMatchObject({
-        document: { document_version_id: docs[20]!.input.document_version_id },
+        literature_id: docs[20]!.literature_id,
       });
     } finally {
+      publication.mockRestore();
+      await documents.close();
       await env.close();
     }
   }, 600000);

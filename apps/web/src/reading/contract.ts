@@ -37,6 +37,11 @@ export interface ReaderResourceEntry {
   open(): Promise<void>;
 }
 export interface ReaderFrame {
+  onSegment?: (id: string) => void;
+  pdfLocation?: {
+    page: number;
+    region: import("@sciretriever/contracts").PageRegion | null;
+  };
   /** Metadata heading for presentation only; source bytes and evidence offsets stay fixed. */
   documentTitle?: string;
   body: HTMLElement;

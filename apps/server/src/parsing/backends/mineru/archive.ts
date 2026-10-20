@@ -1,26 +1,29 @@
 import { inflateRawSync } from "node:zlib";
 import { parserMarkdownReferences } from "../../markdown-resources.js";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
-  parseParserResult,
   parseStrictJsonObject,
-  parserResultSha256,
+  ContractValidationError,
   sha256,
-  type ParserResult,
   canonicalJsonBytes,
+  parseRawParse,
+  parseRawParseInput,
+  rawParseIdentity,
+  type RawParseProfile,
 } from "@sciretriever/contracts";
 import {
-  MINERU_ARCHIVE_VERSION,
   MINERU_RELEASE,
   MINERU_PROTOCOL,
-  MINERU_REQUEST_FIELDS,
+  MINERU_RAW_ARCHIVE_VERSION,
+  mineruRequestFields,
 } from "./profile.js";
 import {
   ParsingFailure,
-  type ParserArtifactRules,
   type StagedParserArtifact,
-  type StagedParserOutput,
+  type StagedRawParseOutput,
 } from "../../ports.js";
+import { convertMinerUContentList } from "./content-list.js";
+import { TypeScriptParserArtifactRules } from "../../artifact-rules.js";
 
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 32 * 1024 * 1024;
@@ -264,101 +267,6 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function validateImagePaths(
-  value: unknown,
-  markdownReference: string,
-  files: ReadonlyMap<string, Uint8Array>,
-): void {
-  const pending: unknown[] = [value];
-  const prefix = markdownReference.includes("/")
-    ? markdownReference.slice(0, markdownReference.lastIndexOf("/") + 1)
-    : "";
-  while (pending.length) {
-    const current = pending.pop();
-    if (Array.isArray(current)) {
-      pending.push(...current);
-      continue;
-    }
-    if (!current || typeof current !== "object") continue;
-    for (const [key, child] of Object.entries(current)) {
-      if (key !== "image_path") {
-        pending.push(child);
-        continue;
-      }
-      if (typeof child !== "string") fail();
-      const path = safePath(child);
-      // MinerU middle.json uses image filenames; older exports include images/.
-      const reference = safePath(
-        `${prefix}${path.includes("/") ? path : `images/${path}`}`,
-      );
-      if (!files.has(reference) || !mediaType(reference).startsWith("image/"))
-        fail();
-    }
-  }
-}
-
-function primaryOutput(
-  files: ReadonlyMap<string, Uint8Array>,
-  expectedPageCount?: number,
-): {
-  readonly markdownReference: string;
-  readonly markdown: Uint8Array;
-  readonly pageCount: number;
-} {
-  const middleNames = [...files.keys()].filter((name) =>
-    name.endsWith("_middle.json"),
-  );
-  if (middleNames.length !== 1) fail();
-  const middleName = middleNames[0]!;
-  const stem = middleName.slice(0, -"_middle.json".length);
-  if (!stem) fail();
-  const markdownReference = `${stem}.md`;
-  const modelName = `${stem}_model.json`;
-  const contentListName = `${stem}_content_list.json`;
-  const markdown = files.get(markdownReference);
-  const middleBytes = files.get(middleName);
-  const modelBytes = files.get(modelName);
-  const contentListBytes = files.get(contentListName);
-  if (!markdown || !middleBytes || !modelBytes || !contentListBytes) fail();
-  if (
-    middleBytes.byteLength +
-      modelBytes.byteLength +
-      contentListBytes.byteLength >
-    32 * 1024 * 1024
-  )
-    fail();
-  const middle = record(strictJson(middleBytes));
-  if (middle._backend !== "vlm" || !Array.isArray(middle.pdf_info)) fail();
-  const pageCount = middle.pdf_info.length;
-  if (
-    pageCount < 1 ||
-    pageCount > 10000 ||
-    (expectedPageCount !== undefined && pageCount !== expectedPageCount)
-  )
-    fail();
-  middle.pdf_info.forEach((page, index) => {
-    const value = record(page);
-    if (value.page_idx !== index) fail();
-  });
-  validateImagePaths(middle, markdownReference, files);
-  const model = strictJson(modelBytes);
-  if (!model || typeof model !== "object") fail();
-  const contentList = strictJson(contentListBytes);
-  if (!Array.isArray(contentList)) fail();
-  let previousPage = -1;
-  for (const item of contentList) {
-    const value = record(item);
-    if (
-      !Number.isSafeInteger(value.page_idx) ||
-      (value.page_idx as number) < 0 ||
-      (value.page_idx as number) >= pageCount ||
-      (value.page_idx as number) < previousPage
-    )
-      fail();
-    previousPage = value.page_idx as number;
-  }
-  return { markdownReference, markdown, pageCount };
-}
 async function artifact(
   bytes: Uint8Array,
   type: string,
@@ -378,94 +286,144 @@ export interface MinerUArchiveOptions {
   readonly source_sha256: string;
   readonly page_count?: number;
   readonly model_identity: string;
-  readonly observed_at?: string;
-  readonly provenance_id?: string;
   readonly parameters_sha256?: string;
 }
 
-/** Convert a bounded MinerU result ZIP without Python, shell tools, or filesystem paths. */
-export async function convertMinerUArchive(
+/** Convert the bounded dual-profile MinerU output; no legacy output fallback. */
+export async function convertMinerURawArchive(
   archive: Uint8Array,
-  options: MinerUArchiveOptions,
-  rules?: Pick<ParserArtifactRules, "validate">,
-): Promise<StagedParserOutput & { readonly result: ParserResult }> {
-  if (
-    !(archive instanceof Uint8Array) ||
-    archive.byteLength > MAX_ARCHIVE_BYTES
-  )
-    fail();
-  const entries = parseZip(archive);
-  const files = new Map(
-    entries.map((entry) => [entry.name, entryBytes(archive, entry)]),
-  );
-  if (
-    options.page_count !== undefined &&
-    (!Number.isSafeInteger(options.page_count) || options.page_count < 1)
-  )
-    fail();
-  const primary = primaryOutput(files, options.page_count);
-  const markdownBytes = primary.markdown;
-  const markdown = text(markdownBytes);
-  if (!markdown.trim()) fail();
-  const references = parserMarkdownReferences(markdown);
-  const prefix = primary.markdownReference.slice(
-    0,
-    primary.markdownReference.lastIndexOf("/") + 1,
-  );
-  const resources = references.map(async (reference) => {
-    const direct = files.get(safePath(`${prefix}${reference}`));
-    if (!direct) fail();
-    return {
-      reference,
-      content: await artifact(direct, mediaType(reference)),
+  options: MinerUArchiveOptions & { readonly profile: RawParseProfile },
+): Promise<StagedRawParseOutput> {
+  try {
+    if (
+      !(archive instanceof Uint8Array) ||
+      archive.byteLength > MAX_ARCHIVE_BYTES
+    )
+      fail();
+    const fields = mineruRequestFields(options.profile);
+    const files = new Map(
+      parseZip(archive).map((entry) => [
+        entry.name,
+        entryBytes(archive, entry),
+      ]),
+    );
+    const middleNames = [...files.keys()].filter((name) =>
+      name.endsWith("_middle.json"),
+    );
+    if (middleNames.length !== 1) fail();
+    const middleName = middleNames[0]!;
+    const stem = middleName.slice(0, -"_middle.json".length);
+    const middleBytes = files.get(middleName)!;
+    const privateBytes = files.get(`${stem}_content_list_v2.json`);
+    const markdownBytes = files.get(`${stem}.md`);
+    if (
+      !privateBytes ||
+      !markdownBytes ||
+      middleBytes.byteLength + privateBytes.byteLength > 32 * 1024 * 1024
+    )
+      fail();
+    const middle = record(strictJson(middleBytes));
+    if (
+      middle._backend !==
+        (options.profile === "pipeline" ? "pipeline" : "vlm") ||
+      !Array.isArray(middle.pdf_info)
+    )
+      fail();
+    const pageCount = middle.pdf_info.length;
+    if (
+      pageCount < 1 ||
+      pageCount > 10000 ||
+      (options.page_count !== undefined && options.page_count !== pageCount)
+    )
+      fail();
+    const pageSizes = middle.pdf_info.map(
+      (v, index): readonly [number, number] => {
+        const p = record(v);
+        if (
+          p.page_idx !== index ||
+          !Array.isArray(p.page_size) ||
+          p.page_size.length !== 2 ||
+          p.page_size.some(
+            (n) => typeof n !== "number" || !Number.isFinite(n) || n <= 0,
+          )
+        )
+          fail();
+        return [p.page_size[0] as number, p.page_size[1] as number];
+      },
+    );
+    const converted = convertMinerUContentList(
+      strictJson(privateBytes),
+      pageCount,
+    );
+    const markdown = text(markdownBytes);
+    if (!markdown.trim()) fail();
+    const references = [
+      ...new Set([
+        ...parserMarkdownReferences(markdown),
+        ...converted.references,
+      ]),
+    ].sort();
+    const prefix = stem.slice(0, stem.lastIndexOf("/") + 1);
+    const resources = await Promise.all(
+      references.map(async (reference) => {
+        const bytes = files.get(safePath(`${prefix}${reference}`));
+        if (!bytes) fail();
+        return {
+          reference,
+          content: await artifact(bytes, mediaType(reference)),
+        };
+      }),
+    );
+    const staged = {
+      blocks: await artifact(
+        canonicalJsonBytes(converted.blocks),
+        "application/json",
+      ),
+      markdown: await artifact(markdownBytes, "text/markdown"),
+      resources,
+      private_content_list: await artifact(privateBytes, "application/json"),
     };
-  });
-  const resolvedResources = await Promise.all(resources);
-  const provenance = {
-    provenance: {
-      provenance_id: options.provenance_id ?? randomUUID(),
-      source_kind: "parser" as const,
-      source_name: "mineru",
-      source_record_id: null,
-      observed_at: options.observed_at ?? new Date().toISOString(),
-      input_sha256: options.source_sha256,
+    await new TypeScriptParserArtifactRules().validate(
+      staged,
+      undefined,
+      converted.references,
+    );
+    const input = parseRawParseInput({
+      source_asset_id: options.source_asset_id,
+      source_sha256: options.source_sha256,
+      profile: options.profile,
+      parser_version: `mineru-${MINERU_RELEASE}-${options.profile}/${MINERU_RAW_ARCHIVE_VERSION}`,
+      model_identity: options.model_identity,
       parameters_sha256:
         options.parameters_sha256 ??
         hash(
           canonicalJsonBytes({
-            adapter: MINERU_ARCHIVE_VERSION,
+            adapter: MINERU_RAW_ARCHIVE_VERSION,
             release: MINERU_RELEASE,
             protocol: MINERU_PROTOCOL,
+            profile: options.profile,
             model_identity: options.model_identity,
-            fields: Object.fromEntries(MINERU_REQUEST_FIELDS),
+            fields: Object.fromEntries(fields),
           }),
         ),
-    },
-    parser_version: MINERU_ARCHIVE_VERSION,
-    mode: "archive",
-    model_identity: options.model_identity,
-  };
-  const core = {
-    source_asset_id: options.source_asset_id,
-    source_sha256: options.source_sha256,
-    page_count: primary.pageCount,
-    markdown: (await artifact(markdownBytes, "text/markdown")).artifact,
-    resources: resolvedResources.map((resource) => ({
-      reference: resource.reference,
-      artifact: resource.content.artifact,
-    })),
-    provenance,
-  };
-  const result_sha256 = await parserResultSha256(core as never);
-  const result = await parseParserResult({ ...core, result_sha256 });
-  const output: StagedParserOutput = {
-    source_asset_id: result.source_asset_id,
-    source_sha256: result.source_sha256,
-    page_count: result.page_count,
-    provenance: result.provenance,
-    markdown: await artifact(markdownBytes, "text/markdown"),
-    resources: resolvedResources,
-  };
-  if (rules) await rules.validate(output);
-  return Object.freeze({ ...output, result });
+      page_count: pageCount,
+      page_sizes: pageSizes,
+      blocks: staged.blocks.artifact,
+      markdown: staged.markdown.artifact,
+      resources: resources.map((r) => ({
+        reference: r.reference,
+        artifact: r.content.artifact,
+      })),
+      private_content_list: staged.private_content_list.artifact,
+    });
+    const result = await parseRawParse({
+      ...input,
+      ...(await rawParseIdentity(input)),
+    });
+    return { ...staged, result };
+  } catch (error) {
+    if (error instanceof ContractValidationError)
+      throw new ParsingFailure("parser-structure");
+    throw error;
+  }
 }

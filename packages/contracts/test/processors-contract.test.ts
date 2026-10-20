@@ -5,6 +5,10 @@ import {
   processorComparison,
   processorPointer,
   type ProcessorInvocation,
+  type ProcessorContent,
+  processorValues,
+  uncheckedProcessorValues,
+  parseProcessorValueChecks,
 } from "../src/index.js";
 const id = (n: number) =>
   `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
@@ -15,14 +19,17 @@ const invocation = (): ProcessorInvocation =>
     spec: { question: "air" },
     inputs: [
       {
-        kind: "result",
+        kind: "snapshot",
         input_id: "i1",
-        result_id: id(1),
+        snapshot_id: id(1),
         content_sha256: "a".repeat(64),
-        record_ids: null,
+        mapped_results: [],
       },
     ],
     execution: {
+      reads: { parts: "main", roles: "all" },
+      uses_description: false,
+      map: null,
       method_sha256: "b".repeat(64),
       model: { provider: "fixture", model: "a" },
     },
@@ -36,8 +43,15 @@ async function result() {
     comparison_sha256: await processorComparison(input),
     status: "empty",
     content: { kind: "records", schema: { type: "object" }, records: [] },
+    value_checks: [],
     coverage: [
-      { input_id: "i1", status: "complete", read_segments: [], gaps: [] },
+      {
+        input_id: "i1",
+        parts: [],
+        status: "complete",
+        read_segments: [],
+        gaps: [],
+      },
     ],
     producer: "internal",
     provenance: {},
@@ -46,6 +60,53 @@ async function result() {
   };
 }
 describe("processor contracts", () => {
+  it("checks each array value and refuses duplicated evidence in place of a distinct source", () => {
+    const sources = [1, 2].map((n) => ({
+      kind: "result" as const,
+      result_id: id(n),
+      content_sha256: "a".repeat(64),
+      record_id: "source",
+      pointer: "/yield",
+    }));
+    const content: ProcessorContent = {
+      kind: "records",
+      schema: { type: "object" },
+      records: [
+        {
+          record_id: "r",
+          payload: {
+            values: [
+              { value: 12, raw: "12", unit: "%" },
+              { value: 15, raw: "15", unit: "%" },
+            ],
+          },
+          evidence: [{ pointer: "/values", sources }],
+          missing: {},
+        },
+      ],
+    };
+    expect(processorValues(content).map((v) => v.pointer)).toEqual([
+      "/values/0",
+      "/values/1",
+    ]);
+    const checks = uncheckedProcessorValues(content, "Unverified candidate.");
+    expect(parseProcessorValueChecks(checks, content)).toEqual(checks);
+    expect(() =>
+      parseProcessorValueChecks(
+        [
+          {
+            ...checks[0],
+            sources: [checks[0]!.sources[0], checks[0]!.sources[0]],
+          },
+          checks[1],
+        ],
+        content,
+      ),
+    ).toThrow();
+    expect(() =>
+      parseProcessorValueChecks(checks.slice(0, 1), content),
+    ).toThrow();
+  });
   it("includes model, method, specification, and upstream versions in reuse identity", async () => {
     const base = invocation();
     const original = await processorComparison(base);
@@ -68,6 +129,7 @@ describe("processor contracts", () => {
       [],
       [
         {
+          parts: [],
           input_id: "i1",
           status: "partial",
           read_segments: [],
@@ -76,6 +138,7 @@ describe("processor contracts", () => {
       ],
       [
         {
+          parts: [],
           input_id: "unknown",
           status: "complete",
           read_segments: [],
@@ -93,6 +156,7 @@ describe("processor contracts", () => {
       status: "ok",
       coverage: [
         {
+          parts: [],
           input_id: "i1",
           status: "partial",
           read_segments: [],

@@ -1,5 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { processorFixture } from "./processor-fixture.js";
+import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -10,10 +10,7 @@ import {
   sha256,
   type ExtractionSpec,
 } from "@sciretriever/contracts";
-import {
-  createApplication,
-  createQueryApplication,
-} from "../src/bootstrap/application.js";
+import { createQueryApplication } from "../src/bootstrap/application.js";
 import { startQueryOnlyWorkbench } from "../src/bootstrap/workbench.js";
 import { DocumentReadError } from "../src/document/read.js";
 import {
@@ -70,14 +67,12 @@ async function spec(
   return { ...content, spec_sha256: await extractionSpecHash(content) };
 }
 async function fixture() {
-  const home = await mkdtemp(
-    join(tmpdir(), "sciretriever-extraction-prepare-"),
-  );
-  const app = await createApplication(home);
+  const e = await processorFixture();
+  const { home, app } = e;
   try {
-    await app.database.putLiterature(FIXTURE_LITERATURE);
-    const assets = [];
-    for (const n of [1, 2]) {
+    await e.build(e.parseRequest);
+    const assets = [e.asset];
+    for (const n of [2]) {
       const pdf = Buffer.concat([
         workbenchPdf(),
         Buffer.from(`\n% synthetic ${n}\n`),
@@ -97,7 +92,7 @@ async function fixture() {
         literature_asset_id: id(910 + n),
         literature_id: lit,
         asset,
-        role: n === 1 ? "primary-pdf" : "supplementary-pdf",
+        role: "supplementary-pdf",
         source_url: null,
         provenance: parseProvenance({
           provenance_id: id(920 + n),
@@ -116,19 +111,17 @@ async function fixture() {
       assets,
       closeApplication: () => app.close(),
       close: async () => {
-        await app.close();
-        await rm(home, { recursive: true, force: true });
+        await e.close();
       },
     };
   } catch (error) {
-    await app.close();
-    await rm(home, { recursive: true, force: true });
+    await e.close();
     throw error;
   }
 }
 
 describe("external extraction preparation", () => {
-  it("binds two exact raw PDFs of one Literature on v1 without parsing or a model", async () => {
+  it("binds exact main and supplementary PDFs of a READY literature without new processing", async () => {
     const env = await fixture();
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
     try {
@@ -151,14 +144,19 @@ describe("external extraction preparation", () => {
       expect(
         output.manifest.items.map((item) => item.material?.asset_sha256),
       ).toEqual(env.assets.map((asset) => asset.sha256));
-      expect(
-        output.manifest.items.every(
-          (item) =>
-            item.document === null &&
-            item.capabilities.includes("material-file-v1") &&
-            item.gaps.includes("document-missing"),
-        ),
-      ).toBe(true);
+      expect(output.manifest.items[0]).toMatchObject({
+        document: { document_version_id: expect.any(String) },
+        capabilities: expect.arrayContaining([
+          "material-file-v1",
+          "document-segment-v1",
+        ]),
+        gaps: [],
+      });
+      expect(output.manifest.items[1]).toMatchObject({
+        document: null,
+        capabilities: ["material-file-v1"],
+        gaps: ["document-missing"],
+      });
       expect(output.missing_required_capabilities).toEqual([]);
       expect(
         await validateExtractionPayload(output.spec, {
@@ -330,7 +328,7 @@ describe("external extraction preparation", () => {
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
     try {
       query = await createQueryApplication(env.home);
-      const asset = env.assets[0]!;
+      const asset = env.assets[1]!;
       const selected = {
         input_id: "source-1",
         literature_id: lit,
@@ -358,10 +356,7 @@ describe("external extraction preparation", () => {
           inputs: [{ ...selected, asset_id: id(999) }],
         }),
       ).rejects.toMatchObject({ code: "input-missing" });
-      await writeFile(
-        join(env.home, "artifacts", "objects/input-1.pdf"),
-        "corrupt",
-      );
+      await writeFile(join(env.home, "artifacts", asset.path), "corrupt");
       await expect(
         query.extractionPreparation!.prepare({
           spec: await spec(),

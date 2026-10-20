@@ -339,7 +339,9 @@ export async function post(
     endpoint: config.endpoint,
     method: "POST",
     timeout_ms: 120_000,
-    ...(call.role === "analysis" ? { timeout_mode: "idle" as const } : {}),
+    ...(["analysis", "proofreading", "value-checking"].includes(call.role)
+      ? { timeout_mode: "idle" as const }
+      : {}),
     headers: [
       ["content-type", "application/json"],
       ...(protocol === "anthropic" ? [ANTHROPIC_API_VERSION_HEADER] : []),

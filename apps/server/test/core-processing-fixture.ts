@@ -1,3 +1,4 @@
+import { rawParserFixture } from "./raw-parser-fixture.js";
 import { dshChatReply } from "./dsh-analysis-fixture.js";
 import type { StagedParserResource } from "../src/parsing/ports.js";
 import { randomUUID } from "node:crypto";
@@ -16,7 +17,6 @@ import {
   type ApplicationOptions,
 } from "../src/bootstrap/application.js";
 import { initializeCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
-import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
 import {
   FIXTURE_LITERATURE,
   FIXTURE_DOI,
@@ -31,12 +31,12 @@ export interface ModelInput {
 }
 const baseConfiguration =
   '[providers.fixture]\napi="openai-chat-completions"\nbase_url="http://127.0.0.1:9/v1"\n[models."fixture/model"]\nreasoning="medium"\nstream=false\n[analyze]\nmodel="fixture/model"\n';
-const legacyBudgets =
-  "metadata_max_output_tokens=2048\ncontent_max_output_tokens=4096\nmax_input_bytes=1048576\nmax_chunk_bytes=1048576\nmax_chunk_count=1\nmax_total_llm_requests=2\nmax_total_output_tokens=6144\n";
 export async function coreProcessingFixture(
   optionsInput: {
-    legacyAnalysis?: boolean;
     analysisModel?: boolean;
+    textLayer?: (text: string) => string;
+    headerOnly?: boolean;
+    archiveProfile?: "pipeline" | "vlm-engine";
     inspectResponseSchema?: (schema: unknown) => void;
   } = {},
 ) {
@@ -47,7 +47,10 @@ export async function coreProcessingFixture(
     join(config, "config.toml"),
     (optionsInput.analysisModel === false
       ? baseConfiguration.replace('[analyze]\nmodel="fixture/model"\n', "")
-      : baseConfiguration) + (optionsInput.legacyAnalysis ? legacyBudgets : ""),
+      : baseConfiguration) +
+      (optionsInput.archiveProfile
+        ? `[parsing]\narchive_profile="${optionsInput.archiveProfile}"\n`
+        : ""),
     { mode: 0o600 },
   );
   await initializeCatalogSchema(join(home, "catalog.sqlite"));
@@ -60,13 +63,6 @@ export async function coreProcessingFixture(
     input: ModelInput,
     signal?: AbortSignal,
   ) => unknown | Promise<unknown> = (input) => {
-    if (input.stage === "metadata")
-      return { outcome: "usable", metadata: FIXTURE_LITERATURE.metadata };
-    if (input.stage === "content")
-      return {
-        markdown:
-          "# 研究背景与目标\n\nThe fixture studies spectroscopy.\n\n# 研究方法\n\n未提供\n\n# 数据\n\n未提供\n\n# 结论与局限性\n\n未提供\n\n# 参考文献\n\n1. Fixture reference.\n",
-      };
     if (input.purpose)
       return {
         outcome: "completed",
@@ -97,44 +93,65 @@ export async function coreProcessingFixture(
     };
   };
   const options: ApplicationOptions = {
-    executionSchema: "require-v2",
-    parsing: {
-      rules: new TypeScriptParserArtifactRules(),
-      parser: {
-        parse: async (request, signal) => {
-          parseCalls++;
-          await parseHook(signal);
-          const bytes = Buffer.from(text);
-          return {
-            source_asset_id: request.source_asset_id,
-            source_sha256: request.source_sha256,
-            page_count: 1,
-            markdown: {
-              artifact: {
-                sha256: await sha256(bytes),
-                byte_size: bytes.length,
-                media_type: "text/markdown",
-              } as ArtifactRef,
-              bytes,
-            },
-            resources,
-            provenance: {
-              provenance: parseProvenance({
-                provenance_id: randomUUID(),
-                source_kind: "parser",
-                source_name: "synthetic",
-                source_record_id: null,
-                observed_at: new Date().toISOString(),
-                input_sha256: request.source_sha256,
-                parameters_sha256: "a".repeat(64),
-              }),
-              parser_version: "fixture-1",
-              mode: null,
-              model_identity: null,
-            },
-          };
-        },
+    proofreadPages: {
+      method: "synthetic-pdf-page-v1",
+      async inspect(_asset, _hash, signal) {
+        signal?.throwIfAborted();
+        return [
+          {
+            page: 0,
+            kind: "text-layer",
+            text: optionsInput.textLayer?.(text) ?? text,
+            visible_glyphs: text.length,
+            hidden_glyphs: 0,
+            unmapped_glyphs: 0,
+            has_graphics: false,
+          },
+        ];
       },
+      async image() {
+        throw new Error("Unexpected fixture image request");
+      },
+    },
+    parsing: {
+      rawParser: rawParserFixture(
+        {
+          parse: async (request, signal) => {
+            parseCalls++;
+            await parseHook(signal);
+            const bytes = Buffer.from(text);
+            return {
+              source_asset_id: request.source_asset_id,
+              source_sha256: request.source_sha256,
+              page_count: 1,
+              markdown: {
+                artifact: {
+                  sha256: await sha256(bytes),
+                  byte_size: bytes.length,
+                  media_type: "text/markdown",
+                } as ArtifactRef,
+                bytes,
+              },
+              resources,
+              provenance: {
+                provenance: parseProvenance({
+                  provenance_id: randomUUID(),
+                  source_kind: "parser",
+                  source_name: "synthetic",
+                  source_record_id: null,
+                  observed_at: new Date().toISOString(),
+                  input_sha256: request.source_sha256,
+                  parameters_sha256: "a".repeat(64),
+                }),
+                parser_version: "fixture-1",
+                mode: null,
+                model_identity: null,
+              },
+            };
+          },
+        },
+        optionsInput.headerOnly,
+      ),
     },
     agentTransportFactory: () => async (request) => {
       modelCalls++;
@@ -209,6 +226,13 @@ export async function coreProcessingFixture(
       home,
       asset,
       parseRequest,
+      rawParseRequest: {
+        literature_id: parseRequest.literature_id,
+        asset_id: asset.asset_id,
+        asset_sha256: asset.sha256,
+        profiles: ["pipeline", "vlm-engine"],
+        force: false,
+      },
       get app() {
         return app;
       },
@@ -252,10 +276,10 @@ export async function coreProcessingFixture(
           budget: { max_input_bytes: 65536, max_output_tokens: 2048 },
         };
       },
-      async enableLegacyAnalysis() {
+      async disableAnalysis() {
         await writeFile(
           join(config, "config.toml"),
-          baseConfiguration + legacyBudgets,
+          baseConfiguration.replace('[analyze]\nmodel="fixture/model"\n', ""),
           { mode: 0o600 },
         );
       },

@@ -54,7 +54,7 @@ providers/
 - 搜索操作、身份、PDF 验证入库、Browser 控制与 Network 调度仍在原业务模块。Provider 不能自行写库或实现私有限流器。
 - `metadata.ts` 中保留公开的旧 decoder-shell 类以维持包根 API 兼容；生产组装使用实际 REST/Atom adapter。旧内部目录已移除，调用方直接引用当前路径。
 
-新增供应商时，从对应 capability 的现有适配器入手；维护自己的 definition、实现和直接测试，然后在注册/生产组装入口接线。详细规范见[供应商治理](../../../../docs/development/provider-governance.md)。
+新增供应商时，从对应 capability 的现有适配器入手；维护自己的 definition、实现和直接测试，然后在注册/生产组装入口接线。
 
 ## 子目录导航
 
@@ -75,4 +75,4 @@ providers/
 - [web-of-science/](web-of-science/README.md)：Web of Science 适配器。
 - [wiley/](wiley/README.md)：Wiley 适配器。
 
-[上级目录](../README.md) · [项目 README](../../../../README.md)
+[上级目录](../README.md)

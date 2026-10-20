@@ -153,7 +153,6 @@ describe("application lifecycle", () => {
     );
     const hostClose = vi.fn(async () => undefined);
     const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
       browserAdmitNavigation: async (url) => url,
       browserHost: () => ({
         deliverCandidate: async () => ({ kind: "exhausted" as const }),

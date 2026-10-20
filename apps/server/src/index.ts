@@ -3,24 +3,7 @@ export {
   WriteAdmissionError,
   acquireCatalogWriteLock,
 } from "./storage/write-admission.js";
-export {
-  LiteratureCleanupService,
-  ContentCleanupFailure,
-  type ContentCleanupRepository,
-  type ContentCleanupCommand,
-  type ContentCleanupSnapshot,
-  type RetiredArtifact,
-} from "./literature/cleanup.js";
-export {
-  ContentAnalysisService,
-  ContentAnalysisFailure,
-  type ContentAnalysisPort,
-  type ContentAnalysisResult,
-} from "./entry/content-analysis.js";
-export {
-  KnowledgeAnalysisService,
-  KnowledgeAnalysisFailure,
-} from "./analysis/knowledge.js";
+
 export {
   ManualPdfIngestionService,
   ManualPdfInputError,
@@ -56,10 +39,6 @@ export {
   KnowledgeContextError,
 } from "./retrieval/knowledge-query.js";
 export {
-  KnowledgeRetrievalIndexService,
-  KnowledgeIndexError,
-} from "./retrieval/knowledge-index.js";
-export {
   LiteratureArtifactService,
   LiteratureArtifactError,
   type ArtifactReadOptions,
@@ -82,7 +61,7 @@ export {
   type BibliographyImportItem,
   type BibliographyImportResult,
   type BibliographyItemStatus,
-} from "./entry/bibliography.js";
+} from "./literature/bibliography-import.js";
 export {
   BibliographyExportError,
   prepareBibliographyExport,
@@ -225,10 +204,7 @@ export {
   MinerUParser as TypeScriptMinerUParser,
   type MinerUHttpTransport,
 } from "./parsing/backends/mineru/index.js";
-export {
-  convertMinerUArchive,
-  type MinerUArchiveOptions,
-} from "./parsing/backends/mineru/index.js";
+export { type MinerUArchiveOptions } from "./parsing/backends/mineru/index.js";
 export {
   METADATA_PROVIDER_ORDER,
   METADATA_AUTO_PROVIDERS,
@@ -300,7 +276,6 @@ export {
   type ExecutionEvent,
   type ExecutionLease,
   type ExecutionRuntimeInspection,
-  type ExecutionMigrationReceipt,
   type ExecutionRestoreCheck,
   type ExecutionRecoveryResult,
 } from "./storage/sqlite/worker.js";
@@ -476,7 +451,7 @@ export {
   type SafeLogFields,
 } from "./logging/index.js";
 
-export { ParsingService, type PreparedParsing } from "./parsing/service.js";
+export { RawParsingService } from "./parsing/raw-service.js";
 export {
   DocumentProcessingService,
   DocumentProcessingError,
@@ -497,31 +472,6 @@ export {
   validateExtractionSpec,
   ExtractionSpecError,
 } from "./extraction/spec.js";
-export { ExtractionMigrationError } from "./storage/sqlite/extraction-migration-error.js";
-export async function inspectExtractionCatalog(path: string) {
-  const migration = await import("./storage/sqlite/extraction-migration.js");
-  return migration.inspectExtractionCatalog(path);
-}
-export async function migrateExtractionCatalog(
-  input: Parameters<
-    typeof import("./storage/sqlite/extraction-migration.js").migrateExtractionCatalog
-  >[0],
-) {
-  const migration = await import("./storage/sqlite/extraction-migration.js");
-  return migration.migrateExtractionCatalog(input);
-}
-export async function inspectKnowledgeCatalog(path: string) {
-  const migration = await import("./storage/sqlite/knowledge-migration.js");
-  return migration.inspectKnowledgeCatalog(path);
-}
-export async function migrateKnowledgeCatalog(
-  input: Parameters<
-    typeof import("./storage/sqlite/knowledge-migration.js").migrateKnowledgeCatalog
-  >[0],
-) {
-  const migration = await import("./storage/sqlite/knowledge-migration.js");
-  return migration.migrateKnowledgeCatalog(input);
-}
 export {
   DocumentReadService,
   DocumentReadError,
@@ -533,11 +483,11 @@ export {
 } from "./document/contract.js";
 export {
   ParsingFailure,
-  type ParserBackend,
-  type ParserPort,
   type ParserArtifactRules,
   type ParserRequest,
-  type StagedParserOutput,
+  type RawParserBackend,
+  type StagedRawParseOutput,
+  type ParserArtifacts,
 } from "./parsing/ports.js";
 
 export {
@@ -545,17 +495,6 @@ export {
   MinerULoopbackParser as TypeScriptLoopbackMinerUParser,
 } from "./parsing/backends/mineru/index.js";
 
-export {
-  LiteratureContentService,
-  ContentAcceptanceError,
-} from "./literature/content.js";
-
-export {
-  AnalysisService,
-  AnalysisFailure,
-  type AnalysisOptions,
-  type AnalysisResult,
-} from "./analysis/service.js";
 export { parseCrossrefRecord } from "./providers/crossref/record.js";
 export {
   exportBibliography,
@@ -611,10 +550,6 @@ export {
   ArticleIdentityError,
 } from "./parsing/article-identity.js";
 export { compareArticleIdentity } from "./literature/article-identity.js";
-export {
-  inspectArticleIdentityCatalog,
-  migrateArticleIdentityCatalog,
-} from "./storage/sqlite/article-identity-migration.js";
 export {
   ProcessingTaskService,
   ProcessingTaskError,

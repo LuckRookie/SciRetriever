@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type {
-  DocumentStructureV1,
+  DocumentStructure,
   LiteratureMetadata,
 } from "@sciretriever/contracts";
 import type { DocumentReadService } from "../document/read.js";
@@ -66,9 +66,22 @@ interface Unit {
 /** Blank-line blocks preserve complete paragraphs and whole Markdown tables. */
 export async function* contextUnits(
   markdown: Uint8Array,
-  structure: DocumentStructureV1,
+  structure: DocumentStructure,
   signal?: AbortSignal,
 ): AsyncGenerator<Unit> {
+  if (structure.schema_version === 2) {
+    for (const [ordinal, segment] of structure.segments.entries()) {
+      check(signal);
+      if (ordinal % 256 === 0) await yieldToEventLoop();
+      yield {
+        start: segment.start_utf8,
+        end: segment.end_utf8,
+        section_id: segment.section_id,
+        ordinal,
+      };
+    }
+    return;
+  }
   let start: number | null = null;
   let end = 0;
   let section: string | null = null;
@@ -402,7 +415,7 @@ export class RetrievalIndexService {
     source: RetrievalSource,
     representation: string,
     markdown: Uint8Array,
-    structure: DocumentStructureV1,
+    structure: DocumentStructure,
     signal?: AbortSignal,
   ): AsyncGenerator<RetrievalEntry> {
     if (representation !== source.representation_sha256)

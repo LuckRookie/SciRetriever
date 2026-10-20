@@ -6,6 +6,7 @@
 
 - [index.ts](index.ts)：包公开导出与基础合同。
 - [document.ts](document.ts)：文档合同。
+- [raw-parsing.ts](raw-parsing.ts)：双 profile 原始解析与中性区块合同，校验坐标、页码、资源引用和不可变清单身份。
 - [knowledge.ts](knowledge.ts)：知识产物合同。
 - [synthesis.ts](synthesis.ts)：综合产物合同。
 - [operations.ts](operations.ts)：操作合同。
@@ -16,6 +17,17 @@
 
 修改字段需要同步生产者、消费者、序列化和持久化兼容；不要把厂商原始响应或机器绝对路径放进中性合同。
 
-[上级目录](../README.md) · [项目 README](../../../README.md)
-
 `processor-transfer.ts` 定义固定结果/导出的有界 UTF-8 传输请求和回执，区分结果 hash 与传输封套 hash，不引入网络或文件访问。
+
+- [proofread.ts](proofread.ts)：校订区块与版本、来源、失败和方法的中性合同；耗时不进入内容或版本身份。
+- [metadata-types.ts](metadata-types.ts)：出版形式与文章性质的封闭枚举及统一中文名称；主元数据与 LibraryQuery 均使用新字段；旧字段不兼容。
+
+- [document-structure-v2.ts](document-structure-v2.ts)：校订稿片段、页码区域、来源与 UTF-8 区间的结构校验；章节角色固定留空，由后续独立结构注释提供。
+
+- 文档输入按 schema 判别旧固定版本与直接引用校订版本的新表示；`document-structure-v2.ts` 定义区块结构，`page-region-v1` 采用公开 1 起计页码。
+
+- `section-roles.ts`：正文/补充材料的封闭章节角色；结构注释消费此合同，不改写文档表示。
+
+`section-roles.ts` 与 `structure-annotation.ts` 定义正文/补充材料的封闭角色、独立注释、图表和引用文本；注释绑定固定 DocumentVersion，独立计算 hash，不改变全文表示与证据 ID。
+
+- `metadata-fields.ts`：逐字段来源/冲突/锁定及人工编辑的严格合同；空值可以人工锁定，非法字段、枚举与重复编辑均拒绝。

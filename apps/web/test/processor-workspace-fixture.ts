@@ -8,7 +8,7 @@ import {
   parseLiterature,
   type ProcessorBatchRequest,
 } from "@sciretriever/contracts";
-import { coreProcessingFixture } from "../../server/test/core-processing-fixture.js";
+import { processorFixture as coreProcessingFixture } from "../../server/test/processor-fixture.js";
 import { createQueryApplication } from "../../server/src/bootstrap/application.js";
 import {
   processorHttpAdapters,
@@ -39,7 +39,7 @@ export async function workspace(
 ) {
   if (!options?.assets)
     throw new Error("Workspace fixture requires production React assets");
-  const env = await coreProcessingFixture({ analysisModel });
+  const env = await coreProcessingFixture();
   const dispose: (() => Promise<void>)[] = [() => env.close()];
   const close = async () => {
     for (const action of dispose.reverse()) await action();
@@ -61,9 +61,11 @@ export async function workspace(
       "# Measurements\nThe measured energy was 4.2 eV.\n\n## Context\nA separate discussion.\n",
     );
     if (setup) await setup(env);
-    const parsed = await env.app.documentProcessing.parseDocuments(
-      env.parseRequest,
-    );
+    const parsed = await env.build(env.parseRequest);
+    if (!analysisModel) {
+      await env.disableAnalysis();
+      await env.reopen();
+    }
     env.setModel((input) => ({
       answer: true,
       source_ids: [input.segments![0]!.segment_id],
@@ -135,6 +137,7 @@ export async function workspace(
       env,
       page,
       parsed,
+      setupCalls: { parser: env.parseCalls, model: env.modelCalls },
       submissions,
       errors,
       close,

@@ -1,6 +1,6 @@
 # 统一知识加工：处理器、批量任务与结果
 
-从已经存在的可读文档或已保存结果开始，选择一个处理器和规范，提交任务，再读取结果集合。加工不会获取 PDF、解析、修复原文或发现新文献。新功能要求 Catalog v10；已有库必须经[显式升级](upgrade.md)，普通启动不升级。
+从已经建档就绪的文献开始，选择算子与读取范围，提交任务，再读取结果。加工只读取校订稿，不获取 PDF、不解析、不自动建档。当前 catalog 由单一 schema 定义；旧开发数据库按明确授权离线重建，不提供逐版本迁移。
 
 ## 当前处理器
 
@@ -8,16 +8,16 @@
 
 正式 HTTP 也提供 `POST /api/v1/query/processors`（`{protocol_version:1, operation:action, request}`）和受认证保护的 `POST /api/v1/maintenance/processor-submit`（`{protocol_version:1, request:ProcessorBatchRequest, start}`），使用同一应用边界。Web 的“提取”提供标签/记录表单、持久任务、已有结果/集合、字段筛选与证据，以及选定记录综合和完整结果导出。接口认证、请求／响应上限和只读边界见[产品接口技术说明](../architecture/technical/01-product-interface.md#421-统一处理器-http-适配2026-10-18)。
 
-| id（version 均为 `1`）                      | 范围     | 规范与行为                                                                              |
-| ------------------------------------------- | -------- | --------------------------------------------------------------------------------------- |
-| `knowledge-overview` / `knowledge-detailed` | 单文档   | `spec: {}`；沿用现有知识分析产物和证据                                                  |
-| `knowledge-question`                        | 单文档   | `question` 必填                                                                         |
-| `knowledge-long`                            | 单文档   | `purpose` 为 overview/detailed/question；question 用途须填写问题                        |
-| `knowledge-synthesis`                       | 整个集合 | `question`、`policy: require-all / allow-partial`；接受文档、结果或旧知识引用           |
-| `labels`                                    | 单文档   | `question`、`answer_type: boolean / string / enum`；枚举加 `choices`；证据不足返回 null |
-| `records`                                   | 单文档   | `record_meaning`、`fields`，可选 `inclusion`；同一记录的字段联合提取                    |
+| 算子（均为版本 `2`） | 输入 | 行为 |
+| --- | --- | --- |
+| `summary` | 就绪档案 | DSH 持续阅读全文、回查与查看已保存图片；purpose 为 overview/detailed/question，问题模式必填 question |
+| `labels` | 就绪档案 | 问答标注；question 和 answer_type，枚举加 choices |
+| `records` | 就绪档案 | record_meaning、fields，可选 inclusion；联合提取同一记录的字段 |
+| `knowledge-synthesis` | 快照 | 先运行或复用 summary，再基于其记录生成带引用报告；question、policy 必填 |
 
-处理器是可信仓库代码。新增方法通过注册接入，不支持执行用户上传的代码，也没有通用 DAG 编辑器。原来的分析、综合和提取交付入口继续有效。
+单篇只能读取 `archive-document`，多篇只能选择 `snapshot`。不能把原始解析、旧总结或另一算子的结果直接传给单篇算子。处理器是可信代码，不支持上传代码。外部提取提交协议保持独立；其输入准备要求就绪校订稿，长期保留的结果标识为 `external-extraction@2`。
+
+`spec.reads` 可指定 `parts: main/supplementary/all` 和 `roles: all/角色数组`。上下文中看不到未声明的部分、角色和原始对照。summary 固定读取完整正文。单篇复用键包含实际读取部分的内容版本、算子版本、规范、方法和模型；修改标题、标签不会让单篇结果失效。
 
 ## 提交、运行和恢复
 
@@ -28,7 +28,7 @@
   "schema_version": 1,
   "idempotency_key": "my-extraction-001",
   "name": "空气暴露观测",
-  "processor": { "id": "records", "version": "1" },
+  "processor": { "id": "records", "version": "2" },
   "spec": {
     "record_meaning": "一组条件下的一条原文观测，不合并重复测量",
     "fields": [
@@ -45,8 +45,8 @@
   },
   "inputs": [
     {
-      "kind": "document",
-      "document_version_id": "00000000-0000-0000-0000-000000000001"
+      "kind": "literature",
+      "literature_id": "00000000-0000-0000-0000-000000000001"
     }
   ]
 }
@@ -62,7 +62,23 @@ sciretriever processors run --request /absolute/path/request.json --json
 
 MCP 写工具需以 maintenance 模式启动。`submit_processor` 接收 `{request: 上述对象}`，提交后启动后台任务；用 `read_task` 查看，`control_task` 暂停、恢复、取消或显式重试失败目标。CLI 用已有 `jobs pause/cancel/resume/retry`。运行依赖所属进程持续存活；重启后显式运行同一 job 即可恢复。
 
-输入还可写为 `{kind:"literature",literature_id}`，提交时解析为当时的主 PDF 默认文档；没有材料的成员保留为缺口。后续任务可使用 `{kind:"result",result_id,record_ids:null}`（整份结果）或指定记录 ID 子集，也可使用 `{kind:"knowledge",artifact_id}`。文献 ID、文档 ID、结果 ID 是不同种类的引用。
+输入使用 `{kind:"literature",literature_id}` 或 `{kind:"snapshot",snapshot_id}`。提交固定当时的校订内容版本；未就绪单篇记为可见缺口，不自动建档。快照创建只纳入 READY 成员，回执单列排除数量。多篇只能选一个快照；同一文献的多条记录不会成为多篇独立证据。
+
+```bash
+sciretriever snapshot create --ids <文献ID列表>
+sciretriever snapshot create --filter /absolute/path/library-query.json
+sciretriever snapshot show <快照ID>
+sciretriever snapshot diff <旧快照ID> <新快照ID>
+sciretriever processor run summary@2 --literature <文献ID>
+sciretriever processor run knowledge-synthesis@2 --snapshot <快照ID> --spec /absolute/path/spec.json
+sciretriever processor results --stale
+sciretriever processor result <结果ID>
+```
+
+MCP 对应 `snapshot_create`、`snapshots_query`、`submit_processor` 与 `processor_query`。快照与大结果读取均分页有界，按 next_offset / next_after / continuation 续读。快照固定成员及描述，不原地更新；比较明确区分新增、移除、内容变化和描述变化。
+
+结果的四态为“已提取”“原文未报告”“无该部分”“读取不完整”；部分存在但不可用记为 incomplete / part-unavailable。列表、详情同时提供 current/stale、原因及四态计数。版本事件在事实发布事务内标记相关结果，不触发模型。多篇结果仅在声明 uses_description 时因描述变化失效；读取旧结果不会自动重算。
+
 
 提交冻结输入、规范、方法和模型配置。同一 key/同一请求返回原运行；同 key 改请求会冲突。默认文档随后变化不会改变已入队任务；模型绑定无法重建时明确失败，不悄悄换模型。新范围应使用新 key。
 
@@ -133,3 +149,11 @@ CLI 统一为 `processors <action> --request <JSON 文件>`；MCP 为 `processor
 当前离线测试证明执行、保存、复用、恢复和证据链机制；真实语料的抽取准确率、漏抽率和领域适用性仍须单独评估。
 
 [指南索引](README.md) · [技术合同](../architecture/technical/05-knowledge-processing.md) · [ADR 0034](../architecture/decisions/0034-unified-processors-and-results.md)
+
+## 逐值用时核对
+
+结果发布前由平台统一核对证据，`value_checks` 用 `record_id` 与 JSON Pointer 指向每个值（报告对应 claim，pointer 为空）。`text-layer` 表示引用数字能在文字层核对过的校订片段或人工片段中找到；`image-checked` 表示 DSH 已查看所引原图区域并确认；`uncertain` 表示数字不符、原图不清、没有合适证据、模型未配置或预算不足。它们描述抄录核对依据，不代表科学结论已验证。
+
+存疑值照常交付。完整 JSON、CSV/Markdown 导出、字段查询与 Web 结果表保留标注。多篇处理保留所引单篇值的标注；新综合表述不会因为来源经过核对就自动获得同等结论。外部托管候选默认注明尚未做视觉核对，不把接纳校验冒充内容确认。
+
+视觉核对使用 `[proofread].value_check_model` 和 `max_value_check_calls`，复用按固定证据、值、图像 hash、方法与模型绑定的缓存。`provenance.value_check_usage` 记录本次核对的调用与已报告 token；结果本身的复用不会再次调用模型。

@@ -27,6 +27,8 @@ export interface FormDraft {
   answerType: "boolean" | "string" | "enum";
   choices: string;
   reading: "full" | "search";
+  readsPart?: "main" | "supplementary" | "all";
+  readsRole?: string;
   readingQuery: string;
   fields: FieldDraft[];
   submission: Submission | null;
@@ -68,6 +70,7 @@ const fits = (text: string, bytes: number) =>
 export function prepareSubmission(
   state: FormDraft,
   ids: readonly string[],
+  snapshot: string | null = null,
 ): Submission {
   const spec: ProcessorObject = {};
   if (state.kind === "records") {
@@ -141,15 +144,22 @@ export function prepareSubmission(
     scope: state.reading,
     query: state.reading === "search" ? state.readingQuery.trim() : null,
   };
+  spec.reads = {
+    parts: state.readsPart ?? "main",
+    roles:
+      !state.readsRole || state.readsRole === "all" ? "all" : [state.readsRole],
+  };
   const payload = {
     schema_version: 1,
     name:
       state.kind === "records"
         ? `记录提取 · ${state.meaning.trim().slice(0, 80)}`
-        : `文献标签 · ${state.question.trim().slice(0, 80)}`,
-    processor: { id: state.kind, version: "1" },
+        : `问答标注 · ${state.question.trim().slice(0, 80)}`,
+    processor: { id: state.kind, version: "2" },
     spec,
-    inputs: ids.map((id) => ({ kind: "literature", literature_id: id })),
+    inputs: snapshot
+      ? [{ kind: "snapshot", snapshot_id: snapshot }]
+      : ids.map((id) => ({ kind: "literature", literature_id: id })),
   };
   const fingerprint = JSON.stringify(payload);
   if (state.submission?.fingerprint === fingerprint) return state.submission;

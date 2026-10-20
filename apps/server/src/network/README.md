@@ -14,6 +14,4 @@
 
 供应商静态 URL、能力和默认间隔在 providers 的 definition；本目录执行共享政策，不判断文章身份或修改文献事实。
 
-相关说明：[所属技术文档](../../../../docs/architecture/technical/02-task-coordination.md)。
-
-[上级目录](../README.md) · [项目 README](../../../../README.md)
+[上级目录](../README.md)

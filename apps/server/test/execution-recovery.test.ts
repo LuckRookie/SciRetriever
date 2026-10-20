@@ -16,7 +16,7 @@ async function environment(mode: "never" | "notify" | "pause", attempts = 3) {
   );
   const path = join(root, "catalog.sqlite");
   const database = new SqliteWorker(path);
-  await database.upgradeExecutionSchema();
+
   const repository = new ExecutionRepository(database);
   const job = await repository.createJob({
     job_id: `job-${mode}`,

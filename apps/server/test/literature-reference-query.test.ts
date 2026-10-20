@@ -50,6 +50,8 @@ it("reads supported references in both directions with stable v1 pagination and 
       parameters_sha256: null,
     });
     await app.observations.publish({
+      source_type: null,
+      source_type_mapping_version: null,
       observation_id: id(200),
       literature_id: id(1),
       provenance: provenance(201),

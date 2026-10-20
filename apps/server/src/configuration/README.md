@@ -13,6 +13,4 @@
 
 这里只保存管理配置的代码。个人 config.toml、credentials.toml、Cookie 和真实值不进入源码目录。
 
-相关说明：[所属技术文档](../../../../docs/architecture/technical/01-product-interface.md)。
-
-[上级目录](../README.md) · [项目 README](../../../../README.md)
+[上级目录](../README.md)

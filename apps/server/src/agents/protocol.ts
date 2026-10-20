@@ -1,6 +1,15 @@
 import type { ModelRequest, ModelResponse } from "./model-protocol.js";
 
-export type AgentRole = "analysis" | "browser";
+export const AGENT_ROLES = [
+  "analysis",
+  "proofreading",
+  "value-checking",
+  "browser",
+  "tagging",
+  "tag-consolidation",
+  "tag-backfill",
+] as const;
+export type AgentRole = (typeof AGENT_ROLES)[number];
 export type AgentCapability =
   | "structured_text"
   | "image_input"
@@ -231,7 +240,7 @@ export function validateAgentCall(
 ): void {
   if (call === null || typeof call !== "object") invalid();
   if (
-    (call.role !== "analysis" && call.role !== "browser") ||
+    !AGENT_ROLES.includes(call.role) ||
     !Array.isArray(call.messages) ||
     call.messages.length === 0 ||
     (history === "atomic" && call.messages.length > 128) ||

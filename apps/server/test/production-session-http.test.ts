@@ -31,7 +31,6 @@ function interruptedReport(articleId: string): DatabaseCompletionReport {
         literature_id: id,
       },
     ],
-    no_usable_content_literature_ids: [],
   };
 }
 function completedReport(articleId: string): DatabaseCompletionReport {
@@ -47,7 +46,6 @@ function completedReport(articleId: string): DatabaseCompletionReport {
     skipped: [],
     notStarted: [],
     interrupted: [],
-    no_usable_content_literature_ids: [],
   };
 }
 
@@ -355,7 +353,6 @@ it("retains a stable failed report while showing a separately committed Library 
         skipped: [],
         notStarted: [],
         interrupted: [],
-        no_usable_content_literature_ids: [],
       };
     },
     async () => ({ sha256: "a".repeat(64), size_bytes: 2048 }),
@@ -393,7 +390,6 @@ it("keeps unstarted targets and classifies an unexpected exception without expos
       skipped: [],
       notStarted: [{ target: { kind: "literature", literature_id: id } }],
       interrupted: [],
-      no_usable_content_literature_ids: [],
     };
   });
   notStarted.start(id);

@@ -19,3 +19,13 @@
 `dsh-document-session.test.ts` 使用合成正文和栅格资源，验证真实 DSH 会话的未读提交拒绝、看图、回查、错误引用修正和完整 usage。`dsh-analysis-fixture.ts` 只提供 fake 模型政策，保留实际 DSH 工具循环；`browser-decision-fixture.ts` 驱动正式 Browser capability，不保留生产单次兼容入口。
 
 `react-workbench-fixture.ts` 将实际 Vite 与阅读资源装入既有独立查询/维护 HTTP 服务。`document-read`、`knowledge-analysis`、`synthesis-service` 和 `knowledge-retrieval-migration` 的浏览器部分通过这个入口继续验证固定版本、来源绑定、证据续读、迟到响应隔离和历史 schema 读取；不另造测试专用业务 API。
+
+`legacy-application-fixture.ts`、`legacy-parser-fixture.ts`、`legacy-parser-publication.ts` 和 `legacy-document-fixture.ts` 只为历史版本 的读取、固定证据和存储保护回归构造旧文档，不进入生产组装。正式解析入口的回归使用双模式 raw fake，明确断言不会发布 ParserResult 或 Document。`raw-parser-fixture.ts` 只将合成测试文字构造成两份 raw，无法访问网络。
+
+- `proofread-document-publication.test.ts`、`proofread-document-migration.test.ts`：校订全文发布/复用/CAS、原始输入变化、页码证据防篡改、补充材料、对照续读、检索与迁移失败恢复；仅使用合成临时库。
+
+`structure-rules.test.ts` 覆盖纯规则、图表、引用切分及结构条件；`structure-annotation.test.ts` 覆盖 DSH fake、不可变发布/复用、人工角色事务、并发和固定分页以及 CLI/MCP；`structure-annotation-migration.test.ts` 覆盖合成 v13→v14 的备份、回滚和重试。
+
+`mineru-http`、`mineru-parser`、`raw-parsing-service` 与 `literature-completion` 使用新的原始解析路径，保留资源闭包、CRC/路径检查、凭据撤销、并发/取消、失败恢复与禁止隐式总结的断言。`parsing-service.test.ts` 仅验证历史 fixture 的不可变发布，不作为新生产解析已验收的独立证据。
+
+`parser-application-fixture.ts` 给旧式合成文字生成器提供匹配的合成可见文字层，隔离占位 PDF 的实际渲染依赖；用于验证固定文档、读取、检索与交付，不证明 OCR 或校订质量。校订专用测试仍独立提供有冲突的文字层/原图 fake，保留错误处置与真实性断言。

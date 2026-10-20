@@ -1,3 +1,4 @@
+import type { MetadataFieldState } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
 import {
   canonicalJsonBytes,
@@ -176,6 +177,7 @@ async function changedLiterature(
   literature: Literature,
   metadataRevision: number,
   metadataSha256?: string,
+  fieldStates: readonly MetadataFieldState[] = [],
 ): Promise<IdentityPublicationCommand["literatures"][number]> {
   return Object.freeze({
     literature,
@@ -183,6 +185,7 @@ async function changedLiterature(
     metadata_sha256:
       metadataSha256 ?? (await sha256(canonicalJsonBytes(literature.metadata))),
     fallback_identity_sha256: await fallbackDigest(literature),
+    field_states: fieldStates,
   });
 }
 
@@ -305,7 +308,8 @@ async function identityReadRequest(
                 abstract: null,
                 publication_date: null,
                 publication_year: null,
-                document_type: null,
+                publication_form: null,
+                article_kind: null,
                 language: null,
                 venue: null,
                 publisher: null,
@@ -373,6 +377,7 @@ export class LiteratureIdentityService {
       current_metadata: current?.metadata ?? null,
       metadata_revision: currentFact?.metadata_revision ?? 1,
       content_ready: currentFact?.content_ready ?? false,
+      field_states: currentFact?.field_states ?? [],
     });
     if (acceptance.outcome === "rejected") return rejected(acceptance.reason);
     const publication = current
@@ -440,7 +445,14 @@ export class LiteratureIdentityService {
         });
     return Object.assign(
       {
-        literatures: [await changedLiterature(literature, 1)],
+        literatures: [
+          await changedLiterature(
+            literature,
+            1,
+            undefined,
+            projection.field_states,
+          ),
+        ],
         meta_literatures: [meta],
         observation: {
           literature_id: literature.literature_id,
@@ -476,7 +488,14 @@ export class LiteratureIdentityService {
     const target = versionTarget(context, current, observation);
     if (!target || target.meta_literature_id === current.meta_literature_id) {
       const changed = projection.changed
-        ? [await changedLiterature(updated, projection.metadata_revision)]
+        ? [
+            await changedLiterature(
+              updated,
+              projection.metadata_revision,
+              undefined,
+              projection.field_states,
+            ),
+          ]
         : [];
       return Object.assign(
         {
@@ -542,6 +561,9 @@ export class LiteratureIdentityService {
           item.literature_id === current.literature_id
             ? undefined
             : fact.metadata_sha256,
+          item.literature_id === current.literature_id
+            ? projection.field_states
+            : fact.field_states,
         );
       }),
     );

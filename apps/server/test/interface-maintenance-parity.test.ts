@@ -1,3 +1,4 @@
+import { processorFixture } from "./processor-fixture.js";
 import {
   EXTRACTION_SCHEMA_URI,
   extractionSpecHash,
@@ -76,7 +77,7 @@ describe("machine interfaces over shared maintenance owners", () => {
             schema_version: 1,
             idempotency_key: "parity-saved-task",
             operations: [
-              { operation: "parse-documents", request: env.parseRequest },
+              { operation: "parse-documents", request: env.rawParseRequest },
             ],
           },
         },
@@ -223,7 +224,9 @@ describe("machine interfaces over shared maintenance owners", () => {
     }
   }, 30000);
   it("delivers the same evidence-linked extraction candidates through MCP and CLI with persistent receipts", async () => {
-    const env = await coreProcessingFixture();
+    const env = await processorFixture();
+    await env.build(env.parseRequest);
+    const setupParseCalls = env.parseCalls;
     const host = createMcpServer({
       home: env.home,
       maintenance: true,
@@ -354,7 +357,7 @@ describe("machine interfaces over shared maintenance owners", () => {
         },
       );
       expect(rejected.code).toBe(3);
-      expect(env.parseCalls).toBe(0);
+      expect(env.parseCalls).toBe(setupParseCalls);
       expect(env.modelCalls).toBe(0);
     } finally {
       await client.close();

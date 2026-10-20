@@ -5,21 +5,20 @@ import {
   type ProcessingOperation,
   type ProcessingTaskRequest,
 } from "@sciretriever/contracts";
-import type { ArticleIdentityService } from "../../parsing/article-identity.js";
+import { randomUUID } from "node:crypto";
+import type { ArchiveOrchestrator } from "../../archive/orchestrator.js";
 import type { DocumentProcessingService } from "../../document/service.js";
-import type { KnowledgeAnalysisService } from "../../analysis/knowledge.js";
-import type { KnowledgeSynthesisService } from "../../analysis/synthesis.js";
+import type { ArticleIdentityService } from "../../parsing/article-identity.js";
 import type { ExecutionRepository } from "../../storage/execution/repository.js";
 import type { ExecutionTarget } from "../../storage/sqlite/worker.js";
+import { WriteAdmissionError } from "../../storage/write-admission.js";
 import {
   ExecutionQueue,
   QueueInterruptedError,
   QueueTargetFailureError,
-  type ExecutionTaskService,
   type ExecutionRunResult,
+  type ExecutionTaskService,
 } from "./service.js";
-import { randomUUID } from "node:crypto";
-import { WriteAdmissionError } from "../../storage/write-admission.js";
 
 export class ProcessingTaskError extends Error {
   constructor(readonly code: string) {
@@ -28,6 +27,8 @@ export class ProcessingTaskError extends Error {
   }
 }
 export interface ProcessingRuntime {
+  readonly tags?: Pick<import("../../tags/service.js").TagService, "backfill">;
+  readonly archive?: ArchiveOrchestrator;
   readonly processors?: {
     execute(
       value: unknown,
@@ -36,8 +37,6 @@ export interface ProcessingRuntime {
     finish(jobId: string, request: ProcessingTaskRequest): Promise<void>;
   };
   readonly documents: Pick<DocumentProcessingService, "parseDocuments">;
-  readonly analysis: Pick<KnowledgeAnalysisService, "analyze" | "analyzeLong">;
-  readonly synthesis: Pick<KnowledgeSynthesisService, "synthesize"> | null;
   readonly identity: Pick<ArticleIdentityService, "assess"> | null;
 }
 export async function processingEvents(
@@ -68,6 +67,9 @@ export async function readProcessingTask(
     targets,
     results: events
       .filter((e) => e.kind === "processing-result")
+      .map((e) => e.payload),
+    partial_results: events
+      .filter((e) => e.kind === "processing-partial-result")
       .map((e) => e.payload),
     collections: events
       .filter((e) => e.kind === "processor-collection")
@@ -412,98 +414,151 @@ export class ProcessingTaskService {
       return this.legacy.runJob(jobId, { signal, boot_id: this.bootId });
     }
     const request = await parseProcessingTaskRequest(snapshot.request);
-    const results = await this.queue.runUntilIdle(
-      jobId,
-      async (target, active) => {
-        const resultId = `${target.target_id}:result`;
-        // The immutable operation receipt wins even if the process died before marking its attempt complete.
-        const saved = (await this.events(jobId)).find(
-          (e) => e.event_id === resultId,
-        );
-        if (saved)
-          return (saved.payload as { disposition?: unknown }).disposition ===
-            "skipped"
-            ? "skipped"
-            : "completed";
-        const operation = request.operations[target.ordinal];
-        if (!operation || target.target_id !== `${jobId}:${target.ordinal}`)
-          throw new ProcessingTaskError("processing-snapshot-invalid");
-        try {
-          if (active.aborted) throw new QueueInterruptedError();
-          const result = await this.perform(operation, active);
-          const disposition =
-            result.outcome === "blocked"
+    const hasArchive = request.operations.some(
+      (o) => o.operation === "build-archive",
+    );
+    if (hasArchive)
+      await this.runtime.archive?.beginBatch(jobId, this.repository);
+    let results: readonly ExecutionRunResult[];
+    try {
+      results = await this.queue.runUntilIdle(
+        jobId,
+        async (target, active) => {
+          const resultId = `${target.target_id}:result`;
+          // The immutable operation receipt wins even if the process died before marking its attempt complete.
+          const saved = (await this.events(jobId)).find(
+            (e) => e.event_id === resultId,
+          );
+          if (saved)
+            return (saved.payload as { disposition?: unknown }).disposition ===
+              "skipped"
+              ? "skipped"
+              : "completed";
+          const operation = request.operations[target.ordinal];
+          if (!operation || target.target_id !== `${jobId}:${target.ordinal}`)
+            throw new ProcessingTaskError("processing-snapshot-invalid");
+          try {
+            if (active.aborted) throw new QueueInterruptedError();
+            const result = await this.perform(operation, active, jobId);
+            if (
+              operation.operation === "parse-documents" &&
+              Array.isArray(result.profiles) &&
+              result.profiles.some((p) => p.status === "failed")
+            ) {
+              await this.repository.appendEvent({
+                event_id: `parse-partial:${randomUUID()}`,
+                job_id: jobId,
+                sequence: -1,
+                kind: "processing-partial-result",
+                payload: {
+                  target_id: target.target_id,
+                  operation: operation.operation,
+                  result,
+                },
+                created_at: new Date().toISOString(),
+              });
+              throw new ProcessingTaskError("parser-partial-failure");
+            }
+            if (
+              operation.operation === "build-archive" &&
+              result.outcome === "failed"
+            ) {
+              await this.repository.appendEvent({
+                event_id: `archive-partial:${randomUUID()}`,
+                job_id: jobId,
+                sequence: -1,
+                kind: "processing-partial-result",
+                payload: {
+                  target_id: target.target_id,
+                  operation: operation.operation,
+                  result,
+                },
+                created_at: new Date().toISOString(),
+              });
+              throw new ProcessingTaskError("archive-failed");
+            }
+            const disposition = [
+              "blocked",
+              "needs-parse",
+              "needs-pdf",
+              "excluded",
+            ].includes(String(result.outcome))
               ? ("skipped" as const)
               : ("completed" as const);
-          await this.repository.appendEvent({
-            event_id: resultId,
-            job_id: jobId,
-            sequence: -1,
-            kind: "processing-result",
-            payload: {
-              target_id: target.target_id,
-              operation: operation.operation,
-              result,
-              disposition,
-            },
-            created_at: new Date().toISOString(),
-          });
-          return disposition;
-        } catch (error) {
-          if (active.aborted) throw new QueueInterruptedError();
-          const code =
-            error &&
-            typeof error === "object" &&
-            "code" in error &&
-            typeof error.code === "string" &&
-            /^[a-z][a-z0-9-]{1,95}$/u.test(error.code)
-              ? error.code
-              : "processing-failed";
-          const unconfigured = [
-            "knowledge-unconfigured",
-            "agent-role-unconfigured",
-            "agent-unconfigured",
-            "agent-configuration",
-          ].includes(code);
-          throw new QueueTargetFailureError({
-            code,
-            reason:
+            await this.repository.appendEvent({
+              event_id: resultId,
+              job_id: jobId,
+              sequence: -1,
+              kind: "processing-result",
+              payload: {
+                target_id: target.target_id,
+                operation: operation.operation,
+                result,
+                disposition,
+              },
+              created_at: new Date().toISOString(),
+            });
+            return disposition;
+          } catch (error) {
+            if (active.aborted) throw new QueueInterruptedError();
+            const code =
               error &&
               typeof error === "object" &&
-              "reason" in error &&
-              typeof error.reason === "string" &&
-              /^agent-[a-z-]{1,56}$/u.test(error.reason)
-                ? error.reason
-                : unconfigured
-                  ? "The analysis model binding is missing or unavailable."
-                  : "The requested product operation did not complete.",
-            action: unconfigured
-              ? "Configure the analysis model, restart the service, then explicitly retry the task."
-              : "Read the failure and retained artifacts before explicitly retrying.",
-            retryable: !!(
-              error &&
-              typeof error === "object" &&
-              "retryable" in error &&
-              error.retryable === true
-            ),
-          });
-        }
-      },
-      {
-        signal,
-        boot_id: this.bootId,
-        workspace_id: `processing:${jobId}`,
-        max_retries: 0,
-        max_targets: request.schema_version === 2 ? 10000 : 100,
-        stage_for_target: (target) =>
-          request.operations[target.ordinal]?.operation === "parse-documents"
-            ? "parsing"
-            : request.operations[target.ordinal]?.operation ===
-                "assess-article-identity"
-              ? "literature"
-              : "analysis",
-      },
-    );
+              "code" in error &&
+              typeof error.code === "string" &&
+              /^[a-z][a-z0-9-]{1,95}$/u.test(error.code)
+                ? error.code
+                : "processing-failed";
+            const unconfigured = [
+              "knowledge-unconfigured",
+              "agent-role-unconfigured",
+              "agent-unconfigured",
+              "agent-configuration",
+            ].includes(code);
+            throw new QueueTargetFailureError({
+              code,
+              reason:
+                error &&
+                typeof error === "object" &&
+                "reason" in error &&
+                typeof error.reason === "string" &&
+                /^agent-[a-z-]{1,56}$/u.test(error.reason)
+                  ? error.reason
+                  : unconfigured
+                    ? "The analysis model binding is missing or unavailable."
+                    : "The requested product operation did not complete.",
+              action: unconfigured
+                ? "Configure the analysis model, restart the service, then explicitly retry the task."
+                : "Read the failure and retained artifacts before explicitly retrying.",
+              retryable: !!(
+                error &&
+                typeof error === "object" &&
+                "retryable" in error &&
+                error.retryable === true
+              ),
+            });
+          }
+        },
+        {
+          signal,
+          concurrency: hasArchive ? this.maxConcurrent : 1,
+          boot_id: this.bootId,
+          workspace_id: `processing:${jobId}`,
+          max_retries: 0,
+          max_targets: request.operations.length,
+          stage_for_target: (target) =>
+            request.operations[target.ordinal]?.operation === "parse-documents"
+              ? "parsing"
+              : request.operations[target.ordinal]?.operation ===
+                  "assess-article-identity"
+                ? "literature"
+                : "analysis",
+        },
+      );
+    } finally {
+      if (hasArchive)
+        await this.runtime.archive?.finish(jobId, this.repository);
+    }
     if (request.schema_version === 2) {
       if (!this.runtime.processors)
         throw new ProcessingTaskError("processor-unavailable");
@@ -514,8 +569,23 @@ export class ProcessingTaskService {
   private async perform(
     operation: ProcessingOperation,
     signal: AbortSignal,
+    jobId: string,
   ): Promise<Record<string, unknown>> {
     switch (operation.operation) {
+      case "backfill-tags": {
+        if (!this.runtime.tags)
+          throw new ProcessingTaskError("tags-unavailable");
+        return this.runtime.tags.backfill(
+          operation.request.tag_ids,
+          false,
+          signal,
+        );
+      }
+      case "build-archive": {
+        if (!this.runtime.archive)
+          throw new ProcessingTaskError("archive-unavailable");
+        return this.runtime.archive.build(operation.request, signal, jobId);
+      }
       case "run-processor": {
         if (!this.runtime.processors)
           throw new ProcessingTaskError("processor-unavailable");
@@ -526,13 +596,7 @@ export class ProcessingTaskService {
           operation.request,
           signal,
         );
-        return {
-          document_version_id: r.document.document_version_id,
-          representation_sha256: r.document.representation_sha256,
-          published: r.published,
-          default_updated: r.default_updated,
-          default_revision: r.default_revision,
-        };
+        return { ...r };
       }
       case "assess-article-identity": {
         if (!this.runtime.identity)
@@ -542,38 +606,6 @@ export class ProcessingTaskService {
           assessment_id: r.assessment.assessment_id,
           status: r.assessment.status,
           published: r.published,
-        };
-      }
-      case "analyze":
-      case "analyze-long": {
-        const r =
-          operation.operation === "analyze"
-            ? await this.runtime.analysis.analyze(operation.request, signal)
-            : await this.runtime.analysis.analyzeLong(
-                operation.request,
-                signal,
-              );
-        return {
-          artifact_id: r.artifact.artifact_id,
-          content_sha256: r.artifact.content_ref.sha256,
-          published: r.published,
-          default_updated: r.default_updated,
-          default_update_outcome: r.default_update_outcome,
-        };
-      }
-      case "synthesize": {
-        if (!this.runtime.synthesis)
-          throw new ProcessingTaskError("synthesis-unavailable");
-        const r = await this.runtime.synthesis.synthesize(
-          operation.request,
-          signal,
-        );
-        return {
-          outcome: r.outcome,
-          artifact_id: r.artifact?.artifact_id ?? null,
-          content_sha256: r.artifact?.content_ref.sha256 ?? null,
-          published: r.published,
-          gaps: r.gaps,
         };
       }
     }

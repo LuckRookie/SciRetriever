@@ -1,20 +1,19 @@
-import { hasManagedArtifactPrefix } from "../artifact-layout.js";
+import { parseArtifactRef } from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import {
+  lstat,
   open,
   readdir,
-  lstat,
   unlink,
   type FileHandle,
 } from "node:fs/promises";
 import { resolve } from "node:path";
-import { parseArtifactRef } from "@sciretriever/contracts";
-import type { RetiredArtifact } from "../../literature/cleanup.js";
+import { hasManagedArtifactPrefix } from "../artifact-layout.js";
 import type { CatalogWriteAdmission } from "../write-admission.js";
-import type { FileStore } from "./store.js";
-import type { ArtifactReclaimer } from "./reclamation.js";
 import { isRelativeArtifactReference } from "./publication.js";
+import type { ArtifactReclaimer, RetiredArtifact } from "./reclamation.js";
+import type { FileStore } from "./store.js";
 
 const DIRECTORY =
   constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;

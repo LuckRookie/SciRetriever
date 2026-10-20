@@ -256,7 +256,6 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         { mode: 0o600 },
       );
       app = await createApplication(home, {
-        executionSchema: "upgrade-synthetic",
         browserRuntime: runtime,
         browserProxy: await proxy.start(),
         browserAdmitNavigation: async (url) =>
@@ -329,6 +328,8 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         await app.database.putLiterature(paper.literature);
         await app.observations.publish({
           ...parseMetadataObservation({
+            source_type: null,
+            source_type_mapping_version: null,
             observation_id: `00000000-0000-0000-0000-00000000970${index}`,
             provenance: {
               provenance_id: `00000000-0000-0000-0000-00000000980${index}`,

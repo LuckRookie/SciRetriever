@@ -29,9 +29,7 @@ import {
   ExtractionStorageError,
   type SqliteWorker,
 } from "../storage/sqlite/worker.js";
-import { ExtractionPreparationService } from "./prepare.js";
-import { ExtractionPreparationError } from "./prepare.js";
-import { validateExtractionPayloads } from "./spec.js";
+import { validateExtractionPayloads, validateExtractionSpec } from "./spec.js";
 import { ExtractionSpecError } from "./spec.js";
 import { WriteAdmissionError } from "../storage/write-admission.js";
 
@@ -174,20 +172,6 @@ function mapped(error: unknown, stage: "input" | "evidence" = "input"): Error {
             : error.code === "write-admission-closed"
               ? "delivery-write-closed"
               : "delivery-write-expired",
-      null,
-      { cause: error },
-    );
-  if (error instanceof ExtractionPreparationError)
-    return new ExtractionDeliveryError(
-      error.code === "preparation-cancelled"
-        ? "delivery-cancelled"
-        : error.code === "input-missing"
-          ? "input-missing"
-          : error.code === "input-unsupported"
-            ? "input-unsupported"
-            : error.code === "input-integrity"
-              ? "input-integrity"
-              : "input-stale",
       null,
       { cause: error },
     );
@@ -461,7 +445,6 @@ export class ExtractionDeliveryService {
   constructor(
     private readonly database: SqliteWorker,
     private readonly documents: DocumentReadService,
-    private readonly preparation: ExtractionPreparationService,
   ) {}
   private run<T>(
     operation: (signal: AbortSignal) => Promise<T>,
@@ -488,20 +471,11 @@ export class ExtractionDeliveryService {
         manifest,
       } = await parseExtractionCreateRequest(value);
       if (stop.aborted) fail("delivery-cancelled");
-      const selections = manifest.items.map((item) => ({
-        input_id: item.input_id,
-        literature_id: item.literature_id,
-        asset_id: item.material?.asset_id ?? null,
-        asset_sha256: item.material?.asset_sha256 ?? null,
-        document_version_id: item.document?.document_version_id ?? null,
-      }));
       try {
-        const prepared = await this.preparation.prepare(
-          { spec, inputs: selections },
-          stop,
-        );
-        if (prepared.manifest.manifest_sha256 !== manifest.manifest_sha256)
-          fail("input-stale");
+        // External callers own their manifest. Readiness applies to platform
+        // processor preparation, not to independent evidence-backed delivery.
+        await validateExtractionSpec(spec, stop);
+        await this.verifyManifest(manifest, stop);
         const row = await this.database.extraction<unknown>(
           "create",
           {
@@ -545,7 +519,11 @@ export class ExtractionDeliveryService {
   ): Promise<void> {
     for (const item of manifest.items) {
       if (signal.aborted) fail("delivery-cancelled");
-      if (!item.material) continue;
+      if (!item.material) {
+        if (!(await this.database.getLiterature(item.literature_id)))
+          fail("input-missing", { input_id: item.input_id });
+        continue;
+      }
       const material = await this.documents
         .materialEvidence(
           {
@@ -574,6 +552,18 @@ export class ExtractionDeliveryService {
           });
         if (
           encode(description.document, 16384) !== encode(item.document, 16384)
+        )
+          fail("input-stale", { input_id: item.input_id });
+        const capabilities = ["material-file-v1", "document-segment-v1"];
+        if (description.capabilities.text)
+          capabilities.push("document-text-v1");
+        if (description.capabilities.outline)
+          capabilities.push("document-outline-v1");
+        if (description.capabilities.resources)
+          capabilities.push("document-resources-v1");
+        if (
+          JSON.stringify([...item.capabilities].sort()) !==
+          JSON.stringify(capabilities.sort())
         )
           fail("input-stale", { input_id: item.input_id });
       }

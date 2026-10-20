@@ -8,7 +8,7 @@ import {
   decodeBibliography,
   importBibliography,
   type BibliographyInputFormat,
-} from "./bibliography.js";
+} from "../literature/bibliography-import.js";
 import { operationRecord as inputRecord } from "./query-operations.js";
 export function createMetadataOperations(app: Application) {
   return {

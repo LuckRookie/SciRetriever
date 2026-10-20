@@ -1,7 +1,7 @@
+import { jobRecord } from "../../data/wire.js";
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  parseDocumentReadResult,
   parseDocumentRequest,
   type ProcessingOperation,
 } from "@sciretriever/contracts";
@@ -14,9 +14,9 @@ import {
   TextField,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
+import { archiveWrite } from "../../data/archive.js";
 import { readLiterature } from "../../data/library.js";
 import {
-  analysisOperation,
   createTask,
   identityOperation,
   processingTask,
@@ -38,7 +38,8 @@ export function download(blob: Blob, name: string) {
 const labels: Record<string, string> = {
   acquire: "获取 PDF",
   parse: "解析 PDF",
-  analyze: "分析文献",
+  analyze: "生成总结",
+  archive: "建立文献档案",
   identity: "核验文章身份",
   export: "导出书目",
   upload: "补充 PDF",
@@ -60,7 +61,6 @@ export function OperationDialog({
   const [key] = useState(randomId),
     [purpose, setPurpose] = useState("overview"),
     [question, setQuestion] = useState(""),
-    [long, setLong] = useState(false),
     [format, setFormat] = useState("bibtex"),
     [policy, setPolicy] = useState("never"),
     [attempts, setAttempts] = useState("1000"),
@@ -151,21 +151,50 @@ export function OperationDialog({
         setTasks([id]);
         return "任务已保存；执行进度与结果请查看任务。";
       }
+      if (kind === "archive") {
+        await archiveWrite(
+          api,
+          "archive",
+          {
+            operation: "build",
+            request: {
+              selector: { kind: "literatures", literature_ids: unique },
+              mode: "full",
+              from_step: null,
+              idempotency_key: key,
+            },
+          },
+          controller.current.signal,
+        );
+        return "建档任务已提交；不会重新调用解析服务。";
+      }
+      if (kind === "analyze") {
+        const response = await api.submitProcessor(
+          {
+            schema_version: 1,
+            idempotency_key: key,
+            name: "文献总结",
+            processor: { id: "summary", version: "2" },
+            spec: {
+              purpose,
+              question: purpose === "question" ? question : null,
+            },
+            inputs: unique.map((literature_id) => ({
+              kind: "literature",
+              literature_id,
+            })),
+          },
+          true,
+          controller.current.signal,
+        );
+        setTasks([String(jobRecord(response.task).job_id)]);
+        return "总结任务已提交；未就绪文献将作为缺口显示。";
+      }
       const operations: ProcessingOperation[] = [],
         missing: string[] = [];
       for (const id of unique) {
         try {
-          if (kind === "analyze")
-            operations.push(
-              await analysisOperation(
-                operationContext,
-                id,
-                purpose,
-                purpose === "question" ? question : null,
-                long,
-              ),
-            );
-          else if (kind === "identity")
+          if (kind === "identity")
             operations.push(await identityOperation(operationContext, id));
           else if (kind === "parse") {
             const detail = await readLiterature(
@@ -180,23 +209,11 @@ export function OperationDialog({
               asset_id: asset.asset_id,
               asset_sha256: asset.sha256,
             };
-            const current = parseDocumentReadResult(
-              "default",
-              (
-                await api.query(
-                  "document-default",
-                  source,
-                  controller.current.signal,
-                )
-              ).result,
-              source,
-            );
             operations.push({
               operation: "parse-documents",
               request: parseDocumentRequest({
                 ...source,
-                mode: "reparse",
-                expected_default_revision: current.default?.revision ?? null,
+                force: false,
               }),
             });
           } else throw new Error("不支持的操作");
@@ -317,7 +334,6 @@ export function OperationDialog({
               onChange={setQuestion}
             />
           )}
-          <Checkbox label="长文分析" isSelected={long} onChange={setLong} />
           <p className="muted">
             DSH 在同一会话中阅读原文、图像与证据后提交结果。
           </p>

@@ -1,3 +1,5 @@
+import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
+import { FIXTURE_DOI } from "../../server/src/workbench/synthetic-fixture.js";
 import {
   workbenchTestAccess,
   loginWorkbenchPage,
@@ -10,17 +12,23 @@ import {
 } from "./next-workspace-fixture.js";
 import { chromium } from "playwright";
 import { expect, it } from "vitest";
-import { coreProcessingFixture } from "../../server/test/core-processing-fixture.js";
+import { processorFixture as coreProcessingFixture } from "../../server/test/processor-fixture.js";
 import { createQueryApplication } from "../../server/src/bootstrap/application.js";
-import { taskHttpAdapters } from "../../server/src/bootstrap/workbench.js";
+import {
+  taskHttpAdapters,
+  processorHttpAdapters,
+} from "../../server/src/bootstrap/workbench.js";
 import {
   startWorkbenchHttp,
   type WorkbenchStaticAsset,
 } from "../../server/src/workbench/http.js";
 import { ProductionWorkbenchSession } from "../../server/src/workbench/production-session.js";
 
-it("uses the authenticated library workspace to read original bytes, run durable parsing and analysis, and reopen verified knowledge", async () => {
+it("keeps parsing separate from document publication and reads existing verified knowledge in the authenticated workspace", async () => {
   const env = await coreProcessingFixture();
+  env.setText(
+    `# Synthetic literature workbench\nDOI: ${FIXTURE_DOI}\nA synthetic finding.`,
+  );
   const query = await createQueryApplication(env.home);
   const session = new ProductionWorkbenchSession(null, async () => {
     throw new Error("unexpected browser action");
@@ -31,7 +39,11 @@ it("uses the authenticated library workspace to read original bytes, run durable
     access: workbenchTestAccess,
     ...taskHttpAdapters(env.app),
     session,
-    query: { application: query, maintenance: env.app.maintenance! },
+    query: {
+      application: query,
+      maintenance: env.app.maintenance!,
+      ...processorHttpAdapters(env.app),
+    },
     maintenance: env.app.maintenance!,
     library: {
       queries: env.app.library,
@@ -55,6 +67,7 @@ it("uses the authenticated library workspace to read original bytes, run durable
     page.setDefaultTimeout(5000);
     await loginWorkbenchPage(page, server.origin);
     await page.goto(server.origin + "/");
+    await showAllLibraryStatuses(page);
     await page.locator(".paper-row .paper-open").click();
     await page
       .locator('.reading-pdf-page[data-rendered="true"]')
@@ -71,7 +84,7 @@ it("uses the authenticated library workspace to read original bytes, run durable
     await page.getByRole("menuitem", { name: "下载已核验的原始 PDF" }).click();
     expect((await download).suggestedFilename()).toMatch(/\.pdf$/u);
     await page.getByRole("button", { name: "加入提取", exact: true }).click();
-    await page.getByRole("tab", { name: "外部交付" }).click();
+    await page.getByRole("tab", { name: "规范与外部交付" }).click();
     await page
       .getByRole("button", { name: "使用库中选定范围", exact: true })
       .click();
@@ -116,33 +129,60 @@ it("uses the authenticated library workspace to read original bytes, run durable
         { timeout: 10000 },
       )
       .toEqual({ status: "completed", failures: [] });
-    expect(env.parseCalls).toBe(1);
+    expect(env.parseCalls).toBe(2);
     expect(env.modelCalls).toBe(0);
+    expect(
+      (
+        await env.app.documentRead.default({
+          literature_id: env.parseRequest.literature_id,
+          asset_id: env.asset.asset_id,
+          asset_sha256: env.asset.sha256,
+        })
+      ).default,
+    ).toBeNull();
+    expect(
+      (await env.app.rawParseStorage!.current(env.asset.asset_id)).filter(
+        (s) => s.result,
+      ),
+    ).toHaveLength(2);
     await page.getByRole("button", { name: "查看任务", exact: true }).click();
-    await page
-      .getByRole("button", { name: "打开解析 PDF结果", exact: true })
-      .click();
+    await expect
+      .poll(() => page.getByRole("dialog").textContent())
+      .toContain("各模式的解析结果");
+    expect(
+      await page
+        .getByRole("button", { name: "打开解析 PDF结果", exact: true })
+        .count(),
+    ).toBe(0);
+    // Existing-version reading is independent of the now raw-only parsing boundary.
+    const seeded = await env.build(env.parseRequest);
+    await page.goto(
+      `${server.origin}/?literature=${env.parseRequest.literature_id}&reader=doc&document=${seeded.document.document_version_id}`,
+    );
     await expect
       .poll(() => page.locator(".reading-status:visible").textContent())
       .toContain("全文已加载");
-    expect(new URL(page.url()).searchParams.get("document")).toBeTruthy();
     await page.getByRole("button", { name: "显示目录", exact: true }).click();
     await page.locator(".reader-outline button").first().click();
     expect(await page.locator(".reader-engine-body").textContent()).toContain(
       "A synthetic finding.",
     );
-    expect(env.parseCalls).toBe(1);
+    expect(env.parseCalls).toBe(4);
     await page.getByRole("button", { name: "加入综合", exact: true }).click();
-    await page.getByRole("button", { name: "新建综合", exact: true }).click();
     await page
-      .getByRole("textbox", { name: "研究问题" })
+      .getByRole("button", { name: "从当前筛选生成快照", exact: true })
+      .click();
+    await page
+      .getByRole("textbox", { name: "综合问题" })
       .fill("Compare the synthetic finding");
-    await page.getByRole("button", { name: "固定输入", exact: true }).click();
     await expect
-      .poll(() => page.getByRole("dialog").textContent())
-      .toContain("已固定 1 项");
+      .poll(
+        async () =>
+          (await env.app.snapshots.list({ after: null, limit: 10 })).items
+            .length,
+      )
+      .toBe(1);
     expect(env.modelCalls).toBe(0);
-    await page.keyboard.press("Escape");
     expect(
       await page.locator(".workspace-tabs").textContent(),
       page.url(),
@@ -158,36 +198,46 @@ it("uses the authenticated library workspace to read original bytes, run durable
     await page.getByRole("button", { name: "确认启动", exact: true }).click();
     await expect
       .poll(() => page.getByRole("dialog").textContent())
-      .toContain("已提交 1 项");
-    await expect
-      .poll(
-        async () =>
-          (await env.app.jobs!.listJobs(10)).filter(
-            (job) => job.status === "completed",
-          ).length,
-        { timeout: 10000 },
-      )
-      .toBe(2);
-    expect(env.modelCalls).toBeGreaterThan(0);
-    const callsAfterAnalysis = env.modelCalls;
+      .toContain("总结任务已提交");
     await page.getByRole("button", { name: "查看任务", exact: true }).click();
     await page
-      .getByRole("button", { name: "打开单篇知识分析结果", exact: true })
-      .click();
-    expect(new URL(page.url()).searchParams.get("knowledge")).toBeTruthy();
+      .getByRole("button", { name: "查看本次结果", exact: true })
+      .waitFor();
+    const summaries = (await env.app.processorRead!.list()).items.filter(
+      (result) => result.processor_id === "summary",
+    );
+    expect(summaries).toHaveLength(1);
+    const callsAfterAnalysis = env.modelCalls;
+    await page.goto(
+      `${server.origin}/?literature=${env.parseRequest.literature_id}&reader=know&result=${summaries[0]!.result_id}&resultHash=${summaries[0]!.content_sha256}`,
+    );
     await expect
       .poll(() => page.locator(".reader-summary-scroll").textContent())
       .toContain("A synthetic finding.");
     await page
       .locator(".reader-summary-scroll")
-      .getByRole("button", { name: "[1]", exact: true })
+      .getByRole("button", { name: "[1.1]", exact: true })
       .first()
       .click();
     await expect
       .poll(() => page.locator(".reader-evidence-preview").textContent())
-      .toContain("# Synthetic literature workbench");
+      .toContain("Synthetic literature workbench");
     expect(env.modelCalls).toBe(callsAfterAnalysis);
     await page.keyboard.press("Escape");
+    env.setModel((input) => {
+      const segment = input.segments!.find((s) => s.text.includes("DOI:"))!;
+      return {
+        document_kind: "article",
+        fields: [
+          {
+            field: "doi",
+            value: FIXTURE_DOI,
+            quote: `DOI: ${FIXTURE_DOI}`,
+            segment_id: segment.segment_id,
+          },
+        ],
+      };
+    });
     await page.getByRole("button", { name: "核验身份", exact: true }).click();
     await page.getByRole("button", { name: "确认启动", exact: true }).click();
     await expect
@@ -222,7 +272,7 @@ it("uses the authenticated library workspace to read original bytes, run durable
 }, 60000);
 
 it.each([true, false])(
-  "preserves explicit reparse publication and missing-model recovery (%s)",
+  "preserves the default document during raw parsing and supports missing-model recovery (%s)",
   async (analysisModel) => {
     const w = await nextWorkspace({ analysisModel });
     try {
@@ -240,7 +290,7 @@ it.each([true, false])(
         .click();
       await expect
         .poll(() => w.page.getByRole("dialog").textContent())
-        .toContain("已提交 1 项");
+        .toContain(analysisModel ? "已提交 1 项" : "总结任务已提交");
       const job = (await w.env.app.jobs!.listJobs(10))[0]!;
       await expect
         .poll(
@@ -257,18 +307,29 @@ it.each([true, false])(
           asset_id: w.env.asset.asset_id,
           asset_sha256: w.env.asset.sha256,
         });
-        expect(current.default!.document_version_id).not.toBe(
+        expect(current.default!.document_version_id).toBe(
           w.parsed.document.document_version_id,
         );
         await expect
           .poll(() => w.page.getByRole("dialog").textContent())
-          .toContain("已设为默认全文");
-        await w.page
-          .getByRole("button", { name: "打开解析 PDF结果", exact: true })
-          .click();
-        await expect
-          .poll(() => w.page.locator(".reading-article").textContent())
-          .toContain("NEWLY PARSED");
+          .toContain("各模式的解析结果");
+        expect(
+          await w.page
+            .getByRole("button", { name: "打开解析 PDF结果", exact: true })
+            .count(),
+        ).toBe(0);
+        const raw = (
+          await w.env.app.rawParseStorage!.current(w.env.asset.asset_id)
+        ).find((s) => s.profile === "vlm-engine")!.result!;
+        expect(
+          Buffer.from(
+            await w.env.app.rawParseStorage!.readArtifact(
+              raw.raw_parse_id,
+              "markdown",
+            ),
+          ).toString(),
+        ).toContain("The measured energy was 4.2 eV.");
+        expect(w.env.parseCalls).toBe(w.setupCalls.parser);
       } else {
         await expect
           .poll(() => w.page.getByRole("dialog").textContent())
@@ -278,7 +339,7 @@ it.each([true, false])(
           .first()
           .click();
         expect(await w.page.getByRole("dialog").textContent()).toContain(
-          "knowledge-unconfigured",
+          "agent-configuration",
         );
         await w.page
           .getByRole("button", { name: "前往模型设置", exact: true })

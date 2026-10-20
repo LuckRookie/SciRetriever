@@ -38,7 +38,7 @@ it("serves the React library under the production CSP with persisted preferences
         ),
       ),
     ).toBe("260px");
-    await page.getByRole("button", { name: "筛选", exact: true }).click();
+    await page.getByRole("button", { name: /^筛选(?: · \d+)?$/ }).click();
     await page
       .getByRole("textbox", { name: "年份起", exact: true })
       .fill("2020");

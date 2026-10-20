@@ -1,0 +1,416 @@
+import { createHash } from "node:crypto";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import {
+  canonicalJsonBytes,
+  type ArchiveState,
+  type ArchiveStepReceipt,
+  type ArchiveIssue,
+  type ArchiveVersionEvent,
+} from "@sciretriever/contracts";
+import type * as State from "../../literature/state.js";
+const { deriveCurrentState }: typeof State = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "../../literature/state.ts"
+      : "../../literature/state.js",
+    import.meta.url,
+  ).href
+);
+export type ArchiveStorageAction =
+  | "state"
+  | "issues"
+  | "events"
+  | "stats"
+  | "revision"
+  | "begin"
+  | "step"
+  | "finish"
+  | "resolve"
+  | "hook";
+export const ARCHIVE_READ_ACTIONS: readonly ArchiveStorageAction[] = [
+  "state",
+  "issues",
+  "events",
+  "stats",
+  "revision",
+];
+const hash = (v: unknown) =>
+  createHash("sha256").update(canonicalJsonBytes(v)).digest("hex");
+const json = (v: unknown) =>
+  Buffer.from(canonicalJsonBytes(v)).toString("utf8");
+const version = (v: unknown): string | null =>
+  typeof v === "string" ? hash(JSON.parse(v)) : null;
+const rows = (db: DatabaseSync, sql: string, ...args: SQLInputValue[]) =>
+  db.prepare(sql).all(...args);
+function fail(code: string): never {
+  throw Object.assign(new Error("archive storage refused"), { code });
+}
+export function archiveStates(
+  db: DatabaseSync,
+  id?: string | readonly string[],
+): Map<string, ArchiveState> {
+  const args = id ? [typeof id === "string" ? id : JSON.stringify(id)] : [],
+    where = !id
+      ? ""
+      : typeof id === "string"
+        ? " WHERE m.literature_id=?"
+        : " WHERE m.literature_id IN (SELECT value FROM json_each(?))";
+  const all = rows(
+    db,
+    `SELECT m.*, EXISTS(SELECT 1 FROM literature_metadata_authors a WHERE a.literature_id=m.literature_id) AS has_authors, r.mode, r.asset_id AS run_asset, r.state AS run_state, r.job_id, j.status AS job_status, (SELECT count(*) FROM literature_tag_items i WHERE i.literature_id=m.literature_id) AS tag_count, dh.source_json AS description_json FROM literature_metadata m LEFT JOIN archive_runs r ON r.literature_id=m.literature_id LEFT JOIN execution_jobs j ON j.job_id=r.job_id LEFT JOIN archive_description_heads dh ON dh.literature_id=m.literature_id ${where}`,
+    ...args,
+  );
+  const filter = !id
+    ? ""
+    : typeof id === "string"
+      ? " WHERE literature_id=?"
+      : " WHERE literature_id IN (SELECT value FROM json_each(?))";
+  const parts = rows(
+    db,
+    `SELECT p.*,(SELECT json_group_array(profile) FROM raw_parse_current r WHERE r.source_asset_id=p.asset_id AND r.source_sha256=p.asset_sha256 AND r.raw_parse_id IS NOT NULL) AS profiles_json FROM archive_current_parts p${filter}`,
+    ...args,
+  );
+  const steps = rows(db, `SELECT * FROM archive_steps${filter}`, ...args);
+  const issues = rows(db, `SELECT * FROM archive_issues${filter}`, ...args);
+  const byLit = <T extends { literature_id: unknown }>(list: T[]) => {
+    const map = new Map<string, T[]>();
+    for (const item of list) {
+      const key = String(item.literature_id);
+      const group = map.get(key) ?? [];
+      group.push(item);
+      map.set(key, group);
+    }
+    return map;
+  };
+  const groupedParts = byLit(
+      parts as ({ literature_id: string } & Record<string, unknown>)[],
+    ),
+    groupedSteps = byLit(
+      steps as ({ literature_id: string } & Record<string, unknown>)[],
+    ),
+    groupedIssues = byLit(
+      issues as ({ literature_id: string } & Record<string, unknown>)[],
+    );
+  const result = new Map<string, ArchiveState>();
+  for (const m of all) {
+    const key = String(m.literature_id),
+      material = groupedParts.get(key) ?? [],
+      stepRows = groupedSteps.get(key) ?? [];
+    const main = material.find((p) => p.part === "main"),
+      started = !!main && main.asset_id === m.run_asset;
+    result.set(key, {
+      literature_id: key,
+      mode: m.mode === "legacy-vlm-markdown" ? m.mode : "full",
+      started,
+      running:
+        started &&
+        m.run_state === "running" &&
+        (!m.job_id || m.job_status === "running"),
+      article_kind: m.article_kind as string | null,
+      metadata_missing: [
+        "title",
+        "publication_year",
+        "publication_form",
+        "article_kind",
+      ]
+        .filter((f) => m[f] === null)
+        .concat(m.has_authors ? [] : ["authors"])
+        .map((f) => `metadata-missing:${f}`),
+      tag_count: Number(m.tag_count),
+      description_version: version(m.description_json),
+      parts: material.map((p) => ({
+        asset_id: String(p.asset_id),
+        asset_sha256: String(p.asset_sha256),
+        part: p.part as "main" | "supplementary",
+        raw_profiles: JSON.parse(String(p.profiles_json)),
+        proofread_id: p.proofread_id as string | null,
+        proofread_complete: p.proofread_status === "complete",
+        document_version_id: p.document_version_id as string | null,
+        structure_annotation_id: p.annotation_id as string | null,
+        structure_satisfied: p.structure_satisfied === 1,
+        content_version: version(p.version_json),
+        steps: stepRows
+          .filter((s) => s.asset_id === p.asset_id)
+          .map(
+            (s) =>
+              ({
+                literature_id: key,
+                asset_id: String(p.asset_id),
+                step: s.step,
+                status: s.status,
+                input_sha256: s.input_sha256,
+                output: JSON.parse(String(s.output_json)),
+                reason: s.reason,
+                elapsed_ms: s.elapsed_ms,
+                calls: s.calls,
+                input_tokens: s.input_tokens,
+                output_tokens: s.output_tokens,
+              }) as ArchiveStepReceipt,
+          ),
+      })),
+      issues: (groupedIssues.get(key) ?? []).flatMap((i) => {
+        const part = material.find((p) => p.asset_id === i.asset_id);
+        return part
+          ? [
+              {
+                issue_id: String(i.issue_id),
+                literature_id: key,
+                asset_id: String(i.asset_id),
+                part: part.part as "main" | "supplementary",
+                step: i.step as ArchiveIssue["step"],
+                reason: String(i.reason),
+                detail: JSON.parse(String(i.detail_json)),
+                affects_readiness:
+                  part.part === "main" && i.step !== "references",
+                resolution: i.resolution as ArchiveIssue["resolution"],
+              },
+            ]
+          : [];
+      }),
+    });
+  }
+  return result;
+}
+export function archiveState(
+  db: DatabaseSync,
+  id: string,
+  maxTags = 6,
+  archiveProfile: "pipeline" | "vlm-engine" = "vlm-engine",
+) {
+  const state = archiveStates(db, id).get(id);
+  if (!state) fail("archive-literature-missing");
+  return { ...state, ...deriveCurrentState(state, maxTags, archiveProfile) };
+}
+function transaction<T>(db: DatabaseSync, write: boolean, fn: () => T): T {
+  db.exec(write ? "BEGIN IMMEDIATE" : "BEGIN");
+  try {
+    const result = fn();
+    db.exec("COMMIT");
+    return result;
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+}
+export function runArchiveStorage(
+  db: DatabaseSync,
+  action: ArchiveStorageAction,
+  args: unknown,
+  maxTags = 6,
+  archiveProfile: "pipeline" | "vlm-engine" = "vlm-engine",
+): unknown {
+  const r = args as Record<string, unknown>;
+  return transaction(db, !ARCHIVE_READ_ACTIONS.includes(action), () => {
+    if (action === "state")
+      return archiveState(db, String(r.literature_id), maxTags, archiveProfile);
+    if (action === "events")
+      return rows(
+        db,
+        "SELECT * FROM archive_version_events WHERE sequence>? ORDER BY sequence LIMIT ?",
+        Number(r.after ?? 0),
+        Math.min(1000, Number(r.limit ?? 100)),
+      ).map(
+        (e) =>
+          ({
+            sequence: Number(e.sequence),
+            kind: e.kind,
+            literature_id: e.literature_id,
+            asset_id: e.asset_id,
+            old_part: e.old_part,
+            new_part: e.new_part,
+            old_version: version(e.old_json),
+            new_version: version(e.new_json),
+            created_at: e.created_at,
+          }) as ArchiveVersionEvent,
+      );
+    if (action === "revision")
+      return {
+        revision: JSON.stringify(
+          db
+            .prepare(
+              "SELECT (SELECT COALESCE(MAX(sequence),0) FROM archive_version_events) AS facts,(SELECT count(*) FROM processor_results) AS results,(SELECT count(*) FROM snapshots) AS snapshots,(SELECT version FROM vocabulary_state WHERE singleton=1) AS vocabulary,(SELECT MAX(started_at||COALESCE(finished_at,'')||state) FROM archive_runs) AS runs",
+            )
+            .get(),
+        ),
+      };
+    if (action === "issues") {
+      const all = [
+        ...archiveStates(
+          db,
+          typeof r.literature_id === "string"
+            ? r.literature_id
+            : rows(db, "SELECT DISTINCT literature_id FROM archive_issues").map(
+                (row) => String(row.literature_id),
+              ),
+        ).values(),
+      ].flatMap((s) => s.issues);
+      const grouped = all.filter(
+        (i) => r.include_resolved || i.resolution === null,
+      );
+      const filtered = grouped.filter(
+        (i) =>
+          (!r.reason || i.reason === r.reason) &&
+          (!r.part || i.part === r.part) &&
+          (r.include_resolved || i.resolution === null),
+      );
+      const offset = Number(r.offset ?? 0),
+        limit = Math.min(200, Number(r.limit ?? 50));
+      return {
+        items: filtered.slice(offset, offset + limit),
+        groups: [...new Set(grouped.map((i) => i.reason))].map((reason) => ({
+          reason,
+          count: grouped.filter((i) => i.reason === reason).length,
+        })),
+        total_count: filtered.length,
+        next_offset: offset + limit < filtered.length ? offset + limit : null,
+      };
+    }
+    if (action === "stats")
+      return {
+        parsing: rows(
+          db,
+          "SELECT profile,status,count(*) AS executions,sum(page_count) AS pages,sum(elapsed_ms) AS elapsed_ms FROM raw_parse_attempts GROUP BY profile,status",
+        ),
+        proofreading: rows(
+          db,
+          "SELECT sum(COALESCE(json_extract(stats_json,'$.text_layer_pages'),0)) AS text_layer_pages,sum(COALESCE(json_extract(stats_json,'$.image_only_pages'),0)) AS image_only_pages,sum(COALESCE(json_extract(stats_json,'$.blank_pages'),0)) AS blank_pages,sum(COALESCE(json_extract(stats_json,'$.missing'),0)) AS missing,sum(COALESCE(json_extract(stats_json,'$.extra'),0)) AS extra,sum(COALESCE(json_extract(stats_json,'$.token_mismatch'),0)) AS token_mismatch,sum(COALESCE(json_extract(stats_json,'$.page_misplaced'),0)) AS page_misplaced,sum(COALESCE(json_extract(stats_json,'$.fixed'),0)) AS fixed,sum(COALESCE(json_extract(stats_json,'$.draft_correct'),0)) AS draft_correct,sum(COALESCE(json_extract(stats_json,'$.uncertain'),0)) AS uncertain,sum(COALESCE(json_extract(stats_json,'$.uncertain_blocks'),0)) AS uncertain_blocks,sum(COALESCE(json_extract(stats_json,'$.agent_deletions'),0)) AS agent_deletions FROM archive_attempts WHERE step='proofread'",
+        ),
+        steps: rows(
+          db,
+          "SELECT step,count(*) AS executions,sum(elapsed_ms) AS elapsed_ms,sum(calls) AS calls,sum(input_tokens) AS input_tokens,sum(output_tokens) AS output_tokens FROM archive_attempts GROUP BY step",
+        ),
+        hooks: rows(
+          db,
+          "SELECT state,count(*) AS count FROM archive_batch_hooks GROUP BY state",
+        ),
+      };
+    if (action === "begin") {
+      const current = archiveState(
+        db,
+        String(r.literature_id),
+        maxTags,
+        archiveProfile,
+      );
+      const main = current.parts.find((p) => p.part === "main");
+      if (!main || main.asset_id !== r.asset_id) fail("archive-primary-stale");
+      if (current.running) fail("archive-busy");
+      db.prepare(
+        "INSERT INTO archive_runs(literature_id,asset_id,mode,run_id,job_id,state,started_at,finished_at) VALUES(?,?,?,?,?,'running',?,NULL) ON CONFLICT(literature_id) DO UPDATE SET asset_id=excluded.asset_id,mode=excluded.mode,run_id=excluded.run_id,job_id=excluded.job_id,state='running',started_at=excluded.started_at,finished_at=NULL",
+      ).run(
+        String(r.literature_id),
+        String(r.asset_id),
+        String(r.mode),
+        String(r.run_id),
+        r.job_id as string | null,
+        new Date().toISOString(),
+      );
+      return current;
+    }
+    if (action === "finish") {
+      db.prepare(
+        "UPDATE archive_runs SET state=?,finished_at=? WHERE literature_id=? AND run_id=?",
+      ).run(
+        r.interrupted ? "interrupted" : "finished",
+        new Date().toISOString(),
+        String(r.literature_id),
+        String(r.run_id),
+      );
+      return null;
+    }
+    if (action === "step") {
+      const s = r.receipt as unknown as ArchiveStepReceipt,
+        now = new Date().toISOString();
+      if (
+        !db
+          .prepare(
+            "SELECT 1 FROM archive_runs WHERE literature_id=? AND run_id=? AND state='running'",
+          )
+          .get(s.literature_id, String(r.run_id))
+      )
+        fail("archive-run-stale");
+      db.prepare(
+        "INSERT INTO archive_steps VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(literature_id,asset_id,step) DO UPDATE SET status=excluded.status,input_sha256=excluded.input_sha256,output_json=excluded.output_json,reason=excluded.reason,elapsed_ms=excluded.elapsed_ms,calls=excluded.calls,input_tokens=excluded.input_tokens,output_tokens=excluded.output_tokens,updated_at=excluded.updated_at",
+      ).run(
+        s.literature_id,
+        s.asset_id,
+        s.step,
+        s.status,
+        s.input_sha256,
+        json(s.output),
+        s.reason,
+        s.elapsed_ms,
+        s.calls,
+        s.input_tokens,
+        s.output_tokens,
+        now,
+      );
+      if (r.record_attempt)
+        db.prepare(
+          "INSERT INTO archive_attempts(literature_id,asset_id,step,elapsed_ms,calls,input_tokens,output_tokens,stats_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        ).run(
+          s.literature_id,
+          s.asset_id,
+          s.step,
+          s.elapsed_ms,
+          s.calls,
+          s.input_tokens,
+          s.output_tokens,
+          json(s.output.stats ?? {}),
+          now,
+        );
+      const issue = hash([s.literature_id, s.asset_id, s.step]);
+      if (s.status === "failed" || s.status === "unavailable")
+        db.prepare(
+          "INSERT INTO archive_issues VALUES(?,?,?,?,?,?,NULL,?) ON CONFLICT(issue_id) DO UPDATE SET reason=excluded.reason,detail_json=excluded.detail_json,resolution=NULL,updated_at=excluded.updated_at",
+        ).run(
+          issue,
+          s.literature_id,
+          s.asset_id,
+          s.step,
+          s.reason ?? "archive-step-failed",
+          json(s.output),
+          now,
+        );
+      else if (s.status === "done")
+        db.prepare(
+          "UPDATE archive_issues SET resolution='continue',updated_at=? WHERE issue_id=?",
+        ).run(now, issue);
+      return null;
+    }
+    if (action === "resolve") {
+      const result = db
+        .prepare(
+          "UPDATE archive_issues SET resolution=?,updated_at=? WHERE issue_id=?",
+        )
+        .run(
+          String(r.resolution),
+          new Date().toISOString(),
+          String(r.issue_id),
+        );
+      if (!result.changes) fail("archive-issue-missing");
+      return (
+        db
+          .prepare(
+            "SELECT r.job_id,j.status FROM archive_issues i JOIN archive_runs r ON r.literature_id=i.literature_id JOIN execution_jobs j ON j.job_id=r.job_id WHERE i.issue_id=?",
+          )
+          .get(String(r.issue_id)) ?? null
+      );
+    }
+    if (action === "hook") {
+      if (r.state === "running")
+        return {
+          claimed:
+            db
+              .prepare(
+                "INSERT INTO archive_batch_hooks VALUES(?,'running','{}') ON CONFLICT DO NOTHING",
+              )
+              .run(String(r.job_id)).changes === 1,
+        };
+      db.prepare(
+        "UPDATE archive_batch_hooks SET state=?,result_json=? WHERE job_id=?",
+      ).run(String(r.state), json(r.result), String(r.job_id));
+      return null;
+    }
+    return fail("archive-operation-invalid");
+  });
+}

@@ -1,3 +1,4 @@
+import { archiveQuery, rows } from "../../data/archive.js";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { parseDocumentReadResult } from "@sciretriever/contracts";
@@ -99,19 +100,50 @@ function ProcessingForm() {
     setDraft((current) => ({ ...current, [key]: value }));
     setProblem(null);
   };
-  const selected = Array.from(shell.selected).sort();
+  const selected = Array.from(shell.selected).sort(),
+    snapshot = route.parameters.get("snapshot");
   const scope = useQuery({
     queryKey: [
       "processors",
       "form-scope",
       draft.scope,
+      snapshot,
       selected,
       route.query,
       route.sort,
     ],
     queryFn: async ({ signal }) => {
-      const ids =
-        draft.scope === "selection"
+      const frozen: string[] = [];
+      if (snapshot) {
+        let offset = 0;
+        for (;;) {
+          const page = record(
+            await archiveQuery(
+              api,
+              "snapshots",
+              {
+                operation: "read",
+                request: {
+                  snapshot_id: snapshot,
+                  offset,
+                  limit: 200,
+                  max_bytes: 262144,
+                },
+              },
+              signal,
+            ),
+            "snapshot",
+          );
+          frozen.push(
+            ...rows(page, "members").map((m) => String(m.literature_id)),
+          );
+          if (page.next_offset === null) break;
+          offset = Number(page.next_offset);
+        }
+      }
+      const ids = snapshot
+        ? frozen
+        : draft.scope === "selection"
           ? selected
           : await scopeIds(api, route.query, route.sort, signal);
       if (!ids.length) throw new Error("当前范围没有文献，请先从文献库选择。");
@@ -123,11 +155,11 @@ function ProcessingForm() {
         !["labels", "records"].every((id) =>
           registry.some((raw) => {
             const p = record(raw, "processor");
-            return p.id === id && p.version === "1";
+            return p.id === id && p.version === "2";
           }),
         )
       )
-        throw new Error("当前服务不支持此版本的标签或记录提取。");
+        throw new Error("当前服务不支持此版本的问答标注或记录提取。");
       const gaps: string[] = [];
       let index = 0;
       await Promise.all(
@@ -137,6 +169,10 @@ function ProcessingForm() {
             const id = ids[index++]!,
               paper = await readLiterature(api, id, signal),
               asset = paper.primary_pdf?.asset;
+            if (paper.literature.status !== "READY") {
+              gaps.push(`${paperTitle(paper)} · 未建档就绪`);
+              continue;
+            }
             if (!asset) {
               gaps.push(`${paperTitle(paper)} · 无 PDF`);
               continue;
@@ -162,7 +198,7 @@ function ProcessingForm() {
   const mutation = useMutation({
     mutationFn: async () => {
       if (!scope.data) throw new Error("输入范围尚未就绪。");
-      const submission = prepareSubmission(draft, scope.data.ids);
+      const submission = prepareSubmission(draft, scope.data.ids, snapshot);
       setDraft((current) => ({ ...current, submission }));
       saveDraft(api, { ...draft, submission });
       submission.note = "正在固定输入并保存任务…";
@@ -201,7 +237,7 @@ function ProcessingForm() {
   const validate = () => {
     try {
       if (!scope.data) throw new Error("请先读取文献范围。");
-      prepareSubmission(draft, scope.data.ids);
+      prepareSubmission(draft, scope.data.ids, snapshot);
       setProblem(null);
       setConfirm(true);
     } catch (error) {
@@ -245,7 +281,7 @@ function ProcessingForm() {
             onChange={(value) => set("kind", value as FormDraft["kind"])}
             items={[
               { id: "records", label: "记录提取" },
-              { id: "labels", label: "文献标签" },
+              { id: "labels", label: "问答标注" },
             ]}
           />
           {draft.kind === "records" ? (
@@ -378,6 +414,34 @@ function ProcessingForm() {
               ) : null}
             </>
           )}
+          <Select
+            label="读取部分"
+            value={draft.readsPart ?? "main"}
+            onChange={(v) =>
+              set("readsPart", v as "main" | "supplementary" | "all")
+            }
+            options={[
+              { value: "main", label: "正文" },
+              { value: "supplementary", label: "补充材料" },
+              { value: "all", label: "正文与补充材料" },
+            ]}
+          />
+          <Select
+            label="章节角色"
+            value={draft.readsRole ?? "all"}
+            onChange={(v) => set("readsRole", v)}
+            options={[
+              { value: "all", label: "全部章节" },
+              { value: "abstract", label: "摘要" },
+              { value: "methods", label: "实验方法" },
+              { value: "results", label: "结果" },
+              { value: "discussion", label: "讨论" },
+              { value: "conclusion", label: "结论" },
+              { value: "si-methods", label: "补充实验" },
+              { value: "si-characterization", label: "补充表征" },
+              { value: "si-computation", label: "补充计算" },
+            ]}
+          />
           <RadioGroup
             label="读取范围"
             value={draft.reading}
@@ -398,7 +462,7 @@ function ProcessingForm() {
             />
           ) : null}
           <p className="ui-description">
-            使用已解析正文，不自动获取或解析前序材料。
+            仅使用就绪校订稿，不自动获取或解析前序材料。
           </p>
           {problem ? (
             <p role="alert" className="ui-error-text">
@@ -408,6 +472,7 @@ function ProcessingForm() {
         </form>
         <aside className="processor-aside" aria-label="处理范围与提交">
           <h2>处理哪些文献</h2>
+          {snapshot ? <p>使用固定快照；当前勾选和筛选不会改变成员。</p> : null}
           <Select
             label="文献范围"
             value={draft.scope}
@@ -455,7 +520,7 @@ function ProcessingForm() {
             isDisabled={!scope.data || !mutable}
             onPress={validate}
           >
-            {draft.kind === "records" ? "开始提取" : "生成文献标签"}
+            {draft.kind === "records" ? "开始提取" : "生成问答标注"}
           </Button>
           <p className="ui-description">
             提交时固定输入，会调用已配置的模型。完整匹配的结果会复用。

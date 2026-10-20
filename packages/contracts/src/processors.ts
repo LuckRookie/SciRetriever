@@ -1,4 +1,10 @@
 import {
+  parseProcessorValueChecks,
+  type ProcessorValueCheck,
+} from "./processor-value-checks.js";
+import { parseArchiveInputPart, type ArchiveInputPart } from "./snapshots.js";
+import { parseSectionRole, type SectionRole } from "./section-roles.js";
+import {
   ContractValidationError,
   canonicalJsonBytes,
   parseAssetId,
@@ -28,44 +34,79 @@ export interface ProcessorIdentity {
   readonly id: string;
   readonly version: string;
 }
+export interface ProcessorReads {
+  readonly parts: "main" | "supplementary" | "all";
+  readonly roles: "all" | readonly SectionRole[];
+}
+export interface ArchiveProcessorInput {
+  readonly kind: "archive-document";
+  readonly input_id: string;
+  readonly literature_id: string;
+  readonly parts: readonly ArchiveInputPart[];
+  readonly description_version: string;
+}
+export interface SnapshotProcessorInput {
+  readonly kind: "snapshot";
+  readonly input_id: string;
+  readonly snapshot_id: string;
+  readonly content_sha256: string;
+  readonly mapped_results: readonly {
+    readonly literature_id: string;
+    readonly result_id: string;
+    readonly content_sha256: string;
+  }[];
+}
+export interface ProcessorPartOutcome {
+  readonly literature_id: string;
+  readonly asset_id: string | null;
+  readonly part: "main" | "supplementary";
+  readonly outcome: "extracted" | "not-reported" | "part-absent" | "incomplete";
+  readonly read_segments: readonly string[];
+  readonly gaps: readonly string[];
+}
+export function parseProcessorReads(value: unknown): ProcessorReads {
+  const r = processorExact(value, ["parts", "roles"]);
+  if (!["main", "supplementary", "all"].includes(String(r.parts)))
+    processorFail();
+  const roles =
+    r.roles === "all" ? ("all" as const) : list(r.roles, parseSectionRole, 40);
+  if (
+    roles !== "all" &&
+    (!roles.length || new Set(roles).size !== roles.length)
+  )
+    processorFail();
+  return {
+    parts: r.parts as ProcessorReads["parts"],
+    roles: roles === "all" ? roles : [...roles].sort(),
+  };
+}
 export type ProcessorSelection =
-  | { readonly kind: "literature"; readonly literature_id: string }
-  | { readonly kind: "document"; readonly document_version_id: string }
-  | {
-      readonly kind: "result";
-      readonly result_id: string;
-      readonly record_ids: readonly string[] | null;
-    }
-  | { readonly kind: "knowledge"; readonly artifact_id: string };
+  | { readonly kind: "snapshot"; readonly snapshot_id: string }
+  | { readonly kind: "literature"; readonly literature_id: string };
+/** Retained external submissions are evidence containers, never executable inputs. */
+export interface ExternalProcessorInput {
+  readonly kind: "external";
+  readonly input_id: string;
+  readonly literature_id: string;
+  readonly material: DocumentMaterialRef | null;
+  readonly document: DocumentReadingRef | null;
+}
+export interface ProcessorRecordSource {
+  readonly kind: "result";
+  readonly input_id: string;
+  readonly result_id: string;
+  readonly content_sha256: string;
+  readonly record_ids: readonly string[] | null;
+}
 export type ProcessorInput =
-  | {
-      readonly kind: "material";
-      readonly input_id: string;
-      readonly material: DocumentMaterialRef;
-    }
-  | {
-      readonly kind: "document";
-      readonly input_id: string;
-      readonly document: DocumentReadingRef;
-    }
+  | ArchiveProcessorInput
+  | SnapshotProcessorInput
+  | ExternalProcessorInput
   | {
       readonly kind: "missing";
       readonly input_id: string;
       readonly literature_id: string;
       readonly reason: string;
-    }
-  | {
-      readonly kind: "result";
-      readonly input_id: string;
-      readonly result_id: string;
-      readonly content_sha256: string;
-      readonly record_ids: readonly string[] | null;
-    }
-  | {
-      readonly kind: "knowledge";
-      readonly input_id: string;
-      readonly artifact_id: string;
-      readonly content_sha256: string;
     };
 export interface ProcessorInvocation {
   readonly schema_version: 1;
@@ -73,6 +114,12 @@ export interface ProcessorInvocation {
   readonly spec: ProcessorObject;
   readonly inputs: readonly ProcessorInput[];
   readonly execution: {
+    readonly reads: ProcessorReads;
+    readonly uses_description: boolean;
+    readonly map: {
+      readonly processor: ProcessorIdentity;
+      readonly spec: ProcessorObject;
+    } | null;
     readonly method_sha256: string;
     readonly model: ProcessorObject | null;
   };
@@ -86,6 +133,13 @@ export interface ProcessorBatchRequest {
   readonly inputs: readonly ProcessorSelection[];
 }
 export type ProcessorCitation =
+  | {
+      readonly kind: "snapshot";
+      readonly snapshot_id: string;
+      readonly content_sha256: string;
+      readonly literature_id: string | null;
+      readonly pointer: string;
+    }
   | { readonly kind: "document"; readonly evidence: EvidenceRef }
   | {
       readonly kind: "result";
@@ -93,12 +147,6 @@ export type ProcessorCitation =
       readonly content_sha256: string;
       readonly record_id: string;
       readonly pointer: string;
-    }
-  | {
-      readonly kind: "knowledge";
-      readonly artifact_id: string;
-      readonly content_sha256: string;
-      readonly statement_id: string;
     };
 export interface ProcessorRecord {
   readonly record_id: string;
@@ -111,27 +159,28 @@ export interface ProcessorRecord {
 }
 export type ProcessorContent =
   | {
+      readonly kind: "report";
+      readonly text: string;
+      readonly claims: readonly {
+        readonly record_id: string;
+        readonly text: string;
+        readonly sources: readonly ProcessorCitation[];
+      }[];
+    }
+  | {
       readonly kind: "records";
       readonly schema: ProcessorObject;
       readonly records: readonly ProcessorRecord[];
-    }
-  | {
-      readonly kind: "text";
-      readonly text: string;
-      readonly evidence: readonly ProcessorCitation[];
-    }
-  | {
-      readonly kind: "knowledge";
-      readonly artifact_id: string;
-      readonly content_sha256: string;
     };
 export interface ProcessorCoverage {
+  readonly parts: readonly ProcessorPartOutcome[];
   readonly input_id: string;
   readonly status: "complete" | "partial" | "none";
   readonly read_segments: readonly string[];
   readonly gaps: readonly string[];
 }
 export interface ProcessorResult {
+  readonly value_checks: readonly ProcessorValueCheck[];
   readonly schema_version: 1;
   readonly result_id: string;
   readonly invocation: ProcessorInvocation;
@@ -232,54 +281,85 @@ export function parseProcessorIdentity(value: unknown): ProcessorIdentity {
   const r = processorExact(value, ["id", "version"]);
   return { id: token(r.id), version: token(r.version) };
 }
-function recordIds(value: unknown): string[] | null {
-  if (value === null) return null;
-  const ids = list(value, token);
-  if (!ids.length || new Set(ids).size !== ids.length) processorFail();
-  return ids;
-}
 export function parseProcessorInput(value: unknown): ProcessorInput {
   const r = processorObject(value);
   const input_id = token(r.input_id);
   switch (r.kind) {
-    case "material":
-      processorExact(r, ["kind", "input_id", "material"]);
-      return {
-        kind: "material",
-        input_id,
-        material: parseDocumentMaterialRef(r.material),
-      };
-    case "document": {
-      processorExact(r, ["kind", "input_id", "document"]);
-      return {
-        kind: "document",
-        input_id,
-        document: parseDocumentReadingRef(r.document),
-      };
-    }
-    case "result":
+    case "archive-document": {
       processorExact(r, [
         "kind",
         "input_id",
-        "result_id",
-        "content_sha256",
-        "record_ids",
+        "literature_id",
+        "parts",
+        "description_version",
       ]);
+      const parts = list(r.parts, parseArchiveInputPart, 1000);
+      if (new Set(parts.map((p) => p.asset_id)).size !== parts.length)
+        processorFail();
       return {
-        kind: "result",
+        kind: r.kind,
         input_id,
-        result_id: id(r.result_id),
-        content_sha256: processorHash(r.content_sha256),
-        record_ids: recordIds(r.record_ids),
+        literature_id: String(parseLiteratureId(r.literature_id)),
+        parts,
+        description_version: processorHash(r.description_version),
       };
-    case "knowledge":
-      processorExact(r, ["kind", "input_id", "artifact_id", "content_sha256"]);
+    }
+    case "snapshot": {
+      processorExact(r, [
+        "kind",
+        "input_id",
+        "snapshot_id",
+        "content_sha256",
+        "mapped_results",
+      ]);
+      const mapped_results = list(r.mapped_results, (v) => {
+        const x = processorExact(v, [
+          "literature_id",
+          "result_id",
+          "content_sha256",
+        ]);
+        return {
+          literature_id: String(parseLiteratureId(x.literature_id)),
+          result_id: id(x.result_id),
+          content_sha256: processorHash(x.content_sha256),
+        };
+      });
+      if (
+        new Set(mapped_results.map((m) => m.literature_id)).size !==
+        mapped_results.length
+      )
+        processorFail();
       return {
-        kind: "knowledge",
+        kind: r.kind,
         input_id,
-        artifact_id: id(r.artifact_id),
+        snapshot_id: id(r.snapshot_id),
         content_sha256: processorHash(r.content_sha256),
+        mapped_results,
       };
+    }
+    case "external": {
+      processorExact(r, [
+        "kind",
+        "input_id",
+        "literature_id",
+        "material",
+        "document",
+      ]);
+      const material =
+        r.material === null ? null : parseDocumentMaterialRef(r.material);
+      const document =
+        r.document === null ? null : parseDocumentReadingRef(r.document);
+      const literature_id = String(parseLiteratureId(r.literature_id));
+      if (material && material.literature_id !== literature_id) processorFail();
+      if (
+        document &&
+        (!material ||
+          JSON.stringify(document.source_material_ref) !==
+            JSON.stringify(material))
+      )
+        processorFail();
+      return { kind: r.kind, input_id, literature_id, material, document };
+    }
     case "missing":
       processorExact(r, ["kind", "input_id", "literature_id", "reason"]);
       return {
@@ -301,11 +381,28 @@ export function parseProcessorInvocation(value: unknown): ProcessorInvocation {
     "execution",
   ]);
   if (r.schema_version !== 1) processorFail();
-  const execution = processorExact(r.execution, ["method_sha256", "model"]);
+  const execution = processorExact(r.execution, [
+    "method_sha256",
+    "model",
+    "reads",
+    "uses_description",
+    "map",
+  ]);
+  if (typeof execution.uses_description !== "boolean") processorFail();
+  const map =
+    execution.map === null
+      ? null
+      : processorExact(execution.map, ["processor", "spec"]);
   const inputs = list(r.inputs, parseProcessorInput);
   if (
     !inputs.length ||
     new Set(inputs.map((i) => i.input_id)).size !== inputs.length
+  )
+    processorFail();
+  if (
+    inputs.some((i) => i.kind === "external") &&
+    (processorObject(r.processor).id !== "external-extraction" ||
+      processorObject(r.processor).version !== "2")
   )
     processorFail();
   const result = {
@@ -314,6 +411,14 @@ export function parseProcessorInvocation(value: unknown): ProcessorInvocation {
     spec: processorJson(r.spec),
     inputs,
     execution: {
+      reads: parseProcessorReads(execution.reads),
+      uses_description: execution.uses_description,
+      map: map
+        ? {
+            processor: parseProcessorIdentity(map.processor),
+            spec: processorJson(map.spec),
+          }
+        : null,
       method_sha256: processorHash(execution.method_sha256),
       model: execution.model === null ? null : processorJson(execution.model),
     },
@@ -339,6 +444,10 @@ export function parseProcessorBatchRequest(
   if (r.schema_version !== 1) processorFail();
   const inputs = list<ProcessorSelection>(r.inputs, (value) => {
     const s = processorObject(value);
+    if (s.kind === "snapshot") {
+      processorExact(s, ["kind", "snapshot_id"]);
+      return { kind: "snapshot", snapshot_id: id(s.snapshot_id) };
+    }
     if (s.kind === "literature") {
       processorExact(s, ["kind", "literature_id"]);
       return {
@@ -346,24 +455,7 @@ export function parseProcessorBatchRequest(
         literature_id: String(parseLiteratureId(s.literature_id)),
       };
     }
-    if (s.kind === "document") {
-      processorExact(s, ["kind", "document_version_id"]);
-      return {
-        kind: "document",
-        document_version_id: id(s.document_version_id),
-      };
-    }
-    if (s.kind === "result") {
-      processorExact(s, ["kind", "result_id", "record_ids"]);
-      return {
-        kind: "result",
-        result_id: id(s.result_id),
-        record_ids: recordIds(s.record_ids),
-      };
-    }
-    processorExact(s, ["kind", "artifact_id"]);
-    if (s.kind !== "knowledge") processorFail();
-    return { kind: "knowledge", artifact_id: id(s.artifact_id) };
+    return processorFail();
   });
   if (!inputs.length) processorFail();
   return freezeExtractionJson({
@@ -377,6 +469,25 @@ export function parseProcessorBatchRequest(
 }
 export function parseProcessorCitation(value: unknown): ProcessorCitation {
   const r = processorObject(value);
+  if (r.kind === "snapshot") {
+    processorExact(r, [
+      "kind",
+      "snapshot_id",
+      "content_sha256",
+      "literature_id",
+      "pointer",
+    ]);
+    return {
+      kind: r.kind,
+      snapshot_id: id(r.snapshot_id),
+      content_sha256: processorHash(r.content_sha256),
+      literature_id:
+        r.literature_id === null
+          ? null
+          : String(parseLiteratureId(r.literature_id)),
+      pointer: processorText(r.pointer, 1024, true),
+    };
+  }
   if (r.kind === "document") {
     processorExact(r, ["kind", "evidence"]);
     return { kind: "document", evidence: parseEvidenceRef(r.evidence) };
@@ -397,14 +508,7 @@ export function parseProcessorCitation(value: unknown): ProcessorCitation {
       pointer: processorText(r.pointer, 1024, true),
     };
   }
-  processorExact(r, ["kind", "artifact_id", "content_sha256", "statement_id"]);
-  if (r.kind !== "knowledge") processorFail();
-  return {
-    kind: "knowledge",
-    artifact_id: id(r.artifact_id),
-    content_sha256: processorHash(r.content_sha256),
-    statement_id: token(r.statement_id),
-  };
+  return processorFail();
 }
 export function processorPointer(
   value: ProcessorJson,
@@ -430,20 +534,24 @@ export function processorPointer(
 }
 export function parseProcessorContent(value: unknown): ProcessorContent {
   const r = processorObject(value);
-  if (r.kind === "knowledge") {
-    processorExact(r, ["kind", "artifact_id", "content_sha256"]);
+  if (r.kind === "report") {
+    processorExact(r, ["kind", "text", "claims"]);
+    const claims = list(r.claims, (v) => {
+      const c = processorExact(v, ["record_id", "text", "sources"]);
+      const sources = list(c.sources, parseProcessorCitation);
+      if (!sources.length) processorFail();
+      return {
+        record_id: token(c.record_id),
+        text: processorText(c.text, 65536),
+        sources,
+      };
+    });
+    if (new Set(claims.map((c) => c.record_id)).size !== claims.length)
+      processorFail();
     return {
-      kind: "knowledge",
-      artifact_id: id(r.artifact_id),
-      content_sha256: processorHash(r.content_sha256),
-    };
-  }
-  if (r.kind === "text") {
-    processorExact(r, ["kind", "text", "evidence"]);
-    return {
-      kind: "text",
+      kind: r.kind,
       text: processorText(r.text, 1024 * 1024, true),
-      evidence: list(r.evidence, parseProcessorCitation),
+      claims,
     };
   }
   processorExact(r, ["kind", "schema", "records"]);
@@ -481,7 +589,28 @@ export function parseProcessorContent(value: unknown): ProcessorContent {
 export async function processorComparison(
   input: ProcessorInvocation,
 ): Promise<string> {
-  return sha256(canonicalJsonBytes(parseProcessorInvocation(input)));
+  const invocation = parseProcessorInvocation(input);
+  return sha256(
+    canonicalJsonBytes({
+      ...invocation,
+      inputs: invocation.inputs.map((i) =>
+        i.kind === "archive-document"
+          ? {
+              kind: i.kind,
+              literature_id: i.literature_id,
+              parts: i.parts
+                .map((p) => ({
+                  asset_id: p.asset_id,
+                  part: p.part,
+                  content_version: p.content_version,
+                  available: p.available,
+                }))
+                .sort((a, b) => a.asset_id.localeCompare(b.asset_id)),
+            }
+          : i,
+      ),
+    }),
+  );
 }
 export async function parseProcessorResult(
   value: unknown,
@@ -493,6 +622,7 @@ export async function parseProcessorResult(
     "comparison_sha256",
     "status",
     "content",
+    "value_checks",
     "coverage",
     "producer",
     "provenance",
@@ -508,7 +638,9 @@ export async function parseProcessorResult(
   const invocation = parseProcessorInvocation(r.invocation);
   const content = parseProcessorContent(r.content);
   const coverage = list(r.coverage, (value) => {
-    const c = processorExact(value, [
+    const raw = processorObject(value);
+    const c = processorExact(raw, [
+      "parts",
       "input_id",
       "status",
       "read_segments",
@@ -521,7 +653,32 @@ export async function parseProcessorResult(
     const gaps = list(c.gaps, (value) => processorText(value, 512));
     if (status !== "complete" && !gaps.length) processorFail();
     if (status === "none" && read_segments.length) processorFail();
-    return { input_id: token(c.input_id), status, read_segments, gaps };
+    const parts = list(c.parts, (v) => {
+      const p = processorExact(v, [
+        "literature_id",
+        "asset_id",
+        "part",
+        "outcome",
+        "read_segments",
+        "gaps",
+      ]);
+      if (
+        !["main", "supplementary"].includes(String(p.part)) ||
+        !["extracted", "not-reported", "part-absent", "incomplete"].includes(
+          String(p.outcome),
+        )
+      )
+        processorFail();
+      return {
+        literature_id: String(parseLiteratureId(p.literature_id)),
+        asset_id: p.asset_id === null ? null : id(p.asset_id),
+        part: p.part as ProcessorPartOutcome["part"],
+        outcome: p.outcome as ProcessorPartOutcome["outcome"],
+        read_segments: list(p.read_segments, token),
+        gaps: list(p.gaps, (v) => processorText(v, 512)),
+      };
+    });
+    return { input_id: token(c.input_id), status, read_segments, gaps, parts };
   });
   if (
     coverage.length !== invocation.inputs.length ||
@@ -534,9 +691,23 @@ export async function parseProcessorResult(
     processorFail();
   if (
     r.status === "empty" &&
-    (content.kind !== "records" ||
-      content.records.length !== 0 ||
-      coverage.some((c) => c.status !== "complete"))
+    (content.kind === "report"
+      ? content.claims.length !== 0
+      : content.kind !== "records" || content.records.length !== 0)
+  )
+    processorFail();
+  if (
+    r.status === "empty" &&
+    coverage.some(
+      (c) =>
+        c.status !== "complete" ||
+        c.parts.some((p) => p.outcome === "incomplete"),
+    )
+  )
+    processorFail();
+  if (
+    invocation.inputs.some((i) => i.kind === "external") &&
+    r.producer !== "external"
   )
     processorFail();
   const comparison = await processorComparison(invocation);
@@ -554,6 +725,7 @@ export async function parseProcessorResult(
     comparison_sha256: comparison,
     status: r.status as "ok" | "empty",
     content,
+    value_checks: parseProcessorValueChecks(r.value_checks, content),
     coverage,
     producer: r.producer as "internal" | "external",
     provenance: processorJson(r.provenance, 4 * 1024 * 1024),

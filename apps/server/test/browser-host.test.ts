@@ -93,12 +93,15 @@ async function fixture(requests?: string[]): Promise<string> {
 
 afterEach(async () => {
   await Promise.all(
-    servers
-      .splice(0)
-      .map(
-        (server) =>
-          new Promise<void>((resolve) => server.close(() => resolve())),
-      ),
+    servers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+          // These servers are owned fixtures; do not leave keep-alive sockets
+          // behind after a failed or interrupted browser action.
+          server.closeAllConnections();
+        }),
+    ),
   );
   await Promise.all(
     created.splice(0).map((path) => rm(path, { recursive: true, force: true })),
@@ -1141,4 +1144,5 @@ it.runIf(browserAvailable)(
       await host.close();
     }
   },
+  30000, // Covers browser startup plus the explicit 15-second response wait.
 );

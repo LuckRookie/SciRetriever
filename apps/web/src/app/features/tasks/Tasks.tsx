@@ -488,6 +488,16 @@ export function TaskDetails({ id }: { id: string }) {
           </Card>
         );
       })}
+      {task.partial_results.length ? (
+        <Disclosure
+          title={`此前尝试的部分结果 ${task.partial_results.length} 项`}
+          defaultExpanded={!task.results.length}
+        >
+          {task.partial_results.map((result, index) => (
+            <ResultLink key={index} result={result} task={task} id={id} />
+          ))}
+        </Disclosure>
+      ) : null}
       {task.results.map((result, index) => (
         <ResultLink key={index} result={result} task={task} id={id} />
       ))}
@@ -604,12 +614,25 @@ function ResultLink({
   const parse = result.operation === "parse-documents";
   return (
     <div>
-      {parse && typeof saved.default_updated === "boolean" ? (
-        <p>
-          {saved.default_updated
-            ? "解析版本已保存，并已设为默认全文。"
-            : "解析版本已保存；默认全文未切换（默认版本已变化或本次未请求切换）。可打开本次固定结果核对；如需切换，请重新读取当前版本后操作。"}
-        </p>
+      {parse && Array.isArray(saved.profiles) ? (
+        <div>
+          <p>各模式的解析结果如下。建档需要另行发起。</p>
+          <ul>
+            {saved.profiles.map((item, i) => {
+              const p = record(item, "parsing profile");
+              return (
+                <li key={i}>
+                  {String(p.profile)}：
+                  {p.status === "failed"
+                    ? String(p.failure_code)
+                    : p.status === "reused"
+                      ? "已复用"
+                      : "已保存"}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       ) : null}
       {typeof saved.artifact_id === "string" ||
       (literature && typeof saved.document_version_id === "string") ? (

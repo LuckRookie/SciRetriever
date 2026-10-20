@@ -145,7 +145,7 @@ describe("machine connections to the live Web owner", () => {
             schema_version: 1,
             idempotency_key: "runtime-parity",
             operations: [
-              { operation: "parse-documents", request: env.parseRequest },
+              { operation: "parse-documents", request: env.rawParseRequest },
             ],
           },
         },
@@ -185,7 +185,7 @@ describe("machine connections to the live Web owner", () => {
       expect(
         await call("runtime_list_tasks", { status_group: "ended", limit: 10 }),
       ).toMatchObject({ tasks: [{ job_id: job.job_id, status: "completed" }] });
-      expect(env.parseCalls).toBe(1);
+      expect(env.parseCalls).toBe(2);
       expect(factory).not.toHaveBeenCalled();
     } finally {
       await client.close();

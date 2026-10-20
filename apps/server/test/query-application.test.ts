@@ -1,3 +1,4 @@
+import { SCHEMA_VERSION } from "../src/storage/sqlite/schema.js";
 import { createHash } from "node:crypto";
 import {
   lstat,
@@ -34,7 +35,8 @@ const emptyQuery = {
   publication_year_to: null,
   venue: null,
   publisher: null,
-  document_types: [],
+  publication_forms: [],
+  article_kinds: [],
   languages: [],
   keywords: [],
   version_roles: [],
@@ -107,7 +109,7 @@ function sqliteBusinessFacts(path: string): string {
   }
 }
 
-async function createSyntheticV2Catalog(
+async function createSyntheticCatalog(
   home: string,
   literatures: readonly ReturnType<typeof parseLiterature>[] = [
     FIXTURE_LITERATURE,
@@ -118,12 +120,12 @@ async function createSyntheticV2Catalog(
     for (const literature of literatures)
       await writer.database.putLiterature(literature);
     expect(await writer.database.inspectExecutionRuntime()).toMatchObject({
-      catalog_version: 1,
-      migrated: false,
+      catalog_version: SCHEMA_VERSION,
+      migrated: true,
     });
-    await writer.database.upgradeExecutionSchema();
+
     expect(await writer.database.inspectExecutionRuntime()).toMatchObject({
-      catalog_version: 2,
+      catalog_version: SCHEMA_VERSION,
       migrated: true,
     });
     return writer;
@@ -205,7 +207,7 @@ it("reads an existing catalog through the real read-only SQLite worker", async (
     query = await createQueryApplication(home);
     expect(query.readiness).toMatchObject({
       status: "ready",
-      schema_version: 1,
+      schema_version: SCHEMA_VERSION,
     });
     expect(query.query).not.toBeNull();
     const page = await query.query!.search({
@@ -218,7 +220,7 @@ it("reads an existing catalog through the real read-only SQLite worker", async (
       FIXTURE_LITERATURE.literature_id,
     );
     const detail = await query.query!.detail(FIXTURE_LITERATURE.literature_id);
-    expect(detail.content).toBeNull();
+    expect(detail).not.toHaveProperty("content");
     expect(detail.primary_pdf).toBeNull();
     await query.close();
     query = undefined;
@@ -296,7 +298,6 @@ it("serves a real query-only Web request without changing the catalog", async ()
     expect(await read.json()).toMatchObject({
       protocol_version: 1,
       detail: {
-        content: null,
         primary_pdf: null,
       },
     });
@@ -397,12 +398,12 @@ it("keeps a CLI query from initializing a missing home", async () => {
   }
 });
 
-it("queries a genuinely migrated v2 catalog without changing its facts", async () => {
+it("queries a current catalog without changing its facts", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-query-v2-"));
   let writer: Awaited<ReturnType<typeof createApplication>> | undefined;
   let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
   try {
-    writer = await createSyntheticV2Catalog(home);
+    writer = await createSyntheticCatalog(home);
     const catalogPath = join(home, "catalog.sqlite");
     const beforeManifest = await businessFileManifest(home);
     const beforeFacts = sqliteBusinessFacts(catalogPath);
@@ -410,7 +411,7 @@ it("queries a genuinely migrated v2 catalog without changing its facts", async (
     query = await createQueryApplication(home);
     expect(query.readiness).toMatchObject({
       status: "ready",
-      schema_version: 2,
+      schema_version: SCHEMA_VERSION,
     });
     const page = await query.query!.search({
       query: parseLibraryQuery(emptyQuery),
@@ -427,7 +428,7 @@ it("queries a genuinely migrated v2 catalog without changing its facts", async (
     expect(await businessFileManifest(home)).toEqual(beforeManifest);
     expect(sqliteBusinessFacts(catalogPath)).toBe(beforeFacts);
     expect(await writer.database.inspectExecutionRuntime()).toMatchObject({
-      catalog_version: 2,
+      catalog_version: SCHEMA_VERSION,
       migrated: true,
       counts: { execution_jobs: 0 },
     });
@@ -453,7 +454,7 @@ it("observes a writer commit through an open query reader without writing facts 
   let writer: Awaited<ReturnType<typeof createApplication>> | undefined;
   let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
   try {
-    writer = await createSyntheticV2Catalog(home);
+    writer = await createSyntheticCatalog(home);
     const catalogPath = join(home, "catalog.sqlite");
     const beforeReaderFacts = sqliteBusinessFacts(catalogPath);
     expect(await writer.database.inspectExecutionRuntime()).toMatchObject({
@@ -463,7 +464,7 @@ it("observes a writer commit through an open query reader without writing facts 
     query = await createQueryApplication(home);
     expect(query.readiness).toMatchObject({
       status: "ready",
-      schema_version: 2,
+      schema_version: SCHEMA_VERSION,
     });
     expect("jobs" in query).toBe(false);
     expect(sqliteBusinessFacts(catalogPath)).toBe(beforeReaderFacts);
@@ -488,7 +489,7 @@ it("observes a writer commit through an open query reader without writing facts 
 
     expect(sqliteBusinessFacts(catalogPath)).toBe(committedFacts);
     expect(await writer.database.inspectExecutionRuntime()).toMatchObject({
-      catalog_version: 2,
+      catalog_version: SCHEMA_VERSION,
       migrated: true,
       counts: { execution_jobs: 0 },
     });
@@ -502,7 +503,7 @@ it("observes a writer commit through an open query reader without writing facts 
 });
 
 it("leaves pending recovery, execution, and publication state untouched on query startup", async () => {
-  const env = await setup(true);
+  const env = await setup();
   let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
   const catalogPath = join(env.home, "catalog.sqlite");
   const jobId = "query-startup-pending-job";
@@ -512,16 +513,31 @@ it("leaves pending recovery, execution, and publication state untouched on query
   let ticketBytes: Buffer | undefined;
   try {
     expect(await env.app.database.inspectExecutionRuntime()).toMatchObject({
-      catalog_version: 2,
+      catalog_version: SCHEMA_VERSION,
       migrated: true,
     });
     const detail = await env.app.library.detail(lit);
     expect(detail.primary_pdf).not.toBeNull();
-    expect(detail.parser_result).not.toBeNull();
+    expect(
+      (
+        await env.app.database.rawParse<unknown[]>(
+          "current",
+          detail.primary_pdf!.asset.asset_id,
+        )
+      ).length,
+    ).toBe(2);
 
-    const cleanup = await env.app.database.contentCleanupSnapshot(lit);
-    expect(cleanup).not.toBeNull();
-    const ticket = await env.app.artifactRecovery.prepare(cleanup!.artifacts);
+    const asset = detail.primary_pdf!.asset;
+    const ticket = await env.app.artifactRecovery.prepare([
+      {
+        reference: asset.path,
+        artifact: {
+          sha256: asset.sha256,
+          byte_size: asset.size_bytes,
+          media_type: asset.media_type,
+        },
+      },
+    ]);
     expect(ticket.artifacts.length).toBeGreaterThan(0);
     ticketPath = join(env.app.files.root, ticket.reference);
 
@@ -614,13 +630,12 @@ it("leaves pending recovery, execution, and publication state untouched on query
     query = await createQueryApplication(env.home);
     expect(query.readiness).toMatchObject({
       status: "ready",
-      schema_version: 2,
+      schema_version: SCHEMA_VERSION,
     });
     expect(query.query).not.toBeNull();
     await expect(query.query!.detail(lit)).resolves.toMatchObject({
       literature: { literature_id: lit },
       primary_pdf: { asset: { sha256: primary.asset.sha256 } },
-      parser_result: { result_sha256: detail.parser_result!.result_sha256 },
     });
     await query.close();
     query = undefined;
@@ -638,7 +653,7 @@ it("leaves pending recovery, execution, and publication state untouched on query
 });
 
 it("serves verified query artifacts and rejects tampered synthetic bytes", async () => {
-  const env = await setup(true);
+  const env = await setup();
   let workbench:
     | Awaited<ReturnType<typeof startQueryOnlyWorkbench>>
     | undefined;
@@ -698,7 +713,7 @@ it("serves verified query artifacts and rejects tampered synthetic bytes", async
 });
 
 it("reports a damaged full-text index instead of returning an empty search page", async () => {
-  const env = await setup(true);
+  const env = await setup();
   let workbench:
     | Awaited<ReturnType<typeof startQueryOnlyWorkbench>>
     | undefined;

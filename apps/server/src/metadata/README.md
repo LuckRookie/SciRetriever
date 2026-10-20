@@ -13,6 +13,4 @@
 
 各厂商响应与 URL 规则在 providers/<provider>/；文献身份与合并由 literature 决定；主题/种子任务编排在 entry。
 
-相关说明：[所属技术文档](../../../../docs/architecture/technical/03-literature-materials.md)。
-
-[上级目录](../README.md) · [项目 README](../../../../README.md)
+[上级目录](../README.md)

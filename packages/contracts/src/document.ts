@@ -1,4 +1,9 @@
 import {
+  parsePageRegion,
+  parseRawParseProfile,
+  type RawParseProfile,
+} from "./raw-parsing.js";
+import {
   ContractValidationError,
   parseArtifactRef,
   parseAssetId,
@@ -39,21 +44,56 @@ export interface DocumentStructureV1 {
     readonly end_utf8: number;
   }[];
 }
-export interface DocumentRepresentationInput {
+/** Corrected content is bound directly to its immutable proofread version. */
+export interface ProofreadDocumentRepresentationInput {
   readonly source_material_ref: DocumentMaterialRef;
-  readonly parser_result_sha256: Sha256;
-  readonly builder_version: string;
+  readonly proofread_id: string;
+  readonly proofread_content_sha256: Sha256;
+  readonly builder_version: "proofread-blocks-v1";
   readonly locator_scheme: "utf8-segment-v1";
   readonly markdown: ArtifactRef;
   readonly structure: ArtifactRef;
   readonly resources: readonly DocumentResource[];
 }
-export interface DocumentRef extends DocumentRepresentationInput {
-  readonly schema_version: 1;
+export interface ProofreadDocumentRef
+  extends ProofreadDocumentRepresentationInput {
+  readonly schema_version: 2;
   readonly document_id: string;
   readonly document_version_id: string;
   readonly representation_sha256: Sha256;
-  readonly parser_provenance_id: string;
+}
+export type DocumentRepresentationInput = ProofreadDocumentRepresentationInput;
+export type DocumentRef = ProofreadDocumentRef;
+export type DocumentStructure =
+  | DocumentStructureV1
+  | import("./document-structure-v2.js").DocumentStructureV2;
+export type DocumentLocator =
+  | { readonly scheme: "utf8-segment-v1"; readonly segment_id: string }
+  | {
+      readonly scheme: "page-region-v1";
+      readonly segment_id: string;
+      /** Public page numbering starts at one. */ readonly page: number;
+      readonly region: readonly [number, number, number, number] | null;
+    };
+export type PageRegionLocator = Extract<
+  DocumentLocator,
+  { scheme: "page-region-v1" }
+>;
+export function parsePageRegionLocator(value: unknown): PageRegionLocator {
+  const r = exact(value, ["scheme", "segment_id", "page", "region"]);
+  if (
+    r.scheme !== "page-region-v1" ||
+    !Number.isSafeInteger(r.page) ||
+    Number(r.page) < 1
+  )
+    fail();
+  const region = r.region === null ? null : parsePageRegion(r.region);
+  return Object.freeze({
+    scheme: "page-region-v1",
+    segment_id: token(r.segment_id),
+    page: Number(r.page),
+    region,
+  });
 }
 export type EvidenceRef =
   | {
@@ -75,25 +115,31 @@ export type EvidenceRef =
         readonly segment_id: string;
       };
       readonly content_sha256: Sha256 | null;
+      readonly page_region?: PageRegionLocator;
     };
 
+/** Explicit PDF parsing. It never publishes a readable document or changes defaults. */
 export interface ParseDocumentRequest {
   readonly literature_id: string;
   readonly asset_id: string;
   readonly asset_sha256: Sha256;
-  readonly mode: "reuse-current" | "reparse";
-  readonly expected_default_revision: number | null;
+  readonly profiles?: readonly RawParseProfile[];
+  /** Re-run selected profiles even when the fixed input and configuration match. */
+  readonly force: boolean;
 }
-
+export interface ParseProfileReceipt {
+  readonly profile: RawParseProfile;
+  readonly status: "published" | "reused" | "failed";
+  readonly raw_parse_id: string | null;
+  readonly result_sha256: Sha256 | null;
+  readonly failure_code: string | null;
+  readonly failure_source_type: string | null;
+}
 export interface ParseDocumentReceipt {
-  readonly document: DocumentRef;
-  readonly parser_result_sha256: Sha256;
-  /** Provenance fixed on the returned DocumentVersion. */
-  readonly parser_provenance_id: string;
-  readonly parser_mode: ParseDocumentRequest["mode"];
-  readonly published: boolean;
-  readonly default_updated: boolean;
-  readonly default_revision: number | null;
+  readonly literature_id: string;
+  readonly asset_id: string;
+  readonly asset_sha256: Sha256;
+  readonly profiles: readonly ParseProfileReceipt[];
 }
 
 function fail(): never {
@@ -196,7 +242,8 @@ export function parseDocumentRepresentationInput(
 ): DocumentRepresentationInput {
   const r = exact(value, [
     "source_material_ref",
-    "parser_result_sha256",
+    "proofread_id",
+    "proofread_content_sha256",
     "builder_version",
     "locator_scheme",
     "markdown",
@@ -218,8 +265,12 @@ export function parseDocumentRepresentationInput(
     fail();
   return Object.freeze({
     source_material_ref: parseDocumentMaterialRef(r.source_material_ref),
-    parser_result_sha256: digest(r.parser_result_sha256),
-    builder_version: token(r.builder_version),
+    proofread_id: identifier(r.proofread_id),
+    proofread_content_sha256: digest(r.proofread_content_sha256),
+    builder_version:
+      r.builder_version === "proofread-blocks-v1"
+        ? ("proofread-blocks-v1" as const)
+        : fail(),
     locator_scheme: "utf8-segment-v1",
     markdown: artifact(r.markdown, "text/markdown"),
     structure: artifact(r.structure, "application/json"),
@@ -233,32 +284,31 @@ export function parseDocumentRef(value: unknown): DocumentRef {
     "document_version_id",
     "representation_sha256",
     "source_material_ref",
-    "parser_result_sha256",
-    "parser_provenance_id",
+    "proofread_id",
+    "proofread_content_sha256",
     "builder_version",
     "locator_scheme",
     "markdown",
     "structure",
     "resources",
   ]);
-  if (r.schema_version !== 1) fail();
+  if (r.schema_version !== 2) fail();
   const representation = parseDocumentRepresentationInput({
     source_material_ref: r.source_material_ref,
-    parser_result_sha256: r.parser_result_sha256,
+    proofread_id: r.proofread_id,
+    proofread_content_sha256: r.proofread_content_sha256,
     builder_version: r.builder_version,
     locator_scheme: r.locator_scheme,
     markdown: r.markdown,
     structure: r.structure,
     resources: r.resources,
   });
-  return Object.freeze({
-    schema_version: 1,
+  const common = {
     document_id: identifier(r.document_id),
     document_version_id: identifier(r.document_version_id),
     representation_sha256: digest(r.representation_sha256),
-    parser_provenance_id: identifier(r.parser_provenance_id),
-    ...representation,
-  });
+  };
+  return Object.freeze({ schema_version: 2, ...common, ...representation });
 }
 export function parseEvidenceRef(value: unknown): EvidenceRef {
   const kind =
@@ -292,6 +342,7 @@ export function parseEvidenceRef(value: unknown): EvidenceRef {
     });
   }
   if (kind === "document") {
+    const hasRegion = Object.hasOwn(value as object, "page_region");
     const r = exact(value, [
       "schema_version",
       "target_kind",
@@ -300,11 +351,14 @@ export function parseEvidenceRef(value: unknown): EvidenceRef {
       "representation_sha256",
       "locator",
       "content_sha256",
+      ...(hasRegion ? ["page_region"] : []),
     ]);
     if (r.schema_version !== 1 || r.locator_scheme !== "utf8-segment-v1")
       fail();
     const locator = exact(r.locator, ["kind", "segment_id"]);
     if (locator.kind !== "segment") fail();
+    const pageRegion = hasRegion ? parsePageRegionLocator(r.page_region) : null;
+    if (pageRegion && pageRegion.segment_id !== locator.segment_id) fail();
     return Object.freeze({
       schema_version: 1,
       target_kind: "document",
@@ -317,67 +371,109 @@ export function parseEvidenceRef(value: unknown): EvidenceRef {
       }),
       content_sha256:
         r.content_sha256 === null ? null : digest(r.content_sha256),
+      ...(pageRegion ? { page_region: pageRegion } : {}),
     });
   }
   return fail();
 }
 
 export function parseDocumentRequest(value: unknown): ParseDocumentRequest {
-  const r = exact(value, [
-    "literature_id",
-    "asset_id",
-    "asset_sha256",
-    "mode",
-    "expected_default_revision",
-  ]);
-  if (r.mode !== "reuse-current" && r.mode !== "reparse") fail();
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail();
+  const r = value as Record<string, unknown>;
   if (
-    r.expected_default_revision !== null &&
-    (!Number.isSafeInteger(r.expected_default_revision) ||
-      (r.expected_default_revision as number) < 1)
+    Object.keys(r).some(
+      (k) =>
+        ![
+          "literature_id",
+          "asset_id",
+          "asset_sha256",
+          "profiles",
+          "force",
+        ].includes(k),
+    )
+  )
+    fail();
+  const profiles = r.profiles === undefined ? null : r.profiles;
+  if (
+    profiles !== null &&
+    (!Array.isArray(profiles) || profiles.length < 1 || profiles.length > 2)
+  )
+    fail();
+  const selected =
+    profiles === null
+      ? null
+      : (profiles as unknown[]).map(parseRawParseProfile);
+  if (
+    (selected !== null && new Set(selected).size !== selected.length) ||
+    (r.force !== undefined && typeof r.force !== "boolean")
   )
     fail();
   return Object.freeze({
     literature_id: parseLiteratureId(r.literature_id),
     asset_id: parseAssetId(r.asset_id),
     asset_sha256: digest(r.asset_sha256),
-    mode: r.mode,
-    expected_default_revision: r.expected_default_revision as number | null,
+    ...(selected === null ? {} : { profiles: Object.freeze(selected) }),
+    force: r.force === true,
   });
 }
-
 export function parseDocumentReceipt(value: unknown): ParseDocumentReceipt {
   const r = exact(value, [
-    "document",
-    "parser_result_sha256",
-    "parser_provenance_id",
-    "parser_mode",
-    "published",
-    "default_updated",
-    "default_revision",
+    "literature_id",
+    "asset_id",
+    "asset_sha256",
+    "profiles",
   ]);
-  const document = parseDocumentRef(r.document);
-  const parserHash = digest(r.parser_result_sha256);
-  const provenanceId = identifier(r.parser_provenance_id);
   if (
-    (r.parser_mode !== "reuse-current" && r.parser_mode !== "reparse") ||
-    typeof r.published !== "boolean" ||
-    typeof r.default_updated !== "boolean" ||
-    (r.default_revision !== null &&
-      (!Number.isSafeInteger(r.default_revision) ||
-        (r.default_revision as number) < 1)) ||
-    (r.default_updated === true && r.default_revision === null) ||
-    parserHash !== document.parser_result_sha256 ||
-    provenanceId !== document.parser_provenance_id
+    !Array.isArray(r.profiles) ||
+    r.profiles.length < 1 ||
+    r.profiles.length > 2
   )
     fail();
+  const profiles = r.profiles.map((value): ParseProfileReceipt => {
+    const p = exact(value, [
+      "profile",
+      "status",
+      "raw_parse_id",
+      "result_sha256",
+      "failure_code",
+      "failure_source_type",
+    ]);
+    if (!["published", "reused", "failed"].includes(String(p.status))) fail();
+    const failed = p.status === "failed";
+    if ((p.raw_parse_id === null) !== (p.result_sha256 === null)) fail();
+    if (
+      !failed &&
+      (p.raw_parse_id === null ||
+        p.failure_code !== null ||
+        p.failure_source_type !== null)
+    )
+      fail();
+    if (
+      failed &&
+      (typeof p.failure_code !== "string" ||
+        !/^parser-[a-z-]{1,64}$/u.test(p.failure_code))
+    )
+      fail();
+    if (
+      p.failure_source_type !== null &&
+      (typeof p.failure_source_type !== "string" ||
+        !/^[a-z][a-z0-9_-]{0,63}$/u.test(p.failure_source_type))
+    )
+      fail();
+    return Object.freeze({
+      profile: parseRawParseProfile(p.profile),
+      status: p.status as ParseProfileReceipt["status"],
+      raw_parse_id: p.raw_parse_id === null ? null : identifier(p.raw_parse_id),
+      result_sha256: p.result_sha256 === null ? null : digest(p.result_sha256),
+      failure_code: p.failure_code as string | null,
+      failure_source_type: p.failure_source_type as string | null,
+    });
+  });
+  if (new Set(profiles.map((p) => p.profile)).size !== profiles.length) fail();
   return Object.freeze({
-    document,
-    parser_result_sha256: parserHash,
-    parser_provenance_id: provenanceId,
-    parser_mode: r.parser_mode,
-    published: r.published,
-    default_updated: r.default_updated,
-    default_revision: r.default_revision as number | null,
+    literature_id: parseLiteratureId(r.literature_id),
+    asset_id: parseAssetId(r.asset_id),
+    asset_sha256: digest(r.asset_sha256),
+    profiles: Object.freeze(profiles),
   });
 }

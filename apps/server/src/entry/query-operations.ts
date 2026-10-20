@@ -1,46 +1,36 @@
-import { KnowledgeReadError } from "../storage/knowledge.js";
 import {
-  readLibraryArtifact,
-  exportBibliographyRequest,
-  LibraryTransferError,
-} from "./library-transfer.js";
-import { SynthesisReadError } from "../storage/synthesis.js";
-import { SynthesisPreparationError } from "../analysis/synthesis-prepare.js";
-import { MaterialContextError } from "../retrieval/query.js";
-import { KnowledgeContextError } from "../retrieval/knowledge-query.js";
+  ContractValidationError,
+  createInputManifest,
+  parseAssetId,
+  parseDocumentReadRequest,
+  parseDocumentReadResult,
+  parseLibrarySearchRequest,
+  parseLiteratureId,
+  type DocumentReadOperation,
+  type InputManifestItem,
+} from "@sciretriever/contracts";
+import { SnapshotError } from "../analysis/snapshots.js";
+import { ArchiveError } from "../archive/orchestrator.js";
+import type { QueryApplication } from "../bootstrap/application.js";
+import { AnnotationError } from "../document/annotations.js";
+import { DocumentReadError } from "../document/read.js";
 import { ExtractionPreparationError } from "../extraction/prepare.js";
 import { ExtractionSpecError } from "../extraction/spec.js";
+import { MetadataFieldError } from "../literature/metadata-service.js";
 import {
   LiteratureNotFoundError,
   LiteratureQueryError,
 } from "../literature/query.js";
-import { DocumentReadError } from "../document/read.js";
+import { ProofreadError } from "../proofread/service.js";
+import { KnowledgeContextError } from "../retrieval/knowledge-query.js";
+import { MaterialContextError } from "../retrieval/query.js";
+import { TagError } from "../tags/rules.js";
 import {
-  ContractValidationError,
-  createInputManifest,
-  parseLiteratureId,
-  parseAssetId,
-  parseLibrarySearchRequest,
-  parseDocumentReadRequest,
-  parseDocumentReadResult,
-  parseKnowledgeReadSelection,
-  parseKnowledgeReadResult,
-  parseKnowledgeListSelection,
-  parseKnowledgeListResult,
-  parseKnowledgeDefaultSelection,
-  parseKnowledgeDefaultResult,
-  knowledgeQuestionSha256,
-  parseSynthesisReadSelection,
-  parseSynthesisReadResult,
-  parseSynthesisSourceResult,
-  parseSynthesisListSelection,
-  parseSynthesisListResult,
-  parseSynthesisPreparationRequest,
-  parseSynthesisPreparationResult,
-  type InputManifestItem,
-  type DocumentReadOperation,
-} from "@sciretriever/contracts";
-import type { QueryApplication } from "../bootstrap/application.js";
+  exportBibliographyRequest,
+  LibraryTransferError,
+  readLibraryArtifact,
+} from "./library-transfer.js";
+import { queryTags } from "./tag-operations.js";
 
 export class ProductOperationError extends Error {
   constructor(
@@ -69,6 +59,10 @@ function unavailable(): never {
   throw new ProductOperationError("query-unavailable");
 }
 export const QUERY_OPERATIONS = [
+  "snapshots",
+  "archive",
+  "tags",
+  "metadata-fields",
   "status",
   "library-search",
   "literature-read",
@@ -80,6 +74,14 @@ export const QUERY_OPERATIONS = [
   "task-read",
   "task-list",
   "task-detail",
+  "document-annotation",
+  "document-figures",
+  "document-reference-texts",
+  "proofread-inspect",
+  "proofread-page",
+  "document-parts",
+  "document-corrections",
+  "document-parsing-status",
   "document-default",
   "document-describe",
   "document-outline",
@@ -90,13 +92,6 @@ export const QUERY_OPERATIONS = [
   "document-evidence",
   "document-material",
   "analysis-inputs",
-  "knowledge-read",
-  "knowledge-list",
-  "knowledge-default",
-  "synthesis-prepare",
-  "synthesis-read",
-  "synthesis-source",
-  "synthesis-list",
   "context",
   "knowledge-context",
   "extraction-prepare",
@@ -115,6 +110,151 @@ async function readQuery(
     return q.readiness;
   }
   if (q.readiness.status !== "ready" || !q.query) unavailable();
+  if (
+    operation === "document-figures" ||
+    operation === "document-reference-texts"
+  ) {
+    if (!q.annotationRead) unavailable();
+    const r = operationRecord(value, [
+      "document_version_id",
+      "annotation_id",
+      "max_bytes",
+      "continuation",
+    ]);
+    return q.annotationRead.read(
+      {
+        ...r,
+        field: operation === "document-figures" ? "figures" : "references",
+      },
+      signal,
+    );
+  }
+  if (operation === "snapshots") {
+    if (!q.snapshots) unavailable();
+    return q.snapshots.query(value, signal);
+  }
+  if (operation === "archive") {
+    if (!q.archive) unavailable();
+    return q.archive.query(value, signal);
+  }
+  if (operation === "tags") {
+    if (!q.tags) unavailable();
+    return queryTags(q.tags, value, signal);
+  }
+  if (operation === "metadata-fields") {
+    if (!q.metadataFields) unavailable();
+    const r = operationRecord(value, ["literature_id"]);
+    const result = await q.metadataFields.read(
+      parseLiteratureId(r.literature_id),
+      signal,
+    );
+    return {
+      literature_id: result.literature.literature_id,
+      metadata: result.literature.metadata,
+      metadata_revision: result.metadata_revision,
+      metadata_sha256: result.metadata_sha256,
+      fields: result.field_states,
+    };
+  }
+  if (operation === "document-annotation") {
+    if (!q.annotationRead) unavailable();
+    return q.annotationRead.read(value, signal);
+  }
+  if (operation === "proofread-page") {
+    if (!q.proofreadRead) unavailable();
+    return q.proofreadRead.page(value, signal);
+  }
+  if (operation === "proofread-inspect") {
+    if (!q.proofreadRead) unavailable();
+    return q.proofreadRead.inspect(value, signal);
+  }
+  if (operation === "document-corrections") {
+    if (!q.documentRead) unavailable();
+    return q.documentRead.corrections(value, signal);
+  }
+  if (operation === "document-parts") {
+    const r = operationRecord(value, ["literature_id", "offset", "limit"]);
+    const literatureId = parseLiteratureId(r.literature_id);
+    if (
+      !Number.isSafeInteger(r.offset) ||
+      Number(r.offset) < 0 ||
+      !Number.isSafeInteger(r.limit) ||
+      Number(r.limit) < 1 ||
+      Number(r.limit) > 200
+    )
+      throw new ContractValidationError();
+    if (!q.documentRead) unavailable();
+    // Verify the literature even if it has no accepted parts; ordering is acceptance row order, never source observation time.
+    await q.query.detail(literatureId);
+    const offset = Number(r.offset),
+      page = await q.documentRead.parts(
+        literatureId,
+        offset,
+        Number(r.limit),
+        signal,
+      );
+    const parts = [];
+    for (const a of page.items) {
+      if (signal?.aborted)
+        throw new ProductOperationError("operation-cancelled");
+      const material = await q.documentRead.default(
+        {
+          literature_id: literatureId,
+          asset_id: a.asset_id,
+          asset_sha256: a.asset_sha256,
+        },
+        signal,
+      );
+      const proofread = await q.proofreadRead?.status(
+        { asset_id: a.asset_id },
+        signal,
+      );
+      parts.push({
+        ...a,
+        default: material.default,
+        proofread: proofread?.current ?? null,
+      });
+    }
+    const end = offset + page.items.length;
+    return {
+      literature_id: literatureId,
+      parts,
+      total: page.total,
+      next_offset: end < page.total ? end : null,
+    };
+  }
+  if (operation === "document-parsing-status") {
+    const request = operationRecord(value, ["literature_id", "asset_id"]);
+    const literatureId = parseLiteratureId(request.literature_id);
+    const assetId = parseAssetId(request.asset_id);
+    const detail = await q.query.detail(literatureId);
+    const assets = [
+      ...(detail.primary_pdf ? [detail.primary_pdf] : []),
+      ...detail.additional_assets,
+    ];
+    const asset = assets.find((a) => a.asset.asset_id === assetId)?.asset;
+    if (!asset) throw new ProductOperationError("material-missing");
+    if (!q.rawParseRead) unavailable();
+    const statuses = await q.rawParseRead.current(assetId, signal);
+    return {
+      literature_id: literatureId,
+      asset_id: assetId,
+      asset_sha256: asset.sha256,
+      archive_profile: q.archiveProfile ?? "vlm-engine",
+      profiles: ["pipeline", "vlm-engine", "vlm-engine-markdown-only"].map(
+        (profile) => {
+          const status = statuses.find((s) => s.profile === profile);
+          return {
+            profile,
+            is_archive_profile: profile === (q.archiveProfile ?? "vlm-engine"),
+            raw_parse_id: status?.result?.raw_parse_id ?? null,
+            result_sha256: status?.result?.result_sha256 ?? null,
+            failure_code: status?.last_failure_code ?? null,
+          };
+        },
+      ),
+    };
+  }
   if (operation.startsWith("document-")) {
     const reader = q.documentRead;
     if (!reader) unavailable();
@@ -229,86 +369,6 @@ async function readQuery(
         throw new ContractValidationError();
       return q.tasks.read(r.job_id);
     }
-    case "knowledge-read": {
-      if (!q.knowledgeRead) unavailable();
-      const selection = parseKnowledgeReadSelection(value);
-      const result = await q.knowledgeRead.byId(selection.artifact_id, signal);
-      return result === null
-        ? null
-        : parseKnowledgeReadResult(result, selection);
-    }
-    case "knowledge-list": {
-      if (!q.knowledgeRead) unavailable();
-      const selection = parseKnowledgeListSelection(value);
-      return parseKnowledgeListResult(
-        await q.knowledgeRead.list(
-          selection.literature_id,
-          selection.limit,
-          signal,
-        ),
-        selection,
-      );
-    }
-    case "knowledge-default": {
-      if (!q.knowledgeRead) unavailable();
-      const selection = parseKnowledgeDefaultSelection(value);
-      const pointer = await q.knowledgeRead.default(
-        selection.literature_id,
-        selection.purpose,
-        await knowledgeQuestionSha256(selection.question),
-        signal,
-      );
-      return pointer
-        ? parseKnowledgeDefaultResult(
-            {
-              revision: pointer.revision,
-              artifact: await q.knowledgeRead.byId(pointer.artifact_id, signal),
-            },
-            selection,
-          )
-        : null;
-    }
-    case "synthesis-prepare": {
-      if (!q.synthesisPreparation) unavailable();
-      const selection = parseSynthesisPreparationRequest(value);
-      return parseSynthesisPreparationResult(
-        await q.synthesisPreparation.prepare(selection, signal),
-        selection,
-      );
-    }
-    case "synthesis-read":
-    case "synthesis-source": {
-      if (!q.synthesisRead) unavailable();
-      const selection = parseSynthesisReadSelection(value);
-      if (operation === "synthesis-read") {
-        const result = await q.synthesisRead.byId(
-          selection.artifact_id,
-          signal,
-        );
-        return result === null
-          ? null
-          : parseSynthesisReadResult(result, selection);
-      }
-      const result = await q.synthesisRead.sourceById(
-        selection.artifact_id,
-        signal,
-      );
-      return result === null
-        ? null
-        : parseSynthesisSourceResult(result, selection);
-    }
-    case "synthesis-list": {
-      if (!q.synthesisRead) unavailable();
-      const selection = parseSynthesisListSelection(value);
-      return parseSynthesisListResult(
-        await q.synthesisRead.list(
-          selection.manifest_sha256,
-          selection.limit,
-          signal,
-        ),
-        selection,
-      );
-    }
     case "context":
       if (!q.context) unavailable();
       return q.context.search(value, signal);
@@ -397,11 +457,14 @@ export function isQueryFailure(
 ): error is Error & { readonly code: string } {
   return (
     error instanceof ProductOperationError ||
+    error instanceof SnapshotError ||
+    error instanceof ArchiveError ||
+    error instanceof TagError ||
+    error instanceof MetadataFieldError ||
+    error instanceof AnnotationError ||
+    error instanceof ProofreadError ||
     error instanceof LibraryTransferError ||
     error instanceof DocumentReadError ||
-    error instanceof KnowledgeReadError ||
-    error instanceof SynthesisReadError ||
-    error instanceof SynthesisPreparationError ||
     error instanceof MaterialContextError ||
     error instanceof KnowledgeContextError ||
     error instanceof ExtractionPreparationError ||

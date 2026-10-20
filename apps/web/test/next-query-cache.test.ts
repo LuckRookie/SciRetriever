@@ -39,15 +39,31 @@ it("does not refetch material queries on Browser heartbeats or control changes, 
     ...view,
     session_outcome: { kind: "published", receipt_id: "receipt-1" },
   });
-  expect(invalidations).toHaveBeenCalledTimes(5);
+  expect(invalidations).toHaveBeenCalledTimes(10);
+  expect(
+    invalidations.mock.calls.map(([request]) => request?.queryKey?.[0]).sort(),
+  ).toEqual(
+    [
+      "archive",
+      "tags",
+      "snapshots",
+      "metadata",
+      "document",
+      "library",
+      "literature",
+      "knowledge",
+      "processors",
+      "tasks",
+    ].sort(),
+  );
   for (let i = 0; i < 20; i++) emit(api.view!);
-  expect(invalidations).toHaveBeenCalledTimes(5);
+  expect(invalidations).toHaveBeenCalledTimes(10);
   for (const listener of api.connectionListeners) {
     listener(false);
     listener(true);
     listener(true);
   }
-  expect(invalidations).toHaveBeenCalledTimes(10);
+  expect(invalidations).toHaveBeenCalledTimes(20);
   dispose();
   expect(api.listeners.size).toBe(0);
   expect(api.connectionListeners.size).toBe(0);

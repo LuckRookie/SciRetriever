@@ -17,6 +17,7 @@ export class ExtractionPreparationError extends Error {
   constructor(
     readonly code:
       | "invalid-request"
+      | "input-not-ready"
       | "input-missing"
       | "input-integrity"
       | "input-unsupported"
@@ -74,26 +75,11 @@ export class ExtractionPreparationService {
     for (const selection of selections) {
       check(signal);
       const literatureId = selection.literature_id;
-      if (selection.asset_id === null) {
-        const detail = await this.literature.detail(literatureId);
-        if (!detail) throw new ExtractionPreparationError("input-missing");
-        if (
-          detail.primary_pdf !== null ||
-          detail.additional_assets.some(
-            (item) => item.asset.media_type === "application/pdf",
-          )
-        )
-          throw new ExtractionPreparationError("stale-binding");
-        items.push({
-          input_id: selection.input_id,
-          literature_id: literatureId,
-          material: null,
-          document: null,
-          capabilities: [],
-          gaps: ["material-missing", "document-missing"],
-        });
-        continue;
-      }
+      const detail = await this.literature.detail(literatureId);
+      if (detail.literature.status !== "READY")
+        throw new ExtractionPreparationError("input-not-ready");
+      if (selection.asset_id === null)
+        throw new ExtractionPreparationError("input-missing");
       let material;
       try {
         const result = await this.documents.materialEvidence(
@@ -140,13 +126,7 @@ export class ExtractionPreparationService {
           versionId = current.default?.document_version_id ?? null;
         } catch (error) {
           check(signal);
-          if (
-            error instanceof DocumentReadError &&
-            error.code === "document-v3-required"
-          ) {
-            // v1/v2 have raw material reading but no DocumentVersion catalog.
-            versionId = null;
-          } else if (error instanceof DocumentReadError) {
+          if (error instanceof DocumentReadError) {
             throw new ExtractionPreparationError(
               error.code === "document-unsupported"
                 ? "input-unsupported"
@@ -168,6 +148,14 @@ export class ExtractionPreparationService {
             JSON.stringify(material)
           )
             throw new ExtractionPreparationError("stale-binding");
+          await this.documents.withVerifiedVersion(
+            versionId,
+            async (version) => {
+              if (version.schema_version !== 2)
+                throw new ExtractionPreparationError("input-unsupported");
+            },
+            signal,
+          );
           document = result.document;
           capabilities.push("document-segment-v1");
           if (result.capabilities.text) capabilities.push("document-text-v1");

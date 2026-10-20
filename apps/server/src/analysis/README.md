@@ -1,25 +1,17 @@
-# 知识分析与综合
+# 校订稿算子与快照
 
-针对明确选择的已有材料生成单篇知识、长文知识及集合综合，保留输入和证据关系。
+针对明确选择的已建档文献执行算子，保留固定输入、结果与证据关系。元数据由 Literature 的字段所有者维护，总结是显式运行的 `summary@2` 算子。
 
-## 内容入口
+- [processor.ts](processor.ts)、[processor-registry.ts](processor-registry.ts)：可信算子注册、声明读取范围、结果校验与接纳；单篇算子不接收其它算子的结果。
+- [processor-archive.ts](processor-archive.ts)：就绪检查、固定校订稿和结构版本、单篇复用键。
+- [knowledge-session.ts](knowledge-session.ts)、[summary-response.ts](summary-response.ts)：DSH 持续阅读、正文分页、回查、图片查看和有证据的总结提交。覆盖检查不代表科学结论正确。
+- [reading-image.ts](reading-image.ts)：验证已保存栅格图片的头信息与尺寸。
+- [processor-synthesis.ts](processor-synthesis.ts)、[snapshots.ts](snapshots.ts)：冻结就绪文献快照、逐篇 map 与集合 reduce、快照比较和结果过时标记；不自动重算。
+- [processor-labels.ts](processor-labels.ts)、[processor-records.ts](processor-records.ts)：调用方定义的标签与记录提取。
+- [value-check.ts](value-check.ts)：结果发布前逐值核对证据；文字/人工片段核对数字，扫描或存疑片段由 DSH 看固定区域。核对标注与用量进入结果，未完成核对不丢弃候选值。
+- [processor-external.ts](processor-external.ts)：外部候选的独立保留；这些证据容器不作为可执行算子输入。
+- [processor-export.ts](processor-export.ts)：完整结果导出封套和固定引用的有界传输。
 
-- [service.ts](service.ts)：已有 Analysis 服务与兼容路径。
-- [knowledge.ts](knowledge.ts)：单篇知识加工入口。
-- [knowledge-session.ts](knowledge-session.ts)：单篇/长文共用 DSH 持续阅读，提供正文分页、回读、检索、保存图片与最终提交工具；原固定分块/分层合并实现已删除。
-- [reading-image.ts](reading-image.ts)：验证已保存栅格资源的图像头并向 DSH 提供实际图片字节。
-- [synthesis.ts](synthesis.ts)：集合知识综合。
+模型协议由 [agents](../agents/README.md) 实现，固定校订稿由 [document](../document/README.md) 提供，批量生命周期由 [application/jobs](../application/jobs/README.md) 管理。读取缺口不隐式触发发现、下载、解析或模型调用。
 
-## 放置边界
-
-模型协议由 agents 实现，固定文档由 document 提供；读取缺口不隐式触发发现或下载。
-
-相关说明：[所属技术文档](../../../../docs/architecture/technical/05-knowledge-processing.md)。
-
-[上级目录](../README.md) · [项目 README](../../../../README.md)
-
-- `processor*.ts`：可信处理器注册、冻结输入、结果接纳、知识分析接入与默认标签/记录提取；只读取已有材料。批量生命周期在 `application/jobs/`。
-
-`processor-export.ts` 保持完整结果导出封套，并向三个入口提供固定引用的有界只读传输；字节读取与完整性校验仍由 Storage 提供。
-
-新知识方法为 `dsh-document-analysis` v1，综合方法为 v3。旧结果保留但不会作为新方法的缓存命中。正文覆盖检查不等于科研语义正确；图片能力/资源限制以 coverage 缺口说明。
+[上级目录](../README.md)

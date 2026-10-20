@@ -65,7 +65,7 @@ it("explains citation scope and keeps a late graph response from replacing stati
     ).toBe("true");
     expect(await page.locator(".citation-network").count()).toBe(0);
     expect(w.env.modelCalls).toBe(0);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(w.setupCalls.parser);
     expect(w.errors).toEqual([]);
   } finally {
     release();

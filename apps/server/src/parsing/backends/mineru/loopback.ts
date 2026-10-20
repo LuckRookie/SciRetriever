@@ -1,13 +1,13 @@
 import { NetworkBudgetCoordinator } from "../../../network/budget.js";
+import type { RawParseProfile } from "@sciretriever/contracts";
 import { normalizeUrl, resolveDestination } from "../../../network/policy.js";
 import { requestOnce } from "../../../network/http.js";
 import { MinerUParser, type MinerUHttpTransport } from "./http.js";
 import { createMinerUProtocolTransport } from "./protocol.js";
 import {
   ParsingFailure,
-  type ParserBackend,
+  type RawParserBackend,
   type ParserRequest,
-  type StagedParserOutput,
 } from "../../ports.js";
 
 function fail(): never {
@@ -15,7 +15,7 @@ function fail(): never {
 }
 
 /** Loopback network boundary; the task protocol is shared with remote services. */
-export class MinerULoopbackParser implements ParserBackend {
+export class MinerULoopbackParser implements RawParserBackend {
   private readonly parser: MinerUParser;
 
   constructor(options: {
@@ -95,10 +95,15 @@ export class MinerULoopbackParser implements ParserBackend {
     );
   }
 
-  parse(
+  identity(profile: RawParseProfile) {
+    return this.parser.identity(profile);
+  }
+
+  parseRaw(
     request: ParserRequest,
+    profile: RawParseProfile,
     signal?: AbortSignal,
-  ): Promise<StagedParserOutput> {
-    return this.parser.parse(request, signal);
+  ) {
+    return this.parser.parseRaw(request, profile, signal);
   }
 }

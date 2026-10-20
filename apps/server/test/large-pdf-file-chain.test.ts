@@ -47,9 +47,7 @@ it.each([17, 513])(
     const evidenceDirectory = await mkdtemp(
       join(tmpdir(), "sciretriever-large-pdf-evidence-"),
     );
-    const app = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const app = await createApplication(home, {});
     const id = FIXTURE_LITERATURE.literature_id;
     const started = performance.now();
     const initialRss = process.memoryUsage().rss;

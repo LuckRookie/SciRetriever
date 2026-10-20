@@ -35,9 +35,10 @@ function labelOutputSchema(spec: ProcessorObject): ProcessorObject {
 }
 export const labelsProcessor: Processor = {
   id: "labels",
-  version: "1",
+  version: "2",
   scope: "document",
-  accepts: ["document"],
+  accepts: ["archive-document"],
+  reads: { parts: "main", roles: "all" },
   model: true,
   output_kind: "records",
   outputSchema: labelOutputSchema,
@@ -133,6 +134,8 @@ export const labelsProcessor: Processor = {
             segments: segments.map((s) => ({
               segment_id: s.segment_id,
               text: s.text,
+              basis: s.basis ?? null,
+              uncertainty: s.uncertainty ?? null,
             })),
           }),
           responseSchema,
@@ -178,21 +181,24 @@ export const labelsProcessor: Processor = {
             },
           ];
     return {
-      status: "ok",
+      status: answer.answer === null ? "empty" : "ok",
       content: {
         kind: "records",
         schema: labelOutputSchema(invocation.spec),
-        records: [
-          {
-            record_id: "answer",
-            payload: { answer: answer.answer! },
-            evidence,
-            missing:
-              answer.answer === null
-                ? { "/answer": processorText(answer.reason, 512) }
-                : {},
-          },
-        ],
+        records:
+          answer.answer === null
+            ? []
+            : [
+                {
+                  record_id: "answer",
+                  payload: { answer: answer.answer! },
+                  evidence,
+                  missing:
+                    answer.answer === null
+                      ? { "/answer": processorText(answer.reason, 512) }
+                      : {},
+                },
+              ],
       },
       coverage: [textCoverage(input, read, gaps)],
       provenance: { limitations: TEXT_LIMITATIONS },

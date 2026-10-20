@@ -42,6 +42,12 @@ it("authenticates the root React entry before granting the workbench cookie and 
     for (const path of [
       "/",
       "/?view=gallery",
+      "/?view=archive",
+      "/?view=tags&tag=synthetic-tag",
+      "/?view=snapshots&snapshot=synthetic-snapshot&processor=summary",
+      "/?view=lib&reader=pdf&page=1&region=%5B0,0,1000,1000%5D",
+      "/?view=lib&inspect=1",
+      "/?view=lib&query=%7B%22document_type%22%3A%22article%22%7D",
       "/?view=lib&reader=doc&from=syn&artifact=fixed-synthesis",
       "/?view=lab",
       "/?view=ins&scope=all",
@@ -55,6 +61,7 @@ it("authenticates the root React entry before granting the workbench cookie and 
         "status",
         "advanced",
         "appearance",
+        "archive",
       ].map((setting) => `/?view=set&setting=${setting}`),
     ]) {
       const response = await fetch(server.origin + path, {
@@ -80,7 +87,28 @@ it("authenticates the root React entry before granting the workbench cookie and 
         },
         body: "{}",
       });
-      expect(attached.status).toBe(201);
+      expect(attached.status, path).toBe(201);
+      const client = (await attached.json()) as {
+        client_id: string;
+        csrf: string;
+      };
+      expect(
+        (
+          await fetch(
+            `${server.origin}/api/clients/disconnect?client_id=${client.client_id}`,
+            {
+              method: "POST",
+              headers: {
+                Cookie: grantedCookie,
+                Origin: server.origin,
+                "X-Workbench-Csrf": client.csrf,
+                "Content-Type": "application/json",
+              },
+              body: "{}",
+            },
+          )
+        ).status,
+      ).toBe(200);
     }
     for (const query of [
       "view=web&session=%2Fetc%2Fpasswd",
@@ -93,6 +121,10 @@ it("authenticates the root React entry before granting the workbench cookie and 
       "from=unknown",
       "redirect=https://example.com",
       "unknown=x",
+      "page=-1",
+      "region=%5B-1,0,2000,3%5D",
+      "processor=unknown",
+      "snapshot=bad%20id",
     ]) {
       const response = await fetch(`${server.origin}/?${query}`, {
         headers: { Cookie: auth },

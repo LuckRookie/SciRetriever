@@ -1,3 +1,13 @@
+import type * as Freshness from "./processor-freshness.js";
+const { bindProcessorFreshness, readProcessorFreshness }: typeof Freshness =
+  await import(
+    new URL(
+      import.meta.url.endsWith(".ts")
+        ? "./processor-freshness.ts"
+        : "./processor-freshness.js",
+      import.meta.url,
+    ).href
+  );
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { ProcessorInput } from "@sciretriever/contracts";
@@ -32,6 +42,8 @@ function tx<T>(db: DatabaseSync, work: () => T): T {
   }
 }
 export interface ProcessorPublication {
+  readonly reads: import("@sciretriever/contracts").ProcessorReads;
+  readonly uses_description: boolean;
   readonly result_id: string;
   readonly comparison_sha256: string;
   readonly processor_id: string;
@@ -44,10 +56,6 @@ export interface ProcessorPublication {
   readonly media_type: string;
   readonly created_at: string;
   readonly inputs: readonly ProcessorInput[];
-  readonly knowledge: {
-    readonly artifact_id: string;
-    readonly content_sha256: string;
-  } | null;
 }
 export interface ProcessorProjection {
   readonly result_id: string;
@@ -139,48 +147,87 @@ function publish(db: DatabaseSync, p: ProcessorPublication): Row {
       p.media_type,
       p.created_at,
     );
-    const knowledge = new Map<string, string>();
     for (const input of p.inputs) {
-      if (input.kind === "material") {
-        const m = input.material;
+      if (input.kind === "snapshot")
         db.prepare(
-          "INSERT OR IGNORE INTO processor_result_materials(result_id,literature_id,asset_id,asset_sha256) VALUES(?,?,?,?)",
-        ).run(p.result_id, m.literature_id, m.asset_id, m.asset_sha256);
-      } else if (input.kind === "document") {
-        const d = input.document,
-          m = d.source_material_ref;
-        const match = one(
+          "INSERT OR IGNORE INTO processor_result_literatures SELECT ?,literature_id FROM snapshot_members WHERE snapshot_id=?",
+        ).run(p.result_id, input.snapshot_id);
+      else
+        db.prepare(
+          "INSERT OR IGNORE INTO processor_result_literatures VALUES(?,?)",
+        ).run(p.result_id, input.literature_id);
+      if (input.kind === "archive-document") {
+        for (const part of input.parts)
+          if (part.available) {
+            const d = one(
+              db,
+              "SELECT d.* FROM document_versions d JOIN structure_annotations a ON a.document_version_id=d.document_version_id WHERE d.document_version_id=? AND d.literature_id=? AND d.source_asset_id=? AND d.source_sha256=? AND d.schema_version=2 AND a.annotation_id=?",
+              part.document_version_id!,
+              input.literature_id,
+              part.asset_id,
+              part.asset_sha256,
+              part.structure_annotation_id!,
+            );
+            if (!d) fail("processor-input-changed");
+            db.prepare(
+              "INSERT OR IGNORE INTO processor_result_documents VALUES(?,?,?,?,?,?)",
+            ).run(
+              p.result_id,
+              input.literature_id,
+              part.asset_id,
+              part.asset_sha256,
+              part.document_version_id!,
+              String(d.representation_sha256),
+            );
+          }
+      } else if (input.kind === "snapshot") {
+        const snapshot = one(
           db,
-          "SELECT 1 FROM document_versions d JOIN literature_assets a ON a.asset_id=d.source_asset_id WHERE d.document_version_id=? AND d.representation_sha256=? AND a.literature_id=? AND a.asset_id=?",
-          d.document_version_id,
-          d.representation_sha256,
-          m.literature_id,
-          m.asset_id,
+          "SELECT content_sha256 FROM snapshots WHERE snapshot_id=?",
+          input.snapshot_id,
         );
-        if (!match) fail("processor-input-changed");
-        db.prepare(
-          "INSERT OR IGNORE INTO processor_result_documents(result_id,literature_id,asset_id,asset_sha256,document_version_id,representation_sha256) VALUES(?,?,?,?,?,?)",
-        ).run(
-          p.result_id,
-          m.literature_id,
-          m.asset_id,
-          m.asset_sha256,
-          d.document_version_id,
-          d.representation_sha256,
-        );
-      } else if (input.kind === "result")
-        db.prepare(
-          "INSERT OR IGNORE INTO processor_result_inputs(result_id,source_result_id,source_sha256) VALUES(?,?,?)",
-        ).run(p.result_id, input.result_id, input.content_sha256);
-      else if (input.kind === "knowledge")
-        knowledge.set(input.artifact_id, input.content_sha256);
+        if (snapshot?.content_sha256 !== input.content_sha256)
+          fail("processor-input-changed");
+        for (const source of input.mapped_results)
+          db.prepare(
+            "INSERT OR IGNORE INTO processor_result_inputs(result_id,source_result_id,source_sha256) VALUES(?,?,?)",
+          ).run(p.result_id, source.result_id, source.content_sha256);
+      } else if (input.kind === "external") {
+        const d = input.document,
+          m = input.material;
+        if (d) {
+          const found = one(
+            db,
+            "SELECT 1 FROM document_versions WHERE document_version_id=? AND literature_id=? AND source_asset_id=? AND representation_sha256=?",
+            d.document_version_id,
+            input.literature_id,
+            d.source_material_ref.asset_id,
+            d.representation_sha256,
+          );
+          if (!found) fail("processor-input-changed");
+          db.prepare(
+            "INSERT OR IGNORE INTO processor_result_documents VALUES(?,?,?,?,?,?)",
+          ).run(
+            p.result_id,
+            input.literature_id,
+            d.source_material_ref.asset_id,
+            d.source_material_ref.asset_sha256,
+            d.document_version_id,
+            d.representation_sha256,
+          );
+        } else if (m)
+          db.prepare(
+            "INSERT OR IGNORE INTO processor_result_materials VALUES(?,?,?,?)",
+          ).run(p.result_id, input.literature_id, m.asset_id, m.asset_sha256);
+      }
     }
-    if (p.knowledge)
-      knowledge.set(p.knowledge.artifact_id, p.knowledge.content_sha256);
-    for (const [id, hash] of knowledge)
-      db.prepare(
-        "INSERT INTO processor_result_knowledge(result_id,artifact_id,content_sha256) VALUES(?,?,?)",
-      ).run(p.result_id, id, hash);
+    bindProcessorFreshness(
+      db,
+      p.result_id,
+      p.inputs,
+      p.reads,
+      p.uses_description,
+    );
     return one(
       db,
       "SELECT * FROM processor_results WHERE result_id=?",
@@ -272,6 +319,7 @@ function queryRecords(db: DatabaseSync, q: ProcessorRecordQuery) {
     .all(...params);
 }
 export type ProcessorStorageAction =
+  | "freshness"
   | "repair-projections"
   | "collection-project"
   | "index-status"
@@ -283,6 +331,7 @@ export type ProcessorStorageAction =
   | "project"
   | "projection"
   | "query"
+  | "context-search"
   | "search"
   | "collection-put"
   | "collection-get"
@@ -296,11 +345,17 @@ export function runProcessorStorage(
   schema: readonly string[],
 ): unknown {
   if (
-    one(db, "SELECT schema_version FROM schema_identity WHERE singleton=1")
-      ?.schema_version !== 10
+    ![11].includes(
+      Number(
+        one(db, "SELECT schema_version FROM schema_identity WHERE singleton=1")
+          ?.schema_version,
+      ),
+    )
   )
     fail("catalog-v10-required");
   switch (action) {
+    case "freshness":
+      return readProcessorFreshness(db, String(args));
     case "repair-projections":
       return tx(db, () => {
         for (const ddl of schema) {
@@ -383,47 +438,78 @@ export function runProcessorStorage(
             "SELECT * FROM processor_result_inputs WHERE result_id=? ORDER BY source_result_id",
           )
           .all(String(args)),
-        knowledge: db
-          .prepare(
-            "SELECT * FROM processor_result_knowledge WHERE result_id=? ORDER BY artifact_id",
-          )
-          .all(String(args)),
       };
     case "list": {
       const q = args as {
         after: string;
         limit: number;
         literature_id?: string | null;
+        stale?: boolean | null;
       };
       if (q.literature_id)
         return db
           .prepare(
             `
-        WITH RECURSIVE knowledge(artifact_id) AS (
-          SELECT artifact_id FROM knowledge_input_materials WHERE literature_id=?
-          UNION SELECT i.artifact_id FROM knowledge_input_artifacts i JOIN knowledge k ON i.source_artifact_id=k.artifact_id
-        ), related(result_id) AS (
-          SELECT result_id FROM processor_result_documents WHERE literature_id=?
-          UNION SELECT result_id FROM processor_result_materials WHERE literature_id=?
-          UNION SELECT p.result_id FROM processor_result_knowledge p JOIN knowledge k ON p.artifact_id=k.artifact_id
-          UNION SELECT i.result_id FROM processor_result_inputs i JOIN related r ON i.source_result_id=r.result_id
+        WITH related(result_id) AS (
+          SELECT result_id FROM processor_result_literatures WHERE literature_id=?
         )
-        SELECT p.* FROM processor_results p JOIN related r ON r.result_id=p.result_id
-        WHERE p.result_id>? ORDER BY p.result_id LIMIT ?
+        SELECT p.*,f.state AS freshness FROM processor_results p JOIN related r ON r.result_id=p.result_id JOIN processor_result_freshness f ON f.result_id=p.result_id
+        WHERE p.result_id>? AND (? IS NULL OR f.state=?) ORDER BY p.result_id LIMIT ?
       `,
           )
           .all(
             q.literature_id,
-            q.literature_id,
-            q.literature_id,
             q.after,
+            q.stale === null || q.stale === undefined
+              ? null
+              : q.stale
+                ? "stale"
+                : "current",
+            q.stale ? "stale" : "current",
             q.limit,
           );
       return db
         .prepare(
-          "SELECT * FROM processor_results WHERE result_id>? ORDER BY result_id LIMIT ?",
+          "SELECT p.*,f.state AS freshness FROM processor_results p JOIN processor_result_freshness f ON f.result_id=p.result_id WHERE p.result_id>? AND (? IS NULL OR f.state=?) ORDER BY p.result_id LIMIT ?",
         )
-        .all(q.after, q.limit);
+        .all(
+          q.after,
+          q.stale === null || q.stale === undefined
+            ? null
+            : q.stale
+              ? "stale"
+              : "current",
+          q.stale ? "stale" : "current",
+          q.limit,
+        );
+    }
+    case "context-search": {
+      const q = args as {
+        query: string;
+        scope: readonly string[];
+        watermark: number | null;
+        after: { result_id: string; record_id: string } | null;
+      };
+      const watermark =
+        q.watermark ??
+        Number(
+          one(db, "SELECT coalesce(max(rowid),0) AS n FROM processor_results")
+            ?.n ?? 0,
+        );
+      const rows = db
+        .prepare(
+          "SELECT f.result_id,f.record_id FROM processor_result_fts f JOIN processor_results r ON r.result_id=f.result_id WHERE processor_result_fts MATCH ? AND r.rowid<=? AND (f.record_id<>'' OR NOT EXISTS(SELECT 1 FROM processor_record_projection p WHERE p.result_id=f.result_id)) AND (?='[]' OR EXISTS(SELECT 1 FROM processor_result_literatures l WHERE l.result_id=f.result_id AND l.literature_id IN (SELECT value FROM json_each(?)))) AND (f.result_id>? OR (f.result_id=? AND f.record_id>?)) ORDER BY f.result_id,f.record_id LIMIT 1",
+        )
+        .all(
+          q.query,
+          watermark,
+          JSON.stringify(q.scope),
+          JSON.stringify(q.scope),
+          q.after?.result_id ?? "",
+          q.after?.result_id ?? "",
+          q.after?.record_id ?? "",
+        );
+      return { watermark, row: rows[0] ?? null };
     }
     case "search": {
       const q = args as { query: string; limit: number; offset: number };

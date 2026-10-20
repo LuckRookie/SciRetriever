@@ -313,7 +313,8 @@ it.runIf(available)(
         f.origin + "/article/a",
         await identity("a"),
       );
-      await expect.poll(() => Boolean(release)).toBe(true);
+      // This is an asynchronous request barrier, not a one-second latency assertion.
+      await expect.poll(() => Boolean(release), { timeout: 5000 }).toBe(true);
       const b = await host.openPage(
         f.origin + "/article/b",
         await identity("b"),
@@ -322,7 +323,7 @@ it.runIf(available)(
         b.id,
       );
       release!();
-      await expect.poll(() => a.title()).toBe("A complete");
+      await expect.poll(() => a.title(), { timeout: 5000 }).toBe("A complete");
       expect(requests.filter((path) => path === "/late")).toHaveLength(1);
     } finally {
       release?.();

@@ -398,7 +398,8 @@ it("binds the model goal and input hash to the article identifier and version", 
     venue: "Journal of Fixtures",
     publisher: "Fixture Press",
     publication_year: 2026,
-    document_type: "article",
+    publication_form: "journal-article" as const,
+    article_kind: null,
   };
   await decide(observation, null, signal, [], metadataTarget);
   const metadataContext = calls
@@ -421,7 +422,7 @@ it("binds the model goal and input hash to the article identifier and version", 
       venue: metadataTarget.venue,
       publisher: metadataTarget.publisher,
       publication_year: metadataTarget.publication_year,
-      document_type: metadataTarget.document_type,
+      publication_form: metadataTarget.publication_form,
     },
   });
   expect(JSON.stringify(metadataContext)).not.toContain("start_url");

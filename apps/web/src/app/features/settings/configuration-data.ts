@@ -59,9 +59,11 @@ export function runtimeStatus(value: JsonRecord) {
     );
   else if (parserRuntime?.assembled === false)
     messages.push(
-      parserRuntime.unavailable_reason === "configuration-incomplete"
-        ? "当前 Application 启动时未组装 Parser；请补齐解析配置后重新检查。"
-        : "当前 Application 未组装 Parser；请检查当前解析配置与服务状态。",
+      parserRuntime.unavailable_reason === "catalog-upgrade-required"
+        ? "当前文献库尚未支持双模式解析。请先备份并使用 CLI 的 storage schema-upgrade 升级，再重启服务。"
+        : parserRuntime.unavailable_reason === "configuration-incomplete"
+          ? "当前 Application 启动时未组装 Parser；请补齐解析配置后重新检查。"
+          : "当前 Application 未组装 Parser；请检查当前解析配置与服务状态。",
     );
   if (sourceNeedsRestart)
     messages.push(

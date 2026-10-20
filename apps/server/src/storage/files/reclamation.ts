@@ -1,21 +1,24 @@
-import { hasManagedArtifactPrefix } from "../artifact-layout.js";
+import { parseArtifactRef, type ArtifactRef } from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import {
-  open,
-  mkdir,
   lstat,
-  rename,
-  unlink,
+  mkdir,
+  open,
   readdir,
+  rename,
   rmdir,
+  unlink,
   type FileHandle,
 } from "node:fs/promises";
-import { resolve, dirname, basename } from "node:path";
-import { parseArtifactRef, type ArtifactRef } from "@sciretriever/contracts";
-import type { RetiredArtifact } from "../../literature/cleanup.js";
+import { basename, dirname, resolve } from "node:path";
+import { hasManagedArtifactPrefix } from "../artifact-layout.js";
 import type { CatalogWriteAdmission } from "../write-admission.js";
 import { isRelativeArtifactReference } from "./publication.js";
+export interface RetiredArtifact {
+  readonly reference: string;
+  readonly artifact: ArtifactRef;
+}
 
 export class ArtifactReclamationError extends Error {
   readonly code = "artifact-reclamation";
@@ -347,4 +350,14 @@ export class ArtifactReclaimer {
       if (results.some((r) => r.status === "rejected")) fail();
     }
   }
+}
+
+export interface CandidateCleanupSnapshot {
+  readonly candidates: readonly { transfer_id: string; record_json: string }[];
+  readonly receipts: readonly {
+    receipt_id: string;
+    transfer_id: string;
+    intent_json: string;
+    result_json: string | null;
+  }[];
 }

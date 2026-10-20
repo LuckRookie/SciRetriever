@@ -167,6 +167,7 @@ export async function parseCrossrefRecord(
       input_sha256,
       parameters_sha256: options.parameters_sha256 ?? null,
     },
+    source_type: text("type"),
     metadata: {
       title: displayText(first("title")),
       authors,
@@ -176,7 +177,6 @@ export async function parseCrossrefRecord(
           : null,
       publication_date: publicationDate,
       publication_year: publicationDate?.slice(0, 4) ?? null,
-      document_type: text("type"),
       language: text("language"),
       venue: displayText(first("container-title")),
       publisher: text("publisher"),

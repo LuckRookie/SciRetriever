@@ -10,6 +10,4 @@
 
 日志描述执行过程，不作为文献事实或任务结果数据库；真实运行日志放 sandbox/runs 或正式运行日志位置。
 
-相关说明：[所属技术文档](../../../../docs/architecture/technical/02-task-coordination.md)。
-
-[上级目录](../README.md) · [项目 README](../../../../README.md)
+[上级目录](../README.md)

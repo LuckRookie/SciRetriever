@@ -101,7 +101,7 @@ it("keeps discovery and bibliography import explicit and uploads a selected PDF 
       )
       .toBe(true);
     expect(w.env.modelCalls).toBe(0);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(w.setupCalls.parser);
     expect(await w.env.app.jobs!.listJobs(10)).toHaveLength(0);
     expect(w.errors).toEqual([]);
   } finally {

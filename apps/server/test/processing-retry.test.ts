@@ -1,9 +1,10 @@
+import { ParsingFailure } from "../src/parsing/ports.js";
 import { describe, expect, it } from "vitest";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
 import type { ExecutionTarget } from "../src/storage/sqlite/worker.js";
 
 const failure = {
-  code: "content-completion-unavailable",
+  code: "completion-parsing-failed",
   reason: "Synthetic completion configuration is missing.",
   action: "Configure the completion service and explicitly retry.",
   retryable: false,
@@ -43,6 +44,9 @@ describe("processing skip diagnostics and explicit retry", () => {
 
   it("preserves an explicit operator skip and a cancelled terminal task", async () => {
     const env = await coreProcessingFixture({ analysisModel: false });
+    env.setParseHook(async () => {
+      throw new ParsingFailure("parser-unavailable");
+    });
     try {
       const job = await env.app.jobService!.create({
         target_kind: "selector",
@@ -50,7 +54,7 @@ describe("processing skip diagnostics and explicit retry", () => {
           kind: "literatures",
           literature_ids: [env.parseRequest.literature_id],
         },
-        goal: "content",
+        goal: "parser",
         policy_version: "fixture",
         policy: { mode: "pause" },
         idempotency_key: "operator-skip",
@@ -73,7 +77,7 @@ describe("processing skip diagnostics and explicit retry", () => {
         await env.app.jobs!.listAttempts(settled.targets[0]!.target_id),
       ).toHaveLength(1);
       expect(settled.failures).toMatchObject([
-        { failure: { code: "content-completion-unavailable" } },
+        { failure: { code: "completion-parsing-failed" } },
       ]);
       await expect(
         env.app.processingTasks!.control(job.job_id, "retry"),
@@ -83,7 +87,7 @@ describe("processing skip diagnostics and explicit retry", () => {
         schema_version: 1,
         idempotency_key: "cancelled-retry",
         operations: [
-          { operation: "parse-documents", request: env.parseRequest },
+          { operation: "parse-documents", request: env.rawParseRequest },
         ],
       });
       await env.app.processingTasks!.control(cancelled.job_id, "cancel");
@@ -93,7 +97,7 @@ describe("processing skip diagnostics and explicit retry", () => {
       expect(
         (await env.app.processingTasks!.read(cancelled.job_id)).job.status,
       ).toBe("cancelled");
-      expect(env.parseCalls).toBe(0);
+      expect(env.parseCalls).toBe(2);
     } finally {
       await env.close();
     }

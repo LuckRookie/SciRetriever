@@ -36,6 +36,8 @@ export class ApiClient {
     readiness: "unavailable",
   };
   private stream: EventSource | null = null;
+  readonly materialListeners = new Set<() => void>();
+  private materialRevision: string | null = null;
   private released = false;
   private loginRedirected = false;
   readonly listeners = new Set<(view: WorkbenchView) => void>();
@@ -127,6 +129,29 @@ export class ApiClient {
           this.accept(JSON.parse((event as MessageEvent<string>).data));
         } catch {
           // A malformed push never replaces the last validated view.
+          void this.refreshView().catch(() => this.connection(false));
+        }
+      });
+      this.stream.addEventListener("materials", (event) => {
+        if (this.released) return;
+        try {
+          const value: unknown = JSON.parse(
+            (event as MessageEvent<string>).data,
+          );
+          if (
+            !value ||
+            typeof value !== "object" ||
+            !("revision" in value) ||
+            typeof value.revision !== "string"
+          )
+            return;
+          const changed =
+            this.materialRevision !== null &&
+            this.materialRevision !== value.revision;
+          this.materialRevision = value.revision;
+          if (changed)
+            for (const listener of this.materialListeners) listener();
+        } catch {
           void this.refreshView().catch(() => this.connection(false));
         }
       });

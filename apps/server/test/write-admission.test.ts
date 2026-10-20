@@ -6,8 +6,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { AsyncResource } from "node:async_hooks";
 import { expect, it } from "vitest";
-import { setup, proposal, lit } from "./content-fixture.js";
-import { LiteratureContentService } from "../src/literature/content.js";
+import { reclamationFixture as setup } from "./reclamation-fixture.js";
 import { createApplication } from "../src/bootstrap/application.js";
 import {
   acquireCatalogWriteLock,
@@ -194,42 +193,36 @@ it("releases a subprocess-held admission on process death without stale lock-dir
     await rm(home, { recursive: true, force: true });
   }
 });
-it("keeps content files and their SQL publication in one admission, then lets a queued maintenance read observe the commit", async () => {
+it("keeps file publication and registration in one admission before a queued maintenance read", async () => {
   const env = await setup();
-  let entered: () => void = () => {},
-    release: () => void = () => {};
-  const atCommit = new Promise<void>((r) => {
-      entered = r;
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>((r) => {
+      enter = r;
     }),
     hold = new Promise<void>((r) => {
       release = r;
     });
   try {
-    const p = await proposal(await env.app.library.detail(lit));
-    const service = new LiteratureContentService(
-      env.app.library,
-      {
-        locateArtifact: (value) => env.app.database.locateArtifact(value),
-        acceptLiteratureContent: async (command) => {
-          await expect(
-            acquireCatalogWriteLock(join(env.home, "catalog.sqlite")),
-          ).rejects.toMatchObject({ code: "write-admission-conflict" });
-          entered();
-          await hold;
-          return env.app.database.acceptLiteratureContent(command);
-        },
-      },
-      env.app.files,
-    );
-    const publishing = service.accept(p.value, p.bytes);
-    await Promise.race([atCommit, publishing]);
+    const publishing = env.app.files.withWrite(async () => {
+      await expect(
+        acquireCatalogWriteLock(join(env.home, "catalog.sqlite")),
+      ).rejects.toMatchObject({ code: "write-admission-conflict" });
+      const bytes = await env.app.files.read(
+          env.primary.path,
+          env.primary.size_bytes,
+        ),
+        stage = await env.app.files.stage();
+      await stage.write(bytes);
+      await env.app.files.publish(stage, env.primary.path);
+      enter();
+      await hold;
+      await env.app.database.putAsset(env.primary);
+    });
+    await Promise.race([entered, publishing]);
     let maintenanceRan = false;
     const maintenance = env.app.writes.run(async () => {
       maintenanceRan = true;
-      expect(
-        await env.app.database.locateArtifact(p.value.markdown),
-      ).not.toBeNull();
-      expect((await env.app.library.detail(lit)).content).not.toBeNull();
+      expect(await env.app.database.locateArtifact(env.primary)).not.toBeNull();
     });
     expect(maintenanceRan).toBe(false);
     release();
@@ -241,40 +234,32 @@ it("keeps content files and their SQL publication in one admission, then lets a 
     await env.close();
   }
 });
-it("application shutdown waits for an already admitted content publication to finish its SQL commit", async () => {
+it("application shutdown waits for an admitted file registration to commit", async () => {
   const env = await setup();
-  let entered: () => void = () => {},
-    release: () => void = () => {};
-  const atCommit = new Promise<void>((r) => {
-      entered = r;
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>((r) => {
+      enter = r;
     }),
     hold = new Promise<void>((r) => {
       release = r;
     });
   let reopened: Awaited<ReturnType<typeof createApplication>> | undefined;
   try {
-    const p = await proposal(await env.app.library.detail(lit));
-    const service = new LiteratureContentService(
-      env.app.library,
-      {
-        locateArtifact: (value) => env.app.database.locateArtifact(value),
-        acceptLiteratureContent: async (command) => {
-          entered();
-          await hold;
-          return env.app.database.acceptLiteratureContent(command);
-        },
-      },
-      env.app.files,
-    );
-    const publishing = service.accept(p.value, p.bytes);
-    await Promise.race([atCommit, publishing]);
+    const publishing = env.app.files.withWrite(async () => {
+      enter();
+      await hold;
+      await env.app.database.putAsset(env.primary);
+    });
+    await entered;
     const closing = env.app.close();
     await Promise.resolve();
     release();
-    const accepted = await publishing;
+    await publishing;
     await closing;
     reopened = await createApplication(env.home);
-    expect((await reopened.library.detail(lit)).content).toEqual(accepted);
+    expect(await reopened.database.getAsset(env.primary.asset_id)).toEqual(
+      env.primary,
+    );
   } finally {
     release();
     await reopened?.close();

@@ -1,15 +1,14 @@
-import { useEffect, useRef, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  parseKnowledgeContextRequest,
-  parseKnowledgeContextBundle,
-  parseMaterialContextRequest,
-  parseMaterialContextBundle,
   parseDocumentReadRequest,
   parseDocumentReadResult,
+  parseKnowledgeContextBundle,
+  parseKnowledgeContextRequest,
   type KnowledgeContextItem,
   type KnowledgeContextRequest,
 } from "@sciretriever/contracts";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { copyText } from "../../../browser-platform.js";
 import {
   Button,
   Disclosure,
@@ -21,15 +20,14 @@ import {
   TechDetails,
   TextField,
 } from "../../components/index.js";
-import { useApi } from "../../data/query.js";
 import type { ApiClient } from "../../data/api.js";
 import { paperTitle, readLiterature, scopeIds } from "../../data/library.js";
-import { navigate, useUrlState } from "../../data/url.js";
+import { useApi } from "../../data/query.js";
 import { sourceParameters } from "../../data/sources.js";
+import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
-import { copyText } from "../../../browser-platform.js";
-import { download } from "../library/OperationDialog.js";
 import { errorMessage } from "../../strings.js";
+import { download } from "../library/OperationDialog.js";
 import "./retrieval.css";
 
 interface State {
@@ -67,22 +65,15 @@ const initial = (): State => ({
 });
 const key = (item: KnowledgeContextItem) => JSON.stringify(item.reference);
 const textOf = (item: KnowledgeContextItem) =>
-  item.kind === "generated-knowledge"
-    ? (item.statement?.text ?? "该知识片段超过本次预算，可打开固定来源。")
+  item.kind === "generated-result"
+    ? item.text || "该结果超过本次预算，可打开完整结果。"
     : item.text;
 export default function Retrieval() {
   const api = useApi(),
     shell = useShell(),
     route = useUrlState(),
     queries = useQueryClient();
-  const materialOnly =
-    api.workspace.schemaVersion != null && api.workspace.schemaVersion < 8;
-  const [state, setState] = useState(() => {
-      const saved = sessions.get(api) ?? initial();
-      return materialOnly
-        ? { ...saved, draft: { ...saved.draft, kinds: "source" } }
-        : saved;
-    }),
+  const [state, setState] = useState(() => sessions.get(api) ?? initial()),
     [busy, setBusy] = useState(false),
     [error, setError] = useState<string | null>(null);
   const active = useRef<AbortController | null>(null),
@@ -128,7 +119,7 @@ export default function Retrieval() {
               continuation: state.next,
             })
           : parseKnowledgeContextRequest({
-              schema_version: 2,
+              schema_version: 3,
               query: state.draft.query,
               scope:
                 state.draft.scope === "library"
@@ -141,20 +132,6 @@ export default function Retrieval() {
                     ? ["knowledge"]
                     : ["metadata", "document", "knowledge"],
               versions: { kind: "default" },
-              knowledge:
-                state.draft.kinds === "source"
-                  ? null
-                  : {
-                      purposes: [
-                        "overview",
-                        "detailed",
-                        "question",
-                        "synthesis",
-                      ],
-                      question: null,
-                      selection: "all",
-                      artifact_ids: [],
-                    },
               budget: {
                 max_items: Number(state.draft.count),
                 max_bytes: Number(state.draft.bytes),
@@ -166,20 +143,6 @@ export default function Retrieval() {
         queryKey: ["retrieval", request],
         queryFn: async ({ signal }) => {
           const combined = AbortSignal.any([signal, controller.signal]);
-          if (materialOnly) {
-            const sourceRequest = parseMaterialContextRequest({
-              query: request.query,
-              scope: request.scope,
-              kinds: ["metadata", "document"],
-              versions: request.versions,
-              budget: request.budget,
-              continuation: request.continuation,
-            });
-            return parseMaterialContextBundle(
-              (await api.query("context", sourceRequest, combined)).result,
-              sourceRequest,
-            );
-          }
           return parseKnowledgeContextBundle(
             (await api.query("knowledge-context", request, combined)).result,
             request,
@@ -234,28 +197,17 @@ export default function Retrieval() {
     });
   const open = (item: KnowledgeContextItem) => {
     const parameters = { ...sourceParameters(item.reference), from: "ask" };
-    if (item.kind === "generated-knowledge" && item.purpose === "synthesis")
+    if (item.kind === "generated-result")
       navigate(
         {
-          view: "syn",
-          literature: null,
-          ...parameters,
-          artifact: item.reference.artifact_id,
+          view: "ext",
+          result: item.reference.result_id,
+          resultHash: item.reference.content_sha256,
+          from: "ask",
         },
         { clearSource: true },
       );
-    else {
-      const id =
-        item.kind === "generated-knowledge"
-          ? item.source_literature_ids[0]
-          : item.literature_id;
-      if (id)
-        shell.openPaper(
-          id,
-          item.kind === "generated-knowledge" ? "know" : "doc",
-          parameters,
-        );
-    }
+    else shell.openPaper(item.literature_id, "doc", parameters);
   };
   return (
     <div className="retrieval-page">
@@ -264,11 +216,6 @@ export default function Retrieval() {
           title="检索"
           description="在已保存的正文和知识里查找材料，随时返回原文核对。"
         />
-        {materialOnly && (
-          <p className="muted">
-            当前文献库提供元数据与原文检索；此版本的库尚不提供知识检索。
-          </p>
-        )}
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -316,12 +263,8 @@ export default function Retrieval() {
                 onChange={(kinds) => draft({ kinds })}
                 options={[
                   { value: "source", label: "仅原文" },
-                  ...(!materialOnly
-                    ? [
-                        { value: "all", label: "原文与知识" },
-                        { value: "knowledge", label: "仅知识" },
-                      ]
-                    : []),
+                  { value: "all", label: "原文与知识" },
+                  { value: "knowledge", label: "仅知识" },
                 ]}
               />
               <Select
@@ -476,7 +419,7 @@ function Result({
 }) {
   const api = useApi();
   const id =
-    item.kind === "generated-knowledge"
+    item.kind === "generated-result"
       ? item.source_literature_ids[0]
       : item.literature_id;
   const literature = useQuery({
@@ -490,8 +433,8 @@ function Result({
       <p data-testid="retrieval-text">{textOf(item)}</p>
       <div className="retrieval-source">
         <span data-testid="retrieval-kind">
-          {item.kind === "generated-knowledge"
-            ? item.purpose === "synthesis"
+          {item.kind === "generated-result"
+            ? item.processor_id === "knowledge-synthesis"
               ? "综合"
               : "知识"
             : item.kind === "metadata"
@@ -501,8 +444,8 @@ function Result({
         <Button variant="text" data-testid="retrieval-source" onPress={onOpen}>
           {literature.data
             ? paperTitle(literature.data)
-            : item.kind === "generated-knowledge" &&
-                item.purpose === "synthesis"
+            : item.kind === "generated-result" &&
+                item.processor_id === "knowledge-synthesis"
               ? "打开综合来源"
               : "打开来源文献"}
         </Button>

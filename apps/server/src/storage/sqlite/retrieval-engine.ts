@@ -1,8 +1,15 @@
-import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
+import type * as Schema from "./schema.js";
+const { SCHEMA_VERSION }: typeof Schema = await import(
+  new URL(
+    import.meta.url.endsWith(".ts") ? "./schema.ts" : "./schema.js",
+    import.meta.url,
+  ).href
+);
 
 export interface RetrievalSchemaConfig {
-  readonly schema_version?: 4 | 5 | 6 | 7 | 8 | 9 | 10;
+  readonly schema_version: typeof SCHEMA_VERSION;
   readonly schema_fingerprint: string;
   readonly schema_manifest: readonly string[];
   readonly execution_schema_version: number;
@@ -11,7 +18,7 @@ export interface RetrievalSchemaConfig {
   readonly execution_runtime_schema_fingerprint: string;
 }
 export interface RetrievalCatalogInspection {
-  readonly schema_version: 4 | 5 | 6 | 7 | 8 | 9 | 10;
+  readonly schema_version: typeof SCHEMA_VERSION;
   readonly schema_fingerprint: string;
   readonly integrity: "ok";
   readonly foreign_keys: "ok";
@@ -51,67 +58,6 @@ export function retrievalHashes(
     posting_sha256: posting.digest("hex"),
   };
 }
-function knowledgeHashes(db: DatabaseSync, generationId: string) {
-  const content = createHash("sha256").update(
-    `knowledge-content-v1:${generationId}\n`,
-  );
-  for (const row of db
-    .prepare(
-      "SELECT e.entry_id,e.artifact_id,e.content_sha256,e.manifest_sha256,e.scope_kind,e.scope_key,e.purpose,e.question_sha256,e.statement_id,e.statement_ordinal,e.statement_sha256,e.source_literature_ids_json,e.scope_complete,e.is_default,f.title,f.body FROM knowledge_retrieval_entries e JOIN knowledge_retrieval_fts f ON f.rowid=e.entry_id WHERE e.generation_id=? ORDER BY e.entry_id",
-    )
-    .iterate(generationId))
-    content.update(`${JSON.stringify(Object.values(row))}\n`);
-  const posting = createHash("sha256").update(
-    `knowledge-posting-v1:${generationId}\n`,
-  );
-  for (const row of db
-    .prepare(
-      "SELECT v.term,v.doc,v.col,v.offset FROM knowledge_retrieval_fts_vocab v JOIN knowledge_retrieval_entries e ON e.entry_id=v.doc WHERE e.generation_id=? ORDER BY v.term,v.doc,v.col,v.offset",
-    )
-    .iterate(generationId))
-    posting.update(`${JSON.stringify(Object.values(row))}\n`);
-  return {
-    content_sha256: content.digest("hex"),
-    posting_sha256: posting.digest("hex"),
-  };
-}
-export function inspectKnowledgeProjectionDdl(
-  db: DatabaseSync,
-  config: RetrievalSchemaConfig,
-): void {
-  if (
-    !([8, 9, 10] as readonly (number | undefined)[]).includes(
-      config.schema_version,
-    )
-  )
-    fail();
-  for (const sql of config.schema_manifest) {
-    const name =
-      /^CREATE (?:UNIQUE )?(?:VIRTUAL )?(?:TABLE|INDEX|TRIGGER) (knowledge_retrieval_[a-z_][a-z0-9_]*)/.exec(
-        sql,
-      )?.[1];
-    if (!name) continue;
-    const actual = db
-      .prepare("SELECT sql FROM sqlite_master WHERE name=?")
-      .get(name) as { sql?: unknown } | undefined;
-    if (actual?.sql !== sql) fail();
-  }
-}
-export function inspectV4(
-  db: DatabaseSync,
-  config: RetrievalSchemaConfig,
-  checkpoint?: () => void,
-  sourceOnly = false,
-): RetrievalCatalogInspection & { readonly schema_version: 4 } {
-  const result = inspectCatalogWithRetrieval(
-    db,
-    config,
-    checkpoint,
-    sourceOnly,
-  );
-  if (result.schema_version !== 4) fail();
-  return result as RetrievalCatalogInspection & { readonly schema_version: 4 };
-}
 export function inspectCatalogWithRetrieval(
   db: DatabaseSync,
   config: RetrievalSchemaConfig,
@@ -122,7 +68,7 @@ export function inspectCatalogWithRetrieval(
   // read snapshot at the first statement and keeps it through the final pointer.
   db.exec("SAVEPOINT sciretriever_retrieval_inspect");
   try {
-    const result = inspectV4Snapshot(db, config, checkpoint, sourceOnly);
+    const result = inspectCatalogSnapshot(db, config, checkpoint, sourceOnly);
     db.exec("RELEASE sciretriever_retrieval_inspect");
     return result;
   } catch (error) {
@@ -135,7 +81,7 @@ export function inspectCatalogWithRetrieval(
     throw error;
   }
 }
-function inspectV4Snapshot(
+function inspectCatalogSnapshot(
   db: DatabaseSync,
   config: RetrievalSchemaConfig,
   checkpoint?: () => void,
@@ -154,14 +100,14 @@ function inspectV4Snapshot(
     | undefined;
   if (
     identity?.product !== "sciretriever" ||
-    identity.schema_version !== (config.schema_version ?? 4) ||
+    identity.schema_version !== config.schema_version ||
     identity.schema_fingerprint !== config.schema_fingerprint
   )
     fail();
   const names = new Set<string>();
   for (const sql of config.schema_manifest) {
     const name =
-      /^CREATE (?:UNIQUE )?(?:VIRTUAL )?(?:TABLE|INDEX|TRIGGER) ([a-z_][a-z0-9_]*)/.exec(
+      /^CREATE (?:UNIQUE )?(?:VIRTUAL )?(?:TABLE|INDEX|TRIGGER|VIEW) ([a-z_][a-z0-9_]*)/.exec(
         sql,
       )?.[1];
     if (!name) fail();
@@ -172,31 +118,21 @@ function inspectV4Snapshot(
     if (
       actual?.sql !== sql &&
       !(
-        ([8, 9, 10] as readonly (number | undefined)[]).includes(
-          config.schema_version,
-        ) &&
-        (name.startsWith("knowledge_retrieval_") ||
-          [
-            "processor_record_projection",
-            "processor_projection_state",
-            "processor_result_fts",
-            "processor_collection_fts",
-          ].includes(name))
+        config.schema_version === SCHEMA_VERSION &&
+        [
+          "processor_record_projection",
+          "processor_projection_state",
+          "processor_result_fts",
+          "processor_collection_fts",
+        ].includes(name)
       )
     )
       fail();
   }
-  for (const table of ["literature_search_fts", "retrieval_fts"])
+  for (const table of ["literature_search_fts", "retrieval_fts", "tag_search"])
     for (const suffix of ["data", "idx", "content", "docsize", "config"])
       names.add(`${table}_${suffix}`);
-  if (
-    ([8, 9, 10] as readonly (number | undefined)[]).includes(
-      config.schema_version,
-    )
-  )
-    for (const suffix of ["data", "idx", "content", "docsize", "config"])
-      names.add(`knowledge_retrieval_fts_${suffix}`);
-  if (config.schema_version === 10)
+  if (config.schema_version === SCHEMA_VERSION)
     for (const prefix of ["processor_result_fts", "processor_collection_fts"])
       for (const suffix of ["data", "idx", "content", "docsize", "config"])
         names.add(`${prefix}_${suffix}`);
@@ -204,12 +140,7 @@ function inspectV4Snapshot(
     .prepare("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
     .all() as { name: string }[];
   if (actual.some((row) => !names.has(row.name))) fail();
-  if (
-    sourceOnly ||
-    ([8, 9, 10] as readonly (number | undefined)[]).includes(
-      config.schema_version,
-    )
-  ) {
+  if (sourceOnly || config.schema_version === SCHEMA_VERSION) {
     // The global integrity pragma invokes FTS5's integrity hook. Repair must
     // still be able to read sound source facts when only that index is damaged.
     for (const sql of config.schema_manifest) {
@@ -219,7 +150,6 @@ function inspectV4Snapshot(
       if (
         !table ||
         (sourceOnly && table.startsWith("retrieval_")) ||
-        table.startsWith("knowledge_retrieval_") ||
         [
           "processor_record_projection",
           "processor_projection_state",
@@ -277,7 +207,7 @@ function inspectV4Snapshot(
     fail();
   if (sourceOnly)
     return {
-      schema_version: config.schema_version ?? 4,
+      schema_version: config.schema_version,
       schema_fingerprint: config.schema_fingerprint,
       integrity: "ok",
       foreign_keys: "ok",
@@ -344,7 +274,7 @@ function inspectV4Snapshot(
   )
     fail();
   return {
-    schema_version: config.schema_version ?? 4,
+    schema_version: config.schema_version,
     schema_fingerprint: config.schema_fingerprint,
     integrity: "ok",
     foreign_keys: "ok",
@@ -421,116 +351,6 @@ export interface RetrievalGeneration {
   readonly entry_count: number;
   readonly source_count: number;
 }
-export interface KnowledgeRetrievalEntry {
-  readonly artifact_id: string;
-  readonly content_sha256: string;
-  readonly manifest_sha256: string;
-  readonly scope_kind: "literature" | "manifest";
-  readonly scope_key: string;
-  readonly purpose: "overview" | "detailed" | "question" | "synthesis";
-  readonly question_sha256: string;
-  readonly statement_id: string;
-  readonly statement_ordinal: number;
-  readonly statement_sha256: string;
-  readonly source_literature_ids: readonly string[];
-  readonly scope_complete: 0 | 1;
-  readonly is_default: 0 | 1;
-  readonly title: string;
-  readonly body: string;
-}
-const KNOWLEDGE_ID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
-const KNOWLEDGE_HASH = /^[0-9a-f]{64}$/;
-const KNOWLEDGE_STATEMENT_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
-function validateKnowledgeEntries(
-  entries: readonly KnowledgeRetrievalEntry[],
-): void {
-  let bytes = 0;
-  const seen = new Set<string>();
-  const ordinals = new Set<string>();
-  const keys = [
-    "artifact_id",
-    "content_sha256",
-    "manifest_sha256",
-    "scope_kind",
-    "scope_key",
-    "purpose",
-    "question_sha256",
-    "statement_id",
-    "statement_ordinal",
-    "statement_sha256",
-    "source_literature_ids",
-    "scope_complete",
-    "is_default",
-    "title",
-    "body",
-  ];
-  for (const entry of entries) {
-    if (
-      !entry ||
-      typeof entry !== "object" ||
-      Array.isArray(entry) ||
-      Object.keys(entry).sort().join("\0") !== [...keys].sort().join("\0")
-    )
-      throw new RetrievalStorageError("index-corrupt");
-    const sources = entry.source_literature_ids;
-    if (
-      !KNOWLEDGE_ID.test(entry.artifact_id) ||
-      !KNOWLEDGE_HASH.test(entry.content_sha256) ||
-      !KNOWLEDGE_HASH.test(entry.manifest_sha256) ||
-      !["literature", "manifest"].includes(entry.scope_kind) ||
-      !(entry.scope_kind === "literature" ? KNOWLEDGE_ID : KNOWLEDGE_HASH).test(
-        entry.scope_key,
-      ) ||
-      !["overview", "detailed", "question", "synthesis"].includes(
-        entry.purpose,
-      ) ||
-      (entry.purpose === "synthesis") !== (entry.scope_kind === "manifest") ||
-      !KNOWLEDGE_HASH.test(entry.question_sha256) ||
-      !KNOWLEDGE_STATEMENT_ID.test(entry.statement_id) ||
-      !Number.isSafeInteger(entry.statement_ordinal) ||
-      entry.statement_ordinal < 0 ||
-      entry.statement_ordinal >= 64 ||
-      !KNOWLEDGE_HASH.test(entry.statement_sha256) ||
-      !Array.isArray(sources) ||
-      sources.length < 1 ||
-      sources.length > 1024 ||
-      sources.some(
-        (source, index) =>
-          !KNOWLEDGE_ID.test(source) ||
-          (index > 0 && sources[index - 1]! >= source),
-      ) ||
-      (entry.scope_kind === "literature" &&
-        (sources.length !== 1 || sources[0] !== entry.scope_key)) ||
-      (entry.scope_complete !== 0 && entry.scope_complete !== 1) ||
-      (entry.is_default !== 0 && entry.is_default !== 1) ||
-      (entry.scope_kind === "manifest" && entry.is_default !== 0) ||
-      typeof entry.title !== "string" ||
-      typeof entry.body !== "string" ||
-      !entry.title ||
-      !entry.body
-    )
-      throw new RetrievalStorageError("index-corrupt");
-    const key = `${entry.artifact_id}\0${entry.statement_id}`;
-    const ordinal = `${entry.artifact_id}\0${entry.statement_ordinal}`;
-    if (seen.has(key) || ordinals.has(ordinal))
-      throw new RetrievalStorageError("index-corrupt");
-    seen.add(key);
-    ordinals.add(ordinal);
-    bytes += Buffer.byteLength(JSON.stringify(entry));
-    if (
-      bytes > 1024 * 1024 ||
-      Buffer.byteLength(entry.title) > 8192 ||
-      Buffer.byteLength(entry.body) > 65536
-    )
-      throw new RetrievalStorageError("index-corrupt");
-  }
-}
-export interface KnowledgeRetrievalHit
-  extends Omit<KnowledgeRetrievalEntry, "title" | "body"> {
-  readonly entry_id: number;
-  readonly score: number;
-}
-export type KnowledgeRetrievalGeneration = RetrievalGeneration;
 export class RetrievalStorageError extends Error {
   readonly code: "index-unavailable" | "index-corrupt" | "index-stale";
   constructor(code: "index-unavailable" | "index-corrupt" | "index-stale") {
@@ -545,11 +365,6 @@ export class RetrievalStorageEngine {
   private observedDataVersion: number;
   private validatedDataVersion: number | null = null;
   private repairGeneration: string | null = null;
-  private knowledgeRepairGeneration: string | null = null;
-  private knowledgeInspectionCache: {
-    dataVersion: number;
-    active: KnowledgeRetrievalGeneration | null;
-  } | null = null;
   readonly readOnly: boolean;
   private readonly config: RetrievalSchemaConfig;
   constructor(path: string, readOnly: boolean, config: RetrievalSchemaConfig) {
@@ -573,19 +388,6 @@ export class RetrievalStorageEngine {
     db.exec("PRAGMA foreign_keys=ON");
     db.exec("PRAGMA busy_timeout=5000");
     prepareRetrievalVocab(db);
-    if (
-      ([8, 9, 10] as readonly (number | undefined)[]).includes(
-        this.config.schema_version,
-      ) &&
-      db
-        .prepare(
-          "SELECT 1 FROM sqlite_master WHERE name='knowledge_retrieval_fts'",
-        )
-        .get()
-    )
-      db.exec(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS temp.knowledge_retrieval_fts_vocab USING fts5vocab(main,knowledge_retrieval_fts,instance)",
-      );
     if (this.readOnly) db.exec("PRAGMA query_only=ON");
     return db;
   }
@@ -603,7 +405,6 @@ export class RetrievalStorageEngine {
         this.db = this.connect();
         this.validate(true);
         this.observedDataVersion = this.dataVersion();
-        this.knowledgeInspectionCache = null;
       }
       return;
     }
@@ -612,7 +413,6 @@ export class RetrievalStorageEngine {
       this.db = this.connect();
       this.observedDataVersion = this.dataVersion();
       this.validatedDataVersion = null;
-      this.knowledgeInspectionCache = null;
     }
     if (skipMaterial || this.validatedDataVersion === this.observedDataVersion)
       return;
@@ -656,7 +456,7 @@ export class RetrievalStorageEngine {
   ): readonly RetrievalSource[] {
     return this.db
       .prepare(
-        `SELECT v.literature_id,l.meta_literature_id,m.metadata_revision,m.metadata_sha256,m.title,m.abstract,NULL AS authors,NULL AS keywords,m.venue,m.publisher,m.publication_year,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=v.literature_id AND p.role='primary-pdf') AS primary_asset_id,v.document_version_id,v.representation_sha256,v.source_asset_id,v.source_sha256 AS source_asset_sha256,CASE WHEN d.document_version_id=v.document_version_id AND v.source_asset_id=(SELECT asset_id FROM literature_assets p WHERE p.literature_id=v.literature_id AND p.role='primary-pdf') THEN 1 ELSE 0 END AS is_default FROM document_versions v JOIN literatures l ON l.literature_id=v.literature_id JOIN literature_metadata m ON m.literature_id=v.literature_id LEFT JOIN document_defaults d ON d.document_id=v.document_id WHERE (? IS NULL OR v.document_version_id>?) ORDER BY v.document_version_id LIMIT ?`,
+        `SELECT v.literature_id,l.meta_literature_id,m.metadata_revision,m.metadata_sha256,m.title,m.abstract,NULL AS authors,NULL AS keywords,m.venue,m.publisher,m.publication_year,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=v.literature_id AND p.role='primary-pdf') AS primary_asset_id,v.document_version_id,v.representation_sha256,v.source_asset_id,v.source_sha256 AS source_asset_sha256,CASE WHEN d.document_version_id=v.document_version_id AND EXISTS(SELECT 1 FROM literature_assets p WHERE p.literature_id=v.literature_id AND p.asset_id=v.source_asset_id AND p.role IN ('primary-pdf','supplementary-pdf')) THEN 1 ELSE 0 END AS is_default FROM document_versions v JOIN literatures l ON l.literature_id=v.literature_id JOIN literature_metadata m ON m.literature_id=v.literature_id LEFT JOIN document_defaults d ON d.document_id=v.document_id WHERE (? IS NULL OR v.document_version_id>?) ORDER BY v.document_version_id LIMIT ?`,
       )
       .all(after, after, limit) as unknown as RetrievalSource[];
   }
@@ -1079,462 +879,5 @@ export class RetrievalStorageEngine {
         "SELECT 1 FROM document_defaults d JOIN document_versions v ON v.document_version_id=d.document_version_id WHERE v.literature_id=? AND v.source_asset_id=?",
       )
       .get(literatureId, assetId);
-  }
-
-  private requireKnowledge(): void {
-    if (
-      !([8, 9, 10] as readonly (number | undefined)[]).includes(
-        this.config.schema_version,
-      )
-    )
-      throw new RetrievalStorageError("index-unavailable");
-  }
-  knowledgeRevision(): number {
-    this.requireKnowledge();
-    this.refreshReader(true);
-    return this.readKnowledgeRevision();
-  }
-  private readKnowledgeRevision(): number {
-    const row = this.db
-      .prepare(
-        "SELECT revision FROM knowledge_retrieval_source_revision WHERE singleton=1",
-      )
-      .get() as { revision?: unknown } | undefined;
-    if (!row || !Number.isSafeInteger(row.revision) || Number(row.revision) < 0)
-      throw new RetrievalStorageError("index-corrupt");
-    return Number(row.revision);
-  }
-  knowledgeSourcePage(
-    after: string | null,
-    limit: number,
-  ): readonly {
-    artifact_id: string;
-    content_sha256: string;
-    manifest_sha256: string;
-    scope_kind: "literature" | "manifest";
-    scope_key: string;
-    purpose: KnowledgeRetrievalEntry["purpose"];
-    question_sha256: string;
-    default_artifact_id: string | null;
-  }[] {
-    this.requireKnowledge();
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 64)
-      throw new RetrievalStorageError("index-corrupt");
-    this.refreshReader(true);
-    return this.db
-      .prepare(
-        "SELECT k.artifact_id,k.content_sha256,k.manifest_sha256,k.scope_kind,k.scope_key,k.purpose,k.question_sha256,d.artifact_id AS default_artifact_id FROM knowledge_artifacts k LEFT JOIN knowledge_defaults d ON d.artifact_id=k.artifact_id WHERE (? IS NULL OR k.artifact_id>?) ORDER BY k.artifact_id LIMIT ?",
-      )
-      .all(after, after, limit) as unknown as ReturnType<
-      RetrievalStorageEngine["knowledgeSourcePage"]
-    >;
-  }
-  private inspectKnowledge(sourceOnly = false): {
-    revision: number;
-    active: KnowledgeRetrievalGeneration | null;
-  } {
-    this.requireKnowledge();
-    this.db.exec("BEGIN");
-    try {
-      inspectCatalogWithRetrieval(this.db, this.config, undefined, true);
-      inspectKnowledgeProjectionDdl(this.db, this.config);
-      const revision = this.readKnowledgeRevision();
-      if (sourceOnly) {
-        this.db.exec("COMMIT");
-        return { revision, active: null };
-      }
-      const generations = this.db
-        .prepare(
-          "SELECT generation_id,status,entry_count,source_count,content_sha256,posting_sha256 FROM knowledge_retrieval_generations",
-        )
-        .all() as {
-        generation_id: string;
-        status: string;
-        entry_count: number;
-        source_count: number;
-        content_sha256: string | null;
-        posting_sha256: string | null;
-      }[];
-      for (const generation of generations) {
-        const entries = Number(
-          (
-            this.db
-              .prepare(
-                "SELECT count(*) AS n FROM knowledge_retrieval_entries WHERE generation_id=?",
-              )
-              .get(generation.generation_id) as { n: number }
-          ).n,
-        );
-        if (entries !== generation.entry_count) throw new Error();
-        if (generation.status === "ready") {
-          const fts = Number(
-            (
-              this.db
-                .prepare(
-                  "SELECT count(*) AS n FROM knowledge_retrieval_entries e JOIN knowledge_retrieval_fts f ON f.rowid=e.entry_id WHERE e.generation_id=?",
-                )
-                .get(generation.generation_id) as { n: number }
-            ).n,
-          );
-          if (fts !== entries) throw new Error();
-          const hashes = knowledgeHashes(this.db, generation.generation_id);
-          if (
-            hashes.content_sha256 !== generation.content_sha256 ||
-            hashes.posting_sha256 !== generation.posting_sha256
-          )
-            throw new Error();
-        } else if (
-          generation.status !== "building" ||
-          generation.content_sha256 !== null ||
-          generation.posting_sha256 !== null
-        )
-          throw new Error();
-      }
-      if (
-        this.db
-          .prepare(
-            "SELECT f.rowid FROM knowledge_retrieval_fts f LEFT JOIN knowledge_retrieval_entries e ON e.entry_id=f.rowid WHERE e.entry_id IS NULL LIMIT 1",
-          )
-          .get()
-      )
-        throw new Error();
-      const pointer = this.db
-        .prepare(
-          "SELECT generation_id FROM knowledge_retrieval_active WHERE singleton=1",
-        )
-        .get() as { generation_id?: unknown } | undefined;
-      const active = pointer?.generation_id;
-      if (
-        active !== undefined &&
-        (typeof active !== "string" ||
-          !generations.some(
-            (g) => g.generation_id === active && g.status === "ready",
-          ))
-      )
-        throw new Error();
-      const activeRow =
-        typeof active === "string"
-          ? (this.db
-              .prepare(
-                "SELECT generation_id,source_revision,entry_count,source_count FROM knowledge_retrieval_generations WHERE generation_id=?",
-              )
-              .get(active) as KnowledgeRetrievalGeneration | undefined)
-          : null;
-      if (active !== undefined && !activeRow) throw new Error();
-      this.db.exec("COMMIT");
-      return { revision, active: activeRow ?? null };
-    } catch {
-      this.db.exec("ROLLBACK");
-      throw new RetrievalStorageError("index-corrupt");
-    }
-  }
-  knowledgeBegin(revision: number): string {
-    this.requireKnowledge();
-    this.refreshReader(true);
-    const id = randomUUID();
-    let repairing = false;
-    try {
-      this.inspectKnowledge();
-    } catch {
-      this.inspectKnowledge(true);
-      repairing = true;
-    }
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      if (this.readKnowledgeRevision() !== revision)
-        throw new RetrievalStorageError("index-stale");
-      this.db.exec(
-        "CREATE TEMP TABLE IF NOT EXISTS knowledge_retrieval_repair_text(entry_id INTEGER PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL)",
-      );
-      this.db.exec("DELETE FROM temp.knowledge_retrieval_repair_text");
-      if (!repairing) {
-        this.db.exec(
-          "DELETE FROM knowledge_retrieval_fts WHERE rowid IN (SELECT e.entry_id FROM knowledge_retrieval_entries e JOIN knowledge_retrieval_generations g ON g.generation_id=e.generation_id WHERE g.status='building')",
-        );
-        this.db.exec(
-          "DELETE FROM knowledge_retrieval_generations WHERE status='building'",
-        );
-      }
-      this.db
-        .prepare(
-          "INSERT INTO knowledge_retrieval_generations(generation_id,index_schema_version,source_revision,status,entry_count,source_count,created_at) VALUES(?,1,?,'building',0,0,?)",
-        )
-        .run(id, revision, new Date().toISOString());
-      this.db.exec("COMMIT");
-      this.knowledgeInspectionCache = null;
-      this.knowledgeRepairGeneration = repairing ? id : null;
-      return id;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
-  }
-  knowledgeInsert(
-    id: string,
-    entries: readonly KnowledgeRetrievalEntry[],
-    sourceCount: number,
-  ): void {
-    this.requireKnowledge();
-    this.refreshReader(true);
-    if (
-      !Array.isArray(entries) ||
-      entries.length > 128 ||
-      !Number.isSafeInteger(sourceCount) ||
-      sourceCount < 0 ||
-      sourceCount > 1
-    )
-      throw new RetrievalStorageError("index-corrupt");
-    validateKnowledgeEntries(entries);
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const insert = this.db.prepare(
-        "INSERT INTO knowledge_retrieval_entries(generation_id,artifact_id,content_sha256,manifest_sha256,scope_kind,scope_key,purpose,question_sha256,statement_id,statement_ordinal,statement_sha256,source_literature_ids_json,scope_complete,is_default) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      );
-      const fts = this.db.prepare(
-        "INSERT INTO knowledge_retrieval_fts(rowid,title,body) VALUES(?,?,?)",
-      );
-      const repair = this.db.prepare(
-        "INSERT INTO temp.knowledge_retrieval_repair_text(entry_id,title,body) VALUES(?,?,?)",
-      );
-      for (const entry of entries) {
-        if (
-          this.db
-            .prepare(
-              "SELECT 1 FROM knowledge_retrieval_entries WHERE generation_id=? AND artifact_id=? AND (statement_id=? OR statement_ordinal=?)",
-            )
-            .get(
-              id,
-              entry.artifact_id,
-              entry.statement_id,
-              entry.statement_ordinal,
-            )
-        )
-          throw new RetrievalStorageError("index-corrupt");
-        const result = insert.run(
-          id,
-          entry.artifact_id,
-          entry.content_sha256,
-          entry.manifest_sha256,
-          entry.scope_kind,
-          entry.scope_key,
-          entry.purpose,
-          entry.question_sha256,
-          entry.statement_id,
-          entry.statement_ordinal,
-          entry.statement_sha256,
-          JSON.stringify(entry.source_literature_ids),
-          entry.scope_complete,
-          entry.is_default,
-        );
-        if (this.knowledgeRepairGeneration === id)
-          repair.run(result.lastInsertRowid, entry.title, entry.body);
-        else fts.run(result.lastInsertRowid, entry.title, entry.body);
-      }
-      const updated = this.db
-        .prepare(
-          "UPDATE knowledge_retrieval_generations SET entry_count=entry_count+?,source_count=source_count+? WHERE generation_id=? AND status='building'",
-        )
-        .run(entries.length, sourceCount, id);
-      if (updated.changes !== 1)
-        throw new RetrievalStorageError("index-corrupt");
-      this.db.exec("COMMIT");
-      this.knowledgeInspectionCache = null;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
-  }
-  knowledgePublish(id: string, revision: number): KnowledgeRetrievalGeneration {
-    this.requireKnowledge();
-    this.refreshReader(true);
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      if (this.readKnowledgeRevision() !== revision)
-        throw new RetrievalStorageError("index-stale");
-      const row = this.db
-        .prepare(
-          "SELECT generation_id,source_revision,entry_count,source_count FROM knowledge_retrieval_generations WHERE generation_id=? AND status='building'",
-        )
-        .get(id) as KnowledgeRetrievalGeneration | undefined;
-      if (!row || row.source_revision !== revision)
-        throw new RetrievalStorageError("index-corrupt");
-      const count = Number(
-        (
-          this.db
-            .prepare(
-              "SELECT count(*) AS n FROM knowledge_retrieval_entries WHERE generation_id=?",
-            )
-            .get(id) as { n: number }
-        ).n,
-      );
-      const repairing = this.knowledgeRepairGeneration === id;
-      const indexed = Number(
-        (
-          this.db
-            .prepare(
-              repairing
-                ? "SELECT count(*) AS n FROM temp.knowledge_retrieval_repair_text t JOIN knowledge_retrieval_entries e ON e.entry_id=t.entry_id WHERE e.generation_id=?"
-                : "SELECT count(*) AS n FROM knowledge_retrieval_entries e JOIN knowledge_retrieval_fts f ON f.rowid=e.entry_id WHERE e.generation_id=?",
-            )
-            .get(id) as { n: number }
-        ).n,
-      );
-      if (count !== row.entry_count || indexed !== count)
-        throw new RetrievalStorageError("index-corrupt");
-      if (repairing) {
-        this.db.exec("DROP TABLE knowledge_retrieval_fts");
-        this.db.exec(
-          "CREATE VIRTUAL TABLE knowledge_retrieval_fts USING fts5(title,body,tokenize='unicode61')",
-        );
-        this.db.exec(
-          "INSERT INTO knowledge_retrieval_fts(rowid,title,body) SELECT entry_id,title,body FROM temp.knowledge_retrieval_repair_text ORDER BY entry_id",
-        );
-      }
-      this.db
-        .prepare(
-          "INSERT INTO knowledge_retrieval_fts(knowledge_retrieval_fts) VALUES('integrity-check')",
-        )
-        .run();
-      const hashes = knowledgeHashes(this.db, id);
-      this.db
-        .prepare(
-          "UPDATE knowledge_retrieval_generations SET status='ready',content_sha256=?,posting_sha256=? WHERE generation_id=?",
-        )
-        .run(hashes.content_sha256, hashes.posting_sha256, id);
-      this.db
-        .prepare(
-          "INSERT INTO knowledge_retrieval_active(singleton,generation_id) VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET generation_id=excluded.generation_id",
-        )
-        .run(id);
-      if (repairing)
-        this.db
-          .prepare(
-            "DELETE FROM knowledge_retrieval_generations WHERE generation_id<>?",
-          )
-          .run(id);
-      this.db.exec("COMMIT");
-      this.knowledgeInspectionCache = null;
-      this.knowledgeRepairGeneration = null;
-      return row;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
-  }
-  knowledgeActive(): KnowledgeRetrievalGeneration | null {
-    this.requireKnowledge();
-    this.refreshReader(true);
-    const version = this.dataVersion();
-    if (this.knowledgeInspectionCache?.dataVersion === version)
-      return this.knowledgeInspectionCache.active;
-    const active = this.inspectKnowledge().active;
-    this.knowledgeInspectionCache = { dataVersion: version, active };
-    return active;
-  }
-  knowledgeCoverage(
-    generationId: string,
-    scope: readonly string[],
-    artifactIds: readonly string[] | null,
-    purposes: readonly string[],
-    questionSha: string | null,
-    selection: "all" | "defaults" | "explicit",
-  ): {
-    any: boolean;
-    missing_literature_ids: readonly string[];
-    missing_artifact_ids: readonly string[];
-  } {
-    this.requireKnowledge();
-    this.refreshReader(true);
-    const where =
-      "e.generation_id=? AND e.purpose IN (SELECT value FROM json_each(?)) AND (? IS NULL OR e.question_sha256=?) AND (?='all' OR (?='defaults' AND e.is_default=1) OR (?='explicit' AND e.artifact_id IN (SELECT value FROM json_each(?)))) AND (?=0 OR e.artifact_id IN (SELECT value FROM json_each(?))) AND (?=0 OR (e.scope_complete=1 AND NOT EXISTS(SELECT 1 FROM json_each(e.source_literature_ids_json) s WHERE s.value NOT IN (SELECT value FROM json_each(?)))))";
-    const bound = [
-      generationId,
-      JSON.stringify(purposes),
-      questionSha,
-      questionSha,
-      selection,
-      selection,
-      selection,
-      JSON.stringify(artifactIds ?? []),
-      artifactIds?.length ?? 0,
-      JSON.stringify(artifactIds ?? []),
-      scope.length,
-      JSON.stringify(scope),
-    ];
-    const exists = (extra: string, value?: string) =>
-      !!this.db
-        .prepare(
-          `SELECT 1 FROM knowledge_retrieval_entries e WHERE ${where}${extra} LIMIT 1`,
-        )
-        .get(...bound, ...(value === undefined ? [] : [value]));
-    const any = exists("");
-    const missing_literature_ids = scope.length
-      ? scope.filter(
-          (id) =>
-            !exists(
-              " AND EXISTS(SELECT 1 FROM json_each(e.source_literature_ids_json) s WHERE s.value=?)",
-              id,
-            ),
-        )
-      : [];
-    const missing_artifact_ids = artifactIds?.length
-      ? artifactIds.filter((id) => !exists(" AND e.artifact_id=?", id))
-      : [];
-    return { any, missing_literature_ids, missing_artifact_ids };
-  }
-  knowledgeSearch(
-    ftsQuery: string,
-    terms: readonly string[],
-    generationId: string,
-    scope: readonly string[],
-    artifactIds: readonly string[] | null,
-    purposes: readonly string[],
-    questionSha: string | null,
-    selection: "all" | "defaults" | "explicit",
-    limit: number,
-  ): { hits: readonly KnowledgeRetrievalHit[]; candidateLimit: boolean } {
-    this.requireKnowledge();
-    this.refreshReader(true);
-    const rows = this.db
-      .prepare(
-        "SELECT e.entry_id,e.artifact_id,e.content_sha256,e.manifest_sha256,e.scope_kind,e.scope_key,e.purpose,e.question_sha256,e.statement_id,e.statement_ordinal,e.statement_sha256,e.source_literature_ids_json,e.scope_complete,e.is_default,f.title,f.body FROM knowledge_retrieval_fts f JOIN knowledge_retrieval_entries e ON e.entry_id=f.rowid WHERE knowledge_retrieval_fts MATCH ? AND e.generation_id=? AND e.purpose IN (SELECT value FROM json_each(?)) AND (? IS NULL OR e.question_sha256=?) AND (?='all' OR (?='defaults' AND e.is_default=1) OR (?='explicit' AND e.artifact_id IN (SELECT value FROM json_each(?)))) AND (?=0 OR e.artifact_id IN (SELECT value FROM json_each(?))) AND (?=0 OR (e.scope_complete=1 AND NOT EXISTS(SELECT 1 FROM json_each(e.source_literature_ids_json) s WHERE s.value NOT IN (SELECT value FROM json_each(?))))) ORDER BY e.entry_id LIMIT 4098",
-      )
-      .all(
-        ftsQuery,
-        generationId,
-        JSON.stringify(purposes),
-        questionSha,
-        questionSha,
-        selection,
-        selection,
-        selection,
-        JSON.stringify(artifactIds ?? []),
-        artifactIds?.length ?? 0,
-        JSON.stringify(artifactIds ?? []),
-        scope.length,
-        JSON.stringify(scope),
-      ) as unknown as (Omit<
-      KnowledgeRetrievalHit,
-      "score" | "source_literature_ids"
-    > & { title: string; body: string; source_literature_ids_json: string })[];
-    const hits = rows
-      .slice(0, 4097)
-      .map((row) => {
-        const { title, body, source_literature_ids_json, ...rest } = row;
-        return {
-          ...rest,
-          source_literature_ids: JSON.parse(
-            source_literature_ids_json,
-          ) as string[],
-          score: scoreText(title, body, terms),
-        } as KnowledgeRetrievalHit;
-      })
-      .sort(
-        (a, b) =>
-          a.score - b.score ||
-          compareText(a.artifact_id, b.artifact_id) ||
-          a.statement_ordinal - b.statement_ordinal,
-      );
-    return { hits: hits.slice(0, limit), candidateLimit: rows.length > 4097 };
   }
 }

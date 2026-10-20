@@ -1,3 +1,5 @@
+import { rawParserFixture } from "./raw-parser-fixture.js";
+import { initializeCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import {
   chmod,
   mkdir,
@@ -42,8 +44,7 @@ import {
 import { EntryPdfAcquisitionService } from "../src/entry/pdf-acquisition.js";
 import { CloakRuntimeError } from "../src/configuration/cloak-runtime.js";
 import { TypeScriptConfigurationOwner } from "../src/configuration/owner.js";
-import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
-import type { ParserBackend } from "../src/parsing/ports.js";
+import type { ParserBackend } from "./parser-fixture-types.js";
 import {
   FIXTURE_DOI,
   FIXTURE_LITERATURE,
@@ -153,6 +154,7 @@ describe("application composition", () => {
       { mode: 0o600 },
     );
     await chmod(directory, 0o700);
+    await initializeCatalogSchema(join(home, "catalog.sqlite"));
     const application = await createApplication(home);
     try {
       expect(application.agents.readiness("analysis")).toEqual({
@@ -201,9 +203,10 @@ describe("application composition", () => {
       { mode: 0o600 },
     );
     await chmod(directory, 0o700);
+    await initializeCatalogSchema(join(home, "catalog.sqlite"));
     const application = await createApplication(home);
     try {
-      expect(application.parsing).not.toBeNull();
+      expect(application.rawParsing).not.toBeNull();
       expect(application.configuration.parsing).toEqual({
         base_url: "https://parser.example.test/v1",
         connection_mode: "remote",
@@ -227,7 +230,7 @@ describe("application composition", () => {
     );
     const unauthorized = await createApplication(home);
     try {
-      expect(unauthorized.parsing).toBeNull();
+      expect(unauthorized.rawParsing).toBeNull();
     } finally {
       await unauthorized.close();
     }
@@ -247,7 +250,7 @@ describe("application composition", () => {
     );
     const missingToken = await createApplication(home);
     try {
-      expect(missingToken.parsing).toBeNull();
+      expect(missingToken.rawParsing).toBeNull();
     } finally {
       await missingToken.close();
     }
@@ -264,7 +267,7 @@ describe("application composition", () => {
     );
     const mismatchedOrigin = await createApplication(home);
     try {
-      expect(mismatchedOrigin.parsing).toBeNull();
+      expect(mismatchedOrigin.rawParsing).toBeNull();
     } finally {
       await mismatchedOrigin.close();
     }
@@ -350,6 +353,7 @@ describe("application composition", () => {
         },
         published.revision,
       );
+      await initializeCatalogSchema(join(home, "catalog.sqlite"));
       const application = await createApplication(home, {
         metadataAssembly: {
           resolver: () => ["93.184.216.34"],
@@ -394,10 +398,13 @@ describe("application composition", () => {
           },
         });
         await expect(
-          application.parsing!.prepareCurrentPrimary(
+          application.rawParsing!.parseCurrentPrimary(
             FIXTURE_LITERATURE.literature_id,
+            ["pipeline"],
           ),
-        ).rejects.toMatchObject({ code: "parser-unavailable" });
+        ).resolves.toMatchObject([
+          { status: "failed", failure_code: "parser-unavailable" },
+        ]);
         expect(authorization).toBe("Bearer synthetic-parser-token");
         expect(method).toBe(redirectAt === "health" ? "GET" : "POST");
         expect(requests).toBe(redirectAt === "health" ? 1 : 2);
@@ -407,9 +414,8 @@ describe("application composition", () => {
             : ["/v1/health", "/v1/tasks"],
         );
         expect(
-          (await application.library.detail(FIXTURE_LITERATURE.literature_id))
-            .parser_result,
-        ).toBeNull();
+          await application.library.detail(FIXTURE_LITERATURE.literature_id),
+        ).not.toHaveProperty("parser_result");
       } finally {
         await application.close();
         server.closeAllConnections();
@@ -438,7 +444,6 @@ describe("assembly of the unified completion entry", () => {
       );
     });
     const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
       metadataAssembly: { resolver },
       acquisitionAssembly: {
         resolver,
@@ -466,7 +471,8 @@ describe("assembly of the unified completion entry", () => {
         publication_year_to: null,
         venue: null,
         publisher: null,
-        document_types: [],
+        publication_forms: [],
+        article_kinds: [],
         languages: [],
         keywords: [],
         version_roles: [],
@@ -578,9 +584,7 @@ describe("assembly of the unified completion entry", () => {
       ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
       { mode: 0o600 },
     );
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       // Enabling Browser without a verified runtime must not fake a runnable route:
       // readiness comes from the real capability, so the registry reports the stable
@@ -621,9 +625,7 @@ describe("assembly of the unified completion entry", () => {
       ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
       { mode: 0o600 },
     );
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       const id = browserFixtureId(1001);
       await application.database.putLiterature(
@@ -674,9 +676,7 @@ describe("assembly of the unified completion entry", () => {
 
   it("runs the locator routes through an explicit non-Browser view and escalates exactly once", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-assembly-split-"));
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       const id = browserFixtureId(1101);
       await application.database.putLiterature(
@@ -760,7 +760,6 @@ describe("assembly of the unified completion entry", () => {
     let mode: "refused" | "mismatch" | "delivered" = "refused";
     let pending: DurableCandidate | null = null;
     const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
       // The synthetic owner injects an identity navigation admission: an injected host
       // factory is a construction seam, never an exemption from the admission the registry
       // reports, so `browserHost()` stays closed without one.
@@ -930,9 +929,7 @@ describe("assembly of the unified completion entry", () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-assembly-browser-off-"),
     );
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       const id = browserFixtureId(1301);
       await application.database.putLiterature(
@@ -1002,12 +999,9 @@ describe("assembly of the unified completion entry", () => {
         throw new Error("the stub parser must never be invoked in this test");
       },
     };
+    await initializeCatalogSchema(join(home, "catalog.sqlite"));
     const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-      parsing: {
-        rules: new TypeScriptParserArtifactRules(),
-        parser: stubParser,
-      },
+      parsing: { rawParser: rawParserFixture(stubParser) },
     });
     try {
       // Construction order matters: the shared orchestration must be built after the
@@ -1023,14 +1017,14 @@ describe("assembly of the unified completion entry", () => {
           kind: "literatures",
           literature_ids: [parseLiteratureId(id)],
         },
-        goal: "CONTENT_READY",
+        goal: "PARSER_RESULT_READY",
       });
       // The live service is reached for real: the target reaches a legitimate
       // terminal partition, never the old null-captured completion failure. In the
       // production graph the target has no PDF, so the automatic acquisition policy
-      // may report an explicit manual intervention skip before Parsing/Analysis.
+      // may report an explicit manual intervention skip before Parsing.
       expect(report.failed.map((item) => item.failure.code)).not.toContain(
-        "content-completion-unavailable",
+        "parser-completion-unavailable",
       );
       expect(report.end.kind).toBe("finished");
       expect(
@@ -1270,7 +1264,6 @@ describe("assembly of the unified completion entry", () => {
       };
     }> = [];
     const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
       browserAdmitNavigation: async (url: string) => url,
       browserHost: () => ({
         deliverCandidate: async (request) => {
@@ -1354,6 +1347,8 @@ describe("assembly of the unified completion entry", () => {
         // target so Entry sees the target's own version-specific landing page.
         await application.observations.publish({
           ...parseMetadataObservation({
+            source_type: null,
+            source_type_mapping_version: null,
             observation_id: browserFixtureId(3300 + index),
             provenance: {
               provenance_id: browserFixtureId(4300 + index),
@@ -1419,7 +1414,6 @@ describe("assembly of the unified completion entry", () => {
     let closed = 0;
     let deliveries = 0;
     const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
       // Identity admission for the injected seam: without it the public demand surface
       // fails closed, exactly as it does for the production factory.
       browserAdmitNavigation: async (url: string) => url,
@@ -1481,9 +1475,7 @@ describe("assembly of the unified completion entry", () => {
 describe("browser intake end-to-end (offline)", () => {
   it("turns synthetic Browser bytes into a real DurableCandidate through the Intake boundary", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-intake-e2e-"));
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       const transfers = application.execution!.transfers;
       const pdf = workbenchPdf(FIXTURE_DOI, "published");
@@ -1539,9 +1531,7 @@ describe("browser intake end-to-end (offline)", () => {
       ["[browser]", "enabled = true", 'profile = "synthetic"', ""].join("\n"),
       { mode: 0o600 },
     );
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       // Browser is enabled, yet no verified runtime and no explicit navigation
       // admission exist: the production owner must stay stably unavailable, so nothing
@@ -1606,7 +1596,6 @@ describe("browser intake end-to-end (offline)", () => {
     );
     let built = 0;
     const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
       // An injected factory is a host-construction seam only. Without the Network-owned
       // navigation admission this process can never deliver an article, so the public
       // demand surface must neither construct, start nor hand out a host — the same
@@ -1718,9 +1707,7 @@ describe("browser intake end-to-end (offline)", () => {
     // module-private WeakSet, so that chain stays an unrun residual (T20-F16 / T23-F03)
     // and must never be reported as verified here.
     const home = await mkdtemp(join(tmpdir(), "sciretriever-assembly-seam-"));
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       await application.database.putLiterature(FIXTURE_LITERATURE);
       const transfers = application.execution!.transfers;
@@ -1893,7 +1880,6 @@ describe("browser intake end-to-end (offline)", () => {
     );
     let deliveries = 0;
     const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
       // A real Entry/Broker path with an offline Browser delivery boundary.
       browserAdmitNavigation: async (url: string) => url,
       browserHost: () => ({
@@ -2038,7 +2024,6 @@ describe("browser intake end-to-end (offline)", () => {
     const deliveries: string[] = [];
     let pending: DurableCandidate | null = null;
     const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
       browserAdmitNavigation: async (url: string) => url,
       browserHost: () => ({
         deliverCandidate: async (request) => {
@@ -2148,7 +2133,6 @@ describe("browser intake end-to-end (offline)", () => {
     );
     let deliveries = 0;
     const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
       browserAdmitNavigation: async (url: string) => url,
       browserHost: () => ({
         deliverCandidate: async () => {
@@ -2237,7 +2221,6 @@ describe("browser intake end-to-end (offline)", () => {
     );
     let deliveries = 0;
     const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
       browserAdmitNavigation: async (url: string) => url,
       browserHost: () => ({
         deliverCandidate: async () => {
@@ -2327,9 +2310,7 @@ describe("browser intake end-to-end (offline)", () => {
 
   it("reports a notify policy stop as an explicit not-eligible skip with the stable code on progress", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-assembly-notify-"));
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       const id = browserFixtureId(1501);
       await application.database.putLiterature(

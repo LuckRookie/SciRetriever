@@ -51,6 +51,7 @@ export interface SourcesConfig {
   };
 }
 export interface ParsingConfig {
+  readonly archive_profile: "pipeline" | "vlm-engine";
   readonly base_url: string | null;
   readonly connection_mode: "loopback" | "remote" | null;
   readonly model_identity: string | null;
@@ -128,6 +129,14 @@ export function effectiveBrowserConcurrency(browser: BrowserConfig): {
   });
 }
 
+export interface TagsConfig {
+  readonly max_per_literature: number;
+  readonly candidate_k: number;
+  readonly backfill_batch: number;
+  readonly model: string | null;
+  readonly consolidation_model: string | null;
+  readonly backfill_model: string | null;
+}
 export interface OrdinaryConfiguration {
   readonly paths: PathsConfig;
   readonly sources: SourcesConfig;
@@ -136,6 +145,13 @@ export interface OrdinaryConfiguration {
   readonly providers: Readonly<Record<string, ProviderConfig>>;
   readonly models: Readonly<Record<string, ModelConfig>>;
   readonly analyze: AnalyzeConfig;
+  readonly tags: TagsConfig;
+  readonly proofread: {
+    readonly model: string | null;
+    readonly max_calls_per_document: number;
+    readonly value_check_model: string | null;
+    readonly max_value_check_calls: number;
+  };
   readonly browser: BrowserConfig;
   readonly execution: { readonly max_concurrency: number };
   readonly library: { readonly max_input_bytes: number };
@@ -149,6 +165,8 @@ const ROOT_KEYS = [
   "providers",
   "models",
   "analyze",
+  "tags",
+  "proofread",
   "browser",
   "execution",
   "library",
@@ -834,10 +852,23 @@ function parseConfigurationObject(
       "connection_mode",
       "model_identity",
       "remote_upload_authorized",
+      "archive_profile",
     ],
   );
   const assets = optionalRecord(raw.assets);
   exact(assets, []);
+  const tagsRaw = exact(
+    optionalRecord(raw.tags),
+    [],
+    [
+      "max_per_literature",
+      "candidate_k",
+      "backfill_batch",
+      "model",
+      "consolidation_model",
+      "backfill_model",
+    ],
+  );
   const analyzeRaw = exact(
     optionalRecord(raw.analyze),
     [],
@@ -919,6 +950,51 @@ function parseConfigurationObject(
       analyzeRaw.max_total_output_tokens,
     ),
   });
+  const tagModel = (value: unknown) => {
+    const raw = textOrNull(value);
+    const ref = raw === null ? null : normalizeModelReference(raw);
+    if (ref !== null && !(ref in models)) invalid();
+    return ref;
+  };
+  const tags: TagsConfig = Object.freeze({
+    max_per_literature:
+      tagsRaw.max_per_literature === undefined
+        ? 6
+        : positiveInteger(tagsRaw.max_per_literature, 1, 64),
+    candidate_k:
+      tagsRaw.candidate_k === undefined
+        ? 8
+        : positiveInteger(tagsRaw.candidate_k, 1, 64),
+    backfill_batch:
+      tagsRaw.backfill_batch === undefined
+        ? 8
+        : positiveInteger(tagsRaw.backfill_batch, 1, 64),
+    model: tagModel(tagsRaw.model),
+    consolidation_model: tagModel(tagsRaw.consolidation_model),
+    backfill_model: tagModel(tagsRaw.backfill_model),
+  });
+  const proofreadRaw = exact(
+    optionalRecord(raw.proofread),
+    [],
+    [
+      "model",
+      "max_calls_per_document",
+      "value_check_model",
+      "max_value_check_calls",
+    ],
+  );
+  const proofread = Object.freeze({
+    model: tagModel(proofreadRaw.model),
+    value_check_model: tagModel(proofreadRaw.value_check_model),
+    max_value_check_calls:
+      proofreadRaw.max_value_check_calls === undefined
+        ? 64
+        : positiveInteger(proofreadRaw.max_value_check_calls, 1, 10000),
+    max_calls_per_document:
+      proofreadRaw.max_calls_per_document === undefined
+        ? 64
+        : positiveInteger(proofreadRaw.max_calls_per_document, 1, 10000),
+  });
   const analyzeModel =
     analyze.model === null ? null : normalizeModelReference(analyze.model);
   if (analyzeModel !== null && !(analyzeModel in models)) invalid();
@@ -991,6 +1067,13 @@ function parseConfigurationObject(
     }),
     assets: Object.freeze({}),
     parsing: Object.freeze({
+      archive_profile:
+        parsing.archive_profile === undefined
+          ? "vlm-engine"
+          : enumValue(
+              parsing.archive_profile,
+              new Set(["pipeline", "vlm-engine"] as const),
+            ),
       base_url: baseUrl,
       connection_mode: connection,
       model_identity: textOrNull(parsing.model_identity),
@@ -999,6 +1082,8 @@ function parseConfigurationObject(
     providers: Object.freeze(providers),
     models: Object.freeze(models),
     analyze: Object.freeze({ ...analyze, model: analyzeModel }),
+    tags,
+    proofread,
     browser,
     execution: Object.freeze({
       max_concurrency:

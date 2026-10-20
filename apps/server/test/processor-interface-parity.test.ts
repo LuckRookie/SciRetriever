@@ -30,7 +30,6 @@ it("reassembles results larger than the MCP response budget through HTTP, CLI an
     env.app.database,
     env.app.files,
     env.app.documentRead,
-    env.app.synthesisRead!,
   );
   const query = await createQueryApplication(env.home);
   const web = await startQueryOnlyHttp({ application: query });
@@ -50,16 +49,24 @@ it("reassembles results larger than the MCP response budget through HTTP, CLI an
       throw new Error("expected material");
     const invocation = parseProcessorInvocation({
       schema_version: 1,
-      processor: { id: "synthetic-transfer", version: "1" },
+      processor: { id: "external-extraction", version: "2" },
       spec: {},
       inputs: [
         {
-          kind: "material",
+          kind: "external",
           input_id: "source",
+          literature_id: material.evidence.material.literature_id,
           material: material.evidence.material,
+          document: null,
         },
       ],
-      execution: { method_sha256: "a".repeat(64), model: null },
+      execution: {
+        method_sha256: "a".repeat(64),
+        model: null,
+        reads: { parts: "main", roles: "all" },
+        uses_description: false,
+        map: null,
+      },
     });
     const make = async (large: boolean) =>
       store.publish(
@@ -93,10 +100,24 @@ it("reassembles results larger than the MCP response budget through HTTP, CLI an
               missing: {},
             })),
           },
+          value_checks: Array.from({ length: large ? 8 : 1 }, (_, i) => ({
+            record_id: `r${i}`,
+            pointer: "/text",
+            status: "uncertain",
+            reason: "Synthetic fixture is unverified.",
+            sources: [
+              {
+                citation: { kind: "document", evidence: material.evidence },
+                status: "uncertain",
+                reason: "Synthetic fixture is unverified.",
+              },
+            ],
+          })),
           coverage: [
             {
               input_id: "source",
               status: "partial",
+              parts: [],
               read_segments: [],
               gaps: ["synthetic-material-only"],
             },

@@ -1,0 +1,316 @@
+import { randomUUID } from "node:crypto";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { ArtifactRef, ProofreadVersion } from "@sciretriever/contracts";
+export type ProofreadStorageAction =
+  | "cache-read"
+  | "cache-write"
+  | "current"
+  | "get"
+  | "state"
+  | "resources"
+  | "publish"
+  | "decide"
+  | "revoke";
+export interface LocatedProofreadArtifact extends ArtifactRef {
+  readonly reference: string;
+}
+export interface ProofreadPublication {
+  readonly version: ProofreadVersion;
+  readonly manual_revision: number;
+  readonly manifest: LocatedProofreadArtifact;
+  readonly resources: readonly (LocatedProofreadArtifact & {
+    readonly kind: "blocks" | "markdown" | "drafts" | "image";
+    readonly logical_reference: string;
+  })[];
+}
+export interface ProofreadDecisionPublication {
+  readonly scope_key: string;
+  readonly part_asset_id: string;
+  readonly proofread_id: string;
+  readonly expected_manual_revision: number;
+  readonly decision_id: string;
+  readonly block_id: string;
+  readonly actor: string;
+  readonly manifest: LocatedProofreadArtifact;
+}
+const one = (db: DatabaseSync, sql: string, ...args: SQLInputValue[]) =>
+  db.prepare(sql).get(...args) ?? null;
+function fail(code: string): never {
+  throw Object.assign(new Error("proofread storage refused"), { code });
+}
+function transaction<T>(db: DatabaseSync, write: boolean, fn: () => T): T {
+  db.exec(write ? "BEGIN IMMEDIATE" : "BEGIN");
+  try {
+    const result = fn();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+function register(db: DatabaseSync, a: LocatedProofreadArtifact) {
+  const old = one(
+    db,
+    "SELECT * FROM artifact_objects WHERE sha256=? OR relative_path=?",
+    a.sha256,
+    a.reference,
+  );
+  if (old) {
+    if (
+      old.sha256 !== a.sha256 ||
+      old.relative_path !== a.reference ||
+      old.byte_size !== a.byte_size ||
+      old.media_type !== a.media_type
+    )
+      fail("proofread-artifact-conflict");
+  } else
+    db.prepare(
+      "INSERT INTO artifact_objects(artifact_id,sha256,byte_size,media_type,relative_path) VALUES(?,?,?,?,?)",
+    ).run(randomUUID(), a.sha256, a.byte_size, a.media_type, a.reference);
+}
+function revision(db: DatabaseSync, asset: string) {
+  return Number(
+    one(
+      db,
+      "SELECT revision FROM proofread_manual_state WHERE part_asset_id=?",
+      asset,
+    )?.revision ?? 0,
+  );
+}
+export function runProofreadStorage(
+  db: DatabaseSync,
+  action: ProofreadStorageAction,
+  args: unknown,
+): unknown {
+  if (
+    ![11].includes(
+      Number(
+        one(db, "SELECT schema_version FROM schema_identity WHERE singleton=1")
+          ?.schema_version,
+      ),
+    )
+  )
+    fail("catalog-current-required");
+  if (action === "cache-read")
+    return one(
+      db,
+      "SELECT * FROM proofread_correction_cache WHERE cache_key=? OR cache_id=?",
+      String(args),
+      String(args),
+    );
+  if (action === "cache-write")
+    return transaction(db, true, () => {
+      const r = args as { key: string; artifact: LocatedProofreadArtifact };
+      if (!/^[a-f0-9]{64}$/u.test(r.key)) fail("proofread-cache-invalid");
+      const id = `${r.key.slice(0, 8)}-${r.key.slice(8, 12)}-${r.key.slice(12, 16)}-${r.key.slice(16, 20)}-${r.key.slice(20, 32)}`;
+      const old = one(
+        db,
+        "SELECT * FROM proofread_correction_cache WHERE cache_key=?",
+        r.key,
+      );
+      if (old) {
+        if (old.sha256 !== r.artifact.sha256) fail("proofread-cache-conflict");
+        return String(old.cache_id);
+      }
+      register(db, r.artifact);
+      db.prepare(
+        "INSERT INTO proofread_correction_cache VALUES(?,?,?,?,?,?)",
+      ).run(
+        r.key,
+        id,
+        r.artifact.reference,
+        r.artifact.sha256,
+        r.artifact.byte_size,
+        r.artifact.media_type,
+      );
+      return id;
+    });
+  if (action === "current")
+    return one(
+      db,
+      "SELECT c.*,v.content_sha256,v.status FROM proofread_current c JOIN proofread_versions v ON v.proofread_id=c.proofread_id WHERE c.part_asset_id=?",
+      String(args),
+    );
+  if (action === "get")
+    return one(
+      db,
+      "SELECT * FROM proofread_versions WHERE proofread_id=?",
+      String(args),
+    );
+  if (action === "resources")
+    return db
+      .prepare(
+        "SELECT * FROM proofread_resources WHERE proofread_id=? ORDER BY kind,reference",
+      )
+      .all(String(args));
+  if (action === "state")
+    return transaction(db, false, () => ({
+      current: one(
+        db,
+        "SELECT c.*,v.content_sha256,v.status FROM proofread_current c JOIN proofread_versions v ON v.proofread_id=c.proofread_id WHERE c.part_asset_id=?",
+        String(args),
+      ),
+      manual_revision: revision(db, String(args)),
+      decisions: db
+        .prepare(
+          "SELECT * FROM proofread_manual_decisions WHERE part_asset_id=? AND active=1 ORDER BY decision_id",
+        )
+        .all(String(args)),
+    }));
+  return transaction(db, true, () => {
+    if (action === "publish") {
+      const p = args as ProofreadPublication,
+        v = p.version;
+      if (revision(db, v.part_asset_id) !== p.manual_revision)
+        fail("proofread-manual-stale");
+      for (const input of [v.draft_input]) {
+        const raw = one(
+          db,
+          "SELECT p.source_asset_id,p.source_sha256,p.result_sha256,c.raw_parse_id AS current_id FROM raw_parses p LEFT JOIN raw_parse_current c ON c.source_asset_id=p.source_asset_id AND c.profile=p.profile WHERE p.raw_parse_id=?",
+          input.raw_parse_id,
+        );
+        if (
+          !raw ||
+          raw.source_asset_id !== v.part_asset_id ||
+          raw.source_sha256 !== v.part_sha256 ||
+          raw.result_sha256 !== input.result_sha256 ||
+          raw.current_id !== input.raw_parse_id
+        )
+          fail("proofread-input-stale");
+      }
+      const old = one(
+        db,
+        "SELECT content_sha256 FROM proofread_versions WHERE proofread_id=?",
+        v.proofread_id,
+      );
+      if (old && old.content_sha256 !== v.content_sha256)
+        fail("proofread-conflict");
+      if (!old) {
+        register(db, p.manifest);
+        for (const r of p.resources) register(db, r);
+        db.prepare(
+          "INSERT INTO proofread_versions(proofread_id,part_asset_id,part_sha256,content_sha256,status,manifest_reference,manifest_sha256,manifest_size,manifest_media_type,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        ).run(
+          v.proofread_id,
+          v.part_asset_id,
+          v.part_sha256,
+          v.content_sha256,
+          v.status,
+          p.manifest.reference,
+          p.manifest.sha256,
+          p.manifest.byte_size,
+          p.manifest.media_type,
+          new Date().toISOString(),
+        );
+        for (const r of p.resources)
+          db.prepare(
+            "INSERT INTO proofread_resources(proofread_id,kind,reference,artifact_reference,sha256,byte_size,media_type) VALUES(?,?,?,?,?,?,?)",
+          ).run(
+            v.proofread_id,
+            r.kind,
+            r.logical_reference,
+            r.reference,
+            r.sha256,
+            r.byte_size,
+            r.media_type,
+          );
+        for (const r of [v.draft_input])
+          db.prepare(
+            "INSERT INTO raw_parse_pins(raw_parse_id,proofread_id) VALUES(?,?) ON CONFLICT DO NOTHING",
+          ).run(r.raw_parse_id, v.proofread_id);
+      }
+      const current = one(
+        db,
+        "SELECT * FROM proofread_current WHERE part_asset_id=?",
+        v.part_asset_id,
+      );
+      if (
+        current?.proofread_id !== v.proofread_id ||
+        current?.manual_revision !== p.manual_revision
+      )
+        db.prepare(
+          "INSERT INTO proofread_current(part_asset_id,part_sha256,proofread_id,revision,manual_revision) VALUES(?,?,?,1,?) ON CONFLICT(part_asset_id) DO UPDATE SET part_sha256=excluded.part_sha256,proofread_id=excluded.proofread_id,revision=proofread_current.revision+1,manual_revision=excluded.manual_revision",
+        ).run(
+          v.part_asset_id,
+          v.part_sha256,
+          v.proofread_id,
+          p.manual_revision,
+        );
+      return {
+        published: !old,
+        revision: Number(
+          one(
+            db,
+            "SELECT revision FROM proofread_current WHERE part_asset_id=?",
+            v.part_asset_id,
+          )!.revision,
+        ),
+      };
+    }
+    if (action === "decide") {
+      const p = args as ProofreadDecisionPublication;
+      if (
+        revision(db, p.part_asset_id) !== p.expected_manual_revision ||
+        one(
+          db,
+          "SELECT proofread_id FROM proofread_current WHERE part_asset_id=?",
+          p.part_asset_id,
+        )?.proofread_id !== p.proofread_id
+      )
+        fail("proofread-manual-stale");
+      register(db, p.manifest);
+      const now = new Date().toISOString();
+      db.prepare(
+        "UPDATE proofread_manual_decisions SET active=0,revoked_by=?,revoked_at=? WHERE part_asset_id=? AND scope_key=? AND active=1",
+      ).run(p.actor, now, p.part_asset_id, p.scope_key);
+      db.prepare(
+        "INSERT INTO proofread_manual_decisions(decision_id,part_asset_id,block_id,scope_key,manifest_reference,manifest_sha256,manifest_size,manifest_media_type,active,actor,created_at) VALUES(?,?,?,?,?,?,?,?,1,?,?)",
+      ).run(
+        p.decision_id,
+        p.part_asset_id,
+        p.block_id,
+        p.scope_key,
+        p.manifest.reference,
+        p.manifest.sha256,
+        p.manifest.byte_size,
+        p.manifest.media_type,
+        p.actor,
+        now,
+      );
+      db.prepare(
+        "INSERT INTO proofread_manual_state(part_asset_id,revision) VALUES(?,1) ON CONFLICT(part_asset_id) DO UPDATE SET revision=revision+1",
+      ).run(p.part_asset_id);
+      return {
+        decision_id: p.decision_id,
+        manual_revision: revision(db, p.part_asset_id),
+      };
+    }
+    if (action === "revoke") {
+      const p = args as {
+        part_asset_id: string;
+        decision_id: string;
+        expected_manual_revision: number;
+        actor: string;
+      };
+      if (revision(db, p.part_asset_id) !== p.expected_manual_revision)
+        fail("proofread-manual-stale");
+      const changed = db
+        .prepare(
+          "UPDATE proofread_manual_decisions SET active=0,revoked_by=?,revoked_at=? WHERE decision_id=? AND part_asset_id=? AND active=1",
+        )
+        .run(
+          p.actor,
+          new Date().toISOString(),
+          p.decision_id,
+          p.part_asset_id,
+        ).changes;
+      if (!changed) fail("proofread-decision-missing");
+      db.prepare(
+        "UPDATE proofread_manual_state SET revision=revision+1 WHERE part_asset_id=?",
+      ).run(p.part_asset_id);
+      return { manual_revision: revision(db, p.part_asset_id) };
+    }
+    return fail("proofread-invalid-operation");
+  });
+}

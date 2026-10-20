@@ -1,3 +1,4 @@
+import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
 import { captureFeature } from "./next-feature-capture-fixture.js";
 import { readFile } from "node:fs/promises";
 import { expect, it } from "vitest";
@@ -11,6 +12,7 @@ async function select(page: Page, label: string, option: string) {
   await page.getByRole("option", { name: option, exact: true }).click();
 }
 async function enterSelected(w: Workspace, missing = false) {
+  if (missing) await showAllLibraryStatuses(w.page);
   const paper = missing
     ? "Unparsed source"
     : (await w.env.app.library.detail(w.env.parseRequest.literature_id))
@@ -27,7 +29,7 @@ async function enterSelected(w: Workspace, missing = false) {
     .toBe(true);
 }
 async function labels(page: Page) {
-  await page.getByRole("tab", { name: "文献标签", exact: true }).click();
+  await page.getByRole("tab", { name: "问答标注", exact: true }).click();
   await page
     .getByRole("textbox", { name: "对每篇文献问一个问题" })
     .fill("Does the source report a measurement?");
@@ -158,14 +160,12 @@ it("validates human records, fixes source inputs, verifies numeric and missing v
       query: null,
     });
     const input = collection.members[0]!.inputs[0]!;
-    expect(input.kind).toBe("document");
-    if (input.kind !== "document") throw new Error("expected document");
-    expect(input.document.document_version_id).toBe(
+    expect(input.kind).toBe("archive-document");
+    if (input.kind !== "archive-document") throw new Error("expected document");
+    expect(input.parts[0]!.document_version_id).toBe(
       w.parsed.document.document_version_id,
     );
-    expect(input.document.source_material_ref.asset_sha256).toBe(
-      w.env.asset.sha256,
-    );
+    expect(input.parts[0]!.asset_sha256).toBe(w.env.asset.sha256);
     const ref = collection.members[0]!.result!;
     const saved = (await w.env.app.processorRead!.byId(ref.result_id))!;
     await assertMachineReadsWebResult(w.env.home, saved);
@@ -185,7 +185,7 @@ it("validates human records, fixes source inputs, verifies numeric and missing v
       .poll(() => w.page.getByRole("alert").textContent())
       .toContain("固定处理结果无法验证");
     expect(w.env.modelCalls).toBe(1);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(w.setupCalls.parser);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
@@ -193,7 +193,7 @@ it("validates human records, fixes source inputs, verifies numeric and missing v
 }, 60000);
 it("submits enum labels on an explicit search scope and retains unparsed material as a gap", async () => {
   const w = await nextWorkspace({
-    path: "/?view=ext",
+    path: "/?view=ext&query=%7B%7D",
     ready: "form.processor-form",
   });
   try {
@@ -203,7 +203,7 @@ it("submits enum labels on an explicit search scope and retains unparsed materia
       .getByRole("textbox", { name: "可选答案" })
       .fill("reported\nreported");
     await w.page
-      .getByRole("button", { name: "生成文献标签", exact: true })
+      .getByRole("button", { name: "生成问答标注", exact: true })
       .click();
     expect(w.submissions).toHaveLength(0);
     expect(
@@ -217,7 +217,7 @@ it("submits enum labels on an explicit search scope and retains unparsed materia
     await w.page.getByRole("radio", { name: "仅与关键词匹配的片段" }).focus();
     await w.page.keyboard.press("Space");
     await w.page
-      .getByRole("button", { name: "生成文献标签", exact: true })
+      .getByRole("button", { name: "生成问答标注", exact: true })
       .click();
     expect(await w.page.getByRole("alert").last().textContent()).toContain(
       "关键词",
@@ -228,13 +228,23 @@ it("submits enum labels on an explicit search scope and retains unparsed materia
       source_ids: [input.segments![0]!.segment_id],
       reason: null,
     }));
-    await submit(w.page, "生成文献标签");
+    await submit(w.page, "生成问答标注");
     const collection = await completed(w);
     expect(w.submissions[0]!.inputs).toHaveLength(2);
     expect(collection.members).toHaveLength(2);
-    expect(collection.members.filter((item) => item.result)).toHaveLength(1);
-    expect(collection.members.find((item) => !item.result)?.gap).toBeTruthy();
-    const ref = collection.members.find((item) => item.result)!.result!,
+    expect(collection.members.filter((item) => item.result)).toHaveLength(2);
+    const missing = collection.members.find(
+      (item) => item.inputs[0]?.kind === "missing",
+    )!;
+    expect(
+      (await w.env.app.processorRead!.byId(missing.result!.result_id))!.result
+        .coverage[0]!.parts,
+    ).toContainEqual(
+      expect.objectContaining({ outcome: "incomplete", gaps: ["not-ready"] }),
+    );
+    const ref = collection.members.find(
+        (item) => item.inputs[0]?.kind === "archive-document",
+      )!.result!,
       saved = (await w.env.app.processorRead!.byId(ref.result_id))!;
     expect(
       saved.result.coverage.some((item) => item.status !== "complete"),
@@ -248,7 +258,7 @@ it("submits enum labels on an explicit search scope and retains unparsed materia
       await w.page.getByRole("table", { name: "提取结果" }).textContent(),
     ).toContain("reported");
     expect(w.env.modelCalls).toBe(1);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(w.setupCalls.parser);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
@@ -273,7 +283,7 @@ it("retains drafts and idempotent requests after a lost save receipt and a faile
       },
       { times: 1 },
     );
-    await submit(w.page, "生成文献标签");
+    await submit(w.page, "生成问答标注");
     await expect
       .poll(() =>
         w.page
@@ -303,7 +313,7 @@ it("retains drafts and idempotent requests after a lost save receipt and a faile
         route.fulfill({ status: 503, json: { code: "test-start-failure" } }),
       { times: 1 },
     );
-    await submit(w.page, "生成文献标签");
+    await submit(w.page, "生成问答标注");
     await expect
       .poll(() =>
         w.page
@@ -318,7 +328,7 @@ it("retains drafts and idempotent requests after a lost save receipt and a faile
       "queued",
     );
     expect(w.env.modelCalls).toBe(0);
-    await submit(w.page, "生成文献标签");
+    await submit(w.page, "生成问答标注");
     await completed(w);
     expect(w.submissions).toHaveLength(2);
     expect(await w.env.app.jobs!.listJobs(10)).toHaveLength(1);
@@ -328,32 +338,41 @@ it("retains drafts and idempotent requests after a lost save receipt and a faile
     await w.close();
   }
 }, 60000);
-it("preserves a valid form when the analysis model is absent and never processes missing documents", async () => {
+it("preserves a valid form and reports a durable model configuration failure without new processing", async () => {
   const w = await nextWorkspace({
     analysisModel: false,
     ready: '[aria-label="文献列表"] .paper-row:first-child',
   });
   try {
-    await enterSelected(w, true);
+    await enterSelected(w);
     await labels(w.page);
-    await submit(w.page, "生成文献标签");
+    await submit(w.page, "生成问答标注");
     await expect
-      .poll(() =>
-        w.page
-          .getByRole("dialog", { name: "确认处理文献" })
-          .getByRole("alert")
-          .textContent(),
+      .poll(async () => (await w.env.app.jobs!.listJobs(10)).length)
+      .toBe(1);
+    const job = (await w.env.app.jobs!.listJobs(10))[0]!;
+    await expect
+      .poll(
+        async () =>
+          (await w.env.app.processingTasks!.read(job.job_id)).job.status,
       )
-      .toContain("分析模型配置不可用");
+      .toBe("failed");
+    expect(
+      (await w.env.app.processingTasks!.read(job.job_id)).failures,
+    ).toContainEqual(
+      expect.objectContaining({
+        failure: expect.objectContaining({ code: "agent-configuration" }),
+      }),
+    );
     await w.page.keyboard.press("Escape");
     expect(
       await w.page
         .getByRole("textbox", { name: "对每篇文献问一个问题" })
         .inputValue(),
     ).toContain("measurement");
-    expect(await w.env.app.jobs!.listJobs(10)).toHaveLength(0);
+    expect(await w.env.app.jobs!.listJobs(10)).toHaveLength(1);
     expect(w.env.modelCalls).toBe(0);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(w.setupCalls.parser);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
@@ -498,51 +517,59 @@ it("keeps cross-page selections and fixed evidence while exporting every origina
       .click();
     const original = await w.env.app.processorRead!.byId(ref.result_id);
     const originalJob = (await w.env.app.jobs!.listJobs(10))[0]!.job_id;
-    const chosen: string[] = [];
-    for (const offset of [0, 10]) {
-      const rows = await w.env.app.processorRead!.query({
-        collection_id: null,
-        result_ids: [ref.result_id],
-        filters: [],
-        sort: null,
-        limit: 10,
-        offset,
-      });
-      chosen.push(rows.items[0]!.record_id);
-    }
     let candidateCount = 0;
     w.env.setModel((input) => {
+      if (input.purpose)
+        return {
+          outcome: "completed",
+          title: "Summary",
+          statements: [
+            {
+              statement_id: "s1",
+              category: "finding",
+              epistemic: "reported",
+              text: "Measured energy was 4.2 eV.",
+              conditions: [],
+              quantity: null,
+              evidence_segment_ids: [input.segments![0]!.segment_id],
+            },
+          ],
+        };
       const candidates = input.candidates as {
         id: string;
         independent_literature_ids: string[];
       }[];
       candidateCount = candidates.length;
       expect(
-        candidates.every(
-          (item) => item.independent_literature_ids.length === 1,
-        ),
-      ).toBe(true);
+        candidates.map((candidate) => candidate.independent_literature_ids),
+      ).toEqual([[w.env.parseRequest.literature_id]]);
       return {
-        statements: [
+        claims: [
           {
-            text: "Two selected observations from one paper.",
-            source_ids: candidates.map((item) => item.id),
+            text: "Evidence from one paper.",
+            source_ids: candidates.map((candidate) => candidate.id),
           },
         ],
       };
     });
     await w.page
-      .getByRole("button", { name: "用所选记录综合", exact: true })
+      .getByRole("button", { name: "选择来源文献", exact: true })
+      .click();
+    await w.page.getByRole("button", { name: "综合", exact: true }).click();
+    await w.page
+      .getByRole("button", { name: "从当前筛选生成快照", exact: true })
       .click();
     await w.page
-      .getByRole("textbox", { name: "研究问题", exact: true })
+      .getByRole("textbox", { name: "综合问题", exact: true })
       .fill("Compare chosen measurements");
-    await w.page
-      .getByRole("button", { name: "确认并创建综合任务", exact: true })
-      .click();
-    await expect.poll(() => candidateCount, { timeout: 10000 }).toBe(2);
+    await w.page.getByRole("button", { name: "确认启动", exact: true }).click();
+    await expect.poll(() => candidateCount, { timeout: 10000 }).toBe(1);
+    const snapshot = (
+      await w.env.app.snapshots.list({ after: null, limit: 10 })
+    ).items[0]!;
+    expect(snapshot.member_count).toBe(1);
     expect(w.submissions.at(-1)!.inputs).toEqual([
-      { kind: "result", result_id: ref.result_id, record_ids: chosen.sort() },
+      { kind: "snapshot", snapshot_id: snapshot.snapshot_id },
     ]);
     const jobs = await w.env.app.jobs!.listJobs(10);
     const synthesisJob = jobs.find((job) => job.job_id !== originalJob);
@@ -558,7 +585,7 @@ it("keeps cross-page selections and fixed evidence while exporting every origina
     expect(await w.env.app.processorRead!.byId(ref.result_id)).toEqual(
       original,
     );
-    expect(w.env.modelCalls).toBe(2);
+    expect(w.env.modelCalls).toBe(4);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
@@ -583,7 +610,7 @@ it("cancels an explicit processor task and refuses its late model response", asy
     });
     await enterSelected(w);
     await labels(w.page);
-    await submit(w.page, "生成文献标签");
+    await submit(w.page, "生成问答标注");
     await expect.poll(() => w.env.modelCalls).toBe(1);
     const job = (await w.env.app.jobs!.listJobs(10))[0]!;
     await w.page.getByRole("button", { name: "查看任务", exact: true }).click();
@@ -602,75 +629,57 @@ it("cancels an explicit processor task and refuses its late model response", asy
     const task = await w.env.app.processingTasks!.read(job.job_id);
     expect(task.results).toHaveLength(0);
     expect((await w.env.app.processorRead!.list()).items).toHaveLength(0);
-    expect(w.env.parseCalls).toBe(1);
+    expect(w.env.parseCalls).toBe(w.setupCalls.parser);
     expect(w.errors).toEqual([]);
   } finally {
     release();
     await w.close();
   }
 }, 60000);
-it("retains the synthesis question and policy but invalidates fixed inputs when selection changes", async () => {
-  const w = await nextWorkspace({
-    ready: '[aria-label="文献列表"] .paper-row:first-child',
-  });
+it("retains the synthesis question and policy when creating another frozen snapshot", async () => {
+  const w = await nextWorkspace();
   try {
-    const title = (
-      await w.env.app.library.detail(w.env.parseRequest.literature_id)
-    ).literature.metadata.title!;
-    await w.page
-      .getByRole("checkbox", { name: `选择 ${title}`, exact: true })
-      .focus();
-    await w.page.keyboard.press("Space");
     await w.page.getByRole("button", { name: "综合", exact: true }).click();
-    await w.page.getByRole("button", { name: "新建综合", exact: true }).click();
     await w.page
-      .getByRole("textbox", { name: "研究问题", exact: true })
-      .fill("Which evidence agrees?");
-    await select(w.page, "缺口策略", "允许部分覆盖，明确记录缺口");
-    await w.page.getByRole("button", { name: "固定输入", exact: true }).click();
+      .getByRole("button", { name: "从当前筛选生成快照", exact: true })
+      .click();
+    const question = w.page.getByRole("textbox", {
+      name: "综合问题",
+      exact: true,
+    });
+    await question.fill("Which evidence agrees?");
+    await select(w.page, "覆盖要求", "带缺口综合");
+    const first = (await w.env.app.snapshots.list({ after: null, limit: 10 }))
+      .items[0]!;
+    await w.page
+      .getByRole("button", { name: "从当前筛选生成快照", exact: true })
+      .click();
     await expect
-      .poll(() =>
-        w.page
-          .getByRole("button", { name: "开始综合", exact: true })
-          .isEnabled(),
+      .poll(
+        async () =>
+          (await w.env.app.snapshots.list({ after: null, limit: 10 })).items
+            .length,
       )
-      .toBe(true);
-    await w.page
-      .getByRole("dialog")
-      .getByRole("button", { name: "关闭对话框", exact: true })
-      .click();
-    await w.page
-      .getByRole("button", { name: /^文献库/ })
-      .first()
-      .click();
-    await w.page
-      .getByRole("checkbox", { name: "选择已加载的文献", exact: true })
-      .focus();
-    await w.page.keyboard.press("Space");
-    await w.page.getByRole("button", { name: "综合", exact: true }).click();
-    await w.page.getByRole("button", { name: "新建综合", exact: true }).click();
+      .toBe(2);
+    expect(await question.inputValue()).toBe("Which evidence agrees?");
     expect(
-      await w.page
-        .getByRole("textbox", { name: "研究问题", exact: true })
-        .inputValue(),
-    ).toBe("Which evidence agrees?");
+      await w.page.getByRole("button", { name: "覆盖要求" }).textContent(),
+    ).toContain("带缺口综合");
     expect(
-      await w.page.getByRole("button", { name: /缺口策略/ }).textContent(),
-    ).toContain("允许部分覆盖");
-    expect(
-      await w.page
-        .getByRole("button", { name: "开始综合", exact: true })
-        .isDisabled(),
-    ).toBe(true);
-    expect(
-      await w.page.getByRole("dialog", { name: "新建综合" }).textContent(),
-    ).toContain("2 篇文献");
+      await w.env.app.snapshots.read({
+        snapshot_id: first.snapshot_id,
+        offset: 0,
+        limit: 50,
+        max_bytes: 262144,
+      }),
+    ).toMatchObject({ member_count: 1 });
     expect(w.env.modelCalls).toBe(0);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
   }
 }, 60000);
+
 it("retries a failed processor scope read without submitting or discarding draft fields", async () => {
   const w = await nextWorkspace({
     ready: '[aria-label="文献列表"] .paper-row:first-child',

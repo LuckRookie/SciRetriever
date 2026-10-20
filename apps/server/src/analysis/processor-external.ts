@@ -6,6 +6,8 @@ import {
   processorJson,
   sha256,
   type ProcessorInput,
+  type ProcessorContent,
+  uncheckedProcessorValues,
 } from "@sciretriever/contracts";
 import type { ExtractionDeliveryService } from "../extraction/delivery.js";
 import type { SqliteProcessorStorage } from "../storage/processor-results.js";
@@ -55,28 +57,22 @@ export class ProcessorExternalRetention {
     }
     const { accepted, spec, manifest } =
       await this.delivery.acceptedForRetention(submission, signal);
-    const inputs: ProcessorInput[] = manifest.items.map((item) =>
-      item.document
-        ? { kind: "document", input_id: item.input_id, document: item.document }
-        : item.material
-          ? {
-              kind: "material",
-              input_id: item.input_id,
-              material: item.material,
-            }
-          : {
-              kind: "missing",
-              input_id: item.input_id,
-              literature_id: item.literature_id,
-              reason: "material-missing",
-            },
-    );
+    const inputs: ProcessorInput[] = manifest.items.map((item) => ({
+      kind: "external",
+      input_id: item.input_id,
+      literature_id: item.literature_id,
+      material: item.material,
+      document: item.document,
+    }));
     const invocation = {
       schema_version: 1 as const,
-      processor: { id: "external-extraction", version: "1" },
+      processor: { id: "external-extraction", version: "2" },
       spec: processorJson(spec),
       inputs,
       execution: {
+        reads: { parts: "all" as const, roles: "all" as const },
+        uses_description: false,
+        map: null,
         method_sha256: await sha256(canonicalJsonBytes(submission.producer)),
         model: null,
       },
@@ -89,11 +85,33 @@ export class ProcessorExternalRetention {
           c?.status === "processed-no-records");
       return {
         input_id: input.input_id,
+        parts: [],
         status: complete ? "complete" : "none",
         read_segments: [],
         gaps: complete ? [] : [c?.reason ?? c?.status ?? "not-submitted"],
       };
     });
+    const content: ProcessorContent = {
+      kind: "records",
+      schema: {
+        type: "object",
+        properties: { record: processorJson(spec.output_schema) },
+        required: ["record"],
+        additionalProperties: false,
+      },
+      records: submission.records.map((r) => ({
+        record_id: r.record_id,
+        payload: { record: processorJson(r.payload) },
+        evidence: r.field_evidence.map((e) => ({
+          pointer: `/record${e.pointer}`,
+          sources: e.sources.map((s) => ({
+            kind: "document",
+            evidence: s.evidence,
+          })),
+        })),
+        missing: {},
+      })),
+    };
     const stored = await this.store.publish(
       await parseProcessorResult({
         schema_version: 1,
@@ -105,27 +123,11 @@ export class ProcessorExternalRetention {
           coverage.every((c) => c.status === "complete")
             ? "empty"
             : "ok",
-        content: {
-          kind: "records",
-          schema: {
-            type: "object",
-            properties: { record: spec.output_schema },
-            required: ["record"],
-            additionalProperties: false,
-          },
-          records: submission.records.map((r) => ({
-            record_id: r.record_id,
-            payload: { record: r.payload },
-            evidence: r.field_evidence.map((e) => ({
-              pointer: `/record${e.pointer}`,
-              sources: e.sources.map((s) => ({
-                kind: "document",
-                evidence: s.evidence,
-              })),
-            })),
-            missing: {},
-          })),
-        },
+        content,
+        value_checks: uncheckedProcessorValues(
+          content,
+          "external-candidate-not-visually-verified",
+        ),
         coverage,
         producer: "external",
         provenance: processorJson(

@@ -1,3 +1,5 @@
+import { SCHEMA_VERSION } from "../src/storage/sqlite/schema.js";
+import { withRawParserFixture } from "./raw-parser-fixture.js";
 import {
   workbenchLogin,
   workbenchTestAccess,
@@ -72,7 +74,7 @@ async function fixture() {
           },
         ],
       },
-      parsing: {
+      parsing: withRawParserFixture({
         rules: new TypeScriptParserArtifactRules(),
         parser: {
           parse: async (request, signal) => {
@@ -111,7 +113,7 @@ async function fixture() {
             };
           },
         },
-      },
+      }),
     },
   });
   const authCookie = await workbenchLogin(server.origin);
@@ -192,8 +194,8 @@ async function fixture() {
         literature_id: FIXTURE_LITERATURE.literature_id,
         asset_id: asset.asset_id,
         asset_sha256: asset.sha256,
-        mode: "reparse" as const,
-        expected_default_revision: null,
+        profiles: ["pipeline", "vlm-engine"],
+        force: false,
       };
     },
     async close() {
@@ -341,7 +343,7 @@ describe("production task workbench composition", () => {
           workspace: {
             catalog_path: env.catalog,
             artifact_root: env.artifacts,
-            schema_version: 10,
+            schema_version: SCHEMA_VERSION,
             capabilities: { tasks: true, query: true, maintenance: true },
           },
         },
@@ -428,7 +430,7 @@ describe("production task workbench composition", () => {
     }
   });
 
-  it("executes PDF and processing tasks through the durable runtime and reads the same committed document", async () => {
+  it("executes PDF and processing tasks through the durable runtime and reads the committed raw parses without creating a document", async () => {
     const env = await fixture();
     try {
       const parseRequest = await env.seed();
@@ -452,7 +454,7 @@ describe("production task workbench composition", () => {
           "completed",
         ),
       );
-      expect(env.parseCalls).toBe(1);
+      expect(env.parseCalls).toBe(2);
       expect(await env.call(`/api/tasks/${id}`)).toMatchObject({
         status: 200,
         value: {
@@ -476,7 +478,7 @@ describe("production task workbench composition", () => {
       ).toMatchObject({
         status: 200,
         value: {
-          result: { default: { document_version_id: expect.any(String) } },
+          result: { default: null },
         },
       });
       expect(
@@ -569,7 +571,7 @@ describe("production task workbench composition", () => {
           (await reopened.application.processingTasks!.read(id)).results,
         ).toHaveLength(1);
         expect(reopened.application.browserHost()).toBeNull();
-        expect(env.parseCalls).toBe(1);
+        expect(env.parseCalls).toBe(2);
       } finally {
         await reopened.close();
       }
@@ -599,7 +601,7 @@ describe("production task workbench composition", () => {
       });
       const id = (submitted.value.task as { job_id: string }).job_id;
       await env.call(`/api/tasks/${id}/start`, {});
-      await vi.waitFor(() => expect(env.parseCalls).toBe(1));
+      await vi.waitFor(() => expect(env.parseCalls).toBe(2));
       expect(await env.call(`/api/tasks/${id}/pause`, {})).toMatchObject({
         status: 200,
         value: { task: { job: { status: "paused" } } },
@@ -642,7 +644,14 @@ describe("production task workbench composition", () => {
             asset_sha256: request.asset_sha256,
           })
         ).default,
-      ).not.toBeNull();
+      ).toBeNull();
+      expect(
+        (
+          await env.server.application.rawParseStorage!.current(
+            request.asset_id,
+          )
+        ).filter((s) => s.result),
+      ).toHaveLength(2);
     } finally {
       await env.close();
     }
@@ -734,7 +743,7 @@ describe("production task workbench composition", () => {
           await env.call(`/api/tasks/${id}/start`, {});
         else
           legacy = env.call(`/api/jobs/${id}/run`, {}).catch(() => undefined);
-        await vi.waitFor(() => expect(env.parseCalls).toBe(1));
+        await vi.waitFor(() => expect(env.parseCalls).toBe(2));
         await env.server.close();
         const reopened = await startProductionWorkbench({
           access: workbenchTestAccess,
@@ -752,7 +761,7 @@ describe("production task workbench composition", () => {
             (await reopened.application.library.detail(request.literature_id))
               .primary_pdf?.asset.sha256,
           ).toBe(request.asset_sha256);
-          expect(env.parseCalls).toBe(1);
+          expect(env.parseCalls).toBe(2);
         } finally {
           await reopened.close();
         }
@@ -782,7 +791,7 @@ describe("production task workbench composition", () => {
         artifact_root: join(home, ".sciretriever", "artifacts"),
       });
       expect(server.application.processingTasks).not.toBeNull();
-      expect(server.application.knowledgeAnalysis).not.toBeNull();
+      expect(server.application.processors).not.toBeNull();
       expect(browserHost).not.toHaveBeenCalled();
       expect((await fetch(server.origin, { redirect: "manual" })).status).toBe(
         303,

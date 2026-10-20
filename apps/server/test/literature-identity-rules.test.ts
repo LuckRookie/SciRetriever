@@ -33,7 +33,8 @@ const metadata = (
   abstract: null,
   publication_date: null,
   publication_year: 2026,
-  document_type: "journal-article",
+  publication_form: "journal-article" as const,
+  article_kind: null,
   language: null,
   venue: null,
   publisher: null,
@@ -65,6 +66,8 @@ const observation = (
   } = {},
 ) =>
   parseMetadataObservation({
+    source_type: null,
+    source_type_mapping_version: null,
     observation_id: id(200 + n),
     provenance: {
       provenance_id: id(300 + n),

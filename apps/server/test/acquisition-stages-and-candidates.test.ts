@@ -262,9 +262,7 @@ describe("operation-local download response observations", () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-authorized-media-"),
     );
-    const app = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const app = await createApplication(home, {});
     try {
       for (const provider of ["core", "elsevier", "wiley"] as const) {
         const pdf = workbenchPdf();
@@ -309,9 +307,7 @@ describe("operation-local download response observations", () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-response-observations-"),
     );
-    const app = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const app = await createApplication(home, {});
     try {
       for (const status of [403, 404, 429, 503]) {
         const observed: Parameters<
@@ -354,9 +350,7 @@ describe("operation-local download response observations", () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-response-download-"),
     );
-    const app = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const app = await createApplication(home, {});
     try {
       const observed: Parameters<
         NonNullable<PdfDownloadOptions["on_response"]>

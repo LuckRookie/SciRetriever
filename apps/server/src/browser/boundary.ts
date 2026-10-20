@@ -70,7 +70,7 @@ export interface BrowserArticleGoal {
   readonly venue: string | null;
   readonly publisher: string | null;
   readonly publication_year: number | null;
-  readonly document_type: string | null;
+  readonly publication_form: string | null;
 }
 
 /**
@@ -122,7 +122,7 @@ export function createBrowserArticleGoal(input: {
       publicationYear <= 9999
         ? publicationYear
         : null,
-    document_type: bounded(input.metadata.document_type, 128),
+    publication_form: bounded(input.metadata.publication_form, 128),
   });
 }
 

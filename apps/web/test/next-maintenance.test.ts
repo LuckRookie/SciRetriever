@@ -1,3 +1,4 @@
+import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,10 +15,9 @@ import {
   parseProvenance,
   sha256,
 } from "@sciretriever/contracts";
-import { createApplication } from "../../server/src/bootstrap/application.js";
-import { migrateDocumentCatalog } from "../../server/src/storage/sqlite/document-migration.js";
+import { createParserFixtureApplication as createApplication } from "../../server/test/parser-application-fixture.js";
 import { TypeScriptParserArtifactRules } from "../../server/src/parsing/artifact-rules.js";
-import type { ParserBackend } from "../../server/src/parsing/ports.js";
+import type { ParserBackend } from "../../server/test/parser-fixture-types.js";
 import {
   startMaintenanceWorkbench,
   startQueryOnlyWorkbench,
@@ -42,13 +42,11 @@ async function confirm(page: import("playwright").Page, label: string) {
     .click();
 }
 
-it("selects the current Library PDF and validates a published Document receipt in Chromium", async () => {
+it("selects the current Library PDF and validates the raw parsing receipt in Chromium", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-document-web-"));
   const id = (n: number) =>
     `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
-  let app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  let app = await createApplication(home, {});
   let workbench:
     | Awaited<ReturnType<typeof startMaintenanceWorkbench>>
     | undefined;
@@ -83,10 +81,6 @@ it("selects the current Library PDF and validates a published Document receipt i
       }),
     });
     await app.close();
-    await migrateDocumentCatalog({
-      catalog_path: join(home, "catalog.sqlite"),
-      backup_path: join(home, "before.sqlite"),
-    });
     const backend: ParserBackend = {
       parse: async (request) => {
         const markdown = Buffer.from("# Title\nEvidence text\n");
@@ -123,12 +117,11 @@ it("selects the current Library PDF and validates a published Document receipt i
     app = await createApplication(home, {
       parsing: { parser: backend, rules: new TypeScriptParserArtifactRules() },
     });
-    const seeded = await app.documentProcessing.parseDocuments({
+    await app.documentProcessing.parseDocuments({
       literature_id: FIXTURE_LITERATURE.literature_id,
       asset_id: asset.asset_id,
       asset_sha256: asset.sha256,
-      mode: "reparse",
-      expected_default_revision: null,
+      force: true,
     });
     await app.close();
     workbench = await startMaintenanceWorkbench({
@@ -224,22 +217,52 @@ it("selects the current Library PDF and validates a published Document receipt i
     expect(await page.locator(".maintenance-grid").innerText()).toContain(
       asset.sha256,
     );
-    expect(await page.locator(".maintenance-grid").innerText()).toContain(
-      "默认版本：1",
+    expect(await page.locator(".maintenance-grid").innerText()).not.toContain(
+      "默认版本：",
     );
-    await confirm(page, "发布可读表示");
+    await page.route("**/api/v1/maintenance/parse-document", async (route) => {
+      const request = route.request().postDataJSON();
+      expect(request).toMatchObject({
+        force: false,
+      });
+      expect(request).not.toHaveProperty("profiles");
+      expect(request).not.toHaveProperty("expected_default_revision");
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          protocol_version: 1,
+          receipt: {
+            literature_id: FIXTURE_LITERATURE.literature_id,
+            asset_id: asset.asset_id,
+            asset_sha256: asset.sha256,
+            profiles: [
+              {
+                profile: "vlm-engine",
+                status: "published",
+                raw_parse_id: id(805),
+                result_sha256: "a".repeat(64),
+                failure_code: null,
+                failure_source_type: null,
+              },
+            ],
+          },
+        }),
+      });
+    });
+    await confirm(page, "解析 PDF");
     await expect
       .poll(() => page.getByRole("status").allTextContents())
-      .toContainEqual(expect.stringContaining("解析表示已保存"));
+      .toContainEqual(expect.stringContaining("vlm-engine"));
     await page
       .locator(".maintenance-output")
       .getByRole("button", { name: "技术详情", exact: true })
       .click();
     expect(await page.locator(".maintenance-output").innerText()).toContain(
-      seeded.document.document_version_id,
+      "raw_parse_id",
     );
     expect(await page.locator(".maintenance-output").innerText()).toContain(
-      '"published": false',
+      '"status": "published"',
     );
     await page.route("**/api/v1/maintenance/parse-document", async (route) => {
       await route.fulfill({
@@ -254,7 +277,7 @@ it("selects the current Library PDF and validates a published Document receipt i
         }),
       });
     });
-    await confirm(page, "发布可读表示");
+    await confirm(page, "解析 PDF");
     await expect.poll(() => page.getByRole("alert").textContent()).toBeTruthy();
   } finally {
     await browser?.close();
@@ -266,9 +289,7 @@ it("selects the current Library PDF and validates a published Document receipt i
 
 it("accepts a selected PDF in Chromium, reads the same fact, and reports rejection and conflict", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-maintenance-web-"));
-  const application = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  const application = await createApplication(home, {});
   await application.database.putLiterature(parseLiterature(FIXTURE_LITERATURE));
   await application.close();
   const workbench = await startMaintenanceWorkbench({
@@ -317,6 +338,7 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
       .poll(() => page.locator(".maintenance-grid").textContent())
       .toContain("PDF 已接纳");
     await page.goto(`${workbench.origin}/query`);
+    await showAllLibraryStatuses(page);
     expect(new URL(page.url()).pathname).toBe("/query");
     await page
       .getByRole("article", {

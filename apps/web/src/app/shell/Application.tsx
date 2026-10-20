@@ -52,6 +52,9 @@ import { ShellContext } from "./context.js";
 import { Icon } from "./icon.js";
 import { sectionLabels, errorMessage } from "../strings.js";
 
+const Tags = lazy(() => import("../features/tags/Tags.js"));
+const Snapshots = lazy(() => import("../features/archive/Snapshots.js"));
+const Archive = lazy(() => import("../features/archive/Archive.js"));
 const Library = lazy(() => import("../features/library/Library.js"));
 const Reader = lazy(() => import("../features/reader/Reader.js"));
 const Lab = lazy(() => import("../features/lab/Lab.js"));
@@ -289,9 +292,9 @@ function Workspace({ api }: { api: ApiClient }) {
         </Button>
         {(
           [
-            { name: "资料", sections: ["lib", "disc"] },
+            { name: "资料", sections: ["lib", "disc", "tags", "snapshots"] },
             { name: "使用", sections: ["ins", "ask", "syn", "ext"] },
-            { name: "运行", sections: ["task", "web"] },
+            { name: "运行", sections: ["archive", "task", "web"] },
           ] as const
         ).map((group) => (
           <div className="navigation-group" key={group.name}>
@@ -353,6 +356,12 @@ function Workspace({ api }: { api: ApiClient }) {
       <Browser />
     ) : route.literature ? (
       <Reader />
+    ) : route.section === "tags" ? (
+      <Tags />
+    ) : route.section === "snapshots" ? (
+      <Snapshots />
+    ) : route.section === "archive" ? (
+      <Archive />
     ) : route.section === "lib" ? (
       <Library />
     ) : route.section === "lab" ? (

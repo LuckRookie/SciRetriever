@@ -163,6 +163,38 @@ describe("TypeScript configuration owner", () => {
     }
   });
 
+  it("persists proofreading and value-check budgets across JSON publication and unrelated saves", async () => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-ts-owner-proofread-"),
+    );
+    try {
+      const owner = new TypeScriptConfigurationOwner(home);
+      const initial = await owner.read();
+      const proofread = {
+        ...initial.configuration.proofread,
+        max_calls_per_document: 23,
+        max_value_check_calls: 9,
+      };
+      const published = await owner.publishConfiguration(
+        { ...initial.configuration, proofread },
+        initial.revision,
+        ["proofread"],
+      );
+      expect(published.configuration.proofread).toEqual(proofread);
+      await owner.publishConfiguration(
+        published.configuration,
+        published.revision,
+        ["tags"],
+      );
+      expect(
+        (await new TypeScriptConfigurationOwner(home).read()).configuration
+          .proofread,
+      ).toEqual(proofread);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("roundtrips hyphenated Web of Science and Sci-Hub source tables atomically", async () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-ts-owner-sources-"),

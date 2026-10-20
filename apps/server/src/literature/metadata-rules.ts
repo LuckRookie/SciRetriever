@@ -1,4 +1,14 @@
 import {
+  adjudicateMetadataFields,
+  metadataFieldEmpty,
+} from "./metadata-fields.js";
+import {
+  EMPTY_METADATA,
+  METADATA_FIELDS,
+  type MetadataFieldState,
+  type MetadataFieldCandidate,
+} from "@sciretriever/contracts";
+import {
   canonicalJsonBytes,
   parseLiterature,
   parseLiteratureMetadata,
@@ -23,6 +33,7 @@ export type MetadataProjectionDecision =
   | {
       readonly outcome: "projected" | "unchanged" | "preserved";
       readonly metadata: LiteratureMetadata;
+      readonly field_states: readonly MetadataFieldState[];
       readonly metadata_revision: number;
       readonly changed: boolean;
       readonly projection_preserved: boolean;
@@ -149,7 +160,7 @@ function supplementAuthor(base: Author, source: Author): Author {
   });
 }
 
-function authorListsAlign(
+export function authorListsAlign(
   base: readonly Author[],
   source: readonly Author[],
 ): boolean {
@@ -180,7 +191,8 @@ function buildProjection(observations: readonly MetadataObservation[]): {
     "abstract",
     "publication_date",
     "publication_year",
-    "document_type",
+    "publication_form",
+    "article_kind",
     "language",
     "venue",
     "publisher",
@@ -273,6 +285,45 @@ function pairConflict(
   return false;
 }
 
+export function metadataObservationCandidates(
+  observations: readonly MetadataObservation[],
+  precedence: readonly string[] = [],
+): readonly MetadataFieldCandidate[] {
+  const ordered = orderedObservations(observations, precedence);
+  const built = buildProjection(
+    ordered.filter((o) => o.provenance.source_name !== "manual-metadata"),
+  );
+  if (!built.metadata)
+    throw new Error(built.failure ?? "metadata-projection-invalid");
+  const candidates: MetadataFieldCandidate[] = [];
+  for (const field of METADATA_FIELDS) {
+    const sources = ordered.filter(
+      (o) =>
+        o.provenance.source_name !== "manual-metadata" &&
+        !metadataFieldEmpty(o.metadata[field]),
+    );
+    for (let index = 0; index < sources.length; index++) {
+      const observation = sources[index]!;
+      candidates.push({
+        field,
+        value:
+          index === 0 && (field === "authors" || field === "identifiers")
+            ? built.metadata[field]
+            : observation.metadata[field],
+        evidence: {
+          source:
+            observation.provenance.source_kind === "user"
+              ? "manual"
+              : "authority",
+          observation_id: observation.observation_id,
+          provenance: observation.provenance,
+        },
+      });
+    }
+  }
+  return candidates;
+}
+
 export function projectMetadata(
   values: readonly MetadataObservation[],
   options: {
@@ -281,6 +332,7 @@ export function projectMetadata(
     readonly metadata_revision?: number;
     readonly expected_metadata_revision?: number | null;
     readonly content_ready?: boolean;
+    readonly field_states?: readonly MetadataFieldState[];
   } = {},
 ): MetadataProjectionDecision {
   if (!Array.isArray(values))
@@ -305,49 +357,36 @@ export function projectMetadata(
     observations,
     options.provider_precedence ?? [],
   );
-  const built = buildProjection(ordered);
+  const built = buildProjection(
+    ordered.filter((o) => o.provenance.source_name !== "manual-metadata"),
+  );
   if (!built.metadata)
     return rejectedProjection(metadataRevision, built.failure!);
   if (current && pairConflict(current, built.metadata))
     return rejectedProjection(metadataRevision, "stable-identifier-conflict");
-  if (!current)
-    return {
-      outcome: "projected",
-      metadata: built.metadata,
-      metadata_revision: metadataRevision,
-      changed: true,
-      projection_preserved: false,
-      observations_projection_changed: false,
-      reason: null,
-    };
-  if (contentReady)
-    return {
-      outcome: "preserved",
-      metadata: current,
-      metadata_revision: metadataRevision,
-      changed: false,
-      projection_preserved: true,
-      observations_projection_changed: false,
-      reason: "content-ready-current-metadata-preserved",
-    };
-  if (equal(current, built.metadata))
-    return {
-      outcome: "unchanged",
-      metadata: current,
-      metadata_revision: metadataRevision,
-      changed: false,
-      projection_preserved: false,
-      observations_projection_changed: false,
-      reason: null,
-    };
+  const candidates = metadataObservationCandidates(ordered);
+  const resolved = adjudicateMetadataFields({
+    current: current ?? EMPTY_METADATA,
+    states: options.field_states ?? [],
+    candidates,
+    preserve_nonempty: contentReady,
+  });
+  const stateOrder = (states: readonly MetadataFieldState[]) =>
+    [...states].sort((a, b) => a.field.localeCompare(b.field));
+  const same =
+    current !== null &&
+    equal(current, resolved.metadata) &&
+    (options.field_states === undefined ||
+      equal(stateOrder(options.field_states), stateOrder(resolved.states)));
   return {
-    outcome: "projected",
-    metadata: built.metadata,
-    metadata_revision: metadataRevision + 1,
-    changed: true,
-    projection_preserved: false,
+    outcome: same ? (contentReady ? "preserved" : "unchanged") : "projected",
+    metadata: resolved.metadata,
+    field_states: resolved.states,
+    metadata_revision: metadataRevision + (current && !same ? 1 : 0),
+    changed: !same,
+    projection_preserved: contentReady,
     observations_projection_changed: false,
-    reason: null,
+    reason: contentReady ? "ready-nonempty-metadata-preserved" : null,
   };
 }
 
@@ -359,6 +398,8 @@ function observationSemanticValue(
     cited_by_count: observation.cited_by_count,
     declared_keywords: observation.declared_keywords,
     metadata: observation.metadata,
+    source_type: observation.source_type,
+    source_type_mapping_version: observation.source_type_mapping_version,
     provenance: {
       source_kind: observation.provenance.source_kind,
       source_name: observation.provenance.source_name,
@@ -423,6 +464,7 @@ export function acceptMetadataObservation(
     readonly metadata_revision?: number;
     readonly expected_metadata_revision?: number | null;
     readonly content_ready?: boolean;
+    readonly field_states?: readonly MetadataFieldState[];
   } = {},
 ): MetadataObservationAcceptanceDecision {
   const observation = parseMetadataObservation(value);
@@ -462,6 +504,9 @@ export function acceptMetadataObservation(
   const duplicate = semanticMatches[0] ?? null;
   const merged = duplicate ? existing : [...existing, observation];
   const projectionOptions = {
+    ...(options.field_states === undefined
+      ? {}
+      : { field_states: options.field_states }),
     ...(options.provider_precedence === undefined
       ? {}
       : { provider_precedence: options.provider_precedence }),
@@ -511,3 +556,8 @@ export function acceptMetadataObservation(
     deduplicated: duplicate !== null,
   };
 }
+
+export {
+  mapSourceType,
+  SOURCE_TYPE_MAPPING_VERSION,
+} from "./metadata-types.js";

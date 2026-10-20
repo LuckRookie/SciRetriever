@@ -1,10 +1,17 @@
+import type { ProcessorValueVerifier } from "./value-check.js";
 import { randomUUID } from "node:crypto";
 import {
   canonicalJsonBytes,
+  parseProcessorReads,
+  createInputManifest,
+  type ProcessorReads,
+  type ArchiveProcessorInput,
+  type SnapshotProcessorInput,
+  type ProcessorPartOutcome,
+  type SnapshotMember,
   parseProcessorInvocation,
   parseProcessorResult,
   parseProcessorBatchRequest,
-  parseEvidenceRef,
   processorComparison,
   processorJson,
   processorPointer,
@@ -12,6 +19,7 @@ import {
   type ProcessorBatchRequest,
   type ProcessorInvocation,
   type ProcessorInput,
+  type ProcessorRecordSource,
   type ProcessorCitation,
   type ProcessorContent,
   type ProcessorCoverage,
@@ -20,11 +28,16 @@ import {
   type ProcessorResultRef,
   type ProcessorRecord,
   type ProcessorCollection,
+  uncheckedProcessorValues,
 } from "@sciretriever/contracts";
 import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
 import type { DocumentReadService } from "../document/read.js";
 import type { LiteratureQueryService } from "../literature/query.js";
-import type { SqliteSynthesisStorage } from "../storage/synthesis.js";
+import { ProcessorArchiveSource } from "./processor-archive.js";
+import {
+  analyzeDocumentSession,
+  type DocumentAnalysisResult,
+} from "./knowledge-session.js";
 import { validateRecordPayloads } from "../extraction/spec.js";
 
 export class ProcessorError extends Error {
@@ -42,10 +55,16 @@ export function processorError(code: string): never {
   throw new ProcessorError(code);
 }
 export interface StoredProcessorResult {
+  readonly freshness?: {
+    readonly state: "current" | "stale";
+    readonly reasons: readonly unknown[];
+    readonly reasons_truncated: boolean;
+  };
   readonly result: ProcessorResult;
   readonly ref: ProcessorResultRef;
 }
 export interface ProcessorSourceRecord {
+  readonly value_checks?: readonly import("@sciretriever/contracts").ProcessorValueCheck[];
   readonly record_id: string;
   readonly payload: ProcessorObject;
   readonly citation: ProcessorCitation;
@@ -62,7 +81,7 @@ export interface ProcessorStore {
     signal?: AbortSignal,
   ): Promise<StoredProcessorResult>;
   records(
-    input: Extract<ProcessorInput, { kind: "result" | "knowledge" }>,
+    input: ProcessorRecordSource,
     signal?: AbortSignal,
   ): Promise<readonly ProcessorSourceRecord[]>;
   verifyCitations(
@@ -72,6 +91,10 @@ export interface ProcessorStore {
   publishCollection(collection: ProcessorCollection): Promise<string>;
 }
 export interface ProcessorSegment {
+  readonly basis?: import("@sciretriever/contracts").ProofreadBasis;
+  readonly uncertainty?:
+    | import("@sciretriever/contracts").ProofreadUncertainty
+    | null;
   readonly segment_id: string;
   readonly text: string;
   readonly citation: ProcessorCitation;
@@ -79,19 +102,28 @@ export interface ProcessorSegment {
 export interface ProcessorContext {
   readonly signal: AbortSignal;
   readDocument(
-    input: Extract<ProcessorInput, { kind: "document" }>,
+    input: ArchiveProcessorInput,
   ): Promise<readonly ProcessorSegment[]>;
   searchDocument(
-    input: Extract<ProcessorInput, { kind: "document" }>,
+    input: ArchiveProcessorInput,
     query: string,
   ): Promise<readonly ProcessorSegment[]>;
-  readResult(
-    input: Extract<ProcessorInput, { kind: "result" | "knowledge" }>,
-  ): Promise<{
-    readonly records: readonly ProcessorSourceRecord[];
-    readonly complete: boolean;
-    readonly gaps: readonly string[];
+  readMappedResults(): Promise<readonly ProcessorSourceRecord[]>;
+  mappedCoverage(): readonly ProcessorPartOutcome[];
+  describeSnapshot(): Promise<{
+    count: number;
+    members: readonly Pick<
+      SnapshotMember,
+      "literature_id" | "metadata" | "tags"
+    >[];
+    citation: (literature: string | null, pointer: string) => ProcessorCitation;
   }>;
+  resolveEvidence(citation: ProcessorCitation): Promise<unknown>;
+  summarize(
+    input: ArchiveProcessorInput,
+    purpose: "overview" | "detailed" | "question",
+    question: string | null,
+  ): Promise<DocumentAnalysisResult>;
   model(
     system: string,
     input: ProcessorObject,
@@ -101,7 +133,7 @@ export interface ProcessorContext {
 export interface ProcessorOutput {
   readonly status: "ok" | "empty";
   readonly content: ProcessorContent;
-  readonly coverage: readonly ProcessorCoverage[];
+  readonly coverage: readonly Omit<ProcessorCoverage, "parts">[];
   readonly provenance?: ProcessorObject;
 }
 export interface Processor {
@@ -109,6 +141,12 @@ export interface Processor {
   readonly version: string;
   readonly scope: "document" | "collection";
   readonly accepts: readonly ProcessorInput["kind"][];
+  readonly reads?: ProcessorReads;
+  readonly uses_description?: boolean;
+  readonly map?: {
+    readonly processor: { readonly id: string; readonly version: string };
+    readonly spec: ProcessorObject;
+  };
   readonly model: boolean;
   readonly output_kind: ProcessorContent["kind"];
   outputSchema?(spec: ProcessorObject): ProcessorObject;
@@ -123,6 +161,14 @@ export interface Processor {
 export class ProcessorRegistry {
   private readonly entries = new Map<string, Processor>();
   register(processor: Processor): void {
+    if (
+      processor.accepts.length !== 1 ||
+      processor.accepts[0] !==
+        (processor.scope === "document" ? "archive-document" : "snapshot") ||
+      (processor.scope === "document" &&
+        (processor.map || processor.uses_description))
+    )
+      processorError("processor-definition-invalid");
     const key = `${processor.id}@${processor.version}`;
     if (this.entries.has(key)) processorError("processor-duplicate");
     this.entries.set(key, processor);
@@ -138,6 +184,9 @@ export class ProcessorRegistry {
       version: p.version,
       scope: p.scope,
       accepts: p.accepts,
+      reads: p.reads ?? { parts: "main", roles: "all" },
+      uses_description: p.uses_description ?? false,
+      map: p.map ?? null,
       spec_schema: p.spec_schema,
       definition: p.definition,
       output_kind: p.output_kind,
@@ -157,8 +206,8 @@ export function resultCitations(
 ): readonly ProcessorCitation[] {
   return content.kind === "records"
     ? content.records.flatMap((r) => r.evidence.flatMap((e) => e.sources))
-    : content.kind === "text"
-      ? content.evidence
+    : content.kind === "report"
+      ? content.claims.flatMap((c) => c.sources)
       : [];
 }
 export class ProcessorService {
@@ -170,15 +219,15 @@ export class ProcessorService {
     private readonly agents: DshAgentRuntime,
     private readonly literature: LiteratureQueryService,
     readonly store: ProcessorStore,
-    private readonly knowledge: Pick<SqliteSynthesisStorage, "sourceById">,
+    readonly archiveSource: ProcessorArchiveSource,
+    private readonly verifier?: ProcessorValueVerifier,
   ) {}
   private async work<T>(
     fn: (signal: AbortSignal) => Promise<T>,
     signal?: AbortSignal,
   ): Promise<T> {
-    if (this.stop.signal.aborted) processorError("processor-closed");
     const active = signal
-      ? AbortSignal.any([this.stop.signal, signal])
+      ? AbortSignal.any([signal, this.stop.signal])
       : this.stop.signal;
     if (active.aborted) processorError("processor-cancelled");
     const promise = Promise.resolve().then(() => fn(active));
@@ -189,25 +238,57 @@ export class ProcessorService {
       this.active.delete(promise);
     }
   }
-  async close(): Promise<void> {
+  async close() {
     this.stop.abort();
     await Promise.allSettled([...this.active]);
   }
-  private async execution(processor: Processor, spec: ProcessorObject) {
+  private spec(p: Processor, value: ProcessorObject) {
+    const { reads, ...rest } = value;
+    const normalized = p.normalizeSpec(rest);
+    return {
+      ...normalized,
+      reads: processorJson(
+        reads === undefined
+          ? (p.reads ?? { parts: "main", roles: "all" })
+          : parseProcessorReads(reads),
+      ),
+    };
+  }
+  private async execution(p: Processor, spec: ProcessorObject) {
+    const reads = parseProcessorReads(spec.reads);
+    const map = p.map ?? null;
+    if (map) {
+      const target = this.registry.get(map.processor.id, map.processor.version);
+      if (
+        target.scope !== "document" ||
+        !target.accepts.includes("archive-document")
+      )
+        processorError("processor-map-invalid");
+    }
     return {
       method_sha256: await sha256(
         canonicalJsonBytes({
-          id: processor.id,
-          version: processor.version,
-          definition: processor.definition,
-          spec_schema: processor.spec_schema,
-          output_kind: processor.output_kind,
-          output_schema: processor.outputSchema?.(spec) ?? null,
+          value_verification: this.verifier
+            ? await this.verifier.identity()
+            : "unconfigured",
+          id: p.id,
+          version: p.version,
+          definition: p.definition,
+          spec_schema: p.spec_schema,
+          output_kind: p.output_kind,
+          output_schema: p.outputSchema?.(spec) ?? null,
+          reads,
+          map,
+          uses_description: p.uses_description ?? false,
         }),
       ),
-      model: processor.model
-        ? processorJson(this.agents.effectiveIdentity("analysis"))
-        : null,
+      model:
+        p.model && this.agents.readiness("analysis").configured
+          ? processorJson(this.agents.effectiveIdentity("analysis"))
+          : null,
+      reads,
+      uses_description: p.uses_description ?? false,
+      map,
     };
   }
   prepare(
@@ -220,98 +301,60 @@ export class ProcessorService {
     const request = parseProcessorBatchRequest(value);
     return this.work(async (active) => {
       const p = this.registry.get(
-        request.processor.id,
-        request.processor.version,
-      );
-      const spec = p.normalizeSpec(request.spec);
+          request.processor.id,
+          request.processor.version,
+        ),
+        spec = this.spec(p, request.spec),
+        execution = await this.execution(p, spec),
+        inputs: ProcessorInput[] = [];
       if (p.outputSchema)
         await validateRecordPayloads(p.outputSchema(spec), [], active);
-      const execution = await this.execution(p, spec);
-      const inputs: ProcessorInput[] = [];
-      for (const [index, selection] of request.inputs.entries()) {
-        if (active.aborted) processorError("processor-cancelled");
-        const input_id = `i${index}`;
-        if (selection.kind === "result") {
-          const stored = await this.store.byId(selection.result_id, active);
-          if (!stored) processorError("processor-result-missing");
-          const input = {
-            kind: "result" as const,
-            input_id,
-            ...stored.ref,
-            record_ids: selection.record_ids,
-          };
-          await this.store.records(input, active);
-          inputs.push(input);
-        } else if (selection.kind === "knowledge") {
-          const source = await this.knowledge.sourceById(
-            selection.artifact_id,
-            active,
-          );
-          if (!source) processorError("processor-input-missing");
-          inputs.push({
-            kind: "knowledge",
-            input_id,
-            artifact_id: selection.artifact_id,
-            content_sha256: source.artifact.content_ref.sha256,
-          });
-        } else {
-          let versionId: string;
-          if (selection.kind === "literature") {
-            const detail = await this.literature.detail(
-              selection.literature_id,
-            );
-            const asset = detail.primary_pdf?.asset;
-            if (!asset) {
-              inputs.push({
-                kind: "missing",
-                input_id,
-                literature_id: selection.literature_id,
-                reason: "material-missing",
-              });
-              continue;
-            }
-            const current = await this.documents.default(
-              {
-                literature_id: selection.literature_id,
-                asset_id: asset.asset_id,
-                asset_sha256: asset.sha256,
-              },
-              active,
-            );
-            if (!current.default) {
-              inputs.push({
-                kind: "missing",
-                input_id,
-                literature_id: selection.literature_id,
-                reason: "document-missing",
-              });
-              continue;
-            }
-            versionId = current.default.document_version_id;
-          } else versionId = selection.document_version_id;
-          const described = await this.documents.describe(
-            { document_version_id: versionId },
-            active,
-          );
-          inputs.push({
-            kind: "document",
-            input_id,
-            document: described.document,
-          });
-        }
-      }
       if (
-        inputs.some((i) => i.kind !== "missing" && !p.accepts.includes(i.kind))
+        p.scope === "collection" &&
+        (request.inputs.length !== 1 || request.inputs[0]!.kind !== "snapshot")
       )
-        processorError("processor-input-kind");
-      // Per-document identities do not depend on the position in a batch.
-      const groups =
-        p.scope === "document"
-          ? inputs.map((i) => [{ ...i, input_id: "document" }])
-          : [inputs];
+        processorError("processor-snapshot-required");
+      for (const selected of request.inputs) {
+        if (selected.kind === "snapshot") {
+          const snapshot = await this.archiveSource.snapshots.all(
+            selected.snapshot_id,
+            active,
+          );
+          if (p.scope === "collection")
+            inputs.push({
+              kind: "snapshot",
+              input_id: "snapshot",
+              snapshot_id: snapshot.snapshot_id,
+              content_sha256: snapshot.content_sha256,
+              mapped_results: [],
+            });
+          else
+            for (const member of snapshot.members)
+              inputs.push(
+                await this.archiveSource.input(
+                  member.literature_id,
+                  execution.reads,
+                  active,
+                  member,
+                ),
+              );
+        } else if (selected.kind === "literature" && p.scope === "document")
+          inputs.push(
+            await this.archiveSource.input(
+              selected.literature_id,
+              execution.reads,
+              active,
+            ),
+          );
+        else processorError("processor-archive-selection-required");
+      }
+      if (!inputs.length) processorError("processor-empty-snapshot");
       return {
         request: { ...request, spec },
-        invocations: groups.map((group) =>
+        invocations: (p.scope === "document"
+          ? inputs.map((i) => [i])
+          : [inputs]
+        ).map((group) =>
           parseProcessorInvocation({
             schema_version: 1,
             processor: request.processor,
@@ -332,160 +375,282 @@ export class ProcessorService {
     reused: boolean;
     coverage: string;
   }> {
-    const invocation = parseProcessorInvocation(value);
+    let invocation = parseProcessorInvocation(value);
     return this.work(async (active) => {
       const p = this.registry.get(
-        invocation.processor.id,
-        invocation.processor.version,
-      );
+          invocation.processor.id,
+          invocation.processor.version,
+        ),
+        spec = this.spec(p, invocation.spec),
+        execution = await this.execution(p, spec);
       if (
-        !equal(invocation.spec, p.normalizeSpec(invocation.spec)) ||
-        !equal(invocation.execution, await this.execution(p, invocation.spec))
+        !equal(spec, invocation.spec) ||
+        !equal(execution, invocation.execution)
       )
         processorError("processor-binding-changed");
-      if (p.scope === "document" && invocation.inputs.length !== 1)
+      if (invocation.inputs.length !== 1)
         processorError("processor-input-kind");
+      let input = invocation.inputs[0]!;
+      if (input.kind !== "missing" && !p.accepts.includes(input.kind))
+        processorError("processor-input-kind");
+      if (!["archive-document", "snapshot", "missing"].includes(input.kind))
+        processorError("processor-corrected-required");
       if (
-        invocation.inputs.some(
-          (i) => i.kind !== "missing" && !p.accepts.includes(i.kind),
-        )
-      )
-        processorError("processor-input-kind");
-      const comparison = await processorComparison(invocation);
-      const previous = await this.store.byComparison(comparison, active);
-      if (previous)
-        return { ...previous.ref, reused: true, coverage: "complete" };
-      const seen = new Map<string, Set<string>>();
-      const calls: ProcessorObject[] = [];
-      const literatureIds = new Set<string>();
-      for (const input of invocation.inputs) {
-        if (input.kind === "document")
-          literatureIds.add(input.document.source_material_ref.literature_id);
-        else if (input.kind === "result") {
-          const stored = await this.store.byId(input.result_id, active);
-          if (!stored || stored.ref.content_sha256 !== input.content_sha256)
-            processorError("processor-input-changed");
-          for (const id of stored.result.literature_ids) literatureIds.add(id);
-        } else if (input.kind === "knowledge") {
-          const source = await this.knowledge.sourceById(
-            input.artifact_id,
-            active,
-          );
-          if (
-            !source ||
-            source.artifact.content_ref.sha256 !== input.content_sha256
-          )
-            processorError("processor-input-changed");
-          for (const item of source.artifact.input.items)
-            if ("literature_id" in item) literatureIds.add(item.literature_id);
-        }
+        input.kind === "archive-document" &&
+        (await this.archiveSource.archive.status(input.literature_id, active))
+          .status !== "READY"
+      ) {
+        input = {
+          kind: "missing",
+          input_id: input.input_id,
+          literature_id: input.literature_id,
+          reason: "not-ready",
+        };
+        invocation = parseProcessorInvocation({
+          ...invocation,
+          inputs: [input],
+        });
       }
-      const checkInput = (input: ProcessorInput) => {
-        if (!invocation.inputs.some((i) => equal(i, input)))
+      const mapResults: StoredProcessorResult[] = [];
+      if (input.kind === "snapshot") {
+        const snapshot = await this.archiveSource.snapshots.all(
+          input.snapshot_id,
+          active,
+        );
+        if (snapshot.content_sha256 !== input.content_sha256)
+          processorError("processor-snapshot-changed");
+        const mapped: SnapshotProcessorInput["mapped_results"][number][] = [];
+        if (execution.map) {
+          const map = execution.map,
+            target = this.registry.get(map.processor.id, map.processor.version),
+            mapSpec = this.spec(target, map.spec),
+            binding = await this.execution(target, mapSpec);
+          for (const member of snapshot.members) {
+            const fixed = await this.archiveSource.input(
+              member.literature_id,
+              binding.reads,
+              active,
+              member,
+            );
+            let result;
+            try {
+              result = await this.execute(
+                {
+                  schema_version: 1,
+                  processor: map.processor,
+                  spec: mapSpec,
+                  inputs: [fixed],
+                  execution: binding,
+                },
+                active,
+              );
+            } catch (error) {
+              if (active.aborted) throw error;
+              result = await this.execute(
+                {
+                  schema_version: 1,
+                  processor: map.processor,
+                  spec: mapSpec,
+                  inputs: [
+                    {
+                      kind: "missing",
+                      input_id: "document",
+                      literature_id: member.literature_id,
+                      reason: "map-failed",
+                    },
+                  ],
+                  execution: binding,
+                },
+                active,
+              );
+            }
+            const stored = await this.store.byId(result.result_id, active);
+            if (!stored) processorError("processor-map-result-missing");
+            mapResults.push(stored);
+            mapped.push({ literature_id: member.literature_id, ...stored.ref });
+          }
+        }
+        input = { ...input, mapped_results: mapped };
+        invocation = parseProcessorInvocation({
+          ...invocation,
+          inputs: [input],
+        });
+      }
+      const comparison = await processorComparison(invocation),
+        previous = await this.store.byComparison(comparison, active);
+      if (previous)
+        return {
+          ...previous.ref,
+          reused: true,
+          coverage: previous.result.coverage.every(
+            (c) => c.status === "complete",
+          )
+            ? "complete"
+            : "partial",
+        };
+      const reads = execution.reads,
+        seen = new Set<string>(),
+        calls: ProcessorObject[] = [];
+      const segments =
+        input.kind === "archive-document"
+          ? await this.archiveSource.segments(input, reads, active)
+          : [];
+      const check = (candidate: ArchiveProcessorInput) => {
+        if (!equal(input, candidate))
           processorError("processor-read-outside-scope");
         if (active.aborted) processorError("processor-cancelled");
       };
-      const readDocument: ProcessorContext["readDocument"] = async (input) => {
-        checkInput(input);
-        return this.documents.withVerifiedVersion(
-          input.document.document_version_id,
-          async (version, bytes, structure) => {
-            if (
-              version.representation_sha256 !==
-                input.document.representation_sha256 ||
-              !equal(
-                version.source_material_ref,
-                input.document.source_material_ref,
-              )
-            )
-              processorError("processor-input-changed");
-            const ids = seen.get(input.input_id) ?? new Set<string>();
-            seen.set(input.input_id, ids);
-            return Promise.all(
-              structure.segments.map(async (segment) => {
-                ids.add(segment.segment_id);
-                const text = bytes.subarray(
-                  segment.start_utf8,
-                  segment.end_utf8,
-                );
-                return {
-                  segment_id: segment.segment_id,
-                  text: new TextDecoder("utf-8", { fatal: true }).decode(text),
-                  citation: {
-                    kind: "document" as const,
-                    evidence: parseEvidenceRef({
-                      schema_version: 1,
-                      target_kind: "document",
-                      locator_scheme: "utf8-segment-v1",
-                      document_version_id: version.document_version_id,
-                      representation_sha256: version.representation_sha256,
-                      locator: {
-                        kind: "segment",
-                        segment_id: segment.segment_id,
-                      },
-                      content_sha256: await sha256(text),
-                    }),
-                  },
-                };
-              }),
-            );
-          },
-          active,
+      const records: ProcessorSourceRecord[] = [];
+      for (const source of mapResults)
+        records.push(
+          ...(await this.store.records(
+            {
+              kind: "result",
+              input_id: "mapped",
+              ...source.ref,
+              record_ids: null,
+            },
+            active,
+          )),
         );
-      };
+      const allowedMap = (citation: ProcessorCitation) =>
+        citation.kind === "result" &&
+        mapResults.some(
+          (r) =>
+            r.ref.result_id === citation.result_id &&
+            r.ref.content_sha256 === citation.content_sha256,
+        );
+      const snapshotCitation = (citation: ProcessorCitation) =>
+        input.kind === "snapshot" &&
+        citation.kind === "snapshot" &&
+        citation.snapshot_id === input.snapshot_id &&
+        citation.content_sha256 === input.content_sha256 &&
+        (execution.uses_description ||
+          (citation.literature_id === null && citation.pointer === "/count"));
       const ctx: ProcessorContext = {
         signal: active,
-        readDocument,
-        searchDocument: async (input, query) => {
-          const terms = query.toLocaleLowerCase().split(/\s+/u).filter(Boolean);
-          return (await readDocument(input)).filter((s) =>
-            terms.some((t) => s.text.toLocaleLowerCase().includes(t)),
-          );
-        },
-        readResult: async (input) => {
-          checkInput(input);
-          const records = await this.store.records(input, active);
-          if (input.kind === "result") {
-            const stored = await this.store.byId(input.result_id, active);
-            if (!stored || stored.ref.content_sha256 !== input.content_sha256)
-              processorError("processor-input-changed");
-            return {
-              records,
-              complete: stored.result.coverage.every(
-                (c) => c.status === "complete",
-              ),
-              gaps: stored.result.coverage.flatMap((c) => c.gaps),
-            };
-          }
-          const source = await this.knowledge.sourceById(
-            input.artifact_id,
-            active,
-          );
-          if (!source) processorError("processor-input-missing");
-          const complete =
-            source.state === "verified" &&
-            source.artifact.coverage.status === "complete";
+        describeSnapshot: async () => {
+          if (input.kind !== "snapshot" || execution.map)
+            processorError("processor-read-outside-scope");
+          const snapshot = input,
+            source = await this.archiveSource.snapshots.all(
+              snapshot.snapshot_id,
+              active,
+            );
           return {
-            records,
-            complete,
-            gaps: complete ? [] : ["upstream-incomplete"],
+            count: source.member_count,
+            members: execution.uses_description
+              ? source.members.map(({ literature_id, metadata, tags }) => ({
+                  literature_id,
+                  metadata,
+                  tags,
+                }))
+              : [],
+            citation: (literature_id, pointer) => ({
+              kind: "snapshot",
+              snapshot_id: snapshot.snapshot_id,
+              content_sha256: snapshot.content_sha256,
+              literature_id,
+              pointer,
+            }),
           };
         },
-        model: async (system, input, schema) => {
+        readDocument: async (candidate) => {
+          check(candidate);
+          segments.forEach((s) => seen.add(s.segment_id));
+          return segments;
+        },
+        searchDocument: async (candidate, query) => {
+          check(candidate);
+          const terms = query.toLocaleLowerCase().split(/\s+/u).filter(Boolean),
+            found = segments.filter((s) =>
+              terms.some((t) => s.text.toLocaleLowerCase().includes(t)),
+            );
+          found.forEach((s) => seen.add(s.segment_id));
+          return found;
+        },
+        mappedCoverage: () =>
+          mapResults.flatMap((r) =>
+            r.result.coverage.flatMap((c) => c.parts ?? []),
+          ),
+        readMappedResults: async () => {
+          if (input.kind !== "snapshot")
+            processorError("processor-read-outside-scope");
+          return records;
+        },
+        resolveEvidence: async (citation) => {
+          if (!allowedMap(citation) && !snapshotCitation(citation))
+            processorError("processor-read-outside-scope");
+          return this.store.verifyCitations([citation], active);
+        },
+        summarize: async (candidate, purpose, question) => {
+          check(candidate);
           if (
-            !p.model ||
-            !equal(
-              invocation.execution,
-              await this.execution(p, invocation.spec),
-            )
+            p.id !== "summary" ||
+            reads.parts !== "main" ||
+            reads.roles !== "all" ||
+            candidate.parts.length !== 1 ||
+            !candidate.parts[0]!.available
           )
+            processorError("processor-summary-scope");
+          const ref = (
+            await this.documents.describe(
+              { document_version_id: candidate.parts[0]!.document_version_id },
+              active,
+            )
+          ).document;
+          const manifest = await createInputManifest([
+            {
+              input_id: "document",
+              literature_id: candidate.literature_id,
+              material: ref.source_material_ref,
+              document: ref,
+              capabilities: [
+                "material-file-v1",
+                "document-segment-v1",
+                "document-text-v1",
+              ],
+              gaps: [],
+            },
+          ]);
+          const accounting = {
+            calls: 0,
+            canonical_call_bytes: 0,
+            reported_calls: 0,
+            reported_input_tokens: 0,
+            reported_output_tokens: 0,
+          };
+          const result = await analyzeDocumentSession(
+            { input: manifest, purpose, question },
+            this.documents,
+            this.agents,
+            this.agents.effectiveIdentity("analysis"),
+            active,
+            accounting,
+            true,
+          );
+          segments.forEach((s) => seen.add(s.segment_id));
+          calls.push({
+            accounting: "session-aggregate",
+            calls: accounting.calls,
+            reported_calls: accounting.reported_calls,
+            provider: result.provider,
+            model: result.model,
+            usage: {
+              input_tokens: accounting.reported_input_tokens,
+              output_tokens: accounting.reported_output_tokens,
+            },
+          });
+          return result;
+        },
+        model: async (system, body, schema) => {
+          if (!p.model || !equal(execution, await this.execution(p, spec)))
             processorError("processor-binding-changed");
-          const bytes = canonicalJsonBytes(input);
           const result = await this.agents.execute(
             {
               role: "analysis",
               required_capabilities: ["structured_text"],
-              input_sha256: await sha256(bytes),
+              input_sha256: await sha256(canonicalJsonBytes(body)),
               messages: [
                 {
                   role: "system",
@@ -496,7 +661,7 @@ export class ProcessorService {
                   parts: [
                     {
                       media_type: "application/json",
-                      text: new TextDecoder().decode(bytes),
+                      text: JSON.stringify(body),
                     },
                   ],
                 },
@@ -511,94 +676,181 @@ export class ProcessorService {
           return processorJson(result.value);
         },
       };
-      const output = await p.run(invocation, ctx);
+      let output: ProcessorOutput;
+      if (
+        input.kind === "missing" ||
+        (input.kind === "archive-document" && !segments.length)
+      )
+        output = {
+          status: "empty",
+          content:
+            p.output_kind === "report"
+              ? { kind: "report", text: "", claims: [] }
+              : {
+                  kind: "records",
+                  schema: p.outputSchema?.(spec) ?? { type: "object" },
+                  records: [],
+                },
+          coverage: [
+            {
+              input_id: input.input_id,
+              status: input.kind === "missing" ? "none" : "complete",
+              read_segments: [],
+              gaps: input.kind === "missing" ? [input.reason] : [],
+            },
+          ],
+        };
+      else output = await p.run(invocation, ctx);
       if (
         output.content.kind !== p.output_kind ||
         (p.outputSchema &&
           output.content.kind === "records" &&
-          !equal(output.content.schema, p.outputSchema(invocation.spec)))
+          !equal(output.content.schema, p.outputSchema(spec)))
       )
         processorError("processor-output-schema");
-      for (const coverage of output.coverage) {
-        const input = invocation.inputs.find(
-          (i) => i.input_id === coverage.input_id,
-        );
-        if (!input) processorError("processor-coverage");
-        if (input.kind === "document" && output.content.kind !== "knowledge") {
-          const read = seen.get(input.input_id) ?? new Set<string>();
-          if (
-            coverage.read_segments.some((id) => !read.has(id)) ||
-            (coverage.status === "complete" &&
-              (!read.size || read.size !== coverage.read_segments.length))
-          )
-            processorError("processor-coverage");
-        }
-      }
-      if (output.content.kind !== "knowledge") literatureIds.clear();
       const citations = resultCitations(output.content);
       for (const citation of citations) {
-        const allowed = invocation.inputs.some((input) => {
-          if (citation.kind === "result")
-            return (
-              input.kind === "result" &&
-              input.result_id === citation.result_id &&
-              input.content_sha256 === citation.content_sha256 &&
-              (input.record_ids === null ||
-                input.record_ids.includes(citation.record_id))
+        if (
+          input.kind === "snapshot"
+            ? !allowedMap(citation) && !snapshotCitation(citation)
+            : citation.kind !== "document" ||
+              citation.evidence.target_kind !== "document" ||
+              !segments.some(
+                (s) => seen.has(s.segment_id) && equal(s.citation, citation),
+              )
+        )
+          processorError("processor-evidence-outside-scope");
+      }
+      await this.store.verifyCitations(citations, active);
+      const reported = output.coverage.flatMap((c) => c.read_segments);
+      if (reported.some((id) => !seen.has(id)))
+        processorError("processor-coverage");
+      const parts: ProcessorPartOutcome[] = [];
+      if (input.kind === "archive-document") {
+        for (const role of (reads.parts === "all"
+          ? ["main", "supplementary"]
+          : [reads.parts]) as ("main" | "supplementary")[]) {
+          const selected = input.parts.filter((p) => p.part === role);
+          if (!selected.length)
+            parts.push({
+              literature_id: input.literature_id,
+              asset_id: null,
+              part: role,
+              outcome: "part-absent",
+              read_segments: [],
+              gaps: ["part-absent"],
+            });
+          for (const part of selected) {
+            const eligible = segments.filter(
+                (s) => s.asset_id === part.asset_id,
+              ),
+              read = eligible.filter((s) => reported.includes(s.segment_id)),
+              complete = part.available && read.length === eligible.length;
+            const extracted = citations.some((c) =>
+              eligible.some((s) => equal(s.citation, c)),
             );
-          if (citation.kind === "knowledge")
-            return (
-              input.kind === "knowledge" &&
-              input.artifact_id === citation.artifact_id &&
-              input.content_sha256 === citation.content_sha256
-            );
-          const evidence = citation.evidence;
-          return (
-            input.kind === "document" &&
-            (evidence.target_kind === "document"
-              ? evidence.document_version_id ===
-                  input.document.document_version_id &&
-                evidence.representation_sha256 ===
-                  input.document.representation_sha256 &&
-                seen.get(input.input_id)?.has(evidence.locator.segment_id) ===
-                  true
-              : equal(evidence.material, input.document.source_material_ref))
-          );
+            parts.push({
+              literature_id: input.literature_id,
+              asset_id: part.asset_id,
+              part: role,
+              outcome: !complete
+                ? "incomplete"
+                : extracted
+                  ? "extracted"
+                  : "not-reported",
+              read_segments: read.map((s) => s.segment_id),
+              gaps: !part.available
+                ? ["part-unavailable"]
+                : complete
+                  ? []
+                  : ["unread-segments"],
+            });
+          }
+        }
+      } else if (input.kind === "missing")
+        parts.push({
+          literature_id: input.literature_id,
+          asset_id: null,
+          part: reads.parts === "supplementary" ? "supplementary" : "main",
+          outcome: "incomplete",
+          read_segments: [],
+          gaps: [input.reason],
         });
-        if (!allowed) processorError("processor-evidence-outside-scope");
-      }
-      for (const source of await this.store.verifyCitations(
-        citations,
-        active,
-      )) {
-        source.literature_ids.forEach((id) => literatureIds.add(id));
-      }
-      if (output.content.kind === "records")
+      else
+        parts.push(
+          ...mapResults.flatMap((r) =>
+            r.result.coverage.flatMap((c) => c.parts ?? []),
+          ),
+        );
+      const incomplete = parts.some((p) => p.outcome === "incomplete"),
+        coverage: ProcessorCoverage[] = [
+          {
+            input_id: input.input_id,
+            status: incomplete
+              ? reported.length
+                ? "partial"
+                : "none"
+              : "complete",
+            read_segments: reported,
+            gaps: [...new Set(parts.flatMap((p) => p.gaps))],
+            parts,
+          },
+        ];
+      if (output.content.kind === "records") {
         await validateRecordPayloads(
           output.content.schema,
           output.content.records.map((r) => r.payload),
           active,
         );
-      if (output.content.kind === "records")
         for (const record of output.content.records) this.verifyRecord(record);
+      }
+      const literature_ids =
+        input.kind === "archive-document" || input.kind === "missing"
+          ? [input.literature_id]
+          : input.kind === "snapshot"
+            ? (
+                await this.archiveSource.snapshots.all(
+                  input.snapshot_id,
+                  active,
+                )
+              ).members.map((m) => m.literature_id)
+            : [];
+      const verification = this.verifier
+        ? await this.verifier.check(
+            output.content,
+            mapResults.map((r) => r.result),
+            active,
+          )
+        : {
+            checks: uncheckedProcessorValues(
+              output.content,
+              "verification-not-configured",
+            ),
+            usage: { calls: 0, input_tokens: 0, output_tokens: 0 },
+          };
       const result = await parseProcessorResult({
         schema_version: 1,
         result_id: randomUUID(),
         invocation,
         comparison_sha256: comparison,
         ...output,
+        value_checks: verification.checks,
+        status: incomplete ? "ok" : output.status,
+        coverage,
         producer: "internal",
-        provenance: { ...output.provenance, model_calls: calls },
-        literature_ids: [...literatureIds].sort(),
+        provenance: {
+          ...output.provenance,
+          model_calls: calls,
+          value_check_usage: verification.usage,
+        },
+        literature_ids: [...new Set(literature_ids)].sort(),
         created_at: new Date().toISOString(),
       });
       const saved = await this.store.publish(result, active);
       return {
         ...saved.ref,
         reused: saved.ref.result_id !== result.result_id,
-        coverage: saved.result.coverage.every((c) => c.status === "complete")
-          ? "complete"
-          : "partial",
+        coverage: incomplete ? "partial" : "complete",
       };
     }, signal);
   }

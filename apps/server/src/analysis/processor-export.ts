@@ -33,6 +33,7 @@ export async function exportProcessorResult(
     invocation: stored.result.invocation,
     coverage: stored.result.coverage,
     provenance: stored.result.provenance,
+    value_checks: stored.result.value_checks,
   };
   const cell = (v: unknown) =>
     `"${(typeof v === "string" ? v : JSON.stringify(v)).replace(/"/g, '""')}"`;
@@ -42,15 +43,27 @@ export async function exportProcessorResult(
     content:
       format === "csv"
         ? [
-            "record_id,payload_json,evidence_json",
+            "record_id,payload_json,evidence_json,value_checks_json",
             ...records.map((r) =>
-              [r.record_id, r.payload, r.citation].map(cell).join(","),
+              [
+                r.record_id,
+                r.payload,
+                r.citation,
+                stored.result.value_checks.filter(
+                  (c) => c.record_id === r.record_id,
+                ),
+              ]
+                .map(cell)
+                .join(","),
             ),
           ].join("\r\n")
         : records
             .map(
               (r) =>
-                `- ${typeof r.payload.text === "string" ? r.payload.text : JSON.stringify(r.payload)}\n\n  Evidence: \`${JSON.stringify(r.citation)}\``,
+                `- ${typeof r.payload.text === "string" ? r.payload.text : JSON.stringify(r.payload)}\n\n  Evidence: \`${JSON.stringify(r.citation)}\`\n\n  Value checks: ${stored.result.value_checks
+                  .filter((c) => c.record_id === r.record_id)
+                  .map((c) => `${c.pointer || "claim"}: ${c.status}`)
+                  .join("; ")}`,
             )
             .join("\n\n"),
   };

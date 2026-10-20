@@ -114,7 +114,7 @@ function browserCall(
               venue: target.venue ?? null,
               publisher: target.publisher ?? null,
               publication_year: target.publication_year ?? null,
-              document_type: target.document_type ?? null,
+              publication_form: target.publication_form ?? null,
             }
           : {}),
       }

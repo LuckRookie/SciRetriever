@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import {
   ContractValidationError,
   parseLiteratureId,
 } from "@sciretriever/contracts";
+import { createHash } from "node:crypto";
 import type { QueryApplication } from "../bootstrap/application.js";
 import { prepareBibliographyExport } from "./bibliography-export.js";
 
@@ -45,7 +45,7 @@ export async function readLibraryArtifact(
   ]);
   const id = parseLiteratureId(r.literature_id);
   if (
-    (r.kind !== "primary-pdf" && r.kind !== "content-markdown") ||
+    r.kind !== "primary-pdf" ||
     !(
       r.expected_sha256 === null ||
       (typeof r.expected_sha256 === "string" &&
@@ -63,15 +63,11 @@ export async function readLibraryArtifact(
   if (!q.query || !q.literatureArtifacts)
     throw new LibraryTransferError("query-unavailable");
   const detail = await q.query.detail(id);
-  const artifact =
-    r.kind === "primary-pdf"
-      ? detail.primary_pdf?.asset
-      : detail.content?.markdown;
+  const artifact = detail.primary_pdf?.asset;
   if (!artifact) throw new LibraryTransferError("artifact-not-found");
   if (r.expected_sha256 !== null && r.expected_sha256 !== artifact.sha256)
     throw new LibraryTransferError("artifact-changed");
-  const size =
-    "size_bytes" in artifact ? artifact.size_bytes : artifact.byte_size;
+  const size = artifact.size_bytes;
   const start = r.offset as number;
   if (start > size) throw new LibraryTransferError("artifact-range");
   const end = Math.min(size, start + (r.max_bytes as number));

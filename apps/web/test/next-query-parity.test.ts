@@ -1,3 +1,5 @@
+import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
+import { processorFixture } from "../../server/test/processor-fixture.js";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +14,7 @@ import { parseLiterature, parseReference } from "@sciretriever/contracts";
 import { startQueryOnlyWorkbench } from "../../server/src/bootstrap/workbench.js";
 import type { WorkbenchStaticAsset } from "../../server/src/workbench/http.js";
 import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
-import { id, lit, proposal, setup } from "../../server/test/content-fixture.js";
+import { id, lit } from "../../server/test/content-fixture.js";
 
 async function assets(): Promise<Map<string, WorkbenchStaticAsset>> {
   return new Map([
@@ -54,7 +56,9 @@ it("shows an uninitialized state without creating a home or catalog", async () =
 }, 60000);
 
 it("reads, searches, follows references and downloads through the query-only page", async () => {
-  const env = await setup(true);
+  const env = await processorFixture();
+  await env.build(env.parseRequest);
+  const source = await env.app.library.detail(lit);
   const related = parseLiterature({
     ...FIXTURE_LITERATURE,
     literature_id: id(80),
@@ -80,12 +84,11 @@ it("reads, searches, follows references and downloads through the query-only pag
     | undefined;
   let browser: Awaited<ReturnType<typeof launchBrowser>> | undefined;
   try {
-    const source = await env.app.library.detail(lit);
-    const content = await proposal(source);
-    await env.app.literatureContent.accept(content.value, content.bytes);
     await env.app.database.putLiterature(related);
     await env.app.database.putLiterature(missingPdf);
     await env.app.observations.publish({
+      source_type: null,
+      source_type_mapping_version: null,
       observation_id: id(85),
       literature_id: lit,
       provenance: {
@@ -362,6 +365,7 @@ it("reads, searches, follows references and downloads through the query-only pag
       .getByLabel("显式输入 JSON 数组", { exact: true })
       .fill(originalInputs);
     await page.goto(`${workbench.origin}/`);
+    await showAllLibraryStatuses(page);
     await page
       .getByRole("searchbox", { name: "搜索文献", exact: true })
       .fill("Synthetic literature workbench");
@@ -456,6 +460,7 @@ it("reads, searches, follows references and downloads through the query-only pag
       .poll(() => new URL(page.url()).searchParams.get("literature"))
       .toBe(related.literature_id);
     await page.goto(`${workbench.origin}/`);
+    await showAllLibraryStatuses(page);
     await page
       .getByRole("searchbox", { name: "搜索文献", exact: true })
       .fill("Query reader without a PDF");

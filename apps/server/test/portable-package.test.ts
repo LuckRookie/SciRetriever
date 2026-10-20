@@ -56,6 +56,14 @@ it("builds a Python-free portable runtime and executes its bundled Node CLI", as
         ),
       ),
     ).toBe(true);
+    for (const module of ["service", "publication"]) {
+      for (const suffix of [".js", ".d.ts"])
+        expect(
+          manifest.files.some((file) =>
+            file.path.endsWith(`/dist/parsing/${module}${suffix}`),
+          ),
+        ).toBe(false);
+    }
     for (const retired of [
       "live.html",
       "live.js",

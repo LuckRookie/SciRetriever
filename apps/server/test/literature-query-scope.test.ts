@@ -17,7 +17,7 @@ const id = (n: number) =>
   `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 const emptyQuery = parseLibrarySearchRequest({ query: {} }).query;
 
-it.each([1, 2])(
+it.each([11])(
   "isolates discovery queries from unrelated invalid metadata in catalog v%i while validating selected versions",
   async (version) => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-query-scope-"));
@@ -46,6 +46,8 @@ it.each([1, 2])(
           }),
         );
       await app.observations.publish({
+        source_type: null,
+        source_type_mapping_version: null,
         observation_id: id(200),
         literature_id: id(1),
         provenance: {
@@ -64,7 +66,6 @@ it.each([1, 2])(
         declared_keywords: [],
         reference_texts: [],
       });
-      if (version === 2) await app.database.upgradeExecutionSchema();
       raw = new DatabaseSync(join(home, "catalog.sqlite"));
       raw.exec("PRAGMA foreign_keys=ON");
       raw

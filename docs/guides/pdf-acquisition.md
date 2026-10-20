@@ -25,7 +25,7 @@ NODE
 
 页面不需要 Browser 会话；上传通过同源 cookie/CSRF 和 `POST /api/v1/maintenance/ingest-pdf` 交付最多 16 MiB 的 `application/pdf` 字节，HTTP 不接受路径字段。公开 TypeScript `ingestPdf({ literature_id, bytes }, signal?)` 也执行同一 16 MiB 限额。程序消费者可直接使用上述 TypeScript API。读取端继续使用独立 `createQueryApplication`/`startQueryOnlyWorkbench`；只读入口不会顺便接纳文件。
 
-分析返回 `NoUsableContent`、解析不足、模型失败或取消时，已接纳的 PDF、来源、hash、ParserResult 和旧有效结果保留。补全报告可在失败分区同时列出 `no_usable_content_literature_ids`；durable Job 沿既有兼容映射将这种非系统目标失败记为 skipped，并保留 `completion-candidates-exhausted` 失败码。当前操作不会把该 PDF 当作坏文件重取，也不会伪报 `CONTENT_READY`；稍后明确重试可在相同 PDF 上继续分析。Acquisition 对非 PDF、损坏或不可读文件的拒绝仍独立生效，文章身份未验证不阻止接纳。
+`complete parser` 显式获取缺少的主 PDF，并生成部署 profile 的一份原始解析；不生成总结或默认阅读文档。解析不足、失败或取消时，已接纳的 PDF、来源、hash 和成功的原始解析保留。补全报告通过五个互斥分区及稳定失败码表示结果，不再包含旧总结清理字段。稍后明确重试会复用成功的 profile；解析失败不会把 PDF 当作坏文件重取。Acquisition 对非 PDF、损坏或不可读文件的拒绝仍独立生效，文章身份未验证不阻止接纳。
 
 SciRetriever 对数据库中已经存在的具体 Literature 补全主 PDF。主题发现和引用发现只接纳元数据，
 不会顺带下载全文。自动获取使用以下顺序，认证要求与阶段分别表示：

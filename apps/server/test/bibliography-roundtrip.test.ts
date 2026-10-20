@@ -8,7 +8,7 @@ import {
   decodeBibliography,
   importBibliography,
   type BibliographyInputFormat,
-} from "../src/entry/bibliography.js";
+} from "../src/literature/bibliography-import.js";
 import { exportBibliographyBatch } from "../src/literature/bibliography.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 

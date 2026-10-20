@@ -10,6 +10,8 @@
 
 ## 内容入口
 
+- [prune-retired-runtime.mjs](prune-retired-runtime.mjs)：正式 build 在 TypeScript 编译后只移除已退役 `parsing/service` 与 `parsing/publication` 的 JS、声明及 map 文件；拒绝输出目录/目标文件符号链接，保留其它产物。安装包回归验证旧模块不会经 dist glob 再次分发。
+
 - [build-reader-assets.mjs](build-reader-assets.mjs)：与正式构建及测试共用的阅读模块、worker、字体/样式和许可文件打包。
 - [build-workbench-assets.mjs](build-workbench-assets.mjs)：从 Web 源码构建 bundle，将指定页面/样式放入应用构建目录。
 - [build-react-assets.mjs](build-react-assets.mjs)：调用 Vite 固定以 production 模式构建 React 入口，即使调用方为 NODE_ENV=test；完成后恢复调用方环境。生成静态资源白名单、收集运行时依赖许可，并在阅读器许可基础上发布合并声明。先完整生成到系统临时目录，再逐文件原子发布，HTML 和白名单最后发布；随后移除 `assets/` 中不再被白名单引用的旧 Vite hashed 文件，防止历史构建资源进入安装包。输出根目录与 `assets/` 必须是实际目录，不接受符号链接；清理不处理其它文件或链接。

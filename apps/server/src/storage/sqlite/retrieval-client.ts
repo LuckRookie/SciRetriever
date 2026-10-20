@@ -1,13 +1,10 @@
-import type { SqliteWorker } from "./worker.js";
 import type {
   RetrievalEntry,
   RetrievalGeneration,
   RetrievalHit,
   RetrievalSource,
-  KnowledgeRetrievalEntry,
-  KnowledgeRetrievalGeneration,
-  KnowledgeRetrievalHit,
 } from "./retrieval-engine.js";
+import type { SqliteWorker } from "./worker.js";
 
 /** Async retrieval port. All SQL and inspection run in the catalog worker. */
 export class RetrievalStorageClient {
@@ -109,97 +106,5 @@ export class RetrievalStorageClient {
   }
   hasDefault(literatureId: string, assetId: string): Promise<boolean> {
     return this.worker.retrieval("hasDefault", [literatureId, assetId]);
-  }
-  knowledgeRevision(): Promise<number> {
-    return this.worker.retrieval("knowledgeRevision");
-  }
-  knowledgeSourcePage(
-    after: string | null,
-    limit: number,
-  ): Promise<
-    readonly {
-      artifact_id: string;
-      content_sha256: string;
-      manifest_sha256: string;
-      scope_kind: "literature" | "manifest";
-      scope_key: string;
-      purpose: KnowledgeRetrievalEntry["purpose"];
-      question_sha256: string;
-      default_artifact_id: string | null;
-    }[]
-  > {
-    return this.worker.retrieval("knowledgeSourcePage", [after, limit]);
-  }
-  knowledgeBegin(revision: number, signal?: AbortSignal): Promise<string> {
-    return this.worker.retrieval("knowledgeBegin", [revision], signal);
-  }
-  knowledgeInsert(
-    id: string,
-    entries: readonly KnowledgeRetrievalEntry[],
-    sourceCount: number,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    return this.worker.retrieval(
-      "knowledgeInsert",
-      [id, entries, sourceCount],
-      signal,
-    );
-  }
-  knowledgePublish(
-    id: string,
-    revision: number,
-    signal?: AbortSignal,
-  ): Promise<KnowledgeRetrievalGeneration> {
-    return this.worker.retrieval("knowledgePublish", [id, revision], signal);
-  }
-  knowledgeActive(): Promise<KnowledgeRetrievalGeneration | null> {
-    return this.worker.retrieval("knowledgeActive");
-  }
-  knowledgeCoverage(
-    generationId: string,
-    scope: readonly string[],
-    artifactIds: readonly string[] | null,
-    purposes: readonly string[],
-    questionSha: string | null,
-    selection: "all" | "defaults" | "explicit",
-  ): Promise<{
-    any: boolean;
-    missing_literature_ids: readonly string[];
-    missing_artifact_ids: readonly string[];
-  }> {
-    return this.worker.retrieval("knowledgeCoverage", [
-      generationId,
-      scope,
-      artifactIds,
-      purposes,
-      questionSha,
-      selection,
-    ]);
-  }
-  knowledgeSearch(
-    fts: string,
-    terms: readonly string[],
-    generationId: string,
-    scope: readonly string[],
-    artifactIds: readonly string[] | null,
-    purposes: readonly string[],
-    questionSha: string | null,
-    selection: "all" | "defaults" | "explicit",
-    limit: number,
-  ): Promise<{
-    hits: readonly KnowledgeRetrievalHit[];
-    candidateLimit: boolean;
-  }> {
-    return this.worker.retrieval("knowledgeSearch", [
-      fts,
-      terms,
-      generationId,
-      scope,
-      artifactIds,
-      purposes,
-      questionSha,
-      selection,
-      limit,
-    ]);
   }
 }

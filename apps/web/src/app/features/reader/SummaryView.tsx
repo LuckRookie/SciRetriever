@@ -1,41 +1,38 @@
-import { useEffect, useRef, useState } from "react";
+import type { EvidenceRef } from "@sciretriever/contracts";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import type { EvidenceRef, KnowledgeArtifact } from "@sciretriever/contracts";
+import { useLayoutEffect, useRef, useState } from "react";
+import { randomId } from "../../../browser-platform.js";
+import { markdown } from "../../../reading/markdown.js";
+import { sourceParameters, type FixedSource } from "../../../reading/source.js";
+import type { ReadingPosition } from "../../../reading/state.js";
+import {
+  nextEvidencePage,
+  readEvidencePage,
+  type EvidencePageCursor,
+} from "../../../reading/transport.js";
 import {
   Button,
   EmptyState,
   ErrorNotice,
   Popover,
-  Select,
   Skeleton,
   TechDetails,
 } from "../../components/index.js";
-import { useApi } from "../../data/query.js";
-import { useShell } from "../../shell/context.js";
-import { useUrlState } from "../../data/url.js";
-import {
-  readEvidencePage,
-  nextEvidencePage,
-  type EvidencePageCursor,
-} from "../../../reading/transport.js";
-import { sourceParameters, type FixedSource } from "../../../reading/source.js";
-import { readingPosition } from "../../../reading/state.js";
-import { markdown } from "../../../reading/markdown.js";
-import { groupedStatements, loadSummaries } from "./summary-data.js";
-import { errorMessage } from "../../strings.js";
 import {
   readProcessorResult,
   resultReference,
 } from "../../data/processor-results.js";
+import { useApi } from "../../data/query.js";
+import { navigate, useUrlState } from "../../data/url.js";
 import { record } from "../../data/wire.js";
+import { useShell } from "../../shell/context.js";
+import { errorMessage } from "../../strings.js";
 
 export function EvidencePreview({
   evidence,
-  artifact,
   index,
 }: {
   evidence: EvidenceRef;
-  artifact?: KnowledgeArtifact;
   index: number;
 }) {
   const api = useApi(),
@@ -60,17 +57,7 @@ export function EvidencePreview({
     const resolved = result.data?.pages[0];
     if (!resolved) return;
     const previous = Object.fromEntries(
-      [
-        "knowledge",
-        "contentHash",
-        "manifest",
-        "statement",
-        "statementHash",
-        "from",
-        "result",
-        "resultHash",
-        "collection",
-      ].flatMap((key) =>
+      ["from", "result", "resultHash", "collection"].flatMap((key) =>
         route.parameters.has(key) ? [[key, route.parameters.get(key)!]] : [],
       ),
     );
@@ -82,6 +69,7 @@ export function EvidencePreview({
       const d = resolved.document;
       shell.openPaper(d.source_material_ref.literature_id, "doc", {
         ...previous,
+        returnReader: "know",
         ...sourceParameters({
           kind: "document",
           literature_id: d.source_material_ref.literature_id,
@@ -92,18 +80,13 @@ export function EvidencePreview({
           start_utf8: resolved.target_range!.start_utf8,
           end_utf8: resolved.target_range!.end_utf8,
         }),
-        ...(artifact
-          ? { artifact: artifact.artifact_id, knowledge: artifact.artifact_id }
-          : {}),
       });
     } else if (evidence.target_kind === "material") {
       shell.openPaper(evidence.material.literature_id, "pdf", {
         ...previous,
+        returnReader: "know",
         asset: evidence.material.asset_id,
         assetHash: evidence.material.asset_sha256,
-        ...(artifact
-          ? { artifact: artifact.artifact_id, knowledge: artifact.artifact_id }
-          : {}),
       });
     }
   };
@@ -146,174 +129,26 @@ export function EvidencePreview({
             </Button>
           )}
           <Button onPress={open}>在原文中核对</Button>
+          {result.data?.pages[0]?.location && result.data.pages[0].document ? (
+            <Button
+              onPress={() => {
+                const first = result.data!.pages[0]!,
+                  material = first.document!.source_material_ref;
+                shell.openPaper(material.literature_id, "pdf", {
+                  asset: material.asset_id,
+                  assetHash: material.asset_sha256,
+                  page: String(first.location!.page),
+                  ...(first.location!.region
+                    ? { region: JSON.stringify(first.location!.region) }
+                    : {}),
+                });
+              }}
+            >
+              在 PDF 中核对区域
+            </Button>
+          ) : null}
         </>
       )}
-    </div>
-  );
-}
-function ArtifactSummary({
-  artifact,
-  source,
-  search,
-}: {
-  artifact: KnowledgeArtifact;
-  source: FixedSource | null;
-  search: string;
-}) {
-  const shell = useShell(),
-    api = useApi(),
-    root = useRef<HTMLDivElement>(null);
-  const id = artifact.input.items[0]?.literature_id ?? "";
-  const state = readingPosition(
-    shell.reading,
-    [
-      api.workspace.catalog,
-      "knowledge",
-      artifact.artifact_id,
-      artifact.content_ref.sha256,
-    ],
-    id,
-  );
-  useEffect(() => {
-    const scroll = root.current?.closest<HTMLElement>(".reader-summary-scroll");
-    if (!scroll) return;
-    scroll.scrollTop = state.scroll;
-    return () => {
-      state.scroll = scroll.scrollTop;
-    };
-  }, [state]);
-  const groups = groupedStatements(artifact, source),
-    gaps = artifact.coverage.capability_gaps;
-  let evidenceIndex = 0;
-  return (
-    <div ref={root} className="reader-summary reading-article">
-      <header>
-        <p className="reader-eyebrow">已保存的文献分析</p>
-        <h1>{artifact.content.title}</h1>
-        <p className="reader-coverage">
-          覆盖 {artifact.coverage.covered_segments} /{" "}
-          {artifact.coverage.total_segments} 段正文 ·{" "}
-          {artifact.content.statements.length} 条结论
-        </p>
-        <p className="ui-description">
-          覆盖记录描述已读材料，不代表原 PDF 的图表和解析都完整。
-          {gaps.length
-            ? `资料缺口：${gaps.join("；")}`
-            : "每条结论可就近核对固定原文。"}
-        </p>
-        {artifact.question && <p>分析问题：{artifact.question}</p>}
-      </header>
-      <nav className="reader-summary-jumps" aria-label="总结栏目">
-        {groups.map((group) => (
-          <Button
-            key={group.id}
-            size="compact"
-            variant="text"
-            onPress={() =>
-              root.current
-                ?.querySelector(`[data-summary-group="${group.id}"]`)
-                ?.scrollIntoView({ block: "start", behavior: "instant" })
-            }
-          >
-            {group.label}
-          </Button>
-        ))}
-      </nav>
-      {groups.map((group) => (
-        <section
-          className="reader-summary-group"
-          data-summary-group={group.id}
-          key={group.id}
-        >
-          <h2>{group.label}</h2>
-          {group.statements.map((statement) => (
-            <article
-              key={statement.statement_id}
-              className={`reader-statement ${search && statement.text.toLocaleLowerCase().includes(search.toLocaleLowerCase()) ? "reading-match" : ""}`}
-            >
-              <div
-                dangerouslySetInnerHTML={{
-                  __html: markdown.parse(statement.text, { async: false }),
-                }}
-              />
-              {statement.epistemic === "inference" && (
-                <p className="reader-inference">推断 · 请结合原文证据判断</p>
-              )}
-              {statement.quantity && (
-                <p className="reader-quantity">
-                  <b>
-                    {statement.quantity.value} {statement.quantity.unit}
-                  </b>
-                  {statement.quantity.comparison_basis
-                    ? ` · 比较基准：${statement.quantity.comparison_basis}`
-                    : ""}
-                </p>
-              )}
-              {statement.conditions.length > 0 && (
-                <div className="reader-conditions" aria-label="适用条件">
-                  {statement.conditions.map((condition, index) => (
-                    <span key={index}>{condition}</span>
-                  ))}
-                </div>
-              )}
-              <div className="reader-evidence-list" aria-label="原文证据">
-                {statement.evidence.map((evidence, index) => {
-                  const number = ++evidenceIndex;
-                  return (
-                    <Popover
-                      key={index}
-                      label={`证据 ${number}`}
-                      trigger={<span>[{number}]</span>}
-                    >
-                      <EvidencePreview
-                        evidence={evidence}
-                        artifact={artifact}
-                        index={number}
-                      />
-                    </Popover>
-                  );
-                })}
-              </div>
-            </article>
-          ))}
-        </section>
-      ))}
-      <TechDetails
-        copyText={JSON.stringify(
-          {
-            ...(artifact
-              ? {
-                  artifact: artifact.artifact_id,
-                  knowledge: artifact.artifact_id,
-                }
-              : {}),
-            method: artifact.method,
-            provenance: artifact.provenance,
-            input: artifact.input.manifest_sha256,
-          },
-          null,
-          2,
-        )}
-      >
-        <dl>
-          <dt>产物</dt>
-          <dd>{artifact.artifact_id}</dd>
-          <dt>生成方法</dt>
-          <dd>
-            {artifact.method.id} · {artifact.method.version}
-          </dd>
-          <dt>模型</dt>
-          <dd>
-            {artifact.provenance.provider} / {artifact.provenance.model}
-          </dd>
-          <dt>输入指纹</dt>
-          <dd>{artifact.input.manifest_sha256}</dd>
-          <dt>内容指纹</dt>
-          <dd>{artifact.content_ref.sha256}</dd>
-          <dt>生成时间</dt>
-          <dd>{new Date(artifact.provenance.generated_at).toLocaleString()}</dd>
-        </dl>
-      </TechDetails>
     </div>
   );
 }
@@ -321,93 +156,255 @@ export function SummaryView({
   id,
   source,
   search,
+  position,
 }: {
   id: string;
   source: FixedSource | null;
   search: string;
+  position: ReadingPosition;
 }) {
   const api = useApi(),
-    route = useUrlState(),
-    [selected, setSelected] = useState("");
-  const fixed = route.parameters.get("knowledge");
-  const resultId = route.parameters.get("result"),
-    resultHash = route.parameters.get("resultHash");
+    route = useUrlState();
+  const root = useRef<HTMLElement>(null);
+  const [busy, setBusy] = useState(false),
+    [failure, setFailure] = useState("");
   const query = useQuery({
-    queryKey: ["knowledge", id, fixed, source, resultId, resultHash],
+    queryKey: [
+      "processors",
+      "summary",
+      id,
+      route.parameters.get("result"),
+      route.parameters.get("resultHash"),
+    ],
     queryFn: async ({ signal }) => {
-      let artifactId = fixed,
-        expectedHash: string | null = null;
-      if (resultId && !fixed) {
-        const ref = resultHash
-          ? resultReference({ result_id: resultId, content_sha256: resultHash })
-          : resultReference(
-              record(
-                (await api.processors("read", { result_id: resultId }, signal))
-                  .result,
-                "result",
-              ).ref,
-            );
-        const saved = await readProcessorResult(api, ref, signal);
-        if (!saved.result.literature_ids.includes(id))
-          throw new Error("固定处理结果不属于当前文献。");
-        if (saved.result.content.kind === "knowledge") {
-          artifactId = saved.result.content.artifact_id;
-          expectedHash = saved.result.content.content_sha256;
-        }
+      const fixed = route.parameters.get("result");
+      let ref;
+      if (fixed)
+        ref = resultReference(
+          record(
+            (await api.processors("read", { result_id: fixed }, signal)).result,
+            "summary",
+          ).ref,
+        );
+      else {
+        let after = "";
+        const rows: Record<string, unknown>[] = [];
+        do {
+          const page = record(
+            (
+              await api.processors(
+                "results",
+                { literature_id: id, limit: 200, after },
+                signal,
+              )
+            ).result,
+            "summary list",
+          );
+          if (!Array.isArray(page.items)) throw new Error("总结列表无效");
+          rows.push(
+            ...page.items
+              .map((v) => record(v, "summary"))
+              .filter((v) => v.processor_id === "summary"),
+          );
+          after = typeof page.next_after === "string" ? page.next_after : "";
+        } while (after);
+        rows.sort((a, b) =>
+          String(b.created_at).localeCompare(String(a.created_at)),
+        );
+        if (!rows.length) return null;
+        ref = resultReference(rows[0]);
       }
-      const artifacts = await loadSummaries(
-        api,
-        id,
-        artifactId,
-        source,
-        signal,
-      );
-      if (expectedHash && artifacts[0]?.content_ref.sha256 !== expectedHash)
-        throw new Error("总结内容与固定处理结果不一致。");
-      return artifacts;
+      const expectedHash = route.parameters.get("resultHash");
+      if (fixed && expectedHash && expectedHash !== ref.content_sha256)
+        throw new Error("总结内容与固定引用不匹配");
+      const saved = await readProcessorResult(api, ref, signal);
+      if (
+        saved.result.invocation.processor.id !== "summary" ||
+        !saved.result.literature_ids.includes(id) ||
+        saved.result.content.kind !== "report"
+      )
+        throw new Error("总结不属于当前文献");
+      return saved;
     },
   });
-  const artifact =
-    query.data?.find((value) => value.artifact_id === selected) ??
-    query.data?.[0];
+  const generate = async () => {
+    setBusy(true);
+    setFailure("");
+    try {
+      await api.submitProcessor(
+        {
+          schema_version: 1,
+          idempotency_key: randomId(),
+          name: "文献总结",
+          processor: { id: "summary", version: "2" },
+          spec: { purpose: "overview", question: null },
+          inputs: [{ kind: "literature", literature_id: id }],
+        },
+        true,
+      );
+      navigate({ view: "task", literature: null });
+    } catch (error) {
+      setFailure(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  useLayoutEffect(() => {
+    const container = root.current?.closest<HTMLElement>(".reading-scroll");
+    if (!container || !query.data) return;
+    container.scrollTop = position.scroll;
+    const remember = () => {
+      position.scroll = container.scrollTop;
+    };
+    container.addEventListener("scroll", remember, { passive: true });
+    return () => container.removeEventListener("scroll", remember);
+  }, [query.data, position]);
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    for (const mark of element.querySelectorAll("mark[data-summary-match]")) {
+      mark.replaceWith(...mark.childNodes);
+    }
+    element.normalize();
+    if (!search.trim()) return;
+    const nodes: Text[] = [];
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) =>
+        n.parentElement?.closest(".reader-statement, .reader-prose") &&
+        !n.parentElement.closest("button")
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT,
+    });
+    while (walker.nextNode()) nodes.push(walker.currentNode as Text);
+    for (const node of nodes) {
+      const text = node.data,
+        needle = search.toLocaleLowerCase(),
+        lower = text.toLocaleLowerCase();
+      let start = 0,
+        index = lower.indexOf(needle);
+      if (index < 0) continue;
+      const fragment = document.createDocumentFragment();
+      while (index >= 0) {
+        fragment.append(text.slice(start, index));
+        const mark = document.createElement("mark");
+        mark.dataset.summaryMatch = "";
+        mark.textContent = text.slice(index, index + search.length);
+        fragment.append(mark);
+        start = index + search.length;
+        index = lower.indexOf(needle, start);
+      }
+      fragment.append(text.slice(start));
+      node.replaceWith(fragment);
+    }
+  }, [query.data, search]);
   if (query.isPending) return <Skeleton label="正在读取已保存总结" rows={5} />;
   if (query.error)
     return (
       <ErrorNotice
         message={errorMessage(query.error)}
-        onRetry={() => {
-          void query.refetch();
-        }}
+        onRetry={() => query.refetch().then(() => {})}
       />
     );
-  if (!artifact)
-    return (
-      <EmptyState
-        title="尚无已保存总结"
-        description="阅读不会自动分析文献。可以在信息栏中显式发起分析。"
-      />
-    );
+  const saved = query.data,
+    content = saved?.result.content;
   return (
-    <>
-      {query.data && query.data.length > 1 && (
-        <div className="reader-summary-select">
-          <Select
-            label="已保存总结"
-            value={artifact.artifact_id}
-            onChange={setSelected}
-            options={query.data.map((value, index) => ({
-              value: value.artifact_id,
-              label: `${value.content.title} · ${new Date(value.provenance.generated_at).toLocaleDateString()}（${index + 1}）`,
-            }))}
-          />
-        </div>
-      )}
-      <ArtifactSummary
-        key={artifact.artifact_id}
-        artifact={artifact}
-        source={source}
-        search={search}
-      />
-    </>
+    <section
+      ref={root}
+      className="reading-article reader-summary"
+      aria-label="文献总结"
+    >
+      {failure ? <ErrorNotice message={failure} /> : null}
+      {!saved ? (
+        <EmptyState
+          title="尚无已保存总结"
+          description="建档完成后可以手动生成；阅读不会触发模型调用。"
+        />
+      ) : null}
+      {saved?.freshness.state === "stale" ? (
+        <p role="status">
+          已过时：本文的内容版本已变化。现有总结仍可阅读与核对。
+        </p>
+      ) : null}
+      <Button isDisabled={busy} onPress={() => void generate()}>
+        {busy ? "正在提交…" : saved ? "重新生成" : "生成总结"}
+      </Button>
+      {saved && content?.kind === "report" ? (
+        <>
+          {content.claims.length ? (
+            content.claims.map((claim, index) => (
+              <section
+                key={claim.record_id}
+                className="reader-statement"
+                aria-label={`总结条目 ${index + 1}`}
+              >
+                <div
+                  className="reader-prose"
+                  dangerouslySetInnerHTML={{
+                    __html: markdown.parse(claim.text),
+                  }}
+                />
+                {saved.result.value_checks
+                  .filter((c) => c.record_id === claim.record_id)
+                  .map((c) => (
+                    <p
+                      key={c.pointer}
+                      className="ui-description"
+                      title={c.reason}
+                    >
+                      {
+                        {
+                          "text-layer": "文字核对",
+                          "image-checked": "图像核对",
+                          uncertain: "存疑",
+                        }[c.status]
+                      }{" "}
+                      · {c.reason}
+                    </p>
+                  ))}
+                <div
+                  className="reader-evidence-list"
+                  aria-label={`条目 ${index + 1} 的证据`}
+                >
+                  {claim.sources.map((citation, i) =>
+                    citation.kind === "document" ? (
+                      <Popover
+                        key={i}
+                        label={`证据 ${index + 1}.${i + 1}`}
+                        trigger={`[${index + 1}.${i + 1}]`}
+                      >
+                        <EvidencePreview
+                          evidence={citation.evidence}
+                          index={i + 1}
+                        />
+                      </Popover>
+                    ) : null,
+                  )}
+                </div>
+              </section>
+            ))
+          ) : (
+            <div
+              className="reader-prose"
+              dangerouslySetInnerHTML={{ __html: markdown.parse(content.text) }}
+            />
+          )}
+          <TechDetails>
+            <pre>
+              {JSON.stringify(
+                {
+                  result_id: saved.ref.result_id,
+                  coverage: saved.result.coverage,
+                  freshness: saved.freshness,
+                  source,
+                  search,
+                },
+                null,
+                2,
+              )}
+            </pre>
+          </TechDetails>
+        </>
+      ) : null}
+    </section>
   );
 }

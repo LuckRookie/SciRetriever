@@ -55,7 +55,7 @@ it("shows an uninitialized React query entry without creating any database or ob
 
 it("reuses a fixed parsed material from the React maintenance entry under its original cookie and CSRF contract", async () => {
   const env = await coreProcessingFixture();
-  await env.app.documentProcessing.parseDocuments(env.parseRequest);
+  await env.app.documentProcessing.parseDocuments(env.rawParseRequest);
   const query = await createQueryApplication(env.home);
   const assets = new Map([
     ...(await readingAssets()),
@@ -82,24 +82,21 @@ it("reuses a fixed parsed material from the React maintenance entry under its or
     await page
       .getByRole("button", { name: "从文献库读取当前 PDF", exact: true })
       .click();
+    await page.getByText("已选择当前 PDF。", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "解析 PDF", exact: true }).click();
     await page
-      .getByText("已选择当前 PDF 与默认文档版本。", { exact: true })
-      .waitFor();
-    await page
-      .getByRole("button", { name: "发布可读表示", exact: true })
-      .click();
-    await page
-      .getByRole("dialog", { name: "发布可读表示？" })
-      .getByRole("button", { name: "发布可读表示", exact: true })
+      .getByRole("dialog", { name: "解析这个 PDF？" })
+      .getByRole("button", { name: "解析 PDF", exact: true })
       .click();
     await expect
       .poll(() =>
         page
           .getByRole("status")
-          .filter({ hasText: /解析表示已保存/ })
+          .filter({ hasText: /pipeline：已复用/ })
           .count(),
       )
       .toBe(1);
+    expect(env.parseCalls).toBe(2);
     expect(env.modelCalls).toBe(0);
     expect(paths).not.toContain("/api/clients");
     expect(paths).not.toContain("/api/tasks");

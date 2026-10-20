@@ -1,3 +1,4 @@
+import { initializeCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import { createHash } from "node:crypto";
 import { readFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -100,6 +101,24 @@ function fixture(): Promise<{ pdf: Buffer; archive: Buffer }> {
       pdf: Buffer.from(workbenchPdf()),
       archive: zip([
         ...contents,
+        {
+          name: "document_content_list_v2.json",
+          bytes: Buffer.from(
+            JSON.stringify([
+              [
+                {
+                  type: "paragraph",
+                  bbox: [10, 10, 900, 100],
+                  content: {
+                    paragraph_content: [
+                      { type: "text", content: "Synthetic source text." },
+                    ],
+                  },
+                },
+              ],
+            ]),
+          ),
+        },
         { name: "images/figure.png", bytes: image },
         {
           name: "private/debug.json",
@@ -273,6 +292,7 @@ it.each(["loopback", "remote"] as const)(
       '[mineru]\nbearer_token = "must-not-reach-loopback"\norigin = "https://parser.example.test"\n',
       { mode: 0o600 },
     );
+    await initializeCatalogSchema(join(home, "catalog.sqlite"));
     const app = await createApplication(
       home,
       remote
@@ -331,27 +351,26 @@ it.each(["loopback", "remote"] as const)(
           parameters_sha256: null,
         },
       });
-      const result = await app.parsing!.commitCurrentPrimary(
-        await app.parsing!.prepareCurrentPrimary(
-          FIXTURE_LITERATURE.literature_id,
-        ),
+      const [outcome] = await app.rawParsing!.parseCurrentPrimary(
+        FIXTURE_LITERATURE.literature_id,
+        ["vlm-engine"],
       );
+      expect(outcome?.status).toBe("published");
+      const result = outcome!.result!;
       expect(result).toMatchObject({
         page_count: 1,
-        provenance: {
-          parser_version: "mineru-ts-archive-v3",
-          mode: "archive",
-          model_identity: "operator-vlm-model@fixture-revision",
-          provenance: { source_name: "mineru", input_sha256: asset.sha256 },
-        },
+        profile: "vlm-engine",
+        source_sha256: asset.sha256,
+        model_identity: "operator-vlm-model@fixture-revision/vlm-engine",
+        blocks: { media_type: "application/json" },
+        private_content_list: { media_type: "application/json" },
       });
       expect(result.resources.map((resource) => resource.reference)).toEqual([
         "images/figure.png",
       ]);
       expect(
-        (await app.library.detail(FIXTURE_LITERATURE.literature_id))
-          .parser_result,
-      ).toEqual(result);
+        await app.library.detail(FIXTURE_LITERATURE.literature_id),
+      ).not.toHaveProperty("parser_result");
       expect(
         fixtureServer.calls.map((call) => [call.method, call.path]),
       ).toEqual([
@@ -378,9 +397,17 @@ it.each(["loopback", "remote"] as const)(
       expect(submit.body.toString("latin1")).toContain(
         'name="return_original_file"\r\n\r\nfalse',
       );
-      expect(
-        (await app.database.snapshotCounts()).tables.artifact_objects,
-      ).toBe(3);
+      const staged = await app.rawParseStorage!.load(result.raw_parse_id);
+      expect(Object.keys(staged).sort()).toEqual([
+        "blocks",
+        "markdown",
+        "private_content_list",
+        "resources",
+        "result",
+      ]);
+      expect(staged.resources.map((r) => r.reference)).toEqual([
+        "images/figure.png",
+      ]);
       await app.literatureArtifacts.withArtifact(
         result.markdown,
         async (chunks) => {
@@ -405,8 +432,11 @@ it.each(["loopback", "remote"] as const)(
 it("runs the loopback MinerU protocol entirely in TypeScript", async () => {
   const fixtureServer = await server();
   try {
-    const result = await parser(fixtureServer.url).parse(await parserRequest());
-    expect(result.page_count).toBe(1);
+    const result = await parser(fixtureServer.url).parseRaw(
+      await parserRequest(),
+      "vlm-engine",
+    );
+    expect(result.result.page_count).toBe(1);
     expect(result.resources.map((item) => item.reference)).toEqual([
       "images/figure.png",
     ]);
@@ -428,7 +458,7 @@ it.each([
   const http = await server(mode);
   try {
     await expect(
-      parser(http.url).parse(await parserRequest()),
+      parser(http.url).parseRaw(await parserRequest(), "vlm-engine"),
     ).rejects.toMatchObject({
       code: mode === "zip" ? "parser-structure" : "parser-unavailable",
     });
@@ -450,7 +480,11 @@ it("cancels pending HTTP and refuses unsafe loopback addresses", async () => {
   const http = await server("delay");
   const abort = new AbortController();
   try {
-    const pending = parser(http.url).parse(await parserRequest(), abort.signal);
+    const pending = parser(http.url).parseRaw(
+      await parserRequest(),
+      "vlm-engine",
+      abort.signal,
+    );
     await Promise.race([
       http.waiting,
       pending.then(() => {
@@ -469,7 +503,11 @@ it("rejects cancellation and invalid deadlines before upload", async () => {
   const http = await server();
   try {
     await expect(
-      parser(http.url).parse(await parserRequest(), AbortSignal.abort()),
+      parser(http.url).parseRaw(
+        await parserRequest(),
+        "vlm-engine",
+        AbortSignal.abort(),
+      ),
     ).rejects.toMatchObject({ code: "parser-cancelled" });
     expect(
       () =>

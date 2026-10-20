@@ -12,4 +12,4 @@
 
 供应商专属 API/页面协议放 providers/<provider>/；下载候选接纳仍归上级 acquisition。
 
-[上级目录](../README.md) · [项目 README](../../../../../README.md)
+[上级目录](../README.md)

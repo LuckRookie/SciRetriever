@@ -1,3 +1,5 @@
+import { initializeCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
+import { rawParserFixture } from "./raw-parser-fixture.js";
 import { workbenchTestAccess } from "./workbench-auth-fixture.js";
 import { createServer } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -12,44 +14,26 @@ import {
 import { startSyntheticWorkbench } from "../src/bootstrap/workbench.js";
 import { verifyInstalledCloakRuntime } from "../src/configuration/cloak-runtime.js";
 import { TypeScriptConfigurationOwner } from "../src/configuration/owner.js";
-import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 
 const bundle = process.env.SCIRETRIEVER_CLOAK_BUNDLE;
 
 it.skipIf(!bundle)(
-  "runs real Browser capture through publication, parsing, loopback Analysis and Library query",
+  "runs real Browser capture through publication and raw parsing without analysis",
   async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-product-journey-"));
     let calls = 0;
     const model = createServer(async (request, response) => {
       for await (const chunk of request) void chunk;
       calls++;
-      const value =
-        calls === 1
-          ? { outcome: "usable", metadata: FIXTURE_LITERATURE.metadata }
-          : {
-              markdown:
-                "# 研究背景与目标\n\nLoopback journey content.\n\n# 研究方法\n\n未提供\n\n# 数据\n\n未提供\n\n# 结论与局限性\n\n未提供\n\n# 参考文献\n\n未提供\n",
-            };
-      response.setHeader("Content-Type", "application/json");
-      response.end(
-        JSON.stringify({
-          model: "journey-model",
-          choices: [
-            {
-              finish_reason: "stop",
-              message: { content: JSON.stringify(value) },
-            },
-          ],
-          usage: { prompt_tokens: 20, completion_tokens: 30 },
-        }),
-      );
+      response.writeHead(500);
+      response.end("Analysis must not be invoked by parsing");
     });
     await new Promise<void>((done) => model.listen(0, "127.0.0.1", done));
     const address = model.address();
     if (!address || typeof address === "string")
       throw new Error("model unavailable");
+    await initializeCatalogSchema(join(home, "catalog.sqlite"));
     const owner = new TypeScriptConfigurationOwner(home);
     await owner.publish(
       `[providers.fixture]\napi = "openai-chat-completions"\nbase_url = "http://127.0.0.1:${address.port}/v1"\n[models."fixture/journey-model"]\nstream = false\n[analyze]\nmodel = "fixture/journey-model"\nmetadata_max_output_tokens = 2048\ncontent_max_output_tokens = 4096\nmax_input_bytes = 1048576\nmax_chunk_bytes = 1048576\nmax_chunk_count = 1\nmax_total_llm_requests = 2\nmax_total_output_tokens = 6144\n`,
@@ -69,8 +53,7 @@ it.skipIf(!bundle)(
         configurationOwner: owner,
         applicationOptions: {
           parsing: {
-            rules: new TypeScriptParserArtifactRules(),
-            parser: {
+            rawParser: rawParserFixture({
               parse: async (request) => {
                 const bytes = new TextEncoder().encode(
                   "# Parsed loopback journey\n\nSynthetic content.\n",
@@ -104,7 +87,7 @@ it.skipIf(!bundle)(
                   },
                 };
               },
-            },
+            }),
           },
         },
       });
@@ -163,15 +146,20 @@ it.skipIf(!bundle)(
         literature_id: FIXTURE_LITERATURE.literature_id,
         transfer_ids: [],
       });
-      expect(result.outcome).toBe("content_ready");
+      expect(result.outcome).toBe("parser_results_ready");
+      if (result.outcome !== "parser_results_ready")
+        throw new Error("raw parse unavailable");
+      expect(result.receipt.profiles.map((p) => p.status)).toEqual([
+        "published",
+        "published",
+      ]);
       const detail = await workbench.application.library.detail(
         FIXTURE_LITERATURE.literature_id,
       );
-      expect(detail.literature.status).toBe("CONTENT_READY");
-      expect(detail.content?.sections[0]?.markdown).toContain(
-        "Loopback journey content",
-      );
-      expect(calls).toBe(2);
+      expect(detail.literature.status).toBe("ASSET_READY");
+      expect(detail).not.toHaveProperty("content");
+      expect(detail).not.toHaveProperty("parser_result");
+      expect(calls).toBe(0);
     } finally {
       await workbench?.close();
       await new Promise<void>((done, reject) =>

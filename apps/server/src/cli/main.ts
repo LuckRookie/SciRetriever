@@ -1,51 +1,36 @@
-import { ProcessorQueryError } from "../storage/processor-results.js";
 import {
-  queryProcessors,
-  submitProcessor,
-  PROCESSOR_QUERIES,
-} from "../entry/processor-operations.js";
-import { processorError, ProcessorError } from "../analysis/processor.js";
-import {
-  executeConfiguration,
-  CONFIGURATION_OPERATIONS,
-  type ConfigurationOperation,
-} from "../entry/configuration-operations.js";
-import {
-  executeMaintenance,
-  isMaintenanceFailure,
-  type MaintenanceOperation,
-} from "../entry/maintenance-operations.js";
-import {
-  executeQuery,
-  isQueryFailure,
-  type QueryOperation,
-} from "../entry/query-operations.js";
-import { parseStrictJsonValue } from "@sciretriever/contracts";
-import { readFile, realpath } from "node:fs/promises";
+  ContractValidationError,
+  parseDiscoveryRunId,
+  parseLibraryQuery,
+  parseLiteratureId,
+  parseMetaLiteratureId,
+  parseStrictJsonValue,
+  type LibraryQuery,
+} from "@sciretriever/contracts";
+import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import {
-  MachineWorkbenchClient,
-  MachineWorkbenchError,
-  type WorkbenchOperation,
-} from "../workbench/machine-client.js";
-import { operationRecord } from "../entry/query-operations.js";
-import { runBrowserSession } from "./browser-session.js";
-import { parseWebOptions, webAccessOptions } from "./web-access.js";
-import { WorkbenchAccessError } from "../workbench/access.js";
+import { readFile, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { processorError, ProcessorError } from "../analysis/processor.js";
+import { ProcessingTaskError } from "../application/jobs/processing.js";
 import * as applicationBootstrap from "../bootstrap/application.js";
-import { DocumentProcessingError } from "../document/service.js";
-import { ParsingFailure } from "../parsing/ports.js";
 import {
   QueryApplicationError,
   type Application,
   type QueryApplication,
 } from "../bootstrap/application.js";
+import { ConfigurationBoundaryError } from "../configuration/index.js";
 import {
-  decodeBibliography,
-  importBibliography,
-  type BibliographyInputFormat,
-} from "../entry/bibliography.js";
+  ConfigurationOwnerError,
+  ConfigurationProbeError,
+  ConfigurationProbeSession,
+  fixedConfigurationHome,
+  TypeScriptConfigurationOwner,
+  type ConfigurationProbeRequest,
+  type ConfigurationProbeResult,
+  type ConfigurationProbeSeams,
+} from "../configuration/owner.js";
+import { DocumentProcessingError } from "../document/service.js";
 import {
   ArtifactExportError,
   exportArtifact,
@@ -57,45 +42,56 @@ import {
   type BibliographyExportSelector,
 } from "../entry/bibliography-export.js";
 import {
-  ConfigurationOwnerError,
-  ConfigurationProbeError,
-  ConfigurationProbeSession,
-  fixedConfigurationHome,
-  TypeScriptConfigurationOwner,
-  type ConfigurationProbeRequest,
-  type ConfigurationProbeResult,
-  type ConfigurationProbeSeams,
-} from "../configuration/owner.js";
-import { LiteratureNotFoundError } from "../literature/query.js";
+  CONFIGURATION_OPERATIONS,
+  executeConfiguration,
+  type ConfigurationOperation,
+} from "../entry/configuration-operations.js";
+import { runDoctor } from "../entry/doctor.js";
 import {
-  ContractValidationError,
-  parseDiscoveryRunId,
-  parseLibraryQuery,
-  parseLiteratureId,
-  parseMetaLiteratureId,
-  type LibraryQuery,
-} from "@sciretriever/contracts";
+  executeMaintenance,
+  isMaintenanceFailure,
+  type MaintenanceOperation,
+} from "../entry/maintenance-operations.js";
+import {
+  PROCESSOR_QUERIES,
+  queryProcessors,
+  submitProcessor,
+} from "../entry/processor-operations.js";
+import {
+  acceptPublisherNameMappings,
+  type PublisherGovernanceSelector,
+} from "../entry/publisher-governance.js";
+import {
+  executeQuery,
+  isQueryFailure,
+  operationRecord,
+  type QueryOperation,
+} from "../entry/query-operations.js";
 import { type LiteratureSelector } from "../entry/selectors.js";
+import {
+  decodeBibliography,
+  importBibliography,
+  type BibliographyInputFormat,
+} from "../literature/bibliography-import.js";
+import { LiteratureNotFoundError } from "../literature/query.js";
+import { ArticleIdentityError } from "../parsing/article-identity.js";
+import { ParsingFailure } from "../parsing/ports.js";
+import { ProcessorQueryError } from "../storage/processor-results.js";
+import { CatalogSchemaError } from "../storage/sqlite/schema-path.js";
+import { WorkbenchAccessError } from "../workbench/access.js";
+import {
+  MachineWorkbenchClient,
+  MachineWorkbenchError,
+  type WorkbenchOperation,
+} from "../workbench/machine-client.js";
+import { runBrowserSession } from "./browser-session.js";
 import { runConfigurationCenter } from "./config-center.js";
 import {
   renderConfigurationTest,
   renderStatus,
   type ConfigTheme,
 } from "./config-ui.js";
-import { runDoctor } from "../entry/doctor.js";
-import { ConfigurationBoundaryError } from "../configuration/index.js";
-import {
-  MigrationSafetyError,
-  SYNTHETIC_COPY_DECLARATION_FLAG,
-} from "../storage/execution/migration-gate.js";
-import { CatalogSchemaError } from "../storage/sqlite/migration-scope.js";
-import { WriteAdmissionError } from "../storage/write-admission.js";
-import { ProcessingTaskError } from "../application/jobs/processing.js";
-import { ArticleIdentityError } from "../parsing/article-identity.js";
-import {
-  acceptPublisherNameMappings,
-  type PublisherGovernanceSelector,
-} from "../entry/publisher-governance.js";
+import { parseWebOptions, webAccessOptions } from "./web-access.js";
 
 export interface CliOptions {
   readonly home?: string;
@@ -120,7 +116,7 @@ export interface CliResult {
 }
 
 class CliInputError extends Error {
-  constructor() {
+  constructor(readonly nextAction?: string) {
     super("invalid command input");
     this.name = "CliInputError";
   }
@@ -157,18 +153,17 @@ function output(value: unknown, options: CliOptions): CliResult {
 
 function usage(options: CliOptions): CliResult {
   const text =
-    "Usage: sciretriever <web|discover|complete|literature|document|analysis|knowledge|synthesis|context|extraction|import|export|config|storage|maintenance|jobs|browser|mcp> ...\n" +
+    "Usage: sciretriever <web|discover|complete|literature|document|analysis|context|extraction|import|export|config|storage|maintenance|jobs|browser|mcp> ...\n" +
     "  web [--port 4174] [--host IPv4]  # login required; generates an API key unless SCIRETRIEVER_WEB_PASSWORD is set\n" +
     "  discover topic QUERY | discover citations --seed-literature-id ID\n" +
-    "  complete pdf|content [--literature-id ID] [--transfers ID,...]\n" +
+    "  complete pdf|parser [--literature-id ID] [--transfers ID,...]\n" +
     "  literature search [query options] | show ID | references ID | cited-by ID\n" +
     "  import metadata FORMAT SOURCE | import pdf ID SOURCE\n" +
-    "  document parse --literature-id ID --asset-id ID --asset-sha256 SHA256 --mode reuse-current|reparse [--expected-default-revision N]\n" +
-    "  export metadata FORMAT OUTPUT | export pdf|content ID --path PATH\n" +
+    "  document parse --literature-id ID --asset-id ID --asset-sha256 SHA256 [--profiles pipeline,vlm-engine] [--force] (default: deployment profile)\n" +
+    "  export metadata FORMAT OUTPUT | export pdf ID --path PATH\n" +
     "  config [--theme auto|dark|light|mono] | config status [--json] [--theme ...] | config test ...\n" +
     "  jobs create [--text QUERY] | jobs submit --request FILE|- | jobs run|show|pause|cancel|resume|retry JOB_ID\n" +
     "  document default|describe|outline|segments|slice|resources|resource|evidence|material --request FILE|-\n" +
-    "  knowledge read|list|default --request FILE|-; synthesis prepare|read|source|list --request FILE|-\n" +
     "  context search|knowledge --request FILE|-; analysis prepare --request FILE|-; extraction prepare --request FILE|-\n" +
     "  literature status; literature search|read|references|reference|identity|artifact-chunk|bibliography --request FILE|-\n" +
     "  jobs list|inspect|create-request|resolve --request FILE|- (create-request only saves)\n" +
@@ -178,9 +173,10 @@ function usage(options: CliOptions): CliResult {
     "  mcp [--maintenance] [--workbench-url http://127.0.0.1:PORT]\n" +
     "  browser session --workbench-url URL --request FILE|- [--maintenance] # NDJSON connection\n" +
     "  jobs runtime --workbench-url URL --request FILE|- [--maintenance] # operate in the Web owner\n" +
-    "  storage schema-inspect|schema-init --catalog PATH | schema-upgrade --catalog PATH [--dry-run | --backup PATH]\n" +
-    "  storage document-inspect|retrieval-inspect|extraction-inspect --catalog PATH | document-migrate|retrieval-migrate|extraction-migrate --catalog PATH [--dry-run | --backup PATH --synthetic-copy]\n" +
-    "  maintenance rebuild-index (requires an existing v4 catalog) | rebuild-knowledge-index (requires v8)\n" +
+    "  archive build IDS [--mode full|legacy-vlm-markdown] [--from-step STEP]; archive status|resume ID; archive issues|stats|events; archive resolve --request FILE\n" +
+    "  tags list|search|show|changes|consolidate|backfill; tags edit|undo --request FILE; literature tags ID / set|lock --request FILE\n" +
+    "  storage schema-inspect|schema-init --catalog PATH\n" +
+    "  maintenance rebuild-index\n" +
     "  maintenance publisher-names (--all | --literature-id ID... | --query TEXT) [--ai] [--scan-limit N] [--cursor CURSOR] [--max-ai-requests N] [--output PATH]\n" +
     "  maintenance publisher-names-accept --report FILE|- --name NAME [--name NAME...]\n";
   options.stdout?.(text);
@@ -404,6 +400,14 @@ function query(
   text: string | null,
   args: readonly string[] = [],
 ): LibraryQuery {
+  if (
+    args.some(
+      (arg) => arg === "--document-type" || arg.startsWith("--document-type="),
+    )
+  )
+    throw new CliInputError(
+      "--document-type was removed; use --publication-form and --article-kind",
+    );
   const identifiers = argumentsOf(args, "--identifier").map((item) => {
     const separator = item.indexOf(":");
     if (separator <= 0 || separator === item.length - 1) invalidInput();
@@ -428,7 +432,8 @@ function query(
       : null,
     venue: argument(args, "--venue"),
     publisher: argument(args, "--publisher"),
-    document_types: argumentsOf(args, "--document-type"),
+    publication_forms: argumentsOf(args, "--publication-form"),
+    article_kinds: argumentsOf(args, "--article-kind"),
     languages: argumentsOf(args, "--language"),
     keywords: argumentsOf(args, "--keyword"),
     version_roles: argumentsOf(args, "--version-role"),
@@ -436,17 +441,23 @@ function query(
     missing_steps: argumentsOf(args, "--missing-step"),
     needs_manual_pdf: bool ? true : noBool ? false : null,
     discovery_run_ids: argumentsOf(args, "--discovery-run-id"),
+    ...(argumentsOf(args, "--tag").length
+      ? {
+          tags: {
+            ids: argumentsOf(args, "--tag"),
+            mode: argument(args, "--tag-mode") ?? "any",
+          },
+        }
+      : {}),
   });
 }
 
 async function withApplication<T>(
   options: CliOptions,
   action: (application: Application) => Promise<T>,
-  executionSchema?: "upgrade-synthetic" | "require-v2" | "inspect",
 ): Promise<T> {
   const application = await applicationBootstrap.createApplication(
     configurationHome(options),
-    { ...(executionSchema ? { executionSchema } : {}) },
   );
   return runAndClose(
     () => action(application),
@@ -620,7 +631,222 @@ async function execute(
     );
     return output({ protocol_version: 1, result }, options);
   }
+  if (group === "snapshot") {
+    if (command === "create") {
+      const ids = argument(args, "--ids"),
+        filter = argument(args, "--filter");
+      if (Boolean(ids) === Boolean(filter)) invalidInput();
+      const definition = ids
+        ? { kind: "literatures", literature_ids: ids.split(",") }
+        : {
+            kind: "query",
+            query: parseStrictJsonValue(
+              await inputBytes(filter!, options, 262144),
+            ),
+          };
+      return output(
+        await withApplication(options, (app) =>
+          executeMaintenance(app, "snapshots", definition, options.signal),
+        ),
+        options,
+      );
+    }
+    const operation = command === "show" ? "read" : command;
+    const request =
+      operation === "read"
+        ? {
+            snapshot_id: args[2],
+            offset: integerOption(args, "--offset", 0),
+            limit: integerOption(args, "--limit", 100),
+            max_bytes: integerOption(args, "--max-bytes", 262144),
+          }
+        : operation === "list"
+          ? {
+              after: argument(args, "--after") ?? null,
+              limit: integerOption(args, "--limit", 50),
+            }
+          : operation === "diff"
+            ? { before: args[2], after: args[3] }
+            : invalidInput();
+    const q = await applicationBootstrap.createQueryApplication(
+      configurationHome(options),
+    );
+    try {
+      return output(
+        await executeQuery(
+          q,
+          "snapshots",
+          { operation, request },
+          options.signal,
+        ),
+        options,
+      );
+    } finally {
+      await q.close();
+    }
+  }
+  if (group === "archive") {
+    const file = argument(args, "--request");
+    const request: unknown = file
+      ? parseStrictJsonValue(await inputBytes(file, options, 262144))
+      : command === "status" || command === "resume"
+        ? { literature_id: args[2] }
+        : command === "issues"
+          ? {
+              ...(argument(args, "--reason")
+                ? { reason: argument(args, "--reason") }
+                : {}),
+              ...(argument(args, "--part")
+                ? { part: argument(args, "--part") }
+                : {}),
+              offset: integerOption(args, "--offset", 0),
+              limit: integerOption(args, "--limit", 50),
+            }
+          : command === "stats"
+            ? {}
+            : command === "events"
+              ? {
+                  after: integerOption(args, "--after", 0),
+                  limit: integerOption(args, "--limit", 100),
+                }
+              : command === "build" && args[2] && !args[2].startsWith("--")
+                ? {
+                    selector: {
+                      kind: "literatures",
+                      literature_ids: args[2].split(","),
+                    },
+                    mode: argument(args, "--mode") ?? "full",
+                    from_step: argument(args, "--from-step") ?? null,
+                    idempotency_key:
+                      argument(args, "--idempotency-key") ??
+                      `archive-${randomUUID()}`,
+                  }
+                : invalidInput();
+    const envelope = { operation: command, request };
+    if (["build", "resume", "resolve"].includes(command ?? ""))
+      return output(
+        await withApplication(options, async (app) => {
+          const result = await executeMaintenance(
+            app,
+            "archive",
+            envelope,
+            options.signal,
+          );
+          const job = (result as { job?: { job_id: string } })?.job;
+          if (job && app.processingTasks) {
+            await app.processingTasks.run(job.job_id, options.signal);
+            return app.processingTasks.read(job.job_id);
+          }
+          return result;
+        }),
+        options,
+      );
+    const query = await applicationBootstrap.createQueryApplication(
+      configurationHome(options),
+    );
+    try {
+      return output(
+        await executeQuery(query, "archive", envelope, options.signal),
+        options,
+      );
+    } finally {
+      await query.close();
+    }
+  }
+  if (group === "tags" || (group === "literature" && command === "tags")) {
+    const source = argument(args, "--request");
+    const cmd = group === "tags" ? command : args[2];
+    let operation: string,
+      request: unknown,
+      write = false;
+    if (source) {
+      request = parseStrictJsonValue(await inputBytes(source, options, 262144));
+      operation =
+        (
+          {
+            edit: "change",
+            create: "change",
+            merge: "change",
+            undo: "change",
+            set: "assign",
+            lock: "lock",
+            build: "build",
+            backfill: "backfill",
+          } as Record<string, string>
+        )[cmd ?? ""] ??
+        cmd ??
+        "";
+      write = [
+        "change",
+        "assign",
+        "lock",
+        "build",
+        "backfill",
+        "consolidate",
+      ].includes(operation);
+    } else if (group === "literature") {
+      operation = "assignment";
+      request = { literature_id: args[2] };
+    } else if (cmd === "list" || cmd === "search") {
+      operation = cmd;
+      request = {
+        query: cmd === "search" ? (args[2] ?? "") : "",
+        limit: integerOption(args, "--limit", 50),
+        offset: integerOption(args, "--offset", 0),
+        ...(argument(args, "--category")
+          ? { category: argument(args, "--category") }
+          : {}),
+        ...(argument(args, "--parent")
+          ? { parent_id: argument(args, "--parent") }
+          : {}),
+      };
+    } else if (cmd === "undo-preview") {
+      operation = "undo-preview";
+      request = { change_version: Number(args[2]) };
+    } else if (cmd === "show") {
+      operation = "show";
+      request = { tag_id: args[2] };
+    } else if (cmd === "changes") {
+      operation = "changes";
+      request = {
+        since: integerOption(args, "--since", 0),
+        limit: integerOption(args, "--limit", 100),
+      };
+    } else if (cmd === "consolidate") {
+      operation = "consolidate";
+      request = {};
+      write = true;
+    } else if (cmd === "backfill") {
+      operation = "backfill-preview";
+      request = { tag_ids: args[2]?.split(",") ?? [] };
+      if (args.includes("--execute")) {
+        operation = "backfill";
+        request = { ...(request as object), dry_run: false };
+        write = true;
+      }
+    } else invalidInput();
+    const envelope = { operation, request };
+    if (write)
+      return output(
+        await withApplication(options, (app) =>
+          executeMaintenance(app, "tags", envelope, options.signal),
+        ),
+        options,
+      );
+    const app = await applicationBootstrap.createQueryApplication(
+      configurationHome(options),
+    );
+    try {
+      return output(
+        await executeQuery(app, "tags", envelope, options.signal),
+        options,
+      );
+    } finally {
+      await app.close();
+    }
+  }
   const queryRoutes: Readonly<Record<string, QueryOperation>> = {
+    "literature metadata-fields": "metadata-fields",
     "jobs list": "task-list",
     "jobs inspect": "task-detail",
     "literature status": "status",
@@ -631,6 +857,14 @@ async function execute(
     "literature references": "references",
     "literature reference": "reference-read",
     "literature identity": "article-identity",
+    "proofread inspect": "proofread-inspect",
+    "proofread page": "proofread-page",
+    "document annotation": "document-annotation",
+    "document figures": "document-figures",
+    "document references": "document-reference-texts",
+    "document parts": "document-parts",
+    "document corrections": "document-corrections",
+    "document parsing-status": "document-parsing-status",
     "document default": "document-default",
     "document describe": "document-describe",
     "document outline": "document-outline",
@@ -641,13 +875,6 @@ async function execute(
     "document evidence": "document-evidence",
     "document material": "document-material",
     "analysis prepare": "analysis-inputs",
-    "knowledge read": "knowledge-read",
-    "knowledge list": "knowledge-list",
-    "knowledge default": "knowledge-default",
-    "synthesis prepare": "synthesis-prepare",
-    "synthesis read": "synthesis-read",
-    "synthesis source": "synthesis-source",
-    "synthesis list": "synthesis-list",
     "context search": "context",
     "context knowledge": "knowledge-context",
     "extraction prepare": "extraction-prepare",
@@ -687,6 +914,10 @@ async function execute(
     return output({ protocol_version: 1, result: value }, options);
   }
   const maintenanceRoutes: Readonly<Record<string, MaintenanceOperation>> = {
+    "literature resolve-references": "archive-references",
+    "literature metadata-edit": "metadata-edit",
+    "document annotate": "document-annotate",
+    "document role": "document-role",
     "import bibliography": "import-bibliography",
     "discover request": "discover",
     "jobs create-request": "task-create",
@@ -705,16 +936,13 @@ async function execute(
     const bytes = await inputBytes(source, options, 1024 * 1024 + 4096);
     if (bytes.byteLength > 1024 * 1024 + 4096) invalidInput();
     const request = parseStrictJsonValue(bytes);
-    const result = await withApplication(
-      options,
-      (app) =>
-        executeMaintenance(
-          app,
-          maintenanceRoutes[queryKey]!,
-          request,
-          options.signal,
-        ),
-      "require-v2",
+    const result = await withApplication(options, (app) =>
+      executeMaintenance(
+        app,
+        maintenanceRoutes[queryKey]!,
+        request,
+        options.signal,
+      ),
     );
     return output({ protocol_version: 1, result }, options);
   }
@@ -784,75 +1012,70 @@ async function execute(
     );
     return { code: 0 };
   }
+  if (group === "storage" && command === "retrieval-inspect") {
+    const path = argument(args, "--catalog");
+    if (!path || args.length !== 4) invalidInput();
+    const { inspectCatalogRetrieval } = await import(
+      "../storage/sqlite/catalog-schema.js"
+    );
+    return output(await inspectCatalogRetrieval(path), options);
+  }
   if (
     group === "storage" &&
-    (command === "schema-inspect" ||
-      command === "schema-init" ||
-      command === "schema-upgrade")
+    (command === "schema-inspect" || command === "schema-init")
   ) {
-    const seen = new Set<string>();
-    for (let index = 2; index < args.length; index++) {
-      const flag = args[index]!;
-      if (seen.has(flag)) invalidInput();
-      seen.add(flag);
-      if (
-        flag === "--catalog" ||
-        (command === "schema-upgrade" && flag === "--backup")
-      ) {
-        if (!args[++index]?.startsWith("/")) invalidInput();
-      } else if (command !== "schema-upgrade" || flag !== "--dry-run") {
-        invalidInput();
-      }
-    }
-    const catalog = argument(args, "--catalog");
-    const backup = argument(args, "--backup");
-    const dryRun = args.includes("--dry-run");
     if (
-      !catalog?.startsWith("/") ||
-      (dryRun && backup !== null) ||
-      (command === "schema-upgrade" && !dryRun && !backup)
+      args.length !== 4 ||
+      args[2] !== "--catalog" ||
+      !args[3]?.startsWith("/")
     )
       invalidInput();
-    const {
-      inspectCatalogSchema,
-      initializeCatalogSchema,
-      upgradeCatalogSchema,
-    } = await import("../storage/sqlite/catalog-schema.js");
-    try {
-      return output(
-        command === "schema-inspect"
-          ? await inspectCatalogSchema(catalog)
-          : command === "schema-init"
-            ? await initializeCatalogSchema(catalog)
-            : await upgradeCatalogSchema({
-                catalog_path: catalog,
-                ...(backup ? { backup_path: backup } : {}),
-                dry_run: dryRun,
-              }),
-        options,
-      );
-    } catch (error) {
-      if (error instanceof CatalogSchemaError) throw error;
-      throw new CatalogSchemaError(
-        error instanceof WriteAdmissionError
-          ? error.code
-          : "catalog-schema-operation-failed",
-        null,
-        { cause: error },
-      );
-    }
+    const { inspectCatalogSchema, initializeCatalogSchema } = await import(
+      "../storage/sqlite/catalog-schema.js"
+    );
+    return output(
+      command === "schema-inspect"
+        ? await inspectCatalogSchema(args[3])
+        : await initializeCatalogSchema(args[3]),
+      options,
+    );
+  }
+
+  if (
+    (group === "proofread" &&
+      ["build", "decide", "revoke"].includes(command ?? "")) ||
+    (group === "document" && command === "publish-proofread")
+  ) {
+    const source = argument(args, "--request");
+    if (!source || args.length !== 4 || args[2] !== "--request") invalidInput();
+    const request = parseStrictJsonValue(
+      await inputBytes(source, options, 1024 * 1024),
+    );
+    return output(
+      await withApplication(options, (app) =>
+        executeMaintenance(
+          app,
+          `${group}-${command}` as MaintenanceOperation,
+          request,
+          options.signal,
+        ),
+      ),
+      options,
+    );
   }
   if (group === "document" && command === "parse") {
     const literatureId = argument(args, "--literature-id");
     const assetId = argument(args, "--asset-id");
     const assetSha = argument(args, "--asset-sha256");
-    const mode = argument(args, "--mode");
-    const revision = argument(args, "--expected-default-revision");
+    if (args.includes("--profiles") && argument(args, "--profiles") === null)
+      invalidInput();
+    const profiles = argument(args, "--profiles")?.split(",");
     if (
       !literatureId ||
       !assetId ||
       !assetSha ||
-      (mode !== "reuse-current" && mode !== "reparse")
+      args.includes("--mode") ||
+      args.includes("--expected-default-revision")
     )
       invalidInput();
     return output(
@@ -862,99 +1085,12 @@ async function execute(
             literature_id: literatureId,
             asset_id: assetId,
             asset_sha256: assetSha,
-            mode,
-            expected_default_revision:
-              revision === null
-                ? null
-                : integerOption(args, "--expected-default-revision", 0),
+            ...(profiles ? { profiles } : {}),
+            force: args.includes("--force"),
           },
           options.signal,
         ),
       ),
-      options,
-    );
-  }
-  if (group === "storage" && command === "document-inspect") {
-    const catalog = argument(args, "--catalog");
-    if (!catalog?.startsWith("/")) invalidInput();
-    const { inspectDocumentCatalog } = await import(
-      "../storage/sqlite/document-migration.js"
-    );
-    return output(await inspectDocumentCatalog(catalog), options);
-  }
-  if (group === "storage" && command === "document-migrate") {
-    const catalog = argument(args, "--catalog");
-    if (!catalog?.startsWith("/")) invalidInput();
-    const dryRun = args.includes("--dry-run");
-    if (!dryRun && !args.includes(SYNTHETIC_COPY_DECLARATION_FLAG))
-      throw new MigrationSafetyError("synthetic-copy-declaration-required");
-    const backup = argument(args, "--backup");
-    if (!dryRun && !backup?.startsWith("/")) invalidInput();
-    const { migrateDocumentCatalog } = await import(
-      "../storage/sqlite/document-migration.js"
-    );
-    return output(
-      await migrateDocumentCatalog({
-        catalog_path: catalog,
-        ...(backup ? { backup_path: backup } : {}),
-        dry_run: dryRun,
-      }),
-      options,
-    );
-  }
-  if (group === "storage" && command === "retrieval-inspect") {
-    const catalog = argument(args, "--catalog");
-    if (!catalog?.startsWith("/")) invalidInput();
-    const { inspectRetrievalCatalog } = await import(
-      "../storage/sqlite/retrieval-migration.js"
-    );
-    return output(await inspectRetrievalCatalog(catalog), options);
-  }
-  if (group === "storage" && command === "retrieval-migrate") {
-    const catalog = argument(args, "--catalog");
-    if (!catalog?.startsWith("/")) invalidInput();
-    const dryRun = args.includes("--dry-run");
-    if (!dryRun && !args.includes(SYNTHETIC_COPY_DECLARATION_FLAG))
-      throw new MigrationSafetyError("synthetic-copy-declaration-required");
-    const backup = argument(args, "--backup");
-    if (!dryRun && !backup?.startsWith("/")) invalidInput();
-    const { migrateRetrievalCatalog } = await import(
-      "../storage/sqlite/retrieval-migration.js"
-    );
-    return output(
-      await migrateRetrievalCatalog({
-        catalog_path: catalog,
-        ...(backup ? { backup_path: backup } : {}),
-        dry_run: dryRun,
-      }),
-      options,
-    );
-  }
-  if (group === "storage" && command === "extraction-inspect") {
-    const catalog = argument(args, "--catalog");
-    if (!catalog?.startsWith("/")) invalidInput();
-    const { inspectExtractionCatalog } = await import(
-      "../storage/sqlite/extraction-migration.js"
-    );
-    return output(await inspectExtractionCatalog(catalog), options);
-  }
-  if (group === "storage" && command === "extraction-migrate") {
-    const catalog = argument(args, "--catalog");
-    if (!catalog?.startsWith("/")) invalidInput();
-    const dryRun = args.includes("--dry-run");
-    if (!dryRun && !args.includes(SYNTHETIC_COPY_DECLARATION_FLAG))
-      throw new MigrationSafetyError("synthetic-copy-declaration-required");
-    const backup = argument(args, "--backup");
-    if (!dryRun && !backup?.startsWith("/")) invalidInput();
-    const { migrateExtractionCatalog } = await import(
-      "../storage/sqlite/extraction-migration.js"
-    );
-    return output(
-      await migrateExtractionCatalog({
-        catalog_path: catalog,
-        ...(backup ? { backup_path: backup } : {}),
-        dry_run: dryRun,
-      }),
       options,
     );
   }
@@ -1048,32 +1184,11 @@ async function execute(
   if (group === "maintenance" && command === "rebuild-index") {
     if (args.length !== 2) invalidInput();
     return output(
-      await withApplication(
-        options,
-        async (app) => {
-          if (!app.maintenance)
-            throw new Error("maintenance runtime is unavailable");
-          return app.maintenance.rebuildIndex(options.signal);
-        },
-        "require-v2",
-      ),
-      options,
-    );
-  }
-  if (group === "maintenance" && command === "rebuild-knowledge-index") {
-    if (args.length !== 2) invalidInput();
-    return output(
-      await withApplication(
-        options,
-        async (app) => {
-          if (!app.maintenance?.rebuildKnowledgeIndex)
-            throw new Error(
-              "knowledge index maintenance is unavailable; catalog v8 is required",
-            );
-          return app.maintenance.rebuildKnowledgeIndex(options.signal);
-        },
-        "require-v2",
-      ),
+      await withApplication(options, async (app) => {
+        if (!app.maintenance)
+          throw new Error("maintenance runtime is unavailable");
+        return app.maintenance.rebuildIndex(options.signal);
+      }),
       options,
     );
   }
@@ -1090,39 +1205,6 @@ async function execute(
       app.database.inspectExecutionRuntime(),
     );
     return output(value, options);
-  }
-  if (group === "storage" && command === "migrate") {
-    if (args.includes("--dry-run")) {
-      // `inspect` verifies an already identifiable catalog read-only, so a
-      // dry-run neither creates nor migrates a target.
-      const value = await withApplication(
-        options,
-        (app) => app.database.migrateExecutionRuntime(true),
-        "inspect",
-      );
-      return output(value, options);
-    }
-    // The command and its declaration are not proof: the assembly gate still
-    // verifies that the target is a synthetic copy before anything is written.
-    if (!args.includes(SYNTHETIC_COPY_DECLARATION_FLAG))
-      throw new MigrationSafetyError("synthetic-copy-declaration-required");
-    const value = await withApplication(
-      options,
-      async (app) => {
-        if (!app.jobs)
-          throw new MigrationSafetyError("migration-target-unverified");
-        return app.jobs.migrate(false);
-      },
-      "upgrade-synthetic",
-    );
-    return output(
-      {
-        ...value.inspection,
-        action: "migrated",
-        migration: value,
-      },
-      options,
-    );
   }
   if (group === "storage" && command === "backup") {
     const path = argument(args, "--path");
@@ -1352,30 +1434,14 @@ async function execute(
     const path = args[3] ?? argument(args, "--path");
     if (!literatureId || !path) invalidInput();
     const bytes = await inputBytes(path, options, 16 * 1024 * 1024);
-    const ingest = async (schema: "require-v2" | "upgrade-synthetic") =>
-      withApplication(
-        options,
-        async (app) => {
-          if (!app.maintenance)
-            throw new Error("maintenance runtime is unavailable");
-          return app.maintenance.ingestPdf(
-            { literature_id: literatureId, bytes },
-            options.signal,
-          );
-        },
-        schema,
+    const value = await withApplication(options, async (app) => {
+      if (!app.maintenance)
+        throw new Error("maintenance runtime is unavailable");
+      return app.maintenance.ingestPdf(
+        { literature_id: literatureId, bytes },
+        options.signal,
       );
-    let value;
-    try {
-      value = await ingest("require-v2");
-    } catch (error) {
-      if (
-        !(error instanceof MigrationSafetyError) ||
-        error.code !== "migration-target-v1"
-      )
-        throw error;
-      value = await ingest("upgrade-synthetic");
-    }
+    });
     return output(value, options);
   }
   if (group === "export" && command === "metadata") {
@@ -1441,7 +1507,7 @@ async function execute(
       options,
     );
   }
-  if (group === "export" && (command === "pdf" || command === "content")) {
+  if (group === "export" && command === "pdf") {
     const id = args[2];
     const path = argument(args, "--path") ?? args[3];
     if (!id || !path) invalidInput();
@@ -1449,16 +1515,7 @@ async function execute(
     if (path === "-") {
       await withQueryApplication(options, async (app) => {
         const detail = await app.query.detail(id);
-        const artifact =
-          command === "pdf"
-            ? detail.primary_pdf?.asset
-            : detail.content
-              ? {
-                  sha256: detail.content.markdown.sha256,
-                  byte_size: detail.content.markdown.byte_size,
-                  media_type: detail.content.markdown.media_type,
-                }
-              : null;
+        const artifact = detail.primary_pdf?.asset;
         if (!artifact) throw new CliBusinessError();
         const chunks: Buffer[] = [];
         await app.literatureArtifacts.withArtifact(artifact, async (stream) => {
@@ -1470,16 +1527,7 @@ async function execute(
     }
     await withQueryApplication(options, async (app) => {
       const detail = await app.query.detail(id);
-      const artifact =
-        command === "pdf"
-          ? detail.primary_pdf?.asset
-          : detail.content
-            ? {
-                sha256: detail.content.markdown.sha256,
-                byte_size: detail.content.markdown.byte_size,
-                media_type: detail.content.markdown.media_type,
-              }
-            : null;
+      const artifact = detail.primary_pdf?.asset;
       if (!artifact) throw new CliBusinessError();
       await exportArtifact(app.literatureArtifacts, artifact, path, {
         overwrite: args.includes("--overwrite"),
@@ -1489,7 +1537,7 @@ async function execute(
   }
   if (group === "complete") {
     const target = args[1];
-    if (target !== "pdf" && target !== "content") invalidInput();
+    if (target !== "pdf" && target !== "parser") invalidInput();
     const explicitIds = argumentsOf(args, "--literature-id");
     const legacyId = argument(args, "--literature");
     const selectorFlags = [
@@ -1546,36 +1594,32 @@ async function execute(
     // target loop, an acquisition transport, nor an ad-hoc result shape. It reuses
     // the single Application-built completion service so the CLI, the durable job
     // runtime and any other frontend share one acquisition port, and it keeps the
-    // t17 migration gate untouched.
-    const report = await withApplication(
-      options,
-      async (app) => {
-        const service = app.databaseCompletion;
-        if (!service)
-          throw new Error("database completion runtime is unavailable");
-        return service.run(
-          {
-            selector,
-            goal: target === "pdf" ? "ASSET_READY" : "CONTENT_READY",
-            transfer_ids: transferIds,
+    // catalog access boundary unchanged.
+    const report = await withApplication(options, async (app) => {
+      const service = app.databaseCompletion;
+      if (!service)
+        throw new Error("database completion runtime is unavailable");
+      return service.run(
+        {
+          selector,
+          goal: target === "pdf" ? "ASSET_READY" : "PARSER_RESULT_READY",
+          transfer_ids: transferIds,
+        },
+        {
+          signal: options.signal,
+          on_progress: (progress) => {
+            options.stderr?.(
+              `${JSON.stringify({
+                progress: "database-completion",
+                state: progress.state,
+                literature_id: progress.literature_id,
+                failure_code: progress.failure?.code ?? null,
+              })}\n`,
+            );
           },
-          {
-            signal: options.signal,
-            on_progress: (progress) => {
-              options.stderr?.(
-                `${JSON.stringify({
-                  progress: "database-completion",
-                  state: progress.state,
-                  literature_id: progress.literature_id,
-                  failure_code: progress.failure?.code ?? null,
-                })}\n`,
-              );
-            },
-          },
-        );
-      },
-      "require-v2",
-    );
+        },
+      );
+    });
     options.stdout?.(`${JSON.stringify(report, null, options.json ? 0 : 2)}\n`);
     return {
       code:
@@ -1587,64 +1631,88 @@ async function execute(
       value: report,
     };
   }
-  if (group === "processors") {
+  if (group === "processors" || group === "processor") {
     const source = argument(args, "--request");
-    const request: unknown = source
+    let request: unknown = source
       ? parseStrictJsonValue(await inputBytes(source, options, 4 * 1024 * 1024))
       : {};
+    if (!source && (command === "run" || command === "submit")) {
+      const identity = args[2]?.split("@"),
+        literature = argument(args, "--literature"),
+        snapshot = argument(args, "--snapshot"),
+        specFile = argument(args, "--spec");
+      if (
+        !identity ||
+        identity.length !== 2 ||
+        !identity[0] ||
+        !identity[1] ||
+        Boolean(literature) === Boolean(snapshot)
+      )
+        return invalidInput();
+      request = {
+        schema_version: 1,
+        idempotency_key: argument(args, "--idempotency-key") ?? randomUUID(),
+        name: argument(args, "--name") ?? args[2],
+        processor: { id: identity[0], version: identity[1] },
+        spec: specFile
+          ? parseStrictJsonValue(await inputBytes(specFile, options, 262144))
+          : {},
+        inputs: [
+          snapshot
+            ? { kind: "snapshot", snapshot_id: snapshot }
+            : { kind: "literature", literature_id: literature },
+        ],
+      };
+    }
+    const action = command === "result" ? "read" : command;
+    if (!source && action === "read") request = { result_id: args[2] };
+    if (!source && action === "results")
+      request = {
+        limit: integerOption(args, "--limit", 50),
+        after: argument(args, "--after") ?? "",
+        ...(args.includes("--stale") ? { stale: true } : {}),
+      };
     if (command === "list")
       return output(await queryProcessors({}, "list", request), options);
     if (command === "retain")
       return output(
-        await withApplication(
-          options,
-          async (app) => {
-            if (!app.processorRetention) processorError("catalog-v10-required");
-            return app.processorRetention.retain(request, options.signal);
-          },
-          "require-v2",
-        ),
+        await withApplication(options, async (app) => {
+          if (!app.processorRetention) processorError("catalog-v10-required");
+          return app.processorRetention.retain(request, options.signal);
+        }),
         options,
       );
     if (command === "submit" || command === "run")
       return output(
-        await withApplication(
-          options,
-          async (app) => {
-            const job = await submitProcessor(
-              app,
-              request,
-              false,
-              options.signal,
-            );
-            if (command === "run") {
-              if (!app.processingTasks) processorError("processor-unavailable");
-              return app.processingTasks.run(job.job_id, options.signal);
-            }
-            return job;
-          },
-          "require-v2",
-        ),
+        await withApplication(options, async (app) => {
+          const job = await submitProcessor(
+            app,
+            request,
+            false,
+            options.signal,
+          );
+          if (command === "run") {
+            if (!app.processingTasks) processorError("processor-unavailable");
+            return app.processingTasks.run(job.job_id, options.signal);
+          }
+          return job;
+        }),
         options,
       );
     if (command === "rebuild")
       return output(
-        await withApplication(
-          options,
-          async (app) => {
-            if (!app.processors) processorError("catalog-v10-required");
-            return app.processors.rebuild();
-          },
-          "require-v2",
-        ),
+        await withApplication(options, async (app) => {
+          if (!app.processors) processorError("catalog-v10-required");
+          return app.processors.rebuild();
+        }),
         options,
       );
     if (
-      PROCESSOR_QUERIES.includes(command as (typeof PROCESSOR_QUERIES)[number])
+      PROCESSOR_QUERIES.includes(action as (typeof PROCESSOR_QUERIES)[number])
     )
       return output(
         await withQueryApplication(options, (app) =>
-          queryProcessors(app, command!, request),
+          queryProcessors(app, action!, request),
         ),
         options,
       );
@@ -1664,15 +1732,11 @@ async function execute(
       return invalidInput();
     }
     return output(
-      await withApplication(
-        options,
-        async (app) => {
-          if (!app.processingTasks)
-            throw new ProcessingTaskError("processing-unavailable");
-          return app.processingTasks.submit(request);
-        },
-        "require-v2",
-      ),
+      await withApplication(options, async (app) => {
+        if (!app.processingTasks)
+          throw new ProcessingTaskError("processing-unavailable");
+        return app.processingTasks.submit(request);
+      }),
       options,
     );
   }
@@ -1695,64 +1759,50 @@ async function execute(
     const jobId = args[2];
     if (!jobId) invalidInput();
     return output(
-      await withApplication(
-        options,
-        async (app) => {
-          if (!app.processingTasks)
-            throw new ProcessingTaskError("processing-unavailable");
-          return app.processingTasks.control(
-            jobId,
-            command as "pause" | "cancel" | "resume" | "retry",
-          );
-        },
-        "require-v2",
-      ),
+      await withApplication(options, async (app) => {
+        if (!app.processingTasks)
+          throw new ProcessingTaskError("processing-unavailable");
+        return app.processingTasks.control(
+          jobId,
+          command as "pause" | "cancel" | "resume" | "retry",
+        );
+      }),
       options,
     );
   }
   if (group === "jobs" && command === "create") {
     const idempotency = argument(args, "--idempotency") ?? `cli-${Date.now()}`;
-    const value = await withApplication(
-      options,
-      async (app) => {
-        if (!app.jobService)
-          throw new Error("execution runtime is unavailable");
-        return app.jobService.create({
-          target_kind: "selector",
-          selector: {
-            kind: "query",
-            query: query(argument(args, "--text"), args),
-          },
-          policy_version: "cli-v1",
-          policy: { mode: "never", max_retries: 0 },
-          idempotency_key: idempotency,
-        });
-      },
-      "require-v2",
-    );
+    const value = await withApplication(options, async (app) => {
+      if (!app.jobService) throw new Error("execution runtime is unavailable");
+      return app.jobService.create({
+        target_kind: "selector",
+        selector: {
+          kind: "query",
+          query: query(argument(args, "--text"), args),
+        },
+        policy_version: "cli-v1",
+        policy: { mode: "never", max_retries: 0 },
+        idempotency_key: idempotency,
+      });
+    });
     return output(value, options);
   }
   if (group === "jobs" && command === "run") {
     const jobId = args[2];
     if (!jobId || !/^[A-Za-z0-9._:-]{1,128}$/u.test(jobId)) invalidInput();
-    const value = await withApplication(
-      options,
-      async (app) => {
-        const job = await app.jobs?.getJob(jobId);
-        if (
-          app.processingTasks &&
-          (job?.selector as { schema_version?: unknown } | undefined)
-            ?.schema_version === 3
-        )
-          return app.processingTasks.run(jobId, options.signal);
-        if (app.processingTasks)
-          return app.processingTasks.runResults(jobId, options.signal);
-        if (!app.taskService)
-          throw new Error("execution runtime is unavailable");
-        return app.taskService.runJob(jobId);
-      },
-      "require-v2",
-    );
+    const value = await withApplication(options, async (app) => {
+      const job = await app.jobs?.getJob(jobId);
+      if (
+        app.processingTasks &&
+        (job?.selector as { schema_version?: unknown } | undefined)
+          ?.schema_version === 3
+      )
+        return app.processingTasks.run(jobId, options.signal);
+      if (app.processingTasks)
+        return app.processingTasks.runResults(jobId, options.signal);
+      if (!app.taskService) throw new Error("execution runtime is unavailable");
+      return app.taskService.runJob(jobId);
+    });
     return output({ job_id: jobId, results: value }, options);
   }
   invalidInput();
@@ -1811,12 +1861,7 @@ export async function runCli(
       error instanceof ProcessingTaskError ||
       error instanceof ProcessorError ||
       error instanceof ProcessorQueryError;
-    const migration =
-      error instanceof CatalogSchemaError ||
-      error instanceof MigrationSafetyError ||
-      (error instanceof Error &&
-        "code" in error &&
-        error.code === "document-migration");
+    const catalog = error instanceof CatalogSchemaError;
     const code =
       interrupted || probeCancelled
         ? 130
@@ -1824,7 +1869,7 @@ export async function runCli(
           ? 2
           : configuration
             ? 4
-            : business || migration || document
+            : business || catalog || document
               ? 3
               : 70;
     const failure =
@@ -1854,14 +1899,17 @@ export async function runCli(
                       ? "invalid-command-input"
                       : configuration
                         ? "configuration-failed"
-                        : migration
-                          ? "migration-refused"
+                        : catalog
+                          ? "catalog-schema-refused"
                           : business
                             ? "business-failed"
                             : "internal-failed";
     effective.stderr?.(
       `${JSON.stringify({
         code: failure,
+        ...(error instanceof CliInputError && error.nextAction
+          ? { next_action: error.nextAction }
+          : {}),
         ...(args[0] === "web"
           ? {
               next_action:
@@ -1871,8 +1919,8 @@ export async function runCli(
                     : "Use web --port 4174. Optional --host accepts an IPv4 listening address. --origin is no longer needed or supported."
                   : configuration
                     ? "Check sciretriever config status and the configured catalog/artifact paths."
-                    : migration
-                      ? "Check the configured catalog parent directory and inspect any existing catalog with sciretriever storage schema-inspect; upgrades require an explicit backup."
+                    : catalog
+                      ? "Check the configured catalog parent directory and inspect any existing catalog with sciretriever storage schema-inspect; only the current catalog layout is supported."
                       : "Check the local port, build assets and configuration before restarting Web.",
             }
           : {}),
@@ -1880,7 +1928,7 @@ export async function runCli(
           ? { fields: error.fields }
           : {}),
         ...(error instanceof CatalogSchemaError
-          ? { reason: error.reason, progress: error.progress }
+          ? { reason: error.reason }
           : {}),
       })}\n`,
     );

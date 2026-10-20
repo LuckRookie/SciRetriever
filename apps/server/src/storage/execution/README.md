@@ -12,4 +12,4 @@
 
 任务步骤和重试决定由 application/jobs 或 entry 作出；这里提供持久化机制。
 
-[上级目录](../README.md) · [项目 README](../../../../../README.md)
+[上级目录](../README.md)

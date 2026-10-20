@@ -62,7 +62,8 @@ describe("six Literature selectors", () => {
         publication_year_to: null,
         venue: null,
         publisher: null,
-        document_types: [],
+        publication_forms: [],
+        article_kinds: [],
         languages: [],
         keywords: [],
         version_roles: [],
@@ -125,6 +126,8 @@ describe("six Literature selectors", () => {
       ).rejects.toMatchObject({ code: "literature-not-found" });
 
       const observation = parseMetadataObservation({
+        source_type: null,
+        source_type_mapping_version: null,
         observation_id: id(2_001),
         provenance: {
           provenance_id: id(2_002),
@@ -234,7 +237,8 @@ describe("six Literature selectors", () => {
         publication_year_to: null,
         venue: null,
         publisher: null,
-        document_types: [],
+        publication_forms: [],
+        article_kinds: [],
         languages: [],
         keywords: [],
         version_roles: [],
@@ -308,6 +312,8 @@ describe("six Literature selectors", () => {
 
       // Accepting a new MetadataObservation clears exactly the accepted Literature's fact.
       const observation = parseMetadataObservation({
+        source_type: null,
+        source_type_mapping_version: null,
         observation_id: id(2_001),
         provenance: {
           provenance_id: id(2_002),

@@ -19,9 +19,7 @@ it.each(["published", "publication-error", "cleanup-error"] as const)(
   "closes the Browser lease after %s while preserving valid file facts",
   async (mode) => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-browser-lease-"));
-    const app = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const app = await createApplication(home, {});
     const runtime = app.execution!;
     const closed: BrowserArticleCloseOutcome[] = [];
     let captured: DurableCandidate | undefined;

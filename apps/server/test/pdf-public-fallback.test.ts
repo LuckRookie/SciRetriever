@@ -45,9 +45,7 @@ async function run(options: {
   discoveryError?: Error;
 }) {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-public-fallback-"));
-  const app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  const app = await createApplication(home, {});
   const mocked = vi
     .spyOn(assembly, "assemblePublicPdfDownloadTransport")
     .mockReturnValue(options.publicTransport);

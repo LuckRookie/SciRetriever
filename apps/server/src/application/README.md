@@ -12,6 +12,4 @@
 
 生产对象图与应用生命周期组装在 bootstrap；用户操作编排在 entry；持久化执行记录在 storage/execution。
 
-相关说明：[所属技术文档](../../../../docs/architecture/technical/02-task-coordination.md)。
-
-[上级目录](../README.md) · [项目 README](../../../../README.md)
+[上级目录](../README.md)

@@ -1,4 +1,5 @@
 import {
+  RAW_PARSE_PROFILES,
   parseConfigurationReadiness,
   type ConfigurationReadiness,
 } from "@sciretriever/contracts";
@@ -94,6 +95,8 @@ export type ConfigurationSection =
   | "sources"
   | "providers"
   | "models"
+  | "proofread"
+  | "tags"
   | "analyze"
   | "browser"
   | "parsing";
@@ -116,6 +119,8 @@ const SECTIONS = new Set<ConfigurationSection>([
   "sources",
   "providers",
   "models",
+  "tags",
+  "proofread",
   "analyze",
   "browser",
   "parsing",
@@ -226,6 +231,8 @@ function renderConfiguration(configuration: OrdinaryConfiguration): string {
     "paths",
     "sources",
     "parsing",
+    "tags",
+    "proofread",
     "analyze",
     "browser",
     "execution",
@@ -465,6 +472,17 @@ function readiness(
     "parser-configuration-incomplete",
     parserConfigured ? "set-credential" : "configure",
   );
+  for (const profile of RAW_PARSE_PROFILES) {
+    add(
+      "parsing",
+      `mineru:${profile}`,
+      parserConfigured &&
+        (configuration.parsing.connection_mode !== "remote" ||
+          parserCredential),
+      "parser-configuration-incomplete",
+      parserConfigured ? "set-credential" : "configure",
+    );
+  }
   add(
     "analyze",
     "content",

@@ -15,14 +15,14 @@ export const STABLE_IDENTIFIER_NAMESPACES = Object.freeze(
   new Set(["doi", "arxiv", "pmid", "pmcid"]),
 );
 const FALLBACK_IDENTITY_HASH_TAG =
-  "sciretriever-literature-fallback-identity-v1";
+  "sciretriever-literature-fallback-identity-v2";
 
 export type StableIdentifierKey = readonly [namespace: string, value: string];
 export type FallbackIdentityKey = readonly [
   title: string,
   authors: readonly string[],
   publicationYear: number,
-  documentType: string,
+  publicationForm: string,
 ];
 export type LiteratureIdentityResolution =
   | {
@@ -135,7 +135,8 @@ export function providerKeyMatchesSeed(
       abstract: null,
       publication_date: null,
       publication_year: null,
-      document_type: null,
+      publication_form: null,
+      article_kind: null,
       language: null,
       venue: null,
       publisher: null,
@@ -179,7 +180,7 @@ export function fallbackIdentityKey(
     metadata.title === null ||
     metadata.authors.length === 0 ||
     metadata.publication_year === null ||
-    metadata.document_type === null
+    metadata.publication_form === null
   )
     return null;
   return Object.freeze([
@@ -190,7 +191,7 @@ export function fallbackIdentityKey(
       ),
     ),
     metadata.publication_year,
-    metadata.document_type,
+    metadata.publication_form,
   ]);
 }
 

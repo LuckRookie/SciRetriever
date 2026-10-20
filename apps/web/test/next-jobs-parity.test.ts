@@ -1,3 +1,4 @@
+import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
 import {
   workbenchTestAccess,
   loginWorkbenchPage,
@@ -27,9 +28,7 @@ async function taskAssets(): Promise<Map<string, WorkbenchStaticAsset>> {
 describe("durable task workbench", () => {
   it("recovers empty, failed, stale, cancelled and completed task states", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-jobs-ui-"));
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     await application.database.putLiterature(FIXTURE_LITERATURE);
     const session = new WorkbenchSession(
       FIXTURE_LITERATURE.literature_id,
@@ -117,6 +116,7 @@ describe("durable task workbench", () => {
           .getByLabel("主导航", { exact: true })
           .getByRole("button", { name: /文献库/ })
           .click();
+        await showAllLibraryStatuses(page);
         const selectAll = page.getByRole("checkbox", {
           name: "选择已加载的文献",
           exact: true,
@@ -432,7 +432,11 @@ describe("durable task workbench", () => {
             idempotency_key: key,
             operations: Array.from({ length: count }, () => ({
               operation: "parse-documents",
-              request: env.parseRequest,
+              request: {
+                ...env.rawParseRequest,
+                profiles: ["pipeline"],
+                force: true,
+              },
             })),
           }),
         );

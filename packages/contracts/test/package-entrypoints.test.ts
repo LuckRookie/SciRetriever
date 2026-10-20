@@ -277,6 +277,11 @@ it("installs packed workspace modules and exercises their public boundaries with
         assert.equal(existsSync(join(root, 'src')), false);
         assert.equal(existsSync(join(root, 'test')), false);
         assert.equal(existsSync(join(root, 'dist', 'tsconfig.tsbuildinfo')), false);
+        if (name === 'server') {
+          for (const module of ['service', 'publication']) {
+            for (const suffix of ['.js', '.d.ts']) assert.equal(existsSync(join(root, 'dist', 'parsing', module + suffix)), false);
+          }
+        }
       }
       assert.equal(manifests.server.dependencies['@sciretriever/contracts'], manifests.contracts.version);
       await assert.rejects(import('@sciretriever/server/dist/configuration/credentials.js'),

@@ -1,12 +1,17 @@
 import {
   parseAssetId,
+  parseProcessorValueChecks,
+  type ProcessorValueCheck,
   parseProcessorCitation,
   processorJson,
   type ProcessorJson,
   type ProcessorRecord,
 } from "@sciretriever/contracts";
 import { record, listField, stringField } from "../../data/wire.js";
-export type ResultRow = ProcessorRecord & { result_id: string };
+export type ResultRow = ProcessorRecord & {
+  result_id: string;
+  value_checks: readonly ProcessorValueCheck[];
+};
 export function display(value: ProcessorJson): string {
   if (value === null) return "无法判断 / 未报告";
   if (typeof value === "boolean") return value ? "是" : "否";
@@ -29,7 +34,7 @@ export function parseRow(value: unknown): ResultRow {
   const missing = record(row.missing, "missing fields");
   if (Object.values(missing).some((v) => typeof v !== "string"))
     throw new Error("缺失字段说明无效");
-  return {
+  const parsed = {
     result_id: String(parseAssetId(row.result_id)),
     record_id: stringField(row, "record_id"),
     payload: processorJson(row.payload, 8 * 1024 * 1024),
@@ -40,6 +45,14 @@ export function parseRow(value: unknown): ResultRow {
         pointer: stringField(source, "pointer"),
         sources: listField(source, "sources").map(parseProcessorCitation),
       };
+    }),
+  };
+  return {
+    ...parsed,
+    value_checks: parseProcessorValueChecks(row.value_checks, {
+      kind: "records",
+      schema: {},
+      records: [parsed],
     }),
   };
 }

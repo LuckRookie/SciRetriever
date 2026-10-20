@@ -5,7 +5,7 @@ import {
 import { expect, it } from "vitest";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { setup, proposal, lit, id } from "./content-fixture.js";
+import { setup, lit, id } from "./content-fixture.js";
 import { parseLiterature } from "@sciretriever/contracts";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 import { startWorkbenchHttp } from "../src/workbench/http.js";
@@ -212,11 +212,9 @@ it("requires cookies, per-client CSRF and same origin even for library reads", a
     await env.close();
   }
 });
-it("downloads only current verified PDF/Markdown as attachments and returns exact bytes", async () => {
+it("downloads verified original PDF bytes and refuses the retired summary download", async () => {
   const env = await fixture();
   try {
-    const p = await proposal(await env.app.library.detail(lit));
-    await env.app.literatureContent.accept(p.value, p.bytes);
     const d = await env.app.library.detail(lit);
     for (const [kind, expected, extension] of [
       [
@@ -224,7 +222,6 @@ it("downloads only current verified PDF/Markdown as attachments and returns exac
         await readFile(join(env.app.files.root, d.primary_pdf!.asset.path)),
         "pdf",
       ],
-      ["content-markdown", p.bytes, "md"],
     ] as const) {
       const r = await env.post("artifact", { literature_id: lit, kind });
       expect(r.status).toBe(200);
@@ -234,6 +231,14 @@ it("downloads only current verified PDF/Markdown as attachments and returns exac
       expect(r.headers.get("content-length")).toBeNull();
       expect(Buffer.from(await r.arrayBuffer())).toEqual(Buffer.from(expected));
     }
+    expect(
+      (
+        await env.post("artifact", {
+          literature_id: lit,
+          kind: "content-markdown",
+        })
+      ).status,
+    ).toBe(400);
   } finally {
     await env.close();
   }
@@ -260,7 +265,7 @@ it("refuses corrupted artifact bytes before sending a successful download", asyn
           kind: "content-markdown",
         })
       ).status,
-    ).toBe(404);
+    ).toBe(400);
   } finally {
     await env.close();
   }

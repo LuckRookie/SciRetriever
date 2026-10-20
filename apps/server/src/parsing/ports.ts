@@ -1,9 +1,11 @@
 import type {
   ArtifactRef,
+  Asset,
+  LiteratureCurrentFacts,
   AssetId,
   Sha256,
-  ParserProvenance,
-  ParserResult,
+  RawParse,
+  RawParseProfile,
 } from "@sciretriever/contracts";
 export interface ParserRequest {
   readonly source_asset_id: AssetId;
@@ -22,34 +24,35 @@ export interface StagedParserResource {
   readonly reference: string;
   readonly content: StagedParserArtifact;
 }
-export interface StagedParserOutput {
-  readonly source_asset_id: AssetId;
-  readonly source_sha256: Sha256;
-  readonly page_count: number;
+export interface ParserArtifacts {
   readonly markdown: StagedParserArtifact;
   readonly resources: readonly StagedParserResource[];
-  readonly provenance: ParserProvenance;
 }
-/** Stable compatibility boundary implemented by every parsing backend. */
-export interface ParserBackend {
-  parse(
+export interface StagedRawParseOutput {
+  readonly result: RawParse;
+  readonly blocks: StagedParserArtifact;
+  readonly markdown: StagedParserArtifact;
+  readonly resources: readonly StagedParserResource[];
+  readonly private_content_list: StagedParserArtifact;
+}
+export interface RawParserBackend {
+  identity(
+    profile: RawParseProfile,
+  ): Promise<
+    Pick<RawParse, "parser_version" | "model_identity" | "parameters_sha256">
+  >;
+  parseRaw(
     request: ParserRequest,
+    profile: RawParseProfile,
     signal?: AbortSignal,
-  ): Promise<StagedParserOutput>;
+  ): Promise<StagedRawParseOutput>;
 }
-/** @deprecated Use ParserBackend; retained for the existing public API. */
-export type ParserPort = ParserBackend;
 export interface ParserArtifactRules {
   validate(
-    output: Pick<StagedParserOutput, "markdown" | "resources">,
+    output: ParserArtifacts,
     signal?: AbortSignal,
+    blockReferences?: readonly string[],
   ): Promise<void>;
-}
-export interface ParserPublication {
-  readonly literature_id: string;
-  readonly result: ParserResult;
-  readonly markdown: StagedParserArtifact;
-  readonly resources: readonly StagedParserResource[];
 }
 export class ParsingFailure extends Error {
   constructor(
@@ -59,7 +62,24 @@ export class ParsingFailure extends Error {
       | "parser-cancelled"
       | "parser-stale"
       | "parser-publication",
+    readonly source_type?: string,
   ) {
     super("literature parsing failed");
   }
 }
+
+export interface ParsingSource {
+  currentFacts(literatureId: string): Promise<LiteratureCurrentFacts | null>;
+  withArtifact<T>(
+    asset: Asset,
+    consume: (chunks: AsyncIterable<Uint8Array>) => Promise<T>,
+    options: { maxBytes: number; signal: AbortSignal },
+  ): Promise<T>;
+  inspectPdf(
+    bytes: Uint8Array,
+    signal: AbortSignal,
+  ): Promise<{ readonly page_count: number }>;
+}
+
+/** Internal operation-local publication boundary; never part of parser requests. */
+export type ParsingCommit = <T>(publish: () => Promise<T>) => Promise<T>;

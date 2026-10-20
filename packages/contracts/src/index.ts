@@ -1,3 +1,14 @@
+export * from "./snapshots.js";
+export * from "./archive.js";
+import {
+  PUBLICATION_FORMS,
+  ARTICLE_KINDS,
+  parsePublicationForm,
+  parseArticleKind,
+  type PublicationForm,
+  type ArticleKind,
+} from "./metadata-types.js";
+export * from "./section-roles.js";
 /** Provider-neutral, closed runtime contracts shared by the TypeScript apps. */
 
 export const CONTRACTS_VERSION = "v1" as const;
@@ -109,7 +120,15 @@ export type VersionRole =
   | "accepted-manuscript"
   | "preprint"
   | "other";
-export type LiteratureStatus = "UNREVIEWED" | "ASSET_READY" | "CONTENT_READY";
+export const LITERATURE_STATUSES = [
+  "UNREVIEWED",
+  "ASSET_READY",
+  "ARCHIVING",
+  "ARCHIVE_FAILED",
+  "READY",
+  "EXCLUDED",
+] as const;
+export type LiteratureStatus = (typeof LITERATURE_STATUSES)[number];
 
 export interface Provenance {
   readonly provenance_id: ProvenanceId;
@@ -142,7 +161,8 @@ export interface LiteratureMetadata {
   readonly abstract: string | null;
   readonly publication_date: string | null;
   readonly publication_year: number | null;
-  readonly document_type: string | null;
+  readonly publication_form: PublicationForm | null;
+  readonly article_kind: ArticleKind | null;
   readonly language: string | null;
   readonly venue: string | null;
   readonly publisher: string | null;
@@ -175,10 +195,17 @@ export interface Asset {
   readonly media_type: string;
   readonly path: RelativeArtifactPath;
 }
-export type MissingStep =
-  | "primary-pdf"
-  | "parser-result"
-  | "literature-content";
+export const MISSING_STEPS = [
+  "primary-pdf",
+  "raw-parse",
+  "proofread",
+  "document",
+  "structure",
+  "metadata",
+  "references",
+  "tags",
+] as const;
+export type MissingStep = (typeof MISSING_STEPS)[number];
 export interface LibraryQuery {
   readonly text: string | null;
   readonly title: string | null;
@@ -189,7 +216,8 @@ export interface LibraryQuery {
   readonly publication_year_to: number | null;
   readonly venue: string | null;
   readonly publisher: string | null;
-  readonly document_types: readonly string[];
+  readonly publication_forms: readonly PublicationForm[];
+  readonly article_kinds: readonly ArticleKind[];
   readonly languages: readonly string[];
   readonly keywords: readonly string[];
   readonly version_roles: readonly VersionRole[];
@@ -197,6 +225,10 @@ export interface LibraryQuery {
   readonly missing_steps: readonly MissingStep[];
   readonly needs_manual_pdf: boolean | null;
   readonly discovery_run_ids: readonly DiscoveryRunId[];
+  readonly tags?: {
+    readonly ids: readonly string[];
+    readonly mode: "primary" | "any";
+  };
 }
 export interface StableFailure {
   readonly code: string;
@@ -218,6 +250,12 @@ export interface LibrarySearchRequest {
   readonly cursor: string | null;
 }
 export interface LiteratureSearchItem {
+  readonly tags?: readonly {
+    readonly tag_id: string;
+    readonly name: string;
+    readonly rank: number;
+  }[];
+
   readonly literature: Literature;
   readonly metadata_revision: number;
   readonly metadata_sha256: Sha256;
@@ -225,6 +263,7 @@ export interface LiteratureSearchItem {
   readonly needs_manual_pdf: boolean;
 }
 export interface LibrarySearchPage {
+  readonly tag_backfill_pending?: number;
   readonly items: readonly LiteratureSearchItem[];
   readonly total_count: number;
   readonly next_cursor: string | null;
@@ -236,16 +275,18 @@ export interface LiteratureReferenceRequest {
   readonly limit: number;
   readonly cursor: string | null;
 }
+export interface ArchiveReferenceTextSupport {
+  readonly kind: "archive_reference_text";
+  readonly document_version_id: string;
+  readonly segment_ids: readonly string[];
+  readonly reference_index: number;
+}
 export type ReferenceSupportSource =
+  | ArchiveReferenceTextSupport
   | { readonly kind: "provider_relation"; readonly observation_id: string }
   | {
       readonly kind: "metadata_reference_text";
       readonly metadata_observation_id: string;
-      readonly reference_index: number;
-    }
-  | {
-      readonly kind: "content_reference_text";
-      readonly literature_content_sha256: Sha256;
       readonly reference_index: number;
     };
 export interface ReferenceSupport {
@@ -332,15 +373,25 @@ export function parseReferenceDetail(value: unknown): ReferenceDetail {
           Number.MAX_SAFE_INTEGER,
         ),
       });
-    } else if (kind === "content_reference_text") {
+    } else if (kind === "archive_reference_text") {
       const p = exact(
         s.source,
-        ["kind", "literature_content_sha256", "reference_index"],
+        ["kind", "document_version_id", "segment_ids", "reference_index"],
         [],
       );
+      const segments = list(p.segment_ids, [], (item, path) =>
+        text(item, path, true),
+      );
+      if (
+        !segments.length ||
+        segments.length > 4096 ||
+        new Set(segments).size !== segments.length
+      )
+        fail();
       locator = Object.freeze({
         kind,
-        literature_content_sha256: hash(p.literature_content_sha256, []),
+        document_version_id: parseAssetId(p.document_version_id),
+        segment_ids: segments,
         reference_index: integer(
           p.reference_index,
           [],
@@ -390,7 +441,8 @@ export function parseLibrarySearchRequest(
     publication_year_to: null,
     venue: null,
     publisher: null,
-    document_types: [],
+    publication_forms: [],
+    article_kinds: [],
     languages: [],
     keywords: [],
     version_roles: [],
@@ -425,8 +477,9 @@ export function parseLiteratureSearchItem(
   value: unknown,
 ): LiteratureSearchItem {
   const r = exact(
-    value,
+    { tags: undefined, ...object(value, []) },
     [
+      "tags",
       "literature",
       "metadata_revision",
       "metadata_sha256",
@@ -436,6 +489,18 @@ export function parseLiteratureSearchItem(
     [],
   );
   return Object.freeze({
+    ...(r.tags === undefined
+      ? {}
+      : {
+          tags: list(r.tags, [], (v) => {
+            const t = exact(v, ["tag_id", "name", "rank"], []);
+            return {
+              tag_id: parseAssetId(t.tag_id),
+              name: text(t.name, []),
+              rank: integer(t.rank, [], 1, 1000),
+            };
+          }),
+        }),
     literature: parseLiterature(r.literature),
     metadata_revision: integer(
       r.metadata_revision,
@@ -447,11 +512,7 @@ export function parseLiteratureSearchItem(
     missing_step:
       r.missing_step === null
         ? null
-        : enumeration<MissingStep>(
-            r.missing_step,
-            ["primary-pdf", "parser-result", "literature-content"],
-            [],
-          ),
+        : enumeration<MissingStep>(r.missing_step, MISSING_STEPS, []),
     needs_manual_pdf: wireBoolean(r.needs_manual_pdf),
   });
 }
@@ -461,7 +522,7 @@ export type ReportEnd =
   | { readonly kind: "failed"; readonly failure: StableFailure };
 
 /** The frozen completion goal of one database-completion request. */
-export type BatchGoal = "ASSET_READY" | "CONTENT_READY";
+export type BatchGoal = "ASSET_READY" | "PARSER_RESULT_READY";
 
 /** The business stage that produced one completion target outcome. */
 export type CompletionStage =
@@ -542,7 +603,6 @@ export interface DatabaseCompletionReport {
   readonly skipped: readonly SkippedCompletionTarget[];
   readonly notStarted: readonly NotStartedCompletionTarget[];
   readonly interrupted: readonly InterruptedCompletionTarget[];
-  readonly no_usable_content_literature_ids: readonly LiteratureId[];
 }
 
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -841,7 +901,8 @@ export function parseLiteratureMetadata(value: unknown): LiteratureMetadata {
       "abstract",
       "publication_date",
       "publication_year",
-      "document_type",
+      "publication_form",
+      "article_kind",
       "language",
       "venue",
       "publisher",
@@ -863,7 +924,8 @@ export function parseLiteratureMetadata(value: unknown): LiteratureMetadata {
     publication_year: optionalInteger(record.publication_year, [
       "publication_year",
     ]),
-    document_type: nullableText(record.document_type, ["document_type"]),
+    publication_form: parsePublicationForm(record.publication_form),
+    article_kind: parseArticleKind(record.article_kind),
     language: nullableText(record.language, ["language"]),
     venue: nullableText(record.venue, ["venue"]),
     publisher: nullableText(record.publisher, ["publisher"]),
@@ -915,11 +977,7 @@ export function parseLiterature(value: unknown): Literature {
       ["version_role"],
     ),
     metadata: parseLiteratureMetadata(record.metadata),
-    status: enumeration(
-      record.status,
-      ["UNREVIEWED", "ASSET_READY", "CONTENT_READY"],
-      ["status"],
-    ),
+    status: enumeration(record.status, LITERATURE_STATUSES, ["status"]),
   });
 }
 export function parseReference(value: unknown): Reference {
@@ -970,7 +1028,7 @@ export function parseAsset(value: unknown): Asset {
 }
 export function parseLibraryQuery(value: unknown): LibraryQuery {
   const record = exact(
-    value,
+    { tags: undefined, ...object(value, []) },
     [
       "text",
       "title",
@@ -981,7 +1039,8 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
       "publication_year_to",
       "venue",
       "publisher",
-      "document_types",
+      "publication_forms",
+      "article_kinds",
       "languages",
       "keywords",
       "version_roles",
@@ -989,6 +1048,7 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
       "missing_steps",
       "needs_manual_pdf",
       "discovery_run_ids",
+      "tags",
     ],
     [],
   );
@@ -1019,10 +1079,13 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
     publication_year_to: to,
     venue: nullableText(record.venue, ["venue"]),
     publisher: nullableText(record.publisher, ["publisher"]),
-    document_types: list(
-      record.document_types,
-      ["document_types"],
-      (item, path) => text(item, path, true),
+    publication_forms: list(
+      record.publication_forms,
+      ["publication_forms"],
+      (item, path) => enumeration(item, PUBLICATION_FORMS, path),
+    ),
+    article_kinds: list(record.article_kinds, ["article_kinds"], (item, path) =>
+      enumeration(item, ARTICLE_KINDS, path),
     ),
     languages: list(record.languages, ["languages"], (item, path) =>
       text(item, path, true),
@@ -1043,18 +1106,12 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
     statuses: list<LiteratureStatus>(
       record.statuses,
       ["statuses"],
-      (item, path) =>
-        enumeration(item, ["UNREVIEWED", "ASSET_READY", "CONTENT_READY"], path),
+      (item, path) => enumeration(item, LITERATURE_STATUSES, path),
     ),
     missing_steps: list<MissingStep>(
       record.missing_steps,
       ["missing_steps"],
-      (item, path) =>
-        enumeration(
-          item,
-          ["primary-pdf", "parser-result", "literature-content"],
-          path,
-        ),
+      (item, path) => enumeration(item, MISSING_STEPS, path),
     ),
     needs_manual_pdf:
       record.needs_manual_pdf === null
@@ -1062,6 +1119,25 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
         : typeof record.needs_manual_pdf === "boolean"
           ? record.needs_manual_pdf
           : fail(["needs_manual_pdf"]),
+    ...(record.tags === undefined
+      ? {}
+      : {
+          tags: (() => {
+            const t = exact(record.tags, ["ids", "mode"], []);
+            const ids = list(t.ids, ["tags", "ids"], (v, p) =>
+              text(v, p, true),
+            );
+            if (ids.length > 64 || ids.some((x) => x.length > 256))
+              fail(["tags"]);
+            return Object.freeze({
+              ids,
+              mode: enumeration(t.mode, ["primary", "any"] as const, [
+                "tags",
+                "mode",
+              ]),
+            });
+          })(),
+        }),
     discovery_run_ids: list(
       record.discovery_run_ids,
       ["discovery_run_ids"],
@@ -1225,7 +1301,6 @@ export function parseDatabaseCompletionReport(
       "skipped",
       "notStarted",
       "interrupted",
-      "no_usable_content_literature_ids",
     ],
     [],
   );
@@ -1233,7 +1308,7 @@ export function parseDatabaseCompletionReport(
   const end = parseReportEnd(record.end);
   const goal = enumeration<BatchGoal>(
     record.goal,
-    ["ASSET_READY", "CONTENT_READY"],
+    ["ASSET_READY", "PARSER_RESULT_READY"],
     ["goal"],
   );
   const completed = list(
@@ -1276,13 +1351,6 @@ export function parseDatabaseCompletionReport(
     }
   }
   if (end.kind === "finished" && interrupted.length > 0) fail(["interrupted"]);
-  const noUsableContent = list(
-    record.no_usable_content_literature_ids,
-    ["no_usable_content_literature_ids"],
-    (item, path) => id<"LiteratureId">(item, path),
-  );
-  if (new Set(noUsableContent).size !== noUsableContent.length)
-    fail(["no_usable_content_literature_ids"]);
   return Object.freeze({
     kind: "database-completion",
     end,
@@ -1292,7 +1360,6 @@ export function parseDatabaseCompletionReport(
     skipped,
     notStarted,
     interrupted,
-    no_usable_content_literature_ids: noUsableContent,
   });
 }
 export function parseUtcTimestamp(
@@ -2629,6 +2696,7 @@ export interface ConfigurationReadinessItem {
   readonly owner:
     | "storage"
     | "parsing"
+    | "tags"
     | "analyze"
     | "browser"
     | "model-provider"
@@ -2695,6 +2763,7 @@ export function parseConfigurationReadiness(
       ![
         "storage",
         "parsing",
+        "tags",
         "analyze",
         "browser",
         "model-provider",
@@ -2771,16 +2840,8 @@ export * from "./extraction-delivery.js";
 export * from "./extraction-delivery-result.js";
 export * from "./extraction-preparation.js";
 export * from "./input-manifest.js";
-export * from "./knowledge.js";
-export * from "./synthesis-manifest.js";
+export * from "./summary.js";
 export * from "./knowledge-context.js";
-export * from "./synthesis.js";
-import {
-  parseParserResult,
-  parseLiteratureContent,
-  type ParserResult,
-  type LiteratureContent,
-} from "./content.js";
 
 export interface ProviderLiteratureKey {
   readonly record_id: string | null;
@@ -2802,6 +2863,8 @@ export type AssetRole =
   | "html"
   | "supplementary";
 export interface MetadataObservation {
+  readonly source_type: string | null;
+  readonly source_type_mapping_version: string | null;
   readonly observation_id: string;
   readonly provenance: Provenance;
   readonly metadata: LiteratureMetadata;
@@ -2833,8 +2896,6 @@ export interface LiteratureDetail extends LiteratureSearchItem {
   readonly metadata_observations: readonly MetadataObservation[];
   readonly primary_pdf: LiteratureAssetView | null;
   readonly additional_assets: readonly LiteratureAssetView[];
-  readonly parser_result: ParserResult | null;
-  readonly content: LiteratureContent | null;
   readonly other_versions: readonly LiteratureSearchItem[];
   readonly reference_count: number;
   readonly cited_by_count: number;
@@ -2916,6 +2977,8 @@ export function parseMetadataObservation(value: unknown): MetadataObservation {
     value,
     [
       "observation_id",
+      "source_type",
+      "source_type_mapping_version",
       "provenance",
       "metadata",
       "version_role",
@@ -2937,7 +3000,9 @@ export function parseMetadataObservation(value: unknown): MetadataObservation {
       fail();
   } else if (
     provenance.source_kind !== "user" ||
-    provenance.source_name !== "bibliographic-import" ||
+    !["bibliographic-import", "manual-metadata"].includes(
+      provenance.source_name,
+    ) ||
     provenance.source_record_id !== null ||
     provenance.input_sha256 !== null ||
     provenance.parameters_sha256 !== null
@@ -2959,6 +3024,10 @@ export function parseMetadataObservation(value: unknown): MetadataObservation {
   );
   return Object.freeze({
     observation_id: text(r.observation_id, [], true),
+    source_type: nullableText(r.source_type, ["source_type"]),
+    source_type_mapping_version: nullableText(r.source_type_mapping_version, [
+      "source_type_mapping_version",
+    ]),
     provenance,
     metadata: parseLiteratureMetadata(r.metadata),
     version_role:
@@ -3064,8 +3133,9 @@ export async function parseLiteratureDetail(
   value: unknown,
 ): Promise<LiteratureDetail> {
   const r = exact(
-    value,
+    { tags: undefined, ...object(value, []) },
     [
+      "tags",
       "literature",
       "metadata_revision",
       "metadata_sha256",
@@ -3075,8 +3145,6 @@ export async function parseLiteratureDetail(
       "metadata_observations",
       "primary_pdf",
       "additional_assets",
-      "parser_result",
-      "content",
       "other_versions",
       "reference_count",
       "cited_by_count",
@@ -3084,6 +3152,7 @@ export async function parseLiteratureDetail(
     [],
   );
   const item = parseLiteratureSearchItem({
+    ...(r.tags === undefined ? {} : { tags: r.tags }),
     literature: r.literature,
     metadata_revision: r.metadata_revision,
     metadata_sha256: r.metadata_sha256,
@@ -3101,12 +3170,6 @@ export async function parseLiteratureDetail(
     additional_assets: Object.freeze(
       array(r.additional_assets, []).map(parseLiteratureAssetView),
     ),
-    parser_result:
-      r.parser_result === null
-        ? null
-        : await parseParserResult(r.parser_result),
-    content:
-      r.content === null ? null : await parseLiteratureContent(r.content),
     other_versions: Object.freeze(
       array(r.other_versions, []).map(parseLiteratureSearchItem),
     ),
@@ -3115,11 +3178,18 @@ export async function parseLiteratureDetail(
   });
 }
 
-export {
-  parseLiteratureContentProposal,
-  analysisInputSha256,
-  type LiteratureContentProposal,
-} from "./content.js";
-
 export * from "./processors.js";
 export * from "./processor-transfer.js";
+export * from "./raw-parsing.js";
+export * from "./metadata-types.js";
+export * from "./proofread.js";
+
+export * from "./document-structure-v2.js";
+
+export * from "./structure-annotation.js";
+
+export * from "./metadata-fields.js";
+
+export * from "./tags.js";
+
+export * from "./processor-value-checks.js";

@@ -28,9 +28,7 @@ const offlineLiterature = parseLiterature({
 describe("persistent service journey", () => {
   it("keeps durable jobs and interventions across restart and explicit v2 setup", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-persistent-"));
-    let app = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    let app = await createApplication(home, {});
     try {
       await app.database.putLiterature(offlineLiterature);
       const job = await app.jobService!.create({
@@ -68,7 +66,7 @@ describe("persistent service journey", () => {
       await app.close();
     }
 
-    app = await createApplication(home, { executionSchema: "require-v2" });
+    app = await createApplication(home);
     try {
       const jobs = await app.jobs!.listJobs();
       expect(jobs).toHaveLength(1);

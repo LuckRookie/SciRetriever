@@ -140,7 +140,7 @@ Full 执行：
 - Quick：Prettier、ESLint、源码 project references 构建类型检查，以及 `tsconfig.tests.json` 的测试 strict 类型检查。
 - Test：Vitest 行为测试；零测试失败。`vitest.config.mjs` 在默认排除项之上排除 `sandbox/**`，根目录直接运行 Vitest 也不收集本机真实测试；Quick 的格式化和 lint 同样忽略该目录。包入口测试会构建两个现有 workspace，将实际 tarball 在系统临时目录离线安装，
   使用 Node 验证公开导入、配置拒绝和包内容，结束后清理自己的目录。
-- Full：Quick、Test 和所有已注册 project 的 build。构建元数据进入 ignored `dist/`，不进入源码或安装包。
+- Full：Quick、Test 和所有已注册 project 的 build。构建元数据进入 ignored `dist/`，不进入源码或安装包。正式 build 在 TypeScript 编译后精确清理已退役的 ParserResult 执行器/发布器输出，防止增量构建遗留字节被打包；清理拒绝符号链接目录和文件，不扫描或删除其它产物。
 
 本地与 CI 采用同一套 TS 命令。CI 普通非 master 分支 push 运行 Quick；PR、master push 和手动运行执行 Full，
 使用 Node 22.19.0、锁定 pnpm 及 Playwright 的测试 Chromium。安装依赖/二进制可以联网，行为测试仍只访问 fake/loopback。
@@ -179,6 +179,7 @@ TS Full 使用 TypeScript Configuration/Credential owner 和合成临时 home，
 ## 8. 文档治理
 
 - 按项目 owner 的目录治理要求，项目维护的目录提供 `README.md`，解释职责、内容入口、上下级导航与相邻模块分工。新建、移动目录或改变职责时同步更新；篇幅随目录复杂度变化，不复制整份架构正文。生成物、第三方依赖、原始数据和历史快照内部由上级说明身份，不改动其原始结构。本规则通过文档审查维护，不新增 CI 门禁。
+- `src/` 内的 README 只维护自包含的代码职责说明和源码树内部链接，不依赖外部计划、架构文件、归档或网页；此处不要求跨出源码树提供上级导航。
 - 同一事实只指定一个真相源，其它文档通过链接解释，不维护相互漂移的独立定义。
 - requirements 说明用户问题和验收，architecture 说明已接受设计，README 和用户指南说明当前行为，源码与测试提供实现证据。
 - 公开 API、CLI、配置、schema、序列化格式、持久化语义、默认值、模块职责、入口或验证命令变化时，按 `docs/development/documentation-map.md` 检查文档影响。

@@ -1,8 +1,10 @@
+import { ProcessorArchiveSource } from "../src/analysis/processor-archive.js";
+import { SqliteAnnotationStorage } from "../src/storage/structure-annotations.js";
 import { describe, it, expect, vi } from "vitest";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { writeFile } from "node:fs/promises";
-import { coreProcessingFixture } from "./core-processing-fixture.js";
+import { processorFixture as coreProcessingFixture } from "./processor-fixture.js";
 import { ProcessorService } from "../src/analysis/processor.js";
 import { createProcessorRegistry } from "../src/analysis/processor-registry.js";
 import { labelsProcessor } from "../src/analysis/processor-labels.js";
@@ -14,9 +16,7 @@ describe("processor publication and recovery", () => {
     let store: SqliteProcessorStorage | undefined;
     try {
       env.setText("The sample was measured.");
-      const document = await env.app.documentProcessing.parseDocuments(
-        env.parseRequest,
-      );
+      await env.build(env.parseRequest);
       env.setModel((input) => ({
         records: Array.from({ length: 12 }, () => ({
           values: { note: "The sample was measured." },
@@ -28,15 +28,15 @@ describe("processor publication and recovery", () => {
         schema_version: 1,
         idempotency_key: "shared-verification",
         name: "shared evidence",
-        processor: { id: "records", version: "1" },
+        processor: { id: "records", version: "2" },
         spec: {
           record_meaning: "synthetic observations sharing a source",
           fields: [{ name: "note", description: "observation" }],
         },
         inputs: [
           {
-            kind: "document",
-            document_version_id: document.document.document_version_id,
+            kind: "literature",
+            literature_id: env.parseRequest.literature_id,
           },
         ],
       });
@@ -56,7 +56,6 @@ describe("processor publication and recovery", () => {
         env.app.database,
         env.app.files,
         env.app.documentRead,
-        env.app.synthesisRead!,
       );
       const resolve = vi.spyOn(env.app.documentRead, "resolveEvidence");
       expect(await store.verifyCitations(citations)).toHaveLength(12);
@@ -90,9 +89,7 @@ describe("processor publication and recovery", () => {
   it("keeps committed content after indexing failure, repairs on retry, and refuses corrupted reuse", async () => {
     const env = await coreProcessingFixture();
     try {
-      const doc = await env.app.documentProcessing.parseDocuments(
-        env.parseRequest,
-      );
+      await env.build(env.parseRequest);
       env.setModel((input) => ({
         answer: true,
         source_ids: [input.segments![0]!.segment_id],
@@ -102,12 +99,12 @@ describe("processor publication and recovery", () => {
         schema_version: 1,
         idempotency_key: "index-failure",
         name: "index repair",
-        processor: { id: "labels", version: "1" },
+        processor: { id: "labels", version: "2" },
         spec: { question: "finding", answer_type: "boolean" },
         inputs: [
           {
-            kind: "document",
-            document_version_id: doc.document.document_version_id,
+            kind: "literature",
+            literature_id: env.parseRequest.literature_id,
           },
         ],
       };
@@ -182,9 +179,7 @@ describe("processor publication and recovery", () => {
     let service: ProcessorService | undefined;
     let store: SqliteProcessorStorage | undefined;
     try {
-      const doc = await env.app.documentProcessing.parseDocuments(
-        env.parseRequest,
-      );
+      await env.build(env.parseRequest);
       env.setModel((input) => ({
         answer: true,
         source_ids: [input.segments![0]!.segment_id],
@@ -194,28 +189,32 @@ describe("processor publication and recovery", () => {
         env.app.database,
         env.app.files,
         env.app.documentRead,
-        env.app.synthesisRead!,
       );
-      const registry = createProcessorRegistry(env.app.knowledgeAnalysis);
-      registry.register({ ...labelsProcessor, version: "2" });
+      const registry = createProcessorRegistry();
+      registry.register({ ...labelsProcessor, version: "3" });
       service = new ProcessorService(
         registry,
         env.app.documentRead,
         env.app.agents,
         env.app.library,
         store,
-        env.app.synthesisRead!,
+        new ProcessorArchiveSource(
+          env.app.archive,
+          env.app.snapshots,
+          new SqliteAnnotationStorage(env.app.database, env.app.files),
+          env.app.documentRead,
+        ),
       );
       const request = {
         schema_version: 1,
         idempotency_key: "concurrent",
         name: "concurrent",
-        processor: { id: "labels", version: "1" },
+        processor: { id: "labels", version: "2" },
         spec: { question: "finding", answer_type: "boolean" },
         inputs: [
           {
-            kind: "document",
-            document_version_id: doc.document.document_version_id,
+            kind: "literature",
+            literature_id: env.parseRequest.literature_id,
           },
         ],
       };
@@ -228,7 +227,7 @@ describe("processor publication and recovery", () => {
       expect(results.filter((r) => r.reused)).toHaveLength(1);
       const changed = await service.prepare({
         ...request,
-        processor: { id: "labels", version: "2" },
+        processor: { id: "labels", version: "3" },
       });
       const newer = await service.execute(changed.invocations[0]);
       expect(newer.result_id).not.toBe(results[0]!.result_id);

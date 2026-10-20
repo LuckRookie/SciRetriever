@@ -336,14 +336,14 @@ describe("workbench configuration HTTP boundary", () => {
       await session.refresh();
       application = await createApplication(home, {
         configurationOwner: owner,
-        executionSchema: "upgrade-synthetic",
+
         mineruTransportFactory: () => ({
           request: async () => {
             throw new Error("parser request must stay offline");
           },
         }),
       });
-      expect(application.parsing).toBeNull();
+      expect(application.rawParsing).toBeNull();
       const runtimeCapabilities = describeWorkbenchRuntime(application);
       expect(runtimeCapabilities.parsing).toEqual({
         assembled: false,
@@ -454,7 +454,7 @@ describe("workbench configuration HTTP boundary", () => {
       expect(JSON.parse(probeResponse.text)).toMatchObject({
         result: { outcome: "passed", reason: null },
       });
-      expect(application.parsing).toBeNull();
+      expect(application.rawParsing).toBeNull();
       await server.close();
       server = undefined;
       await application.close();
@@ -462,14 +462,14 @@ describe("workbench configuration HTTP boundary", () => {
 
       restarted = await createApplication(home, {
         configurationOwner: owner,
-        executionSchema: "upgrade-synthetic",
+
         mineruTransportFactory: () => ({
           request: async () => {
             throw new Error("parser request must stay offline");
           },
         }),
       });
-      expect(restarted.parsing).not.toBeNull();
+      expect(restarted.rawParsing).not.toBeNull();
       expect(describeWorkbenchRuntime(restarted).parsing).toEqual({
         assembled: true,
         unavailable_reason: null,
@@ -501,7 +501,6 @@ describe("workbench configuration HTTP boundary", () => {
       await session.refresh();
       application = await createApplication(home, {
         configurationOwner: owner,
-        executionSchema: "upgrade-synthetic",
       });
       const runtimeCapabilities = describeWorkbenchRuntime(application);
       expect(runtimeCapabilities.acquisition).toContainEqual({

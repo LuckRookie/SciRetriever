@@ -1,44 +1,41 @@
-import { createHash } from "node:crypto";
 import {
+  canonicalJsonBytes,
   parseLibraryQuery,
   parseLibrarySearchRequest,
   parseLiteratureDetail,
   parseLiteratureId,
-  parseLiteratureContent,
-  parseStrictJsonObject,
-  parseArtifactRef,
-  contentCanonicalJsonBytes,
-  canonicalJsonBytes,
-  sha256,
-  type LiteratureDetail,
   parseLiteratureReferenceRequest,
   parseReferenceId,
-  type ReferenceDetail,
-  type LiteratureReferenceRequest,
-  type LiteratureReferencePage,
+  sha256,
   type LibraryQuery,
   type LibrarySearchPage,
   type LibrarySort,
-  type LiteratureSearchItem,
+  type LiteratureDetail,
   type LiteratureId,
+  type LiteratureReferencePage,
+  type LiteratureReferenceRequest,
+  type LiteratureSearchItem,
   type MetaLiteratureId,
+  type ReferenceDetail,
 } from "@sciretriever/contracts";
-import { normalizeQueryText, ftsIndexText } from "./unicode-casefold.js";
+import { createHash } from "node:crypto";
+import { ftsIndexText, normalizeQueryText } from "./unicode-casefold.js";
 
 export interface SearchSnapshotRow {
   readonly item: LiteratureSearchItem;
   readonly relevance: number | null;
   readonly discovery_run_ids: readonly string[];
   readonly has_pdf_exhaustion: boolean;
+  readonly tag_match?: boolean;
 }
 export interface LibraryQueryRepository {
   librarySearchPage(request: LibraryPageQuery): Promise<{
     readonly rows: readonly SearchSnapshotRow[];
     readonly total_count: number;
+    readonly tag_backfill_pending?: number;
   }>;
   literatureDetailSnapshot(literatureId: string): Promise<{
     readonly detail: unknown;
-    readonly content: CurrentContentBinding | null;
   } | null>;
   librarySnapshot(
     ftsQuery: string | null,
@@ -46,6 +43,7 @@ export interface LibraryQueryRepository {
     includeOtherVersions?: boolean,
     literatureIds?: readonly string[],
     metaLiteratureIds?: readonly string[],
+    tags?: LibraryQuery["tags"],
   ): Promise<readonly SearchSnapshotRow[]>;
   referenceQuerySnapshot(
     selection:
@@ -55,24 +53,6 @@ export interface LibraryQueryRepository {
         }
       | { readonly reference_id: string },
   ): Promise<readonly ReferenceDetail[] | null>;
-}
-export interface CurrentContentBinding {
-  readonly literature_id: string;
-  readonly literature_content_sha256: string;
-  readonly metadata_revision: number;
-  readonly metadata_sha256: string;
-  readonly primary_asset_id: string;
-  readonly primary_asset_sha256: string;
-  readonly parser_result_sha256: string;
-  readonly structured_artifact_path: string;
-  readonly structured_artifact_sha256: string;
-  readonly structured_artifact_byte_size: number;
-  readonly structured_artifact_media_type: string;
-  readonly markdown_artifact_sha256: string;
-  readonly markdown_artifact_byte_size: number;
-  readonly markdown_artifact_media_type: string;
-  readonly provenance: unknown;
-  readonly reference_texts: readonly string[];
 }
 export interface LiteratureArtifactReader {
   read(reference: string, maxBytes: number): Promise<Uint8Array>;
@@ -159,7 +139,11 @@ export function queryFingerprint(query: LibraryQuery): string {
     author: contains(query.author),
     author_orcids: unique(query.author_orcids),
     discovery_run_ids: unique(query.discovery_run_ids),
-    document_types: unique(query.document_types),
+    ...(query.tags?.ids.length
+      ? { tags: { ids: unique(query.tags.ids), mode: query.tags.mode } }
+      : {}),
+    publication_forms: unique(query.publication_forms),
+    article_kinds: unique(query.article_kinds),
     identifiers,
     keywords: unique(query.keywords),
     languages: unique(query.languages),
@@ -382,7 +366,8 @@ function matches(row: SearchSnapshotRow, q: LibraryQuery): boolean {
     (q.publication_year_to === null ||
       (m.publication_year !== null &&
         m.publication_year <= q.publication_year_to)) &&
-    any(q.document_types, [m.document_type]) &&
+    any(q.publication_forms, [m.publication_form]) &&
+    any(q.article_kinds, [m.article_kind]) &&
     any(q.languages, [m.language]) &&
     q.keywords.every((value) => m.keywords.includes(value)) &&
     any(q.version_roles, [l.version_role]) &&
@@ -392,17 +377,16 @@ function matches(row: SearchSnapshotRow, q: LibraryQuery): boolean {
       (q.needs_manual_pdf
         ? row.item.needs_manual_pdf
         : !row.has_pdf_exhaustion)) &&
-    any(q.discovery_run_ids, row.discovery_run_ids)
+    any(q.discovery_run_ids, row.discovery_run_ids) &&
+    (!q.tags?.ids.length || row.tag_match !== false)
   );
 }
 export type LiteratureDetailSnapshot = {
   readonly detail: unknown;
-  readonly content: CurrentContentBinding | null;
 };
 export async function verifyLiteratureDetailSnapshot(
   id: string,
   snapshot: LiteratureDetailSnapshot | null,
-  artifacts?: LiteratureArtifactReader,
 ): Promise<LiteratureDetail> {
   if (snapshot === null) throw new LiteratureNotFoundError();
   const detail = await parseLiteratureDetail(snapshot.detail);
@@ -440,75 +424,7 @@ export async function verifyLiteratureDetailSnapshot(
     )
   )
     fail();
-  if (
-    detail.parser_result &&
-    (detail.parser_result.source_asset_id !==
-      detail.primary_pdf?.asset.asset_id ||
-      detail.parser_result.source_sha256 !== detail.primary_pdf.asset.sha256)
-  )
-    fail();
-  let content = null;
-  const binding = snapshot.content;
-  if (binding) {
-    const artifact = parseArtifactRef({
-      sha256: binding.structured_artifact_sha256,
-      byte_size: binding.structured_artifact_byte_size,
-      media_type: binding.structured_artifact_media_type,
-    });
-    // Detail materializes structured text only; large PDF/Markdown bytes use independent reads.
-    if (
-      !artifacts ||
-      artifact.media_type !== "application/json" ||
-      artifact.byte_size > 16 * 1024 * 1024 ||
-      artifact.byte_size === 0
-    )
-      fail();
-    const bytes = await artifacts.read(
-      binding.structured_artifact_path,
-      artifact.byte_size,
-    );
-    if (
-      bytes.byteLength !== artifact.byte_size ||
-      (await sha256(bytes)) !== artifact.sha256
-    )
-      fail();
-    content = await parseLiteratureContent(parseStrictJsonObject(bytes));
-    const same = (a: unknown, b: unknown) =>
-      Buffer.from(contentCanonicalJsonBytes(a)).equals(
-        Buffer.from(contentCanonicalJsonBytes(b)),
-      );
-    const input = await sha256(
-      contentCanonicalJsonBytes({
-        schema: "sciretriever-literature-content-input-v1",
-        metadata_sha256: detail.metadata_sha256,
-        parser_result_sha256: binding.parser_result_sha256,
-        primary_pdf_sha256: detail.primary_pdf?.asset.sha256,
-      }),
-    );
-    if (
-      !Buffer.from(contentCanonicalJsonBytes(content)).equals(
-        Buffer.from(bytes),
-      ) ||
-      binding.literature_id !== id ||
-      content.literature_content_sha256 !== binding.literature_content_sha256 ||
-      content.metadata_revision !== detail.metadata_revision ||
-      binding.metadata_revision !== detail.metadata_revision ||
-      content.metadata_sha256 !== detail.metadata_sha256 ||
-      binding.metadata_sha256 !== detail.metadata_sha256 ||
-      binding.primary_asset_id !== detail.primary_pdf?.asset.asset_id ||
-      binding.primary_asset_sha256 !== detail.primary_pdf.asset.sha256 ||
-      content.provenance.input_sha256 !== input ||
-      !same(content.provenance, binding.provenance) ||
-      !same(content.references, binding.reference_texts) ||
-      !same(content.markdown, {
-        sha256: binding.markdown_artifact_sha256,
-        byte_size: binding.markdown_artifact_byte_size,
-        media_type: binding.markdown_artifact_media_type,
-      }) ||
-      detail.literature.status !== "CONTENT_READY"
-    )
-      fail();
-  } else if (detail.literature.status === "CONTENT_READY") fail();
+
   const metadata_observations = [...detail.metadata_observations].sort(
     (a, b) =>
       Date.parse(b.provenance.observed_at) -
@@ -518,23 +434,20 @@ export async function verifyLiteratureDetailSnapshot(
   return Object.freeze({
     ...detail,
     metadata_observations: Object.freeze(metadata_observations),
-    content,
   });
 }
 export class LiteratureQueryService {
-  constructor(
-    private readonly repository: LibraryQueryRepository,
-    private readonly artifacts?: LiteratureArtifactReader,
-  ) {}
+  constructor(private readonly repository: LibraryQueryRepository) {}
   async detail(value: unknown): Promise<LiteratureDetail> {
     const id = parseLiteratureId(value);
     const snapshot = await this.repository.literatureDetailSnapshot(id);
-    return verifyLiteratureDetailSnapshot(id, snapshot, this.artifacts);
+    return verifyLiteratureDetailSnapshot(id, snapshot);
   }
   async referenceDetail(value: unknown): Promise<ReferenceDetail> {
     const reference_id = parseReferenceId(value);
     const rows = await this.repository.referenceQuerySnapshot({ reference_id });
     if (!rows?.length) throw new LiteratureNotFoundError();
+
     if (rows.length !== 1 || rows[0]!.reference.reference_id !== reference_id)
       fail();
     return rows[0]!;
@@ -642,6 +555,9 @@ export class LiteratureQueryService {
     return Object.freeze({
       items: Object.freeze(page.map((row) => row.item)),
       total_count: result.total_count,
+      ...(result.tag_backfill_pending === undefined
+        ? {}
+        : { tag_backfill_pending: result.tag_backfill_pending }),
       next_cursor:
         result.rows.length > request.limit && page.length
           ? encodePosition(
@@ -668,6 +584,9 @@ export class LiteratureQueryService {
       terms === null ? null : terms.map((term) => `"${term}"`).join(" AND "),
       query.discovery_run_ids,
       true,
+      [],
+      [],
+      query.tags,
     );
     // A sibling included for completeness may not match FTS or the other query
     // fields. It must not become a new seed for the selected scope.

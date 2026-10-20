@@ -69,6 +69,7 @@ async function prepareReaderAssets(outdir) {
     dependency("pdfjs-dist/legacy/build/pdf.worker.mjs"),
     resolve(outdir, "reader/pdf.worker.mjs"),
   );
+  await copyFile(dependency("pdfjs-dist/legacy/build/pdf.mjs"), resolve(outdir, "reader/pdf.mjs"));
   for (const dir of ["cmaps", "standard_fonts", "wasm"])
     await cp(dependency(`pdfjs-dist/${dir}`), resolve(outdir, "reader", dir), {
       recursive: true,

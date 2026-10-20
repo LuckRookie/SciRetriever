@@ -66,9 +66,11 @@ export class DshAgentRuntime {
     const binding = this.bindings.get(role);
     if (!binding) return { configured: false, missing: [] };
     const required: readonly AgentCapability[] =
-      role === "analysis"
-        ? ["structured_text"]
-        : ["image_input", "tool_decision"];
+      role === "browser"
+        ? ["image_input", "tool_decision"]
+        : role === "proofreading" || role === "value-checking"
+          ? ["structured_text", "image_input", "tool_decision"]
+          : ["structured_text"];
     return {
       configured: true,
       missing: required.filter(

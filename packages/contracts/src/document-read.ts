@@ -1,3 +1,15 @@
+import { parseSectionRole, type SectionRole } from "./section-roles.js";
+import type { SectionRoleSource } from "./structure-annotation.js";
+import { parsePageRegion } from "./raw-parsing.js";
+import {
+  PROOFREAD_SEGMENT_KINDS,
+  type ProofreadSegmentKind,
+} from "./document-structure-v2.js";
+import type {
+  ProofreadSource,
+  ProofreadBasis,
+  ProofreadUncertainty,
+} from "./proofread.js";
 import {
   ContractValidationError,
   parseAssetId,
@@ -114,11 +126,14 @@ export interface DocumentReadRequestMap {
   };
   describe: { readonly document_version_id: string };
   outline: {
+    readonly annotation_id?: string | null;
     readonly document_version_id: string;
     readonly limit: number;
     readonly cursor: string | null;
   };
   segments: {
+    readonly annotation_id?: string | null;
+    readonly roles?: readonly SectionRole[];
     readonly document_version_id: string;
     readonly section_id: string | null;
     readonly limit: number;
@@ -171,26 +186,64 @@ export function parseDocumentReadRequest<K extends DocumentReadOperation>(
     }
     case "outline":
     case "resources": {
-      const r = object(value, ["document_version_id", "limit", "cursor"]);
+      const annotated =
+        kind === "outline" &&
+        Boolean(value && typeof value === "object" && "annotation_id" in value);
+      const r = object(value, [
+        "document_version_id",
+        "limit",
+        "cursor",
+        ...(annotated ? ["annotation_id"] : []),
+      ]);
       result = {
         document_version_id: uuid(r.document_version_id),
         limit: count(r.limit, DOCUMENT_READ_MAX_ITEMS),
         cursor: cursor(r.cursor),
+        ...(annotated
+          ? {
+              annotation_id:
+                r.annotation_id === null ? null : hash(r.annotation_id),
+            }
+          : {}),
       };
       break;
     }
     case "segments": {
+      const annotated = Boolean(
+          value && typeof value === "object" && "annotation_id" in value,
+        ),
+        filtered = Boolean(
+          value && typeof value === "object" && "roles" in value,
+        );
       const r = object(value, [
         "document_version_id",
         "section_id",
         "limit",
         "cursor",
+        ...(annotated ? ["annotation_id"] : []),
+        ...(filtered ? ["roles"] : []),
       ]);
+      if (
+        filtered &&
+        (!Array.isArray(r.roles) ||
+          r.roles.length > 20 ||
+          new Set(r.roles).size !== r.roles.length)
+      )
+        fail();
       result = {
         document_version_id: uuid(r.document_version_id),
         section_id: r.section_id === null ? null : token(r.section_id),
         limit: count(r.limit, DOCUMENT_READ_MAX_ITEMS),
         cursor: cursor(r.cursor),
+        ...(annotated
+          ? {
+              annotation_id:
+                r.annotation_id === null ? null : hash(r.annotation_id),
+            }
+          : {}),
+        ...(filtered
+          ? { roles: (r.roles as unknown[]).map((v) => parseSectionRole(v)) }
+          : {}),
       };
       break;
     }
@@ -350,7 +403,87 @@ function range<A extends string, B extends string>(
   if (b <= a) fail();
   return { [start]: a, [end]: b } as Record<A | B, number>;
 }
+export interface DocumentSegmentLocation {
+  readonly block_id: string;
+  /** One-based public page. */ readonly page: number;
+  readonly region: import("./raw-parsing.js").PageRegion | null;
+  readonly continuation_regions: readonly {
+    readonly page: number;
+    readonly region: import("./raw-parsing.js").PageRegion;
+  }[];
+  readonly source: ProofreadSource;
+  readonly basis: ProofreadBasis;
+  readonly uncertainty: ProofreadUncertainty | null;
+  readonly locate: "region" | "page";
+}
+export function parseDocumentSegmentLocation(
+  value: unknown,
+): DocumentSegmentLocation {
+  const r = object(value, [
+    "block_id",
+    "page",
+    "region",
+    "continuation_regions",
+    "source",
+    "basis",
+    "uncertainty",
+    "locate",
+  ]);
+  const page = count(r.page, 10000),
+    region = r.region === null ? null : parsePageRegion(r.region);
+  if (
+    !["parser", "rule", "agent", "manual"].includes(String(r.source)) ||
+    !["region", "page"].includes(String(r.locate)) ||
+    (r.locate === "region") !== (region !== null) ||
+    !Array.isArray(r.continuation_regions) ||
+    r.continuation_regions.length > 10000
+  )
+    fail();
+  if (
+    !["text-layer", "image-only", "uncertain", "manual"].includes(
+      String(r.basis),
+    )
+  )
+    fail();
+  let uncertainty: ProofreadUncertainty | null = null;
+  if (r.uncertainty !== null) {
+    const u = object(r.uncertainty, ["span", "reason", "page"]);
+    if (
+      !Array.isArray(u.span) ||
+      u.span.length !== 2 ||
+      typeof u.reason !== "string" ||
+      !u.reason.trim() ||
+      u.reason.length > 65536
+    )
+      fail();
+    const start = nonnegative(u.span[0]),
+      end = nonnegative(u.span[1]);
+    if (end < start) fail();
+    uncertainty = {
+      span: [start, end],
+      reason: u.reason,
+      page: count(u.page, 10000),
+    };
+  }
+  if ((r.basis === "uncertain") !== (uncertainty !== null)) fail();
+  return {
+    block_id: token(r.block_id),
+    page,
+    region,
+    source: r.source as ProofreadSource,
+    basis: r.basis as ProofreadBasis,
+    uncertainty,
+    locate: r.locate as "region" | "page",
+    continuation_regions: r.continuation_regions.map((v) => {
+      const p = object(v, ["page", "region"]);
+      return { page: count(p.page, 10000), region: parsePageRegion(p.region) };
+    }),
+  };
+}
 function section(value: unknown) {
+  const annotated = Boolean(
+    value && typeof value === "object" && "role" in value,
+  );
   const r = object(value, [
     "section_id",
     "title",
@@ -358,6 +491,7 @@ function section(value: unknown) {
     "level",
     "start_utf8",
     "end_utf8",
+    ...(annotated ? ["role", "role_source"] : []),
   ]);
   if (
     typeof r.title !== "string" ||
@@ -368,7 +502,22 @@ function section(value: unknown) {
     (r.level as number) > 6
   )
     fail();
+  if (
+    annotated &&
+    (r.role === null
+      ? r.role_source !== null
+      : !["rule", "model", "fallback", "manual"].includes(
+          String(r.role_source),
+        ))
+  )
+    fail();
   return Object.freeze({
+    ...(annotated
+      ? {
+          role: r.role === null ? null : parseSectionRole(r.role),
+          role_source: r.role_source as SectionRoleSource | null,
+        }
+      : {}),
     section_id: token(r.section_id),
     title: r.title,
     title_truncated: r.title_truncated,
@@ -381,17 +530,44 @@ function section(value: unknown) {
   });
 }
 function segment(value: unknown) {
+  const located = Boolean(
+    value && typeof value === "object" && "block_id" in value,
+  );
   const r = object(value, [
     "segment_id",
     "kind",
     "section_id",
     "start_utf8",
     "end_utf8",
+    ...(located
+      ? [
+          "block_id",
+          "page",
+          "region",
+          "continuation_regions",
+          "locate",
+          "source",
+          "basis",
+          "uncertainty",
+        ]
+      : []),
   ]);
-  if (!["heading", "text", "table", "caption"].includes(String(r.kind))) fail();
+  if (!PROOFREAD_SEGMENT_KINDS.includes(r.kind as ProofreadSegmentKind)) fail();
   return Object.freeze({
+    ...(located
+      ? parseDocumentSegmentLocation({
+          block_id: r.block_id,
+          page: r.page,
+          region: r.region,
+          continuation_regions: r.continuation_regions,
+          locate: r.locate,
+          source: r.source,
+          basis: r.basis,
+          uncertainty: r.uncertainty,
+        })
+      : {}),
     segment_id: token(r.segment_id),
-    kind: r.kind as "heading" | "text" | "table" | "caption",
+    kind: r.kind as ProofreadSegmentKind,
     section_id: r.section_id === null ? null : token(r.section_id),
     ...range(
       { start_utf8: r.start_utf8, end_utf8: r.end_utf8 },
@@ -406,6 +582,9 @@ function page(
   parseItem: (value: unknown) => unknown,
   limit: number,
 ) {
+  const annotated = Boolean(
+    value && typeof value === "object" && "annotation_id" in value,
+  );
   const r = object(value, [
     "document",
     field,
@@ -413,12 +592,19 @@ function page(
     "next_cursor",
     "capabilities",
     "gaps",
+    ...(annotated ? ["annotation_id"] : []),
   ]);
   if (!Array.isArray(r[field]) || r[field].length > limit) fail();
   const total = nonnegative(r.total);
   if (total < r[field].length) fail();
   const next = cursor(r.next_cursor);
   return {
+    ...(annotated
+      ? {
+          annotation_id:
+            r.annotation_id === null ? null : hash(r.annotation_id),
+        }
+      : {}),
     document: parseDocumentReadingRef(r.document),
     [field]: Object.freeze(r[field].map(parseItem)),
     total,
@@ -440,6 +626,7 @@ function matchPage(
   if (request.cursor !== null && result.next_cursor === request.cursor) fail();
 }
 interface ReadPage {
+  readonly annotation_id?: string | null;
   readonly document: DocumentReadingRef;
   readonly total: number;
   readonly next_cursor: string | null;
@@ -447,6 +634,8 @@ interface ReadPage {
   readonly gaps: readonly DocumentReadGap[];
 }
 interface ReadSection {
+  readonly role?: SectionRole | null;
+  readonly role_source?: SectionRoleSource | null;
   readonly section_id: string;
   readonly title: string;
   readonly title_truncated: boolean;
@@ -454,9 +643,9 @@ interface ReadSection {
   readonly start_utf8: number;
   readonly end_utf8: number;
 }
-interface ReadSegment {
+interface ReadSegment extends Partial<DocumentSegmentLocation> {
   readonly segment_id: string;
-  readonly kind: "heading" | "text" | "table" | "caption";
+  readonly kind: ProofreadSegmentKind;
   readonly section_id: string | null;
   readonly start_utf8: number;
   readonly end_utf8: number;
@@ -484,6 +673,7 @@ export interface DocumentReadResultMap {
   slice: {
     readonly document: DocumentReadingRef;
     readonly selector: DocumentSelector;
+    readonly locations?: readonly DocumentSegmentLocation[];
     readonly actual_range: {
       readonly start_utf8: number;
       readonly end_utf8: number;
@@ -515,6 +705,7 @@ export interface DocumentReadResultMap {
   };
   evidence: {
     readonly evidence: EvidenceRef;
+    readonly location?: DocumentSegmentLocation;
     readonly granularity: "file" | "segment";
     readonly gaps: readonly DocumentReadGap[];
     readonly material?: DocumentMaterialRef;
@@ -617,9 +808,15 @@ function parseResult<K extends DocumentReadOperation>(
       );
       matchDocument(parsed.document, req as DocumentReadRequestMap["outline"]);
       matchPage(req as DocumentReadRequestMap["outline"], parsed);
+      const pinned = req as DocumentReadRequestMap["outline"];
+      if (pinned.annotation_id && parsed.annotation_id !== pinned.annotation_id)
+        fail();
       return Object.freeze(parsed);
     }
     case "slice": {
+      const located = Boolean(
+        value && typeof value === "object" && "locations" in value,
+      );
       const r = object(value, [
         "document",
         "selector",
@@ -631,6 +828,7 @@ function parseResult<K extends DocumentReadOperation>(
         "continuation",
         "capabilities",
         "gaps",
+        ...(located ? ["locations"] : []),
       ]);
       const request = req as DocumentReadRequestMap["slice"];
       const document = parseDocumentReadingRef(r.document);
@@ -685,8 +883,18 @@ function parseResult<K extends DocumentReadOperation>(
         (request.continuation !== null && continuation === request.continuation)
       )
         fail();
+      if (
+        located &&
+        (!Array.isArray(r.locations) ||
+          r.locations.length > DOCUMENT_READ_MAX_EVIDENCE)
+      )
+        fail();
+      const locations = located
+        ? (r.locations as unknown[]).map(parseDocumentSegmentLocation)
+        : null;
       return Object.freeze({
         document,
+        ...(locations ? { locations } : {}),
         selector,
         actual_range,
         text: r.text,
@@ -813,6 +1021,7 @@ function parseResult<K extends DocumentReadOperation>(
           gaps: gaps(m.gaps),
         });
       }
+      const located = Object.hasOwn(r, "location");
       const d = object(r, [
         "evidence",
         "document",
@@ -824,6 +1033,7 @@ function parseResult<K extends DocumentReadOperation>(
         "truncated",
         "continuation",
         "gaps",
+        ...(located ? ["location"] : []),
       ]);
       const evidence = parseEvidenceRef(d.evidence);
       const document = parseDocumentReadingRef(d.document);
@@ -861,6 +1071,9 @@ function parseResult<K extends DocumentReadOperation>(
         evidence,
         document,
         granularity: "segment" as const,
+        ...(located
+          ? { location: parseDocumentSegmentLocation(d.location) }
+          : {}),
         target_range,
         actual_range,
         text: d.text,

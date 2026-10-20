@@ -1,3 +1,4 @@
+import { correctedDocumentFixture } from "./corrected-document-fixture.js";
 import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { parseLiteratureMetadata } from "@sciretriever/contracts";
@@ -15,6 +16,8 @@ describe("post-parse article identity", () => {
       const updateMetadata = async (title: string) => {
         const observationId = randomUUID();
         await env.app.observations.publish({
+          source_type: null,
+          source_type_mapping_version: null,
           observation_id: observationId,
           provenance: {
             provenance_id: randomUUID(),
@@ -77,7 +80,7 @@ describe("post-parse article identity", () => {
             .segment_id,
         })),
       }));
-      await env.app.documentProcessing.parseDocuments(env.parseRequest);
+      await correctedDocumentFixture(env.app).parseDocuments(env.parseRequest);
       const request = await env.identityRequest();
       const assessed = await env.app.articleIdentity!.assess(request);
       expect(assessed.assessment).toMatchObject({
@@ -106,7 +109,7 @@ describe("post-parse article identity", () => {
   it("publishes evidence through the production model binding, reuses it after restart, and invalidates its current label after reparse", async () => {
     const env = await coreProcessingFixture();
     try {
-      await env.app.documentProcessing.parseDocuments(env.parseRequest);
+      await correctedDocumentFixture(env.app).parseDocuments(env.parseRequest);
       expect(
         (await env.app.library.detail(env.parseRequest.literature_id))
           .primary_pdf?.article_identity_status,
@@ -136,7 +139,7 @@ describe("post-parse article identity", () => {
           await query.articleIdentityRead!(result.assessment.assessment_id),
         ).toMatchObject({ current: true });
         env.setText("# New parser representation\nNo identity extracted.\n");
-        await env.app.documentProcessing.parseDocuments({
+        await correctedDocumentFixture(env.app).parseDocuments({
           ...env.parseRequest,
           expected_default_revision: 1,
         });
@@ -184,7 +187,7 @@ describe("post-parse article identity", () => {
               }
             : { document_kind: "unknown", fields: [] },
         );
-        const parsed = await env.app.documentProcessing.parseDocuments(
+        const parsed = await correctedDocumentFixture(env.app).parseDocuments(
           env.parseRequest,
         );
         const result = await env.app.articleIdentity!.assess(
@@ -210,7 +213,7 @@ describe("post-parse article identity", () => {
   it("rejects invented quotes, stale metadata, over-budget input and cancelled model work without a false current verdict", async () => {
     const env = await coreProcessingFixture();
     try {
-      await env.app.documentProcessing.parseDocuments(env.parseRequest);
+      await correctedDocumentFixture(env.app).parseDocuments(env.parseRequest);
       const request = await env.identityRequest();
       env.setModel((input) => ({
         document_kind: "article",

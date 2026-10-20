@@ -72,7 +72,7 @@ function plus(nowValue: string, days: number): string {
 }
 function v5(db: DatabaseSync): void {
   if (
-    ![5, 6, 7, 8, 9, 10].includes(
+    ![11].includes(
       Number(
         one(db, "SELECT schema_version FROM schema_identity WHERE singleton=1")
           ?.schema_version,

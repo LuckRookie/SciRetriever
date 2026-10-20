@@ -1,25 +1,31 @@
 import {
-  parseProcessorInvocation,
-  type ProcessorInvocation,
-} from "./processors.js";
-import { ContractValidationError, canonicalJsonBytes } from "./index.js";
-import { parseDocumentRequest, type ParseDocumentRequest } from "./document.js";
+  parseArchiveBuildRequest,
+  type ArchiveBuildRequest,
+} from "./archive.js";
 import {
   parseArticleIdentityRequest,
   type ArticleIdentityRequest,
 } from "./article-identity.js";
+import { parseDocumentRequest, type ParseDocumentRequest } from "./document.js";
 import {
-  parseKnowledgeAnalysisRequest,
-  parseKnowledgeLongAnalysisRequest,
-  type KnowledgeAnalysisRequest,
-  type KnowledgeLongAnalysisRequest,
-} from "./knowledge.js";
+  ContractValidationError,
+  canonicalJsonBytes,
+  parseAssetId,
+} from "./index.js";
 import {
-  parseKnowledgeSynthesisRequest,
-  type KnowledgeSynthesisRequest,
-} from "./synthesis.js";
+  parseProcessorInvocation,
+  type ProcessorInvocation,
+} from "./processors.js";
 
 export type ProcessingOperation =
+  | {
+      readonly operation: "backfill-tags";
+      readonly request: { readonly tag_ids: readonly string[] };
+    }
+  | {
+      readonly operation: "build-archive";
+      readonly request: ArchiveBuildRequest;
+    }
   | {
       readonly operation: "run-processor";
       readonly request: ProcessorInvocation;
@@ -31,18 +37,6 @@ export type ProcessingOperation =
   | {
       readonly operation: "assess-article-identity";
       readonly request: ArticleIdentityRequest;
-    }
-  | {
-      readonly operation: "analyze";
-      readonly request: KnowledgeAnalysisRequest;
-    }
-  | {
-      readonly operation: "analyze-long";
-      readonly request: KnowledgeLongAnalysisRequest;
-    }
-  | {
-      readonly operation: "synthesize";
-      readonly request: KnowledgeSynthesisRequest;
     };
 export interface ProcessingTaskRequest {
   readonly schema_version: 1 | 2;
@@ -63,6 +57,27 @@ export async function parseProcessingOperation(
     throw new ContractValidationError();
   const r = value as Record<string, unknown>;
   switch (r.operation) {
+    case "backfill-tags": {
+      const request = r.request as Record<string, unknown>;
+      if (
+        !request ||
+        typeof request !== "object" ||
+        Object.keys(request).join() !== "tag_ids" ||
+        !Array.isArray(request.tag_ids) ||
+        !request.tag_ids.length ||
+        request.tag_ids.length > 200
+      )
+        throw new ContractValidationError();
+      return {
+        operation: r.operation,
+        request: { tag_ids: [...new Set(request.tag_ids.map(parseAssetId))] },
+      };
+    }
+    case "build-archive":
+      return {
+        operation: r.operation,
+        request: parseArchiveBuildRequest(r.request),
+      };
     case "run-processor":
       return {
         operation: r.operation,
@@ -77,21 +92,6 @@ export async function parseProcessingOperation(
       return {
         operation: r.operation,
         request: parseArticleIdentityRequest(r.request),
-      };
-    case "analyze":
-      return {
-        operation: r.operation,
-        request: await parseKnowledgeAnalysisRequest(r.request),
-      };
-    case "analyze-long":
-      return {
-        operation: r.operation,
-        request: await parseKnowledgeLongAnalysisRequest(r.request),
-      };
-    case "synthesize":
-      return {
-        operation: r.operation,
-        request: await parseKnowledgeSynthesisRequest(r.request),
       };
     default:
       throw new ContractValidationError();
@@ -114,8 +114,7 @@ export async function parseProcessingTaskRequest(
     ![1, 2].includes(Number(r.schema_version)) ||
     (r.schema_version === 1
       ? Object.keys(r).sort().join() !==
-          "idempotency_key,operations,schema_version" ||
-        bytes.length > 1024 * 1024
+        "idempotency_key,operations,schema_version"
       : Object.keys(r).sort().join() !==
           "collection_name,idempotency_key,operations,schema_version,source_request_sha256" ||
         typeof r.collection_name !== "string" ||
@@ -127,7 +126,7 @@ export async function parseProcessingTaskRequest(
     !/^[A-Za-z0-9._:-]{1,128}$/u.test(r.idempotency_key) ||
     !Array.isArray(r.operations) ||
     r.operations.length < 1 ||
-    r.operations.length > (r.schema_version === 2 ? 10000 : 100)
+    r.operations.length > 10000
   )
     throw new ContractValidationError();
   const operations = await Promise.all(

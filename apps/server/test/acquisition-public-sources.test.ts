@@ -163,9 +163,7 @@ describe("TypeScript public acquisition sources", () => {
 
   it("downloads an admitted locator into the durable Candidate spool", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-public-download-"));
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       const pdf = workbenchPdf();
       const candidate = await downloadPdfCandidate(
@@ -237,9 +235,7 @@ describe("TypeScript public acquisition sources", () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-landing-download-"),
     );
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       await application.database.putLiterature(FIXTURE_LITERATURE);
       const calls: string[] = [];
@@ -379,9 +375,7 @@ describe("TypeScript public acquisition sources", () => {
     );
     const port = (server.address() as AddressInfo).port;
     const coordinator = new NetworkBudgetCoordinator();
-    const application = await createApplication(join(home, "application"), {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(join(home, "application"), {});
     try {
       const candidate = doiLanding(FIXTURE_DOI);
       const transport = assemblePublicPdfDownloadTransport(
@@ -441,9 +435,7 @@ describe("TypeScript public acquisition sources", () => {
 
   it("treats an HTML landing without a PDF link as a miss while preserving HTTP failures", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-landing-miss-"));
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       for (const status of [200, 403, 429]) {
         const download = downloadPdfCandidate(
@@ -485,9 +477,7 @@ describe("TypeScript public acquisition sources", () => {
 
   it("uses actual bytes and follows an HTML response to a supposedly direct PDF", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-direct-html-"));
-    const app = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const app = await createApplication(home, {});
     try {
       const calls: string[] = [];
       const pdf = workbenchPdf();
@@ -533,9 +523,7 @@ describe("TypeScript public acquisition sources", () => {
 
   it("keeps static link rate limits and transport failures distinct from browser-capable misses", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-static-failure-"));
-    const app = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const app = await createApplication(home, {});
     try {
       const cases = [
         {
@@ -615,9 +603,7 @@ describe("TypeScript public acquisition sources", () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-static-admission-"),
     );
-    const app = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const app = await createApplication(home, {});
     try {
       const calls: string[] = [];
       const download = downloadPdfCandidate(
@@ -753,9 +739,7 @@ describe("TypeScript public acquisition sources", () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-authorized-spool-"),
     );
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       await application.database.putLiterature(FIXTURE_LITERATURE);
       const source = new AuthorizedPdfSource(
@@ -899,9 +883,7 @@ describe("TypeScript public acquisition sources", () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-public-download-negative-"),
     );
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       const pdf = workbenchPdf();
       const request = (response: {
@@ -1219,9 +1201,7 @@ describe("controlled browser acquisition route", () => {
 
 it("removes PDF viewer fragments before admitting static links without relaxing URL guards", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-viewer-fragment-"));
-  const app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  const app = await createApplication(home, {});
   const pdf = workbenchPdf();
   const cases = [
     '<iframe src = "/storage/main.pdf#view=FitH&navpanes=0"></iframe>',

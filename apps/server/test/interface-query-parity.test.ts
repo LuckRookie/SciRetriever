@@ -1,3 +1,4 @@
+import { processorFixture } from "./processor-fixture.js";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -15,7 +16,7 @@ async function* input(value: unknown) {
 
 describe("shared Web, CLI and MCP query operations", () => {
   it("returns the same filtered library, fixed document and knowledge through all three transports without querying external services", async () => {
-    const env = await coreProcessingFixture();
+    const env = await processorFixture();
     const query = await createQueryApplication(env.home);
     const web = await startQueryOnlyHttp({ application: query });
     const maintenance = vi.fn(async () => env.app);
@@ -41,7 +42,9 @@ describe("shared Web, CLI and MCP query operations", () => {
         stderr: (s) => messages.push(s),
       });
       expect(reply.code, messages.join("\n")).toBe(0);
-      return (reply.value as { result: unknown }).result;
+      return args[0] === "processors"
+        ? reply.value
+        : (reply.value as { result: unknown }).result;
     };
     const http = async (
       operation: string,
@@ -51,7 +54,11 @@ describe("shared Web, CLI and MCP query operations", () => {
       const response = await fetch(web.origin + "/api/v1/query/" + operation, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ protocol_version: 1, request }),
+        body: JSON.stringify({
+          protocol_version: 1,
+          request,
+          ...(operation === "processors" ? { operation: "read" } : {}),
+        }),
       });
       expect(response.status).toBe(200);
       return ((await response.json()) as Record<string, unknown>)[key];
@@ -91,7 +98,7 @@ describe("shared Web, CLI and MCP query operations", () => {
       });
       expect(env.parseCalls).toBe(0);
       expect(env.modelCalls).toBe(0);
-      await env.app.documentProcessing.parseDocuments(env.parseRequest);
+      await env.build(env.parseRequest);
       const source = {
         literature_id,
         asset_id: env.asset.asset_id,
@@ -113,35 +120,33 @@ describe("shared Web, CLI and MCP query operations", () => {
           literature_ids: [literature_id],
         }),
       ).toEqual(prepared);
-      const analyzed = await env.app.knowledgeAnalysis.analyze({
+      const job = await env.app.processors!.submit({
         schema_version: 1,
-        input: prepared.input,
-        purpose: "overview",
-        question: null,
-        default_update: { expected_revision: null },
+        idempotency_key: "parity-summary",
+        name: "Parity summary",
+        processor: { id: "summary", version: "2" },
+        spec: { purpose: "overview", question: null },
+        inputs: [{ kind: "literature", literature_id }],
       });
-      const selection = { literature_id, limit: 20 };
-      const knowledge = await http("knowledge-list", selection);
-      expect(knowledge).toMatchObject([
-        { artifact_id: analyzed.artifact.artifact_id },
-      ]);
-      expect(await cli(["knowledge", "list"], selection)).toEqual(knowledge);
-      expect(await machine("list_knowledge", selection)).toEqual(knowledge);
-      const defaults = { literature_id, purpose: "overview", question: null };
-      expect(await cli(["knowledge", "default"], defaults)).toEqual(
-        await http("knowledge-default", defaults),
-      );
-      expect(await machine("default_knowledge", defaults)).toEqual(
-        await http("knowledge-default", defaults),
-      );
-      const syntheses = { manifest_sha256: null, limit: 20 };
-      expect(await cli(["synthesis", "list"], syntheses)).toEqual([]);
-      expect(await machine("list_syntheses", syntheses)).toEqual(
-        await http("synthesis-list", syntheses),
-      );
+      await env.app.processingTasks!.run(job.job_id);
+      const state = await env.app.processingTasks!.read(job.job_id);
+      expect(state.failures).toEqual([]);
+      const result_id = (state.results[0] as { result: { result_id: string } })
+        .result.result_id;
+      const before = { parse: env.parseCalls, model: env.modelCalls };
+      const selection = { result_id };
+      const saved = await http("processors", selection);
+      expect(saved).toMatchObject({ ref: { result_id } });
+      expect(await cli(["processors", "read"], selection)).toEqual(saved);
+      expect(
+        await machine("processor_query", {
+          action: "read",
+          request: selection,
+        }),
+      ).toEqual(saved);
       expect(maintenance).not.toHaveBeenCalled();
-      expect(env.parseCalls).toBe(1);
-      expect(env.modelCalls).toBe(2);
+      expect(env.parseCalls).toBe(before.parse);
+      expect(env.modelCalls).toBe(before.model);
     } finally {
       await client.close();
       await mcp.close();
@@ -155,11 +160,10 @@ describe("shared Web, CLI and MCP query operations", () => {
     try {
       expect(
         (
-          await runCli(["knowledge", "list", "--request", "-"], {
+          await runCli(["processors", "read", "--request", "-"], {
             home: env.home,
             stdin: input({
-              literature_id: env.parseRequest.literature_id,
-              limit: 20,
+              result_id: env.asset.asset_id,
               sql: "forbidden",
             }),
           })
@@ -175,7 +179,7 @@ describe("shared Web, CLI and MCP query operations", () => {
       ).toBe(2);
       expect(
         (
-          await runCli(["knowledge", "list", "--request", "-"], {
+          await runCli(["processors", "read", "--request", "-"], {
             home: env.home,
             stdin: input({
               literature_id: env.parseRequest.literature_id,

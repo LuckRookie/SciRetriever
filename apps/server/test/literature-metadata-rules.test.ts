@@ -30,7 +30,8 @@ const metadata = (
   abstract: null,
   publication_date: null,
   publication_year: null,
-  document_type: null,
+  publication_form: null,
+  article_kind: null,
   language: null,
   venue: null,
   publisher: null,
@@ -48,6 +49,8 @@ const observation = (
   sourceName = sourceKind === "user" ? "bibliographic-import" : "provider",
 ) =>
   parseMetadataObservation({
+    source_type: null,
+    source_type_mapping_version: null,
     observation_id: id(100 + n),
     provenance: {
       provenance_id: id(200 + n),

@@ -1,3 +1,5 @@
+import type { SqliteAnnotationStorage } from "../storage/structure-annotations.js";
+import { segmentLocation, segmentPageRegion, readSegment } from "./location.js";
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
@@ -16,7 +18,7 @@ import {
   type DocumentReadRequestMap,
   type DocumentMaterialRef,
   type DocumentRef,
-  type DocumentStructureV1,
+  type DocumentStructure,
   type EvidenceRef,
 } from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
@@ -152,18 +154,19 @@ function safeEnd(bytes: Uint8Array, start: number, end: number): number {
   }
   return start;
 }
-function capabilities() {
+function capabilities(document?: DocumentRef) {
   return {
     text: true,
     outline: true,
     resources: true,
-    table_context: false,
-    figure_caption: false,
-    page: false,
-    bbox: false,
+    table_context: document?.schema_version === 2,
+    figure_caption: document?.schema_version === 2,
+    page: document?.schema_version === 2,
+    bbox: document?.schema_version === 2,
   } as const;
 }
-function gaps() {
+function gaps(document?: DocumentRef) {
+  if (document?.schema_version === 2) return [] as const;
   return [
     "table-structure-unavailable",
     "figure-caption-unavailable",
@@ -181,7 +184,7 @@ function readingRef(document: DocumentRef) {
   };
 }
 function resourceContext(
-  structure: DocumentStructureV1,
+  structure: DocumentStructure,
   bytes: Uint8Array,
   reference: string,
 ) {
@@ -235,12 +238,13 @@ function resourceContext(
 export class DocumentReadService {
   private readonly verificationScope = new AsyncLocalStorage<{
     bytes: number;
+    reserve: ((bytes: number) => void) | undefined;
     versions: Map<
       string,
       {
         version: DocumentRef;
         markdown: Uint8Array;
-        structure: DocumentStructureV1;
+        structure: DocumentStructure;
       }
     >;
   }>();
@@ -250,6 +254,7 @@ export class DocumentReadService {
   constructor(
     private readonly database: SqliteWorker,
     private readonly storage: SqliteDocumentStorage,
+    private readonly annotations: SqliteAnnotationStorage | null = null,
   ) {}
 
   close(): Promise<void> {
@@ -271,16 +276,20 @@ export class DocumentReadService {
   }
   /** One logical result read may cite a fixed document many times. Keep only
    * its verified immutable bytes for this operation, never across requests. */
-  withReadScope<T>(work: () => Promise<T>): Promise<T> {
+  withReadScope<T>(
+    work: () => Promise<T>,
+    reserve?: (bytes: number) => void,
+  ): Promise<T> {
     if (this.verificationScope.getStore()) return work();
     const scope = {
       bytes: 0,
+      reserve,
       versions: new Map<
         string,
         {
           version: DocumentRef;
           markdown: Uint8Array;
-          structure: DocumentStructureV1;
+          structure: DocumentStructure;
         }
       >(),
     };
@@ -301,7 +310,7 @@ export class DocumentReadService {
     consume: (
       version: DocumentRef,
       markdown: Uint8Array,
-      structure: DocumentStructureV1,
+      structure: DocumentStructure,
     ) => Promise<T>,
     reserveVerifiedBytes?: (bytes: number) => void,
   ): Promise<T> {
@@ -328,11 +337,7 @@ export class DocumentReadService {
         );
       }
     }
-    if (
-      ![3, 4, 5, 6, 7, 8, 9, 10].includes(
-        Number((await this.database.schema()).schema_version),
-      )
-    )
+    if (![11].includes(Number((await this.database.schema()).schema_version)))
       throw new DocumentReadError("document-v3-required");
     let snapshot;
     try {
@@ -366,7 +371,10 @@ export class DocumentReadService {
           return consume(version, bytes, structure);
         },
         signal,
-        reserveVerifiedBytes,
+        (bytes) => {
+          this.verificationScope.getStore()?.reserve?.(bytes);
+          reserveVerifiedBytes?.(bytes);
+        },
       );
       check(signal);
       return result;
@@ -384,7 +392,7 @@ export class DocumentReadService {
     consume: (
       version: DocumentRef,
       markdown: Uint8Array,
-      structure: DocumentStructureV1,
+      structure: DocumentStructure,
     ) => Promise<T>,
     signal?: AbortSignal,
     reserveVerifiedBytes?: (bytes: number) => void,
@@ -394,14 +402,97 @@ export class DocumentReadService {
     );
   }
 
+  parts(
+    literatureId: string,
+    offset: number,
+    limit: number,
+    signal?: AbortSignal,
+  ) {
+    return this.run(async () => {
+      check(signal);
+      const value = await this.database.documentParts(
+        literatureId,
+        offset,
+        limit,
+      );
+      check(signal);
+      return value;
+    });
+  }
+  /** Human audit surface; intentionally absent from processor document tools. */
+  corrections(value: unknown, signal?: AbortSignal) {
+    return this.run(async () => {
+      if (
+        !value ||
+        typeof value !== "object" ||
+        Array.isArray(value) ||
+        Object.keys(value).sort().join() !==
+          "continuation,document_version_id,max_bytes,segment_id"
+      )
+        invalid();
+      const r = value as Record<string, unknown>;
+      const selected = request("slice", {
+        document_version_id: r.document_version_id,
+        selector: { kind: "segment", segment_id: r.segment_id },
+        max_bytes: r.max_bytes,
+        continuation: r.continuation,
+      });
+      return this.version(
+        selected.document_version_id,
+        signal,
+        async (document, _bytes, structure) => {
+          if (document.schema_version !== 2)
+            throw new DocumentReadError("document-unsupported");
+          const segment = structure.segments.find(
+            (s) => s.segment_id === r.segment_id,
+          );
+          if (!segment) invalid();
+          const corrections = await this.storage.corrections(
+            document,
+            String(r.segment_id),
+            signal,
+          );
+          // Correction records can exceed a response budget. A fixed-version JSON stream is lossless and resumable.
+          const bytes = Buffer.from(JSON.stringify(corrections));
+          const start = cursorPosition(
+            selected.continuation,
+            "corrections",
+            document,
+            selected.selector,
+            0,
+            bytes.length,
+          );
+          const end = safeEnd(
+            bytes,
+            start,
+            Math.min(bytes.length, start + selected.max_bytes),
+          );
+          if (end <= start) invalid();
+          return {
+            document: readingRef(document),
+            segment_id: r.segment_id,
+            location: segmentLocation(segment),
+            encoding: "json-utf8",
+            text: decoder.decode(bytes.subarray(start, end)),
+            actual_range: { start_utf8: start, end_utf8: end },
+            total_bytes: bytes.length,
+            continuation:
+              end < bytes.length
+                ? cursor("corrections", document, selected.selector, end)
+                : null,
+          };
+        },
+      );
+    });
+  }
   describe(value: unknown, signal?: AbortSignal) {
     return this.run(async () => {
       const r = request("describe", value);
       const id = r.document_version_id;
       return this.version(id, signal, async (document, _bytes, structure) => ({
         document: readingRef(document),
-        capabilities: capabilities(),
-        gaps: gaps(),
+        capabilities: capabilities(document),
+        gaps: gaps(document),
         section_count: structure.sections.length,
         segment_count: structure.segments.length,
         resource_count: document.resources.length,
@@ -414,11 +505,7 @@ export class DocumentReadService {
       const literature = r.literature_id;
       const asset = r.asset_id;
       check(signal);
-      if (
-        ![3, 4, 5, 6, 7, 8, 9, 10].includes(
-          Number((await this.database.schema()).schema_version),
-        )
-      )
+      if (![11].includes(Number((await this.database.schema()).schema_version)))
         throw new DocumentReadError("document-v3-required");
       const material = await this.database.documentMaterial(literature, asset);
       if (!material || material.material.asset_sha256 !== r.asset_sha256)
@@ -436,36 +523,67 @@ export class DocumentReadService {
       };
     });
   }
+  private async annotation(
+    id: string,
+    selected: string | null | undefined,
+    signal?: AbortSignal,
+  ) {
+    if (!this.annotations) {
+      if (selected) invalid();
+      return null;
+    }
+    const a = selected
+      ? await this.annotations.byId(selected, signal)
+      : await this.annotations.current(id, signal);
+    if (selected && !a) invalid();
+    if (a && a.document_version_id !== id) invalid();
+    return a;
+  }
   outline(value: unknown, signal?: AbortSignal) {
     return this.run(async () => {
       const r = request("outline", value);
       const id = r.document_version_id;
       const limit = r.limit;
       return this.version(id, signal, async (document, _bytes, structure) => {
+        const annotation = await this.annotation(id, r.annotation_id, signal);
+        const roles = new Map(
+          annotation?.sections.map((s) => [s.section_id, s]),
+        );
+        const selected = annotation?.annotation_id ?? null;
         const start = cursorPosition(
           r.cursor,
           "outline",
           document,
-          null,
+          selected,
           0,
           structure.sections.length + 1,
         );
         const items = structure.sections
           .slice(start, start + limit)
-          .map((item) => ({ ...item, ...documentReadTitle(item.title) }));
+          .map((item) => ({
+            ...item,
+            ...(roles.has(item.section_id)
+              ? {
+                  role: roles.get(item.section_id)!.role,
+                  role_source: roles.get(item.section_id)!.role_source,
+                }
+              : {}),
+            ...documentReadTitle(item.title),
+          }));
         const next = start + items.length;
         return {
+          ...(annotation ? { annotation_id: annotation.annotation_id } : {}),
           document: readingRef(document),
           sections: items,
           total: structure.sections.length,
           next_cursor:
             next < structure.sections.length
-              ? cursor("outline", document, null, next)
+              ? cursor("outline", document, selected, next)
               : null,
-          capabilities: capabilities(),
+          capabilities: capabilities(document),
           gaps: items.some((item) => item.title_truncated)
-            ? [...gaps(), "outline-title-truncated"]
-            : gaps(),
+            ? [...gaps(document), "outline-title-truncated"]
+            : gaps(document),
         };
       });
     });
@@ -482,30 +600,49 @@ export class DocumentReadService {
           !structure.sections.some((s) => s.section_id === sectionId)
         )
           invalid();
-        const items =
+        const annotation = await this.annotation(id, r.annotation_id, signal);
+        if (r.roles?.length && !annotation) invalid();
+        const roles = new Map(
+          annotation?.segment_roles.map((s) => [s.segment_id, s.role]),
+        );
+        const selector =
+          annotation || r.roles?.length
+            ? {
+                section_id: sectionId,
+                annotation_id: annotation?.annotation_id ?? null,
+                roles: r.roles ?? [],
+              }
+            : sectionId;
+        const candidates =
           sectionId === null
             ? structure.segments
             : structure.segments.filter((s) => s.section_id === sectionId);
+        const items = r.roles?.length
+          ? candidates.filter((s) =>
+              r.roles!.some((role) => role === roles.get(s.segment_id)),
+            )
+          : candidates;
         const start = cursorPosition(
           r.cursor,
           "segments",
           document,
-          sectionId,
+          selector,
           0,
           items.length + 1,
         );
         const page = items.slice(start, start + limit);
         const next = start + page.length;
         return {
+          ...(annotation ? { annotation_id: annotation.annotation_id } : {}),
           document: readingRef(document),
-          segments: page,
+          segments: page.map(readSegment),
           total: items.length,
           next_cursor:
             next < items.length
-              ? cursor("segments", document, sectionId, next)
+              ? cursor("segments", document, selector, next)
               : null,
-          capabilities: capabilities(),
-          gaps: gaps(),
+          capabilities: capabilities(document),
+          gaps: gaps(document),
         };
       });
     });
@@ -534,8 +671,8 @@ export class DocumentReadService {
             next < document.resources.length
               ? cursor("resources", document, null, next)
               : null,
-          capabilities: capabilities(),
-          gaps: gaps(),
+          capabilities: capabilities(document),
+          gaps: gaps(document),
         };
       });
     });
@@ -585,8 +722,8 @@ export class DocumentReadService {
             related_resources: [resource],
             truncated: false,
             continuation: null,
-            capabilities: capabilities(),
-            gaps: [...gaps(), "resource-context-unavailable"],
+            capabilities: capabilities(document),
+            gaps: [...gaps(document), "resource-context-unavailable"],
           };
         if (!selected) invalid();
         const start = cursorPosition(
@@ -649,6 +786,9 @@ export class DocumentReadService {
               document_version_id: document.document_version_id,
               representation_sha256: document.representation_sha256,
               locator: { kind: "segment", segment_id: item.segment_id },
+              ...(segmentPageRegion(item)
+                ? { page_region: segmentPageRegion(item) }
+                : {}),
               content_sha256: await sha256(
                 bytes.subarray(item.start_utf8, item.end_utf8),
               ),
@@ -663,14 +803,22 @@ export class DocumentReadService {
           actual_range: { start_utf8: start, end_utf8: end },
           text,
           evidence,
+          ...(document.schema_version === 2
+            ? {
+                locations: covered.flatMap((s) => {
+                  const location = segmentLocation(s);
+                  return location ? [location] : [];
+                }),
+              }
+            : {}),
           related_resources: resource ? [resource] : [],
           truncated,
           continuation: truncated
             ? cursor("slice", document, selector, end)
             : null,
-          capabilities: capabilities(),
+          capabilities: capabilities(document),
           gaps: [
-            ...gaps(),
+            ...gaps(document),
             ...(partialSegment ? ["partial-segment"] : []),
             ...(evidencePageLimit ? ["evidence-page-limit"] : []),
           ],
@@ -908,6 +1056,13 @@ export class DocumentReadService {
             evidence.content_sha256 !== contentHash
           )
             throw new DocumentReadError("document-integrity");
+          if (
+            evidence.page_region &&
+            JSON.stringify(evidence.page_region) !==
+              JSON.stringify(segmentPageRegion(segment))
+          )
+            throw new DocumentReadError("document-integrity");
+          const location = segmentLocation(segment);
           const start = cursorPosition(
             continuation,
             "evidence",
@@ -928,6 +1083,7 @@ export class DocumentReadService {
             evidence,
             document: readingRef(document),
             granularity: "segment",
+            ...(location ? { location } : {}),
             target_range: {
               start_utf8: segment.start_utf8,
               end_utf8: segment.end_utf8,
@@ -939,7 +1095,7 @@ export class DocumentReadService {
             continuation: truncated
               ? cursor("evidence", document, evidence.locator, end)
               : null,
-            gaps: gaps(),
+            gaps: gaps(document),
           };
         },
       );

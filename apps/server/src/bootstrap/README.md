@@ -25,6 +25,6 @@
 
 `startQueryOnlyWorkbench` 仍只构造只读应用；`startMaintenanceWorkbench` 保留独立维护入口；`startSyntheticWorkbench` 使用合成预览和临时 home，其示例数据不能代表正式文献库。合成 Browser 对象图也绑定同一临时库的 QueryApplication，使新旧界面都能通过已有固定材料查询读取已接纳 PDF；关闭时一并释放该只读应用。
 
-相关说明：[任务与协作控制](../../../../docs/architecture/technical/02-task-coordination.md) · [工作台 HTTP](../workbench/README.md) · [CLI 入口](../cli/README.md)。
+相关源码：[工作台 HTTP](../workbench/README.md) · [CLI 入口](../cli/README.md)。
 
-[上级目录](../README.md) · [项目 README](../../../../README.md)
+[上级目录](../README.md)

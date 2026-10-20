@@ -14,6 +14,8 @@ import {
 } from "@tanstack/react-query";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import {
+  ARTICLE_KIND_LABELS,
+  PUBLICATION_FORM_LABELS,
   parseLibrarySearchRequest,
   type LibraryQuery,
   type LibrarySort,
@@ -49,7 +51,8 @@ import {
 } from "../../data/library.js";
 import { useShell } from "../../shell/context.js";
 import { randomId } from "../../../browser-platform.js";
-import { errorMessage, statusLabels } from "../../strings.js";
+import { archiveQuery, useArchiveAction, rows } from "../../data/archive.js";
+import { archiveReason, errorMessage, statusLabels } from "../../strings.js";
 import { OperationDialog } from "./OperationDialog.js";
 
 const scrollPositions = new WeakMap<ApiClient, Map<string, number>>();
@@ -95,6 +98,7 @@ export default function Library() {
   const api = useApi(),
     shell = useShell(),
     route = useUrlState();
+  const archiveAction = useArchiveAction();
   const queryString = JSON.stringify(route.query);
   const scrollKey = `${queryString}:${route.sort}`;
   if (!scrollPositions.has(api)) scrollPositions.set(api, new Map());
@@ -111,6 +115,9 @@ export default function Library() {
       publication_year_from: "起始年份",
       publication_year_to: "结束年份",
       statuses: "状态",
+      publication_forms: "出版形式",
+      article_kinds: "文章性质",
+      tags: "标签",
       needs_manual_pdf: "无法获取",
     };
     if (
@@ -119,16 +126,19 @@ export default function Library() {
       (Array.isArray(value) && !value.length)
     )
       return [];
+    if (key === "tags" && !route.query.tags?.ids.length) return [];
     const label =
-      key === "identifiers"
-        ? route.query.identifiers.map((id) => id.value).join("、")
-        : key === "statuses"
-          ? route.query.statuses
-              .map((status) => statusLabels[status])
-              .join("、")
-          : Array.isArray(value)
-            ? value.join("、")
-            : String(value);
+      key === "tags"
+        ? `${route.query.tags!.ids.length} 个${route.query.tags!.mode === "primary" ? "主标签" : "标签"}`
+        : key === "identifiers"
+          ? route.query.identifiers.map((id) => id.value).join("、")
+          : key === "statuses"
+            ? route.query.statuses
+                .map((status) => statusLabels[status])
+                .join("、")
+            : Array.isArray(value)
+              ? value.join("、")
+              : String(value);
     return [
       {
         key,
@@ -136,7 +146,12 @@ export default function Library() {
         clear: () =>
           updateQuery({
             ...route.query,
-            [key]: Array.isArray(value) ? [] : null,
+            [key]:
+              key === "tags"
+                ? { ids: [], mode: "any" }
+                : Array.isArray(value)
+                  ? []
+                  : null,
           }),
       },
     ];
@@ -244,6 +259,45 @@ export default function Library() {
   const mutable = api.kind === "workspace";
   const toolbarActions = (
     <>
+      {mutable ? (
+        <Button
+          onPress={() =>
+            archiveAction.mutate(
+              {
+                name: "snapshots",
+                request: { kind: "query", query: route.query },
+              },
+              {
+                onSuccess: () =>
+                  navigate({ view: "snapshots", literature: null }),
+              },
+            )
+          }
+          isPending={archiveAction.isPending}
+        >
+          生成快照
+        </Button>
+      ) : null}
+      {(next.data?.pages[0]?.backfillPending ?? 0) > 0 ? (
+        <p role="status">
+          此标签还有 {next.data!.pages[0]!.backfillPending} 篇待回溯。
+          <Button
+            variant="text"
+            onPress={() =>
+              navigate({
+                view: "tags",
+                literature: null,
+                tag: route.query.tags?.ids[0] ?? null,
+              })
+            }
+          >
+            查看回溯
+          </Button>
+        </p>
+      ) : null}
+      {archiveAction.error ? (
+        <ErrorNotice message={errorMessage(archiveAction.error)} />
+      ) : null}
       <Select
         label="材料状态"
         value={
@@ -266,7 +320,10 @@ export default function Library() {
           { value: "", label: "全部状态" },
           { value: "UNREVIEWED", label: "仅元数据" },
           { value: "ASSET_READY", label: "有 PDF" },
-          { value: "CONTENT_READY", label: "内容已就绪" },
+          { value: "READY", label: "已就绪" },
+          { value: "ARCHIVING", label: "建档中" },
+          { value: "ARCHIVE_FAILED", label: "建档失败" },
+          { value: "EXCLUDED", label: "已排除" },
           { value: "failed", label: "无法获取" },
         ]}
       />
@@ -304,6 +361,7 @@ export default function Library() {
   if (api.workspace.readiness !== "ready")
     return (
       <section className="library-page">
+        {route.warning ? <p role="status">{route.warning}</p> : null}
         <PageHeader
           title="文献库"
           description="此入口只读取已经保存的文献材料。"
@@ -488,7 +546,11 @@ export default function Library() {
           nextPageFailed={next.isFetchNextPageError}
           loadNextPage={next.fetchNextPage}
           onToggle={toggle}
-          onOpen={shell.openPaper}
+          onOpen={(...args) => {
+            if (text.trim() !== (route.query.text ?? ""))
+              updateQuery({ ...route.query, text: text.trim() || null });
+            shell.openPaper(...args);
+          }}
           onPreview={setPeek}
           onFile={onFile}
         />
@@ -502,6 +564,27 @@ export default function Library() {
           >
             <div className="selection-bar" role="region" aria-label="文献选择">
               <b>已选 {shell.selected.size} 篇</b>
+              {mutable ? (
+                <>
+                  <Button
+                    onPress={() =>
+                      setOperation({ ids: [...shell.selected], kind: "parse" })
+                    }
+                  >
+                    解析 PDF
+                  </Button>
+                  <Button
+                    onPress={() =>
+                      setOperation({
+                        ids: [...shell.selected],
+                        kind: "archive",
+                      })
+                    }
+                  >
+                    建档／重试
+                  </Button>
+                </>
+              ) : null}
               {
                 <Button
                   onPress={() => void choose(true)}
@@ -846,11 +929,49 @@ const LibraryRow = memo(function LibraryRow({
           <i>{item.literature.metadata.venue ?? "期刊未提供"}</i> ·{" "}
           {item.literature.metadata.publication_year ?? "年份未提供"}
         </span>
+        {item.tags?.length ? (
+          <span className="paper-tags">
+            {item.tags.map((t) => (
+              <span
+                key={t.tag_id}
+                className={t.rank === 1 ? "paper-tag primary" : "paper-tag"}
+              >
+                {t.name}
+              </span>
+            ))}
+          </span>
+        ) : null}
       </button>
       <span className="paper-status" data-state={item.literature.status}>
         {item.needs_manual_pdf
           ? "无法获取"
           : statusLabels[item.literature.status]}
+        {item.literature.status === "ASSET_READY" ? (
+          <small>
+            {item.missing_step === "raw-parse" ? "待解析" : "待建档"}
+          </small>
+        ) : null}
+        {item.literature.status === "ARCHIVING" ? (
+          <small>
+            {item.missing_step ? archiveReason(item.missing_step) : "正在执行"}
+          </small>
+        ) : null}
+        {item.literature.status === "EXCLUDED" ? (
+          <small>
+            {item.literature.metadata.article_kind
+              ? ARTICLE_KIND_LABELS[item.literature.metadata.article_kind]
+              : "待改判"}
+          </small>
+        ) : null}
+        {item.literature.status === "ARCHIVE_FAILED" ? (
+          <Button
+            variant="text"
+            size="compact"
+            onPress={() => navigate({ view: "archive", literature: null })}
+          >
+            查看问题
+          </Button>
+        ) : null}
       </span>
       <Button size="compact" variant="text" onPress={() => onPreview(id)}>
         预览
@@ -874,7 +995,22 @@ function Filters({
     [doi, setDoi] = useState(
       query.identifiers.find((id) => id.namespace === "doi")?.value ?? "",
     ),
+    [form, setForm] = useState(query.publication_forms[0] ?? ""),
+    [kind, setKind] = useState(query.article_kinds[0] ?? ""),
+    [tag, setTag] = useState(query.tags?.ids[0] ?? ""),
+    [tagMode, setTagMode] = useState(query.tags?.mode ?? "any"),
     [error, setError] = useState("");
+  const api = useApi();
+  const vocabulary = useQuery({
+    queryKey: ["tags", "filter-options"],
+    queryFn: ({ signal }) =>
+      archiveQuery(
+        api,
+        "tags",
+        { operation: "list", request: { limit: 200 } },
+        signal,
+      ),
+  });
   return (
     <form
       className="library-filters"
@@ -887,6 +1023,9 @@ function Filters({
                 ...query,
                 publication_year_from: from ? Number(from) : null,
                 publication_year_to: to ? Number(to) : null,
+                publication_forms: form ? [form] : [],
+                article_kinds: kind ? [kind] : [],
+                tags: { ids: tag ? [tag] : [], mode: tagMode },
                 author: author || null,
                 venue: venue || null,
                 keywords: keyword ? [keyword] : [],
@@ -928,6 +1067,53 @@ function Filters({
         value={keyword}
         onChange={setKeyword}
         placeholder="文献关键词"
+      />
+      <Select
+        label="出版形式"
+        value={form}
+        onChange={setForm}
+        options={[
+          { value: "", label: "全部" },
+          ...Object.entries(PUBLICATION_FORM_LABELS).map(([value, label]) => ({
+            value,
+            label,
+          })),
+        ]}
+      />
+      <Select
+        label="文章性质"
+        value={kind}
+        onChange={setKind}
+        options={[
+          { value: "", label: "全部" },
+          ...Object.entries(ARTICLE_KIND_LABELS).map(([value, label]) => ({
+            value,
+            label,
+          })),
+        ]}
+      />
+      <Select
+        label="文献标签（包含下级）"
+        value={tag}
+        onChange={setTag}
+        options={[
+          { value: "", label: "不限标签" },
+          ...(vocabulary.data
+            ? rows(vocabulary.data).map((t) => ({
+                value: String(t.tag_id),
+                label: String(t.name_zh || t.name_en),
+              }))
+            : []),
+        ]}
+      />
+      <Select
+        label="标签范围"
+        value={tagMode}
+        onChange={(v) => setTagMode(v as "any" | "primary")}
+        options={[
+          { value: "any", label: "任一标签" },
+          { value: "primary", label: "主标签" },
+        ]}
       />
       <TextField label="DOI" value={doi} onChange={setDoi} placeholder="10.…" />
       {error && <p role="alert">{error}</p>}

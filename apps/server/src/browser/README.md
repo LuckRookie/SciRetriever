@@ -17,6 +17,4 @@
 
 模型调用由 agents 执行，网络准入由 network 执行，捕获后的 PDF 验收与发布由 acquisition 负责。出版社专有规则不堆入通用页面控制器。
 
-相关说明：[所属技术文档](../../../../docs/architecture/technical/08-browser-control.md)。
-
-[上级目录](../README.md) · [项目 README](../../../../README.md)
+[上级目录](../README.md)

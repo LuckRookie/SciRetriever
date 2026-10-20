@@ -15,14 +15,11 @@
 - [pdf-acquisition.ts](pdf-acquisition.ts)：单目标 PDF 获取入口。
 - [database-completion.ts](database-completion.ts)：数据库范围冻结与批次补全。
 - [browser-scheduler.ts](browser-scheduler.ts)：浏览器获取调度。
-- [content-analysis.ts](content-analysis.ts)：内容加工入口。
 
 ## 放置边界
 
 CLI/MCP/HTTP 只适配请求；供应商协议、材料验收和事实写入仍由各自业务模块承担。
 
-相关说明：[所属技术文档](../../../../docs/architecture/technical/02-task-coordination.md)。
-
-[上级目录](../README.md) · [项目 README](../../../../README.md)
+[上级目录](../README.md)
 
 - `processor-operations.ts`：CLI/MCP 共用的处理器查询、证据展开和便携导出边界。

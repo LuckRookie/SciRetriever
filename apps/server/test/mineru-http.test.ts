@@ -1,275 +1,45 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import {
-  parserResultSha256,
-  parseAssetId,
-  sha256,
-} from "@sciretriever/contracts";
+import { parseAssetId, sha256 } from "@sciretriever/contracts";
 import { MinerUParser } from "../src/parsing/backends/mineru/http.js";
-import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
 import { buildDocumentStructure } from "../src/document/builder.js";
-import { convertMinerUArchive } from "../src/parsing/backends/mineru/archive.js";
+import { convertMinerURawArchive } from "../src/parsing/backends/mineru/archive.js";
+import { rawParseZip as zip } from "./raw-parse-fixture.js";
 
 const source = new Uint8Array([1, 2, 3]);
 const hash = createHash("sha256").update(source).digest("hex");
-const markdown = new TextEncoder().encode("# parsed\n");
-const markdownHash = createHash("sha256").update(markdown).digest("hex");
-const provenance = {
-  provenance: {
-    provenance_id: "00000000-0000-0000-0000-000000000991",
-    source_kind: "parser",
-    source_name: "mineru-ts",
-    source_record_id: null,
-    observed_at: "2026-09-11T00:00:00Z",
-    input_sha256: hash,
-    parameters_sha256: "1".repeat(64),
-  },
-  parser_version: "ts-mineru-1",
-  mode: null,
+const archiveOptions = {
+  source_asset_id: "00000000-0000-0000-0000-000000000990",
+  source_sha256: hash,
   model_identity: "fixture-model",
+  profile: "vlm-engine" as const,
 };
-
-function crc32(bytes: Uint8Array): number {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1)
-      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
-  }
-  return (crc ^ 0xffffffff) >>> 0;
+async function request() {
+  return {
+    source_asset_id: parseAssetId(archiveOptions.source_asset_id),
+    source_sha256: await sha256(source),
+    media_type: "application/pdf" as const,
+    withContent: async <T>(
+      consume: (chunks: AsyncIterable<Uint8Array>) => Promise<T>,
+    ) =>
+      consume(
+        (async function* () {
+          yield source;
+        })(),
+      ),
+  };
 }
-function zip(entries: readonly { name: string; bytes: Uint8Array }[]): Buffer {
-  const local: Buffer[] = [];
-  const central: Buffer[] = [];
-  let offset = 0;
-  for (const entry of entries) {
-    const name = Buffer.from(entry.name, "utf8");
-    const header = Buffer.alloc(30 + name.length);
-    header.writeUInt32LE(0x04034b50, 0);
-    header.writeUInt16LE(20, 4);
-    header.writeUInt16LE(0x800, 6);
-    header.writeUInt16LE(0, 8);
-    header.writeUInt32LE(crc32(entry.bytes), 14);
-    header.writeUInt32LE(entry.bytes.length, 18);
-    header.writeUInt32LE(entry.bytes.length, 22);
-    header.writeUInt16LE(name.length, 26);
-    name.copy(header, 30);
-    local.push(header, Buffer.from(entry.bytes));
-    const directory = Buffer.alloc(46 + name.length);
-    directory.writeUInt32LE(0x02014b50, 0);
-    directory.writeUInt16LE(20, 4);
-    directory.writeUInt16LE(20, 6);
-    directory.writeUInt16LE(0x800, 8);
-    directory.writeUInt32LE(crc32(entry.bytes), 16);
-    directory.writeUInt32LE(entry.bytes.length, 20);
-    directory.writeUInt32LE(entry.bytes.length, 24);
-    directory.writeUInt16LE(name.length, 28);
-    directory.writeUInt32LE(offset, 42);
-    name.copy(directory, 46);
-    central.push(directory);
-    offset += header.length + entry.bytes.length;
-  }
-  const body = Buffer.concat([...local, ...central]);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(entries.length, 8);
-  end.writeUInt16LE(entries.length, 10);
-  end.writeUInt32LE(Buffer.concat(central).length, 12);
-  end.writeUInt32LE(offset, 16);
-  return Buffer.concat([body, end]);
-}
-
-describe("TypeScript MinerU HTTP client", () => {
-  it("sends PDF bytes to the operator service and validates the canonical output", async () => {
-    const parser = new MinerUParser(
-      {
-        async request(url, options) {
-          expect(url).toBe("http://127.0.0.1:19001/parse");
-          expect(options.headers["content-type"]).toBe("application/pdf");
-          expect([...options.body]).toEqual([...source]);
-          const core = {
-            source_asset_id: "00000000-0000-0000-0000-000000000990",
-            source_sha256: hash,
-            page_count: 1,
-            markdown: {
-              sha256: markdownHash,
-              media_type: "text/markdown",
-              byte_size: markdown.byteLength,
-            },
-            resources: [],
-            provenance,
-          };
-          const output = {
-            ...core,
-            result_sha256: await parserResultSha256(core as never),
-            markdown: {
-              artifact: {
-                sha256: markdownHash,
-                media_type: "text/markdown",
-                byte_size: markdown.byteLength,
-              },
-              base64: Buffer.from(markdown).toString("base64"),
-            },
-          };
-          return {
-            status: 200,
-            headers: [["content-type", "application/json"]],
-            body: new TextEncoder().encode(JSON.stringify(output)),
-          };
-        },
-      },
-      { baseUrl: "http://127.0.0.1:19001", modelIdentity: "fixture-model" },
-    );
-    await expect(
-      parser.parse({
-        source_asset_id: "00000000-0000-0000-0000-000000000990" as never,
-        source_sha256: hash as never,
-        media_type: "application/pdf",
-        withContent: async (consume) =>
-          consume(
-            (async function* () {
-              yield source;
-            })(),
-          ),
-      }),
-    ).resolves.toMatchObject({
-      source_asset_id: "00000000-0000-0000-0000-000000000990",
-      page_count: 1,
-    });
-  });
-
-  it("converts a bounded MinerU ZIP archive in TypeScript and rejects unsafe entries", async () => {
-    const archive = zip([
-      {
-        name: "document.md",
-        bytes: new TextEncoder().encode(
-          "# parsed\n\n![figure](images/figure.png)\n",
-        ),
-      },
-      {
-        name: "document_middle.json",
-        bytes: new TextEncoder().encode(
-          JSON.stringify({ _backend: "vlm", pdf_info: [{ page_idx: 0 }] }),
-        ),
-      },
-      {
-        name: "document_model.json",
-        bytes: new TextEncoder().encode(JSON.stringify({ model: "fixture" })),
-      },
-      {
-        name: "document_content_list.json",
-        bytes: new TextEncoder().encode(JSON.stringify([{ page_idx: 0 }])),
-      },
-      {
-        name: "images/figure.png",
-        bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
-      },
-      {
-        name: "private/debug.json",
-        bytes: new TextEncoder().encode("ignored"),
-      },
-    ]);
-    const converted = await convertMinerUArchive(archive, {
-      source_asset_id: "00000000-0000-0000-0000-000000000990",
-      source_sha256: hash,
-      model_identity: "fixture-model",
-      provenance_id: "00000000-0000-0000-0000-000000000992",
-    });
-    expect(converted.result).toMatchObject({
-      page_count: 1,
-      provenance: {
-        parser_version: "mineru-ts-archive-v3",
-        provenance: { source_name: "mineru" },
-      },
-      resources: [
-        {
-          reference: "images/figure.png",
-          artifact: { media_type: "image/png" },
-        },
-      ],
-    });
-    expect(Buffer.from(converted.markdown.bytes)).toEqual(
-      Buffer.from("# parsed\n\n![figure](images/figure.png)\n"),
-    );
-    const unsafe = zip([
-      { name: "../document.md", bytes: new TextEncoder().encode("# bad") },
-    ]);
-    await expect(
-      convertMinerUArchive(unsafe, {
-        source_asset_id: "00000000-0000-0000-0000-000000000990",
-        source_sha256: hash,
-        model_identity: "fixture-model",
-      }),
-    ).rejects.toBeDefined();
-
-    for (const rejected of [
-      zip([
-        ...[
-          ["document.md", "# parsed\n"],
-          [
-            "document_middle.json",
-            '{"_backend":"vlm","pdf_info":[{"page_idx":0}]}',
-          ],
-          ["document_model.json", "{}"],
-          ["document_content_list.json", '[{"page_idx":0}]'],
-        ].map(([name, value]) => ({
-          name: name!,
-          bytes: new TextEncoder().encode(value),
-        })),
-        { name: "Images/Figure.png", bytes: new Uint8Array([1]) },
-        { name: "images/figure.png", bytes: new Uint8Array([2]) },
-      ]),
-      zip([
-        {
-          name: "bundle/%252e%252e/private.txt",
-          bytes: new TextEncoder().encode("private"),
-        },
-      ]),
-      zip([
-        { name: "document.md", bytes: markdown },
-        {
-          name: "document_middle.json",
-          bytes: new TextEncoder().encode(
-            JSON.stringify({ _backend: "other", pdf_info: [{ page_idx: 0 }] }),
-          ),
-        },
-        { name: "document_model.json", bytes: new TextEncoder().encode("{}") },
-        {
-          name: "document_content_list.json",
-          bytes: new TextEncoder().encode('[{"page_idx":0}]'),
-        },
-      ]),
-    ])
-      await expect(
-        convertMinerUArchive(rejected, {
-          source_asset_id: "00000000-0000-0000-0000-000000000990",
-          source_sha256: hash,
-          model_identity: "fixture-model",
-        }),
-      ).rejects.toMatchObject({ code: "parser-structure" });
-
-    const corrupt = Buffer.from(archive);
-    const payloadOffset = 30 + Buffer.byteLength("document.md");
-    corrupt[payloadOffset] = corrupt[payloadOffset]! ^ 0xff;
-    await expect(
-      convertMinerUArchive(corrupt, {
-        source_asset_id: "00000000-0000-0000-0000-000000000990",
-        source_sha256: hash,
-        model_identity: "fixture-model",
-      }),
-    ).rejects.toMatchObject({ code: "parser-structure" });
-  });
-});
-
-function nestedArchive(
+function entries(
   options: {
     imagePath?: string;
     imageDirectory?: string;
     markdown?: string;
+    backend?: string;
+    privateOutput?: string;
   } = {},
 ) {
   const prefix = "document/vlm/";
-  return zip([
+  return [
     {
       name: prefix + "document.md",
       bytes: Buffer.from(
@@ -280,38 +50,148 @@ function nestedArchive(
       name: prefix + "document_middle.json",
       bytes: Buffer.from(
         JSON.stringify({
-          _backend: "vlm",
+          _backend: options.backend ?? "vlm",
           _version_name: "3.4.4",
           pdf_info: [
-            {
-              page_idx: 0,
-              spans: [{ image_path: options.imagePath ?? "figure.jpg" }],
-            },
-            { page_idx: 1 },
+            { page_idx: 0, page_size: [612, 792] },
+            { page_idx: 1, page_size: [612, 792] },
           ],
         }),
       ),
     },
-    { name: prefix + "document_model.json", bytes: Buffer.from("[]") },
     {
-      name: prefix + "document_content_list.json",
-      bytes: Buffer.from('[{"page_idx":0},{"page_idx":1}]'),
+      name: prefix + "document_content_list_v2.json",
+      bytes: Buffer.from(
+        JSON.stringify([
+          [
+            {
+              type: "image",
+              bbox: [1, 2, 900, 900],
+              content: {
+                image_source: {
+                  path: options.imagePath ?? "images/figure.jpg",
+                },
+                image_caption: [],
+                image_footnote: [],
+              },
+            },
+          ],
+          [],
+        ]),
+      ),
     },
     {
       name: (options.imageDirectory ?? prefix + "images/") + "figure.jpg",
       bytes: Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
     },
-  ]);
+    {
+      name: prefix + "document_model.json",
+      bytes: Buffer.from(options.privateOutput ?? "PRIVATE-ARCHIVE-SENTINEL"),
+    },
+  ];
 }
-const archiveOptions = {
-  source_asset_id: "00000000-0000-0000-0000-000000000990",
-  source_sha256: hash,
-  model_identity: "fixture-model",
-};
+function nestedArchive(options: Parameters<typeof entries>[0] = {}) {
+  return zip(entries(options));
+}
 
-it("resolves nested MinerU resources relative to their documented bases", async () => {
-  const result = await convertMinerUArchive(nestedArchive(), archiveOptions);
-  expect(result.page_count).toBe(2);
+describe("TypeScript MinerU raw HTTP client", () => {
+  it("sends PDF bytes and a fixed profile, accepting only raw ZIP results", async () => {
+    const parser = new MinerUParser(
+      {
+        request: async (url, input) => {
+          expect(url).toBe("http://127.0.0.1:19001/parse");
+          expect(input.headers["content-type"]).toBe("application/pdf");
+          expect(input.headers["x-sciretriever-profile"]).toBe("vlm-engine");
+          expect(input.headers.accept).toBe("application/zip");
+          expect(input.body).toEqual(Buffer.from(source));
+          return {
+            status: 200,
+            headers: [["content-type", "application/zip"]],
+            body: nestedArchive(),
+          };
+        },
+      },
+      { baseUrl: "http://127.0.0.1:19001", modelIdentity: "fixture-model" },
+    );
+    await expect(
+      parser.parseRaw(await request(), "vlm-engine"),
+    ).resolves.toMatchObject({
+      result: {
+        source_asset_id: archiveOptions.source_asset_id,
+        profile: "vlm-engine",
+        page_count: 2,
+      },
+    });
+  });
+  it("rejects the retired JSON response instead of interpreting it as raw parsing", async () => {
+    const parser = new MinerUParser(
+      {
+        request: async () => ({
+          status: 200,
+          headers: [["content-type", "application/json"]],
+          body: Buffer.from("{}"),
+        }),
+      },
+      { baseUrl: "http://127.0.0.1:19001", modelIdentity: "fixture-model" },
+    );
+    await expect(
+      parser.parseRaw(await request(), "vlm-engine"),
+    ).rejects.toMatchObject({ code: "parser-unavailable" });
+  });
+  it.each([
+    [
+      "traversal",
+      () =>
+        zip([
+          ...entries(),
+          { name: "../private.txt", bytes: Buffer.from("secret") },
+        ]),
+    ],
+    [
+      "encoded traversal",
+      () =>
+        zip([
+          ...entries(),
+          {
+            name: "bundle/%252e%252e/private.txt",
+            bytes: Buffer.from("secret"),
+          },
+        ]),
+    ],
+    [
+      "case collision",
+      () =>
+        zip([
+          ...entries(),
+          {
+            name: "document/vlm/Images/Figure.jpg",
+            bytes: Buffer.from("collision"),
+          },
+        ]),
+    ],
+    ["wrong backend", () => nestedArchive({ backend: "other" })],
+    [
+      "CRC mismatch",
+      () => {
+        const bytes = nestedArchive();
+        const offset = 30 + Buffer.byteLength("document/vlm/document.md");
+        bytes[offset] = bytes[offset]! ^ 0xff;
+        return bytes;
+      },
+    ],
+  ] as const)(
+    "rejects %s without publishing a partial result",
+    async (_, archive) => {
+      await expect(
+        convertMinerURawArchive(archive(), archiveOptions),
+      ).rejects.toMatchObject({ code: "parser-structure" });
+    },
+  );
+});
+
+it("resolves nested resources strictly relative to their document output", async () => {
+  const result = await convertMinerURawArchive(nestedArchive(), archiveOptions);
+  expect(result.result.page_count).toBe(2);
   expect(result.resources.map((r) => r.reference)).toEqual([
     "images/figure.jpg",
   ]);
@@ -322,20 +202,16 @@ it("resolves nested MinerU resources relative to their documented bases", async 
     "(images/figure.jpg)",
   );
   await expect(
-    convertMinerUArchive(
-      nestedArchive({ imagePath: "images/figure.jpg" }),
-      archiveOptions,
-    ),
-  ).resolves.toMatchObject({ page_count: 2 });
-  await expect(
-    convertMinerUArchive(nestedArchive(), { ...archiveOptions, page_count: 1 }),
+    convertMinerURawArchive(nestedArchive(), {
+      ...archiveOptions,
+      page_count: 1,
+    }),
   ).rejects.toMatchObject({ code: "parser-structure" });
 });
-
 it.each([
   { imagePath: "../figure.jpg" },
   { imagePath: "%252e%252e/figure.jpg" },
-  { imagePath: "missing.jpg" },
+  { imagePath: "images/missing.jpg" },
   { imageDirectory: "images/" },
   { markdown: "# parsed\n![figure](../images/figure.jpg)" },
   { markdown: "# parsed\n![figure](images/missing.jpg)" },
@@ -343,11 +219,10 @@ it.each([
   "rejects missing or escaping resources without a root-directory fallback: %j",
   async (options) => {
     await expect(
-      convertMinerUArchive(nestedArchive(options), archiveOptions),
+      convertMinerURawArchive(nestedArchive(options), archiveOptions),
     ).rejects.toMatchObject({ code: "parser-structure" });
   },
 );
-
 it("uses the parsed page count even when raw PDF bytes contain no page object markers", async () => {
   const parser = new MinerUParser(
     {
@@ -359,64 +234,57 @@ it("uses the parsed page count even when raw PDF bytes contain no page object ma
     },
     { baseUrl: "http://127.0.0.1:19001", modelIdentity: "fixture-model" },
   );
-  const result = await parser.parse({
-    source_asset_id: parseAssetId(archiveOptions.source_asset_id),
-    source_sha256: await sha256(source),
-    media_type: "application/pdf",
-    withContent: async (consume) =>
-      consume(
-        (async function* () {
-          yield source;
-        })(),
-      ),
-  });
-  expect(result.page_count).toBe(2);
+  expect(
+    (await parser.parseRaw(await request(), "vlm-engine")).result.page_count,
+  ).toBe(2);
 });
-
-it("gives each parsing observation a fresh provenance ID while keeping identical result hashes stable", async () => {
-  const first = await convertMinerUArchive(nestedArchive(), archiveOptions);
-  const repeat = await convertMinerUArchive(nestedArchive(), archiveOptions);
-  const other = await convertMinerUArchive(nestedArchive(), {
+it("binds immutable raw identity to source, content and model, excluding discarded private output", async () => {
+  const first = await convertMinerURawArchive(nestedArchive(), archiveOptions);
+  const repeat = await convertMinerURawArchive(
+    nestedArchive({ privateOutput: "changed ignored debug data" }),
+    archiveOptions,
+  );
+  expect(repeat.result).toEqual(first.result);
+  const other = await convertMinerURawArchive(nestedArchive(), {
     ...archiveOptions,
     source_asset_id: "00000000-0000-0000-0000-000000000993",
     source_sha256: await sha256(new Uint8Array([4, 5, 6])),
   });
-  const ids = [first, repeat, other].map(
-    (r) => r.provenance.provenance.provenance_id,
-  );
-  expect(new Set(ids).size).toBe(3);
-  expect(ids).not.toContain("00000000-0000-0000-0000-000000000000");
-  expect(repeat.result.result_sha256).toBe(first.result.result_sha256);
   expect(other.result.result_sha256).not.toBe(first.result.result_sha256);
-  const changedModel = await convertMinerUArchive(nestedArchive(), {
+  const model = await convertMinerURawArchive(nestedArchive(), {
     ...archiveOptions,
     model_identity: "different-model-revision",
   });
-  expect(changedModel.provenance.provenance.parameters_sha256).not.toBe(
-    first.provenance.provenance.parameters_sha256,
+  expect(model.result.parameters_sha256).not.toBe(
+    first.result.parameters_sha256,
   );
+  expect(model.result.raw_parse_id).not.toBe(first.result.raw_parse_id);
+  expect(Object.keys(first).sort()).toEqual([
+    "blocks",
+    "markdown",
+    "private_content_list",
+    "resources",
+    "result",
+  ]);
 });
-
 it.each([
   "![figure][figure-ref]\n\n[figure-ref]: images/figure.jpg\n",
   "![figure][]\n\n[figure]: images/figure.jpg\n",
   '<picture><source srcset="images/figure.jpg 1x"><img src=images/figure.jpg></picture>\n',
   "![figure](images/figure.jpg)\n\n`![code](images/missing.jpg)`\n<!-- ![comment](images/missing.jpg) -->\n```md\n![example](images/missing.jpg)\n```\n",
 ])(
-  "uses the same resource closure for archive conversion and admission: %s",
+  "uses the same resource closure for conversion and admission: %s",
   async (markdown) => {
-    const converted = await convertMinerUArchive(
+    const converted = await convertMinerURawArchive(
       nestedArchive({ markdown }),
       archiveOptions,
-      new TypeScriptParserArtifactRules(),
     );
-    expect(converted.resources.map((resource) => resource.reference)).toEqual([
+    expect(converted.resources.map((r) => r.reference)).toEqual([
       "images/figure.jpg",
     ]);
     expect(Buffer.from(converted.markdown.bytes).toString()).toBe(markdown);
   },
 );
-
 it.each([
   "![figure][ref]\n\n[ref]: images/missing.jpg\n",
   '<img srcset="images/figure.jpg 1x, images/missing.jpg 2x">',
@@ -426,17 +294,12 @@ it.each([
   "rejects missing or escaping resources in all supported forms: %s",
   async (markdown) => {
     await expect(
-      convertMinerUArchive(
-        nestedArchive({ markdown }),
-        archiveOptions,
-        new TypeScriptParserArtifactRules(),
-      ),
+      convertMinerURawArchive(nestedArchive({ markdown }), archiveOptions),
     ).rejects.toMatchObject({ code: "parser-structure" });
   },
 );
-
-it("preserves supplied scientific text and heading decisions through conversion and document construction", async () => {
-  // This is a synthetic parser OUTPUT, not a claim about real PDF OCR quality.
+it("preserves supplied scientific text and heading decisions without turning parser Markdown into the default document", async () => {
+  // Synthetic parser OUTPUT, not a claim about real PDF OCR quality.
   const markdown = [
     "# Synthetic multi-column article",
     "Left-column paragraph α, then right-column paragraph β.",
@@ -451,23 +314,23 @@ it("preserves supplied scientific text and heading decisions through conversion 
     "[scheme]: images/figure.jpg",
     "",
   ].join("\n");
-  const converted = await convertMinerUArchive(
+  const converted = await convertMinerURawArchive(
     nestedArchive({ markdown }),
     archiveOptions,
-    new TypeScriptParserArtifactRules(),
   );
   const built = await buildDocumentStructure(converted.markdown.bytes);
   expect(Buffer.from(converted.markdown.bytes)).toEqual(Buffer.from(markdown));
-  expect(built.structure.sections.map((section) => section.title)).toEqual([
+  expect(built.structure.sections.map((s) => s.title)).toEqual([
     "Synthetic multi-column article",
     "Supporting Information",
     "Formula and table",
   ]);
-  const reconstructed = Buffer.concat(
-    built.structure.segments.map((segment) =>
-      converted.markdown.bytes.subarray(segment.start_utf8, segment.end_utf8),
+  expect(
+    Buffer.concat(
+      built.structure.segments.map((s) =>
+        converted.markdown.bytes.subarray(s.start_utf8, s.end_utf8),
+      ),
     ),
-  );
-  expect(reconstructed).toEqual(Buffer.from(markdown));
+  ).toEqual(Buffer.from(markdown));
   expect(converted.resources).toHaveLength(1);
 });

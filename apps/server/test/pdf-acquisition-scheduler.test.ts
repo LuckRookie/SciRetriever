@@ -172,9 +172,7 @@ describe("completion acquisition cohorts", () => {
       const home = await mkdtemp(
         join(tmpdir(), "sciretriever-browser-notify-"),
       );
-      const app = await createApplication(home, {
-        executionSchema: "upgrade-synthetic",
-      });
+      const app = await createApplication(home, {});
       const slow = deferred(),
         fast = deferred();
       const observerFailure = new Error("fixture observer failed");
@@ -273,9 +271,7 @@ describe("completion acquisition cohorts", () => {
     "continues HTTP PDF hints and reports the actual Browser terminal (%s)",
     async (mode) => {
       const home = await mkdtemp(join(tmpdir(), "sciretriever-http-pdf-hint-"));
-      const application = await createApplication(home, {
-        executionSchema: "upgrade-synthetic",
-      });
+      const application = await createApplication(home, {});
       const phases: string[] = [];
       const service = new EntryPdfAcquisitionService({
         registry: new PublicAcquisitionRegistry([
@@ -371,9 +367,7 @@ describe("completion acquisition cohorts", () => {
       const home = await mkdtemp(
         join(tmpdir(), "sciretriever-landing-escalation-"),
       );
-      const application = await createApplication(home, {
-        executionSchema: "upgrade-synthetic",
-      });
+      const application = await createApplication(home, {});
       const phase: string[] = [];
       const publicSource: AcquisitionSourcePort = {
         source_name: "doi-landing",
@@ -511,9 +505,7 @@ describe("completion acquisition cohorts", () => {
 
   it("runs Direct, publisher API and Browser barriers in order and reuses rejected-byte evidence", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-pdf-cohort-"));
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     const ids = [1, 2, 3, 4].map((value) =>
       parseLiteratureId(
         `00000000-0000-0000-0000-${String(8_000 + value).padStart(12, "0")}`,
@@ -703,9 +695,7 @@ it.each([302, 429])(
   "supplies first-hop DOI evidence before the publisher API and preserves resolver HTTP %s boundaries",
   async (status) => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-landing-handoff-"));
-    const app = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const app = await createApplication(home, {});
     const assembly = await import("../src/acquisition/assembly.js");
     const phases: string[] = [];
     const landing =

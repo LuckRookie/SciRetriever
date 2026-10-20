@@ -1,9 +1,11 @@
+import { externalManifestFixture } from "./external-manifest-fixture.js";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  createInputManifest,
   extractionSpecHash,
   extractionCanonicalJsonBytes,
   EXTRACTION_MAX_BATCH_BYTES,
@@ -23,9 +25,6 @@ import {
   createQueryApplication,
 } from "../src/bootstrap/application.js";
 import { startQueryOnlyHttp } from "../src/workbench/http.js";
-import { migrateDocumentCatalog } from "../src/storage/sqlite/document-migration.js";
-import { migrateRetrievalCatalog } from "../src/storage/sqlite/retrieval-migration.js";
-import { migrateExtractionCatalog } from "../src/storage/sqlite/extraction-migration.js";
 import { runExtractionStorage } from "../src/storage/sqlite/extraction-engine.js";
 import { SqliteWorker } from "../src/storage/sqlite/worker.js";
 import {
@@ -113,18 +112,6 @@ async function environment() {
     }
     await app.close();
     const catalog = join(home, "catalog.sqlite");
-    await migrateDocumentCatalog({
-      catalog_path: catalog,
-      backup_path: join(home, "before-v3.sqlite"),
-    });
-    await migrateRetrievalCatalog({
-      catalog_path: catalog,
-      backup_path: join(home, "before-v4.sqlite"),
-    });
-    await migrateExtractionCatalog({
-      catalog_path: catalog,
-      backup_path: join(home, "before-v5.sqlite"),
-    });
     app = await createApplication(home);
     const spec = await specification();
     const inputs = assets.map((asset, index) => ({
@@ -134,7 +121,10 @@ async function environment() {
       asset_sha256: asset.sha256,
       document_version_id: null,
     }));
-    const prepared = await app.extractionPreparation.prepare({ spec, inputs });
+    const prepared = await externalManifestFixture(app.documentRead, {
+      spec,
+      inputs,
+    });
     const evidence = await Promise.all(
       assets.map(
         async (asset) =>
@@ -215,7 +205,6 @@ describe("extraction candidate delivery on v5", () => {
     const delivery = new ExtractionDeliveryService(
       env.app.database as unknown as SqliteWorker,
       env.app.documentRead,
-      env.app.extractionPreparation,
     );
     const unhandled: unknown[] = [];
     const onUnhandled = (error: unknown) => unhandled.push(error);
@@ -260,7 +249,6 @@ describe("extraction candidate delivery on v5", () => {
         const delivery = new ExtractionDeliveryService(
           database,
           env.app.documentRead,
-          env.app.extractionPreparation,
         );
         await expect(
           delivery.create({
@@ -278,9 +266,7 @@ describe("extraction candidate delivery on v5", () => {
   it("returns distinct HTTP statuses for each write admission outcome", async () => {
     const env = await environment();
     await env.app.close();
-    env.app = await createApplication(env.home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    env.app = await createApplication(env.home, {});
     const query = await createQueryApplication(env.home);
     let code = "delivery-write-conflict";
     const extraction = {
@@ -413,7 +399,6 @@ describe("extraction candidate delivery on v5", () => {
       const delivery = new ExtractionDeliveryService(
         worker,
         env.app.documentRead,
-        env.app.extractionPreparation,
       );
       const intent = batch(env, op.operation_id);
       const client = new AbortController();
@@ -444,9 +429,7 @@ describe("extraction candidate delivery on v5", () => {
   it("keeps a posted SQLite commit discoverable after the HTTP client disconnects", async () => {
     const env = await environment();
     await env.app.close();
-    env.app = await createApplication(env.home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    env.app = await createApplication(env.home, {});
     const op = await operation(env);
     const intent = batch(env, op.operation_id);
     let posted!: () => void;
@@ -481,7 +464,6 @@ describe("extraction candidate delivery on v5", () => {
     const delivery = new ExtractionDeliveryService(
       worker,
       env.app.documentRead,
-      env.app.extractionPreparation,
     );
     const query = await createQueryApplication(env.home);
     const http = await startQueryOnlyHttp({
@@ -556,7 +538,7 @@ describe("extraction candidate delivery on v5", () => {
         ...content,
         spec_sha256: await extractionSpecHash(content),
       };
-      const prepared = await env.app.extractionPreparation.prepare({
+      const prepared = await externalManifestFixture(env.app.documentRead, {
         spec,
         inputs: env.assets.map((asset, index) => ({
           input_id: `source-${index + 1}`,
@@ -641,7 +623,7 @@ describe("extraction candidate delivery on v5", () => {
         ...FIXTURE_LITERATURE,
         literature_id: missingLiteratureId,
       });
-      const prepared = await env.app.extractionPreparation.prepare({
+      const prepared = await externalManifestFixture(env.app.documentRead, {
         spec: env.prepared.spec,
         inputs: [
           {
@@ -659,6 +641,23 @@ describe("extraction candidate delivery on v5", () => {
             document_version_id: null,
           },
         ],
+      });
+      const invented = await createInputManifest(
+        prepared.manifest.items.map((item) =>
+          item.input_id === "missing-source"
+            ? { ...item, literature_id: id(778) }
+            : item,
+        ),
+      );
+      await expect(
+        env.app.extractionDelivery.create({
+          caller_id: "local.missing",
+          spec: prepared.spec,
+          manifest: invented,
+        }),
+      ).rejects.toMatchObject({
+        code: "input-missing",
+        issue: { input_id: "missing-source" },
       });
       const op = await env.app.extractionDelivery.create({
         caller_id: "local.missing",
@@ -857,7 +856,7 @@ describe("extraction candidate delivery on v5", () => {
         ...content,
         spec_sha256: await extractionSpecHash(content),
       };
-      const prepared = await env.app.extractionPreparation.prepare({
+      const prepared = await externalManifestFixture(env.app.documentRead, {
         spec,
         inputs: env.assets.map((asset, index) => ({
           input_id: `source-${index + 1}`,
@@ -957,9 +956,7 @@ describe("extraction candidate delivery on v5", () => {
   it("exposes explicit CSRF-protected maintenance delivery and receipt reading over loopback", async () => {
     const env = await environment();
     await env.app.close();
-    env.app = await createApplication(env.home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    env.app = await createApplication(env.home, {});
     expect(env.app.maintenance).not.toBeNull();
     const query = await createQueryApplication(env.home);
     const http = await startQueryOnlyHttp({
@@ -1063,7 +1060,7 @@ describe("extraction candidate delivery on v5", () => {
         }),
       ).toThrow();
       expect(
-        await query.extractionPreparation?.prepare({
+        await externalManifestFixture(query.documentRead!, {
           spec: env.prepared.spec,
           inputs: env.assets.map((asset, index) => ({
             input_id: `source-${index + 1}`,
@@ -1073,7 +1070,7 @@ describe("extraction candidate delivery on v5", () => {
             document_version_id: null,
           })),
         }),
-      ).toMatchObject({ persistence: "requires-catalog-v5" });
+      ).toMatchObject({ manifest: env.prepared.manifest });
     } finally {
       await http.close();
       await query.close();
@@ -1450,9 +1447,7 @@ describe("extraction candidate delivery on v5", () => {
         }),
       });
       await env.app.close();
-      env.app = await createApplication(env.home, {
-        executionSchema: "upgrade-synthetic",
-      });
+      env.app = await createApplication(env.home, {});
       query = await createQueryApplication(env.home);
       http = await startQueryOnlyHttp({
         application: query,
@@ -1593,7 +1588,7 @@ describe("extraction candidate delivery on v5", () => {
         ...objectContent,
         spec_sha256: await extractionSpecHash(objectContent),
       };
-      const prepared = await query.extractionPreparation!.prepare({
+      const prepared = await externalManifestFixture(query.documentRead!, {
         spec,
         inputs: selected,
       });
@@ -1685,7 +1680,7 @@ describe("extraction candidate delivery on v5", () => {
         caller_id: "external.program",
         spec: prepared.spec,
         manifest: (
-          await query.extractionPreparation!.prepare({
+          await externalManifestFixture(query.documentRead!, {
             spec,
             inputs: selected.slice(0, 1),
           })
@@ -1802,7 +1797,7 @@ describe("extraction candidate delivery on v5", () => {
         ...arrayContent,
         spec_sha256: await extractionSpecHash(arrayContent),
       };
-      const arrayPrepared = await query.extractionPreparation!.prepare({
+      const arrayPrepared = await externalManifestFixture(query.documentRead!, {
         spec: arraySpec,
         inputs: selected.slice(0, 1),
       });
@@ -1847,10 +1842,13 @@ describe("extraction candidate delivery on v5", () => {
         ...segmentContent,
         spec_sha256: await extractionSpecHash(segmentContent),
       };
-      const segmentPrepared = await query.extractionPreparation!.prepare({
-        spec: segmentSpec,
-        inputs: selected.slice(0, 1),
-      });
+      const segmentPrepared = await externalManifestFixture(
+        query.documentRead!,
+        {
+          spec: segmentSpec,
+          inputs: selected.slice(0, 1),
+        },
+      );
       expect(segmentPrepared.missing_required_capabilities).toMatchObject([
         { input_id: "first-paper" },
       ]);

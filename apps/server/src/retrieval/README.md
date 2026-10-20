@@ -1,18 +1,12 @@
-# 已有材料与知识检索
+# 已有材料与处理结果检索
 
-维护可重建的材料/知识索引，查询固定文档和知识产物并交付可展开的上下文。
+只读检索已有书目、固定校订稿与算子结果，并返回可核对的来源。缺少材料或索引时报告缺口，不自动发现、下载、建档或生成总结。
 
-## 内容入口
+- [index.ts](index.ts)：可重建的材料索引；核验来源后有界批量发布，保留取消及 source revision 校验。
+- [query.ts](query.ts)：书目与固定文档上下文、来源证据和分页。
+- [knowledge-query.ts](knowledge-query.ts)：当前混合上下文（schema 3）。先保留材料检索排序，再读取算子结果；结果按固定 ID 顺序续读，使用结果 ID、内容哈希和记录 ID，不读取旧知识 artifact。
+- [storage.ts](storage.ts)：离线检索存储适配。结果检索复用 [storage/processor-results.ts](../storage/processor-results.ts) 的投影、固定字节校验与证据解析，不维护第二份知识索引。
 
-- [index.ts](index.ts)：材料索引构建。已核验来源先暂存，再跨来源合并有界批次写入，避免逐篇提交事务；保留空来源计数、取消与发布前 revision 校验。
-- [query.ts](query.ts)：材料上下文查询。
-- [knowledge-index.ts](knowledge-index.ts)：知识索引构建。
-- [knowledge-query.ts](knowledge-query.ts)：知识与材料查询。
+分页游标绑定查询和范围，算子结果分页冻结开始时的发布范围。读取预算限制最终 JSON 大小与核验字节；来源损坏报告缺口，已有可靠分支保留。原始事实分别归 Literature、Document 和 Analysis 所有。
 
-## 放置边界
-
-查询缺少材料或索引时报告缺口，不自动发现、下载或生成总结；原始事实归 literature/document/analysis。
-
-相关说明：[所属技术文档](../../../../docs/architecture/technical/06-retrieval-context.md)。
-
-[上级目录](../README.md) · [项目 README](../../../../README.md)
+[上级目录](../README.md)

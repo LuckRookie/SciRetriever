@@ -1,3 +1,4 @@
+import { initializeCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -440,6 +441,7 @@ max_total_output_tokens = 20000
       const pdf = Buffer.from(workbenchPdf());
       const assetId = parseAssetId("00000000-0000-0000-0000-000000000030");
       const assetHash = await sha256(pdf);
+      await initializeCatalogSchema(join(home, "catalog.sqlite"));
       application = await createApplication(home, {
         configurationOwner: owner,
         mineruTransportFactory: () => ({
@@ -478,10 +480,13 @@ max_total_output_tokens = 20000
       });
 
       await expect(
-        application.parsing!.prepareCurrentPrimary(
+        application.rawParsing!.parseCurrentPrimary(
           FIXTURE_LITERATURE.literature_id,
+          ["pipeline"],
         ),
-      ).rejects.toMatchObject({ code: "parser-unavailable" });
+      ).resolves.toMatchObject([
+        { status: "failed", failure_code: "parser-unavailable" },
+      ]);
       expect(requests[0]?.authorization).toBe(
         "Bearer synthetic-mineru-token-one",
       );
@@ -497,10 +502,13 @@ max_total_output_tokens = 20000
         current.revision,
       );
       await expect(
-        application.parsing!.prepareCurrentPrimary(
+        application.rawParsing!.parseCurrentPrimary(
           FIXTURE_LITERATURE.literature_id,
+          ["pipeline"],
         ),
-      ).rejects.toMatchObject({ code: "parser-unavailable" });
+      ).resolves.toMatchObject([
+        { status: "failed", failure_code: "parser-unavailable" },
+      ]);
       expect(requests[1]?.authorization).toBe(
         "Bearer synthetic-mineru-token-two",
       );
@@ -511,10 +519,13 @@ max_total_output_tokens = 20000
         beforeRevocation.revision,
       );
       await expect(
-        application.parsing!.prepareCurrentPrimary(
+        application.rawParsing!.parseCurrentPrimary(
           FIXTURE_LITERATURE.literature_id,
+          ["pipeline"],
         ),
-      ).rejects.toMatchObject({ code: "parser-unavailable" });
+      ).resolves.toMatchObject([
+        { status: "failed", failure_code: "parser-unavailable" },
+      ]);
       expect(requests).toHaveLength(2);
     } finally {
       await application?.close();

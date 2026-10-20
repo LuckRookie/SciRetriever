@@ -1,42 +1,47 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { VerifiedReaderError } from "./files/reader.js";
 import {
   canonicalJsonBytes,
+  parseArtifactRef,
   parseAssetId,
   parseLiteratureId,
-  parseArtifactRef,
-  parseProcessorResult,
   parseProcessorCollection,
-  processorResultBytes,
-  processorPointer,
-  processorJson,
+  parseProcessorResult,
   processorExact,
+  processorJson,
+  processorObject,
+  processorPointer,
+  processorResultBytes,
   processorText,
   sha256,
-  type EvidenceRef,
   type DocumentReadingRef,
+  type EvidenceRef,
   type ProcessorCitation,
-  type ProcessorInput,
   type ProcessorCollection,
   type ProcessorRecord,
-  processorObject,
+  type ProcessorRecordSource,
   type ProcessorResult,
 } from "@sciretriever/contracts";
 import {
+  ProcessorError,
   processorError,
   resultCitations,
+  type ProcessorSourceRecord,
   type ProcessorStore,
   type StoredProcessorResult,
-  type ProcessorSourceRecord,
 } from "../analysis/processor.js";
-import type { DocumentReadService } from "../document/read.js";
-import type { SqliteSynthesisStorage } from "./synthesis.js";
-import type { FileStore } from "./files/store.js";
-import type { SqliteWorker } from "./sqlite/worker.js";
+import {
+  DocumentReadError,
+  type DocumentReadService,
+} from "../document/read.js";
 import { artifactReference } from "./artifact-layout.js";
+import type { FileStore } from "./files/store.js";
 import type {
-  ProcessorPublication,
   ProcessorProjection,
+  ProcessorPublication,
   ProcessorRecordQuery,
 } from "./sqlite/processor-engine.js";
+import type { SqliteWorker } from "./sqlite/worker.js";
 
 type Row = Record<string, unknown>;
 export interface ResolvedProcessorEvidence {
@@ -66,13 +71,16 @@ function identical(a: unknown, b: unknown): boolean {
   );
 }
 export class SqliteProcessorStorage implements ProcessorStore {
+  private readonly contextScope = new AsyncLocalStorage<{
+    verification: Verification;
+    reserve: (bytes: number) => void;
+  }>();
   private closed = false;
   private readonly active = new Set<Promise<unknown>>();
   constructor(
     private readonly database: SqliteWorker,
     private readonly files: FileStore,
     private readonly documents: DocumentReadService,
-    private readonly knowledge: SqliteSynthesisStorage,
   ) {}
   async close() {
     this.closed = true;
@@ -92,6 +100,7 @@ export class SqliteProcessorStorage implements ProcessorStore {
     return this.work(() => this.documents.withReadScope(work));
   }
   private async bytes(row: Row, signal?: AbortSignal): Promise<unknown> {
+    this.contextScope.getStore()?.reserve(Number(row.content_size));
     return this.files.withVerified(
       String(row.content_reference),
       parseArtifactRef({
@@ -149,32 +158,80 @@ export class SqliteProcessorStorage implements ProcessorStore {
         materials: Row[];
         documents: Row[];
         results: Row[];
-        knowledge: Row[];
       }>("pins", id, signal);
       for (const citation of resultCitations(result.content))
         await this.resolve(citation, cache, stack, signal);
-      const expectedDocuments = new Map<
+      const expectedDocuments = new Map<string, DocumentReadingRef>();
+      const expectedMaterials = new Map<
         string,
-        Extract<ProcessorInput, { kind: "document" }>
+        import("@sciretriever/contracts").DocumentMaterialRef
       >();
       const expectedResults = new Map<string, string>();
-      const expectedKnowledge = new Map<string, string>();
-      const materials = result.invocation.inputs.filter(
-        (i) => i.kind === "material",
-      );
+      for (const input of result.invocation.inputs) {
+        if (input.kind === "archive-document") {
+          for (const part of input.parts)
+            if (part.available) {
+              const document = (
+                await this.documents.describe(
+                  { document_version_id: part.document_version_id },
+                  signal,
+                )
+              ).document;
+              if (
+                document.source_material_ref.literature_id !==
+                  input.literature_id ||
+                document.source_material_ref.asset_id !== part.asset_id ||
+                document.source_material_ref.asset_sha256 !==
+                  part.asset_sha256 ||
+                (await sha256(
+                  canonicalJsonBytes({
+                    document_version_id: part.document_version_id,
+                    structure_annotation_id: part.structure_annotation_id,
+                  }),
+                )) !== part.content_version
+              )
+                processorError("processor-input-changed");
+              expectedDocuments.set(document.document_version_id, document);
+            }
+        } else if (input.kind === "snapshot") {
+          for (const source of input.mapped_results) {
+            expectedResults.set(source.result_id, source.content_sha256);
+            const stored = await this.read(
+              source.result_id,
+              cache,
+              stack,
+              signal,
+            );
+            if (!stored || stored.ref.content_sha256 !== source.content_sha256)
+              processorError("processor-input-changed");
+          }
+        } else if (input.kind === "external") {
+          if (input.document) {
+            const current = (
+              await this.documents.describe(
+                { document_version_id: input.document.document_version_id },
+                signal,
+              )
+            ).document;
+            if (!identical(current, input.document))
+              processorError("processor-input-changed");
+            expectedDocuments.set(current.document_version_id, current);
+          } else if (input.material)
+            expectedMaterials.set(input.material.asset_id, input.material);
+        }
+      }
       if (
-        pins.materials.length !==
-        new Set(materials.map((i) => i.material.asset_id)).size
+        pins.documents.length !== expectedDocuments.size ||
+        pins.results.length !== expectedResults.size ||
+        pins.materials.length !== expectedMaterials.size
       )
         processorError("processor-dependency-integrity");
       for (const pin of pins.materials) {
-        const m = materials.find(
-          (i) => i.material.asset_id === pin.asset_id,
-        )?.material;
+        const material = expectedMaterials.get(String(pin.asset_id));
         if (
-          !m ||
-          m.asset_sha256 !== pin.asset_sha256 ||
-          m.literature_id !== pin.literature_id
+          !material ||
+          material.asset_sha256 !== pin.asset_sha256 ||
+          material.literature_id !== pin.literature_id
         )
           processorError("processor-dependency-integrity");
         await this.documents.resolveEvidence(
@@ -182,62 +239,15 @@ export class SqliteProcessorStorage implements ProcessorStore {
             schema_version: 1,
             target_kind: "material",
             locator_scheme: "material-file-v1",
-            material: m,
+            material,
             locator: { kind: "file" },
-            content_sha256: m.asset_sha256,
+            content_sha256: material.asset_sha256,
           },
           signal,
         );
       }
-      for (const input of result.invocation.inputs) {
-        if (input.kind === "document") {
-          expectedDocuments.set(input.document.document_version_id, input);
-          const current =
-            cache.documents.get(input.document.document_version_id) ??
-            (
-              await this.documents.describe(
-                { document_version_id: input.document.document_version_id },
-                signal,
-              )
-            ).document;
-          cache.documents.set(current.document_version_id, current);
-          if (!identical(current, input.document))
-            processorError("processor-input-changed");
-        } else if (input.kind === "result") {
-          expectedResults.set(input.result_id, input.content_sha256);
-          const source = await this.read(input.result_id, cache, stack, signal);
-          if (!source || source.ref.content_sha256 !== input.content_sha256)
-            processorError("processor-input-changed");
-          if (input.record_ids) {
-            const records = await this.contentRecords(
-              source.result.content,
-              signal,
-            );
-            if (
-              input.record_ids.some(
-                (id) => !records.some((r) => r.record_id === id),
-              )
-            )
-              processorError("processor-record-missing");
-          }
-        } else if (input.kind === "knowledge")
-          expectedKnowledge.set(input.artifact_id, input.content_sha256);
-      }
-      if (result.content.kind === "knowledge")
-        expectedKnowledge.set(
-          result.content.artifact_id,
-          result.content.content_sha256,
-        );
-      if (
-        pins.documents.length !== expectedDocuments.size ||
-        pins.results.length !== expectedResults.size ||
-        pins.knowledge.length !== expectedKnowledge.size
-      )
-        processorError("processor-dependency-integrity");
       for (const pin of pins.documents) {
-        const d = expectedDocuments.get(
-          String(pin.document_version_id),
-        )?.document;
+        const d = expectedDocuments.get(String(pin.document_version_id));
         const m = d?.source_material_ref;
         if (
           !d ||
@@ -255,20 +265,22 @@ export class SqliteProcessorStorage implements ProcessorStore {
           pin.source_sha256
         )
           processorError("processor-dependency-integrity");
-      for (const pin of pins.knowledge) {
-        const hash = expectedKnowledge.get(String(pin.artifact_id));
-        if (hash !== pin.content_sha256)
-          processorError("processor-dependency-integrity");
-        const source = await this.knowledge.sourceById(
-          String(pin.artifact_id),
-          signal,
-        );
-        if (!source || source.artifact.content_ref.sha256 !== hash)
-          processorError("processor-input-changed");
-      }
       for (const citation of resultCitations(result.content))
         await this.resolve(citation, cache, stack, signal);
+      const parts = result.coverage.flatMap((c) => c.parts);
+      const outcomes = Object.fromEntries(
+        ["extracted", "not-reported", "part-absent", "incomplete"].map(
+          (outcome) => [
+            outcome,
+            parts.filter((p) => p.outcome === outcome).length,
+          ],
+        ),
+      );
       const stored = {
+        outcomes,
+        freshness: await this.database.processor<
+          NonNullable<StoredProcessorResult["freshness"]>
+        >("freshness", id, signal),
         result,
         ref: { result_id: id, content_sha256: String(row.content_sha256) },
       };
@@ -335,7 +347,8 @@ export class SqliteProcessorStorage implements ProcessorStore {
         ...ref,
         created_at: result.created_at,
         inputs: result.invocation.inputs,
-        knowledge: result.content.kind === "knowledge" ? result.content : null,
+        reads: result.invocation.execution.reads,
+        uses_description: result.invocation.execution.uses_description,
       };
       const row = await this.database.processor<Row>(
         "publish",
@@ -352,98 +365,48 @@ export class SqliteProcessorStorage implements ProcessorStore {
     content: ProcessorResult["content"],
     signal?: AbortSignal,
   ): Promise<readonly ProcessorRecord[]> {
+    if (signal?.aborted) processorError("processor-cancelled");
     if (content.kind === "records") return content.records;
-    if (content.kind === "text")
-      return [
-        {
-          record_id: "text",
-          payload: { text: content.text },
-          evidence: content.evidence.length
-            ? [{ pointer: "", sources: content.evidence }]
-            : [],
-          missing: {},
-        },
-      ];
-    const source = await this.knowledge.sourceById(content.artifact_id, signal);
-    if (
-      !source ||
-      source.artifact.content_ref.sha256 !== content.content_sha256
-    )
-      processorError("processor-input-changed");
-    return source.artifact.content.statements.map((s) => ({
-      record_id: s.statement_id,
-      payload: processorJson({
-        text: s.text,
-        category: s.category,
-        epistemic: s.epistemic,
-        conditions: s.conditions,
-        quantity: s.quantity,
-      }),
-      evidence: [
-        {
-          pointer: "",
-          sources: [
-            {
-              kind: "knowledge",
-              artifact_id: content.artifact_id,
-              content_sha256: content.content_sha256,
-              statement_id: s.statement_id,
-            },
-          ],
-        },
-      ],
-      missing: {},
-    }));
+    if (content.kind === "report")
+      return content.claims.map((c) => ({
+        record_id: c.record_id,
+        payload: { text: c.text },
+        evidence: [{ pointer: "", sources: c.sources }],
+        missing: {},
+      }));
+    return [];
   }
   records(
-    input: Extract<ProcessorInput, { kind: "result" | "knowledge" }>,
+    input: ProcessorRecordSource,
     signal?: AbortSignal,
   ): Promise<readonly ProcessorSourceRecord[]> {
     return this.readWork(async () => {
-      const cache = verification();
-      let content: ProcessorResult["content"];
-      let ref: { result_id: string; content_sha256: string } | null = null;
-      if (input.kind === "result") {
-        const stored = await this.read(
-          input.result_id,
-          cache,
-          new Set(),
-          signal,
-        );
-        if (!stored || stored.ref.content_sha256 !== input.content_sha256)
-          processorError("processor-input-changed");
-        content = stored.result.content;
-        ref = stored.ref;
-      } else
-        content = {
-          kind: "knowledge",
-          artifact_id: input.artifact_id,
-          content_sha256: input.content_sha256,
-        };
-      const all = await this.contentRecords(content, signal);
-      const selected = input.kind === "result" ? input.record_ids : null;
-      if (selected?.some((id) => !all.some((r) => r.record_id === id)))
+      const cache = verification(),
+        stored = await this.read(input.result_id, cache, new Set(), signal);
+      if (!stored || stored.ref.content_sha256 !== input.content_sha256)
+        processorError("processor-input-changed");
+      const all = await this.contentRecords(stored.result.content, signal);
+      if (input.record_ids?.some((id) => !all.some((r) => r.record_id === id)))
         processorError("processor-record-missing");
-      const records = selected
-        ? selected.map((id) => all.find((r) => r.record_id === id)!)
+      const selected = input.record_ids
+        ? input.record_ids.map((id) => all.find((r) => r.record_id === id)!)
         : all;
       const result: ProcessorSourceRecord[] = [];
-      for (const record of records) {
-        const citation: ProcessorCitation = ref
-          ? { kind: "result", ...ref, record_id: record.record_id, pointer: "" }
-          : {
-              kind: "knowledge",
-              artifact_id: (
-                content as Extract<typeof content, { kind: "knowledge" }>
-              ).artifact_id,
-              content_sha256: input.content_sha256,
-              statement_id: record.record_id,
-            };
+      for (const record of selected) {
+        const citation: ProcessorCitation = {
+          kind: "result",
+          ...stored.ref,
+          record_id: record.record_id,
+          pointer: "",
+        };
         const resolved = await this.resolve(citation, cache, new Set(), signal);
         result.push({
           record_id: record.record_id,
           payload: record.payload,
           citation,
+          value_checks: stored.result.value_checks.filter(
+            (c) => c.record_id === record.record_id,
+          ),
           literature_ids: resolved.literature_ids,
         });
       }
@@ -482,6 +445,36 @@ export class SqliteProcessorStorage implements ProcessorStore {
     const key = JSON.stringify(citation),
       cached = cache.citations.get(key);
     if (cached) return cached;
+    if (citation.kind === "snapshot") {
+      const snapshot = await this.database.snapshot<
+        import("@sciretriever/contracts").SnapshotHeader & {
+          member: import("@sciretriever/contracts").SnapshotMember | null;
+        }
+      >(
+        "member",
+        {
+          snapshot_id: citation.snapshot_id,
+          literature_id: citation.literature_id,
+        },
+        signal,
+      );
+      if (snapshot.content_sha256 !== citation.content_sha256)
+        processorError("processor-input-changed");
+      const payload = snapshot.member
+        ? processorJson({
+            literature_id: snapshot.member.literature_id,
+            metadata: snapshot.member.metadata,
+            tags: snapshot.member.tags,
+          })
+        : { count: snapshot.member_count };
+      const resolved = {
+        value: processorPointer(payload, citation.pointer),
+        evidence: [],
+        literature_ids: snapshot.member ? [snapshot.member.literature_id] : [],
+      };
+      cache.citations.set(key, resolved);
+      return resolved;
+    }
     if (citation.kind === "document") {
       if (citation.evidence.content_sha256 === null)
         processorError("processor-invalid-evidence");
@@ -505,7 +498,6 @@ export class SqliteProcessorStorage implements ProcessorStore {
       cache.citations.set(key, resolved);
       return resolved;
     }
-    let knowledgeKey: string | undefined;
     let value: unknown;
     let sources: readonly ProcessorCitation[];
     if (citation.kind === "result") {
@@ -526,39 +518,7 @@ export class SqliteProcessorStorage implements ProcessorStore {
             citation.pointer.startsWith(`${e.pointer}/`),
         )
         .flatMap((e) => e.sources);
-    } else {
-      const key = `knowledge:${citation.artifact_id}:${citation.statement_id}`;
-      if (stack.has(key) || stack.size >= 32)
-        processorError("processor-dependency-cycle");
-      knowledgeKey = key;
-      stack.add(key);
-      const source = await this.knowledge.sourceById(
-        citation.artifact_id,
-        signal,
-      );
-      if (
-        !source ||
-        source.artifact.content_ref.sha256 !== citation.content_sha256
-      )
-        processorError("processor-input-changed");
-      const statement = source.artifact.content.statements.find(
-        (s) => s.statement_id === citation.statement_id,
-      );
-      if (!statement) processorError("processor-record-missing");
-      value = statement.text;
-      sources = statement.evidence.map((e) =>
-        "schema_version" in e
-          ? { kind: "document" as const, evidence: e }
-          : e.target_kind === "document"
-            ? { kind: "document" as const, evidence: e.evidence }
-            : {
-                kind: "knowledge" as const,
-                artifact_id: e.source_artifact_id,
-                content_sha256: e.source_content_sha256,
-                statement_id: e.statement_id,
-              },
-      );
-    }
+    } else processorError("processor-invalid-evidence");
     const evidence: EvidenceRef[] = [];
     const literature = new Set<string>();
     for (const source of sources) {
@@ -566,7 +526,6 @@ export class SqliteProcessorStorage implements ProcessorStore {
       evidence.push(...r.evidence);
       r.literature_ids.forEach((id) => literature.add(id));
     }
-    if (knowledgeKey) stack.delete(knowledgeKey);
     const resolved = {
       value,
       evidence,
@@ -592,9 +551,21 @@ export class SqliteProcessorStorage implements ProcessorStore {
           after = String(rows.at(-1)!.result_id);
         }
       }
+      const scheduled = new Set(ids);
       for (const id of ids) {
         const stored = await this.byId(id, signal);
         if (!stored) processorError("processor-result-missing");
+        // Snapshot map steps publish their own durable results inside the
+        // processor service. Include those dependencies in the same projection
+        // repair, otherwise one missing map projection invalidates all search.
+        for (const input of stored.result.invocation.inputs) {
+          if (input.kind !== "snapshot") continue;
+          for (const dependency of input.mapped_results) {
+            if (scheduled.has(dependency.result_id)) continue;
+            scheduled.add(dependency.result_id);
+            ids.push(dependency.result_id);
+          }
+        }
         const records = await this.contentRecords(
           stored.result.content,
           signal,
@@ -605,7 +576,7 @@ export class SqliteProcessorStorage implements ProcessorStore {
             record_id: r.record_id,
             payload: r.payload,
           })),
-          text: `${stored.result.invocation.processor.id} ${JSON.stringify(stored.result.invocation.spec)} ${stored.result.content.kind === "text" ? stored.result.content.text : ""}`,
+          text: `${stored.result.invocation.processor.id} ${JSON.stringify(stored.result.invocation.spec)} ${stored.result.content.kind === "report" ? stored.result.content.text : ""}`,
         };
         await this.database.processor("project", p, signal);
       }
@@ -721,13 +692,14 @@ export class SqliteProcessorStorage implements ProcessorStore {
     after = "",
     signal?: AbortSignal,
     literatureId: string | null = null,
+    stale: boolean | null = null,
   ) {
     return this.readWork(async () => {
       this.page(limit, 0);
       if (literatureId !== null) parseLiteratureId(literatureId);
       const rows = await this.database.processor<Row[]>(
         "list",
-        { limit, after, literature_id: literatureId },
+        { limit, after, literature_id: literatureId, stale },
         signal,
       );
       return {
@@ -737,6 +709,7 @@ export class SqliteProcessorStorage implements ProcessorStore {
           processor_id: r.processor_id,
           processor_version: r.processor_version,
           complete: Boolean(r.complete),
+          freshness: r.freshness,
           created_at: r.created_at,
         })),
         next_after:
@@ -771,6 +744,123 @@ export class SqliteProcessorStorage implements ProcessorStore {
       .split(/\s+/u)
       .map((t) => `"${t.replace(/"/g, '""')}"`)
       .join(" OR ");
+  }
+  contextReadScope<T>(work: () => Promise<T>): Promise<T> {
+    let bytes = 0;
+    const reserve = (size: number) => {
+      if (
+        !Number.isSafeInteger(size) ||
+        size < 0 ||
+        bytes + size > 64 * 1024 * 1024
+      )
+        throw new DocumentReadError("document-budget");
+      bytes += size;
+    };
+    return this.work(() =>
+      this.contextScope.run({ verification: verification(), reserve }, () =>
+        this.documents.withReadScope(work, reserve),
+      ),
+    );
+  }
+  contextPage(
+    query: string,
+    scope: readonly string[],
+    watermark: number | null,
+    after: { result_id: string; record_id: string } | null,
+    signal?: AbortSignal,
+  ) {
+    return this.readWork(async () => {
+      await this.indexStatus();
+      const page = await this.database.processor<{
+        watermark: number;
+        row: { result_id: string; record_id: string } | null;
+      }>(
+        "context-search",
+        { query: this.fts(query), scope, watermark, after },
+        signal,
+      );
+      if (!page.row) return { ...page, item: null, gap: null };
+      try {
+        const cache =
+          this.contextScope.getStore()?.verification ?? verification();
+        const stored = await this.read(
+          page.row.result_id,
+          cache,
+          new Set(),
+          signal,
+        );
+        if (!stored) processorError("processor-index-corrupt");
+        await this.checkProjection(stored);
+        let text: string,
+          evidence: readonly EvidenceRef[] = [];
+        if (page.row.record_id) {
+          const resolved = await this.resolve(
+            {
+              kind: "result",
+              ...stored.ref,
+              record_id: page.row.record_id,
+              pointer: "",
+            },
+            cache,
+            new Set(),
+            signal,
+          );
+          text =
+            typeof resolved.value === "object" &&
+            resolved.value !== null &&
+            "text" in resolved.value &&
+            typeof resolved.value.text === "string"
+              ? resolved.value.text
+              : JSON.stringify(resolved.value);
+          evidence = resolved.evidence;
+        } else
+          text =
+            stored.result.content.kind === "report"
+              ? stored.result.content.text
+              : JSON.stringify(stored.result.content);
+        return {
+          ...page,
+          gap: null,
+          item: {
+            kind: "generated-result" as const,
+            reference: {
+              kind: "result" as const,
+              ...stored.ref,
+              record_id: page.row.record_id || null,
+            },
+            processor_id: stored.result.invocation.processor.id,
+            source_literature_ids: stored.result.literature_ids,
+            text,
+            evidence: evidence.slice(0, 32),
+            rank: 0,
+            score: 0,
+            gap: evidence.length > 32 ? ("evidence-limit" as const) : null,
+          },
+        };
+      } catch (error) {
+        if (
+          signal?.aborted ||
+          (error instanceof DocumentReadError &&
+            ["document-budget", "document-cancelled"].includes(error.code))
+        )
+          throw error;
+        if (
+          error instanceof VerifiedReaderError ||
+          (error instanceof ProcessorError &&
+            /integrity|input-changed|record-missing|invalid-evidence/.test(
+              error.code,
+            )) ||
+          (error instanceof DocumentReadError &&
+            [
+              "document-missing",
+              "document-integrity",
+              "material-missing",
+            ].includes(error.code))
+        )
+          return { ...page, item: null, gap: "result-source-unavailable" };
+        throw error;
+      }
+    });
   }
   search(query: string, limit = 20, offset = 0) {
     this.page(limit, offset);
@@ -904,7 +994,19 @@ export class SqliteProcessorStorage implements ProcessorStore {
         if (!stored) processorError("processor-result-missing");
         await this.checkProjection(stored);
         const records = await this.contentRecords(stored.result.content);
-        sourceRecords.set(id, records);
+        sourceRecords.set(
+          id,
+          records.map((r) => ({
+            ...r,
+            value_checks: stored.result.value_checks
+              .filter((c) => c.record_id === r.record_id)
+              .map((c) =>
+                stored.result.content.kind === "report"
+                  ? { ...c, pointer: "/text" }
+                  : c,
+              ),
+          })),
+        );
         records.forEach((r) =>
           Object.keys(r.payload).forEach((k) => fields.add(k)),
         );

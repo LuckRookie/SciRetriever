@@ -1,49 +1,24 @@
 import { spawn } from "node:child_process";
-import { pathToFileURL } from "node:url";
-import { expect, it } from "vitest";
-import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
 import {
+  link,
   readFile,
   readdir,
-  writeFile,
   rename,
   symlink,
-  link,
+  writeFile,
 } from "node:fs/promises";
-import { createHash } from "node:crypto";
-import { parseAnalysisInputIdentity } from "@sciretriever/contracts";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { expect, it } from "vitest";
 import { createApplication } from "../src/bootstrap/application.js";
 import { ArtifactRecovery } from "../src/storage/files/recovery.js";
 import {
   CatalogWriteAdmission,
   acquireCatalogWriteLock,
 } from "../src/storage/write-admission.js";
-import { setup, lit } from "./content-fixture.js";
-async function prepared() {
-  const env = await setup();
-  const before = await env.app.library.detail(lit),
-    primary = before.primary_pdf!.asset;
-  const decision = {
-    outcome: "no_usable_content",
-    input: parseAnalysisInputIdentity({
-      literature_id: lit,
-      primary_asset_id: primary.asset_id,
-      primary_pdf_sha256: primary.sha256,
-      parser_result_sha256: before.parser_result!.result_sha256,
-      input_metadata_revision: before.metadata_revision,
-      input_metadata_sha256: before.metadata_sha256,
-    }),
-  };
-  const snapshot = await env.app.database.contentCleanupSnapshot(lit);
-  return {
-    ...env,
-    before,
-    primary,
-    decision,
-    artifacts: snapshot!.artifacts,
-    journal: join(env.app.files.root, ".reclamation"),
-  };
-}
+import { lit, reclamationFixture } from "./reclamation-fixture.js";
+const prepared = () => reclamationFixture(true);
 it.each([
   "before-commit",
   "after-commit",
@@ -55,32 +30,19 @@ it.each([
     const env = await prepared();
     let reopened: Awaited<ReturnType<typeof createApplication>> | undefined;
     try {
-      const commit = env.app.database.cleanupNoUsableContent.bind(
-        env.app.database,
-      );
-      const reclaim = env.app.artifactReclaimer.reclaim.bind(
-        env.app.artifactReclaimer,
-      );
-      if (point === "before-commit" || point === "after-commit")
-        env.app.database.cleanupNoUsableContent = async (command) => {
-          if (point === "after-commit") await commit(command);
-          throw new Error("fixture process stop");
-        };
-      else
-        env.app.artifactReclaimer.reclaim = async (values) => {
-          if (point === "partial-reclamation")
-            await reclaim(values, {
-              checkpoint: async (stage) => {
-                if (stage === "unlinked")
-                  throw new Error("fixture process stop");
-              },
-            });
-          else await reclaim(values);
-          throw new Error("fixture process stop");
-        };
-      await expect(
-        env.app.noUsableContent.cleanup(env.decision),
-      ).rejects.toBeInstanceOf(Error);
+      const ticket = await env.app.artifactRecovery.prepare(env.artifacts);
+      if (point !== "before-commit") await env.unregister();
+      if (point === "partial-reclamation")
+        await expect(
+          env.app.artifactReclaimer.reclaim(env.artifacts, {
+            checkpoint: async (stage) => {
+              if (stage === "unlinked") throw new Error("fixture process stop");
+            },
+          }),
+        ).rejects.toThrow();
+      if (point === "after-reclamation")
+        await env.app.artifactReclaimer.reclaim(env.artifacts);
+      expect(ticket.artifacts).toEqual(env.artifacts);
       expect(await readdir(env.journal)).toHaveLength(1);
       const bytes = await readFile(
         join(env.journal, (await readdir(env.journal))[0]!),
@@ -106,7 +68,9 @@ it.each([
               .length,
           ).toBe(a.artifact.byte_size);
       } else {
-        expect((await reopened.library.detail(lit)).primary_pdf).toBeNull();
+        expect((await reopened.library.detail(lit)).primary_pdf).toEqual(
+          env.before.primary_pdf,
+        );
         for (const a of env.artifacts)
           await expect(
             readFile(join(reopened.files.root, a.reference)),
@@ -123,12 +87,8 @@ it("rechecks current registration during recovery and preserves a newly register
   const env = await prepared();
   let reopened: Awaited<ReturnType<typeof createApplication>> | undefined;
   try {
-    env.app.artifactReclaimer.reclaim = async () => {
-      throw new Error("fixture process stop");
-    };
-    await expect(
-      env.app.noUsableContent.cleanup(env.decision),
-    ).rejects.toMatchObject({ code: "no-usable-content-reclamation" });
+    await env.app.artifactRecovery.prepare(env.artifacts);
+    await env.unregister();
     await env.app.database.putAsset(env.primary);
     await env.app.close();
     reopened = await createApplication(env.home);
@@ -234,13 +194,12 @@ it.each([false, true])(
     const source = `
     const {createApplication}=await import(process.argv[1]);
     const app=await createApplication(process.argv[2]);
-    const commit=app.database.cleanupNoUsableContent.bind(app.database);
-    app.database.cleanupNoUsableContent=async command=>{
-      if(process.argv[4]==="true")await commit(command);
-      process.stdout.write("boundary\\n");
-      await new Promise(()=>{});
-    };
-    await app.noUsableContent.cleanup(JSON.parse(process.argv[3]));
+    const {DatabaseSync}=await import("node:sqlite");
+    const values=JSON.parse(process.argv[3]);
+    await app.artifactRecovery.prepare(values);
+    if(process.argv[4]==="true")await app.writes.run(async()=>{const db=new DatabaseSync(app.configuration.paths.catalog_path ?? process.argv[2]+"/catalog.sqlite");try{db.exec("PRAGMA foreign_keys=ON;BEGIN IMMEDIATE");for(const a of values){db.prepare("DELETE FROM assets WHERE relative_path=?").run(a.reference);db.prepare("DELETE FROM artifact_objects WHERE relative_path=?").run(a.reference);}db.exec("COMMIT");}finally{db.close();}});
+    process.stdout.write("boundary\\n");
+    await new Promise(()=>{});
   `;
     await env.app.close();
     const child = spawn(
@@ -252,7 +211,7 @@ it.each([false, true])(
         pathToFileURL(resolve("apps/server/dist/bootstrap/application.js"))
           .href,
         env.home,
-        JSON.stringify(env.decision),
+        JSON.stringify(env.artifacts),
         String(committed),
       ],
       {
@@ -291,8 +250,8 @@ it.each([false, true])(
       expect((await exited).signal).toBe("SIGKILL");
       reopened = await createApplication(env.home);
       expect(await readdir(env.journal)).toEqual([]);
-      expect((await reopened.library.detail(lit)).primary_pdf === null).toBe(
-        committed,
+      expect((await reopened.library.detail(lit)).primary_pdf).toEqual(
+        env.before.primary_pdf,
       );
       for (const a of env.artifacts) {
         const reading = readFile(join(reopened.files.root, a.reference));

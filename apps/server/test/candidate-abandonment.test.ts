@@ -14,9 +14,7 @@ import {
 
 it("abandons only an unpublished durable Candidate and recovers retained evidence", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-abandonment-"));
-  let app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  let app = await createApplication(home, {});
   try {
     await app.database.putLiterature(FIXTURE_LITERATURE);
     const bytes = workbenchPdf();
@@ -90,9 +88,7 @@ it("abandons only an unpublished durable Candidate and recovers retained evidenc
     });
 
     await app.close();
-    app = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    app = await createApplication(home, {});
     expect(
       await app.execution!.transfers.recover(first.transfer_id),
     ).toBeNull();

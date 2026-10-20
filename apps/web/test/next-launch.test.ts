@@ -1,3 +1,5 @@
+import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
+import { SCHEMA_VERSION } from "../../server/src/storage/sqlite/schema.js";
 import { loginWorkbenchPage } from "../../server/test/workbench-auth-fixture.js";
 import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -82,7 +84,7 @@ describe("formal Web launch and database binding", () => {
         await expect.poll(() => address).not.toBe("");
         expect(await inspectCatalogSchema(catalog)).toMatchObject({
           status: "ready",
-          schema_version: 10,
+          schema_version: SCHEMA_VERSION,
         });
         expect((await owner.read()).configuration.paths).toEqual({
           catalog_path: catalog,
@@ -137,6 +139,7 @@ describe("formal Web launch and database binding", () => {
           .getByLabel("主导航")
           .getByRole("button", { name: /^文献库/ })
           .click();
+        await showAllLibraryStatuses(page);
         await expect
           .poll(() =>
             page.getByLabel("文献列表", { exact: true }).textContent(),
@@ -191,6 +194,7 @@ describe("formal Web launch and database binding", () => {
           .getByLabel("主导航")
           .getByRole("button", { name: /^文献库/ })
           .click();
+        await showAllLibraryStatuses(page);
         await expect
           .poll(() =>
             page.getByLabel("文献列表", { exact: true }).textContent(),
@@ -198,10 +202,22 @@ describe("formal Web launch and database binding", () => {
           .toContain("A synthetic Web workbench article");
         for (const width of [1280, 850, 390]) {
           await page.setViewportSize({ width, height: 900 });
+          const overflow = await page.evaluate(() =>
+            [...document.querySelectorAll("body *")]
+              .filter((el) => el.getBoundingClientRect().right > innerWidth + 1)
+              .map((el) => ({
+                tag: el.tagName,
+                class: el.className,
+                width: el.getBoundingClientRect().width,
+                right: el.getBoundingClientRect().right,
+              }))
+              .slice(0, 15),
+          );
           expect(
             await page.evaluate(
               () => document.documentElement.scrollWidth <= innerWidth,
             ),
+            JSON.stringify({ width, overflow }),
           ).toBe(true);
         }
         await page

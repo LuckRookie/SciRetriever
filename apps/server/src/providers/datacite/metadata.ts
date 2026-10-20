@@ -215,6 +215,13 @@ function observationFromRecord(
       input_sha256: options.inputSha256,
       parameters_sha256: options.parametersSha256,
     },
+    source_type: stringValue(
+      attributes.types &&
+        typeof attributes.types === "object" &&
+        !Array.isArray(attributes.types)
+        ? (attributes.types as Record<string, unknown>).resourceTypeGeneral
+        : null,
+    ),
     metadata: {
       title: titles[0] ?? null,
       authors: creators,
@@ -225,13 +232,6 @@ function observationFromRecord(
         : null,
       publication_date: stringValue(attributes.created),
       publication_year: attributes.publicationYear,
-      document_type: stringValue(
-        attributes.types &&
-          typeof attributes.types === "object" &&
-          !Array.isArray(attributes.types)
-          ? (attributes.types as Record<string, unknown>).resourceTypeGeneral
-          : null,
-      ),
       language: stringValue(attributes.language),
       venue: stringValue(container.title),
       publisher: stringValue(attributes.publisher),

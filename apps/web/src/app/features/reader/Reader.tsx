@@ -1,4 +1,6 @@
 import type { DocumentReadResultMap } from "@sciretriever/contracts";
+import { parsePageRegion } from "@sciretriever/contracts";
+import { useQuery } from "@tanstack/react-query";
 import {
   useLayoutEffect,
   useMemo,
@@ -6,7 +8,22 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { copyText } from "../../../browser-platform.js";
+import type {
+  DocumentLinkPreview,
+  PdfControls,
+  ReaderFrame,
+  ReaderOutlineEntry,
+  ReaderResourceEntry,
+  ReadingContext,
+} from "../../../reading/contract.js";
+import { readFixedSource } from "../../../reading/source.js";
+import { readingPosition } from "../../../reading/state.js";
+import {
+  readDocument,
+  readPdfBytes,
+  resolveReadingSources,
+} from "../../../reading/transport.js";
 import {
   AnchoredPopover,
   Button,
@@ -23,43 +40,47 @@ import {
   SplitPane,
   TechDetails,
 } from "../../components/index.js";
+import { archiveQuery, rows } from "../../data/archive.js";
+import { paperTitle, readLiterature } from "../../data/library.js";
+import { preferences } from "../../data/preferences.js";
 import { useApi } from "../../data/query.js";
-import { readLiterature, paperTitle } from "../../data/library.js";
 import {
   navigate,
   sourceParameterKeys,
   useUrlState,
   type ReaderMode,
 } from "../../data/url.js";
-import { useShell } from "../../shell/context.js";
-import { preferences } from "../../data/preferences.js";
 import { AnimatedPanel } from "../../motion/index.js";
+import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
-import { readFixedSource } from "../../../reading/source.js";
-import { readingPosition } from "../../../reading/state.js";
-import {
-  readDocument,
-  readPdfBytes,
-  resolveReadingSources,
-} from "../../../reading/transport.js";
-import type {
-  DocumentLinkPreview,
-  PdfControls,
-  ReaderFrame,
-  ReaderOutlineEntry,
-  ReaderResourceEntry,
-  ReadingContext,
-} from "../../../reading/contract.js";
-import { copyText } from "../../../browser-platform.js";
+import { ProofreadPanel } from "../archive/ProofreadPanel.js";
+import { StructurePanel } from "../archive/StructurePanel.js";
 import { download, OperationDialog } from "../library/OperationDialog.js";
-import { SummaryView } from "./SummaryView.js";
 import { ReaderInformation } from "./ReaderInformation.js";
 import "./reading.css";
+import { SummaryView } from "./SummaryView.js";
 
 export default function Reader() {
   const api = useApi(),
     shell = useShell(),
     route = useUrlState();
+  const [showSources, setShowSources] = useState(false),
+    [inspect, setInspect] = useState(route.parameters.get("inspect") === "1"),
+    [selectedSegment, setSelectedSegment] = useState<string | undefined>();
+  const parts = useQuery({
+    queryKey: ["document", "parts", route.literature],
+    enabled: !!route.literature,
+    queryFn: async ({ signal }) =>
+      rows(
+        await archiveQuery(
+          api,
+          "document-parts",
+          { literature_id: route.literature, offset: 0, limit: 200 },
+          signal,
+        ),
+        "parts",
+      ),
+  });
   const id = route.literature ?? "",
     mode = route.reader,
     sourceKey = route.parameters.toString();
@@ -158,7 +179,7 @@ export default function Reader() {
           id,
           mode,
           mode === "know"
-            ? new URLSearchParams(sourceKey).get("knowledge")
+            ? new URLSearchParams(sourceKey).get("result")
             : mode === "pdf"
               ? sources.data?.material
               : sources.data?.document,
@@ -215,6 +236,28 @@ export default function Reader() {
     setDocumentLink(null);
     delete root.current.dataset.readingReady;
     const current: ReaderFrame = {
+      onSegment: (segment) => {
+        setSelectedSegment(segment);
+        setInspect(true);
+      },
+      ...(new URLSearchParams(sourceKey).has("page")
+        ? {
+            pdfLocation: {
+              page: Math.max(
+                1,
+                Math.min(
+                  10000,
+                  Number(new URLSearchParams(sourceKey).get("page")) || 1,
+                ),
+              ),
+              region: new URLSearchParams(sourceKey).get("region")
+                ? parsePageRegion(
+                    JSON.parse(new URLSearchParams(sourceKey).get("region")!),
+                  )
+                : null,
+            },
+          }
+        : {}),
       documentTitle: paperTitle(detail.data),
       animateNavigation: () =>
         document.documentElement.dataset.reducedMotion !== "true",
@@ -340,41 +383,29 @@ export default function Reader() {
     );
   const changeMode = (value: string) =>
     shell.openPaper(id, value as ReaderMode, sourceParameters());
-  const fromSynthesis =
-    route.parameters.get("from") === "syn" &&
-    route.parameters.get("knowledge") !== route.parameters.get("artifact");
+  const fromSummary = route.parameters.get("returnReader") === "know";
   const back = () => {
-    const artifact = route.parameters.get("artifact");
-    if (fromSynthesis) {
-      navigate(
-        { view: "syn", literature: null, artifact },
-        { clearSource: true },
-      );
-    } else if (artifact) {
-      const previous = Object.fromEntries(
-        [
-          "contentHash",
-          "manifest",
-          "statement",
-          "statementHash",
-          "from",
-          "result",
-          "resultHash",
-          "collection",
-        ].flatMap((key) =>
-          route.parameters.has(key) ? [[key, route.parameters.get(key)!]] : [],
-        ),
-      );
+    const result = route.parameters.get("result");
+    if (fromSummary) {
       shell.openPaper(id, "know", {
-        ...previous,
-        knowledge: artifact,
-        ...(previous.contentHash &&
-        previous.manifest &&
-        previous.statement &&
-        previous.statementHash
-          ? { source: "knowledge" }
+        ...(result ? { result } : {}),
+        ...(route.parameters.get("resultHash")
+          ? { resultHash: route.parameters.get("resultHash")! }
+          : {}),
+        ...(route.parameters.get("from")
+          ? { from: route.parameters.get("from")! }
           : {}),
       });
+    } else if (result) {
+      navigate(
+        {
+          view: "ext",
+          literature: null,
+          result,
+          resultHash: route.parameters.get("resultHash"),
+        },
+        { clearSource: true },
+      );
     } else
       navigate(
         {
@@ -474,12 +505,20 @@ export default function Reader() {
     );
   if (!detail.data) return <Skeleton label="正在读取文献" rows={6} />;
   const information = (
-    <ReaderInformation
-      detail={detail.data}
-      resources={resources}
-      document={sources.data?.document ?? null}
-      onOperation={setOperation}
-    />
+    <>
+      <ReaderInformation
+        detail={detail.data}
+        resources={resources}
+        document={sources.data?.document ?? null}
+        onOperation={setOperation}
+      />
+      {sources.data?.document ? (
+        <StructurePanel
+          id={id}
+          document={sources.data.document.document_version_id}
+        />
+      ) : null}
+    </>
   );
   const readingControls =
     mode === "pdf" && pdf ? (
@@ -569,6 +608,44 @@ export default function Reader() {
       data-layout={layout}
       aria-label="文献阅读器"
     >
+      {(parts.data?.length ?? 0) > 1 ? (
+        <Select
+          label="阅读部分"
+          value={sources.data?.material?.asset_id ?? ""}
+          onChange={(asset) => {
+            const part = parts.data!.find((p) => p.asset_id === asset)!;
+            navigate(
+              {
+                view: "lib",
+                literature: id,
+                reader: mode,
+                asset,
+                assetHash: String(part.asset_sha256),
+              },
+              { clearSource: true },
+            );
+          }}
+          options={parts.data!.map((p, index) => ({
+            value: String(p.asset_id),
+            label:
+              p.role === "primary-pdf" || p.part === "main"
+                ? "正文"
+                : `补充材料 ${index}`,
+          }))}
+        />
+      ) : null}
+      <Dialog title="校订区块对照" isOpen={inspect} onOpenChange={setInspect}>
+        {sources.data?.material ? (
+          <ProofreadPanel
+            id={id}
+            asset={sources.data.material.asset_id}
+            hash={sources.data.material.asset_sha256}
+            {...(selectedSegment ? { segment: selectedSegment } : {})}
+          />
+        ) : (
+          <p>此文献尚无可对照的材料。</p>
+        )}
+      </Dialog>
       <div className="reader-toolbar">
         <div className="reader-toolbar-start">
           <SegmentedControl
@@ -593,7 +670,27 @@ export default function Reader() {
             <Icon name="menu" />
           </IconButton>
         </div>
-        <div className="reader-toolbar-context">{readingControls}</div>
+        <div className="reader-toolbar-context">
+          {readingControls}
+          {mode === "doc" ? (
+            <Button
+              aria-pressed={showSources}
+              variant="text"
+              onPress={() => setShowSources((v) => !v)}
+            >
+              显示核对依据
+            </Button>
+          ) : null}
+          <Button
+            variant="text"
+            onPress={() => {
+              setSelectedSegment(undefined);
+              setInspect(true);
+            }}
+          >
+            校订对照
+          </Button>
+        </div>
         <div className="reader-toolbar-end">
           <IconButton
             aria-label="文档内查找"
@@ -685,17 +782,15 @@ export default function Reader() {
           />
         </div>
       </div>
-      {(route.parameters.has("artifact") || route.parameters.has("from")) && (
+      {(fromSummary || route.parameters.has("from")) && (
         <div className="reader-return">
           <Button variant="text" icon={<Icon name="arrow" />} onPress={back}>
             返回
-            {fromSynthesis
-              ? "综合"
-              : route.parameters.has("artifact")
-                ? "总结"
-                : route.parameters.get("from") === "ext"
-                  ? "结果"
-                  : "检索"}
+            {fromSummary
+              ? "总结"
+              : route.parameters.get("from") === "ext"
+                ? "结果"
+                : "检索"}
           </Button>
           <span>正在查看固定来源，阅读不会修改材料。</span>
         </div>
@@ -751,7 +846,7 @@ export default function Reader() {
               ) : (
                 <p>
                   {mode === "know"
-                    ? "总结按栏目组织，可在正文顶部选择。"
+                    ? "总结按条目呈现，点击短证据编号核对原文。"
                     : outlineNote || "暂无可靠章节目录。"}
                 </p>
               )}
@@ -780,7 +875,7 @@ export default function Reader() {
             )}
             <div
               ref={body}
-              className={`reading-scroll reader-engine-body ${layoutPosition.fullWidth ? "reading-full" : layoutPosition.wide ? "reading-wide" : ""}`}
+              className={`reading-scroll reader-engine-body ${showSources ? "reading-show-sources" : ""} ${layoutPosition.fullWidth ? "reading-full" : layoutPosition.wide ? "reading-wide" : ""}`}
               hidden={mode === "know" || source.value?.kind === "metadata"}
               style={
                 {
@@ -821,7 +916,12 @@ export default function Reader() {
                   } as CSSProperties
                 }
               >
-                <SummaryView id={id} source={source.value} search={search} />
+                <SummaryView
+                  id={id}
+                  source={source.value}
+                  search={search}
+                  position={position}
+                />
               </div>
             )}
             <div

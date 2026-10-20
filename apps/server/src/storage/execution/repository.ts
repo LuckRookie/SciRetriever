@@ -14,7 +14,6 @@ import {
   type ExecutionIntervention,
   type ExecutionPolicySnapshot,
   type ExecutionRuntimeInspection,
-  type ExecutionMigrationReceipt,
   type ExecutionRecoveryResult,
   type ExecutionTarget,
   type ExecutionTargetStage,
@@ -74,10 +73,6 @@ export class ExecutionRepository {
 
   inspect(): Promise<ExecutionRuntimeInspection> {
     return this.database.inspectExecutionRuntime();
-  }
-
-  migrate(dryRun = false): Promise<ExecutionMigrationReceipt> {
-    return this.database.migrateExecutionRuntime(dryRun);
   }
 
   async createJob(input: CreateExecutionJobInput): Promise<ExecutionJob> {

@@ -27,19 +27,39 @@ const fixture = JSON.parse(
   ),
 ) as Record<string, unknown>;
 
+// Adapt the test input explicitly; the historical encoding oracle stays immutable.
+const { document_type: _legacyType, ...oldMetadata } =
+  fixture.metadata as Record<string, unknown>;
+const { document_types: _legacyTypes, ...oldQuery } = fixture.query as Record<
+  string,
+  unknown
+>;
+void _legacyType;
+void _legacyTypes;
+const metadata = {
+  ...oldMetadata,
+  publication_form: "journal-article",
+  article_kind: null,
+};
+const query = {
+  ...oldQuery,
+  publication_forms: ["journal-article"],
+  article_kinds: [],
+};
+
 function rejects(value: unknown, parser: (input: unknown) => unknown): void {
   expect(() => parser(value)).toThrow(ContractValidationError);
 }
 
 describe("closed provider-neutral contracts", () => {
-  it("parses every synthetic v1 record at the boundary", () => {
+  it("parses current contracts while preserving the historical encoding fixture", () => {
     expect(parseProvenance(fixture.provenance).source_name).toBe(
       "fixture-provider",
     );
-    expect(
-      parseLiteratureMetadata(fixture.metadata).authors[0]?.display_name,
-    ).toBe("Ada Lovelace");
-    expect(parseLibraryQuery(fixture.query).publication_year_from).toBe(2020);
+    expect(parseLiteratureMetadata(metadata).authors[0]?.display_name).toBe(
+      "Ada Lovelace",
+    );
+    expect(parseLibraryQuery(query).publication_year_from).toBe(2020);
     expect(parseAsset(fixture.asset).path).toBe("objects/aa/synthetic.pdf");
     expect(parseReference(fixture.relation).source_literature_id).toBe(
       fixture.relation &&
@@ -53,7 +73,7 @@ describe("closed provider-neutral contracts", () => {
         literature_id: "00000000-0000-0000-0000-000000000004",
         meta_literature_id: "00000000-0000-0000-0000-000000000006",
         version_role: "published",
-        metadata: fixture.metadata,
+        metadata,
         status: "UNREVIEWED",
       }).status,
     ).toBe("UNREVIEWED");
@@ -75,7 +95,7 @@ describe("closed provider-neutral contracts", () => {
     );
     rejects(
       {
-        ...(fixture.query as object),
+        ...query,
         publication_year_from: 2030,
         publication_year_to: 2020,
       },
@@ -83,7 +103,7 @@ describe("closed provider-neutral contracts", () => {
     );
     rejects(
       {
-        ...(fixture.metadata as object),
+        ...metadata,
         authors: [
           {
             display_name: "Ada Lovelace",
@@ -104,9 +124,9 @@ describe("closed provider-neutral contracts", () => {
       namespace: "doi",
       value: "10.1234/fixture.1",
     });
-    const metadata = parseLiteratureMetadata(fixture.metadata);
-    expect(Object.isFrozen(metadata)).toBe(true);
-    expect(Object.isFrozen(metadata.authors)).toBe(true);
+    const parsed = parseLiteratureMetadata(metadata);
+    expect(Object.isFrozen(parsed)).toBe(true);
+    expect(Object.isFrozen(parsed.authors)).toBe(true);
   });
 
   it("does not expose rejected input in the stable failure shape", () => {
@@ -174,7 +194,7 @@ function completionReport(
   return {
     kind: "database-completion",
     end: { kind: "interrupted" },
-    goal: "CONTENT_READY",
+    goal: "PARSER_RESULT_READY",
     completed: [
       {
         target: { kind: "literature", literature_id: completionIds.completed },
@@ -216,7 +236,6 @@ function completionReport(
         literature_id: null,
       },
     ],
-    no_usable_content_literature_ids: [completionIds.completed],
     ...overrides,
   };
 }
@@ -240,7 +259,6 @@ describe("database completion report contract", () => {
       "skipped",
       "notStarted",
       "interrupted",
-      "no_usable_content_literature_ids",
     ]);
     expect(report.completed[0]?.literature_id).toBe(completionIds.completed);
     expect(report.failed[0]?.stage).toBe("parsing");
@@ -249,9 +267,6 @@ describe("database completion report contract", () => {
     expect(report.skipped[0]?.reason).toBe("manual-pdf-required");
     expect(report.notStarted[0]?.target.kind).toBe("literature");
     expect(report.interrupted[0]?.literature_id).toBeNull();
-    expect(report.no_usable_content_literature_ids).toEqual([
-      completionIds.completed,
-    ]);
     expect(Object.isFrozen(report)).toBe(true);
     expect(Object.isFrozen(report.completed)).toBe(true);
     expect(Object.isFrozen(report.skipped)).toBe(true);
@@ -259,21 +274,15 @@ describe("database completion report contract", () => {
     expect(Object.isFrozen(report.skipped[0]?.literature_ids)).toBe(true);
   });
 
-  it("keeps cleanup feedback overlapping a final partition", () => {
-    const report = parseDatabaseCompletionReport(
-      completionReport({
-        no_usable_content_literature_ids: [
-          completionIds.completed,
-          completionIds.skipped,
-        ],
-      }),
+  it("rejects the retired content goal and cleanup feedback", () => {
+    rejects(
+      completionReport({ goal: "CONTENT_READY" }),
+      parseDatabaseCompletionReport,
     );
-    expect(report.completed[0]?.literature_id).toBe(completionIds.completed);
-    expect(report.skipped[0]?.target.kind).toBe("literature");
-    expect(report.no_usable_content_literature_ids).toEqual([
-      completionIds.completed,
-      completionIds.skipped,
-    ]);
+    rejects(
+      completionReport({ no_usable_content_literature_ids: [] }),
+      parseDatabaseCompletionReport,
+    );
   });
 
   it("accepts empty partitions and all three report endings", () => {
@@ -287,7 +296,6 @@ describe("database completion report contract", () => {
         skipped: [],
         notStarted: [],
         interrupted: [],
-        no_usable_content_literature_ids: [],
       }).end,
     ).toEqual({ kind: "finished" });
     expect(parseDatabaseCompletionReport(completionReport()).end).toEqual({

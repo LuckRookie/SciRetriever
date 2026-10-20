@@ -27,6 +27,11 @@ export async function renderPdf(
   state: ReadingPosition,
   bytes: Uint8Array<ArrayBuffer>,
 ): Promise<void> {
+  if (frame.pdfLocation) {
+    state.page = frame.pdfLocation.page;
+    state.pageOffset = 0;
+    state.scroll = 0;
+  }
   const parseStarted = performance.now();
   let paintStarted = 0,
     firstPaint = true;
@@ -212,6 +217,20 @@ export async function renderPdf(
       entry.text.style.width = `${viewport.width}px`;
       entry.text.style.height = `${viewport.height}px`;
       placeholder.append(entry.canvas, entry.text);
+      placeholder.querySelector(".pdf-region-highlight")?.remove();
+      if (frame.pdfLocation?.page === n && frame.pdfLocation.region) {
+        const [x0, y0, x1, y1] = frame.pdfLocation.region,
+          highlight = document.createElement("div");
+        highlight.className = "pdf-region-highlight";
+        highlight.setAttribute("aria-label", "证据对应区域");
+        Object.assign(highlight.style, {
+          left: `${x0 / 10}%`,
+          top: `${y0 / 10}%`,
+          width: `${(x1 - x0) / 10}%`,
+          height: `${(y1 - y0) / 10}%`,
+        });
+        placeholder.append(highlight);
+      }
       entry.render = p.render({
         canvas: entry.canvas,
         viewport,

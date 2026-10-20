@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { canonicalJsonBytes, sha256 } from "@sciretriever/contracts";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,7 +85,8 @@ describe("asset repository", () => {
           abstract: null,
           publication_date: null,
           publication_year: 2026,
-          document_type: "article",
+          publication_form: "journal-article" as const,
+          article_kind: null,
           language: "en",
           venue: null,
           publisher: null,
@@ -123,191 +123,11 @@ describe("asset repository", () => {
           source_url: null,
         }),
       ).resolves.toBe(true);
-      await expect(
-        repository.publishParserResult({
-          source_asset_id: "00000000-0000-0000-0000-000000000044",
-          source_sha256: "c".repeat(64),
-          result_sha256: "d".repeat(64),
-          page_count: 1,
-          markdown_artifact_id: "00000000-0000-0000-0000-000000000046",
-          markdown_artifact_path: "objects/c.md",
-          markdown_sha256: "e".repeat(64),
-          markdown_byte_size: 12,
-          markdown_media_type: "text/markdown",
-          provenance: {
-            provenance_id: "00000000-0000-0000-0000-000000000047",
-            source_kind: "parser",
-            source_name: "offline-parser",
-            source_record_id: null,
-            observed_at: "2026-09-09T00:00:00Z",
-            input_sha256: "c".repeat(64),
-            parameters_sha256: "f".repeat(64),
-          },
-          parser_version: "1",
-          mode: null,
-          model_identity: null,
-          resources: [
-            {
-              reference: "images/figure-1.png",
-              artifact_id: "00000000-0000-0000-0000-000000000048",
-              artifact_path: "objects/figure-1.png",
-              artifact_sha256: "1".repeat(64),
-              artifact_byte_size: 8,
-              artifact_media_type: "image/png",
-            },
-          ],
-        }),
-      ).resolves.toBe(true);
       await expect(worker.snapshotCounts()).resolves.toMatchObject({
         tables: {
           assets: 1,
           literature_assets: 1,
-          parser_results: 1,
-          parser_result_resources: 1,
         },
-      });
-    } finally {
-      await worker.close();
-    }
-  });
-
-  it("publishes and reads a content artifact only when all current inputs are bound", async () => {
-    const worker = new SqliteWorker();
-    try {
-      const literature = {
-        literature_id: "00000000-0000-0000-0000-000000000051" as never,
-        meta_literature_id: "00000000-0000-0000-0000-000000000052" as never,
-        version_role: "published" as const,
-        status: "UNREVIEWED" as const,
-        metadata: {
-          title: "Content owner",
-          authors: [],
-          abstract: null,
-          publication_date: null,
-          publication_year: 2026,
-          document_type: "article",
-          language: "en",
-          venue: null,
-          publisher: null,
-          volume: null,
-          issue: null,
-          pages: null,
-          identifiers: [],
-          keywords: [],
-        },
-      };
-      await worker.putLiterature(literature);
-      const metadataSha256 = await sha256(
-        canonicalJsonBytes(literature.metadata),
-      );
-      const repository = new AssetRepository(worker);
-      await repository.publish({
-        asset_id: "00000000-0000-0000-0000-000000000053" as never,
-        sha256: "3".repeat(64) as never,
-        size_bytes: 10,
-        media_type: "application/pdf",
-        path: "objects/content.pdf" as never,
-      });
-      await repository.publishParserResult({
-        source_asset_id: "00000000-0000-0000-0000-000000000053",
-        source_sha256: "3".repeat(64),
-        result_sha256: "5".repeat(64),
-        page_count: 1,
-        markdown_artifact_id: "00000000-0000-0000-0000-000000000060",
-        markdown_artifact_path: "objects/parser.md",
-        markdown_sha256: "a".repeat(64),
-        markdown_byte_size: 12,
-        markdown_media_type: "text/markdown",
-        provenance: {
-          provenance_id: "00000000-0000-0000-0000-000000000061",
-          source_kind: "parser",
-          source_name: "offline-parser",
-          source_record_id: null,
-          observed_at: "2026-09-09T00:00:00Z",
-          input_sha256: "3".repeat(64),
-          parameters_sha256: "b".repeat(64),
-        },
-        parser_version: "1",
-        mode: null,
-        model_identity: null,
-      });
-      await expect(
-        repository.publishContent({
-          literature_id: literature.literature_id,
-          literature_content_sha256: "4".repeat(64),
-          metadata_revision: 1,
-          metadata_sha256: metadataSha256,
-          primary_asset_id: "00000000-0000-0000-0000-000000000053",
-          primary_asset_sha256: "3".repeat(64),
-          parser_result_sha256: "5".repeat(64),
-          structured_artifact_id: "00000000-0000-0000-0000-000000000054",
-          structured_artifact_path: "objects/content.json",
-          structured_artifact_sha256: "6".repeat(64),
-          structured_artifact_byte_size: 20,
-          structured_artifact_media_type: "application/json",
-          markdown_artifact_id: "00000000-0000-0000-0000-000000000055",
-          markdown_artifact_path: "objects/content.md",
-          markdown_artifact_sha256: "7".repeat(64),
-          markdown_artifact_byte_size: 30,
-          markdown_artifact_media_type: "text/markdown",
-          provenance: {
-            provenance_id: "00000000-0000-0000-0000-000000000056",
-            source_kind: "analysis",
-            source_name: "offline-analysis",
-            source_record_id: null,
-            observed_at: "2026-09-09T00:00:00Z",
-            input_sha256: "8".repeat(64),
-            parameters_sha256: "9".repeat(64),
-          },
-          reference_texts: ["A reference from the accepted content"],
-        }),
-      ).resolves.toBe(true);
-      await expect(
-        repository.getContent(literature.literature_id),
-      ).resolves.toMatchObject({
-        literature_id: literature.literature_id,
-        metadata_revision: 1,
-        metadata_sha256: metadataSha256,
-        primary_asset_sha256: "3".repeat(64),
-        markdown_artifact_sha256: "7".repeat(64),
-        reference_texts: ["A reference from the accepted content"],
-      });
-      await expect(
-        repository.publishContent({
-          literature_id: literature.literature_id,
-          literature_content_sha256: "a".repeat(64),
-          metadata_revision: 1,
-          metadata_sha256: metadataSha256,
-          primary_asset_id: "00000000-0000-0000-0000-000000000053",
-          primary_asset_sha256: "3".repeat(64),
-          parser_result_sha256: "5".repeat(64),
-          structured_artifact_id: "00000000-0000-0000-0000-000000000057",
-          structured_artifact_path: "objects/invalid.json",
-          structured_artifact_sha256: "b".repeat(64),
-          structured_artifact_byte_size: 20,
-          structured_artifact_media_type: "application/json",
-          markdown_artifact_id: "00000000-0000-0000-0000-000000000058",
-          markdown_artifact_path: "objects/invalid.md",
-          markdown_artifact_sha256: "c".repeat(64),
-          markdown_artifact_byte_size: 30,
-          markdown_artifact_media_type: "text/markdown",
-          provenance: {
-            provenance_id: "00000000-0000-0000-0000-000000000059",
-            source_kind: "analysis",
-            source_name: "offline-analysis",
-            source_record_id: null,
-            observed_at: "2026-09-09T00:00:00Z",
-            input_sha256: "8".repeat(64),
-            parameters_sha256: "9".repeat(64),
-          },
-          reference_texts: ["", "invalid"],
-        }),
-      ).rejects.toBeDefined();
-      await expect(
-        repository.getContent(literature.literature_id),
-      ).resolves.toMatchObject({
-        literature_content_sha256: "4".repeat(64),
-        reference_texts: ["A reference from the accepted content"],
       });
     } finally {
       await worker.close();

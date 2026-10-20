@@ -22,7 +22,9 @@ export async function documentRepresentationHash(
   input: unknown,
 ): Promise<Sha256> {
   const normalized = parseDocumentRepresentationInput(input);
-  return sha256(canonicalJsonBytes({ schema_version: 1, ...normalized }));
+  const { proofread_id: _provenance, ...content } = normalized;
+  void _provenance;
+  return sha256(canonicalJsonBytes({ schema_version: 2, ...content }));
 }
 
 /** Document owner operations over v3 immutable publication and fixed-version reads. */
@@ -45,6 +47,7 @@ export interface DocumentStoragePort {
       readonly structure_artifact_path: string;
       readonly resource_artifact_paths: Readonly<Record<string, string>>;
       readonly expected_default_revision: number | null;
+      readonly expected_manual_revision?: number;
     },
     signal?: AbortSignal,
   ): Promise<{

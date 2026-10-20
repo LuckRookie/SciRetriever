@@ -498,3 +498,31 @@
     animation: none;
   }
 }
+
+.reading-block-source {
+  display: none;
+  margin-block: 8px;
+  padding: 4px 8px;
+  color: var(--ink2);
+  background: var(--side);
+  border: 1px solid var(--line2);
+  border-radius: 6px;
+  font: inherit;
+  font-size: var(--text-caption);
+  cursor: pointer;
+}
+.reading-show-sources .reading-block-source {
+  display: block;
+}
+.pdf-region-highlight {
+  position: absolute;
+  border: 2px solid var(--accent);
+  background: var(--sel);
+  z-index: 4;
+  pointer-events: none;
+}
+
+.reading-block-source.reading-block-uncertain {
+  display: inline-flex;
+  color: var(--warning-text, #895b15);
+}

@@ -49,6 +49,7 @@ export interface ExecutionRunOptions {
 }
 
 export interface ExecutionBatchRunOptions extends ExecutionRunOptions {
+  readonly concurrency?: number;
   readonly max_targets?: number;
 }
 
@@ -114,6 +115,7 @@ export class ExecutionQueue {
     jobId: string,
     handler: ExecutionTargetHandler,
     options: ExecutionRunOptions,
+    leaseHeld = false,
   ): Promise<ExecutionRunResult | null> {
     const bootId = options.boot_id ?? randomUUID();
     const policy = await this.repository.getPolicy(jobId);
@@ -134,15 +136,16 @@ export class ExecutionQueue {
       throw new TypeError("execution retry bounds are invalid");
     const leaseId = `lease-${randomUUID()}`;
     const acquiredAt = new Date().toISOString();
-    await this.repository.acquireLease({
-      lease_id: leaseId,
-      job_id: jobId,
-      workspace_id: options.workspace_id ?? null,
-      boot_id: bootId,
-      control_epoch: 0,
-      acquired_at: acquiredAt,
-      released_at: null,
-    });
+    if (!leaseHeld)
+      await this.repository.acquireLease({
+        lease_id: leaseId,
+        job_id: jobId,
+        workspace_id: options.workspace_id ?? null,
+        boot_id: bootId,
+        control_epoch: 0,
+        acquired_at: acquiredAt,
+        released_at: null,
+      });
     try {
       const target = await this.repository.claimTarget(
         jobId,
@@ -338,7 +341,7 @@ export class ExecutionQueue {
         options.signal?.removeEventListener("abort", abort);
       }
     } finally {
-      await this.repository.releaseLease(leaseId);
+      if (!leaseHeld) await this.repository.releaseLease(leaseId);
     }
   }
 
@@ -349,7 +352,7 @@ export class ExecutionQueue {
   private async finalizeJob(jobId: string): Promise<void> {
     const job = await this.repository.getJob(jobId);
     if (!job || ["paused", "cancelled"].includes(job.status)) return;
-    const targets = await this.repository.listTargets(jobId);
+    const targets = await this.repository.listTargets(jobId, 10000);
     if (
       targets.some((target) =>
         ["queued", "acquisition", "parsing", "analysis", "literature"].includes(
@@ -389,11 +392,46 @@ export class ExecutionQueue {
     const max = options.max_targets ?? 1000;
     if (!Number.isSafeInteger(max) || max < 1 || max > 10000)
       throw new TypeError("execution queue bound is invalid");
-    while (results.length < max) {
-      if (options.signal?.aborted) break;
-      const next = await this.runNext(jobId, handler, options);
-      if (!next) break;
-      results.push(next);
+    const concurrency = options.concurrency ?? 1;
+    if (
+      !Number.isSafeInteger(concurrency) ||
+      concurrency < 1 ||
+      concurrency > 100
+    )
+      throw new TypeError("execution concurrency is invalid");
+    const leaseId = `lease-${randomUUID()}`,
+      bootId = options.boot_id ?? randomUUID();
+    await this.repository.acquireLease({
+      lease_id: leaseId,
+      job_id: jobId,
+      workspace_id: options.workspace_id ?? null,
+      boot_id: bootId,
+      control_epoch: 0,
+      acquired_at: new Date().toISOString(),
+      released_at: null,
+    });
+    let admitted = 0;
+    try {
+      const settled = await Promise.allSettled(
+        Array.from({ length: concurrency }, async () => {
+          while (admitted < max) {
+            if (options.signal?.aborted) break;
+            admitted++;
+            const next = await this.runNextOwned(
+              jobId,
+              handler,
+              { ...options, boot_id: bootId },
+              true,
+            );
+            if (!next) break;
+            results.push(next);
+          }
+        }),
+      );
+      const failed = settled.find((r) => r.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
+    } finally {
+      await this.repository.releaseLease(leaseId);
     }
     return Object.freeze(results);
   }
@@ -476,10 +514,10 @@ export class ExecutionJobService {
   async create(
     input: Omit<CreateExecutionJobInput, "selector"> & {
       readonly selector: LiteratureSelector;
-      readonly goal?: "pdf" | "content";
+      readonly goal?: "pdf" | "parser";
     },
   ) {
-    const { selector, goal = "content", ...jobInput } = input;
+    const { selector, goal = "parser", ...jobInput } = input;
     const jobId =
       jobInput.job_id ??
       `job-${(
@@ -508,7 +546,7 @@ export class ExecutionJobService {
     }
     const frozen = await this.completion.freezeRequest({
       selector,
-      goal: goal === "pdf" ? "ASSET_READY" : "CONTENT_READY",
+      goal: goal === "pdf" ? "ASSET_READY" : "PARSER_RESULT_READY",
     });
     if (frozen.length > 10_000)
       throw new TypeError("execution selector is too large");
@@ -978,10 +1016,10 @@ function completionFallback(goal: BatchGoal): StableFailure {
         retryable: false,
       }
     : {
-        code: "content-completion-unavailable",
+        code: "parser-completion-unavailable",
         reason:
           "The target cannot continue without the configured completion services.",
-        action: "Configure Parsing and Analysis, then resume the task.",
+        action: "Configure raw Parsing, then resume the task.",
         retryable: false,
       };
 }
@@ -994,8 +1032,10 @@ function decodeCompletionSnapshot(
     selector && typeof selector === "object" && !Array.isArray(selector)
       ? (selector as Record<string, unknown>)
       : {};
+  if (source.goal !== "pdf" && source.goal !== "parser")
+    throw new TypeError("execution completion goal is unsupported");
   const goal: BatchGoal =
-    source.goal === "pdf" ? "ASSET_READY" : "CONTENT_READY";
+    source.goal === "pdf" ? "ASSET_READY" : "PARSER_RESULT_READY";
   if (source.schema_version === undefined || source.schema_version === 1) {
     return {
       goal,

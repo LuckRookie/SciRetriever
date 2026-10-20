@@ -10,6 +10,10 @@ export const queryKeys = {
   document: ["document"],
   knowledge: ["knowledge"],
   processors: ["processors"],
+  archive: ["archive"],
+  tags: ["tags"],
+  snapshots: ["snapshots"],
+  metadata: ["metadata"],
   tasks: ["tasks"],
   browser: ["browser"],
   configuration: ["configuration"],
@@ -37,6 +41,11 @@ export function useApi() {
 }
 export function invalidateMaterials(queries: QueryClient) {
   for (const queryKey of [
+    queryKeys.archive,
+    queryKeys.tags,
+    queryKeys.snapshots,
+    queryKeys.metadata,
+    queryKeys.document,
     queryKeys.library,
     queryKeys.literature,
     queryKeys.knowledge,
@@ -83,9 +92,15 @@ export function subscribeInvalidation(
     disconnected = !connected;
     if (connected) onView();
   };
+  const onMaterials = () => {
+    invalidateMaterials(queries);
+    void queries.invalidateQueries({ queryKey: queryKeys.tasks });
+  };
+  api.materialListeners.add(onMaterials);
   api.listeners.add(onView);
   api.connectionListeners.add(reconnect);
   return () => {
+    api.materialListeners.delete(onMaterials);
     api.listeners.delete(onView);
     api.connectionListeners.delete(reconnect);
   };

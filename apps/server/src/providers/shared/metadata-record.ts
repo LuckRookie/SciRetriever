@@ -164,13 +164,13 @@ export async function observation(
           ? null
           : await sha256(canonicalJsonBytes(record.parameters)),
     },
+    source_type: text(record.documentType),
     metadata: {
       title: text(record.title),
       authors: normalizedAuthors,
       abstract: text(record.abstract),
       publication_date: text(record.publicationDate),
       publication_year: record.publicationYear,
-      document_type: text(record.documentType),
       language: text(record.language),
       venue: text(record.venue),
       publisher: text(record.publisher),

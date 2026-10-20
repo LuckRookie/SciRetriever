@@ -1,11 +1,11 @@
 import {
   extractionCanonicalJsonBytes,
   parseEvidenceRef,
-  parseKnowledgeContent,
+  parseSummaryContent,
   sha256,
-  type KnowledgeAnalysisRequest,
-  type KnowledgeContent,
-  type KnowledgeStatement,
+  type InputManifest,
+  type SummaryContent,
+  type SummaryStatement,
 } from "@sciretriever/contracts";
 import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
 import { runDshTask, taskAccounting } from "../agents/dsh/task.js";
@@ -15,11 +15,11 @@ import {
   type AgentToolDeclaration,
 } from "../agents/protocol.js";
 import type { DocumentReadService } from "../document/read.js";
+import { readingImage } from "./reading-image.js";
 import {
   KnowledgeAnalysisFailure,
   knowledgeResponseSchema,
-} from "./knowledge.js";
-import { readingImage } from "./reading-image.js";
+} from "./summary-response.js";
 
 export const DOCUMENT_ANALYSIS_METHOD = "dsh-document-analysis";
 export const DOCUMENT_ANALYSIS_VERSION = "1";
@@ -46,7 +46,7 @@ export interface AnalysisAccounting {
   reported_output_tokens: number;
 }
 export interface DocumentAnalysisResult {
-  content: KnowledgeContent | null;
+  content: SummaryContent | null;
   source_bytes: number;
   segment_count: number;
   provider: string;
@@ -100,7 +100,11 @@ const tools: readonly AgentToolDeclaration[] = [
   },
 ];
 export async function analyzeDocumentSession(
-  request: Pick<KnowledgeAnalysisRequest, "input" | "purpose" | "question">,
+  request: {
+    readonly input: InputManifest;
+    readonly purpose: "overview" | "detailed" | "question";
+    readonly question: string | null;
+  },
   documents: DocumentReadService,
   agents: DshAgentRuntime,
   binding: {
@@ -185,7 +189,7 @@ export async function analyzeDocumentSession(
       image_input: imageCapable,
     };
   };
-  let content: KnowledgeContent | null = null;
+  let content: SummaryContent | null = null;
   const input = {
     purpose: request.purpose,
     question: request.question,
@@ -448,7 +452,7 @@ export async function analyzeDocumentSession(
             ),
           }));
           try {
-            content = parseKnowledgeContent({
+            content = parseSummaryContent({
               schema_version: 1,
               title: value.title,
               statements: statements.map(
@@ -461,7 +465,7 @@ export async function analyzeDocumentSession(
                     conditions: s.conditions,
                     quantity: s.quantity,
                     evidence: s.evidence,
-                  }) as KnowledgeStatement,
+                  }) as SummaryStatement,
               ),
             });
           } catch (error) {

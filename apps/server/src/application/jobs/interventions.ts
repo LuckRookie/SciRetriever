@@ -4,6 +4,13 @@ import type { ExecutionIntervention } from "../../storage/sqlite/worker.js";
 import { ExecutionRepository } from "../../storage/execution/repository.js";
 
 export type InterventionResolution = "continue" | "skip" | "cancel";
+export function parseInterventionResolution(
+  value: unknown,
+): InterventionResolution {
+  if (!["continue", "skip", "cancel"].includes(String(value)))
+    throw new TypeError("execution intervention resolution is invalid");
+  return value as InterventionResolution;
+}
 
 /** Applies the frozen assistance policy without turning every failure into user work. */
 export class InterventionService {
@@ -72,8 +79,7 @@ export class InterventionService {
     resolution: InterventionResolution,
     resolvedAt = new Date().toISOString(),
   ): Promise<ExecutionIntervention> {
-    if (!["continue", "skip", "cancel"].includes(resolution))
-      throw new TypeError("execution intervention resolution is invalid");
+    parseInterventionResolution(resolution);
     const result = await this.repository.resolveIntervention(
       interventionId,
       "resolved",

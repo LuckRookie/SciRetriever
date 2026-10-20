@@ -1,14 +1,8 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
-  parseSynthesisReadSelection,
-  parseSynthesisSourceResult,
-  knowledgeStatementSha256,
-  synthesisStatementSha256,
   processorJson,
   type EvidenceRef,
   type ProcessorCitation,
-  type SynthesisArtifact,
-  type SynthesisEvidence,
 } from "@sciretriever/contracts";
 import {
   Button,
@@ -31,58 +25,20 @@ import {
   type EvidencePageCursor,
 } from "../../../reading/transport.js";
 
-/** Preserve synthesis bindings outside the narrower processor citation contract. */
-export type EvidenceCitation =
-  | Exclude<ProcessorCitation, { kind: "knowledge" }>
-  | (Extract<ProcessorCitation, { kind: "knowledge" }> & {
-      readonly fixed?: {
-        readonly manifest_sha256: string;
-        readonly statement_sha256: string;
-      };
-    });
-
-export function synthesisEvidenceCitation(
-  artifact: SynthesisArtifact,
-  source: SynthesisEvidence,
-): EvidenceCitation {
-  if (source.target_kind === "document")
-    return { kind: "document", evidence: source.evidence };
-  const input = artifact.input.items.find(
-    (item) => item.input_id === source.input_id,
-  );
-  if (
-    input?.kind !== "knowledge" ||
-    !input.source_manifest_sha256 ||
-    input.source_artifact_id !== source.source_artifact_id ||
-    input.source_content_sha256 !== source.source_content_sha256
-  )
-    throw new Error("来源内容或固定清单不匹配。");
-  return {
-    kind: "knowledge",
-    artifact_id: source.source_artifact_id,
-    content_sha256: source.source_content_sha256,
-    statement_id: source.statement_id,
-    fixed: {
-      manifest_sha256: input.source_manifest_sha256,
-      statement_sha256: source.statement_sha256,
-    },
-  };
-}
-
 export function ResultEvidence({
   citation,
   onFollow,
   returnParameters,
 }: {
-  citation: EvidenceCitation;
-  onFollow: (next: EvidenceCitation) => void;
+  citation: ProcessorCitation;
+  onFollow: (next: ProcessorCitation) => void;
   returnParameters: Record<string, string>;
 }) {
   const api = useApi();
   const data = useQuery({
     queryKey: ["processors", "evidence", citation],
     queryFn: async ({ signal }) => {
-      const upstream: EvidenceCitation[] = [];
+      const upstream: ProcessorCitation[] = [];
       let missing = "";
       if (citation.kind === "document")
         return {
@@ -92,49 +48,6 @@ export function ResultEvidence({
           missing,
           sourceOnly: false,
         };
-      if (citation.kind === "knowledge") {
-        const request = parseSynthesisReadSelection({
-          artifact_id: citation.artifact_id,
-        });
-        const source = await parseSynthesisSourceResult(
-          (await api.query("synthesis-source", request, signal)).result,
-          request,
-        );
-        const artifact = source.artifact;
-        if (
-          artifact.content_ref.sha256 !== citation.content_sha256 ||
-          (citation.fixed &&
-            artifact.input.manifest_sha256 !== citation.fixed.manifest_sha256)
-        )
-          throw new Error("来源内容或固定清单不匹配。");
-        const statement = artifact.content.statements.find(
-          (item) => item.statement_id === citation.statement_id,
-        );
-        if (!statement) throw new Error("上游知识断言不存在。");
-        if (
-          citation.fixed &&
-          (await (artifact.schema_version === 1
-            ? knowledgeStatementSha256(statement)
-            : synthesisStatementSha256(statement))) !==
-            citation.fixed.statement_sha256
-        )
-          throw new Error("来源断言内容不匹配。");
-        const evidence: EvidenceRef[] = [];
-        for (const entry of statement.evidence) {
-          if ("schema_version" in entry) evidence.push(entry);
-          else if (entry.target_kind === "document")
-            evidence.push(entry.evidence);
-          else if (artifact.schema_version === 2)
-            upstream.push(synthesisEvidenceCitation(artifact, entry));
-        }
-        return {
-          value: statement.text,
-          evidence,
-          upstream,
-          missing,
-          sourceOnly: source.state === "source-only",
-        };
-      }
       const resolved = await resolveProcessorEvidence(api, citation, signal);
       if (citation.kind === "result") {
         const saved = await readProcessorResult(api, citation, signal),
@@ -160,17 +73,13 @@ export function ResultEvidence({
             row.missing[citation.pointer] ??
             row.missing[citation.pointer.slice(1)] ??
             "";
-        } else if (content.kind === "text")
+        } else if (content.kind === "report")
           upstream.push(
-            ...content.evidence.filter((item) => item.kind !== "document"),
+            ...(
+              content.claims.find((c) => c.record_id === citation.record_id)
+                ?.sources ?? []
+            ).filter((item) => item.kind !== "document"),
           );
-        else
-          upstream.push({
-            kind: "knowledge",
-            artifact_id: content.artifact_id,
-            content_sha256: content.content_sha256,
-            statement_id: citation.record_id,
-          });
       }
       return { ...resolved, upstream, missing, sourceOnly: false };
     },
@@ -254,6 +163,24 @@ function Passage({
   return (
     <section className="result-passage">
       <h3>原文证据 {index + 1}</h3>
+      {first?.location && first.document ? (
+        <Button
+          onPress={() => {
+            const m = first.document!.source_material_ref;
+            shell.openPaper(m.literature_id, "pdf", {
+              ...returnParameters,
+              asset: m.asset_id,
+              assetHash: m.asset_sha256,
+              page: String(first.location!.page),
+              ...(first.location!.region
+                ? { region: JSON.stringify(first.location!.region) }
+                : {}),
+            });
+          }}
+        >
+          在 PDF 中核对区域
+        </Button>
+      ) : null}
       {data.isPending ? <Skeleton rows={1} /> : null}
       {data.isError ? (
         <ErrorNotice

@@ -7,6 +7,8 @@ import { createApplication } from "../src/bootstrap/application.js";
 import type { RawItemSession } from "../src/metadata/ports.js";
 
 const observation = parseMetadataObservation({
+  source_type: null,
+  source_type_mapping_version: null,
   observation_id: "00000000-0000-4000-8f00-000000000001",
   provenance: {
     provenance_id: "00000000-0000-4000-8f00-000000000002",
@@ -24,7 +26,8 @@ const observation = parseMetadataObservation({
     abstract: null,
     publication_date: "2026-01-01",
     publication_year: 2026,
-    document_type: "article",
+    publication_form: "journal-article" as const,
+    article_kind: null,
     language: "en",
     venue: "Fixture Journal",
     publisher: null,

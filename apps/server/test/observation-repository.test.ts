@@ -7,6 +7,8 @@ import {
 import { SqliteWorker } from "../src/storage/sqlite/worker.js";
 
 const observation: MetadataObservation = {
+  source_type: null,
+  source_type_mapping_version: null,
   observation_id: "00000000-0000-0000-0000-000000000011",
   provenance: {
     provenance_id: "00000000-0000-0000-0000-000000000012",
@@ -35,7 +37,8 @@ const observation: MetadataObservation = {
     abstract: "Observed abstract",
     publication_date: null,
     publication_year: 2026,
-    document_type: "article",
+    publication_form: "journal-article" as const,
+    article_kind: null,
     language: "en",
     venue: null,
     publisher: null,
@@ -131,7 +134,8 @@ describe("metadata observation repository", () => {
           abstract: null,
           publication_date: null,
           publication_year: 2026,
-          document_type: "article",
+          publication_form: "journal-article" as const,
+          article_kind: null,
           language: "en",
           venue: null,
           publisher: null,

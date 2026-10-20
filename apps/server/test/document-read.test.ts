@@ -1,3 +1,5 @@
+import { SCHEMA_VERSION } from "../src/storage/sqlite/schema.js";
+import { correctedDocumentFixture } from "./corrected-document-fixture.js";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -13,14 +15,13 @@ import {
   type ArtifactRef,
 } from "@sciretriever/contracts";
 import {
-  createApplication,
-  createQueryApplication,
+  createParserFixtureApplication as createApplication,
   type Application,
-} from "../src/bootstrap/application.js";
+} from "./parser-application-fixture.js";
+import { createQueryApplication } from "../src/bootstrap/application.js";
 import { startQueryOnlyWorkbench } from "../src/bootstrap/workbench.js";
 import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
-import type { ParserBackend } from "../src/parsing/ports.js";
-import { migrateDocumentCatalog } from "../src/storage/sqlite/document-migration.js";
+import type { ParserBackend } from "./parser-fixture-types.js";
 import { DocumentReadError } from "../src/document/read.js";
 import {
   FIXTURE_LITERATURE,
@@ -131,13 +132,9 @@ async function fixture() {
       get calls() {
         return calls;
       },
-      async migrate() {
+      async reopen() {
         await app?.close();
         app = undefined;
-        await migrateDocumentCatalog({
-          catalog_path: join(home, "catalog.sqlite"),
-          backup_path: join(home, "before.sqlite"),
-        });
         app = await createApplication(home, {
           parsing: {
             parser: backend,
@@ -159,14 +156,24 @@ async function fixture() {
 
 const queryPageAssets = () => reactWorkbenchAssets("query");
 
+async function segmentId(app: Application, version: string, ordinal: number) {
+  return (
+    await app.documentRead.segments({
+      document_version_id: version,
+      section_id: null,
+      limit: 200,
+      cursor: null,
+    })
+  ).segments[ordinal]!.segment_id;
+}
 describe("bounded document and material reading", () => {
-  it("creates and resolves file evidence on v1 without parser or document version", async () => {
+  it("creates and resolves file evidence without parser or document version", async () => {
     const env = await fixture();
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
     try {
       await env.app.close();
       query = await createQueryApplication(env.home);
-      expect(query.readiness.schema_version).toBe(1);
+      expect(query.readiness.schema_version).toBe(SCHEMA_VERSION);
       const result = await query.documentRead!.materialEvidence({
         literature_id: lit,
         asset_id: env.asset.asset_id,
@@ -184,7 +191,7 @@ describe("bounded document and material reading", () => {
           asset_id: env.asset.asset_id,
           asset_sha256: env.asset.sha256,
         }),
-      ).rejects.toMatchObject({ code: "document-v3-required" });
+      ).resolves.toMatchObject({ default: null });
       expect(env.calls).toBe(0);
     } finally {
       await query?.close();
@@ -322,8 +329,8 @@ describe("bounded document and material reading", () => {
     const env = await fixture();
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
     try {
-      await env.migrate();
-      const d1 = await env.app.documentProcessing.parseDocuments(
+      await env.reopen();
+      const d1 = await correctedDocumentFixture(env.app).parseDocuments(
         env.request("reparse"),
       );
       query = await createQueryApplication(env.home);
@@ -356,7 +363,7 @@ describe("bounded document and material reading", () => {
         chunks.push(last.text);
         continuation = last.continuation;
       } while (continuation);
-      expect(chunks.join("")).toBe("# 标题\nαβ evidence\n![figure](fig.png)\n");
+      expect(chunks.join("")).toBe("# 标题\n\nαβ evidence\n\n![](fig.png)\n\n");
       expect(last!.truncated).toBe(false);
       expect(last!.actual_range?.end_utf8).toBe(
         Buffer.byteLength(chunks.join("")),
@@ -371,14 +378,21 @@ describe("bounded document and material reading", () => {
       ).rejects.toMatchObject({ code: "document-invalid" });
       const segment = await reader.slice({
         document_version_id: d1.document.document_version_id,
-        selector: { kind: "segment", segment_id: "p2" },
+        selector: {
+          kind: "segment",
+          segment_id: await segmentId(
+            env.app,
+            d1.document.document_version_id,
+            1,
+          ),
+        },
         max_bytes: 64,
         continuation: null,
       });
-      expect(segment.text).toBe("αβ evidence\n");
+      expect(segment.text).toBe("αβ evidence\n\n");
       expect(segment.evidence).toHaveLength(1);
       expect(await reader.resolveEvidence(segment.evidence[0])).toMatchObject({
-        text: "αβ evidence\n",
+        text: "αβ evidence\n\n",
       });
       const resources = await reader.resources({
         document_version_id: d1.document.document_version_id,
@@ -417,7 +431,7 @@ describe("bounded document and material reading", () => {
         ]),
       ).toEqual(figure);
       env.setMarkdown("# 新标题\nnew result\n![figure](fig.png)\n");
-      const d2 = await env.app.documentProcessing.parseDocuments(
+      const d2 = await correctedDocumentFixture(env.app).parseDocuments(
         env.request("reparse", d1.default_revision),
       );
       expect(d2.document.document_version_id).not.toBe(
@@ -439,7 +453,7 @@ describe("bounded document and material reading", () => {
         }),
       ).rejects.toMatchObject({ code: "document-invalid" });
       expect(await reader.resolveEvidence(segment.evidence[0])).toMatchObject({
-        text: "αβ evidence\n",
+        text: "αβ evidence\n\n",
       });
       const protectedArtifact = await env.app.database.locateArtifact(
         d1.document.structure,
@@ -536,8 +550,8 @@ describe("bounded document and material reading", () => {
     const env = await fixture();
     let raw: DatabaseSync | undefined;
     try {
-      await env.migrate();
-      const receipt = await env.app.documentProcessing.parseDocuments(
+      await env.reopen();
+      const receipt = await correctedDocumentFixture(env.app).parseDocuments(
         env.request("reparse"),
       );
       const request = {
@@ -564,8 +578,8 @@ describe("bounded document and material reading", () => {
     const env = await fixture();
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
     try {
-      await env.migrate();
-      const receipt = await env.app.documentProcessing.parseDocuments(
+      await env.reopen();
+      const receipt = await correctedDocumentFixture(env.app).parseDocuments(
         env.request("reparse"),
       );
       query = await createQueryApplication(env.home);
@@ -582,7 +596,10 @@ describe("bounded document and material reading", () => {
       await expect(
         reader.slice({
           document_version_id: version,
-          selector: { kind: "segment", segment_id: "p2" },
+          selector: {
+            kind: "segment",
+            segment_id: await segmentId(env.app, version, 1),
+          },
           max_bytes: -1,
           continuation: null,
         }),
@@ -603,7 +620,10 @@ describe("bounded document and material reading", () => {
       ).rejects.toMatchObject({ code: "document-invalid" });
       const full = await reader.slice({
         document_version_id: version,
-        selector: { kind: "segment", segment_id: "p2" },
+        selector: {
+          kind: "segment",
+          segment_id: await segmentId(env.app, version, 1),
+        },
         max_bytes: 100,
         continuation: null,
       });
@@ -664,11 +684,11 @@ describe("bounded document and material reading", () => {
     const env = await fixture();
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
     try {
-      await env.migrate();
+      await env.reopen();
       env.setMarkdown(
         `# ${"长".repeat(300)}\nfirst line\nsecond line\n![figure](fig.png)\n`,
       );
-      const receipt = await env.app.documentProcessing.parseDocuments(
+      const receipt = await correctedDocumentFixture(env.app).parseDocuments(
         env.request("reparse"),
       );
       query = await createQueryApplication(env.home);
@@ -739,7 +759,7 @@ describe("bounded document and material reading", () => {
     const env = await fixture();
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
     try {
-      await env.migrate();
+      await env.reopen();
       const lines = Array.from(
         { length: 90 },
         (_, index) => `line ${index}\n`,
@@ -747,7 +767,7 @@ describe("bounded document and material reading", () => {
       env.setMarkdown(
         `# Heading\n${lines}fig.png is mentioned here\n\`![fake](fig.png)\`\n\\![escaped](fig.png)\n<!--\n![comment](fig.png)\n-->\n![indirect][ref]\n[ref]: fig.png\n`,
       );
-      const receipt = await env.app.documentProcessing.parseDocuments(
+      const receipt = await correctedDocumentFixture(env.app).parseDocuments(
         env.request("reparse"),
       );
       query = await createQueryApplication(env.home);
@@ -783,7 +803,7 @@ describe("bounded document and material reading", () => {
       env.setMarkdown(
         "# Heading\n\\![escaped](fig.png)\n<!--\n![comment](fig.png)\n-->\n![real](fig.png)\n",
       );
-      const next = await env.app.documentProcessing.parseDocuments(
+      const next = await correctedDocumentFixture(env.app).parseDocuments(
         env.request("reparse", 1),
       );
       const context = await reader.slice({
@@ -819,11 +839,11 @@ describe("bounded document and material reading", () => {
       | undefined;
     let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
     try {
-      await env.migrate();
+      await env.reopen();
       env.setMarkdown(
         `# 标题\n${"αβ evidence ".repeat(1000)}\n![figure](fig.png)\n`,
       );
-      const receipt = await env.app.documentProcessing.parseDocuments(
+      const receipt = await correctedDocumentFixture(env.app).parseDocuments(
         env.request("reparse"),
       );
       workbench = await startQueryOnlyWorkbench({
@@ -873,11 +893,11 @@ describe("bounded document and material reading", () => {
       | undefined;
     let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
     try {
-      await env.migrate();
+      await env.reopen();
       env.setMarkdown(
         `${"introduction without heading ".repeat(400)}\nsecond paragraph\n![figure](fig.png)\n`,
       );
-      const receipt = await env.app.documentProcessing.parseDocuments(
+      const receipt = await correctedDocumentFixture(env.app).parseDocuments(
         env.request("reparse"),
       );
       workbench = await startQueryOnlyWorkbench({
@@ -1059,8 +1079,8 @@ describe("bounded document and material reading", () => {
   it("settles an in-flight fixed-version read before closing its SQLite and FileStore owners", async () => {
     const env = await fixture();
     try {
-      await env.migrate();
-      const receipt = await env.app.documentProcessing.parseDocuments(
+      await env.reopen();
+      const receipt = await correctedDocumentFixture(env.app).parseDocuments(
         env.request("reparse"),
       );
       const real = env.app.database.documentVersion.bind(env.app.database);
@@ -1118,8 +1138,8 @@ describe("bounded document and material reading", () => {
       | Awaited<ReturnType<typeof startQueryOnlyWorkbench>>
       | undefined;
     try {
-      await env.migrate();
-      const receipt = await env.app.documentProcessing.parseDocuments(
+      await env.reopen();
+      const receipt = await correctedDocumentFixture(env.app).parseDocuments(
         env.request("reparse"),
       );
       workbench = await startQueryOnlyWorkbench({

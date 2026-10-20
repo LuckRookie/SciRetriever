@@ -1,137 +1,90 @@
 import {
-  SCHEMA_V10_VERSION,
-  SCHEMA_V10_FINGERPRINT,
-  SCHEMA_V10_MANIFEST,
-} from "./schema-v10.js";
-import {
-  acquireExecutionRuntime,
-  ExecutionRuntimeOwner,
-} from "../execution/runtime-owner.js";
-import {
-  SCHEMA_V9_FINGERPRINT,
-  SCHEMA_V9_MANIFEST,
-  SCHEMA_V9_VERSION,
-} from "./schema-v9.js";
-import {
-  parseArticleIdentityAssessment,
-  type ArticleIdentityAssessment,
-} from "@sciretriever/contracts";
-import type { CandidateCleanupSnapshot } from "../../acquisition/candidate-cleanup.js";
-import {
-  WriteAdmissionError,
-  type CatalogWriteAdmission,
-} from "../write-admission.js";
-import type {
-  ContentCleanupSnapshot,
-  ContentCleanupCommand,
-  RetiredArtifact,
-} from "../../literature/cleanup.js";
-import {
-  EXECUTION_SCHEMA,
-  EXECUTION_SCHEMA_FINGERPRINT,
-  EXECUTION_SCHEMA_VERSION,
-  EXECUTION_RUNTIME_SCHEMA,
-  EXECUTION_RUNTIME_SCHEMA_FINGERPRINT,
-  EXECUTION_RUNTIME_SCHEMA_VERSION,
-} from "./execution-schema.js";
-import { Worker } from "node:worker_threads";
-import { RetrievalStorageError } from "../../retrieval/model.js";
-import { CASE_FOLD } from "../../literature/unicode-casefold.js";
-import type {
-  LibraryPageQuery,
-  SearchSnapshotRow,
-} from "../../literature/query.js";
-import { SCHEMA_FINGERPRINT, SCHEMA_MANIFEST } from "./schema.js";
-import {
-  SCHEMA_IDENTITY_V2,
-  SCHEMA_V2_FINGERPRINT,
-  SCHEMA_V2_VERSION,
-} from "./schema-v2.js";
-import {
-  SCHEMA_V3_FINGERPRINT,
-  SCHEMA_V3_MANIFEST,
-  SCHEMA_V3_VERSION,
-} from "./schema-v3.js";
-import {
-  SCHEMA_V4_FINGERPRINT,
-  SCHEMA_V4_MANIFEST,
-  SCHEMA_V4_VERSION,
-} from "./schema-v4.js";
-import {
-  SCHEMA_V5_FINGERPRINT,
-  SCHEMA_V5_MANIFEST,
-  SCHEMA_V5_VERSION,
-} from "./schema-v5.js";
-import {
-  SCHEMA_V6_FINGERPRINT,
-  SCHEMA_V6_MANIFEST,
-  SCHEMA_V6_VERSION,
-} from "./schema-v6.js";
-import {
-  SCHEMA_V7_FINGERPRINT,
-  SCHEMA_V7_MANIFEST,
-  SCHEMA_V7_VERSION,
-} from "./schema-v7.js";
-import {
-  SCHEMA_V8_FINGERPRINT,
-  SCHEMA_V8_MANIFEST,
-  SCHEMA_V8_VERSION,
-} from "./schema-v8.js";
-import {
   canonicalJsonBytes,
-  parseDurableCandidate,
-  parseCandidatePublicationIntent,
-  parseCandidatePublicationReceipt,
-  type DurableCandidate,
-  type CandidatePublicationIntent,
-  type CandidatePublicationReceipt,
   decodeCursor,
   encodeCursor,
-  parseLiterature,
-  parseMetaLiterature,
-  parseMetadataObservation,
-  parseIdentifier,
-  parseLiteratureCurrentFacts,
-  parseAsset,
+  parseArticleIdentityAssessment,
   parseArtifactRef,
-  type ArtifactRef,
-  type ParserResult,
-  parseParserResult,
+  parseAsset,
+  parseAssetId,
+  parseCandidatePublicationIntent,
+  parseCandidatePublicationReceipt,
   parseDocumentMaterialRef,
   parseDocumentRef,
+  parseDurableCandidate,
+  parseIdentifier,
+  parseLiterature,
+  parseLiteratureCurrentFacts,
   parseLiteratureId,
-  parseAssetId,
+  parseLiteratureSearchItem,
+  parseMetadataFieldState,
+  parseMetadataObservation,
+  parseMetaLiterature,
+  parseReference,
+  parseReferenceDetail,
+  sha256,
+  type ArticleIdentityAssessment,
+  type ArtifactRef,
+  type Asset,
+  type CandidatePublicationIntent,
+  type CandidatePublicationReceipt,
+  type MetadataObservation as ContractMetadataObservation,
   type DocumentMaterialRef,
   type DocumentRef,
-  type LiteratureCurrentFacts,
-  parseLiteratureSearchItem,
-  parseReferenceDetail,
-  parseReference,
-  type ReferenceDetail,
-  type LiteratureSearchItem,
-  sha256,
-  type Asset,
-  type Literature,
-  type MetaLiterature,
-  type MetadataObservation as ContractMetadataObservation,
+  type DurableCandidate,
   type Identifier,
+  type Literature,
+  type LiteratureCurrentFacts,
+  type LiteratureSearchItem,
+  type MetadataFieldState,
+  type MetaLiterature,
   type Reference,
+  type ReferenceDetail,
   type Sha256,
 } from "@sciretriever/contracts";
+import { Worker } from "node:worker_threads";
+import type { CandidateCleanupSnapshot } from "../files/reclamation.js";
+import { SnapshotError } from "../../analysis/snapshots.js";
 import {
   fallbackIdentityKey,
   fallbackIdentitySha256,
   stableIdentifierKeys,
 } from "../../literature/identity-rules.js";
 import type {
+  LibraryPageQuery,
+  SearchSnapshotRow,
+} from "../../literature/query.js";
+import { CASE_FOLD } from "../../literature/unicode-casefold.js";
+import { RetrievalStorageError } from "../../retrieval/model.js";
+import { TagError } from "../../tags/rules.js";
+import {
+  acquireExecutionRuntime,
+  ExecutionRuntimeOwner,
+} from "../execution/runtime-owner.js";
+import type { RetiredArtifact } from "../files/reclamation.js";
+import {
+  WriteAdmissionError,
+  type CatalogWriteAdmission,
+} from "../write-admission.js";
+import type { ArchiveReferencePublication } from "./archive-reference-engine.js";
+import {
+  EXECUTION_RUNTIME_SCHEMA,
+  EXECUTION_RUNTIME_SCHEMA_FINGERPRINT,
+  EXECUTION_RUNTIME_SCHEMA_VERSION,
+  EXECUTION_SCHEMA,
+  EXECUTION_SCHEMA_FINGERPRINT,
+  EXECUTION_SCHEMA_VERSION,
+} from "./execution-schema.js";
+import type {
   LiteratureAssetPublication,
-  ContentAcceptanceCommit,
   MetadataObservation,
-  ParserResultPublication,
-  LiteratureContentPublication,
-  ReferenceSnapshot,
   ProviderRelationObservation,
+  ReferenceSnapshot,
 } from "./repositories.js";
+import {
+  SCHEMA_FINGERPRINT,
+  SCHEMA_MANIFEST,
+  SCHEMA_VERSION,
+} from "./schema.js";
 
 export class SqliteWorkerError extends Error {
   readonly code = "sqlite-worker" as const;
@@ -151,16 +104,6 @@ export class KnowledgeStorageError extends Error {
   }
 }
 
-export interface DocumentInputSnapshot {
-  readonly source_artifact_path: string;
-  readonly parser: {
-    readonly result: ParserResult;
-    readonly provenance_id: string;
-    readonly markdown_artifact_path: string;
-    readonly resource_artifact_paths: Readonly<Record<string, string>>;
-  } | null;
-}
-
 export interface DocumentVersionPublication {
   readonly version: DocumentRef;
   readonly source_artifact_path: string;
@@ -168,6 +111,7 @@ export interface DocumentVersionPublication {
   readonly structure_artifact_path: string;
   readonly resource_artifact_paths: Readonly<Record<string, string>>;
   readonly expected_default_revision: number | null;
+  readonly expected_manual_revision?: number;
 }
 
 export interface DocumentVersionCommit {
@@ -261,15 +205,23 @@ export interface IdentityReadContext {
     readonly metadata_revision: number;
     readonly metadata_sha256: string;
     readonly content_ready: boolean;
+    readonly field_states: readonly MetadataFieldState[];
   }[];
 }
 
 export interface IdentityPublicationCommand {
+  readonly document_condition?: {
+    readonly literature_id: string;
+    readonly document_version_id: string;
+    readonly default_revision: number;
+    readonly annotation_id: string;
+  };
   readonly literatures: readonly {
     readonly literature: Literature;
     readonly metadata_revision: number;
     readonly metadata_sha256: string;
     readonly fallback_identity_sha256: string | null;
+    readonly field_states: readonly MetadataFieldState[];
   }[];
   readonly meta_literatures: readonly MetaLiterature[];
   readonly observation: {
@@ -318,6 +270,41 @@ function parseDiscoveryPublication(value: unknown): DiscoveryPublication {
 
 export type SqliteCommand =
   | {
+      readonly kind: "snapshot";
+      readonly action: import("./snapshot-engine.js").SnapshotStorageAction;
+      readonly args: unknown;
+    }
+  | {
+      readonly kind: "archive";
+      readonly action: import("./archive-engine.js").ArchiveStorageAction;
+      readonly args: unknown;
+    }
+  | {
+      readonly kind: "tags";
+      readonly action: import("./tag-engine.js").TagStorageAction;
+      readonly args: unknown;
+    }
+  | {
+      readonly kind: "archive_reference_publish";
+      readonly publication: ArchiveReferencePublication;
+    }
+  | { readonly kind: "metadata_fields_read"; readonly literatureId: string }
+  | {
+      readonly kind: "annotation";
+      readonly action: import("./structure-annotation-engine.js").AnnotationStorageAction;
+      readonly args: unknown;
+    }
+  | {
+      readonly kind: "proofread";
+      readonly action: import("./proofread-engine.js").ProofreadStorageAction;
+      readonly args: unknown;
+    }
+  | {
+      readonly kind: "raw_parse";
+      readonly action: import("./raw-parsing-engine.js").RawParseStorageAction;
+      readonly args: unknown;
+    }
+  | {
       readonly kind: "processor";
       readonly action: import("./processor-engine.js").ProcessorStorageAction;
       readonly args: unknown;
@@ -333,19 +320,6 @@ export type SqliteCommand =
       readonly assetId: string;
     }
   | {
-      readonly kind: "knowledge";
-      readonly action:
-        | "id"
-        | "comparison"
-        | "default"
-        | "list"
-        | "list-synthesis"
-        | "publish"
-        | "publish-synthesis"
-        | "update-default";
-      readonly args: unknown;
-    }
-  | {
       readonly kind: "retrieval";
       readonly operation:
         | "revision"
@@ -358,15 +332,7 @@ export type SqliteCommand =
         | "search"
         | "documentCoverage"
         | "metadataSource"
-        | "hasDefault"
-        | "knowledgeRevision"
-        | "knowledgeSourcePage"
-        | "knowledgeBegin"
-        | "knowledgeInsert"
-        | "knowledgePublish"
-        | "knowledgeActive"
-        | "knowledgeCoverage"
-        | "knowledgeSearch";
+        | "hasDefault";
       readonly args: readonly unknown[];
     }
   | {
@@ -387,7 +353,12 @@ export type SqliteCommand =
       readonly literatureId: string;
       readonly assetId: string;
     }
-  | { readonly kind: "document_input"; readonly material: DocumentMaterialRef }
+  | {
+      readonly kind: "document_parts";
+      readonly literatureId: string;
+      readonly offset: number;
+      readonly limit: number;
+    }
   | { readonly kind: "document_version"; readonly versionId: string }
   | {
       readonly kind: "document_default";
@@ -404,26 +375,9 @@ export type SqliteCommand =
       readonly kind: "artifact_reclamation_snapshot";
       readonly reference: string;
     }
-  | { readonly kind: "content_cleanup_snapshot"; readonly literatureId: string }
-  | {
-      readonly kind: "cleanup_no_usable_content";
-      readonly command: ContentCleanupCommand;
-    }
-  | {
-      readonly kind: "accept_literature_content";
-      readonly command: ContentAcceptanceCommit;
-    }
-  | {
-      readonly kind: "commit_current_parser";
-      readonly literatureId: string;
-      readonly result: ParserResultPublication;
-    }
-  | { readonly kind: "execution_upgrade" }
   | { readonly kind: "execution_runtime_inspect" }
-  | { readonly kind: "execution_runtime_migrate"; readonly dryRun: boolean }
   | { readonly kind: "execution_backup"; readonly path: string }
   | { readonly kind: "execution_restore_check"; readonly path: string }
-  | { readonly kind: "execution_rollback"; readonly backupPath: string }
   | {
       readonly kind: "execution_create_job";
       readonly job: ExecutionJob;
@@ -591,6 +545,7 @@ export type SqliteCommand =
       readonly includeOtherVersions: boolean;
       readonly literatureIds: readonly string[];
       readonly metaLiteratureIds: readonly string[];
+      readonly tags?: import("@sciretriever/contracts").LibraryQuery["tags"];
     }
   | {
       readonly kind: "put_literature";
@@ -614,15 +569,6 @@ export type SqliteCommand =
       readonly kind: "put_literature_asset";
       readonly publication: LiteratureAssetPublication;
     }
-  | {
-      readonly kind: "put_parser_result";
-      readonly result: ParserResultPublication;
-    }
-  | {
-      readonly kind: "put_literature_content";
-      readonly content: LiteratureContentPublication;
-    }
-  | { readonly kind: "get_literature_content"; readonly literatureId: string }
   | { readonly kind: "put_reference"; readonly reference: Reference }
   | {
       readonly kind: "publish_provider_reference";
@@ -646,12 +592,6 @@ export type SqliteCommand =
       readonly kind: "put_metadata_reference_support";
       readonly referenceId: string;
       readonly observationId: string;
-      readonly referenceIndex: number;
-    }
-  | {
-      readonly kind: "put_content_reference_support";
-      readonly referenceId: string;
-      readonly contentSha256: string;
       readonly referenceIndex: number;
     }
   | { readonly kind: "reference_snapshot" }
@@ -832,22 +772,27 @@ export interface ExecutionIntervention {
   readonly resolution: unknown;
 }
 export interface ExecutionRuntimeInspection {
-  readonly catalog_version: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  readonly catalog_version:
+    | 1
+    | 2
+    | 3
+    | 4
+    | 5
+    | 6
+    | 7
+    | 8
+    | 9
+    | 10
+    | 11
+    | 12
+    | 13
+    | 14;
   readonly catalog_fingerprint: string;
   readonly version: number | null;
   readonly fingerprint: string | null;
   readonly migrated: boolean;
   readonly tables: readonly string[];
   readonly counts: Readonly<Record<string, number>>;
-}
-export interface ExecutionMigrationReceipt {
-  readonly migration_id: string;
-  readonly action: "migrate" | "dry-run";
-  readonly from_version: number | null;
-  readonly to_version: number;
-  readonly manifest_fingerprint: string;
-  readonly applied_at: string;
-  readonly inspection: ExecutionRuntimeInspection;
 }
 export interface ExecutionRestoreCheck {
   readonly path: string;
@@ -1114,7 +1059,11 @@ export class SqliteWorker {
   constructor(
     path = ":memory:",
     private readonly admission?: CatalogWriteAdmission,
-    options: { readonly readOnly?: boolean } = {},
+    options: {
+      readonly readOnly?: boolean;
+      readonly maxTags?: number;
+      readonly archiveProfile?: "pipeline" | "vlm-engine";
+    } = {},
   ) {
     if (
       typeof path !== "string" ||
@@ -1140,36 +1089,12 @@ export class SqliteWorker {
       workerData: {
         path,
         read_only: this.readOnly,
+        max_tags: options.maxTags ?? 6,
+        archive_profile: options.archiveProfile ?? "vlm-engine",
         case_fold: CASE_FOLD,
+        schema_version: SCHEMA_VERSION,
         schema_manifest: SCHEMA_MANIFEST,
         schema_fingerprint: SCHEMA_FINGERPRINT,
-        schema_identity_v2: SCHEMA_IDENTITY_V2,
-        schema_v2_version: SCHEMA_V2_VERSION,
-        schema_v2_fingerprint: SCHEMA_V2_FINGERPRINT,
-        schema_v3_version: SCHEMA_V3_VERSION,
-        schema_v3_fingerprint: SCHEMA_V3_FINGERPRINT,
-        schema_v3_manifest: SCHEMA_V3_MANIFEST,
-        schema_v4_version: SCHEMA_V4_VERSION,
-        schema_v4_fingerprint: SCHEMA_V4_FINGERPRINT,
-        schema_v4_manifest: SCHEMA_V4_MANIFEST,
-        schema_v5_version: SCHEMA_V5_VERSION,
-        schema_v5_fingerprint: SCHEMA_V5_FINGERPRINT,
-        schema_v5_manifest: SCHEMA_V5_MANIFEST,
-        schema_v6_version: SCHEMA_V6_VERSION,
-        schema_v6_fingerprint: SCHEMA_V6_FINGERPRINT,
-        schema_v6_manifest: SCHEMA_V6_MANIFEST,
-        schema_v7_version: SCHEMA_V7_VERSION,
-        schema_v7_fingerprint: SCHEMA_V7_FINGERPRINT,
-        schema_v7_manifest: SCHEMA_V7_MANIFEST,
-        schema_v10_version: SCHEMA_V10_VERSION,
-        schema_v10_fingerprint: SCHEMA_V10_FINGERPRINT,
-        schema_v10_manifest: SCHEMA_V10_MANIFEST,
-        schema_v9_version: SCHEMA_V9_VERSION,
-        schema_v9_fingerprint: SCHEMA_V9_FINGERPRINT,
-        schema_v9_manifest: SCHEMA_V9_MANIFEST,
-        schema_v8_version: SCHEMA_V8_VERSION,
-        schema_v8_fingerprint: SCHEMA_V8_FINGERPRINT,
-        schema_v8_manifest: SCHEMA_V8_MANIFEST,
         execution_schema: EXECUTION_SCHEMA,
         execution_schema_version: EXECUTION_SCHEMA_VERSION,
         execution_schema_fingerprint: EXECUTION_SCHEMA_FINGERPRINT,
@@ -1206,6 +1131,7 @@ export class SqliteWorker {
   run<T>(command: SqliteCommand, signal?: AbortSignal): Promise<T> {
     const copy = structuredClone(command);
     const readOnly = new Set<string>([
+      "metadata_fields_read",
       "article_identity_get",
       "article_identity_current",
       "schema",
@@ -1224,7 +1150,6 @@ export class SqliteWorker {
       "list_literature",
       "find_literature_by_identifiers",
       "get_asset",
-      "get_literature_content",
       "get_observation",
       "get_provider_relation",
       "get_discovery",
@@ -1243,10 +1168,10 @@ export class SqliteWorker {
       "reference_query_snapshot",
       "library_snapshot",
       "library_search_page",
-      "content_cleanup_snapshot",
       "artifact_reclamation_snapshot",
       "candidate_cleanup_snapshot",
       "query_preflight",
+      "document_parts",
       "document_material",
       "document_input",
       "document_version",
@@ -1292,14 +1217,9 @@ export class SqliteWorker {
     args: readonly unknown[] = [],
     signal?: AbortSignal,
   ): Promise<T> {
-    const write = [
-      "beginGeneration",
-      "insertEntries",
-      "publish",
-      "knowledgeBegin",
-      "knowledgeInsert",
-      "knowledgePublish",
-    ].includes(operation);
+    const write = ["beginGeneration", "insertEntries", "publish"].includes(
+      operation,
+    );
     if (this.readOnly && write) throw new SqliteWorkerError();
     if (write && !this.admission) throw new SqliteWorkerError();
     const send = async () => {
@@ -1350,17 +1270,128 @@ export class SqliteWorker {
     return read ? send() : this.admission!.run(send, signal);
   }
 
-  async knowledge<T>(
-    action: Extract<SqliteCommand, { kind: "knowledge" }>["action"],
+  async snapshot<T>(
+    action: import("./snapshot-engine.js").SnapshotStorageAction,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const write = action === "publish";
+    if (write && (this.readOnly || !this.admission))
+      throw new SnapshotError("snapshot-write-unavailable");
+    const copy = structuredClone(args),
+      send = async () => {
+        if (signal?.aborted) throw new SnapshotError("snapshot-cancelled");
+        const reply = await this.send<{
+          ok: boolean;
+          value?: T;
+          code?: string;
+        }>({ kind: "snapshot", action, args: copy });
+        if (!reply.ok)
+          throw new SnapshotError(reply.code ?? "snapshot-storage-failed");
+        return reply.value as T;
+      };
+    return write ? this.admission!.run(send, signal) : send();
+  }
+  async archive<T>(
+    action: import("./archive-engine.js").ArchiveStorageAction,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const read = ["state", "issues", "events", "stats", "revision"].includes(
+      action,
+    );
+    if (this.readOnly && !read)
+      throw new KnowledgeStorageError("archive-read-only");
+    if (!read && !this.admission)
+      throw new KnowledgeStorageError("archive-write-admission-required");
+    const copy = structuredClone(args);
+    const send = async () => {
+      if (signal?.aborted)
+        throw new WriteAdmissionError("write-admission-cancelled");
+      const reply = await this.send<{ ok: boolean; value?: T; code?: string }>({
+        kind: "archive",
+        action,
+        args: copy,
+      });
+      if (!reply.ok)
+        throw new KnowledgeStorageError(reply.code ?? "archive-storage-failed");
+      return reply.value as T;
+    };
+    return read ? send() : this.admission!.run(send, signal);
+  }
+
+  async tags<T>(
+    action: import("./tag-engine.js").TagStorageAction,
     args: unknown,
     signal?: AbortSignal,
   ): Promise<T> {
     const read = [
-      "id",
-      "comparison",
-      "default",
+      "state",
       "list",
-      "list-synthesis",
+      "get",
+      "resolve",
+      "assignment",
+      "changes",
+      "backfill-candidates",
+      "undo-preview",
+    ].includes(action);
+    if (this.readOnly && !read) throw new TagError("tag-read-only");
+    if (!read && !this.admission)
+      throw new TagError("tag-write-admission-required");
+    const copy = structuredClone(args);
+    const send = async () => {
+      if (signal?.aborted)
+        throw new WriteAdmissionError("write-admission-cancelled");
+      const reply = await this.send<{
+        ok: boolean;
+        value?: T;
+        code?: string;
+        details?: Record<string, unknown>;
+      }>({ kind: "tags", action, args: copy });
+      if (!reply.ok)
+        throw new TagError(reply.code ?? "tag-storage-failed", reply.details);
+      return reply.value as T;
+    };
+    return read ? send() : this.admission!.run(send, signal);
+  }
+
+  async annotation<T>(
+    action: import("./structure-annotation-engine.js").AnnotationStorageAction,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const read = ["get", "state", "find"].includes(action);
+    if (this.readOnly && !read) throw new KnowledgeStorageError("read-only");
+    if (!read && !this.admission)
+      throw new KnowledgeStorageError("write-admission-required");
+    const copy = structuredClone(args);
+    const send = async () => {
+      if (signal?.aborted)
+        throw new WriteAdmissionError("write-admission-cancelled");
+      const reply = await this.send<{ ok: boolean; value?: T; code?: string }>({
+        kind: "annotation",
+        action,
+        args: copy,
+      });
+      if (!reply.ok)
+        throw new KnowledgeStorageError(
+          reply.code ?? "annotation-storage-failed",
+        );
+      return reply.value as T;
+    };
+    return read ? send() : this.admission!.run(send, signal);
+  }
+  async proofread<T>(
+    action: import("./proofread-engine.js").ProofreadStorageAction,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const read = [
+      "get",
+      "current",
+      "state",
+      "resources",
+      "cache-read",
     ].includes(action);
     if (this.readOnly && !read) throw new KnowledgeStorageError("read-only");
     if (!read && !this.admission)
@@ -1370,12 +1401,40 @@ export class SqliteWorker {
       if (signal?.aborted)
         throw new WriteAdmissionError("write-admission-cancelled");
       const reply = await this.send<{ ok: boolean; value?: T; code?: string }>({
-        kind: "knowledge",
+        kind: "proofread",
         action,
         args: copy,
       });
       if (!reply.ok)
-        throw new KnowledgeStorageError(reply.code ?? "storage-failed");
+        throw new KnowledgeStorageError(
+          reply.code ?? "proofread-storage-failed",
+        );
+      return reply.value as T;
+    };
+    return read ? send() : this.admission!.run(send, signal);
+  }
+  async rawParse<T>(
+    action: import("./raw-parsing-engine.js").RawParseStorageAction,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const read = ["get", "current", "resources"].includes(action);
+    if (this.readOnly && !read) throw new KnowledgeStorageError("read-only");
+    if (!read && !this.admission)
+      throw new KnowledgeStorageError("write-admission-required");
+    const copy = structuredClone(args);
+    const send = async () => {
+      if (signal?.aborted)
+        throw new WriteAdmissionError("write-admission-cancelled");
+      const reply = await this.send<{ ok: boolean; value?: T; code?: string }>({
+        kind: "raw_parse",
+        action,
+        args: copy,
+      });
+      if (!reply.ok)
+        throw new KnowledgeStorageError(
+          reply.code ?? "raw-parse-storage-failed",
+        );
       return reply.value as T;
     };
     return read ? send() : this.admission!.run(send, signal);
@@ -1413,10 +1472,6 @@ export class SqliteWorker {
     };
     return read ? send() : this.admission!.run(send, signal);
   }
-
-  async upgradeExecutionSchema(): Promise<void> {
-    await this.run({ kind: "execution_upgrade" });
-  }
   async inspectExecutionRuntime(): Promise<ExecutionRuntimeInspection> {
     const value = await this.run<unknown>({
       kind: "execution_runtime_inspect",
@@ -1425,9 +1480,7 @@ export class SqliteWorker {
       throw new SqliteWorkerError();
     const result = value as Partial<ExecutionRuntimeInspection>;
     if (
-      ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(
-        result.catalog_version as number,
-      ) ||
+      result.catalog_version !== SCHEMA_VERSION ||
       typeof result.catalog_fingerprint !== "string" ||
       (result.version !== null && typeof result.version !== "number") ||
       (result.fingerprint !== null && typeof result.fingerprint !== "string") ||
@@ -1440,29 +1493,6 @@ export class SqliteWorker {
     )
       throw new SqliteWorkerError();
     return result as ExecutionRuntimeInspection;
-  }
-  async migrateExecutionRuntime(
-    dryRun = false,
-  ): Promise<ExecutionMigrationReceipt> {
-    const value = await this.run<unknown>({
-      kind: "execution_runtime_migrate",
-      dryRun,
-    });
-    if (!value || typeof value !== "object" || Array.isArray(value))
-      throw new SqliteWorkerError();
-    const receipt = value as Partial<ExecutionMigrationReceipt>;
-    if (
-      typeof receipt.migration_id !== "string" ||
-      !["migrate", "dry-run"].includes(receipt.action as string) ||
-      (receipt.from_version !== null &&
-        typeof receipt.from_version !== "number") ||
-      receipt.to_version !== SCHEMA_V2_VERSION ||
-      typeof receipt.manifest_fingerprint !== "string" ||
-      typeof receipt.applied_at !== "string" ||
-      !receipt.inspection
-    )
-      throw new SqliteWorkerError();
-    return receipt as ExecutionMigrationReceipt;
   }
   async createExecutionJob(
     job: ExecutionJob,
@@ -1875,9 +1905,6 @@ export class SqliteWorker {
       throw new SqliteWorkerError();
     return value as ExecutionRestoreCheck;
   }
-  async rollbackExecutionSchema(backupPath: string): Promise<void> {
-    await this.run({ kind: "execution_rollback", backupPath });
-  }
   async putCandidate(value: DurableCandidate): Promise<void> {
     await this.run({
       kind: "put_candidate",
@@ -1947,28 +1974,55 @@ export class SqliteWorker {
     });
     return value === null ? null : parseLiteratureCurrentFacts(value);
   }
-  async documentInput(
-    material: DocumentMaterialRef,
-  ): Promise<DocumentInputSnapshot | null> {
-    const value = await this.run<DocumentInputSnapshot | null>({
-      kind: "document_input",
-      material: parseDocumentMaterialRef(material),
-    });
-    if (value === null) return null;
-    if (typeof value.source_artifact_path !== "string")
+  async documentParts(
+    literatureId: string,
+    offset: number,
+    limit: number,
+  ): Promise<{
+    total: number;
+    items: readonly {
+      asset_id: string;
+      asset_sha256: string;
+      role: "main" | "supplementary";
+    }[];
+  }> {
+    if (
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 200
+    )
       throw new SqliteWorkerError();
-    return {
-      source_artifact_path: value.source_artifact_path,
-      parser:
-        value.parser === null
-          ? null
-          : {
-              result: await parseParserResult(value.parser.result),
-              provenance_id: value.parser.provenance_id,
-              markdown_artifact_path: value.parser.markdown_artifact_path,
-              resource_artifact_paths: value.parser.resource_artifact_paths,
-            },
-    };
+    const value = await this.run<{
+      total: number;
+      items: readonly {
+        asset_id: string;
+        asset_sha256: string;
+        role: "main" | "supplementary";
+      }[];
+    }>({
+      kind: "document_parts",
+      literatureId: String(parseLiteratureId(literatureId)),
+      offset,
+      limit,
+    });
+    if (
+      !Number.isSafeInteger(value.total) ||
+      value.total < 0 ||
+      !Array.isArray(value.items) ||
+      value.items.length > limit
+    )
+      throw new SqliteWorkerError();
+    for (const item of value.items) {
+      parseAssetId(item.asset_id);
+      if (
+        !/^[a-f0-9]{64}$/.test(item.asset_sha256) ||
+        !["main", "supplementary"].includes(item.role)
+      )
+        throw new SqliteWorkerError();
+    }
+    return value;
   }
   async documentMaterial(
     literatureId: string,
@@ -2284,19 +2338,8 @@ export class SqliteWorker {
     }
     return !snapshot.registered && !protectedByExecution;
   }
-  contentCleanupSnapshot(
-    literatureId: string,
-  ): Promise<ContentCleanupSnapshot | null> {
-    return this.run({ kind: "content_cleanup_snapshot", literatureId });
-  }
-  cleanupNoUsableContent(
-    command: ContentCleanupCommand,
-  ): Promise<readonly RetiredArtifact[] | null> {
-    return this.run({ kind: "cleanup_no_usable_content", command });
-  }
   async literatureDetailSnapshot(literatureId: string): Promise<{
     readonly detail: unknown;
-    readonly content: LiteratureContentPublication | null;
   } | null> {
     return this.run({ kind: "literature_detail_snapshot", literatureId });
   }
@@ -2320,8 +2363,13 @@ export class SqliteWorker {
   async librarySearchPage(request: LibraryPageQuery): Promise<{
     readonly rows: readonly SearchSnapshotRow[];
     readonly total_count: number;
+    readonly tag_backfill_pending?: number;
   }> {
-    const page = await this.run<{ rows: unknown; total_count: number }>({
+    const page = await this.run<{
+      rows: unknown;
+      total_count: number;
+      tag_backfill_pending?: number;
+    }>({
       kind: "library_search_page",
       request,
     });
@@ -2330,7 +2378,19 @@ export class SqliteWorker {
     const rows = this.parseSearchRows(page.rows);
     if (rows.length > request.limit + 1 || rows.length > page.total_count)
       throw new SqliteWorkerError();
-    return { rows, total_count: page.total_count };
+    if (
+      page.tag_backfill_pending !== undefined &&
+      (!Number.isSafeInteger(page.tag_backfill_pending) ||
+        page.tag_backfill_pending < 0)
+    )
+      throw new SqliteWorkerError();
+    return {
+      rows,
+      total_count: page.total_count,
+      ...(page.tag_backfill_pending === undefined
+        ? {}
+        : { tag_backfill_pending: page.tag_backfill_pending }),
+    };
   }
   async librarySnapshot(
     ftsQuery: string | null,
@@ -2338,6 +2398,7 @@ export class SqliteWorker {
     includeOtherVersions = false,
     literatureIds: readonly string[] = [],
     metaLiteratureIds: readonly string[] = [],
+    tags?: import("@sciretriever/contracts").LibraryQuery["tags"],
   ): Promise<
     readonly {
       readonly item: LiteratureSearchItem;
@@ -2361,6 +2422,7 @@ export class SqliteWorker {
       includeOtherVersions,
       literatureIds,
       metaLiteratureIds,
+      ...(tags ? { tags } : {}),
     });
     return this.parseSearchRows(value);
   }
@@ -2379,6 +2441,9 @@ export class SqliteWorker {
       )
         throw new SqliteWorkerError();
       return Object.freeze({
+        ...(row.tag_match === undefined
+          ? {}
+          : { tag_match: row.tag_match === true }),
         item: parseLiteratureSearchItem(row.item),
         relevance: row.relevance as number | null,
         has_pdf_exhaustion: row.has_pdf_exhaustion as boolean,
@@ -2471,33 +2536,6 @@ export class SqliteWorker {
   ): Promise<boolean> {
     return this.run({ kind: "put_literature_asset", publication });
   }
-  async commitCurrentParser(
-    literatureId: string,
-    result: ParserResultPublication,
-  ): Promise<ParserResult | null> {
-    const committed = await this.run<unknown>({
-      kind: "commit_current_parser",
-      literatureId,
-      result,
-    });
-    return committed === null ? null : parseParserResult(committed);
-  }
-  acceptLiteratureContent(command: ContentAcceptanceCommit): Promise<boolean> {
-    return this.run({ kind: "accept_literature_content", command });
-  }
-  putParserResult(result: ParserResultPublication): Promise<boolean> {
-    return this.run({ kind: "put_parser_result", result });
-  }
-  putLiteratureContent(
-    content: LiteratureContentPublication,
-  ): Promise<boolean> {
-    return this.run({ kind: "put_literature_content", content });
-  }
-  getLiteratureContent(
-    literatureId: string,
-  ): Promise<LiteratureContentPublication | null> {
-    return this.run({ kind: "get_literature_content", literatureId });
-  }
   putReference(reference: Reference): Promise<boolean> {
     return this.run({ kind: "put_reference", reference });
   }
@@ -2542,18 +2580,6 @@ export class SqliteWorker {
       kind: "put_metadata_reference_support",
       referenceId,
       observationId,
-      referenceIndex,
-    });
-  }
-  putContentReferenceSupport(
-    referenceId: string,
-    contentSha256: string,
-    referenceIndex: number,
-  ): Promise<boolean> {
-    return this.run({
-      kind: "put_content_reference_support",
-      referenceId,
-      contentSha256,
       referenceIndex,
     });
   }
@@ -2631,6 +2657,9 @@ export class SqliteWorker {
             metadata_revision: fact.metadata_revision as number,
             metadata_sha256: fact.metadata_sha256,
             content_ready: fact.content_ready,
+            field_states: Object.freeze(
+              fact.field_states.map(parseMetadataFieldState),
+            ),
           });
         }),
       ),

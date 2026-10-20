@@ -27,7 +27,8 @@ const emptyQuery = {
   publication_year_to: null,
   venue: null,
   publisher: null,
-  document_types: [],
+  publication_forms: [],
+  article_kinds: [],
   languages: [],
   keywords: [],
   version_roles: [],
@@ -170,6 +171,8 @@ it("searches authoritative metadata with Unicode/AND filters and stable v1 curso
     expect(normalizeQueryText("  Straße\u0085ΟΣ İ  ")).toBe("strasse οσ i̇");
     expect(ftsIndexText("Straße OR 你好 — İ")).toBe("strasse 你好 i̇");
     await app.observations.publish({
+      source_type: null,
+      source_type_mapping_version: null,
       observation_id: id(201),
       provenance: {
         provenance_id: id(202),

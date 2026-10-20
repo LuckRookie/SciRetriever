@@ -50,9 +50,7 @@ async function seeded() {
   const home = await mkdtemp(
     join(tmpdir(), "sciretriever-maintenance-operation-"),
   );
-  const app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  const app = await createApplication(home, {});
   await app.database.putLiterature(literature(first, "published"));
   await app.database.putLiterature(literature(second, "preprint"));
   return { home, app };
@@ -62,9 +60,7 @@ async function seededHttpCandidate(origin: string) {
   const home = await mkdtemp(
     join(tmpdir(), "sciretriever-maintenance-http-candidate-"),
   );
-  const app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  const app = await createApplication(home, {});
   const published = parseLiterature({
     ...FIXTURE_LITERATURE,
     literature_id: first,
@@ -76,6 +72,8 @@ async function seededHttpCandidate(origin: string) {
   await app.database.putLiterature(published);
   await app.observations.publish({
     ...parseMetadataObservation({
+      source_type: null,
+      source_type_mapping_version: null,
       observation_id: "00000000-0000-0000-0000-000000008111",
       provenance: {
         provenance_id: "00000000-0000-0000-0000-000000008112",
@@ -114,9 +112,7 @@ async function seededPublished() {
   const home = await mkdtemp(
     join(tmpdir(), "sciretriever-maintenance-published-"),
   );
-  const app = await createApplication(home, {
-    executionSchema: "upgrade-synthetic",
-  });
+  const app = await createApplication(home, {});
   await app.database.putLiterature(
     parseLiterature({
       ...FIXTURE_LITERATURE,
@@ -198,9 +194,7 @@ describe("explicit maintenance operation across Application, CLI and durable Job
         { outcome: "completed", failure: null },
       ]);
       expect(downloads).toBe(3);
-      const reopened = await createApplication(cli.home, {
-        executionSchema: "require-v2",
-      });
+      const reopened = await createApplication(cli.home, {});
       try {
         for (const app of [reopened, direct.app, durable.app]) {
           const pdf = (await app.library.detail(first)).primary_pdf;
@@ -275,9 +269,7 @@ describe("explicit maintenance operation across Application, CLI and durable Job
       expect(jobResults).toMatchObject([
         { outcome: "skipped", failure: { code: "pdf-network-failed" } },
       ]);
-      const reopened = await createApplication(cli.home, {
-        executionSchema: "require-v2",
-      });
+      const reopened = await createApplication(cli.home, {});
       try {
         for (const app of [reopened, direct.app, durable.app]) {
           expect((await app.library.detail(first)).primary_pdf).toBeNull();
@@ -321,9 +313,7 @@ describe("explicit maintenance operation across Application, CLI and durable Job
         home: cli.home,
       });
       expect(read.code).toBe(0);
-      const before = await createApplication(cli.home, {
-        executionSchema: "require-v2",
-      });
+      const before = await createApplication(cli.home, {});
       expect(await before.database.hasAutomaticPdfExhaustion(first)).toBe(
         false,
       );
@@ -383,9 +373,7 @@ describe("explicit maintenance operation across Application, CLI and durable Job
         expect(report.completed).toEqual([]);
         expect(report.failed).toEqual([]);
       }
-      const cliFacts = await createApplication(cli.home, {
-        executionSchema: "require-v2",
-      });
+      const cliFacts = await createApplication(cli.home, {});
       try {
         for (const id of [first, second]) {
           expect(await cliFacts.database.hasAutomaticPdfExhaustion(id)).toBe(

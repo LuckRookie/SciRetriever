@@ -40,7 +40,7 @@ export async function queryProcessors(
   if (signal?.aborted) processorError("processor-cancelled");
   const q = processorJson(value);
   const optionalKeys: Record<string, readonly string[]> = {
-    results: ["limit", "after", "literature_id"],
+    results: ["limit", "after", "literature_id", "stale"],
     collections: ["run_id", "limit", "offset"],
     search: ["query", "limit", "offset"],
     "search-collections": ["query", "limit", "offset"],
@@ -65,13 +65,16 @@ export async function queryProcessors(
       processorExact(q, ["result_id"]);
       return store.byId(String(parseAssetId(q.result_id)), signal);
     case "results":
+      if (q.stale !== undefined && typeof q.stale !== "boolean")
+        processorError("processor-query-invalid");
       return store.list(
         integer(q.limit, 50),
-        q.after === undefined ? "" : processorText(q.after, 256),
+        q.after === undefined ? "" : processorText(q.after, 256, true),
         signal,
         q.literature_id === undefined
           ? null
           : String(parseLiteratureId(q.literature_id)),
+        (q.stale as boolean | undefined) ?? null,
       );
     case "collections":
       return store.collections(

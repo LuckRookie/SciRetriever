@@ -1,3 +1,4 @@
+import { initializeCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import { describe, expect, it } from "vitest";
 import { mkdtemp, readFile, stat, writeFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -11,10 +12,6 @@ import {
 } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
 import { runCli } from "../src/cli/main.js";
-import {
-  probeCatalogIdentity,
-  SYNTHETIC_CATALOG_MARKER_FILE,
-} from "../src/storage/execution/migration-gate.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 
 const id = (n: number) =>
@@ -27,100 +24,6 @@ async function* input(bytes: Uint8Array): AsyncIterable<Uint8Array> {
 }
 
 describe("TypeScript CLI", () => {
-  it("gates the synthetic-only migration and inspects the durable runtime", async () => {
-    const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-"));
-    const catalog = join(home, "catalog.sqlite");
-    const output: string[] = [];
-    const errors: string[] = [];
-    try {
-      // Declaration and target verification are independent factors: this target
-      // is verified as a synthetic copy below, so the refusal here can only come
-      // from the missing `--synthetic-copy` declaration.
-      const refused = await runCli(["storage", "migrate"], {
-        home,
-        stderr: (text) => errors.push(text),
-      });
-      expect(refused.code).toBe(3);
-      expect(errors.join("")).toContain("migration-refused");
-      expect(existsSync(catalog)).toBe(false);
-
-      const migrated = await runCli(
-        ["storage", "migrate", "--synthetic-copy"],
-        {
-          home,
-          stdout: (text) => output.push(text),
-        },
-      );
-      expect(migrated.code).toBe(0);
-      expect(migrated.value).toMatchObject({
-        action: "migrated",
-        migrated: true,
-      });
-      const receipt = (
-        migrated.value as {
-          migration: {
-            readonly migration_id: string;
-            readonly action: string;
-            readonly from_version: number;
-            readonly to_version: number;
-            readonly manifest_fingerprint: string;
-          };
-        }
-      ).migration;
-      expect(receipt).toMatchObject({
-        action: "migrate",
-        from_version: 1,
-        to_version: 2,
-      });
-      expect(receipt.manifest_fingerprint).toMatch(/^[0-9a-f]{64}$/);
-
-      const repeated = await runCli(
-        ["storage", "migrate", "--synthetic-copy"],
-        { home },
-      );
-      expect(repeated.code).toBe(0);
-      expect(repeated.value).toMatchObject({
-        action: "migrated",
-        migration: { migration_id: receipt.migration_id },
-      });
-      await expect(probeCatalogIdentity(catalog)).resolves.toMatchObject({
-        state: "v2",
-        migration_receipts: 1,
-      });
-
-      const inspected = await runCli(["storage", "inspect"], { home });
-      expect(inspected.code).toBe(0);
-      expect(inspected.value).toMatchObject({ migrated: true });
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
-  it("refuses a declared synthetic copy whose marker is not valid", async () => {
-    const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-marker-"));
-    const catalog = join(home, "catalog.sqlite");
-    const errors: string[] = [];
-    await writeFile(
-      join(home, SYNTHETIC_CATALOG_MARKER_FILE),
-      JSON.stringify({
-        product: "other-product",
-        kind: "synthetic-catalog",
-        marker_version: 1,
-      }),
-    );
-    try {
-      const refused = await runCli(["storage", "migrate", "--synthetic-copy"], {
-        home,
-        stderr: (text) => errors.push(text),
-      });
-      expect(refused.code).toBe(3);
-      expect(errors.join("")).toContain("migration-refused");
-      expect(existsSync(catalog)).toBe(false);
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
   it("keeps backup create-if-absent and refuses unsafe target paths", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-backup-"));
     const catalog = join(home, "catalog.sqlite");
@@ -128,11 +31,7 @@ describe("TypeScript CLI", () => {
     const absent = join(home, "absent.sqlite");
     try {
       const app = await createApplication(home);
-      try {
-        await app.database.schema();
-      } finally {
-        await app.close();
-      }
+      await app.close();
       const catalogDigest = await digest(catalog);
 
       const relative = await runCli(
@@ -192,73 +91,10 @@ describe("TypeScript CLI", () => {
     }
   });
 
-  it("keeps dry-run and backup read-only instead of upgrading implicitly", async () => {
-    const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-dry-"));
-    const catalog = join(home, "catalog.sqlite");
-    const backup = join(home, "catalog-v1-copy.sqlite");
-    try {
-      const absent = await runCli(["storage", "migrate", "--dry-run"], {
-        home,
-      });
-      expect(absent.code).toBe(3);
-      expect(existsSync(catalog)).toBe(false);
-
-      const app = await createApplication(home);
-      try {
-        await app.database.schema();
-      } finally {
-        await app.close();
-      }
-      const catalogDigest = await digest(catalog);
-      const dry = await runCli(["storage", "migrate", "--dry-run"], { home });
-      expect(dry.code).toBe(0);
-      expect(dry.value).toMatchObject({
-        action: "dry-run",
-        from_version: 1,
-        to_version: 2,
-        inspection: { catalog_version: 1, migrated: false },
-      });
-      await expect(probeCatalogIdentity(catalog)).resolves.toMatchObject({
-        state: "v1",
-        migration_receipts: 0,
-        execution_tables: [],
-      });
-      expect(await digest(catalog)).toBe(catalogDigest);
-
-      const backed = await runCli(["storage", "backup", "--path", backup], {
-        home,
-      });
-      expect(backed.code).toBe(0);
-      expect(backed.value).toMatchObject({ path: backup, backed_up: true });
-      await expect(probeCatalogIdentity(catalog)).resolves.toMatchObject({
-        state: "v1",
-        execution_tables: [],
-      });
-      expect(await digest(catalog)).toBe(catalogDigest);
-      const backupDigest = await digest(backup);
-      const checked = await runCli(
-        ["storage", "restore-check", "--path", backup],
-        { home },
-      );
-      expect(checked.code).toBe(0);
-      expect(checked.value).toMatchObject({
-        schema_version: 1,
-        runtime: { catalog_version: 1, migrated: false },
-      });
-      expect(await digest(backup)).toBe(backupDigest);
-      expect(await digest(catalog)).toBe(catalogDigest);
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  });
-
   it("runs a persisted job through the TypeScript task service", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-jobs-"));
     try {
-      expect(
-        (await runCli(["storage", "migrate", "--synthetic-copy"], { home }))
-          .code,
-      ).toBe(0);
+      await initializeCatalogSchema(join(home, "catalog.sqlite"));
       const created = await runCli(
         ["jobs", "create", "--idempotency", "cli-job-1"],
         { home },
@@ -475,6 +311,8 @@ describe("TypeScript CLI", () => {
         }),
       );
       await app.observations.publish({
+        source_type: null,
+        source_type_mapping_version: null,
         observation_id: id(200),
         literature_id: FIXTURE_LITERATURE.literature_id,
         provenance: {
@@ -668,10 +506,7 @@ async function seedReportHome(
   titles: readonly string[],
 ): Promise<{ readonly home: string; readonly literatures: readonly string[] }> {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-report-"));
-  expect(
-    (await runCli(["storage", "migrate", "--synthetic-copy"], { home })).code,
-  ).toBe(0);
-  const app = await createApplication(home, { executionSchema: "require-v2" });
+  const app = await createApplication(home);
   const literatures: string[] = [];
   try {
     for (const [index, title] of titles.entries()) {
@@ -723,13 +558,10 @@ describe("TypeScript CLI database completion report", () => {
         ],
         notStarted: [],
         interrupted: [],
-        no_usable_content_literature_ids: [],
       });
       expect(skipped.value).not.toHaveProperty("items");
       expect(skipped.value).not.toHaveProperty("outcome");
-      const app = await createApplication(home, {
-        executionSchema: "require-v2",
-      });
+      const app = await createApplication(home, {});
       try {
         // Only a normally ended automatic route commits the durable fact.
         expect(await app.database.hasAutomaticPdfExhaustion(literatureId)).toBe(
@@ -768,12 +600,12 @@ describe("TypeScript CLI database completion report", () => {
         interrupted: [],
       });
 
-      const content = await runCli(
-        ["complete", "content", "--literature-id", literatureId],
+      const parsing = await runCli(
+        ["complete", "parser", "--literature-id", literatureId],
         { home },
       );
-      expect(content.code).toBe(0);
-      expect(content.value).toMatchObject({
+      expect(parsing.code).toBe(0);
+      expect(parsing.value).toMatchObject({
         kind: "database-completion",
         end: { kind: "finished" },
         skipped: [
@@ -835,9 +667,7 @@ describe("TypeScript CLI database completion report", () => {
       expect(report.notStarted).toHaveLength(2);
       expect(report.interrupted).toHaveLength(2);
       expect(report.completed).toHaveLength(0);
-      const app = await createApplication(home, {
-        executionSchema: "require-v2",
-      });
+      const app = await createApplication(home, {});
       try {
         // Only the two normally exhausted active targets may commit the durable
         // fact; interrupted workers and unstarted chunks must not invent it.

@@ -160,7 +160,6 @@ describe("formal completion Browser exhaustion boundary (offline)", () => {
       cases.map((item) => [item.id, item.mode]),
     );
     const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
       acquisitionAssembly: {
         doiLandingSource: {
           source_name: "doi-landing",
@@ -230,6 +229,8 @@ describe("formal completion Browser exhaustion boundary (offline)", () => {
         await application.database.putLiterature(literature);
         await application.observations.publish({
           ...parseMetadataObservation({
+            source_type: null,
+            source_type_mapping_version: null,
             observation_id: `00000000-0000-0000-0000-0000000009${String(index + 1).padStart(2, "0")}`,
             provenance: {
               provenance_id: `00000000-0000-0000-0000-0000000010${String(index + 1).padStart(2, "0")}`,
@@ -1299,9 +1300,7 @@ describe("browser article flow port (offline)", () => {
 describe("browser flow acceptance (offline)", () => {
   it("carries a real Intake candidate through deliver into the acceptance receipt", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-flow-accept-"));
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       const literatureId = FIXTURE_LITERATURE.literature_id;
       await application.database.putLiterature(FIXTURE_LITERATURE);
@@ -1404,9 +1403,7 @@ describe("browser flow acceptance (offline)", () => {
 
   it("keeps a rejected delivery from producing a receipt or a primary PDF", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-flow-reject-"));
-    const application = await createApplication(home, {
-      executionSchema: "upgrade-synthetic",
-    });
+    const application = await createApplication(home, {});
     try {
       const literatureId = FIXTURE_LITERATURE.literature_id;
       await application.database.putLiterature(FIXTURE_LITERATURE);

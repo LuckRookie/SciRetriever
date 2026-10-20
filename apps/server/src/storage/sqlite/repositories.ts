@@ -1,4 +1,3 @@
-import { sha256 } from "@sciretriever/contracts";
 import type {
   Author,
   Identifier,
@@ -6,8 +5,9 @@ import type {
   Provenance,
   Reference,
 } from "@sciretriever/contracts";
-import { SqliteWorker } from "./worker.js";
+import { sha256 } from "@sciretriever/contracts";
 import type { FileStore } from "../files/store.js";
+import { SqliteWorker } from "./worker.js";
 
 export interface ObservationProvenance {
   readonly provenance_id: string;
@@ -19,6 +19,8 @@ export interface ObservationProvenance {
   readonly parameters_sha256: string | null;
 }
 export interface MetadataObservation {
+  readonly source_type: string | null;
+  readonly source_type_mapping_version: string | null;
   readonly version_links?: readonly import("@sciretriever/contracts").ProviderLiteratureKey[];
   readonly asset_hints?: readonly import("@sciretriever/contracts").AssetHint[];
   readonly observation_id: string;
@@ -56,52 +58,8 @@ export interface LiteratureAssetPublication {
   readonly provenance: ObservationProvenance;
   readonly source_url: string | null;
 }
-export interface ParserResultPublication {
-  readonly source_asset_id: string;
-  readonly source_sha256: string;
-  readonly result_sha256: string;
-  readonly page_count: number;
-  readonly markdown_artifact_id: string;
-  readonly markdown_artifact_path: string;
-  readonly markdown_sha256: string;
-  readonly markdown_byte_size: number;
-  readonly markdown_media_type: "text/markdown";
-  readonly provenance: ObservationProvenance;
-  readonly parser_version: string;
-  readonly mode: string | null;
-  readonly model_identity: string | null;
-  readonly resources?: readonly ParserResourcePublication[];
-}
-export interface ParserResourcePublication {
-  readonly reference: string;
-  readonly artifact_id: string;
-  readonly artifact_path: string;
-  readonly artifact_sha256: string;
-  readonly artifact_byte_size: number;
-  readonly artifact_media_type: string;
-}
-export interface LiteratureContentPublication {
-  readonly literature_id: string;
-  readonly literature_content_sha256: string;
-  readonly metadata_revision: number;
-  readonly metadata_sha256: string;
-  readonly primary_asset_id: string;
-  readonly primary_asset_sha256: string;
-  readonly parser_result_sha256: string;
-  readonly structured_artifact_id: string;
-  readonly structured_artifact_path: string;
-  readonly structured_artifact_sha256: string;
-  readonly structured_artifact_byte_size: number;
-  readonly structured_artifact_media_type: string;
-  readonly markdown_artifact_id: string;
-  readonly markdown_artifact_path: string;
-  readonly markdown_artifact_sha256: string;
-  readonly markdown_artifact_byte_size: number;
-  readonly markdown_artifact_media_type: "text/markdown";
-  readonly provenance: ObservationProvenance;
-  readonly reference_texts: readonly string[];
-}
 export type ReferenceSupport =
+  | import("@sciretriever/contracts").ArchiveReferenceTextSupport
   | {
       readonly kind: "provider_relation";
       readonly observation_id: string;
@@ -109,11 +67,6 @@ export type ReferenceSupport =
   | {
       readonly kind: "metadata_reference_text";
       readonly metadata_observation_id: string;
-      readonly reference_index: number;
-    }
-  | {
-      readonly kind: "content_reference_text";
-      readonly literature_content_sha256: string;
       readonly reference_index: number;
     };
 export interface ReferenceSnapshot {
@@ -175,17 +128,6 @@ export class AssetRepository {
   ): Promise<boolean> {
     return this.worker.putLiteratureAsset(publication);
   }
-  publishParserResult(result: ParserResultPublication): Promise<boolean> {
-    return this.worker.putParserResult(result);
-  }
-  publishContent(content: LiteratureContentPublication): Promise<boolean> {
-    return this.worker.putLiteratureContent(content);
-  }
-  getContent(
-    literatureId: string,
-  ): Promise<LiteratureContentPublication | null> {
-    return this.worker.getLiteratureContent(literatureId);
-  }
   async readAsset(assetId: string): Promise<Uint8Array> {
     if (!this.files) throw new RepositoryError();
     const asset = await this.worker.getAsset(assetId);
@@ -228,28 +170,9 @@ export class ReferenceRepository {
       referenceIndex,
     );
   }
-  supportWithContentReferenceText(
-    referenceId: string,
-    literatureContentSha256: string,
-    referenceIndex: number,
-  ): Promise<boolean> {
-    return this.worker.putContentReferenceSupport(
-      referenceId,
-      literatureContentSha256,
-      referenceIndex,
-    );
-  }
   snapshot(): Promise<readonly ReferenceSnapshot[]> {
     return this.worker.referenceSnapshot();
   }
 }
 
 export type ObservationIdentifier = Identifier;
-
-export interface ContentAcceptanceCommit {
-  readonly input_metadata_revision: number;
-  readonly input_metadata_sha256: string;
-  readonly final_metadata: import("@sciretriever/contracts").LiteratureMetadata;
-  readonly content: LiteratureContentPublication;
-  readonly content_body: string;
-}

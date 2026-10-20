@@ -101,7 +101,7 @@ v4 的阅读页在普通文献库搜索之外提供“材料上下文”。填�
 
 显式旧版可改用 `versions: { "kind": "explicit", "documents": [{ "literature_id": "…", "document_version_id": "…", "representation_sha256": "…" }] }`；范围可用 `{ "kind": "literatures", "literature_ids": ["…"] }`。`continuation` 必须原样带回且同查询、范围、类型、版本和预算；源改变时重新发起查询。当前最多 20 项/262144 字节，没有 tokenizer，非空 `token_limit` 会拒绝。响应 `usage.bytes` 计算整个 `result` JSON，含证据、缺口和继续位置；`score_rule` 为 `weighted-term-frequency-v1`，`score` 是固定 generation 内命中单元的词频排序值（title 权重 4、body 权重 1，负值优先），不是可信度。正文引用返回精确 `start_utf8/end_utf8`，可用 `document-slice` 的 `{ "kind": "range", "start_utf8": …, "end_utf8": … }` 选择器分块继续读取；资源与证据仍使用本页下述受控阅读 API。只读请求不重建索引。
 
-维护 HTTP 路由为受同源会话/CSRF 保护的 `POST /api/v1/maintenance/rebuild-index`，请求为 `{ "protocol_version": 1, "request": { "kind": "rebuild" } }`。从源码构建后的 CLI 可执行 `node apps/server/dist/cli/main.js maintenance rebuild-index --json`；它支持完整 v4–v8 Catalog。新库初始化 v8、旧库显式升级的步骤见[升级指南](upgrade.md)；v3→v4 单步合成演练保留在[文档 Catalog 迁移指南](document-catalog-migration.md)。真实用户数据切换仍需单独授权。
+维护 HTTP 路由为受同源会话/CSRF 保护的 `POST /api/v1/maintenance/rebuild-index`，请求为 `{ "protocol_version": 1, "request": { "kind": "rebuild" } }`。从源码构建后的 CLI 可执行 `node apps/server/dist/cli/main.js maintenance rebuild-index --json`；它使用唯一当前数据库结构。新库创建与现有库的转换、恢复说明见[数据库初始化与恢复](upgrade.md)。
 
 ## 知识与材料混合上下文（Catalog v8）
 

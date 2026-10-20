@@ -73,6 +73,7 @@ export interface TaskDetail {
   readonly job: Json;
   readonly targets: readonly Json[];
   readonly results: readonly Json[];
+  readonly partial_results: readonly Json[];
   readonly collections: readonly Json[];
   readonly skipped: readonly Json[];
   readonly failures: readonly Json[];
@@ -94,6 +95,8 @@ export function parseTaskDetail(value: unknown): TaskDetail {
     job,
     targets: list("targets"),
     results: list("results"),
+    partial_results:
+      task.partial_results == null ? [] : list("partial_results"),
     collections: task.collections == null ? [] : list("collections"),
     skipped: list("skipped"),
     failures: list("failures"),

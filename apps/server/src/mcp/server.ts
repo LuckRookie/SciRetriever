@@ -1,56 +1,56 @@
-import { ProcessorQueryError } from "../storage/processor-results.js";
-import {
-  queryProcessors,
-  submitProcessor,
-} from "../entry/processor-operations.js";
-import {
-  executeConfiguration,
-  type ConfigurationOperation,
-} from "../entry/configuration-operations.js";
-import {
-  TypeScriptConfigurationOwner,
-  type ConfigurationProbeSeams,
-} from "../configuration/owner.js";
-import {
-  executeMaintenance,
-  type MaintenanceOperation,
-} from "../entry/maintenance-operations.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   type CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { Ajv2020 } from "ajv/dist/2020.js";
 import {
-  parseLiteratureId,
   ContractValidationError,
+  parseLiteratureId,
 } from "@sciretriever/contracts";
-import {
-  executeQuery,
-  type QueryOperation,
-} from "../entry/query-operations.js";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import {
   createApplication,
   createQueryApplication,
   type Application,
   type QueryApplication,
 } from "../bootstrap/application.js";
-import { fixedConfigurationHome } from "../configuration/owner.js";
 import {
-  QUERY_TOOLS,
-  MAINTENANCE_TOOLS,
-  BROWSER_QUERY_TOOLS,
-  BROWSER_MAINTENANCE_TOOLS,
-} from "./tools.js";
-import { PdfUploads } from "./pdf-upload.js";
+  fixedConfigurationHome,
+  TypeScriptConfigurationOwner,
+  type ConfigurationProbeSeams,
+} from "../configuration/owner.js";
+import {
+  executeConfiguration,
+  type ConfigurationOperation,
+} from "../entry/configuration-operations.js";
+import {
+  executeMaintenance,
+  type MaintenanceOperation,
+} from "../entry/maintenance-operations.js";
+import {
+  queryProcessors,
+  submitProcessor,
+} from "../entry/processor-operations.js";
+import {
+  executeQuery,
+  type QueryOperation,
+} from "../entry/query-operations.js";
+import { ProcessorQueryError } from "../storage/processor-results.js";
 import {
   MachineWorkbenchClient,
   workbenchOrigin,
   type WorkbenchOperation,
 } from "../workbench/machine-client.js";
+import { PdfUploads } from "./pdf-upload.js";
+import {
+  BROWSER_MAINTENANCE_TOOLS,
+  BROWSER_QUERY_TOOLS,
+  MAINTENANCE_TOOLS,
+  QUERY_TOOLS,
+} from "./tools.js";
 
 export interface McpOptions {
   /** Explicit local owner of live Browser sessions; no discovery through shared storage. */
@@ -121,10 +121,7 @@ export function createMcpServer(options: McpOptions = {}) {
     if (!options.maintenance || stop.signal.aborted) unavailable();
     app ??= (
       options.applicationFactory ??
-      (() =>
-        createApplication(options.home ?? fixedConfigurationHome(), {
-          executionSchema: "require-v2",
-        }))
+      (() => createApplication(options.home ?? fixedConfigurationHome(), {}))
     )();
     return app;
   };
@@ -222,12 +219,22 @@ export function createMcpServer(options: McpOptions = {}) {
       );
     }
     const maintenanceRoutes: Readonly<Record<string, MaintenanceOperation>> = {
+      snapshot_create: "snapshots",
+      archive_manage: "archive",
+      tags_manage: "tags",
+      archive_references: "archive-references",
+      metadata_edit: "metadata-edit",
+      document_annotate: "document-annotate",
+      document_role: "document-role",
+      document_publish_proofread: "document-publish-proofread",
+      proofread_build: "proofread-build",
+      proofread_decide: "proofread-decide",
+      proofread_revoke: "proofread-revoke",
       import_bibliography: "import-bibliography",
       discover_citations: "discover",
       create_task: "task-create",
       resolve_intervention: "resolve-intervention",
       rebuild_index: "rebuild-index",
-      rebuild_knowledge_index: "rebuild-knowledge-index",
       create_extraction: "extraction-operation",
       read_extraction: "extraction-operation-read",
       submit_extraction: "extraction-submit",
@@ -334,18 +341,24 @@ export function createMcpServer(options: McpOptions = {}) {
             },
         signal,
       );
+    if (name === "snapshots_query")
+      return executeQuery(q, "snapshots", args, signal);
+    if (name === "archive_query")
+      return executeQuery(q, "archive", args, signal);
+    if (name === "tags_query") return executeQuery(q, "tags", args, signal);
+    if (name === "metadata_fields")
+      return executeQuery(q, "metadata-fields", args, signal);
+    if (name === "document_annotation")
+      return executeQuery(q, "document-annotation", args, signal);
+    if (name === "proofread_page")
+      return executeQuery(q, "proofread-page", args, signal);
+    if (name === "proofread_inspect")
+      return executeQuery(q, "proofread-inspect", args, signal);
     if (name === "document_read")
       return executeQuery(
         q,
         `document-${args.operation}` as QueryOperation,
         args.request,
-        signal,
-      );
-    if (name === "read_knowledge")
-      return executeQuery(
-        q,
-        args.kind === "synthesis" ? "synthesis-read" : "knowledge-read",
-        { artifact_id: args.artifact_id },
         signal,
       );
     if (name === "search_context")
@@ -365,13 +378,8 @@ export function createMcpServer(options: McpOptions = {}) {
       read_task: "task-read",
       read_article_identity: "article-identity",
       prepare_analysis_inputs: "analysis-inputs",
-      prepare_synthesis: "synthesis-prepare",
       read_references: "references",
       read_reference: "reference-read",
-      list_knowledge: "knowledge-list",
-      default_knowledge: "knowledge-default",
-      list_syntheses: "synthesis-list",
-      read_synthesis_source: "synthesis-source",
       prepare_extraction: "extraction-prepare",
     };
     if (!Object.hasOwn(routes, name)) unavailable();

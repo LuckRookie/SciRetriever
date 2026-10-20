@@ -50,7 +50,7 @@ export const READING_SCHEMA = {
   additionalProperties: false,
 };
 export async function textChunks(
-  input: Extract<ProcessorInput, { kind: "document" }>,
+  input: Extract<ProcessorInput, { kind: "archive-document" }>,
   reading: ProcessorObject,
   ctx: ProcessorContext,
 ) {
@@ -105,7 +105,7 @@ export function textCoverage(
   input: ProcessorInput,
   read: readonly string[],
   gaps: readonly string[],
-): ProcessorCoverage {
+): Omit<ProcessorCoverage, "parts"> {
   return {
     input_id: input.input_id,
     status: gaps.length ? (read.length ? "partial" : "none") : "complete",
