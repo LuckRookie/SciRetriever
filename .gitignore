@@ -149,3 +149,26 @@ archive/
 !/docs/archive/2026-10-19-web-remote-access/
 /docs/archive/2026-10-19-web-remote-access/*
 !/docs/archive/2026-10-19-web-remote-access/README.md
+
+# Superseded ADRs archived on 2026-10-20; exact files only.
+!/docs/archive/decisions/
+/docs/archive/decisions/*
+!/docs/archive/decisions/README.md
+!/docs/archive/decisions/0005-document-package-2-breaking-contract.md
+!/docs/archive/decisions/0006-llm-produced-literature-content.md
+!/docs/archive/decisions/0009-provider-scoped-global-access-scheduling.md
+!/docs/archive/decisions/0020-reusable-model-profiles-and-task-bindings.md
+!/docs/archive/decisions/0008-summarized-markdown-literature-content.md
+!/docs/archive/decisions/0010-parser-neutral-markdown-current-result.md
+!/docs/archive/decisions/0024-typescript-browser-workbench-migration.md
+# Accepted literature-archive proposal archived on 2026-10-20.
+!/docs/archive/2026-10-20-literature-archive-proposal/
+/docs/archive/2026-10-20-literature-archive-proposal/*
+!/docs/archive/2026-10-20-literature-archive-proposal/README.md
+!/docs/archive/2026-10-20-literature-archive-proposal/proposal.md
+
+# Active archive feature modules are source, not historical snapshots.
+!/apps/server/src/archive/
+!/apps/server/src/archive/**
+!/apps/web/src/app/features/archive/
+!/apps/web/src/app/features/archive/**

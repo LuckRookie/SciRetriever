@@ -18,7 +18,12 @@ Owner 已授权将当前工作区分组提交，并归档已完成计划。以�
 | [CLI/MCP 覆盖 Web 业务能力](2026-10-15-interface-capability-parity/README.md) | 两个机器入口分别覆盖当时的 Web 业务范围；当轮 Full 225 文件 / 1,785 项通过。 |
 | [定稿 Web 原型接入](2026-10-15-library-web-adaptation/README.md) | 当时既有能力按定稿原型适配；当轮 Full 221 文件 / 1,769 项通过。后续处理器与阅读由后续计划承接。 |
 
-活动实施入口见[计划规范](../plans/README.md)，可信全文提案仍留在[活动提案](../proposals/2026-10-19-trusted-fulltext-and-processor-inputs/README.md)。
+2026-10-20 另行归档：
+
+- [已归档的架构决策](decisions/README.md)：被取代或已过时的 ADR 0005、0006、0008、0009、0010、0020、0024。
+- [可信全文、文献档案与算子提案](2026-10-20-literature-archive-proposal/README.md)：方向已由 ADR 0037 接受，执行见[文献建档计划](../plans/2026-10-20-literature-archive/README.md)。
+
+活动实施入口见[计划规范](../plans/README.md)。
 
 - [文献知识加工首版](2026-10-18-knowledge-processing-platform/README.md)：2026-10-18 Completed；三块精简计划与提案归档，Full 1,809 项通过、40 项条件跳过，补充适配回归通过；真实质量评估未执行。
 

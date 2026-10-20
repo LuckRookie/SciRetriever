@@ -1,10 +1,12 @@
 # ADR 0024：TypeScript 与 Browser 工作台迁移边界
 
-- Status: Accepted
+- Status: Superseded（2026-10-20 归档：迁移已完成，TypeScript 是唯一活动架构，见 [ADR 0025](../../architecture/decisions/0025-typescript-entry-and-runtime-contract.md)）
 - Date: 2026-09-09
 - Supersedes: none
-- Amends: [ADR 0011](0011-literature-database-centered-incremental-maintenance.md)、[ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[ADR 0023](0023-generic-browser-agent-executor.md)
-- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[任务与协作控制：生产组装与应用生命周期](../technical/02-task-coordination.md#2-生产组装与应用生命周期)、[已归档迁移计划](../../archive/2026-09-07-typescript-browser-workbench/README.md)
+- Amends: [ADR 0011](../../architecture/decisions/0011-literature-database-centered-incremental-maintenance.md)、[ADR 0012](../../architecture/decisions/0012-process-local-provider-access-scheduling.md)、[ADR 0013](../../architecture/decisions/0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0016](../../architecture/decisions/0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](../../architecture/decisions/0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0019](../../architecture/decisions/0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0021](../../architecture/decisions/0021-provider-model-registry-and-direct-task-selection.md)、[ADR 0023](../../architecture/decisions/0023-generic-browser-agent-executor.md)
+- Related: [产品需求](../../architecture/requirements.md)、[设计文档](../../architecture/design.md)、[任务与协作控制：生产组装与应用生命周期](../../architecture/technical/02-task-coordination.md#2-生产组装与应用生命周期)、[已归档迁移计划](../2026-09-07-typescript-browser-workbench/README.md)
+
+> 2026-10-20 归档：本 ADR 约束的是 Python 到 TypeScript 的迁移期。迁移已经完成，Python 入口已退役，TypeScript 为唯一活动架构（ADR 0025）。其中仍然适用的约束——单一运行时 owner、不建立第二个事实库、真实数据切换须另行授权——分别由 ADR 0011、ADR 0025 以及 AGENTS/HARNESS 承接。本文仅作历史背景。
 
 ## 背景
 

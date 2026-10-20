@@ -3,11 +3,11 @@
 - Status: Accepted
 - Date: 2026-08-28
 - Last amended: 2026-09-02
-- Supersedes: [ADR 0020](0020-reusable-model-profiles-and-task-bindings.md)
+- Supersedes: [ADR 0020](../../archive/decisions/0020-reusable-model-profiles-and-task-bindings.md)
 - Superseded by: none
 - Amends: [ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0018](0018-fixed-user-configuration-home.md)
 - Amended by: [ADR 0023](0023-generic-browser-agent-executor.md)
-- Related: [ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[统一产品接口：共享支撑：配置与凭据](../technical/01-product-interface.md#5-共享支撑配置与凭据)、[知识加工：共享支撑：无状态模型运行时](../technical/05-knowledge-processing.md#5-共享支撑无状态模型运行时)
+- Related: [ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[统一产品接口：共享支撑：配置与凭据](../technical/01-product-interface.md#5-共享支撑配置与凭据)、[知识加工：共享支撑：无状态模型运行时](../technical/05-knowledge-processing.md#5-共享支撑单次模型与受控执行基础)
 
 ## 背景
 
@@ -231,7 +231,7 @@ scope 实际需要的 binding 才装配，缺少 Provider、key、Model、image 
   重复声明；
 - API key 在创建远程 Provider/Model 的同一流程完成，同时仍保持普通配置与 secret 分离；
 - `/models` 自动读取减少手工输入，失败路径仍然明确、可取消且可离线测试；
-- SDK、PydanticAI 或当前自有 adapter 可以在 Agents 内部替换，不改变用户配置心智模型。
+- Agents 内部的 SDK 或 adapter（当前为 ADR 0031 的 DSH 底座）可以替换，不改变用户配置心智模型。
 
 ### 代价与限制
 

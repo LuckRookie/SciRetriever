@@ -4,8 +4,10 @@
 - Date: 2026-10-14
 - Last amended: 2026-10-18
 - Amends: [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)（确认 Web 形态、文献库中心与阅读方向，明确人工介入为可选能力）
-- Amended by: [ADR 0033](0033-machine-interfaces-cover-web-capabilities.md)（CLI 与 MCP 分别覆盖 Web 业务；Web 专有阅读交互与维护诊断分工）
+- Amended by: [ADR 0033](0033-machine-interfaces-cover-web-capabilities.md)（CLI 与 MCP 分别覆盖 Web 业务；Web 专有阅读交互与维护诊断分工）；[ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
 - Related: [ADR 0011](0011-literature-database-centered-incremental-maintenance.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0018](0018-fixed-user-configuration-home.md)、[ADR 0028](0028-query-and-expansion-separation.md)、[ADR 0029](0029-unverified-pdf-acquisition.md)、[ADR 0034](0034-unified-processors-and-results.md)、[产品需求 R12](../requirements.md#r12-人类配置浏览器协作与阅读接口)
+
+> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md) 修订本 ADR：文献状态按 ADR 0037 的建档与就绪表达。直接冲突的正文已按 ADR 0037 收口。
 
 ## 背景与授权依据
 
@@ -79,7 +81,7 @@ Web 的完备性按用户能否完成日常业务评价，不按页面数量或 
 
 ### 4. 材料状态简洁呈现，失败不强制转入人工流程
 
-列表可以用紧凑状态和可选筛选表达 PDF、文档、知识的可用性；详情再说明具体版本、用途、覆盖和失败。不能将多版本材料与多用途分析压成唯一的线性完成等级，也不能重新解释既有 `LiteratureStatus` / `CONTENT_READY`。
+列表可以用紧凑状态和可选筛选表达 PDF、文档、知识的可用性；详情再说明具体版本、用途、覆盖和失败。文献状态按 ADR 0037 表达获取、解析、建档与就绪；多版本材料与多用途分析仍不能压成唯一的线性完成等级。
 
 自动获取无需人类在线或响应。无法继续时，按既有结果边界结束该目标并反馈，保留已经取得的事实；不默认创建“等待人工帮助”的必经环节。用户可稍后在相应文献上上传 PDF，或明确请求再次获取。用户主动介入后的暂停和交还按控制协议处理，不与无人介入时的自动执行混淆。
 

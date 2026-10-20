@@ -6,7 +6,7 @@ created = "2026-07-28"
 
 # 多下载源可用性与合理访问限制提案
 
-> 归档说明：本提案已由 2026-08-07 接受的 [ADR 0009](../../architecture/decisions/0009-provider-scoped-global-access-scheduling.md)和当前 design/technical 取代。文内只覆盖 acquisition、只协调单进程以及供应商建议数值等内容均保留为历史讨论，不再构成当前目标设计或实施授权。
+> 归档说明：本提案已由 2026-08-07 接受的 [ADR 0009](../decisions/0009-provider-scoped-global-access-scheduling.md)和当前 design/technical 取代。文内只覆盖 acquisition、只协调单进程以及供应商建议数值等内容均保留为历史讨论，不再构成当前目标设计或实施授权。
 
 ## 1. 提案状态
 

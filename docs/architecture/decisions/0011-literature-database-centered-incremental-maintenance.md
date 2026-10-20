@@ -5,9 +5,11 @@
 - Last amended: 2026-09-27
 - Supersedes: none
 - Superseded by: none
-- Amended by: [ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；[ADR 0028](0028-query-and-expansion-separation.md)（查询与显式扩充分离）
+- Amended by: [ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；[ADR 0028](0028-query-and-expansion-separation.md)（查询与显式扩充分离）；[ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
 - Amends: [ADR 0001](0001-sciretriever-scope-and-boundary.md)、[ADR 0002](0002-literature-identity-and-incremental-processing.md)、[ADR 0004](0004-requirement-led-literature-collection.md)
 - Related: [产品需求](../requirements.md)、[架构原则](../principles.md)、[设计文档](../design.md)、[技术文档](../technical.md)、[任务与协作控制：数据库补全与阶段协调](../technical/02-task-coordination.md#4-数据库补全与阶段协调)、[文献与材料：文献身份、元数据与引用](../technical/03-literature-materials.md#2-文献身份元数据与引用)、[版本化材料与知识存储：Catalog 与文件组织](../technical/07-versioned-storage.md#2-catalog-与文件组织)
+
+> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md) 修订本 ADR：长期保留的结果改为原始解析、校订稿、结构注释、元数据字段状态与标签词表。直接冲突的正文已按 ADR 0037 收口。
 
 > 2026-09-25 修订：产品目的明确为科研 Agent 知识供给；统一逻辑文献库与 current facts 不变量保留。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
 
@@ -46,7 +48,7 @@ SciRetriever 的长期产品目的是为科研 Agent 提供原始知识材料与
 
 ### 3. 只有接纳并需要保留的结果成为数据库事实
 
-当前产品边界内经过业务所有者接纳并按既有设计需要长期保留的结果必须进入同一逻辑数据库，或以稳定关系引用其中的 artifact。这些结果包括文献身份和元数据、来源 observation、资产及其关系、当前 ParserResult、当前 LiteratureContent、引用关系与支持、无法从当前 Literature 反推的 DiscoveryRun provenance，以及会改变未来自动选择的 PDF 自动获取耗尽事实。ADR 0026/0027 新增独立文档/证据、多用途知识和依规范交付的提取候选产物；其写入 owner、输入版本与生命周期须明确，候选不成为文献固定字段或权威领域数据集。
+当前产品边界内经过业务所有者接纳并按既有设计需要长期保留的结果必须进入同一逻辑数据库，或以稳定关系引用其中的 artifact。这些结果包括文献身份和元数据、来源 observation、资产及其关系、原始解析与校订稿、结构注释、元数据字段状态、标签与词表、引用关系与支持、无法从当前 Literature 反推的 DiscoveryRun provenance，以及会改变未来自动选择的 PDF 自动获取耗尽事实。ADR 0026/0027 新增独立文档/证据、多用途知识和依规范交付的提取候选产物；其写入 owner、输入版本与生命周期须明确，候选不成为文献固定字段或权威领域数据集。
 
 外部供应商私有响应、下载候选、临时文件、HTTP 请求、浏览器页面、Parser task、LLM 草稿、内存队列、本次 tried set、批量 selector、冻结目标和运行报告只是形成确认事实或向用户说明本次操作的过程数据。除非其它 Accepted 设计明确要求保留其中某项，它们不因为“数据库中心”而自动进入数据库，也不能成为第二真相源。
 

@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-09
-- Supersedes: [ADR 0009：供应商级全局访问调度](0009-provider-scoped-global-access-scheduling.md)
+- Supersedes: [ADR 0009：供应商级全局访问调度](../../archive/decisions/0009-provider-scoped-global-access-scheduling.md)
 - Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)
 - Amended by: [ADR 0030](0030-browser-transport-and-progress.md)（2026-10-05：Browser 平台网络资格与会话资源分开结算）
 - Related: [ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[统一产品接口：共享支撑：配置与凭据](../technical/01-product-interface.md#5-共享支撑配置与凭据)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[Provider Notes](../../notes/providers/README.md)
@@ -11,7 +11,7 @@
 
 SciRetriever 会在一次运行中并行处理多篇文献，Metadata、Acquisition、Parsing 和 Analysis 也可能访问同一个外部机构。如果每个 adapter、单篇文献或单个批次分别限速，它们会各自认为没有超限，合计却可能超过供应商的并发、请求间隔或周期额度。普通 HTTP、授权 Provider API 和浏览器访问也可能落到同一供应商的不同域名，因此同一进程中的真实外部访问仍需要共享的供应商级准入。
 
-[ADR 0009](0009-provider-scoped-global-access-scheduling.md)进一步要求同机并发进程共享活动租约、冷却截止和额度窗口。Owner 随后明确当前产品是个人使用的单机工具，不要求多个 SciRetriever 进程同时协调，也不要求进程重启后延续上一进程的冷却或 API 窗口。为小概率的并发进程和快速重启持久化运行限速状态，会引入协调目录、状态文件、锁和恢复规则，但不改善主要个人使用流程。
+[ADR 0009](../../archive/decisions/0009-provider-scoped-global-access-scheduling.md)进一步要求同机并发进程共享活动租约、冷却截止和额度窗口。Owner 随后明确当前产品是个人使用的单机工具，不要求多个 SciRetriever 进程同时协调，也不要求进程重启后延续上一进程的冷却或 API 窗口。为小概率的并发进程和快速重启持久化运行限速状态，会引入协调目录、状态文件、锁和恢复规则，但不改善主要个人使用流程。
 
 静态访问政策与动态限速状态需要继续分开：供应商政策、项目安全下限和 operator 收紧配置是可重复加载的配置；当前活动请求、等待队列、额度计数、冷却截止和 `Retry-After` 阻塞只服务正在运行的进程，不是文献事实。
 
@@ -73,7 +73,7 @@ blocked_until
 当次 Retry-After 与保守退避
 ```
 
-这些值不是文献事实，不进入 Pydantic 业务 Model、SQLite Catalog、ArtifactStore、provenance、日志合同或独立状态文件。Network 不建立限速表、协调数据库、协调目录、跨进程 advisory lock、lease marker 或可恢复的 rate-limit 现场。进程退出后全部动态限速状态自然丢弃；下一次运行从静态配置重新建立 Coordinator。
+这些值不是文献事实，不进入业务合同类型、SQLite Catalog、ArtifactStore、provenance、日志合同或独立状态文件。Network 不建立限速表、协调数据库、协调目录、跨进程 advisory lock、lease marker 或可恢复的 rate-limit 现场。进程退出后全部动态限速状态自然丢弃；下一次运行从静态配置重新建立 Coordinator。
 
 静态供应商政策、项目安全下限、Browser/Profile policy 和 operator 收紧值仍由 adapter/Profile、普通配置与 Provider Notes 表达。Provider 凭据按 [ADR 0014](0014-capability-scoped-providers-and-local-credentials.md) 从用户级 `credentials.toml` 解析并注入具体 adapter，但不进入限速状态；本地字段存在、认证成功和具体内容 entitlement 始终是不同事实。
 

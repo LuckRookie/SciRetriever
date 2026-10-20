@@ -8,6 +8,8 @@
 
 Catalog v6 已为单篇知识产物增加独立表与精确依赖；Catalog v7 允许版本化集合综合产物，Catalog v8 append 独立知识检索投影。正式 operator 可用本篇 §4.1.11 的精确目标 CLI 显式初始化或升级；历史单步合成门禁保留。execution 子 schema 仍单独计版本。本篇保留现有表、文件和兼容语义；文档不授权代理执行真实用户数据迁移。
 
+> 2026-10-20：[ADR 0037](../decisions/0037-literature-archive-and-proofread-text.md)（Accepted，2026-10-20）将新增原始解析、校订、结构注释、元数据字段状态、标签词表、建档状态、快照与结果新鲜度等存储。目标形态见[§6](#6-adr-0037-新增存储实施中)，实施见[文献建档计划](../../plans/2026-10-20-literature-archive/README.md)。实施完成前，下文仍描述现行合同与实现。
+
 本篇目录：
 
 - [1. 模块边界与连接](#1-模块边界与连接)
@@ -15,6 +17,7 @@ Catalog v6 已为单篇知识产物增加独立表与精确依赖；Catalog v7 �
 - [3. 事务、发布、并发与恢复](#3-事务发布并发与恢复)
 - [4. 知识版本、依赖与回收](#4-知识版本依赖与回收)
 - [5. 存储完整性验证](#5-存储完整性验证)
+- [6. ADR 0037 新增存储（实施中）](#6-adr-0037-新增存储实施中)
 
 ## 1. 模块边界与连接
 
@@ -280,7 +283,7 @@ Storage 还实现 Literature 拥有的 artifact read Port。输入只接受已�
 
 用户手动提供的原文件从不成为 ArtifactStore 对象。Acquisition 复制到 owner-only staging 后，Storage 只接收内部副本及其 hash；输入绝对路径不进入文件名、相对路径、provenance、Catalog、对账或清理。后续内容无效清理只能删除内部对象。
 
-文献内容处理链中，来源 observation、当前权威 metadata 和原始 PDF 是优先长期可靠保存的事实；ParserResult、Parser Markdown/资源、当前 LiteratureContent、规范总结 Markdown 以及基于当前内容的 support 是可重建派生产物。派生产物仍使用 hash、轻量 provenance、完整当前关系和原子发布防止错配或半成品，旧兼容格式不保证完整数据库历史；新知识/证据依赖仍须按具体版本保持可读或明确失效，派生产物损坏、清理或丢失不能破坏 metadata 和 PDF。已有 ADR 0010 继续约束旧 ParserResult 当前视图；新依赖保护与读取/回收竞争见[新文档与知识存储设计](#41-新文档与知识存储设计)，不从旧可重建语义推出可随意删除。
+文献内容处理链中，来源 observation、当前权威 metadata 和原始 PDF 是优先长期可靠保存的事实。原始解析、校订稿、结构注释、标签与算子结果按 ADR 0037 以不可变版本发布，并按引用关系保护：仍被引用的版本必须可读，否则明确失效；派生产物损坏、清理或丢失不能破坏 metadata 和 PDF。当前代码中的 ParserResult、LiteratureContent 与规范总结 Markdown 属于将退役的旧路径（见 §6），新依赖保护与读取/回收竞争见[新文档与知识存储设计](#41-新文档与知识存储设计)。
 
 ParserResult 是当前可替换中间结果，不是不可变产品历史。Storage 仍以内容寻址和 create-if-absent 发布每一份新字节，但 Catalog 对同一输入 Asset 只保留一项当前 ParserResult 关系。成功切换后旧关系删除，旧字节进入与正式对象区隔离的本地缓存；旧兼容缓存不参与文献状态；新表示仍被有效证据引用时须保留对应版本及可读取关系，不能套用仅按缓存预算回收的旧规则。新结果提交失败时旧关系和旧字节保持完整。
 
@@ -413,6 +416,8 @@ CAS 基线。Acquisition 重读 durable 字节并形成身份/版本证据，Lit
 ## 4. 知识版本、依赖与回收
 
 ### 4.1 新文档与知识存储设计
+
+> ADR 0037：原始解析与校订版本按引用保护；旧 `markdown-utf8-v1` 版本、`LiteratureContent` 与旧处理器结果在 GB 确认后删除。见[§6](#6-adr-0037-新增存储实施中)。
 
 #### 4.1.1 关系布局与 owner
 
@@ -633,3 +638,20 @@ v1/v2→v3→v4→v5→v6→v7→v8 复用各步骤的原事务与完整检查�
 - 共享文件仍被引用时不能回收；
 - Catalog 只保存规范化相对路径，不保存大型 BLOB 或机器相关绝对路径。
 - Network 动态准入、凭据/readiness/probe、Provider cursor、临时 tried set、Parser/LLM 私有现场、同步 Report、原始导入文件和导出文件不进入核心事实库；已有 execution failure 按 [已有执行持久化](#238-已有执行持久化) 保存，新依赖版本按 [新文档与知识存储设计](#41-新文档与知识存储设计) 保护。
+
+## 6. ADR 0037 新增存储（实施中）
+
+本节描述 ADR 0037 的目标存储，尚未实现。表名为计划中的建议名，以实施时的 schema 为准。
+
+| 子系统 | 主要表 | 不可变产物 | 保护规则 |
+| --- | --- | --- | --- |
+| 原始解析 | `raw_parses`、`raw_parse_resources`、`raw_parse_current` | 区块列表 JSON、原始 v2 字节、Markdown、图片 | 被校订版本引用时不能回收 |
+| 校订 | `proofread_versions`、`proofread_current`、`proofread_arbitrations`、`proofread_manual_decisions` | 区块列表、Markdown、资源闭包 | 被文档版本引用时不能回收；人工决定锁定 |
+| 结构 | `structure_annotations` | 结构注释 JSON | 被内容版本引用时不能回收 |
+| 元数据 | `literature_metadata` 列变更、`literature_metadata_field_states` | — | 锁定字段不被自动流程改写 |
+| 标签 | `tags`、`tag_aliases`、`vocabulary_state`、`vocabulary_changes`、`literature_tag_assignments`、`literature_tag_items`、`tag_search` | 词表导出 | 词表写入串行；变更带撤销数据 |
+| 建档 | 建档状态与失败项、版本事件 | — | 事件幂等消费 |
+| 算子 | `snapshots`、`snapshot_members`、`processor_result_freshness` | 结果沿用现有不可变发布 | 快照不可变 |
+
+- 真实库迁移与重建，只能在 Owner 授权（计划 GR）后先在隔离副本上执行。
+- 四类旧数据在 GB 确认后删除，VLM Markdown 作为原始解析保留。

@@ -1,15 +1,17 @@
 # ADR 0008：LLM 总结型 Markdown LiteratureContent
 
-- Status: Accepted
+- Status: Superseded by [ADR 0037](../../architecture/decisions/0037-literature-archive-and-proofread-text.md)（2026-10-20）
 - Date: 2026-08-06
 - Last amended: 2026-09-26
 - Revised: 2026-08-10
 - Supersedes: [ADR 0005](0005-document-package-2-breaking-contract.md)、[ADR 0006](0006-llm-produced-literature-content.md)
-- Amends: [ADR 0001](0001-sciretriever-scope-and-boundary.md)、[ADR 0002](0002-literature-identity-and-incremental-processing.md)、[ADR 0003](0003-operator-managed-mineru-service.md)、[ADR 0007](0007-reference-resolution-and-authoritative-relations.md)
-- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[知识加工：分析与综合](../technical/05-knowledge-processing.md#2-分析与综合)、[文献与材料：文献身份、元数据与引用](../technical/03-literature-materials.md#2-文献身份元数据与引用)
-- Amended by: [ADR 0010](0010-parser-neutral-markdown-current-result.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)
+- Amends: [ADR 0001](../../architecture/decisions/0001-sciretriever-scope-and-boundary.md)、[ADR 0002](../../architecture/decisions/0002-literature-identity-and-incremental-processing.md)、[ADR 0003](../../architecture/decisions/0003-operator-managed-mineru-service.md)、[ADR 0007](../../architecture/decisions/0007-reference-resolution-and-authoritative-relations.md)
+- Related: [产品需求](../../architecture/requirements.md)、[设计文档](../../architecture/design.md)、[知识加工：分析与综合](../../architecture/technical/05-knowledge-processing.md#2-分析与综合)、[文献与材料：文献身份、元数据与引用](../../architecture/technical/03-literature-materials.md#2-文献身份元数据与引用)
+- Amended by: [ADR 0010](0010-parser-neutral-markdown-current-result.md)、[ADR 0013](../../architecture/decisions/0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0017](../../architecture/decisions/0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0026](../../architecture/decisions/0026-agent-knowledge-and-human-collaboration.md)
 
-> 2026-09-25 修订：单一最终总结、固定两阶段/七标题作为全部分析模式及 NoUsableContent 自动删除材料的约束，已由多用途有证据压缩和独立材料保留语义修订。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
+> 2026-10-20 [ADR 0037](../../architecture/decisions/0037-literature-archive-and-proofread-text.md)已整体取代本 ADR：两阶段元数据加总结、固定标题、LiteratureContent 与“关键词不建标签”整体由建档、元数据步骤、总结算子与标签词表取代。仍有效的原则已并入 ADR 0037。本文仅作历史背景，不约束当前设计。
+
+> 2026-09-25 修订：单一最终总结、固定两阶段/七标题作为全部分析模式及 NoUsableContent 自动删除材料的约束，已由多用途有证据压缩和独立材料保留语义修订。详见 [ADR 0026](../../architecture/decisions/0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
 
 ## 背景
 
@@ -226,7 +228,7 @@ PDF 通过上述检查后成为当前主 PDF 并形成 `ASSET_READY`。Analysis 
 
 文献总结和从参考文献原文形成临时 `ReferenceLookup` 都属于 Analysis。Analysis 拥有各分析用例的顺序、prompt、请求分类、响应 schema、业务验收和最终 provenance；其中两阶段顺序仅约束旧单篇兼容用例，新增分析/综合可使用有界多次调用；其它模块只能调用 Analysis 的公开业务 API，不能直接调用这些文献业务用例或通用 prompt 接口。
 
-[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md) 后来确认 Acquisition/Browser 是第二个独立模型能力消费者，因此把不含文献或 Browser 业务语义的 provider/model、capability、预算、取消和请求级 session 提升到公共 `agents` 基础模块。该修订不改变本 ADR 的 Analysis 业务所有权；Analysis 通过 Agents 的 structured-text capability 调用模型，Browser 不能复用 Analysis 的 request kind、prompt 或结果验收。
+[ADR 0017](../../architecture/decisions/0017-shared-agents-and-controlled-browser-agent.md) 后来确认 Acquisition/Browser 是第二个独立模型能力消费者，因此把不含文献或 Browser 业务语义的 provider/model、capability、预算、取消和请求级 session 提升到公共 `agents` 基础模块。该修订不改变本 ADR 的 Analysis 业务所有权；Analysis 通过 Agents 的 structured-text capability 调用模型，Browser 不能复用 Analysis 的 request kind、prompt 或结果验收。
 
 ### 12. ReferenceLookup 仍是按需补充操作
 

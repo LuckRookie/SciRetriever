@@ -1,15 +1,16 @@
 # ADR 0010：Parser-neutral Markdown 与单一当前解析结果
 
-- Status: Accepted
+- Status: Superseded by [ADR 0037](../../architecture/decisions/0037-literature-archive-and-proofread-text.md)（2026-10-20）
 - Date: 2026-08-07
 - Last amended: 2026-09-26
 - Supersedes: none
-- Superseded by: none
-- Amends: [ADR 0003](0003-operator-managed-mineru-service.md)、[ADR 0007](0007-reference-resolution-and-authoritative-relations.md)、[ADR 0008](0008-summarized-markdown-literature-content.md)
-- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[文档与证据：解析转换与中性结果](../technical/04-document-evidence.md#2-解析转换与中性结果)、[统一产品接口：共享合同、结构解析与版本兼容](../technical/01-product-interface.md#6-共享合同结构解析与版本兼容)、[版本化材料与知识存储：Catalog 与文件组织](../technical/07-versioned-storage.md#2-catalog-与文件组织)
-- Amended by: [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)
+- Amends: [ADR 0003](../../architecture/decisions/0003-operator-managed-mineru-service.md)、[ADR 0007](../../architecture/decisions/0007-reference-resolution-and-authoritative-relations.md)、[ADR 0008](0008-summarized-markdown-literature-content.md)
+- Related: [产品需求](../../architecture/requirements.md)、[设计文档](../../architecture/design.md)、[文档与证据：解析转换与中性结果](../../architecture/technical/04-document-evidence.md#2-解析转换与中性结果)、[统一产品接口：共享合同、结构解析与版本兼容](../../architecture/technical/01-product-interface.md#6-共享合同结构解析与版本兼容)、[版本化材料与知识存储：Catalog 与文件组织](../../architecture/technical/07-versioned-storage.md#2-catalog-与文件组织)
+- Amended by: [ADR 0026](../../architecture/decisions/0026-agent-knowledge-and-human-collaboration.md)
 
-> 2026-09-25 修订：解析仅作中间结果、无逐段定位、旧表示无条件可回收的范围收缩已被修订；新目标支持独立读取和稳定证据生命周期。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
+> 2026-10-20 [ADR 0037](../../architecture/decisions/0037-literature-archive-and-proofread-text.md)已整体取代本 ADR：单一当前解析结果、私有输出一律清理、不建立区块定位与不合并多套结果整体由原始解析与校订稿取代。仍有效的原则已并入 ADR 0037。本文仅作历史背景，不约束当前设计。
+
+> 2026-09-25 修订：解析仅作中间结果、无逐段定位、旧表示无条件可回收的范围收缩已被修订；新目标支持独立读取和稳定证据生命周期。详见 [ADR 0026](../../architecture/decisions/0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
 
 ## 背景
 

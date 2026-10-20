@@ -1,10 +1,10 @@
 # ADR 0009：供应商级全局访问调度
 
-- Status: Superseded by [ADR 0012](0012-process-local-provider-access-scheduling.md)
+- Status: Superseded by [ADR 0012](../../architecture/decisions/0012-process-local-provider-access-scheduling.md)
 - Date: 2026-08-07
-- Superseded by: [ADR 0012：进程内供应商访问调度](0012-process-local-provider-access-scheduling.md)
+- Superseded by: [ADR 0012：进程内供应商访问调度](../../architecture/decisions/0012-process-local-provider-access-scheduling.md)
 - Supersedes: [多下载源可用性与合理访问限制提案](../../archive/2026-08-provider-access/acquisition-source-availability-and-access-limits.md)
-- Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[Provider Notes](../../notes/providers/README.md)
+- Related: [产品需求](../../architecture/requirements.md)、[设计文档](../../architecture/design.md)、[任务与协作控制：共享支撑：受控网络访问](../../architecture/technical/02-task-coordination.md#7-共享支撑受控网络访问)、[文献与材料：材料获取、路线与候选](../../architecture/technical/03-literature-materials.md#4-材料获取路线与候选)、[Provider Notes](../../notes/providers/README.md)
 
 > 本 ADR 保存已经撤销的同机跨进程访问协调设计，不再约束当前目标架构。当前进程内共享准入、内存限速状态和非跨进程边界以 ADR 0012 为准。
 

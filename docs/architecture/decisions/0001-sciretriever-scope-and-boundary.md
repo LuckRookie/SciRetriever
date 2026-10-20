@@ -6,8 +6,10 @@
 - Last amended: 2026-09-26
 - Supersedes: none
 - Superseded by: none
-- Amended by: [ADR 0008](0008-summarized-markdown-literature-content.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)、[ADR 0027](0027-extraction-capabilities-and-caller-defined-records.md)
+- Amended by: [ADR 0008](../../archive/decisions/0008-summarized-markdown-literature-content.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)、[ADR 0027](0027-extraction-capabilities-and-caller-defined-records.md)；[ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[架构原则](../principles.md)
+
+> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md) 修订本 ADR：单篇可读全文改由校订稿承担，LiteratureContent 退役。直接冲突的正文已按 ADR 0037 收口。
 
 > 2026-09-26 范围修订：知识压缩/证据目标按 ADR 0026，通用提取按 ADR 0027。原文将全部领域抽取留给下游的限制，修订为平台提供通用能力、调用方定义记录与策略；候选按独立产物交付，领域数据集与文献固定字段边界保留。以下保留原决策背景。
 
@@ -22,8 +24,8 @@ SciRetriever 面向指定领域执行大批量文献收集，最终形成包含�
 1. SciRetriever 为科研 Agent 提供通用文献元数据、原始材料、可独立读取的文档与证据、有明确用途的知识压缩，以及调用方定义规范下的通用提取能力；获取、读取、分析与提取可以分别使用。
 2. 统一逻辑文献库保存文献身份、来源、元数据、资产、文档表示、知识产物、引用与处理证据。反应、分子、路线、产率、材料性质等不成为 Literature 固定字段或权威领域事实。按 ADR 0027 交付的调用方候选 payload 可以使用独立提取产物合同托管；其 schema、科学含义和最终数据集接纳归调用方。
 3. 原始文献资产是解析结果的证据。已接受的原始字节不得原地修改；数据库保存资产关系、hash 和存储引用，不把大型文献文件作为关系型 BLOB 保存。
-4. 原始资产、解析表示、生成解释和提取候选分开表达。Parsing 保持 parser-neutral；Document/Evidence 提供可独立读取的表示和稳定引用。Analysis 的知识产物绑定具体输入及证据，不冒充原文。旧 LiteratureContent 继续提供同源的规范 Markdown 与结构化章节作为兼容格式。
-5. 旧单篇 LiteratureContent 的最终元数据、关键词、章节、参考文献和 Markdown 仍整体验收，不复制权威元数据。新 Analysis 可以产生不同用途/粒度和指定集合的知识产物，各自有明确输入、用途、证据和 provenance；不能因旧格式只有一份当前内容而禁止新用途。
+4. 原始资产、解析表示、生成解释和提取候选分开表达。Parsing 保持 parser-neutral；Document/Evidence 提供可独立读取的表示和稳定引用；按 ADR 0037，单篇可读全文由两份原始解析校订而成的校订稿承担。Analysis 的知识产物绑定具体输入及证据，不冒充原文。
+5. 按 ADR 0037，旧单篇 LiteratureContent 退役：元数据在建档中按字段裁决来源，不复制权威元数据；总结是普通单篇算子。新 Analysis 可以产生不同用途/粒度和指定集合的知识产物，各自有明确输入、用途、证据和 provenance。
 6. SciRetriever 提供材料读取、检索、证据定位以及提取候选的通用检查与交付。调用方定义记录含义、领域 schema、规则和提取策略；领域科学验收、实体去重、数据集、预测、规划与机器学习由下游负责。
 7. 稳定的材料、知识、证据读取及提取交换接口是核心产品能力，应提供稳定标识符、hash、provenance 和版本绑定；具体协议仍须设计。消费者通过公开合同访问，不能依赖内部表或机器路径。
 8. 文献语料、运行时数据库和用户数据存放在配置的数据位置，不进入代码仓库。

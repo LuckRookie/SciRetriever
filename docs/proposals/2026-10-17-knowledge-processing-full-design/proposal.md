@@ -419,7 +419,7 @@ MCP 与 CLI 分别覆盖上述 Web 业务能力，共用列出/描述资产、�
 | 主题                                                                                                    | 提案关系                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | [R13 与 ADR 0027](../../architecture/decisions/0027-extraction-capabilities-and-caller-defined-records.md) | 拟明确提供默认提取执行与长期候选托管，需在确认后补充其责任和产物合同；领域含义与最终接纳继续归调用方                       |
-| [R9 与 ADR 0010](../../architecture/decisions/0010-parser-neutral-markdown-current-result.md)              | 拟扩展文档复查、Unit 与位置映射，需设计版本和兼容；保持原始材料与 parser-neutral 边界                                      |
+| [R9 与 ADR 0010](../../archive/decisions/0010-parser-neutral-markdown-current-result.md)              | 拟扩展文档复查、Unit 与位置映射，需设计版本和兼容；保持原始材料与 parser-neutral 边界                                      |
 | [ADR 0011](../../architecture/decisions/0011-literature-database-centered-incremental-maintenance.md)      | 新结果集合是统一文献库之上的派生产物；不复制文献身份或形成第二套事实库，持久集合合同需明确                                 |
 | [ADR 0028](../../architecture/decisions/0028-query-and-expansion-separation.md)                            | 保持查询、材料扩充和显式加工边界；新配方不获得隐式补库权限                                                                 |
 | [ADR 0031](../../architecture/decisions/0031-dsh-backed-agent-capabilities.md)                             | 当前 DSH/Agents 及配置、网络边界保持；外部算子框架须适配，若确需改变则另行提出                                             |

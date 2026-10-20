@@ -6,7 +6,9 @@
 
 内部划分为 Parsing 解析转换和 Document/Evidence 表示与证据管理。Parsing 隔离外部 parser 协议，表示管理固定结构、版本和定位；二者经⑦发布，由⑤⑥及外部提取程序消费。读取已有材料不隐式解析，也不调用③补库。
 
-当前 ParserResult、DocumentVersion 与两类 EvidenceRef 的只读解析已接通。原始材料证据无需先有 ParserResult，解析表示证据固定具体版本；页码、表格单元和 bbox 定位仍未实现。
+当前实现发布 RawParse 与校订稿 DocumentVersion，原始材料证据无需先解析；校订表示证据固定具体版本，页码与区域定位已接入。表格单元级精确定位不在本轮范围。旧数据转换及当前工作树的集中验收尚未完成，不能把实现状态等同于发布完成。
+
+> 2026-10-21：[ADR 0037 第二版](../decisions/0037-literature-archive-and-proofread-text.md) 使用单一部署 profile 初稿、文字层找疑点与 DSH 看原图矫正；存疑不阻断就绪。当前边界见[§6](#6-adr-0037-目标形态原始解析校订稿与页码区域证据实施中)，实施与待验收项见[计划](../../plans/2026-10-20-literature-archive/README.md)。下文明确标为历史的 ParserResult/两阶段关系不属于当前生产入口。
 
 本篇目录：
 
@@ -15,6 +17,7 @@
 - [3. 可读表示与有界读取](#3-可读表示与有界读取)
 - [4. 证据定位、版本与生命周期](#4-证据定位版本与生命周期)
 - [5. 文档与证据验证](#5-文档与证据验证)
+- [6. ADR 0037 目标形态：原始解析、校订稿与页码区域证据（实施中）](#6-adr-0037-目标形态原始解析校订稿与页码区域证据实施中)
 
 ## 1. 模块边界与连接
 
@@ -35,9 +38,9 @@
 ```text
 parsing/
   ports.ts
-  service.ts
+  raw-service.ts
   artifact-rules.ts
-  publication.ts
+  legacy-raw.ts
   backends/
     mineru/
       index.ts
@@ -49,16 +52,16 @@ parsing/
       archive.ts
 ```
 
-- `service.ts` 组织 ParserBackend 调用、结构接纳、stale 复检和当前结果替换；
+- `raw-service.ts` 按显式请求或部署 profile 组织调用、源 hash 复核、逐 profile 复用和不可变发布；
 - `artifact-rules.ts` 检查 Markdown、资源、hash、页数、provenance 和输入对齐；
-- `ports.ts` 声明 Parsing 与所有后端共享的 ParserBackend 兼容性接口，以及 artifact 存取能力；
+- `ports.ts` 声明 Parsing 与所有后端共享的 RawParserBackend 兼容性接口，以及 artifact 存取能力；
 - `backends/` 按具体后端隔离私有协议，并转换为统一合同；每个后端拥有自己的子目录和导出入口。
 
-`ParserBackend` 是 Parsing 模块内部所有后端的稳定兼容性接口，不是动态第三方插件平台。`bootstrap` 根据已解析配置显式构造一个后端；同一 PDF 一次只调用一个后端，不竞赛、不合并，也不自动回退。增加 GROBID、Docling 或 PyMuPDF 等后端时，只需在 `backends/<name>/` 实现该接口并完成同一组结构验收，Analysis 不需要理解新的输入格式。MinerU 只是当前的一个后端，不拥有 Parsing 公共合同。
+`RawParserBackend` 是 Parsing 模块内部所有后端的稳定兼容性接口，不是动态第三方插件平台。`bootstrap` 根据已解析配置显式构造一个后端；未指定 profiles 时对同一 PDF 只运行 `parsing.archive_profile`，显式请求也可包含 pipeline 与 vlm-engine，分别保存原始解析；不自动选择其他后端回退。增加 GROBID、Docling 或 PyMuPDF 等后端时，只需在 `backends/<name>/` 实现该接口并完成同一组结构验收，Analysis 不需要理解新的输入格式。MinerU 只是当前的一个后端，不拥有 Parsing 公共合同。
 
-### 2.3 输入与 ParserBackend
+### 2.3 输入与 RawParserBackend
 
-Parsing 公开输入只定位已经接纳的当前主 PDF：
+Parsing 公开输入定位 Literature 中已经接纳的固定 PDF 资产（正文或补充材料）：
 
 ```text
 ParserRequest
@@ -73,15 +76,16 @@ ParserRequest
 逻辑 Port 为：
 
 ```text
-ParserBackend.parse(ParserRequest) -> staged parser output
+RawParserBackend.identity(profile) -> parser/model/parameters identity
+RawParserBackend.parseRaw(ParserRequest, profile) -> StagedRawParseOutput
 ```
 
 `staged parser output` 只存在于 Parsing backend 边界，可以包含本次转换所需的临时 Markdown、资源和后端私有产物；它不是公共 Model，也不能直接持久化为产品事实。backend 在返回 Parsing service 前必须完成 vendor/service 类型隔离和初步协议验证。
 
 Operator-managed MinerU 的 submit、poll、resume task 和归档下载仍属于 `backends/mineru/` 内部。外部 task ID 只服务当前尝试的有界恢复和诊断，不进入 `ParserRequest`、`ParserResult` 或 Catalog。
 
-当前 production backend 锁定 MinerU 3.4.4、protocol 2、profile `vlm-engine`、archive
-backend `vlm` 与 parse method `auto`。Bootstrap 从严格 `[parsing]` 读取 connection mode、
+当前 production backend 锁定 MinerU 3.4.4、protocol 2、profiles `pipeline` 与 `vlm-engine`、分别对应 archive
+backend `pipeline` 与 `vlm`，parse method `auto`。Bootstrap 从严格 `[parsing]` 读取 connection mode、
 Base URL、model identity 与 remote upload consent；remote bearer token 从统一凭据文件读取并
 与规范 origin 精确绑定，loopback 不读取 token。`config test parse` 复用同一 production
 client 但只执行 health/release/protocol/profile 检查，不提交 task 或上传 PDF。
@@ -95,8 +99,7 @@ client 但只执行 health/release/protocol/profile 检查，不提交 task 或�
 归档转换从 middle 输出读取连续页数，由 Parsing service 与独立检查的输入 PDF 页数
 交叉校验，不用 PDF 字节正则推测。资源以 Markdown 所在目录解析；公共资源引用继续
 相对于发布的 Markdown。归档转换和 P2 接纳复用 Parsing 内部的资源发现与规范路径规则，
-覆盖行内/引用式图片以及 HTML `src`/`srcset`，忽略代码与注释里的示例；正文与标题字节不因此改变。每次新解析观察使用独立 provenance ID；结果 hash 仍不包含
-观察时间或 provenance ID，相同输入与结果可复用。
+覆盖行内/引用式图片以及 HTML `src`/`srcset`，忽略代码与注释里的示例；正文与标题字节不因此改变。RawParse 清单固定输入、profile、parser/model/参数和产物 hash，不包含时间或任务 ID，相同输入、参数与结果可复用。
 
 ### 2.4 Backend 转换
 
@@ -119,9 +122,11 @@ PyMuPDF text/blocks         ──> PyMuPDFBackend ─┘
 6. 形成 parser identity、有效参数 hash 和输入 hash；
 7. 隔离并在尝试结束后清理私有过程文件。
 
-MinerU 的 VLM、pipeline 或其它 backend 是同一个 MinerU backend 的显式 profile。配置与返回声明不一致、版本不受支持或输出合同无法无歧义转换时稳定失败；backend 不根据 JSON 形状偷猜 mode，也不在一个 mode 失败后自动切换另一个 mode。只有未来真实输出合同出现不兼容时，才在 `backends/mineru/` 内增加版本或 profile 专属转换器，公共 `ParserResult` 不变。
+MinerU 的 VLM、pipeline 或其它 backend 是同一个 MinerU backend 的显式 profile。配置与返回声明不一致、版本不受支持或输出合同无法无歧义转换时稳定失败；backend 不根据 JSON 形状偷猜 mode，也不在一个 mode 失败后自动切换另一个 mode。只有未来真实输出合同出现不兼容时，才在 `backends/mineru/` 内增加版本或 profile 专属转换器，公共 RawParse 合同不由服务端私有格式决定。
 
 ### 2.5 ParserResult 精确合同
+
+> ADR 0037：`ParserResult` 已由原始解析（含中性区块列表）取代，生产发布器已经删除。§2.5–2.10 记录迁移前存量事实的验证规则，不是新解析生产路径。见[§6](#6-adr-0037-目标形态原始解析校订稿与页码区域证据实施中)。
 
 ```text
 ParserArtifactRef
@@ -211,6 +216,8 @@ Parsing 不使用固定最小页数、固定最小字符数、标题匹配、摘
 
 ### 2.7 当前结果发布与替换
 
+> ADR 0037：改为每个 (资产, profile) 一个当前原始解析，旧版本被校订稿引用时受保护。见[§6](#6-adr-0037-目标形态原始解析校订稿与页码区域证据实施中)。
+
 每个输入 `Asset` 最多只有一个 Catalog 当前 `ParserResult`。发布流程为：
 
 1. 在 owner-only staging 中完成 Parser 调用和转换；
@@ -226,6 +233,8 @@ Parsing 不使用固定最小页数、固定最小字符数、标题匹配、摘
 当前 ParserResult 是可替换、可重建的解析产物，不推进 `UNREVIEWED`、`ASSET_READY` 或 `CONTENT_READY`。已经发布的当前 `LiteratureContent` 通过单一 Analysis provenance 的输入 hash 绑定 PDF、ParserResult 和最终 metadata；Parser provenance 由 ParserResult 自身保存，不复制到内容。旧 ParserResult artifact 不要求永久保留，后续重解析也不会自动覆盖当前 LiteratureContent，只有新的完整 Analysis 结果经 Literature 接纳后才能替换它。
 
 ### 2.8 私有过程文件与清理
+
+> ADR 0037：改为保留 `content_list_v2` 转换出的区块列表、原始 v2 字节、Markdown、实际引用的图片与页面尺寸。见[§6](#6-adr-0037-目标形态原始解析校订稿与页码区域证据实施中)。
 
 MinerU 的原始归档、`middle.json`、`content_list*.json`、model output、layout/span PDF、origin PDF 副本和未引用图片，以及其它 Parser 的 TEI、JSON、调试文件和未引用资源，全部位于本次 staging。成功接纳或尝试结束后清理，不进入 Catalog、ParserResult、provenance 或用户查询。
 
@@ -258,26 +267,17 @@ MinerU 的原始归档、`middle.json`、`content_list*.json`、model output、l
 
 ### 2.11 TypeScript 运行接口与独立文档协作
 
-```ts
-interface ParserBackend {
-  parse(
-    request: ParserRequest,
-    signal?: AbortSignal,
-  ): Promise<StagedParserOutput>;
-}
-```
+`RawParserBackend.identity(profile)` 固定 parser/model/参数 hash，`parseRaw(request, profile, signal?)` 返回 `StagedRawParseOutput`：原始清单、区块、Markdown、被引用的资源和原始 v2 字节。请求中的 `withContent` 只允许在调用作用域内读取固定 PDF；不传路径、SQL 或凭据。
 
-`ParserRequest` 携带 source_asset_id、source_sha256、固定 PDF media_type 与作用域内 `withContent(consume, signal)`。字节 reader 不进入序列化合同，也不把用户绝对路径或 Storage handle 交给远程服务。后端返回中性 Markdown/资源 bytes 与 ArtifactRef、页数和 ParserProvenance；`ParsingService` 负责规则与 publication，backend 不自行写入 catalog。
+`RawParsingService` 复核 PDF hash/页数与返回绑定，按 asset/profile 互斥，逐 profile 发布或复用。两份解析可并发准备；数据库补全只把短发布操作交给提交队列。共享存储失败优先于同时发生的取消；任何失败不撤销 PDF 或其他 profile 的成功结果。
 
-当前实现的 MinerU 位于 `backends/mineru/`，其固定服务协议、版本探测和归档过滤是 adapter 限制。前文其它 backend 用于说明可替换接口，不代表已安装 GROBID、Docling 或 PyMuPDF。remote 上传必须有明确授权，每次 `/parse` 新请求重新取得当前 origin 的 bearer；loopback 不附着远程凭据。
+`DocumentProcessingService.parseDocuments` 请求为 `{ literature_id, asset_id, asset_sha256, profiles?, force? }`；未指定 profiles 时由服务采用 `parsing.archive_profile` 一种，`force=false`。回执只含固定 PDF 与逐 profile 的 raw ID/hash/状态/失败信息。旧 `mode`、默认文档 CAS 与 Document 回执已移除；不接受旧请求形状，不发布 ParserResult，也不改变默认阅读文档。
 
-独立 `parseDocuments` 已以固定 Literature ID、Asset ID、PDF SHA-256 与显式 `reuse-current`/`reparse` 模式接通。`reuse-current` 只取该已接纳主 PDF 的当前 ParserResult，不发起 Parser 调用；`reparse` 复用既有 ParsingService 与启动时固定的 ParserBackend/参数和结构资源预算，必须在调用时仍是该文献的 current 主 PDF。既有 ParserResult 提交 CAS 在 current 变化时拒绝 stale；之后 Document 固定已经接纳的输入与 provenance 发布版本。缺 PDF 直接报告缺口，Entry 不调用 completion 下载。Document 构建失败不撤销已接纳 ParserResult、PDF 或旧 DocumentVersion。
+缺 PDF 或原始输入变化返回明确失败。解析不获取 PDF、不建档、不总结；用户显式发起的 `complete parser` 是允许先获取 PDF 的维护操作，仍停在 raw 边界。校订稿及默认阅读版本由独立校订文档发布操作负责。原始 PDF 与旧证据继续固定到原始 ID/hash，不能跟随 current 重定向。
 
-原始 PDF 的文件级或受支持页码证据可以直接消费 MaterialRef，不必先存在 ParserResult。Parser 私有 bbox 不能直接冒充公共 locator；如需可靠页码/区域映射，由 Document/Evidence 验证后按自己版本化的 scheme 发布。重解析产生新的输入 hash，旧证据要么仍解析到旧表示，要么明确失效，不能自动指向新的 current result。
+### 2.12 历史 ParserResult 字段与约束
 
-### 2.12 ParserResult 字段与约束
-
-`ParserResult` 是 Parsing 的中性产物合同，可由独立读者和 Document/Evidence 消费，不以 Analysis 完成为前提；它不是 `LiteratureContent` 或文献状态。以下两阶段关系专指当前 LiteratureContent 兼容用例。Analysis 先根据它形成结构化最终 `LiteratureMetadata` 提案，再把该元数据和同一 `ParserResult` 交给第二阶段形成内容 Markdown 草稿；`LiteratureContent` 由 Analysis 解析第二阶段草稿后形成，并由 Literature 与最终元数据整体接纳。第一阶段提案和第二阶段草稿都不是独立持久化 Model 事实。
+`ParserResult` 是历史库中保留的中性产物，生产端不再创建；它不是 `LiteratureContent` 或文献状态。以下两阶段关系专指当前 LiteratureContent 兼容用例。Analysis 先根据它形成结构化最终 `LiteratureMetadata` 提案，再把该元数据和同一 `ParserResult` 交给第二阶段形成内容 Markdown 草稿；`LiteratureContent` 由 Analysis 解析第二阶段草稿后形成，并由 Literature 与最终元数据整体接纳。第一阶段提案和第二阶段草稿都不是独立持久化 Model 事实。
 
 `ParserResult` 的精确合同为：
 
@@ -311,14 +311,9 @@ ParserResult
 
 ### 2.13 Parsing 准备与发布
 
-迁移 Application 的显式 `parsing: {parser, rules}` 组装 `ParsingService`；未组装时为 null。
-服务从正式 current primary PDF 的 verified artifact Port 开始，校验物理页数，复制 staged 输出后验证
-共享 ParserResult manifest 和资源闭合。`TypeScriptParserArtifactRules` 在进程内完成 Markdown、资源引用、Unicode 和媒体类型校验，不启动 Python。
+`ApplicationOptions.parsing: { rawParser }` 是离线测试注入端口；生产 backend 由 bootstrap 根据配置组装。`Application.rawParsing` 在具备 raw 存储 schema 与有效 parser 配置时存在，否则为 null。旧 `Application.parsing`、`ParsingService`、旧发布器和单结果转换接口已删除，历史 fixture 仅在 test 中组装。
 
-`prepareCurrentPrimary / commitCurrentPrimary / discardPrepared` 使用私有一次性准备凭据。发布先完成不可变
-文件，再在同一 SQLite 事务检查当前 primary ID/hash 并写入 v1 ParserResult/provenance/resources。
-相同 manifest 保留首次 provenance；失败保留原 PDF、ParserResult 和 Content。Application close 取消准备，
-已开始的提交仍由存储完成或报告失败。配置可组装 TypeScript loopback/remote MinerU adapter，所有 HTTP 请求经过共享 NetworkBudget；remote 上传要求 exact-origin credential grant，详见[Parsing 证据](../../../migration/evidence/runtime/parsing-publication.md)和[MinerU 执行证据](../../../migration/evidence/runtime/mineru-execution.md)。
+当前 MinerU adapter 只接纳 ZIP，保留 v2、Markdown 和使用中的图片；旧 JSON 响应或缺失 v2 会失败，不尝试旧转换。所有 HTTP 请求经过共享 NetworkBudget；远程上传要求 exact-origin credential grant，每次请求重新授权，loopback 不附带远程凭据。RawParse 文件采用 create-if-absent，成功发布与 current profile 关系在存储 owner 中确认；失败保留已提交事实。
 
 ## 3. 可读表示与有界读取
 
@@ -442,6 +437,8 @@ interface DocumentSlice {
 
 ### 4.1 EvidenceRef 的两种目标
 
+> ADR 0037：来自校订稿的片段证据同时携带页码与区域（`page-region-v1`）。见[§6](#6-adr-0037-目标形态原始解析校订稿与页码区域证据实施中)。
+
 ```ts
 type EvidenceRef =
   | {
@@ -518,7 +515,7 @@ T01 中性合同的 Material 分支只允许文件级定位，不要求 ParserRe
 
 ### 4.6 M05-T02 已接通的独立解析与表示发布
 
-`Application.documentProcessing.parseDocuments` 是独立 TS 加工入口；配置完整且具备 execution 维护对象图时，`Application.maintenance.parseDocuments` 指向同一实例。CLI `document parse`、维护 Web 表单和同源/CSRF 保护的维护 HTTP 都调用它。请求封闭字段为 `literature_id`、`asset_id`、`asset_sha256`、`mode` 与 `expected_default_revision`。输入必须是该 Literature 已接纳的 current 主 PDF；其 ID/hash/大小/媒体类型和受控 artifact 一起形成 MaterialRef。当前实现不允许任意 parser 参数或绕开 ParsingService 重解析旧非 current 材料；显式 parser 配置、有效参数 hash、资源预算继承启动时已有 Parsing 对象图。`reuse-current` 缺 ParserResult 返回 `parser-result-missing`，不自动改成重解析。`reparse` 无 parser 返回 `parser-unavailable`。
+当前 `Application.documentProcessing.parseDocuments` 只返回所请求 profile 的原始解析，未指定时使用部署 profile，见 §2.11。旧 T02 从 ParserResult 自动创建文档的入口、请求与回执已移除；可读文档由校订稿发布生成，已发布校订版本按固定 ID 读取。
 
 `document_id` 从 Literature ID + Asset ID 确定派生；同一文献换主 PDF 后属于另一逻辑文档。`document_version_id` 从 document_id + representation hash 确定派生。重建相同规范表示复用同一版本与首次 provenance；重解析改变 ParserResult hash、Markdown/资源或 builder/locator 时产生新版本。当前文档选择先固定 current 主 PDF，再选择其 document_id 的 default；旧 document_id/版本只能用精确引用读取，不能静默改绑。
 
@@ -534,7 +531,7 @@ T01 中性合同的 Material 分支只允许文件级定位，不要求 ParserRe
 
 合成 D1→显式重解析 D2 后，D1 的证据仍解析到 D1；v3/v4 旧物理回收返回 preserved。当前没有跨进程 GC pin 或外部引用登记，禁回收是旧证据稳定的实际前提；恢复回收必须另定同一准入下的长期依赖与活动读取协议。
 
-入口在第一个异步步骤前按共享合同复制请求；Document 服务先发布共享关闭 Promise，再同步停止新请求、取消并结算活跃操作，Application 在关闭 Parsing、FileStore 与 DB 前等待它。两条维护 HTTP 解析路由将客户端断连传给同一取消信号。`reparse` 将冻结的 Asset ID/hash 交给 ParsingService；Parsing 在读取 PDF 和调用外部 backend **之前**核对当时的 current 主 PDF，变化则返回 stale，不解析另一份材料。ParserResult 一经既有 current CAS 接纳，Document 固定该提交回执中的结果与 provenance，再按 artifact hash 取得精确发布路径；之后即使 current 关系变化，也不重新选择新输入。输入及外部版本读取使用短 read transaction 固定多表快照。结构 artifact 先按 hash 查找已登记的规范路径，存在时复核字节，缺少时才用 Storage staging 和 create-if-absent 发布；短 SQLite 写事务复核源资产、parser provenance、已登记 Markdown/资源和结构 artifact，并插入不可变版本/资源依赖。`document_defaults` 带期望 revision 独立 CAS：首次传 `null` 创建 revision 1；已有版本传当前 revision 方可切换，冲突时回执 `published: true`、`default_updated: false` 与当前 revision，版本仍可按 ID 读取。相同表示重复请求 `published: false`，返回首次存储的版本来源，后续重解析的 ParserResult 来源仍由 Parsing 独立保存。文件已发布但事务失败可留下无引用的不可变字节，显式重试复用；事务提交后的响应丢失仍报告带原因的失败，不能仅凭旧版本存在推断本次 `published`/CAS 结果。提交在取得 Catalog 写入准入后再做最后取消检查；等待准入期间取消不发送新 SQL，已经发送的事务由提交方结算，正常回执从已存版本读取精确 DocumentRef。已接纳 PDF、旧 ParserResult 与旧 DocumentVersion 不因新构建失败撤销。
+原始解析请求在首个异步步骤前冻结，关闭时取消并结算活跃工作；HTTP 断连传递同一取消信号。新解析不会提交默认文档。校订文档的不可变发布与 default CAS 使用固定源资产/校订 hash，失败保留已有事实，详见 §6。
 
 T02 的 `withPinnedVersion` 从 v3 一致快照读取固定版本与完整路径闭包，复算表示 hash、重建并比较 Markdown 的规范结构，再逐个复核源、Markdown、结构和资源的实际字节 hash/大小，把版本交给回调；各单次 verified file scope 不同时占用大量句柄。v3/v4 上旧物理回收和已接纳材料清理仍禁用，固定版本因此在回调期间不被产品回收。当前没有未来启用 GC 所需的跨进程读取 pin 协议。v1/v2 Document writer/reader 均拒绝，不在查询或读取时升级 Catalog。
 
@@ -569,3 +566,65 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 
 调用及请求字段见[Agent 接口指南](../../guides/agent-interface.md)。离线流程和证据检查的通过
 不能代替真实文献身份抽取质量验收。
+
+## 6. ADR 0037 目标形态：原始解析、校订稿与页码区域证据（实施中）
+
+本节描述 ADR 0037（第二版）的目标合同。双解析对齐与区块仲裁已被第二版取代。任务细节见计划 03–06。
+
+### 6.1 部分与原始解析
+
+- 文献的正文 PDF 与每个补充材料 PDF 各是一个**部分**，独立解析和校订。
+- MinerU 适配保留 `pipeline` 与 `vlm-engine` 两种 profile。建档只需要部署选定的一种；另一种如果存在，只供人工查看。
+- 每份不可变的 `RawParse` 包括：
+  - 中性区块列表 `raw-blocks-v1`：页码、页内顺序、封闭类型、文字或 LaTeX、表格 HTML、图片引用、0–1000 归一化坐标；
+  - 原始 `content_list_v2.json` 字节；
+  - Markdown；
+  - 实际引用的图片；
+  - 页面尺寸。
+- 页码与坐标只是定位提示，不作为正确性依据。
+- 未知的 MinerU 类型会使转换失败，而不是被静默丢弃。
+- 现有文献只有 VLM Markdown，登记为 `vlm-engine-markdown-only`，可以直接作为初稿；段落页归属由文字层确定，无法确定时需重新解析。
+- 解析是独立阶段，建档不调用解析服务。
+
+### 6.2 校订稿
+
+**处理流程**：规则清理 → 页面分类 → 文字层找疑点（`text-layer` 页）→ DSH 看原图矫正 → 处置完整性检查 → 渲染。
+
+- **页面分类**按 PDF 字形而非整套字体判断：有可见且能映射 Unicode 的字形为 `text-layer`；有绘图或字形但没有有效可见文字为 `image-only`，完全空白页独立标记。不可见 OCR 不进入参照文字。无隐藏字形时使用 PDF.js 的文字布局还原，不能把 TJ 字距微调当作空格；混合可见/隐藏页使用仅含可见字形的操作流。
+- **疑点**：逐页比较文字层与初稿中归属该页的内容，以词和数字为单位，不做区块对齐。分为可能漏掉、可能多出或错字、数字单位化学式不一致、页归属错误四类。
+- **矫正**：DSH 使用整页渲染、局部放大、相邻页和初稿片段读取工具。`text-layer` 页只处理疑点；`image-only` 页逐页检查。页面原图是最终依据；文字层只用来找疑点。矫正以编辑操作提交（替换、插入、删除、移动、调整页归属、标为存疑），每个操作注明依据页码，由程序应用并生成完整校订稿。
+- **处置完整性**：每条疑点有处置（已修正、确认初稿无误并附原因、存疑）；每个 `image-only` 页有检查记录；编辑操作和图片引用有效；删除文字层中存在的内容必须附原因。应用后重新比较，新差异在现有预算内继续处理；续跑复用页面缓存，当前稿与分页文字同步。相同内容和未处置问题反复出现时停止，编辑说明换了措辞不代表进展。
+
+**`ProofreadVersion`** 记录：
+- 输入：一份原始解析与该部分的 PDF；
+- 方法版本：清理、页面分类、疑点比较、矫正任务；
+- 人工决定；
+- 状态：`complete`、`incomplete`（处置未完成，可继续）或 `failed`；
+- 区块列表；
+- Markdown 及资源闭包；
+- 页面分类、疑点及其处置、存疑清单、调用统计。
+
+**每个区块**包含：
+- 稳定 ID；
+- 页码、区域（或仅定位到页）；
+- 类型；
+- 最终文字；
+- 文字来源：`parser`、`rule`、`agent`、`manual`；
+- 核对依据：`text-layer`、`image-only`、`uncertain`、`manual`；
+- 存疑说明（如有）与相关编辑操作引用。
+
+校订只检查抄录保真，不认证全文正确。存疑不使该部分失败。失败只在缺少原始解析、某页有内容但校订稿完全没有对应内容且无处置、矫正任务异常中止时发生。
+
+### 6.3 文档表示与定位
+
+- 文档表示 `proofread-blocks-v1` 由 `complete` 状态的校订版本构建，结构 schema v2 的每个片段对应一个区块，并携带页码、区域、来源、核对依据与存疑说明。
+- 新增定位方案 `page-region-v1`：片段 ID 加页码和区域，解析时逐项校验，不做模糊匹配。
+- 校订版本构建成功后成为该部分的默认文档；旧版本可按精确引用读取。
+- 疑点、处置与矫正记录只供人工查看，不进入算子上下文；片段的核对依据与存疑说明随片段提供给算子。
+- 算子结果中的值按 ADR 0037 第 10 节做用时核对，核对结果（`text-layer`、`image-checked`、`uncertain`）记录在值上。
+
+### 6.4 结构注释
+
+- 章节角色与图表清单单独保存为结构注释，以文档版本和方法版本为键，不改变表示 hash。
+- 规则识别优先，模型兜底；人工修正的角色会被锁定。
+- 内容版本 = hash(文档版本, 结构注释)。

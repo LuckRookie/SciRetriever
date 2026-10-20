@@ -210,7 +210,7 @@ provenance 与自动获取耗尽的持久合同不变，因此不需要数据库
 - 新站点只要具有合法文章起点，就可由同一 Agent/Network 合同尝试，不再以编写 Publisher rule
   作为前置工作；
 - 页面策略、页面事实和 PDF 正确性分别归属 Agent、Network、Acquisition，不再有第二套点击循环；
-- 页面变化只需增强通用 Observation/action/capture 合同，站点差异不再扩散为 Python 模块；
+- 页面变化只需增强通用 Observation/action/capture 合同，站点差异不再扩散为站点专用代码模块；
 - Browser 成功可以用同一文件验收和任务关联审计，模型无法用“看起来下载了”绕过 PDF 验收。
 
 代价与限制：

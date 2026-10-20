@@ -32,7 +32,7 @@
 
 ### 1.1 TypeScript-only
 
-TypeScript workspace、Application、CLI、Browser 运行时和 portable package 是当前生产实现路线。Python 代码、历史测试和旧 Harness 只作为迁移历史、离线 oracle 或明确授权的历史维护材料保留；不支持 Python/TypeScript 双写、双运行时或双真相源。生产切换、真实用户数据迁移、发布和历史材料处置仍需独立授权，详见 [ADR 0024](decisions/0024-typescript-browser-workbench-migration.md) 与 [ADR 0025](decisions/0025-typescript-entry-and-runtime-contract.md)。
+TypeScript workspace、Application、CLI、Browser 运行时和 portable package 是当前生产实现路线。Python 代码、历史测试和旧 Harness 只作为迁移历史、离线 oracle 或明确授权的历史维护材料保留；不支持 Python/TypeScript 双写、双运行时或双真相源。生产切换、真实用户数据迁移、发布和历史材料处置仍需独立授权，详见 [ADR 0024](../archive/decisions/0024-typescript-browser-workbench-migration.md) 与 [ADR 0025](decisions/0025-typescript-entry-and-runtime-contract.md)。
 
 ### 1.2 Browser 是当前生产能力
 

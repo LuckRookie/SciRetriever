@@ -4,9 +4,11 @@
 - Date: 2026-08-21
 - Last amended: 2026-10-13
 - Supersedes: none
-- Amends: [ADR 0008](0008-summarized-markdown-literature-content.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)
+- Amends: [ADR 0008](../../archive/decisions/0008-summarized-markdown-literature-content.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)
 - Amended by: [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[ADR 0023](0023-generic-browser-agent-executor.md)、[ADR 0031](0031-dsh-backed-agent-capabilities.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[知识加工：分析与综合](../technical/05-knowledge-processing.md#2-分析与综合)、[知识加工：共享支撑：无状态模型运行时](../technical/05-knowledge-processing.md#5-共享支撑无状态模型运行时)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)
+
+> 2026-10-20 收口：正文中的运行时与 Browser 预算描述，已按 ADR 0023、ADR 0031 的现行决定更新；Python 签名与“尚未实施”等过时表述已删除。
 
 > 2026-09-25 修订：Analysis 的两阶段描述限定为旧单篇兼容用例；新分析可按用途组织有界多次调用。无状态 Agents、消费模块编排和 Browser 安全责任不变。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。
 
@@ -28,7 +30,7 @@ Analysis 与受控 Browser 是两个需要模型能力的真实消费者，但�
 
 > 2026-10-16 修订：按 [ADR 0031](0031-dsh-backed-agent-capabilities.md#2-唯一-dsh-底座按任务使用单次调用或持续会话)，DSH 统一承接单次调用与持续会话，原 `AgentRuntime` 名称在 2026-10-19 经 Owner 授权删除，统一使用 `DshAgentRuntime`。下文无状态限制只描述单次操作语义，不再规定保留独立自研运行时；具体完成状态见当前 Agents 文档。
 
-### 1. `AgentRuntime` 是无状态、Provider-neutral 的单次模型运行时
+### 1. 单次模型调用是无状态、Provider-neutral 的操作
 
 `agents` 中的单次模型层拥有：
 
@@ -38,23 +40,11 @@ Analysis 与受控 Browser 是两个需要模型能力的真实消费者，但�
 - OpenAI Responses、OpenAI Chat Completions 与 Anthropic Messages 的 wire protocol adapter；
 - 单次 context/output/request/response/result 大小、HTTP timeout、取消和 quota 准入。
 
-公共执行合同为：
-
-```python
-class AgentRuntime:
-    def readiness(self, role: AgentRole) -> AgentCapabilityReadiness: ...
-
-    def execute(
-        self,
-        call: AgentCall,
-        *,
-        cancel_event: threading.Event | None = None,
-    ) -> AgentStructuredResult | AgentToolCall: ...
-```
+公共执行合同由唯一 DSH 底座的 `DshAgentRuntime` 提供（ADR 0031）：按 role 查询 readiness，执行一次调用并返回严格结构化结果或工具调用，支持取消信号。精确的 TypeScript 签名以 `apps/server/src/agents/` 为准。
 
 消费者提交 role、messages、required capabilities、严格 response schema 或 tools，以及本次 `max_output_tokens`。消费者不选择 Provider、Base URL、model 或 reasoning effort；Runtime 根据 Bootstrap 已冻结的 role binding 选择 model 与角色默认 effort，并在外部 I/O 前验证 capability。中性配置值为 `default`、`none`、`minimal`、`low`、`medium`、`high`、`xhigh` 与 `max`。`default` 不向 wire request 增加 effort 参数；其它值由具体协议 adapter 原样编码并进入参数 hash，不能降级、近似映射或在失败后静默重试为 default。配置向导对三种 API 提供同一完整集合；模型是否实际支持所选值仍由显式 probe 验证，不能根据模型名称猜测。
 
-单次 `AgentRuntime` 不拥有业务 workflow、工具执行、Browser loop、Analysis 阶段顺序、session history 或跨调用累计预算。按 ADR 0031，独立的 DSH 执行基础可持有受控能力执行所需的临时会话、工具注册、循环和压缩；业务工具语义、文章控制、预算、下载与事实写入仍归消费模块。跨任务长期 memory、后台自主任务和持久 Agent workflow 不因该修订获得授权。
+单次调用不拥有业务 workflow、工具执行、Browser loop、Analysis 阶段顺序、session history 或跨调用累计预算。按 ADR 0031，独立的 DSH 执行基础可持有受控能力执行所需的临时会话、工具注册、循环和压缩；业务工具语义、文章控制、预算、下载与事实写入仍归消费模块。跨任务长期 memory、后台自主任务和持久 Agent workflow 不因该修订获得授权。
 
 ### 2. 完整 Agent 由共享 Runtime 与消费模块控制器组成
 
@@ -62,8 +52,8 @@ class AgentRuntime:
 
 | Owner           | 责任                                                                                                                                      |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `agents`        | 单次模型执行、capability/readiness、role binding、Provider protocol、稳定失败与 usage；ADR 0031 新增受控 DSH 执行基础的目标责任，尚未实施 |
-| `analysis`      | 各分析用例的 prompt、编排、schema、验收与 provenance；两阶段/NoUsableContent 属于旧单篇兼容用例                                           |
+| `agents`        | 单次模型执行、capability/readiness、role binding、Provider protocol、稳定失败与 usage；以及 ADR 0031 的受控 DSH 执行基础（单次调用与持续会话） |
+| `analysis`      | 各分析用例的 prompt、编排、schema、验收与 provenance；单篇、长文与综合按 ADR 0031 使用 DSH 阅读会话，建档中的模型调用见 ADR 0037                                           |
 | `acquisition`   | “取得当前文章主 PDF”的目标、Browser controller、允许动作、语义进展和 route outcome                                                        |
 | `network`       | CloakBrowser runtime、Browser snapshot/revision、动作执行、Network guard、capture 和 cleanup                                              |
 | `configuration` | Model Provider/Model 注册表、Analyze/Download 选择、controller、credential 和本地 readiness                                               |
@@ -73,21 +63,21 @@ class AgentRuntime:
 
 ```text
 Analysis Agent
-  = AgentRuntime
-  + Analysis 用例控制器（旧单篇兼容用例为两阶段）
+  = DshAgentRuntime（单次调用或阅读会话）
+  + Analysis 用例控制器
   + Analysis schema/validator
 
 Browser Agent
-  = 共享单次模型层 + 受控 DSH 执行基础（ADR 0031 目标，尚未实施）
+  = DshAgentRuntime（受控会话与工具循环）
   + Acquisition Browser Agent controller
   + Network Browser action executor
 ```
 
 ### 3. Analysis 直接执行独立的单次调用
 
-旧单篇 LiteratureContent 用例直接调用两次 `AgentRuntime.execute`，自己决定第二阶段是否运行。新 Analysis 可按用途组织有界分段、压缩和综合，每次调用仍独立经过同一运行时；Runtime 不获得业务编排权。ReferenceLookup 同样发起独立调用。Extraction 的外部策略不以内部 Runtime 为前提；是否内置模型策略按 ADR 0027 另定。Provider 成功不能替代业务模块的结构、来源、对齐和产物验收。
+Analysis 通过统一的 DSH 底座执行单次调用或阅读会话（ADR 0031），每次调用经过同一运行时；Runtime 不获得业务编排权。ReferenceLookup 同样发起独立调用。Extraction 的外部策略不以内部 Runtime 为前提；是否内置模型策略按 ADR 0027 另定。Provider 成功不能替代业务模块的结构、来源、对齐和产物验收。
 
-本次历史单次运行时迁移删除旧 `AgentSession`、`open_session`、Analysis Provider wrapper、model 透传和双路径测试，不保留“新 Runtime 失败后回到旧 adapter”的兼容层；这不禁止 ADR 0031 的独立受控执行基础。已经保存的 Literature、Content 和 provenance schema 不迁移。
+旧的 Python `AgentSession`、Analysis Provider wrapper 和自研单次 `AgentRuntime` 已在迁移与 ADR 0031 实施中删除，不保留回退兼容层。
 
 ### 4. 历史决策：Controlled Browser 在作业开始前选择一个 controller
 
@@ -172,7 +162,7 @@ Stop
 
 ### 8. Browser Agent 使用自然终态而非人为作业预算
 
-删除 Browser Agent 的固定 step、总秒数、累计 token/image、重复动作次数和 `BUDGET_EXHAUSTED`。仍保留的客观边界只有：
+删除 Browser Agent 的固定 step、累计 token/image、重复动作次数等人为上限。按 [ADR 0023](0023-generic-browser-agent-executor.md)（2026-10-13），每篇文章另有累计 300 秒活跃时间与 30 次模型调用的探索预算，先到者停止。其余客观边界为：
 
 - model context window 与本次 max output；
 - 单次 HTTP connect/read/overall timeout；

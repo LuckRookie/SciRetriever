@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-12
 - Last amended: 2026-09-26
-- Amends: [ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0018](0018-fixed-user-configuration-home.md)、[ADR 0024](0024-typescript-browser-workbench-migration.md)
+- Amends: [ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0018](0018-fixed-user-configuration-home.md)、[ADR 0024](../../archive/decisions/0024-typescript-browser-workbench-migration.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[TypeScript 架构锚定基线](../typescript-baseline.md)、[任务与协作控制：数据库补全与阶段协调](../technical/02-task-coordination.md#4-数据库补全与阶段协调)
 - Amended by: [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)
 

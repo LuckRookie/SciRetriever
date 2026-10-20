@@ -1268,7 +1268,7 @@ Model 不能导入或暴露：
 
 ### 6.5 不建立 DocumentPackage 占位
 
-[ADR 0008](../decisions/0008-summarized-markdown-literature-content.md) 已撤销 ADR 0005 的 `DocumentPackage` 2.0 目标合同。当前 contracts 不保留 DocumentPackage 占位，不公开该名称，也不建立对应 API、数据库表、文件命名空间、状态或 CLI。未来出现明确完整快照需求时，先确认消费方和公开合同，再新增 ADR 与 Model；不能让空占位暗示过时合同仍会实现。
+[ADR 0008](../../archive/decisions/0008-summarized-markdown-literature-content.md) 已撤销 ADR 0005 的 `DocumentPackage` 2.0 目标合同。当前 contracts 不保留 DocumentPackage 占位，不公开该名称，也不建立对应 API、数据库表、文件命名空间、状态或 CLI。未来出现明确完整快照需求时，先确认消费方和公开合同，再新增 ADR 与 Model；不能让空占位暗示过时合同仍会实现。
 
 ### 6.6 验收
 
@@ -1373,9 +1373,10 @@ CLI 已初始化库上的结果格式保持；缺库查询由旧的隐式建库�
 
 当前 TypeScript 入口为 `Application.maintenance.ingestPdf({ literature_id, bytes }, signal?)`，返回既有 `CandidatePublicationReceipt`（含 ID、hash 与内部相对引用）；CLI `import pdf` 仅在本地适配边界读取用户路径，再传相同字节用例。`startMaintenanceWorkbench({home})` 使用完整维护 Application 与独立 QueryApplication，在没有 Browser 会话时提供 `/` 维护页、`/query` 阅读页和受限的 `POST /api/v1/maintenance/ingest-pdf`。上传只接受 `application/pdf` 原始字节、`X-Literature-Id`、协议版本 1 和同源会话/CSRF；不会解释远端 JSON 路径。原 `startQueryOnlyWorkbench` 不注入写入用例。手动接纳记录 `user/manual-pdf` 来源、输入 SHA-256 和空 `source_url`；同一主 PDF 已存在也拒绝重复接纳。当前单项成功以 receipt 表达，失败以稳定错误码表达；多项目报告形状仍按相应维护用例单独定义。
 | `maintenance.ingestBibliography` | 明确选择的本地文件/记录及受支持格式；返回匹配/新增/拒绝/冲突计数和 Literature ID | Literature | 仅提交通过验证的用户来源 observation；部分有效记录可提交，失败项在报告定位；不复制文件到不必要位置、不丢来源、不静默改写已有身份。 |
-| `maintenance.parseDocuments` | 已接纳 MaterialRef（ID + SHA-256）、解析规格和资源预算；返回精确输入绑定的 ParserResult 与可读 DocumentRef，或能力缺口/失败 | Parsing 接纳 parser-neutral 结果；Document/Evidence 发布可读表示与定位 | 只处理给定材料，不下载、不调用 Analysis；失败保留原资产和已发布旧表示；新资源与 Markdown 字节不可覆盖。 |
+| `maintenance.parseDocuments` | 已接纳 MaterialRef（ID + SHA-256）、解析规格和资源预算；返回精确 PDF 绑定与逐 profile RawParse 回执，或能力缺口/失败 | Parsing 接纳原始解析；Document/Evidence 另行发布校订稿 | 只处理给定材料，不下载、不调用 Analysis；失败保留原资产和已发布旧表示；新资源与 Markdown 字节不可覆盖。 |
 
-当前 T02 实现的单材料加工请求为 `{ literature_id, asset_id, asset_sha256, mode: "reuse-current" | "reparse", expected_default_revision: number | null }`；调用方从已接纳主 PDF 的详情取得固定 ID/hash。共享合同在第一个异步步骤前复制并冻结请求；维护 Web 先用只读 Library 选择当前 PDF，再从受控维护读取取得默认 revision，并明确选择复用或重解析。两条维护 HTTP 解析路由都要求协议版本 1、JSON 和各自的同源/CSRF 认证，客户端断连取消未提交处理。`reuse-current` 仅使用已有 current ParserResult，不发出 Parser 请求；`reparse` 在 PDF 读取及 ParserBackend 调用前复核冻结的 Asset ID/hash，若 current 已变则拒绝，不读取或解析新材料；匹配后继承启动时 Parser profile/有效参数 hash 与既有 Markdown/资源预算。等待 Catalog 写入准入时取消不发出版本提交；已取得准入并送交 SQLite 的提交如实结算。v3 Catalog 是先决条件，普通加工入口不会暗中迁移 v1/v2。回执经共享合同验证，携带已存 `DocumentRef`、ParserResult hash、固定版本 parser provenance ID、实际 mode、`published`、`default_updated` 和 `default_revision`。合法版本与默认关系 CAS 冲突分别报告；无当前解析结果、输入 stale、Parser 未组装和 v3 缺口各有明确错误。当前只支持单项显式输入，批量选择器及有界片段/证据读取等后续能力不由此入口冒充。
+当前解析请求为 `{ literature_id, asset_id, asset_sha256, profiles?, force? }`，默认两种 profile、允许复用。共享边界冻结输入并验证已接纳 PDF；回执只含固定资产和逐 profile 原始解析结果/失败。旧 mode、默认文档 CAS 与 Document 回执已删除。解析不下载、不建档、不总结，也不修改阅读默认版本；仅显式 `complete parser` 可先获取 PDF，再运行同一 raw 服务。v11 及后续 catalog 是 raw 存储前提，入口不隐式迁移旧库。HTTP 保持现有认证、CSRF、协议版本与断连取消边界，见[解析运行接口](04-document-evidence.md#211-typescript-运行接口与独立文档协作)。
+
 | `maintenance.analyze/synthesize` | 明确用途/问题、精确 InputManifest、规格及是否允许部分集合；返回 `KnowledgeArtifact`、实际覆盖/证据，或不适用/缺口/失败 | Analysis | 只能读指定已有输入并发布新不可变结果；缺输入返回 `Gap[]`，不调 Metadata/Acquisition/旧 completion；模型失败、不适用、零覆盖不得删除 PDF 或 ParserResult。跨文综合未获明确部分处理许可时，缺项使结果失败或标记为不完整，不能伪称覆盖全集。 |
 | `maintenance.submitExtractionBatch` | 调用方 `ExtractionSpec`、精确 InputManifest、一次有界 CandidateBatch；返回批次接纳/拒绝回执和逐记录结构/证据问题 | 调用方拥有规范/记录语义/策略与科学接纳；Extraction 校验中性交付；下游拥有最终数据集 | 不调用内部 Analysis/LLM，不调用外部发现/获取，不写 Literature 固定字段。单个批次全收或全拒；多批次任务失败不撤销先前接纳批次。结构/证据合格不代表科学接纳。 |
 

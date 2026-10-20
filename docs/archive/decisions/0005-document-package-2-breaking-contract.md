@@ -5,8 +5,8 @@
 - Revised: 2026-08-06
 - Supersedes: `DocumentPackage` schema 1.x 序列化合同
 - Superseded by: [ADR 0008](0008-summarized-markdown-literature-content.md)
-- Amended by: [ADR 0006](0006-llm-produced-literature-content.md)、[ADR 0007](0007-reference-resolution-and-authoritative-relations.md)
-- Related: [ADR 0001](0001-sciretriever-scope-and-boundary.md)、[ADR 0002](0002-literature-identity-and-incremental-processing.md)、[设计文档](../design.md)、[技术文档](../technical.md)
+- Amended by: [ADR 0006](0006-llm-produced-literature-content.md)、[ADR 0007](../../architecture/decisions/0007-reference-resolution-and-authoritative-relations.md)
+- Related: [ADR 0001](../../architecture/decisions/0001-sciretriever-scope-and-boundary.md)、[ADR 0002](../../architecture/decisions/0002-literature-identity-and-incremental-processing.md)、[设计文档](../../architecture/design.md)、[技术文档](../../architecture/technical.md)
 
 > 本 ADR 保存已被替代的历史 Package 2.0 设计，不再约束当前目标架构。当前项目不实现、读取或迁移此处定义的 Package 2.0；未来完整快照必须重新形成需求和 ADR。
 

@@ -184,7 +184,7 @@ Bootstrap 边界（`apps/server/src/bootstrap/application.ts`、`workbench.ts` �
 - 文件系统不可变发布、verified artifact reader 与原子用户文件输出；
 - metadata search、metadata reference query 和 Acquisition route adapters；
 - 当前进程共享的 Access Coordinator、secure HTTP、Publisher access profile catalog/Planner、单篇层级获取编排 与 Browser scheduler/session broker；只有存在经过生产准入的 Browser route 时才注入受控浏览器 adapter；
-- `parsing/backends/mineru/` 中按 ParserBackend 构造的 MinerU parser backend；
+- `parsing/backends/mineru/` 中按 RawParserBackend 构造的 MinerU parser backend；
 - 当前一个共享无状态单次 Agents runtime，并按 Analyze/Browser 所选 Model 的 Provider 构造 adapter 与 role binding；DSH 执行基础获准实施后也由此 Bootstrap 组装并复用相同模型配置和 Network，具体对象图见待审接入提案；
 - BibTeX、RIS 和 CSL JSON codec；
 - 本机写锁、时钟和资源预算。
@@ -193,7 +193,7 @@ Logging 当前公开函数是 `createLogger(component, sink?, minimum?)`，默�
 
 完整维护对象图中的获取能力必须共享 Network coordinator、Browser session broker 和相同配置。`createQueryApplication` 则只组装 Library/Artifact reader，不能先构造维护图再屏蔽写入方法；当前 TS 没有名为 `ASSET_COMPLETION`/`CONTENT_COMPLETION` 的公开构造模式。当前发布的 Publisher profile catalog 保存授权 API、访问 origin、稳定身份和可选 Publisher 首页 probe 证据；它不生成 Browser 下载 route。生产 Browser 只有 `browser:generic`、`browser-generic` policy 与唯一 `AgentBrowserController`。目标生产对象图只在普通 `[browser]` 已启用、Browser Model、选中且安全存在的固定身份 Profile、CloakBrowser wrapper/经验证 binary、Playwright API 与 headed display 同时就绪时构造 Browser client，并据此动态设置 execution confirmation 与 runtime readiness；不存在 stock Chrome/Chromium fallback。普通文章流程允许已准入页面发起的必要子资源和受限 challenge dependency、丢弃未批准的第三方非关键资源，并逐项审查显式或点击/脚本导航 request；未再次暴露 route 的 native redirect 只能复用同页 live、已批准且预绑定的关联，并在读 terminal body 前取得最终 host permit。Configuration Publisher probe 使用生产 Network contract 加 deny-all capture policy，只证明首页可达性。所有文章共享一个 Profile 和一个 CloakBrowser process/persistent context，并在 `browser-generic` 中限速串行。production catalog、总开关、Model/Profile/runtime readiness、登录状态、机构 IP 与具体文章 entitlement 仍是分立事实。
 
-模块公开入口不得构造具体 adapter，也不得读取全局配置。测试可以直接注入 fake ParserBackend；生产对象图只能由 `bootstrap` 构造。
+模块公开入口不得构造具体 adapter，也不得读取全局配置。测试可以直接注入 fake RawParserBackend；生产对象图只能由 `bootstrap` 构造。
 
 Configuration 边界（`apps/server/src/configuration/index.ts`、`owner.ts`、`credentials.ts`）是唯一普通
 TOML、非 secret 环境选择、统一凭据文件与 Browser Profile 生命周期入口。未知 section、key、

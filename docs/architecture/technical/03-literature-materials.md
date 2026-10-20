@@ -8,6 +8,8 @@
 
 获取成功不以分析完成为前提。来源错误、运行失败与正常耗尽分别表达，后续分析不适用不授予删除材料的权限。旧 completion 清理行为在对应兼容小节说明。
 
+> 2026-10-20：[ADR 0037](../decisions/0037-literature-archive-and-proofread-text.md)（Accepted，2026-10-20）将拆分元数据的文献类型、按字段记录来源与锁定，并以六种状态取代三级状态。目标形态见[§8](#8-adr-0037-目标形态元数据字段与文献状态实施中)，实施见[文献建档计划](../../plans/2026-10-20-literature-archive/README.md)。实施完成前，下文仍描述现行合同与实现。
+
 本篇目录：
 
 - [1. 模块边界与连接](#1-模块边界与连接)
@@ -17,6 +19,7 @@
 - [5. 资产验收、发布与有效性](#5-资产验收发布与有效性)
 - [6. 书目交换与持久化协作](#6-书目交换与持久化协作)
 - [7. 材料与文献验证](#7-材料与文献验证)
+- [8. ADR 0037 目标形态：元数据字段与文献状态（实施中）](#8-adr-0037-目标形态元数据字段与文献状态实施中)
 
 ## 1. 模块边界与连接
 
@@ -83,6 +86,8 @@ LiteratureStatus = "UNREVIEWED" | "ASSET_READY" | "CONTENT_READY"
 
 ### 2.4 身份收敛
 
+> ADR 0037：严格后备匹配中的 `document_type` 改为出版形式；后备身份索引随迁移重算。见[§8](#8-adr-0037-目标形态元数据字段与文献状态实施中)。
+
 #### 2.4.1 文献标识符与 Provider 记录身份
 
 Literature 只消费已经由 `Identifier` 公共 Model 形成的 canonical `(namespace, value)`，不在身份函数中再次解析 URL、前缀或大小写。当前明确规则为：
@@ -106,7 +111,7 @@ OpenAlex Work ID、Web of Science UID、Semantic Scholar Paper ID、Scopus EID �
 1. 用每个 canonical 文献 identifier 精确查询已有 Literature；
 2. 所有已命中的标识符只指向一个 Literature，且 incoming 与该 Literature 的身份型稳定标识符不存在冲突时，命中该 Literature；一条可信 observation 同时携带多个非冲突稳定标识符时，这些值共同描述该具体 Literature；
 3. 至少一项身份型稳定标识符指向同一对象、同时另一项身份型稳定标识符明确指向不同值或不同对象时，返回稳定 `identity-conflict` 接纳失败，不选择任意一项继续，也不创建版本关系；
-4. 双方都没有稳定文献标识符时，才计算标题、完整作者顺序、发表年份和 `document_type` 的严格复合后备键；四项必须全部存在且完全一致；
+4. 双方都没有稳定文献标识符时，才计算标题、完整作者顺序、发表年份和 `publication_form` 的严格复合后备键；四项必须全部存在且完全一致；
 5. 没有精确命中且不存在自相矛盾的身份证据时创建新的 Literature；不同 DOI 因此默认形成不同 Literature，即使标题、作者或年份相同。
 
 标题和每个 `Author.display_name` 的比较键固定为：Unicode NFC、去除首尾空白、把连续 Unicode 空白合并为一个空格，再执行 Unicode casefold。作者部分是上述结果组成的有序 tuple；不删除或统一标点、连字符，不改变姓名组成或作者顺序，也不执行翻译、拼音或其它转写、姓名倒置、首字母展开、编辑距离和模糊相似度。比较键只服务身份判断，不覆盖 `MetadataObservation` 或当前 `LiteratureMetadata` 中的来源展示值。
@@ -129,6 +134,8 @@ arXiv 预印本和具有正式 DOI 的发表版是两个具体 Literature。正�
 
 ### 2.5 来源与统一元数据
 
+> ADR 0037：统一元数据改为按字段裁决来源（人工、权威来源、校订稿），记录冲突与锁定；建档的元数据步骤取代两阶段分析中的元数据阶段。见[§8](#8-adr-0037-目标形态元数据字段与文献状态实施中)。
+
 Provider 与用户书目导入 observations 都是长期来源事实，不能被统一视图覆盖。一个 Literature 可以通过持久化关联拥有多个独立、不可变的 `MetadataObservation`；新接纳的非重复来源观察增加新对象和关联，不修改既有 observation。统一初始元数据按以下优先顺序逐字段形成：
 
 1. 用户书目导入 observation 存在非空值时采用该值；
@@ -150,7 +157,8 @@ LiteratureMetadata
   abstract: str | None
   publication_date: str | None
   publication_year: int | None
-  document_type: str | None
+  publication_form: PublicationForm | None
+  article_kind: ArticleKind | None
   language: str | None
   venue: str | None
   publisher: str | None
@@ -184,13 +192,7 @@ DOI、arXiv ID、PMID 等均作为带 namespace 的 `identifiers`，不建立平
 
 其它 namespace 的标识符不能替代 DOI 满足最低入库条件。因此，只有 arXiv ID、PMID、ISBN 或其它标识符且没有标题的记录不能入库。该判断是 Literature 拥有的入库规则，不放入 Model validator，也不由 Metadata provider 决定。未满足条件的来源结果作为稳定的单条拒绝返回，不创建 `MetaLiterature`、`Literature`、统一元数据或已接纳的来源 observation。
 
-`document_type` 的类型为 `str | None`，并且是开放词汇：
-
-- 项目不为它定义封闭枚举或完整可用值列表；
-- `article`、`journal-article`、`book`、`chapter` 和 `other` 等只是可能出现的值，不构成全局类型合同；
-- Metadata provider 或书目格式适配器可以对已知外部类型做明确的中性映射；没有映射的类型仍可作为字符串进入 observation，不因未出现在项目列表中而被拒绝；
-- Literature 可以在统一元数据中保留选定的当前值，但不维护一套供应商类型注册表；
-- 预印本、作者接受稿和正式发表版等版本语义由 Literature 版本角色和 MetaLiterature 成员归属表达，不依赖 `document_type` 推断。
+按 ADR 0037，统一元数据使用两组封闭枚举 `publication_form` 与 `article_kind`，取值见 [§8.1](#81-出版形式与文章性质)。未知类型在统一字段中保守为空；原始字符串和映射版本保存在 observation，不把供应商开放词汇带入统一字段。预印本仍属于 `version_role`，仅使用明确来源映射中的版本提示。
 
 以下信息不属于 `LiteratureMetadata`：
 
@@ -259,6 +261,8 @@ Analysis 提案不是数据库事实。Literature 接纳前必须重新读取并
 第一阶段或第二阶段失败、提案 stale、最终 metadata 不合格或整体提交失败时，不留下部分最终 metadata、keywords、sections、references 或当前 artifact 指针。已存在的 PDF 和统一初始 metadata 保持有效，可在后续运行重新分析。
 
 ### 2.6 引用解析与权威 Reference
+
+> ADR 0037：参考文献改由校订稿解析，新增 `ArchiveReferenceTextSupport`；`ContentReferenceTextSupport` 随 `LiteratureContent` 退役。见[§8](#8-adr-0037-目标形态元数据字段与文献状态实施中)。
 
 参考文献原文不是权威引用关系。供应商原文保存在 `MetadataObservation.reference_texts`，PDF 中识别的有序参考文献文本保存在当前 `LiteratureContent.references`；两者即使尚未解析目标也继续可用。整份内容通过单一 Analysis provenance 的输入 hash 回溯到 PDF、ParserResult 和最终 metadata，当前不保存逐条位置。空 references 在 Markdown 中显示“未提供”，但该缺失标记不是参考文献。公共 Model 不建立 `ReferenceObservation` 或 `CitationObservation`。
 
@@ -336,6 +340,8 @@ Reference 创建时必须同时发布至少一项有效 support；后续供应�
 无法解析或候选存在歧义时只保留来源原文，不创建占位 Literature、未解析 Reference 或只指向 `MetaLiterature` 的关系。后续运行可以重新形成 lookup。被引用视图是同一 Reference 的反向查询，`MetaLiterature` 级引用网络由 Literature 级关系汇总；二者都不形成第二份可变事实。引用扩展只通过公开查询 API 读取关系及其 support。
 
 ### 2.7 文献状态
+
+> ADR 0037：`CONTENT_READY` 将由 `READY` 取代，状态扩展为六种。见[§8](#8-adr-0037-目标形态元数据字段与文献状态实施中)。
 
 三级状态是纯推导结果，不是可独立修改的数据库列：
 
@@ -1530,7 +1536,7 @@ NoUsableContent 业务清理。详见
 - `Author` 能保留个人、机构、中文姓名、协作组、明确 ORCID、署名单位和 ROR；不同 Literature 不产生全局 Author 身份；
 - 书目导入、供应商 observation 和第一阶段最终 metadata 都使用同一 `Author` 合同，缺失姓名组成、ORCID、单位或 ROR 时保持缺失而不是猜测；
 - 非空标题或 DOI 至少存在一个时才能入库，只有其它 namespace 标识符而没有标题时拒绝；
-- `document_type` 接受未预先枚举的来源类型，已知边界映射保持确定，且版本语义不从该字段推断；
+- `source_type` 保留来源开放词汇，统一字段仅接受两组封闭枚举；未知映射保守为空，版本语义仅采用明确来源提示；
 - `MetadataObservation` 使用独立 `observation_id` 和公共 `Provenance`，不携带 Literature 身份，也不在顶层重复来源、来源记录 ID 和观察时间；Provider 与书目导入只通过受约束的 provenance 区分；
 - 一个 Literature 可以关联多个长期保存的不可变 MetadataObservation，新增 observation 不覆盖旧对象；LiteratureMetadata 始终只有一份当前值；
 - `metadata_revision` 只在当前 LiteratureMetadata 成功替换时递增，用于 stale 复检和当前内容对齐，不存在旧统一 metadata revision 历史；
@@ -1655,3 +1661,48 @@ NoUsableContent 业务清理。详见
 凭据、readiness 和 `config test` 测试使用临时凭据文件、fake adapter 与本地 Network，不读取真实用户配置，也不访问真实供应商。
 
 HTTP 和 Browser 测试使用本地受控站点，不连接真实供应商。
+
+## 8. ADR 0037 目标形态：元数据字段与文献状态（实施中）
+
+本节描述 ADR 0037 的目标合同。元数据字段、字段来源/人工锁定、v15 迁移和内部 DSH 元数据步骤已实施，正在综合验收；六状态与完整建档编排仍由 09 实施。任务与验证证据见计划的 07、09。
+
+### 8.1 出版形式与文章性质
+
+`LiteratureMetadata.document_type` 拆为两个封闭枚举：
+
+| 字段 | 取值 |
+| --- | --- |
+| `publication_form` | `journal-article`、`conference-paper`、`book-or-chapter`、`thesis`、`patent`、`report-or-standard`、`dataset` |
+| `article_kind` | `research-article`、`review`、`letter-or-communication`、`perspective-or-commentary`、`correction-or-editorial` |
+
+- 预印本由 `version_role` 表达，不属于出版形式。
+- 供应商的原始类型字符串保存在 observation 的 `source_type` 中，经带版本的映射表转换，无法映射时为空。
+- `LibraryQuery` 的 `document_types` 改为 `publication_forms` 与 `article_kinds`。
+- 严格后备身份匹配要求出版形式一致。
+
+### 8.2 字段来源、冲突与锁定
+
+每个字段记录来源（`authority`、`proofread`、`manual`）、证据、冲突标记和锁定标记。优先级：
+
+| 字段 | 优先级 |
+| --- | --- |
+| 题名、作者、期刊、出版者、卷、期、页、标识符、日期、出版形式 | 人工 > 权威来源 > 校订稿 |
+| 文章性质、作者关键词、摘要、语言 | 人工 > 校订稿 > 来源 |
+
+- 用户导入值仍按 ADR 0002 优先。
+- 就绪后到来的新 observation 只补空字段并标出冲突；只有显式重新执行建档的元数据步骤，才重新裁决。
+
+### 8.3 文献状态
+
+| 状态 | 条件 |
+| --- | --- |
+| `UNREVIEWED` | 无主 PDF |
+| `ASSET_READY` | 有主 PDF、未就绪；`missing_step` 为 `raw-parse` 或建档的下一步 |
+| `ARCHIVING` | 建档任务运行中 |
+| `ARCHIVE_FAILED` | 正文部分存在未解决的失败 |
+| `READY` | 正文校订完成并成为默认文档、结构满足、必填元数据齐全、标签数在 1 到上限之间 |
+| `EXCLUDED` | 文章性质为观点或评论、勘误或社论 |
+
+- 状态仍是纯推导结果；
+- 补充材料部分不参与推导；
+- 获取 PDF、解析、建档各自手动发起。

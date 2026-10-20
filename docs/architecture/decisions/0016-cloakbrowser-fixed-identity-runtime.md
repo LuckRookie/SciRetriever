@@ -49,7 +49,7 @@ CloakBrowser 类型不得越过 Network 与 Bootstrap 适配边界。迁移期�
 
 ### 3. Binary 生命周期与 Profile 迁移显式受控
 
-CloakBrowser Python wrapper 与定制 Chromium binary 的版本、许可和分发分别核实。SciRetriever wheel 不嵌入或重分发 vendor binary；安装、更新和回退只由用户在 Configuration 边界显式触发，普通 Completion 不隐式下载。显式安装必须把 vendor 签名的 version/digest、仓库固定 digest 与本次实际 archive 字节绑定后才能发布，不能根据解压目录存在或 vendor helper 成功返回自行声明已验证。status 只做本地 presence/version/readiness 检查。当前固定 older-free binary 不消费 license；普通 launch 通过一次性无凭据 cache view 只看见已验证版本，不能读取长期 runtime root 或 vendor cache-file credential。未来若需要 Pro secret，只能在新的受审版本线中从 origin-bound `credentials.toml` 注入，不恢复环境变量或 cache-file 回退。
+CloakBrowser 控制层与定制 Chromium binary 的版本、许可和分发分别核实。SciRetriever 安装包不嵌入或重分发 vendor binary；安装、更新和回退只由用户在 Configuration 边界显式触发，普通 Completion 不隐式下载。显式安装必须把 vendor 签名的 version/digest、仓库固定 digest 与本次实际 archive 字节绑定后才能发布，不能根据解压目录存在或 vendor helper 成功返回自行声明已验证。status 只做本地 presence/version/readiness 检查。当前固定 older-free binary 不消费 license；普通 launch 通过一次性无凭据 cache view 只看见已验证版本，不能读取长期 runtime root 或 vendor cache-file credential。未来若需要 Pro secret，只能在新的受审版本线中从 origin-bound `credentials.toml` 注入，不恢复环境变量或 cache-file 回退。
 
 旧 stock Chrome Profile 只有在程序生成的隔离 fixture 证明兼容、且用户显式同意初始化 identity manifest 后才能接纳。无法证明安全时报告 `needs-new-runtime-profile`，创建新的 Cloak runtime Profile，保持旧目录完全不动；不得静默复制、降级、删除或用较旧 Chromium 打开真实用户 Profile。
 
@@ -90,14 +90,14 @@ Operator 选择 Agent controller 并发起当前文献获取，即表达了由 B
 3. Cloudflare-shaped 第三方 iframe 的受限加载、自动 clear、统一 Observation、通用 Agent 动作、语义无进展、资源阻断和 origin escape；
 4. 用户明确授权的极小 stock/Cloak 串行 A/B，且 SpringerLink/IOP 已有成功链不回归。
 
-通过后一次性删除 stock runtime，再在最终单 runtime 对象图上重新执行 Quick、Full 和 fresh-wheel 验收。切换失败通过完整提交回退，不在产品中保留兼容开关。真实 Provider 结果只决定逐家 ready/deferred/unsupported，不把单篇成功或失败扩写成普遍 entitlement。
+通过后一次性删除 stock runtime，再在最终单 runtime 对象图上重新执行 Quick、Full 和全新安装验收。切换失败通过完整提交回退，不在产品中保留兼容开关。真实 Provider 结果只决定逐家 ready/deferred/unsupported，不把单篇成功或失败扩写成普遍 entitlement。
 
 ## 后果
 
 - 长期 Profile 的 Cookie/历史与设备身份一致，不再因每次随机 seed 自相矛盾。
 - CloakBrowser 降低 stock automation surface，但不保证通过 Cloudflare，也不改变 Publisher entitlement。
 - Cloudflare 必需资源不再被 SciRetriever 自己无差别阻断；自动页面变化和受控动作都通过统一 Observation/Action 合同表达，不再形成第二套 Challenge 生命周期。
-- Binary、版本和 Profile 迁移成为明确 operator 生命周期，wheel 保持可安装且不携带 vendor binary。
+- Binary、版本和 Profile 迁移成为明确 operator 生命周期，安装包保持可安装且不携带 vendor binary。
 - Browser 仍是三级获取的最后一层，原始 IP、Provider 限速、一个共享身份和 Network 安全边界保持不变。
 
 ## 不采用的方案

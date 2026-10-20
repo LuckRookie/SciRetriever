@@ -38,7 +38,7 @@ Analysis 可以比较指定文献的共识、分歧、条件与局限，但不�
 
 元数据供应商返回的记录和带来新来源事实的用户书目导入记录都先作为独立、不可变的 `MetadataObservation` 长期保存，再形成统一文献视图。一个 `Literature` 可以关联多个 observation；新来源观察增加新对象和关联，不能原地覆盖既有 observation，重复导入相同规范化内容也不能制造重复 observation。一个来源不能无声覆盖另一个来源，合并规则变化时应能够从保留的事实重新计算。
 
-每个 Literature 只维护一份当前 `LiteratureMetadata`。内容分析前，它由关联 observations 确定性形成：用户导入 observation 的非空书目信息优先，按配置排序的供应商 observations 只补齐缺失字段。完整 Analysis 接纳后，当前值由统一初始元数据、PDF 明确信息和经过验证的 LLM 提案形成；除全文关键词和已有合同允许的规范化外，用户导入的非空值继续保留。旧统一元数据不保存为历史 revision；`metadata_revision` 只标识当前值的变化并服务 stale 复检及当前 LiteratureContent 对齐。LLM 提案不是新的 MetadataObservation，来源 observations 始终继续保留。
+每个 Literature 只维护一份当前 `LiteratureMetadata`。建档前，它由关联 observations 确定性形成：用户导入 observation 的非空书目信息优先，按配置排序的供应商 observations 只补齐缺失字段。建档的元数据步骤按字段裁决来源（人工、权威来源、校订稿，见 [ADR 0037](decisions/0037-literature-archive-and-proofread-text.md)），记录冲突与锁定；用户导入的非空值继续保留。旧统一元数据不保存为历史 revision；`metadata_revision` 只标识当前值的变化，服务 stale 复检与描述版本。模型提议不是新的 MetadataObservation，来源 observations 始终继续保留。
 
 供应商专有响应在 adapter 边界转换为中性结构，书目文件在 Entry codec 边界转换为同一中性元数据合同；两者都不能把外部私有对象穿透到核心数据合同，也不建立平行的导入元数据模型。
 
@@ -87,7 +87,7 @@ Analysis 可以比较指定文献的共识、分歧、条件与局限，但不�
 
 原始来源、当前文献身份/元数据与原始文件继续可靠保存。新证据/分析产物可重建但不能据此忽略有效引用；当前默认关系更新、引用失效/保留及回收必须一致。
 
-旧 LiteratureContent/ReferenceSupport 的精确更新仍是现有兼容路径，新科学证据引用不得直接套用文献引用边的删除规则。索引重建不覆盖事实，任务成功必须有业务结果支持。
+参考文献的 ReferenceSupport 随文档版本更新（ADR 0007、ADR 0037），新科学证据引用不得直接套用文献引用边的删除规则。索引重建不覆盖事实，任务成功必须有业务结果支持。
 
 批量冻结实际范围并有界推进。Public/API/Browser cohort 及共享访问准入不变；取消停止新工作，已在途与已提交结果如实记录；重启根据当前事实恢复，不重放旧 Browser/网络现场。
 
@@ -119,7 +119,7 @@ Provider secret 只存在于当前用户的固定 `~/.sciretriever/credentials.t
 
 ## 12. 导出实现不是产品边界
 
-任何当前导出实现都不定义产品边界。ADR 0005 的 `DocumentPackage` 2.0 目标合同已经由 [ADR 0008](decisions/0008-summarized-markdown-literature-content.md) 撤销；当前产品不实现、读取或迁移该格式。未来若出现完整离线快照需求，必须先确认消费方和公开合同，再以新 ADR 重新版本化设计，不能恢复过时合同。
+任何当前导出实现都不定义产品边界。ADR 0005 的 `DocumentPackage` 2.0 目标合同已经由 [ADR 0008](../archive/decisions/0008-summarized-markdown-literature-content.md) 撤销；当前产品不实现、读取或迁移该格式。未来若出现完整离线快照需求，必须先确认消费方和公开合同，再以新 ADR 重新版本化设计，不能恢复过时合同。
 
 任何下游集成都必须使用文档化的稳定标识符、hash、provenance 和领域中立表示，不得直接依赖内部数据库表。
 
@@ -168,7 +168,7 @@ Provider secret 只存在于当前用户的固定 `~/.sciretriever/credentials.t
 - [ ] 手动 PDF 是否明确绑定具体 Literature、复制而不移动用户文件、复用相同基本检查，并保持在自动三阶段之外？
 - [ ] Acquisition 是否统一检查 PDF 字节、可读性和适用的文章归属证据；分析不适用、部分解析或失败是否不会单独触发已接纳材料删除？
 - [ ] 旧七标题兼容格式的缺失内容是否仍统一使用“未提供”；新知识产物是否准确表达缺失、不确定与覆盖，不把缺失标记当作证据？
-- [ ] 多用途知识产物是否按用途和输入版本区分，更新是否保留有效证据；旧 LiteratureContent/ReferenceSupport 兼容更新是否仍保持一致？
+- [ ] 多用途知识产物是否按用途和输入版本区分，更新是否保留有效证据；参考文献支持随文档版本更新时是否保持“每条 Reference 至少一项支持”？
 - [ ] 是否保护来源与原始材料，并为派生表示明确保留/失效/回收规则，避免以可重建为由无声断开有效引用？
 - [ ] 解析材料是否无需分析即可读取，知识要点是否能展开到正确版本的证据，检索是否如实表达预算、覆盖和截断？
 - [ ] 人类是否观察同一生产 Browser，指导是否绑定当前流程，接管/交还是否阻止旧动作并重新观察？

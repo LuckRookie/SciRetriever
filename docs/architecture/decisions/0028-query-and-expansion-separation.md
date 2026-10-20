@@ -4,6 +4,9 @@
 - Date: 2026-09-27
 - Amends: [ADR 0011](0011-literature-database-centered-incremental-maintenance.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)
 - Related: [产品需求](../requirements.md)、[设计](../design.md)、[统一产品接口：共享合同、结构解析与版本兼容](../technical/01-product-interface.md#6-共享合同结构解析与版本兼容)、[工作流](../knowledge-service-workflows.md)
+- Amended by: [ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
+
+> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md) 修订本 ADR：completion 不再包含 CONTENT_READY 目标，建档是独立的显式操作。直接冲突的正文已按 ADR 0037 收口。
 
 ## 背景与决定依据
 
@@ -42,7 +45,7 @@ Owner 明确要求将查询数据库与扩充数据库分离。不允许因发�
 
 ### 5. 现有行为与兼容
 
-当前手动发起的数据库 completion 是维护操作，已有 `CONTENT_READY` 可包括获取 PDF 的语义须向调用方准确说明；不得将它用作查询或独立分析的内部缺口处理器。现有命令不因本文静默删除或改变受支持行为。新增独立知识操作应使用已有材料前提；如后续改变旧 completion 的公开语义，需单独做兼容评估。
+当前手动发起的数据库 completion 是维护操作，可以包括获取 PDF 与解析，须向调用方准确说明；按 ADR 0037，建档不属于 completion，原 `CONTENT_READY` 目标已退役。不得将 completion 用作查询或独立分析的内部缺口处理器。新增独立知识操作应使用已有材料前提；如后续改变旧 completion 的公开语义，需单独做兼容评估。
 
 本 ADR 不改变保守身份、不可变资产、事实 owner、来源保留、访问政策、阶段提交及取消语义，也不改变后台存续/长期回放的待定状态。
 

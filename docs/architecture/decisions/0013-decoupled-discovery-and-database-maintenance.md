@@ -5,9 +5,11 @@
 - Last amended: 2026-09-27
 - Supersedes: none
 - Superseded by: none
-- Amends: [ADR 0008](0008-summarized-markdown-literature-content.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)
-- Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；[ADR 0028](0028-query-and-expansion-separation.md)（查询与显式扩充分离）
+- Amends: [ADR 0008](../../archive/decisions/0008-summarized-markdown-literature-content.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)
+- Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；[ADR 0028](0028-query-and-expansion-separation.md)（查询与显式扩充分离）；[ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[任务与协作控制：数据库补全与阶段协调](../technical/02-task-coordination.md#4-数据库补全与阶段协调)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[版本化材料与知识存储：Catalog 与文件组织](../technical/07-versioned-storage.md#2-catalog-与文件组织)
+
+> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md) 修订本 ADR：数据库补全只到获取 PDF 与解析，CONTENT_READY 目标退役，建档为独立手动操作。直接冲突的正文已按 ADR 0037 收口。
 
 > 2026-09-25 修订：独立操作扩展到文档读取、分析/综合、检索和人类协作；旧目标枚举不能穷尽新知识能力。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
 
@@ -21,7 +23,7 @@ SciRetriever 已经确认以统一逻辑文献数据库为产品中心，但“�
 
 讨论中曾把 `Collection` 保留为可选、长期命名的 `MetaLiterature` 集合。但当前核心工作流并不需要这一层：历史发现已经由 `DiscoveryRun` 保存，当前语义范围可以通过数据库查询表达，明确处理对象也可以直接使用 ID。若把 Collection 当作领域占位符，就必须回答自动归属和语义相关性；若把它限定为 Zotero 式手工文件夹，它又是尚未确认的独立产品功能。因此当前目标不能仅为兼容旧概念保留 Collection。
 
-讨论中也曾为数据库补全设计持久化 `BatchRun`、冻结 target、版本候选、逐目标结果和 counts。它们并不决定下一步：下一次操作仍然必须读取 Literature 当前是否有 PDF、ParserResult 或 LiteratureContent。把运行报告保存成另一套表只会引入状态机、恢复规则和与当前事实漂移的风险。用户需要的是每次操作结束时能够看到本次完成情况，而不是长期任务历史；因此补全范围与报告应只存在于当前进程。
+讨论中也曾为数据库补全设计持久化 `BatchRun`、冻结 target、版本候选、逐目标结果和 counts。它们并不决定下一步：下一次操作仍然必须读取 Literature 当前是否有 PDF、原始解析或文献档案。把运行报告保存成另一套表只会引入状态机、恢复规则和与当前事实漂移的风险。用户需要的是每次操作结束时能够看到本次完成情况，而不是长期任务历史；因此补全范围与报告应只存在于当前进程。
 
 但“某个具体 Literature 已经正常耗尽当前全部自动 PDF 获取路径”不同：如果不保存，下一次全库补全会无限重复选择它。这个事实必须以最小形式进入 Catalog，因为它会改变未来选择；网络失败、候选详情和运行统计仍然没有这种用途。
 
@@ -67,10 +69,12 @@ SciRetriever 已经确认以统一逻辑文献数据库为产品中心，但“�
 
 ### 5. 数据库补全是当前进程内的独立操作
 
-本 ADR 原有数据库补全合同提供以下两个维护目标（ADR 0019 随后增加解析目标；新知识操作另有合同）：
+数据库补全提供以下维护目标：
 
 - `ASSET_READY`：为当前没有可用版本主 PDF 的对象补齐主 PDF；
-- `CONTENT_READY`：从每个对象当前第一个缺失步骤继续，必要时先补 PDF，再完成 Parsing、Analysis 和 Literature 接纳。
+- 解析目标（ADR 0019 增加）：必要时先补 PDF，再完成正文部分的原始解析。
+
+原有的 `CONTENT_READY` 目标按 ADR 0037 退役。建档（校订、结构、元数据、参考文献、标签）是独立的手动操作，不属于数据库补全；知识产物由算子另行产生。
 
 一次补全由运行时 `BatchRequest` 表达，只有一个类型化 `BatchSelector` 和一个 `BatchGoal`。当前接受的 selector 为：
 
@@ -92,13 +96,13 @@ Selector 是用户发起本次操作的输入，不保存到 Catalog，也不携
 
 ### 6. MetaLiterature 范围默认只取得一个可用版本
 
-DiscoveryRun、查询、导入和全库维护等普通范围先按 `MetaLiterature` 去重；实际元数据、资产、ParserResult 和 LiteratureContent 仍归具体 `Literature`。默认目标是让每个 MetaLiterature 至少具有一个达到所选目标的可用版本，不盲目补齐全部版本。用户明确选择具体 Literature 时，只处理该版本，也不跨版本回退。
+DiscoveryRun、查询、导入和全库维护等普通范围先按 `MetaLiterature` 去重；实际元数据、资产、原始解析和文献档案仍归具体 `Literature`。默认目标是让每个 MetaLiterature 至少具有一个达到所选目标的可用版本，不盲目补齐全部版本。用户明确选择具体 Literature 时，只处理该版本，也不跨版本回退。
 
 对于尚未满足目标的 MetaLiterature，Entry 在本次操作开始时只在内存中冻结有序的具体 Literature 候选。候选先复用完成度更高的成员：
 
 ```text
-CONTENT_READY
-  > 已有当前 ParserResult
+READY
+  > 已有当前原始解析
   > 已有当前主 PDF
   > 没有上述结果
 ```
