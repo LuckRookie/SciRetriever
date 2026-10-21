@@ -1,3 +1,4 @@
+import { errorMessage } from "../../strings.js";
 import {
   parseProcessorBatchRequest,
   type ProcessorBatchRequest,
@@ -191,6 +192,7 @@ export function processingError(error: unknown) {
       "结果索引需要维护。已有结果仍保留；请通过 CLI/MCP 显式重建结果索引后重试，此页面不会自动重建。",
   };
   return (
-    messages[code] ?? `操作未完成：${code}。草稿已保留，可重试或到任务页核对。`
+    messages[code] ??
+    `${errorMessage(error)} 草稿已保留，可重试或到任务页核对。`
   );
 }

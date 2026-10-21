@@ -1,3 +1,4 @@
+import { serviceMessage } from "../../strings.js";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { parseConfigurationReadiness } from "@sciretriever/contracts";
@@ -227,7 +228,9 @@ export default function Settings() {
     },
     onError: (error) =>
       setMessage(
-        errorMessage(error) === "configuration-conflict"
+        error instanceof Error &&
+          "code" in error &&
+          error.code === "configuration-conflict"
           ? "保存遇到 revision 冲突；草稿仍保留。请刷新当前保存值后再修正。"
           : `保存结果未确认：${errorMessage(error)}。草稿仍保留，请核对后重试。`,
       ),
@@ -1033,7 +1036,7 @@ function Probe({
       {probe.data && (
         <p role="status">
           测试结果：{str(record(probe.data.result, "probe").outcome)} ·{" "}
-          {str(record(probe.data.result, "probe").reason)}
+          {serviceMessage(str(record(probe.data.result, "probe").reason))}
         </p>
       )}
     </div>

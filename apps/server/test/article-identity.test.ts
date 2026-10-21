@@ -160,7 +160,7 @@ describe("post-parse article identity", () => {
     } finally {
       await env.close();
     }
-  });
+  }, 0);
   it("retains conflicting and insufficient evidence without blocking parsing or deleting the PDF", async () => {
     for (const conflict of [true, false]) {
       const env = await coreProcessingFixture();
@@ -209,7 +209,7 @@ describe("post-parse article identity", () => {
         await env.close();
       }
     }
-  });
+  }, 0);
   it("rejects invented quotes, stale metadata, over-budget input and cancelled model work without a false current verdict", async () => {
     const env = await coreProcessingFixture();
     try {

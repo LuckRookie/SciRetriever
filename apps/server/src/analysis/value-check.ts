@@ -124,8 +124,8 @@ export class ProcessorValueVerifier {
             citation,
             status,
             reason: same
-              ? "Mapped value retains its source verification."
-              : "Synthesized value requires interpretation; source verification is retained separately.",
+              ? "mapped-verification-retained"
+              : "synthesis-requires-interpretation",
           });
           continue;
         }
@@ -134,8 +134,7 @@ export class ProcessorValueVerifier {
           sources.push({
             citation,
             status: "uncertain",
-            reason:
-              "No corrected document fragment is available for value verification.",
+            reason: "corrected-fragment-unavailable",
           });
           continue;
         }
@@ -143,7 +142,7 @@ export class ProcessorValueVerifier {
           sources.push({
             citation,
             status: "uncertain",
-            reason: "Value was not reported.",
+            reason: "value-not-reported",
           });
           continue;
         }
@@ -168,9 +167,7 @@ export class ProcessorValueVerifier {
           sources.push({
             citation,
             status: found ? "text-layer" : "uncertain",
-            reason: found
-              ? "Cited numbers are present in the corrected fragment; this checks transcription, not scientific interpretation."
-              : "At least one cited number is absent from the corrected fragment.",
+            reason: found ? "cited-values-present" : "cited-value-missing",
           });
           continue;
         }
@@ -178,8 +175,7 @@ export class ProcessorValueVerifier {
           sources.push({
             citation,
             status: "uncertain",
-            reason:
-              "Visual verification model is not configured or lacks image/tool capability.",
+            reason: "visual-model-unavailable",
           });
           continue;
         }
@@ -202,8 +198,7 @@ export class ProcessorValueVerifier {
           sources.push({
             citation,
             status: "uncertain",
-            reason:
-              "Original PDF region renderer is unavailable; visual verification did not run.",
+            reason: "pdf-region-unavailable",
           });
           continue;
         }
@@ -319,10 +314,14 @@ export class ProcessorValueVerifier {
           citation,
           status: accepted?.confirmed ? "image-checked" : "uncertain",
           reason:
-            accepted?.reason ??
+            (accepted
+              ? accepted.confirmed
+                ? "visual-value-confirmed"
+                : "visual-value-uncertain"
+              : null) ??
             (usage.calls >= this.maxCalls
-              ? "Visual verification budget exhausted."
-              : "Visual verification did not complete."),
+              ? "visual-budget-exhausted"
+              : "visual-verification-incomplete"),
         });
       }
       const status: ProcessorCheckStatus =
@@ -337,12 +336,13 @@ export class ProcessorValueVerifier {
         record_id: target.record_id,
         pointer: target.pointer,
         status,
-        reason: sources.length
-          ? sources
-              .map((s) => s.reason)
-              .join(" ")
-              .slice(0, 4096)
-          : "No cited value evidence was supplied.",
+        reason: !sources.length
+          ? "value-evidence-missing"
+          : synthesized
+            ? "synthesis-requires-interpretation"
+            : status === "uncertain"
+              ? "value-verification-uncertain"
+              : "value-verification-confirmed",
         sources,
       });
     }

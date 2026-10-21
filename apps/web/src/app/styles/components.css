@@ -884,3 +884,10 @@
     }
   }
 }
+
+@layer components {
+  .ui-evidence-popover { min-width: 0; overflow: auto; overscroll-behavior: contain; }
+  .ui-popover-trigger { display: inline-flex; min-width: 0; }
+}
+
+@layer components { .ui-popover-actions { display: flex; justify-content: flex-end; } }

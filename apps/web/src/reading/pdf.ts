@@ -472,11 +472,11 @@ export async function renderPdf(
       }
       for (const entry of rendered.values()) highlight(entry.text);
     };
-  } catch (error) {
+  } catch {
     if (!ctx.signal.aborted)
       readerProblem(
         frame,
-        `PDF 无法打开：${error instanceof Error ? error.message : "格式或 worker 不可用"}。可下载同一份已核验文件。`,
+        "PDF 无法打开，文件读取、校验或渲染未完成。可下载同一份已核验文件。",
       );
     dispose();
   }

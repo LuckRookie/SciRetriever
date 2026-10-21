@@ -36,7 +36,8 @@ export const statusLabels: Readonly<Record<string, string>> = {
   pending: "等待执行",
 };
 export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "操作未完成，请重试。";
+  const message = error instanceof Error ? error.message : "";
+  return /[\u3400-\u9fff]/u.test(message) ? message : serviceMessage(message);
 }
 
 export const archiveStrings = {
@@ -104,6 +105,83 @@ export function archiveReason(code: string): string {
         "part-unavailable": "补充材料尚不可用",
         "model-unavailable": "模型尚不可用",
       } as Record<string, string>
-    )[code] ?? code
+    )[code] ?? serviceMessage(code)
+  );
+}
+
+const valueCheckReasons: Readonly<Record<string, string>> = {
+  "mapped-verification-retained": "沿用来源中同一数值的核对结果。",
+  "synthesis-requires-interpretation":
+    "这是综合结论，来源核对结果不能直接证明这条新结论。",
+  "corrected-fragment-unavailable": "没有可用于核对的校订原文片段。",
+  "value-not-reported": "原文未报告这个值。",
+  "cited-values-present":
+    "数字和单位能在所引校订片段中找到；这只核对抄录，不判断科学解释。",
+  "cited-value-missing":
+    "有数字或单位未能在所引校订片段中找到，请对照原文确认。",
+  "visual-model-unavailable":
+    "图像核对模型未配置，或不支持所需的图像与工具能力。",
+  "pdf-region-unavailable": "原始 PDF 区域暂时无法渲染，未进行图像核对。",
+  "visual-budget-exhausted": "本次图像核对额度已用完。",
+  "visual-verification-incomplete": "图像核对尚未完成。",
+  "visual-value-confirmed": "已对照原始 PDF 图像核对。",
+  "visual-value-uncertain": "对照图像后仍无法确认，请查看对应原文。",
+  "value-evidence-missing": "没有提供这个值所依据的原文。",
+  "value-verification-uncertain": "部分内容仍待确认，展开下面的来源查看原因。",
+  "value-verification-confirmed": "已按各来源标注完成核对。",
+  "verification-not-configured": "尚未配置用时核对。",
+  "external-candidate-not-visually-verified":
+    "外部提交的候选尚未经过图像核对。",
+};
+export function valueCheckReason(code: string): string {
+  return (
+    valueCheckReasons[code] ??
+    "这份结果没有可识别的核对原因，请查看对应原文确认。"
+  );
+}
+export const valueCheckLabels = {
+  "text-layer": "文字核对",
+  "image-checked": "图像核对",
+  uncertain: "存疑",
+} as const;
+
+/** Transport diagnostics are codes, never copy for a human-facing notification. */
+export function serviceMessage(code: string): string {
+  return (
+    (
+      {
+        "invalid-contract": "返回内容无法通过验证，未显示不匹配的材料。",
+        "contract validation failed":
+          "返回内容无法通过验证，未显示不匹配的材料。",
+        "command-rejected": "任务操作未被接受，请刷新任务状态后重试。",
+        "configuration-conflict": "配置已被其他操作修改，请刷新后核对草稿。",
+        "manual-pdf-invalid": "文件不是可读取的 PDF，请选择有效的 PDF 文件。",
+        "primary-asset-conflict": "这篇文献已有主 PDF，不能直接替换。",
+        "operation-not-open": "这项交付操作已关闭，不能再提交。",
+        "knowledge-index-unavailable":
+          "知识检索索引不可用，请先检查或重建索引。",
+        "browser-network-drain-timeout":
+          "浏览器网络连接未能及时关闭，请查看服务日志。",
+        "publication-disk-full": "存储空间不足，材料发布未完成。",
+        "invalid-request": "请求内容无效，请检查填写的内容。",
+        "invalid-input": "输入内容无效，请检查后重试。",
+        "not-found": "所需内容不存在或已被移除。",
+        "library-unavailable": "文献库暂时不可用，请检查服务状态。",
+        "catalog-schema-refused": "数据库结构尚未就绪，请先完成数据库转换。",
+        "catalog-layout-not-current": "数据库结构与当前程序不一致。",
+        "parser-unavailable": "解析服务尚不可用，请检查解析配置。",
+        "model-unavailable": "模型尚不可用，请检查模型配置。",
+        "proofread-renderer-unavailable":
+          "PDF 页面渲染器不可用，请检查浏览器运行环境。",
+        "network-error": "网络连接失败，请检查连接后重试。",
+        "Failed to fetch": "网络连接失败，请检查连接后重试。",
+        "fetch failed": "网络连接失败，请检查连接后重试。",
+        "request-cancelled": "操作已取消。",
+        "archive-tagging": "建档时自动生成标签",
+        "correction-failed": "本次矫正未完成",
+        "correction-edit-conflict": "矫正与当前文字存在冲突，请重新核对",
+        "page-content-missing": "页面正文尚未完整确认",
+      } as Record<string, string>
+    )[code] ?? "操作未完成，请重试；若问题持续，请查看任务详情或服务日志。"
   );
 }

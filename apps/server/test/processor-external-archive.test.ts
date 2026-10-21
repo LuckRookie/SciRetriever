@@ -111,7 +111,7 @@ it("prepares only READY corrected documents and preserves external submissions a
   } finally {
     await e.close();
   }
-});
+}, 0);
 it("exposes direct CLI/MCP archive execution and refuses retired input kinds", async () => {
   const e = await archiveFixture();
   let client: Client | undefined,

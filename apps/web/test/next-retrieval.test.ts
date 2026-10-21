@@ -401,7 +401,7 @@ it("keeps late or failed searches from replacing a newer page and permits an exp
       .click();
     await expect
       .poll(() => w.page.getByRole("alert").textContent())
-      .toContain("knowledge-index-unavailable");
+      .toContain("知识检索索引不可用");
     expect(
       await w.page
         .locator('input[placeholder="输入要查找的问题或关键词"]')

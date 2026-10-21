@@ -474,7 +474,7 @@ describe("bounded document and material reading", () => {
       await query?.close();
       await env.close();
     }
-  }, 20000);
+  }, 0);
 
   it("serves query-only HTTP with the same material evidence and rejects cross-origin input", async () => {
     const env = await fixture();
@@ -1040,8 +1040,14 @@ describe("bounded document and material reading", () => {
         value.result.continuation = null;
         await route.fulfill({ response, json: value });
       });
+      const corruptedResource = page.waitForResponse((response) =>
+        new URL(response.url()).pathname.endsWith("/document-resource"),
+      );
       await page.reload();
       await page.locator(".reading-resource").scrollIntoViewIfNeeded();
+      // Scrolling starts a lazy read; assert its rejection after the injected
+      // response is delivered, not while the placeholder is still loading.
+      await (await corruptedResource).finished();
       await expect
         .poll(() => page.locator(".reading-resource").innerText())
         .toMatch(/无法|失败|暂不可读/);

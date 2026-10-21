@@ -231,5 +231,5 @@ describe("live-discovered acquisition regressions", () => {
       );
       await rm(home, { recursive: true, force: true });
     }
-  });
+  }, 0);
 });

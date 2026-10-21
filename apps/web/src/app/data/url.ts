@@ -72,9 +72,7 @@ export function parseUrl(search: string): UrlState {
     sort = fallback.sort,
     literature: string | null = null;
   try {
-    const raw: unknown = JSON.parse(
-      parameters.get("query") ?? '{"statuses":["READY"]}',
-    );
+    const raw: unknown = JSON.parse(parameters.get("query") ?? "{}");
     if (raw && typeof raw === "object" && !Array.isArray(raw))
       for (const key of ["document_type", "document_types"]) {
         if (Object.hasOwn(raw, key)) {

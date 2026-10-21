@@ -223,7 +223,11 @@ it("checks every reported number in corrected text without a model call, preserv
       [],
       new AbortController().signal,
     );
-    expect(absent.checks[0]!.status).toBe("uncertain");
+    expect(absent.checks[0]!).toMatchObject({
+      status: "uncertain",
+      reason: "value-verification-uncertain",
+      sources: [expect.objectContaining({ reason: "cited-value-missing" })],
+    });
     expect(e.calls).toBe(0);
     expect(e.images).toBe(0);
   } finally {
@@ -254,6 +258,9 @@ it.each([true, false])(
         new AbortController().signal,
       );
       expect(next.checks).toEqual(first.checks);
+      expect(first.checks[0]!.sources[0]!.reason).toBe(
+        confirmed ? "visual-value-confirmed" : "visual-value-uncertain",
+      );
       expect(next.usage.calls).toBe(0);
       expect(e.calls).toBe(2);
     } finally {
@@ -287,7 +294,8 @@ it("preserves delivery as uncertain when the configured region renderer is unava
     );
     expect(result.checks[0]).toMatchObject({
       status: "uncertain",
-      reason: expect.stringContaining("renderer is unavailable"),
+      reason: "value-verification-uncertain",
+      sources: [expect.objectContaining({ reason: "pdf-region-unavailable" })],
     });
     expect(e.calls).toBe(0);
   } finally {

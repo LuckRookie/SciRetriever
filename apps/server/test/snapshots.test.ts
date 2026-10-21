@@ -186,4 +186,4 @@ it("serves bounded pages through the shared query boundary and CLI without model
   } finally {
     await e.close();
   }
-});
+}, 0);

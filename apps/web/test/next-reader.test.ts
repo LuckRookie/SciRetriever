@@ -352,7 +352,19 @@ it("previews only explicit document links and never guesses bare citation number
       );
     },
   });
+  let releaseOutline!: () => void;
+  const outlineGate = new Promise<void>((resolve) => {
+    releaseOutline = resolve;
+  });
   try {
+    await w.page.route(
+      (url) => url.pathname === "/api/v1/query/document-outline",
+      async (route) => {
+        const response = await route.fetch();
+        await outlineGate;
+        await route.fulfill({ response });
+      },
+    );
     await w.page.goto(
       `${w.origin}/?literature=${w.env.parseRequest.literature_id}&reader=doc`,
     );
@@ -367,6 +379,12 @@ it("previews only explicit document links and never guesses bare citation number
     });
     await preview.waitFor();
     expect(await preview.innerText()).toContain("Smith et al.");
+    // Auxiliary navigation can arrive after the user has already opened a preview.
+    const outlineResponse = w.page.waitForResponse((response) =>
+      new URL(response.url()).pathname.endsWith("/document-outline"),
+    );
+    releaseOutline();
+    await (await outlineResponse).finished();
     // Remain usable after the former Dialog autofocus/refocus interval.
     await w.page.waitForTimeout(650);
     expect(await preview.count()).toBe(1);
@@ -386,6 +404,8 @@ it("previews only explicit document links and never guesses bare citation number
     );
     expect(w.errors).toEqual([]);
   } finally {
+    releaseOutline();
+    await w.page.unrouteAll({ behavior: "wait" });
     await w.close();
   }
 }, 90000);

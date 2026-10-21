@@ -1,4 +1,4 @@
-import type { EvidenceRef } from "@sciretriever/contracts";
+import type { EvidenceRef, ProcessorCitation } from "@sciretriever/contracts";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useLayoutEffect, useRef, useState } from "react";
 import { randomId } from "../../../browser-platform.js";
@@ -26,7 +26,25 @@ import { useApi } from "../../data/query.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { record } from "../../data/wire.js";
 import { useShell } from "../../shell/context.js";
-import { errorMessage } from "../../strings.js";
+import {
+  errorMessage,
+  valueCheckReason,
+  valueCheckLabels,
+} from "../../strings.js";
+
+function readableClaim(text: string, sources: readonly ProcessorCitation[]) {
+  // Verified citations already have numbered controls below the paragraph.
+  // Remove only their redundant model-written markers, never arbitrary IDs.
+  for (const citation of sources) {
+    if (
+      citation.kind === "document" &&
+      citation.evidence.target_kind === "document" &&
+      citation.evidence.locator.kind === "segment"
+    )
+      text = text.replaceAll(`【${citation.evidence.locator.segment_id}】`, "");
+  }
+  return text;
+}
 
 export function EvidencePreview({
   evidence,
@@ -104,10 +122,15 @@ export function EvidencePreview({
         />
       ) : (
         <>
-          <blockquote>
-            {result.data?.pages.map((page) => page.text ?? "").join("") ||
-              "这份证据来自原始材料，没有可显示的解析片段。"}
-          </blockquote>
+          <blockquote
+            className="reader-prose"
+            dangerouslySetInnerHTML={{
+              __html: markdown.parse(
+                result.data?.pages.map((page) => page.text ?? "").join("") ||
+                  "这份证据来自原始材料，没有可显示的解析片段。",
+              ),
+            }}
+          />
           <p className="ui-description">
             {result.data?.pages[0]?.document
               ? "定位到固定文档段落；不推测 PDF 页码。"
@@ -340,26 +363,41 @@ export function SummaryView({
                 <div
                   className="reader-prose"
                   dangerouslySetInnerHTML={{
-                    __html: markdown.parse(claim.text),
+                    __html: markdown.parse(
+                      readableClaim(claim.text, claim.sources),
+                    ),
                   }}
                 />
                 {saved.result.value_checks
                   .filter((c) => c.record_id === claim.record_id)
                   .map((c) => (
-                    <p
+                    <details
                       key={c.pointer}
-                      className="ui-description"
-                      title={c.reason}
+                      className="reader-value-check"
+                      data-status={c.status}
                     >
-                      {
-                        {
-                          "text-layer": "文字核对",
-                          "image-checked": "图像核对",
-                          uncertain: "存疑",
-                        }[c.status]
-                      }{" "}
-                      · {c.reason}
-                    </p>
+                      <summary>{valueCheckLabels[c.status]}</summary>
+                      <p>{valueCheckReason(c.reason)}</p>
+                      {c.sources.map((source, sourceIndex) => (
+                        <div key={sourceIndex} className="reader-check-source">
+                          <p>
+                            来源 {sourceIndex + 1}：
+                            {valueCheckReason(source.reason)}
+                          </p>
+                          {source.citation.kind === "document" ? (
+                            <Popover
+                              label={`核对来源 ${index + 1}.${sourceIndex + 1}`}
+                              trigger="查看对应原文"
+                            >
+                              <EvidencePreview
+                                evidence={source.citation.evidence}
+                                index={sourceIndex + 1}
+                              />
+                            </Popover>
+                          ) : null}
+                        </div>
+                      ))}
+                    </details>
                   ))}
                 <div
                   className="reader-evidence-list"

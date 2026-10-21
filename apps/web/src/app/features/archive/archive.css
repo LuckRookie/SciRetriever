@@ -82,22 +82,3 @@
     gap: 8px;
   }
 }
-
-.paper-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
-  font-size: var(--text-caption);
-}
-.paper-tag {
-  color: var(--muted);
-}
-.paper-tag.primary {
-  color: var(--ink);
-  font-weight: 600;
-}
-.paper-status small {
-  display: block;
-  margin-top: 4px;
-}

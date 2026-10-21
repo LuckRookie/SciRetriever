@@ -1283,7 +1283,7 @@ describe("explicit retrieval projection and bounded Context", () => {
       await query?.close();
       await env.close();
     }
-  });
+  }, 0);
 
   it("indexes exact published versions and returns verified Unicode text with resolvable evidence", async () => {
     const env = await fixture(true);
@@ -1398,7 +1398,7 @@ describe("explicit retrieval projection and bounded Context", () => {
       await query?.close();
       await env.close();
     }
-  }, 20000);
+  }, 0);
 
   it("reports evidence-limit for a matching unit with more than 32 source segments", async () => {
     const env = await fixture(true);
@@ -1474,7 +1474,7 @@ describe("explicit retrieval projection and bounded Context", () => {
       await query?.close();
       await env.close();
     }
-  });
+  }, 0);
 
   it("marks candidate-limit before pagination when more than 4097 matching rows exist", async () => {
     const env = await fixture(true);

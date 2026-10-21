@@ -220,7 +220,7 @@ it("selects the correct live article, explicitly returns control on close, while
       .toBe(1);
     await expect
       .poll(() => page.locator(".browser-log").textContent())
-      .toContain("publication-disk-full");
+      .toContain("存储空间不足");
     await page
       .getByRole("button", { name: "返回会话列表", exact: true })
       .click();
@@ -278,7 +278,7 @@ it("selects the correct live article, explicitly returns control on close, while
       .toContain("PDF 已入库");
     await expect
       .poll(() => page.locator(".browser-log").textContent())
-      .toContain("资源清理未完成：browser-network-drain-timeout");
+      .toContain("资源清理未完成：浏览器网络连接未能及时关闭");
     expect(workbench.view().session_outcome).toEqual({
       kind: "published",
       receipt_id: "publication-web-a",

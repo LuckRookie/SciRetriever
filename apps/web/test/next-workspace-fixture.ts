@@ -66,7 +66,7 @@ export async function independentNextAssets(kind: "query" | "maintenance") {
   return loadIndependentReactAssets(kind, pathToFileURL(`${directory}/`));
 }
 
-/** Raw and imported papers are outside the default READY view. */
+/** Explicitly reset any active status filter to include raw and imported papers. */
 export async function showAllLibraryStatuses(page: Page) {
   await page.getByRole("button", { name: "材料状态" }).click();
   await page.getByRole("option", { name: "全部状态", exact: true }).click();

@@ -1,3 +1,4 @@
+import { serviceMessage } from "../../strings.js";
 import { useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { parseTag, type Tag } from "@sciretriever/contracts";
@@ -399,7 +400,10 @@ export default function Tags() {
                 </time>
               </p>
               <p>
-                {String(c.reason)} ·{" "}
+                {c.actor === "tagging"
+                  ? serviceMessage("archive-tagging")
+                  : String(c.reason)}{" "}
+                ·{" "}
                 {archiveStrings.tagActors[
                   String(c.actor) as keyof typeof archiveStrings.tagActors
                 ] ?? String(c.actor)}{" "}

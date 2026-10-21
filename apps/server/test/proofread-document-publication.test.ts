@@ -121,7 +121,7 @@ describe("proofread document publication", () => {
     } finally {
       await e.close();
     }
-  });
+  }, 0);
 });
 
 it("keeps a published version after CAS loss, rejects stale raw inputs, and returns fixed draft corrections with bounded continuation", async () => {

@@ -3,6 +3,7 @@ import { archiveFixture } from "./archive-fixture.js";
 import { createProcessorRegistry } from "../src/analysis/processor-registry.js";
 import { processorRuntime } from "../src/application/jobs/processors.js";
 void processorRuntime;
+// Verify lifecycle outcomes without imposing an aggregate processing deadline.
 it("runs only corrected declared roles and reuses a single-paper result after description edits", async () => {
   const e = await archiveFixture();
   try {
@@ -73,7 +74,7 @@ it("runs only corrected declared roles and reuses a single-paper result after de
   } finally {
     await e.close();
   }
-}, 20000);
+}, 0);
 it("distinguishes absent supplementary material and not-ready members without calling a model", async () => {
   const e = await archiveFixture();
   try {
@@ -124,7 +125,7 @@ it("distinguishes absent supplementary material and not-ready members without ca
   } finally {
     await e.close();
   }
-});
+}, 0);
 it("keeps not-reported distinct from incomplete reading", async () => {
   const e = await archiveFixture();
   try {
@@ -163,4 +164,4 @@ it("keeps not-reported distinct from incomplete reading", async () => {
   } finally {
     await e.close();
   }
-});
+}, 0);

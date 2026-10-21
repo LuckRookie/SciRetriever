@@ -411,7 +411,7 @@
     overflow: auto;
   }
   .reader-evidence-preview blockquote {
-    white-space: pre-wrap;
+    white-space: normal;
     font: var(--text-secondary) / 1.65 var(--serif);
     margin: 0;
   }
@@ -467,7 +467,9 @@
       box-shadow: var(--shadow-pop);
     }
     .reader-toolbar-context {
-      display: none;
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-1);
     }
     .reader-toolbar {
       gap: var(--space-1);
@@ -525,4 +527,28 @@
 .reading-block-source.reading-block-uncertain {
   display: inline-flex;
   color: var(--warning-text, #895b15);
+}
+
+@layer pages {
+  .reader-value-check {
+    margin-block: var(--space-2);
+    font: var(--text-caption) / 1.65 var(--sans);
+    color: var(--fg2);
+  }
+  .reader-value-check > summary {
+    cursor: pointer;
+    width: fit-content;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line);
+  }
+  .reader-value-check[data-status="uncertain"] > summary {
+    color: var(--ink);
+    border-style: dashed;
+  }
+  .reader-value-check p { margin-block: var(--space-2); }
+  .reader-check-source { padding-inline-start: var(--space-3); border-inline-start: 2px solid var(--line); }
+  .reader-evidence-preview { max-height: none; overflow-wrap: anywhere; }
+  .reader-evidence-preview .reader-prose { font: var(--text-secondary) / 1.7 var(--serif); }
+  .reader-evidence-preview .katex-display { overflow-x: auto; overflow-y: hidden; }
 }

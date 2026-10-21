@@ -7,3 +7,5 @@ React Aria 提供按下、键盘、焦点和弹层行为；`index.tsx` 是页面
 组件使用示例和可交互状态位于 [画廊](../features/lab/README.md)。[应用源码](../README.md)
 
 普通 Button 在等待超过1秒后给出“正在提交…”；原标签继续提供稳定的可访问名称和宽度，pending覆盖层不挤动布局。提交中的React Aria状态保留焦点且阻止重复执行。Disclosure折叠不卸载子组件；短内容采用共同collapse/position FLIP，超过480px的内容及减少动效直接展开，不逐帧改变高度。
+
+证据 Popover 以触发点所在阅读区域限制尺寸与定位，最大高度交给 React Aria 的定位器计算；保留关闭预览按钮和 Escape 关闭，异步内容、缩放或视口变化后也能恢复页面操作。文内悬停预览保留独立非模态行为。

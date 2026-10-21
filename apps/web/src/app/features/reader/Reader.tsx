@@ -1,3 +1,4 @@
+import { markdown } from "../../../reading/markdown.js";
 import type { DocumentReadResultMap } from "@sciretriever/contracts";
 import { parsePageRegion } from "@sciretriever/contracts";
 import { useQuery } from "@tanstack/react-query";
@@ -962,7 +963,12 @@ export default function Reader() {
         {documentLink && (
           <div className="reader-evidence-preview">
             <strong>{documentLink.title}</strong>
-            <blockquote>{documentLink.text}</blockquote>
+            <div
+              className="reader-prose"
+              dangerouslySetInnerHTML={{
+                __html: markdown.parse(documentLink.text),
+              }}
+            />
             <Button
               onPress={() => {
                 documentLink.activate();

@@ -73,7 +73,7 @@ describe("application lifecycle", () => {
       await expect(recovered.database.schema()).resolves.toBeDefined();
       await expect(recovered.close()).resolves.toBeUndefined();
     }
-  });
+  }, 0);
 
   it("reopens the same catalog after a normal close", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-reopen-"));

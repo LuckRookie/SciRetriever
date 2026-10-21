@@ -43,7 +43,7 @@ it("requires explicit parsing, builds a durable archive, reuses model steps and 
   } finally {
     await e.close();
   }
-});
+}, 0);
 
 it("records parser pages, per-step usage and batch consolidation independently", async () => {
   const e = await archiveFixture();

@@ -687,11 +687,13 @@ function Viewer({
           {view.session_outcome?.kind === "published" ? (
             <p>PDF 已入库</p>
           ) : view.session_outcome?.kind === "retained" ? (
-            <p>候选已保留：{view.session_outcome.code}</p>
+            <p>
+              候选已保留：{errorMessage(new Error(view.session_outcome.code))}
+            </p>
           ) : null}
           {view.session_cleanup_failure ? (
             <ErrorNotice
-              message={`资源清理未完成：${view.session_cleanup_failure}`}
+              message={`资源清理未完成：${errorMessage(new Error(view.session_cleanup_failure))}`}
             />
           ) : null}
           {observed ? (

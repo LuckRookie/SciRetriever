@@ -60,4 +60,4 @@ it("persists a failed map as an incomplete member and does not reduce it into a 
   } finally {
     await e.close();
   }
-});
+}, 0);

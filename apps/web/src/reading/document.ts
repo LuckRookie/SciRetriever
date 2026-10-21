@@ -6,7 +6,7 @@ import {
 } from "@sciretriever/contracts";
 import type { ReadingContext } from "./contract.js";
 import type { FixedSource } from "./source.js";
-import { button } from "./dom.js";
+import { button, readerErrorMessage } from "./dom.js";
 import type { ReaderFrame } from "./contract.js";
 import type { ReadingPosition } from "./state.js";
 import { readDocument } from "./transport.js";
@@ -193,9 +193,12 @@ export async function renderDocument(
               };
               el.replaceChildren(image);
             })
-            .catch((error) => {
+            .catch((error: unknown) => {
               if (!ctx.signal.aborted && el.isConnected)
-                el.textContent = `图片暂不可读：${error instanceof Error ? error.message : "未知错误"}`;
+                el.textContent = readerErrorMessage(
+                  error,
+                  "图片暂不可读：读取或校验未完成，原正文仍可阅读。",
+                );
             });
         }
     },
@@ -345,10 +348,17 @@ export async function renderDocument(
         anchor: link,
         title: heading.textContent ?? "文内引用",
         text: snippets.join("\n").slice(0, 1200),
-        activate: () => go(Number(section.dataset.byteStart), 0, true),
+        activate: () => {
+          ++jumpRevision;
+          go(Number(section.dataset.byteStart), 0, true);
+        },
       };
       link.title = preview.text;
-      const show = () => frame.onDocumentLink?.(preview);
+      const show = () => {
+        // A late outline must not scroll away from a preview the user opened.
+        ++jumpRevision;
+        frame.onDocumentLink?.(preview);
+      };
       link.onmouseenter = show;
       link.onfocus = show;
       link.onclick = (event) => {
@@ -498,7 +508,10 @@ export async function renderDocument(
       state.loadedEnd = end;
     } catch (error) {
       if (!ctx.signal.aborted) {
-        frame.status.textContent = `正文未加载完成：${error instanceof Error ? error.message : "请重试"}`;
+        frame.status.textContent = readerErrorMessage(
+          error,
+          "正文无法完成读取或校验；已读内容保留，请重试。",
+        );
         autoFailed = true;
         more.hidden = !!frame.onIssue;
         frame.onIssue?.("加载暂停，已读正文保留。", async () => {
@@ -565,6 +578,7 @@ export async function renderDocument(
     state.loadedEnd,
     source?.kind === "document" ? source.end_utf8 : target + 1,
   );
+  const initialRevision = jumpRevision;
   await load();
   do {
     const page: DocumentReadResultMap["outline"] = await readDocument(
@@ -600,11 +614,11 @@ export async function renderDocument(
   } while (cursor);
   if (!frame.onOutline && !frame.outline.childElementCount)
     frame.outline.textContent = "没有可靠章节目录；正文仍可连续阅读。";
-  const initialRevision = jumpRevision;
   while (!finished && end < targetEnd && initialRevision === jumpRevision)
     await load();
   if (initialRevision === jumpRevision)
-    go(target, source?.kind === "document" ? 0 : state.blockOffset, true);
+    // Restore before interaction without leaving an animated scroll in flight.
+    go(target, source?.kind === "document" ? 0 : state.blockOffset);
   restoring = false;
   continuationObserver.observe(tail);
   void prefetch();

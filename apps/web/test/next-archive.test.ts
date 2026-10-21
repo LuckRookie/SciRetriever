@@ -456,23 +456,38 @@ it("recovers archive issues and keeps an unparsed supplement non-blocking in the
 }, 60000);
 
 it("preserves summary reading position and presents evidence on demand across screen sizes", async () => {
-  const w = await nextWorkspace();
+  const w = await nextWorkspace({
+    setup: async (e) => {
+      e.setText(
+        "# Measurements\nThe reagent $\\mathrm{SnBu}_4$ was measured at 4.2 eV. " +
+          "Additional cited context and experimental procedure. ".repeat(50) +
+          "\n\n## Context\nA separate discussion.\n",
+      );
+    },
+  });
   try {
     const e = w.env,
       id = e.parseRequest.literature_id;
-    e.setModel((input) => ({
-      outcome: "completed",
-      title: "Synthetic summary",
-      statements: Array.from({ length: 24 }, (_, index) => ({
-        statement_id: `s${index + 1}`,
-        category: "finding",
-        epistemic: "reported",
-        text: `第 ${index + 1} 项测量：合成材料用于验证总结排版、长文位置和证据核对，不代表实际研究结论。`,
-        conditions: [],
-        quantity: null,
-        evidence_segment_ids: [input.segments![0]!.segment_id],
-      })),
-    }));
+    let citedSegment = "";
+    const experimentId = "00000000-0000-0000-0000-000000009999";
+    e.setModel((input) => {
+      citedSegment = input.segments!.find((s) =>
+        s.text.includes("SnBu"),
+      )!.segment_id;
+      return {
+        outcome: "completed",
+        title: "Synthetic summary",
+        statements: Array.from({ length: 24 }, (_, index) => ({
+          statement_id: `s${index + 1}`,
+          category: "finding",
+          epistemic: "reported",
+          text: `第 ${index + 1} 项测量：合成材料用于验证总结排版、长文位置和证据核对，不代表实际研究结论。【${citedSegment}】实验编号【${experimentId}】。`,
+          conditions: [],
+          quantity: null,
+          evidence_segment_ids: [citedSegment],
+        })),
+      };
+    });
     await e.app.processors!.runBatch({
       schema_version: 1,
       idempotency_key: "summary-layout",
@@ -487,6 +502,9 @@ it("preserves summary reading position and presents evidence on demand across sc
     await summary
       .getByRole("region", { name: "总结条目 24", exact: true })
       .waitFor();
+    const prose = await summary.locator(".reader-prose").first().innerText();
+    expect(prose).not.toContain(citedSegment);
+    expect(prose).toContain(`实验编号【${experimentId}】`);
     await p.screenshot({
       path: "/tmp/sciretriever-archive-implementation-yzz1ycub/reader-desktop.png",
     });
@@ -511,6 +529,66 @@ it("preserves summary reading position and presents evidence on demand across sc
       .getByRole("button", { name: "在原文中核对", exact: true })
       .waitFor();
     await p.keyboard.press("Escape");
+    const firstClaim = summary.getByRole("region", {
+      name: "总结条目 1",
+      exact: true,
+    });
+    expect(
+      await firstClaim.locator(".reader-value-check").getAttribute("open"),
+    ).toBeNull();
+    await firstClaim.locator(".reader-value-check > summary").click();
+    expect(await firstClaim.innerText()).not.toMatch(
+      /At least one|corrected fragment|verification-not-configured/,
+    );
+    await firstClaim
+      .getByRole("button", { name: "查看对应原文", exact: true })
+      .first()
+      .click();
+    await p
+      .getByRole("button", { name: "在原文中核对", exact: true })
+      .waitFor();
+    await p.keyboard.press("Escape");
+    for (const width of [1440, 390]) {
+      await p.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
+      const citation = summary.getByRole("button", {
+        name: "[1.1]",
+        exact: true,
+      });
+      await citation.scrollIntoViewIfNeeded();
+      await p.evaluate(() => new Promise(requestAnimationFrame));
+      await citation.click();
+      const preview = p.getByRole("dialog", { name: "证据 1.1", exact: true });
+      await preview
+        .getByRole("button", { name: "在原文中核对", exact: true })
+        .waitFor();
+      expect(await preview.locator(".katex").count()).toBeGreaterThan(0);
+      await expect
+        .poll(async () => {
+          const popup = await p.locator(".ui-evidence-popover").boundingBox();
+          const area = await p.locator(".reader-surface").boundingBox();
+          return (
+            !!popup &&
+            !!area &&
+            popup.x >= area.x - 1 &&
+            popup.x + popup.width <= area.x + area.width + 1 &&
+            popup.y >= Math.max(0, area.y) - 1 &&
+            popup.y + popup.height <=
+              Math.min(width === 390 ? 844 : 1000, area.y + area.height) + 1
+          );
+        })
+        .toBe(true);
+      await p.keyboard.press("Escape");
+    }
+    await p.getByRole("tab", { name: "全文", exact: true }).click();
+    await p.getByRole("button", { name: "显示核对依据", exact: true }).click();
+    await p.getByRole("button", { name: "校订对照", exact: true }).click();
+    await p
+      .getByRole("dialog", { name: "校订区块对照", exact: true })
+      .locator(".katex")
+      .first()
+      .waitFor();
+    await p.keyboard.press("Escape");
+    await p.setViewportSize({ width: 1440, height: 1000 });
     await p.getByRole("button", { name: "词表", exact: true }).click();
     await p.getByRole("button", { name: "Spectroscopy", exact: true }).click();
     await p
@@ -528,6 +606,49 @@ it("preserves summary reading position and presents evidence on demand across sc
         () => document.documentElement.scrollWidth <= innerWidth,
       ),
     ).toBe(true);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 60000);
+
+it("shows all states and styled ranked tags on a cold library entry", async () => {
+  const w = await nextWorkspace({
+    setup: async (e) => {
+      await e.app.maintenance!.ingestPdf({
+        literature_id: missingId,
+        bytes: workbenchPdf("10.1000/unparsed"),
+      });
+    },
+  });
+  try {
+    const p = w.page;
+    // No archive, vocabulary or reader route has been loaded in this browser.
+    await expect.poll(() => p.locator(".paper-row").count()).toBe(2);
+    await p.getByText("Unparsed source", { exact: true }).waitFor();
+    expect(
+      await p
+        .locator(".paper-status small")
+        .first()
+        .evaluate((el) => getComputedStyle(el).display),
+    ).toBe("block");
+    const tags = p.locator(".paper-tags").first();
+    await tags.waitFor();
+    expect(await tags.evaluate((el) => getComputedStyle(el).display)).toBe(
+      "flex",
+    );
+    expect(
+      await tags.evaluate((el) => parseFloat(getComputedStyle(el).columnGap)),
+    ).toBeGreaterThan(0);
+    const primary = tags.locator(".paper-tag.primary");
+    expect(
+      await primary.evaluate((el) => Number(getComputedStyle(el).fontWeight)),
+    ).toBeGreaterThanOrEqual(600);
+    expect(
+      await primary.evaluate((el) => getComputedStyle(el).borderStyle),
+    ).toBe("solid");
+    await select(p, "材料状态", "已就绪");
+    await expect.poll(() => p.locator(".paper-row").count()).toBe(1);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

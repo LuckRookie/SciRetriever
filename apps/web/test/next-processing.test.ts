@@ -291,7 +291,7 @@ it("retains drafts and idempotent requests after a lost save receipt and a faile
           .getByRole("alert")
           .textContent(),
       )
-      .toContain("test-lost-receipt");
+      .toContain("草稿已保留");
     expect(await w.env.app.jobs!.listJobs(10)).toHaveLength(1);
     await w.page
       .getByRole("dialog")

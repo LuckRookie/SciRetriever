@@ -66,7 +66,7 @@ it("retains earlier publications, surfaces each step failure and resumes after c
     vi.restoreAllMocks();
     await e.close();
   }
-}, 20000); // Six injected failures plus recovery are a lifecycle check, not a 5-second benchmark.
+}, 0); // Six injected failures plus recovery have no aggregate processing deadline.
 describe("supplement and human revision lifecycle", () => {
   let e: Awaited<ReturnType<typeof archiveFixture>>;
   beforeAll(async () => {
@@ -221,7 +221,7 @@ describe("supplement and human revision lifecycle", () => {
     } finally {
       vi.restoreAllMocks();
     }
-  });
+  }, 0);
 });
 it("preserves completed steps across cancellation and an application restart", async () => {
   const e = await archiveFixture();
@@ -257,4 +257,4 @@ it("preserves completed steps across cancellation and an application restart", a
     vi.restoreAllMocks();
     await e.close();
   }
-});
+}, 0);

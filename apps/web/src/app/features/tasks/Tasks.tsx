@@ -265,7 +265,8 @@ function formatDate(value: unknown) {
 }
 function detailsText(value: JsonRecord): string {
   for (const name of ["reason", "message", "detail", "code", "kind", "status"])
-    if (typeof value[name] === "string") return String(value[name]);
+    if (typeof value[name] === "string")
+      return errorMessage(new Error(String(value[name])));
   return "详细信息已保留，可展开查看。";
 }
 export function TaskDetails({ id }: { id: string }) {

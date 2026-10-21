@@ -1,3 +1,5 @@
+import { markdown } from "../../../reading/markdown.js";
+import { valueCheckReason } from "../../strings.js";
 import { ResultState } from "../archive/ResultState.js";
 import { archiveWrite } from "../../data/archive.js";
 import { useEffect, useMemo, useState } from "react";
@@ -663,7 +665,7 @@ function Detail({
                     <span
                       key={c.pointer}
                       className="ui-description"
-                      title={c.reason}
+                      title={valueCheckReason(c.reason)}
                     >
                       {" "}
                       ·{" "}
@@ -912,9 +914,14 @@ function Detail({
       {standalone?.result.content.kind === "report" ? (
         <section>
           <h3>已保存的结果正文</h3>
-          <p className="result-text">
-            {standalone.result.content.text.slice(0, 32000)}
-          </p>
+          <div
+            className="result-text reader-prose"
+            dangerouslySetInnerHTML={{
+              __html: markdown.parse(
+                standalone.result.content.text.slice(0, 32000),
+              ),
+            }}
+          />
           {standalone.result.content.text.length > 32000 ? (
             <p className="ui-description">
               正文较长，此处预览前 32000 字符；下载包含完整正文与来源。

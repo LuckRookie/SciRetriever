@@ -1,3 +1,4 @@
+import { errorMessage } from "../strings.js";
 import {
   createContext,
   useContext,
@@ -60,7 +61,7 @@ export function ErrorNotice({
     <div className="ui-error-notice" role="alert">
       <Icon name="warning" />
       <div>
-        <p>{message}</p>
+        <p>{errorMessage(new Error(message))}</p>
         {retained ? <p className="ui-description">{retained}</p> : null}
         {onRetry ? (
           <Button size="compact" onPress={onRetry}>

@@ -242,7 +242,10 @@ export class ApiClient {
       const code =
         typeof value.code === "string" ? value.code : `http-${response.status}`;
       throw new ApiError(
-        typeof value.reason === "string" ? value.reason : code,
+        typeof value.reason === "string" &&
+        /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/u.test(value.reason)
+          ? value.reason
+          : code,
         code,
         response.status >= 500 || response.status === 429
           ? "retryable"

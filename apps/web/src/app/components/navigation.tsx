@@ -1,4 +1,12 @@
-import { useId, type ReactNode, type RefObject } from "react";
+import {
+  useId,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   Button as AriaButton,
   Dialog,
@@ -265,6 +273,50 @@ export function Menu({
   );
 }
 export { AriaMenuTrigger as MenuTrigger };
+function usePreviewBoundary(anchor: RefObject<Element | null>, open: boolean) {
+  const [boundary, setBoundary] = useState<HTMLElement>();
+  const [size, setSize] = useState<{
+    width: number;
+    maxWidth: number;
+    maxHeight: number;
+  }>();
+  useLayoutEffect(() => {
+    if (!open) return;
+    const element = anchor.current?.closest<HTMLElement>(
+      ".reader-surface, .react-reader",
+    );
+    if (!element) return;
+    setBoundary(element);
+    const measure = () => {
+      const rect = element.getBoundingClientRect();
+      setSize({
+        width: Math.max(0, Math.min(400, rect.width - 16)),
+        maxWidth: Math.max(0, Math.min(400, rect.width - 16)),
+        maxHeight: Math.max(
+          0,
+          Math.min(innerHeight, rect.bottom) - Math.max(0, rect.top) - 16,
+        ),
+      });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [anchor, open]);
+  return {
+    ...(boundary ? { boundaryElement: boundary } : {}),
+    ...(size
+      ? {
+          maxHeight: size.maxHeight,
+          style: { width: size.width, maxWidth: size.maxWidth },
+        }
+      : {}),
+  };
+}
 export function Popover({
   label,
   children,
@@ -274,18 +326,46 @@ export function Popover({
   children: ReactNode;
   trigger?: ReactNode;
 }) {
+  const anchor = useRef<HTMLSpanElement>(null);
+  const [open, setOpen] = useState(false);
+  const boundary = usePreviewBoundary(anchor, open);
+  useEffect(() => {
+    if (!open) return;
+    // Escape also works when resize or async content leaves focus on the trigger.
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+    };
+    document.addEventListener("keydown", dismiss, true);
+    return () => document.removeEventListener("keydown", dismiss, true);
+  }, [open]);
   return (
-    <DialogTrigger>
-      <Button variant="text">{trigger ?? label}</Button>
-      <AriaPopover
-        className="ui-popover ui-evidence-popover"
-        placement="bottom"
-      >
-        <Dialog aria-label={label} className="ui-popover-content">
-          {children}
-        </Dialog>
-      </AriaPopover>
-    </DialogTrigger>
+    <span ref={anchor} className="ui-popover-trigger">
+      <DialogTrigger isOpen={open} onOpenChange={setOpen}>
+        <Button variant="text">{trigger ?? label}</Button>
+        <AriaPopover
+          className="ui-popover ui-evidence-popover"
+          placement="bottom"
+          containerPadding={8}
+          {...boundary}
+        >
+          <Dialog aria-label={label} className="ui-popover-content">
+            <div className="ui-popover-actions">
+              <Button
+                variant="text"
+                size="compact"
+                onPress={() => setOpen(false)}
+              >
+                关闭预览
+              </Button>
+            </div>
+            {children}
+          </Dialog>
+        </AriaPopover>
+      </DialogTrigger>
+    </span>
   );
 }
 /** Engine-owned hover previews keep focus on their anchor; nested modal Dialog autofocus would close them during pointer entry. */
@@ -302,10 +382,13 @@ export function AnchoredPopover({
   triggerRef: RefObject<Element | null>;
   children: ReactNode;
 }) {
+  const boundary = usePreviewBoundary(triggerRef, isOpen);
   return (
     <AriaPopover
       className="ui-popover ui-evidence-popover"
       placement="bottom"
+      containerPadding={8}
+      {...boundary}
       trigger="PreviewTrigger"
       aria-label={label}
       triggerRef={triggerRef}

@@ -145,7 +145,7 @@ describe("durable proofreading and human locks", () => {
     } finally {
       await e.close();
     }
-  });
+  }, 0);
   it("cancellation never changes the current version or starts MinerU", async () => {
     const e = await coreProcessingFixture();
     try {

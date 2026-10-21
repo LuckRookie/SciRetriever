@@ -180,7 +180,7 @@ describe("external extraction preparation", () => {
       await query?.close();
       await env.close();
     }
-  });
+  }, 0);
   it("rejects unknown keywords and remote refs, and keeps different Unicode payloads distinct", async () => {
     await expect(
       validateExtractionSpec(
@@ -367,7 +367,7 @@ describe("external extraction preparation", () => {
       await query?.close();
       await env.close();
     }
-  });
+  }, 0);
   it("preserves document integrity errors and waits for in-flight preparation during reentrant close", async () => {
     const env = await fixture();
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
@@ -432,7 +432,7 @@ describe("external extraction preparation", () => {
       await query?.close();
       await env.close();
     }
-  });
+  }, 0);
   it("serves the real preparation over loopback HTTP and rejects duplicate JSON keys", async () => {
     const env = await fixture();
     let workbench:
@@ -485,7 +485,7 @@ describe("external extraction preparation", () => {
       await workbench?.close();
       await rm(env.home, { recursive: true, force: true });
     }
-  });
+  }, 0);
   it("cancels an in-flight HTTP preparation when its client disconnects", async () => {
     const env = await fixture();
     let workbench:

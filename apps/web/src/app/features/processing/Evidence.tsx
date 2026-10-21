@@ -1,3 +1,4 @@
+import { markdown } from "../../../reading/markdown.js";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   processorJson,
@@ -213,9 +214,14 @@ function Passage({
         </>
       ) : (
         <>
-          <blockquote>
-            {data.data?.pages.map((page) => page.text ?? "").join("")}
-          </blockquote>
+          <blockquote
+            className="reader-prose"
+            dangerouslySetInnerHTML={{
+              __html: markdown.parse(
+                data.data?.pages.map((page) => page.text ?? "").join("") ?? "",
+              ),
+            }}
+          />
           {first ? (
             <p className="ui-description">
               {data.hasNextPage ? "已读取部分证据。" : "已读取完整证据。"}

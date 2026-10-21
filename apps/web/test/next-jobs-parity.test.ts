@@ -180,7 +180,7 @@ describe("durable task workbench", () => {
       await control("启动").click();
       await expect
         .poll(() => drawer.getByRole("alert").allTextContents())
-        .toContainEqual(expect.stringContaining("command-rejected"));
+        .toContainEqual(expect.stringContaining("任务操作未被接受"));
       expect(await control("启动").isEnabled()).toBe(true);
       runGate = new Promise<void>((resolve) => {
         releaseRun = resolve;
@@ -266,7 +266,7 @@ describe("durable task workbench", () => {
             page.locator(".tasks-page").getByRole("alert").allTextContents(),
           { timeout: 10000 },
         )
-        .toContainEqual(expect.stringContaining("fixture"));
+        .toContainEqual(expect.stringContaining("操作未完成"));
       expect(await page.locator(".tasks-list [data-task-id]").count()).toBe(2);
       await page.unroute(listUrl, failedList);
       await page.getByRole("button", { name: "刷新任务", exact: true }).click();

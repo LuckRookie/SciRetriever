@@ -1,3 +1,4 @@
+import { errorMessage } from "../strings.js";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   Button as AriaButton,
@@ -72,7 +73,7 @@ export function Button({
       await onPress?.();
       setConfirming(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "操作未完成，请重试。");
+      setError(errorMessage(cause));
     } finally {
       busy.current = false;
       setPending(false);

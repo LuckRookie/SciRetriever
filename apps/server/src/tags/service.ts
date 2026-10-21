@@ -418,7 +418,7 @@ export class TagService {
             items,
             expected_revision: before?.revision ?? 0,
             expected_version: state.version,
-            reason: "Archive tagging",
+            reason: "archive-tagging",
             model: model.identity,
           },
           "auto",

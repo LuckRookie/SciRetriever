@@ -118,7 +118,7 @@ it("uses the explicitly registered Markdown-only VLM source and exposes read-onl
   } finally {
     await e.close();
   }
-});
+}, 0);
 it("executes archive members concurrently under one existing queue lease", async () => {
   const e = await archiveFixture();
   let release!: () => void;
@@ -196,4 +196,4 @@ it("executes archive members concurrently under one existing queue lease", async
     vi.restoreAllMocks();
     await e.close();
   }
-});
+}, 0);

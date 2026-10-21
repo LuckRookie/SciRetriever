@@ -315,7 +315,7 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
     await confirm(page, "接纳 PDF");
     await expect
       .poll(() => page.getByRole("alert").textContent())
-      .toContain("manual-pdf-invalid");
+      .toContain("有效的 PDF");
     expect(
       (
         await workbench.application.library.detail(
@@ -389,7 +389,7 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
     await confirm(page, "接纳 PDF");
     await expect
       .poll(() => page.getByRole("alert").textContent())
-      .toContain("primary-asset-conflict");
+      .toContain("已有主 PDF");
 
     const queryOnly = await startQueryOnlyWorkbench({
       home,

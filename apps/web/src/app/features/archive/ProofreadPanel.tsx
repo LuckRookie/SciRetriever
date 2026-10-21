@@ -1,3 +1,4 @@
+import { markdown } from "../../../reading/markdown.js";
 import { useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { parsePageRegion } from "@sciretriever/contracts";
@@ -257,17 +258,25 @@ export function ProofreadPanel({
               <div className="archive-split">
                 <section>
                   <h3>解析初稿</h3>
-                  <div className="archive-compare-text">
-                    {String(draft.html ?? draft.text)}
-                  </div>
+                  <div
+                    className="archive-compare-text"
+                    dangerouslySetInnerHTML={{
+                      __html: markdown.parse(String(draft.html ?? draft.text)),
+                    }}
+                  />
                 </section>
                 <section>
                   <h3>校订稿</h3>
-                  <div className="archive-compare-text">
-                    {block
-                      ? String(block.html ?? block.text)
-                      : "经核对已删除此区块"}
-                  </div>
+                  <div
+                    className="archive-compare-text"
+                    dangerouslySetInnerHTML={{
+                      __html: markdown.parse(
+                        block
+                          ? String(block.html ?? block.text)
+                          : "经核对已删除此区块",
+                      ),
+                    }}
+                  />
                 </section>
               </div>
               {block?.uncertainty ? (

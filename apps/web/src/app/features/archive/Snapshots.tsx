@@ -132,7 +132,7 @@ export default function Snapshots() {
   return (
     <div className="feature-page archive-page">
       <PageHeader
-        title={archiveStrings.snapshot}
+        title={route.section === "syn" ? "综合" : archiveStrings.snapshot}
         description="固定一组就绪文献及其内容版本，独立比较和加工。创建快照不会运行模型。"
       />
       {failure || action.error || snapshots.error ? (

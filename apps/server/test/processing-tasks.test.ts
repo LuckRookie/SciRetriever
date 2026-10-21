@@ -342,7 +342,7 @@ describe("durable product processing tasks", () => {
     } finally {
       await env.close();
     }
-  });
+  }, 0);
   it("stops in-flight parsing on pause, leaves later targets unstarted, and resumes against the original frozen requests", async () => {
     const env = await coreProcessingFixture();
     try {

@@ -395,3 +395,30 @@
     }
   }
 }
+
+@layer pages {
+  .paper-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    margin-top: 8px;
+    font-size: var(--text-caption);
+  }
+  .paper-tag {
+    display: inline-flex;
+    padding: 2px 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    color: var(--fg2);
+    background: var(--side);
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .paper-tag.primary {
+    color: var(--blue);
+    font-weight: 600;
+    border-color: var(--blue);
+  }
+}
+
+@layer pages { .paper-status small { display: block; margin-top: 4px; } }

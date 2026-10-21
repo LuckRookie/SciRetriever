@@ -578,7 +578,7 @@ describe("production task workbench composition", () => {
     } finally {
       await env.close();
     }
-  });
+  }, 0);
 
   it("pauses and resumes active processing, cancels queued work, and preserves committed material", async () => {
     const env = await fixture();

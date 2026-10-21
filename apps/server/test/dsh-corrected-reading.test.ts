@@ -178,7 +178,7 @@ it("cancels a continuing DSH read before any result is published", async () => {
   } finally {
     await f.close();
   }
-});
+}, 0);
 it("binds distant conditions and preserves bilingual negation", async () => {
   const f = await setup(
     `CONDITION_DRY_ONLY${"A".repeat(65536)}.\n\nMEASURE_4.2_eV.\n\nCANNOT_REDUCE.\n\nCHINESE_NEGATION.\n\nAFFIRMATIVE_CONTROL.`,

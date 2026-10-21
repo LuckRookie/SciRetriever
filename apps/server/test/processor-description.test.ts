@@ -138,4 +138,4 @@ it("supports metadata-only collection operators and invalidates only declared de
     await store?.close();
     await e.close();
   }
-});
+}, 0);

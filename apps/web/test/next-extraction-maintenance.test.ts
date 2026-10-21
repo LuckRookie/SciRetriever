@@ -344,7 +344,7 @@ it("delivers a v5 extraction batch through the real Chromium maintenance form an
     await confirm("提交候选批次");
     await expect
       .poll(() => page.getByTestId("delivery-feedback").textContent())
-      .toContain("operation-not-open");
+      .toContain("交付操作已关闭");
     await confirm("创建 operation");
     await expect
       .poll(() => page.getByTestId("delivery-feedback").textContent())
@@ -367,7 +367,7 @@ it("delivers a v5 extraction batch through the real Chromium maintenance form an
     await confirm("提交候选批次");
     await expect
       .poll(() => page.getByTestId("delivery-feedback").textContent())
-      .toContain("operation-not-open");
+      .toContain("交付操作已关闭");
   } finally {
     await browser?.close();
     await workbench?.close();

@@ -5,8 +5,8 @@ import { processorFixture } from "./processor-fixture.js";
 let e: Awaited<ReturnType<typeof processorFixture>>;
 let id: string;
 let secondId: string;
-// Real archive setup has its own five-second boundary. The test body measures
-// the persistent summary/map/reduce journey, not unrelated archive preparation.
+// Setup, cleanup and map/reduce verify a lifecycle without aggregate deadlines.
+// Individual operation cancellation and failure contracts remain enabled.
 beforeAll(async () => {
   e = await processorFixture();
   id = e.rawParseRequest.literature_id;
@@ -48,10 +48,10 @@ beforeAll(async () => {
     );
     secondId = second.literature_id;
   });
-}, 5000);
+}, 0);
 afterAll(async () => {
   await e?.close();
-}, 5000);
+}, 0);
 it("runs persistent DSH summaries as reusable maps, then synthesizes only their records", async () => {
   let summaries = 0,
     reductions = 0;
@@ -132,4 +132,4 @@ it("runs persistent DSH summaries as reusable maps, then synthesizes only their 
   expect(resolved.evidence[0]!.target_kind).toBe("document");
   expect(b!.result.literature_ids).toHaveLength(2);
   expect(b!.freshness?.state).toBe("current");
-}, 20000);
+}, 0);

@@ -838,7 +838,7 @@ describe("extraction candidate delivery on v5", () => {
     } finally {
       await env.close();
     }
-  });
+  }, 0);
   it("checks named cross-input relations and accepts explicit zero-record or failed coverage", async () => {
     const env = await environment();
     try {

@@ -368,7 +368,7 @@ it("public parsing freezes input, reports both outcomes, and never publishes a D
   } finally {
     await e.close();
   }
-});
+}, 0);
 it("prepares both profiles outside the operation commit queue and publishes each through it", async () => {
   const e = await fixture();
   let arrived = 0,

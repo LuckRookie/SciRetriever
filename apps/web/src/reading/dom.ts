@@ -1,4 +1,10 @@
 import type { ReaderFrame } from "./contract.js";
+/** Preserve reader-owned Chinese diagnostics; never display raw transport errors. */
+export function readerErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && /[\u3400-\u9fff]/u.test(error.message)
+    ? error.message
+    : fallback;
+}
 export function node<T extends HTMLElement = HTMLElement>(
   selector: string,
   root: ParentNode,
@@ -35,8 +41,10 @@ export function button(
           .closest(".reader-workspace")
           ?.querySelector(".reading-status");
         if (host)
-          host.textContent =
-            error instanceof Error ? error.message : "阅读操作未完成";
+          host.textContent = readerErrorMessage(
+            error,
+            "阅读操作未完成，请重试；已读内容保留。",
+          );
       })
       .finally(() => {
         element.disabled = false;
