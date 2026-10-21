@@ -6,7 +6,7 @@
 
 | 原测试文件 | 被替代的行为 | 当前覆盖与剩余工作 |
 | --- | --- | --- |
-| `knowledge-analysis.test.ts` | 单篇总结由 summary@2 生成，删除旧 artifact/default CAS 协议；DSH 阅读不变量保留。 | processor-reliability、processor-workflow、processor-archive、dsh-document-session；长文 DSH 用例迁移中 |
+| `knowledge-analysis.test.ts` | 单篇总结由 summary@2 生成，删除旧 artifact/default CAS 协议；DSH 阅读不变量保留。 | processor-reliability、processor-workflow、processor-archive、dsh-document-session；dsh-corrected-reading 的连续读取/UTF-8/8192+ 区块/取消/否定断言已迁移 |
 
 ## knowledge-analysis.test.ts
 
@@ -34,7 +34,7 @@
 - binds a distant condition and result to two original evidence references
 - preserves English and Chinese negation without deterministic rewriting
 
-| `knowledge-retrieval.test.ts` | 旧知识表及旧 statement 索引被处理结果投影取代；检索不得读后触发模型。 | result-context-current、processor-workflow、processor-reliability、material-context；损坏来源继续读取用例待补 |
+| `knowledge-retrieval.test.ts` | 旧知识表及旧 statement 索引被处理结果投影取代；检索不得读后触发模型。 | result-context-current、processor-workflow、processor-reliability、material-context；result-context-current 已覆盖损坏来源、健康结果与关闭生命周期 |
 
 ## knowledge-retrieval.test.ts
 
@@ -107,9 +107,18 @@
 - [x] 回收与崩溃恢复：改用独立合成孤儿文件，不再借用已删除的无可用内容流程。定向 6 项通过。
 - [x] DSH 图文阅读、伪造引用纠正：改用真正的校订稿，持续会话 8 次调用测试通过。
 - [x] 新知识检索：范围、固定结果哈希、证据、跨页插入、只读查询对象图、混合检索；定向 1 个集成场景通过。
-- [ ] 长文连续读取、UTF-8、尾部和否定语义、取消、错误用量的独立断言完成迁移。
-- [ ] 检索的来源损坏、总读取预算、健康分支与关闭生命周期断言完成迁移。
-- [ ] 安装、CLI/MCP/HTTP 和 Web 的旧操作调用全部改为当前合同。
-- [ ] 测试 strict 类型检查、最终集中 Full 通过。
+- [x] 长文连续读取、UTF-8、尾部和否定语义、取消、错误用量的独立断言完成迁移。
+- [x] 检索的来源损坏、总读取预算、健康分支与关闭生命周期断言完成迁移。
+- [x] 安装、CLI/MCP/HTTP 和 Web 的旧操作调用全部改为当前合同；完整执行留在最终 Full。
+- [x] 源码与测试 strict 类型检查：本轮最终 `pnpm quick` 通过（final-quick.log）。
+- [ ] 最终集中 Full 通过：唯一一次 Full 原始结果仍为 32 项失败；后续定向收敛不能改写为 Full 通过，详见 12。
 
 [计划入口](README.md)
+
+## 收尾源码核对（2026-10-21）
+
+生产 `document/builder.ts` 和旧任务 analyze/analyze-long 的 Web 投影分支删除，大小上限移到 limits.ts。旧 ATX 从 Markdown 猜目录的测试随已撤销的生产路径删除；有效 Unicode、尾部、结构范围、字节上限及取消断言转入 proofread-document-builder。新 builder 明确按区块类型决定 heading，并支持长循环取消。`builder-retirement.log`：2 文件、30 项通过。解析文本保真继续由 mineru-http 断言，不经旧 builder 重建。
+
+result-context-current 覆盖损坏结果时保留健康来源、只读查询与关闭等待；retrieval-context 覆盖原始文档读取预算、坏源与索引代际；dsh-corrected-reading 与 dsh-long-fixture 覆盖长文、UTF-8、尾部、否定和取消。旧默认 artifact CAS、旧知识链式综合和“无总结就删 PDF”属于已撤销合同，不迁为新功能。
+
+2026-10-21 收尾：200 篇复用已在取消总超时后通过，原 Full 32 个失败全部有定向通过映射；最终集中 Full 的原始失败记录不改写，仍保留上方未勾选状态。

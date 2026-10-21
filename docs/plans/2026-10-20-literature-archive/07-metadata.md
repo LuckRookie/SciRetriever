@@ -1,6 +1,6 @@
 # 07 元数据：出版形式、文章性质与字段来源
 
-状态：Partial（单一当前 schema、字段与公开入口已接入；一次性旧库转换与相应身份索引验证未完成）。执行者：Codex，单独实施。
+状态：Completed（9/9；当前 schema、字段、接口与一次性转换的合成验证完成；真实库操作留在 12/GR）。执行者：Codex，单独实施。
 
 **Outcome**：
 
@@ -77,13 +77,13 @@
 
   无法映射的值，映射结果为空，原始值保留。映射表本身带版本号。
 
-- [ ] **7.3 catalog 迁移**
+- [x] **7.3 一次性 catalog 副本转换**
 
   - 修改 `literature_metadata`、`metadata_observations` 及相关表的列：删除 `document_type`，新增两个枚举列，并加 CHECK 约束。
   - 迁移时对现有数据执行 7.2 的映射：
     - 已接纳元数据：出版形式取映射结果，文章性质只取映射提示，最终以建档为准。
     - 观测：原始值写入 `source_type`。
-  - 迁移脚本遵循现有的 `schema-v*.ts` 和迁移准入方式。
+  - 遵守 Owner 的单一 schema 决定：不恢复迁移阶梯；一次性工具先备份，再向唯一当前 schema 转换，拒绝覆盖目标。
   - 必须做合成库迁移测试，覆盖各种原始值和空值。
   - 真实库迁移只能在 GR 后，在隔离副本上执行（12.3）。
 
@@ -147,12 +147,12 @@
   - Browser 决策中使用的 `document_type`（`browser/boundary.ts`、`browser/decision.ts`）改为传递出版形式。
   - 检查所有引用 `document_type` 的生产代码与测试，确保没有遗留。
 
-- [ ] **7.8 旧分析路径**
+- [x] **7.8 旧分析路径退役**
 
-  - 旧的两阶段分析中的元数据阶段（`analysis/service.ts`），在 12 之前保持可运行，但改用新字段。
-  - 旧阶段产生的文章性质提议，只作为来源提示写入，不覆盖建档结果。
+  - 按 Owner 不保留两套逻辑的决定，删除 `analysis/service.ts` 及其两阶段生产调用；元数据由建档与 Literature 字段 owner 接纳，summary 作为算子运行。
+  - 不恢复已被撤销的兼容阶段。
 
-- [ ] **7.9 身份后备匹配**
+- [x] **7.9 身份后备匹配**
 
   ADR 0037 修订了 ADR 0002 第 6 条：
   - `literature/identity-rules.ts` 中的严格后备匹配键，由 `document_type` 改为出版形式；
@@ -244,3 +244,9 @@
 ### 本轮结束 Full 证据
 
 结束 Full 中字段边界 32 项、元数据字段 11 项及档案元数据 2 项通过；不将这些证据用于证明真实库转换完成。 完整命令、失败分类和收尾后定向结果见[测试收敛记录](test-convergence.md)。本块勾选数不因旧流程测试通过而增加。
+
+## 一次性转换与退役核对（2026-10-21）
+
+执行基线 `8a705d8` 加当前 patch。一次性工具位于本机 `sandbox/cases/2026-10-21-catalog-copy/`，只显式接收源 catalog、源资产根与新的副本目录；不读用户配置、不切换服务，不成为产品兼容入口。使用 SQLite backup 保留 WAL，向唯一 schema 转换；未知非空表、未知列、非旧版文档或外部提取对旧文档的依赖均拒绝并保留诊断副本。原始 Markdown 通过现有 `stageLegacyRawParse` 和存储 owner 登记；四类旧派生事实及独占文件删除，共享原始文件保留。
+
+`node sandbox/cases/2026-10-21-catalog-copy/check.mjs` 通过。合成旧 schema 从基线 `2ccf2c2` 只在临时目录重建，没有引回生产。8 条元数据覆盖已知/未知/空类型；新 hash、revision、CHECK 约束、后备匹配、歧义拒绝、空形式不参与匹配、源文件字节不变、原始 Markdown 保留、四类删除、目标覆盖拒绝和未知事实拒绝均验证。证据 `/tmp/sciretriever-finalize-idyygvg6/catalog-copy-check.log`。这不是对真实库兼容性或 GR 的完成声明。

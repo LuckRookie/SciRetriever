@@ -1,6 +1,6 @@
 # 02 验证：页面类型、初稿质量与矫正效果
 
-状态：In progress（3/5；2.1–2.3 已完成，13 份真实试跑已收齐；2.4 Owner 抽看与 2.5 最终 GV 结论待确认）。执行者：2.1 文档执行者；2.2–2.4 Codex（只读样本与材料整理）；2.4 质量判断、2.5 与 GV/GQ 由 Owner 确认。
+状态：Completed（5/5；Owner 已将 2.4 的抽查与判断委托 Codex，完成原图抽查、表格修复及有限复验，按下述边界通过 GV）。执行者：2.1 文档执行者；2.2–2.4 Codex（只读样本与材料整理）；2.4 质量判断、2.5 与 GV/GQ 由 Owner 确认。
 
 > 本块按 ADR 0037 第二版重写（2026-10-20）。第一版的“双解析对齐率、仲裁正确率”验证已经不再需要：实测已证明区块对齐的前提不成立，见 ADR 0037 背景。
 
@@ -76,12 +76,12 @@
     - 校订失败的次数与原因。
   - 不允许用模型自评分数代替以上统计。
 
-- [ ] **2.4 Owner 抽看**
+- [x] **2.4 Owner 抽看**（本轮明确委托 Codex）
 
   - 由执行者整理：每篇若干页的原 PDF 页面、校订稿对应内容、矫正记录与存疑说明，重点是 `image-only` 页、表格、公式和化学式。
   - Owner 判断是否在可接受范围内，并记录发现的具体问题。被 Owner 修正的内容保留，作为以后的回归样本。
 
-- [ ] **2.5 写出结论并提交 GV**
+- [x] **2.5 写出结论并提交 GV**
 
   - 验证报告写入 `sandbox/reports/`，摘要写入本块，内容包括：
     - 样本范围与限制；
@@ -164,3 +164,12 @@ Owner 已明确授权 02.2/02.3 的真实解析与模型调用。13 份只读样
 本机证据：`sandbox/reports/2026-10-21-proofread-v2/` 的 `README.md`、`summary.json`、`pages.md`、`examples.md` 和 `review.html`；原始记录在 `comparison-layout`、`layout`、`completion` 三个运行目录。实际命令：`SCIRETRIEVER_VALIDATION_ATTEMPT=completion SCIRETRIEVER_VALIDATION_CONCURRENCY=3 SCIRETRIEVER_VALIDATION_EXCLUDE=5,6,7,8,9,10,11,12 SCIRETRIEVER_VALIDATION_DEADLINE_MS=2700000 node sandbox/cases/2026-10-21-proofread-v2/run.mjs 0 13`；只读汇总命令：`python3 sandbox/cases/2026-10-21-proofread-v2/report.py`。完整日志在 `/tmp/sciretriever-proofread-v2-zgeot7n6/real-layout-completion.log`。
 
 GV 材料已准备，待 Owner 抽看。优先检查扫描页、表格/公式、跨页参考文献和叠加图像样本；尤其需确认删除后内容是否在目标页保留，不能用模型的删除理由证明内容无误。暂不切换既有 vlm-engine 默认值，不提高 64 次预算，也不启动全库重建。本轮未运行 Full、未转换或切换真实库、未停止或重启 4174、未提交 Git。
+
+
+## Owner 委托抽查与 GV 收口（2026-10-21）
+
+Owner 最新指令为“你来检查一下就可以了……然后继续完成计划”，将本块检查与质量判断委托 Codex。执行者对 6 份样本的 10 个不同页面逐页看原图，覆盖扫描文字、化学式/公式、双栏表格和脚注、跨页参考文献及叠加图像。发现扫描表格的一次替换漏掉四个晶格参数并丢失 HTML 结构，拒绝将该旧产物视为无问题样例；修复接纳与渲染格式、最小修改提示，并保留原表图中的非文字内容。未覆盖旧产物。
+
+定向验证在 `/tmp/sciretriever-finalize-idyygvg6/`：table-regression.log（11 项）；table-image-regression.log（2 个选定用例）；first-slice-lint/source-types/test-types.log 均通过。只复验样本 01 第 2 页、04 第 3 页、12 第 6 页，三页均接纳并经原图核对；新增 13 次调用、输入 380,691 / 输出 60,415 token，耗时分别约 310/181/90 秒，不把页级结果冒充整篇新版本。依据与残余问题写入本机 `sandbox/reports/2026-10-21-proofread-v2/delegated-review.md`。
+
+GV 判断：按修复后的第二版方案继续收尾，默认沿用 vlm-engine；保留存疑与预算耗尽的 incomplete，不为取得 complete 自动提高现有每部分每次 64 次上限。这是 Owner 授权下的抽查判断，不是模型自评或全文准确率证明。复杂叠加图像样本、页脚噪声等残余问题如实保留；不授权全库模型重建、真实库转换或停服切换。最终 Full 仍待代码和文档收口。

@@ -12,7 +12,7 @@ SciRetriever 是科研 Agent 的论文知识组件，目标是独立提供可追
 
 统一逻辑文献库仍保存身份、来源、材料和产物，保持领域中立、不可变资产及分阶段提交。反应、分子、路线、产率、材料性质等领域 schema 的含义与维护属于调用方；提取候选不成为文献固定领域字段。已接受目标见[产品需求](docs/architecture/requirements.md)、[设计](docs/architecture/design.md)与[ADR 0026](docs/architecture/decisions/0026-agent-knowledge-and-human-collaboration.md)。
 
-**当前实现边界：** 已有发现/获取、解析、旧单篇总结、查询、配置和工作台基础；文档固定版本证据、已有材料的预算 Context，以及单篇与集合知识产物的显式分析/综合、历史发布和按 ID 阅读已交付。Catalog v8 已提供需显式构建的知识检索索引及材料/生成知识混合 Context；检索分数不是科学置信度，真实语料检索质量尚未评估。MCP stdio 和已有材料的持久加工任务已接入，见[Agent 接口指南](docs/guides/agent-interface.md)；完整生产人类协作仍有独立验收边界。当前 TypeScript 生产 completion 遇 `NoUsableContent` 保留已接纳材料，不再自动清理或重取；旧明确失效服务仍存在。本文下面的命令描述当前行为，完整差距见 [TS 基线](docs/architecture/typescript-baseline.md)。
+**当前实现边界：** 发现/获取、独立解析、建档与校订稿、元数据字段来源/锁定、标签、快照、单篇/多篇算子以及 Web/CLI/MCP 已接入。总结是手动发起的 summary 算子，Agents 统一使用 DSH。真实旧库不会在启动时自动转换；转换、全库模型重建和服务切换须独立确认。验证进展见活动计划，不能将小样本校订效果当成全库准确率。
 
 开发者可以从[供应商适配目录](apps/server/src/providers/README.md)查找各家的定义、元数据与 PDF 实现；业务模块和共享网络责任见[技术文档](docs/architecture/technical.md)。
 

@@ -1,6 +1,6 @@
 # 03 解析与原始解析
 
-状态：In progress（3.1–3.9 已按第一版实施；按 ADR 0037 第二版需调整 3.5、3.8，新增 3.11；3.10 等待 GS）。执行者：worker。
+状态：Completed（11/11；当前部署 profile、原始解析及合成页真实 pipeline 检查完成）。
 
 > 文件名沿用 `03-dual-parsing.md` 以保持链接。ADR 0037 第二版取消了“两种 profile 都必须完成”的要求：建档只需要部署选定的一种 profile。原始解析的合同、存储、两种 profile 的适配和 fake MinerU 都保留。
 
@@ -75,7 +75,7 @@
 
   测试 fixture `apps/server/test/raw-parse-server.ts` 按请求 backend 返回合成归档，可注入 backend 不匹配、缺少 v2、未知类型、单 profile 失败、超时。
 
-- [ ] **3.10 真实服务能力检查**（需要 GS）
+- [x] **3.10 真实服务能力检查**（需要 GS）
 
   - 只读诊断命令，例如 `parser check --profile pipeline`：用仓库内的一页合成 PDF 请求指定 profile，校验返回的归档。
   - 只有在 Owner 授权后，才能对真实服务运行。结果脱敏后记录在本块和 `notes/mineru.md`。
@@ -224,3 +224,8 @@ Full `full-raw-retirement.log` 已结束（退出 1）：**301 文件中 299 通
 ### 第二版高级维护入口复验（2026-10-21）
 
 `maintenance-profile-verified.log`：高级维护的 1 个浏览器用例通过，明确不提交显式 profiles 列表，由服务端采用部署配置，拒绝旧 Document 回执；另一个未选中用例不计通过。夹具只准备原始解析，不再为一个解析入口测试隐式生成校订文档。
+
+
+## 3.10 服务能力核销（2026-10-21）
+
+沿用 Owner 已授权的真实 MinerU 验证，执行 `node sandbox/cases/2026-10-21-proofread-v2/check-pipeline.mjs`。本机受控诊断用一页合成 PDF 请求 pipeline，真实适配器完成协议和归档校验，返回 1 页、2 个区块，Markdown 中的合成题名保留，耗时 1,037 ms。证据为 `/tmp/sciretriever-finalize-idyygvg6/real-pipeline-check.log` 及本机 `sandbox/runs/2026-10-21-mineru-pipeline-check/`。无真实文献、模型调用或用户 catalog 写入。GS 对本次测试部署确认，不能外推其它部署；本块 11/11，最终 Full 仍在 12 集中执行。

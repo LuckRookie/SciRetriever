@@ -1,6 +1,6 @@
 # 08 标签词表与打标
 
-状态：Partial（9/10；8.3 输入覆盖记录尚未实现，现有标签路径已通过离线定向测试）。执行者：Codex，单独实施。
+状态：Completed（10/10；8.3 已补齐完整片段限量与覆盖记录，定向测试通过；最终 Full 在 12 集中执行）。执行者：Codex，单独实施。
 
 **Outcome**：
 
@@ -91,7 +91,7 @@
   - 所有修改词表的写入都串行执行，可以通过单一写入事务或队列实现，每次写入版本号加一；
   - 并发打标时，后提交的一方如果遇到名称冲突，返回 `tag-name-conflict`，由 8.3 重新检索后改为吸附。
 
-- [ ] **8.3 打标流程**
+- [x] **8.3 打标流程**
 
   1. **准备输入**：
      - 正文部分的题名；
@@ -282,3 +282,9 @@
 ### 本轮结束 Full 证据
 
 结束 Full 中标签服务 8 项、存储 1 项、DSH 1 项及规则 3 项通过；8.3 的覆盖记录缺口仍在。 完整命令、失败分类和收尾后定向结果见[测试收敛记录](test-convergence.md)。本块勾选数不因旧流程测试通过而增加。
+
+## 收尾补齐（2026-10-21）
+
+基线 `8a705d8` 加本轮 patch。`tags/input.ts` 在完整校订片段边界控制章节输入，每类角色 64 KiB、总正文 256 KiB，无首选章节时最多 8 个后备片段；大段被跳过后仍可纳入后续结论，不切断 Unicode 或证据片段。`TagService.build` 将 `input_coverage` 传给模型并返回；建档编排原有的步骤回执持久化会保存该字段，不新增 catalog 表、数据库版本或独立业务所有者。
+
+证据目录 `/tmp/sciretriever-finalize-idyygvg6/`。实际命令：`VITEST_MAX_FORKS=3 VITEST_MIN_FORKS=1 pnpm exec vitest run apps/server/test/tags-input.test.ts apps/server/test/tags-service.test.ts -t 'keeps complete Unicode|reports fallback|reports a single oversized|uses two model steps' --maxWorkers=3 --minWorkers=1`。`tags-coverage.log`：2 文件、4 个选定用例通过，7 个未选中不计通过。覆盖整段 Unicode、超长摘要不挤掉结论、后备 8 段遗漏记录、单一超大片段，以及两步打标回执与模型所见覆盖一致。指南与源码 README 已同步；本块没有真实模型调用，未运行 Full。

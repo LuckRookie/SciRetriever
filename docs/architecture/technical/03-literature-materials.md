@@ -8,7 +8,7 @@
 
 获取成功不以分析完成为前提。来源错误、运行失败与正常耗尽分别表达，后续分析不适用不授予删除材料的权限。旧 completion 清理行为在对应兼容小节说明。
 
-> 2026-10-20：[ADR 0037](../decisions/0037-literature-archive-and-proofread-text.md)（Accepted，2026-10-20）将拆分元数据的文献类型、按字段记录来源与锁定，并以六种状态取代三级状态。目标形态见[§8](#8-adr-0037-目标形态元数据字段与文献状态实施中)，实施见[文献建档计划](../../plans/2026-10-20-literature-archive/README.md)。实施完成前，下文仍描述现行合同与实现。
+> 当前实现已采用 [ADR 0037 第二版](../decisions/0037-literature-archive-and-proofread-text.md)：双元数据字段、字段来源/锁定与六种建档状态。源码和离线实现已接入；真实旧库仍须在授权副本上转换，不能据此宣称已经切换。
 
 本篇目录：
 
@@ -19,7 +19,7 @@
 - [5. 资产验收、发布与有效性](#5-资产验收发布与有效性)
 - [6. 书目交换与持久化协作](#6-书目交换与持久化协作)
 - [7. 材料与文献验证](#7-材料与文献验证)
-- [8. ADR 0037 目标形态：元数据字段与文献状态（实施中）](#8-adr-0037-目标形态元数据字段与文献状态实施中)
+- [8. ADR 0037 目标形态：元数据字段与文献状态](#8-adr-0037-目标形态元数据字段与文献状态)
 
 ## 1. 模块边界与连接
 
@@ -31,362 +31,41 @@
 
 ### 2.1 文献身份与知识产物的责任分离
 
-按 [ADR 0026](../decisions/0026-agent-knowledge-and-human-collaboration.md)，Literature 继续拥有身份、版本、来源元数据与权威引用；[文档与证据：可读表示与有界读取](04-document-evidence.md#3-可读表示与有界读取)拥有表示/定位，Analysis 拥有新知识产物的解释与验收。各自都通过统一 Storage 保存确认事实，不复制第二份文献身份。
-
-以下三级状态和单一 LiteratureContent 为当前 TS 兼容合同；新材料/分析的可用性、用途、覆盖和有效性需从对应事实投影，不能用 CONTENT_READY 穷尽一切，也不预先改写已有数据。新知识引用不直接套用旧 ReferenceSupport 清理策略。分析不适用不授权删除材料。
+Literature 拥有身份、来源 observation、统一元数据和权威引用。Document 拥有固定校订表示与证据读取；Analysis 拥有算子结果，Extraction 拥有外部提取候选校验。几者共享稳定 Literature/Material/Document ID，不互相复制事实。
 
 ### 2.2 结构与实现映射
 
-当前活动实现位于 `apps/server/src/literature/`，跨模块合同来自 `packages/contracts`。当前文件按源码导出和测试为准，例如 `identity.ts`、`identity-rules.ts`、`metadata-rules.ts`、`content.ts`、`state.ts`、`query.ts`、`bibliography.ts` 和 `artifacts.ts`。
-
-`LiteratureIdentityService` 执行身份接纳，`LiteratureQueryService` 组装只读投影，`LiteratureArtifactService` 通过验证读者交付字节，`LiteratureContentService` 执行旧内容的原子接纳。引用 publication 和 SQLite事务由消费方Port与Storage adapter连接；没有新增独立文献库。
+`identity.ts`、`identity-rules.ts` 执行保守身份接纳；`metadata-service.ts`、`metadata-fields.ts` 处理字段来源、冲突与锁定；`archive-metadata.ts` 从校订稿提议元数据；`archive-references.ts` 接纳引用支持；`state.ts`、`query.ts` 只读投影。两阶段 `LiteratureContent` 生产与分析失败清理策略已删除。
 
 ### 2.3 MetaLiterature 与 Literature
 
-`MetaLiterature` 表示同一文献多个明确版本的稳定聚合身份；`Literature` 表示可以独立拥有 `LiteratureMetadata`、PDF 和 `LiteratureContent` 的具体、可引用文献。
-
-预印本、作者接受稿和正式发表版只有在来源 observation 存在明确同文献版本连接时才共享 `MetaLiterature`，且始终保留为不同 `Literature`。不同 Literature 的元数据、资产和内容不能混合。
-
-精确主体合同为：
-
-```text
-MetaLiterature
-  meta_literature_id: MetaLiteratureId
-  representative_literature_id: LiteratureId
-
-Literature
-  literature_id: LiteratureId
-  meta_literature_id: MetaLiteratureId
-  version_role: VersionRole
-  metadata: LiteratureMetadata
-  status: LiteratureStatus
-
-VersionRole = "published" | "accepted-manuscript" | "preprint" | "other"
-LiteratureStatus = "UNREVIEWED" | "ASSET_READY" | "CONTENT_READY"
-```
-
-`MetaLiterature` 只聚合，不拥有元数据、标识符、PDF、`LiteratureContent`、状态、observation 或关系列表；这些事实均归属具体 `Literature`、来源 observation 或权威 Reference。每个 `Literature` 从创建开始必须且只能属于一个 `MetaLiterature`。第一个 Literature 与其 MetaLiterature 原子创建，并成为必填的代表 Literature；代表 ID 必须始终指向该 MetaLiterature 的成员。
-
-成员关系只由 `Literature.meta_literature_id` 保存，`MetaLiterature` 不重复维护 `literature_ids`。需要查看全部成员时由 read model 反向查询，不形成第二份可变成员事实。只有来源 observation 中明确的 `version_links` 才能让不同 Literature 共享一个 MetaLiterature；引用、更正、撤稿或模糊相似性不触发聚合。共同的 `meta_literature_id` 和各自 `version_role` 已经完整表达版本聚合，不建立独立 `LiteratureRelation`。
-
-`Literature` 是具体、可独立拥有内容的文献版本。`metadata` 必填，表示系统当前接纳的统一初始或最终 `LiteratureMetadata`；标题、标识符等字段不在 Literature 顶层重复。`status` 是当前读取视图中的派生值，不作为可独立写入的状态事实。Observation、资产、轻结构化文档和引用均通过 `literature_id` 关联，不嵌入基础 Literature 对象。
-
-代表 Literature 的默认顺序为：
-
-```text
-正式发表版（`published`）
-  > 作者接受稿
-  > 预印本
-  > 其它已确认版本
-```
-
-代表 Literature 变化只影响 `MetaLiterature` 聚合视图，不删除其它 Literature，也不转移或覆盖其它版本的元数据、资产和内容。`published` 明确表示正式发表版本，替代含义不清晰的旧名称 `formal`；版本角色不能根据 `document_type` 或 URL 猜测，来源没有可靠证据时使用 `other`。
-
-`MetaLiterature` 不拥有或持久化 `status`。查询可以从成员 current facts 推导“是否至少有一个成员达到 ASSET_READY/CONTENT_READY”；这个聚合视图只服务查询和 Entry 的运行时目标排除。普通范围的具体版本候选由 Entry 在当前进程内冻结，排序先复用成员完成度，再使用上述版本角色顺序；成功事实仍归具体 Literature。Literature 模块只提供一致成员事实和纯读取投影，不把内存候选变成第二份成员或状态事实。
+MetaLiterature 通过代表 Literature 和成员关系聚合同一文献的明确版本，不拥有另一份元数据、资产或状态。只有来源明确的 `version_links` 才能连接版本，题名相似或引用关系不能触发版本聚合。Literature 自创建起具有唯一 meta_literature_id、version_role、metadata，读取时投影 status。代表顺序为正式发表版、作者接受稿、预印本、其它；更换代表不转移成员事实。
 
 ### 2.4 身份收敛
 
-> ADR 0037：严格后备匹配中的 `document_type` 改为出版形式；后备身份索引随迁移重算。见[§8](#8-adr-0037-目标形态元数据字段与文献状态实施中)。
+稳定标识符以 namespace/value 精确匹配。标识冲突或多个候选返回 identity-conflict，不做模糊合并。双方没有稳定标识符时才使用规范题名、完整作者顺序、年份、publication_form 的严格后备键；缺任一字段不参加后备匹配。一次性旧库转换重算后备索引，不能沿用 document_type 的旧哈希。
 
-#### 2.4.1 文献标识符与 Provider 记录身份
+### 2.5 元数据、来源与字段裁决
 
-Literature 只消费已经由 `Identifier` 公共 Model 形成的 canonical `(namespace, value)`，不在身份函数中再次解析 URL、前缀或大小写。当前明确规则为：
+当前 metadata 使用 `publication_form` 与 `article_kind` 两个封闭枚举，完整值与状态见 §8；没有 document_type 兼容参数。题名、作者、摘要、日期/年份、期刊、出版者、卷期页、标识符、关键词与语言保持中性合同。
 
-| namespace            | canonical value                         | 身份含义                                                       |
-| -------------------- | --------------------------------------- | -------------------------------------------------------------- |
-| `doi`                | 小写裸 DOI，例如 `10.1021/jacs.5c20087` | 当前具体 Literature 的稳定标识符                               |
-| `arxiv`              | 不带 `vN` 的官方新式或旧式基础 ID       | 当前预印本 Literature 的稳定标识符；revision 不另建 Literature |
-| `pmid`               | 官方纯数字                              | 当前具体 Literature 的稳定标识符                               |
-| `pmcid`              | 官方大写 `PMC` 加数字                   | 当前具体 Literature 的稳定标识符                               |
-| 其它受支持 namespace | 经过已明确、可测试的官方格式转换后的值  | 只有官方语义确实标识当前具体 Literature 时才参加身份收敛       |
+每条 MetadataObservation 不可变，保留 provenance、原始 source_type、映射版本、元数据、声明关键词、参考文本、计数、资产线索和明确版本连接。导入 observation 使用 user 来源；供应商 observation 使用 metadata-provider。未知类型映射为 null，不猜测出版形式。新 observation 保存关联并清除已耗尽的自动获取标记，不能覆盖人工锁定字段。
 
-未知 namespace 的 value 只经过边界空白清理，不推测大小写、分隔符或前缀语义；在其官方身份含义和 canonicalizer 被明确前，Literature 不能据此进行跨来源自动合并。ISBN、ISSN 等未来或当前支持的其它值也必须按各自官方规范建立显式、独立且有 fixture 的纯转换，不能套用 DOI 小写、去标点或其它全局规则。
+统一元数据只有一份。metadata_revision/hash 用于并发复检，字段状态保存 authority/proofread/manual、证据、冲突和锁定。就绪后新增观察只补空并记录冲突；显式重建元数据步骤才重新裁决。人工编辑锁定，解锁也是显式操作。建档模型从 front-matter/abstract/keywords 和第一页读取提议；DOI 必须出现在固定片段且格式合法。缺必填字段返回 metadata-missing，不伪造完成。
 
-OpenAlex Work ID、Web of Science UID、Semantic Scholar Paper ID、Scopus EID 及其它供应商数据库记录 ID 不属于上述集合。当前 observation 自己的记录 ID 进入 `Provenance.source_record_id`，关系或版本端点的记录 ID 进入 `ProviderLiteratureKey.record_id`；二者保留供应商官方格式，只能在父 Provenance 的 provider scope 内定位记录，不能进入 `LiteratureMetadata.identifiers` 或参加跨供应商 Literature 标识符匹配。重复的同一 Provider record 可以通过既有 observation 归属幂等命中，但不能因此把不同 Provider 的记录 ID 当作同一文献。
+### 2.6 文献引用与支持
 
-#### 2.4.2 同一 Literature 的判定
+Reference 只连接已接纳的两个 Literature，反向被引和 MetaLiterature 网络均是投影。关系必须有来源支持：ProviderRelationSupport、MetadataReferenceTextSupport 或 ArchiveReferenceTextSupport。校订稿参考文本由结构注释拥有，关联支持绑定固定文档与参考条目；解析不出或有歧义只保留文本，不创建占位 Literature。
 
-接纳一条 observation 时，Literature 在同一数据库 snapshot 中按以下顺序形成决定：
-
-1. 用每个 canonical 文献 identifier 精确查询已有 Literature；
-2. 所有已命中的标识符只指向一个 Literature，且 incoming 与该 Literature 的身份型稳定标识符不存在冲突时，命中该 Literature；一条可信 observation 同时携带多个非冲突稳定标识符时，这些值共同描述该具体 Literature；
-3. 至少一项身份型稳定标识符指向同一对象、同时另一项身份型稳定标识符明确指向不同值或不同对象时，返回稳定 `identity-conflict` 接纳失败，不选择任意一项继续，也不创建版本关系；
-4. 双方都没有稳定文献标识符时，才计算标题、完整作者顺序、发表年份和 `publication_form` 的严格复合后备键；四项必须全部存在且完全一致；
-5. 没有精确命中且不存在自相矛盾的身份证据时创建新的 Literature；不同 DOI 因此默认形成不同 Literature，即使标题、作者或年份相同。
-
-标题和每个 `Author.display_name` 的比较键固定为：Unicode NFC、去除首尾空白、把连续 Unicode 空白合并为一个空格，再执行 Unicode casefold。作者部分是上述结果组成的有序 tuple；不删除或统一标点、连字符，不改变姓名组成或作者顺序，也不执行翻译、拼音或其它转写、姓名倒置、首字母展开、编辑距离和模糊相似度。比较键只服务身份判断，不覆盖 `MetadataObservation` 或当前 `LiteratureMetadata` 中的来源展示值。
-
-相同规范化 DOI 默认命中同一 Literature，`version_role` 的差异不能把它拆开。同一基础 arXiv ID 的 `v1`、`v2` 等 revision 也命中同一 Literature；如果供应商明确给出 revision，只在现有来源 record、locator、URL 或 Provenance 中保留，不增加 revision 字段。稳定标识符已经无冲突命中时，题名或作者的描述性差异作为来源元数据冲突保留，不能仅靠相似或不相似文本推翻标识符身份。
-
-`identity-conflict` 是接纳结果，不是持久化业务对象。当前不建立身份候选、冲突历史、人工审核状态机或通用关系；调用方只在本次 Report 中呈现稳定、脱敏的拒绝语义。
-
-#### 2.4.3 不同 Literature 的版本聚合
-
-认定两个不同 `Literature` 属于同一个 `MetaLiterature` 时，只接受来源 `MetadataObservation.version_links` 中明确的同文献版本连接。当前 observation 的 `provenance.source_record_id` 和 `metadata.identifiers` 定位当前端点，`version_links` 中每个 `ProviderLiteratureKey` 定位另一端；目标 key 至少具有非空供应商记录 ID 或一个稳定 Identifier。目标未解析或存在冲突时保留 observation，但不创建占位 Literature，也不改变聚合归属。
-
-arXiv 预印本和具有正式 DOI 的发表版是两个具体 Literature。正式发表记录中的 arXiv ID 只有在供应商语义明确表示相关预印本时才进入 `version_links`；它不能同时作为正式 Literature 自身的 identifier。不同 DOI、不同 `version_role`、相似标题、相似作者或 publisher 都不能自行建立 MetaLiterature 归属。反过来，共享 DOI 的记录也不能仅因 `version_role` 不同而拆成两个 Literature。
-
-`version_links` 是身份决定的来源证据，不是权威关系。接纳成功后的唯一结果是两个具体 Literature 具有相同 `meta_literature_id` 和各自 `version_role`；系统不建立 `LiteratureRelationObservation`、`LiteratureRelation` 或引用以外的关系图谱。
-
-#### 2.4.4 规则与持久化边界
-
-身份函数只消费 Model 数据并返回可审计决定，不执行数据库读写。纯官方格式转换由 Model validator 统一实现；Metadata adapter 负责判断某个 vendor 字段表达当前文献 identifier、Provider record identity 还是相关版本；Literature 独占命中、冲突和 MetaLiterature 聚合决定。需要读取现有身份和整体转移关系时，由 Service 通过 Port 取得一致 snapshot，再把决定交给原子事务 Port。
-
-### 2.5 来源与统一元数据
-
-> ADR 0037：统一元数据改为按字段裁决来源（人工、权威来源、校订稿），记录冲突与锁定；建档的元数据步骤取代两阶段分析中的元数据阶段。见[§8](#8-adr-0037-目标形态元数据字段与文献状态实施中)。
-
-Provider 与用户书目导入 observations 都是长期来源事实，不能被统一视图覆盖。一个 Literature 可以通过持久化关联拥有多个独立、不可变的 `MetadataObservation`；新接纳的非重复来源观察增加新对象和关联，不修改既有 observation。统一初始元数据按以下优先顺序逐字段形成：
-
-1. 用户书目导入 observation 存在非空值时采用该值；
-2. 导入 observation 缺少字段时，由按配置顺序排列的 Provider observations 补充；
-3. 冲突值继续保留在 observation 中；
-4. 非冲突稳定标识符可以共同保留；
-5. 相同输入和规则得到相同结果。
-
-Literature 只维护一份当前统一 `LiteratureMetadata`。内容分析前它是关联 observations 的确定性投影；完整 Analysis 接纳后，它由该投影、PDF 明确信息和经过验证的最终提案共同形成。`CONTENT_READY` 后新 observation 仍然建立长期关联，但不能单独替换已与当前 LiteratureContent 对齐的最终 metadata；下一次完整 Analysis 可以把它纳入新的初始投影。Catalog 不保存旧统一元数据快照；`metadata_revision` 是当前元数据每次成功替换时递增的版本令牌，只用于 stale 复检、hash 绑定和当前 LiteratureContent 对齐。
-
-#### 2.5.1 LiteratureMetadata 的边界
-
-`LiteratureMetadata` 只描述文献自身。精确字段为：
-
-```text
-LiteratureMetadata
-  title: str | None
-  authors: Author[]
-  abstract: str | None
-  publication_date: str | None
-  publication_year: int | None
-  publication_form: PublicationForm | None
-  article_kind: ArticleKind | None
-  language: str | None
-  venue: str | None
-  publisher: str | None
-  volume: str | None
-  issue: str | None
-  pages: str | None
-  identifiers: Identifier[]
-  keywords: str[]
-```
-
-##### 2.5.1.1 作者署名
-
-`Author` 和 `Affiliation` 的精确字段见 [Identifier、Author 与 Affiliation](#29-identifierauthor-与-affiliation)。`LiteratureMetadata.authors` 是当前具体 Literature 的有序、不可变署名列表；它不引用全局作者实体，也不建立跨文献 `author_id`。同一现实作者出现在不同 Literature 中时，当前产品分别保存各篇文献中的署名事实。
-
-每个 `MetadataObservation.metadata.authors` 先独立保留该来源明确提供的有序作者列表。Literature 形成统一初始元数据时，作者列表使用以下保守规则：
-
-1. 先从用户书目导入 observations、再从按配置排序的 Provider observations 中选择第一个非空作者列表作为基础；
-2. 只有单个作者的 ORCID 相同，或者两份作者列表的作者数量、顺序和规范化 `display_name` 全部一致时，才允许把两边作者对齐；
-3. 对齐后只补充基础作者缺失的 `given_name`、`family_name`、`orcid` 或 `affiliations`，不覆盖高优先来源已经存在的值；
-4. 单位只按相同 ROR 或完全相同的规范化单位名称去重，并保留首次出现顺序；
-5. 不按姓氏、作者位置、姓名相似度或单位相似度匹配；无法无歧义对齐的冲突继续留在各自 `MetadataObservation` 中。
-
-元数据供应商由 adapter 把明确返回的姓名组成、ORCID、署名单位和 ROR 转换到自己的 observation。书目导入由 Entry codec 把格式能够明确表达的作者字段转换为同一 `LiteratureMetadata.authors`，再组合为用户来源 observation，交给 Literature 使用同一身份和接纳规则。PDF 内容处理时，Analysis 第一阶段可以依据 PDF 与统一初始 metadata 提出最终作者列表；Literature 将它作为最终 `LiteratureMetadata` 的一部分整体验收和替换，不能单独发布作者变更。三条路径都只能保存明确值，不根据姓名猜 ORCID、根据单位名猜 ROR，或机械拆分无法可靠判断的姓名。
-
-`pages` 保存供应商返回的出版定位字符串，既可以是传统页码或页码范围，也可以是电子文章定位号，例如 `"54-58"`、`"e0264587"` 或 `"014103"`。Literature 不根据字符串格式猜测二者的区别，也不建立独立 `article_number` 或 `publication_locator` 字段；供应商适配器把已知页码字段和文章编号字段统一映射到 `pages`。
-
-DOI、arXiv ID、PMID 等均作为带 namespace 的 `identifiers`，不建立平行顶层字段。`title` 可以为空，但 Literature 接纳并入库一条记录时必须满足以下条件之一：
-
-1. 具有非空 `title`；
-2. `identifiers` 中至少存在一个 namespace 为 `doi` 的标识符。
-
-其它 namespace 的标识符不能替代 DOI 满足最低入库条件。因此，只有 arXiv ID、PMID、ISBN 或其它标识符且没有标题的记录不能入库。该判断是 Literature 拥有的入库规则，不放入 Model validator，也不由 Metadata provider 决定。未满足条件的来源结果作为稳定的单条拒绝返回，不创建 `MetaLiterature`、`Literature`、统一元数据或已接纳的来源 observation。
-
-按 ADR 0037，统一元数据使用两组封闭枚举 `publication_form` 与 `article_kind`，取值见 [§8.1](#81-出版形式与文章性质)。未知类型在统一字段中保守为空；原始字符串和映射版本保存在 observation，不把供应商开放词汇带入统一字段。预印本仍属于 `version_role`，仅使用明确来源映射中的版本提示。
-
-以下信息不属于 `LiteratureMetadata`：
-
-- 供应商身份、供应商记录 ID 和观察时间；
-- 供应商明确声明的同文献 `version_links`；
-- 该文献引用的文献列表；
-- 引用该文献的文献列表；
-- 供应商观察到的参考文献次数；
-- 供应商观察到的被引用次数；
-- 供应商返回的 `declared_keywords`；
-- PDF、落地页或开放获取地址等资产线索；
-- 开放获取或其它访问状态；
-- 供应商分页、额度和失败信息。
-
-不完整文献可以先形成 `Literature`，后续 observation 继续补充。Literature 只从 observation 的 `metadata` 部分形成当前统一 `LiteratureMetadata`，不能把供应商返回的其它信息捆绑进元数据对象。
-
-#### 2.5.2 MetadataObservation 来源输入
-
-Provider 或用户书目导入形成的一次中性来源观察复用同一结构：
-
-```text
-MetadataObservation
-  observation_id: ObservationId
-  provenance: Provenance
-  metadata: LiteratureMetadata
-  version_role: VersionRole | None
-  version_links: ProviderLiteratureKey[]
-  declared_keywords: str[]
-  reference_texts: str[]
-  reference_count: int | None
-  cited_by_count: int | None
-  asset_hints: AssetHint[]
-```
-
-`MetadataObservation` 是独立、不可变且长期保存的来源对象，不是 `Literature` 的嵌入属性，也不携带 `literature_id` 或 `meta_literature_id`。Metadata 完成中性转换后，Literature 决定其身份归属，Storage 再建立 `observation_id` 到 `literature_id` 的持久化关联；同一 Literature 可以关联任意多个已接纳 observation。新增观察建立新对象和关联，不能覆盖旧 observation，并在同一逻辑提交中清除该 Literature 既有的自动 PDF 获取耗尽事实，使新的获取线索能够在后续操作中重新尝试。`observation_id` 标识整条来源观察；`provenance_id` 标识公共来源追踪对象，二者含义不同。
-
-`provenance` 统一表达来源类别、来源身份和实际观察时间，不在 observation 顶层重复这些字段。Provider observation 使用 `metadata-provider` provenance；书目导入 observation 固定使用 `source_kind = "user"`、`source_name = "bibliographic-import"`、空 `source_record_id/input_sha256/parameters_sha256`，只保留用户明确提供元数据这一事实。`version_role` 只保存来源对当前记录版本的明确声明；没有可靠声明时为空，由 Literature 在接纳时使用 `other`，不能根据 `document_type`、来源名称或 URL 猜测为 `published`。它与描述单个地址版本的 `AssetHint.version_role` 含义不同。
-
-`version_links` 只保存供应商明确声明为同一文献其它版本的目标定位，复用父级 Provenance，不进入 `LiteratureMetadata`。每个 `ProviderLiteratureKey` 至少具有非空 `record_id` 或一个稳定 Identifier；当前端点由本 observation 自身表达，因此 link 不重复 source，也不携带本地 Literature ID、关系类型、方向、状态或目标元数据。更正、撤稿、引用和其它关系不能进入该字段；引用使用独立 `ProviderRelationObservation`。
-
-`declared_keywords` 只保存供应商返回的声明关键词，不直接合入当前统一 `LiteratureMetadata`。书目导入中的 keywords 保存在该 observation 的 `metadata.keywords` 并按导入优先规则进入统一初始 metadata；Analysis 根据 ParserResult 全文形成最终关键词提案，Literature 验收后以最终 `LiteratureMetadata.keywords` 表达，不维护第二套 LLM 关键词、分类或标签结果。
-
-`reference_texts` 按供应商返回顺序保存当前记录实际携带的非空参考文献原文。它不拆分标题、作者、年份等残缺书目信息，不携带 PDF evidence，也不声明列表完整；空列表只表示本次 observation 没有返回原文。`reference_count` 和 `cited_by_count` 分别保存某供应商在 `provenance.observed_at` 观察到的参考文献次数和被引用次数，均为大于等于零的可选值；它们不根据 `reference_texts` 长度推导，不同供应商的数值也不相加。
-
-`asset_hints` 是同一来源 observation 中可供 Acquisition 使用的访问线索，精确合同见 [AssetHint 合同](#443-assethint-合同)；它们不进入 `LiteratureMetadata`，也不成为 Literature 已经拥有资产的事实。Vendor 原始响应不能进入这些 Model，也不增加通用 `extra_metadata` 字段容纳全部供应商属性。
-
-`LiteratureContent.references` 独立保存 PDF 中可导出的有序非空文本；Analysis 可以从这组文本或 `MetadataObservation.reference_texts` 形成临时 `ReferenceLookup`，但 lookup 不进入任何 observation。Analysis 先确定最终元数据，再以该元数据和同一 ParserResult 为上下文完成正文总结；两阶段都成功后，Literature 才验收 Analysis 提交的最终元数据、结构化章节与参考文献提案。引用目标解析和 Reference 建立是独立、可重试的补充步骤。供应商 observation 继续保留 provenance，但不再参与 `CONTENT_READY` 版本的普通统一展示。
-
-#### 2.5.3 最终元数据与内容接纳
-
-Analysis 提案不是数据库事实。Literature 接纳前必须重新读取并确认：
-
-- `literature_id` 仍指向同一具体版本；
-- 当前主 PDF ID/hash 与提案输入一致；
-- ParserResult 输入/结果 hash 和 parser provenance 一致；
-- 当前统一初始 metadata revision/hash 与提案输入一致；
-- 最终 metadata 仍满足标题或 DOI 至少存在一个的最低规则；
-- `LiteratureContent` 的四个固定 section role、Markdown 字符串、额外标题、reference 索引、内容/Markdown hash 和单一 Analysis provenance 已通过 Analysis 结构验证。
-
-接纳成功时，以第一阶段形成的最终 `LiteratureMetadata` 全量替换该 Literature 的统一初始元数据，保留全部 `MetadataObservation`；LLM 提案不创建新的 MetadataObservation。最终 metadata、递增后的当前 revision、keywords、当前 `LiteratureContent`、规范 Markdown artifact 关系、对当前 PDF/ParserResult/metadata 的输入绑定、单一 Analysis provenance 和 `CONTENT_READY` 推导依据必须整体提交。规范 Markdown 的元数据块和摘要来自已验收 metadata，正文与参考文献来自第二阶段已解析 content，不保存或重新生成第二份元数据。
-
-每个 Literature 只保留一个当前 `LiteratureMetadata` 和一个当前 `LiteratureContent`。重新分析必须先完整形成和验收新结果，再原子替换当前 metadata/content/Markdown 完整视图；失败时保留完整旧当前视图。被替换的统一元数据不进入历史表，旧结构化内容和 Markdown 字节也不形成数据库历史，只成为可回收缓存。当前 content 丢失、损坏或不再与当前 PDF/metadata 对齐时，可以由长期 observations、当前权威元数据和当前 PDF 重新形成 ParserResult 并再分析。
-
-在文献内容处理链中，来源 `MetadataObservation`、当前权威 `LiteratureMetadata` 与当前主 PDF 的 Asset/关系/来源是优先长期可靠保存的事实；ParserResult 与 LiteratureContent 是可重建派生产物。内容接纳或替换失败不得回滚或破坏这些权威输入。该规则不改变 Execution、ProviderRelationObservation 或非 content support 的既有持久化语义。
-
-第一阶段或第二阶段失败、提案 stale、最终 metadata 不合格或整体提交失败时，不留下部分最终 metadata、keywords、sections、references 或当前 artifact 指针。已存在的 PDF 和统一初始 metadata 保持有效，可在后续运行重新分析。
-
-### 2.6 引用解析与权威 Reference
-
-> ADR 0037：参考文献改由校订稿解析，新增 `ArchiveReferenceTextSupport`；`ContentReferenceTextSupport` 随 `LiteratureContent` 退役。见[§8](#8-adr-0037-目标形态元数据字段与文献状态实施中)。
-
-参考文献原文不是权威引用关系。供应商原文保存在 `MetadataObservation.reference_texts`，PDF 中识别的有序参考文献文本保存在当前 `LiteratureContent.references`；两者即使尚未解析目标也继续可用。整份内容通过单一 Analysis provenance 的输入 hash 回溯到 PDF、ParserResult 和最终 metadata，当前不保存逐条位置。空 references 在 Markdown 中显示“未提供”，但该缺失标记不是参考文献。公共 Model 不建立 `ReferenceObservation` 或 `CitationObservation`。
-
-目标解析有两条入口：
-
-```text
-元数据供应商的结构化引用关系查询能力
-  -> 逐边保存 ProviderRelationObservation
-  -> Entry 按当前扩展范围选择 observation
-  -> 本地精确查询；必要时取得 MetadataObservation
-  -> Literature 接纳选中的相关文献
-  -> Reference + ProviderRelationSupport
-
-参考文献原文
-  -> Analysis 形成临时 ReferenceLookup
-  -> 本地精确查询；未命中时由 Metadata 搜索
-  -> Literature 接纳目标文献
-  -> Reference + MetadataReferenceTextSupport 或 ContentReferenceTextSupport
-```
-
-`ReferenceLookup` 只包含当前检索所需的稳定标识符、标题、作者和年份线索，不持久化。LLM 不能用这些值直接创建目标文献；本地已经通过稳定标识符或其它无歧义规则精确命中时可以直接使用现有 Literature，否则 Metadata 结果仍须形成普通 `MetadataObservation`，并通过本模块与主题搜索相同的最低入库和身份规则。
-
-`ProviderRelationObservation` 的精确合同见 [ProviderRelationObservation](#352-providerrelationobservation)。它是元数据供应商逐边保存的来源事实和待扩展输入，不属于 Literature，也不要求目标已经具有本地身份。Literature 只处理 Entry 当前选中的 observation：目标未接纳时不创建占位 Literature 或权威关系；目标接纳后才形成 Reference 和指回该 observation 的 `ProviderRelationSupport`。保存 observation、创建目标 Literature 和发布权威关系是三个分开的阶段。
-
-只有来源和目标都已经具有本地 `LiteratureId`、目标身份可靠确定后，才创建权威关系：
-
-```text
-Reference
-  reference_id: ReferenceId
-  source_literature_id: LiteratureId
-  target_literature_id: LiteratureId
-```
-
-`source_literature_id` 是引用方，`target_literature_id` 是被引用方。三个字段全部必填，source 和 target 都必须是本地具体 `LiteratureId`，且 `source_literature_id != target_literature_id`。Reference 不携带供应商记录 ID、原始文本、临时 lookup、残缺元数据、PDF evidence、provenance 或 `MetaLiteratureId`。相同 `(source_literature_id, target_literature_id)` 只形成一条权威关系。
-
-关系依据使用判别联合表达：
-
-```text
-ReferenceSupport
-  reference_id: ReferenceId
-  source: ReferenceSupportSource
-
-ReferenceSupportSource =
-    ProviderRelationSupport
-  | MetadataReferenceTextSupport
-  | ContentReferenceTextSupport
-
-ProviderRelationSupport
-  kind: Literal["provider_relation"]
-  observation_id: ObservationId
-
-MetadataReferenceTextSupport
-  kind: Literal["metadata_reference_text"]
-  metadata_observation_id: ObservationId
-  reference_index: int
-
-ContentReferenceTextSupport
-  kind: Literal["content_reference_text"]
-  literature_content_sha256: Sha256
-  reference_index: int
-```
-
-`ProviderRelationSupport` 表示元数据供应商已经直接给出具有稳定目标标识的结构化引用关系；`observation_id` 指向该关系来源 observation，且 observation 的有向关系在目标接纳后必须与 Reference 的 source/target 一致。`MetadataReferenceTextSupport` 精确定位 `MetadataObservation.reference_texts[reference_index]`，该 observation 必须归属于 Reference 的 `source_literature_id`；`ContentReferenceTextSupport` 精确定位给定当前内容 hash 的 `LiteratureContent.references[reference_index]`，该内容也必须属于引用方。两个索引都从零开始且必须大于等于零。
-
-结构化关系与参考文献原文按返回数据语义区分，而不是按是否主动调用专门接口区分。供应商明确返回稳定目标记录或标识符时属于 `ProviderRelationSupport`；只返回一段仍需解析目标的参考文献文字时属于 `MetadataReferenceTextSupport`。同一种供应商 API 可以产生其中任一形式。
-
-`ReferenceSupport` 没有独立 `reference_support_id`，自然唯一性为 `(reference_id, source)`。它不重复保存 source/target Literature、原文、目标元数据、PDF evidence、`ReferenceLookup`、confidence、status、created_at 或 provenance；这些内容继续由其指向的来源对象拥有。目标元数据查询和 Literature 身份接纳证明“目标是谁”，support 证明“来源确实声明了这条引用”，两者不能混入同一 schema。
-
-Reference 创建时必须同时发布至少一项有效 support；后续供应商或文本来源再次确认同一 source/target 时，只为既有 Reference 增加去重后的 support，不能创建平行边。只有引用或被引用计数、原文、lookup、供应商目标 ID、相似标题、多个不确定候选或只有 MetaLiterature 身份时都不足以形成 Reference。
-
-当前 LiteratureContent 被新结果替换时，全部指向旧 `literature_content_sha256` 的 `ContentReferenceTextSupport` 必须在同一逻辑提交中删除；某条 Reference 因而不再有任何 support 时一并删除。新 references 后续按普通 lookup 流程重新建立；`ProviderRelationSupport` 和 `MetadataReferenceTextSupport` 不受 content 替换影响。
-
-已经完成的引用 DiscoveryRun 不通过 `reference_id` 长期依赖当前 Reference。其 `CitationDiscoveryCause` 独立保存当时实际的 source/target Literature 和 depth，只表达“本次运行由这条直接引用方向发现目标”的历史事实，不是第四种 ReferenceSupport，也不阻止失去全部 support 的当前 Reference 按上述规则删除。
-
-无法解析或候选存在歧义时只保留来源原文，不创建占位 Literature、未解析 Reference 或只指向 `MetaLiterature` 的关系。后续运行可以重新形成 lookup。被引用视图是同一 Reference 的反向查询，`MetaLiterature` 级引用网络由 Literature 级关系汇总；二者都不形成第二份可变事实。引用扩展只通过公开查询 API 读取关系及其 support。
+引用接纳独立且幂等；失败不撤销文献、PDF、校订稿或元数据。旧总结专属 ContentReferenceTextSupport 已删除；转换时只有失去全部保留支持的引用边被移除。参考文献为空不阻断就绪。
 
 ### 2.7 文献状态
 
-> ADR 0037：`CONTENT_READY` 将由 `READY` 取代，状态扩展为六种。见[§8](#8-adr-0037-目标形态元数据字段与文献状态实施中)。
-
-三级状态是纯推导结果，不是可独立修改的数据库列：
-
-```text
-UNREVIEWED
-ASSET_READY
-CONTENT_READY
-```
-
-推导规则为：
-
-```text
-CONTENT_READY
-  if 存在由 Literature 整体接纳、对齐当前主 PDF 和最终 metadata revision，且具有单一 Analysis provenance 的 LiteratureContent 与规范 Markdown
-
-ASSET_READY
-  else if 存在通过基本检查的当前主 PDF
-
-UNREVIEWED
-  otherwise
-```
-
-`CONTENT_READY` 已表示本产品内容处理完成。自动 PDF 获取耗尽、运行时 selector/目标/Report、failure、attempt、`ParserResult`、Parser task、FTS、孤立文件、临时 `ReferenceLookup`、权威引用关系和未整体提交的 LLM 输出不参与状态推导。LLM 明确判断当前 PDF 无实际内容并完成清理后，状态根据剩余事实自然回到 `UNREVIEWED`。
+六种状态为 UNREVIEWED、ASSET_READY、ARCHIVING、ARCHIVE_FAILED、READY、EXCLUDED，详见 §8.3。它们由当前事实推导，不是可任意写入的一列。READY 要求正文校订 complete、默认文档及结构、必填元数据、有效标签；存疑和补充材料失败不阻断。获取、解析、建档分别显式启动；总结不参与建档或就绪条件。
 
 ### 2.8 独立读取、新知识关联与事实边界
 
-#### 2.8.1 只读访问
-
-当前QueryApplication向CLI、TS调用方和独立Web提供相同的LiteratureQueryService。`search/detail/references/referenceDetail`只读取已经提交的事实，不调用Metadata补查、Acquisition、Parser或模型。未初始化和不可用库在组装边界区分；查询损坏索引不能自动重建，artifact读取必须验证当前关系、文件身份和hash。
-
-`detail` 返回值包含材料/解析/当前内容引用，而不是字节。`withArtifact`接受这些引用并定位实际登记对象，在消费前后复核文件，客户端取消或关闭应用后读作用域失效。查询结果不作为写入命令复用；UI传回修改意图时仍需对应owner重新读取与验收。
-
-#### 2.8.2 新产物怎样关联
-
-新Document/Evidence和KnowledgeArtifact通过明确Literature/Material/Document ID及输入hash关联。Literature继续提供保守版本身份，不能把document_version_id并入literature_id，也不因为两份表示hash不同创建另一篇论文。
-
-旧 `CONTENT_READY` 表示当前七标题内容兼容视图有效；新“有概览/有问题分析/有提取候选”的可用性分别由相应owner读取投影，不能继续增设单一全局完成态或伪造旧content。不同用途的产物可以共存，current/default仅是明确投影。
-
-ReferenceSupport证明文献引用边的来源，EvidenceRef证明某个材料/表示位置的引用；二者不能互相代替。替换旧LiteratureContent删除旧ContentReferenceTextSupport的既有规则，不得扩展成删除仍被新知识/外部交付引用的证据版本。
-
-#### 2.8.3 更新、冲突与失败
-
-元数据修正仍由Literature接纳；Analysis只提交有输入绑定的提案，Extraction的领域payload不进入metadata或observation。并发提交必须复核metadata_revision/hash以及当前PDF/Parser输入；stale拒绝保留当前完整事实和所有来源。
-
-一种用途分析不适用或模型失败不授权删除Asset。资产的错误文章判定、失效或删除由独立的业务决定说明目标与理由，并核对引用依赖；Literature只更新由其拥有的关系，Storage不根据状态列猜测删除范围。
+QueryApplication 只读，不补查来源、不获取材料、不调用模型、不重建索引。材料和证据读取验证固定绑定、字节与 hash；应用关闭等待在途读取结束。结果过时由版本事件推导，修正描述不会让单篇内容算子失效，内容修订不会覆盖历史结果。算子不适用或失败不能授权删除原始资产。
 
 ### 2.9 Identifier、Author 与 Affiliation
 
@@ -434,7 +113,7 @@ Model 只决定一个值的 canonical 表达，不判断该字段究竟标识当
 
 `MetaLiterature`、`Literature`、`VersionRole` 和 `LiteratureStatus` 的精确合同由 [MetaLiterature 与 Literature](#23-metaliterature-与-literature) 定义。`VersionRole` 使用 `published`、`accepted-manuscript`、`preprint` 和 `other`，不保留旧名称 `formal`；`LiteratureStatus` 只承载 Literature 模块已经推导的当前结果，Model validator 不计算状态。
 
-`MetadataObservation` 的精确合同由 [MetadataObservation 来源输入](#252-metadataobservation-来源输入) 定义。它是独立、不可变且长期保存的来源对象，不是 `Literature` 属性；一个 Literature 与多个 observations 的归属由 Storage 关系表达，不把 `literature_id` 放入 observation。Provider observation 与书目导入 observation 复用同一结构，只通过受约束的 Provenance 区分；书目 codec 不得复制 `LiteratureMetadata` 字段建立 `ImportedMetadata`。`version_links` 只保存供应商明确声明为同一文献其它版本的目标 key，用于可审计身份收敛，不进入 `LiteratureMetadata` 或形成独立权威关系；`reference_texts` 只保存供应商实际返回的原文，不声明完整，也不表示已经形成引用关系。`MetadataObservation.declared_keywords` 保存供应商声明关键词；书目导入的 keywords 进入该 observation 的 `metadata.keywords` 并可参与统一初始投影；完整 Analysis 后，当前 `LiteratureMetadata.keywords` 保存 Literature 已验收的全文关键词。`LiteratureMetadata.pages` 同时承载传统页码范围和供应商返回的电子文章定位号，不再建立 `article_number`。`AssetHint` 的精确合同由 [AssetHint 合同](#443-assethint-合同) 定义；其中 URL、媒体类型、资产角色、版本角色、访问状态和许可证都描述具体来源线索，不属于 `LiteratureMetadata`，也不代表已接纳资产。`AssetHint` 不增加获取层级、授权要求或 Browser 要求，运行访问上下文由 Acquisition Resolution/Plan 决定。`PdfCandidate`、`Asset`、`LiteratureAsset` 和 `AcquisitionResult` 的精确合同分别见 [Route hint、候选与 adapter 边界](#444-route-hint候选与-adapter-边界)、[Asset 与 LiteratureAsset](#445-asset-与-literatureasset)和[输入与公开结果](#43-输入与公开结果)：候选与 candidate key 只存在于当前运行；候选只保存 route adapter 的稳定 source identity、Public/Authorized API/Browser path 和声明媒体类型，不要求 URL，也不携带 adapter 私有动作；Asset 只描述不可变文件；唯一 `primary-pdf` 关系表达当前主 PDF；自动业务结果只有已获得或未获得，系统提交错误不属于该联合。`NoPrimaryPdf` 只有在全部适用 routes 正常结束、没有 deferred/action-required/未解决 failure 且最小耗尽事实已提交后成立；运行错误不能伪装成该结果。手动接纳成功使用独立 `AcceptedManualPdf`，只组合已经提交的 `Asset` 与 `LiteratureAsset`；无效本地文件是输入验证错误，不进入自动联合，用户绝对路径不进入 Model。这些来源信息不能通过通用 `extra_metadata`、裸字典或 vendor model 扩展 `LiteratureMetadata`。非空标题或 DOI 至少存在一个是 Literature 的入库规则，不由 Model validator 决定。
+`MetadataObservation` 的精确合同由 [MetadataObservation 来源输入](#25-元数据来源与字段裁决) 定义。它是独立、不可变且长期保存的来源对象，不是 `Literature` 属性；一个 Literature 与多个 observations 的归属由 Storage 关系表达，不把 `literature_id` 放入 observation。Provider observation 与书目导入 observation 复用同一结构，只通过受约束的 Provenance 区分；书目 codec 不得复制 `LiteratureMetadata` 字段建立 `ImportedMetadata`。`version_links` 只保存供应商明确声明为同一文献其它版本的目标 key，用于可审计身份收敛，不进入 `LiteratureMetadata` 或形成独立权威关系；`reference_texts` 只保存供应商实际返回的原文，不声明完整，也不表示已经形成引用关系。`MetadataObservation.declared_keywords` 保存供应商声明关键词；书目导入的 keywords 进入该 observation 的 `metadata.keywords` 并可参与统一初始投影；完整 Analysis 后，当前 `LiteratureMetadata.keywords` 保存 Literature 已验收的全文关键词。`LiteratureMetadata.pages` 同时承载传统页码范围和供应商返回的电子文章定位号，不再建立 `article_number`。`AssetHint` 的精确合同由 [AssetHint 合同](#443-assethint-合同) 定义；其中 URL、媒体类型、资产角色、版本角色、访问状态和许可证都描述具体来源线索，不属于 `LiteratureMetadata`，也不代表已接纳资产。`AssetHint` 不增加获取层级、授权要求或 Browser 要求，运行访问上下文由 Acquisition Resolution/Plan 决定。`PdfCandidate`、`Asset`、`LiteratureAsset` 和 `AcquisitionResult` 的精确合同分别见 [Route hint、候选与 adapter 边界](#444-route-hint候选与-adapter-边界)、[Asset 与 LiteratureAsset](#445-asset-与-literatureasset)和[输入与公开结果](#43-输入与公开结果)：候选与 candidate key 只存在于当前运行；候选只保存 route adapter 的稳定 source identity、Public/Authorized API/Browser path 和声明媒体类型，不要求 URL，也不携带 adapter 私有动作；Asset 只描述不可变文件；唯一 `primary-pdf` 关系表达当前主 PDF；自动业务结果只有已获得或未获得，系统提交错误不属于该联合。`NoPrimaryPdf` 只有在全部适用 routes 正常结束、没有 deferred/action-required/未解决 failure 且最小耗尽事实已提交后成立；运行错误不能伪装成该结果。手动接纳成功使用独立 `AcceptedManualPdf`，只组合已经提交的 `Asset` 与 `LiteratureAsset`；无效本地文件是输入验证错误，不进入自动联合，用户绝对路径不进入 Model。这些来源信息不能通过通用 `extra_metadata`、裸字典或 vendor model 扩展 `LiteratureMetadata`。非空标题或 DOI 至少存在一个是 Literature 的入库规则，不由 Model validator 决定。
 
 ### 2.11 元数据并发绑定
 
@@ -442,7 +121,7 @@ Model 只决定一个值的 canonical 表达，不判断该字段究竟标识当
 
 ### 2.12 权威引用支持结构
 
-`Reference` 只有 `reference_id`、`source_literature_id` 和 `target_literature_id` 三个必填字段。`ReferenceSupport` 由 `reference_id` 和判别联合 `source` 组成，不设置独立 ID；三种 source 分别用关系 observation ID、metadata observation ID 加零基索引，或当前 LiteratureContent SHA-256 加零基索引定位真实来源。Reference 不平铺 provenance、原文、目标元数据或 evidence，support 也不复制这些内容；当前 content 替换后的 support 清理属于 Literature/Storage 规则。精确合同见 [引用解析与权威 Reference](#26-引用解析与权威-reference)。
+`Reference` 只有 reference_id、source_literature_id、target_literature_id。支持来源分别绑定供应商关系观察、元数据参考文本或固定档案参考条目；不复制来源原文。精确 owner 见 §2.6。
 
 ## 3. 元数据来源与供应商适配
 
@@ -566,7 +245,7 @@ Provider 增加或替换时，只需实现相同中性 Port 和网络安全边�
 - PDF、落地页或开放获取地址等可选 `AssetHint`；
 - 可用于后续稳定补充的来源标识。
 
-精确字段见 [MetadataObservation 来源输入](#252-metadataobservation-来源输入)。`MetadataObservation` 是独立、不可变且长期保存的来源对象，不携带 Literature 身份；Literature 接纳后由 Storage 建立归属，一个 Literature 可以关联多个 observations。`LiteratureMetadata` 不是供应商整条返回记录。`version_role`、`version_links`、`declared_keywords`、原始参考文献文本、两类次数和资产线索必须保持为 observation 的独立组成部分，不能为了适配某个供应商而不断向 `LiteratureMetadata` 增加属性。`version_links` 只保留明确同文献版本目标，不能容纳更正、撤稿或其它供应商关系；`declared_keywords` 不直接填入 `LiteratureMetadata.keywords`，也不与 LLM 根据文献内容形成的关键词混合；不同供应商的计数不直接相加；Metadata 也不把 `AssetHint` 接纳为文献资产。Observation 只声明产品需要的中性字段，不增加通用 `extra_metadata` 或让 vendor 原始响应穿透 Model。
+精确字段见 [MetadataObservation 来源输入](#25-元数据来源与字段裁决)。`MetadataObservation` 是独立、不可变且长期保存的来源对象，不携带 Literature 身份；Literature 接纳后由 Storage 建立归属，一个 Literature 可以关联多个 observations。`LiteratureMetadata` 不是供应商整条返回记录。`version_role`、`version_links`、`declared_keywords`、原始参考文献文本、两类次数和资产线索必须保持为 observation 的独立组成部分，不能为了适配某个供应商而不断向 `LiteratureMetadata` 增加属性。`version_links` 只保留明确同文献版本目标，不能容纳更正、撤稿或其它供应商关系；`declared_keywords` 不直接填入 `LiteratureMetadata.keywords`，也不与 LLM 根据文献内容形成的关键词混合；不同供应商的计数不直接相加；Metadata 也不把 `AssetHint` 接纳为文献资产。Observation 只声明产品需要的中性字段，不增加通用 `extra_metadata` 或让 vendor 原始响应穿透 Model。
 
 Adapter 必须先判断一个供应商字段的语义归属，再构造中性 Model：只有标识“当前这条具体文献记录所描述的 Literature”的 DOI、arXiv ID、PMID、PMCID 或其它官方文献 ID 才进入 `metadata.identifiers`；供应商数据库自身的记录键进入 Provenance 或 ProviderLiteratureKey；指向预印本、正式发表版或其它同文献版本的 ID 进入 `version_links`。官方格式只决定值如何表达，不会把 Provider record identity 自动升级为文献自身 identifier。
 
@@ -574,7 +253,7 @@ Adapter 必须先判断一个供应商字段的语义归属，再构造中性 Mo
 
 | 供应商字段表达的事实                                                                                    | 中性归属                                                                                         | 转换规则                                                                                                                                                                                                                                                         |
 | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 文献自身的题名、摘要、出版日期、类型、语言、出版物、出版社、卷、期、页码或电子文章定位号                | `LiteratureMetadata`                                                                             | 只映射 [LiteratureMetadata 的边界](#251-literaturemetadata-的边界)；页码范围和电子文章定位号都进入 `pages`                                                                                                                                                       |
+| 文献自身的题名、摘要、出版日期、类型、语言、出版物、出版社、卷、期、页码或电子文章定位号                | `LiteratureMetadata`                                                                             | 只映射 [LiteratureMetadata 的边界](#25-元数据来源与字段裁决)；页码范围和电子文章定位号都进入 `pages`                                                                                                                                                       |
 | 按署名顺序返回的作者展示名、明确姓名组成、ORCID、作者与单位对应关系及 ROR                               | `LiteratureMetadata.authors: Author[]`                                                           | 按来源顺序转换为 [Identifier、Author 与 Affiliation](#29-identifierauthor-与-affiliation)；只保存供应商明确返回或能够在同一记录中无歧义对齐的值，不建立全局作者身份                                                                                              |
 | 当前记录自身的 DOI、arXiv ID、PMID、PMCID 等具体文献标识符                                              | `LiteratureMetadata.identifiers`                                                                 | 转换为带 namespace 的中性 `Identifier`；公共 Model 统一执行官方 canonicalization，adapter 不再实现另一套大小写、前缀或 URL 去壳规则                                                                                                                              |
 | OpenAlex Work ID、Web of Science UID、Semantic Scholar Paper ID、Scopus EID 等 Provider record identity | 当前记录使用 `provenance.source_record_id`；关系或版本端点使用 `ProviderLiteratureKey.record_id` | 保留供应商官方值并在父 Provenance 的 provider scope 内解释；不能进入 `LiteratureMetadata.identifiers` 或跨供应商身份匹配                                                                                                                                         |
@@ -589,7 +268,7 @@ Adapter 必须先判断一个供应商字段的语义归属，再构造中性 Mo
 
 作者转换由各 provider adapter 在单条供应商记录的边界内完成：保留原始署名顺序和明确的 `display_name`、`given_name`、`family_name`、ORCID、署名单位名称及 ROR；机构或协作组按机构作者表达，无法可靠分类时使用 `unknown`。Adapter 不从展示名按空格机械拆分姓与名，不翻译姓名，不根据姓名猜 ORCID，不根据单位名称猜 ROR，也不使用供应商作者 ID 建立本地作者身份。供应商没有明确给出作者与单位的对应关系时，不能把全部单位分配给全部作者。
 
-Metadata 只转换每个来源自己的作者事实，不跨供应商匹配作者。选择基础作者列表以及按相同 ORCID 或整表完全对齐补充缺失字段，属于 [作者署名](#2511-作者署名)。冲突仍保留在各自 observation 中，不能由 adapter 用模糊匹配提前消解。
+Metadata 只转换每个来源自己的作者事实，不跨供应商匹配作者。选择基础作者列表以及按相同 ORCID 或整表完全对齐补充缺失字段，属于 [作者署名](#29-identifierauthor-与-affiliation)。冲突仍保留在各自 observation 中，不能由 adapter 用模糊匹配提前消解。
 
 所有 adapter 都把 vendor 值交给同一个 `Identifier` 边界：DOI URL、`doi:`、大小写和边界空白必须得到同一小写裸 DOI；arXiv 前缀、官方 URL、新旧式编号和 `vN` revision 必须得到同一基础 ID；PMID、PMCID 及其它已支持 namespace 使用各自官方格式。Adapter 不能为了提高命中率删除标点、改变未知 namespace 大小写或建立私有 alias。不能通过官方语义确认某字段标识当前具体 Literature 时，不得猜测放入 identifiers。
 
@@ -694,7 +373,6 @@ Metadata 形成中性 observation 后，通过自己拥有的 publication Port �
 - 领域 DiscoveryRun 把 `sources.metadata.limit` 分别应用给每个参与 Provider，过滤、缺少标题/DOI、重复和未接纳 item 都消耗本 Source 上限；默认是 500，结果耗尽或达到上限后正常停止，Provider cursor、过程计数、搜索分数、未接纳候选和请求/响应不进入 Model 或 Storage；
 - 接纳一条领域结果不会自动触发该 Literature 的全 Provider 精确补查、PDF、Parsing 或 Analysis，Metadata API 不接收 Collection 或 Batch 状态；
 - 新的 MetadataObservation 成功接纳时，在同一逻辑提交中清除对应 Literature 的自动 PDF 获取耗尽事实；重复幂等提交不制造 observation 或额外状态；
-- Metadata 不使用 LLM、embedding、score 阈值、标题关键词、摘要分类或低收益启发式判断领域相关性；偏题但有实际内容不被解释成 NoUsableContent；
 - 两个以上供应商同时成功；
 - 一个供应商失败、其它供应商成功；
 - 单个供应商分页中途失败；
@@ -749,13 +427,13 @@ Metadata 的 search/lookup/reference 都可能访问外部服务，属于显式�
 
 ### 3.10 来源端点与关系结构
 
-`ProviderLiteratureKey` 是供应商文献记录的中性定位，只包含可选 `record_id` 和稳定 `Identifier[]`，且至少具有其中一种定位。`MetadataObservation.version_links` 用它定位同文献其它版本；当前端点由父 observation 表达。`ProviderRelationObservation` 用两个 key 表达一条规范化 `citing -> cited` 有向引用边。两种用法都不接受本地 Literature ID、目标 MetadataObservation 或状态字段；Model validator 只检查封闭结构、至少一个定位值和非空格式，不决定版本归属、目标接纳或 Reference 建立。精确合同见 [MetadataObservation 来源输入](#252-metadataobservation-来源输入)与 [ProviderRelationObservation](#352-providerrelationobservation)。
+`ProviderLiteratureKey` 是供应商文献记录的中性定位，只包含可选 `record_id` 和稳定 `Identifier[]`，且至少具有其中一种定位。`MetadataObservation.version_links` 用它定位同文献其它版本；当前端点由父 observation 表达。`ProviderRelationObservation` 用两个 key 表达一条规范化 `citing -> cited` 有向引用边。两种用法都不接受本地 Literature ID、目标 MetadataObservation 或状态字段；Model validator 只检查封闭结构、至少一个定位值和非空格式，不决定版本归属、目标接纳或 Reference 建立。精确合同见 [MetadataObservation 来源输入](#25-元数据来源与字段裁决)与 [ProviderRelationObservation](#352-providerrelationobservation)。
 
 ## 4. 材料获取、路线与候选
 
 ### 4.1 独立材料供给与人类介入
 
-按 [ADR 0026](../decisions/0026-agent-knowledge-and-human-collaboration.md)，Acquisition 独立交付已验证原始材料，Analysis 不适用不直接撤销已接纳资产。TypeScript 生产 completion 已取消 `NoUsableContent` 自动清理；下文保留旧清理服务的显式调用与兼容背景，不能将其描述为当前 Analysis 的副作用。材料失效仍须由独立 owner 的明确决定触发。
+按 [ADR 0026](../decisions/0026-agent-knowledge-and-human-collaboration.md)，Acquisition 独立交付已验证原始材料，Analysis 不适用不直接撤销已接纳资产。TypeScript 生产 completion 已取消 `NoUsableContent` 自动清理；旧清理服务已删除。材料失效仍须由独立 owner 的明确决定触发。
 
 生产 Browser 向[统一产品接口：人类工作台与知识阅读](01-product-interface.md#4-人类工作台与知识阅读)提供同会话观察/指导/必要接管能力。控制权与在途动作由共享运行时管理，Acquisition 始终执行 PDF 文件门和任务绑定，文章内容身份保持未验证（ADR 0029）；人工点击或指导不能等同下载成功。公开/API/Browser 分层与 Network 边界保持。
 
@@ -1332,7 +1010,6 @@ persistent context 中的文章隔离/临时资源清理和本地 Chromium found
 - Literature 仍存在；
 - 当前统一元数据仍与获取输入一致；
 - 当前主 PDF 没有被另一结果替换；
-- Literature 尚未具有与当前主 PDF 对齐的有效 `CONTENT_READY` 内容；
 - 发布的文件 hash 与请求一致。
 
 只有文件发布、唯一 `primary-pdf` 关系和已有自动获取耗尽事实清除都成功后，Service 才返回 `AcquiredPrimaryPdf`。Stale 结果拒绝建立关系并作为系统提交错误返回；已发布但未引用的相同内容由 Storage 对账处理。发布失败、事务失败、hash 冲突或 stale 都不能降级为 `NoPrimaryPdf`。
@@ -1341,17 +1018,9 @@ persistent context 中的文章隔离/临时资源清理和本地 Chromium found
 
 全部当前自动路径正常结束且没有主 PDF 时，Acquisition 使用独立短事务幂等写入 `AutomaticPdfAcquisitionExhaustion(literature_id)`，成功后才返回 `NoPrimaryPdf`。用户明确重试该 Literature 时，Entry 通过 Acquisition 公开操作先清除该事实，再发起新的自动获取；清除失败属于 Storage 错误。该事实不携带来源、原因、候选、时间、次数或配置快照。
 
-### 5.3 旧 completion 清理与独立材料有效性
+### 5.3 原始材料有效性
 
-旧 completion 曾在显式注入 cleanup adapter 且 Analysis 返回结构有效的 `NoUsableContent` 时，协调 Acquisition/Storage 撤销当前主 PDF 关系并继续其它候选。现行生产 bootstrap 不再向 `ContentAnalysisService` 注入该 adapter，单篇 completion 遇此结果只终止本次内容尝试并保留 PDF、来源、ParserResult 和旧有效结果；数据库补全不把该 hash 放进重取排除集，也不跨版本回退。该结果表示当前 ParserResult 对本次兼容 Analysis 不适用，一页 PDF 不自动无效。
-
-若将来显式失效当前手动 PDF，清理只可作用于 ArtifactStore 中的 SciRetriever 内部副本、关系和派生结果；用户原文件不在数据库中，也绝不能由此流程删除。手动来源没有自动 candidate key，再次手动接纳只能由用户明确发起。
-
-现行 `NoUsableContent` 只作为本次分析反馈：`DatabaseCompletionReport.no_usable_content_literature_ids` 可与最终 `failed` 分区重叠，失败码为 `completion-candidates-exhausted`；durable Job 既有适配把该非系统目标失败记为 `skipped`，并保留同一失败码。没有成功的 `LiteratureContent` 就不报告 `CONTENT_READY`。已接纳 PDF 的 Asset、关系、hash、provenance 与 ParserResult 不变，也不因本次失败写自动获取耗尽。下次明确维护操作可在同一 PDF 上重试 Analysis，但本次不会不断重新获取。ParserResult 乱码、截断、只剩资源引用或不足以判断，以及 Parser 或 LLM 调用失败，同样保留 PDF。
-
-一旦 Literature 已经形成与当前主 PDF 对齐的有效 `CONTENT_READY` 内容，普通候选发现不得自动替换该主 PDF。替换已接纳内容所依据的资产属于单独的显式产品变化，不由本候选循环隐式触发。
-
-仅当 Acquisition 独立拒绝尚未接纳的错误候选时，自动路线才会继续其它候选；Analysis 的内容判断不触发本次重取。后续新操作不恢复自动路线的临时 tried set；如果 Literature 已有自动获取耗尽事实，只有用户明确重试或新的 MetadataObservation 清除该事实后才会再次自动获取。当前进程的重试仍须遵守 ADR 0012 的共享准入。
+获取成功的 PDF 和原始解析独立保存；解析、建档和算子失败不会触发“无可用总结”清理。任何材料退役必须是独立的显式维护决定，并核查文档、回执和结果依赖。
 
 ### 5.4 Network、官方政策、凭据和资源
 
@@ -1472,12 +1141,11 @@ MaterialRef 的目标设计将已接纳 Asset/关系和 hash 作为最小材料�
 - 使用同一保守身份规则创建或命中 `Literature`，不能因来源是用户而强行合并稳定标识符冲突的记录；
 - 未命中时返回 `created`；命中后，非空导入值补齐缺失字段或替换当前 Provider 值时返回 `enriched`；命中且当前统一投影不变时返回 `matched`。首次与当前 Provider 值相同的用户记录仍保存 user observation，只有相同规范化 user observation 已存在时才复用既有事实；输入不合格、缺少最低识别信息或稳定标识符明确冲突时返回 `rejected`；
 - 导入 observation 的非空书目信息优先于全部 Provider observations，Provider 只能补缺；导入 keywords 可以进入统一初始 metadata，完整 Analysis 后仍由全文关键词替换；
-- `CONTENT_READY` Literature 可以接纳新的非重复导入 observation，但不能因此单独替换当前最终 metadata/content；下一次完整 Analysis 把该 observation 作为最高优先级初始输入；
 - 单条错误只拒绝该条；
 - 外部工具数据库 ID、附件绝对路径、同步状态、插件字段、界面设置、笔记和集合层级不进入核心数据库；
 - 不长期保存原始书目文件、外部工具对象、导入批次历史或其它过程来源细节。
 
-只要 `Literature` 已形成可转换的当前 `LiteratureMetadata` 即可导出，不要求 PDF、解析或内容总结完成。未达到 `CONTENT_READY` 时导出统一初始 metadata，达到后导出已验收最终 metadata。默认每个 `MetaLiterature` 选择一个最佳可导出 Literature；用户明确要求时可以导出全部 Literature。目标格式无法表达的字段必须形成明确损失说明。
+只要 `Literature` 已形成可转换的当前 `LiteratureMetadata` 即可导出，不要求 PDF、解析或内容总结完成。始终导出当前接纳的 metadata，不按分析或建档状态切换另一套数据。默认每个 `MetaLiterature` 选择一个最佳可导出 Literature；用户明确要求时可以导出全部 Literature。目标格式无法表达的字段必须形成明确损失说明。
 
 ### 6.2 Ports 与事务
 
@@ -1489,28 +1157,14 @@ Literature 拥有：
 - Identity transaction；
 - Reference publication；
 - Reference support publication；
-- Content acceptance publication；
+- Metadata field publication；
 - Import/export publication。
 
-来源 observation、身份、统一元数据和 DiscoveryRun 结果/原因的组合提交，以及最终 metadata、keywords、LiteratureContent、规范 Markdown 关系和内容完成依据的组合提交，由 Entry 调用复合持久化 Port 整体完成。Reference 在两个 Literature 身份都已接纳后，通过独立 publication 与第一项 ReferenceSupport 整体、幂等提交；后续 support 可以向同一 Reference 幂等追加。引用提交失败不回滚目标文献、来源原文或已经接纳的内容。Storage 只能保存 Literature 已形成的决定。
+来源 observation、身份、统一元数据和 DiscoveryRun 结果/原因组合提交；引用在身份接纳后独立发布。Storage 保存业务 owner 已确认的决定，不因派生状态自行删除资产。
 
-### 6.3 Literature 内容接纳
+### 6.3 元数据与材料接纳
 
-Application 的 `writes` 为 FileStore 与 SQLite 共同提供 catalog 写入准入。`DatabaseCompletion.run`
-只在冻结 selector 时持准入，`runFrozen` 不包裹整个运行；网络、模型、文件准备和后台下载不持
-cohort 长写锁。Candidate 的 hash/文件复制和目标检查在准入外准备，最终 create-if-absent
-发布、当前输入/receipt 复检及 SQL CAS 提交持各 publication 自身的短准入；准入内遇既有
-目标还需比较相同字节，不依赖准备时的旧判断覆盖数据。Parser 和内容提交继续由各自原事实
-owner 取得写入准入。同进程排队、活动上下文嵌套复用，跨进程使用与 Python 相同的 OS flock
-协议。关闭等待已准入的发布结束。自定义跨文件/SQL 提交应通过 `app.writes.run(...)`，详见
-[写入准入证据](../../../migration/evidence/runtime/catalog-write-admission.md)。[显式描述符文件回收](../../../migration/evidence/runtime/artifact-reclamation.md)已接入同一边界。
-
-`app.literatureContent.accept(proposal, markdownBytes, signal?)` 消费闭合中性 Proposal，验证 final metadata、
-内容 hash、Analysis lineage 与实际 Markdown 字节，读取当前事实后分配下一 metadata revision。
-Storage 先发布不可变 JSON/Markdown，再在同一 SQLite 事务检查 primary/ParserResult/metadata 基线，
-一起替换 metadata、content、关键词、引用支持及 FTS。失败保留旧 current view；普通失败不触发
-NoUsableContent 业务清理。详见
-[内容接纳证据](../../../migration/evidence/runtime/content-acceptance.md)。
+Application 的 writes 为 FileStore 与 SQLite 提供同一短写入准入。网络、模型和文件准备在锁外；不可变发布、输入复检与 SQL CAS 在准入内完成。元数据、原始解析、校订文档和算子结果分别由各自业务 owner 接纳，不再以两阶段总结绑定统一元数据。已发布事实不因后续索引失败或取消而撤销。
 
 ## 7. 材料与文献验证
 
@@ -1520,7 +1174,6 @@ NoUsableContent 业务清理。详见
 
 - 每个 Literature 必须且只能属于一个 MetaLiterature，且第一篇 Literature、MetaLiterature 和代表关系原子创建；
 - MetaLiterature 不能没有成员，代表 Literature 必须属于当前 MetaLiterature，成员关系不能被双向重复保存；
-- MetaLiterature 不保存 status、current asset/content 指针或批量候选；“至少一个成员达到 ASSET_READY/CONTENT_READY”只从成员 current facts 推导；
 - `VersionRole` 只接受 `published`、`accepted-manuscript`、`preprint` 和 `other`，未知来源不能猜测为 `published`；
 - Literature 基础对象不重复保存 metadata 顶层字段，也不嵌入 observation、资产、内容或关系列表；
 - DOI 的裸值、`doi:`、`https://doi.org/`、`http://dx.doi.org/`、大小写和边界空白收敛为相同 canonical key；PMID、PMCID 和其它已支持 namespace 只使用各自官方格式；
@@ -1540,7 +1193,6 @@ NoUsableContent 业务清理。详见
 - `MetadataObservation` 使用独立 `observation_id` 和公共 `Provenance`，不携带 Literature 身份，也不在顶层重复来源、来源记录 ID 和观察时间；Provider 与书目导入只通过受约束的 provenance 区分；
 - 一个 Literature 可以关联多个长期保存的不可变 MetadataObservation，新增 observation 不覆盖旧对象；LiteratureMetadata 始终只有一份当前值；
 - `metadata_revision` 只在当前 LiteratureMetadata 成功替换时递增，用于 stale 复检和当前内容对齐，不存在旧统一 metadata revision 历史；
-- `CONTENT_READY` 后新增 MetadataObservation 只增加来源事实，不单独覆盖当前最终 metadata/content；完整重分析成功后才整体替换；
 - observation 级 `version_role` 与 `AssetHint.version_role` 保持独立，没有可靠证据时不能猜测为 `published`；
 - `version_links` 只接受供应商明确声明的同文献版本目标，每个 key 至少有一种稳定定位；未解析或冲突目标不创建占位 Literature，也不改变 MetaLiterature 归属；
 - 相同 MetaLiterature 的版本归属只保存为 `Literature.meta_literature_id`，不建立 `LiteratureRelationObservation`、`LiteratureRelation` 或其它平行版本事实；
@@ -1550,13 +1202,11 @@ NoUsableContent 业务清理。详见
 - `reference_texts` 按来源顺序保存非空原文，不维护或暗示列表完整性，也不根据其长度推导计数；
 - `ProviderRelationObservation` 一条只表达一条供应商有向边，可以在目标尚未入库时独立存在且不会自动物化 Literature 或递归；
 - 只有当前扩展范围选中的 relation observation 才尝试解析目标，未选中或接纳失败时不形成 ReferenceSupport；
-- `LiteratureContent.references` 以允许为空的有序非空文本独立保存 PDF 参考文献，并通过单一 Analysis provenance 回溯输入；空 tuple 渲染“未提供”但不产生 reference；Parser 不产生参考文献文本、lookup 或权威关系；
 - `ReferenceLookup` 不持久化，不能绕过 Metadata 和 Literature 身份规则直接创建目标；
 - Reference 只有三个 ID 字段，只在两个不同的具体 Literature 都已接纳且至少存在一项有效 ReferenceSupport 后建立，相同 source/target 幂等；
 - ReferenceSupport 使用三种封闭来源结构，索引从零开始；结构化关系方向必须与 Reference 一致，文本来源必须属于引用方，相同 `(reference_id, source)` 幂等；
 - 供应商结构化关系和原始参考文献文本按数据语义区分，不按专门接口或默认返回方式区分；
 - 多个来源只为同一 Reference 增加 support，Reference 不连接原文、供应商记录或 MetaLiterature，也不平铺 provenance；
-- 当前 LiteratureContent 成功替换时删除旧 ContentReferenceTextSupport，Reference 没有其它 support 时一并删除；失败替换保留完整旧 content 和 support；
 - 解析失败或候选歧义只保留原文，不创建占位 Literature 或未解析 Reference；
 - Literature 级引用和 MetaLiterature 级汇总；
 - cited-by 查询是权威引用关系的反向读取，不形成第二套关系事实；
@@ -1568,7 +1218,7 @@ NoUsableContent 业务清理。详见
 - 查询不直接依赖内部数据库表结构；
 - LibraryQuery 只搜索允许的当前权威字段并以具体 Literature 为结果单位；一般多值 OR、keywords AND、普通 text 无 SQL/FTS 语法，分页/排序不进入 QuerySelector；
 - LibrarySearchRequest 的默认排序、缺失值后置、LiteratureId 稳定 tie-break、relevance 前置条件、total_count 和不透明 cursor 绑定成立；后续页面重新读取 current facts，不伪造持久化查询 snapshot；
-- SearchItem/Page 和 LiteratureDetail 是同一 read-only snapshot 临时组装的不可变投影，不持久化或形成写入输入；Detail 的 metadata revision/hash、状态、缺失步骤、资产、ParserResult、Content 和引用数量相互一致；
+- SearchItem/Page 和 LiteratureDetail 是同一 read-only snapshot 临时组装的不可变投影，不持久化或形成写入输入；Detail 的 metadata revision/hash、状态、缺失步骤、资产、原始解析、校订稿和引用数量相互一致；
 - Detail 不嵌入大型 artifact 字节或无界 Reference/Support/Discovery 图；当前参考文献原文可随来源/content 读取，权威关系、support、发现历史和 artifact 使用独立读取；
 - references 与 cited-by 页面使用同一 Reference 的正反向读取，相关 Literature 复用 SearchItem，普通页面只给 support count；ReferenceDetail 才返回同一 snapshot 中的 source、target 与全部当前 support，不建立反向边或第二套引用数量；
 - Literature 的 artifact read Port 只接受 Detail 已给出的 Asset/ArtifactRef，复核正式对象的相对引用、普通文件、size、hash 与 media type 后返回 context-managed 只读 binary stream；Model 不执行 I/O，也不暴露内部绝对路径；
@@ -1576,7 +1226,6 @@ NoUsableContent 业务清理。详见
 - 查询能够分别返回 DiscoveryRun 发现记录和按 MetaLiterature 聚合的成员完成事实，两者不混成 Literature 状态；
 - 查询能够筛选需要人工 PDF 的具体 Literature；新增 MetadataObservation 与耗尽事实清除属于一个逻辑提交；
 - 最终 metadata/content 接纳拒绝 stale PDF 或 metadata revision，且不会留下部分 keywords、sections、references 或 artifact 关系；
-- 每个 Literature 只保留一个当前 LiteratureContent；内容 hash、Markdown 字节 hash 与单一 Analysis provenance 含义分离，当前派生内容可以从权威元数据和 PDF 重建；
 - 身份整理、删除和内容接纳提交不存在部分关系更新。
 
 ### 7.2 验收
@@ -1651,20 +1300,18 @@ NoUsableContent 业务清理。详见
 - Metadata 与 Acquisition 使用同一 API quota 时共享 scope；API `Retry-After` 和 quota 阻塞对所有调用方生效；
 - redirect 到新的 provider/host 不能绕过目标网页 scope 或 host 预算，公开状态不形成限速豁免；
 - 当前进程内的失败、超时和取消不能泄漏网页 permit 或清空仍有效的冷却/`blocked_until`；新进程不恢复这些动态状态；
-- 旧清理服务的明确调用单独验证；生产 completion 与独立分析均不因 NoUsableContent 删除材料。一页完整短文不因页数被判无效；
 - 同次运行使用临时 tried set 避免立即重试，新运行允许重新发现且数据库不保存无效 candidate/route/decision；
 - 新 MetadataObservation、成功自动或手动主 PDF、用户明确重试都会清除自动获取耗尽事实；全库自动补全默认跳过仍有该事实的 Literature；
 - Parser/LLM 调用失败、ParserResult 乱码/截断/只有资源引用或无法判断时不删除 PDF；
-- 无效候选不留下候选级长期详情；Analysis 明确无内容只终止本次尝试，不删除已接纳 PDF、ParserResult、原始 MetadataObservation 或 AssetHint；旧清理服务仅可明确调用；
-- 已有有效 `CONTENT_READY` 内容时不自动替换主 PDF，补充资产不驱动 Parsing、Analysis 或状态。
+- 无效候选不留下候选级长期详情；Analysis 明确无内容只终止本次尝试，不删除已接纳 PDF、ParserResult、原始 MetadataObservation 或 AssetHint；
 
 凭据、readiness 和 `config test` 测试使用临时凭据文件、fake adapter 与本地 Network，不读取真实用户配置，也不访问真实供应商。
 
 HTTP 和 Browser 测试使用本地受控站点，不连接真实供应商。
 
-## 8. ADR 0037 目标形态：元数据字段与文献状态（实施中）
+## 8. ADR 0037 目标形态：元数据字段与文献状态
 
-本节描述 ADR 0037 的目标合同。元数据字段、字段来源/人工锁定、v15 迁移和内部 DSH 元数据步骤已实施，正在综合验收；六状态与完整建档编排仍由 09 实施。任务与验证证据见计划的 07、09。
+本节列出已接入的字段、裁决和状态合同；旧库转换与部署验收的状态单独记录在计划 12。
 
 ### 8.1 出版形式与文章性质
 
