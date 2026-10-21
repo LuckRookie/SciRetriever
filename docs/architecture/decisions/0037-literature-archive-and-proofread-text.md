@@ -1,12 +1,12 @@
 # ADR 0037：文献建档、校订稿与算子输入
 
-- Status: Accepted（2026-10-20，Owner 在[实施计划](../../plans/2026-10-20-literature-archive/README.md)的 GA 确认）；第二版修订（2026-10-20，按真实样本结果重写第 2、3、5、8、10 节）同日经 Owner 确认；目标架构，实施中
+- Status: Accepted（2026-10-20，Owner 在[实施计划](../../plans/2026-10-20-literature-archive/README.md)的 GA 确认）；第二版修订（2026-10-20，按真实样本结果重写第 2、3、5、8、10 节）同日经 Owner 确认；第二版代码已实现，验收边界见末节
 - Date: 2026-10-20
 - Supersedes: [ADR 0008](../../archive/decisions/0008-summarized-markdown-literature-content.md)、[ADR 0010](../../archive/decisions/0010-parser-neutral-markdown-current-result.md)
 - Amends: [ADR 0001](0001-sciretriever-scope-and-boundary.md)、[ADR 0002](0002-literature-identity-and-incremental-processing.md)、[ADR 0003](0003-operator-managed-mineru-service.md)、[ADR 0007](0007-reference-resolution-and-authoritative-relations.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)、[ADR 0028](0028-query-and-expansion-separation.md)、[ADR 0032](0032-library-centered-web-workspace.md)、[ADR 0034](0034-unified-processors-and-results.md)
 - Related: [提案](../../archive/2026-10-20-literature-archive-proposal/proposal.md)、[ADR 0028](0028-query-and-expansion-separation.md)、[ADR 0029](0029-unverified-pdf-acquisition.md)、[ADR 0033](0033-machine-interfaces-cover-web-capabilities.md)、[文献与材料](../technical/03-literature-materials.md)、[文档与证据](../technical/04-document-evidence.md)、[知识加工](../technical/05-knowledge-processing.md)、[版本化存储](../technical/07-versioned-storage.md)
 
-> 本 ADR 记录已接受的目标架构，不代表已经实现。在实施完成之前，代码仍按旧路径运行；实施进度以计划为准。
+> 本 ADR 记录已接受的目标架构。第二版代码已经接入并通过工程验收；真实库切换与样本质量边界见末节及实施计划，不代表全库文献已经完成建档。
 
 ## 背景
 
@@ -317,4 +317,4 @@ Owner 明确要求合并全部数据库版本，不再保留历史 schema 定义
 
 Owner 委托 Codex 对原图抽查与 GV 作判断。13 份/49 页小样本的有效试跑中，12 份 complete、1 份预算耗尽 incomplete；对 6 份样本的 10 个页面抽看发现表格参数遗漏，修正编辑约束/表格格式校验/原表图保留后复验 3 页，遗漏的参数已保留。默认继续 vlm-engine，不据此宣称总体优于 pipeline；complete 仍只代表处置完整，不代表无错误或全库准确率。
 
-源码、对象图、接口与当前文档已完成第二版接入；最终 Full 执行后仍有失败，32 项均已有定向通过证据，200 篇复用用例按 Owner 不设处理总时限的口径通过；没有重跑 Full，不宣称同一最终 patch 已全量验收通过。一次性转换工具只在合成旧库验证；真实库未转换，4174 未停止，不能把本节当成真实库已切换或全计划已验收。
+源码、对象图、接口与当前文档已完成第二版接入；代码提交 f96f16f 的冻结版本通过完整 Full（Quick、296 文件/2,110 项、最终 build；16 文件/40 项既有 runtime 条件跳过，0 失败）。200 篇等已核查功能流程没有任意总处理时限，操作级期限、取消与证据断言仍保留。原失败日志保留，未以多轮定向结果冒充 Full。正式库转换与切换已获 Owner 授权，将在副本核对后执行；本段尚不代表正式库已经切换。

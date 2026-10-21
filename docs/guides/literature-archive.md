@@ -4,6 +4,8 @@
 
 建档与机器/Web 接口已接入，校订采用 DSH 看原图矫正；第二版小样本已在授权范围内验证。真实库转换和全量重建是独立维护步骤，现有用户库不会在启动时自动转换。
 
+显式解析需要可用的 MinerU 连接；建档使用已有解析，并需要可用的 DSH 模型。校订的页面渲染还需要已通过安装校验的 CloakBrowser runtime：`SCIRETRIEVER_CLOAK_BUNDLE` 应指向包含 `chrome` 和安装清单的具体版本目录，而不是它的缓存父目录，安装方式见[安装指南](installation.md)。`parser-unavailable` 表示解析后端尚不可用；建档问题中的 `proofread-renderer-unavailable` 表示页面渲染 runtime 不可用。两者应分别检查，已完成的 PDF 接纳和解析不会因此撤销。
+
 ## 发起与恢复
 
 ```bash
@@ -51,3 +53,5 @@ CLI 等待所提交的持久任务结束；MCP 和 Web 应用边界返回任务�
 MCP 对应 `archive_query`（status/issues/stats/events）与 `archive_manage`（build/resolve/resume），共享 CLI 的应用边界。Web 已提供建档问题、显式解析与建档、统计以及元数据／标签／校订编辑入口，见 [Web 工作空间](web-workbench.md#建档标签与快照)。
 
 [用户指南](README.md) · [解析与校订文档](document-processing.md) · [标签词表](tags.md)
+
+文献库默认显示全部状态，可自行筛选已就绪文献。总结中的“存疑”是可展开的核对标记，展开后可查看原因和固定原文；它不阻断阅读。证据与校订对照均支持公式和表格，窄屏也可使用核对入口。

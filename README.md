@@ -282,7 +282,7 @@ sciretriever complete pdf ...
 sciretriever complete parser ...
 ```
 
-`pdf` 的目标是达到 `ASSET_READY`，`parser` 的目标是达到 `PARSER_RESULT_READY`：主 PDF 的两种 profile 都有当前原始解析。显式 `complete parser` 可以先获取缺少的 PDF，再解析；它不建档、不总结，也不发布默认阅读文档。旧 `complete content` 已删除。每次运行必须通过以下一种 selector 明确选择范围：
+`pdf` 的目标是达到 `ASSET_READY`，`parser` 的目标是达到 `PARSER_RESULT_READY`：主 PDF 已有当前部署 profile 的原始解析。显式 `complete parser` 可以先获取缺少的 PDF，再解析；它不建档、不总结，也不发布默认阅读文档。旧 `complete content` 已删除。每次运行必须通过以下一种 selector 明确选择范围：
 
 - `--all-pending`
 - `--discovery-run-id`
@@ -549,3 +549,9 @@ pnpm full
 - [历史归档](docs/archive)
 
 统一加工入口支持标签、记录提取、旧知识分析适配和跨结果综合。任务冻结输入并复用完整结果，结果持久保存、可检索和展开证据；CLI/MCP 共用接口，详见[统一知识加工指南](docs/guides/knowledge-processors.md)。新功能要求 Catalog v10，不自动升级已有库。
+
+## 已定事项（2026-10-21）
+
+- Web 文献库默认显示全部状态，解析和建档均由用户明确、分别发起。
+- 正式库转换到当前唯一 schema 后使用当前代码启动 Web；不再用旧构建作为日常服务。转换保留原始 PDF、元数据观测和身份关系，旧 VLM Markdown 登记为原始解析，删除已退役的总结、知识、算子结果与旧文档版本。
+- 数据库转换和服务启动不会自动解析、建档或调用模型；由用户在 Web 分批发起后续处理。
