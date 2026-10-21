@@ -97,7 +97,7 @@ describe("processing skip diagnostics and explicit retry", () => {
       expect(
         (await env.app.processingTasks!.read(cancelled.job_id)).job.status,
       ).toBe("cancelled");
-      expect(env.parseCalls).toBe(2);
+      expect(env.parseCalls).toBe(1);
     } finally {
       await env.close();
     }

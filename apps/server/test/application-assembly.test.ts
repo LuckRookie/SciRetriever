@@ -208,6 +208,7 @@ describe("application composition", () => {
     try {
       expect(application.rawParsing).not.toBeNull();
       expect(application.configuration.parsing).toEqual({
+        archive_profile: "vlm-engine",
         base_url: "https://parser.example.test/v1",
         connection_mode: "remote",
         model_identity: "mineru-fixture",

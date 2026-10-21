@@ -1,3 +1,4 @@
+import { boundedCanonicalJsonBytes } from "./canonical-bounded.js";
 import {
   parseProcessorValueChecks,
   type ProcessorValueCheck,
@@ -735,8 +736,10 @@ export async function parseProcessorResult(
 }
 
 export function processorResultBytes(result: ProcessorResult): Uint8Array {
-  return extractionCanonicalJsonBytes(result, 8 * 1024 * 1024, {
-    maxNodes: 20480,
+  // Every JSON node consumes at least one byte; the existing byte ceiling
+  // also bounds traversal without a smaller, unrelated Extraction node cap.
+  return boundedCanonicalJsonBytes(result, 8 * 1024 * 1024, {
+    maxNodes: 8 * 1024 * 1024,
     maxDepth: 32,
     maxArrayLength: 10000,
   });

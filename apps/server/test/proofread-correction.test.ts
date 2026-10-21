@@ -109,6 +109,61 @@ async function context(): Promise<CorrectionContext> {
     resources: [],
   };
 }
+it("asks the same DSH session to preserve table markup and correct a rejected flattening", async () => {
+  const base = await context();
+  const original =
+    "<table><tr><th>parameter</th><th>hk1</th></tr><tr><td>a = 2.812(2)</td><td>003</td></tr></table>";
+  const table = {
+    ...base.drafts[0]!,
+    type: "table" as const,
+    text: "",
+    html: original,
+  };
+  const c = { ...base, drafts: [table], suspects: [] };
+  let calls = 0;
+  const e = setup(async (request, _options, _signal, lifecycle) => {
+    calls++;
+    lifecycle?.onDispatched();
+    if (calls === 1) {
+      expect(JSON.stringify(request.messages)).toContain(
+        "preserve all unaffected content verbatim",
+      );
+      return tool("page_image", { page: 0 });
+    }
+    if (calls === 3)
+      expect(JSON.stringify(request.messages.at(-1))).toContain(
+        "proofread-table-format",
+      );
+    return tool("submit_result", {
+      edits: [
+        {
+          kind: "replace",
+          block_id: table.block_id,
+          basis_page: 0,
+          reason: "Only correct hk1 to hkl; retain the side-cell parameter.",
+          text:
+            calls === 2
+              ? "parameter | hkl\n003"
+              : original.replace("hk1", "hkl"),
+        },
+      ],
+      dispositions: [],
+      no_body_reason: null,
+    });
+  });
+  try {
+    const corrector = (await dshCorrector(e.runtime, e.storage, e.pages, 3))!;
+    const result = await corrector.correct(c, 3);
+    expect(result.calls).toBe(3);
+    expect(result.reason).toBeNull();
+    expect(result.submission?.edits[0]).toMatchObject({
+      text: original.replace("hk1", "hkl"),
+    });
+    expect(e.cache.size).toBe(1);
+  } finally {
+    await e.runtime.close();
+  }
+});
 it("uses one DSH conversation to view images, correct rejected drafts, count tokens and reuse only verified submissions", async () => {
   let calls = 0;
   const c = await context();

@@ -66,6 +66,18 @@ export interface CorrectionSubmission {
   }[];
   readonly no_body_reason: string | null;
 }
+/** Table content is HTML, including when supplied through a replace edit. */
+export function requireTableMarkup(value: string | null): void {
+  if (
+    value === null ||
+    !/^\s*<table\b[^>]*>[\s\S]*<\/table>\s*$/iu.test(value) ||
+    !/<tr\b[^>]*>/iu.test(value) ||
+    !/<t[dh]\b[^>]*>/iu.test(value)
+  )
+    throw Object.assign(new Error("proofread-table-format"), {
+      code: "proofread-table-format",
+    });
+}
 export interface CorrectionContext {
   readonly locked_block_ids?: readonly string[];
   readonly asset_id: string;

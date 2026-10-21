@@ -87,6 +87,7 @@ describe("ordinary configuration boundary", () => {
       limit: 12,
     });
     expect(configuration.parsing).toEqual({
+      archive_profile: "vlm-engine",
       base_url: null,
       connection_mode: null,
       model_identity: null,

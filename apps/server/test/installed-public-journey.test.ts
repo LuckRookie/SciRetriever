@@ -859,6 +859,10 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
     );
     let parserCalls = 0;
     let modelError: string | null = null;
+    // Parser transport and its text-layer boundary share a synthetic source;
+    // dedicated PDF tests exercise the actual renderer and correction quality.
+    const parserText =
+      "# Abstract\n\nFixture Author reports installed spectroscopy.\n\n# Results\n\nThe installed paper measured 4.2 eV in dry conditions.\n\n# Conclusion\n\nA synthetic measurement.\n\n# References\n\n[1] Synthetic reference.\n";
     const legacyParserPorts = {
       rules: new server.TypeScriptParserArtifactRules(),
       parser: {
@@ -866,9 +870,7 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
           request: import("../src/parsing/ports.js").ParserRequest,
         ) => {
           parserCalls++;
-          const bytes = Buffer.from(
-            "# Abstract\n\nFixture Author reports installed spectroscopy.\n\n# Results\n\nThe installed paper measured 4.2 eV in dry conditions.\n\n# Conclusion\n\nA synthetic measurement.\n\n# References\n\n[1] Synthetic reference.\n",
-          );
+          const bytes = Buffer.from(parserText);
           return {
             source_asset_id: request.source_asset_id,
             source_sha256: request.source_sha256,
@@ -901,6 +903,23 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
       },
     };
     application = await server.createApplication(home, {
+      proofreadPages: {
+        method: "installed-fixture-pages-v1",
+        inspect: async () => [
+          {
+            page: 0,
+            kind: "text-layer",
+            text: parserText,
+            visible_glyphs: parserText.length,
+            hidden_glyphs: 0,
+            unmapped_glyphs: 0,
+            has_graphics: false,
+          },
+        ],
+        image: async () => {
+          throw new Error("Synthetic text fixture must not request images");
+        },
+      },
       agentTransportFactory:
         () =>
         async ({ body, onDispatched }) => {

@@ -288,7 +288,7 @@ export function Popover({
     </DialogTrigger>
   );
 }
-/** For trusted engine-owned anchors whose DOM cannot be wrapped by DialogTrigger. */
+/** Engine-owned hover previews keep focus on their anchor; nested modal Dialog autofocus would close them during pointer entry. */
 export function AnchoredPopover({
   label,
   isOpen,
@@ -306,14 +306,14 @@ export function AnchoredPopover({
     <AriaPopover
       className="ui-popover ui-evidence-popover"
       placement="bottom"
+      trigger="PreviewTrigger"
+      aria-label={label}
       triggerRef={triggerRef}
       isOpen={isOpen}
       onOpenChange={onOpenChange}
       isNonModal
     >
-      <Dialog aria-label={label} className="ui-popover-content">
-        {children}
-      </Dialog>
+      <div className="ui-popover-content">{children}</div>
     </AriaPopover>
   );
 }

@@ -92,7 +92,7 @@ it("reuses a fixed parsed material from the React maintenance entry under its or
       .poll(() =>
         page
           .getByRole("status")
-          .filter({ hasText: /pipeline：已复用/ })
+          .filter({ hasText: /vlm-engine：已复用/ })
           .count(),
       )
       .toBe(1);

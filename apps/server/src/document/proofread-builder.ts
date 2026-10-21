@@ -1,4 +1,8 @@
-import { MAX_DOCUMENT_STRUCTURE_BYTES } from "./builder.js";
+import {
+  MAX_DOCUMENT_MARKDOWN_BYTES,
+  MAX_DOCUMENT_STRUCTURE_BYTES,
+} from "./limits.js";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
   canonicalJsonBytes,
   parseProofreadVersion,
@@ -31,7 +35,14 @@ export async function buildProofreadStructure(
   value: ProofreadVersion,
   blockBytes: Uint8Array,
   markdown: Uint8Array,
+  signal?: AbortSignal,
 ) {
+  const check = () => {
+    if (signal?.aborted) throw new Error("proofread-document-cancelled");
+  };
+  check();
+  if (markdown.byteLength > MAX_DOCUMENT_MARKDOWN_BYTES)
+    throw new Error("proofread-document-markdown-limit");
   const v = await parseProofreadVersion(value);
   if (v.status !== "complete") throw new Error("proofread-document-incomplete");
   if (
@@ -60,6 +71,10 @@ export async function buildProofreadStructure(
   const segments: DocumentStructureV2["segments"][number][] = [];
   const stack: typeof sections = [];
   for (let i = 0; i < blocks.blocks.length; i++) {
+    if (i % 256 === 0) {
+      await yieldToEventLoop();
+      check();
+    }
     const block = blocks.blocks[i]!,
       range = rendered.ranges[i]!,
       kind = kinds[block.type];
@@ -108,5 +123,7 @@ export async function buildProofreadStructure(
   const bytes = canonicalJsonBytes(structure);
   if (bytes.byteLength > MAX_DOCUMENT_STRUCTURE_BYTES)
     throw new Error("proofread-document-structure-limit");
-  return { structure, bytes, sha256: await sha256(bytes) };
+  const digest = await sha256(bytes);
+  check();
+  return { structure, bytes, sha256: digest };
 }

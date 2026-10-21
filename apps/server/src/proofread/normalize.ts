@@ -1,4 +1,4 @@
-export const NORMALIZE_VERSION = "normalize-v2";
+export const NORMALIZE_VERSION = "normalize-v3";
 /** Units whose identities must survive compatibility normalization. */
 export const UNIT_EQUIVALENTS: Readonly<Record<string, string>> = Object.freeze(
   { "℃": "°C", "℉": "°F", "‰": "‰", "%": "%", "％": "%", K: "K", μ: "μ" },
@@ -101,7 +101,9 @@ export function semanticTokens(value: string): SemanticTokens {
       /^(?:°C|°F|%|‰|K|m|s|g|cm|kg|mol|mmol|nm|μm|Pa|kPa|MPa|L|mL)$/u.test(s),
     ),
     formulas: [
-      ...text.matchAll(/(?:[A-Z][a-z]?(?:_?\{?\d+\}?)?){1,}(?=\b|[\s.,;])/gu),
+      ...text.matchAll(
+        /(?<![\p{L}\p{N}_])(?:[A-Z][a-z]?(?:_?\{?\d+\}?)?){1,}(?=\b|[\s.,;]|$)/gu,
+      ),
     ].map((m) => m[0]),
   };
 }

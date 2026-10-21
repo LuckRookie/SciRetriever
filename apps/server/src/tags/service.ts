@@ -18,6 +18,7 @@ import type { SqliteDocumentStorage } from "../document/storage.js";
 import type { SqliteAnnotationStorage } from "../storage/structure-annotations.js";
 import type { LiteratureMetadataService } from "../literature/metadata-service.js";
 import { TagError, tagNames, validateCompoundName } from "./rules.js";
+import { selectTagInput } from "./input.js";
 export interface TagConfiguration {
   readonly max_per_literature: number;
   readonly candidate_k: number;
@@ -208,7 +209,7 @@ export class TagService {
       primary.sha256 !== version.version.source_material_ref.asset_sha256
     )
       throw new TagError("tag-evidence-stale");
-    const fragments = await this.documents.withVerifiedDocument(
+    const selectedInput = await this.documents.withVerifiedDocument(
       document,
       async (v, markdown, structure) => {
         if (v.schema_version !== 2 || structure.schema_version !== 2)
@@ -216,37 +217,12 @@ export class TagService {
         const roles = new Map(
           annotation.segment_roles.map((s) => [s.segment_id, s.role]),
         );
-        const preferred = structure.segments.filter((s) =>
-          ["abstract", "introduction", "conclusion"].includes(
-            roles.get(s.segment_id) ?? "",
-          ),
-        );
-        const selected = preferred.length
-          ? preferred
-          : structure.segments
-              .filter(
-                (s) =>
-                  !["references", "bibliography", "front-matter"].includes(
-                    roles.get(s.segment_id) ?? "",
-                  ),
-              )
-              .slice(0, 8);
-        let bytes = 0;
-        return selected.map((s) => {
-          const text = new TextDecoder("utf8", { fatal: true }).decode(
-            markdown.subarray(s.start_utf8, s.end_utf8),
-          );
-          bytes += Buffer.byteLength(text);
-          if (bytes > 262144) throw new TagError("tag-input-limit");
-          return {
-            segment_id: s.segment_id,
-            text,
-            role: roles.get(s.segment_id) ?? "body",
-          };
-        });
+        return selectTagInput(markdown, structure.segments, roles);
       },
       signal,
     );
+    const { fragments, coverage } = selectedInput;
+    if (!fragments.length) throw new TagError("tag-input-empty");
     const model = this.requireModel(),
       usage = { calls: 0, input_tokens: 0, output_tokens: 0 };
     const call = async (
@@ -264,6 +240,7 @@ export class TagService {
         abstract: metadata.literature.metadata.abstract,
         keywords: metadata.literature.metadata.keywords,
         fragments,
+        coverage,
         max: this.configuration.max_per_literature,
       }),
       ["topics"],
@@ -464,7 +441,16 @@ export class TagService {
       }
     }
     if (!assignment) throw new TagError("tag-vocabulary-busy");
-    return { assignment, created_tags: created, usage };
+    return {
+      assignment,
+      created_tags: created,
+      usage,
+      input_coverage: {
+        document_version_id: document,
+        annotation_id: annotation.annotation_id,
+        ...coverage,
+      },
+    };
   }
   async consolidate(signal?: AbortSignal) {
     const through = (await this.state(signal)).version;

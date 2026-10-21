@@ -1,6 +1,7 @@
 import { Marked, type Token } from "marked";
 import katex from "katex";
 import { escape as e } from "./dom.js";
+import { renderTable } from "./table.js";
 
 const math = (text: string, displayMode: boolean) =>
   katex.renderToString(text, {
@@ -11,12 +12,15 @@ const math = (text: string, displayMode: boolean) =>
     maxExpand: 1000,
     maxSize: 20,
   });
-/** No remote media or raw HTML. Resource placeholders are filled only by the document owner. */
+/** Raw markup is escaped except for rebuilt table structure. Media are filled only by the document owner. */
 function createMarkdown(allowFragments: boolean) {
-  return new Marked({
+  const instance: Marked = new Marked({
     gfm: true,
     renderer: {
-      html: ({ text }) => e(text),
+      html: ({ text }) =>
+        renderTable(text, (value) =>
+          instance.parseInline(value, { async: false }),
+        ) ?? e(text),
       image: ({ href, text }) =>
         `<span class="reading-resource" data-resource="${e(href)}">图片：${e(text || href)}</span>`,
       link({ href, tokens }) {
@@ -50,6 +54,7 @@ function createMarkdown(allowFragments: boolean) {
       },
     ],
   });
+  return instance;
 }
 export const markdown = createMarkdown(false);
 /** Only the fixed-document owner wires and validates these fragment links. */

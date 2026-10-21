@@ -1,10 +1,10 @@
 # 可读文档与证据
 
-提供固定版本的正文、片段、资源与证据读取。ADR 0037 的新文档来源是校订稿；v13 已支持显式发布为默认全文，原始解析入口已停止自动发布全文。完整建档仍在实施。
+提供固定版本的正文、片段、资源与证据读取。文档来源是 complete 校订稿，显式发布为默认全文；原始解析入口不发布全文。建档编排在 archive 模块。
 
 ## 内容入口
 
-- [builder.ts](builder.ts)：历史 UTF-8 结构的确定性重建，供已有版本完整性检查与历史 fixture。
+- [limits.ts](limits.ts)：发布和读取共享的正文、结构字节上限。
 - [proofread-builder.ts](proofread-builder.ts)：complete 校订版本到 v2 结构的确定性构建，保存区块 ID、页码与区域。
 - [service.ts](service.ts)：`document parse` 的 raw 操作边界，不生成 Document，不更新默认全文。
 - [read.ts](read.ts)：统一文档与证据读取、部分分页、用于人工核对的有界对照。
@@ -20,6 +20,6 @@
 
 [上级目录](../README.md)
 
-- `section-rules.ts`、`structure-extract.ts`：结构注释的规则识别、模型边界、继承、前置信息角色、图表与参考文献的纯提取逻辑；尚未接入注释持久化与正式命令。
+- `section-rules.ts`、`structure-extract.ts`：结构注释的规则识别、模型边界、继承、前置信息角色、图表与参考文献的纯提取逻辑；由 annotations.ts 接入持久化与正式命令。
 
 结构注释由 `annotations.ts` 管理：规则/DSH 补充角色、图表与引用文本、人工锁定及版本发布；`section-classifier.ts` 只连接现有 DSH。`annotation-read.ts` 提供固定注释有界续读，outline/segments 经同一注释存储返回角色和过滤结果。引用关系仍由后续 Literature 接入负责，注释不拥有文献身份或关系合并。

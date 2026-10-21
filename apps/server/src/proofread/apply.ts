@@ -7,6 +7,7 @@ import {
 } from "@sciretriever/contracts";
 import {
   proofreadId,
+  requireTableMarkup,
   type CorrectionContext,
   type CorrectionSubmission,
   type DraftBlock,
@@ -118,6 +119,7 @@ export function applyEdits(
     if (Math.abs(edit.basis_page - input.page.page) > 1)
       fail("proofread-edit-page-scope");
     if (edit.kind === "insert_after") {
+      if (edit.block.type === "table") requireTableMarkup(edit.block.html);
       const identity = proofreadId(edit);
       if (
         inserted.has(identity) ||
@@ -136,6 +138,8 @@ export function applyEdits(
     }
     const target = blocks.find((b) => b.block_id === edit.block_id);
     if (!target) fail("proofread-edit-target");
+    if (edit.kind === "replace" && target.type === "table")
+      requireTableMarkup(edit.text);
     if (locked.has(edit.block_id)) fail("proofread-manual-locked");
     if (
       Math.abs(target.page - input.page.page) > 1 &&

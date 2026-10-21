@@ -13,3 +13,5 @@ PDF 页码输入保留尚未提交的编辑值，滚动通知不回写覆盖；�
 React 阅读入口通过 `contract.ts` 的 `ReadingContext` / `ReaderFrame` 接入；`source.ts` 是固定来源 URL 与身份解析。`dom.ts` 提供引擎内部的安全 DOM 控件。旧 DOM 入口 `entry.ts` / `frame.ts` 已删除，正式阅读引擎由 Vite 按需 chunk 装载。框架卸载后不再读取已脱离布局的滚动几何，避免把有效页码覆盖成末页。
 
 全文的显式片段链接仅对已加载、可匹配的 Markdown 标题提供预览和定位，不推测裸引用编号与 PDF 页码；标题显示层级可位于元数据文献标题之下，但原文字节、hash、UTF-8 范围和科学内容不改写。
+
+`table.ts` 从 inert template 重建 MinerU HTML 表格，只保留表格结构、有限排版和跨行/跨列属性；事件、样式、脚本与远程图片不进入页面。表内本地图片仍由固定文档资源 owner 读取，原文和证据字节不变。

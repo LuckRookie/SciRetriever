@@ -115,6 +115,7 @@ export class ProofreadDocumentService {
       v,
       output.blocks.bytes,
       output.markdown.bytes,
+      signal,
     );
     const structure: ArtifactRef = {
       sha256: built.sha256,

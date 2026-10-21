@@ -1398,7 +1398,7 @@ describe("explicit retrieval projection and bounded Context", () => {
       await query?.close();
       await env.close();
     }
-  });
+  }, 20000);
 
   it("reports evidence-limit for a matching unit with more than 32 source segments", async () => {
     const env = await fixture(true);

@@ -242,7 +242,7 @@ it("opens literature detail from one catalog snapshot and verifies artifact and 
     const detail = await app.library.detail(literatureId);
     expect(detail).not.toHaveProperty("content");
     expect(detail.literature.status).toBe("ASSET_READY");
-    expect(detail.missing_step).toBe("raw-parse");
+    expect(detail.missing_step).toBe("proofread");
     expect(detail.primary_pdf?.asset).toEqual(asset);
     for (const artifact of [
       detail.primary_pdf!.asset,

@@ -312,3 +312,40 @@ it("finds references merged across three pages and unmapped ligatures", () => {
   );
   expect(ligatures.some((s) => s.tokens.includes("U+E123"))).toBe(true);
 });
+
+it("compares Han text independently of PDF line and parser-block boundaries without hiding missing characters", () => {
+  const blocks = ["中文", "纳米晶 合成 nanocrystal.", "钙钛矿纳米晶合成"].map(
+    (text, i) => ({
+      block_id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+      page: 0,
+      text,
+      html: null,
+    }),
+  );
+  expect(
+    findSuspects([page(blocks.map((b) => b.text).join("\n"))], blocks, []),
+  ).toEqual([]);
+  expect(
+    findSuspects(
+      [page("中文纳米晶合成nanocrystal.钙钛矿纳米晶合成")],
+      blocks,
+      [],
+    ),
+  ).toEqual([]);
+  const missing = findSuspects(
+    [page("中文纳米晶合成nanocrystal.钙钛矿纳米晶合成")],
+    blocks.slice(1),
+    [],
+  );
+  expect(
+    missing.some((s) => s.kind === "missing" && s.tokens.includes("中")),
+  ).toBe(true);
+  expect(textTokens("纳米晶 1.00 mol")).not.toEqual(
+    textTokens("纳米晶 1.0 mol"),
+  );
+});
+
+it("does not retry a chemical-formula match at every character of a long non-formula token", () => {
+  const tokens = semanticTokens(`${"A".repeat(64000)}_suffix H2O Fe2O3`);
+  expect(tokens.formulas).toEqual(["H_{2}O", "Fe_{2}O_{3}"]);
+});

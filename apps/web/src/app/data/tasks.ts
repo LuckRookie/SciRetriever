@@ -27,8 +27,6 @@ export const taskStatusLabel: Readonly<Record<string, string>> = {
 export const operationLabels: Readonly<Record<string, string>> = {
   "parse-documents": "解析 PDF",
   "assess-article-identity": "核验材料身份",
-  analyze: "单篇知识分析",
-  "analyze-long": "长文分段分析",
   synthesize: "集合综合",
   "run-processor": "知识处理",
 };
@@ -139,14 +137,5 @@ export function taskLiteratureId(job: Json, target: Json): string | null {
       ? material.literature_id
       : null;
   }
-  if (item.operation !== "analyze" && item.operation !== "analyze-long")
-    return null;
-  const input = record(
-    record(item.request, "analysis request").input,
-    "input manifest",
-  );
-  const inputs = listField(input, "items");
-  if (inputs.length !== 1) return null;
-  const literatureId = record(inputs[0], "input item").literature_id;
-  return typeof literatureId === "string" ? literatureId : null;
+  return null;
 }

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { parseAssetId, sha256 } from "@sciretriever/contracts";
 import { MinerUParser } from "../src/parsing/backends/mineru/http.js";
-import { buildDocumentStructure } from "../src/document/builder.js";
 import { convertMinerURawArchive } from "../src/parsing/backends/mineru/archive.js";
 import { rawParseZip as zip } from "./raw-parse-fixture.js";
 
@@ -318,19 +317,6 @@ it("preserves supplied scientific text and heading decisions without turning par
     nestedArchive({ markdown }),
     archiveOptions,
   );
-  const built = await buildDocumentStructure(converted.markdown.bytes);
   expect(Buffer.from(converted.markdown.bytes)).toEqual(Buffer.from(markdown));
-  expect(built.structure.sections.map((s) => s.title)).toEqual([
-    "Synthetic multi-column article",
-    "Supporting Information",
-    "Formula and table",
-  ]);
-  expect(
-    Buffer.concat(
-      built.structure.segments.map((s) =>
-        converted.markdown.bytes.subarray(s.start_utf8, s.end_utf8),
-      ),
-    ),
-  ).toEqual(Buffer.from(markdown));
   expect(converted.resources).toHaveLength(1);
 });

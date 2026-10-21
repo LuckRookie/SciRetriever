@@ -19,7 +19,7 @@ import { documentRepresentationHash } from "./contract.js";
 import {
   MAX_DOCUMENT_MARKDOWN_BYTES,
   MAX_DOCUMENT_STRUCTURE_BYTES,
-} from "./builder.js";
+} from "./limits.js";
 
 /** Verifies the immutable closure of a corrected Document. */
 export class SqliteDocumentStorage implements DocumentStoragePort {

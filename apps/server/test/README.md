@@ -20,7 +20,7 @@
 
 `react-workbench-fixture.ts` 将实际 Vite 与阅读资源装入既有独立查询/维护 HTTP 服务。`document-read`、`knowledge-analysis`、`synthesis-service` 和 `knowledge-retrieval-migration` 的浏览器部分通过这个入口继续验证固定版本、来源绑定、证据续读、迟到响应隔离和历史 schema 读取；不另造测试专用业务 API。
 
-`legacy-application-fixture.ts`、`legacy-parser-fixture.ts`、`legacy-parser-publication.ts` 和 `legacy-document-fixture.ts` 只为历史版本 的读取、固定证据和存储保护回归构造旧文档，不进入生产组装。正式解析入口的回归使用双模式 raw fake，明确断言不会发布 ParserResult 或 Document。`raw-parser-fixture.ts` 只将合成测试文字构造成两份 raw，无法访问网络。
+`legacy-application-fixture.ts`、`legacy-parser-fixture.ts`、`legacy-parser-publication.ts` 和 `legacy-document-fixture.ts` 只为历史版本 的读取、固定证据和存储保护回归构造旧文档，不进入生产组装。正式解析入口的回归使用请求 profile 对应的 raw fake，明确断言不会发布 ParserResult 或 Document。`raw-parser-fixture.ts` 只将合成测试文字构造成两份 raw，无法访问网络。
 
 - `proofread-document-publication.test.ts`、`proofread-document-migration.test.ts`：校订全文发布/复用/CAS、原始输入变化、页码证据防篡改、补充材料、对照续读、检索与迁移失败恢复；仅使用合成临时库。
 

@@ -1,6 +1,7 @@
 import type { RawParseResource, ProofreadBlock } from "@sciretriever/contracts";
 import { parserMarkdownReferences } from "../parsing/markdown-resources.js";
-export const PROOFREAD_RENDER_VERSION = "proofread-render-v2";
+import { requireTableMarkup } from "./contract.js";
+export const PROOFREAD_RENDER_VERSION = "proofread-render-v3";
 export function renderBlocks(
   blocks: readonly Pick<
     ProofreadBlock,
@@ -29,7 +30,14 @@ export function renderBlocks(
         break;
       case "table":
         if (!b.html) throw new Error("proofread-table-missing");
+        requireTableMarkup(b.html);
         text = b.html;
+        // Chemical drawings and other non-text cells must remain available to readers.
+        if (
+          b.image_ref &&
+          !parserMarkdownReferences(text).includes(b.image_ref)
+        )
+          text += `\n\n![](${b.image_ref})`;
         break;
       case "equation":
         text = `$$\n${b.text}\n$$`;

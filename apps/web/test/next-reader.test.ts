@@ -367,6 +367,9 @@ it("previews only explicit document links and never guesses bare citation number
     });
     await preview.waitFor();
     expect(await preview.innerText()).toContain("Smith et al.");
+    // Remain usable after the former Dialog autofocus/refocus interval.
+    await w.page.waitForTimeout(650);
+    expect(await preview.count()).toBe(1);
     await preview
       .getByRole("button", { name: "前往文内位置", exact: true })
       .click();

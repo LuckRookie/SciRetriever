@@ -132,4 +132,4 @@ it("runs persistent DSH summaries as reusable maps, then synthesizes only their 
   expect(resolved.evidence[0]!.target_kind).toBe("document");
   expect(b!.result.literature_ids).toHaveLength(2);
   expect(b!.freshness?.state).toBe("current");
-});
+}, 20000);

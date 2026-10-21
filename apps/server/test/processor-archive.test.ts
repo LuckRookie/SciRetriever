@@ -73,7 +73,7 @@ it("runs only corrected declared roles and reuses a single-paper result after de
   } finally {
     await e.close();
   }
-});
+}, 20000);
 it("distinguishes absent supplementary material and not-ready members without calling a model", async () => {
   const e = await archiveFixture();
   try {

@@ -192,45 +192,48 @@ function resourceContext(
   let comment = false;
   let rawHtml = false;
   for (const item of structure.segments) {
-    const line = decoder
+    // Corrected segments are blocks, and can contain several Markdown lines.
+    const lines = decoder
       .decode(bytes.subarray(item.start_utf8, item.end_utf8))
-      .replace(/\r?\n$/u, "");
-    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
-    if (fence) {
-      if (
-        match &&
-        match[1]![0] === fence.marker &&
-        match[1]!.length >= fence.width &&
-        !match[2]!.trim()
-      )
-        fence = null;
-      continue;
+      .split(/\r?\n/u);
+    for (const line of lines) {
+      const match = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+      if (fence) {
+        if (
+          match &&
+          match[1]![0] === fence.marker &&
+          match[1]!.length >= fence.width &&
+          !match[2]!.trim()
+        )
+          fence = null;
+        continue;
+      }
+      if (match) {
+        fence = { marker: match[1]![0]!, width: match[1]!.length };
+        continue;
+      }
+      if (comment) {
+        if (line.includes("-->")) comment = false;
+        continue;
+      }
+      if (line.includes("<!--")) {
+        comment = !line.includes("-->");
+        continue;
+      }
+      if (rawHtml) {
+        if (line.trim() === "") rawHtml = false;
+        continue;
+      }
+      if (/^ {0,3}</u.test(line)) {
+        rawHtml = true;
+        continue;
+      }
+      if (/^ {4}|^\t/u.test(line) || /[`~]/u.test(line)) continue;
+      const image = /^ {0,3}!\[[^\]\r\n]{0,256}\]\(([^()\s]+)\)[ \t]*$/u.exec(
+        line,
+      );
+      if (image?.[1] === reference) return item;
     }
-    if (match) {
-      fence = { marker: match[1]![0]!, width: match[1]!.length };
-      continue;
-    }
-    if (comment) {
-      if (line.includes("-->")) comment = false;
-      continue;
-    }
-    if (line.includes("<!--")) {
-      comment = !line.includes("-->");
-      continue;
-    }
-    if (rawHtml) {
-      if (line.trim() === "") rawHtml = false;
-      continue;
-    }
-    if (/^ {0,3}</u.test(line)) {
-      rawHtml = true;
-      continue;
-    }
-    if (/^ {4}|^\t/u.test(line) || /[`~]/u.test(line)) continue;
-    const image = /^ {0,3}!\[[^\]\r\n]{0,256}\]\(([^()\s]+)\)[ \t]*$/u.exec(
-      line,
-    );
-    if (image?.[1] === reference) return item;
   }
   return undefined;
 }

@@ -183,3 +183,53 @@ describe("processor contracts", () => {
     ).rejects.toThrow();
   });
 });
+
+it("serializes bounded results with per-value checks beyond the Extraction node budget", async () => {
+  const { processorResultBytes } = await import("../src/index.js");
+  const content: ProcessorContent = {
+    kind: "records",
+    schema: { type: "object" },
+    records: Array.from({ length: 1000 }, (_, i) => ({
+      record_id: `r${i}`,
+      payload: { value: i, condition: "synthetic" },
+      evidence: [
+        {
+          pointer: "",
+          sources: [
+            {
+              kind: "result",
+              result_id: id(3),
+              content_sha256: "a".repeat(64),
+              record_id: "source",
+              pointer: "/measurement",
+            },
+          ],
+        },
+      ],
+      missing: {},
+    })),
+  };
+  const parsed = await parseProcessorResult({
+    ...(await result()),
+    status: "ok",
+    content,
+    value_checks: uncheckedProcessorValues(
+      content,
+      "Synthetic unverified evidence.",
+    ),
+  });
+  const bytes = processorResultBytes(parsed);
+  expect(bytes.length).toBeLessThan(8 * 1024 * 1024);
+  expect(JSON.parse(new TextDecoder().decode(bytes)).value_checks).toHaveLength(
+    2000,
+  );
+  await expect(
+    parseProcessorResult(JSON.parse(new TextDecoder().decode(bytes))),
+  ).resolves.toEqual(parsed);
+  expect(() =>
+    processorResultBytes({
+      ...parsed,
+      provenance: { text: "x".repeat(8 * 1024 * 1024) },
+    }),
+  ).toThrow();
+});

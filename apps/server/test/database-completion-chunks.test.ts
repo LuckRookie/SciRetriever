@@ -904,7 +904,7 @@ it.each([false, true])(
         }),
       ]);
       expect(writes).toBe(1);
-      await vi.waitFor(() => expect(env.parseCalls).toBe(4));
+      await vi.waitFor(() => expect(env.parseCalls).toBe(2));
       if (cancel) stop.abort();
       hold.resolve();
       const report = await pending;
@@ -920,7 +920,7 @@ it.each([false, true])(
         ...(await app.rawParseStorage!.current(first.asset_id)),
         ...(await app.rawParseStorage!.current(asset.asset_id)),
       ];
-      expect(states.filter((s) => s.result)).toHaveLength(cancel ? 1 : 4);
+      expect(states.filter((s) => s.result)).toHaveLength(cancel ? 1 : 2);
       expect((await app.library.detail(second)).primary_pdf).not.toBeNull();
       expect(await app.library.detail(second)).not.toHaveProperty("content");
       if (cancel)

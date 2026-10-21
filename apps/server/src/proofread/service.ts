@@ -12,6 +12,7 @@ import { VerifiedReaderError } from "../storage/files/reader.js";
 import { buildProofreadVersion, proofreadCorrectionMethod } from "./engine.js";
 import {
   manualPageIdentity,
+  requireTableMarkup,
   insertedDraft,
   type PdfPages,
   type ProofreadCorrector,
@@ -419,6 +420,8 @@ export class ProofreadService {
         target.draft_sha256 !== r.draft_sha256
       )
         throw new ProofreadError("proofread-manual-stale");
+      if (r.action === "replace" && d?.type === "table")
+        requireTableMarkup(r.text as string);
       const suspect =
           r.suspect_id === undefined || r.suspect_id === null
             ? null

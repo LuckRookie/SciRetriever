@@ -31,3 +31,5 @@
 `section-roles.ts` 与 `structure-annotation.ts` 定义正文/补充材料的封闭角色、独立注释、图表和引用文本；注释绑定固定 DocumentVersion，独立计算 hash，不改变全文表示与证据 ID。
 
 - `metadata-fields.ts`：逐字段来源/冲突/锁定及人工编辑的严格合同；空值可以人工锁定，非法字段、枚举与重复编辑均拒绝。
+
+`canonical-bounded.ts` 提供带字节、深度、节点和数组预算的规范 JSON 编码；Extraction 与完整算子结果分别使用自己的边界，不能让新增核对字段触发另一接口的更小节点上限。

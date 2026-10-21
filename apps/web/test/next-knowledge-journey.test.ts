@@ -129,7 +129,7 @@ it("keeps parsing separate from document publication and reads existing verified
         { timeout: 10000 },
       )
       .toEqual({ status: "completed", failures: [] });
-    expect(env.parseCalls).toBe(2);
+    expect(env.parseCalls).toBe(1);
     expect(env.modelCalls).toBe(0);
     expect(
       (
@@ -144,7 +144,12 @@ it("keeps parsing separate from document publication and reads existing verified
       (await env.app.rawParseStorage!.current(env.asset.asset_id)).filter(
         (s) => s.result,
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
+    expect(
+      (await env.app.rawParseStorage!.current(env.asset.asset_id))
+        .filter((s) => s.result)
+        .map((s) => s.profile),
+    ).toEqual(["vlm-engine"]);
     await page.getByRole("button", { name: "查看任务", exact: true }).click();
     await expect
       .poll(() => page.getByRole("dialog").textContent())
@@ -167,7 +172,7 @@ it("keeps parsing separate from document publication and reads existing verified
     expect(await page.locator(".reader-engine-body").textContent()).toContain(
       "A synthetic finding.",
     );
-    expect(env.parseCalls).toBe(4);
+    expect(env.parseCalls).toBe(3);
     await page.getByRole("button", { name: "加入综合", exact: true }).click();
     await page
       .getByRole("button", { name: "从当前筛选生成快照", exact: true })

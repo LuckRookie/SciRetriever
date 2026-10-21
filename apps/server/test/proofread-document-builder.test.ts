@@ -197,3 +197,76 @@ it("refuses an otherwise valid dense structure before it can exceed the fixed re
     buildProofreadStructure(version, blockBytes, markdown),
   ).rejects.toThrow("proofread-document-structure-limit");
 }, 30000);
+
+it("keeps block-owned headings and exact Unicode ranges while honoring cancellation and size bounds", async () => {
+  const {
+    canonicalJsonBytes,
+    sha256,
+    proofreadIdentity,
+    parseProofreadBlocksV1,
+  } = await import("@sciretriever/contracts");
+  const { renderBlocks } = await import("../src/proofread/render.js");
+  const { MAX_DOCUMENT_MARKDOWN_BYTES } = await import(
+    "../src/document/limits.js"
+  );
+  const f = await fixture();
+  const source = parseProofreadBlocksV1(
+    JSON.parse(new TextDecoder().decode(f.blocks.bytes)),
+    [],
+  );
+  const blocks = [
+    source.blocks[0]!,
+    ...Array.from({ length: 1024 }, (_, i) => ({
+      ...source.blocks[1]!,
+      block_id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+      text: i === 1023 ? "# Not a structural heading\n中文😀 tail" : "内容 α",
+      raw_ref: [[0, i + 1] as const],
+    })),
+  ];
+  const blockBytes = canonicalJsonBytes({ ...source, blocks }),
+    markdown = renderBlocks(blocks, []).markdown;
+  const { proofread_id: _id, content_sha256: _hash, ...base } = f.version;
+  void _id;
+  void _hash;
+  const input = {
+    ...base,
+    blocks: {
+      ...base.blocks,
+      byte_size: blockBytes.length,
+      sha256: await sha256(blockBytes),
+    },
+    markdown: {
+      ...base.markdown,
+      byte_size: markdown.length,
+      sha256: await sha256(markdown),
+    },
+  };
+  const version = { ...input, ...(await proofreadIdentity(input)) };
+  const built = await buildProofreadStructure(version, blockBytes, markdown);
+  expect(built.structure.sections.map((s) => s.title)).toEqual(["方法"]);
+  const last = built.structure.segments.at(-1)!;
+  expect(
+    new TextDecoder("utf-8", { fatal: true }).decode(
+      markdown.subarray(last.start_utf8, last.end_utf8),
+    ),
+  ).toContain("中文😀 tail");
+  const controller = new AbortController();
+  const pending = buildProofreadStructure(
+    version,
+    blockBytes,
+    markdown,
+    controller.signal,
+  );
+  setTimeout(() => controller.abort(), 0);
+  await expect(pending).rejects.toThrow("proofread-document-cancelled");
+  await expect(
+    buildProofreadStructure(version, blockBytes, markdown, controller.signal),
+  ).rejects.toThrow("proofread-document-cancelled");
+  await expect(
+    buildProofreadStructure(
+      version,
+      blockBytes,
+      new Uint8Array(MAX_DOCUMENT_MARKDOWN_BYTES + 1),
+    ),
+  ).rejects.toThrow("proofread-document-markdown-limit");
+});

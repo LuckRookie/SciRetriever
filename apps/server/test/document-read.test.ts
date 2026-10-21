@@ -474,7 +474,7 @@ describe("bounded document and material reading", () => {
       await query?.close();
       await env.close();
     }
-  });
+  }, 20000);
 
   it("serves query-only HTTP with the same material evidence and rejects cross-origin input", async () => {
     const env = await fixture();
@@ -546,33 +546,49 @@ describe("bounded document and material reading", () => {
     }
   });
 
-  it("invalidates warmed schema checks after external DDL changes", async () => {
-    const env = await fixture();
-    let raw: DatabaseSync | undefined;
-    try {
-      await env.reopen();
-      const receipt = await correctedDocumentFixture(env.app).parseDocuments(
-        env.request("reparse"),
-      );
-      const request = {
-        document_version_id: receipt.document.document_version_id,
-      };
-      const first = await env.app.documentRead.describe(request);
-      expect(await env.app.documentRead.describe(request)).toEqual(first);
-      raw = new DatabaseSync(join(env.home, "catalog.sqlite"));
-      raw.exec(
-        "CREATE INDEX unexpected_document_index ON literatures(meta_literature_id)",
-      );
-      await expect(
-        env.app.documentRead.describe(request),
-      ).rejects.toBeInstanceOf(Error);
-      raw.exec("DROP INDEX unexpected_document_index");
-      expect(await env.app.documentRead.describe(request)).toEqual(first);
-    } finally {
-      raw?.close();
-      await env.close();
-    }
-  });
+  it.each(["DDL", "foreign-key"] as const)(
+    "invalidates warmed schema checks after external %s changes",
+    async (kind) => {
+      const env = await fixture();
+      let raw: DatabaseSync | undefined;
+      try {
+        await env.reopen();
+        const receipt = await correctedDocumentFixture(env.app).parseDocuments(
+          env.request("reparse"),
+        );
+        const request = {
+          document_version_id: receipt.document.document_version_id,
+        };
+        const first = await env.app.documentRead.describe(request);
+        expect(await env.app.documentRead.describe(request)).toEqual(first);
+        raw = new DatabaseSync(join(env.home, "catalog.sqlite"));
+        await env.app.database.putLiterature(FIXTURE_LITERATURE);
+        expect(await env.app.documentRead.describe(request)).toEqual(first);
+        if (kind === "DDL")
+          raw.exec(
+            "CREATE INDEX unexpected_document_index ON literatures(meta_literature_id)",
+          );
+        else {
+          raw.exec("PRAGMA foreign_keys=OFF");
+          raw
+            .prepare("UPDATE literature_assets SET asset_id=? WHERE asset_id=?")
+            .run(id(999), env.asset.asset_id);
+        }
+        await expect(
+          env.app.documentRead.describe(request),
+        ).rejects.toBeInstanceOf(Error);
+        if (kind === "DDL") raw.exec("DROP INDEX unexpected_document_index");
+        else
+          raw
+            .prepare("UPDATE literature_assets SET asset_id=? WHERE asset_id=?")
+            .run(env.asset.asset_id, id(999));
+        expect(await env.app.documentRead.describe(request)).toEqual(first);
+      } finally {
+        raw?.close();
+        await env.close();
+      }
+    },
+  );
 
   it("separates invalid locators, unsupported schemes and corrupt resource bytes", async () => {
     const env = await fixture();
@@ -762,10 +778,10 @@ describe("bounded document and material reading", () => {
       await env.reopen();
       const lines = Array.from(
         { length: 90 },
-        (_, index) => `line ${index}\n`,
+        (_, index) => `line ${index}.\n\n`,
       ).join("");
       env.setMarkdown(
-        `# Heading\n${lines}fig.png is mentioned here\n\`![fake](fig.png)\`\n\\![escaped](fig.png)\n<!--\n![comment](fig.png)\n-->\n![indirect][ref]\n[ref]: fig.png\n`,
+        `# Heading\n${lines}fig.png is mentioned here\n\`![fake](fig.png)\`\n\\![escaped](fig.png)\n<!--\n![comment](fig.png)\n-->\n`,
       );
       const receipt = await correctedDocumentFixture(env.app).parseDocuments(
         env.request("reparse"),
@@ -812,7 +828,21 @@ describe("bounded document and material reading", () => {
         max_bytes: 100,
         continuation: null,
       });
-      expect(context.text).toBe("![real](fig.png)\n");
+      expect(context.text).toBe("![](fig.png)\n\n");
+      expect(context.evidence).toHaveLength(1);
+      // Defined reference images become explicit images in the corrected draft.
+      env.setMarkdown("# Heading\n![indirect][ref]\n[ref]: fig.png\n");
+      const indirect = await correctedDocumentFixture(env.app).parseDocuments(
+        env.request("reparse", 2),
+      );
+      const resolved = await reader.slice({
+        document_version_id: indirect.document.document_version_id,
+        selector: { kind: "resource-context", resource_id: "r1" },
+        max_bytes: 100,
+        continuation: null,
+      });
+      expect(resolved.text).toBe("![](fig.png)\n\n");
+      expect(resolved.evidence).toHaveLength(1);
       const stop = new AbortController();
       stop.abort();
       await expect(
@@ -830,7 +860,7 @@ describe("bounded document and material reading", () => {
       await query?.close();
       await env.close();
     }
-  });
+  }, 20000);
 
   it("shows the same fixed version and Unicode text to a human query reader", async () => {
     const env = await fixture();

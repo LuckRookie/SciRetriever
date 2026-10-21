@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
-import { describe, it, expect, vi } from "vitest";
+import { afterAll, beforeAll, describe, it, expect, vi } from "vitest";
 import { ProofreadDocumentService } from "../src/document/proofread-publication.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -776,25 +776,63 @@ describe("processor application acceptance", () => {
     }
   }, 60000);
 
-  it("reuses exactly overlapping unchanged documents for 100→120, 80-overlap and five revised inputs", async () => {
-    const env = await coreProcessingFixture();
-    // This test verifies processor reuse, not full-library material indexing.
-    // Keep real immutable publication, defaults, archives and processor reads;
-    // document-publication and retrieval tests exercise the index callback.
-    const documents = new ProofreadDocumentService(
-      env.app.database,
-      env.app.files,
-      async () => undefined,
-    );
-    const publication = vi
-      .spyOn(env.app.proofreadDocuments, "publish")
-      .mockImplementation((value, signal) => documents.publish(value, signal));
-    try {
-      const docs = [];
-      for (let i = 0; i < 200; i++) docs.push(await addDocument(env, i));
-      env.setModel(yes);
-      const first = await output(
-        env,
+  describe("large-library processor reuse", () => {
+    let env: Env | undefined;
+    let documents: ProofreadDocumentService | undefined;
+    let restorePublication: (() => void) | undefined;
+    const docs: Awaited<ReturnType<typeof addDocument>>[] = [];
+
+    // Owner acceptance is workflow correctness, not a wall-clock deadline.
+    // Vitest timeout=0 disables the aggregate limit; operation-level error and
+    // cancellation handling remains unchanged. Timings are diagnostic only.
+    beforeAll(async () => {
+      const started = performance.now();
+      env = await coreProcessingFixture({}, ["vlm-engine"]);
+      const publicationService = new ProofreadDocumentService(
+        env.app.database,
+        env.app.files,
+        async () => undefined,
+      );
+      documents = publicationService;
+      // This scenario covers reuse; material indexing has separate coverage.
+      const publication = vi
+        .spyOn(env.app.proofreadDocuments, "publish")
+        .mockImplementation((value, signal) =>
+          publicationService.publish(value, signal),
+        );
+      restorePublication = () => publication.mockRestore();
+      for (let i = 0; i < 200; i++) {
+        docs.push(await addDocument(env, i));
+        if ((i + 1) % 50 === 0 && i + 1 < 200)
+          console.info(`Large reuse fixture: ${i + 1}/200 archives prepared`);
+      }
+      console.info(
+        `Large reuse fixture: 200 archives in ${Math.round(performance.now() - started)} ms`,
+      );
+    }, 0);
+
+    afterAll(async () => {
+      restorePublication?.();
+      await documents?.close();
+      await env?.close();
+    }, 0);
+
+    it("reuses exactly overlapping unchanged documents for 100→120, 80-overlap and five revised inputs", async () => {
+      const fixture = env;
+      if (!fixture) throw new Error("Large reuse fixture was not prepared");
+      const run = async (phase: string, request: unknown) => {
+        const started = performance.now();
+        try {
+          return await output(fixture, request);
+        } finally {
+          console.info(
+            `Large reuse batch ${phase}: ${Math.round(performance.now() - started)} ms`,
+          );
+        }
+      };
+      fixture.setModel(yes);
+      const first = await run(
+        "100",
         label(
           "hundred",
           docs.slice(0, 100).map((d) => d.input),
@@ -805,19 +843,19 @@ describe("processor application acceptance", () => {
         computed: 100,
         failed: 0,
       });
-      const before = env.modelCalls;
-      const superset = await output(
-        env,
+      const before = fixture.modelCalls;
+      const superset = await run(
+        "120",
         label(
           "superset",
           docs.slice(0, 120).map((d) => d.input),
         ),
       );
       expect(superset.summary).toMatchObject({ reused: 100, computed: 20 });
-      expect(env.modelCalls - before).toBe(20);
+      expect(fixture.modelCalls - before).toBe(20);
       const overlapDocs = [...docs.slice(20, 100), ...docs.slice(120, 160)];
-      const overlap = await output(
-        env,
+      const overlap = await run(
+        "80-overlap",
         label(
           "overlap",
           overlapDocs.map((d) => d.input),
@@ -832,12 +870,12 @@ describe("processor application acceptance", () => {
         ),
       ).toEqual(overlapDocs.map((d) => d.literature_id));
       for (let i = 20; i < 25; i++) {
-        env.setText(`Revised exposure observation ${i}.`);
-        const revised = await env.build(docs[i]!.request);
+        fixture.setText(`Revised exposure observation ${i}.`);
+        const revised = await fixture.build(docs[i]!.request);
         docs[i]!.input = parsedInput(revised.document.document_version_id);
       }
-      const changed = await output(
-        env,
+      const changed = await run(
+        "five-revised",
         label(
           "changed-five",
           [...docs.slice(20, 100), ...docs.slice(160, 200)].map((d) => d.input),
@@ -845,19 +883,16 @@ describe("processor application acceptance", () => {
       );
       expect(changed.summary).toMatchObject({ reused: 75, computed: 45 });
       expect(
-        (await env.app.processorRead!.collection(first.summary.collection_id))!
-          .members,
+        (await fixture.app.processorRead!.collection(
+          first.summary.collection_id,
+        ))!.members,
       ).toEqual(first.collection.members);
-      const savedInputs = (await env.app.processorRead!.byId(
+      const savedInputs = (await fixture.app.processorRead!.byId(
         changed.refs[0]!.result_id,
       ))!.result.invocation.inputs;
       expect(savedInputs[0]).toMatchObject({
         literature_id: docs[20]!.literature_id,
       });
-    } finally {
-      publication.mockRestore();
-      await documents.close();
-      await env.close();
-    }
-  }, 600000);
+    }, 0);
+  });
 });

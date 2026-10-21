@@ -1,11 +1,12 @@
 import { expect, it } from "vitest";
-import { parseProofreadBlocksV1 } from "@sciretriever/contracts";
+import { parseProofreadBlocksV1, sha256 } from "@sciretriever/contracts";
 import {
   applyEdits,
   draftBlocks,
   parseCorrectionSubmission,
 } from "../src/proofread/apply.js";
 import { prepareDraft } from "../src/proofread/draft.js";
+import { renderBlocks } from "../src/proofread/render.js";
 import type {
   CorrectionContext,
   CorrectionSubmission,
@@ -33,6 +34,66 @@ async function setup() {
 const submission = (
   edits: CorrectionSubmission["edits"],
 ): CorrectionSubmission => ({ edits, dispositions: [], no_body_reason: null });
+it("rejects flattened table replacements before changing content or rendering", async () => {
+  const { c, blocks } = await setup();
+  const original =
+    "<table><tr><th>phase</th><th>hk1</th></tr><tr><td>a = 2.812(2)</td><td>003</td></tr></table>";
+  const table = {
+    ...blocks[0]!,
+    type: "table" as const,
+    text: "",
+    html: original,
+  };
+  const edit = {
+    kind: "replace" as const,
+    block_id: table.block_id,
+    basis_page: 0,
+    reason: "The last header character is a lowercase l.",
+    text: "phase | hkl\n003",
+  };
+  expect(() => applyEdits([table], submission([edit]), c)).toThrow(
+    "proofread-table-format",
+  );
+  expect(table.html).toBe(original);
+  expect(() => renderBlocks([{ ...table, html: edit.text }], [])).toThrow(
+    "proofread-table-format",
+  );
+  const corrected = original.replace("hk1", "hkl");
+  const applied = applyEdits(
+    [table],
+    submission([{ ...edit, text: corrected }]),
+    c,
+  );
+  const markdown = new TextDecoder().decode(
+    renderBlocks(applied.blocks, []).markdown,
+  );
+  expect(markdown).toBe(corrected + "\n\n");
+  expect(markdown).toContain("a = 2.812(2)");
+});
+it("keeps the source table image in the readable document for non-text cells", async () => {
+  const { blocks } = await setup();
+  const image = {
+    reference: "images/synthetic-table.png",
+    artifact: {
+      sha256: await sha256(Buffer.from("synthetic image")),
+      byte_size: 15,
+      media_type: "image/png",
+    },
+  };
+  const table = {
+    ...blocks[0]!,
+    type: "table" as const,
+    text: "",
+    html: "<table><tr><td>Product A</td><td>91%</td></tr></table>",
+    image_ref: image.reference,
+  };
+  const rendered = renderBlocks([table], [image]);
+  const text = new TextDecoder().decode(rendered.markdown);
+  expect(text).toContain(table.html);
+  expect(text).toContain("![](images/synthetic-table.png)");
+  expect(rendered.resources).toEqual([image]);
+  expect(rendered.ranges[0]!.end_utf8).toBe(Buffer.byteLength(text));
+});
 it("keeps uncertainty when replacement and move are submitted after the annotation", async () => {
   const { c, blocks } = await setup(),
     id = blocks[0]!.block_id;

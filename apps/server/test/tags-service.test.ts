@@ -12,6 +12,7 @@ import { createMcpServer } from "../src/mcp/server.js";
 const usage = { calls: 1, input_tokens: 20, output_tokens: 10 };
 it("uses two model steps, requires candidate rejection and corrected evidence, and reuses an existing alias", async () => {
   const calls: string[] = [];
+  let observedCoverage: unknown;
   const model: TagModel = {
     identity: "a".repeat(64),
     async run(task, input) {
@@ -19,7 +20,9 @@ it("uses two model steps, requires candidate rejection and corrected evidence, a
       const v = input as {
         fragments?: { segment_id: string }[];
         topics?: { candidates: { tag_id: string }[] }[];
+        coverage?: unknown;
       };
+      if (task === "topics") observedCoverage = v.coverage;
       return {
         value:
           task === "topics"
@@ -51,6 +54,13 @@ it("uses two model steps, requires candidate rejection and corrected evidence, a
   const e = await tagFixture(model);
   try {
     const first = await e.tags.build(e.request);
+    expect(first.input_coverage).toEqual({
+      document_version_id: e.doc.document_version_id,
+      annotation_id: e.annotation.annotation_id,
+      ...(observedCoverage as object),
+    });
+    expect(first.input_coverage.truncated).toBe(false);
+    expect(first.input_coverage.included_segment_ids.length).toBeGreaterThan(0);
     expect(first.usage).toEqual({
       calls: 2,
       input_tokens: 40,

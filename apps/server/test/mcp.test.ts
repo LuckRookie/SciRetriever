@@ -59,7 +59,7 @@ describe("formal MCP product adapter", () => {
         skipped: [failure],
         failures: [failure],
       });
-      expect(env.parseCalls).toBe(2);
+      expect(env.parseCalls).toBe(1);
       const detail = await env.app.library.detail(
         env.parseRequest.literature_id,
       );
@@ -88,7 +88,7 @@ describe("formal MCP product adapter", () => {
         targets: [{ stage: "completed" }],
         failures: [failure],
       });
-      expect(env.parseCalls).toBe(4);
+      expect(env.parseCalls).toBe(2);
       expect(env.modelCalls).toBe(0);
       expect(
         (

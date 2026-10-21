@@ -1,5 +1,9 @@
 import { expect } from "vitest";
-import { canonicalJsonBytes, sha256 } from "@sciretriever/contracts";
+import {
+  canonicalJsonBytes,
+  sha256,
+  type RawParseProfile,
+} from "@sciretriever/contracts";
 import { ArchiveOrchestrator } from "../src/archive/orchestrator.js";
 import {
   coreProcessingFixture,
@@ -15,6 +19,7 @@ export function processorSelection(documentVersionId: string) {
 /** Real raw -> proofread -> document -> archive path, with only model/parser transport faked. */
 export async function processorFixture(
   options: Parameters<typeof coreProcessingFixture>[0] = {},
+  profiles: readonly RawParseProfile[] = ["pipeline", "vlm-engine"],
 ) {
   const e = await coreProcessingFixture(options);
   let setupCalls = 0;
@@ -60,7 +65,7 @@ export async function processorFixture(
         literature_id: request.literature_id,
         asset_id: request.asset_id,
         asset_sha256: request.asset_sha256,
-        profiles: ["pipeline", "vlm-engine"],
+        profiles,
         force: true,
       });
       // Prepare real archive facts without inserting unrelated setup jobs into

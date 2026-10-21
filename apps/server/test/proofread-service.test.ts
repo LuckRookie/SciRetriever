@@ -332,3 +332,47 @@ it("records a locked no-body decision for a page with no draft blocks", async ()
     await e.close();
   }
 });
+
+it("refuses a malformed manual table before locking it and keeps a valid correction rebuildable", async () => {
+  const e = await coreProcessingFixture();
+  try {
+    const original =
+      "<table><tr><th>Yield</th></tr><tr><td>91%</td></tr></table>";
+    e.setText(original);
+    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    const service = e.app.proofreading!;
+    const first = await service.build({ asset_id: e.asset.asset_id });
+    expect(first.version.status).toBe("complete");
+    const inspected = await service.inspect({ asset_id: e.asset.asset_id });
+    const target = inspected.items.find((i) => i.draft.type === "table")!.draft;
+    const request = {
+      asset_id: e.asset.asset_id,
+      proofread_id: first.version.proofread_id,
+      block_id: target.block_id,
+      draft_sha256: target.draft_sha256,
+      expected_manual_revision: 0,
+      action: "replace",
+      text: "Yield: 92%",
+      reason: "Checked the source table",
+      actor: "fixture-reader",
+    };
+    await expect(service.decide(request)).rejects.toMatchObject({
+      code: "proofread-table-format",
+    });
+    expect(
+      (await service.inspect({ asset_id: e.asset.asset_id })).manual_revision,
+    ).toBe(0);
+    const corrected = original.replace("91%", "92%");
+    const decision = await service.decide({ ...request, text: corrected });
+    const rebuilt = await service.build({ asset_id: e.asset.asset_id });
+    expect(rebuilt.version.status).toBe("complete");
+    expect(rebuilt.version.manual_decision_ids).toEqual([decision.decision_id]);
+    const current = await service.inspect({ asset_id: e.asset.asset_id });
+    expect(
+      current.items.find((i) => i.block?.type === "table")!.block!.html,
+    ).toBe(corrected);
+    expect(e.modelCalls).toBe(0);
+  } finally {
+    await e.close();
+  }
+}, 20000);

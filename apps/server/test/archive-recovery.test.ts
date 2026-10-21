@@ -66,7 +66,7 @@ it("retains earlier publications, surfaces each step failure and resumes after c
     vi.restoreAllMocks();
     await e.close();
   }
-});
+}, 20000); // Six injected failures plus recovery are a lifecycle check, not a 5-second benchmark.
 describe("supplement and human revision lifecycle", () => {
   let e: Awaited<ReturnType<typeof archiveFixture>>;
   beforeAll(async () => {

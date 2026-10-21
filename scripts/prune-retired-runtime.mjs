@@ -16,6 +16,7 @@ export async function pruneRetiredRuntime(repository) {
   const modules = [
     "acquisition/candidate-cleanup",
     "analysis/service",
+    "document/builder",
     "proofread/align",
     "proofread/compare",
     "proofread/merge",

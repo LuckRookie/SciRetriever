@@ -1126,7 +1126,19 @@ it.runIf(browserAvailable)(
     try {
       await host.start();
       const page = await host.openPage(origin + "/article");
-      const snapshot = await page.snapshot();
+      let snapshot: Awaited<ReturnType<typeof page.snapshot>> | undefined;
+      await expect
+        .poll(async () => {
+          try {
+            snapshot = await page.snapshot();
+            return true;
+          } catch (error) {
+            if (error instanceof BrowserPageTransitionError) return false;
+            throw error;
+          }
+        })
+        .toBe(true);
+      if (!snapshot) throw new Error("Missing settled form snapshot");
       const button = snapshot.elements!.find(
         (element) => element.name === "Verify",
       )!;

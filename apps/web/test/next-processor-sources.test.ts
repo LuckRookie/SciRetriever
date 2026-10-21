@@ -3,6 +3,8 @@ import { expect, it } from "vitest";
 import type { Page } from "playwright";
 import {
   parseProcessorInvocation,
+  parseProcessorContent,
+  uncheckedProcessorValues,
   parseProcessorResult,
   processorComparison,
   type EvidenceRef,
@@ -68,6 +70,50 @@ it("shows verified record sources separately from whole-result inputs and filter
         map: null,
       },
     });
+    const content = parseProcessorContent({
+      kind: "records",
+      schema: {
+        type: "object",
+        properties: {
+          quantity: {
+            type: ["object", "null"],
+            properties: { value: { type: "number" } },
+          },
+          flag: { type: "boolean" },
+          text: { type: "string" },
+        },
+      },
+      records: [
+        {
+          record_id: "r1",
+          payload: { quantity: { value: 0 }, flag: false, text: "" },
+          evidence: [
+            {
+              pointer: "",
+              sources: [{ kind: "document", evidence: evidence[1] }],
+            },
+          ],
+          missing: {},
+        },
+        {
+          record_id: "r2",
+          payload: { quantity: null },
+          evidence: [
+            {
+              pointer: "",
+              sources: [{ kind: "document", evidence: evidence[0] }],
+            },
+          ],
+          missing: { "/quantity": "not-reported" },
+        },
+        {
+          record_id: "r3",
+          payload: {},
+          evidence: [],
+          missing: {},
+        },
+      ],
+    });
     const saved = await store.publish(
       await parseProcessorResult({
         schema_version: 1,
@@ -79,50 +125,11 @@ it("shows verified record sources separately from whole-result inputs and filter
         literature_ids: [w.env.parseRequest.literature_id, missingId],
         created_at: "2026-10-19T00:00:00.000Z",
         provenance: { fixture: "source and null query regression" },
-        content: {
-          kind: "records",
-          schema: {
-            type: "object",
-            properties: {
-              quantity: {
-                type: ["object", "null"],
-                properties: { value: { type: "number" } },
-              },
-              flag: { type: "boolean" },
-              text: { type: "string" },
-            },
-          },
-          records: [
-            {
-              record_id: "r1",
-              payload: { quantity: { value: 0 }, flag: false, text: "" },
-              evidence: [
-                {
-                  pointer: "",
-                  sources: [{ kind: "document", evidence: evidence[1] }],
-                },
-              ],
-              missing: {},
-            },
-            {
-              record_id: "r2",
-              payload: { quantity: null },
-              evidence: [
-                {
-                  pointer: "",
-                  sources: [{ kind: "document", evidence: evidence[0] }],
-                },
-              ],
-              missing: { "/quantity": "not-reported" },
-            },
-            {
-              record_id: "r3",
-              payload: {},
-              evidence: [],
-              missing: {},
-            },
-          ],
-        },
+        content,
+        value_checks: uncheckedProcessorValues(
+          content,
+          "Synthetic material-only fixture is unverified.",
+        ),
         coverage: invocation.inputs.map((input) => ({
           input_id: input.input_id,
           status: "partial",
@@ -234,20 +241,25 @@ it("shows verified record sources separately from whole-result inputs and filter
       ],
       missing: {},
     }));
+    const manyContent = parseProcessorContent({
+      kind: "records",
+      schema:
+        saved.result.content.kind === "records"
+          ? saved.result.content.schema
+          : {},
+      records: many,
+    });
     const large = await store.publish(
       await parseProcessorResult({
         ...saved.result,
         result_id: randomUUID(),
         invocation: largeInvocation,
         comparison_sha256: await processorComparison(largeInvocation),
-        content: {
-          kind: "records",
-          schema:
-            saved.result.content.kind === "records"
-              ? saved.result.content.schema
-              : {},
-          records: many,
-        },
+        content: manyContent,
+        value_checks: uncheckedProcessorValues(
+          manyContent,
+          "Synthetic material-only fixture is unverified.",
+        ),
       }),
     );
     await store.rebuild([large.ref.result_id]);

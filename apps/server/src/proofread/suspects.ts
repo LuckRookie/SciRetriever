@@ -6,17 +6,25 @@ import type {
 import type { PdfPageInspection } from "../browser/pdf-region.js";
 import { semanticTokens, normalizeForComparison } from "./normalize.js";
 import { proofreadId, type DraftBlock, type RemovedText } from "./contract.js";
-export const SUSPECTS_VERSION = "text-layer-multiset-v2";
+export const SUSPECTS_VERSION = "text-layer-multiset-v3";
 export function textTokens(text: string): string[] {
-  return [
-    ...semanticTokens(
-      normalizeForComparison(text)
-        .replace(/<[^>]+>/gu, " ")
-        .replace(/!\[[^\]]*\]\([^)]*\)/gu, " ")
-        .replace(/\[([^\]]*)\]\([^)]*\)/gu, "$1")
-        .replace(/&(?:amp|lt|gt|quot|apos);/gu, " "),
-    ).sequence,
-  ].filter((t) => /[\p{L}\p{N}%‰°_^]/u.test(t));
+  return (
+    [
+      ...semanticTokens(
+        normalizeForComparison(text)
+          .replace(/<[^>]+>/gu, " ")
+          .replace(/!\[[^\]]*\]\([^)]*\)/gu, " ")
+          .replace(/\[([^\]]*)\]\([^)]*\)/gu, "$1")
+          .replace(/&(?:amp|lt|gt|quot|apos);/gu, " "),
+      ).sequence,
+    ]
+      // Han text has no required word separators. A PDF line and a parser block
+      // must not become different tokens merely because their boundaries differ.
+      .flatMap((t) =>
+        [...t.matchAll(/\p{Script=Han}|[^\p{Script=Han}]+/gu)].map((m) => m[0]),
+      )
+      .filter((t) => /[\p{L}\p{N}%‰°_^]/u.test(t))
+  );
 }
 function difference(left: readonly string[], right: readonly string[]) {
   const counts = new Map<string, number>();
