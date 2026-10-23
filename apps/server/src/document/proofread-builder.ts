@@ -79,7 +79,7 @@ export async function buildProofreadStructure(
       range = rendered.ranges[i]!,
       kind = kinds[block.type];
     if (!kind) throw new Error("proofread-document-block-type");
-    if (block.type === "title") {
+    if (block.type === "title" && block.text.trim()) {
       while (stack.length && stack.at(-1)!.level >= block.title_level!)
         stack.pop()!.end_utf8 = range.start_utf8;
       const section = {
@@ -107,7 +107,6 @@ export async function buildProofreadStructure(
       locate: block.locate,
       source: block.text_source,
       basis: block.basis,
-      uncertainty: block.uncertainty,
     });
   }
   const structure = parseDocumentStructureV2(

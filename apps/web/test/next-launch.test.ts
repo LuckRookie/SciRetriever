@@ -117,8 +117,8 @@ describe("formal Web launch and database binding", () => {
           )
           .toContain("没有符合条件的文献");
         await page
-          .getByLabel("主导航")
-          .getByRole("button", { name: "发现", exact: true })
+          .getByRole("main")
+          .getByRole("button", { name: "入库", exact: true })
           .click();
         await page.getByRole("tab", { name: "导入书目", exact: true }).click();
         await page.locator('input[type="file"]').setInputFiles({
@@ -225,7 +225,7 @@ describe("formal Web launch and database binding", () => {
           .click();
         await page
           .getByRole("dialog", { name: "导航", exact: true })
-          .getByRole("button", { name: "发现", exact: true })
+          .getByRole("button", { name: "快照", exact: true })
           .click();
         await expect
           .poll(() =>
@@ -235,7 +235,7 @@ describe("formal Web launch and database binding", () => {
         await expect
           .poll(() =>
             page
-              .getByRole("heading", { name: "发现", exact: true })
+              .getByRole("heading", { name: "快照", exact: true })
               .isVisible(),
           )
           .toBe(true);

@@ -45,10 +45,11 @@ it("runs only corrected declared roles and reuses a single-paper result after de
       expect.objectContaining({
         record_id: "answer",
         pointer: "/answer",
-        status: "text-layer",
+        status: "not-found",
+        reason: "cited-value-missing",
       }),
     ]);
-    expect(first!.result.coverage[0]!.parts?.[0]!.outcome).toBe("extracted");
+    expect(first!.result.coverage[0]!.parts?.[0]!.outcome).toBe("complete");
     const meta = await e.app.metadataFields.read(e.id);
     await e.app.metadataFields.edit({
       literature_id: e.id,
@@ -120,13 +121,17 @@ it("distinguishes absent supplementary material and not-ready members without ca
         .result_id,
     );
     expect(absent!.result.coverage[0]!.parts).toEqual([
-      expect.objectContaining({ outcome: "part-absent", asset_id: null }),
+      expect.objectContaining({
+        outcome: "incomplete",
+        gaps: ["part-absent"],
+        asset_id: null,
+      }),
     ]);
   } finally {
     await e.close();
   }
 }, 0);
-it("keeps not-reported distinct from incomplete reading", async () => {
+it("keeps an empty complete result distinct from incomplete reading", async () => {
   const e = await archiveFixture();
   try {
     await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
@@ -155,7 +160,7 @@ it("keeps not-reported distinct from incomplete reading", async () => {
     };
     const empty = await run("not-reported", { scope: "full" });
     expect(empty.status).toBe("empty");
-    expect(empty.coverage[0]!.parts?.[0]!.outcome).toBe("not-reported");
+    expect(empty.coverage[0]!.parts?.[0]!.outcome).toBe("complete");
     const partial = await run("not-read", {
       scope: "search",
       query: "no-such-word",

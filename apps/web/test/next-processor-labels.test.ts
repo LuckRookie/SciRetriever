@@ -76,7 +76,7 @@ it("keeps false distinct from unknown labels, restores associated papers, and ex
         expect(result.status).toBe("empty");
         expect(result.content.records).toEqual([]);
         expect(result.coverage[0]!.parts).toContainEqual(
-          expect.objectContaining({ outcome: "not-reported" }),
+          expect.objectContaining({ outcome: "complete" }),
         );
         await expect
           .poll(() =>
@@ -84,7 +84,7 @@ it("keeps false distinct from unknown labels, restores associated papers, and ex
               .getByRole("region", { name: "结果覆盖与版本" })
               .textContent(),
           )
-          .toContain("原文未报告 1");
+          .toContain("结果为空 1 篇");
         expect(
           await w.page
             .getByRole("checkbox", { name: "选择第 1 条结果", exact: true })
@@ -136,6 +136,7 @@ it("keeps false distinct from unknown labels, restores associated papers, and ex
     const url = new URL(w.page.url());
     url.search = "view=ext&results=all";
     await w.page.goto(url.href);
+    await w.page.getByRole("tab", { name: "结果检索", exact: true }).click();
     await w.page
       .getByRole("searchbox", { name: "检索已有结果", exact: true })
       .fill("Label");

@@ -16,28 +16,7 @@ import { archiveQuery, useArchiveAction } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
 import { record } from "../../data/wire.js";
 import { navigate } from "../../data/url.js";
-import { errorMessage } from "../../strings.js";
-const roles: Record<string, string> = {
-  "front-matter": "前置信息",
-  abstract: "摘要",
-  keywords: "关键词",
-  introduction: "引言",
-  methods: "方法",
-  results: "结果",
-  discussion: "讨论",
-  "results-discussion": "结果与讨论",
-  conclusion: "结论",
-  acknowledgements: "致谢",
-  references: "参考文献",
-  appendix: "附录",
-  body: "正文",
-  "si-methods": "补充方法",
-  "si-characterization": "补充表征",
-  "si-computation": "补充计算",
-  "si-tables": "补充表格",
-  "si-figures": "补充图片",
-  "si-references": "补充引用",
-};
+import { errorMessage, sectionRoleNames as roles } from "../../strings.js";
 export function StructurePanel({
   id,
   document,
@@ -132,7 +111,7 @@ export function StructurePanel({
                   section_id: section.section_id,
                   role,
                   expected_manual_revision: a.manual_revision,
-                  actor: "web",
+                  actor: api.actor,
                 },
               })
             }
@@ -153,7 +132,7 @@ export function StructurePanel({
                     section_id: section.section_id,
                     role: null,
                     expected_manual_revision: a.manual_revision,
-                    actor: "web",
+                    actor: api.actor,
                   },
                 })
               }

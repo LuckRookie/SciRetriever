@@ -11,7 +11,11 @@ import { recordReading } from "./reading-capture-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { expect, it } from "vitest";
 
-import { nextWorkspace } from "./next-workspace-fixture.js";
+import {
+  nextWorkspace,
+  readerOperation,
+  showAllLibraryStatuses,
+} from "./next-workspace-fixture.js";
 
 async function captureReader(page: Page, name: string) {
   const output = process.env.SCIRETRIEVER_WEB_REVIEW_OUTPUT;
@@ -95,7 +99,7 @@ it.each(["no-preference", "reduce"] as const)(
       await w.page
         .getByRole("button", { name: "显示信息", exact: true })
         .click();
-      await w.page.getByRole("button", { name: "解析", exact: true }).click();
+      await readerOperation(w.page, "解析 PDF");
       await w.page
         .getByRole("dialog", { name: "解析 PDF", exact: true })
         .waitFor();
@@ -234,8 +238,7 @@ it("keeps a 100-page PDF bounded over ten React reader switches and releases its
   try {
     await trackReadingResources(w.page);
     await w.page.reload();
-    await w.page.getByRole("button", { name: "材料状态" }).click();
-    await w.page.getByRole("option", { name: "全部状态", exact: true }).click();
+    await showAllLibraryStatuses(w.page);
     const open = async (id: string) => {
       const title =
         id === missingId ? "Unparsed source" : "Synthetic literature workbench";

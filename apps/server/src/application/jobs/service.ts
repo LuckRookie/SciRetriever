@@ -605,7 +605,9 @@ export class ExecutionTaskService {
     jobId: string,
     options: Parameters<ExecutionQueue["runUntilIdle"]>[2] = {},
   ): Promise<readonly ExecutionRunResult[]> {
-    return this.repository.withRuntime(() => this.runJobOwned(jobId, options));
+    return this.repository.withRuntime(() =>
+      this.repository.withOrigin(jobId, () => this.runJobOwned(jobId, options)),
+    );
   }
 
   private async runJobOwned(

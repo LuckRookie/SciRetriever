@@ -1,3 +1,4 @@
+import { activityContext, withActivity } from "../../logging/activity.js";
 import { randomUUID } from "node:crypto";
 import { canonicalJsonBytes, sha256 } from "@sciretriever/contracts";
 import {
@@ -101,11 +102,27 @@ export class ExecutionRepository {
       created_at: createdAt,
       finished_at: null,
     };
+    const context = activityContext();
     return this.database.createExecutionJob(
       job,
       await sha256(canonicalJsonBytes(policy)),
       policy,
       input.targets ?? [],
+      { actor: context.actor, operation: context.operation ?? "task-create" },
+    );
+  }
+  async withOrigin<T>(jobId: string, action: () => Promise<T>): Promise<T> {
+    const origin = await this.database.review<{
+      actor: string;
+      operation: string;
+    } | null>("job-origin-get", { job_id: jobId });
+    return withActivity(
+      {
+        actor: origin?.actor ?? "historical:unknown",
+        job_id: jobId,
+        operation: origin?.operation ?? "task-run",
+      },
+      action,
     );
   }
 

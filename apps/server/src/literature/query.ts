@@ -1,5 +1,7 @@
 import {
   canonicalJsonBytes,
+  LITERATURE_STATUSES,
+  type LibraryCounts,
   parseLibraryQuery,
   parseLibrarySearchRequest,
   parseLiteratureDetail,
@@ -27,9 +29,18 @@ export interface SearchSnapshotRow {
   readonly discovery_run_ids: readonly string[];
   readonly has_pdf_exhaustion: boolean;
   readonly tag_match?: boolean;
+  readonly scope_match?: boolean;
 }
 export interface LibraryQueryRepository {
-  librarySearchPage(request: LibraryPageQuery): Promise<{
+  libraryCounts(
+    query: LibraryQuery,
+    ftsQuery: string | null,
+    signal?: AbortSignal,
+  ): Promise<LibraryCounts>;
+  librarySearchPage(
+    request: LibraryPageQuery,
+    signal?: AbortSignal,
+  ): Promise<{
     readonly rows: readonly SearchSnapshotRow[];
     readonly total_count: number;
     readonly tag_backfill_pending?: number;
@@ -44,6 +55,7 @@ export interface LibraryQueryRepository {
     literatureIds?: readonly string[],
     metaLiteratureIds?: readonly string[],
     tags?: LibraryQuery["tags"],
+    scope?: LibraryQuery,
   ): Promise<readonly SearchSnapshotRow[]>;
   referenceQuerySnapshot(
     selection:
@@ -153,6 +165,8 @@ export function queryFingerprint(query: LibraryQuery): string {
     publication_year_to: query.publication_year_to,
     publisher: contains(query.publisher),
     schema: "sciretriever-library-query-v1",
+    ...(query.folder ? { folder: query.folder } : {}),
+    ...(query.recently_opened ? { recently_opened: true } : {}),
     statuses: unique(query.statuses),
     text_terms: query.text === null ? null : unique(queryTerms(query.text)),
     title: contains(query.title),
@@ -175,13 +189,18 @@ function position(row: SearchSnapshotRow, sort: LibrarySort): Position {
   const l = row.item.literature;
   return {
     literature_id: l.literature_id,
-    value: sort.startsWith("publication-year")
-      ? l.metadata.publication_year
-      : sort.startsWith("title")
-        ? l.metadata.title === null
-          ? null
-          : normalizeQueryText(l.metadata.title)
-        : row.relevance,
+    value:
+      sort === "opened-desc"
+        ? (row.item.last_opened_at ?? null)
+        : sort === "intake-desc"
+          ? (row.item.intake_at ?? null)
+          : sort.startsWith("publication-year")
+            ? l.metadata.publication_year
+            : sort.startsWith("title")
+              ? l.metadata.title === null
+                ? null
+                : normalizeQueryText(l.metadata.title)
+              : row.relevance,
   };
 }
 function compare(a: Position, b: Position, sort: LibrarySort): number {
@@ -201,6 +220,18 @@ function compare(a: Position, b: Position, sort: LibrarySort): number {
   return result || compareText(a.literature_id, b.literature_id);
 }
 function positionPayload(p: Position, sort: LibrarySort): object {
+  if (sort === "opened-desc")
+    return {
+      literature_id: p.literature_id,
+      last_opened_at: p.value,
+      opened_is_null: p.value === null,
+    };
+  if (sort === "intake-desc")
+    return {
+      literature_id: p.literature_id,
+      intake_at: p.value,
+      intake_is_null: p.value === null,
+    };
   if (sort.startsWith("publication-year"))
     return {
       literature_id: p.literature_id,
@@ -279,13 +310,24 @@ function decodePosition(
       payload.sort !== sort
     )
       fail();
-    const field = sort.startsWith("publication-year")
-      ? "publication_year"
-      : sort.startsWith("title")
-        ? "normalized_title"
-        : "bm25";
+    const field =
+      sort === "opened-desc"
+        ? "last_opened_at"
+        : sort === "intake-desc"
+          ? "intake_at"
+          : sort.startsWith("publication-year")
+            ? "publication_year"
+            : sort.startsWith("title")
+              ? "normalized_title"
+              : "bm25";
     const flag =
-      field === "publication_year" ? "year_is_null" : "title_is_null";
+      field === "last_opened_at"
+        ? "opened_is_null"
+        : field === "intake_at"
+          ? "intake_is_null"
+          : field === "publication_year"
+            ? "year_is_null"
+            : "title_is_null";
     const p = object(
       payload.position,
       field === "bm25"
@@ -298,6 +340,14 @@ function decodePosition(
     )
       fail();
     const value = p[field];
+    if (
+      ["intake_at", "last_opened_at"].includes(field) &&
+      value !== null &&
+      (typeof value !== "string" ||
+        !Number.isFinite(Date.parse(value)) ||
+        new Date(value).toISOString() !== value)
+    )
+      fail();
     if (field !== "bm25" && p[flag] !== (value === null)) fail();
     if (
       field === "publication_year" &&
@@ -533,7 +583,30 @@ export class LiteratureQueryService {
           : null,
     });
   }
-  async search(value: unknown): Promise<LibrarySearchPage> {
+  async counts(value: unknown, signal?: AbortSignal): Promise<LibraryCounts> {
+    signal?.throwIfAborted();
+    const query = parseLibrarySearchRequest({ query: value }).query;
+    const terms = query.text === null ? null : queryTerms(query.text);
+    if (terms?.length === 0)
+      return {
+        total: 0,
+        recently_opened: 0,
+        unavailable_pdf: 0,
+        statuses: Object.fromEntries(
+          LITERATURE_STATUSES.map((s) => [s, 0]),
+        ) as Record<(typeof LITERATURE_STATUSES)[number], number>,
+      };
+    return this.repository.libraryCounts(
+      query,
+      terms === null ? null : terms.map((term) => `"${term}"`).join(" AND "),
+      signal,
+    );
+  }
+  async search(
+    value: unknown,
+    signal?: AbortSignal,
+  ): Promise<LibrarySearchPage> {
+    signal?.throwIfAborted();
     const request = parseLibrarySearchRequest(value);
     const after =
       request.cursor === null
@@ -543,14 +616,20 @@ export class LiteratureQueryService {
       request.query.text === null ? null : queryTerms(request.query.text);
     if (terms?.length === 0)
       return Object.freeze({ items: [], total_count: 0, next_cursor: null });
-    const result = await this.repository.librarySearchPage({
-      query: request.query,
-      ftsQuery:
-        terms === null ? null : terms.map((term) => `"${term}"`).join(" AND "),
-      sort: request.sort,
-      after,
-      limit: request.limit,
-    });
+    const result = await this.repository.librarySearchPage(
+      {
+        query: request.query,
+        ftsQuery:
+          terms === null
+            ? null
+            : terms.map((term) => `"${term}"`).join(" AND "),
+        sort: request.sort,
+        after,
+        limit: request.limit,
+      },
+      signal,
+    );
+    signal?.throwIfAborted();
     const page = result.rows.slice(0, request.limit);
     return Object.freeze({
       items: Object.freeze(page.map((row) => row.item)),
@@ -587,12 +666,15 @@ export class LiteratureQueryService {
       [],
       [],
       query.tags,
+      query.folder || query.recently_opened ? query : undefined,
     );
     // A sibling included for completeness may not match FTS or the other query
     // fields. It must not become a new seed for the selected scope.
     const selected = rows.filter(
       (row) =>
-        (terms === null || row.relevance !== null) && matches(row, query),
+        (terms === null || row.relevance !== null) &&
+        row.scope_match !== false &&
+        matches(row, query),
     );
     const sort = query.text === null ? "publication-year-desc" : "relevance";
     selected.sort((a, b) =>

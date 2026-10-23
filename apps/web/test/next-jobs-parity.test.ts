@@ -10,7 +10,10 @@ import { nextAssets, motionOptions } from "./next-workspace-fixture.js";
 import { readingAssets } from "./reading-assets-fixture.js";
 import { chromium } from "playwright";
 import { describe, expect, it } from "vitest";
-import { createApplication } from "../../server/src/bootstrap/application.js";
+import {
+  createApplication,
+  createQueryApplication,
+} from "../../server/src/bootstrap/application.js";
 import { coreProcessingFixture } from "../../server/test/core-processing-fixture.js";
 import { taskHttpAdapters } from "../../server/src/bootstrap/workbench.js";
 import { TypeScriptConfigurationOwner } from "../../server/src/configuration/owner.js";
@@ -57,6 +60,7 @@ describe("durable task workbench", () => {
     await session.refresh();
     const configuration = new TypeScriptConfigurationOwner(home);
     const assets = await taskAssets();
+    const query = await createQueryApplication(home);
     let failNextRun = true;
     let runCalls = 0;
     let releaseRun!: () => void;
@@ -65,6 +69,7 @@ describe("durable task workbench", () => {
     const server = await startWorkbenchHttp({
       access: workbenchTestAccess,
       session,
+      query: { application: query },
       configuration,
       library: {
         queries: application.library,
@@ -103,15 +108,11 @@ describe("durable task workbench", () => {
       await loginWorkbenchPage(page, server.origin);
       await page.goto(`${server.origin}/?view=task`);
       await page.getByText("当前没有任务", { exact: true }).waitFor();
-      const drawer = page.getByRole("dialog", {
+      const drawer = page.getByRole("region", {
         name: "任务详情",
         exact: true,
       });
       const create = async () => {
-        if (await drawer.isVisible())
-          await drawer
-            .getByRole("button", { name: "关闭抽屉", exact: true })
-            .click();
         await page
           .getByLabel("主导航", { exact: true })
           .getByRole("button", { name: /文献库/ })
@@ -123,12 +124,11 @@ describe("durable task workbench", () => {
         });
         if (!(await selectAll.isChecked())) await selectAll.press("Space");
         await page
-          .getByRole("button", { name: "用这些文献做…", exact: true })
-          .first()
+          .getByRole("region", { name: "文献选择" })
+          .getByRole("button", { name: "更多", exact: true })
           .click();
         await page
-          .getByRole("dialog", { name: "使用所选文献" })
-          .getByRole("button", { name: "获取 PDF", exact: true })
+          .getByRole("menuitem", { name: "获取 PDF", exact: true })
           .click();
         const form = page.getByRole("dialog", {
           name: "获取 PDF",
@@ -203,9 +203,6 @@ describe("durable task workbench", () => {
       await page.reload();
       await drawer.getByText("已完成", { exact: true }).first().waitFor();
       expect(new URL(page.url()).searchParams.get("task")).toBe(completedId);
-      await drawer
-        .getByRole("button", { name: "关闭抽屉", exact: true })
-        .click();
       await page.getByRole("button", { name: /^活动/ }).click();
       const activity = page.getByRole("dialog", { name: "活动", exact: true });
       await activity
@@ -222,9 +219,6 @@ describe("durable task workbench", () => {
       expect(new URL(page.url()).searchParams.get("task")).toBe(completedId);
       await page.goBack();
       await drawer.waitFor();
-      await drawer
-        .getByRole("button", { name: "关闭抽屉", exact: true })
-        .click();
       let releaseStale!: () => void;
       const staleGate = new Promise<void>((resolve) => {
         releaseStale = resolve;
@@ -305,9 +299,6 @@ describe("durable task workbench", () => {
       expect(new URL(page.url()).searchParams.get("task")).toBe(
         olderActive.job_id,
       );
-      await drawer
-        .getByRole("button", { name: "关闭抽屉", exact: true })
-        .click();
       await page.getByRole("button", { name: "刷新任务", exact: true }).click();
       await expect
         .poll(() => page.locator(".tasks-list [data-task-id]").count())
@@ -356,6 +347,7 @@ describe("durable task workbench", () => {
       await browser.close();
       await server.close();
       await session.close();
+      await query.close();
       await application.close();
       await rm(home, { recursive: true, force: true });
     }
@@ -391,9 +383,11 @@ describe("durable task workbench", () => {
       },
     );
     await session.refresh();
+    const query = await createQueryApplication(env.home);
     const server = await startWorkbenchHttp({
       access: workbenchTestAccess,
       session,
+      query: { application: query },
       configuration: new TypeScriptConfigurationOwner(env.home),
       library: {
         queries: env.app.library,
@@ -417,7 +411,7 @@ describe("durable task workbench", () => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await loginWorkbenchPage(page, server.origin);
-      const drawer = page.getByRole("dialog", {
+      const drawer = page.getByRole("region", {
         name: "任务详情",
         exact: true,
       });
@@ -492,7 +486,7 @@ describe("durable task workbench", () => {
       expect(result.results[0]).toEqual(firstResult);
       expect(env.parseCalls).toBe(3);
       await drawer
-        .getByRole("button", { name: "活动记录", exact: true })
+        .getByRole("button", { name: "技术活动记录", exact: true })
         .click();
       expect(await drawer.locator(".task-events").innerText()).toContain(
         "processing-result",
@@ -510,9 +504,6 @@ describe("durable task workbench", () => {
         .toBe("completed");
       await drawer.getByText("已完成", { exact: true }).first().waitFor();
       expect(env.parseCalls).toBe(4);
-      await drawer
-        .getByRole("button", { name: "关闭抽屉", exact: true })
-        .click();
       await page.setViewportSize({ width: 390, height: 844 });
       await page.getByRole("button", { name: "打开导航", exact: true }).click();
       await page.keyboard.press("Escape");
@@ -524,6 +515,7 @@ describe("durable task workbench", () => {
       await browser.close();
       await server.close();
       await session.close();
+      await query.close();
       await env.close();
     }
   }, 90000);

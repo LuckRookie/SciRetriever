@@ -3,11 +3,7 @@ import {
   parsePageRegion,
   type PageRegion,
 } from "./index.js";
-import type {
-  ProofreadSource,
-  ProofreadBasis,
-  ProofreadUncertainty,
-} from "./proofread.js";
+import type { ProofreadSource, ProofreadBasis } from "./proofread.js";
 export const PROOFREAD_SEGMENT_KINDS = [
   "heading",
   "text",
@@ -50,7 +46,6 @@ export interface DocumentStructureV2 {
     readonly locate: "region" | "page";
     readonly source: ProofreadSource;
     readonly basis: ProofreadBasis;
-    readonly uncertainty: ProofreadUncertainty | null;
   }[];
 }
 function fail(): never {
@@ -164,7 +159,6 @@ export function parseDocumentStructureV2(
         "locate",
         "source",
         "basis",
-        "uncertainty",
       ]);
       if (
         !PROOFREAD_SEGMENT_KINDS.includes(s.kind as ProofreadSegmentKind) ||
@@ -172,31 +166,8 @@ export function parseDocumentStructureV2(
         !Array.isArray(s.continuation_regions)
       )
         fail();
-      if (
-        !["text-layer", "image-only", "uncertain", "manual"].includes(
-          String(s.basis),
-        )
-      )
+      if (!["text-layer", "image-only", "manual"].includes(String(s.basis)))
         fail();
-      let uncertainty: ProofreadUncertainty | null = null;
-      if (s.uncertainty !== null) {
-        const u = object(s.uncertainty, ["span", "reason", "page"]);
-        if (
-          !Array.isArray(u.span) ||
-          u.span.length !== 2 ||
-          typeof u.reason !== "string" ||
-          !u.reason.trim()
-        )
-          fail();
-        const start = integer(u.span[0], 0, 4 * 1024 * 1024),
-          end = integer(u.span[1], start, 4 * 1024 * 1024);
-        uncertainty = {
-          span: [start, end],
-          reason: u.reason,
-          page: integer(u.page, 0, pages - 1),
-        };
-      }
-      if ((s.basis === "uncertain") !== (uncertainty !== null)) fail();
       if (s.locate !== (s.region === null ? "page" : "region")) fail();
       const start = integer(s.start_utf8, 0, markdownBytes),
         end = integer(s.end_utf8, start + 1, markdownBytes),
@@ -227,7 +198,6 @@ export function parseDocumentStructureV2(
         locate: s.region === null ? "page" : "region",
         source: s.source as ProofreadSource,
         basis: s.basis as ProofreadBasis,
-        uncertainty,
       };
     },
   );

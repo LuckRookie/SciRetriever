@@ -1,5 +1,8 @@
+import { FolderError } from "../../literature/folders.js";
 import {
   canonicalJsonBytes,
+  parseLibraryCounts,
+  type LibraryCounts,
   decodeCursor,
   encodeCursor,
   parseArticleIdentityAssessment,
@@ -269,6 +272,7 @@ function parseDiscoveryPublication(value: unknown): DiscoveryPublication {
 }
 
 export type SqliteCommand =
+  | { readonly kind: "folders"; readonly value: unknown }
   | {
       readonly kind: "snapshot";
       readonly action: import("./snapshot-engine.js").SnapshotStorageAction;
@@ -292,6 +296,11 @@ export type SqliteCommand =
   | {
       readonly kind: "annotation";
       readonly action: import("./structure-annotation-engine.js").AnnotationStorageAction;
+      readonly args: unknown;
+    }
+  | {
+      readonly kind: "review";
+      readonly action: import("./review-engine.js").ReviewStorageAction;
       readonly args: unknown;
     }
   | {
@@ -380,6 +389,10 @@ export type SqliteCommand =
   | { readonly kind: "execution_restore_check"; readonly path: string }
   | {
       readonly kind: "execution_create_job";
+      readonly origin: {
+        readonly actor: string;
+        readonly operation: string;
+      } | null;
       readonly job: ExecutionJob;
       readonly policy_sha256: string;
       readonly policy_json: unknown;
@@ -537,6 +550,11 @@ export type SqliteCommand =
   | { readonly kind: "close" }
   | { readonly kind: "schema" }
   | { readonly kind: "query_preflight" }
+  | {
+      readonly kind: "library_counts";
+      readonly query: LibraryPageQuery["query"];
+      readonly ftsQuery: string | null;
+    }
   | { readonly kind: "library_search_page"; readonly request: LibraryPageQuery }
   | {
       readonly kind: "library_snapshot";
@@ -546,6 +564,7 @@ export type SqliteCommand =
       readonly literatureIds: readonly string[];
       readonly metaLiteratureIds: readonly string[];
       readonly tags?: import("@sciretriever/contracts").LibraryQuery["tags"];
+      readonly scope?: LibraryPageQuery["query"];
     }
   | {
       readonly kind: "put_literature";
@@ -1022,6 +1041,7 @@ export interface LiteraturePage {
 interface Reply {
   readonly id: number;
   readonly ok: boolean;
+  readonly cancelled?: boolean;
   readonly value?: unknown;
 }
 
@@ -1046,7 +1066,7 @@ export class SqliteWorker {
     number,
     {
       resolve: (value: unknown) => void;
-      reject: (error: SqliteWorkerError) => void;
+      reject: (error: Error) => void;
     }
   >();
   private closed = false;
@@ -1109,7 +1129,12 @@ export class SqliteWorker {
       if (!pending) return;
       this.pending.delete(reply.id);
       if (reply.ok) pending.resolve(reply.value);
-      else pending.reject(new SqliteWorkerError());
+      else
+        pending.reject(
+          reply.cancelled
+            ? new DOMException("Library query cancelled", "AbortError")
+            : new SqliteWorkerError(),
+        );
     });
     this.worker.on("error", () => {
       this.failed = true;
@@ -1168,6 +1193,7 @@ export class SqliteWorker {
       "reference_query_snapshot",
       "library_snapshot",
       "library_search_page",
+      "library_counts",
       "artifact_reclamation_snapshot",
       "candidate_cleanup_snapshot",
       "query_preflight",
@@ -1179,12 +1205,17 @@ export class SqliteWorker {
     ]);
     if (this.readOnly && !readOnly.has(copy.kind))
       return Promise.reject(new SqliteWorkerError());
+    const cancellableQuery = ["library_counts", "library_search_page"].includes(
+      copy.kind,
+    );
     const send = () => {
       if (signal?.aborted)
         return Promise.reject(
-          new WriteAdmissionError("write-admission-cancelled"),
+          cancellableQuery
+            ? new DOMException("Library query cancelled", "AbortError")
+            : new WriteAdmissionError("write-admission-cancelled"),
         );
-      return this.send<T>(copy);
+      return this.send<T>(copy, cancellableQuery ? signal : undefined);
     };
     // A running Entry operation retains catalog write admission for its whole
     // frozen scope. Operator pause/cancel must still reach the same SQLite
@@ -1195,19 +1226,42 @@ export class SqliteWorker {
       return this.admission.run(send, signal);
     return send();
   }
-  private send<T>(command: SqliteCommand): Promise<T> {
+  private send<T>(command: SqliteCommand, signal?: AbortSignal): Promise<T> {
     if (this.closed || this.failed)
       return Promise.reject(new SqliteWorkerError());
     return new Promise<T>((resolve, reject) => {
       const id = this.nextId++;
+      const cancellation = signal
+        ? new Int32Array(new SharedArrayBuffer(4))
+        : undefined;
+      const cleanup = () => signal?.removeEventListener("abort", abort);
+      const abort = () => {
+        Atomics.store(cancellation!, 0, 1);
+        this.pending.delete(id);
+        cleanup();
+        reject(new DOMException("Library query cancelled", "AbortError"));
+      };
+      if (signal?.aborted) {
+        abort();
+        return;
+      }
+      signal?.addEventListener("abort", abort, { once: true });
       this.pending.set(id, {
         resolve: (value) => {
+          cleanup();
           this.initialized = true;
           resolve(value as T);
         },
-        reject,
+        reject: (error) => {
+          cleanup();
+          reject(error);
+        },
       });
-      this.worker.postMessage({ id, command });
+      this.worker.postMessage({
+        id,
+        command,
+        ...(cancellation ? { cancellation: cancellation.buffer } : {}),
+      });
     });
   }
 
@@ -1270,12 +1324,39 @@ export class SqliteWorker {
     return read ? send() : this.admission!.run(send, signal);
   }
 
+  async folders(
+    value: {
+      operation: string;
+      request: unknown;
+      now?: string;
+      actor?: string;
+      folder_id?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const read = ["list", "delete-preview"].includes(value.operation);
+    if (!read && (this.readOnly || !this.admission))
+      throw new FolderError("folder-write-unavailable");
+    const copy = structuredClone(value),
+      send = async () => {
+        if (signal?.aborted) throw new FolderError("folder-cancelled");
+        const reply = await this.send<{
+          ok: boolean;
+          value?: unknown;
+          code?: string;
+        }>({ kind: "folders", value: copy });
+        if (!reply.ok)
+          throw new FolderError(reply.code ?? "folder-storage-failed");
+        return reply.value;
+      };
+    return read ? send() : this.admission!.run(send, signal);
+  }
   async snapshot<T>(
     action: import("./snapshot-engine.js").SnapshotStorageAction,
     args: unknown,
     signal?: AbortSignal,
   ): Promise<T> {
-    const write = action === "publish";
+    const write = action === "publish" || action === "rename";
     if (write && (this.readOnly || !this.admission))
       throw new SnapshotError("snapshot-write-unavailable");
     const copy = structuredClone(args),
@@ -1413,6 +1494,38 @@ export class SqliteWorker {
     };
     return read ? send() : this.admission!.run(send, signal);
   }
+  async review<T = unknown>(
+    action: import("./review-engine.js").ReviewStorageAction,
+    args: unknown,
+  ): Promise<T> {
+    const read = [
+      "audit-list",
+      "job-origin-get",
+      "session-list",
+      "session-read",
+      "session-revision",
+      "task-run",
+      "usage-history",
+      "processor-runs",
+      "literature-results",
+      "estimate-issues",
+    ].includes(action);
+    if (this.readOnly && !read) throw new KnowledgeStorageError("read-only");
+    if (!read && !this.admission)
+      throw new KnowledgeStorageError("write-admission-required");
+    const copy = structuredClone(args);
+    const send = async () => {
+      const reply = await this.send<{ ok: boolean; value?: T; code?: string }>({
+        kind: "review",
+        action,
+        args: copy,
+      });
+      if (!reply.ok)
+        throw new KnowledgeStorageError(reply.code ?? "review-storage-failed");
+      return reply.value as T;
+    };
+    return read ? send() : this.admission!.run(send);
+  }
   async rawParse<T>(
     action: import("./raw-parsing-engine.js").RawParseStorageAction,
     args: unknown,
@@ -1499,14 +1612,23 @@ export class SqliteWorker {
     policySha256: string,
     policy: ExecutionPolicySnapshot,
     targets: readonly ExecutionTarget[] = [],
+    origin: {
+      readonly actor: string;
+      readonly operation: string;
+    } | null = null,
   ): Promise<ExecutionJob> {
     const parsed = parseExecutionJob(job);
     const parsedPolicy = parseExecutionPolicy(policy);
+    if (origin) {
+      executionText(origin.actor, 256);
+      executionText(origin.operation, 256);
+    }
     executionText(policySha256, 64);
     if (!/^[0-9a-f]{64}$/u.test(policySha256)) throw new SqliteWorkerError();
     return parseExecutionJob(
       await this.run({
         kind: "execution_create_job",
+        origin,
         job: parsed,
         policy_sha256: policySha256,
         policy_json: parsedPolicy,
@@ -2360,7 +2482,19 @@ export class SqliteWorker {
       artifact: parseArtifactRef(result.artifact),
     };
   }
-  async librarySearchPage(request: LibraryPageQuery): Promise<{
+  async libraryCounts(
+    query: LibraryPageQuery["query"],
+    ftsQuery: string | null,
+    signal?: AbortSignal,
+  ): Promise<LibraryCounts> {
+    return parseLibraryCounts(
+      await this.run({ kind: "library_counts", query, ftsQuery }, signal),
+    );
+  }
+  async librarySearchPage(
+    request: LibraryPageQuery,
+    signal?: AbortSignal,
+  ): Promise<{
     readonly rows: readonly SearchSnapshotRow[];
     readonly total_count: number;
     readonly tag_backfill_pending?: number;
@@ -2369,10 +2503,13 @@ export class SqliteWorker {
       rows: unknown;
       total_count: number;
       tag_backfill_pending?: number;
-    }>({
-      kind: "library_search_page",
-      request,
-    });
+    }>(
+      {
+        kind: "library_search_page",
+        request,
+      },
+      signal,
+    );
     if (!Number.isSafeInteger(page.total_count) || page.total_count < 0)
       throw new SqliteWorkerError();
     const rows = this.parseSearchRows(page.rows);
@@ -2399,6 +2536,7 @@ export class SqliteWorker {
     literatureIds: readonly string[] = [],
     metaLiteratureIds: readonly string[] = [],
     tags?: import("@sciretriever/contracts").LibraryQuery["tags"],
+    scope?: LibraryPageQuery["query"],
   ): Promise<
     readonly {
       readonly item: LiteratureSearchItem;
@@ -2423,6 +2561,7 @@ export class SqliteWorker {
       literatureIds,
       metaLiteratureIds,
       ...(tags ? { tags } : {}),
+      ...(scope ? { scope } : {}),
     });
     return this.parseSearchRows(value);
   }
@@ -2441,6 +2580,9 @@ export class SqliteWorker {
       )
         throw new SqliteWorkerError();
       return Object.freeze({
+        ...(row.scope_match === undefined
+          ? {}
+          : { scope_match: row.scope_match === true }),
         ...(row.tag_match === undefined
           ? {}
           : { tag_match: row.tag_match === true }),

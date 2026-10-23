@@ -19,11 +19,12 @@ import { useApi } from "../../data/query.js";
 import type { ApiClient } from "../../data/api.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { OperationDialog } from "../library/OperationDialog.js";
-import { record, type JsonRecord } from "../../data/wire.js";
+import type { JsonRecord } from "../../data/wire.js";
+import { readIntakeReport, type IntakeReport } from "../../data/intake.js";
 import { errorMessage } from "../../strings.js";
 const reports = new WeakMap<
   ApiClient,
-  { name: string; report: JsonRecord }[]
+  { name: string; report: IntakeReport }[]
 >();
 export default function Intake() {
   const api = useApi(),
@@ -73,7 +74,7 @@ export default function Intake() {
               },
         );
       }
-      return record(response.report, "intake report");
+      return readIntakeReport(response.report);
     },
     onSuccess: (report) => {
       const next = [
@@ -103,7 +104,7 @@ export default function Intake() {
   return (
     <section className="feature-page intake-page">
       <PageHeader
-        title="发现"
+        title="入库"
         description="扩充同一文献库。接纳元数据后，再按需要选择获取或加工。"
       />
       <Tabs
@@ -278,14 +279,19 @@ export default function Intake() {
             <div className="intake-report" key={index}>
               <ListRow
                 title={item.name}
-                badge={<Badge status="completed">已结束</Badge>}
-                bibliography={
-                  typeof item.report.accepted === "number"
-                    ? `已接纳 ${item.report.accepted} 条元数据`
-                    : "运行回执已保存；逐项情况见运行明细。"
+                badge={
+                  <Badge status={item.report.status}>{item.report.label}</Badge>
                 }
+                bibliography={item.report.summary}
               />
-              {typeof item.report.discovery_run_id === "string" ? (
+              {item.report.notices.length ? (
+                <ul aria-label="运行提示">
+                  {item.report.notices.map((notice, i) => (
+                    <li key={i}>{notice}</li>
+                  ))}
+                </ul>
+              ) : null}
+              {typeof item.report.raw.discovery_run_id === "string" ? (
                 <Button
                   onPress={() =>
                     navigate({
@@ -293,7 +299,7 @@ export default function Intake() {
                       query: JSON.stringify({
                         ...route.query,
                         discovery_run_ids: [
-                          parseDiscoveryRunId(item.report.discovery_run_id),
+                          parseDiscoveryRunId(item.report.raw.discovery_run_id),
                         ],
                       }),
                     })
@@ -303,10 +309,10 @@ export default function Intake() {
                 </Button>
               ) : null}
               <TechDetails
-                copyText={JSON.stringify(item.report, null, 2)}
+                copyText={JSON.stringify(item.report.raw, null, 2)}
                 title="运行明细"
               >
-                <pre>{JSON.stringify(item.report, null, 2)}</pre>
+                <pre>{JSON.stringify(item.report.raw, null, 2)}</pre>
               </TechDetails>
             </div>
           ))

@@ -28,6 +28,7 @@ export class ApiError extends Error {
 export class ApiClient {
   clientId = "";
   csrf = "";
+  actor = "";
   view: WorkbenchView | null = null;
   workspace: Workspace = {
     catalog: null,
@@ -37,6 +38,7 @@ export class ApiClient {
   };
   private stream: EventSource | null = null;
   readonly materialListeners = new Set<() => void>();
+  readonly agentListeners = new Set<() => void>();
   private materialRevision: string | null = null;
   private released = false;
   private loginRedirected = false;
@@ -62,6 +64,7 @@ export class ApiClient {
         const session = await this.read("/api/v1/maintenance/session", signal);
         if (typeof session.csrf !== "string") throw new Error("维护会话无效");
         this.csrf = session.csrf;
+        this.actor = String(session.actor ?? "");
       }
       this.workspace = {
         catalog: null,
@@ -79,11 +82,11 @@ export class ApiClient {
       return this.workspace;
     }
     const auth = await fetch("/auth/status", { signal });
-    if (
-      auth.ok &&
-      record(await auth.json(), "authentication").authenticated !== true
-    )
-      this.login();
+    if (auth.ok) {
+      const identity = record(await auth.json(), "authentication");
+      if (identity.authenticated !== true) this.login();
+      this.actor = typeof identity.actor === "string" ? identity.actor : "";
+    }
     const response = await fetch("/api/clients", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Workbench-Init": "1" },
@@ -123,6 +126,9 @@ export class ApiClient {
       };
       signal.throwIfAborted();
       this.stream = new EventSource(this.url("/api/events"));
+      this.stream.addEventListener("agents", () => {
+        for (const listener of this.agentListeners) listener();
+      });
       this.stream.addEventListener("view", (event) => {
         if (this.released) return;
         try {

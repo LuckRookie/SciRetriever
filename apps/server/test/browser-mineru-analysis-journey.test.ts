@@ -14,7 +14,7 @@ import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 const bundle = process.env.SCIRETRIEVER_CLOAK_BUNDLE;
 
 it.skipIf(!bundle)(
-  "runs Browser capture through both MinerU HTTP profiles without starting analysis",
+  "runs Browser capture through the configured MinerU HTTP profile without starting analysis",
   async () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-browser-mineru-analysis-"),
@@ -112,17 +112,11 @@ it.skipIf(!bundle)(
         throw new Error("raw parse unavailable");
       expect(
         completion.receipt.profiles.map((p) => [p.profile, p.status]),
-      ).toEqual([
-        ["pipeline", "published"],
-        ["vlm-engine", "published"],
-      ]);
+      ).toEqual([["vlm-engine", "published"]]);
       const raw = await workbench.application.rawParseStorage!.current(
         completion.receipt.asset_id,
       );
-      expect(raw.map((p) => p.result?.profile).sort()).toEqual([
-        "pipeline",
-        "vlm-engine",
-      ]);
+      expect(raw.map((p) => p.result?.profile).sort()).toEqual(["vlm-engine"]);
       for (const row of raw) {
         expect(row.result?.blocks).not.toBeNull();
         expect(row.result?.model_identity).toBe(
@@ -137,7 +131,6 @@ it.skipIf(!bundle)(
       expect(detail).not.toHaveProperty("content");
       expect(modelCalls).toBe(0);
       expect(mineru.submitted.map((s) => s.profile).sort()).toEqual([
-        "pipeline",
         "vlm-engine",
       ]);
       expect(

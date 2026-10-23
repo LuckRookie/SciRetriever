@@ -18,14 +18,19 @@ export const sections = [
   "ext",
   "task",
   "web",
+  "agent",
   "set",
   "lab",
   "gallery",
 ] as const;
 export type Section = (typeof sections)[number];
-export type ReaderMode = "pdf" | "doc" | "know";
+export type ReaderMode = "pdf" | "doc" | "know" | "edit" | "results";
 const eventName = "sciretriever:react-navigation";
 export const sourceParameterKeys = [
+  "agentSession",
+  "focusLiterature",
+  "rerun",
+  "rerunHash",
   "source",
   "document",
   "task",
@@ -64,7 +69,7 @@ export function parseUrl(search: string): UrlState {
     warning: string | null = null;
   const fallback = parseLibrarySearchRequest({
     query: {},
-    sort: "publication-year-desc",
+    sort: "intake-desc",
     limit: 50,
     cursor: null,
   });
@@ -92,7 +97,7 @@ export function parseUrl(search: string): UrlState {
       literature = parseLiteratureId(parameters.get("literature"));
     if (view && !sections.includes(view as Section))
       throw new Error("未知页面");
-    if (reader && !["pdf", "doc", "know"].includes(reader))
+    if (reader && !["pdf", "doc", "know", "edit", "results"].includes(reader))
       throw new Error("未知阅读视图");
   } catch {
     error = "链接中的筛选或材料标识无效。请返回文献库重新选择。";
@@ -101,7 +106,13 @@ export function parseUrl(search: string): UrlState {
     section,
     warning,
     literature,
-    reader: reader === "doc" || reader === "know" ? reader : "pdf",
+    reader:
+      reader === "doc" ||
+      reader === "know" ||
+      reader === "edit" ||
+      reader === "results"
+        ? reader
+        : "pdf",
     query,
     sort,
     parameters,

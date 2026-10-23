@@ -101,6 +101,7 @@ export interface VocabularyChange {
     readonly before: Tag | null;
   }[];
   readonly actor: VocabularyActor;
+  readonly actor_label?: string;
   readonly reason: string;
   readonly affected_literatures: number;
   readonly outcome: "applied" | "skipped-locked";

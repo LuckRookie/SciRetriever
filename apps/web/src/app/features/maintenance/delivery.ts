@@ -81,9 +81,13 @@ export function extractionTransport(api: ApiClient) {
     );
     if (
       Object.keys(grant).sort().join() !==
-        ["protocol_version", "csrf"].sort().join() ||
+        ["protocol_version", "csrf", "actor"].sort().join() ||
       grant.protocol_version !== 1 ||
-      typeof grant.csrf !== "string"
+      typeof grant.csrf !== "string" ||
+      typeof grant.actor !== "string" ||
+      !/^(?:web-session:[a-f0-9-]{36}|maintenance-session:[a-f0-9]{32})$/u.test(
+        grant.actor,
+      )
     )
       throw new Error("维护会话无效");
     const response = await api.fetch(`/api/v1/maintenance/extraction-${path}`, {

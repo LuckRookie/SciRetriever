@@ -1,3 +1,4 @@
+import { PaperResults } from "./PaperResults.js";
 import { markdown } from "../../../reading/markdown.js";
 import type { DocumentReadResultMap } from "@sciretriever/contracts";
 import { parsePageRegion } from "@sciretriever/contracts";
@@ -29,6 +30,7 @@ import {
   AnchoredPopover,
   Button,
   Dialog,
+  EmptyState,
   ErrorNotice,
   Icon,
   IconButton,
@@ -54,10 +56,11 @@ import {
 import { AnimatedPanel } from "../../motion/index.js";
 import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
-import { ProofreadPanel } from "../archive/ProofreadPanel.js";
+import { ProofreadEditor } from "./ProofreadEditor.js";
 import { StructurePanel } from "../archive/StructurePanel.js";
 import { download, OperationDialog } from "../library/OperationDialog.js";
 import { ReaderInformation } from "./ReaderInformation.js";
+import { RunOperatorDialog } from "../processing/RunOperator.js";
 import "./reading.css";
 import { SummaryView } from "./SummaryView.js";
 
@@ -65,9 +68,10 @@ export default function Reader() {
   const api = useApi(),
     shell = useShell(),
     route = useUrlState();
-  const [showSources, setShowSources] = useState(false),
-    [inspect, setInspect] = useState(route.parameters.get("inspect") === "1"),
-    [selectedSegment, setSelectedSegment] = useState<string | undefined>();
+  const readerActions = useRef(shell);
+  readerActions.current = shell;
+  const [showSources, setShowSources] = useState(false);
+  const [editorWidth, setEditorWidth] = useState(560);
   const parts = useQuery({
     queryKey: ["document", "parts", route.literature],
     enabled: !!route.literature,
@@ -105,6 +109,7 @@ export default function Reader() {
     } | null>(null),
     [ready, setReady] = useState(false),
     [operation, setOperation] = useState<string | null>(null),
+    [runner, setRunner] = useState(false),
     [zoomImage, setZoomImage] = useState<{ src: string; alt: string } | null>(
       null,
     );
@@ -157,6 +162,7 @@ export default function Reader() {
       !!detail.data &&
       !source.error &&
       mode !== "know" &&
+      mode !== "results" &&
       source.value?.kind !== "metadata",
     queryFn: ({ signal }) =>
       resolveReadingSources(
@@ -168,7 +174,7 @@ export default function Reader() {
         },
         detail.data!,
         source.value,
-        mode === "pdf" ? "pdf" : "doc",
+        mode === "pdf" || mode === "edit" ? "pdf" : "doc",
       ),
   });
   const position = useMemo(
@@ -181,7 +187,7 @@ export default function Reader() {
           mode,
           mode === "know"
             ? new URLSearchParams(sourceKey).get("result")
-            : mode === "pdf"
+            : mode === "pdf" || mode === "edit"
               ? sources.data?.material
               : sources.data?.document,
         ],
@@ -211,6 +217,7 @@ export default function Reader() {
       !status.current ||
       !findStatus.current ||
       mode === "know" ||
+      mode === "results" ||
       !sources.data ||
       source.error
     )
@@ -238,8 +245,37 @@ export default function Reader() {
     delete root.current.dataset.readingReady;
     const current: ReaderFrame = {
       onSegment: (segment) => {
-        setSelectedSegment(segment);
-        setInspect(true);
+        const material = sources.data?.material;
+        if (!material) return;
+        void archiveQuery(
+          api,
+          "proofread-inspect",
+          {
+            asset_id: material.asset_id,
+            block_id: segment,
+            offset: 0,
+            limit: 1,
+            unresolved_only: false,
+          },
+          controller.signal,
+        )
+          .then((value) => {
+            const item = rows(value)[0];
+            const block = item?.block ?? item?.draft;
+            const page =
+              block && typeof block === "object" && "page" in block
+                ? Number(block.page) + 1
+                : 1;
+            readerActions.current.openPaper(id, "edit", {
+              asset: material.asset_id,
+              assetHash: material.asset_sha256,
+              page: String(page),
+            });
+          })
+          .catch((error) => {
+            if (!controller.signal.aborted)
+              readerActions.current.notify(errorMessage(error));
+          });
       },
       ...(new URLSearchParams(sourceKey).has("page")
         ? {
@@ -306,7 +342,7 @@ export default function Reader() {
     frame.current = current;
     let url = "";
     const run = async () => {
-      if (mode === "pdf") {
+      if (mode === "pdf" || mode === "edit") {
         if (!sources.data.material) {
           current.status.textContent = "尚无 PDF。可从信息栏上传或显式获取。";
           return;
@@ -382,8 +418,20 @@ export default function Reader() {
         route.parameters.has(key) ? [[key, route.parameters.get(key)!]] : [],
       ),
     );
-  const changeMode = (value: string) =>
-    shell.openPaper(id, value as ReaderMode, sourceParameters());
+  const changeMode = (value: string) => {
+    const material = sources.data?.material;
+    shell.openPaper(
+      id,
+      value as ReaderMode,
+      value === "results"
+        ? {}
+        : value === "edit"
+          ? material
+            ? { asset: material.asset_id, assetHash: material.asset_sha256 }
+            : {}
+          : sourceParameters(),
+    );
+  };
   const fromSummary = route.parameters.get("returnReader") === "know";
   const back = () => {
     const result = route.parameters.get("result");
@@ -511,7 +559,6 @@ export default function Reader() {
         detail={detail.data}
         resources={resources}
         document={sources.data?.document ?? null}
-        onOperation={setOperation}
       />
       {sources.data?.document ? (
         <StructurePanel
@@ -522,7 +569,7 @@ export default function Reader() {
     </>
   );
   const readingControls =
-    mode === "pdf" && pdf ? (
+    (mode === "pdf" || mode === "edit") && pdf ? (
       <>
         <IconButton
           aria-label="上一页"
@@ -564,7 +611,7 @@ export default function Reader() {
           ]}
         />
       </>
-    ) : mode !== "pdf" ? (
+    ) : mode === "doc" || mode === "know" ? (
       <>
         <Select
           label="阅读字号"
@@ -605,11 +652,11 @@ export default function Reader() {
   return (
     <section
       ref={root}
-      className={`react-reader reader-workspace ${!layoutPosition.information ? "reader-without-information" : ""}`}
+      className={`react-reader reader-workspace ${mode === "edit" ? "reader-editing" : !layoutPosition.information ? "reader-without-information" : ""}`}
       data-layout={layout}
       aria-label="文献阅读器"
     >
-      {(parts.data?.length ?? 0) > 1 ? (
+      {mode !== "results" && (parts.data?.length ?? 0) > 1 ? (
         <Select
           label="阅读部分"
           value={sources.data?.material?.asset_id ?? ""}
@@ -635,43 +682,54 @@ export default function Reader() {
           }))}
         />
       ) : null}
-      <Dialog title="校订区块对照" isOpen={inspect} onOpenChange={setInspect}>
-        {sources.data?.material ? (
-          <ProofreadPanel
-            id={id}
-            asset={sources.data.material.asset_id}
-            hash={sources.data.material.asset_sha256}
-            {...(selectedSegment ? { segment: selectedSegment } : {})}
-          />
-        ) : (
-          <p>此文献尚无可对照的材料。</p>
-        )}
-      </Dialog>
       <div className="reader-toolbar">
         <div className="reader-toolbar-start">
           <SegmentedControl
             label="阅读视图"
-            value={mode}
+            value={mode === "edit" ? "doc" : mode === "know" ? "results" : mode}
             onChange={changeMode}
             items={[
               { id: "pdf", label: "PDF" },
               { id: "doc", label: "全文" },
-              { id: "know", label: "总结" },
+              { id: "results", label: "结果" },
             ]}
           />
-          <IconButton
-            aria-label={layoutPosition.outline ? "收起目录" : "显示目录"}
-            aria-expanded={layoutPosition.outline}
-            onPress={() =>
-              changeLayout(() => {
-                layoutPosition.outline = !layoutPosition.outline;
-              })
-            }
-          >
-            <Icon name="menu" />
-          </IconButton>
+          {mode !== "results" && mode !== "edit" ? (
+            <IconButton
+              aria-label={layoutPosition.outline ? "收起目录" : "显示目录"}
+              aria-expanded={layoutPosition.outline}
+              onPress={() =>
+                changeLayout(() => {
+                  layoutPosition.outline = !layoutPosition.outline;
+                })
+              }
+            >
+              <Icon name="menu" />
+            </IconButton>
+          ) : null}
         </div>
         <div className="reader-toolbar-context">
+          {mode === "doc" || mode === "edit" ? (
+            <SegmentedControl
+              label="全文模式"
+              value={mode}
+              onChange={changeMode}
+              items={[
+                { id: "doc", label: "阅读" },
+                { id: "edit", label: "编辑" },
+              ]}
+            />
+          ) : null}
+          {mode === "know" ? (
+            <Button
+              variant="text"
+              className="reader-back"
+              icon={<Icon name="arrow" />}
+              onPress={() => changeMode("results")}
+            >
+              全部结果
+            </Button>
+          ) : null}
           {readingControls}
           {mode === "doc" ? (
             <Button
@@ -682,20 +740,14 @@ export default function Reader() {
               显示核对依据
             </Button>
           ) : null}
-          <Button
-            variant="text"
-            onPress={() => {
-              setSelectedSegment(undefined);
-              setInspect(true);
-            }}
-          >
-            校订对照
-          </Button>
         </div>
         <div className="reader-toolbar-end">
+          {api.kind === "workspace" ? (
+            <Button onPress={() => setRunner(true)}>运行算子</Button>
+          ) : null}
           <IconButton
             aria-label="文档内查找"
-            isDisabled={mode !== "know" && !ready}
+            isDisabled={mode === "results" || (mode !== "know" && !ready)}
             aria-expanded={findOpen}
             onPress={() => setFindOpen((value) => !value)}
           >
@@ -724,7 +776,7 @@ export default function Reader() {
               {
                 id: "find",
                 label: "文档内查找",
-                disabled: mode !== "know" && !ready,
+                disabled: mode === "results" || (mode !== "know" && !ready),
                 onAction: () => setFindOpen((value) => !value),
               },
               {
@@ -735,6 +787,32 @@ export default function Reader() {
                     layoutPosition.information = !layoutPosition.information;
                   }),
               },
+              ...(api.workspace.capabilities.maintenance
+                ? [
+                    {
+                      id: "acquire",
+                      label: "获取 PDF",
+                      onAction: () => setOperation("acquire"),
+                    },
+                    {
+                      id: "upload",
+                      label: "上传 PDF",
+                      onAction: () => setOperation("upload"),
+                    },
+                    {
+                      id: "parse",
+                      label: "解析 PDF",
+                      disabled: !detail.data.primary_pdf,
+                      onAction: () => setOperation("parse"),
+                    },
+                    {
+                      id: "identity",
+                      label: "核验文章身份",
+                      disabled: !detail.data.primary_pdf,
+                      onAction: () => setOperation("identity"),
+                    },
+                  ]
+                : []),
               {
                 id: "pdf",
                 label: "下载已核验的原始 PDF",
@@ -796,7 +874,7 @@ export default function Reader() {
           <span>正在查看固定来源，阅读不会修改材料。</span>
         </div>
       )}
-      <div className="reader-find" hidden={!findOpen}>
+      <div className="reader-find" hidden={!findOpen || mode === "results"}>
         <SearchField
           label="文档内查找"
           value={search}
@@ -805,7 +883,7 @@ export default function Reader() {
             position.query = value;
           }}
           onSubmit={(value) => {
-            if (mode !== "know")
+            if (mode !== "know" && mode !== "results")
               void Promise.resolve(frame.current?.onFind(value)).catch(
                 (error) => shell.notify(errorMessage(error)),
               );
@@ -815,27 +893,51 @@ export default function Reader() {
         {nextMatch && <Button onPress={nextMatch}>下一处命中</Button>}
       </div>
       <SplitPane
-        label="文献信息栏宽度"
+        label={mode === "edit" ? "校订稿编辑区宽度" : "文献信息栏宽度"}
         edge="left"
-        width={layoutPosition.information ? informationWidth : 0}
+        width={
+          mode === "edit"
+            ? editorWidth
+            : layoutPosition.information
+              ? informationWidth
+              : 0
+        }
         onWidthChange={(value) => {
+          if (mode === "edit") {
+            setEditorWidth(value);
+            return;
+          }
           setInformationWidth(value);
           preferences.write("sciretriever:panel:information:v1", `${value}px`);
         }}
-        min={250}
-        max={520}
-        defaultWidth={330}
+        min={mode === "edit" ? 320 : 250}
+        max={mode === "edit" ? 900 : 520}
+        defaultWidth={mode === "edit" ? 560 : 330}
         side={
-          <aside
-            className="reader-information"
-            hidden={!layoutPosition.information}
-          >
-            <AnimatedPanel preset="panelContent">{information}</AnimatedPanel>
-          </aside>
+          mode === "edit" ? (
+            sources.data?.material ? (
+              <ProofreadEditor
+                key={`${id}:${sources.data.material.asset_id}`}
+                id={id}
+                asset={sources.data.material.asset_id}
+                page={pdf?.page ?? 1}
+                onPage={(page) => pdf?.go(page)}
+              />
+            ) : (
+              <p>此文献尚无 PDF 材料。</p>
+            )
+          ) : (
+            <aside
+              className="reader-information"
+              hidden={!layoutPosition.information}
+            >
+              <AnimatedPanel preset="panelContent">{information}</AnimatedPanel>
+            </aside>
+          )
         }
       >
         <div className="reader-center">
-          {layoutPosition.outline && (
+          {mode !== "edit" && mode !== "results" && layoutPosition.outline && (
             <nav className="reader-outline" aria-label="文档目录">
               <h2>目录</h2>
               {outline.length ? (
@@ -854,12 +956,12 @@ export default function Reader() {
             </nav>
           )}
           <div className="reader-surface">
-            {sources.isFetching && mode !== "know" && (
+            {sources.isFetching && mode !== "know" && mode !== "results" && (
               <p className="reading-status" role="status">
                 正在核对固定材料与文档版本…
               </p>
             )}
-            {sources.error && mode !== "know" ? (
+            {sources.error && mode !== "know" && mode !== "results" ? (
               <ErrorNotice
                 message={errorMessage(sources.error)}
                 onRetry={() => {
@@ -867,7 +969,7 @@ export default function Reader() {
                 }}
               />
             ) : null}
-            {issue && mode !== "know" && (
+            {issue && mode !== "know" && mode !== "results" && (
               <ErrorNotice
                 message={issue.message}
                 retained="已加载的内容仍然保留。"
@@ -877,37 +979,78 @@ export default function Reader() {
             <div
               ref={body}
               className={`reading-scroll reader-engine-body ${showSources ? "reading-show-sources" : ""} ${layoutPosition.fullWidth ? "reading-full" : layoutPosition.wide ? "reading-wide" : ""}`}
-              hidden={mode === "know" || source.value?.kind === "metadata"}
+              hidden={
+                mode === "know" ||
+                mode === "results" ||
+                source.value?.kind === "metadata"
+              }
               style={
                 {
                   "--reading-font-size": `${layoutPosition.fontSize}px`,
                 } as CSSProperties
               }
             />
-            {source.value?.kind === "metadata" && mode !== "know" && (
+            {source.value?.kind === "metadata" &&
+              mode !== "know" &&
+              mode !== "results" && (
+                <div className="reading-scroll">
+                  <article className="reading-article">
+                    <p className="reader-eyebrow">固定元数据来源</p>
+                    <h1>{detail.data.literature.metadata.title}</h1>
+                    <p>
+                      {detail.data.literature.metadata.abstract ||
+                        "此版本元数据没有摘要。"}
+                    </p>
+                    <p className="ui-description">
+                      此处核对的是原检索引用的元数据版本，不是解析全文。
+                    </p>
+                    <Button
+                      onPress={() =>
+                        shell.openPaper(id, "pdf", {
+                          from: route.parameters.get("from") ?? "ask",
+                        })
+                      }
+                    >
+                      打开现有 PDF
+                    </Button>
+                  </article>
+                </div>
+              )}
+            {mode === "doc" &&
+            sources.isSuccess &&
+            !sources.data.document &&
+            source.value?.kind !== "metadata" ? (
               <div className="reading-scroll">
-                <article className="reading-article">
-                  <p className="reader-eyebrow">固定元数据来源</p>
-                  <h1>{detail.data.literature.metadata.title}</h1>
-                  <p>
-                    {detail.data.literature.metadata.abstract ||
-                      "此版本元数据没有摘要。"}
-                  </p>
-                  <p className="ui-description">
-                    此处核对的是原检索引用的元数据版本，不是解析全文。
-                  </p>
-                  <Button
-                    onPress={() =>
-                      shell.openPaper(id, "pdf", {
-                        from: route.parameters.get("from") ?? "ask",
-                      })
-                    }
-                  >
-                    打开现有 PDF
-                  </Button>
-                </article>
+                <EmptyState
+                  title="这篇文献还没有建立档案"
+                  description="建档后才有可阅读、可编辑的全文。"
+                  {...(api.workspace.capabilities.maintenance
+                    ? {
+                        action: (
+                          <Button
+                            variant="primary"
+                            isDisabled={!detail.data.primary_pdf}
+                            {...(detail.data.primary_pdf
+                              ? {}
+                              : { disabledReason: "请先获取或上传 PDF。" })}
+                            onPress={() => setOperation("archive")}
+                          >
+                            建立文献档案
+                          </Button>
+                        ),
+                      }
+                    : {})}
+                />
               </div>
-            )}
+            ) : null}
+            {mode === "results" ? (
+              <div className="reading-scroll">
+                <PaperResults
+                  id={id}
+                  onOpenSummary={() => changeMode("know")}
+                />
+              </div>
+            ) : null}
             {mode === "know" && (
               <div
                 className={`reading-scroll reader-summary-scroll ${layoutPosition.fullWidth ? "reading-full" : layoutPosition.wide ? "reading-wide" : ""}`}
@@ -930,7 +1073,11 @@ export default function Reader() {
               className="reading-status"
               role="status"
               aria-live="polite"
-              hidden={mode === "know" || source.value?.kind === "metadata"}
+              hidden={
+                mode === "know" ||
+                mode === "results" ||
+                source.value?.kind === "metadata"
+              }
             />
             {mode === "know" && (
               <div className="reading-status">
@@ -945,6 +1092,15 @@ export default function Reader() {
           {readingControls}
         </Dialog>
       )}
+      {runner ? (
+        <RunOperatorDialog
+          fixed={{
+            scope: { kind: "literatures", ids: [id] },
+            label: `本篇：${paperTitle(detail.data)}`,
+          }}
+          onClose={() => setRunner(false)}
+        />
+      ) : null}
       {operation && (
         <OperationDialog
           kind={operation}

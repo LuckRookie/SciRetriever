@@ -19,7 +19,10 @@ it("keeps discovery and bibliography import explicit and uploads a selected PDF 
         json: {
           report: {
             discovery_run_id: "00000000-0000-0000-0000-000000000981",
-            accepted: 0,
+            status: "COMPLETED",
+            accepted_count: 0,
+            matched_count: 0,
+            source_results: [],
             fixture: true,
           },
         },
@@ -29,7 +32,7 @@ it("keeps discovery and bibliography import explicit and uploads a selected PDF 
       imports.push(route.request().postDataJSON());
       await route.fulfill({
         status: 200,
-        json: { report: { accepted: 0, fixture: true } },
+        json: { report: { format: "bibtex", items: [] } },
       });
     });
     await w.page
@@ -121,7 +124,14 @@ it("retains only the latest 30 discovery reports during a session and clears the
       calls++;
       await route.fulfill({
         status: 200,
-        json: { report: { accepted: calls, fixture: true } },
+        json: {
+          report: {
+            status: "COMPLETED",
+            accepted_count: calls,
+            matched_count: 0,
+            source_results: [],
+          },
+        },
       });
     });
     await page
@@ -147,7 +157,10 @@ it("retains only the latest 30 discovery reports during a session and clears the
       .first()
       .click();
     await page.locator(".paper-row").first().waitFor();
-    await page.getByRole("button", { name: "发现", exact: true }).click();
+    await page
+      .getByRole("main")
+      .getByRole("button", { name: "入库", exact: true })
+      .click();
     await expect.poll(() => page.locator(".intake-report").count()).toBe(30);
     await page.reload();
     await page.getByText("尚未执行发现或导入。", { exact: true }).waitFor();

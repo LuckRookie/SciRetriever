@@ -1,21 +1,16 @@
 @layer pages {
   .tasks-page {
-    max-width: 1200px;
+    max-width: 1400px;
     margin: 0 auto;
-    padding: var(--space-6);
-    display: grid;
-    gap: var(--space-4);
-  }
-  .tasks-page > .ui-field {
-    max-width: 440px;
+    padding: var(--space-6) var(--space-7) var(--space-5);
   }
   .tasks-list {
-    border: 1px solid var(--line);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
+    display: grid;
+    gap: 2px;
   }
-  .tasks-list .ui-list-row + .ui-list-row {
-    border-top: 1px solid var(--line);
+  .tasks-page .ui-master-toolbar .ui-tab {
+    min-height: var(--control-small-height);
+    padding-inline: var(--space-2);
   }
   .task-detail {
     display: grid;
@@ -29,6 +24,13 @@
     flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
+  }
+  .mapped-paper {
+    padding-block: var(--space-4);
+    border-bottom: 1px solid var(--line);
+  }
+  .mapped-paper strong {
+    overflow-wrap: anywhere;
   }
   .task-events {
     padding-left: var(--space-5);

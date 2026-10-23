@@ -1,3 +1,4 @@
+import { recordOperation } from "../application/operations.js";
 import {
   parseProcessorCitation,
   processorExact,
@@ -116,7 +117,17 @@ export async function queryProcessors(
       processorError("processor-query-invalid");
   }
 }
-export async function submitProcessor(
+export function submitProcessor(
+  app: Application,
+  request: unknown,
+  start: boolean,
+  signal?: AbortSignal,
+) {
+  return recordOperation(app.database, "processor-submit", request, () =>
+    performSubmitProcessor(app, request, start, signal),
+  );
+}
+async function performSubmitProcessor(
   app: Pick<Application, "processors" | "processingTasks">,
   value: unknown,
   start: boolean,

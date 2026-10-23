@@ -103,7 +103,7 @@ async function addDocument(env: Env, index: number) {
   });
 }
 describe("processor application acceptance", () => {
-  it("preserves numeric typography, rejects invalid magnitudes and marks unsupported raw values uncertain", async () => {
+  it("preserves numeric typography, rejects invalid magnitudes and marks unsupported raw values not found", async () => {
     const env = await coreProcessingFixture();
     try {
       env.setText("The measured conductivity is 7.25 \\times 10^{-3} S/cm.");
@@ -169,7 +169,7 @@ describe("processor application acceptance", () => {
           expect(stored!.result.value_checks).toEqual([
             expect.objectContaining({
               pointer: "/conductivity",
-              status: key === "invented-raw" ? "uncertain" : "text-layer",
+              status: key === "invented-raw" ? "not-found" : "found",
             }),
           ]);
         }
@@ -464,8 +464,16 @@ describe("processor application acceptance", () => {
   it("preserves partial attempts, permits later complete publication, and never treats search absence as a full-text negative", async () => {
     const env = await coreProcessingFixture();
     try {
+      const identity = env.app.agents.effectiveIdentity.bind(env.app.agents);
+      vi.spyOn(env.app.agents, "effectiveIdentity").mockImplementation(
+        (role) => ({
+          ...identity(role),
+          context_window_tokens: 8192 + 1024 + 1000,
+          max_output_tokens: 1024,
+        }),
+      );
       env.setText(
-        `First exposure observation ${"alpha ".repeat(30)}.\n\nSecond exposure observation ${"beta ".repeat(30)}.`,
+        `First exposure observation ${"alpha ".repeat(90)}.\n\nSecond exposure observation ${"beta ".repeat(110)}.`,
       );
       const parsed = await env.build(env.parseRequest),
         inputs = [parsedInput(parsed.document.document_version_id)];
@@ -492,7 +500,7 @@ describe("processor application acceptance", () => {
         spec: {
           record_meaning: "observations",
           fields: [{ name: "note", description: "observation" }],
-          reading: { max_chunk_bytes: 256 },
+          reading: { scope: "full" },
         },
       };
       const partial = await output(env, request);

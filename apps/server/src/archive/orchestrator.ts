@@ -1,9 +1,9 @@
+import { archiveStepKey } from "./input-key.js";
+import { withActivity } from "../logging/activity.js";
 import { randomUUID } from "node:crypto";
 import {
   ARCHIVE_STEPS,
-  canonicalJsonBytes,
   parseArchiveBuildRequest,
-  sha256,
   type ArchiveBuildRequest,
   type ArchiveState,
   type ArchivePart,
@@ -119,7 +119,10 @@ export class ArchiveOrchestrator {
           )
             continue;
           try {
-            await this.step(runId, request, part, step, signal);
+            await withActivity(
+              { operation: `archive-${step}`, literature_id: id },
+              () => this.step(runId, request, part, step, signal),
+            );
             if (
               step === "metadata" &&
               ["correction-or-editorial", "perspective-or-commentary"].includes(
@@ -212,29 +215,18 @@ export class ArchiveOrchestrator {
       step === "tags"
         ? await this.runtime.tags.assignment(request.literature_id, signal)
         : null;
-    const key = {
-      method: this.runtime.method_sha256,
-      step,
-      mode: request.mode,
-      asset: part.asset_id,
-      proofread: current.proofread_id,
-      document:
-        step === "proofread" || step === "document"
-          ? null
-          : current.document_version_id,
-      annotation: ["metadata", "references", "tags"].includes(step)
-        ? current.structure_annotation_id
-        : null,
-      metadata: metadata
-        ? [metadata.metadata_revision, metadata.metadata_sha256]
-        : null,
-      assignment: assignment?.assignment_sha256 ?? null,
-    };
     return {
       state,
       current,
       metadata,
-      sha256: await sha256(canonicalJsonBytes(key)),
+      sha256: await archiveStepKey(
+        this.runtime.method_sha256,
+        request.mode,
+        current,
+        step,
+        metadata,
+        assignment?.assignment_sha256 ?? null,
+      ),
     };
   }
   private async step(
@@ -257,8 +249,24 @@ export class ArchiveOrchestrator {
       ["metadata", "references", "tags"].includes(step) &&
       prior?.status === "done" &&
       prior.input_sha256 === input.sha256
-    )
+    ) {
+      await this.save(
+        runId,
+        id,
+        part,
+        step,
+        "done",
+        input.sha256,
+        {
+          ...prior.output,
+          usage: { calls: 0, input_tokens: 0, output_tokens: 0 },
+        },
+        null,
+        0,
+        false,
+      );
       return;
+    }
     const start = performance.now();
     let output: Record<string, unknown> = {};
     await this.save(

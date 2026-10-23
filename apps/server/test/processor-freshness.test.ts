@@ -1,3 +1,5 @@
+import { DatabaseSync } from "node:sqlite";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { parseAsset, sha256 } from "@sciretriever/contracts";
@@ -36,6 +38,49 @@ it("marks only read content stale, including newly present supplementary materia
     const main = await run("main", "main-result"),
       si = await run("supplementary", "absent-result"),
       calls = e.modelCalls;
+    const raw = new DatabaseSync(join(e.home, "catalog.sqlite"));
+    try {
+      const saved = raw
+        .prepare(
+          "SELECT method_revision FROM processor_result_summaries WHERE result_id=?",
+        )
+        .get(main)!;
+      raw
+        .prepare(
+          "UPDATE processor_result_summaries SET method_revision=NULL WHERE result_id=?",
+        )
+        .run(main);
+      expect((await e.app.processorRead!.byId(main))!.freshness).toMatchObject({
+        state: "stale",
+        reasons: [expect.objectContaining({ kind: "method-changed" })],
+      });
+      expect((await e.app.processorRead!.byId(main))!.outcomes).toBeNull();
+      expect(
+        (
+          await e.app.processorRead!.list(50, "", undefined, null, true)
+        ).items.map((i) => i.result_id),
+      ).toContain(main);
+      expect(e.modelCalls).toBe(calls);
+      const related = await e.app.database.review<{
+        items: { result_id: string; outcomes: unknown; freshness: string }[];
+      }>("literature-results", { literature_id: e.id });
+      expect(related.items.find((r) => r.result_id === main)).toMatchObject({
+        freshness: "stale",
+        outcomes: null,
+      });
+      const runs = await e.app.database.review<{
+        items: { stale: boolean; outcomes: unknown }[];
+      }>("processor-runs", {});
+      expect(runs.items.filter((r) => r.stale)).toHaveLength(1);
+      expect(runs.items.find((r) => r.stale)!.outcomes).toBeNull();
+      raw
+        .prepare(
+          "UPDATE processor_result_summaries SET method_revision=? WHERE result_id=?",
+        )
+        .run(saved.method_revision!, main);
+    } finally {
+      raw.close();
+    }
     const meta = await e.app.metadataFields.read(e.id);
     await e.app.metadataFields.edit({
       literature_id: e.id,

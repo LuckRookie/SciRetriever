@@ -149,8 +149,6 @@ export interface OrdinaryConfiguration {
   readonly proofread: {
     readonly model: string | null;
     readonly max_calls_per_document: number;
-    readonly value_check_model: string | null;
-    readonly max_value_check_calls: number;
   };
   readonly browser: BrowserConfig;
   readonly execution: { readonly max_concurrency: number };
@@ -976,20 +974,10 @@ function parseConfigurationObject(
   const proofreadRaw = exact(
     optionalRecord(raw.proofread),
     [],
-    [
-      "model",
-      "max_calls_per_document",
-      "value_check_model",
-      "max_value_check_calls",
-    ],
+    ["model", "max_calls_per_document"],
   );
   const proofread = Object.freeze({
     model: tagModel(proofreadRaw.model),
-    value_check_model: tagModel(proofreadRaw.value_check_model),
-    max_value_check_calls:
-      proofreadRaw.max_value_check_calls === undefined
-        ? 64
-        : positiveInteger(proofreadRaw.max_value_check_calls, 1, 10000),
     max_calls_per_document:
       proofreadRaw.max_calls_per_document === undefined
         ? 64

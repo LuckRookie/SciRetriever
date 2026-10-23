@@ -421,6 +421,9 @@ describe("execution queue recovery semantics", () => {
         }),
       ).rejects.toBeDefined();
       await expect(repository.getJob(jobInput.job_id)).resolves.toBeNull();
+      await expect(
+        database.review("job-origin-get", { job_id: jobInput.job_id }),
+      ).resolves.toBeNull();
       await expect(repository.listTargets(jobInput.job_id)).resolves.toEqual(
         [],
       );
@@ -430,6 +433,12 @@ describe("execution queue recovery semantics", () => {
         targets: [target],
       });
       expect(created.job_id).toBe(jobInput.job_id);
+      await expect(
+        database.review("job-origin-get", { job_id: jobInput.job_id }),
+      ).resolves.toMatchObject({
+        actor: expect.stringMatching(/^system:/),
+        operation: "task-create",
+      });
       await expect(repository.listTargets(jobInput.job_id)).resolves.toEqual([
         target,
       ]);

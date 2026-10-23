@@ -13,6 +13,8 @@ import {
   readingSpec,
   READING_SCHEMA,
   textChunks,
+  chunkHeading,
+  PROCESSOR_CHUNKING,
   segmentSources,
   textCoverage,
   TEXT_LIMITATIONS,
@@ -60,7 +62,7 @@ export const recordsProcessor: Processor = {
   outputSchema: recordsOutputSchema,
   definition: {
     prompt: PROMPT,
-    chunking: "whole-segment-bounded-v1",
+    chunking: processorJson(PROCESSOR_CHUNKING),
     number_policy: "original-string-and-unit-scientific-v3-platform-check",
     record_identity: "result-local-observations-v1",
   },
@@ -169,6 +171,12 @@ export const recordsProcessor: Processor = {
       input,
       processorJson(invocation.spec.reading),
       ctx,
+      invocation.execution.model,
+      Buffer.byteLength(
+        PROMPT +
+          JSON.stringify(invocation.spec) +
+          JSON.stringify(responseSchema),
+      ),
     );
     const read: string[] = [];
     const records: ProcessorRecord[] = [];
@@ -182,11 +190,11 @@ export const recordsProcessor: Processor = {
             record_meaning: invocation.spec.record_meaning,
             fields: invocation.spec.fields,
             inclusion: invocation.spec.inclusion,
+            ...chunkHeading(segments),
             segments: segments.map((s) => ({
               segment_id: s.segment_id,
               text: s.text,
               basis: s.basis ?? null,
-              uncertainty: s.uncertainty ?? null,
             })),
           }),
           responseSchema,

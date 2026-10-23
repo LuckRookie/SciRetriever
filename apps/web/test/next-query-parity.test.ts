@@ -437,9 +437,7 @@ it("reads, searches, follows references and downloads through the query-only pag
     ).toBe("true");
     await page.keyboard.press("Escape");
     await page.unroute("**/api/v1/query/material-bytes");
-    await page
-      .getByRole("button", { name: "查看参考文献", exact: true })
-      .click();
+    await page.getByRole("button", { name: /^参考文献 \d/ }).click();
     await page
       .getByRole("button", {
         name: "Query reader reference target",

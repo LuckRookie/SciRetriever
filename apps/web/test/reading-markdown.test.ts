@@ -19,6 +19,12 @@ it("maps normalized Markdown blocks back to original UTF-8 boundaries including 
   );
   expect(unsafe).not.toMatch(/<img|href="javascript:/);
   expect(unsafe).toContain("&lt;img");
+  const pending = markdown.parse("![](images/content-hash.png)", {
+    async: false,
+  });
+  expect(pending).toContain('data-resource="images/content-hash.png"');
+  expect(pending).toContain(">图片待加载</span>");
+  expect(pending).not.toContain("图片：images/");
 });
 
 it("renders corrected HTML tables with spans and math while refusing active markup and remote resources", async () => {

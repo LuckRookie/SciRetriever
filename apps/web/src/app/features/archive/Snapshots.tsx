@@ -1,3 +1,5 @@
+import { UsageEstimate } from "../processing/UsageEstimate.js";
+import { parseProcessorReads } from "@sciretriever/contracts";
 import { useState } from "react";
 import {
   useInfiniteQuery,
@@ -7,12 +9,14 @@ import {
 import {
   Button,
   Disclosure,
-  EmptyState,
   ErrorNotice,
+  Icon,
   PageHeader,
+  Dialog,
   Select,
   Skeleton,
   TextArea,
+  TextField,
 } from "../../components/index.js";
 import { archiveQuery, rows, useArchiveAction } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
@@ -20,22 +24,35 @@ import { record } from "../../data/wire.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
 import { randomId } from "../../../browser-platform.js";
-import { errorMessage, archiveStrings } from "../../strings.js";
+import {
+  errorMessage,
+  archiveStrings,
+  localTime,
+  processorName,
+  sectionRoleNames,
+} from "../../strings.js";
+import { readProcessorResult } from "../../data/processor-results.js";
+import { renameSnapshot } from "../../data/snapshots.js";
+import { RunOperatorDialog } from "../processing/RunOperator.js";
+import { PaperName, SnapshotDefinition } from "./SnapshotInfo.js";
 import "./archive.css";
+/** The stored display name; older servers without names fall back to time and size. */
 const name = (s: Record<string, unknown>) =>
-  `${new Date(String(s.created_at)).toLocaleString()} · ${s.member_count} 篇`;
+  typeof s.name === "string" && s.name
+    ? s.name
+    : `${localTime(s.created_at)} · ${s.member_count} 篇`;
 export default function Snapshots() {
   const api = useApi(),
     shell = useShell(),
     route = useUrlState(),
     queries = useQueryClient(),
     action = useArchiveAction();
-  const [selected, setSelected] = useState(
-      route.parameters.get("snapshot") ?? "",
-    ),
-    [other, setOther] = useState(""),
+  // The open snapshot lives in the URL, so back returns to the list.
+  const selected = route.parameters.get("snapshot") ?? "";
+  const [other, setOther] = useState(""),
     [operator, setOperator] = useState(
-      route.section === "syn" ? "knowledge-synthesis" : "summary",
+      route.parameters.get("processor") ??
+        (route.section === "syn" ? "knowledge-synthesis" : "summary"),
     ),
     [question, setQuestion] = useState(""),
     [policy, setPolicy] = useState("require-all"),
@@ -43,7 +60,67 @@ export default function Snapshots() {
     [failure, setFailure] = useState(""),
     [difference, setDifference] = useState<Record<string, unknown> | null>(
       null,
-    );
+    ),
+    [renaming, setRenaming] = useState<string | null>(null),
+    [running, setRunning] = useState(false);
+  const rename = async (value: string | null) => {
+    setBusy(true);
+    setFailure("");
+    try {
+      await renameSnapshot(api, { snapshot_id: selected, name: value });
+      void queries.invalidateQueries({ queryKey: ["snapshots"] });
+      setRenaming(null);
+    } catch (e) {
+      setFailure(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const open = (id: string) => {
+    setDifference(null);
+    setOther("");
+    navigate({ snapshot: id || null });
+  };
+  const rerunId = route.parameters.get("rerun"),
+    rerunHash = route.parameters.get("rerunHash");
+  const rerun = useQuery({
+    queryKey: ["processors", "rerun", rerunId, rerunHash],
+    enabled: !!rerunId && !!rerunHash,
+    queryFn: async ({ signal }) => {
+      const saved = await readProcessorResult(
+        api,
+        { result_id: rerunId!, content_sha256: rerunHash! },
+        signal,
+      );
+      const input = saved.result.invocation.inputs.find(
+        (i) => i.kind === "snapshot",
+      );
+      const definition =
+        input?.kind === "snapshot"
+          ? record(
+              await archiveQuery(
+                api,
+                "snapshots",
+                {
+                  operation: "read",
+                  request: {
+                    snapshot_id: input.snapshot_id,
+                    offset: 0,
+                    limit: 1,
+                    max_bytes: 262144,
+                  },
+                },
+                signal,
+              ),
+              "snapshot",
+            ).definition
+          : {
+              kind: "literatures",
+              literature_ids: saved.result.literature_ids,
+            };
+      return { saved, definition };
+    },
+  });
   const snapshots = useInfiniteQuery({
     queryKey: ["snapshots", "list"],
     initialPageParam: null as string | null,
@@ -92,16 +169,16 @@ export default function Snapshots() {
     queryFn: async ({ signal }) =>
       (await api.processors("list", {}, signal)).result,
   });
-  const chosen = Array.isArray(registry.data)
-    ? registry.data
-        .map((v) => record(v, "processor"))
-        .find((p) => p.id === operator)
-    : undefined;
+  const processors = Array.isArray(registry.data)
+    ? registry.data.map((v) => record(v, "processor"))
+    : [];
+  const chosen = processors.find((p) => p.id === operator);
+  const reads = chosen ? parseProcessorReads(chosen.reads) : null;
   const run = async () => {
     setBusy(true);
     setFailure("");
     try {
-      if (operator === "labels" || operator === "records") {
+      if (!rerunId && (operator === "labels" || operator === "records")) {
         navigate({
           view: "ext",
           literature: null,
@@ -110,13 +187,23 @@ export default function Snapshots() {
         });
         return;
       }
+      if (!chosen) throw new Error("请先选择可用算子。");
+      if (
+        rerunId &&
+        (!rerun.data ||
+          rerun.data.saved.result.invocation.processor.version !==
+            chosen.version)
+      )
+        throw new Error("原算子版本不可用，请重新选择算子与规范。");
       await api.submitProcessor(
         {
           schema_version: 1,
           idempotency_key: randomId(),
           name: operator === "summary" ? "快照文献总结" : "快照综合",
-          processor: { id: operator, version: "2" },
-          spec: operator === "summary" ? {} : { question, policy },
+          processor: { id: operator, version: String(chosen.version) },
+          spec:
+            rerun.data?.saved.result.invocation.spec ??
+            (operator === "summary" ? {} : { question, policy }),
           inputs: [{ kind: "snapshot", snapshot_id: selected }],
         },
         true,
@@ -131,36 +218,121 @@ export default function Snapshots() {
   };
   return (
     <div className="feature-page archive-page">
-      <PageHeader
-        title={route.section === "syn" ? "综合" : archiveStrings.snapshot}
-        description="固定一组就绪文献及其内容版本，独立比较和加工。创建快照不会运行模型。"
-      />
-      {failure || action.error || snapshots.error ? (
+      {selected ? (
+        <>
+          <Button
+            variant="text"
+            className="snapshot-back"
+            icon={<Icon name="arrow" />}
+            onPress={() => open("")}
+          >
+            返回快照列表
+          </Button>
+          <PageHeader
+            title={definition ? name(definition) : archiveStrings.snapshot}
+            {...(definition
+              ? {
+                  description: `${localTime(definition.created_at)} 创建 · ${
+                    definition.name_source === "manual"
+                      ? "名称已手动修改"
+                      : "名称按定义自动生成"
+                  }`,
+                }
+              : {})}
+            action={
+              definition ? (
+                <Button onPress={() => setRenaming(name(definition))}>
+                  重命名
+                </Button>
+              ) : undefined
+            }
+          />
+          <Dialog
+            title="重命名快照"
+            isOpen={renaming !== null}
+            onOpenChange={(value) => {
+              if (!value) setRenaming(null);
+            }}
+            footer={
+              <>
+                {definition?.name_source === "manual" ? (
+                  <Button
+                    variant="text"
+                    isDisabled={busy}
+                    onPress={() => void rename(null)}
+                  >
+                    恢复默认名称
+                  </Button>
+                ) : null}
+                <Button
+                  variant="primary"
+                  isPending={busy}
+                  disabledReason={
+                    renaming?.trim() ? undefined : "请输入快照名称。"
+                  }
+                  onPress={() => void rename(renaming!.trim())}
+                >
+                  保存
+                </Button>
+              </>
+            }
+          >
+            <p>名称只用于显示，不改变快照的成员和内容版本。</p>
+            <TextField
+              label="快照名称"
+              value={renaming ?? ""}
+              onChange={setRenaming}
+            />
+          </Dialog>
+        </>
+      ) : (
+        <PageHeader
+          title={route.section === "syn" ? "综合" : archiveStrings.snapshot}
+          description="固定一组就绪文献及其内容版本，独立比较和加工。创建快照不会运行模型。"
+          action={
+            <Button
+              isPending={action.isPending}
+              isDisabled={!!rerunId && !rerun.data}
+              onPress={() =>
+                action.mutate(
+                  {
+                    name: "snapshots",
+                    request:
+                      rerun.data?.definition ??
+                      (shell.selected.size
+                        ? {
+                            kind: "literatures",
+                            literature_ids: [...shell.selected],
+                          }
+                        : { kind: "query", query: route.query }),
+                  },
+                  {
+                    onSuccess: (v) =>
+                      open(String(record(v, "snapshot").snapshot_id)),
+                  },
+                )
+              }
+            >
+              {rerunId
+                ? "按原结果范围生成新快照"
+                : archiveStrings.createSnapshot}
+            </Button>
+          }
+        />
+      )}
+      {failure || action.error || snapshots.error || rerun.error ? (
         <ErrorNotice
-          message={failure || errorMessage(action.error ?? snapshots.error)}
+          message={
+            failure ||
+            errorMessage(action.error ?? snapshots.error ?? rerun.error)
+          }
         />
       ) : null}
-      <div className="archive-toolbar">
-        <Button
-          isPending={action.isPending}
-          onPress={() =>
-            action.mutate(
-              {
-                name: "snapshots",
-                request: shell.selected.size
-                  ? { kind: "literatures", literature_ids: [...shell.selected] }
-                  : { kind: "query", query: route.query },
-              },
-              {
-                onSuccess: (v) =>
-                  setSelected(String(record(v, "snapshot").snapshot_id)),
-              },
-            )
-          }
-        >
-          {archiveStrings.createSnapshot}
-        </Button>
-      </div>
+      {rerunId ? (
+        <p>
+          沿用原结果的算子规范；先生成当前版本的新快照，再确认启动。旧结果保持不变。
+        </p>
+      ) : null}
       {action.data ? (
         <p role="status">
           已固定 {Number(record(action.data, "snapshot").member_count)}{" "}
@@ -168,47 +340,22 @@ export default function Snapshots() {
           {Number(record(action.data, "snapshot").excluded_count)} 篇。
         </p>
       ) : null}
-      {snapshots.isPending ? (
-        <Skeleton label="正在读取快照" />
-      ) : !items.length ? (
-        <EmptyState
-          title="还没有快照"
-          description="在文献库应用筛选后生成快照，也可以使用上方按钮。"
-        />
-      ) : null}
-      <Select
-        label="当前快照"
-        value={selected}
-        onChange={(v) => {
-          setSelected(v);
-          setDifference(null);
-        }}
-        options={[
-          { value: "", label: "选择快照" },
-          ...items.map((s) => ({
-            value: String(s.snapshot_id),
-            label: name(s),
-          })),
-        ]}
-      />
-      {snapshots.hasNextPage ? (
-        <Button onPress={() => snapshots.fetchNextPage().then(() => {})}>
-          加载更多快照
-        </Button>
-      ) : null}
       {selected ? (
-        <div className="archive-split">
-          <section>
+        <div className="snapshot-detail">
+          <section className="snapshot-detail-section">
             <h2>成员与版本</h2>
             {members.error ? (
               <ErrorNotice message={errorMessage(members.error)} />
             ) : null}
             {definition ? (
-              <p>
-                {Number(definition.member_count)} 篇就绪文献；创建时排除{" "}
-                {Number(definition.excluded_count)}{" "}
-                篇。快照中的版本不会随库更新。
-              </p>
+              <>
+                <SnapshotDefinition value={definition.definition} />
+                <p>
+                  {Number(definition.member_count)} 篇就绪文献；创建时排除{" "}
+                  {Number(definition.excluded_count)}{" "}
+                  篇。快照中的版本不会随库更新。
+                </p>
+              </>
             ) : null}
             <ul>
               {members.data?.pages
@@ -290,7 +437,7 @@ export default function Snapshots() {
                             variant="text"
                             onPress={() => shell.openPaper(id)}
                           >
-                            打开对应文献
+                            <PaperName id={id} />
                           </Button>
                         </li>
                       ))}
@@ -299,82 +446,213 @@ export default function Snapshots() {
                 ))
               : null}
           </section>
-          <section>
+          <section className="snapshot-detail-section">
             <h2>运行算子</h2>
-            <Select
-              label="算子"
-              value={operator}
-              onChange={setOperator}
-              options={[
-                { value: "summary", label: "全文总结" },
-                { value: "labels", label: "问答标注" },
-                { value: "records", label: "记录提取" },
-                { value: "knowledge-synthesis", label: "多篇综合" },
-              ]}
-            />
-            <p>
-              读取：正文 · 全部章节
-              {operator === "labels" || operator === "records"
-                ? "（下一步可调整）"
-                : ""}
-            </p>
-            {chosen?.map ? (
-              <p>
-                逐篇步骤：
-                {String(
-                  record(record(chosen.map, "map").processor, "processor").id,
-                )}
-                ；已有结果会复用。
-              </p>
-            ) : null}
-            {operator === "knowledge-synthesis" ? (
+            {rerunId ? null : (
               <>
-                <TextArea
-                  label="综合问题"
-                  value={question}
-                  onChange={setQuestion}
-                />
-                <Select
-                  label="覆盖要求"
-                  value={policy}
-                  onChange={setPolicy}
-                  options={[
-                    { value: "require-all", label: "全部成员完整后综合" },
-                    { value: "allow-partial", label: "带缺口综合" },
-                  ]}
-                />
+                <p>以这个快照的固定成员为范围，选择算子、填写规范并确认。</p>
+                <div className="form-actions">
+                  <Button
+                    variant="primary"
+                    isDisabled={!definition}
+                    onPress={() => setRunning(true)}
+                  >
+                    运行算子…
+                  </Button>
+                  <Button
+                    variant="text"
+                    onPress={() =>
+                      action.mutate(
+                        { name: "snapshots", request: definition?.definition },
+                        {
+                          onSuccess: (v) => {
+                            setOther(String(record(v, "snapshot").snapshot_id));
+                          },
+                        },
+                      )
+                    }
+                    isDisabled={!definition || action.isPending}
+                  >
+                    按原条件生成新快照
+                  </Button>
+                </div>
+                {running && definition ? (
+                  <RunOperatorDialog
+                    fixed={{
+                      scope: { kind: "snapshot", id: selected },
+                      label: name(definition),
+                    }}
+                    onClose={() => setRunning(false)}
+                  />
+                ) : null}
               </>
-            ) : null}
-            <Button
-              isPending={busy}
-              isDisabled={
-                operator === "knowledge-synthesis" && !question.trim()
-              }
-              onPress={() => void run()}
+            )}
+          </section>
+          {rerunId ? (
+            <section className="snapshot-detail-section">
+              <h2>按原规范重新运行</h2>
+              <Select
+                label="算子"
+                isDisabled={!!rerunId}
+                value={operator}
+                onChange={setOperator}
+                options={processors.map((p) => ({
+                  value: String(p.id),
+                  label: processorName(String(p.id)),
+                }))}
+              />
+              {registry.error ? (
+                <ErrorNotice message={errorMessage(registry.error)} />
+              ) : null}
+              {reads ? (
+                <p>
+                  读取：
+                  {
+                    {
+                      main: "正文",
+                      supplementary: "补充材料",
+                      all: "正文与补充材料",
+                    }[reads.parts]
+                  }{" "}
+                  ·{" "}
+                  {reads.roles === "all"
+                    ? "全部章节"
+                    : reads.roles
+                        .map((r) => sectionRoleNames[r] ?? "其他章节")
+                        .join("、")}
+                  {chosen?.spec_schema &&
+                  Object.hasOwn(
+                    record(
+                      record(chosen.spec_schema, "specification").properties,
+                      "properties",
+                    ),
+                    "reading",
+                  )
+                    ? "（下一步可调整）"
+                    : ""}
+                </p>
+              ) : (
+                <p>正在读取算子声明…</p>
+              )}
+              {chosen?.map ? (
+                <p>
+                  逐篇步骤：
+                  {processorName(
+                    String(
+                      record(record(chosen.map, "map").processor, "processor")
+                        .id,
+                    ),
+                  )}
+                  ；已有结果会复用。
+                </p>
+              ) : null}
+              {operator === "knowledge-synthesis" && !rerunId ? (
+                <>
+                  <TextArea
+                    label="综合问题"
+                    value={question}
+                    onChange={setQuestion}
+                  />
+                  <Select
+                    label="覆盖要求"
+                    value={policy}
+                    onChange={setPolicy}
+                    options={[
+                      { value: "require-all", label: "全部成员完整后综合" },
+                      { value: "allow-partial", label: "带缺口综合" },
+                    ]}
+                  />
+                </>
+              ) : null}
+              {chosen &&
+              (rerunId || !["labels", "records"].includes(operator)) ? (
+                <UsageEstimate
+                  request={{
+                    kind: "processor",
+                    request: {
+                      schema_version: 1,
+                      idempotency_key: "estimate",
+                      name: "快照处理",
+                      processor: {
+                        id: operator,
+                        version: String(chosen.version),
+                      },
+                      spec:
+                        rerun.data?.saved.result.invocation.spec ??
+                        (operator === "summary" ? {} : { question, policy }),
+                      inputs: [{ kind: "snapshot", snapshot_id: selected }],
+                    },
+                  }}
+                />
+              ) : null}
+              <Button
+                isPending={busy}
+                isDisabled={
+                  !chosen ||
+                  (!rerunId &&
+                    operator === "knowledge-synthesis" &&
+                    !question.trim())
+                }
+                onPress={() => void run()}
+              >
+                {!rerunId && (operator === "labels" || operator === "records")
+                  ? "填写提取规范"
+                  : "确认启动"}
+              </Button>
+              <Button
+                variant="text"
+                onPress={() =>
+                  action.mutate(
+                    { name: "snapshots", request: definition?.definition },
+                    {
+                      onSuccess: (v) => {
+                        setOther(String(record(v, "snapshot").snapshot_id));
+                      },
+                    },
+                  )
+                }
+                isDisabled={!definition || action.isPending}
+              >
+                按原条件生成新快照
+              </Button>
+            </section>
+          ) : null}
+        </div>
+      ) : (
+        <section className="snapshot-list" aria-label="快照列表">
+          {snapshots.isPending ? <Skeleton label="正在读取快照" /> : null}
+          {items.map((item) => (
+            <button
+              type="button"
+              key={String(item.snapshot_id)}
+              className="snapshot-row"
+              onClick={() => open(String(item.snapshot_id))}
             >
-              {operator === "labels" || operator === "records"
-                ? "填写提取规范"
-                : "确认启动"}
-            </Button>
+              <span className="snapshot-row-title">{name(item)}</span>
+              <span className="snapshot-row-meta">
+                {localTime(item.created_at)} · {Number(item.member_count)}{" "}
+                篇就绪文献
+                {Number(item.excluded_count)
+                  ? ` · 创建时排除 ${Number(item.excluded_count)} 篇`
+                  : ""}
+              </span>
+            </button>
+          ))}
+          {!snapshots.isPending && !items.length ? (
+            <p className="snapshot-empty">
+              还没有快照。在文献库应用筛选后，从“用当前结果”生成快照。
+            </p>
+          ) : null}
+          {snapshots.hasNextPage ? (
             <Button
               variant="text"
-              onPress={() =>
-                action.mutate(
-                  { name: "snapshots", request: definition?.definition },
-                  {
-                    onSuccess: (v) => {
-                      setOther(String(record(v, "snapshot").snapshot_id));
-                    },
-                  },
-                )
-              }
-              isDisabled={!definition || action.isPending}
+              onPress={() => snapshots.fetchNextPage().then(() => {})}
             >
-              按原条件生成新快照
+              加载更多快照
             </Button>
-          </section>
-        </div>
-      ) : null}
+          ) : null}
+        </section>
+      )}
     </div>
   );
 }

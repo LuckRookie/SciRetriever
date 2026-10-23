@@ -210,6 +210,13 @@ export async function analyzeDocumentSession(
     const result = await runDshTask(
       agents,
       {
+        trace: {
+          literature_id: item.literature_id,
+          asset_id: material.asset_id,
+          asset_sha256: material.asset_sha256,
+          document_version_id: ref.document_version_id,
+          kind: "summary",
+        },
         system: INSTRUCTIONS,
         accounting,
         input,

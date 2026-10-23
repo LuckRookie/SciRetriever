@@ -1,10 +1,10 @@
+import { UsageEstimate } from "../processing/UsageEstimate.js";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Button,
   Checkbox,
   Disclosure,
-  EmptyState,
   ErrorNotice,
   PageHeader,
   Select,
@@ -79,41 +79,24 @@ export default function Archive() {
     });
     setSelected(new Set());
   };
+  const stepName = (step: string) =>
+    archiveStrings.steps[step as keyof typeof archiveStrings.steps] ?? step;
+  const byReason = [
+    ...issues
+      .reduce((map, issue) => {
+        const key = String(issue.reason);
+        map.set(key, [...(map.get(key) ?? []), issue]);
+        return map;
+      }, new Map<string, typeof issues>())
+      .entries(),
+  ];
+  const paging = offset > 0 || query.data?.next_offset != null;
   return (
     <div className="feature-page archive-page">
       <PageHeader
         title={archiveStrings.title}
         description={archiveStrings.description}
       />
-      <div className="archive-toolbar">
-        <Select
-          label="问题原因"
-          value={reason}
-          onChange={(v) => {
-            setReason(v);
-            setOffset(0);
-            setSelected(new Set());
-          }}
-          options={[
-            { value: "", label: "全部原因" },
-            ...[...new Set([reason, ...reasons])]
-              .filter(Boolean)
-              .map((value) => ({
-                value,
-                label: `${archiveReason(value)} · ${groups.find((g) => g.reason === value)?.count ?? 0}`,
-              })),
-          ]}
-        />
-        <span>
-          {query.data ? `待处理 ${query.data.total_count} 项` : "正在读取…"}
-        </span>
-        <Button
-          isDisabled={!selected.size || action.isPending}
-          onPress={() => void resolve().catch(() => {})}
-        >
-          确认已处理（{selected.size}）
-        </Button>
-      </div>
       {query.error || action.error ? (
         <ErrorNotice
           message={errorMessage(query.error ?? action.error)}
@@ -122,121 +105,121 @@ export default function Archive() {
       ) : null}
       {query.isPending ? (
         <Skeleton label="正在读取建档问题" />
-      ) : !issues.length ? (
-        <EmptyState
-          title={archiveStrings.empty}
-          description="可以返回文献库选择已有 PDF，分别发起解析和建档。"
-        />
-      ) : null}
-      <div className="archive-issues">
-        {issues.map((issue) => {
-          const id = String(issue.literature_id),
-            key = String(issue.issue_id),
-            step = String(issue.step);
-          return (
-            <article key={key} className="archive-issue">
-              <Checkbox
-                label="选择此问题"
-                isSelected={selected.has(key)}
-                onChange={(checked) =>
-                  setSelected((prior) => {
-                    const next = new Set(prior);
-                    if (checked) next.add(key);
-                    else next.delete(key);
-                    return next;
-                  })
-                }
-              />
-              <div>
-                <h3>
-                  <PaperName id={id} />
-                </h3>
-                <p>
-                  {archiveStrings.steps[
-                    step as keyof typeof archiveStrings.steps
-                  ] ?? step}{" "}
-                  · {archiveReason(String(issue.reason))}
-                </p>
-                <p className="ui-description">
-                  {issue.affects_readiness === false
-                    ? issue.part === "supplementary"
-                      ? "补充材料；不影响正文就绪"
-                      : "不影响就绪，可稍后处理"
-                    : "正文"}
-                </p>
-                <div className="form-actions">
-                  {String(issue.reason) === "needs-parse" ||
-                  String(issue.reason).includes("raw-parse") ||
-                  String(issue.reason).includes("parse-failed") ? (
-                    <Button onPress={() => setRetryParse(id)}>重试解析</Button>
-                  ) : null}
-                  <Button
-                    variant="text"
-                    onPress={() =>
-                      step === "metadata" || step === "tags"
-                        ? setEditing(editing === id ? null : id)
-                        : navigate({
-                            view: "lib",
-                            literature: id,
-                            reader: "doc",
-                            inspect: "1",
-                            asset: String(issue.asset_id),
-                          })
-                    }
-                  >
-                    {step === "metadata"
-                      ? "编辑缺失字段"
-                      : step === "tags"
-                        ? "编辑文献标签"
-                        : "查看并修正"}
-                  </Button>
-                  <Button
-                    isPending={action.isPending}
-                    onPress={() =>
-                      action.mutate({
-                        name: "archive",
-                        request: {
-                          operation: "resume",
-                          request: { literature_id: id },
-                        },
-                      })
-                    }
-                  >
-                    {archiveStrings.continue}
-                  </Button>
-                </div>
-                {editing === id ? (
-                  step === "tags" ? (
-                    <Assignment id={id} />
-                  ) : (
-                    <MetadataFields id={id} />
-                  )
-                ) : null}
-              </div>
-            </article>
-          );
-        })}
-      </div>
-      <div className="form-actions">
-        <Button
-          isDisabled={offset === 0}
-          onPress={() => {
-            setOffset(Math.max(0, offset - 50));
-            setSelected(new Set());
-          }}
-        >
-          上一页
-        </Button>
-        <Button
-          isDisabled={query.data?.next_offset == null}
-          onPress={() => {
-            setOffset(Number(query.data?.next_offset));
-            setSelected(new Set());
-          }}
-        >
-          下一页
-        </Button>
-      </div>
+      ) : !issues.length && !reason && offset === 0 ? (
+        <p className="archive-empty">{archiveStrings.empty}。</p>
+      ) : (
+        <>
+          <div className="archive-toolbar">
+            <Select
+              label="问题原因"
+              value={reason}
+              onChange={(v) => {
+                setReason(v);
+                setOffset(0);
+                setSelected(new Set());
+              }}
+              options={[
+                { value: "", label: "全部原因" },
+                ...[...new Set([reason, ...reasons])]
+                  .filter(Boolean)
+                  .map((value) => ({
+                    value,
+                    label: `${archiveReason(value)} · ${groups.find((g) => g.reason === value)?.count ?? 0}`,
+                  })),
+              ]}
+            />
+            <span role="status" className="ui-description">
+              待处理 {Number(query.data?.total_count ?? 0)} 项
+            </span>
+            {selected.size ? (
+              <Button
+                isDisabled={action.isPending}
+                onPress={() => void resolve().catch(() => {})}
+              >
+                确认已处理（{selected.size}）
+              </Button>
+            ) : null}
+          </div>
+          {selected.size ? (
+            <UsageEstimate
+              request={{
+                kind: "archive-issues",
+                request: { issue_ids: [...selected] },
+              }}
+            />
+          ) : null}
+          <div className="archive-issues" aria-label="建档问题列表">
+            {byReason.map(([group, items]) => (
+              <section key={group} className="archive-group">
+                <h2>
+                  {archiveReason(group)}
+                  <span>{items.length}</span>
+                </h2>
+                {items.map((issue) => {
+                  const key = String(issue.issue_id),
+                    id = String(issue.literature_id);
+                  return (
+                    <IssueRow
+                      key={key}
+                      issue={issue}
+                      stepName={stepName(String(issue.step))}
+                      selected={selected.has(key)}
+                      onSelect={(checked) =>
+                        setSelected((prior) => {
+                          const next = new Set(prior);
+                          if (checked) next.add(key);
+                          else next.delete(key);
+                          return next;
+                        })
+                      }
+                      editing={editing === id}
+                      pending={action.isPending}
+                      onEdit={() => setEditing(editing === id ? null : id)}
+                      onRetryParse={() => setRetryParse(id)}
+                      onResume={() =>
+                        action.mutate({
+                          name: "archive",
+                          request: {
+                            operation: "resume",
+                            request: { literature_id: id },
+                          },
+                        })
+                      }
+                    />
+                  );
+                })}
+              </section>
+            ))}
+            {!issues.length ? (
+              <p className="archive-empty">此原因下没有待处理的问题。</p>
+            ) : null}
+          </div>
+          {paging ? (
+            <div className="form-actions archive-paging">
+              <Button
+                variant="text"
+                isDisabled={offset === 0}
+                onPress={() => {
+                  setOffset(Math.max(0, offset - 50));
+                  setSelected(new Set());
+                }}
+              >
+                上一页
+              </Button>
+              <Button
+                variant="text"
+                isDisabled={query.data?.next_offset == null}
+                onPress={() => {
+                  setOffset(Number(query.data?.next_offset));
+                  setSelected(new Set());
+                }}
+              >
+                下一页
+              </Button>
+            </div>
+          ) : null}
+        </>
+      )}
       <Disclosure title={archiveStrings.stats}>
         {stats.error ? (
           <ErrorNotice message={errorMessage(stats.error)} />
@@ -292,5 +275,94 @@ export default function Archive() {
         />
       ) : null}
     </div>
+  );
+}
+/** One issue as a row: what failed, and the actions that resolve it, without leaving the list. */
+function IssueRow({
+  issue,
+  stepName,
+  selected,
+  onSelect,
+  editing,
+  pending,
+  onEdit,
+  onRetryParse,
+  onResume,
+}: {
+  issue: Record<string, unknown>;
+  stepName: string;
+  selected: boolean;
+  onSelect: (checked: boolean) => void;
+  editing: boolean;
+  pending: boolean;
+  onEdit: () => void;
+  onRetryParse: () => void;
+  onResume: () => void;
+}) {
+  const id = String(issue.literature_id),
+    step = String(issue.step),
+    reason = String(issue.reason);
+  return (
+    <article className="archive-issue" data-selected={selected || undefined}>
+      <Checkbox
+        aria-label="选择此问题"
+        isSelected={selected}
+        onChange={onSelect}
+      />
+      <div className="archive-issue-text">
+        <h3>
+          <PaperName id={id} />
+        </h3>
+        <p className="ui-description">
+          {stepName} ·{" "}
+          {issue.affects_readiness === false
+            ? issue.part === "supplementary"
+              ? "补充材料，不影响正文就绪"
+              : "不影响就绪，可稍后处理"
+            : "正文"}
+        </p>
+      </div>
+      <div className="archive-issue-actions">
+        {reason === "needs-parse" ||
+        reason.includes("raw-parse") ||
+        reason.includes("parse-failed") ? (
+          <Button variant="text" size="compact" onPress={onRetryParse}>
+            重试解析
+          </Button>
+        ) : null}
+        <Button
+          variant="text"
+          size="compact"
+          onPress={() =>
+            step === "metadata" || step === "tags"
+              ? onEdit()
+              : navigate({
+                  view: "lib",
+                  literature: id,
+                  reader: "edit",
+                  asset: String(issue.asset_id),
+                })
+          }
+        >
+          {step === "metadata"
+            ? "编辑缺失字段"
+            : step === "tags"
+              ? "编辑文献标签"
+              : "查看并修正"}
+        </Button>
+        <Button size="compact" isPending={pending} onPress={onResume}>
+          {archiveStrings.continue}
+        </Button>
+      </div>
+      {editing ? (
+        <div className="archive-issue-editor">
+          {step === "tags" ? (
+            <Assignment id={id} />
+          ) : (
+            <MetadataFields id={id} />
+          )}
+        </div>
+      ) : null}
+    </article>
   );
 }

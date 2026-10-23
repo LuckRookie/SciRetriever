@@ -15,18 +15,8 @@ import {
 } from "./index.js";
 
 export type ProofreadSource = "parser" | "rule" | "agent" | "manual";
-export type ProofreadBasis =
-  | "text-layer"
-  | "image-only"
-  | "uncertain"
-  | "manual";
+export type ProofreadBasis = "text-layer" | "image-only" | "manual";
 export type ProofreadRawRef = readonly (readonly [number, number])[];
-export interface ProofreadUncertainty {
-  /** Character range in html for table blocks, otherwise in text. */
-  readonly span: readonly [number, number];
-  readonly reason: string;
-  readonly page: number;
-}
 export interface ProofreadBlock {
   readonly block_id: string;
   readonly page: number;
@@ -43,7 +33,7 @@ export interface ProofreadBlock {
   readonly image_ref: string | null;
   readonly text_source: ProofreadSource;
   readonly basis: ProofreadBasis;
-  readonly uncertainty: ProofreadUncertainty | null;
+
   readonly raw_ref: ProofreadRawRef;
   readonly edit_refs: readonly string[];
 }
@@ -109,12 +99,6 @@ export type ProofreadEdit = (
       readonly page: number;
       readonly after_block_id: string | null;
     }
-  | {
-      readonly kind: "mark_uncertain";
-      readonly block_id: string;
-      readonly span: readonly [number, number];
-      readonly reason: string;
-    }
 ) & { readonly basis_page: number; readonly reason: string };
 export interface ProofreadEditRecord {
   readonly edit_id: string;
@@ -162,8 +146,6 @@ export interface ProofreadVersionInput {
     readonly page_misplaced: number;
     readonly fixed: number;
     readonly draft_correct: number;
-    readonly uncertain: number;
-    readonly uncertain_blocks: number;
     readonly agent_deletions: number;
     readonly calls: number;
     readonly input_tokens: number;
@@ -214,14 +196,6 @@ function uniqueIds(v: unknown): string[] {
   const a = list(v).map(parseAssetId);
   if (new Set(a).size !== a.length) fail();
   return a;
-}
-function span(v: unknown, max = 4 * 1024 * 1024): readonly [number, number] {
-  const a = list(v, 2);
-  if (a.length !== 2) fail();
-  const start = count(a[0], max),
-    end = count(a[1], max);
-  if (end < start) fail();
-  return [start, end];
 }
 export function parseProofreadRawRef(v: unknown): ProofreadRawRef {
   const a = list(v).map((p): readonly [number, number] => {
@@ -283,9 +257,7 @@ export function parseProofreadEdit(
           ? ["block_id"]
           : k === "move"
             ? ["block_id", "page", "after_block_id"]
-            : k === "mark_uncertain"
-              ? ["block_id", "span"]
-              : fail();
+            : fail();
   const r = record(v, [...common, ...fields]),
     basis_page = count(r.basis_page, pages - 1),
     editReason = reason(r.reason);
@@ -303,14 +275,6 @@ export function parseProofreadEdit(
       basis_page,
       reason: editReason,
       block_id: parseAssetId(r.block_id),
-    };
-  if (k === "mark_uncertain")
-    return {
-      kind: k,
-      basis_page,
-      reason: editReason,
-      block_id: parseAssetId(r.block_id),
-      span: span(r.span),
     };
   const after_block_id =
     r.after_block_id === null ? null : parseAssetId(r.after_block_id);
@@ -377,7 +341,7 @@ export function parseProofreadBlocksV1(
       "image_ref",
       "text_source",
       "basis",
-      "uncertainty",
+
       "raw_ref",
       "edit_refs",
     ]);
@@ -393,29 +357,10 @@ export function parseProofreadBlocksV1(
     previous = content.page;
     if (
       !["parser", "rule", "agent", "manual"].includes(String(b.text_source)) ||
-      !["text-layer", "image-only", "uncertain", "manual"].includes(
-        String(b.basis),
-      )
+      !["text-layer", "image-only", "manual"].includes(String(b.basis))
     )
       fail();
-    const u =
-      b.uncertainty === null
-        ? null
-        : record(b.uncertainty, ["span", "reason", "page"]);
-    const uncertainty = u
-      ? {
-          span: span(u.span, (content.html ?? content.text).length),
-          reason: reason(u.reason),
-          page: count(u.page, pages - 1),
-        }
-      : null;
-    if (
-      (b.basis === "uncertain") !== (uncertainty !== null) ||
-      (b.text_source === "manual" &&
-        b.basis !== "manual" &&
-        b.basis !== "uncertain")
-    )
-      fail();
+    if (b.text_source === "manual" && b.basis !== "manual") fail();
     const raw_ref = parseProofreadRawRef(b.raw_ref);
     if (raw_ref.some(([p]) => p >= pages)) fail();
     return {
@@ -431,7 +376,7 @@ export function parseProofreadBlocksV1(
       }),
       text_source: b.text_source as ProofreadSource,
       basis: b.basis as ProofreadBasis,
-      uncertainty,
+
       raw_ref,
       edit_refs: uniqueIds(b.edit_refs),
     };
@@ -560,8 +505,6 @@ export function parseProofreadVersionInput(v: unknown): ProofreadVersionInput {
     "page_misplaced",
     "fixed",
     "draft_correct",
-    "uncertain",
-    "uncertain_blocks",
     "agent_deletions",
     "calls",
     "input_tokens",

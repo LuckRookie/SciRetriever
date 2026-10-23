@@ -6,7 +6,7 @@ import {
   valueCheckReason,
 } from "../src/app/strings.js";
 it("localizes service diagnostics without exposing arbitrary English reasons", () => {
-  expect(valueCheckReason("cited-value-missing")).toContain("数字或单位");
+  expect(valueCheckReason("cited-value-missing")).toContain("所引校订片段");
   expect(
     valueCheckReason(
       "At least one cited number is absent from the corrected fragment.",

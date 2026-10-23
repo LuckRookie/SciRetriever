@@ -20,7 +20,11 @@ export type IconName =
   | "upload"
   | "spark"
   | "warning"
-  | "eye";
+  | "eye"
+  | "filter"
+  | "sort"
+  | "folder"
+  | "clock";
 const paths: Record<IconName, string> = {
   search: "m16 16 5 5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0",
   close: "m6 6 12 12 M18 6 6 18",
@@ -44,6 +48,11 @@ const paths: Record<IconName, string> = {
   spark: "m12 3 2.8 6.2L21 12l-6.2 2.8L12 21l-2.8-6.2L3 12l6.2-2.8z",
   warning: "m12 3 10 18H2zM12 9v5M12 17h.01",
   eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12 M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0",
+  filter: "M4 6h16M7 12h10M10 18h4",
+  sort: "M7 4v16m0 0-3-3m3 3 3-3M17 20V4m0 0-3 3m3-3 3 3",
+  folder:
+    "M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z",
+  clock: "M12 7v5l3 2 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
 };
 export function Icon({
   name,
@@ -51,12 +60,12 @@ export function Icon({
 }: SVGProps<SVGSVGElement> & { name: IconName }) {
   return (
     <svg
-      width="18"
-      height="18"
+      width="16"
+      height="16"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.5"
+      strokeWidth="1.75"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"

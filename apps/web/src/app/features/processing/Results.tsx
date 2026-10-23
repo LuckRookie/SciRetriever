@@ -1,5 +1,11 @@
+import { UsageEstimate } from "./UsageEstimate.js";
+import { Runs } from "./Runs.js";
 import { markdown } from "../../../reading/markdown.js";
-import { valueCheckReason } from "../../strings.js";
+import {
+  valueCheckReason,
+  valueCheckLabels,
+  processorName,
+} from "../../strings.js";
 import { ResultState } from "../archive/ResultState.js";
 import { archiveWrite } from "../../data/archive.js";
 import { useEffect, useMemo, useState } from "react";
@@ -26,6 +32,7 @@ import {
   Select,
   Skeleton,
   TechDetails,
+  Tabs,
   TextArea,
   TextField,
   type DataColumn,
@@ -113,6 +120,7 @@ function savedState(api: ApiClient, key: string) {
   return states.get(key) ?? initial();
 }
 export default function Results() {
+  const [listMode, setListMode] = useState("runs");
   const route = useUrlState(),
     collection = route.parameters.get("collection"),
     result = route.parameters.get("result");
@@ -136,7 +144,17 @@ export default function Results() {
           resultHash={route.parameters.get("resultHash")}
         />
       ) : (
-        <ResultList />
+        <Tabs
+          label="结果浏览"
+          value={listMode}
+          onChange={setListMode}
+          items={[
+            { id: "runs", label: "运行记录" },
+            { id: "search", label: "结果检索" },
+          ]}
+        >
+          {listMode === "runs" ? <Runs /> : <ResultList />}
+        </Tabs>
       )}
     </>
   );
@@ -253,7 +271,7 @@ function ResultList() {
                   <h2>
                     {results
                       ? typeof row.processor_id === "string"
-                        ? row.processor_id
+                        ? processorName(row.processor_id)
                         : "正文命中"
                       : stringField(row, "name")}
                   </h2>
@@ -266,7 +284,7 @@ function ResultList() {
                         ? "记录命中"
                         : "完整结果"
                       : typeof row.processor_id === "string"
-                        ? row.processor_id
+                        ? processorName(row.processor_id)
                         : "已保存集合"}
                   </p>
                   {row.freshness === "stale" ? (
@@ -347,6 +365,7 @@ function Detail({
   resultId: string | null;
   resultHash: string | null;
 }) {
+  const focusLiterature = useUrlState().parameters.get("focusLiterature");
   const api = useApi(),
     shell = useShell(),
     queries = useQueryClient();
@@ -635,7 +654,10 @@ function Detail({
       ...[...new Set(data.rows.flatMap((row) => Object.keys(row.payload)))].map(
         (name) => ({
           id: name,
-          header: name,
+          header:
+            typeof schemaFor(data.schema, name).description === "string"
+              ? String(schemaFor(data.schema, name).description)
+              : name,
           value: (row: ResultRow) => display(row.payload[name] ?? null),
           sortable: false,
           render: (row: ResultRow) =>
@@ -668,14 +690,7 @@ function Detail({
                       title={valueCheckReason(c.reason)}
                     >
                       {" "}
-                      ·{" "}
-                      {
-                        {
-                          "text-layer": "文字核对",
-                          "image-checked": "图像核对",
-                          uncertain: "存疑",
-                        }[c.status]
-                      }
+                      · {valueCheckLabels[c.status]}
                     </span>
                   ))}
                 {row.missing[name] || row.missing[pointerFor(name)] ? (
@@ -849,7 +864,7 @@ function Detail({
       {standalone ? (
         <>
           <ResultState
-            coverage={standalone.result.coverage}
+            outcomes={standalone.outcomes}
             freshness={standalone.freshness}
           />
           {standalone.freshness.state === "stale" ? (
@@ -862,10 +877,13 @@ function Detail({
                   result: null,
                   resultHash: null,
                   collection: null,
+                  rerun: standalone.ref.result_id,
+                  rerunHash: standalone.ref.content_sha256,
+                  processor: standalone.result.invocation.processor.id,
                 });
               }}
             >
-              基于当前文献生成新快照
+              基于新快照重新运行
             </Button>
           ) : null}
         </>
@@ -998,6 +1016,11 @@ function Detail({
           应用筛选
         </Button>
       </div>
+      {focusLiterature ? (
+        <p className="ui-description">
+          与当前文献关联的记录以浅蓝底色标出。跨页结果可继续翻页查看。
+        </p>
+      ) : null}
       <p role="status">
         {state.filters.length
           ? "显示已应用筛选的结果；修改条件后点击应用筛选。"
@@ -1046,6 +1069,19 @@ function Detail({
       ) : (
         <>
           <DataTable
+            highlighted={
+              new Set(
+                page.data.rows
+                  .filter(
+                    (row) =>
+                      focusLiterature &&
+                      page.data.sources
+                        .get(rowKey(row))
+                        ?.includes(focusLiterature),
+                  )
+                  .map(rowKey),
+              )
+            }
             label="提取结果"
             rows={page.data.rows}
             columns={columns}
@@ -1161,6 +1197,27 @@ function Detail({
         isDismissable={!synthesize.isPending}
       >
         <p>确认时固定 {synthesis?.length ?? 0} 条记录，原结果保持不变。</p>
+        <UsageEstimate
+          request={
+            synthesis?.length
+              ? {
+                  kind: "synthesis",
+                  request: {
+                    selector: {
+                      kind: "literatures",
+                      literature_ids: [
+                        ...new Set(synthesis.flatMap((i) => i.literatureIds)),
+                      ],
+                    },
+                    spec: {
+                      question: state.question.trim(),
+                      policy: state.policy,
+                    },
+                  },
+                }
+              : null
+          }
+        />
         <TextArea
           label="研究问题"
           value={state.question}

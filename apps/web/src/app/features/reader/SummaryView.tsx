@@ -30,6 +30,7 @@ import {
   errorMessage,
   valueCheckReason,
   valueCheckLabels,
+  valueCheckBasisLabels,
 } from "../../strings.js";
 
 function readableClaim(text: string, sources: readonly ProcessorCitation[]) {
@@ -382,7 +383,11 @@ export function SummaryView({
                         <div key={sourceIndex} className="reader-check-source">
                           <p>
                             来源 {sourceIndex + 1}：
-                            {valueCheckReason(source.reason)}
+                            {valueCheckLabels[source.status]}
+                            {source.basis
+                              ? `（${valueCheckBasisLabels[source.basis]}）`
+                              : ""}
+                            。{valueCheckReason(source.reason)}
                           </p>
                           {source.citation.kind === "document" ? (
                             <Popover

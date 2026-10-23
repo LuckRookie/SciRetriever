@@ -536,15 +536,24 @@ async function installedBrowserJourney(
       .getByRole("complementary", { name: "主导航" })
       .getByRole("button", { name: /^文献库/ })
       .click();
-    await ui.getByRole("button", { name: "材料状态" }).click();
-    await ui.getByRole("option", { name: "全部状态", exact: true }).click();
+    const allStatuses = ui
+      .locator(".library-status-filters")
+      .getByRole("button", { name: /^全部(?:\s+[\d,]+)?$/ });
+    await allStatuses.click();
+    expect(await allStatuses.getAttribute("aria-pressed")).toBe("true");
     await ui
       .locator(`[data-literature-id="${literatureId}"] .paper-open`)
       .click();
     await expect.poll(() => ui.url()).toContain(`literature=${literatureId}`);
     await expect
-      .poll(() => ui.locator(".reader-information").textContent())
-      .toContain("文章身份未验证");
+      .poll(() =>
+        ui
+          .locator(".reader-information .reader-facts > div")
+          .filter({ has: ui.getByText("文章身份", { exact: true }) })
+          .locator("dd")
+          .textContent(),
+      )
+      .toBe("未核验");
     await ui
       .locator('.reading-pdf-page[data-rendered="true"]')
       .first()

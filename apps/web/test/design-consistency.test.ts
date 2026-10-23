@@ -24,10 +24,10 @@ it("uses bounded control metrics and four themes without inline style sheets or 
           })),
       );
       expect(
-        metrics.every((metric) => [28, 36, 40].includes(metric.height)),
+        metrics.every((metric) => [26, 30, 34].includes(metric.height)),
       ).toBe(true);
       expect(new Set(metrics.map((metric) => metric.radius))).toEqual(
-        new Set(["8px"]),
+        new Set(["6px"]),
       );
       if (process.env.SCIRETRIEVER_WEB_REVIEW_OUTPUT)
         await writeDesignAudit(

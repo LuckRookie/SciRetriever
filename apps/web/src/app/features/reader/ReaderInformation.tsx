@@ -1,5 +1,6 @@
 import { Assignment } from "../tags/Assignment.js";
 import { MetadataFields } from "../archive/MetadataFields.js";
+import { StepActions } from "../archive/StepActions.js";
 import { useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
@@ -17,13 +18,13 @@ import {
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import { paperAuthors, paperTitle } from "../../data/library.js";
-import { navigate } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
 import { record } from "../../data/wire.js";
-import { errorMessage } from "../../strings.js";
+import { errorMessage, localTime, statusLabels } from "../../strings.js";
 import type { ReaderResourceEntry } from "../../../reading/contract.js";
 import { copyText } from "../../../browser-platform.js";
 import { EvidencePreview } from "./SummaryView.js";
+import { readReadingStatus } from "../../data/reading-status.js";
 
 function Relations({
   id,
@@ -147,63 +148,120 @@ function Relations({
 export function ReaderInformation({
   detail,
   document,
-  onOperation,
   resources,
 }: {
   detail: LiteratureDetail;
   document: DocumentReadingRef | null;
   resources: readonly ReaderResourceEntry[];
-  onOperation: (kind: string) => void;
 }) {
   const api = useApi(),
     shell = useShell(),
     [expanded, setExpanded] = useState(false),
     [relation, setRelation] = useState<"references" | "cited-by" | null>(null);
+  const assetId = detail.primary_pdf?.asset.asset_id ?? null;
+  // Where the reading text came from; absent before a corrected text exists.
+  const reading = useQuery({
+    queryKey: ["document", "reading-status", assetId],
+    queryFn: ({ signal }) => readReadingStatus(api, assetId!, signal),
+    enabled: !!assetId && detail.literature.status === "READY",
+    retry: false,
+  });
   const id = detail.literature.literature_id,
     m = detail.literature.metadata,
     doi = m.identifiers.find((value) => value.namespace === "doi")?.value;
-  const results = useInfiniteQuery({
-    queryKey: ["processors", "reader-related", id],
-    initialPageParam: null as string | null,
-    enabled: api.workspace.capabilities.query === true,
-    queryFn: async ({ signal, pageParam }) => {
-      const value = record(
-        (
-          await api.processors(
-            "results",
-            {
-              literature_id: id,
-              limit: 10,
-              ...(pageParam ? { after: pageParam } : {}),
-            },
-            signal,
-          )
-        ).result,
-        "related results",
-      );
-      if (!Array.isArray(value.items)) throw new Error("处理结果列表无效");
-      if (value.next_after !== null && typeof value.next_after !== "string")
-        throw new Error("处理结果续读游标无效");
-      return {
-        items: value.items.map((raw) => record(raw, "result")),
-        next: value.next_after as string | null,
-      };
-    },
-    getNextPageParam: (page) => page.next,
-  });
-  const resultItems = results.data?.pages.flatMap((page) => page.items);
+  const identity = detail.primary_pdf
+    ? {
+        unverified: "未核验",
+        "match-supported": "有证据支持",
+        conflict: "存在冲突",
+        "insufficient-evidence": "证据不足",
+      }[detail.primary_pdf.article_identity_status ?? "unverified"]
+    : null;
   return (
     <>
-      <header>
-        <p className="reader-eyebrow">文献信息</p>
+      <section className="reader-info-status">
+        <h3>状态</h3>
+        <span className="paper-status" data-state={detail.literature.status}>
+          {statusLabels[detail.literature.status]}
+        </span>
+        <dl className="reader-facts">
+          <div>
+            <dt>原始 PDF</dt>
+            <dd>{detail.primary_pdf ? "已保存" : "未获取"}</dd>
+          </div>
+          {identity ? (
+            <div>
+              <dt>文章身份</dt>
+              <dd>{identity}</dd>
+            </div>
+          ) : null}
+          <div>
+            <dt>全文</dt>
+            <dd>
+              {(
+                {
+                  READY: "已建档",
+                  ARCHIVING: "建档中",
+                  ARCHIVE_FAILED: "建档失败",
+                } as Record<string, string>
+              )[detail.literature.status] ?? "尚未建档"}
+            </dd>
+          </div>
+          {reading.data ? (
+            <>
+              <div>
+                <dt>文字来源</dt>
+                <dd>
+                  解析 {reading.data.blocks.parser} 块 · Agent 矫正{" "}
+                  {reading.data.blocks.agent} 块 · 人工{" "}
+                  {reading.data.blocks.manual} 块
+                </dd>
+              </div>
+              <div>
+                <dt>文字层</dt>
+                <dd>
+                  {reading.data.text_layer_pages} / {reading.data.total_pages}{" "}
+                  页有文字层
+                </dd>
+              </div>
+              <div>
+                <dt>最后人工修改</dt>
+                <dd>
+                  {reading.data.last_manual_edit
+                    ? `${reading.data.last_manual_edit.actor_label} · ${localTime(reading.data.last_manual_edit.at)}`
+                    : "尚无"}
+                </dd>
+              </div>
+            </>
+          ) : null}
+          {resources.length > 0 ? (
+            <div>
+              <dt>图表资源</dt>
+              <dd>{resources.length} 项</dd>
+            </div>
+          ) : null}
+        </dl>
+        {api.workspace.capabilities.maintenance ? (
+          <StepActions id={id} />
+        ) : null}
+      </section>
+      <section className="reader-info-bibliography">
+        <h3>书目</h3>
         <h2>{paperTitle(detail)}</h2>
         <p>{paperAuthors(detail)}</p>
         <p>
-          <i>{m.venue}</i>
-          {m.publication_year ? ` · ${m.publication_year}` : ""}
+          <i>{m.venue ?? "期刊未提供"}</i> ·{" "}
+          {m.publication_year ?? "年份未提供"}
         </p>
         {doi && (
-          <div className="reader-action-group">
+          <p className="reader-doi">
+            <a
+              href={`https://doi.org/${encodeURIComponent(doi)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {doi}
+            </a>
             <Button
               variant="text"
               size="compact"
@@ -217,20 +275,9 @@ export function ReaderInformation({
             >
               复制 DOI
             </Button>
-          </div>
+          </p>
         )}
-        {doi && (
-          <a
-            href={`https://doi.org/${encodeURIComponent(doi)}`}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {doi}
-          </a>
-        )}
-      </header>
-      <section>
-        <h3>摘要</h3>
+        <h4>摘要</h4>
         <p className={expanded ? "" : "reader-abstract-clamped"}>
           {m.abstract || "此来源未提供摘要。"}
         </p>
@@ -243,217 +290,82 @@ export function ReaderInformation({
             {expanded ? "收起摘要" : "展开摘要"}
           </Button>
         )}
-        <p className="ui-description">摘要来自书目元数据，不是 Agent 总结。</p>
       </section>
       <section>
-        <h3>可读材料</h3>
-        <ul className="reader-materials">
-          <li>
-            {detail.primary_pdf
-              ? "原始 PDF 已保存，可随时核对。"
-              : "暂无 PDF，可显式获取或上传。"}
-          </li>
-          {detail.primary_pdf && (
-            <li>
-              {
-                {
-                  unverified: "文章身份未验证",
-                  "match-supported": "文章身份有证据支持",
-                  conflict: "文章身份存在冲突",
-                  "insufficient-evidence": "文章身份证据不足",
-                }[detail.primary_pdf.article_identity_status ?? "unverified"]
-              }
-              ；保存 PDF 不等于已核对文章身份。
-            </li>
-          )}
-          <li>
-            {document
-              ? "全文已解析，可连续阅读。"
-              : "全文可用性以打开后的固定文档查询为准。"}
-          </li>
-          <li>总结只展示已发布结果，阅读不会启动分析。</li>
-        </ul>
+        <h3>标签</h3>
+        <Disclosure title="编辑标签">
+          <Assignment id={id} />
+        </Disclosure>
       </section>
-      {resources.length > 0 && (
-        <Disclosure title={`文档资源（${resources.length}）`}>
-          <div className="reader-resources">
-            {resources.map((resource) => (
+      <section>
+        <h3>元数据</h3>
+        <Disclosure title="字段、来源与锁定">
+          <MetadataFields id={id} />
+        </Disclosure>
+        {detail.primary_pdf?.article_identity_assessment && (
+          <Disclosure title="身份核验证据">
+            <p>{detail.primary_pdf.article_identity_assessment.reason}</p>
+            <div className="reader-evidence-list">
+              {detail.primary_pdf.article_identity_assessment.evidence.map(
+                (item, index) => (
+                  <Popover
+                    key={index}
+                    label={`核验证据 ${index + 1}`}
+                    trigger={<span>[{index + 1}]</span>}
+                  >
+                    <EvidencePreview
+                      evidence={item.evidence}
+                      index={index + 1}
+                    />
+                  </Popover>
+                ),
+              )}
+            </div>
+          </Disclosure>
+        )}
+        {detail.other_versions.length > 0 && (
+          <Disclosure title={`其他版本（${detail.other_versions.length}）`}>
+            {detail.other_versions.map((version) => (
               <Button
-                key={resource.reference}
+                key={version.literature.literature_id}
                 variant="text"
-                onPress={resource.open}
+                onPress={() =>
+                  shell.openPaper(version.literature.literature_id)
+                }
               >
-                {resource.reference}
+                {paperTitle(version)}
               </Button>
             ))}
-          </div>
-        </Disclosure>
-      )}
+          </Disclosure>
+        )}
+      </section>
       <section>
-        <h3>日常操作</h3>
+        <h3>参考文献</h3>
         <div className="reader-action-group">
-          {api.kind === "workspace" && (
-            <Button variant="text" onPress={() => onOperation("export")}>
-              导出书目
-            </Button>
-          )}
           <Button variant="text" onPress={() => setRelation("references")}>
-            查看参考文献
+            参考文献 {detail.reference_count.toLocaleString()} 条
           </Button>
           <Button variant="text" onPress={() => setRelation("cited-by")}>
-            查看库内被引
+            库内被引 {detail.cited_by_count.toLocaleString()} 次
           </Button>
         </div>
-        {api.kind !== "workspace" && (
-          <p className="ui-description">
-            此独立入口支持材料阅读和下载；书目导出请使用主工作台、CLI 或 MCP。
-          </p>
-        )}
         {relation && <Relations key={relation} id={id} direction={relation} />}
-      </section>
-      {api.workspace.capabilities.maintenance && (
-        <section>
-          <h3>加工材料</h3>
-          <p className="ui-description">
-            加工需确认，可能调用已配置的解析或模型服务。
-          </p>
-          <div className="reader-action-group">
-            {[
-              { kind: "acquire", label: "获取 PDF", reason: "" },
-              { kind: "upload", label: "上传 PDF", reason: "" },
-              {
-                kind: "parse",
-                label: "解析",
-                reason: detail.primary_pdf ? "" : "没有 PDF，无法解析",
-              },
-              {
-                kind: "analyze",
-                label: "分析",
-                reason: detail.primary_pdf ? "" : "没有 PDF，无法分析",
-              },
-              {
-                kind: "identity",
-                label: "核验身份",
-                reason: detail.primary_pdf ? "" : "没有 PDF，无法核验",
-              },
-            ].map((action) => (
-              <Button
-                key={action.kind}
-                variant="process"
-                confirm={false}
-                isDisabled={!!action.reason}
-                disabledReason={action.reason || undefined}
-                onPress={() => onOperation(action.kind)}
-              >
-                {action.label}
-              </Button>
-            ))}
-            <Button
-              variant="text"
-              onPress={() => {
-                shell.setSelected(new Set([id]));
-                navigate(
-                  { view: "syn", literature: null, scope: "selection" },
-                  { clearSource: true },
-                );
-              }}
-            >
-              加入综合
-            </Button>
-            <Button
-              variant="text"
-              onPress={() => {
-                shell.setSelected(new Set([id]));
-                navigate(
-                  { view: "ext", literature: null, scope: "selection" },
-                  { clearSource: true },
-                );
-              }}
-            >
-              加入提取
-            </Button>
-          </div>
-        </section>
-      )}
-      <Disclosure title="编辑文献标签">
-        <Assignment id={id} />
-      </Disclosure>
-      <Disclosure title="编辑字段、来源与锁定">
-        <MetadataFields id={id} />
-      </Disclosure>
-      {detail.primary_pdf?.article_identity_assessment && (
-        <Disclosure title="已保存的身份核验">
-          <p>{detail.primary_pdf.article_identity_assessment.reason}</p>
-          <div className="reader-evidence-list">
-            {detail.primary_pdf.article_identity_assessment.evidence.map(
-              (item, index) => (
-                <Popover
-                  key={index}
-                  label={`核验证据 ${index + 1}`}
-                  trigger={<span>[{index + 1}]</span>}
+        {resources.length > 0 && (
+          <Disclosure title={`图表资源（${resources.length}）`}>
+            <div className="reader-resources">
+              {resources.map((resource) => (
+                <Button
+                  key={resource.reference}
+                  variant="text"
+                  onPress={resource.open}
                 >
-                  <EvidencePreview evidence={item.evidence} index={index + 1} />
-                </Popover>
-              ),
-            )}
-          </div>
-        </Disclosure>
-      )}
-      <Disclosure title="已有处理结果">
-        {results.error ? (
-          <ErrorNotice
-            message={errorMessage(results.error)}
-            onRetry={() => {
-              void results.refetch();
-            }}
-          />
-        ) : resultItems?.length ? (
-          resultItems.map((row) => (
-            <Button
-              key={String(row.result_id)}
-              variant="text"
-              onPress={() =>
-                navigate(
-                  {
-                    view: "ext",
-                    literature: null,
-                    result: String(row.result_id),
-                    resultHash: String(row.content_sha256),
-                  },
-                  { clearSource: true },
-                )
-              }
-            >
-              {String(row.processor_id)} · {row.complete ? "完整" : "部分覆盖"}
-            </Button>
-          ))
-        ) : (
-          <p>暂无已保存处理结果。</p>
+                  {resource.reference}
+                </Button>
+              ))}
+            </div>
+          </Disclosure>
         )}
-        {results.hasNextPage && (
-          <Button
-            isPending={results.isFetchingNextPage}
-            onPress={async () => {
-              await results.fetchNextPage();
-            }}
-          >
-            更多结果
-          </Button>
-        )}
-      </Disclosure>
-      {detail.other_versions.length > 0 && (
-        <Disclosure title={`其他版本（${detail.other_versions.length}）`}>
-          {detail.other_versions.map((version) => (
-            <Button
-              key={version.literature.literature_id}
-              variant="text"
-              onPress={() => shell.openPaper(version.literature.literature_id)}
-            >
-              {paperTitle(version)}
-            </Button>
-          ))}
-        </Disclosure>
-      )}
+      </section>
       <TechDetails
         copyText={JSON.stringify(
           {
@@ -491,10 +403,7 @@ export function ReaderInformation({
               {observation.metadata.venue} ·{" "}
               {observation.metadata.publication_year}
             </p>
-            <p>
-              采集于{" "}
-              {new Date(observation.provenance.observed_at).toLocaleString()}
-            </p>
+            <p>采集于 {localTime(observation.provenance.observed_at)}</p>
             {observation.metadata.abstract && (
               <Disclosure title="此来源的摘要">
                 <p>{observation.metadata.abstract}</p>

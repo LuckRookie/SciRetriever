@@ -112,26 +112,57 @@ export class ProcessorArchiveSource {
             )
               continue;
             const text = bytes.subarray(s.start_utf8, s.end_utf8);
-            result.push({
-              segment_id: `d${partIndex}:s${ordinal}`,
-              basis: s.basis,
-              uncertainty: s.uncertainty,
-              text: new TextDecoder("utf8", { fatal: true }).decode(text),
-              asset_id: part.asset_id,
-              part: part.part,
-              citation: {
-                kind: "document",
-                evidence: parseEvidenceRef({
-                  schema_version: 1,
-                  target_kind: "document",
-                  locator_scheme: "utf8-segment-v1",
-                  document_version_id: version.document_version_id,
-                  representation_sha256: version.representation_sha256,
-                  locator: { kind: "segment", segment_id: s.segment_id },
-                  content_sha256: await sha256(text),
-                }),
-              },
-            });
+            const paragraphTexts =
+              ["text", "list"].includes(s.kind) &&
+              !/\$\$|\\\[|```|~~~|\\begin\{/u.test(
+                new TextDecoder().decode(text),
+              )
+                ? new TextDecoder("utf8", { fatal: true })
+                    .decode(text)
+                    .split(/\n\s*\n/u)
+                    .filter((t) => t.trim())
+                : [new TextDecoder("utf8", { fatal: true }).decode(text)];
+            for (const [paragraph, paragraphText] of paragraphTexts.entries())
+              result.push({
+                document_title: structure.sections[0]?.title ?? "",
+                section_path: structure.sections
+                  .filter(
+                    (section) =>
+                      s.start_utf8 >= section.start_utf8 &&
+                      s.start_utf8 < section.end_utf8,
+                  )
+                  .sort((a, b) => a.level - b.level)
+                  .map((section) => section.title),
+                ...(s.kind === "heading"
+                  ? {
+                      heading_level:
+                        structure.sections.find(
+                          (section) => section.start_utf8 === s.start_utf8,
+                        )?.level ?? 1,
+                    }
+                  : {}),
+                kind: s.kind,
+                page: s.page,
+                part_key: part.asset_id,
+                segment_id: `d${partIndex}:s${ordinal}${paragraphTexts.length > 1 ? `:p${paragraph}` : ""}`,
+                basis: s.basis,
+
+                text: paragraphText,
+                asset_id: part.asset_id,
+                part: part.part,
+                citation: {
+                  kind: "document",
+                  evidence: parseEvidenceRef({
+                    schema_version: 1,
+                    target_kind: "document",
+                    locator_scheme: "utf8-segment-v1",
+                    document_version_id: version.document_version_id,
+                    representation_sha256: version.representation_sha256,
+                    locator: { kind: "segment", segment_id: s.segment_id },
+                    content_sha256: await sha256(text),
+                  }),
+                },
+              });
           }
         },
         signal,

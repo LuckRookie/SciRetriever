@@ -1,15 +1,21 @@
+import type {
+  ProcessorCheckStatus,
+  ProofreadBasis,
+} from "@sciretriever/contracts";
+
 export const sectionLabels = {
   lib: "文献库",
   archive: "建档问题",
   tags: "词表",
   snapshots: "快照",
-  disc: "发现",
+  disc: "入库",
   ins: "洞察",
-  ask: "检索",
+  ask: "全文检索",
   syn: "综合",
-  ext: "提取",
+  ext: "算子",
   task: "任务",
   web: "浏览器",
+  agent: "Agent",
   set: "设置",
   lab: "交互实验台",
   gallery: "组件画廊",
@@ -71,9 +77,8 @@ export const archiveStrings = {
   compare: "区块对照",
   stale: "已过时",
   outcomes: {
-    extracted: "已提取",
-    "not-reported": "原文未报告",
-    "part-absent": "无该部分",
+    with_result: "有结果",
+    empty: "结果为空",
     incomplete: "读取不完整",
   },
   steps: {
@@ -110,28 +115,15 @@ export function archiveReason(code: string): string {
 }
 
 const valueCheckReasons: Readonly<Record<string, string>> = {
-  "mapped-verification-retained": "沿用来源中同一数值的核对结果。",
   "synthesis-requires-interpretation":
-    "这是综合结论，来源核对结果不能直接证明这条新结论。",
-  "corrected-fragment-unavailable": "没有可用于核对的校订原文片段。",
+    "这是综合结论，不做原文比对；请查看所链接来源结果各自的核对状态。",
+  "corrected-fragment-unavailable":
+    "所引片段在当前校订稿中已不存在，无法比对。",
   "value-not-reported": "原文未报告这个值。",
   "cited-values-present":
-    "数字和单位能在所引校订片段中找到；这只核对抄录，不判断科学解释。",
-  "cited-value-missing":
-    "有数字或单位未能在所引校订片段中找到，请对照原文确认。",
-  "visual-model-unavailable":
-    "图像核对模型未配置，或不支持所需的图像与工具能力。",
-  "pdf-region-unavailable": "原始 PDF 区域暂时无法渲染，未进行图像核对。",
-  "visual-budget-exhausted": "本次图像核对额度已用完。",
-  "visual-verification-incomplete": "图像核对尚未完成。",
-  "visual-value-confirmed": "已对照原始 PDF 图像核对。",
-  "visual-value-uncertain": "对照图像后仍无法确认，请查看对应原文。",
+    "值中的数字、单位或文字能在所引校订片段中找到；这只核对抄录，不判断科学解释。",
+  "cited-value-missing": "值未能在所引校订片段中找到，请对照原文确认。",
   "value-evidence-missing": "没有提供这个值所依据的原文。",
-  "value-verification-uncertain": "部分内容仍待确认，展开下面的来源查看原因。",
-  "value-verification-confirmed": "已按各来源标注完成核对。",
-  "verification-not-configured": "尚未配置用时核对。",
-  "external-candidate-not-visually-verified":
-    "外部提交的候选尚未经过图像核对。",
 };
 export function valueCheckReason(code: string): string {
   return (
@@ -139,11 +131,20 @@ export function valueCheckReason(code: string): string {
     "这份结果没有可识别的核对原因，请查看对应原文确认。"
   );
 }
-export const valueCheckLabels = {
-  "text-layer": "文字核对",
-  "image-checked": "图像核对",
-  uncertain: "存疑",
-} as const;
+export const valueCheckLabels: Readonly<Record<ProcessorCheckStatus, string>> =
+  {
+    found: "可找到",
+    "not-found": "找不到",
+    "value-null": "值为空",
+    "no-citation": "无引用",
+    "citation-unavailable": "引用片段不可用",
+    derived: "综合值",
+  };
+export const valueCheckBasisLabels: Readonly<Record<ProofreadBasis, string>> = {
+  "text-layer": "文字层",
+  "image-only": "图像页转写",
+  manual: "人工修改",
+};
 
 /** Transport diagnostics are codes, never copy for a human-facing notification. */
 export function serviceMessage(code: string): string {
@@ -157,6 +158,10 @@ export function serviceMessage(code: string): string {
         "configuration-conflict": "配置已被其他操作修改，请刷新后核对草稿。",
         "manual-pdf-invalid": "文件不是可读取的 PDF，请选择有效的 PDF 文件。",
         "primary-asset-conflict": "这篇文献已有主 PDF，不能直接替换。",
+        "folder-name-conflict": "同一层已有同名文件夹，请换一个名称。",
+        "folder-cycle": "不能把文件夹移到它自己或它的子文件夹中。",
+        "folder-not-found": "文件夹已不存在，请刷新后重试。",
+        "literature-not-found": "有文献已不存在，请刷新后重试。",
         "operation-not-open": "这项交付操作已关闭，不能再提交。",
         "knowledge-index-unavailable":
           "知识检索索引不可用，请先检查或重建索引。",
@@ -171,6 +176,13 @@ export function serviceMessage(code: string): string {
         "catalog-layout-not-current": "数据库结构与当前程序不一致。",
         "parser-unavailable": "解析服务尚不可用，请检查解析配置。",
         "model-unavailable": "模型尚不可用，请检查模型配置。",
+        "proofread-manual-stale":
+          "校订版本已被其他操作修改。当前草稿仍保留，请对照最新版本后再保存。",
+        "proofread-missing": "此材料尚无校订稿，请先解析并建立档案。",
+        "proofread-manual-input-conflict":
+          "原始解析已变化，现有人工修订不会被自动覆盖，请先核对原稿。",
+        "proofread-edit-pages-invalid":
+          "校订稿的页定位无效，请重新读取当前版本后核对。",
         "proofread-renderer-unavailable":
           "PDF 页面渲染器不可用，请检查浏览器运行环境。",
         "network-error": "网络连接失败，请检查连接后重试。",
@@ -184,4 +196,127 @@ export function serviceMessage(code: string): string {
       } as Record<string, string>
     )[code] ?? "操作未完成，请重试；若问题持续，请查看任务详情或服务日志。"
   );
+}
+
+export const sectionRoleNames: Record<string, string> = {
+  "front-matter": "前置信息",
+  abstract: "摘要",
+  keywords: "关键词",
+  introduction: "引言",
+  methods: "方法",
+  results: "结果",
+  discussion: "讨论",
+  "results-discussion": "结果与讨论",
+  conclusion: "结论",
+  acknowledgements: "致谢",
+  references: "参考文献",
+  appendix: "附录",
+  body: "正文",
+  "si-methods": "补充方法",
+  "si-characterization": "补充表征",
+  "si-computation": "补充计算",
+  "si-tables": "补充表格",
+  "si-figures": "补充图片",
+  "si-references": "补充引用",
+};
+
+export function processorName(id: string): string {
+  return (
+    (
+      {
+        summary: "全文总结",
+        labels: "问答标注",
+        records: "记录提取",
+        "knowledge-synthesis": "多篇综合",
+      } as Record<string, string>
+    )[id] ?? "自定义算子"
+  );
+}
+
+export function agentRoleName(role: string) {
+  return (
+    (
+      {
+        analysis: "分析与总结",
+        summary: "文献总结",
+        "archive-metadata": "元数据补全",
+        "archive-structure": "章节角色",
+        "archive-tags": "文献标签",
+        proofreading: "原文校订",
+        "value-checking": "用值核对",
+        tagging: "文献标签",
+        "tag-consolidation": "词表整理",
+        "tag-backfill": "标签回溯",
+        browser: "浏览器",
+      } as Record<string, string>
+    )[role] ?? "Agent 处理"
+  );
+}
+export function agentEventName(kind: string) {
+  return (
+    (
+      {
+        input: "读取任务材料",
+        "model-request": "模型调用",
+        "tool-start": "调用工具",
+        "tool-result": "工具返回",
+        "tool-failed": "工具失败",
+        submission: "提交内容",
+        usage: "用量更新",
+      } as Record<string, string>
+    )[kind] ?? "过程记录"
+  );
+}
+
+export function estimateStageName(kind: string) {
+  return (
+    (
+      {
+        document: "逐篇处理",
+        synthesis: "综合汇总",
+        "mapped-documents": "逐篇阅读",
+        proofread: "校订",
+        structure: "结构",
+        metadata: "元数据",
+        tags: "标签",
+        backfill: "标签回溯",
+        consolidate: "词表整理",
+        "parse-documents": "解析（不调用语言模型）",
+        "assess-article-identity": "文章身份核验",
+        "build-archive": "指定步骤建档",
+      } as Record<string, string>
+    )[kind] ?? "处理"
+  );
+}
+
+export function processorMapStatus(status: string) {
+  return (
+    (
+      {
+        pending: "等待逐篇读取",
+        running: "正在读取",
+        computed: "新计算完成",
+        reused: "复用已有结果",
+        partial: "部分完成",
+        failed: "读取失败",
+        interrupted: "已中断",
+        "not-recorded": "本次未记录逐篇状态",
+      } as Record<string, string>
+    )[status] ?? "状态待核对"
+  );
+}
+const localTimeFormat = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+/** Machine timestamps are shown in the viewer's local time, to the minute. */
+export function localTime(value: unknown): string {
+  const date = new Date(String(value));
+  return Number.isNaN(date.getTime())
+    ? "时间未知"
+    : localTimeFormat.format(date);
 }

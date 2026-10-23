@@ -3,6 +3,12 @@ import type { Page } from "playwright";
 import { TypeScriptConfigurationOwner } from "../../server/src/configuration/owner.js";
 import { nextWorkspace } from "./next-workspace-fixture.js";
 
+async function mode(page: Page, label: string, option: string) {
+  await page
+    .getByRole("radiogroup", { name: label, exact: true })
+    .getByText(option, { exact: true })
+    .click();
+}
 async function select(page: Page, label: string, option: string) {
   await page.getByRole("button", { name: new RegExp(label) }).click();
   await page.getByRole("option", { name: option, exact: true }).click();
@@ -72,7 +78,7 @@ it("preserves drafts across section publications and conflicts, explains restart
       "vlm-engine",
     );
     await page
-      .getByRole("textbox", { name: "每次算子的用时核对调用上限", exact: true })
+      .getByRole("textbox", { name: "每篇矫正调用上限", exact: true })
       .fill("9");
     const publication = page.waitForResponse(
       (response) =>
@@ -85,7 +91,7 @@ it("preserves drafts across section publications and conflicts, explains restart
     await expect
       .poll(
         async () =>
-          (await owner!.read()).configuration.proofread.max_value_check_calls,
+          (await owner!.read()).configuration.proofread.max_calls_per_document,
       )
       .toBe(9);
     await page.getByRole("tab", { name: "运行状态", exact: true }).click();
@@ -99,7 +105,7 @@ it("preserves drafts across section publications and conflicts, explains restart
       .getByRole("textbox", { name: "Browser profile", exact: true })
       .fill("synthetic-unsaved-profile");
     await page.getByRole("tab", { name: "文献来源", exact: true }).click();
-    await select(page, "元数据来源模式", "自定义");
+    await mode(page, "元数据来源模式", "自定义");
     await page
       .getByRole("textbox", { name: "元数据结果上限", exact: true })
       .fill("501");

@@ -134,11 +134,11 @@ export default function Gallery() {
       <AppearanceControls />
       <Example
         title="校订来源与结果状态"
-        usage="明确区分原文未报告、缺少部分和读取不完整。此处为合成展示数据。"
+        usage="按篇区分有结果、结果为空和读取不完整。此处为合成展示数据。"
       >
         <SourceBadge source="manual" pageOnly />
         <ResultState
-          coverage={[]}
+          outcomes={{ with_result: 3, empty: 1, incomplete: 1 }}
           freshness={{
             state: "stale",
             reasons: [{ kind: "content-version-changed" }],

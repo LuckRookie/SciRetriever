@@ -231,6 +231,7 @@ export class SqliteProofreadStorage {
     const state = await this.database.proofread<{
       current: Row | null;
       manual_revision: number;
+      last_manual_edit: { actor: string; at: string } | null;
       decisions: Row[];
     }>("state", asset, signal);
     const decisions: ManualProofreadDecision[] = [];
@@ -250,12 +251,9 @@ export class SqliteProofreadStorage {
         value.decision_id !== row.decision_id ||
         value.part_asset_id !== asset ||
         value.block_id !== row.block_id ||
-        ![
-          "replace",
-          "resolve-suspect",
-          "clear-uncertainty",
-          "no-body",
-        ].includes(value.action) ||
+        !["replace", "document-edit", "resolve-suspect", "no-body"].includes(
+          value.action,
+        ) ||
         typeof value.draft_sha256 !== "string" ||
         !/^[a-f0-9]{64}$/u.test(value.draft_sha256) ||
         !Array.isArray(value.raw_ref) ||
@@ -263,7 +261,7 @@ export class SqliteProofreadStorage {
         !value.reason.trim() ||
         !Number.isSafeInteger(value.page) ||
         value.page < 0 ||
-        (value.action === "replace"
+        (["replace", "document-edit"].includes(value.action)
           ? typeof value.text !== "string"
           : value.text !== null)
       )
@@ -280,6 +278,7 @@ export class SqliteProofreadStorage {
     return {
       current: state.current,
       manual_revision: state.manual_revision,
+      last_manual_edit: state.last_manual_edit,
       decisions,
     };
   }
@@ -309,7 +308,17 @@ export class SqliteProofreadStorage {
       await stage.discard();
     }
   }
-  async publish(value: Output, manualRevision: number, signal?: AbortSignal) {
+  async publish(
+    value: Output,
+    manualRevision: number,
+    signal?: AbortSignal,
+    edit?: {
+      decision: ManualProofreadDecision;
+      actor: string;
+      expected_proofread_id: string;
+      replaced_scopes: readonly string[];
+    },
+  ) {
     if (
       value.blocks.bytes.length > 32 * 1024 * 1024 ||
       value.markdown.bytes.length > 8 * 1024 * 1024 ||
@@ -358,6 +367,22 @@ export class SqliteProofreadStorage {
       fail();
     check(signal);
     return this.files.withWrite(async () => {
+      const manual_edit = edit
+        ? {
+            actor: edit.actor,
+            expected_proofread_id: edit.expected_proofread_id,
+            replaced_scopes: edit.replaced_scopes,
+            decision: {
+              decision_id: edit.decision.decision_id,
+              block_id: edit.decision.block_id,
+              manifest: await this.write(
+                "proofread-decision",
+                canonicalJsonBytes(edit.decision),
+                await artifact(canonicalJsonBytes(edit.decision)),
+              ),
+            },
+          }
+        : undefined;
       // Runtime measurements never overwrite an existing immutable manifest.
       const existing = await this.byId(v.proofread_id, signal);
       if (existing) {
@@ -381,6 +406,7 @@ export class SqliteProofreadStorage {
             manual_revision: manualRevision,
             manifest,
             resources: [],
+            ...(manual_edit ? { manual_edit } : {}),
           },
           signal,
         );
@@ -421,7 +447,13 @@ export class SqliteProofreadStorage {
         revision: number;
       }>(
         "publish",
-        { version: v, manual_revision: manualRevision, manifest, resources },
+        {
+          version: v,
+          manual_revision: manualRevision,
+          manifest,
+          resources,
+          ...(manual_edit ? { manual_edit } : {}),
+        },
         signal,
       );
       return { ...r, version: v };
@@ -458,7 +490,7 @@ export class SqliteProofreadStorage {
               ? `suspect:${decision.suspect_id}`
               : decision.action === "no-body"
                 ? `page:${decision.page}:body`
-                : `block:${decision.block_id}:${decision.action === "replace" ? "text" : "uncertainty"}`,
+                : `block:${decision.block_id}:text`,
           manifest,
         },
         signal,

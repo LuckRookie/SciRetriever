@@ -3,7 +3,6 @@ import type { ModelRequest, ModelResponse } from "./model-protocol.js";
 export const AGENT_ROLES = [
   "analysis",
   "proofreading",
-  "value-checking",
   "browser",
   "tagging",
   "tag-consolidation",

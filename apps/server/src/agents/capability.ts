@@ -70,6 +70,9 @@ export interface AgentCapabilityResult {
 }
 
 export interface AgentCapabilitySessionOptions {
+  readonly observeEvent?: (
+    event: import("@sciretriever/contracts").AgentConversationEvent,
+  ) => void;
   readonly id: string;
   readonly system: string;
   readonly role: AgentRole;
@@ -96,7 +99,7 @@ export interface AgentCapabilitySessionOptions {
 /** Production callers select a configured role; the shared foundation owns transport. */
 export type AgentSessionRequest = Omit<
   AgentCapabilitySessionOptions,
-  "modelContext" | "modelCall"
+  "modelContext" | "modelCall" | "observeEvent"
 >;
 
 export interface AgentCapabilitySession {

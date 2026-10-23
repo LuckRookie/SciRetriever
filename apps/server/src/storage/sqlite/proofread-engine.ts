@@ -18,6 +18,16 @@ export interface ProofreadPublication {
   readonly version: ProofreadVersion;
   readonly manual_revision: number;
   readonly manifest: LocatedProofreadArtifact;
+  readonly manual_edit?: {
+    readonly expected_proofread_id: string;
+    readonly actor: string;
+    readonly replaced_scopes: readonly string[];
+    readonly decision: {
+      readonly decision_id: string;
+      readonly block_id: string;
+      readonly manifest: LocatedProofreadArtifact;
+    };
+  };
   readonly resources: readonly (LocatedProofreadArtifact & {
     readonly kind: "blocks" | "markdown" | "drafts" | "image";
     readonly logical_reference: string;
@@ -151,6 +161,12 @@ export function runProofreadStorage(
         "SELECT c.*,v.content_sha256,v.status FROM proofread_current c JOIN proofread_versions v ON v.proofread_id=c.proofread_id WHERE c.part_asset_id=?",
         String(args),
       ),
+      last_manual_edit:
+        db
+          .prepare(
+            "SELECT actor,at FROM (SELECT actor,created_at AS at FROM proofread_manual_decisions WHERE part_asset_id=? UNION ALL SELECT revoked_by AS actor,revoked_at AS at FROM proofread_manual_decisions WHERE part_asset_id=? AND revoked_at IS NOT NULL) ORDER BY at DESC LIMIT 1",
+          )
+          .get(String(args), String(args)) ?? null,
       manual_revision: revision(db, String(args)),
       decisions: db
         .prepare(
@@ -164,6 +180,53 @@ export function runProofreadStorage(
         v = p.version;
       if (revision(db, v.part_asset_id) !== p.manual_revision)
         fail("proofread-manual-stale");
+      let manualRevision = p.manual_revision;
+      if (p.manual_edit) {
+        const e = p.manual_edit;
+        if (
+          one(
+            db,
+            "SELECT proofread_id FROM proofread_current WHERE part_asset_id=?",
+            v.part_asset_id,
+          )?.proofread_id !== e.expected_proofread_id
+        )
+          fail("proofread-manual-stale");
+        const now = new Date().toISOString();
+        register(db, e.decision.manifest);
+        for (const scope of ["document-edit", ...e.replaced_scopes])
+          db.prepare(
+            "UPDATE proofread_manual_decisions SET active=0,revoked_by=?,revoked_at=? WHERE part_asset_id=? AND scope_key=? AND active=1",
+          ).run(e.actor, now, v.part_asset_id, scope);
+        const m = e.decision.manifest;
+        db.prepare(
+          "INSERT INTO proofread_manual_decisions(decision_id,part_asset_id,block_id,scope_key,manifest_reference,manifest_sha256,manifest_size,manifest_media_type,active,actor,created_at) VALUES(?,?,?,'document-edit',?,?,?,?,1,?,?)",
+        ).run(
+          e.decision.decision_id,
+          v.part_asset_id,
+          e.decision.block_id,
+          m.reference,
+          m.sha256,
+          m.byte_size,
+          m.media_type,
+          e.actor,
+          now,
+        );
+        db.prepare(
+          "INSERT INTO proofread_manual_state(part_asset_id,revision) VALUES(?,1) ON CONFLICT(part_asset_id) DO UPDATE SET revision=revision+1",
+        ).run(v.part_asset_id);
+        manualRevision = revision(db, v.part_asset_id);
+        const active = db
+          .prepare(
+            "SELECT decision_id FROM proofread_manual_decisions WHERE part_asset_id=? AND active=1 ORDER BY decision_id",
+          )
+          .all(v.part_asset_id)
+          .map((r) => String(r.decision_id));
+        if (
+          JSON.stringify(active) !==
+          JSON.stringify([...v.manual_decision_ids].sort())
+        )
+          fail("proofread-manual-stale");
+      }
       for (const input of [v.draft_input]) {
         const raw = one(
           db,
@@ -227,16 +290,11 @@ export function runProofreadStorage(
       );
       if (
         current?.proofread_id !== v.proofread_id ||
-        current?.manual_revision !== p.manual_revision
+        current?.manual_revision !== manualRevision
       )
         db.prepare(
           "INSERT INTO proofread_current(part_asset_id,part_sha256,proofread_id,revision,manual_revision) VALUES(?,?,?,1,?) ON CONFLICT(part_asset_id) DO UPDATE SET part_sha256=excluded.part_sha256,proofread_id=excluded.proofread_id,revision=proofread_current.revision+1,manual_revision=excluded.manual_revision",
-        ).run(
-          v.part_asset_id,
-          v.part_sha256,
-          v.proofread_id,
-          p.manual_revision,
-        );
+        ).run(v.part_asset_id, v.part_sha256, v.proofread_id, manualRevision);
       return {
         published: !old,
         revision: Number(

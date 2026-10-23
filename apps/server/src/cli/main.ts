@@ -1,3 +1,4 @@
+import { withActivity, machineActor } from "../logging/activity.js";
 import {
   ContractValidationError,
   parseDiscoveryRunId,
@@ -631,7 +632,63 @@ async function execute(
     );
     return output({ protocol_version: 1, result }, options);
   }
+  if (group === "folders") {
+    const file = argument(args, "--request");
+    const request = file
+      ? parseStrictJsonValue(await inputBytes(file, options, 262144))
+      : command === "list"
+        ? {}
+        : invalidInput();
+    const envelope = { operation: command, request };
+    if (command === "list" || command === "delete-preview") {
+      const q = await applicationBootstrap.createQueryApplication(
+        configurationHome(options),
+      );
+      try {
+        return output(
+          await executeQuery(q, "folders", envelope, options.signal),
+          options,
+        );
+      } finally {
+        await q.close();
+      }
+    }
+    return output(
+      await withApplication(options, (app) =>
+        executeMaintenance(app, "folders", envelope, options.signal),
+      ),
+      options,
+    );
+  }
+  if (group === "literature" && command === "open") {
+    return output(
+      await withApplication(options, (app) =>
+        executeMaintenance(
+          app,
+          "reading-open",
+          { literature_id: args[2] },
+          options.signal,
+        ),
+      ),
+      options,
+    );
+  }
   if (group === "snapshot") {
+    if (command === "rename") {
+      const name = argument(args, "--name");
+      if (name === null) invalidInput();
+      return output(
+        await withApplication(options, (app) =>
+          executeMaintenance(
+            app,
+            "snapshot-rename",
+            { snapshot_id: args[2], name },
+            options.signal,
+          ),
+        ),
+        options,
+      );
+    }
     if (command === "create") {
       const ids = argument(args, "--ids"),
         filter = argument(args, "--filter");
@@ -646,7 +703,12 @@ async function execute(
           };
       return output(
         await withApplication(options, (app) =>
-          executeMaintenance(app, "snapshots", definition, options.signal),
+          executeMaintenance(
+            app,
+            "snapshots",
+            { ...definition, name: argument(args, "--name") },
+            options.signal,
+          ),
         ),
         options,
       );
@@ -851,12 +913,21 @@ async function execute(
     "jobs inspect": "task-detail",
     "literature status": "status",
     "literature search": "library-search",
+    "literature counts": "library-counts",
     "literature read": "literature-read",
     "literature artifact-chunk": "artifact-chunk",
     "literature bibliography": "bibliography-export",
     "literature references": "references",
     "literature reference": "reference-read",
     "literature identity": "article-identity",
+    "jobs progress": "task-run",
+    "processor runs": "processor-runs",
+    "literature results": "literature-results",
+    "usage estimate": "usage-estimate",
+    "agents sessions": "agent-sessions",
+    "operations history": "operation-history",
+    "proofread text": "proofread-text",
+    "literature reading-status": "reading-status",
     "proofread inspect": "proofread-inspect",
     "proofread page": "proofread-page",
     "document annotation": "document-annotation",
@@ -1043,13 +1114,17 @@ async function execute(
 
   if (
     (group === "proofread" &&
-      ["build", "decide", "revoke"].includes(command ?? "")) ||
+      ["build", "save", "decide", "revoke"].includes(command ?? "")) ||
     (group === "document" && command === "publish-proofread")
   ) {
     const source = argument(args, "--request");
     if (!source || args.length !== 4 || args[2] !== "--request") invalidInput();
     const request = parseStrictJsonValue(
-      await inputBytes(source, options, 1024 * 1024),
+      await inputBytes(
+        source,
+        options,
+        command === "save" ? 9 * 1024 * 1024 : 1024 * 1024,
+      ),
     );
     return output(
       await withApplication(options, (app) =>
@@ -1361,7 +1436,8 @@ async function execute(
     const value = await withQueryApplication(options, (app) =>
       app.query.search({
         query: query(text, args),
-        sort: (argument(args, "--sort") ?? "publication-year-desc") as
+        sort: (argument(args, "--sort") ?? "intake-desc") as
+          | "intake-desc"
           | "publication-year-desc"
           | "publication-year-asc"
           | "title-asc"
@@ -1817,9 +1893,11 @@ export async function runCli(
     json: options.json ?? args.includes("--json"),
   };
   try {
-    return await execute(
-      args.filter((argument) => argument !== "--json"),
-      effective,
+    return await withActivity({ actor: machineActor("cli") }, () =>
+      execute(
+        args.filter((argument) => argument !== "--json"),
+        effective,
+      ),
     );
   } catch (error) {
     const interrupted =

@@ -1,3 +1,4 @@
+import { withActivity, machineActor } from "../logging/activity.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -220,6 +221,9 @@ export function createMcpServer(options: McpOptions = {}) {
     }
     const maintenanceRoutes: Readonly<Record<string, MaintenanceOperation>> = {
       snapshot_create: "snapshots",
+      snapshot_rename: "snapshot-rename",
+      folders_manage: "folders",
+      reading_open: "reading-open",
       archive_manage: "archive",
       tags_manage: "tags",
       archive_references: "archive-references",
@@ -227,6 +231,7 @@ export function createMcpServer(options: McpOptions = {}) {
       document_annotate: "document-annotate",
       document_role: "document-role",
       document_publish_proofread: "document-publish-proofread",
+      proofread_save: "proofread-save",
       proofread_build: "proofread-build",
       proofread_decide: "proofread-decide",
       proofread_revoke: "proofread-revoke",
@@ -248,9 +253,11 @@ export function createMcpServer(options: McpOptions = {}) {
       const input =
         name === "discover_citations"
           ? { kind: "citation", ...args }
-          : Object.hasOwn(args, "request")
-            ? args.request
-            : args;
+          : ["folders_manage", "tags_manage", "archive_manage"].includes(name)
+            ? args
+            : Object.hasOwn(args, "request")
+              ? args.request
+              : args;
       return executeMaintenance(a, maintenanceRoutes[name]!, input, signal);
     }
     if (name === "processor_query")
@@ -327,6 +334,12 @@ export function createMcpServer(options: McpOptions = {}) {
       return a.processingTasks.read(id);
     }
     const q = await reading();
+    if (name === "reading_status")
+      return executeQuery(q, "reading-status", args, signal);
+    if (name === "folders_query")
+      return executeQuery(q, "folders", args, signal);
+    if (name === "library_counts")
+      return executeQuery(q, "library-counts", args, signal);
     if (name === "search_library")
       return executeQuery(
         q,
@@ -337,7 +350,7 @@ export function createMcpServer(options: McpOptions = {}) {
               query: { text: args.text },
               limit: args.limit,
               cursor: args.cursor,
-              sort: args.text ? "relevance" : "publication-year-desc",
+              sort: args.text ? "relevance" : "intake-desc",
             },
         signal,
       );
@@ -350,6 +363,19 @@ export function createMcpServer(options: McpOptions = {}) {
       return executeQuery(q, "metadata-fields", args, signal);
     if (name === "document_annotation")
       return executeQuery(q, "document-annotation", args, signal);
+    if (name === "processor_runs")
+      return executeQuery(q, "processor-runs", args, signal);
+    if (name === "literature_results")
+      return executeQuery(q, "literature-results", args, signal);
+    if (name === "usage_estimate")
+      return executeQuery(q, "usage-estimate", args, signal);
+    if (name === "task_run") return executeQuery(q, "task-run", args, signal);
+    if (name === "agent_sessions")
+      return executeQuery(q, "agent-sessions", args, signal);
+    if (name === "operation_history")
+      return executeQuery(q, "operation-history", args, signal);
+    if (name === "proofread_text")
+      return executeQuery(q, "proofread-text", args, signal);
     if (name === "proofread_page")
       return executeQuery(q, "proofread-page", args, signal);
     if (name === "proofread_inspect")
@@ -396,17 +422,31 @@ export function createMcpServer(options: McpOptions = {}) {
         if (stop.signal.aborted) unavailable();
         const args = request.params.arguments ?? {};
         if (
-          Buffer.byteLength(JSON.stringify(args)) > 1024 * 1024 + 4096 ||
+          Buffer.byteLength(JSON.stringify(args)) >
+            (request.params.name === "proofread_save"
+              ? 9 * 1024 * 1024
+              : 1024 * 1024 + 4096) ||
           !validators.get(request.params.name)?.(args)
         )
           throw Object.assign(new Error("invalid request"), {
             code: "invalid-request",
           });
         return result(
-          await call(
-            request.params.name,
-            args,
-            AbortSignal.any([extra.signal, stop.signal]),
+          await withActivity(
+            {
+              actor: server.getClientVersion()?.name
+                ? `mcp:${server
+                    .getClientVersion()!
+                    .name.replace(/[\p{Cc}\p{Cf}]/gu, "")
+                    .slice(0, 80)}`
+                : machineActor("mcp"),
+            },
+            () =>
+              call(
+                request.params.name,
+                args,
+                AbortSignal.any([extra.signal, stop.signal]),
+              ),
           ),
           request.params.name,
         );

@@ -1,7 +1,74 @@
+import { PROCESSOR_METHOD_REVISION } from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
 
 // One current catalog layout. This is not a migration ladder or a list of supported historic layouts.
 export const SCHEMA_VERSION = 11 as const;
+// Inputs read by archiveStates/deriveCurrentState, including view dependencies.
+// Reading history, folders and processing outputs do not invalidate this projection.
+export const LIBRARY_STATE_INPUT_TABLES = [
+  "literatures",
+  "literature_metadata",
+  "literature_metadata_authors",
+  "literature_assets",
+  "assets",
+  "raw_parse_current",
+  "raw_parse_pins",
+  "raw_parses",
+  "proofread_current",
+  "proofread_versions",
+  "proofread_manual_state",
+  "document_defaults",
+  "document_versions",
+  "structure_annotation_current",
+  "structure_annotations",
+  "archive_runs",
+  "execution_jobs",
+  "archive_steps",
+  "archive_issues",
+  "literature_tag_items",
+  "archive_description_heads",
+] as const;
+const earliestIntake = (id: string) =>
+  `(SELECT strftime('%Y-%m-%dT%H:%M:%fZ',min(julianday(p.observed_at))) FROM literature_metadata_observations lo JOIN metadata_observations o ON o.observation_id=lo.observation_id JOIN provenances p ON p.provenance_id=o.provenance_id WHERE lo.literature_id=${id})`;
+/** Explicit offline backfill only; opening a catalog never applies it. */
+export const LIBRARY_INTAKE_BACKFILL_SQL = `INSERT INTO literature_intake SELECT l.literature_id,${earliestIntake("l.literature_id")} FROM literatures l WHERE true ON CONFLICT(literature_id) DO UPDATE SET intake_at=excluded.intake_at`;
+export const LIBRARY_PERFORMANCE_SCHEMA = [
+  "CREATE TABLE library_state_revision(singleton INTEGER PRIMARY KEY CHECK(singleton=1),revision INTEGER NOT NULL CHECK(revision>=0)) STRICT",
+  ...LIBRARY_STATE_INPUT_TABLES.flatMap((table) =>
+    ["INSERT", "UPDATE", "DELETE"].map(
+      (event) =>
+        `CREATE TRIGGER library_state_${table}_${event.toLowerCase()} AFTER ${event} ON ${table} BEGIN INSERT INTO library_state_revision VALUES(1,1) ON CONFLICT(singleton) DO UPDATE SET revision=revision+1; END`,
+    ),
+  ),
+  "CREATE TABLE literature_intake(literature_id TEXT PRIMARY KEY,intake_at TEXT,FOREIGN KEY(literature_id) REFERENCES literatures(literature_id) ON DELETE CASCADE ON UPDATE CASCADE) STRICT",
+  "CREATE INDEX literature_intake_order ON literature_intake(intake_at DESC,literature_id ASC)",
+  "CREATE TRIGGER literature_intake_create AFTER INSERT ON literatures BEGIN INSERT INTO literature_intake VALUES(NEW.literature_id,NULL); END",
+  ...["INSERT", "UPDATE", "DELETE"].flatMap((event) => {
+    const sides =
+      event === "INSERT"
+        ? ["NEW"]
+        : event === "DELETE"
+          ? ["OLD"]
+          : ["OLD", "NEW"];
+    return [
+      "literature_metadata_observations",
+      "metadata_observations",
+      "provenances",
+    ].map((table) => {
+      const ids = sides
+        .map((side) =>
+          table === "literature_metadata_observations"
+            ? `SELECT ${side}.literature_id`
+            : table === "metadata_observations"
+              ? `SELECT literature_id FROM literature_metadata_observations WHERE observation_id=${side}.observation_id`
+              : `SELECT lo.literature_id FROM literature_metadata_observations lo JOIN metadata_observations o ON o.observation_id=lo.observation_id WHERE o.provenance_id=${side}.provenance_id`,
+        )
+        .join(" UNION ");
+      return `CREATE TRIGGER literature_intake_${table}_${event.toLowerCase()} AFTER ${event} ON ${table} BEGIN UPDATE literature_intake SET intake_at=${earliestIntake("literature_intake.literature_id")} WHERE literature_id IN (${ids}); END`;
+    });
+  }),
+] as const;
+
 export const SCHEMA_MANIFEST = [
   "CREATE TABLE proofread_correction_cache(cache_key TEXT NOT NULL PRIMARY KEY CHECK(length(cache_key)=64),cache_id TEXT NOT NULL UNIQUE,artifact_reference TEXT NOT NULL,sha256 TEXT NOT NULL,byte_size INTEGER NOT NULL,media_type TEXT NOT NULL,FOREIGN KEY(artifact_reference,sha256,byte_size,media_type) REFERENCES artifact_objects(relative_path,sha256,byte_size,media_type) ON DELETE RESTRICT) STRICT",
   "CREATE TABLE schema_identity(singleton INTEGER NOT NULL PRIMARY KEY CHECK(singleton=1),product TEXT NOT NULL CHECK(product='sciretriever'),schema_version INTEGER NOT NULL CHECK(schema_version=11),schema_fingerprint TEXT NOT NULL CHECK(length(schema_fingerprint)=64 AND schema_fingerprint=lower(schema_fingerprint) AND schema_fingerprint NOT GLOB '*[^0-9a-f]*'),created_at TEXT NOT NULL CHECK(length(trim(created_at))>0)) STRICT",
@@ -224,6 +291,13 @@ export const SCHEMA_MANIFEST = [
   "CREATE INDEX archive_document_material_lookup ON document_versions(literature_id,source_asset_id,source_sha256)",
   "CREATE INDEX raw_parse_pins_proofread_lookup ON raw_parse_pins(proofread_id)",
   "CREATE TABLE snapshots(snapshot_id TEXT NOT NULL PRIMARY KEY,created_at TEXT NOT NULL,definition_json TEXT NOT NULL,content_sha256 TEXT NOT NULL,member_count INTEGER NOT NULL CHECK(member_count>=0),excluded_count INTEGER NOT NULL CHECK(excluded_count>=0)) STRICT",
+  "CREATE TABLE folders(folder_id TEXT NOT NULL PRIMARY KEY,parent_id TEXT,name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 128),position INTEGER NOT NULL CHECK(position>=0),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,FOREIGN KEY(parent_id) REFERENCES folders(folder_id) ON DELETE CASCADE,CHECK(parent_id IS NULL OR parent_id<>folder_id)) STRICT",
+  "CREATE UNIQUE INDEX folders_sibling_name ON folders(COALESCE(parent_id,''),name)",
+  "CREATE TABLE folder_members(folder_id TEXT NOT NULL,literature_id TEXT NOT NULL,added_at TEXT NOT NULL,actor TEXT NOT NULL,PRIMARY KEY(folder_id,literature_id),FOREIGN KEY(folder_id) REFERENCES folders(folder_id) ON DELETE CASCADE,FOREIGN KEY(literature_id) REFERENCES literatures(literature_id) ON DELETE CASCADE) STRICT",
+  "CREATE INDEX folder_members_literature ON folder_members(literature_id,folder_id)",
+  "CREATE TABLE reading_history(literature_id TEXT NOT NULL PRIMARY KEY,last_opened_at TEXT NOT NULL,open_count INTEGER NOT NULL CHECK(open_count>=1),FOREIGN KEY(literature_id) REFERENCES literatures(literature_id) ON DELETE CASCADE) STRICT",
+  "CREATE INDEX reading_history_opened ON reading_history(last_opened_at DESC,literature_id)",
+  "CREATE TABLE snapshot_labels(snapshot_id TEXT NOT NULL PRIMARY KEY,name TEXT NOT NULL CHECK(length(trim(name)) BETWEEN 1 AND 256),updated_at TEXT NOT NULL,actor TEXT NOT NULL,FOREIGN KEY(snapshot_id) REFERENCES snapshots(snapshot_id) ON DELETE CASCADE) STRICT",
   "CREATE TABLE snapshot_members(snapshot_id TEXT NOT NULL,literature_id TEXT NOT NULL,ordinal INTEGER NOT NULL,member_sha256 TEXT NOT NULL,member_json TEXT NOT NULL,PRIMARY KEY(snapshot_id,literature_id),UNIQUE(snapshot_id,ordinal),FOREIGN KEY(snapshot_id) REFERENCES snapshots(snapshot_id),FOREIGN KEY(literature_id) REFERENCES literatures(literature_id)) STRICT",
   "CREATE TABLE processor_result_freshness(result_id TEXT NOT NULL PRIMARY KEY,state TEXT NOT NULL CHECK(state IN ('current','stale')),FOREIGN KEY(result_id) REFERENCES processor_results(result_id) ON DELETE CASCADE) STRICT",
   "CREATE TABLE processor_result_archive_scopes(result_id TEXT NOT NULL,literature_id TEXT NOT NULL,parts TEXT NOT NULL CHECK(parts IN ('main','supplementary','all','none')),uses_description INTEGER NOT NULL CHECK(uses_description IN (0,1)),description_version TEXT NOT NULL,PRIMARY KEY(result_id,literature_id),FOREIGN KEY(result_id) REFERENCES processor_results(result_id) ON DELETE CASCADE) STRICT",
@@ -232,6 +306,29 @@ export const SCHEMA_MANIFEST = [
   "CREATE INDEX processor_freshness_event_lookup ON processor_result_freshness_reasons(event_sequence,result_id)",
   "CREATE INDEX processor_scope_literature_lookup ON processor_result_archive_scopes(literature_id,parts)",
   "CREATE TRIGGER processor_consume_archive_event AFTER INSERT ON archive_version_events BEGIN INSERT OR IGNORE INTO processor_result_freshness_reasons SELECT s.result_id,'event:'||NEW.sequence,NEW.sequence,NEW.literature_id,NEW.asset_id,NEW.kind,NEW.old_json,NEW.new_json,NULL FROM processor_result_archive_scopes s WHERE s.literature_id=NEW.literature_id AND ((NEW.kind='description-version-changed' AND s.uses_description=1) OR (NEW.kind='content-version-changed' AND (s.parts='all' OR s.parts=NEW.old_part OR s.parts=NEW.new_part) AND (NEW.old_part IS NULL OR NEW.new_part IS NULL OR NEW.old_part IS NOT NEW.new_part OR (SELECT p.source_json FROM processor_result_archive_parts p WHERE p.result_id=s.result_id AND p.literature_id=s.literature_id AND p.asset_id=NEW.asset_id) IS NOT NEW.new_json))); UPDATE processor_result_freshness SET state='stale' WHERE result_id IN (SELECT result_id FROM processor_result_freshness_reasons WHERE event_sequence=NEW.sequence); END",
+  "CREATE TABLE operation_records(sequence INTEGER PRIMARY KEY,operation_id TEXT NOT NULL UNIQUE,actor TEXT NOT NULL,operation TEXT NOT NULL,scope_json TEXT NOT NULL,result_json TEXT,status TEXT NOT NULL CHECK(status IN ('running','completed','failed')),created_at TEXT NOT NULL,finished_at TEXT) STRICT",
+  "CREATE INDEX operation_records_actor ON operation_records(actor,sequence)",
+  "CREATE TABLE job_origins(job_id TEXT NOT NULL PRIMARY KEY,actor TEXT NOT NULL,operation TEXT NOT NULL,created_at TEXT NOT NULL) STRICT",
+  "CREATE TABLE agent_sessions(session_id TEXT PRIMARY KEY,role TEXT NOT NULL,provider TEXT NOT NULL,model TEXT NOT NULL,actor TEXT NOT NULL,job_id TEXT,literature_id TEXT,subject_json TEXT NOT NULL,status TEXT NOT NULL,started_at TEXT NOT NULL,finished_at TEXT,calls INTEGER NOT NULL DEFAULT 0,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,event_bytes INTEGER NOT NULL DEFAULT 0,truncated INTEGER NOT NULL DEFAULT 0) STRICT",
+  "CREATE INDEX agent_sessions_job ON agent_sessions(job_id,started_at)",
+  "CREATE INDEX agent_sessions_literature ON agent_sessions(literature_id,started_at)",
+  "CREATE TABLE agent_session_events(sequence INTEGER PRIMARY KEY,session_id TEXT NOT NULL,kind TEXT NOT NULL,payload_json TEXT NOT NULL,created_at TEXT NOT NULL,truncated INTEGER NOT NULL,FOREIGN KEY(session_id) REFERENCES agent_sessions(session_id) ON DELETE CASCADE) STRICT",
+  "CREATE INDEX agent_session_events_session ON agent_session_events(session_id,sequence)",
+  "CREATE TABLE agent_view_revision(singleton INTEGER PRIMARY KEY CHECK(singleton=1),revision INTEGER NOT NULL) STRICT",
+  "CREATE TRIGGER agent_revision_insert AFTER INSERT ON agent_sessions BEGIN INSERT INTO agent_view_revision VALUES(1,1) ON CONFLICT(singleton) DO UPDATE SET revision=revision+1; END",
+  "CREATE TRIGGER agent_revision_update AFTER UPDATE ON agent_sessions BEGIN INSERT INTO agent_view_revision VALUES(1,1) ON CONFLICT(singleton) DO UPDATE SET revision=revision+1; END",
+  "CREATE TRIGGER agent_revision_delete AFTER DELETE ON agent_sessions BEGIN INSERT INTO agent_view_revision VALUES(1,1) ON CONFLICT(singleton) DO UPDATE SET revision=revision+1; END",
+  "CREATE TABLE task_steps(job_id TEXT NOT NULL,literature_id TEXT NOT NULL,asset_id TEXT NOT NULL,step TEXT NOT NULL,status TEXT NOT NULL,reason TEXT,calls INTEGER NOT NULL,input_tokens INTEGER NOT NULL,output_tokens INTEGER NOT NULL,elapsed_ms INTEGER NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(job_id,literature_id,asset_id,step)) STRICT",
+  "CREATE TABLE task_model_usage(job_id TEXT NOT NULL,literature_id TEXT NOT NULL,role TEXT NOT NULL,calls INTEGER NOT NULL,input_tokens INTEGER NOT NULL,output_tokens INTEGER NOT NULL,PRIMARY KEY(job_id,literature_id,role)) STRICT",
+  "CREATE TRIGGER task_view_event AFTER INSERT ON execution_events BEGIN INSERT INTO agent_view_revision VALUES(1,1) ON CONFLICT(singleton) DO UPDATE SET revision=revision+1; END",
+  "CREATE TRIGGER task_view_state AFTER UPDATE ON execution_jobs BEGIN INSERT INTO agent_view_revision VALUES(1,1) ON CONFLICT(singleton) DO UPDATE SET revision=revision+1; END",
+  "CREATE TRIGGER task_view_step AFTER INSERT ON task_steps BEGIN INSERT INTO agent_view_revision VALUES(1,1) ON CONFLICT(singleton) DO UPDATE SET revision=revision+1; END",
+  "CREATE TRIGGER task_view_step_update AFTER UPDATE ON task_steps BEGIN INSERT INTO agent_view_revision VALUES(1,1) ON CONFLICT(singleton) DO UPDATE SET revision=revision+1; END",
+  "CREATE INDEX task_event_target ON execution_events(job_id,json_extract(payload_json,'$.target_id'),sequence)",
+  "CREATE TABLE processor_result_summaries(result_id TEXT PRIMARY KEY,usage_json TEXT,outcomes_json TEXT NOT NULL, method_revision TEXT,FOREIGN KEY(result_id) REFERENCES processor_results(result_id) ON DELETE CASCADE) STRICT",
+  `CREATE VIEW processor_result_currentness AS SELECT f.result_id,CASE WHEN COALESCE(s.method_revision,'legacy')='${PROCESSOR_METHOD_REVISION}' THEN f.state ELSE 'stale' END AS state FROM processor_result_freshness f LEFT JOIN processor_result_summaries s USING(result_id)`,
+  "CREATE TABLE processor_run_requests(job_id TEXT PRIMARY KEY,request_json TEXT NOT NULL) STRICT",
+  ...LIBRARY_PERFORMANCE_SCHEMA,
 ] as const;
 export const SCHEMA_FINGERPRINT = createHash("sha256")
   .update(JSON.stringify(SCHEMA_MANIFEST))

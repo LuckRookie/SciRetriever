@@ -3,7 +3,10 @@ import {
   loginWorkbenchPage,
 } from "../../server/test/workbench-auth-fixture.js";
 import { parseLiterature, sha256 } from "@sciretriever/contracts";
-import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
+import {
+  FIXTURE_LITERATURE,
+  FIXTURE_TITLE,
+} from "../../server/src/workbench/synthetic-fixture.js";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -366,7 +369,8 @@ describe("live workbench on the installed Cloak runtime", () => {
             timeout: 15000,
           })
           .toContain("已显示 50");
-        await desktop.locator(".library-scroll").evaluate(async (el) => {
+        // The library scrolls with the page; the main container owns scrollTop.
+        await desktop.locator(".workspace-content").evaluate(async (el) => {
           // Data and the virtualizer's measured scroll range settle separately.
           // Wait for layout before scrolling to the new result set's bottom.
           await new Promise(requestAnimationFrame);
@@ -379,7 +383,7 @@ describe("live workbench on the installed Cloak runtime", () => {
           })
           .toContain("已显示 53");
         expect(await desktop.locator(".paper-row").count()).toBeLessThan(53);
-        await desktop.locator(".library-scroll").evaluate((el) => {
+        await desktop.locator(".workspace-content").evaluate((el) => {
           el.scrollTop = 0;
         });
         await desktop
@@ -405,8 +409,11 @@ describe("live workbench on the installed Cloak runtime", () => {
         await desktop
           .getByRole("searchbox", { name: "搜索文献", exact: true })
           .fill("Synthetic literature");
-        await expect.poll(() => desktop.locator(".paper-row").count()).toBe(1);
-        await desktop.locator(".paper-open").click();
+        // The previous search also had one row; wait for the new result itself.
+        await desktop
+          .getByRole("article", { name: FIXTURE_TITLE, exact: true })
+          .locator(".paper-open")
+          .click();
         await desktop
           .locator('.reading-pdf-page[data-rendered="true"]')
           .first()

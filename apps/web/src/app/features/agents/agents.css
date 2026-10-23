@@ -1,0 +1,107 @@
+@layer pages {
+  .agent-monitor {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: var(--space-6) var(--space-7) var(--space-5);
+  }
+  .agent-session-list {
+    display: grid;
+    gap: 2px;
+  }
+  .agent-session-detail {
+    min-width: 0;
+  }
+  .agent-session-detail h2 {
+    margin: 0 0 var(--space-2);
+    font: 600 var(--type-section) / 1.35 var(--sans);
+  }
+  .agent-session-detail p {
+    overflow-wrap: anywhere;
+  }
+  .agent-session-detail pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .agent-current-page {
+    margin-block: var(--space-5);
+    background: var(--surface-sunken);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+  }
+  .agent-current-page canvas {
+    width: 100%;
+    height: auto;
+  }
+  /* Verbatim conversation: one entry per message, role and local time first. */
+  .agent-conversation {
+    display: grid;
+    gap: var(--space-3);
+    margin: var(--space-4) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .agent-message,
+  .agent-hook {
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    border: 1px solid var(--line);
+  }
+  .agent-message[data-role="assistant"] {
+    background: var(--surface-sunken);
+    border-color: transparent;
+  }
+  .agent-message[data-role="system"],
+  .agent-message[data-role="context"] {
+    border-style: dashed;
+  }
+  .agent-message > header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+    font-size: var(--text-caption);
+  }
+  .agent-message > header strong {
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .agent-text {
+    margin: 0;
+    font: var(--text-control) / 1.6 var(--mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .agent-raw {
+    margin-top: var(--space-2);
+  }
+  .agent-raw > summary {
+    cursor: pointer;
+    font-size: var(--text-caption);
+    color: var(--fg2);
+    margin-bottom: var(--space-1);
+  }
+  .agent-raw > .agent-text {
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+    max-height: 480px;
+    overflow: auto;
+  }
+  .agent-image-omitted {
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-caption);
+    color: var(--fg3);
+  }
+  .agent-hook {
+    font-size: var(--text-caption);
+    color: var(--fg2);
+    padding-block: var(--space-2);
+  }
+  @media (max-width: 900px) {
+    .agent-monitor {
+      padding: var(--space-4);
+    }
+  }
+}

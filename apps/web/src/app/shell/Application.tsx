@@ -1,13 +1,16 @@
 import {
   Component,
+  Fragment,
   Suspense,
   lazy,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { LibraryCounts } from "@sciretriever/contracts";
 import {
   Button,
   Dialog,
@@ -43,10 +46,12 @@ import {
 } from "../data/preferences.js";
 import {
   emptyQuery,
-  searchLibrary,
+  readLibraryCounts,
   readLiterature,
   paperTitle,
 } from "../data/library.js";
+import { recordReadingOpen } from "../data/folders.js";
+import { LibraryFolders, withoutScope } from "../features/library/Folders.js";
 import { createReadingState, closeReadingState } from "../../reading/state.js";
 import { ShellContext } from "./context.js";
 import { Icon } from "./icon.js";
@@ -65,6 +70,7 @@ const ActivityList = lazy(() =>
     default: module.ActivityList,
   })),
 );
+const Agents = lazy(() => import("../features/agents/Agents.js"));
 const Browser = lazy(() => import("../features/browser/Browser.js"));
 const Retrieval = lazy(() => import("../features/retrieval/Retrieval.js"));
 const Insights = lazy(() => import("../features/insights/Insights.js"));
@@ -191,6 +197,12 @@ function Workspace({ api }: { api: ApiClient }) {
       : 244;
   });
   useEffect(() => bindTheme(theme), [theme]);
+  // Pages share one scroll container; each route starts at the top and the
+  // library restores its own remembered position afterwards.
+  const content = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    content.current?.scrollTo({ top: 0 });
+  }, [route.section, route.literature]);
   const activePaper = useQuery({
     queryKey: ["literature", route.literature],
     queryFn: ({ signal }) => readLiterature(api, route.literature!, signal),
@@ -229,10 +241,10 @@ function Workspace({ api }: { api: ApiClient }) {
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, []);
+  // Shares the folder tree's counts query instead of running a library search.
   const count = useQuery({
-    queryKey: ["library", "total"],
-    queryFn: ({ signal }) =>
-      searchLibrary(api, emptyQuery(), "publication-year-desc", null, signal),
+    queryKey: ["library", "counts", emptyQuery()],
+    queryFn: ({ signal }) => readLibraryCounts(api, emptyQuery(), signal),
     enabled: api.workspace.readiness === "ready",
   });
   const tasks = useQuery({
@@ -254,7 +266,7 @@ function Workspace({ api }: { api: ApiClient }) {
       invalidateMaterials(taskQueries);
     lastTasks.current = current;
   }, [tasks.data, taskQueries]);
-  const openPaper = (
+  const showPaper = (
     id: string,
     mode: ReaderMode = "pdf",
     source: Record<string, string> = {},
@@ -272,8 +284,48 @@ function Workspace({ api }: { api: ApiClient }) {
       { clearSource: true },
     );
   };
+  /** Intentional opens are recorded for "recently read"; tab switches are not. */
+  const openPaper: typeof showPaper = (...args) => {
+    showPaper(...args);
+    if (api.kind !== "workspace") return;
+    recordReadingOpen(api, args[0])
+      .then((opened) => {
+        // Counting the whole library is expensive and shares the reader's
+        // database worker, so a first open only bumps the sidebar count and
+        // every library query refreshes at its next natural read.
+        if (opened.open_count === 1)
+          taskQueries.setQueryData<LibraryCounts>(
+            ["library", "counts", emptyQuery()],
+            (counts) =>
+              counts && {
+                ...counts,
+                recently_opened: Math.min(100, counts.recently_opened + 1),
+              },
+          );
+        void taskQueries.invalidateQueries({
+          queryKey: ["library"],
+          refetchType: "none",
+        });
+      })
+      .catch(() => undefined);
+  };
   const go = (section: Section) => {
     navigate({ view: section, literature: null }, { clearSource: true });
+    setMobileNav(false);
+  };
+  // The library entry leaves a folder or "recently read" scope, keeping filters.
+  const openLibrary = () => {
+    navigate(
+      {
+        view: "lib",
+        literature: null,
+        query: JSON.stringify(withoutScope(route.query)),
+        ...(route.query.recently_opened && route.sort === "opened-desc"
+          ? { sort: "intake-desc" }
+          : {}),
+      },
+      { clearSource: true },
+    );
     setMobileNav(false);
   };
   const navigation = (
@@ -285,16 +337,16 @@ function Workspace({ api }: { api: ApiClient }) {
       <div className="navigation-content">
         <Button
           variant="text"
-          icon={<Icon name="ask" />}
+          icon={<Icon name="search" />}
           onPress={() => setSearch(true)}
         >
           搜索 <kbd>⌘K</kbd>
         </Button>
         {(
           [
-            { name: "资料", sections: ["lib", "disc", "tags", "snapshots"] },
-            { name: "使用", sections: ["ins", "ask", "syn", "ext"] },
-            { name: "运行", sections: ["archive", "task", "web"] },
+            { name: "资料", sections: ["lib", "snapshots", "tags"] },
+            { name: "加工", sections: ["ext", "ask", "ins"] },
+            { name: "运行", sections: ["task", "web", "agent", "archive"] },
           ] as const
         ).map((group) => (
           <div className="navigation-group" key={group.name}>
@@ -306,26 +358,37 @@ function Workspace({ api }: { api: ApiClient }) {
                   ["lib", "ins", "ask", "syn", "ext"].includes(section),
               )
               .map((section) => (
-                <Button
-                  key={section}
-                  variant="text"
-                  aria-current={
-                    route.section === section && !route.literature
-                      ? "page"
-                      : false
-                  }
-                  icon={<Icon name={section} />}
-                  onPress={() => go(section)}
-                >
-                  {sectionLabels[section]}
-                  {section === "lib" && (
-                    <span className="navigation-count">
-                      {count.isPending
-                        ? "…"
-                        : (count.data?.total.toLocaleString() ?? "")}
-                    </span>
-                  )}
-                </Button>
+                <Fragment key={section}>
+                  <Button
+                    variant="text"
+                    aria-current={
+                      route.section === section &&
+                      !route.literature &&
+                      !(
+                        section === "lib" &&
+                        (route.query.folder || route.query.recently_opened)
+                      )
+                        ? "page"
+                        : false
+                    }
+                    icon={<Icon name={section} />}
+                    onPress={() =>
+                      section === "lib" ? openLibrary() : go(section)
+                    }
+                  >
+                    {sectionLabels[section]}
+                    {section === "lib" && (
+                      <span className="navigation-count">
+                        {count.isPending
+                          ? "…"
+                          : (count.data?.total.toLocaleString() ?? "")}
+                      </span>
+                    )}
+                  </Button>
+                  {section === "lib" && api.kind === "workspace" ? (
+                    <LibraryFolders onNavigate={() => setMobileNav(false)} />
+                  ) : null}
+                </Fragment>
               ))}
           </div>
         ))}
@@ -352,6 +415,8 @@ function Workspace({ api }: { api: ApiClient }) {
         description="此入口用于查询已保存材料。发现、持久任务、浏览器操作和配置由完整工作台提供。"
         action={<Button onPress={() => go("lib")}>返回文献库</Button>}
       />
+    ) : route.section === "agent" ? (
+      <Agents />
     ) : route.section === "web" ? (
       <Browser />
     ) : route.literature ? (
@@ -436,6 +501,7 @@ function Workspace({ api }: { api: ApiClient }) {
                 <Button
                   variant="text"
                   aria-current={!route.literature ? "page" : false}
+                  icon={<Icon name={route.section} />}
                   onPress={() => go(route.section)}
                 >
                   {sectionLabels[route.section]}
@@ -444,6 +510,7 @@ function Workspace({ api }: { api: ApiClient }) {
                   <div
                     className="paper-tab"
                     key={tab.id}
+                    title={tab.title}
                     data-selected={route.literature === tab.id || undefined}
                   >
                     <Button
@@ -451,14 +518,16 @@ function Workspace({ api }: { api: ApiClient }) {
                       aria-current={
                         route.literature === tab.id ? "page" : false
                       }
+                      icon={<Icon name="file" />}
                       onPress={() =>
-                        openPaper(tab.id, tab.mode, tab.source, tab.title)
+                        showPaper(tab.id, tab.mode, tab.source, tab.title)
                       }
                     >
                       {tab.title}
                     </Button>
                     <IconButton
                       size="inline"
+                      variant="text"
                       aria-label={`关闭文献 ${tab.title}`}
                       icon={<Icon name="close" />}
                       onPress={() => {
@@ -482,7 +551,7 @@ function Workspace({ api }: { api: ApiClient }) {
                 </Button>
               )}
             </header>
-            <main className="workspace-content">
+            <main className="workspace-content" ref={content}>
               <PageBoundary
                 resetKey={`${route.section}:${route.literature ?? ""}`}
               >

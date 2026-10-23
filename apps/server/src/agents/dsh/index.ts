@@ -1,3 +1,4 @@
+import { conversationEvent } from "./events.js";
 import { randomUUID } from "node:crypto";
 import { Context } from "@deepseek-ai/cordis";
 import AgentRegistry, { type AgentHandle } from "@deepseek-ai/dsh-agent";
@@ -54,6 +55,7 @@ class CapabilitySession implements AgentCapabilitySession {
   private handle: AgentHandle | undefined;
   private readonly attachments: SessionAttachments;
   private readonly statuses = new Map<string, ModelToolMessage["status"]>();
+  private readonly toolNames = new Map<string, string>();
   private readonly toolContents = new Map<string, ContentBlock[]>();
   private active: ActiveAdmission | undefined;
   private toolOptions: AgentCapabilityRunOptions | undefined;
@@ -101,6 +103,15 @@ class CapabilitySession implements AgentCapabilitySession {
           maxTokens: this.options.modelContext.max_output_tokens,
         },
         setup: (scope) => {
+          scope.on("session/event", (session, event) => {
+            if (session.id !== this.id) return;
+            const visible = conversationEvent(
+              event,
+              this.toolNames,
+              this.statuses,
+            );
+            if (visible) this.options.observeEvent?.(visible);
+          });
           scope.systemPrompt.section({
             name: "sciretriever:capability",
             order: 0,
@@ -307,6 +318,7 @@ class CapabilitySession implements AgentCapabilitySession {
       this.pending.splice(0);
       this.statuses.clear();
       this.toolContents.clear();
+      this.toolNames.clear();
       this.attachments.close();
       this.unregister?.();
       this.unregister = undefined;

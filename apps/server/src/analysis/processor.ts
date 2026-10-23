@@ -1,8 +1,10 @@
+import { chunkOutputReserve } from "./processor-chunking.js";
+import { withActivity } from "../logging/activity.js";
+import { ProcessorPlanner } from "./processor-planning.js";
 import type { ProcessorValueVerifier } from "./value-check.js";
 import { randomUUID } from "node:crypto";
 import {
   canonicalJsonBytes,
-  parseProcessorReads,
   createInputManifest,
   type ProcessorReads,
   type ArchiveProcessorInput,
@@ -11,12 +13,10 @@ import {
   type SnapshotMember,
   parseProcessorInvocation,
   parseProcessorResult,
-  parseProcessorBatchRequest,
   processorComparison,
   processorJson,
   processorPointer,
   sha256,
-  type ProcessorBatchRequest,
   type ProcessorInvocation,
   type ProcessorInput,
   type ProcessorRecordSource,
@@ -55,6 +55,9 @@ export function processorError(code: string): never {
   throw new ProcessorError(code);
 }
 export interface StoredProcessorResult {
+  readonly outcomes?:
+    | import("@sciretriever/contracts").ProcessorOutcomeCounts
+    | null;
   readonly freshness?: {
     readonly state: "current" | "stale";
     readonly reasons: readonly unknown[];
@@ -91,10 +94,13 @@ export interface ProcessorStore {
   publishCollection(collection: ProcessorCollection): Promise<string>;
 }
 export interface ProcessorSegment {
+  readonly document_title?: string;
+  readonly section_path?: readonly string[];
+  readonly heading_level?: number;
+  readonly kind?: import("@sciretriever/contracts").ProofreadSegmentKind;
+  readonly page?: number;
+  readonly part_key?: string;
   readonly basis?: import("@sciretriever/contracts").ProofreadBasis;
-  readonly uncertainty?:
-    | import("@sciretriever/contracts").ProofreadUncertainty
-    | null;
   readonly segment_id: string;
   readonly text: string;
   readonly citation: ProcessorCitation;
@@ -210,6 +216,21 @@ export function resultCitations(
       ? content.claims.flatMap((c) => c.sources)
       : [];
 }
+export interface ProcessorMapProgress {
+  readonly snapshot_id: string;
+  readonly literature_id: string;
+  readonly status:
+    | "running"
+    | "computed"
+    | "reused"
+    | "partial"
+    | "failed"
+    | "interrupted";
+  readonly result?: {
+    readonly result_id: string;
+    readonly content_sha256: string;
+  };
+}
 export class ProcessorService {
   private readonly stop = new AbortController();
   private readonly active = new Set<Promise<unknown>>();
@@ -221,6 +242,9 @@ export class ProcessorService {
     readonly store: ProcessorStore,
     readonly archiveSource: ProcessorArchiveSource,
     private readonly verifier?: ProcessorValueVerifier,
+    private readonly onMapProgress?: (
+      progress: ProcessorMapProgress,
+    ) => Promise<void>,
   ) {}
   private async work<T>(
     fn: (signal: AbortSignal) => Promise<T>,
@@ -242,130 +266,24 @@ export class ProcessorService {
     this.stop.abort();
     await Promise.allSettled([...this.active]);
   }
+  private get planner() {
+    return new ProcessorPlanner(
+      this.registry,
+      this.agents,
+      this.archiveSource,
+      this.verifier,
+    );
+  }
   private spec(p: Processor, value: ProcessorObject) {
-    const { reads, ...rest } = value;
-    const normalized = p.normalizeSpec(rest);
-    return {
-      ...normalized,
-      reads: processorJson(
-        reads === undefined
-          ? (p.reads ?? { parts: "main", roles: "all" })
-          : parseProcessorReads(reads),
-      ),
-    };
+    return this.planner.spec(p, value);
   }
-  private async execution(p: Processor, spec: ProcessorObject) {
-    const reads = parseProcessorReads(spec.reads);
-    const map = p.map ?? null;
-    if (map) {
-      const target = this.registry.get(map.processor.id, map.processor.version);
-      if (
-        target.scope !== "document" ||
-        !target.accepts.includes("archive-document")
-      )
-        processorError("processor-map-invalid");
-    }
-    return {
-      method_sha256: await sha256(
-        canonicalJsonBytes({
-          value_verification: this.verifier
-            ? await this.verifier.identity()
-            : "unconfigured",
-          id: p.id,
-          version: p.version,
-          definition: p.definition,
-          spec_schema: p.spec_schema,
-          output_kind: p.output_kind,
-          output_schema: p.outputSchema?.(spec) ?? null,
-          reads,
-          map,
-          uses_description: p.uses_description ?? false,
-        }),
-      ),
-      model:
-        p.model && this.agents.readiness("analysis").configured
-          ? processorJson(this.agents.effectiveIdentity("analysis"))
-          : null,
-      reads,
-      uses_description: p.uses_description ?? false,
-      map,
-    };
+  private execution(p: Processor, spec: ProcessorObject) {
+    return this.planner.execution(p, spec);
   }
-  prepare(
-    value: unknown,
-    signal?: AbortSignal,
-  ): Promise<{
-    request: ProcessorBatchRequest;
-    invocations: readonly ProcessorInvocation[];
-  }> {
-    const request = parseProcessorBatchRequest(value);
-    return this.work(async (active) => {
-      const p = this.registry.get(
-          request.processor.id,
-          request.processor.version,
-        ),
-        spec = this.spec(p, request.spec),
-        execution = await this.execution(p, spec),
-        inputs: ProcessorInput[] = [];
-      if (p.outputSchema)
-        await validateRecordPayloads(p.outputSchema(spec), [], active);
-      if (
-        p.scope === "collection" &&
-        (request.inputs.length !== 1 || request.inputs[0]!.kind !== "snapshot")
-      )
-        processorError("processor-snapshot-required");
-      for (const selected of request.inputs) {
-        if (selected.kind === "snapshot") {
-          const snapshot = await this.archiveSource.snapshots.all(
-            selected.snapshot_id,
-            active,
-          );
-          if (p.scope === "collection")
-            inputs.push({
-              kind: "snapshot",
-              input_id: "snapshot",
-              snapshot_id: snapshot.snapshot_id,
-              content_sha256: snapshot.content_sha256,
-              mapped_results: [],
-            });
-          else
-            for (const member of snapshot.members)
-              inputs.push(
-                await this.archiveSource.input(
-                  member.literature_id,
-                  execution.reads,
-                  active,
-                  member,
-                ),
-              );
-        } else if (selected.kind === "literature" && p.scope === "document")
-          inputs.push(
-            await this.archiveSource.input(
-              selected.literature_id,
-              execution.reads,
-              active,
-            ),
-          );
-        else processorError("processor-archive-selection-required");
-      }
-      if (!inputs.length) processorError("processor-empty-snapshot");
-      return {
-        request: { ...request, spec },
-        invocations: (p.scope === "document"
-          ? inputs.map((i) => [i])
-          : [inputs]
-        ).map((group) =>
-          parseProcessorInvocation({
-            schema_version: 1,
-            processor: request.processor,
-            spec,
-            inputs: group,
-            execution,
-          }),
-        ),
-      };
-    }, signal);
+  prepare(value: unknown, signal?: AbortSignal) {
+    return this.work((active) => this.planner.prepare(value, active), signal);
   }
+
   execute(
     value: unknown,
     signal?: AbortSignal,
@@ -426,46 +344,81 @@ export class ProcessorService {
             mapSpec = this.spec(target, map.spec),
             binding = await this.execution(target, mapSpec);
           for (const member of snapshot.members) {
-            const fixed = await this.archiveSource.input(
-              member.literature_id,
-              binding.reads,
-              active,
-              member,
-            );
-            let result;
+            const progress = (
+              status: ProcessorMapProgress["status"],
+              result?: ProcessorMapProgress["result"],
+            ) =>
+              this.onMapProgress?.({
+                snapshot_id: snapshot.snapshot_id,
+                literature_id: member.literature_id,
+                status,
+                ...(result ? { result } : {}),
+              });
+            await progress("running");
+            let result,
+              failed = false;
             try {
-              result = await this.execute(
-                {
-                  schema_version: 1,
-                  processor: map.processor,
-                  spec: mapSpec,
-                  inputs: [fixed],
-                  execution: binding,
-                },
+              const fixed = await this.archiveSource.input(
+                member.literature_id,
+                binding.reads,
                 active,
+                member,
+              );
+              result = await withActivity(
+                { literature_id: member.literature_id },
+                () =>
+                  this.execute(
+                    {
+                      schema_version: 1,
+                      processor: map.processor,
+                      spec: mapSpec,
+                      inputs: [fixed],
+                      execution: binding,
+                    },
+                    active,
+                  ),
               );
             } catch (error) {
-              if (active.aborted) throw error;
-              result = await this.execute(
-                {
-                  schema_version: 1,
-                  processor: map.processor,
-                  spec: mapSpec,
-                  inputs: [
+              if (active.aborted) {
+                await progress("interrupted");
+                throw error;
+              }
+              failed = true;
+              await progress("failed");
+              result = await withActivity(
+                { literature_id: member.literature_id },
+                () =>
+                  this.execute(
                     {
-                      kind: "missing",
-                      input_id: "document",
-                      literature_id: member.literature_id,
-                      reason: "map-failed",
+                      schema_version: 1,
+                      processor: map.processor,
+                      spec: mapSpec,
+                      inputs: [
+                        {
+                          kind: "missing",
+                          input_id: "document",
+                          literature_id: member.literature_id,
+                          reason: "map-failed",
+                        },
+                      ],
+                      execution: binding,
                     },
-                  ],
-                  execution: binding,
-                },
-                active,
+                    active,
+                  ),
               );
             }
             const stored = await this.store.byId(result.result_id, active);
             if (!stored) processorError("processor-map-result-missing");
+            await progress(
+              failed
+                ? "failed"
+                : result.reused
+                  ? "reused"
+                  : result.coverage === "complete"
+                    ? "computed"
+                    : "partial",
+              stored.ref,
+            );
             mapResults.push(stored);
             mapped.push({ literature_id: member.literature_id, ...stored.ref });
           }
@@ -491,9 +444,19 @@ export class ProcessorService {
       const reads = execution.reads,
         seen = new Set<string>(),
         calls: ProcessorObject[] = [];
+      const title =
+        input.kind === "archive-document"
+          ? (await this.literature.detail(input.literature_id)).literature
+              .metadata.title
+          : null;
       const segments =
         input.kind === "archive-document"
-          ? await this.archiveSource.segments(input, reads, active)
+          ? (await this.archiveSource.segments(input, reads, active)).map(
+              (s) => ({
+                ...s,
+                document_title: title ?? s.document_title ?? "",
+              }),
+            )
           : [];
       const check = (candidate: ArchiveProcessorInput) => {
         if (!equal(input, candidate))
@@ -667,6 +630,9 @@ export class ProcessorService {
                 },
               ],
               response_schema: schema,
+              ...(p.definition.chunking
+                ? { max_output_tokens: chunkOutputReserve(execution.model) }
+                : {}),
             },
             active,
           );
@@ -736,7 +702,7 @@ export class ProcessorService {
               literature_id: input.literature_id,
               asset_id: null,
               part: role,
-              outcome: "part-absent",
+              outcome: "incomplete",
               read_segments: [],
               gaps: ["part-absent"],
             });
@@ -746,18 +712,11 @@ export class ProcessorService {
               ),
               read = eligible.filter((s) => reported.includes(s.segment_id)),
               complete = part.available && read.length === eligible.length;
-            const extracted = citations.some((c) =>
-              eligible.some((s) => equal(s.citation, c)),
-            );
             parts.push({
               literature_id: input.literature_id,
               asset_id: part.asset_id,
               part: role,
-              outcome: !complete
-                ? "incomplete"
-                : extracted
-                  ? "extracted"
-                  : "not-reported",
+              outcome: complete ? "complete" : "incomplete",
               read_segments: read.map((s) => s.segment_id),
               gaps: !part.available
                 ? ["part-unavailable"]

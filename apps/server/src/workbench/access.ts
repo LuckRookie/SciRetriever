@@ -1,4 +1,10 @@
-import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  scrypt,
+  timingSafeEqual,
+} from "node:crypto";
 import { isIP } from "node:net";
 import { networkInterfaces } from "node:os";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -64,6 +70,7 @@ function redirect(response: ServerResponse, location: string) {
 export interface WorkbenchAccessGrant {
   readonly origin: string;
   readonly sessionId: string;
+  readonly actor: string;
 }
 
 /** Single-user transport authentication. It owns no library or persistent facts. */
@@ -74,7 +81,10 @@ export class WorkbenchAccess {
   private readonly salt = randomBytes(16);
   private passwordHash: Buffer | undefined;
   private readonly cookieName = `sr_auth_${randomBytes(8).toString("hex")}`;
-  private readonly sessions = new Map<string, number>();
+  private readonly sessions = new Map<
+    string,
+    { expires: number; actor: string }
+  >();
   private readonly attempts = new Map<
     string,
     { start: number; count: number }
@@ -173,7 +183,7 @@ export class WorkbenchAccess {
   }
   valid(id: string): boolean {
     const expiry = this.sessions.get(id);
-    if (expiry !== undefined && expiry > Date.now() && !this.closed)
+    if (expiry !== undefined && expiry.expires > Date.now() && !this.closed)
       return true;
     if (expiry !== undefined) {
       this.sessions.delete(id);
@@ -231,6 +241,7 @@ export class WorkbenchAccess {
       json(response, 200, {
         required: true,
         authenticated: id !== null,
+        ...(id ? { actor: this.sessions.get(id)!.actor } : {}),
       });
       return null;
     }
@@ -326,7 +337,10 @@ export class WorkbenchAccess {
           return null;
         }
         const token = randomBytes(32).toString("hex");
-        this.sessions.set(digest(token), Date.now() + WEB_SESSION_TTL_MS);
+        this.sessions.set(digest(token), {
+          expires: Date.now() + WEB_SESSION_TTL_MS,
+          actor: `web-session:${new Date().toISOString()}:${randomUUID()}`,
+        });
         response.setHeader(
           "Set-Cookie",
           this.cookie(token, WEB_SESSION_TTL_MS / 1000),
@@ -346,7 +360,11 @@ export class WorkbenchAccess {
       else json(response, 401, { code: "login-required" });
       return null;
     }
-    return { origin: address.origin, sessionId: id };
+    return {
+      origin: address.origin,
+      sessionId: id,
+      actor: this.sessions.get(id)!.actor,
+    };
   }
   close(): void {
     this.closed = true;

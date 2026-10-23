@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { nextWorkspace } from "./next-workspace-fixture.js";
+import { libraryStatus, nextWorkspace } from "./next-workspace-fixture.js";
 
 it("serves the React library under the production CSP with persisted preferences and independent selection", async () => {
   const w = await nextWorkspace({ ready: "body" });
@@ -46,7 +46,7 @@ it("serves the React library under the production CSP with persisted preferences
     await expect
       .poll(() => new URL(page.url()).searchParams.get("query"))
       .toContain('"publication_year_from":2020');
-    await page.getByRole("button", { name: "全部", exact: true }).click();
+    await libraryStatus(page, "全部");
     await page.getByRole("button", { name: "浏览器", exact: true }).click();
     await page.getByRole("heading", { name: "浏览器", exact: true }).waitFor();
     await page

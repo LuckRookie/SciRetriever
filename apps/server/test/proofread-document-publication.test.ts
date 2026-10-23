@@ -52,7 +52,6 @@ describe("proofread document publication", () => {
         page: 1,
         source: "parser",
         basis: "text-layer",
-        uncertainty: null,
       });
       parseDocumentReadResult(
         "segments",
@@ -88,7 +87,6 @@ describe("proofread document publication", () => {
           page: 1,
           source: "parser",
           basis: "text-layer",
-          uncertainty: null,
         },
       });
       await expect(

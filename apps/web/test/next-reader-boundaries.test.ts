@@ -27,7 +27,8 @@ it("continues fixed Unicode Markdown without rebuilding stable blocks and recove
     setup: async (env) => {
       env.setText(
         '# Original 文献🙂\r\n\r\nText with $E=mc^2$.\r\n\r\n| Sample | Value |\r\n|---|---|\r\n| A | 4.2 eV |\r\n\r\n$$\r\nE = mc^2\r\n$$\r\n\r\n<span onclick="window.attacked=true">unsafe HTML</span>\r\n\r\n[unsafe](javascript:alert(1)) ![image](valid.png) ![missing](missing.png)\r\n\r\n' +
-          longDocument,
+          longDocument +
+          '\n\n<table><tr><td><img src="tail.png" alt="Final figure"></td></tr></table>\n',
       );
       const bytes = Buffer.from(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aV1cAAAAASUVORK5CYII=",
@@ -39,7 +40,7 @@ it("continues fixed Unicode Markdown without rebuilding stable blocks and recove
         media_type: "image/png",
       });
       env.setResources(
-        ["valid.png", "missing.png"].map((reference) => ({
+        ["valid.png", "missing.png", "tail.png"].map((reference) => ({
           reference,
           content: { bytes, artifact },
         })),
@@ -47,6 +48,10 @@ it("continues fixed Unicode Markdown without rebuilding stable blocks and recove
     },
   });
   let reads = 0;
+  let releaseImage!: () => void;
+  const imageBarrier = new Promise<void>((resolve) => {
+    releaseImage = resolve;
+  });
   try {
     await w.page.route(
       (url) => url.pathname === "/api/v1/query/document-slice",
@@ -83,7 +88,11 @@ it("continues fixed Unicode Markdown without rebuilding stable blocks and recove
             status: 503,
             json: { code: "synthetic-resource-failure" },
           });
-        else await route.fulfill({ response });
+        else {
+          if (value.result.resource.reference === "valid.png")
+            await imageBarrier;
+          await route.fulfill({ response });
+        }
       },
     );
     await open(w, "doc");
@@ -94,8 +103,19 @@ it("continues fixed Unicode Markdown without rebuilding stable blocks and recove
     expect(await article.locator("h1").count()).toBe(1);
     expect(await article.locator("a[href^='javascript:']").count()).toBe(0);
     await w.page.locator(".reading-resource").first().scrollIntoViewIfNeeded();
+    const firstImage = article.locator('[data-resource="valid.png"]');
+    await expect.poll(() => firstImage.innerText()).toBe("正在加载图片…");
+    expect(await firstImage.getAttribute("aria-busy")).toBe("true");
+    expect(await article.innerText()).not.toContain("valid.png");
+    releaseImage();
     await article.locator("img").waitFor();
     expect(await article.locator("img").getAttribute("src")).toMatch(/^blob:/);
+    expect(
+      await article
+        .locator("img")
+        .evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0),
+    ).toBe(true);
+    expect(await firstImage.getAttribute("aria-busy")).toBeNull();
     await expect
       .poll(() => article.locator('[data-resource="missing.png"]').innerText())
       .toContain("暂不可读");
@@ -170,10 +190,32 @@ it("continues fixed Unicode Markdown without rebuilding stable blocks and recove
     expect(await w.page.locator(".reading-status").innerText()).toContain(
       "全文已加载",
     );
+    const tailImage = article.locator('[data-resource="tail.png"] img');
+    await article
+      .locator('[data-resource="tail.png"]')
+      .scrollIntoViewIfNeeded();
+    await tailImage.waitFor();
+    expect(
+      await tailImage.evaluate((el: HTMLImageElement) => el.naturalWidth),
+    ).toBeGreaterThan(0);
+    await w.page.setViewportSize({ width: 390, height: 844 });
+    await tailImage.scrollIntoViewIfNeeded();
+    expect(
+      await w.page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await tailImage.focus();
+    await tailImage.press("Enter");
+    const zoom = w.page.getByRole("dialog", { name: "查看原图" });
+    await zoom.waitFor();
+    expect(await zoom.locator("img").getAttribute("alt")).toBe("Final figure");
+    await w.page.keyboard.press("Escape");
     expect(w.env.parseCalls).toBe(w.setupCalls.parser);
     expect(w.env.modelCalls).toBe(0);
     expect(w.errors).toEqual([]);
   } finally {
+    releaseImage();
     await w.page.unrouteAll({ behavior: "wait" });
     await w.close();
   }

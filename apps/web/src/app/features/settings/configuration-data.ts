@@ -119,6 +119,23 @@ export const SOURCE_PROVIDERS = {
   ],
 } as const;
 
+export const SOURCE_LABELS: Readonly<Record<string, string>> = {
+  "web-of-science": "Web of Science",
+  crossref: "Crossref",
+  "semantic-scholar": "Semantic Scholar",
+  arxiv: "arXiv",
+  openalex: "OpenAlex",
+  "europe-pmc": "Europe PMC",
+  elsevier: "Elsevier",
+  springer: "Springer",
+  datacite: "DataCite",
+  core: "CORE",
+  opencitations: "OpenCitations",
+  unpaywall: "Unpaywall",
+  wiley: "Wiley",
+  "sci-hub": "Sci-Hub",
+};
+
 export const MODEL_APIS = [
   { value: "openai-responses", label: "OpenAI Responses" },
   { value: "openai-chat-completions", label: "OpenAI Chat Completions" },

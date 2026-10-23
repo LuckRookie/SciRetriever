@@ -339,7 +339,7 @@ export async function post(
     endpoint: config.endpoint,
     method: "POST",
     timeout_ms: 120_000,
-    ...(["analysis", "proofreading", "value-checking"].includes(call.role)
+    ...(["analysis", "proofreading"].includes(call.role)
       ? { timeout_mode: "idle" as const }
       : {}),
     headers: [

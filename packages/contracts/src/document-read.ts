@@ -5,11 +5,7 @@ import {
   PROOFREAD_SEGMENT_KINDS,
   type ProofreadSegmentKind,
 } from "./document-structure-v2.js";
-import type {
-  ProofreadSource,
-  ProofreadBasis,
-  ProofreadUncertainty,
-} from "./proofread.js";
+import type { ProofreadSource, ProofreadBasis } from "./proofread.js";
 import {
   ContractValidationError,
   parseAssetId,
@@ -413,7 +409,7 @@ export interface DocumentSegmentLocation {
   }[];
   readonly source: ProofreadSource;
   readonly basis: ProofreadBasis;
-  readonly uncertainty: ProofreadUncertainty | null;
+
   readonly locate: "region" | "page";
 }
 export function parseDocumentSegmentLocation(
@@ -426,7 +422,7 @@ export function parseDocumentSegmentLocation(
     "continuation_regions",
     "source",
     "basis",
-    "uncertainty",
+
     "locate",
   ]);
   const page = count(r.page, 10000),
@@ -439,40 +435,14 @@ export function parseDocumentSegmentLocation(
     r.continuation_regions.length > 10000
   )
     fail();
-  if (
-    !["text-layer", "image-only", "uncertain", "manual"].includes(
-      String(r.basis),
-    )
-  )
-    fail();
-  let uncertainty: ProofreadUncertainty | null = null;
-  if (r.uncertainty !== null) {
-    const u = object(r.uncertainty, ["span", "reason", "page"]);
-    if (
-      !Array.isArray(u.span) ||
-      u.span.length !== 2 ||
-      typeof u.reason !== "string" ||
-      !u.reason.trim() ||
-      u.reason.length > 65536
-    )
-      fail();
-    const start = nonnegative(u.span[0]),
-      end = nonnegative(u.span[1]);
-    if (end < start) fail();
-    uncertainty = {
-      span: [start, end],
-      reason: u.reason,
-      page: count(u.page, 10000),
-    };
-  }
-  if ((r.basis === "uncertain") !== (uncertainty !== null)) fail();
+  if (!["text-layer", "image-only", "manual"].includes(String(r.basis))) fail();
   return {
     block_id: token(r.block_id),
     page,
     region,
     source: r.source as ProofreadSource,
     basis: r.basis as ProofreadBasis,
-    uncertainty,
+
     locate: r.locate as "region" | "page",
     continuation_regions: r.continuation_regions.map((v) => {
       const p = object(v, ["page", "region"]);
@@ -548,7 +518,6 @@ function segment(value: unknown) {
           "locate",
           "source",
           "basis",
-          "uncertainty",
         ]
       : []),
   ]);
@@ -563,7 +532,6 @@ function segment(value: unknown) {
           locate: r.locate,
           source: r.source,
           basis: r.basis,
-          uncertainty: r.uncertainty,
         })
       : {}),
     segment_id: token(r.segment_id),

@@ -75,12 +75,13 @@ it("downloads a complete large result in the browser and rejects altered transfe
         value_checks: Array.from({ length: 8 }, (_, i) => ({
           record_id: `r${i}`,
           pointer: "/text",
-          status: "uncertain",
-          reason: "Synthetic material-only fixture is unverified.",
+          status: "citation-unavailable",
+          reason: "corrected-fragment-unavailable",
           sources: [
             {
               citation: { kind: "document", evidence: material.evidence },
-              status: "uncertain",
+              basis: null,
+              status: "citation-unavailable",
               reason: "Synthetic material-only fixture is unverified.",
             },
           ],

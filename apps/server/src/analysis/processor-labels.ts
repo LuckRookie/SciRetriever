@@ -14,6 +14,8 @@ import {
   readingSpec,
   READING_SCHEMA,
   textChunks,
+  chunkHeading,
+  PROCESSOR_CHUNKING,
   segmentSources,
   textCoverage,
   TEXT_LIMITATIONS,
@@ -44,7 +46,7 @@ export const labelsProcessor: Processor = {
   outputSchema: labelOutputSchema,
   definition: {
     prompt: PROMPT,
-    chunking: "whole-segment-bounded-v1",
+    chunking: processorJson(PROCESSOR_CHUNKING),
     reduction: "evidence-linked-answers-v1",
   },
   spec_schema: {
@@ -103,6 +105,12 @@ export const labelsProcessor: Processor = {
       input,
       processorJson(invocation.spec.reading),
       ctx,
+      invocation.execution.model,
+      Buffer.byteLength(
+        PROMPT +
+          JSON.stringify(invocation.spec) +
+          JSON.stringify(responseSchema),
+      ),
     );
     const read: string[] = [];
     const seen: ProcessorSegment[] = [];
@@ -131,11 +139,11 @@ export const labelsProcessor: Processor = {
           PROMPT,
           processorJson({
             question: invocation.spec.question,
+            ...chunkHeading(segments),
             segments: segments.map((s) => ({
               segment_id: s.segment_id,
               text: s.text,
               basis: s.basis ?? null,
-              uncertainty: s.uncertainty ?? null,
             })),
           }),
           responseSchema,

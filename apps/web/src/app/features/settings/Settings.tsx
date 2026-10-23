@@ -5,9 +5,14 @@ import { parseConfigurationReadiness } from "@sciretriever/contracts";
 import {
   Button,
   Checkbox,
+  Definition,
+  Definitions,
   Dialog,
   ErrorNotice,
   PageHeader,
+  Radio,
+  RadioGroup,
+  Section,
   Select,
   Tabs,
   TechDetails,
@@ -25,6 +30,7 @@ import { errorMessage } from "../../strings.js";
 import {
   MODEL_APIS,
   MODEL_REASONING,
+  SOURCE_LABELS,
   SOURCE_PROVIDERS,
   runtimeStatus,
 } from "./configuration-data.js";
@@ -665,14 +671,6 @@ export default function Settings() {
                   onChange={(v) => edit("proofread", "model", v || null)}
                   options={modelOptions}
                 />
-                <Select
-                  label="用时核对模型"
-                  value={str(value("proofread", "value_check_model"))}
-                  onChange={(v) =>
-                    edit("proofread", "value_check_model", v || null)
-                  }
-                  options={modelOptions}
-                />
                 {[
                   ["model", "文献打标模型"],
                   ["consolidation_model", "词表整理模型"],
@@ -724,7 +722,7 @@ export default function Settings() {
               <div className="settings-section">
                 <h2>建档与标签</h2>
                 <p>
-                  元数据和章节判定使用“模型”页的分析模型。矫正与用时核对未单独指定时沿用分析模型，必须支持图片和工具；存疑内容会保留说明。
+                  元数据和章节判定使用“模型”页的分析模型。校订矫正未单独指定模型时沿用分析模型，必须支持图片和工具。
                 </p>
                 {[
                   ["max_per_literature", "每篇标签上限", 1, 32],
@@ -756,17 +754,6 @@ export default function Settings() {
                   {str(value("parsing", "archive_profile")) || "vlm-engine"}
                   （部署配置，只读）
                 </p>
-                <NumberField
-                  label="每次算子的用时核对调用上限"
-                  minValue={1}
-                  maxValue={10000}
-                  value={Number(
-                    value("proofread", "max_value_check_calls") ?? 64,
-                  )}
-                  onChange={(v) =>
-                    edit("proofread", "max_value_check_calls", v)
-                  }
-                />
                 <Button
                   isPending={publish.isPending}
                   onPress={() => save(["tags", "proofread"])}
@@ -1176,120 +1163,166 @@ function Sources({
     setError("");
     onSave();
   };
+  const sourceLabel = (name: string) => SOURCE_LABELS[name] ?? name;
+  const choice = (kind: "metadata" | "acquisition") => {
+    const config = record(sources[kind], kind),
+      selected = Array.isArray(config.providers)
+        ? config.providers.filter(
+            (value): value is string => typeof value === "string",
+          )
+        : [];
+    return (
+      <Definition
+        term="来源"
+        description={
+          kind === "metadata"
+            ? "自定义时只查询勾选的来源。"
+            : "自定义时只尝试勾选的来源。"
+        }
+        value={
+          config.mode === "custom"
+            ? selected.length
+              ? `已选 ${selected.length} 个：${selected.map(sourceLabel).join("、")}`
+              : "尚未勾选来源"
+            : "由应用按当前版本选择"
+        }
+      >
+        <RadioGroup
+          segmented
+          label={kind === "metadata" ? "元数据来源模式" : "获取来源模式"}
+          value={str(config.mode)}
+          onChange={(mode) =>
+            onChange({
+              ...sources,
+              [kind]: {
+                ...config,
+                mode,
+                providers: mode === "auto" ? [] : selected,
+              },
+            })
+          }
+        >
+          <Radio value="auto">自动</Radio>
+          <Radio value="custom">自定义</Radio>
+        </RadioGroup>
+        {config.mode === "custom" ? (
+          <div className="source-options">
+            {[...new Set([...selected, ...SOURCE_PROVIDERS[kind]])].map(
+              (name) => (
+                <Checkbox
+                  key={name}
+                  label={sourceLabel(name)}
+                  isSelected={selected.includes(name)}
+                  onChange={(checked) =>
+                    update(
+                      kind,
+                      "providers",
+                      checked
+                        ? [...selected, name]
+                        : selected.filter((value) => value !== name),
+                    )
+                  }
+                />
+              ),
+            )}
+          </div>
+        ) : null}
+      </Definition>
+    );
+  };
   return (
-    <div className="settings-section">
-      <h2>文献来源</h2>
-      {(["metadata", "acquisition"] as const).map((kind) => {
-        const config = record(sources[kind], kind),
-          selected = Array.isArray(config.providers)
-            ? config.providers.filter(
-                (value): value is string => typeof value === "string",
-              )
-            : [];
-        return (
-          <fieldset key={kind}>
-            <legend>
-              {kind === "metadata" ? "元数据来源" : "PDF 获取来源"}
-            </legend>
+    <div className="settings-sources">
+      <Section
+        title="元数据"
+        description="导入书目、补全题录信息时查询的服务。"
+      >
+        <Definitions>
+          {choice("metadata")}
+          <Definition
+            term="单次结果上限"
+            description="每个来源一次查询最多返回的条数。"
+          >
+            <div className="settings-short-field">
+              <TextField
+                label="元数据结果上限"
+                value={String(metadata.limit ?? 500)}
+                onChange={(value) => update("metadata", "limit", Number(value))}
+              />
+            </div>
+          </Definition>
+        </Definitions>
+      </Section>
+      <Section title="PDF 获取" description="获取全文 PDF 时依次尝试的服务。">
+        <Definitions>
+          {choice("acquisition")}
+          <Definition
+            term="Unpaywall 联系邮箱"
+            description="勾选 Unpaywall 时必填，随请求发送给 Unpaywall。"
+          >
+            <TextField
+              label="Unpaywall 联系邮箱"
+              value={str(
+                acquisition.unpaywall
+                  ? record(acquisition.unpaywall, "unpaywall").contact_email
+                  : null,
+              )}
+              onChange={(contact_email) =>
+                update(
+                  "acquisition",
+                  "unpaywall",
+                  contact_email ? { contact_email } : null,
+                )
+              }
+            />
+          </Definition>
+        </Definitions>
+      </Section>
+      <Section
+        title="Web of Science"
+        description="需要机构订阅。产品与数据库都留空时不使用。"
+      >
+        <Definitions>
+          <Definition term="产品">
             <Select
-              label={kind === "metadata" ? "元数据来源模式" : "获取来源模式"}
-              value={str(config.mode)}
-              onChange={(mode) =>
-                onChange({
-                  ...sources,
-                  [kind]: {
-                    ...config,
-                    mode,
-                    providers: mode === "auto" ? [] : selected,
-                  },
-                })
+              label="产品"
+              value={str(wos.product)}
+              onChange={(product) =>
+                update(
+                  "metadata",
+                  "web_of_science",
+                  product ? { ...wos, product } : null,
+                )
               }
               options={[
-                { value: "auto", label: "自动" },
-                { value: "custom", label: "自定义" },
+                { value: "", label: "未配置" },
+                { value: "starter", label: "Starter" },
+                { value: "expanded", label: "Expanded" },
               ]}
             />
-            {config.mode === "custom" ? (
-              <div className="source-options">
-                {[...new Set([...selected, ...SOURCE_PROVIDERS[kind]])].map(
-                  (name) => (
-                    <Checkbox
-                      key={name}
-                      label={name}
-                      isSelected={selected.includes(name)}
-                      onChange={(checked) =>
-                        update(
-                          kind,
-                          "providers",
-                          checked
-                            ? [...selected, name]
-                            : selected.filter((value) => value !== name),
-                        )
-                      }
-                    />
-                  ),
-                )}
-              </div>
-            ) : (
-              <p>自动来源由应用按当前版本选择。</p>
-            )}
-          </fieldset>
-        );
-      })}
-      <TextField
-        label="元数据结果上限"
-        value={String(metadata.limit ?? 500)}
-        onChange={(value) => update("metadata", "limit", Number(value))}
-      />
-      <h3>Web of Science</h3>
-      <Select
-        label="产品"
-        value={str(wos.product)}
-        onChange={(product) =>
-          update(
-            "metadata",
-            "web_of_science",
-            product ? { ...wos, product } : null,
-          )
-        }
-        options={[
-          { value: "", label: "未配置" },
-          { value: "starter", label: "Starter" },
-          { value: "expanded", label: "Expanded" },
-        ]}
-      />
-      <TextField
-        label="数据库"
-        value={str(wos.database)}
-        onChange={(database) =>
-          update("metadata", "web_of_science", { ...wos, database })
-        }
-      />
-      <TextField
-        label="版本"
-        value={str(wos.edition)}
-        onChange={(edition) =>
-          update("metadata", "web_of_science", {
-            ...wos,
-            edition: edition || null,
-          })
-        }
-      />
-      <TextField
-        label="Unpaywall 联系邮箱"
-        value={str(
-          acquisition.unpaywall
-            ? record(acquisition.unpaywall, "unpaywall").contact_email
-            : null,
-        )}
-        onChange={(contact_email) =>
-          update(
-            "acquisition",
-            "unpaywall",
-            contact_email ? { contact_email } : null,
-          )
-        }
-      />
+          </Definition>
+          <Definition term="数据库" description="例如 WOS。">
+            <TextField
+              label="数据库"
+              value={str(wos.database)}
+              onChange={(database) =>
+                update("metadata", "web_of_science", { ...wos, database })
+              }
+            />
+          </Definition>
+          <Definition term="版本" description="可选。">
+            <TextField
+              label="版本"
+              value={str(wos.edition)}
+              onChange={(edition) =>
+                update("metadata", "web_of_science", {
+                  ...wos,
+                  edition: edition || null,
+                })
+              }
+            />
+          </Definition>
+        </Definitions>
+      </Section>
       {error && <p role="alert">{error}</p>}
       <div className="form-actions">
         <Button variant="primary" isPending={pending} onPress={validate}>

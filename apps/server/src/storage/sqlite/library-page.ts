@@ -5,13 +5,33 @@ const { resolveLibraryTagIds, tagBackfillPending }: typeof Tags = await import(
     import.meta.url,
   ).href
 );
+import { LITERATURE_STATUSES } from "@sciretriever/contracts";
+import type { LibraryQuery } from "@sciretriever/contracts";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { LibraryPageQuery } from "../../literature/query.js";
 
+export const OPENED_SQL =
+  "(SELECT last_opened_at FROM reading_history h WHERE h.literature_id=l.literature_id)";
+const RECENT_SQL = `${OPENED_SQL} >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')`;
+/** Earliest known observation, not publication date or the last metadata refresh. */
+export const INTAKE_SQL =
+  "(SELECT intake_at FROM literature_intake WHERE literature_id=l.literature_id)";
+export function intakeAt(db: DatabaseSync, id: string): string | null {
+  return (db
+    .prepare(
+      `SELECT ${INTAKE_SQL} AS intake_at FROM literatures l WHERE l.literature_id=?`,
+    )
+    .get(id)?.intake_at ?? null) as string | null;
+}
+
 /** SQL read projection of LibraryQuery; full domain rows are read only for this page. */
-export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
-  const { query: q, sort, after, limit, ftsQuery } = request;
-  const terms: string[] = [],
+function libraryFilter(
+  db: DatabaseSync,
+  q: LibraryQuery,
+  ftsQuery: string | null,
+  intakeOrder = false,
+) {
+  const terms: string[] = ["sr_query_continue()"],
     args: SQLInputValue[] = [];
   const add = (sql: string, ...values: SQLInputValue[]) => {
     terms.push(sql);
@@ -78,9 +98,78 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
       `EXISTS(SELECT 1 FROM literature_tag_items i WHERE i.literature_id=l.literature_id AND i.tag_id IN (SELECT value FROM json_each(?)) ${q.tags?.mode === "primary" ? "AND i.rank=1" : ""})`,
       JSON.stringify(tagIds),
     );
+  if (q.folder) {
+    const ids = q.folder.include_descendants
+      ? "WITH RECURSIVE descendants(id) AS (SELECT folder_id FROM folders WHERE folder_id=? UNION SELECT f.folder_id FROM folders f JOIN descendants d ON f.parent_id=d.id) SELECT id FROM descendants"
+      : "SELECT folder_id FROM folders WHERE folder_id=?";
+    add(
+      `EXISTS(SELECT 1 FROM folder_members fm WHERE fm.literature_id=l.literature_id AND fm.folder_id IN (${ids}))`,
+      q.folder.id,
+    );
+  }
+  if (q.recently_opened) add(RECENT_SQL);
   if (ftsQuery !== null) add("literature_search_fts MATCH ?", ftsQuery);
-  const from = `FROM literatures l JOIN literature_metadata m ON m.literature_id=l.literature_id${ftsQuery === null ? "" : " JOIN literature_search_fts ON literature_search_fts.literature_id=l.literature_id"}`;
-  const where = terms.length ? `WHERE ${terms.join(" AND ")}` : "";
+  const base = intakeOrder
+    ? "literature_intake li INDEXED BY literature_intake_order CROSS JOIN literatures l ON l.literature_id=li.literature_id"
+    : "literatures l";
+  const from = `FROM ${base} JOIN literature_metadata m ON m.literature_id=l.literature_id${ftsQuery === null ? "" : " JOIN literature_search_fts ON literature_search_fts.literature_id=l.literature_id"}`;
+  let where = terms.length ? `WHERE ${terms.join(" AND ")}` : "";
+  if (q.recently_opened)
+    where = `WHERE l.literature_id IN (SELECT l.literature_id ${from} ${where} ORDER BY ${OPENED_SQL} DESC,l.literature_id LIMIT 100)`;
+  // An outer FTS join still needs a MATCH term for bm25 and must use the same query.
+  if (q.recently_opened && ftsQuery !== null) {
+    where += " AND literature_search_fts MATCH ?";
+    args.push(ftsQuery);
+  }
+  return { from, where, args, tagIds };
+}
+export function libraryCounts(
+  db: DatabaseSync,
+  query: LibraryQuery,
+  ftsQuery: string | null,
+) {
+  // Quick-filter counts ignore both quick selections, but retain all other facets.
+  const { from, where, args } = libraryFilter(
+    db,
+    { ...query, statuses: [], needs_manual_pdf: null },
+    ftsQuery,
+  );
+  // Status is a per-row function; materialize it so each row computes it once.
+  const rows = db
+    .prepare(
+      `WITH s AS MATERIALIZED (SELECT sr_status(l.literature_id) AS status, EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=l.literature_id) AS exhausted ${from} ${where}) SELECT status, count(*) AS count, sum(status='UNREVIEWED' AND exhausted) AS unavailable FROM s GROUP BY status`,
+    )
+    .all(...args);
+  const statuses = Object.fromEntries(LITERATURE_STATUSES.map((s) => [s, 0]));
+  let total = 0,
+    unavailable_pdf = 0;
+  for (const row of rows) {
+    if (!Object.hasOwn(statuses, String(row.status)))
+      throw new Error("invalid library status");
+    statuses[String(row.status)] = Number(row.count);
+    total += Number(row.count);
+    unavailable_pdf += Number(row.unavailable);
+  }
+  const recent = db
+    .prepare(
+      `SELECT count(*) AS n ${from} ${where ? where + " AND " : "WHERE "} ${RECENT_SQL}`,
+    )
+    .get(...args)!;
+  return {
+    total,
+    statuses,
+    unavailable_pdf,
+    recently_opened: Math.min(100, Number(recent.n)),
+  };
+}
+export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
+  const { query: q, sort, after, limit, ftsQuery } = request;
+  const { from, where, args, tagIds } = libraryFilter(
+    db,
+    q,
+    ftsQuery,
+    sort === "intake-desc" && ftsQuery === null,
+  );
   const counts = db
     .prepare(
       `SELECT count(*) AS total, count(DISTINCT l.literature_id) AS unique_count ${from} ${where}`,
@@ -89,11 +178,43 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
   if (counts.total !== counts.unique_count)
     throw new Error("duplicate library search rows");
   const relevance = ftsQuery === null ? "NULL" : "bm25(literature_search_fts)";
-  const value = sort.startsWith("title")
-    ? "sr_normalize(m.title)"
-    : sort.startsWith("publication-year")
-      ? "m.publication_year"
-      : relevance;
+  const value =
+    sort === "opened-desc"
+      ? OPENED_SQL
+      : sort === "intake-desc"
+        ? INTAKE_SQL
+        : sort.startsWith("title")
+          ? "sr_normalize(m.title)"
+          : sort.startsWith("publication-year")
+            ? "m.publication_year"
+            : relevance;
+  if (sort === "intake-desc" && ftsQuery === null) {
+    const pageArgs = [...args];
+    let cursor = "";
+    if (after) {
+      cursor =
+        after.value === null
+          ? " AND li.intake_at IS NULL AND l.literature_id > ?"
+          : " AND (li.intake_at IS NULL OR li.intake_at < ? OR (li.intake_at = ? AND l.literature_id > ?))";
+      pageArgs.push(
+        ...(after.value === null
+          ? [after.literature_id]
+          : [after.value, after.value, after.literature_id]),
+      );
+    }
+    const rows = db
+      .prepare(
+        `SELECT l.literature_id,${relevance} AS relevance ${from} ${where} ${cursor} ORDER BY li.intake_at DESC,li.literature_id ASC LIMIT ?`,
+      )
+      .all(...pageArgs, limit + 1);
+    return {
+      rows,
+      total_count: Number(counts.total),
+      ...(tagIds.length
+        ? { tag_backfill_pending: tagBackfillPending(db, tagIds, q.tags!.mode) }
+        : {}),
+    };
+  }
   const pageArgs = [...args];
   let cursor = "";
   if (after) {
@@ -105,7 +226,9 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
       pageArgs.push(after.value, after.value, after.literature_id);
     }
   }
-  // Materialization keeps bm25 in its FTS context and computes each title key once.
+  // FTS candidates keep their own join order; forcing the intake index there
+  // would scan the whole catalog for every matching term. Materialization also
+  // keeps bm25 in its FTS context and computes each title key once.
   const rows = db
     .prepare(
       `WITH matches AS MATERIALIZED (SELECT l.literature_id, ${value} AS sort_value, ${relevance} AS relevance ${from} ${where}) SELECT literature_id,relevance FROM matches ${cursor} ORDER BY sort_value IS NULL, sort_value ${sort.endsWith("desc") ? "DESC" : "ASC"}, literature_id ASC LIMIT ?`,

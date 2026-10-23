@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { activityContext } from "../../logging/activity.js";
+import type { AgentTraceRecorder, AgentTraceSubject } from "../trace.js";
+import { tracedSession } from "../traced-session.js";
 import {
   createDshCapabilityRuntime,
   type DshExecutionRuntime,
@@ -48,8 +52,19 @@ export class DshAgentRuntime {
   private backend: Promise<DshExecutionRuntime> | undefined;
   private closing: Promise<void> | undefined;
   private readonly active = new Set<Promise<unknown>>();
+  private readonly sessions = new Set<AgentCapabilitySession>();
+  private track<T>(operation: Promise<T>): Promise<T> {
+    this.active.add(operation);
+    void operation
+      .finally(() => this.active.delete(operation))
+      .catch(() => undefined);
+    return operation;
+  }
 
-  constructor(bindings: readonly AgentBinding[]) {
+  constructor(
+    bindings: readonly AgentBinding[],
+    private readonly traces?: AgentTraceRecorder,
+  ) {
     if (
       new Set(bindings.map((binding) => binding.role)).size !== bindings.length
     )
@@ -68,7 +83,7 @@ export class DshAgentRuntime {
     const required: readonly AgentCapability[] =
       role === "browser"
         ? ["image_input", "tool_decision"]
-        : role === "proofreading" || role === "value-checking"
+        : role === "proofreading"
           ? ["structured_text", "image_input", "tool_decision"]
           : ["structured_text"];
     return {
@@ -123,29 +138,82 @@ export class DshAgentRuntime {
     };
   }
 
-  async execute(
+  execute(
+    call: AgentCall,
+    signal?: AbortSignal,
+    lifecycle?: AgentCallLifecycle,
+  ): Promise<AgentResult> {
+    return this.track(this.executeTraced(call, signal, lifecycle));
+  }
+  private async executeTraced(
     call: AgentCall,
     signal?: AbortSignal,
     lifecycle?: AgentCallLifecycle,
   ): Promise<AgentResult> {
     if (this.closed) throw new AgentFailure("agent-closed");
     validateAgentCall(call);
-    return this.executeBound(call, signal, async (binding, active) =>
-      (await this.foundation()).call({
-        request: call,
-        provider: binding.provider,
-        model: binding.model,
-        context_window_tokens: binding.context_window_tokens,
-        signal: active,
-        invoke: (signal) =>
-          binding.adapter.execute(
-            call,
-            { reasoning: binding.reasoning, stream: binding.stream },
-            signal,
-            lifecycle,
-          ),
-      }),
-    );
+    const trace = await this.traces?.start({
+      session_id: `${call.role}-${randomUUID()}`,
+      ...this.identity(call.role),
+      context: activityContext(),
+      subject: { kind: activityContext().operation ?? call.role },
+    });
+    try {
+      if (this.stop.signal.aborted || signal?.aborted)
+        throw new AgentFailure("agent-cancelled");
+      trace?.event("input", {
+        messages: call.messages.filter((m) => m.role !== "system"),
+      });
+      const result = await this.executeBound(
+        call,
+        signal,
+        async (binding, active) =>
+          (await this.foundation()).call({
+            request: call,
+            ...(trace
+              ? {
+                  observeEvent: (
+                    event: import("@sciretriever/contracts").AgentConversationEvent,
+                  ) => trace.event(event.event_type, event),
+                }
+              : {}),
+            provider: binding.provider,
+            model: binding.model,
+            context_window_tokens: binding.context_window_tokens,
+            signal: active,
+            invoke: (signal) =>
+              binding.adapter.execute(
+                call,
+                { reasoning: binding.reasoning, stream: binding.stream },
+                signal,
+                {
+                  onDispatched: () => {
+                    lifecycle?.onDispatched();
+                    trace?.usage(1, 0, 0);
+                  },
+                },
+              ),
+          }),
+      );
+      trace?.usage(
+        0,
+        result.provenance.usage.input_tokens,
+        result.provenance.usage.output_tokens,
+      );
+      trace?.event(
+        "submission",
+        result.kind === "structured"
+          ? result.value
+          : { name: result.name, arguments: result.arguments },
+      );
+      await trace?.finish("completed");
+      return result;
+    } catch (error) {
+      await trace?.finish(
+        signal?.aborted || this.stop.signal.aborted ? "cancelled" : "failed",
+      );
+      throw error;
+    }
   }
 
   async executeModel(
@@ -183,12 +251,7 @@ export class DshAgentRuntime {
     signal: AbortSignal | undefined,
     execute: (binding: AgentBinding, active: AbortSignal) => Promise<T>,
   ): Promise<T> {
-    const operation = this.runBound(call, signal, execute);
-    this.active.add(operation);
-    void operation
-      .finally(() => this.active.delete(operation))
-      .catch(() => undefined);
-    return operation;
+    return this.track(this.runBound(call, signal, execute));
   }
 
   private async runBound<T extends Pick<AgentResult, "provenance">>(
@@ -237,8 +300,13 @@ export class DshAgentRuntime {
     }
   }
 
-  async createSession(
-    request: AgentSessionRequest,
+  createSession(
+    request: AgentSessionRequest & { readonly trace?: AgentTraceSubject },
+  ): Promise<AgentCapabilitySession> {
+    return this.track(this.openSession(request));
+  }
+  private async openSession(
+    request: AgentSessionRequest & { readonly trace?: AgentTraceSubject },
   ): Promise<AgentCapabilitySession> {
     if (this.closed) throw new AgentFailure("agent-closed");
     const binding = this.bindings.get(request.role);
@@ -250,27 +318,72 @@ export class DshAgentRuntime {
       throw new AgentFailure("agent-capability");
     const backend = await this.foundation();
     if (this.closed) throw new AgentFailure("agent-closed");
-    return backend.createSession({
-      ...request,
-      modelContext: {
-        ...this.effectiveIdentity(request.role),
-        capabilities: binding.capabilities,
-      },
-      modelCall: (call, signal, lifecycle) => {
-        validateModelRequest(call);
-        // Already dispatched by DSH's session LlmRuntime; enter the protocol adapter directly.
-        return this.executeBound(call, signal, (model, active) => {
-          const invoke = model.adapter.executeModel?.bind(model.adapter);
-          if (!invoke) throw new AgentFailure("agent-capability");
-          return invoke(
-            call,
-            { reasoning: model.reasoning, stream: model.stream },
-            active,
-            lifecycle,
-          );
-        });
-      },
+    const { trace: subject, ...sessionRequest } = request;
+    const trace = await this.traces?.start({
+      session_id: request.id,
+      role: request.role,
+      provider: binding.provider,
+      model: binding.model,
+      context: activityContext(),
+      subject: subject ?? {},
     });
+    let session: AgentCapabilitySession;
+    try {
+      session = await backend.createSession({
+        ...sessionRequest,
+        ...(trace
+          ? {
+              observeEvent: (
+                event: import("@sciretriever/contracts").AgentConversationEvent,
+              ) => trace.event(event.event_type, event),
+            }
+          : {}),
+        modelContext: {
+          ...this.effectiveIdentity(request.role),
+          capabilities: binding.capabilities,
+        },
+        modelCall: (call, signal, lifecycle) => {
+          validateModelRequest(call);
+          // Already dispatched by DSH's session LlmRuntime; enter the protocol adapter directly.
+          return this.executeBound(call, signal, (model, active) => {
+            const invoke = model.adapter.executeModel?.bind(model.adapter);
+            if (!invoke) throw new AgentFailure("agent-capability");
+            return invoke(
+              call,
+              { reasoning: model.reasoning, stream: model.stream },
+              active,
+              lifecycle,
+            );
+          });
+        },
+      });
+    } catch (error) {
+      await trace?.finish("failed");
+      throw error;
+    }
+    const observed = trace ? tracedSession(session, trace) : session;
+    let closing: Promise<void> | undefined;
+    const wrapped: AgentCapabilitySession = {
+      id: observed.id,
+      append: (input) => observed.append(input),
+      run: (input, options) => observed.run(input, options),
+      compact: (options) => observed.compact(options),
+      history: () => observed.history(),
+      close: () =>
+        (closing ??= (async () => {
+          try {
+            await observed.close();
+          } finally {
+            this.sessions.delete(wrapped);
+          }
+        })()),
+    };
+    this.sessions.add(wrapped);
+    if (this.closed) {
+      await wrapped.close();
+      throw new AgentFailure("agent-closed");
+    }
+    return wrapped;
   }
 
   private foundation(): Promise<DshExecutionRuntime> {
@@ -285,6 +398,9 @@ export class DshAgentRuntime {
       const backend = this.backend ? await this.backend : undefined;
       await backend?.close();
       await Promise.allSettled([...this.active]);
+      await Promise.allSettled(
+        [...this.sessions].map((session) => session.close()),
+      );
     })());
   }
 }

@@ -32,7 +32,7 @@ export function draftBlocks(
       context.pages[d.page]!.kind === "text-layer"
         ? "text-layer"
         : "image-only",
-    uncertainty: null,
+
     raw_ref: d.raw_ref,
     edit_refs: [],
   }));
@@ -138,7 +138,11 @@ export function applyEdits(
     }
     const target = blocks.find((b) => b.block_id === edit.block_id);
     if (!target) fail("proofread-edit-target");
-    if (edit.kind === "replace" && target.type === "table")
+    if (
+      edit.kind === "replace" &&
+      target.type === "table" &&
+      !(edit.text === "" && input.pages[target.page]!.kind === "image-only")
+    )
       requireTableMarkup(edit.text);
     if (locked.has(edit.block_id)) fail("proofread-manual-locked");
     if (
@@ -181,11 +185,7 @@ export function applyEdits(
     input.pages[page]!.kind === "text-layer"
       ? ("text-layer" as const)
       : ("image-only" as const);
-  // Apply span annotations after text changes, independent of the submitted order.
-  for (const edit of [...submission.edits].sort(
-    (a, b) =>
-      Number(a.kind === "mark_uncertain") - Number(b.kind === "mark_uncertain"),
-  )) {
+  for (const edit of submission.edits) {
     const edit_id = editIdentity(edit);
     records.push({ edit_id, edit });
     if (edit.kind === "insert_after") {
@@ -196,7 +196,7 @@ export function applyEdits(
         continuation_regions: [],
         text_source: "agent",
         basis: basis(edit.block.page),
-        uncertainty: null,
+
         raw_ref: [],
         edit_refs: [edit_id],
       };
@@ -219,18 +219,14 @@ export function applyEdits(
     let updated: ProofreadBlock = {
       ...b,
       text_source: "agent",
-      basis: b.uncertainty ? "uncertain" : basis(b.page),
+      basis: basis(b.page),
       edit_refs: [...new Set([...b.edit_refs, edit_id])],
     };
     if (edit.kind === "replace")
       updated = {
         ...updated,
-        text: b.type === "table" ? b.text : edit.text,
-        html: b.type === "table" ? edit.text : b.html,
-        // A replacement invalidates old character offsets, not the unresolved concern.
-        uncertainty: b.uncertainty
-          ? { ...b.uncertainty, span: [0, edit.text.length] }
-          : null,
+        text: b.type === "table" && edit.text !== "" ? b.text : edit.text,
+        html: b.type === "table" ? edit.text || null : b.html,
       };
     if (edit.kind === "move") {
       updated = {
@@ -239,7 +235,7 @@ export function applyEdits(
         region: null,
         locate: "page",
         continuation_regions: [],
-        basis: b.uncertainty ? "uncertain" : basis(edit.page),
+        basis: basis(edit.page),
       };
       result.splice(i, 1);
       result.splice(
@@ -250,19 +246,6 @@ export function applyEdits(
         updated,
       );
       continue;
-    }
-    if (edit.kind === "mark_uncertain") {
-      if (edit.span[1] > (updated.html ?? updated.text).length)
-        fail("proofread-edit-span");
-      updated = {
-        ...updated,
-        basis: "uncertain",
-        uncertainty: {
-          span: edit.span,
-          reason: edit.reason,
-          page: edit.basis_page,
-        },
-      };
     }
     result[i] = updated;
   }

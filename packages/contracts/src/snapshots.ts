@@ -5,6 +5,7 @@ import {
   parseLibraryQuery,
   parseLiteratureId,
   parseLiteratureMetadata,
+  parseUtcTimestamp,
   sha256,
   type LibraryQuery,
   type LiteratureMetadata,
@@ -42,8 +43,60 @@ export interface Snapshot {
   readonly content_sha256: string;
 }
 export interface SnapshotHeader extends Omit<Snapshot, "members"> {
+  readonly name: string;
+  readonly name_source: "generated" | "manual";
   readonly member_count: number;
   readonly excluded_count: number;
+}
+/** Display labels are independent of immutable snapshot identity. Empty resets. */
+export function parseSnapshotName(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (
+    typeof value !== "string" ||
+    value.length > 256 ||
+    /[\p{Cc}\p{Cf}]/u.test(value)
+  )
+    fail();
+  return value.trim() || null;
+}
+export function parseSnapshotCreate(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail();
+  const { name, ...definition } = value as Record<string, unknown>;
+  return {
+    definition: parseSnapshotDefinition(definition),
+    name: parseSnapshotName(name),
+  };
+}
+export function parseSnapshotRename(value: unknown) {
+  const r = tagRecord(value, ["snapshot_id", "name"]);
+  return {
+    snapshot_id: parseAssetId(r.snapshot_id),
+    name: parseSnapshotName(r.name),
+  };
+}
+export function parseSnapshotHeader(value: unknown): SnapshotHeader {
+  const r = tagRecord(value, [
+    "snapshot_id",
+    "created_at",
+    "definition",
+    "content_sha256",
+    "member_count",
+    "excluded_count",
+    "name",
+    "name_source",
+  ]);
+  const name = parseSnapshotName(r.name);
+  if (!name || !["generated", "manual"].includes(String(r.name_source))) fail();
+  return {
+    snapshot_id: parseAssetId(r.snapshot_id),
+    created_at: parseUtcTimestamp(r.created_at),
+    definition: parseSnapshotDefinition(r.definition),
+    content_sha256: hash(r.content_sha256),
+    member_count: tagInteger(r.member_count),
+    excluded_count: tagInteger(r.excluded_count),
+    name,
+    name_source: r.name_source as SnapshotHeader["name_source"],
+  };
 }
 export interface SnapshotDifference {
   readonly added: readonly string[];

@@ -1,3 +1,4 @@
+import { actorLabel } from "../logging/actor-label.js";
 import { randomUUID } from "node:crypto";
 import {
   canonicalJsonBytes,
@@ -5,11 +6,13 @@ import {
   parsePageRegion,
   parseProofreadBlocksV1,
   parseProofreadDisposition,
+  proofreadIdentity,
+  sha256,
 } from "@sciretriever/contracts";
 import type { SqliteRawParseStorage } from "../storage/raw-parsing.js";
 import type { SqliteProofreadStorage } from "../storage/proofread.js";
 import { VerifiedReaderError } from "../storage/files/reader.js";
-import { buildProofreadVersion, proofreadCorrectionMethod } from "./engine.js";
+import { buildProofreadVersion, proofreadMethod } from "./engine.js";
 import {
   manualPageIdentity,
   requireTableMarkup,
@@ -18,9 +21,12 @@ import {
   type ProofreadCorrector,
   type ManualProofreadDecision,
 } from "./contract.js";
-import { CLEAN_RULES_VERSION } from "./clean.js";
-import { SUSPECTS_VERSION } from "./suspects.js";
-import { PROOFREAD_RENDER_VERSION } from "./render.js";
+import { renderBlocks } from "./render.js";
+import {
+  editDocument,
+  encodeManualDocument,
+  parseManualDocument,
+} from "./manual-document.js";
 export class ProofreadError extends Error {
   constructor(
     readonly code: string,
@@ -121,6 +127,262 @@ export class ProofreadService {
       };
     });
   }
+  async readingStatus(value: unknown, signal?: AbortSignal) {
+    const r = record(value, ["asset_id"]);
+    return (await this.editor({ ...r, max_bytes: 1024 }, signal))
+      .reading_status;
+  }
+  editor(value: unknown, signal?: AbortSignal) {
+    const r = record(
+        value,
+        ["asset_id"],
+        ["proofread_id", "start", "max_bytes"],
+      ),
+      asset = parseAssetId(r.asset_id);
+    const start = count(r.start ?? 0, 8 * 1024 * 1024),
+      limit = count(r.max_bytes ?? 65536, 262144);
+    if (limit < 1024) throw new ProofreadError("proofread-invalid");
+    return this.run(signal, async (stop) => {
+      const state = await this.storage.state(asset, stop);
+      const id = r.proofread_id
+        ? parseAssetId(r.proofread_id)
+        : state.current?.proofread_id;
+      if (!id) throw new ProofreadError("proofread-missing");
+      const output = await this.storage.load(String(id), stop),
+        v = output.version;
+      if (v.part_asset_id !== asset)
+        throw new ProofreadError("proofread-manual-stale");
+      const bytes = output.markdown.bytes;
+      if (
+        start > bytes.length ||
+        (start < bytes.length && (bytes[start]! & 0xc0) === 0x80)
+      )
+        throw new ProofreadError("proofread-invalid");
+      let end = Math.min(bytes.length, start + limit);
+      while (end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
+      const blocks = parseProofreadBlocksV1(
+        JSON.parse(new TextDecoder().decode(output.blocks.bytes)),
+        v.resources.map((r) => r.reference),
+      );
+      const ranges = output.ranges.flatMap((range) => {
+        if (range.start_utf8 < start || range.start_utf8 >= end) return [];
+        const b = blocks.blocks.find((b) => b.block_id === range.block_id)!;
+        return [
+          {
+            ...range,
+            page: b.page,
+            source: b.text_source,
+            basis: b.basis,
+          },
+        ];
+      });
+      return {
+        asset_id: asset,
+        asset_sha256: v.part_sha256,
+        proofread_id: v.proofread_id,
+        manual_revision: state.manual_revision,
+        status: v.status,
+        page_count: v.pages.length,
+        start,
+        end,
+        total_bytes: bytes.length,
+        text: new TextDecoder("utf-8", { fatal: true }).decode(
+          bytes.subarray(start, end),
+        ),
+        ranges,
+        reading_status: {
+          asset_id: asset,
+          proofread_id: v.proofread_id,
+          blocks: {
+            parser: blocks.blocks.filter((b) =>
+              ["parser", "rule"].includes(b.text_source),
+            ).length,
+            agent: blocks.blocks.filter((b) => b.text_source === "agent")
+              .length,
+            manual: blocks.blocks.filter((b) => b.text_source === "manual")
+              .length,
+          },
+          text_layer_pages: v.pages.filter((p) => p.kind === "text-layer")
+            .length,
+          total_pages: v.pages.length,
+          last_manual_edit: state.last_manual_edit
+            ? {
+                ...state.last_manual_edit,
+                actor_label: actorLabel(state.last_manual_edit.actor),
+              }
+            : null,
+        },
+        next_start: end < bytes.length ? end : null,
+      };
+    });
+  }
+  save(value: unknown, signal?: AbortSignal) {
+    const r = record(
+        value,
+        ["asset_id", "proofread_id", "markdown", "actor"],
+        ["page_starts_utf8"],
+      ),
+      asset = parseAssetId(r.asset_id),
+      id = parseAssetId(r.proofread_id),
+      actor = reason(r.actor, 128);
+    if (
+      typeof r.markdown !== "string" ||
+      (r.page_starts_utf8 !== undefined &&
+        (!Array.isArray(r.page_starts_utf8) ||
+          r.page_starts_utf8.some((n) => typeof n !== "number")))
+    )
+      throw new ProofreadError("proofread-invalid");
+    const markdown = r.markdown,
+      bytes = Buffer.from(markdown);
+    const pageStarts = (r.page_starts_utf8 as number[] | undefined)?.map(
+      (n) => {
+        if (
+          !Number.isSafeInteger(n) ||
+          n < 0 ||
+          n > bytes.length ||
+          (n < bytes.length && (bytes[n]! & 0xc0) === 0x80)
+        )
+          throw new ProofreadError("proofread-edit-pages-invalid");
+        return new TextDecoder("utf-8", { fatal: true }).decode(
+          bytes.subarray(0, n),
+        ).length;
+      },
+    );
+    return this.run(signal, async (stop) => {
+      const state = await this.storage.state(asset, stop);
+      if (state.current?.proofread_id !== id)
+        throw new ProofreadError("proofread-manual-stale");
+      const old = await this.storage.load(id, stop),
+        v = old.version;
+      if (
+        v.part_asset_id !== asset ||
+        state.current.manual_revision !== state.manual_revision
+      )
+        throw new ProofreadError("proofread-manual-stale");
+      const original = parseProofreadBlocksV1(
+        JSON.parse(new TextDecoder().decode(old.blocks.bytes)),
+        v.resources.map((r) => r.reference),
+      );
+      const edited = editDocument(original, markdown, v.resources, pageStarts);
+      if (!edited.changed.length)
+        return {
+          version: v,
+          changed: false,
+          published: false,
+          revision: Number(state.current.revision),
+        };
+      const changed = new Set(edited.changed);
+      const scopes = [...changed].map((id) => `block:${id}:text`);
+      const retained = state.decisions.filter(
+        (d) =>
+          d.action !== "document-edit" &&
+          !(changed.has(d.block_id) && d.action === "replace"),
+      );
+      const prior = state.decisions.find((d) => d.action === "document-edit");
+      const decision: ManualProofreadDecision = {
+        decision_id: randomUUID(),
+        part_asset_id: asset,
+        block_id: asset,
+        draft_sha256: v.draft_input.result_sha256,
+        raw_ref: [],
+        action: "document-edit",
+        reason: "manual-document-edit",
+        page: 0,
+        suspect_id: null,
+        disposition: null,
+        text: encodeManualDocument({
+          blocks: edited.blocks,
+          edits: [...v.edits, ...edited.edits],
+          changed_ids: [
+            ...new Set([
+              ...edited.changed,
+              ...(prior?.text
+                ? parseManualDocument(
+                    prior.text,
+                    v.resources.map((r) => r.reference),
+                  ).changed_ids
+                : []),
+            ]),
+          ],
+        }),
+      };
+      const rendered = renderBlocks(edited.blocks.blocks, v.resources),
+        blockBytes = canonicalJsonBytes(edited.blocks);
+      const artifact = async (bytes: Uint8Array, media_type: string) => ({
+        sha256: await sha256(bytes),
+        byte_size: bytes.length,
+        media_type,
+      });
+      const blockRef = await artifact(blockBytes, "application/json"),
+        markdownRef = await artifact(rendered.markdown, "text/markdown");
+      const suspects = v.suspects.map((s) =>
+        s.block_ids.some((id) => changed.has(id))
+          ? {
+              ...s,
+              disposition: {
+                status: "fixed" as const,
+                reason: "manual-document-edit",
+              },
+            }
+          : s,
+      );
+      const input = {
+        ...v,
+        manual_decision_ids: [
+          ...retained.map((d) => d.decision_id),
+          decision.decision_id,
+        ].sort(),
+        blocks: blockRef,
+        markdown: markdownRef,
+        edits: [...v.edits, ...edited.edits],
+        suspects,
+        pages: v.pages.map((p) =>
+          !edited.blocks.blocks.some((b) => b.page === p.page) &&
+          original.blocks.some((b) => b.page === p.page)
+            ? {
+                ...p,
+                checked: true,
+                no_body_reason: "manual-document-edit",
+                pending_reason: null,
+              }
+            : p,
+        ),
+        stats: {
+          ...v.stats,
+          fixed: suspects.filter((s) => s.disposition?.status === "fixed")
+            .length,
+          calls: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+          elapsed_ms: 0,
+        },
+      };
+      const {
+        proofread_id: oldId,
+        content_sha256: oldHash,
+        ...versionInput
+      } = input;
+      void oldId;
+      void oldHash;
+      const version = {
+        ...versionInput,
+        ...(await proofreadIdentity(versionInput)),
+      };
+      const result = await this.storage.publish(
+        {
+          ...old,
+          version,
+          blocks: { artifact: blockRef, bytes: blockBytes },
+          markdown: { artifact: markdownRef, bytes: rendered.markdown },
+          ranges: rendered.ranges,
+        },
+        state.manual_revision,
+        stop,
+        { decision, actor, expected_proofread_id: id, replaced_scopes: scopes },
+      );
+      return { ...result, changed: true };
+    });
+  }
   build(value: unknown, signal?: AbortSignal) {
     const r = record(value, ["asset_id"], ["mode"]),
       asset = parseAssetId(r.asset_id);
@@ -143,14 +405,7 @@ export class ProofreadService {
       if (!selected) throw new ProofreadError("proofread-input-missing");
       const state = await this.storage.state(asset, stop),
         source = await this.raw.loadSource(selected.raw_parse_id, stop);
-      const method = {
-        clean: CLEAN_RULES_VERSION,
-        page_classify: this.pages.method,
-        suspects: SUSPECTS_VERSION,
-        correction: proofreadCorrectionMethod(this.corrector),
-        render: PROOFREAD_RENDER_VERSION,
-        model_config_sha256: this.corrector?.model_config_sha256 ?? null,
-      };
+      const method = proofreadMethod(this.pages.method, this.corrector);
       if (state.current) {
         const old = await this.storage.byId(
           String(state.current.proofread_id),
@@ -372,9 +627,7 @@ export class ProofreadService {
       actor = reason(r.actor, 128),
       why = reason(r.reason);
     if (
-      !["replace", "resolve-suspect", "clear-uncertainty", "no-body"].includes(
-        String(r.action),
-      ) ||
+      !["replace", "resolve-suspect", "no-body"].includes(String(r.action)) ||
       (r.action === "replace"
         ? typeof r.text !== "string" || r.text.length > 4 * 1024 * 1024
         : r.text !== null)

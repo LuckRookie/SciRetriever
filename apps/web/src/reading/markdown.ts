@@ -1,6 +1,6 @@
 import { Marked, type Token } from "marked";
 import katex from "katex";
-import { escape as e } from "./dom.js";
+import { escape as e, imagePlaceholder } from "./dom.js";
 import { renderTable } from "./table.js";
 
 const math = (text: string, displayMode: boolean) =>
@@ -21,8 +21,7 @@ function createMarkdown(allowFragments: boolean) {
         renderTable(text, (value) =>
           instance.parseInline(value, { async: false }),
         ) ?? e(text),
-      image: ({ href, text }) =>
-        `<span class="reading-resource" data-resource="${e(href)}">图片：${e(text || href)}</span>`,
+      image: ({ href, text }) => imagePlaceholder(href, text),
       link({ href, tokens }) {
         const label = this.parser.parseInline(tokens);
         if (allowFragments && href.startsWith("#") && href.length > 1)

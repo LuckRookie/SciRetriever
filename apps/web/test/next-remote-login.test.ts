@@ -1,4 +1,7 @@
-import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
+import {
+  openSavedViews,
+  showAllLibraryStatuses,
+} from "./next-workspace-fixture.js";
 import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -158,27 +161,27 @@ describe("IP-address HTTP login and workspace", () => {
       expect(await page.evaluate(() => document.cookie)).not.toContain(
         "sr_auth",
       );
-      await page
-        .getByRole("button", { name: "保存当前筛选", exact: true })
+      await (await openSavedViews(page))
+        .getByRole("menuitem", { name: "保存当前筛选…", exact: true })
         .click();
       const saved = page.getByRole("dialog", { name: "保存筛选", exact: true });
       await saved
         .getByRole("textbox", { name: "筛选名称", exact: true })
         .fill("HTTP saved view");
       await saved.getByRole("button", { name: "保存", exact: true }).click();
-      await page
-        .getByRole("button", { name: "HTTP saved view", exact: true })
+      await (await openSavedViews(page))
+        .getByRole("menuitem", { name: "HTTP saved view", exact: true })
         .waitFor();
+      await page.keyboard.press("Escape");
       const check = page.locator(".paper-row").first().getByRole("checkbox");
       await check.focus();
       await page.keyboard.press("Space");
       await page
         .getByRole("region", { name: "文献选择", exact: true })
-        .getByRole("button", { name: "用这些文献做…", exact: true })
+        .getByRole("button", { name: "更多", exact: true })
         .click();
       await page
-        .getByRole("dialog", { name: "使用所选文献", exact: true })
-        .getByRole("button", { name: "获取 PDF", exact: true })
+        .getByRole("menuitem", { name: "获取 PDF", exact: true })
         .click();
       const acquire = page.getByRole("dialog", {
         name: "获取 PDF",

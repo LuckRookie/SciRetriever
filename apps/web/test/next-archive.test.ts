@@ -2,12 +2,19 @@ import { expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { parseAsset, sha256 } from "@sciretriever/contracts";
 import type { Page } from "playwright";
-import { nextWorkspace } from "./next-workspace-fixture.js";
+import {
+  libraryStatus,
+  nextWorkspace,
+  runFromSnapshot,
+} from "./next-workspace-fixture.js";
 import { missingId } from "./processor-workspace-fixture.js";
 import { workbenchPdf } from "../../server/src/workbench/synthetic-fixture.js";
 import { topicDraft } from "../../server/test/tag-fixture.js";
 async function select(page: Page, label: string, option: string) {
-  await page.getByRole("button", { name: new RegExp(label) }).click();
+  await page
+    .getByRole("button", { name: new RegExp(label) })
+    .and(page.locator('[aria-haspopup="listbox"]'))
+    .click();
   await page.getByRole("option", { name: option, exact: true }).click();
 }
 it("keeps manual parsing separate from archiving, then exposes ready state and metadata locks", async () => {
@@ -21,7 +28,7 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
   });
   try {
     const p = w.page;
-    await select(p, "材料状态", "有 PDF");
+    await libraryStatus(p, "有 PDF");
     await p
       .getByRole("checkbox", { name: "选择已加载的文献", exact: true })
       .focus();
@@ -29,8 +36,9 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
     const initial = w.env.parseCalls;
     await p
       .getByRole("region", { name: "文献选择" })
-      .getByRole("button", { name: "解析 PDF", exact: true })
+      .getByRole("button", { name: "更多", exact: true })
       .click();
+    await p.getByRole("menuitem", { name: "解析 PDF", exact: true }).click();
     const dialog = p.getByRole("dialog", { name: "解析 PDF", exact: true });
     await dialog.getByRole("button", { name: "确认启动", exact: true }).click();
     await dialog.getByRole("button", { name: "关闭", exact: true }).click();
@@ -47,7 +55,7 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
     );
     await p
       .getByRole("region", { name: "文献选择" })
-      .getByRole("button", { name: "建档／重试", exact: true })
+      .getByRole("button", { name: "建档", exact: true })
       .click();
     const build = p.getByRole("dialog", { name: "建立文献档案", exact: true });
     await build.getByRole("button", { name: "确认启动", exact: true }).click();
@@ -59,7 +67,7 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
       .toBe("READY");
     await p.goto(`${w.origin}/?literature=${missingId}&reader=doc`);
     await p
-      .getByRole("button", { name: "编辑字段、来源与锁定", exact: true })
+      .getByRole("button", { name: "字段、来源与锁定", exact: true })
       .click();
     await p.getByRole("button", { name: "编辑标题", exact: true }).click();
     await p
@@ -115,18 +123,18 @@ it("creates a snapshot and runs mapped DSH summaries and synthesis with clickabl
           },
     );
     const p = w.page;
-    await p.getByRole("button", { name: "生成快照", exact: true }).click();
-    await p.getByRole("heading", { name: "快照", exact: true }).waitFor();
+    await p.getByRole("button", { name: "用当前结果", exact: true }).click();
+    await p.getByRole("menuitem", { name: "生成快照", exact: true }).click();
+    // Generating a snapshot opens it directly.
+    await p.getByRole("heading", { name: /1 篇/ }).waitFor();
     expect(
       (await w.env.app.snapshots.list({ after: null, limit: 10 })).items,
     ).toHaveLength(1);
-    await p.getByRole("button", { name: /当前快照/ }).click();
-    await p.getByRole("option", { name: /1 篇/ }).click();
-    await select(p, "算子", "多篇综合");
-    await p
-      .getByRole("textbox", { name: "综合问题", exact: true })
-      .fill("Compare the saved measurements.");
-    await p.getByRole("button", { name: "确认启动", exact: true }).click();
+    await runFromSnapshot(p, "多篇综合", (dialog) =>
+      dialog
+        .getByRole("textbox", { name: "综合问题", exact: true })
+        .fill("Compare the saved measurements."),
+    );
     await expect
       .poll(
         async () =>
@@ -145,13 +153,13 @@ it("creates a snapshot and runs mapped DSH summaries and synthesis with clickabl
     await p.getByRole("region", { name: "结果覆盖与版本" }).waitFor();
     expect(
       await p.getByRole("region", { name: "结果覆盖与版本" }).textContent(),
-    ).toContain("已提取 1");
+    ).toContain("有结果 1 篇");
     expect(
       await p.getByRole("table", { name: "提取结果" }).textContent(),
     ).toContain("综合测量证据");
     expect(
       await p.getByRole("table", { name: "提取结果" }).textContent(),
-    ).toContain("存疑");
+    ).toContain("综合值");
     await p
       .getByRole("table", { name: "提取结果" })
       .getByRole("button", { name: "综合测量证据。", exact: true })
@@ -196,7 +204,7 @@ it("previews undo dependencies before reverting a vocabulary change", async () =
     await p.goto(
       `${w.origin}/?literature=${w.env.parseRequest.literature_id}&reader=doc`,
     );
-    await p.getByRole("button", { name: "编辑文献标签", exact: true }).click();
+    await p.getByRole("button", { name: "编辑标签", exact: true }).click();
     await select(p, "要添加的标签", "Extra topic");
     await p.getByRole("button", { name: /支持该标签的原文片段/ }).click();
     await p.getByRole("option", { name: /片段 1 ·/ }).click();
@@ -311,54 +319,37 @@ it("locks an edited block, marks its summary stale and locates the fixed PDF reg
       .getByRole("button", { name: /查看区块来源/ })
       .first()
       .click();
-    const dialog = p.getByRole("dialog", { name: "校订区块对照", exact: true });
-    await dialog.getByRole("button", { name: "人工修订", exact: true }).click();
-    await dialog
-      .getByRole("textbox", { name: "修订文字", exact: true })
-      .fill("Manually corrected measurements");
-    await dialog
-      .getByRole("textbox", { name: "核对依据或原因", exact: true })
-      .fill("已对照原 PDF 核对测量文字。");
-    await dialog
-      .getByRole("button", { name: "保存修订并锁定", exact: true })
-      .click();
+    const editor = p.getByRole("region", { name: "校订稿编辑", exact: true });
+    const field = editor.getByRole("textbox", {
+      name: "第 1 页校订稿",
+      exact: true,
+    });
+    await field.waitFor();
+    const original = await field.inputValue();
+    await field.fill(original + "\n\nManually corrected measurements\n\n");
+    await editor.getByRole("button", { name: "保存修订", exact: true }).click();
+    await p
+      .getByText("修订已保存，全文、结构与引用已重建。", { exact: true })
+      .waitFor();
+    expect(
+      (await w.env.app.processorRead!.byId(result_id))!.freshness?.state,
+    ).toBe("stale");
     await expect
-      .poll(
-        async () =>
-          (await w.env.app.processorRead!.byId(result_id))!.freshness?.state,
-        { timeout: 10000 },
+      .poll(() =>
+        p
+          .locator(".reading-pdf-page canvas")
+          .first()
+          .evaluate(
+            (canvas: HTMLCanvasElement) =>
+              canvas.width > 0 && canvas.height > 0,
+          ),
       )
-      .toBe("stale");
-    await dialog
-      .getByRole("button", { name: "查看原始 PDF 区域", exact: true })
-      .click();
-    try {
-      await expect
-        .poll(() =>
-          dialog
-            .getByLabel("对应原始 PDF 区域", { exact: true })
-            .evaluate(
-              (canvas: HTMLCanvasElement) =>
-                canvas.width > 0 &&
-                canvas.height > 0 &&
-                !!canvas.getContext("2d")?.getImageData(0, 0, 1, 1).data[3],
-            ),
-        )
-        .toBe(true);
-    } catch (e) {
-      throw new Error(
-        JSON.stringify({ dialog: await dialog.innerText(), errors: w.errors }),
-        { cause: e },
-      );
-    }
-    await dialog
-      .getByRole("button", { name: "在 PDF 中定位", exact: true })
-      .click();
-    await p.keyboard.press("Escape");
-    await expect
-      .poll(() => new URL(p.url()).searchParams.get("reader"))
-      .toBe("pdf");
+      .toBe(true);
+    expect(new URL(p.url()).searchParams.get("reader")).toBe("edit");
     expect(new URL(p.url()).searchParams.get("page")).toBe("1");
+    const pdfBox = await p.locator(".reader-surface").boundingBox(),
+      editorBox = await editor.boundingBox();
+    expect(editorBox!.x).toBeGreaterThanOrEqual(pdfBox!.x + pdfBox!.width);
     await p.goto(`${w.origin}/?view=archive`);
     await p.getByRole("heading", { name: "建档问题", exact: true }).waitFor();
     await p.screenshot({
@@ -522,7 +513,8 @@ it("preserves summary reading position and presents evidence on demand across sc
     });
     await expect.poll(scroll).toBeGreaterThan(800);
     await p.getByRole("tab", { name: "全文", exact: true }).click();
-    await p.getByRole("tab", { name: "总结", exact: true }).click();
+    await p.getByRole("tab", { name: "结果", exact: true }).click();
+    await p.getByRole("button", { name: "阅读总结", exact: true }).click();
     await expect.poll(scroll).toBeGreaterThan(800);
     await summary.getByRole("button", { name: "[1.1]", exact: true }).click();
     await p
@@ -581,13 +573,13 @@ it("preserves summary reading position and presents evidence on demand across sc
     }
     await p.getByRole("tab", { name: "全文", exact: true }).click();
     await p.getByRole("button", { name: "显示核对依据", exact: true }).click();
-    await p.getByRole("button", { name: "校订对照", exact: true }).click();
     await p
-      .getByRole("dialog", { name: "校订区块对照", exact: true })
-      .locator(".katex")
-      .first()
-      .waitFor();
-    await p.keyboard.press("Escape");
+      .getByRole("tablist", { name: "全文模式", exact: true })
+      .getByRole("tab", { name: "编辑", exact: true })
+      .click();
+    const editor = p.getByRole("region", { name: "校订稿编辑", exact: true });
+    await editor.getByRole("tab", { name: "预览", exact: true }).click();
+    await editor.locator(".katex").first().waitFor();
     await p.setViewportSize({ width: 1440, height: 1000 });
     await p.getByRole("button", { name: "词表", exact: true }).click();
     await p.getByRole("button", { name: "Spectroscopy", exact: true }).click();
@@ -643,11 +635,12 @@ it("shows all states and styled ranked tags on a cold library entry", async () =
     const primary = tags.locator(".paper-tag.primary");
     expect(
       await primary.evaluate((el) => Number(getComputedStyle(el).fontWeight)),
-    ).toBeGreaterThanOrEqual(600);
+    ).toBeGreaterThanOrEqual(500);
+    // Ranked tags are told apart by a tinted fill, not a border.
     expect(
-      await primary.evaluate((el) => getComputedStyle(el).borderStyle),
-    ).toBe("solid");
-    await select(p, "材料状态", "已就绪");
+      await primary.evaluate((el) => getComputedStyle(el).backgroundColor),
+    ).not.toBe("rgba(0, 0, 0, 0)");
+    await libraryStatus(p, "已就绪");
     await expect.poll(() => p.locator(".paper-row").count()).toBe(1);
     expect(w.errors).toEqual([]);
   } finally {

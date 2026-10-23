@@ -1,3 +1,4 @@
+import { TaskRun } from "./TaskRun.js";
 import { useState } from "react";
 import {
   useInfiniteQuery,
@@ -10,10 +11,11 @@ import {
   Button,
   Card,
   Disclosure,
-  Drawer,
   EmptyState,
   ErrorNotice,
   ListRow,
+  MasterDetail,
+  MasterItem,
   PageHeader,
   SearchField,
   Skeleton,
@@ -23,7 +25,7 @@ import {
 import { useApi } from "../../data/query.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
-import { errorMessage } from "../../strings.js";
+import { errorMessage, localTime } from "../../strings.js";
 import { jobRecord, record, type JsonRecord } from "../../data/wire.js";
 import {
   parseTaskDetail,
@@ -185,83 +187,97 @@ export default function Tasks() {
           </Button>
         }
       />
-      <Tabs
-        label="任务状态"
-        value={group}
-        onChange={setGroup}
-        items={[
-          { id: "", label: "全部" },
-          { id: "active", label: "进行中" },
-          { id: "attention", label: "待处理" },
-          { id: "ended", label: "已结束" },
-        ]}
-      />
-      <SearchField
-        label="筛选任务"
-        value={text}
-        onChange={setText}
-        placeholder="任务名称或编号"
-      />
-      {jobs.isPending ? (
-        <Skeleton label="正在读取任务" />
-      ) : jobs.isError ? (
-        <ErrorNotice
-          message={errorMessage(jobs.error)}
-          retained={items.length ? "已经显示的任务仍然保留。" : ""}
-          onRetry={async () => {
-            await jobs.refetch();
-          }}
-        />
-      ) : null}
-      <div role="status" className="ui-description">
-        已显示 {items.length} 个任务
-        {text ? `，符合筛选 ${filtered.length} 个` : ""}
-      </div>
-      <div className="tasks-list">
-        {filtered.map((job) => (
-          <div key={String(job.job_id)} data-task-id={String(job.job_id)}>
-            <ListRow
-              title={taskTitle(job)}
-              bibliography={formatDate(job.created_at)}
-              badge={<TaskBadge status={job.status} />}
-              onPress={() => navigate({ task: String(job.job_id) })}
+      <MasterDetail
+        label="任务列表"
+        toolbar={
+          <>
+            <Tabs
+              label="任务状态"
+              value={group}
+              onChange={setGroup}
+              items={[
+                { id: "", label: "全部" },
+                { id: "active", label: "进行中" },
+                { id: "attention", label: "待处理" },
+                { id: "ended", label: "已结束" },
+              ]}
             />
+            <SearchField
+              label="筛选任务"
+              value={text}
+              onChange={setText}
+              placeholder="任务名称或编号"
+            />
+            <div role="status" className="ui-description">
+              已显示 {items.length} 个任务
+              {text ? `，符合筛选 ${filtered.length} 个` : ""}
+            </div>
+          </>
+        }
+        list={
+          <div className="tasks-list">
+            {jobs.isPending ? (
+              <Skeleton label="正在读取任务" />
+            ) : jobs.isError ? (
+              <ErrorNotice
+                message={errorMessage(jobs.error)}
+                retained={items.length ? "已经显示的任务仍然保留。" : ""}
+                onRetry={async () => {
+                  await jobs.refetch();
+                }}
+              />
+            ) : null}
+            {filtered.map((job) => (
+              <div key={String(job.job_id)} data-task-id={String(job.job_id)}>
+                <MasterItem
+                  selected={selected === String(job.job_id)}
+                  title={taskTitle(job)}
+                  meta={formatDate(job.created_at)}
+                  badge={<TaskBadge status={job.status} />}
+                  onPress={() => navigate({ task: String(job.job_id) })}
+                />
+              </div>
+            ))}
+            {!jobs.isPending && !filtered.length ? (
+              <EmptyState
+                title={text ? "没有符合筛选的任务" : "当前没有任务"}
+                description="从文献库选择材料并启动处理后，可以在这里查看进度。"
+              />
+            ) : null}
           </div>
-        ))}
-      </div>
-      {!jobs.isPending && !filtered.length ? (
-        <EmptyState
-          title={text ? "没有符合筛选的任务" : "当前没有任务"}
-          description="从文献库选择材料并启动处理后，可以在这里查看进度。"
-        />
-      ) : null}
-      {jobs.hasNextPage ? (
-        <Button
-          isPending={jobs.isFetchingNextPage}
-          onPress={async () => {
-            await jobs.fetchNextPage();
-          }}
-        >
-          加载更多任务
-        </Button>
-      ) : null}
-      <Drawer
-        title="任务详情"
-        isOpen={!!selected}
-        onOpenChange={(open) => {
-          if (!open) navigate({ task: null });
-        }}
-      >
-        {selected ? <TaskDetails key={selected} id={selected} /> : null}
-      </Drawer>
+        }
+        footer={
+          jobs.hasNextPage ? (
+            <Button
+              variant="text"
+              size="compact"
+              isPending={jobs.isFetchingNextPage}
+              onPress={async () => {
+                await jobs.fetchNextPage();
+              }}
+            >
+              加载更多任务
+            </Button>
+          ) : undefined
+        }
+        detail={
+          selected ? (
+            <section className="task-detail-pane" aria-label="任务详情">
+              <TaskDetails key={selected} id={selected} />
+            </section>
+          ) : (
+            <EmptyState
+              title="选择一个任务"
+              description="查看它的进度、逐篇结果与失败原因。"
+            />
+          )
+        }
+      />
     </section>
   );
 }
 function formatDate(value: unknown) {
-  const parsed = new Date(String(value));
-  return Number.isNaN(parsed.valueOf())
-    ? String(value ?? "")
-    : parsed.toLocaleString();
+  return localTime(value);
 }
 function detailsText(value: JsonRecord): string {
   for (const name of ["reason", "message", "detail", "code", "kind", "status"])
@@ -271,8 +287,7 @@ function detailsText(value: JsonRecord): string {
 }
 export function TaskDetails({ id }: { id: string }) {
   const api = useApi(),
-    queries = useQueryClient(),
-    shell = useShell();
+    queries = useQueryClient();
   const detail = useQuery({
     queryKey: ["tasks", "detail", id],
     queryFn: async ({ signal }) =>
@@ -443,52 +458,7 @@ export function TaskDetails({ id }: { id: string }) {
             </TechDetails>
           </Card>
         ))}
-      {task.targets.map((target, index) => {
-        const literature = taskLiteratureId(task.job, target);
-        return (
-          <Card key={String(target.target_id ?? index)}>
-            <ListRow
-              title={literature ? "文献处理" : "加工产物"}
-              bibliography={
-                taskStatusLabel[String(target.stage ?? target.status)] ??
-                String(target.stage ?? target.status)
-              }
-              action={
-                literature ? (
-                  <div className="task-actions">
-                    <Button
-                      onPress={() =>
-                        shell.openPaper(literature, "pdf", { task: id })
-                      }
-                    >
-                      打开文献
-                    </Button>
-                    {api.view?.sessions?.some(
-                      (session) => session.article_id === literature,
-                    ) ? (
-                      <Button
-                        onPress={() =>
-                          navigate(
-                            {
-                              view: "web",
-                              article: literature,
-                              literature: null,
-                              task: id,
-                            },
-                            { clearSource: true },
-                          )
-                        }
-                      >
-                        观看 Agent
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : null
-              }
-            />
-          </Card>
-        );
-      })}
+      <TaskRun id={id} />
       {task.partial_results.length ? (
         <Disclosure
           title={`此前尝试的部分结果 ${task.partial_results.length} 项`}
@@ -550,7 +520,7 @@ export function TaskDetails({ id }: { id: string }) {
         <EmptyState title="任务尚未形成逐项结果" />
       ) : null}
       <Disclosure
-        title={`活动记录${task.events_truncated ? "（较早记录已省略）" : ""}`}
+        title={`技术活动记录${task.events_truncated ? "（较早记录已省略）" : ""}`}
       >
         <ol className="task-events">
           {task.events.map((event, index) => (

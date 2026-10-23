@@ -1,3 +1,7 @@
+import { recordOperation } from "../application/operations.js";
+import { activityContext } from "../logging/activity.js";
+import { saveProofread } from "./proofread-save.js";
+import { presentActors } from "../logging/actor-label.js";
 import {
   ContractValidationError,
   parseExtractionAcceptedResult,
@@ -86,6 +90,9 @@ export async function executeExtraction(
 }
 export const MAINTENANCE_OPERATIONS = [
   "snapshots",
+  "snapshot-rename",
+  "folders",
+  "reading-open",
   "archive",
   "tags",
   "archive-references",
@@ -93,6 +100,7 @@ export const MAINTENANCE_OPERATIONS = [
   "document-annotate",
   "document-role",
   "document-publish-proofread",
+  "proofread-save",
   "proofread-build",
   "proofread-decide",
   "proofread-revoke",
@@ -104,13 +112,40 @@ export const MAINTENANCE_OPERATIONS = [
   ...EXTRACTION_OPERATIONS.map((name) => `extraction-${name}` as const),
 ] as const;
 export type MaintenanceOperation = (typeof MAINTENANCE_OPERATIONS)[number];
-export async function executeMaintenance(
+export function executeMaintenance(
+  app: Application,
+  operation: MaintenanceOperation,
+  input: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  if (
+    [
+      "proofread-save",
+      "proofread-decide",
+      "proofread-revoke",
+      "document-role",
+    ].includes(operation) &&
+    input &&
+    typeof input === "object" &&
+    !Array.isArray(input)
+  )
+    input = { ...input, actor: activityContext().actor };
+  return recordOperation(app.database, operation, input, () =>
+    performMaintenance(app, operation, input, signal).then(presentActors),
+  );
+}
+async function performMaintenance(
   app: Application,
   operation: MaintenanceOperation,
   input: unknown,
   signal?: AbortSignal,
 ): Promise<unknown> {
   if (signal?.aborted) throw new ProductOperationError("operation-cancelled");
+  if (operation === "proofread-save") return saveProofread(app, input, signal);
+  if (operation === "folders") return app.folders.manage(input, signal);
+  if (operation === "reading-open") return app.folders.opened(input, signal);
+  if (operation === "snapshot-rename")
+    return app.snapshots.rename(input, signal);
   if (operation === "snapshots") return app.snapshots.create(input, signal);
   if (operation === "archive") {
     const r = operationRecord(input, ["operation", "request"]);

@@ -66,7 +66,6 @@ function document(
       locate: "region",
       source: "parser",
       basis: "text-layer",
-      uncertainty: null,
     });
     parts.push(bytes);
     offset += bytes.length;

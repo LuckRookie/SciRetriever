@@ -16,9 +16,6 @@ export function segmentLocation(segment: Segment) {
     })),
     source: segment.source,
     basis: segment.basis,
-    uncertainty: segment.uncertainty
-      ? { ...segment.uncertainty, page: segment.uncertainty.page + 1 }
-      : null,
     locate: segment.locate,
   };
 }

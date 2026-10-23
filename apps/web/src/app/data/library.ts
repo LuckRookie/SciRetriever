@@ -1,5 +1,6 @@
 import {
   parseLibrarySearchRequest,
+  parseLibraryCounts,
   parseLiteratureSearchItem,
   parseLiteratureDetail,
   type LibraryQuery,
@@ -95,4 +96,14 @@ export async function scopeIds(
     }
   } while (cursor);
   return [...ids];
+}
+
+export async function readLibraryCounts(
+  api: ApiClient,
+  query: LibraryQuery,
+  signal?: AbortSignal,
+) {
+  return parseLibraryCounts(
+    (await api.query("library-counts", { query }, signal)).result,
+  );
 }

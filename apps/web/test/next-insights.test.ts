@@ -57,7 +57,7 @@ it("explains citation scope and keeps a late graph response from replacing stati
     await page.getByRole("tab", { name: "统计", exact: true }).click();
     release();
     await page.unrouteAll({ behavior: "wait" });
-    expect(await page.locator(".insight-charts").count()).toBe(1);
+    expect(await page.locator(".insight-figures").count()).toBe(1);
     expect(
       await page
         .getByRole("tab", { name: "统计", exact: true })
@@ -73,26 +73,35 @@ it("explains citation scope and keeps a late graph response from replacing stati
   }
 }, 60000);
 
-it("offers chart and table views of all four metadata distributions and applies explicit category filters", async () => {
+it("shows one figure per available distribution, switches all figures to tables at once and applies explicit category filters", async () => {
   const w = await nextWorkspace({
     path: "/?view=ins",
-    ready: ".insight-charts",
+    ready: ".insight-figures",
   });
   try {
     const page = w.page;
     await captureFeature(page, "react-insights");
-    for (const title of ["年份分布", "元数据关键词", "期刊", "材料状态"]) {
-      const area = page.locator(".distribution").filter({
-        has: page.getByRole("heading", { name: title, exact: true }),
-      });
-      const bars = await area.locator(".distribution-bar").count();
-      await area.getByRole("tab", { name: "表格", exact: true }).click();
-      const table = area.getByRole("table", { name: title, exact: true });
-      await table.waitFor();
-      expect(await table.locator("tbody tr").count()).toBe(Math.max(1, bars));
-      await area.getByRole("tab", { name: "图表", exact: true }).click();
-      expect(await area.locator(".distribution-bar").count()).toBe(bars);
-    }
+    const figures = page.locator(".insight-figures .ui-figure");
+    const titles = await figures.locator(".ui-figure-title").allTextContents();
+    expect(titles.slice(0, 2)).toEqual(["年份分布", "材料状态"]);
+    expect(await page.getByRole("tab", { name: "表格" }).count()).toBe(0);
+    const note = (await page.locator(".ui-page-note").textContent()) ?? "";
+    expect(note).toContain("不做推断");
+    if (!titles.includes("元数据关键词"))
+      expect(note).toContain("暂无关键词元数据");
+    const years = figures.filter({ hasText: "年份分布" });
+    const columns = await years.locator(".year-column").count();
+    expect(columns).toBeGreaterThan(0);
+    await page.getByRole("button", { name: "以表格查看", exact: true }).click();
+    expect(await figures.getByRole("table").count()).toBe(titles.length);
+    expect(
+      await years
+        .getByRole("table", { name: "年份分布", exact: true })
+        .locator("tbody tr")
+        .count(),
+    ).toBe(columns);
+    await page.getByRole("button", { name: "以图表查看", exact: true }).click();
+    expect(await years.locator(".year-column").count()).toBe(columns);
     await page.setViewportSize({ width: 390, height: 844 });
     expect(
       await page.evaluate(
@@ -100,16 +109,11 @@ it("offers chart and table views of all four metadata distributions and applies 
       ),
     ).toBe(true);
     await page.setViewportSize({ width: 1440, height: 900 });
-    const years = page.locator(".distribution").filter({
-      has: page.getByRole("heading", { name: "年份分布", exact: true }),
-    });
     const year = await years
-      .locator(".distribution-bar")
-      .first()
-      .locator("span")
+      .locator(".year-column:not([data-missing]) .year-column-label")
       .first()
       .textContent();
-    await years.locator(".distribution-bar").first().click();
+    await years.locator(".year-column:not([data-missing])").first().click();
     await expect
       .poll(() => new URL(page.url()).searchParams.get("view"))
       .toBe("lib");

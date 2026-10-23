@@ -116,7 +116,7 @@ export async function parseStoredDraft(
           ...fields,
           block_id,
           basis: "text-layer",
-          uncertainty: null,
+
           edit_refs: [],
         },
       ],
@@ -145,13 +145,13 @@ export async function parseStoredDraft(
   });
   const {
     basis: _basis,
-    uncertainty: _uncertainty,
+
     edit_refs: _edits,
     block_id: id,
     ...content
   } = block;
   void _basis;
-  void _uncertainty;
+
   void _edits;
   const d = { ...content, known_defect, page_text: parts };
   if ((await sha256(canonicalJsonBytes(d))) !== draft_sha256)

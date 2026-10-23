@@ -70,6 +70,56 @@ it("rejects flattened table replacements before changing content or rendering", 
   expect(markdown).toBe(corrected + "\n\n");
   expect(markdown).toContain("a = 2.812(2)");
 });
+it("retains an unreadable image-only table as an empty, traceable block instead of invented HTML", async () => {
+  const { c, blocks } = await setup();
+  const table = {
+    ...blocks[0]!,
+    type: "table" as const,
+    text: "Unverified OCR",
+    html: "<table><tr><td>67%</td></tr></table>",
+  };
+  const edit = {
+    kind: "replace" as const,
+    block_id: table.block_id,
+    text: "",
+    basis_page: 0,
+    reason: "The scanned table remains unreadable after zooming.",
+  };
+  expect(() => applyEdits([table], submission([edit]), c)).toThrow(
+    "proofread-table-format",
+  );
+  const page = {
+    ...c.page,
+    kind: "image-only" as const,
+    text: "",
+    visible_glyphs: 0,
+  };
+  const applied = applyEdits([table], submission([edit]), {
+    ...c,
+    page,
+    pages: [page],
+  });
+  expect(applied.blocks[0]).toMatchObject({
+    block_id: table.block_id,
+    text: "",
+    html: null,
+    basis: "image-only",
+    text_source: "agent",
+  });
+  expect(applied.blocks[0]!.edit_refs).toHaveLength(1);
+  expect(applied.edits[0]!.edit).toEqual(edit);
+  expect(
+    Buffer.from(renderBlocks(applied.blocks, []).markdown).toString().trim(),
+  ).toBe("");
+  expect(() =>
+    applyEdits(
+      [table],
+      submission([edit]),
+      { ...c, page, pages: [page] },
+      new Set([table.block_id]),
+    ),
+  ).toThrow("proofread-manual-locked");
+});
 it("keeps the source table image in the readable document for non-text cells", async () => {
   const { blocks } = await setup();
   const image = {
@@ -94,19 +144,12 @@ it("keeps the source table image in the readable document for non-text cells", a
   expect(rendered.resources).toEqual([image]);
   expect(rendered.ranges[0]!.end_utf8).toBe(Buffer.byteLength(text));
 });
-it("keeps uncertainty when replacement and move are submitted after the annotation", async () => {
+it("keeps source basis and idempotent edit lineage across replacement and move", async () => {
   const { c, blocks } = await setup(),
     id = blocks[0]!.block_id;
   const out = applyEdits(
     blocks,
     submission([
-      {
-        kind: "mark_uncertain",
-        block_id: id,
-        span: [0, 3],
-        basis_page: 0,
-        reason: "Digits are unclear.",
-      },
       {
         kind: "replace",
         block_id: id,
@@ -127,10 +170,9 @@ it("keeps uncertainty when replacement and move are submitted after the annotati
   );
   expect(out.blocks.at(-1)).toMatchObject({
     text: "97? yield.",
-    basis: "uncertain",
-    uncertainty: { span: [0, 3], reason: "Digits are unclear." },
+    basis: "text-layer",
   });
-  expect(out.blocks.at(-1)!.edit_refs).toHaveLength(3);
+  expect(out.blocks.at(-1)!.edit_refs).toHaveLength(2);
   const repeated = applyEdits(
     out.blocks,
     submission([
@@ -144,7 +186,7 @@ it("keeps uncertainty when replacement and move are submitted after the annotati
     ]),
     c,
   );
-  expect(repeated.blocks.at(-1)!.edit_refs).toHaveLength(3);
+  expect(repeated.blocks.at(-1)!.edit_refs).toHaveLength(2);
 });
 it("rejects conflicting edits, deleted anchors, move cycles and changes to locked text atomically", async () => {
   const { c, blocks } = await setup(),
@@ -223,60 +265,52 @@ it("rejects unexplained deletion and unregistered image references at submission
   ).toThrow();
 });
 
-it("keeps uncertainty valid after shortening text and annotates the HTML content of a table", async () => {
+it("rejects retired uncertainty edits and block fields while preserving reasoned dispositions", async () => {
   const { c, blocks } = await setup();
-  const annotated = applyEdits(
-    blocks,
-    submission([
+  expect(() =>
+    parseCorrectionSubmission(
       {
-        kind: "mark_uncertain",
-        block_id: blocks[0]!.block_id,
-        span: [0, 6],
-        basis_page: 0,
-        reason: "Unreadable letters.",
+        edits: [
+          {
+            kind: "mark_uncertain",
+            block_id: blocks[0]!.block_id,
+            span: [0, 1],
+            basis_page: 0,
+            reason: "Unreadable",
+          },
+        ],
+        dispositions: [],
+        no_body_reason: null,
       },
-    ]),
-    c,
-  );
-  const shortened = applyEdits(
-    annotated.blocks,
-    submission([
-      {
-        kind: "replace",
-        block_id: blocks[0]!.block_id,
-        text: "?",
-        basis_page: 0,
-        reason: "Only one symbol remains visible.",
-      },
-    ]),
-    c,
-  );
-  expect(shortened.blocks[0]!.uncertainty?.span).toEqual([0, 1]);
-  const table = {
-    ...blocks[0]!,
-    type: "table" as const,
-    text: "",
-    html: "<table><tr><td>?</td></tr></table>",
-  };
-  const checked = applyEdits(
-    [table],
-    submission([
-      {
-        kind: "mark_uncertain",
-        block_id: table.block_id,
-        span: [15, 16],
-        basis_page: 0,
-        reason: "Unreadable table value.",
-      },
-    ]),
-    c,
-  );
-  expect(
+      c,
+    ),
+  ).toThrow();
+  expect(() =>
     parseProofreadBlocksV1(
-      { schema_version: 1, page_count: 1, blocks: checked.blocks },
+      {
+        schema_version: 1,
+        page_count: 1,
+        blocks: [
+          {
+            ...blocks[0],
+            basis: "uncertain",
+            uncertainty: { span: [0, 1], reason: "Unreadable", page: 0 },
+          },
+        ],
+      },
       [],
-    ).blocks[0]!.basis,
-  ).toBe("uncertain");
+    ),
+  ).toThrow();
+  expect(() =>
+    parseProofreadBlocksV1(
+      {
+        schema_version: 1,
+        page_count: 1,
+        blocks: [{ ...blocks[0], uncertainty: null }],
+      },
+      [],
+    ),
+  ).toThrow();
 });
 
 it("rejects replaying the same insertion into a draft that already contains it", async () => {

@@ -61,7 +61,7 @@ export interface ProcessorPartOutcome {
   readonly literature_id: string;
   readonly asset_id: string | null;
   readonly part: "main" | "supplementary";
-  readonly outcome: "extracted" | "not-reported" | "part-absent" | "incomplete";
+  readonly outcome: "complete" | "incomplete";
   readonly read_segments: readonly string[];
   readonly gaps: readonly string[];
 }
@@ -665,9 +665,7 @@ export async function parseProcessorResult(
       ]);
       if (
         !["main", "supplementary"].includes(String(p.part)) ||
-        !["extracted", "not-reported", "part-absent", "incomplete"].includes(
-          String(p.outcome),
-        )
+        !["complete", "incomplete"].includes(String(p.outcome))
       )
         processorFail();
       return {

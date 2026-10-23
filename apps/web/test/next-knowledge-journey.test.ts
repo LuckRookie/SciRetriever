@@ -9,6 +9,8 @@ import {
   motionOptions,
   nextAssets,
   nextWorkspace,
+  readerOperation,
+  runSummaryFromReader,
 } from "./next-workspace-fixture.js";
 import { chromium } from "playwright";
 import { expect, it } from "vitest";
@@ -83,8 +85,23 @@ it("keeps parsing separate from document publication and reads existing verified
     const download = page.waitForEvent("download");
     await page.getByRole("menuitem", { name: "下载已核验的原始 PDF" }).click();
     expect((await download).suggestedFilename()).toMatch(/\.pdf$/u);
-    await page.getByRole("button", { name: "加入提取", exact: true }).click();
-    await page.getByRole("tab", { name: "规范与外部交付" }).click();
+    // Choose this paper in the library, then hand its fixed scope to external delivery.
+    await page
+      .getByRole("button", { name: /^文献库/ })
+      .first()
+      .click();
+    await page
+      .getByRole("checkbox", {
+        name: "选择 Synthetic literature workbench",
+        exact: true,
+      })
+      .focus();
+    await page.keyboard.press("Space");
+    await page
+      .getByLabel("主导航")
+      .getByRole("button", { name: "算子", exact: true })
+      .click();
+    await page.getByRole("tab", { name: "算子与规范" }).click();
     await page
       .getByRole("button", { name: "使用库中选定范围", exact: true })
       .click();
@@ -109,7 +126,7 @@ it("keeps parsing separate from document publication and reads existing verified
         exact: true,
       })
       .click();
-    await page.getByRole("button", { name: "解析", exact: true }).click();
+    await readerOperation(page, "解析 PDF");
     expect(env.parseCalls).toBe(0);
     await page.getByRole("button", { name: "确认启动", exact: true }).click();
     await expect
@@ -152,7 +169,11 @@ it("keeps parsing separate from document publication and reads existing verified
     ).toEqual(["vlm-engine"]);
     await page.getByRole("button", { name: "查看任务", exact: true }).click();
     await expect
-      .poll(() => page.getByRole("dialog").textContent())
+      .poll(() =>
+        page
+          .getByRole("region", { name: "任务详情", exact: true })
+          .textContent(),
+      )
       .toContain("各模式的解析结果");
     expect(
       await page
@@ -173,13 +194,16 @@ it("keeps parsing separate from document publication and reads existing verified
       "A synthetic finding.",
     );
     expect(env.parseCalls).toBe(3);
-    await page.getByRole("button", { name: "加入综合", exact: true }).click();
+    await page
+      .getByLabel("主导航")
+      .getByRole("button", { name: "快照", exact: true })
+      .click();
     await page
       .getByRole("button", { name: "从当前筛选生成快照", exact: true })
       .click();
     await page
-      .getByRole("textbox", { name: "综合问题" })
-      .fill("Compare the synthetic finding");
+      .getByRole("button", { name: "运行算子…", exact: true })
+      .waitFor();
     await expect
       .poll(
         async () =>
@@ -199,11 +223,10 @@ it("keeps parsing separate from document publication and reads existing verified
         exact: true,
       })
       .click();
-    await page.getByRole("button", { name: "分析", exact: true }).click();
-    await page.getByRole("button", { name: "确认启动", exact: true }).click();
+    await runSummaryFromReader(page);
     await expect
       .poll(() => page.getByRole("dialog").textContent())
-      .toContain("总结任务已提交");
+      .toContain("任务已保存并启动");
     await page.getByRole("button", { name: "查看任务", exact: true }).click();
     await page
       .getByRole("button", { name: "查看本次结果", exact: true })
@@ -243,7 +266,7 @@ it("keeps parsing separate from document publication and reads existing verified
         ],
       };
     });
-    await page.getByRole("button", { name: "核验身份", exact: true }).click();
+    await readerOperation(page, "核验文章身份");
     await page.getByRole("button", { name: "确认启动", exact: true }).click();
     await expect
       .poll(() => page.getByRole("dialog").textContent())
@@ -260,8 +283,9 @@ it("keeps parsing separate from document publication and reads existing verified
     await page.reload();
     await expect
       .poll(() => page.locator(".reader-information").textContent())
-      .toContain("文章身份有证据支持");
-    await page.getByRole("tab", { name: "总结", exact: true }).click();
+      .toContain("有证据支持");
+    await page.getByRole("tab", { name: "结果", exact: true }).click();
+    await page.getByRole("button", { name: "阅读总结", exact: true }).click();
     await expect
       .poll(() => page.locator(".reader-summary-scroll").textContent())
       .toContain("A synthetic finding.");
@@ -284,18 +308,15 @@ it.each([true, false])(
       const id = w.env.parseRequest.literature_id;
       w.env.setText("# Revised fixture\nThe NEWLY PARSED text is different.\n");
       await w.page.goto(`${w.origin}/?literature=${id}&reader=doc`);
-      await w.page
-        .getByRole("button", {
-          name: analysisModel ? "解析" : "分析",
-          exact: true,
-        })
-        .click();
-      await w.page
-        .getByRole("button", { name: "确认启动", exact: true })
-        .click();
+      if (analysisModel) {
+        await readerOperation(w.page, "解析 PDF");
+        await w.page
+          .getByRole("button", { name: "确认启动", exact: true })
+          .click();
+      } else await runSummaryFromReader(w.page);
       await expect
         .poll(() => w.page.getByRole("dialog").textContent())
-        .toContain(analysisModel ? "已提交 1 项" : "总结任务已提交");
+        .toContain(analysisModel ? "已提交 1 项" : "任务已保存并启动");
       const job = (await w.env.app.jobs!.listJobs(10))[0]!;
       await expect
         .poll(
@@ -316,7 +337,11 @@ it.each([true, false])(
           w.parsed.document.document_version_id,
         );
         await expect
-          .poll(() => w.page.getByRole("dialog").textContent())
+          .poll(() =>
+            w.page
+              .getByRole("region", { name: "任务详情", exact: true })
+              .textContent(),
+          )
           .toContain("各模式的解析结果");
         expect(
           await w.page
@@ -337,15 +362,21 @@ it.each([true, false])(
         expect(w.env.parseCalls).toBe(w.setupCalls.parser);
       } else {
         await expect
-          .poll(() => w.page.getByRole("dialog").textContent())
+          .poll(() =>
+            w.page
+              .getByRole("region", { name: "任务详情", exact: true })
+              .textContent(),
+          )
           .toContain("保存并重启");
         await w.page
           .getByRole("button", { name: "技术详情", exact: true })
           .first()
           .click();
-        expect(await w.page.getByRole("dialog").textContent()).toContain(
-          "agent-configuration",
-        );
+        expect(
+          await w.page
+            .getByRole("region", { name: "任务详情", exact: true })
+            .textContent(),
+        ).toContain("agent-configuration");
         await w.page
           .getByRole("button", { name: "前往模型设置", exact: true })
           .click();

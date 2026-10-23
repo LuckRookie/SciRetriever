@@ -1,3 +1,6 @@
+import { processingJobId } from "../src/application/jobs/processing.js";
+import { createQueryApplication } from "../src/bootstrap/application.js";
+import { executeQuery } from "../src/entry/query-operations.js";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { parseLiterature } from "@sciretriever/contracts";
@@ -121,6 +124,66 @@ it("runs persistent DSH summaries as reusable maps, then synthesizes only their 
   const b = await run(two.snapshot_id, "two-papers");
   expect(summaries).toBe(2);
   expect(reductions).toBe(2);
+  const query = await createQueryApplication(e.home);
+  try {
+    const job_id = await processingJobId("two-papers");
+    const overall = (await executeQuery(query, "task-run", { job_id })) as {
+      items: {
+        target_id: string;
+        literature_count: number;
+        mapped_members: unknown[];
+      }[];
+    };
+    expect(overall.items[0]!.literature_count).toBe(2);
+    expect(overall.items[0]!.mapped_members).toEqual([]);
+    const target_id = overall.items[0]!.target_id;
+    const first = (await executeQuery(query, "task-run", {
+      job_id,
+      target_id,
+      member_offset: 0,
+      member_limit: 1,
+    })) as {
+      items: {
+        mapped_members: {
+          literature_id: string;
+          status: string;
+          result: { result_id: string };
+        }[];
+        next_member_offset: number | null;
+      }[];
+    };
+    expect(first.items[0]!.mapped_members).toHaveLength(1);
+    expect(first.items[0]!.next_member_offset).toBe(1);
+    const second = (await executeQuery(query, "task-run", {
+      job_id,
+      target_id,
+      member_offset: 1,
+      member_limit: 1,
+    })) as typeof first;
+    expect(second.items[0]!.mapped_members).toHaveLength(1);
+    expect(second.items[0]!.next_member_offset).toBeNull();
+    const papers = [
+      ...first.items[0]!.mapped_members,
+      ...second.items[0]!.mapped_members,
+    ];
+    expect(papers.map((p) => p.literature_id).sort()).toEqual(
+      [id, secondId].sort(),
+    );
+    expect(papers.map((p) => p.status).sort()).toEqual(["computed", "reused"]);
+    expect(papers.every((p) => p.result.result_id)).toBe(true);
+    await expect(
+      executeQuery(query, "task-run", { job_id, target_id, member_limit: 0 }),
+    ).rejects.toThrow();
+    expect(
+      await executeQuery(query, "task-run", {
+        job_id,
+        target_id: "not-this-job",
+        member_limit: 1,
+      }),
+    ).toMatchObject({ items: [] });
+  } finally {
+    await query.close();
+  }
   const content = b!.result.content;
   if (content.kind !== "report") throw new Error("report required");
   expect(content.claims[0]!.sources.every((c) => c.kind === "result")).toBe(

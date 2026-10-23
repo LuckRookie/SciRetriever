@@ -239,6 +239,94 @@ export const BROWSER_MAINTENANCE_TOOLS: readonly Tool[] = [
 ];
 export const QUERY_TOOLS: readonly Tool[] = [
   tool(
+    "processor_runs",
+    "List bounded processor runs with actor, source selection, four part-outcome counts and staleness. Filters are conjunctive.",
+    object(
+      {
+        processor_id: text,
+        snapshot_id: id,
+        literature_id: id,
+        literature_query: text,
+        stale: { type: "boolean" },
+        offset: epoch,
+        limit: { type: "integer", minimum: 1, maximum: 200 },
+      },
+      [],
+    ),
+  ),
+  tool(
+    "literature_results",
+    "List all single- and multi-paper processor results involving a literature, with immutable result identity and staleness.",
+    object(
+      {
+        literature_id: id,
+        offset: epoch,
+        limit: { type: "integer", minimum: 1, maximum: 200 },
+      },
+      ["literature_id"],
+    ),
+  ),
+  tool(
+    "usage_estimate",
+    "Read historical median–P90 token estimates without models or writes. kind=processor with a ProcessorBatchRequest, archive with {selector:SnapshotDefinition}, or tags with {operation:backfill|consolidate,tag_ids?}. No history returns unknown; no cost or hard budget is imposed.",
+    object(
+      {
+        kind: {
+          type: "string",
+          enum: [
+            "processor",
+            "archive",
+            "tags",
+            "synthesis",
+            "archive-issues",
+            "processing",
+          ],
+        },
+        request: { type: "object" },
+      },
+      ["kind", "request"],
+    ),
+  ),
+  tool(
+    "task_run",
+    "Read a paginated human/agent task projection: fixed run steps, literature titles, actor, usage and result/session links; no model calls.",
+    object(
+      {
+        job_id: text,
+        target_id: text,
+        member_offset: epoch,
+        member_limit: { type: "integer", minimum: 1, maximum: 50 },
+        offset: epoch,
+        limit: { type: "integer", minimum: 1, maximum: 200 },
+      },
+      ["job_id"],
+    ),
+  ),
+  tool(
+    "agent_sessions",
+    "Read DSH session list, bounded tool history, or revision. Ended histories expire after seven days; viewing never controls agents. operation=list|read|revision, request uses session_id/after/limit for read, job_id/literature_id/status/before/limit for list.",
+    object(
+      {
+        operation: { type: "string", enum: ["list", "read", "revision"] },
+        request: { type: "object" },
+      },
+      ["operation", "request"],
+    ),
+  ),
+  tool(
+    "operation_history",
+    "Read bounded operation history with authenticated session or machine-entry attribution. No writes or models.",
+    object(
+      {
+        actor: text,
+        operation: text,
+        after: epoch,
+        limit: { type: "integer", minimum: 1, maximum: 200 },
+      },
+      [],
+    ),
+  ),
+  tool(
     "snapshots_query",
     "Read frozen archive snapshots (read {snapshot_id,offset,limit,max_bytes}; list {after:null|snapshot_id,limit}; diff {before,after}). Read pages are bounded; follow next_offset. Differences separate membership, content versions and descriptions. No models or implicit recomputation.",
     object({
@@ -292,6 +380,24 @@ export const QUERY_TOOLS: readonly Tool[] = [
     }),
   ),
   tool(
+    "reading_status",
+    "Read corrected block source counts, page text-layer coverage and last manual edit for one asset. Rule-normalized blocks count as parser. No writes or models.",
+    object({ asset_id: id }),
+  ),
+  tool(
+    "proofread_text",
+    "Read immutable corrected Markdown in UTF-8 chunks for editing. Bind subsequent reads and save to the returned proofread_id; no models or writes.",
+    object(
+      {
+        asset_id: id,
+        proofread_id: nullable(id),
+        start: epoch,
+        max_bytes: { type: "integer", minimum: 1024, maximum: 262144 },
+      },
+      ["asset_id"],
+    ),
+  ),
+  tool(
     "proofread_page",
     "Read an original PDF page or region as bounded PNG base64 without model calls or catalog writes. Pages are zero-based.",
     object(
@@ -310,7 +416,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "proofread_inspect",
-    "Read bounded single-source drafts, corrections, unresolved questions, uncertainty and manual locks. No parsing or model calls.",
+    "Read bounded single-source drafts, corrections, unresolved questions and manual locks. No parsing or model calls.",
     object(
       {
         asset_id: id,
@@ -378,6 +484,19 @@ export const QUERY_TOOLS: readonly Tool[] = [
     object({}),
   ),
   tool(
+    "folders_query",
+    "Read folder tree and distinct direct/descendant counts, or preview deletion. operation list request {}; delete-preview request {folder_id}. Does not write.",
+    object({
+      operation: { enum: ["list", "delete-preview"] },
+      request: { type: "object" },
+    }),
+  ),
+  tool(
+    "library_counts",
+    "Count library quick filters, ignoring statuses and needs_manual_pdf but preserving all other LibraryQuery facets. No writes.",
+    object({ query: { type: "object" } }),
+  ),
+  tool(
     "search_library",
     "Search existing literature with full LibraryQuery filters, sorting and pagination. A miss never starts discovery or PDF acquisition. The legacy text/limit/cursor form remains supported.",
     {
@@ -400,6 +519,8 @@ export const QUERY_TOOLS: readonly Tool[] = [
             sort: {
               enum: [
                 "relevance",
+                "intake-desc",
+                "opened-desc",
                 "publication-year-desc",
                 "publication-year-asc",
                 "title-asc",
@@ -526,10 +647,51 @@ export const QUERY_TOOLS: readonly Tool[] = [
 ];
 export const MAINTENANCE_TOOLS: readonly Tool[] = [
   tool(
+    "proofread_save",
+    "Save complete corrected Markdown with optimistic concurrency, preserve unchanged blocks, lock edits and rebuild document/structure/references without models. Optional page_starts_utf8 binds edited text to PDF pages. Inspect rebuild status; a later rebuild failure does not undo a saved edit.",
+    object(
+      {
+        literature_id: id,
+        asset_id: id,
+        proofread_id: id,
+        markdown: text,
+        actor: text,
+        page_starts_utf8: { type: "array", items: epoch },
+      },
+      ["literature_id", "asset_id", "proofread_id", "markdown"],
+    ),
+    false,
+  ),
+
+  tool(
+    "folders_manage",
+    "Explicit folder create, rename, move, delete, add or remove. Deleting a subtree only removes membership, never papers. Member batches allow at most 1000 IDs. See FolderOperation contract.",
+    object({
+      operation: {
+        enum: ["create", "rename", "move", "delete", "add", "remove"],
+      },
+      request: { type: "object" },
+    }),
+    false,
+  ),
+  tool(
+    "reading_open",
+    "Explicitly record opening a paper for shared recent reading history. Queries themselves never update history.",
+    object({ literature_id: id }),
+    false,
+  ),
+  tool(
+    "snapshot_rename",
+    "Set a snapshot display name independently of its immutable content. Empty or null name restores the generated label.",
+    object({ snapshot_id: id, name: nullable(text) }),
+    false,
+  ),
+  tool(
     "snapshot_create",
     "Freeze READY literature IDs with their corrected part versions and descriptions. Supply {kind:'literatures',literature_ids} or {kind:'query',query:LibraryQuery}. Reports non-ready exclusions, never builds or analyzes them.",
     object(
       {
+        name: nullable(text),
         kind: { enum: ["literatures", "query"] },
         literature_ids: { type: "array", items: id },
         query: { type: "object" },
@@ -590,13 +752,17 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   tool(
     "document_role",
     "Set a section role lock, or revoke it with role=null. Atomically publishes a new annotation and retains the prior version and audit history. Supply the current manual revision.",
-    object({
-      document_version_id: id,
-      section_id: id,
-      role: nullable(text),
-      expected_manual_revision: epoch,
-      actor: text,
-    }),
+    object(
+      {
+        document_version_id: id,
+        section_id: id,
+        role: nullable(text),
+        expected_manual_revision: epoch,
+        actor: text,
+      },
+      ["document_version_id", "section_id", "role", "expected_manual_revision"],
+    ),
+    false,
   ),
 
   tool(
@@ -617,32 +783,52 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   tool(
     "proofread_decide",
     "Explicit human correction of a fixed draft block. Locks the decision; use inspect to copy the current revision and hash, then explicitly build again.",
-    object({
-      asset_id: id,
-      proofread_id: id,
-      block_id: id,
-      draft_sha256: hash,
-      expected_manual_revision: epoch,
-      action: {
-        enum: ["replace", "resolve-suspect", "clear-uncertainty", "no-body"],
+    object(
+      {
+        asset_id: id,
+        proofread_id: id,
+        block_id: id,
+        draft_sha256: hash,
+        expected_manual_revision: epoch,
+        action: {
+          enum: ["replace", "resolve-suspect", "no-body"],
+        },
+        reason: text,
+        suspect_id: nullable(id),
+        disposition: { anyOf: [{ type: "object" }, { type: "null" }] },
+        text: nullable(text),
+        actor: text,
+        page: nullable(epoch),
       },
-      reason: text,
-      suspect_id: nullable(id),
-      disposition: { anyOf: [{ type: "object" }, { type: "null" }] },
-      text: nullable(text),
-      actor: text,
-      page: nullable(epoch),
-    }),
+      [
+        "asset_id",
+        "proofread_id",
+        "block_id",
+        "draft_sha256",
+        "expected_manual_revision",
+        "action",
+        "reason",
+        "suspect_id",
+        "disposition",
+        "text",
+        "page",
+      ],
+    ),
+    false,
   ),
   tool(
     "proofread_revoke",
     "Explicitly revoke an active human correction using its fixed decision ID and current manual revision. Retains the audit record.",
-    object({
-      asset_id: id,
-      decision_id: id,
-      expected_manual_revision: epoch,
-      actor: text,
-    }),
+    object(
+      {
+        asset_id: id,
+        decision_id: id,
+        expected_manual_revision: epoch,
+        actor: text,
+      },
+      ["asset_id", "decision_id", "expected_manual_revision"],
+    ),
+    false,
   ),
   tool(
     "submit_processor",

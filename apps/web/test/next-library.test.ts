@@ -1,4 +1,7 @@
-import { showAllLibraryStatuses } from "./next-workspace-fixture.js";
+import {
+  openSavedViews,
+  showAllLibraryStatuses,
+} from "./next-workspace-fixture.js";
 import { expect, it } from "vitest";
 import { canonicalJsonBytes } from "@sciretriever/contracts";
 import { DatabaseSync } from "node:sqlite";
@@ -85,17 +88,17 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
     expect(await p.locator(".library-list-heading").textContent()).toContain(
       "30,002",
     );
-    const action = p.getByRole("button", {
-      name: "用这些文献做…",
-      exact: true,
-    });
-    expect(await action.isDisabled()).toBe(true);
-    await action.hover();
-    const explanation = p.locator(
-      `[id="${await action.getAttribute("aria-describedby")}"]`,
+    // Over the 1,000-paper limit, running and exporting explain the limit instead of acting.
+    await p.getByRole("button", { name: "用当前结果", exact: true }).click();
+    expect(await p.getByRole("menu").textContent()).toContain(
+      "超过 1,000 篇上限",
     );
-    await explanation.waitFor();
-    expect(await explanation.textContent()).toContain("超过 1,000 篇上限");
+    expect(
+      await p
+        .getByRole("menuitem", { name: "运行算子…", exact: true })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+    await p.keyboard.press("Escape");
     await p.mouse.move(0, 0);
     expect(await p.locator(".paper-row").count()).toBeLessThan(30);
     const requests: string[] = [];
@@ -105,7 +108,8 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
     // Observe a full set of SSE heartbeats without any catalog mutation.
     await p.waitForTimeout(1700);
     expect(requests).toHaveLength(0);
-    const list = p.getByLabel("文献列表", { exact: true });
+    // The library scrolls with the page; the shared main container owns scrollTop.
+    const list = p.locator(".workspace-content");
     for (let i = 0; i < 3; i++) {
       await list.evaluate(async (el) => {
         await new Promise(requestAnimationFrame);
@@ -119,7 +123,9 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
         .toContain(`${100 + 50 * i} /`);
     }
     await list.evaluate((el) => {
-      el.scrollTop = 4500;
+      // Follow the rendered row height so the target stays inside the window.
+      const row = el.querySelector(".paper-row")!.getBoundingClientRect();
+      el.scrollTop = 40 * row.height;
     });
     // Await the requested scroll range, not an arbitrary row from the previous
     // range that is about to be recycled by the virtualizer.
@@ -246,12 +252,17 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
     if (process.env.SCIRETRIEVER_WEB_PERFORMANCE === "1")
       expect(timings.max).toBeLessThanOrEqual(50);
     expect(await p.locator(".paper-row").count()).toBeLessThan(30);
-    await p.getByRole("button", { name: "保存当前筛选", exact: true }).click();
+    await (await openSavedViews(p))
+      .getByRole("menuitem", { name: "保存当前筛选…", exact: true })
+      .click();
     const dialog = p.getByRole("dialog", { name: "保存筛选" });
     await dialog.getByRole("textbox", { name: "筛选名称" }).fill("My library");
     await dialog.getByRole("button", { name: "保存", exact: true }).click();
     await p.reload();
-    await p.getByRole("button", { name: "My library", exact: true }).waitFor();
+    await (await openSavedViews(p))
+      .getByRole("menuitem", { name: "My library", exact: true })
+      .waitFor();
+    await p.keyboard.press("Escape");
     await p.getByRole("searchbox", { name: "搜索文献" }).fill("Paper 00001");
     await expect
       .poll(() => p.locator(".library-list-heading").textContent())

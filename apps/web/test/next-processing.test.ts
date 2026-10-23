@@ -4,14 +4,50 @@ import { readFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import type { Page } from "playwright";
 import { unzipSync, strFromU8 } from "fflate";
-import { nextWorkspace } from "./next-workspace-fixture.js";
+import { nextWorkspace, runFromSnapshot } from "./next-workspace-fixture.js";
 import { assertMachineReadsWebResult } from "../../server/test/processor-machine-read-fixture.js";
 type Workspace = Awaited<ReturnType<typeof nextWorkspace>>;
 async function select(page: Page, label: string, option: string) {
-  await page.getByRole("button", { name: new RegExp(label) }).click();
+  await page
+    .getByRole("button", { name: new RegExp(label) })
+    .and(page.locator('[aria-haspopup="listbox"]'))
+    .click();
   await page.getByRole("option", { name: option, exact: true }).click();
 }
-async function enterSelected(w: Workspace, missing = false) {
+const runner = (page: Page) =>
+  page.getByRole("dialog", { name: "运行算子", exact: true });
+async function next(page: Page) {
+  await runner(page)
+    .getByRole("button", { name: "下一步", exact: true })
+    .click();
+}
+async function nextReady(page: Page) {
+  await expect
+    .poll(() =>
+      runner(page)
+        .getByRole("button", { name: "下一步", exact: true })
+        .isEnabled(),
+    )
+    .toBe(true);
+}
+async function chooseOperator(page: Page, name: string) {
+  await runner(page).getByText(name, { exact: true }).click();
+}
+/** Open the dialog from the operator page header and stop at the operator step. */
+async function openFromPage(page: Page) {
+  await page
+    .getByRole("main")
+    .getByRole("button", { name: "运行算子", exact: true })
+    .click();
+  await nextReady(page);
+  await next(page);
+}
+/** Select a paper, open the dialog from the selection bar and reach the specification step. */
+async function enterSelected(
+  w: Workspace,
+  missing = false,
+  operator = "记录提取",
+) {
   if (missing) await showAllLibraryStatuses(w.page);
   const paper = missing
     ? "Unparsed source"
@@ -21,25 +57,50 @@ async function enterSelected(w: Workspace, missing = false) {
     .getByRole("checkbox", { name: `选择 ${paper}`, exact: true })
     .focus();
   await w.page.keyboard.press("Space");
-  await w.page.getByRole("button", { name: "提取", exact: true }).click();
-  await expect
-    .poll(() =>
-      w.page.getByRole("button", { name: "开始提取", exact: true }).isEnabled(),
-    )
-    .toBe(true);
+  await w.page
+    .getByRole("region", { name: "文献选择", exact: true })
+    .getByRole("button", { name: "运行算子…", exact: true })
+    .click();
+  await nextReady(w.page);
+  await chooseOperator(w.page, operator);
+  await next(w.page);
 }
+/** Switch the open dialog to question labels and fill the question. */
 async function labels(page: Page) {
-  await page.getByRole("tab", { name: "问答标注", exact: true }).click();
+  if (!(await runner(page).count())) await openFromPage(page);
+  else
+    await runner(page)
+      .getByRole("button", { name: "上一步", exact: true })
+      .click();
+  await chooseOperator(page, "问答标注");
+  await next(page);
   await page
     .getByRole("textbox", { name: "对每篇文献问一个问题" })
     .fill("Does the source report a measurement?");
 }
-async function submit(page: Page, name = "开始提取") {
-  await page.getByRole("button", { name, exact: true }).click();
-  await page
-    .getByRole("dialog", { name: "确认处理文献" })
-    .getByRole("button", { name: "确认并创建处理任务", exact: true })
+/** Confirm the specification and start; the final press is the only model trigger. */
+async function submit(page: Page) {
+  await next(page);
+  await runner(page)
+    .getByRole("button", { name: "开始运行", exact: true })
     .click();
+}
+/** Leave and come back: the dialog reopens on the retained draft. */
+async function reopen(page: Page) {
+  if (await runner(page).count())
+    await runner(page)
+      .getByRole("button", { name: "关闭对话框", exact: true })
+      .click();
+  await page
+    .getByRole("button", { name: /^文献库/ })
+    .first()
+    .click();
+  await page
+    .getByLabel("主导航")
+    .getByRole("button", { name: "算子", exact: true })
+    .click();
+  await openFromPage(page);
+  await next(page);
 }
 async function completed(w: Workspace) {
   await expect
@@ -97,18 +158,13 @@ it("validates human records, fixes source inputs, verifies numeric and missing v
   try {
     await enterSelected(w);
     expect(w.env.modelCalls).toBe(0);
-    await w.page.getByRole("button", { name: "开始提取", exact: true }).click();
+    await next(w.page);
     expect(
       await w.page
         .getByRole("textbox", { name: "每条记录代表什么" })
         .getAttribute("aria-invalid"),
     ).toBe("true");
     expect(w.submissions).toHaveLength(0);
-    await w.page
-      .getByRole("button", { name: /^文献库/ })
-      .first()
-      .click();
-    await w.page.getByRole("button", { name: "提取", exact: true }).click();
     await w.page
       .getByRole("textbox", { name: "每条记录代表什么" })
       .fill("Each reported measurement");
@@ -125,7 +181,7 @@ it("validates human records, fixes source inputs, verifies numeric and missing v
     await w.page
       .getByRole("textbox", { name: "字段 2 说明" })
       .fill("Unreported qualifier");
-    await w.page.getByRole("button", { name: "开始提取", exact: true }).click();
+    await next(w.page);
     expect(await w.page.getByRole("alert").last().textContent()).toContain(
       "不能重复",
     );
@@ -194,7 +250,7 @@ it("validates human records, fixes source inputs, verifies numeric and missing v
 it("submits enum labels on an explicit search scope and retains unparsed material as a gap", async () => {
   const w = await nextWorkspace({
     path: "/?view=ext&query=%7B%7D",
-    ready: "form.processor-form",
+    ready: ".processing-page",
   });
   try {
     await labels(w.page);
@@ -202,9 +258,7 @@ it("submits enum labels on an explicit search scope and retains unparsed materia
     await w.page
       .getByRole("textbox", { name: "可选答案" })
       .fill("reported\nreported");
-    await w.page
-      .getByRole("button", { name: "生成问答标注", exact: true })
-      .click();
+    await next(w.page);
     expect(w.submissions).toHaveLength(0);
     expect(
       await w.page
@@ -216,9 +270,7 @@ it("submits enum labels on an explicit search scope and retains unparsed materia
       .fill("reported\nunreported");
     await w.page.getByRole("radio", { name: "仅与关键词匹配的片段" }).focus();
     await w.page.keyboard.press("Space");
-    await w.page
-      .getByRole("button", { name: "生成问答标注", exact: true })
-      .click();
+    await next(w.page);
     expect(await w.page.getByRole("alert").last().textContent()).toContain(
       "关键词",
     );
@@ -228,7 +280,7 @@ it("submits enum labels on an explicit search scope and retains unparsed materia
       source_ids: [input.segments![0]!.segment_id],
       reason: null,
     }));
-    await submit(w.page, "生成问答标注");
+    await submit(w.page);
     const collection = await completed(w);
     expect(w.submissions[0]!.inputs).toHaveLength(2);
     expect(collection.members).toHaveLength(2);
@@ -283,25 +335,12 @@ it("retains drafts and idempotent requests after a lost save receipt and a faile
       },
       { times: 1 },
     );
-    await submit(w.page, "生成问答标注");
+    await submit(w.page);
     await expect
-      .poll(() =>
-        w.page
-          .getByRole("dialog", { name: "确认处理文献" })
-          .getByRole("alert")
-          .textContent(),
-      )
+      .poll(() => runner(w.page).getByRole("alert").first().textContent())
       .toContain("草稿已保留");
     expect(await w.env.app.jobs!.listJobs(10)).toHaveLength(1);
-    await w.page
-      .getByRole("dialog")
-      .getByRole("button", { name: "关闭对话框", exact: true })
-      .click();
-    await w.page
-      .getByRole("button", { name: /^文献库/ })
-      .first()
-      .click();
-    await w.page.getByRole("button", { name: "提取", exact: true }).click();
+    await reopen(w.page);
     expect(
       await w.page
         .getByRole("textbox", { name: "对每篇文献问一个问题" })
@@ -313,13 +352,9 @@ it("retains drafts and idempotent requests after a lost save receipt and a faile
         route.fulfill({ status: 503, json: { code: "test-start-failure" } }),
       { times: 1 },
     );
-    await submit(w.page, "生成问答标注");
+    await submit(w.page);
     await expect
-      .poll(() =>
-        w.page
-          .getByRole("complementary", { name: "处理范围与提交" })
-          .textContent(),
-      )
+      .poll(() => runner(w.page).textContent())
       .toContain("启动状态未确认");
     expect(w.submissions).toHaveLength(2);
     expect(w.submissions[1]).toEqual(w.submissions[0]);
@@ -328,7 +363,8 @@ it("retains drafts and idempotent requests after a lost save receipt and a faile
       "queued",
     );
     expect(w.env.modelCalls).toBe(0);
-    await submit(w.page, "生成问答标注");
+    await reopen(w.page);
+    await submit(w.page);
     await completed(w);
     expect(w.submissions).toHaveLength(2);
     expect(await w.env.app.jobs!.listJobs(10)).toHaveLength(1);
@@ -346,7 +382,7 @@ it("preserves a valid form and reports a durable model configuration failure wit
   try {
     await enterSelected(w);
     await labels(w.page);
-    await submit(w.page, "生成问答标注");
+    await submit(w.page);
     await expect
       .poll(async () => (await w.env.app.jobs!.listJobs(10)).length)
       .toBe(1);
@@ -364,7 +400,7 @@ it("preserves a valid form and reports a durable model configuration failure wit
         failure: expect.objectContaining({ code: "agent-configuration" }),
       }),
     );
-    await w.page.keyboard.press("Escape");
+    await reopen(w.page);
     expect(
       await w.page
         .getByRole("textbox", { name: "对每篇文献问一个问题" })
@@ -555,14 +591,18 @@ it("keeps cross-page selections and fixed evidence while exporting every origina
     await w.page
       .getByRole("button", { name: "选择来源文献", exact: true })
       .click();
-    await w.page.getByRole("button", { name: "综合", exact: true }).click();
+    await w.page
+      .getByLabel("主导航")
+      .getByRole("button", { name: "快照", exact: true })
+      .click();
     await w.page
       .getByRole("button", { name: "从当前筛选生成快照", exact: true })
       .click();
-    await w.page
-      .getByRole("textbox", { name: "综合问题", exact: true })
-      .fill("Compare chosen measurements");
-    await w.page.getByRole("button", { name: "确认启动", exact: true }).click();
+    await runFromSnapshot(w.page, "多篇综合", (dialog) =>
+      dialog
+        .getByRole("textbox", { name: "综合问题", exact: true })
+        .fill("Compare chosen measurements"),
+    );
     await expect.poll(() => candidateCount, { timeout: 10000 }).toBe(1);
     const snapshot = (
       await w.env.app.snapshots.list({ after: null, limit: 10 })
@@ -610,7 +650,7 @@ it("cancels an explicit processor task and refuses its late model response", asy
     });
     await enterSelected(w);
     await labels(w.page);
-    await submit(w.page, "生成问答标注");
+    await submit(w.page);
     await expect.poll(() => w.env.modelCalls).toBe(1);
     const job = (await w.env.app.jobs!.listJobs(10))[0]!;
     await w.page.getByRole("button", { name: "查看任务", exact: true }).click();
@@ -636,23 +676,23 @@ it("cancels an explicit processor task and refuses its late model response", asy
     await w.close();
   }
 }, 60000);
-it("retains the synthesis question and policy when creating another frozen snapshot", async () => {
+it("freezes another snapshot from the same definition and submits the synthesis question and policy from the dialog", async () => {
   const w = await nextWorkspace();
   try {
-    await w.page.getByRole("button", { name: "综合", exact: true }).click();
+    await w.page
+      .getByLabel("主导航")
+      .getByRole("button", { name: "快照", exact: true })
+      .click();
     await w.page
       .getByRole("button", { name: "从当前筛选生成快照", exact: true })
       .click();
-    const question = w.page.getByRole("textbox", {
-      name: "综合问题",
-      exact: true,
-    });
-    await question.fill("Which evidence agrees?");
-    await select(w.page, "覆盖要求", "带缺口综合");
+    await w.page.getByRole("button", { name: "重命名", exact: true }).waitFor();
     const first = (await w.env.app.snapshots.list({ after: null, limit: 10 }))
       .items[0]!;
+    // Inside a snapshot, another one is frozen from the same definition
+    // without leaving the open snapshot.
     await w.page
-      .getByRole("button", { name: "从当前筛选生成快照", exact: true })
+      .getByRole("button", { name: "按原条件生成新快照", exact: true })
       .click();
     await expect
       .poll(
@@ -661,19 +701,20 @@ it("retains the synthesis question and policy when creating another frozen snaps
             .length,
       )
       .toBe(2);
-    expect(await question.inputValue()).toBe("Which evidence agrees?");
-    expect(
-      await w.page.getByRole("button", { name: "覆盖要求" }).textContent(),
-    ).toContain("带缺口综合");
-    expect(
-      await w.env.app.snapshots.read({
-        snapshot_id: first.snapshot_id,
-        offset: 0,
-        limit: 50,
-        max_bytes: 262144,
-      }),
-    ).toMatchObject({ member_count: 1 });
-    expect(w.env.modelCalls).toBe(0);
+    expect(new URL(w.page.url()).searchParams.get("snapshot")).toBe(
+      first.snapshot_id,
+    );
+    await runFromSnapshot(w.page, "多篇综合", async (dialog) => {
+      await dialog
+        .getByRole("textbox", { name: "综合问题", exact: true })
+        .fill("Which evidence agrees?");
+      await select(w.page, "覆盖要求", "带缺口综合");
+    });
+    await expect.poll(() => w.submissions.length).toBeGreaterThan(0);
+    expect(w.submissions.at(-1)).toMatchObject({
+      inputs: [{ kind: "snapshot", snapshot_id: first.snapshot_id }],
+      spec: { question: "Which evidence agrees?", policy: "allow-partial" },
+    });
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
@@ -685,6 +726,16 @@ it("retries a failed processor scope read without submitting or discarding draft
     ready: '[aria-label="文献列表"] .paper-row:first-child',
   });
   try {
+    await w.page
+      .getByLabel("主导航")
+      .getByRole("button", { name: "算子", exact: true })
+      .click();
+    // The run list reads the registry first; inject the failure for the dialog's own read.
+    await w.page
+      .getByRole("button", { name: /按算子筛选/ })
+      .and(w.page.locator('[aria-haspopup="listbox"]'))
+      .waitFor();
+    await w.page.waitForTimeout(300);
     let injected = false;
     await w.page.route("**/api/v1/query/processors?*", async (route) => {
       if (!injected && route.request().postDataJSON().operation === "list") {
@@ -695,20 +746,22 @@ it("retries a failed processor scope read without submitting or discarding draft
         });
       } else await route.continue();
     });
-    await w.page.getByRole("button", { name: "提取", exact: true }).click();
+    await openFromPage(w.page);
+    await expect
+      .poll(() => runner(w.page).textContent())
+      .toContain("尚未提交任务");
+    await runner(w.page)
+      .getByRole("button", { name: "重试", exact: true })
+      .click();
+    await chooseOperator(w.page, "记录提取");
+    await next(w.page);
     await w.page
       .getByRole("textbox", { name: "每条记录代表什么" })
       .fill("A retained draft");
-    const side = w.page.getByRole("complementary", { name: "处理范围与提交" });
-    await expect.poll(() => side.textContent()).toContain("尚未提交任务");
-    await side.getByRole("button", { name: "重试", exact: true }).click();
-    await expect
-      .poll(() =>
-        w.page
-          .getByRole("button", { name: "开始提取", exact: true })
-          .isEnabled(),
-      )
-      .toBe(true);
+    await runner(w.page)
+      .getByRole("button", { name: "上一步", exact: true })
+      .click();
+    await next(w.page);
     expect(
       await w.page
         .getByRole("textbox", { name: "每条记录代表什么" })

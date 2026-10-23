@@ -163,24 +163,32 @@ export async function renderDocument(
           observer.unobserve(el);
           const resource = resources.get(el.dataset.resource!);
           if (!resource) {
-            el.textContent += "（未保存该资源，不加载外部图片）";
+            el.textContent = "图片未保存，无法在正文中显示。";
             continue;
           }
+          el.textContent = "正在加载图片…";
+          el.setAttribute("aria-busy", "true");
           void imageUrl(resource)
-            .then((url) => {
+            .then(async (url) => {
               if (ctx.signal.aborted || !el.isConnected) return;
               const image = document.createElement("img");
-              image.alt = resource.reference;
+              const label = el.dataset.resourceLabel || "正文图片";
+              image.alt = label;
               image.src = url;
-              image.loading = "lazy";
+              image.decoding = "async";
+              // The observer already defers off-screen resources. Decode before
+              // replacing the loading message, avoiding a second lazy-load gate.
+              try {
+                await image.decode();
+              } catch {
+                throw new Error("图片无法解码，原正文仍可阅读。");
+              }
+              if (ctx.signal.aborted || !el.isConnected) return;
               if (frame.onImage) {
                 image.tabIndex = 0;
                 image.setAttribute("role", "button");
-                image.setAttribute(
-                  "aria-label",
-                  `放大图片：${resource.reference}`,
-                );
-                image.onclick = () => frame.onImage?.(url, resource.reference);
+                image.setAttribute("aria-label", `放大图片：${label}`);
+                image.onclick = () => frame.onImage?.(url, label);
                 image.onkeydown = (event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
@@ -188,17 +196,17 @@ export async function renderDocument(
                   }
                 };
               }
-              image.onerror = () => {
-                el.textContent = "图片无法解码，原正文仍可阅读。";
-              };
+              el.removeAttribute("aria-busy");
               el.replaceChildren(image);
             })
             .catch((error: unknown) => {
-              if (!ctx.signal.aborted && el.isConnected)
+              if (!ctx.signal.aborted && el.isConnected) {
+                el.removeAttribute("aria-busy");
                 el.textContent = readerErrorMessage(
                   error,
                   "图片暂不可读：读取或校验未完成，原正文仍可阅读。",
                 );
+              }
             });
         }
     },
@@ -401,15 +409,9 @@ export async function renderDocument(
             {
               "text-layer": "文字层核对",
               "image-only": "原图核对",
-              uncertain: "存疑",
               manual: "人工核对",
             } as Record<string, string>
           )[segment.basis ?? ""] ?? "查看来源";
-        if (segment.basis === "uncertain") {
-          source.classList.add("reading-block-uncertain");
-          source.title =
-            segment.uncertainty?.reason ?? "存在未能确定的抄录内容";
-        }
         if (segment.locate === "page") source.textContent += " · 仅页级定位";
         source.setAttribute(
           "aria-label",

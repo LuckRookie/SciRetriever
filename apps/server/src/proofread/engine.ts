@@ -1,3 +1,4 @@
+import { parseManualDocument } from "./manual-document.js";
 import {
   canonicalJsonBytes,
   parseProofreadBlocksV1,
@@ -25,8 +26,20 @@ import { renderBlocks, PROOFREAD_RENDER_VERSION } from "./render.js";
 export type { ManualProofreadDecision } from "./contract.js";
 export type { ProofreadInputReader } from "./draft.js";
 export const proofreadCorrectionMethod = (
-  corrector?: ProofreadCorrector | null,
-) => `${corrector?.method ?? "correction-unconfigured"}:residual-review-v1`;
+  corrector?: Pick<ProofreadCorrector, "method"> | null,
+) =>
+  `${corrector?.method ?? "correction-unconfigured"}:residual-review-v2-no-block-uncertainty`;
+export const proofreadMethod = (
+  pageMethod: string,
+  corrector?: Pick<ProofreadCorrector, "method" | "model_config_sha256"> | null,
+) => ({
+  clean: CLEAN_RULES_VERSION,
+  page_classify: pageMethod,
+  suspects: SUSPECTS_VERSION,
+  correction: proofreadCorrectionMethod(corrector),
+  render: PROOFREAD_RENDER_VERSION,
+  model_config_sha256: corrector?.model_config_sha256 ?? null,
+});
 const artifact = async (
   bytes: Uint8Array,
   media_type: string,
@@ -35,7 +48,7 @@ const artifact = async (
   byte_size: bytes.length,
   media_type,
 });
-/** One parser draft; images settle questions, uncertainty records limits without rejecting completeness. */
+/** One parser draft; images settle questions; reasoned unresolved dispositions do not reject completeness. */
 export async function buildProofreadVersion(input: {
   raw: RawParse;
   reader: ProofreadInputReader;
@@ -47,12 +60,12 @@ export async function buildProofreadVersion(input: {
 }) {
   const started = performance.now();
   input.signal?.throwIfAborted();
-  const { raw, drafts, removed } = await prepareDraft(
-    input.raw,
-    input.reader,
-    input.pages,
-    input.signal,
-  );
+  const {
+    raw,
+    drafts,
+    removed: ruleRemoved,
+  } = await prepareDraft(input.raw, input.reader, input.pages, input.signal);
+  const removed = [...ruleRemoved];
   let blocks = draftBlocks(drafts, { pages: input.pages });
   let suspects = findSuspects(input.pages, blocks, removed, drafts);
   const pages: ProofreadPage[] = input.pages.map((p) => ({
@@ -74,11 +87,62 @@ export async function buildProofreadVersion(input: {
     decisions.some((d) => d.part_asset_id !== raw.source_asset_id)
   )
     throw new Error("proofread-manual-scope");
-  // A clear-uncertainty decision explicitly supersedes a suspect's uncertain disposition.
-  for (const decision of [...decisions].sort(
-    (a, b) =>
-      Number(a.action === "clear-uncertainty") -
-      Number(b.action === "clear-uncertainty"),
+  const documentEdit = decisions.find((d) => d.action === "document-edit");
+  if (documentEdit) {
+    if (documentEdit.draft_sha256 !== raw.result_sha256)
+      throw new Error("proofread-manual-input-conflict");
+    const saved = parseManualDocument(
+      documentEdit.text!,
+      raw.resources.map((r) => r.reference),
+    );
+    if (saved.blocks.page_count !== pages.length)
+      throw new Error("proofread-manual-input-conflict");
+    blocks = [...saved.blocks.blocks];
+    edits.push(...saved.edits);
+    used.push(documentEdit.decision_id);
+    for (const b of blocks)
+      if (b.text_source === "manual") locked.add(b.block_id);
+    for (const id of saved.changed_ids) locked.add(id);
+    for (const record of saved.edits) {
+      if (
+        record.edit.kind !== "delete" ||
+        record.edit.reason !== "manual-document-edit"
+      )
+        continue;
+      const deletedId = record.edit.block_id;
+      const deleted = drafts.find((d) => d.block_id === deletedId);
+      if (deleted)
+        removed.push({
+          page: deleted.page,
+          type: "manual-delete",
+          text: deleted.html ?? deleted.text,
+          raw_ref: deleted.raw_ref[0] ?? [0, 0],
+        });
+    }
+    suspects = findSuspects(input.pages, blocks, removed, drafts);
+    for (let i = 0; i < suspects.length; i++) {
+      const s = suspects[i]!;
+      if (s.block_ids.some((id) => locked.has(id)))
+        suspects[i] = {
+          ...s,
+          disposition: { status: "fixed", reason: "manual-document-edit" },
+        };
+    }
+    for (let i = 0; i < pages.length; i++)
+      if (
+        !blocks.some((b) => b.page === i) &&
+        saved.changed_ids.some((id) =>
+          drafts.some((d) => d.block_id === id && d.page === i),
+        )
+      )
+        pages[i] = {
+          ...pages[i]!,
+          checked: true,
+          no_body_reason: "manual-document-edit",
+        };
+  }
+  for (const decision of decisions.filter(
+    (d) => d.action !== "document-edit",
   )) {
     if (decision.action === "no-body") {
       const page = pages[decision.page];
@@ -151,10 +215,7 @@ export async function buildProofreadVersion(input: {
       continue;
     }
     const d = drafts.find((b) => b.block_id === decision.block_id);
-    if (
-      !d &&
-      (decision.action === "replace" || decision.action === "clear-uncertainty")
-    ) {
+    if (!d && decision.action === "replace") {
       deferred.push(decision);
       continue;
     }
@@ -173,10 +234,7 @@ export async function buildProofreadVersion(input: {
     }
     used.push(decision.decision_id);
     locked.add(d.block_id);
-    if (
-      decision.action === "replace" ||
-      decision.action === "clear-uncertainty"
-    )
+    if (decision.action === "replace")
       blocks = blocks.map((b) =>
         b.block_id === d.block_id
           ? {
@@ -191,15 +249,12 @@ export async function buildProofreadVersion(input: {
                   : b.html,
               text_source: "manual",
               basis: "manual",
-              uncertainty: null,
             }
           : b,
       );
     suspects = suspects.map((s) =>
       decision.suspect_id === s.suspect_id ||
-      ((decision.action === "replace" ||
-        decision.action === "clear-uncertainty") &&
-        s.block_ids.includes(d.block_id))
+      (decision.action === "replace" && s.block_ids.includes(d.block_id))
         ? {
             ...s,
             disposition: decision.disposition ?? {
@@ -303,26 +358,6 @@ export async function buildProofreadVersion(input: {
           ? { ...s, disposition: settled.get(s.suspect_id)! }
           : s,
       );
-      for (const s of suspects.filter(
-        (s) => s.page === page.page && s.disposition?.status === "uncertain",
-      )) {
-        const target = s.block_ids.length
-          ? s.block_ids
-          : blocks.filter((b) => b.page === page.page).map((b) => b.block_id);
-        blocks = blocks.map((b) =>
-          target.includes(b.block_id) && !locked.has(b.block_id)
-            ? {
-                ...b,
-                basis: "uncertain",
-                uncertainty: b.uncertainty ?? {
-                  span: [0, (b.html ?? b.text).length],
-                  reason: s.disposition!.reason,
-                  page: page.page,
-                },
-              }
-            : b,
-        );
-      }
       pages[page.page] = {
         ...pages[page.page]!,
         checked: true,
@@ -373,7 +408,6 @@ export async function buildProofreadVersion(input: {
                 : b.html,
             text_source: "manual",
             basis: "manual",
-            uncertainty: null,
           },
     );
   }
@@ -475,32 +509,6 @@ export async function buildProofreadVersion(input: {
         message: "nonblank-page-has-no-body-content",
       };
   }
-  for (const s of suspects.filter(
-    (s) => s.disposition?.status === "uncertain",
-  )) {
-    const ids = s.block_ids.length
-      ? s.block_ids
-      : blocks.filter((b) => b.page === s.page).map((b) => b.block_id);
-    blocks = blocks.map((b) =>
-      ids.includes(b.block_id) &&
-      !decisions.some(
-        (d) =>
-          used.includes(d.decision_id) &&
-          d.block_id === b.block_id &&
-          d.action === "clear-uncertainty",
-      )
-        ? {
-            ...b,
-            basis: "uncertain",
-            uncertainty: b.uncertainty ?? {
-              span: [0, (b.html ?? b.text).length],
-              reason: s.disposition!.reason,
-              page: s.page,
-            },
-          }
-        : b,
-    );
-  }
   const status = failure
     ? "failed"
     : pages.every((p) => p.checked) && suspects.every((s) => s.disposition)
@@ -545,10 +553,10 @@ export async function buildProofreadVersion(input: {
     draft_correct: suspects.filter(
       (s) => s.disposition?.status === "draft-correct",
     ).length,
-    uncertain: suspects.filter((s) => s.disposition?.status === "uncertain")
-      .length,
-    uncertain_blocks: blocks.filter((b) => b.basis === "uncertain").length,
-    agent_deletions: edits.filter((e) => e.edit.kind === "delete").length,
+    agent_deletions: edits.filter(
+      (e) =>
+        e.edit.kind === "delete" && e.edit.reason !== "manual-document-edit",
+    ).length,
     ...usage,
     elapsed_ms: Math.round(performance.now() - started),
   };
@@ -560,14 +568,7 @@ export async function buildProofreadVersion(input: {
       profile: raw.profile,
       result_sha256: raw.result_sha256,
     },
-    method: {
-      clean: CLEAN_RULES_VERSION,
-      page_classify: input.page_method,
-      suspects: SUSPECTS_VERSION,
-      correction: proofreadCorrectionMethod(input.corrector),
-      render: PROOFREAD_RENDER_VERSION,
-      model_config_sha256: input.corrector?.model_config_sha256 ?? null,
-    },
+    method: proofreadMethod(input.page_method, input.corrector),
     manual_decision_ids: used,
     status,
     pages,

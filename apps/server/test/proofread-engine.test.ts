@@ -4,6 +4,8 @@ import {
   parseProofreadVersion,
 } from "@sciretriever/contracts";
 import { buildProofreadVersion } from "../src/proofread/engine.js";
+import { buildProofreadStructure } from "../src/document/proofread-builder.js";
+import { renderBlocks } from "../src/proofread/render.js";
 import type {
   ProofreadCorrector,
   ManualProofreadDecision,
@@ -32,7 +34,6 @@ it("publishes a stable single-profile draft with text-layer provenance and rejec
   expect(read(a)[0]).toMatchObject({
     text_source: "parser",
     basis: "text-layer",
-    uncertainty: null,
   });
   expect(a.version).not.toHaveProperty("inputs");
   await expect(
@@ -123,8 +124,12 @@ it("completes uncertain transcription without adding uncertainty prose to Markdo
     })),
   });
   expect(out.version.status).toBe("complete");
-  expect(read(out)[0]!.basis).toBe("uncertain");
-  expect(out.version.stats.uncertain_blocks).toBe(1);
+  expect(read(out)[0]!.basis).toBe("text-layer");
+  expect(read(out)[0]).not.toHaveProperty("uncertainty");
+  expect(out.version.stats).not.toHaveProperty("uncertain_blocks");
+  expect(
+    out.version.suspects.some((s) => s.disposition?.status === "uncertain"),
+  ).toBe(true);
   expect(Buffer.from(out.markdown.bytes).toString()).not.toContain(
     "unreadable",
   );
@@ -155,6 +160,60 @@ it("requires explicit image-only page inspection and preserves resumable budget 
   });
   expect(done.version.status).toBe("complete");
   expect(done.version.pages[0]!.checked).toBe(true);
+});
+it("keeps unreadable image-only blocks empty and publishes their locations without invented transcription", async () => {
+  const f = await proofreadFixture("Unverified OCR 67%.", "", "image-only");
+  const out = await buildProofreadVersion({
+    ...f,
+    corrector: corrector(async (c) => ({
+      submission: {
+        edits: c.drafts
+          .filter((d) => d.page === c.page.page)
+          .map((d) => ({
+            kind: "replace" as const,
+            block_id: d.block_id,
+            text: "",
+            basis_page: c.page.page,
+            reason: "Unreadable after image inspection.",
+          })),
+        dispositions: c.suspects.map((s) => ({
+          suspect_id: s.suspect_id,
+          disposition: {
+            status: "uncertain" as const,
+            reason: "Unreadable after image inspection.",
+          },
+        })),
+        no_body_reason: null,
+      },
+      reason: null,
+      calls: 1,
+      input_tokens: 10,
+      output_tokens: 2,
+    })),
+  });
+  expect(out.version.status).toBe("complete");
+  const block = read(out)[0]!;
+  expect(block).toMatchObject({ text: "", html: null, basis: "image-only" });
+  expect(Buffer.from(out.markdown.bytes).toString().trim()).toBe("");
+  const document = await buildProofreadStructure(
+    out.version,
+    out.blocks.bytes,
+    out.markdown.bytes,
+  );
+  expect(document.structure.segments).toHaveLength(1);
+  expect(document.structure.segments[0]).toMatchObject({
+    block_id: block.block_id,
+    page: 0,
+    basis: "image-only",
+  });
+  for (const type of ["title", "table", "equation"] as const) {
+    const rendered = renderBlocks(
+      [{ ...block, type, title_level: type === "title" ? 1 : null }],
+      [],
+    );
+    expect(Buffer.from(rendered.markdown).toString().trim()).toBe("");
+    expect(rendered.ranges).toHaveLength(1);
+  }
 });
 it("resumes newly exposed questions after replaying cached edits within the per-run budget", async () => {
   const f = await proofreadFixture("A old B missing.", "A new B gone.");
@@ -226,7 +285,12 @@ it("resumes newly exposed questions after replaying cached edits within the per-
   expect(completed.version.status).toBe("complete");
   expect(completed.usage.calls).toBe(1);
   expect(dispatches).toBe(2);
-  expect(read(completed)[0]!.basis).toBe("uncertain");
+  expect(read(completed)[0]!.basis).toBe("text-layer");
+  expect(
+    completed.version.suspects.some(
+      (s) => s.disposition?.status === "uncertain",
+    ),
+  ).toBe(true);
   const reused = await buildProofreadVersion({ ...f, corrector: model });
   expect(reused.version.proofread_id).toBe(completed.version.proofread_id);
   expect(reused.usage.calls).toBe(0);

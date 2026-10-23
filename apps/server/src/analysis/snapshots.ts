@@ -1,7 +1,9 @@
+import { activityContext } from "../logging/activity.js";
 import { randomUUID } from "node:crypto";
 import {
   parseAssetId,
-  parseSnapshotDefinition,
+  parseSnapshotCreate,
+  parseSnapshotRename,
   snapshotHash,
   tagRecord,
   tagInteger,
@@ -26,7 +28,7 @@ export class SnapshotService {
     private readonly library: Pick<LiteratureQueryService, "search">,
   ) {}
   async create(value: unknown, signal?: AbortSignal) {
-    const definition = parseSnapshotDefinition(value);
+    const { definition, name } = parseSnapshotCreate(value);
     let ids: readonly string[];
     if (definition.kind === "literatures") ids = definition.literature_ids;
     else {
@@ -46,6 +48,8 @@ export class SnapshotService {
     }>("capture", { ids }, signal);
     const snapshot = {
       snapshot_id: randomUUID(),
+      name,
+      actor: activityContext().actor,
       created_at: new Date().toISOString(),
       definition,
       members: captured.members,
@@ -62,6 +66,17 @@ export class SnapshotService {
       excluded: captured.excluded.slice(0, 200),
       excluded_truncated: captured.excluded.length > 200,
     };
+  }
+  rename(value: unknown, signal?: AbortSignal): Promise<SnapshotHeader> {
+    return this.database.snapshot(
+      "rename",
+      {
+        ...parseSnapshotRename(value),
+        actor: activityContext().actor,
+        updated_at: new Date().toISOString(),
+      },
+      signal,
+    );
   }
   read(value: unknown, signal?: AbortSignal) {
     const r = tagRecord(value, ["snapshot_id", "offset", "limit", "max_bytes"]),

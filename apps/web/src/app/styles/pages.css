@@ -6,7 +6,8 @@
   .application-shell > .ui-split-pane > .ui-split-main {
     min-height: 0;
   }
-  .navigation .ui-button-label {
+  /* The mobile drawer reuses the navigation content outside the aside. */
+  .navigation-content .ui-button-label {
     display: flex;
     flex: 1;
     align-items: center;
@@ -34,18 +35,18 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    font: 600 23px var(--serif);
-    padding: var(--space-3) var(--space-2) var(--space-5);
+    font: 600 15px var(--sans);
+    padding: var(--space-2) var(--space-2) var(--space-4);
   }
   .brand-mark {
     display: grid;
     place-items: center;
     background: var(--mark);
     color: var(--mark-fg);
-    width: 30px;
-    height: 30px;
+    width: 22px;
+    height: 22px;
     border-radius: var(--radius-sm);
-    font-size: 21px;
+    font: 600 13px var(--sans);
   }
   .navigation-content {
     flex: 1;
@@ -58,30 +59,132 @@
     justify-content: flex-start;
   }
   .navigation-group {
-    margin-top: var(--space-5);
+    margin-top: var(--space-4);
     display: grid;
-    gap: var(--space-1);
+    gap: 1px;
   }
   .navigation-group-name {
     font-size: var(--text-caption);
+    font-weight: 500;
     color: var(--fg2);
     padding: 0 var(--space-3) var(--space-1);
+  }
+  .navigation .ui-button[data-variant="text"] {
+    height: var(--control-small-height);
+    color: var(--side-fg);
+    font-weight: 400;
+  }
+  .navigation .ui-button[data-variant="text"][data-hovered] {
+    background: var(--hover-soft);
+    color: var(--fg);
+  }
+  .navigation .ui-button > svg {
+    width: 18px;
+    height: 18px;
+  }
+  .navigation .ui-button[data-variant="text"] svg {
+    color: var(--side-icon);
+    stroke-width: 1.75;
   }
   .navigation-count {
     margin-left: auto;
     font-variant-numeric: tabular-nums;
     font-size: var(--text-caption);
   }
-  .navigation [aria-current="page"] {
+  .navigation .ui-button[aria-current="page"],
+  .navigation .ui-button[aria-current="page"][data-hovered] {
     background: var(--active);
     color: var(--fg);
-    font-weight: 600;
+    font-weight: 500;
+  }
+  .navigation .ui-button[aria-current="page"] svg {
+    color: var(--fg);
   }
   .navigation-footer {
     padding-top: var(--space-3);
   }
+  /* Folder tree under the library entry: recent papers, folders, create. */
+  .folder-navigation {
+    display: grid;
+    gap: 1px;
+    padding-left: var(--space-3);
+    border-radius: var(--radius-md);
+  }
+  .folder-navigation[data-drop] {
+    background: var(--sel);
+  }
+  .folder-tree {
+    display: grid;
+    gap: 1px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .folder-row {
+    display: flex;
+    align-items: center;
+    border-radius: var(--radius-md);
+  }
+  .folder-row[data-drop] {
+    background: var(--sel);
+    box-shadow: inset 0 0 0 1px var(--focus);
+  }
+  .navigation-content .folder-row > .ui-button {
+    width: auto;
+  }
+  .navigation-content .folder-row > .folder-open {
+    flex: 1;
+    min-width: 0;
+  }
+  .navigation .folder-navigation .ui-button > svg {
+    width: 16px;
+    height: 16px;
+  }
+  .folder-toggle {
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+  }
+  .folder-toggle > svg {
+    transform: rotate(-90deg);
+    transition: transform var(--dur-1);
+  }
+  .folder-toggle[data-open] > svg {
+    transform: none;
+  }
+  .folder-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .folder-menu {
+    flex: none;
+    opacity: 0;
+  }
+  .folder-row:hover .folder-menu,
+  .folder-row:focus-within .folder-menu,
+  .folder-menu[aria-expanded="true"] {
+    opacity: 1;
+  }
+  @media (hover: none) {
+    .folder-menu {
+      opacity: 1;
+    }
+  }
+  .navigation .ui-button.folder-create {
+    color: var(--fg3);
+  }
+  .filter-count {
+    margin-left: 2px;
+    color: var(--fg3);
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+  }
   .workspace-header {
-    min-height: 58px;
+    min-height: 48px;
     display: flex;
     align-items: center;
     gap: var(--space-2);
@@ -96,16 +199,58 @@
     overflow-x: auto;
     align-items: center;
   }
+  /* Tabs shrink together when many are open, but a lone tab shows its title. */
   .paper-tab {
     display: flex;
     align-items: center;
-    max-width: 280px;
+    flex: 0 1 auto;
+    min-width: 120px;
+    max-width: 420px;
     border-radius: var(--radius-sm);
+    transition: background-color var(--dur-1);
   }
-  .paper-tab[data-selected] {
+  .paper-tab:hover {
     background: var(--hover);
   }
+  .paper-tab[data-selected] {
+    background: var(--active);
+  }
   .paper-tab .ui-button {
+    color: var(--fg2);
+  }
+  /* The tab itself carries the hover tint; only the close control adds its own. */
+  .paper-tab .ui-button:not(.ui-icon-button)[data-hovered] {
+    background: transparent;
+  }
+  .paper-tab[data-selected] .ui-button {
+    color: var(--fg);
+  }
+  /* Like a browser tab, the close control appears only when the tab is touched. */
+  .paper-tab .ui-icon-button {
+    width: 22px;
+    height: 22px;
+    margin-right: var(--space-1);
+    color: var(--fg3);
+    opacity: 0;
+    transition:
+      opacity var(--dur-1),
+      background-color var(--dur-1);
+  }
+  .paper-tab:is(:hover, :focus-within) .ui-icon-button {
+    opacity: 1;
+  }
+  @media (hover: none) {
+    .paper-tab .ui-icon-button {
+      opacity: 1;
+    }
+  }
+  .paper-tab .ui-button:not(.ui-icon-button) {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .paper-tab .ui-button:not(.ui-icon-button) .ui-button-label {
+    display: block;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -122,18 +267,59 @@
     padding: var(--space-7);
   }
   .library-page {
-    height: 100%;
+    position: relative;
     display: flex;
     flex-direction: column;
-    position: relative;
-    padding: var(--space-6) var(--space-7) 0;
+    width: 100%;
+    max-width: 1200px;
+    min-height: 100%;
+    margin-inline: auto;
+    padding: var(--space-6) var(--space-7) var(--space-5);
+  }
+  .library-page > .ui-page-header {
+    margin-bottom: var(--space-3);
+  }
+  .library-controls {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--bg);
+    padding-top: var(--space-3);
+  }
+  .library-toolbar .ui-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .library-toolbar {
     display: flex;
-    align-items: end;
+    align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
-    margin-block: var(--space-5) var(--space-2);
+  }
+  .library-quick {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    padding-block: var(--space-2) var(--space-1);
+  }
+  .library-status-filters {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+  .library-applied {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding-bottom: var(--space-2);
   }
   .library-toolbar > :first-child {
     flex: 1;
@@ -141,8 +327,18 @@
   }
   .library-toolbar-actions {
     display: flex;
-    align-items: end;
-    gap: var(--space-2);
+    align-items: center;
+    gap: var(--space-1);
+  }
+  .library-toolbar-actions .ui-select {
+    width: auto;
+    border-color: transparent;
+    color: var(--fg2);
+    font-weight: 500;
+  }
+  .library-toolbar-actions .ui-select[data-hovered] {
+    border-color: transparent;
+    background: var(--hover);
   }
   .library-more {
     display: none;
@@ -161,26 +357,25 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    padding: var(--space-3) 0;
+    padding: var(--space-2) var(--space-2);
     border-bottom: 1px solid var(--line);
     font-size: var(--text-caption);
-    color: var(--fg2);
+    color: var(--fg3);
+  }
+  .library-list-heading .ui-choice {
+    min-height: var(--control-small-height);
+    font-size: var(--text-caption);
+    color: var(--fg3);
   }
   .library-results-region {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
+    display: block;
   }
   .library-list-heading > :last-child {
     margin-left: auto;
   }
   .library-scroll {
-    flex: 1;
-    min-height: 180px;
-    overflow: auto;
-    overscroll-behavior: contain;
-    scrollbar-gutter: stable;
+    position: relative;
+    outline: none;
   }
   .virtual-list {
     position: relative;
@@ -193,13 +388,30 @@
     width: 100%;
     display: grid;
     grid-template-columns: 26px minmax(0, 1fr) auto auto;
-    align-items: start;
+    align-items: center;
     column-gap: var(--space-3);
-    padding: var(--space-5) var(--space-2);
+    padding: var(--space-3) var(--space-2);
     border-bottom: 1px solid var(--line);
+    transition: background-color var(--dur-1);
   }
   .paper-row:hover {
     background: var(--hover);
+  }
+  /* Row tools stay out of sight until the row is touched or a selection begins. */
+  .paper-row > .ui-choice,
+  .paper-row > .paper-preview {
+    opacity: 0;
+    transition: opacity var(--dur-1);
+  }
+  .paper-row:is(:hover, :focus-within, [data-selected])
+    > :is(.ui-choice, .paper-preview),
+  .virtual-list:has(.paper-row[data-selected]) .paper-row > .ui-choice {
+    opacity: 1;
+  }
+  @media (hover: none) {
+    .paper-row > :is(.ui-choice, .paper-preview) {
+      opacity: 1;
+    }
   }
   .paper-row[data-selected] {
     background: var(--sel);
@@ -208,7 +420,7 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: var(--space-2);
+    gap: 2px;
     text-align: left;
     border: 0;
     background: transparent;
@@ -218,7 +430,7 @@
     cursor: pointer;
   }
   .paper-title {
-    font: 600 var(--text-literature) / 1.45 var(--serif);
+    font: 500 var(--text-literature) / 1.4 var(--serif);
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -237,18 +449,30 @@
   .paper-status {
     font-size: var(--text-caption);
     padding: 2px var(--space-2);
-    background: var(--t-gray-bg);
-    color: var(--t-gray);
+    background: var(--status-raw-bg);
+    color: var(--status-raw);
     border-radius: var(--radius-xs);
     white-space: nowrap;
   }
   .paper-status[data-state="READY"] {
-    background: var(--t-green-bg);
-    color: var(--t-green);
+    background: var(--status-ready-bg);
+    color: var(--status-ready);
   }
   .paper-status[data-state="ASSET_READY"] {
-    background: var(--t-yellow-bg);
-    color: var(--t-yellow);
+    background: var(--status-asset-bg);
+    color: var(--status-asset);
+  }
+  .paper-status[data-state="ARCHIVING"] {
+    background: var(--status-archiving-bg);
+    color: var(--status-archiving);
+  }
+  .paper-status[data-state="ARCHIVE_FAILED"] {
+    background: var(--status-failed-bg);
+    color: var(--status-failed);
+  }
+  .paper-status[data-state="EXCLUDED"] {
+    background: var(--status-excluded-bg);
+    color: var(--status-excluded);
   }
   .library-filters {
     display: grid;
@@ -267,7 +491,7 @@
   }
   .selection-bar {
     position: absolute;
-    bottom: var(--space-5);
+    bottom: 0;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
@@ -277,16 +501,24 @@
     max-width: calc(100% - 32px);
     background: var(--surface-raised);
     box-shadow: var(--shadow-pop);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     white-space: nowrap;
   }
   .selection-wrap {
-    position: absolute;
-    inset: 0;
+    position: sticky;
+    margin-top: auto;
+    bottom: var(--space-5);
+    height: 0;
+    z-index: 6;
     pointer-events: none;
   }
   .selection-wrap .selection-bar {
     pointer-events: auto;
+  }
+  /* Notices rise above an open selection bar instead of covering its actions. */
+  .application-shell:has(.selection-bar) ~ .ui-toast-region,
+  body:has(.selection-bar) .ui-toast-region {
+    bottom: calc(var(--space-5) + 64px);
   }
   .action-grid {
     display: grid;
@@ -351,7 +583,7 @@
       display: inline-flex;
     }
     .library-page {
-      padding: var(--space-5) var(--space-4) 0;
+      padding: var(--space-5) var(--space-4) var(--space-7);
     }
     .library-toolbar {
       align-items: stretch;
@@ -400,25 +632,29 @@
   .paper-tags {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px 8px;
-    margin-top: 8px;
+    gap: 4px 6px;
+    margin-top: 4px;
     font-size: var(--text-caption);
   }
   .paper-tag {
     display: inline-flex;
-    padding: 2px 8px;
-    border: 1px solid var(--line);
-    border-radius: var(--radius-sm);
-    color: var(--fg2);
-    background: var(--side);
+    padding: 0 6px;
+    border-radius: var(--radius-xs);
+    color: var(--t-gray);
+    background: var(--t-gray-bg);
     max-width: 100%;
     overflow-wrap: anywhere;
   }
   .paper-tag.primary {
-    color: var(--blue);
-    font-weight: 600;
-    border-color: var(--blue);
+    color: var(--t-blue);
+    background: var(--t-blue-bg);
+    font-weight: 500;
   }
 }
 
-@layer pages { .paper-status small { display: block; margin-top: 4px; } }
+@layer pages {
+  .paper-status small {
+    display: block;
+    margin-top: 4px;
+  }
+}

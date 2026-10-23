@@ -163,7 +163,7 @@ describe("TypeScript configuration owner", () => {
     }
   });
 
-  it("persists proofreading and value-check budgets across JSON publication and unrelated saves", async () => {
+  it("persists proofreading budgets across JSON publication and unrelated saves", async () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-ts-owner-proofread-"),
     );
@@ -173,7 +173,6 @@ describe("TypeScript configuration owner", () => {
       const proofread = {
         ...initial.configuration.proofread,
         max_calls_per_document: 23,
-        max_value_check_calls: 9,
       };
       const published = await owner.publishConfiguration(
         { ...initial.configuration, proofread },
@@ -181,6 +180,16 @@ describe("TypeScript configuration owner", () => {
         ["proofread"],
       );
       expect(published.configuration.proofread).toEqual(proofread);
+      await expect(
+        owner.publishConfiguration(
+          {
+            ...published.configuration,
+            proofread: { ...proofread, max_value_check_calls: 9 },
+          },
+          published.revision,
+          ["proofread"],
+        ),
+      ).rejects.toThrow();
       await owner.publishConfiguration(
         published.configuration,
         published.revision,

@@ -1,3 +1,4 @@
+import { withActivity } from "../logging/activity.js";
 import {
   ContractValidationError,
   EXTRACTION_SUBMISSION_WIRE_MAX_BYTES,
@@ -238,6 +239,8 @@ interface ClientGrant {
 }
 const CLIENT_TTL = 180000;
 const UI_SORTS = new Set([
+  "opened-desc",
+  "intake-desc",
   "publication-year-desc",
   "publication-year-asc",
   "title-asc",
@@ -278,6 +281,11 @@ function validUiLocation(url: URL): boolean {
           "view",
           "query",
           "reader",
+          "focusLiterature",
+          "agentSession",
+          "agentStatus",
+          "rerun",
+          "rerunHash",
           "task",
           "artifact",
           "scope",
@@ -349,6 +357,7 @@ function validUiLocation(url: URL): boolean {
         "ext",
         "task",
         "web",
+        "agent",
         "set",
         "lab",
         "gallery",
@@ -357,7 +366,7 @@ function validUiLocation(url: URL): boolean {
         "snapshots",
       ],
     ],
-    ["reader", ["pdf", "doc", "know"]],
+    ["reader", ["pdf", "doc", "know", "edit", "results"]],
     ["inspect", ["1"]],
     ["processor", ["summary", "knowledge-synthesis", "labels", "records"]],
     ["scope", ["selection", "all"]],
@@ -513,6 +522,11 @@ function object(
   )
     invalidInput();
   return record;
+}
+function actorInput(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    invalidInput();
+  return value as Record<string, unknown>;
 }
 async function body(request: IncomingMessage): Promise<unknown> {
   if (request.headers["content-type"] !== "application/json") invalidInput();
@@ -926,610 +940,911 @@ export async function startWorkbenchHttp(
       options.assets,
     );
     if (!authorization) return;
-    const { origin, sessionId: authSessionId } = authorization;
-    const requestOrigin = request.headers.origin;
-    const url = new URL(request.url ?? "/", origin);
-    const pathname = url.pathname.startsWith("/api/v1/")
-      ? `/api/${url.pathname.slice("/api/v1/".length)}`
-      : url.pathname;
-    if (
-      url.origin !== origin ||
-      !["GET", "POST"].includes(request.method ?? "")
-    ) {
-      json(response, 405, { code: "method-not-allowed" });
-      return;
-    }
-    const cookies = (request.headers.cookie ?? "")
-      .split(";")
-      .map((part) => part.trim());
-    const authenticated = cookies.some((part) =>
-      equal(part, `${cookieName}=${cookie}`),
-    );
-    if (request.method === "GET" && pathname === "/") {
-      if (!validUiLocation(url)) {
-        json(response, 400, { code: "invalid-ui-location" });
+    return withActivity({ actor: authorization.actor }, async () => {
+      const { origin, sessionId: authSessionId } = authorization;
+      const requestOrigin = request.headers.origin;
+      const url = new URL(request.url ?? "/", origin);
+      const pathname = url.pathname.startsWith("/api/v1/")
+        ? `/api/${url.pathname.slice("/api/v1/".length)}`
+        : url.pathname;
+      if (
+        url.origin !== origin ||
+        !["GET", "POST"].includes(request.method ?? "")
+      ) {
+        json(response, 405, { code: "method-not-allowed" });
         return;
       }
-      response.setHeader(
-        "Set-Cookie",
-        `${cookieName}=${cookie}; Path=/; HttpOnly; SameSite=Strict`,
+      const cookies = (request.headers.cookie ?? "")
+        .split(";")
+        .map((part) => part.trim());
+      const authenticated = cookies.some((part) =>
+        equal(part, `${cookieName}=${cookie}`),
       );
-      const asset = options.assets.get(pathname);
-      if (!asset) {
-        json(response, 404, { code: "ui-unavailable" });
-        return;
-      }
-      response.writeHead(200, { "Content-Type": asset.contentType });
-      response.end(asset.body);
-      return;
-    }
-    if (!authenticated) {
-      json(response, 401, { code: "authentication-required" });
-      return;
-    }
-    if (
-      request.method === "GET" &&
-      !url.search &&
-      options.assets.has(pathname)
-    ) {
-      const asset = options.assets.get(pathname)!;
-      response.writeHead(200, { "Content-Type": asset.contentType });
-      response.end(asset.body);
-      return;
-    }
-    if (
-      request.method === "POST" &&
-      pathname === "/api/clients" &&
-      !url.search
-    ) {
-      if (
-        requestOrigin !== origin ||
-        request.headers["x-workbench-init"] !== "1"
-      ) {
-        json(response, 403, { code: "csrf-required" });
-        return;
-      }
-      object(await body(request), []);
-      const clientId = session.attach();
-      const grant = {
-        csrf: randomBytes(32).toString("hex"),
-        authSessionId,
-        touched: Date.now(),
-      };
-      clients.set(clientId, grant);
-      json(response, 201, {
-        client_id: clientId,
-        csrf: grant.csrf,
-        view: projectedView(clientId),
-      });
-      return;
-    }
-    if (request.method === "GET" && !pathname.startsWith("/api/")) {
-      json(response, 404, { code: "endpoint-not-found" });
-      return;
-    }
-    const queryKeys = [...url.searchParams.keys()];
-    if (
-      queryKeys.some(
-        (key) =>
-          !["client_id", "session_id", "frame_seq", "limit", "after"].includes(
-            key,
-          ) &&
-          !(
-            pathname === "/api/tasks" &&
-            ["cursor", "status_group"].includes(key)
-          ),
-      ) ||
-      new Set(queryKeys).size !== queryKeys.length
-    ) {
-      json(response, 400, { code: "invalid-query" });
-      return;
-    }
-    const clientId = url.searchParams.get("client_id") ?? "";
-    const grant = clients.get(clientId);
-    if (!grant || grant.authSessionId !== authSessionId) {
-      json(response, 401, { code: "client-required" });
-      return;
-    }
-    grant.touched = Date.now();
-    const sharedQueryRoute =
-      queryHandler &&
-      (url.pathname.startsWith("/api/v1/query/") ||
-        url.pathname.startsWith("/api/v1/maintenance/"));
-    if (sharedQueryRoute && request.method === "GET") {
-      await queryHandler.handle(request, response, grant.csrf);
-      return;
-    }
-    if (request.method === "GET" && pathname === "/api/workspace") {
-      json(response, 200, {
-        workspace: options.workspace ?? {
-          catalog_path: null,
-          artifact_root: null,
-          schema_version: null,
-          configuration_revision:
-            options.configuration?.runtime_revision ?? null,
-          capabilities: {
-            tasks: !!options.tasks,
-            query: !!options.query,
-            maintenance: !!options.maintenance,
-            discovery: !!options.discovery,
-            import: !!options.importBibliography,
-          },
-          runtime_capabilities:
-            options.configuration?.runtime_capabilities ?? null,
-        },
-      });
-      return;
-    }
-    if (
-      request.method === "GET" &&
-      (pathname === "/api/tasks" || pathname.startsWith("/api/tasks/"))
-    ) {
-      if (!options.tasks) {
-        json(response, 503, { code: "tasks-unavailable" });
-        return;
-      }
-      const parts = pathname.split("/").filter(Boolean);
-      if (parts.length === 2) {
-        const limit = Number(url.searchParams.get("limit") ?? "100");
-        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
-          invalidInput();
-        const statusGroup = url.searchParams.get("status_group");
-        if (
-          statusGroup !== null &&
-          !["active", "attention", "ended"].includes(statusGroup)
-        )
-          invalidInput();
-        json(
-          response,
-          200,
-          await options.tasks.list(
-            limit,
-            url.searchParams.get("cursor") ?? undefined,
-            (statusGroup ?? undefined) as
-              | "active"
-              | "attention"
-              | "ended"
-              | undefined,
-          ),
-        );
-      } else if (
-        parts.length === 3 &&
-        /^[A-Za-z0-9._:-]{1,128}$/u.test(parts[2]!)
-      ) {
-        json(response, 200, { task: await options.tasks.read(parts[2]!) });
-      } else json(response, 404, { code: "endpoint-not-found" });
-      return;
-    }
-    if (request.method === "GET" && pathname === "/api/view") {
-      json(response, 200, projectedView(clientId));
-      return;
-    }
-    if (request.method === "GET" && pathname === "/api/version") {
-      json(response, 200, { api_version: 1 });
-      return;
-    }
-    if (request.method === "GET" && pathname === "/api/tabs") {
-      if (!options.tabs) {
-        json(response, 503, { code: "tabs-unavailable" });
-        return;
-      }
-      json(response, 200, { tabs: await options.tabs.list() });
-      return;
-    }
-    if (request.method === "GET" && pathname === "/api/frame") {
-      const raw = url.searchParams.get("frame_seq") ?? "";
-      if (!/^\d{1,15}$/u.test(raw)) {
-        json(response, 400, { code: "invalid-frame" });
-        return;
-      }
-      const targetSessionId = url.searchParams.get("session_id");
-      if (
-        targetSessionId !== null &&
-        !/^[A-Za-z0-9._:-]{1,128}$/u.test(targetSessionId)
-      ) {
-        json(response, 400, { code: "invalid-frame" });
-        return;
-      }
-      if (
-        session instanceof ProductionWorkbenchSession &&
-        targetSessionId === null &&
-        (projectedView(clientId).sessions?.length ?? 0) > 1
-      ) {
-        json(response, 400, { code: "frame-session-required" });
-        return;
-      }
-      const frame =
-        session instanceof ProductionWorkbenchSession
-          ? session.frame(Number(raw), clientId, targetSessionId ?? undefined)
-          : session.frame(Number(raw));
-      if (!frame) {
-        json(response, 409, { code: "frame-replaced" });
-        return;
-      }
-      response.writeHead(200, {
-        "Content-Type": "image/jpeg",
-        "Content-Length": frame.byteLength,
-      });
-      response.end(frame);
-      return;
-    }
-    if (request.method === "GET" && pathname === "/api/events") {
-      if (streams.size >= 16) {
-        json(response, 429, { code: "viewer-limit" });
-        return;
-      }
-      response.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "X-Accel-Buffering": "no",
-      });
-      streams.add(response);
-      const send = () => {
-        if (!clients.has(clientId) || !access.valid(grant.authSessionId)) {
-          response.end();
+      if (request.method === "GET" && pathname === "/") {
+        if (!validUiLocation(url)) {
+          json(response, 400, { code: "invalid-ui-location" });
           return;
         }
-        grant.touched = Date.now();
-        // A slow viewer gets the current projection after drain, never an unbounded frame queue.
-        if (!response.destroyed && !response.writableNeedDrain)
-          response.write(
-            `event: view\ndata: ${JSON.stringify(projectedView(clientId))}\n\n`,
-          );
-      };
-      send();
-      const timer = setInterval(send, 750);
-      timer.unref();
-      const archiveStop = new AbortController();
-      let archiveBusy = false,
-        lastRevision: string | null = null;
-      const archiveTimer = setInterval(() => {
-        const reader = options.query?.application.archive;
-        if (
-          !reader ||
-          archiveBusy ||
-          response.destroyed ||
-          response.writableNeedDrain
-        )
+        response.setHeader(
+          "Set-Cookie",
+          `${cookieName}=${cookie}; Path=/; HttpOnly; SameSite=Strict`,
+        );
+        const asset = options.assets.get(pathname);
+        if (!asset) {
+          json(response, 404, { code: "ui-unavailable" });
           return;
-        archiveBusy = true;
-        void reader
-          .query({ operation: "revision", request: {} }, archiveStop.signal)
-          .then((value) => {
-            const revision = (value as { revision: string }).revision;
-            if (!archiveStop.signal.aborted && revision !== lastRevision) {
-              lastRevision = revision;
-              response.write(
-                `event: materials\ndata: ${JSON.stringify({ revision })}\n\n`,
-              );
-            }
-          })
-          .catch(() => {
-            if (!archiveStop.signal.aborted) response.end();
-          })
-          .finally(() => {
-            archiveBusy = false;
-          });
-      }, 3000);
-      archiveTimer.unref();
-      response.once("close", () => {
-        clearInterval(timer);
-        clearInterval(archiveTimer);
-        archiveStop.abort();
-        streams.delete(response);
-      });
-      return;
-    }
-    if (request.method === "GET" && pathname.startsWith("/api/jobs")) {
-      const jobs = options.jobs;
-      if (!jobs) {
-        json(response, 503, { code: "jobs-unavailable" });
+        }
+        response.writeHead(200, { "Content-Type": asset.contentType });
+        response.end(asset.body);
         return;
       }
-      const parts = pathname.split("/").filter(Boolean);
-      const limit = Number(url.searchParams.get("limit") ?? "100");
-      const after = Number(url.searchParams.get("after") ?? "-1");
+      if (!authenticated) {
+        json(response, 401, { code: "authentication-required" });
+        return;
+      }
       if (
-        !Number.isSafeInteger(limit) ||
-        limit < 1 ||
-        limit > 1000 ||
-        !Number.isSafeInteger(after) ||
-        after < -1
+        request.method === "GET" &&
+        !url.search &&
+        options.assets.has(pathname)
+      ) {
+        const asset = options.assets.get(pathname)!;
+        response.writeHead(200, { "Content-Type": asset.contentType });
+        response.end(asset.body);
+        return;
+      }
+      if (
+        request.method === "POST" &&
+        pathname === "/api/clients" &&
+        !url.search
+      ) {
+        if (
+          requestOrigin !== origin ||
+          request.headers["x-workbench-init"] !== "1"
+        ) {
+          json(response, 403, { code: "csrf-required" });
+          return;
+        }
+        object(await body(request), []);
+        const clientId = session.attach();
+        const grant = {
+          csrf: randomBytes(32).toString("hex"),
+          authSessionId,
+          touched: Date.now(),
+        };
+        clients.set(clientId, grant);
+        json(response, 201, {
+          client_id: clientId,
+          csrf: grant.csrf,
+          view: projectedView(clientId),
+        });
+        return;
+      }
+      if (request.method === "GET" && !pathname.startsWith("/api/")) {
+        json(response, 404, { code: "endpoint-not-found" });
+        return;
+      }
+      const queryKeys = [...url.searchParams.keys()];
+      if (
+        queryKeys.some(
+          (key) =>
+            ![
+              "client_id",
+              "session_id",
+              "frame_seq",
+              "limit",
+              "after",
+            ].includes(key) &&
+            !(
+              pathname === "/api/tasks" &&
+              ["cursor", "status_group"].includes(key)
+            ),
+        ) ||
+        new Set(queryKeys).size !== queryKeys.length
       ) {
         json(response, 400, { code: "invalid-query" });
         return;
       }
-      const id = parts[2] ?? "";
-      if (id && !/^[A-Za-z0-9._:-]{1,128}$/u.test(id)) {
-        json(response, 400, { code: "invalid-job-id" });
+      const clientId = url.searchParams.get("client_id") ?? "";
+      const grant = clients.get(clientId);
+      if (!grant || grant.authSessionId !== authSessionId) {
+        json(response, 401, { code: "client-required" });
         return;
       }
-      if (parts.length === 2) {
-        json(response, 200, { jobs: await jobs.list(limit) });
+      grant.touched = Date.now();
+      const sharedQueryRoute =
+        queryHandler &&
+        (url.pathname.startsWith("/api/v1/query/") ||
+          url.pathname.startsWith("/api/v1/maintenance/"));
+      if (sharedQueryRoute && request.method === "GET") {
+        await queryHandler.handle(
+          request,
+          response,
+          grant.csrf,
+          authorization.actor,
+        );
         return;
       }
-      if (parts.length === 3) {
-        json(response, 200, { job: await jobs.get(id) });
-        return;
-      }
-      if (parts.length === 4 && parts[3] === "targets") {
-        json(response, 200, { targets: await jobs.targets(id, limit) });
-        return;
-      }
-      if (parts.length === 4 && parts[3] === "events") {
-        json(response, 200, { events: await jobs.events(id, after, limit) });
-        return;
-      }
-      if (parts.length === 4 && parts[3] === "policy") {
-        json(response, 200, { policy: await jobs.policy(id) });
-        return;
-      }
-      if (parts.length === 4 && parts[3] === "budget") {
-        json(response, 200, { budget: await jobs.budget(id) });
-        return;
-      }
-      if (parts.length === 4 && parts[3] === "interventions") {
+      if (request.method === "GET" && pathname === "/api/workspace") {
         json(response, 200, {
-          interventions: await jobs.interventions(id, limit),
+          workspace: options.workspace ?? {
+            catalog_path: null,
+            artifact_root: null,
+            schema_version: null,
+            configuration_revision:
+              options.configuration?.runtime_revision ?? null,
+            capabilities: {
+              tasks: !!options.tasks,
+              query: !!options.query,
+              maintenance: !!options.maintenance,
+              discovery: !!options.discovery,
+              import: !!options.importBibliography,
+            },
+            runtime_capabilities:
+              options.configuration?.runtime_capabilities ?? null,
+          },
         });
         return;
       }
       if (
-        parts.length === 6 &&
-        parts[3] === "targets" &&
-        parts[5] === "attempts"
+        request.method === "GET" &&
+        (pathname === "/api/tasks" || pathname.startsWith("/api/tasks/"))
       ) {
-        const targetId = parts[4] ?? "";
-        if (!/^[A-Za-z0-9._:-]{1,128}$/u.test(targetId)) {
-          json(response, 400, { code: "invalid-target-id" });
+        if (!options.tasks) {
+          json(response, 503, { code: "tasks-unavailable" });
           return;
         }
-        json(response, 200, {
-          attempts: await jobs.attempts(targetId, limit),
+        const parts = pathname.split("/").filter(Boolean);
+        if (parts.length === 2) {
+          const limit = Number(url.searchParams.get("limit") ?? "100");
+          if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
+            invalidInput();
+          const statusGroup = url.searchParams.get("status_group");
+          if (
+            statusGroup !== null &&
+            !["active", "attention", "ended"].includes(statusGroup)
+          )
+            invalidInput();
+          json(
+            response,
+            200,
+            await options.tasks.list(
+              limit,
+              url.searchParams.get("cursor") ?? undefined,
+              (statusGroup ?? undefined) as
+                | "active"
+                | "attention"
+                | "ended"
+                | undefined,
+            ),
+          );
+        } else if (
+          parts.length === 3 &&
+          /^[A-Za-z0-9._:-]{1,128}$/u.test(parts[2]!)
+        ) {
+          json(response, 200, { task: await options.tasks.read(parts[2]!) });
+        } else json(response, 404, { code: "endpoint-not-found" });
+        return;
+      }
+      if (request.method === "GET" && pathname === "/api/view") {
+        json(response, 200, projectedView(clientId));
+        return;
+      }
+      if (request.method === "GET" && pathname === "/api/version") {
+        json(response, 200, { api_version: 1 });
+        return;
+      }
+      if (request.method === "GET" && pathname === "/api/tabs") {
+        if (!options.tabs) {
+          json(response, 503, { code: "tabs-unavailable" });
+          return;
+        }
+        json(response, 200, { tabs: await options.tabs.list() });
+        return;
+      }
+      if (request.method === "GET" && pathname === "/api/frame") {
+        const raw = url.searchParams.get("frame_seq") ?? "";
+        if (!/^\d{1,15}$/u.test(raw)) {
+          json(response, 400, { code: "invalid-frame" });
+          return;
+        }
+        const targetSessionId = url.searchParams.get("session_id");
+        if (
+          targetSessionId !== null &&
+          !/^[A-Za-z0-9._:-]{1,128}$/u.test(targetSessionId)
+        ) {
+          json(response, 400, { code: "invalid-frame" });
+          return;
+        }
+        if (
+          session instanceof ProductionWorkbenchSession &&
+          targetSessionId === null &&
+          (projectedView(clientId).sessions?.length ?? 0) > 1
+        ) {
+          json(response, 400, { code: "frame-session-required" });
+          return;
+        }
+        const frame =
+          session instanceof ProductionWorkbenchSession
+            ? session.frame(Number(raw), clientId, targetSessionId ?? undefined)
+            : session.frame(Number(raw));
+        if (!frame) {
+          json(response, 409, { code: "frame-replaced" });
+          return;
+        }
+        response.writeHead(200, {
+          "Content-Type": "image/jpeg",
+          "Content-Length": frame.byteLength,
+        });
+        response.end(frame);
+        return;
+      }
+      if (request.method === "GET" && pathname === "/api/events") {
+        if (streams.size >= 16) {
+          json(response, 429, { code: "viewer-limit" });
+          return;
+        }
+        response.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "X-Accel-Buffering": "no",
+        });
+        streams.add(response);
+        const send = () => {
+          if (!clients.has(clientId) || !access.valid(grant.authSessionId)) {
+            response.end();
+            return;
+          }
+          grant.touched = Date.now();
+          // A slow viewer gets the current projection after drain, never an unbounded frame queue.
+          if (!response.destroyed && !response.writableNeedDrain)
+            response.write(
+              `event: view\ndata: ${JSON.stringify(projectedView(clientId))}\n\n`,
+            );
+        };
+        send();
+        const timer = setInterval(send, 750);
+        timer.unref();
+        const archiveStop = new AbortController();
+        let archiveBusy = false,
+          lastRevision: string | null = null,
+          agentRevision: number | null = null;
+        const archiveTimer = setInterval(() => {
+          const reader = options.query?.application.archive;
+          if (
+            !reader ||
+            archiveBusy ||
+            response.destroyed ||
+            response.writableNeedDrain
+          )
+            return;
+          archiveBusy = true;
+          const agentReader = options.query?.application.reviewRead;
+          void (async () => {
+            if (agentReader) {
+              const value = (await agentReader("session-revision", {})) as {
+                revision: number;
+              };
+              if (
+                !archiveStop.signal.aborted &&
+                agentRevision !== value.revision
+              ) {
+                agentRevision = value.revision;
+                response.write(
+                  `event: agents\ndata: ${JSON.stringify(value)}\n\n`,
+                );
+              }
+            }
+            return reader
+              .query({ operation: "revision", request: {} }, archiveStop.signal)
+              .then((value) => {
+                const revision = (value as { revision: string }).revision;
+                if (!archiveStop.signal.aborted && revision !== lastRevision) {
+                  lastRevision = revision;
+                  response.write(
+                    `event: materials\ndata: ${JSON.stringify({ revision })}\n\n`,
+                  );
+                }
+              })
+              .catch(() => {
+                if (!archiveStop.signal.aborted) response.end();
+              });
+          })()
+            .catch(() => {
+              if (!archiveStop.signal.aborted) response.end();
+            })
+            .finally(() => {
+              archiveBusy = false;
+            });
+        }, 3000);
+        archiveTimer.unref();
+        response.once("close", () => {
+          clearInterval(timer);
+          clearInterval(archiveTimer);
+          archiveStop.abort();
+          streams.delete(response);
         });
         return;
       }
-      json(response, 404, { code: "endpoint-not-found" });
-      return;
-    }
-    if (request.method === "GET" && pathname === "/api/configuration/status") {
-      if (!options.configuration) {
-        json(response, 503, { code: "configuration-unavailable" });
+      if (request.method === "GET" && pathname.startsWith("/api/jobs")) {
+        const jobs = options.jobs;
+        if (!jobs) {
+          json(response, 503, { code: "jobs-unavailable" });
+          return;
+        }
+        const parts = pathname.split("/").filter(Boolean);
+        const limit = Number(url.searchParams.get("limit") ?? "100");
+        const after = Number(url.searchParams.get("after") ?? "-1");
+        if (
+          !Number.isSafeInteger(limit) ||
+          limit < 1 ||
+          limit > 1000 ||
+          !Number.isSafeInteger(after) ||
+          after < -1
+        ) {
+          json(response, 400, { code: "invalid-query" });
+          return;
+        }
+        const id = parts[2] ?? "";
+        if (id && !/^[A-Za-z0-9._:-]{1,128}$/u.test(id)) {
+          json(response, 400, { code: "invalid-job-id" });
+          return;
+        }
+        if (parts.length === 2) {
+          json(response, 200, { jobs: await jobs.list(limit) });
+          return;
+        }
+        if (parts.length === 3) {
+          json(response, 200, { job: await jobs.get(id) });
+          return;
+        }
+        if (parts.length === 4 && parts[3] === "targets") {
+          json(response, 200, { targets: await jobs.targets(id, limit) });
+          return;
+        }
+        if (parts.length === 4 && parts[3] === "events") {
+          json(response, 200, { events: await jobs.events(id, after, limit) });
+          return;
+        }
+        if (parts.length === 4 && parts[3] === "policy") {
+          json(response, 200, { policy: await jobs.policy(id) });
+          return;
+        }
+        if (parts.length === 4 && parts[3] === "budget") {
+          json(response, 200, { budget: await jobs.budget(id) });
+          return;
+        }
+        if (parts.length === 4 && parts[3] === "interventions") {
+          json(response, 200, {
+            interventions: await jobs.interventions(id, limit),
+          });
+          return;
+        }
+        if (
+          parts.length === 6 &&
+          parts[3] === "targets" &&
+          parts[5] === "attempts"
+        ) {
+          const targetId = parts[4] ?? "";
+          if (!/^[A-Za-z0-9._:-]{1,128}$/u.test(targetId)) {
+            json(response, 400, { code: "invalid-target-id" });
+            return;
+          }
+          json(response, 200, {
+            attempts: await jobs.attempts(targetId, limit),
+          });
+          return;
+        }
+        json(response, 404, { code: "endpoint-not-found" });
         return;
       }
-      json(response, 200, { status: await options.configuration.status() });
-      return;
-    }
-    if (request.method === "GET" && pathname === "/api/configuration/read") {
-      if (!options.configuration?.read) {
-        json(response, 503, { code: "configuration-unavailable" });
+      if (
+        request.method === "GET" &&
+        pathname === "/api/configuration/status"
+      ) {
+        if (!options.configuration) {
+          json(response, 503, { code: "configuration-unavailable" });
+          return;
+        }
+        json(response, 200, { status: await options.configuration.status() });
         return;
       }
-      const snapshot = await options.configuration.read();
-      json(response, 200, {
-        snapshot,
-        ...runtimeConfigurationState(options.configuration, snapshot),
-      });
-      return;
-    }
-    if (
-      request.method !== "POST" ||
-      requestOrigin !== origin ||
-      typeof request.headers["x-workbench-csrf"] !== "string" ||
-      !equal(request.headers["x-workbench-csrf"], grant.csrf)
-    ) {
-      json(response, 403, { code: "csrf-required" });
-      return;
-    }
-    if (sharedQueryRoute) {
-      await queryHandler.handle(request, response, grant.csrf);
-      return;
-    }
-    if (pathname === "/api/tasks" || pathname.startsWith("/api/tasks/")) {
-      if (!options.tasks) {
-        json(response, 503, { code: "tasks-unavailable" });
+      if (request.method === "GET" && pathname === "/api/configuration/read") {
+        if (!options.configuration?.read) {
+          json(response, 503, { code: "configuration-unavailable" });
+          return;
+        }
+        const snapshot = await options.configuration.read();
+        json(response, 200, {
+          snapshot,
+          ...runtimeConfigurationState(options.configuration, snapshot),
+        });
         return;
       }
-      const value = await extractionBody(request, 1024 * 1024);
-      const parts = pathname.split("/").filter(Boolean);
-      if (parts.length === 2) {
-        json(response, 201, { task: await options.tasks.create(value) });
+      if (
+        request.method !== "POST" ||
+        requestOrigin !== origin ||
+        typeof request.headers["x-workbench-csrf"] !== "string" ||
+        !equal(request.headers["x-workbench-csrf"], grant.csrf)
+      ) {
+        json(response, 403, { code: "csrf-required" });
         return;
       }
-      const id = parts[2] ?? "";
-      if (parts.length !== 4 || !/^[A-Za-z0-9._:-]{1,128}$/u.test(id))
-        invalidInput();
-      object(value, []);
-      if (parts[3] === "start") {
-        json(response, 202, await options.tasks.start(id));
+      if (sharedQueryRoute) {
+        await queryHandler.handle(
+          request,
+          response,
+          grant.csrf,
+          authorization.actor,
+        );
         return;
       }
-      if (!["pause", "cancel", "resume", "retry"].includes(parts[3]!))
-        invalidInput();
-      json(response, 200, {
-        task: await options.tasks.control(
-          id,
-          parts[3] as "pause" | "cancel" | "resume" | "retry",
-        ),
-      });
-      return;
-    }
-    if (pathname === "/api/discovery") {
-      if (!options.discovery) {
-        json(response, 503, { code: "discovery-unavailable" });
+      if (pathname === "/api/tasks" || pathname.startsWith("/api/tasks/")) {
+        if (!options.tasks) {
+          json(response, 503, { code: "tasks-unavailable" });
+          return;
+        }
+        const value = await extractionBody(request, 1024 * 1024);
+        const parts = pathname.split("/").filter(Boolean);
+        if (parts.length === 2) {
+          json(response, 201, { task: await options.tasks.create(value) });
+          return;
+        }
+        const id = parts[2] ?? "";
+        if (parts.length !== 4 || !/^[A-Za-z0-9._:-]{1,128}$/u.test(id))
+          invalidInput();
+        object(value, []);
+        if (parts[3] === "start") {
+          json(response, 202, await options.tasks.start(id));
+          return;
+        }
+        if (!["pause", "cancel", "resume", "retry"].includes(parts[3]!))
+          invalidInput();
+        json(response, 200, {
+          task: await options.tasks.control(
+            id,
+            parts[3] as "pause" | "cancel" | "resume" | "retry",
+          ),
+        });
+        return;
+      }
+      if (pathname === "/api/discovery") {
+        if (!options.discovery) {
+          json(response, 503, { code: "discovery-unavailable" });
+          return;
+        }
+        const value = await body(request);
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        response.once("close", abort);
+        streams.add(response);
+        try {
+          json(response, 200, {
+            report: await options.discovery(
+              value,
+              AbortSignal.any([controller.signal, stopUploads.signal]),
+            ),
+          });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+        }
+        return;
+      }
+      if (pathname === "/api/import") {
+        if (!options.importBibliography) {
+          json(response, 503, { code: "import-unavailable" });
+          return;
+        }
+        json(response, 200, {
+          report: await options.importBibliography(
+            await extractionBody(request, 1024 * 1024),
+          ),
+        });
+        return;
+      }
+      if (pathname === "/api/maintenance/ingest-pdf") {
+        if (!options.maintenance) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "maintenance-unavailable",
+          });
+          return;
+        }
+        if (
+          request.headers["content-type"] !== "application/pdf" ||
+          request.headers["x-sciretriever-protocol-version"] !== "1"
+        )
+          invalidInput();
+        const literatureId = request.headers["x-literature-id"];
+        if (typeof literatureId !== "string") invalidInput();
+        const receipt = await receiveManualPdf(
+          request,
+          response,
+          literatureId,
+          (input, signal) => options.maintenance!.ingestPdf(input, signal),
+          stopUploads.signal,
+        );
+        json(response, 200, { protocol_version: 1, receipt });
+        return;
+      }
+      if (pathname === "/api/maintenance/parse-document") {
+        if (!options.maintenance) {
+          json(response, 503, { code: "maintenance-unavailable" });
+          return;
+        }
+        if (
+          request.headers["content-type"] !== "application/json" ||
+          request.headers["x-sciretriever-protocol-version"] !== "1"
+        )
+          invalidInput();
+        const receipt = await receiveDocumentRequest(
+          request,
+          response,
+          options.maintenance.parseDocuments,
+          stopUploads.signal,
+        );
+        json(response, 200, { protocol_version: 1, receipt });
         return;
       }
       const value = await body(request);
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      response.once("close", abort);
-      streams.add(response);
-      try {
-        json(response, 200, {
-          report: await options.discovery(
-            value,
-            AbortSignal.any([controller.signal, stopUploads.signal]),
-          ),
-        });
-      } finally {
-        streams.delete(response);
-        response.off("close", abort);
-      }
-      return;
-    }
-    if (pathname === "/api/import") {
-      if (!options.importBibliography) {
-        json(response, 503, { code: "import-unavailable" });
+      if (pathname === "/api/acquisition/start") {
+        if (!options.acquisition) {
+          json(response, 503, { code: "acquisition-unavailable" });
+          return;
+        }
+        const command = object(value, ["article_id"]);
+        if (typeof command.article_id !== "string") invalidInput();
+        options.acquisition.start(command.article_id);
+        json(response, 202, { view: projectedView(clientId) });
         return;
       }
-      json(response, 200, {
-        report: await options.importBibliography(
-          await extractionBody(request, 1024 * 1024),
-        ),
-      });
-      return;
-    }
-    if (pathname === "/api/maintenance/ingest-pdf") {
-      if (!options.maintenance) {
-        json(response, 503, {
-          protocol_version: 1,
-          code: "maintenance-unavailable",
-        });
+      if (pathname === "/api/clients/disconnect") {
+        object(value, []);
+        session.detach(clientId);
+        clients.delete(clientId);
+        json(response, 200, { disconnected: true });
         return;
       }
-      if (
-        request.headers["content-type"] !== "application/pdf" ||
-        request.headers["x-sciretriever-protocol-version"] !== "1"
-      )
-        invalidInput();
-      const literatureId = request.headers["x-literature-id"];
-      if (typeof literatureId !== "string") invalidInput();
-      const receipt = await receiveManualPdf(
-        request,
-        response,
-        literatureId,
-        (input, signal) => options.maintenance!.ingestPdf(input, signal),
-        stopUploads.signal,
-      );
-      json(response, 200, { protocol_version: 1, receipt });
-      return;
-    }
-    if (pathname === "/api/maintenance/parse-document") {
-      if (!options.maintenance) {
-        json(response, 503, { code: "maintenance-unavailable" });
+      if (pathname === "/api/sessions/select") {
+        if (!(session instanceof ProductionWorkbenchSession)) invalidInput();
+        const command = object(value, ["session_id"]);
+        session.selectSession(clientId, command.session_id);
+        await session.refresh(clientId);
+        json(response, 200, { view: projectedView(clientId) });
         return;
       }
-      if (
-        request.headers["content-type"] !== "application/json" ||
-        request.headers["x-sciretriever-protocol-version"] !== "1"
-      )
-        invalidInput();
-      const receipt = await receiveDocumentRequest(
-        request,
-        response,
-        options.maintenance.parseDocuments,
-        stopUploads.signal,
-      );
-      json(response, 200, { protocol_version: 1, receipt });
-      return;
-    }
-    const value = await body(request);
-    if (pathname === "/api/acquisition/start") {
-      if (!options.acquisition) {
-        json(response, 503, { code: "acquisition-unavailable" });
+      if (pathname === "/api/guidance") {
+        const guidance = session.submitGuidance(clientId, value);
+        json(response, 200, { guidance, view: projectedView(clientId) });
         return;
       }
-      const command = object(value, ["article_id"]);
-      if (typeof command.article_id !== "string") invalidInput();
-      options.acquisition.start(command.article_id);
-      json(response, 202, { view: projectedView(clientId) });
-      return;
-    }
-    if (pathname === "/api/clients/disconnect") {
-      object(value, []);
-      session.detach(clientId);
-      clients.delete(clientId);
-      json(response, 200, { disconnected: true });
-      return;
-    }
-    if (pathname === "/api/sessions/select") {
-      if (!(session instanceof ProductionWorkbenchSession)) invalidInput();
-      const command = object(value, ["session_id"]);
-      session.selectSession(clientId, command.session_id);
-      await session.refresh(clientId);
-      json(response, 200, { view: projectedView(clientId) });
-      return;
-    }
-    if (pathname === "/api/guidance") {
-      const guidance = session.submitGuidance(clientId, value);
-      json(response, 200, { guidance, view: projectedView(clientId) });
-      return;
-    }
-    if (pathname === "/api/guidance/cancel") {
-      const guidance = session.cancelGuidance(clientId, value);
-      json(response, 200, { guidance, view: projectedView(clientId) });
-      return;
-    }
-    if (pathname === "/api/tabs/activate") {
-      if (!options.tabs) {
-        json(response, 503, { code: "tabs-unavailable" });
+      if (pathname === "/api/guidance/cancel") {
+        const guidance = session.cancelGuidance(clientId, value);
+        json(response, 200, { guidance, view: projectedView(clientId) });
         return;
       }
-      const command = object(value, ["page_id"]);
-      if (
-        typeof command.page_id !== "string" ||
-        !/^[A-Za-z0-9._:-]{1,128}$/u.test(command.page_id)
-      )
-        invalidInput();
-      await options.tabs.activate(command.page_id);
-      await session.refresh();
-      json(response, 200, { view: projectedView(clientId) });
-      return;
-    }
-    if (pathname === "/api/jobs") {
-      if (!options.jobs) {
-        json(response, 503, { code: "jobs-unavailable" });
-        return;
-      }
-      json(response, 201, { job: await options.jobs.create(value) });
-      return;
-    }
-    if (pathname.startsWith("/api/jobs/") && options.jobs) {
-      const parts = pathname.split("/").filter(Boolean);
-      if (
-        parts.length === 6 &&
-        parts[3] === "interventions" &&
-        parts[5] === "resolve"
-      ) {
-        const command = object(value, ["resolution"]);
+      if (pathname === "/api/tabs/activate") {
+        if (!options.tabs) {
+          json(response, 503, { code: "tabs-unavailable" });
+          return;
+        }
+        const command = object(value, ["page_id"]);
         if (
-          !["continue", "skip", "cancel"].includes(command.resolution as string)
+          typeof command.page_id !== "string" ||
+          !/^[A-Za-z0-9._:-]{1,128}$/u.test(command.page_id)
         )
           invalidInput();
-        json(response, 200, {
-          intervention: await options.jobs.resolveIntervention(
-            parts[4]!,
-            command.resolution as "continue" | "skip" | "cancel",
-          ),
-        });
+        await options.tabs.activate(command.page_id);
+        await session.refresh();
+        json(response, 200, { view: projectedView(clientId) });
         return;
       }
-    }
-    if (pathname.startsWith("/api/jobs/") && options.jobs) {
-      const parts = pathname.split("/").filter(Boolean);
-      if (parts.length === 4 && parts[3] === "run") {
+      if (pathname === "/api/jobs") {
+        if (!options.jobs) {
+          json(response, 503, { code: "jobs-unavailable" });
+          return;
+        }
+        json(response, 201, { job: await options.jobs.create(value) });
+        return;
+      }
+      if (pathname.startsWith("/api/jobs/") && options.jobs) {
+        const parts = pathname.split("/").filter(Boolean);
+        if (
+          parts.length === 6 &&
+          parts[3] === "interventions" &&
+          parts[5] === "resolve"
+        ) {
+          const command = object(value, ["resolution"]);
+          if (
+            !["continue", "skip", "cancel"].includes(
+              command.resolution as string,
+            )
+          )
+            invalidInput();
+          json(response, 200, {
+            intervention: await options.jobs.resolveIntervention(
+              parts[4]!,
+              command.resolution as "continue" | "skip" | "cancel",
+            ),
+          });
+          return;
+        }
+      }
+      if (pathname.startsWith("/api/jobs/") && options.jobs) {
+        const parts = pathname.split("/").filter(Boolean);
+        if (parts.length === 4 && parts[3] === "run") {
+          const id = parts[2] ?? "";
+          if (!/^[A-Za-z0-9._:-]{1,128}$/u.test(id)) {
+            json(response, 400, { code: "invalid-job-command" });
+            return;
+          }
+          object(value, []);
+          const controller = new AbortController();
+          const abort = () => controller.abort();
+          response.once("close", abort);
+          try {
+            json(response, 200, {
+              results: await options.jobs.run(
+                id,
+                AbortSignal.any([controller.signal, stopUploads.signal]),
+              ),
+            });
+          } finally {
+            response.off("close", abort);
+          }
+          return;
+        }
         const id = parts[2] ?? "";
-        if (!/^[A-Za-z0-9._:-]{1,128}$/u.test(id)) {
+        if (
+          parts.length !== 4 ||
+          !/^[A-Za-z0-9._:-]{1,128}$/u.test(id) ||
+          !["pause", "resume", "cancel"].includes(parts[3]!)
+        ) {
           json(response, 400, { code: "invalid-job-command" });
           return;
         }
-        object(value, []);
+        const action = parts[3];
+        const job =
+          action === "pause"
+            ? await options.jobs.pause(id)
+            : action === "resume"
+              ? await options.jobs.resume(id)
+              : await options.jobs.cancel(id);
+        json(response, 200, { job });
+        return;
+      }
+      if (pathname.startsWith("/api/library/")) {
+        const library = options.library;
+        if (!library) {
+          json(response, 503, { code: "library-unavailable" });
+          return;
+        }
+        switch (pathname) {
+          case "/api/library/search": {
+            const stop = new AbortController();
+            const abort = () => stop.abort();
+            response.once("close", abort);
+            try {
+              const page = await library.queries.search(
+                value,
+                AbortSignal.any([stop.signal, stopUploads.signal]),
+              );
+              if (!response.destroyed) json(response, 200, { page });
+            } finally {
+              response.off("close", abort);
+            }
+            return;
+          }
+          case "/api/library/detail": {
+            const command = object(value, ["literature_id"]);
+            json(response, 200, {
+              detail: await library.queries.detail(command.literature_id),
+            });
+            return;
+          }
+          case "/api/library/references":
+            json(response, 200, {
+              page: await library.queries.references(value),
+            });
+            return;
+          case "/api/library/reference": {
+            const command = object(value, ["reference_id"]);
+            json(response, 200, {
+              detail: await library.queries.referenceDetail(
+                command.reference_id,
+              ),
+            });
+            return;
+          }
+          case "/api/library/bibliography": {
+            const command = object(value, ["literature_id", "format"]);
+            if (
+              command.format !== "bibtex" &&
+              command.format !== "biblatex" &&
+              command.format !== "ris" &&
+              command.format !== "csl-json"
+            )
+              invalidInput();
+            if (typeof command.literature_id !== "string") invalidInput();
+            const detail = await library.queries.detail(command.literature_id);
+            const bytes = exportBibliography(detail, command.format);
+            const contentType =
+              command.format === "bibtex" || command.format === "biblatex"
+                ? "application/x-bibtex; charset=utf-8"
+                : command.format === "ris"
+                  ? "application/x-research-info-systems; charset=utf-8"
+                  : "application/json; charset=utf-8";
+            const extension =
+              command.format === "bibtex"
+                ? "bib"
+                : command.format === "biblatex"
+                  ? "biblatex"
+                  : command.format === "ris"
+                    ? "ris"
+                    : "json";
+            response.writeHead(200, {
+              "Content-Type": contentType,
+              "Content-Disposition": `attachment; filename="${detail.literature.literature_id}.${extension}"`,
+              "Content-Length": bytes.byteLength,
+            });
+            response.end(bytes);
+            return;
+          }
+          case "/api/library/artifact": {
+            const command = object(value, ["literature_id", "kind"]);
+            if (command.kind !== "primary-pdf") invalidInput();
+            const detail = await library.queries.detail(command.literature_id);
+            const descriptor = detail.primary_pdf?.asset;
+            if (!descriptor) {
+              json(response, 404, { code: "artifact-not-found" });
+              return;
+            }
+            const stop = new AbortController();
+            const abort = () => stop.abort();
+            response.once("close", abort);
+            response.setHeader(
+              "Content-Type",
+              command.kind === "primary-pdf"
+                ? "application/pdf"
+                : "text/markdown; charset=utf-8",
+            );
+            response.setHeader(
+              "Content-Disposition",
+              `attachment; filename="${detail.literature.literature_id}.${command.kind === "primary-pdf" ? "pdf" : "md"}"`,
+            );
+            try {
+              await library.artifacts.withArtifact(
+                descriptor,
+                async (chunks) => {
+                  for await (const chunk of chunks) {
+                    if (stop.signal.aborted)
+                      throw new Error("download cancelled");
+                    if (!response.write(chunk))
+                      await once(response, "drain", { signal: stop.signal });
+                  }
+                },
+                { signal: stop.signal },
+              );
+              response.end();
+            } finally {
+              response.off("close", abort);
+            }
+            return;
+          }
+          default:
+            json(response, 404, { code: "endpoint-not-found" });
+            return;
+        }
+      }
+      if (pathname === "/api/configuration/status") {
+        if (!options.configuration) {
+          json(response, 503, { code: "configuration-unavailable" });
+          return;
+        }
+        json(response, 200, { status: await options.configuration.status() });
+        return;
+      }
+      if (pathname === "/api/configuration/read") {
+        if (!options.configuration?.read) {
+          json(response, 503, { code: "configuration-unavailable" });
+          return;
+        }
+        const snapshot = await options.configuration.read();
+        json(response, 200, {
+          snapshot,
+          ...runtimeConfigurationState(options.configuration, snapshot),
+        });
+        return;
+      }
+      if (pathname === "/api/configuration/diff") {
+        if (!options.configuration?.diff) {
+          json(response, 503, { code: "configuration-unavailable" });
+          return;
+        }
+        const command = object(value, ["payload", "baseline"]);
+        if (
+          typeof command.payload !== "string" ||
+          typeof command.baseline !== "string"
+        )
+          invalidInput();
+        json(response, 200, {
+          diff: await options.configuration.diff(
+            command.payload,
+            command.baseline,
+          ),
+        });
+        return;
+      }
+      if (pathname === "/api/configuration/publish") {
+        if (!options.configuration?.publish) {
+          json(response, 503, { code: "configuration-unavailable" });
+          return;
+        }
+        const command = object(value, ["payload", "baseline", "sections"]);
+        if (
+          typeof command.payload !== "string" ||
+          typeof command.baseline !== "string" ||
+          !Array.isArray(command.sections) ||
+          command.sections.some((section) => !isConfigurationSection(section))
+        )
+          invalidInput();
+        const snapshot = await options.configuration.publish(
+          command.payload,
+          command.baseline,
+          command.sections as ConfigurationSection[],
+        );
+        json(response, 200, {
+          snapshot,
+          ...runtimeConfigurationState(options.configuration, snapshot),
+        });
+        return;
+      }
+      if (pathname === "/api/configuration/publish-json") {
+        if (!options.configuration?.publishConfiguration) {
+          json(response, 503, { code: "configuration-unavailable" });
+          return;
+        }
+        const command = object(value, [
+          "configuration",
+          "baseline",
+          "sections",
+        ]);
+        if (
+          typeof command.baseline !== "string" ||
+          !Array.isArray(command.sections) ||
+          command.sections.some((section) => !isConfigurationSection(section))
+        )
+          invalidInput();
+        object(command.configuration, CONFIGURATION_ROOT_KEYS);
+        const snapshot = await options.configuration.publishConfiguration(
+          command.configuration,
+          command.baseline,
+          command.sections as ConfigurationSection[],
+        );
+        json(response, 200, {
+          snapshot,
+          ...runtimeConfigurationState(options.configuration, snapshot),
+        });
+        return;
+      }
+      if (pathname === "/api/configuration/probe") {
+        if (!options.configuration?.probe) {
+          json(response, 503, { code: "configuration-probe-unavailable" });
+          return;
+        }
+        const command = object(value, ["owner", "target", "image"]);
+        if (
+          !isConfigurationProbeOwner(command.owner) ||
+          (command.target !== null && typeof command.target !== "string") ||
+          typeof command.image !== "boolean"
+        )
+          invalidInput();
         const controller = new AbortController();
         const abort = () => controller.abort();
         response.once("close", abort);
         try {
           json(response, 200, {
-            results: await options.jobs.run(
-              id,
+            result: await options.configuration.probe(
+              command as unknown as ConfigurationProbeRequest,
               AbortSignal.any([controller.signal, stopUploads.signal]),
             ),
           });
@@ -1538,363 +1853,126 @@ export async function startWorkbenchHttp(
         }
         return;
       }
-      const id = parts[2] ?? "";
-      if (
-        parts.length !== 4 ||
-        !/^[A-Za-z0-9._:-]{1,128}$/u.test(id) ||
-        !["pause", "resume", "cancel"].includes(parts[3]!)
-      ) {
-        json(response, 400, { code: "invalid-job-command" });
-        return;
-      }
-      const action = parts[3];
-      const job =
-        action === "pause"
-          ? await options.jobs.pause(id)
-          : action === "resume"
-            ? await options.jobs.resume(id)
-            : await options.jobs.cancel(id);
-      json(response, 200, { job });
-      return;
-    }
-    if (pathname.startsWith("/api/library/")) {
-      const library = options.library;
-      if (!library) {
-        json(response, 503, { code: "library-unavailable" });
-        return;
-      }
-      switch (pathname) {
-        case "/api/library/search":
-          json(response, 200, { page: await library.queries.search(value) });
-          return;
-        case "/api/library/detail": {
-          const command = object(value, ["literature_id"]);
-          json(response, 200, {
-            detail: await library.queries.detail(command.literature_id),
-          });
+      if (pathname === "/api/configuration/credential") {
+        if (!options.configuration?.credential) {
+          json(response, 503, { code: "configuration-unavailable" });
           return;
         }
-        case "/api/library/references":
-          json(response, 200, {
-            page: await library.queries.references(value),
-          });
-          return;
-        case "/api/library/reference": {
-          const command = object(value, ["reference_id"]);
-          json(response, 200, {
-            detail: await library.queries.referenceDetail(command.reference_id),
-          });
-          return;
-        }
-        case "/api/library/bibliography": {
-          const command = object(value, ["literature_id", "format"]);
-          if (
-            command.format !== "bibtex" &&
-            command.format !== "biblatex" &&
-            command.format !== "ris" &&
-            command.format !== "csl-json"
-          )
-            invalidInput();
-          if (typeof command.literature_id !== "string") invalidInput();
-          const detail = await library.queries.detail(command.literature_id);
-          const bytes = exportBibliography(detail, command.format);
-          const contentType =
-            command.format === "bibtex" || command.format === "biblatex"
-              ? "application/x-bibtex; charset=utf-8"
-              : command.format === "ris"
-                ? "application/x-research-info-systems; charset=utf-8"
-                : "application/json; charset=utf-8";
-          const extension =
-            command.format === "bibtex"
-              ? "bib"
-              : command.format === "biblatex"
-                ? "biblatex"
-                : command.format === "ris"
-                  ? "ris"
-                  : "json";
-          response.writeHead(200, {
-            "Content-Type": contentType,
-            "Content-Disposition": `attachment; filename="${detail.literature.literature_id}.${extension}"`,
-            "Content-Length": bytes.byteLength,
-          });
-          response.end(bytes);
-          return;
-        }
-        case "/api/library/artifact": {
-          const command = object(value, ["literature_id", "kind"]);
-          if (command.kind !== "primary-pdf") invalidInput();
-          const detail = await library.queries.detail(command.literature_id);
-          const descriptor = detail.primary_pdf?.asset;
-          if (!descriptor) {
-            json(response, 404, { code: "artifact-not-found" });
-            return;
-          }
-          const stop = new AbortController();
-          const abort = () => stop.abort();
-          response.once("close", abort);
-          response.setHeader(
-            "Content-Type",
-            command.kind === "primary-pdf"
-              ? "application/pdf"
-              : "text/markdown; charset=utf-8",
-          );
-          response.setHeader(
-            "Content-Disposition",
-            `attachment; filename="${detail.literature.literature_id}.${command.kind === "primary-pdf" ? "pdf" : "md"}"`,
-          );
-          try {
-            await library.artifacts.withArtifact(
-              descriptor,
-              async (chunks) => {
-                for await (const chunk of chunks) {
-                  if (stop.signal.aborted)
-                    throw new Error("download cancelled");
-                  if (!response.write(chunk))
-                    await once(response, "drain", { signal: stop.signal });
-                }
-              },
-              { signal: stop.signal },
-            );
-            response.end();
-          } finally {
-            response.off("close", abort);
-          }
-          return;
-        }
-        default:
-          json(response, 404, { code: "endpoint-not-found" });
-          return;
-      }
-    }
-    if (pathname === "/api/configuration/status") {
-      if (!options.configuration) {
-        json(response, 503, { code: "configuration-unavailable" });
-        return;
-      }
-      json(response, 200, { status: await options.configuration.status() });
-      return;
-    }
-    if (pathname === "/api/configuration/read") {
-      if (!options.configuration?.read) {
-        json(response, 503, { code: "configuration-unavailable" });
-        return;
-      }
-      const snapshot = await options.configuration.read();
-      json(response, 200, {
-        snapshot,
-        ...runtimeConfigurationState(options.configuration, snapshot),
-      });
-      return;
-    }
-    if (pathname === "/api/configuration/diff") {
-      if (!options.configuration?.diff) {
-        json(response, 503, { code: "configuration-unavailable" });
-        return;
-      }
-      const command = object(value, ["payload", "baseline"]);
-      if (
-        typeof command.payload !== "string" ||
-        typeof command.baseline !== "string"
-      )
-        invalidInput();
-      json(response, 200, {
-        diff: await options.configuration.diff(
-          command.payload,
+        const command = object(value, ["edit", "baseline"]);
+        if (typeof command.baseline !== "string") invalidInput();
+        const status = await options.configuration.credential(
+          command.edit as TypeScriptCredentialEdit,
           command.baseline,
-        ),
-      });
-      return;
-    }
-    if (pathname === "/api/configuration/publish") {
-      if (!options.configuration?.publish) {
-        json(response, 503, { code: "configuration-unavailable" });
-        return;
-      }
-      const command = object(value, ["payload", "baseline", "sections"]);
-      if (
-        typeof command.payload !== "string" ||
-        typeof command.baseline !== "string" ||
-        !Array.isArray(command.sections) ||
-        command.sections.some((section) => !isConfigurationSection(section))
-      )
-        invalidInput();
-      const snapshot = await options.configuration.publish(
-        command.payload,
-        command.baseline,
-        command.sections as ConfigurationSection[],
-      );
-      json(response, 200, {
-        snapshot,
-        ...runtimeConfigurationState(options.configuration, snapshot),
-      });
-      return;
-    }
-    if (pathname === "/api/configuration/publish-json") {
-      if (!options.configuration?.publishConfiguration) {
-        json(response, 503, { code: "configuration-unavailable" });
-        return;
-      }
-      const command = object(value, ["configuration", "baseline", "sections"]);
-      if (
-        typeof command.baseline !== "string" ||
-        !Array.isArray(command.sections) ||
-        command.sections.some((section) => !isConfigurationSection(section))
-      )
-        invalidInput();
-      object(command.configuration, CONFIGURATION_ROOT_KEYS);
-      const snapshot = await options.configuration.publishConfiguration(
-        command.configuration,
-        command.baseline,
-        command.sections as ConfigurationSection[],
-      );
-      json(response, 200, {
-        snapshot,
-        ...runtimeConfigurationState(options.configuration, snapshot),
-      });
-      return;
-    }
-    if (pathname === "/api/configuration/probe") {
-      if (!options.configuration?.probe) {
-        json(response, 503, { code: "configuration-probe-unavailable" });
-        return;
-      }
-      const command = object(value, ["owner", "target", "image"]);
-      if (
-        !isConfigurationProbeOwner(command.owner) ||
-        (command.target !== null && typeof command.target !== "string") ||
-        typeof command.image !== "boolean"
-      )
-        invalidInput();
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      response.once("close", abort);
-      try {
+        );
+        const snapshot = await options.configuration.read?.();
         json(response, 200, {
-          result: await options.configuration.probe(
-            command as unknown as ConfigurationProbeRequest,
-            AbortSignal.any([controller.signal, stopUploads.signal]),
-          ),
+          status,
+          credential_effective_at: "next-external-request",
+          in_flight_credential_action: "may-complete",
+          ...(snapshot
+            ? runtimeConfigurationState(options.configuration, snapshot)
+            : {
+                runtime_configuration_current: null,
+                ordinary_configuration_restart_required: null,
+                application_restart_required: null,
+                application_restart_reason: null,
+                runtime_capabilities: null,
+              }),
         });
-      } finally {
-        response.off("close", abort);
-      }
-      return;
-    }
-    if (pathname === "/api/configuration/credential") {
-      if (!options.configuration?.credential) {
-        json(response, 503, { code: "configuration-unavailable" });
         return;
       }
-      const command = object(value, ["edit", "baseline"]);
-      if (typeof command.baseline !== "string") invalidInput();
-      const status = await options.configuration.credential(
-        command.edit as TypeScriptCredentialEdit,
-        command.baseline,
-      );
-      const snapshot = await options.configuration.read?.();
-      json(response, 200, {
-        status,
-        credential_effective_at: "next-external-request",
-        in_flight_credential_action: "may-complete",
-        ...(snapshot
-          ? runtimeConfigurationState(options.configuration, snapshot)
-          : {
-              runtime_configuration_current: null,
-              ordinary_configuration_restart_required: null,
-              application_restart_required: null,
-              application_restart_reason: null,
-              runtime_capabilities: null,
-            }),
-      });
-      return;
-    }
-    if (pathname === "/api/candidate/accept") {
-      await session.acceptCandidate(clientId, value);
-      json(response, 200, { view: projectedView(clientId) });
-      return;
-    }
-    if (pathname === "/api/candidate/abandon") {
-      await session.abandonCandidate(clientId, value);
-      json(response, 200, { view: projectedView(clientId) });
-      return;
-    }
-    if (pathname === "/api/action") {
-      const result = await session.command(clientId, value);
-      await session.refresh();
-      json(response, 200, { result, view: projectedView(clientId) });
-      return;
-    }
-    if (pathname === "/api/control") {
-      const production = session instanceof ProductionWorkbenchSession;
-      const command = object(
-        value,
-        production
-          ? ["kind", "control_epoch", "session_id", "article_id"]
-          : ["kind", "control_epoch"],
-      );
-      if (production)
-        session.assertBinding(clientId, command.session_id, command.article_id);
-      const epoch = command.control_epoch;
-      if (
-        typeof epoch !== "number" ||
-        !Number.isSafeInteger(epoch) ||
-        epoch < 0
-      )
-        invalidInput();
-      switch (command.kind) {
-        case "takeover":
-          if (production)
-            session.takeover(clientId, epoch, command.session_id as string);
-          else session.takeover(clientId, epoch);
-          break;
-        case "release":
-          if (production)
-            session.release(clientId, epoch, command.session_id as string);
-          else session.release(clientId, epoch);
-          break;
-        case "pause":
-          if (production)
-            session.pause(clientId, epoch, command.session_id as string);
-          else session.pause(clientId, epoch);
-          break;
-        case "resume":
-          if (production)
-            session.resume(clientId, epoch, command.session_id as string);
-          else session.resume(clientId, epoch);
-          break;
-        case "cancel":
-          if (production)
-            session.cancel(clientId, epoch, command.session_id as string);
-          else session.cancel(clientId, epoch);
-          break;
-        case "agent-step": {
-          // Respond immediately so a slow model cannot hold the human control channel.
-          void session.runAgent(clientId, epoch).catch(() => undefined);
-          break;
-        }
-        default:
-          invalidInput();
+      if (pathname === "/api/candidate/accept") {
+        await session.acceptCandidate(clientId, value);
+        json(response, 200, { view: projectedView(clientId) });
+        return;
       }
-      json(response, 200, { view: projectedView(clientId) });
-      return;
-    }
-    if (pathname === "/api/target") {
-      const command = object(value, ["article_id", "control_epoch"]);
-      if (
-        typeof command.article_id !== "string" ||
-        typeof command.control_epoch !== "number" ||
-        !Number.isSafeInteger(command.control_epoch)
-      )
-        invalidInput();
-      await session.selectTarget(
-        clientId,
-        command.control_epoch,
-        command.article_id,
-      );
-      json(response, 200, { view: projectedView(clientId) });
-      return;
-    }
-    json(response, 404, { code: "endpoint-not-found" });
+      if (pathname === "/api/candidate/abandon") {
+        await session.abandonCandidate(clientId, value);
+        json(response, 200, { view: projectedView(clientId) });
+        return;
+      }
+      if (pathname === "/api/action") {
+        const result = await session.command(clientId, value);
+        await session.refresh();
+        json(response, 200, { result, view: projectedView(clientId) });
+        return;
+      }
+      if (pathname === "/api/control") {
+        const production = session instanceof ProductionWorkbenchSession;
+        const command = object(
+          value,
+          production
+            ? ["kind", "control_epoch", "session_id", "article_id"]
+            : ["kind", "control_epoch"],
+        );
+        if (production)
+          session.assertBinding(
+            clientId,
+            command.session_id,
+            command.article_id,
+          );
+        const epoch = command.control_epoch;
+        if (
+          typeof epoch !== "number" ||
+          !Number.isSafeInteger(epoch) ||
+          epoch < 0
+        )
+          invalidInput();
+        switch (command.kind) {
+          case "takeover":
+            if (production)
+              session.takeover(clientId, epoch, command.session_id as string);
+            else session.takeover(clientId, epoch);
+            break;
+          case "release":
+            if (production)
+              session.release(clientId, epoch, command.session_id as string);
+            else session.release(clientId, epoch);
+            break;
+          case "pause":
+            if (production)
+              session.pause(clientId, epoch, command.session_id as string);
+            else session.pause(clientId, epoch);
+            break;
+          case "resume":
+            if (production)
+              session.resume(clientId, epoch, command.session_id as string);
+            else session.resume(clientId, epoch);
+            break;
+          case "cancel":
+            if (production)
+              session.cancel(clientId, epoch, command.session_id as string);
+            else session.cancel(clientId, epoch);
+            break;
+          case "agent-step": {
+            // Respond immediately so a slow model cannot hold the human control channel.
+            void session.runAgent(clientId, epoch).catch(() => undefined);
+            break;
+          }
+          default:
+            invalidInput();
+        }
+        json(response, 200, { view: projectedView(clientId) });
+        return;
+      }
+      if (pathname === "/api/target") {
+        const command = object(value, ["article_id", "control_epoch"]);
+        if (
+          typeof command.article_id !== "string" ||
+          typeof command.control_epoch !== "number" ||
+          !Number.isSafeInteger(command.control_epoch)
+        )
+          invalidInput();
+        await session.selectTarget(
+          clientId,
+          command.control_epoch,
+          command.article_id,
+        );
+        json(response, 200, { view: projectedView(clientId) });
+        return;
+      }
+      json(response, 404, { code: "endpoint-not-found" });
+    });
   }
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -1943,6 +2021,9 @@ export async function startWorkbenchHttp(
 }
 
 const ARCHIVE_HTTP_WRITES = [
+  "folders",
+  "reading-open",
+  "snapshot-rename",
   "archive",
   "tags",
   "snapshots",
@@ -1950,12 +2031,22 @@ const ARCHIVE_HTTP_WRITES = [
   "document-role",
   "document-annotate",
   "document-publish-proofread",
+  "proofread-save",
   "proofread-build",
   "proofread-decide",
   "proofread-revoke",
   "archive-references",
 ] as const;
 const ARCHIVE_HTTP_READS = [
+  "reading-status",
+  "folders",
+  "library-counts",
+  "processor-runs",
+  "literature-results",
+  "usage-estimate",
+  "task-run",
+  "agent-sessions",
+  "operation-history",
   "archive",
   "tags",
   "snapshots",
@@ -1965,6 +2056,7 @@ const ARCHIVE_HTTP_READS = [
   "document-annotation",
   "document-figures",
   "document-reference-texts",
+  "proofread-text",
   "proofread-inspect",
   "proofread-page",
 ] as const;
@@ -2012,6 +2104,7 @@ function createQueryHttpHandler(
   const maintenanceCookie = `sr_maintenance_${randomBytes(8).toString("hex")}`;
   const maintenanceToken = randomBytes(32).toString("hex");
   const maintenanceCsrf = randomBytes(32).toString("hex");
+  const maintenanceActor = `maintenance-session:${randomBytes(16).toString("hex")}`;
   const streams = new Set<ServerResponse>();
   const verifiedBinaryStreams = new Set<ServerResponse>();
   const stopUploads = new AbortController();
@@ -2019,6 +2112,7 @@ function createQueryHttpHandler(
     request: IncomingMessage,
     response: ServerResponse,
     workbenchCsrf?: string,
+    authenticatedActor?: string,
   ): Promise<void> {
     response.setHeader("Cache-Control", "no-store");
     response.setHeader("X-Content-Type-Options", "nosniff");
@@ -2077,6 +2171,7 @@ function createQueryHttpHandler(
       json(response, 200, {
         protocol_version: 1,
         csrf: workbenchCsrf ?? maintenanceCsrf,
+        actor: authenticatedActor ?? maintenanceActor,
       });
       return;
     }
@@ -2187,14 +2282,29 @@ function createQueryHttpHandler(
         response.once("close", abort);
         streams.add(response);
         try {
-          const command = object(await extractionBody(request, 1024 * 1024), [
-            "protocol_version",
-            "request",
-          ]);
+          const command = object(
+            await extractionBody(
+              request,
+              archiveOperation === "proofread-save"
+                ? 9 * 1024 * 1024
+                : 1024 * 1024,
+            ),
+            ["protocol_version", "request"],
+          );
           if (command.protocol_version !== 1) invalidInput();
           const result = await options.archiveOperation(
             archiveOperation,
-            command.request,
+            [
+              "proofread-save",
+              "proofread-decide",
+              "proofread-revoke",
+              "document-role",
+            ].includes(archiveOperation)
+              ? {
+                  ...actorInput(command.request),
+                  actor: authenticatedActor ?? maintenanceActor,
+                }
+              : command.request,
             AbortSignal.any([stop.signal, stopUploads.signal]),
           );
           processorReply(response, 200, { protocol_version: 1, result });
@@ -2587,16 +2697,26 @@ function createQueryHttpHandler(
         }
         return;
       }
-      case "/api/v1/query/search":
-        json(response, 200, {
-          protocol_version: 1,
-          page: await executeQuery(
+      case "/api/v1/query/search": {
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        streams.add(response);
+        try {
+          const page = await executeQuery(
             application,
             "library-search",
             command.request,
-          ),
-        });
+            AbortSignal.any([stop.signal, stopUploads.signal]),
+          );
+          if (!response.destroyed)
+            json(response, 200, { protocol_version: 1, page });
+        } finally {
+          streams.delete(response);
+          response.off("close", abort);
+        }
         return;
+      }
       case "/api/v1/query/read": {
         const request = object(command.request, ["literature_id"]);
         json(response, 200, {
@@ -2732,8 +2852,11 @@ function createQueryHttpHandler(
       request: IncomingMessage,
       response: ServerResponse,
       workbenchCsrf?: string,
+      authenticatedActor?: string,
     ) =>
-      handle(request, response, workbenchCsrf).catch((error: unknown) => {
+      withActivity({ actor: authenticatedActor ?? maintenanceActor }, () =>
+        handle(request, response, workbenchCsrf, authenticatedActor),
+      ).catch((error: unknown) => {
         const route = (request.url ?? "").split("?")[0]!;
         if (
           ARCHIVE_HTTP_READS.some((n) => route === `/api/v1/query/${n}`) ||

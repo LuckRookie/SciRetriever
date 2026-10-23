@@ -48,7 +48,9 @@ function fail(code: string): never {
 export function archiveStates(
   db: DatabaseSync,
   id?: string | readonly string[],
+  checkpoint: () => void = () => {},
 ): Map<string, ArchiveState> {
+  checkpoint();
   const args = id ? [typeof id === "string" ? id : JSON.stringify(id)] : [],
     where = !id
       ? ""
@@ -60,6 +62,7 @@ export function archiveStates(
     `SELECT m.*, EXISTS(SELECT 1 FROM literature_metadata_authors a WHERE a.literature_id=m.literature_id) AS has_authors, r.mode, r.asset_id AS run_asset, r.state AS run_state, r.job_id, j.status AS job_status, (SELECT count(*) FROM literature_tag_items i WHERE i.literature_id=m.literature_id) AS tag_count, dh.source_json AS description_json FROM literature_metadata m LEFT JOIN archive_runs r ON r.literature_id=m.literature_id LEFT JOIN execution_jobs j ON j.job_id=r.job_id LEFT JOIN archive_description_heads dh ON dh.literature_id=m.literature_id ${where}`,
     ...args,
   );
+  checkpoint();
   const filter = !id
     ? ""
     : typeof id === "string"
@@ -70,7 +73,9 @@ export function archiveStates(
     `SELECT p.*,(SELECT json_group_array(profile) FROM raw_parse_current r WHERE r.source_asset_id=p.asset_id AND r.source_sha256=p.asset_sha256 AND r.raw_parse_id IS NOT NULL) AS profiles_json FROM archive_current_parts p${filter}`,
     ...args,
   );
+  checkpoint();
   const steps = rows(db, `SELECT * FROM archive_steps${filter}`, ...args);
+  checkpoint();
   const issues = rows(db, `SELECT * FROM archive_issues${filter}`, ...args);
   const byLit = <T extends { literature_id: unknown }>(list: T[]) => {
     const map = new Map<string, T[]>();
@@ -93,6 +98,7 @@ export function archiveStates(
     );
   const result = new Map<string, ArchiveState>();
   for (const m of all) {
+    checkpoint();
     const key = String(m.literature_id),
       material = groupedParts.get(key) ?? [],
       stepRows = groupedSteps.get(key) ?? [];
@@ -223,12 +229,14 @@ export function runArchiveStorage(
             created_at: e.created_at,
           }) as ArchiveVersionEvent,
       );
+    // Reading history is not material: counting it here made every opened paper
+    // invalidate every open page within one poll.
     if (action === "revision")
       return {
         revision: JSON.stringify(
           db
             .prepare(
-              "SELECT (SELECT COALESCE(MAX(sequence),0) FROM archive_version_events) AS facts,(SELECT count(*) FROM processor_results) AS results,(SELECT count(*) FROM snapshots) AS snapshots,(SELECT version FROM vocabulary_state WHERE singleton=1) AS vocabulary,(SELECT MAX(started_at||COALESCE(finished_at,'')||state) FROM archive_runs) AS runs",
+              "SELECT (SELECT COALESCE(MAX(sequence),0) FROM archive_version_events) AS facts,(SELECT count(*) FROM processor_results) AS results,(SELECT count(*) FROM snapshots) AS snapshots,(SELECT rowid||status FROM operation_records WHERE operation IN ('folders','snapshot-rename') ORDER BY rowid DESC LIMIT 1) AS organization,(SELECT version FROM vocabulary_state WHERE singleton=1) AS vocabulary,(SELECT MAX(started_at||COALESCE(finished_at,'')||state) FROM archive_runs) AS runs",
             )
             .get(),
         ),
@@ -273,7 +281,7 @@ export function runArchiveStorage(
         ),
         proofreading: rows(
           db,
-          "SELECT sum(COALESCE(json_extract(stats_json,'$.text_layer_pages'),0)) AS text_layer_pages,sum(COALESCE(json_extract(stats_json,'$.image_only_pages'),0)) AS image_only_pages,sum(COALESCE(json_extract(stats_json,'$.blank_pages'),0)) AS blank_pages,sum(COALESCE(json_extract(stats_json,'$.missing'),0)) AS missing,sum(COALESCE(json_extract(stats_json,'$.extra'),0)) AS extra,sum(COALESCE(json_extract(stats_json,'$.token_mismatch'),0)) AS token_mismatch,sum(COALESCE(json_extract(stats_json,'$.page_misplaced'),0)) AS page_misplaced,sum(COALESCE(json_extract(stats_json,'$.fixed'),0)) AS fixed,sum(COALESCE(json_extract(stats_json,'$.draft_correct'),0)) AS draft_correct,sum(COALESCE(json_extract(stats_json,'$.uncertain'),0)) AS uncertain,sum(COALESCE(json_extract(stats_json,'$.uncertain_blocks'),0)) AS uncertain_blocks,sum(COALESCE(json_extract(stats_json,'$.agent_deletions'),0)) AS agent_deletions FROM archive_attempts WHERE step='proofread'",
+          "SELECT sum(COALESCE(json_extract(stats_json,'$.text_layer_pages'),0)) AS text_layer_pages,sum(COALESCE(json_extract(stats_json,'$.image_only_pages'),0)) AS image_only_pages,sum(COALESCE(json_extract(stats_json,'$.blank_pages'),0)) AS blank_pages,sum(COALESCE(json_extract(stats_json,'$.missing'),0)) AS missing,sum(COALESCE(json_extract(stats_json,'$.extra'),0)) AS extra,sum(COALESCE(json_extract(stats_json,'$.token_mismatch'),0)) AS token_mismatch,sum(COALESCE(json_extract(stats_json,'$.page_misplaced'),0)) AS page_misplaced,sum(COALESCE(json_extract(stats_json,'$.fixed'),0)) AS fixed,sum(COALESCE(json_extract(stats_json,'$.draft_correct'),0)) AS draft_correct,sum(COALESCE(json_extract(stats_json,'$.agent_deletions'),0)) AS agent_deletions FROM archive_attempts WHERE step='proofread'",
         ),
         steps: rows(
           db,
@@ -344,6 +352,27 @@ export function runArchiveStorage(
         s.output_tokens,
         now,
       );
+      const job = db
+        .prepare(
+          "SELECT job_id FROM archive_runs WHERE literature_id=? AND run_id=?",
+        )
+        .get(s.literature_id, String(r.run_id))?.job_id;
+      if (job)
+        db.prepare(
+          "INSERT INTO task_steps VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(job_id,literature_id,asset_id,step) DO UPDATE SET status=excluded.status,reason=excluded.reason,calls=task_steps.calls+excluded.calls,input_tokens=task_steps.input_tokens+excluded.input_tokens,output_tokens=task_steps.output_tokens+excluded.output_tokens,elapsed_ms=task_steps.elapsed_ms+excluded.elapsed_ms,updated_at=excluded.updated_at",
+        ).run(
+          job,
+          s.literature_id,
+          s.asset_id,
+          s.step,
+          s.status,
+          s.reason,
+          r.record_attempt ? s.calls : 0,
+          r.record_attempt ? s.input_tokens : 0,
+          r.record_attempt ? s.output_tokens : 0,
+          r.record_attempt ? s.elapsed_ms : 0,
+          now,
+        );
       if (r.record_attempt)
         db.prepare(
           "INSERT INTO archive_attempts(literature_id,asset_id,step,elapsed_ms,calls,input_tokens,output_tokens,stats_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)",

@@ -100,6 +100,20 @@ export class StructureAnnotationService {
       prefix = annotationInteger(r.max_prefix_characters, 0, 65536);
     return this.run((active) => this.perform(id, prefix, null, active), signal);
   }
+  buildRules(value: unknown, signal?: AbortSignal) {
+    const r = annotationRecord(value, ["document_version_id"]);
+    return this.run(
+      (active) =>
+        this.perform(
+          parseAssetId(r.document_version_id),
+          0,
+          null,
+          active,
+          true,
+        ),
+      signal,
+    );
+  }
   setRole(value: unknown, signal?: AbortSignal) {
     const r = annotationRecord(value, [
       "document_version_id",
@@ -145,6 +159,7 @@ export class StructureAnnotationService {
       expected_manual_revision: number;
     } | null,
     signal: AbortSignal,
+    rulesOnly = false,
   ) {
     const usage = { calls: 0, input_tokens: 0, output_tokens: 0 };
     const state = await this.storage.state(id, signal);
@@ -156,15 +171,15 @@ export class StructureAnnotationService {
         ? await this.storage.byId(state.current.annotation_id, signal)
         : null;
     if (edit && !base) throw new AnnotationError("annotation-missing");
-    const method: StructureAnnotation["method"] = {
-      mode: edit ? "manual" : "automatic",
-      base_annotation_id: base?.annotation_id ?? null,
-      rules_version: SECTION_RULES_VERSION,
-      extraction_version: "structure-extract-v1",
-      model_method_version: "section-role-dsh-v1",
-      max_prefix_characters: prefix,
-      model: edit ? base!.method.model : (this.classifier?.identity ?? null),
-    };
+    const method = structureMethod(
+      prefix,
+      edit
+        ? base!.method.model
+        : rulesOnly
+          ? null
+          : (this.classifier?.identity ?? null),
+      edit ? base!.annotation_id : null,
+    );
     const locks: Record<string, SectionRole> = Object.fromEntries(
       state.locks.map((l) => [l.section_id, l.role]),
     );
@@ -193,7 +208,7 @@ export class StructureAnnotationService {
             max_prefix_characters: prefix,
             locked: locks,
             classify:
-              edit || !this.classifier
+              edit || rulesOnly || !this.classifier
                 ? null
                 : (input, signal) =>
                     this.classifier!.classify(input, signal, (counts) => {
@@ -270,4 +285,20 @@ export class StructureAnnotationService {
       reference_count: published.references.length,
     };
   }
+}
+
+export function structureMethod(
+  prefix: number,
+  model: StructureAnnotation["method"]["model"],
+  base: string | null = null,
+): StructureAnnotation["method"] {
+  return {
+    mode: base ? "manual" : "automatic",
+    base_annotation_id: base,
+    rules_version: SECTION_RULES_VERSION,
+    extraction_version: "structure-extract-v1",
+    model_method_version: "section-role-dsh-v1",
+    max_prefix_characters: prefix,
+    model,
+  };
 }

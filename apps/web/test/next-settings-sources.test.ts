@@ -2,6 +2,12 @@ import { expect, it } from "vitest";
 import type { Page } from "playwright";
 import { TypeScriptConfigurationOwner } from "../../server/src/configuration/owner.js";
 import { nextWorkspace } from "./next-workspace-fixture.js";
+async function mode(page: Page, label: string, option: string) {
+  await page
+    .getByRole("radiogroup", { name: label, exact: true })
+    .getByText(option, { exact: true })
+    .click();
+}
 async function select(page: Page, label: string, option: string) {
   await page
     .getByRole("button", { name: new RegExp(label) })
@@ -69,7 +75,7 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
     };
     const tab = async (name: string) =>
       page.getByRole("tab", { name, exact: true }).click();
-    await check(page, "web-of-science", true);
+    await check(page, "Web of Science", true);
     await page
       .getByRole("textbox", { name: "元数据结果上限", exact: true })
       .fill("37");
@@ -78,7 +84,7 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
       .getByRole("textbox", { name: "数据库", exact: true })
       .fill("WOS-Synthetic");
     await page.getByRole("textbox", { name: "版本", exact: true }).fill("2026");
-    await select(page, "获取来源模式", "自动");
+    await mode(page, "获取来源模式", "自动");
     await save("保存来源配置");
     expect((await owner!.read()).configuration.sources).toMatchObject({
       metadata: {
@@ -93,8 +99,8 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
       },
       acquisition: { mode: "auto", providers: [] },
     });
-    await select(page, "获取来源模式", "自定义");
-    await check(page, "unpaywall", true);
+    await mode(page, "获取来源模式", "自定义");
+    await check(page, "Unpaywall", true);
     const beforeInvalid = (await owner!.read()).revision;
     await page
       .getByRole("button", { name: "保存来源配置", exact: true })

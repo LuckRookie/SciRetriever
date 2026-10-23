@@ -547,7 +547,7 @@ describe("bounded document and material reading", () => {
   });
 
   it.each(["DDL", "foreign-key"] as const)(
-    "invalidates warmed schema checks after external %s changes",
+    "rechecks the catalog after external %s changes (DDL at once, data at the next start)",
     async (kind) => {
       const env = await fixture();
       let raw: DatabaseSync | undefined;
@@ -574,14 +574,23 @@ describe("bounded document and material reading", () => {
             .prepare("UPDATE literature_assets SET asset_id=? WHERE asset_id=?")
             .run(id(999), env.asset.asset_id);
         }
-        await expect(
-          env.app.documentRead.describe(request),
-        ).rejects.toBeInstanceOf(Error);
+        if (kind === "DDL")
+          await expect(
+            env.app.documentRead.describe(request),
+          ).rejects.toBeInstanceOf(Error);
+        else {
+          // Ordinary commits do not repeat the full check; the next start
+          // does, and refuses the damaged catalog.
+          expect(await env.app.documentRead.describe(request)).toEqual(first);
+          await expect(env.reopen()).rejects.toBeInstanceOf(Error);
+        }
         if (kind === "DDL") raw.exec("DROP INDEX unexpected_document_index");
-        else
+        else {
           raw
             .prepare("UPDATE literature_assets SET asset_id=? WHERE asset_id=?")
             .run(env.asset.asset_id, id(999));
+          await env.reopen();
+        }
         expect(await env.app.documentRead.describe(request)).toEqual(first);
       } finally {
         raw?.close();
@@ -1097,7 +1106,7 @@ describe("bounded document and material reading", () => {
       // validated page as the resource descriptor source for this pagination probe.
       await page.reload();
       await page
-        .getByRole("button", { name: "文档资源（51）", exact: true })
+        .getByRole("button", { name: "图表资源（51）", exact: true })
         .click();
       expect(await page.locator(".reader-resources button").count()).toBe(51);
       expect(

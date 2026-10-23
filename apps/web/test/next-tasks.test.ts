@@ -51,7 +51,7 @@ it("keeps active tasks discoverable beyond a full history page and confirms canc
     await w.page
       .getByRole("button", { name: "获取 PDF · 1 篇指定文献", exact: true })
       .click();
-    const drawer = w.page.getByRole("dialog", { name: "任务详情" });
+    const drawer = w.page.getByRole("region", { name: "任务详情" });
     await drawer.getByRole("button", { name: "暂停", exact: true }).click();
     await expect
       .poll(async () => (await w.env.app.jobs!.getJob(activeId))?.status)
@@ -71,7 +71,7 @@ it("keeps active tasks discoverable beyond a full history page and confirms canc
       .toBeGreaterThan(0);
     await w.page.reload();
     await w.page
-      .getByRole("dialog", { name: "任务详情" })
+      .getByRole("region", { name: "任务详情" })
       .getByText("已取消", { exact: true })
       .first()
       .waitFor();

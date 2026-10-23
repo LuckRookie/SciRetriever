@@ -1,5 +1,5 @@
 import type {
-  ProcessorCoverage,
+  ProcessorOutcomeCounts,
   ProofreadSource,
 } from "@sciretriever/contracts";
 import { Badge, Disclosure } from "../../components/index.js";
@@ -26,24 +26,27 @@ export function SourceBadge({
   );
 }
 export function ResultState({
-  coverage,
+  outcomes,
   freshness,
 }: {
-  coverage: readonly ProcessorCoverage[];
+  outcomes: ProcessorOutcomeCounts | null;
   freshness: { state: "current" | "stale"; reasons: readonly unknown[] };
 }) {
-  const parts = coverage.flatMap((c) => c.parts);
   return (
     <section aria-label="结果覆盖与版本">
       <div className="archive-inline-actions">
         <Badge status={freshness.state === "stale" ? "partial" : "completed"}>
           {freshness.state === "stale" ? "已过时" : "当前版本"}
         </Badge>
-        {Object.entries(archiveStrings.outcomes).map(([key, label]) => (
-          <span key={key}>
-            {label} {parts.filter((p) => p.outcome === key).length}
-          </span>
-        ))}
+        {outcomes ? (
+          Object.entries(archiveStrings.outcomes).map(([key, label]) => (
+            <span key={key}>
+              {label} {outcomes[key as keyof ProcessorOutcomeCounts]} 篇
+            </span>
+          ))
+        ) : (
+          <span>旧方法结果未保存按篇计数</span>
+        )}
       </div>
       {freshness.state === "stale" ? (
         <Disclosure title={`过时原因 · ${freshness.reasons.length}`}>

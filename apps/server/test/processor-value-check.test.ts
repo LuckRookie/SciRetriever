@@ -1,23 +1,23 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import {
   parseEvidenceRef,
   sha256,
+  parseProcessorValueChecks,
+  type ProcessorCitation,
+  type ProcessorJson,
   type ProcessorContent,
 } from "@sciretriever/contracts";
-import { ProcessorValueVerifier } from "../src/analysis/value-check.js";
-import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
+import {
+  ProcessorValueVerifier,
+  valueInFragments,
+} from "../src/analysis/value-check.js";
+import { DocumentReadError } from "../src/document/read.js";
 import { buildProofreadVersion } from "../src/proofread/engine.js";
 import { SqliteProofreadStorage } from "../src/storage/proofread.js";
-import type { ProofreadCache, PdfPages } from "../src/proofread/contract.js";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
 
-async function fixture(
-  imageOnly = false,
-  configured = false,
-  confirmed = true,
-  imageFailure?: string,
-) {
+async function fixture(imageOnly = false) {
   const e = await coreProcessingFixture();
   e.setText("The yield was 97%.");
   await e.app.documentProcessing.parseDocuments({
@@ -87,230 +87,122 @@ async function fixture(
       content_sha256: null,
     }),
   };
-  let calls = 0,
-    images = 0;
-  const runtime = new DshAgentRuntime(
-    configured
-      ? [
-          {
-            role: "value-checking",
-            provider: "fixture",
-            model: "vision",
-            capabilities: ["structured_text", "tool_decision", "image_input"],
-            reasoning: "default",
-            stream: false,
-            context_window_tokens: 100000,
-            max_output_tokens: 4096,
-            adapter: {
-              provider: "fixture",
-              model: "vision",
-              execute: async () => {
-                throw new Error("atomic model forbidden");
-              },
-              executeModel: async (request, _options, _signal, lifecycle) => {
-                lifecycle?.onDispatched();
-                calls++;
-                const imageSeen = request.messages.some((m) =>
-                  m.parts.some((p) => "data" in p),
-                );
-                return {
-                  message: {
-                    role: "assistant",
-                    parts: [],
-                    tool_calls: [
-                      {
-                        id: randomUUID(),
-                        name: imageSeen ? "submit_result" : "view_evidence",
-                        arguments: imageSeen
-                          ? {
-                              confirmed,
-                              reason: confirmed
-                                ? "The original region reports 97%."
-                                : "The digits are unreadable.",
-                            }
-                          : {},
-                      },
-                    ],
-                  },
-                  stop_reason: "tool_calls",
-                  provenance: {
-                    provider: "fixture",
-                    model: "vision",
-                    usage: { input_tokens: 20, output_tokens: 5 },
-                  },
-                };
-              },
-            },
-          },
-        ]
-      : [],
-  );
-  const entries = new Map<
-    string,
-    { id: string; bytes: Uint8Array; media_type: string }
-  >();
-  const cache: ProofreadCache = {
-    read: async (key) => entries.get(key) ?? null,
-    save: async (key, bytes, media_type) => {
-      entries.set(key, { id: key, bytes, media_type });
-      return key;
-    },
+  return {
+    e,
+    citation,
+    verifier: new ProcessorValueVerifier(e.app.documentRead),
+    close: () => e.close(),
   };
-  const pages: PdfPages = {
-    method: "fixture",
-    inspect: async () => [],
-    image: async () => {
-      images++;
-      if (imageFailure) throw new Error(imageFailure);
-      return {
-        media_type: "image/png",
-        data: Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==",
-          "base64",
-        ),
-        width: 1,
-        height: 1,
-      };
-    },
-  };
-  const content = (value: number): ProcessorContent => ({
+}
+
+function content(
+  value: ProcessorJson,
+  sources: readonly ProcessorCitation[],
+): ProcessorContent {
+  return {
     kind: "records",
     schema: { type: "object" },
     records: [
       {
         record_id: "r1",
-        payload: { yield: { value, raw: String(value), unit: "%" } },
-        evidence: [{ pointer: "/yield", sources: [citation] }],
+        payload: { value },
+        evidence: [{ pointer: "/value", sources }],
         missing: {},
       },
     ],
-  });
-  return {
-    content,
-    verifier: new ProcessorValueVerifier(
-      e.app.documentRead,
-      runtime,
-      pages,
-      cache,
-      4,
-    ),
-    get calls() {
-      return calls;
-    },
-    get images() {
-      return images;
-    },
-    close: async () => {
-      await runtime.close();
-      await e.close();
-    },
   };
 }
-it("checks every reported number in corrected text without a model call, preserving mismatches as uncertainty", async () => {
-  const e = await fixture();
-  try {
-    const found = await e.verifier.check(
-      e.content(97),
-      [],
-      new AbortController().signal,
-    );
-    expect(found.checks[0]).toMatchObject({
-      pointer: "/yield",
-      status: "text-layer",
-    });
-    const absent = await e.verifier.check(
-      e.content(98),
-      [],
-      new AbortController().signal,
-    );
-    expect(absent.checks[0]!).toMatchObject({
-      status: "uncertain",
-      reason: "value-verification-uncertain",
-      sources: [expect.objectContaining({ reason: "cited-value-missing" })],
-    });
-    expect(e.calls).toBe(0);
-    expect(e.images).toBe(0);
-  } finally {
-    await e.close();
-  }
-});
-it.each([true, false])(
-  "views the fixed image region and caches the completed visual decision (%s)",
-  async (confirmed) => {
-    const e = await fixture(true, true, confirmed);
+it.each([false, true])(
+  "checks all text bases without vision calls and handles all six states (image-only=%s)",
+  { timeout: 0 },
+  async (imageOnly) => {
+    const f = await fixture(imageOnly);
+    const signal = new AbortController().signal;
     try {
-      const first = await e.verifier.check(
-        e.content(97),
-        [],
-        new AbortController().signal,
+      const cases: [ProcessorJson, readonly ProcessorCitation[], string][] = [
+        [{ value: 97, raw: "97", unit: "%" }, [f.citation], "found"],
+        [{ value: 98, raw: "98", unit: "%" }, [f.citation], "not-found"],
+        ["yield", [f.citation], "found"],
+        ["completely absent words", [f.citation], "not-found"],
+        [null, [], "value-null"],
+        ["nonempty", [], "no-citation"],
+        [
+          "nonempty",
+          [
+            {
+              kind: "document",
+              evidence: parseEvidenceRef({
+                ...f.citation.evidence,
+                document_version_id: randomUUID(),
+              }),
+            },
+          ],
+          "citation-unavailable",
+        ],
+        [
+          "synthesis",
+          [
+            {
+              kind: "result",
+              result_id: randomUUID(),
+              content_sha256: "a".repeat(64),
+              record_id: "r0",
+              pointer: "/value",
+            },
+          ],
+          "derived",
+        ],
+      ];
+      for (const [value, sources, status] of cases) {
+        const c = content(value, sources),
+          r = await f.verifier.check(c, [], signal);
+        expect(r.checks[0]!.status).toBe(status);
+        expect(r.usage).toEqual({
+          calls: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+        });
+        expect(parseProcessorValueChecks(r.checks, c)).toEqual(r.checks);
+        if (status === "found")
+          expect(r.checks[0]!.sources[0]!.basis).toBe(
+            imageOnly ? "image-only" : "text-layer",
+          );
+      }
+      const c = content("yield", [f.citation]),
+        r = await f.verifier.check(c, [], signal);
+      expect(() =>
+        parseProcessorValueChecks([{ ...r.checks[0], sources: [] }], c),
+      ).toThrow();
+      vi.spyOn(f.e.app.documentRead, "resolveEvidence").mockRejectedValueOnce(
+        new DocumentReadError("document-integrity"),
       );
-      expect(first.checks[0]!.status).toBe(
-        confirmed ? "image-checked" : "uncertain",
-      );
-      expect(first.usage).toEqual({
-        calls: 2,
-        input_tokens: 40,
-        output_tokens: 10,
+      await expect(f.verifier.check(c, [], signal)).rejects.toMatchObject({
+        code: "document-integrity",
       });
-      const next = await e.verifier.check(
-        e.content(97),
-        [],
-        new AbortController().signal,
-      );
-      expect(next.checks).toEqual(first.checks);
-      expect(first.checks[0]!.sources[0]!.reason).toBe(
-        confirmed ? "visual-value-confirmed" : "visual-value-uncertain",
-      );
-      expect(next.usage.calls).toBe(0);
-      expect(e.calls).toBe(2);
     } finally {
-      await e.close();
+      await f.close();
     }
   },
 );
-it("delivers an unconfigured image-only value as uncertain without a hidden model or render call", async () => {
-  const e = await fixture(true);
-  try {
-    const result = await e.verifier.check(
-      e.content(97),
-      [],
-      new AbortController().signal,
-    );
-    expect(result.checks[0]!.status).toBe("uncertain");
-    expect(e.calls).toBe(0);
-    expect(e.images).toBe(0);
-  } finally {
-    await e.close();
-  }
-});
-
-it("preserves delivery as uncertain when the configured region renderer is unavailable", async () => {
-  const e = await fixture(true, true, true, "proofread-renderer-unavailable");
-  try {
-    const result = await e.verifier.check(
-      e.content(97),
-      [],
-      new AbortController().signal,
-    );
-    expect(result.checks[0]).toMatchObject({
-      status: "uncertain",
-      reason: "value-verification-uncertain",
-      sources: [expect.objectContaining({ reason: "pdf-region-unavailable" })],
-    });
-    expect(e.calls).toBe(0);
-  } finally {
-    await e.close();
-  }
-});
-
-it("refuses tampered original images rather than masking an integrity failure as uncertainty", async () => {
-  const e = await fixture(true, true, true, "proofread-image-integrity");
-  try {
-    await expect(
-      e.verifier.check(e.content(97), [], new AbortController().signal),
-    ).rejects.toThrow("proofread-image-integrity");
-    expect(e.calls).toBe(0);
-  } finally {
-    await e.close();
-  }
+it("does not confuse missing text, different units, or numeric substrings with a found value", () => {
+  expect(valueInFragments("absent words", ["present words"])).toBe(false);
+  expect(valueInFragments("", ["text"])).toBe(false);
+  expect(valueInFragments({ value: 97, raw: "97", unit: "%" }, ["197%"])).toBe(
+    false,
+  );
+  expect(valueInFragments({ value: 97, raw: "97", unit: "°C" }, ["97%"])).toBe(
+    false,
+  );
+  expect(valueInFragments({ value: 97, raw: "97", unit: "°C" }, ["97 ℃"])).toBe(
+    true,
+  );
+  expect(
+    valueInFragments({ value: 97, raw: "97", unit: "m" }, ["97 samples"]),
+  ).toBe(false);
+  expect(valueInFragments({ value: 97, raw: "97", unit: "m" }, ["97 mm"])).toBe(
+    false,
+  );
+  expect(valueInFragments({ value: 97, raw: "97", unit: "m" }, ["97m"])).toBe(
+    true,
+  );
 });

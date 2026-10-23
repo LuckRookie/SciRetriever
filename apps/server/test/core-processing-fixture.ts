@@ -38,6 +38,7 @@ export async function coreProcessingFixture(
     headerOnly?: boolean;
     archiveProfile?: "pipeline" | "vlm-engine";
     inspectResponseSchema?: (schema: unknown) => void;
+    metadata?: ApplicationOptions["metadata"];
   } = {},
 ) {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-core-processing-"));
@@ -93,6 +94,7 @@ export async function coreProcessingFixture(
     };
   };
   const options: ApplicationOptions = {
+    ...(optionsInput.metadata ? { metadata: optionsInput.metadata } : {}),
     proofreadPages: {
       method: "synthetic-pdf-page-v1",
       async inspect(_asset, _hash, signal) {

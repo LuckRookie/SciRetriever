@@ -1,3 +1,4 @@
+import { UsageEstimate } from "../processing/UsageEstimate.js";
 import {
   extractionSpecHash,
   parseDocumentReceipt,
@@ -620,6 +621,28 @@ function Materials() {
           onChange={setQuestion}
           isDisabled={!!active || purpose !== "question"}
         />
+        <UsageEstimate
+          request={
+            literature.trim()
+              ? {
+                  kind: "processor",
+                  request: {
+                    schema_version: 1,
+                    idempotency_key: "estimate",
+                    name: "文献总结",
+                    processor: { id: "summary", version: "2" },
+                    spec: {
+                      purpose,
+                      question: purpose === "question" ? question : null,
+                    },
+                    inputs: [
+                      { kind: "literature", literature_id: literature.trim() },
+                    ],
+                  },
+                }
+              : null
+          }
+        />
         <Button
           isDisabled={!!active || !literature}
           confirm={{
@@ -730,6 +753,18 @@ function Indexes() {
             value={raw}
             onChange={setRaw}
             rows={10}
+          />
+          <UsageEstimate
+            request={(() => {
+              try {
+                return {
+                  kind: "processing",
+                  request: parseStrictJsonValue(raw),
+                };
+              } catch {
+                return null;
+              }
+            })()}
           />
           <Checkbox isSelected={start} onChange={setStart}>
             保存后立即执行

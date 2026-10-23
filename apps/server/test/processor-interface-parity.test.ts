@@ -103,13 +103,14 @@ it("reassembles results larger than the MCP response budget through HTTP, CLI an
           value_checks: Array.from({ length: large ? 8 : 1 }, (_, i) => ({
             record_id: `r${i}`,
             pointer: "/text",
-            status: "uncertain",
-            reason: "Synthetic fixture is unverified.",
+            status: "citation-unavailable",
+            reason: "corrected-fragment-unavailable",
             sources: [
               {
                 citation: { kind: "document", evidence: material.evidence },
-                status: "uncertain",
-                reason: "Synthetic fixture is unverified.",
+                basis: null,
+                status: "citation-unavailable",
+                reason: "corrected-fragment-unavailable",
               },
             ],
           })),

@@ -43,10 +43,11 @@ export class ProcessorBatchService {
         snapshot.request.source_request_sha256 !== hash
       )
         processorError("processor-idempotency-conflict");
+      await this.results.recordRun(existing.job_id, raw);
       return existing;
     }
     const prepared = await this.service.prepare(raw, signal);
-    return this.tasks.submit({
+    const job = await this.tasks.submit({
       schema_version: 2,
       idempotency_key: raw.idempotency_key,
       collection_name: raw.name,
@@ -56,6 +57,8 @@ export class ProcessorBatchService {
         request,
       })),
     });
+    await this.results.recordRun(job.job_id, raw);
+    return job;
   }
   async runBatch(value: unknown, signal?: AbortSignal) {
     const job = await this.submit(value, signal);

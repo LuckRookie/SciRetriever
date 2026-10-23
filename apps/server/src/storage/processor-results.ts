@@ -1,7 +1,9 @@
+import { processorUsage } from "../analysis/processor-usage.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { VerifiedReaderError } from "./files/reader.js";
 import {
   canonicalJsonBytes,
+  processorOutcomeCounts,
   parseArtifactRef,
   parseAssetId,
   parseLiteratureId,
@@ -267,20 +269,26 @@ export class SqliteProcessorStorage implements ProcessorStore {
           processorError("processor-dependency-integrity");
       for (const citation of resultCitations(result.content))
         await this.resolve(citation, cache, stack, signal);
-      const parts = result.coverage.flatMap((c) => c.parts);
-      const outcomes = Object.fromEntries(
-        ["extracted", "not-reported", "part-absent", "incomplete"].map(
-          (outcome) => [
-            outcome,
-            parts.filter((p) => p.outcome === outcome).length,
-          ],
-        ),
+      const mapped = result.invocation.inputs
+        .flatMap((i) => (i.kind === "snapshot" ? i.mapped_results : []))
+        .map((m) => cache.results.get(m.result_id)?.result)
+        .filter((r): r is ProcessorResult => !!r);
+      const freshness = await this.database.processor<
+        NonNullable<StoredProcessorResult["freshness"]>
+      >("freshness", id, signal);
+      const oldMethod = freshness.reasons.some(
+        (reason) =>
+          reason !== null &&
+          typeof reason === "object" &&
+          "kind" in reason &&
+          reason.kind === "method-changed",
       );
+      const outcomes = oldMethod
+        ? null
+        : processorOutcomeCounts(result, mapped);
       const stored = {
         outcomes,
-        freshness: await this.database.processor<
-          NonNullable<StoredProcessorResult["freshness"]>
-        >("freshness", id, signal),
+        freshness,
         result,
         ref: { result_id: id, content_sha256: String(row.content_sha256) },
       };
@@ -338,6 +346,20 @@ export class SqliteProcessorStorage implements ProcessorStore {
         processorResultBytes(result),
       );
       const publication: ProcessorPublication = {
+        usage: processorUsage(result),
+        outcomes: processorOutcomeCounts(
+          result,
+          await Promise.all(
+            result.invocation.inputs
+              .flatMap((i) => (i.kind === "snapshot" ? i.mapped_results : []))
+              .map(async (m) => {
+                const source = await this.byId(m.result_id, signal);
+                if (!source || source.ref.content_sha256 !== m.content_sha256)
+                  processorError("processor-input-changed");
+                return source.result;
+              }),
+          ),
+        ),
         result_id: result.result_id,
         comparison_sha256: result.comparison_sha256,
         processor_id: result.invocation.processor.id,
@@ -359,6 +381,14 @@ export class SqliteProcessorStorage implements ProcessorStore {
       const stored = await this.byId(String(row.result_id));
       if (!stored) processorError("processor-publication-integrity");
       return stored;
+    });
+  }
+  recordRun(job_id: string, request: unknown) {
+    return this.database.review("processor-request-put", {
+      job_id,
+      request: JSON.parse(
+        Buffer.from(canonicalJsonBytes(request)).toString("utf8"),
+      ),
     });
   }
   private async contentRecords(

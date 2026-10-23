@@ -68,7 +68,8 @@ it("finds related corrected, absent-part and snapshot results without fabricated
       [summary.result_id, absent.result_id, synthesis.result_id].sort(),
     );
     const empty = await e.app.processorRead!.byId(absent.result_id);
-    expect(empty!.result.coverage[0]!.parts[0]!.outcome).toBe("part-absent");
+    expect(empty!.result.coverage[0]!.parts[0]!.outcome).toBe("incomplete");
+    expect(empty!.result.coverage[0]!.parts[0]!.gaps).toContain("part-absent");
     expect(empty!.result.content).toMatchObject({
       kind: "records",
       records: [],

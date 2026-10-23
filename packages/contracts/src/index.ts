@@ -207,6 +207,11 @@ export const MISSING_STEPS = [
 ] as const;
 export type MissingStep = (typeof MISSING_STEPS)[number];
 export interface LibraryQuery {
+  readonly folder?: {
+    readonly id: string;
+    readonly include_descendants: boolean;
+  } | null;
+  readonly recently_opened?: boolean;
   readonly text: string | null;
   readonly title: string | null;
   readonly author: string | null;
@@ -238,6 +243,8 @@ export interface StableFailure {
 }
 
 export type LibrarySort =
+  | "intake-desc"
+  | "opened-desc"
   | "publication-year-desc"
   | "publication-year-asc"
   | "title-asc"
@@ -250,6 +257,10 @@ export interface LibrarySearchRequest {
   readonly cursor: string | null;
 }
 export interface LiteratureSearchItem {
+  readonly folder_ids?: readonly string[];
+  readonly last_opened_at?: string | null;
+  /** Earliest attached metadata observation, UTC; null when unavailable. */
+  readonly intake_at?: string | null;
   readonly tags?: readonly {
     readonly tag_id: string;
     readonly name: string;
@@ -423,7 +434,7 @@ export function parseLibrarySearchRequest(
 ): LibrarySearchRequest {
   const r = exact(
     {
-      sort: "publication-year-desc",
+      sort: "intake-desc",
       limit: 50,
       cursor: null,
       ...object(value, []),
@@ -453,8 +464,12 @@ export function parseLibrarySearchRequest(
     ...object(r.query, []),
   });
   const sort = enumeration<LibrarySort>(
-    r.sort,
+    !Object.hasOwn(object(value, []), "sort") && query.recently_opened
+      ? "opened-desc"
+      : r.sort,
     [
+      "intake-desc",
+      "opened-desc",
       "publication-year-desc",
       "publication-year-asc",
       "title-asc",
@@ -477,9 +492,18 @@ export function parseLiteratureSearchItem(
   value: unknown,
 ): LiteratureSearchItem {
   const r = exact(
-    { tags: undefined, ...object(value, []) },
+    {
+      tags: undefined,
+      intake_at: null,
+      last_opened_at: null,
+      folder_ids: [],
+      ...object(value, []),
+    },
     [
       "tags",
+      "intake_at",
+      "last_opened_at",
+      "folder_ids",
       "literature",
       "metadata_revision",
       "metadata_sha256",
@@ -488,7 +512,18 @@ export function parseLiteratureSearchItem(
     ],
     [],
   );
+  if (
+    r.intake_at !== null &&
+    (typeof r.intake_at !== "string" ||
+      !Number.isFinite(Date.parse(r.intake_at)) ||
+      new Date(r.intake_at).toISOString() !== r.intake_at)
+  )
+    fail(["intake_at"]);
   return Object.freeze({
+    intake_at: r.intake_at as string | null,
+    last_opened_at:
+      r.last_opened_at === null ? null : parseUtcTimestamp(r.last_opened_at),
+    folder_ids: list(r.folder_ids, [], (v) => parseAssetId(v)),
     ...(r.tags === undefined
       ? {}
       : {
@@ -1028,7 +1063,12 @@ export function parseAsset(value: unknown): Asset {
 }
 export function parseLibraryQuery(value: unknown): LibraryQuery {
   const record = exact(
-    { tags: undefined, ...object(value, []) },
+    {
+      tags: undefined,
+      folder: undefined,
+      recently_opened: undefined,
+      ...object(value, []),
+    },
     [
       "text",
       "title",
@@ -1049,6 +1089,8 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
       "needs_manual_pdf",
       "discovery_run_ids",
       "tags",
+      "folder",
+      "recently_opened",
     ],
     [],
   );
@@ -1138,6 +1180,27 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
             });
           })(),
         }),
+    ...(record.folder === undefined
+      ? {}
+      : {
+          folder:
+            record.folder === null
+              ? null
+              : (() => {
+                  const f = exact(
+                    record.folder,
+                    ["id", "include_descendants"],
+                    [],
+                  );
+                  return {
+                    id: parseAssetId(f.id),
+                    include_descendants: wireBoolean(f.include_descendants),
+                  };
+                })(),
+        }),
+    ...(record.recently_opened === undefined
+      ? {}
+      : { recently_opened: wireBoolean(record.recently_opened) }),
     discovery_run_ids: list(
       record.discovery_run_ids,
       ["discovery_run_ids"],
@@ -3133,9 +3196,18 @@ export async function parseLiteratureDetail(
   value: unknown,
 ): Promise<LiteratureDetail> {
   const r = exact(
-    { tags: undefined, ...object(value, []) },
+    {
+      tags: undefined,
+      intake_at: null,
+      last_opened_at: null,
+      folder_ids: [],
+      ...object(value, []),
+    },
     [
       "tags",
+      "intake_at",
+      "last_opened_at",
+      "folder_ids",
       "literature",
       "metadata_revision",
       "metadata_sha256",
@@ -3152,6 +3224,9 @@ export async function parseLiteratureDetail(
     [],
   );
   const item = parseLiteratureSearchItem({
+    intake_at: r.intake_at,
+    last_opened_at: r.last_opened_at,
+    folder_ids: r.folder_ids,
     ...(r.tags === undefined ? {} : { tags: r.tags }),
     literature: r.literature,
     metadata_revision: r.metadata_revision,
@@ -3193,3 +3268,16 @@ export * from "./metadata-fields.js";
 export * from "./tags.js";
 
 export * from "./processor-value-checks.js";
+export * from "./processor-reading.js";
+
+export * from "./library-counts.js";
+
+export * from "./actor.js";
+
+export * from "./folders.js";
+
+export * from "./agent-conversation.js";
+
+export * from "./processor-outcomes.js";
+
+export * from "./reading-status.js";

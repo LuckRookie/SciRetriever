@@ -124,7 +124,7 @@ export function taskLiteratureId(job: Json, target: Json): string | null {
     );
     if (inputs.length !== 1) return null;
     const source = record(inputs[0], "processor input");
-    if (source.kind === "missing")
+    if (source.kind === "missing" || source.kind === "archive-document")
       return typeof source.literature_id === "string"
         ? source.literature_id
         : null;

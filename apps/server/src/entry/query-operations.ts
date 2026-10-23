@@ -1,3 +1,5 @@
+import { FolderError } from "../literature/folders.js";
+import { presentActors } from "../logging/actor-label.js";
 import {
   ContractValidationError,
   createInputManifest,
@@ -59,12 +61,20 @@ function unavailable(): never {
   throw new ProductOperationError("query-unavailable");
 }
 export const QUERY_OPERATIONS = [
+  "operation-history",
+  "agent-sessions",
+  "task-run",
+  "usage-estimate",
+  "processor-runs",
+  "literature-results",
   "snapshots",
   "archive",
   "tags",
   "metadata-fields",
   "status",
   "library-search",
+  "library-counts",
+  "folders",
   "literature-read",
   "artifact-chunk",
   "bibliography-export",
@@ -77,6 +87,8 @@ export const QUERY_OPERATIONS = [
   "document-annotation",
   "document-figures",
   "document-reference-texts",
+  "proofread-text",
+  "reading-status",
   "proofread-inspect",
   "proofread-page",
   "document-parts",
@@ -129,6 +141,10 @@ async function readQuery(
       signal,
     );
   }
+  if (operation === "folders") {
+    if (!q.folders) unavailable();
+    return q.folders.query(value, signal);
+  }
   if (operation === "snapshots") {
     if (!q.snapshots) unavailable();
     return q.snapshots.query(value, signal);
@@ -159,6 +175,72 @@ async function readQuery(
   if (operation === "document-annotation") {
     if (!q.annotationRead) unavailable();
     return q.annotationRead.read(value, signal);
+  }
+  if (operation === "processor-runs" || operation === "literature-results") {
+    if (!q.reviewRead) unavailable();
+    if (operation === "processor-runs")
+      operationRecord(
+        value,
+        [],
+        [
+          "processor_id",
+          "snapshot_id",
+          "literature_id",
+          "literature_query",
+          "stale",
+          "offset",
+          "limit",
+        ],
+      );
+    else operationRecord(value, ["literature_id"], ["offset", "limit"]);
+    return q.reviewRead(operation, value);
+  }
+  if (operation === "usage-estimate") {
+    if (!q.usageEstimate) unavailable();
+    return q.usageEstimate(value, signal);
+  }
+  if (operation === "task-run") {
+    if (!q.reviewRead) unavailable();
+    operationRecord(
+      value,
+      ["job_id"],
+      ["offset", "limit", "target_id", "member_offset", "member_limit"],
+    );
+    return q.reviewRead("task-run", value);
+  }
+  if (operation === "agent-sessions") {
+    if (!q.reviewRead) unavailable();
+    const r = operationRecord(value, ["operation", "request"]);
+    if (r.operation === "list") {
+      operationRecord(
+        r.request,
+        [],
+        ["job_id", "literature_id", "status", "before", "limit"],
+      );
+      return q.reviewRead("session-list", r.request);
+    }
+    if (r.operation === "read") {
+      operationRecord(r.request, ["session_id"], ["after", "limit"]);
+      return q.reviewRead("session-read", r.request);
+    }
+    if (r.operation === "revision") {
+      operationRecord(r.request, []);
+      return q.reviewRead("session-revision", {});
+    }
+    throw new ContractValidationError();
+  }
+  if (operation === "operation-history") {
+    if (!q.reviewRead) unavailable();
+    operationRecord(value, [], ["actor", "operation", "after", "limit"]);
+    return q.reviewRead("audit-list", value);
+  }
+  if (operation === "reading-status") {
+    if (!q.proofreadRead) unavailable();
+    return q.proofreadRead.readingStatus(value, signal);
+  }
+  if (operation === "proofread-text") {
+    if (!q.proofreadRead) unavailable();
+    return q.proofreadRead.editor(value, signal);
   }
   if (operation === "proofread-page") {
     if (!q.proofreadRead) unavailable();
@@ -308,8 +390,10 @@ async function readQuery(
       return readLibraryArtifact(q, value, signal);
     case "bibliography-export":
       return exportBibliographyRequest(q, value);
+    case "library-counts":
+      return q.query.counts(operationRecord(value, ["query"]).query, signal);
     case "library-search":
-      return q.query.search(parseLibrarySearchRequest(value));
+      return q.query.search(parseLibrarySearchRequest(value), signal);
     case "literature-read":
       return q.query.detail(
         parseLiteratureId(
@@ -458,6 +542,7 @@ export function isQueryFailure(
   return (
     error instanceof ProductOperationError ||
     error instanceof SnapshotError ||
+    error instanceof FolderError ||
     error instanceof ArchiveError ||
     error instanceof TagError ||
     error instanceof MetadataFieldError ||
@@ -473,4 +558,23 @@ export function isQueryFailure(
     error instanceof LiteratureQueryError
   );
 }
-export { readQuery as executeQuery };
+export async function executeQuery(
+  q: QueryApplication,
+  operation: QueryOperation,
+  value: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const result = await readQuery(q, operation, value, signal);
+  return [
+    "operation-history",
+    "agent-sessions",
+    "task-run",
+    "processor-runs",
+    "tags",
+    "metadata-fields",
+    "proofread-inspect",
+    "proofread-text",
+  ].includes(operation)
+    ? presentActors(result)
+    : result;
+}

@@ -13,7 +13,7 @@ import type { PdfPageInspection } from "../browser/pdf-region.js";
 import type { AgentImagePart } from "../agents/protocol.js";
 export type DraftCandidate = Omit<
   ProofreadBlock,
-  "block_id" | "basis" | "uncertainty" | "edit_refs"
+  "block_id" | "basis" | "edit_refs"
 > & {
   readonly known_defect: boolean;
   readonly page_text: readonly {
@@ -111,11 +111,7 @@ export interface ManualProofreadDecision {
   readonly block_id: string;
   readonly draft_sha256: Sha256;
   readonly raw_ref: ProofreadBlock["raw_ref"];
-  readonly action:
-    | "replace"
-    | "resolve-suspect"
-    | "clear-uncertainty"
-    | "no-body";
+  readonly action: "replace" | "document-edit" | "resolve-suspect" | "no-body";
   readonly text: string | null;
   readonly reason: string;
   readonly page: number;

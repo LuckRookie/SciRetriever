@@ -1,3 +1,14 @@
+import { recordMapProgress } from "../application/operations.js";
+import { ArchiveReusePreview } from "../archive/reuse.js";
+import { ProcessorPlanner } from "../analysis/processor-planning.js";
+import { UsageEstimator } from "../analysis/usage-estimate.js";
+import { valueVerificationIdentity } from "../analysis/value-check.js";
+import {
+  configuredAgentModels,
+  configuredAgentIdentity,
+  endpoint,
+} from "./agent-models.js";
+import { AgentTraceService } from "../application/agent-traces.js";
 import { ProcessorValueVerifier } from "../analysis/value-check.js";
 import { canonicalJsonBytes, sha256 } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
@@ -28,6 +39,7 @@ import { ProcessorArchiveSource } from "../analysis/processor-archive.js";
 import { ProcessorExternalRetention } from "../analysis/processor-external.js";
 import { createProcessorRegistry } from "../analysis/processor-registry.js";
 import { ProcessorService } from "../analysis/processor.js";
+import { FolderService } from "../literature/folders.js";
 import { SnapshotService } from "../analysis/snapshots.js";
 import { InterventionService } from "../application/jobs/interventions.js";
 import {
@@ -187,6 +199,7 @@ import { dshTagModel } from "../tags/model.js";
 import { TagService } from "../tags/service.js";
 export interface Application {
   readonly snapshots: SnapshotService;
+  readonly folders: FolderService;
   readonly archive: ArchiveService;
   readonly tags: TagService;
   readonly metadataFields: LiteratureMetadataService;
@@ -295,7 +308,24 @@ export type ProcessorReader = Pick<
   | "records"
 >;
 export interface QueryApplication {
+  readonly usageEstimate?: (
+    request: unknown,
+    signal?: AbortSignal,
+  ) => Promise<unknown>;
+  readonly reviewRead?: (
+    action:
+      | "audit-list"
+      | "job-origin-get"
+      | "session-list"
+      | "session-read"
+      | "session-revision"
+      | "task-run"
+      | "processor-runs"
+      | "literature-results",
+    value: unknown,
+  ) => Promise<unknown>;
   readonly archiveProfile?: "pipeline" | "vlm-engine";
+  readonly folders?: Pick<FolderService, "query">;
   readonly snapshots?: Pick<
     SnapshotService,
     "query" | "read" | "list" | "diff"
@@ -306,7 +336,7 @@ export interface QueryApplication {
   readonly annotationRead?: AnnotationReadService | null;
   readonly proofreadRead?: Pick<
     ProofreadService,
-    "inspect" | "status" | "page"
+    "inspect" | "status" | "page" | "editor" | "readingStatus"
   > | null;
   readonly rawParseRead?: Pick<SqliteRawParseStorage, "current"> | null;
   readonly processorRead?: ProcessorReader | null;
@@ -324,7 +354,7 @@ export interface QueryApplication {
   /** Read-only literature and artifact operations. No maintenance or Job port is exposed. */
   readonly query: Pick<
     LiteratureQueryService,
-    "search" | "detail" | "references" | "referenceDetail"
+    "search" | "counts" | "detail" | "references" | "referenceDetail"
   > | null;
   readonly literatureArtifacts: LiteratureArtifactService | null;
   readonly documentRead: DocumentReadService | null;
@@ -595,15 +625,13 @@ export async function createApplication(
   let database: SqliteWorker | undefined;
   let files: FileStore | undefined;
   let agents: DshAgentRuntime | undefined;
+  let agentTraces: AgentTraceService | undefined;
   let browserAgentCapability: BrowserAgentCapability | undefined;
   let rawParsing: RawParsingService | undefined;
   let proofreadDocuments: ProofreadDocumentService | undefined;
   let structureAnnotations: StructureAnnotationService | undefined;
   let proofreading: ProofreadService | undefined;
   let valueVerifier: ProcessorValueVerifier | undefined;
-  let verificationPorts:
-    | { pages: PdfPages; cache: SqliteProofreadStorage }
-    | undefined;
   let rawParseStorage: SqliteRawParseStorage | undefined;
   let regionRenderer: PdfRegionRenderer | undefined;
   let completion: LiteratureCompletionService | undefined;
@@ -714,8 +742,9 @@ export async function createApplication(
         () => rawParsing?.close(),
         () => rawParseStorage?.close(),
         () => networkBudget.close(),
-        () => writes.close(),
         () => agents?.close(),
+        () => agentTraces?.close(),
+        () => writes.close(),
         () => files?.close(),
         () => database?.close(),
       ];
@@ -1143,6 +1172,8 @@ export async function createApplication(
       },
     );
     const logger = createLogger("application");
+    agentTraces = new AgentTraceService(database);
+    await agentTraces.initialize();
     agents = new DshAgentRuntime(
       buildAgentBindings(
         configuration,
@@ -1153,6 +1184,7 @@ export async function createApplication(
           configurationOwner.hasCurrentCredential(namespace, provider, field),
         options.agentTransportFactory,
       ),
+      agentTraces,
     );
     browserAgentCapability = createBrowserCapability(agents);
     await options.afterStage?.("agents");
@@ -1273,7 +1305,6 @@ export async function createApplication(
           }
           return regionRenderer;
         });
-      verificationPorts = { pages, cache: proofreadStorage };
       proofreading = new ProofreadService(
         rawParseStorage,
         proofreadStorage,
@@ -1309,14 +1340,7 @@ export async function createApplication(
       new SqliteDocumentStorage(database, files),
       new SqliteAnnotationStorage(database, files),
     );
-    if (verificationPorts)
-      valueVerifier = new ProcessorValueVerifier(
-        documentRead,
-        agents,
-        verificationPorts.pages,
-        verificationPorts.cache,
-        configuration.proofread.max_value_check_calls,
-      );
+    valueVerifier = new ProcessorValueVerifier(documentRead);
     const library = new LiteratureQueryService(database);
     articleIdentity = new ArticleIdentityService(
       documentRead,
@@ -1340,6 +1364,7 @@ export async function createApplication(
           documentRead,
         ),
         valueVerifier,
+        (progress) => recordMapProgress(database!, progress),
       );
     }
     extractionPreparation = new ExtractionPreparationService(
@@ -1525,6 +1550,7 @@ export async function createApplication(
       await recoveryLease?.release();
     }
     const application: Application = {
+      folders: new FolderService(database),
       snapshots: new SnapshotService(database, library),
       archive: new ArchiveService(database, processingTasks, library),
       tags,
@@ -1836,7 +1862,54 @@ export async function createQueryApplication(
     );
     processorRead = new SqliteProcessorStorage(database, files, documentRead);
     knowledgeContext = new KnowledgeContextService(context, processorRead);
+    const identities = configuredAgentIdentity(configuration);
+    const previewTags = new TagService(
+      database,
+      new SqliteDocumentStorage(database, files),
+      new SqliteAnnotationStorage(database, files),
+      new LiteratureMetadataService(database),
+      null,
+    );
+    const archiveReuse = new ArchiveReusePreview(
+      database,
+      files,
+      rawParseRead,
+      previewTags,
+      identities,
+      await sha256(
+        canonicalJsonBytes({
+          method: "archive-v1",
+          models: configuration.models,
+          analyze: configuration.analyze,
+          tags: configuration.tags,
+        }),
+      ),
+      configuration.parsing.archive_profile,
+    );
+    const estimating = new UsageEstimator(
+      database,
+      new ProcessorPlanner(
+        createProcessorRegistry(),
+        identities,
+        new ProcessorArchiveSource(
+          new ArchiveReader(database),
+          new SnapshotService(database, literature),
+          new SqliteAnnotationStorage(database, files),
+          documentRead,
+        ),
+        {
+          identity: () => valueVerificationIdentity(),
+        },
+      ),
+      processorRead,
+      literature,
+      rawParseRead,
+      previewTags,
+      configuration.parsing.archive_profile,
+      (state, signal) => archiveReuse.reusable(state, signal),
+    );
     return {
+      usageEstimate: (value, signal) => estimating.estimate(value, signal),
       readiness: {
         status: "ready",
         schema_version:
@@ -1848,6 +1921,7 @@ export async function createQueryApplication(
             ? preflight.schema.schema_fingerprint
             : null,
       },
+      reviewRead: (action, value) => database.review(action, value),
       processorRead,
       rawParseRead,
       archiveProfile: configuration.parsing.archive_profile,
@@ -1855,6 +1929,7 @@ export async function createQueryApplication(
       annotationRead: new AnnotationReadService(
         new SqliteAnnotationStorage(database, files),
       ),
+      folders: new FolderService(database),
       snapshots: new SnapshotService(database, literature),
       archive: new ArchiveReader(database),
       tags: new TagService(
@@ -1908,47 +1983,14 @@ function buildAgentBindings(
 ): readonly AgentBinding[] {
   const bindings: AgentBinding[] = [];
   const adapters = new Map<string, AgentAdapter>();
-  const roleModels: readonly [
-    import("../agents/protocol.js").AgentRole,
-    string | null,
-  ][] = [
-    ["analysis", configuration.analyze.model],
-    [
-      "proofreading",
-      configuration.proofread.model ?? configuration.analyze.model,
-    ],
-    [
-      "value-checking",
-      configuration.proofread.value_check_model ??
-        configuration.proofread.model ??
-        configuration.analyze.model,
-    ],
-    ["tagging", configuration.tags.model ?? configuration.analyze.model],
-    [
-      "tag-consolidation",
-      configuration.tags.consolidation_model ??
-        configuration.tags.model ??
-        configuration.analyze.model,
-    ],
-    [
-      "tag-backfill",
-      configuration.tags.backfill_model ??
-        configuration.tags.model ??
-        configuration.analyze.model,
-    ],
-    [
-      "browser",
-      configuration.browser.enabled ? configuration.browser.model : null,
-    ],
-  ];
-  for (const [role, reference] of roleModels) {
-    if (reference === null) continue;
-    const providerName = reference.slice(0, reference.indexOf("/"));
-    const modelName = reference.slice(reference.indexOf("/") + 1);
-    const provider = configuration.providers[providerName];
-    if (!provider) continue;
-    const config = configuration.models[reference];
-    if (!config) continue;
+  for (const {
+    role,
+    reference,
+    providerName,
+    modelName,
+    provider,
+    config,
+  } of configuredAgentModels(configuration)) {
     const key = `${providerName}\u0000${reference}`;
     let adapter = adapters.get(key);
     if (!adapter) {
@@ -2068,18 +2110,4 @@ function buildAgentBindings(
     });
   }
   return bindings;
-}
-function endpoint(baseUrl: string, api: string): string {
-  const suffix =
-    api === "openai-responses"
-      ? "/responses"
-      : api === "openai-chat-completions"
-        ? "/chat/completions"
-        : "/messages";
-  const base = new URL(baseUrl);
-  if (base.pathname.endsWith("/")) base.pathname = base.pathname.slice(0, -1);
-  base.pathname = `${base.pathname}${suffix}`;
-  base.search = "";
-  base.hash = "";
-  return base.toString();
 }

@@ -7,6 +7,15 @@ import {
   type SnapshotMember,
   type SnapshotHeader,
 } from "@sciretriever/contracts";
+import type * as Names from "../../analysis/snapshot-names.js";
+const { generatedSnapshotName }: typeof Names = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "../../analysis/snapshot-names.ts"
+      : "../../analysis/snapshot-names.js",
+    import.meta.url,
+  ).href
+);
 import type * as Archive from "./archive-engine.js";
 import type * as Metadata from "./metadata-rows.js";
 import type * as State from "../../literature/state.js";
@@ -37,6 +46,7 @@ const { deriveCurrentState }: typeof State = await import(
 export type SnapshotStorageAction =
   | "capture"
   | "publish"
+  | "rename"
   | "read"
   | "list"
   | "member";
@@ -116,8 +126,47 @@ function capture(
     excluded,
   };
 }
-function header(row: Record<string, unknown>): SnapshotHeader {
+function header(
+  db: DatabaseSync,
+  row: Record<string, unknown>,
+): SnapshotHeader {
+  const label = db
+    .prepare("SELECT name FROM snapshot_labels WHERE snapshot_id=?")
+    .get(String(row.snapshot_id));
+  const definition = parseSnapshotDefinition(
+    JSON.parse(String(row.definition_json)),
+  );
+  const tagNames =
+    definition.kind === "query" && definition.query.tags?.ids.length
+      ? db
+          .prepare(
+            "SELECT row_json FROM tags WHERE tag_id IN (SELECT value FROM json_each(?)) ORDER BY tag_id",
+          )
+          .all(JSON.stringify(definition.query.tags.ids))
+          .map((t) => {
+            const tag = JSON.parse(String(t.row_json)) as {
+              name_zh: string;
+              name_en: string;
+            };
+            return tag.name_zh || tag.name_en;
+          })
+      : [];
+  const folderName =
+    definition.kind === "query" && definition.query.folder
+      ? db
+          .prepare("SELECT name FROM folders WHERE folder_id=?")
+          .get(definition.query.folder.id)?.name
+      : null;
   return {
+    name: label
+      ? String(label.name)
+      : generatedSnapshotName(
+          definition,
+          Number(row.member_count),
+          tagNames,
+          typeof folderName === "string" ? folderName : null,
+        ),
+    name_source: label ? "manual" : "generated",
     snapshot_id: String(row.snapshot_id),
     created_at: String(row.created_at),
     definition: parseSnapshotDefinition(
@@ -136,7 +185,7 @@ export function runSnapshotStorage(
   archiveProfile: "pipeline" | "vlm-engine" = "vlm-engine",
 ): unknown {
   const r = value as Record<string, unknown>;
-  db.exec(action === "publish" ? "BEGIN IMMEDIATE" : "BEGIN");
+  db.exec(["publish", "rename"].includes(action) ? "BEGIN IMMEDIATE" : "BEGIN");
   try {
     let result: unknown;
     if (action === "capture")
@@ -173,11 +222,30 @@ export function runSnapshotStorage(
           hash(member),
           json(member),
         );
+      if (r.name !== null && r.name !== undefined)
+        db.prepare("INSERT INTO snapshot_labels VALUES(?,?,?,?)").run(
+          String(r.snapshot_id),
+          String(r.name),
+          String(r.created_at),
+          String(r.actor),
+        );
       result = header(
+        db,
         db
           .prepare("SELECT * FROM snapshots WHERE snapshot_id=?")
           .get(String(r.snapshot_id))!,
       );
+    } else if (action === "rename") {
+      const id = String(r.snapshot_id),
+        row = db.prepare("SELECT * FROM snapshots WHERE snapshot_id=?").get(id);
+      if (!row) fail("snapshot-not-found");
+      if (r.name === null)
+        db.prepare("DELETE FROM snapshot_labels WHERE snapshot_id=?").run(id);
+      else
+        db.prepare(
+          "INSERT INTO snapshot_labels VALUES(?,?,?,?) ON CONFLICT(snapshot_id) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at,actor=excluded.actor",
+        ).run(id, String(r.name), String(r.updated_at), String(r.actor));
+      result = header(db, row);
     } else if (action === "member") {
       const row = db
         .prepare("SELECT * FROM snapshots WHERE snapshot_id=?")
@@ -210,7 +278,7 @@ export function runSnapshotStorage(
         member = parseSnapshotMember(JSON.parse(String(saved.member_json)));
         if (hash(member) !== saved.member_sha256) fail("snapshot-integrity");
       }
-      result = { ...header(row), member };
+      result = { ...header(db, row), member };
     } else if (action === "read") {
       const row = db
         .prepare("SELECT * FROM snapshots WHERE snapshot_id=?")
@@ -225,7 +293,7 @@ export function runSnapshotStorage(
         )
         .all(String(r.snapshot_id), offset, limit);
       const members: SnapshotMember[] = [];
-      let bytes = Buffer.byteLength(json(header(row))) + 256;
+      let bytes = Buffer.byteLength(json(header(db, row))) + 256;
       if (bytes > budget) fail("snapshot-read-budget");
       if (offset < Number(row.member_count) && saved.length === 0)
         fail("snapshot-integrity");
@@ -241,7 +309,7 @@ export function runSnapshotStorage(
         members.push(parsed);
         bytes += size;
       }
-      const meta = header(row);
+      const meta = header(db, row);
       result = {
         ...meta,
         members,
@@ -261,7 +329,7 @@ export function runSnapshotStorage(
       const items: SnapshotHeader[] = [];
       let bytes = 128;
       for (const row of list.slice(0, limit)) {
-        const h = header(row),
+        const h = header(db, row),
           size = Buffer.byteLength(json(h));
         if (bytes + size > 1024 * 1024) break;
         items.push(h);

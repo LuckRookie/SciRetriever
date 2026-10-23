@@ -21,6 +21,8 @@ export interface DataColumn<T> {
   value: (row: T) => string | number | boolean | null;
   render?: (row: T) => ReactNode;
   sortable?: boolean;
+  /** Right-aligned tabular figures for counts and measurements. */
+  numeric?: boolean;
 }
 export interface DataTableProps<T> {
   label: string;
@@ -28,6 +30,7 @@ export interface DataTableProps<T> {
   columns: readonly DataColumn<T>[];
   getRowId: (row: T) => string;
   selected?: ReadonlySet<string>;
+  highlighted?: ReadonlySet<string>;
   onSelectionChange?: (value: Set<string>) => void;
   empty?: string;
 }
@@ -38,6 +41,7 @@ export function DataTable<T extends object>({
   columns: definitions,
   getRowId,
   selected,
+  highlighted,
   onSelectionChange,
   empty = "当前范围没有结果。",
 }: DataTableProps<T>) {
@@ -56,6 +60,9 @@ export function DataTable<T extends object>({
     [definitions],
   );
   const table = useTable({ features, data: rows, columns, getRowId });
+  const numeric = new Set(
+    definitions.filter((column) => column.numeric).map((column) => column.id),
+  );
   const select = (id: string, checked: boolean) => {
     const next = new Set(selected);
     if (checked) next.add(id);
@@ -91,6 +98,7 @@ export function DataTable<T extends object>({
                 <th
                   key={header.id}
                   scope="col"
+                  data-numeric={numeric.has(header.column.id) || undefined}
                   aria-sort={
                     header.column.getIsSorted() === "asc"
                       ? "ascending"
@@ -127,7 +135,11 @@ export function DataTable<T extends object>({
         </thead>
         <tbody>
           {table.getRowModel().rows.map((row) => (
-            <tr key={row.id} data-selected={selected?.has(row.id) ?? false}>
+            <tr
+              key={row.id}
+              data-highlighted={highlighted?.has(row.id) ?? false}
+              data-selected={selected?.has(row.id) ?? false}
+            >
               {onSelectionChange ? (
                 <td>
                   <Checkbox
@@ -138,7 +150,10 @@ export function DataTable<T extends object>({
                 </td>
               ) : null}
               {row.getAllCells().map((cell) => (
-                <td key={cell.id}>
+                <td
+                  key={cell.id}
+                  data-numeric={numeric.has(cell.column.id) || undefined}
+                >
                   <table.FlexRender cell={cell} />
                 </td>
               ))}

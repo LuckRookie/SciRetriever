@@ -1,3 +1,4 @@
+import { UsageEstimate } from "../processing/UsageEstimate.js";
 import { jobRecord } from "../../data/wire.js";
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -279,6 +280,40 @@ export function OperationDialog({
         </>
       }
     >
+      {(kind === "archive" || kind === "analyze") && !done ? (
+        <UsageEstimate
+          request={
+            kind === "archive"
+              ? {
+                  kind: "archive",
+                  request: {
+                    selector: {
+                      kind: "literatures",
+                      literature_ids: [...new Set(ids)],
+                    },
+                  },
+                }
+              : {
+                  kind: "processor",
+                  request: {
+                    schema_version: 1,
+                    idempotency_key: "estimate",
+                    name: "文献总结",
+                    processor: { id: "summary", version: "2" },
+                    spec: {
+                      purpose,
+                      question: purpose === "question" ? question : null,
+                    },
+                    inputs: [...new Set(ids)].map((literature_id) => ({
+                      kind: "literature",
+                      literature_id,
+                    })),
+                  },
+                }
+          }
+        />
+      ) : null}
+
       <p>范围已固定：{ids.length} 篇文献。</p>
       <p className="muted">
         {kind === "export"

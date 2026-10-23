@@ -349,22 +349,31 @@ export function RadioGroup({
   children,
   value,
   onChange,
+  segmented = false,
   ...field
 }: FieldProps & {
   children: ReactNode;
   value: string;
   onChange: (value: string) => void;
+  /** Two or three mutually exclusive options shown as one segmented control. */
+  segmented?: boolean;
 }) {
   return (
     <AriaRadioGroup
-      className="ui-field"
+      className={segmented ? "ui-field ui-radio-segmented" : "ui-field"}
       value={value}
       onChange={onChange}
       isDisabled={field.isDisabled ?? false}
       isRequired={field.isRequired ?? false}
       isInvalid={!!field.errorMessage}
     >
-      <Field {...field}>{children}</Field>
+      <Field {...field}>
+        {segmented ? (
+          <div className="ui-segmented-options">{children}</div>
+        ) : (
+          children
+        )}
+      </Field>
     </AriaRadioGroup>
   );
 }

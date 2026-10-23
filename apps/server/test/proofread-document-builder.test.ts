@@ -96,7 +96,7 @@ describe("proofread document structure v2", () => {
       region: [10, 100, 900, 250],
       source: "parser",
       basis: "text-layer",
-      uncertainty: null,
+
       locate: "region",
     });
     expect(

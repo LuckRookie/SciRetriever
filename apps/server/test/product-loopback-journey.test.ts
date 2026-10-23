@@ -149,10 +149,9 @@ it.skipIf(!bundle)(
       expect(result.outcome).toBe("parser_results_ready");
       if (result.outcome !== "parser_results_ready")
         throw new Error("raw parse unavailable");
-      expect(result.receipt.profiles.map((p) => p.status)).toEqual([
-        "published",
-        "published",
-      ]);
+      expect(result.receipt.profiles.map((p) => [p.profile, p.status])).toEqual(
+        [["vlm-engine", "published"]],
+      );
       const detail = await workbench.application.library.detail(
         FIXTURE_LITERATURE.literature_id,
       );

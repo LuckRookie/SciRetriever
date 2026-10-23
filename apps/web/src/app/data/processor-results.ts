@@ -1,6 +1,7 @@
 import {
   parseAssetId,
   parseProcessorCitation,
+  parseProcessorOutcomeCounts,
   parseProcessorResult,
   parseProcessorTransferChunk,
   parseEvidenceRef,
@@ -8,6 +9,7 @@ import {
   processorResultBytes,
   sha256,
   type ProcessorCitation,
+  type ProcessorOutcomeCounts,
   type ProcessorResult,
   type ProcessorResultRef,
   type ProcessorTransferFormat,
@@ -22,6 +24,8 @@ export interface WebProcessorResult {
   ref: ProcessorResultRef;
   result: ProcessorResult;
   freshness: { state: "current" | "stale"; reasons: readonly unknown[] };
+  /** Per-paper counts for the current method; null when not derivable. */
+  outcomes: ProcessorOutcomeCounts | null;
 }
 export interface ResultDescription {
   ref: ProcessorResultRef;
@@ -123,6 +127,10 @@ export async function readProcessorResult(
       state: freshness.state as "current" | "stale",
       reasons: freshness.reasons,
     },
+    outcomes:
+      value.outcomes == null
+        ? null
+        : parseProcessorOutcomeCounts(value.outcomes),
   };
 }
 

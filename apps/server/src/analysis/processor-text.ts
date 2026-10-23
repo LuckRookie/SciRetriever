@@ -1,8 +1,15 @@
 import {
+  chunkTokenLimit,
+  splitProcessorText,
+  selectProcessorText,
+} from "./processor-chunking.js";
+export { chunkHeading, PROCESSOR_CHUNKING } from "./processor-chunking.js";
+import {
   processorExact,
   processorJson,
-  processorObject,
-  processorText,
+  parseProcessorReading,
+  PROCESSOR_READING_SCHEMA,
+  ContractValidationError,
   type ProcessorObject,
   type ProcessorCoverage,
   type ProcessorInput,
@@ -18,74 +25,33 @@ export const TEXT_LIMITATIONS = [
   "only explicitly selected materials; supplementary files are not fetched",
 ];
 export function readingSpec(value: unknown) {
-  const r = value === undefined ? {} : processorObject(value);
-  if (
-    Object.keys(r).some(
-      (k) => !["scope", "query", "max_chunk_bytes"].includes(k),
-    )
-  )
-    processorError("processor-spec");
-  const scope = r.scope ?? "full",
-    query = r.query ?? null,
-    max_chunk_bytes = r.max_chunk_bytes ?? 12000;
-  if (
-    !["full", "search"].includes(String(scope)) ||
-    typeof max_chunk_bytes !== "number" ||
-    !Number.isSafeInteger(max_chunk_bytes) ||
-    max_chunk_bytes < 256 ||
-    max_chunk_bytes > 32000
-  )
-    processorError("processor-spec");
-  if (scope === "search") processorText(query, 1024);
-  else if (query !== null) processorError("processor-spec");
-  return processorJson({ scope, query, max_chunk_bytes });
+  try {
+    return processorJson(parseProcessorReading(value));
+  } catch (error) {
+    if (error instanceof ContractValidationError)
+      processorError("processor-spec");
+    throw error;
+  }
 }
-export const READING_SCHEMA = {
-  type: "object",
-  properties: {
-    scope: { enum: ["full", "search"] },
-    query: { type: ["string", "null"] },
-    max_chunk_bytes: { type: "integer", minimum: 256, maximum: 32000 },
-  },
-  additionalProperties: false,
-};
+export const READING_SCHEMA = PROCESSOR_READING_SCHEMA;
 export async function textChunks(
   input: Extract<ProcessorInput, { kind: "archive-document" }>,
   reading: ProcessorObject,
   ctx: ProcessorContext,
+  model: ProcessorObject | null = null,
+  promptBytes = 0,
 ) {
   const all = await ctx.readDocument(input);
   const selected =
     reading.scope === "search"
-      ? all.filter((s) =>
-          String(reading.query)
-            .toLowerCase()
-            .split(/\s+/u)
-            .some((t) => s.text.toLowerCase().includes(t)),
-        )
+      ? selectProcessorText(all, String(reading.query))
       : all;
-  const chunks: ProcessorSegment[][] = [];
-  let chunk: ProcessorSegment[] = [];
-  let size = 0;
-  const gaps: string[] =
-    reading.scope === "search"
-      ? ["search-only; unselected segments were not processed"]
-      : [];
-  for (const segment of selected) {
-    const bytes = Buffer.byteLength(segment.text);
-    if (bytes > Number(reading.max_chunk_bytes)) {
-      gaps.push(`segment-too-large:${segment.segment_id}`);
-      continue;
-    }
-    if (size + bytes > Number(reading.max_chunk_bytes)) {
-      chunks.push(chunk);
-      chunk = [];
-      size = 0;
-    }
-    chunk.push(segment);
-    size += bytes;
-  }
-  if (chunk.length) chunks.push(chunk);
+  const { chunks, gaps } = splitProcessorText(
+    selected,
+    chunkTokenLimit(model, promptBytes),
+  );
+  if (reading.scope === "search")
+    gaps.unshift("search-only; unselected segments were not processed");
   if (!chunks.length) gaps.push("no-readable-selected-segments");
   return { chunks, gaps };
 }

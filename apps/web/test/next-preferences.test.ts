@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { preferences, readTheme } from "../src/app/data/preferences.js";
 import { parseLibrarySearchRequest } from "@sciretriever/contracts";
-import { nextWorkspace } from "./next-workspace-fixture.js";
+import { nextWorkspace, openSavedViews } from "./next-workspace-fixture.js";
 const prefix = "sciretriever:react:";
 afterEach(() => vi.unstubAllGlobals());
 it("reads and writes only current UI preferences without migrating old keys", () => {
@@ -50,9 +50,10 @@ it("restores current theme, panel width and saved view through application start
         localStorage.setItem(key, value);
     }, values);
     await w.page.goto(`${w.origin}/?view=lib`);
-    await w.page
-      .getByRole("button", { name: "My library view", exact: true })
+    await (await openSavedViews(w.page))
+      .getByRole("menuitem", { name: "My library view", exact: true })
       .waitFor();
+    await w.page.keyboard.press("Escape");
     expect(await w.page.locator("html").getAttribute("data-theme")).toBe(
       "green",
     );
@@ -66,9 +67,10 @@ it("restores current theme, panel width and saved view through application start
       expect(stored[key]).toBe(value);
     expect(stored[prefix + "preferences-migrated:v1"]).toBeUndefined();
     await w.page.reload();
-    await w.page
-      .getByRole("button", { name: "My library view", exact: true })
+    await (await openSavedViews(w.page))
+      .getByRole("menuitem", { name: "My library view", exact: true })
       .waitFor();
+    await w.page.keyboard.press("Escape");
     expect(await w.page.locator("html").getAttribute("data-theme")).toBe(
       "green",
     );

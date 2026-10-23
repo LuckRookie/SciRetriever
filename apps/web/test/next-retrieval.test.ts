@@ -369,7 +369,7 @@ it("keeps late or failed searches from replacing a newer page and permits an exp
       .click();
     await w.page
       .getByLabel("主导航")
-      .getByRole("button", { name: "检索", exact: true })
+      .getByRole("button", { name: "全文检索", exact: true })
       .click();
     await expect
       .poll(() => w.page.getByTestId("retrieval-status").textContent())
@@ -448,9 +448,11 @@ it("opens the fixed hit after a new default is published and restores the query 
     const parseCallsAfterSetup = w.env.parseCalls;
     await w.recordSetup();
     await w.page.locator('[data-testid="retrieval-source"]').first().click();
-    await expect
-      .poll(() => w.page.locator(".reading-article").textContent())
-      .toContain("original observation");
+    // The title appears before the fixed text slice is read and verified.
+    await w.page.locator('.react-reader[data-reading-ready="true"]').waitFor();
+    expect(await w.page.locator(".reading-article").textContent()).toContain(
+      "original observation",
+    );
     expect(new URL(w.page.url()).searchParams.get("document")).toBe(
       w.parsed.document.document_version_id,
     );

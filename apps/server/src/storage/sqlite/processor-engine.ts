@@ -1,3 +1,4 @@
+import { PROCESSOR_METHOD_REVISION } from "@sciretriever/contracts";
 import type * as Freshness from "./processor-freshness.js";
 const { bindProcessorFreshness, readProcessorFreshness }: typeof Freshness =
   await import(
@@ -42,6 +43,12 @@ function tx<T>(db: DatabaseSync, work: () => T): T {
   }
 }
 export interface ProcessorPublication {
+  readonly usage?: {
+    calls: number;
+    input_tokens: number;
+    output_tokens: number;
+  } | null;
+  readonly outcomes?: import("@sciretriever/contracts").ProcessorOutcomeCounts;
   readonly reads: import("@sciretriever/contracts").ProcessorReads;
   readonly uses_description: boolean;
   readonly result_id: string;
@@ -147,6 +154,13 @@ function publish(db: DatabaseSync, p: ProcessorPublication): Row {
       p.media_type,
       p.created_at,
     );
+    if (p.outcomes)
+      db.prepare("INSERT INTO processor_result_summaries VALUES(?,?,?,?)").run(
+        p.result_id,
+        p.usage ? JSON.stringify(p.usage) : null,
+        JSON.stringify(p.outcomes),
+        PROCESSOR_METHOD_REVISION,
+      );
     for (const input of p.inputs) {
       if (input.kind === "snapshot")
         db.prepare(
@@ -453,7 +467,7 @@ export function runProcessorStorage(
         WITH related(result_id) AS (
           SELECT result_id FROM processor_result_literatures WHERE literature_id=?
         )
-        SELECT p.*,f.state AS freshness FROM processor_results p JOIN related r ON r.result_id=p.result_id JOIN processor_result_freshness f ON f.result_id=p.result_id
+        SELECT p.*,f.state AS freshness FROM processor_results p JOIN related r ON r.result_id=p.result_id JOIN processor_result_currentness f ON f.result_id=p.result_id
         WHERE p.result_id>? AND (? IS NULL OR f.state=?) ORDER BY p.result_id LIMIT ?
       `,
           )
@@ -470,7 +484,7 @@ export function runProcessorStorage(
           );
       return db
         .prepare(
-          "SELECT p.*,f.state AS freshness FROM processor_results p JOIN processor_result_freshness f ON f.result_id=p.result_id WHERE p.result_id>? AND (? IS NULL OR f.state=?) ORDER BY p.result_id LIMIT ?",
+          "SELECT p.*,f.state AS freshness FROM processor_results p JOIN processor_result_currentness f ON f.result_id=p.result_id WHERE p.result_id>? AND (? IS NULL OR f.state=?) ORDER BY p.result_id LIMIT ?",
         )
         .all(
           q.after,

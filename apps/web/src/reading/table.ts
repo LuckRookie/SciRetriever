@@ -1,4 +1,4 @@
-import { escape as e } from "./dom.js";
+import { escape as e, imagePlaceholder } from "./dom.js";
 
 const containers = new Set([
   "TABLE",
@@ -63,7 +63,7 @@ export function renderTable(
         reference.split("/").some((p) => p === ".." || p === ".")
       )
         return "";
-      return `<span class="reading-resource" data-resource="${e(reference)}">图片：${e(element.getAttribute("alt") || reference)}</span>`;
+      return imagePlaceholder(reference, element.getAttribute("alt") ?? "");
     }
     const children = [...element.childNodes]
       .map((n) => walk(n, depth + 1))

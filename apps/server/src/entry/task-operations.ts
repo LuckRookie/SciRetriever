@@ -1,3 +1,4 @@
+import { recordOperation } from "../application/operations.js";
 import { createTaskReader } from "./task-read.js";
 import type { Application } from "../bootstrap/application.js";
 import { ProcessingTaskError } from "../application/jobs/processing.js";
@@ -99,7 +100,10 @@ export function createTaskOperations(app: Application) {
     ...reader,
     read,
     start,
-    control,
+    control: (id: string, action: "pause" | "cancel" | "resume" | "retry") =>
+      recordOperation(app.database, `task-${action}`, { job_id: id }, () =>
+        control(id, action),
+      ),
     create: async (value: unknown) => {
       const r = inputRecord(
         value,

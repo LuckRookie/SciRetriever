@@ -22,39 +22,48 @@ export function renderBlocks(
     if (ids.has(b.block_id)) throw new Error("proofread-duplicate-block");
     ids.add(b.block_id);
     let text: string;
-    switch (b.type) {
-      case "title":
-        if (!b.title_level || b.title_level > 6)
-          throw new Error("proofread-title-level");
-        text = `${"#".repeat(b.title_level)} ${b.text}`;
-        break;
-      case "table":
-        if (!b.html) throw new Error("proofread-table-missing");
-        requireTableMarkup(b.html);
-        text = b.html;
-        // Chemical drawings and other non-text cells must remain available to readers.
-        if (
-          b.image_ref &&
-          !parserMarkdownReferences(text).includes(b.image_ref)
-        )
-          text += `\n\n![](${b.image_ref})`;
-        break;
-      case "equation":
-        text = `$$\n${b.text}\n$$`;
-        break;
-      case "image":
-        text = b.image_ref
-          ? `![](${b.image_ref})${b.text ? `\n\n${b.text}` : ""}`
-          : b.text;
-        break;
-      case "header":
-      case "footer":
-      case "page-number":
-      case "discarded":
-        throw new Error("proofread-unclean-block");
-      default:
-        text = b.text;
-    }
+    if (
+      !b.text.trim() &&
+      b.html === null &&
+      !["header", "footer", "page-number", "discarded"].includes(b.type)
+    ) {
+      // No transcription is a valid outcome. Keep its image and block range,
+      // without fabricating an empty table, heading or equation.
+      text = b.image_ref ? `![](${b.image_ref})` : "";
+    } else
+      switch (b.type) {
+        case "title":
+          if (!b.title_level || b.title_level > 6)
+            throw new Error("proofread-title-level");
+          text = `${"#".repeat(b.title_level)} ${b.text}`;
+          break;
+        case "table":
+          if (!b.html) throw new Error("proofread-table-missing");
+          requireTableMarkup(b.html);
+          text = b.html;
+          // Chemical drawings and other non-text cells must remain available to readers.
+          if (
+            b.image_ref &&
+            !parserMarkdownReferences(text).includes(b.image_ref)
+          )
+            text += `\n\n![](${b.image_ref})`;
+          break;
+        case "equation":
+          text = `$$\n${b.text}\n$$`;
+          break;
+        case "image":
+          text = b.image_ref
+            ? `![](${b.image_ref})${b.text ? `\n\n${b.text}` : ""}`
+            : b.text;
+          break;
+        case "header":
+        case "footer":
+        case "page-number":
+        case "discarded":
+          throw new Error("proofread-unclean-block");
+        default:
+          text = b.text;
+      }
     for (const ref of [
       ...parserMarkdownReferences(text),
       ...(b.image_ref ? [b.image_ref] : []),

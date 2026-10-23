@@ -68,6 +68,10 @@ export async function renderPdf(
     lastWidth = 0,
     searchRevision = 0,
     query = "",
+    // Every occurrence in reading order, and the one the reader is looking at.
+    hits: { page: number; index: number }[] = [],
+    current = -1,
+    reveal = false,
     pageDraft = false;
   const placeholders: HTMLDivElement[] = [],
     sizes = new Map<number, { width: number; height: number }>(),
@@ -172,15 +176,60 @@ export async function renderPdf(
       },
     });
   };
-  const highlight = (root: HTMLElement) => {
-    for (const el of root.querySelectorAll<HTMLElement>("span"))
-      el.classList.toggle(
-        "pdf-search-hit",
-        !!query &&
-          (el.textContent ?? "")
-            .toLocaleLowerCase()
-            .includes(query.toLocaleLowerCase()),
-      );
+  /** Wraps each occurrence inside its text-layer run, so only the matched words are tinted. */
+  const highlight = (root: HTMLElement, page: number) => {
+    const needle = query.toLocaleLowerCase();
+    let index = 0;
+    for (const span of root.querySelectorAll<HTMLElement>(
+      "span:not(.markedContent)",
+    )) {
+      // Flatten marks from a previous query back into one text node.
+      if (span.querySelector("mark"))
+        span.replaceChildren(span.textContent ?? "");
+      if ([...span.childNodes].some((node) => node.nodeType !== Node.TEXT_NODE))
+        continue;
+      const text = span.textContent ?? "",
+        lower = text.toLocaleLowerCase();
+      if (!needle || !lower.includes(needle)) continue;
+      const parts: (string | HTMLElement)[] = [];
+      let from = 0;
+      for (
+        let at = lower.indexOf(needle);
+        at >= 0;
+        at = lower.indexOf(needle, at + needle.length)
+      ) {
+        const mark = document.createElement("mark");
+        mark.className = "pdf-search-hit";
+        mark.dataset.hit = String(index++);
+        mark.textContent = text.slice(at, at + needle.length);
+        parts.push(text.slice(from, at), mark);
+        from = at + needle.length;
+      }
+      parts.push(text.slice(from));
+      span.replaceChildren(...parts);
+    }
+    const hit = hits[current];
+    if (hit?.page !== page) return;
+    const mark = root.querySelector<HTMLElement>(
+      `mark[data-hit="${hit.index}"]`,
+    );
+    mark?.classList.add("pdf-search-current");
+    if (mark && reveal) {
+      reveal = false;
+      // The page is already scrolled into place; only move again if the match
+      // is still outside the viewport, so the page indicator stays truthful.
+      mark.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  };
+  const occurrences = (text: string, needle: string) => {
+    let count = 0;
+    for (
+      let at = text.indexOf(needle);
+      at >= 0;
+      at = text.indexOf(needle, at + needle.length)
+    )
+      count++;
+    return count;
   };
   const draw = async (n: number) => {
     if (!pdf || closed || rendered.has(n)) return;
@@ -250,7 +299,7 @@ export async function renderPdf(
       });
       await entry.layer.render();
       if (closed || rendered.get(n) !== entry) return;
-      highlight(entry.text);
+      highlight(entry.text, n);
       placeholder.dataset.rendered = "true";
       ctx.root.dataset.readingReady = "true";
       if (firstPaint && n === state.page) {
@@ -436,41 +485,60 @@ export async function renderPdf(
       }
     };
     if (outline) appendOutline(outline);
+    const status = () => {
+      const pages = new Set(hits.map((hit) => hit.page)).size;
+      frame.findStatus.textContent = `第 ${current + 1} / ${hits.length} 处 · ${pages} 页`;
+    };
+    const show = (index: number) => {
+      current = index;
+      reveal = true;
+      const hit = hits[index]!;
+      go(hit.page);
+      for (const [n, entry] of rendered) highlight(entry.text, n);
+      status();
+      if (frame.onFindNext) frame.onFindNext(next);
+      else frame.findStatus.append(button("下一处命中", next));
+    };
+    const next = () => show((current + 1) % hits.length);
     frame.onFind = async (text) => {
       const revision = ++searchRevision,
-        matches: number[] = [];
+        found: { page: number; index: number }[] = [],
+        needle = text.toLocaleLowerCase();
       let hasText = false;
       query = text;
+      hits = [];
+      current = -1;
       frame.onFindNext?.(null);
       frame.findStatus.textContent = "正在查找 PDF 文字层…";
       for (let n = 1; pdf && n <= pdf.numPages; n++) {
         if (closed || revision !== searchRevision) return;
         const page = await pdf.getPage(n),
           content = await page.getTextContent();
-        const textValue = content.items
-          .flatMap((item) => ("str" in item ? [item.str] : []))
-          .join(" ");
-        if (textValue.trim()) hasText = true;
-        if (textValue.toLocaleLowerCase().includes(text.toLocaleLowerCase()))
-          matches.push(n);
+        let index = 0;
+        for (const item of content.items) {
+          if (!("str" in item)) continue;
+          if (item.str.trim()) hasText = true;
+          // Count per text run, exactly as the text layer is highlighted.
+          for (
+            let k = needle
+              ? occurrences(item.str.toLocaleLowerCase(), needle)
+              : 0;
+            k > 0;
+            k--
+          )
+            found.push({ page: n, index: index++ });
+        }
         if (!rendered.has(n)) page.cleanup();
       }
       if (closed || revision !== searchRevision) return;
-      frame.findStatus.textContent = matches.length
-        ? `命中 ${matches.length} 页`
-        : hasText
+      hits = found;
+      if (hits.length) show(0);
+      else {
+        frame.findStatus.textContent = hasText
           ? "未找到匹配关键词。"
           : "此 PDF 没有可检索文字层，可能是扫描文件。";
-      if (matches.length) {
-        go(matches[0]!);
-        const next = () => {
-          const i = matches.indexOf(state.page);
-          go(matches[(i + 1) % matches.length]!);
-        };
-        if (frame.onFindNext) frame.onFindNext(next);
-        else frame.findStatus.append(button("下一处命中", next));
+        for (const [n, entry] of rendered) highlight(entry.text, n);
       }
-      for (const entry of rendered.values()) highlight(entry.text);
     };
   } catch {
     if (!ctx.signal.aborted)

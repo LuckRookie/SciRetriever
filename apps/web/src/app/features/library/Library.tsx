@@ -11,6 +11,7 @@ import {
   keepPreviousData,
   useInfiniteQuery,
   useQuery,
+  useQueryClient,
 } from "@tanstack/react-query";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import {
@@ -30,9 +31,13 @@ import {
   ErrorNotice,
   FilterChip,
   ChipGroup,
+  Icon,
+  IconButton,
+  Menu,
   PageHeader,
   SearchField,
   Select,
+  Switch,
   TextField,
   TechDetails,
 } from "../../components/index.js";
@@ -45,6 +50,7 @@ import {
   emptyQuery,
   paperAuthors,
   paperTitle,
+  readLibraryCounts,
   readLiterature,
   searchLibrary,
   scopeIds,
@@ -52,8 +58,21 @@ import {
 import { useShell } from "../../shell/context.js";
 import { randomId } from "../../../browser-platform.js";
 import { archiveQuery, useArchiveAction, rows } from "../../data/archive.js";
+import { record } from "../../data/wire.js";
 import { archiveReason, errorMessage, statusLabels } from "../../strings.js";
 import { OperationDialog } from "./OperationDialog.js";
+import {
+  AddToFolderDialog,
+  LITERATURE_DRAG,
+  folderPaths,
+  scopeQuery,
+  useFolders,
+} from "./Folders.js";
+import { manageFolder } from "../../data/folders.js";
+import {
+  RunOperatorDialog,
+  type OperatorScope,
+} from "../processing/RunOperator.js";
 
 const scrollPositions = new WeakMap<ApiClient, Map<string, number>>();
 const rowMeasurements = new WeakMap<ApiClient, Map<string, VirtualItem[]>>();
@@ -99,6 +118,7 @@ export default function Library() {
     shell = useShell(),
     route = useUrlState();
   const archiveAction = useArchiveAction();
+  const queries = useQueryClient();
   const queryString = JSON.stringify(route.query);
   const scrollKey = `${queryString}:${route.sort}`;
   if (!scrollPositions.has(api)) scrollPositions.set(api, new Map());
@@ -120,7 +140,10 @@ export default function Library() {
       tags: "标签",
       needs_manual_pdf: "无法获取",
     };
+    // Folder and "recently read" are the page's scope, shown in its title.
     if (
+      key === "folder" ||
+      key === "recently_opened" ||
       value === null ||
       value === false ||
       (Array.isArray(value) && !value.length)
@@ -171,8 +194,10 @@ export default function Library() {
     file?: File;
   } | null>(null);
   const [choosing, setChoosing] = useState(false);
-  const [chooseOpen, setChooseOpen] = useState(false);
-  const [scope, setScope] = useState<string[]>([]);
+  const [runner, setRunner] = useState<{
+    scope: OperatorScope;
+    label: string;
+  } | null>(null);
   const next = useInfiniteQuery({
     queryKey: ["library", route.query, route.sort],
     queryFn: ({ pageParam, signal }) =>
@@ -193,8 +218,45 @@ export default function Library() {
     [next.data],
   );
   const total = next.data?.pages[0]?.total ?? 0;
+  const counts = useQuery({
+    queryKey: ["library", "counts", route.query],
+    queryFn: ({ signal }) => readLibraryCounts(api, route.query, signal),
+    placeholderData: keepPreviousData,
+    enabled: api.workspace.readiness === "ready",
+  });
+  const countFor = (filter: string) =>
+    counts.data
+      ? filter === ""
+        ? counts.data.total
+        : filter === "failed"
+          ? counts.data.unavailable_pdf
+          : (counts.data.statuses[
+              filter as keyof typeof counts.data.statuses
+            ] ?? 0)
+      : null;
+  const folders = useFolders();
+  const folder = route.query.folder ?? null;
+  const folderLabel = folder
+    ? (folderPaths(folders.data?.items ?? []).find(
+        (path) => path.id === folder.id,
+      )?.label ?? "文件夹")
+    : null;
+  const [adding, setAdding] = useState<string[] | null>(null);
   const updateQuery = (query: LibraryQuery, sort = route.sort) =>
     navigate({ query: JSON.stringify(query), sort }, { replace: true });
+  const statusFilter = route.query.needs_manual_pdf
+    ? "failed"
+    : (route.query.statuses[0] ?? "");
+  const setStatusFilter = (value: string) =>
+    updateQuery(
+      parseLibrarySearchRequest({
+        query: {
+          ...route.query,
+          statuses: value && value !== "failed" ? [value] : [],
+          needs_manual_pdf: value === "failed" ? true : null,
+        },
+      }).query,
+    );
   useEffect(() => {
     setText(route.query.text ?? "");
   }, [route.query.text]);
@@ -224,28 +286,34 @@ export default function Library() {
     },
     [shell],
   );
-  const choose = async (selected = false) => {
+  /** Material operations act on fixed ids: the selection, or the current results. */
+  const operate = async (kind: string, selected: boolean) => {
     if (choosing) return;
     setChoosing(true);
     try {
       const ids = selected
         ? [...shell.selected]
         : await scopeIds(api, route.query, route.sort);
-      setScope(ids);
-      setChooseOpen(true);
+      setOperation({ ids, kind });
     } catch (error) {
       shell.notify(errorMessage(error));
     } finally {
       setChoosing(false);
     }
   };
-  const pick = (kind: string) => {
-    setChooseOpen(false);
-    if (["ext", "syn"].includes(kind)) {
-      shell.setSelected(new Set(scope));
-      navigate({ view: kind, literature: null }, { clearSource: true });
-    } else setOperation({ ids: scope, kind });
-  };
+  const snapshot = (definition: unknown) =>
+    archiveAction.mutate(
+      { name: "snapshots", request: definition },
+      {
+        // Open the new snapshot directly instead of leaving it to be found in a list.
+        onSuccess: (v) =>
+          navigate({
+            view: "snapshots",
+            literature: null,
+            snapshot: String(record(v, "snapshot").snapshot_id),
+          }),
+      },
+    );
   const preview = useQuery({
     queryKey: ["literature", peek],
     queryFn: ({ signal }) => readLiterature(api, peek!, signal),
@@ -256,28 +324,64 @@ export default function Library() {
       setOperation({ ids: [id], kind: "upload", file }),
     [],
   );
+  const removeFromFolder = async () => {
+    if (!folder) return;
+    try {
+      const result = await manageFolder(api, {
+        operation: "remove",
+        request: { folder_id: folder.id, literature_ids: [...shell.selected] },
+      });
+      shell.setSelected(new Set());
+      shell.notify(
+        `已从「${folderLabel}」移出 ${"changed" in result ? result.changed : 0} 篇`,
+      );
+      void queries.invalidateQueries({ queryKey: ["folders"] });
+      void queries.invalidateQueries({ queryKey: ["library"] });
+    } catch (error) {
+      shell.notify(errorMessage(error));
+    }
+  };
+  // Dragging a selected row carries the whole selection to a folder.
+  const selectedRef = useRef(shell.selected);
+  selectedRef.current = shell.selected;
+  const onDragRow = useCallback((id: string, data: DataTransfer) => {
+    const ids = selectedRef.current.has(id)
+      ? [...selectedRef.current].slice(0, 1000)
+      : [id];
+    data.setData(LITERATURE_DRAG, JSON.stringify(ids));
+    data.setData("text/plain", `${ids.length} 篇文献`);
+    data.effectAllowed = "copy";
+  }, []);
   const mutable = api.kind === "workspace";
+  // The whole catalog is always over the limit, so the reason lives with the
+  // disabled actions instead of occupying the toolbar.
+  const overLimit =
+    total > 1000
+      ? {
+          description: `当前 ${total.toLocaleString()} 篇，超过 1,000 篇上限；请先筛选或选择。`,
+        }
+      : {};
   const toolbarActions = (
     <>
-      {mutable ? (
-        <Button
-          onPress={() =>
-            archiveAction.mutate(
-              {
-                name: "snapshots",
-                request: { kind: "query", query: route.query },
-              },
-              {
-                onSuccess: () =>
-                  navigate({ view: "snapshots", literature: null }),
-              },
-            )
-          }
-          isPending={archiveAction.isPending}
-        >
-          生成快照
-        </Button>
-      ) : null}
+      <Select
+        label="排序"
+        value={route.sort}
+        onChange={(sort) =>
+          updateQuery(
+            route.query,
+            parseLibrarySearchRequest({ query: route.query, sort }).sort,
+          )
+        }
+        options={[
+          { value: "intake-desc", label: "最近入库" },
+          { value: "opened-desc", label: "最近阅读" },
+          { value: "publication-year-desc", label: "年份：新到旧" },
+          { value: "publication-year-asc", label: "年份：旧到新" },
+          { value: "title-asc", label: "标题：A–Z" },
+          { value: "title-desc", label: "标题：Z–A" },
+          { value: "relevance", label: "相关性" },
+        ]}
+      />
       {(next.data?.pages[0]?.backfillPending ?? 0) > 0 ? (
         <p role="status">
           此标签还有 {next.data!.pages[0]!.backfillPending} 篇待回溯。
@@ -298,36 +402,9 @@ export default function Library() {
       {archiveAction.error ? (
         <ErrorNotice message={errorMessage(archiveAction.error)} />
       ) : null}
-      <Select
-        label="材料状态"
-        value={
-          route.query.needs_manual_pdf
-            ? "failed"
-            : (route.query.statuses[0] ?? "")
-        }
-        onChange={(value) =>
-          updateQuery(
-            parseLibrarySearchRequest({
-              query: {
-                ...route.query,
-                statuses: value && value !== "failed" ? [value] : [],
-                needs_manual_pdf: value === "failed" ? true : null,
-              },
-            }).query,
-          )
-        }
-        options={[
-          { value: "", label: "全部状态" },
-          { value: "UNREVIEWED", label: "仅元数据" },
-          { value: "ASSET_READY", label: "有 PDF" },
-          { value: "READY", label: "已就绪" },
-          { value: "ARCHIVING", label: "建档中" },
-          { value: "ARCHIVE_FAILED", label: "建档失败" },
-          { value: "EXCLUDED", label: "已排除" },
-          { value: "failed", label: "无法获取" },
-        ]}
-      />
       <Button
+        variant="text"
+        icon={<Icon name="filter" />}
         onPress={() => {
           setFilters(!filters);
           setMobileTools(false);
@@ -336,26 +413,41 @@ export default function Library() {
         筛选{chips.length ? ` · ${chips.length}` : ""}
         {filters ? " · 收起" : ""}
       </Button>
-      {mutable && (
-        <Button
-          isPending={choosing}
-          disabledReason={
-            next.isPlaceholderData
-              ? "正在更新筛选结果…"
-              : total > 1000
-                ? `当前 ${total.toLocaleString()} 篇，超过 1,000 篇上限，请先筛选或选择。`
-                : total === 0
-                  ? "请先添加或选择文献。"
-                  : undefined
-          }
-          onPress={() => {
-            setMobileTools(false);
-            void choose();
-          }}
-        >
-          用这些文献做…
-        </Button>
-      )}
+      {mutable ? (
+        <Menu
+          label="用当前结果"
+          indicator
+          variant="text"
+          items={[
+            {
+              id: "run",
+              label: "运行算子…",
+              disabled: total === 0 || total > 1000,
+              ...overLimit,
+              onAction: () => {
+                setMobileTools(false);
+                setRunner({
+                  scope: { kind: "query" },
+                  label: `文献库当前筛选（${total.toLocaleString()} 篇）`,
+                });
+              },
+            },
+            {
+              id: "snapshot",
+              label: "生成快照",
+              disabled: total === 0,
+              onAction: () => snapshot({ kind: "query", query: route.query }),
+            },
+            {
+              id: "export",
+              label: "导出书目",
+              disabled: total === 0 || total > 1000,
+              ...overLimit,
+              onAction: () => void operate("export", false),
+            },
+          ]}
+        />
+      ) : null}
     </>
   );
   if (api.workspace.readiness !== "ready")
@@ -379,8 +471,12 @@ export default function Library() {
   return (
     <section className="library-page">
       <PageHeader
-        title="文献库"
-        description="从同一份材料出发，查找、阅读与使用文献。"
+        title={
+          folderLabel ?? (route.query.recently_opened ? "最近阅读" : "文献库")
+        }
+        {...(route.query.recently_opened
+          ? { description: "最近 30 天打开过的文献，最多 100 篇。" }
+          : {})}
         action={
           mutable ? (
             <Button
@@ -392,89 +488,159 @@ export default function Library() {
           ) : undefined
         }
       />
-      <div className="library-toolbar">
-        <SearchField
-          label="搜索文献"
-          value={text}
-          onChange={setText}
-          onSubmit={(value) =>
-            updateQuery({ ...route.query, text: value.trim() || null })
-          }
-          placeholder="按标题、作者、期刊搜索"
-        />
-        <div className="library-toolbar-actions">{toolbarActions}</div>
-        <Button className="library-more" onPress={() => setMobileTools(true)}>
-          更多操作
-        </Button>
-      </div>
-      <div className="saved-views" aria-label="已保存的筛选">
-        <FilterChip
-          isSelected={!activeView && !chips.length}
-          onChange={() => {
-            setActiveView("");
-            updateQuery(emptyQuery());
-          }}
-        >
-          全部
-        </FilterChip>
-        {views.map((view) => (
-          <FilterChip
-            key={view.id}
-            isSelected={activeView === view.id}
-            onChange={() => {
-              setActiveView(view.id);
-              updateQuery(view.query, view.sort);
-            }}
-          >
-            {view.name}
-          </FilterChip>
-        ))}
-        <Button variant="text" onPress={() => setSaveOpen(true)}>
-          保存当前筛选
-        </Button>
-        {activeView && (
-          <Button
-            variant="text"
-            onPress={() => {
-              const values = views.filter((view) => view.id !== activeView);
-              setViews(values);
-              preferences.write(preferenceKey, JSON.stringify(values));
-              setActiveView("");
-            }}
-          >
-            删除已保存筛选
+      <div className="library-controls">
+        <div className="library-toolbar">
+          <SearchField
+            label="搜索文献"
+            value={text}
+            onChange={setText}
+            onSubmit={(value) =>
+              updateQuery({ ...route.query, text: value.trim() || null })
+            }
+            placeholder="按标题、作者、期刊搜索"
+          />
+          <div className="library-toolbar-actions">{toolbarActions}</div>
+          <Button className="library-more" onPress={() => setMobileTools(true)}>
+            更多操作
           </Button>
-        )}
-      </div>
-      {chips.length > 0 && (
-        <ChipGroup label="当前筛选">
-          {chips.map((chip) => (
-            <FilterChip
-              key={chip.key}
-              isSelected
-              onChange={chip.clear}
-              onRemove={chip.clear}
+        </div>
+        <div className="library-quick">
+          <div className="library-status-filters" aria-label="按材料状态筛选">
+            {STATUS_FILTERS.map((filter) => (
+              <FilterChip
+                key={filter.id}
+                isSelected={statusFilter === filter.id}
+                onChange={() => setStatusFilter(filter.id)}
+              >
+                {filter.label}
+                {countFor(filter.id) !== null ? " " : null}
+                {countFor(filter.id) !== null ? (
+                  <span className="filter-count">
+                    {countFor(filter.id)!.toLocaleString()}
+                  </span>
+                ) : null}
+              </FilterChip>
+            ))}
+            {statusFilter === "EXCLUDED" ? (
+              <FilterChip isSelected onChange={() => setStatusFilter("")}>
+                已排除
+              </FilterChip>
+            ) : (
+              <Menu
+                label="更多状态"
+                indicator
+                variant="text"
+                items={[
+                  {
+                    id: "EXCLUDED",
+                    label: "已排除",
+                    onAction: () => setStatusFilter("EXCLUDED"),
+                  },
+                ]}
+              />
+            )}
+          </div>
+          {folder ? (
+            <Switch
+              isSelected={!folder.include_descendants}
+              onChange={(only) =>
+                updateQuery({
+                  ...route.query,
+                  folder: { id: folder.id, include_descendants: !only },
+                })
+              }
             >
-              {chip.label}
-            </FilterChip>
-          ))}
-        </ChipGroup>
-      )}
-      <Presence>
-        {filters && (
-          <AnimatedPanel key="filters" preset="collapse">
-            <Filters
-              key={queryString}
-              query={route.query}
-              onApply={(query) => {
-                updateQuery(query);
-                setFilters(false);
+              只看本层
+            </Switch>
+          ) : null}
+          <Menu
+            label={
+              activeView
+                ? `已保存筛选：${views.find((view) => view.id === activeView)?.name ?? ""}`
+                : "已保存筛选"
+            }
+            indicator
+            variant="text"
+            items={[
+              ...views.map((view) => ({
+                id: `view:${view.id}`,
+                label: view.name,
+                onAction: () => {
+                  setActiveView(view.id);
+                  updateQuery(view.query, view.sort);
+                },
+              })),
+              {
+                id: "save",
+                label: "保存当前筛选…",
+                onAction: () => setSaveOpen(true),
+              },
+              ...(activeView
+                ? [
+                    {
+                      id: "delete",
+                      label: "删除当前筛选",
+                      onAction: () => {
+                        const values = views.filter(
+                          (view) => view.id !== activeView,
+                        );
+                        setViews(values);
+                        preferences.write(
+                          preferenceKey,
+                          JSON.stringify(values),
+                        );
+                        setActiveView("");
+                      },
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </div>
+        {chips.length > 0 && (
+          <div className="library-applied">
+            <ChipGroup label="当前筛选">
+              {chips.map((chip) => (
+                <FilterChip
+                  key={chip.key}
+                  isSelected
+                  onChange={chip.clear}
+                  onRemove={chip.clear}
+                >
+                  {chip.label}
+                </FilterChip>
+              ))}
+            </ChipGroup>
+            <Button
+              variant="text"
+              size="compact"
+              onPress={() => {
+                setActiveView("");
+                updateQuery(
+                  route.query.folder || route.query.recently_opened
+                    ? scopeQuery(route.query)
+                    : emptyQuery(),
+                );
               }}
-            />
-          </AnimatedPanel>
+            >
+              清除全部
+            </Button>
+          </div>
         )}
-      </Presence>
-      <LayoutGroup className="library-results-region">
+        <Presence>
+          {filters && (
+            <AnimatedPanel key="filters" preset="collapse">
+              <Filters
+                key={queryString}
+                query={route.query}
+                onApply={(query) => {
+                  updateQuery(query);
+                  setFilters(false);
+                }}
+              />
+            </AnimatedPanel>
+          )}
+        </Presence>
         <div className="library-list-heading">
           <Checkbox
             label="选择已加载的文献"
@@ -506,24 +672,9 @@ export default function Library() {
               ? "正在读取文献…"
               : `已显示 ${items.length.toLocaleString()} / 共 ${total.toLocaleString()} 篇`}
           </span>
-          <Select
-            label="排序"
-            value={route.sort}
-            onChange={(sort) =>
-              updateQuery(
-                route.query,
-                parseLibrarySearchRequest({ query: route.query, sort }).sort,
-              )
-            }
-            options={[
-              { value: "publication-year-desc", label: "年份：新到旧" },
-              { value: "publication-year-asc", label: "年份：旧到新" },
-              { value: "title-asc", label: "标题：A–Z" },
-              { value: "title-desc", label: "标题：Z–A" },
-              { value: "relevance", label: "相关性" },
-            ]}
-          />
         </div>
+      </div>
+      <LayoutGroup className="library-results-region">
         {next.isError && (
           <ErrorNotice
             message={errorMessage(next.error)}
@@ -553,6 +704,7 @@ export default function Library() {
           }}
           onPreview={setPeek}
           onFile={onFile}
+          onDragRow={onDragRow}
         />
       </LayoutGroup>
       <Presence>
@@ -567,11 +719,23 @@ export default function Library() {
               {mutable ? (
                 <>
                   <Button
+                    variant="primary"
+                    disabledReason={
+                      shell.selected.size > 1000
+                        ? "最多处理 1,000 篇，请减少选择。"
+                        : undefined
+                    }
                     onPress={() =>
-                      setOperation({ ids: [...shell.selected], kind: "parse" })
+                      setRunner({
+                        scope: {
+                          kind: "literatures",
+                          ids: [...shell.selected],
+                        },
+                        label: `已选的 ${shell.selected.size} 篇`,
+                      })
                     }
                   >
-                    解析 PDF
+                    运行算子…
                   </Button>
                   <Button
                     onPress={() =>
@@ -581,22 +745,70 @@ export default function Library() {
                       })
                     }
                   >
-                    建档／重试
+                    建档
                   </Button>
+                  <Button
+                    icon={<Icon name="folder" />}
+                    disabledReason={
+                      shell.selected.size > 1000
+                        ? "最多一次加入 1,000 篇，请减少选择。"
+                        : undefined
+                    }
+                    onPress={() => setAdding([...shell.selected])}
+                  >
+                    加入文件夹…
+                  </Button>
+                  <Menu
+                    label="更多"
+                    indicator
+                    items={[
+                      ...(folder
+                        ? [
+                            {
+                              id: "remove-folder",
+                              label: `移出「${folderLabel}」`,
+                              disabled: shell.selected.size > 1000,
+                              onAction: () => void removeFromFolder(),
+                            },
+                          ]
+                        : []),
+                      {
+                        id: "acquire",
+                        label: "获取 PDF",
+                        onAction: () => void operate("acquire", true),
+                      },
+                      {
+                        id: "parse",
+                        label: "解析 PDF",
+                        onAction: () => void operate("parse", true),
+                      },
+                      {
+                        id: "identity",
+                        label: "核验文章身份",
+                        onAction: () => void operate("identity", true),
+                      },
+                      {
+                        id: "snapshot",
+                        label: "生成快照",
+                        onAction: () =>
+                          snapshot({
+                            kind: "literatures",
+                            literature_ids: [...shell.selected],
+                          }),
+                      },
+                      {
+                        id: "export",
+                        label: "导出书目",
+                        onAction: () => void operate("export", true),
+                      },
+                    ]}
+                  />
                 </>
-              ) : null}
-              {
-                <Button
-                  onPress={() => void choose(true)}
-                  disabledReason={
-                    shell.selected.size > 1000
-                      ? "最多处理 1,000 篇，请减少选择。"
-                      : undefined
-                  }
-                >
-                  用这些文献做…
+              ) : (
+                <Button onPress={() => void operate("export", true)}>
+                  导出书目
                 </Button>
-              }
+              )}
               <Button
                 variant="text"
                 onPress={() => shell.setSelected(new Set())}
@@ -637,30 +849,12 @@ export default function Library() {
       >
         <TextField label="筛选名称" value={viewName} onChange={setViewName} />
       </Dialog>
-      <Dialog
-        title="使用所选文献"
-        isOpen={chooseOpen}
-        onOpenChange={setChooseOpen}
-      >
-        <p>范围已固定：{scope.length} 篇文献。</p>
-        <div className="action-grid">
-          {[
-            ["acquire", "获取 PDF"],
-            ["parse", "解析"],
-            ["analyze", "分析"],
-            ["identity", "核验身份"],
-            ["syn", "集合综合"],
-            ["ext", "提取与标签"],
-            ["export", "导出书目"],
-          ]
-            .filter(([id]) => mutable || id === "export")
-            .map(([id, label]) => (
-              <Button key={id} onPress={() => pick(id!)}>
-                {label}
-              </Button>
-            ))}
-        </div>
-      </Dialog>
+      {runner ? (
+        <RunOperatorDialog fixed={runner} onClose={() => setRunner(null)} />
+      ) : null}
+      {adding ? (
+        <AddToFolderDialog ids={adding} onClose={() => setAdding(null)} />
+      ) : null}
       <Drawer
         title="文献库操作"
         isOpen={mobileTools}
@@ -716,6 +910,15 @@ export default function Library() {
     </section>
   );
 }
+const STATUS_FILTERS = [
+  { id: "", label: "全部" },
+  { id: "READY", label: "已就绪" },
+  { id: "ASSET_READY", label: "有 PDF" },
+  { id: "ARCHIVING", label: "建档中" },
+  { id: "ARCHIVE_FAILED", label: "建档失败" },
+  { id: "failed", label: "无法获取" },
+  { id: "UNREVIEWED", label: "仅元数据" },
+] as const;
 /** Scroll-range updates belong to the list, not the page's forms and motion layout. */
 const LibraryList = memo(function LibraryList({
   items,
@@ -736,6 +939,7 @@ const LibraryList = memo(function LibraryList({
   onOpen,
   onPreview,
   onFile,
+  onDragRow,
 }: {
   items: readonly LiteratureSearchItem[];
   selected: ReadonlySet<string>;
@@ -755,9 +959,33 @@ const LibraryList = memo(function LibraryList({
   onOpen: ReturnType<typeof useShell>["openPaper"];
   onPreview: (id: string) => void;
   onFile: (id: string, file: File) => void;
+  onDragRow: (id: string, data: DataTransfer) => void;
 }) {
-  const scroll = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  // The whole page scrolls; the list measures its offset inside that container.
+  const scroll = useRef<HTMLElement | null>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
   const getScrollElement = useCallback(() => scroll.current, []);
+  useLayoutEffect(() => {
+    const element = list.current;
+    scroll.current =
+      element?.closest<HTMLElement>(".workspace-content") ?? null;
+    const container = scroll.current;
+    if (!element || !container) return;
+    const measure = () =>
+      setScrollMargin(
+        Math.round(
+          element.getBoundingClientRect().top -
+            container.getBoundingClientRect().top +
+            container.scrollTop,
+        ),
+      );
+    measure();
+    const observer = new ResizeObserver(measure);
+    for (const sibling of element.parentElement?.parentElement?.children ?? [])
+      if (!sibling.contains(element)) observer.observe(sibling);
+    return () => observer.disconnect();
+  }, []);
   const getItemKey = useCallback(
     (index: number) => items[index]!.literature.literature_id,
     [items],
@@ -776,6 +1004,7 @@ const LibraryList = memo(function LibraryList({
     directDomUpdates: true,
     estimateSize: estimateRowSize,
     overscan: 6,
+    scrollMargin,
     initialOffset: initial.offset,
     initialMeasurementsCache: initial.measurements,
     getItemKey,
@@ -800,15 +1029,34 @@ const LibraryList = memo(function LibraryList({
     placeholder,
     loadNextPage,
   ]);
-  useLayoutEffect(() => {
-    scroll.current?.scrollTo({ top: positions.get(scrollKey) ?? 0 });
+  // Ignore scroll events until the remembered position is back in place.
+  const restored = useRef(false);
+  useEffect(() => {
+    // Runs after the shell resets the shared scroll container for this route.
+    restored.current = false;
+    const frame = requestAnimationFrame(() => {
+      scroll.current?.scrollTo({ top: positions.get(scrollKey) ?? 0 });
+      restored.current = true;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [scrollKey, positions]);
+  useEffect(() => {
+    const container = scroll.current;
+    if (!container) return;
+    const remember = () => {
+      if (!restored.current) return;
+      positions.set(scrollKey, container.scrollTop);
+      measurements.set(scrollKey, virtual.measurementsCache.slice());
+    };
+    container.addEventListener("scroll", remember, { passive: true });
+    return () => container.removeEventListener("scroll", remember);
+  }, [scrollKey, positions, measurements, virtual]);
   const onMove = useCallback(
     (index: number) => {
       const target = Math.max(0, Math.min(items.length - 1, index));
       virtual.scrollToIndex(target);
       requestAnimationFrame(() =>
-        scroll.current
+        list.current
           ?.querySelector<HTMLElement>(`[data-index="${target}"]`)
           ?.focus(),
       );
@@ -818,14 +1066,10 @@ const LibraryList = memo(function LibraryList({
   return (
     <div
       className="library-scroll"
-      ref={scroll}
+      ref={list}
       aria-label="文献列表"
       tabIndex={-1}
       aria-busy={fetching}
-      onScroll={(event) => {
-        positions.set(scrollKey, event.currentTarget.scrollTop);
-        measurements.set(scrollKey, virtual.measurementsCache.slice());
-      }}
     >
       {!pending && !items.length && (
         <EmptyState
@@ -838,6 +1082,7 @@ const LibraryList = memo(function LibraryList({
           <LibraryRow
             key={row.key}
             row={row}
+            offset={scrollMargin}
             item={items[row.index]!}
             selected={selected.has(items[row.index]!.literature.literature_id)}
             mutable={mutable}
@@ -847,6 +1092,7 @@ const LibraryList = memo(function LibraryList({
             onPreview={onPreview}
             onFile={onFile}
             onMove={onMove}
+            onDragRow={onDragRow}
           />
         ))}
       </div>
@@ -857,10 +1103,11 @@ const LibraryList = memo(function LibraryList({
     </div>
   );
 });
-const estimateRowSize = () => 116;
+const estimateRowSize = () => 78;
 
 const LibraryRow = memo(function LibraryRow({
   row,
+  offset,
   item,
   selected,
   mutable,
@@ -870,8 +1117,10 @@ const LibraryRow = memo(function LibraryRow({
   onPreview,
   onFile,
   onMove,
+  onDragRow,
 }: {
   row: VirtualItem;
+  offset: number;
   item: LiteratureSearchItem;
   selected: boolean;
   mutable: boolean;
@@ -881,6 +1130,7 @@ const LibraryRow = memo(function LibraryRow({
   onPreview: (id: string) => void;
   onFile: (id: string, file: File) => void;
   onMove: (index: number) => void;
+  onDragRow: (id: string, data: DataTransfer) => void;
 }) {
   const id = item.literature.literature_id,
     title = paperTitle(item);
@@ -891,7 +1141,7 @@ const LibraryRow = memo(function LibraryRow({
       data-index={row.index}
       data-selected={selected || undefined}
       className="paper-row"
-      style={{ transform: `translateY(${row.start}px)` }}
+      style={{ transform: `translateY(${row.start - offset}px)` }}
       tabIndex={0}
       aria-label={title}
       onKeyDown={(event) => {
@@ -905,8 +1155,15 @@ const LibraryRow = memo(function LibraryRow({
           onMove(row.index + (event.key === "ArrowDown" ? 1 : -1));
         }
       }}
+      draggable={mutable}
+      onDragStart={(event) => {
+        if (event.target === event.currentTarget)
+          onDragRow(id, event.dataTransfer);
+      }}
       onDragOver={(event) => {
-        if (mutable) event.preventDefault();
+        // Only a dropped file belongs to the row; folder drags go to the sidebar.
+        if (mutable && event.dataTransfer.types.includes("Files"))
+          event.preventDefault();
       }}
       onDrop={(event) => {
         event.preventDefault();
@@ -942,40 +1199,52 @@ const LibraryRow = memo(function LibraryRow({
           </span>
         ) : null}
       </button>
-      <span className="paper-status" data-state={item.literature.status}>
-        {item.needs_manual_pdf
-          ? "无法获取"
-          : statusLabels[item.literature.status]}
-        {item.literature.status === "ASSET_READY" ? (
-          <small>
-            {item.missing_step === "raw-parse" ? "待解析" : "待建档"}
-          </small>
-        ) : null}
-        {item.literature.status === "ARCHIVING" ? (
-          <small>
-            {item.missing_step ? archiveReason(item.missing_step) : "正在执行"}
-          </small>
-        ) : null}
-        {item.literature.status === "EXCLUDED" ? (
-          <small>
-            {item.literature.metadata.article_kind
-              ? ARTICLE_KIND_LABELS[item.literature.metadata.article_kind]
-              : "待改判"}
-          </small>
-        ) : null}
-        {item.literature.status === "ARCHIVE_FAILED" ? (
-          <Button
-            variant="text"
-            size="compact"
-            onPress={() => navigate({ view: "archive", literature: null })}
-          >
-            查看问题
-          </Button>
-        ) : null}
-      </span>
-      <Button size="compact" variant="text" onPress={() => onPreview(id)}>
-        预览
-      </Button>
+      {item.literature.status === "UNREVIEWED" && !item.needs_manual_pdf ? (
+        // Almost the whole catalog is metadata-only; only departures get a tag.
+        <span />
+      ) : (
+        <span className="paper-status" data-state={item.literature.status}>
+          {item.needs_manual_pdf
+            ? "无法获取"
+            : statusLabels[item.literature.status]}
+          {item.literature.status === "ASSET_READY" ? (
+            <small>
+              {item.missing_step === "raw-parse" ? "待解析" : "待建档"}
+            </small>
+          ) : null}
+          {item.literature.status === "ARCHIVING" ? (
+            <small>
+              {item.missing_step
+                ? archiveReason(item.missing_step)
+                : "正在执行"}
+            </small>
+          ) : null}
+          {item.literature.status === "EXCLUDED" ? (
+            <small>
+              {item.literature.metadata.article_kind
+                ? ARTICLE_KIND_LABELS[item.literature.metadata.article_kind]
+                : "待改判"}
+            </small>
+          ) : null}
+          {item.literature.status === "ARCHIVE_FAILED" ? (
+            <Button
+              variant="text"
+              size="compact"
+              onPress={() => navigate({ view: "archive", literature: null })}
+            >
+              查看问题
+            </Button>
+          ) : null}
+        </span>
+      )}
+      <IconButton
+        className="paper-preview"
+        size="compact"
+        variant="text"
+        aria-label="预览"
+        icon={<Icon name="eye" />}
+        onPress={() => onPreview(id)}
+      />
     </article>
   );
 });

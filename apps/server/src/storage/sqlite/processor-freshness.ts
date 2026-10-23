@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
   canonicalJsonBytes,
+  PROCESSOR_METHOD_REVISION,
   type ProcessorInput,
   type ProcessorReads,
   type SnapshotMember,
@@ -150,7 +151,9 @@ export function bindProcessorFreshness(
 }
 export function readProcessorFreshness(db: DatabaseSync, id: string) {
   const row = db
-    .prepare("SELECT state FROM processor_result_freshness WHERE result_id=?")
+    .prepare(
+      "SELECT f.state,s.method_revision FROM processor_result_currentness f LEFT JOIN processor_result_summaries s USING(result_id) WHERE f.result_id=?",
+    )
     .get(id);
   if (!row)
     throw Object.assign(new Error("processor freshness missing"), {
@@ -163,14 +166,28 @@ export function readProcessorFreshness(db: DatabaseSync, id: string) {
     .all(id);
   return {
     state: row.state as "current" | "stale",
-    reasons: reasons.slice(0, 100).map((r) => ({
-      event_sequence: r.event_sequence,
-      literature_id: r.literature_id,
-      asset_id: r.asset_id,
-      kind: r.kind,
-      old_version: r.expected_version ?? digest(r.old_json),
-      new_version: digest(r.new_json),
-    })),
+    reasons: [
+      ...(row.method_revision === PROCESSOR_METHOD_REVISION
+        ? []
+        : [
+            {
+              event_sequence: null,
+              literature_id: null,
+              asset_id: null,
+              kind: "method-changed",
+              old_version: row.method_revision ?? "legacy",
+              new_version: PROCESSOR_METHOD_REVISION,
+            },
+          ]),
+      ...reasons.slice(0, 100).map((r) => ({
+        event_sequence: r.event_sequence,
+        literature_id: r.literature_id,
+        asset_id: r.asset_id,
+        kind: r.kind,
+        old_version: r.expected_version ?? digest(r.old_json),
+        new_version: digest(r.new_json),
+      })),
+    ],
     reasons_truncated: reasons.length > 100,
   };
 }

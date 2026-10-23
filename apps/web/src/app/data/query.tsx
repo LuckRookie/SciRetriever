@@ -44,6 +44,7 @@ export function invalidateMaterials(queries: QueryClient) {
     queryKeys.archive,
     queryKeys.tags,
     queryKeys.snapshots,
+    ["folders"],
     queryKeys.metadata,
     queryKeys.document,
     queryKeys.library,
@@ -87,6 +88,7 @@ export function subscribeInvalidation(
     queries.setQueryData(["workspace", "connected"], connected);
     if (connected && disconnected) {
       invalidateMaterials(queries);
+      void queries.invalidateQueries({ queryKey: ["agent-sessions"] });
       void queries.invalidateQueries({ queryKey: queryKeys.tasks });
     }
     disconnected = !connected;
@@ -96,10 +98,16 @@ export function subscribeInvalidation(
     invalidateMaterials(queries);
     void queries.invalidateQueries({ queryKey: queryKeys.tasks });
   };
+  const onAgents = () => {
+    void queries.invalidateQueries({ queryKey: ["agent-sessions"] });
+    void queries.invalidateQueries({ queryKey: queryKeys.tasks });
+  };
+  api.agentListeners.add(onAgents);
   api.materialListeners.add(onMaterials);
   api.listeners.add(onView);
   api.connectionListeners.add(reconnect);
   return () => {
+    api.agentListeners.delete(onAgents);
     api.materialListeners.delete(onMaterials);
     api.listeners.delete(onView);
     api.connectionListeners.delete(reconnect);

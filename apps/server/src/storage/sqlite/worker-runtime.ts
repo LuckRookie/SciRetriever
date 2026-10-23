@@ -1,7 +1,8 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
 import type { SqliteCommand } from "./worker.js";
+import type * as StateCache from "./library-state-cache.js";
 import type { RetrievalStorageEngine } from "./retrieval-engine.js";
 /** Dynamic values are confined to SQLite rows and JSON columns at this adapter boundary. */
 type Dynamic = ReturnType<typeof JSON.parse>;
@@ -24,13 +25,37 @@ interface WorkerRuntimeData {
 interface WorkerMessage {
   readonly id: number;
   readonly command: SqliteCommand;
+  readonly cancellation?: SharedArrayBuffer;
 }
 const data = workerData as WorkerRuntimeData;
+const { LibraryStateCache }: typeof StateCache = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./library-state-cache.ts"
+      : "./library-state-cache.js",
+    import.meta.url,
+  ).href
+);
+const libraryStateCache = new LibraryStateCache();
+let cancellation: Int32Array | undefined;
+function queryCheckpoint() {
+  if (cancellation && Atomics.load(cancellation, 0))
+    throw new Error("library-query-cancelled");
+}
+
 const layoutModule = await import(
   new URL(
     import.meta.url.endsWith(".ts")
       ? "./catalog-layout.ts"
       : "./catalog-layout.js",
+    import.meta.url,
+  ).href
+);
+const folderModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./folder-engine.ts"
+      : "./folder-engine.js",
     import.meta.url,
   ).href
 );
@@ -47,14 +72,6 @@ const archiveModule = await import(
     import.meta.url.endsWith(".ts")
       ? "./archive-engine.ts"
       : "./archive-engine.js",
-    import.meta.url,
-  ).href
-);
-const stateModule = await import(
-  new URL(
-    import.meta.url.endsWith(".ts")
-      ? "../../literature/state.ts"
-      : "../../literature/state.js",
     import.meta.url,
   ).href
 );
@@ -85,6 +102,14 @@ const annotationModule = await import(
     import.meta.url.endsWith(".ts")
       ? "./structure-annotation-engine.ts"
       : "./structure-annotation-engine.js",
+    import.meta.url,
+  ).href
+);
+const reviewModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./review-engine.ts"
+      : "./review-engine.js",
     import.meta.url,
   ).href
 );
@@ -187,6 +212,12 @@ function ftsIndexText(value: string): string {
 }
 let db: Dynamic;
 let observedDataVersion: number | null = null;
+let openedCatalogIdentity: string | null = null;
+function catalogIdentity(): string {
+  if (data.path === ":memory:") return "memory";
+  const stat = statSync(data.path);
+  return `${stat.dev}:${stat.ino}`;
+}
 let queryPreflight: {
   readonly status: "ready" | "not-initialized" | "unavailable";
   readonly schema: Dynamic | null;
@@ -199,14 +230,15 @@ function fail(): never {
 }
 let verifiedDocumentSchema: string | null = null;
 function validDocumentSchema(version: number): boolean {
-  // Reuse a full health check only while this connection's database state is
-  // unchanged. External commits, local writes (including rolled-back writes),
-  // DDL and reopening the connection all invalidate this proof.
+  // The full per-table integrity and foreign-key check runs once per worker
+  // start and again after any DDL (schema_version). Ordinary commits do not
+  // repeat it: on a large catalog it takes seconds, and every write (even a
+  // reading record) would otherwise stall the next read. Data damage written
+  // by an outside connection is caught at the next start.
   const identity = JSON.stringify([
     version,
-    db.prepare("PRAGMA data_version").get().data_version,
     db.prepare("PRAGMA schema_version").get().schema_version,
-    db.prepare("SELECT total_changes() AS changes").get().changes,
+    catalogIdentity(),
   ]);
   if (verifiedDocumentSchema === identity) return true;
   verifiedDocumentSchema = null;
@@ -330,13 +362,19 @@ function inspectDocumentSchema(version: number): boolean {
   }
 }
 function initialize(): Dynamic {
-  verifiedDocumentSchema = null;
+  // Reconnecting after another connection's commit keeps the proof; the
+  // identity below still changes on DDL or a different catalog file.
   db = data.read_only
     ? new DatabaseSync(data.path, { readOnly: true })
     : new DatabaseSync(data.path);
+  openedCatalogIdentity = catalogIdentity();
   db.function("sr_normalize", { deterministic: true }, (value: Dynamic) =>
     value === null ? null : queryTextModule.normalizeQueryText(value),
   );
+  db.function("sr_query_continue", () => {
+    queryCheckpoint();
+    return 1;
+  });
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA busy_timeout = 5000");
   if (data.read_only) {
@@ -781,6 +819,7 @@ function libraryTagBadges(ids: readonly string[]): Map<string, Dynamic[]> {
   return result;
 }
 function searchItem(id: Dynamic, literature: Dynamic = undefined): Dynamic {
+  queryCheckpoint();
   literature = literature ?? getLiterature(id);
   const metadata = db
     .prepare(
@@ -797,6 +836,8 @@ function searchItem(id: Dynamic, literature: Dynamic = undefined): Dynamic {
     literature,
     ...metadata,
     tags: libraryTagBadges([id]).get(id) ?? [],
+    intake_at: libraryPageModule.intakeAt(db, id),
+    ...folderModule.libraryMembership(db, id),
     missing_step: state.missing_step,
     needs_manual_pdf: state.status === "UNREVIEWED" && exhausted,
   };
@@ -936,6 +977,7 @@ function librarySnapshot(
   literatureIds: Dynamic = [],
   metaLiteratureIds: Dynamic = [],
   tags: Dynamic = undefined,
+  scope: Dynamic = undefined,
 ): Dynamic {
   db.exec("BEGIN");
   try {
@@ -948,10 +990,29 @@ function librarySnapshot(
     )
       fail();
     validateDiscoveryCauses(discoveryRunIds);
+    let scopeMatches: Set<string> | null = null;
+    if (scope) {
+      registerLibraryStates();
+      scopeMatches = new Set(
+        libraryPageModule
+          .libraryPageIds(db, {
+            query: scope,
+            ftsQuery,
+            sort: scope.recently_opened ? "opened-desc" : "intake-desc",
+            limit: Number.MAX_SAFE_INTEGER,
+            after: null,
+          })
+          .rows.map((r: Dynamic) => String(r.literature_id)),
+      );
+    }
     // Select IDs before materializing domain rows: an unrelated row must not be
     // parsed just because it shares the catalog or an FTS term with this scope.
     const conditions: string[] = [];
     const parameters: string[] = [];
+    if (scopeMatches) {
+      conditions.push("literature_id IN (SELECT value FROM json_each(?))");
+      parameters.push(JSON.stringify([...scopeMatches]));
+    }
     if (ftsQuery !== null) {
       conditions.push("literature_search_fts MATCH ?");
       parameters.push(ftsQuery);
@@ -1002,7 +1063,8 @@ function librarySnapshot(
       (ftsQuery !== null ||
         discoveryRunIds.length ||
         literatureIds.length ||
-        tags?.ids?.length)
+        tags?.ids?.length ||
+        scopeMatches)
     ) {
       const relevance = new Map<Dynamic, Dynamic>(
         rows.map((row: Dynamic) => [row.literature_id, row.relevance]),
@@ -1065,6 +1127,8 @@ function librarySnapshot(
             metadata_revision: metadata.metadata_revision,
             metadata_sha256: metadata.metadata_sha256,
             tags: tagBadges.get(String(row.literature_id)) ?? [],
+            intake_at: libraryPageModule.intakeAt(db, row.literature_id),
+            ...folderModule.libraryMembership(db, row.literature_id),
             missing_step: __state.missing_step,
             needs_manual_pdf: __state.status === "UNREVIEWED" && hasExhaustion,
           },
@@ -1090,6 +1154,11 @@ function librarySnapshot(
           .map((x: Dynamic) => x.discovery_run_id),
       }));
     db.exec("COMMIT");
+    if (scopeMatches)
+      result = result.map((r: Dynamic) => ({
+        ...r,
+        scope_match: scopeMatches.has(r.item.literature.literature_id),
+      }));
     return tagMatches
       ? result.map((r: Dynamic) => ({
           ...r,
@@ -1101,6 +1170,27 @@ function librarySnapshot(
     throw error;
   }
 }
+function registerLibraryStates() {
+  const identity = JSON.stringify([
+    db.prepare("PRAGMA schema_version").get().schema_version,
+    catalogIdentity(),
+  ]);
+  const states = libraryStateCache.read(
+    db,
+    identity,
+    data.max_tags,
+    data.archive_profile,
+    queryCheckpoint,
+  );
+  db.function("sr_status", { deterministic: true }, (id: Dynamic) => {
+    queryCheckpoint();
+    return states.get(id)?.status ?? null;
+  });
+  db.function("sr_missing", { deterministic: true }, (id: Dynamic) => {
+    queryCheckpoint();
+    return states.get(id)?.missing_step ?? null;
+  });
+}
 function librarySearchPage(request: Dynamic): Dynamic {
   return readTransaction(() => {
     validateDiscoveryCauses(request.query.discovery_run_ids);
@@ -1110,26 +1200,7 @@ function librarySearchPage(request: Dynamic): Dynamic {
       q.missing_steps.length ||
       q.needs_manual_pdf === true
     ) {
-      const states = new Map(
-        [...archiveModule.archiveStates(db)].map(([id, facts]: Dynamic) => [
-          id,
-          stateModule.deriveCurrentState(
-            facts,
-            data.max_tags,
-            data.archive_profile,
-          ),
-        ]),
-      );
-      db.function(
-        "sr_status",
-        { deterministic: true },
-        (id: Dynamic) => states.get(id)?.status ?? null,
-      );
-      db.function(
-        "sr_missing",
-        { deterministic: true },
-        (id: Dynamic) => states.get(id)?.missing_step ?? null,
-      );
+      registerLibraryStates();
     }
     const page = libraryPageModule.libraryPageIds(db, request);
     return {
@@ -2081,7 +2152,9 @@ function transaction(operation: Dynamic): Dynamic {
 function readTransaction(operation: Dynamic): Dynamic {
   db.exec("BEGIN");
   try {
+    queryCheckpoint();
     const value = operation();
+    queryCheckpoint();
     db.exec("COMMIT");
     return value;
   } catch (error) {
@@ -2268,6 +2341,7 @@ function createExecutionJob(
   policySha256: Dynamic,
   policyJson: Dynamic,
   targets: Dynamic = [],
+  origin: Dynamic = null,
 ): Dynamic {
   requireRuntime();
   if (typeof policySha256 !== "string" || !/^[0-9a-f]{64}$/.test(policySha256))
@@ -2363,6 +2437,13 @@ function createExecutionJob(
       )
         fail();
     }
+    if (origin)
+      reviewModule.runReviewStorage(db, "job-origin-put", {
+        job_id: row.job_id,
+        actor: origin.actor,
+        operation: origin.operation,
+        created_at: job.created_at,
+      });
     return {
       job_id: row.job_id,
       target_kind: row.target_kind,
@@ -4410,7 +4491,11 @@ function counts(): Dynamic {
   return { tables: result };
 }
 port.on("message", (message: WorkerMessage) => {
+  cancellation = message.cancellation
+    ? new Int32Array(message.cancellation)
+    : undefined;
   try {
+    queryCheckpoint();
     if (message.command.kind === "close") {
       retrievalEngine?.close();
       db?.close();
@@ -4466,7 +4551,10 @@ port.on("message", (message: WorkerMessage) => {
       const current = Number(
         db.prepare("PRAGMA data_version").get().data_version,
       );
-      if (current !== observedDataVersion) {
+      if (
+        current !== observedDataVersion ||
+        openedCatalogIdentity !== catalogIdentity()
+      ) {
         db.close();
         db = undefined;
         queryPreflight = null;
@@ -4481,6 +4569,22 @@ port.on("message", (message: WorkerMessage) => {
       fail();
     let value;
     switch (message.command.kind) {
+      case "folders":
+        try {
+          value = {
+            ok: true,
+            value: folderModule.runFolderStorage(db, message.command.value),
+          };
+        } catch (error) {
+          value = {
+            ok: false,
+            code:
+              error && typeof error === "object" && "code" in error
+                ? error.code
+                : "folder-storage-failed",
+          };
+        }
+        break;
       case "snapshot":
         try {
           value = {
@@ -4565,6 +4669,20 @@ port.on("message", (message: WorkerMessage) => {
                 ? error.code
                 : "annotation-storage-failed",
           };
+        }
+        break;
+      case "review":
+        try {
+          value = {
+            ok: true,
+            value: reviewModule.runReviewStorage(
+              db,
+              message.command.action,
+              message.command.args,
+            ),
+          };
+        } catch {
+          value = { ok: false, code: "review-storage-failed" };
         }
         break;
       case "proofread":
@@ -4730,6 +4848,7 @@ port.on("message", (message: WorkerMessage) => {
           message.command.policy_sha256,
           message.command.policy_json,
           message.command.targets ?? [],
+          message.command.origin,
         );
         break;
       case "execution_get_job":
@@ -4877,6 +4996,19 @@ port.on("message", (message: WorkerMessage) => {
       case "get_receipt_result":
         value = getReceiptResult(message.command.receiptId);
         break;
+      case "library_counts": {
+        const command = message.command;
+        value = readTransaction(() => {
+          validateDiscoveryCauses(command.query.discovery_run_ids);
+          registerLibraryStates();
+          return libraryPageModule.libraryCounts(
+            db,
+            command.query,
+            command.ftsQuery,
+          );
+        });
+        break;
+      }
       case "library_search_page":
         value = librarySearchPage(message.command.request);
         break;
@@ -4888,6 +5020,7 @@ port.on("message", (message: WorkerMessage) => {
           message.command.literatureIds,
           message.command.metaLiteratureIds,
           message.command.tags,
+          message.command.scope,
         );
         break;
       case "candidate_cleanup_snapshot":
@@ -5065,8 +5198,16 @@ port.on("message", (message: WorkerMessage) => {
       default:
         fail();
     }
+    queryCheckpoint();
     port.postMessage({ id: message.id, ok: true, value });
   } catch {
-    port.postMessage({ id: message.id, ok: false, value: null });
+    port.postMessage({
+      id: message.id,
+      ok: false,
+      value: null,
+      cancelled: !!cancellation && Atomics.load(cancellation, 0) !== 0,
+    });
+  } finally {
+    cancellation = undefined;
   }
 });

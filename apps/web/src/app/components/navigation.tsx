@@ -234,14 +234,41 @@ export function Menu({
   label,
   items,
   icon,
+  indicator = false,
+  variant,
+  iconOnly = false,
+  className,
 }: {
   label: string;
   items: readonly MenuOption[];
   icon?: ReactNode;
+  /** Show a trailing chevron so a text trigger reads as a menu. */
+  indicator?: boolean;
+  variant?: "secondary" | "text";
+  /** Render the trigger as a compact icon button; the label names it. */
+  iconOnly?: boolean;
+  className?: string;
 }) {
   return (
     <AriaMenuTrigger>
-      <Button {...(icon ? { icon } : {})}>{label}</Button>
+      {iconOnly ? (
+        <IconButton
+          aria-label={label}
+          size="inline"
+          variant="text"
+          icon={icon ?? <Icon name="more" />}
+          {...(className ? { className } : {})}
+        />
+      ) : (
+        <Button
+          {...(icon ? { icon } : {})}
+          {...(variant ? { variant } : {})}
+          {...(className ? { className } : {})}
+        >
+          {label}
+          {indicator ? <Icon name="chevron" /> : null}
+        </Button>
+      )}
       <AriaPopover className="ui-popover" placement="bottom end">
         <AriaMenu
           className="ui-menu"

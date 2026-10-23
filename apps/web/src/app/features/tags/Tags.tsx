@@ -1,3 +1,4 @@
+import { UsageEstimate } from "../processing/UsageEstimate.js";
 import { serviceMessage } from "../../strings.js";
 import { useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
@@ -22,7 +23,7 @@ import { processingTask } from "../../data/operations.js";
 import { TagEditor } from "./TagEditor.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
-import { errorMessage, archiveStrings } from "../../strings.js";
+import { errorMessage, archiveStrings, localTime } from "../../strings.js";
 import { randomId } from "../../../browser-platform.js";
 import "../archive/archive.css";
 const tagName = (t: Tag) => t.name_zh || t.name_en;
@@ -34,6 +35,7 @@ export default function Tags() {
   const [search, setSearch] = useState(""),
     [selected, setSelected] = useState(route.parameters.get("tag") ?? ""),
     [form, setForm] = useState(false),
+    [consolidate, setConsolidate] = useState(false),
     [name, setName] = useState(""),
     [english, setEnglish] = useState(""),
     [definition, setDefinition] = useState(""),
@@ -154,6 +156,7 @@ export default function Tags() {
         description="以主题组织文献。人工编辑、合并和回溯都保留可核对的变更记录。"
       />
       <div className="archive-toolbar">
+        <Button onPress={() => setConsolidate(true)}>整理词表</Button>
         <SearchField
           label="搜索名称与同义词"
           value={search}
@@ -337,6 +340,12 @@ export default function Tags() {
               </Button>
               {preview ? (
                 <>
+                  <UsageEstimate
+                    request={{
+                      kind: "tags",
+                      request: { operation: "backfill", tag_ids: [selected] },
+                    }}
+                  />
                   <p role="status">
                     候选 {Number(preview.candidate_count)} 篇，预计模型调用{" "}
                     {Number(preview.estimated_calls)} 次。
@@ -396,7 +405,7 @@ export default function Tags() {
               </strong>
               <p>
                 <time dateTime={String(c.created_at)}>
-                  {new Date(String(c.created_at)).toLocaleString()}
+                  {localTime(c.created_at)}
                 </time>
               </p>
               <p>
@@ -435,6 +444,42 @@ export default function Tags() {
           </Button>
         ) : null}
       </Disclosure>
+      <Dialog
+        title="整理词表"
+        isOpen={consolidate}
+        onOpenChange={setConsolidate}
+        footer={
+          <Button
+            isPending={action.isPending}
+            onPress={() =>
+              action.mutate(
+                {
+                  name: "tags",
+                  request: { operation: "consolidate", request: {} },
+                },
+                { onSuccess: () => setConsolidate(false) },
+              )
+            }
+          >
+            确认整理
+          </Button>
+        }
+      >
+        <UsageEstimate
+          request={
+            consolidate
+              ? { kind: "tags", request: { operation: "consolidate" } }
+              : null
+          }
+        />
+
+        <p>
+          检查词表中的重复候选并整理关系；人工锁定会保留。此操作会调用模型。
+        </p>
+        {action.error ? (
+          <ErrorNotice message={errorMessage(action.error)} />
+        ) : null}
+      </Dialog>
       <Dialog
         title="新建标签"
         isOpen={form}

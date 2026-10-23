@@ -1,3 +1,4 @@
+import { activityContext, withActivity } from "../../logging/activity.js";
 import {
   canonicalJsonBytes,
   parseProcessingTaskRequest,
@@ -284,6 +285,14 @@ export class ProcessingTaskService {
     jobId: string,
     action: "pause" | "cancel" | "resume" | "retry",
   ) {
+    await this.repository.appendEvent({
+      event_id: `event-${randomUUID()}`,
+      job_id: jobId,
+      sequence: -1,
+      kind: "task-control-requested",
+      payload: { action, actor: activityContext().actor },
+      created_at: new Date().toISOString(),
+    });
     if (action === "pause" || action === "cancel") {
       this.waiting.delete(jobId);
       if (action === "pause") await this.queue.pause(jobId);
@@ -364,7 +373,9 @@ export class ProcessingTaskService {
     try {
       return await this.repository.withRuntime(() => {
         admitted = true;
-        return this.executeControlled(jobId, signal);
+        return this.repository.withOrigin(jobId, () =>
+          this.executeControlled(jobId, signal),
+        );
       });
     } catch (error) {
       if (
@@ -439,7 +450,12 @@ export class ProcessingTaskService {
             throw new ProcessingTaskError("processing-snapshot-invalid");
           try {
             if (active.aborted) throw new QueueInterruptedError();
-            const result = await this.perform(operation, active, jobId);
+            const result = await this.perform(
+              operation,
+              active,
+              jobId,
+              target.target_id,
+            );
             if (
               operation.operation === "parse-documents" &&
               Array.isArray(result.profiles) &&
@@ -570,44 +586,68 @@ export class ProcessingTaskService {
     operation: ProcessingOperation,
     signal: AbortSignal,
     jobId: string,
+    targetId: string,
   ): Promise<Record<string, unknown>> {
-    switch (operation.operation) {
-      case "backfill-tags": {
-        if (!this.runtime.tags)
-          throw new ProcessingTaskError("tags-unavailable");
-        return this.runtime.tags.backfill(
-          operation.request.tag_ids,
-          false,
-          signal,
-        );
-      }
-      case "build-archive": {
-        if (!this.runtime.archive)
-          throw new ProcessingTaskError("archive-unavailable");
-        return this.runtime.archive.build(operation.request, signal, jobId);
-      }
-      case "run-processor": {
-        if (!this.runtime.processors)
-          throw new ProcessingTaskError("processor-unavailable");
-        return this.runtime.processors.execute(operation.request, signal);
-      }
-      case "parse-documents": {
-        const r = await this.runtime.documents.parseDocuments(
-          operation.request,
-          signal,
-        );
-        return { ...r };
-      }
-      case "assess-article-identity": {
-        if (!this.runtime.identity)
-          throw new ProcessingTaskError("article-identity-unavailable");
-        const r = await this.runtime.identity.assess(operation.request, signal);
-        return {
-          assessment_id: r.assessment.assessment_id,
-          status: r.assessment.status,
-          published: r.published,
-        };
-      }
-    }
+    const input =
+      operation.operation === "run-processor" &&
+      operation.request.inputs.length === 1
+        ? operation.request.inputs[0]
+        : null;
+    const literature =
+      "literature_id" in operation.request
+        ? String(operation.request.literature_id)
+        : input?.kind === "archive-document"
+          ? input.literature_id
+          : undefined;
+    return withActivity(
+      {
+        operation: operation.operation,
+        target_id: targetId,
+        ...(literature ? { literature_id: literature } : {}),
+      },
+      async () => {
+        switch (operation.operation) {
+          case "backfill-tags": {
+            if (!this.runtime.tags)
+              throw new ProcessingTaskError("tags-unavailable");
+            return this.runtime.tags.backfill(
+              operation.request.tag_ids,
+              false,
+              signal,
+            );
+          }
+          case "build-archive": {
+            if (!this.runtime.archive)
+              throw new ProcessingTaskError("archive-unavailable");
+            return this.runtime.archive.build(operation.request, signal, jobId);
+          }
+          case "run-processor": {
+            if (!this.runtime.processors)
+              throw new ProcessingTaskError("processor-unavailable");
+            return this.runtime.processors.execute(operation.request, signal);
+          }
+          case "parse-documents": {
+            const r = await this.runtime.documents.parseDocuments(
+              operation.request,
+              signal,
+            );
+            return { ...r };
+          }
+          case "assess-article-identity": {
+            if (!this.runtime.identity)
+              throw new ProcessingTaskError("article-identity-unavailable");
+            const r = await this.runtime.identity.assess(
+              operation.request,
+              signal,
+            );
+            return {
+              assessment_id: r.assessment.assessment_id,
+              status: r.assessment.status,
+              published: r.published,
+            };
+          }
+        }
+      },
+    );
   }
 }

@@ -119,6 +119,164 @@ export function Card({
     </section>
   );
 }
+/** A titled page section whose content sits in a soft sunken block, like the library filter panel. */
+export function Section({
+  title,
+  description,
+  action,
+  children,
+}: {
+  title: string;
+  description?: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="ui-section">
+      <header>
+        <div>
+          <h2>{title}</h2>
+          {description ? <p>{description}</p> : null}
+        </div>
+        {action}
+      </header>
+      <div className="ui-block">{children}</div>
+    </section>
+  );
+}
+export function Definitions({ children }: { children: ReactNode }) {
+  return <dl className="ui-definitions">{children}</dl>;
+}
+/** One setting or property: name and explanation on the left, control and effective value on the right. */
+export function Definition({
+  term,
+  description,
+  value,
+  children,
+}: {
+  term: string;
+  description?: string;
+  value?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="ui-definition">
+      <dt>
+        {term}
+        {description ? <p>{description}</p> : null}
+      </dt>
+      <dd>
+        {children}
+        {value ? <span className="ui-definition-value">{value}</span> : null}
+      </dd>
+    </div>
+  );
+}
+export function Figure({
+  number,
+  title,
+  meta,
+  children,
+}: {
+  number: number;
+  title: string;
+  meta?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <figure className="ui-figure">
+      <figcaption>
+        <span>
+          <span className="ui-figure-number">图 {number}</span>
+          <span className="ui-figure-title">{title}</span>
+        </span>
+        {meta ? <span className="ui-figure-meta">{meta}</span> : null}
+      </figcaption>
+      <div className="ui-block">{children}</div>
+    </figure>
+  );
+}
+export function PageNote({ children }: { children: ReactNode }) {
+  return <p className="ui-page-note">{children}</p>;
+}
+/** A list beside the selected item's detail, framed as one container with two visible panes. */
+export function MasterDetail({
+  label,
+  toolbar,
+  list,
+  footer,
+  detail,
+}: {
+  label: string;
+  toolbar?: ReactNode;
+  list: ReactNode;
+  footer?: ReactNode;
+  detail: ReactNode;
+}) {
+  return (
+    <div className="ui-master-detail">
+      <div className="ui-master" role="region" aria-label={label}>
+        {toolbar ? <div className="ui-master-toolbar">{toolbar}</div> : null}
+        <div className="ui-master-list">{list}</div>
+        {footer ? <div className="ui-master-footer">{footer}</div> : null}
+      </div>
+      <div className="ui-detail">{detail}</div>
+    </div>
+  );
+}
+export function MasterGroup({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count?: number;
+  children: ReactNode;
+}) {
+  return (
+    <section className="ui-master-group">
+      <h3>
+        {title}
+        {count !== undefined ? <span>{count.toLocaleString()}</span> : null}
+      </h3>
+      {children}
+    </section>
+  );
+}
+/** The whole item is clickable, but only the title names the button. */
+export function MasterItem({
+  title,
+  meta,
+  badge,
+  leading,
+  selected = false,
+  onPress,
+}: {
+  title: ReactNode;
+  meta?: ReactNode;
+  badge?: ReactNode;
+  leading?: ReactNode;
+  selected?: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <div className="ui-master-item" data-selected={selected || undefined}>
+      {leading}
+      <div className="ui-master-item-text">
+        <button
+          type="button"
+          className="ui-master-item-open"
+          aria-current={selected || undefined}
+          onClick={onPress}
+        >
+          {title}
+        </button>
+        {meta ? <span className="ui-master-item-meta">{meta}</span> : null}
+      </div>
+      {badge}
+    </div>
+  );
+}
 export function ListRow({
   title,
   bibliography,
