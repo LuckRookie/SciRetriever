@@ -24,3 +24,5 @@
 - `bibliography-import.ts`：共享的 BibTeX/RIS/CSL 解码和元数据导入；从 Entry 移入同一 Literature 所有者，CLI、MCP 与引用关联复用一份实现。`reference-matching.ts` 优先 DOI 精确身份；只有可确定完整书目字段的结构化引用才使用现有严格后备键，普通非结构化文本不做模糊猜测。
 
 - `reference-matching.ts` / `archive-references.ts`：固定校订稿参考文献的保守库内匹配与原子关系支持；不依靠模糊题名猜测。`bibliography-import.ts` 是书目解码与导入的共享实现，Entry 不再持有重复副本。
+
+- [folders.ts](folders.ts)：文献文件夹、批量成员与显式阅读历史的操作边界；目录与阅读历史不改变文献事实、资产或就绪状态。`query.ts` 的快速筛选计数与搜索共享筛选条件，入库排序取最早关联观测时间。

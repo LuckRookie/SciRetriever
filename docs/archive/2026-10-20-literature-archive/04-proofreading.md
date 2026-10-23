@@ -2,6 +2,8 @@
 
 状态：Completed（12/12；Owner 委托的原图抽查与有限复验通过 GV，最终 Full 待 12 集中执行）。执行者：Codex（独立执行）。真实模型试跑已获授权，质量验收仍需 Owner 抽看。
 
+> 2026-10-22 修订：[ADR 0037](../../architecture/decisions/0037-literature-archive-and-proofread-text.md) 第三版取消“存疑”（校订稿 basis 去掉 `uncertain`），用时核对改为六种状态（去掉 `image-checked`／`uncertain`），单篇结果按值量化（去掉 `not-reported`／`part-absent`），算子按结构分块（去掉 `max_chunk_bytes`）。本文件中相关条文保留为当时的实施记录，后续实现以[计划 13 第二轮](13-web-review-and-audit.md) 13.22–13.24 为准。
+
 > 第一版的“双解析对齐、区块比较、区块仲裁、硬校验”已被 ADR 0037 第二版取代。已写的 `align.ts`、`compare.ts`、`merge.ts`、`arbitration.ts` 及相关合同、表和测试在 4.12 中删除，不保留兼容。规则清理、渲染、持久化、人工决定等已有实现可以复用，但要按本文件调整。第一版的实施记录保留在文末，仅作历史参考。
 
 ## Outcome

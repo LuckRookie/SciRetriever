@@ -133,7 +133,7 @@ GPU 容量和 operator 日志。不要让应用自行启动无审查 fallback。
 
 新的 raw converter 只保存中性区块、Markdown、所引用图片和原始 v2；middle 仅提取页数/页面尺寸。VLM 的表格/公式在没有裁图时可能返回字面值 `images/`，该值作为无图片处理，不能成为文件引用。未知类型会拒绝并带安全类型名，不静默丢弃。
 
-这里的 model identity 为运维配置 identity 加 profile 限定，不是现场探测出的 pipeline 模型 revision。`config status` 的两个 profile 项只是本地配置检查，没有请求服务，不能证明 operator 已加载两套模型。2026-10-21 已获授权完成 13 份真实样本的两种 profile 归档接纳；这证明当前服务可返回这两种格式，不能证明实际模型权重 revision 或文字抄录质量。2026-10-21 的独立合成单页 pipeline 请求已通过，原图抽查由 Owner 委托 Codex 完成，详见[03 实施记录](../plans/2026-10-20-literature-archive/03-dual-parsing.md)。
+这里的 model identity 为运维配置 identity 加 profile 限定，不是现场探测出的 pipeline 模型 revision。`config status` 的两个 profile 项只是本地配置检查，没有请求服务，不能证明 operator 已加载两套模型。2026-10-21 已获授权完成 13 份真实样本的两种 profile 归档接纳；这证明当前服务可返回这两种格式，不能证明实际模型权重 revision 或文字抄录质量。2026-10-21 的独立合成单页 pipeline 请求已通过，原图抽查由 Owner 委托 Codex 完成，详见[03 实施记录](../archive/2026-10-20-literature-archive/03-dual-parsing.md)。
 
 ## 8. 单 profile 校订与真实验证边界（2026-10-21）
 

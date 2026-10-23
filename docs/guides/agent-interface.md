@@ -36,7 +36,7 @@ stdout 专用于 MCP JSON-RPC，诊断写 stderr。查询模式不会启动维�
 推荐顺序：查询/发现 → 明确获取 PDF → 解析 → 读取固定文档/准备 InputManifest → 分析或身份核验 → 读取产物。
 每一步都可以独立使用；解析、分析、身份核验不会为了补输入而暗中下载。
 
-Browser 获取在一篇文章内保留模型工具历史、人工指导和真实下载反馈。模型返回动作或文本不等于取得 PDF；调用方仍以 `read_task` 的文件验收、发布结果和失败信息判断完成。内置模型历史不是独立公开调用合同，也不跨进程恢复；外部 Agent 可按下文显式连接持有该会话的 Web runtime，使用受控 Browser 协作工具。知识分析继续针对固定输入调用单次结构化模型边界，不因此获得 Browser 探索权限。
+Browser 获取在一篇文章内保留模型工具历史、人工指导和真实下载反馈。模型返回动作或文本不等于取得 PDF；调用方仍以 `read_task` 的文件验收、发布结果和失败信息判断完成。内置模型历史不是独立公开调用合同，也不跨进程恢复；外部 Agent 可按下文显式连接持有该会话的 Web runtime，使用受控 Browser 协作工具。知识分析通过 DSH 持续阅读固定校订稿与图片、回查和提交有证据的结果；不因此获得 Browser 探索权限。
 
 ## 三端能力覆盖与结构化入口
 
@@ -264,3 +264,29 @@ sciretriever maintenance publisher-names-accept --report /absolute/path/publishe
 Browser 复用前四层的实际响应准备有限文章入口，不增加 HEAD/GET 预检。普通 HTTP 403/404 不构成 Browser 永久拒绝；首次模型派发前，只有 Browser 实际 404/410 或明确 DNS/连接失败才自动尝试备用入口，已有在途下载优先结算，模型接管后不自动换页。每篇默认共享 300 秒活跃时间与 30 次实际模型派发预算，先到上限停止进一步探索，动作保留统计而默认不独立设限；5 秒节奏、平台准入/冷却继续执行，换入口或恢复不重置预算。最后一次合法调用可以完成动作及有界页面反馈与下载交接，时间和控制版本检查仍有效；已开始的文件传输使用独立寿命。预算耗尽不推断永久无权限或全渠道耗尽。此能力的离线验证不证明真实站点成功率或机构 entitlement。
 
 统一处理器由 `submit_processor`、`processor_query`、`rebuild_processor_index`、`retain_extraction` 提供；任务控制沿用 `read_task/control_task`，见[完整合同与例子](knowledge-processors.md)。
+
+## 校订与运行审查入口
+
+以下读操作共享 HTTP `/api/v1/query/<操作名>`、CLI 与 MCP；CLI 均接受 `--request FILE|-`，不调用模型或启动任务。
+
+| HTTP 操作 | CLI | MCP | 请求 |
+| --- | --- | --- | --- |
+| `proofread-text` | `proofread text` | `proofread_text` | `asset_id`，可选固定 `proofread_id/start/max_bytes` |
+| `agent-sessions` | `agents sessions` | `agent_sessions` | `operation:list/read/revision` 与 `request`；read 固定 session_id，按 after/limit 续读 |
+| `task-run` | `jobs progress` | `task_run` | job_id、offset/limit；综合逐篇页另传 target_id、member_offset/member_limit |
+| `usage-estimate` | `usage estimate` | `usage_estimate` | kind 为 processor/archive/synthesis/tags/archive-issues/processing；request 为相应范围 |
+| `processor-runs` | `processor runs` | `processor_runs` | 算子、快照、来源文献、过时筛选及 offset/limit |
+| `literature-results` | `literature results` | `literature_results` | literature_id、offset/limit |
+| `operation-history` | `operations history` | `operation_history` | 可选 actor/operation，after/limit |
+
+`proofread save` / MCP `proofread_save` 是显式维护操作，保存语义见[校订指南](literature-archive.md#校订全文与单步处理)。Web 使用独立登录会话身份，CLI/MCP 使用入口及系统用户身份；调用方传入的 actor 不能冒充登录身份。任务发起身份在创建时固定，后续控制另记控制者。过程记录有界且结束 7 天后清理，已发布结果和任务用量不随之删除，不应把过程记录当作永久模型会话或续接协议。
+
+## 库组织与阅读记录
+
+- 文献检索默认 `intake-desc`，`intake_at` 为最早关联元数据观测的 UTC 时间，缺失排末尾。`literature counts --request` / `library_counts` 接收 `{query: LibraryQuery}`，返回 total、statuses、unavailable_pdf、recently_opened；忽略状态及无法获取快捷筛选。
+- `folders list` / `folders_query` 列出目录树；查询封套 `{operation:"list",request:{}}`。delete-preview 的 request 为 `{folder_id}`，返回子树与受影响文献数。
+- `folders <create|rename|move|delete|add|remove> --request FILE` / `folders_manage` 为显式写操作；MCP 封套 `{operation,request}`，CLI 文件只包含 request。create：`{name,parent_id?:null|id,position?:number}`；rename：`{folder_id,name}`；move：`{folder_id,parent_id,position}`；delete：`{folder_id}`；add/remove：`{folder_id,literature_ids}`（最多 1000，幂等）。删除包含子目录，只解除成员，不删除文献。
+- `LibraryQuery.folder:{id,include_descendants}` 与其它筛选组合，可直接用于快照和算子范围。搜索结果包含 folder_ids；父目录的 total_count 按子树文献去重。
+- `literature open ID` / `reading_open {literature_id}` 显式更新共享阅读历史。`recently_opened:true` 选最近 30 天内满足其它筛选的最近 100 篇，支持 `opened-desc`；查询本身不写入历史。
+- `snapshot create --name NAME` / `snapshot_create` 可提供名称。`snapshot rename ID --name NAME` / `snapshot_rename {snapshot_id,name}` 改显示名，空名恢复默认，不改变内容哈希。
+- `literature reading-status --request FILE` / `reading_status {asset_id}` 读取校订稿块来源、文字层页数及最后人工修改。Agent 会话的 read 按 events.sequence 续读；其 value 中的 sequence 是会话内部序号，不能用作数据库游标。文本保持换行、图片留占位、隐藏推理和凭据不保存。

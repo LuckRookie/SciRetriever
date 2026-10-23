@@ -181,7 +181,10 @@ Catalog 只为会改变未来自动目标选择的稳定缺失保存一张最小
 
 这些值通过唯一关系、TypeScript 读取规则或查询聚合推导。若未来性能证据要求物化，只能建立可重建投影并保持一个权威来源，不能新增可独立修改的状态。
 
-`LiteratureSearchItem`、`LibrarySearchPage`、`LiteratureAssetView`、`LiteratureDetail`、`LiteratureReferencePage` 和 `ReferenceDetail` 都在查询时由上述权威行、唯一关系、聚合值和稳定 artifact 引用临时组装。Catalog 不建立 search item、page、detail、asset view、missing step、引用数量、关系读取 DTO 或其它投影表；这些对象没有独立 ID、provenance、revision 或写入操作。`LiteratureDetail` 必须在同一个 read-only SQLite snapshot 中读取 Literature/MetaLiterature、metadata binding、observations、资产关系、当前原始解析/校订稿/建档状态、其它版本与 Reference 数量，再使用已经提交的不可变 artifact 引用读取需要的结构化内容，不能把不同时间点的 current facts 拼成一个结果。
+`LiteratureSearchItem`、`LibrarySearchPage`、`LiteratureAssetView`、`LiteratureDetail`、`LiteratureReferencePage` 和 `ReferenceDetail` 都在查询时由上述权威行、唯一关系、聚合值和稳定 artifact 引用临时组装。Catalog 不建立 search item、page、detail、asset view、missing step、引用数量、关系读取 DTO 或其它完整读取 DTO 投影表；这些对象没有独立 ID、provenance、revision 或写入操作。`LiteratureDetail` 必须在同一个 read-only SQLite snapshot 中读取 Literature/MetaLiterature、metadata binding、observations、资产关系、当前原始解析/校订稿/建档状态、其它版本与 Reference 数量，再使用已经提交的不可变 artifact 引用读取需要的结构化内容，不能把不同时间点的 current facts 拼成一个结果。
+
+文献库性能路径（Owner 2026-10-23）：`literature_intake` 仅物化最早关联观测时间这一可重建的排序键，事务触发器维护，UTC 规范化与未物化时的 `min(julianday(observed_at))` 一致，无观测为 null；不产生独立业务身份或人工编辑入口。`library_state_revision` 仅作为内存状态缓存的失效序号，六态和缺失步骤仍由 Literature 在读取时推导，不保存第二份就绪事实。状态依赖、失效和取消检查点的当前实现见源码 [SQLite 说明](../../../apps/server/src/storage/sqlite/README.md)。已有 catalog 的同版追加、回填与切换必须显式授权并在离线副本核对，不在启动时自动执行。
+
 
 `LiteratureReferencePage` 在同一 snapshot 中读取指定端点的权威 Reference、相关 Literature current facts 和每条边的 support count；`ReferenceDetail` 在同一 snapshot 中读取 Reference 两端和全部当前 support。正向和反向列表都查询 `literature_references`，不能物化 cited-by 副本。关系页面的固定排序、total 和 cursor 位置必须来自同一读取视图；后续页面可以看到后续提交的 current facts，但单页内部不能混合提交前后状态。
 
@@ -406,7 +409,7 @@ Literature 拥有元数据与引用；Parsing 拥有原始结果；Proofread 拥
 - 来源 observation、稳定身份、原始 PDF 与资源闭包在失败和重开后保留；
 - 不可变字节发布与 SQL CAS，取消、并发和索引失败不会丢失有效事实；
 - 字段/区块/标签锁定，版本事件和快照过时的事务一致性；
-- 校订未完成不能发布默认文档，存疑不阻断 complete，就绪只由正文要求决定；
+- 校订未完成不能发布默认文档；疑点处置中的“无法确定”不单独阻断 complete，就绪只由正文要求决定。片段不再保存存疑字段，无法转写的图像区块保留为空文字；
 - 外部候选回执与结果的证据版本保护；
 - 一次性副本转换的明确删除范围、保守身份索引、源库不变与目标覆盖拒绝。
 
@@ -426,3 +429,15 @@ Literature 拥有元数据与引用；Parsing 拥有原始结果；Proofread 拥
 
 - 真实库迁移与重建，只能在 Owner 授权（计划 GR）后先在隔离副本上执行。
 - 四类旧数据在 GB 确认后删除，VLM Markdown 作为原始解析保留。
+
+## 7. 运行审查存储（ADR 0032 第 7 节）
+
+Application 拥有操作审计与过程投影。`operation_records` 保存入口会话、操作名及允许的 ID/revision，不存凭据或全文；`job_origins` 固定发起身份。`agent_sessions`/`agent_session_events` 保存脱敏摘要、工具参数/结果、页码区域、提交理由及用量；每事件有界，每会话最多 2 MiB（含计量开销），超限标注并继续累计用量。不保存图片字节、完整上下文或隐藏推理。普通关闭结算会话；进程异常退出的未结束会话不会被当作已完成。
+
+服务启动及每小时清理结束满 7 天的会话和事件。`task_model_usage` 独立保存已结算用量，`task_steps` 固定本次 job 的步骤，不被后来建档覆盖。清理过程不删除结果、来源或任务用量。`agent_view_revision` 与触发器供事件推送读取有界版本号，不通过轮询全量历史判断变化。
+
+Analysis 的 `processor_result_summaries` 保存已发布结果用量/覆盖摘要；`processor_run_requests` 保存实际提交范围，供运行筛选和来源展示。表结构全部写入当前 `schema.ts`，版本号不变；精确指纹改变后仍要求显式核对已有库，普通启动不自动补表。此前正式库切换不代表本轮新增表已部署。
+
+任务发起身份和任务、策略、固定目标同一事务发布。综合逐篇进度使用原有 execution_events 中的 processor-map-progress 事件，不新增表；每篇新算、复用、部分完成、失败和中断均固定到本次目标。task-run 的 target_id/member_offset/member_limit 按页读取，根投影不隐式装载大型快照的全部成员。共享模型生命周期在关闭时等待过程记录收尾，再释放存储。
+
+第二轮库组织新增 `snapshot_labels`（显示名与不可变快照 hash 分离）、`folders`、`folder_members`、`reading_history`。已有 `processor_result_summaries` 增加 `method_revision`，`processor_result_currentness` 只读投影将旧方法标为过时；旧统计无法代表当前三计数时返回 null，不迁移、不当作零。所有 DDL 仍在 schema.ts，版本仍为 11；已有正式库需要授权后在副本显式更新，启动不会自动加表。

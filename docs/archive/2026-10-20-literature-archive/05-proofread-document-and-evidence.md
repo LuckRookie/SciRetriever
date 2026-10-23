@@ -2,6 +2,8 @@
 
 状态：In progress（6/9；发布、默认版本、读取、页码证据与检索已接入；5.7、5.8、5.9 尚未达到第二版要求）。执行者：worker。
 
+> 2026-10-22 修订：[ADR 0037](../../architecture/decisions/0037-literature-archive-and-proofread-text.md) 第三版取消“存疑”（校订稿 basis 去掉 `uncertain`），用时核对改为六种状态（去掉 `image-checked`／`uncertain`），单篇结果按值量化（去掉 `not-reported`／`part-absent`），算子按结构分块（去掉 `max_chunk_bytes`）。本文件中相关条文保留为当时的实施记录，后续实现以[计划 13 第二轮](13-web-review-and-audit.md) 13.22–13.24 为准。
+
 > ADR 0037 第二版（2026-10-20）：校订改为“部署 profile 初稿 → 文字层找疑点 → DSH 看原图矫正 → 存疑不阻断就绪”。本块受影响的 Task 已取消勾选并写明调整内容；其余已完成项保留。
 
 ## Outcome

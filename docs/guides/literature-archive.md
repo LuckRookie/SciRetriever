@@ -37,7 +37,7 @@ CLI 等待所提交的持久任务结束；MCP 和 Web 应用边界返回任务�
 - `ASSET_READY`：已有主 PDF，尚缺解析或建档步骤。
 - `ARCHIVING`：正在建档。
 - `ARCHIVE_FAILED`：正文存在尚未解决的失败。
-- `READY`：当前主 PDF 对应的校订稿、默认文档、结构、必填元数据和标签均满足要求；参考文献为空或有存疑不阻断就绪。
+- `READY`：当前主 PDF 对应的校订稿、默认文档、结构、必填元数据和标签均满足要求；参考文献为空或疑点处置为无法确定不阻断就绪。
 - `EXCLUDED`：勘误、社论、观点或评论类文章。人工修改文章性质后重新推导。
 
 补充材料的缺失或失败不阻断正文就绪，问题条目标明 `affects_readiness: false`。人工修改区块、结构角色、元数据或标签，分别使用对应的校订、文档、元数据和标签命令；随后执行 `archive resume`。`archive resolve --request FILE` 接受 `{ "issue_ids": [...], "resolution": "continue" | "skip" | "cancel" }`，与任务介入使用相同的处理决定。确认或跳过问题不会补造缺失事实；取消会停止仍在运行的关联任务。
@@ -54,4 +54,10 @@ MCP 对应 `archive_query`（status/issues/stats/events）与 `archive_manage`�
 
 [用户指南](README.md) · [解析与校订文档](document-processing.md) · [标签词表](tags.md)
 
-文献库默认显示全部状态，可自行筛选已就绪文献。总结中的“存疑”是可展开的核对标记，展开后可查看原因和固定原文；它不阻断阅读。证据与校订对照均支持公式和表格，窄屏也可使用核对入口。
+文献库默认显示全部状态，可自行筛选已就绪文献。服务端结果接口返回六种文字核对状态及固定原文引用；片段不再保存“存疑”标记。第二轮 Web 正在接入新合同，界面与阅读引擎的验收尚未完成。
+
+## 校订全文与单步处理
+
+阅读器“校订”左侧保留原始 PDF，右侧逐页编辑 Markdown，可预览公式与表格。点击“保存修订”会比较当前校订版本；未变的区块保留原来源和锁，变动区块记为人工并锁定，拆合按删除与新增记录。保存后重建全文、无模型结构规则和参考文献，不重跑元数据或标签；旧结果按内容版本标为过时。并发版本变化会拒绝覆盖并保留当前草稿。保存成功但重建失败时，仍保留已保存版本，可从“单步处理”继续。
+
+机器端用 `proofread text --request FILE|-` 有界读取完整校订稿，输入 `asset_id`，后续固定返回的 `proofread_id`，按 `next_start` 继续；单页默认 64 KiB、最多 256 KiB。`proofread save --request FILE|-` 输入 `literature_id`、`asset_id`、当前 `proofread_id`、完整 `markdown`，可带 `page_starts_utf8` 明确分页；全文最多 8 MiB。Web 保存入口单独接受最多 9 MiB 请求，其它 HTTP 上限不变。CLI/MCP 由入口绑定实际身份，无需手填 actor；细粒度 decide/revoke 仍可使用。读写对应 MCP `proofread_text` / `proofread_save`。

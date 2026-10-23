@@ -16,24 +16,27 @@
    6. 标签
 
    已经解析的补充材料部分一并建档。各部分之间互不阻塞。
+
 3. **只看正文部分。** 正文部分建档成功、满足就绪条件，文献就是 `READY`。补充材料没有解析或建档失败，都不影响就绪；该部分记为“不可用”，并在问题队列中列出，处理与否由人决定。
 4. 文献状态共有六种：
 
-   | 状态 | 含义 |
-   | --- | --- |
-   | `UNREVIEWED` | 没有主 PDF |
-   | `ASSET_READY` | 有主 PDF，还没有就绪。`missing_step` 指出下一步：解析（`raw-parse`）还是建档 |
-   | `ARCHIVING` | 正在建档 |
-   | `ARCHIVE_FAILED` | 正文部分建档失败 |
-   | `READY` | 已就绪 |
-   | `EXCLUDED` | 文章性质为勘误、社论、观点或评论，不作为文献处理，不进入算子 |
+   | 状态             | 含义                                                                         |
+   | ---------------- | ---------------------------------------------------------------------------- |
+   | `UNREVIEWED`     | 没有主 PDF                                                                   |
+   | `ASSET_READY`    | 有主 PDF，还没有就绪。`missing_step` 指出下一步：解析（`raw-parse`）还是建档 |
+   | `ARCHIVING`      | 正在建档                                                                     |
+   | `ARCHIVE_FAILED` | 正文部分建档失败                                                             |
+   | `READY`          | 已就绪                                                                       |
+   | `EXCLUDED`       | 文章性质为勘误、社论、观点或评论，不作为文献处理，不进入算子                 |
 
    就绪判断只使用“满足或不满足”的条件。
+
 5. 版本分两类：
    - 内容版本：每个部分各一个；
    - 描述版本：每篇文献一个。
 
    版本变化时会产生事件，交给 10 标记相关结果为过时。
+
 6. 建档失败的项目进入问题队列。每个问题都对应一种处理动作，处理后从失败的那一步继续建档。
 7. 现有文献可以按旧库模式建档：已登记的 VLM Markdown 直接作为初稿；04 无法确定页归属时报告 `needs-parse`，需要用部署 profile 重新解析。
 8. 每批建档结束后，自动执行一次标签整理。
@@ -41,6 +44,7 @@
 **进入条件**：04–08 的服务入口已完成。
 
 **责任边界**：
+
 - 本块负责：
   - 新目录 `apps/server/src/archive/`（含 README）；
   - `literature/state.ts`；
@@ -57,7 +61,6 @@
 ## Tasks
 
 - [x] **9.1 状态与版本合同**
-
   - `LiteratureStatus` 改为上述六种状态。
   - `MissingStep` 改为：`primary-pdf`、`raw-parse`、`proofread`、`document`、`structure`、`metadata`、`references`、`tags`。
   - **`ArchiveState`** 包含：
@@ -72,7 +75,6 @@
 - [x] **9.2 就绪推导**（第二版调整：6.9 不再要求参考文献；校订 `complete` 指 04 的处置完整性；存疑不影响就绪；真值表同步更新）
 
   把 `literature/state.ts` 的 `deriveCurrentState` 改为纯函数，输入为 `ArchiveState` 与当前事实。按以下顺序判断：
-
   1. 没有主 PDF：`UNREVIEWED`。
   2. 正文部分缺少建档所需的原始解析：`ASSET_READY`，`missing_step = raw-parse`。
   3. 正文已解析，但从未建档：`ASSET_READY`，`missing_step = proofread`。
@@ -91,13 +93,13 @@
   用真值表测试覆盖全部组合。
 
 - [x] **9.3 编排器**（第二版调整前置检查、恢复与校订 `incomplete`）（`archive/orchestrator.ts`）
-
   - 新增任务类型 `build-archive`，目标为文献选择器或 ID 列表，可选参数 `mode` 与 `from_step`。
   - **前置检查**：
     - `full` 模式：正文部分已有部署 profile 的当前原始解析；
     - `legacy-vlm-markdown` 模式：正文部分已有登记过的 `vlm-engine-markdown-only` 原始解析；04 无法确定页归属时，成员结果记为 `needs-parse`。
 
     不满足时，该文献的成员结果记为 `needs-parse`，不调用 MinerU，也不自行发起解析。
+
   - **每篇文献的执行顺序**：
     1. 对每个已解析的部分做校订（04）；
     2. 对每个部分构建文档（05）；
@@ -107,6 +109,7 @@
     6. 打标签（08.3）。
 
     补充材料部分的失败不中断正文部分的后续步骤。
+
   - **幂等**：某一步的输入与方法版本都和已有输出一致时，直接复用，标为 `done`。
   - **恢复**：崩溃或重启后，从第一个未完成的步骤继续。04 的矫正缓存可以避免重复调用模型；`incomplete` 的校订从未检查的页继续。
   - **取消**：正在执行的步骤收到取消信号；已完成的步骤保留。
@@ -120,7 +123,6 @@
   `build-archive` 任务结束时（成功、部分失败或取消都算），如果本批有新建的标签，调用一次 08.5 整理。整理失败只记录，不影响建档结果。
 
 - [x] **9.5 触发方式**
-
   - 解析和建档都只能手动发起，入口为 CLI/MCP/Web。系统中没有任何自动触发。
   - 文献库可以按状态和 `missing_step` 筛选。例如可以筛选“有 PDF、待解析”的文献，批量发起解析；或者筛选“已解析、待建档”的文献，批量发起建档。
 
@@ -128,16 +130,15 @@
 
   每类失败对应的处理动作：
 
-  | 原因代码 | 处理动作 | 之后 |
-  | --- | --- | --- |
-  | `proofread-incomplete`（未处置的疑点或未检查的页，例如预算用尽、矫正模型未配置） | 继续校订，或 4.10 的人工处置 | 从校订继续 |
-  | `proofread-failed`（页面在校订稿中没有对应内容、矫正异常中止） | 重试，或 4.10 的人工决定 | 从校订继续 |
-  | `needs-parse`（旧库 Markdown 无法确定页归属） | 用部署 profile 重新解析（03） | 解析后重新建档 |
-  | `references-missing`（标注“不影响就绪”） | 可忽略，或 06 的修正 | 从参考文献继续 |
-  | `metadata-missing:<field>` | 7.6 的人工编辑 | 从元数据继续 |
-  | `structure-unsatisfied` | 06 的角色修正 | 从结构继续 |
-  | `tags-empty` / `tags-invalid` | 8.9 的人工设置 | 从标签继续 |
-
+  | 原因代码                                                                         | 处理动作                      | 之后           |
+  | -------------------------------------------------------------------------------- | ----------------------------- | -------------- |
+  | `proofread-incomplete`（未处置的疑点或未检查的页，例如预算用尽、矫正模型未配置） | 继续校订，或 4.10 的人工处置  | 从校订继续     |
+  | `proofread-failed`（页面在校订稿中没有对应内容、矫正异常中止）                   | 重试，或 4.10 的人工决定      | 从校订继续     |
+  | `needs-parse`（旧库 Markdown 无法确定页归属）                                    | 用部署 profile 重新解析（03） | 解析后重新建档 |
+  | `references-missing`（标注“不影响就绪”）                                         | 可忽略，或 06 的修正          | 从参考文献继续 |
+  | `metadata-missing:<field>`                                                       | 7.6 的人工编辑                | 从元数据继续   |
+  | `structure-unsatisfied`                                                          | 06 的角色修正                 | 从结构继续     |
+  | `tags-empty` / `tags-invalid`                                                    | 8.9 的人工设置                | 从标签继续     |
   - 补充材料部分的失败也会列入队列，但标注“不影响就绪”，可以忽略。
   - 解析失败不进入本队列，由 03 的解析任务记录和重试。
   - 衔接现有的 `InterventionService`：
@@ -146,14 +147,12 @@
   - 支持批量处理。
 
 - [x] **9.7 版本事件**
-
   - 某个部分的内容版本变化时，产生 `content-version-changed(literature, part, old, new)`。
   - 描述版本变化时，产生 `description-version-changed(literature, old, new)`。
   - 补充材料部分从“不可用”变为建档成功，也算该部分的内容版本变化。
   - 事件持久化，由 10 消费，消费过程要求幂等。
 
 - [x] **9.8 旧库模式**（第二版调整）
-
   - 前置条件：
     - 已用 3.7 登记现有的 VLM Markdown。不再需要补跑 `pipeline`。
   - `mode = legacy-vlm-markdown` 时，04 用文字层确定 Markdown 段落的页归属（4.3），后续步骤与 `full` 模式相同。
@@ -170,14 +169,14 @@
 
 - [x] **9.10 CLI/MCP**
 
-  | 命令 | 用途 |
-  | --- | --- |
-  | `archive build <selector> [--mode] [--from-step]` | 发起建档 |
-  | `archive status <id>` | 查看各部分、各步骤的状态与版本 |
-  | `archive issues [--reason] [--part main\|supplementary]` | 查看问题队列 |
-  | `archive resolve …` | 按问题类型处理 |
-  | `archive resume <id>` | 从失败处继续 |
-  | `archive stats` | 汇总统计 |
+  | 命令                                                     | 用途                           |
+  | -------------------------------------------------------- | ------------------------------ |
+  | `archive build <selector> [--mode] [--from-step]`        | 发起建档                       |
+  | `archive status <id>`                                    | 查看各部分、各步骤的状态与版本 |
+  | `archive issues [--reason] [--part main\|supplementary]` | 查看问题队列                   |
+  | `archive resolve …`                                      | 按问题类型处理                 |
+  | `archive resume <id>`                                    | 从失败处继续                   |
+  | `archive stats`                                          | 汇总统计                       |
 
   文献库查询的状态筛选改为新的状态枚举，并支持按 `missing_step` 筛选。
 

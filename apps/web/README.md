@@ -8,7 +8,7 @@
 
 新界面以 React、React Aria、Motion、TanStack Query/Virtual/Table 和自有 CSS 实现，Vite 生成离线资源。Source Sans 3 / Source Serif 4 拉丁字体随包发布，中文使用本机字体回退，不加载 CDN；许可证、版本与 CSP 结论见[前端依赖说明](../../docs/notes/web-frontend-dependencies.md)。`script-src 'self'`、`style-src 'self'` 保持，不注入运行时 `<style>`。
 
-布局继续以[定稿原型与设计基准](../../docs/architecture/web/README.md)为准；原型文件字节不变。阅读工具栏、分层信息、证据预览和公共控件按 2026-10-19 的 G4/G5 确认调整。[PRODUCT.md](PRODUCT.md) 与 [.impeccable/config.json](.impeccable/config.json) 是设计工作上下文，不替代需求、ADR 或当前行为指南，也不保存业务数据或凭据。
+布局与视觉以[设计内核与页面规格](../../docs/architecture/web/README.md)为准。阅读工具栏、分层信息、证据预览和公共控件按 2026-10-19 的 G4/G5 确认调整。[PRODUCT.md](PRODUCT.md) 与 [.impeccable/config.json](.impeccable/config.json) 是设计工作上下文，不替代需求、ADR 或当前行为指南，也不保存业务数据或凭据。
 
 ## 实现分工
 

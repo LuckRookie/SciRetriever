@@ -8,10 +8,15 @@
 - [reading-image.ts](reading-image.ts)：验证已保存栅格图片的头信息与尺寸。
 - [processor-synthesis.ts](processor-synthesis.ts)、[snapshots.ts](snapshots.ts)：冻结就绪文献快照、逐篇 map 与集合 reduce、快照比较和结果过时标记；不自动重算。
 - [processor-labels.ts](processor-labels.ts)、[processor-records.ts](processor-records.ts)：调用方定义的标签与记录提取。
-- [value-check.ts](value-check.ts)：结果发布前逐值核对证据；文字/人工片段核对数字，扫描或存疑片段由 DSH 看固定区域。核对标注与用量进入结果，未完成核对不丢弃候选值。
+- [value-check.ts](value-check.ts)：结果发布前逐值比对校订片段中的数字、单位及非空文本；各来源统一文字比对，综合值链接来源结果。返回六种核对状态与片段 basis，不调用模型，不把抄录比对当作科学正确性证明。
 - [processor-external.ts](processor-external.ts)：外部候选的独立保留；这些证据容器不作为可执行算子输入。
 - [processor-export.ts](processor-export.ts)：完整结果导出封套和固定引用的有界传输。
 
 模型协议由 [agents](../agents/README.md) 实现，固定校订稿由 [document](../document/README.md) 提供，批量生命周期由 [application/jobs](../application/jobs/README.md) 管理。读取缺口不隐式触发发现、下载、解析或模型调用。
 
 [上级目录](../README.md)
+
+`processor-planning.ts` 供执行和只读预估共用规范、读取范围与模型复用键；`processor-usage.ts` 保存结果生成用量摘要；`usage-estimate.ts` 用历史中位数至 P90 预估显式范围，不加载凭据、不调用模型、不写事实。
+
+- [processor-chunking.ts](processor-chunking.ts)：保守估算输入预算，按标题层级与段落分块，保留表格、图注、脚注、续表及公式整体；预算与规则进入方法身份。
+- [snapshot-names.ts](snapshot-names.ts)：快照显示名生成；人工名由独立标签表保存，不改变快照内容身份。

@@ -14,10 +14,12 @@
 5. 筛选分两种：按主标签，或按任一标签。上级标签包含其所有下级。如果某个标签创建后还未回溯，筛选时会提示结果可能不全。
 
 **进入条件**：
+
 - 06：打标需要 `abstract`、`introduction`、`conclusion` 等角色；
 - 07：打标需要作者关键词。
 
 **责任边界**：
+
 - 本块负责新目录 `apps/server/src/tags/`（含 README），以及：
   - contracts；
   - 存储与迁移；
@@ -37,41 +39,41 @@
 
   **`Tag`** 的字段：
 
-  | 字段 | 说明 |
-  | --- | --- |
-  | `tag_id` | 稳定 ID |
-  | `name_zh`、`name_en` | 至少一个非空 |
-  | `aliases[]` | 同义词 |
-  | `definition` | `{includes, excludes}` |
-  | `parent_id` | 可空；上级标签不能再有上级 |
-  | `category` | 可空，只用于浏览 |
-  | `kind` | `topic` 或 `compound` |
-  | `status` | `active`，或 `merged`（附 `merged_into`） |
-  | `created_vocab_version` | 创建时的词表版本 |
-  | `backfilled_vocab_version` | 可空，上次回溯时的词表版本 |
-  | `examples[]` | `{literature_id, evidence}` |
+  | 字段                       | 说明                                      |
+  | -------------------------- | ----------------------------------------- |
+  | `tag_id`                   | 稳定 ID                                   |
+  | `name_zh`、`name_en`       | 至少一个非空                              |
+  | `aliases[]`                | 同义词                                    |
+  | `definition`               | `{includes, excludes}`                    |
+  | `parent_id`                | 可空；上级标签不能再有上级                |
+  | `category`                 | 可空，只用于浏览                          |
+  | `kind`                     | `topic` 或 `compound`                     |
+  | `status`                   | `active`，或 `merged`（附 `merged_into`） |
+  | `created_vocab_version`    | 创建时的词表版本                          |
+  | `backfilled_vocab_version` | 可空，上次回溯时的词表版本                |
+  | `examples[]`               | `{literature_id, evidence}`               |
 
   **`TagAssignment`** 的字段：
 
-  | 字段 | 说明 |
-  | --- | --- |
-  | `literature_id` | 文献 |
-  | `items[]` | 每项为 `{tag_id, rank, reason, evidence[], origin: auto \| manual \| backfill, locked}` |
-  | `vocab_version` | 打标时的词表版本 |
-  | `model` | 模型配置 hash |
-  | `assignment_sha256` | 分配结果的 hash |
+  | 字段                | 说明                                                                                    |
+  | ------------------- | --------------------------------------------------------------------------------------- |
+  | `literature_id`     | 文献                                                                                    |
+  | `items[]`           | 每项为 `{tag_id, rank, reason, evidence[], origin: auto \| manual \| backfill, locked}` |
+  | `vocab_version`     | 打标时的词表版本                                                                        |
+  | `model`             | 模型配置 hash                                                                           |
+  | `assignment_sha256` | 分配结果的 hash                                                                         |
 
   **`VocabularyChange`** 的字段：
 
-  | 字段 | 说明 |
-  | --- | --- |
-  | `version` | 变更后的版本 |
-  | `op` | `create`、`merge`、`set-parent`、`set-category`、`edit-definition`、`rename`、`undo` |
-  | `payload` | 变更内容 |
-  | `inverse` | 撤销所需的数据 |
-  | `actor` | `tagging`、`consolidation`、`manual` 或 `backfill` |
-  | `reason` | 理由 |
-  | `affected_literatures` | 受影响的文献数 |
+  | 字段                   | 说明                                                                                 |
+  | ---------------------- | ------------------------------------------------------------------------------------ |
+  | `version`              | 变更后的版本                                                                         |
+  | `op`                   | `create`、`merge`、`set-parent`、`set-category`、`edit-definition`、`rename`、`undo` |
+  | `payload`              | 变更内容                                                                             |
+  | `inverse`              | 撤销所需的数据                                                                       |
+  | `actor`                | `tagging`、`consolidation`、`manual` 或 `backfill`                                   |
+  | `reason`               | 理由                                                                                 |
+  | `affected_literatures` | 受影响的文献数                                                                       |
 
   不变量：
   - 同一词表中，启用状态的标签不能和其他标签的名称或同义词规范化后相同；
@@ -92,7 +94,6 @@
   - 并发打标时，后提交的一方如果遇到名称冲突，返回 `tag-name-conflict`，由 8.3 重新检索后改为吸附。
 
 - [x] **8.3 打标流程**
-
   1. **准备输入**：
      - 正文部分的题名；
      - 作者关键词（07）；
@@ -125,41 +126,37 @@
   任何一步失败（例如校验后没有剩下任何标签），标签步骤失败，原因代码为 `tags-empty` 或 `tags-invalid`，交给 09 的问题队列。
 
 - [x] **8.4 主要化合物命名规则**
-
   - 拒绝形如“化合物 2”“compound 3a”的文内编号名称，用正则表达式判断。
   - 化合物代号（例如由大写字母、短横线和数字组成的代号）只能放进同义词，不能作为主名称；主名称必须是正式名称或通用名称。
   - 系列化合物用类别标签，不逐个列出。这条规则写在提示中，没有确定性的判断方法，因此不做校验。
 
 - [x] **8.5 自动整理**
-
   - **触发**：09 每批建档完成时，调用一次整理。也可以手动触发。
   - **范围**：上次整理之后新建或变更的标签，再加上它们在 `tag_search` 中的近邻。
   - **流程**：整理 Agent 给出操作列表，每项操作都附理由。
 
-  | 操作 | 执行方式 |
-  | --- | --- |
-  | `merge A → B` | 程序把 A 的名称和同义词并入 B 的同义词，所有分配中的 A 替换为 B（排序保留，重复时去重），A 的状态改为 `merged` |
-  | `set-parent` | 校验层级深度后写入，不重新打标 |
-  | `set-category` | 直接写入 |
-  | `edit-definition` | 写入新定义，然后对带有该标签的文献重新判断是否仍然适用；判断方式见 8.7 第 3 步的合并调用 |
-
+  | 操作              | 执行方式                                                                                                       |
+  | ----------------- | -------------------------------------------------------------------------------------------------------------- |
+  | `merge A → B`     | 程序把 A 的名称和同义词并入 B 的同义词，所有分配中的 A 替换为 B（排序保留，重复时去重），A 的状态改为 `merged` |
+  | `set-parent`      | 校验层级深度后写入，不重新打标                                                                                 |
+  | `set-category`    | 直接写入                                                                                                       |
+  | `edit-definition` | 写入新定义，然后对带有该标签的文献重新判断是否仍然适用；判断方式见 8.7 第 3 步的合并调用                       |
   - 遇到人工锁定的分配或标签时，跳过该操作，并在日志中记为 `skipped-locked`。
   - 每项操作单独记一条变更，并记录 `inverse`。
 
 - [x] **8.6 撤销**
-
   - 按变更 ID 撤销：执行 `inverse`，并写入一条 `undo` 变更。
   - 如果后续的变更依赖于这次变更（例如合并之后又改了 B 的定义），撤销前必须列出依赖链，由人决定一起撤销还是放弃。
   - 撤销 `merge` 时，恢复 A 的状态，并把合并时替换掉的分配逐条改回。为此，合并时要在 `inverse` 中记录被替换的分配行。
 
 - [x] **8.7 手动回溯**
-
   - **命令**：对一个或多个标签执行回溯，执行前先做 dry-run。
   - **候选**：在 `created_vocab_version` 之前打标、且尚未对照过该标签的文献中检索：
     - 匹配名称、同义词或定义中的词与题名、摘要、作者关键词；
     - 或带有该标签的上级标签或同类近邻标签的文献。
 
     `kind = compound` 时，只做名称和同义词的字面匹配。检索不调用模型。
+
   - **dry-run**：显示候选文献数、预计的模型调用次数和每次调用的批量。
   - **执行**：
     - 按文献分组；
@@ -171,7 +168,6 @@
     - 写入 `backfilled_vocab_version`。
 
 - [x] **8.8 筛选**
-
   - `LibraryQuery` 新增 `tags: {ids, mode: "primary" | "any"}`：
     - 同义词解析到标签 ID；
     - `merged` 状态的标签按 `merged_into` 解析；
@@ -191,15 +187,15 @@
 
 - [x] **8.10 CLI/MCP**
 
-  | 命令 | 功能 |
-  | --- | --- |
-  | `tags list`、`tags search` | 浏览与搜索，可按类别或层级 |
-  | `tags show <id>` | 定义、同义词、示例、使用数、回溯状态 |
-  | `tags changes [--since]` | 变更日志 |
-  | `tags undo <change>` | 撤销 |
-  | `tags consolidate` | 手动触发整理 |
-  | `tags backfill <ids> [--dry-run]` | 回溯 |
-  | `literature tags <id>`、`literature tags set/lock` | 文献的标签 |
+  | 命令                                               | 功能                                 |
+  | -------------------------------------------------- | ------------------------------------ |
+  | `tags list`、`tags search`                         | 浏览与搜索，可按类别或层级           |
+  | `tags show <id>`                                   | 定义、同义词、示例、使用数、回溯状态 |
+  | `tags changes [--since]`                           | 变更日志                             |
+  | `tags undo <change>`                               | 撤销                                 |
+  | `tags consolidate`                                 | 手动触发整理                         |
+  | `tags backfill <ids> [--dry-run]`                  | 回溯                                 |
+  | `literature tags <id>`、`literature tags set/lock` | 文献的标签                           |
 
   文献库查询增加 `--tag` 与 `--tag-mode` 参数。MCP 提供对等的工具，说明中写明打标规则与回溯语义。
 
@@ -217,17 +213,17 @@
 
 使用 fake 模型的定向测试：
 
-| 场景 | 预期 |
-| --- | --- |
-| 吸附 | 使用已有标签 |
-| 创建 | 词表新增标签 |
-| 新建标签与已有同义词重复 | 改为吸附 |
-| 化合物标签名不在题名或摘要中 | 拒绝 |
-| 文内编号作为名称 | 拒绝 |
-| 标签数超过上限 | 截断，或步骤失败 |
-| 同时选中上级与下级 | 去重 |
-| 层级超过 2 | 拒绝 |
-| 两篇文献并发创建同名标签 | 第二篇改为吸附 |
+| 场景                         | 预期             |
+| ---------------------------- | ---------------- |
+| 吸附                         | 使用已有标签     |
+| 创建                         | 词表新增标签     |
+| 新建标签与已有同义词重复     | 改为吸附         |
+| 化合物标签名不在题名或摘要中 | 拒绝             |
+| 文内编号作为名称             | 拒绝             |
+| 标签数超过上限               | 截断，或步骤失败 |
+| 同时选中上级与下级           | 去重             |
+| 层级超过 2                   | 拒绝             |
+| 两篇文献并发创建同名标签     | 第二篇改为吸附   |
 
 此外还要测试：
 

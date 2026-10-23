@@ -354,7 +354,7 @@ Web 面向人的独立日常操作，CLI/MCP 主要服务 Agent 与自动化。�
 
 UI 只持有展示与交互草稿。配置默认值、来源排序、材料有效性、任务终态和控制权都由服务端 owner 返回；前端不能根据按钮是否禁用推断获得了操作权限。
 
-Web架构见[ADR 0032](../decisions/0032-library-centered-web-workspace.md)，正式React界面以[定稿原型及设计语言v2](../web/README.md)为基准：文献列表为主空间，预览按需展开，点击文献打开阅读标签；侧栏按资料/使用/运行分组，任务与浏览器有独立入口，全局活动用于快速查看，设置和低层技术工具独立收纳。查询与写操作围绕同一对象显式区分，不默认展示缺PDF/需人工待办，也不把后台用例逐个平铺为表单。此处的功能/owner对照说明业务归属，页面与组件分工见下节。
+Web 的定位与设计依据见 [ADR 0032](../decisions/0032-library-centered-web-workspace.md)、[ADR 0038](../decisions/0038-web-design-basis.md)，页面排布见[页面规格](../web/page-specs.md)。查询与写操作围绕同一对象显式区分，不把后台用例逐个平铺为表单。此处的功能/owner对照说明业务归属，代码分工见下节。
 
 ### 4.2 当前代码与连接
 
@@ -1500,3 +1500,11 @@ PDF 原字节仍按固定 asset_id/hash、大小与 SHA-256 校验，受 256 MiB
 处理结果使用既有processor `query/evidence/transfer`；文档证据使用 `evidence-resolve`，知识与综合使用 `synthesis-source`。旧知识库因此不需要处理器schema才能核对综合。综合递归来源保留并验证内容、输入清单和断言hash；只剩已存产物时明确“原PDF未复核”。分段证据验证实际UTF-8范围连续，跳转使用完整 `target_range`，不把首个传输块冒充完整证据。
 
 本机UI偏好包括主题、栏宽、默认阅读字号/行宽与按catalog隔离的保存筛选；它们不成为文献事实。它们只读写当前React命名空间，不读取旧键、不执行偏好迁移；不读取或复制凭据、Cookie、文献正文或其它应用数据。
+
+## 运行审查与校订编辑（2026-10-21）
+
+三端新增读取 `proofread-text`、`agent-sessions`、`task-run`、`usage-estimate`、`processor-runs`、`literature-results`、`operation-history`，由统一 QueryApplication 提供有界读取，模型身份仅从配置解析，不加载凭据或调用模型。机器请求映射见[Agent 接口](../../guides/agent-interface.md#校订与运行审查入口)。
+
+维护操作 `proofread-save` 固定 asset、当前 proofread 版本和完整 Markdown，以 CAS 发布人工决定与新版本，然后重建文档、无模型结构规则和引用；后续失败返回已保存事实，不撤销人工稿。只有此 HTTP 路径放宽到 9 MiB，正文最多 8 MiB，其余请求上限不变。Web 身份绑定独立认证会话，CLI/MCP 绑定入口和系统用户；调用输入不能覆写实际身份。
+
+历史预估使用与执行相同的固定输入、规范、方法和模型键。无样本返回无法预估；只显示输入/输出 token 历史中位数至 P90、样本及复用数，不构成预算或执行时限。

@@ -4,7 +4,7 @@
 
 ## 当前提案
 
-- [可信全文、文献档案与算子](../archive/2026-10-20-literature-archive-proposal/proposal.md)：2026-10-20 已接受并归档，长期决定见 [ADR 0037](../architecture/decisions/0037-literature-archive-and-proofread-text.md)，执行见[文献建档计划](../plans/2026-10-20-literature-archive/README.md)。
+- [可信全文、文献档案与算子](../archive/2026-10-20-literature-archive-proposal/proposal.md)：2026-10-20 已接受并归档，长期决定见 [ADR 0037](../architecture/decisions/0037-literature-archive-and-proofread-text.md)，执行见[文献建档计划](../archive/2026-10-20-literature-archive/README.md)。
 - [文献知识加工平台提案](../archive/2026-10-18-knowledge-processing-platform/proposal.md)：2026-10-18 已完成精简首版并与计划归档；当前合同见 ADR 0034。完整版仍是未执行参考。
 - [文献知识加工平台：完整版设计](2026-10-17-knowledge-processing-full-design/README.md)：参考设计，不作为首版实施范围；保存提案原文副本、算子抽象设计与九块计划副本，以及按需引入各项能力的触发条件。
 

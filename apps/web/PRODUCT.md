@@ -50,15 +50,15 @@ SciRetriever 为科研 Agent 和人提供同一逻辑文献库中的元数据、
 
 产品名称为 SciRetriever。界面以明确的对象、动作和真实结果帮助研究者操作，避免让内部协议和服务术语成为普通任务的理解门槛。
 
-Owner 提供并最终确认的 [HTML 原型](../../docs/architecture/web/prototype.html)是现行设计依据；保留其原始文件，直接以它适配生产实现，不另写替代原型或因初始化而归档。后续试用确认的较大字体与控件尺寸也须保留。具体基准统一见[当前 Web 设计说明](../../docs/architecture/web/README.md)，不退回早期三栏线框或任务工作台方案。
+设计依据见 [ADR 0038](../../docs/architecture/decisions/0038-web-design-basis.md)，视觉规则与页面排布分别见[设计内核](../../docs/architecture/web/design-core.md)与[页面规格](../../docs/architecture/web/page-specs.md)。具体基准统一见[当前 Web 设计说明](../../docs/architecture/web/README.md)，不退回早期三栏线框或任务工作台方案。
 
 Owner 允许蓝白、墨绿、暖白等色系切换；主题扩展遵循同一已确认布局，默认设计及适用边界以 ADR 0032 和当前设计说明为准。本文件不另定色值、字体、间距或组件规范。
 
 ## Evidence on Hand
 
 - [产品需求](../../docs/architecture/requirements.md)、[ADR 0032](../../docs/architecture/decisions/0032-library-centered-web-workspace.md)与 [ADR 0033](../../docs/architecture/decisions/0033-machine-interfaces-cover-web-capabilities.md)：产品边界、库中心 Web 和三端能力关系。
-- [当前 Web 设计说明与定稿原型](../../docs/architecture/web/README.md)：Owner 确认的布局、视觉和交互依据；原型中的文献、统计、任务与 Browser 画面是示例，不是科学内容、运行结果或产品能力证明。
-- [Web 使用指南](../../docs/guides/web-workbench.md)和 [React 应用实现](src/app/README.md)：当前功能与界面的实现依据。正式 `/` 使用React；只保留当前界面入口与偏好，不维护迁移期 `/next` 或旧前端兼容。最终验收见[实施计划](../../docs/archive/2026-10-19-web-experience/README.md)。4173合成样本不替代正式入口和定稿原型。
+- [当前 Web 设计说明](../../docs/architecture/web/README.md)：现行的布局、视觉和交互依据。
+- [Web 使用指南](../../docs/guides/web-workbench.md)和 [React 应用实现](src/app/README.md)：当前功能与界面的实现依据。正式 `/` 使用React；只保留当前界面入口与偏好，不维护迁移期 `/next` 或旧前端兼容。最终验收见[实施计划](../../docs/archive/2026-10-19-web-experience/README.md)。4173合成样本不替代正式入口。
 
 ## Product Principles
 
@@ -66,4 +66,4 @@ Owner 允许蓝白、墨绿、暖白等色系切换；主题扩展遵循同一�
 2. 让人完成常用任务，让 Agent 能独立调用相同业务并处理更深入的问题。
 3. 阅读与查询保持可预测；扩充和加工由明确意图启动，人工帮助始终可选。
 4. 知识可回溯到材料和证据；如实呈现结果与限制，不用示例、进度或接收回执代替成功。
-5. 延续已经确认的原型与使用反馈，一次围绕具体使用场景迭代，阅读细节另行设计。
+5. 延续设计内核与使用反馈，一次围绕具体使用场景迭代，阅读细节另行设计。

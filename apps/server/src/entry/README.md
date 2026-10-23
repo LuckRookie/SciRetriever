@@ -23,3 +23,5 @@ CLI/MCP/HTTP 只适配请求；供应商协议、材料验收和事实写入仍�
 [上级目录](../README.md)
 
 - `processor-operations.ts`：CLI/MCP 共用的处理器查询、证据展开和便携导出边界。
+
+`proofread-save.ts` 在显式保存后重建文档、无模型结构规则与参考文献；后续失败保留人工版本并返回已保存状态。`query-operations.ts` 同时提供过程、任务运行、历史预估、运行列表、文献结果和操作历史的三端公共读取。

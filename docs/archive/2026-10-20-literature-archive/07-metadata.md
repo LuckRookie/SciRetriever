@@ -12,11 +12,13 @@
 4. 文献库查询、CLI、MCP 都改用新字段筛选。
 
 **进入条件**：
+
 - GA；
 - 7.5 需要 05 和 06（读取 `front-matter` 片段）；
 - 7.1–7.4、7.6、7.7 可以与 03–06 并行。
 
 **责任边界**：
+
 - 本块负责：
   - `packages/contracts` 的元数据与查询类型；
   - `literature/metadata-rules.ts`；
@@ -41,7 +43,6 @@
 ## Tasks
 
 - [x] **7.1 contracts**
-
   - `LiteratureMetadata`：
     - 删除 `document_type`；
     - 新增 `publication_form`：`journal-article | conference-paper | book-or-chapter | thesis | patent | report-or-standard | dataset | null`；
@@ -56,29 +57,28 @@
 
   在 `literature/metadata-rules.ts` 中实现 `mapSourceType(provider, raw) → {publication_form, article_kind_hint, version_role_hint}`，用表格测试覆盖下列来源：
 
-  | 来源 | 原始值示例 | 映射 |
-  | --- | --- | --- |
-  | Crossref / RIS | `journal-article` | 期刊论文 |
-  | Crossref / RIS | `proceedings-article` | 会议论文 |
-  | Crossref / RIS | `book`、`book-chapter` | 书籍或书籍章节 |
-  | Crossref / RIS | `dissertation` | 学位论文 |
-  | Crossref / RIS | `report`、`standard` | 技术报告或标准 |
-  | Crossref / RIS | `dataset` | 数据集 |
-  | Crossref / RIS | `posted-content` | 不确定，出版形式为空；`version_role_hint = preprint` |
-  | OpenAlex | `article` | 期刊论文 |
-  | OpenAlex | `review` | 期刊论文；`article_kind_hint = review` |
-  | OpenAlex | `letter` | 期刊论文；`article_kind_hint = letter-or-communication` |
-  | OpenAlex | `editorial`、`erratum` | 期刊论文；`article_kind_hint = correction-or-editorial` |
-  | OpenAlex | `book-chapter`、`dissertation`、`dataset` | 对应形式 |
-  | OpenAlex | `preprint` | 出版形式为空；`version_role_hint = preprint` |
-  | arXiv | `preprint` | 出版形式为空；`version_role_hint = preprint` |
-  | Europe PMC | `pubType` 中的 journal article、review、letter 等 | 对应形式与提示 |
-  | DataCite | `resourceTypeGeneral` | Dataset、Text 等对应形式 |
+  | 来源           | 原始值示例                                        | 映射                                                    |
+  | -------------- | ------------------------------------------------- | ------------------------------------------------------- |
+  | Crossref / RIS | `journal-article`                                 | 期刊论文                                                |
+  | Crossref / RIS | `proceedings-article`                             | 会议论文                                                |
+  | Crossref / RIS | `book`、`book-chapter`                            | 书籍或书籍章节                                          |
+  | Crossref / RIS | `dissertation`                                    | 学位论文                                                |
+  | Crossref / RIS | `report`、`standard`                              | 技术报告或标准                                          |
+  | Crossref / RIS | `dataset`                                         | 数据集                                                  |
+  | Crossref / RIS | `posted-content`                                  | 不确定，出版形式为空；`version_role_hint = preprint`    |
+  | OpenAlex       | `article`                                         | 期刊论文                                                |
+  | OpenAlex       | `review`                                          | 期刊论文；`article_kind_hint = review`                  |
+  | OpenAlex       | `letter`                                          | 期刊论文；`article_kind_hint = letter-or-communication` |
+  | OpenAlex       | `editorial`、`erratum`                            | 期刊论文；`article_kind_hint = correction-or-editorial` |
+  | OpenAlex       | `book-chapter`、`dissertation`、`dataset`         | 对应形式                                                |
+  | OpenAlex       | `preprint`                                        | 出版形式为空；`version_role_hint = preprint`            |
+  | arXiv          | `preprint`                                        | 出版形式为空；`version_role_hint = preprint`            |
+  | Europe PMC     | `pubType` 中的 journal article、review、letter 等 | 对应形式与提示                                          |
+  | DataCite       | `resourceTypeGeneral`                             | Dataset、Text 等对应形式                                |
 
   无法映射的值，映射结果为空，原始值保留。映射表本身带版本号。
 
 - [x] **7.3 一次性 catalog 副本转换**
-
   - 修改 `literature_metadata`、`metadata_observations` 及相关表的列：删除 `document_type`，新增两个枚举列，并加 CHECK 约束。
   - 迁移时对现有数据执行 7.2 的映射：
     - 已接纳元数据：出版形式取映射结果，文章性质只取映射提示，最终以建档为准。
@@ -97,13 +97,13 @@
 
   字段优先级写成规则表：
 
-  | 字段 | 优先级 |
-  | --- | --- |
-  | 题名、作者、期刊（venue）、出版者、卷、期、页、标识符、出版日期与年份、出版形式 | 人工 > 权威来源 > 校订稿 |
-  | 文章性质 | 人工 > 校订稿 > 来源提示 |
-  | 作者关键词 | 人工 > 校订稿（文中关键词） > 权威来源 |
-  | 摘要 | 人工 > 校订稿 > 权威来源 |
-  | 语言 | 人工 > 校订稿（由正文判断） > 权威来源 |
+  | 字段                                                                            | 优先级                                 |
+  | ------------------------------------------------------------------------------- | -------------------------------------- |
+  | 题名、作者、期刊（venue）、出版者、卷、期、页、标识符、出版日期与年份、出版形式 | 人工 > 权威来源 > 校订稿               |
+  | 文章性质                                                                        | 人工 > 校订稿 > 来源提示               |
+  | 作者关键词                                                                      | 人工 > 校订稿（文中关键词） > 权威来源 |
+  | 摘要                                                                            | 人工 > 校订稿 > 权威来源               |
+  | 语言                                                                            | 人工 > 校订稿（由正文判断） > 权威来源 |
 
   冲突的判定：
   - 两个非空来源的值在规范化后不相等，就标为冲突；
@@ -113,7 +113,6 @@
   人工修改沿用现有的用户观测机制，额外写入 `locked = true`。重新建档时，锁定字段不变。
 
 - [x] **7.5 建档元数据步骤**
-
   1. 读取正文部分中角色为 `front-matter`、`abstract`、`keywords` 的片段（来自 06），以及第一页的其余片段。
   2. Agent 根据这些片段，为下列字段给出提议，每个字段都附上片段 ID：
      - 题名、作者（含单位）、期刊、卷、期、页、DOI、出版日期；
@@ -123,6 +122,7 @@
      - 摘要。
 
      提议使用 JSON schema 约束，不允许出现枚举以外的值。
+
   3. 按 7.4 的规则裁决，写入新的元数据 revision 和字段状态。
   4. 校验提议中的 DOI 格式，以及它是否出现在所引用的片段文本中。不满足时丢弃该字段的提议，并记录原因。
 
@@ -138,7 +138,6 @@
   Web 界面在 11 中实现。
 
 - [x] **7.7 查询与接口**
-
   - `library-page.ts`：按 `publication_forms` 与 `article_kinds` 筛选和计数。
   - CLI：
     - 新增 `--publication-form` 与 `--article-kind` 参数；
@@ -148,7 +147,6 @@
   - 检查所有引用 `document_type` 的生产代码与测试，确保没有遗留。
 
 - [x] **7.8 旧分析路径退役**
-
   - 按 Owner 不保留两套逻辑的决定，删除 `analysis/service.ts` 及其两阶段生产调用；元数据由建档与 Literature 字段 owner 接纳，summary 作为算子运行。
   - 不恢复已被撤销的兼容阶段。
 
@@ -212,7 +210,6 @@
 证据位于 `/tmp/sciretriever-archive-implementation-yzz1ycub/`：`full-current-final.log`、`full-current-final.exit`、`verification.json`、`current-code-manifest.json`。最后一轮期间 70 个源码/测试及目录说明文件的 hash 未变化。定稿 Web 原型 hash 未变化，依赖/lockfile 未变，没有 Git commit，没有真实 catalog 迁移。
 
 该结果只证明本块**已实现切片**的离线验收，不将尚未接入的入口、存储或真实质量验证改写为完成。未勾选 Task 仍需继续执行。
-
 
 ### 主合同与字段所有者接入（2026-10-20）
 

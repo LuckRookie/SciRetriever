@@ -7,11 +7,12 @@
 
 ## 当前计划
 
-- [文献建档、校订稿与算子输入](2026-10-20-literature-archive/README.md)：In progress（ADR 0037 第二版；01–11 已实现并有对应验收证据，12 工程收尾中）；单一 profile 初稿、文字层找疑点与 DSH 原图矫正形成校订稿，存疑不阻断就绪。结构、双字段元数据、参考文献、标签、快照与算子已接入；旧生产路径已退役。最终 Full 原始失败记录保留，32 项失败均已定向复验通过；200 篇规模按无总时限口径通过。真实库转换、重建与切换仍需 GR。
+- [Web 设计改版（计划 14）](2026-10-23-web-design-overhaul/README.md)：Ready（2026-10-23 编写）。Claude 负责产品设计、计划与验收，代码由 codex worker `sciretriever-web` 实施。
+- [文档体系整理（计划 15）](2026-10-23-docs-consolidation/README.md)：Ready（2026-10-23 编写）。按文档导航的归属表与规则整理现行文档；在计划 14 的空档执行。
 
-截至 2026-10-20，此前的 9 份实施计划均已按各自约定范围完成，依 Owner 要求归档；除上面新建的文献建档计划外，没有其他活动计划。
-上述计划依据已接受的 [ADR 0037](../architecture/decisions/0037-literature-archive-and-proofread-text.md) 执行，原提案已[归档](../archive/2026-10-20-literature-archive-proposal/README.md)；
-真实 OCR、用户文档重解析及 macOS 实机等未覆盖项保留在原计划边界中，不因归档视为完成。
+## 2026-10-23 完成计划归档
+
+[文献建档、校订稿与算子输入](../archive/2026-10-20-literature-archive/README.md)已按 Owner 要求归档：A/B/C 与 13 两轮已交付并部署 4174；分组提交、前端未完成页面、真实获取验收等未关闭事项已移交计划 14，见该计划根 README 顶部。
 
 ## 2026-10-20 完成计划归档
 
@@ -29,7 +30,7 @@
 | [CLI/MCP 覆盖 Web 业务能力](../archive/2026-10-15-interface-capability-parity/README.md) | 两个机器入口分别覆盖当时的 Web 业务范围；当轮 Full 225 文件 / 1,785 项通过。 |
 | [定稿 Web 原型接入](../archive/2026-10-15-library-web-adaptation/README.md) | 当时既有能力按定稿原型适配；当轮 Full 221 文件 / 1,769 项通过。后续处理器与阅读由后续计划承接。 |
 
-除最终 Web 体验 Full 无跳过外，上述各轮的既有环境条件跳过和真实服务覆盖边界仍以各自归档记录为准。定稿原型与现行 ADR 保留在 `docs/architecture/`。
+除最终 Web 体验 Full 无跳过外，上述各轮的既有环境条件跳过和真实服务覆盖边界仍以各自归档记录为准。现行 ADR 保留在 `docs/architecture/`。
 
 2026-10-18 已归档[文献知识加工首版](../archive/2026-10-18-knowledge-processing-platform/README.md)：01–03 Completed；统一处理器、持久结果、复用/恢复、CLI/MCP、标签与提取均完成离线验收；Full 1,809 项通过、40 项按既有条件跳过，补充适配回归和 Quick 通过。真实质量方案未执行，完整版仍为参考。
 

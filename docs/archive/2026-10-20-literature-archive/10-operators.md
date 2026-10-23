@@ -2,6 +2,8 @@
 
 状态：In progress（第一版 11/11 已实施；新增 10.12 用时核对）。执行者：worker。
 
+> 2026-10-22 修订：[ADR 0037](../../architecture/decisions/0037-literature-archive-and-proofread-text.md) 第三版取消“存疑”（校订稿 basis 去掉 `uncertain`），用时核对改为六种状态（去掉 `image-checked`／`uncertain`），单篇结果按值量化（去掉 `not-reported`／`part-absent`），算子按结构分块（去掉 `max_chunk_bytes`）。本文件中相关条文保留为当时的实施记录，后续实现以[计划 13 第二轮](13-web-review-and-audit.md) 13.22–13.24 为准。
+
 **Outcome**：
 
 1. 单篇算子的输入只能是就绪文献的校订稿。算子声明读取哪些部分、哪些章节角色，按元数据和标签选择文献范围。复用键由被读取部分的内容版本、算子版本、规范和模型配置组成。

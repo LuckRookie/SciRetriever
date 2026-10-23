@@ -1,8 +1,8 @@
 # Web 阅读与操作体验改进提案
 
-日期：2026-10-19。状态：**Proposal，待讨论**。本轮用户授权明确缺陷修复、调研、提案与计划；总结内容组织需先解释机制再讨论。本文不替换 Accepted ADR，也不替换或归档 [定稿原型](prototype.html)。
+日期：2026-10-19。状态：**Proposal，待讨论**。本轮用户授权明确缺陷修复、调研、提案与计划；总结内容组织需先解释机制再讨论。本文不替换 Accepted ADR，也不替换或归档 定稿原型（已于 2026-10-23 退役）。
 
-依据：[Web 设计基准及 G1–G3](README.md)、[ADR 0032](../decisions/0032-library-centered-web-workspace.md)、[ADR 0033](../decisions/0033-machine-interfaces-cover-web-capabilities.md)、[ADR 0034](../decisions/0034-unified-processors-and-results.md)。实施历史见 [Web 体验归档记录](../../archive/2026-10-19-web-experience/README.md)。
+依据：[Web 设计基准及 G1–G3](README.md)、[ADR 0032](../../architecture/decisions/0032-library-centered-web-workspace.md)、[ADR 0033](../../architecture/decisions/0033-machine-interfaces-cover-web-capabilities.md)、[ADR 0034](../../architecture/decisions/0034-unified-processors-and-results.md)。实施历史见 [Web 体验归档记录](../2026-10-19-web-experience/README.md)。
 
 ## 问题判断与已核实原因
 
@@ -64,7 +64,7 @@ Owner 对实际 React 控件和 Motion 的反馈为「目前就挺好的，加�
 
 ### 为什么需要 v2
 
-Owner 第二轮反馈：控件圆角不统一，很多框接近直角；风格大体统一了，局部设计没跟上，阅读、总结、全文查看都不够好；整体交互“硬邦邦”，设计破缺太多。实测（真实库只读浏览与 `workspace.css` 核对，明细见 [计划 03 的破缺清单](../../archive/2026-10-19-web-experience/03-design-audit-and-language.md#已知破缺首轮实测)）证实这是**体系缺失**，不是个别控件的问题：
+Owner 第二轮反馈：控件圆角不统一，很多框接近直角；风格大体统一了，局部设计没跟上，阅读、总结、全文查看都不够好；整体交互“硬邦邦”，设计破缺太多。实测（真实库只读浏览与 `workspace.css` 核对，明细见 [计划 03 的破缺清单](../2026-10-19-web-experience/03-design-audit-and-language.md#已知破缺首轮实测)）证实这是**体系缺失**，不是个别控件的问题：
 
 - 设计变量只有字号和控件高度，没有圆角、间距、表面、阴影、焦点和动效；全文件出现 14 种圆角值。
 - 同一种控件分别手写：输入类控件至少 8 处独立定义；任务页筛选框仍是浏览器默认外观，深色主题下为浅灰底。
@@ -75,7 +75,7 @@ Owner 第二轮反馈：控件圆角不统一，很多框接近直角；风格�
 
 v2 不推翻原型。**保留**：导航结构与页面布局、四个主题与主色（白纸、墨蓝、荧光黄）、18/20/17 px 字号与 40 px 常规控件、证据荧光笔。**新增或改变**：设计变量、控件族与使用规则、表面层级、状态体系、字体落地、信息分层和动效。
 
-**实现技术**：Owner 于 2026-10-19 讨论后决定，前端改用 React 重建。行为组件使用 React Aria Components（无样式，样式由本设计提供），动画使用 Motion，数据请求使用 TanStack。详见 [Web 体验计划](../../archive/2026-10-19-web-experience/README.md)的 D1–D10，以及已 Accepted 的 [ADR 0036](../decisions/0036-react-web-frontend.md)。
+**实现技术**：Owner 于 2026-10-19 讨论后决定，前端改用 React 重建。行为组件使用 React Aria Components（无样式，样式由本设计提供），动画使用 Motion，数据请求使用 TanStack。详见 [Web 体验计划](../2026-10-19-web-experience/README.md)的 D1–D10，以及已 Accepted 的 [ADR 0036](../../architecture/decisions/0036-react-web-frontend.md)。
 
 ### 设计原则
 

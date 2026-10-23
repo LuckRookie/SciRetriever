@@ -18,7 +18,6 @@ logs
 !/apps/web/entry/index.html
 !/apps/web/entry/auth.html
 !/apps/web/entry/sample.html
-!/docs/architecture/web/prototype.html
 !/docs/proposals/2026-10-08-agent-workbench/prototype.html
 !/docs/proposals/2026-10-08-agent-workbench/opus-variant.html
 !/docs/proposals/2026-10-08-agent-workbench/comparison.html
@@ -166,6 +165,32 @@ archive/
 /docs/archive/2026-10-20-literature-archive-proposal/*
 !/docs/archive/2026-10-20-literature-archive-proposal/README.md
 !/docs/archive/2026-10-20-literature-archive-proposal/proposal.md
+
+# Literature-archive plan archived on 2026-10-23; exact files only.
+!/docs/archive/2026-10-20-literature-archive/
+/docs/archive/2026-10-20-literature-archive/*
+!/docs/archive/2026-10-20-literature-archive/01-decisions-and-docs.md
+!/docs/archive/2026-10-20-literature-archive/02-validation.md
+!/docs/archive/2026-10-20-literature-archive/03-dual-parsing.md
+!/docs/archive/2026-10-20-literature-archive/04-proofreading.md
+!/docs/archive/2026-10-20-literature-archive/05-proofread-document-and-evidence.md
+!/docs/archive/2026-10-20-literature-archive/06-structure-and-references.md
+!/docs/archive/2026-10-20-literature-archive/07-metadata.md
+!/docs/archive/2026-10-20-literature-archive/08-tags.md
+!/docs/archive/2026-10-20-literature-archive/09-archive-orchestration.md
+!/docs/archive/2026-10-20-literature-archive/10-operators.md
+!/docs/archive/2026-10-20-literature-archive/11-web.md
+!/docs/archive/2026-10-20-literature-archive/12-retirement-rebuild-delivery.md
+!/docs/archive/2026-10-20-literature-archive/13-web-review-and-audit.md
+!/docs/archive/2026-10-20-literature-archive/README.md
+!/docs/archive/2026-10-20-literature-archive/retirement-coverage.md
+!/docs/archive/2026-10-20-literature-archive/test-convergence.md
+
+# Web prototype-era design records archived on 2026-10-23; prototype.html stays local only.
+!/docs/archive/2026-10-15-web-prototype/
+/docs/archive/2026-10-15-web-prototype/*
+!/docs/archive/2026-10-15-web-prototype/README.md
+!/docs/archive/2026-10-15-web-prototype/experience-proposal.md
 
 # Active archive feature modules are source, not historical snapshots.
 !/apps/server/src/archive/

@@ -25,6 +25,7 @@
 ## 责任边界
 
 本块负责：
+
 - `apps/server/src/parsing/`，包括 `backends/mineru/`；
 - 原始解析的 contracts 与存储；
 - 解析任务（`application/jobs/processing.ts` 中的 `parse-documents`）；
@@ -66,7 +67,6 @@
   `stageLegacyRawParse` 把现有 VLM Markdown 登记为 `vlm-engine-markdown-only`，不调用 MinerU，不改动原数据。
 
 - [x] **3.8 CLI/MCP（第二版调整）**
-
   - `document parse` 的 `--profiles` 默认值改为部署 profile；说明中写明另一种 profile 的结果只供人工查看，不参与校订。
   - 文档状态显示每种 profile 的原始解析是否存在、是否失败、失败原因，并标出哪一种是部署 profile。
   - MCP 同步调整。
@@ -76,12 +76,10 @@
   测试 fixture `apps/server/test/raw-parse-server.ts` 按请求 backend 返回合成归档，可注入 backend 不匹配、缺少 v2、未知类型、单 profile 失败、超时。
 
 - [x] **3.10 真实服务能力检查**（需要 GS）
-
   - 只读诊断命令，例如 `parser check --profile pipeline`：用仓库内的一页合成 PDF 请求指定 profile，校验返回的归档。
   - 只有在 Owner 授权后，才能对真实服务运行。结果脱敏后记录在本块和 `notes/mineru.md`。
 
 - [x] **3.11 部署 profile 设置**
-
   - 新增部署级配置项（例如 `parsing.archive_profile`，取值 `pipeline` 或 `vlm-engine`），在 `config status` 中只读显示。
   - 初值在 GV 之前沿用当前行为 `vlm-engine`；GV 之后按 02 的结论更新，并在配置手册中说明。
   - 修改部署 profile 不会改变已有校订版本；新校订使用新 profile 的原始解析，旧版本保留可读。
@@ -117,16 +115,16 @@
 
 执行基线：`2ccf2c2` + 开始时已有的 ADR/计划文档改动；本轮代码尚未提交。未启动子代理、未访问真实服务或用户库，依赖与 lockfile 未变。
 
-| Task | 实现证据与实际验证 | 残余边界 |
-| --- | --- | --- |
-| 3.1 | `packages/contracts/src/raw-parsing.ts`；`raw-parsing-contract.test.ts` 32 项通过，拒绝越界、重复地址、未知类型、越权资源引用及伪造 hash | 仅合成合同验证 |
-| 3.2 | `profile.ts`、`protocol.ts`、`configuration/owner.ts`；请求字段对照 MinerU 3.4.4 固定 commit；`raw-parse-protocol.test.ts` 6 项通过 | `config status` 的 `mineru:pipeline`/`mineru:vlm-engine` 表示本地配置具备，未证明远端模型已加载；真实能力待 GS |
-| 3.3 | `content-list.ts`、`convertMinerURawArchive`；`raw-parse-archive.test.ts` 25 项通过 | 用独立 raw converter 保留旧 converter，满足 3.6；不将旧 parser 的私有文件要求套到新路径 |
-| 3.4 | schema v11、独立迁移、worker、`SqliteRawParseStorage`；已接正式 catalog operator 与 Application；存储 6 项、catalog operator 16 项通过 | 迁移只对系统临时目录合成库执行；真实库未升级；回收不会删除有 pin/current 的版本 |
-| 3.5 | `RawParsingService` 及生产组装已实现；默认两种 profile、共享输入校验、重复请求串行复用、逐 profile 失败/取消；服务 7 项通过 | 任务/CLI/MCP 仍使用旧 `ParseDocumentReceipt`，`PARSER_RESULT_READY` 尚未切换，因此此 Task 未完成 |
-| 3.6 | raw VLM 成功后发布旧 ParserResult，pipeline 不发布；重开应用复用 raw 后仍可读取固定 Document；服务回归通过 | 旧阅读/分析保留到 GB；最终 Full 已通过；入口切换仍未完成 |
-| 3.7 | `stageLegacyRawParse` 验证旧字节并登记 `vlm-engine-markdown-only`；存储测试证明旧关系不变且没有 parser/model 调用 | 旧来源中 model identity 为空时如实保留；不伪造页码区域或区块 |
-| 3.9 | `test/raw-parse-server.ts` + 真实生产 loopback/protocol，覆盖 backend 错误、缺 v2、未知类型、单 profile 失败与超时，6 项通过 | 原计划把生产 `loopback.ts` 误称 fake；已依据实际代码责任校正，fake 位于 test，不改变产品合同或生产网络责任 |
+| Task | 实现证据与实际验证                                                                                                                       | 残余边界                                                                                                       |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| 3.1  | `packages/contracts/src/raw-parsing.ts`；`raw-parsing-contract.test.ts` 32 项通过，拒绝越界、重复地址、未知类型、越权资源引用及伪造 hash | 仅合成合同验证                                                                                                 |
+| 3.2  | `profile.ts`、`protocol.ts`、`configuration/owner.ts`；请求字段对照 MinerU 3.4.4 固定 commit；`raw-parse-protocol.test.ts` 6 项通过      | `config status` 的 `mineru:pipeline`/`mineru:vlm-engine` 表示本地配置具备，未证明远端模型已加载；真实能力待 GS |
+| 3.3  | `content-list.ts`、`convertMinerURawArchive`；`raw-parse-archive.test.ts` 25 项通过                                                      | 用独立 raw converter 保留旧 converter，满足 3.6；不将旧 parser 的私有文件要求套到新路径                        |
+| 3.4  | schema v11、独立迁移、worker、`SqliteRawParseStorage`；已接正式 catalog operator 与 Application；存储 6 项、catalog operator 16 项通过   | 迁移只对系统临时目录合成库执行；真实库未升级；回收不会删除有 pin/current 的版本                                |
+| 3.5  | `RawParsingService` 及生产组装已实现；默认两种 profile、共享输入校验、重复请求串行复用、逐 profile 失败/取消；服务 7 项通过              | 任务/CLI/MCP 仍使用旧 `ParseDocumentReceipt`，`PARSER_RESULT_READY` 尚未切换，因此此 Task 未完成               |
+| 3.6  | raw VLM 成功后发布旧 ParserResult，pipeline 不发布；重开应用复用 raw 后仍可读取固定 Document；服务回归通过                               | 旧阅读/分析保留到 GB；最终 Full 已通过；入口切换仍未完成                                                       |
+| 3.7  | `stageLegacyRawParse` 验证旧字节并登记 `vlm-engine-markdown-only`；存储测试证明旧关系不变且没有 parser/model 调用                        | 旧来源中 model identity 为空时如实保留；不伪造页码区域或区块                                                   |
+| 3.9  | `test/raw-parse-server.ts` + 真实生产 loopback/protocol，覆盖 backend 错误、缺 v2、未知类型、单 profile 失败与超时，6 项通过             | 原计划把生产 `loopback.ts` 误称 fake；已依据实际代码责任校正，fake 位于 test，不改变产品合同或生产网络责任     |
 
 实际命令与日志（系统临时测试目录，不随 Git 提交）：
 
@@ -197,11 +195,9 @@
 
 Full 正运行 `/tmp/sciretriever-archive-implementation-yzz1ycub/full-raw-retirement.log`；源码快照为 `raw-retirement-source-manifest.json`，结果待完成后记录，不能引用 v14 上一轮 Full 代替。新 profile 的实际科学质量与真实服务能力仍不在本轮授权范围。
 
-
 Full `full-raw-retirement.log` 已结束（退出 1）：**301 文件中 299 通过、2 失败；2,208 项中 2,206 通过、2 失败，零跳过**，未进入最终 build。741 个代码/配置文件与运行前快照完全一致。两处失败已定位：Browser multipart 测试的默认 5 秒上限短于内部 15 秒等待；取消测试等的是写入开始而非提交完成。现分别修复为明确 30 秒测试预算与实际提交完成信号，事实保留/网络边界断言不变。
 
 语义复核另发现增量 tsc 残留已退役模块的 dist 字节，会被包声明 glob 收进安装包。新增精确清理脚本并接入正式 build，目录/文件必须为实际对象，拒绝符号链接，安装包测试新增退役文件缺席断言；不改依赖和 lockfile。正在进行定向复验，需重新 Full，不能将失败轮称为验收通过。
-
 
 #### 旧解析退役最终验收（2026-10-20）
 
@@ -224,7 +220,6 @@ Full `full-raw-retirement.log` 已结束（退出 1）：**301 文件中 299 通
 ### 第二版高级维护入口复验（2026-10-21）
 
 `maintenance-profile-verified.log`：高级维护的 1 个浏览器用例通过，明确不提交显式 profiles 列表，由服务端采用部署配置，拒绝旧 Document 回执；另一个未选中用例不计通过。夹具只准备原始解析，不再为一个解析入口测试隐式生成校订文档。
-
 
 ## 3.10 服务能力核销（2026-10-21）
 

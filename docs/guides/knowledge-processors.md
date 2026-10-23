@@ -41,7 +41,7 @@
       },
       { "name": "humidity", "description": "空气相对湿度原串" }
     ],
-    "reading": { "scope": "full", "max_chunk_bytes": 12000 }
+    "reading": { "scope": "full" }
   },
   "inputs": [
     {
@@ -77,7 +77,7 @@ sciretriever processor result <结果ID>
 
 MCP 对应 `snapshot_create`、`snapshots_query`、`submit_processor` 与 `processor_query`。快照与大结果读取均分页有界，按 next_offset / next_after / continuation 续读。快照固定成员及描述，不原地更新；比较明确区分新增、移除、内容变化和描述变化。
 
-结果的四态为“已提取”“原文未报告”“无该部分”“读取不完整”；部分存在但不可用记为 incomplete / part-unavailable。列表、详情同时提供 current/stale、原因及四态计数。版本事件在事实发布事务内标记相关结果，不触发模型。多篇结果仅在声明 uses_description 时因描述变化失效；读取旧结果不会自动重算。
+运行记录按文献去重计“有结果”（with_result）、“结果为空”（empty）、“读取不完整”（incomplete）；同篇的正文、SI 或多条记录不重复计数，读取不完整优先。coverage.parts 的 outcome 仅 complete/incomplete，缺少已请求的 SI 等原因保留在 gaps。列表、详情同时提供 current/stale、原因及上述三种计数。版本事件在事实发布事务内标记相关结果，不触发模型。多篇结果仅在声明 uses_description 时因描述变化失效；读取旧结果不会自动重算。
 
 
 提交冻结输入、规范、方法和模型配置。同一 key/同一请求返回原运行；同 key 改请求会冲突。默认文档随后变化不会改变已入队任务；模型绑定无法重建时明确失败，不悄悄换模型。新范围应使用新 key。
@@ -92,7 +92,7 @@ MCP 对应 `snapshot_create`、`snapshots_query`、`submit_processor` 与 `proce
 
 `raw` 支持十进制、e 记法，以及原文中的 TeX/Unicode 科学计数法（例如 `7.25 \times 10^{-3}`、`7.25 × 10⁻³`）；其数量级必须与 `value` 一致，`raw` 和 `unit` 必须能在引用文本中找到。标量字段不把区间、上下界或“±”表达式当作一个精确数值。需要保留误差、近似说明或区间时，应在规范中添加相应描述字段；不能把一个区间的端点悄悄当成测量值。方法身份包含数值规则与提示词，规则变化后新任务重新计算，已有产物保留。
 
-`labels` 和 `records` 按完整片段分批调用模型。`reading.scope: search` 必须给 query，只处理关键词命中的片段，并明确标记 partial；零命中不等于全文未报告。超过 `max_chunk_bytes` 的单片段不截断为完整结果，而是报告缺口。分批失败保留已完成部分；全部批次失败记为任务失败。
+`reading` 仅接受 `scope`（默认 `full`）和 `query`（默认 null）；分块大小由算子管理，不接受 `max_chunk_bytes`。`reading.scope: search` 必须给非空 query，只处理关键词命中的片段，并明确标记 partial；零命中不等于全文未报告。默认整篇一次调用；按 UTF-8 每字节 1 token 保守估算。门槛为 200K 与模型上下文扣除提示词、输出预留后的较小者，上下文缺省 1M。提示词至少预留 8192 tokens，并覆盖规范/schema 实际大小；输出默认预留并请求最多 16384 tokens，受模型能力上限约束。超限后先按一级标题、再下级标题、最后段落划分，相邻章节可合并；表格与图注/脚注、续表、图片图注及公式不拆。单整体超限记 unit-too-large 缺口。每批带文章标题与章节路径。分批失败保留已完成部分；全部批次失败记为任务失败。
 
 首版只处理当前可读文本及 Markdown 表格文本。证据定位到文档片段，不能承诺表格单元格、图片数据或 PDF 精确坐标。SI 只有显式选中且已有可用表示时才可能参与；不会自动下载或解析。每个非空字段带来源引用，空字段附缺失理由。`empty` 只用于完整处理所选范围且没有记录；不确定、失败与无记录分别表达。
 
@@ -150,10 +150,8 @@ CLI 统一为 `processors <action> --request <JSON 文件>`；MCP 为 `processor
 
 [指南索引](README.md) · [技术合同](../architecture/technical/05-knowledge-processing.md) · [ADR 0034](../architecture/decisions/0034-unified-processors-and-results.md)
 
-## 逐值用时核对
+## 逐值文字核对
 
-结果发布前由平台统一核对证据，`value_checks` 用 `record_id` 与 JSON Pointer 指向每个值（报告对应 claim，pointer 为空）。`text-layer` 表示引用数字能在文字层核对过的校订片段或人工片段中找到；`image-checked` 表示 DSH 已查看所引原图区域并确认；`uncertain` 表示数字不符、原图不清、没有合适证据、模型未配置或预算不足。它们描述抄录核对依据，不代表科学结论已验证。
+结果发布前统一核对证据，`value_checks` 以 `record_id` 与 JSON Pointer 指向值（报告对应 claim，pointer 为空）。六种状态为 found（可找到）、not-found（找不到）、value-null（值为空）、no-citation（无引用）、citation-unavailable（引用不可用）、derived（综合值）。数字按规范化数字串比较，数值的原单位也必须出现；无数字的文本必须非空且在引用片段中出现，不会因数字列表为空而自动通过。核对不证明科学解释正确，也不改写或丢弃候选值。
 
-存疑值照常交付。完整 JSON、CSV/Markdown 导出、字段查询与 Web 结果表保留标注。多篇处理保留所引单篇值的标注；新综合表述不会因为来源经过核对就自动获得同等结论。外部托管候选默认注明尚未做视觉核对，不把接纳校验冒充内容确认。
-
-视觉核对使用 `[proofread].value_check_model` 和 `max_value_check_calls`，复用按固定证据、值、图像 hash、方法与模型绑定的缓存。`provenance.value_check_usage` 记录本次核对的调用与已报告 token；结果本身的复用不会再次调用模型。
+引用片段一律文字比对，每个 sources 项保留 basis（text-layer/image-only/manual）；结果引用保留 result_id/content_sha256/record_id/pointer，链接来源结果而不继承其核对状态。视觉核对模型、预算与缓存调用已删除。`provenance.value_check_usage` 为零，不产生额外模型调用。分块和核对规则计入方法身份，旧方法结果显示过时且不会自动重算。

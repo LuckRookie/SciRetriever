@@ -6,7 +6,7 @@ created = "2026-10-19"
 
 # 可信全文、文献档案与算子
 
-> 状态：已归档（2026-10-20）。方向已由 [ADR 0037](../../architecture/decisions/0037-literature-archive-and-proofread-text.md) 接受，执行见[实施计划](../../plans/2026-10-20-literature-archive/README.md)。本文保留讨论过程与证据，现行规则以 ADR 0037 为准。
+> 状态：已归档（2026-10-20）。方向已由 [ADR 0037](../../architecture/decisions/0037-literature-archive-and-proofread-text.md) 接受，执行见[实施计划](../2026-10-20-literature-archive/README.md)。本文保留讨论过程与证据，现行规则以 ADR 0037 为准。
 >
 > 2026-10-19 讨论中，Owner 已确认[第 2 节](#2-已确认的规则)列出的规则；各问题的答复与待确认项见[第 9 节](#9-问题与答复)。
 >

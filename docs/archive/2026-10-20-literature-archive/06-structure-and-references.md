@@ -13,6 +13,7 @@
 **进入条件**：05 的 5.1、5.2、5.5 已完成。
 
 **责任边界**：
+
 - 本块负责：
   - 结构注释的合同与存储；
   - 角色识别；
@@ -35,45 +36,43 @@
 
   **正文部分**的角色：
 
-  | 角色 | 含义 |
-  | --- | --- |
-  | `front-matter` | 题名、作者、单位、期刊信息 |
-  | `abstract` | 摘要 |
-  | `keywords` | 关键词 |
-  | `introduction` | 引言 |
-  | `methods` | 实验、方法、计算细节 |
-  | `results` | 结果 |
-  | `discussion` | 讨论 |
-  | `results-discussion` | 结果与讨论合并的章节 |
-  | `conclusion` | 结论 |
-  | `acknowledgements` | 致谢 |
-  | `references` | 参考文献 |
-  | `appendix` | 附录 |
-  | `body` | 不属于以上类别的正文章节，例如“理论模型” |
+  | 角色                 | 含义                                     |
+  | -------------------- | ---------------------------------------- |
+  | `front-matter`       | 题名、作者、单位、期刊信息               |
+  | `abstract`           | 摘要                                     |
+  | `keywords`           | 关键词                                   |
+  | `introduction`       | 引言                                     |
+  | `methods`            | 实验、方法、计算细节                     |
+  | `results`            | 结果                                     |
+  | `discussion`         | 讨论                                     |
+  | `results-discussion` | 结果与讨论合并的章节                     |
+  | `conclusion`         | 结论                                     |
+  | `acknowledgements`   | 致谢                                     |
+  | `references`         | 参考文献                                 |
+  | `appendix`           | 附录                                     |
+  | `body`               | 不属于以上类别的正文章节，例如“理论模型” |
 
   **补充材料部分**的角色：
 
-  | 角色 | 含义 |
-  | --- | --- |
-  | `si-methods` | 补充实验细节 |
-  | `si-characterization` | 表征数据与谱图 |
-  | `si-computation` | 计算细节 |
-  | `si-tables` | 补充表格 |
-  | `si-figures` | 补充图 |
-  | `si-references` | 补充材料的参考文献 |
-  | `body` | 其他章节 |
+  | 角色                  | 含义               |
+  | --------------------- | ------------------ |
+  | `si-methods`          | 补充实验细节       |
+  | `si-characterization` | 表征数据与谱图     |
+  | `si-computation`      | 计算细节           |
+  | `si-tables`           | 补充表格           |
+  | `si-figures`          | 补充图             |
+  | `si-references`       | 补充材料的参考文献 |
+  | `body`                | 其他章节           |
 
   `body` 是结构上的通用正文，不代表“无法判断”。每个章节都必须有角色。
 
 - [x] **6.2 规则识别**
-
   - 维护一份标题词典，覆盖中英文常见写法和编号前缀，例如“0 引言”“1 实验部分”“2.1”“Experimental Section”“Results and Discussion”“结论”“参考文献”“Supporting Information”。
   - 子章节继承父章节的角色，除非自身标题命中了词典。
   - 首个标题之前的区块归入 `front-matter`。如果 `front-matter` 中出现“摘要”或“Abstract”开头的区块，就拆出 `abstract`；“关键词”或“Keywords”开头的区块拆出 `keywords`。
   - 规则版本为 `roles-rules-v1`。
 
 - [x] **6.3 模型补充识别**
-
   - 规则没有命中、标题又不在词典中的顶层章节，交给模型判断角色。
   - 输入只包括：章节标题、章节首段的前若干字（上限可配置），以及前后章节的角色。
   - 输出必须是 6.1 中的枚举值。
@@ -81,20 +80,17 @@
   - 模型调用失败时，该章节使用 `body`，`role_source = fallback`，在注释中记录失败原因。这一处理不阻塞就绪，因为 `body` 本身是合法角色。
 
 - [x] **6.4 图表清单**
-
   - 从 `image`、`table` 类型的片段以及相邻的 `caption` 片段生成图表清单。
   - 解析图注中的编号，例如“图 2”“Fig. 2”“Table S1”“Scheme 1”。
   - 每一项记录：类型、编号文本、图注片段 ID、对象片段 ID、页码。
   - 无法解析出编号时，只记录片段 ID，不编造编号。
 
 - [x] **6.5 结构注释发布**
-
   - 新增 `structure_annotations` 表和不可变 JSON 产物。
   - 同一文档版本、同一方法版本，只生成一份注释。
   - 人工可以修正章节角色。修正结果被锁定，并写入新的注释版本。重新识别时，保留人工修正的角色。
 
 - [x] **6.6 参考文献解析**
-
   1. 从正文部分中角色为 `references` 的章节内，取出 `reference-item` 片段和列表片段。
   2. 切分条目：
      - 优先按编号模式切分，例如 `[1]`、`1.`、`(1)`；
@@ -111,7 +107,6 @@
   对每条参考文献，按以下顺序匹配库内文献：
   1. DOI 精确匹配；
   2. 复用 `literature/identity-rules.ts` 中的现有规则匹配，不新增模糊匹配。
-
   - 匹配成功的，记录关联和匹配依据；
   - 未匹配的，只保留文本。
 
@@ -128,19 +123,18 @@
 - [x] **6.9 就绪判断函数**（第二版调整）
 
   `structureSatisfied(annotation)` 是一个纯函数。满足以下条件时返回真：
-
   - 正文部分至少有一个 `body`、`introduction`、`methods`、`results`、`results-discussion` 或 `discussion` 章节；
 
   参考文献不再是就绪条件：缺失或解析失败时记入问题队列（原因 `references-missing`），不影响就绪（ADR 0037 第二版第 5 节）。真值表测试同步删除参考文献相关组合。勘误、社论、观点或评论类文章不作为文献处理，由 9.2 判定为 `EXCLUDED`，不会走到这一判断（Owner，2026-10-20）。
 
 - [x] **6.10 CLI/MCP**
 
-  | 命令 | 内容 |
-  | --- | --- |
-  | `document outline` | 输出章节角色与来源 |
-  | `document figures` | 图表清单 |
-  | `literature references` | 参考文献列表与关联 |
-  | 角色修正 | 设置或解除某个章节的角色锁定 |
+  | 命令                    | 内容                         |
+  | ----------------------- | ---------------------------- |
+  | `document outline`      | 输出章节角色与来源           |
+  | `document figures`      | 图表清单                     |
+  | `literature references` | 参考文献列表与关联           |
+  | 角色修正                | 设置或解除某个章节的角色锁定 |
 
 ## 集成与影响
 
@@ -209,7 +203,6 @@
 `full-structure-v14-reviewed.log` 退出 0：**301 文件 / 2,204 项通过，零跳过**；Quick、全部 Vitest、最终构建通过，Vitest 耗时 1,008.73 秒。`structure-source-manifest-reviewed.json` 的 890 个活动代码/配置文件复核无变化。未调用真实 Provider/MinerU/模型或真实库，未改变锁文件、定稿原型，未提交 Git。随后继续图表邻接修复及旧补全链清理；这份 Full 仅证明该快照，不等于全计划完成，也不能当作后续源码的 Full。
 
 - 图表边界修复已应用：按显式 Fig/Table/Scheme 标签类型挑选相容的邻接 caption，同一 caption 不再重复分配。`caption-tests.log`：2 文件 / 30 项通过（包含新增的 image→Fig caption→table 回归）。该修改在上面 Full 快照之后，最终集成时仍需完整回归。
-
 
 ### 引用关联开始实施（2026-10-20）
 

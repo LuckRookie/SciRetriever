@@ -8,7 +8,9 @@
 
 当前实现发布 RawParse 与校订稿 DocumentVersion，原始材料证据无需先解析；校订表示证据固定具体版本，页码与区域定位已接入。表格单元级精确定位不在本轮范围。旧数据转换及当前工作树的集中验收尚未完成，不能把实现状态等同于发布完成。
 
-> 2026-10-21：[ADR 0037 第二版](../decisions/0037-literature-archive-and-proofread-text.md) 使用单一部署 profile 初稿、文字层找疑点与 DSH 看原图矫正；存疑不阻断就绪。当前边界见[§6](#6-adr-0037-目标形态原始解析校订稿与页码区域证据)，实施与待验收项见[计划](../../plans/2026-10-20-literature-archive/README.md)。旧 ParserResult 仅用于一次性导入验证，不属于当前生产入口。
+> 2026-10-22：ADR 0037 第三版取消“存疑”：校订稿核对依据只保留 `text-layer`、`image-only`、`manual`，删除 `uncertain` 与存疑说明，“无法确定”的疑点只写在处置记录中。当前校订块、文档结构与读取接口已按此合同移除片段存疑字段；疑点处置仍保留无法确定及原因。
+
+> 2026-10-21：[ADR 0037 第二版](../decisions/0037-literature-archive-and-proofread-text.md) 使用单一部署 profile 初稿、文字层找疑点与 DSH 看原图矫正；存疑不阻断就绪。当前边界见[§6](#6-adr-0037-目标形态原始解析校订稿与页码区域证据)，实施与待验收项见[计划](../../archive/2026-10-20-literature-archive/README.md)。旧 ParserResult 仅用于一次性导入验证，不属于当前生产入口。
 
 本篇目录：
 
@@ -302,7 +304,7 @@ interface DocumentSlice {
 
 ## 4. 证据定位、版本与生命周期
 
-校订稿生成 DocumentRef v2，绑定 Literature/Asset、proofread_id、校订内容 hash、builder/locator、正文/结构和资源闭包。每个 segment 保留区块 ID、UTF-8 范围、page/region、continuation regions、核对依据和存疑。只有页定位的区块不能伪造 bbox。
+校订稿生成 DocumentRef v2，绑定 Literature/Asset、proofread_id、校订内容 hash、builder/locator、正文/结构和资源闭包。每个 segment 保留区块 ID、UTF-8 范围、page/region、continuation regions、核对依据。只有页定位的区块不能伪造 bbox。
 
 DocumentStructure 的 heading 由校订区块类型决定，正文里的 Markdown 标记不能意外生成目录。构建与读取共享正文 8 MiB、结构 16 MiB 上限，取消和输入篡改明确失败；长循环让出事件循环。默认版本更新是独立 CAS，失败仍保留已发布版本。索引失败不撤销文档。
 
@@ -367,8 +369,8 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 
 - **页面分类**按 PDF 字形而非整套字体判断：有可见且能映射 Unicode 的字形为 `text-layer`；有绘图或字形但没有有效可见文字为 `image-only`，完全空白页独立标记。不可见 OCR 不进入参照文字。无隐藏字形时使用 PDF.js 的文字布局还原，不能把 TJ 字距微调当作空格；混合可见/隐藏页使用仅含可见字形的操作流。
 - **疑点**：逐页比较文字层与初稿中归属该页的内容，以词和数字为单位，不做区块对齐。分为可能漏掉、可能多出或错字、数字单位化学式不一致、页归属错误四类。
-- **矫正**：DSH 使用整页渲染、局部放大、相邻页和初稿片段读取工具。`text-layer` 页只处理疑点；`image-only` 页逐页检查。页面原图是最终依据；文字层只用来找疑点。矫正以编辑操作提交（替换、插入、删除、移动、调整页归属、标为存疑），每个操作注明依据页码，由程序应用并生成完整校订稿。
-- **处置完整性**：每条疑点有处置（已修正、确认初稿无误并附原因、存疑）；每个 `image-only` 页有检查记录；编辑操作和图片引用有效；删除文字层中存在的内容必须附原因。应用后重新比较，新差异在现有预算内继续处理；续跑复用页面缓存，当前稿与分页文字同步。相同内容和未处置问题反复出现时停止，编辑说明换了措辞不代表进展。
+- **矫正**：DSH 使用整页渲染、局部放大、相邻页和初稿片段读取工具。`text-layer` 页只处理疑点；`image-only` 页逐页检查。页面原图是最终依据；文字层只用来找疑点。矫正以编辑操作提交（替换、插入、删除、移动、调整页归属），每个操作注明依据页码，由程序应用并生成完整校订稿。
+- **处置完整性**：每条疑点有处置（已修正、确认初稿无误并附原因、无法确定并保留原因）；每个 `image-only` 页有检查记录；编辑操作和图片引用有效；删除文字层中存在的内容必须附原因。应用后重新比较，新差异在现有预算内继续处理；续跑复用页面缓存，当前稿与分页文字同步。相同内容和未处置问题反复出现时停止，编辑说明换了措辞不代表进展。
 
 **`ProofreadVersion`** 记录：
 - 输入：一份原始解析与该部分的 PDF；
@@ -377,7 +379,7 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 - 状态：`complete`、`incomplete`（处置未完成，可继续）或 `failed`；
 - 区块列表；
 - Markdown 及资源闭包；
-- 页面分类、疑点及其处置、存疑清单、调用统计。
+- 页面分类、疑点及其处置、调用统计。
 
 **每个区块**包含：
 - 稳定 ID；
@@ -385,18 +387,18 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 - 类型；
 - 最终文字；
 - 文字来源：`parser`、`rule`、`agent`、`manual`；
-- 核对依据：`text-layer`、`image-only`、`uncertain`、`manual`；
-- 存疑说明（如有）与相关编辑操作引用。
+- 核对依据：`text-layer`、`image-only`、`manual`；
+- 相关编辑操作引用；无法确定的理由只存在处置记录中。
 
-校订只检查抄录保真，不认证全文正确。存疑不使该部分失败。失败只在缺少原始解析、某页有内容但校订稿完全没有对应内容且无处置、矫正任务异常中止时发生。
+校订只检查抄录保真，不认证全文正确。无法确定的处置不使该部分失败。失败只在缺少原始解析、某页有内容但校订稿完全没有对应内容且无处置、矫正任务异常中止时发生。
 
 ### 6.3 文档表示与定位
 
-- 文档表示 `proofread-blocks-v1` 由 `complete` 状态的校订版本构建，结构 schema v2 的每个片段对应一个区块，并携带页码、区域、来源、核对依据与存疑说明。
+- 文档表示 `proofread-blocks-v1` 由 `complete` 状态的校订版本构建，结构 schema v2 的每个片段对应一个区块，并携带页码、区域、来源与核对依据。
 - 新增定位方案 `page-region-v1`：片段 ID 加页码和区域，解析时逐项校验，不做模糊匹配。
 - 校订版本构建成功后成为该部分的默认文档；旧版本可按精确引用读取。
-- 疑点、处置与矫正记录只供人工查看，不进入算子上下文；片段的核对依据与存疑说明随片段提供给算子。
-- 算子结果中的值按 ADR 0037 第 10 节做用时核对，核对结果（`text-layer`、`image-checked`、`uncertain`）记录在值上。
+- 疑点、处置与矫正记录只供人工查看，不进入算子上下文；片段的核对依据随片段提供给算子。
+- 算子结果中的值按 ADR 0037 第 10 节做用时核对，核对结果（found/not-found/value-null/no-citation/citation-unavailable/derived）记录在值上。
 
 ### 6.4 结构注释
 

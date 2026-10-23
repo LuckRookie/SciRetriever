@@ -13,7 +13,7 @@
 
 ## 工作台启动
 
-`startProductionWorkbench({home, port?, literature_id?})` 可在不选择文章时启动。它通过 Configuration owner 补齐并保存缺失的存储路径（默认位于 `~/.sciretriever/`），目标不存在时调用 Storage 初始化完整空库；再建立一个 Application 和绑定相同 catalog/资产根的只读 QueryApplication，在一个 loopback HTTP origin 下提供任务、Browser、文献阅读、维护和设置。`home` 是内部组装/隔离测试入口；普通 CLI `sciretriever web` 使用固定用户 home，不提供第二配置身份。
+`startProductionWorkbench({home, port?, literature_id?})` 可在不选择文章时启动。它通过 Configuration owner 补齐并保存缺失的存储路径（默认位于 `~/.sciretriever/`），目标不存在时调用 Storage 初始化完整空库；再建立一个 Application 和绑定相同 catalog/资产根的只读 QueryApplication，在同一认证 HTTP 服务下提供任务、Browser、文献阅读、维护和设置。`home` 是内部组装/隔离测试入口；普通 CLI `sciretriever web` 使用固定用户 home，不提供第二配置身份。
 
 - 启动页面本身不触发发现、获取、Parser、模型调用或 Browser 页面。
 - 没有初始 Literature 时，Browser 投影明确为未选择；随后真实任务内部的文章会话通过同一 `browserCollaboration` 连接工作台。
@@ -23,8 +23,10 @@
 - 仅对不存在的目标执行 create-if-absent 初始化；已有库继续通过迁移门验证，不自动升级、替换或搬迁。自定义目标父目录须已存在。
 - 关闭时先停止并排空 HTTP 请求，再停止 Browser/任务运行时、查询 reader 和 Application；各入口返回的 `close()` 应由调用方释放。
 
-`startQueryOnlyWorkbench` 仍只构造只读应用；`startMaintenanceWorkbench` 保留独立维护入口；`startSyntheticWorkbench` 使用合成预览和临时 home，其示例数据不能代表正式文献库。合成 Browser 对象图也绑定同一临时库的 QueryApplication，使新旧界面都能通过已有固定材料查询读取已接纳 PDF；关闭时一并释放该只读应用。
+`startQueryOnlyWorkbench` 仍只构造只读应用；`startMaintenanceWorkbench` 保留独立维护入口；`startSyntheticWorkbench` 使用合成预览和临时 home，其示例数据不能代表正式文献库。合成 Browser 对象图也绑定同一临时库的 QueryApplication，使界面能通过已有固定材料查询读取已接纳 PDF；关闭时一并释放该只读应用。
 
 相关源码：[工作台 HTTP](../workbench/README.md) · [CLI 入口](../cli/README.md)。
 
 [上级目录](../README.md)
+
+`agent-models.ts` 只从配置解析模型身份，供执行与预估共用；查询不因此加载凭据或创建模型传输。Application 先结清会话，再关闭过程记录清理器与数据库。

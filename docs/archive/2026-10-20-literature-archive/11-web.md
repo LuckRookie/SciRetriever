@@ -2,6 +2,8 @@
 
 状态：Completed（9/9；第二版 Web 旅程及后续修复复验通过，整仓库质量门禁与真实库切换仍见 12）。执行者：Codex。
 
+> 2026-10-22 修订：[ADR 0037](../../architecture/decisions/0037-literature-archive-and-proofread-text.md) 第三版取消“存疑”（校订稿 basis 去掉 `uncertain`），用时核对改为六种状态（去掉 `image-checked`／`uncertain`），单篇结果按值量化（去掉 `not-reported`／`part-absent`），算子按结构分块（去掉 `max_chunk_bytes`）。本文件中相关条文保留为当时的实施记录，后续实现以[计划 13 第二轮](13-web-review-and-audit.md) 13.22–13.24 为准。
+
 **Outcome**：
 
 在 Web 上可以完成以下操作：

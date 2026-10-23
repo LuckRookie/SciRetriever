@@ -12,16 +12,7 @@
 4. 模块责任、数据所有权、依赖、持久化或外部访问问题读取[架构原则](docs/architecture/principles.md)、[设计文档](docs/architecture/design.md)及对应[技术文档](docs/architecture/technical.md)。
 5. 再读取当前实现、公开调用方、直接测试和必要的[代码与文档映射](docs/development/documentation-map.md)。
 
-| 内容                              | 权威位置                                                                                                                            |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| 产品问题、范围和 R1-R13 验收      | `docs/architecture/requirements.md`                                                                                                 |
-| 已接受且长期有效的选择            | `docs/architecture/decisions/`                                                                                                      |
-| 模块、数据流和事实所有权          | `docs/architecture/design.md`                                                                                                       |
-| 代码结构、Model、Ports 和运行技术 | `docs/architecture/technical.md`、`docs/architecture/technical/`                                                                    |
-| 当前已经实现的安装与用户行为      | `README.md`、`docs/guides/`、源码和测试                                                                                             |
-| 易变 Provider、MinerU 等外部事实  | `docs/notes/`；只维护接口、版本与兼容性等说明                                                                                       |
-| 本机真实测试、诊断与验收          | `sandbox/cases/`、`sandbox/runs/`、`sandbox/reports/`；整个 `sandbox/` 被 Git 忽略，不随仓库分发，见[测试目录说明](tests/README.md) |
-| 活动实施计划                      | `docs/plans/`；用于执行与恢复，不属于产品或架构真相源                                                                               |
+文档的类型、每个主题的唯一归属文档和维护规则见[文档导航](docs/README.md)。写或改文档前先查其中的主题归属表，只改归属文档，别处只链接；被取代的内容直接改掉或移走，不原地加注；ADR 接受后正文冻结，方向变化写新 ADR。
 
 目标文档说明应当实现什么，README、源码和测试说明当前行为。不得用当前实现否定已接受设计，也不得把尚未实现的能力写成已发布行为。
 
@@ -88,17 +79,20 @@ apps/web/src/                # Web 工作台适配
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm exec vitest run <相关测试文件>
+VITEST_MAX_FORKS=36 VITEST_MIN_FORKS=12 pnpm exec vitest run <相关测试文件>
 pnpm quick
-pnpm full
+VITEST_MAX_FORKS=36 VITEST_MIN_FORKS=12 pnpm full
 ```
 
 - 相关测试：开发循环和单个能力切片的首选反馈。
+- **Owner 2026-10-22 确定的效率规则**：先根据改动及调用方选择直接相关的测试；小修复不得默认触发全量测试。耗时测试安排在相关改动全部完成后的最后阶段，同一候选版本只跑一次；修复失败后先定向复验，只有新改动或未解决的风险涉及其它能力时才扩大范围。
+- 安装包旅程、真实浏览器测试、30,000 篇文献库、200 篇合成文献处理与复用等耗时测试，只在改动影响对应能力、共享依赖或明确要求验证该流程时运行；没有相关影响就不运行，不因其它用例失败而整组重跑。选择依据应简要记录，不删除或永久跳过这些用例。
+- 本机 Vitest 显式设置 `VITEST_MAX_FORKS=36 VITEST_MIN_FORKS=12`，不用机器默认并发；不同时启动多轮 Vitest。若资源状况需要调整，记录原因与实际设置。
 - Quick：Prettier、ESLint、源码和测试 strict 类型检查。
-- Full：Quick、全部 Vitest 与所有已注册 TS project 的构建；代码交付默认必须通过。`vitest.config.mjs` 排除本机 `sandbox/**`，保留原有回归发现范围。
+- Full：Quick、全部 Vitest 与所有已注册 TS project 的构建；用于确需全量覆盖的最终验收，不作为每次代码交付的默认必跑步骤。`vitest.config.mjs` 排除本机 `sandbox/**`，保留原有回归发现范围。
 - Python Harness、Python 源码和既有 Python 测试已归档到 `archive/2026-09-12-typescript-python-retirement/`，不作为 TS 交付的阻断项；只有用户明确要求历史复核时才处理归档快照。
 - 文档-only 修改检查 diff、链接、术语、命令事实和 Markdown 结构。
-- Full 未通过或未运行时不得声称代码修改已经完成质量验收；确因环境无法运行时，准确说明原因、已运行检查和残余风险。
+- 交付如实说明本次验收范围、已运行结果、未运行项及依据。Full 未通过或未运行时不得声称“Full 通过”，也不得将多轮定向结果拼成一次全量通过；已有失败必须修复或明确列为未解决事项。任务若另有明确验收门槛，遵守 Owner 的最新要求。
 
 精确步骤见 [HARNESS.md](HARNESS.md)、`package.json` 与 CI；当前包、离线安装验证和恢复入口见
 [TypeScript 基础开发入口](docs/development/typescript-foundation.md)。TS 生产路径不依赖 Python；历史源码归档已完成，真实用户数据切换仍需按计划授权执行。
@@ -134,4 +128,4 @@ TS Full 使用 TypeScript Configuration/Credential owner 和合成临时 home，
 - 已知残余风险和需要用户决定的事项；
 - 最终 diff 没有夹带凭据、真实数据、构建产物或无关改动。
 
-代码交付只有在目标路径、直接测试、生产对象图、必要当前文档和 Full Harness 形成闭环后，才可以声明完成。
+代码交付只有在目标路径、直接测试、生产对象图、必要当前文档和与改动影响范围匹配的验收形成闭环后，才可以声明完成；不以重复运行无关耗时测试代替影响分析。

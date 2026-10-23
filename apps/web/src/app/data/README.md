@@ -14,4 +14,8 @@ Browser 的轮询读取不会覆盖请求期间已经接纳的推送或操作回
 
 `wire.ts` 保存通用 JSON 读取边界，`tasks.ts` 保存任务详情投影与状态/范围标签，`candidate-status.ts` 依据真实 publication/operation terminal 形成候选状态文字；这些都不创建 DOM 或改变业务事实。
 
+`intake.ts` 读取发现与书目导入的实际回执，将接纳/匹配/逐项处置计数和完成/部分/失败状态投影给界面；HTTP 成功不等同于业务成功，原回执保留供技术详情查看。
+
 偏好只读写当前 React 命名空间，包含主题、两侧栏宽、默认阅读字号/行宽、动效及按库保存的筛选。按 Owner 的单一界面决定，旧键读取回退和一次迁移已经删除，不扫描、搬迁或删除旧前端存储，更不复制其它应用数据或凭据。
+
+`library.ts` 提供快速筛选计数；`folders.ts` 管理目录树、成员与显式最近阅读记录（读取查询不隐式写历史）；`snapshots.ts` 解析快照名称及改名回执；`actors.ts` 提供操作者显示投影；`agent-conversation.ts` 按数据库游标读取原始会话事件；`reading-status.ts` 解析块来源和人工修改；`processor-spec.ts` 与 `processor-checks.ts` 提供处理规范、六种核对状态及按篇计数的共享合同。它们只做协议适配，组件展示由调用方负责。

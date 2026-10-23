@@ -5,3 +5,5 @@
 - `orchestrator.ts`：单篇执行、断点复用、失败隔离与批次整理。
 - `service.ts`：选择范围、任务提交、问题处理和只读查询。
 - 就绪规则由相邻的 `literature/state.ts` 统一定义；持久化适配由 `storage/sqlite/archive-engine.ts` 实现。
+
+`input-key.ts` 统一步骤复用键；`reuse.ts` 只读检查当前原稿、人工决定、方法、模型及各步缓存，供启动前预估完整可复用篇数，不把部分复用计作整篇复用。

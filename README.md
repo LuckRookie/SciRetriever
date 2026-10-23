@@ -118,7 +118,7 @@ node apps/server/dist/cli/main.js web --port 4174
 
 Web 默认监听所有 IPv4 网卡。本机和其他电脑都需登录；未指定密码时，启动终端显示自动生成的 `api_key`，在浏览器登录框输入即可。固定密码通过 `SCIRETRIEVER_WEB_PASSWORD` 提供。无需 `--origin`，直接打开 `http://服务器IP:4174/`；HTTP 登录不加密传输。详见[Web 启动与登录](docs/guides/web-workbench.md#在服务器运行从自己的电脑访问)。
 
-已安装入口为 `sciretriever web`。正式 Web 按定稿原型以文献库为首页，提供发现、检索、洞察、综合、提取、持久任务、Browser 会话、阅读标签和设置。首次启动直接可用：未配置的数据库与资产路径分别保存为 `~/.sciretriever/catalog.sqlite` 和 `~/.sciretriever/artifacts/`，缺库时创建完整空库；已有自定义路径优先。页面显示实际绑定，CLI/MCP 共享已保存配置。无需初始文献，不自动获取或升级已有库。可在设置中修改位置，重启后生效；不移动已有资料。操作与能力边界见[Web 文献库工作空间指南](docs/guides/web-workbench.md)。
+已安装入口为 `sciretriever web`。正式 Web 以文献库为首页，提供发现、检索、洞察、综合、提取、持久任务、Browser 会话、阅读标签和设置。首次启动直接可用：未配置的数据库与资产路径分别保存为 `~/.sciretriever/catalog.sqlite` 和 `~/.sciretriever/artifacts/`，缺库时创建完整空库；已有自定义路径优先。页面显示实际绑定，CLI/MCP 共享已保存配置。无需初始文献，不自动获取或升级已有库。可在设置中修改位置，重启后生效；不移动已有资料。操作与能力边界见[Web 文献库工作空间指南](docs/guides/web-workbench.md)。
 
 ## Browser 工作台预览
 
