@@ -1,6 +1,9 @@
 # ADR 0027：通用提取能力与调用方定义的记录
 
-- Status: Accepted（提取模块及责任边界；具体接口与执行方式仍待设计）
+类型：决策（ADR）
+负责：通用提取能力与调用方定义的记录
+状态：Accepted（提取模块及责任边界；具体接口与执行方式仍待设计）
+
 - Date: 2026-09-26
 - Amends: [ADR 0001](0001-sciretriever-scope-and-boundary.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)
 - Related: [产品需求 R13](../requirements.md#r13-通用提取能力与调用方定义的记录)、[知识加工：调用方规范与提取交付](../technical/05-knowledge-processing.md#4-调用方规范与提取交付)、[统一产品接口：共享合同、结构解析与版本兼容](../technical/01-product-interface.md#6-共享合同结构解析与版本兼容)
@@ -47,6 +50,6 @@ SciRetriever 提供材料准备、结构化与有界读取、局部检索、资�
 
 ## 契约设计与验证
 
-完整协作场景见[工作流](../knowledge-service-workflows.md)，与当前代码的差异见[演进对照](../evolution-map.md)。具体字段、schema 方言、传输、批量提交和失败协议见提取技术文档中的建议范围；跨模块输入/输出、所有权、错误、副作用及版本问题集中在模块契约草案。草案没有自动冻结为已接受 API。
+完整协作场景见[工作流](../knowledge-service-workflows.md)，与当前代码的差异见[演进对照](../../archive/2026-10-24-docs-consolidation/docs/architecture/evolution-map.md)。具体字段、schema 方言、传输、批量提交和失败协议见提取技术文档中的建议范围；跨模块输入/输出、所有权、错误、副作用及版本问题集中在模块契约草案。草案没有自动冻结为已接受 API。
 
 后续需要用不同形状的合成记录验证：换领域只改变调用方规范与策略；直接材料读取不要求内部模型；记录可引用多个材料；过期引用、结构错误、重复提交、部分覆盖与取消有明确结果；领域接纳不会被格式验证替代。生产源码、用户数据与真实外部服务未因本 ADR 改变。

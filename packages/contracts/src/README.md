@@ -7,8 +7,8 @@
 - [index.ts](index.ts)：包公开导出与基础合同。
 - [document.ts](document.ts)：文档合同。
 - [raw-parsing.ts](raw-parsing.ts)：双 profile 原始解析与中性区块合同，校验坐标、页码、资源引用和不可变清单身份。
-- [knowledge.ts](knowledge.ts)：知识产物合同。
-- [synthesis.ts](synthesis.ts)：综合产物合同。
+- [processors.ts](processors.ts)：知识产物合同。
+- [snapshots.ts](snapshots.ts)：综合产物合同。
 - [operations.ts](operations.ts)：操作合同。
 - [extraction.ts](extraction.ts)：提取合同。
 - [retrieval-context.ts](retrieval-context.ts)：材料检索上下文合同。

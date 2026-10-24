@@ -1,5 +1,9 @@
 # Europe PMC
 
+类型：外部事实
+负责：Europe PMC
+状态：现行
+
 > 当前 TypeScript 适配行为（2026-10-10 核对）：主题年份通过 PUB_YEAR 查询表达式传递；lookup 区分 DOI、PMCID 和 EXT_ID + SRC。references 的 offSet 是从 1 开始的页序号，citations 从 0 开始；两者均不是记录偏移。缺失/空白年份按 unknown 转换。有目标 record ID 时可交付内嵌元数据；只有 DOI 而无 Provider 记录身份时保留关系供后续 lookup，不冒用种子 record ID。 证据见修复验证记录（本地文件：`sandbox/reports/live-discovery-acquisition-fixes-2026-10-10.md`，不随仓库分发）。下文较早日期的探测只代表当时状态。
 
 - 官方资料最后在线核对：2026-08-07
@@ -134,37 +138,68 @@ primary PDF 接纳。
 {
   "version": "6.9",
   "hitCount": 1,
-  "request": {"resultType": "CORE", "cursorMark": "*", "pageSize": 1},
-  "resultList": {"result": [{
-    "id": "32939066",
-    "source": "MED",
-    "pmid": "32939066",
-    "pmcid": "PMC7759461",
-    "doi": "10.1038/s41586-020-2649-2",
-    "title": "Array programming with NumPy.",
-    "authorList": {"author": [{
-      "fullName": "Millman KJ",
-      "firstName": "K Jarrod",
-      "lastName": "Millman",
-      "authorId": {"type": "ORCID", "value": "0000-0002-5263-5070"},
-      "authorAffiliationDetailsList": {"authorAffiliation": [
-        {"affiliation": "Brain Imaging Center, University of California, Berkeley, ..."}
-      ]}
-    }]},
-    "journalInfo": {"issue": "7825", "volume": "585",
-      "journal": {"title": "Nature", "issn": "0028-0836", "essn": "1476-4687"}},
-    "pubYear": "2020",
-    "pageInfo": "357-362",
-    "fullTextUrlList": {"fullTextUrl": [
-      {"availability": "Open access", "documentStyle": "html", "site": "Europe_PMC", "url": "https://europepmc.org/articles/PMC7759461"},
-      {"availability": "Open access", "documentStyle": "pdf", "site": "Europe_PMC", "url": "https://europepmc.org/articles/PMC7759461?pdf=render"}
-    ]},
-    "isOpenAccess": "Y",
-    "hasPDF": "Y",
-    "hasSuppl": "Y",
-    "citedByCount": 7572,
-    "hasReferences": "Y"
-  }]}
+  "request": { "resultType": "CORE", "cursorMark": "*", "pageSize": 1 },
+  "resultList": {
+    "result": [
+      {
+        "id": "32939066",
+        "source": "MED",
+        "pmid": "32939066",
+        "pmcid": "PMC7759461",
+        "doi": "10.1038/s41586-020-2649-2",
+        "title": "Array programming with NumPy.",
+        "authorList": {
+          "author": [
+            {
+              "fullName": "Millman KJ",
+              "firstName": "K Jarrod",
+              "lastName": "Millman",
+              "authorId": { "type": "ORCID", "value": "0000-0002-5263-5070" },
+              "authorAffiliationDetailsList": {
+                "authorAffiliation": [
+                  {
+                    "affiliation": "Brain Imaging Center, University of California, Berkeley, ..."
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "journalInfo": {
+          "issue": "7825",
+          "volume": "585",
+          "journal": {
+            "title": "Nature",
+            "issn": "0028-0836",
+            "essn": "1476-4687"
+          }
+        },
+        "pubYear": "2020",
+        "pageInfo": "357-362",
+        "fullTextUrlList": {
+          "fullTextUrl": [
+            {
+              "availability": "Open access",
+              "documentStyle": "html",
+              "site": "Europe_PMC",
+              "url": "https://europepmc.org/articles/PMC7759461"
+            },
+            {
+              "availability": "Open access",
+              "documentStyle": "pdf",
+              "site": "Europe_PMC",
+              "url": "https://europepmc.org/articles/PMC7759461?pdf=render"
+            }
+          ]
+        },
+        "isOpenAccess": "Y",
+        "hasPDF": "Y",
+        "hasSuppl": "Y",
+        "citedByCount": 7572,
+        "hasReferences": "Y"
+      }
+    ]
+  }
 }
 ```
 
@@ -173,21 +208,21 @@ primary PDF 接纳。
 
 ## 7. 与 SciRetriever 中性数据的候选映射
 
-| 外部字段 | 外部语义 | 候选归属 | 备注 |
-|---|---|---|---|
-| `source` + `id` | Europe PMC 记录定位 | `Provenance.source_record_id` | source 必须保留，`MED:...` 与 `PMC:...` 语义不同 |
-| `pmid`、`pmcid`、`doi` | 稳定标识符 | `LiteratureMetadata.identifiers` | 分别规范化 namespace |
-| `title`、`abstractText`、`language` | 标题、摘要、语言 | `LiteratureMetadata` | abstract 清理 markup 时保持文本忠实 |
-| `authorList.author[]` | 有序署名与逐作者信息 | `Author[]` | 只使用明确嵌套的 ORCID/单位；记录级 authorIdList 不猜对齐 |
-| `journalInfo`、`pageInfo` | venue、卷期页、NLMID/ISSN | `LiteratureMetadata` 的 venue/volume/issue/pages | NLMID/ISSN 仅供 adapter 内部容器辨识/核对，不进入当前文献 identifiers |
-| `pubYear` / `firstPublicationDate` | 年/首次出版日期 | `LiteratureMetadata.publication_year` / `LiteratureMetadata.publication_date` | 不把 index/revision date 当发表日期 |
-| `pubTypeList` | 文献类型列表 | `document_type` | 需要显式映射和 precedence |
-| `keywordList.keyword[]` | 来源关键词 | `MetadataObservation.declared_keywords` 候选 | 不使用 MeSH 自动代替 |
-| reference `unstructuredInformation` | 参考文献原文 | `reference_texts` | 保持 citedOrder |
-| references/citations 稳定 `source/id` 或 DOI | 有向引用目标 | `ProviderRelationObservation` | 每条边独立；方向规范化 |
-| `citedByCount` / `hitCount` | 引用计数/接口总数 | `cited_by_count` / 不入业务 Model | references hitCount 可辅助 reference_count，但优先明确字段语义 |
-| `fullTextUrl[]` | PDF/HTML/landing locator | `AssetHint[]` | 每个 URL 分开，保留 style、availability |
-| 调用时间与输入 | 观察上下文 | `Provenance` | cursor/page 不持久化 |
+| 外部字段                                     | 外部语义                  | 候选归属                                                                      | 备注                                                                  |
+| -------------------------------------------- | ------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `source` + `id`                              | Europe PMC 记录定位       | `Provenance.source_record_id`                                                 | source 必须保留，`MED:...` 与 `PMC:...` 语义不同                      |
+| `pmid`、`pmcid`、`doi`                       | 稳定标识符                | `LiteratureMetadata.identifiers`                                              | 分别规范化 namespace                                                  |
+| `title`、`abstractText`、`language`          | 标题、摘要、语言          | `LiteratureMetadata`                                                          | abstract 清理 markup 时保持文本忠实                                   |
+| `authorList.author[]`                        | 有序署名与逐作者信息      | `Author[]`                                                                    | 只使用明确嵌套的 ORCID/单位；记录级 authorIdList 不猜对齐             |
+| `journalInfo`、`pageInfo`                    | venue、卷期页、NLMID/ISSN | `LiteratureMetadata` 的 venue/volume/issue/pages                              | NLMID/ISSN 仅供 adapter 内部容器辨识/核对，不进入当前文献 identifiers |
+| `pubYear` / `firstPublicationDate`           | 年/首次出版日期           | `LiteratureMetadata.publication_year` / `LiteratureMetadata.publication_date` | 不把 index/revision date 当发表日期                                   |
+| `pubTypeList`                                | 文献类型列表              | `document_type`                                                               | 需要显式映射和 precedence                                             |
+| `keywordList.keyword[]`                      | 来源关键词                | `MetadataObservation.declared_keywords` 候选                                  | 不使用 MeSH 自动代替                                                  |
+| reference `unstructuredInformation`          | 参考文献原文              | `reference_texts`                                                             | 保持 citedOrder                                                       |
+| references/citations 稳定 `source/id` 或 DOI | 有向引用目标              | `ProviderRelationObservation`                                                 | 每条边独立；方向规范化                                                |
+| `citedByCount` / `hitCount`                  | 引用计数/接口总数         | `cited_by_count` / 不入业务 Model                                             | references hitCount 可辅助 reference_count，但优先明确字段语义        |
+| `fullTextUrl[]`                              | PDF/HTML/landing locator  | `AssetHint[]`                                                                 | 每个 URL 分开，保留 style、availability                               |
+| 调用时间与输入                               | 观察上下文                | `Provenance`                                                                  | cursor/page 不持久化                                                  |
 
 ## 8. 不进入业务 Model 的字段
 

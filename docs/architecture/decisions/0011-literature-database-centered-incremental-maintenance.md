@@ -1,6 +1,9 @@
 # ADR 0011：以文献数据库为中心的增量维护
 
-- Status: Accepted
+类型：决策（ADR）
+负责：以文献数据库为中心的增量维护
+状态：Accepted；部分被取代：产品目的为科研 Agent 知识供给，见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；长期保留的结果改为原始解析、校订稿、结构注释、元数据字段状态与标签词表，见 [ADR 0037](0037-literature-archive-and-proofread-text.md)
+
 - Date: 2026-08-08
 - Last amended: 2026-09-27
 - Supersedes: none
@@ -8,10 +11,6 @@
 - Amended by: [ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；[ADR 0028](0028-query-and-expansion-separation.md)（查询与显式扩充分离）；[ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
 - Amends: [ADR 0001](0001-sciretriever-scope-and-boundary.md)、[ADR 0002](0002-literature-identity-and-incremental-processing.md)、[ADR 0004](0004-requirement-led-literature-collection.md)
 - Related: [产品需求](../requirements.md)、[架构原则](../principles.md)、[设计文档](../design.md)、[技术文档](../technical.md)、[任务与协作控制：数据库补全与阶段协调](../technical/02-task-coordination.md#4-数据库补全与阶段协调)、[文献与材料：文献身份、元数据与引用](../technical/03-literature-materials.md#2-文献身份元数据与引用)、[版本化材料与知识存储：Catalog 与文件组织](../technical/07-versioned-storage.md#2-catalog-与文件组织)
-
-> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md) 修订本 ADR：长期保留的结果改为原始解析、校订稿、结构注释、元数据字段状态与标签词表。直接冲突的正文已按 ADR 0037 收口。
-
-> 2026-09-25 修订：产品目的明确为科研 Agent 知识供给；统一逻辑文献库与 current facts 不变量保留。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
 
 ## 背景
 

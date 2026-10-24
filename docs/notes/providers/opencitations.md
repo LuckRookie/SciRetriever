@@ -1,5 +1,9 @@
 # OpenCitations
 
+类型：外部事实
+负责：OpenCitations
+状态：现行
+
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
 - 当前选择键：Metadata `opencitations`；只提供 lookup/reference，不参加主题搜索
@@ -39,14 +43,14 @@ token 不得进入 URL、日志、异常、provenance、fixture 或 Notes。当�
 
 ### 3.1 operations 与方向
 
-| Endpoint | 外部语义 | SciRetriever 方向 |
-|---|---|---|
-| `/citation/{oci}` | 按 Open Citation Identifier 取一条 citation | 读取响应中的显式 `citing -> cited` |
-| `/references/{id}` | 给定实体的 outgoing references | `current -> returned cited` |
-| `/citations/{id}` | 指向给定实体的 incoming citations | `returned citing -> current` |
-| `/reference-count/{id}` | 给定实体的 outgoing 数量 | 计数，不是边 |
-| `/citation-count/{id}` | 给定实体的 incoming 数量 | `cited_by_count` 候选，不是边 |
-| `/venue-citation-count/{id}` | ISSN 对应 venue 中实体的 incoming 总量 | venue 聚合分析，不进入当前 Literature observation |
+| Endpoint                     | 外部语义                                    | SciRetriever 方向                                 |
+| ---------------------------- | ------------------------------------------- | ------------------------------------------------- |
+| `/citation/{oci}`            | 按 Open Citation Identifier 取一条 citation | 读取响应中的显式 `citing -> cited`                |
+| `/references/{id}`           | 给定实体的 outgoing references              | `current -> returned cited`                       |
+| `/citations/{id}`            | 指向给定实体的 incoming citations           | `returned citing -> current`                      |
+| `/reference-count/{id}`      | 给定实体的 outgoing 数量                    | 计数，不是边                                      |
+| `/citation-count/{id}`       | 给定实体的 incoming 数量                    | `cited_by_count` 候选，不是边                     |
+| `/venue-citation-count/{id}` | ISSN 对应 venue 中实体的 incoming 总量      | venue 聚合分析，不进入当前 Literature observation |
 
 当前文档给 citation/reference operations 列出的 bibliographic PID 包括 DOI、PMID、OMID；venue count 使用 ISSN。输入和响应中的 namespace 必须显式解析，不能仅按冒号或 URL 猜类型。
 
@@ -113,60 +117,64 @@ Meta v1 不返回 abstract、author affiliation/ROR、language、keywords、lice
 2026-08-07 匿名 Index references 请求的首条精简形状：
 
 ```json
-[{
-  "oci": "06120343876-061901512048",
-  "citing": "omid:br/06120343876 doi:10.1038/s41586-020-2649-2 openalex:W3099878876 pmid:32939066",
-  "cited": "omid:br/061901512048 doi:10.1109/mcse.2007.51 openalex:W2035776949",
-  "creation": "2020-09-16",
-  "timespan": "P13Y",
-  "journal_sc": "no",
-  "author_sc": "no"
-}]
+[
+  {
+    "oci": "06120343876-061901512048",
+    "citing": "omid:br/06120343876 doi:10.1038/s41586-020-2649-2 openalex:W3099878876 pmid:32939066",
+    "cited": "omid:br/061901512048 doi:10.1109/mcse.2007.51 openalex:W2035776949",
+    "creation": "2020-09-16",
+    "timespan": "P13Y",
+    "journal_sc": "no",
+    "author_sc": "no"
+  }
+]
 ```
 
 计数响应的形状为字符串值，不应假设 JSON number：
 
 ```json
-[{"count": "37"}]
+[{ "count": "37" }]
 ```
 
 2026-08-07 匿名 Meta metadata 请求的完整小型 shape：
 
 ```json
-[{
-  "id": "doi:10.1007/978-1-4020-9632-7 isbn:9781402096327 openalex:W4249829199 omid:br/0612058700",
-  "title": "Adaptive Environmental Management",
-  "author": "",
-  "pub_date": "2009",
-  "issue": "",
-  "volume": "",
-  "venue": "",
-  "type": "book",
-  "page": "",
-  "publisher": "Springer Science And Business Media Llc [crossref:297 omid:ra/0610116006]",
-  "editor": "Allan, Catherine [orcid:0000-0003-2098-4759 omid:ra/069012996]; Stankey, George H. [omid:ra/061808486861]"
-}]
+[
+  {
+    "id": "doi:10.1007/978-1-4020-9632-7 isbn:9781402096327 openalex:W4249829199 omid:br/0612058700",
+    "title": "Adaptive Environmental Management",
+    "author": "",
+    "pub_date": "2009",
+    "issue": "",
+    "volume": "",
+    "venue": "",
+    "type": "book",
+    "page": "",
+    "publisher": "Springer Science And Business Media Llc [crossref:297 omid:ra/0610116006]",
+    "editor": "Allan, Catherine [orcid:0000-0003-2098-4759 omid:ra/069012996]; Stankey, George H. [omid:ra/061808486861]"
+  }
+]
 ```
 
 空字符串是外部缺失表示，必须规范化为缺失，不能当成有效 metadata。
 
 ## 6. 与 SciRetriever 中性数据的候选映射
 
-| 外部字段 | 外部语义 | 候选归属 | 约束 |
-|---|---|---|---|
-| Index `citing` / `cited` | 一条 citation 两端的多 PID 集合 | `ProviderRelationObservation` | 一响应元素一条边；namespace 显式解析；方向不反转 |
-| Index `oci` | citation identity | provenance/source record 候选 | 不进入 Literature identifiers |
-| `citation-count.count` | incoming citation count | `MetadataObservation.cited_by_count` | 字符串转非负整数；不反推边 |
-| `reference-count.count` | outgoing reference count | `MetadataObservation.reference_count` | 不与 reference text 数量强制相等 |
-| Meta `id` | entity 多 PID 字符串 | `LiteratureMetadata.identifiers` | 仅接受项目支持且成功解析的 namespace |
-| Meta `title` | 标题 | `LiteratureMetadata.title` | 空串视缺失 |
-| Meta `author` | 有序作者字符串 | `LiteratureMetadata.authors` | 显式 parser；仅明确 ORCID；不建全局作者 |
-| Meta `pub_date` | 来源出版日期 | `LiteratureMetadata.publication_date` / `LiteratureMetadata.publication_year` | 只按实际精度解析，不伪造月日 |
-| Meta `type` | 来源文献类型 | `LiteratureMetadata.document_type` | 显式 vocabulary 映射 |
-| Meta `venue` | venue 名称与 PID | 名称候选映射 `LiteratureMetadata.venue` | 方括号内 ISSN/OpenAlex/OMID 不进入当前业务 Model，仅供 adapter 内部核对 |
-| Meta `publisher` | publisher 名称及来源实体标识 | `LiteratureMetadata.publisher` | 只保留名称；聚合实体 ID 不进入业务 Model |
-| Meta volume/issue/page | 卷期页 | `LiteratureMetadata` 对应字段 | page 保留外部范围；不从页数推断 |
-| 实际请求时间/数据版本 | observation 上下文 | provenance | `creation` 不是 observed_at |
+| 外部字段                 | 外部语义                        | 候选归属                                                                      | 约束                                                                    |
+| ------------------------ | ------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Index `citing` / `cited` | 一条 citation 两端的多 PID 集合 | `ProviderRelationObservation`                                                 | 一响应元素一条边；namespace 显式解析；方向不反转                        |
+| Index `oci`              | citation identity               | provenance/source record 候选                                                 | 不进入 Literature identifiers                                           |
+| `citation-count.count`   | incoming citation count         | `MetadataObservation.cited_by_count`                                          | 字符串转非负整数；不反推边                                              |
+| `reference-count.count`  | outgoing reference count        | `MetadataObservation.reference_count`                                         | 不与 reference text 数量强制相等                                        |
+| Meta `id`                | entity 多 PID 字符串            | `LiteratureMetadata.identifiers`                                              | 仅接受项目支持且成功解析的 namespace                                    |
+| Meta `title`             | 标题                            | `LiteratureMetadata.title`                                                    | 空串视缺失                                                              |
+| Meta `author`            | 有序作者字符串                  | `LiteratureMetadata.authors`                                                  | 显式 parser；仅明确 ORCID；不建全局作者                                 |
+| Meta `pub_date`          | 来源出版日期                    | `LiteratureMetadata.publication_date` / `LiteratureMetadata.publication_year` | 只按实际精度解析，不伪造月日                                            |
+| Meta `type`              | 来源文献类型                    | `LiteratureMetadata.document_type`                                            | 显式 vocabulary 映射                                                    |
+| Meta `venue`             | venue 名称与 PID                | 名称候选映射 `LiteratureMetadata.venue`                                       | 方括号内 ISSN/OpenAlex/OMID 不进入当前业务 Model，仅供 adapter 内部核对 |
+| Meta `publisher`         | publisher 名称及来源实体标识    | `LiteratureMetadata.publisher`                                                | 只保留名称；聚合实体 ID 不进入业务 Model                                |
+| Meta volume/issue/page   | 卷期页                          | `LiteratureMetadata` 对应字段                                                 | page 保留外部范围；不从页数推断                                         |
+| 实际请求时间/数据版本    | observation 上下文              | provenance                                                                    | `creation` 不是 observed_at                                             |
 
 OpenCitations 可以分别作为 citation source 和 metadata source 候选；接入一种能力不能暗中写另一种事实。尤其 citation adapter 不应顺带把 Meta 字段写入 LiteratureMetadata。
 

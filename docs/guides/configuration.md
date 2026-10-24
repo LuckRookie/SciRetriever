@@ -1,5 +1,9 @@
 # SciRetriever 配置手册
 
+类型：指南
+负责：配置项与默认值
+状态：现行
+
 SciRetriever 把配置分成两条互不替代的边界：
 
 > 本指南同时记录目标配置合同和当前实现状态。当前 `config status` 是本地 readiness；`config test` 已通过统一 `ConfigurationProbeSession` 执行有界、只读 Probe，并区分真实网络/Browser 动作、不可用和未授权结果。Download 没有安全通用 probe，Browser Site 在缺少显式 adapter/seam 或 verified runtime 时稳定返回 unavailable。非 TTY stdout/stderr 语义以源码和直接测试为准；真实 Provider、站点和 Browser runtime 仍需单独授权，不能把离线 fixture 当作现场证据。目标与现状的统一说明见 [TypeScript 架构锚定基线](../architecture/typescript-baseline.md) 与 [ADR 0025](../architecture/decisions/0025-typescript-entry-and-runtime-contract.md)。
@@ -76,7 +80,7 @@ Parser 或 Analysis 参数。`config status` 仍可据此输出本地 capability
 任意原始异常文本、配置值、路径参数或 secret 仍统一压成 `configuration operation failed`。文献业务
 命令继续使用泛化配置错误，不把配置中心的诊断细节扩散到其它输出合同。
 
-## 2. 普通配置的十组合同
+## 2. 普通配置字段
 
 普通配置只接受以下十个顶层组；各组都可省略，并由严格模型补成空组或字段默认值：
 
@@ -947,9 +951,9 @@ enabled = false
 两类 key 都不能写进普通配置。启用 CORE 只注册
 授权 API Source，不保证任意文献都有 CORE `work:`/`output:` 身份或具体下载 entitlement。
 
-## 校订与用时核对
+## 校订模型与调用保护
 
-`[proofread]` 配置单一解析初稿的 DSH 看图矫正，以及算子输出值的视觉核对。`model` 未设置时使用 `analyze.model`，必须具有结构化输出、图片及工具能力；未配置矫正模型时版本保持 incomplete，未配置用时核对模型时对应值标为 uncertain。
+`[proofread]` 配置单一解析初稿的 DSH 看图矫正。`model` 未设置时使用 `analyze.model`，必须具有结构化输出、图片及工具能力；未配置矫正模型时版本保持 incomplete。算子输出按固定校订文字做确定性核对，不使用额外视觉核对模型；六态见[知识加工指南](knowledge-processors.md#逐值文字核对)。
 
 ```toml
 [proofread]
@@ -961,4 +965,19 @@ max_calls_per_document = 64
 
 截图复用安装包内的 PDF.js 和受控浏览器；未安装可验证的浏览器运行时会报告截图不可用。截图使用隔离上下文，不复用用户 Cookie，不允许页面发起外部请求。
 
-部署解析配置 `[parsing].archive_profile` 取 `pipeline` 或 `vlm-engine`，默认 `vlm-engine`。解析默认只运行这一种；显式 profiles 可查看另一种，但不参与校订。Web 建档设置只读显示部署 profile。`[proofread].value_check_model` 未设置时沿用校订模型，再沿用分析模型；`max_value_check_calls` 是每个算子结果的视觉核对调用上限，默认 64，独立于单篇校订预算。
+部署解析配置 `[parsing].archive_profile` 取 `pipeline` 或 `vlm-engine`，默认 `vlm-engine`。解析默认只运行这一种；显式 profiles 可查看另一种，但不参与校订。Web 建档设置只读显示部署 profile。
+
+## 标签模型与数量
+
+标签的模型选择与数量字段如下：
+
+```toml
+[tags]
+max_per_literature = 6
+candidate_k = 8
+backfill_batch = 8
+# 以下引用已登记的 models，未指定时沿用 analyze.model。
+# model = "provider/tagger"
+# consolidation_model = "provider/curator"
+# backfill_model = "provider/tagger"
+```

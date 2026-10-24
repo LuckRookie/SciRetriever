@@ -1,5 +1,9 @@
 # Provider 接入开发手册
 
+类型：开发
+负责：Provider 名称与接入责任（接入步骤）
+状态：现行
+
 当前 TypeScript 代码按 `apps/server/src/providers/<provider>/` 组织：服务配置和协议适配就近维护，中央 registry 只汇总，业务事实所有权保持不变。先阅读[供应商治理](provider-governance.md)和[源码目录导航](../../apps/server/src/providers/README.md)；本手册下述旧 Profile 准入表用于维护外部证据，不要求为每家出版社复制 Browser 执行器，当前通用 Browser 行为以 ADR 0023/0030 与 PDF 获取指南为准。
 
 新增或实质修改 Metadata Provider、Acquisition route 或 PublisherAccessProfile 前，维护者应填写一份准入记录，并由责任文档明确它是当前实现、已批准目标还是未批准提案。Publisher/Access Provider 还必须进入统一的 [Profile 准入与验证矩阵](../notes/providers/publisher-access-matrix.md)。Provider 分类、目标矩阵、证据路由与凭据边界必须遵守 [ADR 0014](../architecture/decisions/0014-capability-scoped-providers-and-local-credentials.md)，访问设计必须遵守 [ADR 0012](../architecture/decisions/0012-process-local-provider-access-scheduling.md)、[ADR 0015](../architecture/decisions/0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0016](../architecture/decisions/0016-cloakbrowser-fixed-identity-runtime.md)与 [ADR 0017](../architecture/decisions/0017-shared-agents-and-controlled-browser-agent.md)，精确配置合同见 [统一产品接口：共享支撑：配置与凭据](../architecture/technical/01-product-interface.md#5-共享支撑配置与凭据)。当前具体 provider client 由调用方注入；配置选择键、通用 Protocol、registry 或测试 fake 都不能单独证明生产接入。

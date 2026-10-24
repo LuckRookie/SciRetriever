@@ -1,5 +1,9 @@
 # 07 · 版本化材料与知识存储技术设计
 
+类型：规格
+负责：不可变材料、版本依赖与 catalog 持久化
+状态：现行
+
 [设计总览](../design.md) · [八模块技术导航](../technical.md)
 
 本模块对应设计中的 **⑦ 版本化材料与知识存储**，保存业务模块确认的结构化事实和不可变字节，并提供一致读取、发布、完整性校验与受控恢复。
@@ -17,7 +21,7 @@ Catalog v6 已为单篇知识产物增加独立表与精确依赖；Catalog v7 �
 - [3. 事务、发布、并发与恢复](#3-事务发布并发与恢复)
 - [4. 知识版本、依赖与回收](#4-知识版本依赖与回收)
 - [5. 存储完整性验证](#5-存储完整性验证)
-- [6. ADR 0037 新增存储](#6-adr-0037-新增存储)
+- [6. ADR 0037 新增存储](#6-建档与校订存储)
 
 ## 1. 模块边界与连接
 
@@ -185,7 +189,6 @@ Catalog 只为会改变未来自动目标选择的稳定缺失保存一张最小
 
 文献库性能路径（Owner 2026-10-23）：`literature_intake` 仅物化最早关联观测时间这一可重建的排序键，事务触发器维护，UTC 规范化与未物化时的 `min(julianday(observed_at))` 一致，无观测为 null；不产生独立业务身份或人工编辑入口。`library_state_revision` 仅作为内存状态缓存的失效序号，六态和缺失步骤仍由 Literature 在读取时推导，不保存第二份就绪事实。状态依赖、失效和取消检查点的当前实现见源码 [SQLite 说明](../../../apps/server/src/storage/sqlite/README.md)。已有 catalog 的同版追加、回填与切换必须显式授权并在离线副本核对，不在启动时自动执行。
 
-
 `LiteratureReferencePage` 在同一 snapshot 中读取指定端点的权威 Reference、相关 Literature current facts 和每条边的 support count；`ReferenceDetail` 在同一 snapshot 中读取 Reference 两端和全部当前 support。正向和反向列表都查询 `literature_references`，不能物化 cited-by 副本。关系页面的固定排序、total 和 cursor 位置必须来自同一读取视图；后续页面可以看到后续提交的 current facts，但单页内部不能混合提交前后状态。
 
 #### 2.3.7 不持久化的核心查询投影与临时现场
@@ -277,8 +280,6 @@ Storage 还实现 Literature 拥有的 artifact read Port。输入只接受已�
 来源 observation、统一元数据与原始 PDF 优先长期保存。原始解析、校订稿、结构和算子结果按引用关系保护，不能因为可重建而丢失有效证据。
 
 原始解析有不可变版本和按资产/profile 的当前指针。换当前指针不覆盖旧字节；旧版本仍被校订稿引用时禁止回收。
-
-
 
 ### 2.5 SQLite 连接策略
 
@@ -389,7 +390,7 @@ v1 文献事实与 v2 job/attempt/event/candidate/receipt 运行事实使用显�
 
 ### 4.1 当前 schema 与显式转换
 
-`storage/sqlite/schema.ts` 是唯一结构定义，内部标识 11 与精确指纹共同验证。启动不自动升级旧库。`initializeCatalogSchema` 仅创建空目标；未知/旧结构拒绝。一次性转换先固定 SQLite 一致性备份，再写入新目录和当前 schema，并复核完整性、外键、数量、稳定 ID、元数据 hash 与原始资产字节。转换不恢复 schema-v* 迁移阶梯。
+`storage/sqlite/schema.ts` 是唯一结构定义，内部标识 11 与精确指纹共同验证。启动不自动升级旧库。`initializeCatalogSchema` 仅创建空目标；未知/旧结构拒绝。一次性转换先固定 SQLite 一致性备份，再写入新目录和当前 schema，并复核完整性、外键、数量、稳定 ID、元数据 hash 与原始资产字节。转换不恢复 schema-v\* 迁移阶梯。
 
 Owner 已授权在转换副本删除旧总结、旧知识、旧算子结果和 markdown-utf8-v1 文档；VLM Markdown 经验证登记为原始解析，共享 PDF/图片不能删除。未知事实、外部回执引用等超出删除范围的依赖必须拒绝并报告。切换仍须单独确认，并先处理备份后的源库增量。
 
@@ -413,24 +414,23 @@ Literature 拥有元数据与引用；Parsing 拥有原始结果；Proofread 拥
 - 外部候选回执与结果的证据版本保护；
 - 一次性副本转换的明确删除范围、保守身份索引、源库不变与目标覆盖拒绝。
 
-## 6. ADR 0037 新增存储
+## 6. 建档与校订存储
 
 以下为唯一当前 schema 中的主要表，普通打开不执行转换。
 
-| 子系统 | 主要表 | 不可变产物 | 保护规则 |
-| --- | --- | --- | --- |
-| 原始解析 | `raw_parses`、`raw_parse_resources`、`raw_parse_current` | 区块列表 JSON、原始 v2 字节、Markdown、图片 | 被校订版本引用时不能回收 |
-| 校订 | `proofread_versions`、`proofread_current`、`proofread_correction_cache`、`proofread_manual_decisions` | 区块列表、Markdown、资源闭包 | 被文档版本引用时不能回收；人工决定锁定 |
-| 结构 | `structure_annotations` | 结构注释 JSON | 被内容版本引用时不能回收 |
-| 元数据 | `literature_metadata` 列变更、`literature_metadata_field_states` | — | 锁定字段不被自动流程改写 |
-| 标签 | `tags`、`tag_aliases`、`vocabulary_state`、`vocabulary_changes`、`literature_tag_assignments`、`literature_tag_items`、`tag_search` | 词表导出 | 词表写入串行；变更带撤销数据 |
-| 建档 | 建档状态与失败项、版本事件 | — | 事件幂等消费 |
-| 算子 | `snapshots`、`snapshot_members`、`processor_result_freshness` | 结果沿用现有不可变发布 | 快照不可变 |
+| 子系统   | 主要表                                                                                                                              | 不可变产物                                  | 保护规则                               |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | -------------------------------------- |
+| 原始解析 | `raw_parses`、`raw_parse_resources`、`raw_parse_current`                                                                            | 区块列表 JSON、原始 v2 字节、Markdown、图片 | 被校订版本引用时不能回收               |
+| 校订     | `proofread_versions`、`proofread_current`、`proofread_correction_cache`、`proofread_manual_decisions`                               | 区块列表、Markdown、资源闭包                | 被文档版本引用时不能回收；人工决定锁定 |
+| 结构     | `structure_annotations`                                                                                                             | 结构注释 JSON                               | 被内容版本引用时不能回收               |
+| 元数据   | `literature_metadata` 列变更、`literature_metadata_field_states`                                                                    | —                                           | 锁定字段不被自动流程改写               |
+| 标签     | `tags`、`tag_aliases`、`vocabulary_state`、`vocabulary_changes`、`literature_tag_assignments`、`literature_tag_items`、`tag_search` | 词表导出                                    | 词表写入串行；变更带撤销数据           |
+| 建档     | 建档状态与失败项、版本事件                                                                                                          | —                                           | 事件幂等消费                           |
+| 算子     | `snapshots`、`snapshot_members`、`processor_result_freshness`                                                                       | 结果沿用现有不可变发布                      | 快照不可变                             |
 
-- 真实库迁移与重建，只能在 Owner 授权（计划 GR）后先在隔离副本上执行。
-- 四类旧数据在 GB 确认后删除，VLM Markdown 作为原始解析保留。
+真实库转换按[切换指南](../../guides/cutover.md)独立授权并在副本核对；不从本文推出数据删除或模型重建许可。
 
-## 7. 运行审查存储（ADR 0032 第 7 节）
+## 7. 运行审查存储
 
 Application 拥有操作审计与过程投影。`operation_records` 保存入口会话、操作名及允许的 ID/revision，不存凭据或全文；`job_origins` 固定发起身份。`agent_sessions`/`agent_session_events` 保存脱敏摘要、工具参数/结果、页码区域、提交理由及用量；每事件有界，每会话最多 2 MiB（含计量开销），超限标注并继续累计用量。不保存图片字节、完整上下文或隐藏推理。普通关闭结算会话；进程异常退出的未结束会话不会被当作已完成。
 

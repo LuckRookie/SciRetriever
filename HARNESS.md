@@ -1,16 +1,20 @@
 # Agent 开发与质量 Harness
 
+类型：开发
+负责：测试层级、并发与 Full
+状态：现行
+
 > 本文件定义 SciRetriever 的稳定工程工作流、质量基线、机械门禁、Git 纪律和通用完成标准。产品边界、架构约束、项目入口和真相源见 [AGENTS.md](AGENTS.md)。
 
 ## 1. 职责、权威与规则强度
 
 本文件回答“如何可靠地完成和验证修改”，不定义产品需求、业务数据含义或架构。项目级规则必须能够追溯到 requirements、Accepted ADR、design 或 technical；机械门禁不能替代产品、架构和安全语义审查。
 
-| 强度 | 含义 |
-| --- | --- |
-| POLICY | 由实现者自检和语义审查保证，不能仅凭命令判定 |
-| LOCAL GATE | 可由本地命令机械检查 |
-| CI GATE | 由 CI 执行并阻断失败变更 |
+| 强度       | 含义                                             |
+| ---------- | ------------------------------------------------ |
+| POLICY     | 由实现者自检和语义审查保证，不能仅凭命令判定     |
+| LOCAL GATE | 可由本地命令机械检查                             |
+| CI GATE    | 由 CI 执行并阻断失败变更                         |
 | HUMAN GATE | 需要授权人员对边界、风险或不可逆影响作出明确决定 |
 
 机械门禁只实现项目 owner 已确认且工具能够稳定判断的规则：
@@ -87,51 +91,7 @@
 
 ## 5. 验证路线与机械门禁
 
-2026-09-10 项目 owner 决定：后续开发以 TypeScript 为主，默认 Quick/Full 分别指 `pnpm quick`/`pnpm full`；不再自动运行 Python Quick、Full 或全量 unittest。5.1–5.3 保留 Python 历史工具说明，仅在用户明确要求时使用；CI 已转向 5.4 的 TS 路线。
-
-归档快照中的 `scripts/harness.py` 曾为 Ruff、`compileall` 和 Pyright 生成同一份排序后的 Python 文件清单。当前根目录没有活动 Python 源码，归档快照不进入 TS 验收：
-
-- `archive/2026-09-12-typescript-python-retirement/src/sciretriever/**/*.py`；
-- `archive/2026-09-12-typescript-python-retirement/tests/**/*.py`；
-- `archive/2026-09-12-typescript-python-retirement/scripts/**/*.py`。
-
-归档、虚拟环境、构建目录、缓存、生成物和 vendored code 不进入当前 TS 检查；Python 快照的历史测试发现和 wheel 内容门禁只在明确的历史复核中使用。
-
-### 5.1 历史 Python 相关验证
-
-开发循环先运行与改动直接相关的测试或原生命令，例如：
-
-Python 源码和测试已移入归档快照。需要历史复核时，必须在隔离副本中恢复相应快照和合成 fixture，并明确记录其结果；当前任务不再从根目录运行这些命令。
-
-相关验证用于快速反馈，不能单独证明跨模块或产品级修改已经完成。
-
-### 5.2 历史 Python Quick
-
-历史 Python Quick 的实现仍保存在 `archive/2026-09-12-typescript-python-retirement/scripts/harness.py`，不属于当前根目录的可执行门禁。
-
-Quick 对全部活动 Python 文件执行：
-
-1. Ruff lint；
-2. Ruff format check；
-3. `compileall`。
-
-历史 Python Quick 不执行 Pyright、全量 unittest 或 wheel 构建；后续普通工作分支 push 使用 5.4 的 TS Quick。
-
-### 5.3 历史 Python Full
-
-历史 Python Full 的实现仍保存在上述归档快照，不属于当前根目录的可执行门禁。
-
-Full 执行：
-
-1. Quick 的全部步骤；
-2. Pyright strict；
-3. 全部 unittest，并拒绝零测试；
-4. 从清理后的 staging 构建 wheel；
-5. 历史复核时核对 wheel 中的 Python 模块与归档快照的 `src/sciretriever/` 一致；当前 TS 包不构建 Python wheel。
-
-本节 Python Full 保留用于明确授权的历史维护，不作为后续 TS 代码交付、PR 或 master 的默认验收。
-
-历史 Python 最低运行版本是 3.10，开发基线是 3.12；对应 `.python-version`、`pyproject.toml`、`uv.lock` 和 `pyrightconfig.json` 均在归档快照中。当前 TS 交付不运行这些历史检查，也不调整或弱化其工具内部检查。
+活动代码的验证采用 TypeScript 路线，具体如下。Python 代码与旧 Harness 是历史材料，不参与当前质量门禁；只有用户明确要求时才复核其历史命令。源码树和工具位置见[开发入口](docs/development/typescript-foundation.md)。
 
 ### 5.4 TypeScript 开发验证
 
@@ -151,14 +111,14 @@ TS Full 使用 TypeScript Configuration/Credential owner 和合成临时 home，
 
 ## 6. 测试、验证与语义审查
 
-| 层级 | 内容 | 默认适用范围 |
-| --- | --- | --- |
-| L0 | diff、修改文件诊断、最小复现和相关测试 | 所有改动 |
-| L1 | Quick 机械检查 | 所有代码改动 |
-| L2 | 类型、模块组装、序列化合同或真实依赖的离线冒烟 | 跨模块、配置或合同改动 |
-| L3 | 按影响范围选取集成、构建、安装后验收和关键用户路径；必要时 Full | 涉及相应调用链或需全量覆盖的交付 |
-| L4 | 需求、架构责任、安全边界与最终 diff 的语义审查 | 中高风险改动 |
-| L5 | 授权人员审批 | 产品边界、生产、安全、公开合同和受支持数据迁移 |
+| 层级 | 内容                                                            | 默认适用范围                                   |
+| ---- | --------------------------------------------------------------- | ---------------------------------------------- |
+| L0   | diff、修改文件诊断、最小复现和相关测试                          | 所有改动                                       |
+| L1   | Quick 机械检查                                                  | 所有代码改动                                   |
+| L2   | 类型、模块组装、序列化合同或真实依赖的离线冒烟                  | 跨模块、配置或合同改动                         |
+| L3   | 按影响范围选取集成、构建、安装后验收和关键用户路径；必要时 Full | 涉及相应调用链或需全量覆盖的交付               |
+| L4   | 需求、架构责任、安全边界与最终 diff 的语义审查                  | 中高风险改动                                   |
+| L5   | 授权人员审批                                                    | 产品边界、生产、安全、公开合同和受支持数据迁移 |
 
 验证规则：
 

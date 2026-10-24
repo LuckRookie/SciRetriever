@@ -1,5 +1,9 @@
 # PDF 解析与校订
 
+类型：指南
+负责：原始解析、校订编辑与证据读取操作
+状态：现行
+
 解析处理已经接纳的正文或补充 PDF，要求当前单一 catalog schema（内部标识 11）。先从文献详情取得 Literature ID、Asset ID 和 PDF SHA-256。普通解析命令不转换 catalog；新库与隔离转换见[升级指南](upgrade.md)。
 
 ## 显式解析
@@ -31,7 +35,7 @@ sciretriever document parsing-status --request request.json --json
 
 ## 校订服务
 
-校订读取已经解析的材料。文字层用于找疑点，DSH 通过原图与放大工具矫正抄录；不总结、不润色。每页疑点都处置且扫描页都检查后为 `complete`，存疑保留在区块上、不阻断完成；模型未配置或预算耗尽为 `incomplete`，可以继续；异常中止或非空页面没有对应内容且没有无正文处置则失败。
+校订读取已经解析的材料。文字层用于找疑点，DSH 通过原图与放大工具矫正抄录；不总结、不润色。每页疑点都处置且扫描页都检查后为 `complete`，无法确定的理由保留在处置记录中、不阻断完成；模型未配置或预算耗尽为 `incomplete`，可以继续；异常中止或非空页面没有对应内容且没有无正文处置则失败。
 
 ```bash
 sciretriever proofread build --request request.json --json
@@ -44,7 +48,7 @@ sciretriever proofread revoke --request decision.json --json
 - `build`：`{"asset_id":"…"}`，读取部署 profile 的原始解析；旧 Markdown 登记可以按唯一、顺序一致的文字层页归属复用，不能确定则返回 `proofread-needs-parse`。不会代为解析。
 - `inspect`：按 `offset/limit` 读取初稿、校订区块、疑点、编辑与 `decisions`；按 `page_offset/page_limit` 读取页面状态及页面决定，分别跟随 `next_offset` / `next_page_offset`。每次响应有字节上限。
 - `page`：`{"asset_id":"…","page":0,"region":null}`。返回原 PDF 页面 PNG 与固定资产 hash；这里页码从 0 开始，region 可为 0–1000 归一化区域。只读，不启动模型或解析。
-- `decide`：填写 inspect 的 `proofread_id`、`block_id`、`draft_sha256`、`expected_manual_revision`，以及 `asset_id`、`actor`、`reason`、`action` 和 `text`。action 为 `replace`（text 为修订文字；表格区块须提交完整 HTML table，包含行和单元格，格式不符时不保存决定）、`resolve-suspect`（附 suspect_id 与 disposition）、`clear-uncertainty` 或 `no-body`（附 page）；其余动作 text 为 null。页无区块时使用 inspect.pages 中的页面身份。决定锁定，旧 revision 或已改变的初稿被拒绝。
+- `decide`：填写 inspect 的 `proofread_id`、`block_id`、`draft_sha256`、`expected_manual_revision`，以及 `asset_id`、`actor`、`reason`、`action` 和 `text`。action 为 `replace`（text 为修订文字；表格区块须提交完整 HTML table，包含行和单元格，格式不符时不保存决定）、`resolve-suspect`（附 suspect_id 与 disposition）或 `no-body`（附 page）；其余动作 text 为 null。页无区块时使用 inspect.pages 中的页面身份。决定锁定，旧 revision 或已改变的初稿被拒绝。
 - `revoke`：`{asset_id, decision_id, expected_manual_revision, actor}`；只撤销所选决定，随后显式重新建档应用。重新解析不会自动丢弃人工冲突。
 
 MCP 对应 `proofread_build/inspect/page/decide/revoke`，HTTP 与 CLI 复用同一业务边界。只有显式写操作才会调用矫正模型。校订使用 `[proofread].model`（未指定时沿用分析模型）和 `max_calls_per_document`；必须具备图片与工具能力。调用次数与 token 单独记录，不作为质量分数。
@@ -89,8 +93,7 @@ sciretriever document annotate --request /absolute/annotation-request.json --jso
 
 MCP 的 `document_annotate`、`document_role`、`document_annotation` 和 `document_read` 的 `outline/segments/figures/reference-texts` 操作使用同一业务实现。读取不会触发解析、模型调用或建档。角色与注释保存在全文之外，修改角色不会改写原始 PDF、校订文字或已有证据定位。
 
-
-## 元数据字段与人工校正（ADR 0037 实施中）
+## 元数据字段与人工校正
 
 当前只维护 schema.ts 的一份结构，内部标识为 11。元数据的出版形式 `publication_form` 与文章性质 `article_kind` 是不同的封闭枚举；旧 `document_type` / `document_types` 已移除。CLI 搜索用 `--publication-form` 和 `--article-kind`；JSON 查询用 `publication_forms` 和 `article_kinds`。原始来源类型保留在 observation 的 `source_type` 与 `source_type_mapping_version` 中。
 
@@ -100,6 +103,6 @@ MCP 的 `document_annotate`、`document_role`、`document_annotation` 和 `docum
 
 建档显式处理元数据、结构与标签。Web 的字段编辑使用同一锁定机制。
 
-校订预算耗尽后，重新发起建档/校订会复用已接受的页面提交，再处理剩余疑点；应用编辑后新发现的差异也进入这一步。没有进展或没有足够预算时仍保持未完成，不把缓存命中当作处置完成。存疑范围是当前区块的字符位置，表格以 HTML 内容计；自动替换不会悄悄清除先前的存疑。
+校订预算耗尽后，重新发起建档/校订会复用已接受的页面提交，再处理剩余疑点；应用编辑后新发现的差异也进入这一步。没有进展或没有足够预算时仍保持未完成，不把缓存命中当作处置完成。无法确定的理由保留在处置记录中，不向算子提供另一套存疑标志；人工锁定的修改不能被自动流程覆盖。
 
 表格校订必须提交 HTML 表格结构，保留原有参数、脚注与已登记原表图。阅读器只重建安全的表格结构、跨行/跨列和本地资源占位，不执行原始 HTML 中的脚本或事件。格式检查不是内容准确性证明，仍可打开固定原图核对。

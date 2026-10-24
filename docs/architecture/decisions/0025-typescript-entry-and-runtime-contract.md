@@ -1,13 +1,14 @@
 # ADR 0025：TypeScript 当前架构与统一 Entry 运行合同
 
-- Status: Accepted
+类型：决策（ADR）
+负责：TypeScript 当前架构与统一 Entry 运行合同
+状态：Accepted；产品操作范围被 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md) 扩展：旧的两个目标和单篇内容报告不再涵盖全部知识合同
+
 - Date: 2026-09-12
 - Last amended: 2026-09-26
 - Amends: [ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0018](0018-fixed-user-configuration-home.md)、[ADR 0024](../../archive/decisions/0024-typescript-browser-workbench-migration.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[TypeScript 架构锚定基线](../typescript-baseline.md)、[任务与协作控制：数据库补全与阶段协调](../technical/02-task-coordination.md#4-数据库补全与阶段协调)
 - Amended by: [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)
-
-> 2026-09-25 修订：产品操作和人类协作扩展，旧两个目标/单篇内容报告不能穷尽新知识合同；TS-only、统一操作和安全边界保留。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
 
 ## 背景
 

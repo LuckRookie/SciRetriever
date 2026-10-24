@@ -1,13 +1,14 @@
 # ADR 0026：科研 Agent 知识组件与人类协作边界
 
-- Status: Accepted（产品方向与责任边界；具体 schema、阅读器与交互细节及迁移方案待设计）
+类型：决策（ADR）
+负责：科研 Agent 知识组件与人类协作边界
+状态：Accepted；部分被 [ADR 0037](0037-literature-archive-and-proofread-text.md) 取代：增加页码区域定位与按部分组织的文档；硬校验只保证抄录保真
+
 - Date: 2026-09-25
 - Last amended: 2026-10-15
 - Amended by: [ADR 0027](0027-extraction-capabilities-and-caller-defined-records.md)（新增通用提取能力与调用方记录边界）；[ADR 0028](0028-query-and-expansion-separation.md)（查询与显式扩充分离）；[ADR 0031](0031-dsh-backed-agent-capabilities.md)（受控 DSH 执行基础）；[ADR 0032](0032-library-centered-web-workspace.md)（以文献库为中心的 Web、可选人工直接交互与后续阅读设计）；[ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
 - Amends: ADR 0001、0008、0010、0011、0013、0017、0019、0025；其余数据、身份、外部访问与凭据不变量继续适用
 - Related: [产品需求](../requirements.md)、[设计](../design.md)、[原则](../principles.md)、[技术索引](../technical.md)
-
-> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md)修订本 ADR：增加页码区域定位与按部分组织的文档；硬校验属于抄录保真，不是科研正确性验收。直接冲突的正文已按 ADR 0037 收口。
 
 ## 背景与授权依据
 
@@ -78,7 +79,7 @@ Owner 明确 SciRetriever 是科研 Agent 系统的论文获取与分析组件�
 | ADR 0019 | 外部 Agent 由可选控制面提升为主要程序消费者，增加证据/检索/上下文与多用途分析                               | Entry 唯一产品边界、薄 MCP/Skill、服务端不变量、内部模型运行时隔离                           |
 | ADR 0025 | 产品操作与人类协作责任扩展，新的知识结果不能由旧两目标/五分区合同穷尽                                       | TS-only、配置身份、统一操作语义、受控 Browser、取消与已提交事实保留                          |
 
-表中 ADR 0008、0010 已于 2026-10-20 被 ADR 0037 整体取代并归档。旧 ADR 保留决策背景和兼容格式，直接冲突的现行正文按本表修订；不通过抹掉旧决定来隐藏当前代码仍使用旧合同的事实。逐项适配见[工作流中的 ADR 对照](../knowledge-service-workflows.md#8-旧-adr-怎样适配)。本轮[统一产品接口：共享合同、结构解析与版本兼容](../technical/01-product-interface.md#6-共享合同结构解析与版本兼容)仍是方案，不能从方向确认推断 wire/schema、任务存续或部署已被接受。
+表中 ADR 0008、0010 已于 2026-10-20 被 ADR 0037 整体取代并归档。旧 ADR 保留决策背景和兼容格式，直接冲突的现行正文按本表修订；不通过抹掉旧决定来隐藏当前代码仍使用旧合同的事实。逐项适配见[工作流中的 ADR 对照](../../archive/2026-09-28-typescript-knowledge-architecture-migration/README.md)。本轮[统一产品接口：共享合同、结构解析与版本兼容](../technical/01-product-interface.md#6-共享合同结构解析与版本兼容)仍是方案，不能从方向确认推断 wire/schema、任务存续或部署已被接受。
 
 ## 未决项
 

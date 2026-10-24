@@ -1,5 +1,9 @@
 # Agent 调用与加工任务
 
+类型：指南
+负责：CLI/MCP 调用入口、任务提交与读取边界
+状态：现行
+
 SciRetriever 提供 MCP stdio，以及同语义的 TypeScript 和 CLI 操作。
 从源码构建后启动只读 MCP：
 
@@ -20,8 +24,8 @@ stdout 专用于 MCP JSON-RPC，诊断写 stderr。查询模式不会启动维�
 | `status`、`search_library`、`read_literature` | 本地 readiness、库内查询和详情；缺口不扩库                                                                             |
 | `document_read`                               | default/describe/outline/segments/slice/resources/resource/evidence/material；使用[固定文档读取合同](library-query.md) |
 | `prepare_analysis_inputs`                     | 从明确 Literature ID 固定已有材料和默认文档，返回 InputManifest 与元数据身份快照                                       |
-| `prepare_synthesis`                           | 按现有 SynthesisPreparationRequest 固定集合输入；不调用模型                                                            |
-| `read_knowledge`、`search_context`            | 读取已有单篇/集合知识和检索上下文                                                                                      |
+| `snapshots_query`、`snapshot_create`          | 查询或显式创建固定文献快照；创建需要维护权限                                                                           |
+| `processor_query`、`search_context`           | 读取已有单篇/集合知识和检索上下文                                                                                      |
 | `read_task`、`read_article_identity`          | 读取执行结果引用、失败和已保存的身份判断                                                                               |
 | `submit_processing`                           | 显式加工已有材料，返回持久任务 ID；使用工具声明的封闭请求 schema                                                       |
 | `acquire_pdf`                                 | 明确 Literature ID 的 PDF 获取，复用 direct → publisher-api → general-api → public-web → browser 五层流程              |
@@ -33,14 +37,14 @@ stdout 专用于 MCP JSON-RPC，诊断写 stderr。查询模式不会启动维�
 响应包含 `protocol_version:1` 和 `result`；MCP 的 `isError` 表示操作调用失败。任务 accepted/queued
 不是 PDF 或知识产物完成，须读取任务目标及结果引用。所有异常只返回稳定 code，不回显原始异常或请求。
 
-推荐顺序：查询/发现 → 明确获取 PDF → 解析 → 读取固定文档/准备 InputManifest → 分析或身份核验 → 读取产物。
+推荐顺序：查询/发现 → 明确获取 PDF → 显式原始解析 → 显式建档 → 算子加工 → 读取固定结果。各阶段分别发起；外部提取和身份核验按自己的明确输入调用。
 每一步都可以独立使用；解析、分析、身份核验不会为了补输入而暗中下载。
 
 Browser 获取在一篇文章内保留模型工具历史、人工指导和真实下载反馈。模型返回动作或文本不等于取得 PDF；调用方仍以 `read_task` 的文件验收、发布结果和失败信息判断完成。内置模型历史不是独立公开调用合同，也不跨进程恢复；外部 Agent 可按下文显式连接持有该会话的 Web runtime，使用受控 Browser 协作工具。知识分析通过 DSH 持续阅读固定校订稿与图片、回查和提交有证据的结果；不因此获得 Browser 探索权限。
 
 ## 三端能力覆盖与结构化入口
 
-目标是 CLI 与 MCP 分别覆盖 Web 的业务能力，见 [ADR 0033](../architecture/decisions/0033-machine-interfaces-cover-web-capabilities.md)。当前常规业务、材料传输、配置和活会话均有机器入口；2026-10-15 的接口适配范围与验收见[历史能力矩阵](../archive/2026-10-15-interface-capability-parity/capability-matrix.md)。纯 UI 偏好不做机器接口，未实现的自动提取执行器也不在覆盖声明内。
+目标是 CLI 与 MCP 分别覆盖 Web 的业务能力，见 [ADR 0033](../architecture/decisions/0033-machine-interfaces-cover-web-capabilities.md)。当前常规业务、材料传输、配置和活会话均有机器入口；2026-10-15 的接口适配范围与验收见[历史能力矩阵](../archive/2026-10-15-interface-capability-parity/capability-matrix.md)。纯 UI 偏好不做机器接口。
 
 新增 CLI 命令使用 `--request /absolute/path/request.json` 或 `--request -` 从 stdin 读取严格 JSON，支持 `--json`。结果封套为 `{protocol_version:1,result}`；空查询不会启动加工。原有命令和工具格式继续支持。
 
@@ -54,8 +58,6 @@ Browser 获取在一篇文章内保留模型工具历史、人工指导和真实
 | `literature bibliography`                                                               | `export_bibliography`                                                                                                                | `{literature_ids,format}`，最多 100 个 ID；返回文本、字节数与 hash                                                               |
 | `import pdf ID SOURCE`                                                                  | `begin_pdf_upload/append_pdf_upload/commit_pdf_upload/discard_pdf_upload`                                                            | PDF 字节显式接纳；MCP 分块上传，提交后走同一验收 owner                                                                           |
 | `analysis prepare`                                                                      | `prepare_analysis_inputs`                                                                                                            | `{literature_ids:[...]}`，固定已有材料与身份元数据快照                                                                           |
-| `knowledge read/list/default`                                                           | `read_knowledge`、`list_knowledge`、`default_knowledge`                                                                              | ID、文献/limit，或文献/purpose/question；缺默认结果返回 null                                                                     |
-| `synthesis prepare/read/source/list`                                                    | `prepare_synthesis`、`read_knowledge(kind=synthesis)`、`read_synthesis_source`、`list_syntheses`                                     | 固定输入、产物 ID、来源状态，或 manifest_sha256/limit                                                                            |
 | `context search/knowledge`                                                              | `search_context`                                                                                                                     | MaterialContextRequest / KnowledgeContextRequest                                                                                 |
 | `jobs list/inspect`                                                                     | `list_tasks`、`inspect_task`                                                                                                         | 列表支持 limit/cursor/status_group；详情提供任务结果、活动、策略、预算和干预；均为只读                                           |
 | `jobs create-request`                                                                   | `create_task`                                                                                                                        | Web 任务请求：`{kind:"processing",request:...}` 或 `{kind:"acquire-pdf",idempotency_key,selector,policy?}`；只保存，随后显式运行 |
@@ -175,8 +177,8 @@ CLI submit 只保存任务；resume/retry 调整为可执行，随后显式 run�
         "literature_id": "返回的 Literature UUID",
         "asset_id": "返回的主 PDF UUID",
         "asset_sha256": "返回的 SHA-256",
-        "mode": "reparse",
-        "expected_default_revision": null
+        "profiles": ["vlm-engine"],
+        "force": false
       }
     }
   ]
@@ -184,13 +186,11 @@ CLI submit 只保存任务；resume/retry 调整为可执行，随后显式 run�
 ```
 
 以上占位值必须替换为真实读取结果。同一请求最多 100 项、1 MiB；固定输入解析/总结/综合不要求业务预算；Browser、发现及检索仍执行各自的范围与预算合同。
-支持 `parse-documents`、`assess-article-identity`、`analyze`、`analyze-long`、`synthesize`，
-分别复用 ParseDocumentRequest、ArticleIdentityRequest、KnowledgeAnalysisRequest、
-KnowledgeLongAnalysisRequest 和 KnowledgeSynthesisRequest。
+当前操作包括 `parse-documents`、`assess-article-identity`、`build-archive` 和 `run-processor`。常规算子提交优先使用[处理器请求](knowledge-processors.md#提交运行和恢复)，由服务端固定 invocation；建档见[文献建档](literature-archive.md)。
 operations 是独立固定目标，不在同一请求内引用尚未产生的结果。前序结果出来后再提交后续请求。
 
 TypeScript 使用 `Application.processingTasks.submit/run/read/control`；只读状态通过
-`QueryApplication.taskRead(jobId)` 读取，不启动恢复。结果只携带 DocumentVersion、KnowledgeArtifact
+`QueryApplication.taskRead(jobId)` 读取，不启动恢复。结果只携带 原始解析、档案、ProcessorResult
 或 assessment 的稳定 ID/hash，后续通过对应读取接口展开内容。局部失败不撤销其它目标结果。
 重启后只重试未完成目标；外部服务恰好调用一次不在保证范围内。
 
@@ -269,15 +269,15 @@ Browser 复用前四层的实际响应准备有限文章入口，不增加 HEAD/
 
 以下读操作共享 HTTP `/api/v1/query/<操作名>`、CLI 与 MCP；CLI 均接受 `--request FILE|-`，不调用模型或启动任务。
 
-| HTTP 操作 | CLI | MCP | 请求 |
-| --- | --- | --- | --- |
-| `proofread-text` | `proofread text` | `proofread_text` | `asset_id`，可选固定 `proofread_id/start/max_bytes` |
-| `agent-sessions` | `agents sessions` | `agent_sessions` | `operation:list/read/revision` 与 `request`；read 固定 session_id，按 after/limit 续读 |
-| `task-run` | `jobs progress` | `task_run` | job_id、offset/limit；综合逐篇页另传 target_id、member_offset/member_limit |
-| `usage-estimate` | `usage estimate` | `usage_estimate` | kind 为 processor/archive/synthesis/tags/archive-issues/processing；request 为相应范围 |
-| `processor-runs` | `processor runs` | `processor_runs` | 算子、快照、来源文献、过时筛选及 offset/limit |
-| `literature-results` | `literature results` | `literature_results` | literature_id、offset/limit |
-| `operation-history` | `operations history` | `operation_history` | 可选 actor/operation，after/limit |
+| HTTP 操作            | CLI                  | MCP                  | 请求                                                                                   |
+| -------------------- | -------------------- | -------------------- | -------------------------------------------------------------------------------------- |
+| `proofread-text`     | `proofread text`     | `proofread_text`     | `asset_id`，可选固定 `proofread_id/start/max_bytes`                                    |
+| `agent-sessions`     | `agents sessions`    | `agent_sessions`     | `operation:list/read/revision` 与 `request`；read 固定 session_id，按 after/limit 续读 |
+| `task-run`           | `jobs progress`      | `task_run`           | job_id、offset/limit；综合逐篇页另传 target_id、member_offset/member_limit             |
+| `usage-estimate`     | `usage estimate`     | `usage_estimate`     | kind 为 processor/archive/synthesis/tags/archive-issues/processing；request 为相应范围 |
+| `processor-runs`     | `processor runs`     | `processor_runs`     | 算子、快照、来源文献、过时筛选及 offset/limit                                          |
+| `literature-results` | `literature results` | `literature_results` | literature_id、offset/limit                                                            |
+| `operation-history`  | `operations history` | `operation_history`  | 可选 actor/operation，after/limit                                                      |
 
 `proofread save` / MCP `proofread_save` 是显式维护操作，保存语义见[校订指南](literature-archive.md#校订全文与单步处理)。Web 使用独立登录会话身份，CLI/MCP 使用入口及系统用户身份；调用方传入的 actor 不能冒充登录身份。任务发起身份在创建时固定，后续控制另记控制者。过程记录有界且结束 7 天后清理，已发布结果和任务用量不随之删除，不应把过程记录当作永久模型会话或续接协议。
 

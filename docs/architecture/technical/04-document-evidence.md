@@ -1,5 +1,9 @@
 # 04 · 文档与证据技术设计
 
+类型：规格
+负责：建档、校订稿与算子输入（文档与证据合同）
+状态：现行
+
 [设计总览](../design.md) · [八模块技术导航](../technical.md)
 
 本模块对应设计中的 **④ 文档与证据**。输入是③已接纳的材料；输出是可独立阅读的文本、结构和资源，以及绑定具体材料或文档版本的证据引用。
@@ -8,10 +12,6 @@
 
 当前实现发布 RawParse 与校订稿 DocumentVersion，原始材料证据无需先解析；校订表示证据固定具体版本，页码与区域定位已接入。表格单元级精确定位不在本轮范围。旧数据转换及当前工作树的集中验收尚未完成，不能把实现状态等同于发布完成。
 
-> 2026-10-22：ADR 0037 第三版取消“存疑”：校订稿核对依据只保留 `text-layer`、`image-only`、`manual`，删除 `uncertain` 与存疑说明，“无法确定”的疑点只写在处置记录中。当前校订块、文档结构与读取接口已按此合同移除片段存疑字段；疑点处置仍保留无法确定及原因。
-
-> 2026-10-21：[ADR 0037 第二版](../decisions/0037-literature-archive-and-proofread-text.md) 使用单一部署 profile 初稿、文字层找疑点与 DSH 看原图矫正；存疑不阻断就绪。当前边界见[§6](#6-adr-0037-目标形态原始解析校订稿与页码区域证据)，实施与待验收项见[计划](../../archive/2026-10-20-literature-archive/README.md)。旧 ParserResult 仅用于一次性导入验证，不属于当前生产入口。
-
 本篇目录：
 
 - [1. 模块边界与连接](#1-模块边界与连接)
@@ -19,7 +19,7 @@
 - [3. 可读表示与有界读取](#3-可读表示与有界读取)
 - [4. 证据定位、版本与生命周期](#4-证据定位版本与生命周期)
 - [5. 文档与证据验证](#5-文档与证据验证)
-- [6. ADR 0037 目标形态：原始解析、校订稿与页码区域证据](#6-adr-0037-目标形态原始解析校订稿与页码区域证据)
+- [6. ADR 0037 目标形态：原始解析、校订稿与页码区域证据](#6-原始解析校订稿与页码区域证据)
 
 ## 1. 模块边界与连接
 
@@ -144,40 +144,6 @@ ParserResult 的执行器与发布器已删除。仅 `parsing/legacy-raw.ts` 可
 
 缺 PDF 或原始输入变化返回明确失败。解析不获取 PDF、不建档、不总结；用户显式发起的 `complete parser` 是允许先获取 PDF 的维护操作，仍停在 raw 边界。校订稿及默认阅读版本由独立校订文档发布操作负责。原始 PDF 与旧证据继续固定到原始 ID/hash，不能跟随 current 重定向。
 
-### 2.12 历史 ParserResult 字段与约束
-
-原始解析不是文献状态或总结。建档读取原始解析并生成校订稿，元数据随后独立裁决；summary 由用户显式发起。
-
-`ParserResult` 的精确合同为：
-
-```text
-ParserArtifactRef
-  sha256: Sha256
-  media_type: str
-  byte_size: int
-
-ParserResource
-  reference: str
-  artifact: ParserArtifactRef
-
-ParserProvenance
-  provenance: Provenance
-  parser_version: str
-  mode: str | None
-  model_identity: str | None
-
-ParserResult
-  source_asset_id: AssetId
-  source_sha256: Sha256
-  page_count: int
-  markdown: ParserArtifactRef
-  resources: tuple[ParserResource, ...]
-  result_sha256: Sha256
-  provenance: ParserProvenance
-```
-
-`page_count` 至少为 1；Markdown artifact 的媒体类型固定为 `text/markdown`，实际字节必须是合法 UTF-8。`resources` 只接受 Markdown 实际使用的安全相对引用，按 `reference` 确定排序且不能重复。Parser provenance 组合复用公共 `Provenance`，其中 source kind 固定为 parser、source record ID 为空、输入与参数 hash 必填；Parser 专属版本必填，mode/model identity 可以为空。`result_sha256` 的 canonical 清单和当前结果替换规则见 [ParserResult 精确合同](#25-现有-markdown-的一次性登记)。ParserResult 不接收正文副本、私有 JSON、block、bbox、source locator、内容决定或 task 状态。
-
 ### 2.13 Parsing 准备与发布
 
 `ApplicationOptions.parsing: { rawParser }` 是离线测试注入端口；生产 backend 由 bootstrap 根据配置组装。`Application.rawParsing` 在具备 raw 存储 schema 与有效 parser 配置时存在，否则为 null。旧 `Application.parsing`、`ParsingService`、旧发布器和单结果转换接口已删除，历史 fixture 仅在 test 中组装。
@@ -188,13 +154,13 @@ ParserResult
 
 ### 3.1 责任、子能力与依赖
 
-| 子能力        | 输入与输出                                            | 不承担的决定                      |
-| ------------- | ----------------------------------------------------- | --------------------------------- |
+| 子能力        | 输入与输出                                        | 不承担的决定                      |
+| ------------- | ------------------------------------------------- | --------------------------------- |
 | 表示构建      | complete 校订稿 → DocumentVersion、结构与资源闭包 | 不执行外部 parser，不判断论文身份 |
-| 结构浏览      | 精确版本 → 目录、段落/表格/资源条目、能力描述         | 不补造 parser 没有提供的结构      |
-| 有界读取      | 版本、选择器、预算 → DocumentSlice、继续位置          | 不隐式重新解析、不调用模型        |
-| 证据创建/解析 | 版本与位置 → EvidenceRef → 受校验内容                 | 不断言科学解释正确                |
-| 版本与依赖    | 已发布版本、默认关系、下游引用 → 可用性与保护         | 不接管原材料删除或下游数据集      |
+| 结构浏览      | 精确版本 → 目录、段落/表格/资源条目、能力描述     | 不补造 parser 没有提供的结构      |
+| 有界读取      | 版本、选择器、预算 → DocumentSlice、继续位置      | 不隐式重新解析、不调用模型        |
+| 证据创建/解析 | 版本与位置 → EvidenceRef → 受校验内容             | 不断言科学解释正确                |
+| 版本与依赖    | 已发布版本、默认关系、下游引用 → 可用性与保护     | 不接管原材料删除或下游数据集      |
 
 Document/Evidence 只从 Literature/Acquisition 的公开只读面取得身份和资产，从 Parsing 取得已验证结果，通过自己的发布 Port 使用 Storage。Analysis、Q、外部提取器与人类阅读都使用同一个读取面；禁止各自解释 MinerU JSON、猜文件路径或直接查私表。
 
@@ -204,13 +170,13 @@ Document/Evidence 只从 Literature/Acquisition 的公开只读面取得身份�
 
 同一 PDF 的 Asset ID/hash 固定原始字节。RawParse 固定某次原始解析的区块、Markdown、资源、输入 hash 和解析身份；ProofreadVersion 固定校订内容。DocumentVersion 再固定结构与定位规则；重新分段、换 builder 或 locator scheme 都可能产生新表示，即使 PDF 不变。
 
-| 对象             | 身份依据                                                       | 变化时的处理                                                 |
-| ---------------- | -------------------------------------------------------------- | ------------------------------------------------------------ |
-| MaterialRef      | Literature、Asset ID、PDF hash                                 | 新字节创建新资产；不覆写旧字节                               |
-| RawParse / ProofreadVersion | 输入资产、解析/校订输出与资源 hash | 不可变版本，current 指针独立更新，受有效依赖保护 |
-| DocumentRef      | document/version ID、representation hash、builder/locator 版本 | 新构建创建新版本                                             |
-| default relation | 文档到默认 DocumentVersion                                     | 独立 CAS 更新；旧引用不跟随变化                              |
-| EvidenceRef      | 精确材料/表示目标与 locator                                    | 引用不可被服务端静默改写                                     |
+| 对象                        | 身份依据                                                       | 变化时的处理                                     |
+| --------------------------- | -------------------------------------------------------------- | ------------------------------------------------ |
+| MaterialRef                 | Literature、Asset ID、PDF hash                                 | 新字节创建新资产；不覆写旧字节                   |
+| RawParse / ProofreadVersion | 输入资产、解析/校订输出与资源 hash                             | 不可变版本，current 指针独立更新，受有效依赖保护 |
+| DocumentRef                 | document/version ID、representation hash、builder/locator 版本 | 新构建创建新版本                                 |
+| default relation            | 文档到默认 DocumentVersion                                     | 独立 CAS 更新；旧引用不跟随变化                  |
+| EvidenceRef                 | 精确材料/表示目标与 locator                                    | 引用不可被服务端静默改写                         |
 
 `document_id` 是一组表示的逻辑身份，`document_version_id` 是具体可读版本。它们不替代 LiteratureId，也不把预印本与正式版合并为一个“文本版本”。同 hash 的文件可被多个文献关系引用，来源关系继续分别保留。
 
@@ -322,7 +288,7 @@ EvidenceRef 固定材料或文档表示和片段 hash；定位必须在固定版
 
 直接验证覆盖：无模型原始材料读取、结构/资源有界读取、跨 UTF-8 边界、旧 cursor 拒绝、两类 EvidenceRef、资源闭包、hash 冲突、重解析后旧引用、发布/回收竞争和取消。测试用合成文档中已知的具体文本/单元，不能只检查返回了一个 ID。
 
-## 解析后的文章身份核验（2026-10-08 实现合同）
+## 7. 解析后的文章身份核验
 
 落实 ADR 0029 的后续核验能力，不修改下载原则。`ArticleIdentityService.assess` 是对已有固定
 DocumentVersion 的显式操作，复用 analysis 模型绑定；普通解析和查询不会隐式产生模型费用。
@@ -335,18 +301,17 @@ Parsing 形成证据，`LiteratureArticleIdentityService` 比较当前元数据�
 没有稳定标识符时，规范化标题与至少一位完整署名均匹配才能支持。歧义或缺少证据保留
 `insufficient-evidence`。这些是有证据的辅助判断，不是模型语义必然正确或科学结论正确的保证。
 
-Catalog v9 的 `article_identity_assessments` 保存有限证据、模型方法和 provenance，绑定 Literature、
+当前 catalog 的 `article_identity_assessments` 保存有限证据、模型方法和 provenance，绑定 Literature、
 asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；不保存 PDF/全文 BLOB。
-当前标签仅投影与当前元数据、材料关系和 ParserResult 对齐的判断；输入变化回到 `unverified`，
-历史结果仍可按 assessment ID 读取。旧库和旧详情继续保守读取；新写入需显式 schema 升级，
-普通启动不迁移。判断不修改权威元数据/文献身份，不自动删除、失效或重新下载 PDF，不阻断后续加工。
+当前标签仅投影与当前元数据、材料关系和校订文档对齐的判断；输入变化回到 `unverified`，
+历史结果仍可按 assessment ID 读取。普通启动只接纳当前结构；不匹配的旧库须按[初始化与恢复指南](../../guides/upgrade.md)离线转换。判断不修改权威元数据/文献身份，不自动删除、失效或重新下载 PDF，不阻断后续加工。
 
 调用及请求字段见[Agent 接口指南](../../guides/agent-interface.md)。离线流程和证据检查的通过
 不能代替真实文献身份抽取质量验收。
 
-## 6. ADR 0037 目标形态：原始解析、校订稿与页码区域证据
+## 6. 原始解析、校订稿与页码区域证据
 
-本节描述 ADR 0037（第二版）的目标合同。双解析对齐与区块仲裁已被第二版取代。任务细节见计划 03–06。
+本节规定原始解析到校订稿和可读文档的处理合同。原始解析、建档与算子分别显式发起。
 
 ### 6.1 部分与原始解析
 
@@ -373,6 +338,7 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 - **处置完整性**：每条疑点有处置（已修正、确认初稿无误并附原因、无法确定并保留原因）；每个 `image-only` 页有检查记录；编辑操作和图片引用有效；删除文字层中存在的内容必须附原因。应用后重新比较，新差异在现有预算内继续处理；续跑复用页面缓存，当前稿与分页文字同步。相同内容和未处置问题反复出现时停止，编辑说明换了措辞不代表进展。
 
 **`ProofreadVersion`** 记录：
+
 - 输入：一份原始解析与该部分的 PDF；
 - 方法版本：清理、页面分类、疑点比较、矫正任务；
 - 人工决定；
@@ -382,6 +348,7 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 - 页面分类、疑点及其处置、调用统计。
 
 **每个区块**包含：
+
 - 稳定 ID；
 - 页码、区域（或仅定位到页）；
 - 类型；

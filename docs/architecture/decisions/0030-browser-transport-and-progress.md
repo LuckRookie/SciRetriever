@@ -1,14 +1,13 @@
 # ADR 0030：Browser 临时访问、页面交接与下载完成
 
-- Status: Accepted
+类型：决策（ADR）
+负责：Browser 临时访问、页面交接与下载完成
+状态：Accepted
+
 - Date: 2026-10-04
 - Updated: 2026-10-13（持续补位与传输分段计时）
 - Amends: [ADR 0023](0023-generic-browser-agent-executor.md)、[ADR 0012](0012-process-local-provider-access-scheduling.md)（Browser 网络资格生命周期）、[ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)（平台调度与会话 cap）
 - Related: [ADR 0029](0029-unverified-pdf-acquisition.md)
-
-> 2026-10-05 修订是已接受的目标合同；后台传输、多会话、资源保护和发布交接仍需
-> [实施计划](../../archive/2026-10-05-browser-parallel-downloads/README.md)中的生产接线与验收。
-> 本文不以决策状态宣称这些能力已交付。
 
 ## 背景
 

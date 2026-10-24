@@ -1,6 +1,9 @@
 # ADR 0013：外部发现与数据库补全解耦
 
-- Status: Accepted
+类型：决策（ADR）
+负责：外部发现与数据库补全解耦
+状态：Accepted；部分被取代：独立操作扩展到文档读取、分析、检索与人类协作，见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；补全只到获取 PDF 与解析、CONTENT_READY 退役、建档为独立操作，见 [ADR 0037](0037-literature-archive-and-proofread-text.md)
+
 - Date: 2026-08-10
 - Last amended: 2026-09-27
 - Supersedes: none
@@ -8,10 +11,6 @@
 - Amends: [ADR 0008](../../archive/decisions/0008-summarized-markdown-literature-content.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)
 - Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；[ADR 0028](0028-query-and-expansion-separation.md)（查询与显式扩充分离）；[ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[任务与协作控制：数据库补全与阶段协调](../technical/02-task-coordination.md#4-数据库补全与阶段协调)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[版本化材料与知识存储：Catalog 与文件组织](../technical/07-versioned-storage.md#2-catalog-与文件组织)
-
-> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md) 修订本 ADR：数据库补全只到获取 PDF 与解析，CONTENT_READY 目标退役，建档为独立手动操作。直接冲突的正文已按 ADR 0037 收口。
-
-> 2026-09-25 修订：独立操作扩展到文档读取、分析/综合、检索和人类协作；旧目标枚举不能穷尽新知识能力。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
 
 ## 背景
 

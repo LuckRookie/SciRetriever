@@ -1,5 +1,9 @@
 # 用户指南
 
+类型：导航
+负责：业务指南操作与技术接口合同（使用步骤导航）
+状态：现行
+
 产品目标已扩展为科研 Agent 知识供给和正式人类协作，见[需求](../architecture/requirements.md)与[ADR 0026](../architecture/decisions/0026-agent-knowledge-and-human-collaboration.md)。当前已接通固定文档证据、分层知识、集合综合、材料/知识 Context、外部候选交付和同一生产 Browser 的观看/指导/接管；本目录说明这些可用入口及其实际验证边界。正式 MCP adapter、真实服务/站点与科学质量验收等剩余目标不能写成已发布或生产就绪。
 
 本目录优先描述当前公开行为，并在能力尚未接线时明确标记“合同目标·未实现”。当前公开入口是 `sciretriever` console script；主题/引用发现与数据库补全是两类独立操作，书目导入、手动 PDF、补全、查询和导出都作用于同一个 SQLite Catalog 与 ArtifactStore。目标/现状总表见 [TypeScript 架构锚定基线](../architecture/typescript-baseline.md)。

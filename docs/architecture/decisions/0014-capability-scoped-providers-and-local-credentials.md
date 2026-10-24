@@ -1,6 +1,9 @@
 # ADR 0014：按能力接入 Provider 与本地凭据管理
 
-- Status: Accepted
+类型：决策（ADR）
+负责：按能力接入 Provider 与本地凭据管理
+状态：Accepted
+
 - Date: 2026-08-10
 - Last amended: 2026-10-11
 - Supersedes: none

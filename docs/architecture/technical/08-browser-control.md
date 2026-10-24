@@ -1,5 +1,9 @@
 # 08 · 浏览器会话与控制技术设计
 
+类型：规格
+负责：Browser binary/Profile 完整生命周期；会话控制；technical 中早期形式化接口（Browser）
+状态：现行；目标接口单独成节
+
 [设计总览](../design.md) · [八模块技术导航](../technical.md)
 
 本模块对应设计中的 **⑧ 浏览器会话与控制**，管理同一生产浏览器的会话、页面、观察、受控动作和下载捕获，支持人类观看、指导、接管与交还。
@@ -15,6 +19,7 @@
 - [3. 获取准入、调度与进展判断](#3-获取准入调度与进展判断)
 - [4. 观察、指导与控制权交接](#4-观察指导与控制权交接)
 - [5. 人工协作与运行边界验证](#5-人工协作与运行边界验证)
+- [6. 目标接口（尚未实现）](#6-目标接口尚未实现)
 
 ## 1. 模块边界与连接
 
@@ -499,6 +504,130 @@ Browser Host 使用一个 operator-managed CloakBrowser process/persistent conte
 
 ### 3.1 Browser admission、会话与调度（目标合同；当前仅部分接线）
 
+完整目标接口见[Browser admission、会话与调度（目标合同；当前仅部分接线）](#61-browser-admission会话与调度目标合同当前仅部分接线)；当前实现以源码为准。
+
+## 4. 观察、指导与控制权交接
+
+### 4.1 观察协议
+
+观察视图需要把文章执行、Browser 页面与材料交付分开：
+
+| 视图信息  | 绑定与含义                                                      |
+| --------- | --------------------------------------------------------------- |
+| 当前目标  | operation/目标 Literature/文章执行标识                          |
+| 页面      | session/page、document generation、脱敏 URL/标题                |
+| 观察      | revision、截图/元素、产生时间或序号                             |
+| 控制      | controller、control epoch、暂停/等待状态                        |
+| 动作      | 受理/执行/结果、绑定观察、取消与过期原因                        |
+| 候选      | captured/staged/validated/durable-ready/accepted 等真实交付阶段 |
+| 失败/帮助 | 当前阻碍、可做的动作、是否仍有在途工作                          |
+
+页面存在、下载已开始、候选已捕获与资产已接纳是不同事实。下载事件后还需复制/验收/发布；UI 不能立刻显示“论文已获得”。图片/帧由受控接口读取，不暴露 Page/CDP 或内部 Profile。
+
+观察可有多个消费者，动作控制者同时只有一个。慢消费者可丢弃旧帧并取得最新完整观察，但关键状态变化需有序号及断档反馈；不能在错过目标切换后仍把上一篇画面标成当前文章。
+
+实时观察不等于永久录像。默认保留有界会话内时间线；长期截图、完整指导记录、回放与容量政策是另行决定的能力。日志不能代替面向用户的执行反馈。
+
+### 4.2 控制身份与动作前置条件
+
+当前 `BrowserControlCoordinator` 持有 workspace、已连接 client、controller 和 epoch。attach/detach、takeover/release 在服务端更新状态；控制者断开或交还使旧 epoch 失效。带当前 epoch 的显式人类接管可以转移旧控制权；同一旧 epoch 的后到请求拒绝。`WorkbenchSession` 绑定目标和页面观察；生产 bridge 在文章开页时把同一 Host page 挂到会话，新操作使用新的 session ID，旧观察和指导不跨文章复用。
+
+目标设计的中性绑定如下，具体字段名按实际控制协议定稿：
+
+```ts
+interface ControlBinding {
+  readonly workspace_id: string;
+  readonly session_id: string;
+  readonly operation_id: string;
+  readonly article_id: string;
+  readonly controller_id: string;
+  readonly control_epoch: number;
+  readonly page_id: string;
+  readonly document_generation: number;
+  readonly observation_revision: number;
+}
+```
+
+动作在接收与实际 vendor dispatch 前都复核必要绑定。某些只读观察请求无需控制租约，但点击、输入或导航不能借只读连接执行。页面 revision、文章 generation 和 control epoch 分别防止旧画面、跨文章与旧控制者的动作，不互相代用。
+
+### 4.3 暂停、接管与交还
+
+| 请求     | 服务端要做的事                         | 返回条件                    |
+| -------- | -------------------------------------- | --------------------------- |
+| 暂停     | 停止派发新的 AI 决定，结算在途动作     | 明确 paused 或仍在 draining |
+| 接管     | 更新控制者/epoch，使旧 AI 决定失效     | 返回新的控制绑定            |
+| 人工动作 | 按当前绑定执行封闭 OperatorInput       | 实际成功/失败及新观察       |
+| 交还     | 释放人类租约，AI 重新观察页面          | 不复用接管前缓存决定        |
+| 取消     | 停止该操作新增工作，结算 transfer/提交 | 实际已接纳事实和未完成项    |
+
+在途点击可能已触发下载，暂停不能虚称该动作从未发生。下载交付仍按原文章绑定验收；如果控制切换使目标不再可信，保留稳定冲突/拒绝结果，不自动接纳到下一篇。
+
+交还后 controller 从最新页面、当前文章和最新指导重新决定。旧模型响应即使随后返回也不能执行。关闭 session 禁止新动作，再结束观察流、排空/终止页面工作，最后由 owner 关闭资源；关闭失败必须反馈，不以 UI 消失当作释放成功。
+
+### 4.4 自然语言指导
+
+自然语言指导是业务协作消息，如“补充材料在页面下方”；它不同于向网页输入框发送 `type-text`。指导不直接变成脚本或任意浏览器动作。
+
+建议请求包含 guidance_id、文章/流程绑定、期望控制状态、文字与适用范围；结果至少区分：
+
+| 结果      | 含义                                    |
+| --------- | --------------------------------------- |
+| accepted  | 已接受等待安全决策点，不表示已执行      |
+| consumed  | 已在明确观察/决定处消费，可显示结果关联 |
+| rejected  | 内容/权限/当前模式不支持                |
+| expired   | 文章、流程或控制状态已变化，未使用      |
+| cancelled | 调用方撤回尚未消费指导                  |
+
+当前指导队列限 16 条待消费、会话内最多 64 条状态记录，每条至多 2048 个 UTF-16 码元（与 Web `maxlength` 和 JavaScript `string.length` 一致，不是 UTF-8 字节），绑定 session、文章与期望 control epoch。下一次生产模型观察时将 accepted 改成 consumed 并作为不可信建议加入输入；控制接管、目标切换或关闭把尚未消费的指导改成 expired；提交者可撤回为 cancelled。重复 guidance_id 同内容幂等，异内容冲突；不持久化、不跨重启恢复。现有页面低层 `type-text` 不充当自然语言指导。
+
+指导可以影响下一次模型决定，但不能取消 Network 地址政策、PDF 文章归属检查或凭据隔离。人类看到的页面文字和指导输入同样是不可信内容，controller 只能输出封闭动作。
+
+### 4.5 断线、多观察者与介入等待
+
+当前生产政策：观察者断开不改变操作；控制者断开撤销租约并暂停新模型动作，等待新连接显式接管并交还，或操作截止/取消。没有后台 daemon 或跨重启回放。生产文章的 120 秒硬截止从准入页面打开后、协作挂接前起算；页面步骤和人工等待共用该截止，一次等待最多取 `min(5 分钟, 文章剩余时间)`。先行的 Public/API 阶段不计入这只文章时钟，但同属可取消的显式补全操作。取消/关闭立即唤醒。模型请求若在接管后才返回，其决定不派发；已经派发的动作与捕获仍按真实结果结算。
+
+ADR 0032 将用户主动关闭观看界面时交还 Agent 作为目标体验，服务端交还确认及失败处理仍待落实。主动交还、正常关闭、切换文章与意外断线须分别设计和验证，不从关闭回调推导交还成功或断线自动恢复；在此之前继续使用上述生产政策。可选人工介入不允许把等待超时、Browser 失败或取消记录成自动获取正常耗尽。
+
+多个人同时接管时以服务端版本化结果为准，失败客户端重新读取控制状态；不能靠最后渲染页面的按钮决定赢家。过期命令返回 conflict/stale 而不是静默忽略，让用户知道动作没有生效。
+
+帮助请求和介入等待只用于明确启用的协作策略或用户主动介入，不是普通自动获取失败后的默认阶段。需要显示目标、阻碍和可行人工动作时，具体等待时限、持久化和恢复仍遵循 Application/Jobs 合同，不从现有 intervention 表推导所有行为已实现，也不因界面调整静默删除这些能力。
+
+登录、机构选择、MFA、验证码等允许的人类操作范围仍需独立确认。它们不自动授权 AI 获取凭据、读取 Profile 或绕过访问控制。
+
+### 4.6 查询隔离与人类控制衔接
+
+独立 QueryApplication 不组装 Network Provider、Browser host 或 AgentRuntime。库内读取可访问 Storage 与本地索引；缺 PDF、缺表示或索引失效返回缺口，不隐式启动网络。配置状态的读取也不是 probe，只有明确配置测试操作才使用本节的外部 transport。
+
+Human Interaction 观看的是生产 Browser 的同一观察源。`BrowserControlCoordinator` 维护 workspace、client、controller 和递增 epoch；接管/交还/断开控制者改变 epoch，陈旧输入在执行前拒绝。页面导航还改变 document generation 与 observation revision，坐标/元素动作必须绑定对应观察，不能复用旧截图的点击位置。
+
+当前已有控制租约、动作派发、自然语言指导队列与文章级安全消费点，同一生产工作台经 `Application` 的文章 flow 接入。自然语言“试试右侧下载按钮”不等于授予任意导航或脚本权限，人工动作仍走 Network 和 Acquisition 验收。生产 `WorkbenchView.operation_feedback` 只投影本次内存操作的阶段、冻结后的目标计数与当前目标、最终 `DatabaseCompletionReport`、稳定失败和操作结束后通过 Library 校验文件字节的主 PDF hash/大小；旧合成视图不带该字段。文件缺失或损坏时标记 `unreadable`，不生成阅读引用；原始异常只在进程内保留，公开反馈使用稳定分类。Browser Intake 的候选评估结果进入同一会话候选列表，但已捕获或身份检查通过均不代表主 PDF 已提交；失败、取消和结束后，未提交候选不再显示“等待提交”。页面以完整报告分区显示已完成、失败、跳过、未开始和中断；无法观测 Public/API 等候时只说明执行中，不猜操作总耗时。Library 阅读按钮指向已确认的当前 Literature ID，阅读和刷新不启动维护操作。
+
+凭据的普通参数与授权时效也须分开：Application 固定本次 provider/model/访问政策，每次新的外部请求重新向 Configuration 授权当前密钥。撤销后的新请求失败，不凭内存旧 key 继续访问；已经派发的 HTTP 或浏览器动作只能如实结算。Browser Profile 的现存登录态不等同于普通 Provider API key，其授权与人类可做的登录操作范围需独立定义。
+
+## 5. 人工协作与运行边界验证
+
+### 5.1 一次人工协作示例
+
+用户明确启动某篇 PDF 获取。公开/API 路线未交付后，符合准入条件的 Browser 打开真实文章页面。用户观看同一会话，发现下载入口特殊，提交指导；界面先显示 accepted，controller 在下一安全点消费并记录 consumed。
+
+若仍失败，用户接管。旧 AI 响应因为 epoch 变化失效，人工点击触发候选下载。Acquisition 检查 PDF 字节、目标归属和版本；候选显示真实捕获及身份状态，操作完成后由 Library 回读确认当前主 PDF 已提交。即使人类已经交还，候选仍按原文章绑定处理；若后续失败或取消，已提交 PDF 仍可从 Library 阅读。
+
+用户随后进入阅读页打开该 PDF。此时不自动解析或总结；用户明确发起加工后，新的 Document/Knowledge 版本可供 Agent 和人类共同读取。
+
+### 5.2 验证设计
+
+离线验证覆盖实际 HTTP/Web 边界、配置 revision 冲突、保存成功但状态失败、来源排序/scan limit、只读页面无维护入口、control epoch 争抢、过期观察、在途动作、跨文章候选、断线和重复关闭。
+
+完整目标旅程必须接同一个生产 Browser owner，证明“获取 → 观看 → 指导/接管 → 交还 → 验收 → 共同读取”。固定 Cloak bundle + loopback 测试已覆盖 HTTP 明确获取、两个观看者、指导受理与过期、旧模型返回失效、人工点击、同一 Acquisition 验收、最终报告和 Web/Agent 对同一 PDF hash 的读取；真实 Publisher 站点未运行。一次合成页面上的 runAgent 成功不能代替该旅程。
+
+阅读验证使用固定版本的合成文档和知识产物，检查证据指向、截断/缺口、Markdown 安全渲染与损坏反馈。当前指导和断线政策只适用于进程内操作；跨重启指导历史、允许人工认证动作和最终界面形态仍需独立决定，不能从 T02 实现推断已授权。
+
+## 6. 目标接口（尚未实现）
+
+本节集中保留尚未整套实现的目标合同；当前实现以源码为准，设计记法不等同于已发布 API。
+
+### 6.1 Browser admission、会话与调度（目标合同；当前仅部分接线）
+
 Browser admission 在启动任何 Browser runtime 前检查：
 
 - 当前 Literature 的公开/API routes 是否已正常结束，是否仍有 deferred、quota 或系统失败；
@@ -751,118 +880,131 @@ surface bounds、当前 screenshot、安全可见 element、page state、capture
 签名 query 只保留在当前 Browser operation 并交给 Chrome，日志、结果、provenance 和持久事实只
 接收 query-free locator。未知 Provider 只要有合法文章起点，也可使用同一通用 Browser 路线。
 
-## 4. 观察、指导与控制权交接
+### 6.2 CloakBrowser binary 与 Profile identity 生命周期
 
-### 4.1 观察协议
+当前 `cloak-runtime.ts` 校验安装 bundle、固定 manifest/身份及不可伪造的 VerifiedCloakRuntime；Host 使用该对象启动。以下安装签名、Profile 接纳与删除规则是完整生命周期设计，不表示当前 CLI 已交付所有安装/升级操作。Python wrapper 的 cache/banner 细节不属于当前生产路径。
 
-观察视图需要把文章执行、Browser 页面与材料交付分开：
+历史 CloakBrowser Python wrapper/wheel 依赖记法不属于当前 TS 产物；patched Chromium binary 具有独立许可、版本与平台生命周期，不能进入 package、仓库、`config.toml` 或 Profile。Configuration 把它解析到固定
+owner-only runtime/cache root，并维护不含 secret 的安装 manifest：wrapper version、binary version、
+platform/architecture、vendor digest/signature、verified-at、compatible Playwright range 与上一个已
+验证版本。普通 Completion 只读取 manifest/readiness，缺失或不匹配时 fail closed，绝不隐式联网
+下载或自动升级。生产 runtime lease 不把该长期 root 直接交给 vendor wrapper；它在系统临时目录
+创建 owner-only 的单次无凭据 cache view，只暴露当前已验证版本目录，关闭 lease 后删除。因此
+长期 root 中即使意外出现 `license.key`、license cache、Pro marker 或其它 vendor 状态，也不能被
+普通 Completion 解析、注入 Browser 子进程或用于改变固定 binary。
 
-| 视图信息  | 绑定与含义                                                      |
-| --------- | --------------------------------------------------------------- |
-| 当前目标  | operation/目标 Literature/文章执行标识                          |
-| 页面      | session/page、document generation、脱敏 URL/标题                |
-| 观察      | revision、截图/元素、产生时间或序号                             |
-| 控制      | controller、control epoch、暂停/等待状态                        |
-| 动作      | 受理/执行/结果、绑定观察、取消与过期原因                        |
-| 候选      | captured/staged/validated/durable-ready/accepted 等真实交付阶段 |
-| 失败/帮助 | 当前阻碍、可做的动作、是否仍有在途工作                          |
+安装、更新和回退只能由配置中心中的显式动作触发。动作必须先显示网络、许可、磁盘和版本影响，
+下载到 owner-only staging，保留本次实际 archive，先用锁定 wrapper 的 Ed25519 公钥验证 detached
+signature 和 manifest version binding，再同时要求 manifest digest、仓库固定 digest 与实际 archive
+SHA-256 三者一致；之后才解压、校验完整 bundle 并原子发布。任一证据缺失、同版本 archive 被替换
+或 digest 漂移都会在解压前 fail closed，失败保留当前已验证版本。当前固定 older-free v146 路径
+不使用 Pro license，并在任何 vendor/network 调用前拒绝安装动作传入的 license key；
+`credentials.toml` 中保留的 `[cloakbrowser]` section 只为未来另行审查的版本线预留，不影响当前
+runtime。环境变量、cache-file credential、命令行和普通配置均不是当前 license 来源。删除 binary
+与删除 Profile 是两个独立确认动作，均不能由普通 Completion 或 reset 隐式执行。
 
-页面存在、下载已开始、候选已捕获与资产已接纳是不同事实。下载事件后还需复制/验收/发布；UI 不能立刻显示“论文已获得”。图片/帧由受控接口读取，不暴露 Page/CDP 或内部 Profile。
+Profile identity manifest 与 Browser user-data directory 同属一个 owner-only Profile identity，
+但不读取或复制 Cookie/站点内容。新 Profile 一次生成 seed 后原子发布 manifest；同一 Profile 后续
+启动必须复用。现有 stock Chrome Profile 只有在程序创建的兼容 fixture 证明可安全接纳，且用户
+显式确认后，才允许以原子 manifest 初始化升级；否则 status 返回 `needs-new-runtime-profile`，
+要求创建新的 Cloak Profile，并保持旧目录完全不动。版本回退不得用较旧 Chromium 就地打开可能已
+升级的真实 Profile；需要时创建隔离 Profile，不通过保留双生产 runtime 解决。
 
-观察可有多个消费者，动作控制者同时只有一个。慢消费者可丢弃旧帧并取得最新完整观察，但关键状态变化需有序号及断档反馈；不能在错过目标切换后仍把上一篇画面标成当前文章。
+### 6.3 外部运行时接入约束
 
-实时观察不等于永久录像。默认保留有界会话内时间线；长期截图、完整指导记录、回放与容量政策是另行决定的能力。日志不能代替面向用户的执行反馈。
+以下保留接入设计中的约束；Python wrapper 记法不表示当前 TypeScript 实现入口。
 
-### 4.2 控制身份与动作前置条件
+#### 6.3.1 签名验证与版本发布
 
-当前 `BrowserControlCoordinator` 持有 workspace、已连接 client、controller 和 epoch。attach/detach、takeover/release 在服务端更新状态；控制者断开或交还使旧 epoch 失效。带当前 epoch 的显式人类接管可以转移旧控制权；同一旧 epoch 的后到请求拒绝。`WorkbenchSession` 绑定目标和页面观察；生产 bridge 在文章开页时把同一 Host page 挂到会话，新操作使用新的 session ID，旧观察和指导不跨文章复用。
+wrapper 固定 Ed25519 公钥。SciRetriever 的显式 installer 使用锁定 wrapper 的下载、签名和解压
+原语，但自行保留本次实际 archive：先验证 detached signature 和 manifest version binding，再要求
+签名 manifest 中的 archive digest、仓库固定 digest 与实际 archive SHA-256 三者相同，然后才解压。
+缺少签名证据、同版本 archive 被替换、digest 漂移或只生成任意 bundle 都会 fail closed，不能把
+`ensure_binary()` 或目录存在本身当成验证结果。项目不接受用户自定义 download URL、未签名
+manifest、本地 executable override 或仅凭文件名/版本目录判断成功。公开 release 还提供 GPG-signed
+tag 与 attestation，可作为维护者的第二层发布审查材料，但不能取代运行安装路径中的 Ed25519 与
+archive digest 校验。
 
-目标设计的中性绑定如下，具体字段名按实际控制协议定稿：
+Configuration 只允许用户显式执行 install/update/rollback：下载到 owner-only staging，完成签名、
+版本与 digest 校验后原子发布；任何失败保留当前已验证版本。安装 manifest 只保存 wrapper/binary
+版本、平台、官方 digest/签名验证状态和核对时间，不保存 license key、下载 URL query、Profile
+身份或环境指纹。普通运行必须显式使用已锁定 `browser_version`，并在进入 vendor wrapper 前完成
+本地 presence/manifest 检查。普通 runtime lease 另外创建 owner-only 的一次性无凭据 cache view，
+只把当前已验证版本目录呈现给 wrapper；该 view 不包含长期 root 中可能出现的 `license.key`、
+`.license_cache`、Pro/latest marker 或其它 vendor 状态，并在 context 关闭后删除。wrapper 的
+`ensure_binary()` 因而只能命中固定版本，不能在业务路径解析 cache-file credential、切换 Pro/latest
+或隐式联网。
 
-```ts
-interface ControlBinding {
-  readonly workspace_id: string;
-  readonly session_id: string;
-  readonly operation_id: string;
-  readonly article_id: string;
-  readonly controller_id: string;
-  readonly control_epoch: number;
-  readonly page_id: string;
-  readonly document_generation: number;
-  readonly observation_revision: number;
-}
-```
+#### 6.3.2 适配器所有权与接入范围
 
-动作在接收与实际 vendor dispatch 前都复核必要绑定。某些只读观察请求无需控制租约，但点击、输入或导航不能借只读连接执行。页面 revision、文章 generation 和 control epoch 分别防止旧画面、跨文章与旧控制者的动作，不互相代用。
+Wrapper 的 manager/context 行为见[外部生命周期记录](../../notes/cloakbrowser.md#4-wrapper-生命周期与参数)。
 
-### 4.3 暂停、接管与交还
+因此不能把它天真塞入一个已经自行 start/stop Playwright 的 stock engine，否则会出现两套 manager、
+线程所有权不一致、重复 stop 或资源残留。目标 adapter 必须让 CloakBrowser 在同一个 engine thread
+内拥有 manager/context 生命周期，再通过 SciRetriever 的中性 Process/Context/Page facade 向上提供
+能力；CloakBrowser 和 Playwright vendor 类型不得越过 Network/Bootstrap。
 
-| 请求     | 服务端要做的事                         | 返回条件                    |
-| -------- | -------------------------------------- | --------------------------- |
-| 暂停     | 停止派发新的 AI 决定，结算在途动作     | 明确 paused 或仍在 draining |
-| 接管     | 更新控制者/epoch，使旧 AI 决定失效     | 返回新的控制绑定            |
-| 人工动作 | 按当前绑定执行封闭 OperatorInput       | 实际成功/失败及新观察       |
-| 交还     | 释放人类租约，AI 重新观察页面          | 不复用接管前缓存决定        |
-| 取消     | 停止该操作新增工作，结算 transfer/提交 | 实际已接纳事实和未完成项    |
+#### 6.3.3 Profile 固定身份
 
-在途点击可能已触发下载，暂停不能虚称该动作从未发生。下载交付仍按原文章绑定验收；如果控制切换使目标不再可信，保留稳定冲突/拒绝结果，不自动接纳到下一篇。
+若复用同一个 Cookie/历史 Profile 却每次更换 seed，就会形成“同一长期状态、不同设备身份”的内部
+矛盾。SciRetriever 必须在新 Profile 初始化时一次生成 seed，把它保存在 owner-only identity
+manifest 中，并在每次启动显式传入相同 `--fingerprint=<seed>`。不同 Profile 必须使用不同 seed；
+seed 原值不能进入普通配置、credentials、日志、Report、Catalog、测试快照或文档。
 
-交还后 controller 从最新页面、当前文章和最新指导重新决定。旧模型响应即使随后返回也不能执行。关闭 session 禁止新动作，再结束观察流、排空/终止页面工作，最后由 owner 关闭资源；关闭失败必须反馈，不以 UI 消失当作释放成功。
+#### 6.3.4 Humanization 动作边界
 
-### 4.4 自然语言指导
+所有生产 click、scroll、wait 和未来获准的输入必须复用同一 patched Page/Locator。不得调用
+`page._original`、新建裸 CDP session、直接 DOM click、任意 `evaluate()` 动作或另一个 Browser。
+只读 DOM/locator 发现仍需在 SciRetriever 有界观察接口内。由于 human layer 使用 Playwright 私有
+API，必须用锁定的 1.55.0 做动作 spy/characterization；未来升级 Playwright 时重复该门禁。
 
-自然语言指导是业务协作消息，如“补充材料在页面下方”；它不同于向网页输入框发送 `type-text`。指导不直接变成脚本或任意浏览器动作。
+#### 6.3.5 子进程环境与凭据来源
 
-建议请求包含 guidance_id、文章/流程绑定、期望控制状态、文字与适用范围；结果至少区分：
+现有 headed-display helper 会复制进程环境。Cloak runtime 必须改为最小 child environment 或在
+传递前删除 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 及小写等价项，并删除所有
+`CLOAKBROWSER_*` 下载、cache、binary、update、license 环境变量。当前固定 older-free v146 的
+显式安装和普通 launch 都不消费 license key；即使保留的 origin-bound `credentials.toml`
+`[cloakbrowser]` section 已配置，status 也只报告 `reserved-not-used-by-pinned-free-binary`。未来若
+另行审查 Pro/latest 版本线，secret 仍只能来自规范 origin `https://cloakbrowser.dev` 绑定的
+credentials；当前路径始终拒绝环境或 cache-file fallback。
 
-| 结果      | 含义                                    |
-| --------- | --------------------------------------- |
-| accepted  | 已接受等待安全决策点，不表示已执行      |
-| consumed  | 已在明确观察/决定处消费，可显示结果关联 |
-| rejected  | 内容/权限/当前模式不支持                |
-| expired   | 文章、流程或控制状态已变化，未使用      |
-| cancelled | 调用方撤回尚未消费指导                  |
+#### 6.3.6 升级与回退门禁
 
-当前指导队列限 16 条待消费、会话内最多 64 条状态记录，每条至多 2048 个 UTF-16 码元（与 Web `maxlength` 和 JavaScript `string.length` 一致，不是 UTF-8 字节），绑定 session、文章与期望 control epoch。下一次生产模型观察时将 accepted 改成 consumed 并作为不可信建议加入输入；控制接管、目标切换或关闭把尚未消费的指导改成 expired；提交者可撤回为 cancelled。重复 guidance_id 同内容幂等，异内容冲突；不持久化、不跨重启恢复。现有页面低层 `type-text` 不充当自然语言指导。
+改变 wrapper、Playwright 或 binary 任一版本前：
 
-指导可以影响下一次模型决定，但不能取消 Network 地址政策、PDF 文章归属检查或凭据隔离。人类看到的页面文字和指导输入同样是不可信内容，controller 只能输出封闭动作。
+1. 固定候选三元组、官方 release、签名 manifest、archive digest 与许可状态；
+2. 在独立 owner-only staging 安装，不触碰当前 binary 或真实 Profile；
+3. 重跑 manager/thread/close、humanized action、固定身份、Xvfb/字体、CONNECT 与本地 HTTPS 事件验收；
+4. 用新建隔离 Profile 做经授权的极小串行 live 对照，不读取个人 Profile/Cookie；
+5. 只有不回归已有成功链且具有可解释收益时，才原子更新 verified manifest；
+6. 回退只能复用与旧 binary 明确兼容的 Profile；不能用较旧 Chromium 打开已经升级的真实 Profile。
 
-### 4.5 断线、多观察者与介入等待
+任何版本若需要 vendor entitlement、Hosted/OEM 许可或无法证明 Profile 安全，Configuration 都应报告
+明确不可用/需要新 Profile，而不是保留 stock runtime fallback、自动下载其它版本或放宽 Network
+guard。
 
-当前生产政策：观察者断开不改变操作；控制者断开撤销租约并暂停新模型动作，等待新连接显式接管并交还，或操作截止/取消。没有后台 daemon 或跨重启回放。生产文章的 120 秒硬截止从准入页面打开后、协作挂接前起算；页面步骤和人工等待共用该截止，一次等待最多取 `min(5 分钟, 文章剩余时间)`。先行的 Public/API 阶段不计入这只文章时钟，但同属可取消的显式补全操作。取消/关闭立即唤醒。模型请求若在接管后才返回，其决定不派发；已经派发的动作与捕获仍按真实结果结算。
+#### 6.3.7 本地生产准入门
 
-ADR 0032 将用户主动关闭观看界面时交还 Agent 作为目标体验，服务端交还确认及失败处理仍待落实。主动交还、正常关闭、切换文章与意外断线须分别设计和验证，不从关闭回调推导交还成功或断线自动恢复；在此之前继续使用上述生产政策。可选人工介入不允许把等待超时、Browser 失败或取消记录成自动获取正常耗尽。
+生产 `CloakRuntimeManager` 只接受当前已核验的运行三元组：Linux `x86_64` 主机、
+`cloakbrowser==0.5.8` wrapper 和 `playwright==1.55.0` API，配合[外部版本记录](../../notes/cloakbrowser.md#1-已核对的版本与来源)中的
+`146.0.7680.177.5` Linux x64 binary。Configuration 在 `status`、显式安装/更新/回退以及
+runtime lease 前使用本地 `sys.platform`、机器架构和 `importlib.metadata` 版本信息做 fail-closed
+检查；不会导入 vendor downloader 或发起网络请求。检查失败时 `status` 只返回稳定的
+`unsupported-platform` 或 `dependency-version-mismatch` reason，不包含路径、凭据或环境值。
 
-多个人同时接管时以服务端版本化结果为准，失败客户端重新读取控制状态；不能靠最后渲染页面的按钮决定赢家。过期命令返回 conflict/stale 而不是静默忽略，让用户知道动作没有生效。
+注入 installer/verifier 的离线 fixture 不受这项生产主机门限制，从而可以在其它宿主平台上验证
+缓存、manifest、签名证据和原子生命周期；这不是公开的第二 runtime，也不会放宽生产准入。
 
-帮助请求和介入等待只用于明确启用的协作策略或用户主动介入，不是普通自动获取失败后的默认阶段。需要显示目标、阻碍和可行人工动作时，具体等待时限、持久化和恢复仍遵循 Application/Jobs 合同，不从现有 intervention 表推导所有行为已实现，也不因界面调整静默删除这些能力。
+#### 6.3.8 启动参数与 persona
 
-登录、机构选择、MFA、验证码等允许的人类操作范围仍需独立确认。它们不自动授权 AI 获取凭据、读取 Profile 或绕过访问控制。
+v0.5.8 wrapper 在 Linux 上默认追加 `--fingerprint-platform=windows`。README 与 changelog 支持
+“native Linux persona”这一概念，并说明 spoofed platform 与宿主一致时结果更稳定；SciRetriever
+因此显式使用固定 seed、`--fingerprint-platform=linux`、Profile 语言偏好、`--lang=en-US`、
+`timezone=UTC` 与 1920x1080 Xvfb，而不采用 wrapper 的随机 Windows persona。
 
-### 4.6 查询隔离与人类控制衔接
-
-独立 QueryApplication 不组装 Network Provider、Browser host 或 AgentRuntime。库内读取可访问 Storage 与本地索引；缺 PDF、缺表示或索引失效返回缺口，不隐式启动网络。配置状态的读取也不是 probe，只有明确配置测试操作才使用本节的外部 transport。
-
-Human Interaction 观看的是生产 Browser 的同一观察源。`BrowserControlCoordinator` 维护 workspace、client、controller 和递增 epoch；接管/交还/断开控制者改变 epoch，陈旧输入在执行前拒绝。页面导航还改变 document generation 与 observation revision，坐标/元素动作必须绑定对应观察，不能复用旧截图的点击位置。
-
-当前已有控制租约、动作派发、自然语言指导队列与文章级安全消费点，同一生产工作台经 `Application` 的文章 flow 接入。自然语言“试试右侧下载按钮”不等于授予任意导航或脚本权限，人工动作仍走 Network 和 Acquisition 验收。生产 `WorkbenchView.operation_feedback` 只投影本次内存操作的阶段、冻结后的目标计数与当前目标、最终 `DatabaseCompletionReport`、稳定失败和操作结束后通过 Library 校验文件字节的主 PDF hash/大小；旧合成视图不带该字段。文件缺失或损坏时标记 `unreadable`，不生成阅读引用；原始异常只在进程内保留，公开反馈使用稳定分类。Browser Intake 的候选评估结果进入同一会话候选列表，但已捕获或身份检查通过均不代表主 PDF 已提交；失败、取消和结束后，未提交候选不再显示“等待提交”。页面以完整报告分区显示已完成、失败、跳过、未开始和中断；无法观测 Public/API 等候时只说明执行中，不猜操作总耗时。Library 阅读按钮指向已确认的当前 Literature ID，阅读和刷新不启动维护操作。
-
-凭据的普通参数与授权时效也须分开：Application 固定本次 provider/model/访问政策，每次新的外部请求重新向 Configuration 授权当前密钥。撤销后的新请求失败，不凭内存旧 key 继续访问；已经派发的 HTTP 或浏览器动作只能如实结算。Browser Profile 的现存登录态不等同于普通 Provider API key，其授权与人类可做的登录操作范围需独立定义。
-
-## 5. 人工协作与运行边界验证
-
-### 5.1 一次人工协作示例
-
-用户明确启动某篇 PDF 获取。公开/API 路线未交付后，符合准入条件的 Browser 打开真实文章页面。用户观看同一会话，发现下载入口特殊，提交指导；界面先显示 accepted，controller 在下一安全点消费并记录 consumed。
-
-若仍失败，用户接管。旧 AI 响应因为 epoch 变化失效，人工点击触发候选下载。Acquisition 检查 PDF 字节、目标归属和版本；候选显示真实捕获及身份状态，操作完成后由 Library 回读确认当前主 PDF 已提交。即使人类已经交还，候选仍按原文章绑定处理；若后续失败或取消，已提交 PDF 仍可从 Library 阅读。
-
-用户随后进入阅读页打开该 PDF。此时不自动解析或总结；用户明确发起加工后，新的 Document/Knowledge 版本可供 Agent 和人类共同读取。
-
-### 5.2 验证设计
-
-离线验证覆盖实际 HTTP/Web 边界、配置 revision 冲突、保存成功但状态失败、来源排序/scan limit、只读页面无维护入口、control epoch 争抢、过期观察、在途动作、跨文章候选、断线和重复关闭。
-
-完整目标旅程必须接同一个生产 Browser owner，证明“获取 → 观看 → 指导/接管 → 交还 → 验收 → 共同读取”。固定 Cloak bundle + loopback 测试已覆盖 HTTP 明确获取、两个观看者、指导受理与过期、旧模型返回失效、人工点击、同一 Acquisition 验收、最终报告和 Web/Agent 对同一 PDF hash 的读取；真实 Publisher 站点未运行。一次合成页面上的 runAgent 成功不能代替该旅程。
-
-阅读验证使用固定版本的合成文档和知识产物，检查证据指向、截断/缺口、Markdown 安全渲染与损坏反馈。当前指导和断线政策只适用于进程内操作；跨重启指导历史、允许人工认证动作和最终界面形态仍需独立决定，不能从 T02 实现推断已授权。
+`launch_persistent_context()` 支持 `user_data_dir`、`headless`、`proxy`、`args`、
+`stealth_args`、`user_agent`、`viewport`、`locale`、`timezone`、`color_scheme`、`humanize`、
+`human_preset`、`human_config`、`license_key`、`browser_version` 等参数。SciRetriever 只传当前
+合同所需的显式值；不启用 geo-IP、代理轮换或任意扩展路径。唯一 Browser proxy 是当前 loopback
+`BrowserConnectProxy`，它继续执行 URL/DNS/IP/host/TLS/预算和 Publisher permit；该 loopback
+proxy 不改变服务器原始出口。

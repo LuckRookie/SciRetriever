@@ -1,5 +1,9 @@
 # RSC Publishing
 
+类型：外部事实
+负责：RSC Publishing
+状态：现行
+
 - 官方资料最后在线核对：2026-08-19
 - 配置选择键：无；RSC Publishing 是 Publication/Access Provider
 - Access Platform：`https://pubs.rsc.org`

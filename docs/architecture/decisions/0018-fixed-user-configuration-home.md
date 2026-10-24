@@ -1,6 +1,9 @@
 # ADR 0018：固定用户级普通配置文件
 
-- Status: Accepted
+类型：决策（ADR）
+负责：固定用户级普通配置文件
+状态：Accepted
+
 - Date: 2026-08-26
 - Supersedes: none
 - Superseded by: none

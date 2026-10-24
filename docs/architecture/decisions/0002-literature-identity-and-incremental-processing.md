@@ -1,14 +1,15 @@
 # ADR 0002：多来源文献身份与增量处理
 
-- Status: Accepted
+类型：决策（ADR）
+负责：多来源文献身份与增量处理
+状态：Accepted；决策第 6 条（后备匹配改用出版形式）和第 12 条（元数据改为按字段裁决）被 [ADR 0037](0037-literature-archive-and-proofread-text.md) 取代
+
 - Date: 2026-07-23
 - Revised: 2026-08-10
 - Supersedes: none
 - Superseded by: none
 - Amended by: [ADR 0008](../../archive/decisions/0008-summarized-markdown-literature-content.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)；[ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[ADR 0001](0001-sciretriever-scope-and-boundary.md)
-
-> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md)修订本 ADR：决策第 6 条后备匹配改用出版形式；第 12 条元数据收敛改为建档元数据步骤按字段裁决。直接冲突的正文已按 ADR 0037 收口。
 
 ## 背景
 

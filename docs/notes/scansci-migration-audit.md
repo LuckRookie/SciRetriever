@@ -1,5 +1,9 @@
 # ScanSci PDF 迁移许可与证据审计
 
+类型：外部事实
+负责：ScanSci 实现的许可与可复用证据
+状态：现行
+
 - 审计日期：2026-08-15
 - 审计对象：<https://github.com/Rimagination/scansci-pdf>
 - 固定 revision：`5e4a6f20ee32b16c0fcb52e37b66ca7a0b31edc5`（Release v1.9.0）

@@ -1,12 +1,13 @@
 # ADR 0034：统一处理器接口与结果格式
 
-- Status: Accepted
+类型：决策（ADR）
+负责：统一处理器接口与结果格式
+状态：Accepted；部分被 [ADR 0037](0037-literature-archive-and-proofread-text.md) 取代：算子只读就绪文献的校订稿；单篇算子无依赖；多篇算子先逐篇再汇总；结果过时只标记、不自动重算；增加区块级仲裁
+
 - Date: 2026-10-18
 - Amends: [ADR 0027](0027-extraction-capabilities-and-caller-defined-records.md)
 - Related: [产品需求](../requirements.md)、[精简实施计划](../../archive/2026-10-18-knowledge-processing-platform/README.md)
 - Amended by: [ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
-
-> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md)修订本 ADR：算子只读就绪文献的校订稿；单篇算子无依赖；多篇算子先逐篇再汇总；结果过时只标记不自动重算；引入区块级仲裁。直接冲突的正文已按 ADR 0037 收口。
 
 ## 决定
 
@@ -24,7 +25,7 @@ Analysis 拥有通用结果接纳与处理器，Extraction 保留外部候选校
 
 ## 取舍与验收
 
-选择精简处理器而非完整形状/配方/Unit 依赖体系，先验证新增方法无需改动执行、存储及机器入口。完整版保留为[参考设计](../../proposals/2026-10-17-knowledge-processing-full-design/README.md)，实际重复工作或重算成本出现后再决定扩展；不要求外部框架或向量库。文档校订（区块级仲裁）后来按 ADR 0037 作为建档的一部分引入，不属于处理器。
+选择精简处理器而非完整形状/配方/Unit 依赖体系，先验证新增方法无需改动执行、存储及机器入口。完整版保留为[参考设计](../../archive/2026-10-17-knowledge-processing-full-design/README.md)，实际重复工作或重算成本出现后再决定扩展；不要求外部框架或向量库。文档校订（区块级仲裁）后来按 ADR 0037 作为建档的一部分引入，不属于处理器。
 
 验收包括重叠集合复用、模型与输入变化、恢复固定输入、部分结果补全、记录进入综合、长期证据和索引重建。合成 fixture 与 fake 模型验证机制，真实语料准确率与真实 Agent 自主行为另行授权评估。Accepted 不表示实现或质量已验收。
 

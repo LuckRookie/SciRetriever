@@ -1,12 +1,16 @@
 # TypeScript 版本安装
 
-支持矩阵当前固定为 Linux x64、Node 22.19.0 runtime、Playwright 1.55.0、CloakBrowser 0.5.8 wrapper 与固定 binary release `146.0.7680.177.5`。免开发包自带 Node、contracts、server、Web 静态资源和 runtime manifest；CloakBrowser bundle 可在构建包时显式携带，也可以由 operator 通过 `SCIRETRIEVER_CLOAK_BUNDLE` 配置。系统需要 `flock`、`prlimit`、`pdfinfo` 和 `Xvfb`，不要求 Python、Rust、VNC 或本地编译器。其它 OS、ARM 和 runtime 版本不属于本轮已验收组合。
+类型：指南
+负责：安装入口和运行支持边界
+状态：现行
+
+支持矩阵当前固定为 Linux x64、Node 22.19.0 runtime、Playwright 1.55.0、CloakBrowser 0.5.8 wrapper 与固定 binary release `146.0.7680.177.5`。免开发包自带 Node、contracts、server、Web 静态资源和 runtime manifest；CloakBrowser bundle 可在构建包时显式携带，也可以由 operator 通过 `SCIRETRIEVER_CLOAK_BUNDLE` 配置。系统需要 `flock`、`prlimit`、`pdfinfo` 和 `Xvfb`，不要求 Python、Rust、VNC 或本地编译器。其它 OS、ARM 和 runtime 版本不在当前声明的支持矩阵内。
 
 从源码安装并验证：
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm full
+pnpm build
 pnpm package:portable -- --output /tmp/sciretriever-portable
 /tmp/sciretriever-portable/bin/sciretriever doctor --json
 ```
@@ -30,6 +34,4 @@ sciretriever storage schema-init --catalog /absolute/data/catalog.sqlite --json
 
 ## 安装验收边界
 
-2026-09-30 已验证实际 portable 包的公开 SDK、CLI、worker 和包内 Web 资源旅程，包含正式 v8 初始化、独立 v1→v8 升级及原始版本备份读取。单独的真实 Cloak portable 旅程把已核实官方归档字节的 bundle 打进包，并从该安装副本运行同会话 Browser、获取、发布和后续阅读。默认离线安装测试使用明确的 synthetic Chromium shim；两类证据分别记录，不能由默认 Full 推导官方 runtime。
-
-真实 runtime 行为只访问 loopback，Parser/模型/Provider 使用 fake 或 fixture，所有 Catalog、资产与 Profile 为合成临时材料。软件来源核实证明签名归档与文件字节，不追认每一条历史测试实际启动了该软件。真实服务、Publisher/机构站点、真实语料质量、用户数据/Profile 切换及发布均未在本轮执行；安装成功不构成这些能力的生产就绪声明。
+安装包检查、源码构建与真实 Browser/供应商验收分别记录；安装成功不证明真实站点 entitlement、解析质量或模型科学质量。开发验证方法见[TypeScript 开发入口](../development/typescript-foundation.md)，测试选择见 [HARNESS](../../HARNESS.md#54-typescript-开发验证)。历史版本的安装旅程不定义当前 schema 支持范围。

@@ -1,6 +1,8 @@
 # 计划 15：文档体系整理
 
-状态：**Ready**（2026-10-23 编写）。计划编写完成，尚未开始实施。
+类型：导航
+负责：文档归属、去重、退役与检查器交付
+状态：整理完成，待统一审阅与提交（2026-10-24）；9/9 Task 已勾选，未提交、未归档
 
 ## 目标
 
@@ -42,24 +44,24 @@ Web 主题已在 2026-10-23 先行整理（ADR 0038、设计内核、页面规�
 
 ### A · 盘点与归属
 
-- [ ] **A.1 盘点**〔worker〕：列出全部现行文档（`docs/` 下除 `archive/` 外的 md、根 `README.md`、`AGENTS.md`、`HARNESS.md`、`apps/` 与 `packages/` 的 README），每份记录：类型（按文档导航的类型表）、负责的主题、状态、行数、与其它文档重叠的主题。输出 `sandbox/reports/2026-10-23-docs-consolidation/inventory.md`。
-- [ ] **A.2 归属判定**〔Claude〕：按盘点补全[主题归属表](../../README.md#主题归属表)；有争议的项交 Owner。
+- [x] **A.1 盘点**〔worker〕：列出全部现行文档（`docs/` 下除 `archive/` 外的 md、根 `README.md`、`AGENTS.md`、`HARNESS.md`、`apps/` 与 `packages/` 的 README），每份记录：类型（按文档导航的类型表）、负责的主题、状态、行数、与其它文档重叠的主题。输出 `sandbox/reports/2026-10-23-docs-consolidation/inventory.md`。
+- [x] **A.2 归属判定**〔Claude〕：按盘点补全[主题归属表](../../README.md#主题归属表)；有争议的项交 Owner。
 
 ### B · 去重与现在时
 
-- [ ] **B.1 规格**〔worker〕：`requirements.md`、`design.md`、`technical/*`、`principles.md`、`knowledge-service-workflows.md`、`evolution-map.md`、`typescript-baseline.md`：
+- [x] **B.1 规格**〔worker〕：`requirements.md`、`design.md`、`technical/*`、`principles.md`、`knowledge-service-workflows.md`、`evolution-map.md`、`typescript-baseline.md`：
   - 删除复述其它归属文档的段落，换成一句话加链接；
   - 把“某日补充/修订”段落改写进对应正文，删除日志式表述（例如 `design.md` 末尾的“ADR 0034 补充”节）；
   - 已不再是现行的内容（例如迁移期说明）移入归档。
-- [ ] **B.2 指南与 README**〔worker〕：根 `README.md` 与 `docs/guides/*` 只保留已实现的行为；与指南重复的部分，根 README 改为链接；核对仍在描述已删除功能的段落。
-- [ ] **B.3 ADR**〔worker 起草，Claude 定稿〕：15 份 ADR 正文开头的“被某 ADR 修订”引用块改为状态行（“部分被 ADR NNNN 取代：第 X 节”）；修复失效链接；不改写正文。ADR 索引同步。
-- [ ] **B.4 开发文档**〔worker〕：`documentation-map.md` 只保留“代码 → 需同步的文档”映射，主题归属部分以文档导航为准；`plans/README.md`、`archive/README.md` 的历史表格精简为索引。
-- [ ] **B.5 提案**〔worker〕：`docs/proposals/2026-10-17-knowledge-processing-full-design/` 已被精简计划取代，移入归档；提案索引同步。
+- [x] **B.2 指南与 README**〔worker〕：根 `README.md` 与 `docs/guides/*` 只保留已实现的行为；与指南重复的部分，根 README 改为链接；核对仍在描述已删除功能的段落。
+- [x] **B.3 ADR**〔worker 起草，Claude 定稿〕：15 份 ADR 正文开头的“被某 ADR 修订”引用块改为状态行（“部分被 ADR NNNN 取代：第 X 节”）；修复失效链接；不改写正文。ADR 索引同步。
+- [x] **B.4 开发文档**〔worker〕：`documentation-map.md` 只保留“代码 → 需同步的文档”映射，主题归属部分以文档导航为准；`plans/README.md`、`archive/README.md` 的历史表格精简为索引。
+- [x] **B.5 提案**〔worker〕：`docs/proposals/2026-10-17-knowledge-processing-full-design/` 已被精简计划取代，移入归档；提案索引同步。
 
 ### C · 开头三行与检查
 
-- [ ] **C.1 开头三行**〔worker〕：全部现行文档加“类型、负责、状态”三行。
-- [ ] **C.2 检查脚本**〔worker〕：`scripts/check-docs.mjs`：本地链接与锚点都能解析；现行文档有开头三行；归档以外不存在指向归档文件的“现行依据”式链接。先作为独立命令；是否加入 `pnpm quick` 由 Owner 决定。
+- [x] **C.1 开头三行**〔worker〕：全部现行文档加“类型、负责、状态”三行。
+- [x] **C.2 检查脚本**〔worker〕：`scripts/check-docs.mjs`：本地链接与锚点都能解析；现行文档有开头三行；归档以外不存在指向归档文件的“现行依据”式链接。先作为独立命令；是否加入 `pnpm quick` 由 Owner 决定。
 
 ## 验证
 
@@ -74,12 +76,21 @@ A–C 全部勾选；主题归属表覆盖所有被多处提到的主题；检�
 
 ## 进度
 
-| 日期       | 事件                                                                                 |
-| ---------- | ------------------------------------------------------------------------------------ |
-| 2026-10-23 | 计划编写完成，状态 Ready；文档类型、归属表与维护规则已写入文档导航，Web 主题先行整理 |
+| 日期       | 事件                                                                                                                                                                                                                      |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-23 | 计划编写完成，状态 Ready；文档类型、归属表与维护规则已写入文档导航，Web 主题先行整理                                                                                                                                      |
+| 2026-10-24 | Worker 完成A.1、A.2草案、B.1/B.2/B.4/B.5、C.1/C.2；229份盘点，13份提案完整归档，15份ADR状态草案；独立检查217份文档，0范围内错误，计划14另报13项。Prettier检查128份改动Markdown，122份通过、6份冻结ADR维持开工前已有告警。 |
 
-**下一安全动作**：在计划 14 的 01（分组提交）完成后开始 A.1；worker 在计划 14 等待审阅的空档执行，不抢占计划 14 的主线。
+| 2026-10-24 | Claude 审阅结论已落实：12 项归属落表，15 份 ADR 状态定稿及索引同步，A.2/B.3 勾选，累计 9/9；目标接口与 Browser 生命周期集中，删除 23 份整份副本，15 份归档精确白名单；检查器扩展并复验通过。 |
+
+**下一安全动作**：Claude 统一审阅本轮 review-fixes.md、正式归属表和目标接口搬移；计划 14 负责方处理其独立报告的问题。Owner 授权后才能提交及归档计划，本轮不执行。
 
 ## 交接记录
 
 按时间追加，每条写：日期 · 角色 · 做了什么 · 命令与结果 · 证据位置 · 未做和未核实。
+
+- 2026-10-24 · worker · 按Owner本轮范围单独完成整理，无子代理。A.1盘点229份；A.2仅写ownership-proposal.md，正式主题归属表未改，两个待定主题保留。B段按现表与明确草案归属执行，迁移比较、旧知识API、旧版本支持和重复配置/测试政策分别归档或链接到归属处；上一轮新增progress和缺失引用规范保留。15份ADR仅整理头部状态草案与失效链接，30份可编辑ADR正文除链接外逐字不变；B.3仍未勾选。完整版知识加工提案13份完整搬入归档。
+- 2026-10-24 · worker · C.1补齐127份可编辑现行文档三行；77份src README按本轮只修链接，未加元信息。新增独立node scripts/check-docs.mjs，未加入Quick；命令退出0，217份文档0错误，计划14的13份缺头部三行问题独立报告。源码README修复2处已删除合同文件链接。12主题抽查及合成检查器验证通过；脚本Prettier/ESLint/Node语法检查通过。全部改动Markdown均运行Prettier检查，其中6份ADR在开工前已存在格式告警，遵守正文冻结未格式化；其余通过。未跑Quick/Full或行为测试。
+- 2026-10-24 · worker · 每批文件清单、逐段删除原文→去向、未动段落、命令原文和失败/修正记录位于sandbox/reports/2026-10-23-docs-consolidation/。38份新归档文件被既有.gitignore忽略，精确路径/hash见archive-manifest.json；以后获授权提交时须精确纳入，不能只提交原路径删除。本轮未改忽略规则，未暂存/commit/push，未改源码行为、测试、正式库、4174或个人配置；未调用真实服务。DONE.md最后写入后停下。
+
+- 2026-10-24 · worker · 按 Claude 审阅结论完成 A.2 落表、B.3 定稿、快照收敛与头部质量修订。10 项建议和两项原待定主题均已落实；19 个区块搬移核对通过，30 份 ADR 正文除一处链接外保持。删除 23 份副本；保留 2 份退役材料和 13 份提案并精确白名单，未知同级仍忽略。`node scripts/check-docs.mjs` 退出 0（217 份、0 范围内错误；计划 14 另列 4 项），合成检查器、ESLint、Node 语法与 diff 检查通过；124 份改动 Markdown 中 118 份格式通过、6 份冻结 ADR 维持已有告警。文件清单、删除清单、链接前后对照及命令见 sandbox/reports/2026-10-23-docs-consolidation/review-fixes.md。没有修改并行负责范围、源码行为、测试、正式库、4174 或凭据；未跑 Full，未暂存、commit、push；等待统一审阅与提交授权。

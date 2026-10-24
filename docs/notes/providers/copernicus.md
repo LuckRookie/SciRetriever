@@ -1,5 +1,9 @@
 # Copernicus Publications
 
+类型：外部事实
+负责：Copernicus Publications
+状态：现行
+
 - 官方资料最后在线核对：2026-08-15
 - 配置选择键：无；Copernicus Publications 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://publications.copernicus.org` 与各期刊独立的 `*.copernicus.org` 文章站点

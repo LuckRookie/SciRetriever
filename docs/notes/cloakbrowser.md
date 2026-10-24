@@ -1,28 +1,19 @@
 # CloakBrowser 接入注意事项
 
-> 最后核对：2026-08-22
->
-> 性质：外部 Browser runtime 的易变事实与接入风险。产品选择以
-> [ADR 0016](../architecture/decisions/0016-cloakbrowser-fixed-identity-runtime.md) 为准，目标技术边界以
-> [任务与协作控制：共享支撑：受控网络访问](../architecture/technical/02-task-coordination.md#7-共享支撑受控网络访问) 与
-> [统一产品接口：共享支撑：配置与凭据](../architecture/technical/01-product-interface.md#5-共享支撑配置与凭据) 技术文档为准。当前生产对象图已经切换为
-> 唯一 CloakBrowser runtime；本文仍不证明任何 Publisher entitlement 或验证页一定能够自动通过。
+类型：外部事实
+负责：CloakBrowser 分发、许可、签名与运行时行为
+状态：现行；外部事实核对日期为 2026-08-22
 
-秘密值、个人 Profile、Cookie、页面正文、截图、挑战 token、签名下载 URL、真实 Publisher
-语料和 Browser binary 都不能进入本文或仓库。
+本文记录已核对版本的外部事实，不证明当前项目构建、Publisher entitlement 或验证页通过率；项目的 binary/Profile 完整生命周期归[Browser 技术篇](../architecture/technical/08-browser-control.md#6-目标接口尚未实现)。
 
-## 1. 当前固定生产基线
+## 1. 已核对的版本与来源
 
-| 项目                  | 固定值                     | 证据边界                                                              |
-| --------------------- | -------------------------- | --------------------------------------------------------------------- |
-| Python wrapper        | `cloakbrowser==0.5.8`      | PyPI 与 GitHub `v0.5.8`；wrapper wheel 只包含 Python 代码             |
-| Playwright API        | `1.55.0`                   | SciRetriever 当前锁定版本；vendor 只声明 `playwright>=1.40`，没有上限 |
-| Linux x64 binary      | `146.0.7680.177.5`         | 官方公开 free release；不是当前最新 Pro binary                        |
-| 目标平台              | Linux x86_64               | 当前服务器平台；其它平台必须单独验证                                  |
-| vendor service origin | `https://cloakbrowser.dev` | 官方 license/download 源码常量与发布路径                              |
-
-生产基线把 wrapper、Playwright API 和 binary 三者一起锁定并完成 characterization。不能因为
-Python 依赖解析成功，就推断 wrapper 对未来 Playwright 私有 API 或未来 Chromium 仍然兼容。
+| 项目                  | 已核对值                   | 证据边界                                                    |
+| --------------------- | -------------------------- | ----------------------------------------------------------- |
+| Python wrapper        | `cloakbrowser==0.5.8`      | PyPI 与 GitHub v0.5.8；wheel 只包含 Python 代码             |
+| Playwright API        | `1.55.0`                   | 接入核对的 API 版本；vendor 声明 playwright>=1.40，没有上限 |
+| Linux x64 binary      | `146.0.7680.177.5`         | 官方 older-free release                                     |
+| vendor service origin | `https://cloakbrowser.dev` | license/download 源码常量与发布路径                         |
 
 官方来源：
 
@@ -33,7 +24,7 @@ Python 依赖解析成功，就推断 wrapper 对未来 Playwright 私有 API �
 - [wrapper MIT license](https://github.com/CloakHQ/CloakBrowser/blob/v0.5.8/LICENSE) 与
   [binary 独立许可](https://github.com/CloakHQ/CloakBrowser/blob/v0.5.8/BINARY-LICENSE.md)。
 
-## 2. Wrapper 与 binary 不是同一分发物
+## 2. Wrapper 与 binary 分发和许可
 
 `cloakbrowser` wheel 约 126 KiB，只包装启动、下载、许可和 humanization 行为；定制 Chromium
 binary 不在 wheel 中。wrapper 使用 MIT License，binary 受单独条款约束。当前公开条款允许内部
@@ -42,14 +33,8 @@ binary 不在 wheel 中。wrapper 使用 MIT License，binary 受单独条款约
 
 公开材料在“最新 major 是否免费”上存在需要 vendor 澄清的张力：README 介绍最新版本可使用
 GitHub key 且限制一个并发，binary license 的 version-specific 条款则把最新 major 与付费订阅联系。
-因此 SciRetriever 首轮只采用公开标记为 older free build 的 v146；v150、v151 或其它 Pro/latest
-版本在 vendor/法务确认前不能成为默认承诺。
 
-SciRetriever wheel、源码仓库、fixture 和构建产物都不得包含 binary。用户显式安装动作应从官方
-渠道取得它；普通 Completion、`config status`、测试、Quick、Full 和 fresh-wheel 验收均不得隐式
-下载或更新。
-
-## 3. 官方校验链与 binary 生命周期
+## 3. 官方校验材料
 
 v146 Linux x64 官方 archive 是 `cloakbrowser-linux-x64.tar.gz`。该 release 同时发布
 `SHA256SUMS` 与 `SHA256SUMS.sig`；manifest 声明的 x64 SHA-256 为：
@@ -58,26 +43,9 @@ v146 Linux x64 官方 archive 是 `cloakbrowser-linux-x64.tar.gz`。该 release 
 4a12bcde95fa1bb1beef2b41ab5e5c27c36be78e3be3d0dac8c64d705216670e
 ```
 
-wrapper 固定 Ed25519 公钥。SciRetriever 的显式 installer 使用锁定 wrapper 的下载、签名和解压
-原语，但自行保留本次实际 archive：先验证 detached signature 和 manifest version binding，再要求
-签名 manifest 中的 archive digest、仓库固定 digest 与实际 archive SHA-256 三者相同，然后才解压。
-缺少签名证据、同版本 archive 被替换、digest 漂移或只生成任意 bundle 都会 fail closed，不能把
-`ensure_binary()` 或目录存在本身当成验证结果。项目不接受用户自定义 download URL、未签名
-manifest、本地 executable override 或仅凭文件名/版本目录判断成功。公开 release 还提供 GPG-signed
-tag 与 attestation，可作为维护者的第二层发布审查材料，但不能取代运行安装路径中的 Ed25519 与
-archive digest 校验。
+wrapper 固定 Ed25519 公钥；release 还提供 GPG-signed tag 与 attestation。`ensure_binary()` 的返回值或版本目录存在本身不能证明已复核签名和 archive 字节。
 
-Configuration 只允许用户显式执行 install/update/rollback：下载到 owner-only staging，完成签名、
-版本与 digest 校验后原子发布；任何失败保留当前已验证版本。安装 manifest 只保存 wrapper/binary
-版本、平台、官方 digest/签名验证状态和核对时间，不保存 license key、下载 URL query、Profile
-身份或环境指纹。普通运行必须显式使用已锁定 `browser_version`，并在进入 vendor wrapper 前完成
-本地 presence/manifest 检查。普通 runtime lease 另外创建 owner-only 的一次性无凭据 cache view，
-只把当前已验证版本目录呈现给 wrapper；该 view 不包含长期 root 中可能出现的 `license.key`、
-`.license_cache`、Pro/latest marker 或其它 vendor 状态，并在 context 关闭后删除。wrapper 的
-`ensure_binary()` 因而只能命中固定版本，不能在业务路径解析 cache-file credential、切换 Pro/latest
-或隐式联网。
-
-## 4. 真实生命周期接缝
+## 4. Wrapper 生命周期与参数
 
 `launch_persistent_context()` 不是一个只返回 executable path 的轻量 helper。v0.5.8 的同步实现会：
 
@@ -86,37 +54,11 @@ Configuration 只允许用户显式执行 install/update/rollback：下载到 ow
 3. 调用 Playwright `chromium.launch_persistent_context(executable_path=...)`；
 4. 包装 `context.close()`，在 Context 关闭后停止由它创建的 Playwright manager。
 
-因此不能把它天真塞入一个已经自行 start/stop Playwright 的 stock engine，否则会出现两套 manager、
-线程所有权不一致、重复 stop 或资源残留。目标 adapter 必须让 CloakBrowser 在同一个 engine thread
-内拥有 manager/context 生命周期，再通过 SciRetriever 的中性 Process/Context/Page facade 向上提供
-能力；CloakBrowser 和 Playwright vendor 类型不得越过 Network/Bootstrap。
+`launch_persistent_context()` 支持 `user_data_dir`、`headless`、`proxy`、`args`、`stealth_args`、`user_agent`、`viewport`、`locale`、`timezone`、`color_scheme`、`humanize`、`human_preset`、`human_config`、`license_key`、`browser_version` 等参数。
 
-`launch_persistent_context()` 支持 `user_data_dir`、`headless`、`proxy`、`args`、
-`stealth_args`、`user_agent`、`viewport`、`locale`、`timezone`、`color_scheme`、`humanize`、
-`human_preset`、`human_config`、`license_key`、`browser_version` 等参数。SciRetriever 只传当前
-合同所需的显式值；不启用 geo-IP、代理轮换或任意扩展路径。唯一 Browser proxy 是当前 loopback
-`BrowserConnectProxy`，它继续执行 URL/DNS/IP/host/TLS/预算和 Publisher permit；该 loopback
-proxy 不改变服务器原始出口。
+## 5. 默认身份与 Linux persona
 
-## 5. 固定身份与 Linux persona
-
-wrapper 默认的 stealth 参数每次启动会随机生成：
-
-```text
---fingerprint=<random 10000..99999>
-```
-
-若复用同一个 Cookie/历史 Profile 却每次更换 seed，就会形成“同一长期状态、不同设备身份”的内部
-矛盾。SciRetriever 必须在新 Profile 初始化时一次生成 seed，把它保存在 owner-only identity
-manifest 中，并在每次启动显式传入相同 `--fingerprint=<seed>`。不同 Profile 必须使用不同 seed；
-seed 原值不能进入普通配置、credentials、日志、Report、Catalog、测试快照或文档。
-
-v0.5.8 wrapper 在 Linux 上默认追加 `--fingerprint-platform=windows`。README 与 changelog 支持
-“native Linux persona”这一概念，并说明 spoofed platform 与宿主一致时结果更稳定；SciRetriever
-因此显式使用固定 seed、`--fingerprint-platform=linux`、Profile 语言偏好、`--lang=en-US`、
-`timezone=UTC` 与 1920x1080 Xvfb，而不采用 wrapper 的随机 Windows persona。
-
-旧 stock Profile 不能被当前 binary 静默打开、复制、降级或修改。历史身份稳定性检查见Browser 测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
+wrapper 每次启动默认随机生成 `--fingerprint=<random 10000..99999>`。v0.5.8 在 Linux 上默认追加 `--fingerprint-platform=windows`；README 与 changelog 也说明 native Linux persona，以及 spoofed platform 与宿主一致时的稳定性。
 
 ## 6. Humanization 接缝
 
@@ -125,54 +67,10 @@ check/select/press/drag 等动作。实现依赖 Playwright 私有 `_generated` 
 字段和 CDP isolated world；这种 vendor 内部 CDP 是 humanizer 的实现细节，不是向 Acquisition 或
 Agent 开放第二个控制器。
 
-所有生产 click、scroll、wait 和未来获准的输入必须复用同一 patched Page/Locator。不得调用
-`page._original`、新建裸 CDP session、直接 DOM click、任意 `evaluate()` 动作或另一个 Browser。
-只读 DOM/locator 发现仍需在 SciRetriever 有界观察接口内。由于 human layer 使用 Playwright 私有
-API，必须用锁定的 1.55.0 做动作 spy/characterization；未来升级 Playwright 时重复该门禁。
+## 7. Playwright 与 Chromium 的网络行为
 
-## 7. 环境、代理与已核验的 Network 边界
+Playwright 不能保证 `context.route()` 观察到被 Service Worker 接管的请求。CONNECT 在建立隧道前只能核对 hostname、IP 与 port；透传 TLS 时无法检查加密流量中的 path、resource type、frame ancestry 或 capture source。
 
-现有 headed-display helper 会复制进程环境。Cloak runtime 必须改为最小 child environment 或在
-传递前删除 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 及小写等价项，并删除所有
-`CLOAKBROWSER_*` 下载、cache、binary、update、license 环境变量。当前固定 older-free v146 的
-显式安装和普通 launch 都不消费 license key；即使保留的 origin-bound `credentials.toml`
-`[cloakbrowser]` section 已配置，status 也只报告 `reserved-not-used-by-pinned-free-binary`。未来若
-另行审查 Pro/latest 版本线，secret 仍只能来自规范 origin `https://cloakbrowser.dev` 绑定的
-credentials；当前路径始终拒绝环境或 cache-file fallback。
+Chromium 的 `plugins.always_open_pdf_externally=true` 会影响 PDF plugin 展示，并将顶层 PDF 交给原生下载事件。
 
-Playwright 明确不能保证 `context.route()` 观察到被 Service Worker 接管的请求。loopback CONNECT
-只能在建立隧道前核对已批准的 hostname、IP 与 port；它透传 TLS，不能在加密流量内证明 reviewed
-path、resource type、frame ancestry、article ownership 或 capture source。因此生产 runtime 固定使用
-`service_workers="block"`。普通页面脚本、fetch、iframe 与 challenge 资源仍走可路由的页面网络栈；
-不得把 CONNECT 写成能够检查 Service Worker 的 TLS 内部请求。
-
-Chromium 的 `plugins.always_open_pdf_externally=true` 会影响 PDF plugin 展示并将顶层 PDF 交给原生下载事件。顶层 PDF、attachment 与 blob 应沿 Chromium 原生 response/download 事件捕获，不另发代取请求。历史复验见Browser 测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
-
-CloakBrowser 降低自动化表面，但它不保证 Cloudflare 自动完成，也不改变文章 entitlement。
-
-## 8. 升级与回退门禁
-
-改变 wrapper、Playwright 或 binary 任一版本前：
-
-1. 固定候选三元组、官方 release、签名 manifest、archive digest 与许可状态；
-2. 在独立 owner-only staging 安装，不触碰当前 binary 或真实 Profile；
-3. 重跑 manager/thread/close、humanized action、固定身份、Xvfb/字体、CONNECT 与本地 HTTPS 事件验收；
-4. 用新建隔离 Profile 做经授权的极小串行 live 对照，不读取个人 Profile/Cookie；
-5. 只有不回归已有成功链且具有可解释收益时，才原子更新 verified manifest；
-6. 回退只能复用与旧 binary 明确兼容的 Profile；不能用较旧 Chromium 打开已经升级的真实 Profile。
-
-任何版本若需要 vendor entitlement、Hosted/OEM 许可或无法证明 Profile 安全，Configuration 都应报告
-明确不可用/需要新 Profile，而不是保留 stock runtime fallback、自动下载其它版本或放宽 Network
-guard。
-
-## 9. 本地生产准入门
-
-生产 `CloakRuntimeManager` 只接受当前已核验的运行三元组：Linux `x86_64` 主机、
-`cloakbrowser==0.5.8` wrapper 和 `playwright==1.55.0` API，配合本页表格中的
-`146.0.7680.177.5` Linux x64 binary。Configuration 在 `status`、显式安装/更新/回退以及
-runtime lease 前使用本地 `sys.platform`、机器架构和 `importlib.metadata` 版本信息做 fail-closed
-检查；不会导入 vendor downloader 或发起网络请求。检查失败时 `status` 只返回稳定的
-`unsupported-platform` 或 `dependency-version-mismatch` reason，不包含路径、凭据或环境值。
-
-注入 installer/verifier 的离线 fixture 不受这项生产主机门限制，从而可以在其它宿主平台上验证
-缓存、manifest、签名证据和原子生命周期；这不是公开的第二 runtime，也不会放宽生产准入。
+CloakBrowser 降低自动化表面，但不保证 Cloudflare 自动完成，也不改变文章 entitlement。

@@ -1,14 +1,15 @@
 # ADR 0007：参考文献解析与权威引用关系
 
-- Status: Accepted
+类型：决策（ADR）
+负责：参考文献解析与权威引用关系
+状态：Accepted；参考文献文本来源被 [ADR 0037](0037-literature-archive-and-proofread-text.md) 取代：改由校订稿解析（ArchiveReferenceTextSupport），ContentReferenceTextSupport 退役
+
 - Date: 2026-08-05
 - Revised: 2026-08-07
 - Supersedes: [ADR 0006](../../archive/decisions/0006-llm-produced-literature-content.md) 中关于 `ReferenceObservation` 的决策
 - Superseded by: none
 - Amended by: [ADR 0008](../../archive/decisions/0008-summarized-markdown-literature-content.md)（撤销 Package 修订；引用关系决策继续有效）、[ADR 0010](../../archive/decisions/0010-parser-neutral-markdown-current-result.md)（参考文献改为有序文本，不保存逐段 locator）；[ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[文献与材料：文献身份、元数据与引用](../technical/03-literature-materials.md#2-文献身份元数据与引用)、[文献与材料：元数据来源与供应商适配](../technical/03-literature-materials.md#3-元数据来源与供应商适配)、[知识加工：分析与综合](../technical/05-knowledge-processing.md#2-分析与综合)
-
-> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md)修订本 ADR：参考文献改由校订稿解析，新增 ArchiveReferenceTextSupport；ContentReferenceTextSupport 随 LiteratureContent 退役。直接冲突的正文已按 ADR 0037 收口。
 
 ## 背景
 

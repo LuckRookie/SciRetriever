@@ -1,11 +1,14 @@
 # ADR 0029：PDF 下载不执行文章身份验收
 
-- Status: Accepted
+类型：决策（ADR）
+负责：PDF 下载不执行文章身份验收
+状态：Accepted
+
 - Date: 2026-10-04
 - Amends: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0023](0023-generic-browser-agent-executor.md)
 - Related: [产品需求](../requirements.md)、[材料获取技术文档](../technical/03-literature-materials.md)、[PDF 获取指南](../../guides/pdf-acquisition.md)
 
-> 后续实现：2026-10-08 的显式解析身份核验及 v9 存储合同见[文档与证据技术文档](../technical/04-document-evidence.md#解析后的文章身份核验2026-10-08-实现合同)。本 ADR 保留当时范围和下载非阻断原则；不把后续实现另立为新的产品决策。
+> 后续实现：2026-10-08 的显式解析身份核验及 v9 存储合同见[文档与证据技术文档](../technical/04-document-evidence.md#7-解析后的文章身份核验)。本 ADR 保留当时范围和下载非阻断原则；不把后续实现另立为新的产品决策。
 
 ## 背景
 

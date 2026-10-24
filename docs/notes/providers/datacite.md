@@ -1,5 +1,9 @@
 # DataCite
 
+类型：外部事实
+负责：DataCite
+状态：现行
+
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
 - 当前选择键：Metadata `datacite`；Acquisition `datacite`；引用是 Metadata 的可选能力
@@ -24,13 +28,13 @@ DataCite REST API 遵循 JSON:API，base 为 `https://api.datacite.org`。公开
 
 当前官方按单 IP、五分钟窗口给出的限制为：
 
-| 请求类别 | 当前限制 | 识别方式 |
-|---|---:|---|
-| authenticated | 3,000 / 5 分钟 | 账户认证 |
-| identified | 1,000 / 5 分钟 | `User-Agent` 含 email 或请求含 `mailto=` |
-| unidentified | 500 / 5 分钟 | 不含上述识别信息 |
-| `doi.org` content negotiation | 1,000 / 5 分钟 | 独立限制 |
-| test system | 不超过 750 / 5 分钟 | 测试环境 |
+| 请求类别                      |            当前限制 | 识别方式                                 |
+| ----------------------------- | ------------------: | ---------------------------------------- |
+| authenticated                 |      3,000 / 5 分钟 | 账户认证                                 |
+| identified                    |      1,000 / 5 分钟 | `User-Agent` 含 email 或请求含 `mailto=` |
+| unidentified                  |        500 / 5 分钟 | 不含上述识别信息                         |
+| `doi.org` content negotiation |      1,000 / 5 分钟 | 独立限制                                 |
+| test system                   | 不超过 750 / 5 分钟 | 测试环境                                 |
 
 超限返回 HTTP 429。生产 adapter 不能把真实 email 写入持久 URL、日志、异常或 provenance；若将来采用 identified 流量，应由 secret/config 依赖在请求边界注入并脱敏。调用预算还要小于共享 Network policy 的总请求、并发和响应大小预算。
 
@@ -127,35 +131,48 @@ DataCite 没有专属 PDF protocol 或授权下载 API；当前 Acquisition 只�
     "id": "10.5281/zenodo.3727209",
     "attributes": {
       "doi": "10.5281/zenodo.3727209",
-      "titles": [{"title": "Advanced Terrestrial Simulator (ATS) v0.88"}],
-      "creators": [{
-        "name": "Coon, Ethan",
-        "nameType": "Personal",
-        "givenName": "Ethan",
-        "familyName": "Coon",
-        "affiliation": ["Oak Ridge National Laboratory"],
-        "nameIdentifiers": [{
-          "nameIdentifierScheme": "ORCID",
-          "nameIdentifier": "https://orcid.org/0000-0001-8124-9622"
-        }]
-      }],
+      "titles": [{ "title": "Advanced Terrestrial Simulator (ATS) v0.88" }],
+      "creators": [
+        {
+          "name": "Coon, Ethan",
+          "nameType": "Personal",
+          "givenName": "Ethan",
+          "familyName": "Coon",
+          "affiliation": ["Oak Ridge National Laboratory"],
+          "nameIdentifiers": [
+            {
+              "nameIdentifierScheme": "ORCID",
+              "nameIdentifier": "https://orcid.org/0000-0001-8124-9622"
+            }
+          ]
+        }
+      ],
       "publisher": "Zenodo",
       "publicationYear": 2020,
-      "types": {"resourceTypeGeneral": "Software", "schemaOrg": "SoftwareSourceCode"},
-      "descriptions": [{"descriptionType": "Abstract", "description": "..."}],
-      "relatedIdentifiers": [{
-        "relationType": "IsCitedBy",
-        "relatedIdentifierType": "DOI",
-        "relatedIdentifier": "10.5194/gmd-2019-265"
-      }],
-      "rightsList": [{"rightsIdentifier": "bsd-3-clause"}],
+      "types": {
+        "resourceTypeGeneral": "Software",
+        "schemaOrg": "SoftwareSourceCode"
+      },
+      "descriptions": [{ "descriptionType": "Abstract", "description": "..." }],
+      "relatedIdentifiers": [
+        {
+          "relationType": "IsCitedBy",
+          "relatedIdentifierType": "DOI",
+          "relatedIdentifier": "10.5194/gmd-2019-265"
+        }
+      ],
+      "rightsList": [{ "rightsIdentifier": "bsd-3-clause" }],
       "url": "https://zenodo.org/record/3727209",
       "contentUrl": null,
       "citationCount": 1
     },
     "relationships": {
-      "citations": {"data": [{"id": "10.5194/gmd-2019-265", "type": "dois"}]},
-      "versionOf": {"data": [{"id": "10.5281/zenodo.3727208", "type": "dois"}]}
+      "citations": {
+        "data": [{ "id": "10.5194/gmd-2019-265", "type": "dois" }]
+      },
+      "versionOf": {
+        "data": [{ "id": "10.5281/zenodo.3727208", "type": "dois" }]
+      }
     }
   }
 }
@@ -165,25 +182,25 @@ DataCite 没有专属 PDF protocol 或授权下载 API；当前 Acquisition 只�
 
 ## 8. 与 SciRetriever 中性数据的候选映射
 
-| 外部字段 | 外部语义 | 候选归属 | 约束 |
-|---|---|---|---|
-| `data.id` / `attributes.doi` | DataCite DOI source record | provenance/source record；`LiteratureMetadata.identifiers` | DOI 规范化，不代替本地 Literature ID |
-| `titles[]` | 主标题/副标题/翻译标题等 | `LiteratureMetadata.title` | 按 title type 明确选择；不拼接未知类型 |
-| `creators[]` | 有序责任者 | `LiteratureMetadata.authors` | `Personal`→person、`Organizational`→organization；contributors 不自动混入 |
-| creator ORCID/affiliation | 对齐到 creator 的标识与单位 | `Author` 嵌套字段 | 仅明确值；请求详细对象后才候选 ROR |
-| `descriptions[type=Abstract]` | 摘要 | `LiteratureMetadata.abstract` | 多摘要/语言选择需确定性规则 |
-| publication/type/language fields | 年份、日期、类型、语言、publisher | `LiteratureMetadata` 对应字段 | 先确认是项目范围内文献；不混用不同 type vocabulary |
-| `container.title` | 容器标题 | `LiteratureMetadata.venue` | 只读增强对象内取值；不从 publisher 或 URL 猜测 |
-| `container.identifier` / `identifierType` | 容器标识及 namespace | 不进入当前业务 Model | 可供 adapter 内部容器辨识/核对；当前 `LiteratureMetadata` 没有 venue identifier，不能塞入文献 identifiers |
-| `container.volume` / `issue` | 容器卷期 | `LiteratureMetadata.volume` / `issue` | 不与顶层资源 `version` 混用 |
-| `container.firstPage` / `lastPage` | 容器内首页/末页 | `LiteratureMetadata.pages` | 两端均有值时确定性组成范围；单端按实际精度保留 |
-| 明确来源声明的 keyword | 来源关键词 | `MetadataObservation.declared_keywords` | 普通 `subjects[]` 不自动等同 |
-| reference/citation linkage | DOI 逐边关系 | `ProviderRelationObservation` | 每边独立、按 relation type 定方向 |
-| `referenceCount` | 来源 outgoing reference 计数 | `MetadataObservation.reference_count` | Event Data 聚合；不能物化引用边 |
-| `citationCount` | 来源 incoming citation 计数 | `MetadataObservation.cited_by_count` | Event Data 聚合；不能物化引用边或跨来源相加 |
-| version relation | 外部版本连接 | `MetadataObservation.version_links` 候选 | 只在明确同文献且保守规则接纳时使用 |
-| `url` / `contentUrl` / rights/media | locator 与来源声明 | `MetadataObservation.asset_hints` 候选 | landing/direct 分开；未下载、未验证 |
-| `created`/`updated` 与请求时间 | 来源新鲜度 | provenance 候选输入 | 不作为 publication date |
+| 外部字段                                  | 外部语义                          | 候选归属                                                   | 约束                                                                                                      |
+| ----------------------------------------- | --------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `data.id` / `attributes.doi`              | DataCite DOI source record        | provenance/source record；`LiteratureMetadata.identifiers` | DOI 规范化，不代替本地 Literature ID                                                                      |
+| `titles[]`                                | 主标题/副标题/翻译标题等          | `LiteratureMetadata.title`                                 | 按 title type 明确选择；不拼接未知类型                                                                    |
+| `creators[]`                              | 有序责任者                        | `LiteratureMetadata.authors`                               | `Personal`→person、`Organizational`→organization；contributors 不自动混入                                 |
+| creator ORCID/affiliation                 | 对齐到 creator 的标识与单位       | `Author` 嵌套字段                                          | 仅明确值；请求详细对象后才候选 ROR                                                                        |
+| `descriptions[type=Abstract]`             | 摘要                              | `LiteratureMetadata.abstract`                              | 多摘要/语言选择需确定性规则                                                                               |
+| publication/type/language fields          | 年份、日期、类型、语言、publisher | `LiteratureMetadata` 对应字段                              | 先确认是项目范围内文献；不混用不同 type vocabulary                                                        |
+| `container.title`                         | 容器标题                          | `LiteratureMetadata.venue`                                 | 只读增强对象内取值；不从 publisher 或 URL 猜测                                                            |
+| `container.identifier` / `identifierType` | 容器标识及 namespace              | 不进入当前业务 Model                                       | 可供 adapter 内部容器辨识/核对；当前 `LiteratureMetadata` 没有 venue identifier，不能塞入文献 identifiers |
+| `container.volume` / `issue`              | 容器卷期                          | `LiteratureMetadata.volume` / `issue`                      | 不与顶层资源 `version` 混用                                                                               |
+| `container.firstPage` / `lastPage`        | 容器内首页/末页                   | `LiteratureMetadata.pages`                                 | 两端均有值时确定性组成范围；单端按实际精度保留                                                            |
+| 明确来源声明的 keyword                    | 来源关键词                        | `MetadataObservation.declared_keywords`                    | 普通 `subjects[]` 不自动等同                                                                              |
+| reference/citation linkage                | DOI 逐边关系                      | `ProviderRelationObservation`                              | 每边独立、按 relation type 定方向                                                                         |
+| `referenceCount`                          | 来源 outgoing reference 计数      | `MetadataObservation.reference_count`                      | Event Data 聚合；不能物化引用边                                                                           |
+| `citationCount`                           | 来源 incoming citation 计数       | `MetadataObservation.cited_by_count`                       | Event Data 聚合；不能物化引用边或跨来源相加                                                               |
+| version relation                          | 外部版本连接                      | `MetadataObservation.version_links` 候选                   | 只在明确同文献且保守规则接纳时使用                                                                        |
+| `url` / `contentUrl` / rights/media       | locator 与来源声明                | `MetadataObservation.asset_hints` 候选                     | landing/direct 分开；未下载、未验证                                                                       |
+| `created`/`updated` 与请求时间            | 来源新鲜度                        | provenance 候选输入                                        | 不作为 publication date                                                                                   |
 
 ## 9. 不进入业务 Model 的字段
 

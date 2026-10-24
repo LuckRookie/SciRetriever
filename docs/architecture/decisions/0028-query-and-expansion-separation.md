@@ -1,12 +1,13 @@
 # ADR 0028：数据库查询与显式扩充操作分离
 
-- Status: Accepted（操作边界与启动条件；具体接口、权限实现和运行存续仍待设计）
+类型：决策（ADR）
+负责：数据库查询与显式扩充操作分离
+状态：Accepted；completion 目标被 [ADR 0037](0037-literature-archive-and-proofread-text.md) 取代：不再包含 CONTENT_READY，建档为独立操作
+
 - Date: 2026-09-27
 - Amends: [ADR 0011](0011-literature-database-centered-incremental-maintenance.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)
 - Related: [产品需求](../requirements.md)、[设计](../design.md)、[统一产品接口：共享合同、结构解析与版本兼容](../technical/01-product-interface.md#6-共享合同结构解析与版本兼容)、[工作流](../knowledge-service-workflows.md)
 - Amended by: [ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
-
-> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md) 修订本 ADR：completion 不再包含 CONTENT_READY 目标，建档是独立的显式操作。直接冲突的正文已按 ADR 0037 收口。
 
 ## 背景与决定依据
 

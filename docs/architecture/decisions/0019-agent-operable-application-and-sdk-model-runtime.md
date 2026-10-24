@@ -1,6 +1,9 @@
 # ADR 0019：Agent 可编排应用边界与 SDK 驱动模型运行时
 
-- Status: Accepted
+类型：决策（ADR）
+负责：Agent 可编排应用边界与 SDK 驱动模型运行时
+状态：Accepted；产品操作范围被 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md) 扩展：科研 Agent 为主要程序消费者，新增证据、知识压缩、检索与人类协作
+
 - Date: 2026-08-26
 - Last amended: 2026-10-15
 - Supersedes: none
@@ -8,8 +11,6 @@
 - Amends: [ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)
 - Amended by: [ADR 0033](0033-machine-interfaces-cover-web-capabilities.md)（CLI/MCP 分别覆盖 Web；受控配置和 Browser 协作）；[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)；[ADR 0028](0028-query-and-expansion-separation.md)（查询与显式扩充分离）；[ADR 0031](0031-dsh-backed-agent-capabilities.md)（受控 DSH 执行基础）
 - Related: [ADR 0010](../../archive/decisions/0010-parser-neutral-markdown-current-result.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)、[ADR 0012](0012-process-local-provider-access-scheduling.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[产品需求](../requirements.md)、[设计文档](../design.md)、[任务与协作控制：数据库补全与阶段协调](../technical/02-task-coordination.md#4-数据库补全与阶段协调)、[知识加工：共享支撑：无状态模型运行时](../technical/05-knowledge-processing.md#5-共享支撑无状态模型运行时)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)
-
-> 2026-09-25 修订：科研 Agent 成为主要程序消费者，新增证据、知识压缩、检索/上下文及正式人类协作；Entry 薄适配与内部模型运行时边界保留。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。下文保留原决定与兼容背景；冲突条款按新 ADR 执行，具体实现状态以源码和 TS 基线为准。
 
 ## 背景
 

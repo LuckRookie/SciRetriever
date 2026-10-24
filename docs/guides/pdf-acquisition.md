@@ -1,5 +1,9 @@
 # PDF 获取指南
 
+类型：指南
+负责：PDF 自动获取、人工接纳与失败排查
+状态：现行
+
 公开文献优先通过普通 HTTPS 下载；arXiv 直接使用 PDF URL，成功后不启动 Browser 或调用 Browser
 模型。受控 Browser Agent 用于前四层仍未取得 PDF 且结果允许继续的目标，通过当前机器
 的网络出口、机构 IP 和浏览器会话访问出版社文章页；具体文章是否可读以实际结果为准。
@@ -8,7 +12,7 @@
 
 用户明确提供的 PDF 可通过 CLI `sciretriever import pdf LITERATURE_ID /absolute/path/article.pdf --json` 或公开 TypeScript `Application.maintenance.ingestPdf({ literature_id, bytes }, signal?)` 接纳。CLI 只读原文件，将字节交给共享维护用例；成功返回包含接纳 ID、SHA-256 和内部相对引用的 receipt。用户原文件不移动、不修改、不删除。目标必须是已有具体 Literature 且尚无当前主 PDF；空文件、损坏或不符合当前非加密可读合同的 PDF 拒绝；文章身份尚未确认不阻止接纳，已有主 PDF 不被替换。接纳只发布 `ASSET_READY` 材料，不接着解析或分析，也不调用外部发现/下载。
 
-可从 `@sciretriever/server` 启动 `startMaintenanceWorkbench({ home })` 获得独立本机维护页：`/` 上传 PDF，`/query` 阅读已保存资料。启动前该 home 必须已有 v2 catalog；维护服务不自动迁移用户 catalog。以下命令在安装了该包的 Node 22.19.0 环境中启动服务，按 Ctrl-C 关闭：
+可从 `@sciretriever/server` 启动 `startMaintenanceWorkbench({ home })` 获得独立本机维护页：`/` 上传 PDF，`/query` 阅读已保存资料。启动前该 home 必须已有当前结构的 catalog；维护服务不自动迁移用户 catalog。以下命令在安装了该包的 Node 22.19.0 环境中启动服务，按 Ctrl-C 关闭：
 
 ```bash
 node --input-type=module <<'NODE'
@@ -141,7 +145,7 @@ builtin。镜像按顺序而非并发尝试，不自动发现，也不接受 Key
 
 ### 生产观看、指导和接管
 
-已有 v2 catalog、已配置 Browser/模型和已验证 Cloak runtime 时，可在安装了 `@sciretriever/server` 的 Node 22.19.0 环境中启动生产工作台。`literature_id` 必须是已存在的具体 Literature；打开页面只建立本机界面，不会开始获取。进入页面后，点击“获取这篇文献的 PDF”才调用同一 Application 的正式 `ASSET_READY` 补全流程：
+已有当前结构的 catalog、已配置 Browser/模型和已验证 Cloak runtime 时，可在安装了 `@sciretriever/server` 的 Node 22.19.0 环境中启动生产工作台。`literature_id` 必须是已存在的具体 Literature；打开页面只建立本机界面，不会开始获取。进入页面后，点击“获取这篇文献的 PDF”才调用同一 Application 的正式 `ASSET_READY` 补全流程：
 
 ```bash
 node --input-type=module <<'NODE'
@@ -332,7 +336,7 @@ capture/identity 验收和 cleanup 线索；实际发给 Agent 的图片保存�
 `sciretriever-agent-debug-*`，并用 `manifest.ndjson` 对齐调用序号。图片、prompt、页面正文、完整 URL、
 Cookie、Profile 路径和 PDF 字节不会进入 Catalog、仓库或普通日志。
 
-### 本轮失败诊断补充
+### 失败诊断
 
 Browser 限流保留 `pdf-browser-rate-limited`，报告提示等待平台 Retry-After 与共享冷却，
 `retryable=true` 表示条件恢复后可重试，不代表立即重发。Agent 在阻塞页主动停止时，失败原因

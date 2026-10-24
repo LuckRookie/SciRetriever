@@ -1,6 +1,9 @@
 # ADR 0012：进程内供应商访问调度
 
-- Status: Accepted
+类型：决策（ADR）
+负责：进程内供应商访问调度
+状态：Accepted
+
 - Date: 2026-08-09
 - Supersedes: [ADR 0009：供应商级全局访问调度](../../archive/decisions/0009-provider-scoped-global-access-scheduling.md)
 - Amended by: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)

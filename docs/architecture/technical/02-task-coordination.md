@@ -1,5 +1,9 @@
 # 02 · 任务与协作控制技术设计
 
+类型：规格
+负责：任务编排、网络与日志边界；technical 中早期形式化接口（Port 与 Report）
+状态：现行；目标接口单独成节
+
 [设计总览](../design.md) · [八模块技术导航](../technical.md)
 
 本模块对应设计中的 **② 任务与协作控制**，执行用户明确启动的维护操作。输入是操作范围、目标、预算和取消信号，输出是已提交结果、失败与未处理部分；它不决定文献身份、PDF 归属或知识内容是否有效。
@@ -19,6 +23,7 @@
 - [7. 共享支撑：受控网络访问](#7-共享支撑受控网络访问)
 - [8. 共享支撑：安全日志](#8-共享支撑安全日志)
 - [9. 整体协作验证](#9-整体协作验证)
+- [11. 目标接口（尚未实现）](#11-目标接口尚未实现)
 
 ## 1. 模块边界与连接
 
@@ -161,77 +166,7 @@ bootstrap ------------------> logging public API/configuration
 
 ### 2.4 Ports 与生产组装（目标合同）
 
-本节描述应由 TypeScript Bootstrap 形成的唯一对象图；它不证明审查快照中的每个对象已经接线。当前实现状态见 [TypeScript 架构锚定基线](../typescript-baseline.md)。
-
-Port 由消费能力的模块所有：
-
-| 消费模块      | Port 范围                                                                                                                                                                                                        |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `entry`       | DiscoveryRun repository、selector/current-facts read、write admission、clock、literature metadata codec、原子用户文件输出；目标、候选和 Report 只在内存形成                                                      |
-| `metadata`    | metadata search、metadata reference query、observation publication                                                                                                                                               |
-| `literature`  | literature repository、read model、artifact read、identity transaction、reference/support publication、content acceptance publication、import/export publication                                                 |
-| `acquisition` | route adapter、临时获取、Asset 与 LiteratureAsset 原子 publication、自动获取耗尽事实 publication/clear；Resolution、Plan、route hint 和 Browser queue 只在模块/Entry 当前运行内存中形成                          |
-| `parsing`     | parser                                                                                                                                                                                                           |
-| `analysis`    | Agents structured-text capability；第一阶段元数据提案、第二阶段内容 Markdown 草稿和完整待验收提案都是临时结果，不拥有持久化 publication                                                                          |
-| `agents`      | 当前单次模型层拥有 role binding、协议执行、capability/readiness、显式模型目录、单次 limits、取消和失败；ADR 0031 另选定受控 DSH 执行基础（接入中）。不拥有用户 Model 配置、文献/页面事实、任务调度或业务结果接纳 |
-
-禁止建立顶层共享 `ports/`、`repositories/`、`utils/` 或笼统 `integrations/` package。
-
-Bootstrap 边界（`apps/server/src/bootstrap/application.ts`、`workbench.ts` 与 server 包导出）是唯一生产对象图组装
-点，负责把以下具体实现注入模块公开构造入口：
-
-- `node:sqlite` repository 与 publisher；
-- 文件系统不可变发布、verified artifact reader 与原子用户文件输出；
-- metadata search、metadata reference query 和 Acquisition route adapters；
-- 当前进程共享的 Access Coordinator、secure HTTP、Publisher access profile catalog/Planner、单篇层级获取编排 与 Browser scheduler/session broker；只有存在经过生产准入的 Browser route 时才注入受控浏览器 adapter；
-- `parsing/backends/mineru/` 中按 RawParserBackend 构造的 MinerU parser backend；
-- 当前一个共享无状态单次 Agents runtime，并按 Analyze/Browser 所选 Model 的 Provider 构造 adapter 与 role binding；DSH 执行基础获准实施后也由此 Bootstrap 组装并复用相同模型配置和 Network，具体对象图见待审接入提案；
-- BibTeX、RIS 和 CSL JSON codec；
-- 本机写锁、时钟和资源预算。
-
-Logging 当前公开函数是 `createLogger(component, sink?, minimum?)`，默认输出 stderr；生产统一配置和更丰富 formatter 属于 Logging 的设计责任，不能虚构已存在的 `configure_logging`。注入 sink 是技术输出边界，不是文献业务 Port。
-
-完整维护对象图中的获取能力必须共享 Network coordinator、Browser session broker 和相同配置。`createQueryApplication` 则只组装 Library/Artifact reader，不能先构造维护图再屏蔽写入方法；当前 TS 没有名为 `ASSET_COMPLETION`/`CONTENT_COMPLETION` 的公开构造模式。当前发布的 Publisher profile catalog 保存授权 API、访问 origin、稳定身份和可选 Publisher 首页 probe 证据；它不生成 Browser 下载 route。生产 Browser 只有 `browser:generic`、`browser-generic` policy 与唯一 `AgentBrowserController`。目标生产对象图只在普通 `[browser]` 已启用、Browser Model、选中且安全存在的固定身份 Profile、CloakBrowser wrapper/经验证 binary、Playwright API 与 headed display 同时就绪时构造 Browser client，并据此动态设置 execution confirmation 与 runtime readiness；不存在 stock Chrome/Chromium fallback。普通文章流程允许已准入页面发起的必要子资源和受限 challenge dependency、丢弃未批准的第三方非关键资源，并逐项审查显式或点击/脚本导航 request；未再次暴露 route 的 native redirect 只能复用同页 live、已批准且预绑定的关联，并在读 terminal body 前取得最终 host permit。Configuration Publisher probe 使用生产 Network contract 加 deny-all capture policy，只证明首页可达性。所有文章共享一个 Profile 和一个 CloakBrowser process/persistent context，并在 `browser-generic` 中限速串行。production catalog、总开关、Model/Profile/runtime readiness、登录状态、机构 IP 与具体文章 entitlement 仍是分立事实。
-
-模块公开入口不得构造具体 adapter，也不得读取全局配置。测试可以直接注入 fake RawParserBackend；生产对象图只能由 `bootstrap` 构造。
-
-Configuration 边界（`apps/server/src/configuration/index.ts`、`owner.ts`、`credentials.ts`）是唯一普通
-TOML、非 secret 环境选择、统一凭据文件与 Browser Profile 生命周期入口。未知 section、key、
-枚举或组合必须 fail closed；普通配置转换为 `OrdinaryConfiguration` 中不含 secret 的中性配置数据，再执行跨字段和运行环境规则。文献 Provider、Model Provider 与远程 MinerU secret 只从
-`~/.sciretriever/credentials.toml` 读取并作为私有短生命周期值交给 Bootstrap；不保留 secret
-环境变量回退。Browser Profile 只接受 opaque identity，Chrome 自己管理的 Cookie/认证内容不进入
-TOML、Model 或 status。精确文件、权限、origin、readiness 和 CLI 合同见
-[统一产品接口：共享支撑：配置与凭据](01-product-interface.md#5-共享支撑配置与凭据)。
-
-普通配置按以下十个公开责任组组织：
-
-```text
-paths
-sources
-assets
-parsing
-providers
-models
-analyze
-execution
-library
-browser
-```
-
-Source 的 Auto/Custom mode、Custom 精确顺序、Metadata 逐 Source limit、产品/database/edition、AccessPolicy 和联系邮箱留在普通配置；Auto effective catalog 只由版本内置常量解析，不读取 Network 或 credentials。Provider API key 与 token 只进入固定凭据文件，不能形成普通配置中的 `credentials` 责任组，也不能反向启用 Source。Secret 值不得进入 Model configuration、SQLite、ArtifactStore、provenance、Report、diagnostics、URL、文件名或用户输出。普通配置在 Application 启动时形成快照；已组装 adapter 在每次新请求派发前通过 Configuration owner 重新授权当前凭据，撤销不等到进程重启。adapter 决定允许附着凭据的 origin；`network` 负责 redirect stripping 和脱敏。
-
-#### 2.4.1 新知识服务的输入绑定和发布
-
-| owner             | 接收的已确认输入                                | 形成的事实                             | 对后续读取的保证                                 |
-| ----------------- | ----------------------------------------------- | -------------------------------------- | ------------------------------------------------ |
-| Acquisition       | 具体 Literature、复制后的候选字节、文章归属证据 | Asset + LiteratureAsset                | 原始材料不可覆盖；来源与 SHA-256 保留            |
-| Parsing           | Asset ID/hash、解析选项                         | ParserResult 与中性资源闭包            | 后端私有 task 不越界；解析与分析独立             |
-| Document/Evidence | MaterialRef 或 ParserResult                     | 文档表示版本、定位规则与可解析证据引用 | 引用固定精确材料/表示版本，不跟随 current 重绑定 |
-| Analysis          | 冻结输入清单、用途/问题、方法和预算             | KnowledgeArtifact 与证据/覆盖          | 内容属于派生解释，不改写来源或删除材料           |
-| Extraction        | 调用方 Spec、输入清单、外部候选和证据           | 校验/交付回执；按合同托管的候选        | 格式、证据解析与领域接纳分别表达                 |
-| Retrieval/Context | 已发布事实、索引版本和读取预算                  | 临时查询/上下文结果                    | 缺口明确返回；索引不能反向成为事实               |
-
-新对象的 schema/hash、读取和保留合同在各模块文档展开。先准备不可变字节，再短事务复核输入并提交事实/依赖；后续阶段失败不撤销前序已提交结果。有效证据依赖尚未保护时，不得启用相关产物的自动回收。Storage 执行业务 owner 的决定，不自行推导材料是否有价值。
+完整目标接口见[Ports 与生产组装（目标合同）](#111-ports-与生产组装目标合同)；当前实现以源码为准。
 
 ### 2.5 明确不采用的机制
 
@@ -684,213 +619,7 @@ Entry 拥有：
 
 ### 5.5 非持久化 Entry Report
 
-Report 是一次有效 Entry 请求开始后的最终运行回执，不是持久化运行、恢复 checkpoint 或文献事实。所有 Report 默认不可变、拒绝未知字段，只存在于当前进程；CLI 可以把它序列化到 stdout，程序内调用方直接接收 Model。项目不建立通用字段容器、Report ID、开始/结束时间、持续时间、自由 `details`、日志事件数组或可恢复状态机。
-
-各 Report 只共享一个精确的最终停止值，不共享大而全父类或 envelope：
-
-```text
-ReportEnd = FinishedReportEnd | InterruptedReportEnd | FailedReportEnd
-
-FinishedReportEnd
-  kind: Literal["finished"]
-
-InterruptedReportEnd
-  kind: Literal["interrupted"]
-
-FailedReportEnd
-  kind: Literal["failed"]
-  failure: StableFailure
-
-EntryReport =
-    DiscoveryReport
-  | DatabaseCompletionReport
-  | ManualPdfReport
-  | ImportReport
-  | ExportReport
-```
-
-`finished` 只表示 Entry 到达该操作的正常边界，不表示全部 Provider、目标或记录成功；局部失败保留在操作特有结果中。`interrupted` 只表示用户受控停止。`failed` 表示写入准入、共同依赖、Storage 或其它操作级错误使本次操作无法正常走到边界；已经形成的局部结果仍可保留在 Report 中，已经提交的数据库事实也不回滚。CLI 参数、输入文件路径或枚举在操作开始前验证失败时直接返回稳定输入错误，不伪造一份没有运行内容的 Report。
-
-`StableFailure` 是 DiscoverySourceResult 和全部 Report 复用的稳定、脱敏失败合同：
-
-```text
-StableFailure
-  code: str
-  reason: str
-  action: str
-  retryable: bool
-```
-
-三个文本字段去除边界空白后必须非空。它不保存 traceback、原始异常正文、HTTP/SDK 对象、URL、header、Cookie、prompt、文献正文、文件绝对路径或自由 details；`retryable` 只给用户提供本次失败的重试提示，不形成自动重试状态。
-
-#### 5.5.1 DiscoveryReport
-
-```text
-DiscoveryProviderReportOutcome =
-    "EXHAUSTED"
-  | "SCAN_LIMIT_REACHED"
-  | "FAILED"
-  | "INTERRUPTED"
-  | "NOT_STARTED"
-
-DiscoveryProviderReport
-  provider_name: str
-  raw_item_count: int
-  accepted_observation_count: int
-  outcome: DiscoveryProviderReportOutcome
-  failure: StableFailure | None
-
-DiscoveryReport
-  kind: Literal["discovery"]
-  end: ReportEnd
-  discovery_run_id: DiscoveryRunId
-  run_status: DiscoveryRunStatus
-  providers: tuple[DiscoveryProviderReport, ...]
-  discovery_result_count: int
-  new_meta_literature_count: int
-  new_literature_count: int
-  new_metadata_observation_count: int
-```
-
-Provider tuple 按输入顺序且名称唯一；所有 count 均非负。`raw_item_count` 使用与 scan limit 相同的过滤前口径，`accepted_observation_count` 只统计已经成功接纳的来源 observation。`failure` 只在 provider outcome 为 `FAILED` 时存在；`INTERRUPTED` 表示已经开始但受控停止，`NOT_STARTED` 表示停止或操作级失败前尚未调用。前三种 outcome 与已经提交的 `DiscoverySourceResult` 对齐，后两种只属于当次 Report。
-
-`discovery_result_count` 是本次按 MetaLiterature 去重的 DiscoveryResult 数量；其余三个 count 分别说明真正新建的 MetaLiterature、具体 Literature 和 MetadataObservation。Report 不保存扫描 item、结果 ID 列表、cursor 或完整发现路径。`run_status` 报告数据库中最后成功提交的 DiscoveryRun status；如果操作级提交错误使其仍为 `RUNNING`，`FailedReportEnd` 说明本次失败，恢复时仍按 DiscoveryRun 规则收尾。
-
-#### 5.5.2 DatabaseCompletionReport
-
-```text
-CompletionTarget = MetaLiteratureCompletionTarget | LiteratureCompletionTarget
-
-MetaLiteratureCompletionTarget
-  kind: Literal["meta-literature"]
-  meta_literature_id: MetaLiteratureId
-
-LiteratureCompletionTarget
-  kind: Literal["literature"]
-  literature_id: LiteratureId
-
-CompletionStage = "acquisition" | "parsing" | "analysis" | "literature"
-
-CompletedCompletionTarget
-  target: CompletionTarget
-  literature_id: LiteratureId
-
-SkippedCompletionTarget
-  target: CompletionTarget
-  reason: "manual-pdf-required" | "already-satisfied" | "not-eligible"
-  literature_ids: tuple[LiteratureId, ...]
-
-FailedCompletionTarget
-  target: CompletionTarget
-  literature_id: LiteratureId | None
-  stage: CompletionStage
-  failure: StableFailure
-
-InterruptedCompletionTarget
-  target: CompletionTarget
-  literature_id: LiteratureId | None
-
-NotStartedCompletionTarget
-  target: CompletionTarget
-
-DatabaseCompletionReport
-  kind: Literal["database-completion"]
-  end: ReportEnd
-  goal: BatchGoal
-  completed: tuple[CompletedCompletionTarget, ...]
-  failed: tuple[FailedCompletionTarget, ...]
-  skipped: tuple[SkippedCompletionTarget, ...]
-  notStarted: tuple[NotStartedCompletionTarget, ...]
-  interrupted: tuple[InterruptedCompletionTarget, ...]
-  no_usable_content_literature_ids: tuple[LiteratureId, ...]
-```
-
-五个结果 tuple 对本次已经冻结的实际目标做不重不漏的分区，其长度之和就是实际选择数，presenter 直接按长度形成摘要，不在 Model 中再复制一组可能漂移的 counts。`CompletedCompletionTarget.literature_id` 是最终满足目标的具体版本。`SkippedCompletionTarget` 只用于明确未执行但不属于失败的目标，例如自动获取已耗尽、需要用户手动绑定 PDF，或目标已经满足；`reason` 必须稳定，不能用 `skipped` 隐藏系统错误。目标在失败、中断或从未开始时尚未进入具体版本，`literature_id` 可以为空。
-
-以下 `no_usable_content_literature_ids` 与清理描述仅记录旧报告/实现语义，目标资产保留按 ADR 0026 执行；新产物不能沿用其清理授权。`no_usable_content_literature_ids` 按首次出现顺序去重，只说明这些具体 Literature 在本次至少有一个 PDF 被 Analysis 明确判定为 `NoUsableContent` 并完成清理；它可以与最终分区中的 `completed` 或 `skipped` 同时出现，不保存 PDF、候选、原因或次数。这样用户能够区分内容无效与调用失败，而不会把一次中间清理错误提升成最终目标状态。
-
-Network 或 Storage 错误按当时消费它的业务阶段报告；开始处理实际目标前发生的共同能力错误进入 `FailedReportEnd`。`NoUsableContent` 删除当前无效候选并继续同一版本或下一版本，不单独成为最终目标 outcome；最终要么由另一具体 Literature 达到目标，要么进入 `skipped(reason = "manual-pdf-required")`，要么形成失败/中断。一个目标即使已经提交 PDF 后在 Parsing 失败，也只形成一项 `FailedCompletionTarget`，数据库中的 PDF 事实仍然有效。
-
-#### 5.5.3 ManualPdfReport
-
-```text
-AcceptedManualPdfReportResult
-  kind: Literal["accepted"]
-  accepted: AcceptedManualPdf
-
-RejectedManualPdfReportResult
-  kind: Literal["rejected"]
-  failure: StableFailure
-
-ManualPdfReportResult = AcceptedManualPdfReportResult | RejectedManualPdfReportResult
-
-ManualPdfReport
-  kind: Literal["manual-pdf"]
-  end: ReportEnd
-  literature_id: LiteratureId
-  result: ManualPdfReportResult | None
-```
-
-有效 PDF 完整提交后形成 `accepted`；目标不存在、已有主 PDF 或基本节件检查失败等正常输入拒绝形成 `rejected`，不增加第三种自动 AcquisitionResult。`FinishedReportEnd` 必须有一个 result；`InterruptedReportEnd` 或 `FailedReportEnd` 时 result 为空。Report 不保存用户输入路径，也不复制 PDF 字节。
-
-#### 5.5.4 ImportReport 与 ImportReportSelector
-
-```text
-ImportAcceptanceOutcome = "created" | "enriched" | "matched"
-
-AcceptedImportRecord
-  kind: Literal["accepted"]
-  record_index: int
-  outcome: ImportAcceptanceOutcome
-  meta_literature_id: MetaLiteratureId
-  literature_id: LiteratureId
-
-RejectedImportRecord
-  kind: Literal["rejected"]
-  record_index: int
-  failure: StableFailure
-
-ImportRecordReport = AcceptedImportRecord | RejectedImportRecord
-
-ImportReport
-  kind: Literal["import"]
-  end: ReportEnd
-  format: BibliographyFormat
-  input_record_count: int
-  records: tuple[ImportRecordReport, ...]
-  not_processed_record_indexes: tuple[int, ...]
-  accepted_meta_literature_ids: tuple[MetaLiteratureId, ...]
-```
-
-`record_index` 从零开始。Codec 先形成有序记录或逐记录格式失败，因此 `input_record_count` 在接纳开始前确定；`records` 与 `not_processed_record_indexes` 对 `0..input_record_count-1` 做不重不漏的分区。`created` 表示未命中并创建具体 Literature；`enriched` 表示命中后，导入记录至少提供了一个原本缺失的非空值，或以用户值替换了当前由供应商选择的值；`matched` 表示命中已有 Literature 且当前统一投影不变。首次出现但与当前 Provider 值相同的用户记录仍保存为 user observation；只有已经存在相同规范化 user observation 时才复用既有事实而不重复插入。格式不合格、缺少最低识别信息或稳定标识符明确冲突形成 `RejectedImportRecord`。前三种接纳结果都进入按首次出现顺序去重的 `accepted_meta_literature_ids`，单条拒绝不撤销其它接纳。对于 `CONTENT_READY` Literature，`enriched` 可以表示新导入 observation 已保存并将参与下一次完整 Analysis，不表示当前 metadata/content 已被拆开替换。
-
-`ImportReportSelector` 只接受非空、去重且保持顺序的 `meta_literature_ids`；调用方可以直接复制 `accepted_meta_literature_ids`，空结果不形成补全请求。Report 本身不被 Entry 保存，也没有 ImportRunId。
-
-#### 5.5.5 ExportReport
-
-```text
-SkippedExportRecord
-  literature_id: LiteratureId
-  failure: StableFailure
-
-ExportFieldOmission
-  literature_id: LiteratureId
-  field: str
-  reason: str
-
-ExportReport
-  kind: Literal["export"]
-  end: ReportEnd
-  format: BibliographyFormat
-  selected_literature_ids: tuple[LiteratureId, ...]
-  published_literature_ids: tuple[LiteratureId, ...]
-  skipped: tuple[SkippedExportRecord, ...]
-  not_published_literature_ids: tuple[LiteratureId, ...]
-  omissions: tuple[ExportFieldOmission, ...]
-  bytes_written: int | None
-```
-
-选择结果按最终具体 Literature 去重并保持导出顺序。`published_literature_ids`、`skipped` 和 `not_published_literature_ids` 对 selected 做不重不漏的分区；字段损失只用非空 `field/reason` 说明，不能用自由 details。导出发布是文件级原子操作：只有 staging file 完整 flush、`fsync` 并原子发布后，才能填充 `published_literature_ids` 和非负 `bytes_written`；中断或操作级失败时二者分别为空和 `None`，已经编码但未发布的 Literature 仍进入 `not_published_literature_ids`，旧目标文件保持不变。Report 不保存输出绝对路径或导出文件字节。
+完整目标接口见[非持久化 Entry Report](#112-非持久化-entry-report)；当前实现以源码为准。
 
 ## 6. 跨模块调用与协作约束
 
@@ -944,22 +673,7 @@ ExportReport
 
 ### 6.3 模块间操作合同
 
-| ID / 调用方 → 提供方                           | 输入                                               | 输出与成功标准                                      | 副作用与失败语义                                                                        |
-| ---------------------------------------------- | -------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| C01 Agent/人类 → Entry/T                       | 独立查询或明确维护意图、范围、目标、处理步骤与预算 | 操作特有结果；实际目标与已交付产物可核对            | 按查询/维护边界分派；知识缺口不生成扩库任务；长任务存续不由返回形式推断                 |
-| C02 T → Metadata/Literature                    | 来源条件或标识、Provider 范围与停止边界            | 已接纳文献/来源和发现结果                           | 仅来自用户明确启动的发现/补充操作；不自动下载；源失败保留其它结果                       |
-| C03 T → Acquisition                            | 具体文献/版本、来源线索、材料要求和获准能力        | 资产可读取且文件/归属验收及关系提交完成             | 仅来自明确启动的 PDF 维护；分层按现行政策；捕获非成功，暂时失败非耗尽                   |
-| C04 T → Parsing → Document/Evidence            | 已接纳 MaterialRef、支持的转换规格                 | 中性解析结果，再由文档 owner 发布可读取 DocumentRef | 可调用外部 parser；失败保留原始材料；没有可靠表格/坐标时报告能力缺口                    |
-| C05 入口/Analysis/提取器/Q → Document/Evidence | 明确版本、选择器、读取预算                         | 对应版本的片段/资源及稳定引用                       | 只读；旧版本不可用明确失败，不自动重解析或重定位                                        |
-| C06 T → Analysis                               | 固定输入、用途/问题、分析规格、预算与部分处理政策  | 已接纳知识产物、证据及覆盖；也可明确不适用或失败    | 可调用模型并发布；缺材料只返回缺口，应用层也不因此调用获取；不修改来源事实              |
-| C07 调用方 → Extraction                        | Spec、输入清单、能力要求                           | 有效规范绑定与材料缺口                              | 不因接受规范就运行模型；不支持的 schema/能力明确拒绝或协商缩小范围                      |
-| C08 外部提取器 → Extraction                    | CandidateBatch、证据、生产者方法声明               | 接纳回执与可交付产物，或具体结构/引用错误           | 推荐以显式批次为原子提交单位；批次失败不撤销此前已接纳批次；科学验收归下游              |
-| C09 入口/提取器 → Q                            | 问题、文献/版本范围、内容类型、预算                | 有界命中/上下文、来源及展开入口                     | 不隐式下载/解析/分析；索引不可用与零命中分开；不声称穷尽所有证据                        |
-| C10 人类 → Configuration                       | 编辑意图、期望配置版本、显式 probe 对象            | 发布/冲突、生效范围或实际 probe 诊断                | 凭据不回显；状态查询无外联；普通参数快照不延续已撤销权限                                |
-| C11 人类/T/R → Browser 控制                    | ControlBinding、指导/暂停/接管/交还/取消           | 受理、拒绝、过期或已执行及实际观察                  | 一个动作控制者；指导在安全决策点消费；已派发动作如实结算；人工候选仍由 Acquisition 验收 |
-| C12 业务 owner → Storage                       | 已验证产物与输入绑定、发布决定、并发前置条件       | 不可变字节及一致引用可见                            | create-if-absent；先准备字节后短事务提交；冲突、损坏和提交失败明确，不伪造业务成功      |
-
-C08 的批次原子性是本方案推荐，不是已发布保证；较大的任务拆成有界批次，接纳回执标明具体批次。schema 方言推荐 Draft 2020-12；支持的词汇表/本地引用子集、精确大小及错误列表上限在 Extraction 接纳实现前确定，不凭空规定数值。
+完整目标接口见[模块间操作合同](#113-模块间操作合同)；当前实现以源码为准。
 
 ### 6.4 失败、取消与外部执行
 
@@ -996,15 +710,15 @@ C08 的批次原子性是本方案推荐，不是已发布保证；较大的任�
 
 本方案已经给出推荐职责、语义与取舍，以下不是继续悬空全部设计，而是实施前需要定稿的具体边界：
 
-| 未决项                          | 已可继续的设计                                                                                                         | 受影响部分                                                                                                                                                                                                    |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Q01 客户端断开/重启后的任务存续 | 独立操作、事实重读、取消和模块合同                                                                                     | durable 调度、任务 ID/保留、介入等待、部署                                                                                                                                                                    |
-| Q02 配置与撤销时点              | 普通参数由 Application 启动绑定；新 CLI 构造新 Application，已有工作台明确提示重启；已组装能力的新外部请求重新授权凭据 | 当前 HTTP/Agent/Parser/Provider 请求边界已实现；Browser 生产指导/控制的具体生效边界按 Human Interaction 合同验证                                                                                              |
-| Q03 文献规模/成本与质量目标     | 有界读取、实际覆盖和分层验证                                                                                           | 批量大小、性能目标、知识质量评测样本，不编造 SLA                                                                                                                                                              |
-| Q04 人类界面与允许动作          | 复用 Web 的配置/观看/指导/阅读方案                                                                                     | 最终形态、登录/MFA 等人类权限范围                                                                                                                                                                             |
-| Q05 长期历史/回放               | 实时观看和有界会话反馈                                                                                                 | 长期截图、指导历史、保留与存储成本                                                                                                                                                                            |
-| 新 schema/兼容                  | 对象语义、owner、发布/读取边界；schema 方言推荐 Draft 2020-12                                                          | Storage 确定 DDL/reader/canonicalization/迁移；Extraction 明确词汇表与本地引用子集及大小边界                                                                                                                  |
-| 候选回执与外部引用              | 即时交付不要求历史 payload 托管；两类证据目标                                                                          | Extraction 接纳实现前定 scope/寿命/并发/重启/取消；Storage 回收前及 Extraction 交付前定外部依赖保护与失效政策，见 [候选交付的剩余合同与收敛时点](05-knowledge-processing.md#411-候选交付的剩余合同与收敛时点) |
+| 未决项                          | 已可继续的设计                                                                                                         | 受影响部分                                                                                                                                                                                                  |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Q01 客户端断开/重启后的任务存续 | 独立操作、事实重读、取消和模块合同                                                                                     | durable 调度、任务 ID/保留、介入等待、部署                                                                                                                                                                  |
+| Q02 配置与撤销时点              | 普通参数由 Application 启动绑定；新 CLI 构造新 Application，已有工作台明确提示重启；已组装能力的新外部请求重新授权凭据 | 当前 HTTP/Agent/Parser/Provider 请求边界已实现；Browser 生产指导/控制的具体生效边界按 Human Interaction 合同验证                                                                                            |
+| Q03 文献规模/成本与质量目标     | 有界读取、实际覆盖和分层验证                                                                                           | 批量大小、性能目标、知识质量评测样本，不编造 SLA                                                                                                                                                            |
+| Q04 人类界面与允许动作          | 复用 Web 的配置/观看/指导/阅读方案                                                                                     | 最终形态、登录/MFA 等人类权限范围                                                                                                                                                                           |
+| Q05 长期历史/回放               | 实时观看和有界会话反馈                                                                                                 | 长期截图、指导历史、保留与存储成本                                                                                                                                                                          |
+| 新 schema/兼容                  | 对象语义、owner、发布/读取边界；schema 方言推荐 Draft 2020-12                                                          | Storage 确定 DDL/reader/canonicalization/迁移；Extraction 明确词汇表与本地引用子集及大小边界                                                                                                                |
+| 候选回执与外部引用              | 即时交付不要求历史 payload 托管；两类证据目标                                                                          | Extraction 接纳实现前定 scope/寿命/并发/重启/取消；Storage 回收前及 Extraction 交付前定外部依赖保护与失效政策，见 [候选交付的剩余合同与收敛时点](05-knowledge-processing.md#412-首版规范输入绑定与提交语义) |
 
 [工作流](../knowledge-service-workflows.md)给出成功/失败推演。实现验收应同时覆盖：无内部模型的材料读取与提取、一文多条/嵌套/跨文记录、旧证据稳定读取、重复提交冲突、人工接管竞态、输入变化和局部失败。结构合法、引用可解析、语义支持、领域正确四个结论分别验证，不以单一 schema 测试替代。
 
@@ -1694,7 +1408,7 @@ FileStore、DB Worker、Agents、Browser、Acquisition 与业务。每个切片�
 任何 v1 bytes/hash/schema、owner、secret、SSRF、不可变发布、Candidate 对账或恢复差异都阻断下游并回到
 对应 owner；不在后续模块增加长期兼容旁路。
 
-## 已有材料加工任务（2026-10-08 实现合同）
+## 10. 已有材料加工任务
 
 `ProcessingTaskRequest` 是封闭类型联合：独立解析、文章身份核验、单篇分析、长文分析和集合综合。
 最多 100 个独立固定目标；前后依赖由调用方取得前项正式产物后再显式提交，不增加 DAG 引擎。
@@ -1725,6 +1439,314 @@ ProcessingTaskService 执行中每 500 ms 读取控制状态，可观察其它�
 显式 retry 只重新排入失败、中断及最新结算为失败跳过的目标；已完成、正常耗尽、预算耗尽和人工跳过不重跑。
 旧事件无 skipped_reason 时允许对带 failure 的跳过项显式重试；不改写历史事件、不迁移任务状态枚举。
 completed 仍表示本轮执行结束，不能代替目标结果判定。
+HTTP `/api/tasks`、CLI `jobs list` 与 MCP `list_tasks` / `runtime_list_tasks` 共享任务列表投影，每项附带 `progress:{total,done}`。`total` 为当前持久目标数；`done` 只计当前处置为 `completed`、`failed`、`skipped` 的目标，无目标时两者均为 0。重试回到 pending 的目标不计完成，多次 attempt 不重复累计。计数与当前页任务在同一条有界聚合 SQL 中读取；它是列表投影，不是新增持久化事实，也不改变任务详情合同。
 生产组装和生命周期回归见 `processing-tasks.test.ts`、`processing-retry.test.ts`、
 `execution-runtime-owner.test.ts`、`mcp.test.ts`、`mcp-stdio.test.ts`；
 调用见[Agent 接口指南](../../guides/agent-interface.md)。
+
+## 11. 目标接口（尚未实现）
+
+本节集中保留尚未整套实现的目标合同；当前实现以源码为准，设计记法不等同于已发布 API。
+
+### 11.1 Ports 与生产组装（目标合同）
+
+本节描述应由 TypeScript Bootstrap 形成的唯一对象图；它不证明审查快照中的每个对象已经接线。当前实现状态见 [TypeScript 架构锚定基线](../typescript-baseline.md)。
+
+Port 由消费能力的模块所有：
+
+| 消费模块      | Port 范围                                                                                                                                                                                                        |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `entry`       | DiscoveryRun repository、selector/current-facts read、write admission、clock、literature metadata codec、原子用户文件输出；目标、候选和 Report 只在内存形成                                                      |
+| `metadata`    | metadata search、metadata reference query、observation publication                                                                                                                                               |
+| `literature`  | literature repository、read model、artifact read、identity transaction、reference/support publication、content acceptance publication、import/export publication                                                 |
+| `acquisition` | route adapter、临时获取、Asset 与 LiteratureAsset 原子 publication、自动获取耗尽事实 publication/clear；Resolution、Plan、route hint 和 Browser queue 只在模块/Entry 当前运行内存中形成                          |
+| `parsing`     | parser                                                                                                                                                                                                           |
+| `analysis`    | Agents structured-text capability；第一阶段元数据提案、第二阶段内容 Markdown 草稿和完整待验收提案都是临时结果，不拥有持久化 publication                                                                          |
+| `agents`      | 当前单次模型层拥有 role binding、协议执行、capability/readiness、显式模型目录、单次 limits、取消和失败；ADR 0031 另选定受控 DSH 执行基础（接入中）。不拥有用户 Model 配置、文献/页面事实、任务调度或业务结果接纳 |
+
+禁止建立顶层共享 `ports/`、`repositories/`、`utils/` 或笼统 `integrations/` package。
+
+Bootstrap 边界（`apps/server/src/bootstrap/application.ts`、`workbench.ts` 与 server 包导出）是唯一生产对象图组装
+点，负责把以下具体实现注入模块公开构造入口：
+
+- `node:sqlite` repository 与 publisher；
+- 文件系统不可变发布、verified artifact reader 与原子用户文件输出；
+- metadata search、metadata reference query 和 Acquisition route adapters；
+- 当前进程共享的 Access Coordinator、secure HTTP、Publisher access profile catalog/Planner、单篇层级获取编排 与 Browser scheduler/session broker；只有存在经过生产准入的 Browser route 时才注入受控浏览器 adapter；
+- `parsing/backends/mineru/` 中按 RawParserBackend 构造的 MinerU parser backend；
+- 当前一个共享无状态单次 Agents runtime，并按 Analyze/Browser 所选 Model 的 Provider 构造 adapter 与 role binding；DSH 执行基础获准实施后也由此 Bootstrap 组装并复用相同模型配置和 Network，具体对象图见待审接入提案；
+- BibTeX、RIS 和 CSL JSON codec；
+- 本机写锁、时钟和资源预算。
+
+Logging 当前公开函数是 `createLogger(component, sink?, minimum?)`，默认输出 stderr；生产统一配置和更丰富 formatter 属于 Logging 的设计责任，不能虚构已存在的 `configure_logging`。注入 sink 是技术输出边界，不是文献业务 Port。
+
+完整维护对象图中的获取能力必须共享 Network coordinator、Browser session broker 和相同配置。`createQueryApplication` 则只组装 Library/Artifact reader，不能先构造维护图再屏蔽写入方法；当前 TS 没有名为 `ASSET_COMPLETION`/`CONTENT_COMPLETION` 的公开构造模式。当前发布的 Publisher profile catalog 保存授权 API、访问 origin、稳定身份和可选 Publisher 首页 probe 证据；它不生成 Browser 下载 route。生产 Browser 只有 `browser:generic`、`browser-generic` policy 与唯一 `AgentBrowserController`。目标生产对象图只在普通 `[browser]` 已启用、Browser Model、选中且安全存在的固定身份 Profile、CloakBrowser wrapper/经验证 binary、Playwright API 与 headed display 同时就绪时构造 Browser client，并据此动态设置 execution confirmation 与 runtime readiness；不存在 stock Chrome/Chromium fallback。普通文章流程允许已准入页面发起的必要子资源和受限 challenge dependency、丢弃未批准的第三方非关键资源，并逐项审查显式或点击/脚本导航 request；未再次暴露 route 的 native redirect 只能复用同页 live、已批准且预绑定的关联，并在读 terminal body 前取得最终 host permit。Configuration Publisher probe 使用生产 Network contract 加 deny-all capture policy，只证明首页可达性。所有文章共享一个 Profile 和一个 CloakBrowser process/persistent context，并在 `browser-generic` 中限速串行。production catalog、总开关、Model/Profile/runtime readiness、登录状态、机构 IP 与具体文章 entitlement 仍是分立事实。
+
+模块公开入口不得构造具体 adapter，也不得读取全局配置。测试可以直接注入 fake RawParserBackend；生产对象图只能由 `bootstrap` 构造。
+
+Configuration 边界（`apps/server/src/configuration/index.ts`、`owner.ts`、`credentials.ts`）是唯一普通
+TOML、非 secret 环境选择、统一凭据文件与 Browser Profile 生命周期入口。未知 section、key、
+枚举或组合必须 fail closed；普通配置转换为 `OrdinaryConfiguration` 中不含 secret 的中性配置数据，再执行跨字段和运行环境规则。文献 Provider、Model Provider 与远程 MinerU secret 只从
+`~/.sciretriever/credentials.toml` 读取并作为私有短生命周期值交给 Bootstrap；不保留 secret
+环境变量回退。Browser Profile 只接受 opaque identity，Chrome 自己管理的 Cookie/认证内容不进入
+TOML、Model 或 status。精确文件、权限、origin、readiness 和 CLI 合同见
+[统一产品接口：共享支撑：配置与凭据](01-product-interface.md#5-共享支撑配置与凭据)。
+
+普通配置按以下十个公开责任组组织：
+
+```text
+paths
+sources
+assets
+parsing
+providers
+models
+analyze
+execution
+library
+browser
+```
+
+Source 的 Auto/Custom mode、Custom 精确顺序、Metadata 逐 Source limit、产品/database/edition、AccessPolicy 和联系邮箱留在普通配置；Auto effective catalog 只由版本内置常量解析，不读取 Network 或 credentials。Provider API key 与 token 只进入固定凭据文件，不能形成普通配置中的 `credentials` 责任组，也不能反向启用 Source。Secret 值不得进入 Model configuration、SQLite、ArtifactStore、provenance、Report、diagnostics、URL、文件名或用户输出。普通配置在 Application 启动时形成快照；已组装 adapter 在每次新请求派发前通过 Configuration owner 重新授权当前凭据，撤销不等到进程重启。adapter 决定允许附着凭据的 origin；`network` 负责 redirect stripping 和脱敏。
+
+#### 11.1.1 新知识服务的输入绑定和发布
+
+| owner             | 接收的已确认输入                                | 形成的事实                             | 对后续读取的保证                                 |
+| ----------------- | ----------------------------------------------- | -------------------------------------- | ------------------------------------------------ |
+| Acquisition       | 具体 Literature、复制后的候选字节、文章归属证据 | Asset + LiteratureAsset                | 原始材料不可覆盖；来源与 SHA-256 保留            |
+| Parsing           | Asset ID/hash、解析选项                         | ParserResult 与中性资源闭包            | 后端私有 task 不越界；解析与分析独立             |
+| Document/Evidence | MaterialRef 或 ParserResult                     | 文档表示版本、定位规则与可解析证据引用 | 引用固定精确材料/表示版本，不跟随 current 重绑定 |
+| Analysis          | 冻结输入清单、用途/问题、方法和预算             | KnowledgeArtifact 与证据/覆盖          | 内容属于派生解释，不改写来源或删除材料           |
+| Extraction        | 调用方 Spec、输入清单、外部候选和证据           | 校验/交付回执；按合同托管的候选        | 格式、证据解析与领域接纳分别表达                 |
+| Retrieval/Context | 已发布事实、索引版本和读取预算                  | 临时查询/上下文结果                    | 缺口明确返回；索引不能反向成为事实               |
+
+新对象的 schema/hash、读取和保留合同在各模块文档展开。先准备不可变字节，再短事务复核输入并提交事实/依赖；后续阶段失败不撤销前序已提交结果。有效证据依赖尚未保护时，不得启用相关产物的自动回收。Storage 执行业务 owner 的决定，不自行推导材料是否有价值。
+
+### 11.2 非持久化 Entry Report
+
+Report 是一次有效 Entry 请求开始后的最终运行回执，不是持久化运行、恢复 checkpoint 或文献事实。所有 Report 默认不可变、拒绝未知字段，只存在于当前进程；CLI 可以把它序列化到 stdout，程序内调用方直接接收 Model。项目不建立通用字段容器、Report ID、开始/结束时间、持续时间、自由 `details`、日志事件数组或可恢复状态机。
+
+各 Report 只共享一个精确的最终停止值，不共享大而全父类或 envelope：
+
+```text
+ReportEnd = FinishedReportEnd | InterruptedReportEnd | FailedReportEnd
+
+FinishedReportEnd
+  kind: Literal["finished"]
+
+InterruptedReportEnd
+  kind: Literal["interrupted"]
+
+FailedReportEnd
+  kind: Literal["failed"]
+  failure: StableFailure
+
+EntryReport =
+    DiscoveryReport
+  | DatabaseCompletionReport
+  | ManualPdfReport
+  | ImportReport
+  | ExportReport
+```
+
+`finished` 只表示 Entry 到达该操作的正常边界，不表示全部 Provider、目标或记录成功；局部失败保留在操作特有结果中。`interrupted` 只表示用户受控停止。`failed` 表示写入准入、共同依赖、Storage 或其它操作级错误使本次操作无法正常走到边界；已经形成的局部结果仍可保留在 Report 中，已经提交的数据库事实也不回滚。CLI 参数、输入文件路径或枚举在操作开始前验证失败时直接返回稳定输入错误，不伪造一份没有运行内容的 Report。
+
+`StableFailure` 是 DiscoverySourceResult 和全部 Report 复用的稳定、脱敏失败合同：
+
+```text
+StableFailure
+  code: str
+  reason: str
+  action: str
+  retryable: bool
+```
+
+三个文本字段去除边界空白后必须非空。它不保存 traceback、原始异常正文、HTTP/SDK 对象、URL、header、Cookie、prompt、文献正文、文件绝对路径或自由 details；`retryable` 只给用户提供本次失败的重试提示，不形成自动重试状态。
+
+#### 11.2.1 DiscoveryReport
+
+```text
+DiscoveryProviderReportOutcome =
+    "EXHAUSTED"
+  | "SCAN_LIMIT_REACHED"
+  | "FAILED"
+  | "INTERRUPTED"
+  | "NOT_STARTED"
+
+DiscoveryProviderReport
+  provider_name: str
+  raw_item_count: int
+  accepted_observation_count: int
+  outcome: DiscoveryProviderReportOutcome
+  failure: StableFailure | None
+
+DiscoveryReport
+  kind: Literal["discovery"]
+  end: ReportEnd
+  discovery_run_id: DiscoveryRunId
+  run_status: DiscoveryRunStatus
+  providers: tuple[DiscoveryProviderReport, ...]
+  discovery_result_count: int
+  new_meta_literature_count: int
+  new_literature_count: int
+  new_metadata_observation_count: int
+```
+
+Provider tuple 按输入顺序且名称唯一；所有 count 均非负。`raw_item_count` 使用与 scan limit 相同的过滤前口径，`accepted_observation_count` 只统计已经成功接纳的来源 observation。`failure` 只在 provider outcome 为 `FAILED` 时存在；`INTERRUPTED` 表示已经开始但受控停止，`NOT_STARTED` 表示停止或操作级失败前尚未调用。前三种 outcome 与已经提交的 `DiscoverySourceResult` 对齐，后两种只属于当次 Report。
+
+`discovery_result_count` 是本次按 MetaLiterature 去重的 DiscoveryResult 数量；其余三个 count 分别说明真正新建的 MetaLiterature、具体 Literature 和 MetadataObservation。Report 不保存扫描 item、结果 ID 列表、cursor 或完整发现路径。`run_status` 报告数据库中最后成功提交的 DiscoveryRun status；如果操作级提交错误使其仍为 `RUNNING`，`FailedReportEnd` 说明本次失败，恢复时仍按 DiscoveryRun 规则收尾。
+
+#### 11.2.2 DatabaseCompletionReport
+
+```text
+CompletionTarget = MetaLiteratureCompletionTarget | LiteratureCompletionTarget
+
+MetaLiteratureCompletionTarget
+  kind: Literal["meta-literature"]
+  meta_literature_id: MetaLiteratureId
+
+LiteratureCompletionTarget
+  kind: Literal["literature"]
+  literature_id: LiteratureId
+
+CompletionStage = "acquisition" | "parsing" | "analysis" | "literature"
+
+CompletedCompletionTarget
+  target: CompletionTarget
+  literature_id: LiteratureId
+
+SkippedCompletionTarget
+  target: CompletionTarget
+  reason: "manual-pdf-required" | "already-satisfied" | "not-eligible"
+  literature_ids: tuple[LiteratureId, ...]
+
+FailedCompletionTarget
+  target: CompletionTarget
+  literature_id: LiteratureId | None
+  stage: CompletionStage
+  failure: StableFailure
+
+InterruptedCompletionTarget
+  target: CompletionTarget
+  literature_id: LiteratureId | None
+
+NotStartedCompletionTarget
+  target: CompletionTarget
+
+DatabaseCompletionReport
+  kind: Literal["database-completion"]
+  end: ReportEnd
+  goal: BatchGoal
+  completed: tuple[CompletedCompletionTarget, ...]
+  failed: tuple[FailedCompletionTarget, ...]
+  skipped: tuple[SkippedCompletionTarget, ...]
+  notStarted: tuple[NotStartedCompletionTarget, ...]
+  interrupted: tuple[InterruptedCompletionTarget, ...]
+  no_usable_content_literature_ids: tuple[LiteratureId, ...]
+```
+
+五个结果 tuple 对本次已经冻结的实际目标做不重不漏的分区，其长度之和就是实际选择数，presenter 直接按长度形成摘要，不在 Model 中再复制一组可能漂移的 counts。`CompletedCompletionTarget.literature_id` 是最终满足目标的具体版本。`SkippedCompletionTarget` 只用于明确未执行但不属于失败的目标，例如自动获取已耗尽、需要用户手动绑定 PDF，或目标已经满足；`reason` 必须稳定，不能用 `skipped` 隐藏系统错误。目标在失败、中断或从未开始时尚未进入具体版本，`literature_id` 可以为空。
+
+以下 `no_usable_content_literature_ids` 与清理描述仅记录旧报告/实现语义，目标资产保留按 ADR 0026 执行；新产物不能沿用其清理授权。`no_usable_content_literature_ids` 按首次出现顺序去重，只说明这些具体 Literature 在本次至少有一个 PDF 被 Analysis 明确判定为 `NoUsableContent` 并完成清理；它可以与最终分区中的 `completed` 或 `skipped` 同时出现，不保存 PDF、候选、原因或次数。这样用户能够区分内容无效与调用失败，而不会把一次中间清理错误提升成最终目标状态。
+
+Network 或 Storage 错误按当时消费它的业务阶段报告；开始处理实际目标前发生的共同能力错误进入 `FailedReportEnd`。`NoUsableContent` 删除当前无效候选并继续同一版本或下一版本，不单独成为最终目标 outcome；最终要么由另一具体 Literature 达到目标，要么进入 `skipped(reason = "manual-pdf-required")`，要么形成失败/中断。一个目标即使已经提交 PDF 后在 Parsing 失败，也只形成一项 `FailedCompletionTarget`，数据库中的 PDF 事实仍然有效。
+
+#### 11.2.3 ManualPdfReport
+
+```text
+AcceptedManualPdfReportResult
+  kind: Literal["accepted"]
+  accepted: AcceptedManualPdf
+
+RejectedManualPdfReportResult
+  kind: Literal["rejected"]
+  failure: StableFailure
+
+ManualPdfReportResult = AcceptedManualPdfReportResult | RejectedManualPdfReportResult
+
+ManualPdfReport
+  kind: Literal["manual-pdf"]
+  end: ReportEnd
+  literature_id: LiteratureId
+  result: ManualPdfReportResult | None
+```
+
+有效 PDF 完整提交后形成 `accepted`；目标不存在、已有主 PDF 或基本节件检查失败等正常输入拒绝形成 `rejected`，不增加第三种自动 AcquisitionResult。`FinishedReportEnd` 必须有一个 result；`InterruptedReportEnd` 或 `FailedReportEnd` 时 result 为空。Report 不保存用户输入路径，也不复制 PDF 字节。
+
+#### 11.2.4 ImportReport 与 ImportReportSelector
+
+```text
+ImportAcceptanceOutcome = "created" | "enriched" | "matched"
+
+AcceptedImportRecord
+  kind: Literal["accepted"]
+  record_index: int
+  outcome: ImportAcceptanceOutcome
+  meta_literature_id: MetaLiteratureId
+  literature_id: LiteratureId
+
+RejectedImportRecord
+  kind: Literal["rejected"]
+  record_index: int
+  failure: StableFailure
+
+ImportRecordReport = AcceptedImportRecord | RejectedImportRecord
+
+ImportReport
+  kind: Literal["import"]
+  end: ReportEnd
+  format: BibliographyFormat
+  input_record_count: int
+  records: tuple[ImportRecordReport, ...]
+  not_processed_record_indexes: tuple[int, ...]
+  accepted_meta_literature_ids: tuple[MetaLiteratureId, ...]
+```
+
+`record_index` 从零开始。Codec 先形成有序记录或逐记录格式失败，因此 `input_record_count` 在接纳开始前确定；`records` 与 `not_processed_record_indexes` 对 `0..input_record_count-1` 做不重不漏的分区。`created` 表示未命中并创建具体 Literature；`enriched` 表示命中后，导入记录至少提供了一个原本缺失的非空值，或以用户值替换了当前由供应商选择的值；`matched` 表示命中已有 Literature 且当前统一投影不变。首次出现但与当前 Provider 值相同的用户记录仍保存为 user observation；只有已经存在相同规范化 user observation 时才复用既有事实而不重复插入。格式不合格、缺少最低识别信息或稳定标识符明确冲突形成 `RejectedImportRecord`。前三种接纳结果都进入按首次出现顺序去重的 `accepted_meta_literature_ids`，单条拒绝不撤销其它接纳。对于 `CONTENT_READY` Literature，`enriched` 可以表示新导入 observation 已保存并将参与下一次完整 Analysis，不表示当前 metadata/content 已被拆开替换。
+
+`ImportReportSelector` 只接受非空、去重且保持顺序的 `meta_literature_ids`；调用方可以直接复制 `accepted_meta_literature_ids`，空结果不形成补全请求。Report 本身不被 Entry 保存，也没有 ImportRunId。
+
+#### 11.2.5 ExportReport
+
+```text
+SkippedExportRecord
+  literature_id: LiteratureId
+  failure: StableFailure
+
+ExportFieldOmission
+  literature_id: LiteratureId
+  field: str
+  reason: str
+
+ExportReport
+  kind: Literal["export"]
+  end: ReportEnd
+  format: BibliographyFormat
+  selected_literature_ids: tuple[LiteratureId, ...]
+  published_literature_ids: tuple[LiteratureId, ...]
+  skipped: tuple[SkippedExportRecord, ...]
+  not_published_literature_ids: tuple[LiteratureId, ...]
+  omissions: tuple[ExportFieldOmission, ...]
+  bytes_written: int | None
+```
+
+选择结果按最终具体 Literature 去重并保持导出顺序。`published_literature_ids`、`skipped` 和 `not_published_literature_ids` 对 selected 做不重不漏的分区；字段损失只用非空 `field/reason` 说明，不能用自由 details。导出发布是文件级原子操作：只有 staging file 完整 flush、`fsync` 并原子发布后，才能填充 `published_literature_ids` 和非负 `bytes_written`；中断或操作级失败时二者分别为空和 `None`，已经编码但未发布的 Literature 仍进入 `not_published_literature_ids`，旧目标文件保持不变。Report 不保存输出绝对路径或导出文件字节。
+
+### 11.3 模块间操作合同
+
+| ID / 调用方 → 提供方                           | 输入                                               | 输出与成功标准                                      | 副作用与失败语义                                                                        |
+| ---------------------------------------------- | -------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| C01 Agent/人类 → Entry/T                       | 独立查询或明确维护意图、范围、目标、处理步骤与预算 | 操作特有结果；实际目标与已交付产物可核对            | 按查询/维护边界分派；知识缺口不生成扩库任务；长任务存续不由返回形式推断                 |
+| C02 T → Metadata/Literature                    | 来源条件或标识、Provider 范围与停止边界            | 已接纳文献/来源和发现结果                           | 仅来自用户明确启动的发现/补充操作；不自动下载；源失败保留其它结果                       |
+| C03 T → Acquisition                            | 具体文献/版本、来源线索、材料要求和获准能力        | 资产可读取且文件/归属验收及关系提交完成             | 仅来自明确启动的 PDF 维护；分层按现行政策；捕获非成功，暂时失败非耗尽                   |
+| C04 T → Parsing → Document/Evidence            | 已接纳 MaterialRef、支持的转换规格                 | 中性解析结果，再由文档 owner 发布可读取 DocumentRef | 可调用外部 parser；失败保留原始材料；没有可靠表格/坐标时报告能力缺口                    |
+| C05 入口/Analysis/提取器/Q → Document/Evidence | 明确版本、选择器、读取预算                         | 对应版本的片段/资源及稳定引用                       | 只读；旧版本不可用明确失败，不自动重解析或重定位                                        |
+| C06 T → Analysis                               | 固定输入、用途/问题、分析规格、预算与部分处理政策  | 已接纳知识产物、证据及覆盖；也可明确不适用或失败    | 可调用模型并发布；缺材料只返回缺口，应用层也不因此调用获取；不修改来源事实              |
+| C07 调用方 → Extraction                        | Spec、输入清单、能力要求                           | 有效规范绑定与材料缺口                              | 不因接受规范就运行模型；不支持的 schema/能力明确拒绝或协商缩小范围                      |
+| C08 外部提取器 → Extraction                    | CandidateBatch、证据、生产者方法声明               | 接纳回执与可交付产物，或具体结构/引用错误           | 推荐以显式批次为原子提交单位；批次失败不撤销此前已接纳批次；科学验收归下游              |
+| C09 入口/提取器 → Q                            | 问题、文献/版本范围、内容类型、预算                | 有界命中/上下文、来源及展开入口                     | 不隐式下载/解析/分析；索引不可用与零命中分开；不声称穷尽所有证据                        |
+| C10 人类 → Configuration                       | 编辑意图、期望配置版本、显式 probe 对象            | 发布/冲突、生效范围或实际 probe 诊断                | 凭据不回显；状态查询无外联；普通参数快照不延续已撤销权限                                |
+| C11 人类/T/R → Browser 控制                    | ControlBinding、指导/暂停/接管/交还/取消           | 受理、拒绝、过期或已执行及实际观察                  | 一个动作控制者；指导在安全决策点消费；已派发动作如实结算；人工候选仍由 Acquisition 验收 |
+| C12 业务 owner → Storage                       | 已验证产物与输入绑定、发布决定、并发前置条件       | 不可变字节及一致引用可见                            | create-if-absent；先准备字节后短事务提交；冲突、损坏和提交失败明确，不伪造业务成功      |
+
+C08 的批次原子性是本方案推荐，不是已发布保证；较大的任务拆成有界批次，接纳回执标明具体批次。schema 方言推荐 Draft 2020-12；支持的词汇表/本地引用子集、精确大小及错误列表上限在 Extraction 接纳实现前确定，不凭空规定数值。

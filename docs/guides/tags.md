@@ -1,5 +1,9 @@
 # 标签词表与文献打标
 
+类型：指南
+负责：词表查询、打标与标签维护操作
+状态：现行
+
 标签是库中的领域主题，与“问答标注”处理器的结果不同。打标读取校订稿的摘要、引言和结论及作者关键词，先提出主题，再检索词表并决定吸附或创建。原始 PDF 和解析不会被这一步自动启动。
 
 章节输入按完整片段限量读取：每类章节最多 64 KiB，片段正文合计最多 256 KiB；没有摘要、引言或结论标注时，退回到最多 8 个非参考文献、非前置信息片段。超过上限的片段不会被截成半段，也不会阻止读取后续仍能纳入的片段。没有任何可用片段时明确返回 `tag-input-empty`。
@@ -37,18 +41,7 @@ pnpm sciretriever tags backfill TAG_ID --execute
 
 MCP 的 `tags_query` 和 `tags_manage` 与上述 CLI 共用应用边界，均接受 `{operation, request}`。只读工具支持 `list/search/show/state/changes/assignment/backfill-preview`；维护工具支持 `change/assign/lock/build/consolidate/backfill`，需要维护权限。`build` 提供 `{literature_id, document_version_id, annotation_id}`，只接受当前正文校订稿，不隐式解析。
 
-模型与数量配置：
-
-```toml
-[tags]
-max_per_literature = 6
-candidate_k = 8
-backfill_batch = 8
-# 以下引用已登记的 models，未指定时沿用 analyze.model。
-# model = "provider/tagger"
-# consolidation_model = "provider/curator"
-# backfill_model = "provider/tagger"
-```
+模型与数量字段统一见[配置手册](configuration.md#标签模型与数量)。
 
 三类任务均使用共享 DSH；没有新增 Agent 后端。回溯预览不调用模型，执行按文献合并相关标签判断。新增分配的证据必须能定位到校订稿中的元数据文本；没有支持片段会拒绝发布。模型使用次数、输入与输出 token 单独记录，不将配置预算当作实际用量。
 

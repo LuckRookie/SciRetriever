@@ -1,5 +1,9 @@
 # DeepSeek Harness 组件与兼容性
 
+类型：外部事实
+负责：DSH/Cordis 依赖版本、许可证与适配限制
+状态：现行
+
 上级：[外部依赖说明](README.md)。接入决定与业务责任见 [ADR 0031](../architecture/decisions/0031-dsh-backed-agent-capabilities.md)，当前实现入口见 [Agents](../../apps/server/src/agents/README.md)。本页记录外部组件事实，不保存真实测试日志或成功率。
 
 ## 固定版本与来源
@@ -9,12 +13,12 @@
 | 组件                                                        | 接入用途                                                             |
 | ----------------------------------------------------------- | -------------------------------------------------------------------- |
 | `dsh-llm`                                                   | 模型 adapter 与消息/usage 事件协议；出站由 SciRetriever Network 实现 |
-| `dsh-session`、`dsh-session-projection`                     | 任务会话原始事件与模型可见历史投影                                     |
+| `dsh-session`、`dsh-session-projection`                     | 任务会话原始事件与模型可见历史投影                                   |
 | `dsh-system-prompt`                                         | 任务 scope 的固定系统指令                                            |
 | `dsh-tools`                                                 | 工具声明、调用 ID、真实执行结果                                      |
 | `dsh-agent`、`dsh-agent-loop`                               | Agent scope 与模型—工具循环                                          |
 | `dsh-token-meter`、`dsh-compaction`、`dsh-compaction-basic` | 上下文估算与历史压缩                                                 |
-| `dsh-attachment`                                            | 内存图片引用类型；字节由调用/会话所属 adapter 保管                        |
+| `dsh-attachment`                                            | 内存图片引用类型；字节由调用/会话所属 adapter 保管                   |
 | `dsh-scope`、`dsh-session-persistence`                      | 核心包的运行时 peer/import 依赖；不挂载磁盘会话持久化服务            |
 
 这些是独立发布的组件包；不安装或启动完整 DSH CLI/SDK/ACP 应用，不导入用户机器上的 DSH profile、模型与会话设置。Cordis 是组件组合与生命周期容器。

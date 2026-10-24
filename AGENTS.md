@@ -1,5 +1,9 @@
 # SciRetriever 仓库协作规范
 
+类型：开发
+负责：项目画像、真相源索引与协作边界
+状态：现行
+
 > 本文件是 SciRetriever 的项目画像、真相源索引和项目级约束入口。稳定工程工作流、质量门禁、Git 纪律和通用完成标准见 [HARNESS.md](HARNESS.md)。
 
 ## 1. 真相源与阅读顺序
@@ -75,29 +79,9 @@ apps/web/src/                # Web 工作台适配
 
 ## 5. 验证入口
 
-依据项目 owner 于 2026-09-10 的决定，后续开发和全量验收转向 TypeScript，不再默认运行 Python Quick、Full 或全量 unittest。从仓库根目录执行：
+测试选择、显式并发、Quick/Full 的内容与运行时机统一遵循 [HARNESS 第 5.4 节](HARNESS.md#54-typescript-开发验证)和[验证规则](HARNESS.md#6-测试验证与语义审查)。按改动影响范围先跑定向验证，未执行或失败的检查如实报告；本页不维护第二份测试政策和命令清单。
 
-```bash
-pnpm install --frozen-lockfile
-VITEST_MAX_FORKS=36 VITEST_MIN_FORKS=12 pnpm exec vitest run <相关测试文件>
-pnpm quick
-VITEST_MAX_FORKS=36 VITEST_MIN_FORKS=12 pnpm full
-```
-
-- 相关测试：开发循环和单个能力切片的首选反馈。
-- **Owner 2026-10-22 确定的效率规则**：先根据改动及调用方选择直接相关的测试；小修复不得默认触发全量测试。耗时测试安排在相关改动全部完成后的最后阶段，同一候选版本只跑一次；修复失败后先定向复验，只有新改动或未解决的风险涉及其它能力时才扩大范围。
-- 安装包旅程、真实浏览器测试、30,000 篇文献库、200 篇合成文献处理与复用等耗时测试，只在改动影响对应能力、共享依赖或明确要求验证该流程时运行；没有相关影响就不运行，不因其它用例失败而整组重跑。选择依据应简要记录，不删除或永久跳过这些用例。
-- 本机 Vitest 显式设置 `VITEST_MAX_FORKS=36 VITEST_MIN_FORKS=12`，不用机器默认并发；不同时启动多轮 Vitest。若资源状况需要调整，记录原因与实际设置。
-- Quick：Prettier、ESLint、源码和测试 strict 类型检查。
-- Full：Quick、全部 Vitest 与所有已注册 TS project 的构建；用于确需全量覆盖的最终验收，不作为每次代码交付的默认必跑步骤。`vitest.config.mjs` 排除本机 `sandbox/**`，保留原有回归发现范围。
-- Python Harness、Python 源码和既有 Python 测试已归档到 `archive/2026-09-12-typescript-python-retirement/`，不作为 TS 交付的阻断项；只有用户明确要求历史复核时才处理归档快照。
-- 文档-only 修改检查 diff、链接、术语、命令事实和 Markdown 结构。
-- 交付如实说明本次验收范围、已运行结果、未运行项及依据。Full 未通过或未运行时不得声称“Full 通过”，也不得将多轮定向结果拼成一次全量通过；已有失败必须修复或明确列为未解决事项。任务若另有明确验收门槛，遵守 Owner 的最新要求。
-
-精确步骤见 [HARNESS.md](HARNESS.md)、`package.json` 与 CI；当前包、离线安装验证和恢复入口见
-[TypeScript 基础开发入口](docs/development/typescript-foundation.md)。TS 生产路径不依赖 Python；历史源码归档已完成，真实用户数据切换仍需按计划授权执行。
-
-TS Full 使用 TypeScript Configuration/Credential owner 和合成临时 home，不启动 Python bridge；Python Harness 与既有测试只作为明确要求时的历史维护入口。安装、依赖和支持边界见 [TypeScript 基础开发入口](docs/development/typescript-foundation.md)。
+包与开发入口见[TypeScript 基础开发入口](docs/development/typescript-foundation.md)。
 
 ## 6. 必须保留的安全边界
 

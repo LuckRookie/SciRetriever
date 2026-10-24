@@ -1,6 +1,9 @@
 # ADR 0001：SciRetriever 的范围与数据边界
 
-- Status: Accepted
+类型：决策（ADR）
+负责：SciRetriever 的范围与数据边界
+状态：Accepted；部分被取代：知识压缩与证据目标见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)，通用提取见 [ADR 0027](0027-extraction-capabilities-and-caller-defined-records.md)；单篇可读全文改由校订稿承担、LiteratureContent 退役，见 [ADR 0037](0037-literature-archive-and-proofread-text.md)
+
 - Date: 2026-07-20
 - Revised: 2026-08-06
 - Last amended: 2026-09-26
@@ -8,10 +11,6 @@
 - Superseded by: none
 - Amended by: [ADR 0008](../../archive/decisions/0008-summarized-markdown-literature-content.md)、[ADR 0011](0011-literature-database-centered-incremental-maintenance.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)、[ADR 0027](0027-extraction-capabilities-and-caller-defined-records.md)；[ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[架构原则](../principles.md)
-
-> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md) 修订本 ADR：单篇可读全文改由校订稿承担，LiteratureContent 退役。直接冲突的正文已按 ADR 0037 收口。
-
-> 2026-09-26 范围修订：知识压缩/证据目标按 ADR 0026，通用提取按 ADR 0027。原文将全部领域抽取留给下游的限制，修订为平台提供通用能力、调用方定义记录与策略；候选按独立产物交付，领域数据集与文献固定字段边界保留。以下保留原决策背景。
 
 ## 背景
 

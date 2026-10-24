@@ -1,5 +1,9 @@
 # Web of Science
 
+类型：外部事实
+负责：Web of Science
+状态：现行
+
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
 - 当前配置选择键：Metadata `web-of-science`；普通配置显式选择 `starter` 或 `expanded` 产品及 database/edition
@@ -10,10 +14,10 @@
 
 Clarivate 当前至少有两个不可混写的 Web of Science API 产品：
 
-| 产品 | 当前 base | 能力边界 |
-|---|---|---|
-| Web of Science Starter API | `https://api.clarivate.com/apis/wos-starter/v1`、`/v2` | 基础 document/journal metadata、Web of Science 页面链接；按 plan 返回 Times Cited |
-| Web of Science API Expanded | `https://wos-api.clarivate.com/api/wos` | Full Record、完整检索、addresses/affiliations/funding、cited references、citing items、related records |
+| 产品                        | 当前 base                                              | 能力边界                                                                                               |
+| --------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Web of Science Starter API  | `https://api.clarivate.com/apis/wos-starter/v1`、`/v2` | 基础 document/journal metadata、Web of Science 页面链接；按 plan 返回 Times Cited                      |
+| Web of Science API Expanded | `https://wos-api.clarivate.com/api/wos`                | Full Record、完整检索、addresses/affiliations/funding、cited references、citing items、related records |
 
 [Web of Science API Lite](https://developer.clarivate.com/apis/woslite) 的当前官方页明确写明已被 Starter API 取代，并要求应用迁移。旧 Lite endpoint/schema 不能作为新 adapter 的依据，也不能把旧代码示例写成 Starter 合同。
 
@@ -42,11 +46,11 @@ X-ApiKey: API_KEY
 
 当前官方 Starter plans：
 
-| Plan | 次/秒 | 次/日 | Times Cited |
-|---|---:|---:|---|
-| Free Trial | 1 | 50 | 不返回 |
-| Free Institutional Member | 5 | 5,000 | 面向 WoS 订阅机构成员，官方说明可返回 |
-| Free Institutional Integration | 5 | 20,000 | 需机构管理员审批，用于内部集成；具体字段 entitlement 仍以账户为准 |
+| Plan                           | 次/秒 |  次/日 | Times Cited                                                       |
+| ------------------------------ | ----: | -----: | ----------------------------------------------------------------- |
+| Free Trial                     |     1 |     50 | 不返回                                                            |
+| Free Institutional Member      |     5 |  5,000 | 面向 WoS 订阅机构成员，官方说明可返回                             |
+| Free Institutional Integration |     5 | 20,000 | 需机构管理员审批，用于内部集成；具体字段 entitlement 仍以账户为准 |
 
 Starter 有“free plan”不等于匿名，也不等于所有机构/产品数据库内容免费；仍要注册 application 和 API key。
 
@@ -54,20 +58,20 @@ Starter 有“free plan”不等于匿名，也不等于所有机构/产品数�
 
 Expanded 需要付费许可；计划可用性取决于机构 Web of Science subscription、可检索 databases/editions、Full Record 数与请求配额。当前公开标准计划为：
 
-| Plan | 次/秒 | Full Records/年 |
-|---|---:|---:|
-| Basic | 2 | 50,000 |
-| Intermediate | 2 | 250,000 |
-| Advanced | 3 | 1,000,000 |
-| Premium | 5 | 3,000,000 |
+| Plan         | 次/秒 | Full Records/年 |
+| ------------ | ----: | --------------: |
+| Basic        |     2 |          50,000 |
+| Intermediate |     2 |         250,000 |
+| Advanced     |     3 |       1,000,000 |
+| Premium      |     5 |       3,000,000 |
 
 Essentials plans 当前另列：
 
-| Plan | 次/秒 | 次/日 | Full Records/月 |
-|---|---:|---:|---:|
-| Essentials 1 | 3 | 30,000 | 1,000,000 |
-| Essentials 2 | 3 | 10,000 | 500,000 |
-| Essentials 3 | 2 | 5,000 | 100,000 |
+| Plan         | 次/秒 |  次/日 | Full Records/月 |
+| ------------ | ----: | -----: | --------------: |
+| Essentials 1 |     3 | 30,000 |       1,000,000 |
+| Essentials 2 |     3 | 10,000 |         500,000 |
+| Essentials 3 |     2 |  5,000 |         100,000 |
 
 Expanded `optionView=FR` 取 Full Record，`SR` 是不计 Full Record quota 的短记录，`FS` 配合 `viewField` 做字段选择。响应 quota header 示例包括 `X-REC-AmtPerYear-Remaining`、`X-REQ-ReqPerSec-Remaining`；实际 header/窗口以账户和合同为准。HTTP 429 是 throttle，不应重试成“无结果”。
 
@@ -138,24 +142,38 @@ Starter 不提供 abstract、作者 affiliation/ROR、ORCID 或逐条 cited refe
 
 ```json
 {
-  "metadata": {"total": 2, "page": 1, "limit": 10},
-  "hits": [{
-    "uid": "WOS:000222526200005",
-    "title": "...",
-    "types": ["Article"],
-    "source": {
-      "sourceTitle": "BULLETIN OF HISPANIC STUDIES",
-      "publishYear": 2004,
-      "volume": "81",
-      "issue": "2",
-      "pages": {"range": "215-228", "begin": "215", "end": "228", "count": 14}
-    },
-    "names": {"authors": [{"displayName": "Tomlinson, E", "wosStandard": "Tomlinson, E"}]},
-    "links": {"record": "https://www.webofscience.com/...", "references": "https://www.webofscience.com/..."},
-    "citations": [{"db": "WOS", "count": 3}],
-    "identifiers": {"doi": "10.3828/bhs.81.2.5", "issn": "1475-3839"},
-    "keywords": {"authorKeywords": []}
-  }]
+  "metadata": { "total": 2, "page": 1, "limit": 10 },
+  "hits": [
+    {
+      "uid": "WOS:000222526200005",
+      "title": "...",
+      "types": ["Article"],
+      "source": {
+        "sourceTitle": "BULLETIN OF HISPANIC STUDIES",
+        "publishYear": 2004,
+        "volume": "81",
+        "issue": "2",
+        "pages": {
+          "range": "215-228",
+          "begin": "215",
+          "end": "228",
+          "count": 14
+        }
+      },
+      "names": {
+        "authors": [
+          { "displayName": "Tomlinson, E", "wosStandard": "Tomlinson, E" }
+        ]
+      },
+      "links": {
+        "record": "https://www.webofscience.com/...",
+        "references": "https://www.webofscience.com/..."
+      },
+      "citations": [{ "db": "WOS", "count": 3 }],
+      "identifiers": { "doi": "10.3828/bhs.81.2.5", "issn": "1475-3839" },
+      "keywords": { "authorKeywords": [] }
+    }
+  ]
 }
 ```
 
@@ -236,22 +254,22 @@ Full Record `silo_tc[]` 或 Starter `citations[]` 是按 collection 的 Times Ci
 
 ## 7. 与 SciRetriever 中性数据的候选映射
 
-| 外部字段 | 外部语义 | 候选归属 | 约束 |
-|---|---|---|---|
-| WoS `UID` | source record/accession number | provenance/source record | 不代替本地 Literature ID |
-| DOI/PMID 等明确 document ID | 稳定文献标识 | `LiteratureMetadata.identifiers` | source ISSN 不进入文献 identifiers；未知 type 不猜 |
-| item title / Starter `title` | 文献标题 | `LiteratureMetadata.title` | Expanded 必须按 title `type` 选 item title |
-| Expanded abstract | 摘要 | `LiteratureMetadata.abstract` | Starter 缺失，不从 `TS` 命中反推 |
-| author role names | 有序署名 | `LiteratureMetadata.authors` | role + seq_no/响应顺序；ORCID/affiliation 只用明确对齐值 |
-| source title | venue 名称 | `LiteratureMetadata.venue` | ISSN 仅 adapter 内部容器辨识，不进入当前 Model |
-| pub info/source pages | 年月日、卷期页、类型 | `LiteratureMetadata` 对应字段 | cover/early-access/sort date 需明确 precedence；不伪造日精度 |
-| publisher/language | 出版者、语言 | `LiteratureMetadata.publisher` / `LiteratureMetadata.language` | 显式值 |
-| author keywords | 来源声明关键词 | `MetadataObservation.declared_keywords` | Keywords Plus/category/topic 排除 |
-| `refs.count` | outgoing reference count | `MetadataObservation.reference_count` | 不反推边 |
-| Times Cited by collection | incoming count | `MetadataObservation.cited_by_count` | 保留 database；不跨 collection 相加 |
-| references 中稳定 UID/DOI | outgoing edge | `ProviderRelationObservation` | 一 reference 一 observation，`current -> target` |
-| citing records UID | incoming edge的 citing 端 | `ProviderRelationObservation` | 一 result 一 observation，`result -> current` |
-| request time、database/edition/query | 来源上下文 | provenance | API query ID、page 不作为业务 ID |
+| 外部字段                             | 外部语义                       | 候选归属                                                       | 约束                                                         |
+| ------------------------------------ | ------------------------------ | -------------------------------------------------------------- | ------------------------------------------------------------ |
+| WoS `UID`                            | source record/accession number | provenance/source record                                       | 不代替本地 Literature ID                                     |
+| DOI/PMID 等明确 document ID          | 稳定文献标识                   | `LiteratureMetadata.identifiers`                               | source ISSN 不进入文献 identifiers；未知 type 不猜           |
+| item title / Starter `title`         | 文献标题                       | `LiteratureMetadata.title`                                     | Expanded 必须按 title `type` 选 item title                   |
+| Expanded abstract                    | 摘要                           | `LiteratureMetadata.abstract`                                  | Starter 缺失，不从 `TS` 命中反推                             |
+| author role names                    | 有序署名                       | `LiteratureMetadata.authors`                                   | role + seq_no/响应顺序；ORCID/affiliation 只用明确对齐值     |
+| source title                         | venue 名称                     | `LiteratureMetadata.venue`                                     | ISSN 仅 adapter 内部容器辨识，不进入当前 Model               |
+| pub info/source pages                | 年月日、卷期页、类型           | `LiteratureMetadata` 对应字段                                  | cover/early-access/sort date 需明确 precedence；不伪造日精度 |
+| publisher/language                   | 出版者、语言                   | `LiteratureMetadata.publisher` / `LiteratureMetadata.language` | 显式值                                                       |
+| author keywords                      | 来源声明关键词                 | `MetadataObservation.declared_keywords`                        | Keywords Plus/category/topic 排除                            |
+| `refs.count`                         | outgoing reference count       | `MetadataObservation.reference_count`                          | 不反推边                                                     |
+| Times Cited by collection            | incoming count                 | `MetadataObservation.cited_by_count`                           | 保留 database；不跨 collection 相加                          |
+| references 中稳定 UID/DOI            | outgoing edge                  | `ProviderRelationObservation`                                  | 一 reference 一 observation，`current -> target`             |
+| citing records UID                   | incoming edge的 citing 端      | `ProviderRelationObservation`                                  | 一 result 一 observation，`result -> current`                |
+| request time、database/edition/query | 来源上下文                     | provenance                                                     | API query ID、page 不作为业务 ID                             |
 
 Starter 与 Expanded 是两套外部产品/response parser；不能根据字段相似就共用未经区分的 vendor model。若两者对同一 UID 给出事实，仍是带产品、数据库、观察时间的独立 observation。
 

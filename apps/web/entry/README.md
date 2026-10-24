@@ -1,5 +1,9 @@
 # React 工作台静态入口
 
+类型：代码导航
+负责：React 工作台静态入口
+状态：现行
+
 本目录提供 Vite 的 HTML 入口和 `public/` 中不经 JavaScript 注入的固定样式。
 界面源码位于 [`src/app/`](../src/app/README.md)，构建由
 [`build-react-assets.mjs`](../../../scripts/build-react-assets.mjs) 交付到服务端。

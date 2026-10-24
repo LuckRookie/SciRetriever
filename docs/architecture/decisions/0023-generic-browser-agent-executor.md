@@ -1,6 +1,9 @@
 # ADR 0023：通用 Browser Agent 执行器
 
-- Status: Accepted
+类型：决策（ADR）
+负责：通用 Browser Agent 执行器
+状态：Accepted
+
 - Amended by: [ADR 0029](0029-unverified-pdf-acquisition.md)（下载取消文章身份门，保存未验证标签）
 - Amended by: [ADR 0030](0030-browser-transport-and-progress.md)（临时传输、文章会话、后台下载、候选交接和平台限流）；[ADR 0031](0031-dsh-backed-agent-capabilities.md)（DSH 执行基础与多轮历史）
 - Date: 2026-09-06
@@ -9,10 +12,6 @@
 - Supersedes: none
 - Amends: [ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)、[ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)、[PDF 获取指南](../../guides/pdf-acquisition.md)
-
-> 本次修订定义已接受的目标合同。2026-10-11 的入口准备与预算接线由
-> [本轮实施计划](../../archive/2026-10-11-metadata-governance-pdf-routing/README.md)记录；此前独立 worker、后台传输与多会话工作台见
-> [并行交接记录](../../archive/2026-10-05-browser-parallel-downloads/README.md)。决策被接受不等于能力已经交付。
 
 ## 背景
 

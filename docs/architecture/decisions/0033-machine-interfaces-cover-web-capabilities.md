@@ -1,6 +1,9 @@
 # ADR 0033：CLI 与 MCP 分别覆盖 Web 业务能力
 
-- Status: Accepted（Owner 已确认；实施状态见当前指南和计划）
+类型：决策（ADR）
+负责：CLI 与 MCP 分别覆盖 Web 业务能力
+状态：Accepted（Owner 已确认；实施状态见当前指南和计划）
+
 - Date: 2026-10-15
 - Last amended: 2026-10-18
 - Amends: [ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0032](0032-library-centered-web-workspace.md)

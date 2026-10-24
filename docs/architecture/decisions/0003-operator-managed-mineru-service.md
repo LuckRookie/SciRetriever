@@ -1,14 +1,15 @@
 # ADR 0003：Operator-managed MinerU PDF parser adapter
 
-- Status: Accepted
+类型：决策（ADR）
+负责：Operator-managed MinerU PDF parser adapter
+状态：Accepted；决策第 7 条（不建立 block/bbox 图）被 [ADR 0037](0037-literature-archive-and-proofread-text.md) 取代：增加 pipeline profile，保留区块与坐标
+
 - Date: 2026-07-24
 - Revised: 2026-08-07
 - Supersedes: none
 - Superseded by: none
 - Amended by: [ADR 0008](../../archive/decisions/0008-summarized-markdown-literature-content.md)、[ADR 0010](../../archive/decisions/0010-parser-neutral-markdown-current-result.md)；[ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[MinerU 注意事项](../../notes/mineru.md)
-
-> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md)修订本 ADR：增加 pipeline profile，保留区块与坐标；第 7 条“不建立 block/bbox 图”不再适用。直接冲突的正文已按 ADR 0037 收口。
 
 ## 背景
 

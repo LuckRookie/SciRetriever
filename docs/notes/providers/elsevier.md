@@ -1,5 +1,9 @@
 # Elsevier
 
+类型：外部事实
+负责：Elsevier
+状态：现行
+
 > 当前 TypeScript 适配行为（2026-10-10 核对）：Article Retrieval 使用 /content/article/{doi|pii|eid}/{identifier}?view=FULL。Source 接受受信 Article API 的 /pii/ 与 PII: 等类型化提示，Scopus 检索 origin 本身不是 Elsevier 正文归属证据。解析 MAIN web-pdf 时仅取直接子字段，忽略嵌套预览图片的独立 filename/extension/eid。正文获取沿 FULL XML → MAIN object 定位；仅有 PDF 媒体类型不能证明收到正文。 证据见修复验证记录（本地文件：`sandbox/reports/live-discovery-acquisition-fixes-2026-10-10.md`，不随仓库分发）。下文较早日期的探测只代表当时状态。
 
 - 官方资料最后在线核对：Article/Object Retrieval WADL 于 2026-10-13 复核；其它资料保持 2026-08-19 的核对范围
@@ -39,12 +43,12 @@ X-RateLimit-Reset
 
 当前官网列出的常用默认值：
 
-| API | 周配额 | throttle | 其它限制 |
-|---|---:|---:|---|
-| Scopus Search | 20,000 | 9 req/s | 无 cursor 时最多访问 5,000 个结果；`STANDARD` 每页最多 200，`COMPLETE`/`COMPONENT` 最多 25 |
-| Abstract Retrieval | 10,000 | 9 req/s | 单记录；view/entitlement 影响字段 |
-| Article Retrieval | 50,000 | 10 req/s | 官方表中 TDM key 为 unlimited；内容权限另计 |
-| ScienceDirect Search v2 | 20,000 | 2 req/s | 与 Scopus Search 是不同产品 |
+| API                     | 周配额 | throttle | 其它限制                                                                                   |
+| ----------------------- | -----: | -------: | ------------------------------------------------------------------------------------------ |
+| Scopus Search           | 20,000 |  9 req/s | 无 cursor 时最多访问 5,000 个结果；`STANDARD` 每页最多 200，`COMPLETE`/`COMPONENT` 最多 25 |
+| Abstract Retrieval      | 10,000 |  9 req/s | 单记录；view/entitlement 影响字段                                                          |
+| Article Retrieval       | 50,000 | 10 req/s | 官方表中 TDM key 为 unlimited；内容权限另计                                                |
+| ScienceDirect Search v2 | 20,000 |  2 req/s | 与 Scopus Search 是不同产品                                                                |
 
 这些是供应商默认值，不是 SciRetriever 应用级预算。429 既可能表示 quota exceeded，也可能是瞬时 throttle；实现需结合响应体/headers、重置时间和有界退避判断。key、token、机构身份和 usage headers 不进入业务 Model 或日志。
 
@@ -229,11 +233,11 @@ API、验证真实账户 entitlement 或读取响应正文。
 
 `verified`，2026-10-13：在同一凭据与服务器网络下，对同一组文章观察到以下差异：
 
-| 路径 | 已观察到的行为 | 可成立的结论 |
-| --- | --- | --- |
-| Article Retrieval，`Accept: application/pdf` | 带与不带 `view=FULL` 均返回 HTTP 200、合法但仅含文章首页的 PDF | 直接 Article PDF 可能是首页表示；状态码、媒体类型和 reader 可读性不能单独证明正文完整 |
-| Article Retrieval，XML FULL → 显式 MAIN attachment EID → Object Retrieval | Object API 返回完整的出版社 PDF | XML 提供文件定位信息，随后取回现成的 PDF；没有把 XML 转换成 PDF |
-| Article Retrieval，XML 省略 `view` | 此组响应仍包含与 FULL 请求相同的正文附件 EID | 这组首页响应不能归因于省略 view；不据此将所有文章的默认 view 视为 FULL |
+| 路径                                                                      | 已观察到的行为                                                 | 可成立的结论                                                                          |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Article Retrieval，`Accept: application/pdf`                              | 带与不带 `view=FULL` 均返回 HTTP 200、合法但仅含文章首页的 PDF | 直接 Article PDF 可能是首页表示；状态码、媒体类型和 reader 可读性不能单独证明正文完整 |
+| Article Retrieval，XML FULL → 显式 MAIN attachment EID → Object Retrieval | Object API 返回完整的出版社 PDF                                | XML 提供文件定位信息，随后取回现成的 PDF；没有把 XML 转换成 PDF                       |
+| Article Retrieval，XML 省略 `view`                                        | 此组响应仍包含与 FULL 请求相同的正文附件 EID                   | 这组首页响应不能归因于省略 view；不据此将所有文章的默认 view 视为 FULL                |
 
 这些观察不代表 Article API 永远只返回首页，也不代表 Object API 对任意文章都可下载。Article PDF 与 Object PDF 在同一环境下出现差异的服务端原因尚未确认，不能直接归为无订阅、无版权或全局 API 格式限制。返回 XML 也不保证包含可用的结构化正文或 MAIN PDF 附件，应分别检查正文内容与显式附件字段。
 
@@ -270,17 +274,19 @@ full-text-retrieval-response
     "opensearch:totalResults": "1",
     "opensearch:startIndex": "0",
     "opensearch:itemsPerPage": "1",
-    "entry": [{
-      "dc:identifier": "SCOPUS_ID:...",
-      "eid": "2-s2.0-...",
-      "dc:title": "...",
-      "dc:creator": "...",
-      "prism:publicationName": "...",
-      "prism:coverDate": "...",
-      "prism:doi": "...",
-      "citedby-count": "...",
-      "link": [{"@ref": "full-text", "@href": "https://..."}]
-    }]
+    "entry": [
+      {
+        "dc:identifier": "SCOPUS_ID:...",
+        "eid": "2-s2.0-...",
+        "dc:title": "...",
+        "dc:creator": "...",
+        "prism:publicationName": "...",
+        "prism:coverDate": "...",
+        "prism:doi": "...",
+        "citedby-count": "...",
+        "link": [{ "@ref": "full-text", "@href": "https://..." }]
+      }
+    ]
   }
 }
 ```
@@ -289,20 +295,20 @@ full-text-retrieval-response
 
 ## 7. 与 SciRetriever 中性数据的候选映射
 
-| 外部字段 | 外部语义 | 候选归属 | 备注 |
-|---|---|---|---|
-| Scopus EID / `dc:identifier` | provider record identity | `Provenance.source_record_id` | 不代替本地 Literature ID |
-| DOI/PII/PMID 等显式 ID | 文献标识 | `LiteratureMetadata.identifiers` | 按 namespace 规范化；不从 URL 猜 |
-| title/description | 标题/摘要 | `LiteratureMetadata` | Abstract Retrieval 优先于精简 Search 字段 |
-| publication/cover date、venue、卷期页 | 发表信息 | `LiteratureMetadata` | 区分 online/cover/publication date |
-| `authors.author[]` | 有序结构化署名 | `Author[]` | 只接受明确对齐的 ORCID/affiliation；`dc:creator` 不足时不伪造 |
-| `authkeywords.author-keyword[]` | 作者关键词 | `MetadataObservation.declared_keywords` 候选 | 不把 Scopus 分类词混入 |
-| bibliography 原文 | 来源参考文献文本 | `MetadataObservation.reference_texts` 候选 | 保持来源顺序与 provenance |
-| bibliography 显式 target ID | 来源结构化引用 | `ProviderRelationObservation` 候选 | 每个显式目标一条；当前无独立 citation key |
-| `citedby-count` | 来源引用计数 | observation 计数字段候选 | 不生成边 |
-| full-text/link/object locator | 资产线索 | `AssetHint[]` | 区分 landing、XML、image 与 PDF；逐项验证 |
-| `MAIN web-pdf` attachment EID | 授权主 PDF object locator | 当次 `AuthorizedDownloadLocator` | 只在 Acquisition client 内使用，不进入 Literature 数据库 |
-| 强 DOI/PII/Article EID + Article `application/pdf` | 授权主 PDF representation locator | 当次 `AuthorizedDownloadLocator` | 仅在 FULL XML 无可用 MAIN object 时使用；不是公开 URL 猜测或 Browser fallback |
+| 外部字段                                           | 外部语义                          | 候选归属                                     | 备注                                                                          |
+| -------------------------------------------------- | --------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------- |
+| Scopus EID / `dc:identifier`                       | provider record identity          | `Provenance.source_record_id`                | 不代替本地 Literature ID                                                      |
+| DOI/PII/PMID 等显式 ID                             | 文献标识                          | `LiteratureMetadata.identifiers`             | 按 namespace 规范化；不从 URL 猜                                              |
+| title/description                                  | 标题/摘要                         | `LiteratureMetadata`                         | Abstract Retrieval 优先于精简 Search 字段                                     |
+| publication/cover date、venue、卷期页              | 发表信息                          | `LiteratureMetadata`                         | 区分 online/cover/publication date                                            |
+| `authors.author[]`                                 | 有序结构化署名                    | `Author[]`                                   | 只接受明确对齐的 ORCID/affiliation；`dc:creator` 不足时不伪造                 |
+| `authkeywords.author-keyword[]`                    | 作者关键词                        | `MetadataObservation.declared_keywords` 候选 | 不把 Scopus 分类词混入                                                        |
+| bibliography 原文                                  | 来源参考文献文本                  | `MetadataObservation.reference_texts` 候选   | 保持来源顺序与 provenance                                                     |
+| bibliography 显式 target ID                        | 来源结构化引用                    | `ProviderRelationObservation` 候选           | 每个显式目标一条；当前无独立 citation key                                     |
+| `citedby-count`                                    | 来源引用计数                      | observation 计数字段候选                     | 不生成边                                                                      |
+| full-text/link/object locator                      | 资产线索                          | `AssetHint[]`                                | 区分 landing、XML、image 与 PDF；逐项验证                                     |
+| `MAIN web-pdf` attachment EID                      | 授权主 PDF object locator         | 当次 `AuthorizedDownloadLocator`             | 只在 Acquisition client 内使用，不进入 Literature 数据库                      |
+| 强 DOI/PII/Article EID + Article `application/pdf` | 授权主 PDF representation locator | 当次 `AuthorizedDownloadLocator`             | 仅在 FULL XML 无可用 MAIN object 时使用；不是公开 URL 猜测或 Browser fallback |
 
 ## 8. 不进入业务 Model 的字段
 

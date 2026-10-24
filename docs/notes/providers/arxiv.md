@@ -1,5 +1,9 @@
 # arXiv
 
+类型：外部事实
+负责：arXiv
+状态：现行
+
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
 - 当前选择键：Metadata `arxiv`；Acquisition `arxiv`
@@ -106,19 +110,19 @@ Atom API 没有补充材料清单、结构化全文 XML/HTML、OA 状态或许�
 
 ## 7. 与 SciRetriever 中性数据的候选映射
 
-| 外部字段 | 外部语义 | 候选归属 | 备注 |
-|---|---|---|---|
-| `entry/id` 中的版本化 ID | arXiv 记录/版本定位 | `MetadataObservation.provenance.source_record_id`；`LiteratureMetadata.identifiers` | 标识符 namespace 候选为 `arxiv`，保留 `vN`；URL 本身不必成为标识符值 |
-| `title` | 投稿标题 | `LiteratureMetadata.title` | 规范空白，不改写内容 |
-| `summary` | 投稿摘要 | `LiteratureMetadata.abstract` | 不是 LLM 总结 |
-| `published` / `updated` | 首版/当前版本提交时间 | `LiteratureMetadata.publication_date` 或 `Provenance` 的候选输入 | 必须先明确项目希望表达哪种日期；不同时写成两个“发表日期” |
-| `author[].name` | 有序署名展示名 | `Author.display_name` | 不机械拆 given/family |
-| `author[].arxiv:affiliation` | 作者投稿时声明单位文本 | `Author.affiliations` | 无 ROR 时只保留明确名称 |
-| `arxiv:doi` | 投稿者提供的 DOI | `LiteratureMetadata.identifiers` | 规范化后 namespace `doi` |
-| `category[]` / `primary_category` | arXiv 分类 | 暂无业务字段 | 不是 `declared_keywords`，除非未来有明确产品规则 |
-| HTML `link` | abstract landing page | `AssetHint` | `landing-page`，不是已获得资产 |
-| PDF `link` | 供应商声明的 PDF 地址 | `AssetHint` | `direct-file`、媒体类型 `application/pdf`、角色候选 `primary-pdf`、版本候选 `preprint` |
-| feed 查询与观察时间 | 调用上下文 | `Provenance` | 输入 hash 由适配边界形成 |
+| 外部字段                          | 外部语义               | 候选归属                                                                            | 备注                                                                                   |
+| --------------------------------- | ---------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `entry/id` 中的版本化 ID          | arXiv 记录/版本定位    | `MetadataObservation.provenance.source_record_id`；`LiteratureMetadata.identifiers` | 标识符 namespace 候选为 `arxiv`，保留 `vN`；URL 本身不必成为标识符值                   |
+| `title`                           | 投稿标题               | `LiteratureMetadata.title`                                                          | 规范空白，不改写内容                                                                   |
+| `summary`                         | 投稿摘要               | `LiteratureMetadata.abstract`                                                       | 不是 LLM 总结                                                                          |
+| `published` / `updated`           | 首版/当前版本提交时间  | `LiteratureMetadata.publication_date` 或 `Provenance` 的候选输入                    | 必须先明确项目希望表达哪种日期；不同时写成两个“发表日期”                               |
+| `author[].name`                   | 有序署名展示名         | `Author.display_name`                                                               | 不机械拆 given/family                                                                  |
+| `author[].arxiv:affiliation`      | 作者投稿时声明单位文本 | `Author.affiliations`                                                               | 无 ROR 时只保留明确名称                                                                |
+| `arxiv:doi`                       | 投稿者提供的 DOI       | `LiteratureMetadata.identifiers`                                                    | 规范化后 namespace `doi`                                                               |
+| `category[]` / `primary_category` | arXiv 分类             | 暂无业务字段                                                                        | 不是 `declared_keywords`，除非未来有明确产品规则                                       |
+| HTML `link`                       | abstract landing page  | `AssetHint`                                                                         | `landing-page`，不是已获得资产                                                         |
+| PDF `link`                        | 供应商声明的 PDF 地址  | `AssetHint`                                                                         | `direct-file`、媒体类型 `application/pdf`、角色候选 `primary-pdf`、版本候选 `preprint` |
+| feed 查询与观察时间               | 调用上下文             | `Provenance`                                                                        | 输入 hash 由适配边界形成                                                               |
 
 arXiv 记录代表预印本这一事实很强，但 `MetadataObservation.version_role = preprint` 是否由 provider adapter 固定声明，仍应由实现任务对照目标 schema 与测试确认；本 Notes 不替代该设计决定。Atom API 也没有明确给出“这是某个 DOI 正式版的同文献版本连接”，所以 DOI 共现本身不能自动形成 `version_links`。
 

@@ -1,5 +1,9 @@
 # Unpaywall
 
+类型：外部事实
+负责：Unpaywall
+状态：现行
+
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
 - 当前选择键：Acquisition `unpaywall`
@@ -121,12 +125,12 @@ raw_affiliation_strings[]
     "url_for_pdf": "https://...pdf"
   },
   "oa_locations": [
-    {"host_type": "publisher", "version": "publishedVersion"},
-    {"host_type": "repository", "version": "submittedVersion"}
+    { "host_type": "publisher", "version": "publishedVersion" },
+    { "host_type": "repository", "version": "submittedVersion" }
   ],
   "data_standard": 2,
   "updated": "...",
-  "z_authors": [{"author_position": "first", "raw_author_name": "..."}]
+  "z_authors": [{ "author_position": "first", "raw_author_name": "..." }]
 }
 ```
 
@@ -134,13 +138,13 @@ raw_affiliation_strings[]
 
 ## 7. 与 SciRetriever 中性数据的候选映射
 
-| 外部字段 | 外部语义 | 候选归属 | 备注 |
-|---|---|---|---|
-| `doi` | 查询记录 DOI | Acquisition source 的解析输入与 `Provenance.source_record_id` 候选 | 不建立本地 Literature ID；必须与输入 DOI 对齐 |
-| location URL 字段 | PDF/landing/general URL | 运行时 `PdfCandidate.url` / `access_kind` | 一个 location 形成一个候选；只接受安全 HTTPS 地址，未声明 PDF 时不能伪造媒体类型 |
-| `version` | 外部稿件版本 | 当前 adapter 的候选筛选输入 | Unpaywall 不是 metadata provider，不能把该值写入 `MetadataObservation.asset_hints`；只用于避免把明确非主文版本误当主 PDF |
-| `license`、`host_type`、OA 字段 | 聚合访问观察 | 当前 adapter 的候选筛选输入或 provenance 输入 hash | 不进入 `PdfCandidate`，也不证明下载成功或合法授权 |
-| location/记录更新时间与调用时间 | 来源新鲜度 | `Provenance` 候选输入 | `observed_at` 取实际调用时间；`deprecated` 不解析为时间 |
+| 外部字段                        | 外部语义                | 候选归属                                                           | 备注                                                                                                                     |
+| ------------------------------- | ----------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `doi`                           | 查询记录 DOI            | Acquisition source 的解析输入与 `Provenance.source_record_id` 候选 | 不建立本地 Literature ID；必须与输入 DOI 对齐                                                                            |
+| location URL 字段               | PDF/landing/general URL | 运行时 `PdfCandidate.url` / `access_kind`                          | 一个 location 形成一个候选；只接受安全 HTTPS 地址，未声明 PDF 时不能伪造媒体类型                                         |
+| `version`                       | 外部稿件版本            | 当前 adapter 的候选筛选输入                                        | Unpaywall 不是 metadata provider，不能把该值写入 `MetadataObservation.asset_hints`；只用于避免把明确非主文版本误当主 PDF |
+| `license`、`host_type`、OA 字段 | 聚合访问观察            | 当前 adapter 的候选筛选输入或 provenance 输入 hash                 | 不进入 `PdfCandidate`，也不证明下载成功或合法授权                                                                        |
+| location/记录更新时间与调用时间 | 来源新鲜度              | `Provenance` 候选输入                                              | `observed_at` 取实际调用时间；`deprecated` 不解析为时间                                                                  |
 
 `title`、出版信息和 `z_authors` 可用于 adapter 内部一致性检查，但在当前能力声明下不写入 `LiteratureMetadata`。同理，OA location 的版本、许可证和访问状态也不能由纯 Acquisition adapter 暗中持久化为 `MetadataObservation.asset_hints`。若未来要让 Unpaywall 成为 Metadata Provider，需先修改公开选择键、责任文档与测试。
 

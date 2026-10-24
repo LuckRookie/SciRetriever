@@ -1,5 +1,9 @@
 # 03 · 文献与材料技术设计
 
+类型：规格
+负责：文献身份、元数据与材料接纳；technical 中早期形式化接口（获取结果）
+状态：现行；目标接口单独成节
+
 [设计总览](../design.md) · [八模块技术导航](../technical.md)
 
 本模块对应设计中的 **③ 文献与材料**，交付身份与来源清楚的文献记录，以及经过文件和文章归属验收的原始材料。
@@ -19,7 +23,8 @@
 - [5. 资产验收、发布与有效性](#5-资产验收发布与有效性)
 - [6. 书目交换与持久化协作](#6-书目交换与持久化协作)
 - [7. 材料与文献验证](#7-材料与文献验证)
-- [8. ADR 0037 目标形态：元数据字段与文献状态](#8-adr-0037-目标形态元数据字段与文献状态)
+- [8. ADR 0037 目标形态：元数据字段与文献状态](#8-元数据字段与文献状态)
+- [9. 目标接口（尚未实现）](#9-目标接口尚未实现)
 
 ## 1. 模块边界与连接
 
@@ -253,7 +258,7 @@ Adapter 必须先判断一个供应商字段的语义归属，再构造中性 Mo
 
 | 供应商字段表达的事实                                                                                    | 中性归属                                                                                         | 转换规则                                                                                                                                                                                                                                                         |
 | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 文献自身的题名、摘要、出版日期、类型、语言、出版物、出版社、卷、期、页码或电子文章定位号                | `LiteratureMetadata`                                                                             | 只映射 [LiteratureMetadata 的边界](#25-元数据来源与字段裁决)；页码范围和电子文章定位号都进入 `pages`                                                                                                                                                       |
+| 文献自身的题名、摘要、出版日期、类型、语言、出版物、出版社、卷、期、页码或电子文章定位号                | `LiteratureMetadata`                                                                             | 只映射 [LiteratureMetadata 的边界](#25-元数据来源与字段裁决)；页码范围和电子文章定位号都进入 `pages`                                                                                                                                                             |
 | 按署名顺序返回的作者展示名、明确姓名组成、ORCID、作者与单位对应关系及 ROR                               | `LiteratureMetadata.authors: Author[]`                                                           | 按来源顺序转换为 [Identifier、Author 与 Affiliation](#29-identifierauthor-与-affiliation)；只保存供应商明确返回或能够在同一记录中无歧义对齐的值，不建立全局作者身份                                                                                              |
 | 当前记录自身的 DOI、arXiv ID、PMID、PMCID 等具体文献标识符                                              | `LiteratureMetadata.identifiers`                                                                 | 转换为带 namespace 的中性 `Identifier`；公共 Model 统一执行官方 canonicalization，adapter 不再实现另一套大小写、前缀或 URL 去壳规则                                                                                                                              |
 | OpenAlex Work ID、Web of Science UID、Semantic Scholar Paper ID、Scopus EID 等 Provider record identity | 当前记录使用 `provenance.source_record_id`；关系或版本端点使用 `ProviderLiteratureKey.record_id` | 保留供应商官方值并在父 Provenance 的 provider scope 内解释；不能进入 `LiteratureMetadata.identifiers` 或跨供应商身份匹配                                                                                                                                         |
@@ -468,48 +473,7 @@ apps/server/src/browser/                # page/runtime/flow/observation/control/
 
 ### 4.3 输入与公开结果
 
-#### 4.3.1 自动获取
-
-公开 API 接收具体 `Literature` 的中性 `LiteratureMetadata`、稳定标识符、当前 MetadataObservation 中的 Provider record identity 与 `AssetHint[]`、当前资产事实和本次运行临时排除的 candidate key 集合。它们只用于形成当前 `PublisherAccessResolution`、`AcquisitionPlan` 和候选，不把完整 vendor 对象带入 Acquisition。Resolution、Plan、route hint、Browser queue 和动态访问状态不是公开业务结果。业务成功/正常缺失的语义结构如下；这是设计记法，当前 TS 入口还以明确的执行 outcome 传递失败、暂停和取消：
-
-```text
-AcquisitionResult =
-    AcquiredPrimaryPdf
-  | NoPrimaryPdf
-
-AcquiredPrimaryPdf
-  asset: Asset
-  relation: LiteratureAsset
-  candidate_key: str
-
-NoPrimaryPdf
-```
-
-`AcquiredPrimaryPdf` 表示不可变 PDF 字节、该 Literature 的唯一 `primary-pdf` 关系和已有自动获取耗尽事实的清除都已经安全提交；只完成下载或临时检查不能返回它。`candidate_key` 仅供当前 Entry 操作更新内存 tried set，不进入持久化关系。
-
-`NoPrimaryPdf` 是无字段结果，但只能在以下条件全部成立后返回：当前元数据和已配置自动能力下的direct、publisher-api、general-api、public-web 与受控 Browser 的适用路径已经正常遍历；没有候选、正常返回“未找到”、浏览器流程正常结束但没有下载，或候选非 PDF、为空、损坏等预期未命中已经收敛；并且该 Literature 的 `AutomaticPdfAcquisitionExhaustion` 已经安全提交。它不暴露或持久化原因枚举与逐候选详情。
-
-用户中断、Network 传输或 API 错误、权限或配置错误、数据库或文件系统无法安全提交、并发变化导致提交条件失效，以及共享 Network readiness/policy/coordinator 本身不可用，都属于本次操作失败而不是第三种 Acquisition 业务结果。属于一个 candidate、locator、target 或 route adapter 的外部失败可以在内存中保留为脱敏稳定失败，并继续其它独立获取路径；若后续没有任何路径成功，Service 必须向 Entry 抛出稳定失败，不能返回 `NoPrimaryPdf`，也不能建立耗尽事实。配置与 readiness 预检、取消、Port 合同、清理、发布和 stale 失败立即终止。因此只有已经完整收敛且从未留下未解决 route failure，并成功提交耗尽事实的 `NoPrimaryPdf` 可以支持 MetaLiterature 切换版本。
-
-公开 API 不暴露 URL client、HTTP response、Browser page/download、临时绝对路径或来源私有对象。
-
-#### 4.3.2 手动 PDF 接纳
-
-手动接纳是与自动获取并列的独立 API。Entry 必须先把用户选择解析为一个具体 `LiteratureId`，并以只读方式打开用户输入文件；Acquisition 把字节复制到 owner-only 临时文件后再执行统一检查。输入路径和文件 handle 是适配边界值，不进入跨模块 TypeScript contract、provenance 或 Catalog。
-
-成功结果为：
-
-```text
-AcceptedManualPdf
-  asset: Asset
-  relation: LiteratureAsset
-```
-
-`relation.role` 必须为 `primary-pdf`，`relation.source_url` 为空，provenance 使用 `source_kind = "user"` 和稳定 `source_name = "manual-pdf"`，并以内部复制字节的 SHA-256 作为输入 hash。只有内部不可变 Asset 和唯一关系都已经提交后才能返回成功。
-
-以下情况直接形成稳定输入验证错误，不返回 `NoPrimaryPdf`：用户文件不存在或不可读、基本 PDF 检查失败、目标 Literature 不存在，或者该 Literature 已有当前主 PDF。文件发布、事务或 stale 复检失败仍是系统错误。手动接纳不进入自动 Source 顺序或自动 tried set，也不增加第四个 `AcquisitionPath`。当前 TypeScript `Application.maintenance.ingestPdf` 使用 transfer/acceptance/identity-validation 与不可变 publication；CLI 本地文件、公开 TS 字节和 Web 受控上传调用同一用例，不启动自动 Source、Parsing 或 Analysis。独立维护页不要求 Browser runtime，上传协议不接受本机路径。
-
-Acquisition 只复制用户字节，不移动、改名、截断、覆盖或删除用户原文件。成功只形成 `ASSET_READY` 并清除已有自动获取耗尽事实；Parsing 与 Analysis 由后续独立数据库补全操作发起。
+完整目标接口见[输入与公开结果](#91-输入与公开结果)；当前实现以源码为准。
 
 ### 4.4 Access Profile、运行时计划与五层 Route
 
@@ -1001,7 +965,7 @@ persistent context 中的文章隔离/临时资源清理和本地 Chromium found
 在没有后续核验时对 PDF 返回 `"unverified"`，非 PDF 返回 `null`。旧详情没有标签时保守投影，
 旧 accepted 回执可重放但不代表后续解析验证。Catalog v9 的显式核验由 Parsing 提供证据、Literature
 接纳判断，详情展示与当前输入绑定的结果；解析成功本身仍不等于身份核验。详见
-[解析后的文章身份核验](04-document-evidence.md#解析后的文章身份核验2026-10-08-实现合同)。
+[解析后的文章身份核验](04-document-evidence.md#7-解析后的文章身份核验)。
 
 ### 5.2 发布与并发复检
 
@@ -1309,18 +1273,18 @@ Application 的 writes 为 FileStore 与 SQLite 提供同一短写入准入。�
 
 HTTP 和 Browser 测试使用本地受控站点，不连接真实供应商。
 
-## 8. ADR 0037 目标形态：元数据字段与文献状态
+## 8. 元数据字段与文献状态
 
-本节列出已接入的字段、裁决和状态合同；旧库转换与部署验收的状态单独记录在计划 12。
+本节规定元数据字段裁决与由事实推导的建档状态。
 
 ### 8.1 出版形式与文章性质
 
 `LiteratureMetadata.document_type` 拆为两个封闭枚举：
 
-| 字段 | 取值 |
-| --- | --- |
-| `publication_form` | `journal-article`、`conference-paper`、`book-or-chapter`、`thesis`、`patent`、`report-or-standard`、`dataset` |
-| `article_kind` | `research-article`、`review`、`letter-or-communication`、`perspective-or-commentary`、`correction-or-editorial` |
+| 字段               | 取值                                                                                                            |
+| ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `publication_form` | `journal-article`、`conference-paper`、`book-or-chapter`、`thesis`、`patent`、`report-or-standard`、`dataset`   |
+| `article_kind`     | `research-article`、`review`、`letter-or-communication`、`perspective-or-commentary`、`correction-or-editorial` |
 
 - 预印本由 `version_role` 表达，不属于出版形式。
 - 供应商的原始类型字符串保存在 observation 的 `source_type` 中，经带版本的映射表转换，无法映射时为空。
@@ -1331,25 +1295,74 @@ HTTP 和 Browser 测试使用本地受控站点，不连接真实供应商。
 
 每个字段记录来源（`authority`、`proofread`、`manual`）、证据、冲突标记和锁定标记。优先级：
 
-| 字段 | 优先级 |
-| --- | --- |
+| 字段                                                         | 优先级                   |
+| ------------------------------------------------------------ | ------------------------ |
 | 题名、作者、期刊、出版者、卷、期、页、标识符、日期、出版形式 | 人工 > 权威来源 > 校订稿 |
-| 文章性质、作者关键词、摘要、语言 | 人工 > 校订稿 > 来源 |
+| 文章性质、作者关键词、摘要、语言                             | 人工 > 校订稿 > 来源     |
 
 - 用户导入值仍按 ADR 0002 优先。
 - 就绪后到来的新 observation 只补空字段并标出冲突；只有显式重新执行建档的元数据步骤，才重新裁决。
 
 ### 8.3 文献状态
 
-| 状态 | 条件 |
-| --- | --- |
-| `UNREVIEWED` | 无主 PDF |
-| `ASSET_READY` | 有主 PDF、未就绪；`missing_step` 为 `raw-parse` 或建档的下一步 |
-| `ARCHIVING` | 建档任务运行中 |
-| `ARCHIVE_FAILED` | 正文部分存在未解决的失败 |
-| `READY` | 正文校订完成并成为默认文档、结构满足、必填元数据齐全、标签数在 1 到上限之间 |
-| `EXCLUDED` | 文章性质为观点或评论、勘误或社论 |
+| 状态             | 条件                                                                        |
+| ---------------- | --------------------------------------------------------------------------- |
+| `UNREVIEWED`     | 无主 PDF                                                                    |
+| `ASSET_READY`    | 有主 PDF、未就绪；`missing_step` 为 `raw-parse` 或建档的下一步              |
+| `ARCHIVING`      | 建档任务运行中                                                              |
+| `ARCHIVE_FAILED` | 正文部分存在未解决的失败                                                    |
+| `READY`          | 正文校订完成并成为默认文档、结构满足、必填元数据齐全、标签数在 1 到上限之间 |
+| `EXCLUDED`       | 文章性质为观点或评论、勘误或社论                                            |
 
 - 状态仍是纯推导结果；
 - 补充材料部分不参与推导；
 - 获取 PDF、解析、建档各自手动发起。
+
+## 9. 目标接口（尚未实现）
+
+本节集中保留尚未整套实现的目标合同；当前实现以源码为准，设计记法不等同于已发布 API。
+
+### 9.1 输入与公开结果
+
+#### 9.1.1 自动获取
+
+公开 API 接收具体 `Literature` 的中性 `LiteratureMetadata`、稳定标识符、当前 MetadataObservation 中的 Provider record identity 与 `AssetHint[]`、当前资产事实和本次运行临时排除的 candidate key 集合。它们只用于形成当前 `PublisherAccessResolution`、`AcquisitionPlan` 和候选，不把完整 vendor 对象带入 Acquisition。Resolution、Plan、route hint、Browser queue 和动态访问状态不是公开业务结果。业务成功/正常缺失的语义结构如下；这是设计记法，当前 TS 入口还以明确的执行 outcome 传递失败、暂停和取消：
+
+```text
+AcquisitionResult =
+    AcquiredPrimaryPdf
+  | NoPrimaryPdf
+
+AcquiredPrimaryPdf
+  asset: Asset
+  relation: LiteratureAsset
+  candidate_key: str
+
+NoPrimaryPdf
+```
+
+`AcquiredPrimaryPdf` 表示不可变 PDF 字节、该 Literature 的唯一 `primary-pdf` 关系和已有自动获取耗尽事实的清除都已经安全提交；只完成下载或临时检查不能返回它。`candidate_key` 仅供当前 Entry 操作更新内存 tried set，不进入持久化关系。
+
+`NoPrimaryPdf` 是无字段结果，但只能在以下条件全部成立后返回：当前元数据和已配置自动能力下的direct、publisher-api、general-api、public-web 与受控 Browser 的适用路径已经正常遍历；没有候选、正常返回“未找到”、浏览器流程正常结束但没有下载，或候选非 PDF、为空、损坏等预期未命中已经收敛；并且该 Literature 的 `AutomaticPdfAcquisitionExhaustion` 已经安全提交。它不暴露或持久化原因枚举与逐候选详情。
+
+用户中断、Network 传输或 API 错误、权限或配置错误、数据库或文件系统无法安全提交、并发变化导致提交条件失效，以及共享 Network readiness/policy/coordinator 本身不可用，都属于本次操作失败而不是第三种 Acquisition 业务结果。属于一个 candidate、locator、target 或 route adapter 的外部失败可以在内存中保留为脱敏稳定失败，并继续其它独立获取路径；若后续没有任何路径成功，Service 必须向 Entry 抛出稳定失败，不能返回 `NoPrimaryPdf`，也不能建立耗尽事实。配置与 readiness 预检、取消、Port 合同、清理、发布和 stale 失败立即终止。因此只有已经完整收敛且从未留下未解决 route failure，并成功提交耗尽事实的 `NoPrimaryPdf` 可以支持 MetaLiterature 切换版本。
+
+公开 API 不暴露 URL client、HTTP response、Browser page/download、临时绝对路径或来源私有对象。
+
+#### 9.1.2 手动 PDF 接纳
+
+手动接纳是与自动获取并列的独立 API。Entry 必须先把用户选择解析为一个具体 `LiteratureId`，并以只读方式打开用户输入文件；Acquisition 把字节复制到 owner-only 临时文件后再执行统一检查。输入路径和文件 handle 是适配边界值，不进入跨模块 TypeScript contract、provenance 或 Catalog。
+
+成功结果为：
+
+```text
+AcceptedManualPdf
+  asset: Asset
+  relation: LiteratureAsset
+```
+
+`relation.role` 必须为 `primary-pdf`，`relation.source_url` 为空，provenance 使用 `source_kind = "user"` 和稳定 `source_name = "manual-pdf"`，并以内部复制字节的 SHA-256 作为输入 hash。只有内部不可变 Asset 和唯一关系都已经提交后才能返回成功。
+
+以下情况直接形成稳定输入验证错误，不返回 `NoPrimaryPdf`：用户文件不存在或不可读、基本 PDF 检查失败、目标 Literature 不存在，或者该 Literature 已有当前主 PDF。文件发布、事务或 stale 复检失败仍是系统错误。手动接纳不进入自动 Source 顺序或自动 tried set，也不增加第四个 `AcquisitionPath`。当前 TypeScript `Application.maintenance.ingestPdf` 使用 transfer/acceptance/identity-validation 与不可变 publication；CLI 本地文件、公开 TS 字节和 Web 受控上传调用同一用例，不启动自动 Source、Parsing 或 Analysis。独立维护页不要求 Browser runtime，上传协议不接受本机路径。
+
+Acquisition 只复制用户字节，不移动、改名、截断、覆盖或删除用户原文件。成功只形成 `ASSET_READY` 并清除已有自动获取耗尽事实；Parsing 与 Analysis 由后续独立数据库补全操作发起。

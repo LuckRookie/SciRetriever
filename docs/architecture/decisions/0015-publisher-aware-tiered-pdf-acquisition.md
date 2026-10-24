@@ -1,6 +1,9 @@
 # ADR 0015：访问方感知的五层 PDF 获取与 Browser 调度
 
-- Status: Accepted
+类型：决策（ADR）
+负责：访问方感知的五层 PDF 获取与 Browser 调度
+状态：Accepted
+
 - Date: 2026-08-15
 - Last amended: 2026-10-13
 - Supersedes: none

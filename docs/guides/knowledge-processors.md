@@ -1,19 +1,23 @@
 # 统一知识加工：处理器、批量任务与结果
 
+类型：指南
+负责：算子选择、批量执行、结果查询与导出
+状态：现行
+
 从已经建档就绪的文献开始，选择算子与读取范围，提交任务，再读取结果。加工只读取校订稿，不获取 PDF、不解析、不自动建档。当前 catalog 由单一 schema 定义；旧开发数据库按明确授权离线重建，不提供逐版本迁移。
 
 ## 当前处理器
 
 `sciretriever processors list` 或 MCP `processor_query`（`action: "list", request: {}`）返回处理器版本、输入类型、规范 schema 与方法描述。
 
-正式 HTTP 也提供 `POST /api/v1/query/processors`（`{protocol_version:1, operation:action, request}`）和受认证保护的 `POST /api/v1/maintenance/processor-submit`（`{protocol_version:1, request:ProcessorBatchRequest, start}`），使用同一应用边界。Web 的“提取”提供标签/记录表单、持久任务、已有结果/集合、字段筛选与证据，以及选定记录综合和完整结果导出。接口认证、请求／响应上限和只读边界见[产品接口技术说明](../architecture/technical/01-product-interface.md#421-统一处理器-http-适配2026-10-18)。
+正式 HTTP 也提供 `POST /api/v1/query/processors`（`{protocol_version:1, operation:action, request}`）和受认证保护的 `POST /api/v1/maintenance/processor-submit`（`{protocol_version:1, request:ProcessorBatchRequest, start}`），使用同一应用边界。Web 的“提取”提供标签/记录表单、持久任务、已有结果/集合、字段筛选与证据，以及选定记录综合和完整结果导出。接口认证、请求／响应上限和只读边界见[产品接口技术说明](../architecture/technical/01-product-interface.md#421-统一处理器-http-适配)。
 
-| 算子（均为版本 `2`） | 输入 | 行为 |
-| --- | --- | --- |
-| `summary` | 就绪档案 | DSH 持续阅读全文、回查与查看已保存图片；purpose 为 overview/detailed/question，问题模式必填 question |
-| `labels` | 就绪档案 | 问答标注；question 和 answer_type，枚举加 choices |
-| `records` | 就绪档案 | record_meaning、fields，可选 inclusion；联合提取同一记录的字段 |
-| `knowledge-synthesis` | 快照 | 先运行或复用 summary，再基于其记录生成带引用报告；question、policy 必填 |
+| 算子（均为版本 `2`）  | 输入     | 行为                                                                                                 |
+| --------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| `summary`             | 就绪档案 | DSH 持续阅读全文、回查与查看已保存图片；purpose 为 overview/detailed/question，问题模式必填 question |
+| `labels`              | 就绪档案 | 问答标注；question 和 answer_type，枚举加 choices                                                    |
+| `records`             | 就绪档案 | record_meaning、fields，可选 inclusion；联合提取同一记录的字段                                       |
+| `knowledge-synthesis` | 快照     | 先运行或复用 summary，再基于其记录生成带引用报告；question、policy 必填                              |
 
 单篇只能读取 `archive-document`，多篇只能选择 `snapshot`。不能把原始解析、旧总结或另一算子的结果直接传给单篇算子。处理器是可信代码，不支持上传代码。外部提取提交协议保持独立；其输入准备要求就绪校订稿，长期保留的结果标识为 `external-extraction@2`。
 
@@ -79,7 +83,6 @@ MCP 对应 `snapshot_create`、`snapshots_query`、`submit_processor` 与 `proce
 
 运行记录按文献去重计“有结果”（with_result）、“结果为空”（empty）、“读取不完整”（incomplete）；同篇的正文、SI 或多条记录不重复计数，读取不完整优先。coverage.parts 的 outcome 仅 complete/incomplete，缺少已请求的 SI 等原因保留在 gaps。列表、详情同时提供 current/stale、原因及上述三种计数。版本事件在事实发布事务内标记相关结果，不触发模型。多篇结果仅在声明 uses_description 时因描述变化失效；读取旧结果不会自动重算。
 
-
 提交冻结输入、规范、方法和模型配置。同一 key/同一请求返回原运行；同 key 改请求会冲突。默认文档随后变化不会改变已入队任务；模型绑定无法重建时明确失败，不悄悄换模型。新范围应使用新 key。
 
 复用只接受输入、规范、方法、执行配置一致且完整、可读的结果。100 篇变为包含它们的 120 篇，复用 100、处理 20；120 篇中只重叠 80 篇，则复用 80、处理 40。结果集合只包含本次选定的成员，旧集合不被改写。综合绑定整个输入集合，变化后整体生成新结果。partial 可以显式另起任务，整篇重做；失败目标走原任务 retry。首版没有对完整成功结果的同身份强制重算。
@@ -100,18 +103,18 @@ MCP 对应 `snapshot_create`、`snapshots_query`、`submit_processor` 与 `proce
 
 CLI 统一为 `processors <action> --request <JSON 文件>`；MCP 为 `processor_query`，参数 `{action,request}`。不传文件的 `list`、`results`、`collections` 使用空请求。
 
-| action                          | request                                                    |
-| ------------------------------- | ---------------------------------------------------------- |
-| `list`                          | `{}`                                                       |
-| `results`                       | 可选 `limit`（1–200）、`after`、`literature_id`                             |
-| `collections`                   | 可选 `run_id`、`limit`、`offset`                           |
-| `collection`                    | `{collection_id}`，返回精确成员、输入、规范与缺口          |
-| `read`                          | `{result_id}`，返回不可变内容、schema、执行身份及覆盖      |
-| `search` / `search-collections` | `{query,limit?,offset?}`，分别检索正文/记录与集合名称/规范 |
-| `query`                         | 下列固定查询格式；SQL 不对外开放                           |
-| `evidence`                      | 完整 citation（例如下列字段引用）                          |
-| `export`                        | `{result_id,format:"json" / "csv" / "markdown"}`           |
-| `transfer` | `{result_id,content_sha256,format:"result" / "json" / "csv" / "markdown",max_bytes,continuation}` |
+| action                          | request                                                                                           |
+| ------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `list`                          | `{}`                                                                                              |
+| `results`                       | 可选 `limit`（1–200）、`after`、`literature_id`                                                   |
+| `collections`                   | 可选 `run_id`、`limit`、`offset`                                                                  |
+| `collection`                    | `{collection_id}`，返回精确成员、输入、规范与缺口                                                 |
+| `read`                          | `{result_id}`，返回不可变内容、schema、执行身份及覆盖                                             |
+| `search` / `search-collections` | `{query,limit?,offset?}`，分别检索正文/记录与集合名称/规范                                        |
+| `query`                         | 下列固定查询格式；SQL 不对外开放                                                                  |
+| `evidence`                      | 完整 citation（例如下列字段引用）                                                                 |
+| `export`                        | `{result_id,format:"json" / "csv" / "markdown"}`                                                  |
+| `transfer`                      | `{result_id,content_sha256,format:"result" / "json" / "csv" / "markdown",max_bytes,continuation}` |
 
 ```json
 {

@@ -1,5 +1,9 @@
 # Provider 外部接口 Notes
 
+类型：导航
+负责：Provider 外部接口 Notes
+状态：现行
+
 本目录记录 SciRetriever 适配外部文献服务时需要长期维护的易变事实：官方入口、认证和限流、endpoint/分页/响应层级、metadata/citation/asset 候选映射、已知兼容性、已知缺口与当前实现边界。
 
 2026-10-07 治理说明：本目录包含历史 Python 实现和旧 Browser 调度记录，不以旧文中的“当前”证明 TypeScript 已实现。活动静态定义在 `apps/server/src/providers/registry.ts`；Metadata/Acquisition 的间隔与窗口已接到共享 Network，当前政策依据和未覆盖项统一见[供应商治理](../../development/provider-governance.md)。本文后续旧 Browser 九条 route、旧并发阈值、挑战页处理描述仅保留历史语境，当前行为以 [PDF 获取指南](../../guides/pdf-acquisition.md) 为准。

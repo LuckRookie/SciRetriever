@@ -1,6 +1,10 @@
 # Semantic Scholar
 
-> 当前 TypeScript 适配行为（2026-10-10 核对）：references/citations 的 fields 使用 paper 字段名，不同时发送 citedPaper.* / citingPaper.*。同一原始关系交付的内嵌 observation 与关系使用一致 provenance；共享一个 provenance ID 时其输入/参数 hash 也必须一致。 证据见修复验证记录（本地文件：`sandbox/reports/live-discovery-acquisition-fixes-2026-10-10.md`，不随仓库分发）。下文较早日期的探测只代表当时状态。
+类型：外部事实
+负责：Semantic Scholar
+状态：现行
+
+> 当前 TypeScript 适配行为（2026-10-10 核对）：references/citations 的 fields 使用 paper 字段名，不同时发送 citedPaper._ / citingPaper._。同一原始关系交付的内嵌 observation 与关系使用一致 provenance；共享一个 provenance ID 时其输入/参数 hash 也必须一致。 证据见修复验证记录（本地文件：`sandbox/reports/live-discovery-acquisition-fixes-2026-10-10.md`，不随仓库分发）。下文较早日期的探测只代表当时状态。
 
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
@@ -111,31 +115,33 @@ Network/Acquisition 重新检查 redirect、媒体类型、字节、PDF 结构�
   "total": 7813039,
   "offset": 0,
   "next": 1,
-  "data": [{
-    "paperId": "024a2c03be8e468e7c4fdf9bda36cdc0eaae85fb",
-    "corpusId": 219792763,
-    "externalIds": {
-      "DOI": "10.1038/s41586-020-2649-2",
-      "ArXiv": "2006.10256",
-      "PubMed": "32939066",
-      "PubMedCentral": "7759461"
-    },
-    "title": "Array programming with NumPy",
-    "venue": "Nature",
-    "year": 2020,
-    "publicationDate": "2020-06-18",
-    "journal": {"name": "Nature", "pages": "357 - 362", "volume": "585"},
-    "authors": [{"authorId": "2061249", "name": "K. Millman"}],
-    "referenceCount": 89,
-    "citationCount": 21570,
-    "isOpenAccess": true,
-    "openAccessPdf": {
-      "url": "https://www.nature.com/articles/s41586-020-2649-2.pdf",
-      "status": "HYBRID",
-      "license": "CCBY",
-      "disclaimer": "Notice: Paper or abstract available at ..."
+  "data": [
+    {
+      "paperId": "024a2c03be8e468e7c4fdf9bda36cdc0eaae85fb",
+      "corpusId": 219792763,
+      "externalIds": {
+        "DOI": "10.1038/s41586-020-2649-2",
+        "ArXiv": "2006.10256",
+        "PubMed": "32939066",
+        "PubMedCentral": "7759461"
+      },
+      "title": "Array programming with NumPy",
+      "venue": "Nature",
+      "year": 2020,
+      "publicationDate": "2020-06-18",
+      "journal": { "name": "Nature", "pages": "357 - 362", "volume": "585" },
+      "authors": [{ "authorId": "2061249", "name": "K. Millman" }],
+      "referenceCount": 89,
+      "citationCount": 21570,
+      "isOpenAccess": true,
+      "openAccessPdf": {
+        "url": "https://www.nature.com/articles/s41586-020-2649-2.pdf",
+        "status": "HYBRID",
+        "license": "CCBY",
+        "disclaimer": "Notice: Paper or abstract available at ..."
+      }
     }
-  }]
+  ]
 }
 ```
 
@@ -145,14 +151,16 @@ Network/Acquisition 重新检查 redirect、媒体类型、字节、PDF 结构�
 {
   "offset": 0,
   "next": 1,
-  "data": [{
-    "citedPaper": {
-      "paperId": "8d7f03c75bdb21d9a981cde8ae6a8359be2a67f8",
-      "externalIds": {"DOI": "10.1109/MCSE.2021.3059232"},
-      "title": "Reproducing GW150914: ...",
-      "year": 2020
+  "data": [
+    {
+      "citedPaper": {
+        "paperId": "8d7f03c75bdb21d9a981cde8ae6a8359be2a67f8",
+        "externalIds": { "DOI": "10.1109/MCSE.2021.3059232" },
+        "title": "Reproducing GW150914: ...",
+        "year": 2020
+      }
     }
-  }]
+  ]
 }
 ```
 
@@ -161,19 +169,19 @@ Network/Acquisition 重新检查 redirect、媒体类型、字节、PDF 结构�
 
 ## 7. 与 SciRetriever 中性数据的候选映射
 
-| 外部字段 | 外部语义 | 候选归属 | 备注 |
-|---|---|---|---|
-| `paperId` | S2 paper 主 ID | `Provenance.source_record_id` | provider ID，不是本地 Literature ID |
-| `externalIds` 白名单项 | DOI/arXiv/PMID/PMCID 等 | `LiteratureMetadata.identifiers` | 显式 namespace 映射；CorpusId/MAG/DBLP 是否保留按当前 identifier 合同决定 |
-| `title`、`abstract` | 标题、摘要 | `LiteratureMetadata` | fields 未请求与 null 要区分 |
-| `publicationTypes` | S2 类型列表 | `document_type` | 需显式映射与 precedence |
-| `publicationDate` / `year` | 出版日期/年 | `LiteratureMetadata.publication_date` / `LiteratureMetadata.publication_year` | 日期可能与正式版/预印本日期不同，保留来源差异 |
-| `venue` / `publicationVenue` / `journal` | venue、卷页 | `venue`、`volume`、`pages` | 多表示有重叠，adapter 需固定规则 |
-| `authors[]` | 有序展示署名 | `Author.display_name` | authorId 不建全局 Author，不拆 name，不猜 ORCID/单位 |
-| reference/citation `paperId`/external ID | 结构化有向边端点 | `ProviderRelationObservation` | 每条 edge 独立、方向规范化 |
-| `referenceCount` / `citationCount` | 来源计数 | observation 计数字段 | 不与 edge 列表长度或其它来源相加 |
-| `openAccessPdf` | OA PDF locator、status/license | `AssetHint` | URL 是线索；status/license 只描述该访问渠道 |
-| API 调用和时间 | 来源观察 | `Provenance` | `fields`、offset/next 不持久化 |
+| 外部字段                                 | 外部语义                       | 候选归属                                                                      | 备注                                                                      |
+| ---------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `paperId`                                | S2 paper 主 ID                 | `Provenance.source_record_id`                                                 | provider ID，不是本地 Literature ID                                       |
+| `externalIds` 白名单项                   | DOI/arXiv/PMID/PMCID 等        | `LiteratureMetadata.identifiers`                                              | 显式 namespace 映射；CorpusId/MAG/DBLP 是否保留按当前 identifier 合同决定 |
+| `title`、`abstract`                      | 标题、摘要                     | `LiteratureMetadata`                                                          | fields 未请求与 null 要区分                                               |
+| `publicationTypes`                       | S2 类型列表                    | `document_type`                                                               | 需显式映射与 precedence                                                   |
+| `publicationDate` / `year`               | 出版日期/年                    | `LiteratureMetadata.publication_date` / `LiteratureMetadata.publication_year` | 日期可能与正式版/预印本日期不同，保留来源差异                             |
+| `venue` / `publicationVenue` / `journal` | venue、卷页                    | `venue`、`volume`、`pages`                                                    | 多表示有重叠，adapter 需固定规则                                          |
+| `authors[]`                              | 有序展示署名                   | `Author.display_name`                                                         | authorId 不建全局 Author，不拆 name，不猜 ORCID/单位                      |
+| reference/citation `paperId`/external ID | 结构化有向边端点               | `ProviderRelationObservation`                                                 | 每条 edge 独立、方向规范化                                                |
+| `referenceCount` / `citationCount`       | 来源计数                       | observation 计数字段                                                          | 不与 edge 列表长度或其它来源相加                                          |
+| `openAccessPdf`                          | OA PDF locator、status/license | `AssetHint`                                                                   | URL 是线索；status/license 只描述该访问渠道                               |
+| API 调用和时间                           | 来源观察                       | `Provenance`                                                                  | `fields`、offset/next 不持久化                                            |
 
 `fieldsOfStudy`、`s2FieldsOfStudy` 和 tldr 等是分类/派生数据，不候选映射为
 `declared_keywords`、最终 `keywords` 或 `LiteratureContent`。

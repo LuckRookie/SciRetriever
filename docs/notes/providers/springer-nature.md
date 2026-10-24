@@ -1,5 +1,9 @@
 # Springer Nature
 
+类型：外部事实
+负责：Springer Nature
+状态：现行
+
 - 官方资料最后在线核对：2026-08-15
 - 当前实现离线对照：2026-08-20
 - 当前选择键：Metadata `springer`；Acquisition `springer`
@@ -31,12 +35,12 @@
 
 官方当前基础与 Premium 计划额度：
 
-| API | Basic requests/min | Basic requests/day | Premium requests/min | Premium requests/day |
-|---|---:|---:|---:|---:|
-| Metadata API | 100 | 500 | 300 | 10,000 |
-| Meta API v1/v2 | 100 | 500 | 300 | 10,000 |
-| Open Access API | 100 | 500 | 200 | 10,000 |
-| Full Text API | 200 | 500 | 200 | 20,000 |
+| API             | Basic requests/min | Basic requests/day | Premium requests/min | Premium requests/day |
+| --------------- | -----------------: | -----------------: | -------------------: | -------------------: |
+| Metadata API    |                100 |                500 |                  300 |               10,000 |
+| Meta API v1/v2  |                100 |                500 |                  300 |               10,000 |
+| Open Access API |                100 |                500 |                  200 |               10,000 |
+| Full Text API   |                200 |                500 |                  200 |               20,000 |
 
 Full Text Premium 取决于具体 agreement，其它 Premium 也需联系销售/支持。这些是供应商账户上限，不是建议把应用并发开到同值；SciRetriever 仍需自己的资源预算和有界并发。官方 throttle 页面以 HTTP 429 表示 rate limit/daily quota，并建议 exponential backoff。
 
@@ -198,25 +202,29 @@ adapter 应保留每个安全 HTTPS 候选的 format/platform/provenance；legac
 {
   "apiMessage": "This JSON was provided by Springer Nature",
   "query": "doi:...",
-  "result": [{
-    "total": "1",
-    "start": "1",
-    "pageLength": "10",
-    "recordsDisplayed": "1"
-  }],
-  "records": [{
-    "contentType": "Chapter",
-    "identifier": "doi:...",
-    "url": [
-      {"format": "html", "platform": "web", "value": "http://..."},
-      {"format": "pdf", "platform": "web", "value": "http://..."}
-    ],
-    "title": "...",
-    "creators": [{"creator": "..."}],
-    "publicationName": "...",
-    "openaccess": "false",
-    "publisher": "Springer ..."
-  }]
+  "result": [
+    {
+      "total": "1",
+      "start": "1",
+      "pageLength": "10",
+      "recordsDisplayed": "1"
+    }
+  ],
+  "records": [
+    {
+      "contentType": "Chapter",
+      "identifier": "doi:...",
+      "url": [
+        { "format": "html", "platform": "web", "value": "http://..." },
+        { "format": "pdf", "platform": "web", "value": "http://..." }
+      ],
+      "title": "...",
+      "creators": [{ "creator": "..." }],
+      "publicationName": "...",
+      "openaccess": "false",
+      "publisher": "Springer ..."
+    }
+  ]
 }
 ```
 
@@ -224,16 +232,16 @@ adapter 应保留每个安全 HTTPS 候选的 format/platform/provenance；legac
 
 ## 8. 与 SciRetriever 中性数据的候选映射
 
-| 外部字段 | 外部语义 | 候选归属 | 备注 |
-|---|---|---|---|
-| `identifier` / `doi` | provider record ID 与 DOI | provenance / `LiteratureMetadata.identifiers` | 拆除 namespace wrapper 后规范化 |
-| `title` / `abstract` | 标题与摘要 | `LiteratureMetadata` | 不从 JATS 重复写 metadata owner |
-| `creators[]` | 有序作者字符串 | `LiteratureMetadata.authors` 候选 | observation 组合中性 metadata；不猜 ORCID、affiliation 或全局作者 |
-| publication/journal/publisher/date/year/language | 出版信息 | `LiteratureMetadata` | 区分明确日期语义；document type 显式映射 |
-| 明确声明的 keyword 字段 | 作者/记录关键词 | `declared_keywords` 候选 | `subjects[]` 未证明为声明关键词时不混入 |
-| `url[]` | format/platform locator | `AssetHint[]` | 仅安全 HTTPS；一个 URL 一个候选；PDF 仍需实取验证 |
-| OA/JATS/Full Text response | 访问与结构化全文观察 | provenance / parser 输入 | 不把 XML 作为 PDF，也不直接形成 LiteratureContent |
-| 实际调用时间、API 产品与版本 | 来源上下文 | `Provenance` 候选输入 | key、metric 与 query echo 不保存 |
+| 外部字段                                         | 外部语义                  | 候选归属                                      | 备注                                                              |
+| ------------------------------------------------ | ------------------------- | --------------------------------------------- | ----------------------------------------------------------------- |
+| `identifier` / `doi`                             | provider record ID 与 DOI | provenance / `LiteratureMetadata.identifiers` | 拆除 namespace wrapper 后规范化                                   |
+| `title` / `abstract`                             | 标题与摘要                | `LiteratureMetadata`                          | 不从 JATS 重复写 metadata owner                                   |
+| `creators[]`                                     | 有序作者字符串            | `LiteratureMetadata.authors` 候选             | observation 组合中性 metadata；不猜 ORCID、affiliation 或全局作者 |
+| publication/journal/publisher/date/year/language | 出版信息                  | `LiteratureMetadata`                          | 区分明确日期语义；document type 显式映射                          |
+| 明确声明的 keyword 字段                          | 作者/记录关键词           | `declared_keywords` 候选                      | `subjects[]` 未证明为声明关键词时不混入                           |
+| `url[]`                                          | format/platform locator   | `AssetHint[]`                                 | 仅安全 HTTPS；一个 URL 一个候选；PDF 仍需实取验证                 |
+| OA/JATS/Full Text response                       | 访问与结构化全文观察      | provenance / parser 输入                      | 不把 XML 作为 PDF，也不直接形成 LiteratureContent                 |
+| 实际调用时间、API 产品与版本                     | 来源上下文                | `Provenance` 候选输入                         | key、metric 与 query echo 不保存                                  |
 
 ## 9. 不进入业务 Model 的字段
 

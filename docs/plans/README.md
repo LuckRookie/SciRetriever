@@ -1,84 +1,19 @@
-# SciRetriever 活动实施计划规范
+# 实施计划
 
-本目录保存需要跨阶段执行、跨会话恢复、共享合同变更、持久化变更或独立授权范围的活动计划。
-计划把已经确定的方向组织成可执行、可验证、可恢复的结果，不替代需求、架构、Accepted ADR、技术合同或源码。
-普通局部修改不必创建正式计划。所有计划继续受根 [HARNESS](../../HARNESS.md) 和
-[AGENTS](../../AGENTS.md) 的工作树保护、权限、验证和交付规则约束；计划本身不授予真实数据、系统配置或 Git 操作权限。
+类型：导航
+负责：计划编写/恢复规范与历史验收台账（计划结构）
+状态：现行
 
-## 当前计划
+## 活动索引
 
-- [Web 设计改版（计划 14）](2026-10-23-web-design-overhaul/README.md)：Ready（2026-10-23 编写）。Claude 负责产品设计、计划与验收，代码由 codex worker `sciretriever-web` 实施。
-- [文档体系整理（计划 15）](2026-10-23-docs-consolidation/README.md)：Ready（2026-10-23 编写）。按文档导航的归属表与规则整理现行文档；在计划 14 的空档执行。
+- [计划14：Web设计改版](2026-10-23-web-design-overhaul/README.md)。
+- [计划15：文档体系整理](2026-10-23-docs-consolidation/README.md)。
 
-## 2026-10-23 完成计划归档
-
-[文献建档、校订稿与算子输入](../archive/2026-10-20-literature-archive/README.md)已按 Owner 要求归档：A/B/C 与 13 两轮已交付并部署 4174；分组提交、前端未完成页面、真实获取验收等未关闭事项已移交计划 14，见该计划根 README 顶部。
-
-## 2026-10-20 完成计划归档
-
-已完成工作分组提交，归档保留对应 revision、当轮验收和残余限制。当前使用方法见[用户指南](../guides/README.md)，历史记录见[归档导航](../archive/README.md)。
-
-| 归档计划 | 完成范围与验收 |
-| --- | --- |
-| [Web 体验重建](../archive/2026-10-19-web-experience/README.md) | React 唯一根入口、旧前端与 `/next` 兼容删除、阅读/加工/Browser/设置及性能修复；最终 Full 285 文件 / 1,981 项无跳过，减少动效 36 文件 / 84 项、144 组页面矩阵及便携包离线验收通过。 |
-| [DSH 分析会话与旧执行路径退役](../archive/2026-10-19-dsh-analysis-sessions/README.md) | 持续阅读、看图与回查；指定论文真实验收及 Owner 授权的 8 项旧结果清理完成；当轮 Full 247 文件 / 1,880 项通过。 |
-| [Web 远程访问与认证](../archive/2026-10-19-web-remote-access/README.md) | 默认对外监听、统一登录与自动密钥；当轮 Full 245 文件 / 1,885 项通过。 |
-| [Web 后续审查修复](../archive/2026-10-19-web-followup-fixes/README.md) | 18 项审查问题及复核边界修复；当轮 Full 242 文件 / 1,874 项通过。 |
-| [Web 大库读取与可靠性修复](../archive/2026-10-19-web-large-library-fixes/README.md) | 35,177 篇隔离副本复测、分页/文档/会话问题修复；当轮 Full 241 文件 / 1,867 项通过。 |
-| [Web 日常能力与阅读体验完善](../archive/2026-10-18-web-capability-and-reading/README.md) | G1/G2/G3 确认，检索、加工、结果与阅读生产接入；三端一致性、安装及当轮 Full 240 文件 / 1,861 项通过。 |
-| [DSH 统一 Agents 底座](../archive/2026-10-16-dsh-agents-foundation/README.md) | 单次调用与通用会话统一；当轮 Full 226 文件 / 1,793 项通过，真实质量对照未包含在该计划。 |
-| [CLI/MCP 覆盖 Web 业务能力](../archive/2026-10-15-interface-capability-parity/README.md) | 两个机器入口分别覆盖当时的 Web 业务范围；当轮 Full 225 文件 / 1,785 项通过。 |
-| [定稿 Web 原型接入](../archive/2026-10-15-library-web-adaptation/README.md) | 当时既有能力按定稿原型适配；当轮 Full 221 文件 / 1,769 项通过。后续处理器与阅读由后续计划承接。 |
-
-除最终 Web 体验 Full 无跳过外，上述各轮的既有环境条件跳过和真实服务覆盖边界仍以各自归档记录为准。现行 ADR 保留在 `docs/architecture/`。
-
-2026-10-18 已归档[文献知识加工首版](../archive/2026-10-18-knowledge-processing-platform/README.md)：01–03 Completed；统一处理器、持久结果、复用/恢复、CLI/MCP、标签与提取均完成离线验收；Full 1,809 项通过、40 项按既有条件跳过，补充适配回归和 Quick 通过。真实质量方案未执行，完整版仍为参考。
-
-2026-10-13 核对以下五个计划的结果块、完成证据和残余限制后移入归档；历史 Full 与真实测试记录保持原口径，不作为后续代码修改的验收。
-
-| 最近归档                                                                                          | 完成范围与限制                                                                                                  |
-| ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| [DSH/Cordis 受控 Agent 后端](../archive/2026-10-13-dsh-agent-backend/README.md)                   | Completed；Full 234 文件 / 1768 项；固定 50 篇对照 baseline 34、DSH 29 篇主文 PDF，不证明普遍提速或成功率提升。 |
-| [蓝白任务工作台](../archive/2026-10-13-web-workbench/README.md)                                   | Completed；集成 Full 214 文件 / 1676 项通过，39 项按既有条件跳过；真实服务验收不在该计划范围。                  |
-| [Browser 持续补位与传输计时](../archive/2026-10-13-browser-throughput/README.md)                  | Completed；含预览误捕获与失败归因修复，Full 226 文件 / 1697 项通过；真实总耗时未改善。                          |
-| [固定输入加工与宽容结果接纳](../archive/2026-10-12-knowledge-processing-simplification/README.md) | Completed；Full 211 文件 / 1626 项通过、39 项跳过；真实加工和读取完成，不背书科学正确性。                       |
-| [MinerU 正式解析修复](../archive/2026-10-12-mineru-parsing/README.md)                             | Completed；Full 1622 项通过、39 项跳过；四篇正式解析验证完成，未迁移生产库。                                    |
-
-最近完成的计划已归档：
-
-| 归档计划                                                                                                            | 完成范围                                                                                             |
-| ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| [元数据名称治理、五层 PDF 获取与 Browser 入口准备](../archive/2026-10-11-metadata-governance-pdf-routing/README.md) | 五层获取、显式名称维护与单任务 Browser 入口准备；Full 210 文件 / 1,606 项通过，39 项按既有条件跳过。 |
-| [Provider 可选字段的有界容错](../archive/2026-10-10-provider-field-boundaries/README.md)                            | 全部生产 Metadata adapters 接入；Full 205 文件 / 1,448 项通过，39 项按既有条件跳过。                 |
-| [真实发现与 PDF 获取缺陷修复](../archive/2026-10-10-live-discovery-acquisition-fixes/README.md)                     | Full 203 文件 / 1,380 项通过，39 项按既有条件跳过；真实复验与外部限制见记录。                        |
-| [核心采集兼容、文章身份核验与 Agent 操作闭环](../archive/2026-10-08-core-agent-completion/README.md)                | 含 2026-10-09 任务生命周期修复；Full 201 文件 / 1,358 项通过，39 项按既有条件跳过。                  |
-| [按供应商组织适配代码](../archive/2026-10-07-provider-layout/README.md)                                             | 每家供应商独立目录，403 个包根导出保留；Full 194 文件 / 1,334 项通过。                               |
-| [供应商能力与访问政策治理](../archive/2026-10-07-provider-governance/README.md)                                     | 统一服务定义与普通 HTTP/API 调度；限制和验收见归档。                                                 |
-| [Browser 独立 worker 与后台下载](../archive/2026-10-05-browser-parallel-downloads/README.md)                        | 并行 worker、后台下载与正式入库；真实样本和外部访问限制见归档。                                      |
-
-### 历史计划
-
-[2026-09-28 TypeScript 知识架构迁移](../archive/2026-09-28-typescript-knowledge-architecture-migration/README.md)
-已完成并归档；真实环境质量验收、用户数据切换和发布不因归档而视为执行过。
-[2026-09-25 讨论计划](../archive/2026-09-25-requirements-and-operation-architecture/README.md)
-保持 Superseded，未执行项由后续迁移承接，不改写为 Completed。
-较早的 [TypeScript 迁移计划](../archive/2026-09-07-typescript-browser-workbench/README.md)和
-[架构 UX 计划](../archive/2026-09-16-architecture-and-ux-improvements/README.md)保留各自历史证据。
-现有 `archive/` 忽略策略不因本规范修改；历史资料不替代现行合同或授予新操作权限。
+已完成、取消或被替代的计划从[历史索引](../archive/README.md)查找；验收数字、授权记录与残余事项留在各计划中。
 
 ## 1. 计划与其他文档的职责
 
-| 文档                      | 负责什么                                         | 不负责什么                   |
-| ------------------------- | ------------------------------------------------ | ---------------------------- |
-| requirements              | 产品目标、范围和验收方向                         | 不维护施工任务与测试日志     |
-| design / technical        | 模块责任、事实所有权、目标对象图和技术合同       | 不把设计目标表示为已经实现   |
-| Accepted ADR              | 长期架构选择及其后果                             | 不维护逐项实施进度           |
-| contracts、源码与直接测试 | 当前可执行的数据和行为合同                       | 不替代产品决策或实施顺序     |
-| plan                      | 把已确定方向变成可验证结果的依赖、行动和恢复安排 | 不成为第二套架构或运行数据库 |
-| README / guide / API      | 实际安装、配置和调用方式                         | 不把未交付能力写成当前用法   |
-
-计划可引用上述事实。方向变化时应回到相应 owner 文档修正，不能长期保留两份相反的真相。
-长期选择需要 ADR 时，把决策同步作为明确 Task；实施计划中的建议不能自行覆盖 Accepted ADR。
+计划只保存任务、门槛、证据和恢复。文档类型及归属统一见[文档导航](../README.md)，授权与验证规则见 [HARNESS](../../HARNESS.md)。
 
 ## 2. 什么时候需要正式计划
 
@@ -173,7 +108,7 @@ Task 采用稳定编号和 checkbox，例如 `2.3`。每项写清动作、输出
 配置和数据兼容、生产对象图以及需要时的安装交接如何得到证明。
 命令必须来自本仓库真实入口，不复制其他项目的工具或测试数量。
 
-代码切片使用相关 Vitest 反馈，交付默认必须通过 `pnpm full`；真实 Browser/Provider 测试与离线 Harness 分开记录。
+代码切片与最终验收按 [HARNESS 的验证路线](../../HARNESS.md#54-typescript-开发验证)选择；Full 不作为每次交付的默认必跑项。真实 Browser/Provider 测试与离线 Harness 分开记录。
 文档修改检查链接、术语、命令事实、Markdown 结构和 diff。未运行检查及原因必须写明，
 任何历史 Full、第三方评审或单次真实成功都不能代替当前改动的验收。
 

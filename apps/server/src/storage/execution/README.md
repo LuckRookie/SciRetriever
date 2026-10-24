@@ -1,12 +1,11 @@
 # 执行记录存储
 
-保存任务执行记录、租约与运行时所有权，支持恢复和迁移准入。
+保存任务执行记录、租约与运行时所有权，支持恢复和运行准入。
 
 ## 内容入口
 
-- [repository.ts](repository.ts)：执行记录仓库。
+- [repository.ts](repository.ts)：执行记录仓库；列表进度由当前目标处置聚合，不保存第二份进度事实，不按 attempt 重复计数。
 - [runtime-owner.ts](runtime-owner.ts)：运行时所有权。
-- [migration-gate.ts](migration-gate.ts)：执行格式迁移准入。
 
 ## 放置边界
 

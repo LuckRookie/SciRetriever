@@ -1,5 +1,9 @@
 # OpenAlex
 
+类型：外部事实
+负责：OpenAlex
+状态：现行
+
 - 官方资料最后在线核对：2026-08-07
 - 当前实现离线对照：2026-08-15
 - 当前选择键：Metadata `openalex`；Acquisition `openalex`；引用是 Metadata 的可选能力，不存在第三类 citation 选择键
@@ -125,30 +129,52 @@ content download 是另一个计费动作；本轮未使用。
     "next_cursor": "...",
     "cost_usd": 0.001
   },
-  "results": [{
-    "id": "https://openalex.org/W3035965352",
-    "doi": "https://doi.org/10.1038/s41586-020-2649-2",
-    "title": "Array programming with NumPy",
-    "publication_year": 2020,
-    "publication_date": "2020-09-16",
-    "ids": {"openalex": "https://openalex.org/W3035965352", "pmid": "https://pubmed.ncbi.nlm.nih.gov/32939066"},
-    "authorships": [{
-      "author_position": "middle",
-      "author": {"display_name": "K. Jarrod Millman", "orcid": "https://orcid.org/0000-0002-5263-5070"},
-      "institutions": [{"display_name": "University of California, Berkeley", "ror": "https://ror.org/01an7q238"}],
-      "raw_affiliation_strings": ["Berkeley Institute for Data Science, ..."]
-    }],
-    "primary_location": {
-      "landing_page_url": "https://doi.org/10.1038/s41586-020-2649-2",
-      "pdf_url": "https://www.nature.com/articles/s41586-020-2649-2.pdf",
-      "license": "cc-by",
-      "version": "publishedVersion"
-    },
-    "biblio": {"volume": "585", "issue": "7825", "first_page": "357", "last_page": "362"},
-    "referenced_works": ["https://openalex.org/W1969761972"],
-    "referenced_works_count": 41,
-    "cited_by_count": 22998
-  }],
+  "results": [
+    {
+      "id": "https://openalex.org/W3035965352",
+      "doi": "https://doi.org/10.1038/s41586-020-2649-2",
+      "title": "Array programming with NumPy",
+      "publication_year": 2020,
+      "publication_date": "2020-09-16",
+      "ids": {
+        "openalex": "https://openalex.org/W3035965352",
+        "pmid": "https://pubmed.ncbi.nlm.nih.gov/32939066"
+      },
+      "authorships": [
+        {
+          "author_position": "middle",
+          "author": {
+            "display_name": "K. Jarrod Millman",
+            "orcid": "https://orcid.org/0000-0002-5263-5070"
+          },
+          "institutions": [
+            {
+              "display_name": "University of California, Berkeley",
+              "ror": "https://ror.org/01an7q238"
+            }
+          ],
+          "raw_affiliation_strings": [
+            "Berkeley Institute for Data Science, ..."
+          ]
+        }
+      ],
+      "primary_location": {
+        "landing_page_url": "https://doi.org/10.1038/s41586-020-2649-2",
+        "pdf_url": "https://www.nature.com/articles/s41586-020-2649-2.pdf",
+        "license": "cc-by",
+        "version": "publishedVersion"
+      },
+      "biblio": {
+        "volume": "585",
+        "issue": "7825",
+        "first_page": "357",
+        "last_page": "362"
+      },
+      "referenced_works": ["https://openalex.org/W1969761972"],
+      "referenced_works_count": 41,
+      "cited_by_count": 22998
+    }
+  ],
   "group_by": []
 }
 ```
@@ -157,19 +183,19 @@ content download 是另一个计费动作；本轮未使用。
 
 ## 7. 与 SciRetriever 中性数据的候选映射
 
-| 外部字段 | 外部语义 | 候选归属 | 备注 |
-|---|---|---|---|
-| `id` | OpenAlex Work ID | `Provenance.source_record_id` | 可同时作为 provider key，不代替本地 Literature ID |
-| `doi` / `ids.pmid` / `ids.pmcid` | 稳定标识符 | `LiteratureMetadata.identifiers` | 去 URL wrapper 后按 namespace 规范化 |
-| `title` | work 标题 | `LiteratureMetadata.title` | `display_name` 通常重复，不保存两份 |
-| `abstract_inverted_index` | 摘要倒排索引 | `LiteratureMetadata.abstract` | 必须按 position 完整重建；缺失不猜 |
-| `type`、`language`、publication fields | 类型、语言、出版日/年 | `LiteratureMetadata` | 显式值映射 |
-| `authorships[]` | 有序署名及对齐单位 | `Author[]` | 只用明确 ORCID/ROR；OpenAlex author ID 不建全局作者 |
-| location source + `biblio` | venue、ISSN、卷期页 | `LiteratureMetadata` | first/last page 确定性组成 pages |
-| `referenced_works[]` | 结构化引用目标 | `ProviderRelationObservation` | 一 ID 一条边；目标未入库也可独立保存 observation |
-| `referenced_works_count` / `cited_by_count` | 来源计数 | observation 计数字段 | 不跨供应商相加 |
-| location URL/media/version/license/OA | 获取线索 | `AssetHint[]` | 多 location 分开；OA/license 不进 LiteratureMetadata |
-| `updated_date` 与调用时间 | 数据新鲜度/观察上下文 | `Provenance` 的候选输入 | 以实际 observed_at 为主，不把 updated_date 当出版日 |
+| 外部字段                                    | 外部语义              | 候选归属                         | 备注                                                 |
+| ------------------------------------------- | --------------------- | -------------------------------- | ---------------------------------------------------- |
+| `id`                                        | OpenAlex Work ID      | `Provenance.source_record_id`    | 可同时作为 provider key，不代替本地 Literature ID    |
+| `doi` / `ids.pmid` / `ids.pmcid`            | 稳定标识符            | `LiteratureMetadata.identifiers` | 去 URL wrapper 后按 namespace 规范化                 |
+| `title`                                     | work 标题             | `LiteratureMetadata.title`       | `display_name` 通常重复，不保存两份                  |
+| `abstract_inverted_index`                   | 摘要倒排索引          | `LiteratureMetadata.abstract`    | 必须按 position 完整重建；缺失不猜                   |
+| `type`、`language`、publication fields      | 类型、语言、出版日/年 | `LiteratureMetadata`             | 显式值映射                                           |
+| `authorships[]`                             | 有序署名及对齐单位    | `Author[]`                       | 只用明确 ORCID/ROR；OpenAlex author ID 不建全局作者  |
+| location source + `biblio`                  | venue、ISSN、卷期页   | `LiteratureMetadata`             | first/last page 确定性组成 pages                     |
+| `referenced_works[]`                        | 结构化引用目标        | `ProviderRelationObservation`    | 一 ID 一条边；目标未入库也可独立保存 observation     |
+| `referenced_works_count` / `cited_by_count` | 来源计数              | observation 计数字段             | 不跨供应商相加                                       |
+| location URL/media/version/license/OA       | 获取线索              | `AssetHint[]`                    | 多 location 分开；OA/license 不进 LiteratureMetadata |
+| `updated_date` 与调用时间                   | 数据新鲜度/观察上下文 | `Provenance` 的候选输入          | 以实际 observed_at 为主，不把 updated_date 当出版日  |
 
 OpenAlex `keywords[]`、`topics[]` 是自动推导内容，明确不候选映射到
 `MetadataObservation.declared_keywords`；本 Notes 不新增自动 topic 模型。

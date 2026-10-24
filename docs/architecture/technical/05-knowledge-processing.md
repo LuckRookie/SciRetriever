@@ -1,5 +1,9 @@
 # 05 · 知识加工技术设计
 
+类型：规格
+负责：建档、校订稿与算子输入（加工与结果合同）
+状态：现行
+
 [设计总览](../design.md) · [八模块技术导航](../technical.md)
 
 本模块对应设计中的 **⑤ 知识加工**，使用已有材料与证据，形成压缩知识或交付调用方规范下的提取候选。
@@ -17,7 +21,7 @@ Agents 统一由 DSH 提供模型与持续会话能力。summary 是普通单篇
 - [3. 结果格式与发布](#3-结果格式与发布)
 - [4. 调用方规范与提取交付](#4-调用方规范与提取交付)
 - [5. 共享支撑：单次模型与受控执行基础](#5-共享支撑单次模型与受控执行基础)
-- [7. ADR 0037 目标形态：标签与算子输入](#7-adr-0037-目标形态标签与算子输入)
+- [7. ADR 0037 目标形态：标签与算子输入](#7-标签与算子输入)
 
 ## 1. 模块边界与连接
 
@@ -208,20 +212,9 @@ Extractor 不获得配置 secret、SQL 写入、Browser/Page 对象或任意脚�
 
 验证需穿过实际材料读取与候选接纳边界，在无内部模型配置下完成上述流程。负例包括不支持 schema、远程 ref、缺失字段、错误 pointer、跨范围证据、同 key 异内容、响应丢失、过期/重启、取消后迟到，以及交付后重解析/回收仍能复核原证据。用这些不同记录形状证明通用性，不能只以一个固定领域 JSON 成功为证。
 
-### 4.11 候选交付的剩余合同与收敛时点
-
-候选 payload 托管、最小去重/回执记录和外部证据依赖是三种不同责任。首版无历史 payload 查询，不等于禁止必要的轻量持久记录，也不自动承诺永久幂等或无限证据保留。
-
-- **Extraction 接纳实现前**明确去重 scope（调用方/规范/操作与 key 的组合）、比较域（包含规范、输入、证据和 payload 的规范化内容）、并发串行化、回执寿命、响应丢失重试、重启、取消/迟到、过期后行为。是否保存最小回执记录及其存储协议在此决定；过期/未知不能伪称曾接纳或全新成功。
-- **Storage 回收 writer 接通前**明确对外交付引用如何进入依赖判定：登记轻量保护记录，或提供可辨认的有效性与失效政策。未确定外部引用保护时，不启用可能删除这些引用目标的回收；不能只按内部 current/产物引用判定无引用。
-- **Extraction 发布接纳回执前**复用上述依赖合同，让调用方知道原始/文档证据是否受保护、何时可能失效、如何复核。Storage/Document 提供能力，Extraction 登记/交付相应引用；无需建立第二个候选 payload 仓库。
-- 验证两条正式旅程：并发/响应丢失/重启或过期后的重复提交；候选交付 → 重解析/回收尝试 → 原版本证据复核。合法失效应有可检查原因，不能静默重定位或返回不存在。
-
-下节固定首版提交合同；本节早期未决项由该合同收敛。T02 已通过独立维护对象图接通候选 writer；只读查询和原始材料读取的既有边界不变。
-
 ### 4.12 首版规范、输入绑定与提交语义
 
-M08-T01 固定以下首版协议，T02 已接通显式 operation、候选接纳与回执事务。只读准备结果仍不表示已经受理一次提取任务。
+显式 operation 固定规范与输入，候选接纳与回执使用同一事务。只读准备结果仍不表示已经受理一次提取任务。
 
 `ExtractionSpec` 采用 Draft 2020-12 URI，但只接受封闭关键词集合：`$schema`、根层 `$defs`、`$ref`、`type`、`properties`、`required`、`additionalProperties`、`items`、`prefixItems`、`minItems/maxItems`、`minLength/maxLength`、`minimum/maximum/exclusiveMinimum/exclusiveMaximum`、`enum`、`const`、`allOf/anyOf/oneOf`、`title/description`。根 schema 需声明支持的 `type` 或本地 `$ref`，根值可为 object、array 或其它 JSON 类型；`type` 联合数组由 Ajv 明确允许并按声明验证，不改变载荷类型。`$ref` 仅允许 `#/$defs/<简单名称>` 且目标存在，可递归指回同一定义。不接受远程、动态或锚定引用、`$id`、正则、format、default、条件词、未知关键词和布尔 schema。不能靠关闭 Ajv strict 校验使非法 schema 通过。编译及候选校验运行于可终止 worker，单次 3 秒超时；进程内最多同时 2 个 worker、16 个可取消排队请求，超额报 `schema-busy`。Ajv 使用 `inlineRefs:false` 避免本地引用重复内联；每个 Worker 另设 V8 old/young heap 64/16 MiB、code range 16 MiB、stack 2 MiB 上限，资源退出报 `schema-resource-limit`。这些是 V8 隔离堆/栈限制，不声称限制进程总 RSS 或外部原生内存。取消与关闭中断并等待 worker 终止。完整规范（含 hash）≤64 KiB、schema 节点≤128、语法嵌套≤8、组合嵌套≤3、每组合≤8 分支、定义≤128。候选 JSON 深度≤32、数组≤256、节点≤8192、批次≤1 MiB；记录与证据数量在 T02 envelope 边界另行检查。
 
@@ -478,17 +471,7 @@ Agents 不取得 Browser runtime、Page、Context、Profile、Cookie、selector�
 
 ### 5.10 Configuration 与 Bootstrap
 
-Configuration 保存 Model Provider/Model 两个直接注册表：
-
-- Provider 拥有 name、API、Base URL 与 exact-origin credential scope；
-- Model 以 `provider/model` 为唯一 reference，并拥有 reasoning、image 与 stream；
-- `[analyze].model` 与 `[browser].model` 直接引用完整 Model reference；
-- `[providers.<provider>]` credential 与 Provider 的规范 origin 精确绑定。
-
-交互配置由 `Models` 管理 Provider、Model 和模型 key；`Analyze`、`Download` 只选择 Model 并管理
-各自业务参数。Analyze 的 structured-output/text-only 合同由模块派生；Download 只选择
-`image = true` 的 Model，其 image/tool/当前生产 Observation 的 `image/jpeg`/正数 image limits 由模块派生。任一任务切换 Model 都不
-修改 Model 或另一个任务；没有 Profile、Preset、Entry 或 task-level reasoning/stream override。
+模型注册字段、默认值、任务选择和交互配置统一见[配置手册](../../guides/configuration.md)。Configuration 提供经过验证的选择，Bootstrap 负责组装消费模块所需的运行时与协议适配器。
 
 固定的单次 HTTP timeout 以及 prompt/input/schema/request/response/result 字节上限由 Agents
 实现定义，并由 Bootstrap 装配，不与固定输入加工的业务预算组合；它们不是普通 Model 配置字段。
@@ -583,13 +566,13 @@ Analysis 组合验证见[模型 loopback 证据](../../../migration/evidence/run
 单次模型入口保持无状态。三种协议的 JSON/SSE 经过有界完整 body 读取后重建中性结果，再交给 DSH 事件接口；不是逐 token 网络转发。stream 失败不改模式重发，普通推理和压缩均不隐式重试。模型不获得 Browser 或事实写入权限。Metadata/Acquisition adapter 只转换供应商协议并发布
 observation；Literature、Analysis 和 Entry 分别拥有 identity/current facts、内容分析和用户协议。
 
-## 6. ADR 0034：统一处理器与结果（实施合同）
+## 6. 统一处理器与结果
 
 中性合同位于 `packages/contracts/src/processors.ts`，运行接口与注册表位于 `analysis/processor.ts`。Processor 具有 id/version、文献或集合范围、输入种类、规范 schema、方法定义和执行函数。规范在准备时正规化；处理器方法定义、输出 schema 与真实模型绑定参与身份，不能只凭函数名或文献 ID 复用。
 
-冻结输入支持精确文档、上游 Result、既有 Knowledge 和显式缺口。文献级输入的标识与其在批次中的位置无关；记录子集必须固定记录 ID。ProcessorInvocation 保存完整输入、规范和非秘密执行配置；运行恢复时绑定不一致会报告错误，不自动换模型/版本。
+冻结输入按[算子输入与复用](#72-算子输入与复用)和[快照与多篇算子](#73-快照与多篇算子)确定。文献级输入的标识与其在批次中的位置无关；记录子集必须固定记录 ID。ProcessorInvocation 保存完整输入、规范和非秘密执行配置；运行恢复时绑定不一致会报告错误，不自动换模型/版本。
 
-ProcessorResult 保存稳定 ID、比较身份、内容、字段证据、覆盖和实际来源。内容支持 records、text 或旧知识的稳定引用。结果 ID 不等于比较键，partial 尝试和后续完整结果可以并存；只有校验通过且完整的内部结果可自动复用。外部生产者信息是声明，不能当作平台实际观测。字段证据引用原文、已保存结果的记录/路径或旧知识要点；读取应检查 hash、范围及递归引用，不把任意 JSON 冒充旧知识格式。
+ProcessorResult 保存稳定 ID、比较身份、内容、字段证据、覆盖和实际来源。内容支持 records 与 report。结果 ID 不等于比较键，partial 尝试和后续完整结果可以并存；只有校验通过且完整的内部结果可自动复用。外部生产者信息是声明，不能当作平台实际观测。字段证据引用固定原文、快照或已保存结果的记录/路径；读取检查 hash、范围及递归引用。
 
 `ok/empty` 是可发布结果，失败进入现有 Jobs；coverage 独立说明 complete/partial/none、实际读取片段与缺口。empty 仅用于完整处理且零记录，检索未命中不等于处理完整。结果集合保存精确成员引用与缺口，运行进度和已发布清单分离，更新发布新清单。
 
@@ -607,9 +590,9 @@ ProcessorResult 保存稳定 ID、比较身份、内容、字段证据、覆盖�
 
 `entry/processor-operations.ts` 是 CLI/MCP 共用的只读查询/证据/导出边界；QueryApplication 不实例化模型。数字保存原串与原单位，不默默做领域换算。标签和提取按文本片段分批，保留 missing、partial 和能力限制。精确请求格式见[统一加工指南](../../guides/knowledge-processors.md)。版本事件传播过时状态而不自动重算；Web 通过同一业务合同展示结果和证据。
 
-## 7. ADR 0037 目标形态：标签与算子输入
+## 7. 标签与算子输入
 
-本节描述已接入的标签与算子输入；实际部署转换见计划 12。
+本节规定标签、单篇校订稿输入与固定快照的责任。
 
 ### 7.1 标签词表
 
@@ -626,12 +609,13 @@ ProcessorResult 保存稳定 ID、比较身份、内容、字段证据、覆盖�
 ### 7.2 算子输入与复用
 
 单篇算子：
+
 - 输入只能是就绪文献的档案文档，按声明的部分和章节角色读取校订稿片段；
 - 单篇算子之间不互相依赖；
 - 片段的核对依据随片段提供；提取出的每个值由平台做一次用时核对，所有片段一律做文字比对，不调用视觉模型，结果为六种：可找到、找不到、值为空、无引用、引用片段不可用、综合值（ADR 0037 第三版；实现为 value-check.ts 的确定性文字比对，不再配置视觉核对角色）；
 - 复用键 = 被读取部分的内容版本 + 算子版本 + 规范 + 方法 + 模型配置，描述版本不参与；
-- 结果按值量化：字段要么有值，要么为空（null）；读取是否完整单独记录，补充材料不可用等作为缺口保留（如 `part-unavailable`）。原 `not-reported`、`part-absent` 两种状态取消（ADR 0037 第三版，实现见计划 13.23）。
-- 分块：默认整篇一次调用，超过门槛（200K 与上下文窗口减预留中的较小者）才按 Markdown 结构分块，规则见 ADR 0037 第 10 节（实现见计划 13.24）。
+- 结果按值量化：字段要么有值，要么为空（null）；读取是否完整单独记录，补充材料不可用等作为缺口保留（如 `part-unavailable`）。原 `not-reported`、`part-absent` 两种状态取消。
+- 分块：默认整篇一次调用，超过门槛（200K 与上下文窗口减预留中的较小者）才按 Markdown 结构分块，规则见 ADR 0037 第 10 节。
 
 ### 7.3 快照与多篇算子
 
@@ -639,4 +623,4 @@ ProcessorResult 保存稳定 ID、比较身份、内容、字段证据、覆盖�
 - 多篇算子执行两步：
   1. 用 `map` 单篇算子逐篇读取，结果可复用；
   2. 只基于单篇结果汇总，输出带引用的报告或表格。
-- 版本事件会把相关结果标为过时，不会自动重算，这一点修订了 §6 的“整体综合”。
+- 版本事件会把相关结果标为过时，不会自动重算。

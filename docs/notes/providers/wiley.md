@@ -1,5 +1,9 @@
 # Wiley
 
+类型：外部事实
+负责：Wiley
+状态：现行
+
 > 当前 TypeScript 适配行为（2026-10-10 核对）：Source 接受与唯一 DOI 一致的 TDM API 提示以及 onlinelibrary.wiley.com 的受信子域。生产 Network 只允许 api.wiley.com 到 `https://alm.wiley.com/alm/api/v2/download/<opaque>` 的一次跳转，拒绝 query/fragment 与其它路径；ALM 不接收 TDM token。源选择由用户配置决定。 证据见修复验证记录（本地文件：`sandbox/reports/live-discovery-acquisition-fixes-2026-10-10.md`，不随仓库分发）。下文较早日期的探测只代表当时状态。
 
 - 官方资料与最小只读链路最后在线核对：2026-08-19
@@ -56,13 +60,13 @@ origin、固定 path prefix、无 query/fragment 的单跳目标启用 guarded o
 
 官方客户端当前解释：
 
-| HTTP 状态 | WileyLabs Client | SciRetriever 中性结果 |
-|---|---|---|
-| `200` | 保存 PDF | 有界临时 PDF，具体文章 entitlement=`GRANTED`，随后统一验证 |
-| `403` | `ACCESS_DENIED` | 授权/entitlement 系统失败，不形成耗尽 |
-| `404` | `UNKNOWN_DOI` | 正常 `http-404` miss，可继续后续 Source |
-| 其它非 `200` | API error | `401` 按通用 HTTP 认证失败、`429` 按 quota、`5xx` 按服务失败，其它按响应合同失败 |
-| 网络异常 | Network error | 可重试的 Network/Access 系统失败 |
+| HTTP 状态    | WileyLabs Client | SciRetriever 中性结果                                                            |
+| ------------ | ---------------- | -------------------------------------------------------------------------------- |
+| `200`        | 保存 PDF         | 有界临时 PDF，具体文章 entitlement=`GRANTED`，随后统一验证                       |
+| `403`        | `ACCESS_DENIED`  | 授权/entitlement 系统失败，不形成耗尽                                            |
+| `404`        | `UNKNOWN_DOI`    | 正常 `http-404` miss，可继续后续 Source                                          |
+| 其它非 `200` | API error        | `401` 按通用 HTTP 认证失败、`429` 按 quota、`5xx` 按服务失败，其它按响应合同失败 |
+| 网络异常     | Network error    | 可重试的 Network/Access 系统失败                                                 |
 
 官方客户端没有进一步固定 `401`、`429` 或其它错误 body schema；SciRetriever 因此只按
 稳定 HTTP 类别映射，不解析或保存供应商错误正文。200 响应也不能凭状态码直接接纳：
@@ -154,12 +158,12 @@ entitlement 保持 `UNKNOWN`；具体 download 的 200 PDF 响应才把该篇 en
 
 ## 6. 中性映射与禁止进入 Model 的信息
 
-| Wiley 外部事实 | SciRetriever 归属 | 约束 |
-|---|---|---|
-| canonical DOI + 已确认 WOL/ALM AssetHint origin，或已解析 WOL landing origin | 当前请求的强路由证据 | 只保存规范 origin 并存在于本次 Acquisition；不持久化成出版社事实 |
-| TDM API DOI locator | `AuthorizedDownloadLocator` | 非 URL、无 token；只在 Wiley client 边界解释 |
-| PDF response bytes | `TemporaryPdfContent` → 统一 PDF 验证 | 有界、可清理；通过后才成为不可变 Asset |
-| DOI | 下载 provenance 的 `source_record_id` | 来源为 `wiley`；不复制 header、账户或 entitlement payload |
+| Wiley 外部事实                                                               | SciRetriever 归属                     | 约束                                                             |
+| ---------------------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------- |
+| canonical DOI + 已确认 WOL/ALM AssetHint origin，或已解析 WOL landing origin | 当前请求的强路由证据                  | 只保存规范 origin 并存在于本次 Acquisition；不持久化成出版社事实 |
+| TDM API DOI locator                                                          | `AuthorizedDownloadLocator`           | 非 URL、无 token；只在 Wiley client 边界解释                     |
+| PDF response bytes                                                           | `TemporaryPdfContent` → 统一 PDF 验证 | 有界、可清理；通过后才成为不可变 Asset                           |
+| DOI                                                                          | 下载 provenance 的 `source_record_id` | 来源为 `wiley`；不复制 header、账户或 entitlement payload        |
 
 以下信息不能进入业务 Model 或仓库材料：token/header 值、cookie、账户和机构标识、用户
 公网 IP、受限响应正文、登录/Cloudflare HTML、供应商内部 entitlement payload、错误

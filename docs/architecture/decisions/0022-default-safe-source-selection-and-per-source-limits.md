@@ -1,6 +1,9 @@
 # ADR 0022：默认安全 Source 选择与逐 Source 扫描上限
 
-- Status: Accepted
+类型：决策（ADR）
+负责：默认安全 Source 选择与逐 Source 扫描上限
+状态：Accepted
+
 - Date: 2026-08-31
 - Supersedes: none
 - Superseded by: none

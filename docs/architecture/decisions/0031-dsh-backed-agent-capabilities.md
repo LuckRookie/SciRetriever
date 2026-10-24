@@ -1,6 +1,9 @@
 # ADR 0031：基于 DSH/Cordis 的受控 Agent 能力
 
-- Status: Accepted（后端选型与责任边界；实施方案已获 Owner 批准，首期接入已完成）
+类型：决策（ADR）
+负责：基于 DSH/Cordis 的受控 Agent 能力
+状态：Accepted（后端选型与责任边界；实施方案已获 Owner 批准，首期接入已完成）
+
 - Date: 2026-10-13
 - Last amended: 2026-10-19（Owner 要求移除旧 Agents 兼容入口，单篇/长文与综合交由 DSH 持续阅读）
 - Amends: [ADR 0017](0017-shared-agents-and-controlled-browser-agent.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0023](0023-generic-browser-agent-executor.md)、[ADR 0026](0026-agent-knowledge-and-human-collaboration.md)

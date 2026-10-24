@@ -1,5 +1,9 @@
 # 06 · 知识查询与上下文技术设计
 
+类型：规格
+负责：文献查询、检索投影与上下文读取；technical 中早期形式化接口（查询）
+状态：现行；目标接口单独成节
+
 [设计总览](../design.md) · [八模块技术导航](../technical.md)
 
 本模块对应设计中的 **⑥ 知识查询与上下文**，从已有库中检索文献、材料和知识，按范围与预算返回内容、来源、证据和缺口。
@@ -14,6 +18,7 @@
 - [2. 文献查询与读取合同](#2-文献查询与读取合同)
 - [3. 独立查询应用与只读生命周期](#3-独立查询应用与只读生命周期)
 - [4. 知识检索与上下文组装](#4-知识检索与上下文组装)
+- [5. 目标接口（尚未实现）](#5-目标接口尚未实现)
 
 ## 1. 模块边界与连接
 
@@ -447,62 +452,7 @@ CLI `literature search/show/references/cited-by` 与 `export metadata/pdf/conten
 
 ### 4.2 查询合同
 
-#### 4.2.1 范围和内容种类
-
-```ts
-interface KnowledgeQuery {
-  readonly query: string;
-  readonly scope: QueryScope;
-  readonly kinds: readonly ("metadata" | "document" | "knowledge")[];
-  readonly version_policy: "default" | "explicit";
-  readonly budget: ContextBudget;
-  readonly continuation: string | null;
-}
-type QueryScope =
-  | { kind: "library" }
-  | { kind: "literatures"; literature_ids: readonly string[] }
-  | { kind: "manifest"; manifest: InputManifest };
-interface ContextBudget {
-  readonly max_items: number;
-  readonly max_bytes: number;
-  readonly token_limit?: { tokenizer: string; max_tokens: number };
-}
-```
-
-`library` 指现有逻辑文献库，绝不表示外部互联网。显式 manifest 固定版本；default 在本次读取开始时解析为具体引用后固定。空范围、无效 ID、未知内容类型、超限预算和不支持 tokenizer 分别拒绝，不将无效请求扩大为全库搜索。
-
-源材料的身份按 LiteratureId，而不是标题模糊匹配。用户过滤到某个预印本时，不能自动返回正式版正文充数；允许相关版本展示时必须明确标记不同版本和关系。
-
-#### 4.2.2 结果合同
-
-```ts
-interface ContextBundle {
-  readonly items: readonly ContextItem[];
-  readonly coverage: QueryCoverage;
-  readonly gaps: readonly Gap[];
-  readonly usage: {
-    bytes: number;
-    items: number;
-    tokens: number | null;
-    tokenizer: string | null;
-  };
-  readonly truncated: boolean;
-  readonly continuation: string | null;
-}
-interface ContextItem {
-  readonly kind: "metadata" | "source-text" | "generated-knowledge";
-  readonly literature_id: string;
-  readonly reference: MaterialRef | DocumentRef | KnowledgeArtifactRef;
-  readonly text: string;
-  readonly evidence: readonly EvidenceRef[];
-  readonly rank: number;
-  readonly score: number | null;
-}
-```
-
-`reference` 按 kind 进一步采用判别式 parser，示意 union 不意味着任意组合都合法。元数据命中可以没有 PDF；知识命中必须能追到其输入和证据。压缩产物与原文不可共用一个含义模糊的 `content` 标签。
-
-QueryCoverage 表达已搜索的数据类型、索引 generation、可见范围、排除/失败部分和截断；不等于穷尽了所有相关研究。score 是具体算法的相关性指标，不能标成科学置信度或跨算法通用概率。
+完整目标接口见[查询合同](#51-查询合同)；当前实现以源码为准。
 
 ### 4.3 索引设计与读取一致性
 
@@ -572,29 +522,17 @@ Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要
 
 新增上下文能力应扩展只读对象图与版本化协议，不从 QueryApplication 取完整 Application 再“约定不用 writer”。公共包、HTTP、CLI 和人类页必须共用事实 owner，不能分别实现一套搜索结果解释。
 
-### 4.9 M07-T01/T02 已实现的材料 Context 切片
+### 4.9 材料 Context 的实现边界
 
-`packages/contracts/src/retrieval-context.ts` 定义实际 `MaterialContextRequest`/`MaterialContextBundle`。请求固定非空普通文本、`library` 或非空 Literature ID 集、`metadata | document` 类型、默认表示或显式 `{ literature_id, document_version_id, representation_sha256 }` 集，以及最多 20 项、1024–262144 JSON UTF-8 字节的预算。当前没有 tokenizer；`token_limit` 必须为 `null`，否则明确拒绝。它不包含未来的 manifest、KnowledgeArtifact 或向量检索。
+`retrieval-context.ts` 定义 `MaterialContextRequest/MaterialContextBundle`，固定查询、范围、类型、版本、字节预算与续读位置。当前无 tokenizer；请求与使用方式见[读取指南](../../guides/library-query.md#上下文检索)。
 
-Catalog v4 在 v3 完整 manifest 后添加独立 `retrieval_*` 投影：来源 revision 触发器、构建/就绪 generation、原子 active 指针、精确版本和片段引用、FTS5、迁移 receipt。v1/v2/v3 fingerprint 与当前 Library FTS 不变。显式 `maintenance rebuild-index` 或受同源 CSRF 保护的 `/api/v1/maintenance/rebuild-index` 先从当前元数据和全部已发布 DocumentVersion 读/验证源，逐单元分批暂存于系统临时目录，再以有界事务写新 generation、校验计数/FTS、按 source revision CAS 发布；失败保留旧 active generation。健康重建保留旧 ready generation；若仅可重建的检索投影损坏，显式重建在源 schema 与事实校验通过后，先暂存新 FTS 文本，再于单一事务中重建 FTS、切换 active 并移除旧坏 generation。失败或取消不切换 active；源事实损坏则拒绝修复。修复范围是 schema 完整时的检索内容、FTS 正文或倒排损坏；已知检索 DDL 缺失或篡改时 Context 报损坏，业务 writer 拒绝进入，只读 Library/Document 仍可校验源 schema 并读取原材料。普通 Context 查询始终完整校验检索投影。默认检索只取与当前主 PDF 对齐的默认表示；显式版本可读取旧表示。Document 文本按段落/整表格单元索引，查询命中后仍从固定版本受控 reader 复核 Markdown/结构/hash，再返回原文与可解析证据。元数据命中无 PDF、已有 PDF 无表示会分别给出缺口。
+材料投影使用当前 schema 中的 `retrieval_*` 表。显式重建完整验证来源，建档发布后的 refresh 可复用来源未变且验证通过的条目。构建者使用独立 generation 锁，catalog 写入按有界批次准入；开始和发布校验、source revision CAS 决定新 generation 是否可用。源变化返回过时，不切换旧 active。只读查询不隐式修复。
 
-Context 使用 `queryTerms` 的 Unicode casefold 与 FTS5 候选匹配；类型、Literature 范围及版本在候选 SQL 阶段约束。一次最多接纳 4097 原始 FTS 候选并标记 `candidate-limit`；命中单元按 `weighted-term-frequency-v1` 排序：仅统计固定 generation 的 title/body 精确词频，title 权重 4、body 权重 1，负值优先，同分按 kind、Literature ID、版本 ID 和片段序号。`score_rule` 随 Bundle 返回并绑定 cursor，score 不是科学置信度。cursor 绑定请求、generation、source revision 与位置；source revision 改变返回 `index-stale`，不会把新旧结果拼页。文档类查询在整个请求范围内检查缺 PDF 和默认表示；library 范围只汇总缺口类型，不枚举全部 ID；显式版本必须与 Literature ID、版本 ID、表示 hash 同时匹配。索引缺失/损坏分别返回 `index-unavailable`/`index-corrupt`，无隐式迁移、重建、解析或模型调用。`usage.bytes` 精确等于最终 Bundle JSON 的 UTF-8 字节数，包含来源、证据、缺口、用量和继续位置；不够容纳完整片段时返回固定范围引用与 `context-too-large`，由 DocumentRead 的 `range` 选择器继续读取。极小预算若连压缩后的首项引用与缺口都容不下，则拒绝请求并返回 `context-budget-invalid`，不能跳过尚未交付的命中；已交付项之后预算耗尽时，继续位置停在最后一个已交付项。
+### 4.10 处理器结果与混合 Context
 
-长期 SQLite 读取连接在其它连接提交后可保留旧 FTS5 校验视图：Node 22.19.0 的合成双连接复现中，writer 与新 reader 的 `integrity_check=ok`，旧 reader 却报告 malformed inverted index。v4 worker 与只读 RetrievalStorage 因此仅在命令边界观察 `PRAGMA data_version` 变化时重开连接，并重复原有只读、schema identity/DDL 准入；不跳过损坏检查。[SQLite 兼容性说明](../../notes/sqlite-fts5-long-reader.md)维护适用版本和处理方式；最小复现与实际结果保存在测试记录（本地文件：`sandbox/reports/sqlite-fts5-long-reader-2026-09-29.md`，不随仓库分发）。当前无向量/模型重排，也不承诺全库语义召回或查询延迟 SLA。
+`knowledgeContext` 将材料 Context 与已发布处理器结果合并。原始文档和生成结果明确区分；固定结果及上游依赖通过 `processorRead` 核验，来源缺失、损坏、过时与未命中分别表达。覆盖、排序、预算及继续位置规则见本节前述合同；score 不表示科学可信度。
 
-### 4.10 M07-T03 知识 Context 版本合同
-
-旧 `MaterialContextRequest`、`MaterialContextBundle` 和 `/api/v1/query/context` 固定为材料协议 v1，仍只接受 `metadata | document`，其预算、排序、cursor 和旧索引维护回执不变。知识查询另用 `KnowledgeContextRequest.schema_version=2` 和 `/api/v1/query/knowledge-context`；新协议一次请求可以同时选 `metadata`、`document`、`knowledge`，服务端在同一预算内按统一的 `weighted-term-frequency-v1` 词频（title 权重 4、body 权重 1）和稳定的种类、Literature ID、版本/产物 ID、单元序号排序。分数不是科学置信度。未选材料种类时只依赖知识索引；只选材料时也可使用旧材料协议。
-
-v2 请求固定普通文本查询、`library` / 非空 Literature ID 集 / 精确知识 Artifact ID 集范围、非空且去重的内容种类、文档 `default` 或精确版本三元组、知识用途过滤（`overview | detailed | question | synthesis`）、可选完整问题文本和知识选择方式（`all` / `defaults` / 精确 Artifact ID 集）、1–20 项与 1024–262144 最终 JSON UTF-8 字节预算、不透明继续位置。当前没有 tokenizer，非空 token 限额在执行入口明确拒绝。`defaults` 仅适用单篇知识；集合综合没有默认关系，须用 `all` 或精确产物。问题按 trim 后原文精确匹配，不把不同问题的产物折叠；非空问题只可与 `question | synthesis` 用途一起请求。Artifact 范围只允许知识种类，并与知识选择的精确列表及顺序一致，文档版本必须为 `default`。Literature 范围采用保守闭包规则：单篇须属于指定 Literature；综合的**所有实际和声明的源 Literature** 都须在集合内，来源不明则不纳入，不能用综合的一个输入冒充整项归属。`library` 只指现有本地库。目标 §4.2 的 manifest scope 尚未进入本版 wire；固定 Document 三元组与 Artifact ID 范围是首版精确输入机制。
-
-实际 `packages/contracts/src/knowledge-context.ts` 的请求字段为 `{schema_version:2,query,scope,kinds,versions,knowledge,budget,continuation}`，均必需；`scope` 是 `{kind:'library'}`、`{kind:'literatures',literature_ids}` 或 `{kind:'artifacts',artifact_ids}`。`versions` 沿用材料 v1 的 `default` / `explicit.documents`；无知识种类时 `knowledge:null`，有知识种类时 `{purposes,question,selection,artifact_ids}`，`all/defaults` 的 ID 列表为空，`explicit` 必须有 1–1000 个不同 ID。文献范围 1–1000 个不同 ID，查询 UTF-8 不超过 512 字节；问题与 M06 共用 NFC+trim、4096 UTF-8 字节规范，响应问题必须已经规范化。v2 cursor 最多 2048 个 URL 安全字符，独立于材料 v1 的 1024 限制。未知字段拒绝。`budget.token_limit` 保留与 v1 一致的语法解析，但当前无 tokenizer，执行时拒绝非 `null`。
-
-v2 响应字段为 `{schema_version:2,score_rule,items,coverage,generations,gaps,usage,truncated,continuation}`。item 是带判别式的 `metadata`、`source-text` 或 `generated-knowledge`。前两类保留 v1 的精确材料/文档引用和 EvidenceRef；知识项的 `reference` 固定 Artifact ID、content SHA-256、manifest SHA-256、statement ID/完整 canonical statement SHA-256，并带用途、问题、scope kind、原始来源 Literature ID、独立 Literature ID、`source_state`、`source_layers`、压缩深度、coverage status、完整 statement（含逐断言 evidence）、rank、score 和可为空的 `context-too-large`。单条 disagreement 断言可从完整合法综合中分页返回；完整内容仍要求同一冲突组至少两条。来源闭包最多 1024 个不同且排序的 Literature ID，最终仍受 JSON 字节预算约束。知识是模型生成内容，即使引用文档证据也不标为原文。`coverage_status` 是发布时不可变的覆盖结论；`source_state` 与 `source_layers` 只描述目前可读的已纳入来源，逐层保留 `verified | source-only | missing`、Document 或 Knowledge、压缩层级和上游 Artifact ID。历史排除的输入不伪装成当前缺源，其细目仍从固定 Artifact 的 coverage reader 取得；本 v2 摘要用 `coverage-partial` 缺口标明历史覆盖不足。发布时仅 degraded 的 partial 可以没有当前 missing；完整发布后原件缺失也可以变成 source-only。`source-only` 只说明仍可读已存来源，不声称原 PDF/Document 已验证。历史排除输入的当前层保持 `missing`；已纳入且无文档的输入只有在原材料再次验证成功时才给 `source-only`。单篇读取同样通过正式固定产物 reader/来源闭包，缺失、损坏与 source-only 不合并为一个状态。`independent_literature_ids` 由**当前断言的 evidence** 逐条追溯，不能把整份综合的来源数复制给每条断言；多个问题产物、重解析版本或一篇论文的多个摘要，不增加独立科研支持数。
-
-coverage 同时报告材料与知识各自的 generation/source revision、选中类型、候选上限和缺项。知识 `knowledge-missing` 只说明指定范围/用途/问题/选择下没有已发布且已被显式索引纳入的产物；已有索引产物但当前词不匹配时不报此缺口。该判断使用固定 projection 的存在性查询，不扫描产物字节；索引尚未建立、旧 generation、陈旧和损坏分别报告，不能说未分析。混合请求中单支索引不可用、损坏或陈旧时，保留另一支已验证的结果，整体 coverage 为 `partial`，并给失败支 `material-index-*` 或 `knowledge-index-*` 缺口；失败支的 generation 为空，也不能携带该支 item，不把它误写为无产物。当前 `source-only` 用 `source-only` 缺口，发布时 partial 用 `coverage-partial` 缺口，各自独立；不能以 complete 和空 gaps 宣称完整，也不能把历史覆盖不足说成当前 `source-missing`/`source-corrupt`。命中后通过固定 ID 的正式 Knowledge/Synthesis reader 验证内容字节、manifest、精确依赖和证据；同一请求的知识命中共享一个有界读取会话与上游缓存，材料候选先固定 generation、再仅展开入选项，材料与知识验证字节共用 64 MiB 上限。单个来源缺失/损坏给带 Artifact ID 的 `source-missing`/`source-corrupt` 缺口，并继续其它命中；缺口页最多 32 项，超出时用继续位置分页。只验证入选的有界项，不读全库所有产物。cursor 绑定规范请求、实际参与的 generation/revision 和最后已交付项；任一参与索引变化均拒绝旧 cursor。最终 JSON（包括来源、证据、缺口、usage、cursor）按 UTF-8 实测；不足以容纳首项完整内容时可交付无正文的固定引用及 `context-too-large`，连引用都放不下则拒绝，不能推进游标跳过未交付项。取消、缺源或坏源不触发维护、模型、外网、扩库、解析或生成。
-
-知识投影独立于 v4 材料投影。Catalog v8 在冻结的 v7 完整 manifest 后 append `knowledge_retrieval_*` revision/generation/entry/FTS/active/迁移回执及参加投影或筛选的源表触发器；不改写 v1–v7 DDL/fingerprint，也不让知识发布使旧材料 cursor 无故 stale。新知识 generation 按 Artifact/statement 的精确 ID、content hash、用途/问题、source closure 和索引规则版本绑定；派生 FTS 正文包括断言文本、条件及数量的值/单位/比较基准，按 Unicode casefold 规范化。单条派生标题最多 8192 UTF-8 字节、正文最多 65536 UTF-8 字节，批次最多 1 MiB；超限拒绝该次重建，不截断已经发布的来源。FTS 只提供候选，原文仍从正式 reader 取。知识索引维护是独立显式操作，不改变已有 `rebuild-index` 及其 v1 回执。维护分批构建、检查源 revision，以 CAS 原子切换知识 active；正常发布保留旧 ready generation，损坏修复可在事务内替换坏投影和旧 generation，失败或取消保留原 active，源事实不回滚。索引检查在单个 SQLite snapshot 中验证 DDL、revision、计数/hash 和 active；缓存只在相同 data version 与无本连接写入时复用。材料与知识维护可分别成功，分别报告，查询不会隐式重建。v7→v8 只在系统临时目录的合成 catalog 上显式检查、同目录可恢复备份、事务迁移并复核；旧 reader 仅按各自声明的已支持版本读取，未知 v8 不被旧程序悄悄接受。v8 的 Library/Document/Knowledge/Synthesis reader 和材料 Context 仍可读已提交事实；知识投影损坏时 source-only 检查可读取源，知识 Context 报 index-corrupt，业务 writer 严格拒绝未知或被篡改的 DDL。
+结果记录与全文投影由结果存储维护，生成成功但索引失败时保留不可变结果，可显式重建；不是另一份知识产物事实。结果输入及递归引用见[知识加工](05-knowledge-processing.md#3-结果格式与发布)，当前单一 catalog 与投影完整性见[存储](07-versioned-storage.md#4-知识版本依赖与回收)。
 
 ### 4.8 示例与验证
 
@@ -603,3 +541,66 @@ coverage 同时报告材料与知识各自的 generation/source revision、选�
 调用方进一步展开某个断言时，Q 转交 EvidenceRef 给 Document/Evidence；若旧表示被合法失效，返回该状态，不替换成新的近似段落。用户选择“分析这三篇”后才进入独立 Analysis 请求，并固定三篇实际版本。
 
 验证分两层：行为测试证明无隐式写入/外联、范围隔离、预算准确、重复版本不夸大、截断与取消明确；检索质量评估使用版本固定的合成或获准语料、问题与相关证据标注，记录召回/排序/关键条件保留。测试通过数不能代替召回率，模型自评也不能证明检索完整。
+
+## 5. 目标接口（尚未实现）
+
+本节集中保留尚未整套实现的目标合同；当前实现以源码为准，设计记法不等同于已发布 API。
+
+### 5.1 查询合同
+
+#### 5.1.1 范围和内容种类
+
+```ts
+interface KnowledgeQuery {
+  readonly query: string;
+  readonly scope: QueryScope;
+  readonly kinds: readonly ("metadata" | "document" | "knowledge")[];
+  readonly version_policy: "default" | "explicit";
+  readonly budget: ContextBudget;
+  readonly continuation: string | null;
+}
+type QueryScope =
+  | { kind: "library" }
+  | { kind: "literatures"; literature_ids: readonly string[] }
+  | { kind: "manifest"; manifest: InputManifest };
+interface ContextBudget {
+  readonly max_items: number;
+  readonly max_bytes: number;
+  readonly token_limit?: { tokenizer: string; max_tokens: number };
+}
+```
+
+`library` 指现有逻辑文献库，绝不表示外部互联网。显式 manifest 固定版本；default 在本次读取开始时解析为具体引用后固定。空范围、无效 ID、未知内容类型、超限预算和不支持 tokenizer 分别拒绝，不将无效请求扩大为全库搜索。
+
+源材料的身份按 LiteratureId，而不是标题模糊匹配。用户过滤到某个预印本时，不能自动返回正式版正文充数；允许相关版本展示时必须明确标记不同版本和关系。
+
+#### 5.1.2 结果合同
+
+```ts
+interface ContextBundle {
+  readonly items: readonly ContextItem[];
+  readonly coverage: QueryCoverage;
+  readonly gaps: readonly Gap[];
+  readonly usage: {
+    bytes: number;
+    items: number;
+    tokens: number | null;
+    tokenizer: string | null;
+  };
+  readonly truncated: boolean;
+  readonly continuation: string | null;
+}
+interface ContextItem {
+  readonly kind: "metadata" | "source-text" | "generated-knowledge";
+  readonly literature_id: string;
+  readonly reference: MaterialRef | DocumentRef | KnowledgeArtifactRef;
+  readonly text: string;
+  readonly evidence: readonly EvidenceRef[];
+  readonly rank: number;
+  readonly score: number | null;
+}
+```
+
+`reference` 按 kind 进一步采用判别式 parser，示意 union 不意味着任意组合都合法。元数据命中可以没有 PDF；知识命中必须能追到其输入和证据。压缩产物与原文不可共用一个含义模糊的 `content` 标签。
+
+QueryCoverage 表达已搜索的数据类型、索引 generation、可见范围、排除/失败部分和截断；不等于穷尽了所有相关研究。score 是具体算法的相关性指标，不能标成科学置信度或跨算法通用概率。

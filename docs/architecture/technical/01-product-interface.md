@@ -1,5 +1,9 @@
 # 01 · 统一产品接口技术设计
 
+类型：规格
+负责：统一产品操作、配置发布与中性合同；Web 前端技术栈；technical 中早期形式化接口（Entry）
+状态：现行；目标接口单独成节
+
 [设计总览](../design.md) · [八模块技术导航](../technical.md)
 
 本模块对应设计中的 **① 统一产品接口**，把科研 Agent、CLI 和人类工作台的意图转换成一致的产品操作。查询分派到⑥；明确维护分派到②；业务接纳由③④⑤各自决定。
@@ -16,6 +20,7 @@
 - [4. 人类工作台与知识阅读](#4-人类工作台与知识阅读)
 - [5. 共享支撑：配置与凭据](#5-共享支撑配置与凭据)
 - [6. 共享合同、结构解析与版本兼容](#6-共享合同结构解析与版本兼容)
+- [9. 目标接口（尚未实现）](#9-目标接口尚未实现)
 
 ## 1. 模块边界与连接
 
@@ -58,7 +63,7 @@
 
 parse/analyze/extraction 不继承 acquire 权限。旧 `complete content` 仍是明确维护命令，可按兼容语义包含获取、解析和旧分析；新 query/knowledge 用例不能调用它作为缺口 fallback。
 
-当前单篇知识维护使用 `Application.maintenance.analyze` 和受同源 Cookie/CSRF 保护的 `POST /api/v1/maintenance/analyze-knowledge`。协议封套为 `{protocol_version:1,request:KnowledgeAnalysisRequest}`，成功为 `{protocol_version:1,result:KnowledgeAnalysisReceipt}`。请求只支持一个有材料和可读表示的 `InputManifest` v1、`overview/detailed/question`、问题及可选默认 CAS（历史 budget 可省略且不执行）；模型和方法身份由服务端实际有效绑定决定，客户端不能伪造。`startMaintenanceWorkbench` 的表单先核对所选 PDF 和默认表示，再明确启动分析；`createQueryApplication(home).knowledgeRead.byId/list/default` 与 `POST /api/v1/query/knowledge-read|knowledge-list|knowledge-default` 只读，不启动模型。知识列表是按 Literature ID 的最近历史产物，按 ID 读取返回完整结构、片段证据和覆盖；v8 显式索引后的知识排序与混合 Context 见[知识查询](06-retrieval-context.md#410-m07-t03-知识-context-版本合同)。HTTP 同源/JSON/版本和共享 parser 拒绝非法或重复键，维护断连/关闭会取消在途分析，已提交的知识仍保留。精确内容与 v6 依赖见[知识加工](05-knowledge-processing.md#2-分析与综合)和[版本化存储](07-versioned-storage.md#4-知识版本依赖与回收)。
+当前单篇知识维护使用 `Application.maintenance.analyze` 和受同源 Cookie/CSRF 保护的 `POST /api/v1/maintenance/analyze-knowledge`。协议封套为 `{protocol_version:1,request:KnowledgeAnalysisRequest}`，成功为 `{protocol_version:1,result:KnowledgeAnalysisReceipt}`。请求只支持一个有材料和可读表示的 `InputManifest` v1、`overview/detailed/question`、问题及可选默认 CAS（历史 budget 可省略且不执行）；模型和方法身份由服务端实际有效绑定决定，客户端不能伪造。`startMaintenanceWorkbench` 的表单先核对所选 PDF 和默认表示，再明确启动分析；`createQueryApplication(home).knowledgeRead.byId/list/default` 与 `POST /api/v1/query/knowledge-read|knowledge-list|knowledge-default` 只读，不启动模型。知识列表是按 Literature ID 的最近历史产物，按 ID 读取返回完整结构、片段证据和覆盖；v8 显式索引后的知识排序与混合 Context 见[知识查询](06-retrieval-context.md#410-处理器结果与混合-context)。HTTP 同源/JSON/版本和共享 parser 拒绝非法或重复键，维护断连/关闭会取消在途分析，已提交的知识仍保留。精确内容与 v6 依赖见[知识加工](05-knowledge-processing.md#2-分析与综合)和[版本化存储](07-versioned-storage.md#4-知识版本依赖与回收)。
 
 单篇长文另用 `Application.maintenance.analyzeLong` 与 `POST /api/v1/maintenance/analyze-knowledge-long`，内层请求为 `KnowledgeLongAnalysisRequest` v2，外层仍是协议 v1。固定输入加工不设置业务 token、次数、累计输入或整篇时长预算；网页只选择长文模式、用途和输入。Analysis 实际执行局部调用和有界整合，只有完整处理及证据校验成功才发布 v1 知识产物；普通请求 v1 的全文字节含义不变。当前 TS 失败异常可携带调用统计；HTTP 返回安全错误 code 及适用的 reason/retryable，不声称已经返回详细成本账单。精确分块、邻接证据与整合限制见知识加工正文。
 
@@ -163,7 +168,7 @@ Document/Evidence 返回精确版本的片段、资源与 EvidenceRef。知识�
 
 外部提取：读取能力 → 绑定调用方 Spec 与 manifest → read/检索/展开证据 → 外部程序提取 → submitExtractionBatch → 获得候选与校验回执 → 下游科学接纳。整条路径允许没有内部模型配置。
 
-当前只读准备段由 `createQueryApplication(home).extractionPreparation.prepare({spec,inputs})` 和 `POST /api/v1/query/extraction-prepare` 提供：校验规范与有序输入，返回固定材料 manifest、能力与缺口；查询页提供同一表单。它不创建 operation 或回执。显式接纳段由 v5 维护 Application 的 `extractionDelivery.create/submit` 和受同源会话/CSRF 保护的 `POST /api/v1/maintenance/extraction-operation|extraction-submit` 提供；维护页可创建 operation、提交有界批次、关闭/取消、读取回执及清理。两个 HTTP 面均使用 `{protocol_version:1,request:...}` 封套与严格 JSON 解析，成功返回 `{protocol_version:1,result:...}`。提交不继承 query 的只读身份，也不启动获取、解析或模型；spec、manifest、批次、期限与错误码见[知识加工合同](05-knowledge-processing.md#4-调用方规范与提取交付)和[用户指南](../../guides/library-query.md#候选批次交付catalog-v5-维护)。
+当前只读准备段由 `createQueryApplication(home).extractionPreparation.prepare({spec,inputs})` 和 `POST /api/v1/query/extraction-prepare` 提供：校验规范与有序输入，返回固定材料 manifest、能力与缺口；查询页提供同一表单。它不创建 operation 或回执。显式接纳段由 v5 维护 Application 的 `extractionDelivery.create/submit` 和受同源会话/CSRF 保护的 `POST /api/v1/maintenance/extraction-operation|extraction-submit` 提供；维护页可创建 operation、提交有界批次、关闭/取消、读取回执及清理。两个 HTTP 面均使用 `{protocol_version:1,request:...}` 封套与严格 JSON 解析，成功返回 `{protocol_version:1,result:...}`。提交不继承 query 的只读身份，也不启动获取、解析或模型；spec、manifest、批次、期限与错误码见[知识加工合同](05-knowledge-processing.md#4-调用方规范与提取交付)和[用户指南](../../guides/knowledge-processors.md#提取范围和证据)。
 
 准备请求与结果使用共享运行时 parser；结果必须对应所请求规范、输入顺序、资产 hash 和显式文档版本。文件或文档损坏报告 `input-integrity`，明确缺失报告 `input-missing`，关闭/断连会取消并等待在途读取。只读入口不会因为能力缺口生成文件级替代片段证据。
 
@@ -195,40 +200,7 @@ CLI 或其它入口只负责：
 
 #### 3.1.1 Entry 公开 API
 
-目标 Entry API 只公开下面这些文献数据库用户操作。表中的英文是稳定责任名，不是当前 TypeScript 函数名，也不能据此推断对应导出已经存在。它们与[文献操作 CLI 与 operator 入口](#312-文献操作-cli-与-operator-入口)的文献操作 CLI 对应，但 API 名称和 CLI 层级仍是两个不同合同，不能通过字符串转换自动生成。`config` 是生产启动配置的 CLI 边界，直接复用根级 configuration/bootstrap 能力，不进入文献业务 API。
-
-| 能力              | 目标 Entry responsibility    | 输入                                                                                                       | 直接结果                           |
-| ----------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| 领域发现          | `discover_topic`             | `TopicDiscoveryInput`                                                                                      | `DiscoveryReport`                  |
-| 引用发现          | `discover_citations`         | `CitationDiscoveryInput`                                                                                   | `DiscoveryReport`                  |
-| 数据库补全        | `complete_database`          | `BatchRequest`                                                                                             | `DatabaseCompletionReport`         |
-| 手动 PDF 接纳     | `admit_manual_pdf`           | `LiteratureId`；PDF 是本次只读 binary input                                                                | `ManualPdfReport`                  |
-| 本地文献搜索      | `search_literature`          | `LibrarySearchRequest`                                                                                     | `LibrarySearchPage`                |
-| 单篇详情          | `get_literature_detail`      | `LiteratureId`                                                                                             | `LiteratureDetail`                 |
-| 正向/反向引用页面 | `list_literature_references` | `LiteratureReferenceRequest`                                                                               | `LiteratureReferencePage`          |
-| 引用关系详情      | `get_reference_detail`       | `ReferenceId`                                                                                              | `ReferenceDetail`                  |
-| Artifact 打开     | `open_artifact`              | `Asset \| ParserArtifactRef \| ArtifactRef`                                                                | context-managed 只读 binary stream |
-| Artifact 导出     | `export_artifact`            | 同一 artifact 引用；本次目标路径；显式覆盖开关                                                             | 正常返回或稳定文件错误             |
-| 书目导入          | `import_bibliography`        | `BibliographyFormat`；本次只读 binary input                                                                | `ImportReport`                     |
-| 书目导出          | `export_bibliography`        | `BibliographyFormat`；全库、DiscoveryRun、LibraryQuery 或明确 MetaLiterature/Literature 范围；本次目标路径 | `ExportReport`                     |
-
-其中 binary input、binary stream 和目标路径是 I/O boundary 对象，不是跨模块业务数据；它们不进入 JSON、Catalog、provenance 或 Report。手动 PDF 和书目导入可以由 CLI 路径、stdin 或程序内 reader 提供，但进入业务用例后只看到 reader 和已经解析的中性数据。Artifact 和书目导出在 Entry 边界接收用户目标；内部文件读取与原子输出分别通过受控 Port 完成。当前 TypeScript contracts 的具体解析和类型以 `packages/contracts` 为准。
-
-这些操作的副作用边界固定为：
-
-| 操作组                                     |            访问外部 Provider |                       修改文献数据库 | 创建 DiscoveryRun |                形成处理 Report |
-| ------------------------------------------ | ---------------------------: | -----------------------------------: | ----------------: | -----------------------------: |
-| 领域/引用发现                              |                           是 |                                   是 |                是 |          是，`DiscoveryReport` |
-| 数据库补全                                 |           按缺失步骤可能访问 |                                   是 |                否 | 是，`DatabaseCompletionReport` |
-| 手动 PDF 接纳                              |                           否 |                                   是 |                否 |          是，`ManualPdfReport` |
-| 搜索、详情、引用页面/详情                  |                           否 |                                   否 |                否 |                             否 |
-| Artifact 打开/导出                         |                           否 |             否；导出只写用户目标文件 |                否 |                             否 |
-| 书目导入                                   |                           否 |                                   是 |                否 |             是，`ImportReport` |
-| 书目导出                                   |                           否 |                 否；只写用户目标文件 |                否 |             是，`ExportReport` |
-| 统一配置中心与 status                      |                           否 | 否；只安全修改普通配置和固定凭据文件 |                否 |                             否 |
-| Provider/Analyze/Browser Model/MinerU test | 是；仅用户显式最小只读 probe |                                   否 |                否 |                             否 |
-
-读取操作直接返回 read result；不能为了接口统一套通用 Report。写数据库的四组入口必须取得写入准入，并只提交各业务模块已经确认的事实。公开 API 不接受 Provider 名称之外的私有参数、SQL、内部路径、adapter、数据库连接、HTTP client、Parser client 或 LLM client；实现选择只在 Bootstrap。
+完整目标接口见[Entry 公开 API](#91-entry-公开-api)；当前实现以源码为准。
 
 #### 3.1.2 文献操作 CLI 与 operator 入口
 
@@ -386,14 +358,14 @@ React以React Aria管理键盘/焦点/浮层，TanStack Query管理请求生命�
 
 同一正式 HTTP server 在 Host/Origin/Cookie/client/CSRF 验证后复用完整 `/api/v1/query/*` 与 `/api/v1/maintenance/*` handler，QueryApplication 固定到启动时同一数据库/资产目录。配置保存不切换已打开的运行库。独立 query-only 仍仅有读取能力，独立 maintenance 保留原有认证；共用 handler 不扩大只读部署权限。正式启动、配置与运行边界见[Web 指南](../../guides/web-workbench.md)。
 
-#### 4.2.1 统一处理器 HTTP 适配（2026-10-18）
+#### 4.2.1 统一处理器 HTTP 适配
 
 处理器沿用 `entry/processor-operations.ts` 的 `queryProcessors` 与 `submitProcessor`，与 CLI/MCP 共用冻结、执行与结果 owner。生产工作台和独立维护入口通过 `processorHttpAdapters` 显式组装提交能力；只读入口没有该适配。维护对象保持原 owner 引用，新增提交适配单独传入 HTTP handler。
 
-| 路由 | 请求 | 成功回执 |
-| --- | --- | --- |
-| `POST /api/v1/query/processors` | `{protocol_version:1, operation, request}`，operation 为 list/read/results/collections/collection/search/search-collections/query/evidence/export/transfer | `{protocol_version:1, result}` |
-| `POST /api/v1/maintenance/processor-submit` | `{protocol_version:1, request:ProcessorBatchRequest, start:boolean}` | HTTP 202，`{protocol_version:1, task}`；task 包含持久 job_id，不表示执行完成 |
+| 路由                                        | 请求                                                                                                                                                       | 成功回执                                                                     |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `POST /api/v1/query/processors`             | `{protocol_version:1, operation, request}`，operation 为 list/read/results/collections/collection/search/search-collections/query/evidence/export/transfer | `{protocol_version:1, result}`                                               |
+| `POST /api/v1/maintenance/processor-submit` | `{protocol_version:1, request:ProcessorBatchRequest, start:boolean}`                                                                                       | HTTP 202，`{protocol_version:1, task}`；task 包含持久 job_id，不表示执行完成 |
 
 两端严格解析 JSON 封套、拒绝重复键和未知字段；查询参数复用对应 action 合同。正式工作台要求同源 Cookie、client grant 与 `X-Workbench-Csrf`；维护请求另带 `X-Sciretriever-Protocol-Version:1`，独立维护部署继续使用自身 Cookie/CSRF。仅查询部署的提交路由返回 404，不会因读取 registry 组装写入能力。旧 catalog 可读取离线 registry，读取 v10 结果返回 `catalog-v10-required`，不会隐式升级。
 
@@ -401,7 +373,7 @@ React以React Aria管理键盘/焦点/浮层，TanStack Query管理请求生命�
 
 提交在客户端断连／服务关闭时取消未完成的输入准备；已经保存的任务仍由持久任务 owner 管理，重试使用原幂等键核对。`start:true` 请求保存后在所属 runtime 启动，状态和结果仍通过任务服务读取。HTTP 错误携带稳定 code，不暴露内部异常或任意文件路径。新路由为现有处理器能力的适配，不新增 catalog schema、领域字段或执行引擎。
 
-#### 4.2.2 处理器大结果传输（2026-10-19）
+#### 4.2.2 处理器大结果传输
 
 新增只读 action `transfer`，CLI `processors transfer --request …`、MCP `processor_query {action:"transfer",request}`、HTTP query/processors 共用 Analysis 的导出/传输实现，Storage 仍负责完整性核验。既有 `read/export` 的小结果合同保持兼容，不改变 catalog schema、8 MiB 文件上限和 4 MiB MCP 回执上限；ADR 0033 的共享能力与受控资源边界不变。
 
@@ -528,220 +500,11 @@ descriptor 读取并复核文件身份，替换、过大、非法 UTF-8/TOML 或
 
 ### 5.4 普通配置合同
 
-Provider 启用顺序、产品选择、contact identity、访问池、Storage 路径和客观单次资源限制属于普通
-配置。模型配置分成两个直接注册表：
-
-```text
-providers.<name>.api / base_url
-models."<provider>/<model>".reasoning / image / stream
-```
-
-Model Provider 是可复用 transport 与 exact-origin credential scope，只拥有本地 name、API 协议和
-Base URL。Model 以完整 `provider/model` 为唯一身份，只拥有 reasoning、image 与 stream；必须引用已经存在
-的 Provider。被 Analyze/Browser 引用的 Model 不能删除，仍有 Model 引用的 Provider 不能删除。
-配置不建立 Model Profile、Preset、Entry、alias 或 task-level reasoning override。
-
-支持的 wire API 是 OpenAI Responses、OpenAI Chat Completions 与 Anthropic Messages。三种协议
-都继承具体 Model 的 `stream`：默认 `true` 并由 Agents 在内部消费有界 SSE；显式 `false` 时只
-请求和解析非流式 JSON。Analyze/Browser 不增加 override，失败后也不自动切换模式。远程
-Provider 必须使用 hostname-based HTTPS 并要求 API key；HTTP 只允许 loopback 且不读取 key。URL
-统一拒绝 userinfo、query、fragment、remote IP literal、dot segments、编码分隔符和非规范端口
-文本。官方 Provider 选择只为配置向导提供 URL/API 初值，不形成另一套持久 preset。固定的单次
-prompt/input/schema/request/response/result 字节上限与 HTTP timeout 由 Agents 实现和 Bootstrap
-组装，不是普通 TOML 字段。
-
-任务直接引用 Model：
-
-```toml
-[analyze]
-model = "openai/gpt-5.4"
-
-[browser]
-model = "openai/gpt-5.4"
-```
-
-`[analyze]` 另外只保留文献两阶段 output、输入与 chunk 等业务预算；`[browser]` 另外只保留
-Browser 启用、Profile 和本机资源政策。两者不保存 Provider、key、远端 model、reasoning 或 stream override。
-Analyze 可以引用任意已配置 Model，其 strict structured output/text-only/no-tool 合同由模块派生；
-`[browser]` 只允许引用 `image = true` 的 Model，其当前生产 Observation 的
-`image/jpeg`/image/tool 合同由模块派生。Browser 总是使用唯一 Agent controller。
-
-远端 model identity 在 Configuration 边界规范化为 NFC，并拒绝空白、C0/C1 控制字符、无效
-UTF-8 和超过 512 bytes 的值；Provider name 最长 128 bytes，完整 reference 最长 641 bytes。同样
-约束在 Agents binding 与 request 边界再次执行。reasoning 接受
-`default/none/minimal/low/medium/high/xhigh/max`；`default` 让 adapter 省略 wire effort，其它值
-按协议精确编码，不从 Provider/model 名称猜测或静默降级。context/output、structured output、
-tool decision、图片 MIME/数量/大小、session turns、Browser deadline 和累计作业预算都不进入
-Model 配置，由当前消费模块和 Bootstrap 的安全合同拥有。stream 是调用传输行为，不是 capability；
-它由 Model 拥有并进入请求参数 hash。
-
-旧 `[agents]`、`[agents.analysis]`、`[agents.browser]`、`[models.services.*]`、
-`[models.profiles.*]`、`[models.entries.*]`、`[analysis]` 与 `[access]` 不进入普通生产
-解析，也没有字段映射迁移器、双生产路径或恢复入口。裸 `config` 在首页前严格读取当前普通
-配置与凭据；malformed、未知 section/key、无效值以及文件过大、链接、所有权/权限、目录或读取
-竞争错误都返回退出码 4 和无配置值诊断，不显示菜单、不写文件。文件缺失按尚未写入的空当前
-配置处理；第一次确认修改仍走正常原子发布。
-
-`[parsing]` 只保存 connection mode、Base URL、model identity 与 remote upload consent。
-MinerU 3.4.4、protocol 2、profile `vlm-engine`、archive backend `vlm`、parse method `auto`
-是只读实现事实，不是 backend 选择。loopback 只接受 HTTP loopback 且不需要 token；remote
-只接受 hostname-based HTTPS，必须明确确认 PDF 离开本机并配置 bearer token。
-
-#### 5.4.1 Source 选择与逐 Source limit
-
-`Configuration.sources.metadata` 与 `Configuration.sources.acquisition` 都使用严格的
-`SourceMode.AUTO/CUSTOM`。配置文件形状是：
-
-```toml
-[sources.metadata]
-mode = "auto"
-limit = 500
-
-[sources.acquisition]
-mode = "auto"
-```
-
-Auto 时 `providers` 必须为空，运行时由 `configuration/index.ts` 与 `metadata/registry.ts` 的本地常量解析有效
-有序集合；Custom 时 `providers` 是用户精确列表并允许为空。resolver 不读取 credentials、环境、
-Network 或 readiness，也不把结果写回配置。Metadata Auto 固定为 Crossref、Semantic Scholar、
-arXiv、OpenAlex、Europe PMC、DataCite、CORE；OpenCitations 可显式配置用于引用能力，不在当前 Auto 列表。Acquisition Auto 的命名 Source
-固定为 arXiv、Europe PMC。默认 catalog 是当前 release 事实，可以随版本维护；Custom 列表不受
-catalog 变化影响。
-
-`sources.metadata.limit` 是严格正整数，默认 500。Metadata registry 把同一值分别复制成每个
-参与 topic/reference Source 的 `ProviderDiscoveryLimit`；OpenCitations 没有 topic-search port，
-因此当前 Auto 主题搜索的理论原始 item ceiling 是 `7 × limit`。计数发生在过滤、准入、去重和
-接纳前，不是 HTTP 请求数。旧 `DiscoveryConfig`、顶层 `[discovery]` 和
-`metadata_scan_limit` 已删除，解析边界将其作为未知 schema 拒绝，不提供兼容层。
-
-Auto/Custom 只决定命名 Source enablement。可选 Key 可以改善已经有效的 Metadata Source，不能
-反向启用 capability；Acquisition 始终消费安全的 direct/landing AssetHint。Sci-Hub、Browser 和
-需要 operator 参数或授权凭据的 Acquisition API 不进入 Auto。
-
-#### 5.4.2 Sci-Hub 有序镜像配置边界
-
-Sci-Hub Source 默认关闭。operator 显式启用且没有 custom table 时，Acquisition 使用当前版本的
-bundled mirror set；bundled 列表是 release 实现事实，不写入用户 TOML，升级可以更新它。
-`sources.acquisition.sci-hub.urls` 是可选的一到八项有序 custom override；一旦存在就完整覆盖
-bundled 列表，升级不得改写该用户列表。每项在 Model 边界规范化为 hostname-based HTTPS 默认
-端口 Base URL；userinfo、query、fragment、IP literal、loopback、dot segment、编码路径分隔符、
-重复规范 URL 与未知字段全部 fail closed。有效列表的顺序是唯一尝试顺序，不形成健康度、权重、
-并发组或第二套运行状态。URL 不属于 credentials，Sci-Hub 也没有
-Key/Cookie/session/代理/selector/script 配置。
-
-Acquisition registry 在无 I/O 组装中按“显式注入 resolver → custom `urls` → bundled mirror set”
-选择 `ConfiguredSciHubLandingResolver`。该 resolver 只把已接纳 canonical DOI 逐 segment 编码后
-附到每个 Base URL，不访问 Network；缺 DOI 时 route 不适用。显式注入只用于程序集成和离线测试，
-不是兼容 schema 或普通用户的必需依赖。未启用 Source 时即使 bundled/custom 已就绪也不安装 route。
-
-交互所有权固定在 `Download → Sources → sci-hub`。未启用时入口动作是
-`Enable / Mirrors / Back`，Enable 直接使用当前有效列表；已启用时是
-`Mirrors / Disable / Back`。镜像编辑器为 `Add / Remove / Save / Reset / Back`：从当前有效列表
-开始，Save 形成 custom override，
-Reset 删除 custom table 并重新跟随 bundled，Back 不发布 draft，空列表不能 Save。Disable 保留
-custom override。URL 列表由当前 TypeScript configuration parser 做最终规范化、唯一性与上限验证，CLI 不建立平行 validator；
-Status 以 `mode = builtin|custom` 与有效 `urls` 明确两种状态。
-
-#### 5.4.3 Browser access 配置边界
-
-ADR 0023 的普通配置只表达 Browser Agent Model、总启用选择、固定身份 Profile、本机 Browser 资源
-上限，以及对 `browser-generic` policy 的收紧值。普通配置不能：
-
-- 新建或改写 Browser route、Publisher 点击规则、`browser-generic` policy revision 或文章起点；
-- 把同一通用执行组按 DOI、Literature、Publisher、入口 URL 或随机任务拆开；
-- 提高并发/额度、缩短 interval/cooldown、忽略 window/`Retry-After` 或自动提速；
-- 配置第二个页面控制器、提供任意规则脚本、自动登录或绕过 Challenge 页面合同；
-- 配置 Browser Profile 路径、Cookie、账号、机构名、SSO/CARSI 内容、代理、fingerprint seed/persona
-  或其它认证材料；普通配置只允许选择一个 opaque Profile identity。
-
-Browser 使用当前机器的正常网络出口和一个 operator-managed 持久 Profile；在无 GUI Linux 上
-由 Xvfb 提供虚拟显示。生产 Configuration 只接受规范化的 Profile identity，不接受路径，也不
-读取、导入、导出或显示 Cookie、local storage、账号或机构身份。Configuration 把 identity 解析
-到固定 owner-only 目录，验证目录树和 identity manifest，并通过跨进程独占 lease 保证同一 Profile
-同时只有一个 CloakBrowser Chromium process。manifest 在 Profile 初始化时一次生成固定 seed、
-native Linux persona、locale/timezone、screen、identity schema 与 Browser version policy；status
-只报告 manifest schema/version readiness，不显示或派生 seed。纯 Browser 访问方不因为拥有 `PublisherAccessProfile` 就需要 Provider credential
-section；API token、Profile presence、Browser runtime readiness、登录状态与逐文章 entitlement
-始终是不同事实。Chromium 认证状态可以留在 Profile 中；页面登录/MFA/challenge 结果、runtime
-health、cooldown 和 circuit 不持久化回普通配置、凭据文件或文献数据库。
-
-当前普通配置字段为：
-
-```toml
-[browser]
-model = "openai/operator-selected-browser-model"
-enabled = false
-profile = "institutional-access"
-max_concurrency = 5
-policy_overrides = []
-```
-
-`enabled = true` 必须同时具有 `profile`，并启用唯一 `browser:generic` route；它不表示 Profile 已登录、
-当前 IP 或文章已获授权。Profile identity
-必须是不含敏感信息的稳定短名称，不能是路径、URL、UUID、账号、机构名、Token 或 Cookie 标签。
-`max_concurrency` 是必须大于 1 的全局本机资源 cap，不改变 `browser-generic` 固定的组内并发 1。
-默认值 5，配置合同不设置上限；所有文章共享一个 CloakBrowser Chromium process/persistent
-context，不会因为 cap 较大而启动多个 Browser。Browser 必须选择一个 `image = true` 的 Model；
-tool decision、当前生产 Observation 的 `image/jpeg` 与正数 image limits 由模块合同派生。
-
-普通配置不接受逐 Publisher 的本机许可声明。`enabled = true` 是对整个受控 Browser 第三层的一次
-显式启用；合法 canonical landing 无需匹配 Publisher rule 即可进入 generic Agent。该开关不能证明
-组织合同、当前 IP 或具体文章权限；Network admission、通用 policy 与 Acquisition 的 PDF/文章
-归属验收仍逐篇执行。
-
-`policy_overrides` 是按 `rate_limit_group` 唯一标识的 inline-table 数组。每项只允许
-以下收紧字段：
-
-```text
-max_concurrency = 1
-minimum_start_interval
-maximum_starts_per_window + window_seconds
-cooldown_after_completion
-rate_limit_cooldown
-failure_cooldown
-runtime_failure_threshold
-```
-
-窗口计数和时长必须成对出现；时间必须是有限非负数，需要正值的窗口和 rate-limit cooldown
-不能为 0；阈值和计数必须为正整数。相对通用 baseline，并发/窗口计数/运行失败阈值只能
-减小，interval/window duration/cooldown 只能增大。未知 group、重复 group、空 override、负数、
-`inf`/`nan` 或任何放宽都会在 Configuration 边界拒绝。配置不接受 policy revision、session key、
-origin、selector 或 Browser rule 字段。当前唯一 group 是 `browser-generic`，基线为并发 1、最小
-启动间隔 1 秒、每小时最多 120 次启动、限流冷却 60 秒、普通失败冷却 5 秒和连续 3 次 runtime
-failure 熔断。任何其它 group 都以 `browser policy group is unknown` fail closed。普通 `[browser]`
-字段已经接入严格 TOML、round-trip 编辑和交互管理；status 分开呈现唯一 production route、总开关、
-CloakBrowser wrapper/经验证 binary、Playwright API、固定 Profile 与 headed display，文章
-entitlement 始终在实际获取时检查。
+普通配置字段、默认值、模型/来源选择及 Browser 收紧项统一见[配置手册](../../guides/configuration.md#2-普通配置字段)。Configuration 负责严格解析与原子发布；业务模块不得另建配置解析或默认值。本篇保留发布、凭据隔离和运行时生命周期的技术合同。
 
 #### 5.4.4 CloakBrowser binary 与 Profile identity 生命周期
 
-当前 `cloak-runtime.ts` 校验安装 bundle、固定 manifest/身份及不可伪造的 VerifiedCloakRuntime；Host 使用该对象启动。以下安装签名、Profile 接纳与删除规则是完整生命周期设计，不表示当前 CLI 已交付所有安装/升级操作。Python wrapper 的 cache/banner 细节不属于当前生产路径。
-
-历史 CloakBrowser Python wrapper/wheel 依赖记法不属于当前 TS 产物；patched Chromium binary 具有独立许可、版本与平台生命周期，不能进入 package、仓库、`config.toml` 或 Profile。Configuration 把它解析到固定
-owner-only runtime/cache root，并维护不含 secret 的安装 manifest：wrapper version、binary version、
-platform/architecture、vendor digest/signature、verified-at、compatible Playwright range 与上一个已
-验证版本。普通 Completion 只读取 manifest/readiness，缺失或不匹配时 fail closed，绝不隐式联网
-下载或自动升级。生产 runtime lease 不把该长期 root 直接交给 vendor wrapper；它在系统临时目录
-创建 owner-only 的单次无凭据 cache view，只暴露当前已验证版本目录，关闭 lease 后删除。因此
-长期 root 中即使意外出现 `license.key`、license cache、Pro marker 或其它 vendor 状态，也不能被
-普通 Completion 解析、注入 Browser 子进程或用于改变固定 binary。
-
-安装、更新和回退只能由配置中心中的显式动作触发。动作必须先显示网络、许可、磁盘和版本影响，
-下载到 owner-only staging，保留本次实际 archive，先用锁定 wrapper 的 Ed25519 公钥验证 detached
-signature 和 manifest version binding，再同时要求 manifest digest、仓库固定 digest 与实际 archive
-SHA-256 三者一致；之后才解压、校验完整 bundle 并原子发布。任一证据缺失、同版本 archive 被替换
-或 digest 漂移都会在解压前 fail closed，失败保留当前已验证版本。当前固定 older-free v146 路径
-不使用 Pro license，并在任何 vendor/network 调用前拒绝安装动作传入的 license key；
-`credentials.toml` 中保留的 `[cloakbrowser]` section 只为未来另行审查的版本线预留，不影响当前
-runtime。环境变量、cache-file credential、命令行和普通配置均不是当前 license 来源。删除 binary
-与删除 Profile 是两个独立确认动作，均不能由普通 Completion 或 reset 隐式执行。
-
-Profile identity manifest 与 Browser user-data directory 同属一个 owner-only Profile identity，
-但不读取或复制 Cookie/站点内容。新 Profile 一次生成 seed 后原子发布 manifest；同一 Profile 后续
-启动必须复用。现有 stock Chrome Profile 只有在程序创建的兼容 fixture 证明可安全接纳，且用户
-显式确认后，才允许以原子 manifest 初始化升级；否则 status 返回 `needs-new-runtime-profile`，
-要求创建新的 Cloak Profile，并保持旧目录完全不动。版本回退不得用较旧 Chromium 就地打开可能已
-升级的真实 Profile；需要时创建隔离 Profile，不通过保留双生产 runtime 解决。
+Browser binary/Profile 完整生命周期见[Browser 技术篇的目标设计](08-browser-control.md#62-cloakbrowser-binary-与-profile-identity-生命周期)。
 
 ### 5.5 统一 credentials schema 与 origin 绑定
 
@@ -1322,6 +1085,121 @@ Model 不能导入或暴露：
 
 ### 6.7 新知识合同的版本与组合
 
+完整目标接口见[新知识合同的版本与组合](#92-新知识合同的版本与组合)；当前实现以源码为准。
+
+### 6.8 设计依据与适用范围
+
+完整目标接口见[设计依据与适用范围](#93-设计依据与适用范围)；当前实现以源码为准。
+
+### 6.9 交换对象及其含义
+
+完整目标接口见[交换对象及其含义](#94-交换对象及其含义)；当前实现以源码为准。
+
+### 6.10 公共解析入口
+
+所有外部 JSON、数据库重建值、CLI/HTTP 输入都先作为 `unknown` 进入相应 `parse*` 边界：
+
+1. 校验对象类型及允许字段，不用 TypeScript 类型断言替代运行时验证。
+2. 按合同处理必填、null 与省略；不能把数据库损坏默认为空对象。
+3. 检查字符串/整数/判别联合/数组元素与跨字段结构约束。
+4. 构造新的中性值和只读数组，避免把外部可变对象传给业务层。
+5. 需要 hash 的解析器执行确定序列化和 hash 复核；异步 parser 必须被 await。
+6. 拒绝未知协议/schema 版本；不能在读取过程中回写升级。
+
+常用入口包括 `parseLiteratureMetadata`、`parseMetadataObservation`、`parseLibrarySearchRequest`、`parseParserResult`、`parseLiteratureDetail`、`parseLiteratureContentProposal` 和 `parseDatabaseCompletionReport`。`ContractValidationError` 只表示合同解析失败；展示边界还应区分非法用户输入与存储/上游对象违反合同，不能凭错误类型把真实故障说成零命中。
+
+解析器不得执行身份合并、元数据 precedence、PDF/内容判定、状态推导、入库/导出决策、环境读取或网络/文件 I/O。规范化 DOI 等纯格式处理与业务接纳分开；例如“至少有标题或 DOI 才能入库”由 Literature 的准入规则执行。
+
+### 6.11 字段记法与合同分布
+
+以下数据结构代码块使用语言中立记法：`str` 表示字符串、`int` 表示通过整数约束的 number、`None` 表示 JSON null，`tuple[T, ...]` 表示有序只读数组。它们描述字段与约束，不是可导入的 Python API。当前 TypeScript 示例使用 `readonly` 和 `null`；JSON 字段名保持兼容，不因语言迁移改名。
+
+## 7. MCP stdio 适配
+
+正式适配使用官方 MCP TypeScript SDK，`sciretriever mcp` 默认只读，`--maintenance` 增加
+显式维护工具；具体命令、schema 和行为见[Agent 接口指南](../../guides/agent-interface.md)。
+工具声明副作用并经过 JSON Schema 初检及所属产品合同解析；不开放 SQL、凭据、任意路径、
+Browser/CDP、脚本或任意 prompt。查询缺口不启动维护 Application。
+
+MCP 复用 Application/QueryApplication；stdio stdout 仅承载 JSON-RPC，调用错误脱敏。
+大型原始材料默认只交付引用，有界片段通过文档读取合同获得。提交任务只返回执行引用，
+完成与产物由任务和业务读取结果说明；不将工具调用成功等同于 PDF 或知识生成成功。
+
+MCP 服务进程存续期间任务可在工具调用之间继续；关闭进程会停止在途工作并保留已提交事实，
+停止后不继续后台执行。重启后的未知项需显式恢复，不自动重放收费调用。新进程读取任务
+通过只读 QueryApplication，不触发恢复。当前传输不扩展为远程多租户或常驻 daemon。
+
+### 显式连接现有运行时
+
+CLI/MCP 的 `--workbench-url` 接受显式 IPv4 HTTP origin（所有连接须提供同一 Web 密码或启动 API key），通过 `workbench/machine-client.ts` 连接已存在的工作台 HTTP owner。认证材料仅保留在进程内，动作沿用 WorkbenchActionCommand、session/article、epoch 和 lease 校验；工具只映射封闭业务操作。`runtime_*` 任务入口在该服务的同一个 Application 执行，独立机器进程不再争用执行锁。断开需确认服务端 detach；若仍持控制租约则遵守既有暂停政策。Web、CLI、MCP 的材料字节均经 LiteratureArtifactService 或 ManualPdfIngestionService，MCP 分块缓冲不构成持久业务事实。传输限额和命令见[Agent 指南](../../guides/agent-interface.md)。
+
+### Web 结果与阅读接入
+
+正式工作台使用共享处理器 `query/evidence/transfer`；`results` 增加可选 `literature_id`，Storage 在既有固定文档、材料、知识和结果输入关系上递归投影，排序和 next_after 语义不变，不新增业务表。无字段证据的未知记录仍按其固定输入关联文献。CLI/MCP 使用同一 Entry 验证与实现。
+
+React入口由Vite按需加载阅读模块，保留框架无关引擎；不再提供旧 `/reader.js` bundle。`build-reader-assets.mjs` 交付PDF.js worker、cMaps、标准字体、wasm、KaTeX字体和文字层CSS；静态服务只枚举随包资源，不把HTTP路径映射成任意文件路径。主工作台允许本地worker与受控Blob，仍拒绝JavaScript eval和外部连接。独立查询/维护使用相同React外壳，各自原有读取、CSRF和能力边界保持。
+
+PDF 原字节仍按固定 asset_id/hash、大小与 SHA-256 校验，受 256 MiB 读取上限约束；可见页及邻近页才持有 canvas/文字层。全文使用有界 document-slice 续读，按原始 UTF-8 与 Markdown 块映射保存位置、定位证据；CRLF 与 Unicode 不按 DOM 字符索引混算。图片通过 document-resource 分块读取并校验，不请求 Markdown 的远程图片 URL；内嵌支持 PNG/JPEG/GIF/WebP，单图超过 16 MiB 时显示不支持预览。会话 UI 状态按库和固定版本隔离，关闭文献释放状态。阅读没有模型、加工或索引重建副作用。
+
+### React适配与证据读取边界（ADR 0036）
+
+`apps/web/src/app/data/` 负责已有HTTP封套、固定来源解析、Query缓存和失效；`features/` 只保留页面展示与草稿，文献选择、任务、结果和持久事实仍由既有业务owner提供。TanStack Query消费AbortSignal，离开页面中止在途读取；Browser心跳和控制epoch变化不触发全库重读，真实发布和重连才失效材料查询。URL参数沿用既有格式，不引入另一套路由合同。
+
+处理结果使用既有processor `query/evidence/transfer`；文档证据使用 `evidence-resolve`，知识与综合使用 `synthesis-source`。旧知识库因此不需要处理器schema才能核对综合。综合递归来源保留并验证内容、输入清单和断言hash；只剩已存产物时明确“原PDF未复核”。分段证据验证实际UTF-8范围连续，跳转使用完整 `target_range`，不把首个传输块冒充完整证据。
+
+本机UI偏好包括主题、栏宽、默认阅读字号/行宽与按catalog隔离的保存筛选；它们不成为文献事实。它们只读写当前React命名空间，不读取旧键、不执行偏好迁移；不读取或复制凭据、Cookie、文献正文或其它应用数据。
+
+## 8. 运行审查与校订编辑
+
+三端新增读取 `proofread-text`、`agent-sessions`、`task-run`、`usage-estimate`、`processor-runs`、`literature-results`、`operation-history`，由统一 QueryApplication 提供有界读取，模型身份仅从配置解析，不加载凭据或调用模型。机器请求映射见[Agent 接口](../../guides/agent-interface.md#校订与运行审查入口)。
+
+维护操作 `proofread-save` 固定 asset、当前 proofread 版本和完整 Markdown，以 CAS 发布人工决定与新版本，然后重建文档、无模型结构规则和引用；后续失败返回已保存事实，不撤销人工稿。只有此 HTTP 路径放宽到 9 MiB，正文最多 8 MiB，其余请求上限不变。Web 身份绑定独立认证会话，CLI/MCP 绑定入口和系统用户；调用输入不能覆写实际身份。
+
+历史预估使用与执行相同的固定输入、规范、方法和模型键。无样本返回无法预估；只显示输入/输出 token 历史中位数至 P90、样本及复用数，不构成预算或执行时限。
+
+## 9. 目标接口（尚未实现）
+
+本节集中保留尚未整套实现的目标合同；当前实现以源码为准，设计记法不等同于已发布 API。
+
+### 9.1 Entry 公开 API
+
+目标 Entry API 只公开下面这些文献数据库用户操作。表中的英文是稳定责任名，不是当前 TypeScript 函数名，也不能据此推断对应导出已经存在。它们与[文献操作 CLI 与 operator 入口](#312-文献操作-cli-与-operator-入口)的文献操作 CLI 对应，但 API 名称和 CLI 层级仍是两个不同合同，不能通过字符串转换自动生成。`config` 是生产启动配置的 CLI 边界，直接复用根级 configuration/bootstrap 能力，不进入文献业务 API。
+
+| 能力              | 目标 Entry responsibility    | 输入                                                                                                       | 直接结果                           |
+| ----------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| 领域发现          | `discover_topic`             | `TopicDiscoveryInput`                                                                                      | `DiscoveryReport`                  |
+| 引用发现          | `discover_citations`         | `CitationDiscoveryInput`                                                                                   | `DiscoveryReport`                  |
+| 数据库补全        | `complete_database`          | `BatchRequest`                                                                                             | `DatabaseCompletionReport`         |
+| 手动 PDF 接纳     | `admit_manual_pdf`           | `LiteratureId`；PDF 是本次只读 binary input                                                                | `ManualPdfReport`                  |
+| 本地文献搜索      | `search_literature`          | `LibrarySearchRequest`                                                                                     | `LibrarySearchPage`                |
+| 单篇详情          | `get_literature_detail`      | `LiteratureId`                                                                                             | `LiteratureDetail`                 |
+| 正向/反向引用页面 | `list_literature_references` | `LiteratureReferenceRequest`                                                                               | `LiteratureReferencePage`          |
+| 引用关系详情      | `get_reference_detail`       | `ReferenceId`                                                                                              | `ReferenceDetail`                  |
+| Artifact 打开     | `open_artifact`              | `Asset \| ParserArtifactRef \| ArtifactRef`                                                                | context-managed 只读 binary stream |
+| Artifact 导出     | `export_artifact`            | 同一 artifact 引用；本次目标路径；显式覆盖开关                                                             | 正常返回或稳定文件错误             |
+| 书目导入          | `import_bibliography`        | `BibliographyFormat`；本次只读 binary input                                                                | `ImportReport`                     |
+| 书目导出          | `export_bibliography`        | `BibliographyFormat`；全库、DiscoveryRun、LibraryQuery 或明确 MetaLiterature/Literature 范围；本次目标路径 | `ExportReport`                     |
+
+其中 binary input、binary stream 和目标路径是 I/O boundary 对象，不是跨模块业务数据；它们不进入 JSON、Catalog、provenance 或 Report。手动 PDF 和书目导入可以由 CLI 路径、stdin 或程序内 reader 提供，但进入业务用例后只看到 reader 和已经解析的中性数据。Artifact 和书目导出在 Entry 边界接收用户目标；内部文件读取与原子输出分别通过受控 Port 完成。当前 TypeScript contracts 的具体解析和类型以 `packages/contracts` 为准。
+
+这些操作的副作用边界固定为：
+
+| 操作组                                     |            访问外部 Provider |                       修改文献数据库 | 创建 DiscoveryRun |                形成处理 Report |
+| ------------------------------------------ | ---------------------------: | -----------------------------------: | ----------------: | -----------------------------: |
+| 领域/引用发现                              |                           是 |                                   是 |                是 |          是，`DiscoveryReport` |
+| 数据库补全                                 |           按缺失步骤可能访问 |                                   是 |                否 | 是，`DatabaseCompletionReport` |
+| 手动 PDF 接纳                              |                           否 |                                   是 |                否 |          是，`ManualPdfReport` |
+| 搜索、详情、引用页面/详情                  |                           否 |                                   否 |                否 |                             否 |
+| Artifact 打开/导出                         |                           否 |             否；导出只写用户目标文件 |                否 |                             否 |
+| 书目导入                                   |                           否 |                                   是 |                否 |             是，`ImportReport` |
+| 书目导出                                   |                           否 |                 否；只写用户目标文件 |                否 |             是，`ExportReport` |
+| 统一配置中心与 status                      |                           否 | 否；只安全修改普通配置和固定凭据文件 |                否 |                             否 |
+| Provider/Analyze/Browser Model/MinerU test | 是；仅用户显式最小只读 probe |                                   否 |                否 |                             否 |
+
+读取操作直接返回 read result；不能为了接口统一套通用 Report。写数据库的四组入口必须取得写入准入，并只提交各业务模块已经确认的事实。公开 API 不接受 Provider 名称之外的私有参数、SQL、内部路径、adapter、数据库连接、HTTP client、Parser client 或 LLM client；实现选择只在 Bootstrap。
+
+### 9.2 新知识合同的版本与组合
+
 以下对象是新设计，不通过给旧 ParserResult 或 LiteratureContent 放宽字段实现：
 
 | 对象              | 必需的技术信息                                                                                         | owner 与验证                                         |
@@ -1342,7 +1220,7 @@ EvidenceRef 的 material 分支至少能精确指向原始文件；只支持文�
 
 新设计的 payload 托管、回执去重作用域/寿命及外部证据保留分别是独立合同；无历史候选服务不等于无需幂等回执或引用保护。精确交付与保留策略见 [知识加工：调用方规范与提取交付](05-knowledge-processing.md#4-调用方规范与提取交付) 与 [文档与证据：可读表示与有界读取](04-document-evidence.md#3-可读表示与有界读取)。
 
-### 6.8 设计依据与适用范围
+### 9.3 设计依据与适用范围
 
 系统完整提供材料、文档、分析/总结、提取、查询及人类协作。PDF 有效获取是非常重要的业务能力；分析等依赖材料已经可用，不依赖获取算法、Browser 或下载运行状态。重要程度、数据前置和模块所有权分别表达。
 
@@ -1350,7 +1228,7 @@ EvidenceRef 的 material 分支至少能精确指向原始文件；只支持文�
 
 以下新合同是迁移实施输入，不是当前已发布 API。一个操作可以经 TypeScript API、CLI、Web 或 Agent adapter 适配，传输只改变边界转换，不改变成功标准。各模块在不改变此处语义的前提下确定代码级类型和物理 DDL。旧格式的兼容约束仍有效。
 
-#### 6.8.1 查询与维护的独立入口
+#### 9.3.1 查询与维护的独立入口
 
 [ADR 0028](../decisions/0028-query-and-expansion-separation.md)已确认：查询只读已有库；每次元数据/PDF 扩充由用户明确开启。维护内部可以自动批量执行，不能把“手动开启”实现成逐条审批。已有材料的解析、分析和提取也须由独立加工操作明确启动，且不拥有外部补库权限。
 
@@ -1360,7 +1238,7 @@ EvidenceRef 的 material 分支至少能精确指向原始文件；只支持文�
 
 CLI 已初始化库上的结果格式保持；缺库查询由旧的隐式建库改为 `query-not-initialized`（退出码 3），落实 ADR 0028 的冷启动边界。下表的新文档/知识引用与通用 Gap 合同仍是后续目标，不能用本次 Library 读取宣称全部实现。
 
-#### 6.8.2 目标公开操作合同
+#### 9.3.2 目标公开操作合同
 
 新 TypeScript surface 推荐为 `Application.query.*` 与 `Application.maintenance.*`；CLI、Web 和 Agent adapter 调用同一用例。新 wire 消息带 `protocol_version: 1`，分属 `sciretriever.query` 或 `sciretriever.maintenance` 合同。已有 `/api/library/*`、CLI 已初始化库的结果与维护命令、包导出保持兼容；CLI 缺库读取按上文只读启动边界报告未初始化；新 HTTP 路由若采用协议，放在 `/api/v1/query/*` 和 `/api/v1/maintenance/*` 下，不能让旧路由改义。
 
@@ -1384,9 +1262,9 @@ CLI 已初始化库上的结果格式保持；缺库查询由旧的隐式建库�
 
 现有 `LiteratureSelector.kind = "query"` 是“用户已明确创建维护 Job 后，用来选目标”的选择器，不是 query API，也不授予自动维护权。新 `query.*` 只读消息与维护请求中的范围选择器必须用不同的顶层合同名；实现须保留已有 Job/selector 能力并验证二者不串线。
 
-### 6.9 交换对象及其含义
+### 9.4 交换对象及其含义
 
-#### 6.9.1 引用、输入与产物
+#### 9.4.1 引用、输入与产物
 
 | 对象建议            | 必须表达的语义                                                              | owner / 重要限制                                                                       |
 | ------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
@@ -1402,7 +1280,7 @@ CLI 已初始化库上的结果格式保持；缺库查询由旧的隐式建库�
 
 例如同一论文同时有概览和针对问题 A 的分析，两者都是独立知识产物，绑定各自输入与生成规格。调用方规范可以规定“一条记录是一项测量”，也可以规定“一条记录包含一组实验”；平台不会假定一文一条、固定实验实体或统一领域表。
 
-#### 6.9.2 五类版本不能混用
+#### 9.4.2 五类版本不能混用
 
 1. **协议版本**决定 API/wire 字段如何解释，reader 必须明确支持范围。
 2. **对象 schema 版本**决定持久化 JSON/record shape；它不同于 npm package version 和 Catalog version。
@@ -1412,7 +1290,7 @@ CLI 已初始化库上的结果格式保持；缺库查询由旧的隐式建库�
 
 hash 表示内容或规范一致性，不证明来源可信、语义正确或调用恰好执行一次。时间戳、任务 ID 和来源名称不能代替输入绑定。
 
-#### 6.9.3 引用字段与版本设计
+#### 9.4.3 引用字段与版本设计
 
 新增 JSON/API envelope 使用 `protocol_version: 1`；新增可持久化产品 envelope（DocumentRef、EvidenceRef、InputManifest、KnowledgeArtifact、ExtractionSpec、CandidateBatch）各自使用 `schema_version: 1`。协议/对象名限定 version namespace；不得新增一个全局任意 `version` 字段。既有 `ParserResult`、`LiteratureContent`、`ArtifactRef` shape 不加字段，旧 parser 继续严格校验旧字段集。
 
@@ -1430,81 +1308,19 @@ hash 表示内容或规范一致性，不证明来源可信、语义正确或调
 
 `@sciretriever/contracts` npm SemVer 只控制 TypeScript 包消费者；它不替代上述存储/协议版本。新 HTTP/Agent adapter 首版映射相同 request/result shape；已有 `/api/library/*` 继续旧 DTO，不能冒充新协议 reader。
 
-#### 6.9.4 生产者、消费者与旧合同兼容矩阵
+#### 9.4.4 生产者、消费者与旧合同兼容矩阵
 
-| 产物/合同                                                                                                   | 当前生产者 → 当前消费者                                                                                                                                                                        | 迁移后的生产者 → 新消费者                                                           | 兼容决定                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MetaLiterature` / `Literature`、metadata revisions、provider/user observations、Reference/ReferenceSupport | Metadata + Literature → Library search/detail、discovery/completion selector、bibliography import/export、CLI/Web                                                                              | 原 owner 不变；Q、Agent 与人类阅读新能力                                            | ID、来源 observation、权威引用关系和保守身份继续原格式；不将领域候选写入 Literature。                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 已接纳 PDF/Asset/ArtifactRef                                                                                | Public/API/Browser/manual Acquisition → Parsing、completion、PDF 导出和 Library detail                                                                                                         | 同一 owner → Document/Evidence、Q、Analysis、Extraction                             | ID/hash/不可变字节/相对路径保持；下游必须 pin `asset_sha256`，错误或后续失败不覆盖/删除有效资产。                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `ParserResult`（当前 parser-neutral Markdown 与资源）                                                       | Parsing/MinerU adapter → 旧 ContentAnalysis 与资产/解析读取                                                                                                                                    | Parsing → 新 Document/Evidence builder；旧 reader 继续受支持                        | 既有精确字段/哈希含义不变。新定位和表示版本包裹在独立 `DocumentRef`，不扩展旧 ParserResult 或将 `result_sha256` 直接当作 locator version。                                                                                                                                                                                                                                                                                                                                                                  |
-| `LiteratureContent` 与当前 LiteratureStatus 投影                                                            | 旧 Analysis/ContentAnalysis → Literature detail、CLI content export、Web Library、completion/reuse                                                                                             | 旧消费者照读；新 Analysis/Q/Human 可并列读 KnowledgeArtifact                        | 旧格式、单一 current 视图与字段含义保持。不得把旧内容静默改解释为任意用途/问题结果；迁移投影须显式标 `legacy-final-content` 且不补造字段级 EvidenceRef。LiteratureStatus 留作兼容摘要，不作新模块的唯一 readiness。                                                                                                                                                                                                                                                                                         |
-| 操作报告（Discovery、Bibliography import/export、DatabaseCompletion、Jobs）                                 | 各 Entry/Jobs → CLI JSON/终端、WorkBench HTTP/Web Jobs                                                                                                                                         | operation-specific report v1 → CLI/Web/Agent adapter                                | 旧字段/退出码/goal 语义保留；尤其 `complete content` 的 `CONTENT_READY` 可含 PDF 获取+Parsing+旧 Analysis。新 Query/Analysis/Extraction 不返回该旧 report、不将其用于缺口 fallback。                                                                                                                                                                                                                                                                                                                        |
-| 配置文件与能力选择                                                                                          | Configuration owner → CLI/Web/Bootstrap/业务 Entry                                                                                                                                             | 同一 owner 提供新用例所需配置投影                                                   | 固定 home、普通/secret 分离及既有字段语义不改；首批 query/Document/Extraction 无新增配置字段。旧 `[discovery]` 仍按 ADR 0022 拒绝，不建立 Profile/配置迁移。                                                                                                                                                                                                                                                                                                                                                |
-| 书目交换格式                                                                                                | Literature bibliography owner → CLI/Web 及外部书目工具                                                                                                                                         | 同一 reader/writer                                                                  | 已支持格式和字段保留，不等待 PDF/KnowledgeArtifact；新 Knowledge/Candidate 不是书目字段。                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 产物/合同                                                                                                   | 当前生产者 → 当前消费者                                                                                                                                                                        | 迁移后的生产者 → 新消费者                                                           | 兼容决定                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MetaLiterature` / `Literature`、metadata revisions、provider/user observations、Reference/ReferenceSupport | Metadata + Literature → Library search/detail、discovery/completion selector、bibliography import/export、CLI/Web                                                                              | 原 owner 不变；Q、Agent 与人类阅读新能力                                            | ID、来源 observation、权威引用关系和保守身份继续原格式；不将领域候选写入 Literature。                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 已接纳 PDF/Asset/ArtifactRef                                                                                | Public/API/Browser/manual Acquisition → Parsing、completion、PDF 导出和 Library detail                                                                                                         | 同一 owner → Document/Evidence、Q、Analysis、Extraction                             | ID/hash/不可变字节/相对路径保持；下游必须 pin `asset_sha256`，错误或后续失败不覆盖/删除有效资产。                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `ParserResult`（当前 parser-neutral Markdown 与资源）                                                       | Parsing/MinerU adapter → 旧 ContentAnalysis 与资产/解析读取                                                                                                                                    | Parsing → 新 Document/Evidence builder；旧 reader 继续受支持                        | 既有精确字段/哈希含义不变。新定位和表示版本包裹在独立 `DocumentRef`，不扩展旧 ParserResult 或将 `result_sha256` 直接当作 locator version。                                                                                                                                                                                                                                                                                                                                                            |
+| `LiteratureContent` 与当前 LiteratureStatus 投影                                                            | 旧 Analysis/ContentAnalysis → Literature detail、CLI content export、Web Library、completion/reuse                                                                                             | 旧消费者照读；新 Analysis/Q/Human 可并列读 KnowledgeArtifact                        | 旧格式、单一 current 视图与字段含义保持。不得把旧内容静默改解释为任意用途/问题结果；迁移投影须显式标 `legacy-final-content` 且不补造字段级 EvidenceRef。LiteratureStatus 留作兼容摘要，不作新模块的唯一 readiness。                                                                                                                                                                                                                                                                                   |
+| 操作报告（Discovery、Bibliography import/export、DatabaseCompletion、Jobs）                                 | 各 Entry/Jobs → CLI JSON/终端、WorkBench HTTP/Web Jobs                                                                                                                                         | operation-specific report v1 → CLI/Web/Agent adapter                                | 旧字段/退出码/goal 语义保留；尤其 `complete content` 的 `CONTENT_READY` 可含 PDF 获取+Parsing+旧 Analysis。新 Query/Analysis/Extraction 不返回该旧 report、不将其用于缺口 fallback。                                                                                                                                                                                                                                                                                                                  |
+| 配置文件与能力选择                                                                                          | Configuration owner → CLI/Web/Bootstrap/业务 Entry                                                                                                                                             | 同一 owner 提供新用例所需配置投影                                                   | 固定 home、普通/secret 分离及既有字段语义不改；首批 query/Document/Extraction 无新增配置字段。旧 `[discovery]` 仍按 ADR 0022 拒绝，不建立 Profile/配置迁移。                                                                                                                                                                                                                                                                                                                                          |
+| 书目交换格式                                                                                                | Literature bibliography owner → CLI/Web 及外部书目工具                                                                                                                                         | 同一 reader/writer                                                                  | 已支持格式和字段保留，不等待 PDF/KnowledgeArtifact；新 Knowledge/Candidate 不是书目字段。                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Catalog v1–v8 与 execution/runtime sub-schema                                                               | Storage → 当前 Library/Entry/Jobs；v1/v2 compatibility/migration gate                                                                                                                          | Catalog v3 的 Document/Evidence 基础；后续 owner-specific schema 单独演进           | v2 在 v1 业务表基础上加 execution/runtime；v3 在完整 v2 上仅加文档版本/资源/default/迁移记录，execution/runtime 子 schema 仍独立。v1/v2 原始事实不变。当前 TS 通用 reader 支持 v1–v8；v1/v2 可复核仍存的原始 PDF 文件级证据，Document writer 与固定版本阅读需 v3+，材料 Context 需 v4+，候选回执 writer 需显式 v5，单篇知识发布/读取需显式 v6，集合综合需显式 v7，知识检索投影需显式 v8。DDL、fingerprint、输入/读取矩阵与合成恢复见[版本化存储](07-versioned-storage.md#41-当前-schema-与显式转换)。 |
-| `LiteratureSelector.kind = "query"`                                                                         | 明确 `jobs create` / `complete` 入口 → Jobs/DatabaseCompletion 选择已请求目标                                                                                                                  | 可保留作维护 selector；新 Q 使用独立 QueryRequest                                   | 已按用户显式点选/调用维护命令时才是范围过滤器；不能将它解释成 query 命中后的自动排队许可。                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| 新 Document/Evidence、InputManifest、KnowledgeArtifact、ExtractionSpec/CandidateBatch                       | Document/Evidence 的固定版本 reader、InputManifest 准备、ExtractionSpec/候选交付已接通；KnowledgeArtifact 的单篇三用途及长文 v2 请求生产者、v6 reader 与 v7 集合综合执行、发布及 reader 已接通 | Parsing/Document, Entry/Analysis, 调用方/Extraction → 新 Q、Agent、人类、下游调用方 | 新增类型通过 contracts v1；旧 DTO/reader 不隐式消费。v5 只持久化规范、operation、回执及整个 manifest 的有限期依赖 pin；当前成功响应即时交付 accepted_batch，历史 payload 不入库。v6 单篇知识持久化独立内容、精确材料/文档依赖和默认 CAS，保留旧 LiteratureContent reader。共享 Operation/Receipt/AcceptedResult/Issue parser 拒绝未知字段并校验请求绑定；详见[提取交付首版合同](05-knowledge-processing.md#412-首版规范输入绑定与提交语义)。                                                                |
+| `LiteratureSelector.kind = "query"`                                                                         | 明确 `jobs create` / `complete` 入口 → Jobs/DatabaseCompletion 选择已请求目标                                                                                                                  | 可保留作维护 selector；新 Q 使用独立 QueryRequest                                   | 已按用户显式点选/调用维护命令时才是范围过滤器；不能将它解释成 query 命中后的自动排队许可。                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 新 Document/Evidence、InputManifest、KnowledgeArtifact、ExtractionSpec/CandidateBatch                       | Document/Evidence 的固定版本 reader、InputManifest 准备、ExtractionSpec/候选交付已接通；KnowledgeArtifact 的单篇三用途及长文 v2 请求生产者、v6 reader 与 v7 集合综合执行、发布及 reader 已接通 | Parsing/Document, Entry/Analysis, 调用方/Extraction → 新 Q、Agent、人类、下游调用方 | 新增类型通过 contracts v1；旧 DTO/reader 不隐式消费。v5 只持久化规范、operation、回执及整个 manifest 的有限期依赖 pin；当前成功响应即时交付 accepted_batch，历史 payload 不入库。v6 单篇知识持久化独立内容、精确材料/文档依赖和默认 CAS，保留旧 LiteratureContent reader。共享 Operation/Receipt/AcceptedResult/Issue parser 拒绝未知字段并校验请求绑定；详见[提取交付首版合同](05-knowledge-processing.md#412-首版规范输入绑定与提交语义)。                                                          |
 
 完整 Agent knowledge API 尚未实现；当前公开 TypeScript/HTTP 已提供 Library 与 Document/Evidence 有界读取，M07-T01/T02 的元数据与已发布 DocumentVersion 检索、预算 Context 已接通；M06 单篇与集合知识产物已接通。M07-T03 的 v2 知识 Context 使用独立的 Catalog v8 显式知识索引，通过 `createQueryApplication(home).knowledgeContext.search`、`POST /api/v1/query/knowledge-context` 和查询 Web 页按共同排序、预算与游标混合读取材料和生成知识。知识索引由 `Application.maintenance.rebuildKnowledgeIndex`、`maintenance rebuild-knowledge-index` 或受同源会话/CSRF 保护的 `POST /api/v1/maintenance/rebuild-knowledge-index` 独立重建；材料 `rebuild-index` 及 v1 Context 不变。旧 Analysis 输出与 LiteratureContent 仍由既有 reader 证明兼容，新生产者与消费者分别见各模块技术设计。查询 HTTP 的 `/api/v1/query/document-default|document-describe|document-outline|document-segments|document-resources|document-slice|document-resource|material-evidence|evidence-resolve` 使用统一 `protocol_version:1` 封套，成功字段为 `result`；请求和响应由共享合同解析并绑定固定版本/材料。人类阅读页提供全局片段（包括无标题正文和首标题前引言）、目录与资源翻页，显示实际范围、证据和能力缺口；晚到的旧片段响应不会覆盖新选择。各预算/缺口见[④文档与证据](04-document-evidence.md#3-可读表示与有界读取)。
-
-### 6.10 公共解析入口
-
-所有外部 JSON、数据库重建值、CLI/HTTP 输入都先作为 `unknown` 进入相应 `parse*` 边界：
-
-1. 校验对象类型及允许字段，不用 TypeScript 类型断言替代运行时验证。
-2. 按合同处理必填、null 与省略；不能把数据库损坏默认为空对象。
-3. 检查字符串/整数/判别联合/数组元素与跨字段结构约束。
-4. 构造新的中性值和只读数组，避免把外部可变对象传给业务层。
-5. 需要 hash 的解析器执行确定序列化和 hash 复核；异步 parser 必须被 await。
-6. 拒绝未知协议/schema 版本；不能在读取过程中回写升级。
-
-常用入口包括 `parseLiteratureMetadata`、`parseMetadataObservation`、`parseLibrarySearchRequest`、`parseParserResult`、`parseLiteratureDetail`、`parseLiteratureContentProposal` 和 `parseDatabaseCompletionReport`。`ContractValidationError` 只表示合同解析失败；展示边界还应区分非法用户输入与存储/上游对象违反合同，不能凭错误类型把真实故障说成零命中。
-
-解析器不得执行身份合并、元数据 precedence、PDF/内容判定、状态推导、入库/导出决策、环境读取或网络/文件 I/O。规范化 DOI 等纯格式处理与业务接纳分开；例如“至少有标题或 DOI 才能入库”由 Literature 的准入规则执行。
-
-### 6.11 字段记法与合同分布
-
-以下数据结构代码块使用语言中立记法：`str` 表示字符串、`int` 表示通过整数约束的 number、`None` 表示 JSON null，`tuple[T, ...]` 表示有序只读数组。它们描述字段与约束，不是可导入的 Python API。当前 TypeScript 示例使用 `readonly` 和 `null`；JSON 字段名保持兼容，不因语言迁移改名。
-
-## MCP stdio 适配（2026-10-08 实现合同）
-
-正式适配使用官方 MCP TypeScript SDK，`sciretriever mcp` 默认只读，`--maintenance` 增加
-显式维护工具；具体命令、schema 和行为见[Agent 接口指南](../../guides/agent-interface.md)。
-工具声明副作用并经过 JSON Schema 初检及所属产品合同解析；不开放 SQL、凭据、任意路径、
-Browser/CDP、脚本或任意 prompt。查询缺口不启动维护 Application。
-
-MCP 复用 Application/QueryApplication；stdio stdout 仅承载 JSON-RPC，调用错误脱敏。
-大型原始材料默认只交付引用，有界片段通过文档读取合同获得。提交任务只返回执行引用，
-完成与产物由任务和业务读取结果说明；不将工具调用成功等同于 PDF 或知识生成成功。
-
-MCP 服务进程存续期间任务可在工具调用之间继续；关闭进程会停止在途工作并保留已提交事实，
-停止后不继续后台执行。重启后的未知项需显式恢复，不自动重放收费调用。新进程读取任务
-通过只读 QueryApplication，不触发恢复。当前传输不扩展为远程多租户或常驻 daemon。
-
-### 显式连接现有运行时
-
-CLI/MCP 的 `--workbench-url` 接受显式 IPv4 HTTP origin（所有连接须提供同一 Web 密码或启动 API key），通过 `workbench/machine-client.ts` 连接已存在的工作台 HTTP owner。认证材料仅保留在进程内，动作沿用 WorkbenchActionCommand、session/article、epoch 和 lease 校验；工具只映射封闭业务操作。`runtime_*` 任务入口在该服务的同一个 Application 执行，独立机器进程不再争用执行锁。断开需确认服务端 detach；若仍持控制租约则遵守既有暂停政策。Web、CLI、MCP 的材料字节均经 LiteratureArtifactService 或 ManualPdfIngestionService，MCP 分块缓冲不构成持久业务事实。传输限额和命令见[Agent 指南](../../guides/agent-interface.md)。
-
-### Web 结果与阅读接入（2026-10-19）
-
-正式工作台使用共享处理器 `query/evidence/transfer`；`results` 增加可选 `literature_id`，Storage 在既有固定文档、材料、知识和结果输入关系上递归投影，排序和 next_after 语义不变，不新增业务表。无字段证据的未知记录仍按其固定输入关联文献。CLI/MCP 使用同一 Entry 验证与实现。
-
-React入口由Vite按需加载阅读模块，保留框架无关引擎；不再提供旧 `/reader.js` bundle。`build-reader-assets.mjs` 交付PDF.js worker、cMaps、标准字体、wasm、KaTeX字体和文字层CSS；静态服务只枚举随包资源，不把HTTP路径映射成任意文件路径。主工作台允许本地worker与受控Blob，仍拒绝JavaScript eval和外部连接。独立查询/维护使用相同React外壳，各自原有读取、CSRF和能力边界保持。
-
-PDF 原字节仍按固定 asset_id/hash、大小与 SHA-256 校验，受 256 MiB 读取上限约束；可见页及邻近页才持有 canvas/文字层。全文使用有界 document-slice 续读，按原始 UTF-8 与 Markdown 块映射保存位置、定位证据；CRLF 与 Unicode 不按 DOM 字符索引混算。图片通过 document-resource 分块读取并校验，不请求 Markdown 的远程图片 URL；内嵌支持 PNG/JPEG/GIF/WebP，单图超过 16 MiB 时显示不支持预览。会话 UI 状态按库和固定版本隔离，关闭文献释放状态。阅读没有模型、加工或索引重建副作用。
-
-### React适配与证据读取边界（ADR 0036）
-
-`apps/web/src/app/data/` 负责已有HTTP封套、固定来源解析、Query缓存和失效；`features/` 只保留页面展示与草稿，文献选择、任务、结果和持久事实仍由既有业务owner提供。TanStack Query消费AbortSignal，离开页面中止在途读取；Browser心跳和控制epoch变化不触发全库重读，真实发布和重连才失效材料查询。URL参数沿用既有格式，不引入另一套路由合同。
-
-处理结果使用既有processor `query/evidence/transfer`；文档证据使用 `evidence-resolve`，知识与综合使用 `synthesis-source`。旧知识库因此不需要处理器schema才能核对综合。综合递归来源保留并验证内容、输入清单和断言hash；只剩已存产物时明确“原PDF未复核”。分段证据验证实际UTF-8范围连续，跳转使用完整 `target_range`，不把首个传输块冒充完整证据。
-
-本机UI偏好包括主题、栏宽、默认阅读字号/行宽与按catalog隔离的保存筛选；它们不成为文献事实。它们只读写当前React命名空间，不读取旧键、不执行偏好迁移；不读取或复制凭据、Cookie、文献正文或其它应用数据。
-
-## 运行审查与校订编辑（2026-10-21）
-
-三端新增读取 `proofread-text`、`agent-sessions`、`task-run`、`usage-estimate`、`processor-runs`、`literature-results`、`operation-history`，由统一 QueryApplication 提供有界读取，模型身份仅从配置解析，不加载凭据或调用模型。机器请求映射见[Agent 接口](../../guides/agent-interface.md#校订与运行审查入口)。
-
-维护操作 `proofread-save` 固定 asset、当前 proofread 版本和完整 Markdown，以 CAS 发布人工决定与新版本，然后重建文档、无模型结构规则和引用；后续失败返回已保存事实，不撤销人工稿。只有此 HTTP 路径放宽到 9 MiB，正文最多 8 MiB，其余请求上限不变。Web 身份绑定独立认证会话，CLI/MCP 绑定入口和系统用户；调用输入不能覆写实际身份。
-
-历史预估使用与执行相同的固定输入、规范、方法和模型键。无样本返回无法预估；只显示输入/输出 token 历史中位数至 P90、样本及复用数，不构成预算或执行时限。

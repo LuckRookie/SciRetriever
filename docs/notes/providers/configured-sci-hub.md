@@ -1,5 +1,9 @@
 # Configured Sci-Hub
 
+类型：外部事实
+负责：Configured Sci-Hub
+状态：现行
+
 - 外部事实最后核对：2026-10-10（Asia/Shanghai），用户明确授权的低频真实调查与下载验证。
 - 当前选择键：Acquisition `sci-hub`；不提供 Metadata 或引用发现能力。
 - 默认关闭；用户启用后使用版本维护的镜像列表；custom `urls` 完整覆盖 builtin。

@@ -1,5 +1,9 @@
 # PDF 获取路径参考实现调研
 
+类型：外部事实
+负责：外部 PDF 获取工具的路线与接入证据
+状态：现行
+
 - 最后核对：2026-08-15
 - 文档性质：外部工具与参考实现 Notes
 - 相关目标设计：[文献与材料：材料获取、路线与候选](../architecture/technical/03-literature-materials.md#4-材料获取路线与候选)、[任务与协作控制：共享支撑：受控网络访问](../architecture/technical/02-task-coordination.md#7-共享支撑受控网络访问)

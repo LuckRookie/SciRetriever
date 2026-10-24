@@ -1,5 +1,9 @@
 # CORE
 
+类型：外部事实
+负责：CORE
+状态：现行
+
 - 官方资料最后在线核对：2026-08-13
 - 当前实现离线对照：2026-08-15
 - 当前配置选择键：`core`；支持 Metadata 与 Acquisition
@@ -38,13 +42,13 @@ Authorization: Bearer API_KEY
 
 当前 token 预算为：
 
-| 用户类别 | 当前额度 |
-|---|---|
-| anonymous | 每日 100 tokens，最多 10/min；不提供 full text |
-| registered personal | 每日 1,000 tokens，最多 25/min |
-| registered academic，非 Supporting/Sustaining 机构 | 每日 5,000 tokens，最多 10/min |
+| 用户类别                                                   | 当前额度                                              |
+| ---------------------------------------------------------- | ----------------------------------------------------- |
+| anonymous                                                  | 每日 100 tokens，最多 10/min；不提供 full text        |
+| registered personal                                        | 每日 1,000 tokens，最多 25/min                        |
+| registered academic，非 Supporting/Sustaining 机构         | 每日 5,000 tokens，最多 10/min                        |
 | Supporting/Sustaining 机构成员与 non-academic organization | 随服务器负载/合同动态调整；官方估计约 200k tokens/day |
-| VIP | 与 CORE 单独约定 |
+| VIP                                                        | 与 CORE 单独约定                                      |
 
 简单查询通常消耗 1 token，复杂查询通常 3–5；recommender、scroll search、bulk 等可能更贵，且官方可随负载调整 operation cost。必须以响应 headers 为准：
 
@@ -153,26 +157,31 @@ cites
   "totalHits": 1,
   "limit": 1,
   "offset": 0,
-  "results": [{
-    "id": 143262545,
-    "title": "CORE: A Global Aggregation Service for Open Access Papers",
-    "doi": "10.1038/s41597-023-02208-w",
-    "authors": [{"name": "Herrmannova, Drahomira"}],
-    "publishedDate": "2023-01-01T00:00:00+00:00",
-    "yearPublished": 2023,
-    "identifiers": [
-      {"identifier": "10.1038/s41597-023-02208-w", "type": "doi"},
-      {"identifier": "oai:oro.open.ac.uk:89835", "type": "oai"}
-    ],
-    "outputs": ["https://api.core.ac.uk/v3/outputs/571215426"],
-    "downloadUrl": "https://core.ac.uk/download/571215426.pdf",
-    "sourceFulltextUrls": ["https://oro.open.ac.uk/89835/1/article.pdf"],
-    "links": [
-      {"type": "download", "url": "https://core.ac.uk/download/571215426.pdf"},
-      {"type": "display", "url": "https://core.ac.uk/works/143262545"}
-    ],
-    "references": []
-  }],
+  "results": [
+    {
+      "id": 143262545,
+      "title": "CORE: A Global Aggregation Service for Open Access Papers",
+      "doi": "10.1038/s41597-023-02208-w",
+      "authors": [{ "name": "Herrmannova, Drahomira" }],
+      "publishedDate": "2023-01-01T00:00:00+00:00",
+      "yearPublished": 2023,
+      "identifiers": [
+        { "identifier": "10.1038/s41597-023-02208-w", "type": "doi" },
+        { "identifier": "oai:oro.open.ac.uk:89835", "type": "oai" }
+      ],
+      "outputs": ["https://api.core.ac.uk/v3/outputs/571215426"],
+      "downloadUrl": "https://core.ac.uk/download/571215426.pdf",
+      "sourceFulltextUrls": ["https://oro.open.ac.uk/89835/1/article.pdf"],
+      "links": [
+        {
+          "type": "download",
+          "url": "https://core.ac.uk/download/571215426.pdf"
+        },
+        { "type": "display", "url": "https://core.ac.uk/works/143262545" }
+      ],
+      "references": []
+    }
+  ],
   "searchId": "..."
 }
 ```
@@ -181,20 +190,20 @@ cites
 
 ## 10. 与 SciRetriever 中性数据的候选映射
 
-| 外部字段 | 外部语义 | 候选归属 | 约束 |
-|---|---|---|---|
-| Work/Output `id` | CORE source record | provenance/source record | 不代替本地 Literature ID |
-| `doi` / typed `identifiers[]` / arXiv/PubMed/OAI | 标识符 | `LiteratureMetadata.identifiers` | namespace 明确规范化；OAI/CORE ID 主要作 provenance |
-| `title` / `abstract` | 聚合或来源文本 | `LiteratureMetadata.title` / `abstract` | 空值保持缺失；Work/Output provenance 不混 |
-| `authors[]` | 来源/聚合作者名 | `LiteratureMetadata.authors` | 顺序/重复需直接测试；无明确 ORCID/ROR 不猜 |
-| publication/type/language/publisher | 书目信息 | `LiteratureMetadata` 对应字段 | 区分 published/accepted/deposited/CORE timestamps |
-| `journals[]` | venue title 与标识 | title 候选映射 `LiteratureMetadata.venue` | ISSN 等仅供 adapter 内部容器核对，不进入当前业务 Model；空对象不接纳 |
-| `references[].raw` | 解析参考文献原文 | `MetadataObservation.reference_texts` | 每项保留来源与顺序 |
-| reference DOI/CORE ID | outgoing 稳定目标 | `ProviderRelationObservation` | `current -> target`；每项独立；不自动建 Reference |
-| `downloadUrl` / source URL / links | 获取线索 | `MetadataObservation.asset_hints` 候选 | direct/landing 分流；未下载、未验证 |
-| Output license | 来源权利声明 | `AssetHint.license` 候选 | 只在与 locator 明确对齐时使用 |
-| Work `outputs[]` | CORE 聚合成员 | provenance/身份证据候选 | 不自动建立本地 version/member 关系 |
-| request/CORE timestamps | 观察上下文 | provenance | 不能替代 publication date |
+| 外部字段                                         | 外部语义           | 候选归属                                  | 约束                                                                 |
+| ------------------------------------------------ | ------------------ | ----------------------------------------- | -------------------------------------------------------------------- |
+| Work/Output `id`                                 | CORE source record | provenance/source record                  | 不代替本地 Literature ID                                             |
+| `doi` / typed `identifiers[]` / arXiv/PubMed/OAI | 标识符             | `LiteratureMetadata.identifiers`          | namespace 明确规范化；OAI/CORE ID 主要作 provenance                  |
+| `title` / `abstract`                             | 聚合或来源文本     | `LiteratureMetadata.title` / `abstract`   | 空值保持缺失；Work/Output provenance 不混                            |
+| `authors[]`                                      | 来源/聚合作者名    | `LiteratureMetadata.authors`              | 顺序/重复需直接测试；无明确 ORCID/ROR 不猜                           |
+| publication/type/language/publisher              | 书目信息           | `LiteratureMetadata` 对应字段             | 区分 published/accepted/deposited/CORE timestamps                    |
+| `journals[]`                                     | venue title 与标识 | title 候选映射 `LiteratureMetadata.venue` | ISSN 等仅供 adapter 内部容器核对，不进入当前业务 Model；空对象不接纳 |
+| `references[].raw`                               | 解析参考文献原文   | `MetadataObservation.reference_texts`     | 每项保留来源与顺序                                                   |
+| reference DOI/CORE ID                            | outgoing 稳定目标  | `ProviderRelationObservation`             | `current -> target`；每项独立；不自动建 Reference                    |
+| `downloadUrl` / source URL / links               | 获取线索           | `MetadataObservation.asset_hints` 候选    | direct/landing 分流；未下载、未验证                                  |
+| Output license                                   | 来源权利声明       | `AssetHint.license` 候选                  | 只在与 locator 明确对齐时使用                                        |
+| Work `outputs[]`                                 | CORE 聚合成员      | provenance/身份证据候选                   | 不自动建立本地 version/member 关系                                   |
+| request/CORE timestamps                          | 观察上下文         | provenance                                | 不能替代 publication date                                            |
 
 纯 acquisition adapter 不能顺带保存 `fullText` 或 metadata；metadata adapter 形成 AssetHint 也不等于文件已下载。
 

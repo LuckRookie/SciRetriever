@@ -1,16 +1,15 @@
 # ADR 0017：无状态共享 Agents 与受控 Browser Controller
 
-- Status: Accepted
+类型：决策（ADR）
+负责：无状态共享 Agents 与受控 Browser Controller
+状态：Accepted；部分被取代：运行时与 Browser 预算见 [ADR 0023](0023-generic-browser-agent-executor.md)、[ADR 0031](0031-dsh-backed-agent-capabilities.md)；Analysis 两阶段只适用于旧单篇用例，见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)
+
 - Date: 2026-08-21
 - Last amended: 2026-10-13
 - Supersedes: none
 - Amends: [ADR 0008](../../archive/decisions/0008-summarized-markdown-literature-content.md)、[ADR 0014](0014-capability-scoped-providers-and-local-credentials.md)、[ADR 0015](0015-publisher-aware-tiered-pdf-acquisition.md)、[ADR 0016](0016-cloakbrowser-fixed-identity-runtime.md)
 - Amended by: [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)、[ADR 0019](0019-agent-operable-application-and-sdk-model-runtime.md)、[ADR 0021](0021-provider-model-registry-and-direct-task-selection.md)、[ADR 0023](0023-generic-browser-agent-executor.md)、[ADR 0031](0031-dsh-backed-agent-capabilities.md)
 - Related: [产品需求](../requirements.md)、[设计文档](../design.md)、[知识加工：分析与综合](../technical/05-knowledge-processing.md#2-分析与综合)、[知识加工：共享支撑：无状态模型运行时](../technical/05-knowledge-processing.md#5-共享支撑无状态模型运行时)、[文献与材料：材料获取、路线与候选](../technical/03-literature-materials.md#4-材料获取路线与候选)、[任务与协作控制：共享支撑：受控网络访问](../technical/02-task-coordination.md#7-共享支撑受控网络访问)
-
-> 2026-10-20 收口：正文中的运行时与 Browser 预算描述，已按 ADR 0023、ADR 0031 的现行决定更新；Python 签名与“尚未实施”等过时表述已删除。
-
-> 2026-09-25 修订：Analysis 的两阶段描述限定为旧单篇兼容用例；新分析可按用途组织有界多次调用。无状态 Agents、消费模块编排和 Browser 安全责任不变。详见 [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)。
 
 ## 背景
 

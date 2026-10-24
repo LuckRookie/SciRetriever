@@ -1,5 +1,9 @@
 # Crossref
 
+类型：外部事实
+负责：Crossref
+状态：现行
+
 > 当前 TypeScript 适配行为（2026-10-10 核对）：Crossref 展示字段折叠换行、回车和连续空白，DOI 身份不作此类修补；链接访问状态为 unknown。年份过滤支持单边范围，规范年份的最终范围检查由主题发现入口完成。 证据见修复验证记录（本地文件：`sandbox/reports/live-discovery-acquisition-fixes-2026-10-10.md`，不随仓库分发）。下文较早日期的探测只代表当时状态。
 
 - 官方资料最后在线核对：2026-08-07
@@ -26,11 +30,11 @@ REST API 公开池无需注册。polite 池通过 `mailto` query 或 agent heade
 
 官方当前列出的限制为：
 
-| 池 | 速率 | 并发 |
-|---|---:|---:|
-| Public | 5 requests/s | 1 |
-| Polite | 10 requests/s | 3 |
-| Plus | 150 requests/s | 页面标为 None |
+| 池     |           速率 |          并发 |
+| ------ | -------------: | ------------: |
+| Public |   5 requests/s |             1 |
+| Polite |  10 requests/s |             3 |
+| Plus   | 150 requests/s | 页面标为 None |
 
 实际响应还会通过 `x-rate-limit-limit`、`x-rate-limit-interval` 和
 `x-concurrency-limit` header 给出当前值。超限返回 `429`；人工 block 可能返回 `403`。
@@ -136,24 +140,30 @@ Crossref 只传播成员登记的 link 与 license metadata：有 link 不证明
       }
     ],
     "container-title": ["Nature"],
-    "issued": {"date-parts": [[2020, 9, 16]]},
-    "link": [{
-      "URL": "https://www.nature.com/articles/s41586-020-2649-2.pdf",
-      "content-type": "application/pdf",
-      "content-version": "vor",
-      "intended-application": "text-mining"
-    }],
-    "license": [{
-      "content-version": "vor",
-      "delay-in-days": 0,
-      "URL": "https://creativecommons.org/licenses/by/4.0"
-    }],
-    "reference": [{
-      "key": "2649_CR1",
-      "DOI": "10.1103/PhysRevLett.116.061102",
-      "unstructured": "Abbott, B. P. et al. ... (2016).",
-      "year": "2016"
-    }],
+    "issued": { "date-parts": [[2020, 9, 16]] },
+    "link": [
+      {
+        "URL": "https://www.nature.com/articles/s41586-020-2649-2.pdf",
+        "content-type": "application/pdf",
+        "content-version": "vor",
+        "intended-application": "text-mining"
+      }
+    ],
+    "license": [
+      {
+        "content-version": "vor",
+        "delay-in-days": 0,
+        "URL": "https://creativecommons.org/licenses/by/4.0"
+      }
+    ],
+    "reference": [
+      {
+        "key": "2649_CR1",
+        "DOI": "10.1103/PhysRevLett.116.061102",
+        "unstructured": "Abbott, B. P. et al. ... (2016).",
+        "year": "2016"
+      }
+    ],
     "reference-count": 57,
     "is-referenced-by-count": 23441
   }
@@ -165,25 +175,25 @@ Crossref 只传播成员登记的 link 与 license metadata：有 link 不证明
 
 ## 7. 与 SciRetriever 中性数据的候选映射
 
-| 外部字段 | 外部语义 | 候选归属 | 备注 |
-|---|---|---|---|
-| `DOI` | Crossref work DOI | `LiteratureMetadata.identifiers` | namespace `doi`；同时保留 Crossref record identity |
-| `title[0]` | 主标题 | `LiteratureMetadata.title` | 多标题/翻译的选择待 provider 规则明确，不静默拼接 |
-| `abstract` | 登记摘要，可能为 JATS | `LiteratureMetadata.abstract` | 在 adapter 边界安全提取文本 |
-| `type` / `subtype` | Crossref 内容类型 | `LiteratureMetadata.document_type` | 需要显式映射表；未知值不猜 |
-| `author[]` | 有序贡献者 | `Author[]` | 保留顺序、明确姓名组成、ORCID 和逐作者 affiliation；`authenticated-orcid` 是来源质量信息，不是另一个 ID |
-| `container-title[]` | 期刊/会议/书名 | `LiteratureMetadata.venue` | 按 work type 解释 |
-| `publisher` | 登记出版社 | `LiteratureMetadata.publisher` | 可缺失 |
-| `volume`、`issue`、`page` / `article-number` | 卷期页/文章号 | 对应 `volume`、`issue`、`pages` | article number 进入现有 `pages` |
-| `published*` / `issued` | 多种出版日期 | `LiteratureMetadata.publication_date` / `LiteratureMetadata.publication_year` | 按明确 precedence 选择并保留来源 observation |
-| `subject[]` | Crossref subject | 暂无业务字段 | 不自动写 `declared_keywords` 或最终 `keywords` |
-| `reference[].unstructured` | 登记的参考文献原文 | `MetadataObservation.reference_texts` | 保持条目顺序；缺 DOI 也保留原文 |
-| 有 DOI 的 `reference[]` | 结构化 citing→cited 线索 | `ProviderRelationObservation` | 当前 work 是 citing 端，reference DOI 是 cited 端 |
-| 两类计数 | 来源时点的计数 | `reference_count` / `cited_by_count` | 不跨供应商相加 |
-| `link[]` | 资源地址与声明媒体/版本 | `AssetHint[]` | 每个地址独立形成线索，不覆盖 |
-| `license[]` | 登记许可范围与生效信息 | `AssetHint.license` 的候选来源 | 需与相应 content-version/URL 对齐，不能全局套用 |
-| work `URL` / `resource.primary.URL` | DOI/主资源 landing page | `AssetHint` | landing page，不是已获得资产 |
-| Crossref source、member、观察时间 | 来源上下文 | `Provenance` | member ID 不是 Literature ID |
+| 外部字段                                     | 外部语义                 | 候选归属                                                                      | 备注                                                                                                    |
+| -------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `DOI`                                        | Crossref work DOI        | `LiteratureMetadata.identifiers`                                              | namespace `doi`；同时保留 Crossref record identity                                                      |
+| `title[0]`                                   | 主标题                   | `LiteratureMetadata.title`                                                    | 多标题/翻译的选择待 provider 规则明确，不静默拼接                                                       |
+| `abstract`                                   | 登记摘要，可能为 JATS    | `LiteratureMetadata.abstract`                                                 | 在 adapter 边界安全提取文本                                                                             |
+| `type` / `subtype`                           | Crossref 内容类型        | `LiteratureMetadata.document_type`                                            | 需要显式映射表；未知值不猜                                                                              |
+| `author[]`                                   | 有序贡献者               | `Author[]`                                                                    | 保留顺序、明确姓名组成、ORCID 和逐作者 affiliation；`authenticated-orcid` 是来源质量信息，不是另一个 ID |
+| `container-title[]`                          | 期刊/会议/书名           | `LiteratureMetadata.venue`                                                    | 按 work type 解释                                                                                       |
+| `publisher`                                  | 登记出版社               | `LiteratureMetadata.publisher`                                                | 可缺失                                                                                                  |
+| `volume`、`issue`、`page` / `article-number` | 卷期页/文章号            | 对应 `volume`、`issue`、`pages`                                               | article number 进入现有 `pages`                                                                         |
+| `published*` / `issued`                      | 多种出版日期             | `LiteratureMetadata.publication_date` / `LiteratureMetadata.publication_year` | 按明确 precedence 选择并保留来源 observation                                                            |
+| `subject[]`                                  | Crossref subject         | 暂无业务字段                                                                  | 不自动写 `declared_keywords` 或最终 `keywords`                                                          |
+| `reference[].unstructured`                   | 登记的参考文献原文       | `MetadataObservation.reference_texts`                                         | 保持条目顺序；缺 DOI 也保留原文                                                                         |
+| 有 DOI 的 `reference[]`                      | 结构化 citing→cited 线索 | `ProviderRelationObservation`                                                 | 当前 work 是 citing 端，reference DOI 是 cited 端                                                       |
+| 两类计数                                     | 来源时点的计数           | `reference_count` / `cited_by_count`                                          | 不跨供应商相加                                                                                          |
+| `link[]`                                     | 资源地址与声明媒体/版本  | `AssetHint[]`                                                                 | 每个地址独立形成线索，不覆盖                                                                            |
+| `license[]`                                  | 登记许可范围与生效信息   | `AssetHint.license` 的候选来源                                                | 需与相应 content-version/URL 对齐，不能全局套用                                                         |
+| work `URL` / `resource.primary.URL`          | DOI/主资源 landing page  | `AssetHint`                                                                   | landing page，不是已获得资产                                                                            |
+| Crossref source、member、观察时间            | 来源上下文               | `Provenance`                                                                  | member ID 不是 Literature ID                                                                            |
 
 ## 8. 不进入业务 Model 的字段
 

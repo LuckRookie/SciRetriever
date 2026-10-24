@@ -1,5 +1,9 @@
 # 开发手册
 
+类型：导航
+负责：开发手册
+状态：现行
+
 开发工作从项目根目录 [`AGENTS.md`](../../AGENTS.md) 和 [`HARNESS.md`](../../HARNESS.md) 开始。前者说明项目边界、模块画像和验证命令，后者说明通用协作、测试、文档和 Git 规则。
 
 ## 常用入口
@@ -13,7 +17,7 @@
 - [Publisher Access Profile 准入与验证矩阵](../notes/providers/publisher-access-matrix.md)：Publisher/Access Provider 的统一证据包、三态状态、Browser rule 对齐和当前生产矩阵。
 - [整体架构](../architecture/README.md)：修改领域边界、数据所有权、持久化或依赖方向前的设计真相源。
 
-[迁移映射](../architecture/evolution-map.md)保留实施前的改造依据；[已完成计划](../archive/2026-09-28-typescript-knowledge-architecture-migration/README.md)保留验收证据。当前版本兼容见[安装指南](../guides/installation.md)，后续工作以[活动计划索引](../plans/README.md)为准。旧Python技术主体已归档，不再作为活动API。
+[迁移映射](../archive/2026-10-24-docs-consolidation/docs/architecture/evolution-map.md)保留实施前的改造依据；[已完成计划](../archive/2026-09-28-typescript-knowledge-architecture-migration/README.md)保留验收证据。当前版本兼容见[安装指南](../guides/installation.md)，后续工作以[活动计划索引](../plans/README.md)为准。旧Python技术主体已归档，不再作为活动API。
 
 ## 验证
 

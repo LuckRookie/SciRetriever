@@ -1,13 +1,14 @@
 # ADR 0032：以文献库为中心的 Web 与可选 Browser 直接交互
 
-- Status: Accepted（整体架构与定稿原型已确认；当前实现范围见 Web 指南）；**2026-10-23 部分被 [ADR 0038](0038-web-design-basis.md) 取代**：以 10-15 原型为布局与视觉依据的表述（背景第 3 段、第 2 节标题、后果中的视觉基准条）不再有效
+类型：决策（ADR）
+负责：以文献库为中心的 Web 与可选 Browser 直接交互
+状态：Accepted；部分被取代：文献状态改按 [ADR 0037](0037-literature-archive-and-proofread-text.md) 的建档与就绪表达；原型作为设计依据的表述，以及第 8 节第 1、2、5、7、10 条，见 [ADR 0038](0038-web-design-basis.md)
+
 - Date: 2026-10-14
 - Last amended: 2026-10-22（新增第 8 节：Web 定稿修订；同时修订第 7 节第 1、2、3、6 条）；2026-10-21（新增第 7 节：校订稿编辑、Agent 监视、任务运行与结果组织）
 - Amends: [ADR 0026](0026-agent-knowledge-and-human-collaboration.md)（确认 Web 形态、文献库中心与阅读方向，明确人工介入为可选能力）
 - Amended by: [ADR 0033](0033-machine-interfaces-cover-web-capabilities.md)（CLI 与 MCP 分别覆盖 Web 业务；Web 专有阅读交互与维护诊断分工）；[ADR 0037](0037-literature-archive-and-proofread-text.md)（2026-10-20）
 - Related: [ADR 0011](0011-literature-database-centered-incremental-maintenance.md)、[ADR 0013](0013-decoupled-discovery-and-database-maintenance.md)、[ADR 0018](0018-fixed-user-configuration-home.md)、[ADR 0028](0028-query-and-expansion-separation.md)、[ADR 0029](0029-unverified-pdf-acquisition.md)、[ADR 0034](0034-unified-processors-and-results.md)、[产品需求 R12](../requirements.md#r12-人类配置浏览器协作与阅读接口)
-
-> 2026-10-20 [ADR 0037](0037-literature-archive-and-proofread-text.md) 修订本 ADR：文献状态按 ADR 0037 的建档与就绪表达。直接冲突的正文已按 ADR 0037 收口。
 
 ## 背景与授权依据
 

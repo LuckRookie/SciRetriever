@@ -1,6 +1,9 @@
 # ADR 0016：CloakBrowser 固定身份 Browser runtime 与验证页资源边界
 
-- Status: Accepted
+类型：决策（ADR）
+负责：CloakBrowser 固定身份 Browser runtime 与验证页资源边界
+状态：Accepted
+
 - Date: 2026-08-21
 - Last amended: 2026-09-04
 - Supersedes: none

@@ -1,26 +1,19 @@
 # TypeScript 基础开发入口
 
-当前 TypeScript workspace 位于仓库根目录，使用 Node `22.19.0` 和 pnpm `10.32.1`。包管理器版本由
-`package.json` 的 `packageManager` 字段和 `pnpm-lock.yaml` 固定；当前已有 `@sciretriever/contracts`
-package、`@sciretriever/server` 的配置、凭据、Network、FileStore、SQLite、Agents、Browser、Literature、
-Parsing/Analysis 切片，以及 `apps/web` 的静态样本和实时 Cloak 工作台。配置 owner bridge、Candidate 发布/放弃、
-Library 与 Browser→MinerU→Analysis source-checkout loopback 旅程均已完成首阶段验收；全量迁移状态见
-[已归档迁移计划](../archive/2026-09-07-typescript-browser-workbench/README.md)；当前工作见[活动计划索引](../plans/README.md)。
+类型：开发
+负责：源码开发、构建、便携包验证入口
+状态：现行
+
+当前工作区包含 contracts、server 与 React Web。源码映射见[TypeScript 基线](../architecture/typescript-baseline.md)，安装与支持环境见[安装指南](../guides/installation.md)。
 
 ## 本地开发
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm quick
-pnpm test
-pnpm full
+pnpm build
 ```
 
-`quick` 执行 Prettier、ESLint、源码 project-reference typecheck 和 `tsconfig.tests.json` 的测试 strict typecheck；
-`test` 执行 Vitest；`full` 追加所有已注册 TypeScript project 的 build。Lint 扫描 `packages/**/*.ts`、
-`apps/**/*.ts` 与 `apps/**/*.tsx`。构建元数据保存在各包的 ignored `dist/`。测试文件按行为命名，例如
-`contract-validation.test.ts` 和 `canonical-encoding.test.ts`。不要用块、阶段或任务顺序命名测试文件或
-suite。
+开发循环与最终验收的命令、并发和范围统一见 [HARNESS §5.4](../../HARNESS.md#54-typescript-开发验证)。构建元数据进入 ignored `dist/`，测试按行为命名，不按阶段或任务编号命名。
 
 Web前端按[ADR 0036](../architecture/decisions/0036-react-web-frontend.md)采用React、React Aria、Motion、TanStack及自有CSS；Quick同时覆盖 `.ts` / `.tsx` 与测试strict类型。`pnpm --filter @sciretriever/web dev` 启动Vite热更新，`SCIRETRIEVER_WEB_API_ORIGIN` 指向已经正常启动并认证的loopback工作台。开发代理仍走同一登录与client grant；测试不增加免认证模式。生产资源、阅读worker和字体离线随包交付；精确版本、补丁及许可见[前端依赖说明](../notes/web-frontend-dependencies.md)。默认入口和旧代码清理的实施记录见[归档计划](../archive/2026-10-19-web-experience/README.md)。
 
@@ -44,7 +37,7 @@ SQLite worker 的活动业务实现是 `apps/server/src/storage/sqlite/worker-ru
 的 type stripping 启动该 TypeScript 文件，build 与 portable 包使用 `worker-runtime.js`；portable
 验证会从生成包实际执行 `literature search --json`，因此同时覆盖 worker 文件清单、ESM URL 与运行入口。
 
-2026-09-10 按项目 owner 决定，后续全量验收只运行 `pnpm full`，不再默认运行 Python Quick、Full 或全量 unittest。既有 Python 测试保留为历史维护入口；仅在用户明确要求时执行。CI 同步采用 TS Quick/Full，具体触发见 HARNESS。
+CI 与测试纪律统一遵循 [HARNESS](../../HARNESS.md)，不在开发入口复制历史验收命令。
 
 ## 当前边界
 
@@ -60,20 +53,7 @@ contracts package 使用 Web 标准 `TextEncoder`、`TextDecoder`、Web Crypto �
 RPC、不连接真实 Provider、不读取用户 home、Catalog、Profile 或凭据。v1 fixture 位于
 `tests/fixtures/compat-v1/`，只包含固定的 synthetic 数据，用于检查 Model、canonical bytes 和 hash。
 
-2026-09-10 文档核对：早期 [运行时盘点](../../migration/evidence/baseline/runtime-capabilities.md) 是历史快照，
-其中“Chromium 未安装、TS SQLite binding 尚未选择”已不反映后续实现进展。
-[Browser Host 记录](../../migration/evidence/browser-acquisition/browser-host.md) 记载 2026-09-09 使用
-Chrome for Testing 148.0.7778.96 完成临时 Profile 的 loopback 启动测试；
-[SQLite 记录](../../migration/evidence/runtime/sqlite-compatibility.md)记载 worker 已采用 `node:sqlite` 并验证 v1 兼容行为。
-历史专项证据曾显式设置并运行 operator Cloak bundle，记录见[历史 runtime 切片](../../migration/evidence/browser-acquisition/cloak-workbench-runtime.md)；
-它不等于当前修复快照的真实正路径证据。当前 `pnpm full` 未设置该 bundle，live runtime 保持 skipped/not-run；离线
-安装包 smoke 仍不构成生产切换或独立安装包自带 Browser runtime 的承诺。
-qpdf 仍只有早期“未安装”记录，按 PDF 验收需要核实，不把历史环境记录当成永久前置门。
-
-Candidate/receipt 已增加显式 SQLite execution extension；合成副本上的新进程恢复、发布对账、升级备份和回滚
-见 [恢复证据](../../migration/evidence/runtime/candidate-recovery.md)。目标 Cloak 的本地工作台与 PDF intake
-见 [运行时旅程](../../migration/evidence/browser-acquisition/cloak-workbench-runtime.md)，实际 MinerU/Analysis/Library
-闭环见[联合旅程](../../migration/evidence/runtime/browser-mineru-analysis-journey.md)。这些切片不表示生产切换完成。
+历史运行时与迁移验收只作[历史材料](../archive/2026-09-28-typescript-knowledge-architecture-migration/README.md)查阅，不定义当前环境或当前 Full 的结果。
 
 ## 恢复入口
 

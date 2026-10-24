@@ -1,5 +1,9 @@
 # MinerU 接入注意事项
 
+类型：外部事实
+负责：MinerU 服务协议、输出边界与兼容风险
+状态：当前外部依赖说明。普通配置与凭据合同以
+
 > 状态：当前外部依赖说明。普通配置与凭据合同以
 > [配置手册](../guides/configuration.md) 和
 > [统一产品接口：共享支撑：配置与凭据](../architecture/technical/01-product-interface.md#5-共享支撑配置与凭据) 为准；本文只记录易变的
@@ -9,16 +13,16 @@
 
 ## 1. 当前锁定的实现身份
 
-| 项目            | 当前值                                        |
-| --------------- | --------------------------------------------- |
-| MinerU release  | `3.4.4`                                       |
-| API protocol    | `2`                                           |
+| 项目            | 当前值                                                       |
+| --------------- | ------------------------------------------------------------ |
+| MinerU release  | `3.4.4`                                                      |
+| API protocol    | `2`                                                          |
 | 部署 profile    | `parsing.archive_profile`：`vlm-engine`（默认）或 `pipeline` |
-| archive backend | 分别为 `vlm` / `pipeline` |
-| parse method    | `auto`                                        |
-| 服务所有权      | operator-managed persistent service           |
-| 原始解析输入    | 按页区块列表 v2、Markdown、实际引用图片 |
-| 临时辅助输入    | middle JSON 只供页数和尺寸校验，不长期保留 |
+| archive backend | 分别为 `vlm` / `pipeline`                                    |
+| parse method    | `auto`                                                       |
+| 服务所有权      | operator-managed persistent service                          |
+| 原始解析输入    | 按页区块列表 v2、Markdown、实际引用图片                      |
+| 临时辅助输入    | middle JSON 只供页数和尺寸校验，不长期保留                   |
 
 这些值由当前 `backends/mineru/profile.ts`、protocol client、归档 adapter 和直接测试共同锁定。它们在
 `sciretriever config`、`config status` 中展示。每次默认只请求部署选定的一种 profile，
@@ -125,7 +129,6 @@ GPU 容量和 operator 日志。不要让应用自行启动无审查 fallback。
 4. 审查依赖/模型许可、GPU 和运维要求；
 5. 由 owner 接受后同步 adapter、Notes、配置只读身份与测试；
 6. 新结果完整接纳前保留当前 PDF 和已有有效 RawParse，不原地覆盖资产。
-
 
 ## 7. ADR 0037 双 profile 适配进展（2026-10-20）
 

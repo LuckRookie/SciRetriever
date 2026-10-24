@@ -1,6 +1,9 @@
 # ADR 0004：产品需求与派生设计的责任边界
 
-- Status: Accepted
+类型：决策（ADR）
+负责：产品需求与派生设计的责任边界
+状态：Accepted
+
 - Date: 2026-07-29
 - Revised: 2026-08-05
 - Supersedes: 旧文档中把 Work、状态机、CLI、解析器协议和其它技术机制写成产品需求的表述

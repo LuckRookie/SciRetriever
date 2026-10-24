@@ -1,5 +1,9 @@
 # AIP Publishing
 
+类型：外部事实
+负责：AIP Publishing
+状态：现行
+
 - 官方资料最后在线核对：2026-08-19
 - 配置选择键：无；AIP Publishing 是 Publication/Access Provider，不是当前 Metadata Provider
 - Access Platform：`https://pubs.aip.org`

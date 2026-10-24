@@ -1,6 +1,9 @@
 # ADR 0021：Provider、Model 注册表与任务直接选择
 
-- Status: Accepted
+类型：决策（ADR）
+负责：Provider、Model 注册表与任务直接选择
+状态：Accepted
+
 - Date: 2026-08-28
 - Last amended: 2026-09-02
 - Supersedes: [ADR 0020](../../archive/decisions/0020-reusable-model-profiles-and-task-bindings.md)
