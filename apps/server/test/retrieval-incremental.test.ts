@@ -305,6 +305,7 @@ describe("incremental material indexing", () => {
     }
   });
 
+  // Reached 2.2 s under Full (36/12) load, too close to the 5 s default.
   it("does not reuse corrupted FTS and preserves repair staging across unrelated commits", async () => {
     const env = await fixture();
     const entered = deferred(),
@@ -364,7 +365,7 @@ describe("incremental material indexing", () => {
       await pending;
       await env.close();
     }
-  });
+  }, 30_000);
 
   it("removes temporary repair rows if the main batch commit fails", async () => {
     const env = await fixture();

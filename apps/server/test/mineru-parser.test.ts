@@ -272,6 +272,7 @@ async function parserRequest() {
   };
 }
 
+// Reached 2.9 s under Full (36/12) load, too close to the 5 s default.
 it.each(["loopback", "remote"] as const)(
   "assembles the %s MinerU protocol and publishes normalized artifacts",
   async (connectionMode) => {
@@ -427,6 +428,7 @@ it.each(["loopback", "remote"] as const)(
       await rm(home, { recursive: true, force: true });
     }
   },
+  30_000,
 );
 
 it("runs the loopback MinerU protocol entirely in TypeScript", async () => {

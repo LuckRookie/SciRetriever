@@ -53,6 +53,7 @@ async function fixture() {
   }
 }
 describe("raw parsing catalog and immutable publication", () => {
+  // Reached 2.7 s under Full (36/12) load, too close to the 5 s default.
   it("loads many images with a single manifest read and still rejects corrupted resource bytes", async () => {
     const e = await fixture();
     try {
@@ -97,7 +98,7 @@ describe("raw parsing catalog and immutable publication", () => {
       vi.restoreAllMocks();
       await e.close();
     }
-  });
+  }, 30_000);
   it("registers existing Markdown without inventing blocks, model identity or page sizes", async () => {
     const e = await fixture();
     try {
@@ -182,6 +183,7 @@ describe("raw parsing catalog and immutable publication", () => {
       await e.close();
     }
   });
+  // Reached 2.3 s under Full (36/12) load, too close to the 5 s default.
   it("retains each profile, reports failures independently, deduplicates bytes and protects pinned old versions", async () => {
     const e = await fixture();
     try {
@@ -242,7 +244,7 @@ describe("raw parsing catalog and immutable publication", () => {
     } finally {
       await e.close();
     }
-  });
+  }, 30_000);
   it("refuses changed staged bytes, source identity and persisted content", async () => {
     const e = await fixture();
     try {

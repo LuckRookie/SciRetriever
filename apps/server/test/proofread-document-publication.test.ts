@@ -247,6 +247,7 @@ it("keeps a published version after CAS loss, rejects stale raw inputs, and retu
   }
 }, 30000);
 
+// Reached 2.0 s under Full (36/12) load, too close to the 5 s default.
 it("lists and reads a supplementary PDF independently from the main default", async () => {
   const { randomUUID } = await import("node:crypto");
   const { sha256, parseAsset } = await import("@sciretriever/contracts");
@@ -332,7 +333,7 @@ it("lists and reads a supplementary PDF independently from the main default", as
   } finally {
     await e.close();
   }
-});
+}, 30000);
 
 it("exposes publication and part reads through CLI/MCP without opening a parser or model", async () => {
   const { runCli } = await import("../src/cli/main.js");

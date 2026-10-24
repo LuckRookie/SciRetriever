@@ -180,6 +180,7 @@ describe("visible frame feedback on real loopback Chromium", () => {
   let runtime: BrowserPageRuntime;
   let generation: number;
 
+  // Launching Chromium can exceed the 10 s hook default under Full load.
   beforeAll(async () => {
     server = createServer((request, response) => {
       response.setHeader("Content-Type", "text/html");
@@ -208,7 +209,7 @@ describe("visible frame feedback on real loopback Chromium", () => {
       headless: true,
       args: ["--no-proxy-server", "--disable-background-networking"],
     });
-  });
+  }, 30_000);
   afterAll(async () => {
     await browser?.close();
     if (server)
@@ -234,6 +235,7 @@ describe("visible frame feedback on real loopback Chromium", () => {
     await page?.context().close();
   });
 
+  // Real Chromium work reached 2.2 s under Full (36/12) load, too close to the 5 s default.
   it.each(["main", "cross-origin", "nested"])(
     "wakes for a newly visible control in %s without waiting for timeout",
     async (surface) => {
@@ -269,6 +271,7 @@ describe("visible frame feedback on real loopback Chromium", () => {
           .isVisible(),
       ).toBe(true);
     },
+    30_000,
   );
 
   it("detects an iframe control becoming enabled without text or frame navigation", async () => {

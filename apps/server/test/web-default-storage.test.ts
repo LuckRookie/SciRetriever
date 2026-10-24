@@ -35,6 +35,7 @@ const open = (home: string) =>
   });
 
 describe("Web default storage", () => {
+  // Reached 2.7 s under Full (36/12) load, too close to the 5 s default.
   it("shares the persisted library with CLI and MCP and reopens existing facts", async () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-web-default-shared-"),
@@ -89,7 +90,7 @@ describe("Web default storage", () => {
       await web?.close();
       await rm(home, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it("honors custom locations and creates only a missing catalog without altering configuration", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-web-custom-"));

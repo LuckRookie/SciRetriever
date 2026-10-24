@@ -10,6 +10,7 @@ import { executeQuery } from "../src/entry/query-operations.js";
 import { executeMaintenance } from "../src/entry/maintenance-operations.js";
 
 describe("durable proofreading and human locks", () => {
+  // Reached 2.3 s under Full (36/12) load, too close to the 5 s default.
   it("requires existing raw inputs, publishes/reuses one immutable version, and reads it after reopening", async () => {
     const e = await coreProcessingFixture();
     try {
@@ -70,7 +71,7 @@ describe("durable proofreading and human locks", () => {
     } finally {
       await e.close();
     }
-  });
+  }, 20000);
   it("locks corrections, refuses stale decisions, preserves them on rebuild, and requires explicit revocation after input changes", async () => {
     const e = await coreProcessingFixture();
     try {
@@ -165,6 +166,7 @@ describe("durable proofreading and human locks", () => {
   });
 });
 
+// Reached 2.1 s under Full (36/12) load, too close to the 5 s default.
 it("offers the same correction reads through CLI and MCP without parser/model calls", async () => {
   const e = await coreProcessingFixture();
   const host = createMcpServer({
@@ -241,7 +243,7 @@ it("offers the same correction reads through CLI and MCP without parser/model ca
     await host.close();
     await e.close();
   }
-});
+}, 20000);
 
 it("retains separate manual dispositions for several suspects in one block", async () => {
   const e = await coreProcessingFixture({

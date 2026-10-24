@@ -40,12 +40,17 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
     const dialog = p.getByRole("dialog", { name: "解析 PDF", exact: true });
     await dialog.getByRole("button", { name: "确认启动", exact: true }).click();
     await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-    await expect.poll(() => w.env.parseCalls).toBeGreaterThan(initial);
+    // Background work started here can outlast the 1 s poll default under Full load.
+    await expect
+      .poll(() => w.env.parseCalls, { timeout: 15000 })
+      .toBeGreaterThan(initial);
+    // Background work started here can outlast the 1 s poll default under Full load.
     await expect
       .poll(
         async () =>
           (await w.env.app.archive.status(missingId)).parts[0]?.raw_profiles
             .length,
+        { timeout: 15000 },
       )
       .toBe(1);
     expect((await w.env.app.archive.status(missingId)).status).toBe(
@@ -72,11 +77,13 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
       .getByRole("textbox", { name: "标题", exact: true })
       .fill("Manually corrected title");
     await p.getByRole("button", { name: "保存并锁定", exact: true }).click();
+    // Background work started here can outlast the 1 s poll default under Full load.
     await expect
       .poll(
         async () =>
           (await w.env.app.metadataFields.read(missingId)).literature.metadata
             .title,
+        { timeout: 15000 },
       )
       .toBe("Manually corrected title");
     expect(
@@ -407,8 +414,11 @@ it("recovers archive issues and keeps an unparsed supplement non-blocking in the
       from_step: "tags",
       idempotency_key: randomUUID(),
     });
+    // Background work started here can outlast the 1 s poll default under Full load.
     await expect
-      .poll(async () => (await e.app.archive.status(id)).status)
+      .poll(async () => (await e.app.archive.status(id)).status, {
+        timeout: 15000,
+      })
       .toBe("ARCHIVE_FAILED");
     failed.mockRestore();
     const p = w.page;

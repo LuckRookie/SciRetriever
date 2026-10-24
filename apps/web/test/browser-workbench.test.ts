@@ -81,6 +81,7 @@ afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
 });
 
+// Real Chromium work reached 3.2 s under Full (36/12) load, too close to the 5 s default.
 it("serves only sample assets and refuses filesystem paths and mutations", async () => {
   const response = await page.request.get(`${origin}/`);
   expect(response.headers()["content-security-policy"]).toContain(
@@ -97,7 +98,7 @@ it("serves only sample assets and refuses filesystem paths and mutations", async
   }
   expect((await page.request.post(origin)).status()).toBe(405);
   expect((await page.request.head(origin)).status()).toBe(200);
-});
+}, 15_000);
 
 it("requires human takeover for page input and explicit confirmation for sample publication", async () => {
   expect(await page.locator("#pdf-button").isDisabled()).toBe(true);

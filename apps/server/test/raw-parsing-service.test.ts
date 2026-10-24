@@ -247,11 +247,14 @@ describe("explicit deployment-profile parsing service", () => {
         controller.signal,
       );
       await waiting;
+      // Background work started here can outlast the 1 s poll default under Full load.
       await expect
-        .poll(async () =>
-          (await e.app.rawParseStorage!.current(e.f.asset.asset_id)).some(
-            (s) => s.profile === "pipeline" && s.result !== null,
-          ),
+        .poll(
+          async () =>
+            (await e.app.rawParseStorage!.current(e.f.asset.asset_id)).some(
+              (s) => s.profile === "pipeline" && s.result !== null,
+            ),
+          { timeout: 10000 },
         )
         .toBe(true);
       controller.abort();

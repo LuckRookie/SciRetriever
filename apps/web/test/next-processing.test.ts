@@ -103,8 +103,11 @@ async function reopen(page: Page) {
   await next(page);
 }
 async function completed(w: Workspace) {
+  // Background work started here can outlast the 1 s poll default under Full load.
   await expect
-    .poll(async () => (await w.env.app.jobs!.listJobs(10)).length)
+    .poll(async () => (await w.env.app.jobs!.listJobs(10)).length, {
+      timeout: 10000,
+    })
     .toBe(1);
   const job = (await w.env.app.jobs!.listJobs(10))[0]!;
   await expect
@@ -383,14 +386,19 @@ it("preserves a valid form and reports a durable model configuration failure wit
     await enterSelected(w);
     await labels(w.page);
     await submit(w.page);
+    // Background work started here can outlast the 1 s poll default under Full load.
     await expect
-      .poll(async () => (await w.env.app.jobs!.listJobs(10)).length)
+      .poll(async () => (await w.env.app.jobs!.listJobs(10)).length, {
+        timeout: 10000,
+      })
       .toBe(1);
     const job = (await w.env.app.jobs!.listJobs(10))[0]!;
+    // Background work started here can outlast the 1 s poll default under Full load.
     await expect
       .poll(
         async () =>
           (await w.env.app.processingTasks!.read(job.job_id)).job.status,
+        { timeout: 10000 },
       )
       .toBe("failed");
     expect(
@@ -651,7 +659,8 @@ it("cancels an explicit processor task and refuses its late model response", asy
     await enterSelected(w);
     await labels(w.page);
     await submit(w.page);
-    await expect.poll(() => w.env.modelCalls).toBe(1);
+    // Background work started here can outlast the 1 s poll default under Full load.
+    await expect.poll(() => w.env.modelCalls, { timeout: 10000 }).toBe(1);
     const job = (await w.env.app.jobs!.listJobs(10))[0]!;
     await w.page.getByRole("button", { name: "查看任务", exact: true }).click();
     await w.page.getByRole("button", { name: "取消任务", exact: true }).click();
@@ -660,10 +669,12 @@ it("cancels an explicit processor task and refuses its late model response", asy
       .getByRole("button", { name: "取消任务", exact: true })
       .click();
     release();
+    // Background work started here can outlast the 1 s poll default under Full load.
     await expect
       .poll(
         async () =>
           (await w.env.app.processingTasks!.read(job.job_id)).job.status,
+        { timeout: 10000 },
       )
       .toBe("cancelled");
     const task = await w.env.app.processingTasks!.read(job.job_id);
@@ -694,11 +705,13 @@ it("freezes another snapshot from the same definition and submits the synthesis 
     await w.page
       .getByRole("button", { name: "按原条件生成新快照", exact: true })
       .click();
+    // Background work started here can outlast the 1 s poll default under Full load.
     await expect
       .poll(
         async () =>
           (await w.env.app.snapshots.list({ after: null, limit: 10 })).items
             .length,
+        { timeout: 10000 },
       )
       .toBe(2);
     expect(new URL(w.page.url()).searchParams.get("snapshot")).toBe(

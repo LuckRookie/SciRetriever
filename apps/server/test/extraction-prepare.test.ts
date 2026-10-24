@@ -486,6 +486,7 @@ describe("external extraction preparation", () => {
       await rm(env.home, { recursive: true, force: true });
     }
   }, 0);
+  // Reached 3.3 s under Full (36/12) load, too close to the 5 s default.
   it("cancels an in-flight HTTP preparation when its client disconnects", async () => {
     const env = await fixture();
     let workbench:
@@ -547,5 +548,5 @@ describe("external extraction preparation", () => {
       await workbench?.close();
       await rm(env.home, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });

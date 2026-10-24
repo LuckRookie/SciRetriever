@@ -200,6 +200,7 @@ function batch(env: Environment, operationId: string, value = "alpha") {
 }
 
 describe("extraction candidate delivery on v5", () => {
+  // Reached 2.8 s under Full (36/12) load, too close to the 5 s default.
   it("rejects valid and invalid create calls after shutdown without orphaned parsing", async () => {
     const env = await environment();
     const delivery = new ExtractionDeliveryService(
@@ -228,7 +229,8 @@ describe("extraction candidate delivery on v5", () => {
       process.off("unhandledRejection", onUnhandled);
       await env.close();
     }
-  });
+  }, 30_000);
+  // Reached 3.6 s under Full (36/12) load, too close to the 5 s default.
   it("preserves each write admission failure and only reports actual cancellation as cancelled", async () => {
     const env = await environment();
     try {
@@ -262,7 +264,7 @@ describe("extraction candidate delivery on v5", () => {
     } finally {
       await env.close();
     }
-  });
+  }, 30_000);
   it("returns distinct HTTP statuses for each write admission outcome", async () => {
     const env = await environment();
     await env.app.close();
@@ -953,6 +955,7 @@ describe("extraction candidate delivery on v5", () => {
       await env.close();
     }
   });
+  // Reached 2.6 s under Full (36/12) load, too close to the 5 s default.
   it("exposes explicit CSRF-protected maintenance delivery and receipt reading over loopback", async () => {
     const env = await environment();
     await env.app.close();
@@ -1076,7 +1079,8 @@ describe("extraction candidate delivery on v5", () => {
       await query.close();
       await env.close();
     }
-  });
+  }, 30_000);
+  // Reached 2.2 s under Full (36/12) load, too close to the 5 s default.
   it("rolls back receipt and the first material pin when a later pin fails", async () => {
     const env = await environment();
     try {
@@ -1121,7 +1125,8 @@ describe("extraction candidate delivery on v5", () => {
     } finally {
       await env.close();
     }
-  });
+  }, 30_000);
+  // Reached 2.1 s under Full (36/12) load, too close to the 5 s default.
   it("commits a whole batch with exact manifest pins, returns historical receipt after close and restart", async () => {
     const env = await environment();
     try {
@@ -1204,8 +1209,9 @@ describe("extraction candidate delivery on v5", () => {
     } finally {
       await env.close();
     }
-  });
+  }, 30_000);
 
+  // Reached 2.5 s under Full (36/12) load, too close to the 5 s default.
   it("rejects malformed payload, pointer, wrong evidence, coverage and duplicate batch without partial receipt", async () => {
     const env = await environment();
     try {
@@ -1315,8 +1321,9 @@ describe("extraction candidate delivery on v5", () => {
     } finally {
       await env.close();
     }
-  });
+  }, 30_000);
 
+  // Reached 2.1 s under Full (36/12) load, too close to the 5 s default.
   it("serializes cancellation before new submission, retains earlier receipts and cleans expired rows explicitly", async () => {
     const env = await environment();
     try {
@@ -1363,7 +1370,7 @@ describe("extraction candidate delivery on v5", () => {
     } finally {
       await env.close();
     }
-  });
+  }, 30_000);
   it("settles a concurrent submit and cancel at one durable admission point", async () => {
     const env = await environment();
     try {

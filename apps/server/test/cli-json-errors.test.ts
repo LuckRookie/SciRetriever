@@ -52,6 +52,7 @@ afterAll(async () => {
   if (root) await rm(root, { recursive: true, force: true });
 });
 
+// Spawning the CLI is load-sensitive (0.6 s under Full load); do not rely on the 5 s default.
 it("keeps a missing-catalog CLI error as JSON without eagerly loading SQLite", () => {
   const result = spawnSync(
     process.execPath,
@@ -62,8 +63,9 @@ it("keeps a missing-catalog CLI error as JSON without eagerly loading SQLite", (
   expect(result.status).toBe(3);
   expect(result.stdout).toBe("");
   expect(result.stderr).toBe('{"code":"query-not-initialized"}\n');
-});
+}, 30_000);
 
+// Spawning the CLI is load-sensitive (0.9 s under Full load); do not rely on the 5 s default.
 it("preserves SQLite and unrelated Node warnings when modules explicitly request them", () => {
   const result = spawnSync(
     process.execPath,
@@ -79,4 +81,4 @@ it("preserves SQLite and unrelated Node warnings when modules explicitly request
   expect(result.stderr).toContain("SQLite is an experimental feature");
   expect(result.stderr).toContain("Synthetic diagnostic remains visible");
   expect(result.stderr).toContain("SCIRETRIEVER_TEST_WARNING");
-});
+}, 30_000);

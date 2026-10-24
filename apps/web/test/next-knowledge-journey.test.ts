@@ -204,11 +204,13 @@ it("keeps parsing separate from document publication and reads existing verified
     await page
       .getByRole("button", { name: "运行算子…", exact: true })
       .waitFor();
+    // Background work started here can outlast the 1 s poll default under Full load.
     await expect
       .poll(
         async () =>
           (await env.app.snapshots.list({ after: null, limit: 10 })).items
             .length,
+        { timeout: 10000 },
       )
       .toBe(1);
     expect(env.modelCalls).toBe(0);
@@ -318,10 +320,12 @@ it.each([true, false])(
         .poll(() => w.page.getByRole("dialog").textContent())
         .toContain(analysisModel ? "已提交 1 项" : "任务已保存并启动");
       const job = (await w.env.app.jobs!.listJobs(10))[0]!;
+      // Background work started here can outlast the 1 s poll default under Full load.
       await expect
         .poll(
           async () =>
             (await w.env.app.processingTasks!.read(job.job_id)).job.status,
+          { timeout: 10000 },
         )
         .toBe(analysisModel ? "completed" : "failed");
       await w.page

@@ -719,6 +719,7 @@ describe("persistent browser profile host", () => {
     expect(await readFile(path, "utf8")).toBe(malformed);
   });
 
+  // Real Chromium work reached 3.8 s under Full (36/12) load, too close to the 5 s default.
   it.skipIf(!browserAvailable)(
     "rejects credentials, fragments and non-http navigation",
     async () => {
@@ -739,6 +740,7 @@ describe("persistent browser profile host", () => {
       );
       await host.close();
     },
+    30_000,
   );
   it("uses the admitted proxy for real snapshots and rejects stale element or control inputs", async () => {
     const server = createServer((_request, response) => {
@@ -1027,6 +1029,7 @@ describe("persistent browser profile host", () => {
   );
 });
 
+// Real Chromium work reached 3.5 s under Full (36/12) load, too close to the 5 s default.
 it.runIf(browserAvailable)(
   "returns from a popup without history to its article opener",
   async () => {
@@ -1085,6 +1088,7 @@ it.runIf(browserAvailable)(
       await host.close();
     }
   },
+  30_000,
 );
 
 it.runIf(browserAvailable)(

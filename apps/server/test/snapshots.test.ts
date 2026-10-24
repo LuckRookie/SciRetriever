@@ -6,6 +6,7 @@ import { expect, it, vi } from "vitest";
 import { parseLiterature, type SnapshotMember } from "@sciretriever/contracts";
 import { archiveFixture } from "./archive-fixture.js";
 import { SqliteAnnotationStorage } from "../src/storage/structure-annotations.js";
+// Reached 2.8 s under Full (36/12) load, too close to the 5 s default.
 it("freezes ready members, reports exclusions and separates content from description differences", async () => {
   const e = await archiveFixture();
   try {
@@ -99,7 +100,8 @@ it("freezes ready members, reports exclusions and separates content from descrip
   } finally {
     await e.close();
   }
-});
+}, 30_000);
+// Reached 2.2 s under Full (36/12) load, too close to the 5 s default.
 it("rejects a changed publication input and leaves no partial snapshot", async () => {
   const e = await archiveFixture();
   try {
@@ -132,7 +134,7 @@ it("rejects a changed publication input and leaves no partial snapshot", async (
     vi.restoreAllMocks();
     await e.close();
   }
-});
+}, 30_000);
 
 it("serves bounded pages through the shared query boundary and CLI without models", async () => {
   const e = await archiveFixture();

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { archiveFixture } from "./archive-fixture.js";
+// Reached 2.1 s under Full (36/12) load, too close to the 5 s default.
 it("requires a completed archive after parsing and preserves accepted material when metadata editing fails", async () => {
   const e = await archiveFixture();
   try {
@@ -27,4 +28,4 @@ it("requires a completed archive after parsing and preserves accepted material w
   } finally {
     await e.close();
   }
-});
+}, 30_000);

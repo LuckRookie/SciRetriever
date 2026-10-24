@@ -161,6 +161,7 @@ describe("durable processor batches", () => {
       await env.close();
     }
   }, 30000);
+  // Reached 3.5 s under Full (36/12) load, too close to the 5 s default.
   it.each(["overview", "detailed", "question"] as const)(
     "publishes summary %s with readable evidence",
     async (purpose) => {
@@ -209,5 +210,6 @@ describe("durable processor batches", () => {
         await env.close();
       }
     },
+    30000,
   );
 });

@@ -250,6 +250,7 @@ it("preserves a relation supported by metadata when obsolete archive support is 
   }
 });
 
+// Reached 2.1 s under Full (36/12) load, too close to the 5 s default.
 it("uses the same explicit reference owner through CLI and MCP", async () => {
   const { e, request } = await preparedReferences();
   const server = createMcpServer({
@@ -284,4 +285,4 @@ it("uses the same explicit reference owner through CLI and MCP", async () => {
     await server.close();
     await e.close();
   }
-});
+}, 30_000);

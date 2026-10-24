@@ -465,9 +465,11 @@ describe("durable task workbench", () => {
       const jobId = await submit("web-partial-processing", 2);
       expect(env.parseCalls).toBe(0);
       await control("启动").click();
+      // Background work started here can outlast the 1 s poll default under Full load.
       await expect
         .poll(
           async () => (await env.app.processingTasks!.read(jobId)).job.status,
+          { timeout: 10000 },
         )
         .toBe("failed");
       await expect
@@ -483,9 +485,11 @@ describe("durable task workbench", () => {
         .poll(() => drawer.innerText(), { timeout: 10000 })
         .toContain("1 / 2 项已完成");
       await control("重试").click();
+      // Background work started here can outlast the 1 s poll default under Full load.
       await expect
         .poll(
           async () => (await env.app.processingTasks!.read(jobId)).job.status,
+          { timeout: 10000 },
         )
         .toBe("completed");
       await expect
@@ -506,10 +510,12 @@ describe("durable task workbench", () => {
       await drawer.getByText("等待处理", { exact: true }).first().waitFor();
       expect(env.parseCalls).toBe(3);
       await control("继续").click();
+      // Background work started here can outlast the 1 s poll default under Full load.
       await expect
         .poll(
           async () =>
             (await env.app.processingTasks!.read(resumedId)).job.status,
+          { timeout: 10000 },
         )
         .toBe("completed");
       await drawer.getByText("已完成", { exact: true }).first().waitFor();

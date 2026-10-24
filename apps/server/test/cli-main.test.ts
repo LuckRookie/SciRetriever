@@ -24,6 +24,7 @@ async function* input(bytes: Uint8Array): AsyncIterable<Uint8Array> {
 }
 
 describe("TypeScript CLI", () => {
+  // Reached 2.6 s under Full (36/12) load, too close to the 5 s default.
   it("keeps backup create-if-absent and refuses unsafe target paths", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-backup-"));
     const catalog = join(home, "catalog.sqlite");
@@ -89,7 +90,7 @@ describe("TypeScript CLI", () => {
     } finally {
       await rm(home, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it("runs a persisted job through the TypeScript task service", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-jobs-"));
@@ -239,6 +240,7 @@ describe("TypeScript CLI", () => {
     }
   });
 
+  // Reached 2.2 s under Full (36/12) load, too close to the 5 s default.
   it("passes an opaque literature cursor through the CLI query boundary", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-cursor-"));
     const newer = join(home, "newer.bib");
@@ -291,7 +293,7 @@ describe("TypeScript CLI", () => {
     } finally {
       await rm(home, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it("opens a reference detail by reference id", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-reference-"));
@@ -361,6 +363,7 @@ describe("TypeScript CLI", () => {
     }
   });
 
+  // Reached 2.1 s under Full (36/12) load, too close to the 5 s default.
   it("exports metadata selected by meta literature and discovery run", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-export-"));
     const source = join(home, "record.bib");
@@ -438,7 +441,7 @@ describe("TypeScript CLI", () => {
     } finally {
       await rm(home, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it("requires exactly one of the six completion selectors", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-cli-selector-"));
@@ -534,6 +537,7 @@ async function seedReportHome(
 }
 
 describe("TypeScript CLI database completion report", () => {
+  // Reached 2.4 s under Full (36/12) load, too close to the 5 s default.
   it("reports the five mutually exclusive partitions instead of an ad-hoc item list", async () => {
     const { home, literatures } = await seedReportHome(["Report paper"]);
     const literatureId = literatures[0]!;
@@ -619,7 +623,7 @@ describe("TypeScript CLI database completion report", () => {
     } finally {
       await rm(home, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it("stops launching chunks on cancellation and distinguishes active targets from notStarted", async () => {
     const { home, literatures } = await seedReportHome(

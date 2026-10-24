@@ -16,6 +16,7 @@ async function connected(host: ReturnType<typeof createMcpServer>) {
   return client;
 }
 describe("formal MCP product adapter", () => {
+  // Reached 2.6 s under Full (36/12) load, too close to the 5 s default.
   it("exposes a failed raw parsing attempt and completes the same task after repair and explicit retry", async () => {
     const env = await coreProcessingFixture({ analysisModel: false });
     env.setParseHook(async () => {
@@ -103,7 +104,7 @@ describe("formal MCP product adapter", () => {
       await host.close();
       await env.close();
     }
-  });
+  }, 30000);
   it("uses the real protocol client and production graph for parse, identity, summary and snapshot synthesis", async () => {
     const env = await processorFixture();
     env.setText(`# Article\nDOI: ${FIXTURE_DOI}\nA synthetic finding.`);
@@ -226,9 +227,11 @@ describe("formal MCP product adapter", () => {
         });
         const job = String(submitted.job_id);
         await wait(job);
+        // Background work started here can outlast the 1 s poll default under Full load.
         await expect
           .poll(
             async () => (await env.app.processorRead!.collections(job)).length,
+            { timeout: 10000 },
           )
           .toBe(1);
         const collections = await env.app.processorRead!.collections(job);

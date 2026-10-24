@@ -458,6 +458,7 @@ describe("shared manual PDF maintenance", () => {
     }
   });
 
+  // Reached 2.1 s under Full (36/12) load, too close to the 5 s default.
   it("reports a failed maintenance close after releasing HTTP and catalog resources", async () => {
     const env = await setup();
     await env.app.close();
@@ -481,7 +482,7 @@ describe("shared manual PDF maintenance", () => {
     } finally {
       await env.close();
     }
-  });
+  }, 30000);
 
   it("uses the same cancellation and conflict rules on the Browser workbench upload route", async () => {
     const env = await setup();

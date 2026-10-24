@@ -53,8 +53,11 @@ it("keeps active tasks discoverable beyond a full history page and confirms canc
       .click();
     const drawer = w.page.getByRole("region", { name: "任务详情" });
     await drawer.getByRole("button", { name: "暂停", exact: true }).click();
+    // Background work started here can outlast the 1 s poll default under Full load.
     await expect
-      .poll(async () => (await w.env.app.jobs!.getJob(activeId))?.status)
+      .poll(async () => (await w.env.app.jobs!.getJob(activeId))?.status, {
+        timeout: 10000,
+      })
       .toBe("paused");
     await drawer.getByRole("button", { name: "继续", exact: true }).waitFor();
     await drawer.getByRole("button", { name: "取消任务", exact: true }).click();
@@ -63,8 +66,11 @@ it("keeps active tasks discoverable beyond a full history page and confirms canc
       .getByRole("dialog", { name: "取消这个任务？" })
       .getByRole("button", { name: "取消任务", exact: true })
       .click();
+    // Background work started here can outlast the 1 s poll default under Full load.
     await expect
-      .poll(async () => (await w.env.app.jobs!.getJob(activeId))?.status)
+      .poll(async () => (await w.env.app.jobs!.getJob(activeId))?.status, {
+        timeout: 10000,
+      })
       .toBe("cancelled");
     await expect
       .poll(() => drawer.getByText("已取消", { exact: true }).count())

@@ -186,6 +186,7 @@ it("rejects recovery through a different catalog and leaves the original manifes
     await env.close();
   }
 });
+// Reached 2.2 s under Full (36/12) load, too close to the 5 s default.
 it.each([false, true])(
   "recovers after SIGKILL with catalog commit=%s using only on-disk evidence",
   async (committed) => {
@@ -266,4 +267,5 @@ it.each([false, true])(
       await env.close();
     }
   },
+  30000,
 );

@@ -45,6 +45,7 @@ it("requires explicit parsing, builds a durable archive, reuses model steps and 
   }
 }, 0);
 
+// Reached 2.2 s under Full (36/12) load, too close to the 5 s default.
 it("records parser pages, per-step usage and batch consolidation independently", async () => {
   const e = await archiveFixture();
   try {
@@ -74,8 +75,9 @@ it("records parser pages, per-step usage and batch consolidation independently",
   } finally {
     await e.close();
   }
-});
+}, 30_000);
 
+// Reached 2.1 s under Full (36/12) load, too close to the 5 s default.
 it("does not roll back a ready archive when the once-per-batch consolidation hook fails", async () => {
   const e = await archiveFixture();
   try {
@@ -95,8 +97,9 @@ it("does not roll back a ready archive when the once-per-batch consolidation hoo
     vi.restoreAllMocks();
     await e.close();
   }
-});
+}, 30_000);
 
+// Reached 2.4 s under Full (36/12) load, too close to the 5 s default.
 it("archives a single deployment-profile parse without references and reports the nonblocking gap", async () => {
   const e = await archiveFixture();
   try {
@@ -127,4 +130,4 @@ it("archives a single deployment-profile parse without references and reports th
   } finally {
     await e.close();
   }
-});
+}, 30_000);

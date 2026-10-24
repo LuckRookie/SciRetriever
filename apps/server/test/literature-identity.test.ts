@@ -127,6 +127,7 @@ it("creates, enriches and groups provider observations with explicit version lin
   }
 });
 
+// Reached 2.4 s under Full (36/12) load, too close to the 5 s default.
 it("uses the identifier index beyond ten thousand Literatures", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-identity-capacity-"));
   const first = await createApplication(home);
@@ -181,4 +182,4 @@ it("uses the identifier index beyond ten thousand Literatures", async () => {
     await app.close();
     await rm(home, { recursive: true, force: true });
   }
-});
+}, 30_000);

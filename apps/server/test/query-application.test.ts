@@ -502,6 +502,7 @@ it("observes a writer commit through an open query reader without writing facts 
   }
 });
 
+// Reached 2.0 s under Full (36/12) load, too close to the 5 s default.
 it("leaves pending recovery, execution, and publication state untouched on query startup", async () => {
   const env = await setup();
   let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
@@ -650,7 +651,7 @@ it("leaves pending recovery, execution, and publication state untouched on query
     await query?.close();
     await env.close();
   }
-});
+}, 30_000);
 
 it("serves verified query artifacts and rejects tampered synthetic bytes", async () => {
   const env = await setup();

@@ -364,9 +364,11 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
           expect(turns[1]!.at - turns[0]!.end!).toBeGreaterThanOrEqual(5_000);
         }
       }
+      // Background work started here can outlast the 1 s poll default under Full load.
       await expect
         .poll(
           () => app!.execution!.transfers.resources.snapshot().temporary_bytes,
+          { timeout: 30_000 },
         )
         .toBe(0);
       const evidence = {

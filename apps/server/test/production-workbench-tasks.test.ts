@@ -699,6 +699,7 @@ describe("production task workbench composition", () => {
     }
   }, 0);
 
+  // Reached 2.3 s under Full (36/12) load, too close to the 5 s default.
   it("pauses and resumes active processing, cancels queued work, and preserves committed material", async () => {
     const env = await fixture();
     try {
@@ -774,8 +775,9 @@ describe("production task workbench composition", () => {
     } finally {
       await env.close();
     }
-  });
+  }, 30_000);
 
+  // Reached 2.1 s under Full (36/12) load, too close to the 5 s default.
   it("drains interrupted discovery before closing its database", async () => {
     const env = await fixture();
     let release!: () => void;
@@ -831,8 +833,9 @@ describe("production task workbench composition", () => {
       await request;
       await env.close();
     }
-  });
+  }, 30_000);
 
+  // Reached 2.9 s under Full (36/12) load, too close to the 5 s default.
   it.each(["background-task", "legacy-run"])(
     "cancels active %s parsing on shutdown and retains a readable interrupted task",
     async (entry) => {
@@ -889,6 +892,7 @@ describe("production task workbench composition", () => {
         await legacy;
       }
     },
+    30_000,
   );
 
   it("starts an empty home with the default library without opening Browser", async () => {

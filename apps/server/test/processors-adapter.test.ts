@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { processorFixture } from "./processor-fixture.js";
 import { createProcessorRegistry } from "../src/analysis/processor-registry.js";
+// Reached 2.0 s under Full (36/12) load, too close to the 5 s default.
 it("exposes only archive processors and forbids retired single-paper result chains", async () => {
   const registry = createProcessorRegistry();
   expect(registry.list().map((p) => [p.id, p.accepts])).toEqual([
@@ -28,7 +29,7 @@ it("exposes only archive processors and forbids retired single-paper result chai
   } finally {
     await e.close();
   }
-});
+}, 30_000);
 it("persists a failed map as an incomplete member and does not reduce it into a full-text negative", async () => {
   const e = await processorFixture();
   try {

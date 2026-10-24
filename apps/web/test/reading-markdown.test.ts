@@ -27,6 +27,7 @@ it("maps normalized Markdown blocks back to original UTF-8 boundaries including 
   expect(pending).not.toContain("图片：images/");
 });
 
+// Real Chromium work reached 1.8 s under Full (36/12) load, too close to the 5 s default.
 it("renders corrected HTML tables with spans and math while refusing active markup and remote resources", async () => {
   const { build } = await import("esbuild");
   const { chromium } = await import("playwright");
@@ -87,4 +88,4 @@ it("renders corrected HTML tables with spans and math while refusing active mark
   } finally {
     await browser.close();
   }
-});
+}, 30_000);

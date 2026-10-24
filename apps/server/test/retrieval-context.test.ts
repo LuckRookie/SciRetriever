@@ -533,6 +533,7 @@ describe("explicit retrieval projection and bounded Context", () => {
     }
   }, 10_000);
 
+  // Reached 2.8 s under Full (36/12) load, too close to the 5 s default.
   it("keeps a pinned DocumentVersion and its evidence readable after reopening and index rebuild", async () => {
     const env = await fixture(true, true);
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
@@ -566,7 +567,7 @@ describe("explicit retrieval projection and bounded Context", () => {
       await query?.close();
       await env.close();
     }
-  });
+  }, 30_000);
 
   it("publishes a generation, filters kinds before pagination, and reports missing material", async () => {
     const env = await fixture();
@@ -1090,6 +1091,7 @@ describe("explicit retrieval projection and bounded Context", () => {
     }
   });
 
+  // Reached 2.5 s under Full (36/12) load, too close to the 5 s default.
   it("rolls back an in-transaction repair failure and permits a clean explicit retry", async () => {
     const env = await fixture(true);
     try {
@@ -1167,7 +1169,7 @@ describe("explicit retrieval projection and bounded Context", () => {
     } finally {
       await env.close();
     }
-  });
+  }, 30_000);
 
   it("bounds a repeated long heading without replacing the previous generation", async () => {
     const env = await fixture(true);

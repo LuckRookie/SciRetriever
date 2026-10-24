@@ -97,10 +97,12 @@ it("keeps discovery and bibliography import explicit and uploads a selected PDF 
       .click();
     expect((await w.env.app.library.detail(missingId)).primary_pdf).toBeNull();
     await w.page.getByRole("button", { name: "确认上传", exact: true }).click();
+    // Background work started here can outlast the 1 s poll default under Full load.
     await expect
       .poll(
         async () =>
           (await w.env.app.library.detail(missingId)).primary_pdf !== null,
+        { timeout: 10000 },
       )
       .toBe(true);
     expect(w.env.modelCalls).toBe(0);

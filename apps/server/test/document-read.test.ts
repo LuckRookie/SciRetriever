@@ -167,6 +167,7 @@ async function segmentId(app: Application, version: string, ordinal: number) {
   ).segments[ordinal]!.segment_id;
 }
 describe("bounded document and material reading", () => {
+  // Reached 2.5 s under Full (36/12) load, too close to the 5 s default.
   it("creates and resolves file evidence without parser or document version", async () => {
     const env = await fixture();
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
@@ -197,8 +198,9 @@ describe("bounded document and material reading", () => {
       await query?.close();
       await env.close();
     }
-  });
+  }, 20000);
 
+  // Reached 2.6 s under Full (36/12) load, too close to the 5 s default.
   it("streams a selected original PDF by stable IDs and hash, and waits for active reads on close", async () => {
     const env = await fixture();
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
@@ -323,7 +325,7 @@ describe("bounded document and material reading", () => {
       await query?.close();
       await env.close();
     }
-  });
+  }, 20000);
 
   it("reads bounded Unicode slices, pinned D1 evidence after D2, and verified resources", async () => {
     const env = await fixture();
@@ -546,6 +548,7 @@ describe("bounded document and material reading", () => {
     }
   });
 
+  // Reached 2.3 s under Full (36/12) load, too close to the 5 s default.
   it.each(["DDL", "foreign-key"] as const)(
     "rechecks the catalog after external %s changes (DDL at once, data at the next start)",
     async (kind) => {
@@ -597,8 +600,10 @@ describe("bounded document and material reading", () => {
         await env.close();
       }
     },
+    20000,
   );
 
+  // Reached 2.2 s under Full (36/12) load, too close to the 5 s default.
   it("separates invalid locators, unsupported schemes and corrupt resource bytes", async () => {
     const env = await fixture();
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
@@ -703,8 +708,9 @@ describe("bounded document and material reading", () => {
       await query?.close();
       await env.close();
     }
-  });
+  }, 20000);
 
+  // Reached 2.2 s under Full (36/12) load, too close to the 5 s default.
   it("copies requests, rejects malformed cursors, and accepts equivalent selector key order", async () => {
     const env = await fixture();
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
@@ -778,7 +784,7 @@ describe("bounded document and material reading", () => {
       await query?.close();
       await env.close();
     }
-  });
+  }, 20000);
 
   it("pages dense segment evidence and reports only reliable resource context", async () => {
     const env = await fixture();
@@ -1177,6 +1183,7 @@ describe("bounded document and material reading", () => {
       await env.close();
     }
   });
+  // Reached 2.4 s under Full (36/12) load, too close to the 5 s default.
   it("passes a query HTTP disconnect to the read signal without dispatching maintenance", async () => {
     const env = await fixture();
     let workbench:
@@ -1236,5 +1243,5 @@ describe("bounded document and material reading", () => {
       await workbench?.close();
       await env.close();
     }
-  });
+  }, 20000);
 });

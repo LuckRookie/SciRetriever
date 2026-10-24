@@ -124,6 +124,7 @@ async function seededPublished() {
 }
 
 describe("explicit maintenance operation across Application, CLI and durable Jobs", () => {
+  // Reached 2.9 s under Full (36/12) load, too close to the 5 s default.
   it("commits a valid PDF through the shared operation in CLI, Application and Jobs", async () => {
     const url = "https://fixture.example.test/paper.pdf";
     const bytes = workbenchPdf();
@@ -219,7 +220,7 @@ describe("explicit maintenance operation across Application, CLI and durable Job
         ),
       );
     }
-  });
+  }, 30_000);
 
   it("preserves the public-address boundary and reports the same route failure in all three entrances", async () => {
     const origin = "https://127.0.0.1:9";
@@ -303,6 +304,7 @@ describe("explicit maintenance operation across Application, CLI and durable Job
     }
   });
 
+  // Reached 3.1 s under Full (36/12) load, too close to the 5 s default.
   it("freezes the same MetaLiterature request and maps normal exhaustion without expanding a read", async () => {
     const cli = await seeded();
     const direct = await seeded();
@@ -397,7 +399,7 @@ describe("explicit maintenance operation across Application, CLI and durable Job
         ),
       );
     }
-  });
+  }, 30_000);
 
   it("does not add a version inserted after durable target creation", async () => {
     const { home, app } = await seeded();

@@ -8,6 +8,7 @@ import { startQueryOnlyHttp } from "../src/workbench/http.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { runCli } from "../src/cli/main.js";
 
+// Reached 4.1 s under Full (36/12) load, too close to the 5 s default.
 it("returns identical counts through HTTP, CLI and MCP after a merge deduplicates a paper", async () => {
   const e = await tagFixture();
   try {
@@ -97,4 +98,4 @@ it("returns identical counts through HTTP, CLI and MCP after a merge deduplicate
   } finally {
     await e.close();
   }
-});
+}, 30_000);

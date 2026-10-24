@@ -112,6 +112,7 @@ it("prepares only READY corrected documents and preserves external submissions a
     await e.close();
   }
 }, 0);
+// Reached 2.9 s under Full (36/12) load, too close to the 5 s default.
 it("exposes direct CLI/MCP archive execution and refuses retired input kinds", async () => {
   const e = await archiveFixture();
   let client: Client | undefined,
@@ -195,4 +196,4 @@ it("exposes direct CLI/MCP archive execution and refuses retired input kinds", a
     await server?.close();
     await e.close();
   }
-});
+}, 30_000);

@@ -119,6 +119,7 @@ describe("metadata editor", () => {
       await rm(home, { recursive: true, force: true });
     }
   });
+  // Reached 2.5 s under Full (36/12) load, too close to the 5 s default.
   it("exposes the same read and edit operations through product entry and CLI without calling a model", async () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-metadata-interfaces-"),
@@ -213,5 +214,5 @@ describe("metadata editor", () => {
       await app.close();
       await rm(home, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 });

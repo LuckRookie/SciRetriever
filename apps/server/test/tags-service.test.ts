@@ -11,6 +11,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../src/mcp/server.js";
 const usage = { calls: 1, input_tokens: 20, output_tokens: 10 };
+// Reached 2.1 s under Full (36/12) load, too close to the 5 s default.
 it("uses two model steps, requires candidate rejection and corrected evidence, and reuses an existing alias", async () => {
   const calls: string[] = [];
   let observedCoverage: unknown;
@@ -101,7 +102,8 @@ it("uses two model steps, requires candidate rejection and corrected evidence, a
   } finally {
     await e.close();
   }
-});
+}, 30_000);
+// Reached 2.7 s under Full (36/12) load, too close to the 5 s default.
 it("filters primary/any/parent/aliases consistently for pages and frozen selection and reports unexamined old assignments", async () => {
   const e = await tagFixture();
   try {
@@ -155,7 +157,8 @@ it("filters primary/any/parent/aliases consistently for pages and frozen selecti
   } finally {
     await e.close();
   }
-});
+}, 30_000);
+// Reached 2.5 s under Full (36/12) load, too close to the 5 s default.
 it("preserves locked assignments, atomically merges ranks, and detects an intervening manual edit before undo", async () => {
   const e = await tagFixture();
   try {
@@ -191,7 +194,8 @@ it("preserves locked assignments, atomically merges ranks, and detects an interv
   } finally {
     await e.close();
   }
-});
+}, 30_000);
+// Reached 2.3 s under Full (36/12) load, too close to the 5 s default.
 it("previews backfill without a model and groups each paper with all candidate tags in one call", async () => {
   let calls = 0;
   const model: TagModel = {
@@ -238,8 +242,9 @@ it("previews backfill without a model and groups each paper with all candidate t
   } finally {
     await e.close();
   }
-});
+}, 30_000);
 
+// Reached 2.8 s under Full (36/12) load, too close to the 5 s default.
 it("absorbs a concurrently created vocabulary name across two corrected papers instead of creating duplicates", async () => {
   let selected = 0,
     release!: () => void;
@@ -327,8 +332,9 @@ it("absorbs a concurrently created vocabulary name across two corrected papers i
     release();
     await e.close();
   }
-});
+}, 30_000);
 
+// Reached 2.8 s under Full (36/12) load, too close to the 5 s default.
 it("backfills a new tag using corrected abstract evidence, and can undo a chain of merges without rewinding assignment revisions", async () => {
   const model: TagModel = {
     identity: "c".repeat(64),
@@ -395,8 +401,9 @@ it("backfills a new tag using corrected abstract evidence, and can undo a chain 
   } finally {
     await e.close();
   }
-});
+}, 30_000);
 
+// Reached 2.1 s under Full (36/12) load, too close to the 5 s default.
 it("consolidates changed tags once and rechecks assigned papers after a definition change with combined usage", async () => {
   const calls: string[] = [];
   let source = "",
@@ -460,8 +467,9 @@ it("consolidates changed tags once and rechecks assigned papers after a definiti
   } finally {
     await e.close();
   }
-});
+}, 30_000);
 
+// Reached 2.4 s under Full (36/12) load, too close to the 5 s default.
 it("rejects model output whose metadata input changed while the model was reading", async () => {
   let edit: () => Promise<void> = async () => {};
   const model: TagModel = {
@@ -516,4 +524,4 @@ it("rejects model output whose metadata input changed while the model was readin
   } finally {
     await e.close();
   }
-});
+}, 30_000);
