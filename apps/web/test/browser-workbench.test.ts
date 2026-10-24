@@ -41,8 +41,7 @@ beforeAll(async () => {
   origin = `http://127.0.0.1:${address.port}`;
   browser = await chromium.launch({
     executablePath:
-      process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ??
-      "/home/duanjw/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome",
+      process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ?? chromium.executablePath(),
     headless: true,
   });
 }, 30_000);

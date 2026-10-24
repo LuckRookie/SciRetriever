@@ -27,7 +27,7 @@ const tool = (name: string, args: Record<string, unknown>): ModelResponse => ({
     usage: { input_tokens: 10, output_tokens: 5 },
   },
 });
-it("requires full reading and saved images, then corrects forged citations in the same DSH conversation", async () => {
+it("requires full reading and saved images, then corrects illegal statement structure in the same DSH conversation", async () => {
   const env = await coreProcessingFixture();
   let runtime: DshAgentRuntime | undefined;
   try {
@@ -168,9 +168,17 @@ it("requires full reading and saved images, then corrects forged citations in th
                 return tool("read_segments", { ids: [measured] });
               case 7:
                 expect(text).toContain("60%");
-                return tool("submit_result", draft("forged"));
+                return tool("submit_result", {
+                  ...draft(measured),
+                  statements: [
+                    {
+                      ...draft(measured).statements[0],
+                      quantity: { value: "60" },
+                    },
+                  ],
+                });
               case 8:
-                expect(text).toContain("knowledge-invalid-evidence");
+                expect(text).toContain("result-schema");
                 return tool("submit_result", draft(measured));
               default:
                 throw new Error("Unexpected continuation");

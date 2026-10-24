@@ -64,7 +64,6 @@ export default function Processing() {
     <section className="feature-page processing-page">
       <PageHeader
         title="算子"
-        description="在一批文献上运行算子，回看运行记录与结果。"
         action={
           canCreate ? (
             <Button variant="primary" onPress={() => setDialog({})}>

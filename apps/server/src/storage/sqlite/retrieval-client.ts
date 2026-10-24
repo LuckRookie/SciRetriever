@@ -52,6 +52,24 @@ export class RetrievalStorageClient {
   active(): Promise<RetrievalGeneration | null> {
     return this.worker.retrieval("active");
   }
+  reusableGeneration(): Promise<RetrievalGeneration | null> {
+    return this.worker.retrieval("reusableGeneration");
+  }
+  reusePage(
+    generation: string,
+    kind: "metadata" | "document",
+    source: RetrievalSource,
+    after: number,
+    limit: number,
+  ): Promise<readonly (RetrievalEntry & { entry_id: number })[]> {
+    return this.worker.retrieval("reusePage", [
+      generation,
+      kind,
+      source,
+      after,
+      limit,
+    ]);
+  }
   search(
     ftsQuery: string,
     terms: readonly string[],

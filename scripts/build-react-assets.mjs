@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { build as bundle } from "esbuild";
 import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   copyFile,
@@ -30,7 +30,7 @@ const runtimePackages = [
 /** The login entry uses shared primitives without importing application pages. */
 export async function buildAuthAssets(outdir) {
   await mkdir(outdir, { recursive: true });
-  await bundle({
+  const result = await bundle({
     entryPoints: [
       resolve(repository, "apps/web/src/app/features/auth/main.tsx"),
     ],
@@ -41,11 +41,23 @@ export async function buildAuthAssets(outdir) {
     minify: true,
     define: { "process.env.NODE_ENV": '"production"' },
     outfile: resolve(outdir, "auth.js"),
+    loader: { ".woff2": "file" },
+    assetNames: "auth-fonts/[name]-[hash]",
+    publicPath: "/",
+    metafile: true,
   });
   await copyFile(
     resolve(repository, "apps/web/entry/auth.html"),
     resolve(outdir, "auth.html"),
   );
+  // Register only fonts emitted by this build, never arbitrary files in outdir.
+  const fonts = Object.keys(result.metafile.outputs)
+    .filter((name) => name.endsWith(".woff2"))
+    .map((name) =>
+      relative(resolve(outdir), resolve(name)).replaceAll("\\", "/"),
+    )
+    .sort();
+  await writeFile(resolve(outdir, "auth-fonts.json"), JSON.stringify(fonts));
 }
 
 /** The synthetic preview has no API transport and keeps the production CSP. */

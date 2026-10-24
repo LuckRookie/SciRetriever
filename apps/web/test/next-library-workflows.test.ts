@@ -23,13 +23,13 @@ it("opens keyboard search and live activity without starting work, and preserves
     const page = w.page;
     await page.keyboard.press("Control+k");
     const search = page.getByRole("dialog", {
-      name: "搜索文献库",
+      name: "搜索文献",
       exact: true,
     });
     await search
-      .getByRole("searchbox", { name: "搜索文献", exact: true })
+      .getByRole("combobox", { name: "搜索文献", exact: true })
       .fill("Unparsed");
-    await search.getByRole("button", { name: "搜索", exact: true }).click();
+    await search.getByRole("button", { name: /^在文献库中查看全部/ }).click();
     await expect.poll(() => page.locator(".paper-row").count()).toBe(1);
     expect(
       JSON.parse(new URL(page.url()).searchParams.get("query")!),
@@ -51,7 +51,7 @@ it("opens keyboard search and live activity without starting work, and preserves
     expect(w.env.modelCalls).toBe(0);
     await page.keyboard.press("Escape");
     const checked = page.getByRole("checkbox", {
-      name: "选择已加载的文献",
+      name: "全选已加载",
       exact: true,
     });
     await checked.focus();

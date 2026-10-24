@@ -269,7 +269,7 @@ it("searches source and knowledge in all three modes, paginates, and explains Ch
     await search(w.page, "纳米晶", "source");
     expect(
       await w.page.locator('[data-testid="retrieval-text"]').allTextContents(),
-    ).toEqual(["纳米晶 合成 nanocrystal.\n\n"]);
+    ).toEqual(["纳米晶 合成 nanocrystal."]);
     await search(w.page, "钙钛矿", "source");
     expect(
       await w.page.locator('[data-testid="retrieval-result"]').count(),
@@ -448,11 +448,15 @@ it("opens the fixed hit after a new default is published and restores the query 
     const parseCallsAfterSetup = w.env.parseCalls;
     await w.recordSetup();
     await w.page.locator('[data-testid="retrieval-source"]').first().click();
-    // The title appears before the fixed text slice is read and verified.
-    await w.page.locator('.react-reader[data-reading-ready="true"]').waitFor();
-    expect(await w.page.locator(".reading-article").textContent()).toContain(
-      "original observation",
-    );
+    // A same-source refresh may clear the body after a prior ready observation.
+    // Read readiness and verified text together, without a gap between commands.
+    await expect
+      .poll(() =>
+        w.page
+          .locator('.react-reader[data-reading-ready="true"] .reading-article')
+          .textContent(),
+      )
+      .toContain("original observation");
     expect(new URL(w.page.url()).searchParams.get("document")).toBe(
       w.parsed.document.document_version_id,
     );

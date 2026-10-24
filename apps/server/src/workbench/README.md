@@ -14,6 +14,8 @@
 
 ## 正式工作台接口
 
+正式工作台与独立查询入口对资源清单中 `/assets/` 下带八位内容 hash 的 JS、CSS、WOFF/WOFF2 成功响应使用 `Cache-Control: private, max-age=31536000, immutable`。登录页另外通过 `auth-fonts.json` 登记同源 `/auth-fonts/` 下带八位内容 hash 的 WOFF2，允许未登录 GET 访问并采用相同缓存策略；清单以外的字体、工作台资源及业务数据不因此公开。HTML、登录 JS/CSS、API、阅读材料、不带 hash 的资源和拒绝响应均保持 `no-store`；CSP 保持不变。
+
 正式主页面使用 `live.html` / `workspace.css` 和库中心 UI bundle；静态入口允许经校验的 `view`、`reader`、查询条件和固定产物/任务参数。Browser 的 `GET /api/view` 直接返回 WorkbenchView，命令回执仍以 `view` 字段封装。
 
 正式工作台绑定启动配置选中的同一组 catalog 与资产根目录。所有业务调用复用 Application、Entry 或只读 QueryApplication，不在 HTTP 内另建业务库或任务事实。

@@ -27,6 +27,9 @@ import {
 } from "../../data/folders.js";
 import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
+import { archiveQuery } from "../../data/archive.js";
+import { record } from "../../data/wire.js";
+import { Icon as SectionIcon } from "../../shell/icon.js";
 
 /** Drag payloads between library rows and the folder tree. */
 export const LITERATURE_DRAG = "application/x-sciretriever-literature";
@@ -119,6 +122,25 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
     shell = useShell(),
     queries = useQueryClient();
   const folders = useFolders();
+  // Only the total is needed; it shares the archive query prefix so issue
+  // actions refresh it.
+  const issues = useQuery({
+    queryKey: ["archive", "issues", "count"],
+    queryFn: async ({ signal }) =>
+      Number(
+        record(
+          await archiveQuery(
+            api,
+            "archive",
+            { operation: "issues", request: { offset: 0, limit: 1 } },
+            signal,
+          ),
+          "archive issues",
+        ).total_count ?? 0,
+      ),
+    enabled: api.workspace.readiness === "ready",
+    staleTime: 30000,
+  });
   const counts = useQuery({
     queryKey: ["library", "counts", emptyQuery()],
     queryFn: ({ signal }) => readLibraryCounts(api, emptyQuery(), signal),
@@ -317,6 +339,7 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
     </ul>
   );
   const recent = route.section === "lib" && route.query.recently_opened;
+  const needsAction = route.section === "archive" && !route.literature;
   return (
     <div
       className="folder-navigation"
@@ -344,6 +367,24 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
         <span className="folder-name">最近阅读</span>
         <span className="navigation-count">
           {counts.data?.recently_opened.toLocaleString() ?? ""}
+        </span>
+      </Button>
+      <Button
+        variant="text"
+        className="folder-open folder-recent"
+        aria-current={needsAction ? "page" : false}
+        icon={<SectionIcon name="archive" />}
+        onPress={() => {
+          navigate({ view: "archive", literature: null });
+          onNavigate();
+        }}
+      >
+        <span className="folder-name">需处理</span>
+        <span
+          className="navigation-count"
+          data-zero={issues.data === 0 || undefined}
+        >
+          {issues.data?.toLocaleString() ?? ""}
         </span>
       </Button>
       {folders.isError ? (

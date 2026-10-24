@@ -99,30 +99,37 @@
 }
 .snapshot-list {
   display: grid;
-  border-top: 1px solid var(--line);
 }
-.snapshot-row {
-  display: grid;
-  gap: 2px;
-  padding: var(--space-3) var(--space-2);
+.snapshot-table tbody tr {
+  cursor: pointer;
+}
+.snapshot-table [data-numeric] {
+  text-align: right;
+  width: 120px;
+}
+.snapshot-table td {
+  vertical-align: middle;
+}
+.snapshot-open {
+  padding: 0;
   border: 0;
-  border-bottom: 1px solid var(--line);
   background: transparent;
   color: var(--fg);
+  font: 500 var(--text-interface) / var(--lh-body) var(--sans);
   text-align: left;
   cursor: pointer;
-  transition: background-color var(--dur-1);
 }
-.snapshot-row:hover {
-  background: var(--hover);
-}
-.snapshot-row-title {
-  font-size: var(--text-interface);
-  font-weight: 500;
-}
-.snapshot-row-meta {
-  font-size: var(--text-caption);
+.snapshot-time {
+  width: 180px;
   color: var(--fg2);
+}
+@media (max-width: 720px) {
+  .snapshot-table :is(th, td):nth-child(3) {
+    display: none;
+  }
+  .snapshot-time {
+    width: auto;
+  }
 }
 .snapshot-empty {
   color: var(--fg2);
@@ -220,5 +227,64 @@
   }
   .archive-issue {
     gap: 8px;
+  }
+}
+/* Vocabulary: one table grouped by category; a tag's details open beneath its row. */
+.vocabulary-toolbar > .ui-field {
+  flex: 1 1 280px;
+  max-width: 420px;
+}
+.vocabulary-table [data-numeric] {
+  width: 120px;
+  text-align: right;
+}
+.vocabulary-table td {
+  vertical-align: middle;
+}
+.vocabulary-group th {
+  position: static;
+  padding-top: var(--space-5);
+  color: var(--fg);
+  font-weight: 600;
+  font-size: var(--text-interface);
+}
+.vocabulary-table tr[data-depth="1"] td:first-child {
+  padding-left: var(--space-6);
+}
+.vocabulary-table td:first-child .ui-button {
+  padding-inline: 0;
+  height: auto;
+  color: var(--fg);
+  font-size: var(--text-interface);
+}
+.vocabulary-table tr[data-depth="1"] td:first-child .ui-button {
+  color: var(--fg2);
+}
+.vocabulary-table tr[data-selected] {
+  background: var(--sel);
+}
+.vocabulary-aliases {
+  color: var(--fg2);
+}
+.vocabulary-table tr.vocabulary-detail:hover {
+  background: transparent;
+}
+.vocabulary-detail > td > section {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+}
+.vocabulary-detail h2 {
+  margin: 0;
+}
+.vocabulary-detail p {
+  margin: 0;
+}
+@media (max-width: 720px) {
+  .vocabulary-table :is(th, td):nth-child(2) {
+    display: none;
   }
 }

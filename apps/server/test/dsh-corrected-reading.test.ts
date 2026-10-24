@@ -145,8 +145,20 @@ it("reads more than 8192 corrected blocks without losing the final evidence", as
     await f.close();
   }
 }, 30000);
+it("retains an unresolved segment declaration without rewriting the summary", async () => {
+  const f = await setup("DRY_RESULT_4.2_eV.", { invalidEvidence: true });
+  try {
+    const result = await f.run();
+    expect(result.content!.statements).toHaveLength(1);
+    expect(result.content!.statements[0]!.evidence).toMatchObject([
+      { locator: { segment_id: "forged" }, content_sha256: null },
+    ]);
+    expect(f.fake.calls).toHaveLength(1);
+  } finally {
+    await f.close();
+  }
+});
 it.each([
-  [{ invalidEvidence: true }, "knowledge-invalid-evidence"],
   [{ invalidQuantity: true }, "knowledge-response"],
   [{ notApplicable: true }, "knowledge-not-applicable"],
   [{ outputTokens: Number.NaN }, "knowledge-response"],

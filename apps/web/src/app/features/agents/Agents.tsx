@@ -12,6 +12,7 @@ import {
   MasterDetail,
   MasterItem,
   PageHeader,
+  PageNote,
   Select,
   Skeleton,
   Switch,
@@ -19,6 +20,7 @@ import {
 } from "../../components/index.js";
 import { archiveQuery, rows } from "../../data/archive.js";
 import { readAgentConversation } from "../../data/agent-conversation.js";
+import { RunSwitch, useActiveTaskCount } from "../tasks/RunSwitch.js";
 import { useApi } from "../../data/query.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { record } from "../../data/wire.js";
@@ -41,7 +43,9 @@ export default function Agents() {
   const api = useApi(),
     route = useUrlState(),
     session = route.parameters.get("agentSession"),
-    filter = route.parameters.get("agentStatus") ?? "running";
+    // A linked session may have ended; list everything so it stays visible.
+    filter =
+      route.parameters.get("agentStatus") ?? (session ? "all" : "running");
   const list = useInfiniteQuery({
     queryKey: ["agent-sessions", "list", filter],
     initialPageParam: undefined as number | undefined,
@@ -63,12 +67,14 @@ export default function Agents() {
       typeof p.next_before === "number" ? p.next_before : undefined,
   });
   const sessions = list.data?.pages.flatMap((p) => rows(p)) ?? [];
+  const running = useActiveTaskCount();
   return (
     <section className="agent-monitor">
       <PageHeader
-        title="Agent"
-        description="观看当前工具调用和核对过程。结束后的过程记录保留 7 天，查看不会暂停任务。"
+        title="任务"
+        count={running ? `${running} 个进行中` : undefined}
       />
+      <RunSwitch value="agent" />
       <MasterDetail
         label="Agent 会话"
         toolbar={
@@ -93,7 +99,12 @@ export default function Agents() {
               <MasterItem
                 key={String(s.session_id)}
                 selected={session === s.session_id}
-                onPress={() => navigate({ agentSession: String(s.session_id) })}
+                onPress={() =>
+                  navigate({
+                    agentSession: String(s.session_id),
+                    agentStatus: filter,
+                  })
+                }
                 title={`${agentRoleName(
                   String(record(s.subject, "subject").kind ?? s.role),
                 )} · ${String(s.title || "文献处理中")}`}
@@ -152,6 +163,7 @@ export default function Agents() {
           )
         }
       />
+      <PageNote>结束后的过程记录保留 7 天。</PageNote>
     </section>
   );
 }

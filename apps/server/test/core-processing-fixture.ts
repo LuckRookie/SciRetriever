@@ -33,6 +33,11 @@ const baseConfiguration =
   '[providers.fixture]\napi="openai-chat-completions"\nbase_url="http://127.0.0.1:9/v1"\n[models."fixture/model"]\nreasoning="medium"\nstream=false\n[analyze]\nmodel="fixture/model"\n';
 export async function coreProcessingFixture(
   optionsInput: {
+    homeParent?: string;
+    configurationText?: string;
+    offline?: boolean;
+    sourcePdf?: Uint8Array;
+    pageCount?: number;
     analysisModel?: boolean;
     textLayer?: (text: string) => string;
     headerOnly?: boolean;
@@ -41,7 +46,9 @@ export async function coreProcessingFixture(
     metadata?: ApplicationOptions["metadata"];
   } = {},
 ) {
-  const home = await mkdtemp(join(tmpdir(), "sciretriever-core-processing-"));
+  const home = await mkdtemp(
+    join(optionsInput.homeParent ?? tmpdir(), "sciretriever-core-processing-"),
+  );
   const config = join(home, ".sciretriever");
   await mkdir(config, { mode: 0o700 });
   await writeFile(
@@ -51,7 +58,8 @@ export async function coreProcessingFixture(
       : baseConfiguration) +
       (optionsInput.archiveProfile
         ? `[parsing]\narchive_profile="${optionsInput.archiveProfile}"\n`
-        : ""),
+        : "") +
+      (optionsInput.configurationText ?? ""),
     { mode: 0o600 },
   );
   await initializeCatalogSchema(join(home, "catalog.sqlite"));
@@ -94,22 +102,37 @@ export async function coreProcessingFixture(
     };
   };
   const options: ApplicationOptions = {
+    ...(optionsInput.offline
+      ? {
+          metadataAssembly: {
+            resolver: async () => {
+              throw new Error("Synthetic external metadata request blocked");
+            },
+          },
+          acquisitionAssembly: {
+            resolver: async () => {
+              throw new Error("Synthetic external acquisition request blocked");
+            },
+          },
+        }
+      : {}),
     ...(optionsInput.metadata ? { metadata: optionsInput.metadata } : {}),
     proofreadPages: {
       method: "synthetic-pdf-page-v1",
       async inspect(_asset, _hash, signal) {
         signal?.throwIfAborted();
-        return [
-          {
-            page: 0,
+        return Array.from(
+          { length: optionsInput.pageCount ?? 1 },
+          (_, page) => ({
+            page,
             kind: "text-layer",
             text: optionsInput.textLayer?.(text) ?? text,
             visible_glyphs: text.length,
             hidden_glyphs: 0,
             unmapped_glyphs: 0,
             has_graphics: false,
-          },
-        ];
+          }),
+        );
       },
       async image() {
         throw new Error("Unexpected fixture image request");
@@ -125,7 +148,7 @@ export async function coreProcessingFixture(
             return {
               source_asset_id: request.source_asset_id,
               source_sha256: request.source_sha256,
-              page_count: 1,
+              page_count: optionsInput.pageCount ?? 1,
               markdown: {
                 artifact: {
                   sha256: await sha256(bytes),
@@ -153,6 +176,7 @@ export async function coreProcessingFixture(
           },
         },
         optionsInput.headerOnly,
+        (optionsInput.pageCount ?? 1) > 1,
       ),
     },
     agentTransportFactory: () => async (request) => {
@@ -213,7 +237,7 @@ export async function coreProcessingFixture(
     await app.database.putLiterature(FIXTURE_LITERATURE);
     await app.maintenance!.ingestPdf({
       literature_id: FIXTURE_LITERATURE.literature_id,
-      bytes: workbenchPdf(),
+      bytes: optionsInput.sourcePdf ?? workbenchPdf(),
     });
     const asset = (await app.library.detail(FIXTURE_LITERATURE.literature_id))
       .primary_pdf!.asset;

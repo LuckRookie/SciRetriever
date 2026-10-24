@@ -357,7 +357,7 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
       .locator('.reading-pdf-page[data-rendered="true"]')
       .first()
       .waitFor();
-    expect(await page.locator(".reader-facts").innerText()).toMatch(
+    expect(await page.locator(".reader-facts").first().innerText()).toMatch(
       /文章身份\s+未核验/u,
     );
     const read = await page.evaluate(async (literatureId) => {

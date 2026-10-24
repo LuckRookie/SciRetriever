@@ -766,7 +766,7 @@ export default function Reader() {
           </IconButton>
           <Menu
             label="更多"
-            icon={<Icon name="more" />}
+            iconOnly
             items={[
               {
                 id: "reading-settings",
@@ -1044,7 +1044,7 @@ export default function Reader() {
               </div>
             ) : null}
             {mode === "results" ? (
-              <div className="reading-scroll">
+              <div className="reading-scroll" data-mode="results">
                 <PaperResults
                   id={id}
                   onOpenSummary={() => changeMode("know")}

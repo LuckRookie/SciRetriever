@@ -73,13 +73,14 @@ it("preserves drafts across section publications and conflicts, explains restart
   try {
     const page = w.page;
     await page.getByRole("tab", { name: "建档", exact: true }).click();
-    await page.getByText(/部署解析 profile：/).waitFor();
-    expect(await page.getByText(/部署解析 profile：/).textContent()).toContain(
-      "vlm-engine",
-    );
+    const profile = page.locator(".ui-definition", { hasText: "解析 profile" });
+    await profile.waitFor();
+    expect(await profile.textContent()).toContain("vlm-engine");
     await page
       .getByRole("textbox", { name: "每篇矫正调用上限", exact: true })
       .fill("9");
+    // A number field commits on leaving it; then the section's save appears.
+    await page.keyboard.press("Tab");
     const publication = page.waitForResponse(
       (response) =>
         new URL(response.url()).pathname === "/api/configuration/publish-json",
@@ -95,7 +96,7 @@ it("preserves drafts across section publications and conflicts, explains restart
       )
       .toBe(9);
     await page.getByRole("tab", { name: "运行状态", exact: true }).click();
-    const runtime = page.locator(".settings-section [data-state]");
+    const runtime = page.locator(".settings-runtime[data-state]");
     await expect.poll(() => runtime.textContent()).toContain("core");
     expect(await runtime.getAttribute("data-state")).toBe("restart-required");
     await page

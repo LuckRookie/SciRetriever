@@ -64,8 +64,7 @@ async function saveHostEvidence(
 }
 
 const cachedBrowser =
-  process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ??
-  "/home/duanjw/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome";
+  process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ?? chromium.executablePath();
 const browserAvailable = existsSync(cachedBrowser);
 const created: string[] = [];
 const servers: Server[] = [];
@@ -317,6 +316,8 @@ describe("persistent browser profile host", () => {
         await host.close();
       }
     },
+    // Launching Chromium and up to eight pages exceeds the 5 s default under Full load.
+    30000,
   );
 
   it.skipIf(!browserAvailable && !bundle)(

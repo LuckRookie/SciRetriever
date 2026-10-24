@@ -365,6 +365,7 @@ export class RetrievalStorageEngine {
   private observedDataVersion: number;
   private validatedDataVersion: number | null = null;
   private repairGeneration: string | null = null;
+  private repairText: DatabaseSync | null = null;
   readonly readOnly: boolean;
   private readonly config: RetrievalSchemaConfig;
   constructor(path: string, readOnly: boolean, config: RetrievalSchemaConfig) {
@@ -427,6 +428,8 @@ export class RetrievalStorageEngine {
     }
   }
   close(): void {
+    this.repairText?.close();
+    this.repairText = null;
     this.db.close();
   }
   revision(): number {
@@ -471,12 +474,17 @@ export class RetrievalStorageEngine {
       // replace a damaged, derived retrieval projection.
       repairing = true;
     }
-    this.db.exec("BEGIN IMMEDIATE");
+    // Anonymous temporary SQLite storage survives main-connection refreshes,
+    // spills to disk, and disappears on close. It adds no catalog schema.
+    const repairText = repairing ? new DatabaseSync("") : null;
+    let transaction = false;
     try {
-      this.db.exec(
-        "CREATE TEMP TABLE IF NOT EXISTS retrieval_repair_text(entry_id INTEGER PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL)",
-      );
-      this.db.exec("DELETE FROM temp.retrieval_repair_text");
+      if (repairText)
+        repairText.exec(
+          "PRAGMA temp_store=FILE; CREATE TEMP TABLE retrieval_repair_text(entry_id INTEGER PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL)",
+        );
+      this.db.exec("BEGIN IMMEDIATE");
+      transaction = true;
       // Only interrupted staging is removed; ready generations remain readable.
       const stale = this.db
         .prepare(
@@ -501,12 +509,15 @@ export class RetrievalStorageEngine {
         )
         .run(id, sourceRevision, new Date().toISOString());
       this.db.exec("COMMIT");
-      this.repairGeneration = repairing ? id : null;
-      return id;
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      if (transaction) this.db.exec("ROLLBACK");
+      repairText?.close();
       throw error;
     }
+    this.repairText?.close();
+    this.repairText = repairText;
+    this.repairGeneration = repairing ? id : null;
+    return id;
   }
   insertEntries(
     generationId: string,
@@ -515,16 +526,26 @@ export class RetrievalStorageEngine {
   ): void {
     this.refreshReader();
     this.db.exec("BEGIN IMMEDIATE");
+    const repair =
+      this.repairGeneration === generationId ? this.repairText : null;
+    const stagedIds: (number | bigint)[] = [];
+    let repairTransaction = false;
     try {
+      if (repair) {
+        repair.exec("BEGIN");
+        repairTransaction = true;
+      }
       const insert = this.db.prepare(
         "INSERT INTO retrieval_entries(generation_id,kind,literature_id,meta_literature_id,metadata_revision,metadata_sha256,document_version_id,representation_sha256,source_asset_id,source_asset_sha256,unit_start_utf8,unit_end_utf8,unit_sha256,section_id,unit_ordinal,is_default) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
       );
       const fts = this.db.prepare(
         "INSERT INTO retrieval_fts(rowid,title,body) VALUES(?,?,?)",
       );
-      const repairText = this.db.prepare(
-        "INSERT INTO temp.retrieval_repair_text(entry_id,title,body) VALUES(?,?,?)",
-      );
+      const repairText = repair
+        ? repair.prepare(
+            "INSERT INTO temp.retrieval_repair_text(entry_id,title,body) VALUES(?,?,?)",
+          )
+        : null;
       for (const e of entries) {
         const result = insert.run(
           generationId,
@@ -544,24 +565,40 @@ export class RetrievalStorageEngine {
           e.unit_ordinal,
           e.is_default,
         );
-        if (this.repairGeneration === generationId)
+        if (repairText) {
           repairText.run(result.lastInsertRowid, e.title, e.body);
-        else fts.run(result.lastInsertRowid, e.title, e.body);
+          stagedIds.push(result.lastInsertRowid);
+        } else fts.run(result.lastInsertRowid, e.title, e.body);
       }
       this.db
         .prepare(
           "UPDATE retrieval_generations SET entry_count=entry_count+?,fts_count=fts_count+?,source_count=source_count+? WHERE generation_id=? AND status='building'",
         )
         .run(entries.length, entries.length, sourceCount, generationId);
+      if (repair) {
+        repair.exec("COMMIT");
+        repairTransaction = false;
+      }
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
+      if (repairTransaction) repair!.exec("ROLLBACK");
+      else if (repair) {
+        // If the main commit failed after temporary staging committed, remove
+        // only this batch. It must never be mistaken for published input.
+        const remove = repair.prepare(
+          "DELETE FROM temp.retrieval_repair_text WHERE entry_id=?",
+        );
+        for (const id of stagedIds) remove.run(id);
+      }
       throw error;
     }
   }
   publish(generationId: string, sourceRevision: number): RetrievalGeneration {
     this.refreshReader();
     this.db.exec("BEGIN IMMEDIATE");
+    let published: RetrievalGeneration;
+    const repairing = this.repairGeneration === generationId;
     try {
       if (this.revision() !== sourceRevision)
         throw new RetrievalStorageError("index-stale");
@@ -583,16 +620,15 @@ export class RetrievalStorageEngine {
             .get(generationId) as { n: number }
         ).n,
       );
-      const repairing = this.repairGeneration === generationId;
       const ftsCount = Number(
         (
-          this.db
+          (repairing ? this.repairText! : this.db)
             .prepare(
               repairing
-                ? "SELECT count(*) AS n FROM temp.retrieval_repair_text t JOIN retrieval_entries e ON e.entry_id=t.entry_id WHERE e.generation_id=?"
+                ? "SELECT count(*) AS n FROM temp.retrieval_repair_text"
                 : "SELECT count(*) AS n FROM retrieval_entries e JOIN retrieval_fts f ON f.rowid=e.entry_id WHERE e.generation_id=?",
             )
-            .get(generationId) as { n: number }
+            .get(...(repairing ? [] : [generationId])) as { n: number }
         ).n,
       );
       if (
@@ -608,9 +644,18 @@ export class RetrievalStorageEngine {
         this.db.exec(
           "CREATE VIRTUAL TABLE retrieval_fts USING fts5(title,body,tokenize='unicode61')",
         );
-        this.db.exec(
-          "INSERT INTO retrieval_fts(rowid,title,body) SELECT entry_id,title,body FROM temp.retrieval_repair_text ORDER BY entry_id",
+        const insert = this.db.prepare(
+          "INSERT INTO retrieval_fts(rowid,title,body) VALUES(?,?,?)",
         );
+        const member = this.db.prepare(
+          "SELECT 1 FROM retrieval_entries WHERE generation_id=? AND entry_id=?",
+        );
+        for (const row of this.repairText!.prepare(
+          "SELECT entry_id,title,body FROM temp.retrieval_repair_text ORDER BY entry_id",
+        ).iterate()) {
+          if (!member.get(generationId, row.entry_id!)) fail();
+          insert.run(row.entry_id!, row.title!, row.body!);
+        }
       }
       this.db
         .prepare(
@@ -633,11 +678,9 @@ export class RetrievalStorageEngine {
           .prepare("DELETE FROM retrieval_generations WHERE generation_id<>?")
           .run(generationId);
         inspectCatalogWithRetrieval(this.db, this.config);
-        this.db.exec("DELETE FROM temp.retrieval_repair_text");
       }
       this.db.exec("COMMIT");
-      if (repairing) this.repairGeneration = null;
-      return {
+      published = {
         generation_id: row.generation_id,
         source_revision: row.source_revision,
         entry_count: row.entry_count,
@@ -647,6 +690,12 @@ export class RetrievalStorageEngine {
       this.db.exec("ROLLBACK");
       throw error;
     }
+    if (repairing) {
+      this.repairText!.close();
+      this.repairText = null;
+      this.repairGeneration = null;
+    }
+    return published;
   }
   active(): RetrievalGeneration | null {
     this.refreshReader();
@@ -692,6 +741,48 @@ export class RetrievalStorageEngine {
       entry_count: row.entry_count,
       source_count: row.source_count,
     };
+  }
+  reusableGeneration(): RetrievalGeneration | null {
+    this.refreshReader();
+    try {
+      // Never turn corrupt indexed text into a new trusted generation.
+      this.validate(false);
+      return this.active();
+    } catch (error) {
+      if (error instanceof RetrievalStorageError) return null;
+      throw error;
+    }
+  }
+  reusePage(
+    generation: string,
+    kind: "metadata" | "document",
+    source: RetrievalSource,
+    after: number,
+    limit: number,
+  ): readonly (RetrievalEntry & { entry_id: number })[] {
+    return this.db
+      .prepare(
+        `SELECT e.entry_id,e.kind,e.literature_id,e.meta_literature_id,e.metadata_revision,e.metadata_sha256,e.document_version_id,e.representation_sha256,e.source_asset_id,e.source_asset_sha256,e.unit_start_utf8,e.unit_end_utf8,e.unit_sha256,e.section_id,e.unit_ordinal,e.is_default,f.title,f.body
+       FROM retrieval_entries e JOIN retrieval_fts f ON f.rowid=e.entry_id
+       WHERE e.generation_id=? AND e.kind=? AND e.literature_id=? AND e.meta_literature_id=? AND e.metadata_revision=? AND e.metadata_sha256=?
+       AND e.document_version_id IS ? AND e.representation_sha256 IS ? AND e.source_asset_id IS ? AND e.source_asset_sha256 IS ? AND e.is_default=?
+       AND e.entry_id>? ORDER BY e.entry_id LIMIT ?`,
+      )
+      .all(
+        generation,
+        kind,
+        source.literature_id,
+        source.meta_literature_id,
+        source.metadata_revision,
+        source.metadata_sha256,
+        kind === "document" ? source.document_version_id! : null,
+        kind === "document" ? source.representation_sha256! : null,
+        kind === "document" ? source.source_asset_id! : null,
+        kind === "document" ? source.source_asset_sha256! : null,
+        kind === "document" ? source.is_default! : 1,
+        after,
+        limit,
+      ) as unknown as (RetrievalEntry & { entry_id: number })[];
   }
   search(
     ftsQuery: string,

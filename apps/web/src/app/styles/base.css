@@ -10,7 +10,7 @@
   body {
     background: var(--bg);
     color: var(--fg);
-    font: var(--text-interface) / 1.45 var(--sans);
+    font: var(--text-interface) / var(--lh-body) var(--sans);
     -webkit-font-smoothing: antialiased;
   }
   button,
@@ -65,10 +65,16 @@
   p {
     margin-top: 0;
   }
+  h2 {
+    font-size: var(--type-section);
+  }
+  h3 {
+    font-size: var(--text-interface);
+  }
   h1,
   h2,
   h3 {
-    line-height: 1.3;
+    line-height: var(--lh-heading);
     text-wrap: balance;
     font-weight: 600;
   }

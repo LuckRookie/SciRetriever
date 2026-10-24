@@ -1,19 +1,54 @@
 import { readFile, readdir } from "node:fs/promises";
 import type { WorkbenchStaticAsset } from "./http.js";
 
-const manifest = [
+const authManifest = [
   ["/auth", "auth.html", "text/html; charset=utf-8"],
   ["/auth.js", "auth.js", "text/javascript; charset=utf-8"],
   ["/auth.css", "auth.css", "text/css; charset=utf-8"],
 ] as const;
 
-async function loadAssets(
-  entries: readonly (readonly [string, string, string])[],
+export function isAuthFontPath(pathname: string): boolean {
+  return /^\/auth-fonts\/[A-Za-z0-9_-]+-[A-Z0-9]{8}\.woff2$/u.test(pathname);
+}
+
+/** Apply only after the requested asset has been found in the build registry. */
+export function staticAssetCacheControl(pathname: string): string {
+  return isAuthFontPath(pathname) ||
+    /^\/assets\/[A-Za-z0-9_-]+-[A-Za-z0-9_-]{8}\.(?:js|css|woff2?)$/u.test(
+      pathname,
+    )
+    ? "private, max-age=31536000, immutable"
+    : "no-store";
+}
+
+/** Only explicitly bundled login fonts are eligible for unauthenticated access. */
+export async function loadAuthAssets(
+  base = new URL("../web/", import.meta.url),
 ): Promise<ReadonlyMap<string, WorkbenchStaticAsset>> {
+  const names: unknown = JSON.parse(
+    await readFile(new URL("auth-fonts.json", base), "utf8"),
+  );
+  if (
+    !Array.isArray(names) ||
+    names.length > 2000 ||
+    !names.every(
+      (name) => typeof name === "string" && isAuthFontPath(`/${name}`),
+    )
+  )
+    throw new Error("Invalid login font asset manifest");
   const assets = new Map<string, WorkbenchStaticAsset>();
-  for (const [route, name, contentType] of entries) {
-    const body = await readFile(new URL(`../web/${name}`, import.meta.url));
+  for (const [route, name, contentType] of authManifest) {
+    const body = await readFile(new URL(name, base));
     assets.set(route, Object.freeze({ contentType, body }));
+  }
+  for (const name of names as string[]) {
+    assets.set(
+      `/${name}`,
+      Object.freeze({
+        contentType: "font/woff2",
+        body: await readFile(new URL(name, base)),
+      }),
+    );
   }
   return assets;
 }
@@ -22,7 +57,7 @@ async function loadAssets(
 export async function loadWorkbenchAssets(): Promise<
   ReadonlyMap<string, WorkbenchStaticAsset>
 > {
-  const assets = new Map(await loadAssets(manifest));
+  const assets = new Map(await loadAuthAssets());
   for (const [route, asset] of await loadReadingAssets())
     assets.set(route, asset);
   for (const [route, asset] of await loadReactAssets())

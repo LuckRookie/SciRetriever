@@ -634,8 +634,24 @@ export function RunOperatorDialog({
                           : { overview: "概览", detailed: "详细分析" }[purpose]}
               </dd>
             </div>
+            <div>
+              <dt>输入</dt>
+              <dd>
+                {resolved.data
+                  ? `${resolved.data.ids.length} 篇 · 提交时固定输入版本`
+                  : resolved.isPending
+                    ? "正在读取范围与已有材料…"
+                    : "未能读取"}
+              </dd>
+            </div>
+            {resolved.data?.gaps.length ? (
+              <div>
+                <dt>缺口</dt>
+                <dd>{resolved.data.gaps.length} 篇缺少解析正文，保留为缺口</dd>
+              </div>
+            ) : null}
           </dl>
-          <ScopeStatus resolved={resolved} />
+          <ScopeStatus resolved={resolved} listOnly />
           {!outcome ? (
             <UsageEstimate request={confirmRequest(request)} />
           ) : null}
@@ -668,11 +684,16 @@ function confirmRequest(build: () => unknown) {
 }
 function ScopeStatus({
   resolved,
+  listOnly = false,
 }: {
   resolved: UseQueryResult<{ ids: string[]; gaps: string[] }>;
+  /** The confirm step shows the counts in its summary table. */
+  listOnly?: boolean;
 }) {
   if (resolved.isPending)
-    return <Skeleton rows={2} label="正在读取范围与已有材料" />;
+    return listOnly ? null : (
+      <Skeleton rows={2} label="正在读取范围与已有材料" />
+    );
   if (resolved.isError)
     return (
       <ErrorNotice
@@ -683,10 +704,14 @@ function ScopeStatus({
     );
   return (
     <>
-      <p role="status">{resolved.data.ids.length} 篇 · 提交时固定输入版本</p>
+      {listOnly ? null : (
+        <p role="status">{resolved.data.ids.length} 篇 · 提交时固定输入版本</p>
+      )}
       {resolved.data.gaps.length ? (
         <>
-          <p>{resolved.data.gaps.length} 篇缺少解析正文，将保留为缺口。</p>
+          {listOnly ? null : (
+            <p>{resolved.data.gaps.length} 篇缺少解析正文，将保留为缺口。</p>
+          )}
           <Disclosure title="查看缺少材料的文献">
             <ul>
               {resolved.data.gaps.map((gap) => (

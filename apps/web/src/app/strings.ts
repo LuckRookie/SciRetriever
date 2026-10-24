@@ -5,7 +5,7 @@ import type {
 
 export const sectionLabels = {
   lib: "文献库",
-  archive: "建档问题",
+  archive: "需处理",
   tags: "词表",
   snapshots: "快照",
   disc: "入库",
@@ -15,7 +15,7 @@ export const sectionLabels = {
   ext: "算子",
   task: "任务",
   web: "浏览器",
-  agent: "Agent",
+  agent: "Agent 会话",
   set: "设置",
   lab: "交互实验台",
   gallery: "组件画廊",
@@ -63,7 +63,7 @@ export const archiveStrings = {
     manual: "人工",
     backfill: "标签回溯",
   },
-  title: "建档问题",
+  title: "需处理",
   description: "按需处理影响阅读与加工的问题。解析、建档和总结都由你分别启动。",
   metadata: "字段与来源",
   continue: "继续建档",

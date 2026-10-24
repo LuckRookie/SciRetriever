@@ -113,13 +113,18 @@ describe("durable task workbench", () => {
         exact: true,
       });
       const create = async () => {
+        // The task detail is a modal drawer; close it before using the shell.
+        if (await drawer.isVisible()) {
+          await page.keyboard.press("Escape");
+          await drawer.waitFor({ state: "hidden" });
+        }
         await page
           .getByLabel("主导航", { exact: true })
           .getByRole("button", { name: /文献库/ })
           .click();
         await showAllLibraryStatuses(page);
         const selectAll = page.getByRole("checkbox", {
-          name: "选择已加载的文献",
+          name: "全选已加载",
           exact: true,
         });
         if (!(await selectAll.isChecked())) await selectAll.press("Space");
@@ -203,6 +208,8 @@ describe("durable task workbench", () => {
       await page.reload();
       await drawer.getByText("已完成", { exact: true }).first().waitFor();
       expect(new URL(page.url()).searchParams.get("task")).toBe(completedId);
+      await page.keyboard.press("Escape");
+      await drawer.waitFor({ state: "hidden" });
       await page.getByRole("button", { name: /^活动/ }).click();
       const activity = page.getByRole("dialog", { name: "活动", exact: true });
       await activity
@@ -213,8 +220,11 @@ describe("durable task workbench", () => {
         .getByRole("button", { name: "打开文献", exact: true })
         .click();
       await page
-        .locator(".reader-information")
-        .getByText("Synthetic literature workbench", { exact: true })
+        .getByRole("navigation", { name: "工作区与阅读标签" })
+        .getByRole("button", {
+          name: "Synthetic literature workbench",
+          exact: true,
+        })
         .waitFor();
       expect(new URL(page.url()).searchParams.get("task")).toBe(completedId);
       await page.goBack();
@@ -239,15 +249,15 @@ describe("durable task workbench", () => {
       await page.route(listUrl, staleRoute);
       await page.getByRole("button", { name: "刷新任务", exact: true }).click();
       await expect.poll(() => listCalls).toBe(1);
-      await page.getByRole("tab", { name: "已结束", exact: true }).click();
+      await page.getByRole("button", { name: "已结束", exact: true }).click();
       await expect
-        .poll(() => page.locator(".tasks-list [data-task-id]").count())
+        .poll(() => page.locator(".task-table [data-task-id]").count())
         .toBe(2);
       releaseStale();
-      await page.getByRole("tab", { name: "全部", exact: true }).click();
+      await page.getByRole("button", { name: "全部", exact: true }).click();
       await page.getByRole("button", { name: "刷新任务", exact: true }).click();
       await expect
-        .poll(() => page.locator(".tasks-list [data-task-id]").count())
+        .poll(() => page.locator(".task-table [data-task-id]").count())
         .toBe(2);
       await page.unroute(listUrl, staleRoute);
       const failedList = (route: import("playwright").Route) =>
@@ -261,7 +271,7 @@ describe("durable task workbench", () => {
           { timeout: 10000 },
         )
         .toContainEqual(expect.stringContaining("操作未完成"));
-      expect(await page.locator(".tasks-list [data-task-id]").count()).toBe(2);
+      expect(await page.locator(".task-table [data-task-id]").count()).toBe(2);
       await page.unroute(listUrl, failedList);
       await page.getByRole("button", { name: "刷新任务", exact: true }).click();
       await expect
@@ -301,13 +311,13 @@ describe("durable task workbench", () => {
       );
       await page.getByRole("button", { name: "刷新任务", exact: true }).click();
       await expect
-        .poll(() => page.locator(".tasks-list [data-task-id]").count())
+        .poll(() => page.locator(".task-table [data-task-id]").count())
         .toBe(100);
       await page
         .getByRole("button", { name: "加载更多任务", exact: true })
         .click();
       await expect
-        .poll(() => page.locator(".tasks-list [data-task-id]").count())
+        .poll(() => page.locator(".task-table [data-task-id]").count())
         .toBe(105);
       expect(
         await page
@@ -317,10 +327,10 @@ describe("durable task workbench", () => {
       await createHistory("history-new-arrival");
       await page.getByRole("button", { name: "刷新任务", exact: true }).click();
       await expect
-        .poll(() => page.locator(".tasks-list [data-task-id]").count())
+        .poll(() => page.locator(".task-table [data-task-id]").count())
         .toBe(106);
       const loaded = await page
-        .locator(".tasks-list [data-task-id]")
+        .locator(".task-table [data-task-id]")
         .evaluateAll((rows) =>
           rows.map((row) => (row as HTMLElement).dataset.taskId),
         );
@@ -330,13 +340,13 @@ describe("durable task workbench", () => {
         .getByRole("searchbox", { name: "筛选任务", exact: true })
         .fill(completedId);
       await expect
-        .poll(() => page.locator(".tasks-list [data-task-id]").count())
+        .poll(() => page.locator(".task-table [data-task-id]").count())
         .toBe(1);
       await page
         .getByRole("searchbox", { name: "筛选任务", exact: true })
         .fill("");
       await expect
-        .poll(() => page.locator(".tasks-list [data-task-id]").count())
+        .poll(() => page.locator(".task-table [data-task-id]").count())
         .toBe(106);
       expect(errors).toEqual([]);
       await page.setViewportSize({ width: 390, height: 844 });
@@ -505,6 +515,9 @@ describe("durable task workbench", () => {
       await drawer.getByText("已完成", { exact: true }).first().waitFor();
       expect(env.parseCalls).toBe(4);
       await page.setViewportSize({ width: 390, height: 844 });
+      // The task detail is a modal drawer; close it before using the shell.
+      await page.keyboard.press("Escape");
+      await drawer.waitFor({ state: "hidden" });
       await page.getByRole("button", { name: "打开导航", exact: true }).click();
       await page.keyboard.press("Escape");
       await page

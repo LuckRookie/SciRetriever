@@ -46,6 +46,8 @@ export interface TabsProps {
   onChange: (value: string) => void;
   items: readonly TabItem[];
   children?: ReactNode;
+  /** Vertical tabs list sections down the side of a page, as in settings. */
+  orientation?: "horizontal" | "vertical";
 }
 function TabNavigation({
   label,
@@ -54,12 +56,14 @@ function TabNavigation({
   items,
   children,
   segmented,
+  orientation = "horizontal",
 }: TabsProps & { segmented: boolean }) {
   const id = useId();
   const { reduced } = useMotionPreference();
   return (
     <AriaTabs
       className={segmented ? "ui-segmented" : "ui-tabs"}
+      orientation={orientation}
       selectedKey={value}
       onSelectionChange={(key) => onChange(String(key))}
       disabledKeys={items
@@ -166,12 +170,12 @@ export type BadgeStatus =
 const badges: Record<BadgeStatus, readonly [string, string]> = {
   metadata: ["gray", "仅元数据"],
   pdf: ["blue", "有 PDF"],
-  ready: ["green", "内容已就绪"],
+  ready: ["green", "已就绪"],
   running: ["yellow", "进行中"],
   partial: ["yellow", "部分完成"],
   completed: ["green", "完成"],
   failed: ["red", "失败"],
-  unavailable: ["red", "无法获取"],
+  unavailable: ["purple", "无法获取"],
 };
 export function Badge({
   status,
@@ -229,6 +233,8 @@ export interface MenuOption {
   disabled?: boolean;
   description?: string;
   shortcut?: string;
+  /** Start a new group of items with a hairline above this one. */
+  divider?: boolean;
 }
 export function Menu({
   label,
@@ -282,6 +288,7 @@ export function Menu({
             <MenuItem
               id={item.id}
               className="ui-menu-item"
+              data-divider={item.divider || undefined}
               textValue={item.label}
               onAction={item.onAction}
             >

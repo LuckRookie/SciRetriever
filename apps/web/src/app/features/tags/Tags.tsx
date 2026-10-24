@@ -1,14 +1,15 @@
 import { UsageEstimate } from "../processing/UsageEstimate.js";
 import { serviceMessage } from "../../strings.js";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { parseTag, type Tag } from "@sciretriever/contracts";
+import { parseTag, parseTagListItem, type Tag } from "@sciretriever/contracts";
 import {
   Button,
   Dialog,
   Disclosure,
   EmptyState,
   ErrorNotice,
+  Icon,
   PageHeader,
   SearchField,
   Select,
@@ -74,7 +75,8 @@ export default function Tags() {
       typeof p.next_offset === "number" ? p.next_offset : undefined,
   });
   const vocabulary =
-    query.data?.pages.flatMap((p) => rows(p).map(parseTag)) ?? [];
+    query.data?.pages.flatMap((p) => rows(p).map(parseTagListItem)) ?? [];
+  const uses = new Map(vocabulary.map((t) => [t.tag_id, t.uses] as const));
   const state = useQuery({
     queryKey: ["tags", "state"],
     queryFn: async ({ signal }) =>
@@ -149,23 +151,140 @@ export default function Tags() {
       setBusy(false);
     }
   };
+  const detailPanel = detail.error ? (
+    <ErrorNotice message={errorMessage(detail.error)} />
+  ) : detail.data ? (
+    <>
+      <h2>{tagName(detail.data.tag)}</h2>
+      <p>{detail.data.tag.definition.includes}</p>
+      {detail.data.tag.definition.excludes ? (
+        <p>不包含：{detail.data.tag.definition.excludes}</p>
+      ) : null}
+      <p>同义词：{detail.data.tag.aliases.join("、") || "无"}</p>
+      <p>
+        {Number(detail.data.uses)} 篇使用 · 创建于词表第{" "}
+        {detail.data.tag.created_vocab_version} 版
+      </p>
+      <p>{Number(detail.data.uncovered_literatures)} 篇尚未按此标签回溯</p>
+      {detail.data.tag.examples.map((e) => (
+        <Button
+          key={e.literature_id}
+          variant="text"
+          onPress={() => shell.openPaper(e.literature_id)}
+        >
+          打开示例文献
+        </Button>
+      ))}
+      <TagEditor
+        key={`${selected}:${state.data?.version}`}
+        tag={detail.data.tag}
+        vocabulary={vocabulary}
+        busy={busy || action.isPending}
+        change={change}
+      />
+      <Disclosure title="合并到已有标签">
+        <Select
+          label="目标标签"
+          value={merge}
+          onChange={setMerge}
+          options={[
+            { value: "", label: "选择目标" },
+            ...vocabulary
+              .filter((t) => t.tag_id !== selected)
+              .map((t) => ({ value: t.tag_id, label: tagName(t) })),
+          ]}
+        />
+        <p>原标签会保留合并去向；人工锁定的赋值会受保护。</p>
+        <Button
+          isDisabled={!merge || busy}
+          onPress={() =>
+            void execute(() =>
+              change({ op: "merge", tag_id: selected, into: merge }),
+            )
+          }
+        >
+          确认合并
+        </Button>
+      </Disclosure>
+      <Button
+        isPending={busy}
+        onPress={() =>
+          void execute(async () =>
+            setPreview(
+              record(
+                await archiveQuery(api, "tags", {
+                  operation: "backfill-preview",
+                  request: { tag_ids: [selected] },
+                }),
+                "backfill preview",
+              ),
+            ),
+          )
+        }
+      >
+        预估回溯
+      </Button>
+      {preview ? (
+        <>
+          <UsageEstimate
+            request={{
+              kind: "tags",
+              request: { operation: "backfill", tag_ids: [selected] },
+            }}
+          />
+          <p role="status">
+            候选 {Number(preview.candidate_count)} 篇，预计模型调用{" "}
+            {Number(preview.estimated_calls)} 次。
+          </p>
+          <Button
+            isPending={busy}
+            onPress={() =>
+              void execute(async () => {
+                const id = await processingTask(
+                  {
+                    api,
+                    signal: new AbortController().signal,
+                    notify: shell.notify,
+                    onTasksChanged: () => {},
+                  },
+                  [
+                    {
+                      operation: "backfill-tags",
+                      request: { tag_ids: [selected] },
+                    },
+                  ],
+                  randomId(),
+                );
+                navigate({ view: "task", literature: null, task: id });
+              })
+            }
+          >
+            确认并启动回溯
+          </Button>
+        </>
+      ) : null}
+    </>
+  ) : (
+    <Skeleton label="正在读取标签" />
+  );
   return (
     <div className="feature-page archive-page">
-      <PageHeader
-        title={archiveStrings.vocabulary}
-        description="以主题组织文献。人工编辑、合并和回溯都保留可核对的变更记录。"
-      />
-      <div className="archive-toolbar">
-        <Button onPress={() => setConsolidate(true)}>整理词表</Button>
+      <PageHeader title={archiveStrings.vocabulary} />
+      <div className="archive-toolbar vocabulary-toolbar">
         <SearchField
           label="搜索名称与同义词"
+          placeholder="搜索名称与同义词"
           value={search}
           onChange={(v) => {
             setSearch(v);
             setSelected("");
           }}
         />
+        <Button variant="text" onPress={() => setConsolidate(true)}>
+          整理词表
+        </Button>
         <Button
+          icon={<Icon name="plus" />}
           onPress={() => {
             setName("");
             setEnglish("");
@@ -186,205 +305,82 @@ export default function Tags() {
           message={failure || errorMessage(action.error ?? query.error)}
         />
       ) : null}
-      <div className="archive-split">
-        <section aria-label="两层标签词表">
-          {query.isPending ? (
-            <Skeleton label="正在读取词表" />
-          ) : !vocabulary.length ? (
-            <EmptyState
-              title="未找到标签"
-              description="可更换关键词，或填写定义后新建。"
-            />
-          ) : null}
-          {[...new Set(vocabulary.map((t) => t.category ?? "未分类"))].map(
-            (group) => (
-              <section key={group}>
-                <h2>{group}</h2>
-                <ul>
-                  {vocabulary
-                    .filter(
-                      (t) => (t.category ?? "未分类") === group && !t.parent_id,
-                    )
-                    .map((t) => (
-                      <li key={t.tag_id}>
-                        <Button
-                          variant="text"
-                          onPress={() => {
-                            setSelected(t.tag_id);
-                            setPreview(null);
-                          }}
-                        >
-                          {tagName(t)}
-                        </Button>
-                        <ul>
-                          {vocabulary
-                            .filter((c) => c.parent_id === t.tag_id)
-                            .map((c) => (
-                              <li key={c.tag_id}>
-                                <Button
-                                  variant="text"
-                                  onPress={() => {
-                                    setSelected(c.tag_id);
-                                    setPreview(null);
-                                  }}
-                                >
-                                  {tagName(c)}
-                                </Button>
-                              </li>
-                            ))}
-                        </ul>
-                      </li>
-                    ))}
-                  {vocabulary
-                    .filter(
-                      (t) =>
-                        (t.category ?? "未分类") === group &&
-                        t.parent_id &&
-                        !vocabulary.some((p) => p.tag_id === t.parent_id),
-                    )
-                    .map((t) => (
-                      <li key={t.tag_id}>
-                        <Button
-                          variant="text"
-                          onPress={() => setSelected(t.tag_id)}
-                        >
-                          {tagName(t)} · 子标签
-                        </Button>
-                      </li>
-                    ))}
-                </ul>
-              </section>
-            ),
-          )}
-          {query.hasNextPage ? (
-            <Button onPress={() => query.fetchNextPage().then(() => {})}>
-              加载更多标签
-            </Button>
-          ) : null}
-        </section>
-        <section aria-label="标签详情">
-          {detail.error ? (
-            <ErrorNotice message={errorMessage(detail.error)} />
-          ) : detail.data ? (
-            <>
-              <h2>{tagName(detail.data.tag)}</h2>
-              <p>{detail.data.tag.definition.includes}</p>
-              {detail.data.tag.definition.excludes ? (
-                <p>不包含：{detail.data.tag.definition.excludes}</p>
-              ) : null}
-              <p>同义词：{detail.data.tag.aliases.join("、") || "无"}</p>
-              <p>
-                {Number(detail.data.uses)} 篇使用 · 创建于词表第{" "}
-                {detail.data.tag.created_vocab_version} 版
-              </p>
-              <p>
-                {Number(detail.data.uncovered_literatures)} 篇尚未按此标签回溯
-              </p>
-              {detail.data.tag.examples.map((e) => (
-                <Button
-                  key={e.literature_id}
-                  variant="text"
-                  onPress={() => shell.openPaper(e.literature_id)}
-                >
-                  打开示例文献
-                </Button>
-              ))}
-              <TagEditor
-                key={`${selected}:${state.data?.version}`}
-                tag={detail.data.tag}
-                vocabulary={vocabulary}
-                busy={busy || action.isPending}
-                change={change}
-              />
-              <Disclosure title="合并到已有标签">
-                <Select
-                  label="目标标签"
-                  value={merge}
-                  onChange={setMerge}
-                  options={[
-                    { value: "", label: "选择目标" },
-                    ...vocabulary
-                      .filter((t) => t.tag_id !== selected)
-                      .map((t) => ({ value: t.tag_id, label: tagName(t) })),
-                  ]}
-                />
-                <p>原标签会保留合并去向；人工锁定的赋值会受保护。</p>
-                <Button
-                  isDisabled={!merge || busy}
-                  onPress={() =>
-                    void execute(() =>
-                      change({ op: "merge", tag_id: selected, into: merge }),
-                    )
-                  }
-                >
-                  确认合并
-                </Button>
-              </Disclosure>
-              <Button
-                isPending={busy}
-                onPress={() =>
-                  void execute(async () =>
-                    setPreview(
-                      record(
-                        await archiveQuery(api, "tags", {
-                          operation: "backfill-preview",
-                          request: { tag_ids: [selected] },
-                        }),
-                        "backfill preview",
-                      ),
-                    ),
-                  )
-                }
-              >
-                预估回溯
-              </Button>
-              {preview ? (
-                <>
-                  <UsageEstimate
-                    request={{
-                      kind: "tags",
-                      request: { operation: "backfill", tag_ids: [selected] },
-                    }}
-                  />
-                  <p role="status">
-                    候选 {Number(preview.candidate_count)} 篇，预计模型调用{" "}
-                    {Number(preview.estimated_calls)} 次。
-                  </p>
-                  <Button
-                    isPending={busy}
-                    onPress={() =>
-                      void execute(async () => {
-                        const id = await processingTask(
-                          {
-                            api,
-                            signal: new AbortController().signal,
-                            notify: shell.notify,
-                            onTasksChanged: () => {},
-                          },
-                          [
-                            {
-                              operation: "backfill-tags",
-                              request: { tag_ids: [selected] },
-                            },
-                          ],
-                          randomId(),
-                        );
-                        navigate({ view: "task", literature: null, task: id });
-                      })
-                    }
-                  >
-                    确认并启动回溯
-                  </Button>
-                </>
-              ) : null}
-            </>
-          ) : (
-            <p className="ui-description">
-              选择标签查看定义、使用情况与回溯入口。
-            </p>
-          )}
-        </section>
-      </div>
+      <section aria-label="两层标签词表" className="vocabulary">
+        {query.isPending ? (
+          <Skeleton label="正在读取词表" />
+        ) : !vocabulary.length ? (
+          <EmptyState title="未找到标签。可更换关键词，或新建标签。" />
+        ) : (
+          <table className="ui-data-table vocabulary-table">
+            <thead>
+              <tr>
+                <th scope="col">标签</th>
+                <th scope="col">同义词</th>
+                <th scope="col" data-numeric>
+                  使用篇数
+                </th>
+              </tr>
+            </thead>
+            {[...new Set(vocabulary.map((t) => t.category ?? "未分类"))].map(
+              (group) => (
+                <tbody key={group}>
+                  <tr className="vocabulary-group">
+                    <th scope="rowgroup" colSpan={3}>
+                      {group}
+                    </th>
+                  </tr>
+                  {ordered(vocabulary, group).map(({ tag: t, depth }) => (
+                    <Fragment key={t.tag_id}>
+                      <tr
+                        data-selected={selected === t.tag_id || undefined}
+                        data-depth={depth}
+                      >
+                        <td>
+                          <Button
+                            variant="text"
+                            aria-expanded={selected === t.tag_id}
+                            onPress={() => {
+                              setSelected(
+                                selected === t.tag_id ? "" : t.tag_id,
+                              );
+                              setPreview(null);
+                            }}
+                          >
+                            {tagName(t)}
+                          </Button>
+                        </td>
+                        <td className="vocabulary-aliases">
+                          {t.aliases.join("、") || "—"}
+                        </td>
+                        <td data-numeric>
+                          {uses.get(t.tag_id)?.toLocaleString() ?? "—"}
+                        </td>
+                      </tr>
+                      {selected === t.tag_id ? (
+                        <tr className="vocabulary-detail">
+                          <td colSpan={3}>
+                            <section aria-label="标签详情">
+                              {detailPanel}
+                            </section>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
+                  ))}
+                </tbody>
+              ),
+            )}
+          </table>
+        )}
+        {query.hasNextPage ? (
+          <Button
+            variant="text"
+            onPress={() => query.fetchNextPage().then(() => {})}
+          >
+            加载更多标签
+          </Button>
+        ) : null}
+      </section>
       <Disclosure title="词表变更日志">
         {changes.error ? (
           <ErrorNotice message={errorMessage(changes.error)} />
@@ -586,4 +582,22 @@ export default function Tags() {
       </Dialog>
     </div>
   );
+}
+/** Top-level tags of a category, each followed by its children; orphans last. */
+function ordered(vocabulary: readonly Tag[], group: string) {
+  const inGroup = vocabulary.filter((t) => (t.category ?? "未分类") === group);
+  const ids = new Set(vocabulary.map((t) => t.tag_id));
+  return [
+    ...inGroup
+      .filter((t) => !t.parent_id)
+      .flatMap((t) => [
+        { tag: t, depth: 0 },
+        ...vocabulary
+          .filter((c) => c.parent_id === t.tag_id)
+          .map((c) => ({ tag: c, depth: 1 })),
+      ]),
+    ...inGroup
+      .filter((t) => t.parent_id && !ids.has(t.parent_id))
+      .map((t) => ({ tag: t, depth: 1 })),
+  ];
 }

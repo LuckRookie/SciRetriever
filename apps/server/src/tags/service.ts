@@ -8,6 +8,7 @@ import {
   tagRecord,
   tagText,
   type Tag,
+  type TagListItem,
   type TagAssignment,
   type TagAssignmentItem,
   type VocabularyActor,
@@ -36,9 +37,13 @@ export interface TagModel {
   }>;
 }
 export interface TagPage {
-  readonly items: readonly Tag[];
+  readonly items: readonly TagListItem[];
   readonly total: number;
   readonly next_offset: number | null;
+}
+function vocabularyTag({ uses, ...tag }: TagListItem): Tag {
+  void uses;
+  return tag;
 }
 export class TagService {
   constructor(
@@ -282,7 +287,7 @@ export class TagService {
         topics: topics.map((t, i) => ({
           ...t,
           topic_index: i,
-          candidates: candidates[i]!.items,
+          candidates: candidates[i]!.items.map(vocabularyTag),
         })),
         current: before?.items ?? [],
       }),
@@ -501,7 +506,7 @@ export class TagService {
               },
               signal,
             )
-          ).items,
+          ).items.map(vocabularyTag),
         );
       }
     }

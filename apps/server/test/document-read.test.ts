@@ -890,9 +890,9 @@ describe("bounded document and material reading", () => {
         assets: await queryPageAssets(),
       });
       browser = await chromium.launch({
-        executablePath:
-          process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ??
-          "/home/duanjw/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome",
+        ...(process.env.SCIRETRIEVER_BROWSER_EXECUTABLE
+          ? { executablePath: process.env.SCIRETRIEVER_BROWSER_EXECUTABLE }
+          : {}),
         headless: true,
       });
       const page = await browser.newPage();
@@ -944,9 +944,9 @@ describe("bounded document and material reading", () => {
         assets: await queryPageAssets(),
       });
       browser = await chromium.launch({
-        executablePath:
-          process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ??
-          "/home/duanjw/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome",
+        ...(process.env.SCIRETRIEVER_BROWSER_EXECUTABLE
+          ? { executablePath: process.env.SCIRETRIEVER_BROWSER_EXECUTABLE }
+          : {}),
         headless: true,
       });
       const page = await browser.newPage();

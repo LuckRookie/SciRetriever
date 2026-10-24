@@ -717,6 +717,22 @@ export async function parseProcessorResult(
     String(parseLiteratureId(value)),
   );
   if (new Set(literature_ids).size !== literature_ids.length) processorFail();
+  const value_checks = parseProcessorValueChecks(r.value_checks, content);
+  // In internal summaries a missing content hash retains an unresolved segment
+  // declaration. Generic EvidenceRef readers still allow an unspecified hash.
+  if (r.producer === "internal" && invocation.processor.id === "summary") {
+    if (content.kind !== "report") processorFail();
+    for (const check of value_checks)
+      for (const source of check.sources)
+        if (
+          source.citation.kind === "document" &&
+          source.citation.evidence.content_sha256 === null &&
+          (source.status !== "citation-unavailable" ||
+            source.basis !== null ||
+            check.status !== "citation-unavailable")
+        )
+          processorFail();
+  }
   return freezeExtractionJson({
     schema_version: 1,
     result_id: id(r.result_id),
@@ -724,7 +740,7 @@ export async function parseProcessorResult(
     comparison_sha256: comparison,
     status: r.status as "ok" | "empty",
     content,
-    value_checks: parseProcessorValueChecks(r.value_checks, content),
+    value_checks,
     coverage,
     producer: r.producer as "internal" | "external",
     provenance: processorJson(r.provenance, 4 * 1024 * 1024),

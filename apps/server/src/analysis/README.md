@@ -5,6 +5,7 @@
 - [processor.ts](processor.ts)、[processor-registry.ts](processor-registry.ts)：可信算子注册、声明读取范围、结果校验与接纳；单篇算子不接收其它算子的结果。
 - [processor-archive.ts](processor-archive.ts)：就绪检查、固定校订稿和结构版本、单篇复用键。
 - [knowledge-session.ts](knowledge-session.ts)、[summary-response.ts](summary-response.ts)：DSH 持续阅读、正文分页、回查、图片查看和有证据的总结提交。覆盖检查不代表科学结论正确。
+- [processor-evidence.ts](processor-evidence.ts)：summary 引用的固定输入范围检查，供执行接纳及结果存储复用；不存在的片段声明保留，由存储核验真实缺失并由逐值核对标记。
 - [reading-image.ts](reading-image.ts)：验证已保存栅格图片的头信息与尺寸。
 - [processor-synthesis.ts](processor-synthesis.ts)、[snapshots.ts](snapshots.ts)：冻结就绪文献快照、逐篇 map 与集合 reduce、快照比较和结果过时标记；不自动重算。
 - [processor-labels.ts](processor-labels.ts)、[processor-records.ts](processor-records.ts)：调用方定义的标签与记录提取。

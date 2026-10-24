@@ -287,6 +287,7 @@ export function Drawer({
   children,
   footer,
   isDismissable = true,
+  className,
 }: DialogProps) {
   return (
     <ModalOverlay
@@ -296,7 +297,7 @@ export function Drawer({
       isDismissable={isDismissable}
       isKeyboardDismissDisabled={!isDismissable}
     >
-      <Modal className="ui-drawer">
+      <Modal className={`ui-drawer ${className ?? ""}`}>
         <AriaDialog className="ui-dialog">
           <AnimatedPanel preset="drawer">
             <header className="ui-dialog-header">

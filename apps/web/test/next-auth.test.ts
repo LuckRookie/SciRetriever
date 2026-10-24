@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
+import { loadAuthAssets } from "../../server/src/workbench/assets.js";
 import { chromium } from "playwright";
 import { expect, it } from "vitest";
 import { nextAssets } from "./next-workspace-fixture.js";
@@ -49,15 +51,10 @@ it.each(["no-preference", "reduce"] as const)(
         directory,
       ]);
       const assets = new Map(await nextAssets());
-      for (const [path, file, contentType] of [
-        ["/auth", "auth.html", "text/html"],
-        ["/auth.js", "auth.js", "text/javascript"],
-        ["/auth.css", "auth.css", "text/css"],
-      ] as const)
-        assets.set(path, {
-          contentType,
-          body: await readFile(join(directory, file)),
-        });
+      for (const [path, asset] of await loadAuthAssets(
+        pathToFileURL(`${directory}/`),
+      ))
+        assets.set(path, asset);
       server = await startWorkbenchHttp({
         session,
         assets,
@@ -70,12 +67,40 @@ it.each(["no-preference", "reduce"] as const)(
       page.on("console", (message) => {
         if (
           message.type() === "error" &&
-          message.text().includes("Content Security Policy")
+          /Content Security Policy|font|woff|OTS parsing/iu.test(message.text())
         )
           violations.push(message.text());
       });
       await page.goto(`${server.origin}/?view=web`);
       await page.getByRole("heading", { name: "打开你的文献库" }).waitFor();
+      const fontStatus = await page.evaluate(async () => {
+        const families = [
+          "Source Sans 3",
+          "Source Serif 4",
+          "Noto Sans SC",
+          "Noto Serif SC",
+        ];
+        return Promise.all(
+          families.map(async (family) => {
+            const faces = await document.fonts.load(
+              `16px "${family}"`,
+              "文献库 SciRetriever",
+            );
+            return {
+              family,
+              loaded:
+                faces.length > 0 &&
+                faces.every((face) => face.status === "loaded"),
+            };
+          }),
+        );
+      });
+      expect(fontStatus).toEqual([
+        { family: "Source Sans 3", loaded: true },
+        { family: "Source Serif 4", loaded: true },
+        { family: "Noto Sans SC", loaded: true },
+        { family: "Noto Serif SC", loaded: true },
+      ]);
       const input = page.getByLabel("密码或 API key");
       await input.fill("incorrect");
       await page.getByRole("button", { name: "显示密码" }).click();

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   parseTag,
+  parseTagListItem,
   parseTagAssignment,
   parseDocumentReadResult,
   type TagAssignmentItem,
@@ -63,7 +64,7 @@ export function Assignment({ id }: { id: string }) {
           },
           signal,
         ),
-      ).map(parseTag),
+      ).map(parseTagListItem),
   });
   const docs = useQuery({
     queryKey: ["document", "tag-source", id],

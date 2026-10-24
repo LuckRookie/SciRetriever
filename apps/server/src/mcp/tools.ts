@@ -111,7 +111,7 @@ function tool(
 export const BROWSER_QUERY_TOOLS: readonly Tool[] = [
   tool(
     "runtime_list_tasks",
-    "Read tasks from the explicitly connected Web runtime. Does not open another Application.",
+    "Read tasks with progress {total,done} from the explicitly connected Web runtime. done counts targets with completed, failed or skipped dispositions. Does not open another Application.",
     object(
       {
         limit: { type: "integer", minimum: 1, maximum: 1000 },
@@ -344,7 +344,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "tags_query",
-    "Read the library tag vocabulary (list/search/show/state/changes/undo-preview), ordered literature assignment or a model-free backfill-preview. Parent and merged tags resolve to active children. Preview reports candidates and estimated calls; old assignments may need explicit backfill.",
+    "Read the library tag vocabulary (list/search/show/state/changes/undo-preview), ordered literature assignment or a model-free backfill-preview. List/search returns {items,total,next_offset}; each item has the Tag fields plus uses, the direct literature assignment count (same as show.uses, excluding descendants). List defaults to active tags. Parent and merged tags resolve to active children. Preview reports candidates and estimated calls; old assignments may need explicit backfill.",
     object({
       operation: {
         enum: [
@@ -611,7 +611,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "list_tasks",
-    "List persisted tasks with cursor and active/attention/ended filter. Read-only; does not recover or execute tasks.",
+    "List persisted tasks with progress {total,done}, cursor and active/attention/ended filter. done counts targets with completed, failed or skipped dispositions. Read-only; does not recover or execute tasks.",
     object(
       {
         limit: { type: "integer", minimum: 1, maximum: 1000 },

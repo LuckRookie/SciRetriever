@@ -2,13 +2,15 @@ import {
   openSavedViews,
   showAllLibraryStatuses,
 } from "./next-workspace-fixture.js";
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, request as httpRequest } from "node:http";
 import { build } from "esbuild";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
+import { loadAuthAssets } from "../../server/src/workbench/assets.js";
 import { nextAssets, motionOptions } from "./next-workspace-fixture.js";
 import { chromium } from "playwright";
 import { describe, expect, it } from "vitest";
@@ -36,15 +38,10 @@ async function assets(
     "import { buildAuthAssets } from './scripts/build-react-assets.mjs'; await buildAuthAssets(process.argv[1]);",
     directory,
   ]);
-  for (const [route, file, contentType] of [
-    ["/auth", "auth.html", "text/html"],
-    ["/auth.js", "auth.js", "text/javascript"],
-    ["/auth.css", "auth.css", "text/css"],
-  ] as const)
-    result.set(route, {
-      contentType,
-      body: await readFile(join(directory, file)),
-    });
+  for (const [route, asset] of await loadAuthAssets(
+    pathToFileURL(`${directory}/`),
+  ))
+    result.set(route, asset);
   const platform = await build({
     entryPoints: [
       new URL("../src/browser-platform.ts", import.meta.url).pathname,

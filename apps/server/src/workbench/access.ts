@@ -10,6 +10,7 @@ import { networkInterfaces } from "node:os";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseStrictJsonObject } from "@sciretriever/contracts";
 import type { WorkbenchStaticAsset } from "./http.js";
+import { isAuthFontPath, staticAssetCacheControl } from "./assets.js";
 
 export interface WorkbenchAccessOptions {
   readonly host?: string;
@@ -248,10 +249,16 @@ export class WorkbenchAccess {
     if (
       request.method === "GET" &&
       !url.search &&
-      PUBLIC_ASSETS.has(url.pathname)
+      (PUBLIC_ASSETS.has(url.pathname) ||
+        (isAuthFontPath(url.pathname) &&
+          assets.get(url.pathname)?.contentType === "font/woff2"))
     ) {
       const asset = assets.get(url.pathname);
       if (asset) {
+        response.setHeader(
+          "Cache-Control",
+          staticAssetCacheControl(url.pathname),
+        );
         response.writeHead(200, { "Content-Type": asset.contentType });
         response.end(asset.body);
       } else json(response, 404, { code: "ui-unavailable" });

@@ -61,21 +61,23 @@
   .year-column-track {
     display: flex;
     align-items: flex-end;
+    justify-content: center;
     border-bottom: 1px solid var(--line3);
   }
   .year-column-track i {
     display: block;
-    width: 100%;
-    background: var(--blue);
+    width: min(100%, 28px);
+    background: var(--chart-ink);
     border-radius: var(--radius-xs) var(--radius-xs) 0 0;
     transition: opacity var(--dur-1);
   }
   .year-column-label {
+    justify-self: center;
+    min-height: 1lh;
     font-size: var(--text-caption);
+    font-variant-numeric: tabular-nums;
     color: var(--fg2);
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .year-column[data-missing] .year-column-track i {
     background: var(--line3);
@@ -136,7 +138,7 @@
   .ranking-track i {
     display: block;
     height: 100%;
-    background: color-mix(in srgb, var(--blue) 72%, var(--bg));
+    background: var(--chart-ink);
     border-radius: var(--radius-xs);
   }
   .proportion-bar {
@@ -214,11 +216,11 @@
     stroke-width: 1.2;
   }
   .citation-map circle {
-    fill: var(--blue);
+    fill: var(--chart-ink);
   }
   .citation-map text {
     fill: var(--fg2);
-    font-size: 14px;
+    font-size: var(--text-caption);
   }
   .citation-map g {
     cursor: pointer;

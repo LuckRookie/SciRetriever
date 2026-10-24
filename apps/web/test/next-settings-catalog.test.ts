@@ -14,8 +14,13 @@ async function select(page: Page, label: string, option: string) {
     .click();
   await page.getByRole("option", { name: option, exact: true }).click();
 }
-async function check(page: Page, name: string, checked: boolean) {
-  const field = page.getByRole("checkbox", { name, exact: true });
+async function check(
+  page: Page,
+  name: string,
+  checked: boolean,
+  role: "checkbox" | "switch" = "checkbox",
+) {
+  const field = page.getByRole(role, { name, exact: true });
   if ((await field.isChecked()) !== checked) {
     await field.focus();
     await page.keyboard.press("Space");
@@ -167,7 +172,7 @@ it("registers an empty model catalog, binds and probes the saved Browser model, 
     ).toBe("777");
     await tab("解析与 Browser");
     await select(page, "Browser 模型", "vision-fixture/remote-vision");
-    await check(page, "启用 Browser", true);
+    await check(page, "启用 Browser", true, "switch");
     await page
       .getByRole("textbox", { name: "Browser profile", exact: true })
       .fill("synthetic-profile");

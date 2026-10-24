@@ -16,8 +16,9 @@ export async function searchLibrary(
   sort: LibrarySort,
   cursor: string | null,
   signal?: AbortSignal,
+  limit = 50,
 ) {
-  const request = parseLibrarySearchRequest({ query, sort, cursor, limit: 50 });
+  const request = parseLibrarySearchRequest({ query, sort, cursor, limit });
   const value = api.workspace.capabilities.query
     ? await api.query("search", request, signal)
     : await api.request("/api/library/search", request, signal);

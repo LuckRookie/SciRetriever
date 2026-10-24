@@ -5,8 +5,8 @@
     --bg: #fff;
     --side: #f7f7f5;
     --fg: #37352f;
-    --fg2: #6b6a66;
-    --fg3: #74736f;
+    --fg2: #5f5e5a;
+    --fg3: #6b6a66;
     --fg-quiet: #a5a49f;
     --side-fg: #4b4a46;
     --side-icon: #7f7e7a;
@@ -65,11 +65,11 @@
     --text-control: 14px;
     --text-literature: 16px;
     --text-reading: 20px;
-    --text-secondary: 14px;
+    --text-secondary: 13px;
     --text-caption: 13px;
     --sans:
-      "Source Sans 3", -apple-system, BlinkMacSystemFont, "PingFang SC",
-      "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      "Source Sans 3", "Noto Sans SC", -apple-system, BlinkMacSystemFont,
+      "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     --serif: "Source Serif 4", "Noto Serif SC", "Songti SC", Georgia, serif;
     --mono: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
     --shadow-1:
@@ -84,9 +84,20 @@
     --ease-out: cubic-bezier(0.2, 0, 0, 1);
     --ease-in: cubic-bezier(0.4, 0, 1, 1);
     --disabled-opacity: 0.45;
-    --type-page: 32px;
+    --type-page: 28px;
+    --title-face: var(--serif);
+    --title-weight: 600;
+    --lh-body: 1.6;
+    --lh-control: 1.4;
+    --lh-heading: 1.3;
+    --lh-literature: 1.4;
+    --lh-caption: 1.5;
+    --lh-reading: 1.75;
     --type-section: 17px;
     --rule: var(--line2);
+    --chart-ink: rgba(55, 53, 47, 0.46);
+    --chart-muted: rgba(55, 53, 47, 0.14);
+    --chart-accent: var(--blue);
     --status-ready: var(--t-green);
     --status-ready-bg: var(--t-green-bg);
     --status-asset: var(--t-blue);
@@ -99,7 +110,7 @@
     --status-unavailable-bg: var(--t-purple-bg);
     --status-raw: var(--t-gray);
     --status-raw-bg: var(--t-gray-bg);
-    --status-excluded: var(--fg3);
+    --status-excluded: var(--fg2);
     --status-excluded-bg: var(--hover);
   }
   :root[data-theme="dark"] {
@@ -108,7 +119,7 @@
     --side: #1d2024;
     --fg: #e3e5e8;
     --fg2: #a9aeb5;
-    --fg3: #8c939b;
+    --fg3: #959ca4;
     --fg-quiet: #5f656c;
     --side-fg: #c9cdd2;
     --side-icon: #8c939b;
@@ -144,6 +155,8 @@
     --t-purple: #e5d6f2;
     --shadow-pop: 0 5px 18px rgba(0, 0, 0, 0.24);
     --shadow-modal: 0 16px 48px rgba(0, 0, 0, 0.3);
+    --chart-ink: rgba(227, 229, 232, 0.5);
+    --chart-muted: rgba(255, 255, 255, 0.14);
   }
   :root[data-theme="green"] {
     --bg: #fbfcf8;
@@ -161,7 +174,7 @@
     --blue-fg: #fff;
     --focus: #35558a;
     --fg: #29261f;
-    --fg2: #746c60;
-    --fg3: #746c60;
+    --fg2: #655d52;
+    --fg3: #6a6256;
   }
 }

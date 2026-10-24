@@ -14,6 +14,7 @@ import {
   EmptyState,
   ErrorNotice,
   PageHeader,
+  PageNote,
   Select,
   Skeleton,
   TechDetails,
@@ -115,7 +116,6 @@ export default function Browser() {
     <section className="browser-page">
       <PageHeader
         title="浏览器"
-        description="观看 Agent 获取 PDF 的真实页面。需要帮助时，直接点击画面即可接手。"
         action={
           <Button
             onPress={async () => {
@@ -147,17 +147,8 @@ export default function Browser() {
         ))}
       </div>
       {!view.isPending && !sessions.length ? (
-        <EmptyState
-          title="没有正在使用的会话"
-          description="获取任务进入浏览器阶段后，会话会显示在这里。"
-        />
+        <EmptyState title="没有正在使用的会话。获取任务进入浏览器阶段后，会话会显示在这里。" />
       ) : null}
-      <Disclosure title="会话显示范围">
-        <p>
-          这里仅展示当前服务持有的会话。其他进程的 Agent
-          会话不会因共享文献库而自动出现在这里。
-        </p>
-      </Disclosure>
       {selected && view.data ? (
         <Viewer
           key={selected.session}
@@ -167,6 +158,10 @@ export default function Browser() {
           onClose={() => setSelected(null)}
         />
       ) : null}
+      <PageNote>
+        只显示当前服务持有的会话，其他进程的 Agent
+        会话不会因共享文献库而出现在这里。需要帮助时，直接点击画面即可接手。
+      </PageNote>
     </section>
   );
 }

@@ -168,7 +168,7 @@ export default function Insights() {
   }, [papers.data]);
   return (
     <section className="insights-page">
-      <PageHeader title="洞察" description="已有文献的分布与库内引用关系。" />
+      <PageHeader title="洞察" />
       <div className="insights-toolbar">
         <Tabs
           label="洞察视图"
@@ -386,9 +386,11 @@ function YearColumns({
   onSelect: (label: string) => void;
 }) {
   const max = Math.max(1, ...rows.map((row) => row.count));
+  // Narrow columns cannot fit every year; label every nth column in full.
+  const step = Math.max(1, Math.ceil(rows.length / 10));
   return (
     <div className="year-columns" role="list">
-      {rows.map((row) => (
+      {rows.map((row, index) => (
         <button
           key={row.label}
           role="listitem"
@@ -404,7 +406,9 @@ function YearColumns({
           <span className="year-column-track">
             <i style={{ height: `${Math.max(2, (row.count / max) * 100)}%` }} />
           </span>
-          <span className="year-column-label">{row.label}</span>
+          <span className="year-column-label" aria-hidden="true">
+            {index % step === 0 || index === rows.length - 1 ? row.label : ""}
+          </span>
         </button>
       ))}
     </div>

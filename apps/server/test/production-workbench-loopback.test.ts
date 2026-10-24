@@ -481,7 +481,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         "run",
       );
       await ui.reload();
-      await ui.locator(".reader-information h2").waitFor();
+      await ui.locator(".reader-information .reader-facts").first().waitFor();
       await ui
         .getByLabel("主导航")
         .getByRole("button", { name: /^文献库/ })
@@ -491,7 +491,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
           `[data-literature-id="${SECOND_LITERATURE.literature_id}"] .paper-open`,
         )
         .click();
-      await ui.locator(".reader-information h2").waitFor();
+      await ui.locator(".reader-information .reader-facts").first().waitFor();
       await ui
         .getByLabel("主导航")
         .getByRole("button", { name: "浏览器", exact: true })
@@ -575,12 +575,12 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       await ui.getByRole("button", { name: "设置", exact: true }).click();
       await ui.getByRole("tab", { name: "运行状态", exact: true }).click();
       await expect
-        .poll(() => ui.locator(".settings-section").innerText())
+        .poll(() => ui.locator(".settings-content").innerText())
         .toContain("当前普通配置");
       await ui
         .getByRole("tab", { name: "解析与 Browser", exact: true })
         .click();
-      const browserEnabled = ui.getByRole("checkbox", {
+      const browserEnabled = ui.getByRole("switch", {
         name: "启用 Browser",
         exact: true,
       });
@@ -595,7 +595,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         .poll(() => ui.getByRole("status").allTextContents())
         .toContainEqual(expect.stringContaining("当前服务需重启"));
       await ui.getByRole("tab", { name: "运行状态", exact: true }).click();
-      expect(await ui.locator(".settings-section").innerText()).toContain(
+      expect(await ui.locator(".settings-content").innerText()).toContain(
         "需重启服务后生效",
       );
       expect(pageErrors).toEqual([]);

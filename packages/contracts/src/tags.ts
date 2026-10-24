@@ -35,6 +35,10 @@ export interface Tag extends TagDraft {
     readonly evidence: TagEvidence;
   }[];
 }
+/** Read projection; uses counts direct literature assignments, not descendants. */
+export interface TagListItem extends Tag {
+  readonly uses: number;
+}
 export interface TagAssignmentItem {
   readonly tag_id: string;
   readonly rank: number;
@@ -372,6 +376,17 @@ export function parseTag(value: unknown): Tag {
       }),
     ),
   });
+}
+export function parseTagListItem(value: unknown): TagListItem {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    !Object.hasOwn(value, "uses")
+  )
+    fail();
+  const { uses, ...tag } = value as Record<string, unknown>;
+  return Object.freeze({ ...parseTag(tag), uses: tagInteger(uses) });
 }
 export function parseTagAssignment(value: unknown): TagAssignment {
   const r = tagRecord(value, [

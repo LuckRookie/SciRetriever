@@ -17,6 +17,10 @@ import {
 } from "@sciretriever/contracts";
 import { startProductionWorkbench } from "../src/bootstrap/workbench.js";
 import { initializeCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
+import type {
+  ExecutionJobStatus,
+  ExecutionTarget,
+} from "../src/storage/sqlite/worker.js";
 import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
 import {
   FIXTURE_LITERATURE,
@@ -206,6 +210,121 @@ async function fixture() {
 }
 
 describe("production task workbench composition", () => {
+  it("projects current target progress for every task status group and cursor page", async () => {
+    const env = await fixture();
+    const repository = env.server.application.jobs!;
+    const cases: readonly {
+      status: ExecutionJobStatus;
+      dispositions: readonly ExecutionTarget["disposition"][];
+      done: number;
+    }[] = [
+      { status: "queued", dispositions: ["pending", null], done: 0 },
+      {
+        status: "running",
+        dispositions: [
+          "completed",
+          "failed",
+          "skipped",
+          "pending",
+          "interrupted",
+        ],
+        done: 3,
+      },
+      { status: "paused", dispositions: ["completed", "pending"], done: 1 },
+      { status: "interrupted", dispositions: ["interrupted"], done: 0 },
+      {
+        status: "completed",
+        dispositions: ["completed", "completed"],
+        done: 2,
+      },
+      { status: "cancelled", dispositions: [], done: 0 },
+      { status: "failed", dispositions: ["failed", "skipped"], done: 2 },
+    ];
+    try {
+      const expected = new Map<string, unknown>();
+      for (const [index, item] of cases.entries()) {
+        const jobId = `progress-${item.status}`;
+        const job = await repository.createJob({
+          job_id: jobId,
+          target_kind: "selector",
+          selector: { kind: "synthetic-progress" },
+          policy_version: "progress-policy",
+          policy: {},
+          idempotency_key: jobId,
+          created_at: new Date(
+            Date.UTC(2026, 9, 23) + index * 1000,
+          ).toISOString(),
+          targets: item.dispositions.map((disposition, ordinal) => ({
+            job_id: jobId,
+            target_id: `${jobId}-${ordinal}`,
+            ordinal,
+            literature_id: null,
+            version_role: null,
+            stage:
+              disposition === "pending" || disposition === null
+                ? "queued"
+                : disposition,
+            disposition,
+            next_eligible_at: null,
+          })),
+        });
+        await repository.updateJob(jobId, item.status);
+        expected.set(jobId, {
+          ...job,
+          status: item.status,
+          progress: { total: item.dispositions.length, done: item.done },
+        });
+      }
+      const groups = {
+        all: cases.map((item) => item.status),
+        active: ["queued", "running"],
+        attention: ["paused", "interrupted", "failed"],
+        ended: ["completed", "cancelled", "failed"],
+      };
+      const run = vi.spyOn(env.server.application.database, "run");
+      for (const [group, statuses] of Object.entries(groups)) {
+        run.mockClear();
+        const response = await env.call(
+          `/api/tasks?limit=1000${group === "all" ? "" : `&status_group=${group}`}`,
+        );
+        expect(response.status).toBe(200);
+        const tasks = response.value.tasks as { job_id: string }[];
+        expect(tasks).toHaveLength(statuses.length);
+        expect(tasks.map((task) => task.job_id).sort()).toEqual(
+          statuses.map((status) => `progress-${status}`).sort(),
+        );
+        for (const task of tasks)
+          expect(task).toEqual(expected.get(task.job_id));
+        expect(run.mock.calls.map(([command]) => command.kind)).toEqual([
+          "execution_list_jobs",
+        ]);
+      }
+      run.mockClear();
+      const first = await env.call("/api/tasks?limit=1&status_group=active");
+      expect(first.value).toMatchObject({
+        tasks: [
+          { job_id: "progress-running", progress: { total: 5, done: 3 } },
+        ],
+        next_cursor: expect.any(String),
+      });
+      expect(run.mock.calls.map(([command]) => command.kind)).toEqual([
+        "execution_list_jobs",
+        "execution_list_jobs",
+      ]);
+      const second = await env.call(
+        `/api/tasks?limit=1&status_group=active&cursor=${String(first.value.next_cursor)}`,
+      );
+      expect(second.value).toMatchObject({
+        tasks: [{ job_id: "progress-queued", progress: { total: 2, done: 0 } }],
+        next_cursor: null,
+      });
+      expect(env.parseCalls).toBe(0);
+      expect(env.discoveryCalls).toBe(0);
+    } finally {
+      await env.close();
+    }
+  });
+
   it("validates workspace deep links and adapts explicit citation discovery to its existing owner", async () => {
     const env = await fixture();
     try {

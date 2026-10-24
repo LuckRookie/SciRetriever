@@ -82,6 +82,7 @@ import {
 } from "./access.js";
 import { ProductionWorkbenchSession } from "./production-session.js";
 import { WorkbenchSession, WorkbenchSessionError } from "./session.js";
+import { staticAssetCacheControl } from "./assets.js";
 
 export interface WorkbenchStaticAsset {
   readonly contentType: string;
@@ -988,6 +989,7 @@ export async function startWorkbenchHttp(
         options.assets.has(pathname)
       ) {
         const asset = options.assets.get(pathname)!;
+        response.setHeader("Cache-Control", staticAssetCacheControl(pathname));
         response.writeHead(200, { "Content-Type": asset.contentType });
         response.end(asset.body);
         return;
@@ -2463,6 +2465,10 @@ function createQueryHttpHandler(
     const staticAsset =
       request.method === "GET" ? options.assets?.get(url.pathname) : undefined;
     if (staticAsset) {
+      response.setHeader(
+        "Cache-Control",
+        staticAssetCacheControl(url.pathname),
+      );
       response.writeHead(200, { "Content-Type": staticAsset.contentType });
       response.end(staticAsset.body);
       return;

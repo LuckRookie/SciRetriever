@@ -184,7 +184,15 @@ describe("machine connections to the live Web owner", () => {
       expect(detail).toEqual({ task: await tasks.read(job.job_id) });
       expect(
         await call("runtime_list_tasks", { status_group: "ended", limit: 10 }),
-      ).toMatchObject({ tasks: [{ job_id: job.job_id, status: "completed" }] });
+      ).toMatchObject({
+        tasks: [
+          {
+            job_id: job.job_id,
+            status: "completed",
+            progress: { total: 1, done: 1 },
+          },
+        ],
+      });
       expect(env.parseCalls).toBe(2);
       expect(factory).not.toHaveBeenCalled();
     } finally {

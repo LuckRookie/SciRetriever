@@ -1,3 +1,5 @@
+import { parseTaskProgress } from "@sciretriever/contracts";
+
 /** Narrow JSON adapters shared by the workbench pages.
  *
  * The server is an authenticated HTTP boundary, but it is still a wire boundary:
@@ -50,6 +52,8 @@ export function jobRecord(value: unknown): JsonRecord {
   const job = record(value, "job");
   stringField(job, "job_id", "job id");
   stringField(job, "status", "job status");
+  if (job.progress !== undefined)
+    return { ...job, progress: parseTaskProgress(job.progress) };
   return job;
 }
 

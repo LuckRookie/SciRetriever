@@ -1323,7 +1323,7 @@ export async function createApplication(
       files,
       async (signal) => {
         if (!retrievalIndex) throw new Error("index-unavailable");
-        return retrievalIndex.build(signal);
+        return retrievalIndex.refresh(signal);
       },
     );
     structureAnnotations = new StructureAnnotationService(

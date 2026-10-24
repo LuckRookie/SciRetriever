@@ -1,3 +1,4 @@
+import { chromium } from "playwright";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,8 +12,7 @@ import { resolveDestination } from "../src/network/policy.js";
 import { startWorkbenchFixture } from "../src/workbench/synthetic-fixture.js";
 
 const executable =
-  process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ??
-  "/home/duanjw/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome";
+  process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ?? chromium.executablePath();
 
 it("leaves background previews visible and captures selected native, popup, data and blob downloads", async () => {
   const root = await mkdtemp(join(tmpdir(), "sciretriever-browser-complex-"));

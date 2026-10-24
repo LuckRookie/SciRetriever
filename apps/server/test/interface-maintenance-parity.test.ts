@@ -88,8 +88,18 @@ describe("machine interfaces over shared maintenance owners", () => {
         limit: 1,
       });
       expect(listed.tasks).toMatchObject([
-        { job_id: task.job_id, status: "queued" },
+        {
+          job_id: task.job_id,
+          status: "queued",
+          progress: { total: 1, done: 0 },
+        },
       ]);
+      const cliList = await runCli(["jobs", "list", "--request", "-"], {
+        home: env.home,
+        stdin: stdin({ status_group: "active", limit: 1 }),
+      });
+      expect(cliList.code).toBe(0);
+      expect(cliList.value).toEqual({ protocol_version: 1, result: listed });
       const detail = await call("inspect_task", { job_id: task.job_id });
       const inspected = await runCli(["jobs", "inspect", "--request", "-"], {
         home: env.home,

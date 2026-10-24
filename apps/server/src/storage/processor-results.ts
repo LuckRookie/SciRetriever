@@ -1,4 +1,6 @@
 import { processorUsage } from "../analysis/processor-usage.js";
+import { summaryCitationInput } from "../analysis/processor-evidence.js";
+import { SqliteAnnotationStorage } from "./structure-annotations.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { VerifiedReaderError } from "./files/reader.js";
 import {
@@ -23,6 +25,7 @@ import {
   type ProcessorRecord,
   type ProcessorRecordSource,
   type ProcessorResult,
+  type ProcessorInvocation,
 } from "@sciretriever/contracts";
 import {
   ProcessorError,
@@ -55,9 +58,15 @@ interface Verification {
   results: Map<string, StoredProcessorResult>;
   documents: Map<string, DocumentReadingRef>;
   citations: Map<string, ResolvedProcessorEvidence>;
+  bindings: Set<string>;
 }
 function verification(): Verification {
-  return { results: new Map(), documents: new Map(), citations: new Map() };
+  return {
+    results: new Map(),
+    documents: new Map(),
+    citations: new Map(),
+    bindings: new Set(),
+  };
 }
 export class ProcessorQueryError extends Error {
   constructor(
@@ -161,8 +170,15 @@ export class SqliteProcessorStorage implements ProcessorStore {
         documents: Row[];
         results: Row[];
       }>("pins", id, signal);
-      for (const citation of resultCitations(result.content))
+      for (const citation of resultCitations(result.content)) {
+        await this.verifyCitationScope(
+          citation,
+          result.producer === "internal" ? result.invocation : undefined,
+          cache,
+          signal,
+        );
         await this.resolve(citation, cache, stack, signal);
+      }
       const expectedDocuments = new Map<string, DocumentReadingRef>();
       const expectedMaterials = new Map<
         string,
@@ -340,7 +356,11 @@ export class SqliteProcessorStorage implements ProcessorStore {
   ): Promise<StoredProcessorResult> {
     return this.work(async () => {
       const result = await parseProcessorResult(value);
-      await this.verifyCitations(resultCitations(result.content), signal);
+      await this.verifyCitations(
+        resultCitations(result.content),
+        signal,
+        result.producer === "internal" ? result.invocation : undefined,
+      );
       const ref = await this.writeObject(
         "processor-result",
         processorResultBytes(result),
@@ -455,16 +475,66 @@ export class SqliteProcessorStorage implements ProcessorStore {
   verifyCitations(
     citations: readonly ProcessorCitation[],
     signal?: AbortSignal,
+    invocation?: ProcessorInvocation,
   ): Promise<readonly ResolvedProcessorEvidence[]> {
     return this.readWork(async () => {
       const cache = verification();
       const results: ResolvedProcessorEvidence[] = [];
       for (const citation of citations) {
         if (signal?.aborted) throw signal.reason;
+        await this.verifyCitationScope(citation, invocation, cache, signal);
         results.push(await this.resolve(citation, cache, new Set(), signal));
       }
       return results;
     });
+  }
+  private async verifyCitationScope(
+    citation: ProcessorCitation,
+    invocation: ProcessorInvocation | undefined,
+    cache: Verification,
+    signal?: AbortSignal,
+  ) {
+    if (
+      invocation?.processor.id !== "summary" &&
+      (citation.kind !== "document" ||
+        citation.evidence.content_sha256 !== null)
+    )
+      return;
+    const input = invocation && summaryCitationInput(invocation, citation);
+    if (
+      !input ||
+      citation.kind !== "document" ||
+      citation.evidence.target_kind !== "document"
+    )
+      processorError("processor-evidence-outside-scope");
+    const binding = JSON.stringify(invocation);
+    if (cache.bindings.has(binding)) return;
+    const part = input.parts[0]!;
+    const document = (
+      await this.documents.describe(
+        { document_version_id: citation.evidence.document_version_id },
+        signal,
+      )
+    ).document;
+    const annotation = await new SqliteAnnotationStorage(
+      this.database,
+      this.files,
+    ).byId(part.structure_annotation_id!, signal);
+    if (
+      !annotation ||
+      annotation.document_version_id !== document.document_version_id ||
+      document.source_material_ref.literature_id !== input.literature_id ||
+      document.source_material_ref.asset_id !== part.asset_id ||
+      document.source_material_ref.asset_sha256 !== part.asset_sha256 ||
+      (await sha256(
+        canonicalJsonBytes({
+          document_version_id: part.document_version_id,
+          structure_annotation_id: part.structure_annotation_id,
+        }),
+      )) !== part.content_version
+    )
+      processorError("processor-input-changed");
+    cache.bindings.add(binding);
   }
   private async resolve(
     citation: ProcessorCitation,
@@ -506,8 +576,41 @@ export class SqliteProcessorStorage implements ProcessorStore {
       return resolved;
     }
     if (citation.kind === "document") {
-      if (citation.evidence.content_sha256 === null)
-        processorError("processor-invalid-evidence");
+      const evidence = citation.evidence;
+      if (evidence.content_sha256 === null) {
+        if (evidence.target_kind !== "document" || evidence.page_region)
+          processorError("processor-invalid-evidence");
+        // Verify the complete fixed source before classifying absence. A failed
+        // read, changed representation or existing segment is never absence.
+        const resolved = await this.documents.withVerifiedVersion(
+          evidence.document_version_id,
+          async (version, _bytes, structure) => {
+            if (
+              version.schema_version !== 2 ||
+              structure.schema_version !== 2 ||
+              version.representation_sha256 !==
+                evidence.representation_sha256 ||
+              structure.segments.some(
+                (s) => s.segment_id === evidence.locator.segment_id,
+              )
+            )
+              return null;
+            return {
+              value: {
+                status: "citation-unavailable",
+                reason: "corrected-fragment-unavailable",
+                evidence,
+              },
+              evidence: [evidence],
+              literature_ids: [version.source_material_ref.literature_id],
+            };
+          },
+          signal,
+        );
+        if (!resolved) processorError("processor-invalid-evidence");
+        cache.citations.set(key, resolved);
+        return resolved;
+      }
       const value = await this.documents.resolveEvidence(
         citation.evidence,
         signal,

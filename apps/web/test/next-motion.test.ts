@@ -71,9 +71,15 @@ it.each(["no-preference", "reduce"] as const)(
     const w = await nextWorkspace();
     try {
       await w.page.emulateMedia({ reducedMotion });
-      const filter = w.page.getByRole("button", {
-        name: /^筛选(?: · \d+)?(?: · 收起)?$/,
-      });
+      // Filter conditions open and close from the 筛选 menu.
+      const filter = {
+        click: async () => {
+          await w.page.getByRole("button", { name: /^筛选/ }).click();
+          await w.page
+            .getByRole("menuitem", { name: /^(?:筛选条件…|收起筛选条件)$/ })
+            .click();
+        },
+      };
       await filter.click();
       await w.page
         .getByRole("textbox", { name: "年份起", exact: true })

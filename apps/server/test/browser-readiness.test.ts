@@ -6,11 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { BrowserHost } from "../src/browser/host.js";
-import type { Page } from "playwright";
+import { chromium, type Page } from "playwright";
 
 const executablePath =
-  process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ??
-  "/home/duanjw/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome";
+  process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ?? chromium.executablePath();
 
 it.runIf(existsSync(executablePath))(
   "observes a usable article with stalled scripts and fonts without exposing sensitive inputs",

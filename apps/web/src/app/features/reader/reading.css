@@ -11,7 +11,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: var(--space-3);
+    gap: var(--space-4);
     padding: var(--space-3) var(--space-4);
     border-bottom: 1px solid var(--line);
     flex-wrap: wrap;
@@ -24,6 +24,12 @@
     align-items: center;
     gap: var(--space-2);
     min-width: 0;
+  }
+  .reader-toolbar-end {
+    gap: var(--space-1);
+  }
+  .reader-toolbar-end > .ui-button:first-child {
+    margin-right: var(--space-2);
   }
   .reader-toolbar .ui-label {
     position: absolute;
@@ -89,6 +95,10 @@
     background: var(--pdfbg);
     scrollbar-gutter: stable;
     overflow-anchor: none;
+  }
+  .react-reader .reading-scroll[data-mode="results"] {
+    padding: 0;
+    background: var(--bg);
   }
   .react-reader .reading-scroll[hidden] {
     display: none;
@@ -335,7 +345,9 @@
     border-top: 1px solid var(--line);
   }
   .reader-facts dt {
+    flex-shrink: 0;
     color: var(--fg2);
+    white-space: nowrap;
   }
   .reader-information .reader-facts dd {
     margin: 0;
@@ -344,11 +356,11 @@
   .reader-back svg {
     transform: scaleX(-1);
   }
-  .reader-doi {
+  .reader-information .reader-doi {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
-    gap: var(--space-2);
+    justify-content: flex-end;
+    gap: var(--space-1);
     word-break: break-all;
   }
   .reader-information a {
@@ -362,7 +374,7 @@
   }
   .reader-abstract-clamped {
     display: -webkit-box;
-    -webkit-line-clamp: 4;
+    -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
@@ -531,7 +543,8 @@
     .reader-toolbar-end {
       gap: var(--space-1);
     }
-    .reader-toolbar-end > .ui-icon-button {
+    /* Find and the information toggle move into “更多”, which stays. */
+    .reader-toolbar-end > .ui-icon-button:not([aria-haspopup]) {
       display: none;
     }
     .react-reader .reading-scroll {
@@ -590,7 +603,11 @@
     border-radius: var(--radius-sm);
     border: 1px solid var(--line);
   }
-  .reader-value-check:is([data-status="not-found"], [data-status="citation-unavailable"]) > summary {
+  .reader-value-check:is(
+      [data-status="not-found"],
+      [data-status="citation-unavailable"]
+    )
+    > summary {
     color: var(--ink);
     border-style: dashed;
   }
@@ -677,33 +694,32 @@
 }
 
 @layer pages {
+  /* Results read as one list on the page, not a stack of cards. */
   .paper-results {
     display: grid;
-    gap: var(--space-3);
+    gap: var(--space-4);
     max-width: 900px;
     margin-inline: auto;
-    padding-block: var(--space-5);
+    padding: var(--space-6) var(--space-6) var(--space-7);
   }
-  .paper-results > header {
-    margin-bottom: var(--space-2);
-  }
-  .paper-results > header h2 {
+  .paper-results > h2 {
     margin: 0;
-    font: 600 var(--type-section) / 1.3 var(--serif);
   }
-  .paper-results > header p {
-    margin: var(--space-1) 0 0;
-    color: var(--fg2);
-    font-size: var(--text-caption);
+  .paper-result-list {
+    list-style: none;
+    margin: 0;
+    padding: var(--space-1) var(--space-5);
+    background: var(--surface-sunken);
+    border-radius: var(--radius-lg);
   }
   .paper-result {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding: var(--space-4) var(--space-5);
-    background: var(--surface-raised);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-1);
+    padding-block: var(--space-3);
+  }
+  .paper-result + .paper-result {
+    border-top: 1px solid var(--line);
   }
   .paper-result > div {
     flex: 1;
@@ -714,19 +730,19 @@
     align-items: center;
     gap: var(--space-2);
     margin: 0;
-    font: 600 var(--text-literature) / 1.4 var(--serif);
+    font-weight: 500;
   }
   .paper-result p {
-    margin: var(--space-1) 0 0;
+    margin: 2px 0 0;
     color: var(--fg2);
     font-size: var(--text-secondary);
     font-variant-numeric: tabular-nums;
   }
-  .paper-result-tag {
-    padding: 2px var(--space-2);
-    border-radius: var(--radius-xs);
-    background: var(--status-archiving-bg);
-    color: var(--status-archiving);
-    font: 400 var(--text-caption) / 1.4 var(--sans);
+  .reader-evidence-unavailable {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    color: var(--fg2);
+    font-size: var(--text-caption);
   }
 }

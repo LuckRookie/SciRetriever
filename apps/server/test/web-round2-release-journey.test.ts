@@ -174,7 +174,7 @@ it(
         exact: true,
       });
       await runs
-        .getByRole("button", { name: "查看结果表", exact: true })
+        .getByRole("button", { name: "查看结果", exact: true })
         .first()
         .waitFor();
       expect(await runs.innerText()).toContain("有结果");

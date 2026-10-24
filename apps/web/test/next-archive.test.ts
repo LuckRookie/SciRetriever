@@ -29,9 +29,7 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
   try {
     const p = w.page;
     await libraryStatus(p, "有 PDF");
-    await p
-      .getByRole("checkbox", { name: "选择已加载的文献", exact: true })
-      .focus();
+    await p.getByRole("checkbox", { name: "全选已加载", exact: true }).focus();
     await p.keyboard.press("Space");
     const initial = w.env.parseCalls;
     await p
@@ -351,7 +349,7 @@ it("locks an edited block, marks its summary stale and locates the fixed PDF reg
       editorBox = await editor.boundingBox();
     expect(editorBox!.x).toBeGreaterThanOrEqual(pdfBox!.x + pdfBox!.width);
     await p.goto(`${w.origin}/?view=archive`);
-    await p.getByRole("heading", { name: "建档问题", exact: true }).waitFor();
+    await p.getByRole("heading", { name: "需处理", exact: true }).waitFor();
     await p.screenshot({
       path: "/tmp/sciretriever-archive-implementation-yzz1ycub/archive-desktop.png",
     });

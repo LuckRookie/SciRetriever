@@ -13,12 +13,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { LibraryCounts } from "@sciretriever/contracts";
 import {
   Button,
-  Dialog,
   Drawer,
   ErrorNotice,
   EmptyState,
   IconButton,
-  SearchField,
   Select,
   SplitPane,
   ToastProvider,
@@ -55,6 +53,7 @@ import { LibraryFolders, withoutScope } from "../features/library/Folders.js";
 import { createReadingState, closeReadingState } from "../../reading/state.js";
 import { ShellContext } from "./context.js";
 import { Icon } from "./icon.js";
+import { CommandPalette } from "./CommandPalette.js";
 import { sectionLabels, errorMessage } from "../strings.js";
 
 const Tags = lazy(() => import("../features/tags/Tags.js"));
@@ -188,8 +187,7 @@ function Workspace({ api }: { api: ApiClient }) {
     [tabs, setTabs] = useState<PaperTab[]>([]),
     [mobileNav, setMobileNav] = useState(false),
     [activity, setActivity] = useState(false),
-    [search, setSearch] = useState(false),
-    [searchText, setSearchText] = useState("");
+    [search, setSearch] = useState(false);
   const [width, setWidth] = useState(() => {
     const value = preferences.read("sciretriever:panel:navigation:v1");
     return value && /^\d+px$/.test(value)
@@ -310,7 +308,10 @@ function Workspace({ api }: { api: ApiClient }) {
       .catch(() => undefined);
   };
   const go = (section: Section) => {
-    navigate({ view: section, literature: null }, { clearSource: true });
+    navigate(
+      { view: section, literature: null, results: null },
+      { clearSource: true },
+    );
     setMobileNav(false);
   };
   // The library entry leaves a folder or "recently read" scope, keeping filters.
@@ -346,7 +347,7 @@ function Workspace({ api }: { api: ApiClient }) {
           [
             { name: "资料", sections: ["lib", "snapshots", "tags"] },
             { name: "加工", sections: ["ext", "ask", "ins"] },
-            { name: "运行", sections: ["task", "web", "agent", "archive"] },
+            { name: "运行", sections: ["task", "web"] },
           ] as const
         ).map((group) => (
           <div className="navigation-group" key={group.name}>
@@ -362,7 +363,8 @@ function Workspace({ api }: { api: ApiClient }) {
                   <Button
                     variant="text"
                     aria-current={
-                      route.section === section &&
+                      (route.section === section ||
+                        (section === "task" && route.section === "agent")) &&
                       !route.literature &&
                       !(
                         section === "lib" &&
@@ -383,6 +385,9 @@ function Workspace({ api }: { api: ApiClient }) {
                           ? "…"
                           : (count.data?.total.toLocaleString() ?? "")}
                       </span>
+                    )}
+                    {section === "task" && running > 0 && (
+                      <span className="navigation-count">{running} 进行中</span>
                     )}
                   </Button>
                   {section === "lib" && api.kind === "workspace" ? (
@@ -594,35 +599,7 @@ function Workspace({ api }: { api: ApiClient }) {
           查看全部任务
         </Button>
       </Drawer>
-      <Dialog title="搜索文献库" isOpen={search} onOpenChange={setSearch}>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            navigate(
-              {
-                view: "lib",
-                literature: null,
-                query: JSON.stringify({
-                  ...emptyQuery(),
-                  text: searchText.trim() || null,
-                }),
-              },
-              { clearSource: true },
-            );
-            setSearch(false);
-          }}
-        >
-          <SearchField
-            label="搜索文献"
-            value={searchText}
-            onChange={setSearchText}
-            placeholder="标题、作者或期刊"
-          />
-          <Button type="submit" variant="primary">
-            搜索
-          </Button>
-        </form>
-      </Dialog>
+      <CommandPalette isOpen={search} onOpenChange={setSearch} />
       {(route.section === "lab" || route.section === "gallery") && (
         <div className="review-theme">
           <Select

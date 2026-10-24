@@ -5,6 +5,8 @@ import { MotionProvider } from "../../motion/index.js";
 import { loginDestination, loginStatus, signIn } from "../../data/auth.js";
 import { readTheme, bindTheme } from "../../data/preferences.js";
 import "../../styles/tokens.css";
+import "../../styles/font-faces.css";
+import "../../styles/font-faces-cjk.css";
 import "../../styles/base.css";
 import "../../styles/components.css";
 import "./auth.css";

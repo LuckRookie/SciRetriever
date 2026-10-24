@@ -1,7 +1,11 @@
 import { expect, it } from "vitest";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { libraryStatus, nextWorkspace } from "./next-workspace-fixture.js";
+import {
+  libraryStatus,
+  nextWorkspace,
+  openFilterConditions,
+} from "./next-workspace-fixture.js";
 
 it("serves the React library under the production CSP with persisted preferences and independent selection", async () => {
   const w = await nextWorkspace({ ready: "body" });
@@ -38,7 +42,7 @@ it("serves the React library under the production CSP with persisted preferences
         ),
       ),
     ).toBe("260px");
-    await page.getByRole("button", { name: /^筛选(?: · \d+)?$/ }).click();
+    await openFilterConditions(page);
     await page
       .getByRole("textbox", { name: "年份起", exact: true })
       .fill("2020");

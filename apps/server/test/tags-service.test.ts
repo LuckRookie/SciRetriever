@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   parseLibrarySearchRequest,
+  parseTag,
   type TagAssignment,
 } from "@sciretriever/contracts";
 import { tagFixture, topicDraft } from "./tag-fixture.js";
@@ -23,6 +24,9 @@ it("uses two model steps, requires candidate rejection and corrected evidence, a
         coverage?: unknown;
       };
       if (task === "topics") observedCoverage = v.coverage;
+      if (task === "select")
+        for (const candidate of v.topics![0]!.candidates)
+          expect(() => parseTag(candidate)).not.toThrow();
       return {
         value:
           task === "topics"

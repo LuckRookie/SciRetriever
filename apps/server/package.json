@@ -8,7 +8,9 @@
     "dist/web/reader/**",
     "dist/web/react/**",
     "dist/web/auth.html",
-    "dist/web/auth.css"
+    "dist/web/auth.css",
+    "dist/web/auth-fonts.json",
+    "dist/web/auth-fonts/*.woff2"
   ],
   "type": "module",
   "main": "./dist/index.js",

@@ -84,7 +84,8 @@ export default function Archive() {
   const byReason = [
     ...issues
       .reduce((map, issue) => {
-        const key = String(issue.reason);
+        // Different codes can share one human-readable reason; group by it.
+        const key = archiveReason(String(issue.reason));
         map.set(key, [...(map.get(key) ?? []), issue]);
         return map;
       }, new Map<string, typeof issues>())
@@ -95,7 +96,9 @@ export default function Archive() {
     <div className="feature-page archive-page">
       <PageHeader
         title={archiveStrings.title}
-        description={archiveStrings.description}
+        count={
+          query.data ? `${Number(query.data.total_count ?? 0)} 项` : undefined
+        }
       />
       {query.error || action.error ? (
         <ErrorNotice
@@ -128,9 +131,6 @@ export default function Archive() {
                   })),
               ]}
             />
-            <span role="status" className="ui-description">
-              待处理 {Number(query.data?.total_count ?? 0)} 项
-            </span>
             {selected.size ? (
               <Button
                 isDisabled={action.isPending}
@@ -152,7 +152,7 @@ export default function Archive() {
             {byReason.map(([group, items]) => (
               <section key={group} className="archive-group">
                 <h2>
-                  {archiveReason(group)}
+                  {group}
                   <span>{items.length}</span>
                 </h2>
                 {items.map((issue) => {

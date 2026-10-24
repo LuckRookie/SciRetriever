@@ -28,11 +28,11 @@ import {
   Drawer,
   EmptyState,
   ErrorNotice,
+  Icon,
   SearchField,
   Select,
   Skeleton,
   TechDetails,
-  Tabs,
   TextArea,
   TextField,
   type DataColumn,
@@ -65,6 +65,8 @@ import {
 } from "./result-shape.js";
 import { processingError } from "./form.js";
 import { ResultEvidence } from "./Evidence.js";
+// Also rendered inside 全文检索, which does not load the operator page.
+import "./processing.css";
 interface Filter {
   field: string;
   operator: string;
@@ -120,7 +122,6 @@ function savedState(api: ApiClient, key: string) {
   return states.get(key) ?? initial();
 }
 export default function Results() {
-  const [listMode, setListMode] = useState("runs");
   const route = useUrlState(),
     collection = route.parameters.get("collection"),
     result = route.parameters.get("result");
@@ -130,7 +131,14 @@ export default function Results() {
         <Button
           variant="text"
           onPress={() =>
-            navigate({ view: "ask", literature: null }, { clearSource: true })
+            navigate(
+              {
+                view: "ask",
+                literature: null,
+                results: route.parameters.get("results"),
+              },
+              { clearSource: true },
+            )
           }
         >
           返回检索
@@ -144,22 +152,13 @@ export default function Results() {
           resultHash={route.parameters.get("resultHash")}
         />
       ) : (
-        <Tabs
-          label="结果浏览"
-          value={listMode}
-          onChange={setListMode}
-          items={[
-            { id: "runs", label: "运行记录" },
-            { id: "search", label: "结果检索" },
-          ]}
-        >
-          {listMode === "runs" ? <Runs /> : <ResultList />}
-        </Tabs>
+        <Runs />
       )}
     </>
   );
 }
-function ResultList() {
+/** Saved results searched by name or text; shown in 全文检索 as “算子结果”. */
+export function ResultList() {
   const api = useApi();
   const [query, setQuery] = useState(""),
     [scope, setScope] = useState("collections"),
@@ -208,11 +207,8 @@ function ResultList() {
   });
   return (
     <>
-      <p className="ui-description">
-        按运行查看已保存结果，或检索已有结果正文。打开结果不会启动加工。
-      </p>
       <form
-        className="result-toolbar"
+        className="result-toolbar run-toolbar"
         onSubmit={(event) => {
           event.preventDefault();
           setOffset(0);
@@ -242,14 +238,19 @@ function ResultList() {
         >
           只看过时结果
         </Button>
-        <SearchField label="检索已有结果" value={query} onChange={setQuery} />
+        <SearchField
+          label="检索已有结果"
+          value={query}
+          onChange={setQuery}
+          placeholder="集合名称、说明或结果正文中的关键词"
+        />
         <Button type="submit">检索</Button>
       </form>
-      <p className="ui-description">
-        {/\p{Script=Han}/u.test(applied.query)
-          ? "当前按关键词做词法匹配，不会自动跨语言匹配；检索英文正文可尝试原文关键词。"
-          : "关键词按词法匹配，不会自动翻译或重建索引。"}
-      </p>
+      {/\p{Script=Han}/u.test(applied.query) ? (
+        <p className="retrieval-note">
+          按关键词做词法匹配，不会自动跨语言匹配；检索英文正文可尝试原文关键词。
+        </p>
+      ) : null}
       {data.isPending ? (
         <Skeleton />
       ) : data.isError ? (
@@ -288,9 +289,10 @@ function ResultList() {
                         : "已保存集合"}
                   </p>
                   {row.freshness === "stale" ? (
-                    <p role="status">已过时</p>
+                    <Badge status="running">已过时</Badge>
                   ) : null}
                   <Button
+                    variant="text"
                     onPress={() =>
                       navigate(
                         results
@@ -299,14 +301,14 @@ function ResultList() {
                               result: id,
                               resultHash: ref!.content_sha256,
                               collection: null,
-                              results: null,
+                              from: "ask",
                             }
                           : {
                               view: "ext",
                               collection: id,
                               result: null,
                               resultHash: null,
-                              results: null,
+                              from: "ask",
                             },
                       )
                     }
@@ -686,11 +688,11 @@ function Detail({
                   .map((c) => (
                     <span
                       key={c.pointer}
-                      className="ui-description"
+                      className="value-check"
+                      data-status={c.status}
                       title={valueCheckReason(c.reason)}
                     >
-                      {" "}
-                      · {valueCheckLabels[c.status]}
+                      {valueCheckLabels[c.status]}
                     </span>
                   ))}
                 {row.missing[name] || row.missing[pointerFor(name)] ? (
@@ -833,6 +835,8 @@ function Detail({
     <>
       <Button
         variant="text"
+        className="result-back"
+        icon={<Icon name="arrow" />}
         onPress={() =>
           navigate({
             view: "ext",
@@ -845,7 +849,7 @@ function Detail({
       >
         全部结果
       </Button>
-      <h2>
+      <h2 className="result-title">
         {collection?.name ??
           (standalone?.result.invocation.processor.id === "labels"
             ? "问答标注"
@@ -856,7 +860,7 @@ function Detail({
                 ? "文献综合"
                 : "记录提取")}
       </h2>
-      <p>
+      <p className="result-meta">
         {collection
           ? `${collection.members.length} 项输入 · ${collection.members.filter((item) => item.result).length} 项已有结果 · ${collection.members.filter((item) => !item.result).length} 项缺口`
           : `${describeResult(standalone!).literatureIds.length} 篇关联文献 · ${standalone!.result.coverage.some((item) => item.status !== "complete") ? "部分覆盖" : "完整覆盖"}`}
@@ -948,7 +952,7 @@ function Detail({
           <Button onPress={() => setExportRef(standalone.ref)}>完整结果</Button>
         </section>
       ) : null}
-      <div className="result-toolbar">
+      <div className="result-toolbar run-toolbar">
         <Select
           label="筛选字段"
           value={field}
@@ -1021,10 +1025,8 @@ function Detail({
           与当前文献关联的记录以浅蓝底色标出。跨页结果可继续翻页查看。
         </p>
       ) : null}
-      <p role="status">
-        {state.filters.length
-          ? "显示已应用筛选的结果；修改条件后点击应用筛选。"
-          : "显示本次固定范围的已有记录。"}
+      <p role="status" className="result-meta">
+        {state.filters.length ? "已应用筛选；修改条件后点击应用筛选。" : null}
       </p>
       {problem ? <ErrorNotice message={problem} /> : null}
       {state.selected.size ? (

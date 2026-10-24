@@ -288,7 +288,11 @@ export default function Snapshots() {
       ) : (
         <PageHeader
           title={route.section === "syn" ? "综合" : archiveStrings.snapshot}
-          description="固定一组就绪文献及其内容版本，独立比较和加工。创建快照不会运行模型。"
+          count={
+            snapshots.data && !snapshots.hasNextPage
+              ? `${items.length} 个`
+              : undefined
+          }
           action={
             <Button
               isPending={action.isPending}
@@ -621,23 +625,54 @@ export default function Snapshots() {
       ) : (
         <section className="snapshot-list" aria-label="快照列表">
           {snapshots.isPending ? <Skeleton label="正在读取快照" /> : null}
-          {items.map((item) => (
-            <button
-              type="button"
-              key={String(item.snapshot_id)}
-              className="snapshot-row"
-              onClick={() => open(String(item.snapshot_id))}
-            >
-              <span className="snapshot-row-title">{name(item)}</span>
-              <span className="snapshot-row-meta">
-                {localTime(item.created_at)} · {Number(item.member_count)}{" "}
-                篇就绪文献
-                {Number(item.excluded_count)
-                  ? ` · 创建时排除 ${Number(item.excluded_count)} 篇`
-                  : ""}
-              </span>
-            </button>
-          ))}
+          {items.length ? (
+            <table className="ui-data-table snapshot-table">
+              <thead>
+                <tr>
+                  <th scope="col">名称</th>
+                  <th scope="col" data-numeric>
+                    篇数
+                  </th>
+                  <th scope="col" data-numeric>
+                    创建时排除
+                  </th>
+                  <th scope="col">创建时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr
+                    key={String(item.snapshot_id)}
+                    onClick={() => open(String(item.snapshot_id))}
+                  >
+                    <td>
+                      <button
+                        type="button"
+                        className="snapshot-open"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          open(String(item.snapshot_id));
+                        }}
+                      >
+                        {name(item)}
+                      </button>
+                    </td>
+                    <td data-numeric>
+                      {Number(item.member_count).toLocaleString()}
+                    </td>
+                    <td data-numeric>
+                      {Number(item.excluded_count)
+                        ? Number(item.excluded_count).toLocaleString()
+                        : "—"}
+                    </td>
+                    <td className="snapshot-time">
+                      {localTime(item.created_at)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : null}
           {!snapshots.isPending && !items.length ? (
             <p className="snapshot-empty">
               还没有快照。在文献库应用筛选后，从“用当前结果”生成快照。

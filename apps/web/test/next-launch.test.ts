@@ -81,7 +81,9 @@ describe("formal Web launch and database binding", () => {
         headless: true,
       });
       try {
-        await expect.poll(() => address).not.toBe("");
+        // The CLI builds and opens the catalog first; under Full load that
+        // takes longer than the default one-second poll window.
+        await expect.poll(() => address, { timeout: 20000 }).not.toBe("");
         expect(await inspectCatalogSchema(catalog)).toMatchObject({
           status: "ready",
           schema_version: SCHEMA_VERSION,

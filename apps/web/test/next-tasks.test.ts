@@ -38,7 +38,7 @@ it("keeps active tasks discoverable beyond a full history page and confirms canc
           .count(),
       )
       .toBe(1);
-    await w.page.getByRole("tab", { name: "进行中" }).click();
+    await w.page.getByRole("button", { name: "进行中", exact: true }).click();
     await expect
       .poll(() =>
         w.page

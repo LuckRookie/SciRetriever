@@ -24,7 +24,7 @@
   }
   .processor-form h2,
   .processor-aside h2 {
-    font-size: 22px;
+    font: 600 var(--type-section) / var(--lh-heading) var(--sans);
     margin: var(--space-3) 0 0;
   }
   .processor-field {
@@ -55,15 +55,184 @@
     flex: 1 1 160px;
     max-width: 320px;
   }
-  .result-list-item {
-    padding: var(--space-5) 0;
+  /* Run records: a one-line toolbar over a quiet list, as in the library. */
+  .run-toolbar {
+    align-items: center;
+  }
+  .run-toolbar .ui-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .run-toolbar > .ui-field {
+    flex: 0 1 auto;
+  }
+  .run-toolbar > .ui-field:has(.ui-search) {
+    flex: 1 1 220px;
+    max-width: 360px;
+  }
+  .run-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--line);
+  }
+  .run-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-2);
     border-bottom: 1px solid var(--line);
   }
-  .result-list-item h2 {
-    font: 600 24px/1.4 var(--serif);
+  .run-row-main {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+  .run-row h3 {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    font-weight: 500;
+  }
+  .run-spec {
+    color: var(--fg2);
+    font-weight: 400;
+  }
+  .run-spec::before {
+    content: "·";
+    margin-right: var(--space-2);
+  }
+  .run-meta,
+  .run-outcomes {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0 var(--space-3);
+    margin: 0;
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+    min-width: 0;
+  }
+  .run-meta .ui-button {
+    margin-inline: calc(-1 * var(--space-2)) 0;
+  }
+  .run-source {
+    max-width: 48ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .run-outcomes b {
+    font-weight: 500;
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
+  }
+  .run-outcomes [data-failed] b {
+    color: var(--status-failed);
+  }
+  .run-actions {
+    display: flex;
+    gap: var(--space-1);
+    flex-shrink: 0;
+  }
+  @media (max-width: 720px) {
+    .run-row {
+      flex-direction: column;
+      align-items: stretch;
+      gap: var(--space-1);
+    }
+    .run-actions {
+      margin-left: calc(-1 * var(--space-3));
+    }
+  }
+  .result-list {
+    border-top: 1px solid var(--line);
+  }
+  .result-list-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: var(--space-4);
+    align-items: center;
+    padding: var(--space-3) var(--space-2);
+    border-bottom: 1px solid var(--line);
+  }
+  .result-list-item > :not(.ui-button) {
+    grid-column: 1;
+    margin: 0;
   }
   .result-list-item > .ui-button {
-    margin-left: var(--space-3);
+    grid-column: 2;
+    grid-row: 1 / span 3;
+  }
+  .result-list-item h2 {
+    font: 500 var(--text-interface) / var(--lh-body) var(--sans);
+  }
+  .result-list-item > p:not(.ui-description) {
+    font-size: var(--text-secondary);
+    color: var(--fg);
+  }
+  .result-list-item .ui-description {
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+  }
+  .result-list-item .ui-badge {
+    justify-self: start;
+  }
+  .result-back svg {
+    transform: scaleX(-1);
+  }
+  .result-title {
+    margin: var(--space-2) 0 var(--space-1);
+  }
+  .result-meta {
+    margin: 0 0 var(--space-2);
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+  }
+  .result-meta:empty {
+    display: none;
+  }
+  /* Six value-check states share the badge colours, as small inline labels. */
+  .value-check {
+    display: inline-block;
+    margin-left: var(--space-1);
+    padding: 0 6px;
+    border-radius: var(--radius-xs);
+    font-size: var(--text-caption);
+    line-height: 20px;
+    white-space: nowrap;
+    background: var(--status-raw-bg);
+    color: var(--status-raw);
+  }
+  .value-check[data-status="found"] {
+    background: var(--status-ready-bg);
+    color: var(--status-ready);
+  }
+  .value-check[data-status="not-found"] {
+    background: var(--status-failed-bg);
+    color: var(--status-failed);
+  }
+  .value-check[data-status="citation-unavailable"] {
+    background: var(--status-unavailable-bg);
+    color: var(--status-unavailable);
+  }
+  .value-check[data-status="derived"] {
+    background: var(--status-asset-bg);
+    color: var(--status-asset);
+  }
+  .result-pagination .ui-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .result-pagination {
     display: flex;
@@ -143,7 +312,7 @@
     transform: translateY(-2px);
   }
   .synthesis-card h2 {
-    font: 600 24px/1.4 var(--serif);
+    font: 500 var(--text-literature) / var(--lh-literature) var(--serif);
     margin: 0;
     display: -webkit-box;
     -webkit-box-orient: vertical;
@@ -163,20 +332,39 @@
     justify-content: space-between;
   }
   .synthesis-reading > h2 {
-    font: 600 30px/1.3 var(--serif);
+    font: var(--title-weight) var(--type-page) / var(--lh-heading)
+      var(--title-face);
   }
   .synthesis-statement {
     margin-block: var(--space-6);
   }
   .synthesis-statement > p {
-    font: var(--text-reading) / 1.7 var(--serif);
+    font: var(--text-reading) / var(--lh-reading) var(--serif);
   }
   .intake-form {
-    max-width: 760px;
+    max-width: 960px;
     display: flex;
     flex-direction: column;
-    gap: var(--space-5);
-    padding-block: var(--space-3) var(--space-6);
+    gap: var(--space-4);
+    padding-block: var(--space-2) var(--space-6);
+  }
+  .intake-form .ui-definition > dd .ui-field:has(.ui-number) {
+    width: 160px;
+  }
+  .intake-form .ui-definition > dd .ui-field:has(.ui-input) {
+    width: min(100%, 480px);
+  }
+  .intake-range {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--fg3);
+  }
+  .intake-history > h2 {
+    margin: 0 0 var(--space-2);
+  }
+  .intake-history > .ui-description {
+    margin: 0;
   }
   .intake-form > .ui-button {
     align-self: flex-start;
@@ -229,6 +417,11 @@
   }
   .run-operator.ui-modal {
     width: min(760px, 100%);
+  }
+  /* Every step has the same height, so the step bar and the footer stay put. */
+  .run-operator .ui-dialog-body {
+    height: min(440px, calc(100dvh - 240px));
+    overflow-y: auto;
   }
   .run-operator-steps {
     display: flex;
@@ -322,7 +515,7 @@
   }
   .run-operator .processor-form h3 {
     margin: var(--space-2) 0 0;
-    font: 600 var(--text-interface) / 1.3 var(--serif);
+    font: 600 var(--text-interface) / var(--lh-heading) var(--sans);
   }
   .operator-catalog {
     list-style: none;
@@ -344,7 +537,7 @@
   }
   .operator-catalog h3 {
     margin: 0;
-    font: 600 var(--text-literature) / 1.4 var(--serif);
+    font: 500 var(--text-literature) / var(--lh-literature) var(--serif);
   }
   .operator-catalog p {
     margin: var(--space-1) 0 0;

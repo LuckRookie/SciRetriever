@@ -22,7 +22,7 @@ import {
 } from "./summary-response.js";
 
 export const DOCUMENT_ANALYSIS_METHOD = "dsh-document-analysis";
-export const DOCUMENT_ANALYSIS_VERSION = "1";
+export const DOCUMENT_ANALYSIS_VERSION = "2";
 const INSTRUCTIONS = `Read the fixed paper in a persistent DSH session and produce an evidence-grounded analysis. Read the entire text with read_document, inspect its saved figures with view_image when supported, and use search_document/read_segments to check numbers, conditions, limitations and apparent contradictions before submitting. Treat headings and OCR as fallible: an attachment link or publisher marker is not necessarily a section title. Do not silently repair the stored source. Compare prose with figures/tables and describe unresolved inconsistencies rather than inventing a correction.
 Write a coherent Chinese account, retaining original scientific terms, units and exact conditions. Overview: explain the research question and contribution first, then methods, decisive results and limitations. Detailed: retain additional experimental detail and scope. Question: focus on what the paper can and cannot answer. Distinguish author reports from your inference and claimed applications from demonstrated validation. Explain resource/visual limitations in the result. Use statements with concise paragraphs and original segment citations, including the Markdown anchor when citing a figure. A summary is not a paraphrase of the abstract. Complete textual coverage does not certify scientific accuracy. Use reading_status to check unread text/resources. Return not_applicable only after reviewing the whole source.`;
 export function documentAnalysisParameters(
@@ -442,10 +442,6 @@ export async function analyzeDocumentSession(
                 const segment = source.segments.find(
                   (s) => s.segment_id === id,
                 );
-                if (!segment)
-                  throw new KnowledgeAnalysisFailure(
-                    "knowledge-invalid-evidence",
-                  );
                 return parseEvidenceRef({
                   schema_version: 1,
                   target_kind: "document",
@@ -453,7 +449,7 @@ export async function analyzeDocumentSession(
                   document_version_id: ref.document_version_id,
                   representation_sha256: ref.representation_sha256,
                   locator: { kind: "segment", segment_id: id },
-                  content_sha256: segment.hash,
+                  content_sha256: segment?.hash ?? null,
                 });
               },
             ),

@@ -7,7 +7,14 @@ import {
   type KnowledgeContextRequest,
 } from "@sciretriever/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { copyText } from "../../../browser-platform.js";
 import {
   Button,
@@ -16,7 +23,9 @@ import {
   ErrorNotice,
   PageHeader,
   SearchField,
+  SegmentedControl,
   Select,
+  Skeleton,
   TechDetails,
   TextField,
 } from "../../components/index.js";
@@ -29,6 +38,12 @@ import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
 import { download } from "../library/OperationDialog.js";
 import "./retrieval.css";
+// Saved operator results are searched here too; the list lives with the results.
+const ResultList = lazy(() =>
+  import("../processing/Results.js").then((module) => ({
+    default: module.ResultList,
+  })),
+);
 
 interface State {
   draft: {
@@ -69,6 +84,42 @@ const textOf = (item: KnowledgeContextItem) =>
     ? item.text || "该结果超过本次预算，可打开完整结果。"
     : item.text;
 export default function Retrieval() {
+  const route = useUrlState(),
+    // `results=all` on this page means saved operator results.
+    mode = route.parameters.get("results") === "all" ? "results" : "text";
+  const header = (
+    <>
+      <PageHeader title="全文检索" />
+      <SegmentedControl
+        label="检索内容"
+        value={mode}
+        onChange={(value) =>
+          navigate(
+            { results: value === "results" ? "all" : null },
+            { replace: true },
+          )
+        }
+        items={[
+          { id: "text", label: "全文" },
+          { id: "results", label: "算子结果" },
+        ]}
+      />
+    </>
+  );
+  if (mode === "results")
+    return (
+      <section className="retrieval-page" data-mode="results">
+        <div className="retrieval-main">
+          {header}
+          <Suspense fallback={<Skeleton />}>
+            <ResultList />
+          </Suspense>
+        </div>
+      </section>
+    );
+  return <TextRetrieval header={header} />;
+}
+function TextRetrieval({ header }: { header: ReactNode }) {
   const api = useApi(),
     shell = useShell(),
     route = useUrlState(),
@@ -212,10 +263,7 @@ export default function Retrieval() {
   return (
     <div className="retrieval-page">
       <section className="retrieval-main">
-        <PageHeader
-          title="检索"
-          description="在已保存的正文和知识里查找材料，随时返回原文核对。"
-        />
+        {header}
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -233,11 +281,8 @@ export default function Retrieval() {
               检索
             </Button>
           </div>
-          <p className="muted">
-            按文献所用的语言检索。多个关键词须同时命中，不自动翻译或扩展含义。
-          </p>
           {/\p{Script=Han}/u.test(state.draft.query) && (
-            <p role="note">
+            <p role="note" className="retrieval-note">
               当前不会自动跨语言匹配；英文文献可尝试英文关键词。中文按连续词串匹配，子词不保证命中。
             </p>
           )}
@@ -308,20 +353,26 @@ export default function Retrieval() {
           />
         )}
         <div className="retrieval-results" role="region" aria-label="检索结果">
-          {state.items.map((item, index) => (
-            <Result
-              key={`${state.generation}:${key(item)}:${index}`}
-              item={item}
-              selected={state.basket.has(key(item))}
-              onToggle={() => toggle(item)}
-              onOpen={() => open(item)}
-            />
+          {groups(state.items).map((group) => (
+            <section
+              className="retrieval-group"
+              key={`${state.generation}:${group.key}`}
+            >
+              <GroupTitle id={group.literature} />
+              {group.items.map(({ item, index }) => (
+                <Result
+                  key={`${state.generation}:${key(item)}:${index}`}
+                  item={item}
+                  terms={terms(state.current?.query ?? "")}
+                  selected={state.basket.has(key(item))}
+                  onToggle={() => toggle(item)}
+                  onOpen={() => open(item)}
+                />
+              ))}
+            </section>
           ))}
           {!state.items.length && !busy && state.current && !error && (
-            <EmptyState
-              title="当前没有可显示的片段"
-              description="可调整关键词或范围；索引状态见上方说明。"
-            />
+            <EmptyState title="当前没有可显示的片段。可调整关键词或范围。" />
           )}
         </div>
         {state.next && (
@@ -406,31 +457,90 @@ export default function Retrieval() {
     </div>
   );
 }
-function Result({
-  item,
-  selected,
-  onToggle,
-  onOpen,
-}: {
-  item: KnowledgeContextItem;
-  selected: boolean;
-  onToggle: () => void;
-  onOpen: () => void;
-}) {
+/** Consecutive hits from the same paper sit under one title. */
+function groups(items: readonly KnowledgeContextItem[]) {
+  const out: {
+    key: string;
+    literature: string | undefined;
+    items: { item: KnowledgeContextItem; index: number }[];
+  }[] = [];
+  items.forEach((item, index) => {
+    const literature = sourceOf(item);
+    const last = out[out.length - 1];
+    if (last && last.literature === literature && literature)
+      last.items.push({ item, index });
+    else
+      out.push({
+        key: `${literature ?? "none"}:${index}`,
+        literature,
+        items: [{ item, index }],
+      });
+  });
+  return out;
+}
+const sourceOf = (item: KnowledgeContextItem) =>
+  item.kind === "generated-result"
+    ? item.source_literature_ids[0]
+    : item.literature_id;
+function GroupTitle({ id }: { id: string | undefined }) {
   const api = useApi();
-  const id =
-    item.kind === "generated-result"
-      ? item.source_literature_ids[0]
-      : item.literature_id;
   const literature = useQuery({
     queryKey: ["literature", id],
     queryFn: ({ signal }) => readLiterature(api, id!, signal),
     enabled: !!id,
   });
+  return (
+    <h2 className="retrieval-group-title">
+      {literature.data ? paperTitle(literature.data) : id ? "…" : "综合结果"}
+    </h2>
+  );
+}
+const terms = (query: string) =>
+  query
+    .split(/\s+/u)
+    .map((term) => term.trim())
+    .filter((term) => term.length > 0);
+/** Marks every query term in the hit, in the evidence yellow; headings lose their “#”. */
+function Highlighted({ text, terms }: { text: string; terms: string[] }) {
+  const plain = text.replace(/^#{1,6}[ \t]+/gmu, "").trimEnd();
+  if (!terms.length) return <>{plain}</>;
+  const pattern = new RegExp(
+    `(${terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("|")})`,
+    "giu",
+  );
+  return (
+    <>
+      {plain.split(pattern).map((part, index) =>
+        index % 2 ? (
+          <mark key={index} className="retrieval-hit">
+            {part}
+          </mark>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+function Result({
+  item,
+  terms,
+  selected,
+  onToggle,
+  onOpen,
+}: {
+  item: KnowledgeContextItem;
+  terms: string[];
+  selected: boolean;
+  onToggle: () => void;
+  onOpen: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   return (
     <article className="retrieval-result" data-testid="retrieval-result">
-      <p data-testid="retrieval-text">{textOf(item)}</p>
+      <p data-testid="retrieval-text">
+        <Highlighted text={textOf(item)} terms={terms} />
+      </p>
       <div className="retrieval-source">
         <span data-testid="retrieval-kind">
           {item.kind === "generated-result"
@@ -442,12 +552,7 @@ function Result({
               : "原文"}
         </span>
         <Button variant="text" data-testid="retrieval-source" onPress={onOpen}>
-          {literature.data
-            ? paperTitle(literature.data)
-            : item.kind === "generated-result" &&
-                item.processor_id === "knowledge-synthesis"
-              ? "打开综合来源"
-              : "打开来源文献"}
+          {item.kind === "generated-result" ? "打开结果" : "在原文中查看"}
         </Button>
         <Button variant="text" onPress={() => setExpanded(!expanded)}>
           固定来源

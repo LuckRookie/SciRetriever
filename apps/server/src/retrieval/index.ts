@@ -11,13 +11,14 @@ import type {
 } from "@sciretriever/contracts";
 import type { DocumentReadService } from "../document/read.js";
 import type { LiteratureQueryService } from "../literature/query.js";
-import type { CatalogWriteAdmission } from "../storage/write-admission.js";
+import { CatalogWriteAdmission } from "../storage/write-admission.js";
 import { ftsIndexText } from "../literature/unicode-casefold.js";
 import {
   type RetrievalEntry,
   type RetrievalGeneration,
   type RetrievalSource,
 } from "./storage.js";
+import { RetrievalStorageError } from "./model.js";
 import { RetrievalStorageClient } from "../storage/sqlite/retrieval-client.js";
 
 export const RETRIEVAL_UNIT_RULE = "markdown-context-v1";
@@ -138,6 +139,7 @@ function check(signal?: AbortSignal): void {
 }
 
 export class RetrievalIndexService {
+  private readonly generationAdmission: CatalogWriteAdmission;
   private readonly active = new Map<
     Promise<RetrievalGeneration>,
     AbortController
@@ -148,8 +150,15 @@ export class RetrievalIndexService {
     private readonly store: RetrievalStorageClient,
     private readonly documents: DocumentReadService,
     private readonly literature: LiteratureQueryService,
-    private readonly admission: CatalogWriteAdmission,
-  ) {}
+    admission: CatalogWriteAdmission,
+  ) {
+    // Serialize builders across processes without occupying the business write
+    // queue. This names a lock sidecar, not another catalog. Lock order is
+    // generation -> catalog; callers must not hold catalog admission here.
+    this.generationAdmission = new CatalogWriteAdmission(
+      `${admission.catalogPath}.retrieval-index`,
+    );
+  }
 
   private async verifiedMetadata(
     source: RetrievalSource,
@@ -175,26 +184,40 @@ export class RetrievalIndexService {
     this.stopped = true;
     for (const controller of this.active.values()) controller.abort();
     return (this.closing ??= Promise.allSettled([...this.active.keys()]).then(
-      () => undefined,
+      () => this.generationAdmission.close(),
     ));
   }
 
   build(signal?: AbortSignal): Promise<RetrievalGeneration> {
+    return this.run(false, signal);
+  }
+
+  /** Reuse only verified, unchanged sources; explicit rebuild always reads them anew. */
+  refresh(signal?: AbortSignal): Promise<RetrievalGeneration> {
+    return this.run(true, signal);
+  }
+
+  private run(
+    reuse: boolean,
+    signal?: AbortSignal,
+  ): Promise<RetrievalGeneration> {
     if (this.stopped)
       return Promise.reject(new RetrievalIndexError("index-cancelled"));
     const controller = new AbortController();
     const combined = signal
       ? AbortSignal.any([signal, controller.signal])
       : controller.signal;
-    const pending = this.admission.run(async () => {
+    const pending = this.generationAdmission.run(async () => {
       signal = combined;
       check(signal);
       const store = this.store;
       let spoolRoot: string | null = null;
+      let revision: number | null = null;
       try {
         spoolRoot = await mkdtemp(join(tmpdir(), "sciretriever-index-"));
         const spoolPath = join(spoolRoot, "entries.ndjson");
-        const revision = await store.revision();
+        revision = await store.revision();
+        const previous = reuse ? await store.reusableGeneration() : null;
         const spool = await open(spoolPath, "wx", 0o600);
         let sourceCount = 0;
         let entryCount = 0;
@@ -256,6 +279,18 @@ export class RetrievalIndexService {
             for (const source of page) {
               check(signal);
               const metadata = await this.verifiedMetadata(source);
+              const cached =
+                previous &&
+                (await this.reusableEntries(
+                  previous.generation_id,
+                  "metadata",
+                  source,
+                  signal,
+                ));
+              if (cached) {
+                await collect(cached);
+                continue;
+              }
               const title = ftsIndexText(metadata.title ?? "");
               const body = [
                 metadata.abstract,
@@ -310,6 +345,18 @@ export class RetrievalIndexService {
                 !source.source_asset_sha256
               )
                 throw new RetrievalIndexError("index-source-invalid");
+              const cached =
+                previous &&
+                (await this.reusableEntries(
+                  previous.generation_id,
+                  "document",
+                  source,
+                  signal,
+                ));
+              if (cached) {
+                await collect(cached);
+                continue;
+              }
               let indexingFailure: unknown;
               let failedDuringIndexing = false;
               try {
@@ -400,6 +447,15 @@ export class RetrievalIndexService {
         }
         check(signal);
         return await store.publish(generation, revision, signal);
+      } catch (error) {
+        if (
+          error instanceof RetrievalIndexError &&
+          error.code === "index-source-invalid" &&
+          revision !== null &&
+          (await store.revision()) !== revision
+        )
+          throw new RetrievalStorageError("index-stale");
+        throw error;
       } finally {
         if (spoolRoot) await rm(spoolRoot, { recursive: true, force: true });
       }
@@ -409,6 +465,41 @@ export class RetrievalIndexService {
       .finally(() => this.active.delete(pending))
       .catch(() => undefined);
     return pending;
+  }
+
+  private async reusableEntries(
+    generation: string,
+    kind: "metadata" | "document",
+    source: RetrievalSource,
+    signal?: AbortSignal,
+  ): Promise<AsyncIterable<RetrievalEntry> | null> {
+    const first = await this.store.reusePage(
+      generation,
+      kind,
+      source,
+      0,
+      BATCH,
+    );
+    if (!first.length) return null;
+    const store = this.store;
+    return (async function* () {
+      let page = first;
+      while (true) {
+        check(signal);
+        for (const { entry_id, ...entry } of page) {
+          void entry_id;
+          yield entry;
+        }
+        if (page.length < BATCH) return;
+        page = await store.reusePage(
+          generation,
+          kind,
+          source,
+          page.at(-1)!.entry_id,
+          BATCH,
+        );
+      }
+    })();
   }
 
   private async *documentEntries(

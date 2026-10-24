@@ -9,11 +9,14 @@ import {
   Definitions,
   Dialog,
   ErrorNotice,
+  Icon,
+  IconButton,
   PageHeader,
   Radio,
   RadioGroup,
   Section,
   Select,
+  Switch,
   Tabs,
   TechDetails,
   TextField,
@@ -329,11 +332,54 @@ export default function Settings() {
       setMessage(errorMessage(error));
     }
   };
+  const changed = (...names: string[]) => names.some((name) => dirty.has(name));
+  /** A section's save button exists only while that section has unsaved edits. */
+  const saveButton = (
+    names: string[],
+    label: string,
+    onPress: () => void = () => save(names),
+  ) =>
+    changed(...names) ? (
+      <Button variant="primary" isPending={publish.isPending} onPress={onPress}>
+        {label}
+      </Button>
+    ) : undefined;
+  const runtimeSections = [
+    "browser",
+    "parsing",
+    "analyze",
+    "tags",
+    "proofread",
+  ];
+  const sectionTabs =
+    api.kind === "workspace"
+      ? tabs
+      : tabs.filter(
+          (tab) =>
+            tab.id === "appearance" ||
+            (api.kind === "maintenance" && tab.id === "advanced"),
+        );
+  const pathValue = (path: string | null | undefined, label: string) =>
+    path ? (
+      <span className="settings-path">
+        <code title={path}>{path}</code>
+        <IconButton
+          size="inline"
+          variant="text"
+          aria-label={`复制${label}`}
+          icon={<Icon name="copy" />}
+          onPress={() =>
+            void copyText(path).then(() => shell.notify(`${label}已复制`))
+          }
+        />
+      </span>
+    ) : (
+      "当前进程未提供"
+    );
   return (
     <section className="settings-page">
       <PageHeader
         title="设置"
-        description="管理当前文献库、服务与本机阅读偏好。"
         action={
           <Button
             isDisabled={publish.isPending}
@@ -345,540 +391,632 @@ export default function Settings() {
           </Button>
         }
       />
-      <Tabs
-        label="设置分区"
-        value={section}
-        onChange={setSection}
-        items={
-          api.kind === "workspace"
-            ? tabs
-            : tabs.filter(
-                (tab) =>
-                  tab.id === "appearance" ||
-                  (api.kind === "maintenance" && tab.id === "advanced"),
-              )
-        }
-      />
-      {section === "appearance" ? (
-        <Appearance />
-      ) : section === "advanced" ? (
-        <Suspense fallback={<p role="status">正在打开高级工具…</p>}>
-          <Maintenance />
-        </Suspense>
-      ) : read.isPending ? (
-        <p role="status">正在读取配置…</p>
-      ) : read.isError ? (
-        <ErrorNotice message="配置读取失败，请重试。" onRetry={refresh} />
-      ) : (
-        draft && (
-          <>
-            {section === "paths" && (
-              <div className="settings-section">
-                <h2>文献库位置</h2>
-                <p className="muted">
-                  当前进程使用已绑定的位置。修改路径后重启生效，已有文件不会移动。
-                </p>
-                <TextField
-                  label="Catalog 路径"
-                  value={str(value("paths", "catalog_path"))}
-                  onChange={(value) =>
-                    edit("paths", "catalog_path", value || null)
-                  }
-                />
-                <TextField
-                  label="资产目录"
-                  value={str(value("paths", "artifact_root"))}
-                  onChange={(value) =>
-                    edit("paths", "artifact_root", value || null)
-                  }
-                />
-                <p>
-                  当前进程：<code>{api.workspace.catalog ?? "未提供"}</code>
-                </p>
-                <p>
-                  资产目录：<code>{api.workspace.artifacts ?? "未提供"}</code>
-                </p>
-                <div className="form-actions">
-                  <Button
-                    onPress={() =>
-                      void copyText(api.workspace.catalog ?? "").then(() =>
-                        shell.notify("数据库路径已复制"),
-                      )
-                    }
-                  >
-                    复制数据库路径
-                  </Button>
-                  <Button
-                    variant="primary"
-                    isPending={publish.isPending}
-                    onPress={() => save(["paths"])}
-                  >
-                    保存文献库位置
-                  </Button>
-                </div>
-                <h2>当前登录</h2>
-                <p>退出会释放当前浏览器连接，已提交的后台任务继续运行。</p>
-                <Button
-                  onPress={() =>
-                    void api
-                      .logout()
-                      .catch((error: unknown) =>
-                        setMessage(errorMessage(error)),
-                      )
-                  }
-                >
-                  退出登录
-                </Button>
-              </div>
-            )}
-            {section === "sources" && (
-              <Sources
-                configuration={draft}
-                onChange={(sources) => {
-                  setDraft({ ...draft, sources });
-                  mark("sources");
-                }}
-                onSave={() => save(["sources"])}
-                pending={publish.isPending}
-              />
-            )}
-            {section === "models" && (
-              <div className="settings-section">
-                <h2>模型服务</h2>
-                <p className="muted">
-                  Provider 定义连接协议，Model
-                  记录远程模型与能力。凭据在单独的分区保存。
-                </p>
-                {providers.map((row, index) => (
-                  <fieldset key={row.id}>
-                    <legend>Provider {index + 1}</legend>
-                    <div className="settings-grid">
-                      <TextField
-                        label={`Provider ${index + 1} 名称`}
-                        value={row.name}
-                        onChange={(name) => {
-                          setProviders(
-                            providers.map((item) =>
-                              item.id === row.id ? { ...item, name } : item,
-                            ),
-                          );
-                          mark("providers");
-                        }}
-                      />
-                      <Select
-                        label={`Provider ${index + 1} 协议`}
-                        value={row.api}
-                        onChange={(api) => {
-                          setProviders(
-                            providers.map((item) =>
-                              item.id === row.id ? { ...item, api } : item,
-                            ),
-                          );
-                          mark("providers");
-                        }}
-                        options={MODEL_APIS}
-                      />
-                      <TextField
-                        label={`Provider ${index + 1} Base URL`}
-                        value={row.url}
-                        onChange={(url) => {
-                          setProviders(
-                            providers.map((item) =>
-                              item.id === row.id ? { ...item, url } : item,
-                            ),
-                          );
-                          mark("providers");
-                        }}
-                      />
-                      <Button
-                        variant="text"
-                        onPress={() => {
-                          if (
-                            models.some((model) => model.provider === row.name)
-                          ) {
-                            setMessage(
-                              "Provider 仍有模型引用，请先移除或调整模型。",
-                            );
-                            return;
-                          }
-                          setProviders(
-                            providers.filter((item) => item.id !== row.id),
-                          );
-                          mark("providers");
-                        }}
-                      >
-                        移除 Provider
-                      </Button>
-                    </div>
-                  </fieldset>
-                ))}
-                <Button
-                  onPress={() => {
-                    setProviders([
-                      ...providers,
-                      {
-                        id: randomId(),
-                        name: "",
-                        api: "openai-responses",
-                        url: "",
-                      },
-                    ]);
-                    mark("providers");
-                  }}
-                >
-                  添加 Provider
-                </Button>
-                <h2>已注册模型</h2>
-                {models.map((row, index) => (
-                  <fieldset key={row.id}>
-                    <legend>Model {index + 1}</legend>
-                    <div className="settings-grid">
-                      <Select
-                        label={`Model ${index + 1} Provider`}
-                        value={row.provider}
-                        onChange={(provider) => {
-                          setModels(
-                            models.map((item) =>
-                              item.id === row.id ? { ...item, provider } : item,
-                            ),
-                          );
-                          mark("models");
-                        }}
-                        options={[
-                          { value: "", label: "请选择" },
-                          ...providers
-                            .filter((provider) => provider.name)
-                            .map((provider) => ({
-                              value: provider.name,
-                              label: provider.name,
-                            })),
-                        ]}
-                      />
-                      <TextField
-                        label={`Model ${index + 1} 远程名称`}
-                        value={row.name}
-                        onChange={(name) => {
-                          setModels(
-                            models.map((item) =>
-                              item.id === row.id ? { ...item, name } : item,
-                            ),
-                          );
-                          mark("models");
-                        }}
-                      />
-                      <Select
-                        label={`Model ${index + 1} Reasoning`}
-                        value={row.reasoning}
-                        onChange={(reasoning) => {
-                          setModels(
-                            models.map((item) =>
-                              item.id === row.id
-                                ? { ...item, reasoning }
-                                : item,
-                            ),
-                          );
-                          mark("models");
-                        }}
-                        options={MODEL_REASONING.map((value) => ({
-                          value,
-                          label: value,
-                        }))}
-                      />
-                      <Checkbox
-                        label={`Model ${index + 1} 支持图像`}
-                        isSelected={row.image}
-                        onChange={(image) => {
-                          setModels(
-                            models.map((item) =>
-                              item.id === row.id ? { ...item, image } : item,
-                            ),
-                          );
-                          mark("models");
-                        }}
-                      />
-                      <Checkbox
-                        label={`Model ${index + 1} 流式输出`}
-                        isSelected={row.stream}
-                        onChange={(stream) => {
-                          setModels(
-                            models.map((item) =>
-                              item.id === row.id ? { ...item, stream } : item,
-                            ),
-                          );
-                          mark("models");
-                        }}
-                      />
-                      <Button
-                        variant="text"
-                        onPress={() => {
-                          const ref = `${row.provider}/${row.name}`;
-                          if (
-                            value("browser", "model") === ref ||
-                            value("analyze", "model") === ref
-                          ) {
-                            setMessage(
-                              "模型仍有角色绑定，请先调整并保存角色绑定。",
-                            );
-                            return;
-                          }
-                          setModels(
-                            models.filter((item) => item.id !== row.id),
-                          );
-                          mark("models");
-                        }}
-                      >
-                        移除 Model
-                      </Button>
-                    </div>
-                    <Probe
-                      owner="model"
-                      target={`${row.provider}/${row.name}`}
-                      image={row.image}
-                    />
-                  </fieldset>
-                ))}
-                <Button
-                  onPress={() => {
-                    setModels([
-                      ...models,
-                      {
-                        id: randomId(),
-                        provider: providers[0]?.name ?? "",
-                        name: "",
-                        reasoning: "default",
-                        image: false,
-                        stream: true,
-                      },
-                    ]);
-                    mark("models");
-                  }}
-                >
-                  添加 Model
-                </Button>
-                <div className="form-actions">
-                  <Button
-                    variant="primary"
-                    isPending={publish.isPending}
-                    onPress={saveModels}
-                  >
-                    保存 Provider/Model
-                  </Button>
-                </div>
-                <h2>角色绑定</h2>
-                <Select
-                  label="校订矫正模型"
-                  value={str(value("proofread", "model"))}
-                  onChange={(v) => edit("proofread", "model", v || null)}
-                  options={modelOptions}
-                />
-                {[
-                  ["model", "文献打标模型"],
-                  ["consolidation_model", "词表整理模型"],
-                  ["backfill_model", "标签回溯模型"],
-                ].map(([key, label]) => (
-                  <Select
-                    key={key}
-                    label={label!}
-                    value={str(value("tags", key!))}
-                    onChange={(v) => edit("tags", key!, v || null)}
-                    options={modelOptions}
-                  />
-                ))}
-                <p className="muted">
-                  标签任务未单独指定时使用分析模型；元数据与章节角色也使用分析模型。
-                </p>
-                <Select
-                  label="分析模型"
-                  value={str(value("analyze", "model"))}
-                  onChange={(value) => edit("analyze", "model", value || null)}
-                  options={modelOptions}
-                />
-                <Select
-                  label="Browser 模型"
-                  value={str(value("browser", "model"))}
-                  onChange={(value) => edit("browser", "model", value || null)}
-                  options={modelOptions.map((option) => ({
-                    ...option,
-                    disabled:
-                      !!option.value &&
-                      record(
-                        record(draft.models, "models")[option.value],
-                        "model",
-                      ).image !== true,
-                  }))}
-                />
-                <Button
-                  variant="primary"
-                  isPending={publish.isPending}
-                  onPress={() =>
-                    save(["browser", "parsing", "analyze", "tags", "proofread"])
-                  }
-                >
-                  保存角色绑定
-                </Button>
-              </div>
-            )}
-            {section === "archive" && (
-              <div className="settings-section">
-                <h2>建档与标签</h2>
-                <p>
-                  元数据和章节判定使用“模型”页的分析模型。校订矫正未单独指定模型时沿用分析模型，必须支持图片和工具。
-                </p>
-                {[
-                  ["max_per_literature", "每篇标签上限", 1, 32],
-                  ["candidate_k", "候选检索数量", 1, 64],
-                  ["backfill_batch", "回溯批量", 1, 64],
-                ].map(([key, label, min, max]) => (
-                  <NumberField
-                    key={String(key)}
-                    label={String(label)}
-                    minValue={Number(min)}
-                    maxValue={Number(max)}
-                    value={Number(value("tags", String(key)) ?? min)}
-                    onChange={(v) => edit("tags", String(key), v)}
-                  />
-                ))}
-                <NumberField
-                  label="每篇矫正调用上限"
-                  minValue={1}
-                  maxValue={10000}
-                  value={Number(
-                    value("proofread", "max_calls_per_document") ?? 64,
-                  )}
-                  onChange={(v) =>
-                    edit("proofread", "max_calls_per_document", v)
-                  }
-                />
-                <p className="ui-description">
-                  部署解析 profile：
-                  {str(value("parsing", "archive_profile")) || "vlm-engine"}
-                  （部署配置，只读）
-                </p>
-                <Button
-                  isPending={publish.isPending}
-                  onPress={() => save(["tags", "proofread"])}
-                >
-                  保存建档设置
-                </Button>
-              </div>
-            )}
-            {section === "parser" && (
-              <div className="settings-section">
-                <h2>解析与 Browser</h2>
-                <Checkbox
-                  label="启用 Browser"
-                  isSelected={value("browser", "enabled") === true}
-                  onChange={(value) => edit("browser", "enabled", value)}
-                />
-                <TextField
-                  label="Browser profile"
-                  value={str(value("browser", "profile"))}
-                  onChange={(value) =>
-                    edit("browser", "profile", value || null)
-                  }
-                />
-                <Select
-                  label="Browser 模型"
-                  value={str(value("browser", "model"))}
-                  onChange={(value) => edit("browser", "model", value || null)}
-                  options={modelOptions}
-                />
-                <TextField
-                  label="MinerU 服务地址"
-                  value={str(value("parsing", "base_url"))}
-                  onChange={(value) =>
-                    edit("parsing", "base_url", value || null)
-                  }
-                />
-                <Select
-                  label="MinerU 连接模式"
-                  value={str(value("parsing", "connection_mode"))}
-                  onChange={(value) =>
-                    edit("parsing", "connection_mode", value || null)
-                  }
-                  options={[
-                    { value: "", label: "未配置" },
-                    { value: "loopback", label: "本机 loopback" },
-                    { value: "remote", label: "远程 HTTPS" },
-                  ]}
-                />
-                <TextField
-                  label="MinerU 模型"
-                  value={str(value("parsing", "model_identity"))}
-                  onChange={(value) =>
-                    edit("parsing", "model_identity", value || null)
-                  }
-                />
-                <div className="form-actions">
-                  <Button
-                    variant="primary"
-                    isPending={publish.isPending}
-                    onPress={() =>
-                      save([
-                        "browser",
-                        "parsing",
-                        "analyze",
-                        "tags",
-                        "proofread",
-                      ])
-                    }
-                  >
-                    保存运行配置
-                  </Button>
-                </div>
-                <Probe owner="parse" />
-                <Probe owner="browser-model" image />
-              </div>
-            )}
-            {section === "cred" && (
-              <Credential
-                baseline={str(snapshot?.revision)}
-                onResult={(result) => {
-                  setRuntime(result);
-                  void readiness.refetch();
-                }}
-              />
-            )}
-            {section === "status" && (
-              <div className="settings-section">
-                <h2>运行状态</h2>
-                <p data-state={runtimeNote.state}>{runtimeNote.message}</p>
-                {readiness.isError ? (
-                  <ErrorNotice
-                    message="状态读取失败，已保存配置保持不变。"
-                    onRetry={() => void readiness.refetch()}
-                  />
-                ) : (
-                  <ul>
-                    {readiness.data?.items.map((item) => (
-                      <li key={`${item.owner}/${item.target}`}>
-                        {item.owner} / {item.target}：{item.state} ·{" "}
-                        {item.next_action}
-                      </li>
-                    ))}
-                  </ul>
+      <div className="settings-layout">
+        <nav className="settings-navigation" aria-label="设置分区导航">
+          <Tabs
+            label="设置分区"
+            orientation="vertical"
+            value={section}
+            onChange={setSection}
+            items={sectionTabs}
+          />
+          <div className="settings-navigation-narrow">
+            <Select
+              label="设置分区"
+              value={section}
+              onChange={setSection}
+              options={sectionTabs.map((tab) => ({
+                value: tab.id,
+                label: tab.label,
+              }))}
+            />
+          </div>
+        </nav>
+        <div className="settings-content">
+          {section === "appearance" ? (
+            <Appearance />
+          ) : section === "advanced" ? (
+            <Suspense fallback={<p role="status">正在打开高级工具…</p>}>
+              <Maintenance />
+            </Suspense>
+          ) : read.isPending ? (
+            <p role="status">正在读取配置…</p>
+          ) : read.isError ? (
+            <ErrorNotice message="配置读取失败，请重试。" onRetry={refresh} />
+          ) : (
+            draft && (
+              <>
+                {section === "paths" && (
+                  <>
+                    <Section
+                      title="文献库位置"
+                      action={saveButton(["paths"], "保存文献库位置")}
+                    >
+                      <Definitions>
+                        <Definition
+                          term="Catalog 路径"
+                          description="修改后重启服务生效，已有文件不会移动。"
+                          value={pathValue(api.workspace.catalog, "数据库路径")}
+                        >
+                          <TextField
+                            label="Catalog 路径"
+                            value={str(value("paths", "catalog_path"))}
+                            onChange={(value) =>
+                              edit("paths", "catalog_path", value || null)
+                            }
+                          />
+                        </Definition>
+                        <Definition
+                          term="资产目录"
+                          description="PDF、解析材料与校订稿存放的位置。"
+                          value={pathValue(api.workspace.artifacts, "资产目录")}
+                        >
+                          <TextField
+                            label="资产目录"
+                            value={str(value("paths", "artifact_root"))}
+                            onChange={(value) =>
+                              edit("paths", "artifact_root", value || null)
+                            }
+                          />
+                        </Definition>
+                      </Definitions>
+                    </Section>
+                    <Section title="当前登录">
+                      <Definitions>
+                        <Definition
+                          term="退出登录"
+                          description="释放当前浏览器连接；已提交的后台任务继续运行。"
+                        >
+                          <Button
+                            onPress={() =>
+                              void api
+                                .logout()
+                                .catch((error: unknown) =>
+                                  setMessage(errorMessage(error)),
+                                )
+                            }
+                          >
+                            退出登录
+                          </Button>
+                        </Definition>
+                      </Definitions>
+                    </Section>
+                  </>
                 )}
-                <Button onPress={() => void readiness.refetch()}>
-                  刷新状态
-                </Button>
-              </div>
-            )}
-          </>
-        )
-      )}
-      {dirty.size > 0 && (
-        <p className="settings-draft-note" role="status">
-          有未保存的修改；切换设置分区会保留草稿。
-        </p>
-      )}
-      <p role={publish.isError ? "alert" : "status"}>{message}</p>
-      {snapshot && (
-        <TechDetails>
-          <p>
-            配置版本：<code>{str(snapshot.revision)}</code>
-          </p>
-        </TechDetails>
-      )}
+                {section === "sources" && (
+                  <Sources
+                    configuration={draft}
+                    onChange={(sources) => {
+                      setDraft({ ...draft, sources });
+                      mark("sources");
+                    }}
+                    onSave={() => save(["sources"])}
+                    pending={publish.isPending}
+                    dirty={changed("sources")}
+                  />
+                )}
+                {section === "models" && (
+                  <>
+                    <Section
+                      title="模型服务"
+                      description="Provider 定义连接协议，Model 记录远程模型与能力；凭据在“凭据”分区保存。"
+                      action={saveButton(
+                        ["providers", "models"],
+                        "保存 Provider/Model",
+                        saveModels,
+                      )}
+                    >
+                      <div className="settings-registry">
+                        <h3>Provider</h3>
+                        {providers.map((row, index) => (
+                          <fieldset key={row.id}>
+                            <legend>Provider {index + 1}</legend>
+                            <div className="settings-grid">
+                              <TextField
+                                label={`Provider ${index + 1} 名称`}
+                                value={row.name}
+                                onChange={(name) => {
+                                  setProviders(
+                                    providers.map((item) =>
+                                      item.id === row.id
+                                        ? { ...item, name }
+                                        : item,
+                                    ),
+                                  );
+                                  mark("providers");
+                                }}
+                              />
+                              <Select
+                                label={`Provider ${index + 1} 协议`}
+                                value={row.api}
+                                onChange={(api) => {
+                                  setProviders(
+                                    providers.map((item) =>
+                                      item.id === row.id
+                                        ? { ...item, api }
+                                        : item,
+                                    ),
+                                  );
+                                  mark("providers");
+                                }}
+                                options={MODEL_APIS}
+                              />
+                              <TextField
+                                label={`Provider ${index + 1} Base URL`}
+                                value={row.url}
+                                onChange={(url) => {
+                                  setProviders(
+                                    providers.map((item) =>
+                                      item.id === row.id
+                                        ? { ...item, url }
+                                        : item,
+                                    ),
+                                  );
+                                  mark("providers");
+                                }}
+                              />
+                              <Button
+                                variant="text"
+                                onPress={() => {
+                                  if (
+                                    models.some(
+                                      (model) => model.provider === row.name,
+                                    )
+                                  ) {
+                                    setMessage(
+                                      "Provider 仍有模型引用，请先移除或调整模型。",
+                                    );
+                                    return;
+                                  }
+                                  setProviders(
+                                    providers.filter(
+                                      (item) => item.id !== row.id,
+                                    ),
+                                  );
+                                  mark("providers");
+                                }}
+                              >
+                                移除 Provider
+                              </Button>
+                            </div>
+                          </fieldset>
+                        ))}
+                        <Button
+                          onPress={() => {
+                            setProviders([
+                              ...providers,
+                              {
+                                id: randomId(),
+                                name: "",
+                                api: "openai-responses",
+                                url: "",
+                              },
+                            ]);
+                            mark("providers");
+                          }}
+                        >
+                          添加 Provider
+                        </Button>
+                        <h3>Model</h3>
+                        {models.map((row, index) => (
+                          <fieldset key={row.id}>
+                            <legend>Model {index + 1}</legend>
+                            <div className="settings-grid">
+                              <Select
+                                label={`Model ${index + 1} Provider`}
+                                value={row.provider}
+                                onChange={(provider) => {
+                                  setModels(
+                                    models.map((item) =>
+                                      item.id === row.id
+                                        ? { ...item, provider }
+                                        : item,
+                                    ),
+                                  );
+                                  mark("models");
+                                }}
+                                options={[
+                                  { value: "", label: "请选择" },
+                                  ...providers
+                                    .filter((provider) => provider.name)
+                                    .map((provider) => ({
+                                      value: provider.name,
+                                      label: provider.name,
+                                    })),
+                                ]}
+                              />
+                              <TextField
+                                label={`Model ${index + 1} 远程名称`}
+                                value={row.name}
+                                onChange={(name) => {
+                                  setModels(
+                                    models.map((item) =>
+                                      item.id === row.id
+                                        ? { ...item, name }
+                                        : item,
+                                    ),
+                                  );
+                                  mark("models");
+                                }}
+                              />
+                              <Select
+                                label={`Model ${index + 1} Reasoning`}
+                                value={row.reasoning}
+                                onChange={(reasoning) => {
+                                  setModels(
+                                    models.map((item) =>
+                                      item.id === row.id
+                                        ? { ...item, reasoning }
+                                        : item,
+                                    ),
+                                  );
+                                  mark("models");
+                                }}
+                                options={MODEL_REASONING.map((value) => ({
+                                  value,
+                                  label: value,
+                                }))}
+                              />
+                              <Checkbox
+                                label={`Model ${index + 1} 支持图像`}
+                                isSelected={row.image}
+                                onChange={(image) => {
+                                  setModels(
+                                    models.map((item) =>
+                                      item.id === row.id
+                                        ? { ...item, image }
+                                        : item,
+                                    ),
+                                  );
+                                  mark("models");
+                                }}
+                              />
+                              <Checkbox
+                                label={`Model ${index + 1} 流式输出`}
+                                isSelected={row.stream}
+                                onChange={(stream) => {
+                                  setModels(
+                                    models.map((item) =>
+                                      item.id === row.id
+                                        ? { ...item, stream }
+                                        : item,
+                                    ),
+                                  );
+                                  mark("models");
+                                }}
+                              />
+                              <Button
+                                variant="text"
+                                onPress={() => {
+                                  const ref = `${row.provider}/${row.name}`;
+                                  if (
+                                    value("browser", "model") === ref ||
+                                    value("analyze", "model") === ref
+                                  ) {
+                                    setMessage(
+                                      "模型仍有角色绑定，请先调整并保存角色绑定。",
+                                    );
+                                    return;
+                                  }
+                                  setModels(
+                                    models.filter((item) => item.id !== row.id),
+                                  );
+                                  mark("models");
+                                }}
+                              >
+                                移除 Model
+                              </Button>
+                            </div>
+                            <Probe
+                              owner="model"
+                              target={`${row.provider}/${row.name}`}
+                              image={row.image}
+                            />
+                          </fieldset>
+                        ))}
+                        <Button
+                          onPress={() => {
+                            setModels([
+                              ...models,
+                              {
+                                id: randomId(),
+                                provider: providers[0]?.name ?? "",
+                                name: "",
+                                reasoning: "default",
+                                image: false,
+                                stream: true,
+                              },
+                            ]);
+                            mark("models");
+                          }}
+                        >
+                          添加 Model
+                        </Button>
+                      </div>
+                    </Section>
+                    <Section
+                      title="角色绑定"
+                      description="标签任务未单独指定时使用分析模型；元数据与章节角色也使用分析模型。"
+                      action={saveButton(runtimeSections, "保存角色绑定")}
+                    >
+                      <Definitions>
+                        <Definition
+                          term="分析模型"
+                          description="单篇处理、元数据与章节角色。"
+                        >
+                          <Select
+                            label="分析模型"
+                            value={str(value("analyze", "model"))}
+                            onChange={(value) =>
+                              edit("analyze", "model", value || null)
+                            }
+                            options={modelOptions}
+                          />
+                        </Definition>
+                        <Definition
+                          term="校订矫正模型"
+                          description="未指定时沿用分析模型，须支持图片与工具。"
+                        >
+                          <Select
+                            label="校订矫正模型"
+                            value={str(value("proofread", "model"))}
+                            onChange={(v) =>
+                              edit("proofread", "model", v || null)
+                            }
+                            options={modelOptions}
+                          />
+                        </Definition>
+                        {[
+                          ["model", "文献打标模型"],
+                          ["consolidation_model", "词表整理模型"],
+                          ["backfill_model", "标签回溯模型"],
+                        ].map(([key, label]) => (
+                          <Definition key={key} term={label!}>
+                            <Select
+                              label={label!}
+                              value={str(value("tags", key!))}
+                              onChange={(v) => edit("tags", key!, v || null)}
+                              options={modelOptions}
+                            />
+                          </Definition>
+                        ))}
+                        <Definition
+                          term="Browser 模型"
+                          description="须支持图像。"
+                        >
+                          <Select
+                            label="Browser 模型"
+                            value={str(value("browser", "model"))}
+                            onChange={(value) =>
+                              edit("browser", "model", value || null)
+                            }
+                            options={modelOptions.map((option) => ({
+                              ...option,
+                              disabled:
+                                !!option.value &&
+                                record(
+                                  record(draft.models, "models")[option.value],
+                                  "model",
+                                ).image !== true,
+                            }))}
+                          />
+                        </Definition>
+                      </Definitions>
+                    </Section>
+                  </>
+                )}
+                {section === "archive" && (
+                  <Section
+                    title="建档与标签"
+                    description="元数据和章节判定使用“模型”分区的分析模型。"
+                    action={saveButton(["tags", "proofread"], "保存建档设置")}
+                  >
+                    <Definitions>
+                      {[
+                        ["max_per_literature", "每篇标签上限", 1, 32],
+                        ["candidate_k", "候选检索数量", 1, 64],
+                        ["backfill_batch", "回溯批量", 1, 64],
+                      ].map(([key, label, min, max]) => (
+                        <Definition
+                          key={String(key)}
+                          term={String(label)}
+                          description={`${String(min)}–${String(max)}`}
+                        >
+                          <NumberField
+                            label={String(label)}
+                            minValue={Number(min)}
+                            maxValue={Number(max)}
+                            value={Number(value("tags", String(key)) ?? min)}
+                            onChange={(v) => edit("tags", String(key), v)}
+                          />
+                        </Definition>
+                      ))}
+                      <Definition
+                        term="每篇矫正调用上限"
+                        description="1–10,000"
+                      >
+                        <NumberField
+                          label="每篇矫正调用上限"
+                          minValue={1}
+                          maxValue={10000}
+                          value={Number(
+                            value("proofread", "max_calls_per_document") ?? 64,
+                          )}
+                          onChange={(v) =>
+                            edit("proofread", "max_calls_per_document", v)
+                          }
+                        />
+                      </Definition>
+                      <Definition
+                        term="解析 profile"
+                        description="部署配置，只读。"
+                      >
+                        <span className="settings-readonly">
+                          {str(value("parsing", "archive_profile")) ||
+                            "vlm-engine"}
+                        </span>
+                      </Definition>
+                    </Definitions>
+                  </Section>
+                )}
+                {section === "parser" && (
+                  <>
+                    <Section
+                      title="Browser"
+                      action={saveButton(runtimeSections, "保存运行配置")}
+                    >
+                      <Definitions>
+                        <Definition
+                          term="启用 Browser"
+                          description="获取 PDF 时可以打开受控浏览器。"
+                        >
+                          <Switch
+                            isSelected={value("browser", "enabled") === true}
+                            onChange={(value) =>
+                              edit("browser", "enabled", value)
+                            }
+                          >
+                            启用 Browser
+                          </Switch>
+                        </Definition>
+                        <Definition term="Browser profile">
+                          <TextField
+                            label="Browser profile"
+                            value={str(value("browser", "profile"))}
+                            onChange={(value) =>
+                              edit("browser", "profile", value || null)
+                            }
+                          />
+                        </Definition>
+                        <Definition
+                          term="Browser 模型"
+                          description="与“模型”分区的角色绑定相同。"
+                        >
+                          <Select
+                            label="Browser 模型"
+                            value={str(value("browser", "model"))}
+                            onChange={(value) =>
+                              edit("browser", "model", value || null)
+                            }
+                            options={modelOptions}
+                          />
+                        </Definition>
+                        <Definition
+                          term="连接测试"
+                          description="使用已保存的配置和凭据，可能消耗模型额度。"
+                        >
+                          <Probe owner="browser-model" image />
+                        </Definition>
+                      </Definitions>
+                    </Section>
+                    <Section title="MinerU 解析">
+                      <Definitions>
+                        <Definition term="服务地址">
+                          <TextField
+                            label="MinerU 服务地址"
+                            value={str(value("parsing", "base_url"))}
+                            onChange={(value) =>
+                              edit("parsing", "base_url", value || null)
+                            }
+                          />
+                        </Definition>
+                        <Definition term="连接模式">
+                          <Select
+                            label="MinerU 连接模式"
+                            value={str(value("parsing", "connection_mode"))}
+                            onChange={(value) =>
+                              edit("parsing", "connection_mode", value || null)
+                            }
+                            options={[
+                              { value: "", label: "未配置" },
+                              { value: "loopback", label: "本机 loopback" },
+                              { value: "remote", label: "远程 HTTPS" },
+                            ]}
+                          />
+                        </Definition>
+                        <Definition term="模型">
+                          <TextField
+                            label="MinerU 模型"
+                            value={str(value("parsing", "model_identity"))}
+                            onChange={(value) =>
+                              edit("parsing", "model_identity", value || null)
+                            }
+                          />
+                        </Definition>
+                        <Definition
+                          term="连接测试"
+                          description="使用已保存的配置访问解析服务。"
+                        >
+                          <Probe owner="parse" />
+                        </Definition>
+                      </Definitions>
+                    </Section>
+                  </>
+                )}
+                {section === "cred" && (
+                  <Credential
+                    baseline={str(snapshot?.revision)}
+                    onResult={(result) => {
+                      setRuntime(result);
+                      void readiness.refetch();
+                    }}
+                  />
+                )}
+                {section === "status" && (
+                  <Section
+                    title="运行状态"
+                    action={
+                      <Button onPress={() => void readiness.refetch()}>
+                        刷新状态
+                      </Button>
+                    }
+                  >
+                    <p
+                      className="settings-runtime"
+                      data-state={runtimeNote.state}
+                    >
+                      {runtimeNote.message}
+                    </p>
+                    {readiness.isError ? (
+                      <ErrorNotice
+                        message="状态读取失败，已保存配置保持不变。"
+                        onRetry={() => void readiness.refetch()}
+                      />
+                    ) : (
+                      <Definitions>
+                        {readiness.data?.items.map((item) => (
+                          <Definition
+                            key={`${item.owner}/${item.target}`}
+                            term={`${item.owner} / ${item.target}`}
+                            description={item.next_action}
+                          >
+                            <span className="settings-readonly">
+                              {item.state}
+                            </span>
+                          </Definition>
+                        ))}
+                      </Definitions>
+                    )}
+                  </Section>
+                )}
+              </>
+            )
+          )}
+          {dirty.size > 0 && (
+            <p className="settings-draft-note" role="status">
+              有未保存的修改；切换设置分区会保留草稿。
+            </p>
+          )}
+          <p role={publish.isError ? "alert" : "status"}>{message}</p>
+          {snapshot && (
+            <TechDetails>
+              <p>
+                配置版本：<code>{str(snapshot.revision)}</code>
+              </p>
+            </TechDetails>
+          )}
+        </div>
+      </div>
       <Dialog
         title="保留未保存的修改？"
         isOpen={leaveConfirm}
@@ -924,66 +1062,77 @@ function Appearance() {
       preferences.read("sciretriever:reading:width:v1") ?? "comfortable",
     );
   return (
-    <div className="settings-section">
-      <h2>外观与阅读</h2>
-      <Select
-        label="主题"
-        value={shell.theme}
-        onChange={(value) => shell.setTheme(value as Theme)}
-        options={[
-          { value: "light", label: "蓝白" },
-          { value: "dark", label: "深色" },
-          { value: "green", label: "墨绿" },
-          { value: "warm", label: "暖白" },
-          { value: "system", label: "跟随系统" },
-        ]}
-      />
-      <Select
-        label="默认阅读字号"
-        value={font}
-        onChange={(value) => {
-          setFont(value);
-          preferences.write("sciretriever:reading:font:v1", value);
-        }}
-        options={[18, 20, 22, 24].map((value) => ({
-          value: String(value),
-          label: `${value} px`,
-        }))}
-      />
-      <Select
-        label="默认阅读行宽"
-        value={width}
-        onChange={(value) => {
-          setWidth(value);
-          preferences.write("sciretriever:reading:width:v1", value);
-        }}
-        options={[
-          { value: "comfortable", label: "舒适" },
-          { value: "wide", label: "宽" },
-          { value: "full", label: "全宽" },
-        ]}
-      />
-      <Select
-        label="动效"
-        value={motion.preference}
-        onChange={(value) => {
-          const choice =
-            value === "reduced"
-              ? "reduced"
-              : value === "full"
-                ? "full"
-                : "system";
-          motion.setPreference(choice);
-          preferences.write("sciretriever:motion:v1", choice);
-        }}
-        options={[
-          { value: "system", label: "跟随系统" },
-          { value: "reduced", label: "减少动效" },
-          { value: "full", label: "完整动效" },
-        ]}
-      />
-      <p className="muted">偏好保存在当前浏览器，不会更改文献库内容。</p>
-    </div>
+    <Section
+      title="外观与阅读"
+      description="偏好保存在当前浏览器，不会更改文献库内容。"
+    >
+      <Definitions>
+        <Definition term="主题">
+          <Select
+            label="主题"
+            value={shell.theme}
+            onChange={(value) => shell.setTheme(value as Theme)}
+            options={[
+              { value: "light", label: "蓝白" },
+              { value: "dark", label: "深色" },
+              { value: "green", label: "墨绿" },
+              { value: "warm", label: "暖白" },
+              { value: "system", label: "跟随系统" },
+            ]}
+          />
+        </Definition>
+        <Definition term="默认阅读字号" description="阅读页可临时调整。">
+          <Select
+            label="默认阅读字号"
+            value={font}
+            onChange={(value) => {
+              setFont(value);
+              preferences.write("sciretriever:reading:font:v1", value);
+            }}
+            options={[18, 20, 22, 24].map((value) => ({
+              value: String(value),
+              label: `${value} px`,
+            }))}
+          />
+        </Definition>
+        <Definition term="默认阅读行宽">
+          <Select
+            label="默认阅读行宽"
+            value={width}
+            onChange={(value) => {
+              setWidth(value);
+              preferences.write("sciretriever:reading:width:v1", value);
+            }}
+            options={[
+              { value: "comfortable", label: "舒适" },
+              { value: "wide", label: "宽" },
+              { value: "full", label: "全宽" },
+            ]}
+          />
+        </Definition>
+        <Definition term="动效" description="系统的“减少动效”设置同样生效。">
+          <Select
+            label="动效"
+            value={motion.preference}
+            onChange={(value) => {
+              const choice =
+                value === "reduced"
+                  ? "reduced"
+                  : value === "full"
+                    ? "full"
+                    : "system";
+              motion.setPreference(choice);
+              preferences.write("sciretriever:motion:v1", choice);
+            }}
+            options={[
+              { value: "system", label: "跟随系统" },
+              { value: "reduced", label: "减少动效" },
+              { value: "full", label: "完整动效" },
+            ]}
+          />
+        </Definition>
+      </Definitions>
+    </Section>
   );
 }
 function Probe({
@@ -1082,29 +1231,51 @@ function Credential({
     }
   };
   return (
-    <div className="settings-section">
-      <h2>凭据</h2>
-      <p>凭据只在提交时传给服务端，不保存在界面状态或本机偏好中。</p>
-      <Select
-        label="凭据类型"
-        value={namespace}
-        onChange={setNamespace}
-        options={[
-          { value: "model", label: "模型 Provider" },
-          { value: "source", label: "文献来源 API key" },
-          { value: "mineru", label: "MinerU bearer token" },
-        ]}
-      />
-      <TextField label="目标名称" value={target} onChange={setTarget} />
-      <label className="credential-field">
-        凭据值
-        <input ref={secret} type="password" autoComplete="new-password" />
-      </label>
-      <Button variant="primary" isPending={pending} onPress={() => void save()}>
-        保存凭据
-      </Button>
+    <Section
+      title="凭据"
+      description="凭据只在提交时传给服务端，不保存在界面状态或本机偏好中，保存后不回显。"
+      action={
+        <Button
+          variant="primary"
+          isPending={pending}
+          onPress={() => void save()}
+        >
+          保存凭据
+        </Button>
+      }
+    >
+      <Definitions>
+        <Definition term="凭据类型">
+          <Select
+            label="凭据类型"
+            value={namespace}
+            onChange={setNamespace}
+            options={[
+              { value: "model", label: "模型 Provider" },
+              { value: "source", label: "文献来源 API key" },
+              { value: "mineru", label: "MinerU bearer token" },
+            ]}
+          />
+        </Definition>
+        <Definition
+          term="目标名称"
+          description="Provider 名称、来源名称或 MinerU。"
+        >
+          <TextField label="目标名称" value={target} onChange={setTarget} />
+        </Definition>
+        <Definition term="凭据值">
+          <span className="credential-field">
+            <input
+              ref={secret}
+              aria-label="凭据值"
+              type="password"
+              autoComplete="new-password"
+            />
+          </span>
+        </Definition>
+      </Definitions>
       <p role="status">{message}</p>
-    </div>
+    </Section>
   );
 }
 function Sources({
@@ -1112,11 +1283,14 @@ function Sources({
   onChange,
   onSave,
   pending,
+  dirty,
 }: {
   configuration: JsonRecord;
   onChange: (sources: JsonRecord) => void;
   onSave: () => void;
   pending: boolean;
+  /** The save button exists only while the sources have unsaved edits. */
+  dirty: boolean;
 }) {
   const sources = record(configuration.sources, "sources"),
     metadata = record(sources.metadata, "metadata"),
@@ -1324,11 +1498,13 @@ function Sources({
         </Definitions>
       </Section>
       {error && <p role="alert">{error}</p>}
-      <div className="form-actions">
-        <Button variant="primary" isPending={pending} onPress={validate}>
-          保存来源配置
-        </Button>
-      </div>
+      {dirty ? (
+        <div className="form-actions">
+          <Button variant="primary" isPending={pending} onPress={validate}>
+            保存来源配置
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

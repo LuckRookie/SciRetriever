@@ -204,16 +204,25 @@ it("installs packed workspace modules and exercises their public boundaries with
       for (const route of readerFiles) assert.ok(assets.get(route)?.body.length > 100, route);
       const serverRoot = dirname(fileURLToPath(import.meta.resolve('@sciretriever/server')));
       const reactFiles = JSON.parse(readFileSync(join(serverRoot, 'web/react/assets.json'), 'utf8'));
+      const authFonts = JSON.parse(readFileSync(join(serverRoot, 'web/auth-fonts.json'), 'utf8'));
+      assert.ok(authFonts.length > 0);
+      for (const name of authFonts) {
+        assert.match(name, new RegExp('^auth-fonts/[A-Za-z0-9_-]+-[A-Z0-9]{8}[.]woff2$', 'u'));
+        assert.equal(assets.get('/' + name)?.contentType, 'font/woff2');
+        assert.ok(assets.get('/' + name)?.body.length > 0, name);
+      }
       assert.ok(reactFiles.includes('index.html'));
       assert.ok(reactFiles.includes('third-party-notices.txt'));
       for (const name of reactFiles) assert.ok(assets.get(name === 'index.html' ? '/' : '/' + name)?.body.length > 0, name);
-      for (const route of assets.keys()) assert.ok(['/', '/auth', '/auth.js', '/auth.css'].includes(route) || route.startsWith('/reader/') || reactFiles.includes(route.slice(1)), route);
+      for (const route of assets.keys()) assert.ok(['/', '/auth', '/auth.js', '/auth.css'].includes(route) || route.startsWith('/reader/') || reactFiles.includes(route.slice(1)) || authFonts.includes(route.slice(1)), route);
       assert.ok(reactFiles.some(name => name.endsWith('.woff2')));
       assert.ok(reactFiles.some(name => name.endsWith('.css')));
       assert.match(assets.get('/third-party-notices.txt').body.toString(), /react-aria-components@/);
       assert.match(assets.get('/third-party-notices.txt').body.toString(), /Apache License/);
       assert.match(assets.get('/third-party-notices.txt').body.toString(), /SIL OPEN FONT LICENSE/);
       assert.equal(assets.has('/assets.json'), false);
+      assert.equal(assets.has('/auth-fonts.json'), false);
+      assert.equal(assets.has('/auth-fonts/unregistered-ABCDEFGH.woff2'), false);
       assert.equal(existsSync(join(serverRoot, 'web/next')), false);
       assert.equal(assets.get('/reader/pdf.worker.mjs').contentType, 'text/javascript');
       assert.equal(assets.get('/reader/fonts/KaTeX_Main-Regular.woff2').contentType, 'font/woff2');
@@ -223,6 +232,15 @@ it("installs packed workspace modules and exercises their public boundaries with
 
       const http = await startWorkbenchHttp({ session, assets, access: { host: '127.0.0.1' } });
       assert.equal(typeof http.apiKey, 'string');
+      const publicFont = await fetch(http.origin + '/' + authFonts[0]);
+      assert.equal(publicFont.status, 200);
+      assert.equal(publicFont.headers.get('content-type'), 'font/woff2');
+      await publicFont.arrayBuffer();
+      for (const path of ['/auth-fonts.json', '/auth-fonts/unregistered-ABCDEFGH.woff2', '/api/view']) {
+        const denied = await fetch(http.origin + path);
+        assert.equal(denied.status, 401, path);
+        assert.deepEqual(await denied.json(), { code: 'login-required' });
+      }
       const anonymous = await fetch(http.origin, { redirect: 'manual' });
       assert.equal(anonymous.status, 303);
       const login = await fetch(http.origin + '/auth/login', {

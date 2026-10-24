@@ -47,6 +47,22 @@ function readableClaim(text: string, sources: readonly ProcessorCitation[]) {
   return text;
 }
 
+/**
+ * An internal summary keeps a citation whose segment did not exist in its fixed
+ * input; it has no content hash and must not open the normal segment reader.
+ */
+function unavailable(evidence: EvidenceRef) {
+  return (
+    evidence.target_kind === "document" && evidence.content_sha256 === null
+  );
+}
+function UnavailableCitation({ label }: { label: string }) {
+  return (
+    <span className="reader-evidence-unavailable" title="引用片段不可用">
+      {label} 引用片段不可用
+    </span>
+  );
+}
 export function EvidencePreview({
   evidence,
   index,
@@ -389,7 +405,12 @@ export function SummaryView({
                               : ""}
                             。{valueCheckReason(source.reason)}
                           </p>
-                          {source.citation.kind === "document" ? (
+                          {source.citation.kind === "document" &&
+                          unavailable(source.citation.evidence) ? (
+                            <UnavailableCitation
+                              label={`来源 ${index + 1}.${sourceIndex + 1}`}
+                            />
+                          ) : source.citation.kind === "document" ? (
                             <Popover
                               label={`核对来源 ${index + 1}.${sourceIndex + 1}`}
                               trigger="查看对应原文"
@@ -409,7 +430,13 @@ export function SummaryView({
                   aria-label={`条目 ${index + 1} 的证据`}
                 >
                   {claim.sources.map((citation, i) =>
-                    citation.kind === "document" ? (
+                    citation.kind === "document" &&
+                    unavailable(citation.evidence) ? (
+                      <UnavailableCitation
+                        key={i}
+                        label={`[${index + 1}.${i + 1}]`}
+                      />
+                    ) : citation.kind === "document" ? (
                       <Popover
                         key={i}
                         label={`证据 ${index + 1}.${i + 1}`}

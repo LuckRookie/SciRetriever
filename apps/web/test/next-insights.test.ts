@@ -109,6 +109,27 @@ it("shows one figure per available distribution, switches all figures to tables 
       ),
     ).toBe(true);
     await page.setViewportSize({ width: 1440, height: 900 });
+    // Year labels are shown in full on a subset of columns and never overlap.
+    const labelBoxes = await years
+      .locator(".year-column-label")
+      .evaluateAll((labels) =>
+        labels
+          .filter((label) => label.textContent)
+          .map((label) => {
+            const box = label.getBoundingClientRect();
+            return {
+              text: label.textContent!,
+              left: box.left,
+              right: box.right,
+            };
+          }),
+      );
+    expect(labelBoxes.length).toBeGreaterThan(0);
+    for (const [index, label] of labelBoxes.entries()) {
+      expect(label.text).not.toContain("…");
+      if (index > 0)
+        expect(label.left).toBeGreaterThan(labelBoxes[index - 1]!.right);
+    }
     const year = await years
       .locator(".year-column:not([data-missing]) .year-column-label")
       .first()

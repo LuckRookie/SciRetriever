@@ -52,10 +52,7 @@ export default function Maintenance({
   const [tab, setTab] = useState(deliveryOnly ? "delivery" : "materials");
   return (
     <section className="maintenance-page">
-      <PageHeader
-        title={deliveryOnly ? "规范与交付" : "高级维护"}
-        description="固定已有材料、按调用方规范交付候选，或显式启动维护。不会因浏览而调用解析或模型。"
-      />
+      <PageHeader title={deliveryOnly ? "规范与交付" : "高级维护"} />
       {!deliveryOnly && api.kind !== "query" ? (
         <Tabs
           label="维护功能"

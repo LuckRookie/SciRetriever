@@ -1,5 +1,5 @@
 import { TaskRun } from "./TaskRun.js";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   useInfiniteQuery,
   useQuery,
@@ -10,22 +10,30 @@ import {
   Badge,
   Button,
   Card,
+  ChipGroup,
   Disclosure,
   EmptyState,
   ErrorNotice,
+  FilterChip,
+  Icon,
+  IconButton,
   ListRow,
-  MasterDetail,
-  MasterItem,
   PageHeader,
   SearchField,
   Skeleton,
-  Tabs,
   TechDetails,
 } from "../../components/index.js";
+import { archiveQuery, rows } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
-import { errorMessage, localTime } from "../../strings.js";
+import { RunSwitch, useActiveTaskCount } from "./RunSwitch.js";
+import {
+  agentRoleName,
+  errorMessage,
+  localTime,
+  statusLabels,
+} from "../../strings.js";
 import { jobRecord, record, type JsonRecord } from "../../data/wire.js";
 import {
   parseTaskDetail,
@@ -165,6 +173,7 @@ export default function Tasks() {
       .includes(text.toLocaleLowerCase()),
   );
   const selected = route.parameters.get("task");
+  const running = useActiveTaskCount();
   if (api.kind !== "workspace")
     return (
       <EmptyState
@@ -173,10 +182,10 @@ export default function Tasks() {
       />
     );
   return (
-    <section className="tasks-page">
+    <section className="tasks-page" data-panel={selected ? "open" : undefined}>
       <PageHeader
         title="任务"
-        description="查看已启动的操作、结果与失败。已接纳的材料会保留在文献库。"
+        count={running ? `${running} 个进行中` : undefined}
         action={
           <Button
             onPress={async () => {
@@ -187,92 +196,247 @@ export default function Tasks() {
           </Button>
         }
       />
-      <MasterDetail
-        label="任务列表"
-        toolbar={
-          <>
-            <Tabs
-              label="任务状态"
-              value={group}
-              onChange={setGroup}
-              items={[
-                { id: "", label: "全部" },
-                { id: "active", label: "进行中" },
-                { id: "attention", label: "待处理" },
-                { id: "ended", label: "已结束" },
-              ]}
-            />
-            <SearchField
-              label="筛选任务"
-              value={text}
-              onChange={setText}
-              placeholder="任务名称或编号"
-            />
-            <div role="status" className="ui-description">
-              已显示 {items.length} 个任务
-              {text ? `，符合筛选 ${filtered.length} 个` : ""}
-            </div>
-          </>
-        }
-        list={
-          <div className="tasks-list">
-            {jobs.isPending ? (
-              <Skeleton label="正在读取任务" />
-            ) : jobs.isError ? (
-              <ErrorNotice
-                message={errorMessage(jobs.error)}
-                retained={items.length ? "已经显示的任务仍然保留。" : ""}
-                onRetry={async () => {
-                  await jobs.refetch();
-                }}
-              />
-            ) : null}
-            {filtered.map((job) => (
-              <div key={String(job.job_id)} data-task-id={String(job.job_id)}>
-                <MasterItem
-                  selected={selected === String(job.job_id)}
-                  title={taskTitle(job)}
-                  meta={formatDate(job.created_at)}
-                  badge={<TaskBadge status={job.status} />}
-                  onPress={() => navigate({ task: String(job.job_id) })}
-                />
-              </div>
-            ))}
-            {!jobs.isPending && !filtered.length ? (
-              <EmptyState
-                title={text ? "没有符合筛选的任务" : "当前没有任务"}
-                description="从文献库选择材料并启动处理后，可以在这里查看进度。"
-              />
-            ) : null}
-          </div>
-        }
-        footer={
-          jobs.hasNextPage ? (
+      <RunSwitch value="task" />
+      <div className="tasks-toolbar">
+        <ChipGroup label="任务状态">
+          {[
+            { id: "", label: "全部" },
+            { id: "active", label: "进行中" },
+            { id: "attention", label: "待处理" },
+            { id: "ended", label: "已结束" },
+          ].map((item) => (
+            <FilterChip
+              key={item.id || "all"}
+              isSelected={group === item.id}
+              onChange={() => setGroup(item.id)}
+            >
+              {item.label}
+            </FilterChip>
+          ))}
+        </ChipGroup>
+        <SearchField
+          label="筛选任务"
+          value={text}
+          onChange={setText}
+          placeholder="任务名称或编号"
+        />
+        <span role="status" className="tasks-count">
+          已显示 {items.length} 个任务
+          {text ? `，符合筛选 ${filtered.length} 个` : ""}
+        </span>
+      </div>
+      {jobs.isPending ? (
+        <Skeleton label="正在读取任务" />
+      ) : jobs.isError ? (
+        <ErrorNotice
+          message={errorMessage(jobs.error)}
+          retained={items.length ? "已经显示的任务仍然保留。" : ""}
+          onRetry={async () => {
+            await jobs.refetch();
+          }}
+        />
+      ) : null}
+      {filtered.length ? (
+        <table className="ui-data-table task-table" aria-label="任务列表">
+          <thead>
+            <tr>
+              <th scope="col">任务</th>
+              <th scope="col">发起方</th>
+              <th scope="col">进度</th>
+              <th scope="col">状态</th>
+              <th scope="col">开始</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((job) => {
+              const id = String(job.job_id);
+              return (
+                <tr
+                  key={id}
+                  data-task-id={id}
+                  data-selected={selected === id || undefined}
+                  onClick={() => navigate({ task: id })}
+                >
+                  <td>
+                    <button
+                      type="button"
+                      className="task-open"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        navigate({ task: id });
+                      }}
+                    >
+                      {taskTitle(job)}
+                    </button>
+                  </td>
+                  <td>
+                    {job.actor_label || job.actor ? (
+                      String(job.actor_label ?? job.actor)
+                    ) : (
+                      <span className="task-empty">—</span>
+                    )}
+                  </td>
+                  <td>
+                    <TaskProgress job={job} />
+                  </td>
+                  <td>
+                    <TaskBadge status={job.status} />
+                  </td>
+                  <td className="task-time">{formatDate(job.created_at)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : !jobs.isPending ? (
+        <EmptyState
+          title={text ? "没有符合筛选的任务" : "当前没有任务"}
+          description="从文献库选择材料并启动处理后，可以在这里查看进度。"
+          action={
+            text ? undefined : (
+              <Button
+                onPress={() => navigate({ view: "lib", literature: null })}
+              >
+                去文献库
+              </Button>
+            )
+          }
+        />
+      ) : null}
+      {jobs.hasNextPage ? (
+        <Button
+          variant="text"
+          size="compact"
+          isPending={jobs.isFetchingNextPage}
+          onPress={async () => {
+            await jobs.fetchNextPage();
+          }}
+        >
+          加载更多任务
+        </Button>
+      ) : null}
+      {selected ? (
+        <TaskPanel
+          key={selected}
+          id={selected}
+          onClose={() => {
+            navigate({ task: null });
+            // Return focus to the row that opened the panel.
+            requestAnimationFrame(() =>
+              document
+                .querySelector<HTMLButtonElement>(
+                  `[data-task-id="${CSS.escape(selected)}"] .task-open`,
+                )
+                ?.focus(),
+            );
+          }}
+        />
+      ) : null}
+    </section>
+  );
+}
+/**
+ * Non-modal detail panel: the task list stays usable, so another row can be
+ * opened directly. Escape or the close button dismisses it.
+ */
+function TaskPanel({ id, onClose }: { id: string; onClose: () => void }) {
+  const panel = useRef<HTMLElement>(null);
+  useEffect(() => {
+    panel.current?.focus();
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !document.querySelector('[role="dialog"]'))
+        onClose();
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [onClose]);
+  return (
+    <aside
+      ref={panel}
+      tabIndex={-1}
+      className="task-panel"
+      role="region"
+      aria-label="任务详情"
+    >
+      <header className="task-panel-header">
+        <h2>任务详情</h2>
+        <IconButton aria-label="关闭任务详情" onPress={onClose}>
+          <Icon name="close" />
+        </IconButton>
+      </header>
+      <TaskDetails id={id} />
+    </aside>
+  );
+}
+/** Shown only when the list reports a total; otherwise the processed count. */
+function TaskProgress({ job }: { job: JsonRecord }) {
+  const progress =
+    job.progress && typeof job.progress === "object"
+      ? (job.progress as JsonRecord)
+      : null;
+  const total = Number(progress?.total),
+    done = Number(progress?.done);
+  if (!progress || !Number.isFinite(done))
+    return <span className="task-time task-empty">—</span>;
+  if (!Number.isFinite(total) || total <= 0)
+    return <span className="task-time">已处理 {done}</span>;
+  return (
+    <span className="task-progress">
+      <span className="task-progress-track" aria-hidden="true">
+        <i style={{ width: `${Math.min(100, (done / total) * 100)}%` }} />
+      </span>
+      <span className="task-time">
+        {done}/{total}
+      </span>
+    </span>
+  );
+}
+function TaskSessions({ id }: { id: string }) {
+  const api = useApi();
+  const sessions = useQuery({
+    queryKey: ["agent-sessions", "by-task", id],
+    queryFn: async ({ signal }) =>
+      rows(
+        record(
+          await archiveQuery(
+            api,
+            "agent-sessions",
+            { operation: "list", request: { job_id: id, limit: 30 } },
+            signal,
+          ),
+          "sessions",
+        ),
+      ),
+    refetchInterval: 5000,
+  });
+  if (!sessions.data?.length) return null;
+  return (
+    <section className="task-sessions" aria-label="Agent 会话">
+      <h3>Agent 会话</h3>
+      <ul>
+        {sessions.data.map((s) => (
+          <li key={String(s.session_id)}>
             <Button
               variant="text"
               size="compact"
-              isPending={jobs.isFetchingNextPage}
-              onPress={async () => {
-                await jobs.fetchNextPage();
-              }}
+              onPress={() =>
+                navigate({
+                  view: "agent",
+                  agentSession: String(s.session_id),
+                  agentStatus: "all",
+                  task: null,
+                })
+              }
             >
-              加载更多任务
+              {`${agentRoleName(String(record(s.subject, "subject").kind ?? s.role))} · ${String(s.title || "文献处理中")}`}
             </Button>
-          ) : undefined
-        }
-        detail={
-          selected ? (
-            <section className="task-detail-pane" aria-label="任务详情">
-              <TaskDetails key={selected} id={selected} />
-            </section>
-          ) : (
-            <EmptyState
-              title="选择一个任务"
-              description="查看它的进度、逐篇结果与失败原因。"
-            />
-          )
-        }
-      />
+            <span className="task-time">
+              {statusLabels[String(s.status)] ?? "处理中"} ·{" "}
+              {localTime(s.started_at)}
+            </span>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -381,6 +545,7 @@ export function TaskDetails({ id }: { id: string }) {
           </Button>
         ))}
       </div>
+      <TaskSessions id={id} />
       <p>
         {task.targets.filter((target) => target.stage === "completed").length} /{" "}
         {task.targets.length} 项已完成

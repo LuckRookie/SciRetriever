@@ -120,8 +120,9 @@ it(
         (j) => j.status === "running",
       )!;
       await w.page.goto(`${w.origin}/?view=agent`);
+      // Agent sessions live under 任务 since plan 14 (4.1).
       await w.page
-        .getByRole("heading", { name: "Agent", exact: true })
+        .getByRole("tab", { name: "Agent 会话", selected: true })
         .waitFor();
       const selected = w.page
         .locator(".agent-session-list")
@@ -175,10 +176,10 @@ it(
         exact: true,
       });
       await runs
-        .getByRole("button", { name: "查看结果表", exact: true })
+        .getByRole("button", { name: "查看结果", exact: true })
         .first()
         .waitFor();
-      expect(await runs.innerText()).toContain("当前版本");
+      // Only stale runs carry a badge; current runs need no label.
       expect(await runs.innerText()).toContain("已过时");
       await screenshot("runs-desktop");
       await w.page.goto(`${w.origin}/?literature=${id}&reader=results`);
@@ -269,9 +270,9 @@ it(
         exact: true,
       });
       await runs
-        .getByRole("button", { name: "查看结果表", exact: true })
+        .getByRole("button", { name: "查看结果", exact: true })
         .waitFor();
-      expect(await runs.innerText()).toContain("有结果 1 篇");
+      expect(await runs.innerText()).toMatch(/有结果\s*1\b/u);
       expect(w.errors).toEqual([]);
     } finally {
       await w.close();

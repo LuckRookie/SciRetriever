@@ -115,10 +115,19 @@ export async function runFromSnapshot(
   await dialog.getByRole("button", { name: "开始运行", exact: true }).click();
   return dialog;
 }
-/** Saved filters live in a menu; returns the open menu. */
+/** Filter conditions and saved filters share the 筛选 menu; returns the open menu. */
 export async function openSavedViews(page: Page) {
-  await page.getByRole("button", { name: /^已保存筛选/ }).click();
+  await page
+    .getByRole("button", { name: /^筛选/ })
+    .filter({ visible: true })
+    .first()
+    .click();
   const menu = page.getByRole("menu");
   await menu.waitFor();
   return menu;
+}
+/** Opens the library's filter-conditions panel from the 筛选 menu. */
+export async function openFilterConditions(page: Page) {
+  const menu = await openSavedViews(page);
+  await menu.getByRole("menuitem", { name: "筛选条件…", exact: true }).click();
 }

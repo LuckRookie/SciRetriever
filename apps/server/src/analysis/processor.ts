@@ -1,4 +1,5 @@
 import { chunkOutputReserve } from "./processor-chunking.js";
+import { summaryCitationInput } from "./processor-evidence.js";
 import { withActivity } from "../logging/activity.js";
 import { ProcessorPlanner } from "./processor-planning.js";
 import type { ProcessorValueVerifier } from "./value-check.js";
@@ -90,6 +91,7 @@ export interface ProcessorStore {
   verifyCitations(
     citations: readonly ProcessorCitation[],
     signal?: AbortSignal,
+    invocation?: ProcessorInvocation,
   ): Promise<readonly { readonly literature_ids: readonly string[] }[]>;
   publishCollection(collection: ProcessorCollection): Promise<string>;
 }
@@ -681,13 +683,18 @@ export class ProcessorService {
             ? !allowedMap(citation) && !snapshotCitation(citation)
             : citation.kind !== "document" ||
               citation.evidence.target_kind !== "document" ||
-              !segments.some(
+              (!segments.some(
                 (s) => seen.has(s.segment_id) && equal(s.citation, citation),
-              )
+              ) &&
+                !(
+                  citation.evidence.content_sha256 === null &&
+                  !citation.evidence.page_region &&
+                  summaryCitationInput(invocation, citation)
+                ))
         )
           processorError("processor-evidence-outside-scope");
       }
-      await this.store.verifyCitations(citations, active);
+      await this.store.verifyCitations(citations, active, invocation);
       const reported = output.coverage.flatMap((c) => c.read_segments);
       if (reported.some((id) => !seen.has(id)))
         processorError("processor-coverage");

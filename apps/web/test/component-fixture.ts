@@ -8,7 +8,7 @@ import { chromium } from "playwright";
 export async function componentFixture(kind: "gallery" | "lab" = "gallery") {
   const result = await build({
     stdin: {
-      contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import Gallery from './src/app/features/lab/${kind === "lab" ? "Lab" : "Gallery"}.tsx'; import {MotionProvider} from './src/app/motion/index.tsx'; import {ToastProvider} from './src/app/components/index.tsx'; import './src/app/styles/tokens.css'; import './src/app/styles/font-faces.css'; import './src/app/styles/base.css'; import './src/app/styles/components.css'; createRoot(document.getElementById('root')).render(<MotionProvider><ToastProvider><Gallery/></ToastProvider></MotionProvider>);`,
+      contents: `import React from 'react'; import {createRoot} from 'react-dom/client'; import Gallery from './src/app/features/lab/${kind === "lab" ? "Lab" : "Gallery"}.tsx'; import {MotionProvider} from './src/app/motion/index.tsx'; import {ToastProvider} from './src/app/components/index.tsx'; import './src/app/styles/tokens.css'; import './src/app/styles/font-faces.css'; import './src/app/styles/font-faces-cjk.css'; import './src/app/styles/base.css'; import './src/app/styles/components.css'; import './src/app/styles/pages.css'; createRoot(document.getElementById('root')).render(<MotionProvider><ToastProvider><Gallery/></ToastProvider></MotionProvider>);`,
       resolveDir: new URL("..", import.meta.url).pathname,
       loader: "tsx",
     },

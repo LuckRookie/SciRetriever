@@ -13,6 +13,8 @@ import {
   Button,
   Disclosure,
   ErrorNotice,
+  Icon,
+  IconButton,
   TechDetails,
   Popover,
 } from "../../components/index.js";
@@ -212,8 +214,8 @@ export function ReaderInformation({
               <div>
                 <dt>文字来源</dt>
                 <dd>
-                  解析 {reading.data.blocks.parser} 块 · Agent 矫正{" "}
-                  {reading.data.blocks.agent} 块 · 人工{" "}
+                  解析 {reading.data.blocks.parser} · Agent 矫正{" "}
+                  {reading.data.blocks.agent} · 人工{" "}
                   {reading.data.blocks.manual} 块
                 </dd>
               </div>
@@ -247,36 +249,50 @@ export function ReaderInformation({
       </section>
       <section className="reader-info-bibliography">
         <h3>书目</h3>
-        <h2>{paperTitle(detail)}</h2>
-        <p>{paperAuthors(detail)}</p>
-        <p>
-          <i>{m.venue ?? "期刊未提供"}</i> ·{" "}
-          {m.publication_year ?? "年份未提供"}
-        </p>
-        {doi && (
-          <p className="reader-doi">
-            <a
-              href={`https://doi.org/${encodeURIComponent(doi)}`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              {doi}
-            </a>
-            <Button
-              variant="text"
-              size="compact"
-              onPress={() => {
-                void copyText(doi)
-                  .then(() => shell.notify("DOI 已复制"))
-                  .catch(() =>
-                    shell.notify("浏览器未允许复制，可选择 DOI 文本复制。"),
-                  );
-              }}
-            >
-              复制 DOI
-            </Button>
-          </p>
-        )}
+        {/* The title is already on the tab and the page; the panel adds the rest. */}
+        <dl className="reader-facts">
+          <div>
+            <dt>作者</dt>
+            <dd>{paperAuthors(detail)}</dd>
+          </div>
+          <div>
+            <dt>期刊</dt>
+            <dd>
+              {m.venue ?? <span className="paper-venue-missing">未提供</span>}
+            </dd>
+          </div>
+          <div>
+            <dt>年份</dt>
+            <dd>{m.publication_year ?? "未提供"}</dd>
+          </div>
+          {doi ? (
+            <div>
+              <dt>DOI</dt>
+              <dd className="reader-doi">
+                <a
+                  href={`https://doi.org/${encodeURIComponent(doi)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {doi}
+                </a>
+                <IconButton
+                  size="inline"
+                  variant="text"
+                  aria-label="复制 DOI"
+                  icon={<Icon name="copy" />}
+                  onPress={() => {
+                    void copyText(doi)
+                      .then(() => shell.notify("DOI 已复制"))
+                      .catch(() =>
+                        shell.notify("浏览器未允许复制，可选择 DOI 文本复制。"),
+                      );
+                  }}
+                />
+              </dd>
+            </div>
+          ) : null}
+        </dl>
         <h4>摘要</h4>
         <p className={expanded ? "" : "reader-abstract-clamped"}>
           {m.abstract || "此来源未提供摘要。"}

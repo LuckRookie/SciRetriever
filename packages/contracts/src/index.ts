@@ -24,6 +24,21 @@ import {
 /** Execution records have their own version; the v1 literature bytes stay frozen. */
 export const EXECUTION_CONTRACT_VERSION = 1 as const;
 
+/** Current target disposition counts; attempts never contribute extra work. */
+export interface TaskProgress {
+  /** Number of persisted targets, including pending and interrupted targets. */
+  readonly total: number;
+  /** Targets whose current disposition is completed, failed or skipped. */
+  readonly done: number;
+}
+
+export function parseTaskProgress(value: unknown): TaskProgress {
+  const r = exact(value, ["total", "done"], []);
+  const total = integer(r.total, ["total"], 0, Number.MAX_SAFE_INTEGER);
+  const done = integer(r.done, ["done"], 0, total);
+  return Object.freeze({ total, done });
+}
+
 export interface CandidateCapture {
   readonly session_id: string;
   readonly article_id: string;

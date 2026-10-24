@@ -137,7 +137,7 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
     expect(await check.isChecked()).toBe(true);
     expect(
       await p
-        .getByRole("checkbox", { name: "选择已加载的文献", exact: true })
+        .getByRole("checkbox", { name: "全选已加载", exact: true })
         .evaluate((el) => (el as HTMLInputElement).indeterminate),
     ).toBe(true);
     const before = await list.evaluate((el) => el.scrollTop);

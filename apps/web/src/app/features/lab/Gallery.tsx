@@ -38,6 +38,7 @@ import {
 import { useMotionPreference } from "../../motion/index.js";
 import { ShellContext } from "../../shell/context.js";
 import { bindTheme, type Theme } from "../../data/preferences.js";
+import { statusLabels } from "../../strings.js";
 import "./lab.css";
 const samples = [
   { id: "first", title: "可追溯的研究材料", year: 2024 },
@@ -100,6 +101,128 @@ function Example({
     </section>
   );
 }
+const typeScale = [
+  {
+    name: "页标题",
+    spec: "衬线 28 / 600",
+    className: "lab-type-page",
+    sample: "文献库 Literature",
+  },
+  {
+    name: "节标题",
+    spec: "无衬线 17 / 600",
+    className: "lab-type-section",
+    sample: "年份分布 Distribution",
+  },
+  {
+    name: "正文",
+    spec: "无衬线 15 / 400",
+    className: "lab-type-body",
+    sample: "固定一组文献及其内容版本，独立比较和加工。",
+  },
+  {
+    name: "控件",
+    spec: "无衬线 14 / 400",
+    className: "lab-type-control",
+    sample: "运行算子 · 加入文件夹",
+  },
+  {
+    name: "辅助",
+    spec: "无衬线 13",
+    className: "lab-type-caption",
+    sample: "Zhang L., Okafor C. · Joule · 2023",
+  },
+  {
+    name: "文献标题",
+    spec: "衬线 16 / 500",
+    className: "lab-type-literature",
+    sample: "Interfacial Stability of Li6PS5Cl 锂金属界面稳定性",
+  },
+  {
+    name: "阅读正文",
+    spec: "衬线 20 / 1.75",
+    className: "lab-type-reading",
+    sample: "固态电解质与锂金属之间的界面在循环中逐渐演化。",
+  },
+] as const;
+const colorRoles = [
+  { name: "强调", token: "--blue", usage: "主按钮、链接、焦点、选中" },
+  { name: "证据", token: "--mark", usage: "证据标记与查找命中" },
+  { name: "正文", token: "--fg", usage: "正文文字" },
+  { name: "次要", token: "--fg2", usage: "书目、说明" },
+  { name: "再次", token: "--fg3", usage: "提示、占位" },
+  { name: "图表墨色", token: "--chart-ink", usage: "图表默认标记" },
+  { name: "图表弱色", token: "--chart-muted", usage: "图表底轨" },
+  { name: "底块", token: "--surface-sunken", usage: "节的内容区、侧栏" },
+] as const;
+const archiveStates = [
+  "READY",
+  "ASSET_READY",
+  "ARCHIVING",
+  "ARCHIVE_FAILED",
+  "UNAVAILABLE",
+  "UNREVIEWED",
+  "EXCLUDED",
+] as const;
+function Foundations() {
+  return (
+    <>
+      <Example
+        title="字体与字号"
+        usage="界面用 Source Sans 3 与思源黑体，标题、文献标题与阅读正文用 Source Serif 4 与思源宋体；全站只有这七种文字规格。"
+      >
+        <dl className="lab-type-scale">
+          {typeScale.map((level) => (
+            <div key={level.name}>
+              <dt>
+                {level.name}
+                <small>{level.spec}</small>
+              </dt>
+              <dd className={level.className}>{level.sample}</dd>
+            </div>
+          ))}
+        </dl>
+      </Example>
+      <Example title="颜色角色" usage="每种颜色只有一种用途；其余一律用灰阶。">
+        <ul className="lab-swatches">
+          {colorRoles.map((role) => (
+            <li key={role.token}>
+              <span style={{ background: `var(${role.token})` }} />
+              <strong>{role.name}</strong>
+              <small>{role.usage}</small>
+            </li>
+          ))}
+        </ul>
+      </Example>
+      <Example
+        title="建档状态与标签"
+        usage="七种建档状态全站同一套颜色；占大多数的“仅元数据”在列表里不显示。"
+      >
+        <div className="lab-row">
+          {archiveStates.map((state) => (
+            <span key={state} className="paper-status" data-state={state}>
+              {state === "UNAVAILABLE" ? "无法获取" : statusLabels[state]}
+            </span>
+          ))}
+          <span className="paper-status" data-state="ASSET_READY">
+            有 PDF<small>待建档</small>
+          </span>
+        </div>
+        <div className="lab-row">
+          <Badge status="running" />
+          <Badge status="partial" />
+          <Badge status="completed" />
+          <Badge status="failed" />
+        </div>
+        <span className="paper-tags">
+          <span className="paper-tag primary">Solid-state electrolyte</span>
+          <span className="paper-tag">Interphase</span>
+          <span className="paper-tag">硫化物电解质</span>
+        </span>
+      </Example>
+    </>
+  );
+}
 function DisclosureDraft() {
   const [draft, setDraft] = useState("");
   return <TextField label="折叠区草稿" value={draft} onChange={setDraft} />;
@@ -132,6 +255,7 @@ export default function Gallery() {
         description="与文献库共用的控件、状态与主题。这里的交互仅使用合成示例，不访问服务。"
       />
       <AppearanceControls />
+      <Foundations />
       <Example
         title="校订来源与结果状态"
         usage="按篇区分有结果、结果为空和读取不完整。此处为合成展示数据。"

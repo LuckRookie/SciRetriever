@@ -24,6 +24,7 @@ import {
   parseMetaLiterature,
   parseReference,
   parseReferenceDetail,
+  parseTaskProgress,
   sha256,
   type ArticleIdentityAssessment,
   type ArtifactRef,
@@ -43,6 +44,7 @@ import {
   type Reference,
   type ReferenceDetail,
   type Sha256,
+  type TaskProgress,
 } from "@sciretriever/contracts";
 import { Worker } from "node:worker_threads";
 import type { CandidateCleanupSnapshot } from "../files/reclamation.js";
@@ -338,6 +340,8 @@ export type SqliteCommand =
         | "insertEntries"
         | "publish"
         | "active"
+        | "reusableGeneration"
+        | "reusePage"
         | "search"
         | "documentCoverage"
         | "metadataSource"
@@ -695,6 +699,10 @@ export interface ExecutionJob {
   readonly idempotency_key: string;
   readonly created_at: string;
   readonly finished_at: string | null;
+}
+/** A list projection, not an additional persisted execution fact. */
+export interface ExecutionJobListItem extends ExecutionJob {
+  readonly progress: TaskProgress;
 }
 export interface ExecutionTarget {
   readonly target_id: string;
@@ -1694,7 +1702,7 @@ export class SqliteWorker {
     order: "oldest" | "newest" | "finished" = "oldest",
     before: ExecutionJobCursor | null = null,
     statuses: readonly ExecutionJobStatus[] = [],
-  ): Promise<readonly ExecutionJob[]> {
+  ): Promise<readonly ExecutionJobListItem[]> {
     if (
       !Number.isSafeInteger(limit) ||
       limit < 1 ||
@@ -1721,7 +1729,13 @@ export class SqliteWorker {
       order,
     });
     if (!Array.isArray(value)) throw new SqliteWorkerError();
-    return Object.freeze(value.map(parseExecutionJob));
+    return Object.freeze(
+      value.map((item: unknown) => {
+        const job = parseExecutionJob(item);
+        const { progress } = item as Record<string, unknown>;
+        return { ...job, progress: parseTaskProgress(progress) };
+      }),
+    );
   }
   async listExecutionTargets(
     jobId: string,

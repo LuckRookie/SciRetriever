@@ -4,6 +4,7 @@ import {
   canonicalJsonBytes,
   normalizedTagName,
   parseTag,
+  parseTagListItem,
   parseTagAssignment,
   parseTagAssignmentItem,
   parseVocabularyMutation,
@@ -430,10 +431,21 @@ export function runTagStorage(
         );
       const items = db
         .prepare(
-          `SELECT t.row_json FROM tags t WHERE ${where} ORDER BY t.created_vocab_version DESC,t.tag_id LIMIT ? OFFSET ?`,
+          `WITH page AS MATERIALIZED (
+            SELECT t.tag_id,t.row_json,t.created_vocab_version FROM tags t
+            WHERE ${where} ORDER BY t.created_vocab_version DESC,t.tag_id LIMIT ? OFFSET ?
+          )
+          SELECT p.row_json,count(i.literature_id) AS uses
+          FROM page p LEFT JOIN literature_tag_items i ON i.tag_id=p.tag_id
+          GROUP BY p.tag_id ORDER BY p.created_vocab_version DESC,p.tag_id`,
         )
         .all(...bindings, limit, offset)
-        .map((row) => parseTag(JSON.parse(String(row.row_json))));
+        .map((row) =>
+          parseTagListItem({
+            ...JSON.parse(String(row.row_json)),
+            uses: Number(row.uses),
+          }),
+        );
       return {
         items,
         total,

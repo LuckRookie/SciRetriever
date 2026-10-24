@@ -101,7 +101,7 @@ it("keeps false distinct from unknown labels, restores associated papers, and ex
         .click();
       await expect
         .poll(() => w.page.getByRole("main").textContent())
-        .toContain("显示已应用");
+        .toContain("已应用筛选");
       expect(
         await w.page
           .getByRole("table", { name: "提取结果" })
@@ -134,9 +134,9 @@ it("keeps false distinct from unknown labels, restores associated papers, and ex
     }
     const calls = w.env.modelCalls;
     const url = new URL(w.page.url());
-    url.search = "view=ext&results=all";
+    // Saved operator results are searched from 全文检索 → 算子结果.
+    url.search = "view=ask&results=all";
     await w.page.goto(url.href);
-    await w.page.getByRole("tab", { name: "结果检索", exact: true }).click();
     await w.page
       .getByRole("searchbox", { name: "检索已有结果", exact: true })
       .fill("Label");

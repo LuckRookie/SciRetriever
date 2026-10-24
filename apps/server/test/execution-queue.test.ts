@@ -179,6 +179,9 @@ describe("execution queue recovery semantics", () => {
         stage: "queued",
         disposition: "pending",
       });
+      expect(await env.repository.listJobs()).toMatchObject([
+        { job_id: env.job.job_id, progress: { total: 1, done: 0 } },
+      ]);
       await expect(
         env.queue.runNext(env.job.job_id, handler, {
           max_retries: 1,
@@ -191,6 +194,12 @@ describe("execution queue recovery semantics", () => {
         status: "completed",
       });
       expect(calls).toBe(2);
+      expect(
+        await env.repository.listAttempts("target-queue-test"),
+      ).toHaveLength(2);
+      expect(await env.repository.listJobs()).toMatchObject([
+        { job_id: env.job.job_id, progress: { total: 1, done: 1 } },
+      ]);
     } finally {
       await env.database.close();
     }

@@ -8,10 +8,6 @@
     display: grid;
     gap: 2px;
   }
-  .tasks-page .ui-master-toolbar .ui-tab {
-    min-height: var(--control-small-height);
-    padding-inline: var(--space-2);
-  }
   .task-detail {
     display: grid;
     gap: var(--space-4);
@@ -40,5 +36,181 @@
   .task-events time {
     font-size: var(--text-secondary);
     color: var(--fg2);
+  }
+  .tasks-page > .ui-segmented {
+    margin-bottom: var(--space-4);
+  }
+  .tasks-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+    margin-bottom: var(--space-3);
+  }
+  .tasks-toolbar .ui-field {
+    width: 260px;
+  }
+  /* Toolbar fields keep their accessible name but show no label above. */
+  .tasks-toolbar .ui-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .tasks-count {
+    margin-left: auto;
+    color: var(--fg2);
+    font-size: var(--text-caption);
+  }
+  .task-table {
+    width: 100%;
+  }
+  .task-table tbody tr {
+    cursor: pointer;
+    transition: background-color var(--dur-1);
+  }
+  .task-table tbody tr:hover,
+  .task-table tbody tr[data-selected] {
+    background: var(--hover);
+  }
+  .task-table td:nth-child(3) {
+    width: 200px;
+  }
+  .task-table th,
+  .task-table td:not(:first-child) {
+    white-space: nowrap;
+  }
+  /* With the detail panel open only task, progress and status remain. */
+  .tasks-page[data-panel="open"]
+    .task-table
+    :is(th, td):is(:nth-child(2), :nth-child(5)) {
+    display: none;
+  }
+  .tasks-page[data-panel="open"] .task-table td:nth-child(3) {
+    width: 140px;
+  }
+  .task-open {
+    border: 0;
+    padding: 0;
+    background: none;
+    color: var(--fg);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .task-open:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: var(--radius-xs);
+  }
+  .task-time {
+    color: var(--fg2);
+    font-size: var(--text-caption);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .task-progress {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .task-progress-track {
+    flex: 1;
+    height: 4px;
+    border-radius: var(--radius-pill);
+    background: var(--chart-muted);
+    overflow: hidden;
+  }
+  .task-progress-track > i {
+    display: block;
+    height: 100%;
+    background: var(--chart-ink);
+  }
+  .tasks-page[data-panel="open"] {
+    padding-right: calc(560px + var(--space-6));
+  }
+  .task-panel {
+    position: fixed;
+    top: 52px;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    width: min(560px, 100%);
+    overflow-y: auto;
+    padding: var(--space-4) var(--space-5) var(--space-6);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-pop);
+    outline: none;
+  }
+  .task-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-3);
+  }
+  .task-panel-header h2 {
+    margin: 0;
+  }
+  .task-sessions h3 {
+    margin: 0 0 var(--space-2);
+  }
+  .task-sessions ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: var(--space-1);
+  }
+  .task-sessions li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  @media (max-width: 720px) {
+    .tasks-page {
+      padding: var(--space-5) var(--space-4);
+    }
+    .tasks-toolbar .ui-field {
+      width: 100%;
+    }
+    .tasks-page[data-panel="open"] {
+      padding-right: var(--space-4);
+    }
+    .task-panel {
+      top: 0;
+    }
+    .task-table thead {
+      display: none;
+    }
+    .task-table,
+    .task-table tbody,
+    .task-table tr,
+    .task-table td {
+      display: block;
+    }
+    .task-table tr {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: var(--space-1) var(--space-3);
+      padding: var(--space-3) 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .task-table td {
+      padding: 0;
+      border: 0;
+    }
+    .task-table td:nth-child(1) {
+      grid-column: 1 / -1;
+    }
+    .task-table td:nth-child(3) {
+      width: auto;
+    }
+    /* A card has no columns to hold open, so missing values simply drop out. */
+    .task-table td:has(> .task-empty:only-child) {
+      display: none;
+    }
   }
 }

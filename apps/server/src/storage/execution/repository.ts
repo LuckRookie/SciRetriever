@@ -6,6 +6,7 @@ import {
   type ExecutionAttempt,
   type ExecutionEvent,
   type ExecutionJob,
+  type ExecutionJobListItem,
   type ExecutionJobCursor,
   type ExecutionJobStatus,
   type ExecutionLease,
@@ -148,7 +149,7 @@ export class ExecutionRepository {
     order: "oldest" | "newest" | "finished" = "oldest",
     before: ExecutionJobCursor | null = null,
     statuses: readonly ExecutionJobStatus[] = [],
-  ): Promise<readonly ExecutionJob[]> {
+  ): Promise<readonly ExecutionJobListItem[]> {
     return this.database.listExecutionJobs(limit, order, before, statuses);
   }
   listTargets(

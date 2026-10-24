@@ -324,6 +324,18 @@ export default function Library() {
       setOperation({ ids: [id], kind: "upload", file }),
     [],
   );
+  const onRowAction = useCallback(
+    (id: string, title: string, kind: RowAction) => {
+      if (kind === "run")
+        setRunner({
+          scope: { kind: "literatures", ids: [id] },
+          label: `《${title}》`,
+        });
+      else if (kind === "folder") setAdding([id]);
+      else setOperation({ ids: [id], kind });
+    },
+    [],
+  );
   const removeFromFolder = async () => {
     if (!folder) return;
     try {
@@ -363,6 +375,59 @@ export default function Library() {
       : {};
   const toolbarActions = (
     <>
+      <Menu
+        label={`筛选${
+          activeView
+            ? `：${views.find((view) => view.id === activeView)?.name ?? ""}`
+            : chips.length
+              ? ` · ${chips.length}`
+              : ""
+        }`}
+        icon={<Icon name="filter" />}
+        indicator
+        variant="text"
+        items={[
+          {
+            id: "conditions",
+            label: filters ? "收起筛选条件" : "筛选条件…",
+            onAction: () => {
+              setFilters(!filters);
+              setMobileTools(false);
+            },
+          },
+          ...views.map((view, index) => ({
+            id: `view:${view.id}`,
+            label: view.name,
+            divider: index === 0,
+            onAction: () => {
+              setActiveView(view.id);
+              updateQuery(view.query, view.sort);
+            },
+          })),
+          {
+            id: "save",
+            label: "保存当前筛选…",
+            divider: views.length === 0,
+            onAction: () => setSaveOpen(true),
+          },
+          ...(activeView
+            ? [
+                {
+                  id: "delete",
+                  label: "删除当前筛选",
+                  onAction: () => {
+                    const values = views.filter(
+                      (view) => view.id !== activeView,
+                    );
+                    setViews(values);
+                    preferences.write(preferenceKey, JSON.stringify(values));
+                    setActiveView("");
+                  },
+                },
+              ]
+            : []),
+        ]}
+      />
       <Select
         label="排序"
         value={route.sort}
@@ -402,17 +467,6 @@ export default function Library() {
       {archiveAction.error ? (
         <ErrorNotice message={errorMessage(archiveAction.error)} />
       ) : null}
-      <Button
-        variant="text"
-        icon={<Icon name="filter" />}
-        onPress={() => {
-          setFilters(!filters);
-          setMobileTools(false);
-        }}
-      >
-        筛选{chips.length ? ` · ${chips.length}` : ""}
-        {filters ? " · 收起" : ""}
-      </Button>
       {mutable ? (
         <Menu
           label="用当前结果"
@@ -454,10 +508,7 @@ export default function Library() {
     return (
       <section className="library-page">
         {route.warning ? <p role="status">{route.warning}</p> : null}
-        <PageHeader
-          title="文献库"
-          description="此入口只读取已经保存的文献材料。"
-        />
+        <PageHeader title="文献库" />
         <EmptyState
           title={
             api.workspace.readiness === "not-initialized"
@@ -474,13 +525,15 @@ export default function Library() {
         title={
           folderLabel ?? (route.query.recently_opened ? "最近阅读" : "文献库")
         }
-        {...(route.query.recently_opened
-          ? { description: "最近 30 天打开过的文献，最多 100 篇。" }
-          : {})}
+        count={
+          counts.data
+            ? `${route.query.recently_opened ? "最近 30 天 · " : ""}${counts.data.total.toLocaleString()} 篇`
+            : undefined
+        }
         action={
           mutable ? (
             <Button
-              variant="primary"
+              icon={<Icon name="plus" />}
               onPress={() => navigate({ view: "disc", literature: null })}
             >
               入库
@@ -506,7 +559,12 @@ export default function Library() {
         </div>
         <div className="library-quick">
           <div className="library-status-filters" aria-label="按材料状态筛选">
-            {STATUS_FILTERS.map((filter) => (
+            {STATUS_FILTERS.filter(
+              (filter) =>
+                filter.id === "" ||
+                statusFilter === filter.id ||
+                countFor(filter.id) !== 0,
+            ).map((filter) => (
               <FilterChip
                 key={filter.id}
                 isSelected={statusFilter === filter.id}
@@ -553,49 +611,6 @@ export default function Library() {
               只看本层
             </Switch>
           ) : null}
-          <Menu
-            label={
-              activeView
-                ? `已保存筛选：${views.find((view) => view.id === activeView)?.name ?? ""}`
-                : "已保存筛选"
-            }
-            indicator
-            variant="text"
-            items={[
-              ...views.map((view) => ({
-                id: `view:${view.id}`,
-                label: view.name,
-                onAction: () => {
-                  setActiveView(view.id);
-                  updateQuery(view.query, view.sort);
-                },
-              })),
-              {
-                id: "save",
-                label: "保存当前筛选…",
-                onAction: () => setSaveOpen(true),
-              },
-              ...(activeView
-                ? [
-                    {
-                      id: "delete",
-                      label: "删除当前筛选",
-                      onAction: () => {
-                        const values = views.filter(
-                          (view) => view.id !== activeView,
-                        );
-                        setViews(values);
-                        preferences.write(
-                          preferenceKey,
-                          JSON.stringify(values),
-                        );
-                        setActiveView("");
-                      },
-                    },
-                  ]
-                : []),
-            ]}
-          />
         </div>
         {chips.length > 0 && (
           <div className="library-applied">
@@ -643,7 +658,7 @@ export default function Library() {
         </Presence>
         <div className="library-list-heading">
           <Checkbox
-            label="选择已加载的文献"
+            label="全选已加载"
             isIndeterminate={
               items.some((item) =>
                 shell.selected.has(item.literature.literature_id),
@@ -704,6 +719,7 @@ export default function Library() {
           }}
           onPreview={setPeek}
           onFile={onFile}
+          onRowAction={onRowAction}
           onDragRow={onDragRow}
         />
       </LayoutGroup>
@@ -939,6 +955,7 @@ const LibraryList = memo(function LibraryList({
   onOpen,
   onPreview,
   onFile,
+  onRowAction,
   onDragRow,
 }: {
   items: readonly LiteratureSearchItem[];
@@ -959,6 +976,7 @@ const LibraryList = memo(function LibraryList({
   onOpen: ReturnType<typeof useShell>["openPaper"];
   onPreview: (id: string) => void;
   onFile: (id: string, file: File) => void;
+  onRowAction: (id: string, title: string, kind: RowAction) => void;
   onDragRow: (id: string, data: DataTransfer) => void;
 }) {
   const list = useRef<HTMLDivElement>(null);
@@ -1091,6 +1109,7 @@ const LibraryList = memo(function LibraryList({
             onOpen={onOpen}
             onPreview={onPreview}
             onFile={onFile}
+            onRowAction={onRowAction}
             onMove={onMove}
             onDragRow={onDragRow}
           />
@@ -1104,6 +1123,27 @@ const LibraryList = memo(function LibraryList({
   );
 });
 const estimateRowSize = () => 78;
+type RowAction = "run" | "folder" | "acquire" | "archive";
+/** A row shows at most three tags; the rest collapse into “+N”. */
+const ROW_TAGS = 3;
+const CJK = /[\u3400-\u9fff\uf900-\ufaff]/u;
+/** Rows list three authors at most, the way a reference list does. */
+function rowAuthors(item: LiteratureSearchItem) {
+  const authors = item.literature.metadata.authors;
+  if (authors.length <= 3) return paperAuthors(item);
+  return `${paperAuthors({
+    ...item,
+    literature: {
+      ...item.literature,
+      metadata: { ...item.literature.metadata, authors: authors.slice(0, 3) },
+    },
+  })} 等`;
+}
+/** Journal names are italic in Latin script only; CJK has no true italic. */
+function Venue({ name }: { name: string | null | undefined }) {
+  if (!name) return <span className="paper-venue-missing">期刊未提供</span>;
+  return CJK.test(name) ? <span>{name}</span> : <i>{name}</i>;
+}
 
 const LibraryRow = memo(function LibraryRow({
   row,
@@ -1116,6 +1156,7 @@ const LibraryRow = memo(function LibraryRow({
   onOpen,
   onPreview,
   onFile,
+  onRowAction,
   onMove,
   onDragRow,
 }: {
@@ -1129,6 +1170,7 @@ const LibraryRow = memo(function LibraryRow({
   onOpen: ReturnType<typeof useShell>["openPaper"];
   onPreview: (id: string) => void;
   onFile: (id: string, file: File) => void;
+  onRowAction: (id: string, title: string, kind: RowAction) => void;
   onMove: (index: number) => void;
   onDragRow: (id: string, data: DataTransfer) => void;
 }) {
@@ -1182,13 +1224,12 @@ const LibraryRow = memo(function LibraryRow({
       >
         <span className="paper-title">{title}</span>
         <span className="paper-citation">
-          {paperAuthors(item)} ·{" "}
-          <i>{item.literature.metadata.venue ?? "期刊未提供"}</i> ·{" "}
+          {rowAuthors(item)} · <Venue name={item.literature.metadata.venue} /> ·{" "}
           {item.literature.metadata.publication_year ?? "年份未提供"}
         </span>
         {item.tags?.length ? (
           <span className="paper-tags">
-            {item.tags.map((t) => (
+            {item.tags.slice(0, ROW_TAGS).map((t) => (
               <span
                 key={t.tag_id}
                 className={t.rank === 1 ? "paper-tag primary" : "paper-tag"}
@@ -1196,6 +1237,17 @@ const LibraryRow = memo(function LibraryRow({
                 {t.name}
               </span>
             ))}
+            {item.tags.length > ROW_TAGS ? (
+              <span
+                className="paper-tag-more"
+                title={item.tags
+                  .slice(ROW_TAGS)
+                  .map((t) => t.name)
+                  .join("、")}
+              >
+                +{item.tags.length - ROW_TAGS}
+              </span>
+            ) : null}
           </span>
         ) : null}
       </button>
@@ -1203,7 +1255,12 @@ const LibraryRow = memo(function LibraryRow({
         // Almost the whole catalog is metadata-only; only departures get a tag.
         <span />
       ) : (
-        <span className="paper-status" data-state={item.literature.status}>
+        <span
+          className="paper-status"
+          data-state={
+            item.needs_manual_pdf ? "UNAVAILABLE" : item.literature.status
+          }
+        >
           {item.needs_manual_pdf
             ? "无法获取"
             : statusLabels[item.literature.status]}
@@ -1237,14 +1294,45 @@ const LibraryRow = memo(function LibraryRow({
           ) : null}
         </span>
       )}
-      <IconButton
-        className="paper-preview"
-        size="compact"
-        variant="text"
-        aria-label="预览"
-        icon={<Icon name="eye" />}
-        onPress={() => onPreview(id)}
-      />
+      <span className="paper-tools">
+        <IconButton
+          className="paper-preview"
+          size="compact"
+          variant="text"
+          aria-label="预览"
+          icon={<Icon name="eye" />}
+          onPress={() => onPreview(id)}
+        />
+        {mutable ? (
+          <Menu
+            label="文献操作"
+            iconOnly
+            items={[
+              {
+                id: "run",
+                label: "运行算子…",
+                onAction: () => onRowAction(id, title, "run"),
+              },
+              {
+                id: "folder",
+                label: "加入文件夹…",
+                onAction: () => onRowAction(id, title, "folder"),
+              },
+              {
+                id: "acquire",
+                label: "获取 PDF",
+                divider: true,
+                onAction: () => onRowAction(id, title, "acquire"),
+              },
+              {
+                id: "archive",
+                label: "建档",
+                onAction: () => onRowAction(id, title, "archive"),
+              },
+            ]}
+          />
+        ) : null}
+      </span>
     </article>
   );
 });

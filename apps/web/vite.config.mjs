@@ -76,5 +76,8 @@ export default defineConfig({
     emptyOutDir: true,
     manifest: true,
     sourcemap: false,
+    // The CSP allows fonts only from 'self'; small CJK font slices must stay
+    // files instead of being inlined as data: URLs.
+    assetsInlineLimit: (file) => (/\.woff2?$/u.test(file) ? false : undefined),
   },
 });

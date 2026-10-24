@@ -12,25 +12,38 @@ import { Button, IconButton } from "./actions.js";
 import { Icon } from "./icons.js";
 import { Disclosure } from "./navigation.js";
 import { AnimatedPanel, Presence } from "../motion/index.js";
+/**
+ * Page title, an optional context figure ("35,177 篇") and at most one primary
+ * action. `description` is only for internal demo pages; product pages express
+ * system behaviour through their controls instead.
+ */
 export function PageHeader({
   title,
+  count,
   description,
   action,
 }: {
   title: string;
+  count?: ReactNode;
   description?: string;
   action?: ReactNode;
 }) {
   return (
     <header className="ui-page-header">
       <div>
-        <h1>{title}</h1>
+        <div className="ui-page-title">
+          <h1>{title}</h1>
+          {count === undefined || count === null ? null : (
+            <span className="ui-page-count">{count}</span>
+          )}
+        </div>
         {description ? <p>{description}</p> : null}
       </div>
       {action}
     </header>
   );
 }
+/** One sentence about what is missing, plus at most one action. */
 export function EmptyState({
   title,
   description,
@@ -40,10 +53,13 @@ export function EmptyState({
   description?: string;
   action?: ReactNode;
 }) {
+  const ended = /[。！？.!?]$/u.test(title);
   return (
     <div className="ui-empty">
-      <p className="ui-empty-title">{title}</p>
-      {description ? <p>{description}</p> : null}
+      <p>
+        <span className="ui-empty-title">{title}</span>
+        {description ? (ended ? description : `。${description}`) : null}
+      </p>
       {action}
     </div>
   );

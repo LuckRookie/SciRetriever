@@ -2523,9 +2523,27 @@ function listExecutionJobs(
     filters.push(`status IN (${statuses.map(() => "?").join(",")})`);
     args.push(...statuses);
   }
+  const sort =
+    order === "oldest" ? "created_at,job_id" : `${timeColumn} DESC,job_id DESC`;
+  // Aggregate only this page's unique target rows through the existing job_id
+  // index. Keep wide job/selector rows out of GROUP BY and attempts out entirely.
   const rows = db
     .prepare(
-      `SELECT * FROM execution_jobs${filters.length ? ` WHERE ${filters.join(" AND ")}` : ""} ORDER BY ${order === "oldest" ? "created_at,job_id" : `${timeColumn} DESC,job_id DESC`} LIMIT ?`,
+      `WITH selected_jobs AS MATERIALIZED (
+        SELECT * FROM execution_jobs${filters.length ? ` WHERE ${filters.join(" AND ")}` : ""}
+        ORDER BY ${sort} LIMIT ?
+      ), progress AS (
+        SELECT job_id, count(*) AS total,
+          count(CASE WHEN disposition IN ('completed','failed','skipped') THEN 1 END) AS done
+        FROM execution_targets
+        WHERE job_id IN (SELECT job_id FROM selected_jobs)
+        GROUP BY job_id
+      )
+      SELECT job.*, COALESCE(progress.total,0) AS progress_total,
+        COALESCE(progress.done,0) AS progress_done
+      FROM selected_jobs job
+      LEFT JOIN progress ON progress.job_id=job.job_id
+      ORDER BY ${sort.replaceAll("job_id", "job.job_id")}`,
     )
     .all(...args, limit);
   return rows.map((row: Dynamic) => ({
@@ -2537,6 +2555,7 @@ function listExecutionJobs(
     idempotency_key: row.idempotency_key,
     created_at: row.created_at,
     finished_at: row.finished_at,
+    progress: { total: row.progress_total, done: row.progress_done },
   }));
 }
 function getExecutionPolicy(jobId: Dynamic): Dynamic {
@@ -4521,6 +4540,8 @@ port.on("message", (message: WorkerMessage) => {
           "insertEntries",
           "publish",
           "active",
+          "reusableGeneration",
+          "reusePage",
           "search",
           "documentCoverage",
           "metadataSource",

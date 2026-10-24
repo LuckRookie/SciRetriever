@@ -1,3 +1,4 @@
+import { chromium } from "playwright";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,8 +23,7 @@ import {
 import { verifyInstalledCloakRuntime } from "../src/configuration/cloak-runtime.js";
 
 const stock =
-  process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ??
-  "/home/duanjw/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome";
+  process.env.SCIRETRIEVER_BROWSER_EXECUTABLE ?? chromium.executablePath();
 async function readySnapshot(
   page: BrowserPageHandle,
 ): Promise<BrowserPageSnapshot> {

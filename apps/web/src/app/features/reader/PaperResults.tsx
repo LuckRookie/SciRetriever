@@ -1,5 +1,6 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import {
+  Badge,
   Button,
   EmptyState,
   ErrorNotice,
@@ -33,60 +34,60 @@ export function PaperResults({
   });
   return (
     <section aria-label="文献参与的全部结果" className="paper-results">
-      <header>
-        <h2>结果</h2>
-        <p>这篇文献参与过的单篇处理与多篇综合，全文总结排在最前。</p>
-      </header>
+      <h2>结果</h2>
       {list.isPending ? <Skeleton /> : null}
       {list.error ? <ErrorNotice message={errorMessage(list.error)} /> : null}
-      {list.data?.pages
-        .flatMap((p) => rows(p))
-        .sort(
-          (a, b) =>
-            Number(b.processor_id === "summary") -
-            Number(a.processor_id === "summary"),
-        )
-        .map((r) => (
-          <article key={String(r.result_id)} className="paper-result">
-            <div>
-              <h3>
-                {processorName(String(r.processor_id))}
-                {r.freshness === "stale" ? (
-                  <span className="paper-result-tag">已过时</span>
+      {list.data && rows(list.data.pages[0]).length ? (
+        <ul className="paper-result-list">
+          {list.data.pages
+            .flatMap((p) => rows(p))
+            .sort(
+              (a, b) =>
+                Number(b.processor_id === "summary") -
+                Number(a.processor_id === "summary"),
+            )
+            .map((r) => (
+              <li key={String(r.result_id)} className="paper-result">
+                <div>
+                  <h3>
+                    {processorName(String(r.processor_id))}
+                    {r.freshness === "stale" ? (
+                      <Badge status="running">已过时</Badge>
+                    ) : null}
+                  </h3>
+                  <p>
+                    {localTime(r.created_at)} ·{" "}
+                    {Number(r.complete) ? "完整" : "部分完成"} ·{" "}
+                    {Number(r.literature_count) > 1
+                      ? `${r.literature_count} 篇共同参与`
+                      : "单篇"}
+                  </p>
+                </div>
+                {r.processor_id === "summary" ? (
+                  <Button onPress={onOpenSummary}>阅读总结</Button>
                 ) : null}
-              </h3>
-              <p>
-                {localTime(r.created_at)} ·{" "}
-                {Number(r.complete) ? "完整" : "部分完成"} ·{" "}
-                {Number(r.literature_count) > 1
-                  ? `${r.literature_count} 篇共同参与`
-                  : "单篇"}
-              </p>
-            </div>
-            {r.processor_id === "summary" ? (
-              <Button variant="primary" onPress={onOpenSummary}>
-                阅读总结
-              </Button>
-            ) : null}
-            <Button
-              onPress={() =>
-                navigate(
-                  {
-                    view: "ext",
-                    literature: null,
-                    result: String(r.result_id),
-                    resultHash: String(r.content_sha256),
-                    focusLiterature: id,
-                    results: "all",
-                  },
-                  { clearSource: true },
-                )
-              }
-            >
-              结果详情
-            </Button>
-          </article>
-        ))}
+                <Button
+                  variant="text"
+                  onPress={() =>
+                    navigate(
+                      {
+                        view: "ext",
+                        literature: null,
+                        result: String(r.result_id),
+                        resultHash: String(r.content_sha256),
+                        focusLiterature: id,
+                        results: "all",
+                      },
+                      { clearSource: true },
+                    )
+                  }
+                >
+                  结果详情
+                </Button>
+              </li>
+            ))}
+        </ul>
+      ) : null}
       {list.data && !rows(list.data.pages[0]).length ? (
         <EmptyState
           title="这篇文献还没有算子结果"

@@ -1,18 +1,103 @@
 @layer pages {
-  .auth-page { min-height: 100dvh; overflow: auto; font-size: var(--text-interface); }
-  .auth-brand { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-5) var(--space-6); border-bottom: 1px solid var(--line); font: 600 22px var(--serif); }
-  .auth-logo { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--mark); color: var(--mark-fg); }
-  .auth-main { width: min(100% - 48px, 448px); margin: clamp(48px, 12vh, 128px) auto 48px; }
-  .auth-main h1 { font: 600 32px/1.3 var(--serif); margin: 0 0 var(--space-4); text-wrap: balance; }
-  .auth-intro, .auth-note { color: var(--fg2); line-height: 1.7; }
-  .auth-intro { margin-bottom: var(--space-6); }
-  .auth-input { display: flex; border: 1px solid var(--line2); border-radius: var(--radius-md); margin-top: var(--space-2); }
-  .auth-input:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
-  .auth-input input { width: 100%; min-width: 0; padding: var(--space-3); background: transparent; border: 0; border-radius: var(--radius-md); }
-  .auth-input input:focus-visible { outline: none; }
-  .auth-input .ui-button { flex-shrink: 0; align-self: center; }
-  .auth-error { min-height: 1.5em; color: var(--t-red); margin: var(--space-3) 0; }
-  .auth-main #login-submit { width: 100%; display: flex; justify-content: center; min-height: 48px; }
-  .auth-note { margin-top: var(--space-5); font-size: var(--text-secondary); }
-  @media (max-width: 480px) { .auth-brand { padding: var(--space-4) var(--space-5); } .auth-main { margin-top: var(--space-7); } }
+  .auth-page {
+    min-height: 100dvh;
+    overflow: auto;
+    font-size: var(--text-interface);
+    background: var(--side);
+  }
+  .auth-brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-5) var(--space-6);
+    border-bottom: 1px solid var(--line);
+    font: 600 var(--type-section) var(--serif);
+  }
+  .auth-logo {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    background: var(--mark);
+    color: var(--mark-fg);
+  }
+  /* One raised card on the warm page, like the dialogs inside the app. */
+  .auth-main {
+    width: min(100% - 32px, 448px);
+    margin: clamp(48px, 12vh, 128px) auto 48px;
+    padding: var(--space-6);
+    background: var(--surface-raised);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-pop);
+  }
+  .auth-main h1 {
+    font: var(--title-weight) var(--type-page) / var(--lh-heading)
+      var(--title-face);
+    margin: 0 0 var(--space-4);
+    text-wrap: balance;
+  }
+  .auth-intro,
+  .auth-note {
+    color: var(--fg2);
+    line-height: 1.7;
+  }
+  .auth-intro {
+    margin-bottom: var(--space-6);
+  }
+  .auth-input {
+    display: flex;
+    border: 1px solid var(--line3);
+    border-radius: var(--radius-sm);
+    margin-top: var(--space-2);
+    background: var(--surface);
+    transition:
+      border-color var(--dur-1),
+      box-shadow var(--dur-1);
+  }
+  .auth-input:focus-within {
+    border-color: var(--focus);
+    box-shadow: 0 0 0 3px var(--sel);
+  }
+  .auth-input input {
+    width: 100%;
+    min-width: 0;
+    padding: var(--space-3);
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-sm);
+    font: inherit;
+    color: var(--fg);
+  }
+  .auth-input input:focus-visible {
+    outline: none;
+  }
+  .auth-input .ui-button {
+    flex-shrink: 0;
+    align-self: center;
+  }
+  .auth-error {
+    min-height: 1.5em;
+    color: var(--t-red);
+    margin: var(--space-3) 0;
+  }
+  .auth-main #login-submit {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    min-height: 40px;
+  }
+  .auth-note {
+    margin-top: var(--space-5);
+    font-size: var(--text-secondary);
+  }
+  @media (max-width: 480px) {
+    .auth-brand {
+      padding: var(--space-4) var(--space-5);
+    }
+    .auth-main {
+      margin-top: var(--space-6);
+      padding: var(--space-5);
+    }
+  }
 }

@@ -31,7 +31,8 @@
     border-radius: var(--radius-md);
   }
   .sample-article h2 {
-    font: 600 32px/1.25 var(--serif);
+    font: var(--title-weight) var(--type-page) / var(--lh-heading)
+      var(--title-face);
   }
   .sample-article > p:first-child {
     color: var(--fg2);
@@ -50,9 +51,6 @@
     }
     .sample-article {
       padding: var(--space-4);
-    }
-    .sample-article h2 {
-      font-size: 26px;
     }
   }
 }
