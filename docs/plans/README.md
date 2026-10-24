@@ -6,9 +6,6 @@
 
 ## 活动索引
 
-- [计划14：Web设计改版](2026-10-23-web-design-overhaul/README.md)。
-- [计划15：文档体系整理](2026-10-23-docs-consolidation/README.md)。
-
 已完成、取消或被替代的计划从[历史索引](../archive/README.md)查找；验收数字、授权记录与残余事项留在各计划中。
 
 ## 1. 计划与其他文档的职责

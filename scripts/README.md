@@ -14,7 +14,7 @@
 
 ## 内容入口
 
-- [check-docs.mjs](check-docs.mjs)：独立运行 `node scripts/check-docs.mjs`；检查现行文档头部、本地链接、Markdown锚点和明确的归档现行依据引用；状态拒绝泛化套话，负责主题不能逐字复述标题（目录 README 与 Provider Notes 除外）。计划14范围单列报告；源码README按本轮约束只检查链接和源码树边界。未接入Quick。
+- [check-docs.mjs](check-docs.mjs)：独立运行 `node scripts/check-docs.mjs`；检查现行文档头部、本地链接、Markdown锚点和明确的归档现行依据引用；状态拒绝泛化套话，负责主题不能逐字复述标题（目录 README 与 Provider Notes 除外）。源码 README 只检查链接和源码树边界。未接入Quick。
 
 - [prune-retired-runtime.mjs](prune-retired-runtime.mjs)：正式 build 在 TypeScript 编译后只移除已退役 `parsing/service` 与 `parsing/publication` 的 JS、声明及 map 文件；拒绝输出目录/目标文件符号链接，保留其它产物。安装包回归验证旧模块不会经 dist glob 再次分发。
 

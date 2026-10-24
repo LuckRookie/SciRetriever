@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：Full、截图对照、文档同步与部署
-状态：In progress；7.1–7.5 已完成，4174 已部署并通过只读冒烟；7.6 等待提交清单确认，7.7 待收尾
+状态：Done
 
 ## Outcome
 
@@ -27,8 +27,8 @@ worker 执行验收与部署；Claude 核对文档、截图与最终 diff，给�
   - 字体许可证与依赖说明。
 - [x] **7.4 部署**〔须 G-deploy〕：确认 4174 没有进行中或排队的任务；用现有停服脚本停服；构建；用现有启动脚本重启；登录密码不变且不读取、不输出。
 - [x] **7.5 只读冒烟**：桌面与 390 px 各走一遍侧栏全部入口、文献库筛选与排序、打开一篇有 PDF 的文献、命令面板；不新建文件夹、不写阅读历史，除非 Owner 另行同意。记录首屏中文字体下载量与打开文献耗时。
-- [ ] **7.6 提交**〔须 G-commit〕：按块分组提交，交 Owner 确认清单后执行，不 push。
-- [ ] **7.7 计划收尾**：更新根 README 的最终 revision、证据、残余风险与恢复方式；状态改为 Completed，按仓库约定归档。
+- [x] **7.6 提交**〔须 G-commit〕：按块分组提交，交 Owner 确认清单后执行，不 push。
+- [x] **7.7 计划收尾**：更新根 README 的最终 revision、证据、残余风险与恢复方式；状态改为 Completed，按仓库约定归档。
 
 ## 验证
 
@@ -91,3 +91,13 @@ Full 通过或已按规则记录；部署与冒烟完成；文档一致；计划
 - 1440/390 两宽度各走完全部侧栏入口、任务下 Agent、筛选排序、PDF 和双快捷键命令面板，32 场景通过。两次 reading-open 在浏览器中拦截；文献 35177、阅读历史 8、任务 8、文件夹/成员 0，前后不变；阅读历史内容 hash 及 schema hash 也不变。页面错误/HTTP 5xx/加工写请求/外部请求均 0；PDF 首页 4898 个文字字符且画布非空，出字 1412.49/1063.87 ms；首屏中文字体响应体 865456/742228 B。测量为每宽度一次 loopback 冷上下文，不宣称公网/p95 性能。
 - 证据：本机 `sandbox/reports/2026-10-24-plan14-07/deploy-e/` 的 Full、冻结、部署、资源核对、smoke.json 和 32 张截图；完整报告 `report-e.md`。旧资源探针漏根页面初始化导致 401、就绪探针误用 status 属性两次脚本错误均保留并纠正，不是产品失败，未追加 Full 或改源码。
 - 7.1/7.4/7.5 勾选；7.6 保持未勾选，仅生成 `commit-plan.md` 待 Owner 确认。没有暂存/commit/push、没有修改正式库结构/配置、没有调用 Provider/模型/MinerU。计划 16 排除；6.3 真实获取仍待 G-real，7.7 最终收尾/归档尚未执行。
+
+### 2026-10-24 · 7.6 分组提交完成（本条未提交）
+
+- Owner 已明确授权 G1 → G2 → G3 三次提交到本地 master，排除计划 16，不 push；7.7 交 Claude。提交前 516 条工作区状态/hash 和三个 partial 候选全部与清单一致，无额外改动；每组暂存前及 commit 前再次核对，index 和提交树字节均符合清单，工作区原文未覆盖。
+- G1 `d403de7609bd340569c74b599dea2db1bb5ca720`：`docs: consolidate documentation ownership and retired archives`；清单 158 路径，Git 识别 14 对归档迁移后为 144 files changed、2928 insertions、3207 deletions。
+- G2 `602d97df067280a6bb3bbb91766acb8b91d528e7`：`feat(web): ship the redesigned workbench and backend support`；332 files changed、13265 insertions、1846 deletions。
+- G3 `fa8c84f30787167b5293bcc969d33f9edc668cee`：`docs(web): finalize workbench design and rollout evidence`；20 files changed、598 insertions、340 deletions。
+- 三条提交均使用清单草稿并附 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`。两个混合文件只更新 index；三个提交中均无计划 16 文件、§8 草案或索引入口。提交后 status 只剩计划 16 的 7 个文件和两个混合文档的计划 16 差异，暂存为空。
+- 提交后 `pnpm quick` 退出 0；`node scripts/check-docs.mjs` 退出 0：224 documents、0 errors、0 Plan 14 findings（44 protected files）、77 source README header exemptions。本轮未报告计划 16 链接错误，未修改它们；没有运行 Full。原始日志、逐组 hash、完整 git show --stat 和最终状态见本机 `sandbox/reports/2026-10-24-plan14-07/commit-f/`。
+- 7.6 已勾选；本条和根 README 交接按授权留在工作区，不做第四次提交。7.7 由 Claude 执行。未 push、未改源码、未操作 4174/正式库/真实服务或读取个人配置/凭据。

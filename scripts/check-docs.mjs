@@ -3,12 +3,6 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const posix = (value) => value.split(sep).join("/");
-const protectedPath = (path) =>
-  path.startsWith("apps/web/") ||
-  path.startsWith("docs/architecture/web/") ||
-  path.startsWith("docs/plans/2026-10-23-web-design-overhaul/") ||
-  path === "docs/guides/web-workbench.md" ||
-  path === "docs/architecture/decisions/0038-web-design-basis.md";
 const sourceReadme = (path) =>
   path.includes("/src/") && path.endsWith("/README.md");
 
@@ -184,8 +178,7 @@ export async function checkDocuments(root) {
     issues = [],
     cache = new Map();
   let checked = 0,
-    sourceExceptions = 0,
-    protectedFiles = 0;
+    sourceExceptions = 0;
   const read = async (path) => {
     if (!cache.has(path)) cache.set(path, await readFile(path, "utf8"));
     return cache.get(path);
@@ -200,10 +193,9 @@ export async function checkDocuments(root) {
       throw error;
     }
     checked++;
-    if (protectedPath(path)) protectedFiles++;
     const issue = (code, line, detail) =>
       issues.push({
-        severity: protectedPath(path) ? "plan14" : "error",
+        severity: "error",
         file: path,
         line,
         code,
@@ -337,9 +329,7 @@ export async function checkDocuments(root) {
   return {
     checked,
     sourceExceptions,
-    protectedFiles,
-    errors: issues.filter((i) => i.severity === "error"),
-    plan14: issues.filter((i) => i.severity === "plan14"),
+    errors: issues,
   };
 }
 
@@ -353,12 +343,12 @@ if (
   if (process.argv.includes("--json"))
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else {
-    for (const item of [...result.errors, ...result.plan14])
+    for (const item of result.errors)
       process.stdout.write(
         `${item.severity}: ${item.file}:${item.line} ${item.code}: ${item.detail}\n`,
       );
     process.stdout.write(
-      `Checked ${result.checked} documents; ${result.errors.length} errors; ${result.plan14.length} Plan 14 findings (${result.protectedFiles} protected files); ${result.sourceExceptions} source README header exemptions.\n`,
+      `Checked ${result.checked} documents; ${result.errors.length} errors; ${result.sourceExceptions} source README header exemptions.\n`,
     );
   }
   if (result.errors.length) process.exitCode = 1;

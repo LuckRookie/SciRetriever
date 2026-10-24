@@ -224,3 +224,18 @@ archive/
 !/docs/archive/2026-10-24-docs-consolidation/docs/architecture/
 /docs/archive/2026-10-24-docs-consolidation/docs/architecture/*
 !/docs/archive/2026-10-24-docs-consolidation/docs/architecture/evolution-map.md
+
+# Web design overhaul (plan 14) and docs consolidation (plan 15), archived on 2026-10-24; exact files only.
+!/docs/archive/2026-10-23-web-design-overhaul/
+/docs/archive/2026-10-23-web-design-overhaul/*
+!/docs/archive/2026-10-23-web-design-overhaul/README.md
+!/docs/archive/2026-10-23-web-design-overhaul/01-commit-baseline.md
+!/docs/archive/2026-10-23-web-design-overhaul/02-design-samples.md
+!/docs/archive/2026-10-23-web-design-overhaul/03-foundation.md
+!/docs/archive/2026-10-23-web-design-overhaul/04-structure.md
+!/docs/archive/2026-10-23-web-design-overhaul/05-pages.md
+!/docs/archive/2026-10-23-web-design-overhaul/06-backend-followups.md
+!/docs/archive/2026-10-23-web-design-overhaul/07-acceptance.md
+!/docs/archive/2026-10-23-docs-consolidation/
+/docs/archive/2026-10-23-docs-consolidation/*
+!/docs/archive/2026-10-23-docs-consolidation/README.md
