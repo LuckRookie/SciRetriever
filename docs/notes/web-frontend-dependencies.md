@@ -1,5 +1,9 @@
 # Web 前端框架依赖与兼容性
 
+类型：外部事实
+负责：前端框架候选版本、许可与 CSP 兼容事实
+状态：现行
+
 2026-10-19 核查并安装，**当前锁定依赖；整站及最终便携包验收完成**。
 
 本文配合 [ADR 0036](../architecture/decisions/0036-react-web-frontend.md)与 [Web 体验计划 02](../archive/2026-10-19-web-experience/02-architecture-and-scaffold.md)使用。
@@ -9,7 +13,7 @@
 - 下表体积为各库选定入口的独立 esbuild 生产 bundle（包含共享/peer 依赖），**不能相加**，也不能替代最终 Vite 首屏体积。
 - CSP 已完成真实策略下的依赖最小示例；便携包生产入口的登录、库、PDF、全文和提取页也已在同一策略下验证。
 
-阅读渲染相关的依赖（PDF.js、Marked、KaTeX、fflate、@noble/hashes）继续由 [Web 阅读渲染依赖](web-reading-dependencies.md)维护，本文不重复。
+阅读渲染相关的依赖（PDF.js、Marked、KaTeX、fflate、@noble/hashes）继续由 [Web 阅读渲染依赖](web-reading-dependencies.md)维护；随包字体的来源、版本与许可证由[字体说明](../../apps/web/src/app/styles/fonts/README.md)维护，本文不重复。
 
 ## 选版规则
 

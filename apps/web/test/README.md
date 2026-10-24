@@ -1,5 +1,9 @@
 # Web 回归测试
 
+类型：代码导航
+负责：Web 回归测试
+状态：现行
+
 保存 界面状态、页面交互和 loopback Chromium 旅程 的可重复离线回归。测试以 \*.test.ts 命名，fixture/helper 与测试就近存放。
 
 `next-remote-login.test.ts` 通过仅 loopback 的 fixture 代理，让 Chromium 以普通 HTTP IP origin 访问真实工作台，验证登录、深链接、保存视图、持久任务、非 secure-context API、退出和重新访问。代理只允许测试 origin，不访问外部服务。

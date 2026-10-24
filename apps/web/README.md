@@ -1,12 +1,16 @@
 # SciRetriever Web 工作台
 
+类型：代码导航
+负责：Web 工作台的源码结构与构建
+状态：现行
+
 本目录提供以文献库为核心的人类界面、独立只读/维护页面和合成预览。正式入口为 `sciretriever web`，默认监听 `0.0.0.0:4174`，所有连接统一输入密码或启动时输出的 API key。默认存储在 `~/.sciretriever/`；自定义路径优先，修改后重启生效，不自动搬迁已有库。详见[Web 使用指南](../../docs/guides/web-workbench.md)。
 
 ## 当前实施状态
 
 正式 `/` 已使用 [src/app/](src/app/README.md) 中的 React 工作台。静态资源使用 `/assets/`，维护服务保留 `/query`。迁移期 `/next` 入口、旧 URL 别名与旧偏好兼容已经取消，界面只使用当前 React 路由和偏好。登录页、独立查询/维护与 4173 合成样本都使用同一 React 工程，各自认证和能力边界保持。Owner 已确认本版定稿；最终 Full 与离线安装结果见[Web 体验计划](../../docs/archive/2026-10-19-web-experience/README.md)。
 
-新界面以 React、React Aria、Motion、TanStack Query/Virtual/Table 和自有 CSS 实现，Vite 生成离线资源。Source Sans 3 / Source Serif 4 拉丁字体随包发布，中文使用本机字体回退，不加载 CDN；许可证、版本与 CSP 结论见[前端依赖说明](../../docs/notes/web-frontend-dependencies.md)。`script-src 'self'`、`style-src 'self'` 保持，不注入运行时 `<style>`。
+新界面以 React、React Aria、Motion、TanStack Query/Virtual/Table 和自有 CSS 实现，Vite 生成离线资源。Source Sans 3 / Source Serif 4 与思源黑体、思源宋体随包发布，工作台与登录页都使用，不加载 CDN；字体来源与许可证见[字体说明](src/app/styles/fonts/README.md)，其它依赖的许可证、版本与 CSP 结论见[前端依赖说明](../../docs/notes/web-frontend-dependencies.md)。界面规则见 [Web 设计](../../docs/architecture/web/README.md)。`script-src 'self'`、`style-src 'self'` 保持，不注入运行时 `<style>`。
 
 布局与视觉以[设计内核与页面规格](../../docs/architecture/web/README.md)为准。阅读工具栏、分层信息、证据预览和公共控件按 2026-10-19 的 G4/G5 确认调整。[PRODUCT.md](PRODUCT.md) 与 [.impeccable/config.json](.impeccable/config.json) 是设计工作上下文，不替代需求、ADR 或当前行为指南，也不保存业务数据或凭据。
 
@@ -16,7 +20,7 @@
 | ----------------------------------------- | ----------------------------------------------------------------------------------- |
 | [src/app/](src/app/README.md)             | React 数据层、应用壳、共享组件、动效和功能页面；只持有展示/草稿，不产生第二套库事实 |
 | [src/reading/](src/reading/README.md)     | PDF.js、Markdown/KaTeX、固定来源/字节验证、有界续读与会话位置；通过 ref 接入 React  |
-| [entry/](entry/README.md)                   | React 主入口、登录、样本 HTML 和受控静态样式                                        |
+| [entry/](entry/README.md)                 | React 主入口、登录、样本 HTML 和受控静态样式                                        |
 | [public/](public/README.md)               | 阅读器兼容构建所需的第三方许可源文件                                                |
 | `src/browser-platform.ts`                 | 普通 HTTP 下的明确复制和安全随机 ID 适配                                            |
 | `src/preview-server.ts`、`src/preview.ts` | 只读合成样本服务器及启动/停止                                                       |

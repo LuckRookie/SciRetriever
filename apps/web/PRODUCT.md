@@ -52,7 +52,7 @@ SciRetriever 为科研 Agent 和人提供同一逻辑文献库中的元数据、
 
 设计依据见 [ADR 0038](../../docs/architecture/decisions/0038-web-design-basis.md)，视觉规则与页面排布分别见[设计内核](../../docs/architecture/web/design-core.md)与[页面规格](../../docs/architecture/web/page-specs.md)。具体基准统一见[当前 Web 设计说明](../../docs/architecture/web/README.md)，不退回早期三栏线框或任务工作台方案。
 
-Owner 允许蓝白、墨绿、暖白等色系切换；主题扩展遵循同一已确认布局，默认设计及适用边界以 ADR 0032 和当前设计说明为准。本文件不另定色值、字体、间距或组件规范。
+Owner 允许蓝白、墨绿、暖白等色系切换；主题扩展遵循同一已确认布局，默认设计及适用边界以 [ADR 0038](../../docs/architecture/decisions/0038-web-design-basis.md) 和[设计内核](../../docs/architecture/web/design-core.md)为准。本文件不另定色值、字体、间距或组件规范。
 
 ## Evidence on Hand
 

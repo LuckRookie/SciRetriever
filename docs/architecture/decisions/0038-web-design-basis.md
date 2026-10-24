@@ -1,6 +1,9 @@
 # ADR 0038：Web 的定位与设计依据
 
-- Status: Accepted（2026-10-23；Owner 同意设立，正文由负责产品设计的 Claude 起草）
+类型：决策（ADR）
+负责：Web 的定位与设计依据
+状态：Accepted（2026-10-23；Owner 同意设立，正文由负责产品设计的 Claude 起草）
+
 - Date: 2026-10-23
 - Supersedes in part: [ADR 0032](0032-library-centered-web-workspace.md) 中以 10-15 HTML 原型为布局与视觉依据的表述（背景第 3 段、第 2 节标题、“对既有决策的影响”中的视觉基准条），以及第 8 节第 1、2、5、7、10 条的页面级细节
 - Related: [ADR 0033](0033-machine-interfaces-cover-web-capabilities.md)、[ADR 0036](0036-react-web-frontend.md)、[设计内核](../web/design-core.md)、[页面规格](../web/page-specs.md)
