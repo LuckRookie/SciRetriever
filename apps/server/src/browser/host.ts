@@ -21,6 +21,7 @@ import {
   type BrowserPageApplyResult,
 } from "./page-runtime.js";
 import type { BrowserArticleSessionIdentity } from "./article-session.js";
+import { createLogger } from "../logging/index.js";
 import {
   BrowserCdpOwner,
   type BrowserOwnedRequest,
@@ -538,9 +539,7 @@ export class BrowserHost {
         retryNavigation: async (identity, url) => {
           const target = this.pageTargets.get(identity.page_id);
           const current = target ? this.resolveOwnership(target) : null;
-          const page = this.pages.get(identity.page_id);
           if (
-            !page ||
             !current ||
             current.session_id !== identity.session_id ||
             current.operation_id !== identity.operation_id ||
@@ -551,7 +550,7 @@ export class BrowserHost {
             !this.pageSessions.get(identity.page_id)?.networkAllowed
           )
             throw new BrowserHostError();
-          await this.navigatePage(page, url, false);
+          await this.cdp!.replayNavigation(identity, url);
         },
         navigationRetryFailed: (identity) =>
           this.options.navigationRetryFailed?.(identity),
@@ -614,7 +613,7 @@ export class BrowserHost {
       });
       this.context.on("page", (page) => {
         void this.trackPage(page).catch(() => {
-          if (!this.closing) this.failure = "page";
+          if (!this.closing) this.pageTrackingFailed();
         });
       });
       for (const page of this.context.pages()) await this.trackPage(page);
@@ -1259,6 +1258,13 @@ export class BrowserHost {
     this.tracking.set(page, tracked);
     return tracked;
   }
+  private pageTrackingFailed(): void {
+    this.failure = "page";
+    createLogger("browser").warn("Browser page tracking failed", {
+      phase: "popup-track",
+      cause_code: "page-tracking-failed",
+    });
+  }
   private async trackPageInternal(page: Page): Promise<string> {
     const protocol = await page.context().newCDPSession(page);
     let targetId: string;
@@ -1342,7 +1348,7 @@ export class BrowserHost {
     });
     page.on("popup", (popup) => {
       void this.trackPage(popup).catch(() => {
-        if (!this.closing) this.failure = "page";
+        if (!this.closing) this.pageTrackingFailed();
       });
     });
     page.on("crash", () => {

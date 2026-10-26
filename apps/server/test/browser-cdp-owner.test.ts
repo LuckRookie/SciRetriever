@@ -2329,3 +2329,94 @@ it("ends IO activity before completed calls stopNetwork while local validation c
   await dispatcher.settle("session-a");
   owner.dispose();
 });
+
+it.each(["current", "cancelled", "replaced", "different-url"] as const)(
+  "replays only the bound popup recovery through its CDP session (%s)",
+  async (change) => {
+    const abort = new AbortController();
+    const replayed = deferred<void>();
+    let recovered: BrowserOwnedRequest | undefined;
+    const failed = vi.fn();
+    const { owner, protocol, pages } = await fixture({
+      beforeRequest: async (binding, _url, drain) =>
+        binding.request_id === "popup-first" ? drain() : undefined,
+      retryNavigation: async (binding, url) => {
+        recovered = binding;
+        if (change === "cancelled") abort.abort();
+        if (change === "replaced")
+          pages.set("popup", { ...pages.get("popup")!, generation: 2 });
+        try {
+          await owner.replayNavigation(
+            binding,
+            change === "different-url" ? url + "/other" : url,
+          );
+        } finally {
+          replayed.resolve();
+        }
+      },
+      navigationRetryFailed: failed,
+    });
+    pages.set("a", { ...pages.get("a")!, signal: abort.signal });
+    try {
+      protocol.attach("popup", "a");
+      await owner.ready("popup");
+      protocol.request("old", "a", "Image");
+      await vi.waitFor(() =>
+        expect(
+          protocol.calls.some(
+            (c) =>
+              c.method === "Fetch.continueRequest" &&
+              c.params.requestId === "old",
+          ),
+        ).toBe(true),
+      );
+      protocol.result = (command, params) => {
+        if (
+          command === "Fetch.failRequest" &&
+          params.requestId === "popup-first"
+        )
+          protocol.emit(
+            "Network.loadingFailed",
+            { requestId: "network-popup-first" },
+            "protocol-popup",
+          );
+        if (command === "Page.stopLoading")
+          protocol.emit(
+            "Network.loadingFailed",
+            { requestId: "network-old" },
+            "protocol-a",
+          );
+        return {};
+      };
+      protocol.request(
+        "popup-first",
+        "popup",
+        "Document",
+        "http://127.0.0.1/viewer",
+      );
+      await replayed.promise;
+      if (change === "current") {
+        expect(
+          protocol.calls.filter((c) => c.method === "Page.navigate"),
+        ).toEqual([
+          {
+            method: "Page.navigate",
+            params: { url: "http://127.0.0.1/viewer", frameId: "popup" },
+            session: "protocol-popup",
+          },
+        ]);
+        expect(failed).not.toHaveBeenCalled();
+        await expect(
+          owner.replayNavigation(recovered!, "http://127.0.0.1/viewer"),
+        ).rejects.toBeInstanceOf(BrowserProtocolError);
+      } else {
+        await vi.waitFor(() => expect(failed).toHaveBeenCalledOnce());
+        expect(
+          protocol.calls.filter((c) => c.method === "Page.navigate"),
+        ).toEqual([]);
+      }
+    } finally {
+      owner.dispose();
+    }
+  },
+);

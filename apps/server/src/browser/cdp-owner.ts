@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { open, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { createLogger } from "../logging/index.js";
 import {
   BrowserProtocolError,
   type BrowserProtocol,
@@ -74,6 +75,7 @@ interface NavigationRecovery {
   readonly resolve: () => void;
   readonly reject: (error: Error) => void;
   active: boolean;
+  replayed: boolean;
 }
 export interface BrowserPdfResponse {
   readonly status: number;
@@ -563,6 +565,56 @@ export class BrowserCdpOwner {
   navigationRecoveryRequest(targetId: string): BrowserOwnedRequest | undefined {
     return this.recoveries.get(targetId)?.request;
   }
+  /** Replay only this owner's canceled main GET, before Playwright exposes its Page. */
+  async replayNavigation(
+    identity: BrowserOwnedRequest,
+    url: string,
+  ): Promise<void> {
+    const entry = [...this.recoveries].find(
+      ([, recovery]) =>
+        recovery.active &&
+        !recovery.replayed &&
+        recovery.request === identity &&
+        recovery.url === url,
+    );
+    const target = entry?.[0];
+    const session = target === undefined ? undefined : this.targets.get(target);
+    const current =
+      target === undefined ? null : this.options.resolvePage(target);
+    if (
+      !target ||
+      !session ||
+      !current ||
+      this.closed ||
+      this.destroyedTargets.has(target) ||
+      identity.request_method !== "GET" ||
+      !identity.is_navigation ||
+      identity.signal.aborted ||
+      current.signal.aborted ||
+      current.page_id !== identity.page_id ||
+      current.session_id !== identity.session_id ||
+      current.operation_id !== identity.operation_id ||
+      current.generation !== identity.generation ||
+      current.document_generation !== identity.document_generation
+    )
+      throw new BrowserProtocolError("target-inactive");
+    entry![1].replayed = true;
+    // Fetch interception remains installed: this request must pass admission again.
+    // Do not await Page creation or domain setup; both can require this first response.
+    const result = await this.options.protocol.send(
+      "Page.navigate",
+      { url, frameId: target },
+      session,
+      undefined,
+      identity.signal,
+    );
+    if (
+      result.errorText &&
+      result.isDownload !== true &&
+      !this.transferLive(identity.session_id)
+    )
+      throw new BrowserProtocolError();
+  }
   canRetryNavigation(
     targetId: string,
     generation: number,
@@ -814,6 +866,8 @@ export class BrowserCdpOwner {
     let identity: BrowserOwnedRequest | undefined;
     let record: RequestRecord | undefined;
     let recovery: NavigationRecovery | undefined;
+    let recoveryPhase: "navigation-drain" | "navigation-replay" =
+      "navigation-drain";
     try {
       const networkId =
         params.networkId === undefined ? undefined : text(params.networkId);
@@ -957,6 +1011,7 @@ export class BrowserCdpOwner {
             url,
             completed: completion.completed,
             active: true,
+            replayed: false,
             resolve: () => {
               created.active = false;
               completion.resolve();
@@ -997,6 +1052,7 @@ export class BrowserCdpOwner {
       if (admission?.kind === "retry-navigation") {
         if (!recovery || !this.options.retryNavigation)
           throw new BrowserProtocolError();
+        recoveryPhase = "navigation-replay";
         await this.options.retryNavigation(identity, url);
         recovery.resolve();
         return;
@@ -1022,6 +1078,14 @@ export class BrowserCdpOwner {
       });
     } catch (error) {
       if (recovery) {
+        createLogger("browser").warn("Browser navigation recovery failed", {
+          phase: recoveryPhase,
+          cause_code:
+            error instanceof BrowserProtocolError
+              ? error.reason
+              : "recovery-operation-failed",
+          session_id: identity?.session_id,
+        });
         recovery.reject(
           error instanceof Error ? error : new BrowserProtocolError(),
         );

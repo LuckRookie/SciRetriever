@@ -43,6 +43,17 @@ interface ArticleProjection {
   cleanupFailure: string | null;
 }
 
+function outcomeState(
+  outcome: BrowserArticleCloseOutcome,
+): "finished" | "failed" | "cancelled" {
+  if (outcome.kind === "cancelled") return "cancelled";
+  return outcome.kind === "published" ||
+    outcome.code === "delivered" ||
+    outcome.code === "exhausted"
+    ? "finished"
+    : "failed";
+}
+
 /** Projects the owning articles; a viewer's selection never determines capture ownership. */
 export class ProductionWorkbenchSession {
   private readonly clients = new Set<string>();
@@ -396,15 +407,7 @@ export class ProductionWorkbenchSession {
       record.cleanupFailure ??= outcome.code;
     record.outcome ??= Object.freeze({ ...outcome });
     record.activity.close(record.outcome);
-    record.session?.finishProduction(
-      record.outcome.kind === "cancelled"
-        ? "cancelled"
-        : record.outcome.kind === "retained" &&
-            record.outcome.code !== "delivered" &&
-            record.outcome.code !== "exhausted"
-          ? "failed"
-          : "finished",
-    );
+    record.session?.finishProduction(outcomeState(record.outcome));
     this.pendingCandidates.delete(sessionId);
   }
 
@@ -515,11 +518,13 @@ export class ProductionWorkbenchSession {
         record.outcome ??= Object.freeze({ ...outcome });
       }
       session.finishProduction(
-        outcome?.kind === "cancelled" || request.signal?.aborted
-          ? "cancelled"
-          : failed
-            ? "failed"
-            : "finished",
+        record.outcome
+          ? outcomeState(record.outcome)
+          : request.signal?.aborted
+            ? "cancelled"
+            : failed
+              ? "failed"
+              : "finished",
       );
     };
     return {
@@ -640,6 +645,8 @@ export class ProductionWorkbenchSession {
     if (selected?.session) {
       const view: WorkbenchView = {
         ...selected.session.view(),
+        // Cleanup aborts revoke work; only the article owner decides its outcome.
+        ...(selected.outcome ? { state: outcomeState(selected.outcome) } : {}),
         sessions: summaries,
         session_phase: this.articlePhase(selected),
         session_outcome: selected.outcome,
@@ -648,6 +655,7 @@ export class ProductionWorkbenchSession {
           : {}),
       };
       if (view.article_id !== this.articleId) return view;
+      if (selected.outcome) return { ...view, operation_feedback };
       if (this.phase === "ended")
         return { ...view, state: this.operationState, operation_feedback };
       if (this.operationState === "cancelled")
@@ -689,15 +697,9 @@ export class ProductionWorkbenchSession {
       session_id: projectionId,
       article_id: projectionArticleId,
       state: selected
-        ? selected.outcome?.kind === "cancelled"
-          ? "cancelled"
-          : selected.outcome?.kind === "published" ||
-              (selected.outcome?.kind === "retained" &&
-                ["delivered", "exhausted"].includes(selected.outcome.code))
-            ? "finished"
-            : selected.outcome
-              ? "failed"
-              : "agent-running"
+        ? selected.outcome
+          ? outcomeState(selected.outcome)
+          : "agent-running"
         : this.operationState,
       control: {
         workspace_id: projectionId,

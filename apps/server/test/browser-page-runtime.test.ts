@@ -7,6 +7,7 @@ import {
   beforeEach,
   afterEach,
   describe,
+  vi,
   expect,
   it,
 } from "vitest";
@@ -210,6 +211,47 @@ describe("visible frame feedback on real loopback Chromium", () => {
       args: ["--no-proxy-server", "--disable-background-networking"],
     });
   }, 30_000);
+  it.each(["missing", "detached", "hidden", "outside", "replaced"] as const)(
+    "rejects a %s observed control without dispatching input",
+    async (change) => {
+      await page.evaluate(() => {
+        document.body.innerHTML = '<button id="pdf">Download PDF</button>';
+      });
+      const first = await runtime.snapshot();
+      const element = first.elements!.find((e) => e.name === "Download PDF")!;
+      const mouse = vi.spyOn(page.mouse, "click");
+      if (change === "missing") {
+        await page.locator("#pdf").evaluate((e) => e.remove());
+        await runtime.snapshot();
+      } else if (change === "replaced") {
+        await page.locator("#pdf").evaluate((e) => {
+          e.replaceWith(e.cloneNode(true));
+        });
+        await runtime.snapshot();
+      } else if (change === "detached")
+        await page.locator("#pdf").evaluate((e) => e.remove());
+      else
+        await page.locator("#pdf").evaluate((e, change) => {
+          if (change === "hidden") e.style.visibility = "hidden";
+          else {
+            e.style.position = "absolute";
+            e.style.left = "900px";
+          }
+        }, change);
+      await expect(
+        runtime.apply(
+          {
+            kind: "click-element",
+            element_id: element.element_id,
+            revision: 1,
+          },
+          first.document_generation!,
+          () => true,
+        ),
+      ).rejects.toMatchObject({ code: "browser-element-unavailable" });
+      expect(mouse).not.toHaveBeenCalled();
+    },
+  );
   afterAll(async () => {
     await browser?.close();
     if (server)

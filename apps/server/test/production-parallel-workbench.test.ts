@@ -908,3 +908,55 @@ it("projects executed Agent points and original stop text from the owning produc
     await workbench.close();
   }
 });
+
+it.each([
+  [{ kind: "published", receipt_id: "published-fixture" }, "finished"],
+  [{ kind: "retained", code: "browser-page-runtime" }, "failed"],
+  [{ kind: "retained", code: "exhausted" }, "finished"],
+  [{ kind: "cancelled" }, "cancelled"],
+] as const)(
+  "projects the explicit outcome after cleanup abort: %j",
+  async (outcome, state) => {
+    const workbench = new ProductionWorkbenchSession(articleA, undefined);
+    const abort = new AbortController();
+    const incoming = {
+      ...request(articleA, "cleanup-outcome"),
+      signal: abort.signal,
+    };
+    const collaboration = await workbench.open(
+      incoming,
+      page(articleA, 90),
+      Date.now() + 300_000,
+    );
+    const client = workbench.attach();
+    try {
+      abort.abort(); // Scheduler closes every ticket this way, including published ones.
+      await collaboration.beforeClose?.(outcome);
+      collaboration.close(state === "failed", outcome);
+      workbench.removed(incoming.session_identity!.session_id, outcome);
+      const view = parseWorkbenchView(workbench.view(client));
+      expect(view).toMatchObject({
+        state,
+        session_phase: "closed",
+        session_outcome: outcome,
+      });
+      expect(view.sessions?.[0]).toMatchObject({
+        phase: "closed",
+        outcome:
+          outcome.kind === "published"
+            ? { kind: "published", code: "published" }
+            : {
+                kind: "retained",
+                code:
+                  outcome.kind === "cancelled"
+                    ? "browser-flow-cancelled"
+                    : outcome.code,
+              },
+      });
+      expect(view.control.controller_id).toBeNull();
+      expect(view.operation_feedback).toBeDefined();
+    } finally {
+      await workbench.close();
+    }
+  },
+);

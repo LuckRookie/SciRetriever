@@ -3628,3 +3628,134 @@ it.each(["access-unavailable", "no-viable-path"] as const)(
     expect(close).toHaveBeenCalledTimes(1);
   },
 );
+
+it("re-observes an unavailable element, accounts for both calls and delivers the next valid click", async () => {
+  const { BrowserElementUnavailableError } = await import(
+    "../src/browser/page-runtime.js"
+  );
+  await withStore(async (collector) => {
+    const captured = await captureFixture(collector, "reobserved-control");
+    let calls = 0,
+      attempts = 0,
+      ready = false;
+    const driver = cooperativeDriver({
+      action_cooldown_ms: 0,
+      dispatch_tracking: "test-seam",
+      page: {
+        snapshot: async () => ({
+          ...snapshot(attempts),
+          elements: [
+            {
+              element_id: attempts ? "new-id" : "old-id",
+              role: "button",
+              name: "Download PDF",
+              editable: false,
+            },
+          ],
+        }),
+        apply: async (input) => {
+          expect(input.kind).toBe("click-element");
+          if (++attempts === 1)
+            throw new BrowserElementUnavailableError("element-missing");
+          expect(input).toMatchObject({ element_id: "new-id" });
+          ready = true;
+        },
+      },
+      agent: {
+        run: async (turn, signal) => {
+          const hooks = await turn.admitRequest(
+            {
+              session_id: SESSION_ID,
+              request_id: `fake-${++calls}`,
+              purpose: "inference",
+            },
+            signal,
+          );
+          hooks.onDispatched();
+          hooks.onSettled?.();
+          if (calls === 2)
+            expect(turn.feedback?.join(" ")).toContain(
+              "Observe the page again",
+            );
+          const result = await turn.executeAction({
+            kind: "click-element",
+            element_id: turn.observation.elements[0]!.element_id,
+            revision: turn.observation.observation_revision,
+          });
+          expect(result).toMatchObject(
+            calls === 1
+              ? { status: "rejected", code: "browser-element-unavailable" }
+              : { status: "success" },
+          );
+        },
+        record: () => {},
+        close: async () => {},
+      },
+      hasCandidate: () => ready,
+      awaitCandidate: async () => (ready ? captured : null),
+    });
+    try {
+      expect(await driver.step()).toMatchObject({ kind: "waiting" });
+      expect(
+        driver.activity.snapshot().filter((a) => a.kind === "click-element"),
+      ).toHaveLength(0);
+      expect(await driver.step()).toMatchObject({
+        kind: "candidate",
+        candidate: captured.candidate,
+      });
+      expect(driver.clock.snapshot()).toMatchObject({
+        model_calls: 2,
+        actions: 1,
+      });
+      expect(
+        driver.activity.snapshot().filter((a) => a.kind === "click-element"),
+      ).toHaveLength(1);
+    } finally {
+      await driver.close({ kind: "retained", code: "delivered" });
+    }
+  });
+});
+
+it("keeps the model budget when repeatedly rejecting unavailable controls", async () => {
+  const { BrowserElementUnavailableError } = await import(
+    "../src/browser/page-runtime.js"
+  );
+  const driver = cooperativeDriver({
+    max_model_calls: 2,
+    action_cooldown_ms: 0,
+    dispatch_tracking: "test-seam",
+    page: {
+      snapshot: async () => ({
+        ...snapshot(1),
+        elements: [
+          { element_id: "gone", role: "button", name: "PDF", editable: false },
+        ],
+      }),
+      apply: async () => {
+        throw new BrowserElementUnavailableError("element-not-visible");
+      },
+    },
+    decide: async (observation) => ({
+      kind: "click-element",
+      element_id: "gone",
+      revision: observation.observation_revision,
+    }),
+  });
+  try {
+    await driver.step();
+    await driver.step();
+    expect(await driver.step()).toMatchObject({
+      kind: "terminal",
+      result: { code: "browser-flow-budget-exhausted" },
+    });
+    expect(driver.clock.snapshot()).toMatchObject({
+      model_calls: 2,
+      actions: 0,
+    });
+  } finally {
+    await driver.close({
+      kind: "retained",
+      code: "browser-flow-budget-exhausted",
+    });
+  }
+});

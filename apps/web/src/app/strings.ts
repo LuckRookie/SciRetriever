@@ -167,6 +167,9 @@ export function serviceMessage(code: string): string {
           "知识检索索引不可用，请先检查或重建索引。",
         "browser-network-drain-timeout":
           "浏览器网络连接未能及时关闭，请查看服务日志。",
+        "browser-page-runtime":
+          "页面操作没能执行（控件可能已变化或不可见），流程停止。",
+        "browser-navigation-failed": "打开新页面时导航失败，流程停止。",
         "publication-disk-full": "存储空间不足，材料发布未完成。",
         "invalid-request": "请求内容无效，请检查填写的内容。",
         "invalid-input": "输入内容无效，请检查后重试。",

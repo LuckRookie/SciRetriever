@@ -1,4 +1,5 @@
 import { BrowserActivityLog } from "./activity.js";
+import { BrowserElementUnavailableError } from "./page-runtime.js";
 import type {
   DurableCandidate,
   BrowserAgentStopReason,
@@ -1156,6 +1157,23 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       applied = await application;
     } catch (error) {
       if (!current()) return outcome("cancelled", "browser-action-revoked");
+      if (error instanceof BrowserElementUnavailableError) {
+        this.previousObservationIdentity = null;
+        this.previousActionIdentity = null;
+        this.feedback = [
+          "The observed element is no longer actionable (" +
+            error.reason +
+            "). No input was sent. Observe the page again and choose a current visible control; do not replay the old element ID or coordinates.",
+        ];
+        this.phaseValue = "ready";
+        createLogger("browser").warn("Browser action rejected", {
+          phase: "element-check",
+          cause_code: error.reason,
+          code: error.code,
+          session_id: this.session_id,
+        });
+        return outcome("rejected", error.code);
+      }
       if (isStaleActionError(error) || isPageTransitionError(error)) {
         this.previousObservationIdentity = null;
         this.previousActionIdentity = null;

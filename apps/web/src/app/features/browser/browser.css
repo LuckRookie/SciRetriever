@@ -235,6 +235,9 @@
     border-radius: var(--radius-md);
     margin-top: var(--space-3);
   }
+  .browser-frame[data-readonly] {
+    cursor: default;
+  }
   .browser-frame:focus-visible {
     outline: 2px solid var(--focus);
     outline-offset: 3px;

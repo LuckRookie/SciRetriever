@@ -11,6 +11,8 @@
 - [pacing.ts](pacing.ts)：动作节奏与等待。
 - [transfers.ts](transfers.ts)：下载传输管理。
 - [host.ts](host.ts)：浏览器宿主边界。
+- [cdp-owner.ts](cdp-owner.ts)：原始 target/request/文档与传输归属；新窗口导航恢复使用绑定的 CDP session，仍经网络准入，不依赖 Playwright Page 已登记。
+- [page-runtime.ts](page-runtime.ts)：当前页面观察与输入；失效控件以可恢复错误拒绝，由文章流程重新观察，失败输入不记作已执行动作。
 
 ## 放置边界
 

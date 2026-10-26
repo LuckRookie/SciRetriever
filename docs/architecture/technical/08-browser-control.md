@@ -41,6 +41,8 @@
 
 所选会话的可选 `actions` 返回最近 100 条实际执行完成的输入与生命周期事件，`seq` 单调递增，`at` 为 UTC，`actor` 为 agent / human / platform。动作名沿用输入类型，并加入 `navigation`、`tab-switch`、`download-started`、`download-failed`、`validation-passed`、`validation-failed`、`flow-stopped`；文件验收通过不等于文献已发布。`label` 最多 512 字符，URL 不含 userinfo、query 或 fragment，输入内容不进入记录。点击 `point` 来自执行时的实际 CSS 坐标或元素框中心，未知则省略；它与当时的 `viewport`、`frame_seq`、`observation_revision`、`page_id`、`document_generation` 一起返回。前端只在这些绑定与所展示画面匹配时绘制指针，不能把旧动作坐标套到新的页面或视口上。导航/页签事件由观察变化产生；这部分记录 actor=platform，不推断哪个主体触发了页面脚本。合成工作台与生产文章流程复用同一投影，新 parser 同时接受没有这些字段的旧 payload。
 
+文章结束状态以 owner 的明确 outcome 为准：published 为 finished，失败 retained 为 failed，只有显式取消才是 cancelled；资源清理使用的 abort 信号不覆盖已有结果。已观察控件缺失、脱离 DOM、不可见或移出视口时，当前动作被拒绝并要求重新观察，失败动作不进入已执行动作记录，模型与活跃时间预算继续累计。日志仅记录 element-check、popup-track、navigation-drain、navigation-replay 等阶段和稳定原因，不记录页面内容、请求参数或凭据。
+
 ### 2.2 浏览器实现
 
 #### 2.2.1 当前 TypeScript surface 与接线状态
@@ -86,6 +88,8 @@ Renderer的Network终态与target销毁只作为原请求的精确终态证据�
 整篇会话确认关闭才回收意图，关闭后迟到writer执行取消/退役。初始open在导航前接通单文章取消信号，
 预算终止不会误标为用户取消，也不会取消其它文章。完整关闭由实际page.close结束页面，同时独立结算writer/IO/worker；
 连接失败重试只允许精确已准入且有失败证据的同URL GET，重定向到其它地址失败不能授权重放原始DOI。
+
+新窗口首导航在旧网络清理后需要恢复时，由 CDP owner 在绑定的 target/session 上重放精确的 GET，经过原有 Fetch 网络准入；不等待可能依赖首响应才能登记的 Playwright Page。恢复资格一次性消费，并检查文章 operation/session/generation、文档代次及取消状态，Page 到达后再接通观察 runtime。原生下载与在途 PDF writer 仍使用原有独立归属和结算路径。
 
 实际本机Cloak测试覆盖正式Application、popup归属、并发、资源/取消和文件发布；真实出版社测试独立记录于
 2026-10-07最终验收（本地文件：`sandbox/reports/browser-final-acceptance-2026-10-07.md`，不随仓库分发）。单次成功不代表所有文章都有订阅权限，

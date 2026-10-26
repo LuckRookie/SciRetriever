@@ -45,3 +45,5 @@ HTTP 关闭先取消并排空正在处理的请求；生产组装随后停止 du
 机器连接使用现有 HTTP 授权边界，`POST /api/clients/disconnect` 需要当前 Cookie、client_id 与 CSRF，显式撤销连接；仍控制页面时按既有 detach/pause 政策处理。该客户端的事件流随撤销结束。
 
 会话摘要带获取 operation、冻结标题、排队/结束时间与结束结果；所选会话的 `actions` 保留最近 100 条动作。生产与合成会话复用 Browser 的内存投影，点击坐标绑定执行时画面，不把输入内容或 URL 查询参数送入动作记录。
+
+正式会话的结束状态按文章 owner 的 outcome 投影；清理使用的 abort 不覆盖已发布或失败结果，只有明确取消才显示 cancelled。

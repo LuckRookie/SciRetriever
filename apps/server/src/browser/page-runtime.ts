@@ -60,6 +60,20 @@ export class BrowserPageStaleActionError extends BrowserPageRuntimeError {
     this.name = "BrowserPageStaleActionError";
   }
 }
+/** A previously observed control is no longer actionable; no input was sent. */
+export class BrowserElementUnavailableError extends BrowserPageRuntimeError {
+  override readonly code = "browser-element-unavailable";
+  constructor(
+    readonly reason:
+      | "element-missing"
+      | "element-detached"
+      | "element-not-visible"
+      | "element-outside-viewport",
+  ) {
+    super();
+    this.name = "BrowserElementUnavailableError";
+  }
+}
 /** A document changed while a snapshot was settling; the caller should re-observe. */
 export class BrowserPageTransitionError extends BrowserPageRuntimeError {
   override readonly code = "browser-page-transition" as const;
@@ -531,6 +545,25 @@ export class BrowserPageRuntime {
     if (this.coordinateInput) await this.coordinateInput(run);
     else await run();
   }
+  private elementReadFailed(error: unknown): never {
+    if (this.crashed) throw new BrowserPageCrashedError();
+    if (this.page.isClosed()) throw new BrowserPageClosedError();
+    if (error instanceof Error) {
+      if (
+        /Execution context was destroyed|Cannot find context|frame was detached/iu.test(
+          error.message,
+        )
+      )
+        throw new BrowserPageTransitionError();
+      if (
+        /JSHandle is disposed|Element is not attached to the DOM/iu.test(
+          error.message,
+        )
+      )
+        throw new BrowserElementUnavailableError("element-detached");
+    }
+    throw error;
+  }
   async apply(
     value: OperatorInput,
     expectedGeneration: number,
@@ -670,25 +703,36 @@ export class BrowserPageRuntime {
       case "click-element":
       case "type-text": {
         const element = this.elements.get(input.element_id);
-        if (!element) throw new BrowserPageRuntimeError();
-        const box = await element.boundingBox();
+        if (!element)
+          throw new BrowserElementUnavailableError("element-missing");
+        const box = await element
+          .boundingBox()
+          .catch((error: unknown) => this.elementReadFailed(error));
         const viewport = this.viewport;
-        const allowed = await element.evaluate(
-          (node) =>
-            node instanceof Element &&
-            node.isConnected &&
-            node.getAttribute("type") !== "file",
-        );
+        const allowed = await element
+          .evaluate((node) => ({
+            connected: node instanceof Element && node.isConnected,
+            forbidden:
+              node instanceof Element && node.getAttribute("type") === "file",
+            visible:
+              node instanceof Element &&
+              getComputedStyle(node).visibility === "visible" &&
+              getComputedStyle(node).display !== "none",
+          }))
+          .catch((error: unknown) => this.elementReadFailed(error));
+        if (allowed.forbidden) throw new BrowserPageRuntimeError();
+        if (!allowed.connected)
+          throw new BrowserElementUnavailableError("element-detached");
+        if (!box || !allowed.visible)
+          throw new BrowserElementUnavailableError("element-not-visible");
+        if (!viewport) throw new BrowserPageRuntimeError();
         if (
-          !allowed ||
-          !box ||
-          !viewport ||
           box.x < 0 ||
           box.y < 0 ||
           box.x + box.width > viewport.width ||
           box.y + box.height > viewport.height
         )
-          throw new BrowserPageRuntimeError();
+          throw new BrowserElementUnavailableError("element-outside-viewport");
         if (input.kind === "type-text") {
           const editable = await element.evaluate(
             (node) =>

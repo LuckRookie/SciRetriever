@@ -26,7 +26,7 @@ import {
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import { registerNavigationGuard, useUrlState } from "../../data/url.js";
-import { errorMessage } from "../../strings.js";
+import { errorMessage, serviceMessage } from "../../strings.js";
 import { randomId } from "../../../browser-platform.js";
 import { candidateStatus } from "../../data/candidate-status.js";
 import { readLiterature } from "../../data/library.js";
@@ -82,11 +82,11 @@ function actionText(action: WorkbenchActionRecord) {
     case "download-started":
       return "开始下载";
     case "download-failed":
-      return `下载失败${label ? `：${errorMessage(new Error(label))}` : ""}`;
+      return `下载失败${label ? `：${reasonText(label)}` : ""}`;
     case "validation-passed":
       return "文件验收通过";
     case "validation-failed":
-      return `文件验收未通过${label ? `：${errorMessage(new Error(label))}` : ""}`;
+      return `文件验收未通过${label ? `：${reasonText(label)}` : ""}`;
     case "flow-stopped":
       return "流程停止";
     default:
@@ -111,11 +111,16 @@ function PhaseBadge({ session }: { session: Session }) {
     return <Badge status="metadata">等待执行</Badge>;
   return <Badge status="ready">{phases[session.phase] ?? session.phase}</Badge>;
 }
+/** A platform code in words; unknown codes stay visible instead of a generic retry hint. */
+function reasonText(code: string) {
+  const known = serviceMessage(code);
+  return known === serviceMessage("") ? `原因代码：${code}` : known;
+}
 /** The Agent's own stop explanation, or the stable platform reason. */
 function stopText(session: Session) {
   if (session.stop?.explanation) return session.stop.explanation;
   const code = session.stop?.reason ?? session.outcome?.code;
-  return code ? errorMessage(new Error(code)) : "";
+  return code ? reasonText(code) : "";
 }
 interface SessionGroup {
   id: string;
@@ -673,6 +678,8 @@ function Viewer({
     selectedTarget = editable.some((element) => element.element_id === target)
       ? target
       : (editable[0]?.element_id ?? "");
+  // A finished flow keeps its last frame for review; input would be refused.
+  const readOnly = ended(view) || current?.phase === "closed";
   const otherController =
     !human &&
     !!view.control.controller_id &&
@@ -816,7 +823,12 @@ function Viewer({
                 src={frame.url}
                 alt="真实 Browser 页面"
                 tabIndex={0}
+                data-readonly={readOnly || undefined}
                 onClick={(event) => {
+                  if (readOnly) {
+                    setFeedback("流程已结束，画面只读。");
+                    return;
+                  }
                   const bounds = event.currentTarget.getBoundingClientRect(),
                     observation = frame.observed;
                   if (bounds.width && bounds.height)
