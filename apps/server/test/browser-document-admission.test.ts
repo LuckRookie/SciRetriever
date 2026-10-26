@@ -22,7 +22,7 @@ async function fixture(
   options: Partial<
     Pick<
       BrowserArticleExecution,
-      "phase" | "step" | "changed" | "preparationTarget"
+      "phase" | "step" | "changed" | "preparationTarget" | "navigationFailed"
     >
   > = {},
   entries?: readonly string[],
@@ -697,3 +697,56 @@ it.each([
     }
   },
 );
+
+it("retains failed navigation for feedback without inventing old-document network grants", async () => {
+  const navigationFailed = vi.fn();
+  const f = await fixture(true, { navigationFailed });
+  const next = {
+    ...f.binding,
+    request_id: "failed-navigation",
+    source_document_id: "document-a",
+    document_id: "document-b",
+  };
+  try {
+    await expect(
+      f.owner.beforeRequest(
+        next,
+        "https://publisher-b.test/reader",
+        async () => {
+          throw new Error("synthetic-drain-failure");
+        },
+      ),
+    ).rejects.toThrow("synthetic-drain-failure");
+    f.owner.navigationRetryFailed({ ...next, operation_id: "other-operation" });
+    expect(navigationFailed).not.toHaveBeenCalled();
+    f.owner.navigationRetryFailed(next);
+    expect(navigationFailed).toHaveBeenCalledOnce();
+    expect(f.owner.snapshot().sessions).toBe(1);
+    await expect(
+      f.owner.beforeRequest(
+        subrequest(f.binding),
+        "https://publisher-a.test/background",
+        async () => {},
+      ),
+    ).rejects.toThrow("browser-document-network-inactive");
+    await f.owner.resumeDocument(
+      {
+        ...f.binding,
+        document_id: "document-a",
+        document_generation: 1,
+        is_main: true,
+        navigation_request_id: null,
+      },
+      async () => {},
+    );
+    await expect(
+      f.owner.beforeRequest(
+        subrequest(f.binding),
+        "https://publisher-a.test/background",
+        async () => {},
+      ),
+    ).resolves.toBeUndefined();
+  } finally {
+    await f.close();
+  }
+});

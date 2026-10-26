@@ -2357,6 +2357,7 @@ it.each(["current", "cancelled", "replaced", "different-url"] as const)(
       navigationRetryFailed: failed,
     });
     pages.set("a", { ...pages.get("a")!, signal: abort.signal });
+    const commands = vi.spyOn(protocol, "send");
     try {
       protocol.attach("popup", "a");
       await owner.ready("popup");
@@ -2396,6 +2397,13 @@ it.each(["current", "cancelled", "replaced", "different-url"] as const)(
       );
       await replayed.promise;
       if (change === "current") {
+        expect(commands).toHaveBeenCalledWith(
+          "Page.navigate",
+          { url: "http://127.0.0.1/viewer", frameId: "popup" },
+          "protocol-popup",
+          0,
+          abort.signal,
+        );
         expect(
           protocol.calls.filter((c) => c.method === "Page.navigate"),
         ).toEqual([

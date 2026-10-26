@@ -82,6 +82,8 @@ export interface BrowserArticleExecution extends BrowserArticleDeliveryLease {
   setNetworkAccess(allowed: boolean): void;
   /** Revoke a late decision on human takeover/release without cancelling a transfer. */
   controlEpochChanged(): void;
+  /** Revoke the current decision so the retained page can expose a failed navigation. */
+  navigationFailed?(): void;
   /** Accepted human/control events join this article's ephemeral Agent context. */
   recordAgentEvent?(event: BrowserAgentEvent): void;
   /** Cancels this article's outstanding work; other article sessions are untouched. */

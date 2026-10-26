@@ -500,15 +500,10 @@ export class BrowserArticleScheduler {
       identity.generation !== binding.generation
     )
       return;
-    this.track(
-      this.finish(
-        ticket,
-        browserRefused(
-          "browser-navigation-failed",
-          "The admitted Browser navigation could not resume after network cleanup.",
-        ),
-      ),
-    );
+    // Navigation failure belongs to the retained article's next observation.
+    // No lease or document grant is invented here: Host recovery must resume a
+    // known document through resumeDocument before another network action.
+    ticket.execution?.navigationFailed?.();
   }
 
   /** Raw CDP commits bind a new document to its exact admitted navigation. */
@@ -624,6 +619,9 @@ export class BrowserArticleScheduler {
           platform: history.platform,
         });
         ticket.documentGrants.add(document.document_id);
+        // Restoring a known source ends the failed provisional navigation.
+        // A new Agent choice must obtain a fresh admission, not reuse its retry.
+        ticket.navigations.delete(document.page_id);
       } finally {
         include?.();
       }

@@ -58,9 +58,12 @@ const actors: Readonly<Record<WorkbenchActionRecord["actor"], string>> = {
   human: "你",
   platform: "平台",
 };
+/** Publisher titles may carry inline markup such as <sub>; show it as text. */
+const plain = (text: string) =>
+  text.replace(/<\/?(?:sub|sup|i|b|em|strong|span)\b[^>]*>/giu, "");
 /** One line for an action that actually happened; no guessed intent. */
 function actionText(action: WorkbenchActionRecord) {
-  const label = action.label ?? "";
+  const label = plain(action.label ?? "");
   switch (action.kind) {
     case "click-element":
     case "click-point":
@@ -77,6 +80,9 @@ function actionText(action: WorkbenchActionRecord) {
       return "等待页面变化";
     case "tab-switch":
       return label ? `切换到 ${label}` : "切换页签";
+    case "navigation-failed":
+      // The label repeats the platform code; the sentence is enough here.
+      return "跳转未完成，Agent 重新观察页面";
     case "navigation":
       return `进入 ${label || action.url || "新页面"}`;
     case "download-started":
@@ -395,8 +401,8 @@ function useSessionTitle(session: Session) {
       (api.workspace.capabilities.library === true ||
         api.workspace.capabilities.query === true),
   });
-  return (
-    session.title ?? detail.data?.literature.metadata.title ?? "文献获取会话"
+  return plain(
+    session.title ?? detail.data?.literature.metadata.title ?? "文献获取会话",
   );
 }
 function Viewer({
@@ -777,7 +783,7 @@ function Viewer({
       <div className="browser-watch-layout">
         <div className="browser-stage">
           <h2 className="browser-document-title">
-            {observed?.title ?? "等待当前页面"}
+            {observed ? plain(observed.title) : "等待当前页面"}
           </h2>
           <p className="browser-address">
             {observed?.url ?? "等待当前会话页面"}

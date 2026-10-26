@@ -55,13 +55,20 @@ export class BrowserHostRuntimeError extends Error {
 }
 export class BrowserHostNavigationError extends BrowserHostError {
   override readonly code = "browser-navigation-failed" as const;
+  readonly #target: string | undefined;
   constructor(
     cause?: unknown,
     readonly recoverable = false,
+    /** Private exact target for bounded retries; never a display/log field. */
+    target?: string,
   ) {
     super(cause);
+    this.#target = target;
     this.message = "Browser navigation did not commit";
     this.name = "BrowserHostNavigationError";
+  }
+  get target(): string | undefined {
+    return this.#target;
   }
 }
 export class BrowserHostCleanupError extends BrowserHostError {
@@ -125,11 +132,15 @@ export interface BrowserPageHandle {
   navigate?(url: string): Promise<void>;
   /** Private preparation fact; never exposed in observations or persisted. */
   navigationUrl?(): string | null;
+  navigationSucceeded?(target: string): boolean;
   /** Retained initial failure, allowing capture settlement before entry recovery. */
   readonly initial_navigation_failure?: { readonly recoverable: boolean };
   snapshot(): Promise<BrowserPageSnapshot>;
   settleCaptures?(): Promise<void>;
   retryRateLimit?(signal: AbortSignal, deadlineAt: number): Promise<boolean>;
+  recoverNavigation?(
+    failure: BrowserHostNavigationError,
+  ): Promise<BrowserPageHandle>;
   apply(
     input: OperatorInput,
     documentGeneration: number,
@@ -285,6 +296,15 @@ export class BrowserHost {
   private readonly runtimes = new Map<string, BrowserPageRuntime>();
   /** A blocked document navigation cannot be interpreted as a normal no-PDF page. */
   private readonly blockedNavigations = new Set<string>();
+  private readonly crashedPages = new Set<string>();
+  private readonly failedNavigationPages = new Set<string>();
+  private readonly navigationFailures = new Map<
+    string,
+    {
+      identity: BrowserOwnedRequest;
+      error: BrowserHostNavigationError;
+    }
+  >();
   /** Last admitted top-level locator, retained only while its page is owned. */
   private readonly navigationUrls = new Map<string, string>();
   private readonly historyResumes = new Map<string, Promise<void>>();
@@ -485,6 +505,14 @@ export class BrowserHost {
         targetCreated: (targetId, openerId) =>
           this.reserveTarget(targetId, openerId),
         documentCommitted: (document) => {
+          if (
+            document.is_main &&
+            !document.is_error_document &&
+            document.navigation_request_id
+          ) {
+            this.navigationFailures.delete(document.session_id);
+            this.failedNavigationPages.delete(document.page_id);
+          }
           this.options.documentCommitted?.(document);
           if (document.is_history_navigation && this.options.resumeDocument) {
             const resume = this.options.resumeDocument(document, () =>
@@ -552,8 +580,20 @@ export class BrowserHost {
             throw new BrowserHostError();
           await this.cdp!.replayNavigation(identity, url);
         },
-        navigationRetryFailed: (identity) =>
-          this.options.navigationRetryFailed?.(identity),
+        navigationRetryFailed: (identity, url) => {
+          const session = this.sessions.get(identity.session_id);
+          if (!session || session.closing || identity.signal.aborted) return;
+          this.failedNavigationPages.add(identity.page_id);
+          if (
+            this.navigationFailures.get(identity.session_id)?.identity
+              .request_id !== identity.request_id
+          )
+            this.navigationFailures.set(identity.session_id, {
+              identity,
+              error: new BrowserHostNavigationError(undefined, true, url),
+            });
+          this.options.navigationRetryFailed?.(identity);
+        },
         admitted: (identity, url) => {
           if (identity.is_navigation) {
             this.blockedNavigations.delete(identity.page_id);
@@ -843,6 +883,7 @@ export class BrowserHost {
       this.cdp?.sessionClosed(session.id);
       for (const id of session.pageIds) this.pageSessions.delete(id);
       this.sessions.delete(session.id);
+      this.navigationFailures.delete(session.id);
     })();
     return session.closePromise;
   }
@@ -987,19 +1028,35 @@ export class BrowserHost {
           ? (this.navigationUrls.get(id) ?? null)
           : safeNavigationUrl(value);
       },
+      navigationSucceeded: (target) => {
+        const document = this.cdp?.currentDocument(this.pageTargets.get(id)!);
+        return (
+          !page.isClosed() &&
+          page.url() === target &&
+          !!document &&
+          !document.is_error_document
+        );
+      },
       retryRateLimit: async (signal, deadlineAt) =>
         this.runtimes.get(id)?.retryRateLimit(signal, deadlineAt) ?? false,
+      recoverNavigation: (failure) => this.recoverNavigation(id, failure),
       settleCaptures: async () => {
         const sessionId = this.pageSessions.get(id)?.id;
         if (sessionId) await this.transfers?.settle(sessionId);
       },
       snapshot: async () => {
         this.assertRuntime();
+        const failed = this.navigationFailure(id);
+        if (failed) throw failed;
         const target = this.pageTargets.get(id);
         if (target !== undefined) {
           const generation = this.cdp?.documentGeneration(target);
           if (generation !== undefined)
-            await this.cdp?.navigationRecovery(target, generation);
+            try {
+              await this.cdp?.navigationRecovery(target, generation);
+            } catch (error) {
+              throw this.navigationFailure(id) ?? error;
+            }
         }
         const generation =
           target === undefined
@@ -1043,6 +1100,8 @@ export class BrowserHost {
       },
       apply: async (input, generation, current) => {
         this.assertRuntime();
+        const failed = this.navigationFailure(id);
+        if (failed) throw failed;
         const runtime = this.runtimes.get(id);
         if (
           !runtime ||
@@ -1060,6 +1119,8 @@ export class BrowserHost {
           });
         } catch (error) {
           if (this.runtimeLost) throw new BrowserHostRuntimeError(error);
+          const failed = this.navigationFailure(id);
+          if (failed) throw failed;
           throw error;
         }
         const historyResume = this.historyResumes.get(id);
@@ -1114,10 +1175,103 @@ export class BrowserHost {
     const candidates = [...this.pages.entries()].filter(
       ([candidateId, candidate]) =>
         candidateId !== id &&
+        !this.failedNavigationPages.has(candidateId) &&
         !candidate.isClosed() &&
         this.pageParents.get(candidate) === owner,
     );
     return candidates.at(-1) ?? null;
+  }
+  private navigationFailure(
+    id: string,
+  ): BrowserHostNavigationError | undefined {
+    if (this.crashedPages.has(id)) throw new BrowserPageCrashedError();
+    const session = this.pageSessions.get(id);
+    const failed = session
+      ? this.navigationFailures.get(session.id)
+      : undefined;
+    if (
+      this.blockedNavigations.has(id) ||
+      (failed && this.blockedNavigations.has(failed.identity.page_id))
+    )
+      throw new BrowserHostError();
+    return failed?.error;
+  }
+  private async recoverNavigation(
+    id: string,
+    error: BrowserHostNavigationError,
+  ): Promise<BrowserPageHandle> {
+    this.assertRuntime();
+    const session = this.pageSessions.get(id);
+    if (
+      !session ||
+      session.closing ||
+      session.controller.signal.aborted ||
+      !error.recoverable
+    )
+      throw error;
+    this.navigationFailure(id); // Fatal policy/crash facts take priority.
+    const failure = this.navigationFailures.get(session.id);
+    const candidates = [...this.pages].filter(
+      ([candidateId, candidate]) =>
+        !candidate.isClosed() &&
+        this.pageSessions.get(candidateId)?.id === session.id &&
+        !this.crashedPages.has(candidateId) &&
+        !this.blockedNavigations.has(candidateId),
+    );
+    const healthy = ([candidateId]: [string, Page]) => {
+      const document = this.cdp?.currentDocument(
+        this.pageTargets.get(candidateId)!,
+      );
+      return document && !document.is_error_document;
+    };
+    // Prefer the current healthy document, then its still-open article sibling.
+    // A failed popup must not strand the Agent in about:blank or an error page.
+    const selected =
+      candidates.find(
+        (candidate) => candidate[0] === id && healthy(candidate),
+      ) ??
+      candidates.find(healthy) ??
+      candidates.find(([candidateId]) => candidateId === id);
+    if (!selected) throw new BrowserPageClosedError();
+    const [selectedId, selectedPage] = selected;
+    const target = this.pageTargets.get(selectedId)!;
+    let document = this.cdp?.currentDocument(target);
+    if (document?.is_error_document) {
+      const generation = document.document_generation;
+      this.cdp?.expectHistoryNavigation(target);
+      await selectedPage.goBack({ waitUntil: "commit", timeout: 0 });
+      // Playwright and the ownership connection receive their commit events
+      // independently. Do not resume an error document using the earlier event.
+      await this.cdp?.waitForDocumentChange(target, generation);
+      const resumed = this.historyResumes.get(selectedId);
+      if (resumed) {
+        await resumed;
+        this.historyResumes.delete(selectedId);
+      }
+      document = this.cdp?.currentDocument(target);
+    }
+    if (!document || document.is_error_document)
+      throw new BrowserHostNavigationError();
+    if (this.options.resumeDocument)
+      await this.options.resumeDocument(document, () =>
+        this.cdp!.drainSession(session.id),
+      );
+    if (session.closing || session.controller.signal.aborted)
+      throw new BrowserHostError();
+    if (failure) {
+      const failedTarget = this.pageTargets.get(failure.identity.page_id);
+      if (failedTarget)
+        this.cdp?.acknowledgeNavigationFailure(
+          failedTarget,
+          failure.identity.request_id,
+        );
+      if (this.navigationFailures.get(session.id) === failure)
+        this.navigationFailures.delete(session.id);
+    }
+    this.navigationFailure(selectedId);
+    this.failedNavigationPages.delete(selectedId);
+    await this.withPageInput(selectedId, selectedPage, async () => undefined);
+    return this.handle(selectedId, selectedPage);
   }
   private assertRuntime(): void {
     if (this.runtimeLost && !this.closing) throw new BrowserHostRuntimeError();
@@ -1206,7 +1360,11 @@ export class BrowserHost {
             continue;
         }
         // A failed redirect cannot authorize replaying its original start URL.
-        throw new BrowserHostNavigationError(error, temporary);
+        throw new BrowserHostNavigationError(
+          error,
+          temporary && !this.blockedNavigations.has(this.pageIds.get(page)!),
+          url,
+        );
       }
     }
   }
@@ -1340,6 +1498,7 @@ export class BrowserHost {
       this.pages.delete(id);
       this.runtimes.delete(id);
       this.blockedNavigations.delete(id);
+      this.failedNavigationPages.delete(id);
       this.navigationUrls.delete(id);
       this.pageIds.delete(page);
       this.pageParents.delete(page);
@@ -1352,6 +1511,7 @@ export class BrowserHost {
       });
     });
     page.on("crash", () => {
+      this.crashedPages.add(id);
       this.failure ??= "page";
     });
     return id;

@@ -33,7 +33,7 @@ export class BrowserActivityLog {
   snapshot(): readonly WorkbenchActionRecord[] {
     return Object.freeze([...this.records]);
   }
-  record(record: Omit<WorkbenchActionRecord, "seq" | "at">): void {
+  record(record: Omit<WorkbenchActionRecord, "seq" | "at">): number {
     // Keep ordering even if the wall clock is adjusted while this process runs.
     const at = new Date(
       Math.max(
@@ -47,6 +47,19 @@ export class BrowserActivityLog {
       at,
     });
     this.records = [...this.records.slice(-99), item];
+    return item.seq;
+  }
+  navigationFailed(code: string, pendingAction?: number): void {
+    // Only the Driver's still-pending input can be superseded by this result.
+    // A later observation ends that association; unrelated inputs stay intact.
+    const attempt = this.records.find((item) => item.seq === pendingAction);
+    if (attempt) this.records = this.records.filter((item) => item !== attempt);
+    this.record({
+      actor: "platform",
+      kind: "navigation-failed",
+      label: `导航失败（${code}）`,
+      ...(attempt?.page_id === undefined ? {} : { page_id: attempt.page_id }),
+    });
   }
   observe(
     observation: WorkbenchObservation,
@@ -107,7 +120,7 @@ export class BrowserActivityLog {
     observation: WorkbenchObservation,
     result: unknown,
     actor: "agent" | "human",
-  ): void {
+  ): number | undefined {
     if (input.kind === "stop") {
       this.stopped(
         {
@@ -158,7 +171,7 @@ export class BrowserActivityLog {
           (e) => e.element_id === input.element_id,
         )?.name;
     } else if (input.kind === "press-key") label = input.key;
-    this.record({
+    return this.record({
       actor,
       kind: input.kind,
       ...this.binding(observation),

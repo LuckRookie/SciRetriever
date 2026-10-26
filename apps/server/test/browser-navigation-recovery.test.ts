@@ -7,6 +7,7 @@ import {
   BrowserHostNavigationError,
   BrowserHostRuntimeError,
   type BrowserPageHandle,
+  type BrowserHostOptions,
 } from "../src/browser/host.js";
 import type { BrowserPageSnapshot } from "../src/browser/observation.js";
 import {
@@ -30,9 +31,11 @@ function hostFixture(
     documentGeneration(): number;
     navigationRecovery(): Promise<void> | undefined;
   },
+  options: Pick<BrowserHostOptions, "resumeDocument"> = {},
 ) {
   const host = new BrowserHost({
     profile: join(tmpdir(), "sciretriever-navigation-recovery-fixture"),
+    ...options,
   });
   (Reflect.get(host, "pages") as Map<string, Page>).set("page-a", page);
   (Reflect.get(host, "pageIds") as Map<Page, string>).set(page, "page-a");
@@ -266,5 +269,123 @@ it.each([
     else if (terminal === "closed-page")
       await expect(snapshot).rejects.toBeInstanceOf(BrowserPageClosedError);
     else await expect(snapshot).rejects.toBe(cause);
+  },
+);
+
+it.each(["cancelled", "crashed", "runtime", "policy", "closed"] as const)(
+  "does not restore a navigation across the fatal %s boundary",
+  async (boundary) => {
+    const page = { isClosed: () => boundary === "closed" } as unknown as Page;
+    const host = hostFixture(page, {
+      documentGeneration: () => 1,
+      navigationRecovery: () => undefined,
+    });
+    const controller = new AbortController();
+    const session = { id: "article", controller, closing: false };
+    (Reflect.get(host, "pageSessions") as Map<string, unknown>).set(
+      "page-a",
+      session,
+    );
+    if (boundary === "cancelled") controller.abort();
+    if (boundary === "crashed")
+      (Reflect.get(host, "crashedPages") as Set<string>).add("page-a");
+    if (boundary === "runtime") Reflect.set(host, "runtimeLost", true);
+    if (boundary === "policy")
+      (Reflect.get(host, "blockedNavigations") as Set<string>).add("page-a");
+    const restore = Reflect.get(host, "recoverNavigation") as (
+      id: string,
+      error: BrowserHostNavigationError,
+    ) => Promise<BrowserPageHandle>;
+    await expect(
+      restore.call(
+        host,
+        "page-a",
+        new BrowserHostNavigationError(
+          undefined,
+          true,
+          "https://fixture.test/reader",
+        ),
+      ),
+    ).rejects.toMatchObject({
+      code:
+        boundary === "crashed"
+          ? "browser-page-crashed"
+          : boundary === "runtime"
+            ? "browser-runtime-lost"
+            : boundary === "closed"
+              ? "browser-page-closed"
+              : boundary === "policy"
+                ? "browser-host"
+                : "browser-navigation-failed",
+    });
+  },
+);
+
+it.each([false, true])(
+  "restores the article without following its failed popup again (closed=%s)",
+  async (popupClosed) => {
+    const closed = { isClosed: () => popupClosed } as unknown as Page;
+    const parent = {
+      isClosed: () => false,
+      bringToFront: vi.fn(async () => {}),
+    } as unknown as Page;
+    const other = {
+      isClosed: () => false,
+      bringToFront: vi.fn(async () => {}),
+    } as unknown as Page;
+    const resume = vi.fn(async () => {});
+    const host = hostFixture(
+      closed,
+      {
+        documentGeneration: () => 1,
+        navigationRecovery: () => undefined,
+      },
+      { resumeDocument: resume },
+    );
+    const controller = new AbortController();
+    const session = { id: "article-a", controller, closing: false };
+    const sessions = Reflect.get(host, "pageSessions") as Map<string, unknown>;
+    sessions.set("page-a", session);
+    sessions.set("page-other", { ...session, id: "article-b" });
+    sessions.set("page-parent", session);
+    const pages = Reflect.get(host, "pages") as Map<string, Page>;
+    pages.set("page-other", other);
+    pages.set("page-parent", parent);
+    (Reflect.get(host, "pageParents") as WeakMap<Page, Page>).set(
+      closed,
+      parent,
+    );
+    (Reflect.get(host, "failedNavigationPages") as Set<string>).add("page-a");
+    const targets = Reflect.get(host, "pageTargets") as Map<string, string>;
+    targets.set("page-other", "target-other");
+    targets.set("page-parent", "target-parent");
+    const document = {
+      page_id: "page-parent",
+      document_id: "document-parent",
+      session_id: "article-a",
+    };
+    Reflect.set(
+      Reflect.get(host, "cdp") as object,
+      "currentDocument",
+      (target: string) => (target === "target-parent" ? document : null),
+    );
+    const restore = Reflect.get(host, "recoverNavigation") as (
+      id: string,
+      error: BrowserHostNavigationError,
+    ) => Promise<BrowserPageHandle>;
+    const handle = await restore.call(
+      host,
+      "page-a",
+      new BrowserHostNavigationError(
+        undefined,
+        true,
+        "https://fixture.test/reader",
+      ),
+    );
+    expect(handle.id).toBe("page-parent");
+    expect(await handle.successor?.()).toBeNull();
+    expect(resume).toHaveBeenCalledWith(document, expect.any(Function));
+    expect(parent.bringToFront).toHaveBeenCalledOnce();
+    expect(other.bringToFront).not.toHaveBeenCalled();
   },
 );

@@ -41,7 +41,7 @@
 
 所选会话的可选 `actions` 返回最近 100 条实际执行完成的输入与生命周期事件，`seq` 单调递增，`at` 为 UTC，`actor` 为 agent / human / platform。动作名沿用输入类型，并加入 `navigation`、`tab-switch`、`download-started`、`download-failed`、`validation-passed`、`validation-failed`、`flow-stopped`；文件验收通过不等于文献已发布。`label` 最多 512 字符，URL 不含 userinfo、query 或 fragment，输入内容不进入记录。点击 `point` 来自执行时的实际 CSS 坐标或元素框中心，未知则省略；它与当时的 `viewport`、`frame_seq`、`observation_revision`、`page_id`、`document_generation` 一起返回。前端只在这些绑定与所展示画面匹配时绘制指针，不能把旧动作坐标套到新的页面或视口上。导航/页签事件由观察变化产生；这部分记录 actor=platform，不推断哪个主体触发了页面脚本。合成工作台与生产文章流程复用同一投影，新 parser 同时接受没有这些字段的旧 payload。
 
-文章结束状态以 owner 的明确 outcome 为准：published 为 finished，失败 retained 为 failed，只有显式取消才是 cancelled；资源清理使用的 abort 信号不覆盖已有结果。已观察控件缺失、脱离 DOM、不可见或移出视口时，当前动作被拒绝并要求重新观察，失败动作不进入已执行动作记录，模型与活跃时间预算继续累计。日志仅记录 element-check、popup-track、navigation-drain、navigation-replay 等阶段和稳定原因，不记录页面内容、请求参数或凭据。
+文章结束状态以 owner 的明确 outcome 为准：published 为 finished，失败 retained 为 failed，只有显式取消才是 cancelled；资源清理使用的 abort 信号不覆盖已有结果。已观察控件缺失、脱离 DOM、不可见或移出视口时，当前动作被拒绝并要求重新观察，失败动作不进入已执行动作记录，模型与活跃时间预算继续累计。日志仅记录 element-check、popup-track、navigation-request、navigation-drain、navigation-replay、navigation-feedback 等阶段和稳定原因，不记录页面内容、请求参数或凭据。
 
 ### 2.2 浏览器实现
 
@@ -90,6 +90,12 @@ Renderer的Network终态与target销毁只作为原请求的精确终态证据�
 连接失败重试只允许精确已准入且有失败证据的同URL GET，重定向到其它地址失败不能授权重放原始DOI。
 
 新窗口首导航在旧网络清理后需要恢复时，由 CDP owner 在绑定的 target/session 上重放精确的 GET，经过原有 Fetch 网络准入；不等待可能依赖首响应才能登记的 Playwright Page。恢复资格一次性消费，并检查文章 operation/session/generation、文档代次及取消状态，Page 到达后再接通观察 runtime。原生下载与在途 PDF writer 仍使用原有独立归属和结算路径。
+
+同页与新窗口的导航恢复都可能等待平台准入、冷却和文档响应；这段等待不使用普通 CDP 命令的 15 秒 RPC 超时。只有显式绑定文章取消信号的 Page.navigate 可以省略该计时器，仍受文章活跃预算、保留会话寿命、显式取消与连接关闭约束；不增加重试次数，不缩短准入或绕过网络政策，其它协议命令保留原有超时。
+
+已准入导航的连接失败或 drain/replay 失败先作为当前尝试失败处理，不直接结束整篇。Host 优先保留同会话健康页面；进入浏览器错误页时先返回并等待独立 CDP 归属连接确认文档，按 Scheduler 的已知文档历史恢复准入，再要求 Agent 重新观察后重试、返回或改选链接。恢复不复用旧元素 ID，不扩大网络资格，不重置文章时间与模型调用预算；同一精确目标连续失败两次以 `browser-navigation-retry-limit` 结束。错误页提交前不恢复，避免迟到的错误文档覆盖恢复结果；失败 popup 在新的成功导航前不参与自动 successor 选择，避免恢复原页后又跳回失败窗口。进程内活动合同新增 `navigation-failed` kind（actor=platform）；只记录稳定原因，替代仍待反馈的已执行输入记录，旧输入的迟到结果不补记成功。旧 payload 仍可由新 parser 解析，严格枚举的旧 parser 不能读取新增 kind，部署需使用同版前后端。
+
+页面/浏览器崩溃、runtime lost、没有可用页面、策略拒绝、取消及已发布事实冲突仍维持原终止边界。恢复不撤销已开始的 transfer、candidate 或 published 事实；原生 writer、IO、redirect 与 operation/session/generation 的归属检查不变。
 
 实际本机Cloak测试覆盖正式Application、popup归属、并发、资源/取消和文件发布；真实出版社测试独立记录于
 2026-10-07最终验收（本地文件：`sandbox/reports/browser-final-acceptance-2026-10-07.md`，不随仓库分发）。单次成功不代表所有文章都有订阅权限，

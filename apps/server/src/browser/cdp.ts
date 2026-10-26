@@ -64,7 +64,7 @@ export class OwnedBrowserCdpConnection implements BrowserProtocol {
     {
       readonly resolve: (value: Record<string, unknown>) => void;
       readonly reject: (error: Error) => void;
-      readonly timer: ReturnType<typeof setTimeout>;
+      readonly timer: ReturnType<typeof setTimeout> | undefined;
       readonly removeAbort: () => void;
     }
   >();
@@ -215,13 +215,21 @@ export class OwnedBrowserCdpConnection implements BrowserProtocol {
     if (this.closed) return Promise.reject(new BrowserProtocolError("closed"));
     if (signal?.aborted)
       return Promise.reject(new BrowserProtocolError("command-cancelled"));
+    // Navigation waits include platform admission and response/commit, not just
+    // protocol processing. Only an explicitly owned navigation can omit the RPC
+    // timer; its article cancellation/lifetime and connection still bound it.
+    if (timeoutMs === 0 && (method !== "Page.navigate" || !signal))
+      return Promise.reject(new BrowserProtocolError());
     const id = ++this.sequence;
     const response = new Promise<Record<string, unknown>>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        removeAbort();
-        reject(new BrowserProtocolError("timeout"));
-      }, timeoutMs);
+      const timer =
+        timeoutMs === 0
+          ? undefined
+          : setTimeout(() => {
+              this.pending.delete(id);
+              removeAbort();
+              reject(new BrowserProtocolError("timeout"));
+            }, timeoutMs);
       const abort = () => {
         if (!this.pending.delete(id)) return;
         clearTimeout(timer);

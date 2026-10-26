@@ -124,7 +124,7 @@ export interface BrowserCdpOwnerOptions {
     drainPrevious: () => Promise<BrowserRequestAdmission>,
   ): Promise<BrowserRequestAdmission>;
   retryNavigation?(identity: BrowserOwnedRequest, url: string): Promise<void>;
-  navigationRetryFailed?(identity: BrowserOwnedRequest): void;
+  navigationRetryFailed?(identity: BrowserOwnedRequest, url: string): void;
   admitted(identity: BrowserOwnedRequest, url: string): void;
   ended?(identity: BrowserOwnedRequest): void;
   blocked(page: BrowserPageOwnership | null, navigation: boolean): void;
@@ -198,6 +198,7 @@ export class BrowserCdpOwner {
       readonly identity: BrowserOwnedRequest;
       readonly url: string;
       connection_failed: boolean;
+      failure_reported?: boolean;
     }
   >();
   private readonly documentWaiters = new Set<{
@@ -565,6 +566,15 @@ export class BrowserCdpOwner {
   navigationRecoveryRequest(targetId: string): BrowserOwnedRequest | undefined {
     return this.recoveries.get(targetId)?.request;
   }
+  acknowledgeNavigationFailure(targetId: string, requestId: string): void {
+    const recovery = this.recoveries.get(targetId);
+    if (
+      recovery &&
+      !recovery.active &&
+      recovery.request.request_id === requestId
+    )
+      this.recoveries.delete(targetId);
+  }
   /** Replay only this owner's canceled main GET, before Playwright exposes its Page. */
   async replayNavigation(
     identity: BrowserOwnedRequest,
@@ -601,11 +611,13 @@ export class BrowserCdpOwner {
     entry![1].replayed = true;
     // Fetch interception remains installed: this request must pass admission again.
     // Do not await Page creation or domain setup; both can require this first response.
+    // Like ordinary Host navigation, wait on the article lifetime instead of the
+    // default RPC timer: a platform lease/cooldown can hold Fetch before commit.
     const result = await this.options.protocol.send(
       "Page.navigate",
       { url, frameId: target },
       session,
-      undefined,
+      0,
       identity.signal,
     );
     if (
@@ -644,6 +656,9 @@ export class BrowserCdpOwner {
           parent_document_id: null,
           is_main: true,
           navigation_request_id: null,
+          ...(this.errorDocuments.has(pageTarget)
+            ? { is_error_document: true as const }
+            : {}),
         }
       : null;
   }
@@ -765,6 +780,26 @@ export class BrowserCdpOwner {
         ...(historyNavigation ? { is_history_navigation: true as const } : {}),
         ...(errorDocument ? { is_error_document: true as const } : {}),
       });
+    if (main && errorDocument) this.reportFailedDocument(frameId);
+  }
+  private reportFailedDocument(frame: string): void {
+    const navigation = this.navigations.get(frame);
+    if (
+      !navigation?.connection_failed ||
+      navigation.failure_reported ||
+      !this.errorDocuments.has(frame) ||
+      this.recoveries.get(frame)?.active
+    )
+      return;
+    // Wait for the error document commit: restoring the old page before this
+    // event would race the renderer's pending replacement and lose the restore.
+    navigation.failure_reported = true;
+    createLogger("browser").warn("Browser navigation attempt failed", {
+      phase: "navigation-request",
+      cause_code: "connection-failed",
+      session_id: navigation.identity.session_id,
+    });
+    this.options.navigationRetryFailed?.(navigation.identity, navigation.url);
   }
   private targetForSession(sessionId: string | undefined): string | undefined {
     if (!sessionId) return undefined;
@@ -1089,15 +1124,16 @@ export class BrowserCdpOwner {
         recovery.reject(
           error instanceof Error ? error : new BrowserProtocolError(),
         );
-        if (identity) this.options.navigationRetryFailed?.(identity);
+        if (identity) this.options.navigationRetryFailed?.(identity, url);
       }
       const canceled = record !== undefined && !this.requests.has(requestId);
       if (identity && this.requests.has(requestId)) this.end(requestId);
-      this.options.blocked(
-        owner?.page ?? null,
-        resourceType === "Document" &&
-          (!owner || frameId === owner.pageTargetId),
-      );
+      if (!recovery || !this.options.navigationRetryFailed)
+        this.options.blocked(
+          owner?.page ?? null,
+          resourceType === "Document" &&
+            (!owner || frameId === owner.pageTargetId),
+        );
       if (!canceled)
         await this.options.protocol.send("Fetch.failRequest", {
           requestId,
@@ -1137,7 +1173,7 @@ export class BrowserCdpOwner {
       const navigation = request
         ? this.navigations.get(request.frame_id)
         : undefined;
-      if (
+      const failedNavigation =
         request?.admitted &&
         navigation?.request === requestId &&
         [
@@ -1146,9 +1182,15 @@ export class BrowserCdpOwner {
           "ConnectionRefused",
           "NameNotResolved",
           "TimedOut",
-        ].includes(text(params.responseErrorReason))
-      )
+          "Failed",
+          "InternetDisconnected",
+          "ConnectionAborted",
+          "ConnectionFailed",
+        ].includes(text(params.responseErrorReason));
+      if (failedNavigation && !navigation.connection_failed) {
         navigation.connection_failed = true;
+        this.reportFailedDocument(request.frame_id);
+      }
       if (request) request.renderer_terminal = true;
       try {
         // Forward the original failed response so a still-paused consumer can
@@ -1512,8 +1554,12 @@ export class BrowserCdpOwner {
           /net::ERR_(?:NAME_NOT_RESOLVED|DNS_TIMED_OUT|CONNECTION_RESET|CONNECTION_CLOSED|CONNECTION_REFUSED|TIMED_OUT|NETWORK_CHANGED|EMPTY_RESPONSE)\b/u.test(
             params.errorText,
           )
-        )
-          navigation.connection_failed = true;
+        ) {
+          if (!navigation.connection_failed) {
+            navigation.connection_failed = true;
+            this.reportFailedDocument(request.frame_id);
+          }
+        }
         if (
           !request.native_response &&
           !request.stream_response &&

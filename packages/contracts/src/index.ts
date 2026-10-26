@@ -2427,6 +2427,7 @@ export const WORKBENCH_ACTION_KINDS = [
   "wait-for-change",
   "tab-switch",
   "navigation",
+  "navigation-failed",
   "download-started",
   "download-failed",
   "validation-passed",

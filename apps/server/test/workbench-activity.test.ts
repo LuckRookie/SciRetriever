@@ -230,3 +230,42 @@ it("retains the original bounded stop text, distinct from the platform close out
     kind: "flow-stopped",
   });
 });
+
+it("replaces only the pending navigation input with a bounded failed platform record", () => {
+  const log = new BrowserActivityLog();
+  const older = log.record({
+    actor: "agent",
+    kind: "click-element",
+    label: "Earlier action",
+  });
+  const pending = log.record({
+    actor: "agent",
+    kind: "click-element",
+    page_id: "page-a",
+    label: "ePDF",
+  });
+  log.navigationFailed("browser-navigation-failed", pending);
+  expect(log.snapshot().map((action) => action.seq)).toEqual([
+    older,
+    pending + 1,
+  ]);
+  expect(log.snapshot().at(-1)).toMatchObject({
+    actor: "platform",
+    kind: "navigation-failed",
+    page_id: "page-a",
+  });
+  // A later observation ended the association. The earlier successful action stays.
+  log.navigationFailed("browser-navigation-failed");
+  expect(log.snapshot()[0]?.seq).toBe(older);
+  for (let index = 0; index < 110; index++)
+    log.navigationFailed("browser-navigation-failed");
+  expect(log.snapshot()).toHaveLength(100);
+  expect(new Set(log.snapshot().map((action) => action.seq)).size).toBe(100);
+  expect(
+    log
+      .snapshot()
+      .every(
+        (action) => action.url === undefined && action.point === undefined,
+      ),
+  ).toBe(true);
+});

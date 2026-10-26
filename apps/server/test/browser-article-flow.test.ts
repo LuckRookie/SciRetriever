@@ -3759,3 +3759,168 @@ it("keeps the model budget when repeatedly rejecting unavailable controls", asyn
     });
   }
 });
+
+it.each([false, true])(
+  "re-observes a failed navigation and bounds repeated target failure (persistent=%s)",
+  async (persistent) => {
+    const { BrowserHostNavigationError } = await import(
+      "../src/browser/host.js"
+    );
+    await withStore(async (collector) => {
+      const captured = await captureFixture(collector, "navigation-retry");
+      let attempts = 0,
+        ready = false,
+        restored = 0;
+      const page = {
+        snapshot: async () => ({
+          ...snapshot(attempts),
+          elements: [
+            {
+              element_id: `epdf-${attempts}`,
+              name: "ePDF",
+              role: "link",
+              editable: false,
+            },
+          ],
+        }),
+        apply: async (input: { kind: string }) => {
+          if (input.kind !== "click-element") return;
+          attempts++;
+          if (attempts === 1 || persistent)
+            throw new BrowserHostNavigationError(
+              undefined,
+              true,
+              "https://fixture.test/reader?private=value",
+            );
+          ready = true;
+        },
+        recoverNavigation: async () => {
+          restored++;
+          return page;
+        },
+      };
+      const driver = cooperativeDriver({
+        page,
+        action_cooldown_ms: 0,
+        max_model_calls: 4,
+        dispatch_tracking: "test-seam",
+        decide: async (
+          observation,
+          _frame,
+          _signal,
+          _guidance,
+          _target,
+          _actions,
+          feedback,
+        ) => {
+          if (attempts)
+            expect(feedback?.join(" ")).toContain(
+              "last navigation did not complete",
+            );
+          return {
+            kind: "click-element",
+            element_id: observation.elements[0]!.element_id,
+            revision: observation.observation_revision,
+          };
+        },
+        hasCandidate: () => ready,
+        awaitCandidate: async () => (ready ? captured : null),
+      });
+      try {
+        expect(await driver.step()).toMatchObject({ kind: "waiting" });
+        expect(restored).toBe(1);
+        expect(
+          driver.activity.snapshot().filter((a) => a.kind === "click-element"),
+        ).toHaveLength(0);
+        expect(driver.activity.snapshot().at(-1)).toMatchObject({
+          kind: "navigation-failed",
+          actor: "platform",
+        });
+        expect(JSON.stringify(driver.activity.snapshot())).not.toContain(
+          "private=value",
+        );
+        const result = await driver.step();
+        expect(result).toMatchObject(
+          persistent
+            ? {
+                kind: "terminal",
+                result: { code: "browser-navigation-retry-limit" },
+              }
+            : { kind: "candidate", candidate: captured.candidate },
+        );
+        expect(attempts).toBe(2);
+        expect(restored).toBe(1);
+        expect(driver.clock.snapshot().model_calls).toBe(2);
+        expect(
+          driver.activity
+            .snapshot()
+            .filter((a) => a.kind === "navigation-failed"),
+        ).toHaveLength(persistent ? 2 : 1);
+        expect(
+          driver.activity.snapshot().filter((a) => a.kind === "click-element"),
+        ).toHaveLength(persistent ? 0 : 1);
+      } finally {
+        await driver.close({
+          kind: "retained",
+          code: persistent ? "browser-navigation-retry-limit" : "delivered",
+        });
+      }
+    });
+  },
+);
+
+it("keeps an already-started transfer when navigation restoration loses its page", async () => {
+  await withStore(async (collector) => {
+    const captured = await captureFixture(collector, "recovery-transfer");
+    let ready = false;
+    const failure = new BrowserHostNavigationError(
+      undefined,
+      true,
+      "https://fixture.test/reader?private=value",
+    );
+    expect(JSON.stringify(failure)).not.toContain("private=value");
+    const driver = cooperativeDriver({
+      dispatch_tracking: "test-seam",
+      action_cooldown_ms: 0,
+      page: {
+        snapshot: async () => snapshot(1),
+        apply: async () => {
+          throw failure;
+        },
+        recoverNavigation: async () => {
+          driver.transferStarted(captured.transfer_id);
+          throw new Error("Synthetic restoration interrupted by transfer");
+        },
+      },
+      decide: async (observation) => ({
+        kind: "go-back",
+        revision: observation.observation_revision,
+      }),
+      hasCandidate: () => ready,
+      awaitCandidate: async () => (ready ? captured : null),
+    });
+    try {
+      expect(await driver.step()).toMatchObject({
+        kind: "suspended",
+        transfer_id: captured.transfer_id,
+      });
+      ready = true;
+      driver.transferCompleted(captured.transfer_id);
+      driver.candidateReady();
+      expect(await driver.step()).toMatchObject({
+        kind: "candidate",
+        candidate: captured.candidate,
+      });
+      expect(
+        driver.activity
+          .snapshot()
+          .filter((action) => action.kind === "flow-stopped"),
+      ).toHaveLength(0);
+    } finally {
+      await driver.close({
+        kind: "published",
+        receipt_id: "synthetic-recovery",
+      });
+    }
+  });
+});

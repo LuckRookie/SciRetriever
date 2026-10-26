@@ -114,3 +114,24 @@ it("bounds points by their execution viewport and requires exact frame binding",
   ])
     expect(() => parseWorkbenchView({ ...legacy, actions: invalid })).toThrow();
 });
+
+it("accepts explicit failed-navigation events without changing legacy action payloads", () => {
+  const failure = {
+    seq: 2,
+    at: "2026-10-26T00:00:00Z",
+    actor: "platform",
+    kind: "navigation-failed",
+    label: "Navigation failed",
+  };
+  expect(parseWorkbenchActionRecord(failure)).toEqual(failure);
+  expect(parseWorkbenchView(legacy).actions).toBeUndefined();
+  expect(() =>
+    parseWorkbenchActionRecord({ ...failure, kind: "navigation-unknown" }),
+  ).toThrow();
+  expect(() =>
+    parseWorkbenchActionRecord({
+      ...failure,
+      url: "https://example.test/?token=private",
+    }),
+  ).toThrow();
+});

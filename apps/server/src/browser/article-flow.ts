@@ -12,7 +12,7 @@ import {
 } from "@sciretriever/contracts";
 import { BrowserObservationStore } from "./observation.js";
 import type { BrowserPageSnapshot } from "./observation.js";
-import type { BrowserPageHandle } from "./host.js";
+import { BrowserHostNavigationError, type BrowserPageHandle } from "./host.js";
 import type { BrowserCaptureBatchItem } from "./capture-batch.js";
 import { AgentFailure, type AgentCallLifecycle } from "../agents/protocol.js";
 import type { AgentCapabilityRequestLifecycle } from "../agents/capability.js";
@@ -81,7 +81,11 @@ export interface FlowPageHandle {
   successor?(): Promise<FlowPageHandle | null>;
   navigate?(url: string): Promise<void>;
   navigationUrl?(): string | null;
+  navigationSucceeded?(target: string): boolean;
   readonly initial_navigation_failure?: { readonly recoverable: boolean };
+  recoverNavigation?(
+    failure: BrowserHostNavigationError,
+  ): Promise<FlowPageHandle>;
 }
 
 /**
@@ -266,6 +270,9 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
   private initializationPending = false;
   private initializationCaptureSeen = false;
   private initializationFailure: string | null = null;
+  private pendingNavigationAction: number | undefined;
+  private navigationFailureVersion = 0;
+  private navigationFailureRun: { target: string; count: number } | null = null;
   private initializationWait: (() => void) | null = null;
   private readonly onOperationAbort: () => void;
   private readonly unsubscribeClock: () => void;
@@ -492,6 +499,10 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       this.phaseValue = "ready";
     this.notify();
   }
+  navigationFailed(): void {
+    this.navigationFailureVersion++;
+    this.controlEpochChanged();
+  }
 
   recordAgentEvent(event: BrowserAgentEvent): void {
     this.options.agent?.record(event);
@@ -560,6 +571,11 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     } catch (error) {
       if (this.options.signal.aborted) this.stop("cancelled");
       else if (this.options.hasCandidate?.() === true) this.candidateReady();
+      else if (
+        this.page &&
+        (await this.recoverNavigationFailure(error, this.page))
+      )
+        return this.currentResult();
       else if (
         stableBrowserFlowFailureCode(error) === "browser-rate-limited" &&
         this.options.onNetworkEnded !== undefined
@@ -793,6 +809,8 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       snapshot = observed.value;
     } catch (error) {
       if (!current()) return this.currentResult();
+      if (await this.recoverNavigationFailure(error, page))
+        return this.currentResult();
       if (isPageTransitionError(error) || isPageRuntimeError(error)) {
         const successor = await page.successor?.().catch(() => null);
         if (successor) this.usePage(successor);
@@ -864,6 +882,12 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     );
     const observationIdentity = stableObservationIdentity(observation);
     if (!current()) return this.currentResult();
+    this.pendingNavigationAction = undefined;
+    if (
+      this.navigationFailureRun &&
+      page.navigationSucceeded?.(this.navigationFailureRun.target)
+    )
+      this.navigationFailureRun = null;
     this.activity.observe(observation);
     this.options.automatic?.onObservation?.(observation, observed.frame, page);
     const abort = new AbortController();
@@ -1146,6 +1170,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     const endAction = this.beginActive("action");
     this.resetWaitFeedback();
     let applied: unknown;
+    const navigationVersion = this.navigationFailureVersion;
     try {
       const application = page
         .apply(input, this.generation, current)
@@ -1157,6 +1182,12 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       applied = await application;
     } catch (error) {
       if (!current()) return outcome("cancelled", "browser-action-revoked");
+      const navigationCode = await this.recoverNavigationFailure(error, page);
+      if (navigationCode)
+        return outcome(
+          this.phaseValue === "closing" ? "error" : "rejected",
+          navigationCode,
+        );
       if (error instanceof BrowserElementUnavailableError) {
         this.previousObservationIdentity = null;
         this.previousActionIdentity = null;
@@ -1184,7 +1215,20 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     } finally {
       endAction();
     }
-    this.activity.applied(input, observation, applied, "agent");
+    if (navigationVersion !== this.navigationFailureVersion)
+      return outcome("rejected", "browser-navigation-failed");
+    const activity = this.activity.applied(
+      input,
+      observation,
+      applied,
+      "agent",
+    );
+    if (
+      ["click-element", "click-point", "go-back", "press-key"].includes(
+        input.kind,
+      )
+    )
+      this.pendingNavigationAction = activity;
     const selectedElement =
       input.kind === "click-element"
         ? observation.elements.find(
@@ -1356,9 +1400,16 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
           feedback: [...this.feedback, ...this.waitFeedback],
         };
       })
-      .catch((error: unknown): BrowserAgentActionResult => {
+      .catch(async (error: unknown): Promise<BrowserAgentActionResult> => {
         if (this.epoch !== expectedEpoch || this.phaseValue !== "waiting")
           return { status: "cancelled", code: "browser-wait-revoked" };
+        const navigationCode = await this.recoverNavigationFailure(error, page);
+        if (navigationCode)
+          return {
+            status: "rejected",
+            code: navigationCode,
+            feedback: [...this.feedback],
+          };
         if (
           isStaleActionError(error) ||
           isPageTransitionError(error) ||
@@ -1397,6 +1448,74 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     // intentionally redact query parameters and cannot prove those URLs equal.
     const reached = page.navigationUrl?.() ?? fallback;
     if (reached) this.attemptedEntries.add(reached);
+  }
+  private async recoverNavigationFailure(
+    error: unknown,
+    page: FlowPageHandle,
+  ): Promise<string | undefined> {
+    if (
+      !(error instanceof BrowserHostNavigationError) ||
+      !error.recoverable ||
+      !error.target ||
+      !page.recoverNavigation
+    )
+      return undefined;
+    if (
+      this.options.signal.aborted ||
+      this.terminalResult ||
+      ["downloading", "validating", "candidate-ready", "closed"].includes(
+        this.phaseValue,
+      )
+    )
+      return error.code;
+    const count =
+      this.navigationFailureRun?.target === error.target
+        ? this.navigationFailureRun.count + 1
+        : 1;
+    this.navigationFailureRun = { target: error.target, count };
+    const code = count >= 2 ? "browser-navigation-retry-limit" : error.code;
+    this.activity.navigationFailed(code, this.pendingNavigationAction);
+    this.pendingNavigationAction = undefined;
+    createLogger("browser").warn("Browser navigation attempt failed", {
+      phase: "navigation-feedback",
+      cause_code: code,
+      session_id: this.session_id,
+    });
+    if (count >= 2) {
+      this.fail(code);
+      return code;
+    }
+    try {
+      const recovered = await page.recoverNavigation(error);
+      if (
+        this.options.signal.aborted ||
+        this.terminalResult ||
+        ["downloading", "validating", "candidate-ready", "closed"].includes(
+          this.phaseValue,
+        )
+      )
+        return code;
+      this.usePage(recovered);
+      this.previousObservationIdentity = null;
+      this.previousActionIdentity = null;
+      this.resetWaitFeedback();
+      this.feedback = [
+        "The last navigation did not complete. Observe the page again, then choose whether to retry, go back, or use another link. Do not replay stale element IDs or coordinates. A second consecutive failure for the same target ends this attempt.",
+      ];
+      this.phaseValue = "ready";
+      this.notify();
+    } catch (recoveryError) {
+      if (
+        !this.options.signal.aborted &&
+        !this.terminalResult &&
+        !["downloading", "validating", "candidate-ready", "closed"].includes(
+          this.phaseValue,
+        ) &&
+        this.options.hasCandidate?.() !== true
+      )
+        this.fail(stableBrowserFlowFailureCode(recoveryError));
+    }
+    return code;
   }
 
   private async recoverEntry(

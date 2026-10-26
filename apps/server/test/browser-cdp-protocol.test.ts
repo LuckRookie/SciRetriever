@@ -198,3 +198,84 @@ it.each([
     await expect(operation).rejects.toMatchObject({ reason });
   },
 );
+
+it("keeps owned navigation admission outside the ordinary RPC timeout", async () => {
+  const { connection, socket } = await fixture();
+  vi.useFakeTimers();
+  const controller = new AbortController();
+  const navigation = connection.send(
+    "Page.navigate",
+    {},
+    "session-a",
+    0,
+    controller.signal,
+  );
+  const ordinary = connection.send("Page.getFrameTree", {}, "session-b");
+  const timedOut = expect(ordinary).rejects.toMatchObject({
+    reason: "timeout",
+  });
+  await vi.advanceTimersByTimeAsync(16000);
+  await timedOut;
+  expect(
+    (Reflect.get(connection, "pending") as Map<unknown, unknown>).size,
+  ).toBe(1);
+  socket.reply({
+    id: socket.sent[0]!.id,
+    result: { loaderId: "admitted-document" },
+  });
+  await expect(navigation).resolves.toEqual({ loaderId: "admitted-document" });
+  expect(
+    (Reflect.get(connection, "pending") as Map<unknown, unknown>).size,
+  ).toBe(0);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each(["cancelled", "closed"] as const)(
+  "ends a navigation waiting for admission when its owner is %s",
+  async (ending) => {
+    const { connection, socket } = await fixture();
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+    const navigation = connection.send(
+      "Page.navigate",
+      {},
+      "session-a",
+      0,
+      controller.signal,
+    );
+    const stopped = expect(navigation).rejects.toMatchObject({
+      reason: ending === "cancelled" ? "command-cancelled" : "closed",
+    });
+    await vi.advanceTimersByTimeAsync(16000);
+    if (ending === "cancelled") controller.abort();
+    else connection.close();
+    await stopped;
+    expect(remove).toHaveBeenCalledExactlyOnceWith(
+      "abort",
+      expect.any(Function),
+    );
+    expect(
+      (Reflect.get(connection, "pending") as Map<unknown, unknown>).size,
+    ).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    socket.reply({
+      id: socket.sent[0]!.id,
+      result: { loaderId: "late-document" },
+    });
+    expect(
+      (Reflect.get(connection, "pending") as Map<unknown, unknown>).size,
+    ).toBe(0);
+  },
+);
+
+it("requires an owned navigation signal to omit the RPC timer", async () => {
+  const { connection, socket } = await fixture();
+  await expect(
+    connection.send("Page.navigate", {}, undefined, 0),
+  ).rejects.toMatchObject({ reason: "operation" });
+  await expect(
+    connection.send("IO.read", {}, undefined, 0, new AbortController().signal),
+  ).rejects.toMatchObject({ reason: "operation" });
+  expect(socket.sent).toEqual([]);
+});
