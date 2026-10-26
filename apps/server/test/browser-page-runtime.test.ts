@@ -274,6 +274,40 @@ describe("visible frame feedback on real loopback Chromium", () => {
     30_000,
   );
 
+  it("returns execution-time element centers and point labels without typed values", async () => {
+    await page.setContent(
+      '<title>Fixture</title><button style="position:absolute;left:25px;top:35px;width:100px;height:40px">View PDF<span hidden>Hidden copy</span></button><input aria-label="Notes" style="position:absolute;left:25px;top:100px;width:150px;height:30px">',
+    );
+    const snapshot = await runtime.snapshot();
+    const button = snapshot.elements!.find((e) => e.name === "View PDF")!;
+    const input = snapshot.elements!.find((e) => e.editable)!;
+    const click = await runtime.apply(
+      { kind: "click-element", element_id: button.element_id, revision: 1 },
+      snapshot.document_generation!,
+      () => true,
+    );
+    expect(click).toMatchObject({ point: { x: 75, y: 55 }, label: "View PDF" });
+    const point = await runtime.apply(
+      { kind: "click-point", x: 75, y: 55, revision: 1, viewport_version: 1 },
+      snapshot.document_generation!,
+      () => true,
+    );
+    expect(point).toMatchObject({ point: { x: 75, y: 55 }, label: "View PDF" });
+    const typed = await runtime.apply(
+      {
+        kind: "type-text",
+        element_id: input.element_id,
+        text: "PRIVATE_INPUT_4821",
+        revision: 1,
+      },
+      snapshot.document_generation!,
+      () => true,
+    );
+    expect(await page.locator("input").inputValue()).toBe("PRIVATE_INPUT_4821");
+    expect(JSON.stringify(typed)).not.toContain("PRIVATE_INPUT_4821");
+    expect(typed?.point).toBeUndefined();
+  }, 30_000);
+
   it("detects an iframe control becoming enabled without text or frame navigation", async () => {
     const frame = page
       .frames()

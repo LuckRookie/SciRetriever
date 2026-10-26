@@ -18,6 +18,89 @@ const reader = (mode: string) => (ids: DesignSampleIds) =>
   `/?literature=${ids.literature}&reader=${mode}`;
 const query = (value: object) => encodeURIComponent(JSON.stringify(value));
 const stepNames = ["范围", "算子", "规范", "确认"];
+/** Two acquisition tasks: one still running, one finished last night. */
+function sampleSessions(literature: string) {
+  const session = (
+    id: string,
+    operation: string,
+    title: string,
+    phase: string,
+    queued: string,
+    extra: object = {},
+  ) => ({
+    session_id: id,
+    article_id: literature,
+    generation: 1,
+    phase,
+    operation_id: operation,
+    title,
+    queued_at: queued,
+    ...extra,
+  });
+  const now = "2026-10-26T06:02:00.000Z",
+    night = "2026-10-25T13:30:00.000Z";
+  return [
+    session(
+      "s-1",
+      "op-now",
+      "[样例] Synthetic spectra under humid storage",
+      "deciding",
+      now,
+    ),
+    session(
+      "s-2",
+      "op-now",
+      "[样例] A quiet atlas of synthetic spectra and evidence",
+      "downloading",
+      now,
+    ),
+    session(
+      "s-3",
+      "op-now",
+      "[样例] Interface diffusion in fictional oxide cells",
+      "queued",
+      now,
+    ),
+    session(
+      "s-4",
+      "op-now",
+      "[样例] Thermal recovery of imaginary halide electrolytes",
+      "closed",
+      now,
+      {
+        closed_at: "2026-10-26T06:09:00.000Z",
+        outcome: { kind: "published", code: "published" },
+      },
+    ),
+    session(
+      "s-5",
+      "op-night",
+      "[样例] Moisture-stable argyrodites in a sample world",
+      "closed",
+      night,
+      {
+        closed_at: "2026-10-25T13:41:00.000Z",
+        outcome: { kind: "published", code: "published" },
+      },
+    ),
+    session(
+      "s-6",
+      "op-night",
+      "[样例] Catholyte interfaces for synthetic lithium metal",
+      "closed",
+      night,
+      {
+        closed_at: "2026-10-25T13:44:00.000Z",
+        outcome: { kind: "retained", code: "browser-flow-stopped" },
+        stop: {
+          reason: "blocked",
+          explanation:
+            "页面要求机构登录，当前会话没有可用的访问权限，未获取 PDF。",
+        },
+      },
+    ),
+  ];
+}
 async function openSettings(p: Page, name: string) {
   // Desktop lists sections down the side; narrow screens use a menu.
   const tab = p.getByRole("tab", { name, exact: true });
@@ -318,9 +401,9 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   },
   {
     id: "browser-sessions",
-    name: "浏览器 · 会话卡片",
+    name: "浏览器 · 会话分组",
     route: route("web"),
-    interaction: "注入一个合成的下载中会话",
+    interaction: "注入两个获取任务的合成会话",
     // No real browser runs in the sample library; only the session list in the
     // view is synthetic, so the card's look can be checked without network use.
     prepare: async (p, ids) => {
@@ -333,30 +416,34 @@ export const designSamplePages: readonly DesignSamplePage[] = [
             response,
             json: {
               ...view,
-              sessions: [
-                {
-                  session_id: "design-sample-session",
-                  article_id: ids.literature,
-                  generation: 1,
-                  phase: "downloading",
-                },
-              ],
+              sessions: sampleSessions(ids.literature),
             },
           });
         },
       );
-      // A view pushed by the event stream during a refresh wins over the read,
-      // so wait for the first view to settle and retry the refresh.
-      await p.getByText("没有正在使用的会话", { exact: false }).waitFor();
-      const card = p.locator(".browser-sessions .ui-card").first();
-      for (
-        let attempt = 0;
-        attempt < 3 && !(await card.isVisible());
-        attempt++
-      ) {
-        await p.getByRole("button", { name: "刷新会话" }).click();
-        await card.waitFor({ timeout: 3000 }).catch(() => {});
-      }
+      // The sample server pushes its real (empty) view over the event stream;
+      // mute those pushes so the synthetic list stays the only source.
+      await p.addInitScript(() => {
+        const add = EventSource.prototype.addEventListener;
+        EventSource.prototype.addEventListener = function (
+          this: EventSource,
+          type: string,
+          ...rest: unknown[]
+        ) {
+          if (type === "view") return;
+          return (add as (...args: unknown[]) => void).call(
+            this,
+            type,
+            ...rest,
+          );
+        } as typeof add;
+      });
+      await p.reload({ waitUntil: "domcontentloaded" });
+      await p.locator(".browser-sessions .ui-card").first().waitFor();
+      for (const trigger of await p
+        .locator('[aria-label="已结束"] .ui-disclosure-trigger')
+        .all())
+        await trigger.click();
     },
     ready: ".browser-sessions .ui-card",
   },

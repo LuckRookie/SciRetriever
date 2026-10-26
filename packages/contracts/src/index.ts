@@ -1996,18 +1996,20 @@ export function parseBrowserAction(value: unknown): BrowserAction {
       const reason = object(value, []).reason;
       if (reason === "access-unavailable" || reason === "no-viable-path") {
         const stopped = exact(value, ["kind", "reason", "explanation"], []);
+        // Validate as before, but retain the Agent's original formatting for supervision.
+        text(
+          typeof stopped.explanation === "string"
+            ? stopped.explanation.replace(/\s+/gu, " ")
+            : stopped.explanation,
+          ["explanation"],
+          true,
+        );
         return Object.freeze({
           kind,
           reason: enumeration(stopped.reason, BROWSER_AGENT_STOP_REASONS, [
             "reason",
           ]),
-          explanation: text(
-            typeof stopped.explanation === "string"
-              ? stopped.explanation.replace(/\s+/gu, " ")
-              : stopped.explanation,
-            ["explanation"],
-            true,
-          ),
+          explanation: wireText(stopped.explanation, Number.MAX_SAFE_INTEGER),
         });
       }
       const r = exact(value, ["kind", "reason"], []);
@@ -2380,6 +2382,8 @@ export interface WorkbenchView {
   readonly session_outcome?: WorkbenchArticleCloseOutcome | null;
   /** Process-local cleanup diagnosis; never replaces a published receipt or Library fact. */
   readonly session_cleanup_failure?: string;
+  /** Recent completed inputs and lifecycle facts for the selected session; no input text. */
+  readonly actions?: readonly WorkbenchActionRecord[];
 }
 export type WorkbenchArticlePhase =
   | "queued"
@@ -2396,7 +2400,161 @@ export interface WorkbenchArticleSession {
   readonly article_id: string;
   readonly generation: number;
   readonly phase: WorkbenchArticlePhase;
+  readonly operation_id?: string;
+  readonly title?: string;
+  readonly queued_at?: string;
+  readonly closed_at?: string;
+  readonly outcome?: WorkbenchSessionOutcome;
+  readonly stop?: WorkbenchSessionStop;
 }
+export interface WorkbenchSessionOutcome {
+  readonly kind: "published" | "retained";
+  /** Published uses "published"; retained preserves the platform outcome code. */
+  readonly code: string;
+}
+export interface WorkbenchSessionStop {
+  /** Original Agent stop reason, or an existing stable platform failure code. */
+  readonly reason: string;
+  readonly explanation?: string;
+}
+export const WORKBENCH_ACTION_KINDS = [
+  "click-element",
+  "click-point",
+  "scroll-surface",
+  "type-text",
+  "press-key",
+  "go-back",
+  "wait-for-change",
+  "tab-switch",
+  "navigation",
+  "download-started",
+  "download-failed",
+  "validation-passed",
+  "validation-failed",
+  "flow-stopped",
+] as const;
+export interface WorkbenchActionRecord {
+  readonly seq: number;
+  readonly at: string;
+  readonly actor: "agent" | "human" | "platform";
+  readonly kind: (typeof WORKBENCH_ACTION_KINDS)[number];
+  readonly label?: string;
+  readonly url?: string;
+  readonly point?: { readonly x: number; readonly y: number };
+  /** Viewport at execution, not the selected view's possibly newer viewport. */
+  readonly viewport?: { readonly width: number; readonly height: number };
+  readonly frame_seq?: number;
+  readonly observation_revision?: number;
+  readonly page_id?: string;
+  readonly document_generation?: number;
+}
+export function parseWorkbenchActionRecord(
+  value: unknown,
+): WorkbenchActionRecord {
+  const shape = object(value, []);
+  const optional = [
+    "label",
+    "url",
+    "point",
+    "viewport",
+    "frame_seq",
+    "observation_revision",
+    "page_id",
+    "document_generation",
+  ];
+  const r = exact(
+    value,
+    ["seq", "at", "actor", "kind", ...optional.filter((key) => key in shape)],
+    [],
+  );
+  const kind = enumeration(r.kind, WORKBENCH_ACTION_KINDS, ["kind"]);
+  let viewport: WorkbenchActionRecord["viewport"];
+  if (r.viewport !== undefined) {
+    const v = exact(r.viewport, ["width", "height"], []);
+    viewport = Object.freeze({
+      width: integer(v.width, [], 1, 16384),
+      height: integer(v.height, [], 1, 16384),
+    });
+  }
+  let point: WorkbenchActionRecord["point"];
+  if (r.point !== undefined) {
+    if (
+      !viewport ||
+      !["click-point", "click-element"].includes(kind) ||
+      r.frame_seq === undefined ||
+      r.observation_revision === undefined ||
+      r.page_id === undefined ||
+      r.document_generation === undefined
+    )
+      fail(["point"]);
+    const p = exact(r.point, ["x", "y"], []);
+    if (
+      typeof p.x !== "number" ||
+      typeof p.y !== "number" ||
+      !Number.isFinite(p.x) ||
+      !Number.isFinite(p.y) ||
+      p.x < 0 ||
+      p.y < 0 ||
+      p.x >= viewport.width ||
+      p.y >= viewport.height
+    )
+      fail(["point"]);
+    point = Object.freeze({ x: p.x, y: p.y });
+  }
+  let url: string | undefined;
+  if (r.url !== undefined) {
+    url = wireText(r.url, 2048);
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      fail(["url"]);
+    }
+    if (
+      !["http:", "https:"].includes(parsed.protocol) ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    )
+      fail(["url"]);
+  }
+  return Object.freeze({
+    seq: integer(r.seq, ["seq"], 1, Number.MAX_SAFE_INTEGER),
+    at: parseUtcTimestamp(r.at, ["at"]),
+    actor: enumeration(r.actor, ["agent", "human", "platform"], ["actor"]),
+    kind,
+    ...(r.label === undefined ? {} : { label: wireText(r.label, 512) }),
+    ...(url === undefined ? {} : { url }),
+    ...(viewport ? { viewport } : {}),
+    ...(point ? { point } : {}),
+    ...(r.frame_seq === undefined ? {} : { frame_seq: wireCount(r.frame_seq) }),
+    ...(r.observation_revision === undefined
+      ? {}
+      : { observation_revision: wireCount(r.observation_revision) }),
+    ...(r.page_id === undefined ? {} : { page_id: workbenchId(r.page_id) }),
+    ...(r.document_generation === undefined
+      ? {}
+      : { document_generation: wireCount(r.document_generation) }),
+  });
+}
+export function parseWorkbenchSessionStop(
+  value: unknown,
+): WorkbenchSessionStop {
+  const shape = object(value, []);
+  const r = exact(
+    value,
+    ["reason", ...("explanation" in shape ? ["explanation"] : [])],
+    [],
+  );
+  return Object.freeze({
+    reason: workbenchId(r.reason),
+    ...(r.explanation === undefined
+      ? {}
+      : { explanation: wireText(r.explanation, 2048) }),
+  });
+}
+
 export type WorkbenchArticleCloseOutcome =
   | { readonly kind: "published"; readonly receipt_id: string }
   | { readonly kind: "retained"; readonly code: string }
@@ -2412,13 +2570,58 @@ const WORKBENCH_ARTICLE_PHASES = [
   "closing",
   "closed",
 ] as const;
-function parseWorkbenchArticleSession(value: unknown): WorkbenchArticleSession {
+export function parseWorkbenchArticleSession(
+  value: unknown,
+): WorkbenchArticleSession {
+  const shape = object(value, []);
+  const optional = [
+    "operation_id",
+    "title",
+    "queued_at",
+    "closed_at",
+    "outcome",
+    "stop",
+  ];
   const row = exact(
     value,
-    ["session_id", "article_id", "generation", "phase"],
+    [
+      "session_id",
+      "article_id",
+      "generation",
+      "phase",
+      ...optional.filter((key) => key in shape),
+    ],
     [],
   );
+  const queued =
+    row.queued_at === undefined ? undefined : parseUtcTimestamp(row.queued_at);
+  const closed =
+    row.closed_at === undefined ? undefined : parseUtcTimestamp(row.closed_at);
+  if (
+    closed &&
+    (row.phase !== "closed" ||
+      (queued && Date.parse(closed) < Date.parse(queued)))
+  )
+    fail(["closed_at"]);
+  let outcome: WorkbenchSessionOutcome | undefined;
+  if (row.outcome !== undefined) {
+    const o = exact(row.outcome, ["kind", "code"], []);
+    outcome = Object.freeze({
+      kind: enumeration(o.kind, ["published", "retained"], ["kind"]),
+      code: workbenchId(o.code),
+    });
+  }
   return Object.freeze({
+    ...(row.operation_id === undefined
+      ? {}
+      : { operation_id: workbenchId(row.operation_id) }),
+    ...(row.title === undefined ? {} : { title: wireText(row.title, 512) }),
+    ...(queued ? { queued_at: queued } : {}),
+    ...(closed ? { closed_at: closed } : {}),
+    ...(outcome ? { outcome } : {}),
+    ...(row.stop === undefined
+      ? {}
+      : { stop: parseWorkbenchSessionStop(row.stop) }),
     session_id: workbenchId(row.session_id),
     article_id: workbenchId(row.article_id),
     generation: wireCount(row.generation),
@@ -2498,6 +2701,7 @@ export function parseWorkbenchView(value: unknown): WorkbenchView {
       ...("mode" in shape ? ["mode"] : []),
       ...("operation_feedback" in shape ? ["operation_feedback"] : []),
       ...("sessions" in shape ? ["sessions"] : []),
+      ...("actions" in shape ? ["actions"] : []),
       ...("session_phase" in shape ? ["session_phase"] : []),
       ...("session_outcome" in shape ? ["session_outcome"] : []),
       ...("session_cleanup_failure" in shape
@@ -2592,7 +2796,22 @@ export function parseWorkbenchView(value: unknown): WorkbenchView {
       });
     },
   );
+  let actions: readonly WorkbenchActionRecord[] | undefined;
+  if (r.actions !== undefined) {
+    if (!Array.isArray(r.actions) || r.actions.length > 100) fail(["actions"]);
+    actions = Object.freeze(r.actions.map(parseWorkbenchActionRecord));
+    if (
+      actions.some(
+        (item, i) =>
+          i > 0 &&
+          (item.seq <= actions![i - 1]!.seq ||
+            Date.parse(item.at) < Date.parse(actions![i - 1]!.at)),
+      )
+    )
+      fail(["actions"]);
+  }
   const view = {
+    ...(actions ? { actions } : {}),
     ...(r.mode === undefined
       ? {}
       : { mode: enumeration(r.mode, ["synthetic", "production"], ["mode"]) }),

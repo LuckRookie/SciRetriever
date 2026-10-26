@@ -93,12 +93,8 @@ it.each(["no-preference", "reduce"] as const)(
         .click({ position: { x: 30, y: 30 } });
       await expect.poll(() => apply.mock.calls.length).toBe(1);
       await expect
-        .poll(() =>
-          page
-            .getByText("你正在操作 · Agent 已暂停", { exact: true })
-            .textContent(),
-        )
-        .toContain("你正在操作");
+        .poll(() => page.locator(".browser-control-note").textContent())
+        .toContain("你在操作 · Agent 已暂停");
       const controller = session.view().control.controller_id;
       await page.route("**/api/control?*", async (route) => {
         if (route.request().postDataJSON().kind === "release")
@@ -119,7 +115,7 @@ it.each(["no-preference", "reduce"] as const)(
         .toContain("交还未完成");
       expect(session.view().control.controller_id).toBe(controller);
       expect(
-        await page.getByRole("dialog", { name: "Agent 操作界面" }).isVisible(),
+        await page.getByRole("dialog", { name: "观看 Agent" }).isVisible(),
       ).toBe(true);
       // Browser back is a navigation attempt too: a failed release keeps
       // both the controlled view and its confirmed URL/history entry.
@@ -128,15 +124,13 @@ it.each(["no-preference", "reduce"] as const)(
         .poll(() => new URL(page.url()).searchParams.get("view"))
         .toBe("web");
       expect(
-        await page.getByRole("dialog", { name: "Agent 操作界面" }).isVisible(),
+        await page.getByRole("dialog", { name: "观看 Agent" }).isVisible(),
       ).toBe(true);
       expect(session.view().control.controller_id).toBe(controller);
       await page.unroute("**/api/control?*");
       await page.getByRole("button", { name: "返回会话列表" }).click();
       await expect
-        .poll(() =>
-          page.getByRole("dialog", { name: "Agent 操作界面" }).count(),
-        )
+        .poll(() => page.getByRole("dialog", { name: "观看 Agent" }).count())
         .toBe(0);
       expect(session.view().control.controller_id).toBeNull();
       await page
@@ -167,9 +161,7 @@ it.each(["no-preference", "reduce"] as const)(
           .toBe("web");
         expect(session.view().control.controller_id).toBe(controller);
         expect(
-          await page
-            .getByRole("dialog", { name: "Agent 操作界面" })
-            .isVisible(),
+          await page.getByRole("dialog", { name: "观看 Agent" }).isVisible(),
         ).toBe(true);
       } finally {
         acknowledgeAction();
@@ -186,9 +178,7 @@ it.each(["no-preference", "reduce"] as const)(
         .toBe("task");
       await expect.poll(() => session.view().control.controller_id).toBeNull();
       await expect
-        .poll(() =>
-          page.getByRole("dialog", { name: "Agent 操作界面" }).count(),
-        )
+        .poll(() => page.getByRole("dialog", { name: "观看 Agent" }).count())
         .toBe(0);
       await page.goForward();
       await expect

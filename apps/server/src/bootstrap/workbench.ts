@@ -717,6 +717,11 @@ export async function startSyntheticWorkbench(options: {
       browserReadiness.configured && browserReadiness.missing.length === 0
         ? application.browserCapability
         : undefined,
+      {
+        ...(FIXTURE_LITERATURE.metadata.title
+          ? { title: FIXTURE_LITERATURE.metadata.title }
+          : {}),
+      },
     );
     for (const candidate of await application.database.listCandidates(
       target.articleId,

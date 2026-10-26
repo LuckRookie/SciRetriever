@@ -133,7 +133,9 @@ it("selects the correct live article, explicitly returns control on close, while
       )
       .toBe(2);
     expect(
-      await page.getByRole("button", { name: "人工接管", exact: true }).count(),
+      await page
+        .getByRole("button", { name: "暂停 Agent", exact: true })
+        .count(),
     ).toBe(0);
     await page
       .locator('[data-session="web-session-a"]')
@@ -142,11 +144,11 @@ it("selects the correct live article, explicitly returns control on close, while
     await expect
       .poll(() => page.locator(".browser-document-title").textContent())
       .toBe("Synthetic article A");
-    await page.getByText("页面文字与可选指导", { exact: true }).click();
-    await page.getByRole("button", { name: "人工接管", exact: true }).click();
+    await page.getByText("更多操作", { exact: true }).click();
+    await page.getByRole("button", { name: "暂停 Agent", exact: true }).click();
     await expect
-      .poll(() => page.locator(".browser-watch-header .ui-badge").textContent())
-      .toBe("你正在操作 · Agent 已暂停");
+      .poll(() => page.locator(".browser-control-note").textContent())
+      .toContain("你在操作 · Agent 已暂停");
     const client = workbench.view().control.controller_id!;
     const aEpoch = workbench.view().control.epoch;
     const step = b.step();
@@ -235,11 +237,11 @@ it("selects the correct live article, explicitly returns control on close, while
       .poll(() => page.locator(".browser-document-title").textContent())
       .toBe("Synthetic article A");
     expect(await page.locator(".browser-log .ui-card").count()).toBe(0);
-    await page.getByText("页面文字与可选指导", { exact: true }).click();
-    await page.getByRole("button", { name: "人工接管", exact: true }).click();
+    await page.getByText("更多操作", { exact: true }).click();
+    await page.getByRole("button", { name: "暂停 Agent", exact: true }).click();
     await expect
-      .poll(() => page.locator(".browser-watch-header .ui-badge").textContent())
-      .toBe("你正在操作 · Agent 已暂停");
+      .poll(() => page.locator(".browser-control-note").textContent())
+      .toContain("你在操作 · Agent 已暂停");
     expect(
       await page.locator(".browser-log > .ui-description").textContent(),
     ).toContain("30 次模型调用");

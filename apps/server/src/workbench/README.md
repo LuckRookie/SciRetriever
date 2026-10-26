@@ -30,7 +30,7 @@
 | `/api/jobs/*`                                   | 保留既有任务兼容接口、事件分页与人工介入处理，运行同样交统一任务 owner。                                                                                                                                                                                                                                                                                |
 | `/api/v1/query/*`                               | 文献、文档、证据、知识、综合与检索上下文的既有只读合同。                                                                                                                                                                                                                                                                                                |
 | `/api/v1/maintenance/*`                         | 手动 PDF、解析、知识分析、综合、索引与提取交付的既有维护合同。新 UI 的长时间加工优先提交 durable task。                                                                                                                                                                                                                                                 |
-| `POST /api/discovery`                           | 显式主题发现或引用扩展；`kind: "citation"` 固定种子、方向与扫描上限，复用 CitationDiscovery，其余主题请求复用 Discovery；只接纳元数据并返回原 owner 报告。                                                                                                                                                                                                                                                                              |
+| `POST /api/discovery`                           | 显式主题发现或引用扩展；`kind: "citation"` 固定种子、方向与扫描上限，复用 CitationDiscovery，其余主题请求复用 Discovery；只接纳元数据并返回原 owner 报告。                                                                                                                                                                                              |
 | `POST /api/import`                              | 显式导入 BibTeX、BibLaTeX、RIS 或 CSL JSON 文本；复用 Bibliography Entry 与 Identity 接纳。                                                                                                                                                                                                                                                             |
 | `/api/configuration/*`                          | 配置、凭据状态、显式保存与 probe；连接测试仅由用户明确操作触发。                                                                                                                                                                                                                                                                                        |
 
@@ -43,3 +43,5 @@ HTTP 关闭先取消并排空正在处理的请求；生产组装随后停止 du
 [上级目录](../README.md)
 
 机器连接使用现有 HTTP 授权边界，`POST /api/clients/disconnect` 需要当前 Cookie、client_id 与 CSRF，显式撤销连接；仍控制页面时按既有 detach/pause 政策处理。该客户端的事件流随撤销结束。
+
+会话摘要带获取 operation、冻结标题、排队/结束时间与结束结果；所选会话的 `actions` 保留最近 100 条动作。生产与合成会话复用 Browser 的内存投影，点击坐标绑定执行时画面，不把输入内容或 URL 查询参数送入动作记录。

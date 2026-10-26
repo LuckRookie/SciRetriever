@@ -66,12 +66,14 @@ vi.mock("../src/browser/pacing.js", async (load) => ({
     !signal.aborted,
 }));
 
-it("keeps the synthetic v1 view's exact serialized field set", () => {
+it("adds optional activity and session summaries to the synthetic v1 view", () => {
   const { session } = setup();
   const view = session.view();
   expect(Object.keys(view).sort()).toEqual(
     [
       "article_id",
+      "actions",
+      "sessions",
       "candidates",
       "control",
       "error",

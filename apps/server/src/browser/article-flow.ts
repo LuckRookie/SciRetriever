@@ -1,3 +1,4 @@
+import { BrowserActivityLog } from "./activity.js";
 import type {
   DurableCandidate,
   BrowserAgentStopReason,
@@ -212,6 +213,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
   readonly identity: BrowserArticleSessionIdentity;
   readonly clock: BrowserArticleClock;
   readonly session_id: string;
+  readonly activity = new BrowserActivityLog();
   get signal(): AbortSignal {
     return this.options.signal;
   }
@@ -383,6 +385,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       kind: "transfer-started",
       transfer_id: transferId,
     });
+    this.activity.record({ actor: "platform", kind: "download-started" });
     this.transferId = transferId;
     this.resumePage ??= this.page;
     this.phaseValue = "downloading";
@@ -417,6 +420,11 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       transfer_id: transferId,
       code: stableCaptureFailureCode(code),
     });
+    this.activity.record({
+      actor: "platform",
+      kind: "download-failed",
+      label: stableCaptureFailureCode(code),
+    });
     this.transferId = null;
     this.unresolvedCaptureFailure = stableCaptureFailureCode(code);
     if (isLocalCaptureFailure(this.unresolvedCaptureFailure)) {
@@ -436,6 +444,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
       return;
     if (this.initializationPending) this.initializationCaptureSeen = true;
     this.recordAgentEvent({ kind: "candidate-ready" });
+    this.activity.record({ actor: "platform", kind: "validation-passed" });
     this.unresolvedCaptureFailure = null;
     this.phaseValue = "candidate-ready";
     this.revokeDecision();
@@ -454,6 +463,11 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     this.recordAgentEvent({
       kind: "candidate-rejected",
       code: stableCaptureFailureCode(code),
+    });
+    this.activity.record({
+      actor: "platform",
+      kind: "validation-failed",
+      label: stableCaptureFailureCode(code),
     });
     this.transferId = null;
     this.unresolvedCaptureFailure = stableCaptureFailureCode(code);
@@ -640,6 +654,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
           );
       } finally {
         this.phaseValue = "closed";
+        this.activity.close(outcome);
         this.notify();
       }
     })();
@@ -848,6 +863,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     );
     const observationIdentity = stableObservationIdentity(observation);
     if (!current()) return this.currentResult();
+    this.activity.observe(observation);
     this.options.automatic?.onObservation?.(observation, observed.frame, page);
     const abort = new AbortController();
     this.decisionAbort = abort;
@@ -1073,6 +1089,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     }
     if (!accept()) return outcome("rejected", "browser-action-batch-limit");
     if (parsed.kind === "stop") {
+      this.activity.applied(parsed, observation, undefined, "agent");
       this.clock.recordAgentAction();
       if ("explanation" in parsed) {
         this.stop(parsed.reason, parsed.explanation);
@@ -1149,6 +1166,7 @@ export class BrowserArticleFlowDriver implements BrowserArticleExecution {
     } finally {
       endAction();
     }
+    this.activity.applied(input, observation, applied, "agent");
     const selectedElement =
       input.kind === "click-element"
         ? observation.elements.find(
@@ -2001,6 +2019,9 @@ export function createBrowserArticleFlow(
         generation: request.generation ?? 0,
         literature_id: request.literature_id,
         metadata_snapshot: Object.freeze({ ...request.metadata_snapshot }),
+        ...(request.article_goal?.title
+          ? { title: request.article_goal.title }
+          : {}),
       });
     if (
       identity.literature_id !== request.literature_id ||

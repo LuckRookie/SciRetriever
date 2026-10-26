@@ -14,6 +14,9 @@ export interface BrowserElement {
   readonly editable: boolean;
 }
 export interface BrowserPageApplyResult {
+  /** Actual CSS-pixel click target, captured from the executing runtime. */
+  readonly point?: { readonly x: number; readonly y: number };
+  readonly label?: string;
   /** The click landed on a visible PDF/download surface. */
   readonly likely_pdf?: boolean;
   readonly no_history?: boolean;
@@ -630,6 +633,14 @@ export class BrowserPageRuntime {
               likelyPdf: /(?:\bpdf\b|download)/iu.test(surfaceText),
               tag: node?.tagName.toLowerCase() ?? "unknown",
               semanticControl: surface !== null,
+              label:
+                surface?.getAttribute("aria-label") ||
+                surface?.getAttribute("title") ||
+                (surface instanceof HTMLElement
+                  ? surface.innerText
+                  : surface?.textContent) ||
+                surface?.querySelector("img[alt]")?.getAttribute("alt") ||
+                "",
             };
           },
           { x: input.x, y: input.y },
@@ -646,6 +657,8 @@ export class BrowserPageRuntime {
           else await this.page.mouse.click(input.x, input.y);
         });
         return {
+          point: { x: input.x, y: input.y },
+          label: redact(hit.label, 512),
           likely_pdf: hit.likelyPdf,
           ...(!hit.semanticControl
             ? {
@@ -686,6 +699,25 @@ export class BrowserPageRuntime {
           );
           if (!editable) throw new BrowserPageRuntimeError();
         }
+        const clickLabel =
+          input.kind === "click-element"
+            ? await element.evaluate(
+                (node) =>
+                  (node instanceof Element
+                    ? node.getAttribute("aria-label")
+                    : null) ||
+                  (node instanceof Element
+                    ? node.getAttribute("title")
+                    : null) ||
+                  (node instanceof HTMLElement
+                    ? node.innerText
+                    : node.textContent) ||
+                  (node instanceof Element
+                    ? node.querySelector("img[alt]")?.getAttribute("alt")
+                    : null) ||
+                  "",
+              )
+            : undefined;
         if (input.kind === "click-element") {
           const download = await element.evaluate((node) => {
             const anchor =
@@ -717,6 +749,12 @@ export class BrowserPageRuntime {
           }
         });
         return {
+          ...(input.kind === "click-element"
+            ? {
+                point: { x: box.x + box.width / 2, y: box.y + box.height / 2 },
+                label: redact(clickLabel ?? "", 512),
+              }
+            : {}),
           likely_pdf:
             input.kind === "click-element" &&
             (await element

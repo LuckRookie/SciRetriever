@@ -118,7 +118,7 @@ describe("live workbench on the installed Cloak runtime", () => {
             .getByRole("button", { name: "观看 Agent", exact: true })
             .click();
           await page
-            .getByRole("button", { name: "页面文字与可选指导", exact: true })
+            .getByRole("button", { name: "更多操作", exact: true })
             .click();
           await page.getByRole("button", { name: /下载与接纳 ·/ }).click();
         };
@@ -134,15 +134,13 @@ describe("live workbench on the installed Cloak runtime", () => {
               ?.naturalWidth,
         );
         await desktop
-          .getByRole("button", { name: "人工接管", exact: true })
+          .getByRole("button", { name: "暂停 Agent", exact: true })
           .click();
         await expect
-          .poll(
-            () =>
-              desktop.locator(".browser-watch-header .ui-badge").innerText(),
-            { timeout: 10000 },
-          )
-          .toBe("你正在操作 · Agent 已暂停");
+          .poll(() => desktop.locator(".browser-control-note").innerText(), {
+            timeout: 10000,
+          })
+          .toContain("你在操作 · Agent 已暂停");
         await clickAcceptedAction(desktop, "Download PDF");
         await expect
           .poll(
@@ -211,14 +209,12 @@ describe("live workbench on the installed Cloak runtime", () => {
               ?.naturalWidth,
         );
         await mobile
-          .getByRole("button", { name: "人工接管", exact: true })
+          .getByRole("button", { name: "暂停 Agent", exact: true })
           .click();
         await expect
-          .poll(
-            () =>
-              desktop.locator(".browser-watch-header .ui-badge").innerText(),
-            { timeout: 10000 },
-          )
+          .poll(() => desktop.locator(".browser-control-note").innerText(), {
+            timeout: 10000,
+          })
           .toBe("另一个操作者正在控制");
         expect(
           await desktop
@@ -270,14 +266,16 @@ describe("live workbench on the installed Cloak runtime", () => {
           .toBe(0);
         await openWatch(mobile);
         await mobile
-          .getByRole("button", { name: "人工接管", exact: true })
+          .getByRole("button", { name: "暂停 Agent", exact: true })
           .click();
         expect(
           await mobile.evaluate(
             () => document.documentElement.scrollWidth <= innerWidth,
           ),
         ).toBe(true);
-        await mobile.getByRole("button", { name: "暂停", exact: true }).click();
+        await mobile
+          .getByRole("button", { name: "暂停会话", exact: true })
+          .click();
         await expect
           .poll(() => mobile.locator(".browser-log").innerText())
           .toContain("已暂停");
@@ -312,7 +310,7 @@ describe("live workbench on the installed Cloak runtime", () => {
           )
           .toContain("· 2");
         await desktop
-          .getByRole("button", { name: "人工接管", exact: true })
+          .getByRole("button", { name: "暂停 Agent", exact: true })
           .click();
         await desktop
           .locator(".browser-log .ui-card")
@@ -397,11 +395,15 @@ describe("live workbench on the installed Cloak runtime", () => {
           .locator(".paper-open")
           .click();
         await expect
-          .poll(() => desktop.locator(".reader-information").innerText())
+          .poll(() => desktop.locator(".paper-tab[data-selected]").innerText())
           .toContain("<img src=x onerror=alert(1)>");
-        expect(await desktop.locator(".reader-information img").count()).toBe(
-          0,
-        );
+        expect(
+          await desktop
+            .locator(
+              ".paper-tab[data-selected] img, .reading-article img, .reader-information img",
+            )
+            .count(),
+        ).toBe(0);
         await desktop
           .getByLabel("主导航", { exact: true })
           .getByRole("button", { name: /文献库/ })

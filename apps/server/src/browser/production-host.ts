@@ -205,6 +205,9 @@ export function createProductionBrowserHostFactory(options: {
           generation: request.generation ?? 0,
           literature_id: request.literature_id,
           metadata_snapshot: Object.freeze({ ...request.metadata_snapshot }),
+          ...(request.article_goal?.title
+            ? { title: request.article_goal.title }
+            : {}),
         });
       if (
         request.signal.aborted ||

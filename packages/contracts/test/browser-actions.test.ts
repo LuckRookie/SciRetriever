@@ -94,7 +94,7 @@ it.each(["access-unavailable", "no-viable-path"] as const)(
         ...action,
         explanation: "Tried PDF.\nNo alternative remains.",
       }),
-    ).toMatchObject({ explanation: "Tried PDF. No alternative remains." });
+    ).toMatchObject({ explanation: "Tried PDF.\nNo alternative remains." });
     expect(() => parseBrowserAction({ kind: "stop", reason })).toThrow();
     expect(() => parseBrowserAction({ ...action, explanation: " " })).toThrow();
     expect(() =>

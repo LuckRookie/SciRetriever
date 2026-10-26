@@ -1507,10 +1507,14 @@ export async function startWorkbenchHttp(
         return;
       }
       if (pathname === "/api/sessions/select") {
-        if (!(session instanceof ProductionWorkbenchSession)) invalidInput();
         const command = object(value, ["session_id"]);
-        session.selectSession(clientId, command.session_id);
-        await session.refresh(clientId);
+        if (session instanceof ProductionWorkbenchSession) {
+          session.selectSession(clientId, command.session_id);
+          await session.refresh(clientId);
+        } else {
+          if (command.session_id !== session.id) invalidInput();
+          await session.refresh();
+        }
         json(response, 200, { view: projectedView(clientId) });
         return;
       }

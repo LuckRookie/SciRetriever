@@ -1,3 +1,4 @@
+import { BrowserActivityLog, activityText } from "../browser/activity.js";
 import { randomUUID } from "node:crypto";
 import {
   parseBrowserAction,
@@ -106,6 +107,13 @@ export class WorkbenchSession {
   private readonly waiters = new Set<() => void>();
   private agentSession: BrowserAgentSession | undefined;
   private readonly pendingAgentEvents: BrowserAgentEvent[] = [];
+  private activity: BrowserActivityLog;
+  private readonly displayArticleId: string;
+  private queuedAt = new Date().toISOString();
+  private publishedOutcome:
+    | import("@sciretriever/contracts").WorkbenchArticleCloseOutcome
+    | undefined;
+  private nextObservationActor: "human" | "platform" = "platform";
 
   constructor(
     public articleId: string,
@@ -126,7 +134,13 @@ export class WorkbenchSession {
     private readonly production = false,
     private readonly execution?: BrowserArticleExecution,
     private readonly capability?: BrowserAgentCapability,
+    private readonly display?: {
+      readonly title?: string;
+      readonly operation_id?: string;
+    },
   ) {
+    this.activity = execution?.activity ?? new BrowserActivityLog();
+    this.displayArticleId = articleId;
     if (!/^[a-zA-Z0-9._:-]{1,128}$/u.test(articleId))
       throw new WorkbenchSessionError("stale-command");
     this.id = id;
@@ -180,6 +194,7 @@ export class WorkbenchSession {
     if (!page || typeof page.id !== "string")
       throw new WorkbenchSessionError("stale-command");
     await page.activate?.();
+    this.nextObservationActor = "human";
     this.page = page;
     this.current = undefined;
     this.wire = null;
@@ -217,6 +232,8 @@ export class WorkbenchSession {
       this.agentSession = undefined;
       this.pendingAgentEvents.length = 0;
       this.articleId = articleId;
+      this.activity = new BrowserActivityLog();
+      this.queuedAt = new Date().toISOString();
       this.current = undefined;
       this.wire = null;
       this.captureStateValue = "NONE";
@@ -348,6 +365,7 @@ export class WorkbenchSession {
       throw new WorkbenchSessionError("stale-command");
     this.page = page as BrowserPageHandle;
     this.wire = parseWorkbenchObservation(observation);
+    this.activity.observe(this.wire);
     this.current = {
       article_id: observation.article_id,
       page_id: observation.page_id,
@@ -445,14 +463,51 @@ export class WorkbenchSession {
     this.invalidateAgent();
     this.policy.cancel();
     this.stateValue = "cancelled";
+    if (!this.production)
+      this.activity.close(this.publishedOutcome ?? { kind: "cancelled" });
     this.control.release(clientId, this.control.state().epoch);
     this.execution?.cancel();
     this.controlChanged();
+  }
+  activityLog(): BrowserActivityLog {
+    return this.activity;
   }
   view(): WorkbenchView {
     const control = this.control.state();
     return Object.freeze({
       ...(this.production ? { mode: "production" as const } : {}),
+      actions: this.activity.snapshot(),
+      ...(!this.production
+        ? {
+            sessions: [
+              {
+                session_id: this.id,
+                article_id: this.articleId,
+                generation: 0,
+                operation_id: this.display?.operation_id ?? this.id,
+                ...(this.articleId === this.displayArticleId &&
+                this.display?.title
+                  ? { title: activityText(this.display.title, 512) }
+                  : {}),
+                queued_at: this.queuedAt,
+                phase: this.activity.closedAt
+                  ? ("closed" as const)
+                  : this.stateValue === "agent-running"
+                    ? ("deciding" as const)
+                    : this.captureStateValue === "CANDIDATE"
+                      ? ("downloading" as const)
+                      : ("ready" as const),
+                ...(this.activity.closedAt
+                  ? { closed_at: this.activity.closedAt }
+                  : {}),
+                ...(this.activity.outcome
+                  ? { outcome: this.activity.outcome }
+                  : {}),
+                ...(this.activity.stop ? { stop: this.activity.stop } : {}),
+              },
+            ],
+          }
+        : {}),
       candidates: [...this.candidates.values()],
       ...(this.production
         ? {
@@ -491,14 +546,31 @@ export class WorkbenchSession {
       !this.candidates.has(candidate.transfer_id)
     )
       throw new WorkbenchSessionError("session-busy");
+    const previous = this.candidates.get(candidate.transfer_id);
     this.candidates.set(candidate.transfer_id, Object.freeze({ ...candidate }));
+    if (!this.execution?.activity && !previous)
+      this.activity.record({
+        actor: "platform",
+        kind:
+          candidate.disposition === "accepted"
+            ? "validation-passed"
+            : "validation-failed",
+      });
     this.captureStateValue = "CAPTURED";
   }
   transferStarted(): void {
-    if (!this.closePromise) this.captureStateValue = "CANDIDATE";
+    if (!this.closePromise) {
+      this.captureStateValue = "CANDIDATE";
+      this.activity.record({ actor: "platform", kind: "download-started" });
+    }
     this.wake();
   }
   transferFailed(): void {
+    this.activity.record({
+      actor: "platform",
+      kind: "download-failed",
+      label: "browser-transfer-failed",
+    });
     if (!this.closePromise && this.captureStateValue !== "CAPTURED")
       this.captureStateValue = "NONE";
     this.wake();
@@ -645,6 +717,11 @@ export class WorkbenchSession {
         publication.sha256 !== candidate.sha256
       )
         throw new WorkbenchSessionError("stale-command");
+      if (!this.production)
+        this.publishedOutcome = {
+          kind: "published",
+          receipt_id: publication.receipt_id,
+        };
       // A commit that already crossed its publication boundary remains a valid fact after takeover.
       this.candidates.set(
         candidate.transfer_id,
@@ -773,6 +850,8 @@ export class WorkbenchSession {
         capture_state: observation.capture_state,
         remaining: this.policy.remaining(),
       });
+      this.activity.observe(this.wire, this.nextObservationActor);
+      this.nextObservationActor = "platform";
       this.current = observation;
       this.observationPending = false;
       this.errorValue = null;
@@ -831,10 +910,33 @@ export class WorkbenchSession {
       ) => {
         const apply = async () => {
           if (!current()) throw new WorkbenchSessionError("stale-command");
-          await this.page.apply(input, command.document_generation, current);
+          const applied = await this.page.apply(
+            input,
+            command.document_generation,
+            current,
+          );
+          if (this.wire)
+            this.activity.applied(
+              input,
+              this.wire,
+              applied,
+              human ? "human" : "agent",
+            );
           if (input.kind === "stop") {
             this.policy.finish();
             this.stateValue = "finished";
+            if (!this.production)
+              this.activity.close(
+                this.publishedOutcome ?? {
+                  kind: "retained",
+                  code:
+                    input.reason === "cancel"
+                      ? "browser-flow-cancelled"
+                      : input.reason === "budget"
+                        ? "browser-flow-budget-exhausted"
+                        : "exhausted",
+                },
+              );
             this.stopResult =
               input.reason === "budget"
                 ? "budget"
@@ -1337,6 +1439,8 @@ export class WorkbenchSession {
     this.abandonmentAbort?.abort();
     this.policy.cancel();
     this.stateValue = "cancelled";
+    if (!this.production)
+      this.activity.close(this.publishedOutcome ?? { kind: "cancelled" });
     this.expireGuidance();
     this.wake();
     this.closePromise = (async () => {

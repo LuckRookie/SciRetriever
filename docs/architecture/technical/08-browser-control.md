@@ -37,6 +37,10 @@
 
 [ADR 0032](../decisions/0032-library-centered-web-workspace.md)确定新的交互方向：画面默认观看，用户在画面上直接操作可以触发控制权交接；无人介入时自动获取仍按实际结果结束，不以等待人工为默认阶段。该方向尚需前端和服务端联合适配，不表示当前已支持任意直接输入。服务端必须先确认控制权和当前文章/页面绑定，才派发输入；首次点击期间页面变化、多窗口竞争不能通过盲目重放事件处理。已存在的显式接管、交还和自然语言指导能力保留。
 
+工作台的会话摘要与动作记录是进程内读取投影，不增加 catalog 表、持久化历史或模型上下文。`WorkbenchView.sessions` 可选新增 `operation_id`、冻结元数据标题 `title`（最多 512 字符）、UTC `queued_at` / `closed_at`、`outcome: {kind, code}` 和 `stop: {reason, explanation?}`。`outcome.kind` 为 `published` 或 `retained`；发布使用 `code: "published"`，取消映射为 retained / `browser-flow-cancelled`，其余保留已有平台码。Agent Stop 保留其原始 reason 与 explanation（最多 2048 字符，敏感信息仍脱敏）；不能以平台的通用结束码覆盖 Agent 原因。原有 `session_outcome` 合同不变。
+
+所选会话的可选 `actions` 返回最近 100 条实际执行完成的输入与生命周期事件，`seq` 单调递增，`at` 为 UTC，`actor` 为 agent / human / platform。动作名沿用输入类型，并加入 `navigation`、`tab-switch`、`download-started`、`download-failed`、`validation-passed`、`validation-failed`、`flow-stopped`；文件验收通过不等于文献已发布。`label` 最多 512 字符，URL 不含 userinfo、query 或 fragment，输入内容不进入记录。点击 `point` 来自执行时的实际 CSS 坐标或元素框中心，未知则省略；它与当时的 `viewport`、`frame_seq`、`observation_revision`、`page_id`、`document_generation` 一起返回。前端只在这些绑定与所展示画面匹配时绘制指针，不能把旧动作坐标套到新的页面或视口上。导航/页签事件由观察变化产生；这部分记录 actor=platform，不推断哪个主体触发了页面脚本。合成工作台与生产文章流程复用同一投影，新 parser 同时接受没有这些字段的旧 payload。
+
 ### 2.2 浏览器实现
 
 #### 2.2.1 当前 TypeScript surface 与接线状态

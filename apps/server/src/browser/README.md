@@ -6,6 +6,7 @@
 
 - [article-flow.ts](article-flow.ts)：单篇文章的页面操作流程。
 - [observation.ts](observation.ts)：页面观察材料。
+- [activity.ts](activity.ts)：有界的进程内动作与停止投影；不保存输入文本、页面图片或数据库事实。
 - [decision.ts](decision.ts)：保留单次决策兼容入口，并提供绑定文章身份的 DSH 能力会话；工具语义与动作结果由 Browser 定义。
 - [pacing.ts](pacing.ts)：动作节奏与等待。
 - [transfers.ts](transfers.ts)：下载传输管理。

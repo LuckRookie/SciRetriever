@@ -1,3 +1,4 @@
+import { BrowserActivityLog, activityText } from "../browser/activity.js";
 import { randomUUID } from "node:crypto";
 import {
   parseLiteratureId,
@@ -33,6 +34,9 @@ import { WorkbenchSession, WorkbenchSessionError } from "./session.js";
 interface ArticleProjection {
   readonly identity: BrowserArticleSessionIdentity;
   readonly cancel: () => void;
+  readonly queuedAt: string;
+  title?: string;
+  activity: BrowserActivityLog;
   session?: WorkbenchSession;
   execution?: BrowserArticleExecution;
   outcome: BrowserArticleCloseOutcome | null;
@@ -335,6 +339,8 @@ export class ProductionWorkbenchSession {
         metadata_snapshot: Object.freeze({ ...identity.metadata_snapshot }),
       }),
       cancel,
+      queuedAt: new Date().toISOString(),
+      activity: new BrowserActivityLog(),
       outcome: null,
       cleanupFailure: null,
     });
@@ -370,6 +376,9 @@ export class ProductionWorkbenchSession {
     )
       throw new WorkbenchSessionError("stale-command");
     record.execution = execution;
+    if (execution.activity) record.activity = execution.activity;
+    if (request.article_goal?.title)
+      record.title = activityText(request.article_goal.title, 512);
     return {
       close: (outcome) => this.removed(identity.session_id, outcome),
     };
@@ -386,6 +395,7 @@ export class ProductionWorkbenchSession {
     )
       record.cleanupFailure ??= outcome.code;
     record.outcome ??= Object.freeze({ ...outcome });
+    record.activity.close(record.outcome);
     record.session?.finishProduction(
       record.outcome.kind === "cancelled"
         ? "cancelled"
@@ -436,6 +446,9 @@ export class ProductionWorkbenchSession {
       );
       record = this.sessions.get(id)!;
     }
+    if (execution?.activity) record.activity = execution.activity;
+    if (request.article_goal?.title)
+      record.title = activityText(request.article_goal.title, 512);
     const target: BrowserDecisionTarget = request.article_goal ?? {
       literature_id: articleId,
       identifier: request.identifier,
@@ -487,6 +500,7 @@ export class ProductionWorkbenchSession {
       execution,
     );
     record.session = session;
+    record.activity = session.activityLog();
     if (execution) record.execution = execution;
     for (const client of this.clients) {
       session.attach(client);
@@ -497,7 +511,9 @@ export class ProductionWorkbenchSession {
     if (articleId === this.articleId) this.phase = "browser";
     await session.refresh();
     const finish = (failed: boolean, outcome?: BrowserArticleCloseOutcome) => {
-      if (outcome) record.outcome ??= Object.freeze({ ...outcome });
+      if (outcome) {
+        record.outcome ??= Object.freeze({ ...outcome });
+      }
       session.finishProduction(
         outcome?.kind === "cancelled" || request.signal?.aborted
           ? "cancelled"
@@ -522,6 +538,12 @@ export class ProductionWorkbenchSession {
       close: (failed, outcome) => {
         if (articleId === this.articleId) this.phase = "settling";
         finish(failed, outcome);
+        record.activity.close(
+          record.outcome ?? {
+            kind: "retained",
+            code: failed ? "browser-failed" : "exhausted",
+          },
+        );
       },
     };
   }
@@ -602,6 +624,18 @@ export class ProductionWorkbenchSession {
       article_id: record.identity.literature_id,
       generation: record.identity.generation,
       phase: this.articlePhase(record),
+      operation_id: record.identity.operation_id,
+      ...((record.title ?? record.identity.title)
+        ? { title: activityText((record.title ?? record.identity.title)!, 512) }
+        : {}),
+      queued_at: record.queuedAt,
+      ...(this.articlePhase(record) === "closed" && record.activity.closedAt
+        ? { closed_at: record.activity.closedAt }
+        : {}),
+      ...(this.articlePhase(record) === "closed" && record.activity.outcome
+        ? { outcome: record.activity.outcome }
+        : {}),
+      ...(record.activity.stop ? { stop: record.activity.stop } : {}),
     }));
     if (selected?.session) {
       const view: WorkbenchView = {
@@ -637,6 +671,7 @@ export class ProductionWorkbenchSession {
       selected?.identity.literature_id ?? this.articleId;
     return {
       mode: "production",
+      actions: selected?.activity.snapshot() ?? [],
       sessions: summaries,
       ...(selected
         ? {

@@ -1,3 +1,4 @@
+import type { BrowserActivityLog } from "./activity.js";
 import type {
   DurableCandidate,
   MetadataSnapshot,
@@ -14,6 +15,8 @@ export interface BrowserArticleSessionIdentity {
   readonly generation: number;
   readonly literature_id: string;
   readonly metadata_snapshot: MetadataSnapshot;
+  /** Title from the same frozen neutral metadata used to build article_goal. */
+  readonly title?: string;
 }
 
 /** Browser runtime phases, not persistent Literature or acquisition result states. */
@@ -62,6 +65,7 @@ export type BrowserArticleStepResult =
 export interface BrowserArticleExecution extends BrowserArticleDeliveryLease {
   readonly identity: BrowserArticleSessionIdentity;
   readonly clock: BrowserArticleClock;
+  readonly activity?: BrowserActivityLog;
   phase(): BrowserArticleSessionPhase;
   /** Exact software-selected entry while its pre-model navigation is in flight. */
   preparationTarget?(): string | null;

@@ -599,6 +599,8 @@ it("selects and cancels an initial queued article through HTTP without opening i
       article_id: articleB,
       generation: 1,
       phase: "downloading",
+      operation_id: "parallel-operation",
+      queued_at: expect.any(String),
     });
     const binding = {
       session_id: incoming.session_identity!.session_id,
@@ -795,6 +797,114 @@ it("consumes only guidance included in the dispatched request when new guidance 
   } finally {
     permit.resolve();
     await execution.close({ kind: "retained", code: "exhausted" });
+    await workbench.close();
+  }
+});
+
+it("projects executed Agent points and original stop text from the owning production flow", async () => {
+  const workbench = new ProductionWorkbenchSession(articleA, undefined);
+  const owned = page(articleA, 33);
+  owned.apply = vi.fn(async (input) =>
+    input.kind === "click-point"
+      ? { point: { x: input.x, y: input.y }, label: "Read article" }
+      : { wait_outcome: "changed", wait_elapsed_ms: 0 },
+  );
+  let calls = 0;
+  const flow = createBrowserArticleFlow({
+    session_id: "activity-flow",
+    observations: new BrowserObservationStore(),
+    collaboration: workbench,
+    action_cooldown_ms: 0,
+    pages: {
+      openPage: async (incoming) => ({
+        page: owned,
+        session_id: incoming.session_identity!.session_id,
+        close: () => owned.close(),
+      }),
+    },
+    candidateSource: () => ({
+      hasCandidate: () => false,
+      next: async () => null,
+    }),
+    decide: async (
+      observation,
+      _frame,
+      _signal,
+      _guidance,
+      _target,
+      _history,
+      _feedback,
+      lifecycle,
+    ) => {
+      lifecycle!.onDispatched();
+      return calls++ === 0
+        ? {
+            kind: "click-point",
+            x: 45,
+            y: 70,
+            revision: observation.observation_revision,
+            viewport_version: observation.viewport_revision,
+          }
+        : {
+            kind: "stop",
+            reason: "no-viable-path",
+            explanation:
+              "No PDF route remains.\nThe visible links were exhausted.",
+          };
+    },
+  });
+  const incoming = request(articleA, "activity-article");
+  const execution = await flow.open!({
+    ...incoming,
+    article_goal: {
+      literature_id: articleA,
+      identifier: incoming.identifier,
+      version: incoming.version,
+      title: "Frozen source title",
+      identifiers: [],
+      authors: [],
+      abstract_excerpt: null,
+      venue: null,
+      publisher: null,
+      publication_year: null,
+      publication_form: null,
+    },
+  });
+  const client = workbench.attach();
+  try {
+    for (let i = 0; i < 10; i++) {
+      const step = await execution.step();
+      if (step.kind === "terminal") break;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(calls).toBe(2);
+    await execution.close({ kind: "retained", code: "browser-agent-stopped" });
+    const view = parseWorkbenchView(workbench.view(client));
+    expect(view.sessions?.[0]).toMatchObject({
+      operation_id: "parallel-operation",
+      title: "Frozen source title",
+      queued_at: expect.any(String),
+      closed_at: expect.any(String),
+      outcome: { kind: "retained", code: "browser-agent-stopped" },
+      stop: {
+        reason: "no-viable-path",
+        explanation: "No PDF route remains.\nThe visible links were exhausted.",
+      },
+    });
+    expect(view.actions?.find((a) => a.kind === "click-point")).toMatchObject({
+      actor: "agent",
+      point: { x: 45, y: 70 },
+      frame_seq: expect.any(Number),
+      observation_revision: expect.any(Number),
+      page_id: "page-33",
+      viewport: { width: 800, height: 600 },
+    });
+    expect(view.actions?.at(-1)).toMatchObject({
+      kind: "flow-stopped",
+      actor: "agent",
+    });
+  } finally {
+    await execution.close({ kind: "cancelled" });
     await workbench.close();
   }
 });
