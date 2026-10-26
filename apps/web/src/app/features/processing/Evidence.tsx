@@ -1,5 +1,6 @@
 import { markdown } from "../../../reading/markdown.js";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import {
   processorJson,
   type EvidenceRef,
@@ -10,6 +11,7 @@ import {
   ErrorNotice,
   Skeleton,
   TechDetails,
+  Tooltip,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import {
@@ -26,19 +28,14 @@ import {
   type EvidencePageCursor,
 } from "../../../reading/transport.js";
 
-export function ResultEvidence({
-  citation,
-  onFollow,
-  returnParameters,
-}: {
-  citation: ProcessorCitation;
-  onFollow: (next: ProcessorCitation) => void;
-  returnParameters: Record<string, string>;
-}) {
-  const api = useApi();
-  const data = useQuery({
+/** Resolves a citation to its value, original passages and upstream links; shared by the drawer and the hover preview. */
+function evidenceQuery(
+  api: ReturnType<typeof useApi>,
+  citation: ProcessorCitation,
+) {
+  return {
     queryKey: ["processors", "evidence", citation],
-    queryFn: async ({ signal }) => {
+    queryFn: async ({ signal }: { signal: AbortSignal }) => {
       const upstream: ProcessorCitation[] = [];
       let missing = "";
       if (citation.kind === "document")
@@ -84,7 +81,43 @@ export function ResultEvidence({
       }
       return { ...resolved, upstream, missing, sourceOnly: false };
     },
-  });
+  };
+}
+/** First page of one original passage; the drawer reads further pages with the same key. */
+function passageQuery(api: ReturnType<typeof useApi>, evidence: EvidenceRef) {
+  return {
+    queryKey: ["document", "result-passage", evidence],
+    initialPageParam: {
+      continuation: null,
+      expectedStart: null,
+    } as EvidencePageCursor,
+    retry: false,
+    queryFn: ({
+      pageParam,
+      signal,
+    }: {
+      pageParam: EvidencePageCursor;
+      signal: AbortSignal;
+    }) =>
+      readEvidencePage(
+        { api, signal, root: document.body, refresh: () => {} },
+        evidence,
+        pageParam,
+      ),
+    getNextPageParam: nextEvidencePage,
+  };
+}
+export function ResultEvidence({
+  citation,
+  onFollow,
+  returnParameters,
+}: {
+  citation: ProcessorCitation;
+  onFollow: (next: ProcessorCitation) => void;
+  returnParameters: Record<string, string>;
+}) {
+  const api = useApi();
+  const data = useQuery(evidenceQuery(api, citation));
   if (data.isPending) return <Skeleton label="正在核验固定来源" />;
   if (data.isError)
     return (
@@ -145,21 +178,7 @@ function Passage({
 }) {
   const api = useApi(),
     shell = useShell();
-  const data = useInfiniteQuery({
-    queryKey: ["document", "result-passage", evidence],
-    initialPageParam: {
-      continuation: null,
-      expectedStart: null,
-    } as EvidencePageCursor,
-    retry: false,
-    queryFn: ({ pageParam, signal }) =>
-      readEvidencePage(
-        { api, signal, root: document.body, refresh: () => {} },
-        evidence,
-        pageParam,
-      ),
-    getNextPageParam: nextEvidencePage,
-  });
+  const data = useInfiniteQuery(passageQuery(api, evidence));
   const first = data.data?.pages[0];
   return (
     <section className="result-passage">
@@ -261,5 +280,70 @@ function Passage({
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * Hover or keyboard focus on a cited value previews its first original passage;
+ * pressing still opens the full evidence drawer.
+ */
+export function EvidencePeek({
+  citation,
+  children,
+}: {
+  citation: ProcessorCitation;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip wide text={<PeekBody citation={citation} />}>
+      {children}
+    </Tooltip>
+  );
+}
+function PeekBody({ citation }: { citation: ProcessorCitation }) {
+  const api = useApi();
+  const data = useQuery(evidenceQuery(api, citation));
+  const first = data.data?.evidence[0];
+  if (data.isPending)
+    return <p className="evidence-peek-note">正在读取原文…</p>;
+  if (data.isError)
+    return <p className="evidence-peek-note">{processingError(data.error)}</p>;
+  if (!first)
+    return (
+      <p className="evidence-peek-note">
+        {data.data.missing || "该字段没有可定位的原文依据。"}
+      </p>
+    );
+  return <PeekPassage evidence={first} count={data.data.evidence.length} />;
+}
+function PeekPassage({
+  evidence,
+  count,
+}: {
+  evidence: EvidenceRef;
+  count: number;
+}) {
+  const api = useApi();
+  const data = useInfiniteQuery(passageQuery(api, evidence));
+  const page = data.data?.pages[0];
+  const text = (page?.text ?? "").replace(/^#+\s*/gm, "").trim();
+  return (
+    <div className="evidence-peek">
+      {data.isPending ? (
+        <p className="evidence-peek-note">正在读取原文…</p>
+      ) : data.isError ? (
+        <p className="evidence-peek-note">{processingError(data.error)}</p>
+      ) : page?.granularity === "file" ? (
+        <p className="evidence-peek-note">
+          证据指向原始文件，没有正文片段定位。
+        </p>
+      ) : (
+        <blockquote>{text || "原文片段为空。"}</blockquote>
+      )}
+      <p className="evidence-peek-note">
+        {page?.location ? `PDF 第 ${page.location.page} 页 · ` : ""}
+        {count > 1 ? `共 ${count} 处原文，` : ""}点击查看完整证据与核对
+      </p>
+    </div>
   );
 }

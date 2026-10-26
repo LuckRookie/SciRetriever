@@ -5,9 +5,9 @@ import {
   Button,
   EmptyState,
   ErrorNotice,
-  SearchField,
   Select,
   Skeleton,
+  SuggestField,
   Switch,
 } from "../../components/index.js";
 import { archiveQuery, rows } from "../../data/archive.js";
@@ -41,6 +41,25 @@ export function Runs() {
         signal,
       ),
   });
+  const needle = literature.trim().toLowerCase();
+  /** Snapshots offered while typing; the chosen one stays listed so its name shows. */
+  const snapshotOptions = (snapshots.data ? rows(snapshots.data) : [])
+    .map((s) => ({
+      value: String(s.snapshot_id),
+      label:
+        typeof s.name === "string" && s.name
+          ? s.name
+          : `${Number(s.member_count)} 篇 · ${localTime(s.created_at)}`,
+      description: `快照 · ${Number(s.member_count)} 篇`,
+    }))
+    .filter(
+      (option) =>
+        option.value === snapshot ||
+        !needle ||
+        option.label.toLowerCase().includes(needle),
+    )
+    .sort((a, b) => Number(b.value === snapshot) - Number(a.value === snapshot))
+    .slice(0, 8);
   const list = useInfiniteQuery({
     queryKey: ["processors", "runs", processor, snapshot, literature, stale],
     initialPageParam: 0,
@@ -81,28 +100,14 @@ export function Runs() {
               : []),
           ]}
         />
-        <Select
-          label="按快照筛选"
-          value={snapshot}
-          onChange={setSnapshot}
-          options={[
-            { value: "", label: "全部输入" },
-            ...(snapshots.data
-              ? rows(snapshots.data).map((s) => ({
-                  value: String(s.snapshot_id),
-                  label:
-                    typeof s.name === "string" && s.name
-                      ? s.name
-                      : `${Number(s.member_count)} 篇 · ${localTime(s.created_at)}`,
-                }))
-              : []),
-          ]}
-        />
-        <SearchField
-          label="按来源文献筛选"
-          value={literature}
-          onChange={setLiterature}
-          placeholder="来源文献标题或标识"
+        <SuggestField
+          label="按来源筛选"
+          text={literature}
+          onTextChange={setLiterature}
+          selected={snapshot}
+          onSelect={setSnapshot}
+          suggestions={snapshotOptions}
+          placeholder="来源文献，或选择快照"
         />
         <Switch isSelected={stale} onChange={setStale}>
           只看过时

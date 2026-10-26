@@ -64,7 +64,7 @@ import {
   type ResultRow,
 } from "./result-shape.js";
 import { processingError } from "./form.js";
-import { ResultEvidence } from "./Evidence.js";
+import { EvidencePeek, ResultEvidence } from "./Evidence.js";
 // Also rendered inside 全文检索, which does not load the operator page.
 import "./processing.css";
 interface Filter {
@@ -665,20 +665,29 @@ function Detail({
           render: (row: ResultRow) =>
             Object.hasOwn(row.payload, name) ? (
               <>
-                <Button
-                  variant="text"
-                  size="compact"
-                  onPress={() =>
-                    setEvidence({
-                      kind: "result",
-                      ...refs.get(row.result_id)!,
-                      record_id: row.record_id,
-                      pointer: pointerFor(name),
-                    })
-                  }
+                <EvidencePeek
+                  citation={{
+                    kind: "result",
+                    ...refs.get(row.result_id)!,
+                    record_id: row.record_id,
+                    pointer: pointerFor(name),
+                  }}
                 >
-                  {display(row.payload[name]!)}
-                </Button>
+                  <Button
+                    variant="text"
+                    size="compact"
+                    onPress={() =>
+                      setEvidence({
+                        kind: "result",
+                        ...refs.get(row.result_id)!,
+                        record_id: row.record_id,
+                        pointer: pointerFor(name),
+                      })
+                    }
+                  >
+                    {display(row.payload[name]!)}
+                  </Button>
+                </EvidencePeek>
                 {row.value_checks
                   .filter(
                     (c) =>

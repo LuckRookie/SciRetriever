@@ -123,10 +123,13 @@ it("selects the correct live article, explicitly returns control on close, while
     await loginWorkbenchPage(page, http.origin);
     await page.goto(`${http.origin}/?view=web`);
     await expect
-      .poll(() =>
-        page
-          .locator(".browser-sessions [data-session] > section > button")
-          .count(),
+      .poll(
+        () =>
+          page
+            .locator(".browser-sessions [data-session]")
+            .getByRole("button", { name: "观看 Agent", exact: true })
+            .count(),
+        { timeout: 20000 },
       )
       .toBe(2);
     expect(

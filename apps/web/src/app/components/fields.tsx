@@ -1,7 +1,14 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import {
   Button,
   Checkbox as AriaCheckbox,
+  ComboBox as AriaComboBox,
   FieldError,
   Group,
   Input,
@@ -238,6 +245,89 @@ export function Select({
     </AriaSelect>
   );
 }
+/**
+ * Free-text field with picked suggestions: typing filters by text, choosing a
+ * suggestion replaces the text with that item. One control for "type or pick".
+ */
+export function SuggestField({
+  text,
+  onTextChange,
+  selected,
+  onSelect,
+  suggestions,
+  placeholder,
+  ...field
+}: FieldProps & {
+  text: string;
+  onTextChange: (text: string) => void;
+  selected: string;
+  onSelect: (value: string) => void;
+  suggestions: readonly SelectOption[];
+  placeholder?: string;
+}) {
+  const label = suggestions.find((option) => option.value === selected)?.label;
+  return (
+    <AriaComboBox
+      className="ui-field"
+      allowsCustomValue
+      menuTrigger="focus"
+      inputValue={selected ? (label ?? "") : text}
+      onInputChange={(next) => {
+        if (selected && next === label) return;
+        if (selected) onSelect("");
+        onTextChange(next);
+      }}
+      selectedKey={selected || null}
+      onSelectionChange={(key) => {
+        if (key === null) return;
+        onSelect(String(key));
+        onTextChange("");
+      }}
+      items={suggestions}
+      isDisabled={field.isDisabled ?? false}
+    >
+      <Field {...field}>
+        <Group className="ui-search">
+          <Icon name="search" />
+          <Input
+            className="ui-search-input"
+            {...(placeholder ? { placeholder } : {})}
+          />
+          {text || selected ? (
+            <Button
+              className="ui-clear"
+              aria-label="清除"
+              onPress={() => {
+                onSelect("");
+                onTextChange("");
+              }}
+            >
+              <Icon name="close" />
+            </Button>
+          ) : null}
+        </Group>
+        <Popover className="ui-popover" placement="bottom start">
+          <ListBox className="ui-listbox">
+            {(option: SelectOption) => (
+              <ListBoxItem
+                className="ui-option"
+                id={option.value}
+                textValue={option.label}
+              >
+                <Text slot="label">{option.label}</Text>
+                {option.description ? (
+                  <Text slot="description" className="ui-description">
+                    {option.description}
+                  </Text>
+                ) : null}
+              </ListBoxItem>
+            )}
+          </ListBox>
+        </Popover>
+      </Field>
+    </AriaComboBox>
+  );
+}
 export function NumberField({
   value,
   onChange,
@@ -246,6 +336,7 @@ export function NumberField({
   step,
   placeholder,
   formatOptions,
+  live = false,
   ...field
 }: FieldProps & {
   value: number;
@@ -255,6 +346,8 @@ export function NumberField({
   step?: number;
   placeholder?: string;
   formatOptions?: Intl.NumberFormatOptions;
+  /** Report each typed in-range value instead of waiting for blur or Enter. */
+  live?: boolean;
 }) {
   const [focused, setFocused] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -287,6 +380,24 @@ export function NumberField({
               setFocused(true);
             }}
             onBlur={() => setFocused(false)}
+            {...(live
+              ? {
+                  onInput: (event: FormEvent<HTMLInputElement>) => {
+                    const text = event.currentTarget.value.replace(
+                      /[\s,，]/g,
+                      "",
+                    );
+                    const next = text === "" ? Number.NaN : Number(text);
+                    if (
+                      Number.isFinite(next) &&
+                      next !== value &&
+                      (minValue === undefined || next >= minValue) &&
+                      (maxValue === undefined || next <= maxValue)
+                    )
+                      onChange(next);
+                  },
+                }
+              : {})}
           />
           <Button slot="increment" className="ui-number-step" aria-label="增加">
             <Icon name="plus" />

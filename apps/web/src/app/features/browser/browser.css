@@ -11,11 +11,22 @@
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
     gap: var(--space-4);
   }
-  .browser-session-preview {
-    background: var(--surface-sunken);
-    padding: var(--space-5);
-    border-radius: var(--radius-md);
-    margin-bottom: var(--space-3);
+  .browser-sessions .ui-card {
+    border-color: transparent;
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-1);
+  }
+  .browser-sessions .ui-card h2 {
+    font-family: var(--title-face);
+    font-weight: 600;
+    line-height: 1.4;
+  }
+  .browser-session-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
   }
   .browser-watch.ui-modal {
     width: min(1540px, 96vw);

@@ -182,13 +182,12 @@ function SessionCard({
   });
   return (
     <Card title={detail.data?.literature.metadata.title ?? "文献获取会话"}>
-      <div className="browser-session-preview">
+      <div className="browser-session-status">
         <Badge status="running">
           {phases[session.phase] ?? states[session.phase] ?? session.phase}
         </Badge>
-        <p>Agent 的真实页面</p>
+        <Button onPress={onOpen}>观看 Agent</Button>
       </div>
-      <Button onPress={onOpen}>观看 Agent</Button>
       <TechDetails copyText={session.session_id}>
         <p>会话编号：{session.session_id}</p>
         <p>文献编号：{session.article_id}</p>

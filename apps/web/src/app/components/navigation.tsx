@@ -436,15 +436,23 @@ export function AnchoredPopover({
 }
 export function Tooltip({
   text,
+  wide = false,
   children,
 }: {
-  text: string;
+  /** Short hint text, or a small read-only preview when `wide`. */
+  text: ReactNode;
+  wide?: boolean;
   children: ReactNode;
 }) {
   return (
     <TooltipTrigger delay={500} closeDelay={0}>
       {children}
-      <AriaTooltip className="ui-tooltip">{text}</AriaTooltip>
+      <AriaTooltip
+        className={wide ? "ui-tooltip ui-tooltip-wide" : "ui-tooltip"}
+        {...(wide ? { placement: "bottom start" as const } : {})}
+      >
+        {text}
+      </AriaTooltip>
     </TooltipTrigger>
   );
 }

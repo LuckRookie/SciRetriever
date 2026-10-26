@@ -4,8 +4,8 @@ G1 记录/标签表单固定选择范围，校验字段、单位与读取策略�
 
 纯结果传输与 hash 校验复用 `app/data/processor-results.ts`。旧 artifact 与 result ID 不互换；false、null 和缺失字段分别展示。证据视图保留上游引用及固定原文跳转，技术标识仅在详情中展示。
 
-`Evidence.tsx` 按来源走现有读取边界：处理结果使用 processors，文档使用 evidence-resolve，知识与综合使用 synthesis-source。综合的来源内容、输入清单和断言 hash 在递归核对时全部保留；原 PDF 不可复核时明示来源降级。旧知识库的证据读取不依赖处理器 schema。
+`Evidence.tsx` 按来源走现有读取边界：处理结果使用 processors，文档使用 evidence-resolve，知识与综合使用 synthesis-source。综合的来源内容、输入清单和断言 hash 在递归核对时全部保留；原 PDF 不可复核时明示来源降级。旧知识库的证据读取不依赖处理器 schema。`EvidencePeek` 在字段取值悬停或聚焦时预览第一段原文，与证据侧栏共用同一查询键，打开侧栏时不重复读取。
 
 [应用源码](../../README.md)
 
-`Runs.tsx` 是默认运行记录入口，按算子、快照、文献和版本筛选；结果检索仍可切换使用。`UsageEstimate.tsx` 在明确确认前展示历史区间、复用和样本数，缺样本时显示无法预估，不设置金额或时限。字段标题优先采用规范 description。
+`Runs.tsx` 是默认运行记录入口，按算子、来源（输入文字筛文献，或从下拉选快照）和是否过时筛选；结果检索仍可切换使用。`UsageEstimate.tsx` 在明确确认前展示历史区间、复用和样本数，缺样本时显示无法预估，不设置金额或时限。字段标题优先采用规范 description。

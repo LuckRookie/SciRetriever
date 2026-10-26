@@ -6,7 +6,7 @@ export interface DesignSamplePage {
   name: string;
   route: (ids: DesignSampleIds, gallery: boolean) => string;
   interaction?: string;
-  prepare?: (page: Page) => Promise<void>;
+  prepare?: (page: Page, ids: DesignSampleIds) => Promise<void>;
   ready: string;
   anonymous?: boolean;
 }
@@ -18,6 +18,16 @@ const reader = (mode: string) => (ids: DesignSampleIds) =>
   `/?literature=${ids.literature}&reader=${mode}`;
 const query = (value: object) => encodeURIComponent(JSON.stringify(value));
 const stepNames = ["范围", "算子", "规范", "确认"];
+async function openSettings(p: Page, name: string) {
+  // Desktop lists sections down the side; narrow screens use a menu.
+  const tab = p.getByRole("tab", { name, exact: true });
+  await p.locator(".settings-navigation").waitFor();
+  if (await tab.isVisible()) await tab.click();
+  else {
+    await p.locator(".settings-navigation-narrow button").click();
+    await p.getByRole("option", { name, exact: true }).click();
+  }
+}
 export const designSamplePages: readonly DesignSamplePage[] = [
   {
     id: "intake",
@@ -183,11 +193,44 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     ready: '[aria-label="算子运行记录"]',
   },
   {
+    id: "operator-runs-source",
+    name: "算子 · 来源筛选",
+    route: route("ext"),
+    interaction: "聚焦来源输入框，列出可选快照",
+    prepare: async (p) => {
+      await p.locator(".run-list").waitFor();
+      await p.getByRole("combobox", { name: "按来源筛选" }).click();
+    },
+    ready: ".ui-listbox .ui-option",
+  },
+  {
     id: "result-detail",
     name: "算子 · 结果详情",
     route: (ids) =>
       `/?view=ext&result=${ids.result}&resultHash=${ids.resultHash}`,
     ready: '[aria-label="提取结果"]',
+  },
+  {
+    id: "result-detail-peek",
+    name: "算子 · 证据预览",
+    route: (ids) =>
+      `/?view=ext&result=${ids.result}&resultHash=${ids.resultHash}`,
+    interaction: "键盘聚焦第一个取值，预览原文",
+    prepare: async (p) => {
+      // Columns: selection, source, then the first extracted field.
+      const value = p
+        .locator('[aria-label="提取结果"] tbody tr')
+        .first()
+        .locator("td")
+        .nth(2)
+        .locator(".ui-button")
+        .first();
+      await value.waitFor();
+      await value.focus();
+      await p.keyboard.press("Shift+Tab");
+      await p.keyboard.press("Tab");
+    },
+    ready: ".ui-tooltip-wide .evidence-peek blockquote",
   },
   {
     id: "snapshots",
@@ -274,6 +317,50 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     ready: ".browser-workspace, .browser-workbench, .browser-page",
   },
   {
+    id: "browser-sessions",
+    name: "浏览器 · 会话卡片",
+    route: route("web"),
+    interaction: "注入一个合成的下载中会话",
+    // No real browser runs in the sample library; only the session list in the
+    // view is synthetic, so the card's look can be checked without network use.
+    prepare: async (p, ids) => {
+      await p.route(
+        (url) => url.pathname === "/api/view",
+        async (request) => {
+          const response = await request.fetch();
+          const view = (await response.json()) as Record<string, unknown>;
+          await request.fulfill({
+            response,
+            json: {
+              ...view,
+              sessions: [
+                {
+                  session_id: "design-sample-session",
+                  article_id: ids.literature,
+                  generation: 1,
+                  phase: "downloading",
+                },
+              ],
+            },
+          });
+        },
+      );
+      // A view pushed by the event stream during a refresh wins over the read,
+      // so wait for the first view to settle and retry the refresh.
+      await p.getByText("没有正在使用的会话", { exact: false }).waitFor();
+      const card = p.locator(".browser-sessions .ui-card").first();
+      for (
+        let attempt = 0;
+        attempt < 3 && !(await card.isVisible());
+        attempt++
+      ) {
+        await p.getByRole("button", { name: "刷新会话" }).click();
+        await card.waitFor({ timeout: 3000 }).catch(() => {});
+      }
+    },
+    ready: ".browser-sessions .ui-card",
+  },
+  {
     id: "archive-issues",
     name: "建档问题",
     route: route("archive"),
@@ -295,20 +382,23 @@ export const designSamplePages: readonly DesignSamplePage[] = [
       name: `设置 · ${name}`,
       route: route("set"),
       interaction: `切换到${name}`,
-      prepare: async (p) => {
-        // Desktop lists sections down the side; narrow screens use a menu.
-        const tab = p.getByRole("tab", { name, exact: true });
-        await p.locator(".settings-navigation").waitFor();
-        if (await tab.isVisible()) await tab.click();
-        else {
-          await p.locator(".settings-navigation-narrow button").click();
-          await p.getByRole("option", { name, exact: true }).click();
-        }
-      },
+      prepare: (p) => openSettings(p, name),
       ready:
         ".settings-content .ui-section, .settings-sources, .maintenance-page",
     }),
   ),
+  {
+    id: "settings-dirty",
+    name: "设置 · 未保存改动",
+    route: route("set"),
+    interaction: "在建档分区输入一个新数值，不离开输入框",
+    prepare: async (p) => {
+      await openSettings(p, "建档");
+      const field = p.getByRole("textbox", { name: "每篇标签上限" });
+      await field.fill("12");
+    },
+    ready: '.settings-content .ui-button[data-variant="primary"]',
+  },
   {
     id: "login",
     name: "登录",
@@ -345,7 +435,7 @@ export async function reachDesignSample(
   await page.goto(origin + entry.route(ids, gallery), {
     waitUntil: "domcontentloaded",
   });
-  await entry.prepare?.(page);
+  await entry.prepare?.(page, ids);
   await page.locator(entry.ready).first().waitFor({ state: "visible" });
   // The component gallery deliberately exhibits skeletons as a finished example.
   if (entry.id !== "components")

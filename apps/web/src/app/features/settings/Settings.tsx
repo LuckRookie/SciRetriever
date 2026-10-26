@@ -823,6 +823,7 @@ export default function Settings() {
                           description={`${String(min)}–${String(max)}`}
                         >
                           <NumberField
+                            live
                             label={String(label)}
                             minValue={Number(min)}
                             maxValue={Number(max)}
@@ -836,6 +837,7 @@ export default function Settings() {
                         description="1–10,000"
                       >
                         <NumberField
+                          live
                           label="每篇矫正调用上限"
                           minValue={1}
                           maxValue={10000}
