@@ -208,6 +208,8 @@ export function createMcpServer(options: McpOptions = {}) {
         ].includes(name)
       )
         unavailable();
+      if (name === "configuration_status" && app)
+        return (await app).configurationStatus(signal);
       return executeConfiguration(
         options.configurationOwner ??
           new TypeScriptConfigurationOwner(

@@ -261,7 +261,7 @@ function summaryRows(
     [
       colors.accent("◆ Download"),
       config.sources.acquisition.mode === "auto"
-        ? `Auto · ${ACQUISITION_AUTO.length} built-in Sources`
+        ? `Auto · ${status.acquisition_routes?.pending.filter((route) => route.mode_reason !== "builtin").length ?? ACQUISITION_AUTO.length} locally configured Sources`
         : `Custom · ${config.sources.acquisition.providers.length} Sources`,
       stateText(aggregate("acquisition"), colors),
     ],
@@ -798,9 +798,16 @@ async function sourcesPage(
   while (true) {
     const snapshot = await options.owner.read();
     const selection = snapshot.configuration.sources[kind];
-    const builtIn = kind === "metadata" ? METADATA_AUTO : ACQUISITION_AUTO;
+    const status =
+      kind === "acquisition" ? await options.owner.status() : undefined;
+    const builtIn =
+      kind === "metadata"
+        ? METADATA_AUTO
+        : (status?.acquisition_routes?.pending
+            .filter((route) => route.mode_reason !== "builtin")
+            .map((route) => route.source) ?? ACQUISITION_AUTO);
     options.write(
-      `${panel(`${kind === "metadata" ? "Search · Metadata sources" : "Download · Acquisition sources"}`, [colors.muted(kind === "metadata" ? "Metadata discovery and PDF acquisition are separate capabilities." : "Sources are tried in order and do not imply an entitlement."), `Mode       ${selection.mode}`, `Sources    ${selection.mode === "auto" ? `built-in: ${builtIn.join(", ")}` : selection.providers.join(", ") || "none"}`, ...(kind === "metadata" ? [`Limit      ${selection.limit ?? 500} raw items / source`] : [])], colors)}\n`,
+      `${panel(`${kind === "metadata" ? "Search · Metadata sources" : "Download · Acquisition sources"}`, [colors.muted(kind === "metadata" ? "Metadata discovery and PDF acquisition are separate capabilities." : "Sources are tried in order and do not imply an entitlement."), `Mode       ${selection.mode}`, `Sources    ${selection.mode === "auto" ? `local selection: ${builtIn.join(", ")}` : selection.providers.join(", ") || "none"}`, ...(kind === "metadata" ? [`Limit      ${selection.limit ?? 500} raw items / source`] : [])], colors)}\n`,
     );
     const action = await select(
       {
@@ -832,7 +839,10 @@ async function sourcesPage(
                 ? `${value} · ${LITERATURE_PROVIDERS[value]!.metadata.join(", ")}`
                 : `${value} · ${LITERATURE_PROVIDERS[value]!.acquisition === "hints" ? "metadata links only; no standalone download adapter" : LITERATURE_PROVIDERS[value]!.acquisition}`,
             value,
-            checked: selection.providers.includes(value),
+            checked: (selection.mode === "auto"
+              ? builtIn
+              : selection.providers
+            ).includes(value),
           })),
         },
         { input: process.stdin, output: process.stderr },

@@ -43,6 +43,12 @@ import {
   operationLabels,
   type TaskDetail,
 } from "../../data/tasks.js";
+import { readLiterature } from "../../data/library.js";
+import {
+  attemptsDetail,
+  attemptsLine,
+} from "../../data/acquisition-wording.js";
+import type { AcquisitionTaskTrace } from "@sciretriever/contracts";
 import "./tasks.css";
 
 const terminal = (status: unknown) =>
@@ -624,6 +630,18 @@ export function TaskDetails({ id }: { id: string }) {
           </Card>
         ))}
       <TaskRun id={id} />
+      {task.acquisition_traces?.length ? (
+        <Disclosure
+          title={`获取经过 ${task.acquisition_traces.length} 篇${task.acquisition_traces_truncated ? "（较早记录已省略）" : ""}`}
+          defaultExpanded
+        >
+          <ul className="task-traces">
+            {task.acquisition_traces.map((trace) => (
+              <TraceRow key={trace.attempt_id} trace={trace} />
+            ))}
+          </ul>
+        </Disclosure>
+      ) : null}
       {task.partial_results.length ? (
         <Disclosure
           title={`此前尝试的部分结果 ${task.partial_results.length} 项`}
@@ -711,6 +729,30 @@ function count(value: JsonRecord, key: string) {
   if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0)
     throw new Error("处理结果计数无效");
   return total;
+}
+/** Which sources one paper went through, in order, before it got (or missed) its PDF. */
+function TraceRow({ trace }: { trace: AcquisitionTaskTrace }) {
+  const api = useApi(),
+    shell = useShell();
+  const detail = useQuery({
+    queryKey: ["literature", trace.literature_id],
+    queryFn: ({ signal }) => readLiterature(api, trace.literature_id, signal),
+  });
+  return (
+    <li>
+      <Button
+        variant="text"
+        size="compact"
+        onPress={() => shell.openPaper(trace.literature_id, "pdf")}
+      >
+        {detail.data?.literature.metadata.title ?? trace.literature_id}
+      </Button>
+      <p className="task-trace-line" title={attemptsDetail(trace.attempts)}>
+        {attemptsLine(trace.attempts) || "没有记录到来源尝试"}
+        {trace.truncated ? " · 更早的尝试已省略" : ""}
+      </p>
+    </li>
+  );
 }
 function ResultLink({
   result,

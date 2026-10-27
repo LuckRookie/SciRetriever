@@ -875,8 +875,11 @@ describe("TypeScript public acquisition sources", () => {
       { credentials: parseCredentialText('[core]\napi_key = "present"\n') },
     );
     expect(autoWithCredential.statuses.map((item) => item.source_name)).toEqual(
-      ["direct", "arxiv", "europe-pmc", "doi-landing"],
+      ["direct", "arxiv", "europe-pmc", "core", "doi-landing"],
     );
+    expect(
+      autoWithCredential.statuses.find((item) => item.source_name === "core"),
+    ).toMatchObject({ ready: true, failure_code: null });
   });
 
   it("rejects non-PDF, failed and oversized public download responses", async () => {

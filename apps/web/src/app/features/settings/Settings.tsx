@@ -1,7 +1,16 @@
+import {
+  STAGES,
+  routeStatus,
+  sourceName,
+} from "../../data/acquisition-wording.js";
 import { serviceMessage } from "../../strings.js";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { parseConfigurationReadiness } from "@sciretriever/contracts";
+import {
+  parseAcquisitionRouteState,
+  parseConfigurationReadiness,
+  type AcquisitionRouteState,
+} from "@sciretriever/contracts";
 import {
   Button,
   Checkbox,
@@ -493,6 +502,7 @@ export default function Settings() {
                     onSave={() => save(["sources"])}
                     pending={publish.isPending}
                     dirty={changed("sources")}
+                    routes={runtime.acquisition_routes}
                   />
                 )}
                 {section === "models" && (
@@ -1286,6 +1296,7 @@ function Sources({
   onSave,
   pending,
   dirty,
+  routes,
 }: {
   configuration: JsonRecord;
   onChange: (sources: JsonRecord) => void;
@@ -1293,6 +1304,8 @@ function Sources({
   pending: boolean;
   /** The save button exists only while the sources have unsaved edits. */
   dirty: boolean;
+  /** Effective and saved acquisition routes; older servers omit them. */
+  routes?: unknown;
 }) {
   const sources = record(configuration.sources, "sources"),
     metadata = record(sources.metadata, "metadata"),
@@ -1429,6 +1442,7 @@ function Sources({
         </Definitions>
       </Section>
       <Section title="PDF 获取" description="获取全文 PDF 时依次尝试的服务。">
+        <AcquisitionRoutes value={routes} />
         <Definitions>
           {choice("acquisition")}
           <Definition
@@ -1506,6 +1520,51 @@ function Sources({
             保存来源配置
           </Button>
         </div>
+      ) : null}
+    </div>
+  );
+}
+/** The order PDF acquisition actually runs in, and what a restart would change. */
+function AcquisitionRoutes({ value }: { value: unknown }) {
+  let state: AcquisitionRouteState | null = null;
+  try {
+    state = value === undefined ? null : parseAcquisitionRouteState(value);
+  } catch {
+    state = null;
+  }
+  if (!state) return null;
+  const shown = state.effective ?? state.pending,
+    pendingOnly = state.changed
+      ? state.pending.filter(
+          (route) => !shown.some((item) => item.source === route.source),
+        )
+      : [];
+  return (
+    <div className="settings-routes">
+      <p className="settings-routes-title">
+        当前获取顺序
+        {state.effective === null ? "（按已保存配置）" : ""}
+      </p>
+      <ol>
+        {shown.map((route) => (
+          <li key={route.source} data-ready={route.ready}>
+            <span>{sourceName(route.source)}</span>
+            <span className="settings-routes-stage">{STAGES[route.stage]}</span>
+            <span>{routeStatus(route)}</span>
+          </li>
+        ))}
+        {pendingOnly.map((route) => (
+          <li key={route.source} data-pending>
+            <span>{sourceName(route.source)}</span>
+            <span className="settings-routes-stage">{STAGES[route.stage]}</span>
+            <span>重启后生效</span>
+          </li>
+        ))}
+      </ol>
+      {state.restart_required ? (
+        <p className="ui-description">
+          已保存的选择与当前服务不同，重启服务后生效。
+        </p>
       ) : null}
     </div>
   );

@@ -586,7 +586,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "read_task",
-    "Read durable task state, fixed targets, result references and failures. accepted/queued/running is not a completed scientific result.",
+    "Read durable task state, fixed targets, result references, failures and bounded per-article acquisition_traces. accepted/queued/running is not a completed scientific result.",
     object({ job_id: text }),
   ),
   tool(
@@ -623,7 +623,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "inspect_task",
-    "Read task targets, results, failures, events, interventions, policy and budget. Read-only, including tasks created from Web/CLI.",
+    "Read task targets, results, failures, events, acquisition_traces, interventions, policy and budget. acquisition_traces_truncated flags the bounded source history. Read-only, including tasks created from Web/CLI.",
     object({ job_id: text }),
   ),
   tool(
@@ -633,7 +633,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "configuration_status",
-    "Read local configuration and credential-presence readiness. No external requests.",
+    "Read local configuration, credential-presence readiness and acquisition_routes (effective runtime or null, pending selection, restart difference). No external requests.",
     object({}),
   ),
   tool(

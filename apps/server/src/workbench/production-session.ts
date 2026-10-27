@@ -595,8 +595,9 @@ export class ProductionWorkbenchSession {
     return this.view();
   }
   attach(): string {
-    if (this.closed || this.clients.size >= 16)
-      throw new WorkbenchSessionError("session-closed");
+    if (this.closed) throw new WorkbenchSessionError("session-closed");
+    if (this.clients.size >= 16)
+      throw new WorkbenchSessionError("viewer-limit");
     const id = `client-${randomUUID()}`;
     this.clients.add(id);
     for (const record of this.sessions.values()) record.session?.attach(id);
@@ -634,6 +635,9 @@ export class ProductionWorkbenchSession {
         ? { title: activityText((record.title ?? record.identity.title)!, 512) }
         : {}),
       queued_at: record.queuedAt,
+      ...(record.identity.prior_attempts
+        ? { prior_attempts: record.identity.prior_attempts }
+        : {}),
       ...(this.articlePhase(record) === "closed" && record.activity.closedAt
         ? { closed_at: record.activity.closedAt }
         : {}),

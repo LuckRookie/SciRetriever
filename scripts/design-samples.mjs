@@ -208,7 +208,11 @@ async function capture() {
   const password = await readFile(state.passwordFile, "utf8");
   const pagesFile = join(state.directory, "capture-pages.mjs");
   await build({
-    entryPoints: [join(root, "apps/web/test/design-samples-pages.ts")],
+    stdin: {
+      contents:
+        'export * from "./apps/web/test/design-samples-pages.ts"; export * from "./apps/web/test/design-samples-browser.ts";',
+      resolveDir: root,
+    },
     outfile: pagesFile,
     bundle: true,
     packages: "external",
@@ -216,9 +220,11 @@ async function capture() {
     format: "esm",
     target: "node22",
   });
-  const { designSamplePages: allPages, reachDesignSample } = await import(
-    pathToFileURL(pagesFile)
-  );
+  const {
+    designSamplePages: allPages,
+    reachDesignSample,
+    designSamplePageCleanup,
+  } = await import(pathToFileURL(pagesFile));
   const selected = flags.get("--pages")?.split(",");
   if (selected?.some((id) => !allPages.some((p) => p.id === id)))
     throw new Error("Unknown screenshot page");
@@ -273,6 +279,7 @@ async function capture() {
             }));
           contexts.set(contextKey, context);
           const page = await context.newPage();
+          const closePage = designSamplePageCleanup(page);
           const errors = [],
             blocked = [];
           await page.route("**/*", async (route) => {
@@ -385,7 +392,7 @@ async function capture() {
               })
               .catch(() => {});
           } finally {
-            await page.close();
+            await closePage();
             await json(join(directory, "manifest.json"), manifest);
             process.stdout.write(
               `${entry.id} ${width} ${theme}: ${manifest.failures.some((f) => f.page === entry.id && f.width === width && f.theme === theme) ? "failed" : "ok"}\n`,

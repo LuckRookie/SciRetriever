@@ -482,6 +482,7 @@ export type SqliteCommand =
     }
   | {
       readonly kind: "execution_list_events";
+      readonly acquisitionOnly?: boolean;
       readonly order: "oldest" | "newest";
       readonly jobId: string;
       readonly after: number;
@@ -1928,6 +1929,7 @@ export class SqliteWorker {
     after = -1,
     limit = 100,
     order: "oldest" | "newest" = "oldest",
+    acquisitionOnly = false,
   ): Promise<readonly ExecutionEvent[]> {
     executionText(jobId);
     if (!["oldest", "newest"].includes(order)) throw new SqliteWorkerError();
@@ -1937,6 +1939,7 @@ export class SqliteWorker {
       throw new SqliteWorkerError();
     const value = await this.run<unknown>({
       kind: "execution_list_events",
+      acquisitionOnly,
       order,
       jobId,
       after,

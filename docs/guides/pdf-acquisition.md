@@ -52,15 +52,15 @@ SciRetriever 对数据库中已经存在的具体 Literature 补全主 PDF。主
 | ------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------- |
 | direct        | 已保存的 PDF 线索       | 明确 PDF 媒体类型/主 PDF 角色或 pathname 的 `.pdf` 后缀；排除补充材料、其它角色与目标版本冲突，实际字节仍须验证 |
 | direct        | arXiv、Europe PMC       | Auto 默认启用；由 arXiv ID、PMCID 生成公开 PDF 地址，PMID 本身不生成地址                                        |
-| publisher-api | Elsevier Article/Object | Custom 启用、配置 `api_key`，且有 PII、Article EID、匹配文章提示或确认过的 landing                              |
-| publisher-api | Wiley TDM               | Custom 启用、配置 `tdm_api_token`，唯一 DOI 与 Wiley 文章访问证据绑定                                           |
-| general-api   | CORE                    | Custom 启用、配置 `api_key`，并有 CORE 强记录身份                                                               |
-| general-api   | Unpaywall               | Custom 启用并配置联系邮箱；返回的文件 locator 立即下载                                                          |
+| publisher-api | Elsevier Article/Object | Auto 配置齐全后启用或 Custom 显式选择、配置 `api_key`，且有 PII、Article EID、匹配文章提示或确认过的 landing    |
+| publisher-api | Wiley TDM               | Auto 配置齐全后启用或 Custom 显式选择、配置 `tdm_api_token`，唯一 DOI 与 Wiley 文章访问证据绑定                 |
+| general-api   | CORE                    | Auto 配置齐全后启用或 Custom 显式选择、配置 `api_key`，并有 CORE 强记录身份                                     |
+| general-api   | Unpaywall               | Auto 配置联系邮箱后启用或 Custom 显式选择并配置联系邮箱；返回的文件 locator 立即下载                            |
 | public-web    | DOI/文章 landing        | Network 逐跳复检后解析静态 PDF 声明或链接，相对地址基于实际落地页                                               |
 | public-web    | Sci-Hub locator         | 默认关闭；显式启用、有 DOI，使用 builtin 或 custom 镜像                                                         |
 | browser       | `browser:generic`       | 前四层结果允许继续、有安全入口且 Browser/Model/Profile/runtime/admission 就绪；本地就绪不证明文章权限           |
 
-Custom 精确选择来源，在同一阶段内以配置顺序为基础，出版社 API 可按唯一名称候选稳定优先；阶段顺序固定。CORE 与 Unpaywall 同层，但凭据要求不同。已选中却缺参数、凭据或适配器的来源会报告失败，不能被静默当作正常耗尽。
+Auto 在默认公开来源之外加入必要凭据或联系邮箱已配置齐全的 API，配置不齐的来源不加入也不报错，不自动启用镜像。是否配置齐全不证明 API 权限或文章可下载；修改配置或补齐凭据后，已有 Application 的选源集合需重启才更新。Custom 精确选择来源，在同一阶段内以配置顺序为基础，出版社 API 可按唯一名称候选稳定优先；阶段顺序固定。CORE 与 Unpaywall 同层，但凭据要求不同。已选中却缺参数、凭据或适配器的来源会报告失败，不能被静默当作正常耗尽。
 
 `.PDF`、`.pdf?download=1` 都可以形成候选；无后缀但明确为 PDF 的地址同样可用。只处理受支持资产线索，保留 query，移除阅读器 fragment；文件有效性由字节与 PDF reader 决定。任一层取得 locator 后立即沿对应机制下载，有效文件不重新排到 direct，不因错误的 Content-Type 重取；本地发布失败保留有效候选。
 
@@ -76,14 +76,21 @@ Elsevier 可以消费 PII/EID、Article API 提示或确认过的文章 landing 
 `/content/article/{doi|pii|eid}/{identifier}?view=FULL`，再取 FULL XML 中 MAIN PDF 的 attachment
 对象；预览图片的嵌套字段不当作主文件字段。Wiley 可以消费与唯一 DOI 绑定的 TDM 提示、
 Wiley Online Library 及其子域的页面证据；TDM 请求只允许官方 ALM 下载路径的一次跳转，
-跨 origin 不携带 TDM token，下载 locator 不进入 provenance。API key 存在仍不会自动改变
-Auto/Custom 选源。
+跨 origin 不携带 TDM token，下载 locator 不进入 provenance。Auto 会按必要配置是否齐全加入授权 PDF API；Custom 仍只使用精确列表。具体默认集合与参数见[配置手册](configuration.md)。
 
 Springer 当前全文 API 产品返回 JATS/XML，不是主 PDF API。Provider key 已配置、认证成功和单篇
 文章有全文权限始终是不同事实。
 
 有效的 `2xx` landing HTML 没有静态 PDF 链接属于正常未命中。公共 HTTP `403`、静态链接只返回非 PDF 表示、明确的重定向上限且没有限流反馈，表示该 HTTP 路线不能完成，可以继续已配置的 API 与 Browser；不据此判断机构版权。标为 PDF 直链的地址返回 HTML 时也尝试通用静态 PDF 链接，实际 PDF 字节不因错误的 Content-Type 被拒绝。`401`、`429`、Retry-After、候选地址拒绝、5xx、连接/请求失败、超时或响应中断均保留原因并允许独立来源继续；限流只停止本来源的备用候选，共享服务/平台冷却仍有效。这些失败及冷却仍是未解决结果，后续未命中不能覆盖它们；内部合同异常不按来源失败吞掉。静态 PDF 声明或链接中的阅读器 fragment（例如 `#view=FitH&navpanes=0`）在请求前去除；实际路径、query、origin 和 DNS 仍经过原安全检查，不执行脚本或任意表单。主 PDF 接纳检查字节、PDF结构、页数与当前非加密可读合同，不匹配正文中的
 DOI、arXiv ID或标题；有效文件正常发布并标为文章身份未验证。后续解析阶段可另行检验身份。
+
+### 查看实际来源与获取轨迹
+
+配置状态接口 `/api/configuration/status` 的 `status.acquisition_routes` 提供当前进程的 `effective` 路线和已保存配置的 `pending` 选择，以及 `changed` / `restart_required` 差异标记。路线按五层执行顺序列出；同一出版社阶段仍可能按单篇证据优先。独立 CLI `config status --json` 与 MCP `configuration_status` 没有组装获取进程时，`effective` 和差异标记为 `null`，不会把待生效选择冒充 4174 的运行状态。字段只说明本地配置或组装情况，不联网验证权限。
+
+`/api/tasks/:job_id`、CLI `jobs inspect --request request.json --json`（文件内容为 `{"job_id":"..."}`） 和 MCP `read_task` / `inspect_task` 共享 `acquisition_traces`。每组绑定目标、文献和本次 attempt，按发生顺序给出来源、阶段、起止时间、`requested`、结果、稳定原因码与候选数；成功会保留前序来源结果。`requested=true` 表示受控 HTTP 请求已开始发出；没有候选、配置缺失、准入前拒绝或冷却不算已请求。Browser 的 `escalated` 只说明交接，`requested=false` 不表示后续 Agent 没有联网。`not-enabled` 与已选但不可用的 `unavailable` 分开。
+
+任务来源轨迹最多返回 10,000 个事件，超过时 `acquisition_traces_truncated=true`；每文献/attempt 最多 64 条，组内另有 `truncated`。这与“技术活动记录”的最近 1,000 条独立。浏览器会话 `prior_attempts` 是最新 16 条前置轨迹，重启后仍应从任务读取持久记录。历史任务缺少轨迹时返回空数组，不补造旧记录。安全轨迹不保存 URL、header、凭据或正文，不改变获取、耗尽、取消和发布语义。
 
 ### 出版社名称与维护
 

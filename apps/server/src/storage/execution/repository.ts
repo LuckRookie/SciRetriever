@@ -257,6 +257,39 @@ export class ExecutionRepository {
     return this.database.listExecutionEvents(jobId, after, limit, order);
   }
 
+  /** Separate from the technical event tail; bounded, oldest-first pagination. */
+  async acquisitionEvents(
+    jobId: string,
+  ): Promise<{ events: readonly ExecutionEvent[]; truncated: boolean }> {
+    const events: ExecutionEvent[] = [];
+    let after = -1;
+    while (events.length < 10000) {
+      const page = await this.database.listExecutionEvents(
+        jobId,
+        after,
+        1000,
+        "oldest",
+        true,
+      );
+      events.push(...page);
+      if (page.length < 1000) return { events, truncated: false };
+      after = page.at(-1)!.sequence;
+    }
+    return {
+      events,
+      truncated:
+        (
+          await this.database.listExecutionEvents(
+            jobId,
+            after,
+            1,
+            "oldest",
+            true,
+          )
+        ).length > 0,
+    };
+  }
+
   putIntervention(
     intervention: ExecutionIntervention,
   ): Promise<ExecutionIntervention> {

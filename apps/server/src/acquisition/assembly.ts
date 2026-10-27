@@ -1,3 +1,5 @@
+import { networkRequestDispatched } from "../network/request-activity.js";
+import { selectedAcquisitionSources } from "../configuration/acquisition-selection.js";
 import { lookup } from "node:dns/promises";
 import {
   bundlePreview,
@@ -20,8 +22,8 @@ import { CoreAuthorizedPdfClient } from "../providers/core/acquisition.js";
 import { ElsevierAuthorizedPdfClient } from "../providers/elsevier/acquisition.js";
 import { EuropePmcPdfSource } from "../providers/europe-pmc/acquisition.js";
 import {
-  AUTO_ACQUISITION_SOURCES,
   LITERATURE_PROVIDERS,
+  ACQUISITION_PROVIDER_NAMES,
   acquisitionService,
   publicWebService,
 } from "../providers/registry.js";
@@ -431,18 +433,25 @@ function authorizedTransport(
           : {}),
         ...(options.connection ? { connection: options.connection } : {}),
       });
-  const send: AuthorizedTransport = injected ?? {
-    request: async (url, requestOptions = {}) => {
-      const response = await request!({
-        endpoint: url,
-        method: "GET",
-        headers: Object.entries(requestOptions.headers ?? {}),
-        body: new Uint8Array(),
-        ...(requestOptions.signal ? { signal: requestOptions.signal } : {}),
-      });
-      return response;
-    },
-  };
+  const send: AuthorizedTransport = injected
+    ? {
+        request: (url, requestOptions) => {
+          networkRequestDispatched();
+          return injected.request(url, requestOptions);
+        },
+      }
+    : {
+        request: async (url, requestOptions = {}) => {
+          const response = await request!({
+            endpoint: url,
+            method: "GET",
+            headers: Object.entries(requestOptions.headers ?? {}),
+            body: new Uint8Array(),
+            ...(requestOptions.signal ? { signal: requestOptions.signal } : {}),
+          });
+          return response;
+        },
+      };
   if (!options.currentCredential) return send;
   return {
     request: async (url, requestOptions = {}) => {
@@ -515,9 +524,10 @@ export function assemblePublicAcquisitionRegistry(
   coordinator: NetworkBudgetCoordinator,
   options: PublicAcquisitionAssemblyOptions = {},
 ): PublicAcquisitionRegistry {
-  const selection = configuration.sources.acquisition;
-  const selected =
-    selection.mode === "auto" ? AUTO_ACQUISITION_SOURCES : selection.providers;
+  const selected = selectedAcquisitionSources(
+    configuration,
+    options.credentials ? bundlePreview(options.credentials) : { sections: [] },
+  );
   const sources: AcquisitionSourcePort[] = [new DirectPdfSource()];
   const unavailable: Record<string, string> = {};
   const credentials = options.credentials;
@@ -620,7 +630,21 @@ export function assemblePublicAcquisitionRegistry(
         options.browser_admission.unavailable_reason ?? "browser-disabled";
     }
   } else unavailable[BROWSER_ROUTE_NAME] = "browser-route-not-wired";
-  return new PublicAcquisitionRegistry(sources, order, unavailable);
+  return new PublicAcquisitionRegistry(
+    sources,
+    order,
+    unavailable,
+    ACQUISITION_PROVIDER_NAMES.filter(
+      (name) =>
+        !selected.includes(name) &&
+        ["public", "authorized-api"].includes(
+          LITERATURE_PROVIDERS[name]!.acquisition,
+        ),
+    ).map((source) => ({
+      source,
+      stage: LITERATURE_PROVIDERS[source]!.acquisitionStage ?? "public-web",
+    })),
+  );
 }
 
 /** One process' acquisition view: locator routes plus the Browser admission state. */

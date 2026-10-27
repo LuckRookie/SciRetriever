@@ -1,3 +1,9 @@
+import {
+  parseAcquisitionAttempt,
+  parseAcquisitionTaskTrace,
+  MAX_ACQUISITION_ATTEMPTS,
+  type AcquisitionAttempt,
+} from "@sciretriever/contracts";
 import type { ExecutionRepository } from "../storage/execution/repository.js";
 import type { ExecutionJobStatus } from "../storage/sqlite/worker.js";
 import { readProcessingTask } from "../application/jobs/processing.js";
@@ -6,15 +12,52 @@ import { operationRecord as inputRecord } from "./query-operations.js";
 /** Read-only task projections; no recovery or runtime lock is started. */
 export function createTaskReader(repository: ExecutionRepository) {
   const read = async (id: string) => {
-    const [task, events, interventions, policy, budget] = await Promise.all([
-      readProcessingTask(repository, id),
-      repository.listEvents(id, -1, 1000, "newest"),
-      repository.listInterventions(id, 1000),
-      repository.getPolicy(id),
-      repository.getBudget(id),
-    ]);
+    const [task, events, interventions, policy, budget, acquisition] =
+      await Promise.all([
+        readProcessingTask(repository, id),
+        repository.listEvents(id, -1, 1000, "newest"),
+        repository.listInterventions(id, 1000),
+        repository.getPolicy(id),
+        repository.getBudget(id),
+        repository.acquisitionEvents(id),
+      ]);
+    const traces = new Map<
+      string,
+      {
+        target_id: string;
+        attempt_id: string;
+        literature_id: string;
+        attempts: AcquisitionAttempt[];
+        truncated: boolean;
+      }
+    >();
+    for (const event of acquisition.events) {
+      const payload = inputRecord(event.payload, [
+        "target_id",
+        "attempt_id",
+        "literature_id",
+        "attempt",
+      ]);
+      const parsed = parseAcquisitionTaskTrace({
+        target_id: payload.target_id,
+        attempt_id: payload.attempt_id,
+        literature_id: payload.literature_id,
+        attempts: [payload.attempt],
+        truncated: false,
+      });
+      const key = parsed.attempt_id + ":" + parsed.literature_id;
+      let row = traces.get(key);
+      if (!row) {
+        row = { ...parsed, attempts: [] };
+        traces.set(key, row);
+      }
+      if (row.attempts.length >= MAX_ACQUISITION_ATTEMPTS) row.truncated = true;
+      else row.attempts.push(parseAcquisitionAttempt(payload.attempt));
+    }
     return {
       ...task,
+      acquisition_traces: [...traces.values()].map(parseAcquisitionTaskTrace),
+      acquisition_traces_truncated: acquisition.truncated,
       events: [...events].reverse(),
       events_truncated: (events.at(-1)?.sequence ?? 0) > 0,
       interventions,

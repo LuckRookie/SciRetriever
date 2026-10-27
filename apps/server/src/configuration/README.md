@@ -6,6 +6,7 @@
 
 - [index.ts](index.ts)：配置模型、解析与公开入口。
 - [owner.ts](owner.ts)：配置读取、保存和诊断的所有者；Web 启动通过 `ensureStoragePaths` 仅补齐缺失路径并保存共享配置，默认数据位于用户 `~/.sciretriever/` 下。数据库初始化仍由 Storage 负责。
+- [acquisition-selection.ts](acquisition-selection.ts)：只根据配置与字段存在性解析 PDF Auto/Custom 来源及生效/待生效路线差异；owner 的 `acquisitionRoutes` 按指定配置快照投影，供读取和保存响应使用，不调用独立的 `status` 就绪检查。
 - [credentials.ts](credentials.ts)：凭据边界与授权。
 - [cloak-runtime.ts](cloak-runtime.ts)：Cloak runtime 身份与可用性。
 

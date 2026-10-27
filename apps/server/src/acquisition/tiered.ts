@@ -1,3 +1,8 @@
+import {
+  parseAcquisitionAttempt,
+  type AcquisitionAttempt,
+} from "@sciretriever/contracts";
+import { observeNetworkRequests } from "../network/request-activity.js";
 import { ContractValidationError } from "@sciretriever/contracts";
 import { NetworkHttpError } from "../network/http.js";
 import { createLogger } from "../logging/index.js";
@@ -125,7 +130,7 @@ export class AcquisitionUnavailableError extends Error {
 
 /** One operation-local candidate was already rejected; try the next without cooling the route. */
 export class AcquisitionCandidateSkippedError extends Error {
-  constructor() {
+  constructor(readonly disposition: "rejected" | "miss" = "rejected") {
     super("acquisition candidate already attempted");
     this.name = "AcquisitionCandidateSkippedError";
   }
@@ -249,6 +254,7 @@ export interface TieredAcquisitionOptions {
   readonly now?: () => number;
   readonly signal?: AbortSignal;
   readonly on_progress?: (progress: AcquisitionBatchProgress) => void;
+  readonly on_attempt?: (attempt: AcquisitionAttempt) => Promise<void>;
 }
 
 export type AcquisitionCandidateDownloader = (
@@ -388,7 +394,10 @@ export class TieredAcquisitionService {
   async run(
     items: readonly AcquisitionBatchItem[],
     download: AcquisitionCandidateDownloader,
-    options: Pick<TieredAcquisitionOptions, "signal" | "on_progress"> = {},
+    options: Pick<
+      TieredAcquisitionOptions,
+      "signal" | "on_progress" | "on_attempt"
+    > = {},
   ): Promise<readonly AcquisitionBatchResult[]> {
     if (
       !Array.isArray(items) ||
@@ -423,7 +432,13 @@ export class TieredAcquisitionService {
         continue;
       }
       results.push(
-        await this.runItem(item, download, signal, options.on_progress),
+        await this.runItem(
+          item,
+          download,
+          signal,
+          options.on_progress,
+          options.on_attempt,
+        ),
       );
     }
     return Object.freeze(results);
@@ -434,10 +449,47 @@ export class TieredAcquisitionService {
     download: AcquisitionCandidateDownloader,
     signal: AbortSignal,
     onProgress?: (progress: AcquisitionBatchProgress) => void,
+    onAttempt?: (attempt: AcquisitionAttempt) => Promise<void>,
   ): Promise<AcquisitionBatchResult> {
     const attempted: string[] = [];
+    let trace:
+      | { result: AcquisitionAttempt["result"]; code?: string }
+      | undefined;
     let lastFailure: AcquisitionBatchFailure | null = null;
-    const remember = (next: AcquisitionBatchFailure): void => {
+    const recordTraceOutcome = (
+      result: AcquisitionAttempt["result"],
+      code: string,
+    ): void => {
+      const severity: Partial<Record<AcquisitionAttempt["result"], number>> = {
+        miss: 0,
+        "not-applicable": 1,
+        unavailable: 2,
+        rejected: 3,
+        failed: 4,
+      };
+      // A later miss/rejection cannot erase an unresolved failure within this source.
+      // A successful publication explicitly replaces the source summary with a hit.
+      if (
+        trace &&
+        (!trace.code || (severity[result] ?? 0) > (severity[trace.result] ?? 0))
+      ) {
+        trace.result = result;
+        trace.code = code;
+      }
+    };
+    const remember = (
+      next: AcquisitionBatchFailure,
+      result?: AcquisitionAttempt["result"],
+    ): void => {
+      recordTraceOutcome(
+        result ??
+          (next.unavailability === "not-applicable"
+            ? "not-applicable"
+            : next.unavailability
+              ? "unavailable"
+              : "failed"),
+        next.unavailability ?? next.code,
+      );
       createLogger("pdf-acquisition").debug("Acquisition source outcome", {
         operation: item.key,
         provider: next.source,
@@ -461,142 +513,220 @@ export class TieredAcquisitionService {
       ),
     ];
     for (const source of sources) {
-      if (signal.aborted)
-        return this.interrupted(
-          item.key,
-          attempted,
-          null,
-          "Acquisition batch was cancelled while a target was running.",
-        );
-      const cooldown = this.cooldowns.get(source.source_name);
-      if (cooldown && cooldown.until > this.now()) {
-        const detail = Object.freeze({
-          ...cooldown.failure,
-          code: "source-cooldown" as const,
-          reason: `The source is cooling down after a route failure: ${cooldown.failure.reason}`,
-        });
-        remember(detail);
-        continue;
-      }
-      this.cooldowns.delete(source.source_name);
-      attempted.push(source.source_name);
-      let candidates: readonly SourceCandidate[];
+      const startedAt = new Date().toISOString();
+      let requested = false,
+        candidateCount = 0;
+      trace = { result: "miss" };
+      const markRequested = () => {
+        requested = true;
+      };
       try {
-        candidates = await source.discover(item.request, signal);
-      } catch (error) {
-        // A discovery failure is one route outcome; an explicitly classified
-        // storage/receipt/contract/system failure leaves the batch untouched.
-        // An explicit low-risk unavailability is not a failure at all: it is recorded
-        // as-is (non-retryable, no cooldown) so Entry can decide with its own admission.
-        if (error instanceof AcquisitionUnavailableError) {
-          remember(unavailableFailure(error, source.source_name));
-          continue;
-        }
-        const kind = classifyAcquisitionFailure(error, signal, "discovery");
-        if (kind === "cancel")
-          return this.interrupted(
-            item.key,
-            attempted,
-            null,
-            "Acquisition batch was cancelled while a source was being discovered.",
-          );
-        if (kind !== "route") throw error;
-        const detail = routeFailure(
-          error,
-          source.source_name,
-          failure(
-            "source-discovery-failed",
-            source.source_name,
-            "The source did not return a valid discovery result.",
-            true,
-          ),
-        );
-        this.cooldowns.set(source.source_name, {
-          until: this.cooldownUntil(error),
-          failure: detail,
-        });
-        remember(detail);
-        continue;
-      }
-      const bounded = candidates.slice(0, this.maxCandidatesPerSource);
-      onProgress?.({
-        key: item.key,
-        source: source.source_name,
-        candidate_count: bounded.length,
-        disposition: "discovered",
-      });
-      if (bounded.length === 0) continue;
-      for (const candidate of bounded) {
         if (signal.aborted)
           return this.interrupted(
             item.key,
             attempted,
-            source.source_name,
-            "Acquisition batch was cancelled during candidate delivery.",
+            null,
+            "Acquisition batch was cancelled while a target was running.",
           );
+        const cooldown = this.cooldowns.get(source.source_name);
+        if (cooldown && cooldown.until > this.now()) {
+          const detail = Object.freeze({
+            ...cooldown.failure,
+            code: "source-cooldown" as const,
+            reason: `The source is cooling down after a route failure: ${cooldown.failure.reason}`,
+          });
+          remember(detail);
+          trace.result = "cooldown";
+          continue;
+        }
+        this.cooldowns.delete(source.source_name);
+        attempted.push(source.source_name);
+        let candidates: readonly SourceCandidate[];
         try {
-          await download(item, source, candidate, signal);
-          onProgress?.({
-            key: item.key,
-            source: source.source_name,
-            candidate_count: bounded.length,
-            disposition: "acquired",
-          });
-          return copyResult({
-            key: item.key,
-            disposition: "acquired",
-            source: source.source_name,
-            candidate,
-            failure: null,
-            attempted_sources: attempted,
-          });
+          candidates = await observeNetworkRequests(markRequested, () =>
+            source.discover(item.request, signal),
+          );
         } catch (error) {
-          // Only a route failure continues with the next candidate. A
-          // cancellation stops this target; storage, receipt, contract and
-          // system failures leave the batch instead of being swallowed.
-          // HTTP capability is candidate-local; a separate public locator may work.
-          // Other declarations concern the whole route/target.
+          // A discovery failure is one route outcome; an explicitly classified
+          // storage/receipt/contract/system failure leaves the batch untouched.
+          // An explicit low-risk unavailability is not a failure at all: it is recorded
+          // as-is (non-retryable, no cooldown) so Entry can decide with its own admission.
           if (error instanceof AcquisitionUnavailableError) {
             remember(unavailableFailure(error, source.source_name));
-            if (error.unavailability === "http-route-unavailable") continue;
-            break;
+            continue;
           }
-          if (error instanceof AcquisitionCandidateSkippedError) continue;
-          const kind = classifyAcquisitionFailure(error, signal, "delivery");
+          const kind = classifyAcquisitionFailure(error, signal, "discovery");
           if (kind === "cancel")
             return this.interrupted(
               item.key,
               attempted,
-              source.source_name,
-              "Acquisition batch was cancelled during candidate delivery.",
+              null,
+              "Acquisition batch was cancelled while a source was being discovered.",
             );
           if (kind !== "route") throw error;
           const detail = routeFailure(
             error,
             source.source_name,
             failure(
-              "candidate-download-failed",
+              "source-discovery-failed",
               source.source_name,
-              "The candidate failed delivery or PDF acceptance; the next candidate remains eligible.",
+              "The source did not return a valid discovery result.",
               true,
             ),
           );
-          remember(detail);
-          onProgress?.({
-            key: item.key,
-            source: source.source_name,
-            candidate_count: bounded.length,
-            disposition: "download-failed",
+          this.cooldowns.set(source.source_name, {
+            until: this.cooldownUntil(error),
+            failure: detail,
           });
-          if (detail.code === "rate-limited") {
-            this.cooldowns.set(source.source_name, {
-              until: this.cooldownUntil(error),
-              failure: detail,
-            });
-            break;
-          }
-          if (!detail.retryable) break;
+          remember(detail);
+          continue;
         }
+        const bounded = candidates.slice(0, this.maxCandidatesPerSource);
+        candidateCount = bounded.length;
+        onProgress?.({
+          key: item.key,
+          source: source.source_name,
+          candidate_count: bounded.length,
+          disposition: "discovered",
+        });
+        if (bounded.length === 0) {
+          trace.result = requested ? "miss" : "not-applicable";
+          continue;
+        }
+        for (const candidate of bounded) {
+          if (signal.aborted)
+            return this.interrupted(
+              item.key,
+              attempted,
+              source.source_name,
+              "Acquisition batch was cancelled during candidate delivery.",
+            );
+          try {
+            await observeNetworkRequests(markRequested, () =>
+              download(item, source, candidate, signal),
+            );
+            trace.result = "hit";
+            delete trace.code;
+            onProgress?.({
+              key: item.key,
+              source: source.source_name,
+              candidate_count: bounded.length,
+              disposition: "acquired",
+            });
+            return copyResult({
+              key: item.key,
+              disposition: "acquired",
+              source: source.source_name,
+              candidate,
+              failure: null,
+              attempted_sources: attempted,
+            });
+          } catch (error) {
+            // Only a route failure continues with the next candidate. A
+            // cancellation stops this target; storage, receipt, contract and
+            // system failures leave the batch instead of being swallowed.
+            // HTTP capability is candidate-local; a separate public locator may work.
+            // Other declarations concern the whole route/target.
+            if (error instanceof AcquisitionUnavailableError) {
+              remember(unavailableFailure(error, source.source_name));
+              if (error.unavailability === "http-route-unavailable") continue;
+              break;
+            }
+            if (error instanceof AcquisitionCandidateSkippedError) {
+              recordTraceOutcome(
+                error.disposition,
+                error.disposition === "miss"
+                  ? "source-miss"
+                  : "candidate-skipped",
+              );
+              continue;
+            }
+            const kind = classifyAcquisitionFailure(error, signal, "delivery");
+            if (kind === "cancel")
+              return this.interrupted(
+                item.key,
+                attempted,
+                source.source_name,
+                "Acquisition batch was cancelled during candidate delivery.",
+              );
+            if (kind !== "route") throw error;
+            const detail = routeFailure(
+              error,
+              source.source_name,
+              failure(
+                "candidate-download-failed",
+                source.source_name,
+                "The candidate failed delivery or PDF acceptance; the next candidate remains eligible.",
+                true,
+              ),
+            );
+            remember(
+              detail,
+              error instanceof Error &&
+                [
+                  "CandidateAcceptanceError",
+                  "PdfAcceptanceError",
+                  "NetworkPolicyError",
+                ].includes(error.name)
+                ? "rejected"
+                : undefined,
+            );
+            onProgress?.({
+              key: item.key,
+              source: source.source_name,
+              candidate_count: bounded.length,
+              disposition: "download-failed",
+            });
+            if (detail.code === "rate-limited") {
+              this.cooldowns.set(source.source_name, {
+                until: this.cooldownUntil(error),
+                failure: detail,
+              });
+              break;
+            }
+            if (!detail.retryable) break;
+          }
+        }
+      } catch (error) {
+        trace.result = "failed";
+        trace.code =
+          classifyAcquisitionFailure(error, signal) === "cancel"
+            ? "execution-cancelled"
+            : "acquisition-internal-failure";
+        throw error;
+      } finally {
+        if (signal.aborted && trace.result !== "hit") {
+          trace.result = "failed";
+          trace.code = "execution-cancelled";
+        }
+        if (!source.ready) {
+          trace.result = "unavailable";
+          trace.code =
+            this.registry.unavailable[source.source_name] ??
+            "download-unavailable";
+        }
+        await onAttempt?.(
+          parseAcquisitionAttempt({
+            stage:
+              source.acquisition_stage ??
+              (source.acquisition_tier === "authorized-api"
+                ? "publisher-api"
+                : "direct"),
+            source: source.source_name,
+            started_at: startedAt,
+            finished_at: new Date().toISOString(),
+            requested,
+            result: trace.result,
+            candidates: candidateCount,
+            ...(trace.code
+              ? {
+                  code: /^[a-z][a-z0-9-]{0,95}$/u.test(trace.code)
+                    ? trace.code
+                    : "source-failure",
+                }
+              : {}),
+          }),
+        );
       }
     }
     // `exhausted` requires that every applicable route ended normally: any

@@ -39,6 +39,25 @@ function sampleSessions(literature: string) {
   });
   const now = "2026-10-26T06:02:00.000Z",
     night = "2026-10-25T13:30:00.000Z";
+  // What ran before the Agent: an API miss and a public-site miss.
+  const tried = (at: string) => [
+    {
+      stage: "publisher-api",
+      source: "elsevier",
+      started_at: at,
+      finished_at: at,
+      requested: true,
+      result: "miss",
+    },
+    {
+      stage: "public-web",
+      source: "doi-landing",
+      started_at: at,
+      finished_at: at,
+      requested: true,
+      result: "miss",
+    },
+  ];
   return [
     session(
       "s-1",
@@ -46,6 +65,7 @@ function sampleSessions(literature: string) {
       "[样例] Synthetic spectra under humid storage",
       "deciding",
       now,
+      { prior_attempts: tried(now) },
     ),
     session(
       "s-2",

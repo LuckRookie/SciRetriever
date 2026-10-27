@@ -173,4 +173,48 @@
       grid-template-columns: minmax(0, 1fr);
     }
   }
+  .settings-routes {
+    padding: var(--space-4) var(--space-5) 0;
+  }
+  .settings-routes-title {
+    margin: 0 0 var(--space-2);
+    font-weight: 500;
+  }
+  .settings-routes ol {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: route;
+  }
+  .settings-routes li {
+    counter-increment: route;
+    display: grid;
+    grid-template-columns: 2em minmax(8em, 1fr) minmax(6em, 1fr) minmax(0, 2fr);
+    gap: var(--space-2);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--line);
+    font-size: var(--text-secondary);
+  }
+  .settings-routes li::before {
+    content: counter(route);
+    color: var(--fg3);
+    font-variant-numeric: tabular-nums;
+  }
+  .settings-routes li[data-ready="false"] > span:last-child {
+    color: var(--t-red);
+  }
+  .settings-routes li[data-pending] {
+    color: var(--fg2);
+  }
+  .settings-routes-stage {
+    color: var(--fg2);
+  }
+  @media (max-width: 640px) {
+    .settings-routes li {
+      grid-template-columns: 2em minmax(0, 1fr);
+    }
+    .settings-routes li > span:not(:first-child) {
+      grid-column: 2;
+    }
+  }
 }

@@ -338,7 +338,8 @@ export async function downloadSourceCandidate(
   )
     throw new Error("acquisition download request is invalid");
   const result = await source.download_candidate(candidate, options.signal);
-  if (result?.kind === "miss") throw new AcquisitionCandidateSkippedError();
+  if (result?.kind === "miss")
+    throw new AcquisitionCandidateSkippedError("miss");
   if (!result || result.kind !== "download")
     throw new Error("acquisition source did not return a PDF");
   if (!(result.bytes instanceof Uint8Array) || result.bytes.byteLength === 0)
@@ -568,6 +569,10 @@ export class PublicAcquisitionRegistry {
     sources: readonly AcquisitionSourcePort[],
     expectedSourceNames?: readonly string[],
     unavailable: Readonly<Record<string, string>> = {},
+    readonly not_enabled: readonly {
+      readonly source: string;
+      readonly stage: AcquisitionStage;
+    }[] = [],
   ) {
     const byName = new Map<string, AcquisitionSourcePort>();
     for (const source of sources) {

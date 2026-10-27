@@ -1,3 +1,4 @@
+import { parseAcquisitionAttempts } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
 import { createLogger } from "../logging/index.js";
 import {
@@ -176,6 +177,14 @@ export class BrowserArticleScheduler {
       generation,
       literature_id: request.literature_id,
       metadata_snapshot: Object.freeze({ ...request.metadata_snapshot }),
+      ...(request.prior_attempts
+        ? {
+            prior_attempts: parseAcquisitionAttempts(
+              request.prior_attempts,
+              16,
+            ),
+          }
+        : {}),
     });
     const bound = {
       ...request,

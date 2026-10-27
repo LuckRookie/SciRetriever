@@ -1,3 +1,4 @@
+import { observeNetworkRequests } from "../src/network/request-activity.js";
 import {
   createServer,
   type IncomingMessage,
@@ -471,4 +472,37 @@ describe("HTTP diagnostic facts and declared transport limits", () => {
       await site.close();
     }
   });
+});
+
+it("reports only dispatched HTTP requests and exposes no request material to the observer", async () => {
+  let requests = 0;
+  const site = await fixture((_request, response) => {
+    requests++;
+    response.end("Synthetic response");
+  });
+  const dispatched = vi.fn();
+  try {
+    await observeNetworkRequests(dispatched, () =>
+      requestFollowingRedirects(
+        site.url + "/file?opaque=synthetic",
+        () => [],
+        site.policy,
+      ),
+    );
+    expect(requests).toBe(1);
+    expect(dispatched.mock.calls).toEqual([[]]);
+    const rejected = vi.fn();
+    await expect(
+      observeNetworkRequests(rejected, () =>
+        requestFollowingRedirects(site.url, () => [], {
+          ...site.policy,
+          allowed_classes: ["public"],
+        }),
+      ),
+    ).rejects.toThrow();
+    expect(rejected).not.toHaveBeenCalled();
+    expect(requests).toBe(1);
+  } finally {
+    await site.close();
+  }
 });

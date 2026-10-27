@@ -1,3 +1,8 @@
+import { acquisitionRouteState } from "./acquisition-selection.js";
+import {
+  type AcquisitionRouteState,
+  type AcquisitionRoute,
+} from "@sciretriever/contracts";
 import {
   RAW_PARSE_PROFILES,
   parseConfigurationReadiness,
@@ -764,11 +769,37 @@ export class TypeScriptConfigurationOwner {
     return this.publish(payload, baseline, sections, signal);
   }
 
-  async status(signal?: AbortSignal): Promise<ConfigurationReadiness> {
+  async status(
+    signal?: AbortSignal,
+    effective: readonly AcquisitionRoute[] | null = null,
+  ): Promise<ConfigurationReadiness> {
     cancelled(signal);
     const current = await snapshot(this.home);
     const credentials = await loadCredentialBundle(this.home);
-    return readiness(current.configuration, bundlePreview(credentials));
+    const preview = bundlePreview(credentials);
+    return parseConfigurationReadiness({
+      ...readiness(current.configuration, preview),
+      acquisition_routes: acquisitionRouteState(
+        current.configuration,
+        preview,
+        effective,
+      ),
+    });
+  }
+
+  /** Project routes from the exact read/published snapshot, independently of readiness. */
+  async acquisitionRoutes(
+    current: TypeScriptConfigurationSnapshot,
+    signal?: AbortSignal,
+    effective: readonly AcquisitionRoute[] | null = null,
+  ): Promise<AcquisitionRouteState> {
+    cancelled(signal);
+    const credentials = await loadCredentialBundle(this.home);
+    return acquisitionRouteState(
+      current.configuration,
+      bundlePreview(credentials),
+      effective,
+    );
   }
 
   /**

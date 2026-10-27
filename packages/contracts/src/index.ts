@@ -1,3 +1,10 @@
+import {
+  parseAcquisitionAttempts,
+  parseAcquisitionRouteState,
+  type AcquisitionAttempt,
+  type AcquisitionRouteState,
+} from "./acquisition.js";
+export * from "./acquisition.js";
 export * from "./snapshots.js";
 export * from "./archive.js";
 import {
@@ -2406,6 +2413,7 @@ export interface WorkbenchArticleSession {
   readonly closed_at?: string;
   readonly outcome?: WorkbenchSessionOutcome;
   readonly stop?: WorkbenchSessionStop;
+  readonly prior_attempts?: readonly AcquisitionAttempt[];
 }
 export interface WorkbenchSessionOutcome {
   readonly kind: "published" | "retained";
@@ -2582,6 +2590,7 @@ export function parseWorkbenchArticleSession(
     "closed_at",
     "outcome",
     "stop",
+    "prior_attempts",
   ];
   const row = exact(
     value,
@@ -2613,6 +2622,9 @@ export function parseWorkbenchArticleSession(
     });
   }
   return Object.freeze({
+    ...(row.prior_attempts === undefined
+      ? {}
+      : { prior_attempts: parseAcquisitionAttempts(row.prior_attempts, 16) }),
     ...(row.operation_id === undefined
       ? {}
       : { operation_id: workbenchId(row.operation_id) }),
@@ -3013,6 +3025,7 @@ export interface ConfigurationReadinessItem {
     | "explicit-test";
 }
 export interface ConfigurationReadiness {
+  readonly acquisition_routes?: AcquisitionRouteState;
   readonly version: 1;
   readonly network_performed: false;
   readonly browser_launched: false;
@@ -3040,6 +3053,9 @@ export function parseConfigurationReadiness(
       "browser_launched",
       "items",
       "credentials",
+      ...(value && typeof value === "object" && "acquisition_routes" in value
+        ? ["acquisition_routes"]
+        : []),
     ],
     [],
   );
@@ -3118,6 +3134,11 @@ export function parseConfigurationReadiness(
   )
     fail();
   return Object.freeze({
+    ...(r.acquisition_routes === undefined
+      ? {}
+      : {
+          acquisition_routes: parseAcquisitionRouteState(r.acquisition_routes),
+        }),
     version: 1,
     network_performed: false,
     browser_launched: false,

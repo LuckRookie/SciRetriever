@@ -146,8 +146,10 @@ function configurationHttpAdapter(
   return {
     runtime_revision: application.configuration_revision,
     runtime_capabilities: describeWorkbenchRuntime(application),
-    status: (signal) => owner.status(signal),
+    status: (signal) => application.configurationStatus(signal),
     read: (signal) => owner.read(signal),
+    acquisitionRoutes: (snapshot, signal) =>
+      application.configurationAcquisitionRoutes(snapshot, signal),
     diff: (payload, baseline, signal) => owner.diff(payload, baseline, signal),
     publish: (payload, baseline, sections, signal) =>
       owner.publish(payload, baseline, sections, signal),
@@ -164,8 +166,10 @@ function configurationHttpAdapter(
         probe.close();
       }
     },
-    credential: (edit, baseline, signal) =>
-      owner.credential(edit, baseline, signal),
+    credential: async (edit, baseline, signal) => {
+      await owner.credential(edit, baseline, signal);
+      return application.configurationStatus(signal);
+    },
   };
 }
 

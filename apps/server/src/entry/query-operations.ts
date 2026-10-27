@@ -419,7 +419,7 @@ async function readQuery(
         !/^[A-Za-z0-9._:-]{1,128}$/.test(r.job_id)
       )
         throw new ContractValidationError();
-      return q.taskRead(r.job_id);
+      return q.tasks ? q.tasks.read(r.job_id) : q.taskRead(r.job_id);
     }
     case "task-list": {
       if (!q.tasks) unavailable();

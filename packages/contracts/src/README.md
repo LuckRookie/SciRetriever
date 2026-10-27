@@ -5,6 +5,7 @@
 ## 内容入口
 
 - [index.ts](index.ts)：包公开导出与基础合同。
+- [acquisition.ts](acquisition.ts)：当前/待生效来源与有界安全获取轨迹，供配置、任务和浏览器读取。
 - [document.ts](document.ts)：文档合同。
 - [raw-parsing.ts](raw-parsing.ts)：双 profile 原始解析与中性区块合同，校验坐标、页码、资源引用和不可变清单身份。
 - [processors.ts](processors.ts)：知识产物合同。

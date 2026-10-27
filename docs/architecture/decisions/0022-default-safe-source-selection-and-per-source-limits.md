@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：默认安全 Source 选择与逐 Source 扫描上限
-状态：Accepted
+状态：Accepted；Acquisition Auto 的固定集合与凭据不改变选择部分被 [ADR 0039](0039-configured-acquisition-auto-and-traces.md) 取代
 
 - Date: 2026-08-31
 - Supersedes: none

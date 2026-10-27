@@ -1,3 +1,4 @@
+import type { AcquisitionAttempt, LiteratureId } from "@sciretriever/contracts";
 /** Entry's operation-local submission boundary; it never owns business decisions. */
 export type CompletionCommit = <T>(action: () => Promise<T>) => Promise<T>;
 
@@ -30,6 +31,10 @@ export class CompletionSerialExecutor {
 }
 
 export interface CompletionExecution {
+  readonly on_acquisition_attempt?: (
+    literatureId: LiteratureId,
+    attempt: AcquisitionAttempt,
+  ) => Promise<void>;
   readonly commit: CompletionCommit;
   /** PDF acquisition remains within the enclosing target worker. */
   readonly acquire: CompletionCommit;

@@ -1,3 +1,4 @@
+import { designSamplePageCleanup } from "./design-samples-browser.js";
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { chromium, type Browser, type BrowserContext } from "playwright";
@@ -73,6 +74,7 @@ it.each(designSamplePages)(
         }));
       contexts.set(key, context);
       const page = await context.newPage();
+      const closePage = designSamplePageCleanup(page);
       await page.addInitScript(() => localStorage.clear());
       const errors: string[] = [],
         blocked: string[] = [];
@@ -102,7 +104,7 @@ it.each(designSamplePages)(
         expect(errors, `${entry.id}/${width}`).toEqual([]);
         expect(blocked, `${entry.id}/${width}`).toEqual([]);
       } finally {
-        await page.close();
+        await closePage();
       }
     }
   },

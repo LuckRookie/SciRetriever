@@ -1,3 +1,4 @@
+import type { AcquisitionAttempt } from "@sciretriever/contracts";
 import { DocumentProcessingError } from "../document/service.js";
 import {
   parseDatabaseCompletionReport,
@@ -58,6 +59,11 @@ export interface DatabaseCompletionRequest {
 }
 
 export interface DatabaseCompletionOptions {
+  readonly on_acquisition_attempt?: (
+    target: CompletionTarget,
+    literatureId: LiteratureId,
+    attempt: AcquisitionAttempt,
+  ) => Promise<void>;
   readonly signal?: AbortSignal | undefined;
   /** The immutable scope after selection, before any target starts. Feedback only. */
   readonly on_scope?: (targets: readonly CompletionTarget[]) => void;
@@ -474,6 +480,12 @@ export class DatabaseCompletionTargetRunner {
         literature_id: id,
         detail,
         metadata_snapshot: facts.metadata_snapshot,
+        ...(execution.on_acquisition_attempt
+          ? {
+              on_attempt: (attempt: AcquisitionAttempt) =>
+                execution.on_acquisition_attempt!(id, attempt),
+            }
+          : {}),
         signal,
         commit,
         generation: execution.generation,
@@ -1032,7 +1044,22 @@ export class DatabaseCompletionService {
     const { outcomes, end } = await operation.run(
       targets,
       (frozen, active, execution) =>
-        this.completeTarget(frozen, goal, transferIds, active, execution),
+        this.completeTarget(frozen, goal, transferIds, active, {
+          ...execution,
+          ...(options.on_acquisition_attempt
+            ? {
+                on_acquisition_attempt: (
+                  literatureId: LiteratureId,
+                  attempt: AcquisitionAttempt,
+                ) =>
+                  options.on_acquisition_attempt!(
+                    frozen.target,
+                    literatureId,
+                    attempt,
+                  ),
+              }
+            : {}),
+        }),
     );
     // Results are projected in frozen order, independent of worker completion order.
     for (const frozen of targets) {

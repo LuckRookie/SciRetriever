@@ -1,3 +1,4 @@
+import { parseAcquisitionAttempts } from "@sciretriever/contracts";
 import type { OperatorInput } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
 import type {
@@ -205,6 +206,14 @@ export function createProductionBrowserHostFactory(options: {
           generation: request.generation ?? 0,
           literature_id: request.literature_id,
           metadata_snapshot: Object.freeze({ ...request.metadata_snapshot }),
+          ...(request.prior_attempts
+            ? {
+                prior_attempts: parseAcquisitionAttempts(
+                  request.prior_attempts,
+                  16,
+                ),
+              }
+            : {}),
           ...(request.article_goal?.title
             ? { title: request.article_goal.title }
             : {}),

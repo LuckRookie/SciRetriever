@@ -30,6 +30,10 @@ import { errorMessage, serviceMessage } from "../../strings.js";
 import { randomId } from "../../../browser-platform.js";
 import { candidateStatus } from "../../data/candidate-status.js";
 import { readLiterature } from "../../data/library.js";
+import {
+  attemptsDetail,
+  attemptsLine,
+} from "../../data/acquisition-wording.js";
 import "./browser.css";
 
 const states: Readonly<Record<string, string>> = {
@@ -361,6 +365,7 @@ function SessionCard({
         <PhaseBadge session={session} />
         <Button onPress={onOpen}>观看 Agent</Button>
       </div>
+      <PriorAttempts session={session} />
       <TechDetails copyText={session.session_id}>
         <p>会话编号：{session.session_id}</p>
         <p>文献编号：{session.article_id}</p>
@@ -386,8 +391,21 @@ function FinishedRow({
           查看
         </Button>
       </div>
+      <PriorAttempts session={session} />
       {reason ? <p className="browser-finished-reason">{reason}</p> : null}
     </li>
+  );
+}
+/** Why this paper reached the Agent: the sources tried before it. */
+function PriorAttempts({ session }: { session: Session }) {
+  const attempts = session.prior_attempts?.filter(
+    (attempt) => attempt.stage !== "browser",
+  );
+  if (!attempts?.length) return null;
+  return (
+    <p className="browser-prior" title={attemptsDetail(attempts)}>
+      已尝试：{attemptsLine(attempts)} → 交给 Agent
+    </p>
   );
 }
 /** Title from the session itself; older servers omit it, so read the literature. */

@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import {
   parseWorkbenchView,
+  parseAcquisitionAttempts,
   sha256,
   type OperatorInput,
 } from "@sciretriever/contracts";
@@ -62,6 +63,12 @@ it("projects bounded synthetic actions, actual points, private input omission an
   const client = session.attach();
   try {
     await session.refresh();
+    expect(
+      parseWorkbenchView(session.view()).sessions?.[0]?.prior_attempts,
+    ).toMatchObject([
+      { source: "doi-landing", result: "miss", requested: true },
+      { stage: "browser", result: "escalated", requested: false },
+    ]);
     expect(session.view().actions?.[0]).toMatchObject({
       kind: "navigation",
       actor: "platform",
@@ -191,6 +198,16 @@ it("keeps queued/closed production metadata and existing outcomes without a page
       sha256: await sha256(new Uint8Array([1])),
     },
     title: "Frozen title",
+    prior_attempts: parseAcquisitionAttempts([
+      {
+        stage: "publisher-api",
+        source: "wiley",
+        started_at: "2026-10-26T00:00:00Z",
+        finished_at: "2026-10-26T00:00:01Z",
+        requested: true,
+        result: "miss",
+      },
+    ]),
   };
   workbench.queued(identity, () => {});
   const queued = parseWorkbenchView(workbench.view()).sessions![0]!;
@@ -201,9 +218,11 @@ it("keeps queued/closed production metadata and existing outcomes without a page
     queued_at: expect.any(String),
   });
   expect(queued.closed_at).toBeUndefined();
+  expect(queued.prior_attempts).toEqual(identity.prior_attempts);
   workbench.removed("queued", { kind: "published", receipt_id: "receipt-1" });
   expect(parseWorkbenchView(workbench.view()).sessions?.[0]).toMatchObject({
     phase: "closed",
+    prior_attempts: identity.prior_attempts,
     outcome: { kind: "published", code: "published" },
     closed_at: expect.any(String),
   });

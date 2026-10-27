@@ -5,6 +5,7 @@
 ## 内容入口
 
 - [http.ts](http.ts)：受控 HTTP 传输。
+- [request-activity.ts](request-activity.ts)：隔离并发请求的无参数派发通知，不携带 URL、凭据或响应。
 - [policy.ts](policy.ts)：网络访问策略。
 - [budget.ts](budget.ts)：共享访问额度。
 - [browser-admission.ts](browser-admission.ts)：浏览器请求准入。

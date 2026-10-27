@@ -1,3 +1,4 @@
+import { networkRequestDispatched } from "./request-activity.js";
 import { Agent, request } from "node:http";
 import type { AgentTransport } from "../agents/protocol.js";
 
@@ -323,6 +324,7 @@ export async function requestOnce(
             parameters.append(name, value);
           query = parameters.toString();
         }
+        networkRequestDispatched();
         const req = request({
           agent,
           method: options.method ?? "GET",

@@ -721,6 +721,17 @@ export class ExecutionTaskService {
               });
               return true;
             },
+            on_acquisition_attempt: async (target, literatureId, attempt) => {
+              const row = selectedRows.get(targetKey(target));
+              if (!row)
+                throw new TypeError("acquisition trace target is unavailable");
+              await this.event(jobId, "acquisition-attempt", {
+                target_id: row.target_id,
+                attempt_id: attemptIds.get(row.target_id),
+                literature_id: literatureId,
+                attempt,
+              });
+            },
             on_target_finish: async (target, outcome) => {
               const key = targetKey(target);
               const row = selectedRows.get(key);

@@ -1,3 +1,5 @@
+import { networkRequestDispatched } from "../src/network/request-activity.js";
+import type { AcquisitionAttempt } from "@sciretriever/contracts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -233,6 +235,7 @@ function stageSource(
         : [];
     },
     async download_candidate(candidate) {
+      networkRequestDispatched();
       const value = decodeURIComponent(
         new URL(candidate.locator).pathname
           .split("/")
@@ -261,6 +264,7 @@ it.each([0, 1, 2, 3, 4])(
   async (successfulStage) => {
     const test = await fixture();
     const events: string[] = [];
+    const trace: AcquisitionAttempt[] = [];
     const deliver = vi.fn(async (request: BrowserDeliveryRequest) => {
       events.push("browser");
       return test.browserPdf(request);
@@ -281,7 +285,26 @@ it.each([0, 1, 2, 3, 4])(
         }),
       });
       const request = await test.seed(1);
-      expect((await service.acquire(request)).kind).toBe("acquired");
+      expect(
+        (
+          await service.acquire({
+            ...request,
+            on_attempt: async (a) => {
+              trace.push(a);
+            },
+          })
+        ).kind,
+      ).toBe("acquired");
+      expect(trace.map((a) => a.result)).toEqual([
+        ...Array(Math.min(successfulStage, 4)).fill("not-applicable"),
+        successfulStage === 4 ? "escalated" : "hit",
+      ]);
+      expect(trace.at(-1)?.requested).toBe(successfulStage !== 4);
+      if (successfulStage === 4)
+        expect(deliver.mock.calls[0]![0].prior_attempts).toEqual(trace);
+      expect(JSON.stringify(trace)).not.toMatch(
+        /https|headers|fixture.example/,
+      );
       expect(events).toEqual([
         ...stages
           .slice(0, Math.min(successfulStage + 1, 4))

@@ -1,4 +1,8 @@
 import {
+  parseAcquisitionTaskTrace,
+  type AcquisitionTaskTrace,
+} from "@sciretriever/contracts";
+import {
   envelopeRecord,
   jobRecord,
   jobStatus,
@@ -68,6 +72,8 @@ export function taskTitle(job: Json): string {
 }
 
 export interface TaskDetail {
+  readonly acquisition_traces?: readonly AcquisitionTaskTrace[];
+  readonly acquisition_traces_truncated?: boolean;
   readonly job: Json;
   readonly targets: readonly Json[];
   readonly results: readonly Json[];
@@ -90,6 +96,15 @@ export function parseTaskDetail(value: unknown): TaskDetail {
   const list = (name: string) =>
     listField(task, name).map((item) => record(item, name));
   return {
+    ...(task.acquisition_traces === undefined
+      ? {}
+      : {
+          acquisition_traces: listField(task, "acquisition_traces").map(
+            parseAcquisitionTaskTrace,
+          ),
+          acquisition_traces_truncated:
+            task.acquisition_traces_truncated === true,
+        }),
     job,
     targets: list("targets"),
     results: list("results"),

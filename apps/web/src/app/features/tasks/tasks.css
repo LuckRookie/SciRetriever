@@ -213,4 +213,19 @@
       display: none;
     }
   }
+  .task-traces {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .task-traces > li {
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .task-trace-line {
+    margin: var(--space-1) 0 0;
+    color: var(--fg2);
+    font-size: var(--text-caption);
+    overflow-wrap: anywhere;
+  }
 }

@@ -1,3 +1,7 @@
+import {
+  parseAcquisitionAttempts,
+  type AcquisitionAttempt,
+} from "@sciretriever/contracts";
 import { BrowserActivityLog, activityText } from "../browser/activity.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -49,6 +53,7 @@ export class WorkbenchSessionError extends Error {
       | "stale-command"
       | "session-busy"
       | "session-closed"
+      | "viewer-limit"
       | "model-unavailable"
       | "browser-failed",
   ) {
@@ -87,7 +92,7 @@ export class WorkbenchSession {
   private observedAt = "";
   private observationPending = false;
   private stateValue: WorkbenchSessionState = "watching";
-  private errorValue: WorkbenchSessionError["code"] | null = null;
+  private errorValue: WorkbenchView["error"] = null;
   private busy = false;
   private actionPromise: Promise<unknown> | undefined;
   private refreshPromise: Promise<void> | undefined;
@@ -135,6 +140,7 @@ export class WorkbenchSession {
     private readonly execution?: BrowserArticleExecution,
     private readonly capability?: BrowserAgentCapability,
     private readonly display?: {
+      readonly prior_attempts?: readonly AcquisitionAttempt[];
       readonly title?: string;
       readonly operation_id?: string;
     },
@@ -244,8 +250,8 @@ export class WorkbenchSession {
     }
   }
   attach(existingId?: string): string {
-    if (this.humans.size >= 16 || this.closePromise)
-      throw new WorkbenchSessionError("session-closed");
+    if (this.closePromise) throw new WorkbenchSessionError("session-closed");
+    if (this.humans.size >= 16) throw new WorkbenchSessionError("viewer-limit");
     const id = existingId ?? `client-${randomUUID()}`;
     if (!/^[a-zA-Z0-9._:-]{1,128}$/u.test(id))
       throw new WorkbenchSessionError("stale-command");
@@ -490,6 +496,27 @@ export class WorkbenchSession {
                   ? { title: activityText(this.display.title, 512) }
                   : {}),
                 queued_at: this.queuedAt,
+                prior_attempts: parseAcquisitionAttempts(
+                  this.display?.prior_attempts ?? [
+                    {
+                      stage: "public-web",
+                      source: "doi-landing",
+                      started_at: this.queuedAt,
+                      finished_at: this.queuedAt,
+                      requested: true,
+                      result: "miss",
+                    },
+                    {
+                      stage: "browser",
+                      source: "browser",
+                      started_at: this.queuedAt,
+                      finished_at: this.queuedAt,
+                      requested: false,
+                      result: "escalated",
+                    },
+                  ],
+                  16,
+                ),
                 phase: this.activity.closedAt
                   ? ("closed" as const)
                   : this.stateValue === "agent-running"

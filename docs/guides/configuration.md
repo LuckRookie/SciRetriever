@@ -152,10 +152,7 @@ mode = "auto"
 | `sources.acquisition` | `mode`      | `auto` 或 `custom` | `auto` | 选择版本默认集合或用户精确集合。                        |
 | `sources.acquisition` | `providers` | 有序、不可重复数组 | 空     | 仅 Custom 使用；允许空列表。                            |
 
-Auto 禁止同时保存非空 `providers`，有效集合由当前版本在本地确定，不根据凭据、Network probe
-或临时服务状态变化。Custom 精确保留用户数组与顺序；空列表表示不启用该能力的命名 Provider。
-升级可以维护 Auto catalog，Custom 不随 catalog 改变。不存在 preset、include/exclude 或按 Key
-自动启用。
+Auto 禁止同时保存非空 `providers`。Metadata Auto 只由当前版本的默认集合确定；Acquisition Auto 还使用必要配置的存在性，规则见下文。两者都不通过 Network probe 或临时服务状态选源。Custom 精确保留用户数组与顺序；空列表表示不启用该能力的命名 Provider。升级可以维护 Auto catalog，Custom 不随 catalog 改变；没有 preset 或 include/exclude。
 
 当前 Metadata Auto 有序集合是：
 
@@ -171,9 +168,9 @@ OpenCitations 当前不在 Auto 集合，也不参加主题搜索。默认 `limi
 
 引用发现的 Auto 执行顺序在上述已启用集合内稳定分组：已配置凭据的 API 在前，无需密钥的 API 在后，组内保持默认顺序；凭据存在只影响已选引用来源的优先级，不启用额外来源，也不证明凭据在线有效或具有订阅权限。Custom 的 `providers` 顺序就是精确优先级，不再按凭据重排。主题搜索继续查询所选搜索来源，不采用引用扩展的成功短路。引用扩展每个节点重新按优先级开始，空结果或局部失败顺延，取得正常完成且可识别的引用结果后停止该节点的后续来源。
 
-当前 Acquisition Auto 的命名 Source 是 `arxiv, europe-pmc`。所有模式都会消费已经保存且安全
-验证通过的 direct/landing `AssetHint`；Crossref、Semantic Scholar、OpenAlex、DataCite 等提供的
-公开 hint 不需要再启用同名下载服务。Sci-Hub、Unpaywall、授权 PDF API 和 Browser 不进入 Auto。
+Acquisition Auto 默认包含 `arxiv, europe-pmc`，另加入必要配置齐全的 API：Elsevier 的 `api_key`、Wiley 的 `tdm_api_token`、CORE 的 `api_key`，以及 Unpaywall 的 `contact_email`。选择只消费凭据字段存在性，不读取授权值、不联网探测；缺配置的 API 不加入、不报错。配置齐全不等于认证有效或文章有全文权限。Sci-Hub 等镜像不因 Auto 自动加入，Browser 继续由 `[browser]` 独立启用。
+
+所有模式自动加入 direct 和 DOI landing，消费已有且通过准入的资产线索；元数据 Provider 的 hint 不需要再启用同名下载服务。Custom 不因凭据变化增删来源；显式选择却缺配置的来源保留稳定不可用原因。执行顺序与轨迹读取见 [PDF 获取指南](pdf-acquisition.md)。已有获取进程冻结启动时的选择，补齐凭据或保存选择后需重启更新；已装配来源的请求级凭据仍按原规则在下次请求时读取。
 
 选择 Custom 时，两个 `providers` 字段都是按顺序、不可重复的 Provider key 数组。
 Metadata 的允许值为：
@@ -611,7 +608,7 @@ Browser:  Setup / Test model / Back
 ```
 
 Search/Download 的 Sources 使用 Auto/Custom 两层。Auto → Custom 会冻结当前有效集合与顺序；
-Custom → Auto 会恢复内置集合。Search 的 Limit 修改逐 Source raw-item 上限。当前页面只编辑
+Custom → Auto 会恢复当前 Auto 规则，其中获取来源包含配置齐全的 API。Search 的 Limit 修改逐 Source raw-item 上限。当前页面只编辑
 集合和 limit；Source 的凭据与远程 Test 仍通过公开 `config test` 命令和 owner 接口处理，状态页只
 显示 secret presence，绝不显示值、长度或特征。
 
@@ -881,9 +878,7 @@ production capability 存在
 领域发现要求非空的有效 Metadata Source 选择和 `paths`；默认 Auto 已提供当前版本安全集合，
 Custom 空列表则明确不具备该能力。实际只有有效、就绪且具有 topic-search 的 adapter 参加主题
 搜索，每个 adapter 独立获得 `sources.metadata.limit`。引用发现还需要引用 Analysis 的
-完整服务参数与对应凭据。PDF 补全需要 `paths`，并会在构造期拒绝任何已启用
-但不就绪的 Acquisition Provider；内容补全还需要完整 Parser、Analysis 配置与相应
-凭据。纯本地查询、三种书目交换、手动 PDF 只需要安全 Storage 路径。
+完整服务参数与对应凭据。PDF 补全需要 `paths`；显式选中但不就绪的 Acquisition 来源保留不可用原因，不伪装成正常未命中，其它独立来源仍可继续。解析需要对应 Parser 配置与凭据，后续建档/分析另需对应模型配置。纯本地查询、三种书目交换、手动 PDF 只需要安全 Storage 路径。
 
 启用但缺少生产实现、普通参数、必需凭据或访问政策会在外部调用和 Storage 创建前
 稳定失败，不会静默跳过或伪装为零结果。真实调用后的认证、授权、quota、网络或服务

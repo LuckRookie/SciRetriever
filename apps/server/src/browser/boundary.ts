@@ -1,3 +1,4 @@
+import type { AcquisitionAttempt } from "@sciretriever/contracts";
 import type {
   BrowserAgentStopReason,
   DurableCandidate,
@@ -22,6 +23,7 @@ import type {
  * signal. It never receives a credential, Cookie, arbitrary URL or selector.
  */
 export interface BrowserDeliveryRequest {
+  readonly prior_attempts?: readonly AcquisitionAttempt[];
   readonly literature_id: string;
   readonly identifier: string;
   /**

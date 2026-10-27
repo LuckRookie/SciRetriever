@@ -582,13 +582,9 @@ sci-hub
 
 这里使用稳定 Provider key；`springer` 表示 Springer Nature，`sci-hub` 表示默认关闭、必须由 operator 显式启用的 locator Source。启用后 resolver 使用当前版本 bundled mirror set；`sources.acquisition.sci-hub.urls` 可以用一到八个有序 HTTPS 镜像完整覆盖 bundled 列表，测试/内部显式注入 resolver 又优先于两者。三种选择都只对 canonical DOI 形成 landing locator，按序执行、不并发、不自动发现镜像。这里的“覆盖”表示相应服务能够贡献 PDF 字节、直接 locator、落地页或受控内容路径，并不要求每个名称都复制一套下载 adapter。Crossref、OpenAlex、DataCite 等 Metadata adapter 已经给出 `AssetHint` 时，由通用公开 route 消费同一线索；不为名称对称再实现只转发相同 URL 的 route adapter。Web of Science 和 OpenCitations 当前不作为原文来源。以上是目标矩阵，不证明当前代码或安装产品已经接入。
 
-Acquisition named Source 由本地 Auto/Custom resolver 选择。当前 Auto 只启用 arXiv 与 Europe PMC
-两个零配置公开协议；Custom 精确使用用户保存的集合、以每个获取阶段内的列表顺序为基础并允许为空，出版社 API 可按唯一名称候选稳定优先。无论哪种模式，所有已保存且通过
-安全验证的 PDF/landing `AssetHint` 分别供 direct 与 public-web/Browser 使用，不依赖同名 Provider enablement。
-Sci-Hub、Unpaywall、CORE/Elsevier/Wiley 授权 API 不进入 Auto，Browser 仍由 `[browser]` 独立
-显式启用；凭据存在不改变 Source 选择。Registry/status/Planner 的选择解析不执行 DNS 或 HTTP，
-运行时仍按 Literature 证据和 direct → publisher-api → general-api → public-web → browser 层级短路，不对每篇 Literature 穷举全部
-Provider。
+Acquisition named Source 由 Configuration 的本地 Auto/Custom resolver 选择。Auto 是版本默认公开集合，加上必要配置齐全的授权 API 和通用 API；只消费凭据字段存在性或普通必填参数，不读取授权值，不执行 DNS、HTTP 或权限探测。配置不齐的来源不加入，也不报配置错误；镜像不因 Auto 自动加入。具体当前来源和参数由[配置手册](../../guides/configuration.md)维护。Custom 精确保留用户列表，不因凭据变化扩展；显式选择但不可用的来源保留稳定原因。五层顺序固定，阶段内保持原顺序，出版社 API 可按单篇唯一名称候选稳定优先。
+
+所有模式继续自动加入 direct 与 DOI landing；已有 `AssetHint` 不依赖同名 Provider enablement。Browser 由 `[browser]` 独立启用。Application 冻结当前路线；配置状态返回 `acquisition_routes`，包含执行顺序下的 `effective`、已保存配置对应的 `pending` 与差异/重启标记。路线只含来源、阶段、`mode_reason`、本地 ready 和可选稳定不可用码。没有运行时的配置进程必须返回 `effective=null`，不得声称这是其它进程的生效状态；Browser 的运行时健康也不能从 pending 配置预测。此选源决定见 [ADR 0039](../decisions/0039-configured-acquisition-auto-and-traces.md)。
 
 `public:sci-hub` 复用共享 `PublicLocatorFetcher`。每个镜像 hostname 自动得到独立的保守 web
 scope；landing 可直接交付 PDF，或通过有限静态声明（`citation_pdf_url` 与明确
@@ -865,7 +861,7 @@ LiteratureAsset
        └─ Storage 错误：抛出，不转换为 NoPrimaryPdf
 ```
 
-一个候选正常未命中、没有 Browser 下载、格式错误或基本检查失败时清理临时结果并继续其它候选，不把详情带入下一个候选或数据库。一个 candidate、locator、target、DOI landing 解析或 adapter 的 Network/API/认证/授权/quota/service/schema 等外部失败，在不放宽 Network policy 的前提下转换为当前运行的脱敏状态；按 ADR 0015 §7，已识别来源失败允许独立 API/Browser 继续；当前服务的限流和冷却仍有效。后续成功交付才清除该目标的未解决失败；全部未成功时保留首个未解决来源失败，不能成为“已耗尽”证据。Browser 的观察与终态仍保留在当次 Debug 事件中。这些状态只进入安全日志、内存聚合和本次非持久化 Report，不成为持久化候选历史。
+一个候选正常未命中、没有 Browser 下载、格式错误或基本检查失败时清理临时结果并继续其它候选，不把详情带入下一个候选或数据库。一个 candidate、locator、target、DOI landing 解析或 adapter 的 Network/API/认证/授权/quota/service/schema 等外部失败，在不放宽 Network policy 的前提下转换为当前运行的脱敏状态；按 ADR 0015 §7，已识别来源失败允许独立 API/Browser 继续；当前服务的限流和冷却仍有效。后续成功交付才清除该目标的未解决失败；全部未成功时保留首个未解决来源失败，不能成为“已耗尽”证据。Browser 的观察与终态仍保留在当次 Debug 事件中。逐候选定位和临时响应仍不持久化；来源级安全摘要由 Entry 交给 Jobs 的既有 durable events 保存，不成为文献事实、候选历史或自动耗尽依据。
 
 后续 route 成功时正常短路；最终没有成功时选择稳定失败、deferred 或 action-required 结果，绝不能在尝试其它候选后伪装成完整耗尽。配置预检、取消、Port 合同、临时文件清理、发布和 stale 失败不属于可隔离的 route 失败，必须立即终止。不同候选可以有各自来源，但同一 `Literature` 只有一个主 PDF 驱动解析。候选通过基本检查并完整提交后立即形成 `ASSET_READY`，不等待正文内容判断。补充 PDF 或其它相关文件可以保存为补充资产，但不驱动 Parsing、Analysis 或 Literature 状态。
 
@@ -874,7 +870,9 @@ LiteratureAsset
 `browser-generic` 聚合政策与文章平台资格共同准入；同平台网络串行，不同平台可由独立 worker
 推进。等待 Network/Browser permit 不等于候选失败。
 
-Debug 诊断为 cohort、tier、route、route adapter、授权 source/target/lookup/download 和 Browser source/candidate 记录单调时钟耗时。每个 route 终态显式使用 `disposition=delivered|miss|deferred|action-required|failure|fatal` 与 `next=next-route|next-tier|browser-admission|stop` 说明实际控制流；授权 API source 同时报告 strong-evidence target 数、attempted 与 delivered。正常模式不逐条显示 route miss 或候选内容；保留交付、Browser 分组/等待、最终耗尽和稳定失败。Browser 另以低频 INFO 记录不含定位信息的传输/Intake/发布计时，见 ADR 0030。日志不能改变 route 聚合、Browser admission 或耗尽判断。
+获取来源轨迹与 Debug 日志分开。每篇每来源产生有界 `AcquisitionAttempt`：`stage/source/started_at/finished_at/requested/result`，可选 `code/candidates`；结果区分命中、正常未命中、不适用、未启用、不可用、失败、冷却和拒绝。共享 Network 只在已准入 HTTP 请求派发时提供无参数通知，不能把调用 locator 或进入阶段当作实际网络请求。Browser 升级单独产生 `stage=browser,result=escalated,requested=false`，不声称后续 Browser 的联网状态。首次出版社证据准备的安全计时单列 `doi-resolution`，不保存落地页。
+
+Jobs 按目标/文献/attempt 绑定并保存 `acquisition-attempt` 事件，不新增表；HTTP、CLI、MCP 共用任务读取投影。每次单篇获取最多 64 条；任务读取最多 10,000 个来源事件并显式报告截断，按文献/attempt 聚合后同样有组内截断标记，不受普通技术活动尾部窗口遮蔽。`WorkbenchView.sessions[].prior_attempts` 可选追加最新 16 条，随文章身份进入进程内会话；旧 payload 可省略。合成会话使用同样合同。安全事件只有受限 ID、枚举、时间和计数，不保存 URL、headers、Cookie、token、响应或页面文字。后续成功不能抹去前序来源轨迹；诊断不改变五层短路、失败隔离、取消、预算或不可变发布。
 
 **2026-10-13 当前编排：** 生产 Completion 由有界 worker 逐篇调用 `EntryPdfAcquisitionService.acquire`，
 每篇内部保持五层顺序、来源隔离、实际入口证据和不可变发布，完成即反馈并补入新目标。单篇恢复不推进全操作

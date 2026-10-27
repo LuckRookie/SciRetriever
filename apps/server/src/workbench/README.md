@@ -42,7 +42,7 @@ HTTP 关闭先取消并排空正在处理的请求；生产组装随后停止 du
 
 [上级目录](../README.md)
 
-机器连接使用现有 HTTP 授权边界，`POST /api/clients/disconnect` 需要当前 Cookie、client_id 与 CSRF，显式撤销连接；仍控制页面时按既有 detach/pause 政策处理。该客户端的事件流随撤销结束。
+机器连接使用现有 HTTP 授权边界，`POST /api/clients/disconnect` 需要当前 Cookie、client_id 与 CSRF，显式撤销连接；仍控制页面时按既有 detach/pause 政策处理。该客户端的事件流随撤销结束。客户端达到 16 个上限时，注册返回 `429 / viewer-limit`，不代表工作台关闭；只有实际关闭才返回 `409 / session-closed`。意外断开仍保留原有的 grant 过期回收与事件流重连行为。
 
 会话摘要带获取 operation、冻结标题、排队/结束时间与结束结果；所选会话的 `actions` 保留最近 100 条动作。生产与合成会话复用 Browser 的内存投影，点击坐标绑定执行时画面，不把输入内容或 URL 查询参数送入动作记录。
 

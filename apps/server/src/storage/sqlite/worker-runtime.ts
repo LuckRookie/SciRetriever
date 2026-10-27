@@ -2967,6 +2967,7 @@ function listExecutionEvents(
   after: Dynamic,
   limit: Dynamic,
   order: Dynamic,
+  acquisitionOnly: Dynamic = false,
 ): Dynamic {
   requireRuntime();
   if (
@@ -2977,12 +2978,17 @@ function listExecutionEvents(
     limit > 1000
   )
     fail();
-  if (order !== "oldest" && order !== "newest") fail();
+  if (
+    (order !== "oldest" && order !== "newest") ||
+    typeof acquisitionOnly !== "boolean"
+  )
+    fail();
+  const filter = acquisitionOnly ? " AND kind='acquisition-attempt'" : "";
   return db
     .prepare(
       order === "newest"
-        ? "SELECT * FROM execution_events WHERE job_id=? AND sequence>? ORDER BY sequence DESC LIMIT ?"
-        : "SELECT * FROM execution_events WHERE job_id=? AND sequence>? ORDER BY sequence LIMIT ?",
+        ? `SELECT * FROM execution_events WHERE job_id=? AND sequence>?${filter} ORDER BY sequence DESC LIMIT ?`
+        : `SELECT * FROM execution_events WHERE job_id=? AND sequence>?${filter} ORDER BY sequence LIMIT ?`,
     )
     .all(jobId, after, limit)
     .map((row: Dynamic) => ({
@@ -4968,6 +4974,7 @@ port.on("message", (message: WorkerMessage) => {
           message.command.after,
           message.command.limit,
           message.command.order,
+          message.command.acquisitionOnly ?? false,
         );
         break;
       case "execution_put_intervention":

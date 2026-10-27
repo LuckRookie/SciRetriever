@@ -3,12 +3,17 @@ import {
   workbenchTestAccess,
 } from "./workbench-auth-fixture.js";
 import { request as httpRequest } from "node:http";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createApplication } from "../src/bootstrap/application.js";
-import { describeWorkbenchRuntime } from "../src/bootstrap/workbench.js";
+import {
+  describeWorkbenchRuntime,
+  startProductionWorkbench,
+} from "../src/bootstrap/workbench.js";
+import { initializeCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
+import { parseAcquisitionRouteState } from "@sciretriever/contracts";
 import { TypeScriptConfigurationOwner } from "../src/configuration/owner.js";
 import { ConfigurationProbeSession } from "../src/configuration/owner.js";
 import { startWorkbenchHttp } from "../src/workbench/http.js";
@@ -75,6 +80,171 @@ function fixtureSession(): WorkbenchSession {
 }
 
 describe("workbench configuration HTTP boundary", () => {
+  it("keeps reads and committed publications independent of status refresh failures while preserving routes", async () => {
+    const home = await mkdtemp(
+      join(tmpdir(), "sciretriever-status-isolation-"),
+    );
+    const owner = new TypeScriptConfigurationOwner(home);
+    await mkdir(join(home, ".sciretriever"), { mode: 0o700 });
+    await initializeCatalogSchema(
+      join(home, ".sciretriever", "catalog.sqlite"),
+    );
+    const initial = await owner.read();
+    await owner.publishConfiguration(initial.configuration, initial.revision, [
+      "sources",
+    ]);
+    const server = await startProductionWorkbench({
+      home,
+      access: workbenchTestAccess,
+      assets: new Map([["/", { contentType: "text/html", body: "Synthetic" }]]),
+      applicationOptions: {
+        configurationOwner: owner,
+        browserHost: () => null,
+      },
+    });
+    const originalStatus = server.application.configurationStatus.bind(
+      server.application,
+    );
+    const status = vi.spyOn(server.application, "configurationStatus");
+    try {
+      const auth = await workbenchLogin(server.origin);
+      const root = await exchange(server.origin, "/", "GET", { Cookie: auth });
+      const cookie = `${auth}; ${(root.headers["set-cookie"] as string[])[0]!.split(";")[0]!}`;
+      const init = await exchange(
+        server.origin,
+        "/api/clients",
+        "POST",
+        {
+          Cookie: cookie,
+          Origin: server.origin,
+          "Content-Type": "application/json",
+          "X-Workbench-Init": "1",
+        },
+        "{}",
+      );
+      const grant = JSON.parse(init.text) as {
+        client_id: string;
+        csrf: string;
+      };
+      const headers = {
+        Cookie: cookie,
+        Origin: server.origin,
+        "Content-Type": "application/json",
+        "X-Workbench-Csrf": grant.csrf,
+      };
+      const request = (path: string, method: "GET" | "POST", body?: unknown) =>
+        exchange(
+          server.origin,
+          `/api/configuration/${path}?client_id=${grant.client_id}`,
+          method,
+          headers,
+          body === undefined ? undefined : JSON.stringify(body),
+        );
+      const checkRefresh = async () => {
+        expect(status).not.toHaveBeenCalled();
+        // The fault belongs to the explicit refresh, not the completed publication.
+        const failed = await request("status", "GET");
+        expect(failed.status).toBe(409);
+        expect(JSON.parse(failed.text)).toEqual({ code: "command-rejected" });
+        const refreshed = await request("status", "POST", {});
+        expect(refreshed.status).toBe(200);
+        expect(status).toHaveBeenCalledTimes(2);
+        return parseAcquisitionRouteState(
+          JSON.parse(refreshed.text).status.acquisition_routes,
+        );
+      };
+      const armRefreshFailure = () => {
+        status.mockClear();
+        status.mockRejectedValueOnce(new Error("synthetic readiness failure"));
+      };
+      for (const method of ["GET", "POST"] as const) {
+        armRefreshFailure();
+        const read = await request(
+          "read",
+          method,
+          method === "POST" ? {} : undefined,
+        );
+        expect(read.status).toBe(200);
+        const routes = parseAcquisitionRouteState(
+          JSON.parse(read.text).acquisition_routes,
+        );
+        expect(routes.effective).not.toBeNull();
+        expect(routes).toEqual(await checkRefresh());
+      }
+      // Credential publication already returns status: the HTTP layer must reuse it.
+      status.mockClear();
+      status.mockImplementationOnce(originalStatus);
+      status.mockRejectedValueOnce(new Error("synthetic readiness failure"));
+      const current = await owner.read();
+      const credential = await request("credential", "POST", {
+        edit: {
+          namespace: "source",
+          target: "wiley",
+          kind: "set",
+          fields: { tdm_api_token: "synthetic-status-isolation" },
+        },
+        baseline: current.revision,
+      });
+      expect(credential.status).toBe(200);
+      expect(status).toHaveBeenCalledTimes(1);
+      const result = JSON.parse(credential.text);
+      const routes = parseAcquisitionRouteState(result.acquisition_routes);
+      expect(routes).toEqual(result.status.acquisition_routes);
+      expect(routes.pending.find((r) => r.source === "wiley")).toMatchObject({
+        mode_reason: "auto-configured",
+        ready: true,
+      });
+      expect(routes.effective?.some((r) => r.source === "wiley")).toBe(false);
+      expect(result).toMatchObject({
+        ordinary_configuration_restart_required: false,
+        application_restart_required: true,
+        application_restart_reason: "capability-reassembly",
+      });
+      expect(credential.text).not.toContain("synthetic-status-isolation");
+      expect((await request("status", "GET")).status).toBe(409);
+      expect((await request("status", "GET")).status).toBe(200);
+      for (const path of ["publish", "publish-json"] as const) {
+        const current = await owner.read();
+        const mode = path === "publish" ? "custom" : "auto";
+        const configuration = {
+          ...current.configuration,
+          sources: {
+            ...current.configuration.sources,
+            acquisition: {
+              ...current.configuration.sources.acquisition,
+              mode,
+              providers: [],
+            },
+          },
+        };
+        armRefreshFailure();
+        const published = await request(path, "POST", {
+          ...(path === "publish"
+            ? {
+                payload: '[sources.acquisition]\nmode="custom"\nproviders=[]\n',
+              }
+            : { configuration }),
+          baseline: current.revision,
+          sections: ["sources"],
+        });
+        expect(published.status).toBe(200);
+        const result = JSON.parse(published.text);
+        const saved = await owner.read();
+        expect(result.snapshot).toEqual(saved);
+        expect(saved.configuration.sources.acquisition.mode).toBe(mode);
+        const routes = parseAcquisitionRouteState(result.acquisition_routes);
+        expect(routes.pending.some((r) => r.source === "arxiv")).toBe(
+          mode === "auto",
+        );
+        expect(routes).toEqual(await checkRefresh());
+      }
+    } finally {
+      status.mockRestore();
+      await server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 30000);
+
   it("supports local reads and rejects malformed JSON, owners, sections and projections", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-config-http-"));
     const owner = new TypeScriptConfigurationOwner(home);

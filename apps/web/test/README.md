@@ -38,3 +38,5 @@ GB 确认后，20 个旧 UI 测试文件已随旧渲染器删除；业务断言�
 隔离性能复测可设置 `SCIRETRIEVER_WEB_PERFORMANCE=1` 运行 `next-library.test.ts`，按计划核验50ms长任务口径；全量并发测试始终验证分页与有界DOM，性能数值另记，不把特定机器时延增加为全仓通用门禁。
 
 `reading-markdown.test.ts` 独立保留 Markdown 的 CRLF/非 BMP UTF-8 原始边界与不安全 URL/HTML 隔离断言，不依赖页面框架。
+
+`design-samples-browser.ts` 为样例测试和截图脚本提供同一页面清理流程：收到真实 `pagehide` 处理器的断开回执后才销毁 renderer，匿名页直接关闭。`design-samples-browser.test.ts` 用真实 `ApiClient` 验证连续 20 页、延迟断开回执与拒绝断开的场景；不依赖 `page.close()` 一定送达 keepalive 请求。

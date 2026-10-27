@@ -1,3 +1,4 @@
+import type { AcquisitionAttempt } from "@sciretriever/contracts";
 import type { BrowserActivityLog } from "./activity.js";
 import type {
   DurableCandidate,
@@ -10,6 +11,7 @@ import type { BrowserDeliveryResult } from "./boundary.js";
 
 /** Immutable article ownership; foreground selection is never an ownership signal. */
 export interface BrowserArticleSessionIdentity {
+  readonly prior_attempts?: readonly AcquisitionAttempt[];
   readonly session_id: string;
   readonly operation_id: string;
   readonly generation: number;

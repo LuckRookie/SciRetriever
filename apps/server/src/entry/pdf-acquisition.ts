@@ -1,3 +1,9 @@
+import {
+  parseAcquisitionAttempt,
+  MAX_ACQUISITION_ATTEMPTS,
+  type AcquisitionAttempt,
+} from "@sciretriever/contracts";
+import { observeNetworkRequests } from "../network/request-activity.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   parseLiteratureId,
@@ -65,6 +71,7 @@ import {
 export interface PdfAcquisitionRequest {
   readonly literature_id: LiteratureId;
   readonly detail: LiteratureDetail;
+  readonly on_attempt?: (attempt: AcquisitionAttempt) => Promise<void>;
   readonly metadata_snapshot: MetadataSnapshot;
   readonly signal: AbortSignal;
   readonly commit?: CompletionCommit;
@@ -371,6 +378,10 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
       )
     )
       return null;
+    const startedAt = new Date().toISOString();
+    let requested = false;
+    let resolutionResult: AcquisitionAttempt["result"] = "miss";
+    let resolutionCode = "access-evidence-ready";
     const candidates = this.publisherCandidates(request);
     createLogger("pdf-acquisition").debug("Resolving article access evidence", {
       candidate_count: candidates.length,
@@ -380,15 +391,26 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     try {
       if (request.signal.aborted)
         throw new DOMException("Acquisition cancelled", "AbortError");
-      const target = await (
-        this.ports.resolve_doi_landing ??
-        ((url, signal, options) =>
-          resolveDoiLanding(url, this.ports.network_budget, signal, options))
-      )(doi, request.signal, {
-        on_response: (response) => {
-          context.doi_response = { url: doi, response };
+      const target = await observeNetworkRequests(
+        () => {
+          requested = true;
         },
-      });
+        () =>
+          (
+            this.ports.resolve_doi_landing ??
+            ((url, signal, options) =>
+              resolveDoiLanding(
+                url,
+                this.ports.network_budget,
+                signal,
+                options,
+              ))
+          )(doi, request.signal, {
+            on_response: (response) => {
+              context.doi_response = { url: doi, response };
+            },
+          }),
+      );
       if (request.signal.aborted)
         throw new DOMException("Acquisition cancelled", "AbortError");
       const safe = target === null ? null : articleUrl(target);
@@ -412,10 +434,15 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
           ),
           { assistance: "never" },
         );
-        return (await this.runLocator(request, cached, context)).outcome;
+        const outcome = (await this.runLocator(request, cached, context))
+          .outcome;
+        if (outcome.kind === "acquired") resolutionResult = "hit";
+        return outcome;
       }
       return null;
     } catch (error) {
+      resolutionResult = "failed";
+      resolutionCode = "doi-resolution-failed";
       const kind = classifyAcquisitionFailure(error, request.signal);
       if (kind === "cancel") return { kind: "cancelled" };
       if (kind !== "route" && !(error instanceof AcquisitionRouteError))
@@ -429,6 +456,16 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
           retryable: false,
         }),
       };
+    } finally {
+      await this.recordAttempt(request, context, {
+        stage: "publisher-api",
+        source: "doi-resolution",
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+        requested,
+        result: resolutionResult,
+        code: resolutionCode,
+      });
     }
   }
 
@@ -535,6 +572,21 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     };
     for (const { stage, service: locator } of this.locators) {
       if (!active.length) break;
+      for (const index of active)
+        for (const route of this.ports.registry.not_enabled.filter(
+          (r) => r.stage === stage,
+        )) {
+          const at = new Date().toISOString();
+          await this.recordAttempt(requests[index]!, contexts[index]!, {
+            stage,
+            source: route.source,
+            started_at: at,
+            finished_at: at,
+            requested: false,
+            result: "not-enabled",
+            code: "source-not-enabled",
+          });
+        }
       if (stage === "publisher-api") {
         const prepared = await Promise.all(
           active.map(async (index) => ({
@@ -614,6 +666,18 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
             ]),
           };
           try {
+            if (!this.routes.browser.enabled) {
+              const at = new Date().toISOString();
+              await this.recordAttempt(request, contexts[index]!, {
+                stage: "browser",
+                source: "browser",
+                started_at: at,
+                finished_at: at,
+                requested: false,
+                result: "not-enabled",
+                code: "browser-disabled",
+              });
+            }
             const automaticOutcome = this.routes.browser.enabled
               ? await this.attemptBrowserEscalation(
                   request,
@@ -673,6 +737,17 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
         },
       };
     return outcome;
+  }
+
+  private async recordAttempt(
+    request: PdfAcquisitionRequest,
+    context: AcquisitionContext,
+    value: AcquisitionAttempt,
+  ): Promise<void> {
+    if (context.attempts.length >= MAX_ACQUISITION_ATTEMPTS) return;
+    const attempt = parseAcquisitionAttempt(value);
+    context.attempts.push(attempt);
+    await request.on_attempt?.(attempt);
   }
 
   private async runLocator(
@@ -849,7 +924,11 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
             ),
           );
         },
-        { signal: request.signal },
+        {
+          signal: request.signal,
+          on_attempt: (attempt) =>
+            this.recordAttempt(request, context, attempt),
+        },
       );
     } catch (error) {
       if (classifyAcquisitionFailure(error, request.signal) === "cancel")
@@ -954,12 +1033,22 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     context: AcquisitionContext,
   ): Promise<PdfAcquisitionOutcome> {
     let delivery: BrowserDeliveryResult;
+    const at = new Date().toISOString();
+    await this.recordAttempt(request, context, {
+      stage: "browser",
+      source: "browser",
+      started_at: at,
+      finished_at: at,
+      requested: false,
+      result: "escalated",
+    });
     try {
       const delivered = await this.browserBroker.deliver(
         request,
         (session, signal) =>
           session.deliverCandidate({
             literature_id: literatureId,
+            prior_attempts: context.attempts.slice(-16),
             identifier: browserIdentifier(request),
             version: request.detail.literature.version_role,
             article_goal: createBrowserArticleGoal({

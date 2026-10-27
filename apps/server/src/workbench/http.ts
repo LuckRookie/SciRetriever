@@ -8,6 +8,7 @@ import {
   parseRetrievalGenerationReceipt,
   parseStrictJsonObject,
   type ConfigurationReadiness,
+  type AcquisitionRouteState,
 } from "@sciretriever/contracts";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
@@ -183,6 +184,11 @@ export interface WorkbenchHttpOptions {
     readonly runtime_capabilities?: WorkbenchRuntimeCapabilities | null;
     status(signal?: AbortSignal): Promise<ConfigurationReadiness>;
     read?(signal?: AbortSignal): Promise<TypeScriptConfigurationSnapshot>;
+    /** Route-only projection; configuration reads/publications must not invoke status. */
+    acquisitionRoutes?(
+      snapshot: TypeScriptConfigurationSnapshot,
+      signal?: AbortSignal,
+    ): Promise<AcquisitionRouteState>;
     diff?(
       payload: string,
       baseline: string,
@@ -458,7 +464,9 @@ function json(response: ServerResponse, status: number, value: unknown): void {
 function runtimeConfigurationState(
   configuration: NonNullable<WorkbenchHttpOptions["configuration"]>,
   snapshot: TypeScriptConfigurationSnapshot,
+  routes?: AcquisitionRouteState,
 ): {
+  readonly acquisition_routes?: AcquisitionRouteState;
   readonly runtime_configuration_current: boolean | null;
   readonly ordinary_configuration_restart_required: boolean | null;
   readonly application_restart_required: boolean | null;
@@ -492,19 +500,23 @@ function runtimeConfigurationState(
         );
   const ordinaryRestartRequired = current === null ? null : current === false;
   const restartRequired =
-    ordinaryRestartRequired === true || capabilityRestartRequired === true
+    ordinaryRestartRequired === true ||
+    capabilityRestartRequired === true ||
+    routes?.restart_required === true
       ? true
       : ordinaryRestartRequired === false && capabilityRestartRequired === false
         ? false
         : null;
   return {
+    ...(routes ? { acquisition_routes: routes } : {}),
     runtime_configuration_current: current,
     ordinary_configuration_restart_required: ordinaryRestartRequired,
     application_restart_required: restartRequired,
     application_restart_reason:
       ordinaryRestartRequired === true
         ? "ordinary-configuration"
-        : capabilityRestartRequired === true
+        : capabilityRestartRequired === true ||
+            routes?.restart_required === true
           ? "capability-reassembly"
           : null,
     runtime_capabilities: capabilities,
@@ -881,28 +893,31 @@ export async function startWorkbenchHttp(
         }
         response.removeHeader("Content-Disposition");
         const status =
-          error instanceof ProcessingTaskError
-            ? error.code === "processing-not-found"
-              ? 404
-              : 409
-            : error instanceof LiteratureNotFoundError
-              ? 404
-              : error instanceof ManualPdfInputError ||
-                  error instanceof PdfAcceptanceError ||
-                  (error instanceof LiteraturePublicationError &&
-                    error.code !== "primary-asset-conflict")
-                ? 400
-                : error instanceof CandidateAcceptanceError &&
-                    error.code === "literature-not-found"
-                  ? 404
-                  : error instanceof WorkbenchInputError ||
-                      error instanceof ContractValidationError ||
-                      (error instanceof ConfigurationOwnerError &&
-                        error.code === "configuration-invalid") ||
-                      (error instanceof ConfigurationProbeError &&
-                        error.code === "configuration-probe-invalid")
-                    ? 400
-                    : 409;
+          error instanceof WorkbenchSessionError &&
+          error.code === "viewer-limit"
+            ? 429
+            : error instanceof ProcessingTaskError
+              ? error.code === "processing-not-found"
+                ? 404
+                : 409
+              : error instanceof LiteratureNotFoundError
+                ? 404
+                : error instanceof ManualPdfInputError ||
+                    error instanceof PdfAcceptanceError ||
+                    (error instanceof LiteraturePublicationError &&
+                      error.code !== "primary-asset-conflict")
+                  ? 400
+                  : error instanceof CandidateAcceptanceError &&
+                      error.code === "literature-not-found"
+                    ? 404
+                    : error instanceof WorkbenchInputError ||
+                        error instanceof ContractValidationError ||
+                        (error instanceof ConfigurationOwnerError &&
+                          error.code === "configuration-invalid") ||
+                        (error instanceof ConfigurationProbeError &&
+                          error.code === "configuration-probe-invalid")
+                      ? 400
+                      : 409;
         json(response, status, {
           code:
             error instanceof LiteratureNotFoundError
@@ -1357,7 +1372,11 @@ export async function startWorkbenchHttp(
         const snapshot = await options.configuration.read();
         json(response, 200, {
           snapshot,
-          ...runtimeConfigurationState(options.configuration, snapshot),
+          ...runtimeConfigurationState(
+            options.configuration,
+            snapshot,
+            await options.configuration.acquisitionRoutes?.(snapshot),
+          ),
         });
         return;
       }
@@ -1757,7 +1776,11 @@ export async function startWorkbenchHttp(
         const snapshot = await options.configuration.read();
         json(response, 200, {
           snapshot,
-          ...runtimeConfigurationState(options.configuration, snapshot),
+          ...runtimeConfigurationState(
+            options.configuration,
+            snapshot,
+            await options.configuration.acquisitionRoutes?.(snapshot),
+          ),
         });
         return;
       }
@@ -1800,7 +1823,11 @@ export async function startWorkbenchHttp(
         );
         json(response, 200, {
           snapshot,
-          ...runtimeConfigurationState(options.configuration, snapshot),
+          ...runtimeConfigurationState(
+            options.configuration,
+            snapshot,
+            await options.configuration.acquisitionRoutes?.(snapshot),
+          ),
         });
         return;
       }
@@ -1828,7 +1855,11 @@ export async function startWorkbenchHttp(
         );
         json(response, 200, {
           snapshot,
-          ...runtimeConfigurationState(options.configuration, snapshot),
+          ...runtimeConfigurationState(
+            options.configuration,
+            snapshot,
+            await options.configuration.acquisitionRoutes?.(snapshot),
+          ),
         });
         return;
       }
@@ -1876,7 +1907,11 @@ export async function startWorkbenchHttp(
           credential_effective_at: "next-external-request",
           in_flight_credential_action: "may-complete",
           ...(snapshot
-            ? runtimeConfigurationState(options.configuration, snapshot)
+            ? runtimeConfigurationState(
+                options.configuration,
+                snapshot,
+                status.acquisition_routes,
+              )
             : {
                 runtime_configuration_current: null,
                 ordinary_configuration_restart_required: null,

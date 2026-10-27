@@ -1,3 +1,4 @@
+import { parseAcquisitionAttempts } from "@sciretriever/contracts";
 import { BrowserActivityLog } from "./activity.js";
 import { BrowserElementUnavailableError } from "./page-runtime.js";
 import type {
@@ -2156,6 +2157,14 @@ export function createBrowserArticleFlow(
         generation: request.generation ?? 0,
         literature_id: request.literature_id,
         metadata_snapshot: Object.freeze({ ...request.metadata_snapshot }),
+        ...(request.prior_attempts
+          ? {
+              prior_attempts: parseAcquisitionAttempts(
+                request.prior_attempts,
+                16,
+              ),
+            }
+          : {}),
         ...(request.article_goal?.title
           ? { title: request.article_goal.title }
           : {}),

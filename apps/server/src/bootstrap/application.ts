@@ -1,3 +1,9 @@
+import type { TypeScriptConfigurationSnapshot } from "../configuration/owner.js";
+import { configuredAcquisitionRoutes } from "../configuration/acquisition-selection.js";
+import type {
+  AcquisitionRouteState,
+  ConfigurationReadiness,
+} from "@sciretriever/contracts";
 import { recordMapProgress } from "../application/operations.js";
 import { ArchiveReusePreview } from "../archive/reuse.js";
 import { ProcessorPlanner } from "../analysis/processor-planning.js";
@@ -213,6 +219,11 @@ export interface Application {
   readonly bootId: string;
   readonly metadata: MetadataRegistry;
   readonly acquisition: PublicAcquisitionRegistry;
+  configurationStatus(signal?: AbortSignal): Promise<ConfigurationReadiness>;
+  configurationAcquisitionRoutes(
+    snapshot: TypeScriptConfigurationSnapshot,
+    signal?: AbortSignal,
+  ): Promise<AcquisitionRouteState>;
   readonly discovery: TopicDiscoveryService;
   readonly citations: CitationDiscoveryService;
   readonly identity: LiteratureIdentityService;
@@ -1549,6 +1560,27 @@ export async function createApplication(
     } finally {
       await recoveryLease?.release();
     }
+    const effectiveAcquisitionRoutes = () =>
+      configuredAcquisitionRoutes(
+        configuration,
+        bundlePreview(credentials),
+      ).map((route) => {
+        const status = acquisition.statuses.find(
+          (s) => s.source_name === route.source,
+        );
+        const { unavailable_code: _code, ...base } = route;
+        void _code;
+        return {
+          ...base,
+          ready: status?.ready ?? false,
+          ...(status?.ready
+            ? {}
+            : {
+                unavailable_code:
+                  status?.failure_code ?? "missing-source-adapter",
+              }),
+        };
+      });
     const application: Application = {
       folders: new FolderService(database),
       snapshots: new SnapshotService(database, library),
@@ -1560,6 +1592,14 @@ export async function createApplication(
       bootId,
       metadata,
       acquisition,
+      configurationStatus: (signal) =>
+        configurationOwner.status(signal, effectiveAcquisitionRoutes()),
+      configurationAcquisitionRoutes: (snapshot, signal) =>
+        configurationOwner.acquisitionRoutes(
+          snapshot,
+          signal,
+          effectiveAcquisitionRoutes(),
+        ),
       discovery: new TopicDiscoveryService(
         metadata.service,
         identity,

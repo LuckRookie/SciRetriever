@@ -1,4 +1,5 @@
 import type {
+  AcquisitionAttempt,
   Identifier,
   MetadataObservation,
   VersionRole,
@@ -13,6 +14,7 @@ import {
 
 /** Current-operation evidence only; public failures never blacklist Browser transport. */
 export interface AcquisitionContext {
+  readonly attempts: AcquisitionAttempt[];
   readonly landing_origins: Set<string>;
   readonly landing_urls: string[];
   readonly attempted_locators: Set<string>;
@@ -26,6 +28,7 @@ export interface AcquisitionContext {
 
 export function createAcquisitionContext(): AcquisitionContext {
   return {
+    attempts: [],
     landing_origins: new Set(),
     landing_urls: [],
     attempted_locators: new Set(),
