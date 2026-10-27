@@ -555,10 +555,16 @@ function taskRun(db: DatabaseSync, r: Record<string, unknown>) {
             )
             .all(request.literature_id)
             .map(({ output_json, ...s }) => {
-              const { pages, ...output } = JSON.parse(String(output_json));
+              // The row's own status wins over any status inside a step's output; source maps stay in the document.
+              const {
+                pages,
+                source_map: _sourceMap,
+                ...output
+              } = JSON.parse(String(output_json));
+              void _sourceMap;
               return {
-                ...s,
                 ...output,
+                ...s,
                 pages: Array.isArray(pages)
                   ? {
                       required: pages.filter((p) => p.status !== "not-required")

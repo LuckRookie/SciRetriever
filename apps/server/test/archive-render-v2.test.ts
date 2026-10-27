@@ -146,6 +146,25 @@ it("keeps original subheadings and excludes heading-only sections from readiness
   expect(annotation.body_content_leaf_ids).toEqual([]);
   expect(arrangedStructureSatisfied(annotation, b)).toBe(false);
 });
+it("renders skeleton order even when a later section comes from an earlier page", async () => {
+  const f = await archiveTextFixture([
+      { text: "Affiliation: Northlight Institute.", page: 0 },
+      { text: "We introduce the work.", page: 0 },
+      { text: "The work is concluded.", page: 2 },
+    ]),
+    [affiliation, intro, conclusion] = arranged(f.source).leaves,
+    b = bundle(f.source, [
+      assigned(affiliation!.leaf_id, "end-matter"),
+      assigned(intro!.leaf_id, "introduction"),
+      assigned(conclusion!.leaf_id, "conclusion"),
+    ]),
+    rendered = renderArrangement(b, []),
+    text = rendered.markdown.toString();
+  expect(text.indexOf("The work is concluded.")).toBeLessThan(
+    text.indexOf("Affiliation: Northlight Institute."),
+  );
+  expect(rendered.structure.segments.map((s) => s.page)).toEqual([0, 2, 0]);
+});
 it("renders native headings once and adds display-math structure without altering formula payload", async () => {
   const f = await archiveTextFixture([
       { text: "Original title", type: "title" },

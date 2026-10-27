@@ -206,12 +206,9 @@ export function parseDocumentStructureV2(
     new Set(segments.map((s) => s.block_id)).size !== segments.length
   )
     fail();
+  // Arranged documents follow the section skeleton, so a later segment may come from an earlier page.
   for (let i = 1; i < segments.length; i++)
-    if (
-      segments[i]!.start_utf8 < segments[i - 1]!.end_utf8 ||
-      segments[i]!.page < segments[i - 1]!.page
-    )
-      fail();
+    if (segments[i]!.start_utf8 < segments[i - 1]!.end_utf8) fail();
   return {
     schema_version: 2,
     text_encoding: "utf8",

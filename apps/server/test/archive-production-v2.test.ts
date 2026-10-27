@@ -90,6 +90,26 @@ it("publishes the six-step X workflow, excludes dropped text from fixed document
     expect(
       JSON.stringify(events.filter((v) => v.kind === "archive-progress")),
     ).not.toMatch(/DROP_HEADER|BIBLIOGRAPHY/u);
+    // Task detail keeps each step's own status; metadata output carries a status of its own.
+    const detail = (await e.app.database.review("task-run", {
+      job_id: run.job.job_id,
+    })) as {
+      items: {
+        archive?: {
+          steps: { step: string; status: string; source_map?: unknown }[];
+        };
+      }[];
+    };
+    const steps = detail.items[0]!.archive!.steps;
+    expect(Object.fromEntries(steps.map((s) => [s.step, s.status]))).toEqual({
+      arrange: "done",
+      proofread: "done",
+      render: "done",
+      metadata: "done",
+      references: "done",
+      tags: "done",
+    });
+    expect(steps.some((s) => s.source_map !== undefined)).toBe(false);
   } finally {
     await e.close();
   }
