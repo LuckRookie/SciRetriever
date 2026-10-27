@@ -1,6 +1,7 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   PROCESSOR_METHOD_REVISION,
+  archivePageCursor,
   parseProcessorOutcomeCounts,
 } from "@sciretriever/contracts";
 
@@ -546,7 +547,53 @@ function taskRun(db: DatabaseSync, r: Record<string, unknown>) {
             subject: JSON.parse(String(subject_json)),
           })),
       );
+    const archiveRows =
+      op.operation === "build-archive"
+        ? db
+            .prepare(
+              "SELECT asset_id,step,status,output_json,reason FROM archive_steps WHERE literature_id=? AND json_extract(output_json,'$.schema_version')=2 ORDER BY asset_id,updated_at",
+            )
+            .all(request.literature_id)
+            .map(({ output_json, ...s }) => {
+              const { pages, ...output } = JSON.parse(String(output_json));
+              return {
+                ...s,
+                ...output,
+                pages: Array.isArray(pages)
+                  ? {
+                      required: pages.filter((p) => p.status !== "not-required")
+                        .length,
+                      accepted: pages.filter((p) => p.status === "accepted")
+                        .length,
+                      failed: pages.filter((p) => p.status === "failed").length,
+                      pending: pages.filter((p) => p.status === "pending")
+                        .length,
+                    }
+                  : null,
+                page_status: Array.isArray(pages)
+                  ? {
+                      items: pages.slice(0, 200),
+                      next_cursor:
+                        pages.length > 200
+                          ? archivePageCursor(String(output.proofread_id), 200)
+                          : null,
+                    }
+                  : null,
+              };
+            })
+        : null;
     return {
+      ...(archiveRows
+        ? {
+            archive: {
+              schema_version: 2,
+              literature_id: request.literature_id,
+              steps: archiveRows,
+              events_truncated: false,
+              next_event_cursor: null,
+            },
+          }
+        : {}),
       synthesis,
       aggregate_usage: aggregate,
       target_id: target.target_id,

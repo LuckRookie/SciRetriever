@@ -1,4 +1,8 @@
-import { ContractValidationError } from "./index.js";
+import {
+  ARCHIVE_SECTION_ROLES,
+  type ArchiveSectionRole,
+  ContractValidationError,
+} from "./index.js";
 export const MAIN_SECTION_ROLES = [
   "front-matter",
   "abstract",
@@ -26,7 +30,10 @@ export const SUPPLEMENTARY_SECTION_ROLES = [
 export type MainSectionRole = (typeof MAIN_SECTION_ROLES)[number];
 export type SupplementarySectionRole =
   (typeof SUPPLEMENTARY_SECTION_ROLES)[number];
-export type SectionRole = MainSectionRole | SupplementarySectionRole;
+export type SectionRole =
+  | MainSectionRole
+  | SupplementarySectionRole
+  | ArchiveSectionRole;
 export type DocumentPartRole = "main" | "supplementary";
 export function parseSectionRole(
   value: unknown,
@@ -37,7 +44,11 @@ export function parseSectionRole(
       ? MAIN_SECTION_ROLES
       : part === "supplementary"
         ? SUPPLEMENTARY_SECTION_ROLES
-        : [...MAIN_SECTION_ROLES, ...SUPPLEMENTARY_SECTION_ROLES];
+        : [
+            ...MAIN_SECTION_ROLES,
+            ...SUPPLEMENTARY_SECTION_ROLES,
+            ...ARCHIVE_SECTION_ROLES,
+          ];
   if (typeof value !== "string" || !values.includes(value))
     throw new ContractValidationError();
   return value as SectionRole;

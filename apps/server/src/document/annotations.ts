@@ -8,7 +8,7 @@ import {
   canonicalJsonBytes,
   sha256,
   ContractValidationError,
-  type StructureAnnotation,
+  type StructureAnnotationV1 as StructureAnnotation,
   type SectionRole,
 } from "@sciretriever/contracts";
 import { SqliteDocumentStorage } from "./storage.js";
@@ -140,7 +140,8 @@ export class StructureAnnotationService {
     };
     return this.run(async (active) => {
       const current = await this.storage.current(id, active);
-      if (!current) throw new AnnotationError("annotation-missing");
+      if (!current || current.schema_version !== 1)
+        throw new AnnotationError("annotation-missing");
       return this.perform(
         id,
         current.method.max_prefix_characters,
@@ -170,6 +171,8 @@ export class StructureAnnotationService {
       edit && state.current
         ? await this.storage.byId(state.current.annotation_id, signal)
         : null;
+    if (base && base.schema_version !== 1)
+      throw new AnnotationError("archive-contract-obsolete");
     if (edit && !base) throw new AnnotationError("annotation-missing");
     const method = structureMethod(
       prefix,
@@ -261,6 +264,8 @@ export class StructureAnnotationService {
         },
         signal,
       );
+    if (annotation.schema_version !== 1)
+      throw new AnnotationError("archive-contract-obsolete");
     const receipt = await this.storage.publish(
       annotation,
       {
@@ -273,7 +278,8 @@ export class StructureAnnotationService {
       signal,
     );
     const published = await this.storage.byId(receipt.annotation_id, signal);
-    if (!published) throw new AnnotationError("annotation-integrity");
+    if (!published || published.schema_version !== 1)
+      throw new AnnotationError("annotation-integrity");
     return {
       ...receipt,
       usage,

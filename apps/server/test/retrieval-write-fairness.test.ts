@@ -125,7 +125,12 @@ it("admits folder writes during two consecutive archive index updates", async ()
         operations: [
           {
             operation: "build-archive",
-            request: { literature_id, mode: "full", from_step: null },
+            request: {
+              schema_version: 2,
+              literature_id,
+              mode: "full",
+              from_step: null,
+            },
           },
         ],
       });

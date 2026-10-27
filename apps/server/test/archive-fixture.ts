@@ -4,8 +4,10 @@ import {
   coreProcessingFixture,
 } from "./core-processing-fixture.js";
 import { topicDraft } from "./tag-fixture.js";
-export async function archiveFixture() {
-  const e = await coreProcessingFixture();
+export async function archiveFixture(
+  options: Parameters<typeof coreProcessingFixture>[0] = {},
+) {
+  const e = await coreProcessingFixture(options);
   e.setText(
     "# Abstract\n\nFixture Author studies synthetic spectroscopy.\n\n# Introduction\n\nA complete synthetic study.\n\n# Conclusion\n\nSpectroscopy is the main theme.\n\n# References\n\n[1] Example synthetic reference.\n",
   );
@@ -22,7 +24,12 @@ export async function archiveFixture() {
       operations: [
         {
           operation: "build-archive",
-          request: { literature_id: id, mode: "full", from_step },
+          request: {
+            schema_version: 2,
+            literature_id: id,
+            mode: "full",
+            from_step,
+          },
         },
       ],
     });

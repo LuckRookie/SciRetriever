@@ -148,7 +148,6 @@ export interface OrdinaryConfiguration {
   readonly tags: TagsConfig;
   readonly proofread: {
     readonly model: string | null;
-    readonly max_calls_per_document: number;
   };
   readonly browser: BrowserConfig;
   readonly execution: { readonly max_concurrency: number };
@@ -978,10 +977,6 @@ function parseConfigurationObject(
   );
   const proofread = Object.freeze({
     model: tagModel(proofreadRaw.model),
-    max_calls_per_document:
-      proofreadRaw.max_calls_per_document === undefined
-        ? 64
-        : positiveInteger(proofreadRaw.max_calls_per_document, 1, 10000),
   });
   const analyzeModel =
     analyze.model === null ? null : normalizeModelReference(analyze.model);
@@ -1086,6 +1081,8 @@ function parseConfigurationObject(
           : positiveInteger(library.max_input_bytes, 1_024, 1_073_741_824),
     }),
   };
+  if (Object.hasOwn(proofreadRaw, "max_calls_per_document"))
+    removedOptions.add(result);
   return freeze(result);
 }
 function nullablePositive(value: unknown): number | null {
@@ -1323,4 +1320,18 @@ export async function loadConfiguration(
     await directoryFile?.close().catch(() => undefined);
   }
   return invalid();
+}
+
+const removedOptions = new WeakSet<OrdinaryConfiguration>();
+export function configurationDiagnostics(configuration: OrdinaryConfiguration) {
+  return removedOptions.has(configuration)
+    ? [
+        {
+          code: "configuration-option-removed" as const,
+          path: "proofread.max_calls_per_document" as const,
+          message:
+            "This option has been removed. Archive arrangement and page proofreading have no per-document call limit. Delete the obsolete option.",
+        },
+      ]
+    : [];
 }

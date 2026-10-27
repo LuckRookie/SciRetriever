@@ -21,7 +21,7 @@ export function archiveStepKey(
       asset: part.asset_id,
       proofread: part.proofread_id,
       document:
-        step === "proofread" || step === "document"
+        step === "arrange" || step === "proofread" || step === "render"
           ? null
           : part.document_version_id,
       annotation: ["metadata", "references", "tags"].includes(step)

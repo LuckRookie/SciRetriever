@@ -460,6 +460,10 @@ export class ProcessorService {
               }),
             )
           : [];
+      const unsupportedRoles =
+        input.kind === "archive-document"
+          ? await this.archiveSource.unsupportedRoles(input, reads, active)
+          : new Set<string>();
       const check = (candidate: ArchiveProcessorInput) => {
         if (!equal(input, candidate))
           processorError("processor-read-outside-scope");
@@ -718,7 +722,10 @@ export class ProcessorService {
                 (s) => s.asset_id === part.asset_id,
               ),
               read = eligible.filter((s) => reported.includes(s.segment_id)),
-              complete = part.available && read.length === eligible.length;
+              complete =
+                part.available &&
+                !unsupportedRoles.has(part.asset_id) &&
+                read.length === eligible.length;
             parts.push({
               literature_id: input.literature_id,
               asset_id: part.asset_id,
@@ -727,9 +734,11 @@ export class ProcessorService {
               read_segments: read.map((s) => s.segment_id),
               gaps: !part.available
                 ? ["part-unavailable"]
-                : complete
-                  ? []
-                  : ["unread-segments"],
+                : unsupportedRoles.has(part.asset_id)
+                  ? ["structure-role-unavailable"]
+                  : complete
+                    ? []
+                    : ["unread-segments"],
             });
           }
         }

@@ -4,7 +4,7 @@
 负责：构建、打包与独立文档检查入口
 状态：现行
 
-保存反复使用、随项目维护的构建和发布工具。
+保存随项目维护的构建、发布与显式维护工具。
 
 ## 下级目录
 
@@ -22,6 +22,8 @@
 - [build-workbench-assets.mjs](build-workbench-assets.mjs)：从 Web 源码构建 bundle，将指定页面/样式放入应用构建目录。
 - [build-react-assets.mjs](build-react-assets.mjs)：调用 Vite 固定以 production 模式构建 React 入口，即使调用方为 NODE_ENV=test；完成后恢复调用方环境。生成静态资源白名单、收集运行时依赖许可，并在阅读器许可基础上发布合并声明。先完整生成到系统临时目录，再逐文件原子发布，HTML 和白名单最后发布；随后移除 `assets/` 中不再被白名单引用的旧 Vite hashed 文件，防止历史构建资源进入安装包。输出根目录与 `assets/` 必须是实际目录，不接受符号链接；清理不处理其它文件或链接。
 - [build-sample-assets.mjs](build-sample-assets.mjs)：构建仅内存的 React Browser 合成样例；`@sciretriever/web preview` 使用该入口，保持 `connect-src 'none'`。
+
+- [migrate-archive-v12.mjs](migrate-archive-v12.mjs)：构建服务端后，显式对一个离线 catalog 副本执行 11 → 12；校验精确旧布局，在事务中扩展 archive_steps 的步骤 CHECK，更新版本/指纹并核对全部表行数与外键。只接受绝对路径，不自动迁移或重建文献，正式切换前须先备份并在副本演练。
 
 ## 放置边界
 

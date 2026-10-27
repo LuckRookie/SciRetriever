@@ -156,7 +156,12 @@ it(
           operations: [
             {
               operation: "build-archive",
-              request: { literature_id: id, mode: "full", from_step: null },
+              request: {
+                schema_version: 2,
+                literature_id: id,
+                mode: "full",
+                from_step: null,
+              },
             },
           ],
         }),

@@ -813,6 +813,7 @@ export interface ExecutionRuntimeInspection {
     | 10
     | 11
     | 12
+    | 12
     | 13
     | 14;
   readonly catalog_fingerprint: string;
@@ -1482,6 +1483,7 @@ export class SqliteWorker {
       "state",
       "resources",
       "cache-read",
+      "binding",
     ].includes(action);
     if (this.readOnly && !read) throw new KnowledgeStorageError("read-only");
     if (!read && !this.admission)

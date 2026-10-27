@@ -167,11 +167,24 @@ it(
         const { executeMaintenance } = await import(
           "../src/entry/maintenance-operations.js"
         );
+        const { SqliteArchiveTextStorage } = await import(
+          "../src/storage/archive-text.js"
+        );
+        const current = (await new SqliteArchiveTextStorage(
+          e.app.database,
+          e.app.files,
+        ).load(before.proofread_id!))!;
         await executeMaintenance(e.app, "proofread-save", {
+          schema_version: 2,
           literature_id: id,
           asset_id: before.asset_id,
           proofread_id: before.proofread_id,
-          markdown: text.text + "\n\nManual revision.\n\n",
+          expected_arrangement_id: current.version.arrangement_id,
+          expected_manual_revision: 0,
+          markdown: text.text.replace(
+            "A synthetic finding.",
+            "A revised synthetic finding.",
+          ),
           actor: "fixture",
         });
         expect(
@@ -209,17 +222,17 @@ it(
     try {
       await e.build(e.parseRequest);
       const { ArchiveReusePreview } = await import("../src/archive/reuse.js"),
-        { SqliteProofreadStorage } = await import(
-          "../src/storage/proofread.js"
+        { SqliteArchiveTextStorage } = await import(
+          "../src/storage/archive-text.js"
         ),
         { canonicalJsonBytes, sha256 } = await import(
           "@sciretriever/contracts"
         );
       const state = await e.app.archive.status(e.parseRequest.literature_id),
-        proof = await new SqliteProofreadStorage(
+        proof = await new SqliteArchiveTextStorage(
           e.app.database,
           e.app.files,
-        ).byId(state.parts[0]!.proofread_id!);
+        ).load(state.parts[0]!.proofread_id!);
       const preview = new ArchiveReusePreview(
         e.app.database,
         e.app.files,
@@ -228,20 +241,22 @@ it(
         e.app.agents,
         await sha256(
           canonicalJsonBytes({
-            method: "archive-v1",
+            method: "archive-arrange-v2",
+            proofread: e.app.configuration.proofread,
             models: e.app.configuration.models,
             analyze: e.app.configuration.analyze,
             tags: e.app.configuration.tags,
           }),
         ),
         e.app.configuration.parsing.archive_profile,
-        proof!.method.page_classify,
+        proof!.version.method.page_classify,
       );
       expect(await preview.reusable(state, new AbortController().signal)).toBe(
         true,
       );
       const before = e.modelCalls;
       const job = await e.app.archive.build({
+        schema_version: 2,
         selector: {
           kind: "literatures",
           literature_ids: [e.parseRequest.literature_id],
@@ -256,11 +271,11 @@ it(
         items: { steps: { step: string; status: string }[] }[];
       }>("task-run", { job_id: job.job!.job_id });
       expect(progress.items[0]!.steps.map((s) => s.step).sort()).toEqual([
-        "document",
+        "arrange",
         "metadata",
         "proofread",
         "references",
-        "structure",
+        "render",
         "tags",
       ]);
       expect(progress.items[0]!.steps.every((s) => s.status === "done")).toBe(

@@ -37,7 +37,13 @@ export async function processorFixture(
         text: "A synthetic finding.",
         conditions: [],
         quantity: null,
-        evidence_segment_ids: [input.segments![0]!.segment_id],
+        evidence_segment_ids: [
+          (
+            input.segments!.find((s) =>
+              s.text.includes("A synthetic finding."),
+            ) ?? input.segments![0]!
+          ).segment_id,
+        ],
       },
     ],
   });
@@ -71,6 +77,7 @@ export async function processorFixture(
       // Prepare real archive facts without inserting unrelated setup jobs into
       // processor/UI job assertions. Durable archive jobs have their own tests.
       const archive = new ArchiveOrchestrator(e.app.database, {
+        text: e.app.archiveText!,
         proofread: e.app.proofreading!,
         documents: e.app.proofreadDocuments,
         structure: e.app.structureAnnotations!,
@@ -80,7 +87,8 @@ export async function processorFixture(
         metadataFields: e.app.metadataFields,
         method_sha256: await sha256(
           canonicalJsonBytes({
-            method: "archive-v1",
+            method: "archive-arrange-v2",
+            proofread: e.app.configuration.proofread,
             models: e.app.configuration.models,
             analyze: e.app.configuration.analyze,
             tags: e.app.configuration.tags,
@@ -88,6 +96,7 @@ export async function processorFixture(
         ),
       });
       await archive.build({
+        schema_version: 2,
         literature_id: request.literature_id,
         mode: "full",
         from_step: null,

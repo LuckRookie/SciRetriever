@@ -335,6 +335,25 @@ export const QUERY_TOOLS: readonly Tool[] = [
     }),
   ),
   tool(
+    "archive_arrangement",
+    "Read a fixed arrangement summary or bounded JSON-UTF8 stream of leaves, breaks, or source-map; deleted content is never a document segment.",
+    object(
+      {
+        schema_version: { const: 2 },
+        asset_id: id,
+        proofread_id: nullable(id),
+        kind: { enum: ["summary", "leaves", "breaks", "source-map", "pages"] },
+        visibility: { enum: ["kept", "dropped", "all"] },
+        drop_reason: nullable(text),
+        page_index: nullable(epoch),
+        cursor: nullable(text),
+        limit: { type: "integer", minimum: 1, maximum: 200 },
+        max_bytes: { type: "integer", minimum: 1024, maximum: 65536 },
+      },
+      ["schema_version", "asset_id", "proofread_id", "kind"],
+    ),
+  ),
+  tool(
     "archive_query",
     "Read archive status, issues, stats or persisted version events without starting work. Requests: status {literature_id}; issues {reason?,part?,offset?,limit?}; stats {}; events {after,limit}.",
     object({
@@ -648,17 +667,26 @@ export const QUERY_TOOLS: readonly Tool[] = [
 export const MAINTENANCE_TOOLS: readonly Tool[] = [
   tool(
     "proofread_save",
-    "Save complete corrected Markdown with optimistic concurrency, preserve unchanged blocks, lock edits and rebuild document/structure/references without models. Optional page_starts_utf8 binds edited text to PDF pages. Inspect rebuild status; a later rebuild failure does not undo a saved edit.",
+    "Save schema 2 Markdown only when its source map uniquely decomposes edits into leaf-local corrections. Supply the expected arrangement and manual revision. No model calls; mapping conflicts do not publish.",
     object(
       {
         literature_id: id,
         asset_id: id,
         proofread_id: id,
+        schema_version: { const: 2 },
+        expected_arrangement_id: hash,
+        expected_manual_revision: epoch,
         markdown: text,
-        actor: text,
-        page_starts_utf8: { type: "array", items: epoch },
       },
-      ["literature_id", "asset_id", "proofread_id", "markdown"],
+      [
+        "schema_version",
+        "literature_id",
+        "asset_id",
+        "proofread_id",
+        "expected_arrangement_id",
+        "expected_manual_revision",
+        "markdown",
+      ],
     ),
     false,
   ),
@@ -701,8 +729,31 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     false,
   ),
   tool(
+    "archive_arrangement_edit",
+    "Restore or reassign leaves with explicit version/CAS and human locks. Does not call a model.",
+    object({
+      schema_version: { const: 2 },
+      literature_id: id,
+      asset_id: id,
+      expected_proofread_id: id,
+      expected_arrangement_id: hash,
+      expected_manual_revision: epoch,
+      changes: {
+        type: "array",
+        minItems: 1,
+        maxItems: 200,
+        items: object({
+          kind: { enum: ["restore", "assign"] },
+          leaf_id: id,
+          target: { type: "object" },
+          presentation: { type: "object" },
+        }),
+      },
+    }),
+  ),
+  tool(
     "archive_manage",
-    "Explicit build {selector:{kind:'literatures',literature_ids} or {kind:'query',query},mode:'full'|'legacy-vlm-markdown',from_step:null|step,idempotency_key}; resume {literature_id}; resolve {issue_ids,resolution:'continue'|'skip'|'cancel'}. Requires pre-existing raw parses and never calls MinerU. Correct failed facts using proofread, metadata, structure or tag commands before resume; acknowledgement cannot establish readiness.",
+    "Explicit build {schema_version:2,selector:{kind:'literatures',literature_ids} or {kind:'query',query},mode:'full'|'legacy-vlm-markdown',from_step:null|step,idempotency_key}; resume {literature_id}; resolve {issue_ids,resolution:'continue'|'skip'|'cancel'}. Requires pre-existing raw parses and never calls MinerU. Correct failed facts using arrangement/text editing, metadata or tag commands before resume; acknowledgement cannot establish readiness.",
     object({
       operation: { enum: ["build", "resume", "resolve"] },
       request: { type: "object" },
@@ -743,10 +794,11 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
 
   tool(
     "document_annotate",
-    "Explicitly identify section roles, figures and references from a fixed proofread document. Uses configured DSH for unknown top-level headings; preserves human role locks.",
+    "Deterministically derive annotation schema 2 from a fixed arranged document. Requires its arrangement ID; never calls a model. Old classification requests are obsolete.",
     object({
+      schema_version: { const: 2 },
       document_version_id: id,
-      max_prefix_characters: { type: "integer", minimum: 0, maximum: 65536 },
+      arrangement_id: hash,
     }),
   ),
   tool(
@@ -769,6 +821,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     "document_publish_proofread",
     "Explicitly publish a complete immutable proofreading version as the default readable document. No parser or model call.",
     object({
+      schema_version: { const: 2 },
       literature_id: id,
       asset_id: id,
       proofread_id: id,
@@ -777,8 +830,18 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   ),
   tool(
     "proofread_build",
-    "Explicitly correct one existing parser draft against PDF pages and publish an immutable proofreading version; never invokes MinerU. Unresolved work remains incomplete; documented uncertainty does not block completion.",
-    object({ asset_id: id }),
+    "Proofread retained leaves of an already accepted arrangement, page by page. Does not arrange, parse or fetch. Old unbound raw-draft requests are obsolete.",
+    object({
+      schema_version: { const: 2 },
+      asset_id: id,
+      arrangement_id: hash,
+      retry_page_indexes: nullable({
+        type: "array",
+        items: epoch,
+        maxItems: 10000,
+        uniqueItems: true,
+      }),
+    }),
   ),
   tool(
     "proofread_decide",

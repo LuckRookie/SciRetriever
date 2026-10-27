@@ -374,6 +374,7 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 - 改字只有 correct：叶块、原文半开区间、原文片段、替换文字、依据页和一词理由。允许叶块内空区间插入或删除文字；拒绝跨叶块、已删除内容、错误页、原文不符、交叠改字及破坏表格结构的操作。每条改字确定性映射回 raw root 与源区间。
 - 每个有保留叶块的页都必须提交；没有改字时明确 no_change。宿主记录全部保留字符的读取覆盖和整页查看证明，crop 不能替代整页。每条原始及当前新增疑点都须处置：fixed 引用实际改字，draft-correct 或 uncertain 附一词理由。无法确定时保留原文，不因此失败。撤销草案产生的临时疑点随草案重算，原始疑点仍保留。
 - 没有保留叶块的页返回 not-required，不要求空校订提交，也不调用模型。PDF 有可见内容而没有任何叶块时，同时产生不阻断就绪的 `page-content-missing` 问题和页码，供后续“需处理”投影与重新解析；不虚构正文叶块。
+- 显式 retry_page_indexes 只重试所选页；未选的未完成页保留原处置记录，本次不计执行或模型消耗，整篇仍须所有必需页完成。所选重试对应的方法已变时返回 input-stale，应重新检查完整页输入，不能沿用旧方法的局部提交。
 - `page_input_sha256` 绑定 PDF/raw 身份、本页分类与文字层、保留及已删除叶块、校订/疑点/页面工具方法和有效模型设置，不绑定全篇 arrangement ID。重新整理后，只重校页输入变化的页。成功页记录按键保存，命中时重验来源、覆盖、改字映射与重算疑点；失败页不作为成功缓存。返回历史页用量与本次新消耗时分别计量，复用页本次消耗为 0。
 
 ### 6.4 停止保护与受控上下文
@@ -386,10 +387,34 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 - 读取窗口最多 20 项，按 JSON 编码后的字节数限界，工具文字回执不超过 16 KiB；大块用 code point 游标继续读。操作和处置由宿主分批保存，提交只引用当前草案，不重复传整篇全文。
 - 使用 DSH 的 image_policy=latest，旧图在请求中换成文字占位。中性请求超过 384 KiB 的文字/图片字节窗口后，在当前工具批收尾处交回 DSH 显式压缩，再继续同一会话；模型上下文触发的原生压缩也保留。宿主草案、覆盖和用量不依赖压缩摘要，可用有界工具重新查询。协议原有请求/响应大小保护仍有效；这不是文献调用预算。
 
-### 6.5 实现接入与文档表示
+### 6.5 生产编排、发布与历史读取
 
-`archive/text-source.ts`、`archive/arrangement*.ts` 与 `proofread/{leaf-corrections,page-service}.ts` 已实现上述服务和严格合同。接纳检查点复用现有 ProofreadCache 接口，不新增表，也不写 archive_steps 或旧 document/structure 步骤。新整理审计投影校验保留文字，不是已发布 Markdown/DocumentVersion。
+新建档固定执行 `arrange → proofread → render → metadata → references → tags`。整理和逐页校订都绑定 `proofreading` 角色。`archive/text-pipeline.ts` 组装 source、整理、逐页校订与接纳清单；检查点和页缓存继续使用现有不可变 artifact、校订版本和 raw pin，不另建业务库。新的写入请求为 schema 2；旧步骤与旧写请求返回 `archive-contract-obsolete`，不把 document/structure 当作新步骤别名。
 
-默认生产编排、六步入库、最终渲染/结构注释、元数据等后续读取、人工整理修改与传输入口尚待接入；本段服务不能被描述为已切换的 Web/CLI/MCP 建档。旧每篇上限的配置警告与启动前预计也属于后续接入，现有配置行为不因独立服务新增而自动改变。
+render 从保留叶块及已记录 correct 确定性生成 Markdown、DocumentStructureV2 和叶块 UTF-8 source map。骨架、标题标记、公式分隔符、合并接缝、资源语法和段落分隔单独记录；原生 section-heading 可直接作为所属骨架标题，不重复输出固定标题。保留 payload 恰好出现一次。跨脚注、图表或图注合并时，独立内容位于合并段落之后。图片区块只引用保留内容所需的已登记资源。书目标题区由阅读层从 catalog 元数据投影，不进入不可变正文。
 
-目标文档表示由保留叶块和已记录改字确定性渲染，章节与图表注释从整理归属生成，仍独立绑定文档版本，不改变表示 hash；内容版本 = hash(文档版本, 结构注释)。历史已发布的 proofread-blocks-v1、结构 schema v2、page-region-v1 和固定证据保持读取，不能把旧记录交给新叶块 parser，也不自动重建历史版本。最终渲染、默认发布与历史读取切换另行验证。
+结构注释采用独立 schema 2，直接从整理归属和图注挂接派生，role_source 为 arrangement 或 manual，不再调用章节分类模型。11 个新骨架角色与历史角色分别解码，不作名称映射。`body_content_leaf_ids` 记录真正具有保留正文 payload 的正文类叶块；纯标题不满足 READY。正文类角色恰为 introduction、methods、results-discussion、conclusion、additional。主文仍需完整校订、当前默认文档、派生注释、必需元数据与标签；补充材料和参考文献缺口不独自阻断主文。没有叶块的页所产生的 page-content-missing 是非阻断问题。
+
+元数据只读取 title/authors/abstract/keywords 保留片段，以及 bibliography 删除叶块的原始文字。后者带 raw parse、整理、源 span 的专门证据，不冒充文档 segment。参考文献、标签、检索和算子使用固定文档的保留内容。内容版本仍为 hash(文档版本, 结构注释)，变更经现有事务内事件使下游结果过时，不隐式重算。
+
+全文摘要读取器按 builder 分派片段覆盖校验：历史表示连续覆盖全文，新表示允许已验证渲染器生成的结构字节位于叶块片段之外。指定的算子角色在该版本注释中无法表达时，返回 `structure-role-unavailable` 缺口，不把空片段冒充完整阅读或自动映射旧角色。
+
+历史 proofread-blocks-v1、结构注释 schema 1、DocumentStructureV2、page-region-v1 与固定证据继续按各自历史 parser 读取，不转换 hash、不自动重建。历史步骤单列为 legacy_steps；新步骤使用 schema 2 的回执与 archive-progress 事件。历史 document/structure 行保留，不能成为新写请求。
+
+### 6.6 人工修改、并发与资源
+
+`archive-arrangement` 提供摘要、保留/删除叶块、断段、source map 和有界页状态；固定 proofread ID 后继续游标。大块通过 JSON-UTF8 字节窗口无损续读，不能悄悄截掉原文。`archive-arrangement-edit` 以 proofread、arrangement 和 manual revision 做 CAS，原子恢复或重归属并锁定 destination。文字锁和 destination 锁各自保存，源 span 变化返回 manual-conflict，不按相似文本重绑。
+
+人工操作不调用模型。页输入仍有效时确定性重渲染；恢复使保留页输入改变时保存决定、列出待校订页，保留上次完整固定文档，显式恢复建档才重校。Markdown 保存仅接纳能由 source map 唯一分解的叶块改字；无唯一来源边界时返回 typed mapping conflict，不发布无来源全文。人工改字也使用叶块 code point 范围并保留 raw 映射。
+
+校订发布在同一事务内检查 current revision、manual revision 与当前 raw parse，登记资源并 pin 输入。缓存竞争采用首个已验证结果，竞争者的实际调用用量仍记录到本次 attempt；不修改既有 immutable 清单的 usage。默认文档与注释失败不撤销先前有效事实，完整输入与注释未接纳时不成立 READY。
+
+### 6.7 Schema 与预计消耗
+
+当前 catalog 为 schema 12；唯一结构变化是 archive_steps.step 的 CHECK 接纳 arrange/render，并保留历史 document/structure，同时更新 schema identity、指纹和版本守卫。打开旧库仍拒绝自动迁移。显式离线入口为 `node scripts/migrate-archive-v12.mjs /absolute/path/to/offline-copy.sqlite`，先核对旧布局，再在事务中重建 CHECK、核对全表行数及外键；正式切换前必须先在副本演练，迁移不执行任何获取或模型工作。
+
+`[proofread].max_calls_per_document` 不再生效；识别到字段名时不校验、使用或回显旧值，配置状态返回 configuration-option-removed、路径与固定删除说明，其它未知键仍严格拒绝。运行时停止条件见 6.4；协议大小限制继续有效。
+
+usage-estimate 的建档分支为 ArchiveUsageEstimateV2，给出页数、复用篇数、六步的 calls/input/output 中位数和 P90、样本数与未知原因。只使用新流程、相同方法/模型绑定且 usage 完整的成功历史；不混用旧校订/结构分类数据。无历史返回 null，不以旧预算充当预计，也不阻止显式提交。render 和当前确定性参考文献步骤为零模型调用；组件分位数相加仅作展示，不承诺总成本分布。
+
+完整复用与部分文本复用分别计算。原稿、方法、模型及人工决定均匹配时，已有整理的调用单元为零，已接纳或免校订页不计入预计待校订页，page_basis 为 accepted-arrangement；没有可复用整理时按全部 PDF 页保守估计。模型工作完成后缓存或发布失败，失败步骤仍保留本次实际 usage；成功页缓存的历史用量不重复计入新尝试。

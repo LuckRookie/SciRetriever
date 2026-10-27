@@ -27,6 +27,75 @@ import {
   toolJson,
 } from "./archive-text-fixture.js";
 const hash = "d".repeat(64);
+it("retries only an explicitly selected failed page and preserves other unfinished records without charging them again", async () => {
+  const f = await archiveTextFixture([
+      { text: "FIRSTPAGE synthetic.", page: 0 },
+      { text: "SECONDPAGE synthetic.", page: 1 },
+    ]),
+    snapshot = arranged(f.source),
+    cache = memoryTextCache(),
+    steps = new Map<number, number>(),
+    visited: number[] = [];
+  let fail = true;
+  const runtime = fakeTextRuntime(async (request) => {
+    const { page_index } = initialPage(request);
+    visited.push(page_index);
+    if (fail) throw new AgentFailure("agent-response-limit");
+    const n = (steps.get(page_index) ?? 0) + 1;
+    steps.set(page_index, n);
+    if (n === 1)
+      return modelTool("read_blocks", {
+        page_index,
+        index: 0,
+        offset: 0,
+        limit: 20,
+      });
+    if (n === 2) return modelTool("view_page", { page_index, region: null });
+    return modelTool("submit_page", { no_change: true });
+  });
+  try {
+    const service = new ArchivePageProofreadService(
+      runtime,
+      fakePages(f.pages),
+      cache.cache,
+    );
+    const first = await service.build(f.source, snapshot, f.pages);
+    expect(first.pages.map((p) => p.status)).toEqual(["failed", "failed"]);
+    fail = false;
+    visited.length = 0;
+    const second = await service.build(
+      f.source,
+      snapshot,
+      f.pages,
+      undefined,
+      [],
+      undefined,
+      new Map([[1, first.pages[1]!]]),
+    );
+    expect(visited).toEqual([0, 0, 0]);
+    expect(second.pages.map((p) => p.status)).toEqual(["accepted", "failed"]);
+    expect(second.pages[1]).toEqual(first.pages[1]);
+    expect(second.untouched_page_indexes).toEqual([1]);
+    expect(second.complete).toBe(false);
+    expect(second.usage.calls).toBe(3);
+    visited.length = 0;
+    const third = await service.build(
+      f.source,
+      snapshot,
+      f.pages,
+      undefined,
+      [],
+      undefined,
+      new Map([[0, second.pages[0]!]]),
+    );
+    expect(visited).toEqual([1, 1, 1]);
+    expect(third.complete).toBe(true);
+    expect(third.reused_page_indexes).toEqual([0]);
+    expect(third.usage.calls).toBe(3);
+  } finally {
+    await runtime.close();
+  }
+});
 const evidence = (ids: readonly string[]): PageReviewEvidence => ({
   read_leaf_ids: ids,
   viewed_full_page: true,

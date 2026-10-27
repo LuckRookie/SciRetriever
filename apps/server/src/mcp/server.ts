@@ -37,6 +37,7 @@ import {
 } from "../entry/processor-operations.js";
 import {
   executeQuery,
+  ProductOperationError,
   type QueryOperation,
 } from "../entry/query-operations.js";
 import { ProcessorQueryError } from "../storage/processor-results.js";
@@ -227,6 +228,7 @@ export function createMcpServer(options: McpOptions = {}) {
       folders_manage: "folders",
       reading_open: "reading-open",
       archive_manage: "archive",
+      archive_arrangement_edit: "archive-arrangement-edit",
       tags_manage: "tags",
       archive_references: "archive-references",
       metadata_edit: "metadata-edit",
@@ -358,6 +360,8 @@ export function createMcpServer(options: McpOptions = {}) {
       );
     if (name === "snapshots_query")
       return executeQuery(q, "snapshots", args, signal);
+    if (name === "archive_arrangement")
+      return executeQuery(q, "archive-arrangement", args, signal);
     if (name === "archive_query")
       return executeQuery(q, "archive", args, signal);
     if (name === "tags_query") return executeQuery(q, "tags", args, signal);
@@ -423,6 +427,26 @@ export function createMcpServer(options: McpOptions = {}) {
       try {
         if (stop.signal.aborted) unavailable();
         const args = request.params.arguments ?? {};
+        const name = request.params.name;
+        if (
+          ["document_role", "proofread_decide", "proofread_revoke"].includes(
+            name,
+          ) ||
+          ([
+            "document_annotate",
+            "proofread_build",
+            "document_publish_proofread",
+            "proofread_save",
+          ].includes(name) &&
+            args.schema_version !== 2) ||
+          (name === "archive_manage" &&
+            args.operation === "build" &&
+            (!args.request ||
+              typeof args.request !== "object" ||
+              !("schema_version" in args.request) ||
+              args.request.schema_version !== 2))
+        )
+          throw new ProductOperationError("archive-contract-obsolete");
         if (
           Buffer.byteLength(JSON.stringify(args)) >
             (request.params.name === "proofread_save"

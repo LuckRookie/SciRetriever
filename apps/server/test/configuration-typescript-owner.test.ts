@@ -163,7 +163,7 @@ describe("TypeScript configuration owner", () => {
     }
   });
 
-  it("persists proofreading budgets across JSON publication and unrelated saves", async () => {
+  it("removes obsolete proofreading budgets during explicit publication and preserves unrelated settings", async () => {
     const home = await mkdtemp(
       join(tmpdir(), "sciretriever-ts-owner-proofread-"),
     );
@@ -179,7 +179,9 @@ describe("TypeScript configuration owner", () => {
         initial.revision,
         ["proofread"],
       );
-      expect(published.configuration.proofread).toEqual(proofread);
+      expect(published.configuration.proofread).toEqual({
+        model: proofread.model,
+      });
       await expect(
         owner.publishConfiguration(
           {
@@ -198,7 +200,7 @@ describe("TypeScript configuration owner", () => {
       expect(
         (await new TypeScriptConfigurationOwner(home).read()).configuration
           .proofread,
-      ).toEqual(proofread);
+      ).toEqual({ model: proofread.model });
     } finally {
       await rm(home, { recursive: true, force: true });
     }

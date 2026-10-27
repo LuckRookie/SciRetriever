@@ -409,6 +409,7 @@ it("recovers archive issues and keeps an unparsed supplement non-blocking in the
       }),
     );
     await e.app.archive.build({
+      schema_version: 2,
       selector: { kind: "literatures", literature_ids: [id] },
       mode: "full",
       from_step: "tags",

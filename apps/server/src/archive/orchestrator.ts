@@ -1,5 +1,5 @@
 import { archiveStepKey } from "./input-key.js";
-import { withActivity } from "../logging/activity.js";
+import { activityContext, withActivity } from "../logging/activity.js";
 import { randomUUID } from "node:crypto";
 import {
   ARCHIVE_STEPS,
@@ -29,6 +29,7 @@ export class ArchiveError extends Error {
   }
 }
 export interface ArchiveRuntime {
+  readonly text?: import("./text-pipeline.js").ArchiveTextPipeline;
   readonly proofread: Pick<ProofreadService, "build">;
   readonly documents: Pick<ProofreadDocumentService, "publish">;
   readonly structure: Pick<StructureAnnotationService, "build">;
@@ -282,55 +283,60 @@ export class ArchiveOrchestrator {
       false,
     );
     try {
-      if (step === "proofread") {
-        const result = await this.runtime.proofread.build(
-          { asset_id: part.asset_id, mode: request.mode },
-          signal,
-        );
-        output = {
-          proofread_id: result.version.proofread_id,
-          stats: result.version.stats,
-          usage: result.usage,
-          status: result.version.status,
-          failure: result.version.failure,
-          pending_pages: result.version.pages.filter((p) => !p.checked),
-        };
-        if (result.version.status !== "complete")
-          throw new ArchiveError(
-            result.version.status === "incomplete"
-              ? "proofread-incomplete"
-              : "proofread-failed",
-          );
-      } else if (step === "document") {
-        if (!input.current.proofread_id || !input.current.proofread_complete)
-          throw new ArchiveError("proofread-failed");
-        const previous = await this.database.documentDefault(
-          id,
-          part.asset_id,
-          part.asset_sha256,
-        );
-        output = {
-          ...(await this.runtime.documents.publish(
-            {
-              literature_id: id,
-              asset_id: part.asset_id,
-              proofread_id: input.current.proofread_id,
-              expected_default_revision: previous?.revision ?? null,
-            },
-            signal,
-          )),
-        };
-      } else if (step === "structure") {
-        output = {
-          ...(await this.runtime.structure.build(
-            {
-              document_version_id: input.current.document_version_id,
-              max_prefix_characters: 1024,
-            },
-            signal,
-          )),
-        };
-        if (part.part === "main" && !output.structure_satisfied)
+      if (step === "arrange" || step === "proofread" || step === "render") {
+        if (!this.runtime.text)
+          throw new ArchiveError("archive-runtime-unavailable");
+        output =
+          step === "arrange"
+            ? await this.runtime.text.arrange(
+                part.asset_id,
+                request.mode,
+                signal,
+              )
+            : step === "proofread"
+              ? await this.runtime.text.proofread(
+                  part.asset_id,
+                  request.mode,
+                  request.retry_page_indexes,
+                  signal,
+                  async (page, reused, usage) => {
+                    const job = activityContext().job_id;
+                    if (!job) return;
+                    await this.database.appendExecutionEvent({
+                      event_id: `archive-page:${randomUUID()}`,
+                      job_id: job,
+                      sequence: -1,
+                      kind: "archive-progress",
+                      created_at: new Date().toISOString(),
+                      payload: {
+                        schema_version: 2,
+                        run_id: runId,
+                        attempt_id: `${runId}:${part.asset_id}:proofread`,
+                        literature_id: id,
+                        asset_id: part.asset_id,
+                        part: part.part,
+                        step: "proofread",
+                        phase: reused
+                          ? "reused"
+                          : page.status === "accepted"
+                            ? "page-accepted"
+                            : page.stop
+                              ? "stopped"
+                              : "progress",
+                        page_index: page.page_index,
+                        pages: null,
+                        usage,
+                        stop: page.stop,
+                      },
+                    });
+                  },
+                )
+              : await this.runtime.text.render(id, part.asset_id, signal);
+        if (
+          step === "render" &&
+          part.part === "main" &&
+          !output.structure_satisfied
+        )
           throw new ArchiveError("structure-unsatisfied");
       } else {
         const reference = {
@@ -384,6 +390,14 @@ export class ArchiveOrchestrator {
         true,
       );
     } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "output" in error &&
+        error.output &&
+        typeof error.output === "object"
+      )
+        output = { ...output, ...error.output };
       const originalCode = signal?.aborted
         ? "archive-cancelled"
         : error &&
@@ -400,6 +414,26 @@ export class ArchiveOrchestrator {
         : step === "references" && !signal?.aborted
           ? "references-missing"
           : originalCode;
+      if (!output.stop)
+        output = {
+          ...output,
+          stop: {
+            code: signal?.aborted
+              ? "cancelled"
+              : step === "render"
+                ? "render-failed"
+                : "other",
+            step,
+            scope: "part",
+            page_index: null,
+            retryable: true,
+            cause_code: /^[a-z][a-z0-9-]{0,80}$/u.test(originalCode)
+              ? originalCode
+              : `${step}-failed`,
+            validation: null,
+            progress: null,
+          },
+        };
       if (code !== originalCode)
         output = { ...output, failure_code: originalCode };
       await this.save(
@@ -445,7 +479,39 @@ export class ArchiveOrchestrator {
         step,
         status,
         input_sha256: input,
-        output,
+        output: {
+          schema_version: 2,
+          run_id: run,
+          attempt_id: `${run}:${part.asset_id}:${step}`,
+          ...output,
+          usage: {
+            calls: usage?.calls ?? 0,
+            compaction_calls:
+              (output.usage as { compaction_calls?: number } | undefined)
+                ?.compaction_calls ?? 0,
+            input_tokens: usage?.input_tokens ?? null,
+            output_tokens: usage?.output_tokens ?? null,
+            usage_complete:
+              usage?.input_tokens !== undefined &&
+              usage?.input_tokens !== null &&
+              usage?.output_tokens !== undefined &&
+              usage?.output_tokens !== null,
+            elapsed_ms: Math.round(elapsed),
+          },
+          stats: {
+            ...((output.stats as object) ?? {}),
+            workflow: "arranged-v2",
+            method_sha256: this.runtime.method_sha256,
+            usage_complete:
+              usage !== undefined &&
+              (output.usage as { usage_complete?: boolean }).usage_complete !==
+                false,
+            required_pages: Array.isArray(output.pages)
+              ? output.pages.filter((p) => p.status !== "not-required").length
+              : null,
+            status,
+          },
+        },
         reason,
         elapsed_ms: Math.round(elapsed),
         calls: usage?.calls ?? 0,

@@ -117,7 +117,7 @@ export class ArticleIdentityService {
         throw new ArticleIdentityError("article-identity-cancelled");
     };
     check();
-    if (![11].includes(Number((await this.repository.schema()).schema_version)))
+    if (![12].includes(Number((await this.repository.schema()).schema_version)))
       throw new ArticleIdentityError("article-identity-v9-required");
     const detail = await this.library.detail(request.literature_id);
     const bindingMatches = (v: LiteratureDetail) =>

@@ -2,8 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { runCli } from "../src/cli/main.js";
-import { describe, expect, it, vi } from "vitest";
-import * as bootstrap from "../src/bootstrap/application.js";
+import { describe, expect, it } from "vitest";
 import { coreProcessingFixture } from "./core-processing-fixture.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
 import { executeQuery } from "../src/entry/query-operations.js";
@@ -129,12 +128,16 @@ describe("durable proofreading and human locks", () => {
         (await e.app.proofreading!.inspect({ asset_id: e.asset.asset_id }))
           .manual_revision,
       ).toBe(1);
-      await executeMaintenance(e.app, "proofread-revoke", {
+      const revoke = {
         asset_id: e.asset.asset_id,
         decision_id: decision.decision_id,
         expected_manual_revision: 1,
         actor: "fixture-reader",
-      });
+      };
+      await expect(
+        executeMaintenance(e.app, "proofread-revoke", revoke),
+      ).rejects.toMatchObject({ code: "archive-contract-obsolete" });
+      await e.app.proofreading!.revoke(revoke);
       expect(
         (await e.app.proofreading!.build({ asset_id: e.asset.asset_id }))
           .version.status,
@@ -179,28 +182,27 @@ it("offers the same correction reads through CLI and MCP without parser/model ca
   const client = new Client({ name: "fixture", version: "1" });
   try {
     await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    const built = await e.app.proofreading!.build({
+      asset_id: e.asset.asset_id,
+    });
+    const request = {
+      asset_id: e.asset.asset_id,
+      unresolved_only: false,
+      limit: 1,
+    };
     const output: string[] = [];
-    const cliApp = await e.openAnother();
-    const factory = vi
-      .spyOn(bootstrap, "createApplication")
-      .mockResolvedValueOnce(cliApp);
-    let cli;
-    try {
-      cli = await runCli(["proofread", "build", "--request", "-", "--json"], {
+    const cli = await runCli(
+      ["proofread", "inspect", "--request", "-", "--json"],
+      {
         home: e.home,
         stdout: (s) => output.push(s),
         stdin: (async function* () {
-          yield Buffer.from(JSON.stringify({ asset_id: e.asset.asset_id }));
+          yield Buffer.from(JSON.stringify(request));
         })(),
-      });
-    } finally {
-      factory.mockRestore();
-      await cliApp.close();
-    }
+      },
+    );
     expect(cli.code).toBe(0);
-    const receipt = JSON.parse(output.join(""));
-    expect(receipt.status).toBe("complete");
-    expect(receipt).not.toHaveProperty("failures");
+    const receipt = built.version;
     await host.connect(serverTransport);
     await client.connect(clientTransport);
     const response = await client.callTool({
@@ -232,10 +234,9 @@ it("offers the same correction reads through CLI and MCP without parser/model ca
       name: "proofread_build",
       arguments: { asset_id: e.asset.asset_id },
     });
-    expect(reused.isError).not.toBe(true);
-    expect(reused.structuredContent).toMatchObject({
-      result: { proofread_id: receipt.proofread_id, published: false },
-    });
+    expect(reused.isError).toBe(true);
+    expect(JSON.stringify(reused)).toContain("archive-contract-obsolete");
+    expect(response.structuredContent).toEqual(JSON.parse(output.join("")));
     expect(e.parseCalls).toBe(2);
     expect(e.modelCalls).toBe(0);
   } finally {

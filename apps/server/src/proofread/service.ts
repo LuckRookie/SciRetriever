@@ -1,3 +1,4 @@
+import { renderArrangement } from "../archive/render.js";
 import { actorLabel } from "../logging/actor-label.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -143,6 +144,77 @@ export class ProofreadService {
       limit = count(r.max_bytes ?? 65536, 262144);
     if (limit < 1024) throw new ProofreadError("proofread-invalid");
     return this.run(signal, async (stop) => {
+      const head = await this.storage.arrangedHead(asset, stop),
+        selected = r.proofread_id
+          ? parseAssetId(r.proofread_id)
+          : head.current?.proofread_id;
+      const arranged = selected
+        ? await this.storage.arranged(String(selected), stop)
+        : null;
+      if (arranged) {
+        if (arranged.version.part_asset_id !== asset)
+          throw new ProofreadError("proofread-manual-stale");
+        const rendered = renderArrangement(
+            arranged.bundle,
+            arranged.version.resources,
+          ),
+          bytes = rendered.markdown;
+        if (
+          start > bytes.length ||
+          (start < bytes.length && (bytes[start]! & 0xc0) === 0x80)
+        )
+          throw new ProofreadError("proofread-invalid");
+        let end = Math.min(bytes.length, start + limit);
+        while (end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
+        const counts = { parser: 0, agent: 0, manual: 0 };
+        for (const row of arranged.bundle.leaves)
+          if (row.destination.kind === "assigned") counts[row.text_source]++;
+        return {
+          schema_version: 2,
+          format: "arranged-v2",
+          asset_id: asset,
+          asset_sha256: arranged.version.part_sha256,
+          proofread_id: arranged.version.proofread_id,
+          arrangement_id: arranged.version.arrangement_id,
+          manual_revision: head.manual_revision,
+          status: arranged.version.status,
+          page_count: arranged.bundle.page_count,
+          start,
+          end,
+          total_bytes: bytes.length,
+          text: bytes.subarray(start, end).toString("utf8"),
+          ranges: rendered.source_map
+            .filter((s) => s.start_utf8 >= start && s.start_utf8 < end)
+            .map((s) => {
+              const row = arranged.bundle.leaves.find(
+                (l) => l.leaf.leaf_id === s.leaf_id,
+              )!;
+              return {
+                ...s,
+                block_id: s.leaf_id,
+                page: row.leaf.page_index,
+                source: row.text_source,
+                basis: row.basis,
+              };
+            }),
+          reading_status: {
+            asset_id: asset,
+            proofread_id: arranged.version.proofread_id,
+            blocks: counts,
+            text_layer_pages: arranged.version.pages.filter(
+              (p) => p.page_kind === "text-layer",
+            ).length,
+            total_pages: arranged.bundle.page_count,
+            last_manual_edit: head.last_manual_edit
+              ? {
+                  ...head.last_manual_edit,
+                  actor_label: actorLabel(head.last_manual_edit.actor),
+                }
+              : null,
+          },
+          next_start: end < bytes.length ? end : null,
+        };
+      }
       const state = await this.storage.state(asset, stop);
       const id = r.proofread_id
         ? parseAssetId(r.proofread_id)
@@ -723,7 +795,10 @@ export class ProofreadService {
         throw new ProofreadError("proofread-page-tools-unavailable");
       const current = await this.storage.current(id, stop);
       if (!current) throw new ProofreadError("proofread-missing");
-      const v = await this.storage.byId(String(current.proofread_id), stop);
+      const v =
+        (await this.storage.arranged(String(current.proofread_id), stop))
+          ?.version ??
+        (await this.storage.byId(String(current.proofread_id), stop));
       if (!v || page >= v.pages.length)
         throw new ProofreadError("proofread-invalid");
       const image = await this.pages.image(

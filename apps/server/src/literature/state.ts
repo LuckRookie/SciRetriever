@@ -18,19 +18,27 @@ export function deriveCurrentState(
       : ["vlm-engine-markdown-only"];
   if (!accepted.some((p) => main.raw_profiles.includes(p)))
     return { status: "ASSET_READY", missing_step: "raw-parse" };
-  if (!facts.started)
-    return { status: "ASSET_READY", missing_step: "proofread" };
-  const missing: MissingStep | null = !main.proofread_complete
-    ? "proofread"
-    : !main.document_version_id
-      ? "document"
-      : !main.structure_satisfied
-        ? "structure"
-        : facts.metadata_missing.length
-          ? "metadata"
-          : facts.tag_count < 1 || facts.tag_count > maxTags
-            ? "tags"
-            : null;
+  if (!facts.started) return { status: "ASSET_READY", missing_step: "arrange" };
+  const arranged = main.format === "arranged-v2";
+  const missing: MissingStep | null =
+    arranged &&
+    !main.steps.some((s) => s.step === "arrange" && s.status === "done")
+      ? "arrange"
+      : !main.proofread_complete
+        ? "proofread"
+        : !main.document_version_id
+          ? arranged
+            ? "render"
+            : "document"
+          : !main.structure_satisfied
+            ? arranged
+              ? "render"
+              : "structure"
+            : facts.metadata_missing.length
+              ? "metadata"
+              : facts.tag_count < 1 || facts.tag_count > maxTags
+                ? "tags"
+                : null;
   if (facts.running) return { status: "ARCHIVING", missing_step: missing };
   if (
     ["correction-or-editorial", "perspective-or-commentary"].includes(

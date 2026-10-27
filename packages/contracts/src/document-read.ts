@@ -476,7 +476,7 @@ function section(value: unknown) {
     annotated &&
     (r.role === null
       ? r.role_source !== null
-      : !["rule", "model", "fallback", "manual"].includes(
+      : !["rule", "model", "fallback", "manual", "arrangement"].includes(
           String(r.role_source),
         ))
   )

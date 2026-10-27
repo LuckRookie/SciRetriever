@@ -8,7 +8,7 @@ import {
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { archiveFixture } from "./archive-fixture.js";
-import { SqliteProofreadStorage } from "../src/storage/proofread.js";
+import { SqliteArchiveTextStorage } from "../src/storage/archive-text.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
 import { executeQuery } from "../src/entry/query-operations.js";
 import { createMcpServer } from "../src/mcp/server.js";
@@ -21,7 +21,7 @@ it("uses the explicitly registered Markdown-only VLM source and exposes read-onl
     );
     const { rawParseArchive } = await import("./raw-parse-fixture.js");
     const text =
-      "# Introduction\n\nFixture Author studies synthetic spectroscopy.\n\n# References\n\n[1] Example synthetic reference.\n";
+      "# Abstract\n\nFixture Author studies synthetic spectroscopy.\n\n# Introduction\n\nA synthetic body.\n\n# References\n\n[1] Example synthetic reference.\n";
     e.setText(text);
     const staged = await convertMinerURawArchive(
       rawParseArchive("vlm-engine", { markdown: text }),
@@ -62,6 +62,7 @@ it("uses the explicitly registered Markdown-only VLM source and exposes read-onl
         {
           operation: "build-archive",
           request: {
+            schema_version: 2,
             literature_id: e.id,
             mode: "legacy-vlm-markdown",
             from_step: null,
@@ -71,13 +72,13 @@ it("uses the explicitly registered Markdown-only VLM source and exposes read-onl
     });
     await e.app.processingTasks!.run(job.job_id);
     const state = await e.app.archive.status(e.id);
-    expect(state.status).toBe("READY");
+    expect(state.status, JSON.stringify(state)).toBe("READY");
     expect(e.parseCalls).toBe(0);
-    const proof = await new SqliteProofreadStorage(
+    const proof = await new SqliteArchiveTextStorage(
       e.app.database,
       e.app.files,
-    ).byId(state.parts[0]!.proofread_id!);
-    expect(proof!.draft_input.raw_parse_id).toBe(legacy.raw_parse_id);
+    ).load(state.parts[0]!.proofread_id!);
+    expect(proof!.version.draft_input.raw_parse_id).toBe(legacy.raw_parse_id);
     const q = await createQueryApplication(e.home);
     try {
       expect(
@@ -156,13 +157,13 @@ it("executes archive members concurrently under one existing queue lease", async
     const both = new Promise<void>((r) => {
       notify = r;
     });
-    const original = e.app.archiveMetadata.build.bind(e.app.archiveMetadata);
-    vi.spyOn(e.app.archiveMetadata, "build").mockImplementation(
-      async (v, signal) => {
+    const original = e.app.archiveText!.arrange.bind(e.app.archiveText!);
+    vi.spyOn(e.app.archiveText!, "arrange").mockImplementation(
+      async (asset, mode, signal) => {
         entered++;
         if (entered === 2) notify();
         await gate;
-        return original(v, signal);
+        return original(asset, mode, signal);
       },
     );
     const job = await e.app.processingTasks!.submit({
@@ -170,7 +171,12 @@ it("executes archive members concurrently under one existing queue lease", async
       idempotency_key: "parallel",
       operations: [e.id, second.literature_id].map((literature_id) => ({
         operation: "build-archive",
-        request: { literature_id, mode: "full", from_step: null },
+        request: {
+          schema_version: 2,
+          literature_id,
+          mode: "full",
+          from_step: null,
+        },
       })),
     });
     const run = e.app.processingTasks!.run(job.job_id);

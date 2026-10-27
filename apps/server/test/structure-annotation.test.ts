@@ -59,13 +59,19 @@ it("publishes, reuses, locks and revokes separate annotations without changing d
     });
     expect(e.modelCalls).toBe(1);
     const section = annotation!.sections[0]!.section_id;
-    const locked = await executeMaintenance(e.app, "document-role", {
+    const edit = {
       document_version_id: id,
       section_id: section,
       role: "results",
       expected_manual_revision: 0,
       actor: "synthetic-user",
-    });
+    };
+    await expect(
+      executeMaintenance(e.app, "document-role", edit),
+    ).rejects.toMatchObject({ code: "archive-contract-obsolete" });
+    // Historical annotations remain readable; the internal legacy fixture
+    // builder is deliberately separate from the retired public write API.
+    const locked = await e.app.structureAnnotations!.setRole(edit);
     expect(locked).toMatchObject({ published: true, manual_revision: 1 });
     const after = await store.current(id);
     expect(after?.sections[0]).toMatchObject({
@@ -312,7 +318,7 @@ it("returns annotated outline and role-filtered segments, and pins old roles aft
   }
 }, 30000);
 
-it("exposes the same annotation owner through CLI and MCP", async () => {
+it("reads the same historical annotation through CLI and MCP and rejects obsolete writes", async () => {
   const { e, id } = await prepared(false);
   const server = createMcpServer({
     home: e.home,
@@ -329,10 +335,12 @@ it("exposes the same annotation owner through CLI and MCP", async () => {
       name: "document_annotate",
       arguments: { document_version_id: id, max_prefix_characters: 20 },
     });
-    expect(published.isError, JSON.stringify(published)).not.toBe(true);
-    const annotation_id = (
-      published.structuredContent as { result: { annotation_id: string } }
-    ).result.annotation_id;
+    expect(published.isError).toBe(true);
+    expect(JSON.stringify(published)).toContain("archive-contract-obsolete");
+    const { annotation_id } = await e.app.structureAnnotations!.build({
+      document_version_id: id,
+      max_prefix_characters: 20,
+    });
     const request = {
       document_version_id: id,
       annotation_id,

@@ -7,7 +7,8 @@ import {
 import { editDocument } from "../src/proofread/manual-document.js";
 import { renderBlocks } from "../src/proofread/render.js";
 import { processorFixture } from "./processor-fixture.js";
-import { SqliteProofreadStorage } from "../src/storage/proofread.js";
+import { SqliteArchiveTextStorage } from "../src/storage/archive-text.js";
+import { renderArrangement } from "../src/archive/render.js";
 import { executeMaintenance } from "../src/entry/maintenance-operations.js";
 
 const block = (
@@ -123,9 +124,11 @@ it(
         asset = e.parseRequest.asset_id;
       await e.build(e.parseRequest);
       const initial = (await e.app.archive.status(id)).parts[0]!;
-      const store = new SqliteProofreadStorage(e.app.database, e.app.files),
+      const store = new SqliteArchiveTextStorage(e.app.database, e.app.files),
         before = await store.load(initial.proofread_id!);
-      const markdown = new TextDecoder().decode(before.markdown.bytes);
+      const markdown = new TextDecoder().decode(
+        renderArrangement(before!.bundle, before!.version.resources).markdown,
+      );
       await e.app.processors!.runBatch({
         schema_version: 1,
         idempotency_key: "edit-original",
@@ -139,6 +142,9 @@ it(
         tags = await e.app.tags.assignment(id),
         calls = e.modelCalls;
       const request = {
+        schema_version: 2,
+        expected_arrangement_id: before!.version.arrangement_id,
+        expected_manual_revision: 0,
         literature_id: id,
         asset_id: asset,
         proofread_id: initial.proofread_id,
@@ -161,7 +167,7 @@ it(
       expect(saved).toMatchObject({
         saved: true,
         changed: true,
-        rebuild: { status: "completed" },
+        rebuild: { status: "done" },
       });
       const readingStatus = await e.app.proofreading!.readingStatus({
         asset_id: asset,
@@ -181,33 +187,37 @@ it(
           ?.state,
       ).toBe("stale");
       const after = await store.load(saved.proofread_id);
-      const blocks = parseProofreadBlocksV1(
-        JSON.parse(new TextDecoder().decode(after.blocks.bytes)),
-        [],
-      );
       expect(
-        blocks.blocks.find((b) => b.text === "A manually checked finding."),
-      ).toMatchObject({
-        basis: "manual",
-        text_source: "manual",
-      });
+        after!.bundle.leaves.find(
+          (l) => l.corrected_text === "A manually checked finding.",
+        ),
+      ).toMatchObject({ basis: "manual", text_source: "manual" });
       expect(await store.load(initial.proofread_id!)).toEqual(before);
       await expect(
         executeMaintenance(e.app, "proofread-save", {
           ...request,
           markdown: markdown + "Late change.",
         }),
-      ).rejects.toMatchObject({ code: "proofread-manual-stale" });
-      expect((await store.current(asset))!.proofread_id).toBe(
+      ).rejects.toMatchObject({ code: "publication-conflict" });
+      expect((await store.state(asset)).current!.proofread_id).toBe(
         saved.proofread_id,
       );
-      const cached = await e.app.proofreading!.build({ asset_id: asset });
-      expect(cached.version.proofread_id).toBe(saved.proofread_id);
+      const cached = await executeMaintenance(e.app, "proofread-build", {
+        schema_version: 2,
+        asset_id: asset,
+        arrangement_id: after!.version.arrangement_id,
+        retry_page_indexes: null,
+      });
+      expect(cached).toMatchObject({ proofread_id: saved.proofread_id });
       expect(e.modelCalls).toBe(calls);
       const same = await executeMaintenance(e.app, "proofread-save", {
         ...request,
         proofread_id: saved.proofread_id,
-        markdown: new TextDecoder().decode(after.markdown.bytes),
+        expected_arrangement_id: after!.version.arrangement_id,
+        expected_manual_revision: 1,
+        markdown: new TextDecoder().decode(
+          renderArrangement(after!.bundle, after!.version.resources).markdown,
+        ),
       });
       expect(same).toMatchObject({ saved: true, changed: false });
     } finally {

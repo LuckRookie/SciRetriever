@@ -1,3 +1,8 @@
+import { SqliteArchiveTextStorage } from "../storage/archive-text.js";
+import {
+  renderArrangement,
+  ARRANGED_DOCUMENT_BUILDER,
+} from "../archive/render.js";
 import { parseProofreadBlocksV1 } from "@sciretriever/contracts";
 import { SqliteProofreadStorage } from "../storage/proofread.js";
 import {
@@ -61,6 +66,31 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     const parsed = parseDocumentRepresentationInput(input);
     if ("proofread_id" in parsed) {
       try {
+        if (parsed.builder_version === ARRANGED_DOCUMENT_BUILDER) {
+          const output = await new SqliteArchiveTextStorage(
+            this.database,
+            this.files,
+          ).load(parsed.proofread_id);
+          if (
+            !output ||
+            output.version.content_sha256 !== parsed.proofread_content_sha256 ||
+            output.version.part_asset_id !==
+              parsed.source_material_ref.asset_id ||
+            output.version.part_sha256 !==
+              parsed.source_material_ref.asset_sha256 ||
+            output.version.status !== "complete"
+          )
+            return "stale";
+          const built = renderArrangement(
+            output.bundle,
+            output.version.resources,
+          );
+          return built.sha256 === parsed.structure.sha256 &&
+            built.markdown.length === parsed.markdown.byte_size &&
+            (await sha256(built.markdown)) === parsed.markdown.sha256
+            ? "available"
+            : "integrity-failure";
+        }
         const output = await new SqliteProofreadStorage(
           this.database,
           this.files,
@@ -142,7 +172,9 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
       throw new Error("document artifact limit exceeded");
     if (
       v.schema_version !== 2 ||
-      v.builder_version !== PROOFREAD_DOCUMENT_BUILDER_VERSION
+      ![PROOFREAD_DOCUMENT_BUILDER_VERSION, ARRANGED_DOCUMENT_BUILDER].includes(
+        v.builder_version,
+      )
     )
       throw new Error("document builder unsupported");
     if (
@@ -231,6 +263,25 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     signal?: AbortSignal,
     reserveVerifiedBytes?: (bytes: number) => void,
   ) {
+    if (v.builder_version === ARRANGED_DOCUMENT_BUILDER) {
+      const output = await new SqliteArchiveTextStorage(
+        this.database,
+        this.files,
+      ).load(v.proofread_id, signal);
+      if (
+        !output ||
+        output.version.status !== "complete" ||
+        output.version.content_sha256 !== v.proofread_content_sha256 ||
+        output.version.part_asset_id !== v.source_material_ref.asset_id ||
+        output.version.part_sha256 !== v.source_material_ref.asset_sha256
+      )
+        throw new Error("document proofread binding mismatch");
+      reserveVerifiedBytes?.(output.version.blocks.byte_size);
+      const built = renderArrangement(output.bundle, output.version.resources);
+      if (!Buffer.from(markdown).equals(built.markdown))
+        throw new Error("document source-map mismatch");
+      return built;
+    }
     const output = await new SqliteProofreadStorage(
       this.database,
       this.files,
@@ -250,6 +301,35 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
   ) {
     if (document.schema_version !== 2)
       throw new Error("document corrections unsupported");
+    if (document.builder_version === ARRANGED_DOCUMENT_BUILDER) {
+      const output = await new SqliteArchiveTextStorage(
+        this.database,
+        this.files,
+      ).load(document.proofread_id, signal);
+      const row = output?.bundle.leaves.find(
+        (l) =>
+          l.leaf.leaf_id === segmentId && l.destination.kind === "assigned",
+      );
+      if (!output || !row)
+        throw new Error("document correction record missing");
+      return {
+        schema_version: 2,
+        format: "arranged-v2",
+        proofread_id: document.proofread_id,
+        leaf: row.leaf,
+        corrected_text: row.corrected_text,
+        page_record: output.version.pages[row.leaf.page_index],
+        corrections: output.version.pages
+          .flatMap((p) => p.corrections)
+          .filter((c) => c.operation.leaf_id === segmentId),
+        page_image: {
+          asset_id: document.source_material_ref.asset_id,
+          asset_sha256: document.source_material_ref.asset_sha256,
+          page: row.leaf.page_index,
+          region: row.leaf.region,
+        },
+      };
+    }
     const output = await new SqliteProofreadStorage(
       this.database,
       this.files,

@@ -218,6 +218,8 @@ export interface Asset {
   readonly path: RelativeArtifactPath;
 }
 export const MISSING_STEPS = [
+  "arrange",
+  "render",
   "primary-pdf",
   "raw-parse",
   "proofread",
@@ -3025,6 +3027,11 @@ export interface ConfigurationReadinessItem {
     | "explicit-test";
 }
 export interface ConfigurationReadiness {
+  readonly diagnostics?: readonly {
+    readonly code: "configuration-option-removed";
+    readonly path: "proofread.max_calls_per_document";
+    readonly message: string;
+  }[];
   readonly acquisition_routes?: AcquisitionRouteState;
   readonly version: 1;
   readonly network_performed: false;
@@ -3053,6 +3060,9 @@ export function parseConfigurationReadiness(
       "browser_launched",
       "items",
       "credentials",
+      ...(value && typeof value === "object" && "diagnostics" in value
+        ? ["diagnostics"]
+        : []),
       ...(value && typeof value === "object" && "acquisition_routes" in value
         ? ["acquisition_routes"]
         : []),
@@ -3134,6 +3144,23 @@ export function parseConfigurationReadiness(
   )
     fail();
   return Object.freeze({
+    ...(r.diagnostics === undefined
+      ? {}
+      : {
+          diagnostics: list<
+            NonNullable<ConfigurationReadiness["diagnostics"]>[number]
+          >(r.diagnostics, [], (v) => {
+            const q = exact(v, ["code", "path", "message"], []);
+            if (
+              q.code !== "configuration-option-removed" ||
+              q.path !== "proofread.max_calls_per_document" ||
+              typeof q.message !== "string" ||
+              q.message.length > 512
+            )
+              fail();
+            return { code: q.code, path: q.path, message: q.message };
+          }),
+        }),
     ...(r.acquisition_routes === undefined
       ? {}
       : {
@@ -3539,3 +3566,5 @@ export * from "./processor-outcomes.js";
 export * from "./reading-status.js";
 
 export * from "./archive-text.js";
+
+export * from "./archive-publication.js";

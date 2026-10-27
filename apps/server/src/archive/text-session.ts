@@ -20,7 +20,9 @@ import type {
 import { ArchiveTextError, textHash } from "./text-source.js";
 export const ARCHIVE_TEXT_STOP_POLICY = "validation3-progress8-v1";
 export const TEXT_TOOL_MAX_BYTES = 16 * 1024;
-export function archiveTextModelIdentity(runtime: DshAgentRuntime) {
+export function archiveTextModelIdentity(
+  runtime: Pick<DshAgentRuntime, "readiness" | "effectiveIdentity">,
+) {
   const ready = runtime.readiness("proofreading");
   return ready.configured && !ready.missing.length
     ? runtime.effectiveIdentity("proofreading")
@@ -49,6 +51,33 @@ export function sumArchiveUsage(
     usage_complete: values.every((u) => u.usage_complete),
     elapsed_ms: values.reduce((n, u) => n + u.elapsed_ms, 0),
   };
+}
+/** Keep paid model work visible even when cache/CAS publication fails afterwards. */
+export function archiveUsageFailure(error: unknown, usage: ArchiveModelUsage) {
+  const output =
+    error &&
+    typeof error === "object" &&
+    "output" in error &&
+    error.output &&
+    typeof error.output === "object"
+      ? error.output
+      : {};
+  const code =
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    /^[a-z][a-z0-9-]{0,80}$/u.test(error.code)
+      ? error.code
+      : "archive-text-failed";
+  return Object.assign(
+    new ArchiveTextError(
+      code,
+      error instanceof ArchiveTextError ? error.issues : [],
+      { cause: error },
+    ),
+    { output: { ...output, usage } },
+  );
 }
 export class TextProgress {
   private revision = 0;

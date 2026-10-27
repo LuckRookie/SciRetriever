@@ -76,6 +76,7 @@ import {
 } from "./credentials.js";
 import {
   ConfigurationBoundaryError,
+  configurationDiagnostics,
   configurationPath,
   loadConfiguration,
   parseConfiguration,
@@ -537,6 +538,7 @@ function readiness(
     network_performed: false,
     browser_launched: false,
     items,
+    diagnostics: configurationDiagnostics(configuration),
     credentials: {
       sources: Object.keys(LITERATURE_PROVIDERS)
         .filter((name) => LITERATURE_PROVIDERS[name]!.credentialFields.length)
@@ -779,6 +781,7 @@ export class TypeScriptConfigurationOwner {
     const preview = bundlePreview(credentials);
     return parseConfigurationReadiness({
       ...readiness(current.configuration, preview),
+      diagnostics: configurationDiagnostics(current.configuration),
       acquisition_routes: acquisitionRouteState(
         current.configuration,
         preview,

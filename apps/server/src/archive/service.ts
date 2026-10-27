@@ -104,7 +104,15 @@ export class ArchiveService extends ArchiveReader {
   }
   async build(value: unknown, signal?: AbortSignal) {
     if (!this.tasks) throw new ArchiveError("archive-task-unavailable");
+    if (
+      !value ||
+      typeof value !== "object" ||
+      !("schema_version" in value) ||
+      value.schema_version !== 2
+    )
+      throw new ArchiveError("archive-contract-obsolete");
     const r = tagRecord(value, [
+        "schema_version",
         "selector",
         "mode",
         "from_step",
@@ -131,6 +139,8 @@ export class ArchiveService extends ArchiveReader {
       tagRecord(s, ["kind", "query"]);
       selector = { kind: "query", query: parseLibraryQuery(s.query) };
     } else throw new ArchiveError("archive-selector-invalid");
+    if (r.schema_version !== 2)
+      throw new ArchiveError("archive-contract-obsolete");
     const selected =
       selector.kind === "literatures"
         ? await this.library.targetedSnapshot({
@@ -161,6 +171,7 @@ export class ArchiveService extends ArchiveReader {
       operations: selected.items.map((i) => ({
         operation: "build-archive",
         request: parseArchiveBuildRequest({
+          schema_version: 2,
           literature_id: i.literature.literature_id,
           mode: r.mode,
           from_step: r.from_step,
@@ -174,6 +185,7 @@ export class ArchiveService extends ArchiveReader {
     const current = await this.status(id, signal);
     return this.build(
       {
+        schema_version: 2,
         selector: { kind: "literatures", literature_ids: [id] },
         mode: current.mode,
         from_step: null,

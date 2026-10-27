@@ -5,6 +5,7 @@ import {
   parsePageRegion,
   parseArchiveModelUsage,
   type ArrangementSnapshot,
+  type SourceSpan,
   type ArrangementOperation,
   type ParagraphBreakDecision,
 } from "@sciretriever/contracts";
@@ -18,6 +19,7 @@ import {
   reviewArrangement,
   acceptArrangement,
   verifyArrangement,
+  type ArrangementConstraints,
 } from "./arrangement.js";
 import {
   ArchiveTextError,
@@ -39,6 +41,7 @@ import {
   TextReadCoverage,
   runArchiveTextSession,
   emptyArchiveUsage,
+  archiveUsageFailure,
   type ArchiveTextSessionResult,
 } from "./text-session.js";
 const str = { type: "string" },
@@ -132,6 +135,8 @@ export class ArchiveArrangementService {
   async build(
     source: ArchiveTextSource,
     signal?: AbortSignal,
+    seed?: ArrangementSnapshot,
+    lockedTextSpans: readonly SourceSpan[] = [],
   ): Promise<ArchiveTextSessionResult<ArrangementSnapshot>> {
     signal?.throwIfAborted();
     const method = textHash({
@@ -144,6 +149,9 @@ export class ArchiveArrangementService {
     });
     const key = textHash({
       stage: "arrangement-checkpoint-v1",
+      manual: seed?.destinations.filter((d) => d.locked) ?? [],
+      manual_revision: seed?.manual_revision ?? 0,
+      locked_text_spans: lockedTextSpans,
       source: source.input_sha256,
       method,
     });
@@ -200,9 +208,15 @@ export class ArchiveArrangementService {
         throw new ArchiveTextError("source-integrity");
       }
     }
-    const ops = new Map<string, ArrangementOperation>(),
+    const ops = new Map<string, ArrangementOperation>(
+        seed?.operations.map((o) => [arrangementOperationKey(o), o]) ?? [],
+      ),
       decisions = new Map<string, ParagraphBreakDecision>();
-    const viewed = new Set<number>(),
+    const viewed = new Set<number>(
+        seed?.operations
+          .filter((o) => o.kind === "assign-page")
+          .map((o) => o.page_index) ?? [],
+      ),
       read = new TextReadCoverage(),
       progress = new TextProgress("arrange", null);
     const layerTokens = source.pages.map((p) => {
@@ -213,8 +227,23 @@ export class ArchiveArrangementService {
       return counts;
     });
     let accepted: ArrangementSnapshot | null = null;
+    const constraints: ArrangementConstraints = {
+      locked_spans: lockedTextSpans,
+      viewed_pages: viewed,
+      manual_revision: seed?.manual_revision ?? 0,
+      locked_destinations: new Map(
+        seed?.destinations
+          .filter((d) => d.locked)
+          .map((d) => [d.leaf_id, d.destination]) ?? [],
+      ),
+      locked_decisions: new Map(
+        seed?.destinations
+          .filter((d) => d.locked)
+          .map((d) => [d.leaf_id, d.decision_id!]) ?? [],
+      ),
+    };
     const review = () =>
-      reviewArrangement(source, [...ops.values()], { viewed_pages: viewed });
+      reviewArrangement(source, [...ops.values()], constraints);
     const tools = [
       toolDeclaration(
         "draft_status",
@@ -485,7 +514,7 @@ export class ArchiveArrangementService {
             const draft = new Map(ops);
             for (const op of parsed) draft.set(arrangementOperationKey(op), op);
             reviewArrangement(source, [...draft.values()], {
-              viewed_pages: viewed,
+              ...constraints,
               allow_incomplete: true,
             });
             for (const op of parsed) ops.set(arrangementOperationKey(op), op);
@@ -589,7 +618,7 @@ export class ArchiveArrangementService {
                 break_decisions: [...decisions.values()],
               },
               method,
-              { viewed_pages: viewed },
+              constraints,
             );
             context.concludeTurn();
             return textReply({
@@ -602,26 +631,47 @@ export class ArchiveArrangementService {
       },
       signal,
     );
-    if (result.value) {
-      await this.cache.save(
-        key,
-        Buffer.from(
-          JSON.stringify({
-            schema_version: 1,
-            stage: "arrange",
-            source_input_sha256: source.input_sha256,
-            method_sha256: method,
-            snapshot: result.value,
-            usage: result.usage,
-            evidence: {
-              read_root_ids: source.blocks.map((b) => b.root_block_id),
-              viewed_pages: [...viewed],
-            },
-          }),
-        ),
-        "application/json",
-        signal,
-      );
+    if (result.value && !signal?.aborted) {
+      try {
+        await this.cache.save(
+          key,
+          Buffer.from(
+            JSON.stringify({
+              schema_version: 1,
+              stage: "arrange",
+              source_input_sha256: source.input_sha256,
+              method_sha256: method,
+              snapshot: result.value,
+              usage: result.usage,
+              evidence: {
+                read_root_ids: source.blocks.map((b) => b.root_block_id),
+                viewed_pages: [...viewed],
+              },
+            }),
+          ),
+          "application/json",
+          signal,
+        );
+      } catch (error) {
+        try {
+          if (
+            !error ||
+            typeof error !== "object" ||
+            !("code" in error) ||
+            error.code !== "proofread-cache-conflict"
+          )
+            throw error;
+          const winner = await this.build(
+            source,
+            signal,
+            seed,
+            lockedTextSpans,
+          );
+          return { ...result, value: winner.value };
+        } catch (failure) {
+          throw archiveUsageFailure(failure, result.usage);
+        }
+      }
     }
     return result;
   }

@@ -351,13 +351,18 @@ it("exposes publication and part reads through CLI/MCP without opening a parser 
   const client = new Client({ name: "fixture", version: "1" });
   try {
     await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
-    const proofread = await e.app.proofreading!.build({
-      asset_id: e.asset.asset_id,
-    });
+    await e.app.archiveText!.arrange(e.asset.asset_id, "full");
+    const proofread = await e.app.archiveText!.proofread(
+      e.asset.asset_id,
+      "full",
+      null,
+    );
+    const calls = e.modelCalls;
     const input = {
+      schema_version: 2,
       literature_id: e.rawParseRequest.literature_id,
       asset_id: e.asset.asset_id,
-      proofread_id: proofread.version.proofread_id,
+      proofread_id: proofread.proofread_id,
       expected_default_revision: null,
     };
     const stdout: string[] = [];
@@ -400,7 +405,7 @@ it("exposes publication and part reads through CLI/MCP without opening a parser 
         parts: [
           {
             default: {
-              document_version_id: publication.document.document_version_id,
+              document_version_id: publication.document_version_id,
             },
           },
         ],
@@ -414,7 +419,7 @@ it("exposes publication and part reads through CLI/MCP without opening a parser 
         })
       ).isError,
     ).not.toBe(true);
-    const docId = publication.document.document_version_id;
+    const docId = publication.document_version_id;
     const segment = (
       await e.app.documentRead.segments({
         document_version_id: docId,
@@ -440,9 +445,10 @@ it("exposes publication and part reads through CLI/MCP without opening a parser 
       result: { text: string };
     };
     expect(JSON.parse(envelope.result.text)).toMatchObject({
-      block_id: segment.segment_id,
-      draft: expect.any(Object),
-      block: { basis: "text-layer" },
+      schema_version: 2,
+      format: "arranged-v2",
+      leaf: { leaf_id: segment.segment_id },
+      page_record: { status: "accepted" },
       page_image: { asset_id: e.asset.asset_id, page: 0 },
     });
     const correctionOutput: string[] = [];
@@ -468,7 +474,7 @@ it("exposes publication and part reads through CLI/MCP without opening a parser 
       protocol_version: 1,
       result: envelope.result,
     });
-    expect(e.modelCalls).toBe(0);
+    expect(e.modelCalls).toBe(calls);
     expect(e.parseCalls).toBe(2);
   } finally {
     await client.close();

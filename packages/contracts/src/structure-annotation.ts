@@ -4,13 +4,20 @@ import {
   parseIdentifier,
   canonicalJsonBytes,
   sha256,
+  ARCHIVE_SECTION_ROLES,
+  type ArchiveSectionRole,
 } from "./index.js";
 import {
   parseSectionRole,
   type SectionRole,
   type DocumentPartRole,
 } from "./section-roles.js";
-export type SectionRoleSource = "rule" | "model" | "fallback" | "manual";
+export type SectionRoleSource =
+  | "rule"
+  | "model"
+  | "fallback"
+  | "manual"
+  | "arrangement";
 export interface AssignedSection {
   readonly section_id: string;
   readonly role: SectionRole;
@@ -37,7 +44,7 @@ export interface StructureReference {
   readonly segment_ids: readonly string[];
   readonly doi: string | null;
 }
-export interface StructureAnnotation {
+export interface StructureAnnotationV1 {
   readonly schema_version: 1;
   readonly annotation_id: string;
   readonly document_version_id: string;
@@ -116,7 +123,9 @@ function unique(values: readonly string[]) {
   if (new Set(values).size !== values.length)
     throw new ContractValidationError();
 }
-export function parseStructureAnnotation(value: unknown): StructureAnnotation {
+export function parseStructureAnnotationV1(
+  value: unknown,
+): StructureAnnotationV1 {
   const r = annotationRecord(value, [
     "schema_version",
     "annotation_id",
@@ -298,7 +307,9 @@ export function parseStructureAnnotation(value: unknown): StructureAnnotation {
   };
 }
 export function structureAnnotationHash(
-  value: Omit<StructureAnnotation, "annotation_id">,
+  value:
+    | Omit<StructureAnnotationV1, "annotation_id">
+    | Omit<ArrangementStructureAnnotationV2, "annotation_id">,
 ): Promise<string> {
   return sha256(canonicalJsonBytes(value));
 }
@@ -310,4 +321,196 @@ export async function verifyStructureAnnotation(
   if ((await structureAnnotationHash(body)) !== annotation_id)
     throw new ContractValidationError();
   return parsed;
+}
+
+export interface ArrangementStructureAnnotationV2 {
+  readonly body_content_leaf_ids: readonly string[];
+  readonly schema_version: 2;
+  readonly annotation_id: string;
+  readonly document_version_id: string;
+  readonly part: DocumentPartRole;
+  readonly arrangement_id: string;
+  readonly method: {
+    readonly generator: "arrangement-v1";
+    readonly method_sha256: string;
+  };
+  readonly manual_revision: number;
+  readonly sections: readonly {
+    readonly section_id: string;
+    readonly role: ArchiveSectionRole;
+    readonly role_source: "arrangement" | "manual";
+    readonly source_leaf_ids: readonly string[];
+    readonly locked: boolean;
+  }[];
+  readonly segment_roles: readonly {
+    readonly segment_id: string;
+    readonly section_id: string;
+    readonly role: ArchiveSectionRole;
+  }[];
+  readonly figures: readonly (StructureFigure & {
+    readonly caption_segment_ids: readonly string[];
+  })[];
+  readonly references: readonly StructureReference[];
+}
+export type StructureAnnotation =
+  | StructureAnnotationV1
+  | ArrangementStructureAnnotationV2;
+export function parseStructureAnnotation(value: unknown): StructureAnnotation {
+  if (
+    value &&
+    typeof value === "object" &&
+    "schema_version" in value &&
+    value.schema_version === 1
+  )
+    return parseStructureAnnotationV1(value);
+  const r = annotationRecord(value, [
+    "schema_version",
+    "annotation_id",
+    "document_version_id",
+    "part",
+    "arrangement_id",
+    "method",
+    "manual_revision",
+    "sections",
+    "segment_roles",
+    "figures",
+    "references",
+    "body_content_leaf_ids",
+  ]);
+  const m = annotationRecord(r.method, ["generator", "method_sha256"]);
+  const hash = (v: unknown) => {
+    if (typeof v !== "string" || !/^[a-f0-9]{64}$/u.test(v))
+      throw new ContractValidationError();
+    return v;
+  };
+  const role = (v: unknown): ArchiveSectionRole => {
+    if (
+      typeof v !== "string" ||
+      !(ARCHIVE_SECTION_ROLES as readonly string[]).includes(v)
+    )
+      throw new ContractValidationError();
+    return v as ArchiveSectionRole;
+  };
+  if (
+    r.schema_version !== 2 ||
+    m.generator !== "arrangement-v1" ||
+    !["main", "supplementary"].includes(String(r.part))
+  )
+    throw new ContractValidationError();
+  const sections = list(r.sections, (v) => {
+    const q = annotationRecord(v, [
+      "section_id",
+      "role",
+      "role_source",
+      "source_leaf_ids",
+      "locked",
+    ]);
+    if (
+      !["arrangement", "manual"].includes(String(q.role_source)) ||
+      typeof q.locked !== "boolean" ||
+      q.locked !== (q.role_source === "manual")
+    )
+      throw new ContractValidationError();
+    return {
+      section_id: annotationToken(q.section_id),
+      role: role(q.role),
+      role_source: q.role_source as "arrangement" | "manual",
+      source_leaf_ids: list(q.source_leaf_ids, parseAssetId),
+      locked: q.locked,
+    };
+  });
+  const sectionIds = new Set(sections.map((s) => s.section_id));
+  if (sectionIds.size !== sections.length) throw new ContractValidationError();
+  const segment_roles = list(r.segment_roles, (v) => {
+    const q = annotationRecord(v, ["segment_id", "section_id", "role"]);
+    const section_id = annotationToken(q.section_id);
+    if (!sectionIds.has(section_id)) throw new ContractValidationError();
+    return {
+      segment_id: annotationToken(q.segment_id),
+      section_id,
+      role: role(q.role),
+    };
+  });
+  const segIds = new Set(segment_roles.map((s) => s.segment_id));
+  if (segIds.size !== segment_roles.length) throw new ContractValidationError();
+  const seg = (v: unknown) => {
+    const id = annotationToken(v);
+    if (!segIds.has(id)) throw new ContractValidationError();
+    return id;
+  };
+  const figures = list(r.figures, (v) => {
+    const q = annotationRecord(v, [
+      "object_segment_id",
+      "caption_segment_id",
+      "caption_segment_ids",
+      "kind",
+      "label",
+      "page",
+    ]);
+    if (!["figure", "table", "scheme"].includes(String(q.kind)))
+      throw new ContractValidationError();
+    return {
+      object_segment_id: seg(q.object_segment_id),
+      caption_segment_id:
+        q.caption_segment_id === null ? null : seg(q.caption_segment_id),
+      caption_segment_ids: list(q.caption_segment_ids, seg),
+      kind: q.kind as StructureFigure["kind"],
+      label: q.label === null ? null : text(q.label, 256),
+      page: annotationInteger(q.page, 0, 9999),
+    };
+  });
+  const references = list(r.references, (v, i) => {
+    const q = annotationRecord(v, [
+      "reference_index",
+      "text",
+      "segment_ids",
+      "doi",
+    ]);
+    if (q.reference_index !== i) throw new ContractValidationError();
+    return {
+      reference_index: i,
+      text: text(q.text, 8 * 1024 * 1024),
+      segment_ids: list(q.segment_ids, seg),
+      doi:
+        q.doi === null
+          ? null
+          : parseIdentifier({ namespace: "doi", value: q.doi }).value,
+    };
+  });
+  const body_content_leaf_ids = list(r.body_content_leaf_ids, seg);
+  unique(body_content_leaf_ids);
+  if (
+    body_content_leaf_ids.some(
+      (id) =>
+        !segment_roles.some(
+          (s) =>
+            s.segment_id === id &&
+            [
+              "introduction",
+              "methods",
+              "results-discussion",
+              "conclusion",
+              "additional",
+            ].includes(s.role),
+        ),
+    )
+  )
+    throw new ContractValidationError();
+  return {
+    body_content_leaf_ids,
+    schema_version: 2,
+    annotation_id: hash(r.annotation_id),
+    document_version_id: parseAssetId(r.document_version_id),
+    part: r.part as DocumentPartRole,
+    arrangement_id: hash(r.arrangement_id),
+    method: {
+      generator: "arrangement-v1",
+      method_sha256: hash(m.method_sha256),
+    },
+    manual_revision: annotationInteger(r.manual_revision),
+    sections,
+    segment_roles,
+    figures,
+    references,
+  };
 }

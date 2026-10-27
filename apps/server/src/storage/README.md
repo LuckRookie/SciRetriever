@@ -4,10 +4,10 @@
 
 ## 下级目录
 
-| 目录                              | 职责                  |
-| --------------------------------- | --------------------- |
-| [execution/](execution/README.md) | 执行记录存储          |
-| [files/](files/README.md)         | 不可变文件存储        |
+| 目录                              | 职责                            |
+| --------------------------------- | ------------------------------- |
+| [execution/](execution/README.md) | 执行记录存储                    |
+| [files/](files/README.md)         | 不可变文件存储                  |
 | [sqlite/](sqlite/README.md)       | SQLite catalog 初始化与结构检查 |
 
 ## 内容入口
@@ -28,3 +28,5 @@
 - [proofread.ts](proofread.ts)：校订产物与人工决定的不可变文件，读取校验与 SQLite worker 发布；与 raw 的引用保护在同一事务登记。
 
 `structure-annotations.ts` 保存与验证固定文档的结构注释，文件保存 JSON 字节，catalog 保存版本关系和人工角色审计；识别规则与业务决定属于 Document，存储不判断章节语义。
+
+`archive-text.ts` 保存 schema 2 文本清单、页处置与人工锁的不可变 artifact，复用校订表与 raw pin；发布在同一事务内检查 current/manual/raw 身份。`proofread.ts` 继续解码历史版本与共享页缓存。

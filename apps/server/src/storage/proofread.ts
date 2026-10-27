@@ -1,3 +1,4 @@
+import { SqliteArchiveTextStorage } from "./archive-text.js";
 import {
   canonicalJsonBytes,
   parseArtifactRef,
@@ -41,6 +42,18 @@ export class SqliteProofreadStorage {
     private readonly database: SqliteWorker,
     private readonly files: FileStore,
   ) {}
+  async arranged(id: string, signal?: AbortSignal) {
+    return new SqliteArchiveTextStorage(this.database, this.files).load(
+      id,
+      signal,
+    );
+  }
+  async arrangedHead(asset: string, signal?: AbortSignal) {
+    return new SqliteArchiveTextStorage(this.database, this.files).state(
+      asset,
+      signal,
+    );
+  }
   async read(key: string, signal?: AbortSignal) {
     const row = await this.database.proofread<Row | null>(
       "cache-read",

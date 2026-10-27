@@ -66,6 +66,22 @@ export async function readProcessingTask(
   return {
     job,
     targets,
+    archive: {
+      schema_version: 2,
+      steps: [
+        ...new Map(
+          events
+            .filter((e) => e.kind === "archive-progress")
+            .map((e) => {
+              const p = e.payload as { attempt_id: string };
+              return [p.attempt_id, e.payload];
+            }),
+        ).values(),
+      ],
+      events_truncated: events.length >= 1000,
+      next_event_cursor:
+        events.length >= 1000 ? (events[0]?.sequence ?? null) : null,
+    },
     results: events
       .filter((e) => e.kind === "processing-result")
       .map((e) => e.payload),

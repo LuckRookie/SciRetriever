@@ -5,7 +5,7 @@ import {
   canonicalJsonBytes,
   sha256,
   parseSectionRole,
-  type StructureAnnotation,
+  type StructureAnnotationV1 as StructureAnnotation,
 } from "@sciretriever/contracts";
 import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
 import type { RoleModelInput } from "./section-rules.js";

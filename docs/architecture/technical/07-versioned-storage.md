@@ -12,7 +12,7 @@
 
 Catalog v6 已为单篇知识产物增加独立表与精确依赖；Catalog v7 允许版本化集合综合产物，Catalog v8 append 独立知识检索投影。正式 operator 可用本篇 §4.1.11 的精确目标 CLI 显式初始化或升级；历史单步合成门禁保留。execution 子 schema 仍单独计版本。本篇保留现有表、文件和兼容语义；文档不授权代理执行真实用户数据迁移。
 
-> 当前采用 [ADR 0037 第二版](../decisions/0037-literature-archive-and-proofread-text.md) 的原始解析、校订稿、结构、标签、建档与快照存储。唯一 schema.ts 的内部编号为 11；历史逐级迁移已删除。真实旧库仍未切换。
+> 当前采用 [ADR 0037 第二版](../decisions/0037-literature-archive-and-proofread-text.md) 的原始解析、校订稿、结构、标签、建档与快照存储。唯一 schema.ts 的内部编号为 12；历史逐级迁移已删除。真实旧库仍未切换。
 
 本篇目录：
 
@@ -390,7 +390,7 @@ v1 文献事实与 v2 job/attempt/event/candidate/receipt 运行事实使用显�
 
 ### 4.1 当前 schema 与显式转换
 
-`storage/sqlite/schema.ts` 是唯一结构定义，内部标识 11 与精确指纹共同验证。启动不自动升级旧库。`initializeCatalogSchema` 仅创建空目标；未知/旧结构拒绝。一次性转换先固定 SQLite 一致性备份，再写入新目录和当前 schema，并复核完整性、外键、数量、稳定 ID、元数据 hash 与原始资产字节。转换不恢复 schema-v\* 迁移阶梯。
+`storage/sqlite/schema.ts` 是唯一结构定义，内部标识 12 与精确指纹共同验证。启动不自动升级旧库。建档 11 → 12 的专用离线脚本只扩展步骤 CHECK 并更新身份，旧行保持原样，入口与核对口径见[文档与证据第 6.7 节](04-document-evidence.md#67-schema-与预计消耗)。`initializeCatalogSchema` 仅创建空目标；未知/旧结构拒绝。一次性转换先固定 SQLite 一致性备份，再写入新目录和当前 schema，并复核完整性、外键、数量、稳定 ID、元数据 hash 与原始资产字节。转换不恢复 schema-v\* 迁移阶梯。
 
 Owner 已授权在转换副本删除旧总结、旧知识、旧算子结果和 markdown-utf8-v1 文档；VLM Markdown 经验证登记为原始解析，共享 PDF/图片不能删除。未知事实、外部回执引用等超出删除范围的依赖必须拒绝并报告。切换仍须单独确认，并先处理备份后的源库增量。
 
@@ -440,4 +440,4 @@ Analysis 的 `processor_result_summaries` 保存已发布结果用量/覆盖摘�
 
 任务发起身份和任务、策略、固定目标同一事务发布。综合逐篇进度使用原有 execution_events 中的 processor-map-progress 事件，不新增表；每篇新算、复用、部分完成、失败和中断均固定到本次目标。task-run 的 target_id/member_offset/member_limit 按页读取，根投影不隐式装载大型快照的全部成员。共享模型生命周期在关闭时等待过程记录收尾，再释放存储。
 
-第二轮库组织新增 `snapshot_labels`（显示名与不可变快照 hash 分离）、`folders`、`folder_members`、`reading_history`。已有 `processor_result_summaries` 增加 `method_revision`，`processor_result_currentness` 只读投影将旧方法标为过时；旧统计无法代表当前三计数时返回 null，不迁移、不当作零。所有 DDL 仍在 schema.ts，版本仍为 11；已有正式库需要授权后在副本显式更新，启动不会自动加表。
+第二轮库组织新增 `snapshot_labels`（显示名与不可变快照 hash 分离）、`folders`、`folder_members`、`reading_history`。已有 `processor_result_summaries` 增加 `method_revision`，`processor_result_currentness` 只读投影将旧方法标为过时；旧统计无法代表当前三计数时返回 null，不迁移、不当作零。所有 DDL 仍在 schema.ts，当前版本为 12；已有正式库需要授权后在副本显式更新，启动不会自动加表。

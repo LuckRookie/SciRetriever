@@ -64,14 +64,14 @@ export function runRawParseStorage(
   args: unknown,
 ): unknown {
   if (
-    ![11].includes(
+    ![12].includes(
       Number(
         one(db, "SELECT schema_version FROM schema_identity WHERE singleton=1")
           ?.schema_version,
       ),
     )
   )
-    fail("catalog-v11-required");
+    fail("catalog-v12-required");
   if (action === "get")
     return one(
       db,

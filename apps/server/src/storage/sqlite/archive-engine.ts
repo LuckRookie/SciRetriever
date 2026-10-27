@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   canonicalJsonBytes,
+  archivePageCursor,
   type ArchiveState,
   type ArchiveStepReceipt,
   type ArchiveIssue,
@@ -125,6 +126,35 @@ export function archiveStates(
       tag_count: Number(m.tag_count),
       description_version: version(m.description_json),
       parts: material.map((p) => ({
+        format: stepRows.some(
+          (s) => s.asset_id === p.asset_id && s.step === "arrange",
+        )
+          ? "arranged-v2"
+          : p.proofread_id
+            ? "legacy-v1"
+            : "not-built",
+        legacy_steps: stepRows
+          .filter(
+            (s) =>
+              s.asset_id === p.asset_id &&
+              JSON.parse(String(s.output_json)).schema_version !== 2,
+          )
+          .map(
+            (s) =>
+              ({
+                literature_id: key,
+                asset_id: String(p.asset_id),
+                step: s.step,
+                status: s.status,
+                input_sha256: s.input_sha256,
+                output: JSON.parse(String(s.output_json)),
+                reason: s.reason,
+                elapsed_ms: s.elapsed_ms,
+                calls: s.calls,
+                input_tokens: s.input_tokens,
+                output_tokens: s.output_tokens,
+              }) as ArchiveStepReceipt,
+          ),
         asset_id: String(p.asset_id),
         asset_sha256: String(p.asset_sha256),
         part: p.part as "main" | "supplementary",
@@ -136,10 +166,15 @@ export function archiveStates(
         structure_satisfied: p.structure_satisfied === 1,
         content_version: version(p.version_json),
         steps: stepRows
-          .filter((s) => s.asset_id === p.asset_id)
+          .filter(
+            (s) =>
+              s.asset_id === p.asset_id &&
+              JSON.parse(String(s.output_json)).schema_version === 2,
+          )
           .map(
             (s) =>
               ({
+                ...projectArchiveReceipt(JSON.parse(String(s.output_json))),
                 literature_id: key,
                 asset_id: String(p.asset_id),
                 step: s.step,
@@ -167,7 +202,14 @@ export function archiveStates(
                 reason: String(i.reason),
                 detail: JSON.parse(String(i.detail_json)),
                 affects_readiness:
-                  part.part === "main" && i.step !== "references",
+                  part.part === "main" &&
+                  i.step !== "references" &&
+                  i.reason !== "page-content-missing" &&
+                  !(
+                    stepRows.some(
+                      (s) => s.asset_id === i.asset_id && s.step === "arrange",
+                    ) && ["document", "structure"].includes(String(i.step))
+                  ),
                 resolution: i.resolution as ArchiveIssue["resolution"],
               },
             ]
@@ -279,6 +321,14 @@ export function runArchiveStorage(
           db,
           "SELECT profile,status,count(*) AS executions,sum(page_count) AS pages,sum(elapsed_ms) AS elapsed_ms FROM raw_parse_attempts GROUP BY profile,status",
         ),
+        arrangement: rows(
+          db,
+          "SELECT sum(COALESCE(json_extract(stats_json,'$.dropped_count'),0)) AS dropped_count FROM archive_attempts WHERE step='arrange'",
+        ),
+        corrections: rows(
+          db,
+          "SELECT sum(COALESCE(json_extract(stats_json,'$.correction_count'),0)) AS correction_count FROM archive_attempts WHERE step='proofread'",
+        ),
         proofreading: rows(
           db,
           "SELECT sum(COALESCE(json_extract(stats_json,'$.text_layer_pages'),0)) AS text_layer_pages,sum(COALESCE(json_extract(stats_json,'$.image_only_pages'),0)) AS image_only_pages,sum(COALESCE(json_extract(stats_json,'$.blank_pages'),0)) AS blank_pages,sum(COALESCE(json_extract(stats_json,'$.missing'),0)) AS missing,sum(COALESCE(json_extract(stats_json,'$.extra'),0)) AS extra,sum(COALESCE(json_extract(stats_json,'$.token_mismatch'),0)) AS token_mismatch,sum(COALESCE(json_extract(stats_json,'$.page_misplaced'),0)) AS page_misplaced,sum(COALESCE(json_extract(stats_json,'$.fixed'),0)) AS fixed,sum(COALESCE(json_extract(stats_json,'$.draft_correct'),0)) AS draft_correct,sum(COALESCE(json_extract(stats_json,'$.agent_deletions'),0)) AS agent_deletions FROM archive_attempts WHERE step='proofread'",
@@ -387,6 +437,84 @@ export function runArchiveStorage(
           json(s.output.stats ?? {}),
           now,
         );
+      if (job && s.output.schema_version === 2) {
+        const sequence = Number(
+          db
+            .prepare(
+              "SELECT COALESCE(max(sequence),-1)+1 AS n FROM execution_events WHERE job_id=?",
+            )
+            .get(job)!.n,
+        );
+        const payload = {
+          schema_version: 2,
+          run_id: r.run_id,
+          attempt_id: `${r.run_id}:${s.asset_id}:${s.step}`,
+          literature_id: s.literature_id,
+          asset_id: s.asset_id,
+          step: s.step,
+          phase:
+            s.status === "running"
+              ? "started"
+              : s.status === "done"
+                ? "completed"
+                : "stopped",
+          usage: s.output.usage ?? {
+            calls: 0,
+            compaction_calls: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            usage_complete: true,
+            elapsed_ms: 0,
+          },
+          page_status: Array.isArray(s.output.pages)
+            ? {
+                items: s.output.pages.slice(0, 200),
+                next_cursor:
+                  s.output.pages.length > 200
+                    ? archivePageCursor(String(s.output.proofread_id), 200)
+                    : null,
+              }
+            : null,
+          stop: s.output.stop ?? null,
+          part: onePart(db, s.literature_id, s.asset_id),
+          page_index: null,
+          pages: Array.isArray(s.output.pages)
+            ? {
+                required: s.output.pages.filter(
+                  (p) => p.status !== "not-required",
+                ).length,
+                accepted: s.output.pages.filter((p) => p.status === "accepted")
+                  .length,
+                reused: s.output.pages.filter((p) => p.reused).length,
+              }
+            : null,
+        };
+        db.prepare("INSERT INTO execution_events VALUES(?,?,?,?,?,?)").run(
+          `${r.run_id}:${s.asset_id}:${s.step}:${sequence}`,
+          job,
+          sequence,
+          "archive-progress",
+          json(payload),
+          now,
+        );
+      }
+      for (const item of Array.isArray(s.output.issues)
+        ? s.output.issues
+        : []) {
+        const issue = item as { code?: unknown; page_index?: unknown };
+        if (issue.code !== "page-content-missing") continue;
+        db.prepare(
+          "INSERT INTO archive_issues VALUES(?,?,?,?,?,?,NULL,?) ON CONFLICT(issue_id) DO UPDATE SET detail_json=excluded.detail_json,updated_at=excluded.updated_at",
+        ).run(
+          hash([s.literature_id, s.asset_id, issue.code, issue.page_index]),
+          s.literature_id,
+          s.asset_id,
+          s.step,
+          issue.code,
+          json(issue),
+          now,
+        );
+      }
       const issue = hash([s.literature_id, s.asset_id, s.step]);
       if (s.status === "failed" || s.status === "unavailable")
         db.prepare(
@@ -442,4 +570,42 @@ export function runArchiveStorage(
     }
     return fail("archive-operation-invalid");
   });
+}
+
+function onePart(db: DatabaseSync, literature: string, asset: string) {
+  return db
+    .prepare(
+      "SELECT role FROM literature_assets WHERE literature_id=? AND asset_id=?",
+    )
+    .get(literature, asset)?.role === "primary-pdf"
+    ? "main"
+    : "supplementary";
+}
+
+function projectArchiveReceipt(o: Record<string, unknown>) {
+  const pages = Array.isArray(o.pages)
+    ? (o.pages as { status: string; reused?: boolean }[])
+    : null;
+  return {
+    schema_version: 2,
+    run_id: o.run_id,
+    attempt_id: o.attempt_id,
+    usage: o.usage,
+    stop: o.stop ?? null,
+    output_ids: {
+      arrangement_id: o.arrangement_id ?? null,
+      proofread_id: o.proofread_id ?? null,
+      document_version_id: o.document_version_id ?? null,
+      annotation_id: o.annotation_id ?? null,
+    },
+    pages: pages
+      ? {
+          required: pages.filter((p) => p.status !== "not-required").length,
+          accepted: pages.filter((p) => p.status === "accepted").length,
+          reused: pages.filter((p) => p.reused).length,
+          pending: pages.filter((p) => p.status === "pending").length,
+          failed: pages.filter((p) => p.status === "failed").length,
+        }
+      : null,
+  };
 }

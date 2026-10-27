@@ -6,6 +6,7 @@ import {
   type ArrangementLeaf,
   type ArrangementSnapshot,
   type LeafDestination,
+  type SourceSpan,
   type ParagraphBreakCandidate,
   type ParagraphBreakDecision,
 } from "@sciretriever/contracts";
@@ -56,6 +57,8 @@ export interface ArrangementConstraints {
   readonly allow_incomplete?: boolean;
   readonly locked_destinations?: ReadonlyMap<string, LeafDestination>;
   readonly manual_revision?: number;
+  readonly locked_decisions?: ReadonlyMap<string, string>;
+  readonly locked_spans?: readonly SourceSpan[];
 }
 export function reviewArrangement(
   source: ArchiveTextSource,
@@ -174,6 +177,13 @@ export function reviewArrangement(
   if (constraints.locked_destinations)
     for (const id of constraints.locked_destinations.keys())
       if (!finalById.has(id)) add("manual-conflict", id);
+  for (const span of constraints.locked_spans ?? []) {
+    const leaf = assignedLeaves.find(
+      (l) => textHash(l.source) === textHash(span),
+    );
+    if (!leaf || destinations.get(leaf.leaf_id)?.kind !== "assigned")
+      add("manual-conflict", span.root_block_id);
+  }
   for (const [id, d] of destinations) {
     if (
       d.kind === "assigned" &&
@@ -349,8 +359,8 @@ export function acceptArrangement(
     destinations: review.leaves.map((l) => ({
       leaf_id: l.leaf_id,
       destination: review.destinations.get(l.leaf_id)!,
-      decision_id: null,
-      locked: false,
+      decision_id: constraints.locked_decisions?.get(l.leaf_id) ?? null,
+      locked: constraints.locked_decisions?.has(l.leaf_id) ?? false,
     })),
     break_candidates: review.candidates,
     break_decisions: s.break_decisions,
@@ -373,8 +383,25 @@ export function verifyArrangement(
   methodHash: string,
   constraints: ArrangementConstraints = {},
 ): ArrangementSnapshot {
-  const old = parseArrangementSnapshot(value, source.raw.page_count),
-    review = reviewArrangement(source, old.operations, constraints),
+  const old = parseArrangementSnapshot(value, source.raw.page_count);
+  const { arrangement_id, ...oldBody } = old;
+  if (textHash(oldBody) !== arrangement_id)
+    throw new ArchiveTextError("source-integrity");
+  const locks = new Map(
+    old.destinations
+      .filter((d) => d.locked)
+      .map((d) => [d.leaf_id, d.destination]),
+  );
+  constraints = {
+    ...constraints,
+    locked_destinations: locks,
+    locked_decisions: new Map(
+      old.destinations
+        .filter((d) => d.locked)
+        .map((d) => [d.leaf_id, d.decision_id!]),
+    ),
+  };
+  const review = reviewArrangement(source, old.operations, constraints),
     fresh = acceptArrangement(
       source,
       {

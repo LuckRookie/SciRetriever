@@ -10,7 +10,10 @@ import {
   processorComparison,
   type ProcessorInvocation,
   type ProcessorObject,
+  ARCHIVE_STEPS,
   type ArchiveState,
+  type ArchiveEstimateComponent,
+  type EstimateRange,
 } from "@sciretriever/contracts";
 import type { ProcessorPlanner } from "./processor-planning.js";
 import type { ProcessorStore } from "./processor.js";
@@ -19,6 +22,9 @@ import type { LiteratureQueryService } from "../literature/query.js";
 import type { SqliteRawParseStorage } from "../storage/raw-parsing.js";
 import type { TagService } from "../tags/service.js";
 
+type Component =
+  | ({ kind: string } & ReturnType<typeof range>)
+  | (Omit<ArchiveEstimateComponent, "kind"> & { kind: string });
 interface Usage {
   calls: number;
   input_tokens: number;
@@ -64,6 +70,16 @@ export class UsageEstimator {
       state: ArchiveState,
       signal: AbortSignal,
     ) => Promise<boolean>,
+    private readonly archiveMethod: string | null = null,
+    private readonly archiveTextWork?: (
+      part: import("@sciretriever/contracts").ArchivePart,
+      signal: AbortSignal,
+    ) => Promise<{
+      arrange_required: boolean;
+      total_pdf_pages: number | null;
+      expected_proofread_pages: number | null;
+      page_basis: "accepted-arrangement" | "all-pdf-pages" | "unknown";
+    }>,
   ) {}
   async estimate(
     value: unknown,
@@ -71,7 +87,7 @@ export class UsageEstimator {
   ): Promise<{
     count: number | null;
     reused_count: number | null;
-    components: ({ kind: string } & ReturnType<typeof range>)[];
+    components: Component[];
     available: boolean;
     no_hard_limit: boolean;
     [key: string]: unknown;
@@ -158,7 +174,7 @@ export class UsageEstimator {
     }
     if (r.kind === "processing") {
       const task = await parseProcessingTaskRequest(r.request);
-      const components: ({ kind: string } & ReturnType<typeof range>)[] = [];
+      const components: Component[] = [];
       let available = true;
       for (const op of task.operations) {
         stop.throwIfAborted();
@@ -224,36 +240,74 @@ export class UsageEstimator {
           : await this.select(selection.query, stop);
       let pages = 0,
         unknown = 0,
-        reused = 0;
+        reused = 0,
+        totalPages = 0,
+        totalUnknown = 0,
+        workParts = 0,
+        acceptedBasis = true;
       for (const id of ids) {
         stop.throwIfAborted();
         const state = await this.planner.archiveSource.archive.status(id, stop);
-        if (await this.archiveReuse(state, stop)) {
-          reused++;
-          continue;
-        }
+        const fullyReusable = await this.archiveReuse(state, stop);
+        if (fullyReusable) reused++;
         for (const part of state.parts) {
+          if (this.archiveTextWork) {
+            const work = await this.archiveTextWork(part, stop);
+            if (work.total_pdf_pages === null) totalUnknown++;
+            else totalPages += work.total_pdf_pages;
+            if (fullyReusable) continue;
+            if (work.arrange_required) workParts++;
+            if (work.expected_proofread_pages === null) unknown++;
+            else pages += work.expected_proofread_pages;
+            acceptedBasis &&= work.page_basis === "accepted-arrangement";
+            continue;
+          }
+          acceptedBasis = false;
           const current = await this.raw.current(part.asset_id, stop);
           const source = current.find(
             (c) => c.profile === this.profile,
           )?.result;
-          if (source?.page_sizes.length) pages += source.page_sizes.length;
+          if (source) totalPages += source.page_count;
+          else totalUnknown++;
+          if (fullyReusable) continue;
+          workParts++;
+          if (source) pages += source.page_count;
           else unknown++;
         }
       }
       const history = await this.db.review<
         (Usage & { step: string; stats: Record<string, unknown> })[]
       >("usage-history", { kind: "archive" });
-      const components = ["proofread", "structure", "metadata", "tags"].map(
-        (step) => {
+      const components = ARCHIVE_STEPS.map(
+        (step): ArchiveEstimateComponent & { kind: string } => {
+          const unit =
+            step === "proofread"
+              ? ("page" as const)
+              : step === "arrange"
+                ? ("part" as const)
+                : ("literature" as const);
+          const units =
+            step === "proofread"
+              ? unknown
+                ? null
+                : pages
+              : step === "arrange"
+                ? workParts
+                : ids.length - reused;
+          const deterministic = step === "render" || step === "references";
           const samples = history
-            .filter((s) => s.step === step)
+            .filter(
+              (s) =>
+                s.step === step &&
+                s.stats.workflow === "arranged-v2" &&
+                s.stats.status === "done" &&
+                s.stats.usage_complete === true &&
+                this.archiveMethod !== null &&
+                s.stats.method_sha256 === this.archiveMethod,
+            )
             .flatMap((s) => {
-              if (step !== "proofread") return [s];
               const n =
-                Number(s.stats.text_layer_pages ?? 0) +
-                Number(s.stats.image_only_pages ?? 0) +
-                Number(s.stats.blank_pages ?? 0);
+                step === "proofread" ? Number(s.stats.executed_pages ?? 0) : 1;
               return n > 0
                 ? [
                     {
@@ -264,24 +318,71 @@ export class UsageEstimator {
                   ]
                 : [];
             });
+          const estimate = (key: keyof Usage): EstimateRange | null => {
+            if (deterministic || units === 0) return { median: 0, p90: 0 };
+            if (units === null || !samples.length) return null;
+            const sorted = samples.map((s) => s[key]).sort((a, b) => a - b),
+              q = (p: number) =>
+                Math.ceil(
+                  sorted[Math.max(0, Math.ceil(sorted.length * p) - 1)]! *
+                    units,
+                );
+            return { median: q(0.5), p90: q(0.9) };
+          };
           return {
             kind: step,
-            unit: step === "proofread" ? "page" : "document",
-            ...range(
-              samples,
-              step === "proofread" ? pages : ids.length - reused,
-            ),
+            step,
+            unit,
+            units,
+            sample_count: samples.length,
+            basis: deterministic
+              ? "deterministic"
+              : samples.length
+                ? "matching-history"
+                : "unknown",
+            calls: estimate("calls"),
+            input_tokens: estimate("input_tokens"),
+            output_tokens: estimate("output_tokens"),
+            unknown_code:
+              deterministic || units === 0
+                ? null
+                : units === null
+                  ? "pages-unknown"
+                  : samples.length
+                    ? null
+                    : "no-matching-history",
           };
         },
       );
+      const total = (
+        key: "calls" | "input_tokens" | "output_tokens",
+      ): EstimateRange | null =>
+        components.some((c) => c[key] === null)
+          ? null
+          : {
+              median: components.reduce((n, c) => n + c[key]!.median, 0),
+              p90: components.reduce((n, c) => n + c[key]!.p90, 0),
+            };
       return {
+        schema_version: 2,
+        kind: "archive",
         count: ids.length,
         reused_count: reused,
-        reuse_basis: "fully-reusable-archive-papers",
-        pages,
-        unknown_page_parts: unknown,
+        total_pdf_pages: totalUnknown ? null : totalPages,
+        expected_proofread_pages: unknown ? null : pages,
+        page_basis: unknown
+          ? "unknown"
+          : acceptedBasis
+            ? "accepted-arrangement"
+            : "all-pdf-pages",
         components,
-        available: !unknown && components.every((c) => c.input_tokens !== null),
+        total: {
+          calls: total("calls"),
+          input_tokens: total("input_tokens"),
+          output_tokens: total("output_tokens"),
+        },
+        estimate_method: "archive-v2-matched-success-per-unit-v1",
+        available: components.every((c) => c.input_tokens !== null),
         no_hard_limit: true,
       };
     }

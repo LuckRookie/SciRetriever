@@ -26,6 +26,7 @@ export class ArchiveMetadataService {
     private readonly documents: SqliteDocumentStorage,
     private readonly annotations: SqliteAnnotationStorage,
     private readonly proposer: ReturnType<typeof dshMetadataProposer>,
+    private readonly archiveText?: import("../storage/archive-text.js").SqliteArchiveTextStorage,
   ) {}
   async build(value: unknown, signal?: AbortSignal) {
     const r = annotationRecord(value, [
@@ -75,14 +76,26 @@ export class ArchiveMetadataService {
           annotation.segment_roles.map((s) => [s.segment_id, s.role]),
         );
         const fragments: MetadataFragment[] = structure.segments
-          .filter(
-            (s) =>
-              s.page === 0 ||
-              ["front-matter", "abstract", "keywords"].includes(
-                roles.get(s.segment_id) ?? "",
-              ),
+          .filter((s) =>
+            annotation.schema_version === 2
+              ? ["title", "authors", "abstract", "keywords"].includes(
+                  roles.get(s.segment_id) ?? "",
+                )
+              : s.page === 0 ||
+                ["front-matter", "abstract", "keywords"].includes(
+                  roles.get(s.segment_id) ?? "",
+                ),
           )
           .map((s) => ({
+            ...(annotation.schema_version === 2
+              ? {
+                  evidence: {
+                    kind: "document-segment" as const,
+                    document_version_id: document,
+                    segment_ids: [s.segment_id],
+                  },
+                }
+              : {}),
             fragment_id: s.segment_id,
             page: s.page + 1,
             role: roles.get(s.segment_id) ?? "body",
@@ -90,6 +103,39 @@ export class ArchiveMetadataService {
               markdown.subarray(s.start_utf8, s.end_utf8),
             ),
           }));
+        if (annotation.schema_version === 2) {
+          const output = await this.archiveText?.load(
+            version.proofread_id,
+            signal,
+          );
+          if (
+            !output ||
+            output.version.arrangement_id !== annotation.arrangement_id
+          )
+            throw new Error("metadata-arrangement-required");
+          for (const row of output.bundle.leaves) {
+            if (
+              row.destination.kind !== "dropped" ||
+              row.destination.reason !== "bibliography"
+            )
+              continue;
+            fragments.push({
+              fragment_id: row.leaf.leaf_id,
+              page: row.leaf.page_index + 1,
+              role: "bibliography",
+              text: row.leaf.original_text,
+              evidence: {
+                kind: "arrangement-leaf",
+                proofread_id: output.version.proofread_id,
+                arrangement_id: annotation.arrangement_id,
+                raw_parse_id: output.version.draft_input.raw_parse_id,
+                leaf_id: row.leaf.leaf_id,
+                source: row.leaf.source,
+                drop_reason: "bibliography",
+              },
+            });
+          }
+        }
         if (!fragments.length) throw new Error("metadata-fragments-missing");
         if (
           fragments.length > 512 ||

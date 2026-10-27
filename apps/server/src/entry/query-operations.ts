@@ -1,3 +1,5 @@
+import { ArchiveContractObsoleteError } from "@sciretriever/contracts";
+import { ArchiveTextError } from "../archive/text-source.js";
 import { FolderError } from "../literature/folders.js";
 import { presentActors } from "../logging/actor-label.js";
 import {
@@ -69,6 +71,7 @@ export const QUERY_OPERATIONS = [
   "literature-results",
   "snapshots",
   "archive",
+  "archive-arrangement",
   "tags",
   "metadata-fields",
   "status",
@@ -148,6 +151,10 @@ async function readQuery(
   if (operation === "snapshots") {
     if (!q.snapshots) unavailable();
     return q.snapshots.query(value, signal);
+  }
+  if (operation === "archive-arrangement") {
+    if (!q.archiveArrangement) unavailable();
+    return q.archiveArrangement.read(value, signal);
   }
   if (operation === "archive") {
     if (!q.archive) unavailable();
@@ -247,6 +254,8 @@ async function readQuery(
     return q.proofreadRead.page(value, signal);
   }
   if (operation === "proofread-inspect") {
+    const arranged = await q.archiveArrangement?.inspect(value, signal);
+    if (arranged) return arranged;
     if (!q.proofreadRead) unavailable();
     return q.proofreadRead.inspect(value, signal);
   }
@@ -544,6 +553,8 @@ export function isQueryFailure(
     error instanceof SnapshotError ||
     error instanceof FolderError ||
     error instanceof ArchiveError ||
+    error instanceof ArchiveTextError ||
+    error instanceof ArchiveContractObsoleteError ||
     error instanceof TagError ||
     error instanceof MetadataFieldError ||
     error instanceof AnnotationError ||

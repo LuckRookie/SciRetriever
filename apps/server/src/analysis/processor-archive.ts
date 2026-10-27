@@ -2,6 +2,9 @@ import {
   parseEvidenceRef,
   sha256,
   archiveContentVersion,
+  ARCHIVE_SECTION_ROLES,
+  MAIN_SECTION_ROLES,
+  SUPPLEMENTARY_SECTION_ROLES,
   type ArchiveProcessorInput,
   type ProcessorInput,
   type ProcessorReads,
@@ -19,6 +22,35 @@ export class ProcessorArchiveSource {
     private readonly annotations: SqliteAnnotationStorage,
     private readonly documents: DocumentReadService,
   ) {}
+  async unsupportedRoles(
+    input: ArchiveProcessorInput,
+    reads: ProcessorReads,
+    signal: AbortSignal,
+  ) {
+    const unsupported = new Set<string>();
+    if (reads.roles === "all") return unsupported;
+    for (const part of input.parts) {
+      if (!part.available) continue;
+      const annotation = await this.annotations.byId(
+        part.structure_annotation_id!,
+        signal,
+      );
+      if (
+        !annotation ||
+        annotation.document_version_id !== part.document_version_id
+      )
+        processorError("processor-input-changed");
+      const supported: readonly string[] =
+        annotation.schema_version === 2
+          ? ARCHIVE_SECTION_ROLES
+          : part.part === "main"
+            ? MAIN_SECTION_ROLES
+            : SUPPLEMENTARY_SECTION_ROLES;
+      if (reads.roles.some((r) => !supported.includes(r)))
+        unsupported.add(part.asset_id);
+    }
+    return unsupported;
+  }
   async input(
     literature_id: string,
     reads: ProcessorReads,

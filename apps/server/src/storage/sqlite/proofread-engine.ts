@@ -1,13 +1,19 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import type { ArtifactRef, ProofreadVersion } from "@sciretriever/contracts";
+import type {
+  ArtifactRef,
+  ProofreadVersion,
+  ProofreadVersionV2,
+} from "@sciretriever/contracts";
 export type ProofreadStorageAction =
   | "cache-read"
   | "cache-write"
+  | "binding"
   | "current"
   | "get"
   | "state"
   | "resources"
+  | "render-resources"
   | "publish"
   | "decide"
   | "revoke";
@@ -15,7 +21,18 @@ export interface LocatedProofreadArtifact extends ArtifactRef {
   readonly reference: string;
 }
 export interface ProofreadPublication {
-  readonly version: ProofreadVersion;
+  readonly version: ProofreadVersion | ProofreadVersionV2;
+  readonly expected_current_revision?: number | null;
+  readonly manual_decisions?: {
+    readonly expected_proofread_id: string;
+    readonly actor: string;
+    readonly items: readonly {
+      readonly decision_id: string;
+      readonly block_id: string;
+      readonly scope_key: string;
+      readonly manifest: LocatedProofreadArtifact;
+    }[];
+  };
   readonly manual_revision: number;
   readonly manifest: LocatedProofreadArtifact;
   readonly manual_edit?: {
@@ -94,7 +111,7 @@ export function runProofreadStorage(
   args: unknown,
 ): unknown {
   if (
-    ![11].includes(
+    ![12].includes(
       Number(
         one(db, "SELECT schema_version FROM schema_identity WHERE singleton=1")
           ?.schema_version,
@@ -136,6 +153,12 @@ export function runProofreadStorage(
       );
       return id;
     });
+  if (action === "binding")
+    return one(
+      db,
+      "SELECT d.document_version_id,dv.proofread_id FROM document_defaults d JOIN document_versions dv ON dv.document_version_id=d.document_version_id WHERE dv.source_asset_id=? ORDER BY d.document_version_id LIMIT 1",
+      String(args),
+    );
   if (action === "current")
     return one(
       db,
@@ -175,12 +198,111 @@ export function runProofreadStorage(
         .all(String(args)),
     }));
   return transaction(db, true, () => {
+    if (action === "render-resources") {
+      const p = args as {
+        proofread_id: string;
+        manual_revision: number;
+        resources: ProofreadPublication["resources"];
+      };
+      const current = one(
+        db,
+        "SELECT p.* FROM proofread_current c JOIN proofread_versions p USING(proofread_id) WHERE p.proofread_id=?",
+        p.proofread_id,
+      );
+      if (
+        !current ||
+        current.status !== "complete" ||
+        revision(db, String(current.part_asset_id)) !== p.manual_revision
+      )
+        fail("proofread-current-stale");
+      for (const r of p.resources) {
+        register(db, r);
+        const old = one(
+          db,
+          "SELECT * FROM proofread_resources WHERE proofread_id=? AND kind=? AND reference=?",
+          p.proofread_id,
+          r.kind,
+          r.logical_reference,
+        );
+        if (
+          old &&
+          (old.sha256 !== r.sha256 || old.artifact_reference !== r.reference)
+        )
+          fail("proofread-artifact-conflict");
+        if (!old)
+          db.prepare(
+            "INSERT INTO proofread_resources VALUES(?,?,?,?,?,?,?)",
+          ).run(
+            p.proofread_id,
+            r.kind,
+            r.logical_reference,
+            r.reference,
+            r.sha256,
+            r.byte_size,
+            r.media_type,
+          );
+      }
+      return { registered: true };
+    }
     if (action === "publish") {
       const p = args as ProofreadPublication,
         v = p.version;
       if (revision(db, v.part_asset_id) !== p.manual_revision)
         fail("proofread-manual-stale");
+      const head = one(
+        db,
+        "SELECT * FROM proofread_current WHERE part_asset_id=?",
+        v.part_asset_id,
+      );
+      if (
+        Object.hasOwn(p, "expected_current_revision") &&
+        (head?.revision ?? null) !== p.expected_current_revision &&
+        head?.proofread_id !== v.proofread_id
+      )
+        fail("proofread-current-stale");
       let manualRevision = p.manual_revision;
+      if (p.manual_decisions) {
+        const e = p.manual_decisions;
+        if (head?.proofread_id !== e.expected_proofread_id)
+          fail("proofread-manual-stale");
+        const now = new Date().toISOString();
+        for (const item of e.items) {
+          register(db, item.manifest);
+          db.prepare(
+            "UPDATE proofread_manual_decisions SET active=0,revoked_by=?,revoked_at=? WHERE part_asset_id=? AND scope_key=? AND active=1",
+          ).run(e.actor, now, v.part_asset_id, item.scope_key);
+          const m = item.manifest;
+          db.prepare(
+            "INSERT INTO proofread_manual_decisions(decision_id,part_asset_id,block_id,scope_key,manifest_reference,manifest_sha256,manifest_size,manifest_media_type,active,actor,created_at) VALUES(?,?,?,?,?,?,?,?,1,?,?)",
+          ).run(
+            item.decision_id,
+            v.part_asset_id,
+            item.block_id,
+            item.scope_key,
+            m.reference,
+            m.sha256,
+            m.byte_size,
+            m.media_type,
+            e.actor,
+            now,
+          );
+        }
+        db.prepare(
+          "INSERT INTO proofread_manual_state(part_asset_id,revision) VALUES(?,1) ON CONFLICT(part_asset_id) DO UPDATE SET revision=revision+1",
+        ).run(v.part_asset_id);
+        manualRevision = revision(db, v.part_asset_id);
+        const active = db
+          .prepare(
+            "SELECT decision_id FROM proofread_manual_decisions WHERE part_asset_id=? AND active=1 ORDER BY decision_id",
+          )
+          .all(v.part_asset_id)
+          .map((r) => String(r.decision_id));
+        if (
+          JSON.stringify(active) !==
+          JSON.stringify([...v.manual_decision_ids].sort())
+        )
+          fail("proofread-manual-stale");
+      }
       if (p.manual_edit) {
         const e = p.manual_edit;
         if (

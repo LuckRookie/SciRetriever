@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { AgentFailure } from "../src/agents/protocol.js";
 import { ArchiveArrangementService } from "../src/archive/arrangement-service.js";
+import { ArchivePageProofreadService } from "../src/proofread/page-service.js";
 import { ArchiveTextError } from "../src/archive/text-source.js";
 import {
   boundedTextWindow,
@@ -20,7 +21,93 @@ import {
   memoryTextCache,
   modelText,
   modelTool,
+  assigned,
+  arranged,
+  toolJson,
 } from "./archive-text-fixture.js";
+
+it.each(["arrange", "proofread"] as const)(
+  "preserves actual %s usage across cache errors and concurrent checkpoint admission",
+  async (step) => {
+    const f = await archiveTextFixture([{ text: "Synthetic paragraph." }]);
+    for (const conflict of [false, true]) {
+      const memory = memoryTextCache();
+      let calls = 0;
+      const runtime = fakeTextRuntime(async (request) => {
+        calls++;
+        if (step === "arrange") {
+          if (calls === 1)
+            return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
+          if (calls === 2)
+            return modelTool("put_operations", {
+              operations: assigned(f.source),
+            });
+          if (calls === 3)
+            return modelTool("review_breaks", { offset: 0, limit: 20 });
+          return modelTool("submit_operations", {
+            reviewed_candidates_sha256:
+              toolJson(request).reviewed_candidates_sha256,
+          });
+        }
+        if (calls === 1)
+          return modelTool("read_blocks", {
+            page_index: 0,
+            index: 0,
+            offset: 0,
+            limit: 20,
+          });
+        if (calls === 2)
+          return modelTool("view_page", { page_index: 0, region: null });
+        return modelTool("submit_page", { no_change: true });
+      });
+      const cache = {
+        read: memory.cache.read,
+        save: async (...args: Parameters<typeof memory.cache.save>) => {
+          if (conflict) await memory.cache.save(...args);
+          throw Object.assign(new Error("synthetic cache fault"), {
+            code: conflict ? "proofread-cache-conflict" : "cache-write-failed",
+          });
+        },
+      };
+      try {
+        const build =
+          step === "arrange"
+            ? new ArchiveArrangementService(
+                runtime,
+                fakePages(f.pages),
+                cache,
+              ).build(f.source)
+            : new ArchivePageProofreadService(
+                runtime,
+                fakePages(f.pages),
+                cache,
+              ).build(f.source, arranged(f.source), f.pages);
+        const expected = step === "arrange" ? 4 : 3;
+        if (conflict)
+          expect((await build).usage).toMatchObject({
+            calls: expected,
+            input_tokens: expected * 13,
+            output_tokens: expected * 7,
+          });
+        else
+          await expect(build).rejects.toMatchObject({
+            code: "cache-write-failed",
+            output: {
+              usage: {
+                calls: expected,
+                input_tokens: expected * 13,
+                output_tokens: expected * 7,
+                usage_complete: true,
+              },
+            },
+          });
+        expect(calls).toBe(expected);
+      } finally {
+        await runtime.close();
+      }
+    }
+  },
+);
 it("bounds encoded JSON windows including escaping, and counts only newly read code points", () => {
   const text = '"\\\n\t😀'.repeat(30000),
     rows = [

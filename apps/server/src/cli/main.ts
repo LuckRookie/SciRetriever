@@ -747,7 +747,10 @@ async function execute(
       await q.close();
     }
   }
-  if (group === "archive") {
+  if (
+    group === "archive" &&
+    !["arrangement", "arrangement-edit"].includes(command ?? "")
+  ) {
     const file = argument(args, "--request");
     const request: unknown = file
       ? parseStrictJsonValue(await inputBytes(file, options, 262144))
@@ -773,6 +776,7 @@ async function execute(
                 }
               : command === "build" && args[2] && !args[2].startsWith("--")
                 ? {
+                    schema_version: 2,
                     selector: {
                       kind: "literatures",
                       literature_ids: args[2].split(","),
@@ -924,6 +928,7 @@ async function execute(
     "processor runs": "processor-runs",
     "literature results": "literature-results",
     "usage estimate": "usage-estimate",
+    "archive arrangement": "archive-arrangement",
     "agents sessions": "agent-sessions",
     "operations history": "operation-history",
     "proofread text": "proofread-text",
@@ -987,6 +992,7 @@ async function execute(
   const maintenanceRoutes: Readonly<Record<string, MaintenanceOperation>> = {
     "literature resolve-references": "archive-references",
     "literature metadata-edit": "metadata-edit",
+    "archive arrangement-edit": "archive-arrangement-edit",
     "document annotate": "document-annotate",
     "document role": "document-role",
     "import bibliography": "import-bibliography",

@@ -19,7 +19,7 @@ export class DocumentProcessingError extends Error {
       | "material-stale"
       | "parser-unavailable"
       | "document-cancelled"
-      | "catalog-v11-required",
+      | "catalog-v12-required",
     options?: ErrorOptions,
   ) {
     super("document parsing failed", options);
@@ -49,8 +49,8 @@ export class DocumentProcessingService {
     const operation = (async () => {
       if (combined.aborted)
         throw new DocumentProcessingError("document-cancelled");
-      if (![11].includes(Number((await this.database.schema()).schema_version)))
-        throw new DocumentProcessingError("catalog-v11-required");
+      if (![12].includes(Number((await this.database.schema()).schema_version)))
+        throw new DocumentProcessingError("catalog-v12-required");
       const facts = await this.database.currentFacts(request.literature_id);
       const asset = await this.database.getAsset(request.asset_id);
       if (!facts || !asset)

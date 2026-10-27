@@ -14,13 +14,9 @@ it("retains earlier publications, surfaces each step failure and resumes after c
   try {
     await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
     const stages = [
-      { owner: e.app.proofreading!, method: "build", step: "proofread" },
-      { owner: e.app.proofreadDocuments, method: "publish", step: "document" },
-      {
-        owner: e.app.structureAnnotations!,
-        method: "build",
-        step: "structure",
-      },
+      { owner: e.app.archiveText!, method: "arrange", step: "arrange" },
+      { owner: e.app.archiveText!, method: "proofread", step: "proofread" },
+      { owner: e.app.archiveText!, method: "render", step: "render" },
       { owner: e.app.archiveMetadata, method: "build", step: "metadata" },
       { owner: e.app.tags, method: "build", step: "tags" },
       { owner: e.app.archiveReferences, method: "build", step: "references" },
@@ -31,6 +27,9 @@ it("retains earlier publications, surfaces each step failure and resumes after c
           stage.owner as unknown as {
             build: (value: unknown) => Promise<unknown>;
             publish: (value: unknown) => Promise<unknown>;
+            arrange: (...value: unknown[]) => Promise<unknown>;
+            proofread: (...value: unknown[]) => Promise<unknown>;
+            render: (...value: unknown[]) => Promise<unknown>;
           },
           stage.method,
         )
@@ -125,17 +124,17 @@ describe("supplement and human revision lifecycle", () => {
         asset_id: asset.asset_id,
         asset_sha256: asset.sha256,
       });
-      const original = e.app.proofreading!.build.bind(e.app.proofreading!);
+      const original = e.app.archiveText!.proofread.bind(e.app.archiveText!);
       const failSupplement = vi
-        .spyOn(e.app.proofreading!, "build")
-        .mockImplementation((value, signal) =>
-          (value as { asset_id: string }).asset_id === asset.asset_id
+        .spyOn(e.app.archiveText!, "proofread")
+        .mockImplementation((id, mode, retry, signal) =>
+          id === asset.asset_id
             ? Promise.reject(
                 Object.assign(new Error("synthetic SI failure"), {
                   code: "proofread-failed",
                 }),
               )
-            : original(value, signal),
+            : original(id, mode, retry, signal),
         );
       await e.submit("failed-supplement");
       failSupplement.mockRestore();
@@ -166,16 +165,37 @@ describe("supplement and human revision lifecycle", () => {
         )!.document_version_id!,
         store = new SqliteAnnotationStorage(e.app.database, e.app.files),
         annotation = (await store.current(doc))!;
-      const section = annotation.sections.find(
-        (s) => s.role === "introduction",
+      expect(annotation.schema_version).toBe(2);
+      const output = (await e.app.archiveArrangement.storage.load(
+        before.parts.find((p) => p.part === "main")!.proofread_id!,
+      ))!;
+      const leaf = output.bundle.leaves.find(
+        (l) =>
+          l.destination.kind === "assigned" &&
+          l.destination.target.role === "introduction",
       )!;
-      await e.app.structureAnnotations!.setRole({
-        document_version_id: doc,
-        section_id: section.section_id,
-        role: "methods",
-        expected_manual_revision: 0,
-        actor: "fixture-user",
-      });
+      await e.app.archiveArrangement.edit(
+        {
+          schema_version: 2,
+          literature_id: e.id,
+          asset_id: e.asset.asset_id,
+          expected_proofread_id: output.version.proofread_id,
+          expected_arrangement_id: output.version.arrangement_id,
+          expected_manual_revision: 0,
+          changes: [
+            {
+              kind: "assign",
+              leaf_id: leaf.leaf.leaf_id,
+              target: { role: "methods" },
+              presentation:
+                leaf.destination.kind === "assigned"
+                  ? leaf.destination.presentation
+                  : { kind: "content" },
+            },
+          ],
+        },
+        "fixture-user",
+      );
       expect(
         (await e.app.archive.status(e.id)).parts.find(
           (part) => part.part === "main",
@@ -192,32 +212,40 @@ describe("supplement and human revision lifecycle", () => {
           (x) => x.kind === "content-version-changed" && x.old_version !== null,
         ),
       ).not.toHaveLength(0);
-      const inspected = await e.app.proofreading!.inspect({
+      const current = (
+        await e.app.archiveArrangement.storage.state(e.asset.asset_id)
+      ).current!;
+      const textVersion = (await e.app.archiveArrangement.storage.load(
+        String(current.proofread_id),
+      ))!;
+      const text = await e.app.proofreading!.editor({
         asset_id: e.asset.asset_id,
-        unresolved_only: false,
       });
-      const c = inspected.items[0]!.draft;
-      await e.app.proofreading!.decide({
-        asset_id: e.asset.asset_id,
-        proofread_id: before.parts.find((part) => part.part === "main")!
-          .proofread_id,
-        block_id: c.block_id,
-        draft_sha256: c.draft_sha256,
-        expected_manual_revision: 0,
-        action: "replace",
-        reason: "Checked original PDF",
-        text: "Corrected transcription.",
-        actor: "fixture-user",
-      });
+      await e.app.archiveArrangement.save(
+        {
+          schema_version: 2,
+          literature_id: e.id,
+          asset_id: e.asset.asset_id,
+          proofread_id: textVersion.version.proofread_id,
+          expected_arrangement_id: textVersion.version.arrangement_id,
+          expected_manual_revision: 1,
+          markdown: text.text.replace(
+            "A complete synthetic study.",
+            "A checked synthetic study.",
+          ),
+          actor: "fixture-user",
+        },
+        "fixture-user",
+      );
       const changed = await e.app.archive.status(e.id);
       expect(
         changed.parts.find((part) => part.part === "main")!.content_version,
-      ).toBeNull();
+      ).not.toBe(before.parts.find((p) => p.part === "main")!.content_version);
       expect(
         changed.parts.find((part) => part.part === "supplementary")!
           .content_version,
       ).toBe(supplemental.content_version);
-      expect(changed.status).not.toBe("READY");
+      expect(changed.status).toBe("READY");
     } finally {
       vi.restoreAllMocks();
     }
@@ -244,7 +272,7 @@ it("preserves completed steps across cancellation and an application restart", a
       interrupted.parts[0]!.steps.find((s) => s.step === "metadata")?.status,
     ).toBe("done");
     expect(
-      interrupted.parts[0]!.steps.find((s) => s.step === "structure")?.status,
+      interrupted.parts[0]!.steps.find((s) => s.step === "render")?.status,
     ).toBe("done");
     await e.reopen();
     const completed = await e.submit("resume-after-restart");

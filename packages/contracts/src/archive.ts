@@ -6,9 +6,9 @@ import {
 } from "./index.js";
 
 export const ARCHIVE_STEPS = [
+  "arrange",
   "proofread",
-  "document",
-  "structure",
+  "render",
   "metadata",
   "references",
   "tags",
@@ -22,14 +22,34 @@ export type ArchiveStepStatus =
   | "failed"
   | "unavailable";
 export interface ArchiveBuildRequest {
+  readonly schema_version: 2;
+  readonly retry_page_indexes: readonly number[] | null;
   readonly literature_id: string;
   readonly mode: ArchiveMode;
   readonly from_step: ArchiveStep | null;
 }
 export interface ArchiveStepReceipt {
+  readonly schema_version?: 2;
+  readonly run_id?: string;
+  readonly attempt_id?: string;
+  readonly usage?: import("./archive-text.js").ArchiveModelUsage;
+  readonly stop?: import("./archive-text.js").ArchiveTextStop | null;
+  readonly output_ids?: {
+    readonly arrangement_id: string | null;
+    readonly proofread_id: string | null;
+    readonly document_version_id: string | null;
+    readonly annotation_id: string | null;
+  };
+  readonly pages?: {
+    readonly required: number;
+    readonly accepted: number;
+    readonly reused: number;
+    readonly pending: number;
+    readonly failed: number;
+  } | null;
   readonly literature_id: string;
   readonly asset_id: string;
-  readonly step: ArchiveStep;
+  readonly step: ArchiveStep | "document" | "structure";
   readonly status: ArchiveStepStatus;
   readonly input_sha256: string;
   readonly output: Readonly<Record<string, unknown>>;
@@ -40,6 +60,8 @@ export interface ArchiveStepReceipt {
   readonly output_tokens: number;
 }
 export interface ArchivePart {
+  readonly format?: "arranged-v2" | "legacy-v1" | "not-built";
+  readonly legacy_steps?: readonly ArchiveStepReceipt[];
   readonly asset_id: string;
   readonly asset_sha256: string;
   readonly part: "main" | "supplementary";
@@ -57,7 +79,7 @@ export interface ArchiveIssue {
   readonly literature_id: string;
   readonly asset_id: string;
   readonly part: "main" | "supplementary";
-  readonly step: ArchiveStep;
+  readonly step: ArchiveStep | "document" | "structure";
   readonly reason: string;
   readonly detail: Readonly<Record<string, unknown>>;
   readonly affects_readiness: boolean;
@@ -86,13 +108,32 @@ export interface ArchiveVersionEvent {
   readonly new_version: string | null;
   readonly created_at: string;
 }
+export class ArchiveContractObsoleteError extends Error {
+  readonly code = "archive-contract-obsolete";
+  constructor() {
+    super("archive contract obsolete");
+  }
+}
+export type ArchiveBuildRequestV2 = ArchiveBuildRequest;
 export function parseArchiveBuildRequest(value: unknown): ArchiveBuildRequest {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new ContractValidationError();
   const r = value as Record<string, unknown>;
   if (
+    r.schema_version !== 2 ||
+    ["document", "structure"].includes(String(r.from_step))
+  )
+    throw new ArchiveContractObsoleteError();
+  if (
     Object.keys(r).some(
-      (k) => !["literature_id", "mode", "from_step"].includes(k),
+      (k) =>
+        ![
+          "schema_version",
+          "literature_id",
+          "mode",
+          "from_step",
+          "retry_page_indexes",
+        ].includes(k),
     ) ||
     (r.mode !== undefined &&
       !["full", "legacy-vlm-markdown"].includes(String(r.mode))) ||
@@ -101,7 +142,19 @@ export function parseArchiveBuildRequest(value: unknown): ArchiveBuildRequest {
       !ARCHIVE_STEPS.includes(r.from_step as ArchiveStep))
   )
     throw new ContractValidationError();
+  const retry = r.retry_page_indexes ?? null;
+  if (
+    retry !== null &&
+    (!Array.isArray(retry) ||
+      retry.length > 10000 ||
+      retry.some((n) => !Number.isSafeInteger(n) || n < 0 || n > 9999) ||
+      new Set(retry).size !== retry.length ||
+      r.from_step !== "proofread")
+  )
+    throw new ContractValidationError();
   return Object.freeze({
+    schema_version: 2,
+    retry_page_indexes: retry,
     literature_id: parseLiteratureId(r.literature_id),
     mode: (r.mode ?? "full") as ArchiveMode,
     from_step: (r.from_step ?? null) as ArchiveStep | null,

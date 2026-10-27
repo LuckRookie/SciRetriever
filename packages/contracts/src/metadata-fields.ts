@@ -1,4 +1,10 @@
 import {
+  archiveHash,
+  archiveList,
+  type ArchiveMetadataFragmentEvidence,
+} from "./archive-publication.js";
+import { parseSourceSpan } from "./archive-text.js";
+import {
   ContractValidationError,
   parseLiteratureMetadata,
   parseProvenance,
@@ -26,6 +32,12 @@ export const METADATA_FIELDS = [
 export type MetadataField = (typeof METADATA_FIELDS)[number];
 export type MetadataValue = LiteratureMetadata[MetadataField];
 export type MetadataFieldEvidence =
+  | {
+      readonly source: "proofread";
+      readonly schema_version: 2;
+      readonly document_version_id: string;
+      readonly archive_fragments: readonly ArchiveMetadataFragmentEvidence[];
+    }
   | {
       readonly source: "authority";
       readonly observation_id: string;
@@ -115,20 +127,71 @@ export function parseMetadataFieldCandidate(
   const raw = object(row.evidence);
   let evidence: MetadataFieldEvidence;
   if (raw.source === "proofread") {
-    exact(raw, ["source", "document_version_id", "fragment_ids"]);
-    if (
-      !Array.isArray(raw.fragment_ids) ||
-      raw.fragment_ids.length === 0 ||
-      raw.fragment_ids.length > 64
-    )
-      fail();
-    const ids = raw.fragment_ids.map(text);
-    if (new Set(ids).size !== ids.length) fail();
-    evidence = {
-      source: "proofread",
-      document_version_id: text(raw.document_version_id),
-      fragment_ids: Object.freeze(ids),
-    };
+    if (raw.schema_version === 2) {
+      exact(raw, [
+        "source",
+        "schema_version",
+        "document_version_id",
+        "archive_fragments",
+      ]);
+      const fragments = archiveList(
+        raw.archive_fragments,
+        (v): ArchiveMetadataFragmentEvidence => {
+          const q = object(v);
+          if (q.kind === "document-segment") {
+            exact(q, ["kind", "document_version_id", "segment_ids"]);
+            return {
+              kind: q.kind,
+              document_version_id: text(q.document_version_id),
+              segment_ids: archiveList(q.segment_ids, text, 64),
+            };
+          }
+          exact(q, [
+            "kind",
+            "proofread_id",
+            "arrangement_id",
+            "raw_parse_id",
+            "leaf_id",
+            "source",
+            "drop_reason",
+          ]);
+          if (q.kind !== "arrangement-leaf" || q.drop_reason !== "bibliography")
+            fail();
+          return {
+            kind: q.kind,
+            proofread_id: text(q.proofread_id),
+            arrangement_id: archiveHash(q.arrangement_id),
+            raw_parse_id: text(q.raw_parse_id),
+            leaf_id: text(q.leaf_id),
+            source: parseSourceSpan(q.source),
+            drop_reason: q.drop_reason,
+          };
+        },
+        64,
+      );
+      if (!fragments.length) fail();
+      evidence = {
+        source: "proofread",
+        schema_version: 2,
+        document_version_id: text(raw.document_version_id),
+        archive_fragments: fragments,
+      };
+    } else {
+      exact(raw, ["source", "document_version_id", "fragment_ids"]);
+      if (
+        !Array.isArray(raw.fragment_ids) ||
+        raw.fragment_ids.length === 0 ||
+        raw.fragment_ids.length > 64
+      )
+        fail();
+      const ids = raw.fragment_ids.map(text);
+      if (new Set(ids).size !== ids.length) fail();
+      evidence = {
+        source: "proofread",
+        document_version_id: text(raw.document_version_id),
+        fragment_ids: Object.freeze(ids),
+      };
+    }
   } else {
     exact(raw, ["source", "observation_id", "provenance"]);
     if (raw.source !== "authority" && raw.source !== "manual") fail();

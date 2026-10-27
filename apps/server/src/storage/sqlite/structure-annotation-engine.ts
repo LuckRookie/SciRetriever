@@ -93,7 +93,7 @@ export function runAnnotationStorage(
   args: unknown,
 ): unknown {
   if (
-    ![11].includes(
+    ![12].includes(
       Number(
         one(db, "SELECT schema_version FROM schema_identity WHERE singleton=1")
           ?.schema_version,
@@ -135,10 +135,11 @@ export function runAnnotationStorage(
     if (document?.schema_version !== 2) fail("annotation-proofread-required");
     const before = state(db, id);
     if (
-      p.edit
+      a.schema_version === 1 &&
+      (p.edit
         ? a.method.mode !== "manual" ||
           a.method.base_annotation_id !== before.current?.annotation_id
-        : a.method.mode !== "automatic" || a.method.base_annotation_id !== null
+        : a.method.mode !== "automatic" || a.method.base_annotation_id !== null)
     )
       fail("annotation-method-conflict");
     if (before.part !== a.part) fail("annotation-part-stale");
@@ -176,9 +177,11 @@ export function runAnnotationStorage(
     }
     if (
       a.manual_revision !== before.manual_revision + (p.edit ? 1 : 0) ||
-      a.sections.filter((s) => s.locked).length !== locks.size ||
+      (a.schema_version === 1 &&
+        a.sections.filter((s) => s.locked).length !== locks.size) ||
       a.sections.some(
         (s) =>
+          a.schema_version === 1 &&
           s.locked &&
           (locks.get(s.section_id) !== s.role || s.role_source !== "manual"),
       )
@@ -235,7 +238,11 @@ export function runAnnotationStorage(
         m.byte_size,
         m.media_type,
         now,
-        Number(structureSatisfied(a.part, a.sections)),
+        Number(
+          a.schema_version === 1
+            ? structureSatisfied(a.part, a.sections)
+            : a.part === "main" && a.body_content_leaf_ids.length > 0,
+        ),
       );
     }
     const chosen = String(existing?.annotation_id ?? a.annotation_id),

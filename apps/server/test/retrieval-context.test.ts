@@ -580,7 +580,7 @@ describe("explicit retrieval projection and bounded Context", () => {
             { home: env.home },
           )
         ).value,
-      ).toMatchObject({ schema_version: 11, active_generation: null });
+      ).toMatchObject({ schema_version: 12, active_generation: null });
       const published = (
         await runCli(["maintenance", "rebuild-index"], { home: env.home })
       ).value as {
@@ -855,7 +855,7 @@ describe("explicit retrieval projection and bounded Context", () => {
         const inspected = inspectCatalogWithRetrieval(
           reader,
           {
-            schema_version: 11,
+            schema_version: 12,
             schema_fingerprint: SCHEMA_FINGERPRINT,
             schema_manifest: SCHEMA_MANIFEST,
             execution_schema_version: EXECUTION_SCHEMA_VERSION,

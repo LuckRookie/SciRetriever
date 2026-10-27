@@ -1159,7 +1159,12 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
         operations: [
           {
             operation: "build-archive",
-            request: { literature_id, mode: "full", from_step: null },
+            request: {
+              schema_version: 2,
+              literature_id,
+              mode: "full",
+              from_step: null,
+            },
           },
         ],
       });

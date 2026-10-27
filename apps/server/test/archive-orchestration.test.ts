@@ -13,7 +13,7 @@ it("requires explicit parsing, builds a durable archive, reuses model steps and 
     expect(e.parseCalls).toBe(0);
     expect(e.modelCalls).toBe(0);
     await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
-    expect((await e.app.archive.status(id)).missing_step).toBe("proofread");
+    expect((await e.app.archive.status(id)).missing_step).toBe("arrange");
     const first = await submit("archive-first");
     expect(
       first.failures,

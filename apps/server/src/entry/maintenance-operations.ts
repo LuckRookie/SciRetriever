@@ -1,6 +1,12 @@
+import {
+  archiveHash,
+  parseAssetId,
+  annotationInteger,
+} from "@sciretriever/contracts";
+import { ArchiveContractObsoleteError } from "@sciretriever/contracts";
+import { ArchiveTextError } from "../archive/text-source.js";
 import { recordOperation } from "../application/operations.js";
 import { activityContext } from "../logging/activity.js";
-import { saveProofread } from "./proofread-save.js";
 import { presentActors } from "../logging/actor-label.js";
 import {
   ContractValidationError,
@@ -94,6 +100,7 @@ export const MAINTENANCE_OPERATIONS = [
   "folders",
   "reading-open",
   "archive",
+  "archive-arrangement-edit",
   "tags",
   "archive-references",
   "metadata-edit",
@@ -141,7 +148,10 @@ async function performMaintenance(
   signal?: AbortSignal,
 ): Promise<unknown> {
   if (signal?.aborted) throw new ProductOperationError("operation-cancelled");
-  if (operation === "proofread-save") return saveProofread(app, input, signal);
+  if (operation === "archive-arrangement-edit")
+    return app.archiveArrangement.edit(input, activityContext().actor, signal);
+  if (operation === "proofread-save")
+    return app.archiveArrangement.save(input, activityContext().actor, signal);
   if (operation === "folders") return app.folders.manage(input, signal);
   if (operation === "reading-open") return app.folders.opened(input, signal);
   if (operation === "snapshot-rename")
@@ -171,35 +181,102 @@ async function performMaintenance(
       fields: result.field_states,
     };
   }
-  if (operation === "document-annotate" || operation === "document-role") {
-    if (!app.structureAnnotations)
-      throw new ProductOperationError("annotation-unavailable");
-    return operation === "document-annotate"
-      ? app.structureAnnotations.build(input, signal)
-      : app.structureAnnotations.setRole(input, signal);
-  }
-  if (operation === "document-publish-proofread")
-    return app.proofreadDocuments.publish(input, signal);
-  if (operation.startsWith("proofread-")) {
-    if (!app.proofreading)
-      throw new ProductOperationError("proofread-unavailable");
-    if (operation === "proofread-build") {
-      const r = await app.proofreading.build(input, signal);
-      return {
-        proofread_id: r.version.proofread_id,
-        content_sha256: r.version.content_sha256,
-        status: r.version.status,
-        stats: r.version.stats,
-        failure: r.version.failure,
-        pending_pages: r.version.pages.filter((p) => !p.checked),
-        published: r.published,
-        revision: r.revision,
-      };
+  if (
+    [
+      "document-annotate",
+      "proofread-build",
+      "document-publish-proofread",
+    ].includes(operation)
+  ) {
+    if (
+      !input ||
+      typeof input !== "object" ||
+      !("schema_version" in input) ||
+      input.schema_version !== 2
+    )
+      throw new ArchiveContractObsoleteError();
+    if (!app.archiveText)
+      throw new ArchiveTextError("archive-runtime-unavailable");
+    if (operation === "document-annotate") {
+      const r = operationRecord(input, [
+        "schema_version",
+        "document_version_id",
+        "arrangement_id",
+      ]);
+      return app.archiveText.annotate(
+        parseAssetId(r.document_version_id),
+        archiveHash(r.arrangement_id),
+        signal,
+      );
     }
-    if (operation === "proofread-decide")
-      return app.proofreading.decide(input, signal);
-    return app.proofreading.revoke(input, signal);
+    if (operation === "proofread-build") {
+      const r = operationRecord(input, [
+          "schema_version",
+          "asset_id",
+          "arrangement_id",
+          "retry_page_indexes",
+        ]),
+        asset = parseAssetId(r.asset_id),
+        state = await app.archiveText.storage.state(asset, signal),
+        current = state.current
+          ? await app.archiveText.storage.load(
+              String(state.current.proofread_id),
+              signal,
+            )
+          : null;
+      if (
+        !current ||
+        current.version.arrangement_id !== archiveHash(r.arrangement_id)
+      )
+        throw new ArchiveTextError("input-stale");
+      const indexes = r.retry_page_indexes;
+      if (
+        indexes !== null &&
+        (!Array.isArray(indexes) ||
+          indexes.length > 10000 ||
+          new Set(indexes).size !== indexes.length)
+      )
+        throw new ContractValidationError();
+      return app.archiveText.proofread(
+        asset,
+        current.version.draft_input.profile === "vlm-engine-markdown-only"
+          ? "legacy-vlm-markdown"
+          : "full",
+        indexes === null
+          ? null
+          : (indexes as unknown[]).map((i) => annotationInteger(i, 0, 9999)),
+        signal,
+      );
+    }
+    const r = operationRecord(input, [
+      "schema_version",
+      "literature_id",
+      "asset_id",
+      "proofread_id",
+      "expected_default_revision",
+    ]);
+    return app.archiveText.render(
+      parseLiteratureId(r.literature_id),
+      parseAssetId(r.asset_id),
+      signal,
+      {
+        proofread_id: parseAssetId(r.proofread_id),
+        default_revision:
+          r.expected_default_revision === null
+            ? null
+            : annotationInteger(r.expected_default_revision, 1),
+      },
+    );
   }
+  if (
+    operation === "document-annotate" ||
+    operation === "document-role" ||
+    operation === "proofread-build" ||
+    operation === "proofread-decide" ||
+    operation === "proofread-revoke" ||
+    operation === "document-publish-proofread"
+  )
+    throw new ArchiveContractObsoleteError();
   if (operation.startsWith("extraction-"))
     return executeExtraction(
       app.extractionDelivery,
@@ -257,6 +334,8 @@ export function isMaintenanceFailure(
   | ProofreadError
   | SnapshotError
   | ArchiveError
+  | ArchiveTextError
+  | ArchiveContractObsoleteError
   | TagError
   | MetadataFieldError
   | ArchiveReferenceError {
@@ -265,6 +344,8 @@ export function isMaintenanceFailure(
     error instanceof ProofreadError ||
     error instanceof SnapshotError ||
     error instanceof ArchiveError ||
+    error instanceof ArchiveTextError ||
+    error instanceof ArchiveContractObsoleteError ||
     error instanceof TagError ||
     error instanceof MetadataFieldError ||
     error instanceof ArchiveReferenceError ||

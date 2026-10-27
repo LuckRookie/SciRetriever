@@ -129,11 +129,15 @@ export async function analyzeDocumentSession(
         version.source_material_ref.literature_id !== item.literature_id
       )
         throw new KnowledgeAnalysisFailure("knowledge-input-invalidated");
+      // The verified arranged builder keeps deterministic scaffold bytes
+      // outside source leaf segments. Legacy documents cover every byte.
+      const scaffold = version.builder_version === "arranged-leaves-v2";
       let end = 0;
       const segments = await Promise.all(
         structure.segments.map(async (s) => {
           if (
-            s.start_utf8 !== end ||
+            s.start_utf8 < end ||
+            (!scaffold && s.start_utf8 !== end) ||
             s.end_utf8 <= end ||
             s.end_utf8 > bytes.length
           )
@@ -148,7 +152,7 @@ export async function analyzeDocumentSession(
           };
         }),
       );
-      if (end !== bytes.length)
+      if (!scaffold && end !== bytes.length)
         throw new KnowledgeAnalysisFailure("knowledge-input-invalidated");
       return { version, bytes, segments, sections: structure.sections };
     },

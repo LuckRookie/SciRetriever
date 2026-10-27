@@ -120,7 +120,12 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
       operations: [
         {
           operation: "build-archive",
-          request: { literature_id: literature, mode: "full", from_step: null },
+          request: {
+            schema_version: 2,
+            literature_id: literature,
+            mode: "full",
+            from_step: null,
+          },
         },
       ],
     });

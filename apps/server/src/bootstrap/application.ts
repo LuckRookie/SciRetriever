@@ -1,3 +1,6 @@
+import { ArchiveTextPipeline } from "../archive/text-pipeline.js";
+import { ArchiveArrangementAccess } from "../archive/arrangement-access.js";
+import { SqliteArchiveTextStorage } from "../storage/archive-text.js";
 import type { TypeScriptConfigurationSnapshot } from "../configuration/owner.js";
 import { configuredAcquisitionRoutes } from "../configuration/acquisition-selection.js";
 import type {
@@ -174,7 +177,6 @@ import {
 import type { RawParserBackend } from "../parsing/ports.js";
 import { ParsingFailure } from "../parsing/ports.js";
 import { RawParsingService } from "../parsing/raw-service.js";
-import { dshCorrector } from "../proofread/correction.js";
 import { pdfPages } from "../proofread/pdf-pages.js";
 import type { PdfPages } from "../proofread/contract.js";
 import { ProofreadService } from "../proofread/service.js";
@@ -204,6 +206,8 @@ import {
 import { dshTagModel } from "../tags/model.js";
 import { TagService } from "../tags/service.js";
 export interface Application {
+  readonly archiveArrangement: ArchiveArrangementAccess;
+  readonly archiveText: ArchiveTextPipeline | null;
   readonly snapshots: SnapshotService;
   readonly folders: FolderService;
   readonly archive: ArchiveService;
@@ -319,6 +323,7 @@ export type ProcessorReader = Pick<
   | "records"
 >;
 export interface QueryApplication {
+  readonly archiveArrangement?: ArchiveArrangementAccess;
   readonly usageEstimate?: (
     request: unknown,
     signal?: AbortSignal,
@@ -642,6 +647,7 @@ export async function createApplication(
   let proofreadDocuments: ProofreadDocumentService | undefined;
   let structureAnnotations: StructureAnnotationService | undefined;
   let proofreading: ProofreadService | undefined;
+  let archiveText: ArchiveTextPipeline | undefined;
   let valueVerifier: ProcessorValueVerifier | undefined;
   let rawParseStorage: SqliteRawParseStorage | undefined;
   let regionRenderer: PdfRegionRenderer | undefined;
@@ -1316,16 +1322,22 @@ export async function createApplication(
           }
           return regionRenderer;
         });
+      archiveText = new ArchiveTextPipeline(
+        new SqliteArchiveTextStorage(database, files),
+        rawParseStorage,
+        pages,
+        agents,
+        configuration.parsing.archive_profile,
+        async (signal) => {
+          if (!retrievalIndex) throw new Error("index-unavailable");
+          return retrievalIndex.refresh(signal);
+        },
+      );
       proofreading = new ProofreadService(
         rawParseStorage,
         proofreadStorage,
         pages,
-        await dshCorrector(
-          agents,
-          proofreadStorage,
-          pages,
-          configuration.proofread.max_calls_per_document,
-        ),
+        null,
         configuration.parsing.archive_profile,
       );
     }
@@ -1466,8 +1478,10 @@ export async function createApplication(
       new SqliteDocumentStorage(database, files),
       new SqliteAnnotationStorage(database, files),
       dshMetadataProposer(agents),
+      new SqliteArchiveTextStorage(database, files),
     );
     const archiveOrchestrator = new ArchiveOrchestrator(database, {
+      ...(archiveText ? { text: archiveText } : {}),
       archiveProfile: configuration.parsing.archive_profile,
       proofread: proofreading!,
       documents: proofreadDocuments,
@@ -1478,7 +1492,8 @@ export async function createApplication(
       metadataFields,
       method_sha256: await sha256(
         canonicalJsonBytes({
-          method: "archive-v1",
+          method: "archive-arrange-v2",
+          proofread: configuration.proofread,
           models: configuration.models,
           analyze: configuration.analyze,
           tags: configuration.tags,
@@ -1585,6 +1600,11 @@ export async function createApplication(
       folders: new FolderService(database),
       snapshots: new SnapshotService(database, library),
       archive: new ArchiveService(database, processingTasks, library),
+      archiveText: archiveText ?? null,
+      archiveArrangement: new ArchiveArrangementAccess(
+        new SqliteArchiveTextStorage(database, files),
+        archiveText,
+      ),
       tags,
       metadataFields,
       archiveReferences,
@@ -1918,7 +1938,8 @@ export async function createQueryApplication(
       identities,
       await sha256(
         canonicalJsonBytes({
-          method: "archive-v1",
+          method: "archive-arrange-v2",
+          proofread: configuration.proofread,
           models: configuration.models,
           analyze: configuration.analyze,
           tags: configuration.tags,
@@ -1947,6 +1968,16 @@ export async function createQueryApplication(
       previewTags,
       configuration.parsing.archive_profile,
       (state, signal) => archiveReuse.reusable(state, signal),
+      await sha256(
+        canonicalJsonBytes({
+          method: "archive-arrange-v2",
+          proofread: configuration.proofread,
+          models: configuration.models,
+          analyze: configuration.analyze,
+          tags: configuration.tags,
+        }),
+      ),
+      (part, signal) => archiveReuse.textWork(part, signal),
     );
     return {
       usageEstimate: (value, signal) => estimating.estimate(value, signal),
@@ -1972,6 +2003,9 @@ export async function createQueryApplication(
       folders: new FolderService(database),
       snapshots: new SnapshotService(database, literature),
       archive: new ArchiveReader(database),
+      archiveArrangement: new ArchiveArrangementAccess(
+        new SqliteArchiveTextStorage(database, files),
+      ),
       tags: new TagService(
         database,
         new SqliteDocumentStorage(database, files),

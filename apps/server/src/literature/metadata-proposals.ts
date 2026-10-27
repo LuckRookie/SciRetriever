@@ -11,6 +11,7 @@ import {
   type LiteratureMetadata,
 } from "@sciretriever/contracts";
 export interface MetadataFragment {
+  readonly evidence?: import("@sciretriever/contracts").ArchiveMetadataFragmentEvidence;
   readonly fragment_id: string;
   readonly page: number;
   readonly role: string;
@@ -176,11 +177,22 @@ export function validateMetadataProposals(
       parseMetadataFieldCandidate({
         field,
         value: metadata[field],
-        evidence: {
-          source: "proofread",
-          document_version_id: document,
-          fragment_ids: p.fragment_ids,
-        },
+        evidence: (p.fragment_ids as string[]).every(
+          (id) => known.get(id)!.evidence,
+        )
+          ? {
+              source: "proofread",
+              schema_version: 2,
+              document_version_id: document,
+              archive_fragments: (p.fragment_ids as string[]).map(
+                (id) => known.get(id)!.evidence!,
+              ),
+            }
+          : {
+              source: "proofread",
+              document_version_id: document,
+              fragment_ids: p.fragment_ids,
+            },
       }),
     );
   }

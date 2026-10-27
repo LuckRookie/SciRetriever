@@ -318,6 +318,14 @@ export function renderStatus(
     ),
     colors.heading("Readiness"),
     table(["Owner", "Target", "State", "Next step"], readinessRows, colors),
+    ...(status.diagnostics?.length
+      ? [
+          colors.heading("Configuration warnings"),
+          ...status.diagnostics.map(
+            (d) => `${colors.warning(d.code)} · ${d.path}\n${d.message}`,
+          ),
+        ]
+      : []),
     colors.muted("network_performed=false · browser_launched=false"),
   ].join("\n\n");
 }

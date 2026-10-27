@@ -1,3 +1,5 @@
+import { archiveChatReply } from "./archive-chat-fixture.js";
+import { imageBytes } from "./archive-text-fixture.js";
 import { rawParserFixture } from "./raw-parser-fixture.js";
 import { dshChatReply } from "./dsh-analysis-fixture.js";
 import type { StagedParserResource } from "../src/parsing/ports.js";
@@ -30,7 +32,7 @@ export interface ModelInput {
   readonly [key: string]: unknown;
 }
 const baseConfiguration =
-  '[providers.fixture]\napi="openai-chat-completions"\nbase_url="http://127.0.0.1:9/v1"\n[models."fixture/model"]\nreasoning="medium"\nstream=false\n[analyze]\nmodel="fixture/model"\n';
+  '[providers.fixture]\napi="openai-chat-completions"\nbase_url="http://127.0.0.1:9/v1"\n[models."fixture/model"]\nreasoning="medium"\nimage=true\nstream=false\n[analyze]\nmodel="fixture/model"\n';
 export async function coreProcessingFixture(
   optionsInput: {
     homeParent?: string;
@@ -38,6 +40,7 @@ export async function coreProcessingFixture(
     offline?: boolean;
     sourcePdf?: Uint8Array;
     pageCount?: number;
+    pageMethod?: string;
     analysisModel?: boolean;
     textLayer?: (text: string) => string;
     headerOnly?: boolean;
@@ -64,6 +67,7 @@ export async function coreProcessingFixture(
   );
   await initializeCatalogSchema(join(home, "catalog.sqlite"));
   let text = `# ${FIXTURE_TITLE}\nDOI: ${FIXTURE_DOI}\nA synthetic finding.\n`;
+  const assetTexts = new Map<string, string>();
   let resources: readonly StagedParserResource[] = [];
   let parseCalls = 0;
   let parseHook: (signal?: AbortSignal) => Promise<void> = async () => {};
@@ -118,7 +122,7 @@ export async function coreProcessingFixture(
       : {}),
     ...(optionsInput.metadata ? { metadata: optionsInput.metadata } : {}),
     proofreadPages: {
-      method: "synthetic-pdf-page-v1",
+      method: optionsInput.pageMethod ?? "synthetic-pdf-page-v1",
       async inspect(_asset, _hash, signal) {
         signal?.throwIfAborted();
         return Array.from(
@@ -126,8 +130,11 @@ export async function coreProcessingFixture(
           (_, page) => ({
             page,
             kind: "text-layer",
-            text: optionsInput.textLayer?.(text) ?? text,
-            visible_glyphs: text.length,
+            text:
+              optionsInput.textLayer?.(assetTexts.get(_asset) ?? text) ??
+              assetTexts.get(_asset) ??
+              text,
+            visible_glyphs: (assetTexts.get(_asset) ?? text).length,
             hidden_glyphs: 0,
             unmapped_glyphs: 0,
             has_graphics: false,
@@ -135,7 +142,12 @@ export async function coreProcessingFixture(
         );
       },
       async image() {
-        throw new Error("Unexpected fixture image request");
+        return {
+          media_type: "image/png",
+          data: imageBytes,
+          width: 1,
+          height: 1,
+        };
       },
     },
     parsing: {
@@ -143,6 +155,7 @@ export async function coreProcessingFixture(
         {
           parse: async (request, signal) => {
             parseCalls++;
+            assetTexts.set(request.source_asset_id, text);
             await parseHook(signal);
             const bytes = Buffer.from(text);
             return {
@@ -196,6 +209,13 @@ export async function coreProcessingFixture(
       optionsInput.inspectResponseSchema?.(
         wire.response_format?.json_schema?.schema,
       );
+      if (wire.tools?.some((t) => t.function.name === "read_blocks")) {
+        return {
+          status: 200,
+          headers: [],
+          body: Buffer.from(JSON.stringify(archiveChatReply(wire))),
+        };
+      }
       if (wire.tools?.some((t) => t.function.name === "submit_result")) {
         const value = await dshChatReply(wire, (input) =>
           modelReply(input, request.signal),

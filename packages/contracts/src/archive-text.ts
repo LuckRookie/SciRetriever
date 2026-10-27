@@ -237,7 +237,13 @@ export const ARCHIVE_TEXT_STOP_CODES = [
 ] as const;
 export interface ArchiveTextStop {
   readonly code: (typeof ARCHIVE_TEXT_STOP_CODES)[number];
-  readonly step: "arrange" | "proofread";
+  readonly step:
+    | "arrange"
+    | "proofread"
+    | "render"
+    | "metadata"
+    | "references"
+    | "tags";
   readonly scope: "part" | "page";
   readonly page_index: number | null;
   readonly retryable: boolean;
@@ -847,7 +853,14 @@ export function parseArchiveTextStop(v: unknown): ArchiveTextStop {
     fail();
   return {
     code,
-    step: choice(r.step, ["arrange", "proofread"] as const),
+    step: choice(r.step, [
+      "arrange",
+      "proofread",
+      "render",
+      "metadata",
+      "references",
+      "tags",
+    ] as const),
     scope,
     page_index,
     retryable: bool(r.retryable),
