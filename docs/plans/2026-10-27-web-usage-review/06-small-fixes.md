@@ -47,6 +47,7 @@
   - 从各轮测试日志里收集偶发失败的用例（Agent 监控等），复现并查清根因，不靠放宽超时。
   - 修复后每个相关文件连续 5 次通过，记录命令与结果。
   - 已知一例（2026-10-28 Claude 核实）：`apps/server/test/document-read.test.ts` 的 “keeps unheaded text reachable and ignores late or mismatched browser read replies” 在干净的 HEAD（`bd1512e`）上也稳定失败。第三次 reload 后，错配提示要 1 秒以上才出现，而该处 poll 用的是默认超时；把它补到与前两处相同的 10 秒后，又在后面的 `delayed` poll 失败。要查清为什么 reload 后的读取变慢，不能只加超时。
+  - 第二例（2026-10-28 Claude 核实）：`apps/web/test/next-reader-boundaries.test.ts` 的 “keeps encrypted PDF rejection at ingestion and reports no accepted PDF” 在 `7182549`（01 第三段之前）上同样失败。没有 PDF 时，“正在核对固定材料与文档版本…”一直不消失，与状态区同时存在，严格选择器取到两处。要查清读取为什么停在核对中，可能与第一例同源。
 
 ## 验证
 
