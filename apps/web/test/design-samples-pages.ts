@@ -207,6 +207,26 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     ready: '[aria-label="文献选择"] .selection-group',
   },
   {
+    id: "archive-estimate",
+    name: "建档 · 发起前预计消耗",
+    route: route("lib", "&sort=title-asc"),
+    interaction: "依次勾选，直到选中两篇尚未建档的文献，点“建档”",
+    prepare: async (p) => {
+      const rows = p.locator(".paper-row");
+      await rows.nth(1).waitFor();
+      const build = p
+        .getByRole("region", { name: "文献选择" })
+        .getByRole("button", { name: /^建档 \d+$/ });
+      for (let n = 0; n < 40; n++) {
+        await rows.nth(n).focus();
+        await p.keyboard.press("Space");
+        if ((await build.textContent()) === "建档 2") break;
+      }
+      await build.click();
+    },
+    ready: '[aria-label="启动前用量预估"] table',
+  },
+  {
     id: "library-folder",
     name: "文献库 · 文件夹",
     route: (ids) =>
@@ -266,6 +286,17 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     name: "阅读 · 编辑",
     route: reader("edit"),
     ready: ".proofread-editor textarea",
+  },
+  {
+    id: "reader-edit-dropped",
+    name: "阅读 · 编辑 · 显示已删除",
+    route: reader("edit"),
+    interaction: "打开“显示已删除”",
+    prepare: async (p) => {
+      await p.locator(".proofread-editor textarea").first().waitFor();
+      await p.getByText("显示已删除", { exact: true }).click();
+    },
+    ready: ".dropped-leaf",
   },
   {
     id: "reader-results",
@@ -448,6 +479,16 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     name: "任务 · 详情",
     route: (ids) => `/?view=task&task=${ids.task}`,
     ready: '[aria-label="任务详情"]',
+  },
+  {
+    id: "task-detail-archive",
+    name: "任务 · 建档步骤",
+    route: (ids) => `/?view=task&task=${ids.archiveTask}`,
+    interaction: "滚到建档步骤",
+    prepare: async (p) => {
+      await p.locator(".archive-run-steps").scrollIntoViewIfNeeded();
+    },
+    ready: ".archive-run-steps",
   },
   {
     id: "agents",

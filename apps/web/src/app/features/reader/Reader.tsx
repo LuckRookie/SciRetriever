@@ -44,7 +44,7 @@ import {
   TechDetails,
   RichTitle,
 } from "../../components/index.js";
-import { archiveQuery, rows } from "../../data/archive.js";
+import { archiveJsonStream, archiveQuery, rows } from "../../data/archive.js";
 import {
   paperTitle,
   paperTitleParts,
@@ -52,6 +52,8 @@ import {
 } from "../../data/library.js";
 import { preferences } from "../../data/preferences.js";
 import { useApi } from "../../data/query.js";
+import type { ApiClient } from "../../data/api.js";
+import { record } from "../../data/wire.js";
 import {
   navigate,
   sourceParameterKeys,
@@ -252,25 +254,8 @@ export default function Reader() {
       onSegment: (segment) => {
         const material = sources.data?.material;
         if (!material) return;
-        void archiveQuery(
-          api,
-          "proofread-inspect",
-          {
-            asset_id: material.asset_id,
-            block_id: segment,
-            offset: 0,
-            limit: 1,
-            unresolved_only: false,
-          },
-          controller.signal,
-        )
-          .then((value) => {
-            const item = rows(value)[0];
-            const block = item?.block ?? item?.draft;
-            const page =
-              block && typeof block === "object" && "page" in block
-                ? Number(block.page) + 1
-                : 1;
+        void leafPage(api, material.asset_id, segment, controller.signal)
+          .then((page) => {
             readerActions.current.openPaper(id, "edit", {
               asset: material.asset_id,
               assetHash: material.asset_sha256,
@@ -1160,4 +1145,46 @@ export default function Reader() {
       )}
     </section>
   );
+}
+
+/** The 1-based PDF page a reading segment came from, for arranged and old drafts alike. */
+async function leafPage(
+  api: ApiClient,
+  asset: string,
+  segment: string,
+  signal: AbortSignal,
+) {
+  const request = {
+    asset_id: asset,
+    block_id: segment,
+    limit: 1,
+    unresolved_only: false,
+  };
+  const head = record(
+    await archiveQuery(
+      api,
+      "proofread-inspect",
+      { ...request, offset: 0 },
+      signal,
+    ),
+    "inspect",
+  );
+  if (head.format === "arranged-v2") {
+    const { value } = await archiveJsonStream(
+      api,
+      "proofread-inspect",
+      request,
+      "offset",
+      signal,
+    );
+    const leaf = rows(value, "leaves")[0]?.leaf;
+    return leaf && typeof leaf === "object" && "page_index" in leaf
+      ? Number(leaf.page_index) + 1
+      : 1;
+  }
+  const item = rows(head)[0];
+  const block = item?.block ?? item?.draft;
+  return block && typeof block === "object" && "page" in block
+    ? Number(block.page) + 1
+    : 1;
 }

@@ -82,14 +82,26 @@ export const archiveStrings = {
     incomplete: "读取不完整",
   },
   steps: {
+    arrange: "整理",
     proofread: "校订",
-    document: "全文发布",
-    structure: "章节结构",
+    render: "全文发布",
+    document: "全文发布（旧流程）",
+    structure: "章节结构（旧流程）",
     metadata: "元数据",
     references: "引用关系",
     tags: "文献标签",
   },
 } as const;
+
+/** Why a leaf was left out of the reading text; the six reasons are closed by the archive contract. */
+export const dropReasons: Readonly<Record<string, string>> = {
+  header: "页眉",
+  footer: "页脚",
+  interface: "网页界面文字",
+  bibliography: "书目信息",
+  copyright: "版权声明",
+  decoration: "装饰性内容",
+};
 
 export function archiveReason(code: string): string {
   return (
@@ -103,6 +115,20 @@ export function archiveReason(code: string): string {
         "proofread-incomplete": "校订尚未完成",
         "correction-model-unconfigured": "矫正模型未配置",
         "correction-budget-exhausted": "本次矫正预算已用完，可继续",
+        "page-content-missing": "有页面没有解析出正文",
+        "validation-repeated": "同一校验错误连续出现",
+        "no-progress": "模型连续多次没有进展",
+        "page-tools-unavailable": "页面图像暂不可读",
+        "model-failed": "模型调用失败",
+        "request-too-large": "单次请求过大",
+        "response-too-large": "模型回复过大",
+        "source-integrity": "原始材料校验未通过",
+        "publication-conflict": "内容已被其他操作更新",
+        "render-failed": "全文渲染失败",
+        "input-stale": "原始解析已变化",
+        "input-missing": "缺少原始解析",
+        interrupted: "任务被中断",
+        "configuration-option-removed": "配置中有已删除的选项",
         "manual-conflict": "初稿已变化，请核对人工修订",
         "metadata-incomplete": "元数据字段不完整",
         "structure-unsatisfied": "章节结构待确认",
@@ -204,6 +230,10 @@ export function serviceMessage(code: string): string {
 }
 
 export const sectionRoleNames: Record<string, string> = {
+  title: "标题",
+  authors: "作者",
+  "end-matter": "文末信息",
+  additional: "其他章节",
   "front-matter": "前置信息",
   abstract: "摘要",
   keywords: "关键词",
@@ -280,7 +310,10 @@ export function estimateStageName(kind: string) {
         document: "逐篇处理",
         synthesis: "综合汇总",
         "mapped-documents": "逐篇阅读",
+        arrange: "整理",
         proofread: "校订",
+        render: "全文发布",
+        references: "引用关系",
         structure: "结构",
         metadata: "元数据",
         tags: "标签",

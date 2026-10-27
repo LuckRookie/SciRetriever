@@ -21,6 +21,7 @@ import {
   Icon,
   IconButton,
   PageHeader,
+  PageNote,
   Radio,
   RadioGroup,
   Section,
@@ -821,6 +822,17 @@ export default function Settings() {
                     description="元数据和章节判定使用“模型”分区的分析模型。"
                     action={saveButton(["tags", "proofread"], "保存建档设置")}
                   >
+                    {readiness.data?.diagnostics?.some(
+                      (d) => d.code === "configuration-option-removed",
+                    ) ? (
+                      <PageNote>
+                        配置文件里还有已删除的“每篇矫正调用上限”（
+                        <code>proofread.max_calls_per_document</code>
+                        ）。它不再生效：整理与校订在同一校验错误连续出现 3
+                        次，或连续 8
+                        次调用没有进展时停下。可以从配置文件中删去这一行。
+                      </PageNote>
+                    ) : null}
                     <Definitions>
                       {[
                         ["max_per_literature", "每篇标签上限", 1, 32],
@@ -842,23 +854,6 @@ export default function Settings() {
                           />
                         </Definition>
                       ))}
-                      <Definition
-                        term="每篇矫正调用上限"
-                        description="1–10,000"
-                      >
-                        <NumberField
-                          live
-                          label="每篇矫正调用上限"
-                          minValue={1}
-                          maxValue={10000}
-                          value={Number(
-                            value("proofread", "max_calls_per_document") ?? 64,
-                          )}
-                          onChange={(v) =>
-                            edit("proofread", "max_calls_per_document", v)
-                          }
-                        />
-                      </Definition>
                       <Definition
                         term="解析 profile"
                         description="部署配置，只读。"

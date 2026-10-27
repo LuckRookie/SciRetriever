@@ -1,7 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import {
-  MAIN_SECTION_ROLES,
-  SUPPLEMENTARY_SECTION_ROLES,
   parseStructureAnnotation,
   parseDocumentReadResult,
 } from "@sciretriever/contracts";
@@ -9,10 +7,9 @@ import {
   Button,
   Disclosure,
   ErrorNotice,
-  Select,
   Skeleton,
 } from "../../components/index.js";
-import { archiveQuery, useArchiveAction } from "../../data/archive.js";
+import { archiveQuery } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
 import { record } from "../../data/wire.js";
 import { navigate } from "../../data/url.js";
@@ -24,8 +21,7 @@ export function StructurePanel({
   id: string;
   document: string;
 }) {
-  const api = useApi(),
-    action = useArchiveAction();
+  const api = useApi();
   const query = useQuery({
     queryKey: ["document", "annotation", document],
     queryFn: async ({ signal }) => {
@@ -92,56 +88,22 @@ export function StructurePanel({
   return (
     <section aria-label="章节、图表与参考文献">
       <h3>章节角色</h3>
-      {action.error ? (
-        <ErrorNotice message={errorMessage(action.error)} />
-      ) : null}
       <p className="ui-description">
-        修正角色会锁定该章节，并将读取此部分的既有结果标为过时。
+        {a.schema_version === 2
+          ? "章节归属来自整理结果，不调用模型。要调整某段内容的归属，请在校订稿里恢复或改动它。"
+          : "这是旧建档流程判定的章节角色，只能查看。重新建档后按新的章节归属显示。"}
       </p>
-      {a.sections.map((section, index) => (
-        <div className="archive-field" key={section.section_id}>
-          <Select
-            label={titles.get(section.section_id) ?? `章节 ${index + 1}`}
-            value={section.role}
-            onChange={(role) =>
-              action.mutate({
-                name: "document-role",
-                request: {
-                  document_version_id: document,
-                  section_id: section.section_id,
-                  role,
-                  expected_manual_revision: a.manual_revision,
-                  actor: api.actor,
-                },
-              })
-            }
-            options={(a.part === "main"
-              ? MAIN_SECTION_ROLES
-              : SUPPLEMENTARY_SECTION_ROLES
-            ).map((value) => ({ value, label: roles[value] ?? value }))}
-          />
-          {section.locked ? (
-            <Button
-              variant="text"
-              size="compact"
-              onPress={() =>
-                action.mutate({
-                  name: "document-role",
-                  request: {
-                    document_version_id: document,
-                    section_id: section.section_id,
-                    role: null,
-                    expected_manual_revision: a.manual_revision,
-                    actor: api.actor,
-                  },
-                })
-              }
-            >
-              解除角色锁定
-            </Button>
-          ) : null}
-        </div>
-      ))}
+      <dl className="structure-roles">
+        {a.sections.map((section, index) => (
+          <div key={section.section_id}>
+            <dt>{titles.get(section.section_id) ?? `章节 ${index + 1}`}</dt>
+            <dd>
+              {roles[section.role] ?? section.role}
+              {section.locked ? " · 人工锁定" : ""}
+            </dd>
+          </div>
+        ))}
+      </dl>
       <Disclosure title={`图表 · ${a.figures.length}`}>
         {a.figures.map((f, index) => (
           <p key={f.object_segment_id}>

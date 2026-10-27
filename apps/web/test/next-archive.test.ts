@@ -331,10 +331,15 @@ it("locks an edited block, marks its summary stale and locates the fixed PDF reg
     });
     await field.waitFor();
     const original = await field.inputValue();
-    await field.fill(original + "\n\nManually corrected measurements\n\n");
+    // Arranged drafts accept word edits inside an existing paragraph; new paragraphs have no source.
+    const lines = original.split("\n"),
+      prose = lines.findIndex((l) => /^[A-Za-z][^ ]* [^ ]/.test(l));
+    expect(prose).toBeGreaterThanOrEqual(0);
+    lines[prose] = lines[prose]!.replace(" ", " manually corrected ");
+    await field.fill(lines.join("\n"));
     await editor.getByRole("button", { name: "保存修订", exact: true }).click();
     await p
-      .getByText("修订已保存，全文、结构与引用已重建。", { exact: true })
+      .getByText("修订已保存，全文已重新生成。", { exact: true })
       .waitFor();
     expect(
       (await w.env.app.processorRead!.byId(result_id))!.freshness?.state,

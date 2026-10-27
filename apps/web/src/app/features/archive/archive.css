@@ -283,6 +283,25 @@
 .vocabulary-detail p {
   margin: 0;
 }
+.structure-roles {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-4);
+}
+.structure-roles > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  padding-block: var(--space-1);
+  border-bottom: 1px solid var(--line);
+}
+.structure-roles dt {
+  overflow-wrap: anywhere;
+}
+.structure-roles dd {
+  margin: 0;
+  color: var(--fg2);
+}
 @media (max-width: 720px) {
   .vocabulary-table :is(th, td):nth-child(2) {
     display: none;

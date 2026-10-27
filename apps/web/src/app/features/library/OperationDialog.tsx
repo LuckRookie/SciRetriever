@@ -159,6 +159,7 @@ export function OperationDialog({
           {
             operation: "build",
             request: {
+              schema_version: 2,
               selector: { kind: "literatures", literature_ids: unique },
               mode: "full",
               from_step: null,

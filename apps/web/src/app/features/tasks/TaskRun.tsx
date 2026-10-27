@@ -5,6 +5,7 @@ import { useApi } from "../../data/query.js";
 import { record } from "../../data/wire.js";
 import { navigate } from "../../data/url.js";
 import {
+  archiveReason,
   archiveStrings,
   errorMessage,
   processorName,
@@ -104,7 +105,9 @@ export function TaskRun({ id }: { id: string }) {
                   token
                 </p>
               ) : null}
-              {steps.length ? (
+              {item.archive ? (
+                <ArchiveSteps value={record(item.archive, "archive steps")} />
+              ) : steps.length ? (
                 <ol className="task-step-list">
                   {steps.map((s) => (
                     <li key={`${s.asset_id}:${s.step}`}>
@@ -331,5 +334,105 @@ function MappedPapers({ id, target }: { id: string; target: string }) {
         </Button>
       ) : null}
     </section>
+  );
+}
+
+const ARCHIVE_ORDER = [
+  "arrange",
+  "proofread",
+  "render",
+  "metadata",
+  "references",
+  "tags",
+];
+const stepStatus: Readonly<Record<string, string>> = {
+  done: "完成",
+  running: "进行中",
+  pending: "等待",
+  unavailable: "暂不可用",
+  failed: "停下",
+};
+/** Flow X steps for one paper: page progress, actual usage and why a step stopped. */
+function ArchiveSteps({ value }: { value: Record<string, unknown> }) {
+  const all = rows(value, "steps"),
+    assets = [...new Set(all.map((s) => String(s.asset_id)))];
+  return (
+    <>
+      {assets.map((asset, index) => (
+        <ol
+          key={asset}
+          className="task-step-list archive-run-steps"
+          aria-label={
+            assets.length > 1 ? `材料 ${index + 1} 的建档步骤` : "建档步骤"
+          }
+        >
+          {ARCHIVE_ORDER.map((step) => {
+            const s = all.find((r) => r.asset_id === asset && r.step === step);
+            const pages = s?.pages ? record(s.pages, "pages") : null,
+              usage = s?.usage ? record(s.usage, "usage") : null,
+              stop = s?.stop ? record(s.stop, "stop") : null;
+            return (
+              <li key={step} data-status={String(s?.status ?? "pending")}>
+                <strong>
+                  {
+                    archiveStrings.steps[
+                      step as keyof typeof archiveStrings.steps
+                    ]
+                  }
+                </strong>{" "}
+                · {stepStatus[String(s?.status ?? "pending")] ?? "停下"}
+                {pages && Number(pages.required) > 0 ? (
+                  <span>
+                    {" "}
+                    · {Number(pages.accepted)} / {Number(pages.required)} 页
+                    {Number(pages.failed)
+                      ? `，${Number(pages.failed)} 页停下`
+                      : ""}
+                  </span>
+                ) : null}
+                {usage && Number(usage.calls) > 0 ? (
+                  <span className="ui-description">
+                    {" "}
+                    · {Number(usage.calls)} 次调用 · 输入{" "}
+                    {usage.input_tokens == null
+                      ? "未报告"
+                      : Number(usage.input_tokens).toLocaleString()}{" "}
+                    / 输出{" "}
+                    {usage.output_tokens == null
+                      ? "未报告"
+                      : Number(usage.output_tokens).toLocaleString()}{" "}
+                    token
+                  </span>
+                ) : null}
+                {stop ? <StopReason stop={stop} /> : null}
+                {!stop && s?.status === "failed" && s.reason ? (
+                  <p>{archiveReason(String(s.reason))}</p>
+                ) : null}
+              </li>
+            );
+          })}
+        </ol>
+      ))}
+    </>
+  );
+}
+function StopReason({ stop }: { stop: Record<string, unknown> }) {
+  const validation = stop.validation
+      ? record(stop.validation, "validation")
+      : null,
+    progress = stop.progress ? record(stop.progress, "progress") : null;
+  return (
+    <p className="archive-stop">
+      停下原因：{archiveReason(String(stop.code))}
+      {typeof stop.page_index === "number"
+        ? `（第 ${stop.page_index + 1} 页）`
+        : ""}
+      {validation
+        ? `。同一错误连续 ${Number(validation.consecutive)} 次，达到 ${Number(validation.threshold)} 次即停。`
+        : progress
+          ? `。连续 ${Number(progress.consecutive_calls)} 次调用没有进展，达到 ${Number(progress.threshold)} 次即停。`
+          : "。"}
+      {stop.retryable ? "可以继续建档。" : ""}
+    </p>
   );
 }

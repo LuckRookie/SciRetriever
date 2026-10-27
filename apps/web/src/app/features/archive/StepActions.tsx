@@ -10,7 +10,14 @@ import {
 import { archiveQuery, rows, useArchiveAction } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
 import { record } from "../../data/wire.js";
-import { archiveStrings, errorMessage } from "../../strings.js";
+import { errorMessage } from "../../strings.js";
+
+const stepLabels = {
+  proofread: "校订",
+  render: "全文发布",
+  structure: "章节注释",
+  references: "引用关系",
+} as const;
 
 /** Explicit single-stage operations reuse the same public contracts as CLI/MCP. */
 export function StepActions({ id }: { id: string }) {
@@ -38,10 +45,23 @@ export function StepActions({ id }: { id: string }) {
           signal,
         ),
       ]);
-      return {
-        parts: rows(status, "parts"),
-        documents: rows(documents, "parts"),
-      };
+      const parts = rows(status, "parts");
+      const arrangements = await Promise.all(
+        parts.map((p) =>
+          archiveQuery(
+            api,
+            "archive-arrangement",
+            {
+              schema_version: 2,
+              asset_id: p.asset_id,
+              proofread_id: null,
+              kind: "summary",
+            },
+            signal,
+          ).then((v) => record(v, "arrangement summary")),
+        ),
+      );
+      return { parts, documents: rows(documents, "parts"), arrangements };
     },
   });
   const parts = state.data?.parts ?? [],
@@ -52,14 +72,22 @@ export function StepActions({ id }: { id: string }) {
   const current = document?.default
     ? record(document.default, "document default")
     : null;
+  const arrangement = part
+    ? state.data?.arrangements[parts.indexOf(part)]
+    : undefined;
+  const arrangementId =
+    arrangement?.format === "arranged-v2" &&
+    typeof arrangement.arrangement_id === "string"
+      ? arrangement.arrangement_id
+      : null;
   const allowed =
     !!part &&
     (step === "proofread"
-      ? Array.isArray(part.raw_profiles) && part.raw_profiles.length > 0
-      : step === "document"
-        ? part.proofread_complete === true
+      ? arrangementId !== null
+      : step === "render"
+        ? part.proofread_complete === true && arrangementId !== null
         : step === "structure"
-          ? !!part.document_version_id
+          ? !!part.document_version_id && arrangementId !== null
           : part.part === "main" &&
             !!part.document_version_id &&
             !!part.structure_annotation_id);
@@ -68,11 +96,20 @@ export function StepActions({ id }: { id: string }) {
     setNotice("");
     const operation =
       step === "proofread"
-        ? { name: "proofread-build", request: { asset_id: part.asset_id } }
-        : step === "document"
+        ? {
+            name: "proofread-build",
+            request: {
+              schema_version: 2,
+              asset_id: part.asset_id,
+              arrangement_id: arrangementId,
+              retry_page_indexes: null,
+            },
+          }
+        : step === "render"
           ? {
               name: "document-publish-proofread",
               request: {
+                schema_version: 2,
                 literature_id: id,
                 asset_id: part.asset_id,
                 proofread_id: part.proofread_id,
@@ -83,8 +120,9 @@ export function StepActions({ id }: { id: string }) {
             ? {
                 name: "document-annotate",
                 request: {
+                  schema_version: 2,
                   document_version_id: part.document_version_id,
-                  max_prefix_characters: 1024,
+                  arrangement_id: arrangementId,
                 },
               }
             : {
@@ -148,24 +186,21 @@ export function StepActions({ id }: { id: string }) {
             setStep(v);
             setNotice("");
           }}
-          options={["proofread", "document", "structure", "references"].map(
-            (value) => ({
-              value,
-              label:
-                archiveStrings.steps[
-                  value as keyof typeof archiveStrings.steps
-                ],
-            }),
-          )}
+          options={Object.entries(stepLabels).map(([value, label]) => ({
+            value,
+            label,
+          }))}
         />
         <p>
-          {step === "proofread" || step === "structure"
-            ? "此步骤可能调用模型。"
-            : "此步骤不调用模型。"}
+          {step === "proofread" ? "此步骤会调用模型。" : "此步骤不调用模型。"}
           仅执行所选步骤，不自动继续其他加工。
         </p>
         {!allowed && !state.isPending ? (
-          <p>所选部分尚不具备此步骤需要的材料，请先完成前置步骤。</p>
+          <p>
+            {part && !arrangementId
+              ? "所选部分还没有按新流程整理，请先发起建档。"
+              : "所选部分尚不具备此步骤需要的材料，请先完成前置步骤。"}
+          </p>
         ) : null}
         {notice ? <p role="status">{notice}</p> : null}
       </Dialog>

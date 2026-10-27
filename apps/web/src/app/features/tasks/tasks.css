@@ -8,8 +8,10 @@
     display: grid;
     gap: 2px;
   }
+  /* minmax(0, 1fr): one unbreakable line must not widen the whole panel past a narrow screen. */
   .task-detail {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-4);
   }
   .task-detail h2 {
@@ -20,6 +22,24 @@
     flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
+  }
+  .archive-run-steps {
+    display: grid;
+    gap: var(--space-2);
+    margin: var(--space-3) 0;
+    padding-left: var(--space-5);
+    font-variant-numeric: tabular-nums;
+  }
+  .archive-run-steps li[data-status="pending"] {
+    color: var(--fg3);
+  }
+  .archive-run-steps li[data-status="failed"] > strong {
+    color: var(--t-red);
+  }
+  .archive-stop {
+    margin: var(--space-1) 0 0;
+    padding-left: var(--space-3);
+    border-left: 2px solid var(--line2);
   }
   .mapped-paper {
     padding-block: var(--space-4);

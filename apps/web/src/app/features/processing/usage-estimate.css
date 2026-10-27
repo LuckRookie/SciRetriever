@@ -1,0 +1,33 @@
+@layer pages {
+  .usage-estimate {
+    margin-block: var(--space-4);
+    padding: var(--space-4);
+    border-left: 2px solid var(--line2);
+    background: var(--side);
+  }
+  .usage-estimate > p {
+    margin: 0 0 var(--space-2);
+  }
+  .usage-estimate > p:last-child {
+    margin-bottom: 0;
+  }
+  .usage-estimate-total {
+    font-weight: 600;
+  }
+  .usage-estimate-table {
+    width: 100%;
+    margin-block: var(--space-3);
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+  }
+  .usage-estimate-table th,
+  .usage-estimate-table td {
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    font-weight: normal;
+  }
+  .usage-estimate-table thead th {
+    color: var(--fg2);
+  }
+}

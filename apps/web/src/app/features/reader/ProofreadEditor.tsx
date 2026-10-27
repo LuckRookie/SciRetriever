@@ -7,19 +7,24 @@ import {
   ErrorNotice,
   SegmentedControl,
   Skeleton,
+  Switch,
   TextArea,
 } from "../../components/index.js";
-import { archiveQuery, archiveWrite, rows } from "../../data/archive.js";
+import { archiveWrite } from "../../data/archive.js";
 import { useApi, invalidateMaterials } from "../../data/query.js";
 import { record } from "../../data/wire.js";
 import { registerNavigationGuard } from "../../data/url.js";
 import { errorMessage } from "../../strings.js";
 import { markdown } from "../../../reading/markdown.js";
+import { readProofreadText, type EditorText } from "./proofread-text.js";
+import {
+  DroppedLeaves,
+  readDroppedLeaves,
+  type DroppedLeaf,
+} from "./dropped-leaves.js";
 
-interface EditorText {
-  proofread: string;
-  pages: string[];
-}
+const MAPPING_CONFLICT =
+  "这处修改对应不到原文区块，没有保存。这里只能改已有段落里的文字；新增段落、调整顺序或改章节标题，请撤回这处修改。草稿仍保留。";
 export function ProofreadEditor({
   id,
   asset,
@@ -43,83 +48,10 @@ export function ProofreadEditor({
     [failure, setFailure] = useState(""),
     [leave, setLeave] = useState(false);
   const decision = useRef<((allowed: boolean) => void) | null>(null);
-  const read = async (
-    version: string | null,
-    signal?: AbortSignal,
-  ): Promise<EditorText> => {
-    let start = 0,
-      proofread: string | null = version,
-      total = 0,
-      pageCount = 0,
-      text = "";
-    const ranges: Record<string, unknown>[] = [];
-    do {
-      const chunk = record(
-        await archiveQuery(
-          api,
-          "proofread-text",
-          { asset_id: asset, proofread_id: proofread, start, max_bytes: 65536 },
-          signal,
-        ),
-        "editor text",
-      );
-      if (
-        chunk.asset_id !== asset ||
-        typeof chunk.proofread_id !== "string" ||
-        (proofread && proofread !== chunk.proofread_id) ||
-        chunk.start !== start ||
-        typeof chunk.text !== "string" ||
-        typeof chunk.end !== "number" ||
-        chunk.end < start ||
-        new TextEncoder().encode(chunk.text).length !== chunk.end - start ||
-        Number(chunk.total_bytes) > 8 * 1024 * 1024
-      )
-        throw new Error("校订稿分块不一致，请重新读取。");
-      proofread = chunk.proofread_id;
-      text += chunk.text;
-      total = Number(chunk.total_bytes);
-      pageCount = Number(chunk.page_count);
-      ranges.push(...rows(chunk, "ranges"));
-      if (
-        chunk.next_start !== null &&
-        (chunk.next_start !== chunk.end || chunk.end === start)
-      )
-        throw new Error("校订稿续读位置无效。");
-      start = chunk.end;
-      if (chunk.next_start === null) break;
-    } while (start < total);
-    const bytes = new TextEncoder().encode(text);
-    if (
-      bytes.length !== total ||
-      !proofread ||
-      !Number.isSafeInteger(pageCount) ||
-      pageCount < 1 ||
-      pageCount > 10000
-    )
-      throw new Error("校订稿未完整读取。");
-    const pages = Array.from({ length: pageCount }, () => "");
-    for (const r of ranges) {
-      const n = Number(r.page),
-        from = Number(r.start_utf8),
-        to = Number(r.end_utf8);
-      if (
-        !Number.isSafeInteger(n) ||
-        n < 0 ||
-        n >= pageCount ||
-        from < 0 ||
-        to > bytes.length ||
-        to < from
-      )
-        throw new Error("校订稿页定位无效。");
-      pages[n] += new TextDecoder("utf-8", { fatal: true }).decode(
-        bytes.slice(from, to),
-      );
-    }
-    if (!ranges.length && !text.trim()) pages[0] = text;
-    if (pages.join("") !== text)
-      throw new Error("校订稿页内容不完整，未打开编辑。");
-    return { proofread, pages };
-  };
+  const read = (version: string | null, signal?: AbortSignal) =>
+    readProofreadText(api, asset, version, signal);
+  const [showDropped, setShowDropped] = useState(false),
+    [pendingPages, setPendingPages] = useState<number[]>([]);
   const data = useQuery({
     queryKey: ["document", "editor", asset],
     retry: false,
@@ -170,50 +102,136 @@ export function ProofreadEditor({
       scrolling.current = false;
     };
   }, [page, draft?.proofread]);
+  const editable =
+    draft?.format === "arranged-v2" && api.workspace.capabilities.maintenance;
+  const dropped = useQuery({
+    queryKey: ["document", "dropped", asset, draft?.proofread],
+    enabled: showDropped && draft?.format === "arranged-v2",
+    retry: false,
+    refetchOnWindowFocus: false,
+    queryFn: ({ signal }) =>
+      readDroppedLeaves(api, asset, draft!.proofread, signal),
+  });
+  const droppedByPage = new Map<number, DroppedLeaf[]>();
+  for (const leaf of dropped.data ?? [])
+    droppedByPage.set(leaf.page, [
+      ...(droppedByPage.get(leaf.page) ?? []),
+      leaf,
+    ]);
+  const reload = async (proofread: string, saved: string) => {
+    try {
+      setDraft(await read(proofread));
+    } catch (error) {
+      setFailure(`${saved}，但重新读取未完成：${errorMessage(error)}`);
+    }
+    invalidateMaterials(queries);
+  };
   const save = async () => {
-    if (!draft || busy) return;
+    if (!draft || busy || !editable) return;
     setBusy(true);
     setFailure("");
     setMessage("");
     try {
-      const pages = draft.pages.map((t) =>
-          t.trimEnd() ? t.trimEnd() + "\n\n" : "",
-        ),
-        starts: number[] = [];
-      let offset = 0;
-      for (const text of pages) {
-        starts.push(offset);
-        offset += new TextEncoder().encode(text).length;
-      }
-      if (offset > 8 * 1024 * 1024)
+      const text = draft.segments.map((s) => s.text).join("");
+      if (new TextEncoder().encode(text).length > 8 * 1024 * 1024)
         throw new Error("校订稿超过单份文档大小限制，请缩减后保存。");
       const response = record(
         await archiveWrite(api, "proofread-save", {
+          schema_version: 2,
           literature_id: id,
           asset_id: asset,
           proofread_id: draft.proofread,
-          markdown: pages.join(""),
-          page_starts_utf8: starts,
-          actor: api.actor,
+          expected_arrangement_id: draft.arrangement,
+          expected_manual_revision: draft.manualRevision,
+          markdown: text,
         }),
         "saved proofreading",
       );
+      if (response.saved === false && response.conflict) {
+        setFailure(MAPPING_CONFLICT);
+        return;
+      }
       if (response.saved !== true || typeof response.proofread_id !== "string")
         throw new Error("没有收到校订保存确认，草稿仍保留。");
-      setDraft({ ...draft, proofread: response.proofread_id, pages });
       setDirty(false);
-      try {
-        setDraft(await read(response.proofread_id));
-      } catch (error) {
-        setFailure(`修订已保存，但重新读取未完成：${errorMessage(error)}`);
-      }
       const rebuilt = record(response.rebuild, "rebuild");
       setMessage(
-        rebuilt.status === "failed"
-          ? "修订已保存；全文重建尚未完成，可从单步处理继续。"
-          : response.changed
-            ? "修订已保存，全文、结构与引用已重建。"
-            : "内容没有变化。",
+        !response.changed
+          ? "内容没有变化。"
+          : rebuilt.status === "failed"
+            ? "修订已保存；全文没有重新生成，可从“单步处理”发布全文。"
+            : "修订已保存，全文已重新生成。",
+      );
+      await reload(response.proofread_id, "修订已保存");
+    } catch (error) {
+      setFailure(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const restore = async (leaf: DroppedLeaf) => {
+    if (!draft || busy || dirty || !editable) return;
+    setBusy(true);
+    setFailure("");
+    setMessage("");
+    try {
+      const response = record(
+        await archiveWrite(api, "archive-arrangement-edit", {
+          schema_version: 2,
+          literature_id: id,
+          asset_id: asset,
+          expected_proofread_id: draft.proofread,
+          expected_arrangement_id: draft.arrangement,
+          expected_manual_revision: draft.manualRevision,
+          changes: [
+            {
+              kind: "restore",
+              leaf_id: leaf.leafId,
+              target: leaf.target,
+              presentation: { kind: "content" },
+            },
+          ],
+        }),
+        "restored leaf",
+      );
+      if (typeof response.proofread_id !== "string")
+        throw new Error("没有收到恢复确认。");
+      const pending = Array.isArray(response.pending_page_indexes)
+        ? response.pending_page_indexes.map(Number)
+        : [];
+      setPendingPages(pending);
+      const rebuilt = record(response.rebuild, "rebuild");
+      setMessage(
+        pending.length
+          ? `已恢复并锁定。第 ${pending.map((p) => p + 1).join("、")} 页要重新校订，之后才会出现在全文里。`
+          : rebuilt.status === "failed"
+            ? "已恢复并锁定；全文没有重新生成，可从“单步处理”发布全文。"
+            : "已恢复并锁定，全文已重新生成。",
+      );
+      await reload(response.proofread_id, "已恢复");
+    } catch (error) {
+      setFailure(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const continueProofread = async () => {
+    setBusy(true);
+    setFailure("");
+    try {
+      await archiveWrite(api, "archive", {
+        operation: "build",
+        request: {
+          schema_version: 2,
+          selector: { kind: "literatures", literature_ids: [id] },
+          mode: "full",
+          from_step: "proofread",
+          idempotency_key: crypto.randomUUID(),
+        },
+      });
+      setPendingPages([]);
+      setMessage(
+        "已提交建档任务：只重新校订待处理的页，其余页复用。进度见任务。",
       );
       invalidateMaterials(queries);
     } catch (error) {
@@ -227,6 +245,14 @@ export function ProofreadEditor({
     decision.current?.(allow);
     decision.current = null;
   };
+  const restoreBlocked = busy
+    ? "正在保存"
+    : dirty
+      ? "先保存或放弃当前修订，再恢复已删除的内容。"
+      : !editable
+        ? "这份校订稿不能在这里修改。"
+        : null;
+  const shownPages = new Set<number>();
   return (
     <section className="proofread-editor" aria-label="校订稿编辑">
       <header className="proofread-editor-header">
@@ -241,26 +267,45 @@ export function ProofreadEditor({
               { id: "preview", label: "预览" },
             ]}
           />
+          {draft?.format === "arranged-v2" ? (
+            <Switch isSelected={showDropped} onChange={setShowDropped}>
+              显示已删除
+            </Switch>
+          ) : null}
           <Button
             variant="primary"
             isPending={busy}
-            isDisabled={!dirty || !api.workspace.capabilities.maintenance}
+            isDisabled={!dirty || !editable}
             onPress={() => void save()}
           >
             保存修订
           </Button>
         </div>
         <p className="ui-description">
-          保存后，读取这篇的算子结果会标为过时。保存与重建不调用模型。
+          {draft?.format === "legacy-v1"
+            ? "这份校订稿来自旧的建档流程，只能阅读。重新建档后可以在这里修改。"
+            : "只能改已有段落里的文字。保存后，读取这篇的算子结果会标为过时；保存与重新生成全文不调用模型。"}
         </p>
         {message ? <p role="status">{message}</p> : null}
+        {pendingPages.length ? (
+          <Button
+            isPending={busy}
+            isDisabled={!api.workspace.capabilities.maintenance}
+            onPress={() => void continueProofread()}
+          >
+            重新校订 {pendingPages.length} 页（调用模型）
+          </Button>
+        ) : null}
+        {showDropped && dropped.error ? (
+          <ErrorNotice message={errorMessage(dropped.error)} />
+        ) : null}
         {failure || data.error ? (
           <>
             <ErrorNotice message={failure || errorMessage(data.error)} />
             {dirty && draft ? (
               <Button
                 onPress={() => {
-                  void copyText(draft.pages.join("\n\n"))
+                  void copyText(draft.segments.map((s) => s.text).join(""))
                     .then(() => setMessage("当前草稿已复制。"))
                     .catch(() =>
                       setMessage(
@@ -297,43 +342,68 @@ export function ProofreadEditor({
         {!draft && data.isPending ? (
           <Skeleton label="正在完整读取校订稿" />
         ) : null}
-        {draft?.pages.map((text, index) => (
-          <section
-            key={index}
-            data-edit-page={index + 1}
-            className="proofread-editor-page"
-          >
-            <h3>第 {index + 1} 页</h3>
-            {preview ? (
-              <div
-                className="reader-prose"
-                dangerouslySetInnerHTML={{ __html: markdown.parse(text) }}
-              />
-            ) : (
-              <div onFocus={() => onPage(index + 1)}>
-                <TextArea
-                  label={`第 ${index + 1} 页校订稿`}
-                  value={text}
-                  onChange={(value) => {
-                    setDraft((current) =>
-                      current
-                        ? {
-                            ...current,
-                            pages: current.pages.map((t, i) =>
-                              i === index ? value : t,
-                            ),
-                          }
-                        : current,
-                    );
-                    setDirty(true);
-                    setMessage("");
-                  }}
-                  isDisabled={busy}
-                />
-              </div>
-            )}
-          </section>
-        ))}
+        {showDropped && dropped.isPending ? (
+          <Skeleton label="正在读取已删除的内容" />
+        ) : null}
+        {draft
+          ? pageOrder(draft, droppedByPage).map(({ index, pageIndex }) => {
+              const segment = index === null ? null : draft.segments[index]!,
+                first = !shownPages.has(pageIndex);
+              shownPages.add(pageIndex);
+              const label = `第 ${pageIndex + 1} 页${segment?.repeat ? `（续 ${segment.repeat}）` : ""}`;
+              return (
+                <section
+                  key={
+                    index === null ? `dropped-${pageIndex}` : `segment-${index}`
+                  }
+                  data-edit-page={pageIndex + 1}
+                  className="proofread-editor-page"
+                >
+                  <h3>{label}</h3>
+                  {segment === null ? null : preview ? (
+                    <div
+                      className="reader-prose"
+                      dangerouslySetInnerHTML={{
+                        __html: markdown.parse(segment.text),
+                      }}
+                    />
+                  ) : (
+                    <div onFocus={() => onPage(pageIndex + 1)}>
+                      <TextArea
+                        label={`${label}校订稿`}
+                        value={segment.text}
+                        onChange={(value) => {
+                          setDraft((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  segments: current.segments.map((s, i) =>
+                                    i === index ? { ...s, text: value } : s,
+                                  ),
+                                }
+                              : current,
+                          );
+                          setDirty(true);
+                          setMessage("");
+                        }}
+                        isDisabled={busy || !editable}
+                      />
+                    </div>
+                  )}
+                  {showDropped && first ? (
+                    <DroppedLeaves
+                      leaves={droppedByPage.get(pageIndex) ?? []}
+                      disabled={restoreBlocked}
+                      onRestore={(leaf) => void restore(leaf)}
+                    />
+                  ) : null}
+                </section>
+              );
+            })
+          : null}
+        {showDropped && dropped.data && !dropped.data.length ? (
+          <p className="ui-description">这份校订稿没有删除任何内容。</p>
+        ) : null}
       </div>
       <Dialog
         title="保留未保存的校订？"
@@ -352,4 +422,20 @@ export function ProofreadEditor({
       </Dialog>
     </section>
   );
+}
+
+/** Segments in text order, with pages that only hold dropped content slotted in by page number. */
+function pageOrder(
+  draft: EditorText,
+  dropped: ReadonlyMap<number, readonly DroppedLeaf[]>,
+): { index: number | null; pageIndex: number }[] {
+  const order: { index: number | null; pageIndex: number }[] =
+    draft.segments.map((s, index) => ({ index, pageIndex: s.page }));
+  const present = new Set(draft.segments.map((s) => s.page));
+  for (const pageIndex of [...dropped.keys()].sort((a, b) => a - b)) {
+    if (present.has(pageIndex)) continue;
+    const at = order.findIndex((o) => o.pageIndex > pageIndex);
+    order.splice(at < 0 ? order.length : at, 0, { index: null, pageIndex });
+  }
+  return order;
 }

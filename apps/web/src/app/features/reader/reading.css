@@ -673,6 +673,38 @@
     font: var(--text-literature) / 1.75 var(--serif);
     overflow-wrap: anywhere;
   }
+  /* Dropped text sits under its page, struck through in the margin colour, so it reads as set aside rather than gone. */
+  .dropped-leaves {
+    list-style: none;
+    margin: var(--space-3) 0 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-2);
+  }
+  .dropped-leaf {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border-left: 2px dashed var(--line3);
+    background: var(--hover-soft);
+  }
+  .dropped-leaf p {
+    margin: 0;
+  }
+  .dropped-leaf-reason {
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+  }
+  .dropped-leaf-text {
+    font: var(--text-secondary) / 1.6 var(--serif);
+    color: var(--fg3);
+    text-decoration: line-through;
+    text-decoration-color: var(--line3);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
   .reader-editing .reader-toolbar-start > .ui-icon-button {
     display: none;
   }

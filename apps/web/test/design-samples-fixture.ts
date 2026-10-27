@@ -31,6 +31,7 @@ export interface DesignSampleIds {
   folder: string;
   snapshot: string;
   task: string;
+  archiveTask: string;
   result: string;
   resultHash: string;
   agent: string;
@@ -57,8 +58,13 @@ const title = (n: number) =>
 /** The synthetic document body repeats the title without metadata markup. */
 const plainTitle = (n: number) =>
   title(n).replace(/&lt;\/?[a-z]+&gt;|<\/?[a-z]+>/g, "");
+// Sample 0 carries a running header and a received line, which the synthetic arranger drops.
+const dropped = (n: number) =>
+  n === 0
+    ? "DROP_HEADER Northlight Sample Journal · Volume 7 · 2026\n\nBIBLIOGRAPHY Received 2 March 2026; accepted 9 May 2026.\n\n"
+    : "";
 const text = (n: number) =>
-  `# ${plainTitle(n)}\n\n# Abstract\n\nSynthetic spectroscopy in the imaginary Northlight laboratory. All values are fictional design samples.\n\n# Introduction\n\nWe compare imaginary materials and retain evidence for every observation.\n\n# Methods\n\nThe measured energy was 4.2 eV. The reagent $\\mathrm{SnBu}_4$ is a fictional example.\n\n# Results\n\n![Synthetic diagram](diagram.png)\n\n| Sample | Energy |\n| --- | --- |\n| Northlight | 4.2 eV |\n\n# Conclusion\n\nSynthetic spectroscopy supports this design example only.\n\n# References\n\n[1] Imaginary Researcher. Synthetic reference. Northlight Sample Journal, 2025.\n`;
+  `# ${plainTitle(n)}\n\n${dropped(n)}# Abstract\n\nSynthetic spectroscopy in the imaginary Northlight laboratory. All values are fictional design samples.\n\n# Introduction\n\nWe compare imaginary materials and retain evidence for every observation.\n\n# Methods\n\nThe measured energy was 4.2 eV. The reagent $\\mathrm{SnBu}_4$ is a fictional example.\n\n# Results\n\n![Synthetic diagram](diagram.png)\n\n| Sample | Energy |\n| --- | --- |\n| Northlight | 4.2 eV |\n\n# Conclusion\n\nSynthetic spectroscopy supports this design example only.\n\n# References\n\n[1] Imaginary Researcher. Synthetic reference. Northlight Sample Journal, 2025.\n`;
 // A public, synthetic PNG; contains no paper-derived bytes.
 const diagram = designSampleImage();
 
@@ -81,6 +87,7 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
     e.parseRequest.literature_id,
     ...Array.from({ length: 59 }, (_, i) => id(i + 1)),
   ];
+  let archiveTask = "";
   let failArchive = false,
     hold = false;
   let release!: () => void;
@@ -202,7 +209,8 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
         });
       }
       if (n <= 10) {
-        await archive(papers[n]!, `design-archive-${n}`);
+        const job = await archive(papers[n]!, `design-archive-${n}`);
+        if (n === 0) archiveTask = job.job_id;
         if ((await app.archive.status(papers[n]!)).status !== "READY")
           throw new Error(
             `Sample ${n} did not become ready: ${JSON.stringify(await app.archive.status(papers[n]!))}`,
@@ -503,17 +511,21 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
     const { executeMaintenance } = await import(
       "../../server/src/entry/maintenance-operations.js"
     );
-    await executeMaintenance(app, "proofread-save", {
+    const saved = (await executeMaintenance(app, "proofread-save", {
+      schema_version: 2,
       literature_id: papers[2],
       asset_id: part.asset_id,
       proofread_id: part.proofread_id,
-      markdown: editor.text + "\n\nA revised synthetic observation.\n",
-      page_starts_utf8: Array.from(
-        { length: editor.page_count },
-        (_, page) => editor.ranges.find((r) => r.page === page)!.start_utf8,
+      expected_arrangement_id: editor.arrangement_id,
+      expected_manual_revision: editor.manual_revision,
+      markdown: editor.text.replace(
+        "supports this design example only.",
+        "supports this revised design example only.",
       ),
       actor: "fixture:design",
-    });
+    })) as { saved?: boolean; changed?: boolean };
+    if (!saved.saved || !saved.changed)
+      throw new Error("Synthetic manual revision was not saved");
     // Durable task states use public job controls; interrupted is a simulated recovery event.
     for (const state of [
       "queued",
@@ -585,6 +597,7 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
         folder: parent.folder_id,
         snapshot: snapshots[0]!.snapshot_id,
         task: completed.job.job_id,
+        archiveTask,
         result: String(record.result_id),
         resultHash: String(record.content_sha256),
         agent: agent.session_id,

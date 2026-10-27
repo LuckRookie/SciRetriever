@@ -77,7 +77,7 @@ it("preserves drafts across section publications and conflicts, explains restart
     await profile.waitFor();
     expect(await profile.textContent()).toContain("vlm-engine");
     await page
-      .getByRole("textbox", { name: "每篇矫正调用上限", exact: true })
+      .getByRole("textbox", { name: "每篇标签上限", exact: true })
       .fill("9");
     // A number field commits on leaving it; then the section's save appears.
     await page.keyboard.press("Tab");
@@ -91,10 +91,13 @@ it("preserves drafts across section publications and conflicts, explains restart
     expect((await publication).status()).toBe(200);
     await expect
       .poll(
-        async () =>
-          (await owner!.read()).configuration.proofread.max_calls_per_document,
+        async () => (await owner!.read()).configuration.tags.max_per_literature,
       )
       .toBe(9);
+    // The per-document call budget is gone; archive stops on repeated errors or no progress.
+    expect(
+      await page.getByRole("textbox", { name: "每篇矫正调用上限" }).count(),
+    ).toBe(0);
     await page.getByRole("tab", { name: "运行状态", exact: true }).click();
     const runtime = page.locator(".settings-runtime[data-state]");
     await expect.poll(() => runtime.textContent()).toContain("core");
