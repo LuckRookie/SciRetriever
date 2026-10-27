@@ -3537,3 +3537,5 @@ export * from "./agent-conversation.js";
 export * from "./processor-outcomes.js";
 
 export * from "./reading-status.js";
+
+export * from "./archive-text.js";
