@@ -16,7 +16,7 @@ import { TypeScriptConfigurationOwner } from "../src/configuration/owner.js";
 import { NetworkBudgetCoordinator } from "../src/network/budget.js";
 import { createApplication } from "../src/bootstrap/application.js";
 
-it("Auto adds only configured APIs, never mirrors, without reading credential grants or probing", () => {
+it("Auto adds configured APIs and the built-in mirror after DOI landing without reading credential grants or probing", () => {
   const config = parseConfiguration(
     '[sources.acquisition.unpaywall]\ncontact_email="fixture@example.test"\n',
   );
@@ -48,9 +48,9 @@ it("Auto adds only configured APIs, never mirrors, without reading credential gr
     expect(
       routes.stages["general-api"].sources.map((s) => s.source_name),
     ).toEqual(["unpaywall", "core"]);
-    expect(registry.statuses.some((s) => s.source_name === "sci-hub")).toBe(
-      false,
-    );
+    expect(
+      routes.stages["public-web"].sources.map((s) => s.source_name),
+    ).toEqual(["doi-landing", "sci-hub"]);
     expect(currentCredential).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
     expect(
@@ -68,6 +68,7 @@ it("Auto adds only configured APIs, never mirrors, without reading credential gr
       "arxiv",
       "europe-pmc",
       "doi-landing",
+      "sci-hub",
     ]);
     expect(absent.unavailable).toEqual({ browser: "browser-route-not-wired" });
     const partial = assemblePublicAcquisitionRegistry(

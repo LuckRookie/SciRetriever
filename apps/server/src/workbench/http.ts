@@ -1,3 +1,12 @@
+import {
+  RestartAdmissionError,
+  withoutRestartAdmission,
+} from "../application/restart-admission.js";
+import { SourceConfigurationError } from "../configuration/sources.js";
+import {
+  CONFIGURATION_OPERATIONS,
+  type ConfigurationOperation,
+} from "../entry/configuration-operations.js";
 import { withActivity } from "../logging/activity.js";
 import {
   ContractValidationError,
@@ -178,6 +187,12 @@ export interface WorkbenchHttpOptions {
     } | null>;
   };
   readonly configuration?: {
+    lifecycleFlushed?(): void;
+    sourceOperation?(
+      operation: ConfigurationOperation,
+      value: unknown,
+      signal?: AbortSignal,
+    ): Promise<unknown>;
     /** Ordinary configuration revision captured by the owning Application at startup. */
     readonly runtime_revision?: string;
     /** Actual process assembly snapshot; null/absent means the caller cannot confirm it. */
@@ -848,7 +863,9 @@ export async function startWorkbenchHttp(
   const server = createServer(
     { requestTimeout: 5000, headersTimeout: 5000, maxHeaderSize: 8192 },
     (request, response) => {
-      const operation = handle(request, response).catch((error: unknown) => {
+      const operation = withoutRestartAdmission(() =>
+        handle(request, response),
+      ).catch((error: unknown) => {
         if (
           request.url?.startsWith("/api/maintenance/ingest-pdf") ||
           request.url?.startsWith("/api/maintenance/parse-document") ||
@@ -879,6 +896,8 @@ export async function startWorkbenchHttp(
                 : error instanceof PdfAcceptanceError
                   ? "manual-pdf-invalid"
                   : error instanceof ConfigurationOwnerError ||
+                      error instanceof SourceConfigurationError ||
+                      error instanceof RestartAdmissionError ||
                       error instanceof ConfigurationProbeError
                     ? error.code
                     : error instanceof WorkbenchInputError
@@ -912,6 +931,8 @@ export async function startWorkbenchHttp(
                     ? 404
                     : error instanceof WorkbenchInputError ||
                         error instanceof ContractValidationError ||
+                        (error instanceof SourceConfigurationError &&
+                          error.code === "source-configuration-invalid") ||
                         (error instanceof ConfigurationOwnerError &&
                           error.code === "configuration-invalid") ||
                         (error instanceof ConfigurationProbeError &&
@@ -919,6 +940,20 @@ export async function startWorkbenchHttp(
                       ? 400
                       : 409;
         json(response, status, {
+          ...(error instanceof SourceConfigurationError
+            ? {
+                protocol_version: 1,
+                problem: {
+                  display: "error",
+                  technical_details: {
+                    diagnostics: [{ code: error.code, scope: "configuration" }],
+                  },
+                },
+                ...(error.current_revision
+                  ? { current_revision: error.current_revision }
+                  : {}),
+              }
+            : {}),
           code:
             error instanceof LiteratureNotFoundError
               ? "literature-not-found"
@@ -1355,6 +1390,24 @@ export async function startWorkbenchHttp(
       }
       if (
         request.method === "GET" &&
+        (pathname === "/api/configuration/sources" ||
+          pathname === "/api/configuration/apply")
+      ) {
+        if (!options.configuration?.sourceOperation) {
+          json(response, 503, { code: "configuration-unavailable" });
+          return;
+        }
+        json(response, 200, {
+          protocol_version: 1,
+          result: await options.configuration.sourceOperation(
+            pathname.endsWith("/apply") ? "apply" : "sources",
+            {},
+          ),
+        });
+        return;
+      }
+      if (
+        request.method === "GET" &&
         pathname === "/api/configuration/status"
       ) {
         if (!options.configuration) {
@@ -1504,6 +1557,42 @@ export async function startWorkbenchHttp(
           stopUploads.signal,
         );
         json(response, 200, { protocol_version: 1, receipt });
+        return;
+      }
+      if (
+        pathname.startsWith("/api/configuration/source-") ||
+        pathname === "/api/configuration/sources" ||
+        pathname === "/api/configuration/apply" ||
+        pathname === "/api/configuration/apply-cancel"
+      ) {
+        const operation = pathname.slice(
+          "/api/configuration/".length,
+        ) as ConfigurationOperation;
+        if (
+          !CONFIGURATION_OPERATIONS.includes(operation) ||
+          !options.configuration?.sourceOperation
+        ) {
+          json(response, 404, { code: "endpoint-not-found" });
+          return;
+        }
+        const value = await extractionBody(request, 1_048_576);
+        const result = await options.configuration.sourceOperation(
+          operation,
+          value,
+        );
+        if (operation === "apply")
+          response.once("finish", () =>
+            options.configuration?.lifecycleFlushed?.(),
+          );
+        json(
+          response,
+          operation === "source-test" ||
+            operation === "source-test-all" ||
+            operation === "apply"
+            ? 202
+            : 200,
+          { protocol_version: 1, result },
+        );
         return;
       }
       const value = await body(request);
@@ -3033,7 +3122,9 @@ export async function startQueryOnlyHttp(
   const server = createServer(
     { requestTimeout: 5000, headersTimeout: 5000, maxHeaderSize: 8192 },
     (request, response) => {
-      const operation = handler.handle(request, response);
+      const operation = withoutRestartAdmission(() =>
+        handler.handle(request, response),
+      );
       pending.add(operation);
       void operation.then(
         () => pending.delete(operation),

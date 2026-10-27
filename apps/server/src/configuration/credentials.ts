@@ -734,6 +734,40 @@ export function editCredentialBundle(
   return bytes;
 }
 
+/** Field-level source edits. No secret leaves the opaque bundle except its publication bytes. */
+export function editSourceCredentials(
+  bundle: CredentialBundle,
+  provider: string,
+  edits: readonly import("@sciretriever/contracts").CredentialFieldEdit[],
+): Uint8Array | null {
+  const data = bundles.get(bundle as object);
+  const fields = PROVIDER_FIELDS[provider];
+  if (!data || new Set(edits.map((e) => e.field)).size !== edits.length)
+    invalid();
+  if (!edits.length) return null;
+  if (!fields) invalid();
+  const providers = cloneClaims(data.providers);
+  for (const edit of edits) {
+    if (!fields.includes(edit.field) || edit.field === "api_metric") invalid();
+    const key = grantKey(provider, edit.field);
+    if (edit.action === "clear") providers.delete(key);
+    else {
+      const value = editValue(edit.value);
+      if (!value) invalid();
+      providers.set(key, { provider, field: edit.field, value, origin: "" });
+    }
+  }
+  const next = makeBundle(
+    providers,
+    cloneClaims(data.models),
+    cloneClaims(data.core),
+    [],
+  );
+  const bytes = renderCredentialBundle(bundles.get(next as object)!);
+  parseCredentialText(bytes);
+  return bytes;
+}
+
 /** Publish credentials after the caller has acquired the configuration lock. */
 export async function publishCredentialText(
   home: string,

@@ -152,9 +152,9 @@ mode = "auto"
 | `sources.acquisition` | `mode`      | `auto` 或 `custom` | `auto` | 选择版本默认集合或用户精确集合。                        |
 | `sources.acquisition` | `providers` | 有序、不可重复数组 | 空     | 仅 Custom 使用；允许空列表。                            |
 
-Auto 禁止同时保存非空 `providers`。Metadata Auto 只由当前版本的默认集合确定；Acquisition Auto 还使用必要配置的存在性，规则见下文。两者都不通过 Network probe 或临时服务状态选源。Custom 精确保留用户数组与顺序；空列表表示不启用该能力的命名 Provider。升级可以维护 Auto catalog，Custom 不随 catalog 改变；没有 preset 或 include/exclude。
+Auto 禁止同时保存非空 `providers`。Metadata 与 Acquisition 的 Auto 都由版本默认集合加上必要配置的存在性确定，规则见下文。两者都不通过 Network probe 或临时服务状态选源。Custom 精确保留用户数组与顺序；空列表表示不启用该能力的命名 Provider。升级可以维护 Auto catalog，Custom 不随 catalog 改变；没有 preset 或 include/exclude。
 
-当前 Metadata Auto 有序集合是：
+当前 Metadata Auto 的公开默认有序集合是：
 
 ```text
 crossref, semantic-scholar, arxiv, openalex,
@@ -162,13 +162,15 @@ europe-pmc, datacite, core
 ```
 
 OpenCitations 当前不在 Auto 集合，也不参加主题搜索。默认 `limit = 500` 时主题搜索的理论 raw-item ceiling 是
-`7 × 500 = 3500`。`limit` 独立给每个参与 Source，不是共享总量、最终接纳数量或 HTTP 请求数。
+`7 × 500 = 3500`；配齐商业来源后按实际参与来源数增加。`limit` 独立给每个参与 Source，不是共享总量、最终接纳数量或 HTTP 请求数。
 `discover topic` 与 `discover citations` 未显式提供 `--scan-limit` 时使用已保存的 `limit`；显式
 `--scan-limit` 只覆盖当前命令，不改写配置。
 
-引用发现的 Auto 执行顺序在上述已启用集合内稳定分组：已配置凭据的 API 在前，无需密钥的 API 在后，组内保持默认顺序；凭据存在只影响已选引用来源的优先级，不启用额外来源，也不证明凭据在线有效或具有订阅权限。Custom 的 `providers` 顺序就是精确优先级，不再按凭据重排。主题搜索继续查询所选搜索来源，不采用引用扩展的成功短路。引用扩展每个节点重新按优先级开始，空结果或局部失败顺延，取得正常完成且可识别的引用结果后停止该节点的后续来源。
+Elsevier 与 Springer Nature 配齐 `api_key` 后加入 Metadata Auto；Web of Science 还要求产品与数据库参数齐全。三个 Metadata 用途共用一份选择，按实际能力过滤；PDF 独立选择。不存在启动联网验证。
 
-Acquisition Auto 默认包含 `arxiv, europe-pmc`，另加入必要配置齐全的 API：Elsevier 的 `api_key`、Wiley 的 `tdm_api_token`、CORE 的 `api_key`，以及 Unpaywall 的 `contact_email`。选择只消费凭据字段存在性，不读取授权值、不联网探测；缺配置的 API 不加入、不报错。配置齐全不等于认证有效或文章有全文权限。Sci-Hub 等镜像不因 Auto 自动加入，Browser 继续由 `[browser]` 独立启用。
+引用发现的 Auto 执行顺序在上述已启用集合内稳定分组：已配置凭据的 API 在前，无需密钥的 API 在后，组内保持默认顺序；来源在本地配置齐全后可加入 Auto；凭据存在性还影响已选引用来源的优先级，但不证明凭据在线有效或具有订阅权限。Custom 的 `providers` 顺序就是精确优先级，不再按凭据重排。主题搜索继续查询所选搜索来源，不采用引用扩展的成功短路。引用扩展每个节点重新按优先级开始，空结果或局部失败顺延，取得正常完成且可识别的引用结果后停止该节点的后续来源。
+
+Acquisition Auto 默认包含 `arxiv, europe-pmc, sci-hub`，另加入必要配置齐全的 API：Elsevier 的 `api_key`、Wiley 的 `tdm_api_token`、CORE 的 `api_key`，以及 Unpaywall 的 `contact_email`。选择只消费凭据字段存在性，不读取授权值、不联网探测；缺配置的 API 不加入、不报错。配置齐全不等于认证有效或文章有全文权限。Sci-Hub 使用内置镜像，配置的有序镜像列表会完整覆盖它；reset 恢复内置列表。DOI 落地页始终在 Sci-Hub 前，Browser 继续由 `[browser]` 独立启用。
 
 所有模式自动加入 direct 和 DOI landing，消费已有且通过准入的资产线索；元数据 Provider 的 hint 不需要再启用同名下载服务。Custom 不因凭据变化增删来源；显式选择却缺配置的来源保留稳定不可用原因。执行顺序与轨迹读取见 [PDF 获取指南](pdf-acquisition.md)。已有获取进程冻结启动时的选择，补齐凭据或保存选择后需重启更新；已装配来源的请求级凭据仍按原规则在下次请求时读取。
 
@@ -608,7 +610,7 @@ Browser:  Setup / Test model / Back
 ```
 
 Search/Download 的 Sources 使用 Auto/Custom 两层。Auto → Custom 会冻结当前有效集合与顺序；
-Custom → Auto 会恢复当前 Auto 规则，其中获取来源包含配置齐全的 API。Search 的 Limit 修改逐 Source raw-item 上限。当前页面只编辑
+Custom → Auto 会恢复当前 Auto 规则，其中两类来源都包含必要配置齐全的 API，获取还包含默认镜像。Search 的 Limit 修改逐 Source raw-item 上限。当前页面只编辑
 集合和 limit；Source 的凭据与远程 Test 仍通过公开 `config test` 命令和 owner 接口处理，状态页只
 显示 secret presence，绝不显示值、长度或特征。
 
@@ -977,3 +979,19 @@ backfill_batch = 8
 # consolidation_model = "provider/curator"
 # backfill_model = "provider/tagger"
 ```
+
+## 来源目录、单源保存与应用
+
+`sciretriever config sources --json` 和 MCP `configuration_sources` 读取同一份来源目录。它包含 15 家来源的四种用途、普通参数、凭据字段存在性、固定样本测试结果，以及 Auto/Custom 路线预览。只有绑定 Web Application 的读取才有 `runtime` 与 `effective_pdf_routes`；独立 CLI/MCP 返回运行态为空，不能推断另一个进程的生效状态。
+
+HTTP `GET /api/configuration/sources` 与既有配置接口共用登录和客户端授权；新接口封套为 `{protocol_version:1,result}`。单源写入使用 `POST /api/configuration/source-save`，选择使用 `source-selection`，显式测试使用 `source-test` / `source-test-all`。CLI 对应 `config source-save|source-selection|source-test|source-test-all --request FILE|- --json`；MCP 使用 `configuration_source_*`。传输不回显秘密字段，传入凭据时宜使用标准输入；不要把凭据写进参数、URL 或日志。
+
+单源保存须带 `catalog_revision` 作为 baseline。普通参数按一个来源的小对象 keep/reset/set；凭据逐字段 replace/clear，未提交字段保持。空 replace 非法。只写这一家，不改选择、扫描上限、其它来源或模型。并发配置或凭据发布会使旧 baseline 冲突。两份 TOML 各自原子发布；跨文件中途失败返回 `status=partial` 与 `committed_fields`，重新读取后处理未保存字段，不回滚已经发布的凭据。Springer 历史 `api_metric` 仅显示 presence 技术诊断，不开放编辑，也不影响 readiness。旧 hint PDF 选择仍可读；新选择保存只接纳具有独立 PDF adapter 的来源，线索仍由 builtin direct 消费。
+
+测试是明确授权的真实最小请求，读取、启动、一般配置发布与应用均不自动测试。Metadata 对固定公开标识做一次 lookup，扫描上限 1；PDF 只走被选中的来源，用固定开放样本取得字节并经 PDF reader 验证，不升级其它来源或 Browser，不写文献库、资产或文档。Browser 测试仅启动已安装 Cloak 的临时 profile 后关闭，不调用模型。PLOS 没有独立 adapter，不提供测试。`config test download` 保留原有只读能力检查边界；实际 PDF 测试用新的单源接口。
+
+最近测试缓存在 `~/.sciretriever/source-state.json`，不含 URL、响应正文、凭据或秘密 hash；它不是文献事实。配置变化使对应来源的旧测试失效，外部未知文件改动保守失效。缺失或损坏缓存不妨碍启动；目录读取不修写它。测试完成也不改变配置 CAS。API key 同 presence 轮换不会单凭轮换要求重启；新启用来源、参数或选择变化需重建运行时。
+
+测试主状态为可用、错误，或未配置/凭据无效/无全文权限三种可处理情况。裸 403、超时、限流和挑战不证明全文权限被拒；未知失败统一错误，原因码在技术详情。正常空结果不是错误，但也不证明该文章可下载。
+
+受管 `web` 可通过 `GET/POST /api/configuration/apply` 读取/发起应用，`apply-cancel` 取消尚未提交关闭的请求。请求带运行时代次身份、request_id 和目标 binding revision。等待期间停止新工作准入，既有队列继续完成；任务取消和既有 Browser 人工协助仍可用。目标配置变化会失败并提示重新应用。新代就绪前可能短暂断连，随后须重新登录。直接嵌入 `startProductionWorkbench` 未注入生命周期时返回 unmanaged，不会退出宿主进程。程序升级与首次切换步骤见[安装](installation.md)和[升级](upgrade.md)。

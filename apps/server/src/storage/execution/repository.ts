@@ -65,12 +65,24 @@ export function normalizeExecutionPolicy(
   return Object.freeze(policy);
 }
 
+/** Lifecycle is supplied by the application; storage does not choose a restart policy. */
+export interface ExecutionRuntimeAdmission {
+  newWork<T>(operation: () => Promise<T>): Promise<T>;
+  continuation<T>(operation: () => Promise<T>): Promise<T>;
+}
 /** Typed repository for the v2 durable execution surface. */
 export class ExecutionRepository {
-  constructor(private readonly database: SqliteWorker) {}
+  constructor(
+    private readonly database: SqliteWorker,
+    private readonly restart?: ExecutionRuntimeAdmission,
+  ) {}
 
   withRuntime<T>(operation: () => Promise<T>): Promise<T> {
-    return this.database.withExecutionRuntime(operation);
+    return this.restart
+      ? this.restart.continuation(() =>
+          this.database.withExecutionRuntime(operation),
+        )
+      : this.database.withExecutionRuntime(operation);
   }
 
   inspect(): Promise<ExecutionRuntimeInspection> {
@@ -104,13 +116,16 @@ export class ExecutionRepository {
       finished_at: null,
     };
     const context = activityContext();
-    return this.database.createExecutionJob(
-      job,
-      await sha256(canonicalJsonBytes(policy)),
-      policy,
-      input.targets ?? [],
-      { actor: context.actor, operation: context.operation ?? "task-create" },
-    );
+    const policyHash = await sha256(canonicalJsonBytes(policy));
+    const create = () =>
+      this.database.createExecutionJob(
+        job,
+        policyHash,
+        policy,
+        input.targets ?? [],
+        { actor: context.actor, operation: context.operation ?? "task-create" },
+      );
+    return this.restart ? this.restart.newWork(create) : create();
   }
   async withOrigin<T>(jobId: string, action: () => Promise<T>): Promise<T> {
     const origin = await this.database.review<{

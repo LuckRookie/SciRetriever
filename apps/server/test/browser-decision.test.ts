@@ -461,3 +461,64 @@ it("keeps sensitive locators and credentials out of Agent stop diagnostics", () 
   expect(secret.reason).not.toContain("private-value");
   expect(secret.code).toBe("browser-agent-access-unavailable");
 });
+
+it.each([true, false])(
+  "delivers the generic direct-download preference to the fake model (direct available: %s)",
+  async (direct) => {
+    const elements = [
+      {
+        element_id: "reader",
+        role: "link",
+        name: "ePDF online reader",
+        editable: false,
+      },
+      ...(direct
+        ? [
+            {
+              element_id: "direct",
+              role: "link",
+              name: "Download PDF",
+              editable: false,
+            },
+          ]
+        : []),
+    ];
+    let captured: ModelRequest | undefined;
+    const agents = runtime((call) => {
+      captured = call;
+      return {
+        kind: "tool",
+        name: "browser_action",
+        arguments: {
+          action: {
+            kind: "click-element",
+            element_id: direct ? "direct" : "reader",
+            revision: 2,
+          },
+        },
+        provenance: {
+          provider: "fixture-provider",
+          model: "fixture-model",
+          usage: { input_tokens: 10, output_tokens: 5 },
+        },
+      };
+    });
+    expect(
+      await browserDecisionFixture(agents)(
+        { ...observation, elements },
+        new Uint8Array([1, 2]),
+        new AbortController().signal,
+      ),
+    ).toMatchObject({
+      kind: "click-element",
+      element_id: direct ? "direct" : "reader",
+    });
+    const allText = captured!.messages
+      .flatMap((message) => message.parts)
+      .map((part) => ("text" in part ? part.text : ""))
+      .join("\n");
+    expect(allText).toContain("choose the direct PDF/download link first");
+    expect(allText).toContain("ePDF online reader");
+    if (direct) expect(allText).toContain("Download PDF");
+  },
+);

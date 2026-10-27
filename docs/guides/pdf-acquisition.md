@@ -57,10 +57,10 @@ SciRetriever 对数据库中已经存在的具体 Literature 补全主 PDF。主
 | general-api   | CORE                    | Auto 配置齐全后启用或 Custom 显式选择、配置 `api_key`，并有 CORE 强记录身份                                     |
 | general-api   | Unpaywall               | Auto 配置联系邮箱后启用或 Custom 显式选择并配置联系邮箱；返回的文件 locator 立即下载                            |
 | public-web    | DOI/文章 landing        | Network 逐跳复检后解析静态 PDF 声明或链接，相对地址基于实际落地页                                               |
-| public-web    | Sci-Hub locator         | 默认关闭；显式启用、有 DOI，使用 builtin 或 custom 镜像                                                         |
+| public-web    | Sci-Hub locator         | Auto 默认；Custom 可关闭；有 DOI，按 builtin 或 custom 镜像有序尝试                                             |
 | browser       | `browser:generic`       | 前四层结果允许继续、有安全入口且 Browser/Model/Profile/runtime/admission 就绪；本地就绪不证明文章权限           |
 
-Auto 在默认公开来源之外加入必要凭据或联系邮箱已配置齐全的 API，配置不齐的来源不加入也不报错，不自动启用镜像。是否配置齐全不证明 API 权限或文章可下载；修改配置或补齐凭据后，已有 Application 的选源集合需重启才更新。Custom 精确选择来源，在同一阶段内以配置顺序为基础，出版社 API 可按唯一名称候选稳定优先；阶段顺序固定。CORE 与 Unpaywall 同层，但凭据要求不同。已选中却缺参数、凭据或适配器的来源会报告失败，不能被静默当作正常耗尽。
+Auto 在默认公开来源之外加入必要凭据或联系邮箱已配置齐全的 API，配置不齐的来源不加入也不报错，默认启用 Sci-Hub，排在 DOI 落地页之后、Browser 之前。是否配置齐全不证明 API 权限或文章可下载；修改配置或补齐凭据后，已有 Application 的选源集合需重启才更新。Custom 精确选择来源，在同一阶段内以配置顺序为基础，出版社 API 可按唯一名称候选稳定优先；阶段顺序固定。CORE 与 Unpaywall 同层，但凭据要求不同。已选中却缺参数、凭据或适配器的来源会报告失败，不能被静默当作正常耗尽。
 
 `.PDF`、`.pdf?download=1` 都可以形成候选；无后缀但明确为 PDF 的地址同样可用。只处理受支持资产线索，保留 query，移除阅读器 fragment；文件有效性由字节与 PDF reader 决定。任一层取得 locator 后立即沿对应机制下载，有效文件不重新排到 direct，不因错误的 Content-Type 重取；本地发布失败保留有效候选。
 
@@ -352,3 +352,5 @@ Browser 限流保留 `pdf-browser-rate-limited`，报告提示等待平台 Retry
 或 portable 包的恢复入口，不搜索临时目录或切换其它浏览器内核。
 早期渠道的“不适用/没有能力”提示不会覆盖后续 Browser 的实际失败；例如 HTTP hint 转交
 Browser 后用尽活跃预算，最终报告应显示 Browser 预算耗尽。早期来源的真正请求失败仍保留其原有诊断与选择规则。
+
+Agent 在同时看到直接 PDF/下载入口与 ePDF/在线阅读器时，优先选择直接 PDF/下载入口；仅有阅读器时仍可使用。这个通用提示不增加出版社 selector，也不改变导航恢复、网络准入或 PDF 验收。固定样本来源测试与当前运行/待生效路线读取见[配置指南](configuration.md#来源目录单源保存与应用)。

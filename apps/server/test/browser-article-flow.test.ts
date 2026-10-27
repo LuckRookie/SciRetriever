@@ -3924,3 +3924,66 @@ it("keeps an already-started transfer when navigation restoration loses its page
     }
   });
 });
+
+it("captures a synthetic download from a page offering both direct PDF and ePDF", async () => {
+  await withStore(async (collector) => {
+    let selected = false;
+    let captured: Awaited<ReturnType<typeof captureFixture>> | null = null;
+    const page: FlowPageHandle = {
+      snapshot: async () => ({
+        ...snapshot(1),
+        screenshot: new Uint8Array([1]),
+        elements: [
+          { element_id: "reader", role: "link", name: "ePDF", editable: false },
+          {
+            element_id: "download",
+            role: "link",
+            name: "Download PDF",
+            editable: false,
+          },
+        ],
+      }),
+      apply: async (input) => {
+        expect(input).toMatchObject({
+          kind: "click-element",
+          element_id: "download",
+        });
+        selected = true;
+        captured = await captureFixture(collector, "priority-direct-download");
+      },
+    };
+    const driver = new BrowserArticleFlowDriver({
+      identity: FLOW_IDENTITY,
+      page,
+      decide: async (o) => {
+        expect(o.elements?.map((e) => e.name)).toEqual([
+          "ePDF",
+          "Download PDF",
+        ]);
+        return {
+          kind: "click-element",
+          element_id: "download",
+          revision: o.observation_revision,
+        };
+      },
+      max_actions: 4,
+      max_model_calls: 4,
+      deadline_ms: 60000,
+      started_at: Date.now(),
+      signal: new AbortController().signal,
+      article_id: ARTICLE_ID,
+      session_id: SESSION_ID,
+      observations: new BrowserObservationStore(),
+      awaitCandidate: async () => captured,
+      hasCandidate: () => captured !== null,
+      action_cooldown_ms: 0,
+    });
+    const result = await driver.run();
+    expect(selected).toBe(true);
+    expect(result.stopped_reason).toBe("stopped");
+    expect(await driver.candidate()).toMatchObject({
+      transfer_id: "priority-direct-download",
+      accepted: true,
+    });
+  });
+});

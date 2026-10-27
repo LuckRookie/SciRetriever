@@ -1,3 +1,8 @@
+import {
+  RestartAdmission,
+  guardRuntimeMethods,
+  type RestartBootstrapPermit,
+} from "../application/restart-admission.js";
 import { ArchiveTextPipeline } from "../archive/text-pipeline.js";
 import { ArchiveArrangementAccess } from "../archive/arrangement-access.js";
 import { SqliteArchiveTextStorage } from "../storage/archive-text.js";
@@ -206,6 +211,7 @@ import {
 import { dshTagModel } from "../tags/model.js";
 import { TagService } from "../tags/service.js";
 export interface Application {
+  readonly restartAdmission?: RestartAdmission;
   readonly archiveArrangement: ArchiveArrangementAccess;
   readonly archiveText: ArchiveTextPipeline | null;
   readonly snapshots: SnapshotService;
@@ -413,6 +419,10 @@ export type ApplicationStage =
   | "agents"
   | "schema";
 export interface ApplicationOptions {
+  readonly networkBudget?: NetworkBudgetCoordinator;
+  readonly configurationSnapshot?: import("../configuration/owner.js").TypeScriptConfigurationSnapshot;
+  readonly startupCredentials?: CredentialBundle;
+  readonly restartBootstrapPermit?: RestartBootstrapPermit;
   /** Explicit PDF inspection/rendering port for isolated integrations; production uses verified bundled PDF.js. */
   readonly proofreadPages?: PdfPages;
   readonly metadata?: {
@@ -622,6 +632,35 @@ export async function createApplication(
 ): Promise<Application> {
   if (typeof homeValue !== "string" || !homeValue.startsWith("/"))
     throw new Error("application operation failed");
+  const home = resolve(homeValue);
+  await mkdir(home, { recursive: true, mode: 0o700 });
+  await mkdir(join(home, ".sciretriever"), { recursive: true, mode: 0o700 });
+  const owner =
+    options.configurationOwner ?? new TypeScriptConfigurationOwner(home);
+  const snapshot = options.configurationSnapshot ?? (await owner.read());
+  const admission = new RestartAdmission(
+    home,
+    snapshot.configuration.paths.catalog_path ?? join(home, "catalog.sqlite"),
+  );
+  return admission.bootstrap(
+    () =>
+      createApplicationOwned(
+        home,
+        {
+          ...options,
+          configurationOwner: owner,
+          configurationSnapshot: snapshot,
+        },
+        admission,
+      ),
+    options.restartBootstrapPermit,
+  );
+}
+async function createApplicationOwned(
+  homeValue: string,
+  options: ApplicationOptions,
+  admission: RestartAdmission,
+): Promise<Application> {
   if (options.parsing && options.typescriptParserRuntime)
     throw new ParsingFailure("parser-unavailable");
   const home = resolve(homeValue);
@@ -633,10 +672,12 @@ export async function createApplication(
     options.configurationOwner ?? new TypeScriptConfigurationOwner(home);
   if (configurationOwner.home !== home)
     throw new Error("application operation failed");
-  const configurationSnapshot = await configurationOwner.read();
+  const configurationSnapshot =
+    options.configurationSnapshot ?? (await configurationOwner.read());
   const configuration = configurationSnapshot.configuration;
   await options.afterStage?.("configuration");
-  const credentials = await loadCredentialBundle(home);
+  const credentials =
+    options.startupCredentials ?? (await loadCredentialBundle(home));
   await options.afterStage?.("credentials");
   let database: SqliteWorker | undefined;
   let files: FileStore | undefined;
@@ -707,7 +748,7 @@ export async function createApplication(
   let retrievalIndex: RetrievalIndexService | null = null;
   const catalogPath =
     configuration.paths.catalog_path ?? join(home, "catalog.sqlite");
-  const networkBudget = new NetworkBudgetCoordinator();
+  const networkBudget = options.networkBudget ?? new NetworkBudgetCoordinator();
   const writes = new CatalogWriteAdmission(catalogPath);
   let closing: Promise<void> | undefined;
   const closeApplication = (): Promise<void> => {
@@ -1223,9 +1264,9 @@ export async function createApplication(
     {
       const runtime = await database.inspectExecutionRuntime();
       if (!runtime.migrated) throw new Error("execution-runtime-integrity");
-      jobs = new ExecutionRepository(database);
+      jobs = new ExecutionRepository(database, admission);
       queue = new ExecutionQueue(jobs);
-      interventions = new InterventionService(jobs);
+      interventions = new InterventionService(jobs, admission);
       const transfers = new BrowserTransferCollector(files, database);
       const publisher = new CandidatePublisher(transfers, database);
       const executionValue: NonNullable<Application["execution"]> = {
@@ -1596,14 +1637,24 @@ export async function createApplication(
               }),
         };
       });
+    const protect = <T extends object>(
+      value: T | null,
+      methods: readonly (keyof T)[],
+    ): T | null =>
+      value ? guardRuntimeMethods(value, methods, admission) : null;
     const application: Application = {
+      restartAdmission: admission,
       folders: new FolderService(database),
       snapshots: new SnapshotService(database, library),
       archive: new ArchiveService(database, processingTasks, library),
       archiveText: archiveText ?? null,
-      archiveArrangement: new ArchiveArrangementAccess(
-        new SqliteArchiveTextStorage(database, files),
-        archiveText,
+      archiveArrangement: guardRuntimeMethods(
+        new ArchiveArrangementAccess(
+          new SqliteArchiveTextStorage(database, files),
+          archiveText,
+        ),
+        ["edit", "save"],
+        admission,
       ),
       tags,
       metadataFields,
@@ -1620,40 +1671,69 @@ export async function createApplication(
           signal,
           effectiveAcquisitionRoutes(),
         ),
-      discovery: new TopicDiscoveryService(
-        metadata.service,
-        identity,
-        observations,
-        database,
+      discovery: guardRuntimeMethods(
+        new TopicDiscoveryService(
+          metadata.service,
+          identity,
+          observations,
+          database,
+        ),
+        ["run"],
+        admission,
       ),
-      citations: new CitationDiscoveryService(
-        metadata.service,
-        identity,
-        observations,
-        references,
-        database,
+      citations: guardRuntimeMethods(
+        new CitationDiscoveryService(
+          metadata.service,
+          identity,
+          observations,
+          references,
+          database,
+        ),
+        ["run"],
+        admission,
       ),
       identity,
       completion: completion ?? null,
       maintenance: manualPdf
-        ? {
-            ingestPdf: manualPdf.ingestPdf.bind(manualPdf),
-            parseDocuments:
-              documentProcessing.parseDocuments.bind(documentProcessing),
-            documentDefault: database.documentDefault.bind(database),
-            rebuildIndex: retrievalIndex.build.bind(retrievalIndex),
-            extraction: extractionDelivery,
-          }
+        ? guardRuntimeMethods<NonNullable<Application["maintenance"]>>(
+            {
+              ingestPdf: manualPdf.ingestPdf.bind(manualPdf),
+              parseDocuments:
+                documentProcessing.parseDocuments.bind(documentProcessing),
+              documentDefault: database.documentDefault.bind(database),
+              rebuildIndex: retrievalIndex.build.bind(retrievalIndex),
+              extraction: extractionDelivery,
+            },
+            ["ingestPdf", "parseDocuments", "rebuildIndex"],
+            admission,
+          )
         : null,
-      documentProcessing,
+      documentProcessing: guardRuntimeMethods(
+        documentProcessing,
+        ["parseDocuments"],
+        admission,
+      ),
       articleIdentity,
-      processingTasks,
-      processors,
-      processorRetention,
+      processingTasks: processingTasks
+        ? guardRuntimeMethods(
+            processingTasks,
+            ["submit", "run", "runResults", "control"],
+            admission,
+            (method, args) =>
+              method === "control" &&
+              ["pause", "cancel"].includes(String(args[1])),
+          )
+        : null,
+      processors: protect(processors, ["submit", "rebuild"]),
+      processorRetention: protect(processorRetention, ["retain"]),
       processorRead,
       documentRead,
       extractionPreparation,
-      extractionDelivery,
+      extractionDelivery: guardRuntimeMethods(
+        extractionDelivery,
+        ["create", "submit", "closeOperation", "cleanupExpired"],
+        admission,
+      ),
       artifactRecovery,
       writes,
       artifactReclaimer,
@@ -1666,19 +1746,19 @@ export async function createApplication(
       literatureArtifacts,
       library,
       execution,
-      publisherGovernance: new PublisherGovernanceService(
-        library,
-        configurationOwner,
-        agents,
+      publisherGovernance: guardRuntimeMethods(
+        new PublisherGovernanceService(library, configurationOwner, agents),
+        ["report"],
+        admission,
       ),
       jobs,
-      queue,
-      jobService,
-      taskService,
+      queue: protect(queue, ["recover", "resume"]),
+      jobService: protect(jobService, ["create"]),
+      taskService: protect(taskService, ["runJob"]),
       interventions,
       executionRecovery,
-      pdfAcquisition,
-      databaseCompletion,
+      pdfAcquisition: protect(pdfAcquisition, ["acquire", "acquireCohort"]),
+      databaseCompletion: protect(databaseCompletion, ["run"]),
       browserHost: demandBrowserHost,
       home,
       configuration,

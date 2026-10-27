@@ -1,8 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
-import { open, mkdir, lstat, type FileHandle } from "node:fs/promises";
+import {
+  open,
+  mkdir,
+  lstat,
+  link,
+  unlink,
+  type FileHandle,
+} from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
 
 export class WriteAdmissionError extends Error {
@@ -50,11 +57,14 @@ async function regular(path: string): Promise<BigIntStats | null> {
     throw e;
   }
 }
-async function flock(handle: FileHandle): Promise<void> {
+async function flock(
+  handle: FileHandle,
+  mode: "shared" | "exclusive",
+): Promise<void> {
   // flock(2) is attached to the inherited open file description; the parent keeps it after this child exits.
   const child = spawn(
     "/usr/bin/flock",
-    ["--exclusive", "--nonblock", "--conflict-exit-code", "75", "3"],
+    [`--${mode}`, "--nonblock", "--conflict-exit-code", "75", "3"],
     {
       stdio: ["ignore", "ignore", "ignore", handle.fd],
       env: { PATH: "/usr/bin:/bin" },
@@ -80,9 +90,52 @@ async function flock(handle: FileHandle): Promise<void> {
     });
   });
 }
-/** Same canonical catalog sidecar, marker and flock protocol as Python CatalogWriteLock. */
-export async function acquireCatalogWriteLock(
+/** Publish a fully initialized marker. Readers never observe a zero-byte sentinel. */
+async function protocolFile(
   path: string,
+  marker: Buffer,
+  directory: FileHandle,
+): Promise<FileHandle> {
+  try {
+    return await open(path, FILE);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  const file = await open(
+    temporary,
+    FILE | constants.O_CREAT | constants.O_EXCL,
+    0o600,
+  );
+  let published = false;
+  try {
+    await flock(file, "exclusive");
+    await file.writeFile(marker);
+    await file.sync();
+    try {
+      await link(temporary, path);
+      published = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    await unlink(temporary);
+    await directory.sync();
+    if (published) return file;
+    const existing = await open(path, FILE);
+    await file.close();
+    return existing;
+  } catch (error) {
+    await file.close();
+    await unlink(temporary).catch((cleanupError: NodeJS.ErrnoException) => {
+      if (cleanupError.code !== "ENOENT") throw cleanupError;
+    });
+    throw error;
+  }
+}
+/** Same canonical catalog sidecar, marker and flock protocol as Python CatalogWriteLock. */
+async function acquireProtocolLock(
+  path: string,
+  mode: "shared" | "exclusive",
 ): Promise<{ release(): Promise<void> }> {
   if (
     process.platform !== "linux" ||
@@ -118,28 +171,11 @@ export async function acquireCatalogWriteLock(
     const hash = createHash("sha256").update(path).digest("hex");
     const lockPath = `/proc/self/fd/${directory.fd}/catalog-${hash}.lock`;
     const marker = Buffer.from(`sciretriever-catalog-lock-v1\n${hash}\n`);
-    let file: FileHandle,
-      created = false;
-    try {
-      file = await open(
-        lockPath,
-        FILE | constants.O_CREAT | constants.O_EXCL,
-        0o600,
-      );
-      created = true;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      file = await open(lockPath, FILE);
-    }
+    const file = await protocolFile(lockPath, marker, directory);
     handles.push(file);
+    await flock(file, mode);
     const fileStat = await file.stat({ bigint: true });
     if (!fileStat.isFile() || fileStat.nlink !== 1n) fail();
-    if (created) {
-      await file.writeFile(marker);
-      await file.sync();
-      await directory.sync();
-    }
-    await flock(file);
     const bytes = Buffer.alloc(marker.length + 1);
     const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
     if (
@@ -171,6 +207,18 @@ export async function acquireCatalogWriteLock(
     if (error instanceof WriteAdmissionError) throw error;
     return fail();
   }
+}
+/** Business writers always use the exclusive protocol. */
+export function acquireCatalogWriteLock(path: string) {
+  return acquireProtocolLock(path, "exclusive");
+}
+/** Dedicated process handoff locks; never substitutes for the catalog business lock. */
+export function acquireRestartLock(
+  identity: string,
+  phase: "intent" | "activity",
+  mode: "shared" | "exclusive",
+) {
+  return acquireProtocolLock(`${identity}.restart-${phase}`, mode);
 }
 interface Scope {
   active: boolean;

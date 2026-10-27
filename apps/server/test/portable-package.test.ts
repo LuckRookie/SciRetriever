@@ -1,10 +1,16 @@
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readlink, realpath } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
+import {
+  workbenchLogin,
+  workbenchTestAccess,
+} from "./workbench-auth-fixture.js";
 
 const repository = fileURLToPath(new URL("../../..", import.meta.url));
 
@@ -213,6 +219,124 @@ it("builds a Python-free portable runtime and executes its bundled Node CLI", as
         },
       ],
     });
+
+    // Launch outside the checkout and installed app directory. Both generations must
+    // use the package's Node and its private worker, with no checkout-relative entry.
+    const web = spawn(
+      join(output, "bin", "sciretriever"),
+      ["web", "--host", "127.0.0.1", "--port", "0", "--json"],
+      {
+        cwd: parent,
+        env: {
+          ...environment,
+          SCIRETRIEVER_WEB_PASSWORD: workbenchTestAccess.password,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const ready: { urls: string[] }[] = [];
+    let stdout = "",
+      stderr = "",
+      incomplete = "";
+    web.stdout.on("data", (bytes) => {
+      const text = String(bytes);
+      stdout += text;
+      incomplete += text;
+      const lines = incomplete.split("\n");
+      incomplete = lines.pop()!;
+      for (const line of lines)
+        if (line.trim()) ready.push(JSON.parse(line) as { urls: string[] });
+    });
+    web.stderr.on("data", (bytes) => {
+      stderr += String(bytes);
+    });
+    const exit = new Promise<number | null>((done) => web.once("exit", done));
+    try {
+      await expect.poll(() => ready.length, { timeout: 20000 }).toBe(1);
+      const packagedNode = await realpath(join(output, "runtime/bin/node"));
+      expect(await readlink(`/proc/${web.pid}/exe`)).toBe(packagedNode);
+      const parentChildren = readFileSync(
+        `/proc/${web.pid}/task/${web.pid}/children`,
+        "utf8",
+      )
+        .trim()
+        .split(/\s+/u);
+      expect(parentChildren).toHaveLength(1);
+      expect(await readlink(`/proc/${parentChildren[0]}/exe`)).toBe(
+        packagedNode,
+      );
+      const origin = new URL(
+        ready[0]!.urls.find((u) => u.startsWith("http://127.0.0.1:"))!,
+      ).origin;
+      const auth = await workbenchLogin(origin),
+        root = await fetch(origin, { headers: { Cookie: auth } });
+      const cookie = `${auth}; ${root.headers
+        .getSetCookie()
+        .map((c) => c.split(";")[0])
+        .join("; ")}`;
+      const registration = await fetch(`${origin}/api/clients`, {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: origin,
+          "X-Workbench-Init": "1",
+          "Content-Type": "application/json",
+        },
+        body: "{}",
+      });
+      const grant = (await registration.json()) as {
+        client_id: string;
+        csrf: string;
+      };
+      const directoryResponse = await fetch(
+        `${origin}/api/configuration/sources?client_id=${grant.client_id}`,
+        { headers: { Cookie: cookie } },
+      );
+      const directory = (await directoryResponse.json()) as {
+        result: { binding_revision: string; runtime: { runtime_id: string } };
+      };
+      const response = await fetch(
+        `${origin}/api/configuration/apply?client_id=${grant.client_id}`,
+        {
+          method: "POST",
+          headers: {
+            Cookie: cookie,
+            Origin: origin,
+            "X-Workbench-Csrf": grant.csrf,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            request_id: randomUUID(),
+            runtime_id: directory.result.runtime.runtime_id,
+            target_binding_revision: directory.result.binding_revision,
+          }),
+        },
+      );
+      expect(response.status).toBe(202);
+      await response.arrayBuffer();
+      await expect.poll(() => ready.length, { timeout: 20000 }).toBe(2);
+      expect(ready[1]!.urls).toEqual(ready[0]!.urls);
+      expect(
+        (
+          await fetch(`${origin}/api/configuration/sources`, {
+            headers: { Cookie: cookie },
+          })
+        ).status,
+      ).toBe(401);
+      const nextChildren = readFileSync(
+        `/proc/${web.pid}/task/${web.pid}/children`,
+        "utf8",
+      )
+        .trim()
+        .split(/\s+/u);
+      expect(nextChildren).toHaveLength(1);
+      expect(nextChildren).not.toEqual(parentChildren);
+      expect(await readlink(`/proc/${nextChildren[0]}/exe`)).toBe(packagedNode);
+      expect(stdout + stderr).not.toContain(workbenchTestAccess.password);
+    } finally {
+      if (web.exitCode === null && web.signalCode === null) web.kill("SIGTERM");
+      expect(await exit, stderr).toBe(0);
+    }
   } finally {
     rmSync(parent, { recursive: true, force: true });
   }

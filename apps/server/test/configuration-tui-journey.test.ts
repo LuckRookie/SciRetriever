@@ -16,6 +16,7 @@ const promptState = vi.hoisted(() => ({
   selections: [] as string[],
   inputs: [] as string[],
   confirmations: [] as boolean[],
+  checkboxChoices: [] as string[],
 }));
 
 vi.mock("@inquirer/prompts", () => ({
@@ -27,7 +28,12 @@ vi.mock("@inquirer/prompts", () => ({
   confirm: vi.fn(async () => promptState.confirmations.shift() ?? false),
   input: vi.fn(async () => promptState.inputs.shift() ?? ""),
   password: vi.fn(async () => ""),
-  checkbox: vi.fn(async () => []),
+  checkbox: vi.fn(
+    async (options: { choices: readonly { value: string }[] }) => {
+      promptState.checkboxChoices = options.choices.map((c) => c.value);
+      return [];
+    },
+  ),
 }));
 
 async function* input(text: string): AsyncIterable<Uint8Array> {
@@ -342,4 +348,48 @@ describe("TypeScript configuration center", () => {
       await rm(home, { recursive: true, force: true });
     }
   });
+});
+
+it("preserves legacy hint IDs on read and offers only standalone PDF adapters on explicit custom editing", async () => {
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-tui-source-choice-")),
+    owner = new TypeScriptConfigurationOwner(home);
+  try {
+    await owner.publish(
+      '[sources.acquisition]\nmode="custom"\nproviders=["crossref","wiley"]\n',
+      "missing",
+      ["sources"],
+    );
+    await owner.status();
+    expect(
+      (await owner.read()).configuration.sources.acquisition.providers,
+    ).toEqual(["crossref", "wiley"]);
+    promptState.selections = ["download", "custom", "back", "quit"];
+    promptState.confirmations = [true];
+    const output: string[] = [];
+    expect(
+      await runRichConfigurationCenter({
+        owner,
+        theme: "mono",
+        write: (t) => output.push(t),
+      }),
+    ).toBe(0);
+    expect(promptState.checkboxChoices).toEqual([
+      "arxiv",
+      "europe-pmc",
+      "unpaywall",
+      "elsevier",
+      "wiley",
+      "core",
+      "sci-hub",
+    ]);
+    expect(output.join("\n")).toContain("Proposed configuration changes");
+    expect(
+      (await owner.read()).configuration.sources.acquisition.providers,
+    ).toEqual([]);
+  } finally {
+    promptState.selections = [];
+    promptState.confirmations = [];
+    promptState.checkboxChoices = [];
+    await rm(home, { recursive: true, force: true });
+  }
 });

@@ -123,9 +123,11 @@ export function submitProcessor(
   start: boolean,
   signal?: AbortSignal,
 ) {
-  return recordOperation(app.database, "processor-submit", request, () =>
-    performSubmitProcessor(app, request, start, signal),
-  );
+  const work = () =>
+    recordOperation(app.database, "processor-submit", request, () =>
+      performSubmitProcessor(app, request, start, signal),
+    );
+  return app.restartAdmission ? app.restartAdmission.newWork(work) : work();
 }
 async function performSubmitProcessor(
   app: Pick<Application, "processors" | "processingTasks">,

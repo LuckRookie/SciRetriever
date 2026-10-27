@@ -1,4 +1,7 @@
-import { networkRequestDispatched } from "./request-activity.js";
+import {
+  networkRequestDispatched,
+  networkResponseBytes,
+} from "./request-activity.js";
 import { Agent, request } from "node:http";
 import type { AgentTransport } from "../agents/protocol.js";
 
@@ -275,6 +278,7 @@ export async function requestOnce(
       const responseFailure = (cause?: unknown): void =>
         fail("response-incomplete", cause);
       const consumeResponse = (bytes: number): void => {
+        networkResponseBytes(bytes);
         try {
           permit?.consumeResponse(bytes);
         } catch (error) {

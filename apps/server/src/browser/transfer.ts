@@ -75,6 +75,14 @@ export class BrowserTransferCollector {
     this.files = files;
   }
 
+  /** Writers and prepared publication ownership only; durable retained candidates are facts, not live work. */
+  activeCount(): number {
+    return (
+      [...this.transfers.values()].filter((t) => t.state === "capturing")
+        .length + this.publicationStages.size
+    );
+  }
+
   async begin(
     transferId: string,
     maxBytes = Number.MAX_SAFE_INTEGER,

@@ -407,6 +407,22 @@ React以React Aria管理键盘/焦点/浮层，TanStack Query管理请求生命�
 
 配置状态读取无外联。probe 是用户明确动作，指出将联系何种服务及可能费用，只发送固定最小测试内容，不发送用户文献。结果显示实际阶段和稳定诊断；probe 成功不表示所有文献获取或分析都会成功。
 
+#### 4.3.3 web 守护与应用配置
+
+正式 `web` 命令是前台父进程，使用当前 Node 和随包私有入口 fork 一个 worker，不打开 catalog、不装配第二个 Application、不提供父进程 HTTP。worker 持有 Application/HTTP；直接嵌入 startProductionWorkbench 未注入 lifecycle 时为 unmanaged。来源目录、单源保存/测试与 apply 均经 configuration-operations 共享边界，接口封套为 protocol_version=1/result；来源合同与存储规则见[来源目录](03-literature-materials.md#310-来源目录与安全测试)。
+
+apply 绑定 runtime_id、generation、request_id 与保存的 binding revision。同目标在途幂等，不同目标冲突；等待中目标变化产生 stale failure。先回送并 flush 202，再异步交接。waiting/draining 可取消，commit 后不可取消。状态包括 unmanaged/idle/waiting/draining/stopping/starting/applied/cancelled/failed；blockers 分 queued、running、foreground、probes、browser_transfers，原因码仅在安全 problem 技术详情中。
+
+每次异步取锁、释放锁或检查返回后，在写交接状态前重新核对本请求身份；取消后迟到的锁不能恢复 waiting/draining，旧请求异常不能改写后继请求。并发同目标请求在配置读取后再次合并为同一在途 receipt；迟到的取消确认只处理其原请求。
+
+新工作先持 intent shared，再在释放前登记 queued 或取得覆盖执行及清理的 activity shared。许可同时按规范 home 与 catalog 身份建立，另一个 home 指向同一库也不能绕过。Application 启动/恢复、CLI/MCP/Entry、前台写入与 probe 使用同一准入；已登记任务的 continuation 由实际 owner 调用 activity，不接受客户端自报 job_id 授权。HTTP、CLI 和 MCP 入口先脱离内部许可上下文，不能继承创建 listener 或调用传输入口时尚有效的 bootstrap 许可；长期内部回调继承的过期 ALS 上下文必须重新取许可，不能借它继续写。
+
+父进程持 intent exclusive 后阻止新提交/恢复/重试/前台工作及测试；已有队列继续排空，必要人工 Browser 协助和取消可用。父取得 activity exclusive 后，屏障下再次检查全部 blocker、目标与外部 execution-runtime lease；现有 execution lease 只作短检查并释放，不能持到下一代恢复。父持专用两类交接锁至新代 ready。下一代通过 IPC 的一次性本进程 bootstrap capability 完成启动；装配使用已校验的同一配置/凭据快照，ready 核对代次、实际端口、binding revision 与 IPC 版本。旧 PID 真退出前不启动新代。查询为零本身不是重启许可。
+
+受控 apply 仅在匹配本代 commit 后 exit 75 才换代；裸 75 属异常。异常退避为 1、2、4 秒，60 秒内最多重启 3 次，之后非零停止；启动/端口/schema/IPC 错误不 crash-loop。60 秒未收到合格 ready 时报告启动超时并要求正常关闭，不将其当成已就绪。正常关闭卡住只报告 failed 并等待，不自动 kill 或启动第二代。父 SIGINT/SIGTERM 关闭整树；直接子信号按 operator 停服；父死亡/IPC 断开时子进程正常关闭。异常恢复只沿现有对账标记中断，不重演 Provider、模型或 Browser 动作。
+
+端口 0 首次分配后由父记住，后代保持；端口被抢明确失败。固定密码只由父消费一次启动环境并删除，通过私有 IPC 内存注入，禁止 argv、文件或生命周期日志传递。自动 API key 每代重生，仍只走启动安全交付；cookie、登录、CSRF 和控制 grant 失效，需重新登录。父重启不重演 pending apply。应用配置不执行 build、升级或 schema 迁移；首次从直接子进程方式切换见[升级指南](../../guides/upgrade.md#web-守护的首次切换与程序升级)。
+
 ### 4.4 知识阅读与维护分离
 
 阅读页展示文献身份、具体版本、元数据来源、材料、可读表示和不同用途知识产物。Agent 与人类看到同一事实，差异只在渲染与交互，不在“谁有更完整的数据库”。

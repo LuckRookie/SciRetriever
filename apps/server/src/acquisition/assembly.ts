@@ -518,7 +518,7 @@ function sourceCredential(
   return readProviderCredential(credentials, grant, provider, field);
 }
 
-/** Assemble the public locator sources without probing or enabling sci-hub. */
+/** Assemble the public locator sources without probing; selection is resolved from local configuration. */
 export function assemblePublicAcquisitionRegistry(
   configuration: Pick<OrdinaryConfiguration, "sources">,
   coordinator: NetworkBudgetCoordinator,
@@ -606,7 +606,12 @@ export function assemblePublicAcquisitionRegistry(
   // Candidate Intake/identity-acceptance boundary. Keeping the throwing marker source
   // out of the locator batch prevents an empty Browser result from being mistaken for
   // normal exhaustion while preserving the admission state for Entry escalation.
-  const order = ["direct", ...selected, "doi-landing"];
+  const order = [
+    "direct",
+    ...selected.filter((source) => source !== "sci-hub"),
+    "doi-landing",
+    ...(selected.includes("sci-hub") ? ["sci-hub"] : []),
+  ];
   if (options.browser_admission) {
     order.push(BROWSER_ROUTE_NAME);
     if (options.browser_admission.enabled) {

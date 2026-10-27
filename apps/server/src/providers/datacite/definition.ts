@@ -18,6 +18,13 @@ export const services = Object.freeze({
   ),
 });
 export const definition = provider({
+  displayName: "DataCite",
+  sourceFixture: {
+    version: "v1",
+    identifiers: [{ namespace: "doi", value: "10.5281/zenodo.3727209" }],
+    record_id: null,
+    evidence: "docs/notes/providers/datacite.md representative public response",
+  },
   metadata: references,
   metadataService: "datacite-rest",
   metadataAuto: true,

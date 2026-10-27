@@ -1,3 +1,5 @@
+import { RestartAdmission } from "../application/restart-admission.js";
+import { sourceFileIdentity, sourceStateChanged } from "./source-state.js";
 import { acquisitionRouteState } from "./acquisition-selection.js";
 import {
   type AcquisitionRouteState,
@@ -9,7 +11,7 @@ import {
   type ConfigurationReadiness,
 } from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -77,8 +79,7 @@ import {
 import {
   ConfigurationBoundaryError,
   configurationDiagnostics,
-  configurationPath,
-  loadConfiguration,
+  readConfigurationBytes,
   parseConfiguration,
   publishConfiguration,
   type OrdinaryConfiguration,
@@ -385,17 +386,9 @@ async function ensureHome(home: string): Promise<void> {
 }
 
 async function readBytes(home: string): Promise<Uint8Array | null> {
-  const path = configurationPath(home);
   try {
-    const stat = await lstat(path);
-    if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600)
-      invalid();
-    const bytes = await readFile(path);
-    if (bytes.byteLength > MAX_BYTES) invalid();
-    return bytes;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    if (error instanceof ConfigurationOwnerError) throw error;
+    return await readConfigurationBytes(home);
+  } catch {
     invalid();
   }
 }
@@ -407,7 +400,7 @@ async function snapshot(
   const bytes = await readBytes(home);
   if (bytes === null)
     return { revision: "missing", configuration: parseConfiguration("") };
-  const configuration = await loadConfiguration(home);
+  const configuration = parseConfiguration(bytes);
   return { revision: digest(bytes), configuration };
 }
 
@@ -653,6 +646,13 @@ export class TypeScriptConfigurationOwner {
     if (!home.startsWith("/")) invalid();
   }
 
+  async admit<T>(work: () => Promise<T>): Promise<T> {
+    await mkdir(join(this.home, ".sciretriever"), {
+      recursive: true,
+      mode: 0o700,
+    });
+    return new RestartAdmission(this.home).newWork(work);
+  }
   async read(signal?: AbortSignal): Promise<TypeScriptConfigurationSnapshot> {
     cancelled(signal);
     return snapshot(this.home);
@@ -725,7 +725,58 @@ export class TypeScriptConfigurationOwner {
     baseline: string,
     sections: readonly ConfigurationSection[],
     signal?: AbortSignal,
+    heldLock?: import("../storage/locking.js").FileLock,
   ): Promise<TypeScriptConfigurationSnapshot> {
+    if (!heldLock)
+      return this.admit(async () => {
+        const lock = await acquireFileLock(this.home, "configuration");
+        try {
+          const before = await this.read(signal);
+          const identity = await sourceFileIdentity(this.home, before.revision);
+          const after = await this.publish(
+            payload,
+            baseline,
+            sections,
+            signal,
+            lock,
+          );
+          if (after.revision !== before.revision) {
+            const keys = [
+              [
+                "web-of-science",
+                before.configuration.sources.metadata.web_of_science,
+                after.configuration.sources.metadata.web_of_science,
+              ],
+              [
+                "crossref",
+                before.configuration.sources.metadata.crossref,
+                after.configuration.sources.metadata.crossref,
+              ],
+              [
+                "unpaywall",
+                before.configuration.sources.acquisition.unpaywall,
+                after.configuration.sources.acquisition.unpaywall,
+              ],
+              [
+                "sci-hub",
+                before.configuration.sources.acquisition.sci_hub,
+                after.configuration.sources.acquisition.sci_hub,
+              ],
+            ] as const;
+            await sourceStateChanged(
+              this.home,
+              identity,
+              await sourceFileIdentity(this.home, after.revision),
+              keys
+                .filter(([, a, b]) => JSON.stringify(a) !== JSON.stringify(b))
+                .map(([source]) => source),
+            );
+          }
+          return after;
+        } finally {
+          await lock.release();
+        }
+      });
     const candidate = this.validate(payload, signal);
     checkSections(sections);
     const currentBytes = await readBytes(this.home);
@@ -751,6 +802,7 @@ export class TypeScriptConfigurationOwner {
       this.home,
       bytes,
       current.revision === "missing" ? null : current.revision,
+      heldLock,
     );
     return snapshot(this.home);
   }
@@ -897,6 +949,13 @@ export class TypeScriptConfigurationOwner {
     baseline: string,
     signal?: AbortSignal,
   ): Promise<ConfigurationReadiness> {
+    return this.admit(() => this.credentialOwned(edit, baseline, signal));
+  }
+  private async credentialOwned(
+    edit: TypeScriptCredentialEdit,
+    baseline: string,
+    signal?: AbortSignal,
+  ): Promise<ConfigurationReadiness> {
     cancelled(signal);
     validateCredentialEdit(edit);
     const expected = revision(baseline);
@@ -918,9 +977,18 @@ export class TypeScriptConfigurationOwner {
       } else if (edit.namespace !== "source") {
         invalid();
       }
+      const identity = await sourceFileIdentity(this.home, current.revision);
       const bundle = await loadCredentialBundle(this.home);
       const bytes = editCredentialBundle(bundle, edit, origin);
-      if (bytes !== null) await publishCredentialText(this.home, bytes);
+      if (bytes !== null) {
+        await publishCredentialText(this.home, bytes);
+        await sourceStateChanged(
+          this.home,
+          identity,
+          await sourceFileIdentity(this.home, current.revision),
+          edit.namespace === "source" ? [edit.target] : [],
+        );
+      }
     } finally {
       await lock.release();
     }
@@ -1205,6 +1273,7 @@ export class ConfigurationProbeSession {
     private readonly metadata: MetadataRegistry,
     private readonly acquisition: PublicAcquisitionRegistry,
     private readonly seams: ConfigurationProbeSeams,
+    private readonly owner: TypeScriptConfigurationOwner,
   ) {}
 
   static async create(
@@ -1265,6 +1334,7 @@ export class ConfigurationProbeSession {
       metadata,
       acquisition,
       effectiveSeams,
+      owner,
     );
   }
 
@@ -1273,6 +1343,12 @@ export class ConfigurationProbeSession {
   }
 
   async run(
+    request: ConfigurationProbeRequest,
+    options: { readonly authorized: boolean; readonly signal?: AbortSignal },
+  ): Promise<ConfigurationProbeResult> {
+    return this.owner.admit(() => this.runOwned(request, options));
+  }
+  private async runOwned(
     request: ConfigurationProbeRequest,
     options: { readonly authorized: boolean; readonly signal?: AbortSignal },
   ): Promise<ConfigurationProbeResult> {

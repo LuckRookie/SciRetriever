@@ -640,7 +640,7 @@ describe("TypeScript public acquisition sources", () => {
     }
   });
 
-  it("keeps configured mirrors opt-in and routes authorized downloads without exposing credentials", async () => {
+  it("keeps configured mirror locators precise and routes authorized downloads without exposing credentials", async () => {
     const mirror = new ConfiguredSciHubSource(["https://mirror.example"]);
     await expect(mirror.discover(request)).resolves.toMatchObject([
       {
@@ -816,6 +816,7 @@ describe("TypeScript public acquisition sources", () => {
         { source_name: "arxiv", ready: true, failure_code: null },
         { source_name: "europe-pmc", ready: true, failure_code: null },
         { source_name: "doi-landing", ready: true, failure_code: null },
+        { source_name: "sci-hub", ready: true, failure_code: null },
       ]);
     } finally {
       await application.close();
@@ -852,8 +853,8 @@ describe("TypeScript public acquisition sources", () => {
       "direct",
       "wiley",
       "arxiv",
-      "sci-hub",
       "doi-landing",
+      "sci-hub",
     ]);
     expect(selected.statuses[1]).toEqual({
       source_name: "wiley",
@@ -863,8 +864,8 @@ describe("TypeScript public acquisition sources", () => {
     expect(selected.sources.map((item) => item.source_name)).toEqual([
       "direct",
       "arxiv",
-      "sci-hub",
       "doi-landing",
+      "sci-hub",
     ]);
 
     const autoWithCredential = (
@@ -875,7 +876,7 @@ describe("TypeScript public acquisition sources", () => {
       { credentials: parseCredentialText('[core]\napi_key = "present"\n') },
     );
     expect(autoWithCredential.statuses.map((item) => item.source_name)).toEqual(
-      ["direct", "arxiv", "europe-pmc", "core", "doi-landing"],
+      ["direct", "arxiv", "europe-pmc", "core", "doi-landing", "sci-hub"],
     );
     expect(
       autoWithCredential.statuses.find((item) => item.source_name === "core"),
@@ -972,6 +973,7 @@ describe("controlled browser acquisition route", () => {
       "arxiv",
       "europe-pmc",
       "doi-landing",
+      "sci-hub",
       "browser",
     ]);
     expect(
@@ -988,6 +990,7 @@ describe("controlled browser acquisition route", () => {
       "arxiv",
       "europe-pmc",
       "doi-landing",
+      "sci-hub",
     ]);
   });
 
@@ -1042,6 +1045,7 @@ describe("controlled browser acquisition route", () => {
         "arxiv",
         "europe-pmc",
         "doi-landing",
+        "sci-hub",
         "browser",
       ]);
       expect(
@@ -1056,6 +1060,7 @@ describe("controlled browser acquisition route", () => {
         "arxiv",
         "europe-pmc",
         "doi-landing",
+        "sci-hub",
         "browser",
       ]);
       // Entry runs only the locator view and escalates explicitly, so the throwing
@@ -1066,6 +1071,7 @@ describe("controlled browser acquisition route", () => {
         "arxiv",
         "europe-pmc",
         "doi-landing",
+        "sci-hub",
       ]);
       expect(split.browser).toEqual({
         enabled: true,
@@ -1105,6 +1111,7 @@ describe("controlled browser acquisition route", () => {
       "arxiv",
       "europe-pmc",
       "doi-landing",
+      "sci-hub",
     ]);
   });
 
@@ -1125,16 +1132,16 @@ describe("controlled browser acquisition route", () => {
     expect(registry.sources.map((item) => item.source_name)).toEqual([
       "direct",
       "arxiv",
-      "sci-hub",
       "doi-landing",
+      "sci-hub",
     ]);
     const split = splitAcquisitionRoutes(registry);
     expect(split.routes.sources.map((item) => item.source_name)).toEqual([
       "direct",
       "wiley",
       "arxiv",
-      "sci-hub",
       "doi-landing",
+      "sci-hub",
     ]);
     const wiley = split.routes.sources.find(
       (item) => item.source_name === "wiley",

@@ -21,6 +21,13 @@ export const services = Object.freeze({
   ),
 });
 export const definition = provider({
+  displayName: "arXiv",
+  sourceFixture: {
+    version: "v1",
+    identifiers: [{ namespace: "arxiv", value: "2106.14834" }],
+    record_id: "2106.14834",
+    evidence: "https://arxiv.org/abs/2106.14834",
+  },
   metadata: search,
   metadataFormat: "atom",
   metadataService: "arxiv-query",

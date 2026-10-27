@@ -38,6 +38,14 @@ export const services = Object.freeze({
   ),
 });
 export const definition = provider({
+  displayName: "Elsevier",
+  sourceFixture: {
+    version: "v1",
+    identifiers: [{ namespace: "doi", value: "10.1016/j.softx.2015.06.001" }],
+    record_id: null,
+    evidence:
+      "https://doi.org/10.1016/j.softx.2015.06.001 ; GROMACS, SoftwareX open access",
+  },
   publisherAliases: [
     "Elsevier",
     "Elsevier BV",

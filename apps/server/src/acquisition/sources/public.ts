@@ -130,7 +130,7 @@ function staticPdfLocators(base: string, bytes: Uint8Array): readonly string[] {
   );
 }
 
-async function fetchPdfResponse(
+export async function fetchPdfResponse(
   candidate: SourceCandidate,
   transport: PdfDownloadTransport,
   signal?: AbortSignal,

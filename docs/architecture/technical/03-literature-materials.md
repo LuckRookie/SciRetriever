@@ -359,7 +359,7 @@ Scopus Search 的 offset 与 cursor 是两种分页合同：cursor 响应必须�
 adapter 会将它与本地已接收计数严格核对。Debug 只记录受控 envelope、字段存在位、disposition
 和中性 failure kind，不记录字段值、cursor、query 或响应正文。
 
-普通配置向 `bootstrap/application.ts` 提供 Source mode、Custom Provider 顺序、产品/database/edition、逐 Source `limit`、非 secret 运行身份和 AccessPolicy；Configuration 的有效 Source 解析只用版本常量解析 Auto，不访问 Network 或 credentials。当前 Metadata Auto 是 Crossref、Semantic Scholar、arXiv、OpenAlex、Europe PMC、DataCite 与 CORE；Crossref 无子表时使用 anonymous。OpenCitations 可显式选择其支持的引用能力，不在当前 Auto 列表，也不参加 topic search。Provider secret 只由 TypeScript Configuration owner 从 `~/.sciretriever/credentials.toml` 私有解析后注入具体 adapter。Metadata API、Port、Model、AccessScope 和 observation 都不保存 secret 值或凭据文件原文。未知选择键、缺失生产适配器、缺失所需普通参数/凭据或缺少明确 AccessPolicy 必须形成稳定 readiness 失败，不能静默回退到假实现或无限制访问。
+普通配置向 `bootstrap/application.ts` 提供 Source mode、Custom Provider 顺序、产品/database/edition、逐 Source `limit`、非 secret 运行身份和 AccessPolicy；Configuration 的有效 Source 解析只用版本默认和本地配置/凭据存在性，不访问 Network、不读取授权值。Metadata Auto 的公开集合是 Crossref、Semantic Scholar、arXiv、OpenAlex、Europe PMC、DataCite 与 CORE，另加入必要 key 齐全的 Elsevier、Springer Nature，以及 key、产品与数据库齐全的 Web of Science；Crossref 无子表时使用 anonymous。OpenCitations 可显式选择其支持的引用能力，不在当前 Auto 列表，也不参加 topic search。Provider secret 只由 TypeScript Configuration owner 从 `~/.sciretriever/credentials.toml` 私有解析后注入具体 adapter。Metadata API、Port、Model、AccessScope 和 observation 都不保存 secret 值或凭据文件原文。未知选择键、缺失生产适配器、缺失所需普通参数/凭据或缺少明确 AccessPolicy 必须形成稳定 readiness 失败，不能静默回退到假实现或无限制访问。
 
 `config status` 只读取 capability spec、普通配置和凭据字段存在性，不调用 Metadata API 或 Network。用户显式执行的 `config test` 可以复用 adapter 声明的最小 probe，但它通过 Bootstrap 的配置测试边界和统一 Network 执行，不伪装成 Metadata Search/Lookup，不产生 MetadataObservation、ProviderRelationObservation、DiscoveryRun、Report 或持久化结果。
 
@@ -410,7 +410,7 @@ Metadata 形成中性 observation 后，通过自己拥有的 publication Port �
 - 同一输入重复运行不制造无意义 observation；
 - Vendor 和 HTTP 类型不进入公开 API 或 Model；
 - 凭据与底层异常不会进入持久化失败或用户输出；
-- Provider secret 只由配置边界注入 adapter，不进入 Metadata Model、Port、AccessScope、observation、日志或 fixture；`config status` 不调用 Network，`config test` 使用 fake Network 且不产生文献事实；
+- Provider secret 只由配置边界注入 adapter，不进入 Metadata Model、Port、AccessScope、observation、日志或 fixture；`config status` 不调用 Network，配置测试经显式授权才请求外部服务，不产生文献事实；自动回归使用 fake Network；
 - 同一 API quota 被 Metadata search、reference query 与 Acquisition 共用时，在当前进程使用同一 AccessScope；不同供应商仍可逻辑并发，但真实请求分别服从其共享 policy；
 - `429`、`Retry-After` 和 quota 阻塞会限制同一 scope 的其它调用方，取消或重跑不能立即绕过；
 - 缺失 policy、vendor SDK 绕过受控 transport 或 adapter 私建局部 limiter 时 readiness/架构检查失败；
@@ -433,6 +433,18 @@ Metadata 的 search/lookup/reference 都可能访问外部服务，属于显式�
 ### 3.10 来源端点与关系结构
 
 `ProviderLiteratureKey` 是供应商文献记录的中性定位，只包含可选 `record_id` 和稳定 `Identifier[]`，且至少具有其中一种定位。`MetadataObservation.version_links` 用它定位同文献其它版本；当前端点由父 observation 表达。`ProviderRelationObservation` 用两个 key 表达一条规范化 `citing -> cited` 有向引用边。两种用法都不接受本地 Literature ID、目标 MetadataObservation 或状态字段；Model validator 只检查封闭结构、至少一个定位值和非空格式，不决定版本归属、目标接纳或 Reference 建立。精确合同见 [MetadataObservation 来源输入](#25-元数据来源与字段裁决)与 [ProviderRelationObservation](#352-providerrelationobservation)。
+
+### 3.10 来源目录与安全测试
+
+Provider definition 拥有展示名、四列用途所需能力、公开字段描述和 `sourceFixture.version`。Configuration owner 产生 `SourceDirectory`：恰好 15 家来源，Browser 为独立 builtin 测试；Metadata 三种用途共用一份选择，PDF 独立。目录区分本地 ready、当前 Application selected 与 pending；配置-only 进程 selected/effective 为空，不伪造已在用。当前生效与待生效路线使用同一 plan，direct → publisher-api → general-api → public-web → Browser；同阶段保留既有排序，DOI landing 在 Sci-Hub 前。Metadata Auto 见 ADR 0043，PDF 镜像默认见 ADR 0040。
+
+来源保存只接一个来源的小对象和封闭字段动作。目录 CAS 包含普通配置 revision 与凭据文件发布身份元数据，不包含秘密内容 hash；binding revision 只取非秘密配置与组装所需的 presence，所以同 presence key 轮换不自行要求重启。单字段 clear 不删除其它 key。全部校验后持 configuration 锁，依次发布凭据、普通配置及非秘密缓存。每个文件保留权限、链接防护、临时文件/fsync/rename；跨文件不宣称事务，中途失败返回 typed partial 与 committed_fields，不回滚已发布事实。保存成功但测试接纳失败仍返回 saved，并用可选 test_problem 说明测试未启动。
+
+显式来源测试使用一个长寿命 dispatcher，共用 Application Network。固定公开 DOI 或原生 ID 在 provider 就近维护；Metadata lookup 的 scan_limit=1，PDF 只执行该源的一个逻辑原生获取并经共享 PDF reader 验证，不升级其它源/Browser、不发布文献或资产。全部测试串行；相同 request/revision 幂等，同源在途复用，旧 revision 的晚结果拒绝覆盖新状态。Browser 只用已安装 Cloak 和可销毁临时 profile 启动/关闭；PLOS 不伪造 adapter。
+
+`SourceProblem.display` 只有 error、not-configured、credential-invalid、no-fulltext-permission。裸 403 与挑战不足以证明全文权限；只有原生协议明确认证已接受且全文授权拒绝才使用最后一种。其它请求失败统一 error，正常空结果不算错误。安全技术详情只携带稳定 code、scope、白名单字段名和有界数字，不保存 URL、headers、cookie、响应或页面文字。
+
+最近结果保存在可删除重建的 source-state.json，而非 catalog。只保存发布身份、非秘密 generation、方法版本和最多 15+Browser 条安全结果，0700/0600、原子发布。来源变更只使本来源失效，外部未知文件修改保守全失效；测试进度/结果不改变配置 CAS。GET 不写缓存，缺失/损坏不阻启动。运行绑定与平稳重启见[配置交互](01-product-interface.md#43-配置交互)。
 
 ## 4. 材料获取、路线与候选
 
@@ -580,9 +592,9 @@ core
 sci-hub
 ```
 
-这里使用稳定 Provider key；`springer` 表示 Springer Nature，`sci-hub` 表示默认关闭、必须由 operator 显式启用的 locator Source。启用后 resolver 使用当前版本 bundled mirror set；`sources.acquisition.sci-hub.urls` 可以用一到八个有序 HTTPS 镜像完整覆盖 bundled 列表，测试/内部显式注入 resolver 又优先于两者。三种选择都只对 canonical DOI 形成 landing locator，按序执行、不并发、不自动发现镜像。这里的“覆盖”表示相应服务能够贡献 PDF 字节、直接 locator、落地页或受控内容路径，并不要求每个名称都复制一套下载 adapter。Crossref、OpenAlex、DataCite 等 Metadata adapter 已经给出 `AssetHint` 时，由通用公开 route 消费同一线索；不为名称对称再实现只转发相同 URL 的 route adapter。Web of Science 和 OpenCitations 当前不作为原文来源。以上是目标矩阵，不证明当前代码或安装产品已经接入。
+这里使用稳定 Provider key；`springer` 表示 Springer Nature，`sci-hub` 表示 Auto 默认、Custom 可关闭的 locator Source。resolver 使用当前版本 bundled mirror set；`sources.acquisition.sci-hub.urls` 可以用一到八个有序 HTTPS 镜像完整覆盖 bundled 列表，测试/内部显式注入 resolver 又优先于两者。三种选择都只对 canonical DOI 形成 landing locator，按序执行、不并发、不自动发现镜像。这里的“覆盖”表示相应服务能够贡献 PDF 字节、直接 locator、落地页或受控内容路径，并不要求每个名称都复制一套下载 adapter。Crossref、OpenAlex、DataCite 等 Metadata adapter 已经给出 `AssetHint` 时，由通用公开 route 消费同一线索；不为名称对称再实现只转发相同 URL 的 route adapter。Web of Science 和 OpenCitations 当前不作为原文来源。以上是目标矩阵，不证明当前代码或安装产品已经接入。
 
-Acquisition named Source 由 Configuration 的本地 Auto/Custom resolver 选择。Auto 是版本默认公开集合，加上必要配置齐全的授权 API 和通用 API；只消费凭据字段存在性或普通必填参数，不读取授权值，不执行 DNS、HTTP 或权限探测。配置不齐的来源不加入，也不报配置错误；镜像不因 Auto 自动加入。具体当前来源和参数由[配置手册](../../guides/configuration.md)维护。Custom 精确保留用户列表，不因凭据变化扩展；显式选择但不可用的来源保留稳定原因。五层顺序固定，阶段内保持原顺序，出版社 API 可按单篇唯一名称候选稳定优先。
+Acquisition named Source 由 Configuration 的本地 Auto/Custom resolver 选择。Auto 是版本默认公开集合，加上必要配置齐全的授权 API 和通用 API；只消费凭据字段存在性或普通必填参数，不读取授权值，不执行 DNS、HTTP 或权限探测。配置不齐的来源不加入，也不报配置错误；Sci-Hub 使用内置镜像加入 Auto，Custom 可明确关闭。具体当前来源和参数由[配置手册](../../guides/configuration.md)维护。Custom 精确保留用户列表，不因凭据变化扩展；显式选择但不可用的来源保留稳定原因。五层顺序固定，阶段内保持原顺序，出版社 API 可按单篇唯一名称候选稳定优先。
 
 所有模式继续自动加入 direct 与 DOI landing；已有 `AssetHint` 不依赖同名 Provider enablement。Browser 由 `[browser]` 独立启用。Application 冻结当前路线；配置状态返回 `acquisition_routes`，包含执行顺序下的 `effective`、已保存配置对应的 `pending` 与差异/重启标记。路线只含来源、阶段、`mode_reason`、本地 ready 和可选稳定不可用码。没有运行时的配置进程必须返回 `effective=null`，不得声称这是其它进程的生效状态；Browser 的运行时健康也不能从 pending 配置预测。此选源决定见 [ADR 0039](../decisions/0039-configured-acquisition-auto-and-traces.md)。
 
@@ -727,7 +739,7 @@ Plan 固定按以下顺序组织 routes，同阶段以配置顺序为基础，�
 1. **direct**：受支持资产线索中明确 PDF 媒体类型/主 PDF 角色，或 URL pathname 中忽略大小写的 `.pdf` 后缀；arXiv ID 与 PMCID 的稳定公开 PDF 定位也属于本层。保留 query、去除阅读器 fragment，排除明确非主 PDF 角色、目标版本冲突与已登记授权 API 地址；
 2. **publisher-api**：Elsevier、Wiley 等专用 API，仅调用已配置、就绪且有文章级适用证据的内容服务；
 3. **general-api**：CORE、Unpaywall 等聚合/开放获取 API，是否需要凭据仍按所属 adapter 合同；
-4. **public-web**：DOI/文章 landing 的有界 HTTP 与静态 PDF 解析、显式启用的 Sci-Hub 等网站；
+4. **public-web**：DOI/文章 landing 的有界 HTTP 与静态 PDF 解析、Auto 默认或 Custom 明确选择的 Sci-Hub 网站，固定在 DOI 落地页之后；
 5. **browser**：只处理前四层结果允许继续且独立准入的剩余目标，消费有序文章入口，使用一个
    operator-managed 固定身份 Profile、共享有头 CloakBrowser Chromium process/context 和隔离文章 page。
    Browser 只使用通用 `AgentBrowserController`；Agent 从第一次稳定 Observation 起选择封闭动作，

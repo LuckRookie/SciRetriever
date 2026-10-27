@@ -3568,3 +3568,5 @@ export * from "./reading-status.js";
 export * from "./archive-text.js";
 
 export * from "./archive-publication.js";
+
+export * from "./source-configuration.js";

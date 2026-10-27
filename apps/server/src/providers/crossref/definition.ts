@@ -18,6 +18,32 @@ export const services = Object.freeze({
   ),
 });
 export const definition = provider({
+  displayName: "Crossref",
+  configurationFields: [
+    {
+      field: "mode",
+      label: "Mode",
+      type: { kind: "enum", values: ["anonymous", "polite"] },
+      required: false,
+      needed_for: ["topic-search", "lookup"],
+      default_value: "anonymous",
+    },
+    {
+      field: "mailto",
+      label: "Contact email",
+      type: { kind: "string", format: "email" },
+      required: false,
+      required_when: { field: "mode", equals: "polite" },
+      needed_for: ["topic-search", "lookup"],
+    },
+  ],
+  sourceFixture: {
+    version: "v1",
+    identifiers: [{ namespace: "doi", value: "10.1038/s41586-020-2649-2" }],
+    record_id: null,
+    evidence:
+      "https://doi.org/10.1038/s41586-020-2649-2 ; public OA record, provider notes fixtures",
+  },
   metadata: search,
   metadataService: "crossref-rest",
   metadataAuto: true,

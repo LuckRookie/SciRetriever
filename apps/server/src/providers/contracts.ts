@@ -1,3 +1,7 @@
+import type {
+  SourcePublicFieldSchema,
+  SourcePurpose,
+} from "@sciretriever/contracts";
 import type { AcquisitionStage } from "../acquisition/ports.js";
 import type { AccessRatePolicy } from "../network/budget.js";
 export type MetadataCapability = "topic-search" | "lookup" | "reference-query";
@@ -8,7 +12,28 @@ export interface ServiceDefinition {
   readonly policyBasis: string;
   readonly coverage: string;
 }
+export interface ProviderSourceField {
+  readonly field: string;
+  readonly label: string;
+  readonly type: SourcePublicFieldSchema;
+  readonly required: boolean;
+  readonly needed_for: readonly SourcePurpose[];
+  readonly required_when?: { readonly field: string; readonly equals: string };
+  readonly default_value?: string | readonly string[];
+}
+export interface ProviderSourceFixture {
+  readonly version: "v1";
+  readonly identifiers: readonly {
+    readonly namespace: string;
+    readonly value: string;
+  }[];
+  readonly record_id: string | null;
+  readonly evidence: string;
+}
 export interface ProviderDefinition {
+  readonly displayName?: string;
+  readonly configurationFields?: readonly ProviderSourceField[];
+  readonly sourceFixture?: ProviderSourceFixture;
   readonly metadata: readonly MetadataCapability[];
   readonly metadataService?: string;
   readonly metadataFormat?: "json" | "atom";
@@ -75,6 +100,36 @@ export const references: readonly MetadataCapability[] = Object.freeze([
 export function provider(value: ProviderDefinition): ProviderDefinition {
   return Object.freeze({
     ...value,
+    ...(value.configurationFields
+      ? {
+          configurationFields: Object.freeze(
+            value.configurationFields.map((field) =>
+              Object.freeze({
+                ...field,
+                needed_for: Object.freeze([...field.needed_for]),
+                type: Object.freeze({
+                  ...field.type,
+                  ...(field.type.kind === "enum"
+                    ? { values: Object.freeze([...field.type.values]) }
+                    : {}),
+                }),
+              }),
+            ),
+          ),
+        }
+      : {}),
+    ...(value.sourceFixture
+      ? {
+          sourceFixture: Object.freeze({
+            ...value.sourceFixture,
+            identifiers: Object.freeze(
+              value.sourceFixture.identifiers.map((id) =>
+                Object.freeze({ ...id }),
+              ),
+            ),
+          }),
+        }
+      : {}),
     metadata: Object.freeze([...value.metadata]),
     credentialFields: Object.freeze([...value.credentialFields]),
     ...(value.publisherAliases

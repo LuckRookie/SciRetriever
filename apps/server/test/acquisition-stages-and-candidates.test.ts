@@ -77,8 +77,8 @@ describe("acquisition stages independent of authentication", () => {
       ]);
       expect(names(split.stages["general-api"])).toEqual(["core", "unpaywall"]);
       expect(names(split.stages["public-web"])).toEqual([
-        "sci-hub",
         "doi-landing",
+        "sci-hub",
       ]);
       expect(names(split.authorized_api_routes)).toEqual([
         "core",
@@ -87,11 +87,11 @@ describe("acquisition stages independent of authentication", () => {
       ]);
       expect(names(split.public_routes)).toEqual([
         "direct",
-        "sci-hub",
         "europe-pmc",
         "unpaywall",
         "arxiv",
         "doi-landing",
+        "sci-hub",
       ]);
       expect(split.stages["general-api"].statuses).toEqual([
         {

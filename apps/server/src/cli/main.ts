@@ -1,3 +1,17 @@
+import {
+  sourceConfiguration,
+  SourceConfigurationError,
+  sourceDetails,
+} from "../configuration/sources.js";
+import {
+  RestartAdmissionError,
+  withoutRestartAdmission,
+} from "../application/restart-admission.js";
+import { WebSupervisorError } from "./web-supervisor.js";
+import {
+  sourceProbes,
+  closeSourceProbes,
+} from "../configuration/source-probes.js";
 import { withActivity, machineActor } from "../logging/activity.js";
 import {
   ContractValidationError,
@@ -460,10 +474,14 @@ async function withApplication<T>(
   const application = await applicationBootstrap.createApplication(
     configurationHome(options),
   );
-  return runAndClose(
-    () => action(application),
-    () => application.close(),
-  );
+  const work = () =>
+    runAndClose(
+      () => action(application),
+      () => application.close(),
+    );
+  return application.restartAdmission
+    ? application.restartAdmission.newWork(work)
+    : work();
 }
 
 async function runAndClose<T>(
@@ -611,8 +629,11 @@ async function execute(
     CONFIGURATION_OPERATIONS.includes(command as ConfigurationOperation) &&
     command !== "status"
   ) {
-    const noInput = command === "read";
     const source = argument(args, "--request");
+    const noInput =
+      command === "read" ||
+      command === "sources" ||
+      (command === "apply" && !source);
     if (
       noInput
         ? args.length !== 2
@@ -623,14 +644,26 @@ async function execute(
       ? await inputBytes(source, options, 1024 * 1024 + 4096)
       : Buffer.from("{}");
     if (bytes.byteLength > 1024 * 1024 + 4096) invalidInput();
-    const result = await executeConfiguration(
-      new TypeScriptConfigurationOwner(configurationHome(options)),
-      command as ConfigurationOperation,
-      parseStrictJsonValue(bytes),
-      options.signal,
-      options.probeSeams,
-    );
-    return output({ protocol_version: 1, result }, options);
+    const owner = new TypeScriptConfigurationOwner(configurationHome(options));
+    const sources = sourceConfiguration(owner);
+    const abort = () => {
+      void closeSourceProbes(sources).catch(() => undefined);
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    try {
+      const result = await executeConfiguration(
+        owner,
+        command as ConfigurationOperation,
+        parseStrictJsonValue(bytes),
+        options.signal,
+        options.probeSeams,
+      );
+      if (command?.startsWith("source-")) await sourceProbes(sources).settle();
+      return output({ protocol_version: 1, result }, options);
+    } finally {
+      options.signal?.removeEventListener("abort", abort);
+      await closeSourceProbes(sources);
+    }
   }
   if (group === "folders") {
     const file = argument(args, "--request");
@@ -1029,47 +1062,43 @@ async function execute(
     if (options.signal?.aborted) return { code: 130 };
     const access = webAccessOptions(parsed.access);
     if (options.signal?.aborted) return { code: 130 };
-    const configurationOwner = new TypeScriptConfigurationOwner(
-      configurationHome(options),
-    );
-    const { startProductionWorkbench } = await import(
-      "../bootstrap/workbench.js"
-    );
-    const { loadWorkbenchAssets } = await import("../workbench/assets.js");
-    const running = await startProductionWorkbench({
-      home: configurationHome(options),
-      port,
-      access,
-      assets: await loadWorkbenchAssets(),
-      applicationOptions: { configurationOwner },
-    });
+    const { startWebSupervisor } = await import("./web-supervisor.js");
+    let running: Awaited<ReturnType<typeof startWebSupervisor>>;
     try {
-      output(
-        {
-          mode: "web",
-          listen: running.listenAddress,
-          url: running.urls[0],
-          urls: running.urls,
-          ...(running.apiKey === undefined ? {} : { api_key: running.apiKey }),
-          login:
-            running.apiKey === undefined
-              ? "Log in with the configured password."
-              : "Log in with api_key. This key changes when the service restarts.",
-        },
-        options,
-      );
-      await new Promise<void>((resolve) => {
-        if (options.signal?.aborted) resolve();
-        else
-          options.signal?.addEventListener("abort", () => resolve(), {
-            once: true,
-          });
+      running = await startWebSupervisor({
+        home: configurationHome(options),
+        port,
+        access,
+        ...(options.signal ? { signal: options.signal } : {}),
+        onReady: (ready) =>
+          output(
+            {
+              mode: "web",
+              listen: ready.listen,
+              url: ready.urls[0],
+              urls: ready.urls,
+              ...(ready.api_key === undefined
+                ? {}
+                : { api_key: ready.api_key }),
+              login:
+                ready.api_key === undefined
+                  ? "Log in with the configured password."
+                  : "Log in with api_key. This key changes when the service restarts.",
+            },
+            options,
+          ),
       });
-      return { code: 0 };
+    } catch (error) {
+      if (options.signal?.aborted) return { code: 0 };
+      throw error;
+    }
+    try {
+      return { code: await running.stopped };
     } finally {
       await running.close();
     }
   }
+
   if (group === "mcp") {
     const origin = argument(args, "--workbench-url");
     const flags = args.slice(1).filter((v) => v !== "--maintenance");
@@ -1899,10 +1928,12 @@ export async function runCli(
     json: options.json ?? args.includes("--json"),
   };
   try {
-    return await withActivity({ actor: machineActor("cli") }, () =>
-      execute(
-        args.filter((argument) => argument !== "--json"),
-        effective,
+    return await withoutRestartAdmission(() =>
+      withActivity({ actor: machineActor("cli") }, () =>
+        execute(
+          args.filter((argument) => argument !== "--json"),
+          effective,
+        ),
       ),
     );
   } catch (error) {
@@ -1925,11 +1956,16 @@ export async function runCli(
       error instanceof WorkbenchAccessError ||
       error instanceof ContractValidationError ||
       error instanceof TypeError ||
+      (error instanceof SourceConfigurationError &&
+        error.code === "source-configuration-invalid") ||
       probeInvalid;
     const configuration =
       error instanceof ConfigurationOwnerError ||
       error instanceof ConfigurationBoundaryError;
     const business =
+      error instanceof SourceConfigurationError ||
+      error instanceof RestartAdmissionError ||
+      error instanceof WebSupervisorError ||
       error instanceof MachineWorkbenchError ||
       isQueryFailure(error) ||
       isMaintenanceFailure(error) ||
@@ -1959,38 +1995,53 @@ export async function runCli(
     const failure =
       error instanceof WorkbenchAccessError
         ? error.code
-        : error instanceof LiteratureNotFoundError &&
-            !args.includes("--request")
-          ? "business-failed"
-          : isQueryFailure(error) ||
-              isMaintenanceFailure(error) ||
-              error instanceof MachineWorkbenchError
-            ? error.code
-            : error instanceof DocumentProcessingError ||
-                error instanceof ParsingFailure ||
-                error instanceof ArticleIdentityError ||
-                error instanceof ProcessingTaskError ||
-                error instanceof ProcessorError ||
-                error instanceof ProcessorQueryError
+        : error instanceof SourceConfigurationError ||
+            error instanceof RestartAdmissionError ||
+            error instanceof WebSupervisorError
+          ? error.code
+          : error instanceof LiteratureNotFoundError &&
+              !args.includes("--request")
+            ? "business-failed"
+            : isQueryFailure(error) ||
+                isMaintenanceFailure(error) ||
+                error instanceof MachineWorkbenchError
               ? error.code
-              : error instanceof QueryApplicationError
+              : error instanceof DocumentProcessingError ||
+                  error instanceof ParsingFailure ||
+                  error instanceof ArticleIdentityError ||
+                  error instanceof ProcessingTaskError ||
+                  error instanceof ProcessorError ||
+                  error instanceof ProcessorQueryError
                 ? error.code
-                : probeCancelled
-                  ? "configuration-test-cancelled"
-                  : interrupted
-                    ? "operation-interrupted"
-                    : input
-                      ? "invalid-command-input"
-                      : configuration
-                        ? "configuration-failed"
-                        : catalog
-                          ? "catalog-schema-refused"
-                          : business
-                            ? "business-failed"
-                            : "internal-failed";
+                : error instanceof QueryApplicationError
+                  ? error.code
+                  : probeCancelled
+                    ? "configuration-test-cancelled"
+                    : interrupted
+                      ? "operation-interrupted"
+                      : input
+                        ? "invalid-command-input"
+                        : configuration
+                          ? "configuration-failed"
+                          : catalog
+                            ? "catalog-schema-refused"
+                            : business
+                              ? "business-failed"
+                              : "internal-failed";
     effective.stderr?.(
       `${JSON.stringify({
         code: failure,
+        ...(error instanceof SourceConfigurationError
+          ? {
+              problem: {
+                display: "error",
+                technical_details: sourceDetails(error.code),
+              },
+              ...(error.current_revision
+                ? { current_revision: error.current_revision }
+                : {}),
+            }
+          : {}),
         ...(error instanceof CliInputError && error.nextAction
           ? { next_action: error.nextAction }
           : {}),

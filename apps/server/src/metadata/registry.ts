@@ -68,19 +68,38 @@ export function configuredMetadataSelections(
 ): {
   readonly topic: readonly string[];
   readonly reference: readonly string[];
+  readonly lookup: readonly string[];
 } {
+  const configured = new Set(credentialedProviders);
+  const auto = [
+    ...METADATA_AUTO_PROVIDERS,
+    ...["elsevier", "springer", "web-of-science"].filter((source) => {
+      if (!configured.has(source)) return false;
+      if (source !== "web-of-science") return true;
+      const web = configuration.sources.metadata.web_of_science;
+      return (
+        !!web &&
+        ["starter", "expanded"].includes(String(web.product)) &&
+        typeof web.database === "string" &&
+        !!web.database.trim()
+      );
+    }),
+  ];
+  const selection =
+    configuration.sources.metadata.mode === "auto"
+      ? { mode: "custom" as const, providers: auto }
+      : configuration.sources.metadata;
   const topic = resolveMetadataSelection(
-    configuration.sources.metadata,
+    selection,
     "topic-search",
     capabilities,
   );
   const selectedReferences = resolveMetadataSelection(
-    configuration.sources.metadata,
+    selection,
     "reference-query",
     capabilities,
   );
-  // Credentials prioritize already-enabled Auto sources; they never enable a
-  // new source or override an operator's explicit Custom order.
+  // Keep the established reference priority within the selected Auto sources.
   const credentialed = new Set(credentialedProviders);
   const reference =
     configuration.sources.metadata.mode === "auto"
@@ -89,7 +108,11 @@ export function configuredMetadataSelections(
           ...selectedReferences.filter((name) => !credentialed.has(name)),
         ])
       : selectedReferences;
-  return Object.freeze({ topic, reference });
+  return Object.freeze({
+    topic,
+    reference,
+    lookup: resolveMetadataSelection(selection, "lookup", capabilities),
+  });
 }
 
 const CAPABILITIES: Readonly<Record<string, readonly MetadataCapability[]>> =

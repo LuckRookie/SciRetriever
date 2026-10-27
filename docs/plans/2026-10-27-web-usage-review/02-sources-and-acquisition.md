@@ -51,23 +51,29 @@
     - 守护重启按合同第 7 节实施，竞态要有测试证明；异常退出按 1、2、4 秒退避，60 秒内最多 3 次；
     - 重启后需要重新登录是可接受的边界。
   - 方案确认不需要改 catalog 表结构，也不改凭据文件格式。
-- [ ] **2.2 全部来源可在 Web 配置**（worker）
+- [x] **2.2 全部来源可在 Web 配置**（worker）
   - 15 个来源的全部配置项都能经 Web 保存，包括联系邮箱、Web of Science 的产品与数据库、Sci-Hub 镜像。
   - 来源凭据从“凭据”分区移到来源目录，“凭据”分区只留模型服务。
   - 保存只作用于这一个来源。
   - 写配置沿用现有的原子写入与权限规则。
-- [ ] **2.3 来源测试**（worker）
+  - 2026-10-28 worker 后端完成：来源目录、单源普通参数/逐字段凭据、发布 CAS、typed partial 与 HTTP/CLI/MCP 同口径；`source-configuration`、`configuration-sources`、`source-interfaces` 的正反例通过。证据：本机 `sandbox/reports/2026-10-28-plan17-02/phase2.md`。来源凭据的界面迁移与显示由 2.7 接入，本项不宣称界面已完成。
+
+- [x] **2.3 来源测试**（worker）
   - 测试按草案规定做最小的真实请求，不写入文献库：
     - 元数据来源：用固定公开 DOI 补全一次；
     - PDF 来源：对一篇固定开放获取文章请求一次 PDF，只校验响应；
     - 出版社 API：区分“无全文权限”；
     - Browser Agent：只检查运行时能否启动。
   - 自动测试一律用 fake。生产环境里由用户点“测试”触发真实请求。
-- [ ] **2.4 自动模式用上所有来源**（worker，P15）
+  - 2026-10-28 worker 后端完成：版本化固定公开样本、共用 Network 的单源/串行全部测试、非秘密最近结果缓存、原生授权证据与裸 403 的区分，以及取消/超时清理；`configuration-source-probes` 与跨入口读取通过。自动验证均为 fake，真实权限和命中留 2.8 / 07。
+
+- [x] **2.4 自动模式用上所有来源**（worker，P15）
   - 自动模式下，配置齐全的来源全部启用。
   - Sci-Hub 用内置镜像，位于 DOI 落地页之后、Browser 之前，按 ADR 0040 执行。
   - 自定义模式保持精确。
-- [ ] **2.5 应用配置**（worker，P7）
+  - 2026-10-28 worker 完成：ADR 0043 的 Metadata Auto、PDF Auto 与 Custom 的 DOI landing → Sci-Hub 顺序、生效/待生效投影；旧 hint ID 保持可读，显式新选择编辑收口。`acquisition-auto`、`provider-catalog`、`acquisition-stages-and-candidates`、`acquisition-public-sources` 与 TUI 直接测试通过。旧排序断言按 Accepted ADR 更新。
+
+- [x] **2.5 应用配置**（worker，P7）
   - 页头显示“应用配置”：
     - 没有任务在跑时，立即平稳重启；
     - 有任务在跑时，等其结束后重启；
@@ -75,9 +81,13 @@
   - 现在 4174 是由 `sh -c node … web` 直接启动的，没有托管进程。需要由 `web` 命令自带守护，用父进程重启子进程，不依赖 systemd。
   - 重启前后的端口、令牌与会话按现有规则处理。
   - 首次切换到新启动方式时需要 G-deploy。
-- [ ] **2.6 Agent 优先点直接 PDF**（worker，P8）
+  - 2026-10-28 worker 后端完成：自带父子守护、intent/activity 两把交接锁、排空/取消/代次/启动与退出边界；`web-supervisor`、`restart-admission` 和安装包直接测试通过。sandbox 只用临时 home、合成库与 127.0.0.1，完成四代交接并核对计数/hash；关闭卡住不强杀，固定密码沿用、旧登录失效。首次切换与真实部署留 07；操作步骤、竞态证据见 phase2.md。
+
+- [x] **2.6 Agent 优先点直接 PDF**（worker，P8）
   - 提示词加通用偏好：“有直接 PDF / 下载链接时优先点它”，不点名出版社。
   - 合成页同时放 PDF 与 ePDF 两个入口，直接测试 Agent 的选择。测试用录制的模型回放或 fake，不调用真实模型。
+  - 2026-10-28 worker 完成：通用直接 PDF/下载优先提示，reader-only 路径仍可用；`browser-decision` 与同时含直接 PDF/ePDF 的 `browser-article-flow` 合成下载测试通过。未调用真实模型，不把 fake 的选择当作真实模型行为验收。
+
 - [ ] **2.7 界面**（Claude）
   - 按草案实现来源目录：
     - 选源方式；

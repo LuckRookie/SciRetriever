@@ -555,3 +555,14 @@ export {
   ProcessingTaskError,
 } from "./application/jobs/processing.js";
 export { createMcpServer, runMcpStdio, type McpOptions } from "./mcp/server.js";
+
+export {
+  SourceConfigurationOwner,
+  SourceConfigurationError,
+  sourceConfiguration,
+  type SourceRuntimeBinding,
+} from "./configuration/sources.js";
+export {
+  SourceProbeService,
+  type SourceProbeSeams,
+} from "./configuration/source-probes.js";

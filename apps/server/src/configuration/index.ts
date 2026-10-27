@@ -1108,6 +1108,7 @@ export async function publishConfiguration(
   homeValue: string,
   bytes: Uint8Array,
   expectedSha256: string | null,
+  heldLock?: FileLock,
 ): Promise<string> {
   if (
     typeof homeValue !== "string" ||
@@ -1125,7 +1126,9 @@ export async function publishConfiguration(
   let temporaryPath: string | undefined;
   let lock: FileLock | undefined;
   try {
-    lock = await acquireFileLock(resolve(homeValue), "configuration");
+    if (heldLock && heldLock.key !== "configuration") invalid();
+    if (!heldLock)
+      lock = await acquireFileLock(resolve(homeValue), "configuration");
     await mkdir(directoryPath, { recursive: true, mode: 0o700 });
     directory = await open(
       directoryPath,
@@ -1237,10 +1240,10 @@ export async function publishConfiguration(
 export interface ConfigurationReadHooks {
   readonly beforeRead?: () => void | Promise<void>;
 }
-export async function loadConfiguration(
+export async function readConfigurationBytes(
   home = homedir(),
   hooks: ConfigurationReadHooks = {},
-): Promise<OrdinaryConfiguration> {
+): Promise<Uint8Array | null> {
   const path = configurationPath(home);
   const directoryPath = join(resolve(home), ".sciretriever");
   let directoryFile: Awaited<ReturnType<typeof open>> | undefined;
@@ -1263,8 +1266,7 @@ export async function loadConfiguration(
     try {
       named = await lstat(path);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT")
-        return parseConfiguration("");
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw error;
     }
     if (
@@ -1311,7 +1313,7 @@ export async function loadConfiguration(
       after.nlink !== 1
     )
       invalid();
-    return parseConfiguration(bytes);
+    return bytes;
   } catch (error) {
     if (error instanceof ConfigurationBoundaryError) throw error;
     invalid();
@@ -1320,6 +1322,14 @@ export async function loadConfiguration(
     await directoryFile?.close().catch(() => undefined);
   }
   return invalid();
+}
+
+/** Parse exactly the bytes whose owner revision is exposed; never re-open between hash and parse. */
+export async function loadConfiguration(
+  home = homedir(),
+  hooks: ConfigurationReadHooks = {},
+): Promise<OrdinaryConfiguration> {
+  return parseConfiguration((await readConfigurationBytes(home, hooks)) ?? "");
 }
 
 const removedOptions = new WeakSet<OrdinaryConfiguration>();

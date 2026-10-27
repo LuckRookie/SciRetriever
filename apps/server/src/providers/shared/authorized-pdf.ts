@@ -33,6 +33,8 @@ export interface AuthorizedPdfDownload {
   readonly entitlement: "granted";
 }
 export interface AuthorizedClientFailure {
+  readonly authentication?: "accepted" | "rejected";
+  readonly fulltext_permission?: "denied";
   readonly code:
     | "access"
     | "authentication"

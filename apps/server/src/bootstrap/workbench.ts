@@ -1,3 +1,11 @@
+import { RestartAdmission } from "../application/restart-admission.js";
+import type { ConfigurationLifecycle } from "../configuration/apply.js";
+import { sourceConfiguration } from "../configuration/sources.js";
+import {
+  sourceProbes,
+  closeSourceProbes,
+} from "../configuration/source-probes.js";
+import { executeConfiguration } from "../entry/configuration-operations.js";
 import { executeMaintenance } from "../entry/maintenance-operations.js";
 import { createMetadataOperations } from "../entry/metadata-operations.js";
 import { createTaskOperations } from "../entry/task-operations.js";
@@ -142,8 +150,34 @@ function configurationHttpAdapter(
   application: Application,
   owner: TypeScriptConfigurationOwner,
   probeSeams: ConfigurationProbeSeams = {},
+  lifecycle?: ConfigurationLifecycle,
 ): NonNullable<WorkbenchHttpOptions["configuration"]> {
+  const sources = sourceConfiguration(owner);
+  sources.runtime = {
+    runtime_id: randomUUID(),
+    configuration: application.configuration,
+    presence: bundlePreview(application.credentials),
+    metadata: application.metadata,
+    effective_routes: async () =>
+      (await application.configurationAcquisitionRoutes(await owner.read()))
+        .effective ?? [],
+  };
+  sourceProbes(sources, application.networkBudget, {
+    ...(probeSeams.metadata_assembly
+      ? { metadata: probeSeams.metadata_assembly }
+      : {}),
+    ...(probeSeams.acquisition_assembly
+      ? { acquisition: probeSeams.acquisition_assembly }
+      : {}),
+  });
+  lifecycle?.bind(application, sources);
   return {
+    lifecycleFlushed: () => lifecycle?.flushed(),
+    sourceOperation: (operation, value, signal) =>
+      executeConfiguration(owner, operation, value, signal, {
+        ...probeSeams,
+        network: application.networkBudget,
+      }),
     runtime_revision: application.configuration_revision,
     runtime_capabilities: describeWorkbenchRuntime(application),
     status: (signal) => application.configurationStatus(signal),
@@ -324,7 +358,7 @@ export async function startMaintenanceWorkbench(options: {
 }
 
 /** Explicit production Browser workbench. A view alone never starts acquisition. */
-export async function startProductionWorkbench(options: {
+export interface ProductionWorkbenchOptions {
   readonly home: string;
   readonly access?: WorkbenchAccessOptions;
   readonly literature_id?: string;
@@ -336,7 +370,33 @@ export async function startProductionWorkbench(options: {
   >;
   /** Test/operator probe seam; production defaults to the Configuration owner probe. */
   readonly configurationProbeSeams?: ConfigurationProbeSeams;
-}): Promise<
+  readonly lifecycle?: ConfigurationLifecycle;
+}
+export async function startProductionWorkbench(
+  options: ProductionWorkbenchOptions,
+): Promise<
+  WorkbenchHttpServer & {
+    readonly session: ProductionWorkbenchSession;
+    readonly application: Application;
+  }
+> {
+  const owner =
+    options.applicationOptions?.configurationOwner ??
+    new TypeScriptConfigurationOwner(options.home);
+  const snapshot =
+    options.applicationOptions?.configurationSnapshot ?? (await owner.read());
+  const catalog =
+    snapshot.configuration.paths.catalog_path ??
+    join(options.home, ".sciretriever", "catalog.sqlite");
+  const gate = new RestartAdmission(options.home, catalog);
+  return gate.bootstrap(
+    () => startProductionWorkbenchOwned(options),
+    options.applicationOptions?.restartBootstrapPermit,
+  );
+}
+async function startProductionWorkbenchOwned(
+  options: ProductionWorkbenchOptions,
+): Promise<
   WorkbenchHttpServer & {
     readonly session: ProductionWorkbenchSession;
     readonly application: Application;
@@ -375,6 +435,9 @@ export async function startProductionWorkbench(options: {
         failures.push(error);
       }
       const settled = await Promise.allSettled([
+        Promise.resolve().then(() =>
+          closeSourceProbes(sourceConfiguration(configurationOwner)),
+        ),
         Promise.resolve().then(() => session.close()),
         Promise.resolve().then(() => application?.close()),
         Promise.resolve().then(() => query?.close()),
@@ -390,7 +453,9 @@ export async function startProductionWorkbench(options: {
     return closing;
   };
   try {
-    const configuration = await configurationOwner.ensureStoragePaths();
+    const configuration =
+      options.applicationOptions?.configurationSnapshot ??
+      (await configurationOwner.ensureStoragePaths());
     const startupCatalog = resolve(
       configuration.configuration.paths.catalog_path!,
     );
@@ -400,8 +465,11 @@ export async function startProductionWorkbench(options: {
       (await inspectCatalogSchema(startupCatalog)).status === "not-initialized"
     )
       await initializeCatalogSchema(startupCatalog);
+    const { restartBootstrapPermit: _permit, ...applicationOptions } =
+      options.applicationOptions ?? {};
+    void _permit;
     application = await createApplication(options.home, {
-      ...options.applicationOptions,
+      ...applicationOptions,
       configurationOwner,
 
       browserCollaboration: session,
@@ -479,6 +547,7 @@ export async function startProductionWorkbench(options: {
         app,
         configurationOwner,
         options.configurationProbeSeams,
+        options.lifecycle,
       ),
     });
     return { ...http, session, application: app, close };

@@ -12,3 +12,15 @@ export function observeNetworkRequests<T>(
 export function networkRequestDispatched(): void {
   observers.getStore()?.();
 }
+
+const responseObservers = new AsyncLocalStorage<(bytes: number) => void>();
+export function observeNetworkBytes<T>(
+  notify: (bytes: number) => void,
+  action: () => Promise<T>,
+): Promise<T> {
+  return responseObservers.run(notify, action);
+}
+/** Byte count only, including redirects/error bodies; no response bytes leave Network. */
+export function networkResponseBytes(bytes: number): void {
+  responseObservers.getStore()?.(bytes);
+}

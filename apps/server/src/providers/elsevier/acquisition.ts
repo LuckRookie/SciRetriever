@@ -198,6 +198,10 @@ export class ElsevierAuthorizedPdfClient implements AuthorizedPdfClientPort {
       return interpretDownloadResponse(locator, lookup, articleUrl);
     if ([204, 404, 410].includes(lookup.status))
       return interpretDownloadResponse(locator, lookup, articleUrl);
+    if (lookup.status === 401 || lookup.status === 403) {
+      const evidence = elsevierPermissionFailure(lookup);
+      if (evidence) throw new AuthorizedProviderError(evidence);
+    }
     if (lookup.status !== 200)
       return interpretDownloadResponse(locator, lookup, articleUrl);
     const representation = mediaType(lookup);
@@ -274,4 +278,41 @@ export function candidateUrl(locator: AuthorizedDownloadLocator): string {
       ? "pii"
       : "eid";
   return `${services["elsevier-article"].endpoint}/content/article/${kind}/${value}?view=FULL`;
+}
+
+/** Official Article Retrieval JSON status; unknown/challenge bodies remain generic errors. */
+export function elsevierPermissionFailure(
+  response: import("../../network/http.js").HttpResponse,
+): import("../shared/authorized-pdf.js").AuthorizedClientFailure | null {
+  if (response.body.byteLength > 65536 || ![401, 403].includes(response.status))
+    return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(response.body),
+    );
+  } catch {
+    return null;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const error = (value as Record<string, unknown>)["service-error"];
+  if (!error || typeof error !== "object" || Array.isArray(error)) return null;
+  const status = (error as Record<string, unknown>).status;
+  if (!status || typeof status !== "object" || Array.isArray(status))
+    return null;
+  const code = (status as Record<string, unknown>).statusCode;
+  if (code === "AUTHENTICATION_ERROR")
+    return {
+      code: "authentication",
+      http_status: response.status,
+      authentication: "rejected",
+    };
+  if (code === "AUTHORIZATION_ERROR")
+    return {
+      code: "entitlement",
+      http_status: response.status,
+      authentication: "accepted",
+      fulltext_permission: "denied",
+    };
+  return null;
 }

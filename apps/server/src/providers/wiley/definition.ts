@@ -17,6 +17,14 @@ export const services = Object.freeze({
   ),
 });
 export const definition = provider({
+  displayName: "Wiley",
+  sourceFixture: {
+    version: "v1",
+    identifiers: [{ namespace: "doi", value: "10.1002/jcc.21787" }],
+    record_id: null,
+    evidence:
+      "https://pmc.ncbi.nlm.nih.gov/articles/PMC3144279/ ; MDAnalysis, open access manuscript",
+  },
   publisherAliases: [
     "Wiley",
     "John Wiley & Sons",

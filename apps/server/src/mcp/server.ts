@@ -1,3 +1,11 @@
+import { NetworkBudgetCoordinator } from "../network/budget.js";
+import { withoutRestartAdmission } from "../application/restart-admission.js";
+import {
+  sourceConfiguration,
+  SourceConfigurationError,
+  sourceDetails,
+} from "../configuration/sources.js";
+import { closeSourceProbes } from "../configuration/source-probes.js";
 import { withActivity, machineActor } from "../logging/activity.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -113,6 +121,11 @@ export function createMcpServer(options: McpOptions = {}) {
   const validators = new Map(
     tools.map((tool) => [tool.name, ajv.compile(tool.inputSchema)]),
   );
+  const configurationOwner =
+    options.configurationOwner ??
+    new TypeScriptConfigurationOwner(options.home ?? fixedConfigurationHome());
+  const configurationNetwork =
+    options.probeSeams?.network ?? new NetworkBudgetCoordinator();
   let app: Promise<Application> | undefined;
   let query: Promise<QueryApplication> | undefined;
   let closing: Promise<void> | undefined;
@@ -123,7 +136,11 @@ export function createMcpServer(options: McpOptions = {}) {
     if (!options.maintenance || stop.signal.aborted) unavailable();
     app ??= (
       options.applicationFactory ??
-      (() => createApplication(options.home ?? fixedConfigurationHome(), {}))
+      (() =>
+        createApplication(configurationOwner.home, {
+          configurationOwner,
+          networkBudget: configurationNetwork,
+        }))
     )();
     return app;
   };
@@ -198,6 +215,14 @@ export function createMcpServer(options: McpOptions = {}) {
       configuration_publish: "publish",
       configuration_credential: "credential",
       configuration_probe: "probe",
+      configuration_sources: "sources",
+      configuration_apply_state: "apply",
+      configuration_apply: "apply",
+      configuration_apply_cancel: "apply-cancel",
+      configuration_source_save: "source-save",
+      configuration_source_selection: "source-selection",
+      configuration_source_test: "source-test",
+      configuration_source_test_all: "source-test-all",
     };
     if (Object.hasOwn(configurationRoutes, name)) {
       if (
@@ -206,20 +231,19 @@ export function createMcpServer(options: McpOptions = {}) {
           "configuration_read",
           "configuration_status",
           "configuration_preview",
+          "configuration_sources",
+          "configuration_apply_state",
         ].includes(name)
       )
         unavailable();
       if (name === "configuration_status" && app)
         return (await app).configurationStatus(signal);
       return executeConfiguration(
-        options.configurationOwner ??
-          new TypeScriptConfigurationOwner(
-            options.home ?? fixedConfigurationHome(),
-          ),
+        configurationOwner,
         configurationRoutes[name]!,
         args,
         signal,
-        options.probeSeams,
+        { ...options.probeSeams, network: configurationNetwork },
       );
     }
     const maintenanceRoutes: Readonly<Record<string, MaintenanceOperation>> = {
@@ -493,6 +517,17 @@ export function createMcpServer(options: McpOptions = {}) {
           ...result({
             failure: {
               code,
+              ...(error instanceof SourceConfigurationError
+                ? {
+                    problem: {
+                      display: "error",
+                      technical_details: sourceDetails(error.code),
+                    },
+                    ...(error.current_revision
+                      ? { current_revision: error.current_revision }
+                      : {}),
+                  }
+                : {}),
               ...(error instanceof ProcessorQueryError
                 ? { fields: error.fields }
                 : {}),
@@ -503,7 +538,7 @@ export function createMcpServer(options: McpOptions = {}) {
         };
       }
     };
-    const pending = execute();
+    const pending = withoutRestartAdmission(execute);
     active.add(pending);
     try {
       return await pending;
@@ -519,6 +554,11 @@ export function createMcpServer(options: McpOptions = {}) {
       const opened = await Promise.allSettled([app, query]);
       const failures: unknown[] = [];
       try {
+        await closeSourceProbes(sourceConfiguration(configurationOwner));
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
         await browser?.close();
       } catch (error) {
         failures.push(error);
@@ -532,6 +572,7 @@ export function createMcpServer(options: McpOptions = {}) {
           }
         }
       await server.close();
+      if (!options.probeSeams?.network) configurationNetwork.close();
       if (failures.length)
         throw new AggregateError(failures, "MCP cleanup failed");
     })();

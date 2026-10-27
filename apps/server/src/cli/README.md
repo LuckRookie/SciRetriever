@@ -5,6 +5,8 @@
 ## 内容入口
 
 - [main.ts](main.ts)：命令树、参数解析和入口分派。
+- [web-supervisor.ts](web-supervisor.ts)：前台父进程、双锁交接、同端口换代与有限异常退避。
+- [web-worker.ts](web-worker.ts)、[web-worker-runtime.ts](web-worker-runtime.ts)：私有 IPC 子进程入口与生产生命周期；不是用户子命令。
 - [web-access.ts](web-access.ts)：统一 Web 启动参数与可选密码环境变量；默认对外监听，无密码时由 HTTP access owner 生成 API key，成功启动后显示。
 - [browser-session.ts](browser-session.ts)：持续机器连接的有界 NDJSON 适配；按行返回结果，退出时撤销会话。
 - [config-center.ts](config-center.ts)：配置中心操作。

@@ -19,6 +19,13 @@ export const services = Object.freeze({
   ),
 });
 export const definition = provider({
+  displayName: "Europe PMC",
+  sourceFixture: {
+    version: "v1",
+    identifiers: [{ namespace: "pmcid", value: "PMC7759461" }],
+    record_id: "PMC7759461",
+    evidence: "https://europepmc.org/articles/PMC7759461",
+  },
   metadata: references,
   metadataService: "europe-pmc-rest",
   metadataAuto: true,

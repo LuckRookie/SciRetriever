@@ -14,6 +14,23 @@ export const services = Object.freeze({
   ),
 });
 export const definition = provider({
+  displayName: "Unpaywall",
+  configurationFields: [
+    {
+      field: "contact_email",
+      label: "Contact email",
+      type: { kind: "string", format: "email" },
+      required: true,
+      needed_for: ["pdf"],
+    },
+  ],
+  sourceFixture: {
+    version: "v1",
+    identifiers: [{ namespace: "doi", value: "10.1038/s41586-020-2649-2" }],
+    record_id: null,
+    evidence:
+      "https://doi.org/10.1038/s41586-020-2649-2 ; public OA record, provider notes fixtures",
+  },
   metadata: [],
   acquisition: "public",
   acquisitionStage: "general-api",

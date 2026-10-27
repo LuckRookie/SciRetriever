@@ -45,8 +45,9 @@ describe("provider catalog production consumers", () => {
       );
       expect(acquisition.sources.map((s) => s.source_name)).toEqual([
         "direct",
-        ...AUTO_ACQUISITION_SOURCES,
+        ...AUTO_ACQUISITION_SOURCES.filter((s) => s !== "sci-hub"),
         "doi-landing",
+        "sci-hub",
       ]);
       expect(LITERATURE_PROVIDERS.crossref!.acquisition).toBe("hints");
       expect(LITERATURE_PROVIDERS.wiley!.metadata).toEqual([]);

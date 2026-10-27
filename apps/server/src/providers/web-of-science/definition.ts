@@ -22,6 +22,37 @@ export const services = Object.freeze({
   ),
 });
 export const definition = provider({
+  displayName: "Web of Science",
+  configurationFields: [
+    {
+      field: "product",
+      label: "Product",
+      type: { kind: "enum", values: ["starter", "expanded"] },
+      required: true,
+      needed_for: ["topic-search", "lookup", "reference-query"],
+    },
+    {
+      field: "database",
+      label: "Database",
+      type: { kind: "string", format: "nonempty" },
+      required: true,
+      needed_for: ["topic-search", "lookup", "reference-query"],
+    },
+    {
+      field: "edition",
+      label: "Edition",
+      type: { kind: "string", format: "nonempty" },
+      required: false,
+      needed_for: ["topic-search", "lookup", "reference-query"],
+    },
+  ],
+  sourceFixture: {
+    version: "v1",
+    identifiers: [{ namespace: "doi", value: "10.1038/s41586-020-2649-2" }],
+    record_id: null,
+    evidence:
+      "https://doi.org/10.1038/s41586-020-2649-2 ; public OA record, provider notes fixtures",
+  },
   metadata: search,
   metadataService: "wos-starter",
   acquisition: "none",

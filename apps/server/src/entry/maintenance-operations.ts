@@ -137,9 +137,15 @@ export function executeMaintenance(
     !Array.isArray(input)
   )
     input = { ...input, actor: activityContext().actor };
-  return recordOperation(app.database, operation, input, () =>
-    performMaintenance(app, operation, input, signal).then(presentActors),
-  );
+  const work = () =>
+    recordOperation(app.database, operation, input, () =>
+      performMaintenance(app, operation, input, signal).then(presentActors),
+    );
+  return app.restartAdmission &&
+    operation !== "resolve-intervention" &&
+    operation !== "extraction-cancel"
+    ? app.restartAdmission.newWork(work)
+    : work();
 }
 async function performMaintenance(
   app: Application,

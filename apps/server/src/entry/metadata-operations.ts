@@ -1,3 +1,4 @@
+import { guardRuntimeMethods } from "../application/restart-admission.js";
 import type { Application } from "../bootstrap/application.js";
 import {
   ContractValidationError,
@@ -11,7 +12,7 @@ import {
 } from "../literature/bibliography-import.js";
 import { operationRecord as inputRecord } from "./query-operations.js";
 export function createMetadataOperations(app: Application) {
-  return {
+  const operations = {
     discovery: async (value: unknown, signal?: AbortSignal) => {
       if (
         value &&
@@ -112,4 +113,11 @@ export function createMetadataOperations(app: Application) {
       );
     },
   };
+  return app.restartAdmission
+    ? guardRuntimeMethods(
+        operations,
+        ["discovery", "importBibliography"],
+        app.restartAdmission,
+      )
+    : operations;
 }

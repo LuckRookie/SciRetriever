@@ -1,3 +1,4 @@
+import type { RestartAdmission } from "../restart-admission.js";
 import { randomUUID } from "node:crypto";
 import type { StableFailure } from "@sciretriever/contracts";
 import type { ExecutionIntervention } from "../../storage/sqlite/worker.js";
@@ -14,7 +15,10 @@ export function parseInterventionResolution(
 
 /** Applies the frozen assistance policy without turning every failure into user work. */
 export class InterventionService {
-  constructor(private readonly repository: ExecutionRepository) {}
+  constructor(
+    private readonly repository: ExecutionRepository,
+    private readonly admission?: RestartAdmission,
+  ) {}
 
   request(input: {
     readonly job_id: string;
@@ -80,6 +84,19 @@ export class InterventionService {
     resolvedAt = new Date().toISOString(),
   ): Promise<ExecutionIntervention> {
     parseInterventionResolution(resolution);
+    const work = () =>
+      this.resolveOwned(interventionId, resolution, resolvedAt);
+    return this.admission
+      ? resolution === "cancel"
+        ? this.admission.continuation(work)
+        : this.admission.newWork(work)
+      : work();
+  }
+  private async resolveOwned(
+    interventionId: string,
+    resolution: InterventionResolution,
+    resolvedAt: string,
+  ): Promise<ExecutionIntervention> {
     const result = await this.repository.resolveIntervention(
       interventionId,
       "resolved",

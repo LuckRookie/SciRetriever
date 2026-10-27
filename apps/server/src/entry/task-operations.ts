@@ -73,7 +73,7 @@ export function createTaskOperations(app: Application) {
     return null;
   const reader = createTaskReader(repository);
   const read = reader.read;
-  const start = async (id: string) => {
+  const startOwned = async (id: string) => {
     const task = await repository.getJob(id);
     if (!task) throw new ProcessingTaskError("processing-not-found");
     if (task.status === "cancelled" || task.status === "completed")
@@ -86,6 +86,10 @@ export function createTaskOperations(app: Application) {
       throw new ProcessingTaskError("processing-resume-required");
     return { started: runtime.start(id), task };
   };
+  const start = (id: string) =>
+    app.restartAdmission
+      ? app.restartAdmission.newWork(() => startOwned(id))
+      : startOwned(id);
   const control = async (
     id: string,
     action: "pause" | "cancel" | "resume" | "retry",
@@ -101,9 +105,13 @@ export function createTaskOperations(app: Application) {
     read,
     start,
     control: (id: string, action: "pause" | "cancel" | "resume" | "retry") =>
-      recordOperation(app.database, `task-${action}`, { job_id: id }, () =>
-        control(id, action),
-      ),
+      action === "resume" || action === "retry"
+        ? app.restartAdmission
+          ? app.restartAdmission.newWork(() => control(id, action))
+          : control(id, action)
+        : recordOperation(app.database, `task-${action}`, { job_id: id }, () =>
+            control(id, action),
+          ),
     create: async (value: unknown) => {
       const r = inputRecord(
         value,

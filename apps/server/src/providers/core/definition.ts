@@ -22,6 +22,14 @@ export const services = Object.freeze({
   ),
 });
 export const definition = provider({
+  displayName: "CORE",
+  sourceFixture: {
+    version: "v1",
+    identifiers: [{ namespace: "core-work", value: "143262545" }],
+    record_id: "143262545",
+    evidence:
+      "docs/notes/providers/core.md section 9; CORE aggregation service OA paper",
+  },
   metadata: references,
   metadataService: "core-v3",
   metadataAuto: true,

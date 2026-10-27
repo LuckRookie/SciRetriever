@@ -22,6 +22,14 @@ export const services = Object.freeze({
   ),
 });
 export const definition = provider({
+  displayName: "Springer Nature",
+  sourceFixture: {
+    version: "v1",
+    identifiers: [{ namespace: "doi", value: "10.1038/s41586-020-2649-2" }],
+    record_id: null,
+    evidence:
+      "https://doi.org/10.1038/s41586-020-2649-2 ; public OA record, provider notes fixtures",
+  },
   publisherAliases: [
     "Springer",
     "Springer Nature",

@@ -1,3 +1,4 @@
+import { sourceConfiguration } from "../configuration/sources.js";
 import { checkbox, confirm, input, password, select } from "@inquirer/prompts";
 import type {
   ConfigurationReadiness,
@@ -26,7 +27,6 @@ import {
   AUTO_ACQUISITION_SOURCES as ACQUISITION_AUTO,
   ACQUISITION_PROVIDER_NAMES as ACQUISITION_PROVIDERS,
   LITERATURE_PROVIDERS,
-  METADATA_AUTO_PROVIDERS as METADATA_AUTO,
   METADATA_PROVIDER_NAMES as METADATA_PROVIDERS,
 } from "../providers/registry.js";
 
@@ -254,7 +254,7 @@ function summaryRows(
     [
       colors.accent("◆ Search"),
       config.sources.metadata.mode === "auto"
-        ? `Auto · ${METADATA_AUTO.length} built-in Sources · Limit ${config.sources.metadata.limit ?? 500}`
+        ? `Auto · defaults + configured Sources · Limit ${config.sources.metadata.limit ?? 500}`
         : `Custom · ${config.sources.metadata.providers.length} Sources · Limit ${config.sources.metadata.limit ?? 500}`,
       stateText(aggregate("metadata"), colors),
     ],
@@ -802,7 +802,13 @@ async function sourcesPage(
 ): Promise<void> {
   const colors = palette(currentTheme);
   const providerChoices =
-    kind === "metadata" ? METADATA_PROVIDERS : ACQUISITION_PROVIDERS;
+    kind === "metadata"
+      ? METADATA_PROVIDERS
+      : ACQUISITION_PROVIDERS.filter((source) =>
+          ["public", "authorized-api"].includes(
+            LITERATURE_PROVIDERS[source]!.acquisition,
+          ),
+        );
   while (true) {
     const snapshot = await options.owner.read();
     const selection = snapshot.configuration.sources[kind];
@@ -810,7 +816,8 @@ async function sourcesPage(
       kind === "acquisition" ? await options.owner.status() : undefined;
     const builtIn =
       kind === "metadata"
-        ? METADATA_AUTO
+        ? (await sourceConfiguration(options.owner).directory()).preview.auto
+            .metadata.topic
         : (status?.acquisition_routes?.pending
             .filter((route) => route.mode_reason !== "builtin")
             .map((route) => route.source) ?? ACQUISITION_AUTO);

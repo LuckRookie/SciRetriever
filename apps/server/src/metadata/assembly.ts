@@ -53,6 +53,9 @@ import {
 type ProviderName = string;
 
 export interface MetadataAssemblyOptions {
+  /** A bounded single-use owner (for example a source probe) can cancel every adapter request. */
+  readonly signal?: AbortSignal;
+  readonly maxRetries?: 0 | 1;
   readonly resolver?: Resolver;
   readonly connection?: ConnectionDependencies;
   /** Configuration owner re-reads the credential file before each provider request. */
@@ -252,7 +255,7 @@ function providerTransport(
           maxHostConcurrency: 2,
           maxResponseBytes: 4_194_304,
           maxRedirects: 0,
-          maxRetries: 1,
+          maxRetries: options.maxRetries ?? 1,
         },
         ...(options.connection ? { connection: options.connection } : {}),
       });
@@ -260,6 +263,10 @@ function providerTransport(
     async request(url, requestOptions = {}) {
       if (new URL(url).origin !== expectedOrigin)
         throw new Error("metadata provider changed origin");
+      const signal =
+        options.signal && requestOptions.signal
+          ? AbortSignal.any([options.signal, requestOptions.signal])
+          : (options.signal ?? requestOptions.signal);
       const headers = {
         ...(requestOptions.headers ?? {}),
         ...(options.currentCredential
@@ -283,6 +290,7 @@ function providerTransport(
           {
             ...requestOptions,
             headers,
+            ...(signal ? { signal } : {}),
           },
         );
       return requestMetadataResponse(
@@ -302,7 +310,7 @@ function providerTransport(
           ...(credentialQuery.length
             ? { credential_query: credentialQuery }
             : {}),
-          ...(requestOptions.signal ? { signal: requestOptions.signal } : {}),
+          ...(signal ? { signal } : {}),
         },
         LITERATURE_PROVIDERS[provider]?.metadataFormat === "atom"
           ? "atom"
@@ -479,8 +487,12 @@ export function assembleMetadataRegistry(
   const selected = configuredMetadataSelections(
     configuration,
     capabilities,
-    Object.keys(capabilities).filter(
-      (provider) => credentialFields(credentials, provider).length > 0,
+    Object.keys(capabilities).filter((provider) =>
+      LITERATURE_PROVIDERS[provider]?.requiredMetadataCredential
+        ? credentialFields(credentials, provider).includes(
+            LITERATURE_PROVIDERS[provider]!.requiredMetadataCredential!,
+          )
+        : credentialFields(credentials, provider).length > 0,
     ),
   );
   return Object.freeze({

@@ -68,7 +68,9 @@ it("assembles adapters from the TS owner's saved snapshot and reloads on restart
         },
       }),
     ).rejects.toMatchObject({ code: "configuration-boundary" });
-    expect(stages).toEqual(["home"]);
+    // Invalid configuration is rejected by bootstrap admission's preflight before
+    // any application service or catalog recovery is initialized.
+    expect(stages).toEqual([]);
   } finally {
     await application?.close();
     await rm(home, { recursive: true, force: true });

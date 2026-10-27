@@ -646,6 +646,16 @@ export const QUERY_TOOLS: readonly Tool[] = [
     object({ job_id: text }),
   ),
   tool(
+    "configuration_apply_state",
+    "Read configuration apply lifecycle state; configuration-only processes are unmanaged.",
+    object({}),
+  ),
+  tool(
+    "configuration_sources",
+    "Read all 15 source capabilities, presence, saved/effective routes and safe recent test results. No external requests.",
+    object({}),
+  ),
+  tool(
     "configuration_read",
     "Read the supported ordinary configuration and revision from the fixed user home. No secret values or external probes.",
     object({}),
@@ -665,6 +675,105 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
 ];
 export const MAINTENANCE_TOOLS: readonly Tool[] = [
+  tool(
+    "configuration_apply",
+    "Apply a saved binding in a managed runtime. Configuration-only processes return unmanaged and do not stop themselves.",
+    object({
+      request_id: id,
+      runtime_id: sessionId,
+      target_binding_revision: hash,
+    }),
+    false,
+  ),
+  tool(
+    "configuration_apply_cancel",
+    "Cancel an uncommitted apply request in its owning managed runtime.",
+    object({ request_id: id, runtime_id: sessionId }),
+    false,
+  ),
+  tool(
+    "configuration_source_save",
+    "Save exactly one source. Secret fields are replace/clear only; test_after_save explicitly authorizes the fixed probe. Partial publications enumerate committed fields.",
+    object({
+      source: {
+        enum: [
+          "web-of-science",
+          "crossref",
+          "semantic-scholar",
+          "arxiv",
+          "openalex",
+          "europe-pmc",
+          "elsevier",
+          "springer",
+          "datacite",
+          "core",
+          "opencitations",
+          "unpaywall",
+          "wiley",
+          "sci-hub",
+          "plos",
+        ],
+      },
+      baseline: text,
+      parameters: {
+        anyOf: [
+          object({ action: { const: "keep" } }),
+          object({ action: { const: "reset" } }),
+          object({ action: { const: "set" }, value: { type: "object" } }),
+        ],
+      },
+      credentials: {
+        type: "array",
+        maxItems: 8,
+        items: {
+          anyOf: [
+            object({ field: text, action: { const: "clear" } }),
+            object({
+              field: text,
+              action: { const: "replace" },
+              value: { type: "string", minLength: 1, maxLength: 65536 },
+            }),
+          ],
+        },
+      },
+      test_after_save: { type: "boolean" },
+    }),
+    false,
+  ),
+  tool(
+    "configuration_source_selection",
+    "Save one exact metadata/PDF selection; Auto has no provider list. No probes.",
+    object({
+      baseline: text,
+      domain: { enum: ["metadata", "pdf"] },
+      selection: object({
+        mode: { enum: ["auto", "custom"] },
+        providers: {
+          type: "array",
+          maxItems: 15,
+          uniqueItems: true,
+          items: text,
+        },
+      }),
+    }),
+    false,
+  ),
+  tool(
+    "configuration_source_test",
+    "Explicitly test one source on its fixed fixture; no library writes.",
+    object({ source: text, source_revision: text, request_id: id }),
+    false,
+  ),
+  tool(
+    "configuration_source_test_all",
+    "Explicitly test configured sources serially, using shared access budgets.",
+    object({
+      catalog_revision: text,
+      request_id: id,
+      scope: { const: "configured" },
+    }),
+    false,
+  ),
   tool(
     "proofread_save",
     "Save schema 2 Markdown only when its source map uniquely decomposes edits into leaf-local corrections. Supply the expected arrangement and manual revision. No model calls; mapping conflicts do not publish.",

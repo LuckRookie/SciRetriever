@@ -9,6 +9,7 @@ export const services = Object.freeze({
   ),
 });
 export const definition = provider({
+  displayName: "PLOS",
   publisherAliases: [
     "PLOS",
     "Public Library of Science (PLoS)",
