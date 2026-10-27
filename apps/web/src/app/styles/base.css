@@ -27,6 +27,14 @@
     color: var(--blue);
     text-underline-offset: 0.18em;
   }
+  /* Chemical formulas in titles: indices must not open up the line. */
+  sub,
+  sup {
+    line-height: 0;
+  }
+  .title-small-caps {
+    font-variant-caps: small-caps;
+  }
   button,
   input,
   textarea {

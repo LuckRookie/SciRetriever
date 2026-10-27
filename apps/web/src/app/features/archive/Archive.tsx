@@ -9,10 +9,11 @@ import {
   PageHeader,
   Select,
   Skeleton,
+  RichTitle,
 } from "../../components/index.js";
 import { archiveQuery, rows, useArchiveAction } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
-import { readLiterature, paperTitle } from "../../data/library.js";
+import { readLiterature, paperTitleParts } from "../../data/library.js";
 import { record } from "../../data/wire.js";
 import { navigate } from "../../data/url.js";
 import { archiveReason, archiveStrings, errorMessage } from "../../strings.js";
@@ -26,7 +27,11 @@ function PaperName({ id }: { id: string }) {
     queryKey: ["literature", id],
     queryFn: ({ signal }) => readLiterature(api, id, signal),
   });
-  return <span>{q.data ? paperTitle(q.data) : "文献记录"}</span>;
+  return (
+    <span>
+      {q.data ? <RichTitle parts={paperTitleParts(q.data)} /> : "文献记录"}
+    </span>
+  );
 }
 export default function Archive() {
   const api = useApi(),

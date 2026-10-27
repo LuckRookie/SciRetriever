@@ -43,14 +43,22 @@ export const DESIGN_SAMPLE_GAPS = [
 ];
 const id = (n: number) =>
   `00000000-0000-0000-0000-${String(70000 + n).padStart(12, "0")}`;
+// Samples 1 and 2 carry publisher inline markup, raw and entity-escaped, as real metadata does.
 const title = (n: number) =>
   n === 0
     ? "[样例] A quiet atlas of synthetic spectra and evidence"
-    : n % 7 === 0
-      ? `[样例 ${n}] 虚构材料的光谱观察与可复现研究笔记`
-      : `[Sample ${String(n).padStart(2, "0")}] ${n % 9 === 0 ? "A deliberately long study of synthetic interfaces, reproducible measurements, uncertain boundaries and the relationship between spectroscopy and hypothetical material behaviour across multiple research contexts" : "Synthetic observations in the imaginary Northlight laboratory"}`;
+    : n === 1
+      ? "[Sample 01] Moisture-tolerant Li <sub>6</sub> PS <sub>5</sub> Cl in the imaginary Northlight laboratory"
+      : n === 2
+        ? "[Sample 02] Synthetic Csp&lt;sup&gt;3&lt;/sup&gt; couplings &lt;i&gt;via&lt;/i&gt; imaginary catalysts"
+        : n % 7 === 0
+          ? `[样例 ${n}] 虚构材料的光谱观察与可复现研究笔记`
+          : `[Sample ${String(n).padStart(2, "0")}] ${n % 9 === 0 ? "A deliberately long study of synthetic interfaces, reproducible measurements, uncertain boundaries and the relationship between spectroscopy and hypothetical material behaviour across multiple research contexts" : "Synthetic observations in the imaginary Northlight laboratory"}`;
+/** The synthetic document body repeats the title without metadata markup. */
+const plainTitle = (n: number) =>
+  title(n).replace(/&lt;\/?[a-z]+&gt;|<\/?[a-z]+>/g, "");
 const text = (n: number) =>
-  `# ${title(n)}\n\n# Abstract\n\nSynthetic spectroscopy in the imaginary Northlight laboratory. All values are fictional design samples.\n\n# Introduction\n\nWe compare imaginary materials and retain evidence for every observation.\n\n# Methods\n\nThe measured energy was 4.2 eV. The reagent $\\mathrm{SnBu}_4$ is a fictional example.\n\n# Results\n\n![Synthetic diagram](diagram.png)\n\n| Sample | Energy |\n| --- | --- |\n| Northlight | 4.2 eV |\n\n# Conclusion\n\nSynthetic spectroscopy supports this design example only.\n\n# References\n\n[1] Imaginary Researcher. Synthetic reference. Northlight Sample Journal, 2025.\n`;
+  `# ${plainTitle(n)}\n\n# Abstract\n\nSynthetic spectroscopy in the imaginary Northlight laboratory. All values are fictional design samples.\n\n# Introduction\n\nWe compare imaginary materials and retain evidence for every observation.\n\n# Methods\n\nThe measured energy was 4.2 eV. The reagent $\\mathrm{SnBu}_4$ is a fictional example.\n\n# Results\n\n![Synthetic diagram](diagram.png)\n\n| Sample | Energy |\n| --- | --- |\n| Northlight | 4.2 eV |\n\n# Conclusion\n\nSynthetic spectroscopy supports this design example only.\n\n# References\n\n[1] Imaginary Researcher. Synthetic reference. Northlight Sample Journal, 2025.\n`;
 // A public, synthetic PNG; contains no paper-derived bytes.
 const diagram = designSampleImage();
 
@@ -383,7 +391,10 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
           values: {
             method: "Synthetic spectroscopy",
             missing: null,
-            note: "This is deliberately absent from the cited passage",
+            // Long enough to wrap in its cell; cites the passage with inline math.
+            note:
+              "This is deliberately absent from the cited passage. " +
+              "The synthetic note keeps going so that the result table has to wrap a long value across several lines instead of running past the column.",
           },
           evidence: {
             method: [
@@ -392,7 +403,9 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
               )!.segment_id,
             ],
             missing: [],
-            note: [input.segments![0]!.segment_id],
+            note: [
+              input.segments!.find((s) => s.text.includes("SnBu"))!.segment_id,
+            ],
           },
           missing: {
             method: null,

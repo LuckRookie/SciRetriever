@@ -12,6 +12,7 @@ import {
   SegmentedControl,
   Tabs,
   TechDetails,
+  RichTitle,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import {
@@ -21,6 +22,7 @@ import {
 import {
   emptyQuery,
   paperTitle,
+  paperTitleParts,
   readLiterature,
   searchLibrary,
 } from "../../data/library.js";
@@ -581,7 +583,7 @@ function CitationMap({
                 )
               }
             >
-              {paperTitle(node.item)}
+              <RichTitle parts={paperTitleParts(node.item)} />
             </Button>
             {!node.in_scope && <span className="muted">库内邻居</span>}
             <Button

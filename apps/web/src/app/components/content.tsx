@@ -212,6 +212,41 @@ export function Figure({
     </figure>
   );
 }
+type RichTitlePart =
+  | string
+  | { readonly tag: string; readonly parts: readonly RichTitlePart[] };
+/** A literature title with its inline sub/sup/italic markup, already parsed into text parts. */
+export function RichTitle({ parts }: { parts: readonly RichTitlePart[] }) {
+  return (
+    <>
+      {parts.map((part, index) =>
+        typeof part === "string" ? (
+          part
+        ) : part.tag === "sub" ? (
+          <sub key={index}>
+            <RichTitle parts={part.parts} />
+          </sub>
+        ) : part.tag === "sup" ? (
+          <sup key={index}>
+            <RichTitle parts={part.parts} />
+          </sup>
+        ) : part.tag === "b" ? (
+          <b key={index}>
+            <RichTitle parts={part.parts} />
+          </b>
+        ) : part.tag === "scp" ? (
+          <span key={index} className="title-small-caps">
+            <RichTitle parts={part.parts} />
+          </span>
+        ) : (
+          <i key={index}>
+            <RichTitle parts={part.parts} />
+          </i>
+        ),
+      )}
+    </>
+  );
+}
 export function PageNote({ children }: { children: ReactNode }) {
   return <p className="ui-page-note">{children}</p>;
 }

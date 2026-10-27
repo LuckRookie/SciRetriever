@@ -10,6 +10,7 @@ import { button, readerErrorMessage } from "./dom.js";
 import type { ReaderFrame } from "./contract.js";
 import type { ReadingPosition } from "./state.js";
 import { readDocument } from "./transport.js";
+import { appendTitle, titleParts } from "./title.js";
 import { documentMarkdown as markdown, markdownBlocks } from "./markdown.js";
 
 export async function renderDocument(
@@ -75,7 +76,7 @@ export async function renderDocument(
   if (frame.documentTitle) {
     const title = document.createElement("h1");
     title.className = "reading-document-title";
-    title.textContent = frame.documentTitle;
+    appendTitle(title, titleParts(frame.documentTitle));
     article.append(title);
   }
   frame.body.append(article);

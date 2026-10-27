@@ -6,6 +6,8 @@ import {
   useState,
   useCallback,
   memo,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   keepPreviousData,
@@ -40,6 +42,7 @@ import {
   Switch,
   TextField,
   TechDetails,
+  RichTitle,
 } from "../../components/index.js";
 import { AnimatedPanel, Presence, LayoutGroup } from "../../motion/index.js";
 import type { ApiClient } from "../../data/api.js";
@@ -50,10 +53,12 @@ import {
   emptyQuery,
   paperAuthors,
   paperTitle,
+  paperTitleParts,
   readLibraryCounts,
   readLiterature,
   searchLibrary,
   scopeIds,
+  scopeItems,
 } from "../../data/library.js";
 import { useShell } from "../../shell/context.js";
 import { randomId } from "../../../browser-platform.js";
@@ -61,6 +66,12 @@ import { archiveQuery, useArchiveAction, rows } from "../../data/archive.js";
 import { record } from "../../data/wire.js";
 import { archiveReason, errorMessage, statusLabels } from "../../strings.js";
 import { OperationDialog } from "./OperationDialog.js";
+import {
+  SELECTION_GROUPS,
+  groupSelection,
+  useRangeSelection,
+  type SelectionGroup,
+} from "./selection.js";
 import {
   AddToFolderDialog,
   LITERATURE_DRAG,
@@ -218,6 +229,15 @@ export default function Library() {
     [next.data],
   );
   const total = next.data?.pages[0]?.total ?? 0;
+  // Statuses seen in this session, so a selection made across scrolls and
+  // filters can still be split into what each batch action applies to.
+  const known = useRef(new Map<string, LiteratureSearchItem>()).current;
+  for (const item of items) known.set(item.literature.literature_id, item);
+  const range = useRangeSelection({
+    items,
+    selected: shell.selected,
+    setSelected: shell.setSelected,
+  });
   const counts = useQuery({
     queryKey: ["library", "counts", route.query],
     queryFn: ({ signal }) => readLibraryCounts(api, route.query, signal),
@@ -279,12 +299,14 @@ export default function Library() {
   }, [text, route.query]);
   const toggle = useCallback(
     (id: string) => {
+      if (range.handledByPress()) return;
       const selected = new Set(shell.selected);
       if (selected.has(id)) selected.delete(id);
       else selected.add(id);
       shell.setSelected(selected);
+      range.remember(id);
     },
-    [shell],
+    [shell, range],
   );
   /** Material operations act on fixed ids: the selection, or the current results. */
   const operate = async (kind: string, selected: boolean) => {
@@ -301,6 +323,43 @@ export default function Library() {
       setChoosing(false);
     }
   };
+  /** “Select all” beyond the loaded rows reads the whole scope once, statuses included. */
+  const selectScope = async () => {
+    if (choosing) return;
+    setChoosing(true);
+    try {
+      const all = await scopeItems(api, route.query, route.sort);
+      const selected = new Set(shell.selected);
+      for (const item of all) {
+        known.set(item.literature.literature_id, item);
+        selected.add(item.literature.literature_id);
+      }
+      shell.setSelected(selected);
+    } catch (error) {
+      shell.notify(errorMessage(error));
+    } finally {
+      setChoosing(false);
+    }
+  };
+  // Esc clears the selection unless a field has the key; open overlays consume
+  // their own Escape before it reaches the window.
+  const selectionCount = shell.selected.size;
+  useEffect(() => {
+    if (!selectionCount) return;
+    const clear = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.closest(
+          "input:not([type=checkbox], [type=radio]), textarea, select, [contenteditable]",
+        )
+      )
+        return;
+      shell.setSelected(new Set());
+    };
+    window.addEventListener("keydown", clear);
+    return () => window.removeEventListener("keydown", clear);
+  }, [selectionCount, shell]);
   const snapshot = (definition: unknown) =>
     archiveAction.mutate(
       { name: "snapshots", request: definition },
@@ -365,6 +424,14 @@ export default function Library() {
     data.effectAllowed = "copy";
   }, []);
   const mutable = api.kind === "workspace";
+  const groups = groupSelection(shell.selected, known);
+  /** Each batch button counts only the papers it would actually act on. */
+  const batchReason = (group: SelectionGroup, none: string) =>
+    groups[group].length === 0
+      ? none
+      : groups[group].length > 1000
+        ? "最多处理 1,000 篇，请减少选择。"
+        : undefined;
   // The whole catalog is always over the limit, so the reason lives with the
   // disabled actions instead of occupying the toolbar.
   const overLimit =
@@ -687,6 +754,25 @@ export default function Library() {
               ? "正在读取文献…"
               : `已显示 ${items.length.toLocaleString()} / 共 ${total.toLocaleString()} 篇`}
           </span>
+          {items.length > 0 &&
+            total > items.length &&
+            items.every((item) =>
+              shell.selected.has(item.literature.literature_id),
+            ) && (
+              <Button
+                variant="text"
+                size="compact"
+                isPending={choosing}
+                disabledReason={
+                  total > 1000
+                    ? `共 ${total.toLocaleString()} 篇，超过 1,000 篇上限；请先筛选。`
+                    : undefined
+                }
+                onPress={selectScope}
+              >
+                选择全部 {total.toLocaleString()} 篇符合条件的文献
+              </Button>
+            )}
         </div>
       </div>
       <LayoutGroup className="library-results-region">
@@ -712,6 +798,9 @@ export default function Library() {
           nextPageFailed={next.isFetchNextPageError}
           loadNextPage={next.fetchNextPage}
           onToggle={toggle}
+          onCheckPointerDown={range.onPointerDown}
+          onCheckClickCapture={range.onClickCapture}
+          selectingRange={range.dragging}
           onOpen={(...args) => {
             if (text.trim() !== (route.query.text ?? ""))
               updateQuery({ ...route.query, text: text.trim() || null });
@@ -732,36 +821,57 @@ export default function Library() {
           >
             <div className="selection-bar" role="region" aria-label="文献选择">
               <b>已选 {shell.selected.size} 篇</b>
+              <span className="selection-groups">
+                {SELECTION_GROUPS.filter(
+                  ({ group }) => groups[group].length > 0,
+                ).map(({ group, label }) => (
+                  <Button
+                    key={group}
+                    variant="text"
+                    size="compact"
+                    className="selection-group"
+                    aria-label={`只保留${label}的 ${groups[group].length} 篇`}
+                    onPress={() => shell.setSelected(new Set(groups[group]))}
+                  >
+                    {label} <span>{groups[group].length}</span>
+                  </Button>
+                ))}
+              </span>
               {mutable ? (
                 <>
                   <Button
                     variant="primary"
-                    disabledReason={
-                      shell.selected.size > 1000
-                        ? "最多处理 1,000 篇，请减少选择。"
-                        : undefined
-                    }
+                    disabledReason={batchReason("no-pdf", "所选文献都已有 PDF")}
                     onPress={() =>
-                      setRunner({
-                        scope: {
-                          kind: "literatures",
-                          ids: [...shell.selected],
-                        },
-                        label: `已选的 ${shell.selected.size} 篇`,
-                      })
+                      setOperation({ ids: groups["no-pdf"], kind: "acquire" })
                     }
                   >
-                    运行算子…
+                    获取 PDF <span>{groups["no-pdf"].length}</span>
                   </Button>
                   <Button
+                    disabledReason={batchReason(
+                      "ready",
+                      "所选文献都还没有建档就绪",
+                    )}
                     onPress={() =>
-                      setOperation({
-                        ids: [...shell.selected],
-                        kind: "archive",
+                      setRunner({
+                        scope: { kind: "literatures", ids: groups.ready },
+                        label: `已选中已就绪的 ${groups.ready.length} 篇`,
                       })
                     }
                   >
-                    建档
+                    运行算子 <span>{groups.ready.length}</span>
+                  </Button>
+                  <Button
+                    disabledReason={batchReason(
+                      "unarchived",
+                      "所选文献没有待建档的；建档需要先有 PDF",
+                    )}
+                    onPress={() =>
+                      setOperation({ ids: groups.unarchived, kind: "archive" })
+                    }
+                  >
+                    建档 <span>{groups.unarchived.length}</span>
                   </Button>
                   <Button
                     icon={<Icon name="folder" />}
@@ -788,11 +898,6 @@ export default function Library() {
                             },
                           ]
                         : []),
-                      {
-                        id: "acquire",
-                        label: "获取 PDF",
-                        onAction: () => void operate("acquire", true),
-                      },
                       {
                         id: "parse",
                         label: "解析 PDF",
@@ -895,7 +1000,9 @@ export default function Library() {
         ) : (
           preview.data && (
             <>
-              <h2>{paperTitle(preview.data)}</h2>
+              <h2>
+                <RichTitle parts={paperTitleParts(preview.data)} />
+              </h2>
               <p>{paperAuthors(preview.data)}</p>
               <p>
                 {preview.data.literature.metadata.abstract ?? "尚未提供摘要。"}
@@ -952,6 +1059,9 @@ const LibraryList = memo(function LibraryList({
   nextPageFailed,
   loadNextPage,
   onToggle,
+  onCheckPointerDown,
+  onCheckClickCapture,
+  selectingRange,
   onOpen,
   onPreview,
   onFile,
@@ -973,6 +1083,9 @@ const LibraryList = memo(function LibraryList({
   nextPageFailed: boolean;
   loadNextPage: () => Promise<unknown>;
   onToggle: (id: string) => void;
+  onCheckPointerDown: CheckPointerDown;
+  onCheckClickCapture: (event: ReactMouseEvent) => void;
+  selectingRange: () => boolean;
   onOpen: ReturnType<typeof useShell>["openPaper"];
   onPreview: (id: string) => void;
   onFile: (id: string, file: File) => void;
@@ -1106,6 +1219,9 @@ const LibraryList = memo(function LibraryList({
             mutable={mutable}
             measure={virtual.measureElement}
             onToggle={onToggle}
+            onCheckPointerDown={onCheckPointerDown}
+            onCheckClickCapture={onCheckClickCapture}
+            selectingRange={selectingRange}
             onOpen={onOpen}
             onPreview={onPreview}
             onFile={onFile}
@@ -1123,6 +1239,10 @@ const LibraryList = memo(function LibraryList({
   );
 });
 const estimateRowSize = () => 78;
+type CheckPointerDown = (
+  index: number,
+  event: ReactPointerEvent<HTMLElement>,
+) => void;
 type RowAction = "run" | "folder" | "acquire" | "archive";
 /** A row shows at most three tags; the rest collapse into “+N”. */
 const ROW_TAGS = 3;
@@ -1153,6 +1273,9 @@ const LibraryRow = memo(function LibraryRow({
   mutable,
   measure,
   onToggle,
+  onCheckPointerDown,
+  onCheckClickCapture,
+  selectingRange,
   onOpen,
   onPreview,
   onFile,
@@ -1167,6 +1290,9 @@ const LibraryRow = memo(function LibraryRow({
   mutable: boolean;
   measure: (element: HTMLElement | null) => void;
   onToggle: (id: string) => void;
+  onCheckPointerDown: CheckPointerDown;
+  onCheckClickCapture: (event: ReactMouseEvent) => void;
+  selectingRange: () => boolean;
   onOpen: ReturnType<typeof useShell>["openPaper"];
   onPreview: (id: string) => void;
   onFile: (id: string, file: File) => void;
@@ -1199,7 +1325,9 @@ const LibraryRow = memo(function LibraryRow({
       }}
       draggable={mutable}
       onDragStart={(event) => {
-        if (event.target === event.currentTarget)
+        // A press on the checkbox column selects a run; it never drags the row.
+        if (selectingRange()) event.preventDefault();
+        else if (event.target === event.currentTarget)
           onDragRow(id, event.dataTransfer);
       }}
       onDragOver={(event) => {
@@ -1213,16 +1341,24 @@ const LibraryRow = memo(function LibraryRow({
         if (mutable && file) onFile(id, file);
       }}
     >
-      <Checkbox
-        aria-label={`选择 ${title}`}
-        isSelected={selected}
-        onChange={() => onToggle(id)}
-      />
+      <span
+        className="paper-check"
+        onPointerDownCapture={(event) => onCheckPointerDown(row.index, event)}
+        onClickCapture={onCheckClickCapture}
+      >
+        <Checkbox
+          aria-label={`选择 ${title}`}
+          isSelected={selected}
+          onChange={() => onToggle(id)}
+        />
+      </span>
       <button
         className="paper-open"
         onClick={() => onOpen(id, "pdf", undefined, title)}
       >
-        <span className="paper-title">{title}</span>
+        <span className="paper-title">
+          <RichTitle parts={paperTitleParts(item)} />
+        </span>
         <span className="paper-citation">
           {rowAuthors(item)} · <Venue name={item.literature.metadata.venue} /> ·{" "}
           {item.literature.metadata.publication_year ?? "年份未提供"}

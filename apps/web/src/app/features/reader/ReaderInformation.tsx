@@ -17,9 +17,11 @@ import {
   IconButton,
   TechDetails,
   Popover,
+  RichTitle,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
-import { paperAuthors, paperTitle } from "../../data/library.js";
+import { paperAuthors, paperTitleParts } from "../../data/library.js";
+import { titleParts } from "../../../reading/title.js";
 import { useShell } from "../../shell/context.js";
 import { record } from "../../data/wire.js";
 import { errorMessage, localTime, statusLabels } from "../../strings.js";
@@ -98,7 +100,7 @@ function Relations({
               variant="text"
               onPress={() => shell.openPaper(row.item.literature.literature_id)}
             >
-              {paperTitle(row.item)}
+              <RichTitle parts={paperTitleParts(row.item)} />
             </Button>
             <Button
               variant="text"
@@ -349,7 +351,7 @@ export function ReaderInformation({
                   shell.openPaper(version.literature.literature_id)
                 }
               >
-                {paperTitle(version)}
+                <RichTitle parts={paperTitleParts(version)} />
               </Button>
             ))}
           </Disclosure>
@@ -414,7 +416,9 @@ export function ReaderInformation({
         {detail.metadata_observations.map((observation) => (
           <section className="reader-source" key={observation.observation_id}>
             <h4>{observation.provenance.source_name}</h4>
-            <p>{observation.metadata.title}</p>
+            <p>
+              <RichTitle parts={titleParts(observation.metadata.title)} />
+            </p>
             <p>
               {observation.metadata.venue} ·{" "}
               {observation.metadata.publication_year}

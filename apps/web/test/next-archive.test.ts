@@ -58,7 +58,7 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
     );
     await p
       .getByRole("region", { name: "文献选择" })
-      .getByRole("button", { name: "建档", exact: true })
+      .getByRole("button", { name: /^建档 \d+$/ })
       .click();
     const build = p.getByRole("dialog", { name: "建立文献档案", exact: true });
     await build.getByRole("button", { name: "确认启动", exact: true }).click();

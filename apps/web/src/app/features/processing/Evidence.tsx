@@ -326,7 +326,12 @@ function PeekPassage({
   const api = useApi();
   const data = useInfiniteQuery(passageQuery(api, evidence));
   const page = data.data?.pages[0];
-  const text = (page?.text ?? "").replace(/^#+\s*/gm, "").trim();
+  // The peek is a clamped single paragraph: flatten headings and breaks, keep math.
+  const text = (page?.text ?? "")
+    .replace(/^#+\s*/gm, "")
+    .replace(/\$\$([\s\S]+?)\$\$/g, (_, tex: string) => `$${tex.trim()}$`)
+    .replace(/\s*\n+\s*/g, " ")
+    .trim();
   return (
     <div className="evidence-peek">
       {data.isPending ? (
@@ -337,8 +342,14 @@ function PeekPassage({
         <p className="evidence-peek-note">
           证据指向原始文件，没有正文片段定位。
         </p>
+      ) : text ? (
+        <blockquote
+          dangerouslySetInnerHTML={{
+            __html: markdown.parseInline(text, { async: false }),
+          }}
+        />
       ) : (
-        <blockquote>{text || "原文片段为空。"}</blockquote>
+        <blockquote>原文片段为空。</blockquote>
       )}
       <p className="evidence-peek-note">
         {page?.location ? `PDF 第 ${page.location.page} 页 · ` : ""}

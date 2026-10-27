@@ -42,9 +42,14 @@ import {
   Skeleton,
   SplitPane,
   TechDetails,
+  RichTitle,
 } from "../../components/index.js";
 import { archiveQuery, rows } from "../../data/archive.js";
-import { paperTitle, readLiterature } from "../../data/library.js";
+import {
+  paperTitle,
+  paperTitleParts,
+  readLiterature,
+} from "../../data/library.js";
 import { preferences } from "../../data/preferences.js";
 import { useApi } from "../../data/query.js";
 import {
@@ -295,7 +300,7 @@ export default function Reader() {
             },
           }
         : {}),
-      documentTitle: paperTitle(detail.data),
+      documentTitle: detail.data.literature.metadata.title || "未命名文献",
       animateNavigation: () =>
         document.documentElement.dataset.reducedMotion !== "true",
       onResources: (resources) => {
@@ -996,7 +1001,9 @@ export default function Reader() {
                 <div className="reading-scroll">
                   <article className="reading-article">
                     <p className="reader-eyebrow">固定元数据来源</p>
-                    <h1>{detail.data.literature.metadata.title}</h1>
+                    <h1>
+                      <RichTitle parts={paperTitleParts(detail.data)} />
+                    </h1>
                     <p>
                       {detail.data.literature.metadata.abstract ||
                         "此版本元数据没有摘要。"}

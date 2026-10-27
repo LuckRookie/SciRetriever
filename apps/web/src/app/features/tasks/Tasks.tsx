@@ -22,6 +22,7 @@ import {
   SearchField,
   Skeleton,
   TechDetails,
+  RichTitle,
 } from "../../components/index.js";
 import { archiveQuery, rows } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
@@ -43,7 +44,7 @@ import {
   operationLabels,
   type TaskDetail,
 } from "../../data/tasks.js";
-import { readLiterature } from "../../data/library.js";
+import { paperTitleParts, readLiterature } from "../../data/library.js";
 import {
   attemptsDetail,
   attemptsLine,
@@ -745,7 +746,11 @@ function TraceRow({ trace }: { trace: AcquisitionTaskTrace }) {
         size="compact"
         onPress={() => shell.openPaper(trace.literature_id, "pdf")}
       >
-        {detail.data?.literature.metadata.title ?? trace.literature_id}
+        {detail.data ? (
+          <RichTitle parts={paperTitleParts(detail.data)} />
+        ) : (
+          trace.literature_id
+        )}
       </Button>
       <p className="task-trace-line" title={attemptsDetail(trace.attempts)}>
         {attemptsLine(trace.attempts) || "没有记录到来源尝试"}

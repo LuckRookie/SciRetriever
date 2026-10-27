@@ -28,9 +28,14 @@ import {
   Skeleton,
   TechDetails,
   TextField,
+  RichTitle,
 } from "../../components/index.js";
 import type { ApiClient } from "../../data/api.js";
-import { paperTitle, readLiterature, scopeIds } from "../../data/library.js";
+import {
+  paperTitleParts,
+  readLiterature,
+  scopeIds,
+} from "../../data/library.js";
 import { useApi } from "../../data/query.js";
 import { sourceParameters } from "../../data/sources.js";
 import { navigate, useUrlState } from "../../data/url.js";
@@ -491,7 +496,13 @@ function GroupTitle({ id }: { id: string | undefined }) {
   });
   return (
     <h2 className="retrieval-group-title">
-      {literature.data ? paperTitle(literature.data) : id ? "…" : "综合结果"}
+      {literature.data ? (
+        <RichTitle parts={paperTitleParts(literature.data)} />
+      ) : id ? (
+        "…"
+      ) : (
+        "综合结果"
+      )}
     </h2>
   );
 }

@@ -257,6 +257,18 @@
     border-radius: var(--radius-md);
     margin-block: var(--space-4);
   }
+  /* A cited value reads as text: it wraps inside its cell at a readable measure. */
+  .ui-button.result-value {
+    height: auto;
+    min-height: var(--control-small-height);
+    max-width: 60ch;
+    padding-block: var(--space-1);
+    justify-content: flex-start;
+    text-align: left;
+    line-height: 1.5;
+    white-space: normal;
+    overflow-wrap: break-word;
+  }
   .evidence-peek blockquote {
     margin: 0 0 var(--space-2);
     padding-left: var(--space-3);

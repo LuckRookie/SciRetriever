@@ -407,21 +407,32 @@
     background: var(--hover);
   }
   /* Row tools stay out of sight until the row is touched or a selection begins. */
-  .paper-row > .ui-choice,
+  .paper-row > .paper-check,
   .paper-row > .paper-tools {
     opacity: 0;
     transition: opacity var(--dur-1);
   }
   .paper-row:is(:hover, :focus-within, [data-selected])
-    > :is(.ui-choice, .paper-tools),
+    > :is(.paper-check, .paper-tools),
   .paper-tools:has([aria-expanded="true"]),
-  .virtual-list:has(.paper-row[data-selected]) .paper-row > .ui-choice {
+  .virtual-list:has(.paper-row[data-selected]) .paper-row > .paper-check {
     opacity: 1;
   }
   @media (hover: none) {
-    .paper-row > :is(.ui-choice, .paper-tools) {
+    .paper-row > :is(.paper-check, .paper-tools) {
       opacity: 1;
     }
+  }
+  /* The checkbox column also takes press-and-drag and Shift+click ranges. */
+  .paper-check {
+    display: flex;
+    align-items: center;
+    align-self: stretch;
+  }
+  .library-range-selecting,
+  .library-range-selecting * {
+    user-select: none;
+    cursor: default;
   }
   .paper-tools {
     display: flex;
@@ -544,6 +555,24 @@
     border-radius: var(--radius-lg);
     white-space: nowrap;
   }
+  /* What the selection is made of; each tag narrows the selection to its group. */
+  .selection-groups {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+  .selection-group {
+    color: var(--fg2);
+  }
+  .selection-bar .ui-button-label > span {
+    font-variant-numeric: tabular-nums;
+  }
+  .selection-bar
+    .ui-button:not([data-variant="primary"])
+    .ui-button-label
+    > span {
+    color: var(--fg2);
+  }
   .selection-wrap {
     position: sticky;
     margin-top: auto;
@@ -665,10 +694,22 @@
     .library-filters {
       grid-template-columns: 1fr;
     }
+    /* On a phone the bar spans the width and wraps: count and groups, then actions. */
     .selection-bar {
       bottom: var(--space-3);
+      left: var(--space-2);
+      right: var(--space-2);
+      transform: none;
+      max-width: none;
+      flex-wrap: wrap;
+      white-space: normal;
       gap: var(--space-2);
+      padding: var(--space-2) var(--space-3);
       font-size: var(--text-caption);
+    }
+    .selection-groups {
+      flex: 1 1 auto;
+      flex-wrap: wrap;
     }
     .workspace-header {
       padding-inline: var(--space-2);

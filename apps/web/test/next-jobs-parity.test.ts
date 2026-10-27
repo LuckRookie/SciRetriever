@@ -130,10 +130,7 @@ describe("durable task workbench", () => {
         if (!(await selectAll.isChecked())) await selectAll.press("Space");
         await page
           .getByRole("region", { name: "文献选择" })
-          .getByRole("button", { name: "更多", exact: true })
-          .click();
-        await page
-          .getByRole("menuitem", { name: "获取 PDF", exact: true })
+          .getByRole("button", { name: /^获取 PDF \d+$/ })
           .click();
         const form = page.getByRole("dialog", {
           name: "获取 PDF",

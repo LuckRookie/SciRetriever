@@ -42,7 +42,7 @@ export interface ReaderFrame {
     page: number;
     region: import("@sciretriever/contracts").PageRegion | null;
   };
-  /** Metadata heading for presentation only; source bytes and evidence offsets stay fixed. */
+  /** Metadata heading for presentation only, may carry publisher inline tags (see `title.ts`); source bytes and evidence offsets stay fixed. */
   documentTitle?: string;
   body: HTMLElement;
   controls: HTMLElement;

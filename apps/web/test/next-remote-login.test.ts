@@ -170,13 +170,10 @@ describe("IP-address HTTP login and workspace", () => {
         .getByRole("menuitem", { name: "HTTP saved view", exact: true })
         .waitFor();
       await page.keyboard.press("Escape");
-      const check = page.locator(".paper-row").first().getByRole("checkbox");
-      await check.focus();
-      await page.keyboard.press("Space");
-      await page
-        .getByRole("region", { name: "文献选择", exact: true })
-        .getByRole("button", { name: "更多", exact: true })
-        .click();
+      // The fixture paper already has a PDF, so fetch it again from its own row menu.
+      const row = page.locator(".paper-row").first();
+      await row.hover();
+      await row.getByRole("button", { name: "文献操作", exact: true }).click();
       await page
         .getByRole("menuitem", { name: "获取 PDF", exact: true })
         .click();

@@ -181,6 +181,32 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     ready: '[aria-label="文献选择"]',
   },
   {
+    id: "library-selection-mixed",
+    name: "文献库 · 混合选择",
+    route: route("lib", "&sort=title-asc"),
+    interaction: "按住勾选列向下拖过可见的几行，选中状态不一的文献",
+    prepare: async (p) => {
+      const box = async (n: number) => {
+        const b = (await p
+          .locator(`.paper-row[data-index="${n}"] .paper-check`)
+          .boundingBox())!;
+        return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+      };
+      // Drag down to the last row fully in view, so the list does not autoscroll.
+      await p.locator('.paper-row[data-index="3"]').waitFor();
+      const height = p.viewportSize()!.height;
+      let last = 0;
+      while ((await box(last + 1)).y < height - 160) last++;
+      const from = await box(0),
+        to = await box(last);
+      await p.mouse.move(from.x, from.y);
+      await p.mouse.down();
+      await p.mouse.move(to.x, to.y, { steps: 8 });
+      await p.mouse.up();
+    },
+    ready: '[aria-label="文献选择"] .selection-group',
+  },
+  {
     id: "library-folder",
     name: "文献库 · 文件夹",
     route: (ids) =>
@@ -334,6 +360,28 @@ export const designSamplePages: readonly DesignSamplePage[] = [
       await p.keyboard.press("Tab");
     },
     ready: ".ui-tooltip-wide .evidence-peek blockquote",
+  },
+  {
+    id: "result-detail-peek-math",
+    name: "算子 · 证据预览（公式与长取值）",
+    route: (ids) =>
+      `/?view=ext&result=${ids.result}&resultHash=${ids.resultHash}`,
+    interaction: "键盘聚焦长取值，预览含公式的原文",
+    prepare: async (p) => {
+      // Columns: selection, source, method, missing, then the long note.
+      const value = p
+        .locator('[aria-label="提取结果"] tbody tr')
+        .first()
+        .locator("td")
+        .nth(4)
+        .locator(".ui-button")
+        .first();
+      await value.waitFor();
+      await value.focus();
+      await p.keyboard.press("Shift+Tab");
+      await p.keyboard.press("Tab");
+    },
+    ready: ".ui-tooltip-wide .evidence-peek blockquote .katex",
   },
   {
     id: "snapshots",

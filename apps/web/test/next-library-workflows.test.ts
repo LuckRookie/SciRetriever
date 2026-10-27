@@ -59,13 +59,16 @@ it("opens keyboard search and live activity without starting work, and preserves
     expect(
       await page.getByRole("region", { name: "文献选择" }).textContent(),
     ).toContain("已选 1 篇");
-    await page
-      .getByRole("region", { name: "文献选择" })
-      .getByRole("button", { name: "运行算子…", exact: true })
-      .click();
-    await expect
-      .poll(() => page.getByRole("dialog", { name: "运行算子" }).textContent())
-      .toContain("范围：已选的 1 篇");
+    // A metadata-only paper can be fetched, not run: each batch action counts its own papers.
+    const bar = page.getByRole("region", { name: "文献选择" });
+    expect(await bar.textContent()).toContain("无 PDF 1");
+    expect(
+      await bar
+        .getByRole("button", { name: "运行算子 0", exact: true })
+        .isDisabled(),
+    ).toBe(true);
+    await bar.getByRole("button", { name: "获取 PDF 1", exact: true }).click();
+    await page.getByRole("dialog", { name: "获取 PDF", exact: true }).waitFor();
     await page.keyboard.press("Escape");
     expect(await w.env.app.jobs!.listJobs(10)).toHaveLength(0);
     const job = await w.env.app.jobService!.create({

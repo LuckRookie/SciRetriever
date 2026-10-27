@@ -2,7 +2,8 @@ import { folderPaths, useFolders } from "../library/Folders.js";
 import { useQuery } from "@tanstack/react-query";
 import { parseSnapshotDefinition } from "@sciretriever/contracts";
 import { useApi } from "../../data/query.js";
-import { paperTitle, readLiterature } from "../../data/library.js";
+import { RichTitle } from "../../components/index.js";
+import { paperTitleParts, readLiterature } from "../../data/library.js";
 import { statusLabels } from "../../strings.js";
 
 export function PaperName({ id }: { id: string }) {
@@ -13,11 +14,13 @@ export function PaperName({ id }: { id: string }) {
   });
   return (
     <span>
-      {query.data
-        ? paperTitle(query.data)
-        : query.error
-          ? "文献标题暂不可读"
-          : "正在读取标题…"}
+      {query.data ? (
+        <RichTitle parts={paperTitleParts(query.data)} />
+      ) : query.error ? (
+        "文献标题暂不可读"
+      ) : (
+        "正在读取标题…"
+      )}
     </span>
   );
 }

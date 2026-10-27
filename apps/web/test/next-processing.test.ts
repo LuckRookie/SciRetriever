@@ -59,7 +59,7 @@ async function enterSelected(
   await w.page.keyboard.press("Space");
   await w.page
     .getByRole("region", { name: "文献选择", exact: true })
-    .getByRole("button", { name: "运行算子…", exact: true })
+    .getByRole("button", { name: "运行算子 1", exact: true })
     .click();
   await nextReady(w.page);
   await chooseOperator(w.page, operator);

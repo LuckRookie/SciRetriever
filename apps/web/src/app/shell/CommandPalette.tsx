@@ -7,12 +7,14 @@ import {
 } from "react-aria-components";
 import type { LiteratureSearchItem } from "@sciretriever/contracts";
 import { AnimatedPanel } from "../motion/index.js";
+import { RichTitle } from "../components/index.js";
 import { useApi } from "../data/query.js";
 import { navigate } from "../data/url.js";
 import {
   emptyQuery,
   paperAuthors,
   paperTitle,
+  paperTitleParts,
   searchLibrary,
 } from "../data/library.js";
 import { statusLabels } from "../strings.js";
@@ -155,7 +157,9 @@ function Palette({ onClose }: { onClose: () => void }) {
             onPointerMove={() => setActive(index)}
             onClick={() => open(item)}
           >
-            <span className="command-title">{paperTitle(item)}</span>
+            <span className="command-title">
+              <RichTitle parts={paperTitleParts(item)} />
+            </span>
             <span className="command-citation">
               {paperAuthors(item)} ·{" "}
               {item.literature.metadata.venue ?? "期刊未提供"} ·{" "}

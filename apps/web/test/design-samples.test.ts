@@ -109,3 +109,84 @@ it.each(designSamplePages)(
     }
   },
 );
+it("renders publisher inline markup in titles, raw or entity-escaped, as real tags", async () => {
+  const context = await browser.newContext({ serviceWorkers: "block" });
+  const page = await context.newPage();
+  try {
+    await loginWorkbenchPage(page, samples.origin, password);
+    await page.goto(`${samples.origin}/?view=lib`);
+    const raw = page.locator(".paper-title", { hasText: "[Sample 01]" });
+    await raw.waitFor();
+    expect(await raw.locator("sub").allTextContents()).toEqual(["6", "5"]);
+    expect(await raw.textContent()).toContain("Li6 PS5 Cl");
+    const escaped = page.locator(".paper-title", { hasText: "[Sample 02]" });
+    expect(await escaped.locator("sup").allTextContents()).toEqual(["3"]);
+    expect(await escaped.locator("i").allTextContents()).toEqual(["via"]);
+    expect(await escaped.textContent()).not.toMatch(/&lt;|<sup>/);
+  } finally {
+    await context.close();
+  }
+});
+it(
+  "selects runs of papers by dragging the checkbox column and Shift+click, and Esc clears",
+  { timeout: 60000 },
+  async () => {
+    const context = await browser.newContext({
+      viewport: { width: 1440, height: 900 },
+      serviceWorkers: "block",
+    });
+    const page = await context.newPage();
+    try {
+      await loginWorkbenchPage(page, samples.origin, password);
+      await page.goto(`${samples.origin}/?view=lib`);
+      const check = async (index: number) => {
+        const box = (await page
+          .locator(`.paper-row[data-index="${index}"] .paper-check`)
+          .boundingBox())!;
+        return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      };
+      await page.locator('.paper-row[data-index="4"]').waitFor();
+      const bar = page.getByRole("region", { name: "文献选择" });
+      const from = await check(0),
+        to = await check(3);
+      await page.mouse.move(from.x, from.y);
+      await page.mouse.down();
+      await page.mouse.move(to.x, to.y, { steps: 6 });
+      await page.mouse.up();
+      expect(await bar.locator("b").textContent()).toBe("已选 4 篇");
+      // Shift extends from the row where the last press began.
+      const end = await check(4);
+      await page.keyboard.down("Shift");
+      await page.mouse.click(end.x, end.y);
+      await page.keyboard.up("Shift");
+      expect(await bar.locator("b").textContent()).toBe("已选 5 篇");
+      // Starting on a selected row clears the run instead.
+      const a = await check(1),
+        b = await check(2);
+      await page.mouse.move(a.x, a.y);
+      await page.mouse.down();
+      await page.mouse.move(b.x, b.y, { steps: 4 });
+      await page.mouse.up();
+      expect(await bar.locator("b").textContent()).toBe("已选 3 篇");
+      expect(
+        await page
+          .locator(".paper-row[data-selected]")
+          .evaluateAll((rows) =>
+            rows.map((row) => Number((row as HTMLElement).dataset.index)),
+          ),
+      ).toEqual([0, 3, 4]);
+      // The bar splits the selection by what each action can act on.
+      const counts = await bar.locator(".selection-group").allTextContents();
+      expect(counts.length).toBeGreaterThan(0);
+      const total = counts
+        .map((text) => Number(text.match(/(\d+)$/)?.[1] ?? 0))
+        .reduce((sum, n) => sum + n, 0);
+      expect(total).toBe(3);
+      // Esc right after clicking checkboxes clears the selection.
+      await page.keyboard.press("Escape");
+      await expect.poll(() => bar.count(), { timeout: 3000 }).toBe(0);
+    } finally {
+      await context.close();
+    }
+  },
+);

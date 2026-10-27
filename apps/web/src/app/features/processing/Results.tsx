@@ -676,6 +676,7 @@ function Detail({
                   <Button
                     variant="text"
                     size="compact"
+                    className="result-value"
                     onPress={() =>
                       setEvidence({
                         kind: "result",

@@ -8,6 +8,7 @@ import {
   type LiteratureSearchItem,
 } from "@sciretriever/contracts";
 import { record } from "./wire.js";
+import { titleParts, titleText, type TitlePart } from "../../reading/title.js";
 import type { ApiClient } from "./api.js";
 export const emptyQuery = () => parseLibrarySearchRequest({ query: {} }).query;
 export async function searchLibrary(
@@ -50,18 +51,14 @@ export async function readLiterature(
     throw new Error("文献响应与选择不一致");
   return detail;
 }
+/** Title with its inline sub/sup/italic markup, for visible headings and rows. */
+export function paperTitleParts(item: LiteratureSearchItem): TitlePart[] {
+  const parts = titleParts(item.literature.metadata.title);
+  return parts.length ? parts : ["未命名文献"];
+}
+/** Plain title for labels, tabs and sorting. */
 export function paperTitle(item: LiteratureSearchItem): string {
-  const decoder = document.createElement("textarea");
-  const title = item.literature.metadata.title?.replace(
-    /&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);/giu,
-    (entity) => {
-      decoder.innerHTML = entity;
-      return decoder.value;
-    },
-  );
-  return (
-    title?.replace(/<\/?(?:i|b|em|strong|sub|sup)\s*>/giu, "") || "未命名文献"
-  );
+  return titleText(paperTitleParts(item));
 }
 export function paperAuthors(item: LiteratureSearchItem): string {
   return (
@@ -74,13 +71,14 @@ export function paperAuthors(item: LiteratureSearchItem): string {
       .join(", ") || "作者未提供"
   );
 }
-export async function scopeIds(
+/** Every item in the current scope, at most 1,000; used to select or act on all of it. */
+export async function scopeItems(
   api: ApiClient,
   query: LibraryQuery,
   sort: LibrarySort,
   signal?: AbortSignal,
 ) {
-  const ids = new Set<string>();
+  const items = new Map<string, LiteratureSearchItem>();
   const cursors = new Set<string>();
   let cursor: string | null = null;
   do {
@@ -88,7 +86,8 @@ export async function scopeIds(
     const page = await searchLibrary(api, query, sort, cursor, signal);
     if (page.total > 1000)
       throw new Error("当前范围超过 1,000 篇，请先筛选或选择。");
-    for (const item of page.items) ids.add(item.literature.literature_id);
+    for (const item of page.items)
+      items.set(item.literature.literature_id, item);
     cursor = page.cursor;
     if (cursor) {
       if (cursors.has(cursor))
@@ -96,7 +95,17 @@ export async function scopeIds(
       cursors.add(cursor);
     }
   } while (cursor);
-  return [...ids];
+  return [...items.values()];
+}
+export async function scopeIds(
+  api: ApiClient,
+  query: LibraryQuery,
+  sort: LibrarySort,
+  signal?: AbortSignal,
+) {
+  return (await scopeItems(api, query, sort, signal)).map(
+    (item) => item.literature.literature_id,
+  );
 }
 
 export async function readLibraryCounts(
