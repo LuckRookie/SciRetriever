@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：以文献库为中心的 Web 与可选 Browser 直接交互
-状态：Accepted；部分被取代：文献状态改按 [ADR 0037](0037-literature-archive-and-proofread-text.md) 的建档与就绪表达；原型作为设计依据的表述，以及第 8 节第 1、2、5、7、10 条，见 [ADR 0038](0038-web-design-basis.md)
+状态：Accepted；部分被取代：文献状态改按 [ADR 0037](0037-literature-archive-and-proofread-text.md) 的建档与就绪表达；原型作为设计依据的表述，以及第 8 节第 1、2、5、7、10 条，见 [ADR 0038](0038-web-design-basis.md)；第 5 节第 2 条（输入绑定页面 revision）被 [ADR 0042](0042-browser-screencast-and-direct-input.md) 取代
 
 - Date: 2026-10-14
 - Last amended: 2026-10-22（新增第 8 节：Web 定稿修订；同时修订第 7 节第 1、2、3、6 条）；2026-10-21（新增第 7 节：校订稿编辑、Agent 监视、任务运行与结果组织）
