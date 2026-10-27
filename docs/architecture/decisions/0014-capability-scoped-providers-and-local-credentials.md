@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：按能力接入 Provider 与本地凭据管理
-状态：Accepted
+状态：Accepted；Sci-Hub 默认关闭的部分被 [ADR 0040](0040-sci-hub-enabled-by-default.md) 取代
 
 - Date: 2026-08-10
 - Last amended: 2026-10-11

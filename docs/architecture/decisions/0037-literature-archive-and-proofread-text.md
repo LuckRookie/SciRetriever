@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：建档、校订稿与算子输入
-状态：Accepted（2026-10-20，Owner 在[实施计划](../../archive/2026-10-20-literature-archive/README.md)的 GA 确认）；第二版修订（2026-10-20，按真实样本结果重写第 2、3、5、8、10 节）同日经 Owner 确认；第二版代码已实现，验收边界见末节
+状态：Accepted（2026-10-20，Owner 在[实施计划](../../archive/2026-10-20-literature-archive/README.md)的 GA 确认）；第二版修订（2026-10-20，按真实样本结果重写第 2、3、5、8、10 节）同日经 Owner 确认；第二版代码已实现，验收边界见末节；术语表四行与第 3、5、6、8 节的相应部分被 [ADR 0041](0041-arrange-then-per-page-proofread.md)（建档先整理、再逐页校订保留内容）取代
 
 - Date: 2026-10-20
 - Last amended: 2026-10-22（第三版修订：取消“存疑”，用时核对改为六种可客观判断的状态，单篇结果按值量化，算子按结构分块；修订第 3、8、10 节。Owner 于 2026-10-22 在[计划 13 第二轮](../../archive/2026-10-20-literature-archive/13-web-review-and-audit.md)确定，实现见该计划 13.22–13.24）

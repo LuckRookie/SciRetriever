@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：通用 Browser Agent 执行器
-状态：Accepted
+状态：Accepted；Sci-Hub 须显式启用的限定被 [ADR 0040](0040-sci-hub-enabled-by-default.md) 取代
 
 - Amended by: [ADR 0029](0029-unverified-pdf-acquisition.md)（下载取消文章身份门，保存未验证标签）
 - Amended by: [ADR 0030](0030-browser-transport-and-progress.md)（临时传输、文章会话、后台下载、候选交接和平台限流）；[ADR 0031](0031-dsh-backed-agent-capabilities.md)（DSH 执行基础与多轮历史）

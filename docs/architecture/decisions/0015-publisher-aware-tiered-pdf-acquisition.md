@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：访问方感知的五层 PDF 获取与 Browser 调度
-状态：Accepted
+状态：Accepted；public-web 只含显式启用 Sci-Hub 镜像的限定被 [ADR 0040](0040-sci-hub-enabled-by-default.md) 取代
 
 - Date: 2026-08-15
 - Last amended: 2026-10-13

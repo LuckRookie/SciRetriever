@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：PDF Auto 选源与来源级持久诊断
-状态：Accepted
+状态：Accepted；“镜像不自动启用”被 [ADR 0040](0040-sci-hub-enabled-by-default.md) 取代
 
 - Date: 2026-10-26
 - 依据：Owner 明确决定“配好凭据的 PDF 获取来源默认启用；补逐来源获取轨迹”。
