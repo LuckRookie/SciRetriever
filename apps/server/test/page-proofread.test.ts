@@ -819,7 +819,7 @@ it("names each rejected disposition so the model does not resend the same batch"
     await runtime.close();
   }
 });
-it("hands the model short page-local suspect and correction IDs and stores the real ones", async () => {
+it("hands the model short page-local leaf, suspect and correction IDs and stores the real ones", async () => {
   // Real models mis-copied 36-character suspect UUIDs and resent them unchanged.
   const f = await archiveTextFixture([{ text: "Yield 67%." }], {
       layers: ["Yield 97%."],
@@ -852,7 +852,7 @@ it("hands the model short page-local suspect and correction IDs and stores the r
         corrections: [
           {
             kind: "correct",
-            leaf_id: leaf.leaf_id,
+            leaf_id: "b1",
             start: 6,
             end: 8,
             original: "67",
@@ -886,11 +886,17 @@ it("hands the model short page-local suspect and correction IDs and stores the r
       fakePages(f.pages),
       memoryTextCache().cache,
     ).build(f.source, snapshot, f.pages);
+    expect(replies[0]).toMatchObject({ items: [{ id: "b1" }] });
     expect(
       (replies[1]!.suspects as { suspect_id: string }[]).map(
         (q) => q.suspect_id,
       ),
     ).toEqual(["s1", "s2"]);
+    expect(
+      (replies[1]!.suspects as { leaf_ids: string[] }[]).flatMap(
+        (q) => q.leaf_ids,
+      ),
+    ).not.toContain(leaf.leaf_id);
     expect(replies[2]).toMatchObject({ correction_ids: ["c1"] });
     expect(replies[4]).toMatchObject({ accepted: false });
     expect(replies[4]!.issues).toContainEqual({
@@ -901,6 +907,7 @@ it("hands the model short page-local suspect and correction IDs and stores the r
     expect(result.complete).toBe(true);
     const page = result.pages[0]!,
       correction = page.corrections[0]!.correction_id;
+    expect(page.corrections[0]!.operation.leaf_id).toBe(leaf.leaf_id);
     expect(page.dispositions).toEqual(
       page.suspects.map((q) => ({
         suspect_id: q.suspect_id,
@@ -916,6 +923,30 @@ it("hands the model short page-local suspect and correction IDs and stores the r
       expect.stringMatching(/^[0-9a-f-]{36}$/u),
       expect.stringMatching(/^[0-9a-f-]{36}$/u),
     ]);
+  } finally {
+    await runtime.close();
+  }
+});
+it("names the leaf field when a model mistypes a leaf ID", async () => {
+  // A real page: one hex digit off in a leaf UUID drew a misleading off-page rejection.
+  const f = await archiveTextFixture([{ text: "Yield 67%." }]);
+  const replies: Record<string, unknown>[] = [];
+  let calls = 0;
+  const runtime = fakeTextRuntime(async (request) => {
+    calls++;
+    if (calls > 1) replies.push(toolJson(request));
+    return modelTool("find_text", { leaf_id: "b9", text: "67", start: 0 });
+  });
+  try {
+    await new ArchivePageProofreadService(
+      runtime,
+      fakePages(f.pages),
+      memoryTextCache().cache,
+    ).build(f.source, arranged(f.source), f.pages);
+    expect(replies[0]).toMatchObject({
+      accepted: false,
+      issues: [{ code: "tool-input", id: "leaf_id" }],
+    });
   } finally {
     await runtime.close();
   }

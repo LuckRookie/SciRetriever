@@ -79,7 +79,7 @@ const str = { type: "string" },
   };
 const correctionSchema = objectSchema({
   kind: { const: "correct" },
-  leaf_id: str,
+  leaf_id: { type: "string", description: "Short leaf ID (b1, b2, ...)." },
   start: integer,
   end: integer,
   original: str,
@@ -142,7 +142,7 @@ function itemField(item: unknown): string {
 class PageHandles {
   private readonly handles = new Map<string, string>();
   private readonly ids = new Map<string, string>();
-  constructor(private readonly prefix: "s" | "c") {}
+  constructor(private readonly prefix: "b" | "s" | "c") {}
   handle(id: string): string {
     let h = this.handles.get(id);
     if (!h) {
@@ -510,8 +510,12 @@ export class ArchivePageProofreadService {
         suspects = new Map<string, RetainedPageSuspect>(
           initialSuspects.map((s) => [s.suspect_id, s]),
         );
-      const suspectNames = new PageHandles("s"),
+      const leafNames = new PageHandles("b"),
+        suspectNames = new PageHandles("s"),
         correctionNames = new PageHandles("c");
+      // Leaves are named in reading order, so b1 is the first leaf read_blocks returns.
+      for (const l of retained) leafNames.handle(l.leaf_id);
+      const leafId = (value: unknown) => String(leafNames.id(value));
       let fullViewed = false,
         accepted: ReturnType<typeof acceptPageSubmission> | null = null;
       const progress = new TextProgress("proofread", page.page);
@@ -591,7 +595,14 @@ export class ArchivePageProofreadService {
         toolDeclaration(
           "find_text",
           "Find exact original characters in one retained leaf on this page; never change offsets to UTF-16 or use another leaf.",
-          { leaf_id: str, text: str, start: integer },
+          {
+            leaf_id: {
+              type: "string",
+              description: "Short leaf ID (b1, b2, ...).",
+            },
+            text: str,
+            start: integer,
+          },
         ),
         toolDeclaration(
           "put_corrections",
@@ -647,12 +658,14 @@ export class ArchivePageProofreadService {
             page_index: page.page,
             page_input_sha256: key,
             page_kind: page.kind,
-            locked_leaf_ids: [...lockedIds].slice(0, 100),
+            locked_leaf_ids: [...lockedIds]
+              .slice(0, 100)
+              .map((id) => leafNames.name(id)),
             leaf_count: retained.length,
             suspect_count: suspects.size,
             coordinate_unit: "unicode-code-point-half-open",
             instruction:
-              "Begin read_blocks at index=0,offset=0 for this page only. Each returned id is the leaf_id. View this full page then inspect reference suspects.",
+              "Begin read_blocks at index=0,offset=0 for this page only. Each returned id is a short leaf_id (b1, b2, ...). View this full page then inspect reference suspects.",
           },
           tools,
           accepted: () => accepted,
@@ -675,13 +688,14 @@ export class ArchivePageProofreadService {
                 return textReply(
                   boundedTextWindow(
                     retained.map((l) => ({
-                      id: l.leaf_id,
+                      id: leafNames.name(l.leaf_id),
                       text: l.original_text,
                     })),
                     toolCount(r.index, retained.length),
                     toolCount(r.offset),
                     toolLimit(r.limit),
-                    (id, start, end) => {
+                    (name, start, end) => {
+                      const id = leafId(name);
                       const changed = readRanges.add(id, start, end);
                       if (
                         readRanges.complete(
@@ -707,7 +721,7 @@ export class ArchivePageProofreadService {
                   r.kind === "corrections"
                     ? [...corrections].map(([correction_id, operation]) => ({
                         correction_id: correctionNames.handle(correction_id),
-                        leaf_id: operation.leaf_id,
+                        leaf_id: leafNames.name(operation.leaf_id),
                         start: operation.start,
                         end: operation.end,
                         original_preview: cpSlice(operation.original, 0, 80),
@@ -780,6 +794,7 @@ export class ArchivePageProofreadService {
                   [...suspects.values()].map((q) => ({
                     ...q,
                     suspect_id: suspectNames.handle(q.suspect_id),
+                    leaf_ids: q.leaf_ids.map((id) => leafNames.name(id)),
                     tokens: q.tokens.map((t) => cpSlice(t, 0, 200)),
                     tokens_truncated: q.tokens.some((t) => [...t].length > 200),
                   })),
@@ -812,14 +827,20 @@ export class ArchivePageProofreadService {
               }
               if (name === "find_text") {
                 const r = toolRecord(args, ["leaf_id", "text", "start"]),
-                  leaf = retained.find((l) => l.leaf_id === r.leaf_id);
+                  leaf = retained.find((l) => l.leaf_id === leafId(r.leaf_id));
+                // Name the field: an unknown leaf is a mistyped ID, not an edit off this page.
+                if (!leaf)
+                  throw new ArchiveTextError("tool-input", [
+                    { code: "tool-input", id: "leaf_id" },
+                  ]);
                 if (
-                  !leaf ||
                   typeof r.text !== "string" ||
                   !r.text.length ||
                   [...r.text].length > 200
                 )
-                  throw new ArchiveTextError("correction-outside-page");
+                  throw new ArchiveTextError("tool-input", [
+                    { code: "tool-input", id: "text" },
+                  ]);
                 const start = toolCount(r.start),
                   tail = cpSlice(leaf.original_text, start),
                   at = tail.indexOf(r.text);
@@ -840,7 +861,11 @@ export class ArchivePageProofreadService {
                   throw new ArchiveTextError("tool-input");
                 const batch = batchItems(
                   "corrections",
-                  r.corrections,
+                  r.corrections.map((c: unknown) =>
+                    c && typeof c === "object" && "leaf_id" in c
+                      ? { ...c, leaf_id: leafNames.id(c.leaf_id) }
+                      : c,
+                  ),
                   parseCorrectOperation,
                 );
                 const draft = new Map(corrections);
@@ -992,7 +1017,9 @@ export class ArchivePageProofreadService {
                     ? i
                     : {
                         ...i,
-                        id: correctionNames.name(suspectNames.name(i.id)),
+                        id: leafNames.name(
+                          correctionNames.name(suspectNames.name(i.id)),
+                        ),
                       },
                 ),
                 { cause: error },
