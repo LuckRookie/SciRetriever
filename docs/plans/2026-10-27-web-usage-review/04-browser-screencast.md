@@ -90,7 +90,7 @@
     - 测试：`next-browser-control.test.ts` 改为合成投屏源，验证观看不接管、第一次按下取得控制、交还失败保留、文档已换时这次按下不落到新页、离开页面只断开不交还；`next-parallel-browser.test.ts`、`browser-workbench`、`design-samples-browser`、`workbench-http`、`screencast-http` 共 14 项通过。
     - R-04：`screencast-viewer-samples.test.ts`（设 `SCREENCAST_SAMPLE_OUTPUT` 才运行）生成进行中、你在操作、被其他窗口接管、断线重连、没有画面五种状态 × 1440 / 390，共 10 张，在 `sandbox/reports/design-samples/2026-10-28-r04/`，Claude 自审代 R-04。
     - 顺带修复：04 把工作台视图推送从 750 ms 改成 3 秒，会话状态与动作记录最多晚 3 秒；现改为每 500 ms 比较一次，有变化就推送，3 秒心跳不变（`http.ts`）。
-  - 残余：真实 Cloak 的 `next-live-browser.test.ts` 查出 04 的缺陷：已有窗口观看静止页时，第二个观看者收不到首帧。已派 worker 修，测试按正确行为断言，修复前失败。
+  - 真实 Cloak 的 `next-live-browser.test.ts` 查出 04 的缺陷：已有窗口观看静止页时，第二个观看者收不到首帧。worker 改为文章会话在内存中保留活动页最新一张帧、只补发给新观看者（`f4a5cc3`）；该测试与 `next-browser-control` 共 3 项通过。
 - [ ] **4.8 Owner 实际观看**〔须 G-deploy〕
   - 部署后，Owner 在 4174 观看一次真实获取，并亲手点、滚、输入。
   - 按 P25 的检验确认。
