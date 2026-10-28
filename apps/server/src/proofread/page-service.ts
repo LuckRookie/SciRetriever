@@ -74,20 +74,17 @@ const correctionSchema = objectSchema({
   basis_page_index: integer,
   reason: reasonText,
 });
-const dispositionSchema = {
-  anyOf: [
-    objectSchema({
-      suspect_id: str,
-      status: { const: "fixed" },
-      correction_ids: idList,
-    }),
-    objectSchema({
-      suspect_id: str,
-      status: { type: "string", enum: ["draft-correct", "uncertain"] },
-      reason: reasonText,
-    }),
-  ],
-};
+// One shape for every status: a model that fixed a suspect still wants to say why.
+const dispositionSchema = objectSchema({
+  suspect_id: str,
+  status: { type: "string", enum: ["fixed", "draft-correct", "uncertain"] },
+  correction_ids: {
+    ...idList,
+    description:
+      "Host correction IDs that resolve this suspect: required for fixed, empty otherwise.",
+  },
+  reason: reasonText,
+});
 export function pageProofreadInputKey(
   source: ArchiveTextSource,
   leaves: readonly ArrangementLeaf[],
@@ -605,7 +602,11 @@ export class ArchivePageProofreadService {
                     });
                 if (region === null) fullViewed = true;
                 else if (regions.length < 100) regions.push(region);
-                progress.progress("page", page.page);
+                // A crop not seen before is new evidence; zooming in on a suspect is real work.
+                progress.progress(
+                  "page",
+                  region === null ? page.page : [page.page, ...region],
+                );
                 return { status: "success", parts: [image] };
               }
               if (name === "read_reference") {

@@ -322,6 +322,42 @@ it("uses code-point half-open correction ranges and rejects rewritten/overlong c
   ])
     expect(() => parseCorrectOperation({ ...correct, ...change })).toThrow();
 });
+it("accepts one disposition shape for every status, as a real model sends it", async () => {
+  const { parseSuspectDisposition } = await import("../src/archive-text.js");
+  const suspect = "00000000-0000-4000-8000-000000000001",
+    correction = "00000000-0000-4000-8000-000000000002";
+  expect(
+    parseSuspectDisposition({
+      suspect_id: suspect,
+      status: "fixed",
+      correction_ids: [correction],
+      reason: "Image confirms the corrected spelling.",
+    }),
+  ).toEqual({
+    suspect_id: suspect,
+    status: "fixed",
+    correction_ids: [correction],
+  });
+  expect(
+    parseSuspectDisposition({
+      suspect_id: suspect,
+      status: "draft-correct",
+      correction_ids: [],
+      reason: "Notation only.",
+    }),
+  ).toEqual({
+    suspect_id: suspect,
+    status: "draft-correct",
+    reason: "Notation only.",
+  });
+  for (const bad of [
+    { status: "fixed", correction_ids: [], reason: "x" },
+    { status: "draft-correct", correction_ids: [correction], reason: "x" },
+  ])
+    expect(() =>
+      parseSuspectDisposition({ suspect_id: suspect, ...bad }),
+    ).toThrow();
+});
 it("validates page submissions, zero change and source bounds", () => {
   const value = {
     schema_version: 2,

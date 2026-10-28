@@ -734,13 +734,25 @@ export function parseSuspectDisposition(v: unknown): SuspectDisposition {
     v && typeof v === "object" && "status" in v ? v.status : undefined,
     ["fixed", "draft-correct", "uncertain"] as const,
   );
+  // Models send one shape for every status; stored records keep only what each status means.
+  const keys = Object.keys(v as object),
+    full = keys.length === 4;
+  const r = record(
+    v,
+    full
+      ? ["suspect_id", "status", "correction_ids", "reason"]
+      : status === "fixed"
+        ? ["suspect_id", "status", "correction_ids"]
+        : ["suspect_id", "status", "reason"],
+  );
+  const correction_ids =
+    r.correction_ids === undefined ? [] : ids(r.correction_ids);
   if (status === "fixed") {
-    const r = record(v, ["suspect_id", "status", "correction_ids"]),
-      correction_ids = ids(r.correction_ids);
     if (!correction_ids.length) fail();
+    if (r.reason !== undefined) note(r.reason);
     return { suspect_id: parseAssetId(r.suspect_id), status, correction_ids };
   }
-  const r = record(v, ["suspect_id", "status", "reason"]);
+  if (correction_ids.length) fail();
   return {
     suspect_id: parseAssetId(r.suspect_id),
     status,
