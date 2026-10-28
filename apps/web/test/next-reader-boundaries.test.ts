@@ -414,7 +414,13 @@ it("keeps encrypted PDF rejection at ingestion and reports no accepted PDF", asy
     },
   });
   try {
+    const detailRead = w.page.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/v1/query/read",
+    );
     await open(w, "pdf", missingId);
+    // Navigation only loads the shell. Source resolution starts after the
+    // literature receipt; do not spend the assertion window on application startup.
+    await (await detailRead).finished();
     await expect
       .poll(() => w.page.locator(".reading-status").innerText())
       .toContain("尚无 PDF");
@@ -474,8 +480,23 @@ it("discards a late automatic text continuation after the reader closes", async 
         await route.fulfill({ response });
       },
     );
+    const initialOutline = w.page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/v1/query/document-outline",
+    );
     await open(w, "doc");
     await w.page.locator(".reading-article").waitFor();
+    // The article container precedes the first body chunk. Initial restoration
+    // follows its outline receipt. Wait for the existing ready control as well,
+    // so a programmatic scroll cannot race that initial restoration.
+    await (await initialOutline).finished();
+    await expect
+      .poll(() =>
+        w.page
+          .getByRole("button", { name: "文档内查找", exact: true })
+          .isEnabled(),
+      )
+      .toBe(true);
     await w.page.locator(".reader-engine-body").evaluate((el) => {
       el.scrollTop = el.scrollHeight;
     });

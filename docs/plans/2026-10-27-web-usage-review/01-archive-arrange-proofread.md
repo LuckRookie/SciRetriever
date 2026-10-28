@@ -137,7 +137,7 @@
   - 在独立 sandbox 库上，用第四轮同批 5 篇（ACS 2 篇、Elsevier、Wiley 长文、RSC）走一遍新流程。
   - 原始区块复用已有解析，不调用 MinerU。
   - 按 P23、P24 的检验逐条记录，并与第四轮流程 X 的成本和改字对照。
-- [ ] **1.10 整理读块时直接给出叶块 ID**（worker，2026-10-28 Claude 决定）
+- [x] **1.10 整理读块时直接给出叶块 ID**（worker，2026-10-28 Claude 决定）
   - 起因：
     - 现在 leaf ID 只能经 `block_info` 逐块取得，一篇 300 个区块的论文仅取 ID 就要数百次工具往返，抬高 P23/P24 关心的成本；
     - 合成测试中，160 节的长文整理要 563 次调用，`next-reader-boundaries` 两项因此超时（在 `7182549` 上通过）。
@@ -149,6 +149,13 @@
   - 验收：
     - 160 节合成长文的整理调用数有直接断言；
     - 上述两项 Web 测试回到原超时内通过，不放宽超时。
+  - 2026-10-28 worker 证据：
+    - `read_blocks` 在有界文字窗口中给出当前 split 草案对应的程序叶块 ID、类型和页提示；与 `block_info`、最终 review 共用派生规则。提示词和合成模型改为直接取读块 ID、按 20 项批量提交。
+    - 160 节、321 区块的生产对象图直接断言：整理 36 次调用（17 读、17 操作批次、1 复核、1 提交）。新增 Unicode/空图片/split 刷新/101 叶块分页与 16 KiB 记账测试通过。
+    - 命令：`VITEST_MAX_FORKS=36 VITEST_MIN_FORKS=12 pnpm exec vitest run apps/server/test/document-read.test.ts apps/web/test/next-reader-boundaries.test.ts --maxWorkers=36 --minWorkers=12 --silent`，连续 5 轮均为 2 文件、22 项通过；指定两项保持原 60 秒整例超时。续读测试另补齐首批正文及初始位置恢复的就绪前置条件，未改结果断言或超时。
+    - 扩大回归覆盖 25 文件、168 项；其中首轮自动续读时序失败的回执与后续五连验证分别保留。本机证据见本块交接目录的 `phase4.md`、`phase4-regression.log`、`phase4-stability-final-{1..5}.log`。
+    - 残余：调用数/token 来自 fake 模型与合成文献，未验证真实模型成本；Full 留给 07。
+    - 收尾：`pnpm quick` 通过（Prettier、ESLint、源码与测试 strict 类型检查）；文档检查 230 份、0 错误。
 
 ## 集成与影响
 

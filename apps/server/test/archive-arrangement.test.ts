@@ -4,6 +4,7 @@ import {
   type ArrangementOperation,
 } from "@sciretriever/contracts";
 import { ArchiveArrangementService } from "../src/archive/arrangement-service.js";
+import { TEXT_TOOL_MAX_BYTES } from "../src/archive/text-session.js";
 import {
   acceptArrangement,
   arrangementLeafId,
@@ -31,6 +32,206 @@ import {
 } from "./archive-text-fixture.js";
 const method = "c".repeat(64),
   foreign = "00000000-0000-0000-0000-000000000099";
+it("reads current leaf identities, types and page hints with exact text, including empty images and drafted splits", async () => {
+  const f = await archiveTextFixture([
+    { text: "A😀.B🙂." },
+    { text: "", type: "image", image: true, page: 1 },
+    { text: "Heading", type: "title", page: 1 },
+  ]);
+  type Item = {
+    id: string;
+    type: string;
+    page_hint: number;
+    text: string;
+    leaf_count: number;
+    leaves: { leaf_id: string; start: number; end: number }[];
+  };
+  let calls = 0,
+    items: Item[] = [];
+  const root = f.source.blocks[0]!,
+    expected = (start: number, end: number) =>
+      arrangementLeafId(
+        root.root_block_id,
+        start,
+        end,
+        f.source.raw.result_sha256,
+      ),
+    runtime = fakeTextRuntime(async (request) => {
+      calls++;
+      if (calls === 1)
+        return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
+      if (calls === 2) {
+        items = toolJson(request).items as Item[];
+        expect(items[0]).toMatchObject({
+          id: root.root_block_id,
+          text: "A😀.B🙂.",
+          type: "text",
+          page_hint: 0,
+          leaf_count: 1,
+          leaves: [{ leaf_id: expected(0, 6), start: 0, end: 6 }],
+        });
+        expect(items[1]).toMatchObject({
+          text: "",
+          type: "image",
+          page_hint: 1,
+          leaf_count: 1,
+          leaves: [{ start: 0, end: 0 }],
+        });
+        expect(items[2]).toMatchObject({ type: "title", page_hint: 1 });
+        return modelTool("put_operations", {
+          operations: [
+            { kind: "split", root_block_id: root.root_block_id, cuts: [3] },
+          ],
+        });
+      }
+      if (calls === 3)
+        return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
+      if (calls === 4) {
+        items = toolJson(request).items as Item[];
+        expect(items[0]!.leaves).toEqual([
+          { leaf_id: expected(0, 3), start: 0, end: 3 },
+          { leaf_id: expected(3, 6), start: 3, end: 6 },
+        ]);
+        expect(items[0]!.leaf_count).toBe(2);
+        return modelTool("block_info", { root_block_id: root.root_block_id });
+      }
+      if (calls === 5) {
+        expect(toolJson(request).leaves).toEqual(items[0]!.leaves);
+        return modelTool("put_operations", {
+          operations: items.flatMap((i) =>
+            i.leaves.map((l) => ({
+              kind: "assign",
+              leaf_id: l.leaf_id,
+              target: { role: "methods" },
+              presentation: { kind: "content" },
+            })),
+          ),
+        });
+      }
+      if (calls === 6)
+        return modelTool("review_breaks", { offset: 0, limit: 20 });
+      return modelTool("submit_operations", {
+        reviewed_candidates_sha256:
+          toolJson(request).reviewed_candidates_sha256,
+      });
+    });
+  try {
+    const result = await new ArchiveArrangementService(
+      runtime,
+      fakePages(f.pages),
+      memoryTextCache().cache,
+    ).build(f.source);
+    expect(result.stop).toBeNull();
+    expect(result.usage.calls).toBe(7);
+    expect(result.value!.leaves.map((l) => l.leaf_id)).toEqual(
+      items.flatMap((i) => i.leaves.map((l) => l.leaf_id)),
+    );
+    expect(result.value!.leaves.map((l) => l.original_text)).toEqual([
+      "A😀.",
+      "B🙂.",
+      "",
+      "Heading",
+    ]);
+  } finally {
+    await runtime.close();
+  }
+});
+it("paginates a large split root and its leaf metadata together without losing code points or read coverage", async () => {
+  const text = "🙂".repeat(100) + 'word "\\\n'.repeat(2000) + ".",
+    f = await archiveTextFixture([{ text }]),
+    root = f.source.blocks[0]!,
+    leaves = new Map<string, { leaf_id: string; start: number; end: number }>();
+  let phase = "split",
+    readText = "",
+    assignedCount = 0,
+    windows = 0;
+  const runtime = fakeTextRuntime(async (request) => {
+    if (phase === "split") {
+      phase = "read-start";
+      return modelTool("put_operations", {
+        operations: [
+          {
+            kind: "split",
+            root_block_id: root.root_block_id,
+            cuts: Array.from({ length: 100 }, (_, i) => i + 1),
+          },
+        ],
+      });
+    }
+    if (phase === "read-start") {
+      phase = "read";
+      return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
+    }
+    if (phase === "read") {
+      const reply = toolJson(request) as {
+        items: {
+          text: string;
+          start: number;
+          end: number;
+          leaf_count: number;
+          leaves: { leaf_id: string; start: number; end: number }[];
+        }[];
+        next: { index: number; offset: number } | null;
+      };
+      expect(Buffer.byteLength(JSON.stringify(reply))).toBeLessThanOrEqual(
+        TEXT_TOOL_MAX_BYTES,
+      );
+      expect(reply.items).toHaveLength(1);
+      const item = reply.items[0]!;
+      expect(item.leaf_count).toBe(101);
+      expect(item.start).toBe([...readText].length);
+      readText += item.text;
+      for (const l of item.leaves) leaves.set(l.leaf_id, l);
+      windows++;
+      if (reply.next) {
+        expect(item.end).toBeGreaterThan(item.start);
+        return modelTool("read_blocks", { ...reply.next, limit: 20 });
+      }
+      phase = "assign";
+    }
+    if (phase === "assign") {
+      const batch = [...leaves.values()].slice(
+        assignedCount,
+        assignedCount + 20,
+      );
+      if (batch.length) {
+        assignedCount += batch.length;
+        return modelTool("put_operations", {
+          operations: batch.map((l) => ({
+            kind: "assign",
+            leaf_id: l.leaf_id,
+            target: { role: "abstract" },
+            presentation: { kind: "content" },
+          })),
+        });
+      }
+      phase = "submit";
+      return modelTool("review_breaks", { offset: 0, limit: 20 });
+    }
+    return modelTool("submit_operations", {
+      reviewed_candidates_sha256: toolJson(request).reviewed_candidates_sha256,
+    });
+  });
+  try {
+    const result = await new ArchiveArrangementService(
+      runtime,
+      fakePages(f.pages),
+      memoryTextCache().cache,
+    ).build(f.source);
+    expect(result.stop).toBeNull();
+    expect(readText).toBe(text);
+    expect(windows).toBeGreaterThan(2);
+    expect(result.value!.leaves).toHaveLength(101);
+    expect(result.value!.leaves.map((l) => l.original_text).join("")).toBe(
+      text,
+    );
+    expect(result.value!.leaves.map((l) => l.leaf_id)).toEqual([
+      ...leaves.keys(),
+    ]);
+  } finally {
+    await runtime.close();
+  }
+});
 function accept(
   source: Parameters<typeof acceptArrangement>[0],
   operations: readonly ArrangementOperation[],

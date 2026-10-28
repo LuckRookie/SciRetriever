@@ -366,6 +366,8 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 
 整理会话可查看任意页；文字层给出可能的页归属提示，原图是依据。assign-page 要求目标页等于依据页，宿主证明会话看过该整页；改变责任页时清除旧 bbox，不改 raw locator。操作草案由宿主保存；非法 ID、漏去向、断段漏决定、过时 review 或文字差异都退回同一会话修正。
 
+`read_blocks` 随原文窗口返回类型、原始页提示、图片引用和当前程序派生的叶块 ID 及 code point 区间，已起草的 split 立即计入。窗口只列与本次文字范围相交的叶块，并给出原块的叶块总数；空文字图片仍返回其零长度叶块。沿 `next` 续读即可取得全部文字与身份，不必逐块调用 `block_info`。拆分改变后重新读块，或用 `block_info` 刷新该块的全部叶块；需要文字层页提示时也使用 `block_info`。身份信息与文字共同计入 JSON 字节窗口，不能在有界文字回执之后无界追加。操作仍分批提交并由宿主校验。
+
 ### 6.3 逐页校订与复用
 
 - PDF 页分类继续按可见字形区分 `text-layer`、`image-only`、`blank`；隐藏 OCR 不进入参照文字，页面原图始终是最终依据。

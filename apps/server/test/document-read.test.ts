@@ -937,6 +937,7 @@ describe("bounded document and material reading", () => {
       | Awaited<ReturnType<typeof startQueryOnlyWorkbench>>
       | undefined;
     let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+    let releaseDelayedRead: (() => void) | undefined;
     try {
       await env.reopen();
       env.setMarkdown(
@@ -989,7 +990,15 @@ describe("bounded document and material reading", () => {
         value.result.document.source_material_ref.asset_id = id(999);
         await route.fulfill({ response, json: value });
       });
+      const mismatchedDescribe = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname ===
+          "/api/v1/query/document-describe",
+      );
       await page.reload();
+      // The integrity assertion concerns this injected receipt, which is only
+      // requested after the shell, literature, material and default have loaded.
+      await (await mismatchedDescribe).finished();
       await expect
         .poll(() => page.locator("main").innerText())
         .toContain("固定文档与原始材料不匹配");
@@ -1010,9 +1019,8 @@ describe("bounded document and material reading", () => {
       expect(await page.locator(".reader-information").innerText()).toContain(
         receipt.document.document_version_id,
       );
-      let release!: () => void;
       const gate = new Promise<void>((resolve) => {
-        release = resolve;
+        releaseDelayedRead = resolve;
       });
       let delayed = false;
       await page.route("**/document-slice", async (route) => {
@@ -1021,10 +1029,15 @@ describe("bounded document and material reading", () => {
         await gate;
         await route.fulfill({ response }).catch(() => undefined);
       });
+      const delayedRequest = page.waitForRequest(
+        (request) =>
+          new URL(request.url()).pathname === "/api/v1/query/document-slice",
+      );
       await page.reload();
+      await delayedRequest;
       await expect.poll(() => delayed).toBe(true);
       await page.getByRole("tab", { name: "PDF", exact: true }).click();
-      release();
+      releaseDelayedRead!();
       await page.unroute("**/document-slice");
       await page
         .locator('.reading-pdf-page[data-rendered="true"]')
@@ -1038,7 +1051,12 @@ describe("bounded document and material reading", () => {
         value.result.document.document_version_id = id(999);
         await route.fulfill({ response, json: value });
       });
+      const mismatchedSlice = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === "/api/v1/query/document-slice",
+      );
       await page.getByRole("tab", { name: "全文", exact: true }).click();
+      await (await mismatchedSlice).finished();
       await expect
         .poll(() => page.locator(".reading-status").innerText())
         .toMatch(/无法|invalid|失败|validation failed/);
@@ -1122,6 +1140,10 @@ describe("bounded document and material reading", () => {
       await page.unroute("**/document-resources");
       expect(failures).toEqual([]);
     } finally {
+      releaseDelayedRead?.();
+      for (const context of browser?.contexts() ?? [])
+        for (const page of context.pages())
+          await page.unrouteAll({ behavior: "wait" });
       await browser?.close();
       await workbench?.close();
       await env.close();

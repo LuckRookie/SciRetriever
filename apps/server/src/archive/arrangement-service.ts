@@ -16,6 +16,7 @@ import {
   ARRANGEMENT_METHOD,
   PARAGRAPH_BREAK_RULE,
   arrangementOperationKey,
+  arrangementLeafSpans,
   reviewArrangement,
   acceptArrangement,
   verifyArrangement,
@@ -141,6 +142,7 @@ export class ArchiveArrangementService {
     signal?.throwIfAborted();
     const method = textHash({
       arrange: ARRANGEMENT_METHOD,
+      tools: "arrangement-read-leaves-v2",
       breaks: PARAGRAPH_BREAK_RULE,
       stop: ARCHIVE_TEXT_STOP_POLICY,
       image: "latest",
@@ -260,7 +262,7 @@ export class ArchiveArrangementService {
       ),
       toolDeclaration(
         "read_blocks",
-        "Read exact original block characters in bounded windows. Follow next until null; offsets are Unicode code points.",
+        "Read exact original block characters with type, page hint and current program-derived leaf IDs, including draft splits. Leaves intersect the returned text window. Follow next until null; offsets are Unicode code points.",
         {
           index: integer,
           offset: integer,
@@ -269,7 +271,7 @@ export class ArchiveArrangementService {
       ),
       toolDeclaration(
         "block_info",
-        "Read source identity, type, page hint and program-derived leaf IDs after a split. Never infer IDs.",
+        "Refresh program-derived leaf IDs after a split, or request text-layer page hints. Otherwise use identities from read_blocks. Never infer IDs.",
         { root_block_id: str },
       ),
       toolDeclaration(
@@ -342,7 +344,7 @@ export class ArchiveArrangementService {
         input_sha256: key,
         progress,
         system:
-          "Arrange the original blocks without changing characters. Classify each terminal leaf exactly once. Use the fixed skeleton, keeping original subheadings. Authors contain names only; affiliations, funding, notes and final supporting-information notices belong to end-matter. Drop bibliographic lines, UI labels, headers, footers, copyright and decoration with their closed reason. Split embedded copyright then drop only that span. Never dehyphenate or normalize text. Cross independent footnotes/figures/tables/captions when merging, without losing them. Page hints can be wrong: view the destination page before assign-page. Read sources via bounded tools, obtain leaf IDs via block_info, store draft operations in batches, review and decide paragraph candidates, then submit. Do not output full text.",
+          "Arrange the original blocks without changing characters. Classify each terminal leaf exactly once. Use the fixed skeleton, keeping original subheadings. Authors contain names only; affiliations, funding, notes and final supporting-information notices belong to end-matter. Drop bibliographic lines, UI labels, headers, footers, copyright and decoration with their closed reason. Split embedded copyright then drop only that span. Never dehyphenate or normalize text. Cross independent footnotes/figures/tables/captions when merging, without losing them. Page hints can be wrong: view the destination page before assign-page. Read sources via bounded read_blocks, using its current leaf IDs, types and page hints to store draft operations in batches. Use block_info only to refresh identities after a split or obtain text-layer page hints. Review and decide paragraph candidates, then submit. Do not output full text.",
         initial: {
           source_input_sha256: source.input_sha256,
           block_count: source.blocks.length,
@@ -350,18 +352,23 @@ export class ArchiveArrangementService {
           roles: ARCHIVE_SECTION_ROLES,
           coordinate_unit: "unicode-code-point-half-open",
           instruction:
-            "Start at read_blocks index=0,offset=0. Fetch identities with block_info.",
+            "Start at read_blocks index=0,offset=0. Use its leaf IDs and follow next until null; leaf spans and text windows use Unicode code points. Splitting replaces leaf identities: reread the block or use block_info after changing a split.",
         },
         tools,
         accepted: () => accepted,
         execute: async (name, args, context) => {
           if (name === "read_blocks") {
-            const r = toolRecord(args, ["index", "offset", "limit"]);
+            const r = toolRecord(args, ["index", "offset", "limit"]),
+              spans = new Map<
+                string,
+                ReturnType<typeof arrangementLeafSpans>
+              >();
             return textReply(
               boundedTextWindow(
                 source.blocks.map((b) => ({
                   id: b.root_block_id,
                   text: b.text,
+                  block: b,
                 })),
                 toolCount(r.index, source.blocks.length),
                 toolCount(r.offset),
@@ -369,6 +376,29 @@ export class ArchiveArrangementService {
                 (id, start, end) => {
                   if (read.add(id, start, end))
                     progress.progress("read-block", [id, start, end]);
+                },
+                (row, start, end) => {
+                  let leaves = spans.get(row.id);
+                  if (!leaves) {
+                    const split = ops.get(`split:${row.id}`);
+                    leaves = arrangementLeafSpans(
+                      row.block,
+                      source.raw.result_sha256,
+                      split?.kind === "split" ? split.cuts : [],
+                    );
+                    spans.set(row.id, leaves);
+                  }
+                  return {
+                    type: row.block.type,
+                    page_hint: row.block.page_hint,
+                    image_ref: row.block.image_ref,
+                    leaf_count: leaves.length,
+                    leaves: leaves.filter((leaf) =>
+                      start === end
+                        ? leaf.start <= start && leaf.end >= end
+                        : leaf.start < end && leaf.end > start,
+                    ),
+                  };
                 },
               ),
             );
@@ -418,12 +448,6 @@ export class ArchiveArrangementService {
               );
             if (!root) throw new ArchiveTextError("unknown-root");
             const split = ops.get(`split:${root.root_block_id}`);
-            const cuts = [
-              0,
-              ...(split?.kind === "split" ? split.cuts : []),
-              [...root.text].length,
-            ];
-            const { arrangementLeafId } = await import("./arrangement.js");
             const tokens = textTokens(root.text),
               needed = new Map<string, number>();
             for (const token of tokens)
@@ -445,16 +469,11 @@ export class ArchiveArrangementService {
               image_ref: root.image_ref,
               text_layer_page_hints: matches.slice(0, 20),
               text_layer_page_hint_count: matches.length,
-              leaves: cuts.slice(1).map((end, i) => ({
-                leaf_id: arrangementLeafId(
-                  root.root_block_id,
-                  cuts[i]!,
-                  end,
-                  source.raw.result_sha256,
-                ),
-                start: cuts[i],
-                end,
-              })),
+              leaves: arrangementLeafSpans(
+                root,
+                source.raw.result_sha256,
+                split?.kind === "split" ? split.cuts : [],
+              ),
             });
           }
           if (name === "view_page") {

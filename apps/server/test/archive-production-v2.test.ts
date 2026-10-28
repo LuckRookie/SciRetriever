@@ -14,6 +14,38 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../src/mcp/server.js";
 
+it("arranges a 160-section synthetic document in 36 calls using read-block leaf identities in batches", async () => {
+  const e = await archiveFixture();
+  try {
+    e.setText(
+      "# Original document\n\n" +
+        Array.from(
+          { length: 160 },
+          (_, i) =>
+            `## Section ${i}\n\nParagraph ${i} 中文 α🙂. ${"A reported observation with conditions. ".repeat(3)}\n\n`,
+        ).join(""),
+    );
+    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    const calls = e.modelCalls,
+      result = await e.app.archiveText!.arrange(e.asset.asset_id, "full"),
+      output = (await new SqliteArchiveTextStorage(
+        e.app.database,
+        e.app.files,
+      ).load(result.proofread_id))!;
+    expect(output.bundle.arrangement!.leaves).toHaveLength(321);
+    // 17 read windows + 17 operation batches + one review + one submission.
+    expect(result.usage.calls).toBe(36);
+    expect(e.modelCalls - calls).toBe(36);
+    expect(result.usage).toMatchObject({
+      input_tokens: 3600,
+      output_tokens: 1800,
+      usage_complete: true,
+    });
+  } finally {
+    await e.close();
+  }
+}, 30000);
+
 it("publishes the six-step X workflow, excludes dropped text from fixed documents, and gives metadata bibliography evidence", async () => {
   const e = await archiveFixture();
   let fragments: { role: string; text: string }[] = [];

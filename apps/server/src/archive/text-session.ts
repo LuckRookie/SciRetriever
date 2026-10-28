@@ -336,14 +336,23 @@ export function boundedItems<T>(
       offset + items.length < rows.length ? offset + items.length : null,
   };
 }
+interface TextWindowItem {
+  id: string;
+  start: number;
+  end: number;
+  total: number;
+  text: string;
+}
 export function boundedTextWindow<
   T extends { readonly id: string; readonly text: string },
+  M extends object = object,
 >(
   rows: readonly T[],
   index: number,
   offset: number,
   limit: number,
   onRead: (id: string, start: number, end: number, complete: boolean) => void,
+  describe?: (row: T, start: number, end: number) => M,
 ) {
   if (
     index > rows.length ||
@@ -352,13 +361,7 @@ export function boundedTextWindow<
     offset > [...(rows[index]?.text ?? "")].length
   )
     throw new ArchiveTextError("tool-input");
-  const items: {
-    id: string;
-    start: number;
-    end: number;
-    total: number;
-    text: string;
-  }[] = [];
+  const items: (TextWindowItem & Partial<M>)[] = [];
   let i = index,
     o = offset,
     bytes = 0;
@@ -374,15 +377,44 @@ export function boundedTextWindow<
       used += Buffer.byteLength(JSON.stringify(chars[end]!)) - 2;
       end++;
     }
-    const item = {
-      id: row.id,
-      start: o,
-      end,
-      total: chars.length,
-      text: chars.slice(o, end).join(""),
+    const describeItem = (last: number) => {
+      const metadata: Partial<M> = describe?.(row, o, last) ?? {};
+      return {
+        ...metadata,
+        id: row.id,
+        start: o,
+        end: last,
+        total: chars.length,
+        text: chars.slice(o, last).join(""),
+      };
     };
-    const itemBytes = Buffer.byteLength(JSON.stringify(item)) + 1;
-    if (bytes + itemBytes > 12000) break;
+    let item = describeItem(end),
+      itemBytes = Buffer.byteLength(JSON.stringify(item)) + 1;
+    if (bytes + itemBytes > 12000 && !describe) break;
+    // Metadata (including split leaf IDs) shares the text window's byte budget.
+    if (bytes + itemBytes > 12000) {
+      let low = Math.min(o + 1, chars.length),
+        high = end;
+      if (
+        bytes + Buffer.byteLength(JSON.stringify(describeItem(low))) + 1 >
+        12000
+      ) {
+        if (items.length) break;
+        throw new ArchiveTextError("response-too-large");
+      }
+      while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        if (
+          bytes + Buffer.byteLength(JSON.stringify(describeItem(middle))) + 1 <=
+          12000
+        )
+          low = middle;
+        else high = middle - 1;
+      }
+      end = low;
+      item = describeItem(end);
+      itemBytes = Buffer.byteLength(JSON.stringify(item)) + 1;
+    }
     items.push(item);
     bytes += itemBytes;
     if (end < chars.length) {

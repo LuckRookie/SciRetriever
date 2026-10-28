@@ -145,6 +145,30 @@ it("bounds encoded JSON windows including escaping, and counts only newly read c
     boundedTextWindow(rows, 0, [...text].length + 1, 1, () => undefined),
   ).toThrow();
 });
+it("includes identities in the encoded window budget and never marks an oversized metadata reply as read", () => {
+  const read = vi.fn(),
+    rows = [{ id: "root", text: '😀"'.repeat(4000) }];
+  expect(() =>
+    boundedTextWindow(rows, 0, 0, 20, read, () => ({
+      identities: "x".repeat(TEXT_TOOL_MAX_BYTES),
+    })),
+  ).toThrow(ArchiveTextError);
+  expect(read).not.toHaveBeenCalled();
+  const reply = boundedTextWindow(rows, 0, 0, 20, read, () => ({
+    identities: "x".repeat(10000),
+  }));
+  expect(Buffer.byteLength(JSON.stringify(reply))).toBeLessThanOrEqual(
+    TEXT_TOOL_MAX_BYTES,
+  );
+  expect(reply.items[0]!.end).toBeGreaterThan(0);
+  expect(reply.next).toEqual({ index: 0, offset: reply.items[0]!.end });
+  expect(read).toHaveBeenCalledExactlyOnceWith(
+    "root",
+    0,
+    reply.items[0]!.end,
+    false,
+  );
+});
 it("stops the third repeated validation problem set without mislabelling the task as cancelled", async () => {
   const f = await archiveTextFixture([{ text: "Untouched." }]);
   let calls = 0;

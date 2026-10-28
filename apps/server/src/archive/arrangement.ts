@@ -4,6 +4,7 @@ import {
   parseArrangementSnapshot,
   type ArrangementOperation,
   type ArrangementLeaf,
+  type ArrangementSourceBlock,
   type ArrangementSnapshot,
   type LeafDestination,
   type SourceSpan,
@@ -43,6 +44,19 @@ export function arrangementLeafId(
   resultHash: string,
 ) {
   return textId(["arrangement-leaf-v1", resultHash, root, start, end]);
+}
+/** The draft and the final review share exactly the same program-derived identities. */
+export function arrangementLeafSpans(
+  root: ArrangementSourceBlock,
+  resultHash: string,
+  splitCuts: readonly number[] = [],
+) {
+  const cuts = [0, ...splitCuts, [...root.text].length];
+  return cuts.slice(1).map((end, i) => ({
+    leaf_id: arrangementLeafId(root.root_block_id, cuts[i]!, end, resultHash),
+    start: cuts[i]!,
+    end,
+  }));
 }
 export interface ArrangementReview {
   readonly leaves: readonly ArrangementLeaf[];
@@ -88,9 +102,11 @@ export function reviewArrangement(
       add("split-out-of-range", root.root_block_id);
       continue;
     }
-    for (let i = 1; i < cuts.length; i++) {
-      const start = cuts[i - 1]!,
-        end = cuts[i]!;
+    for (const { leaf_id, start, end } of arrangementLeafSpans(
+      root,
+      source.raw.result_sha256,
+      splits.get(root.root_block_id)?.cuts,
+    )) {
       const text = cpSlice(root.text, start, end);
       if (
         root.type === "table" &&
@@ -99,12 +115,7 @@ export function reviewArrangement(
       )
         add("split-table-format", root.root_block_id);
       leaves.push({
-        leaf_id: arrangementLeafId(
-          root.root_block_id,
-          start,
-          end,
-          source.raw.result_sha256,
-        ),
+        leaf_id,
         source: {
           root_block_id: root.root_block_id,
           source_sha256: root.source_sha256,

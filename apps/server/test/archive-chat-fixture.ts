@@ -119,20 +119,25 @@ export function archiveChatReply(wire: {
     return invoke("submit_page", { no_change: true });
   }
   const rows = new Map<string, string>();
+  const infos = new Map<
+    string,
+    {
+      type: string;
+      leaves: Map<string, { leaf_id: string; start: number; end: number }>;
+    }
+  >();
   for (const m of reads)
-    for (const item of (m.value.items ?? []) as { id: string; text: string }[])
+    for (const item of (m.value.items ?? []) as {
+      id: string;
+      text: string;
+      type: string;
+      leaves: { leaf_id: string; start: number; end: number }[];
+    }[]) {
       rows.set(item.id, (rows.get(item.id) ?? "") + item.text);
-  const infos = history("block_info").map(
-    (m) =>
-      m.value as {
-        root_block_id: string;
-        type: string;
-        leaves: { leaf_id: string }[];
-      },
-  );
-  const missing = [...rows.keys()].find(
-    (id) => !infos.some((i) => i.root_block_id === id),
-  );
+      const info = infos.get(item.id) ?? { type: item.type, leaves: new Map() };
+      for (const leaf of item.leaves) info.leaves.set(leaf.leaf_id, leaf);
+      infos.set(item.id, info);
+    }
   const assigned = new Set(
     calls
       .filter((c) => c.function.name === "put_operations")
@@ -147,8 +152,7 @@ export function archiveChatReply(wire: {
   let role: ArchiveSectionRole = "additional";
   const operations = [];
   for (const [root, text] of rows) {
-    const info = infos.find((i) => i.root_block_id === root)!;
-    if (!info) continue;
+    const info = infos.get(root)!;
     if (/abstract/iu.test(text) && /^\s*#|^abstract/iu.test(text))
       role = "abstract";
     else if (/introduction/iu.test(text) && /^\s*#|^introduction/iu.test(text))
@@ -160,16 +164,20 @@ export function archiveChatReply(wire: {
     else if (info.type === "title" && root === rows.keys().next().value)
       role = "title";
     else if (role === "title") role = "additional";
-    const id = info.leaves[0]!.leaf_id;
-    if (!assigned.has(id) && /^(?:DROP_HEADER|BIBLIOGRAPHY)/u.test(text)) {
-      operations.push({
-        kind: "drop",
-        leaf_id: id,
-        reason: text.startsWith("BIBLIOGRAPHY") ? "bibliography" : "header",
-      });
-      continue;
-    }
-    if (!assigned.has(id))
+    for (const leaf of info.leaves.values()) {
+      const id = leaf.leaf_id,
+        leafText = [...text].slice(leaf.start, leaf.end).join("");
+      if (assigned.has(id)) continue;
+      if (/^(?:DROP_HEADER|BIBLIOGRAPHY)/u.test(leafText)) {
+        operations.push({
+          kind: "drop",
+          leaf_id: id,
+          reason: leafText.startsWith("BIBLIOGRAPHY")
+            ? "bibliography"
+            : "header",
+        });
+        continue;
+      }
       operations.push({
         kind: "assign",
         leaf_id: id,
@@ -181,10 +189,10 @@ export function archiveChatReply(wire: {
           kind: info.type === "title" ? "section-heading" : "content",
         },
       });
+    }
   }
   if (operations.length)
     return invoke("put_operations", { operations: operations.slice(0, 20) });
-  if (missing) return invoke("block_info", { root_block_id: missing });
   const review = last("review_breaks");
   if (!review) return invoke("review_breaks", { offset: 0, limit: 20 });
   if (typeof review.next_offset === "number")

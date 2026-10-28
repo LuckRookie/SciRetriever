@@ -43,11 +43,18 @@
     - `paperTitle` 仍返回纯文本，供无障碍名称、标签页与排序使用；新增 `paperTitleParts` 与 `RichTitle`，用于文献库行与预览、阅读页、元数据来源、命令面板、检索分组、快照、任务逐篇经过、洞察；阅读引擎的标题也按片段渲染；
     - 样例 01、02 分别带原样与转义的标签；`design-samples.test.ts` 新增直接断言。
   - 验证：`pnpm quick` 通过；7 个相关 Web 测试文件 70 项通过，新增标题测试通过。
-- [ ] **6.3 偶发失败的测试**（worker，P12）
+- [x] **6.3 偶发失败的测试**（worker，P12）
   - 从各轮测试日志里收集偶发失败的用例（Agent 监控等），复现并查清根因，不靠放宽超时。
   - 修复后每个相关文件连续 5 次通过，记录命令与结果。
   - 已知一例（2026-10-28 Claude 核实）：`apps/server/test/document-read.test.ts` 的 “keeps unheaded text reachable and ignores late or mismatched browser read replies” 在干净的 HEAD（`bd1512e`）上也稳定失败。第三次 reload 后，错配提示要 1 秒以上才出现，而该处 poll 用的是默认超时；把它补到与前两处相同的 10 秒后，又在后面的 `delayed` poll 失败。要查清为什么 reload 后的读取变慢，不能只加超时。
   - 第二例（2026-10-28 Claude 核实）：`apps/web/test/next-reader-boundaries.test.ts` 的 “keeps encrypted PDF rejection at ingestion and reports no accepted PDF” 在 `7182549`（01 第三段之前）上同样失败。没有 PDF 时，“正在核对固定材料与文档版本…”一直不消失，与状态区同时存在，严格选择器取到两处。要查清读取为什么停在核对中，可能与第一例同源。
+  - 2026-10-28 worker 证据：
+    - 合成时序记录确认两项都在 `goto/reload` 后、来源读取完成前耗尽默认 1 秒轮询；延长诊断观察能看到无 PDF 在约 1.21 秒收敛、错配回执在约 2.09 秒返回并立即拒绝。接口请求约 35–104 ms，未发现后端读取死锁或 query 永久挂起。
+    - 按实际 read/describe/slice 回执与延迟请求同步测试；清理前释放屏障并等待路由回调。不改原选择器、结果断言或超时。扩大回归另捕获自动续读在空 article/初始位置恢复期间滚动，补齐现有控件 ready 前置条件，原第二次读取及迟到回执拒绝断言保留。
+    - 命令：`VITEST_MAX_FORKS=36 VITEST_MIN_FORKS=12 pnpm exec vitest run apps/server/test/document-read.test.ts apps/web/test/next-reader-boundaries.test.ts --maxWorkers=36 --minWorkers=12 --silent`，两个完整文件连续 5 次、每次 22 项通过，无 unhandled error。
+    - 检索 94 份近期阶段日志，46 个曾失败的用例名逐项列入本机交接目录 `phase4-flake-inventory.json`；区分既有合同/fixture 接入失败和本轮时序问题，相关建档/索引/阅读文件已复验。根因、失败原件、受控复现与五轮结果见 01 的 `phase4.md`。
+    - 残余：只用 fake/回放与合成库；未做真实服务或 Full 验收。
+    - 收尾：`pnpm quick` 通过；文档检查 230 份、0 错误。未改任何 `apps/web/src/app/` 文件。
 
 ## 验证
 
