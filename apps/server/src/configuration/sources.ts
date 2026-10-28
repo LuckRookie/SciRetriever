@@ -589,6 +589,7 @@ export class SourceConfigurationOwner {
       builtin_tests: [
         {
           source: "browser",
+          source_revision: browserRevision,
           test: {
             availability: "ready",
             state:

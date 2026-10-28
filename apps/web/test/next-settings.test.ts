@@ -1,18 +1,8 @@
 import { expect, it } from "vitest";
-import type { Page } from "playwright";
 import { TypeScriptConfigurationOwner } from "../../server/src/configuration/owner.js";
+import { executeConfiguration } from "../../server/src/entry/configuration-operations.js";
 import { nextWorkspace } from "./next-workspace-fixture.js";
 
-async function mode(page: Page, label: string, option: string) {
-  await page
-    .getByRole("radiogroup", { name: label, exact: true })
-    .getByText(option, { exact: true })
-    .click();
-}
-async function select(page: Page, label: string, option: string) {
-  await page.getByRole("button", { name: new RegExp(label) }).click();
-  await page.getByRole("option", { name: option, exact: true }).click();
-}
 it("preserves drafts across section publications and conflicts, explains restart binding, and clears credentials", async () => {
   let owner: TypeScriptConfigurationOwner;
   let baseline = "",
@@ -67,6 +57,8 @@ it("preserves drafts across section publications and conflicts, explains restart
       },
       credential: (edit, baseline, signal) =>
         owner.credential(edit, baseline, signal),
+      sourceOperation: (operation, value, signal) =>
+        executeConfiguration(owner, operation, value, signal),
     }),
     ...{ ready: 'label:has-text("Catalog 路径")' },
   });
@@ -109,7 +101,6 @@ it("preserves drafts across section publications and conflicts, explains restart
       .getByRole("textbox", { name: "Browser profile", exact: true })
       .fill("synthetic-unsaved-profile");
     await page.getByRole("tab", { name: "文献来源", exact: true }).click();
-    await mode(page, "元数据来源模式", "自定义");
     await page
       .getByRole("textbox", { name: "元数据结果上限", exact: true })
       .fill("501");
@@ -173,20 +164,34 @@ it("preserves drafts across section publications and conflicts, explains restart
           .inputValue(),
       )
       .toBe("88");
+    // Source credentials live in the source directory; only model services stay under 凭据.
     await page.getByRole("tab", { name: "凭据", exact: true }).click();
-    await select(page, "凭据类型", "文献来源 API key");
-    await page
-      .getByRole("textbox", { name: "目标名称", exact: true })
-      .fill("core");
+    await page.getByRole("button", { name: /凭据类型/ }).click();
+    expect(
+      await page.getByRole("option", { name: "文献来源 API key" }).count(),
+    ).toBe(0);
+    await page.keyboard.press("Escape");
+    // The configuration changed outside this page above; wait for the directory to be read again.
+    const reread = page.waitForResponse((r) =>
+      r.url().includes("/api/configuration/sources"),
+    );
+    await page.getByRole("tab", { name: "文献来源", exact: true }).click();
+    await reread;
+    const directory = page.getByRole("region", {
+      name: "文献来源",
+      exact: true,
+    });
+    const core = directory.getByRole("row").filter({ hasText: "CORE" });
+    await core.getByRole("button", { name: /缺 API Key/ }).click();
     const syntheticSecret = "synthetic-ui-secret-never-returned";
-    await page.getByLabel("凭据值", { exact: true }).fill(syntheticSecret);
-    await page.getByRole("button", { name: "保存凭据", exact: true }).click();
+    const secret = directory.locator(".source-secret input").first();
+    await secret.fill(syntheticSecret);
+    await directory.getByRole("button", { name: "保存", exact: true }).click();
     await expect
-      .poll(() => page.getByLabel("凭据值", { exact: true }).inputValue())
-      .toBe("");
-    await expect
-      .poll(() => page.getByRole("status").allTextContents())
-      .toContainEqual(expect.stringContaining("凭据已保存且不回显"));
+      .poll(() => directory.getByRole("status").allTextContents())
+      .toContainEqual(expect.stringContaining("已保存"));
+    expect(await secret.inputValue()).toBe("");
+    await expect.poll(() => core.textContent()).toContain("API Key 已配置");
     expect(await page.locator("body").textContent()).not.toContain(
       syntheticSecret,
     );
@@ -199,8 +204,6 @@ it("preserves drafts across section publications and conflicts, explains restart
       ),
     ).not.toContain(syntheticSecret);
     await page.getByRole("tab", { name: "运行状态", exact: true }).click();
-    await expect.poll(() => runtime.textContent()).toContain("下一次外部请求");
-    expect(await runtime.textContent()).toContain("普通配置已保存");
     expect(await runtime.textContent()).toContain("重启服务后生效");
     expect(await runtime.textContent()).toContain("core");
     expect(await runtime.getAttribute("data-state")).toBe("restart-required");

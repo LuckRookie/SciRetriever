@@ -1,3 +1,4 @@
+import { randomId } from "../../../browser-platform.js";
 import { copyText } from "../../../browser-platform.js";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -226,7 +227,7 @@ export function ProofreadEditor({
           selector: { kind: "literatures", literature_ids: [id] },
           mode: "full",
           from_step: "proofread",
-          idempotency_key: crypto.randomUUID(),
+          idempotency_key: randomId(),
         },
       });
       setPendingPages([]);

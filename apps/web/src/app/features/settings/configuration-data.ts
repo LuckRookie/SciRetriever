@@ -89,53 +89,6 @@ export function runtimeStatus(value: JsonRecord) {
         : "unknown";
   return { message: messages.join(" "), state };
 }
-export const SOURCE_PROVIDERS = {
-  metadata: [
-    "web-of-science",
-    "crossref",
-    "semantic-scholar",
-    "arxiv",
-    "openalex",
-    "europe-pmc",
-    "elsevier",
-    "springer",
-    "datacite",
-    "core",
-    "opencitations",
-  ],
-  acquisition: [
-    "arxiv",
-    "crossref",
-    "semantic-scholar",
-    "openalex",
-    "europe-pmc",
-    "unpaywall",
-    "elsevier",
-    "springer",
-    "wiley",
-    "datacite",
-    "core",
-    "sci-hub",
-  ],
-} as const;
-
-export const SOURCE_LABELS: Readonly<Record<string, string>> = {
-  "web-of-science": "Web of Science",
-  crossref: "Crossref",
-  "semantic-scholar": "Semantic Scholar",
-  arxiv: "arXiv",
-  openalex: "OpenAlex",
-  "europe-pmc": "Europe PMC",
-  elsevier: "Elsevier",
-  springer: "Springer",
-  datacite: "DataCite",
-  core: "CORE",
-  opencitations: "OpenCitations",
-  unpaywall: "Unpaywall",
-  wiley: "Wiley",
-  "sci-hub": "Sci-Hub",
-};
-
 export const MODEL_APIS = [
   { value: "openai-responses", label: "OpenAI Responses" },
   { value: "openai-chat-completions", label: "OpenAI Chat Completions" },

@@ -1,0 +1,236 @@
+@layer pages {
+  .source-directory {
+    display: grid;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+  .source-modes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-5);
+  }
+  .source-mode {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .source-mode > span {
+    color: var(--fg2);
+  }
+  .source-heading {
+    margin: 0;
+    font-size: var(--text-secondary);
+    font-weight: 600;
+    color: var(--fg2);
+  }
+  /* Five stages read left to right, the order acquisition actually tries them. */
+  .source-route-stages {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: stage;
+  }
+  .source-route-stages li {
+    display: grid;
+    align-content: start;
+    gap: var(--space-1);
+    padding-top: var(--space-2);
+    border-top: 2px solid var(--line2);
+    counter-increment: stage;
+  }
+  .source-stage-name {
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+  }
+  .source-stage-name::before {
+    content: counter(stage) " ";
+    font-variant-numeric: tabular-nums;
+    color: var(--fg3);
+  }
+  .source-stage-empty {
+    color: var(--fg3);
+  }
+  .source-table-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .source-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .source-table th,
+  .source-table td {
+    padding: var(--space-2);
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: middle;
+    font-weight: normal;
+  }
+  .source-table thead th {
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+  }
+  .source-table-group th {
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+  .source-table-group th[colspan="3"]:first-of-type,
+  .source-table-group th[scope="colgroup"] {
+    text-align: center;
+    border-bottom: 1px solid var(--line2);
+  }
+  .source-table thead tr:last-child th:nth-child(n + 2):nth-child(-n + 5),
+  .source-use {
+    width: 3.5em;
+    text-align: center;
+  }
+  .source-row > th {
+    font-weight: 500;
+  }
+  .source-row[data-missing] {
+    background: var(--mark-soft);
+  }
+  .source-use[data-state="available"],
+  .source-use[data-state="not-provided"] {
+    color: var(--fg3);
+  }
+  .source-use[data-state="hint"] {
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+  }
+  .source-config[data-tone="missing"] {
+    color: var(--t-yellow);
+  }
+  .source-config[data-tone="optional"],
+  .source-config[data-tone="none"] {
+    color: var(--fg3);
+  }
+  .source-config-toggle {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .source-config-toggle:hover {
+    text-decoration: underline;
+  }
+  .source-row[data-open] .source-config-toggle > span {
+    display: inline-block;
+    transform: rotate(90deg);
+  }
+  .source-test-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    white-space: nowrap;
+  }
+  .source-test-ok {
+    color: var(--t-green);
+  }
+  .problem-label {
+    color: var(--t-red);
+  }
+  .source-editor-row > td {
+    background: var(--side);
+  }
+  .source-editor {
+    display: grid;
+    gap: var(--space-3);
+    max-width: 36rem;
+    padding: var(--space-2) var(--space-2) var(--space-3);
+  }
+  .source-secret {
+    display: flex;
+    align-items: end;
+    gap: var(--space-2);
+  }
+  .source-secret label {
+    display: grid;
+    flex: 1;
+    gap: var(--space-1);
+  }
+  .source-secret label > span {
+    display: flex;
+    gap: var(--space-2);
+  }
+  .source-secret-state {
+    color: var(--fg3);
+  }
+  .source-secret input {
+    min-height: var(--control-height);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--control-border);
+    border-radius: var(--radius-control, 4px);
+    background: var(--bg);
+    color: var(--fg);
+    font: inherit;
+  }
+  .source-builtin {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .apply-configuration {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .apply-configuration [role="status"] {
+    color: var(--fg2);
+  }
+  /* Narrow screens: name and the four marks on the first line, configuration and test below. */
+  @media (max-width: 720px) {
+    .source-route-stages {
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--space-2);
+    }
+    .source-route-stages li {
+      grid-auto-flow: column;
+      justify-content: start;
+      gap: var(--space-3);
+      padding-top: var(--space-1);
+      border-top-width: 1px;
+    }
+    .source-table thead tr:last-child th:nth-child(n + 6),
+    .source-table-group th:last-child {
+      display: none;
+    }
+    .source-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) repeat(4, 2.75em);
+      border-bottom: 1px solid var(--line);
+    }
+    .source-row > * {
+      border-bottom: 0;
+    }
+    .source-row > .source-config {
+      grid-column: 1 / 3;
+      padding-top: 0;
+    }
+    .source-row > .source-test {
+      grid-column: 3 / -1;
+      padding-top: 0;
+      text-align: right;
+    }
+    .source-table thead tr:last-child {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) repeat(4, 2.75em);
+    }
+    .source-table-group {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) calc(3 * 2.75em) 2.75em;
+    }
+    .source-editor-row,
+    .source-editor-row > td {
+      display: block;
+    }
+  }
+}

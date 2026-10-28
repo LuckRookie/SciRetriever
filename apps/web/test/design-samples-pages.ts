@@ -580,9 +580,25 @@ export const designSamplePages: readonly DesignSamplePage[] = [
       interaction: `切换到${name}`,
       prepare: (p) => openSettings(p, name),
       ready:
-        ".settings-content .ui-section, .settings-sources, .maintenance-page",
+        name === "文献来源"
+          ? ".source-table"
+          : ".settings-content .ui-section, .maintenance-page",
     }),
   ),
+  {
+    id: "settings-sources-expanded",
+    name: "设置 · 文献来源 · 展开配置",
+    route: route("set"),
+    interaction: "展开缺联系邮箱的 Unpaywall",
+    prepare: async (p) => {
+      await openSettings(p, "文献来源");
+      await p
+        .locator(".source-row", { hasText: "Unpaywall" })
+        .locator(".source-config-toggle")
+        .click();
+    },
+    ready: ".source-editor",
+  },
   {
     id: "settings-dirty",
     name: "设置 · 未保存改动",

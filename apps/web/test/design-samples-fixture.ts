@@ -20,6 +20,7 @@ import {
   taskHttpAdapters,
 } from "../../server/src/bootstrap/workbench.js";
 import { TypeScriptConfigurationOwner } from "../../server/src/configuration/owner.js";
+import { executeConfiguration } from "../../server/src/entry/configuration-operations.js";
 import {
   startWorkbenchHttp,
   type WorkbenchStaticAsset,
@@ -713,6 +714,12 @@ export async function startDesignSamples(options: {
         status: owner.status.bind(owner),
         publishConfiguration: owner.publishConfiguration.bind(owner),
         credential: owner.credential.bind(owner),
+        // The sample library stays offline: reading and saving work, live source tests do not.
+        sourceOperation: async (operation, value, signal) => {
+          if (operation === "source-test" || operation === "source-test-all")
+            throw new Error("design-sample-offline");
+          return executeConfiguration(owner, operation, value, signal);
+        },
       },
     });
     return { ...seed, origin: server.origin, close };

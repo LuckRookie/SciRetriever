@@ -1,16 +1,7 @@
-import {
-  STAGES,
-  routeStatus,
-  sourceName,
-} from "../../data/acquisition-wording.js";
 import { serviceMessage } from "../../strings.js";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  parseAcquisitionRouteState,
-  parseConfigurationReadiness,
-  type AcquisitionRouteState,
-} from "@sciretriever/contracts";
+import { parseConfigurationReadiness } from "@sciretriever/contracts";
 import {
   Button,
   Checkbox,
@@ -22,8 +13,6 @@ import {
   IconButton,
   PageHeader,
   PageNote,
-  Radio,
-  RadioGroup,
   Section,
   Select,
   Switch,
@@ -43,10 +32,10 @@ import { errorMessage } from "../../strings.js";
 import {
   MODEL_APIS,
   MODEL_REASONING,
-  SOURCE_LABELS,
-  SOURCE_PROVIDERS,
   runtimeStatus,
 } from "./configuration-data.js";
+import { ApplyConfiguration } from "../sources/ApplyConfiguration.js";
+import { SourceDirectoryPanel } from "../sources/SourceDirectory.js";
 import "./settings.css";
 
 const Maintenance = lazy(() => import("../maintenance/Maintenance.js"));
@@ -391,14 +380,17 @@ export default function Settings() {
       <PageHeader
         title="设置"
         action={
-          <Button
-            isDisabled={publish.isPending}
-            onPress={() =>
-              dirty.size ? setRefreshConfirm(true) : void refresh()
-            }
-          >
-            刷新配置
-          </Button>
+          <>
+            {api.kind === "workspace" ? <ApplyConfiguration /> : null}
+            <Button
+              isDisabled={publish.isPending}
+              onPress={() =>
+                dirty.size ? setRefreshConfirm(true) : void refresh()
+              }
+            >
+              刷新配置
+            </Button>
+          </>
         }
       />
       <div className="settings-layout">
@@ -494,17 +486,56 @@ export default function Settings() {
                   </>
                 )}
                 {section === "sources" && (
-                  <Sources
-                    configuration={draft}
-                    onChange={(sources) => {
-                      setDraft({ ...draft, sources });
-                      mark("sources");
-                    }}
-                    onSave={() => save(["sources"])}
-                    pending={publish.isPending}
-                    dirty={changed("sources")}
-                    routes={runtime.acquisition_routes}
-                  />
+                  <>
+                    <Section title="文献来源">
+                      <SourceDirectoryPanel />
+                    </Section>
+                    <Section
+                      title="主题检索"
+                      action={saveButton(["sources"], "保存来源配置", () => {
+                        const limit = Number(
+                          record(
+                            record(draft.sources, "sources").metadata,
+                            "metadata",
+                          ).limit,
+                        );
+                        if (!Number.isSafeInteger(limit) || limit < 1)
+                          setMessage("结果上限需为正整数。");
+                        else save(["sources"]);
+                      })}
+                    >
+                      <Definitions>
+                        <Definition
+                          term="元数据结果上限"
+                          description="每个来源每次检索最多读取的条数。"
+                        >
+                          <TextField
+                            label="元数据结果上限"
+                            value={String(
+                              record(
+                                record(draft.sources, "sources").metadata,
+                                "metadata",
+                              ).limit ?? 500,
+                            )}
+                            onChange={(limit) => {
+                              const sources = record(draft.sources, "sources");
+                              setDraft({
+                                ...draft,
+                                sources: {
+                                  ...sources,
+                                  metadata: {
+                                    ...record(sources.metadata, "metadata"),
+                                    limit: Number(limit),
+                                  },
+                                },
+                              });
+                              mark("sources");
+                            }}
+                          />
+                        </Definition>
+                      </Definitions>
+                    </Section>
+                  </>
                 )}
                 {section === "models" && (
                   <>
@@ -1259,14 +1290,13 @@ function Credential({
             onChange={setNamespace}
             options={[
               { value: "model", label: "模型 Provider" },
-              { value: "source", label: "文献来源 API key" },
               { value: "mineru", label: "MinerU bearer token" },
             ]}
           />
         </Definition>
         <Definition
           term="目标名称"
-          description="Provider 名称、来源名称或 MinerU。"
+          description="Provider 名称或 MinerU。文献来源的凭据在“文献来源”里配置。"
         >
           <TextField label="目标名称" value={target} onChange={setTarget} />
         </Definition>
@@ -1283,284 +1313,5 @@ function Credential({
       </Definitions>
       <p role="status">{message}</p>
     </Section>
-  );
-}
-function Sources({
-  configuration,
-  onChange,
-  onSave,
-  pending,
-  dirty,
-  routes,
-}: {
-  configuration: JsonRecord;
-  onChange: (sources: JsonRecord) => void;
-  onSave: () => void;
-  pending: boolean;
-  /** The save button exists only while the sources have unsaved edits. */
-  dirty: boolean;
-  /** Effective and saved acquisition routes; older servers omit them. */
-  routes?: unknown;
-}) {
-  const sources = record(configuration.sources, "sources"),
-    metadata = record(sources.metadata, "metadata"),
-    acquisition = record(sources.acquisition, "acquisition"),
-    wos = metadata.web_of_science
-      ? record(metadata.web_of_science, "Web of Science")
-      : {};
-  const update = (kind: string, key: string, value: unknown) =>
-    onChange({
-      ...sources,
-      [kind]: { ...record(sources[kind], kind), [key]: value },
-    });
-  const [error, setError] = useState("");
-  const validate = () => {
-    if (!Number.isSafeInteger(metadata.limit) || Number(metadata.limit) < 1) {
-      setError("结果上限需为正整数。");
-      return;
-    }
-    const selected = (kind: JsonRecord, name: string) =>
-      kind.mode === "custom" &&
-      Array.isArray(kind.providers) &&
-      kind.providers.includes(name);
-    if (
-      (wos.product ||
-        wos.database ||
-        wos.edition ||
-        selected(metadata, "web-of-science")) &&
-      (!wos.product || !wos.database)
-    ) {
-      setError("Web of Science 需要同时填写产品和数据库。");
-      return;
-    }
-    if (
-      selected(acquisition, "unpaywall") &&
-      !str(
-        acquisition.unpaywall
-          ? record(acquisition.unpaywall, "unpaywall").contact_email
-          : null,
-      )
-    ) {
-      setError("选择 Unpaywall 时，请填写联系邮箱。");
-      return;
-    }
-    setError("");
-    onSave();
-  };
-  const sourceLabel = (name: string) => SOURCE_LABELS[name] ?? name;
-  const choice = (kind: "metadata" | "acquisition") => {
-    const config = record(sources[kind], kind),
-      selected = Array.isArray(config.providers)
-        ? config.providers.filter(
-            (value): value is string => typeof value === "string",
-          )
-        : [];
-    return (
-      <Definition
-        term="来源"
-        description={
-          kind === "metadata"
-            ? "自定义时只查询勾选的来源。"
-            : "自定义时只尝试勾选的来源。"
-        }
-        value={
-          config.mode === "custom"
-            ? selected.length
-              ? `已选 ${selected.length} 个：${selected.map(sourceLabel).join("、")}`
-              : "尚未勾选来源"
-            : "由应用按当前版本选择"
-        }
-      >
-        <RadioGroup
-          segmented
-          label={kind === "metadata" ? "元数据来源模式" : "获取来源模式"}
-          value={str(config.mode)}
-          onChange={(mode) =>
-            onChange({
-              ...sources,
-              [kind]: {
-                ...config,
-                mode,
-                providers: mode === "auto" ? [] : selected,
-              },
-            })
-          }
-        >
-          <Radio value="auto">自动</Radio>
-          <Radio value="custom">自定义</Radio>
-        </RadioGroup>
-        {config.mode === "custom" ? (
-          <div className="source-options">
-            {[...new Set([...selected, ...SOURCE_PROVIDERS[kind]])].map(
-              (name) => (
-                <Checkbox
-                  key={name}
-                  label={sourceLabel(name)}
-                  isSelected={selected.includes(name)}
-                  onChange={(checked) =>
-                    update(
-                      kind,
-                      "providers",
-                      checked
-                        ? [...selected, name]
-                        : selected.filter((value) => value !== name),
-                    )
-                  }
-                />
-              ),
-            )}
-          </div>
-        ) : null}
-      </Definition>
-    );
-  };
-  return (
-    <div className="settings-sources">
-      <Section
-        title="元数据"
-        description="导入书目、补全题录信息时查询的服务。"
-      >
-        <Definitions>
-          {choice("metadata")}
-          <Definition
-            term="单次结果上限"
-            description="每个来源一次查询最多返回的条数。"
-          >
-            <div className="settings-short-field">
-              <TextField
-                label="元数据结果上限"
-                value={String(metadata.limit ?? 500)}
-                onChange={(value) => update("metadata", "limit", Number(value))}
-              />
-            </div>
-          </Definition>
-        </Definitions>
-      </Section>
-      <Section title="PDF 获取" description="获取全文 PDF 时依次尝试的服务。">
-        <AcquisitionRoutes value={routes} />
-        <Definitions>
-          {choice("acquisition")}
-          <Definition
-            term="Unpaywall 联系邮箱"
-            description="勾选 Unpaywall 时必填，随请求发送给 Unpaywall。"
-          >
-            <TextField
-              label="Unpaywall 联系邮箱"
-              value={str(
-                acquisition.unpaywall
-                  ? record(acquisition.unpaywall, "unpaywall").contact_email
-                  : null,
-              )}
-              onChange={(contact_email) =>
-                update(
-                  "acquisition",
-                  "unpaywall",
-                  contact_email ? { contact_email } : null,
-                )
-              }
-            />
-          </Definition>
-        </Definitions>
-      </Section>
-      <Section
-        title="Web of Science"
-        description="需要机构订阅。产品与数据库都留空时不使用。"
-      >
-        <Definitions>
-          <Definition term="产品">
-            <Select
-              label="产品"
-              value={str(wos.product)}
-              onChange={(product) =>
-                update(
-                  "metadata",
-                  "web_of_science",
-                  product ? { ...wos, product } : null,
-                )
-              }
-              options={[
-                { value: "", label: "未配置" },
-                { value: "starter", label: "Starter" },
-                { value: "expanded", label: "Expanded" },
-              ]}
-            />
-          </Definition>
-          <Definition term="数据库" description="例如 WOS。">
-            <TextField
-              label="数据库"
-              value={str(wos.database)}
-              onChange={(database) =>
-                update("metadata", "web_of_science", { ...wos, database })
-              }
-            />
-          </Definition>
-          <Definition term="版本" description="可选。">
-            <TextField
-              label="版本"
-              value={str(wos.edition)}
-              onChange={(edition) =>
-                update("metadata", "web_of_science", {
-                  ...wos,
-                  edition: edition || null,
-                })
-              }
-            />
-          </Definition>
-        </Definitions>
-      </Section>
-      {error && <p role="alert">{error}</p>}
-      {dirty ? (
-        <div className="form-actions">
-          <Button variant="primary" isPending={pending} onPress={validate}>
-            保存来源配置
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-/** The order PDF acquisition actually runs in, and what a restart would change. */
-function AcquisitionRoutes({ value }: { value: unknown }) {
-  let state: AcquisitionRouteState | null = null;
-  try {
-    state = value === undefined ? null : parseAcquisitionRouteState(value);
-  } catch {
-    state = null;
-  }
-  if (!state) return null;
-  const shown = state.effective ?? state.pending,
-    pendingOnly = state.changed
-      ? state.pending.filter(
-          (route) => !shown.some((item) => item.source === route.source),
-        )
-      : [];
-  return (
-    <div className="settings-routes">
-      <p className="settings-routes-title">
-        当前获取顺序
-        {state.effective === null ? "（按已保存配置）" : ""}
-      </p>
-      <ol>
-        {shown.map((route) => (
-          <li key={route.source} data-ready={route.ready}>
-            <span>{sourceName(route.source)}</span>
-            <span className="settings-routes-stage">{STAGES[route.stage]}</span>
-            <span>{routeStatus(route)}</span>
-          </li>
-        ))}
-        {pendingOnly.map((route) => (
-          <li key={route.source} data-pending>
-            <span>{sourceName(route.source)}</span>
-            <span className="settings-routes-stage">{STAGES[route.stage]}</span>
-            <span>重启后生效</span>
-          </li>
-        ))}
-      </ol>
-      {state.restart_required ? (
-        <p className="ui-description">
-          已保存的选择与当前服务不同，重启服务后生效。
-        </p>
-      ) : null}
-    </div>
   );
 }

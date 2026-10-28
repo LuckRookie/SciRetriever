@@ -244,6 +244,7 @@ export interface SourceDirectory {
   readonly rows: readonly SourceDirectoryRow[];
   readonly builtin_tests: readonly {
     readonly source: "browser";
+    readonly source_revision: string;
     readonly test: SourceTestSlot;
   }[];
   readonly saved: {
@@ -772,7 +773,12 @@ export const parseSourceDirectory: Reader<SourceDirectory> = (v) => {
     ),
     rows: array(parseSourceDirectoryRow, 15),
     builtin_tests: array(
-      (v) => object(v, { source: literal("browser"), test: slot }),
+      (v) =>
+        object(v, {
+          source: literal("browser"),
+          source_revision: token,
+          test: slot,
+        }),
       1,
     ),
     saved: (v) =>
