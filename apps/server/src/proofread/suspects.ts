@@ -26,6 +26,75 @@ export function textTokens(text: string): string[] {
       .filter((t) => /[\p{L}\p{N}%‰°_^]/u.test(t))
   );
 }
+const LATEX_SYMBOLS: Readonly<Record<string, string>> = {
+  pm: "±",
+  mp: "∓",
+  times: "×",
+  cdot: "·",
+  circ: "°",
+  degree: "°",
+  leq: "≤",
+  le: "≤",
+  geq: "≥",
+  ge: "≥",
+  approx: "≈",
+  sim: "∼",
+  to: "→",
+  rightarrow: "→",
+  infty: "∞",
+  prime: "′",
+  alpha: "α",
+  beta: "β",
+  gamma: "γ",
+  delta: "δ",
+  epsilon: "ε",
+  varepsilon: "ε",
+  eta: "η",
+  theta: "θ",
+  kappa: "κ",
+  lambda: "λ",
+  mu: "μ",
+  nu: "ν",
+  pi: "π",
+  rho: "ρ",
+  sigma: "σ",
+  tau: "τ",
+  phi: "φ",
+  chi: "χ",
+  psi: "ψ",
+  omega: "ω",
+  Gamma: "Γ",
+  Delta: "Δ",
+  Sigma: "Σ",
+  Omega: "Ω",
+};
+/**
+ * Retained-page suspects compare a parser's text with a PDF text layer. Both describe the
+ * same printed characters in different notations, so notation differences are removed
+ * first: line-end hyphenation in the layer, LaTeX commands, script markers and citation
+ * numbers glued to a period. What remains is a difference in the characters themselves.
+ */
+export function comparableTokens(text: string): string[] {
+  const plain = normalizeForComparison(
+    text.replace(/(\p{L})[-\u2010\u00ad][ \t]*\r?\n[ \t]*(?=\p{Ll})/gu, "$1"),
+  )
+    .replace(
+      /\\(?:mathrm|mathbf|mathit|mathsf|text|textrm|textit|operatorname)\s*\{([^{}]*)\}/gu,
+      "$1",
+    )
+    .replace(
+      /\\([A-Za-z]+)/gu,
+      (_m, name: string) => LATEX_SYMBOLS[name] ?? " ",
+    )
+    .replace(/[_^]\{([^{}]*)\}/gu, " $1 ")
+    .replace(/[_^](?=[\p{L}\p{N}])/gu, " ")
+    .replace(/[{}$]/gu, " ")
+    .replace(/([\p{L})\]])\.(\d)/gu, "$1. $2");
+  return textTokens(plain).flatMap((t) => {
+    const bare = t.replace(/^[_^]\{(.*)\}$/u, "$1");
+    return bare ? [bare] : [];
+  });
+}
 function difference(left: readonly string[], right: readonly string[]) {
   const counts = new Map<string, number>();
   for (const t of right) counts.set(t, (counts.get(t) ?? 0) + 1);

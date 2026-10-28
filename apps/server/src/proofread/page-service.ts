@@ -493,7 +493,7 @@ export class ArchivePageProofreadService {
             input_sha256: key,
             progress,
             system:
-              "Check transcription fidelity on this page only, not style or scientific truth. Never polish, summarize, infer missing facts or dehyphenate by habit. The original PDF image is authoritative; the text layer and suspects are hints. Read every retained leaf and view the full page before submitting, even on text-layer pages without suspects. Image-only pages have no text-layer reference. Keep uncertain original text with a reason. Corrections are Unicode code-point [start,end) ranges in ORIGINAL leaf text, cannot cross leaves and cannot change dropped text, page assignments or structure roles. Read evidence in bounded windows. Store corrections and dispositions in host-managed batches; do not output a full page or document.",
+              "Check transcription fidelity on this page only, not style or scientific truth. Never polish, summarize, infer missing facts or dehyphenate by habit. A hyphen the PDF prints only because a word breaks at the end of a line is not part of the text: never add one to a joined word. The original PDF image is authoritative; the text layer and suspects are hints. Read every retained leaf and view the full page before submitting, even on text-layer pages without suspects. Image-only pages have no text-layer reference. Keep uncertain original text with a reason. Corrections are Unicode code-point [start,end) ranges in ORIGINAL leaf text, cannot cross leaves and cannot change dropped text, page assignments or structure roles. Read evidence in bounded windows. Store corrections and dispositions in host-managed batches; do not output a full page or document.",
             initial: {
               page_index: page.page,
               page_input_sha256: key,
@@ -745,6 +745,12 @@ export class ArchivePageProofreadService {
                 return textReply({
                   disposed: dispositions.size,
                   total: suspects.size,
+                  // Saying the next step stops a model from re-sending the same disposition.
+                  ...([...suspects.keys()].every((id) => dispositions.has(id))
+                    ? {
+                        next: "All suspects are resolved. Call submit_page now; no_change is true when there are no corrections.",
+                      }
+                    : {}),
                 });
               }
               if (name === "submit_page") {

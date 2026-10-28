@@ -220,10 +220,35 @@ export const objectSchema = (properties: Record<string, unknown>) => ({
 /** The shared Agent wire accepts enum/anyOf, not JSON Schema const or bounds.
  * Business parsers below enforce the numeric, collection and source constraints.
  */
+/**
+ * Strict provider schemas reject numeric and length bounds, so they are removed from the
+ * wire; the bound is restated in the field description, where a model still reads it.
+ */
+function boundText(schema: Record<string, unknown>): string | null {
+  const range = (low: unknown, high: unknown, unit: string) =>
+    low !== undefined && high !== undefined
+      ? `${unit} from ${String(low)} to ${String(high)}`
+      : low !== undefined
+        ? `${unit} of at least ${String(low)}`
+        : high !== undefined
+          ? `${unit} of at most ${String(high)}`
+          : null;
+  return (
+    range(schema.minimum, schema.maximum, "value") ??
+    range(schema.minItems, schema.maxItems, "item count")
+  );
+}
 function wireSchema(schema: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
+  const bound = boundText(schema);
+  if (bound)
+    result.description =
+      typeof schema.description === "string"
+        ? `${schema.description} (${bound})`
+        : `Allowed ${bound}.`;
   for (const [key, value] of Object.entries(schema)) {
     if (["minimum", "maximum", "minItems", "maxItems"].includes(key)) continue;
+    if (key === "description" && bound) continue;
     if (key === "const") {
       result.type = typeof value;
       result.enum = [value];
@@ -515,11 +540,8 @@ export async function runArchiveTextSession<T>(
               ...modelRequest,
               messages: modelRequest.messages.map((m) => ({
                 ...m,
-                parts: m.parts.map((p) =>
-                  "data" in p
-                    ? { ...p, data: Buffer.from(p.data).toString("base64") }
-                    : p,
-                ),
+                // Page images are bounded by the latest-image policy; this window bounds text growth.
+                parts: m.parts.map((p) => ("data" in p ? { ...p, data: "" } : p)),
               })),
             }),
           );
@@ -623,11 +645,21 @@ export async function runArchiveTextSession<T>(
                 yielded = true;
                 context.concludeTurn();
               }
+              // A bare "tool-input" gives a model nothing to correct; return the declared schema with it.
+              const schema = issues.some((i) => i.code === "tool-input")
+                ? input.tools.find((t) => t.name === call.name)?.parameters
+                : undefined;
               return textReply(
                 {
                   accepted: false,
                   issues: issues.slice(0, 20),
                   issue_count: issues.length,
+                  ...(schema
+                    ? {
+                        hint: `Arguments must match the ${call.name} parameter schema exactly: only the listed keys, integers within their minimum and maximum.`,
+                        expected_arguments: schema,
+                      }
+                    : {}),
                   stop: input.progress.state.stop,
                 },
                 "rejected",

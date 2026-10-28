@@ -11,7 +11,7 @@ import {
   type PageReviewEvidence,
 } from "@sciretriever/contracts";
 import type { PdfPageInspection } from "../browser/pdf-region.js";
-import { textTokens } from "./suspects.js";
+import { comparableTokens, textTokens } from "./suspects.js";
 import { requireTableMarkup } from "./contract.js";
 import {
   ArchiveTextError,
@@ -20,7 +20,7 @@ import {
   textId,
 } from "../archive/text-source.js";
 export const LEAF_CORRECTION_METHOD = "leaf-correct-codepoint-v1";
-export const RETAINED_SUSPECT_METHOD = "retained-page-multiset-v1";
+export const RETAINED_SUSPECT_METHOD = "retained-page-comparable-v2";
 function subtract(left: readonly string[], right: readonly string[]) {
   const counts = new Map<string, number>();
   for (const t of right) counts.set(t, (counts.get(t) ?? 0) + 1);
@@ -43,11 +43,11 @@ export function retainedPageSuspects(
 ): readonly RetainedPageSuspect[] {
   if (page.kind !== "text-layer") return [];
   const expected = subtract(
-    textTokens(page.text),
-    deleted.flatMap((l) => textTokens(l.original_text)),
+    comparableTokens(page.text),
+    deleted.flatMap((l) => comparableTokens(l.original_text)),
   ).map((t) => t.token);
   const entries = retained.flatMap((l) =>
-    textTokens(texts?.get(l.leaf_id) ?? l.original_text).map((token) => ({
+    comparableTokens(texts?.get(l.leaf_id) ?? l.original_text).map((token) => ({
       token,
       id: l.leaf_id,
     })),

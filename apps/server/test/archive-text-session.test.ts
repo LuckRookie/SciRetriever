@@ -203,6 +203,71 @@ it("stops the third repeated validation problem set without mislabelling the tas
     await runtime.close();
   }
 });
+it("returns the declared schema with an out-of-range argument so a real model can correct it", async () => {
+  // A real model read limit as characters (8000); a bare "tool-input" left it guessing.
+  const f = await archiveTextFixture([{ text: "Untouched." }]);
+  let calls = 0,
+    rejection: Record<string, unknown> | null = null;
+  const runtime = fakeTextRuntime(async (request) => {
+    calls++;
+    if (calls === 1)
+      return modelTool("read_blocks", { index: 0, offset: 0, limit: 8000 });
+    rejection ??= toolJson(request);
+    return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
+  });
+  try {
+    await new ArchiveArrangementService(
+      runtime,
+      fakePages(f.pages),
+      memoryTextCache().cache,
+    ).build(f.source);
+    expect(rejection).toMatchObject({
+      accepted: false,
+      issues: [{ code: "tool-input" }],
+      expected_arguments: {
+        properties: {
+          limit: {
+            type: "integer",
+            description: "Allowed value from 1 to 20.",
+          },
+        },
+      },
+    });
+  } finally {
+    await runtime.close();
+  }
+});
+it("does not count page-image bytes toward the text compaction window", async () => {
+  // A real 4-page paper compacted after its first page view: one image's base64 exceeded the window.
+  const f = await archiveTextFixture([{ text: "Untouched." }]);
+  const big = new Uint8Array(600 * 1024);
+  const pages = {
+    ...fakePages(f.pages),
+    image: async () => ({
+      media_type: "image/png",
+      data: big,
+      width: 1000,
+      height: 1400,
+    }),
+  };
+  let calls = 0;
+  const runtime = fakeTextRuntime(async () => {
+    calls++;
+    return calls < 4
+      ? modelTool("view_page", { page_index: 0, region: null })
+      : modelTool("review_breaks", { offset: 0, limit: 20 });
+  });
+  try {
+    const result = await new ArchiveArrangementService(
+      runtime,
+      pages,
+      memoryTextCache().cache,
+    ).build(f.source);
+    expect(result.usage.compaction_calls).toBe(0);
+  } finally {
+    await runtime.close();
+  }
+});
 it("counts actual dispatches and stops after eight calls with no new evidence or semantic operations", async () => {
   const f = await archiveTextFixture([{ text: "Untouched." }]);
   let calls = 0;

@@ -771,3 +771,21 @@ it("ends a page with a typed page-tools stop when image rendering fails", async 
     await runtime.close();
   }
 });
+
+it("compares retained text with the text layer after removing notation differences", async () => {
+  const { comparableTokens } = await import("../src/proofread/suspects.js");
+  // Text layer (left) and parser text (right) from a real ACS page, 2026-10-28.
+  expect(
+    comparableTokens(
+      "Over 20 syntheses of sparteine.4 Its antiar-\nrhythmic use (±)-sparteine and η2 binding were sup-\npressed",
+    ),
+  ).toEqual(
+    comparableTokens(
+      "Over 20 syntheses of sparteine.$^{4}$ Its antiarrhythmic use $(\\pm)$-sparteine and $\\eta^2$ binding were suppressed",
+    ),
+  );
+  // A real character difference survives.
+  expect(comparableTokens("measured 4.2 eV")).not.toEqual(
+    comparableTokens("measured 4.7 eV"),
+  );
+});

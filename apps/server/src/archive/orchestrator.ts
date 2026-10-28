@@ -420,9 +420,12 @@ export class ArchiveOrchestrator {
           stop: {
             code: signal?.aborted
               ? "cancelled"
-              : step === "render"
-                ? "render-failed"
-                : "other",
+              : error instanceof Error &&
+                  error.message === "proofread-renderer-unavailable"
+                ? "page-tools-unavailable"
+                : step === "render"
+                  ? "render-failed"
+                  : "other",
             step,
             scope: "part",
             page_index: null,

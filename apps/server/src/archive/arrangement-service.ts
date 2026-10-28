@@ -262,7 +262,7 @@ export class ArchiveArrangementService {
       ),
       toolDeclaration(
         "read_blocks",
-        "Read exact original block characters with type, page hint and current program-derived leaf IDs, including draft splits. Leaves intersect the returned text window. Follow next until null; offsets are Unicode code points.",
+        "Read exact original block characters with type, page hint and current program-derived leaf IDs, including draft splits. Leaves intersect the returned text window. Follow next until null; offsets are Unicode code points. limit counts blocks per window (1-20), not characters.",
         {
           index: integer,
           offset: integer,
@@ -344,7 +344,7 @@ export class ArchiveArrangementService {
         input_sha256: key,
         progress,
         system:
-          "Arrange the original blocks without changing characters. Classify each terminal leaf exactly once. Use the fixed skeleton, keeping original subheadings. Authors contain names only; affiliations, funding, notes and final supporting-information notices belong to end-matter. Drop bibliographic lines, UI labels, headers, footers, copyright and decoration with their closed reason. Split embedded copyright then drop only that span. Never dehyphenate or normalize text. Cross independent footnotes/figures/tables/captions when merging, without losing them. Page hints can be wrong: view the destination page before assign-page. Read sources via bounded read_blocks, using its current leaf IDs, types and page hints to store draft operations in batches. Use block_info only to refresh identities after a split or obtain text-layer page hints. Review and decide paragraph candidates, then submit. Do not output full text.",
+          "Arrange the original blocks without changing characters. Classify each terminal leaf exactly once. Use the fixed skeleton, keeping original subheadings. Authors contain names only; affiliations, funding, notes and final supporting-information notices belong to end-matter. Drop bibliographic lines, UI labels, headers, footers, copyright and decoration with their closed reason. Split embedded copyright then drop only that span. Never dehyphenate or normalize text. Cross independent footnotes/figures/tables/captions when merging, without losing them. Page hints can be wrong: view the destination page before assign-page. Read sources via bounded read_blocks, using its current leaf IDs, types and page hints. After each read_blocks window, put_operations for every leaf in that window before reading the next one; drafts are kept by the host, so context compaction never loses finished work. Use block_info only to refresh identities after a split or obtain text-layer page hints. Review and decide paragraph candidates, then submit. Do not output full text.",
         initial: {
           source_input_sha256: source.input_sha256,
           block_count: source.blocks.length,
