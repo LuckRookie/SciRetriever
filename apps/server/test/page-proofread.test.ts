@@ -819,6 +819,95 @@ it("names each rejected disposition so the model does not resend the same batch"
     await runtime.close();
   }
 });
+it("names the batch item and field a mistyped id breaks", async () => {
+  // A real page: one suspect id with an extra digit drew three identical resends.
+  const f = await archiveTextFixture([{ text: "Yield 67%." }]);
+  const replies: Record<string, unknown>[] = [];
+  let calls = 0;
+  const runtime = fakeTextRuntime(async (request) => {
+    calls++;
+    if (calls > 1) replies.push(toolJson(request));
+    return modelTool("put_dispositions", {
+      dispositions: [
+        {
+          suspect_id: "02eeb366-2d96-ad76-4349-8dacfe4b4590",
+          status: "uncertain",
+          correction_ids: [],
+          reason: "The image shows this text.",
+        },
+        {
+          suspect_id: "02eeb366-2d96-ad76-4349-8dacfe4b459",
+          status: "uncertain",
+          correction_ids: [],
+          reason: "The image shows this text.",
+        },
+      ],
+    });
+  });
+  try {
+    await new ArchivePageProofreadService(
+      runtime,
+      fakePages(f.pages),
+      memoryTextCache().cache,
+    ).build(f.source, arranged(f.source), f.pages);
+    expect(replies[0]).toMatchObject({
+      accepted: false,
+      issues: [{ code: "tool-input", id: "dispositions[1].suspect_id" }],
+      hint: expect.stringContaining("names a batch item"),
+    });
+  } finally {
+    await runtime.close();
+  }
+});
+it("caps an oversized window and counts only consecutive identical rejections", async () => {
+  // Real pages: models sent limit 25-200 as characters, and two rejections
+  // separated by accepted calls ended a page as validation-repeated.
+  const f = await archiveTextFixture([{ text: "alpha beta." }]);
+  const bad = () =>
+    modelTool("put_dispositions", {
+      dispositions: [
+        {
+          suspect_id: "not-an-id",
+          status: "uncertain",
+          correction_ids: [],
+          reason: "The image shows this text.",
+        },
+      ],
+    });
+  const script = [
+    () =>
+      modelTool("read_blocks", {
+        page_index: 0,
+        index: 0,
+        offset: 0,
+        limit: 200,
+      }),
+    () => modelTool("view_page", { page_index: 0, region: null }),
+    bad,
+    () =>
+      modelTool("draft_status", { kind: "corrections", offset: 0, limit: 50 }),
+    bad,
+    () =>
+      modelTool("draft_status", { kind: "dispositions", offset: 0, limit: 50 }),
+    bad,
+    () => modelTool("submit_page", { no_change: true }),
+  ];
+  let calls = 0;
+  const runtime = fakeTextRuntime(async () => {
+    return script[calls++]?.() ?? modelTool("submit_page", { no_change: true });
+  });
+  try {
+    const result = await new ArchivePageProofreadService(
+      runtime,
+      fakePages(f.pages),
+      memoryTextCache().cache,
+    ).build(f.source, arranged(f.source), f.pages);
+    expect(result.pages[0]!.stop).toBeNull();
+    expect(result.complete).toBe(true);
+  } finally {
+    await runtime.close();
+  }
+});
 it.each([
   ["distinct spans keep the page going", true],
   ["the same search repeated stops it", false],

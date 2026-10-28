@@ -37,6 +37,7 @@ import {
   textReply,
   toolRecord,
   toolCount,
+  toolLimit,
   boundedTextWindow,
   boundedItems,
   TextReadCoverage,
@@ -51,6 +52,13 @@ const str = { type: "string" },
     description: "A short reason: one line, at most 120 characters.",
   },
   integer = { type: "integer", minimum: 0 },
+  windowLimit = {
+    type: "integer",
+    minimum: 1,
+    maximum: 20,
+    description:
+      "Number of items per window, not characters; a larger value returns 20.",
+  },
   strings = { type: "array", items: str, maxItems: 20 };
 const target = {
   anyOf: [
@@ -256,7 +264,7 @@ export class ArchiveArrangementService {
         "Inspect bounded host-held operation drafts after compaction. This does not read source evidence.",
         {
           offset: integer,
-          limit: { type: "integer", minimum: 1, maximum: 20 },
+          limit: windowLimit,
         },
       ),
       toolDeclaration(
@@ -270,7 +278,7 @@ export class ArchiveArrangementService {
         {
           index: integer,
           offset: integer,
-          limit: { type: "integer", minimum: 1, maximum: 20 },
+          limit: windowLimit,
         },
       ),
       toolDeclaration(
@@ -323,7 +331,7 @@ export class ArchiveArrangementService {
         "Validate complete destinations and return bounded paragraph-break candidates. Review hash changes when the draft changes.",
         {
           offset: integer,
-          limit: { type: "integer", minimum: 1, maximum: 20 },
+          limit: windowLimit,
         },
       ),
       toolDeclaration(
@@ -376,7 +384,7 @@ export class ArchiveArrangementService {
                 })),
                 toolCount(r.index, source.blocks.length),
                 toolCount(r.offset),
-                toolCount(r.limit, 20),
+                toolLimit(r.limit),
                 (id, start, end) => {
                   if (read.add(id, start, end))
                     progress.progress("read-block", [id, start, end]);
@@ -413,7 +421,7 @@ export class ArchiveArrangementService {
               operations: boundedItems(
                 [...ops].map(([key, operation]) => ({ key, operation })),
                 toolCount(r.offset),
-                toolCount(r.limit, 20),
+                toolLimit(r.limit),
               ),
               decision_count: decisions.size,
               read_block_count: source.blocks.filter((b) =>
@@ -568,7 +576,7 @@ export class ArchiveArrangementService {
             const r = toolRecord(args, ["offset", "limit"]),
               v = review(),
               offset = toolCount(r.offset),
-              limit = toolCount(r.limit, 20);
+              limit = toolLimit(r.limit);
             if (limit < 1 || offset > v.candidates.length)
               throw new ArchiveTextError("tool-input");
             return textReply({

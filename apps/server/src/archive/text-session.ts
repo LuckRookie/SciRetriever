@@ -130,6 +130,11 @@ export class TextProgress {
   finish() {
     this.settle();
   }
+  /** A call the host accepted ends any run of identical rejections. */
+  accepted() {
+    this.consecutive = 0;
+    this.fingerprint = null;
+  }
   validation(issues: readonly { code: string; id: string | null }[]) {
     const normalized = [
       ...new Set(issues.map((x) => x.code + ":" + (x.id ?? ""))),
@@ -315,6 +320,14 @@ export function toolCount(
       { code: "tool-input", id: null },
     ]);
   return Number(value);
+}
+/** A window size: models read "limit" as characters, so a larger count returns the maximum. */
+export function toolLimit(value: unknown, max = 20): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1)
+    throw new ArchiveTextError("tool-input", [
+      { code: "tool-input", id: null },
+    ]);
+  return Math.min(Number(value), max);
 }
 /** Monotonic character coverage; overlapping/repeated windows are not new evidence. */
 export class TextReadCoverage {
@@ -633,6 +646,7 @@ export async function runArchiveTextSession<T>(
                 call.arguments,
                 context,
               );
+              input.progress.accepted();
               if (
                 compactAfterTurn &&
                 !input.accepted() &&
@@ -692,7 +706,11 @@ export async function runArchiveTextSession<T>(
                   issue_count: issues.length,
                   ...(schema
                     ? {
-                        hint: `Arguments must match the ${call.name} parameter schema exactly: only the listed keys, integers within their minimum and maximum.`,
+                        hint: issues.some(
+                          (i) => i.code === "tool-input" && i.id !== null,
+                        )
+                          ? "Each listed id names a batch item and the field that failed: copy IDs exactly as the host returned them, keep a reason to one line of at most 120 characters, and make original equal the leaf text at [start,end). Nothing in this batch was saved; resend it with those items fixed."
+                          : `Arguments must match the ${call.name} parameter schema exactly: only the listed keys, integers within their minimum and maximum.`,
                         expected_arguments: schema,
                       }
                     : issues.some(

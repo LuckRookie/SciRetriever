@@ -206,13 +206,14 @@ it("stops the third repeated validation problem set without mislabelling the tas
 });
 it("returns the declared schema with an out-of-range argument so a real model can correct it", async () => {
   // A real model read limit as characters (8000); a bare "tool-input" left it guessing.
+  // Larger counts are now capped, so a zero count stands in for the out-of-range value.
   const f = await archiveTextFixture([{ text: "Untouched." }]);
   let calls = 0,
     rejection: Record<string, unknown> | null = null;
   const runtime = fakeTextRuntime(async (request) => {
     calls++;
     if (calls === 1)
-      return modelTool("read_blocks", { index: 0, offset: 0, limit: 8000 });
+      return modelTool("read_blocks", { index: 0, offset: 0, limit: 0 });
     rejection ??= toolJson(request);
     return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
   });
@@ -229,7 +230,9 @@ it("returns the declared schema with an out-of-range argument so a real model ca
         properties: {
           limit: {
             type: "integer",
-            description: "Allowed value from 1 to 20.",
+            description: expect.stringMatching(
+              /not characters.*\(value from 1 to 20\)$/u,
+            ),
           },
         },
       },

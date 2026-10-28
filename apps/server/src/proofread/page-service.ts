@@ -1,4 +1,6 @@
 import {
+  ContractValidationError,
+  parseAssetId,
   parsePageRegion,
   parseCorrectOperation,
   parseSuspectDisposition,
@@ -43,6 +45,7 @@ import {
   textReply,
   toolRecord,
   toolCount,
+  toolLimit,
   boundedTextWindow,
   boundedItems,
   TextReadCoverage,
@@ -62,6 +65,13 @@ export interface PageProofreadResult {
 }
 const str = { type: "string" },
   integer = { type: "integer", minimum: 0 },
+  windowLimit = {
+    type: "integer",
+    minimum: 1,
+    maximum: 20,
+    description:
+      "Number of items per window, not characters; a larger value returns 20.",
+  },
   idList = { type: "array", items: str, maxItems: 20 },
   reasonText = {
     type: "string",
@@ -88,6 +98,61 @@ const dispositionSchema = objectSchema({
   },
   reason: reasonText,
 });
+/** The first field of a batch item that breaks a rule the schema cannot state. */
+function itemField(item: unknown): string {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return "";
+  const r = item as Record<string, unknown>;
+  const valid = (parse: () => unknown) => {
+    try {
+      parse();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (const key of ["leaf_id", "suspect_id"])
+    if (key in r && !valid(() => parseAssetId(r[key]))) return `.${key}`;
+  if (
+    Array.isArray(r.correction_ids) &&
+    !r.correction_ids.every((id) => valid(() => parseAssetId(id)))
+  )
+    return ".correction_ids";
+  if (
+    typeof r.reason === "string" &&
+    (!r.reason.trim() || /[\r\n]/u.test(r.reason) || [...r.reason].length > 120)
+  )
+    return ".reason";
+  if (
+    typeof r.original === "string" &&
+    typeof r.start === "number" &&
+    typeof r.end === "number" &&
+    (r.end - r.start !== [...r.original].length || r.original === r.replacement)
+  )
+    return ".original";
+  return "";
+}
+/** Parse a batch item by item so a rejection names each item to fix. */
+function batchItems<T>(
+  field: string,
+  rows: readonly unknown[],
+  parse: (row: unknown) => T,
+): T[] {
+  const issues: { code: string; id: string }[] = [];
+  const parsed = rows.flatMap((row, i) => {
+    try {
+      return [parse(row)];
+    } catch (error) {
+      if (!(error instanceof ContractValidationError)) throw error;
+      issues.push({
+        code: "tool-input",
+        id: `${field}[${i}]${itemField(row)}`,
+      });
+      return [];
+    }
+  });
+  if (issues.length) throw new ArchiveTextError("tool-input", issues);
+  return parsed;
+}
 export function pageProofreadInputKey(
   source: ArchiveTextSource,
   leaves: readonly ArrangementLeaf[],
@@ -451,7 +516,7 @@ export class ArchivePageProofreadService {
           {
             kind: { type: "string", enum: ["corrections", "dispositions"] },
             offset: integer,
-            limit: { type: "integer", minimum: 1, maximum: 20 },
+            limit: windowLimit,
           },
         ),
         toolDeclaration(
@@ -461,7 +526,7 @@ export class ArchivePageProofreadService {
             page_index: integer,
             index: integer,
             offset: integer,
-            limit: { type: "integer", minimum: 1, maximum: 20 },
+            limit: windowLimit,
           },
         ),
         toolDeclaration(
@@ -582,7 +647,7 @@ export class ArchivePageProofreadService {
                   })),
                   toolCount(r.index, retained.length),
                   toolCount(r.offset),
-                  toolCount(r.limit, 20),
+                  toolLimit(r.limit),
                   (id, start, end) => {
                     const changed = readRanges.add(id, start, end);
                     if (
@@ -626,7 +691,7 @@ export class ArchivePageProofreadService {
                 draft: boundedItems(
                   rows,
                   toolCount(r.offset),
-                  toolCount(r.limit, 20),
+                  toolLimit(r.limit),
                 ),
                 read_leaf_count: read.size,
                 leaf_count: retained.length,
@@ -729,8 +794,13 @@ export class ArchivePageProofreadService {
               const r = toolRecord(args, ["corrections"]);
               if (!Array.isArray(r.corrections) || r.corrections.length > 20)
                 throw new ArchiveTextError("tool-input");
+              const batch = batchItems(
+                "corrections",
+                r.corrections,
+                parseCorrectOperation,
+              );
               const draft = new Map(corrections);
-              for (const c of r.corrections.map(parseCorrectOperation)) {
+              for (const c of batch) {
                 if (lockedIds.has(c.leaf_id))
                   throw new ArchiveTextError("manual-conflict");
                 draft.set(correctRecordId(c, key), c);
@@ -744,7 +814,7 @@ export class ArchivePageProofreadService {
               corrections.clear();
               for (const [id, c] of draft) corrections.set(id, c);
               refreshSuspects();
-              for (const c of r.corrections.map(parseCorrectOperation))
+              for (const c of batch)
                 progress.progress("corrections", {
                   ...c,
                   reason: "transcription",
@@ -777,7 +847,11 @@ export class ArchivePageProofreadService {
               const r = toolRecord(args, ["dispositions"]);
               if (!Array.isArray(r.dispositions) || r.dispositions.length > 20)
                 throw new ArchiveTextError("tool-input");
-              const parsed = r.dispositions.map(parseSuspectDisposition);
+              const parsed = batchItems(
+                "dispositions",
+                r.dispositions,
+                parseSuspectDisposition,
+              );
               // Name each rejected item, or the model resends the same batch unchanged.
               const invalid = parsed.filter(
                 (d) =>
