@@ -995,6 +995,17 @@ it("compares retained text with the text layer after removing notation differenc
       "Over 20 syntheses of sparteine.$^{4}$ Its antiarrhythmic use $(\\pm)$-sparteine and $\\eta^2$ binding were suppressed",
     ),
   );
+  // A real Wiley page: 27 suspects were a number glued to its unit, and the
+  // model spent the page inserting thin spaces.
+  expect(
+    comparableTokens(
+      "$200\\mathrm{mL}$ water, $1\\,\\mathrm{g}$ PVP and $25~\\mathrm{mL}$",
+    ),
+  ).toEqual(comparableTokens("200 mL water, 1 g PVP and 25 mL"));
+  // Two units fused into one name still print differently.
+  expect(comparableTokens("$\\mathrm{mgcm}^{-2}$")).not.toEqual(
+    comparableTokens("mg cm-2"),
+  );
   // A real character difference survives.
   expect(comparableTokens("measured 4.2 eV")).not.toEqual(
     comparableTokens("measured 4.7 eV"),

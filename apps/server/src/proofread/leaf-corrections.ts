@@ -20,7 +20,7 @@ import {
   textId,
 } from "../archive/text-source.js";
 export const LEAF_CORRECTION_METHOD = "leaf-correct-codepoint-v1";
-export const RETAINED_SUSPECT_METHOD = "retained-page-comparable-v3";
+export const RETAINED_SUSPECT_METHOD = "retained-page-comparable-v4";
 function subtract(left: readonly string[], right: readonly string[]) {
   const counts = new Map<string, number>();
   for (const t of right) counts.set(t, (counts.get(t) ?? 0) + 1);

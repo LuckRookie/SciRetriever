@@ -71,17 +71,19 @@ const LATEX_SYMBOLS: Readonly<Record<string, string>> = {
 /**
  * Retained-page suspects compare a parser's text with a PDF text layer. Both describe the
  * same printed characters in different notations, so notation differences are removed
- * first: hyphenation, LaTeX commands, script markers and citation numbers glued to a
+ * first: hyphenation, LaTeX font and spacing commands, script markers and citation numbers glued to a
  * period. What remains is a difference in the characters themselves.
  */
 export function comparableTokens(text: string): string[] {
   const plain = normalizeForComparison(
     text.replace(/(\p{L})[-\u2010\u00ad][ \t]*\r?\n[ \t]*(?=\p{Ll})/gu, "$1"),
   )
+    // A font command bounds a word: "200\\mathrm{mL}" prints as "200 mL", not "200mL".
     .replace(
       /\\(?:mathrm|mathbf|mathit|mathsf|text|textrm|textit|operatorname)\s*\{([^{}]*)\}/gu,
-      "$1",
+      " $1 ",
     )
+    .replace(/\\[,;:! ]|~/gu, " ")
     .replace(
       /\\([A-Za-z]+)/gu,
       (_m, name: string) => LATEX_SYMBOLS[name] ?? " ",
