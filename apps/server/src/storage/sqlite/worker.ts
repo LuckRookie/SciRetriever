@@ -91,6 +91,9 @@ import {
   SCHEMA_VERSION,
 } from "./schema.js";
 
+import { CatalogCorruptionError } from "./errors.js";
+export { CatalogCorruptionError } from "./errors.js";
+
 export class SqliteWorkerError extends Error {
   readonly code = "sqlite-worker" as const;
   constructor() {
@@ -355,6 +358,7 @@ export type SqliteCommand =
         | "finishIncremental"
         | "verificationEntries"
         | "verify"
+        | "verifyCatalog"
         | "recordVerification";
       readonly args: readonly unknown[];
     }
@@ -1063,6 +1067,8 @@ interface Reply {
   readonly ok: boolean;
   readonly cancelled?: boolean;
   readonly value?: unknown;
+  readonly code?: string;
+  readonly sqlite_code?: "SQLITE_CORRUPT" | "SQLITE_NOTADB" | null;
 }
 
 function sqliteWorkerRuntimeEntry(): {
@@ -1153,7 +1159,9 @@ export class SqliteWorker {
         pending.reject(
           reply.cancelled
             ? new DOMException("Library query cancelled", "AbortError")
-            : new SqliteWorkerError(),
+            : reply.code === "catalog-corrupt"
+              ? new CatalogCorruptionError(reply.sqlite_code ?? null)
+              : new SqliteWorkerError(),
         );
     });
     this.worker.on("error", () => {
@@ -1317,6 +1325,8 @@ export class SqliteWorker {
         operation,
         args,
       });
+      if (!reply.ok && reply.code === "catalog-corrupt")
+        throw new CatalogCorruptionError(null);
       if (!reply.ok)
         throw new RetrievalStorageError(
           reply.code === "index-stale" ||

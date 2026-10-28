@@ -7,6 +7,12 @@ const { SCHEMA_VERSION }: typeof Schema = await import(
     import.meta.url,
   ).href
 );
+const { CatalogCorruptionError, catalogCorruption } = await import(
+  new URL(
+    import.meta.url.endsWith(".ts") ? "./errors.ts" : "./errors.js",
+    import.meta.url,
+  ).href
+);
 
 export interface RetrievalSchemaConfig {
   readonly schema_version: typeof SCHEMA_VERSION;
@@ -798,6 +804,22 @@ export class RetrievalStorageEngine {
         "SELECT e.kind,e.literature_id,e.meta_literature_id,e.metadata_revision,e.metadata_sha256,e.document_version_id,e.representation_sha256,e.source_asset_id,e.source_asset_sha256,e.unit_start_utf8,e.unit_end_utf8,e.unit_sha256,e.section_id,e.unit_ordinal,e.is_default,f.title,f.body FROM retrieval_entries e LEFT JOIN retrieval_fts f ON f.rowid=e.entry_id WHERE e.generation_id=? AND e.kind IN ('metadata','document') AND e.literature_id=? ORDER BY e.kind,e.document_version_id,e.unit_ordinal,e.entry_id",
       )
       .all(generation, id) as unknown as RetrievalEntry[];
+  }
+  /** Explicit catalog maintenance, including an empty/unbuilt retrieval projection. */
+  verifyCatalog(): RetrievalCatalogInspection {
+    this.refreshReader();
+    try {
+      return inspectCatalogWithRetrieval(this.db, this.config);
+    } catch (error) {
+      const corruption = catalogCorruption(error);
+      if (corruption) throw corruption;
+      if (
+        error instanceof RetrievalStorageError &&
+        error.code === "index-corrupt"
+      )
+        throw new CatalogCorruptionError(null, { cause: error });
+      throw error;
+    }
   }
   /** Explicit maintenance only: this is intentionally not called by active/search. */
   verify(): { inspection: RetrievalCatalogInspection; proof: string } {

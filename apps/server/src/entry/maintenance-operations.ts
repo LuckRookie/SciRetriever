@@ -118,6 +118,7 @@ export const MAINTENANCE_OPERATIONS = [
   "resolve-intervention",
   "rebuild-index",
   "verify-index",
+  "verify-catalog",
   ...EXTRACTION_OPERATIONS.map((name) => `extraction-${name}` as const),
 ] as const;
 export type MaintenanceOperation = (typeof MAINTENANCE_OPERATIONS)[number];
@@ -333,6 +334,12 @@ async function performMaintenance(
     case "verify-index": {
       operationRecord(input, []);
       const verify = app.maintenance?.verifyIndex;
+      if (!verify) throw new ProductOperationError("maintenance-unavailable");
+      return verify(signal);
+    }
+    case "verify-catalog": {
+      operationRecord(input, []);
+      const verify = app.maintenance?.verifyCatalog;
       if (!verify) throw new ProductOperationError("maintenance-unavailable");
       return verify(signal);
     }

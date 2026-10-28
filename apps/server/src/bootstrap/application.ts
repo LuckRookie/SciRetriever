@@ -170,6 +170,7 @@ import {
 import { createBrowserNetworkAdmission } from "../network/browser-admission.js";
 import type { BrowserNetworkProxy } from "../network/browser-proxy.js";
 import { NetworkBudgetCoordinator } from "../network/budget.js";
+import { throwCatalogCorruption } from "../storage/sqlite/errors.js";
 import type { ConnectionDependencies } from "../network/connection.js";
 import { createAgentTransport, NetworkHttpError } from "../network/http.js";
 import type { Resolver } from "../network/policy.js";
@@ -247,6 +248,7 @@ export interface Application {
     readonly documentDefault: SqliteWorker["documentDefault"];
     readonly rebuildIndex: RetrievalIndexService["build"];
     readonly verifyIndex: RetrievalIndexService["verify"];
+    readonly verifyCatalog: RetrievalStorageClient["verifyCatalog"];
     readonly extraction: ExtractionDeliveryService;
   } | null;
   readonly documentProcessing: DocumentProcessingService;
@@ -1740,9 +1742,19 @@ async function createApplicationOwned(
               documentDefault: database.documentDefault.bind(database),
               rebuildIndex: indexRefresh.rebuild.bind(indexRefresh),
               verifyIndex: retrievalIndex.verify.bind(retrievalIndex),
+              verifyCatalog: (signal) =>
+                new RetrievalStorageClient(indexDatabase!).verifyCatalog(
+                  signal,
+                ),
               extraction: extractionDelivery,
             },
-            ["ingestPdf", "parseDocuments", "rebuildIndex", "verifyIndex"],
+            [
+              "ingestPdf",
+              "parseDocuments",
+              "rebuildIndex",
+              "verifyIndex",
+              "verifyCatalog",
+            ],
             admission,
           )
         : null,
@@ -1962,6 +1974,7 @@ export async function createQueryApplication(
     preflight = await database.queryPreflight();
   } catch (error) {
     await closeAfterStartupFailure(error);
+    throwCatalogCorruption(error);
     return unavailable();
   }
   if (preflight.status === "not-initialized") {
@@ -2024,8 +2037,8 @@ export async function createQueryApplication(
       documentRead,
       literature,
     );
-    // Retrieval performs synchronous index integrity inspection. Isolate its
-    // reader from ordinary library/material reads; share one bounded worker
+    // Isolate retrieval candidate work from ordinary library/material reads;
+    // share one bounded worker
     // between both retrieval services, never one worker per request.
     const retrievalStorage = new RetrievalStorageClient(
       (retrievalDatabase = new SqliteWorker(catalogPath, undefined, {

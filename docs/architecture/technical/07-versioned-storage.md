@@ -406,7 +406,15 @@ Literature 拥有元数据与引用；Parsing 拥有原始结果；Proofread 拥
 
 ## 5. 存储完整性验证
 
-- schema 指纹、完整性和外键检查，以及未知 DDL 拒绝；
+普通打开只核对当前 schema identity/fingerprint、两个执行层 identity，以及一次 `sqlite_master` 清单中的必需表、索引、触发器和精确 DDL；拒绝未知对象和不支持的布局。只读源读取保留可重建检索投影的隔离口径。检查不读取业务表数据，不执行逐表或全库 integrity_check/foreign_key_check，不随文献条数增长。布局证明按 SQLite schema_version 与文件 inode 复用，普通外部提交后的重连不升级为健康扫描。`ready` 只证明布局可读，不是全库健康证明。
+
+`maintenance verify-catalog` 显式核验 SQLite 数据、外键、当前布局及已有检索计数/哈希证书；HTTP 为 `POST /api/v1/maintenance/verify-catalog`，使用 protocol_version=1 封套和 request `{kind:"verify"}`；MCP 为 `verify_catalog`，参数 `{}`。三者使用同一维护口径，不要求已建立全文索引，不修复、不读模型或 Provider。耗时检查在独立检索 worker 的固定读取快照中执行，不占用普通库查询 worker 或 catalog 写入 admission。来源正文与索引文字的逐条核验另由[检索技术篇](06-retrieval-context.md#49-材料-context-的实现边界)的 verify-index 提供。
+
+源库实际读取/写入时报告 SQLITE_CORRUPT 或 SQLITE_NOTADB，边界返回 `catalog-corrupt`，附 `maintenance_hint="verify-catalog"` 和技术详情 sqlite_code；不转成 not-initialized 或吞为通用 unavailable。可重建检索投影继续使用检索合同的 index-corrupt 与重建提示。布局正确而数据页已损坏的库可以先通过轻量打开，在访问损坏页或显式核验时失败。只有文件不存在或真正空库属于未初始化。备份 `backupExecution`、恢复 `restoreCheck` 及显式 schema 转换继续保留完整检查；普通打开不会代替它们。
+
+自动回归覆盖：
+
+- 轻量打开的指纹、执行层身份和未知/缺失 DDL 拒绝；显式完整性与外键检查；
 - 来源 observation、稳定身份、原始 PDF 与资源闭包在失败和重开后保留；
 - 不可变字节发布与 SQL CAS，取消、并发和索引失败不会丢失有效事实；
 - 字段/区块/标签锁定，版本事件和快照过时的事务一致性；

@@ -17,6 +17,8 @@ import {
   schemaTargetPath,
 } from "./schema-path.js";
 import { SCHEMA_FINGERPRINT, SCHEMA_VERSION } from "./schema.js";
+import { readCatalogIdentity, CatalogLayoutError } from "./catalog-identity.js";
+import { throwCatalogCorruption } from "./errors.js";
 export { CatalogSchemaError } from "./schema-path.js";
 
 export interface CatalogSchemaInspection {
@@ -48,38 +50,26 @@ export async function inspectCatalogSchema(
     };
   const db = new DatabaseSync(path, { readOnly: true });
   try {
-    const tables = db
-      .prepare("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
-      .all();
-    if (!tables.length)
+    db.exec("PRAGMA query_only=ON");
+    const result = readCatalogIdentity(db, CURRENT_CATALOG_CONFIG);
+    if (!result)
       return {
         ...target,
         status: "not-initialized",
         schema_version: null,
         schema_fingerprint: null,
       };
-    const identity = db
-      .prepare(
-        "SELECT product,schema_version,schema_fingerprint FROM schema_identity WHERE singleton=1",
-      )
-      .get();
-    if (
-      identity?.product !== "sciretriever" ||
-      identity.schema_version !== SCHEMA_VERSION ||
-      identity.schema_fingerprint !== SCHEMA_FINGERPRINT
-    )
-      throw new CatalogSchemaError("catalog-layout-not-current");
-    prepareRetrievalVocab(db);
-    db.exec("PRAGMA query_only=ON");
-    const result = inspectCatalogWithRetrieval(db, CURRENT_CATALOG_CONFIG);
     return {
       ...target,
       status: "ready",
-      schema_version: result.schema_version,
-      schema_fingerprint: result.schema_fingerprint,
+      schema_version: Number(result.schema_version),
+      schema_fingerprint: String(result.schema_fingerprint),
     };
   } catch (error) {
+    throwCatalogCorruption(error);
     if (error instanceof CatalogSchemaError) throw error;
+    if (error instanceof CatalogLayoutError)
+      throw new CatalogSchemaError(error.reason, { cause: error });
     throw new CatalogSchemaError("catalog-integrity-refused", { cause: error });
   } finally {
     db.close();

@@ -20,7 +20,7 @@
 
 表、索引、视图与事务内版本事件的触发器统一维护在当前 `schema.ts`；真实数据库不进入本目录，旧库不在启动时自动转换。
 
-普通写入 worker 的文档 schema 完整健康检查（逐表 `integrity_check` 与 `foreign_key_check`）在首次使用时运行，之后按 `schema_version`、catalog 文件 inode 与合同版本复用：DDL 或换成另一个 catalog 文件会使证明失效；普通数据提交（包括其它连接的提交和随之重开连接）不再重跑。Owner 2026-10-23 决定：大库上这项检查需数秒，原规则使每次写入（含阅读记录）后的下一次读取停顿；外部连接写入的数据损坏改为在下次启动时发现。操作仍解析所读事实，文件字节仍由 FileStore 校验；这个内存证明不写入 catalog，也不能替代 operator 的完整检查。
+`catalog-identity.ts` 用一次 sqlite_master 清单和单例身份核对当前布局，普通写入/只读 worker 与 Web 启动门共享；打开不执行完整健康扫描。布局证明按 schema_version、文件 inode 和合同版本复用。`errors.ts` 保留真实 SQLite 损坏码，实际操作遇到损坏时提示显式 verify-catalog；完整核验由 retrieval-engine 的维护方法执行，不在普通读取前运行。FileStore 继续校验实际读取的文件字节。
 
 [上级目录](../README.md)
 
@@ -46,7 +46,7 @@
 
 `literature_intake` 是最早关联元数据观测时间的查询投影，保留 `min(julianday(observed_at))` 的 UTC 毫秒语义；无观测时为 null。观测关系、观测的 provenance 和 provenance 时间发生增删改时，在原事务中重新计算受影响文献；索引按时间降序、文献 ID 升序排列。`library-page.ts` 的入库排序直接使用索引，null 在末尾，其它排序继续保持原游标语义。已有 catalog 必须在停服后的副本上显式追加结构并执行 `LIBRARY_INTAKE_BACKFILL_SQL`，启动和查询不自动迁移。
 
-文献库计数和分页的取消从 HTTP/Entry 经查询服务传至 worker。每次可取消查询带一个共享原子标记，worker 在取出排队请求、状态计算阶段之间、SQL 扫描行及结果装载之间检查；取消时回滚只读事务，不返回部分结果。调用方立即收到 AbortError，worker 随后确认取消并继续处理后续请求。没有终止共享 worker，也不取消任何写事务；SQLite 无检查点的单条内部操作及启动完整健康检查仍需运行到下一个检查点。这是协作式取消，不承诺任意指令处立即中断。
+文献库计数和分页的取消从 HTTP/Entry 经查询服务传至 worker。每次可取消查询带一个共享原子标记，worker 在取出排队请求、状态计算阶段之间、SQL 扫描行及结果装载之间检查；取消时回滚只读事务，不返回部分结果。调用方立即收到 AbortError，worker 随后确认取消并继续处理后续请求。没有终止共享 worker，也不取消任何写事务；SQLite 无检查点的单条内部操作仍需运行到下一个检查点。这是协作式取消，不承诺任意指令处立即中断。
 
 当前 schema 12 接纳 arrange/render，并保留 document/structure 历史行。`archive-schema-migration.ts` 只提供显式离线 11 → 12 校验、事务迁移和行数/外键核对；catalog open 不调用它。
 

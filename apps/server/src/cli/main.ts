@@ -8,6 +8,7 @@ import {
   withoutRestartAdmission,
 } from "../application/restart-admission.js";
 import { WebSupervisorError } from "./web-supervisor.js";
+import { catalogCorruption } from "../storage/sqlite/errors.js";
 import {
   sourceProbes,
   closeSourceProbes,
@@ -195,6 +196,7 @@ function usage(options: CliOptions): CliResult {
     "  storage schema-inspect|schema-init --catalog PATH\n" +
     "  maintenance rebuild-index\n" +
     "  maintenance verify-index\n" +
+    "  maintenance verify-catalog\n" +
     "  maintenance index-status\n" +
     "  maintenance publisher-names (--all | --literature-id ID... | --query TEXT) [--ai] [--scan-limit N] [--cursor CURSOR] [--max-ai-requests N] [--output PATH]\n" +
     "  maintenance publisher-names-accept --report FILE|- --name NAME [--name NAME...]\n";
@@ -1303,7 +1305,7 @@ async function execute(
   }
   if (
     group === "maintenance" &&
-    ["rebuild-index", "verify-index"].includes(command ?? "")
+    ["rebuild-index", "verify-index", "verify-catalog"].includes(command ?? "")
   ) {
     if (args.length !== 2) invalidInput();
     return output(
@@ -1312,7 +1314,9 @@ async function execute(
           throw new Error("maintenance runtime is unavailable");
         return command === "verify-index"
           ? app.maintenance.verifyIndex(options.signal)
-          : app.maintenance.rebuildIndex(options.signal);
+          : command === "verify-catalog"
+            ? app.maintenance.verifyCatalog(options.signal)
+            : app.maintenance.rebuildIndex(options.signal);
       }),
       options,
     );
@@ -1980,6 +1984,13 @@ export async function runCli(
       ),
     );
   } catch (error) {
+    const corruption = catalogCorruption(error);
+    if (corruption) {
+      effective.stderr?.(
+        `${JSON.stringify({ code: corruption.code, maintenance_hint: corruption.maintenance_hint, technical_details: { sqlite_code: corruption.sqlite_code } })}\n`,
+      );
+      return { code: 3 };
+    }
     const interrupted =
       error instanceof Error &&
       (error.name === "AbortError" ||

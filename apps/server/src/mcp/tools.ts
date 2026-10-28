@@ -1178,6 +1178,12 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     false,
   ),
   tool(
+    "verify_catalog",
+    "Explicitly verify the complete SQLite catalog layout, integrity, foreign keys and stored retrieval certificates. Works without a built retrieval index. Does not repair or read artifact contents.",
+    object({}),
+    false,
+  ),
+  tool(
     "create_extraction",
     "Create a delivery operation from a previously prepared caller spec and fixed manifest. Does not perform automatic extraction.",
     object({ request: { type: "object" } }),

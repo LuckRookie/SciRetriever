@@ -413,7 +413,7 @@ interface QueryApplication {
 | 引用证据    | `query.referenceDetail(referenceId)`                      | ReferenceDetail          |
 | 已有文件    | `literatureArtifacts.withArtifact(ref, consume, options)` | 作用域内验证后的只读字节 |
 
-`ready` 表示受支持 v1/v2 schema 可被读取，不是全库健康认证。缺库/无 schema 返回 not-initialized，配置/存储/未知 schema 返回 unavailable；已打开库的索引或对象错误在实际读取时失败。存在未恢复的 Job、receipt 或回收票据不自动改变它们，也不阻止其它完整已提交资料读取。
+`ready` 表示当前受支持布局可被读取，不是全库健康认证。缺库/真正空库返回 not-initialized，配置或未知布局返回 unavailable；SQLite 报告的真实损坏按[存储完整性验证](07-versioned-storage.md#5-存储完整性验证)返回明确错误与完整检查提示。已打开库的索引或对象错误在实际读取时失败。存在未恢复的 Job、receipt 或回收票据不自动改变它们，也不阻止其它完整已提交资料读取。
 
 CLI `literature search/show/references/cited-by` 与 `export metadata/pdf/content` 使用此图。缺库时退出码 3、code=query-not-initialized，不再隐式建库；已初始化库上的原结果与导出格式保持。导出副本是用户明确请求的文件副作用，不是扩库。
 
@@ -528,7 +528,7 @@ Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要
 
 材料投影使用当前 schema 的 `retrieval_*` 表，保留元数据和全部已接纳固定文档版本，默认文档与显式历史版本仍分别筛选。没有新增表、schema 版本或自动迁移。索引是可重建投影，不成为正文或元数据的事实来源。
 
-**读取**：`active()` 只读单例指针和 ready generation 的标量计数；不逐项重数 entries/FTS。冷连接和外部 `data_version` 变化后的重连只核对 schema identity、固定数量的 retrieval DDL 与触发器、active 是否存在且 ready、已知损坏标记和 source revision。查询不运行 PRAGMA integrity_check/foreign_key_check、FTS integrity-check、整份哈希或来源指纹扫描。只读 worker 的 query preflight 保留固定布局与版本守卫，移除逐表健康扫描；普通写入 Application 的源库启动健康检查仍保留。`inspectCatalogSchema` 的 Web 启动门和显式 `storage retrieval-inspect` 仍属于独立完整检查，不由搜索触发。
+**读取**：`active()` 只读单例指针和 ready generation 的标量计数；不逐项重数 entries/FTS。冷连接和外部 `data_version` 变化后的重连只核对 schema identity、固定数量的 retrieval DDL 与触发器、active 是否存在且 ready、已知损坏标记和 source revision。查询不运行 PRAGMA integrity_check/foreign_key_check、FTS integrity-check、整份哈希或来源指纹扫描。普通 worker 和 Web 启动门同样只检查布局；完整目录库核验与真实损坏错误的规则归[存储技术篇](07-versioned-storage.md#5-存储完整性验证)。显式 `storage retrieval-inspect` 仍保留完整检查，不由搜索触发。
 
 源 revision 领先于 active 的 source_revision 时返回 index-stale；没有 active 则 index-unavailable。发生真实 SQLite/FTS 读取损坏或已经由显式维护确认损坏时，返回 index-corrupt，并带可选 `maintenance_hint="rebuild-index"`。查询不为了发现尚未触达的静默损坏而扫描全库；命中源仍按固定 ID/hash 与 artifact reader 核对。全库材料缺口只查询存在性，不把全部文献行加载到宿主。
 

@@ -178,6 +178,20 @@ const extractionModule = await import(
     import.meta.url,
   ).href
 );
+const { readCatalogIdentity } = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./catalog-identity.ts"
+      : "./catalog-identity.js",
+    import.meta.url,
+  ).href
+);
+const { catalogCorruption, throwCatalogCorruption } = await import(
+  new URL(
+    import.meta.url.endsWith(".ts") ? "./errors.ts" : "./errors.js",
+    import.meta.url,
+  ).href
+);
 let retrievalEngine: RetrievalStorageEngine | undefined;
 function getRetrievalEngine(): RetrievalStorageEngine {
   return (retrievalEngine ??= new retrievalModule.RetrievalStorageEngine(
@@ -230,12 +244,6 @@ function fail(): never {
 }
 let verifiedDocumentSchema: string | null = null;
 function validDocumentSchema(version: number): boolean {
-  // The full per-table integrity and foreign-key check runs once per writable
-  // worker start and again after any DDL (schema_version). Read-only workers
-  // only check schema layout. Ordinary commits do not
-  // repeat it: on a large catalog it takes seconds, and every write (even a
-  // reading record) would otherwise stall the next read. Data damage written
-  // by an outside connection is caught at the next start.
   const identity = JSON.stringify([
     version,
     db.prepare("PRAGMA schema_version").get().schema_version,
@@ -243,126 +251,37 @@ function validDocumentSchema(version: number): boolean {
   ]);
   if (verifiedDocumentSchema === identity) return true;
   verifiedDocumentSchema = null;
-  const valid = inspectDocumentSchema(version);
-  if (valid) verifiedDocumentSchema = identity;
-  return valid;
-}
-function inspectDocumentSchema(version: number): boolean {
   try {
-    const names = new Set<string>();
-    const manifest = version === SCHEMA_VERSION ? SCHEMA_MANIFEST : null;
-    if (!manifest) return false;
-    for (const sql of manifest) {
-      const name =
-        /^CREATE (?:UNIQUE )?(?:VIRTUAL )?(?:TABLE|INDEX|TRIGGER|VIEW) ([a-z_][a-z0-9_]*)/.exec(
-          sql,
-        )?.[1];
-      if (!name) return false;
-      names.add(name);
-      // These exact known objects belong to the derived Context projection.
-      // Its own inspector checks their DDL; source readers need only their
-      // names whitelisted so a missing/damaged projection index cannot hide
-      // otherwise valid Literature and Document facts.
-      if (
-        [
-          "processor_record_projection",
-          "processor_projection_state",
-          "processor_result_fts",
-          "processor_collection_fts",
-        ].includes(name)
-      )
-        continue;
-      if (
-        data.read_only &&
-        version === SCHEMA_VERSION &&
-        (name.startsWith("retrieval_") ||
-          [
-            "processor_record_projection",
-            "processor_projection_state",
-            "processor_result_fts",
-            "processor_collection_fts",
-          ].includes(name))
-      )
-        continue;
-      if (
-        db.prepare("SELECT sql FROM sqlite_master WHERE name=?").get(name)
-          ?.sql !== sql
-      )
-        return false;
-    }
-    for (const suffix of ["data", "idx", "content", "docsize", "config"])
-      names.add(`literature_search_fts_${suffix}`);
-    for (const suffix of ["data", "idx", "content", "docsize", "config"])
-      names.add(`tag_search_${suffix}`);
-    if (version === SCHEMA_VERSION)
-      for (const suffix of ["data", "idx", "content", "docsize", "config"])
-        names.add(`retrieval_fts_${suffix}`);
-    if (version === SCHEMA_VERSION)
-      for (const prefix of ["processor_result_fts", "processor_collection_fts"])
-        for (const suffix of ["data", "idx", "content", "docsize", "config"])
-          names.add(`${prefix}_${suffix}`);
     if (
-      db
-        .prepare(
-          "SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
-        )
-        .all()
-        .some((row: Dynamic) => !names.has(row.name))
+      version !== SCHEMA_VERSION ||
+      !readCatalogIdentity(
+        db,
+        layoutModule.CURRENT_CATALOG_CONFIG,
+        data.read_only,
+      )
     )
       return false;
-    if (!data.read_only && version === SCHEMA_VERSION) {
-      // Retrieval is a rebuildable projection. Its damaged FTS postings must
-      // not block Library and Document source reads needed to repair it.
-      for (const sql of manifest) {
-        const table = /^CREATE (?:VIRTUAL )?TABLE ([a-z_][a-z0-9_]*)/.exec(
-          sql,
-        )?.[1];
-        if (
-          !table ||
-          table.startsWith("retrieval_") ||
-          [
-            "processor_record_projection",
-            "processor_projection_state",
-            "processor_result_fts",
-            "processor_collection_fts",
-          ].includes(table)
-        )
-          continue;
-        if (
-          db.prepare(`PRAGMA integrity_check(${table})`).get()
-            ?.integrity_check !== "ok"
-        )
-          return false;
-        if (db.prepare(`PRAGMA foreign_key_check(${table})`).all().length)
-          return false;
-      }
-    } else if (!data.read_only) {
-      if (db.prepare("PRAGMA integrity_check").get()?.integrity_check !== "ok")
-        return false;
-      if (db.prepare("PRAGMA foreign_key_check").all().length !== 0)
-        return false;
-    }
-    const execution = db
-      .prepare(
-        "SELECT version,fingerprint FROM execution_schema_identity WHERE singleton=1",
-      )
-      .get();
-    const runtime = db
-      .prepare(
-        "SELECT version,fingerprint FROM execution_runtime_schema_identity WHERE singleton=1",
-      )
-      .get();
-    return (
-      execution?.version === EXECUTION_SCHEMA_VERSION &&
-      execution?.fingerprint === EXECUTION_SCHEMA_FINGERPRINT &&
-      runtime?.version === EXECUTION_RUNTIME_SCHEMA_VERSION &&
-      runtime?.fingerprint === EXECUTION_RUNTIME_SCHEMA_FINGERPRINT
-    );
-  } catch {
+    verifiedDocumentSchema = identity;
+    return true;
+  } catch (error) {
+    throwCatalogCorruption(error);
     return false;
   }
 }
 function initialize(): Dynamic {
+  try {
+    return initializeConnection();
+  } catch (error) {
+    try {
+      db?.close();
+    } finally {
+      db = undefined;
+      queryPreflight = null;
+    }
+    throw error;
+  }
+}
+function initializeConnection(): Dynamic {
   // Reconnecting after another connection's commit keeps the proof; the
   // identity below still changes on DDL or a different catalog file.
   db = data.read_only
@@ -424,45 +343,20 @@ function inspectQueryCatalog(): {
   readonly schema: Dynamic | null;
 } {
   try {
-    const identityTable = db
-      .prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_identity'",
-      )
-      .get();
-    if (!identityTable) {
-      const userTables = Number(
-        db
-          .prepare(
-            "SELECT count(*) AS count FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-          )
-          .get().count,
-      );
-      return {
-        status: userTables === 0 ? "not-initialized" : "unavailable",
-        schema: null,
-      };
-    }
-    const identity = db
-      .prepare(
-        "SELECT product,schema_version,schema_fingerprint FROM schema_identity WHERE singleton=1",
-      )
-      .get();
-    if (
-      !identity ||
-      identity.product !== "sciretriever" ||
-      !(
-        identity.schema_version === SCHEMA_VERSION &&
-        identity.schema_fingerprint === SCHEMA_FINGERPRINT
-      )
-    )
-      return { status: "unavailable", schema: null };
-    if (
-      identity.schema_version === SCHEMA_VERSION &&
-      !validDocumentSchema(identity.schema_version)
-    )
-      return { status: "unavailable", schema: null };
+    const identity = readCatalogIdentity(
+      db,
+      layoutModule.CURRENT_CATALOG_CONFIG,
+      true,
+    );
+    if (!identity) return { status: "not-initialized", schema: null };
+    verifiedDocumentSchema = JSON.stringify([
+      SCHEMA_VERSION,
+      db.prepare("PRAGMA schema_version").get().schema_version,
+      catalogIdentity(),
+    ]);
     return { status: "ready", schema: identity };
-  } catch {
+  } catch (error) {
+    throwCatalogCorruption(error);
     return { status: "unavailable", schema: null };
   }
 }
@@ -4572,6 +4466,7 @@ port.on("message", (message: WorkerMessage) => {
           "finishIncremental",
           "verificationEntries",
           "verify",
+          "verifyCatalog",
           "recordVerification",
           "markCorrupt",
         ];
@@ -4581,6 +4476,7 @@ port.on("message", (message: WorkerMessage) => {
           value: Reflect.apply(engine[operation], engine, args),
         };
       } catch (error) {
+        if (message.command.operation === "verifyCatalog") throw error;
         value = {
           ok: false,
           code:
@@ -4625,6 +4521,7 @@ port.on("message", (message: WorkerMessage) => {
             value: folderModule.runFolderStorage(db, message.command.value),
           };
         } catch (error) {
+          throwCatalogCorruption(error);
           value = {
             ok: false,
             code:
@@ -4647,6 +4544,7 @@ port.on("message", (message: WorkerMessage) => {
             ),
           };
         } catch (error) {
+          throwCatalogCorruption(error);
           value = {
             ok: false,
             code:
@@ -4669,6 +4567,7 @@ port.on("message", (message: WorkerMessage) => {
             ),
           };
         } catch (error) {
+          throwCatalogCorruption(error);
           value = {
             ok: false,
             code:
@@ -4689,6 +4588,7 @@ port.on("message", (message: WorkerMessage) => {
             ),
           };
         } catch (error) {
+          throwCatalogCorruption(error);
           const known = error instanceof Error && error.name === "TagError";
           value = {
             ok: false,
@@ -4708,6 +4608,7 @@ port.on("message", (message: WorkerMessage) => {
             ),
           };
         } catch (error) {
+          throwCatalogCorruption(error);
           value = {
             ok: false,
             code:
@@ -4730,7 +4631,8 @@ port.on("message", (message: WorkerMessage) => {
               message.command.args,
             ),
           };
-        } catch {
+        } catch (error) {
+          throwCatalogCorruption(error);
           value = { ok: false, code: "review-storage-failed" };
         }
         break;
@@ -4745,6 +4647,7 @@ port.on("message", (message: WorkerMessage) => {
             ),
           };
         } catch (error) {
+          throwCatalogCorruption(error);
           value = {
             ok: false,
             code:
@@ -4768,6 +4671,7 @@ port.on("message", (message: WorkerMessage) => {
             ),
           };
         } catch (error) {
+          throwCatalogCorruption(error);
           value = {
             ok: false,
             code:
@@ -4792,6 +4696,7 @@ port.on("message", (message: WorkerMessage) => {
             ),
           };
         } catch (error) {
+          throwCatalogCorruption(error);
           value = {
             ok: false,
             code:
@@ -4815,6 +4720,7 @@ port.on("message", (message: WorkerMessage) => {
             ),
           };
         } catch (error) {
+          throwCatalogCorruption(error);
           value = {
             ok: false,
             code:
@@ -5250,11 +5156,15 @@ port.on("message", (message: WorkerMessage) => {
     }
     queryCheckpoint();
     port.postMessage({ id: message.id, ok: true, value });
-  } catch {
+  } catch (error) {
+    const corruption = catalogCorruption(error);
     port.postMessage({
       id: message.id,
       ok: false,
       value: null,
+      ...(corruption
+        ? { code: corruption.code, sqlite_code: corruption.sqlite_code }
+        : {}),
       cancelled: !!cancellation && Atomics.load(cancellation, 0) !== 0,
     });
   } finally {

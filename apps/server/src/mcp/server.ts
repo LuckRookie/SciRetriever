@@ -1,3 +1,4 @@
+import { catalogCorruption } from "../storage/sqlite/errors.js";
 import { NetworkBudgetCoordinator } from "../network/budget.js";
 import { withoutRestartAdmission } from "../application/restart-admission.js";
 import {
@@ -260,6 +261,7 @@ export function createMcpServer(options: McpOptions = {}) {
       resolve_intervention: "resolve-intervention",
       rebuild_index: "rebuild-index",
       verify_index: "verify-index",
+      verify_catalog: "verify-catalog",
       create_extraction: "extraction-operation",
       read_extraction: "extraction-operation-read",
       submit_extraction: "extraction-submit",
@@ -512,6 +514,18 @@ export function createMcpServer(options: McpOptions = {}) {
           ),
         );
       } catch (error) {
+        const corruption = catalogCorruption(error);
+        if (corruption)
+          return {
+            isError: true,
+            ...result({
+              failure: {
+                code: corruption.code,
+                maintenance_hint: corruption.maintenance_hint,
+                technical_details: { sqlite_code: corruption.sqlite_code },
+              },
+            }),
+          };
         const code =
           error &&
           typeof error === "object" &&

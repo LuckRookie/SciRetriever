@@ -1,3 +1,4 @@
+import { catalogCorruption } from "../storage/sqlite/errors.js";
 import { ScreencastRelay } from "./screencast-relay.js";
 import {
   RestartAdmissionError,
@@ -2252,6 +2253,7 @@ export interface QueryOnlyHttpOptions {
     } | null>;
     readonly rebuildIndex?: (signal?: AbortSignal) => Promise<unknown>;
     readonly verifyIndex?: (signal?: AbortSignal) => Promise<unknown>;
+    readonly verifyCatalog?: (signal?: AbortSignal) => Promise<unknown>;
     readonly extraction?: ExtractionDeliveryService;
   };
   readonly assets?: ReadonlyMap<string, WorkbenchStaticAsset>;
@@ -2397,6 +2399,7 @@ function createQueryHttpHandler(
       url.pathname === "/api/v1/maintenance/document-default" ||
       url.pathname === "/api/v1/maintenance/rebuild-index" ||
       url.pathname === "/api/v1/maintenance/verify-index" ||
+      url.pathname === "/api/v1/maintenance/verify-catalog" ||
       url.pathname === "/api/v1/maintenance/processor-submit" ||
       extractionPaths.has(url.pathname) ||
       ARCHIVE_HTTP_WRITES.some(
@@ -2582,12 +2585,16 @@ function createQueryHttpHandler(
         [
           "/api/v1/maintenance/rebuild-index",
           "/api/v1/maintenance/verify-index",
+          "/api/v1/maintenance/verify-catalog",
         ].includes(url.pathname)
       ) {
+        const catalog = url.pathname.endsWith("/verify-catalog");
         const verifying = url.pathname.endsWith("/verify-index");
-        const rebuild = verifying
-          ? options.maintenance.verifyIndex
-          : options.maintenance.rebuildIndex;
+        const rebuild = catalog
+          ? options.maintenance.verifyCatalog
+          : verifying
+            ? options.maintenance.verifyIndex
+            : options.maintenance.rebuildIndex;
         if (!rebuild) {
           json(response, 503, {
             protocol_version: 1,
@@ -2602,7 +2609,7 @@ function createQueryHttpHandler(
         const intent = object(command.request, ["kind"]);
         if (
           command.protocol_version !== 1 ||
-          intent.kind !== (verifying ? "verify" : "rebuild")
+          intent.kind !== (verifying || catalog ? "verify" : "rebuild")
         )
           invalidInput();
         const stop = new AbortController();
@@ -2612,9 +2619,11 @@ function createQueryHttpHandler(
         streams.add(response);
         try {
           const receipt = await rebuild(stop.signal);
-          const result = verifying
-            ? parseIndexVerificationResult(receipt)
-            : parseRetrievalGenerationReceipt(receipt);
+          const result = catalog
+            ? receipt
+            : verifying
+              ? parseIndexVerificationResult(receipt)
+              : parseRetrievalGenerationReceipt(receipt);
           json(response, 200, { protocol_version: 1, result });
         } finally {
           streams.delete(response);
@@ -3040,6 +3049,18 @@ function createQueryHttpHandler(
       withActivity({ actor: authenticatedActor ?? maintenanceActor }, () =>
         handle(request, response, workbenchCsrf, authenticatedActor),
       ).catch((error: unknown) => {
+        const corruption = catalogCorruption(error);
+        if (corruption) {
+          if (response.headersSent || response.destroyed) response.destroy();
+          else
+            json(response, 503, {
+              protocol_version: 1,
+              code: corruption.code,
+              maintenance_hint: corruption.maintenance_hint,
+              technical_details: { sqlite_code: corruption.sqlite_code },
+            });
+          return;
+        }
         const route = (request.url ?? "").split("?")[0]!;
         if (
           ARCHIVE_HTTP_READS.some((n) => route === `/api/v1/query/${n}`) ||
@@ -3070,6 +3091,7 @@ function createQueryHttpHandler(
           request.url?.startsWith("/api/v1/maintenance/document-default") ||
           request.url?.startsWith("/api/v1/maintenance/rebuild-index") ||
           request.url?.startsWith("/api/v1/maintenance/verify-index") ||
+          request.url?.startsWith("/api/v1/maintenance/verify-catalog") ||
           request.url?.startsWith("/api/v1/maintenance/extraction-")
         ) {
           const failure = maintenanceError(error);
