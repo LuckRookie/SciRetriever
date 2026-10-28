@@ -1,6 +1,9 @@
 import { request as httpRequest } from "node:http";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { startWorkbenchHttp } from "../src/workbench/http.js";
 import { ProductionWorkbenchSession } from "../src/workbench/production-session.js";
 import {
@@ -13,7 +16,6 @@ import {
 } from "../src/workbench/machine-client.js";
 import { parseWebOptions } from "../src/cli/web-access.js";
 import { runCli } from "../src/cli/main.js";
-import * as shippedAssets from "../src/workbench/assets.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
 import { mkdtemp, mkdir, rm, readdir, readFile } from "node:fs/promises";
 import { initializeCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
@@ -134,75 +136,90 @@ async function client(origin: string) {
 }
 
 describe("one authenticated Web service", () => {
-  it.each(["generated", "configured"] as const)(
-    "starts the real CLI with %s credentials, no prompt, and all-interface listening",
-    async (credential) => {
-      const home = await mkdtemp(join(tmpdir(), "sciretriever-web-cli-"));
-      const stop = new AbortController();
-      let check: Promise<void> | undefined;
-      let output = "";
-      vi.stubEnv(
-        "SCIRETRIEVER_WEB_PASSWORD",
-        credential === "configured" ? PASSWORD : undefined,
+  describe("built CLI and its native worker", () => {
+    let runBuiltCli: typeof import("../dist/cli/main.js").runCli;
+    beforeAll(async () => {
+      const cwd = fileURLToPath(new URL("../../..", import.meta.url));
+      // Native fork resolves the worker beside the built supervisor; in-process
+      // Vitest asset mocks cannot supply resources to that child process.
+      await promisify(execFile)("pnpm", ["exec", "tsc", "-b"], {
+        cwd,
+        timeout: 90000,
+      });
+      await promisify(execFile)(
+        process.execPath,
+        ["scripts/build-workbench-assets.mjs"],
+        { cwd, timeout: 90000 },
       );
-      try {
-        vi.spyOn(shippedAssets, "loadWorkbenchAssets").mockResolvedValue(
-          assets,
+      ({ runCli: runBuiltCli } = await import("../dist/cli/main.js"));
+    }, 120000);
+    it.each(["generated", "configured"] as const)(
+      "starts the real CLI with %s credentials, no prompt, and all-interface listening",
+      async (credential) => {
+        const home = await mkdtemp(join(tmpdir(), "sciretriever-web-cli-"));
+        const stop = new AbortController();
+        let check: Promise<void> | undefined;
+        let output = "";
+        vi.stubEnv(
+          "SCIRETRIEVER_WEB_PASSWORD",
+          credential === "configured" ? PASSWORD : undefined,
         );
-        const launched = await runCli(["web", "--port", "0"], {
-          home,
-          stdin: Readable.from([]),
-          signal: stop.signal,
-          stdout: (text) => {
-            output += text;
-            const value = JSON.parse(text) as {
-              listen: string;
-              url: string;
-              urls: string[];
-              api_key?: string;
-            };
-            check = (async () => {
-              expect(value.listen).toMatch(/^0\.0\.0\.0:[0-9]+$/);
-              expect(value.urls).toContain(value.url);
-              expect(value.urls.every((url) => !url.includes("0.0.0.0"))).toBe(
-                true,
-              );
-              if (credential === "generated")
-                expect(value.api_key).toMatch(/^[A-Za-z0-9_-]{43}$/);
-              else expect(value.api_key).toBeUndefined();
-              const origin = `http://127.0.0.1:${new URL(value.url).port}`;
-              expect((await request(origin, "/")).status).toBe(303);
-              expect(
-                (await login(origin, value.api_key ?? PASSWORD)).status,
-              ).toBe(200);
-              // Binding all interfaces also accepts a second loopback address, with the same authentication.
-              const alias = origin.replace("127.0.0.1", "127.0.0.2");
-              expect((await request(alias, "/api/view")).status).toBe(401);
-              expect(
-                (await login(alias, value.api_key ?? PASSWORD)).status,
-              ).toBe(200);
-              const config = await readFile(
-                join(home, ".sciretriever", "config.toml"),
-                "utf8",
-              );
-              expect(config).not.toContain(value.api_key ?? PASSWORD);
-            })().finally(() => stop.abort());
-          },
-        });
-        expect(launched.code).toBe(0);
-        expect(check).toBeDefined();
-        await check;
-        expect(output).not.toContain(PASSWORD);
-        expect(process.env.SCIRETRIEVER_WEB_PASSWORD).toBeUndefined();
-      } finally {
-        stop.abort();
-        vi.restoreAllMocks();
-        vi.unstubAllEnvs();
-        await rm(home, { recursive: true, force: true });
-      }
-    },
-    15000,
-  );
+        try {
+          const launched = await runBuiltCli(["web", "--port", "0"], {
+            home,
+            stdin: Readable.from([]),
+            signal: stop.signal,
+            stdout: (text) => {
+              output += text;
+              const value = JSON.parse(text) as {
+                listen: string;
+                url: string;
+                urls: string[];
+                api_key?: string;
+              };
+              check = (async () => {
+                expect(value.listen).toMatch(/^0\.0\.0\.0:[0-9]+$/);
+                expect(value.urls).toContain(value.url);
+                expect(
+                  value.urls.every((url) => !url.includes("0.0.0.0")),
+                ).toBe(true);
+                if (credential === "generated")
+                  expect(value.api_key).toMatch(/^[A-Za-z0-9_-]{43}$/);
+                else expect(value.api_key).toBeUndefined();
+                const origin = `http://127.0.0.1:${new URL(value.url).port}`;
+                expect((await request(origin, "/")).status).toBe(303);
+                expect(
+                  (await login(origin, value.api_key ?? PASSWORD)).status,
+                ).toBe(200);
+                // Binding all interfaces also accepts a second loopback address, with the same authentication.
+                const alias = origin.replace("127.0.0.1", "127.0.0.2");
+                expect((await request(alias, "/api/view")).status).toBe(401);
+                expect(
+                  (await login(alias, value.api_key ?? PASSWORD)).status,
+                ).toBe(200);
+                const config = await readFile(
+                  join(home, ".sciretriever", "config.toml"),
+                  "utf8",
+                );
+                expect(config).not.toContain(value.api_key ?? PASSWORD);
+              })().finally(() => stop.abort());
+            },
+          });
+          expect(launched.code).toBe(0);
+          expect(check).toBeDefined();
+          await check;
+          expect(output).not.toContain(PASSWORD);
+          expect(process.env.SCIRETRIEVER_WEB_PASSWORD).toBeUndefined();
+        } finally {
+          stop.abort();
+          vi.restoreAllMocks();
+          vi.unstubAllEnvs();
+          await rm(home, { recursive: true, force: true });
+        }
+      },
+      15000,
+    );
+  });
 
   it("rejects an invalid supplied password before creating a library instead of silently replacing it", async () => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-web-invalid-"));

@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import {
   parseMetadataObservation,
+  parseMetadataSourceProgress,
   parseSourceStatistics,
   parseTaskSourceResults,
   type MetadataObservation,
@@ -340,37 +342,83 @@ it("excludes unrecorded history, applies job-created time windows and reads beyo
     const old = await create("old", "2026-08-01T00:00:00.000Z");
     await create("unrecorded", "2026-07-01T00:00:00.000Z");
     const newJob = await create("new", "2026-10-28T00:00:00.000Z");
-    for (const job of [old, newJob]) {
-      for (let n = 0; n < 205; n++) {
-        const base = {
-          schema_version: 1,
-          record_id: "r" + n,
-          source: "crossref",
-          purpose: "lookup",
-          role: "primary",
-          unit_id: "u" + n,
-          at: "2026-10-28T00:00:00.000Z",
-        };
-        for (const progress of [
-          { ...base, phase: "started" },
-          { ...base, phase: "requested" },
-          { ...base, phase: "returned", count: 0 },
-          { ...base, phase: "finished", result: "miss", problem: null },
-        ])
-          await app.jobs!.appendEvent({
-            event_id: randomUUID(),
-            job_id: job.job_id,
-            sequence: -1,
-            kind: "metadata-source",
-            payload: { target_id: "t", progress },
-            created_at: base.at,
-          });
+    // This reader fixture needs all 1,640 events to cross the real 1,000-row
+    // boundary, not 1,640 independent write-admission locks and commits. No job
+    // runs while we seed this newly created temporary catalog.
+    const seed = new DatabaseSync(join(home, "catalog.sqlite"));
+    try {
+      seed.exec("PRAGMA foreign_keys=ON");
+      seed.exec("BEGIN");
+      try {
+        const insert = seed.prepare(
+          "INSERT INTO execution_events(event_id,job_id,sequence,kind,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+        );
+        for (const job of [old, newJob]) {
+          let sequence = Number(
+            seed
+              .prepare(
+                "SELECT coalesce(max(sequence),-1)+1 AS next FROM execution_events WHERE job_id=?",
+              )
+              .get(job.job_id)!.next,
+          );
+          for (let n = 0; n < 205; n++) {
+            const base = {
+              schema_version: 1,
+              record_id: "r" + n,
+              source: "crossref",
+              purpose: "lookup",
+              role: "primary",
+              unit_id: "u" + n,
+              at: "2026-10-28T00:00:00.000Z",
+            };
+            for (const progress of [
+              { ...base, phase: "started" },
+              { ...base, phase: "requested" },
+              { ...base, phase: "returned", count: 0 },
+              { ...base, phase: "finished", result: "miss", problem: null },
+            ])
+              insert.run(
+                randomUUID(),
+                job.job_id,
+                sequence++,
+                "metadata-source",
+                JSON.stringify({
+                  target_id: "t",
+                  progress: parseMetadataSourceProgress(progress),
+                }),
+                base.at,
+              );
+          }
+        }
+        seed.exec("COMMIT");
+      } catch (error) {
+        seed.exec("ROLLBACK");
+        throw error;
       }
+      expect(seed.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      seed.close();
     }
     const clock = () => new Date("2026-10-28T01:00:00.000Z");
+    const pages = vi.spyOn(app.jobs!, "sourceRecordPage");
     const all = parseSourceStatistics(
       await sourceStatistics(app.jobs!, { range: "all" }, undefined, clock),
     );
+    // Exercise the real aggregation's continuation too, not only manual paging.
+    expect(pages).toHaveBeenCalledTimes(2);
+    const [allFirst, allSecond] = await Promise.all(
+      pages.mock.results.map((result) => result.value),
+    );
+    expect(allFirst.events).toHaveLength(1000);
+    expect(allSecond.events).toHaveLength(640);
+    expect(pages.mock.calls[1]![0]).toMatchObject({
+      after: allFirst.next_after,
+      snapshot: allFirst.snapshot,
+      limit: 1000,
+    });
+    expect(allSecond.snapshot).toBe(allFirst.snapshot);
+    expect(allSecond.next_after).toBeNull();
+    pages.mockRestore();
     const recent = await sourceStatistics(
       app.jobs!,
       { range: "last-30-days" },
@@ -390,7 +438,8 @@ it("excludes unrecorded history, applies job-created time windows and reads beyo
       limit: 1000,
     });
     expect(first.events).toHaveLength(1000);
-    await app.jobs!.appendEvent({
+    expect(first.next_after).not.toBeNull();
+    const appended = await app.jobs!.appendEvent({
       event_id: randomUUID(),
       job_id: newJob.job_id,
       sequence: -1,
@@ -418,9 +467,29 @@ it("excludes unrecorded history, applies job-created time windows and reads beyo
       limit: 1000,
     });
     expect(second.events).toHaveLength(640);
+    expect(second.snapshot).toBe(first.snapshot);
+    expect(second.next_after).toBeNull();
+    const ids = [...first.events, ...second.events].map(
+      (event) => event.event_id,
+    );
+    expect(new Set(ids).size).toBe(1640);
     expect(second.events.some((e) => e.kind === "pdf-source-result")).toBe(
       false,
     );
+    // The new row has the same timestamp cutoff and is visible to a fresh
+    // snapshot; only the fixed high-water mark keeps it out of the old one.
+    const fresh = await app.jobs!.sourceRecordPage({
+      job_id: null,
+      from: null,
+      through: clock().toISOString(),
+      after: first.next_after!,
+      snapshot: null,
+      limit: 1000,
+    });
+    expect(fresh.snapshot).toBeGreaterThan(first.snapshot);
+    expect(fresh.events).toHaveLength(641);
+    expect(fresh.next_after).toBeNull();
+    expect(fresh.events.at(-1)).toEqual(appended);
   } finally {
     await app.close();
     await rm(home, { recursive: true, force: true });
