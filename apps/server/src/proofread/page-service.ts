@@ -657,327 +657,347 @@ export class ArchivePageProofreadService {
           tools,
           accepted: () => accepted,
           execute: async (name, args, context) => {
-            if (
-              ["read_blocks", "view_page", "read_reference"].includes(name) &&
-              args.page_index !== page.page
-            )
-              throw new ArchiveTextError("page-outside-session", [
-                { code: "page-outside-session", id: null },
-              ]);
-            if (name === "read_blocks") {
-              const r = toolRecord(args, [
-                "page_index",
-                "index",
-                "offset",
-                "limit",
-              ]);
-              return textReply(
-                boundedTextWindow(
-                  retained.map((l) => ({
-                    id: l.leaf_id,
-                    text: l.original_text,
-                  })),
-                  toolCount(r.index, retained.length),
-                  toolCount(r.offset),
-                  toolLimit(r.limit),
-                  (id, start, end) => {
-                    const changed = readRanges.add(id, start, end);
-                    if (
-                      readRanges.complete(
-                        id,
-                        [
-                          ...retained.find((l) => l.leaf_id === id)!
-                            .original_text,
-                        ].length,
-                      )
-                    )
-                      read.add(id);
-                    if (changed)
-                      progress.progress("read-leaf", [id, start, end]);
-                  },
-                ),
-              );
-            }
-            if (name === "draft_status") {
-              const r = toolRecord(args, ["kind", "offset", "limit"]);
-              if (r.kind !== "corrections" && r.kind !== "dispositions")
-                throw new ArchiveTextError("tool-input");
-              const rows: readonly unknown[] =
-                r.kind === "corrections"
-                  ? [...corrections].map(([correction_id, operation]) => ({
-                      correction_id: correctionNames.handle(correction_id),
-                      leaf_id: operation.leaf_id,
-                      start: operation.start,
-                      end: operation.end,
-                      original_preview: cpSlice(operation.original, 0, 80),
-                      replacement_preview: cpSlice(
-                        operation.replacement,
-                        0,
-                        80,
-                      ),
-                      original_length: [...operation.original].length,
-                      replacement_length: [...operation.replacement].length,
-                    }))
-                  : [...dispositions.values()].map((d) => ({
-                      ...d,
-                      suspect_id: suspectNames.handle(d.suspect_id),
-                      ...(d.status === "fixed"
-                        ? {
-                            correction_ids: d.correction_ids.map((id) =>
-                              correctionNames.handle(id),
-                            ),
-                          }
-                        : {}),
-                    }));
-              return textReply({
-                draft: boundedItems(
-                  rows,
-                  toolCount(r.offset),
-                  toolLimit(r.limit),
-                ),
-                read_leaf_count: read.size,
-                leaf_count: retained.length,
-                viewed_full_page: fullViewed,
-                suspect_count: suspects.size,
-              });
-            }
-            if (name === "view_page") {
-              const r = toolRecord(args, ["page_index", "region"]),
-                region = r.region === null ? null : parsePageRegion(r.region),
-                image = await this.pdf
-                  .image(
-                    source.raw.source_asset_id,
-                    source.raw.source_sha256,
-                    page.page,
-                    region,
-                    context.signal,
-                  )
-                  .catch((error: unknown) => {
-                    if (context.signal.aborted) throw error;
-                    throw new ArchiveTextError("page-tools-unavailable", [], {
-                      cause: error,
-                    });
-                  });
-              if (region === null) fullViewed = true;
-              else if (regions.length < 100) regions.push(region);
-              // A crop not seen before is new evidence; zooming in on a suspect is real work.
-              progress.progress(
-                "page",
-                region === null ? page.page : [page.page, ...region],
-              );
-              return { status: "success", parts: [image] };
-            }
-            if (name === "read_reference") {
-              const r = toolRecord(args, [
+            try {
+              if (
+                ["read_blocks", "view_page", "read_reference"].includes(name) &&
+                args.page_index !== page.page
+              )
+                throw new ArchiveTextError("page-outside-session", [
+                  { code: "page-outside-session", id: null },
+                ]);
+              if (name === "read_blocks") {
+                const r = toolRecord(args, [
                   "page_index",
-                  "text_offset",
-                  "suspect_offset",
-                ]),
-                offset = toolCount(r.text_offset),
-                suspectOffset = toolCount(r.suspect_offset);
-              const window = boundedItems(
-                [...suspects.values()].map((q) => ({
-                  ...q,
-                  suspect_id: suspectNames.handle(q.suspect_id),
-                  tokens: q.tokens.map((t) => cpSlice(t, 0, 200)),
-                  tokens_truncated: q.tokens.some((t) => [...t].length > 200),
-                })),
-                suspectOffset,
-                20,
-                7000,
-              );
-              const layer = page.kind === "text-layer" ? page.text : "";
-              // Paging suspects past the end of the layer text is not an input error.
-              const reference = boundedTextWindow(
-                [{ id: `reference:${page.page}`, text: layer }],
-                0,
-                Math.min(offset, [...layer].length),
-                1,
-                (id, start, end) => {
-                  if (readRanges.add(id, start, end))
-                    progress.progress("reference", [id, start, end]);
-                },
-              );
-              return textReply({
-                page_index: page.page,
-                text:
-                  page.kind === "text-layer"
-                    ? (reference.items[0]?.text ?? "")
-                    : null,
-                next_text_offset: reference.next?.offset ?? null,
-                suspects: window.items,
-                next_suspect_offset: window.next_offset,
-              });
-            }
-            if (name === "find_text") {
-              const r = toolRecord(args, ["leaf_id", "text", "start"]),
-                leaf = retained.find((l) => l.leaf_id === r.leaf_id);
-              if (
-                !leaf ||
-                typeof r.text !== "string" ||
-                !r.text.length ||
-                [...r.text].length > 200
-              )
-                throw new ArchiveTextError("correction-outside-page");
-              const start = toolCount(r.start),
-                tail = cpSlice(leaf.original_text, start),
-                at = tail.indexOf(r.text);
-              // Locating a new span to correct is real work; a repeated search is not.
-              if (at >= 0)
-                progress.progress("find", [leaf.leaf_id, r.text, start]);
-              return textReply({
-                start: at < 0 ? null : start + [...tail.slice(0, at)].length,
-                end:
-                  at < 0
-                    ? null
-                    : start + [...tail.slice(0, at + r.text.length)].length,
-              });
-            }
-            if (name === "put_corrections") {
-              const r = toolRecord(args, ["corrections"]);
-              if (!Array.isArray(r.corrections) || r.corrections.length > 20)
-                throw new ArchiveTextError("tool-input");
-              const batch = batchItems(
-                "corrections",
-                r.corrections,
-                parseCorrectOperation,
-              );
-              const draft = new Map(corrections);
-              for (const c of batch) {
-                if (lockedIds.has(c.leaf_id))
-                  throw new ArchiveTextError("manual-conflict");
-                draft.set(correctRecordId(c, key), c);
-              }
-              // Rejects overlapping or out-of-leaf edits before the draft changes.
-              applyLeafCorrections(
-                retained,
-                [...draft.values()],
-                page.page,
-                key,
-              );
-              corrections.clear();
-              for (const [id, c] of draft) corrections.set(id, c);
-              refreshSuspects();
-              for (const c of batch)
-                progress.progress("corrections", {
-                  ...c,
-                  reason: "transcription",
-                });
-              return textReply({
-                // One ID per correction in this batch, in the order sent.
-                correction_ids: batch.map((c) =>
-                  correctionNames.handle(correctRecordId(c, key)),
-                ),
-                correction_count: corrections.size,
-                suspect_count: suspects.size,
-              });
-            }
-            if (name === "remove_corrections") {
-              const r = toolRecord(args, ["correction_ids"]);
-              if (
-                !Array.isArray(r.correction_ids) ||
-                r.correction_ids.length > 20
-              )
-                throw new ArchiveTextError("tool-input");
-              const removed = r.correction_ids.map((id) =>
-                String(correctionNames.id(id)),
-              );
-              if (removed.some((id) => !corrections.has(id)))
-                throw new ArchiveTextError("tool-input");
-              for (const id of removed) {
-                if (lockedIds.has(corrections.get(String(id))!.leaf_id))
-                  throw new ArchiveTextError("manual-conflict");
-                corrections.delete(String(id));
-              }
-              refreshSuspects();
-              return textReply({ correction_count: corrections.size });
-            }
-            if (name === "put_dispositions") {
-              const r = toolRecord(args, ["dispositions"]);
-              if (!Array.isArray(r.dispositions) || r.dispositions.length > 20)
-                throw new ArchiveTextError("tool-input");
-              const parsed = batchItems(
-                "dispositions",
-                r.dispositions.map((d: unknown) =>
-                  d && typeof d === "object" && !Array.isArray(d)
-                    ? {
-                        ...d,
-                        suspect_id: suspectNames.id(
-                          (d as Record<string, unknown>).suspect_id,
-                        ),
-                        ...(Array.isArray(
-                          (d as Record<string, unknown>).correction_ids,
+                  "index",
+                  "offset",
+                  "limit",
+                ]);
+                return textReply(
+                  boundedTextWindow(
+                    retained.map((l) => ({
+                      id: l.leaf_id,
+                      text: l.original_text,
+                    })),
+                    toolCount(r.index, retained.length),
+                    toolCount(r.offset),
+                    toolLimit(r.limit),
+                    (id, start, end) => {
+                      const changed = readRanges.add(id, start, end);
+                      if (
+                        readRanges.complete(
+                          id,
+                          [
+                            ...retained.find((l) => l.leaf_id === id)!
+                              .original_text,
+                          ].length,
                         )
+                      )
+                        read.add(id);
+                      if (changed)
+                        progress.progress("read-leaf", [id, start, end]);
+                    },
+                  ),
+                );
+              }
+              if (name === "draft_status") {
+                const r = toolRecord(args, ["kind", "offset", "limit"]);
+                if (r.kind !== "corrections" && r.kind !== "dispositions")
+                  throw new ArchiveTextError("tool-input");
+                const rows: readonly unknown[] =
+                  r.kind === "corrections"
+                    ? [...corrections].map(([correction_id, operation]) => ({
+                        correction_id: correctionNames.handle(correction_id),
+                        leaf_id: operation.leaf_id,
+                        start: operation.start,
+                        end: operation.end,
+                        original_preview: cpSlice(operation.original, 0, 80),
+                        replacement_preview: cpSlice(
+                          operation.replacement,
+                          0,
+                          80,
+                        ),
+                        original_length: [...operation.original].length,
+                        replacement_length: [...operation.replacement].length,
+                      }))
+                    : [...dispositions.values()].map((d) => ({
+                        ...d,
+                        suspect_id: suspectNames.handle(d.suspect_id),
+                        ...(d.status === "fixed"
                           ? {
-                              correction_ids: (
-                                (d as Record<string, unknown>)
-                                  .correction_ids as unknown[]
-                              ).map((id) => correctionNames.id(id)),
+                              correction_ids: d.correction_ids.map((id) =>
+                                correctionNames.handle(id),
+                              ),
                             }
                           : {}),
-                      }
-                    : d,
-                ),
-                parseSuspectDisposition,
-              );
-              // Name each rejected item, or the model resends the same batch unchanged.
-              const invalid = parsed.filter(
-                (d) =>
-                  !suspects.has(d.suspect_id) ||
-                  (d.status === "fixed" &&
-                    d.correction_ids.some((id) => !corrections.has(id))),
-              );
-              if (invalid.length)
-                throw new ArchiveTextError(
-                  "suspect-disposition-invalid",
-                  invalid.map((d) => ({
-                    code: "suspect-disposition-invalid",
-                    id: suspectNames.name(d.suspect_id),
-                  })),
-                );
-              for (const d of parsed) dispositions.set(d.suspect_id, d);
-              for (const d of parsed)
+                      }));
+                return textReply({
+                  draft: boundedItems(
+                    rows,
+                    toolCount(r.offset),
+                    toolLimit(r.limit),
+                  ),
+                  read_leaf_count: read.size,
+                  leaf_count: retained.length,
+                  viewed_full_page: fullViewed,
+                  suspect_count: suspects.size,
+                });
+              }
+              if (name === "view_page") {
+                const r = toolRecord(args, ["page_index", "region"]),
+                  region = r.region === null ? null : parsePageRegion(r.region),
+                  image = await this.pdf
+                    .image(
+                      source.raw.source_asset_id,
+                      source.raw.source_sha256,
+                      page.page,
+                      region,
+                      context.signal,
+                    )
+                    .catch((error: unknown) => {
+                      if (context.signal.aborted) throw error;
+                      throw new ArchiveTextError("page-tools-unavailable", [], {
+                        cause: error,
+                      });
+                    });
+                if (region === null) fullViewed = true;
+                else if (regions.length < 100) regions.push(region);
+                // A crop not seen before is new evidence; zooming in on a suspect is real work.
                 progress.progress(
-                  "dispositions",
-                  d.status === "fixed"
-                    ? d
-                    : { suspect_id: d.suspect_id, status: d.status },
+                  "page",
+                  region === null ? page.page : [page.page, ...region],
                 );
-              return textReply({
-                disposed: dispositions.size,
-                total: suspects.size,
-                // Saying the next step stops a model from re-sending the same disposition.
-                ...([...suspects.keys()].every((id) => dispositions.has(id))
-                  ? {
-                      next: "All suspects are resolved. Call submit_page now; no_change is true when there are no corrections.",
-                    }
-                  : {}),
-              });
-            }
-            if (name === "submit_page") {
-              const r = toolRecord(args, ["no_change"]);
-              accepted = acceptPageSubmission(
-                {
-                  page,
-                  retained,
-                  deleted,
-                  page_input_sha256: key,
-                  suspects: [...suspects.values()],
-                  evidence: evidence(),
-                },
-                {
-                  schema_version: 2,
+                return { status: "success", parts: [image] };
+              }
+              if (name === "read_reference") {
+                const r = toolRecord(args, [
+                    "page_index",
+                    "text_offset",
+                    "suspect_offset",
+                  ]),
+                  offset = toolCount(r.text_offset),
+                  suspectOffset = toolCount(r.suspect_offset);
+                const window = boundedItems(
+                  [...suspects.values()].map((q) => ({
+                    ...q,
+                    suspect_id: suspectNames.handle(q.suspect_id),
+                    tokens: q.tokens.map((t) => cpSlice(t, 0, 200)),
+                    tokens_truncated: q.tokens.some((t) => [...t].length > 200),
+                  })),
+                  suspectOffset,
+                  20,
+                  7000,
+                );
+                const layer = page.kind === "text-layer" ? page.text : "";
+                // Paging suspects past the end of the layer text is not an input error.
+                const reference = boundedTextWindow(
+                  [{ id: `reference:${page.page}`, text: layer }],
+                  0,
+                  Math.min(offset, [...layer].length),
+                  1,
+                  (id, start, end) => {
+                    if (readRanges.add(id, start, end))
+                      progress.progress("reference", [id, start, end]);
+                  },
+                );
+                return textReply({
                   page_index: page.page,
-                  page_input_sha256: key,
-                  corrections: [...corrections.values()],
-                  no_change: r.no_change,
-                  dispositions: [...dispositions.values()],
-                },
+                  text:
+                    page.kind === "text-layer"
+                      ? (reference.items[0]?.text ?? "")
+                      : null,
+                  next_text_offset: reference.next?.offset ?? null,
+                  suspects: window.items,
+                  next_suspect_offset: window.next_offset,
+                });
+              }
+              if (name === "find_text") {
+                const r = toolRecord(args, ["leaf_id", "text", "start"]),
+                  leaf = retained.find((l) => l.leaf_id === r.leaf_id);
+                if (
+                  !leaf ||
+                  typeof r.text !== "string" ||
+                  !r.text.length ||
+                  [...r.text].length > 200
+                )
+                  throw new ArchiveTextError("correction-outside-page");
+                const start = toolCount(r.start),
+                  tail = cpSlice(leaf.original_text, start),
+                  at = tail.indexOf(r.text);
+                // Locating a new span to correct is real work; a repeated search is not.
+                if (at >= 0)
+                  progress.progress("find", [leaf.leaf_id, r.text, start]);
+                return textReply({
+                  start: at < 0 ? null : start + [...tail.slice(0, at)].length,
+                  end:
+                    at < 0
+                      ? null
+                      : start + [...tail.slice(0, at + r.text.length)].length,
+                });
+              }
+              if (name === "put_corrections") {
+                const r = toolRecord(args, ["corrections"]);
+                if (!Array.isArray(r.corrections) || r.corrections.length > 20)
+                  throw new ArchiveTextError("tool-input");
+                const batch = batchItems(
+                  "corrections",
+                  r.corrections,
+                  parseCorrectOperation,
+                );
+                const draft = new Map(corrections);
+                for (const c of batch) {
+                  if (lockedIds.has(c.leaf_id))
+                    throw new ArchiveTextError("manual-conflict");
+                  draft.set(correctRecordId(c, key), c);
+                }
+                // Rejects overlapping or out-of-leaf edits before the draft changes.
+                applyLeafCorrections(
+                  retained,
+                  [...draft.values()],
+                  page.page,
+                  key,
+                );
+                corrections.clear();
+                for (const [id, c] of draft) corrections.set(id, c);
+                refreshSuspects();
+                for (const c of batch)
+                  progress.progress("corrections", {
+                    ...c,
+                    reason: "transcription",
+                  });
+                return textReply({
+                  // One ID per correction in this batch, in the order sent.
+                  correction_ids: batch.map((c) =>
+                    correctionNames.handle(correctRecordId(c, key)),
+                  ),
+                  correction_count: corrections.size,
+                  suspect_count: suspects.size,
+                });
+              }
+              if (name === "remove_corrections") {
+                const r = toolRecord(args, ["correction_ids"]);
+                if (
+                  !Array.isArray(r.correction_ids) ||
+                  r.correction_ids.length > 20
+                )
+                  throw new ArchiveTextError("tool-input");
+                const removed = r.correction_ids.map((id) =>
+                  String(correctionNames.id(id)),
+                );
+                if (removed.some((id) => !corrections.has(id)))
+                  throw new ArchiveTextError("tool-input");
+                for (const id of removed) {
+                  if (lockedIds.has(corrections.get(String(id))!.leaf_id))
+                    throw new ArchiveTextError("manual-conflict");
+                  corrections.delete(String(id));
+                }
+                refreshSuspects();
+                return textReply({ correction_count: corrections.size });
+              }
+              if (name === "put_dispositions") {
+                const r = toolRecord(args, ["dispositions"]);
+                if (
+                  !Array.isArray(r.dispositions) ||
+                  r.dispositions.length > 20
+                )
+                  throw new ArchiveTextError("tool-input");
+                const parsed = batchItems(
+                  "dispositions",
+                  r.dispositions.map((d: unknown) =>
+                    d && typeof d === "object" && !Array.isArray(d)
+                      ? {
+                          ...d,
+                          suspect_id: suspectNames.id(
+                            (d as Record<string, unknown>).suspect_id,
+                          ),
+                          ...(Array.isArray(
+                            (d as Record<string, unknown>).correction_ids,
+                          )
+                            ? {
+                                correction_ids: (
+                                  (d as Record<string, unknown>)
+                                    .correction_ids as unknown[]
+                                ).map((id) => correctionNames.id(id)),
+                              }
+                            : {}),
+                        }
+                      : d,
+                  ),
+                  parseSuspectDisposition,
+                );
+                // Name each rejected item, or the model resends the same batch unchanged.
+                const invalid = parsed.filter(
+                  (d) =>
+                    !suspects.has(d.suspect_id) ||
+                    (d.status === "fixed" &&
+                      d.correction_ids.some((id) => !corrections.has(id))),
+                );
+                if (invalid.length)
+                  throw new ArchiveTextError(
+                    "suspect-disposition-invalid",
+                    invalid.map((d) => ({
+                      code: "suspect-disposition-invalid",
+                      id: suspectNames.name(d.suspect_id),
+                    })),
+                  );
+                for (const d of parsed) dispositions.set(d.suspect_id, d);
+                for (const d of parsed)
+                  progress.progress(
+                    "dispositions",
+                    d.status === "fixed"
+                      ? d
+                      : { suspect_id: d.suspect_id, status: d.status },
+                  );
+                return textReply({
+                  disposed: dispositions.size,
+                  total: suspects.size,
+                  // Saying the next step stops a model from re-sending the same disposition.
+                  ...([...suspects.keys()].every((id) => dispositions.has(id))
+                    ? {
+                        next: "All suspects are resolved. Call submit_page now; no_change is true when there are no corrections.",
+                      }
+                    : {}),
+                });
+              }
+              if (name === "submit_page") {
+                const r = toolRecord(args, ["no_change"]);
+                accepted = acceptPageSubmission(
+                  {
+                    page,
+                    retained,
+                    deleted,
+                    page_input_sha256: key,
+                    suspects: [...suspects.values()],
+                    evidence: evidence(),
+                  },
+                  {
+                    schema_version: 2,
+                    page_index: page.page,
+                    page_input_sha256: key,
+                    corrections: [...corrections.values()],
+                    no_change: r.no_change,
+                    dispositions: [...dispositions.values()],
+                  },
+                );
+                context.concludeTurn();
+                return textReply({ accepted: true, page_index: page.page });
+              }
+              throw new ArchiveTextError("tool-input");
+            } catch (error) {
+              // A rejection names suspects and corrections by the short IDs the model holds.
+              if (!(error instanceof ArchiveTextError)) throw error;
+              throw new ArchiveTextError(
+                error.code,
+                error.issues.map((i) =>
+                  i.id === null
+                    ? i
+                    : {
+                        ...i,
+                        id: correctionNames.name(suspectNames.name(i.id)),
+                      },
+                ),
+                { cause: error },
               );
-              context.concludeTurn();
-              return textReply({ accepted: true, page_index: page.page });
             }
-            throw new ArchiveTextError("tool-input");
           },
         },
         signal,

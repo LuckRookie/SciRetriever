@@ -847,8 +847,8 @@ it("hands the model short page-local suspect and correction IDs and stores the r
         text_offset: 0,
         suspect_offset: 0,
       });
-    if (calls === 4)
-      return modelTool("put_corrections", {
+    const correct = (replacement: string) =>
+      modelTool("put_corrections", {
         corrections: [
           {
             kind: "correct",
@@ -856,23 +856,28 @@ it("hands the model short page-local suspect and correction IDs and stores the r
             start: 6,
             end: 8,
             original: "67",
-            replacement: "97",
+            replacement,
             basis_page_index: 0,
-            reason: "The image prints 97.",
+            reason: `The image prints ${replacement}.`,
           },
         ],
       });
-    if (calls === 5)
-      return modelTool("put_dispositions", {
-        dispositions: [
-          ...["s1", "s2"].map((suspect_id) => ({
-            suspect_id,
-            status: "fixed",
-            correction_ids: ["c1"],
-            reason: "The image prints 97.",
-          })),
-        ],
+    const dispose = (correction: string) =>
+      modelTool("put_dispositions", {
+        dispositions: ["s1", "s2"].map((suspect_id) => ({
+          suspect_id,
+          status: "fixed",
+          correction_ids: [correction],
+          reason: "The image prints 97.",
+        })),
       });
+    // A first correction that leaves the suspect in place is rejected by short ID.
+    if (calls === 4) return correct("68");
+    if (calls === 5) return dispose("c1");
+    if (calls === 7)
+      return modelTool("remove_corrections", { correction_ids: ["c1"] });
+    if (calls === 8) return correct("97");
+    if (calls === 9) return dispose("c2");
     return modelTool("submit_page", { no_change: false });
   });
   try {
@@ -887,6 +892,12 @@ it("hands the model short page-local suspect and correction IDs and stores the r
       ),
     ).toEqual(["s1", "s2"]);
     expect(replies[2]).toMatchObject({ correction_ids: ["c1"] });
+    expect(replies[4]).toMatchObject({ accepted: false });
+    expect(replies[4]!.issues).toContainEqual({
+      code: "suspect-not-fixed",
+      id: "s1",
+    });
+    expect(replies[6]).toMatchObject({ correction_ids: ["c2"] });
     expect(result.complete).toBe(true);
     const page = result.pages[0]!,
       correction = page.corrections[0]!.correction_id;
@@ -897,6 +908,10 @@ it("hands the model short page-local suspect and correction IDs and stores the r
         correction_ids: [correction],
       })),
     );
+    const known = new Set(page.suspects.map((q) => q.suspect_id));
+    expect(
+      (replies[4]!.issues as { id: string }[]).filter((i) => known.has(i.id)),
+    ).toEqual([]);
     expect(page.suspects.map((q) => q.suspect_id)).toEqual([
       expect.stringMatching(/^[0-9a-f-]{36}$/u),
       expect.stringMatching(/^[0-9a-f-]{36}$/u),
