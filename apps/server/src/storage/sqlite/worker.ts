@@ -348,12 +348,11 @@ export type SqliteCommand =
         | "metadataSource"
         | "hasDefault"
         | "markCorrupt"
-        | "interruptedStaging"
+        | "pruneGenerationBatch"
         | "scanChanges"
         | "literatureSources"
         | "ensureActive"
         | "beginLiteratureUpdate"
-        | "discardLiteratureUpdate"
         | "commitLiteratureUpdate"
         | "finishIncremental"
         | "verificationEntries"
@@ -1308,7 +1307,7 @@ export class SqliteWorker {
       "publish",
       "ensureActive",
       "beginLiteratureUpdate",
-      "discardLiteratureUpdate",
+      "pruneGenerationBatch",
       "commitLiteratureUpdate",
       "finishIncremental",
       "recordVerification",

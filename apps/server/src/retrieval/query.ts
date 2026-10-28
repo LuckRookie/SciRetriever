@@ -471,6 +471,13 @@ export class MaterialContextService {
     this.active.add(pending);
     try {
       return await pending;
+    } catch (error) {
+      if (
+        error instanceof RetrievalStorageError &&
+        error.code === "index-stale"
+      )
+        throw new MaterialContextError("context-cursor-invalid");
+      throw error;
     } finally {
       this.active.delete(pending);
     }
@@ -588,7 +595,12 @@ export class MaterialContextService {
         request.budget.max_items + 1,
         after,
       );
-    } catch {
+    } catch (error) {
+      if (
+        error instanceof RetrievalStorageError &&
+        error.code === "index-stale"
+      )
+        throw new MaterialContextError("context-cursor-invalid");
       return returnBundle(
         base("index-corrupt", generation.generation_id, revision),
       );
@@ -839,6 +851,13 @@ export class MaterialContextService {
           await this.storage.revision(),
         ),
       );
+    const currentGeneration = await this.storage.active();
+    if (
+      !currentGeneration ||
+      currentGeneration.generation_id !== generation.generation_id ||
+      currentGeneration.source_revision !== generation.source_revision
+    )
+      throw new MaterialContextError("context-cursor-invalid");
     const result = withBytes({
       ...base(
         gaps.length || truncated ? "partial" : "complete",

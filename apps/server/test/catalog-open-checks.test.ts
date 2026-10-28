@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -12,6 +12,10 @@ import {
 } from "../src/storage/sqlite/catalog-layout.js";
 import { readCatalogIdentity } from "../src/storage/sqlite/catalog-identity.js";
 import {
+  catalogNeedsInitialization,
+  inspectCatalogSchema,
+} from "../src/storage/sqlite/catalog-schema.js";
+import {
   SqliteWorker,
   SqliteWorkerError,
 } from "../src/storage/sqlite/worker.js";
@@ -19,6 +23,8 @@ import { RetrievalStorageClient } from "../src/storage/sqlite/retrieval-client.j
 import { CatalogWriteAdmission } from "../src/storage/write-admission.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
+import { startProductionWorkbench } from "../src/bootstrap/workbench.js";
+import { parseConfiguration } from "../src/configuration/index.js";
 import { runCli } from "../src/cli/main.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { startQueryOnlyHttp } from "../src/workbench/http.js";
@@ -66,6 +72,80 @@ it("reads a single schema inventory and singleton identities without checking ca
     } finally {
       spy.mockRestore();
       db.close();
+    }
+  }));
+
+it("uses an empty-target probe while explicit schema inspection still checks data", async () =>
+  fixture(async (home, catalog) => {
+    expect(await catalogNeedsInitialization(join(home, "absent.sqlite"))).toBe(
+      true,
+    );
+    const empty = join(home, "empty.sqlite");
+    new DatabaseSync(empty).close();
+    expect(await catalogNeedsInitialization(empty)).toBe(true);
+    const foreign = join(home, "foreign.sqlite"),
+      db = new DatabaseSync(foreign);
+    db.exec("CREATE TABLE foreign_data(value TEXT)");
+    db.close();
+    expect(await catalogNeedsInitialization(foreign)).toBe(false);
+    const prepare = DatabaseSync.prototype.prepare;
+    const probe = vi
+      .spyOn(DatabaseSync.prototype, "prepare")
+      .mockImplementation(function (this: DatabaseSync, sql: string) {
+        if (/integrity_check|foreign_key_check/iu.test(sql))
+          throw Error("full-check-requested");
+        return prepare.call(this, sql);
+      });
+    try {
+      expect(await catalogNeedsInitialization(catalog)).toBe(false);
+      await expect(inspectCatalogSchema(catalog)).rejects.toMatchObject({
+        reason: "catalog-integrity-refused",
+      });
+    } finally {
+      probe.mockRestore();
+    }
+  }));
+
+it("serves an initialized production workbench without running the explicit inspection gate", async () =>
+  fixture(async (home, catalog) => {
+    await mkdir(join(home, ".sciretriever"), { mode: 0o700 });
+    const prepare = DatabaseSync.prototype.prepare;
+    const probe = vi
+      .spyOn(DatabaseSync.prototype, "prepare")
+      .mockImplementation(function (this: DatabaseSync, sql: string) {
+        if (/integrity_check|foreign_key_check/iu.test(sql))
+          throw Error("startup-full-check-requested");
+        return prepare.call(this, sql);
+      });
+    let server:
+      | Awaited<ReturnType<typeof startProductionWorkbench>>
+      | undefined;
+    const browserHost = vi.fn(() => null);
+    try {
+      server = await startProductionWorkbench({
+        home,
+        port: 0,
+        access: { host: "127.0.0.1" },
+        assets: new Map([["/", { contentType: "text/html", body: "ok" }]]),
+        applicationOptions: {
+          configurationSnapshot: {
+            revision: "synthetic-open-check",
+            configuration: parseConfiguration(
+              `[paths]\ncatalog_path=${JSON.stringify(catalog)}\nartifact_root=${JSON.stringify(join(home, "artifacts"))}\n[sources.acquisition]\nmode="custom"\nproviders=[]\n`,
+            ),
+          },
+          browserHost,
+          metadata: {},
+        },
+      });
+      expect((await fetch(`${server.origin}/auth/status`)).status).toBe(200);
+      expect((await fetch(server.origin, { redirect: "manual" })).status).toBe(
+        303,
+      );
+      expect(browserHost).not.toHaveBeenCalled();
+    } finally {
+      await server?.close();
+      probe.mockRestore();
     }
   }));
 

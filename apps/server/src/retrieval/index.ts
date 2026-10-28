@@ -11,7 +11,10 @@ import type {
 } from "@sciretriever/contracts";
 import type { DocumentReadService } from "../document/read.js";
 import type { LiteratureQueryService } from "../literature/query.js";
-import { CatalogWriteAdmission } from "../storage/write-admission.js";
+import {
+  CatalogWriteAdmission,
+  WriteAdmissionError,
+} from "../storage/write-admission.js";
 import { ftsIndexText } from "../literature/unicode-casefold.js";
 import {
   type RetrievalEntry,
@@ -199,11 +202,7 @@ export class RetrievalIndexService {
   ): Promise<RetrievalGeneration> {
     return this.track(async (active) => {
       let generation = await this.store.ensureActive(active);
-      for (const interrupted of await this.store.interruptedStaging()) {
-        check(active);
-        await this.store.discardLiteratureUpdate(interrupted);
-        await yieldToEventLoop();
-      }
+      await this.pruneRetired(active);
       for (;;) {
         check(active);
         const scan = await this.store.scanChanges();
@@ -287,6 +286,22 @@ export class RetrievalIndexService {
         generation = (await this.store.active())!;
       }
     }, signal);
+  }
+  private async pruneRetired(signal: AbortSignal): Promise<void> {
+    while (!signal.aborted) {
+      try {
+        if ((await this.store.pruneGenerationBatch(null, signal)).done) return;
+      } catch (error) {
+        if (
+          signal.aborted &&
+          error instanceof WriteAdmissionError &&
+          error.code === "write-admission-cancelled"
+        )
+          return;
+        throw error;
+      }
+      await yieldToEventLoop();
+    }
   }
   private track(
     work: (signal: AbortSignal) => Promise<RetrievalGeneration>,
@@ -689,7 +704,11 @@ export class RetrievalIndexService {
           input.destroy();
         }
         check(signal);
-        return await store.publish(generation, revision, signal);
+        const published = await store.publish(generation, revision, signal);
+        // The active switch is durable. Cancellation during reclamation keeps
+        // that publication and leaves the remaining retired rows for refresh.
+        await this.pruneRetired(combined);
+        return published;
       } catch (error) {
         if (
           error instanceof RetrievalIndexError &&

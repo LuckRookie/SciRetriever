@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { authorizeSyntheticCatalog } from "../storage/synthetic-scope.js";
 import {
   initializeCatalogSchema,
-  inspectCatalogSchema,
+  catalogNeedsInitialization,
 } from "../storage/sqlite/catalog-schema.js";
 import {
   validateWorkbenchAccess,
@@ -461,9 +461,7 @@ async function startProductionWorkbenchOwned(
     );
     // Only an absent target can be initialized. Existing catalogs retain their
     // schema and facts; the ordinary Application gate still validates them.
-    if (
-      (await inspectCatalogSchema(startupCatalog)).status === "not-initialized"
-    )
+    if (await catalogNeedsInitialization(startupCatalog))
       await initializeCatalogSchema(startupCatalog);
     const { restartBootstrapPermit: _permit, ...applicationOptions } =
       options.applicationOptions ?? {};
@@ -588,7 +586,7 @@ export async function startSyntheticWorkbench(options: {
   // Fixture startup retains the independent synthetic-location check, then uses
   // the same current catalog initialization and runtime path as the formal Web.
   await authorizeSyntheticCatalog(catalog);
-  if ((await inspectCatalogSchema(catalog)).status === "not-initialized")
+  if (await catalogNeedsInitialization(catalog))
     await initializeCatalogSchema(catalog);
   const application = await createApplication(options.home, {
     ...options.applicationOptions,

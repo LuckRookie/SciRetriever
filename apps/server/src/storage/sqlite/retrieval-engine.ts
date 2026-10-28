@@ -268,9 +268,12 @@ function inspectCatalogSnapshot(
       active_generation: null,
       hashes: "not-current",
     };
+  // Retired and unpublished generations cannot be queried and may be partly
+  // reclaimed. SQLite/FK/FTS physical checks above still cover the full file;
+  // logical projection counts and certificates apply to the active state.
   const counts = db
     .prepare(
-      "SELECT g.generation_id,g.status,g.entry_count,g.fts_count,g.content_sha256,g.posting_sha256,(SELECT count(*) FROM retrieval_entries e WHERE e.generation_id=g.generation_id) AS actual_entries,(SELECT count(*) FROM retrieval_entries e JOIN retrieval_fts f ON f.rowid=e.entry_id WHERE e.generation_id=g.generation_id) AS actual_fts FROM retrieval_generations g",
+      "SELECT g.generation_id,g.status,g.entry_count,g.fts_count,g.content_sha256,g.posting_sha256,(SELECT count(*) FROM retrieval_entries e WHERE e.generation_id=g.generation_id) AS actual_entries,(SELECT count(*) FROM retrieval_entries e JOIN retrieval_fts f ON f.rowid=e.entry_id WHERE e.generation_id=g.generation_id) AS actual_fts FROM retrieval_generations g WHERE g.generation_id=(SELECT generation_id FROM retrieval_active_generation WHERE singleton=1)",
     )
     .all() as {
     generation_id: string;
@@ -660,31 +663,115 @@ export class RetrievalStorageEngine {
       .run(id, this.revision(), new Date().toISOString());
     return id;
   }
-  interruptedStaging(): string[] {
+  /** Caller owns the generation lock; all non-active stages are abandoned here. */
+  pruneGenerationBatch(target: string | null = null): {
+    entries_deleted: number;
+    generations_deleted: number;
+    done: boolean;
+  } {
     this.refreshReader();
-    return this.db
-      .prepare(
-        "SELECT generation_id FROM retrieval_generations WHERE status='building'",
-      )
-      .all()
-      .map((r) => String(r.generation_id));
-  }
-  discardLiteratureUpdate(id: string): void {
-    this.refreshReader();
-    if (this.active()?.generation_id === id) fail();
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const active =
+        this.db
+          .prepare(
+            "SELECT generation_id FROM retrieval_active_generation WHERE singleton=1",
+          )
+          .get()?.generation_id ?? null;
+      if (target !== null && target === active)
+        throw new RetrievalStorageError("index-stale");
+      const candidate = this.db
+        .prepare(
+          "SELECT generation_id FROM retrieval_generations WHERE generation_id IS NOT ? AND (? IS NULL OR generation_id=?) LIMIT 1",
+        )
+        .get(active, target, target);
+      if (!candidate) {
+        this.db.exec("COMMIT");
+        return { entries_deleted: 0, generations_deleted: 0, done: true };
+      }
+      const id = String(candidate.generation_id);
+      const selected = this.db
+        .prepare(
+          "SELECT e.entry_id,e.kind,e.literature_id,e.document_version_id,COALESCE(length(CAST(f.title AS BLOB))+length(CAST(f.body AS BLOB)),0) AS bytes FROM retrieval_entries e LEFT JOIN retrieval_fts f ON f.rowid=e.entry_id WHERE e.generation_id=? LIMIT 128",
+        )
+        .all(id);
+      const rows: typeof selected = [];
+      let bytes = 0;
+      for (const row of selected) {
+        const size = Number(row.bytes);
+        if (rows.length && bytes + size > 1024 * 1024) break;
+        rows.push(row);
+        bytes += size;
+      }
+      const ids = JSON.stringify(rows.map((r) => r.entry_id));
       this.db
         .prepare(
-          "DELETE FROM retrieval_fts WHERE rowid IN (SELECT entry_id FROM retrieval_entries WHERE generation_id=?)",
+          "DELETE FROM retrieval_fts WHERE rowid IN (SELECT value FROM json_each(?))",
         )
-        .run(id);
+        .run(ids);
+      const removed = Number(
+        this.db
+          .prepare(
+            "DELETE FROM retrieval_entries WHERE generation_id=? AND entry_id IN (SELECT value FROM json_each(?))",
+          )
+          .run(id, ids).changes,
+      );
+      const sources = new Map(
+        rows.map((r) => [
+          JSON.stringify([r.kind, r.literature_id, r.document_version_id]),
+          r,
+        ]),
+      );
+      let removedSources = 0;
+      const remains = this.db.prepare(
+        "SELECT 1 FROM retrieval_entries WHERE generation_id=? AND kind=? AND literature_id=? AND document_version_id IS ? LIMIT 1",
+      );
+      for (const row of sources.values())
+        if (
+          !remains.get(
+            id,
+            row.kind!,
+            row.literature_id!,
+            row.document_version_id!,
+          )
+        )
+          removedSources++;
       this.db
         .prepare(
-          "DELETE FROM retrieval_generations WHERE generation_id=? AND status='building'",
+          "UPDATE retrieval_generations SET entry_count=max(0,entry_count-?),fts_count=max(0,fts_count-?),source_count=max(0,source_count-?),content_sha256=CASE WHEN status='ready' THEN ? ELSE NULL END,posting_sha256=CASE WHEN status='ready' THEN ? ELSE NULL END WHERE generation_id=?",
         )
-        .run(id);
+        .run(
+          removed,
+          removed,
+          removedSources,
+          RETRIEVAL_UNVERIFIED,
+          RETRIEVAL_UNVERIFIED,
+          id,
+        );
+      let removedGeneration = 0;
+      if (
+        !this.db
+          .prepare(
+            "SELECT 1 FROM retrieval_entries WHERE generation_id=? LIMIT 1",
+          )
+          .get(id)
+      )
+        removedGeneration = Number(
+          this.db
+            .prepare("DELETE FROM retrieval_generations WHERE generation_id=?")
+            .run(id).changes,
+        );
+      const pending = this.db
+        .prepare(
+          "SELECT 1 FROM retrieval_generations WHERE generation_id IS NOT ? AND (? IS NULL OR generation_id=?) LIMIT 1",
+        )
+        .get(active, target, target);
       this.db.exec("COMMIT");
+      return {
+        entries_deleted: removed,
+        generations_deleted: removedGeneration,
+        done: !pending,
+      };
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -942,22 +1029,8 @@ export class RetrievalStorageEngine {
         );
       this.db.exec("BEGIN IMMEDIATE");
       transaction = true;
-      // Only interrupted staging is removed; ready generations remain readable.
-      const stale = this.db
-        .prepare(
-          "SELECT generation_id FROM retrieval_generations WHERE status='building'",
-        )
-        .all() as { generation_id: string }[];
-      for (const row of stale) {
-        this.db
-          .prepare(
-            "DELETE FROM retrieval_fts WHERE rowid IN (SELECT entry_id FROM retrieval_entries WHERE generation_id=?)",
-          )
-          .run(row.generation_id);
-        this.db
-          .prepare("DELETE FROM retrieval_generations WHERE generation_id=?")
-          .run(row.generation_id);
-      }
+      // Abandoned staging is retired in bounded batches after successful
+      // publication. Do not cascade-delete an entire failed generation here.
       if (this.revision() !== sourceRevision)
         throw new RetrievalStorageError("index-stale");
       this.db
@@ -1130,12 +1203,7 @@ export class RetrievalStorageEngine {
           "INSERT INTO retrieval_active_generation(singleton,generation_id) VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET generation_id=excluded.generation_id",
         )
         .run(generationId);
-      if (repairing) {
-        this.db
-          .prepare("DELETE FROM retrieval_generations WHERE generation_id<>?")
-          .run(generationId);
-        inspectCatalogWithRetrieval(this.db, this.config);
-      }
+      if (repairing) inspectCatalogWithRetrieval(this.db, this.config);
       this.db.exec("COMMIT");
       published = {
         generation_id: row.generation_id,
@@ -1207,88 +1275,105 @@ export class RetrievalStorageEngine {
     readonly candidateLimit: boolean;
   } {
     this.refreshReader();
-    const scopeJson = JSON.stringify(scope);
-    const kindsJson = JSON.stringify(kinds);
-    const versionsJson = JSON.stringify(explicitVersions ?? []);
-    const rows = this.db
-      .prepare(
-        `SELECT e.entry_id,e.generation_id,e.kind,e.literature_id,e.meta_literature_id,e.metadata_revision,e.metadata_sha256,e.document_version_id,e.representation_sha256,e.source_asset_id,e.source_asset_sha256,e.unit_start_utf8,e.unit_end_utf8,e.unit_sha256,e.section_id,e.unit_ordinal,e.is_default,retrieval_fts.title,retrieval_fts.body,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=e.literature_id AND p.role='primary-pdf') AS primary_asset_id FROM retrieval_fts JOIN retrieval_entries e ON e.entry_id=retrieval_fts.rowid WHERE retrieval_fts MATCH ? AND e.generation_id=? AND e.kind IN (SELECT value FROM json_each(?)) AND (json_array_length(?)=0 OR e.literature_id IN (SELECT value FROM json_each(?))) AND (e.kind='metadata' OR (?=0 AND e.is_default=1) OR (?=1 AND e.document_version_id IN (SELECT value FROM json_each(?)))) ORDER BY e.entry_id LIMIT 4098`,
-      )
-      .all(
-        ftsQuery,
-        generationId,
-        kindsJson,
-        scopeJson,
-        scopeJson,
-        explicitVersions === null ? 0 : 1,
-        explicitVersions === null ? 0 : 1,
-        versionsJson,
-      ) as unknown as (Omit<RetrievalHit, "score"> & {
-      title: string;
-      body: string;
-    })[];
-    const groups = new Map<string, RetrievalHit>();
-    for (const row of rows.slice(0, 4097)) {
-      const { title, body, ...reference } = row;
-      const hit: RetrievalHit = {
-        ...reference,
-        score: scoreText(title, body, terms),
-      };
-      const key = JSON.stringify([
-        hit.kind,
-        hit.literature_id,
-        hit.document_version_id,
-        hit.unit_ordinal,
-      ]);
-      const previous = groups.get(key);
-      if (
-        !previous ||
-        hit.score < previous.score ||
-        (hit.score === previous.score && hit.entry_id < previous.entry_id)
-      )
-        groups.set(key, hit);
-    }
-    const ordered = [...groups.values()].sort(
-      (a, b) =>
-        a.score - b.score ||
-        compareText(a.kind, b.kind) ||
-        compareText(a.literature_id, b.literature_id) ||
-        compareText(a.document_version_id ?? "", b.document_version_id ?? "") ||
-        a.unit_ordinal - b.unit_ordinal,
-    );
-    const position = (hit: RetrievalHit) =>
-      [
-        hit.score,
-        hit.kind,
-        hit.literature_id,
-        hit.document_version_id ?? "",
-        hit.unit_ordinal,
-      ] as const;
-    const follows = (hit: RetrievalHit) => {
-      if (!after) return true;
-      const value = position(hit);
-      const previous = [
-        after.score,
-        after.kind,
-        after.literature_id,
-        after.document_version_id,
-        after.unit_ordinal,
-      ] as const;
-      for (let index = 0; index < value.length; index++) {
-        const left = value[index]!;
-        const right = previous[index]!;
-        const order =
-          typeof left === "number" && typeof right === "number"
-            ? left - right
-            : compareText(String(left), String(right));
-        if (order !== 0) return order > 0;
+    this.db.exec("SAVEPOINT retrieval_search");
+    try {
+      if (this.active()?.generation_id !== generationId)
+        throw new RetrievalStorageError("index-stale");
+      const scopeJson = JSON.stringify(scope);
+      const kindsJson = JSON.stringify(kinds);
+      const versionsJson = JSON.stringify(explicitVersions ?? []);
+      const rows = this.db
+        .prepare(
+          `SELECT e.entry_id,e.generation_id,e.kind,e.literature_id,e.meta_literature_id,e.metadata_revision,e.metadata_sha256,e.document_version_id,e.representation_sha256,e.source_asset_id,e.source_asset_sha256,e.unit_start_utf8,e.unit_end_utf8,e.unit_sha256,e.section_id,e.unit_ordinal,e.is_default,retrieval_fts.title,retrieval_fts.body,(SELECT asset_id FROM literature_assets p WHERE p.literature_id=e.literature_id AND p.role='primary-pdf') AS primary_asset_id FROM retrieval_fts JOIN retrieval_entries e ON e.entry_id=retrieval_fts.rowid WHERE retrieval_fts MATCH ? AND e.generation_id=? AND e.kind IN (SELECT value FROM json_each(?)) AND (json_array_length(?)=0 OR e.literature_id IN (SELECT value FROM json_each(?))) AND (e.kind='metadata' OR (?=0 AND e.is_default=1) OR (?=1 AND e.document_version_id IN (SELECT value FROM json_each(?)))) ORDER BY e.entry_id LIMIT 4098`,
+        )
+        .all(
+          ftsQuery,
+          generationId,
+          kindsJson,
+          scopeJson,
+          scopeJson,
+          explicitVersions === null ? 0 : 1,
+          explicitVersions === null ? 0 : 1,
+          versionsJson,
+        ) as unknown as (Omit<RetrievalHit, "score"> & {
+        title: string;
+        body: string;
+      })[];
+      const groups = new Map<string, RetrievalHit>();
+      for (const row of rows.slice(0, 4097)) {
+        const { title, body, ...reference } = row;
+        const hit: RetrievalHit = {
+          ...reference,
+          score: scoreText(title, body, terms),
+        };
+        const key = JSON.stringify([
+          hit.kind,
+          hit.literature_id,
+          hit.document_version_id,
+          hit.unit_ordinal,
+        ]);
+        const previous = groups.get(key);
+        if (
+          !previous ||
+          hit.score < previous.score ||
+          (hit.score === previous.score && hit.entry_id < previous.entry_id)
+        )
+          groups.set(key, hit);
       }
-      return false;
-    };
-    return {
-      hits: ordered.filter(follows).slice(0, limit),
-      candidateLimit: rows.length > 4097,
-    };
+      const ordered = [...groups.values()].sort(
+        (a, b) =>
+          a.score - b.score ||
+          compareText(a.kind, b.kind) ||
+          compareText(a.literature_id, b.literature_id) ||
+          compareText(
+            a.document_version_id ?? "",
+            b.document_version_id ?? "",
+          ) ||
+          a.unit_ordinal - b.unit_ordinal,
+      );
+      const position = (hit: RetrievalHit) =>
+        [
+          hit.score,
+          hit.kind,
+          hit.literature_id,
+          hit.document_version_id ?? "",
+          hit.unit_ordinal,
+        ] as const;
+      const follows = (hit: RetrievalHit) => {
+        if (!after) return true;
+        const value = position(hit);
+        const previous = [
+          after.score,
+          after.kind,
+          after.literature_id,
+          after.document_version_id,
+          after.unit_ordinal,
+        ] as const;
+        for (let index = 0; index < value.length; index++) {
+          const left = value[index]!;
+          const right = previous[index]!;
+          const order =
+            typeof left === "number" && typeof right === "number"
+              ? left - right
+              : compareText(String(left), String(right));
+          if (order !== 0) return order > 0;
+        }
+        return false;
+      };
+      const result = {
+        hits: ordered.filter(follows).slice(0, limit),
+        candidateLimit: rows.length > 4097,
+      };
+      this.db.exec("RELEASE retrieval_search");
+      return result;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK TO retrieval_search; RELEASE retrieval_search");
+      } catch {
+        /* Preserve the original read failure. */
+      }
+      throw error;
+    }
   }
   metadataSource(literatureId: string): RetrievalSource | null {
     const row = this.db

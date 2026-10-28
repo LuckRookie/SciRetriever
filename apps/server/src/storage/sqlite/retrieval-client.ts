@@ -64,8 +64,15 @@ export class RetrievalStorageClient {
   scanChanges(): Promise<RetrievalChangeScan> {
     return this.worker.retrieval("scanChanges");
   }
-  interruptedStaging(): Promise<string[]> {
-    return this.worker.retrieval("interruptedStaging");
+  pruneGenerationBatch(
+    target: string | null = null,
+    signal?: AbortSignal,
+  ): Promise<{
+    entries_deleted: number;
+    generations_deleted: number;
+    done: boolean;
+  }> {
+    return this.worker.retrieval("pruneGenerationBatch", [target], signal);
   }
   literatureSources(id: string): Promise<{
     fingerprint: string;
@@ -80,8 +87,10 @@ export class RetrievalStorageClient {
   beginLiteratureUpdate(signal?: AbortSignal): Promise<string> {
     return this.worker.retrieval("beginLiteratureUpdate", [], signal);
   }
-  discardLiteratureUpdate(id: string): Promise<void> {
-    return this.worker.retrieval("discardLiteratureUpdate", [id]);
+  async discardLiteratureUpdate(id: string): Promise<void> {
+    while (!(await this.pruneGenerationBatch(id)).done) {
+      // Each call releases catalog admission; staged discards are bounded too.
+    }
   }
   commitLiteratureUpdate(
     active: string,

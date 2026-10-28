@@ -33,6 +33,28 @@ export interface CatalogSchemaResult {
   readonly to_version: typeof SCHEMA_VERSION;
   readonly inspection: CatalogSchemaInspection;
 }
+/** Startup only asks whether initialization is needed, never whether data is healthy. */
+export async function catalogNeedsInitialization(
+  path: string,
+): Promise<boolean> {
+  await schemaTargetPath(path);
+  if (!(await schemaTargetFile(path))) return true;
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    return !db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' LIMIT 1",
+      )
+      .get();
+  } catch (error) {
+    throwCatalogCorruption(error);
+    throw new CatalogSchemaError("catalog-layout-not-current", {
+      cause: error,
+    });
+  } finally {
+    db.close();
+  }
+}
 export async function inspectCatalogSchema(
   path: string,
 ): Promise<CatalogSchemaInspection> {
@@ -50,7 +72,6 @@ export async function inspectCatalogSchema(
     };
   const db = new DatabaseSync(path, { readOnly: true });
   try {
-    db.exec("PRAGMA query_only=ON");
     const result = readCatalogIdentity(db, CURRENT_CATALOG_CONFIG);
     if (!result)
       return {
@@ -59,6 +80,11 @@ export async function inspectCatalogSchema(
         schema_version: null,
         schema_fingerprint: null,
       };
+    // Explicit inspection retains full health checks. Web startup uses only
+    // the empty-target probe and delegates supported-layout checks to Application.
+    prepareRetrievalVocab(db);
+    db.exec("PRAGMA query_only=ON");
+    inspectCatalogWithRetrieval(db, CURRENT_CATALOG_CONFIG);
     return {
       ...target,
       status: "ready",

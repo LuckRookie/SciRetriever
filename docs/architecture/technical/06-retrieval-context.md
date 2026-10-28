@@ -528,17 +528,21 @@ Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要
 
 材料投影使用当前 schema 的 `retrieval_*` 表，保留元数据和全部已接纳固定文档版本，默认文档与显式历史版本仍分别筛选。没有新增表、schema 版本或自动迁移。索引是可重建投影，不成为正文或元数据的事实来源。
 
-**读取**：`active()` 只读单例指针和 ready generation 的标量计数；不逐项重数 entries/FTS。冷连接和外部 `data_version` 变化后的重连只核对 schema identity、固定数量的 retrieval DDL 与触发器、active 是否存在且 ready、已知损坏标记和 source revision。查询不运行 PRAGMA integrity_check/foreign_key_check、FTS integrity-check、整份哈希或来源指纹扫描。普通 worker 和 Web 启动门同样只检查布局；完整目录库核验与真实损坏错误的规则归[存储技术篇](07-versioned-storage.md#5-存储完整性验证)。显式 `storage retrieval-inspect` 仍保留完整检查，不由搜索触发。
+**读取**：`active()` 只读单例指针和 ready generation 的标量计数；不逐项重数 entries/FTS。冷连接和外部 `data_version` 变化后的重连只核对 schema identity、固定数量的 retrieval DDL 与触发器、active 是否存在且 ready、已知损坏标记和 source revision。查询不运行 PRAGMA integrity_check/foreign_key_check、FTS integrity-check、整份哈希或来源指纹扫描。普通打开、Web 初始化探针、显式目录库核验与真实损坏错误的规则归[存储技术篇](07-versioned-storage.md#5-存储完整性验证)。显式 `storage retrieval-inspect` 仍保留完整检查，不由搜索触发。
 
 源 revision 领先于 active 的 source_revision 时返回 index-stale；没有 active 则 index-unavailable。发生真实 SQLite/FTS 读取损坏或已经由显式维护确认损坏时，返回 index-corrupt，并带可选 `maintenance_hint="rebuild-index"`。查询不为了发现尚未触达的静默损坏而扫描全库；命中源仍按固定 ID/hash 与 artifact reader 核对。全库材料缺口只查询存在性，不把全部文献行加载到宿主。
 
 **逐篇增量刷新**：`refresh()` 先用现有索引比对全部来源的标量指纹，不读正文或 FTS 倒排。指纹为 Literature/Meta 身份、metadata_revision/sha256，以及每个文档的 version、representation、源资产/hash 和 is_default。仅变化、删除或失去来源的 Literature 进入处理；它的元数据与固定文档重新核验并按原规则分块，未变化的文献不读取正文、不重写条目。每篇先借现有 building generation 暂存，每批最多 128 条或 1 MiB，沿用 catalog admission；扫描、文件读取和宿主计算不持有业务写锁。
 
-单篇接纳事务重新比较该篇来源指纹；匹配才删除旧的该篇条目并将暂存条目归入 active，按差额更新计数，不切换其它文献。指纹改变只丢弃并重做该篇。后到的新发布导致一次新的轻量比对，已接纳且未再变化的文献保留，不因全局 revision 变化而整批作废。源消失时移除它的旧条目；关闭/取消保留已提交文献，清理未接纳暂存。generation 锁约束刷新、重建与验证，同一 catalog 一个处理者；下次刷新清理进程中断遗留的 building 暂存。
+单篇接纳事务重新比较该篇来源指纹；匹配才删除旧的该篇条目并将暂存条目归入 active，按差额更新计数，不切换其它文献。指纹改变只丢弃并重做该篇。后到的新发布导致一次新的轻量比对，已接纳且未再变化的文献保留，不因全局 revision 变化而整批作废。源消失时移除它的旧条目；关闭/取消保留已提交文献，清理未接纳暂存。generation 锁约束刷新、重建与验证，同一 catalog 一个处理者。
 
 全部变化都追上同一 source watermark 后，短事务才将 active.source_revision 推进到该值。分批更新期间旧 revision 保持过时，查询不返回混合结果；更新结束后旧 continuation 的 revision 不再匹配，返回 context-cursor-invalid，提示重新查询。这复用现有 cursor 身份，无需新增 generation 修订列。
 
 **显式重建与验证**：`build()` 始终完整读源、创建新 generation，保留原整代校验/CAS；不复用旧 FTS 文字。`verify()` 逐篇从源重算预期条目，与 active 的条目和文字逐项比较，再执行 SQLite/外键健康检查、FTS integrity-check 和整份内容/倒排哈希。成功返回 `IndexVerificationResult {schema_version:1,status:"verified",generation_id,source_revision,entry_count,source_count,elapsed_ms}`。完整哈希扫描在业务写入 admission 外形成有界证明，最终短事务复核数据版本并保存证书；期间有来源或索引变化返回 index-stale，不把并发变化误标为损坏。
+
+**退役代回收**：成功切换 active 后，以及下一次增量刷新比对来源前，持 generation 锁清理全部非 active 代，包括旧 ready 代与中断遗留的 building 暂存；当前结构不保存 failed 状态。每个事务通过 catalog admission 最多删除 128 个条目及对应 FTS 行，并以 1 MiB 原 FTS 文字为批次目标；单条超过目标时独立处理以继续进展。每批重读 active 并拒绝删除它，批次间释放写入 admission；只有条目清空才删除代头，不用一次外键级联删除整代。取消保留已提交回收；已经发布的 active 不撤销，剩余旧代下次刷新续清。回收不改变源 revision，也不自动 VACUUM；释放的页供 SQLite 复用。
+
+候选读取将 active 身份核对与 FTS 查询固定在同一个 SQLite 读取快照，WAL 读者可完成已开始的快照。候选请求的 generation 已失效、或组装完成前 active 身份变化时，返回 context-cursor-invalid，要求重新查询；旧 continuation 不依赖旧代继续存在。完整检查仍覆盖全库 SQLite、外键、FTS 物理结构和孤立 FTS 行；计数与内容/倒排证书只核对 active，部分回收的退役代不再作为可读投影核验。
 
 增量修改会使上一份整代哈希证书失效：现有 hash 字段的全零保留值表示证书不再对应当前投影；完整检查回执 `hashes=not-current`，不能当作正文已经全量核实。显式完整核验通过后保存新证书，`hashes=verified`。维护确认损坏时在 posting hash 保存专用保留标记，供读取常数级拒绝；重建后清除。静默删行或改字并不保证在下一次 MATCH 中立即触发 SQLite 错误，必须由显式 verify 检出，不能恢复搜索前的全量扫描。现有 `storage retrieval-inspect` 保留结构/计数/已有证书检查；核对来源正文使用 verify-index。
 

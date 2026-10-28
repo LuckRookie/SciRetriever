@@ -42,7 +42,7 @@ export function initializeCurrentCatalog(
     if (
       db
         .prepare(
-          "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1",
+          "SELECT 1 FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' LIMIT 1",
         )
         .get()
     )

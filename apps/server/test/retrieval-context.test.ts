@@ -672,7 +672,7 @@ describe("explicit retrieval projection and bounded Context", () => {
     }
   });
 
-  it("retains the old generation after source change until an explicit rebuild", async () => {
+  it("retains the active generation after source change and reclaims it after an explicit rebuild", async () => {
     const env = await fixture();
     let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
     try {
@@ -704,7 +704,14 @@ describe("explicit retrieval projection and bounded Context", () => {
               )
               .get() as { n: number }
           ).n,
-        ).toBe(2);
+        ).toBe(1);
+        expect(
+          db
+            .prepare(
+              "SELECT generation_id FROM retrieval_generations WHERE generation_id=?",
+            )
+            .get(before.generation_id),
+        ).toBeUndefined();
       } finally {
         db.close();
       }

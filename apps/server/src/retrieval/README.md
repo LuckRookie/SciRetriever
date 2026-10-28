@@ -13,6 +13,8 @@
 
 索引构建使用独立 generation 锁串行化同一 catalog 的构建者；锁只占用既有锁目录的派生 sidecar，不创建第二份 catalog。扫描与文件核验不持有业务写入 admission，每批最多 128 条、1 MiB，再通过共享 worker 的 catalog admission 提交；批次之间允许文件夹等业务写入。锁顺序为 generation → catalog，调用者不可在 catalog admission 内等待构建。整代重建检查 source revision；增量更新只复核正在接纳的文献，源变时只重做这一篇，已提交的其它篇保留。损坏必须显式验证/重建，不在查询或刷新前扫描全库。
 
+整代发布后与下次增量刷新先分批回收非 active 的 ready/building 代；清空条目与 FTS 后才删代头，每批重读 active 并释放 catalog admission，取消后可续清，不自动 VACUUM。查询将 active 身份和 FTS 候选放在同一 SQLite 快照，结果组装后再核对身份；退役状态和旧游标返回需重新查询，不读取部分回收的旧代。
+
 更新期间查询沿用现有口径：无就绪代为 `index-unavailable`，源版本领先于 active 时为 `index-stale` 且不返回过时命中；它们不等同于正在运行任务。读取只检查身份、ready、源版本与已知损坏标记；`data_version` 变化不重算全库哈希。完整健康检查仅在显式维护、备份/恢复和迁移边界执行。
 
 [上级目录](../README.md)

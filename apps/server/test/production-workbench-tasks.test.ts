@@ -16,6 +16,7 @@ import {
   type ArtifactRef,
 } from "@sciretriever/contracts";
 import { startProductionWorkbench } from "../src/bootstrap/workbench.js";
+import { ProcessingTaskService } from "../src/application/jobs/processing.js";
 import { initializeCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import type {
   ExecutionJobStatus,
@@ -120,6 +121,25 @@ async function fixture() {
       }),
     },
   });
+  // Observe the actual HTTP-owned run. Joining it synchronously at admission
+  // never starts a replacement run and avoids a one-second polling deadline
+  // for artifact publication and durable task settlement under suite load.
+  const settlements = new Map<
+    string,
+    ReturnType<ProcessingTaskService["runResults"]>
+  >();
+  const start = ProcessingTaskService.prototype.start;
+  const started = vi
+    .spyOn(ProcessingTaskService.prototype, "start")
+    .mockImplementation(function (this: ProcessingTaskService, id: string) {
+      const admitted = start.call(this, id);
+      if (admitted) {
+        const pending = this.runResults(id);
+        settlements.set(id, pending);
+        void pending.catch(() => undefined);
+      }
+      return admitted;
+    });
   const authCookie = await workbenchLogin(server.origin);
   const index = await fetch(server.origin, { headers: { Cookie: authCookie } });
   const cookie = `${authCookie}; ${index.headers.get("set-cookie")!.split(";")[0]!}`;
@@ -171,6 +191,10 @@ async function fixture() {
     grant,
     cookie,
     call,
+    async settledTask(id: string) {
+      expect(settlements.has(id)).toBe(true);
+      await settlements.get(id)!;
+    },
     get discoveryCalls() {
       return discoveryCalls;
     },
@@ -203,8 +227,12 @@ async function fixture() {
       };
     },
     async close() {
-      await server.close();
-      await rm(home, { recursive: true, force: true });
+      try {
+        await server.close();
+      } finally {
+        started.mockRestore();
+        await rm(home, { recursive: true, force: true });
+      }
     },
   };
 }
@@ -568,10 +596,9 @@ describe("production task workbench composition", () => {
         status: 202,
         value: { started: true },
       });
-      await vi.waitFor(async () =>
-        expect((await env.server.application.jobs!.getJob(id))?.status).toBe(
-          "completed",
-        ),
+      await env.settledTask(id);
+      expect((await env.server.application.jobs!.getJob(id))?.status).toBe(
+        "completed",
       );
       expect(env.parseCalls).toBe(2);
       expect(await env.call(`/api/tasks/${id}`)).toMatchObject({
@@ -730,10 +757,9 @@ describe("production task workbench composition", () => {
       expect(await env.call(`/api/tasks/${id}/resume`, {})).toMatchObject({
         status: 200,
       });
-      await vi.waitFor(async () =>
-        expect((await env.server.application.jobs!.getJob(id))?.status).toBe(
-          "completed",
-        ),
+      await env.settledTask(id);
+      expect((await env.server.application.jobs!.getJob(id))?.status).toBe(
+        "completed",
       );
       const other = await env.call("/api/tasks", {
         kind: "processing",
