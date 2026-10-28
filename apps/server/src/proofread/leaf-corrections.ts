@@ -20,7 +20,7 @@ import {
   textId,
 } from "../archive/text-source.js";
 export const LEAF_CORRECTION_METHOD = "leaf-correct-codepoint-v1";
-export const RETAINED_SUSPECT_METHOD = "retained-page-comparable-v2";
+export const RETAINED_SUSPECT_METHOD = "retained-page-comparable-v3";
 function subtract(left: readonly string[], right: readonly string[]) {
   const counts = new Map<string, number>();
   for (const t of right) counts.set(t, (counts.get(t) ?? 0) + 1);
@@ -65,7 +65,7 @@ export function retainedPageSuspects(
   const result: RetainedPageSuspect[] = [];
   const add = (
     kind: RetainedPageSuspect["kind"],
-    token: string,
+    tokens: readonly string[],
     index: number,
     ids: readonly string[],
   ) => {
@@ -73,22 +73,54 @@ export function retainedPageSuspects(
       page_index: page.page,
       kind,
       leaf_ids: ids,
-      tokens: [token],
+      tokens,
     };
     result.push({
       suspect_id: textId([RETAINED_SUSPECT_METHOD, inputHash, body, index]),
       ...body,
     });
   };
-  for (const t of missing) {
+  // One question per run of adjacent differing tokens: a paragraph the draft lacks, or
+  // a figure's text the layer lacks, is one thing to check, not one per word. A run
+  // with a number, unit or formula is a token mismatch; ADR 0037 counts it once.
+  const runs = (
+    values: readonly { token: string; index: number }[],
+    owner: (index: number) => string,
+  ) => {
+    const out: { token: string; index: number }[][] = [];
+    for (const v of values) {
+      const last = out.at(-1)?.at(-1);
+      if (
+        last &&
+        last.index + 1 === v.index &&
+        owner(last.index) === owner(v.index)
+      )
+        out.at(-1)!.push(v);
+      else out.push([v]);
+    }
+    return out;
+  };
+  const kind = (
+    run: readonly { token: string }[],
+    side: "missing" | "extra",
+  ) => (run.some((t) => scientific(t.token)) ? "token-mismatch" : side);
+  for (const run of runs(missing, () => "")) {
     const ids = retained.length === 1 ? [retained[0]!.leaf_id] : [];
-    add("missing", t.token, t.index, ids);
-    if (scientific(t.token)) add("token-mismatch", t.token, t.index, ids);
+    add(
+      kind(run, "missing"),
+      run.map((t) => t.token),
+      run[0]!.index,
+      ids,
+    );
   }
-  for (const t of extra) {
-    const ids = [entries[t.index]!.id];
-    add("extra", t.token, t.index, ids);
-    if (scientific(t.token)) add("token-mismatch", t.token, t.index, ids);
+  for (const run of runs(extra, (i) => entries[i]!.id)) {
+    const ids = [entries[run[0]!.index]!.id];
+    add(
+      kind(run, "extra"),
+      run.map((t) => t.token),
+      run[0]!.index,
+      ids,
+    );
   }
   for (const leaf of retained) {
     const value = texts?.get(leaf.leaf_id) ?? leaf.original_text;
@@ -96,7 +128,7 @@ export function retainedPageSuspects(
       if (["\t", "\r", "\n"].includes(match[0])) continue;
       add(
         "extra",
-        `U+${match[0].codePointAt(0)!.toString(16).toUpperCase()}`,
+        [`U+${match[0].codePointAt(0)!.toString(16).toUpperCase()}`],
         [...value.slice(0, match.index)].length,
         [leaf.leaf_id],
       );

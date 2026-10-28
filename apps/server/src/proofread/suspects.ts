@@ -71,8 +71,8 @@ const LATEX_SYMBOLS: Readonly<Record<string, string>> = {
 /**
  * Retained-page suspects compare a parser's text with a PDF text layer. Both describe the
  * same printed characters in different notations, so notation differences are removed
- * first: line-end hyphenation in the layer, LaTeX commands, script markers and citation
- * numbers glued to a period. What remains is a difference in the characters themselves.
+ * first: hyphenation, LaTeX commands, script markers and citation numbers glued to a
+ * period. What remains is a difference in the characters themselves.
  */
 export function comparableTokens(text: string): string[] {
   const plain = normalizeForComparison(
@@ -89,7 +89,10 @@ export function comparableTokens(text: string): string[] {
     .replace(/[_^]\{([^{}]*)\}/gu, " $1 ")
     .replace(/[_^](?=[\p{L}\p{N}])/gu, " ")
     .replace(/[{}$]/gu, " ")
-    .replace(/([\p{L})\]])\.(\d)/gu, "$1. $2");
+    .replace(/([\p{L})\]])\.(\d)/gu, "$1. $2")
+    // A compound hyphen that falls at a line end is indistinguishable from a break
+    // hyphen, so both sides join every word-internal hyphen.
+    .replace(/([\p{L}\p{N}])[-\u2010\u2011](?=[\p{L}\p{N}])/gu, "$1");
   return textTokens(plain).flatMap((t) => {
     const bare = t.replace(/^[_^]\{(.*)\}$/u, "$1");
     return bare ? [bare] : [];

@@ -243,12 +243,10 @@ it("subtracts only deleted token occurrences, retains repeated-number questions 
       snapshot.leaves.slice(1),
       hash,
     );
-  expect(
-    suspects.filter((s) => s.kind === "missing").map((s) => s.tokens),
-  ).toEqual([["5"]]);
-  expect(new Set(suspects.map((s) => s.kind))).toEqual(
-    new Set(["missing", "token-mismatch"]),
-  );
+  // A number is counted once, as a token mismatch, not also as missing text.
+  expect(suspects.map((s) => [s.kind, s.tokens])).toEqual([
+    ["token-mismatch", ["5"]],
+  ]);
   const badGlyph = await archiveTextFixture([{ text: "x\uFFFD" }], {
     layers: ["x"],
   });
@@ -260,6 +258,40 @@ it("subtracts only deleted token occurrences, retains repeated-number questions 
       hash,
     ).some((s) => s.tokens.includes("U+FFFD")),
   ).toBe(true);
+});
+it("asks one question per run of adjacent differences and ignores where a compound hyphen breaks", async () => {
+  // A real RSC page: scheme text the layer lacks became 115 one-word questions, and a
+  // compound hyphen at a layer line end made "metal-catalyzed" two words on one side only.
+  const f = await archiveTextFixture(
+    [
+      {
+        text: "A metal-catalyzed route. Scheme scope with varied aryl iodides 97% yield.",
+      },
+    ],
+    { layers: ["A metal-\ncatalyzed route."] },
+  );
+  const suspects = retainedPageSuspects(
+    f.pages[0]!,
+    arranged(f.source).leaves,
+    [],
+    hash,
+  );
+  expect(suspects.map((s) => [s.kind, s.tokens])).toEqual([
+    [
+      "token-mismatch",
+      [
+        "Scheme",
+        "scope",
+        "with",
+        "varied",
+        "aryl",
+        "iodides",
+        "97",
+        "%",
+        "yield",
+      ],
+    ],
+  ]);
 });
 it("requires complete source reading, a full image and an explicit disposition for every original and newly introduced suspect", async () => {
   const f = await archiveTextFixture([{ text: "Yield 67%." }], {
@@ -720,13 +752,14 @@ it("removes draft-only questions when their correction is removed and preserves 
       });
     }
     if (calls === 5)
+      // Paging suspects only: an offset past the layer end returns no text, not a rejection.
       return modelTool("read_reference", {
         page_index: 0,
-        text_offset: 0,
+        text_offset: 9999,
         suspect_offset: 0,
       });
     if (calls === 6) {
-      expect(toolJson(request).suspects).toEqual([]);
+      expect(toolJson(request)).toMatchObject({ text: "", suspects: [] });
       return modelTool("submit_page", { no_change: true });
     }
     throw Error("unexpected-call");
@@ -740,6 +773,48 @@ it("removes draft-only questions when their correction is removed and preserves 
     expect(result.complete).toBe(true);
     expect(result.pages[0]!.corrections).toEqual([]);
     expect(calls).toBe(6);
+  } finally {
+    await runtime.close();
+  }
+});
+it("names each rejected disposition so the model does not resend the same batch", async () => {
+  // A real 112-suspect page: one bad id in a batch of 20 drew three identical resends.
+  const f = await archiveTextFixture([{ text: "Yield 67%." }], {
+    layers: ["Yield 97%."],
+  });
+  const replies: Record<string, unknown>[] = [];
+  let calls = 0;
+  const runtime = fakeTextRuntime(async (request) => {
+    calls++;
+    if (calls > 1) replies.push(toolJson(request));
+    return modelTool("put_dispositions", {
+      dispositions: [
+        {
+          suspect_id: "00000000-0000-4000-8000-000000000000",
+          status: "draft-correct",
+          correction_ids: [],
+          reason: "The image shows this text.",
+        },
+      ],
+    });
+  });
+  try {
+    const result = await new ArchivePageProofreadService(
+      runtime,
+      fakePages(f.pages),
+      memoryTextCache().cache,
+    ).build(f.source, arranged(f.source), f.pages);
+    expect(result.complete).toBe(false);
+    expect(replies[0]).toMatchObject({
+      accepted: false,
+      issues: [
+        {
+          code: "suspect-disposition-invalid",
+          id: "00000000-0000-4000-8000-000000000000",
+        },
+      ],
+      hint: expect.stringContaining("not a current suspect"),
+    });
   } finally {
     await runtime.close();
   }

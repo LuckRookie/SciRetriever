@@ -671,7 +671,13 @@ export async function runArchiveTextSession<T>(
                         hint: `Arguments must match the ${call.name} parameter schema exactly: only the listed keys, integers within their minimum and maximum.`,
                         expected_arguments: schema,
                       }
-                    : {}),
+                    : issues.some(
+                          (i) => i.code === "suspect-disposition-invalid",
+                        )
+                      ? {
+                          hint: "Each listed id is not a current suspect of this page, or a fixed disposition names a correction that does not exist. Nothing in this batch was saved; resend it without or with corrected items.",
+                        }
+                      : {}),
                   stop: input.progress.state.stop,
                 },
                 "rejected",

@@ -441,7 +441,7 @@ export class ArchivePageProofreadService {
           ),
           toolDeclaration(
             "read_reference",
-            "Read this page visible text layer and current suspects; both are hints, the image is authoritative.",
+            "Read this page visible text layer and current suspects; both are hints, the image is authoritative. Page them separately with next_text_offset and next_suspect_offset; a text_offset past the end returns no text.",
             {
               page_index: integer,
               text_offset: integer,
@@ -627,15 +627,12 @@ export class ArchivePageProofreadService {
                   20,
                   7000,
                 );
+                const layer = page.kind === "text-layer" ? page.text : "";
+                // Paging suspects past the end of the layer text is not an input error.
                 const reference = boundedTextWindow(
-                  [
-                    {
-                      id: `reference:${page.page}`,
-                      text: page.kind === "text-layer" ? page.text : "",
-                    },
-                  ],
+                  [{ id: `reference:${page.page}`, text: layer }],
                   0,
-                  offset,
+                  Math.min(offset, [...layer].length),
                   1,
                   (id, start, end) => {
                     if (readRanges.add(id, start, end))
@@ -730,15 +727,21 @@ export class ArchivePageProofreadService {
                 )
                   throw new ArchiveTextError("tool-input");
                 const parsed = r.dispositions.map(parseSuspectDisposition);
-                if (
-                  parsed.some(
-                    (d) =>
-                      !suspects.has(d.suspect_id) ||
-                      (d.status === "fixed" &&
-                        d.correction_ids.some((id) => !corrections.has(id))),
-                  )
-                )
-                  throw new ArchiveTextError("suspect-disposition-invalid");
+                // Name each rejected item, or the model resends the same batch unchanged.
+                const invalid = parsed.filter(
+                  (d) =>
+                    !suspects.has(d.suspect_id) ||
+                    (d.status === "fixed" &&
+                      d.correction_ids.some((id) => !corrections.has(id))),
+                );
+                if (invalid.length)
+                  throw new ArchiveTextError(
+                    "suspect-disposition-invalid",
+                    invalid.map((d) => ({
+                      code: "suspect-disposition-invalid",
+                      id: d.suspect_id,
+                    })),
+                  );
                 for (const d of parsed) dispositions.set(d.suspect_id, d);
                 for (const d of parsed)
                   progress.progress(
