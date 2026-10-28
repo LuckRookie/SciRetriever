@@ -11,6 +11,7 @@ import {
   type BibliographyInputFormat,
 } from "../literature/bibliography-import.js";
 import { operationRecord as inputRecord } from "./query-operations.js";
+import { runMetadataTask } from "./metadata-task.js";
 export function createMetadataOperations(app: Application) {
   const operations = {
     discovery: async (value: unknown, signal?: AbortSignal) => {
@@ -37,17 +38,18 @@ export function createMetadataOperations(app: Application) {
           throw new ContractValidationError();
         if (!app.metadata.reference_selection.length)
           throw new ProcessingTaskError("metadata-unavailable");
-        return app.citations.run({
-          seed_literature_ids: [seed],
-          direction: r.direction as "references" | "cited-by",
-          max_depth: 1,
-          result_limit: r.scan_limit,
-          providers: app.metadata.reference_selection.map((provider_name) => ({
-            provider_name,
-            scan_limit: r.scan_limit as number,
-          })),
-          ...(signal ? { signal } : {}),
-        });
+        return runMetadataTask(
+          app,
+          {
+            kind: "citation",
+            seed_literature_ids: [seed],
+            direction: r.direction as "references" | "cited-by",
+            max_depth: 1,
+            result_limit: r.scan_limit,
+            scan_limit: r.scan_limit,
+          },
+          signal,
+        );
       }
       const r = inputRecord(
         value,
@@ -86,16 +88,17 @@ export function createMetadataOperations(app: Application) {
         throw new ContractValidationError();
       if (!app.metadata.topic_selection.length)
         throw new ProcessingTaskError("metadata-unavailable");
-      return app.discovery.run({
-        query: r.query,
-        year_from: from,
-        year_to: to,
-        providers: app.metadata.topic_selection.map((provider_name) => ({
-          provider_name,
+      return runMetadataTask(
+        app,
+        {
+          kind: "topic",
+          query: r.query,
+          year_from: from,
+          year_to: to,
           scan_limit: limit,
-        })),
-        ...(signal ? { signal } : {}),
-      });
+        },
+        signal,
+      );
     },
     importBibliography: async (value: unknown) => {
       const r = inputRecord(value, ["format", "content"]);

@@ -424,7 +424,15 @@ describe("workbench session", () => {
     expect(() =>
       missing.session.runAgent(missing.a, missing.session.view().control.epoch),
     ).toThrow("workbench session operation failed");
-    expect(missing.session.view().error).toBe("model-unavailable");
+    expect(missing.session.view()).toMatchObject({
+      error: "error",
+      problem: {
+        display: "error",
+        technical_details: {
+          diagnostics: [{ code: "model-unavailable", scope: "runtime" }],
+        },
+      },
+    });
     await session.close();
     await missing.session.close();
   });

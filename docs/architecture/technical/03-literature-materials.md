@@ -333,7 +333,7 @@ observation/result 的既有先后顺序，再按供应商返回顺序切成最�
 物理提交粒度，不合并 observation、端点、provenance 或后续待扩展单位，也不把整次 Provider
 的无界关系集合放入一个长事务。
 
-领域 DiscoveryRun 由 Entry 调用本次有效选择且 readiness 通过的全部 Metadata Search Provider。有效选择由纯本地 resolver 从 Auto 或 Custom 得到：Auto 是当前版本维护的默认安全集合，Custom 是用户精确顺序并允许为空；Key 和在线状态都不改变集合。明确选择但缺少生产 adapter、必需普通参数、凭据或 AccessPolicy 时，运行开始前形成稳定配置错误；不能静默跳过、凭据驱动启用或伪装为零结果。Metadata 不因一条 observation 被接纳就自动对它发起逐篇精确查询，也不把搜索相关度、候选、未接纳结果、cursor、原始请求/响应或扫描计数交给 publication Port。自然耗尽、达到扫描上限和失败由 Entry 转换为逐来源稳定终止结果；Adapter 的 timeout、重复 cursor 与空分页循环保护不进入业务 Model。
+领域 DiscoveryRun 由 Entry 调用本次有效选择的 Metadata Provider。有效选择由纯本地 resolver 从 Auto 或 Custom 得到：Auto 按 ADR 0043 使用公开默认集合与配置齐全的授权来源，Custom 是用户精确顺序并允许为空；不在启动时探测在线权限。明确选择但缺少生产 adapter、必需普通参数、凭据或 AccessPolicy 时，运行开始前形成稳定配置错误；不能静默跳过或伪装为零结果。Metadata 不因一条 observation 被接纳就自动对它发起逐篇精确查询，也不把搜索相关度、候选、未接纳结果、cursor、原始请求/响应或扫描计数交给 publication Port。自然耗尽、达到扫描上限和失败由 Entry 转换为逐来源稳定终止结果；Adapter 的 timeout、重复 cursor 与空分页循环保护不进入业务 Model。
 
 Metadata 不判断一条 Provider 结果是否与用户领域语义相关，不调用 LLM 或 embedding，也不按搜索分数、标题关键词、摘要、连续低收益或其它主题启发式过滤和提前停止。非空标题或 DOI 任一存在就是当前最低入库边界；有实际内容但偏题的 Literature 仍可正常进入后续处理，不属于 `NoUsableContent`。
 
@@ -882,9 +882,9 @@ LiteratureAsset
 `browser-generic` 聚合政策与文章平台资格共同准入；同平台网络串行，不同平台可由独立 worker
 推进。等待 Network/Browser permit 不等于候选失败。
 
-获取来源轨迹与 Debug 日志分开。每篇每来源产生有界 `AcquisitionAttempt`：`stage/source/started_at/finished_at/requested/result`，可选 `code/candidates`；结果区分命中、正常未命中、不适用、未启用、不可用、失败、冷却和拒绝。共享 Network 只在已准入 HTTP 请求派发时提供无参数通知，不能把调用 locator 或进入阶段当作实际网络请求。Browser 升级单独产生 `stage=browser,result=escalated,requested=false`，不声称后续 Browser 的联网状态。首次出版社证据准备的安全计时单列 `doi-resolution`，不保存落地页。
+获取来源轨迹与 Debug 日志分开。每篇每来源产生有界 `AcquisitionAttempt`：`stage/source/started_at/finished_at/requested/result`，可选 `problem/technical_details/candidates`（历史 code 只读解码）；结果区分命中、正常未命中、不适用、未启用、不可用、失败、冷却和拒绝。共享 Network 只在已准入 HTTP 请求派发时提供无参数通知，不能把调用 locator 或进入阶段当作实际网络请求。Browser 升级单独产生 `stage=browser,result=escalated,requested=false`，不声称后续 Browser 的联网状态；实际派发与完成另记。首次出版社证据准备的安全计时单列 `doi-resolution`，不保存落地页。
 
-Jobs 按目标/文献/attempt 绑定并保存 `acquisition-attempt` 事件，不新增表；HTTP、CLI、MCP 共用任务读取投影。每次单篇获取最多 64 条；任务读取最多 10,000 个来源事件并显式报告截断，按文献/attempt 聚合后同样有组内截断标记，不受普通技术活动尾部窗口遮蔽。`WorkbenchView.sessions[].prior_attempts` 可选追加最新 16 条，随文章身份进入进程内会话；旧 payload 可省略。合成会话使用同样合同。安全事件只有受限 ID、枚举、时间和计数，不保存 URL、headers、Cookie、token、响应或页面文字。后续成功不能抹去前序来源轨迹；诊断不改变五层短路、失败隔离、取消、预算或不可变发布。
+Jobs 按目标/文献/attempt 绑定并保存 `acquisition-attempt` 事件，不新增表；HTTP、CLI、MCP 共用任务读取投影。每次单篇获取最多 64 条；任务读取最多 10,000 个来源事件并显式报告截断，按文献/attempt 聚合后同样有组内截断标记，不受普通技术活动尾部窗口遮蔽。`WorkbenchView.sessions[].prior_attempts` 可选追加最新 16 条，随文章身份进入进程内会话；旧 payload 可省略。合成会话使用同样合同。安全事件只有受限 ID、枚举、时间和计数，不保存 URL、headers、Cookie、token、响应或页面文字。后续成功不能抹去前序来源轨迹；诊断不改变五层短路、失败隔离、取消、预算或不可变发布。最终渠道事件、任务来源汇总与统计口径见[任务技术篇 10.1](02-task-coordination.md#101-获取来源记录与统计)。
 
 **2026-10-13 当前编排：** 生产 Completion 由有界 worker 逐篇调用 `EntryPdfAcquisitionService.acquire`，
 每篇内部保持五层顺序、来源隔离、实际入口证据和不可变发布，完成即反馈并补入新目标。单篇恢复不推进全操作
@@ -1081,9 +1081,9 @@ DOI 定位只对 doi.org 发出一次 GET。首跳响应由当前操作保存并
 session/article/control epoch，截图请求在多会话下必须带当前所选 `session_id`。
 中性 `WorkbenchView` 的可选 `sessions/session_phase/session_outcome` 保留旧单会话字段兼容，
 会话投影最多64行，与已有 completion cohort 支持范围一致；只淘汰已关闭行，不截掉运行任务。
-closed outcome 只投影 published(receipt_id)、retained(code) 或 cancelled；Page、lease、
+closed outcome 只投影 published(receipt_id)、retained(code, problem?) 或 cancelled；Page、lease、
 Cookie、敏感 query 和文件绝对路径均不进入这份合同。可选 `session_cleanup_failure` 单独投影
-本篇资源清理的稳定code，已published的receipt和Library事实保持可见，不被随后cleanup错误替换。
+本篇资源清理错误，稳定原因码仅在 technical_details，已published的receipt和Library事实保持可见，不被随后cleanup错误替换。
 Agent的JSON观察包含动作统计、真实模型派发和活跃时间预算，旧Workbench bytes字段保留兼容，
 不作为模型的文件大小上限。
 

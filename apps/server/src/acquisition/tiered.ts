@@ -1,7 +1,9 @@
 import {
   parseAcquisitionAttempt,
   type AcquisitionAttempt,
+  type SourceProblem,
 } from "@sciretriever/contracts";
+import { sourceProblem } from "../providers/shared/source-problem.js";
 import { observeNetworkRequests } from "../network/request-activity.js";
 import { ContractValidationError } from "@sciretriever/contracts";
 import { NetworkHttpError } from "../network/http.js";
@@ -514,6 +516,7 @@ export class TieredAcquisitionService {
     ];
     for (const source of sources) {
       const startedAt = new Date().toISOString();
+      let problem: SourceProblem | undefined;
       let requested = false,
         candidateCount = 0;
       trace = { result: "miss" };
@@ -564,6 +567,13 @@ export class TieredAcquisitionService {
               "Acquisition batch was cancelled while a source was being discovered.",
             );
           if (kind !== "route") throw error;
+          problem = sourceProblem(
+            error instanceof AcquisitionRouteError
+              ? error.code
+              : "source-discovery-failed",
+            "pdf",
+            error,
+          );
           const detail = routeFailure(
             error,
             source.source_name,
@@ -606,6 +616,7 @@ export class TieredAcquisitionService {
               download(item, source, candidate, signal),
             );
             trace.result = "hit";
+            problem = undefined;
             delete trace.code;
             onProgress?.({
               key: item.key,
@@ -650,6 +661,13 @@ export class TieredAcquisitionService {
                 "Acquisition batch was cancelled during candidate delivery.",
               );
             if (kind !== "route") throw error;
+            problem = sourceProblem(
+              error instanceof AcquisitionRouteError
+                ? error.code
+                : "candidate-download-failed",
+              "pdf",
+              error,
+            );
             const detail = routeFailure(
               error,
               source.source_name,
@@ -704,6 +722,7 @@ export class TieredAcquisitionService {
           trace.code =
             this.registry.unavailable[source.source_name] ??
             "download-unavailable";
+          problem = sourceProblem(trace.code, "pdf");
         }
         await onAttempt?.(
           parseAcquisitionAttempt({
@@ -718,6 +737,13 @@ export class TieredAcquisitionService {
             requested,
             result: trace.result,
             candidates: candidateCount,
+            ...(["failed", "rejected", "unavailable"].includes(trace.result)
+              ? {
+                  problem:
+                    problem ??
+                    sourceProblem(trace.code ?? "source-failure", "pdf"),
+                }
+              : {}),
             ...(trace.code
               ? {
                   code: /^[a-z][a-z0-9-]{0,95}$/u.test(trace.code)

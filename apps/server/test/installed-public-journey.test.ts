@@ -412,9 +412,7 @@ async function installedBrowserJourney(
       `${origin}/api/frame?client_id=${watcher.id}&frame_seq=${running.observation!.frame_seq}`,
       { headers: { Cookie: cookie! } },
     );
-    expect(frame.status).toBe(200);
-    expect(frame.headers.get("content-type")).toBe("image/jpeg");
-    expect((await frame.arrayBuffer()).byteLength).toBeGreaterThan(0);
+    expect(frame.status).toBe(404);
     const hint = await post(
       "/api/guidance",
       {

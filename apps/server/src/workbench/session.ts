@@ -1,3 +1,17 @@
+import type {
+  DirectBrowserInput,
+  ScreencastFrame,
+} from "@sciretriever/contracts";
+import {
+  ScreencastError,
+  SCREENCAST_PROFILES,
+  type ScreencastProfile,
+} from "../browser/screencast.js";
+import type {
+  WorkbenchScreencastObserver,
+  WorkbenchScreencastState,
+} from "./screencast-port.js";
+import { presentWorkbenchSources } from "./source-presentation.js";
 import {
   parseAcquisitionAttempts,
   type AcquisitionAttempt,
@@ -118,6 +132,22 @@ export class WorkbenchSession {
   private publishedOutcome:
     | import("@sciretriever/contracts").WorkbenchArticleCloseOutcome
     | undefined;
+  private readonly screenViewers = new Map<
+    string,
+    WorkbenchScreencastObserver
+  >();
+  private readonly screenProfiles = new Map<string, ScreencastProfile>();
+  private screenStop: (() => Promise<void>) | undefined;
+  private screenTail = Promise.resolve();
+  private screenPage: BrowserPageHandle | undefined;
+  private screenStatus: WorkbenchScreencastState["status"] = "connecting";
+  private screenCode: string | undefined;
+  private screenEpoch = 0;
+  private screenEpochKey = "";
+  private screenKind: import("@sciretriever/contracts").ScreencastPageKind =
+    "unknown";
+  private directTail: Promise<void> = Promise.resolve();
+  private returning: string | null = null;
   private nextObservationActor: "human" | "platform" = "platform";
 
   constructor(
@@ -202,6 +232,7 @@ export class WorkbenchSession {
     await page.activate?.();
     this.nextObservationActor = "human";
     this.page = page;
+    this.rebindScreencast();
     this.current = undefined;
     this.wire = null;
     this.errorValue = null;
@@ -273,6 +304,9 @@ export class WorkbenchSession {
       this.abandonmentAbort?.abort();
     this.humans.delete(clientId);
     this.control.detach(clientId);
+    if (controlled) {
+      this.queueInputReset(this.page);
+    }
     if (controlled && this.production) {
       this.policy.pause();
       this.stateValue = "paused";
@@ -281,6 +315,7 @@ export class WorkbenchSession {
     else this.wake();
   }
   private wake(): void {
+    this.notifyScreencast();
     for (const waiter of this.waiters) waiter();
     this.waiters.clear();
   }
@@ -316,6 +351,240 @@ export class WorkbenchSession {
         this.control.state().controller_id === null ? "agent" : "human",
     });
     this.wake();
+  }
+
+  screencastState(clientId: string): WorkbenchScreencastState {
+    const control = this.control.state();
+    const terminal =
+      this.closePromise ||
+      ["cancelled", "finished", "failed"].includes(this.stateValue);
+    return {
+      status: terminal ? "closed" : this.screenStatus,
+      page_kind: this.screenKind,
+      stream_epoch: this.screenEpoch,
+      control:
+        this.returning === clientId
+          ? "returning"
+          : control.controller_id === clientId
+            ? "controlling"
+            : control.controller_id && control.controller_id !== this.agentId
+              ? "taken-over"
+              : "watching",
+      control_epoch: control.epoch,
+      agent_paused:
+        (control.controller_id !== null &&
+          control.controller_id !== this.agentId) ||
+        this.policy.state() === "paused",
+      ...(this.screenCode ? { code: this.screenCode } : {}),
+    };
+  }
+  private acceptScreenEpoch(pageId: string, sourceEpoch: number): void {
+    const key = `${pageId}:${sourceEpoch}`;
+    if (this.screenEpochKey !== key) {
+      this.screenEpochKey = key;
+      this.screenEpoch++;
+    }
+  }
+  private queueInputReset(page: BrowserPageHandle): void {
+    this.directTail = this.directTail
+      .then(async () => {
+        await page.screencast?.reset();
+      })
+      .catch(() => {
+        this.screenCode = "screencast-reset-failed";
+        this.notifyScreencast();
+      });
+  }
+  private notifyScreencast(): void {
+    for (const [id, observer] of this.screenViewers)
+      observer.state(this.screencastState(id));
+  }
+  private rebindScreencast(): void {
+    this.screenTail = this.screenTail
+      .then(async () => {
+        if (
+          !this.closePromise &&
+          !["cancelled", "finished", "failed"].includes(this.stateValue) &&
+          this.screenPage === this.page &&
+          this.screenStop &&
+          this.screenViewers.size
+        )
+          return;
+        if (this.screenPage && this.screenPage !== this.page)
+          this.queueInputReset(this.screenPage);
+        await this.screenStop?.();
+        this.screenStop = undefined;
+        this.screenPage = undefined;
+        if (
+          !this.screenViewers.size ||
+          this.closePromise ||
+          ["cancelled", "finished", "failed"].includes(this.stateValue)
+        )
+          return;
+        const page = this.page;
+        this.screenPage = page;
+        this.screenStatus = "connecting";
+        this.screenCode = undefined;
+        this.screenKind = "unknown";
+        this.notifyScreencast();
+        if (!page.screencast) {
+          this.screenStatus = "no-frame";
+          this.screenCode = "screencast-unavailable";
+          this.notifyScreencast();
+          return;
+        }
+        this.screenStop = await page.screencast.subscribe({
+          frame: (frame) => {
+            if (
+              page !== this.page ||
+              !this.screenViewers.size ||
+              this.closePromise
+            )
+              return;
+            this.acceptScreenEpoch(page.id, frame.stream_epoch);
+            if (this.screenStatus !== "live") {
+              this.screenStatus = "live";
+              this.screenCode = undefined;
+              this.notifyScreencast();
+            }
+            for (const observer of this.screenViewers.values())
+              observer.frame({ ...frame, stream_epoch: this.screenEpoch });
+          },
+          status: (status, code, pageKind, streamEpoch) => {
+            if (page !== this.page) return;
+            if (streamEpoch !== undefined)
+              this.acceptScreenEpoch(page.id, streamEpoch);
+            this.screenStatus = status;
+            this.screenCode = code;
+            if (pageKind) this.screenKind = pageKind;
+            this.notifyScreencast();
+          },
+        });
+        await this.configureScreencastProfile();
+      })
+      .catch(() => {
+        this.screenStatus = "no-frame";
+        this.screenCode = "screencast-source-failed";
+        this.notifyScreencast();
+      });
+  }
+  async subscribeScreencast(
+    clientId: string,
+    observer: WorkbenchScreencastObserver,
+  ): Promise<() => Promise<void>> {
+    this.human(clientId);
+    this.live();
+    if (this.screenViewers.has(clientId))
+      throw new ScreencastError("screencast-already-subscribed");
+    this.screenViewers.set(clientId, observer);
+    this.screenProfiles.set(clientId, SCREENCAST_PROFILES[0]!);
+    observer.state(this.screencastState(clientId));
+    this.rebindScreencast();
+    await this.screenTail;
+    let stopped = false;
+    return async () => {
+      if (stopped) return;
+      stopped = true;
+      this.screenViewers.delete(clientId);
+      this.screenProfiles.delete(clientId);
+      this.rebindScreencast();
+      await this.screenTail;
+      await this.configureScreencastProfile();
+    };
+  }
+  private async configureScreencastProfile(): Promise<void> {
+    if (!this.screenViewers.size) return;
+    const rank = Math.max(
+      0,
+      ...[...this.screenProfiles.values()].map((p) =>
+        SCREENCAST_PROFILES.findIndex(
+          (item) => item.width === p.width && item.quality === p.quality,
+        ),
+      ),
+    );
+    await this.page.screencast?.configure(SCREENCAST_PROFILES[rank]!);
+  }
+  async configureScreencast(
+    clientId: string,
+    profile: ScreencastProfile,
+  ): Promise<void> {
+    this.human(clientId);
+    if (!this.screenViewers.has(clientId))
+      throw new ScreencastError("screencast-not-subscribed");
+    this.screenProfiles.set(clientId, profile);
+    await this.configureScreencastProfile();
+  }
+  directInput(
+    clientId: string,
+    epoch: number,
+    frame: ScreencastFrame,
+    input: DirectBrowserInput,
+    first: boolean,
+  ): Promise<void> {
+    this.human(clientId);
+    this.live();
+    if (
+      this.returning ||
+      frame.session_id !== this.id ||
+      frame.article_id !== this.articleId
+    )
+      throw new ScreencastError("screencast-control-stale");
+    const page = this.page;
+    if (!page.screencast) throw new ScreencastError("screencast-unavailable");
+    if (first) this.takeover(clientId, epoch);
+    else this.control.assertController(clientId, epoch);
+    const lease = this.control.state().epoch;
+    const current = () =>
+      !this.closePromise &&
+      this.page === page &&
+      !this.returning &&
+      this.humans.has(clientId) &&
+      this.control.state().controller_id === clientId &&
+      this.control.state().epoch === lease &&
+      !["cancelled", "finished", "failed"].includes(this.stateValue);
+    const pending = this.directTail.then(async () => {
+      if (!current()) throw new ScreencastError("screencast-control-stale");
+      if (first) await page.screencast!.reset();
+      await page.screencast!.input(input, frame, current, first);
+    });
+    this.directTail = pending.catch(() => undefined);
+    return pending;
+  }
+  async releaseDirect(clientId: string, epoch: number): Promise<void> {
+    this.human(clientId);
+    this.live();
+    this.control.assertController(clientId, epoch);
+    if (this.returning) throw new ScreencastError("screencast-control-stale");
+    this.returning = clientId;
+    this.notifyScreencast();
+    try {
+      await this.directTail;
+      await this.actionPromise;
+      this.control.assertController(clientId, epoch);
+      await this.page.screencast?.reset();
+      this.current = undefined;
+      this.wire = null;
+      await this.refreshPromise;
+      await this.refreshInternal();
+      this.control.assertController(clientId, epoch);
+      if (this.errorValue)
+        throw new ScreencastError("screencast-reobserve-failed");
+      this.release(clientId, epoch);
+    } finally {
+      this.returning = null;
+      this.notifyScreencast();
+    }
+  }
+  async disconnectScreencast(clientId: string): Promise<void> {
+    if (this.control.state().controller_id !== clientId) return;
+    // Losing the viewing connection never silently hands a half-typed page to the Agent.
+    this.policy.pause();
+    this.stateValue = "paused";
+    this.invalidateAgent();
+    this.control.release(clientId, this.control.state().epoch);
+    this.controlChanged();
+    await this.directTail;
+    await this.page.screencast?.reset();
   }
 
   /** Production input is projected from the Browser article owner, including its clock. */
@@ -370,6 +639,7 @@ export class WorkbenchSession {
     )
       throw new WorkbenchSessionError("stale-command");
     this.page = page as BrowserPageHandle;
+    this.rebindScreencast();
     this.wire = parseWorkbenchObservation(observation);
     this.activity.observe(this.wire);
     this.current = {
@@ -393,6 +663,7 @@ export class WorkbenchSession {
     };
     this.observationPending = false;
     this.errorValue = null;
+    this.wake();
   }
   private human(clientId: string): void {
     if (!this.humans.has(clientId))
@@ -421,6 +692,7 @@ export class WorkbenchSession {
     if (epoch !== this.control.state().epoch)
       throw new WorkbenchSessionError("stale-command");
     this.invalidateAgent();
+    this.queueInputReset(this.page);
     this.publicationAbort?.abort();
     this.abandonmentAbort?.abort();
     this.control.takeover(clientId);
@@ -433,7 +705,7 @@ export class WorkbenchSession {
     this.control.release(clientId, epoch);
     this.publicationAbort?.abort();
     this.abandonmentAbort?.abort();
-    if (this.production && this.stateValue === "paused") {
+    if (this.stateValue === "paused") {
       this.policy.resume();
       this.stateValue = "watching";
     }
@@ -469,6 +741,7 @@ export class WorkbenchSession {
     this.invalidateAgent();
     this.policy.cancel();
     this.stateValue = "cancelled";
+    this.rebindScreencast();
     if (!this.production)
       this.activity.close(this.publishedOutcome ?? { kind: "cancelled" });
     this.control.release(clientId, this.control.state().epoch);
@@ -479,6 +752,9 @@ export class WorkbenchSession {
     return this.activity;
   }
   view(): WorkbenchView {
+    return presentWorkbenchSources(this.rawView());
+  }
+  private rawView(): WorkbenchView {
     const control = this.control.state();
     return Object.freeze({
       ...(this.production ? { mode: "production" as const } : {}),
@@ -1286,6 +1562,7 @@ export class WorkbenchSession {
     const successor = await this.page.successor?.();
     if (successor) {
       this.page = successor;
+      this.rebindScreencast();
       this.current = undefined;
       this.wire = null;
     }
@@ -1456,6 +1733,7 @@ export class WorkbenchSession {
         this.control.release(control.controller_id, control.epoch);
       if (outcome === "cancelled") this.policy.cancel();
       if (this.stateValue !== "cancelled") this.stateValue = outcome;
+      this.rebindScreencast();
       this.wake();
     }
   }
@@ -1466,6 +1744,7 @@ export class WorkbenchSession {
     this.abandonmentAbort?.abort();
     this.policy.cancel();
     this.stateValue = "cancelled";
+    this.rebindScreencast();
     if (!this.production)
       this.activity.close(this.publishedOutcome ?? { kind: "cancelled" });
     this.expireGuidance();
@@ -1474,6 +1753,9 @@ export class WorkbenchSession {
       await this.publicationPromise?.catch(() => undefined);
       await this.abandonmentPromise?.catch(() => undefined);
       await this.refreshPromise;
+      this.rebindScreencast();
+      await this.screenTail;
+      await this.directTail;
       const errors: unknown[] = [];
       try {
         await (this.closePage ? this.closePage() : this.page.close());

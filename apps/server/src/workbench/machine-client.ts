@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import {
   ContractValidationError,
@@ -12,7 +11,6 @@ export const WORKBENCH_READ_OPERATIONS = [
   "view",
   "select",
   "tabs",
-  "frame",
   "task-list",
   "task-read",
 ] as const;
@@ -242,28 +240,6 @@ export class MachineWorkbenchClient {
           ),
         );
         return operation === "view" ? this.view(result) : result;
-      }
-      if (operation === "frame") {
-        const r = operationRecord(value, ["session_id", "frame_seq"]);
-        identifier(r.session_id);
-        if (!Number.isSafeInteger(r.frame_seq) || (r.frame_seq as number) < 0)
-          throw new ContractValidationError();
-        const response = await this.request(
-          `/api/frame?session_id=${encodeURIComponent(r.session_id)}&frame_seq=${r.frame_seq}`,
-          undefined,
-          signal,
-        );
-        if (!response.ok) return this.json(response);
-        if (response.headers.get("content-type") !== "image/jpeg")
-          throw new MachineWorkbenchError("workbench-protocol");
-        const bytes = await this.bytes(response);
-        return {
-          ...r,
-          media_type: "image/jpeg",
-          byte_size: bytes.length,
-          sha256: createHash("sha256").update(bytes).digest("hex"),
-          bytes_base64: bytes.toString("base64"),
-        };
       }
       let path: string;
       switch (operation) {

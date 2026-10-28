@@ -16,8 +16,16 @@ import {
   parseProcessorInvocation,
   type ProcessorInvocation,
 } from "./processors.js";
+import {
+  parseMetadataTaskRequest,
+  type MetadataTaskRequest,
+} from "./source-results.js";
 
 export type ProcessingOperation =
+  | {
+      readonly operation: "acquire-metadata";
+      readonly request: MetadataTaskRequest;
+    }
   | {
       readonly operation: "backfill-tags";
       readonly request: { readonly tag_ids: readonly string[] };
@@ -57,6 +65,11 @@ export async function parseProcessingOperation(
     throw new ContractValidationError();
   const r = value as Record<string, unknown>;
   switch (r.operation) {
+    case "acquire-metadata":
+      return {
+        operation: r.operation,
+        request: parseMetadataTaskRequest(r.request),
+      };
     case "backfill-tags": {
       const request = r.request as Record<string, unknown>;
       if (

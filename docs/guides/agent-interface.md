@@ -120,16 +120,18 @@ sciretriever jobs runtime --workbench-url http://127.0.0.1:4174 --request /absol
 
 | 范围     | 工具                                                    | 行为                                                                        |
 | -------- | ------------------------------------------------------- | --------------------------------------------------------------------------- |
-| 观察     | `browser_view/select/tabs/frame`                        | 当前会话/观察、选择文章、列出页面、读取确切 frame_seq；观看不暂停 Agent     |
+| 观察     | `browser_view/select/tabs`                        | 当前会话/观察、选择文章、列出页面；观看不暂停 Agent     |
 | 控制     | `browser_control/action/activate_tab`                   | 取得/交还/暂停/恢复/取消控制，以及带页面绑定的 OperatorInput；不暴露 JS/CDP |
 | 指导     | `browser_guidance/cancel_guidance`                      | 提交或撤销当前连接的待处理指导                                              |
 | 候选     | `browser_accept_candidate/abandon_candidate`            | 既有候选操作，仍校验当前控制权与 transfer hash                              |
 | 生命周期 | `browser_disconnect`                                    | 撤销当前连接，不停止 Web 服务                                               |
 | 服务任务 | `runtime_list_tasks/read_task/create_task/control_task` | 在连接的 Web 服务内读、保存、启动、暂停、取消、恢复或重试任务               |
 
+实时画面使用已认证 WebSocket 投屏；`browser_frame` 和 NDJSON 的 `frame` 操作已移除，机器观察读取结构化 `browser_view`。协议见 [Browser 控制](../architecture/technical/08-browser-control.md#411-人类投屏协议)。
+
 `browser_view` 返回既有 WorkbenchView，并补充 `controlled_by_client`。先观察，再用返回的 `session_id/article_id/control.epoch` 请求 takeover；取得控制后重新读取观察，用确切的 session/page/document/observation/viewport/epoch 和唯一 `request_id` 发送动作。支持 `click-element`、`click-point`、`scroll-surface`、`go-back`、`wait-for-change`、`type-text`、`press-key`、`stop`，字段使用既有 OperatorInput 合同；旧 epoch/页面版本拒绝，不自动重放。调用 action 超时不代表动作被撤销，应重新观察再判断。
 
-CLI `browser session` 是持续连接，输入为 NDJSON，每行 `{operation,request}`，每行输出 `{protocol_version:1,result}`。可用操作：`view/select/tabs/frame/control/action/guidance/cancel-guidance/activate-tab/accept-candidate/abandon-candidate`；也支持 `task-list/task-read/task-create/task-control`。单行不超过 256 KiB。Agent 可以边读回复边生成下一行，无需人类交互。错误行返回稳定 failure.code，后续行可继续；有错误时最终退出码为 3。例：
+CLI `browser session` 是持续连接，输入为 NDJSON，每行 `{operation,request}`，每行输出 `{protocol_version:1,result}`。可用操作：`view/select/tabs/control/action/guidance/cancel-guidance/activate-tab/accept-candidate/abandon-candidate`；也支持 `task-list/task-read/task-create/task-control`。单行不超过 256 KiB。Agent 可以边读回复边生成下一行，无需人类交互。错误行返回稳定 failure.code，后续行可继续；有错误时最终退出码为 3。例：
 
 ```json
 { "operation": "view", "request": {} }
@@ -227,6 +229,10 @@ budget: {max_input_bytes, max_output_tokens}
 升级前停写并按[升级指南](upgrade.md)提供精确目标与原始备份；普通 MCP/CLI 启动不会升级。
 
 ## 发现结果与扫描预算
+
+主题发现与引用扩展的公开入口现在保存并运行现有 durable 元数据任务，回执附 `job_id/source_summary`。精确补全可用 `sciretriever metadata lookup ID[,ID]` 或 MCP `lookup_metadata`；只保存待执行任务可用三端共用的 `{kind:"metadata",idempotency_key,request}`（request 为 topic/citation/lookup，省略 providers 时冻结进程当前选择），再显式启动。`acquire-metadata` 是 `ProcessingTaskRequest` 的封闭操作之一，不调用 PDF 或解析。
+
+任务详情与 `task_run` 带 `source_results`，来源统计用 CLI `sources statistics --request FILE|-`（输入 `{range:"last-30-days"}` 或 all）或 MCP `source_statistics`。比例返回分子分母，零分母为 null，历史无记录排除；精确统计口径见[任务技术篇 10.1](../architecture/technical/02-task-coordination.md#101-获取来源记录与统计)。旧发现 source_results 的 failure 由公开适配改为安全 problem；原因码仅在 technical_details。
 
 种子查询同时携带已知稳定标识（如 DOI）与该 Provider 的来源 observation 中保存的原生记录 ID；存在 DOI 不会丢弃已有原生 ID。部分反向接口要求原生 ID，尚无该 Provider 观察时仍可能受其 key 能力限制；来源失败不会撤销其它已接纳结果。
 

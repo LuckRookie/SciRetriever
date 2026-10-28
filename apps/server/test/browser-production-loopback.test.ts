@@ -11,6 +11,8 @@ import { describe, expect, it } from "vitest";
 import {
   parseMetadataObservation,
   parseLiteratureId,
+  type AcquisitionAttempt,
+  type PdfSourceResult,
 } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
 import { BrowserNetworkProxy } from "../src/network/browser-proxy.js";
@@ -239,17 +241,41 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
             literature_id: FIXTURE_LITERATURE.literature_id,
           });
           expect(application.databaseCompletion).not.toBeNull();
-          const report = await application.databaseCompletion!.run({
-            selector: {
-              kind: "literatures",
-              literature_ids: [
-                parseLiteratureId(FIXTURE_LITERATURE.literature_id),
-              ],
+          const attempts: AcquisitionAttempt[] = [];
+          const publications: PdfSourceResult[] = [];
+          const report = await application.databaseCompletion!.run(
+            {
+              selector: {
+                kind: "literatures",
+                literature_ids: [
+                  parseLiteratureId(FIXTURE_LITERATURE.literature_id),
+                ],
+              },
+              goal: "ASSET_READY",
             },
-            goal: "ASSET_READY",
-          });
+            {
+              on_acquisition_attempt: async (_target, _id, attempt) => {
+                attempts.push(attempt);
+              },
+              on_pdf_source_result: async (_target, result) => {
+                publications.push(result);
+              },
+            },
+          );
           expect(report.completed, JSON.stringify(report)).toMatchObject([
             { literature_id: FIXTURE_LITERATURE.literature_id },
+          ]);
+          expect(attempts.filter((a) => a.source === "browser")).toMatchObject([
+            { result: "escalated", requested: false },
+            { result: "hit", requested: true },
+          ]);
+          expect(publications).toMatchObject([
+            {
+              result: "obtained",
+              source: "browser",
+              stage: "browser",
+              receipt_id: expect.any(String),
+            },
           ]);
           expect(
             (await application.library.detail(FIXTURE_LITERATURE.literature_id))

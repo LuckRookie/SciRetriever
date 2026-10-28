@@ -142,11 +142,6 @@ export const BROWSER_QUERY_TOOLS: readonly Tool[] = [
     object({}),
   ),
   tool(
-    "browser_frame",
-    "Read the current JPEG frame from the selected session and exact observation frame_seq. Returns an image; a replaced frame is refused.",
-    object({ session_id: sessionId, frame_seq: epoch }),
-  ),
-  tool(
     "browser_disconnect",
     "Close this runtime connection and revoke its control lease. Release explicitly before disconnect to return control; disconnect while controlling follows the owner's pause policy.",
     object({}),
@@ -301,6 +296,11 @@ export const QUERY_TOOLS: readonly Tool[] = [
       },
       ["job_id"],
     ),
+  ),
+  tool(
+    "source_statistics",
+    "Read source-record aggregates for the last 30 days or all recorded history, with explicit ratio numerators/denominators and recorded_since. Never probes sources or writes the library.",
+    object({ range: { enum: ["last-30-days", "all"] } }),
   ),
   tool(
     "agent_sessions",
@@ -1120,6 +1120,21 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     false,
   ),
   tool(
+    "lookup_metadata",
+    "Explicitly complete bibliography for existing literatures through configured metadata sources; records a durable task, never downloads PDF.",
+    object({
+      literature_ids: {
+        type: "array",
+        items: id,
+        minItems: 1,
+        maxItems: 1000,
+        uniqueItems: true,
+      },
+      scan_limit: { type: "integer", minimum: 1, maximum: 10000 },
+    }),
+    false,
+  ),
+  tool(
     "discover_citations",
     "Explicitly expand existing literature references or citations using configured sources. Saves metadata/relations, not PDFs.",
     object({
@@ -1131,7 +1146,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   ),
   tool(
     "create_task",
-    "Save a durable Web-compatible task without executing it. request is {kind: processing, request: ProcessingTaskRequest} or {kind: acquire-pdf, idempotency_key, selector, policy?}. Call control_task run explicitly after inspecting the saved scope.",
+    "Save a durable Web-compatible task without executing it. request is {kind: processing, request: ProcessingTaskRequest}, {kind: metadata, idempotency_key, request: MetadataTaskRequest (providers optional)}, or {kind: acquire-pdf, idempotency_key, selector, policy?}. Call control_task run explicitly after inspecting the saved scope.",
     object({ request: { type: "object" } }),
     false,
   ),

@@ -456,6 +456,7 @@ export function assembleMetadataRegistry(
   }
 
   const readiness: Record<string, string | null> = {};
+  if (!web) readiness["web-of-science"] = "configuration-missing";
   for (const { provider, field } of REQUIRED_METADATA_CREDENTIALS)
     if (!credentialFields(credentials, provider).includes(field))
       readiness[provider] = "credential-missing";
@@ -499,5 +500,6 @@ export function assembleMetadataRegistry(
     ...registry,
     topic_selection: selected.topic,
     reference_selection: selected.reference,
+    lookup_selection: selected.lookup,
   });
 }

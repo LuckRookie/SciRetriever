@@ -309,15 +309,14 @@ describe("authenticated loopback workbench API", () => {
             { Cookie: cookie },
           )
         ).status,
-      ).toBe(409);
+      ).toBe(404);
       const frame = await request(
         server.origin,
         `/api/frame${query}&frame_seq=${current.observation!.frame_seq}`,
         "GET",
         { Cookie: cookie },
       );
-      expect(frame.status).toBe(200);
-      expect(frame.headers["content-type"]).toBe("image/jpeg");
+      expect(frame.status).toBe(404);
       const target = await request(
         server.origin,
         `/api/target${query}`,

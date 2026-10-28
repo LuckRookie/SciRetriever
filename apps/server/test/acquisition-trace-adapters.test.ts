@@ -20,7 +20,10 @@ import {
   workbenchTestAccess,
 } from "./workbench-auth-fixture.js";
 import { parseTaskDetail } from "../../web/src/app/data/tasks.js";
-import { parseConfigurationReadiness } from "@sciretriever/contracts";
+import {
+  parseConfigurationReadiness,
+  parseTaskSourceResults,
+} from "@sciretriever/contracts";
 
 it("persists per-article attempts and reads the same safe projection through HTTP, CLI and MCP", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-acquire-trace-"));
@@ -124,7 +127,30 @@ it("persists per-article attempts and reads the same safe projection through HTT
       idempotency_key: "trace-fixture",
     });
     await server.application.taskService!.runJob(job.job_id);
-    const first = parseTaskDetail(await read("/api/tasks/" + job.job_id));
+    const initial = await read("/api/tasks/" + job.job_id);
+    const sourceResults = parseTaskSourceResults(
+      (initial as { task: { source_results: unknown } }).task.source_results,
+    );
+    expect(sourceResults.pdf).toMatchObject({
+      documents: 1,
+      obtained: 1,
+      not_obtained: 0,
+      unknown: 0,
+    });
+    expect(
+      sourceResults.pdf!.sources.find((s) => s.source === "doi-landing"),
+    ).toMatchObject({ attempted: 1, obtained: 1, requests: 1 });
+    expect(
+      sourceResults.pdf!.sources.find((s) => s.source === "wiley"),
+    ).toMatchObject({
+      attempted: 0,
+      obtained: 0,
+      problems: [{ display: "not-configured" }],
+    });
+    expect(sourceResults.pdf!.sources.reduce((n, s) => n + s.obtained, 0)).toBe(
+      1,
+    );
+    const first = parseTaskDetail(initial);
     const trace = first.acquisition_traces![0]!;
     expect(trace.attempts).toEqual(
       expect.arrayContaining([
@@ -132,7 +158,15 @@ it("persists per-article attempts and reads the same safe projection through HTT
           source: "wiley",
           result: "unavailable",
           requested: false,
-          code: "missing-credential",
+          problem: {
+            display: "not-configured",
+            technical_details: {
+              diagnostics: [{ code: "missing-credential", scope: "pdf" }],
+            },
+          },
+          technical_details: {
+            diagnostics: [{ code: "missing-credential", scope: "pdf" }],
+          },
         }),
         expect.objectContaining({
           source: "elsevier",
@@ -174,6 +208,12 @@ it("persists per-article attempts and reads the same safe projection through HTT
     });
     expect(cli.code).toBe(0);
     expect(
+      parseTaskSourceResults(
+        (cli.value as { result: { source_results: unknown } }).result
+          .source_results,
+      ),
+    ).toEqual(sourceResults);
+    expect(
       (cli.value as { result: { acquisition_traces: unknown } }).result
         .acquisition_traces,
     ).toEqual(first.acquisition_traces);
@@ -188,6 +228,12 @@ it("persists per-article attempts and reads the same safe projection through HTT
           result: { acquisition_traces: unknown };
         }
       ).result;
+      expect(
+        parseTaskSourceResults(
+          (result as { acquisition_traces: unknown; source_results?: unknown })
+            .source_results,
+        ),
+      ).toEqual(sourceResults);
       expect(result.acquisition_traces).toEqual(first.acquisition_traces);
     }
     expect(JSON.stringify(first.acquisition_traces)).not.toMatch(

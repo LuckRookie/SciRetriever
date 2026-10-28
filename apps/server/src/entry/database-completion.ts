@@ -59,6 +59,10 @@ export interface DatabaseCompletionRequest {
 }
 
 export interface DatabaseCompletionOptions {
+  readonly on_pdf_source_result?: (
+    target: CompletionTarget,
+    result: import("@sciretriever/contracts").PdfSourceResult,
+  ) => Promise<void>;
   readonly on_acquisition_attempt?: (
     target: CompletionTarget,
     literatureId: LiteratureId,
@@ -479,6 +483,9 @@ export class DatabaseCompletionTargetRunner {
       const request = {
         literature_id: id,
         detail,
+        ...(execution.on_pdf_source_result
+          ? { on_source_result: execution.on_pdf_source_result }
+          : {}),
         metadata_snapshot: facts.metadata_snapshot,
         ...(execution.on_acquisition_attempt
           ? {
@@ -1046,6 +1053,13 @@ export class DatabaseCompletionService {
       (frozen, active, execution) =>
         this.completeTarget(frozen, goal, transferIds, active, {
           ...execution,
+          ...(options.on_pdf_source_result
+            ? {
+                on_pdf_source_result: (
+                  result: import("@sciretriever/contracts").PdfSourceResult,
+                ) => options.on_pdf_source_result!(frozen.target, result),
+              }
+            : {}),
           ...(options.on_acquisition_attempt
             ? {
                 on_acquisition_attempt: (

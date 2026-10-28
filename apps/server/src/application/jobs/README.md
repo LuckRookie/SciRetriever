@@ -15,3 +15,5 @@
 [上级目录](../README.md)
 
 - `processors.ts`：把处理器请求冻结成现有队列目标，发布不可变结果集合与运行统计；不维护第二套调度器。
+
+`metadata-progress.ts` 将逻辑来源调用的安全增量写进既有 durable events，Network 的无参数派发事实与来源进入阶段分开。

@@ -1516,6 +1516,7 @@ export class SqliteWorker {
       "session-read",
       "session-revision",
       "task-run",
+      "source-records-page",
       "usage-history",
       "processor-runs",
       "literature-results",

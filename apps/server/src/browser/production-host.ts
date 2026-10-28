@@ -177,7 +177,12 @@ export function createProductionBrowserHostFactory(options: {
           request.start_url ?? undefined,
           identity,
           request.signal,
-          { retainNavigationFailure: true },
+          {
+            retainNavigationFailure: true,
+            ...(request.on_request_dispatched
+              ? { on_request_dispatched: request.on_request_dispatched }
+              : {}),
+          },
         );
         return {
           page,

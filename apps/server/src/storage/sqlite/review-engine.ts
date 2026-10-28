@@ -19,6 +19,7 @@ export type ReviewStorageAction =
   | "session-read"
   | "session-revision"
   | "task-run"
+  | "source-records-page"
   | "usage-history"
   | "processor-request-put"
   | "processor-runs"
@@ -51,6 +52,49 @@ export function runReviewStorage(
   value: unknown,
 ): unknown {
   const r = input(value);
+  if (action === "source-records-page") {
+    const after = integer(r.after, 0, Number.MAX_SAFE_INTEGER),
+      limit = integer(r.limit, 1000, 1000),
+      through = text(r.through, 64),
+      from = r.from === null ? null : text(r.from, 64),
+      job = r.job_id === null ? null : text(r.job_id),
+      snapshot =
+        r.snapshot === null
+          ? Number(
+              db
+                .prepare(
+                  "SELECT coalesce(max(rowid),0) AS n FROM execution_events",
+                )
+                .get()!.n,
+            )
+          : integer(r.snapshot, 0, Number.MAX_SAFE_INTEGER);
+    const kinds =
+      "('acquisition-attempt','metadata-source','pdf-source-result')";
+    const rows = db
+      .prepare(
+        `SELECT e.* ,e.rowid AS source_cursor FROM execution_events e JOIN execution_jobs j USING(job_id) WHERE e.rowid>? AND e.rowid<=? AND e.kind IN ${kinds} AND julianday(e.created_at)<=julianday(?) AND julianday(j.created_at)<=julianday(?) AND (? IS NULL OR julianday(j.created_at)>=julianday(?)) AND (? IS NULL OR e.job_id=?) ORDER BY e.rowid LIMIT ?`,
+      )
+      .all(after, snapshot, through, through, from, from, job, job, limit + 1);
+    const page = rows.slice(0, limit);
+    const earliest = db
+      .prepare(
+        `SELECT j.created_at FROM execution_jobs j WHERE julianday(j.created_at)<=julianday(?) AND EXISTS(SELECT 1 FROM execution_events e WHERE e.job_id=j.job_id AND e.kind IN ${kinds} AND e.rowid<=? AND julianday(e.created_at)<=julianday(?)) ORDER BY julianday(j.created_at),j.job_id LIMIT 1`,
+      )
+      .get(through, snapshot, through);
+    return {
+      snapshot,
+      recorded_since: earliest?.created_at ?? null,
+      events: page.map((e) => ({
+        event_id: e.event_id,
+        job_id: e.job_id,
+        sequence: e.sequence,
+        kind: e.kind,
+        created_at: e.created_at,
+        payload: JSON.parse(String(e.payload_json)),
+      })),
+      next_after: rows.length > limit ? page.at(-1)!.source_cursor : null,
+    };
+  }
   if (action === "session-start") {
     const context = input(r.context),
       subject = input(r.subject);

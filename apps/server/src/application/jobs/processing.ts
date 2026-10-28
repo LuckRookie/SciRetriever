@@ -1,4 +1,5 @@
 import { activityContext, withActivity } from "../../logging/activity.js";
+import { taskSourceResults } from "../source-statistics.js";
 import {
   canonicalJsonBytes,
   parseProcessingTaskRequest,
@@ -28,6 +29,14 @@ export class ProcessingTaskError extends Error {
   }
 }
 export interface ProcessingRuntime {
+  readonly metadata?: {
+    execute(
+      request: import("@sciretriever/contracts").MetadataTaskRequest,
+      signal: AbortSignal,
+      jobId: string,
+      targetId: string,
+    ): Promise<Record<string, unknown>>;
+  };
   readonly tags?: Pick<import("../../tags/service.js").TagService, "backfill">;
   readonly archive?: ArchiveOrchestrator;
   readonly processors?: {
@@ -48,7 +57,16 @@ export async function processingEvents(
   let after = -1;
   for (;;) {
     const page = await repository.listEvents(jobId, after, 1000);
-    events.push(...page);
+    events.push(
+      ...page.filter(
+        (e) =>
+          ![
+            "metadata-source",
+            "pdf-source-result",
+            "acquisition-attempt",
+          ].includes(e.kind),
+      ),
+    );
     if (page.length < 1000) return events;
     if (events.length >= 100000)
       throw new ProcessingTaskError("processing-result-budget");
@@ -66,6 +84,7 @@ export async function readProcessingTask(
   return {
     job,
     targets,
+    source_results: await taskSourceResults(repository, jobId),
     archive: {
       schema_version: 2,
       steps: [
@@ -581,8 +600,9 @@ export class ProcessingTaskService {
           stage_for_target: (target) =>
             request.operations[target.ordinal]?.operation === "parse-documents"
               ? "parsing"
-              : request.operations[target.ordinal]?.operation ===
-                  "assess-article-identity"
+              : ["assess-article-identity", "acquire-metadata"].includes(
+                    request.operations[target.ordinal]!.operation,
+                  )
                 ? "literature"
                 : "analysis",
         },
@@ -623,6 +643,40 @@ export class ProcessingTaskService {
       },
       async () => {
         switch (operation.operation) {
+          case "acquire-metadata": {
+            if (!this.runtime.metadata)
+              throw new ProcessingTaskError("metadata-unavailable");
+            const result = await this.runtime.metadata.execute(
+              operation.request,
+              signal,
+              jobId,
+              targetId,
+            );
+            if (result.status === "INTERRUPTED")
+              throw new QueueInterruptedError();
+            if (result.status === "FAILED") {
+              await this.repository.appendEvent({
+                event_id: randomUUID(),
+                job_id: jobId,
+                sequence: -1,
+                kind: "processing-partial-result",
+                payload: {
+                  target_id: targetId,
+                  operation: operation.operation,
+                  result,
+                },
+                created_at: new Date().toISOString(),
+              });
+              throw new QueueTargetFailureError({
+                code: "metadata-sources-failed",
+                reason:
+                  "The selected metadata sources did not complete the task.",
+                action: "Review source details before retrying.",
+                retryable: true,
+              });
+            }
+            return result;
+          }
           case "backfill-tags": {
             if (!this.runtime.tags)
               throw new ProcessingTaskError("tags-unavailable");

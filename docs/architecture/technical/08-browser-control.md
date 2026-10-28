@@ -37,9 +37,9 @@
 
 [ADR 0032](../decisions/0032-library-centered-web-workspace.md)确定新的交互方向：画面默认观看，用户在画面上直接操作可以触发控制权交接；无人介入时自动获取仍按实际结果结束，不以等待人工为默认阶段。该方向尚需前端和服务端联合适配，不表示当前已支持任意直接输入。服务端必须先确认控制权和当前文章/页面绑定，才派发输入；首次点击期间页面变化、多窗口竞争不能通过盲目重放事件处理。已存在的显式接管、交还和自然语言指导能力保留。
 
-工作台的会话摘要与动作记录是进程内读取投影，不增加 catalog 表、持久化历史或模型上下文。`WorkbenchView.sessions` 可选新增 `operation_id`、冻结元数据标题 `title`（最多 512 字符）、UTC `queued_at` / `closed_at`、`outcome: {kind, code}` 和 `stop: {reason, explanation?}`。`outcome.kind` 为 `published` 或 `retained`；发布使用 `code: "published"`，取消映射为 retained / `browser-flow-cancelled`，其余保留已有平台码。Agent Stop 保留其原始 reason 与 explanation（最多 2048 字符，敏感信息仍脱敏）；不能以平台的通用结束码覆盖 Agent 原因。原有 `session_outcome` 合同不变。
+工作台的会话摘要与动作记录是进程内读取投影，不增加 catalog 表、持久化历史或模型上下文。`WorkbenchView.sessions` 可选新增 `operation_id`、冻结元数据标题 `title`（最多 512 字符）、UTC `queued_at` / `closed_at`、`outcome: {kind, code}` 和 `stop: {reason, explanation?}`。`outcome.kind` 为 `published` 或 `retained`；发布使用 `code: "published"`，取消映射为 retained / `browser-flow-cancelled`，其余平台失败投影为 code: error，并在可选 problem.technical_details 中保留稳定原因码。Agent Stop 保留其原始 reason 与 explanation（最多 2048 字符，敏感信息仍脱敏）；不能以平台的通用结束码覆盖 Agent 原因。`session_outcome` 的 retained 同样支持 problem，平台错误的 code 为 error；取消和已发布仍按原事实呈现。
 
-所选会话的可选 `actions` 返回最近 100 条实际执行完成的输入与生命周期事件，`seq` 单调递增，`at` 为 UTC，`actor` 为 agent / human / platform。动作名沿用输入类型，并加入 `navigation`、`tab-switch`、`download-started`、`download-failed`、`validation-passed`、`validation-failed`、`flow-stopped`；文件验收通过不等于文献已发布。`label` 最多 512 字符，URL 不含 userinfo、query 或 fragment，输入内容不进入记录。点击 `point` 来自执行时的实际 CSS 坐标或元素框中心，未知则省略；它与当时的 `viewport`、`frame_seq`、`observation_revision`、`page_id`、`document_generation` 一起返回。前端只在这些绑定与所展示画面匹配时绘制指针，不能把旧动作坐标套到新的页面或视口上。导航/页签事件由观察变化产生；这部分记录 actor=platform，不推断哪个主体触发了页面脚本。合成工作台与生产文章流程复用同一投影，新 parser 同时接受没有这些字段的旧 payload。
+所选会话的可选 `actions` 返回最近 100 条实际执行完成的输入与生命周期事件，`seq` 单调递增，`at` 为 UTC，`actor` 为 agent / human / platform。动作名沿用输入类型，并加入 `navigation`、`tab-switch`、`download-started`、`download-failed`、`validation-passed`、`validation-failed`、`flow-stopped`；文件验收通过不等于文献已发布。平台失败动作的 label 为“错误”，可选 technical_details 保留稳定诊断；顶层 error 与清理失败同样使用 error / problem，不影响内部终态。`label` 最多 512 字符，URL 不含 userinfo、query 或 fragment，输入内容不进入记录。点击 `point` 来自执行时的实际 CSS 坐标或元素框中心，未知则省略；它与当时的 `viewport`、`frame_seq`、`observation_revision`、`page_id`、`document_generation` 一起返回。前端只在这些绑定与所展示画面匹配时绘制指针，不能把旧动作坐标套到新的页面或视口上。导航/页签事件由观察变化产生；这部分记录 actor=platform，不推断哪个主体触发了页面脚本。合成工作台与生产文章流程复用同一投影，新 parser 同时接受没有这些字段的旧 payload。
 
 文章结束状态以 owner 的明确 outcome 为准：published 为 finished，失败 retained 为 failed，只有显式取消才是 cancelled；资源清理使用的 abort 信号不覆盖已有结果。已观察控件缺失、脱离 DOM、不可见或移出视口时，当前动作被拒绝并要求重新观察，失败动作不进入已执行动作记录，模型与活跃时间预算继续累计。日志仅记录 element-check、popup-track、navigation-request、navigation-drain、navigation-replay、navigation-feedback 等阶段和稳定原因，不记录页面内容、请求参数或凭据。
 
@@ -542,27 +542,37 @@ Browser Host 使用一个 operator-managed CloakBrowser process/persistent conte
 
 实时观察不等于永久录像。默认保留有界会话内时间线；长期截图、完整指导记录、回放与容量政策是另行决定的能力。日志不能代替面向用户的执行反馈。
 
+### 4.1.1 人类投屏协议
+
+合同由 `packages/contracts/src/screencast.ts` 定义，严格 parser 拒绝未知字段、非有限数值和越界消息。人类投屏与 Agent 的 JPEG 观察分开；投屏从不进入模型上下文，也不落盘、录像或回放。
+
+- 端点：`/api/screencast`，WebSocket 子协议 `sciretriever.screencast.v1`。Upgrade 必须带显式同源 Origin、现有登录和工作台 Cookie；URL 不带凭据或查询参数。5 秒内发送 `hello {protocol_version:1, client_id, csrf}`，验证现有 tab grant 后才允许订阅/编码。登出与登录过期关闭相应连接。
+- `subscribe {session_id}` 显式绑定文章，回执 `state` 给出新 `subscription_id`。每窗口一个连接、每连接一个订阅；同 client 重连先排空旧连接并停止旧订阅，再接通新订阅，旧关闭回调不能撤销新控制。输入不跨连接重放。
+- 二进制帧前缀为 16 字节：`SCR1`、大端 uint32 JSON header 长度、大端 uint32 JPEG 长度、reserved=0；随后是 UTF-8 header 与 JPEG。整个封套最多 8 MiB，header 最多 4096 字节。header 含协议版本、订阅/流代次/帧号、捕获时间、文章/会话/页/文档身份、图像与 viewport 尺寸、顶部偏移、页面与设备缩放、滚动位置、JPEG 质量。无 URL、headers、Cookie 或页面文本。
+- 观看者解码并画出后发 `ack {subscription_id, stream_epoch, frame_id}`。默认每代次最多 1 帧在途，可由进程内测试 seam 测 2 帧；另有一张最新待发帧，新帧覆盖旧 pending 并计数。改参数按原生停屏、流代次递增、重新开始执行；状态和帧均带 stream_epoch，观看端丢弃旧代次帧，服务端忽略旧代次 ACK，不用它放行新帧。已发送的有界坐标元数据仍可作为人工输入证据；流代次不充当控制 revision，首次输入仍只复核文档身份。ACK 后不保留 JPEG，只保留至多 128 条身份元数据；旧元数据 15 秒过期，最新已发送帧身份保留到后续帧或退订，以免静止页久未出帧后无法点击。未 ACK 超过 15 秒的连接关闭，不积累队列。
+- Chromium 逐帧 ACK，`everyNthFrame=1`。每页共享一个 encoder，第一个观看者开始、最后一个离开等待 Page.stopScreencast 的原生回执及原生 detach 完成。停止时可能仍有 compositor capture 在途，因此不能用本地开关冒称已退役；停止后原始帧计数仍由 CDP 回调统计。重开或改档使用新的本页 CDP session，静止页不靠短动画或截图预热取得首帧。默认最大宽 1280、最大高 1080、JPEG Q60；降档顺序为 960/Q60、960/Q40、640/Q40。每至少 8 个 ACK 且至少 2 秒测接收/解码/绘制吞吐，延迟中位超过 180 ms 且吞吐不足 15 fps 时逐档降低；延迟小于 80 ms、距上次调档超过 15 秒时逐档恢复。静止页无样本不推断带宽。多观看者共享最保守档位。
+- 文本消息最多 32 KiB，待执行消息最多 128 条；纯文本/粘贴/组合文本最多 8192 个 UTF-16 码元。`input` 带订阅、已发送帧号、单调 `seq`、`control_epoch`、`first` 和封闭输入；首次额外带文档身份。帧内坐标在服务端夹到图像边界，滚轮每轴限制 ±2000；键盘 down/up 传键位与修饰键，实际字符由 `text`/`paste` 插入；输入法中间态用 `composition`，提交用 `text`，避免重复键入。回执 `input-result` 明确 applied/rejected，技术原因只在 `problem.technical_details`。
+- `release` 排空本连接已受理输入、复位按下状态、清旧观察并重新观察后交还；失败保留控制并报告错误。正常关闭观看界面应先等 release 确认，再退订/断开；意外断线按控制者断线政策暂停，不能自动续跑。后台任务不因纯观看连接离开而取消。
+- `state.status` 为 connecting/live/no-frame/reconnecting/closed，`state.control` 为 watching/controlling/returning/taken-over；同时返回控制 epoch、stream_epoch、Agent 是否暂停、可空 problem，以及按主文档 MIME 得出的安全页面类型 page_kind（html/pdf/other/unknown），供不出帧时诊断。刷新和同页导航复用订阅；3 秒未产生首帧或新文档帧时报告 no-frame。新页签/弹窗在文章 owner 接纳为活动页后停旧订阅、在新页重订；不把另一个文章的页面接过来。
+
+`/api/frame`、CLI 的 frame 操作及 MCP `browser_frame` 已移除。HTTP 的 750 ms 截图刷新也已移除；SSE 只以 3 秒 metadata heartbeat 提供工作台投影，独立的任务/材料事件继续保留，不触发页面观察。Agent 在自身决策点继续读取页面并捕获 JPEG Q65。
+
+观察截图通过 Chromium surface capture 取得原图，再在服务端像素上涂抹 password 和 one-time-code。扫描可见 iframe 与开放 shadow 内的输入边界，不读取字段值；最多 128 个区域、原图最多 32 MiB，前后区域不一致或检测/截图失败即返回无图。遮挡色为不透明深灰并向外扩 4 像素，避免 JPEG 边缘泄漏；不插覆盖 DOM、修改 CSS 或让遮挡出现在投屏中。投屏画面保持真实页面原样，包括 OTP 的页面显示和密码框圆点。
+
+`SyntheticScreencastSource` 与 `createSyntheticScreencastSession` 是明确注入的合成源，供样例库及离线测试构造运行、人工控制、别窗接管、重连与无画面。生产源不出帧时只返回有技术详情的错误，不转入截图 fallback。
+
 ### 4.2 控制身份与动作前置条件
 
-当前 `BrowserControlCoordinator` 持有 workspace、已连接 client、controller 和 epoch。attach/detach、takeover/release 在服务端更新状态；控制者断开或交还使旧 epoch 失效。带当前 epoch 的显式人类接管可以转移旧控制权；同一旧 epoch 的后到请求拒绝。`WorkbenchSession` 绑定目标和页面观察；生产 bridge 在文章开页时把同一 Host page 挂到会话，新操作使用新的 session ID，旧观察和指导不跨文章复用。
+`BrowserControlCoordinator` 持有 workspace、已连接 client、单一 controller 和 epoch。接管以调用方看到的 epoch 做 CAS，成功后递增 epoch 并撤销尚未派发的 Agent 决定；竞争失败的窗口重读状态，不能自动重放输入。
 
-目标设计的中性绑定如下，具体字段名按实际控制协议定稿：
+Agent 的封闭动作继续绑定观察 revision、文档 generation、短期 element ID 与当前控制 epoch。人的投屏输入按 [ADR 0042](../decisions/0042-browser-screencast-and-direct-input.md) 单独处理：
 
-```ts
-interface ControlBinding {
-  readonly workspace_id: string;
-  readonly session_id: string;
-  readonly operation_id: string;
-  readonly article_id: string;
-  readonly controller_id: string;
-  readonly control_epoch: number;
-  readonly page_id: string;
-  readonly document_generation: number;
-  readonly observation_revision: number;
-}
-```
+- 第一次操作携带实际已发给本连接的帧号及 `session_id/article_id/page_id/document_generation/document_id`。服务端验证文章、会话、控制 epoch，再在 Host 的输入 FIFO 内重新读取主文档 loader 身份，确认没有换文档才派发。不比较 Agent 观察 revision。
+- 成功取得控制后，输入仍验证已认证 client、会话、租约 epoch 与单调输入序号，坐标按指定已发送帧换算；不逐次核对文档或观察版本。跨页签绑定变化及控制转移仍撤销旧输入资格。
+- 鼠标、拖动、滚轮、键盘、纯文本粘贴、文本插入和输入法组合使用本页专用 CDP session 的 `Input.*`。帧像素坐标按 viewport、页面缩放和顶部偏移转为 CSS 坐标；组合区间使用 CDP/DOM 的 UTF-16 半开区间。
+- 接管、断线与换页清理按键、鼠标按下和组合输入状态。输入不进入 durable 事件、日志、模型消息或页面文字投影。
 
-动作在接收与实际 vendor dispatch 前都复核必要绑定。某些只读观察请求无需控制租约，但点击、输入或导航不能借只读连接执行。页面 revision、文章 generation 和 control epoch 分别防止旧画面、跨文章与旧控制者的动作，不互相代用。
+服务端授权、任务/文章归属和 Network 准入不因直接输入而放宽。已经派发的动作按实际结果结算，不能把暂停说成从未执行。
 
 ### 4.3 暂停、接管与交还
 
@@ -570,7 +580,7 @@ interface ControlBinding {
 | -------- | -------------------------------------- | --------------------------- |
 | 暂停     | 停止派发新的 AI 决定，结算在途动作     | 明确 paused 或仍在 draining |
 | 接管     | 更新控制者/epoch，使旧 AI 决定失效     | 返回新的控制绑定            |
-| 人工动作 | 按当前绑定执行封闭 OperatorInput       | 实际成功/失败及新观察       |
+| 人工动作 | 按投屏帧换算并直接派发输入              | 实际成功/失败；投屏独立更新 |
 | 交还     | 释放人类租约，AI 重新观察页面          | 不复用接管前缓存决定        |
 | 取消     | 停止该操作新增工作，结算 transfer/提交 | 实际已接纳事实和未完成项    |
 
@@ -967,10 +977,7 @@ seed 原值不能进入普通配置、credentials、日志、Report、Catalog、
 
 #### 6.3.4 Humanization 动作边界
 
-所有生产 click、scroll、wait 和未来获准的输入必须复用同一 patched Page/Locator。不得调用
-`page._original`、新建裸 CDP session、直接 DOM click、任意 `evaluate()` 动作或另一个 Browser。
-只读 DOM/locator 发现仍需在 SciRetriever 有界观察接口内。由于 human layer 使用 Playwright 私有
-API，必须用锁定的 1.55.0 做动作 spy/characterization；未来升级 Playwright 时重复该门禁。
+Agent 的 click、scroll 和 wait 复用同一 patched Page/Locator；不得用 `page._original`、DOM click、任意 `evaluate()` 动作或另一个 Browser 绕过动作边界。按 ADR 0042，人类投屏直接输入可在同一已拥有页面上使用专用 CDP `Input.*`；它与 Agent 输入共用 Host FIFO、文章归属与控制 epoch 复检，不能改变 Network 准入。只读 DOM/locator 发现仍受有界观察接口约束。human layer 使用 Playwright 私有 API，须用锁定的 1.55.0 做动作 characterization；未来升级时重复该验证。
 
 #### 6.3.5 子进程环境与凭据来源
 

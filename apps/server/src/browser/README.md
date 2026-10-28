@@ -10,6 +10,8 @@
 - [decision.ts](decision.ts)：保留单次决策兼容入口，并提供绑定文章身份的 DSH 能力会话；工具语义与动作结果由 Browser 定义。
 - [pacing.ts](pacing.ts)：动作节奏与等待。
 - [transfers.ts](transfers.ts)：下载传输管理。
+- [screencast.ts](screencast.ts)：同一已拥有页面的按需 CDP 投屏、文档身份及直接输入；与 Host 共享输入 FIFO。
+- [observation-image.ts](observation-image.ts)：Agent 观察图的像素遮挡；不修改 DOM，检测失败返回无图。
 - [host.ts](host.ts)：浏览器宿主边界。
 - [cdp-owner.ts](cdp-owner.ts)：原始 target/request/文档与传输归属；新窗口导航恢复使用绑定的 CDP session，仍经网络准入，不依赖 Playwright Page 已登记。
 - [cdp.ts](cdp.ts)：所属浏览器的协议连接；普通命令保留 RPC 超时，带文章取消信号的导航等待由文章生命周期约束，避免将准入排队误判为导航失败。

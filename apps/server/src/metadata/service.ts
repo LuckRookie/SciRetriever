@@ -170,9 +170,15 @@ async function* scanItems(
 async function scan(
   ...args: Parameters<typeof scanItems>
 ): Promise<MetadataProviderInvocation> {
+  return collectScan(scanItems(...args));
+}
+async function collectScan(
+  stream: AsyncGenerator<MetadataScanEvent>,
+  onItem?: () => Promise<void>,
+): Promise<MetadataProviderInvocation> {
   const observations: MetadataObservation[] = [];
   const relations: ProviderRelationObservation[] = [];
-  for await (const event of scanItems(...args)) {
+  for await (const event of stream) {
     if (event.kind === "end") {
       return {
         provider_name: event.provider_name,
@@ -183,6 +189,7 @@ async function scan(
         relations,
       };
     }
+    await onItem?.();
     observations.push(...event.item.observations);
     relations.push(...event.item.relations);
   }
@@ -190,6 +197,7 @@ async function scan(
 }
 
 export class MetadataService {
+  private readonly readiness: Readonly<Record<string, string | null>>;
   private readonly topics: ReadonlyMap<string, TopicSearchPort>;
   private readonly lookups: ReadonlyMap<string, MetadataLookupPort>;
   private readonly references: ReadonlyMap<string, ReferenceQueryPort>;
@@ -198,11 +206,26 @@ export class MetadataService {
       readonly topic_search_ports?: readonly TopicSearchPort[];
       readonly lookup_ports?: readonly MetadataLookupPort[];
       readonly reference_query_ports?: readonly ReferenceQueryPort[];
+      readonly readiness?: Readonly<Record<string, string | null>>;
     } = {},
   ) {
+    this.readiness = options.readiness ?? {};
     this.topics = this.index(options.topic_search_ports ?? []);
     this.lookups = this.index(options.lookup_ports ?? []);
     this.references = this.index(options.reference_query_ports ?? []);
+  }
+  private requirePort<T>(provider: string, port: T | undefined): T {
+    const missing = this.readiness[provider];
+    if (missing || !port)
+      throw new MetadataProviderFailure({
+        code: missing
+          ? `metadata-source-${missing}`
+          : "metadata-source-unavailable",
+        reason: "The selected metadata source is unavailable in this process.",
+        action: "Review the source configuration and adapter readiness.",
+        retryable: false,
+      });
+    return port;
   }
   private index<T extends { readonly provider_name: string }>(
     values: readonly T[],
@@ -220,15 +243,20 @@ export class MetadataService {
     query: TopicSearchQuery,
     scan_limit: number,
     signal?: AbortSignal,
+    onItem?: () => Promise<void>,
   ): Promise<MetadataProviderInvocation> {
-    const port = this.topics.get(providerName(provider));
-    if (!port)
-      throw new Error("requested topic-search capability is not assembled");
-    return scan(
+    const port = this.requirePort(
       providerName(provider),
-      scan_limit,
-      () => port.open_topic_search(query),
-      signal,
+      this.topics.get(providerName(provider)),
+    );
+    return collectScan(
+      scanItems(
+        providerName(provider),
+        scan_limit,
+        () => port.open_topic_search(query),
+        signal,
+      ),
+      onItem,
     );
   }
   async searchTopic(
@@ -256,16 +284,18 @@ export class MetadataService {
   async lookupProvider(
     request: MetadataLookupRequest,
     signal?: AbortSignal,
+    onItem?: () => Promise<void>,
   ): Promise<MetadataProviderInvocation> {
     const provider = providerName(request.provider_name);
-    const port = this.lookups.get(provider);
-    if (!port)
-      throw new Error("requested metadata-lookup capability is not assembled");
-    return scan(
-      provider,
-      request.scan_limit,
-      () => port.open_lookup(request.key),
-      signal,
+    const port = this.requirePort(provider, this.lookups.get(provider));
+    return collectScan(
+      scanItems(
+        provider,
+        request.scan_limit,
+        () => port.open_lookup(request.key),
+        signal,
+      ),
+      onItem,
     );
   }
   async lookup(
@@ -285,9 +315,7 @@ export class MetadataService {
     signal?: AbortSignal,
   ): Promise<MetadataProviderInvocation> {
     const name = providerName(provider);
-    const port = this.references.get(name);
-    if (!port)
-      throw new Error("requested reference-query capability is not assembled");
+    const port = this.requirePort(name, this.references.get(name));
     const context: ReferenceQueryContext = {
       keys,
       direction: request.direction,
@@ -309,9 +337,7 @@ export class MetadataService {
     signal?: AbortSignal,
   ): AsyncGenerator<MetadataScanEvent> {
     const name = providerName(provider);
-    const port = this.references.get(name);
-    if (!port)
-      throw new Error("requested reference-query capability is not assembled");
+    const port = this.requirePort(name, this.references.get(name));
     const context: ReferenceQueryContext = { keys, direction };
     return scanItems(
       name,

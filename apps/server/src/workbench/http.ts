@@ -1,3 +1,4 @@
+import { ScreencastRelay } from "./screencast-relay.js";
 import {
   RestartAdmissionError,
   withoutRestartAdmission,
@@ -140,6 +141,8 @@ export interface WorkbenchWorkspace {
 export interface WorkbenchHttpOptions {
   readonly access?: WorkbenchAccessOptions;
   readonly session: WorkbenchSession | ProductionWorkbenchSession;
+  /** Transport tuning for loopback measurements; production default is documented in Browser control. */
+  readonly screencastMaxInFlight?: 1 | 2;
   readonly workspace?: WorkbenchWorkspace;
   /** Same catalog read services; shares routes, never creates a second HTTP server. */
   readonly query?: QueryOnlyHttpOptions;
@@ -380,6 +383,7 @@ function validUiLocation(url: URL): boolean {
         "task",
         "web",
         "agent",
+        "stats",
         "set",
         "lab",
         "gallery",
@@ -842,6 +846,7 @@ export async function startWorkbenchHttp(
     for (const [clientId, grant] of clients) {
       if (grant.authSessionId === id) {
         clients.delete(clientId);
+        screencast?.revoke(clientId);
         session.detach(clientId);
       }
     }
@@ -1193,43 +1198,6 @@ export async function startWorkbenchHttp(
         json(response, 200, { tabs: await options.tabs.list() });
         return;
       }
-      if (request.method === "GET" && pathname === "/api/frame") {
-        const raw = url.searchParams.get("frame_seq") ?? "";
-        if (!/^\d{1,15}$/u.test(raw)) {
-          json(response, 400, { code: "invalid-frame" });
-          return;
-        }
-        const targetSessionId = url.searchParams.get("session_id");
-        if (
-          targetSessionId !== null &&
-          !/^[A-Za-z0-9._:-]{1,128}$/u.test(targetSessionId)
-        ) {
-          json(response, 400, { code: "invalid-frame" });
-          return;
-        }
-        if (
-          session instanceof ProductionWorkbenchSession &&
-          targetSessionId === null &&
-          (projectedView(clientId).sessions?.length ?? 0) > 1
-        ) {
-          json(response, 400, { code: "frame-session-required" });
-          return;
-        }
-        const frame =
-          session instanceof ProductionWorkbenchSession
-            ? session.frame(Number(raw), clientId, targetSessionId ?? undefined)
-            : session.frame(Number(raw));
-        if (!frame) {
-          json(response, 409, { code: "frame-replaced" });
-          return;
-        }
-        response.writeHead(200, {
-          "Content-Type": "image/jpeg",
-          "Content-Length": frame.byteLength,
-        });
-        response.end(frame);
-        return;
-      }
       if (request.method === "GET" && pathname === "/api/events") {
         if (streams.size >= 16) {
           json(response, 429, { code: "viewer-limit" });
@@ -1253,7 +1221,8 @@ export async function startWorkbenchHttp(
             );
         };
         send();
-        const timer = setInterval(send, 750);
+        // Metadata heartbeat only: viewing never triggers an Agent observation.
+        const timer = setInterval(send, 3000);
         timer.unref();
         const archiveStop = new AbortController();
         let archiveBusy = false,
@@ -1431,6 +1400,10 @@ export async function startWorkbenchHttp(
             await options.configuration.acquisitionRoutes?.(snapshot),
           ),
         });
+        return;
+      }
+      if (request.method === "GET") {
+        json(response, 404, { code: "endpoint-not-found" });
         return;
       }
       if (
@@ -2104,6 +2077,48 @@ export async function startWorkbenchHttp(
       json(response, 404, { code: "endpoint-not-found" });
     });
   }
+  const screencast = new ScreencastRelay({
+    server,
+    ...(options.screencastMaxInFlight
+      ? { maxInFlight: options.screencastMaxInFlight }
+      : {}),
+    authenticate: (request) => {
+      const authenticated = (request.headers.cookie ?? "")
+        .split(";")
+        .some((part) => equal(part.trim(), `${cookieName}=${cookie}`));
+      return authenticated ? access.authenticateWebSocket(request) : null;
+    },
+    grant: (clientId, csrf, authSessionId) => {
+      const grant = clients.get(clientId);
+      if (
+        !grant ||
+        !access.valid(authSessionId) ||
+        grant.authSessionId !== authSessionId ||
+        !equal(grant.csrf, csrf)
+      )
+        return false;
+      grant.touched = Date.now();
+      return true;
+    },
+    valid: (clientId, authSessionId) => {
+      const grant = clients.get(clientId);
+      if (
+        !grant ||
+        !access.valid(authSessionId) ||
+        grant.authSessionId !== authSessionId
+      )
+        return false;
+      grant.touched = Date.now();
+      return true;
+    },
+    session: (clientId, sessionId) => {
+      if (session instanceof ProductionWorkbenchSession)
+        return session.screencastSession(clientId, sessionId);
+      if (sessionId !== session.id)
+        throw new WorkbenchSessionError("stale-command");
+      return session;
+    },
+  });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(options.port ?? 0, access.host, () => {
@@ -2117,13 +2132,13 @@ export async function startWorkbenchHttp(
   access.listening(address.port);
   const refreshTimer = setInterval(() => {
     access.sweep();
-    if (clients.size) void session.refresh();
     for (const [id, grant] of clients)
       if (Date.now() - grant.touched > CLIENT_TTL) {
         clients.delete(id);
+        screencast?.revoke(id);
         session.detach(id);
       }
-  }, 750);
+  }, 10000);
   refreshTimer.unref();
   return {
     origin: access.origin,
@@ -2133,6 +2148,7 @@ export async function startWorkbenchHttp(
     close: async () => {
       if (closing) return;
       closing = true;
+      const screenClose = await Promise.allSettled([screencast.close()]);
       access.close();
       stopUploads.abort();
       queryHandler?.close();
@@ -2146,6 +2162,7 @@ export async function startWorkbenchHttp(
       server.closeAllConnections();
       await done;
       await Promise.allSettled([...pending]);
+      if (screenClose[0]?.status === "rejected") throw screenClose[0].reason;
     },
   };
 }
@@ -2169,6 +2186,7 @@ const ARCHIVE_HTTP_WRITES = [
   "archive-references",
 ] as const;
 const ARCHIVE_HTTP_READS = [
+  "source-statistics",
   "archive-arrangement",
   "reading-status",
   "folders",

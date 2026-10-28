@@ -23,6 +23,7 @@ import {
   type LibraryQuery,
 } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
+import { runMetadataTask } from "../entry/metadata-task.js";
 import { createReadStream } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -171,6 +172,7 @@ function usage(options: CliOptions): CliResult {
     "Usage: sciretriever <web|discover|complete|literature|document|analysis|context|extraction|import|export|config|storage|maintenance|jobs|browser|mcp> ...\n" +
     "  web [--port 4174] [--host IPv4]  # login required; generates an API key unless SCIRETRIEVER_WEB_PASSWORD is set\n" +
     "  discover topic QUERY | discover citations --seed-literature-id ID\n" +
+    "  metadata lookup ID[,ID] | sources statistics --request FILE|-\n" +
     "  complete pdf|parser [--literature-id ID] [--transfers ID,...]\n" +
     "  literature search [query options] | show ID | references ID | cited-by ID\n" +
     "  import metadata FORMAT SOURCE | import pdf ID SOURCE\n" +
@@ -958,6 +960,7 @@ async function execute(
     "literature reference": "reference-read",
     "literature identity": "article-identity",
     "jobs progress": "task-run",
+    "sources statistics": "source-statistics",
     "processor runs": "processor-runs",
     "literature results": "literature-results",
     "usage estimate": "usage-estimate",
@@ -1403,6 +1406,30 @@ async function execute(
       session.close();
     }
   }
+  if (group === "metadata" && command === "lookup") {
+    const ids = argumentsOf(args, "--literature-id");
+    const selected = ids.length
+      ? ids
+      : (args[2] ?? "").split(",").filter(Boolean);
+    if (!selected.length) invalidInput();
+    return output(
+      await withApplication(options, (app) =>
+        runMetadataTask(
+          app,
+          {
+            kind: "lookup",
+            literature_ids: selected,
+            scan_limit: metadataScanLimit(
+              args,
+              app.configuration.sources.metadata.limit ?? 500,
+            ),
+          },
+          options.signal,
+        ),
+      ),
+      options,
+    );
+  }
   if (group === "discover" && command === "topic") {
     const text = argument(args, "--text") ?? args[2] ?? null;
     if (!text) invalidInput();
@@ -1413,16 +1440,18 @@ async function execute(
         args,
         app.configuration.sources.metadata.limit ?? 500,
       );
-      return app.discovery.run({
-        query: text,
-        year_from:
-          yearFrom === null ? null : integerOption(args, "--year-from", 0),
-        year_to: yearTo === null ? null : integerOption(args, "--year-to", 0),
-        providers: app.metadata.topic_selection.map((provider_name) => ({
-          provider_name,
+      return runMetadataTask(
+        app,
+        {
+          kind: "topic",
+          query: text,
+          year_from:
+            yearFrom === null ? null : integerOption(args, "--year-from", 0),
+          year_to: yearTo === null ? null : integerOption(args, "--year-to", 0),
           scan_limit: limit,
-        })),
-      });
+        },
+        options.signal,
+      );
     });
     return output(value, options);
   }
@@ -1444,23 +1473,25 @@ async function execute(
         args,
         app.configuration.sources.metadata.limit ?? 500,
       );
-      return app.citations.run({
-        seed_literature_ids: seeds,
-        direction: (argument(args, "--direction") ?? "both") as
-          | "references"
-          | "cited-by"
-          | "both",
-        max_depth: integerOption(args, "--max-depth", 1),
-        result_limit: integerOption(
-          args,
-          "--result-limit",
-          integerOption(args, "--limit", 1000),
-        ),
-        providers: app.metadata.reference_selection.map((provider_name) => ({
-          provider_name,
+      return runMetadataTask(
+        app,
+        {
+          kind: "citation",
+          seed_literature_ids: seeds,
+          direction: (argument(args, "--direction") ?? "both") as
+            | "references"
+            | "cited-by"
+            | "both",
+          max_depth: integerOption(args, "--max-depth", 1),
+          result_limit: integerOption(
+            args,
+            "--result-limit",
+            integerOption(args, "--limit", 1000),
+          ),
           scan_limit: limit,
-        })),
-      });
+        },
+        options.signal,
+      );
     });
     return output(value, options);
   }

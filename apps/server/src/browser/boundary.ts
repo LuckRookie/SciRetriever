@@ -23,6 +23,8 @@ import type {
  * signal. It never receives a credential, Cookie, arbitrary URL or selector.
  */
 export interface BrowserDeliveryRequest {
+  /** Process-local notification after Network admission; carries no request data. */
+  readonly on_request_dispatched?: () => void;
   readonly prior_attempts?: readonly AcquisitionAttempt[];
   readonly literature_id: string;
   readonly identifier: string;

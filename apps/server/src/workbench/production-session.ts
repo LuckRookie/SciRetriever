@@ -1,3 +1,4 @@
+import { presentWorkbenchSources } from "./source-presentation.js";
 import { BrowserActivityLog, activityText } from "../browser/activity.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -613,6 +614,9 @@ export class ProductionWorkbenchSession {
     this.selection.delete(clientId);
   }
   view(clientId?: string): WorkbenchView {
+    return presentWorkbenchSources(this.rawView(clientId));
+  }
+  private rawView(clientId?: string): WorkbenchView {
     const operation_feedback: WorkbenchOperationFeedback = {
       phase: this.phase,
       targets: this.targetCounts(),
@@ -751,6 +755,10 @@ export class ProductionWorkbenchSession {
     const record = id ? this.sessions.get(id) : undefined;
     if (!record?.session) throw new WorkbenchSessionError("session-busy");
     return record.session;
+  }
+  /** Explicit article binding: watching another tab never retargets a subscription. */
+  screencastSession(clientId: string, sessionId: string): WorkbenchSession {
+    return this.active(clientId, sessionId);
   }
   assertBinding(
     clientId: string,

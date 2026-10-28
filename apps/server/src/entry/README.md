@@ -25,3 +25,5 @@ CLI/MCP/HTTP 只适配请求；供应商协议、材料验收和事实写入仍�
 - `processor-operations.ts`：CLI/MCP 共用的处理器查询、证据展开和便携导出边界。
 
 `proofread-save.ts` 在显式保存后重建文档、无模型结构规则与参考文献；后续失败保留人工版本并返回已保存状态。`query-operations.ts` 同时提供过程、任务运行、历史预估、运行列表、文献结果和操作历史的三端公共读取。
+
+`metadata-task.ts` 在准入时冻结来源并保存/运行现有加工任务；`metadata-task-runtime.ts` 编排主题、引用与逐篇补全，只由身份 owner 接纳观察，来源计数不成为另一份文献事实。

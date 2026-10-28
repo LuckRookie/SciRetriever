@@ -1,3 +1,4 @@
+import { captureObservationImage } from "./observation-image.js";
 import { waitForBrowserAgentCooldown } from "./pacing.js";
 import { HumanizedBrowserInput } from "./human-input.js";
 import {
@@ -363,51 +364,11 @@ export class BrowserPageRuntime {
     };
   }
 
-  /**
-   * Playwright waits for every document font before taking a screenshot. Publisher
-   * pages often leave a third-party font pending while their article document is
-   * already usable, which would make the Agent lose the hand-off after a challenge
-   * navigation. Keep the normal masked screenshot first; for a page without sensitive
-   * inputs, fall back to Chromium's surface capture so observation can continue.
-   */
+  /** Observation capture shares the Host input lock, and never overlays the live page. */
   private async captureScreenshot(): Promise<Uint8Array | null> {
     if (this.coordinateInput)
-      return this.coordinateInput(() => this.captureScreenshotInternal());
-    return this.captureScreenshotInternal();
-  }
-  private async captureScreenshotInternal(): Promise<Uint8Array | null> {
-    const masked = [
-      this.page.locator(
-        'input[type="password"],input[autocomplete="one-time-code"]',
-      ),
-    ];
-    try {
-      return new Uint8Array(
-        await this.page.screenshot({
-          type: "jpeg",
-          quality: 65,
-          timeout: 5000,
-          mask: masked,
-        }),
-      );
-    } catch {
-      const sensitiveCount = await this.page
-        .locator('input[type="password"],input[autocomplete="one-time-code"]')
-        .count()
-        .catch(() => 1);
-      if (sensitiveCount > 0) return null;
-      const session = await this.page.context().newCDPSession(this.page);
-      try {
-        const captured = await session.send("Page.captureScreenshot", {
-          format: "jpeg",
-          quality: 65,
-          fromSurface: true,
-        });
-        return new Uint8Array(Buffer.from(captured.data, "base64"));
-      } finally {
-        await session.detach().catch(() => undefined);
-      }
-    }
+      return this.coordinateInput(() => captureObservationImage(this.page));
+    return captureObservationImage(this.page);
   }
   private async feedback(): Promise<string | null> {
     // Read each visible frame through Playwright, including cross-origin frames.

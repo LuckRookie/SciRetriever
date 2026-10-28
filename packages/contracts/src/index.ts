@@ -4,6 +4,12 @@ import {
   type AcquisitionAttempt,
   type AcquisitionRouteState,
 } from "./acquisition.js";
+import {
+  parseSourceProblem,
+  parseSourceTechnicalDetails,
+  type SourceProblem,
+  type SourceTechnicalDetails,
+} from "./source-configuration.js";
 export * from "./acquisition.js";
 export * from "./snapshots.js";
 export * from "./archive.js";
@@ -2353,6 +2359,7 @@ export interface WorkbenchCandidate {
   readonly publication: CandidatePublicationReceipt | null;
 }
 export interface WorkbenchView {
+  readonly problem?: SourceProblem;
   readonly mode?: "synthetic" | "production";
   readonly session_id: string;
   /** Null only for an idle workbench without a selected literature. */
@@ -2379,6 +2386,7 @@ export interface WorkbenchView {
     | "session-closed"
     | "model-unavailable"
     | "browser-failed"
+    | "error"
     | null;
   readonly candidates: readonly WorkbenchCandidate[];
   /** Bounded, process-local guidance for the active article. Older v1 views omit it. */
@@ -2421,11 +2429,13 @@ export interface WorkbenchSessionOutcome {
   readonly kind: "published" | "retained";
   /** Published uses "published"; retained preserves the platform outcome code. */
   readonly code: string;
+  readonly problem?: SourceProblem;
 }
 export interface WorkbenchSessionStop {
   /** Original Agent stop reason, or an existing stable platform failure code. */
   readonly reason: string;
   readonly explanation?: string;
+  readonly problem?: SourceProblem;
 }
 export const WORKBENCH_ACTION_KINDS = [
   "click-element",
@@ -2445,6 +2455,7 @@ export const WORKBENCH_ACTION_KINDS = [
   "flow-stopped",
 ] as const;
 export interface WorkbenchActionRecord {
+  readonly technical_details?: SourceTechnicalDetails;
   readonly seq: number;
   readonly at: string;
   readonly actor: "agent" | "human" | "platform";
@@ -2464,6 +2475,7 @@ export function parseWorkbenchActionRecord(
 ): WorkbenchActionRecord {
   const shape = object(value, []);
   const optional = [
+    "technical_details",
     "label",
     "url",
     "point",
@@ -2532,6 +2544,11 @@ export function parseWorkbenchActionRecord(
   }
   return Object.freeze({
     seq: integer(r.seq, ["seq"], 1, Number.MAX_SAFE_INTEGER),
+    ...(r.technical_details === undefined
+      ? {}
+      : {
+          technical_details: parseSourceTechnicalDetails(r.technical_details),
+        }),
     at: parseUtcTimestamp(r.at, ["at"]),
     actor: enumeration(r.actor, ["agent", "human", "platform"], ["actor"]),
     kind,
@@ -2555,11 +2572,18 @@ export function parseWorkbenchSessionStop(
   const shape = object(value, []);
   const r = exact(
     value,
-    ["reason", ...("explanation" in shape ? ["explanation"] : [])],
+    [
+      "reason",
+      ...("explanation" in shape ? ["explanation"] : []),
+      ...("problem" in shape ? ["problem"] : []),
+    ],
     [],
   );
   return Object.freeze({
     reason: workbenchId(r.reason),
+    ...(r.problem === undefined
+      ? {}
+      : { problem: parseSourceProblem(r.problem) }),
     ...(r.explanation === undefined
       ? {}
       : { explanation: wireText(r.explanation, 2048) }),
@@ -2568,7 +2592,11 @@ export function parseWorkbenchSessionStop(
 
 export type WorkbenchArticleCloseOutcome =
   | { readonly kind: "published"; readonly receipt_id: string }
-  | { readonly kind: "retained"; readonly code: string }
+  | {
+      readonly kind: "retained";
+      readonly code: string;
+      readonly problem?: SourceProblem;
+    }
   | { readonly kind: "cancelled" };
 const WORKBENCH_ARTICLE_PHASES = [
   "queued",
@@ -2617,10 +2645,18 @@ export function parseWorkbenchArticleSession(
     fail(["closed_at"]);
   let outcome: WorkbenchSessionOutcome | undefined;
   if (row.outcome !== undefined) {
-    const o = exact(row.outcome, ["kind", "code"], []);
+    const shape = object(row.outcome, []);
+    const o = exact(
+      row.outcome,
+      ["kind", "code", ...("problem" in shape ? ["problem"] : [])],
+      [],
+    );
     outcome = Object.freeze({
       kind: enumeration(o.kind, ["published", "retained"], ["kind"]),
       code: workbenchId(o.code),
+      ...(o.problem === undefined
+        ? {}
+        : { problem: parseSourceProblem(o.problem) }),
     });
   }
   return Object.freeze({
@@ -2655,8 +2691,18 @@ function parseWorkbenchArticleCloseOutcome(
     });
   }
   if (shape.kind === "retained") {
-    const row = exact(value, ["kind", "code"], []);
-    return Object.freeze({ kind: "retained", code: workbenchId(row.code) });
+    const row = exact(
+      value,
+      ["kind", "code", ...("problem" in shape ? ["problem"] : [])],
+      [],
+    );
+    return Object.freeze({
+      kind: "retained",
+      code: workbenchId(row.code),
+      ...(row.problem === undefined
+        ? {}
+        : { problem: parseSourceProblem(row.problem) }),
+    });
   }
   exact(value, ["kind"], []);
   if (shape.kind !== "cancelled") fail(["kind"]);
@@ -2719,6 +2765,7 @@ export function parseWorkbenchView(value: unknown): WorkbenchView {
       ...("actions" in shape ? ["actions"] : []),
       ...("session_phase" in shape ? ["session_phase"] : []),
       ...("session_outcome" in shape ? ["session_outcome"] : []),
+      ...("problem" in shape ? ["problem"] : []),
       ...("session_cleanup_failure" in shape
         ? ["session_cleanup_failure"]
         : []),
@@ -2750,6 +2797,7 @@ export function parseWorkbenchView(value: unknown): WorkbenchView {
       "session-closed",
       "model-unavailable",
       "browser-failed",
+      "error",
     ].includes(r.error as string)
   )
     fail();
@@ -2868,6 +2916,9 @@ export function parseWorkbenchView(value: unknown): WorkbenchView {
               ? null
               : parseWorkbenchArticleCloseOutcome(r.session_outcome),
         }),
+    ...(r.problem === undefined
+      ? {}
+      : { problem: parseSourceProblem(r.problem) }),
     ...(r.session_cleanup_failure === undefined
       ? {}
       : { session_cleanup_failure: workbenchId(r.session_cleanup_failure) }),
@@ -3570,3 +3621,6 @@ export * from "./archive-text.js";
 export * from "./archive-publication.js";
 
 export * from "./source-configuration.js";
+export * from "./source-results.js";
+
+export * from "./screencast.js";

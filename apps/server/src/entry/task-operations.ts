@@ -1,4 +1,5 @@
 import { recordOperation } from "../application/operations.js";
+import { prepareMetadataTask } from "./metadata-task.js";
 import { createTaskReader } from "./task-read.js";
 import type { Application } from "../bootstrap/application.js";
 import { ProcessingTaskError } from "../application/jobs/processing.js";
@@ -121,6 +122,19 @@ export function createTaskOperations(app: Application) {
       if (r.kind === "processing") {
         inputRecord(value, ["kind", "request"]);
         return runtime.submit(r.request);
+      }
+      if (r.kind === "metadata") {
+        inputRecord(value, ["kind", "idempotency_key", "request"]);
+        return runtime.submit({
+          schema_version: 1,
+          idempotency_key: r.idempotency_key,
+          operations: [
+            {
+              operation: "acquire-metadata",
+              request: prepareMetadataTask(app, r.request),
+            },
+          ],
+        });
       }
       if (r.kind !== "acquire-pdf") throw new ContractValidationError();
       inputRecord(value, ["kind", "idempotency_key", "selector"], ["policy"]);

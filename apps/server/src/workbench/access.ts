@@ -171,6 +171,13 @@ export class WorkbenchAccess {
       return null;
     return { origin, host: url.host };
   }
+  /** WebSocket upgrade requires an explicit same-Origin header and the existing login. */
+  authenticateWebSocket(request: IncomingMessage): string | null {
+    const address = this.address(request);
+    if (this.closed || !address || request.headers.origin !== address.origin)
+      return null;
+    return this.sessionId(request);
+  }
   private sessionId(request: IncomingMessage): string | null {
     const prefix = `${this.cookieName}=`;
     const value = (request.headers.cookie ?? "")

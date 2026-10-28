@@ -203,7 +203,7 @@ describe("machine connections to the live Web owner", () => {
       await env.close();
     }
   }, 20000);
-  it("shares observation, guidance, frames and control with Web, rejects stale actions and revokes leases on disconnect", async () => {
+  it("shares observation, guidance and control with Web, rejects stale actions and revokes leases on disconnect", async () => {
     const env = await fixture();
     const factory = vi.fn();
     const host = createMcpServer({
@@ -245,20 +245,9 @@ describe("machine connections to the live Web owner", () => {
         }),
       ).toMatchObject({ guidance: { state: "cancelled" } });
       view = (await call("browser_view")) as View;
-      const frame = await client.callTool({
-        name: "browser_frame",
-        arguments: {
-          session_id: view.session_id,
-          frame_seq: view.observation!.frame_seq,
-        },
-      });
-      expect(frame.isError, JSON.stringify(frame)).not.toBe(true);
-      expect(frame.content).toEqual([
-        { type: "image", mimeType: "image/jpeg", data: "AQID" },
-      ]);
-      expect(frame.structuredContent).toMatchObject({
-        result: { frame_seq: view.observation!.frame_seq, byte_size: 3 },
-      });
+      expect(
+        (await client.listTools()).tools.map((tool) => tool.name),
+      ).not.toContain("browser_frame");
       view = (
         (await call("browser_control", binding(view, "takeover"))) as {
           view: View;
@@ -467,20 +456,12 @@ describe("machine connections to the live Web owner", () => {
       .spyOn(globalThis, "fetch")
       .mockImplementation(async (input, options) => {
         const response = await fetchResponse(input, options);
-        if (String(input).includes("/api/frame?")) controller.abort();
+        if (String(input).includes("/api/view?")) controller.abort();
         return response;
       });
     try {
-      const view = (await machine.execute("view", {})) as View;
       await expect(
-        machine.execute(
-          "frame",
-          {
-            session_id: view.session_id,
-            frame_seq: view.observation!.frame_seq,
-          },
-          controller.signal,
-        ),
+        machine.execute("view", {}, controller.signal),
       ).rejects.toMatchObject({ code: "operation-cancelled" });
     } finally {
       capture.mockRestore();

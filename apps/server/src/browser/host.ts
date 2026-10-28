@@ -1,4 +1,8 @@
 import {
+  ChromiumScreencastSource,
+  type BrowserScreencastSource,
+} from "./screencast.js";
+import {
   BrowserTransferDispatcher,
   type BrowserTransferCallbacks,
 } from "./transfers.js";
@@ -120,6 +124,7 @@ export type {
   BrowserDocumentCommit,
 } from "./cdp-owner.js";
 export interface BrowserPageHandle {
+  readonly screencast?: BrowserScreencastSource;
   readonly id: string;
   readonly session_id?: string;
   close(): Promise<void>;
@@ -158,6 +163,7 @@ export interface BrowserPageInfo {
   readonly session_id?: string;
 }
 interface HostArticleSession {
+  readonly on_request_dispatched?: () => void;
   readonly id: string;
   readonly identity: BrowserArticleSessionIdentity | null;
   readonly controller: AbortController;
@@ -293,6 +299,7 @@ export class BrowserHost {
   private protocol: OwnedBrowserCdpConnection | undefined;
   private cdp: BrowserCdpOwner | undefined;
   private downloadsDirectory: string | undefined;
+  private readonly screencasts = new Map<string, ChromiumScreencastSource>();
   private readonly runtimes = new Map<string, BrowserPageRuntime>();
   /** A blocked document navigation cannot be interpreted as a normal no-PDF page. */
   private readonly blockedNavigations = new Set<string>();
@@ -595,6 +602,7 @@ export class BrowserHost {
           this.options.navigationRetryFailed?.(identity);
         },
         admitted: (identity, url) => {
+          this.sessions.get(identity.session_id)?.on_request_dispatched?.();
           if (identity.is_navigation) {
             this.blockedNavigations.delete(identity.page_id);
             this.navigationUrls.set(identity.page_id, url);
@@ -690,7 +698,10 @@ export class BrowserHost {
     initialUrl?: string,
     identity?: BrowserArticleSessionIdentity,
     signal?: AbortSignal,
-    options?: { readonly retainNavigationFailure: boolean },
+    options?: {
+      readonly retainNavigationFailure: boolean;
+      readonly on_request_dispatched?: () => void;
+    },
   ): Promise<BrowserPageHandle> {
     this.assertRuntime();
     if (this.state !== "ready" || !this.context || this.closing)
@@ -719,6 +730,9 @@ export class BrowserHost {
         })
       : null;
     const session: HostArticleSession = {
+      ...(options?.on_request_dispatched
+        ? { on_request_dispatched: options.on_request_dispatched }
+        : {}),
       id: sessionId,
       identity: frozen,
       controller: new AbortController(),
@@ -965,9 +979,18 @@ export class BrowserHost {
   }
 
   private handle(id: string, page: Page): BrowserPageHandle {
+    let screencast = this.screencasts.get(id);
+    if (!screencast) {
+      screencast = new ChromiumScreencastSource(page, id, (operation) =>
+        this.withPageInput(id, page, operation),
+      );
+      this.screencasts.set(id, screencast);
+      page.once("close", () => this.screencasts.delete(id));
+    }
     let returnTo: [string, Page] | null = null;
     return {
       id,
+      screencast,
       ...(this.pageSessions.get(id)
         ? { session_id: this.pageSessions.get(id)!.id }
         : {}),

@@ -23,6 +23,7 @@
 - [7. 共享支撑：受控网络访问](#7-共享支撑受控网络访问)
 - [8. 共享支撑：安全日志](#8-共享支撑安全日志)
 - [9. 整体协作验证](#9-整体协作验证)
+- [10. 持久获取与加工任务](#10-持久获取与加工任务)
 - [11. 目标接口（尚未实现）](#11-目标接口尚未实现)
 
 ## 1. 模块边界与连接
@@ -1408,9 +1409,9 @@ FileStore、DB Worker、Agents、Browser、Acquisition 与业务。每个切片�
 任何 v1 bytes/hash/schema、owner、secret、SSRF、不可变发布、Candidate 对账或恢复差异都阻断下游并回到
 对应 owner；不在后续模块增加长期兼容旁路。
 
-## 10. 已有材料加工任务
+## 10. 持久获取与加工任务
 
-`ProcessingTaskRequest` 是封闭类型联合：独立解析、文章身份核验、单篇分析、长文分析和集合综合。
+`ProcessingTaskRequest` 是封闭类型联合，包含元数据获取、独立解析、建档、文章身份核验、标签和算子加工。
 最多 100 个独立固定目标；前后依赖由调用方取得前项正式产物后再显式提交，不增加 DAG 引擎。
 目标输入保留对应操作的材料 ID/hash、manifest 和预算。任务执行复用已有业务操作，
 PDF/content completion 保留既有冻结选择和分层获取流程。
@@ -1443,6 +1444,29 @@ HTTP `/api/tasks`、CLI `jobs list` 与 MCP `list_tasks` / `runtime_list_tasks` 
 生产组装和生命周期回归见 `processing-tasks.test.ts`、`processing-retry.test.ts`、
 `execution-runtime-owner.test.ts`、`mcp.test.ts`、`mcp-stdio.test.ts`；
 调用见[Agent 接口指南](../../guides/agent-interface.md)。
+
+### 10.1 获取来源记录与统计
+
+`source-results.ts` 中的中性合同由应用层同一个 `SourceResultAggregation` 归约器投影为任务 `source_results: TaskSourceResults` 与 `SourceStatistics`，不从当前文献状态反推历史。没有来源事件的任务返回 `availability: unrecorded`；已有记录但缺最终 PDF 结果的篇目计入 `unknown`，不伪造未获取或 Browser 成功。统计只供人判断，不改变来源选择或调度。
+
+三类元数据请求统一为 `MetadataTaskRequest`：topic 固定查询与年份，citation 固定种子、方向、深度和结果上限，lookup 固定文献 ID。准入时按当前进程对应用途冻结 `{source, scan_limit}`，显式来源列表保留其顺序；之后配置保存不改写已接纳任务。它们以 `acquire-metadata` 加工操作进入现有 job/target/attempt/queue。`POST /api/tasks` 的 `kind: metadata` 只保存，启动仍是单独动作；旧同步 discovery 入口保存并运行同一任务，回执附 `job_id/source_summary`。书目导入保持独立，不冒充来源请求。
+
+`metadata-source` 事件以 schema 1、record_id、target_id、source、purpose、role、unit_id 和 UTC 时间绑定一次逻辑来源调用，阶段为 started、requested、returned、rejected、observed、included、finished。Network 实际派发才写 requested；进入来源、缺配置、未启用、冷却都不能制造请求。returned 按原始 item 累加，在后续分页未结束时即可读取；included 按稳定 MetaLiterature ID 去重。observed 记录已接纳的 created/matched 身份，只在任务层计算新增与合并已有总数，同一任务的新文献后来再次命中不再算合并已有。引用主查询为 primary；解析关系目标所做的补全为 supporting，有独立请求/错误记录，但不增加独立补全或引用命中的分母。
+
+PDF 保留原 `acquisition-attempt`；Browser 的 escalated 不算实际请求，完成另记来源结果。受准入控制的 Browser 请求继续前由所属文章身份发出无参数派发通知，不能用观看者选择或进入 Browser 代替。Entry 在接纳主 PDF 的 publication receipt 后独立写 `pdf-source-result`，绑定最终 source/stage/receipt_id；最终未获取也写终态。一次任务内一篇只计一个最终渠道，同目标再次确认 publication 时以最后一次为准，后续清理或未获取结果不撤销已记录发布。`doi-resolution` 是证据准备，不是 PDF 渠道。同一 MetaLiterature 目标的多个版本共用该目标计数，不因 fallback 多算篇数；缺 target_id 的历史才按 Literature 归组。旧 HTTP hit 可作为历史交付证据；只有 Browser 升级的旧记录保持 unknown。历史缓存/fake 的无请求 hit 保留拿到事实，并单列 `obtained_without_request`，不伪造尝试，命中率分子只用有请求证据的拿到数。
+
+统计请求只有 `range: last-30-days | all`。近 30 天以任务 created_at 在 `[as_of - 30 天, as_of]` 内为口径，读取事件也不得晚于 as_of。`recorded_since` 是全部历史中最早有来源记录任务的创建时间，不因时间范围变化而改变。通过固定 execution_events rowid 水位、每页 1000 条游标读完全部来源事件，排除读途中新增事件，不受普通技术活动尾部窗口或逐篇轨迹显示上限遮蔽。不新增表、索引或持久汇总，旧记录不回填。
+
+所有比例都返回 numerator、denominator、ratio，分母为零时 ratio 为 null：
+
+- PDF attempted 是实际请求过的 `(job, target)` 数（缺目标标识的旧记录用 literature），obtained 是最终发布渠道数；attempt_rate 分母为有来源记录的篇数，hit_rate 分母为本来源 attempted。错误率为 requested 且失败/拒绝的逻辑来源调用数除以 requested 调用数，取消不算请求错误。
+- 元数据任务返回各来源原始 returned、去重 included、本次 merged 和 coverage（included / merged）；新增/合并已有只在任务层。来源按名称唯一，跨用途时 purpose 为 mixed。每篇来源行最多返回 200 条，record_count 与 records_truncated 显式标记；汇总仍覆盖全部事件。
+- topic_coverage 先算每次非空、实际请求检索的来源 included / 全次 merged，再取算术平均；numerator 是分数和，denominator 是有效检索次数，另附 covered_results/merged_results 供核对，不使用两者之比替代平均。
+- lookup_hit 按被请求输入文献去重，reference_hit 按被请求引用节点去重；引用列表命中依据来源提供关系，后续本地身份解析失败不冒充网络错误。supporting 的错误计入真实来源 error_rate，命中不纳入独立用途分母。不提供的用途为 null，提供但无样本的比例为 null。
+
+这里的 request 是一次实际派发过网络的逻辑来源调用；来源内部分页、重定向与 HTTP 自动重试不另算一次逻辑调用。进度事件只有受限标识、枚举、时间与数字，不带 URL、正文、headers 或凭据。所有来源问题复用 `SourceProblem`：error、not-configured、credential-invalid、no-fulltext-permission；只有认证通过且有明确全文拒绝证据才可给出最后一种，裸 403 是 error。码与 HTTP 状态只放 technical_details。历史码仍只读解码，公开来源轨迹与 Browser 错误经安全投影输出。
+
+HTTP 任务详情与 task-run、CLI `jobs inspect/progress`、MCP `read_task/inspect_task/task_run` 返回同一 source_results。统计读取为 `POST /api/v1/query/source-statistics`、CLI `sources statistics --request FILE|-`、MCP `source_statistics`。读取仅使用现有任务事件，不初始化执行 runtime、不恢复或启动任务，也不探测来源。直接测试为 `source-results`、`metadata-source-results`、`source-results-adapters`、`source-presentation` 与既有 acquisition-trace 测试。
 
 ## 11. 目标接口（尚未实现）
 

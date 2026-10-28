@@ -1,4 +1,10 @@
 import { ContractValidationError, parseUtcTimestamp } from "./index.js";
+import {
+  parseSourceProblem,
+  parseSourceTechnicalDetails,
+  type SourceProblem,
+  type SourceTechnicalDetails,
+} from "./source-configuration.js";
 
 export const ACQUISITION_STAGES = [
   "direct",
@@ -46,6 +52,8 @@ export interface AcquisitionAttempt {
   readonly requested: boolean;
   readonly result: (typeof ACQUISITION_ATTEMPT_RESULTS)[number];
   readonly code?: string;
+  readonly problem?: SourceProblem;
+  readonly technical_details?: SourceTechnicalDetails;
   readonly candidates?: number;
 }
 export const MAX_ACQUISITION_ATTEMPTS = 64;
@@ -81,6 +89,8 @@ export function parseAcquisitionAttempt(value: unknown): AcquisitionAttempt {
     "requested",
     "result",
     "code",
+    "problem",
+    "technical_details",
     "candidates",
   ]);
   const started = parseUtcTimestamp(r.started_at),
@@ -108,6 +118,14 @@ export function parseAcquisitionAttempt(value: unknown): AcquisitionAttempt {
     requested: r.requested,
     result: r.result as AcquisitionAttempt["result"],
     ...(r.code === undefined ? {} : { code: token(r.code) }),
+    ...(r.problem === undefined
+      ? {}
+      : { problem: parseSourceProblem(r.problem) }),
+    ...(r.technical_details === undefined
+      ? {}
+      : {
+          technical_details: parseSourceTechnicalDetails(r.technical_details),
+        }),
     ...(r.candidates === undefined
       ? {}
       : { candidates: r.candidates as number }),

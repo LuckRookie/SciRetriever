@@ -41,3 +41,7 @@
 `library-counts.ts`、`folders.ts` 约定库计数、目录与阅读历史；`snapshots.ts` 将显示名称与不可变快照定义分开；`actor.ts`、`agent-conversation.ts`、`reading-status.ts` 约定操作者和阅读过程的读取投影；`processor-reading.ts` 约定全文／检索范围，`processor-value-checks.ts` 与 `processor-outcomes.ts` 约定六种核对状态和按文献去重的三种结果计数。
 
 `source-configuration.ts` 定义来源目录、单源编辑、测试回执与配置应用状态的封闭中性合同；凭据字段只有存在性与替换/清除动作。
+
+`source-results.ts` 定义元数据任务请求、安全来源进度、最终 PDF 渠道、任务来源汇总与来源统计；比例显式带分子分母，历史无记录可区分，所有问题沿用 source-configuration 的安全诊断。
+
+`screencast.ts` 定义人类观看的认证握手、订阅、二进制 JPEG 封套、直接输入及控制/连接状态，包含严格边界解析；它与 Agent 的 WorkbenchObservation 分离。

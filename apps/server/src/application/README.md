@@ -17,3 +17,5 @@
 [上级目录](../README.md)
 
 `conversation-record.ts` 约束原始可见会话记录：保留普通文本和工具 JSON 格式，排除凭据、图片字节与隐藏推理，明确标记截断；`agent-traces.ts` 仍负责持久化队列、2 MiB 会话上限和 7 天清理。
+
+`source-results.ts` 是任务来源汇总与来源统计共用的纯归约器；`source-statistics.ts` 从既有事件按固定水位分页读取，既不回填历史，也不探测来源。

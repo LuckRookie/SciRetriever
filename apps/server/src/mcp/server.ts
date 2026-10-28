@@ -55,6 +55,7 @@ import {
   type WorkbenchOperation,
 } from "../workbench/machine-client.js";
 import { PdfUploads } from "./pdf-upload.js";
+import { runMetadataTask } from "../entry/metadata-task.js";
 import {
   BROWSER_MAINTENANCE_TOOLS,
   BROWSER_QUERY_TOOLS,
@@ -78,17 +79,7 @@ function unavailable(): never {
     code: "capability-unavailable",
   });
 }
-function result(value: unknown, name?: string): CallToolResult {
-  if (name === "browser_frame") {
-    const frame = value as { bytes_base64: string; media_type: string };
-    const { bytes_base64, ...descriptor } = frame;
-    return {
-      content: [
-        { type: "image", data: bytes_base64, mimeType: frame.media_type },
-      ],
-      structuredContent: { protocol_version: 1, result: descriptor },
-    };
-  }
+function result(value: unknown): CallToolResult {
   const structuredContent = { protocol_version: 1, result: value };
   const text = JSON.stringify(structuredContent);
   if (Buffer.byteLength(text) > 4 * 1024 * 1024)
@@ -335,18 +326,35 @@ export function createMcpServer(options: McpOptions = {}) {
       a.processingTasks.start(job.job_id);
       return { job_id: job.job_id, status: job.status };
     }
+    if (name === "lookup_metadata") {
+      return runMetadataTask(
+        await application(),
+        {
+          kind: "lookup",
+          literature_ids: args.literature_ids,
+          scan_limit: args.scan_limit,
+        },
+        signal,
+      );
+    }
     if (name === "discover_metadata") {
       const a = await application();
-      return a.discovery.run({
-        query: args.query as string,
-        year_from: args.year_from as number | null,
-        year_to: args.year_to as number | null,
-        providers: args.providers as {
-          provider_name: string;
-          scan_limit: number;
-        }[],
+      return runMetadataTask(
+        a,
+        {
+          kind: "topic",
+          query: args.query as string,
+          year_from: args.year_from as number | null,
+          year_to: args.year_to as number | null,
+          providers: (
+            args.providers as {
+              provider_name: string;
+              scan_limit: number;
+            }[]
+          ).map((p) => ({ source: p.provider_name, scan_limit: p.scan_limit })),
+        },
         signal,
-      });
+      );
     }
     if (name === "control_task") {
       const a = await application();
@@ -400,6 +408,8 @@ export function createMcpServer(options: McpOptions = {}) {
     if (name === "usage_estimate")
       return executeQuery(q, "usage-estimate", args, signal);
     if (name === "task_run") return executeQuery(q, "task-run", args, signal);
+    if (name === "source_statistics")
+      return executeQuery(q, "source-statistics", args, signal);
     if (name === "agent_sessions")
       return executeQuery(q, "agent-sessions", args, signal);
     if (name === "operation_history")
@@ -498,7 +508,6 @@ export function createMcpServer(options: McpOptions = {}) {
                 AbortSignal.any([extra.signal, stop.signal]),
               ),
           ),
-          request.params.name,
         );
       } catch (error) {
         const code =

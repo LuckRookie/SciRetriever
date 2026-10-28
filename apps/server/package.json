@@ -41,6 +41,7 @@
     "@deepseek-ai/dsh-tools": "0.2.1-alpha.2",
     "@inquirer/prompts": "^8.7.2",
     "@modelcontextprotocol/sdk": "1.27.1",
+    "@napi-rs/canvas": "1.0.11",
     "@sciretriever/contracts": "workspace:*",
     "ajv": "8.17.1",
     "chalk": "^6.0.0",
@@ -49,9 +50,13 @@
     "playwright-core": "1.55.0",
     "string-width": "^8.2.2",
     "tldts": "7.4.16",
-    "wrap-ansi": "^10.0.1"
+    "wrap-ansi": "^10.0.1",
+    "ws": "8.22.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.1"
   }
 }

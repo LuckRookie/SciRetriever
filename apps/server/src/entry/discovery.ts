@@ -11,6 +11,11 @@ import {
   type MetadataProviderInvocation,
 } from "../metadata/ports.js";
 import type { MetadataService } from "../metadata/service.js";
+import { MetadataProviderFailure } from "../metadata/ports.js";
+import {
+  MetadataProgressError,
+  type MetadataSourceRun,
+} from "../application/jobs/metadata-progress.js";
 import type { MetadataScanEvent } from "../metadata/ports.js";
 import type { LiteratureIdentityService } from "../literature/identity.js";
 import type { ObservationRepository } from "../storage/sqlite/repositories.js";
@@ -21,6 +26,7 @@ import {
 } from "../storage/sqlite/worker.js";
 
 export interface TopicDiscoveryRequest {
+  readonly source_run?: MetadataSourceRun;
   readonly query: string;
   readonly year_from?: number | null;
   readonly year_to?: number | null;
@@ -43,6 +49,7 @@ export interface TopicDiscoveryReport {
 }
 
 export interface CitationDiscoveryRequest {
+  readonly source_run?: MetadataSourceRun;
   readonly seed_literature_ids: readonly string[];
   readonly direction: "references" | "cited-by" | "both";
   readonly max_depth: number;
@@ -167,25 +174,45 @@ export class TopicDiscoveryService {
     let interrupted = request.signal?.aborted ?? false;
     for (const provider of request.providers) {
       if (interrupted) break;
+      const progress = await request.source_run?.begin(
+        provider.provider_name,
+        "topic-search",
+        runId,
+      );
       let invocation: MetadataProviderInvocation;
       try {
-        invocation = await this.metadata.searchTopicProvider(
-          provider.provider_name,
-          query,
-          provider.scan_limit,
-          request.signal,
-        );
-      } catch {
+        const invoke = () =>
+          this.metadata.searchTopicProvider(
+            provider.provider_name,
+            query,
+            provider.scan_limit,
+            request.signal,
+            progress ? () => progress.returned(1) : undefined,
+          );
+        invocation = progress ? await progress.run(invoke) : await invoke();
+      } catch (error) {
+        if (error instanceof MetadataProgressError) throw error;
+        if (request.signal?.aborted) {
+          await progress?.finish("cancelled");
+          interrupted = true;
+          break;
+        }
+        const failure =
+          error instanceof MetadataProviderFailure
+            ? error.failure
+            : providerFailure(
+                "The metadata provider could not complete discovery.",
+              );
+        await progress?.failure(failure.code, error);
         sourceResults.push({
           provider_name: provider.provider_name,
           outcome: "FAILED",
-          failure: providerFailure(
-            "The metadata provider could not complete discovery.",
-          ),
+          failure,
         });
         continue;
       }
-      if (invocation.outcome === "INTERRUPTED") {
+      if (invocation.outcome === "INTERRUPTED" || request.signal?.aborted) {
+        await progress?.finish("cancelled");
         interrupted = true;
         break;
       }
@@ -204,11 +231,15 @@ export class TopicDiscoveryService {
           (year === null ||
             (query.year_from !== null && year < query.year_from) ||
             (query.year_to !== null && year > query.year_to))
-        )
+        ) {
+          await progress?.rejected();
           continue;
+        }
         const decision = await this.identity.observe(observation);
-        if (decision.disposition !== "accepted" || !decision.literature_id)
+        if (decision.disposition !== "accepted" || !decision.literature_id) {
+          await progress?.rejected();
           continue;
+        }
         accepted += decision.created ? 1 : 0;
         matched += decision.created ? 0 : 1;
         const literature = await this.database.getLiterature(
@@ -216,6 +247,11 @@ export class TopicDiscoveryService {
         );
         if (!literature)
           throw new Error("discovery identity refers to missing Literature");
+        await progress?.observed(
+          literature.meta_literature_id,
+          decision.created,
+        );
+        await progress?.included(literature.meta_literature_id);
         if (!results.has(literature.meta_literature_id)) {
           results.set(literature.meta_literature_id, {
             meta_literature_id: literature.meta_literature_id,
@@ -227,6 +263,9 @@ export class TopicDiscoveryService {
           actual_literature_id: literature.literature_id,
         });
       }
+      if (invocation.failure) await progress?.failure(invocation.failure.code);
+      else
+        await progress?.finish(invocation.raw_item_count > 0 ? "hit" : "miss");
     }
     if (request.signal?.aborted) interrupted = true;
     const status: TopicDiscoveryReport["status"] = interrupted
@@ -350,6 +389,13 @@ export class CitationDiscoveryService {
               )?.provenance.source_record_id ?? null,
             identifiers: source.metadata.identifiers,
           };
+          const progress = await request.source_run?.begin(
+            provider.provider_name,
+            "reference-query",
+            sourceId,
+          );
+          let sourceFailure: StableFailure | null = null,
+            referenceListProvided = false;
           let complete = false;
           let usableRelations = 0;
           let incomplete = false;
@@ -363,19 +409,31 @@ export class CitationDiscoveryService {
               state.scan_limit - state.raw_item_count,
               request.signal,
             );
-          } catch {
-            recordCitationFailure(
-              state,
-              providerFailure(
-                "The citation provider could not complete expansion.",
-              ),
-            );
+          } catch (error) {
+            if (error instanceof MetadataProgressError) throw error;
+            if (request.signal?.aborted) {
+              await progress?.finish("cancelled");
+              interrupted = true;
+              break;
+            }
+            const failure =
+              error instanceof MetadataProviderFailure
+                ? error.failure
+                : providerFailure(
+                    "The citation provider could not complete expansion.",
+                  );
+            await progress?.failure(failure.code, error);
+            recordCitationFailure(state, failure);
             continue;
           }
-          for await (const event of stream) {
+          for await (const event of progress
+            ? progress.stream(stream)
+            : stream) {
             if (event.kind === "end") {
-              if (event.outcome === "INTERRUPTED") interrupted = true;
-              if (event.failure) {
+              if (event.outcome === "INTERRUPTED" || request.signal?.aborted)
+                interrupted = true;
+              if (event.failure && !interrupted) {
+                sourceFailure ??= event.failure;
                 recordCitationFailure(state, event.failure);
                 incomplete = true;
               }
@@ -383,19 +441,36 @@ export class CitationDiscoveryService {
               break;
             }
             state.raw_item_count += 1;
+            await progress?.returned(1);
             if (request.signal?.aborted) {
               interrupted = true;
               break;
             }
             if (event.failure) {
+              sourceFailure ??= event.failure;
+              await progress?.rejected();
               recordCitationFailure(state, event.failure);
               incomplete = true;
             }
+            if (event.item.relations.length > 0) referenceListProvided = true;
             // Raw reference text about the anchor remains available even when no
             // related work can yet be identified.
             for (const observation of event.item.observations)
-              if (observationMatches(observation, provider.provider_name, key))
-                await this.identity.observe(observation);
+              if (
+                observationMatches(observation, provider.provider_name, key)
+              ) {
+                const decision = await this.identity.observe(observation);
+                if (decision.disposition === "accepted") {
+                  const accepted = await this.database.getLiterature(
+                    decision.literature_id,
+                  );
+                  if (accepted)
+                    await progress?.observed(
+                      accepted.meta_literature_id,
+                      decision.created,
+                    );
+                }
+              }
             for (const relation of event.item.relations) {
               await this.observations.publishProviderRelation(relation);
               const sourceMatches =
@@ -461,10 +536,16 @@ export class CitationDiscoveryService {
                 if (
                   decision.disposition === "accepted" &&
                   decision.literature_id
-                )
+                ) {
                   targetLiterature = await this.database.getLiterature(
                     decision.literature_id,
                   );
+                  if (targetLiterature)
+                    await progress?.observed(
+                      targetLiterature.meta_literature_id,
+                      decision.created,
+                    );
+                }
               }
               if (!targetLiterature) {
                 // Native record IDs belong to the relation's provider. Only
@@ -494,27 +575,50 @@ export class CitationDiscoveryService {
                   if (!lookupKey.record_id && !lookupKey.identifiers.length)
                     continue;
                   let lookup: MetadataProviderInvocation;
+                  const lookupProgress = await request.source_run?.begin(
+                    candidate.provider_name,
+                    "lookup",
+                    sourceId + ":" + relation.observation_id,
+                    "supporting",
+                  );
                   lookupState.attempted = true;
                   try {
-                    lookup = await this.metadata.lookupProvider(
-                      {
-                        provider_name: candidate.provider_name,
-                        key: lookupKey,
-                        scan_limit: 1,
-                      },
-                      request.signal,
-                    );
-                  } catch {
-                    recordCitationFailure(
-                      lookupState,
-                      providerFailure(
-                        "The citation provider could not resolve a relation target.",
-                      ),
-                    );
+                    const invoke = () =>
+                      this.metadata.lookupProvider(
+                        {
+                          provider_name: candidate.provider_name,
+                          key: lookupKey,
+                          scan_limit: 1,
+                        },
+                        request.signal,
+                      );
+                    lookup = lookupProgress
+                      ? await lookupProgress.run(invoke)
+                      : await invoke();
+                  } catch (error) {
+                    if (error instanceof MetadataProgressError) throw error;
+                    if (request.signal?.aborted) {
+                      await lookupProgress?.finish("cancelled");
+                      interrupted = true;
+                      break;
+                    }
+                    const failure =
+                      error instanceof MetadataProviderFailure
+                        ? error.failure
+                        : providerFailure(
+                            "The citation provider could not resolve a relation target.",
+                          );
+                    await lookupProgress?.failure(failure.code, error);
+                    recordCitationFailure(lookupState, failure);
                     continue;
                   }
+                  await lookupProgress?.returned(lookup.raw_item_count);
                   consumeCitationInvocation(lookupState, lookup);
-                  if (lookup.outcome === "INTERRUPTED") {
+                  if (
+                    lookup.outcome === "INTERRUPTED" ||
+                    request.signal?.aborted
+                  ) {
+                    await lookupProgress?.finish("cancelled");
                     interrupted = true;
                     break;
                   }
@@ -526,17 +630,33 @@ export class CitationDiscoveryService {
                         lookupKey,
                       ),
                   );
-                  if (!targetObservation) continue;
+                  if (!targetObservation) {
+                    if (lookup.failure)
+                      await lookupProgress?.failure(lookup.failure.code);
+                    else await lookupProgress?.finish("miss");
+                    continue;
+                  }
                   const decision =
                     await this.identity.observe(targetObservation);
                   if (
                     decision.disposition !== "accepted" ||
                     !decision.literature_id
-                  )
+                  ) {
+                    await lookupProgress?.rejected();
+                    await lookupProgress?.finish("hit");
                     continue;
+                  }
                   targetLiterature = await this.database.getLiterature(
                     decision.literature_id,
                   );
+                  if (targetLiterature)
+                    await lookupProgress?.observed(
+                      targetLiterature.meta_literature_id,
+                      decision.created,
+                    );
+                  if (lookup.failure)
+                    await lookupProgress?.failure(lookup.failure.code);
+                  else await lookupProgress?.finish("hit");
                   if (targetLiterature) break;
                 }
               }
@@ -570,6 +690,8 @@ export class CitationDiscoveryService {
                 }),
                 relation.observation_id,
               );
+              if (!seeds.includes(targetLiterature.literature_id))
+                await progress?.included(targetLiterature.meta_literature_id);
               if (seenEdges.has(edgeKey)) continue;
               seenEdges.add(edgeKey);
               if (seeds.includes(targetLiterature.literature_id)) continue;
@@ -604,6 +726,9 @@ export class CitationDiscoveryService {
             )
               break;
           }
+          if (interrupted) await progress?.finish("cancelled");
+          else if (sourceFailure) await progress?.failure(sourceFailure.code);
+          else await progress?.finish(referenceListProvided ? "hit" : "miss");
           // Exhaust this source's pages first. Empty, partial or unresolved
           // responses fall through; success short-circuits only this node.
           if (complete && usableRelations > 0 && !incomplete) break;

@@ -7,8 +7,10 @@ import {
 import type { ExecutionRepository } from "../storage/execution/repository.js";
 import type { ExecutionJobStatus } from "../storage/sqlite/worker.js";
 import { readProcessingTask } from "../application/jobs/processing.js";
+import { sourceStatistics } from "../application/source-statistics.js";
 import { ContractValidationError } from "@sciretriever/contracts";
 import { operationRecord as inputRecord } from "./query-operations.js";
+import { presentAcquisitionAttempt } from "../providers/shared/source-problem.js";
 /** Read-only task projections; no recovery or runtime lock is started. */
 export function createTaskReader(repository: ExecutionRepository) {
   const read = async (id: string) => {
@@ -52,7 +54,10 @@ export function createTaskReader(repository: ExecutionRepository) {
         traces.set(key, row);
       }
       if (row.attempts.length >= MAX_ACQUISITION_ATTEMPTS) row.truncated = true;
-      else row.attempts.push(parseAcquisitionAttempt(payload.attempt));
+      else
+        row.attempts.push(
+          presentAcquisitionAttempt(parseAcquisitionAttempt(payload.attempt)),
+        );
     }
     return {
       ...task,
@@ -66,6 +71,8 @@ export function createTaskReader(repository: ExecutionRepository) {
     };
   };
   return {
+    sourceStatistics: (value: unknown, signal?: AbortSignal) =>
+      sourceStatistics(repository, value, signal),
     list: async (
       limit = 100,
       cursor?: string,

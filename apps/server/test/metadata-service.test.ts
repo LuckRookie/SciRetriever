@@ -122,6 +122,7 @@ describe("TypeScript Metadata service", () => {
     expect(configuredMetadataSelections(configuration)).toEqual({
       topic: ["core", "crossref"],
       reference: ["core"],
+      lookup: ["core", "crossref"],
     });
     expect(
       resolveMetadataSelection({ mode: "auto", providers: [] }, "topic-search"),

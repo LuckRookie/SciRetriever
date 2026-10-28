@@ -13,7 +13,11 @@ import {
   workbenchPdf,
 } from "../src/workbench/synthetic-fixture.js";
 import type { BrowserArticleCloseOutcome } from "../src/browser/article-session.js";
-import type { DurableCandidate } from "@sciretriever/contracts";
+import type {
+  PdfSourceResult,
+  AcquisitionAttempt,
+  DurableCandidate,
+} from "@sciretriever/contracts";
 
 it.each(["published", "publication-error", "cleanup-error"] as const)(
   "closes the Browser lease after %s while preserving valid file facts",
@@ -22,6 +26,8 @@ it.each(["published", "publication-error", "cleanup-error"] as const)(
     const app = await createApplication(home, {});
     const runtime = app.execution!;
     const closed: BrowserArticleCloseOutcome[] = [];
+    const results: PdfSourceResult[] = [];
+    const attempts: AcquisitionAttempt[] = [];
     let captured: DurableCandidate | undefined;
     const service = new EntryPdfAcquisitionService({
       registry: new PublicAcquisitionRegistry(
@@ -40,6 +46,7 @@ it.each(["published", "publication-error", "cleanup-error"] as const)(
       browser_host: () => ({
         close: async () => undefined,
         deliverCandidate: async (request) => {
+          request.on_request_dispatched?.();
           const intake = new BrowserCandidateIntake(runtime.transfers, {
             article_id: request.literature_id,
             identifier: request.identifier,
@@ -91,6 +98,12 @@ it.each(["published", "publication-error", "cleanup-error"] as const)(
       await app.database.putLiterature(FIXTURE_LITERATURE);
       const id = FIXTURE_LITERATURE.literature_id;
       const pending = service.acquire({
+        on_source_result: async (value) => {
+          results.push(value);
+        },
+        on_attempt: async (value) => {
+          attempts.push(value);
+        },
         literature_id: id,
         detail: await app.library.detail(id),
         metadata_snapshot: (await app.database.currentFacts(id))!
@@ -102,6 +115,12 @@ it.each(["published", "publication-error", "cleanup-error"] as const)(
         expect(closed).toEqual([
           { kind: "retained", code: "browser-publication-incomplete" },
         ]);
+        expect(results).toEqual([]);
+        expect(attempts.at(-1)).toMatchObject({
+          source: "browser",
+          result: "failed",
+          requested: true,
+        });
         expect((await app.database.currentFacts(id))!.primary_asset).toBeNull();
         expect(await runtime.transfers.recover("lease-transfer")).toEqual(
           captured,
@@ -109,6 +128,18 @@ it.each(["published", "publication-error", "cleanup-error"] as const)(
       } else {
         const result = await pending;
         expect(result.kind).toBe("acquired");
+        expect(results).toMatchObject([
+          {
+            source: "browser",
+            result: "obtained",
+            receipt_id: "entry-browser-lease-transfer",
+          },
+        ]);
+        expect(attempts.at(-1)).toMatchObject({
+          source: "browser",
+          result: "hit",
+          requested: true,
+        });
         expect(closed).toEqual([
           { kind: "published", receipt_id: "entry-browser-lease-transfer" },
         ]);

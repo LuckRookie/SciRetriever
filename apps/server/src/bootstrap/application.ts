@@ -13,6 +13,7 @@ import type {
   ConfigurationReadiness,
 } from "@sciretriever/contracts";
 import { recordMapProgress } from "../application/operations.js";
+import { executeMetadataTask } from "../entry/metadata-task-runtime.js";
 import { ArchiveReusePreview } from "../archive/reuse.js";
 import { ProcessorPlanner } from "../analysis/processor-planning.js";
 import { UsageEstimator } from "../analysis/usage-estimate.js";
@@ -429,6 +430,7 @@ export interface ApplicationOptions {
     readonly topic_search_ports?: readonly TopicSearchPort[];
     readonly lookup_ports?: readonly MetadataLookupPort[];
     readonly reference_query_ports?: readonly ReferenceQueryPort[];
+    readonly readiness?: Readonly<Record<string, string | null>>;
   };
   /** Optional resolver/loopback seam for the shared production metadata Network. */
   readonly metadataAssembly?: MetadataAssemblyOptions;
@@ -1551,6 +1553,23 @@ async function createApplicationOwned(
           tags,
           documents: documentProcessing,
           identity: articleIdentity,
+          metadata: {
+            execute: (request, signal, jobId, targetId) =>
+              executeMetadataTask(
+                {
+                  registry: metadata,
+                  identity,
+                  library,
+                  repository: jobs!,
+                  topic: topicDiscovery,
+                  citations: citationDiscovery,
+                },
+                request,
+                signal,
+                jobId,
+                targetId,
+              ),
+          },
           ...(processorService && processorRead
             ? {
                 processors: processorRuntime(
@@ -1583,6 +1602,19 @@ async function createApplicationOwned(
               configurationOwner.authorizeCurrentCredential(request)),
         });
     const identity = new LiteratureIdentityService(database, writes);
+    const topicDiscovery = new TopicDiscoveryService(
+      metadata.service,
+      identity,
+      observations,
+      database,
+    );
+    const citationDiscovery = new CitationDiscoveryService(
+      metadata.service,
+      identity,
+      observations,
+      references,
+      database,
+    );
     await database.schema();
     let executionRecovery: Application["executionRecovery"] = null;
     let recoveryLease: Awaited<
@@ -1671,27 +1703,8 @@ async function createApplicationOwned(
           signal,
           effectiveAcquisitionRoutes(),
         ),
-      discovery: guardRuntimeMethods(
-        new TopicDiscoveryService(
-          metadata.service,
-          identity,
-          observations,
-          database,
-        ),
-        ["run"],
-        admission,
-      ),
-      citations: guardRuntimeMethods(
-        new CitationDiscoveryService(
-          metadata.service,
-          identity,
-          observations,
-          references,
-          database,
-        ),
-        ["run"],
-        admission,
-      ),
+      discovery: guardRuntimeMethods(topicDiscovery, ["run"], admission),
+      citations: guardRuntimeMethods(citationDiscovery, ["run"], admission),
       identity,
       completion: completion ?? null,
       maintenance: manualPdf

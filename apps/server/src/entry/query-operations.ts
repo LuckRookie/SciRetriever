@@ -66,6 +66,7 @@ export const QUERY_OPERATIONS = [
   "operation-history",
   "agent-sessions",
   "task-run",
+  "source-statistics",
   "usage-estimate",
   "processor-runs",
   "literature-results",
@@ -123,6 +124,10 @@ async function readQuery(
   if (operation === "status") {
     operationRecord(value, []);
     return q.readiness;
+  }
+  if (operation === "source-statistics") {
+    if (!q.tasks || q.readiness.status !== "ready") unavailable();
+    return q.tasks.sourceStatistics(value, signal);
   }
   if (q.readiness.status !== "ready" || !q.query) unavailable();
   if (
@@ -208,12 +213,15 @@ async function readQuery(
   }
   if (operation === "task-run") {
     if (!q.reviewRead) unavailable();
-    operationRecord(
+    const r = operationRecord(
       value,
       ["job_id"],
       ["offset", "limit", "target_id", "member_offset", "member_limit"],
     );
-    return q.reviewRead("task-run", value);
+    const report = await q.reviewRead("task-run", value);
+    if (!report || !q.tasks) return report;
+    const task = await q.tasks.read(String(r.job_id));
+    return { ...report, source_results: task.source_results };
   }
   if (operation === "agent-sessions") {
     if (!q.reviewRead) unavailable();

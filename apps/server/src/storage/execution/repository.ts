@@ -262,6 +262,21 @@ export class ExecutionRepository {
   appendEvent(event: ExecutionEvent): Promise<ExecutionEvent> {
     return this.database.appendExecutionEvent(event);
   }
+  sourceRecordPage(request: {
+    job_id: string | null;
+    from: string | null;
+    through: string;
+    after: number;
+    snapshot: number | null;
+    limit: number;
+  }) {
+    return this.database.review<{
+      snapshot: number;
+      recorded_since: string | null;
+      events: readonly ExecutionEvent[];
+      next_after: number | null;
+    }>("source-records-page", request);
+  }
 
   listEvents(
     jobId: string,

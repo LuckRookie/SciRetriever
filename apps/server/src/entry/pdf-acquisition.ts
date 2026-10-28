@@ -1,9 +1,12 @@
 import {
   parseAcquisitionAttempt,
+  parsePdfSourceResult,
+  type PdfSourceResult,
   MAX_ACQUISITION_ATTEMPTS,
   type AcquisitionAttempt,
 } from "@sciretriever/contracts";
 import { observeNetworkRequests } from "../network/request-activity.js";
+import { sourceProblem } from "../providers/shared/source-problem.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   parseLiteratureId,
@@ -72,6 +75,7 @@ export interface PdfAcquisitionRequest {
   readonly literature_id: LiteratureId;
   readonly detail: LiteratureDetail;
   readonly on_attempt?: (attempt: AcquisitionAttempt) => Promise<void>;
+  readonly on_source_result?: (result: PdfSourceResult) => Promise<void>;
   readonly metadata_snapshot: MetadataSnapshot;
   readonly signal: AbortSignal;
   readonly commit?: CompletionCommit;
@@ -711,6 +715,21 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     }
     if (final.some((outcome) => outcome === undefined))
       throw new TypeError("acquisition cohort partition is incomplete");
+    for (const [index, outcome] of final.entries()) {
+      if (outcome?.kind !== "acquired")
+        await requests[index]!.on_source_result?.(
+          parsePdfSourceResult({
+            schema_version: 1,
+            literature_id: requests[index]!.literature_id,
+            finished_at: new Date().toISOString(),
+            result: "not-obtained",
+            source: null,
+            stage: null,
+            receipt_id: null,
+            technical_details: { diagnostics: [] },
+          }),
+        );
+    }
     return Object.freeze(final as PdfAcquisitionOutcome[]);
   }
 
@@ -923,6 +942,22 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
               ),
             ),
           );
+          await request.on_source_result?.(
+            parsePdfSourceResult({
+              schema_version: 1,
+              literature_id: literatureId,
+              finished_at: new Date().toISOString(),
+              result: "obtained",
+              source: source.source_name,
+              stage:
+                source.acquisition_stage ??
+                (source.acquisition_tier === "authorized-api"
+                  ? "publisher-api"
+                  : "direct"),
+              receipt_id: publications.at(-1)!.receipt_id,
+              technical_details: { diagnostics: [] },
+            }),
+          );
         },
         {
           signal: request.signal,
@@ -1032,6 +1067,59 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     priorFailure: AcquisitionBatchFailure | null,
     context: AcquisitionContext,
   ): Promise<PdfAcquisitionOutcome> {
+    const startedAt = new Date().toISOString();
+    let requested = false;
+    let outcome: PdfAcquisitionOutcome | undefined;
+    const markRequested = () => {
+      requested = true;
+    };
+    try {
+      outcome = await observeNetworkRequests(markRequested, () =>
+        this.runBrowserEscalation(
+          request,
+          literatureId,
+          browser,
+          priorFailure,
+          context,
+          markRequested,
+        ),
+      );
+      return outcome;
+    } finally {
+      const code = request.signal.aborted
+        ? "browser-flow-cancelled"
+        : outcome?.kind === "browser-failure"
+          ? outcome.code
+          : outcome?.kind === "route-failure"
+            ? outcome.failure.code
+            : "browser-delivery-failed";
+      await this.recordAttempt(request, context, {
+        stage: "browser",
+        source: "browser",
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+        requested,
+        result:
+          outcome?.kind === "acquired"
+            ? "hit"
+            : outcome?.kind === "exhausted"
+              ? "miss"
+              : "failed",
+        ...(outcome?.kind === "acquired" || outcome?.kind === "exhausted"
+          ? {}
+          : { code, problem: sourceProblem(code, "pdf") }),
+      });
+    }
+  }
+
+  private async runBrowserEscalation(
+    request: PdfAcquisitionRequest,
+    literatureId: LiteratureId,
+    browser: { readonly unavailable_reason: string | null },
+    priorFailure: AcquisitionBatchFailure | null,
+    context: AcquisitionContext,
+    onRequestDispatched: () => void,
+  ): Promise<PdfAcquisitionOutcome> {
     let delivery: BrowserDeliveryResult;
     const at = new Date().toISOString();
     await this.recordAttempt(request, context, {
@@ -1048,6 +1136,7 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
         (session, signal) =>
           session.deliverCandidate({
             literature_id: literatureId,
+            on_request_dispatched: onRequestDispatched,
             prior_attempts: context.attempts.slice(-16),
             identifier: browserIdentifier(request),
             version: request.detail.literature.version_role,
@@ -1187,6 +1276,18 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
         ),
       );
       closeOutcome = { kind: "published", receipt_id: publication.receipt_id };
+      await request.on_source_result?.(
+        parsePdfSourceResult({
+          schema_version: 1,
+          literature_id: literatureId,
+          finished_at: new Date().toISOString(),
+          result: "obtained",
+          source: "browser",
+          stage: "browser",
+          receipt_id: publication.receipt_id,
+          technical_details: { diagnostics: [] },
+        }),
+      );
       timing("published");
       return {
         kind: "acquired",

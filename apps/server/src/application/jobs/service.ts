@@ -721,6 +721,16 @@ export class ExecutionTaskService {
               });
               return true;
             },
+            on_pdf_source_result: async (target, result) => {
+              const row = selectedRows.get(targetKey(target));
+              if (!row)
+                throw new TypeError("PDF publication target is unavailable");
+              await this.event(jobId, "pdf-source-result", {
+                target_id: row.target_id,
+                attempt_id: attemptIds.get(row.target_id),
+                result,
+              });
+            },
             on_acquisition_attempt: async (target, literatureId, attempt) => {
               const row = selectedRows.get(targetKey(target));
               if (!row)

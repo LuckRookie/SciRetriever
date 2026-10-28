@@ -36,6 +36,7 @@ export interface MetadataRegistry {
   readonly statuses: readonly MetadataProviderStatus[];
   readonly topic_selection: readonly string[];
   readonly reference_selection: readonly string[];
+  readonly lookup_selection: readonly string[];
 }
 
 /** Resolve source order locally; readiness and network state never rewrite it. */
@@ -185,6 +186,9 @@ export function buildMetadataRegistry(
     statuses: Object.freeze(statuses),
     topic_selection: selection.topic,
     reference_selection: selection.reference,
+    lookup_selection: Object.freeze(
+      METADATA_AUTO_PROVIDERS.filter((provider) => lookupNames.has(provider)),
+    ),
   });
 }
 

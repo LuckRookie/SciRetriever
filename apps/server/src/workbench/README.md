@@ -47,3 +47,7 @@ HTTP 关闭先取消并排空正在处理的请求；生产组装随后停止 du
 会话摘要带获取 operation、冻结标题、排队/结束时间与结束结果；所选会话的 `actions` 保留最近 100 条动作。生产与合成会话复用 Browser 的内存投影，点击坐标绑定执行时画面，不把输入内容或 URL 查询参数送入动作记录。
 
 正式会话的结束状态按文章 owner 的 outcome 投影；清理使用的 abort 不覆盖已发布或失败结果，只有明确取消才显示 cancelled。
+
+`source-presentation.ts` 只处理公开错误投影：平台错误显示 error，稳定原因码只进技术详情；Agent 停止说明与内部发布/取消事实不改写。任务与 task-run 返回 source_results，来源统计经 `/api/v1/query/source-statistics` 只读聚合。
+
+实时观看由 `screencast-relay.ts` 管理认证 WebSocket、二进制帧与有限背压，`screencast-port.ts` 定义进程内会话端口；`session.ts` 拥有控制权与活动页重绑定。`synthetic-screencast.ts` 提供明确注入的离线合成源，不是生产截图回退。

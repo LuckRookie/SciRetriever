@@ -219,19 +219,17 @@ it("routes HTTP selection, takeover, guidance, frames and cancellation to one ar
       `${http.origin}/api/frame?client_id=${client.client_id}&session_id=${a.session_id}&frame_seq=1`,
       { headers: { Cookie: cookie } },
     );
-    expect(oldFrame.status).toBe(409);
+    expect(oldFrame.status).toBe(404);
     const missingBinding = await fetch(
       `${http.origin}/api/frame?client_id=${client.client_id}&frame_seq=1`,
       { headers: { Cookie: cookie } },
     );
-    expect(missingBinding.status).toBe(400);
+    expect(missingBinding.status).toBe(404);
     const frameB = await fetch(
       `${http.origin}/api/frame?client_id=${client.client_id}&session_id=${b.session_id}&frame_seq=${parseWorkbenchView(selectedB.value.view).observation!.frame_seq}`,
       { headers: { Cookie: cookie } },
     );
-    expect(new Uint8Array(await frameB.arrayBuffer())).toEqual(
-      new Uint8Array([2]),
-    );
+    expect(frameB.status).toBe(404);
     expect(
       (
         await post("/api/control", {
@@ -313,7 +311,15 @@ it("routes HTTP selection, takeover, guidance, frames and cancellation to one ar
     });
     expect(completedB).toMatchObject({
       state: "finished",
-      session_cleanup_failure: "browser-network-drain-timeout",
+      session_cleanup_failure: "error",
+      problem: {
+        display: "error",
+        technical_details: {
+          diagnostics: [
+            { code: "browser-network-drain-timeout", scope: "runtime" },
+          ],
+        },
+      },
     });
     expect(completedB.candidates[0]?.sha256).toBe(candidate.sha256);
     expect(a.clock.snapshot()).toMatchObject({ model_calls: 1, actions: 0 });
@@ -885,7 +891,16 @@ it("projects executed Agent points and original stop text from the owning produc
       title: "Frozen source title",
       queued_at: expect.any(String),
       closed_at: expect.any(String),
-      outcome: { kind: "retained", code: "browser-agent-stopped" },
+      outcome: {
+        kind: "retained",
+        code: "error",
+        problem: {
+          display: "error",
+          technical_details: {
+            diagnostics: [{ code: "browser-agent-stopped", scope: "runtime" }],
+          },
+        },
+      },
       stop: {
         reason: "no-viable-path",
         explanation: "No PDF route remains.\nThe visible links were exhausted.",
@@ -938,7 +953,19 @@ it.each([
       expect(view).toMatchObject({
         state,
         session_phase: "closed",
-        session_outcome: outcome,
+        session_outcome:
+          state === "failed" && outcome.kind === "retained"
+            ? {
+                kind: "retained",
+                code: "error",
+                problem: {
+                  display: "error",
+                  technical_details: {
+                    diagnostics: [{ code: outcome.code, scope: "runtime" }],
+                  },
+                },
+              }
+            : outcome,
       });
       expect(view.sessions?.[0]).toMatchObject({
         phase: "closed",
@@ -950,7 +977,21 @@ it.each([
                 code:
                   outcome.kind === "cancelled"
                     ? "browser-flow-cancelled"
-                    : outcome.code,
+                    : state === "failed"
+                      ? "error"
+                      : outcome.code,
+                ...(state === "failed" && outcome.kind === "retained"
+                  ? {
+                      problem: {
+                        display: "error",
+                        technical_details: {
+                          diagnostics: [
+                            { code: outcome.code, scope: "runtime" },
+                          ],
+                        },
+                      },
+                    }
+                  : {}),
               },
       });
       expect(view.control.controller_id).toBeNull();
