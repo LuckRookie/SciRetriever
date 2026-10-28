@@ -245,7 +245,7 @@ it("does not count page-image bytes toward the text compaction window", async ()
   const pages = {
     ...fakePages(f.pages),
     image: async () => ({
-      media_type: "image/png",
+      media_type: "image/png" as const,
       data: big,
       width: 1000,
       height: 1400,

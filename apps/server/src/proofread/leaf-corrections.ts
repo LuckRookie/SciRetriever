@@ -11,7 +11,7 @@ import {
   type PageReviewEvidence,
 } from "@sciretriever/contracts";
 import type { PdfPageInspection } from "../browser/pdf-region.js";
-import { comparableTokens, textTokens } from "./suspects.js";
+import { comparableTokens } from "./suspects.js";
 import { requireTableMarkup } from "./contract.js";
 import {
   ArchiveTextError,
