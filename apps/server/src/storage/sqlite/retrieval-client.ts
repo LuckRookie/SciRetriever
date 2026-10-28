@@ -3,6 +3,7 @@ import type {
   RetrievalGeneration,
   RetrievalHit,
   RetrievalSource,
+  RetrievalChangeScan,
 } from "./retrieval-engine.js";
 import type { SqliteWorker } from "./worker.js";
 
@@ -52,23 +53,74 @@ export class RetrievalStorageClient {
   active(): Promise<RetrievalGeneration | null> {
     return this.worker.retrieval("active");
   }
-  reusableGeneration(): Promise<RetrievalGeneration | null> {
-    return this.worker.retrieval("reusableGeneration");
+  markCorrupt(generation: string, revision: number): Promise<void> {
+    return this.worker.retrieval("markCorrupt", [generation, revision]);
   }
-  reusePage(
+  scanChanges(): Promise<RetrievalChangeScan> {
+    return this.worker.retrieval("scanChanges");
+  }
+  interruptedStaging(): Promise<string[]> {
+    return this.worker.retrieval("interruptedStaging");
+  }
+  literatureSources(id: string): Promise<{
+    fingerprint: string;
+    metadata: RetrievalSource | null;
+    documents: readonly RetrievalSource[];
+  }> {
+    return this.worker.retrieval("literatureSources", [id]);
+  }
+  ensureActive(signal?: AbortSignal): Promise<RetrievalGeneration> {
+    return this.worker.retrieval("ensureActive", [], signal);
+  }
+  beginLiteratureUpdate(signal?: AbortSignal): Promise<string> {
+    return this.worker.retrieval("beginLiteratureUpdate", [], signal);
+  }
+  discardLiteratureUpdate(id: string): Promise<void> {
+    return this.worker.retrieval("discardLiteratureUpdate", [id]);
+  }
+  commitLiteratureUpdate(
+    active: string,
+    staged: string,
+    id: string,
+    fingerprint: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    return this.worker.retrieval(
+      "commitLiteratureUpdate",
+      [active, staged, id, fingerprint],
+      signal,
+    );
+  }
+  finishIncremental(
+    id: string,
+    revision: number,
+    signal?: AbortSignal,
+  ): Promise<RetrievalGeneration | null> {
+    return this.worker.retrieval("finishIncremental", [id, revision], signal);
+  }
+  verificationEntries(
     generation: string,
-    kind: "metadata" | "document",
-    source: RetrievalSource,
-    after: number,
-    limit: number,
-  ): Promise<readonly (RetrievalEntry & { entry_id: number })[]> {
-    return this.worker.retrieval("reusePage", [
-      generation,
-      kind,
-      source,
-      after,
-      limit,
-    ]);
+    id: string,
+  ): Promise<readonly RetrievalEntry[]> {
+    return this.worker.retrieval("verificationEntries", [generation, id]);
+  }
+  verify(): Promise<{
+    inspection: import("./retrieval-engine.js").RetrievalCatalogInspection;
+    proof: string;
+  }> {
+    return this.worker.retrieval("verify");
+  }
+  recordVerification(
+    generation: string,
+    revision: number,
+    proof: string,
+    signal?: AbortSignal,
+  ): Promise<RetrievalGeneration> {
+    return this.worker.retrieval(
+      "recordVerification",
+      [generation, revision, proof],
+      signal,
+    );
   }
   search(
     ftsQuery: string,

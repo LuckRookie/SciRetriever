@@ -248,6 +248,7 @@ export interface MaterialContextItem {
   readonly gap: "context-too-large" | "evidence-limit" | null;
 }
 export interface MaterialContextBundle {
+  readonly maintenance_hint?: "rebuild-index";
   readonly score_rule: "weighted-term-frequency-v1";
   readonly items: readonly MaterialContextItem[];
   readonly coverage:
@@ -290,6 +291,11 @@ export function parseMaterialContextBundle(
     "usage",
     "truncated",
     "continuation",
+    ...(value &&
+    typeof value === "object" &&
+    Object.hasOwn(value, "maintenance_hint")
+      ? ["maintenance_hint"]
+      : []),
   ]);
   if (
     r.score_rule !== "weighted-term-frequency-v1" ||
@@ -308,6 +314,11 @@ export function parseMaterialContextBundle(
   )
     fail();
   const generation_id = r.generation_id === null ? null : uuid(r.generation_id);
+  if (
+    Object.hasOwn(r, "maintenance_hint") &&
+    (r.coverage !== "index-corrupt" || r.maintenance_hint !== "rebuild-index")
+  )
+    fail();
   const source_revision =
     r.source_revision === null
       ? null
@@ -497,5 +508,8 @@ export function parseMaterialContextBundle(
     usage: { bytes, items: items.length, tokens: null, tokenizer: null },
     truncated: r.truncated as boolean,
     continuation: continuation(r.continuation),
+    ...(r.maintenance_hint === "rebuild-index"
+      ? { maintenance_hint: "rebuild-index" as const }
+      : {}),
   });
 }

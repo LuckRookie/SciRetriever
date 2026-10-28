@@ -29,7 +29,10 @@ export class IndexRefreshService {
   constructor(
     catalog: string,
     private readonly index: {
-      refresh(signal?: AbortSignal): Promise<RetrievalGenerationReceipt>;
+      refresh(
+        signal?: AbortSignal,
+        progress?: (pending: number) => Promise<void>,
+      ): Promise<RetrievalGenerationReceipt>;
       build(signal?: AbortSignal): Promise<RetrievalGenerationReceipt>;
     },
     private readonly revision: () => Promise<number>,
@@ -63,6 +66,7 @@ export class IndexRefreshService {
         requested_at: new Date().toISOString(),
         finished_at: null,
         technical_details: { code: null },
+        pending_literatures: null,
       }))
       .catch((error: unknown) => {
         this.failure = code(error);
@@ -125,9 +129,19 @@ export class IndexRefreshService {
               status: "running",
               started_at: new Date().toISOString(),
               technical_details: { code: null },
+              pending_literatures: null,
             }));
+            const refreshStarted = performance.now();
             try {
-              const generation = await this.index.refresh(this.stop.signal);
+              const generation = await this.index.refresh(
+                this.stop.signal,
+                async (pending) => {
+                  await this.store.update((latest) => ({
+                    ...latest,
+                    pending_literatures: pending,
+                  }));
+                },
+              );
               await this.store.update((latest) => ({
                 ...latest,
                 indexed_revision: generation.source_revision,
@@ -137,6 +151,11 @@ export class IndexRefreshService {
                     : "updated",
                 finished_at: new Date().toISOString(),
                 technical_details: { code: null },
+                pending_literatures:
+                  (latest.requested_revision ?? 0) > generation.source_revision
+                    ? null
+                    : 0,
+                last_refresh_ms: Math.round(performance.now() - refreshStarted),
               }));
             } catch (error) {
               // Metadata can advance after render without another publication.
@@ -160,6 +179,7 @@ export class IndexRefreshService {
                     : "failed",
                 finished_at: new Date().toISOString(),
                 technical_details: { code: code(error) },
+                last_refresh_ms: Math.round(performance.now() - refreshStarted),
               }));
               if (this.stopped) return;
             }

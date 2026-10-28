@@ -33,19 +33,24 @@ it("admits folder writes during two consecutive archive index updates", async ()
     }),
   );
   let triggered = 0;
-  const page = RetrievalStorageClient.prototype.metadataPage;
+  const page = RetrievalStorageClient.prototype.literatureSources;
+  const triggeredLiteratures = new Set<string>();
   let measure = false;
   const observed = vi
-    .spyOn(RetrievalStorageClient.prototype, "metadataPage")
+    .spyOn(RetrievalStorageClient.prototype, "literatureSources")
     .mockImplementation(async function (
       this: RetrievalStorageClient,
-      after,
-      limit,
+      literature,
     ) {
-      if (measure && after === null) {
+      if (
+        measure &&
+        [env.id, id(3)].includes(literature) &&
+        !triggeredLiteratures.has(literature)
+      ) {
+        triggeredLiteratures.add(literature);
         triggers[triggered++]?.();
       }
-      return page.call(this, after, limit);
+      return page.call(this, literature);
     });
   try {
     // Bulk seed only unrelated synthetic metadata; archive and folder operations
@@ -117,6 +122,9 @@ it("admits folder writes during two consecutive archive index updates", async ()
       asset_id: asset.asset_id,
       asset_sha256: asset.sha256,
     });
+    // Start from a complete baseline: only the two newly published papers may
+    // trigger these independent writes, not the 768 unrelated metadata sources.
+    await env.app.maintenance!.rebuildIndex();
     measure = true;
     for (const literature_id of [env.id, second.literature_id]) {
       const job = await env.app.processingTasks!.submit({

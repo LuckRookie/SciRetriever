@@ -16,6 +16,7 @@ import {
   parseLibrarySearchRequest,
   parsePageRegion,
   parseRetrievalGenerationReceipt,
+  parseIndexVerificationResult,
   parseStrictJsonObject,
   type ConfigurationReadiness,
   type AcquisitionRouteState,
@@ -81,6 +82,7 @@ import {
   type LiteratureQueryService,
 } from "../literature/query.js";
 import { ParsingFailure } from "../parsing/ports.js";
+import { RetrievalStorageError } from "../retrieval/model.js";
 import { RetrievalIndexError } from "../retrieval/index.js";
 import { KnowledgeContextError } from "../retrieval/knowledge-query.js";
 import { MaterialContextError } from "../retrieval/query.js";
@@ -698,6 +700,11 @@ function maintenanceError(error: unknown): {
   if (error instanceof ExtractionSpecError)
     return {
       status: error.code === "schema-busy" ? 429 : 422,
+      code: error.code,
+    };
+  if (error instanceof RetrievalStorageError)
+    return {
+      status: error.code === "index-corrupt" ? 422 : 409,
       code: error.code,
     };
   if (error instanceof RetrievalIndexError)
@@ -2244,6 +2251,7 @@ export interface QueryOnlyHttpOptions {
       readonly revision: number;
     } | null>;
     readonly rebuildIndex?: (signal?: AbortSignal) => Promise<unknown>;
+    readonly verifyIndex?: (signal?: AbortSignal) => Promise<unknown>;
     readonly extraction?: ExtractionDeliveryService;
   };
   readonly assets?: ReadonlyMap<string, WorkbenchStaticAsset>;
@@ -2388,6 +2396,7 @@ function createQueryHttpHandler(
       url.pathname === "/api/v1/maintenance/parse-document" ||
       url.pathname === "/api/v1/maintenance/document-default" ||
       url.pathname === "/api/v1/maintenance/rebuild-index" ||
+      url.pathname === "/api/v1/maintenance/verify-index" ||
       url.pathname === "/api/v1/maintenance/processor-submit" ||
       extractionPaths.has(url.pathname) ||
       ARCHIVE_HTTP_WRITES.some(
@@ -2569,8 +2578,16 @@ function createQueryHttpHandler(
         json(response, 200, { protocol_version: 1, default: current });
         return;
       }
-      if (url.pathname === "/api/v1/maintenance/rebuild-index") {
-        const rebuild = options.maintenance.rebuildIndex;
+      if (
+        [
+          "/api/v1/maintenance/rebuild-index",
+          "/api/v1/maintenance/verify-index",
+        ].includes(url.pathname)
+      ) {
+        const verifying = url.pathname.endsWith("/verify-index");
+        const rebuild = verifying
+          ? options.maintenance.verifyIndex
+          : options.maintenance.rebuildIndex;
         if (!rebuild) {
           json(response, 503, {
             protocol_version: 1,
@@ -2583,7 +2600,10 @@ function createQueryHttpHandler(
           "request",
         ]);
         const intent = object(command.request, ["kind"]);
-        if (command.protocol_version !== 1 || intent.kind !== "rebuild")
+        if (
+          command.protocol_version !== 1 ||
+          intent.kind !== (verifying ? "verify" : "rebuild")
+        )
           invalidInput();
         const stop = new AbortController();
         const abort = () => stop.abort();
@@ -2591,9 +2611,10 @@ function createQueryHttpHandler(
         stopUploads.signal.addEventListener("abort", abort, { once: true });
         streams.add(response);
         try {
-          const result = parseRetrievalGenerationReceipt(
-            await rebuild(stop.signal),
-          );
+          const receipt = await rebuild(stop.signal);
+          const result = verifying
+            ? parseIndexVerificationResult(receipt)
+            : parseRetrievalGenerationReceipt(receipt);
           json(response, 200, { protocol_version: 1, result });
         } finally {
           streams.delete(response);
@@ -3048,6 +3069,7 @@ function createQueryHttpHandler(
           request.url?.startsWith("/api/v1/maintenance/parse-document") ||
           request.url?.startsWith("/api/v1/maintenance/document-default") ||
           request.url?.startsWith("/api/v1/maintenance/rebuild-index") ||
+          request.url?.startsWith("/api/v1/maintenance/verify-index") ||
           request.url?.startsWith("/api/v1/maintenance/extraction-")
         ) {
           const failure = maintenanceError(error);

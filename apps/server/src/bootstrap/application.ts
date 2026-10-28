@@ -246,6 +246,7 @@ export interface Application {
     readonly parseDocuments: DocumentProcessingService["parseDocuments"];
     readonly documentDefault: SqliteWorker["documentDefault"];
     readonly rebuildIndex: RetrievalIndexService["build"];
+    readonly verifyIndex: RetrievalIndexService["verify"];
     readonly extraction: ExtractionDeliveryService;
   } | null;
   readonly documentProcessing: DocumentProcessingService;
@@ -1738,9 +1739,10 @@ async function createApplicationOwned(
                 documentProcessing.parseDocuments.bind(documentProcessing),
               documentDefault: database.documentDefault.bind(database),
               rebuildIndex: indexRefresh.rebuild.bind(indexRefresh),
+              verifyIndex: retrievalIndex.verify.bind(retrievalIndex),
               extraction: extractionDelivery,
             },
-            ["ingestPdf", "parseDocuments", "rebuildIndex"],
+            ["ingestPdf", "parseDocuments", "rebuildIndex", "verifyIndex"],
             admission,
           )
         : null,

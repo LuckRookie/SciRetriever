@@ -1,4 +1,48 @@
 import { ContractValidationError } from "./index.js";
+import {
+  parseRetrievalGenerationReceipt,
+  type RetrievalGenerationReceipt,
+} from "./retrieval-context.js";
+export interface IndexVerificationResult extends RetrievalGenerationReceipt {
+  readonly schema_version: 1;
+  readonly status: "verified";
+  readonly elapsed_ms: number;
+}
+export function parseIndexVerificationResult(
+  value: unknown,
+): IndexVerificationResult {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new ContractValidationError();
+  const r = value as Record<string, unknown>;
+  if (
+    Object.keys(r).sort().join() !==
+      [
+        "schema_version",
+        "status",
+        "elapsed_ms",
+        "generation_id",
+        "source_revision",
+        "entry_count",
+        "source_count",
+      ]
+        .sort()
+        .join() ||
+    r.schema_version !== 1 ||
+    r.status !== "verified" ||
+    !Number.isSafeInteger(r.elapsed_ms) ||
+    Number(r.elapsed_ms) < 0
+  )
+    throw new ContractValidationError();
+  const { schema_version, status, elapsed_ms, ...generation } = r;
+  void schema_version;
+  void status;
+  return {
+    schema_version: 1,
+    status: "verified",
+    elapsed_ms: Number(elapsed_ms),
+    ...parseRetrievalGenerationReceipt(generation),
+  };
+}
 
 /** Projection work is separate from an accepted document publication. */
 export interface IndexRefreshStatus {
@@ -11,6 +55,8 @@ export interface IndexRefreshStatus {
   readonly started_at: string | null;
   readonly finished_at: string | null;
   readonly technical_details: { readonly code: string | null };
+  readonly pending_literatures?: number | null;
+  readonly last_refresh_ms?: number | null;
 }
 export function parseIndexRefreshStatus(value: unknown): IndexRefreshStatus {
   const fail = (): never => {
@@ -30,6 +76,10 @@ export function parseIndexRefreshStatus(value: unknown): IndexRefreshStatus {
         "started_at",
         "finished_at",
         "technical_details",
+        ...(Object.hasOwn(r, "pending_literatures")
+          ? ["pending_literatures"]
+          : []),
+        ...(Object.hasOwn(r, "last_refresh_ms") ? ["last_refresh_ms"] : []),
       ]
         .sort()
         .join() ||
@@ -46,6 +96,13 @@ export function parseIndexRefreshStatus(value: unknown): IndexRefreshStatus {
     fail();
   for (const key of ["requested_revision", "indexed_revision"])
     if (
+      r[key] !== null &&
+      (!Number.isSafeInteger(r[key]) || Number(r[key]) < 0)
+    )
+      fail();
+  for (const key of ["pending_literatures", "last_refresh_ms"])
+    if (
+      Object.hasOwn(r, key) &&
       r[key] !== null &&
       (!Number.isSafeInteger(r[key]) || Number(r[key]) < 0)
     )

@@ -230,8 +230,9 @@ function fail(): never {
 }
 let verifiedDocumentSchema: string | null = null;
 function validDocumentSchema(version: number): boolean {
-  // The full per-table integrity and foreign-key check runs once per worker
-  // start and again after any DDL (schema_version). Ordinary commits do not
+  // The full per-table integrity and foreign-key check runs once per writable
+  // worker start and again after any DDL (schema_version). Read-only workers
+  // only check schema layout. Ordinary commits do not
   // repeat it: on a large catalog it takes seconds, and every write (even a
   // reading record) would otherwise stall the next read. Data damage written
   // by an outside connection is caught at the next start.
@@ -309,7 +310,7 @@ function inspectDocumentSchema(version: number): boolean {
         .some((row: Dynamic) => !names.has(row.name))
     )
       return false;
-    if (version === SCHEMA_VERSION) {
+    if (!data.read_only && version === SCHEMA_VERSION) {
       // Retrieval is a rebuildable projection. Its damaged FTS postings must
       // not block Library and Document source reads needed to repair it.
       for (const sql of manifest) {
@@ -335,7 +336,7 @@ function inspectDocumentSchema(version: number): boolean {
         if (db.prepare(`PRAGMA foreign_key_check(${table})`).all().length)
           return false;
       }
-    } else {
+    } else if (!data.read_only) {
       if (db.prepare("PRAGMA integrity_check").get()?.integrity_check !== "ok")
         return false;
       if (db.prepare("PRAGMA foreign_key_check").all().length !== 0)
@@ -4530,12 +4531,23 @@ port.on("message", (message: WorkerMessage) => {
     if (message.command.kind === "retrieval") {
       let value;
       try {
-        if (!db) initialize();
         const engine = getRetrievalEngine();
         const { operation, args } = message.command;
         if (
           data.read_only &&
-          ["beginGeneration", "insertEntries", "publish"].includes(operation)
+          [
+            "beginGeneration",
+            "insertEntries",
+            "publish",
+            "ensureActive",
+            "beginLiteratureUpdate",
+            "discardLiteratureUpdate",
+            "commitLiteratureUpdate",
+            "finishIncremental",
+            "recordVerification",
+            "markCorrupt",
+            "verify",
+          ].includes(operation)
         )
           fail();
         const allowed = [
@@ -4546,12 +4558,22 @@ port.on("message", (message: WorkerMessage) => {
           "insertEntries",
           "publish",
           "active",
-          "reusableGeneration",
-          "reusePage",
           "search",
           "documentCoverage",
           "metadataSource",
           "hasDefault",
+          "interruptedStaging",
+          "scanChanges",
+          "literatureSources",
+          "ensureActive",
+          "beginLiteratureUpdate",
+          "discardLiteratureUpdate",
+          "commitLiteratureUpdate",
+          "finishIncremental",
+          "verificationEntries",
+          "verify",
+          "recordVerification",
+          "markCorrupt",
         ];
         if (!allowed.includes(operation) || !Array.isArray(args)) fail();
         value = {

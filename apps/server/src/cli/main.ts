@@ -194,6 +194,7 @@ function usage(options: CliOptions): CliResult {
     "  tags list|search|show|changes|consolidate|backfill; tags edit|undo --request FILE; literature tags ID / set|lock --request FILE\n" +
     "  storage schema-inspect|schema-init --catalog PATH\n" +
     "  maintenance rebuild-index\n" +
+    "  maintenance verify-index\n" +
     "  maintenance index-status\n" +
     "  maintenance publisher-names (--all | --literature-id ID... | --query TEXT) [--ai] [--scan-limit N] [--cursor CURSOR] [--max-ai-requests N] [--output PATH]\n" +
     "  maintenance publisher-names-accept --report FILE|- --name NAME [--name NAME...]\n";
@@ -1300,13 +1301,18 @@ async function execute(
       options,
     );
   }
-  if (group === "maintenance" && command === "rebuild-index") {
+  if (
+    group === "maintenance" &&
+    ["rebuild-index", "verify-index"].includes(command ?? "")
+  ) {
     if (args.length !== 2) invalidInput();
     return output(
       await withApplication(options, async (app) => {
         if (!app.maintenance)
           throw new Error("maintenance runtime is unavailable");
-        return app.maintenance.rebuildIndex(options.signal);
+        return command === "verify-index"
+          ? app.maintenance.verifyIndex(options.signal)
+          : app.maintenance.rebuildIndex(options.signal);
       }),
       options,
     );

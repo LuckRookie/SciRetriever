@@ -20,7 +20,7 @@
 
 表、索引、视图与事务内版本事件的触发器统一维护在当前 `schema.ts`；真实数据库不进入本目录，旧库不在启动时自动转换。
 
-文档 schema 的完整健康检查（逐表 `integrity_check` 与 `foreign_key_check`）在每个 worker 启动时运行，之后按 `schema_version`、catalog 文件 inode 与合同版本复用：DDL 或换成另一个 catalog 文件会使证明失效；普通数据提交（包括其它连接的提交和随之重开连接）不再重跑。Owner 2026-10-23 决定：大库上这项检查需数秒，原规则使每次写入（含阅读记录）后的下一次读取停顿；外部连接写入的数据损坏改为在下次启动时发现。操作仍解析所读事实，文件字节仍由 FileStore 校验；这个内存证明不写入 catalog，也不能替代 operator 的完整检查。
+普通写入 worker 的文档 schema 完整健康检查（逐表 `integrity_check` 与 `foreign_key_check`）在首次使用时运行，之后按 `schema_version`、catalog 文件 inode 与合同版本复用：DDL 或换成另一个 catalog 文件会使证明失效；普通数据提交（包括其它连接的提交和随之重开连接）不再重跑。Owner 2026-10-23 决定：大库上这项检查需数秒，原规则使每次写入（含阅读记录）后的下一次读取停顿；外部连接写入的数据损坏改为在下次启动时发现。操作仍解析所读事实，文件字节仍由 FileStore 校验；这个内存证明不写入 catalog，也不能替代 operator 的完整检查。
 
 [上级目录](../README.md)
 
@@ -49,3 +49,5 @@
 文献库计数和分页的取消从 HTTP/Entry 经查询服务传至 worker。每次可取消查询带一个共享原子标记，worker 在取出排队请求、状态计算阶段之间、SQL 扫描行及结果装载之间检查；取消时回滚只读事务，不返回部分结果。调用方立即收到 AbortError，worker 随后确认取消并继续处理后续请求。没有终止共享 worker，也不取消任何写事务；SQLite 无检查点的单条内部操作及启动完整健康检查仍需运行到下一个检查点。这是协作式取消，不承诺任意指令处立即中断。
 
 当前 schema 12 接纳 arrange/render，并保留 document/structure 历史行。`archive-schema-migration.ts` 只提供显式离线 11 → 12 校验、事务迁移和行数/外键核对；catalog open 不调用它。
+
+只读 worker 的 query preflight 仅核对固定布局/版本，不执行逐表健康扫描；检索命令直接交给 `retrieval-engine.ts` 的独立连接，不顺带初始化普通写入连接。`active/search` 只作轻量检查，完整验证由显式索引维护承担。增量修改使用现有 building generation 暂存，按篇 CAS 接纳；未接纳的暂存不参与搜索。完整哈希证书的全零保留值表示失效，维护确认损坏的专用标记使查询直接拒绝，原始事实和 schema 不因此改变。

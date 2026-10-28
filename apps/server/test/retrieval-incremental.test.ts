@@ -198,13 +198,22 @@ describe("incremental material indexing", () => {
     }
   }, 0);
 
-  it("lets independent writers through a batch, rejects a stale publish and then builds the new source", async () => {
+  it("lets independent writers through a batch and retries only the concurrently changed literature", async () => {
     const env = await fixture();
     const entered = deferred(),
       release = deferred();
     let pending: Promise<unknown> | undefined;
     try {
       const previous = await env.index.build();
+      await env.app.database.putLiterature(
+        parseLiterature({
+          ...FIXTURE_LITERATURE,
+          metadata: {
+            ...FIXTURE_LITERATURE.metadata,
+            title: "First changed synthetic metadata",
+          },
+        }),
+      );
       const insert = env.store.insertEntries.bind(env.store);
       vi.spyOn(env.store, "insertEntries").mockImplementationOnce(
         async (...args) => {
@@ -229,7 +238,9 @@ describe("incremental material indexing", () => {
         }),
       );
       release.resolve();
-      expect(await pending).toMatchObject({ code: "index-stale" });
+      expect(await pending).toMatchObject({
+        source_revision: await env.store.revision(),
+      });
       expect((await env.store.active())?.generation_id).toBe(
         previous.generation_id,
       );
@@ -243,14 +254,14 @@ describe("incremental material indexing", () => {
     }
   });
 
-  it("reports concurrent metadata replacement as stale rather than source corruption", async () => {
+  it("retries concurrent metadata replacement without treating it as source corruption", async () => {
     const env = await fixture();
     const entered = deferred(),
       release = deferred();
     let pending: Promise<unknown> | undefined;
     try {
-      const page = env.store.metadataPage.bind(env.store);
-      vi.spyOn(env.store, "metadataPage").mockImplementationOnce(
+      const page = env.store.literatureSources.bind(env.store);
+      vi.spyOn(env.store, "literatureSources").mockImplementationOnce(
         async (...args) => {
           const source = await page(...args);
           entered.resolve();
@@ -270,8 +281,12 @@ describe("incremental material indexing", () => {
         }),
       );
       release.resolve();
-      expect(await pending).toMatchObject({ code: "index-stale" });
-      expect(await env.store.active()).toBeNull();
+      expect(await pending).toMatchObject({
+        source_revision: await env.store.revision(),
+      });
+      expect((await env.store.active())?.source_revision).toBe(
+        await env.store.revision(),
+      );
     } finally {
       release.resolve();
       await pending;
@@ -359,7 +374,7 @@ describe("incremental material indexing", () => {
           await release.promise;
         },
       );
-      pending = env.index.refresh();
+      pending = env.index.build();
       await entered.promise;
       await env.app.folders.manage({
         operation: "create",

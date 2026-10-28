@@ -462,7 +462,7 @@ CLI `literature search/show/references/cited-by` 与 `export metadata/pdf/conten
 
 查询先取得索引命中，再验证源版本仍可读。遇到陈旧或缺失项可返回其缺口并继续其它命中，但 coverage 必须保留事实；不能因为过滤掉失败项就声称全部结果完整。读取不到源对象时不启动重建。
 
-索引发布由维护入口完成：固定输入范围 → 构建新 generation → 校验覆盖 → 原子切换可读指针。失败保留旧 generation。更新期间 reader 固定自身 generation；继续 cursor 绑定查询规范、范围和 generation，失效时返回需重新查询，不偷偷换页序。
+显式整代重建采用固定输入范围、构建新 generation、完整校验和原子切换指针；发布后自动刷新则在 active generation 内逐篇接纳变化。两者的写入、源变化处理和校验边界见 [4.9](#49-材料-context-的实现边界)。继续 cursor 固定查询、范围、generation 与已接纳 source revision；任一身份变化须重新查询，不偷偷换页序。
 
 第一版优先验证 SQLite FTS 与显式投影是否满足场景。向量、混合排序、重排与单独索引服务要依据代表性数据和问题评估后选择；架构不预定向量数据库。若未来引入付费模型重排，也不能把它隐藏在目前承诺无模型副作用的查询里，必须另行定义能力与成本合同。
 
@@ -506,7 +506,7 @@ Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要
 
 ### 4.6 并发、取消与性能边界
 
-当前 QueryApplication 为普通材料／库读取和检索各持有一个只读 SQLite worker；材料与知识检索共用后者，数量不随请求增加。冷检索的同步完整性校验及 `data_version` 变化后的再校验保持原义，不再占用库读取队列。应用关闭先 drain 两个 Context service，再关闭检索 worker 和材料 reader；启动失败复用同一清理路径。维护 Application 为索引构建持有一个独立 SQLite worker，避免整代完整性检查的同步工作堵住建档普通读写队列；全部 generation/repair 状态留在这个连接，共享 catalog 写入 admission，批量写入仍按同一规则串行。HTTP 取消不终止共享 worker，已发送的同步 SQLite 工作仍需结算。
+当前 QueryApplication 为普通材料／库读取和检索各持有一个只读 SQLite worker；材料与知识检索共用后者，数量不随请求增加。冷检索和 `data_version` 变化后的首次读取都只做固定大小的身份/布局检查，不运行全库健康检查；具体检查和维护边界见 [4.9](#49-材料-context-的实现边界)。应用关闭先 drain 两个 Context service，再关闭检索 worker 和材料 reader；启动失败复用同一清理路径。维护 Application 为索引构建持有一个独立 SQLite worker，避免整代完整性检查的同步工作堵住建档普通读写队列；全部 generation/repair 状态留在这个连接，共享 catalog 写入 admission，批量写入仍按同一规则串行。HTTP 取消不终止共享 worker，已发送的同步 SQLite 工作仍需结算。
 
 一次读取内部使用已提交 snapshot 和固定 artifact 引用，不混合两个 current 版本。跨页是否固定数据库 snapshot 取决于协议；现有 Library 分页只保证单页一致，新协议若固定索引 generation也不能假称底层业务永不变化。
 
@@ -526,13 +526,33 @@ Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要
 
 `retrieval-context.ts` 定义 `MaterialContextRequest/MaterialContextBundle`，固定查询、范围、类型、版本、字节预算与续读位置。当前无 tokenizer；请求与使用方式见[读取指南](../../guides/library-query.md#上下文检索)。
 
-材料投影使用当前 schema 中的 `retrieval_*` 表。显式重建完整验证来源，建档发布后的 refresh 可复用来源未变且验证通过的条目。构建者使用独立 generation 锁，catalog 写入按有界批次准入；开始和发布校验、source revision CAS 决定新 generation 是否可用。源变化返回过时，不切换旧 active。只读查询不隐式修复。
+材料投影使用当前 schema 的 `retrieval_*` 表，保留元数据和全部已接纳固定文档版本，默认文档与显式历史版本仍分别筛选。没有新增表、schema 版本或自动迁移。索引是可重建投影，不成为正文或元数据的事实来源。
 
-发布后的刷新由 `retrieval/refresh.ts` 合并执行。文档接纳后仅等待刷新请求原子落盘，回执 `index_status=scheduled`；建档和 READY 不等待整库索引，也不依赖刷新成功。100 ms 的批次窗口合并相邻发布，运行中最多保留一个最新 source revision；一个 catalog 同时只有一个后台刷新者，底层 generation 锁继续约束显式重建。新请求的 revision 已被本次新代覆盖时不再补跑，否则执行最新一份待处理请求。失败保留现有 active generation 与文档；index-stale 且确认源 revision 前进时，合并最新源重跑，涵盖 render 后元数据步骤造成的变化。没有新源或新请求的同一失败不会循环重试；新发布或显式维护可再次请求。关闭时取消构建并将未完成请求保留，下一次维护 Application 启动恢复 scheduled/running 状态；只读查询不启动工作。
+**读取**：`active()` 只读单例指针和 ready generation 的标量计数；不逐项重数 entries/FTS。冷连接和外部 `data_version` 变化后的重连只核对 schema identity、固定数量的 retrieval DDL 与触发器、active 是否存在且 ready、已知损坏标记和 source revision。查询不运行 PRAGMA integrity_check/foreign_key_check、FTS integrity-check、整份哈希或来源指纹扫描。只读 worker 的 query preflight 保留固定布局与版本守卫，移除逐表健康扫描；普通写入 Application 的源库启动健康检查仍保留。`inspectCatalogSchema` 的 Web 启动门和显式 `storage retrieval-inspect` 仍属于独立完整检查，不由搜索触发。
 
-非秘密状态保存为 `<catalog>.index-refresh.json`，属于可重建投影队列，不是资产、配置或新业务事实；不改变 catalog schema。只接受严格 schema、当前用户的 0600 普通单链接文件，拒绝符号链接；写入经独立短锁串行，临时文件 fsync 后原子 rename，再 fsync 目录。独立 worker 锁负责跨进程单刷新者，状态锁只保护短更新，不在扫描期间占用 catalog 写入准入。状态为 idle/scheduled/running/updated/failed，字段含 request_sequence、requested_revision、indexed_revision、请求/开始/结束时间与 technical_details.code；请求序号使同一源 revision 的后到请求在失败后仍可重试。原因码不含异常原文。坏状态返回 index-refresh-state-invalid，不阻止维护进程启动；显式成功重建可重置损坏 JSON，始终拒绝覆盖不安全的文件。
+源 revision 领先于 active 的 source_revision 时返回 index-stale；没有 active 则 index-unavailable。发生真实 SQLite/FTS 读取损坏或已经由显式维护确认损坏时，返回 index-corrupt，并带可选 `maintenance_hint="rebuild-index"`。查询不为了发现尚未触达的静默损坏而扫描全库；命中源仍按固定 ID/hash 与 artifact reader 核对。全库材料缺口只查询存在性，不把全部文献行加载到宿主。
 
-HTTP `POST /api/v1/query/index-status`（request 为 `{}`）、CLI `maintenance index-status`、MCP `index_status` 共享此状态读取。重试使用现有 HTTP maintenance/rebuild-index、CLI `maintenance rebuild-index` 或 MCP `rebuild_index`；显式成功重建清除失败。排队后短命 CLI 进程退出会留下 scheduled 请求，长驻 Web 或下一次维护进程可续跑；需要立即完成时显式重建。没有就绪代仍返回 index-unavailable；源领先于 active 时继续返回 index-stale 缺口，不返回旧命中。scheduled 表示落后状态可见，不承诺刷新固定耗时。
+**逐篇增量刷新**：`refresh()` 先用现有索引比对全部来源的标量指纹，不读正文或 FTS 倒排。指纹为 Literature/Meta 身份、metadata_revision/sha256，以及每个文档的 version、representation、源资产/hash 和 is_default。仅变化、删除或失去来源的 Literature 进入处理；它的元数据与固定文档重新核验并按原规则分块，未变化的文献不读取正文、不重写条目。每篇先借现有 building generation 暂存，每批最多 128 条或 1 MiB，沿用 catalog admission；扫描、文件读取和宿主计算不持有业务写锁。
+
+单篇接纳事务重新比较该篇来源指纹；匹配才删除旧的该篇条目并将暂存条目归入 active，按差额更新计数，不切换其它文献。指纹改变只丢弃并重做该篇。后到的新发布导致一次新的轻量比对，已接纳且未再变化的文献保留，不因全局 revision 变化而整批作废。源消失时移除它的旧条目；关闭/取消保留已提交文献，清理未接纳暂存。generation 锁约束刷新、重建与验证，同一 catalog 一个处理者；下次刷新清理进程中断遗留的 building 暂存。
+
+全部变化都追上同一 source watermark 后，短事务才将 active.source_revision 推进到该值。分批更新期间旧 revision 保持过时，查询不返回混合结果；更新结束后旧 continuation 的 revision 不再匹配，返回 context-cursor-invalid，提示重新查询。这复用现有 cursor 身份，无需新增 generation 修订列。
+
+**显式重建与验证**：`build()` 始终完整读源、创建新 generation，保留原整代校验/CAS；不复用旧 FTS 文字。`verify()` 逐篇从源重算预期条目，与 active 的条目和文字逐项比较，再执行 SQLite/外键健康检查、FTS integrity-check 和整份内容/倒排哈希。成功返回 `IndexVerificationResult {schema_version:1,status:"verified",generation_id,source_revision,entry_count,source_count,elapsed_ms}`。完整哈希扫描在业务写入 admission 外形成有界证明，最终短事务复核数据版本并保存证书；期间有来源或索引变化返回 index-stale，不把并发变化误标为损坏。
+
+增量修改会使上一份整代哈希证书失效：现有 hash 字段的全零保留值表示证书不再对应当前投影；完整检查回执 `hashes=not-current`，不能当作正文已经全量核实。显式完整核验通过后保存新证书，`hashes=verified`。维护确认损坏时在 posting hash 保存专用保留标记，供读取常数级拒绝；重建后清除。静默删行或改字并不保证在下一次 MATCH 中立即触发 SQLite 错误，必须由显式 verify 检出，不能恢复搜索前的全量扫描。现有 `storage retrieval-inspect` 保留结构/计数/已有证书检查；核对来源正文使用 verify-index。
+
+**后台调度与状态**：`retrieval/refresh.ts` 在发布后将最新请求原子落盘，文档回执 index_status=scheduled，建档和 READY 不等索引。100 ms 窗口合并相邻请求，待发仅保留最新目标 revision；增量工作追上目标即可结束，失败保留文档与已接受的索引文献。没有新源或新请求的重复失败不会循环执行；新发布或显式维护可重试。关闭保留未完成请求，下次维护 Application 恢复 scheduled/running；只读查询不启动工作。
+
+状态保存在 `<catalog>.index-refresh.json`，属于非秘密的可重建投影队列，不是资产、配置或业务事实。继续要求当前用户 0600 普通单链接文件，拒绝符号链接，独立短锁及 fsync/rename 保证原子替换；worker 锁和 catalog admission 分开。原状态 idle/scheduled/running/updated/failed、request_sequence、requested_revision、indexed_revision、三个时间戳与 technical_details.code 保留。可选新增 `pending_literatures` 是最近一次指纹比对后尚未接纳的篇数，新请求未比对时为 null；`last_refresh_ms` 是最近一次已结算刷新尝试的墙钟耗时，含失败/取消，不含队列等待。状态读取只读这些小字段，不重新比对来源。旧状态文件没有新增键仍可读。
+
+| 动作 | HTTP | CLI | MCP |
+| --- | --- | --- | --- |
+| 读取状态 | POST /api/v1/query/index-status，request `{}` | maintenance index-status | index_status |
+| 完整重建/修复 | POST /api/v1/maintenance/rebuild-index，request `{kind:"rebuild"}` | maintenance rebuild-index | rebuild_index |
+| 完整核验 | POST /api/v1/maintenance/verify-index，request `{kind:"verify"}` | maintenance verify-index | verify_index |
+
+HTTP 继续使用 protocol_version=1 封套和现有维护认证。显式成功重建清除失败；验证不自动修复源或投影。短命 CLI 退出时可留下 scheduled 请求，长驻 Web 或下一次维护进程续跑；立即需要可查询的新索引时显式重建。scheduled 只表示排队事实，不承诺固定完成时间。
 
 ### 4.10 处理器结果与混合 Context
 

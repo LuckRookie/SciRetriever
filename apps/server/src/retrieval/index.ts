@@ -189,18 +189,286 @@ export class RetrievalIndexService {
   }
 
   build(signal?: AbortSignal): Promise<RetrievalGeneration> {
-    return this.run(false, signal);
+    return this.run(signal);
   }
 
-  /** Reuse only verified, unchanged sources; explicit rebuild always reads them anew. */
-  refresh(signal?: AbortSignal): Promise<RetrievalGeneration> {
-    return this.run(true, signal);
-  }
-
-  private run(
-    reuse: boolean,
+  /** Scan scalar fingerprints once, then publish only changed literatures. */
+  refresh(
     signal?: AbortSignal,
+    progress?: (pending: number) => Promise<void>,
   ): Promise<RetrievalGeneration> {
+    return this.track(async (active) => {
+      let generation = await this.store.ensureActive(active);
+      for (const interrupted of await this.store.interruptedStaging()) {
+        check(active);
+        await this.store.discardLiteratureUpdate(interrupted);
+        await yieldToEventLoop();
+      }
+      for (;;) {
+        check(active);
+        const scan = await this.store.scanChanges();
+        if (scan.generation?.generation_id !== generation.generation_id)
+          throw new RetrievalStorageError("index-stale");
+        await progress?.(scan.literature_ids.length);
+        for (const [ordinal, id] of scan.literature_ids.entries()) {
+          for (;;) {
+            check(active);
+            const source = await this.store.literatureSources(id);
+            let staged: string | null = null;
+            try {
+              staged = await this.store.beginLiteratureUpdate(active);
+              let batch: RetrievalEntry[] = [],
+                bytes = 0,
+                total = 0;
+              const flush = async () => {
+                if (!batch.length) return;
+                check(active);
+                await this.store.insertEntries(staged!, batch, 0, active);
+                batch = [];
+                bytes = 0;
+                await yieldToEventLoop();
+              };
+              for await (const entry of this.literatureEntries(
+                source,
+                active,
+              )) {
+                const size =
+                  Buffer.byteLength(entry.title) +
+                  Buffer.byteLength(entry.body);
+                if (
+                  total + size > MAX_SOURCE_FTS_BYTES ||
+                  size > MAX_SPOOL_BATCH_BYTES
+                )
+                  throw new RetrievalIndexError("index-limit");
+                if (
+                  batch.length &&
+                  (batch.length >= BATCH ||
+                    bytes + size > MAX_SPOOL_BATCH_BYTES)
+                )
+                  await flush();
+                batch.push(entry);
+                bytes += size;
+                total += size;
+              }
+              await flush();
+              if (
+                await this.store.commitLiteratureUpdate(
+                  generation.generation_id,
+                  staged,
+                  id,
+                  source.fingerprint,
+                  active,
+                )
+              ) {
+                staged = null;
+                break;
+              }
+            } catch (error) {
+              check(active);
+              // Only this paper's changed source needs another reading/attempt.
+              if (
+                (await this.store.literatureSources(id)).fingerprint ===
+                source.fingerprint
+              )
+                throw error;
+            } finally {
+              if (staged) await this.store.discardLiteratureUpdate(staged);
+            }
+          }
+          await progress?.(scan.literature_ids.length - ordinal - 1);
+        }
+        const result = await this.store.finishIncremental(
+          generation.generation_id,
+          scan.revision,
+          active,
+        );
+        if (result) return result;
+        // Other publications arrived: the next cheap comparison retains accepted papers.
+        generation = (await this.store.active())!;
+      }
+    }, signal);
+  }
+  private track(
+    work: (signal: AbortSignal) => Promise<RetrievalGeneration>,
+    signal?: AbortSignal,
+  ) {
+    if (this.stopped)
+      return Promise.reject(new RetrievalIndexError("index-cancelled"));
+    const controller = new AbortController(),
+      combined = signal
+        ? AbortSignal.any([signal, controller.signal])
+        : controller.signal;
+    const pending = this.generationAdmission.run(
+      () => work(combined),
+      combined,
+    );
+    this.active.set(pending, controller);
+    void pending.finally(() => this.active.delete(pending)).catch(() => {});
+    return pending;
+  }
+  private async *literatureEntries(
+    source: Awaited<ReturnType<RetrievalStorageClient["literatureSources"]>>,
+    signal?: AbortSignal,
+  ): AsyncGenerator<RetrievalEntry> {
+    if (source.metadata) {
+      const s = source.metadata,
+        metadata = await this.verifiedMetadata(s);
+      const title = ftsIndexText(metadata.title ?? ""),
+        body = [
+          metadata.abstract,
+          metadata.authors.map((a) => a.display_name).join(" "),
+          metadata.keywords.join(" "),
+          metadata.venue,
+          metadata.publisher,
+          metadata.publication_year === null
+            ? null
+            : String(metadata.publication_year),
+        ]
+          .filter((v) => v !== null && v !== "")
+          .join("\n");
+      for await (const chunk of chunks(body, signal))
+        yield {
+          kind: "metadata",
+          literature_id: s.literature_id,
+          meta_literature_id: s.meta_literature_id,
+          metadata_revision: s.metadata_revision,
+          metadata_sha256: s.metadata_sha256,
+          document_version_id: null,
+          representation_sha256: null,
+          source_asset_id: null,
+          source_asset_sha256: null,
+          unit_start_utf8: null,
+          unit_end_utf8: null,
+          unit_sha256: null,
+          section_id: null,
+          unit_ordinal: 0,
+          is_default: 1,
+          title,
+          body: ftsIndexText(chunk),
+        };
+    }
+    for (const s of source.documents) {
+      check(signal);
+      await this.verifiedMetadata(s);
+      const entries: RetrievalEntry[] = [];
+      await this.documents.withVerifiedVersion(
+        s.document_version_id!,
+        async (version, markdown, structure) => {
+          if (version.representation_sha256 !== s.representation_sha256)
+            throw new RetrievalIndexError("index-source-invalid");
+          let bytes = 0;
+          for await (const entry of this.documentEntries(
+            s,
+            version.representation_sha256,
+            markdown,
+            structure,
+            signal,
+          )) {
+            bytes +=
+              Buffer.byteLength(entry.title) + Buffer.byteLength(entry.body);
+            if (bytes > MAX_SOURCE_FTS_BYTES)
+              throw new RetrievalIndexError("index-limit");
+            entries.push(entry);
+          }
+        },
+        signal,
+      );
+      if (!entries.length)
+        throw new RetrievalIndexError("index-source-invalid");
+      yield* entries;
+    }
+  }
+  /** Full source/text/posting verification is an explicit maintenance operation. */
+  async verify(signal?: AbortSignal) {
+    const started = performance.now();
+    let sourceRevision: number | undefined;
+    let generationId: string | undefined;
+    const generation = await this.track(async (active) => {
+      const scan = await this.store.scanChanges();
+      sourceRevision = scan.revision;
+      if (!scan.generation)
+        throw new RetrievalStorageError("index-unavailable");
+      generationId = scan.generation.generation_id;
+      if (scan.revision !== scan.generation.source_revision)
+        throw new RetrievalStorageError("index-stale");
+      if (scan.literature_ids.length)
+        throw new RetrievalStorageError("index-corrupt");
+      const keys: readonly (keyof RetrievalEntry)[] = [
+        "kind",
+        "literature_id",
+        "meta_literature_id",
+        "metadata_revision",
+        "metadata_sha256",
+        "document_version_id",
+        "representation_sha256",
+        "source_asset_id",
+        "source_asset_sha256",
+        "unit_start_utf8",
+        "unit_end_utf8",
+        "unit_sha256",
+        "section_id",
+        "unit_ordinal",
+        "is_default",
+        "title",
+        "body",
+      ];
+      const canonical = (entries: readonly RetrievalEntry[]) =>
+        entries.map((e) => JSON.stringify(keys.map((key) => e[key]))).sort();
+      let after: string | null = null;
+      for (;;) {
+        check(active);
+        const sources = await this.store.metadataPage(after, PAGE);
+        for (const item of sources) {
+          const source = await this.store.literatureSources(item.literature_id),
+            expected: RetrievalEntry[] = [];
+          for await (const entry of this.literatureEntries(source, active))
+            expected.push(entry);
+          const actual = await this.store.verificationEntries(
+            scan.generation.generation_id,
+            item.literature_id,
+          );
+          if (
+            JSON.stringify(canonical(expected)) !==
+            JSON.stringify(canonical(actual))
+          ) {
+            if ((await this.store.revision()) !== scan.revision)
+              throw new RetrievalStorageError("index-stale");
+            throw new RetrievalStorageError("index-corrupt");
+          }
+        }
+        if (sources.length < PAGE) break;
+        after = sources.at(-1)!.literature_id;
+        await yieldToEventLoop();
+      }
+      const verified = await this.store.verify();
+      check(active);
+      return this.store.recordVerification(
+        scan.generation.generation_id,
+        scan.revision,
+        verified.proof,
+        active,
+      );
+    }, signal).catch(async (error: unknown) => {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        ["index-corrupt", "index-source-invalid"].includes(String(error.code))
+      ) {
+        if (sourceRevision !== undefined && generationId !== undefined)
+          await this.store.markCorrupt(generationId, sourceRevision);
+      }
+      throw error;
+    });
+    return {
+      schema_version: 1 as const,
+      status: "verified" as const,
+      ...generation,
+      elapsed_ms: Math.round(performance.now() - started),
+    };
+  }
+
+  private run(signal?: AbortSignal): Promise<RetrievalGeneration> {
     if (this.stopped)
       return Promise.reject(new RetrievalIndexError("index-cancelled"));
     const controller = new AbortController();
@@ -217,7 +485,6 @@ export class RetrievalIndexService {
         spoolRoot = await mkdtemp(join(tmpdir(), "sciretriever-index-"));
         const spoolPath = join(spoolRoot, "entries.ndjson");
         revision = await store.revision();
-        const previous = reuse ? await store.reusableGeneration() : null;
         const spool = await open(spoolPath, "wx", 0o600);
         let sourceCount = 0;
         let entryCount = 0;
@@ -279,18 +546,6 @@ export class RetrievalIndexService {
             for (const source of page) {
               check(signal);
               const metadata = await this.verifiedMetadata(source);
-              const cached =
-                previous &&
-                (await this.reusableEntries(
-                  previous.generation_id,
-                  "metadata",
-                  source,
-                  signal,
-                ));
-              if (cached) {
-                await collect(cached);
-                continue;
-              }
               const title = ftsIndexText(metadata.title ?? "");
               const body = [
                 metadata.abstract,
@@ -345,18 +600,6 @@ export class RetrievalIndexService {
                 !source.source_asset_sha256
               )
                 throw new RetrievalIndexError("index-source-invalid");
-              const cached =
-                previous &&
-                (await this.reusableEntries(
-                  previous.generation_id,
-                  "document",
-                  source,
-                  signal,
-                ));
-              if (cached) {
-                await collect(cached);
-                continue;
-              }
               let indexingFailure: unknown;
               let failedDuringIndexing = false;
               try {
@@ -465,41 +708,6 @@ export class RetrievalIndexService {
       .finally(() => this.active.delete(pending))
       .catch(() => undefined);
     return pending;
-  }
-
-  private async reusableEntries(
-    generation: string,
-    kind: "metadata" | "document",
-    source: RetrievalSource,
-    signal?: AbortSignal,
-  ): Promise<AsyncIterable<RetrievalEntry> | null> {
-    const first = await this.store.reusePage(
-      generation,
-      kind,
-      source,
-      0,
-      BATCH,
-    );
-    if (!first.length) return null;
-    const store = this.store;
-    return (async function* () {
-      let page = first;
-      while (true) {
-        check(signal);
-        for (const { entry_id, ...entry } of page) {
-          void entry_id;
-          yield entry;
-        }
-        if (page.length < BATCH) return;
-        page = await store.reusePage(
-          generation,
-          kind,
-          source,
-          page.at(-1)!.entry_id,
-          BATCH,
-        );
-      }
-    })();
   }
 
   private async *documentEntries(

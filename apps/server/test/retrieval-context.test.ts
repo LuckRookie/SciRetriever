@@ -955,7 +955,11 @@ describe("explicit retrieval projection and bounded Context", () => {
       } finally {
         db.close();
       }
+      await expect(env.app.maintenance!.verifyIndex()).rejects.toMatchObject({
+        code: "index-corrupt",
+      });
       expect(await query.context!.search(request())).toMatchObject({
+        maintenance_hint: "rebuild-index",
         coverage: "index-corrupt",
         items: [],
       });
@@ -993,7 +997,11 @@ describe("explicit retrieval projection and bounded Context", () => {
       } finally {
         db.close();
       }
+      await expect(env.app.maintenance!.verifyIndex()).rejects.toMatchObject({
+        code: "index-corrupt",
+      });
       expect(await query.context!.search(request())).toMatchObject({
+        maintenance_hint: "rebuild-index",
         coverage: "index-corrupt",
         items: [],
       });
@@ -1030,7 +1038,11 @@ describe("explicit retrieval projection and bounded Context", () => {
       } finally {
         db.close();
       }
+      await expect(env.app.maintenance!.verifyIndex()).rejects.toMatchObject({
+        code: "index-corrupt",
+      });
       expect(await query.context!.search(request())).toMatchObject({
+        maintenance_hint: "rebuild-index",
         coverage: "index-corrupt",
         items: [],
       });

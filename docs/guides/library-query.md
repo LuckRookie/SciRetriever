@@ -59,9 +59,9 @@ await reader.close();
 
 `context.search` 检索已有元数据和文档；`knowledgeContext.search` 合并材料与处理器结果。对应 HTTP 为 `/api/v1/query/context` 与 `/api/v1/query/knowledge-context`，CLI/MCP 入口见[Agent 接口](agent-interface.md)。请求固定 scope、kinds、versions、budget，续页原样带回 continuation；无 tokenizer 时不接受 token_limit。
 
-材料索引缺失、过时或损坏会分别报告 `index-unavailable`、`index-stale`、`index-corrupt`。显式执行 `sciretriever maintenance rebuild-index --json` 修复材料投影；结果索引维护由[处理器入口](knowledge-processors.md)提供。查询不会调用修复。索引及来源/结果证据的精确合同见[检索与上下文](../architecture/technical/06-retrieval-context.md#4-知识检索与上下文组装)。
+材料索引缺失、过时或损坏会分别报告 `index-unavailable`、`index-stale`、`index-corrupt`；损坏回执会给出 rebuild-index 维护提示。搜索前只做轻量身份和版本检查，不做全库健康扫描。用 `sciretriever maintenance verify-index --json` 显式核验全部索引文字、倒排和来源，或执行 `sciretriever maintenance rebuild-index --json` 完整重建材料投影；结果索引维护由[处理器入口](knowledge-processors.md)提供。查询不会调用修复。索引及来源/结果证据的精确合同见[检索与上下文](../architecture/technical/06-retrieval-context.md#4-知识检索与上下文组装)。
 
-建档发布会将全文索引刷新排队，固定全文与建档完成无需等待。`sciretriever maintenance index-status` 返回 scheduled/running/updated/failed 等状态、源与已索引 revision 和技术原因；失败可用上述重建命令重试。索引刷新期间只读查询仍遵守过时检查，不返回未核实的旧命中。
+建档发布会将全文索引按篇增量刷新排队，元数据仍在全文检索范围内，固定全文与建档完成无需等待。`sciretriever maintenance index-status` 返回 scheduled/running/updated/failed 等状态、源与已索引 revision 和技术原因；pending_literatures 表示最近比对后尚未更新的篇数（未知为 null），last_refresh_ms 是上次刷新尝试耗时；失败可用上述重建命令重试。索引刷新期间只读查询仍遵守过时检查，不返回未核实的旧命中。
 
 ## 读取知识与准备外部提取
 

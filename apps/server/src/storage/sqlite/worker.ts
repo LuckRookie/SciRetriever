@@ -340,12 +340,22 @@ export type SqliteCommand =
         | "insertEntries"
         | "publish"
         | "active"
-        | "reusableGeneration"
-        | "reusePage"
         | "search"
         | "documentCoverage"
         | "metadataSource"
-        | "hasDefault";
+        | "hasDefault"
+        | "markCorrupt"
+        | "interruptedStaging"
+        | "scanChanges"
+        | "literatureSources"
+        | "ensureActive"
+        | "beginLiteratureUpdate"
+        | "discardLiteratureUpdate"
+        | "commitLiteratureUpdate"
+        | "finishIncremental"
+        | "verificationEntries"
+        | "verify"
+        | "recordVerification";
       readonly args: readonly unknown[];
     }
   | {
@@ -1284,9 +1294,18 @@ export class SqliteWorker {
     args: readonly unknown[] = [],
     signal?: AbortSignal,
   ): Promise<T> {
-    const write = ["beginGeneration", "insertEntries", "publish"].includes(
-      operation,
-    );
+    const write = [
+      "beginGeneration",
+      "insertEntries",
+      "publish",
+      "ensureActive",
+      "beginLiteratureUpdate",
+      "discardLiteratureUpdate",
+      "commitLiteratureUpdate",
+      "finishIncremental",
+      "recordVerification",
+      "markCorrupt",
+    ].includes(operation);
     if (this.readOnly && write) throw new SqliteWorkerError();
     if (write && !this.admission) throw new SqliteWorkerError();
     const send = async () => {
@@ -1300,7 +1319,11 @@ export class SqliteWorker {
       });
       if (!reply.ok)
         throw new RetrievalStorageError(
-          reply.code === "index-stale" ? "index-stale" : "index-corrupt",
+          reply.code === "index-stale" ||
+          reply.code === "index-limit" ||
+          reply.code === "index-unavailable"
+            ? reply.code
+            : "index-corrupt",
         );
       return reply.value as T;
     };

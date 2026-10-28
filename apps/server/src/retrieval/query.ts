@@ -488,6 +488,9 @@ export class MaterialContextService {
       score_rule: RETRIEVAL_SCORE_RULE,
       items: [],
       coverage,
+      ...(coverage === "index-corrupt"
+        ? { maintenance_hint: "rebuild-index" as const }
+        : {}),
       generation_id,
       source_revision,
       gaps: [],
@@ -505,8 +508,10 @@ export class MaterialContextService {
     if (!this.storage)
       return returnBundle(base("index-unavailable", null, null));
     let generation;
+    let revision: number;
     try {
       generation = await this.storage.active();
+      revision = await this.storage.revision();
     } catch (error) {
       if (
         error instanceof RetrievalStorageError &&
@@ -516,10 +521,7 @@ export class MaterialContextService {
       throw error;
     }
     if (!generation)
-      return returnBundle(
-        base("index-unavailable", null, await this.storage.revision()),
-      );
-    const revision = await this.storage.revision();
+      return returnBundle(base("index-unavailable", null, revision));
     if (request.continuation !== null)
       decodeCursor(
         request,

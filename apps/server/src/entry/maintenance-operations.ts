@@ -1,3 +1,4 @@
+import { RetrievalStorageError } from "../retrieval/model.js";
 import {
   archiveHash,
   parseAssetId,
@@ -116,6 +117,7 @@ export const MAINTENANCE_OPERATIONS = [
   "task-create",
   "resolve-intervention",
   "rebuild-index",
+  "verify-index",
   ...EXTRACTION_OPERATIONS.map((name) => `extraction-${name}` as const),
 ] as const;
 export type MaintenanceOperation = (typeof MAINTENANCE_OPERATIONS)[number];
@@ -328,6 +330,12 @@ async function performMaintenance(
       if (!rebuild) throw new ProductOperationError("maintenance-unavailable");
       return rebuild(signal);
     }
+    case "verify-index": {
+      operationRecord(input, []);
+      const verify = app.maintenance?.verifyIndex;
+      if (!verify) throw new ProductOperationError("maintenance-unavailable");
+      return verify(signal);
+    }
     default:
       throw new ContractValidationError();
   }
@@ -344,8 +352,10 @@ export function isMaintenanceFailure(
   | ArchiveContractObsoleteError
   | TagError
   | MetadataFieldError
-  | ArchiveReferenceError {
+  | ArchiveReferenceError
+  | RetrievalStorageError {
   return (
+    error instanceof RetrievalStorageError ||
     error instanceof ExtractionDeliveryError ||
     error instanceof ProofreadError ||
     error instanceof SnapshotError ||

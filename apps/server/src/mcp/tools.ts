@@ -1172,6 +1172,12 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     false,
   ),
   tool(
+    "verify_index",
+    "Explicitly verify all indexed source text, SQLite structure, FTS postings and whole-generation hashes. Does not rebuild, download or parse. Rebuild if verification reports corruption.",
+    object({}),
+    false,
+  ),
+  tool(
     "create_extraction",
     "Create a delivery operation from a previously prepared caller spec and fixed manifest. Does not perform automatic extraction.",
     object({ request: { type: "object" } }),
