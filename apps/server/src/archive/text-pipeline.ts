@@ -20,6 +20,7 @@ import { SqliteProofreadStorage } from "../storage/proofread.js";
 import { SqliteAnnotationStorage } from "../storage/structure-annotations.js";
 import { SqliteDocumentStorage } from "../document/storage.js";
 import { documentRepresentationHash } from "../document/contract.js";
+import { documentIdentity } from "../document/proofread-publication.js";
 import type { PdfPages } from "../proofread/contract.js";
 import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
 import { ArchivePageProofreadService } from "../proofread/page-service.js";
@@ -654,7 +655,7 @@ export class ArchiveTextPipeline {
         resources,
       };
       const hash = await documentRepresentationHash(representation),
-        document_id = textId(["document", literature, asset]),
+        document_id = documentIdentity(literature, asset),
         document = {
           schema_version: 2 as const,
           document_id,
@@ -708,6 +709,9 @@ export class ArchiveTextPipeline {
         },
         signal?.aborted ? undefined : signal,
       );
+      // A version that did not become the default is not a published archive.
+      if (!result.default_updated)
+        throw new ArchiveTextError("publication-conflict");
       const part = (
         await db.archive<{
           parts: { asset_id: string; part: "main" | "supplementary" }[];

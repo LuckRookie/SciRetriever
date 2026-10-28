@@ -13,6 +13,7 @@ import { runCli } from "../src/cli/main.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../src/mcp/server.js";
+import { documentIdentity } from "../src/document/proofread-publication.js";
 
 it("arranges a 160-section synthetic document in 36 calls using read-block leaf identities in batches", async () => {
   const e = await archiveFixture();
@@ -142,6 +143,56 @@ it("publishes the six-step X workflow, excludes dropped text from fixed document
       tags: "done",
     });
     expect(steps.some((s) => s.source_map !== undefined)).toBe(false);
+  } finally {
+    await e.close();
+  }
+}, 30000);
+
+it("publishes under the part's one document identity and refuses a render whose version did not become the default", async () => {
+  // A paper first built by the old flow kept its old default when X used another document ID.
+  const e = await archiveFixture();
+  try {
+    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    await e.submit("document-identity");
+    const part = (await e.app.archive.status(e.id)).parts[0]!;
+    await new SqliteDocumentStorage(
+      e.app.database,
+      e.app.files,
+    ).withVerifiedDocument(part.document_version_id!, async (v) => {
+      expect(v.document_id).toBe(documentIdentity(e.id, e.asset.asset_id));
+    });
+    // A new manual revision whose own render is held back, then rendered against a stale default.
+    const storage = e.app.archiveText!.storage,
+      old = (await storage.load(part.proofread_id!))!,
+      text = renderArrangement(
+        old.bundle,
+        old.version.resources,
+      ).markdown.toString();
+    const fault = vi
+      .spyOn(e.app.archiveText!, "render")
+      .mockRejectedValueOnce(new ArchiveTextError("source-integrity"));
+    const saved = await e.app.archiveArrangement.save(
+      {
+        schema_version: 2,
+        literature_id: e.id,
+        asset_id: e.asset.asset_id,
+        proofread_id: old.version.proofread_id,
+        expected_arrangement_id: old.version.arrangement_id,
+        expected_manual_revision: 0,
+        markdown: text.replace(
+          "A complete synthetic study.",
+          "A checked synthetic study.",
+        ),
+      },
+      "fixture-human",
+    );
+    fault.mockRestore();
+    await expect(
+      e.app.archiveText!.render(e.id, e.asset.asset_id, undefined, {
+        proofread_id: saved.proofread_id!,
+        default_revision: 99,
+      }),
+    ).rejects.toMatchObject({ code: "publication-conflict" });
   } finally {
     await e.close();
   }

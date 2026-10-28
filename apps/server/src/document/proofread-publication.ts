@@ -31,6 +31,10 @@ function identity(namespace: string, value: string) {
     .digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
+/** One document per literature and part asset, whichever flow publishes its versions. */
+export function documentIdentity(literature: string, asset: string) {
+  return identity("document", `${literature}\0${asset}`);
+}
 /** Explicit publication used by archiving; parsing and read operations never call it. */
 export class ProofreadDocumentService {
   private readonly stop = new AbortController();
@@ -138,7 +142,7 @@ export class ProofreadDocumentService {
       })),
     };
     const hash = await documentRepresentationHash(representation),
-      documentId = identity("document", `${literature}\0${asset}`);
+      documentId = documentIdentity(literature, asset);
     let document = parseDocumentRef({
       schema_version: 2,
       document_id: documentId,
