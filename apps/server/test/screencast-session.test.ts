@@ -147,6 +147,99 @@ describe("screencast session and bounded frames", () => {
     expect(f.source.emit()).toBeNull();
     await f.session.close();
   });
+  it("gives a late viewer the current static frame while A controls, without re-encoding or interrupting A", async () => {
+    const f = await attach(),
+      b = f.session.attach(),
+      bFrames: ScreencastFrame[] = [];
+    let stopB: (() => Promise<void>) | undefined;
+    try {
+      const original = f.frames[0]!;
+      await f.session.directInput(f.client, 0, original, down, true);
+      // A has displayed/ACKed every generated frame. The source now stays idle.
+      while (f.pump.stats().in_flight) {
+        const frame = f.frames.at(-1)!;
+        f.pump.ack(frame.frame_id, frame.stream_epoch);
+      }
+      const current = f.frames.at(-1)!,
+        aCount = f.frames.length,
+        encoded = f.source.encoded;
+      const bPump = new ScreencastFramePump(
+        "late-sub",
+        f.session.id,
+        f.session.articleId,
+        1,
+        (packet) => bFrames.push(decodeScreencastFrame(packet).frame),
+      );
+      stopB = await f.session.subscribeScreencast(b, {
+        frame: (frame) => bPump.offer(frame),
+        state: (state) => bPump.advance(state.stream_epoch),
+      });
+      expect(bFrames).toHaveLength(1);
+      expect(bFrames[0]).toMatchObject({
+        subscription_id: "late-sub",
+        captured_at: current.captured_at,
+        stream_epoch: current.stream_epoch,
+        page_id: current.page_id,
+        document_id: current.document_id,
+      });
+      expect(f.source.encoded).toBe(encoded);
+      expect(f.source.starts).toBe(1);
+      expect(f.source.stops).toBe(0);
+      expect(f.frames).toHaveLength(aCount);
+      expect(f.session.view().control.controller_id).toBe(f.client);
+      expect(f.session.screencastState(b).control).toBe("taken-over");
+      await f.session.directInput(
+        f.client,
+        f.session.view().control.epoch,
+        current,
+        { ...down, action: "up", buttons: 0 },
+        false,
+      );
+      expect(f.frames.length).toBeGreaterThan(aCount);
+      bPump.ack(bFrames[0]!.frame_id, bFrames[0]!.stream_epoch);
+      expect(bFrames.length).toBeGreaterThan(1);
+    } finally {
+      await stopB?.();
+      await f.stop();
+      await f.session.close();
+    }
+  });
+  it("never boots a new viewer from a previous page or a stream reporting no frame", async () => {
+    const f = await attach(),
+      b = f.session.attach(),
+      frames: unknown[] = [];
+    let stopB: (() => Promise<void>) | undefined;
+    try {
+      f.source.setStatus("no-frame");
+      stopB = await f.session.subscribeScreencast(b, {
+        frame: (frame) => frames.push(frame),
+        state: () => {},
+      });
+      expect(frames).toHaveLength(0);
+      await stopB();
+      stopB = undefined;
+      f.source.setStatus("live");
+      const source = new SyntheticScreencastSource("new-page", false);
+      source.setStatus("no-frame");
+      await f.session.activatePage({
+        ...f.page,
+        id: source.pageId,
+        screencast: source,
+      });
+      stopB = await f.session.subscribeScreencast(b, {
+        frame: (frame) => frames.push(frame),
+        state: () => {},
+      });
+      expect(frames).toHaveLength(0);
+      source.setStatus("live");
+      expect(frames).toHaveLength(1);
+      expect(frames[0]).toMatchObject({ page_id: "new-page" });
+    } finally {
+      await stopB?.();
+      await f.stop();
+      await f.session.close();
+    }
+  });
   it("rejects a replaced document before input, accepts the same document after new observations, and reobserves on release", async () => {
     const f = await attach();
     try {

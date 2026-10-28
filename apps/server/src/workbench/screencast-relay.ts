@@ -18,7 +18,9 @@ import {
 import { sourceProblem } from "../providers/shared/source-problem.js";
 import type { WorkbenchSession } from "./session.js";
 
-/** At most N sent frames plus one replacement slot; acknowledged JPEGs are not retained. */
+/** Per-viewer pump: N sent frames plus one replacement slot, no acknowledged JPEGs.
+ * The session separately retains one current page JPEG to bootstrap late viewers.
+ */
 export class ScreencastFramePump {
   private pending: { frame: ScreencastFrame; jpeg: Uint8Array } | undefined;
   private readonly flights = new Map<number, { sent: number; bytes: number }>();

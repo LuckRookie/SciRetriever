@@ -1,3 +1,4 @@
+import { WorkbenchSession } from "../src/workbench/session.js";
 import { expect, it, vi, describe } from "vitest";
 import { createCanvas, loadImage } from "@napi-rs/canvas";
 import type { ScreencastFrame } from "@sciretriever/contracts";
@@ -90,6 +91,133 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         await f.close();
       }
     }, 30000);
+    it("gives B a first frame within 2.5 seconds while A controls a static page, and A keeps streaming on the same epoch", async () => {
+      const f = await screencastLoopbackFixture(
+        process.env.SCIRETRIEVER_CLOAK_BUNDLE!,
+      );
+      const session = new WorkbenchSession(
+        "article-1",
+        f.page,
+        {
+          max_actions: 10,
+          max_model_calls: 10,
+          max_retries: 1,
+          max_bytes: 10000,
+          deadline_ms: 60000,
+        },
+        undefined,
+        "session-1",
+      );
+      const a = session.attach(),
+        b = session.attach(),
+        aFrames: PageScreencastFrame[] = [],
+        bFrames: PageScreencastFrame[] = [];
+      let stopA: (() => Promise<void>) | undefined,
+        stopB: (() => Promise<void>) | undefined,
+        firstBMs: number | undefined;
+      try {
+        stopA = await session.subscribeScreencast(a, {
+          frame: (frame) => aFrames.push(frame),
+          state: () => {},
+        });
+        await vi.waitFor(() => expect(aFrames.length).toBeGreaterThan(0), {
+          timeout: 2500,
+        });
+        const first = aFrames.at(-1)!;
+        await session.directInput(
+          a,
+          session.view().control.epoch,
+          wire(first),
+          mouse(first, 75, 105, "down"),
+          true,
+        );
+        await session.directInput(
+          a,
+          session.view().control.epoch,
+          wire(first),
+          mouse(first, 75, 105, "up"),
+          false,
+        );
+        await vi.waitFor(
+          async () => {
+            const frame = aFrames.at(-1)!;
+            const p = await pixel(
+              frame.jpeg,
+              (40 * frame.width) / frame.viewport_width,
+              (95 * frame.height) / frame.viewport_height,
+            );
+            expect(p[1]!).toBeGreaterThan(p[2]!);
+          },
+          { timeout: 2500 },
+        );
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const raw = f.page.screencast!.diagnostics!().raw_frames;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(f.page.screencast!.diagnostics!().raw_frames).toBe(raw);
+        const current = aFrames.at(-1)!,
+          aCount = aFrames.length,
+          diagnostics = f.page.screencast!.diagnostics!();
+        const started = performance.now();
+        stopB = await session.subscribeScreencast(b, {
+          frame: (frame) => {
+            if (!bFrames.length) firstBMs = performance.now() - started;
+            bFrames.push(frame);
+          },
+          state: () => {},
+        });
+        await vi.waitFor(() => expect(bFrames.length).toBeGreaterThan(0), {
+          timeout: 2500,
+        });
+        expect(firstBMs!).toBeLessThan(2500);
+        expect(bFrames[0]).toMatchObject({
+          page_id: current.page_id,
+          document_id: current.document_id,
+          stream_epoch: current.stream_epoch,
+          captured_at: current.captured_at,
+        });
+        expect(session.view().control.controller_id).toBe(a);
+        expect(session.screencastState(b).control).toBe("taken-over");
+        expect(aFrames).toHaveLength(aCount);
+        expect(f.page.screencast!.diagnostics!()).toEqual(diagnostics);
+        await session.directInput(
+          a,
+          session.view().control.epoch,
+          wire(current),
+          mouse(current, 75, 105, "down"),
+          false,
+        );
+        await session.directInput(
+          a,
+          session.view().control.epoch,
+          wire(current),
+          mouse(current, 75, 105, "up"),
+          false,
+        );
+        await vi.waitFor(
+          () => {
+            expect(aFrames.length).toBeGreaterThan(aCount);
+            expect(bFrames.length).toBeGreaterThan(1);
+          },
+          { timeout: 2500 },
+        );
+        expect(aFrames.at(-1)!.stream_epoch).toBe(current.stream_epoch);
+        console.info(
+          "Late static viewer verification",
+          JSON.stringify({
+            first_frame_ms: firstBMs,
+            raw_frames_while_idle_500ms: 0,
+            encoder_restarted: false,
+            control_unchanged: true,
+            stream_epoch: current.stream_epoch,
+          }),
+        );
+      } finally {
+        await stopB?.();
+        await stopA?.();
+        await session.close();
+        await f.close();
+      }
+    }, 20000);
     it("pushes a static change, masks only the observation image, stays subscribed across refresh/navigation and rebinds to a popup", async () => {
       const f = await screencastLoopbackFixture(
         process.env.SCIRETRIEVER_CLOAK_BUNDLE!,

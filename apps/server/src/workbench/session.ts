@@ -6,6 +6,7 @@ import {
   ScreencastError,
   SCREENCAST_PROFILES,
   type ScreencastProfile,
+  type PageScreencastFrame,
 } from "../browser/screencast.js";
 import type {
   WorkbenchScreencastObserver,
@@ -140,6 +141,8 @@ export class WorkbenchSession {
   private screenStop: (() => Promise<void>) | undefined;
   private screenTail = Promise.resolve();
   private screenPage: BrowserPageHandle | undefined;
+  /** One current CDP JPEG while watched, only to bootstrap a late viewer. Never persisted. */
+  private screenFrame: PageScreencastFrame | undefined;
   private screenStatus: WorkbenchScreencastState["status"] = "connecting";
   private screenCode: string | undefined;
   private screenEpoch = 0;
@@ -383,6 +386,7 @@ export class WorkbenchSession {
     if (this.screenEpochKey !== key) {
       this.screenEpochKey = key;
       this.screenEpoch++;
+      this.screenFrame = undefined;
     }
   }
   private queueInputReset(page: BrowserPageHandle): void {
@@ -412,6 +416,7 @@ export class WorkbenchSession {
           return;
         if (this.screenPage && this.screenPage !== this.page)
           this.queueInputReset(this.screenPage);
+        this.screenFrame = undefined;
         await this.screenStop?.();
         this.screenStop = undefined;
         this.screenPage = undefined;
@@ -442,18 +447,20 @@ export class WorkbenchSession {
             )
               return;
             this.acceptScreenEpoch(page.id, frame.stream_epoch);
+            this.screenFrame = { ...frame, stream_epoch: this.screenEpoch };
             if (this.screenStatus !== "live") {
               this.screenStatus = "live";
               this.screenCode = undefined;
               this.notifyScreencast();
             }
             for (const observer of this.screenViewers.values())
-              observer.frame({ ...frame, stream_epoch: this.screenEpoch });
+              observer.frame(this.screenFrame);
           },
           status: (status, code, pageKind, streamEpoch) => {
             if (page !== this.page) return;
             if (streamEpoch !== undefined)
               this.acceptScreenEpoch(page.id, streamEpoch);
+            this.screenFrame = undefined;
             this.screenStatus = status;
             this.screenCode = code;
             if (pageKind) this.screenKind = pageKind;
@@ -463,6 +470,7 @@ export class WorkbenchSession {
         await this.configureScreencastProfile();
       })
       .catch(() => {
+        this.screenFrame = undefined;
         this.screenStatus = "no-frame";
         this.screenCode = "screencast-source-failed";
         this.notifyScreencast();
@@ -476,11 +484,25 @@ export class WorkbenchSession {
     this.live();
     if (this.screenViewers.has(clientId))
       throw new ScreencastError("screencast-already-subscribed");
+    const existingFrame = this.screenFrame;
     this.screenViewers.set(clientId, observer);
     this.screenProfiles.set(clientId, SCREENCAST_PROFILES[0]!);
     observer.state(this.screencastState(clientId));
     this.rebindScreencast();
     await this.screenTail;
+    // The encoder is shared. An idle document may never produce another frame
+    // after B joins, so bootstrap only B from the current live stream. If a new
+    // frame arrived during subscribe it was already broadcast to B; do not repeat it.
+    if (
+      existingFrame &&
+      this.screenFrame === existingFrame &&
+      this.screenStatus === "live" &&
+      this.screenPage === this.page &&
+      existingFrame.page_id === this.page.id &&
+      existingFrame.stream_epoch === this.screenEpoch &&
+      this.screenViewers.get(clientId) === observer
+    )
+      observer.frame(existingFrame);
     let stopped = false;
     return async () => {
       if (stopped) return;
