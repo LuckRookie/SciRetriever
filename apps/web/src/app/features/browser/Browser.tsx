@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   type OperatorInput,
+  type SourceProblem,
   type WorkbenchObservation,
   type WorkbenchActionRecord,
   type WorkbenchArticleSession,
@@ -27,6 +28,7 @@ import {
 import { useApi } from "../../data/query.js";
 import { registerNavigationGuard, useUrlState } from "../../data/url.js";
 import { errorMessage, serviceMessage } from "../../strings.js";
+import { ProblemDetails, problemText } from "../sources/problem.js";
 import { randomId } from "../../../browser-platform.js";
 import { candidateStatus } from "../../data/candidate-status.js";
 import { readLiterature } from "../../data/library.js";
@@ -121,16 +123,24 @@ function PhaseBadge({ session }: { session: Session }) {
     return <Badge status="metadata">等待执行</Badge>;
   return <Badge status="ready">{phases[session.phase] ?? session.phase}</Badge>;
 }
-/** A platform code in words; unknown codes stay visible instead of a generic retry hint. */
-function reasonText(code: string) {
+/**
+ * Platform failures read “错误”; only the three problems a person can act on get a
+ * name, and the code itself stays in the technical details. Non-failure reasons
+ * (a person stopped the session, say) keep their own words.
+ */
+function reasonText(code: string, problem?: SourceProblem) {
+  if (problem) return problemText(problem.display);
   const known = serviceMessage(code);
-  return known === serviceMessage("") ? `原因代码：${code}` : known;
+  if (code !== "error" && known !== serviceMessage("")) return known;
+  return { user: "已由人工停止", cancelled: "已取消" }[code] ?? "错误";
 }
-/** The Agent's own stop explanation, or the stable platform reason. */
+const stopProblem = (session: Session) =>
+  session.stop?.problem ?? session.outcome?.problem ?? null;
+/** The Agent's own stop explanation, or the platform reason. */
 function stopText(session: Session) {
   if (session.stop?.explanation) return session.stop.explanation;
   const code = session.stop?.reason ?? session.outcome?.code;
-  return code ? reasonText(code) : "";
+  return code ? reasonText(code, stopProblem(session) ?? undefined) : "";
 }
 interface SessionGroup {
   id: string;
@@ -393,6 +403,9 @@ function FinishedRow({
       </div>
       <PriorAttempts session={session} />
       {reason ? <p className="browser-finished-reason">{reason}</p> : null}
+      {reason && !session.stop?.explanation ? (
+        <ProblemDetails problem={stopProblem(session)} />
+      ) : null}
     </li>
   );
 }
@@ -1024,9 +1037,14 @@ function Viewer({
           )}
           {current?.phase === "closed" &&
           current.outcome?.kind !== "published" ? (
-            <p className="browser-stop">
-              流程停止：{stopText(current) || "没有获取到 PDF"}
-            </p>
+            <>
+              <p className="browser-stop">
+                流程停止：{stopText(current) || "没有获取到 PDF"}
+              </p>
+              {current.stop?.explanation ? null : (
+                <ProblemDetails problem={stopProblem(current)} />
+              )}
+            </>
           ) : null}
           {view.session_outcome?.kind === "published" ? (
             <p>PDF 已入库</p>

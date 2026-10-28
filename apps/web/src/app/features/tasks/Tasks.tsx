@@ -29,6 +29,7 @@ import { useApi } from "../../data/query.js";
 import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
 import { RunSwitch, useActiveTaskCount } from "./RunSwitch.js";
+import { SourceResults } from "./SourceResults.js";
 import {
   agentRoleName,
   errorMessage,
@@ -37,6 +38,7 @@ import {
 } from "../../strings.js";
 import { jobRecord, record, type JsonRecord } from "../../data/wire.js";
 import {
+  acquisitionTask,
   parseTaskDetail,
   taskTitle,
   taskStatusLabel,
@@ -552,6 +554,9 @@ export function TaskDetails({ id }: { id: string }) {
           </Button>
         ))}
       </div>
+      {task.source_results && acquisitionTask(task.job) ? (
+        <SourceResults value={task.source_results} />
+      ) : null}
       <TaskSessions id={id} />
       <p>
         {task.targets.filter((target) => target.stage === "completed").length} /{" "}
@@ -633,7 +638,7 @@ export function TaskDetails({ id }: { id: string }) {
       <TaskRun id={id} />
       {task.acquisition_traces?.length ? (
         <Disclosure
-          title={`获取经过 ${task.acquisition_traces.length} 篇${task.acquisition_traces_truncated ? "（较早记录已省略）" : ""}`}
+          title={`逐篇经过 ${task.acquisition_traces.length} 篇${task.acquisition_traces_truncated ? "（较早记录已省略）" : ""}`}
           defaultExpanded
         >
           <ul className="task-traces">

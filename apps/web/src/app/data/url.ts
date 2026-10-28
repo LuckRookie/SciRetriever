@@ -19,6 +19,7 @@ export const sections = [
   "task",
   "web",
   "agent",
+  "stats",
   "set",
   "lab",
   "gallery",

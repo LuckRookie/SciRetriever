@@ -16,21 +16,22 @@ export function useActiveTaskCount() {
   return Array.isArray(tasks.data?.tasks) ? tasks.data.tasks.length : 0;
 }
 
-/** Tasks and the Agent sessions they start share one page under 运行. */
-export function RunSwitch({ value }: { value: "task" | "agent" }) {
+/** Tasks, the Agent sessions they start and their source statistics share one page under 运行. */
+export function RunSwitch({ value }: { value: "task" | "agent" | "stats" }) {
   return (
     <SegmentedControl
       label="运行视图"
       value={value}
       onChange={(next) =>
         navigate({
-          view: next === "agent" ? "agent" : "task",
+          view: next === "agent" || next === "stats" ? next : "task",
           literature: null,
         })
       }
       items={[
         { id: "task", label: "任务" },
         { id: "agent", label: "Agent 会话" },
+        { id: "stats", label: "来源统计" },
       ]}
     />
   );

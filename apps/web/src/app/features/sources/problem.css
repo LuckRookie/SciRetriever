@@ -1,0 +1,6 @@
+@layer pages {
+  /* Shared by source tests, task details, source statistics and the browser page. */
+  .problem-label {
+    color: var(--t-red);
+  }
+}

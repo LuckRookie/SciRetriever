@@ -1,4 +1,5 @@
 import { designSampleImage } from "./design-samples-image.js";
+import { seedSourceResultTasks } from "./design-samples-sources.js";
 import { randomUUID } from "node:crypto";
 import {
   parseLiterature,
@@ -33,6 +34,9 @@ export interface DesignSampleIds {
   snapshot: string;
   task: string;
   archiveTask: string;
+  pdfTask: string;
+  metadataTask: string;
+  metadataRunningTask: string;
   result: string;
   resultHash: string;
   agent: string;
@@ -565,6 +569,7 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
         });
       }
     }
+    const sourceTasks = await seedSourceResultTasks(app, papers);
     reply = summary;
     await app.maintenance!.rebuildIndex();
     hold = true;
@@ -599,6 +604,7 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
         snapshot: snapshots[0]!.snapshot_id,
         task: completed.job.job_id,
         archiveTask,
+        ...sourceTasks,
         result: String(record.result_id),
         resultHash: String(record.content_sha256),
         agent: agent.session_id,

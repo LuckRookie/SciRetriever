@@ -223,9 +223,13 @@ it("selects the correct live article, explicitly returns control on close, while
     await expect
       .poll(() => page.locator(".browser-log .ui-card").count())
       .toBe(1);
+    // A platform failure reads “错误”; its code stays in the technical details.
     await expect
       .poll(() => page.locator(".browser-log").textContent())
-      .toContain("存储空间不足");
+      .toContain("流程停止：错误");
+    expect(await page.locator(".browser-log").textContent()).toContain(
+      "publication-disk-full",
+    );
     await page
       .getByRole("button", { name: "返回会话列表", exact: true })
       .click();

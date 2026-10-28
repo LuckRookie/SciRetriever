@@ -18,6 +18,13 @@ const SOURCES: Readonly<Record<string, string>> = {
   unpaywall: "Unpaywall",
   "sci-hub": "Sci-Hub",
   browser: "Browser Agent",
+  "web-of-science": "Web of Science",
+  crossref: "Crossref",
+  "semantic-scholar": "Semantic Scholar",
+  openalex: "OpenAlex",
+  datacite: "DataCite",
+  opencitations: "OpenCitations",
+  plos: "PLOS",
 };
 export const STAGES: Readonly<Record<AcquisitionRoute["stage"], string>> = {
   direct: "直链",
@@ -46,7 +53,7 @@ const RESULTS: Readonly<Record<AcquisitionAttempt["result"], string>> = {
   "not-applicable": "不适用",
   "not-enabled": "未启用",
   unavailable: "不可用",
-  failed: "出错",
+  failed: "错误",
   cooldown: "冷却中",
   rejected: "候选被拒",
   escalated: "交给 Agent",

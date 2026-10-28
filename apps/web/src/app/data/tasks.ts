@@ -1,6 +1,8 @@
 import {
   parseAcquisitionTaskTrace,
+  parseTaskSourceResults,
   type AcquisitionTaskTrace,
+  type TaskSourceResults,
 } from "@sciretriever/contracts";
 import {
   envelopeRecord,
@@ -29,6 +31,7 @@ export const taskStatusLabel: Readonly<Record<string, string>> = {
   resolved: "已处理",
 };
 export const operationLabels: Readonly<Record<string, string>> = {
+  "acquire-metadata": "获取元数据",
   "parse-documents": "解析 PDF",
   "assess-article-identity": "核验材料身份",
   synthesize: "集合综合",
@@ -42,6 +45,9 @@ export function taskTitle(job: Json): string {
     const operations = listField(request, "operations").map((item) =>
       record(item, "operation"),
     );
+    const metadata =
+      operations.length === 1 ? metadataTitle(operations[0]!) : null;
+    if (metadata) return metadata;
     if (
       request.schema_version === 2 &&
       typeof request.collection_name === "string"
@@ -71,9 +77,32 @@ export function taskTitle(job: Json): string {
   return `${selector.goal === "pdf" ? "获取 PDF" : "文献处理"} · ${scope}`;
 }
 
+/** Only PDF acquisition and metadata tasks carry per-source results worth showing. */
+export function acquisitionTask(job: Json): boolean {
+  const selector = record(job.selector, "task selector");
+  if (selector.schema_version !== 3) return selector.goal === "pdf";
+  return listField(record(selector.request, "processing request"), "operations")
+    .map((item) => record(item, "operation"))
+    .some((item) => item.operation === "acquire-metadata");
+}
+
+/** Topic discovery, citation expansion and bibliography lookup read as what they are. */
+function metadataTitle(operation: Json): string | null {
+  if (operation.operation !== "acquire-metadata") return null;
+  const request = record(operation.request, "metadata request");
+  if (request.kind === "topic") return `主题发现 · “${String(request.query)}”`;
+  if (request.kind === "citation")
+    return `引用扩展 · ${listField(request, "seed_literature_ids").length} 篇`;
+  if (request.kind === "lookup")
+    return `补全书目 · ${listField(request, "literature_ids").length} 篇`;
+  return null;
+}
+
 export interface TaskDetail {
   readonly acquisition_traces?: readonly AcquisitionTaskTrace[];
   readonly acquisition_traces_truncated?: boolean;
+  /** Per-source counts; absent on older servers, "unrecorded" on tasks from before them. */
+  readonly source_results?: TaskSourceResults;
   readonly job: Json;
   readonly targets: readonly Json[];
   readonly results: readonly Json[];
@@ -105,6 +134,9 @@ export function parseTaskDetail(value: unknown): TaskDetail {
           acquisition_traces_truncated:
             task.acquisition_traces_truncated === true,
         }),
+    ...(task.source_results == null
+      ? {}
+      : { source_results: parseTaskSourceResults(task.source_results) }),
     job,
     targets: list("targets"),
     results: list("results"),

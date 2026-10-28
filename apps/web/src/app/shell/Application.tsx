@@ -70,6 +70,9 @@ const ActivityList = lazy(() =>
   })),
 );
 const Agents = lazy(() => import("../features/agents/Agents.js"));
+const SourceStatistics = lazy(
+  () => import("../features/tasks/SourceStatistics.js"),
+);
 const Browser = lazy(() => import("../features/browser/Browser.js"));
 const Retrieval = lazy(() => import("../features/retrieval/Retrieval.js"));
 const Insights = lazy(() => import("../features/insights/Insights.js"));
@@ -364,7 +367,8 @@ function Workspace({ api }: { api: ApiClient }) {
                     variant="text"
                     aria-current={
                       (route.section === section ||
-                        (section === "task" && route.section === "agent")) &&
+                        (section === "task" &&
+                          ["agent", "stats"].includes(route.section))) &&
                       !route.literature &&
                       !(
                         section === "lib" &&
@@ -413,7 +417,7 @@ function Workspace({ api }: { api: ApiClient }) {
   );
   const page =
     (api.kind !== "workspace" &&
-      ["disc", "task", "web"].includes(route.section)) ||
+      ["disc", "task", "web", "stats"].includes(route.section)) ||
     (api.kind === "query" && route.section === "set") ? (
       <EmptyState
         title="当前入口不提供这项操作"
@@ -422,6 +426,8 @@ function Workspace({ api }: { api: ApiClient }) {
       />
     ) : route.section === "agent" ? (
       <Agents />
+    ) : route.section === "stats" ? (
+      <SourceStatistics />
     ) : route.section === "web" ? (
       <Browser />
     ) : route.literature ? (

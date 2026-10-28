@@ -16,6 +16,7 @@ export const sectionLabels = {
   task: "任务",
   web: "浏览器",
   agent: "Agent 会话",
+  stats: "来源统计",
   set: "设置",
   lab: "交互实验台",
   gallery: "组件画廊",

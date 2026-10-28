@@ -3,6 +3,7 @@ import type {
   SourceProblemDisplay,
 } from "@sciretriever/contracts";
 import { TechDetails } from "../../components/index.js";
+import "./problem.css";
 
 /**
  * Requests fail in ways that cannot be enumerated, so the interface never sorts them:

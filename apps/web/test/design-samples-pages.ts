@@ -491,6 +491,40 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     ready: ".archive-run-steps",
   },
   {
+    id: "task-detail-pdf",
+    name: "任务 · 获取 PDF 按渠道",
+    route: (ids) => `/?view=task&task=${ids.pdfTask}`,
+    ready: ".source-bars",
+  },
+  {
+    id: "task-detail-pdf-table",
+    name: "任务 · 获取 PDF 表格",
+    route: (ids) => `/?view=task&task=${ids.pdfTask}`,
+    interaction: "切到表格",
+    prepare: async (p) => {
+      await p.getByRole("tab", { name: "表格" }).first().click();
+    },
+    ready: ".source-results-table",
+  },
+  {
+    id: "task-detail-metadata",
+    name: "任务 · 主题发现按来源",
+    route: (ids) => `/?view=task&task=${ids.metadataTask}`,
+    ready: ".source-results-empty",
+  },
+  {
+    id: "task-detail-metadata-running",
+    name: "任务 · 主题发现进行中",
+    route: (ids) => `/?view=task&task=${ids.metadataRunningTask}`,
+    ready: ".source-running",
+  },
+  {
+    id: "source-statistics",
+    name: "任务 · 来源统计",
+    route: route("stats"),
+    ready: ".source-statistics",
+  },
+  {
     id: "agents",
     name: "Agent · 会话列表",
     route: route("agent"),

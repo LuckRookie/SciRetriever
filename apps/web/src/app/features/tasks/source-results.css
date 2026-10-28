@@ -1,0 +1,231 @@
+@layer pages {
+  .source-results {
+    display: grid;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+  .source-results-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2) var(--space-4);
+  }
+  .source-results-summary {
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .source-results-unrecorded {
+    margin: 0;
+    color: var(--fg2);
+  }
+  /* Name, bar, number: the number reads right after the bar, not in a far column. */
+  .source-bars {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+  }
+  .source-bars figcaption {
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+  }
+  .source-bars ul {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .source-bars li {
+    display: grid;
+    grid-template-columns: minmax(6em, 9em) minmax(0, 1fr) minmax(5.5em, auto);
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .source-bar-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .source-bar-track {
+    position: relative;
+    height: 10px;
+  }
+  .source-bar-track > i {
+    position: absolute;
+    inset: 0 auto 0 0;
+    min-width: 2px;
+    border-radius: var(--radius-xs);
+    background: var(--chart-ink);
+  }
+  .source-bar-track > .source-bar-behind {
+    background: var(--chart-muted);
+  }
+  .source-bars li[data-tone="failed"] .source-bar-track > i {
+    background: var(--t-red);
+  }
+  .source-bar-value {
+    font-size: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    color: var(--fg2);
+    white-space: nowrap;
+  }
+  .source-results-empty {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+  }
+  .source-results-empty li {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--space-1);
+  }
+  .source-running {
+    color: var(--fg3);
+  }
+  .source-results-table td,
+  .source-results-table th {
+    font-variant-numeric: tabular-nums;
+  }
+  .source-results-table thead th,
+  .source-statistics thead th {
+    white-space: nowrap;
+  }
+  .source-results-table td .problem-label,
+  .source-statistics td .problem-label {
+    margin-left: var(--space-2);
+  }
+  .source-stage {
+    margin-left: var(--space-2);
+    font-size: var(--text-secondary);
+    color: var(--fg3);
+  }
+  /* Source statistics page. */
+  .source-statistics {
+    display: grid;
+    gap: var(--space-6);
+  }
+  .source-statistics-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+  .source-statistics-since {
+    margin: 0;
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+  }
+  .source-statistics section {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .source-statistics-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2) var(--space-4);
+  }
+  .source-statistics-heading h2 {
+    margin: 0;
+    font-size: var(--type-section);
+  }
+  .source-statistics-heading p {
+    margin: 0;
+    color: var(--fg2);
+    font-variant-numeric: tabular-nums;
+  }
+  .source-statistics table {
+    width: 100%;
+  }
+  .source-statistics td,
+  .source-statistics th {
+    font-variant-numeric: tabular-nums;
+    vertical-align: top;
+  }
+  .source-ratio {
+    display: grid;
+    grid-template-columns: minmax(4em, 1fr) 3.5em;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .source-ratio-track {
+    height: 8px;
+    border-radius: var(--radius-xs);
+    background: var(--chart-muted);
+    overflow: hidden;
+  }
+  /* Low hit rates may mean a narrow source, not a broken one: always the accent. */
+  .source-ratio-track > i {
+    display: block;
+    height: 100%;
+    background: var(--chart-accent);
+  }
+  .source-cell-basis {
+    display: block;
+    font-size: var(--text-caption);
+    color: var(--fg3);
+  }
+  .source-error[data-high] {
+    color: var(--t-red);
+  }
+  .source-ratio-count {
+    display: none;
+  }
+  @media (max-width: 720px) {
+    /* Two lines per source: name and stage, then the ratio with its counts. */
+    .source-statistics thead {
+      display: none;
+    }
+    .source-statistics tbody tr {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: var(--space-1) var(--space-3);
+      padding: var(--space-2) 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .source-statistics tbody :is(th, td) {
+      padding: 0;
+      border: 0;
+    }
+    .source-statistics tbody th {
+      grid-column: 1 / -1;
+    }
+    .source-statistics-pdf td:nth-of-type(1),
+    .source-statistics-pdf td:nth-of-type(2) {
+      display: none;
+    }
+    .source-ratio {
+      grid-template-columns: minmax(4em, 1fr) 3em auto;
+    }
+    .source-ratio-count {
+      display: inline;
+      font-size: var(--text-caption);
+      color: var(--fg3);
+    }
+    .source-statistics-metadata tbody tr {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .source-statistics-metadata td::before {
+      content: attr(data-label);
+      display: block;
+      font-size: var(--text-caption);
+      color: var(--fg3);
+    }
+    .source-bars li {
+      grid-template-columns: minmax(0, 1fr) auto;
+      row-gap: var(--space-1);
+    }
+    .source-bar-track {
+      grid-column: 1 / -1;
+      grid-row: 2;
+    }
+  }
+}

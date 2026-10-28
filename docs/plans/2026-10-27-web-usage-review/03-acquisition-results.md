@@ -33,23 +33,36 @@
 
 ## Tasks
 
-- [ ] **3.1 元数据逐来源计数**（worker）
+- [x] **3.1 元数据逐来源计数**（worker）
   - 主题发现、引用扩展、补全书目三类任务，每个来源记录：返回条数、进入本次合并结果的条数、出错与未配置。
   - 本次新入库与合并到已有的总数只记在任务层面。
   - 进行中的任务经任务事件实时更新。
-- [ ] **3.2 来源统计接口**（worker）
+  - 后端证据（2026-10-28）：`metadata-source-results.test.ts` 覆盖 topic/citation/lookup、运行中真实派发与分页 returned 事件、辅助 lookup 归属、取消与缺配置；`source-results-adapters.test.ts` 覆盖 HTTP/CLI/MCP 同口径及显式发起。来源数据沿用 execution_events，不改 schema。36/12 的最终来源验证 22 项通过，PDF 三端补充验证 1 项通过。
+  - 残余：任务详情图表和 Web data 层由 Claude 接入，原发现回执另附 job_id/source_summary；旧 failure 改为安全 problem。
+- [x] **3.2 来源统计接口**（worker）
   - 时间范围分“近 30 天”和“全部”。
   - PDF 每个来源：尝试、拿到、请求出错的比例，以及三种可处理情况的标签。
   - 元数据每个来源：检索覆盖、补全命中、引用命中、错误四个比例，各带分母。
   - 只从逐来源记录聚合，不另算一套。历史任务没有记录的不计入，并返回统计起点。
-- [ ] **3.3 界面**（Claude）
+  - 后端证据（2026-10-28）：同一归约器投影 task source_results 和 source-statistics；合同有比例分子分母、零样本与历史无记录的正反例。直接验证算术平均覆盖、1640 条事件分页/固定水位、近 30 天/全部、无记录历史排除、发布后清理失败保留渠道。接口为 `/api/v1/query/source-statistics`、CLI `sources statistics`、MCP `source_statistics`。
+  - 残余：仅 fake/回环验证；真实大历史库性能未实测。Quick 已跑，现被本单外 proofread/leaf-corrections.ts 的 unused import 阻断；独立测试 strict 还报既有 archive-text-session.test.ts 的图片 media_type 类型。
+- [x] **3.3 界面**（Claude）
   - 两类任务详情、“来源统计”标签页、浏览器页的错误显示。
   - Agent 自己写的停止说明保留原样。
   - 设计样例库补齐：进行中、无结果、出错、历史无记录等状态，截图后交 R-03。
-- [ ] **3.4 一致性测试**（worker 写服务端，Claude 写 Web）
+  - 证据（2026-10-28）：
+    - 任务详情：获取 PDF 与元数据任务在操作按钮下显示汇总、条形图与表格切换，其余任务不显示；元数据任务按主题发现、引用扩展、补全书目命名。
+    - 任务页第三个标签“来源统计”，时间范围近 30 天 / 全部；窄屏每个来源两行。
+    - 浏览器页平台失败显示“错误”，原因码收进技术详情；Agent 写的停止说明、人工停止照旧。逐篇经过里的失败也改为“错误”。
+    - 设计样例库新增 5 页：获取 PDF 按渠道与表格、主题发现完成与进行中、来源统计。样例任务写入与生产相同的逐来源事件，数字由生产汇总器算出。1440 与 390 共 10 张截图通过，Claude 自审代 R-03，截图在 `sandbox/reports/design-samples/2026-10-28-r03d/`。
+    - 历史无记录的任务只写一句“这个任务没有逐来源记录。”，未单独出样例页。
+- [x] **3.4 一致性测试**（worker 写服务端，Claude 写 Web）
   - 在合成任务上断言：条形图与统计的数字等于逐篇或逐条记录求和；
   - 未启用和冷却中的不计入尝试；
   - 每篇只计入最终拿到 PDF 的渠道。
+  - 服务端证据（2026-10-28）：`source-results.test.ts`、`acquisition-trace-adapters.test.ts` 和 Browser publication/真实 Cloak 回环覆盖求和、未启用/冷却排除、候选版本去重、最终渠道及发布事实。定向既有回归 346 项通过；启用 Cloak 后最终直接测试 10 文件 60 项通过，不用 Full 代替本块验收。
+  - Web 证据（2026-10-28）：`apps/web/test/source-results-bars.test.ts` 把逐篇、逐条事件交给生产汇总器，断言“按渠道”每篇只计一次、总数等于篇数，未启用与冷却不计尝试，元数据条形与覆盖比例一致，零分母显示“无样本”。`next-parallel-browser.test.ts` 改为断言“流程停止：错误”且技术详情含原码。
+  - 残余：`next-browser-control` 两项与 `next-parallel-browser` 一项仍失败，原因是 04 拆掉了旧观看页的拉图接口；在 4.7 换新观看页时处理。
 
 ## 集成与影响
 

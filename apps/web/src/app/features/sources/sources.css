@@ -134,9 +134,6 @@
   .source-test-ok {
     color: var(--t-green);
   }
-  .problem-label {
-    color: var(--t-red);
-  }
   .source-editor-row > td {
     background: var(--side);
   }
