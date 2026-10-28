@@ -372,6 +372,7 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 
 - PDF 页分类继续按可见字形区分 `text-layer`、`image-only`、`blank`；隐藏 OCR 不进入参照文字，页面原图始终是最终依据。
 - 每个有保留叶块的页各建一个短 DSH 会话。会话只能读本页保留叶块、查看本页整图或局部放大、读本页可见文字层与疑点；不能访问邻页、已删除叶块或整理历史。文字层仍可包含被删除内容，疑点计算按出现次数扣除它们，不把它们作为待校订正文发送。
+- 页会话按配置的并发数运行，默认与范围见[配置手册](../../guides/configuration.md#整理校订模型与停止保护)。完成次序不影响最终页码顺序；进度提交串行执行，required/accepted/reused/pending/failed 始终按已接纳状态计数。会话、工具草案、文字覆盖、疑点、图像与压缩窗口各页独立；PDF 渲染保留内部队列，缓存及 SQLite 写入沿用共享 admission，接受后的缓存写入不因随后取消而丢失。
 - 疑点为 missing、extra、token-mismatch 三类；页归属问题由整理处理。比较词和数字多重集，并保留乱码/控制字符提示，不把科学结论当作需要校订的内容。
 - 改字只有 correct：叶块、原文半开区间、原文片段、替换文字、依据页和一词理由。允许叶块内空区间插入或删除文字；拒绝跨叶块、已删除内容、错误页、原文不符、交叠改字及破坏表格结构的操作。每条改字确定性映射回 raw root 与源区间。
 - 每个有保留叶块的页都必须提交；没有改字时明确 no_change。宿主记录全部保留字符的读取覆盖和整页查看证明，crop 不能替代整页。每条原始及当前新增疑点都须处置：fixed 引用实际改字，draft-correct 或 uncertain 附一词理由。无法确定时保留原文，不因此失败。撤销草案产生的临时疑点随草案重算，原始疑点仍保留。
@@ -385,6 +386,7 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 
 - 同一校验问题集连续 **3 次**返回，停止该部分整理或该页校订。问题集按稳定 code 与 ID 排序去重后计算 fingerprint，错误措辞不参与；停下记录 fingerprint、issue_codes、实际次数与阈值。
 - 连续 **8 次实际派发的模型调用**没有新进展，停止该会话。新进展是读到新的源字符、页面或参照窗口，或提交新的合法语义操作/疑点处置；重复读取、去掉再放回同一操作或只改理由措辞不计。压缩调用也如实计入实际调用。
+- 模型返回 429（适配器归一为 retryable agent-quota）时，在同一页、同一 DSH 会话重试同一请求，不追加重复用户输入。页调度与实际模型请求共用本次文献的递减额度，每次限流降一档，最少 1；遵守 Network 已限界的 Retry-After，全篇等待窗口取最大值。已在运行的页不撤销，其后续请求等待降档后的空位，新页也等空位。限流派发计 calls，不能作为无进展决定；usage.rate_limits 保存页码、服务等待提示、实际等待和降档前后额度。无可靠响应 usage 的 token 仍为 null，不推算限流请求用量。单页质量停止不取消其它页；用户取消才中断全部在途请求与限流等待。
 - no-progress、validation-repeated 与 cancelled、模型异常、输入冲突、页面工具不可用、协议大小拒绝分别记录，不能把质量停止记成取消。失败派发后没有可靠 usage 时，token 为 null，usage_complete=false，不填成 0；所有已报告 usage 含压缩实耗。
 - 读取窗口最多 20 项，按 JSON 编码后的字节数限界，工具文字回执不超过 16 KiB；大块用 code point 游标继续读。操作和处置由宿主分批保存，提交只引用当前草案，不重复传整篇全文。
 - 使用 DSH 的 image_policy=latest，旧图在请求中换成文字占位。中性请求超过 384 KiB 的文字/图片字节窗口后，在当前工具批收尾处交回 DSH 显式压缩，再继续同一会话；模型上下文触发的原生压缩也保留。宿主草案、覆盖和用量不依赖压缩摘要，可用有界工具重新查询。协议原有请求/响应大小保护仍有效；这不是文献调用预算。
@@ -398,6 +400,8 @@ render 从保留叶块及已记录 correct 确定性生成 Markdown、DocumentSt
 结构注释采用独立 schema 2，直接从整理归属和图注挂接派生，role_source 为 arrangement 或 manual，不再调用章节分类模型。11 个新骨架角色与历史角色分别解码，不作名称映射。`body_content_leaf_ids` 记录真正具有保留正文 payload 的正文类叶块；纯标题不满足 READY。正文类角色恰为 introduction、methods、results-discussion、conclusion、additional。主文仍需完整校订、当前默认文档、派生注释、必需元数据与标签；补充材料和参考文献缺口不独自阻断主文。没有叶块的页所产生的 page-content-missing 是非阻断问题。
 
 元数据只读取 title/authors/abstract/keywords 保留片段，以及 bibliography 删除叶块的原始文字。后者带 raw parse、整理、源 span 的专门证据，不冒充文档 segment。参考文献、标签、检索和算子使用固定文档的保留内容。内容版本仍为 hash(文档版本, 结构注释)，变更经现有事务内事件使下游结果过时，不隐式重算。
+
+新旧校订稿发布都只等待全文索引刷新请求持久化，回执为 index_status=scheduled；不等待整库扫描，也不因索引失败撤销发布或阻断建档完成。排队、失败读取与显式重试见[检索技术篇](06-retrieval-context.md#49-材料-context-的实现边界)。索引状态与固定文档、注释和 READY 分开。
 
 全文摘要读取器按 builder 分派片段覆盖校验：历史表示连续覆盖全文，新表示允许已验证渲染器生成的结构字节位于叶块片段之外。指定的算子角色在该版本注释中无法表达时，返回 `structure-role-unavailable` 缺口，不把空片段冒充完整阅读或自动映射旧角色。
 

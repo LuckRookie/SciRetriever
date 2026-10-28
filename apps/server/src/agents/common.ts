@@ -357,7 +357,12 @@ export async function post(
   if (response.status < 200 || response.status > 299) {
     if (response.status === 401 || response.status === 403)
       throw new AgentFailure("agent-auth");
-    if (response.status === 429) throw new AgentFailure("agent-quota", true);
+    if (response.status === 429)
+      throw new AgentFailure("agent-quota", true, {
+        ...(response.retry_after_ms === undefined
+          ? {}
+          : { retry_after_ms: response.retry_after_ms }),
+      });
     throw new AgentFailure(
       response.status >= 500 ? "agent-remote" : "agent-request",
       response.status >= 500,

@@ -148,6 +148,7 @@ export interface OrdinaryConfiguration {
   readonly tags: TagsConfig;
   readonly proofread: {
     readonly model: string | null;
+    readonly max_concurrent_pages: number;
   };
   readonly browser: BrowserConfig;
   readonly execution: { readonly max_concurrency: number };
@@ -973,10 +974,14 @@ function parseConfigurationObject(
   const proofreadRaw = exact(
     optionalRecord(raw.proofread),
     [],
-    ["model", "max_calls_per_document"],
+    ["model", "max_concurrent_pages", "max_calls_per_document"],
   );
   const proofread = Object.freeze({
     model: tagModel(proofreadRaw.model),
+    max_concurrent_pages:
+      proofreadRaw.max_concurrent_pages === undefined
+        ? 3
+        : positiveInteger(proofreadRaw.max_concurrent_pages, 1, 8),
   });
   const analyzeModel =
     analyze.model === null ? null : normalizeModelReference(analyze.model);

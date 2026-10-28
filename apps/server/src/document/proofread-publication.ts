@@ -42,7 +42,7 @@ export class ProofreadDocumentService {
   constructor(
     private readonly database: SqliteWorker,
     private readonly files: FileStore,
-    private readonly refreshIndex: (signal: AbortSignal) => Promise<unknown>,
+    private readonly scheduleIndex: () => Promise<unknown>,
   ) {}
   async close() {
     this.stop.abort();
@@ -195,14 +195,14 @@ export class ProofreadDocumentService {
       throw new ProofreadDocumentError("document-integrity");
     document = persisted.version;
     // Index failure cannot roll back a valid fixed document; expose a retryable projection outcome.
-    let index_status: "updated" | "unchanged" | "failed" = "unchanged";
+    let index_status: "scheduled" | "unchanged" | "failed" = "unchanged";
     if (
       result.default_updated &&
       previousDefault?.document_version_id !== document.document_version_id
     ) {
       try {
-        await this.refreshIndex(signal);
-        index_status = "updated";
+        await this.scheduleIndex();
+        index_status = "scheduled";
       } catch {
         index_status = "failed";
       }

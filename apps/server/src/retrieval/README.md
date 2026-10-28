@@ -2,7 +2,8 @@
 
 只读检索已有书目、固定校订稿与算子结果，并返回可核对的来源。缺少材料或索引时报告缺口，不自动发现、下载、建档或生成总结。
 
-- [index.ts](index.ts)：可重建的材料索引；`build()` 强制读源，建档发布调用 `refresh()`，完整验证旧索引后复用来源版本与默认状态未变的条目；新增或变化的来源重新读取、分块，仍发布完整的新 generation。
+- [index.ts](index.ts)：可重建的材料索引；`build()` 强制读源，`refresh()` 完整验证旧索引后复用来源版本与默认状态未变的条目；新增或变化的来源重新读取、分块，仍发布完整的新 generation。
+- [refresh.ts](refresh.ts)：发布后的后台合并刷新；请求先持久化再返回，同一 catalog 同时最多一个刷新者，运行期间的新请求合并到最新源 revision；失败可读、可显式重建重试。进程关闭中断构建，未完成请求保留给下次启动。
 - [query.ts](query.ts)：书目与固定文档上下文、来源证据和分页。
 - [knowledge-query.ts](knowledge-query.ts)：当前混合上下文（schema 3）。先保留材料检索排序，再读取算子结果；结果按固定 ID 顺序续读，使用结果 ID、内容哈希和记录 ID，不读取旧知识 artifact。
 - [storage.ts](storage.ts)：离线检索存储适配。结果检索复用 [storage/processor-results.ts](../storage/processor-results.ts) 的投影、固定字节校验与证据解析，不维护第二份知识索引。

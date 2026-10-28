@@ -70,6 +70,10 @@ MCP 对应 `archive_query`（status/issues/stats/events）与 `archive_manage`�
 
 单步 `proofread build` 使用 `{schema_version:2, asset_id, arrangement_id, retry_page_indexes:null}`，只校已有整理结果；`document publish-proofread` 使用 `{schema_version:2, literature_id, asset_id, proofread_id, expected_default_revision}`，只渲染完整新校订稿；`document annotate` 使用 `{schema_version:2, document_version_id, arrangement_id}`，从固定整理派生注释。这些单步不会隐式解析或整理，渲染与注释不调用模型。
 
+逐页校订可以同时运行几页，每页上下文仍独立；配置与限流降档见[配置指南](configuration.md#整理校订模型与停止保护)。一页停止不会撤销其它已接受页，指定页重试和页缓存复用保持原口径。任务回执按页码排序，运行中事件包含准确的必需、已接受、复用、待处理与失败计数。
+
+全文发布后回执 `index_status=scheduled` 表示已排队刷新检索索引，建档可继续完成，固定全文可立即读取。索引失败不撤销文档；用 `maintenance index-status`、HTTP `POST /api/v1/query/index-status`（request `{}`）或 MCP `index_status` 查看状态及技术原因，再用 `maintenance rebuild-index`、HTTP `/api/v1/maintenance/rebuild-index` 或 MCP `rebuild_index` 显式重试。短命 CLI 退出时队列保留，下次维护进程继续；立即需要检索可显式重建。刷新完成前可能有 index-stale 缺口，详见[读取指南](library-query.md#上下文检索)。
+
 `archive arrangement --request FILE|-`（MCP `archive_arrangement`）输入 schema_version=2、asset_id、proofread_id（首次可为 null）和 kind。summary 返回删除/改字/章节统计、人工 revision、当前固定文档与待校订页；leaves、breaks、source-map 和 pages 提供有界读取。leaves 还需 visibility、drop_reason、page_index，所有分页请求带 cursor、limit（最多 200）和 max_bytes（最多 64 KiB）。leaves/breaks/source-map 的 JSON-UTF8 text 需按 next_cursor 拼接后解码；pages 返回有界状态项。后续请求必须固定首次返回的 proofread_id。
 
 `archive arrangement-edit --request FILE|-`（MCP `archive_arrangement_edit`）输入 schema_version=2、literature_id、asset_id、expected_proofread_id、expected_arrangement_id、expected_manual_revision 与 changes。restore/assign 指定 leaf_id、骨架 target、presentation。服务端绑定实际 actor，原子保存 destination 锁；并发变化拒绝覆盖，不隐式调用模型。恢复后若增加待校订内容，返回 pending_page_indexes，原固定文档仍可读；显式 archive resume 后才校订这些页。

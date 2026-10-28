@@ -299,7 +299,7 @@ export class ArchiveOrchestrator {
                   request.mode,
                   request.retry_page_indexes,
                   signal,
-                  async (page, reused, usage) => {
+                  async (page, reused, usage, counts) => {
                     const job = activityContext().job_id;
                     if (!job) return;
                     await this.database.appendExecutionEvent({
@@ -324,7 +324,7 @@ export class ArchiveOrchestrator {
                               ? "stopped"
                               : "progress",
                         page_index: page.page_index,
-                        pages: null,
+                        pages: counts,
                         usage,
                         stop: page.stop,
                       },
@@ -471,7 +471,7 @@ export class ArchiveOrchestrator {
     record: boolean,
   ) {
     const usage = output.usage as
-      | { calls?: number; input_tokens?: number; output_tokens?: number }
+      | Partial<import("@sciretriever/contracts").ArchiveModelUsage>
       | undefined;
     return this.database.archive("step", {
       run_id: run,
@@ -500,6 +500,9 @@ export class ArchiveOrchestrator {
               usage?.output_tokens !== undefined &&
               usage?.output_tokens !== null,
             elapsed_ms: Math.round(elapsed),
+            ...(usage?.rate_limits?.length
+              ? { rate_limits: usage.rate_limits }
+              : {}),
           },
           stats: {
             ...((output.stats as object) ?? {}),

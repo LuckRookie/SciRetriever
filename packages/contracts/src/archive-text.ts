@@ -208,6 +208,13 @@ export interface PageProofreadSubmission {
   readonly no_change: boolean;
   readonly dispositions: readonly SuspectDisposition[];
 }
+export interface ArchiveRateLimitRetry {
+  readonly page_index: number;
+  readonly retry_after_ms: number | null;
+  readonly wait_ms: number;
+  readonly concurrency_before: number;
+  readonly concurrency_after: number;
+}
 export interface ArchiveModelUsage {
   readonly calls: number;
   readonly compaction_calls: number;
@@ -215,6 +222,8 @@ export interface ArchiveModelUsage {
   readonly output_tokens: number | null;
   readonly usage_complete: boolean;
   readonly elapsed_ms: number;
+  /** Absent on historical attempts and attempts without throttling. */
+  readonly rate_limits?: readonly ArchiveRateLimitRetry[];
 }
 export const ARCHIVE_TEXT_STOP_CODES = [
   "validation-repeated",
@@ -784,6 +793,8 @@ export function parsePageProofreadSubmission(
   };
 }
 export function parseArchiveModelUsage(v: unknown): ArchiveModelUsage {
+  const hasRateLimits =
+    !!v && typeof v === "object" && Object.hasOwn(v, "rate_limits");
   const r = record(v, [
     "calls",
     "compaction_calls",
@@ -791,6 +802,7 @@ export function parseArchiveModelUsage(v: unknown): ArchiveModelUsage {
     "output_tokens",
     "usage_complete",
     "elapsed_ms",
+    ...(hasRateLimits ? ["rate_limits"] : []),
   ]);
   const calls = number(r.calls),
     compaction_calls = number(r.compaction_calls),
@@ -809,6 +821,32 @@ export function parseArchiveModelUsage(v: unknown): ArchiveModelUsage {
     output_tokens,
     usage_complete,
     elapsed_ms: number(r.elapsed_ms),
+    ...(hasRateLimits
+      ? {
+          rate_limits: list(r.rate_limits, (value) => {
+            const q = record(value, [
+              "page_index",
+              "retry_after_ms",
+              "wait_ms",
+              "concurrency_before",
+              "concurrency_after",
+            ]);
+            const before = number(q.concurrency_before, 8),
+              after = number(q.concurrency_after, 8);
+            if (before < 1 || after !== Math.max(1, before - 1)) fail();
+            return {
+              page_index: number(q.page_index, 9999),
+              retry_after_ms:
+                q.retry_after_ms === null
+                  ? null
+                  : number(q.retry_after_ms, 120000),
+              wait_ms: number(q.wait_ms),
+              concurrency_before: before,
+              concurrency_after: after,
+            };
+          }),
+        }
+      : {}),
   };
 }
 export function parseArchiveTextStop(v: unknown): ArchiveTextStop {

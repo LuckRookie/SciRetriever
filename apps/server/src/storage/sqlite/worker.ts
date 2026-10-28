@@ -1164,6 +1164,9 @@ export class SqliteWorker {
   }
 
   run<T>(command: SqliteCommand, signal?: AbortSignal): Promise<T> {
+    // A closed, never-used worker must reject before trying its first admission.
+    if (this.closed || this.failed)
+      return Promise.reject(new SqliteWorkerError());
     const copy = structuredClone(command);
     const readOnly = new Set<string>([
       "metadata_fields_read",

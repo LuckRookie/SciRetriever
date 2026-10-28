@@ -78,12 +78,18 @@ export type AgentResult = AgentStructuredResult | AgentToolCall;
 export class AgentFailure extends Error {
   readonly code: string;
   readonly retryable: boolean;
-  constructor(code: string, retryable = false, options?: ErrorOptions) {
+  constructor(
+    code: string,
+    retryable = false,
+    options?: ErrorOptions & { readonly retry_after_ms?: number },
+  ) {
     super("agent operation failed", options);
     this.name = "AgentFailure";
     this.code = code;
     this.retryable = retryable;
+    this.retry_after_ms = options?.retry_after_ms;
   }
+  readonly retry_after_ms: number | undefined;
 }
 
 export interface AgentTransportResponse {

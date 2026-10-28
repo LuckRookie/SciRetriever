@@ -43,6 +43,30 @@ const call: AgentCall = {
 };
 const variants = ["chat", "responses", "anthropic"] as const;
 it.each(variants)(
+  "preserves the bounded Retry-After for a throttled %s model request",
+  async (variant) => {
+    const adapter = make(variant, {
+      provider: variant,
+      model: "synthetic",
+      endpoint: "http://127.0.0.1:9/v1",
+      credential: null,
+      transport: async () => ({
+        status: 429,
+        retry_after_ms: 1234,
+        headers: [],
+        body: Buffer.from("{}"),
+      }),
+    });
+    await expect(
+      adapter.execute(call, { reasoning: "default", stream: false }),
+    ).rejects.toMatchObject({
+      code: "agent-quota",
+      retryable: true,
+      retry_after_ms: 1234,
+    });
+  },
+);
+it.each(variants)(
   "forwards the in-process dispatch lifecycle through %s without serializing it",
   async (variant) => {
     let dispatched = 0;

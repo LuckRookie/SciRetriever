@@ -50,6 +50,9 @@ export function sumArchiveUsage(
       : null,
     usage_complete: values.every((u) => u.usage_complete),
     elapsed_ms: values.reduce((n, u) => n + u.elapsed_ms, 0),
+    ...(values.some((u) => u.rate_limits?.length)
+      ? { rate_limits: values.flatMap((u) => u.rate_limits ?? []) }
+      : {}),
   };
 }
 /** Keep paid model work visible even when cache/CAS publication fails afterwards. */
@@ -119,6 +122,10 @@ export class TextProgress {
   onDispatched() {
     this.dispatched++;
     this.priorRevision = this.revision;
+  }
+  rateLimited() {
+    // The dispatched attempt consumed transport work, not a model decision.
+    this.accounted = this.dispatched;
   }
   finish() {
     this.settle();
@@ -487,6 +494,11 @@ export async function runArchiveTextSession<T>(
       context: Parameters<AgentCapabilityRunOptions["executeTool"]>[1],
     ) => Promise<AgentCapabilityToolResult>;
     accepted: () => T | null;
+    requests?: Pick<
+      import("../agents/capability.js").AgentCapabilityRequestLifecycle,
+      "beforeAttempt" | "onRateLimited"
+    >;
+    rateLimits?: readonly import("@sciretriever/contracts").ArchiveRateLimitRetry[];
   },
   signal?: AbortSignal,
 ): Promise<ArchiveTextSessionResult<T>> {
@@ -519,6 +531,18 @@ export async function runArchiveTextSession<T>(
     admitRequest(request) {
       input.progress.beforeCall();
       return {
+        ...input.requests,
+        ...(input.requests?.onRateLimited
+          ? {
+              onRateLimited: async (
+                retryAfterMs: number | undefined,
+                active: AbortSignal,
+              ) => {
+                input.progress.rateLimited();
+                await input.requests!.onRateLimited!(retryAfterMs, active);
+              },
+            }
+          : {}),
         onRequest(modelRequest) {
           // Native DSH validates the tool schema before invoking the business host.
           // Count those failures too, using only a stable code/name, never its text.
@@ -733,6 +757,7 @@ export async function runArchiveTextSession<T>(
     output_tokens: complete ? outTokens : null,
     usage_complete: complete,
     elapsed_ms: Math.round(performance.now() - started),
+    ...(input.rateLimits?.length ? { rate_limits: input.rateLimits } : {}),
   });
   return { value: stop ? null : input.accepted(), usage, stop };
 }

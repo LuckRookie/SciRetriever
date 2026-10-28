@@ -485,7 +485,7 @@ it("retains an accepted manual text decision after render failure, returns a typ
       await e.app.archiveText!.render(e.id, e.asset.asset_id),
     ).toMatchObject({
       structure_satisfied: true,
-      index_status: "updated",
+      index_status: "scheduled",
       usage: { calls: 0 },
     });
     expect(e.modelCalls).toBe(calls);

@@ -166,6 +166,8 @@ export interface ArchiveProgressV2 {
     readonly required: number;
     readonly accepted: number;
     readonly reused: number;
+    readonly pending?: number;
+    readonly failed?: number;
   } | null;
   readonly usage: ArchiveModelUsage;
   readonly stop: ArchiveTextStop | null;

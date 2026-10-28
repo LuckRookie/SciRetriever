@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   parseDocumentReadRequest,
   parseDocumentReadResult,
@@ -27,7 +27,7 @@ describe("proofread document publication", () => {
         published: true,
         default_updated: true,
         default_revision: 1,
-        index_status: "updated",
+        index_status: "scheduled",
         document: {
           schema_version: 2,
           builder_version: "proofread-blocks-v1",
@@ -223,7 +223,12 @@ it("keeps a published version after CAS loss, rejects stale raw inputs, and retu
       default_updated: true,
       default_revision: 2,
     });
-    expect(published.index_status).toBe("updated");
+    expect(published.index_status).toBe("scheduled");
+    await vi.waitFor(async () =>
+      expect(await e.app.indexRefreshStatus!()).toMatchObject({
+        status: "updated",
+      }),
+    );
     const query = await createQueryApplication(e.home);
     try {
       const result = await query.context!.search({
@@ -383,7 +388,7 @@ it("exposes publication and part reads through CLI/MCP without opening a parser 
     const publication = JSON.parse(stdout.join(""));
     expect(publication).toMatchObject({
       published: true,
-      index_status: "updated",
+      index_status: "scheduled",
     });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a);

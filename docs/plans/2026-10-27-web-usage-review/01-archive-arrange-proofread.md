@@ -180,3 +180,11 @@
 
 - 某个 Task 失败时，保留失败回执和当时的源码；退回上一个通过的 Task，不拼接结果。
 - 实施中发现 ADR 0041 有做不到或需要改方向的地方，停下交 Claude；涉及长期决定的，写新 ADR，不改 0041 正文。
+
+### 2026-10-28 worker 补充证据：逐页并行与发布后索引
+
+- 每页独立短会话保留，配置 `[proofread].max_concurrent_pages` 默认 3、范围 1–8；本次文献收到限流时降低页/请求并发，在同一 DSH 会话按 Retry-After 重试，不计作无进展。页进度串行接纳、结果按页排序；失败、取消、复用和指定页重试均有 fake 直接测试。
+- 新旧文档发布只等待索引请求落盘，回执 scheduled；后台单刷新者合并最新请求，失败状态经 HTTP/CLI/MCP 可读、可用已有 rebuild-index 重试。元数据阶段推进源 revision 导致过时 CAS 时合并重跑；无新源的重复失败停下。未完成请求保留给下次维护进程，查询不启动刷新。
+- Owner 指定的 sandbox 库副本实测：35,177 篇、6 个文档版本，一次 refresh 为 494.716 秒。新建临时副本上复用已接纳稿 render，两条历史 500.839/522.417 秒记录分别为 10.214 秒（冷 worker 首次读取）/0.316 秒，均无模型调用、索引端口受控挂起；不是两次完整建档或真实模型并行测速。
+- 命令：`VITEST_MAX_FORKS=36 VITEST_MIN_FORKS=12 pnpm exec vitest run [34 个定向文件] --maxWorkers=36 --minWorkers=12`，最终 34 文件、306 项通过，104.87 秒；完整名单见本块交接目录并行补充报告的 validation-summary.json。`pnpm quick` 通过；`node scripts/check-docs.mjs` 检查 230 份、0 错误。
+- 实测入口为 `sandbox/cases/2026-10-28-plan17-01-parallel/`，本机证据为 `sandbox/reports/2026-10-28-plan17-01-parallel/`。本补充不勾选 1.9：没有调用真实模型、Provider 或 MinerU，没有修改正式库、个人配置或 4174；真实模型速度与限流行为仍由 Claude 实跑。

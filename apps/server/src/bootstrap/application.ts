@@ -186,6 +186,8 @@ import { RawParsingService } from "../parsing/raw-service.js";
 import { pdfPages } from "../proofread/pdf-pages.js";
 import type { PdfPages } from "../proofread/contract.js";
 import { ProofreadService } from "../proofread/service.js";
+import { IndexRefreshService } from "../retrieval/refresh.js";
+import { IndexRefreshStateStore } from "../storage/retrieval-refresh.js";
 import { RetrievalIndexService } from "../retrieval/index.js";
 import { KnowledgeContextService } from "../retrieval/knowledge-query.js";
 import { MaterialContextService } from "../retrieval/query.js";
@@ -247,6 +249,9 @@ export interface Application {
     readonly extraction: ExtractionDeliveryService;
   } | null;
   readonly documentProcessing: DocumentProcessingService;
+  readonly indexRefreshStatus?: () => Promise<
+    import("@sciretriever/contracts").IndexRefreshStatus
+  >;
   readonly documentRead: DocumentReadService;
   readonly extractionPreparation: ExtractionPreparationService;
   readonly extractionDelivery: ExtractionDeliveryService;
@@ -380,6 +385,9 @@ export interface QueryApplication {
     "search" | "counts" | "detail" | "references" | "referenceDetail"
   > | null;
   readonly literatureArtifacts: LiteratureArtifactService | null;
+  readonly indexRefreshStatus?: () => Promise<
+    import("@sciretriever/contracts").IndexRefreshStatus
+  >;
   readonly documentRead: DocumentReadService | null;
   readonly extractionPreparation: ExtractionPreparationService | null;
   readonly context: MaterialContextService | null;
@@ -748,6 +756,8 @@ async function createApplicationOwned(
   let extractionPreparation: ExtractionPreparationService | null = null;
   let extractionDelivery: ExtractionDeliveryService | null = null;
   let retrievalIndex: RetrievalIndexService | null = null;
+  let indexDatabase: SqliteWorker | undefined;
+  let indexRefresh: IndexRefreshService | null = null;
   const catalogPath =
     configuration.paths.catalog_path ?? join(home, "catalog.sqlite");
   const networkBudget = options.networkBudget ?? new NetworkBudgetCoordinator();
@@ -791,7 +801,9 @@ async function createApplicationOwned(
         () => manualPdf?.close(),
         () => regionRenderer?.close(),
 
+        () => indexRefresh?.close(),
         () => retrievalIndex?.close(),
+        () => indexDatabase?.close(),
         () => documentProcessing?.close(),
         () => extractionDelivery?.shutdown(),
         () => extractionPreparation?.close(),
@@ -1371,10 +1383,11 @@ async function createApplicationOwned(
         pages,
         agents,
         configuration.parsing.archive_profile,
-        async (signal) => {
-          if (!retrievalIndex) throw new Error("index-unavailable");
-          return retrievalIndex.refresh(signal);
+        async () => {
+          if (!indexRefresh) throw new Error("index-unavailable");
+          return indexRefresh.schedule();
         },
+        configuration.proofread.max_concurrent_pages,
       );
       proofreading = new ProofreadService(
         rawParseStorage,
@@ -1387,9 +1400,9 @@ async function createApplicationOwned(
     proofreadDocuments = new ProofreadDocumentService(
       database,
       files,
-      async (signal) => {
-        if (!retrievalIndex) throw new Error("index-unavailable");
-        return retrievalIndex.refresh(signal);
+      async () => {
+        if (!indexRefresh) throw new Error("index-unavailable");
+        return indexRefresh.schedule();
       },
     );
     structureAnnotations = new StructureAnnotationService(
@@ -1443,12 +1456,22 @@ async function createApplicationOwned(
         extractionDelivery,
         processorRead,
       );
+    // Full-generation validation can occupy a worker synchronously. Keep its
+    // generation/repair state on one dedicated worker, sharing business admission.
+    indexDatabase = new SqliteWorker(catalogPath, writes, {
+      maxTags: configuration.tags.max_per_literature,
+      archiveProfile: configuration.parsing.archive_profile,
+    });
     retrievalIndex = new RetrievalIndexService(
-      new RetrievalStorageClient(database),
+      new RetrievalStorageClient(indexDatabase),
       documentRead,
       library,
       writes,
     );
+    indexRefresh = new IndexRefreshService(catalogPath, retrievalIndex, () =>
+      new RetrievalStorageClient(database!).revision(),
+    );
+    await indexRefresh.start();
     // One process-wide acquisition port, built here and shared by every caller: the
     // CLI, the durable job runtime and any future frontend must not assemble their own
     // isolated acquisition loop. The completion orchestration is constructed later,
@@ -1536,7 +1559,7 @@ async function createApplicationOwned(
       method_sha256: await sha256(
         canonicalJsonBytes({
           method: "archive-arrange-v2",
-          proofread: configuration.proofread,
+          proofread: { model: configuration.proofread.model },
           models: configuration.models,
           analyze: configuration.analyze,
           tags: configuration.tags,
@@ -1714,13 +1737,14 @@ async function createApplicationOwned(
               parseDocuments:
                 documentProcessing.parseDocuments.bind(documentProcessing),
               documentDefault: database.documentDefault.bind(database),
-              rebuildIndex: retrievalIndex.build.bind(retrievalIndex),
+              rebuildIndex: indexRefresh.rebuild.bind(indexRefresh),
               extraction: extractionDelivery,
             },
             ["ingestPdf", "parseDocuments", "rebuildIndex"],
             admission,
           )
         : null,
+      indexRefreshStatus: () => indexRefresh!.status(),
       documentProcessing: guardRuntimeMethods(
         documentProcessing,
         ["parseDocuments"],
@@ -2032,7 +2056,7 @@ export async function createQueryApplication(
       await sha256(
         canonicalJsonBytes({
           method: "archive-arrange-v2",
-          proofread: configuration.proofread,
+          proofread: { model: configuration.proofread.model },
           models: configuration.models,
           analyze: configuration.analyze,
           tags: configuration.tags,
@@ -2064,7 +2088,7 @@ export async function createQueryApplication(
       await sha256(
         canonicalJsonBytes({
           method: "archive-arrange-v2",
-          proofread: configuration.proofread,
+          proofread: { model: configuration.proofread.model },
           models: configuration.models,
           analyze: configuration.analyze,
           tags: configuration.tags,
@@ -2128,6 +2152,8 @@ export async function createQueryApplication(
       extractionPreparation,
       context,
       knowledgeContext,
+      indexRefreshStatus: () =>
+        IndexRefreshStateStore.status(`${catalogPath}.index-refresh.json`),
 
       close,
     };
@@ -2199,8 +2225,14 @@ function buildAgentBindings(
           coordinator: networkBudget,
           scope: "agent-model",
           limits: {
-            maxConcurrency: 2,
-            maxHostConcurrency: 2,
+            maxConcurrency: Math.max(
+              2,
+              configuration.proofread.max_concurrent_pages,
+            ),
+            maxHostConcurrency: Math.max(
+              2,
+              configuration.proofread.max_concurrent_pages,
+            ),
             maxResponseBytes: 4194304,
             maxRedirects: 0,
             maxRetries: 0,

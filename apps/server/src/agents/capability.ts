@@ -22,6 +22,13 @@ export interface AgentCapabilityRequest {
 }
 
 export interface AgentCapabilityRequestLifecycle extends AgentCallLifecycle {
+  /** Caller-owned concurrency admission, acquired again for a rate-limit retry. */
+  readonly beforeAttempt?: (signal: AbortSignal) => Promise<() => void>;
+  /** Opt-in retry of this exact request, within the same DSH session. */
+  readonly onRateLimited?: (
+    retryAfterMs: number | undefined,
+    signal: AbortSignal,
+  ) => Promise<void>;
   readonly onSettled?: () => void;
   readonly onRequest?: (request: ModelRequest) => void;
   readonly onUsage?: (usage: {

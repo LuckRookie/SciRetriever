@@ -227,13 +227,35 @@ export class ControlledModelAdapter extends LlmAdapter {
             : (this.options.tool_choice ?? "auto"),
       } satisfies import("../model-protocol.js").ModelRequest;
       lifecycle?.onRequest?.(request);
-      const result = await this.options.modelCall(request, signal, {
-        onDispatched: () => {
-          lifecycle?.onDispatched();
-          dispatchedAt = Date.now();
-          logger.info("model_request_dispatched", identity);
-        },
-      });
+      let result: import("../model-protocol.js").ModelResponse;
+      for (;;) {
+        signal.throwIfAborted();
+        const release = await lifecycle?.beforeAttempt?.(signal);
+        let limited: AgentFailure;
+        try {
+          result = await this.options.modelCall(request, signal, {
+            onDispatched: () => {
+              lifecycle?.onDispatched();
+              dispatchedAt = Date.now();
+              logger.info("model_request_dispatched", identity);
+            },
+          });
+          break;
+        } catch (error) {
+          if (
+            !(error instanceof AgentFailure) ||
+            error.code !== "agent-quota" ||
+            !error.retryable ||
+            !lifecycle?.onRateLimited ||
+            signal.aborted
+          )
+            throw error;
+          limited = error;
+        } finally {
+          release?.();
+        }
+        await lifecycle.onRateLimited(limited.retry_after_ms, signal);
+      }
       tokens = result.provenance.usage;
       lifecycle?.onUsage?.(tokens);
       signal.throwIfAborted();

@@ -307,18 +307,23 @@ describe("application lifecycle", () => {
       ).rejects.toMatchObject({
         message: "application startup and cleanup failed",
         cause: startupFailure,
-        errors: [startupFailure, { errors: [fileFailure, databaseFailure] }],
+        errors: [
+          startupFailure,
+          { errors: [databaseFailure, fileFailure, databaseFailure] },
+        ],
       });
       expect(files).toHaveBeenCalledTimes(1);
-      expect(database).toHaveBeenCalledTimes(1);
+      expect(database).toHaveBeenCalledTimes(2);
       expect(closedFiles).toHaveLength(1);
-      expect(closedDatabases).toHaveLength(1);
+      expect(closedDatabases).toHaveLength(2);
+      expect(new Set(closedDatabases).size).toBe(2);
       await expect(closedFiles[0]!.stage()).rejects.toMatchObject({
         code: "file-store",
       });
-      await expect(closedDatabases[0]!.schema()).rejects.toMatchObject({
-        code: "sqlite-worker",
-      });
+      for (const closed of closedDatabases)
+        await expect(closed.schema()).rejects.toMatchObject({
+          code: "sqlite-worker",
+        });
       files.mockRestore();
       database.mockRestore();
       const recovered = await createApplication(home);

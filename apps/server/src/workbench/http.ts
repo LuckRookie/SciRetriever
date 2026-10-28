@@ -2193,6 +2193,7 @@ const ARCHIVE_HTTP_WRITES = [
   "archive-references",
 ] as const;
 const ARCHIVE_HTTP_READS = [
+  "index-status",
   "source-statistics",
   "archive-arrangement",
   "reading-status",

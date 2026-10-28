@@ -503,6 +503,11 @@ export const QUERY_TOOLS: readonly Tool[] = [
     object({}),
   ),
   tool(
+    "index_status",
+    "Read the durable post-publication index refresh queue and its last failure. Retry with rebuild_index. No initialization or external calls.",
+    object({}),
+  ),
+  tool(
     "folders_query",
     "Read folder tree and distinct direct/descendant counts, or preview deletion. operation list request {}; delete-preview request {folder_id}. Does not write.",
     object({

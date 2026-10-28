@@ -118,7 +118,14 @@ describe("incremental material indexing", () => {
         });
       };
       const first = await publish(text);
-      expect(first.index_status).toBe("updated");
+      expect(first.index_status).toBe("scheduled");
+      await vi.waitFor(
+        async () =>
+          expect(await env.app.indexRefreshStatus!()).toMatchObject({
+            status: "updated",
+          }),
+        { timeout: 10000 },
+      );
       const reads = vi.spyOn(env.app.documentRead, "withVerifiedVersion");
       try {
         await env.index.refresh();
@@ -157,7 +164,14 @@ describe("incremental material indexing", () => {
       await sameAsRebuild(env);
 
       const second = await publish(text + "\nSynthetic revised conclusion.\n");
-      expect(second.index_status).toBe("updated");
+      expect(second.index_status).toBe("scheduled");
+      await vi.waitFor(
+        async () =>
+          expect(await env.app.indexRefreshStatus!()).toMatchObject({
+            status: "updated",
+          }),
+        { timeout: 10000 },
+      );
       expect(second.document.document_version_id).not.toBe(
         first.document.document_version_id,
       );

@@ -506,7 +506,7 @@ Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要
 
 ### 4.6 并发、取消与性能边界
 
-当前 QueryApplication 为普通材料／库读取和检索各持有一个只读 SQLite worker；材料与知识检索共用后者，数量不随请求增加。冷检索的同步完整性校验及 `data_version` 变化后的再校验保持原义，不再占用库读取队列。应用关闭先 drain 两个 Context service，再关闭检索 worker 和材料 reader；启动失败复用同一清理路径。维护 Application 的索引写入继续使用原写 worker 与 admission，不跨连接移动 generation/repair 状态。HTTP 取消不终止共享 worker，已发送的同步 SQLite 工作仍需结算。
+当前 QueryApplication 为普通材料／库读取和检索各持有一个只读 SQLite worker；材料与知识检索共用后者，数量不随请求增加。冷检索的同步完整性校验及 `data_version` 变化后的再校验保持原义，不再占用库读取队列。应用关闭先 drain 两个 Context service，再关闭检索 worker 和材料 reader；启动失败复用同一清理路径。维护 Application 为索引构建持有一个独立 SQLite worker，避免整代完整性检查的同步工作堵住建档普通读写队列；全部 generation/repair 状态留在这个连接，共享 catalog 写入 admission，批量写入仍按同一规则串行。HTTP 取消不终止共享 worker，已发送的同步 SQLite 工作仍需结算。
 
 一次读取内部使用已提交 snapshot 和固定 artifact 引用，不混合两个 current 版本。跨页是否固定数据库 snapshot 取决于协议；现有 Library 分页只保证单页一致，新协议若固定索引 generation也不能假称底层业务永不变化。
 
@@ -527,6 +527,12 @@ Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要
 `retrieval-context.ts` 定义 `MaterialContextRequest/MaterialContextBundle`，固定查询、范围、类型、版本、字节预算与续读位置。当前无 tokenizer；请求与使用方式见[读取指南](../../guides/library-query.md#上下文检索)。
 
 材料投影使用当前 schema 中的 `retrieval_*` 表。显式重建完整验证来源，建档发布后的 refresh 可复用来源未变且验证通过的条目。构建者使用独立 generation 锁，catalog 写入按有界批次准入；开始和发布校验、source revision CAS 决定新 generation 是否可用。源变化返回过时，不切换旧 active。只读查询不隐式修复。
+
+发布后的刷新由 `retrieval/refresh.ts` 合并执行。文档接纳后仅等待刷新请求原子落盘，回执 `index_status=scheduled`；建档和 READY 不等待整库索引，也不依赖刷新成功。100 ms 的批次窗口合并相邻发布，运行中最多保留一个最新 source revision；一个 catalog 同时只有一个后台刷新者，底层 generation 锁继续约束显式重建。新请求的 revision 已被本次新代覆盖时不再补跑，否则执行最新一份待处理请求。失败保留现有 active generation 与文档；index-stale 且确认源 revision 前进时，合并最新源重跑，涵盖 render 后元数据步骤造成的变化。没有新源或新请求的同一失败不会循环重试；新发布或显式维护可再次请求。关闭时取消构建并将未完成请求保留，下一次维护 Application 启动恢复 scheduled/running 状态；只读查询不启动工作。
+
+非秘密状态保存为 `<catalog>.index-refresh.json`，属于可重建投影队列，不是资产、配置或新业务事实；不改变 catalog schema。只接受严格 schema、当前用户的 0600 普通单链接文件，拒绝符号链接；写入经独立短锁串行，临时文件 fsync 后原子 rename，再 fsync 目录。独立 worker 锁负责跨进程单刷新者，状态锁只保护短更新，不在扫描期间占用 catalog 写入准入。状态为 idle/scheduled/running/updated/failed，字段含 request_sequence、requested_revision、indexed_revision、请求/开始/结束时间与 technical_details.code；请求序号使同一源 revision 的后到请求在失败后仍可重试。原因码不含异常原文。坏状态返回 index-refresh-state-invalid，不阻止维护进程启动；显式成功重建可重置损坏 JSON，始终拒绝覆盖不安全的文件。
+
+HTTP `POST /api/v1/query/index-status`（request 为 `{}`）、CLI `maintenance index-status`、MCP `index_status` 共享此状态读取。重试使用现有 HTTP maintenance/rebuild-index、CLI `maintenance rebuild-index` 或 MCP `rebuild_index`；显式成功重建清除失败。排队后短命 CLI 进程退出会留下 scheduled 请求，长驻 Web 或下一次维护进程可续跑；需要立即完成时显式重建。没有就绪代仍返回 index-unavailable；源领先于 active 时继续返回 index-stale 缺口，不返回旧命中。scheduled 表示落后状态可见，不承诺刷新固定耗时。
 
 ### 4.10 处理器结果与混合 Context
 

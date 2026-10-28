@@ -67,6 +67,7 @@ export const QUERY_OPERATIONS = [
   "agent-sessions",
   "task-run",
   "source-statistics",
+  "index-status",
   "usage-estimate",
   "processor-runs",
   "literature-results",
@@ -128,6 +129,11 @@ async function readQuery(
   if (operation === "source-statistics") {
     if (!q.tasks || q.readiness.status !== "ready") unavailable();
     return q.tasks.sourceStatistics(value, signal);
+  }
+  if (operation === "index-status") {
+    operationRecord(value, []);
+    if (!q.indexRefreshStatus) unavailable();
+    return q.indexRefreshStatus();
   }
   if (q.readiness.status !== "ready" || !q.query) unavailable();
   if (

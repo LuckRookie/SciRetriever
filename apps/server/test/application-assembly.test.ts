@@ -593,7 +593,14 @@ describe("assembly of the unified completion entry", () => {
       // route.
       expect(
         application.acquisition.statuses.map((i) => i.source_name),
-      ).toEqual(["direct", "arxiv", "europe-pmc", "doi-landing", "browser"]);
+      ).toEqual([
+        "direct",
+        "arxiv",
+        "europe-pmc",
+        "doi-landing",
+        "sci-hub",
+        "browser",
+      ]);
       expect(
         application.acquisition.statuses.find(
           (item) => item.source_name === "browser",

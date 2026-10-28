@@ -14,6 +14,7 @@
 - [operations.ts](operations.ts)：操作合同。
 - [extraction.ts](extraction.ts)：提取合同。
 - [retrieval-context.ts](retrieval-context.ts)：材料检索上下文合同。
+- [index-refresh.ts](index-refresh.ts)：发布后全文索引的非秘密队列状态与严格解码；源 revision 和请求序号独立，失败只携带技术原因码。
 
 ## 放置边界
 

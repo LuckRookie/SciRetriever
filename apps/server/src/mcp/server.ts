@@ -440,6 +440,7 @@ export function createMcpServer(options: McpOptions = {}) {
       export_bibliography: "bibliography-export",
       inspect_task: "task-detail",
       status: "status",
+      index_status: "index-status",
       read_literature: "literature-read",
       read_task: "task-read",
       read_article_identity: "article-identity",

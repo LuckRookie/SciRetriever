@@ -20,7 +20,7 @@ it("recognizes the removed field by name without using, validating or echoing it
     const config = parseConfiguration(
       `[proofread]\nmax_calls_per_document=${value}\n`,
     );
-    expect(config.proofread).toEqual({ model: null });
+    expect(config.proofread).toEqual({ model: null, max_concurrent_pages: 3 });
     expect(configurationDiagnostics(config)).toMatchObject([
       {
         code: "configuration-option-removed",

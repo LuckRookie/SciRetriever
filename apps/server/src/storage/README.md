@@ -15,6 +15,7 @@
 - [artifact-layout.ts](artifact-layout.ts)：原始文件、解析与知识产物的分类目录、hash 分桶和真实扩展名；已有 catalog 路径优先复用。
 - [locking.ts](locking.ts)：文件锁与写入协作。
 - [write-admission.ts](write-admission.ts)：写入准入。
+- [retrieval-refresh.ts](retrieval-refresh.ts)：catalog 旁的非秘密索引刷新队列状态，严格读取、原子替换和写入串行化；不保存文献正文或配置。
 - [processor-results.ts](processor-results.ts)：不可变算子结果/集合、固定依赖与可重建查询投影，负责 summary 引用固定范围与真实缺失的发布/回读核验；指定结果重建时同时覆盖其快照 map 依赖，避免逐篇结果缺少投影使检索过期。
 
 ## 放置边界

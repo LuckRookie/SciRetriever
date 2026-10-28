@@ -181,6 +181,7 @@ describe("TypeScript configuration owner", () => {
       );
       expect(published.configuration.proofread).toEqual({
         model: proofread.model,
+        max_concurrent_pages: proofread.max_concurrent_pages,
       });
       await expect(
         owner.publishConfiguration(
@@ -200,7 +201,10 @@ describe("TypeScript configuration owner", () => {
       expect(
         (await new TypeScriptConfigurationOwner(home).read()).configuration
           .proofread,
-      ).toEqual({ model: proofread.model });
+      ).toEqual({
+        model: proofread.model,
+        max_concurrent_pages: proofread.max_concurrent_pages,
+      });
     } finally {
       await rm(home, { recursive: true, force: true });
     }

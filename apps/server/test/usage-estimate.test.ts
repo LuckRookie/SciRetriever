@@ -242,7 +242,7 @@ it(
         await sha256(
           canonicalJsonBytes({
             method: "archive-arrange-v2",
-            proofread: e.app.configuration.proofread,
+            proofread: { model: e.app.configuration.proofread.model },
             models: e.app.configuration.models,
             analyze: e.app.configuration.analyze,
             tags: e.app.configuration.tags,

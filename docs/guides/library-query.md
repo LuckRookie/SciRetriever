@@ -61,6 +61,8 @@ await reader.close();
 
 材料索引缺失、过时或损坏会分别报告 `index-unavailable`、`index-stale`、`index-corrupt`。显式执行 `sciretriever maintenance rebuild-index --json` 修复材料投影；结果索引维护由[处理器入口](knowledge-processors.md)提供。查询不会调用修复。索引及来源/结果证据的精确合同见[检索与上下文](../architecture/technical/06-retrieval-context.md#4-知识检索与上下文组装)。
 
+建档发布会将全文索引刷新排队，固定全文与建档完成无需等待。`sciretriever maintenance index-status` 返回 scheduled/running/updated/failed 等状态、源与已索引 revision 和技术原因；失败可用上述重建命令重试。索引刷新期间只读查询仍遵守过时检查，不返回未核实的旧命中。
+
 ## 读取知识与准备外部提取
 
 总结和综合通过 `processorRead` 读取固定结果、记录、证据及导出；没有单独的旧 KnowledgeArtifact 分析/默认指针接口。操作示例见[知识加工指南](knowledge-processors.md)。

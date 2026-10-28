@@ -194,6 +194,7 @@ function usage(options: CliOptions): CliResult {
     "  tags list|search|show|changes|consolidate|backfill; tags edit|undo --request FILE; literature tags ID / set|lock --request FILE\n" +
     "  storage schema-inspect|schema-init --catalog PATH\n" +
     "  maintenance rebuild-index\n" +
+    "  maintenance index-status\n" +
     "  maintenance publisher-names (--all | --literature-id ID... | --query TEXT) [--ai] [--scan-limit N] [--cursor CURSOR] [--max-ai-requests N] [--output PATH]\n" +
     "  maintenance publisher-names-accept --report FILE|- --name NAME [--name NAME...]\n";
   options.stdout?.(text);
@@ -947,6 +948,7 @@ async function execute(
     }
   }
   const queryRoutes: Readonly<Record<string, QueryOperation>> = {
+    "maintenance index-status": "index-status",
     "literature metadata-fields": "metadata-fields",
     "jobs list": "task-list",
     "jobs inspect": "task-detail",
@@ -999,11 +1001,15 @@ async function execute(
   ) {
     const source = argument(args, "--request");
     if (
-      queryRoutes[queryKey] !== "status" &&
+      !["status", "index-status"].includes(queryRoutes[queryKey]!) &&
       (!source || args.length !== 4 || args[2] !== "--request")
     )
       invalidInput();
-    if (queryRoutes[queryKey] === "status" && args.length !== 2) invalidInput();
+    if (
+      ["status", "index-status"].includes(queryRoutes[queryKey]!) &&
+      args.length !== 2
+    )
+      invalidInput();
     const bytes = source
       ? await inputBytes(source, options, 1024 * 1024 + 4096)
       : new TextEncoder().encode("{}");

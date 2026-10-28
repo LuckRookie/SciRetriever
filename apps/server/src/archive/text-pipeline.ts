@@ -236,7 +236,8 @@ export class ArchiveTextPipeline {
     readonly pdf: PdfPages,
     readonly runtime: DshAgentRuntime,
     readonly profile: "pipeline" | "vlm-engine",
-    readonly refreshIndex: (signal: AbortSignal) => Promise<unknown>,
+    readonly scheduleIndex: () => Promise<unknown>,
+    readonly maxConcurrentPages = 3,
   ) {}
   async source(asset: string, mode: string, signal?: AbortSignal) {
     const choices = await this.raw.current(asset, signal),
@@ -421,6 +422,9 @@ export class ArchiveTextPipeline {
       page: PageProofreadRecord,
       reused: boolean,
       usage: ArchiveModelUsage,
+      counts: NonNullable<
+        import("@sciretriever/contracts").ArchiveStepReceipt["pages"]
+      >,
     ) => Promise<void>,
   ) {
     const state = await this.storage.decisions(asset, signal),
@@ -509,6 +513,7 @@ export class ArchiveTextPipeline {
         this.runtime,
         this.pdf,
         cache,
+        this.maxConcurrentPages,
       ).build(
         source,
         old.bundle.arrangement,
@@ -753,8 +758,8 @@ export class ArchiveTextPipeline {
     let index_status = "unchanged";
     if (receipt.default_updated) {
       try {
-        await this.refreshIndex(signal ?? new AbortController().signal);
-        index_status = "updated";
+        await this.scheduleIndex();
+        index_status = "scheduled";
       } catch {
         index_status = "failed";
       }
