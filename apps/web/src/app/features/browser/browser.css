@@ -244,9 +244,57 @@
   .browser-frame[data-readonly] {
     cursor: default;
   }
-  .browser-frame:focus-visible {
+  /* Keys go to a hidden field over the picture; its focus shows on the picture. */
+  .browser-frame-wrap:focus-within .browser-frame {
     outline: 2px solid var(--focus);
     outline-offset: 3px;
+  }
+  .browser-frame-wrap canvas.browser-frame {
+    /* The box keeps the frame's own ratio, so pointer positions map 1:1 to frame pixels. */
+    object-fit: fill;
+    touch-action: none;
+  }
+  .browser-frame-wrap:not([data-painted]) {
+    width: min(960px, 100%);
+    aspect-ratio: 16 / 9;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+  }
+  .browser-frame-wrap:not([data-painted]) canvas.browser-frame {
+    visibility: hidden;
+  }
+  .browser-keyboard {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    border: 0;
+    opacity: 0;
+    resize: none;
+    pointer-events: none;
+  }
+  .browser-frame-status {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    background: var(--surface-raised);
+    color: var(--fg2);
+    text-align: center;
+  }
+  .browser-frame-status p {
+    margin: 0;
+  }
+  /* A picture already shown stays visible under a reconnect notice. */
+  .browser-frame-wrap[data-painted] .browser-frame-status {
+    inset: auto 0 0;
+    place-content: start;
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    text-align: left;
   }
   .browser-feedback {
     min-height: 1.5em;

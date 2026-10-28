@@ -1208,21 +1208,28 @@ export async function startWorkbenchHttp(
           "X-Accel-Buffering": "no",
         });
         streams.add(response);
+        let last = "",
+          sentAt = 0;
         const send = () => {
           if (!clients.has(clientId) || !access.valid(grant.authSessionId)) {
             response.end();
             return;
           }
-          grant.touched = Date.now();
+          const value = JSON.stringify(projectedView(clientId)),
+            now = Date.now();
+          // Push a changed projection promptly and an unchanged one as a 3 s heartbeat.
+          if (value === last && now - sentAt < 3000) return;
+          grant.touched = now;
           // A slow viewer gets the current projection after drain, never an unbounded frame queue.
-          if (!response.destroyed && !response.writableNeedDrain)
-            response.write(
-              `event: view\ndata: ${JSON.stringify(projectedView(clientId))}\n\n`,
-            );
+          if (!response.destroyed && !response.writableNeedDrain) {
+            response.write(`event: view\ndata: ${value}\n\n`);
+            last = value;
+            sentAt = now;
+          }
         };
         send();
-        // Metadata heartbeat only: viewing never triggers an Agent observation.
-        const timer = setInterval(send, 3000);
+        // Metadata only: viewing never triggers an Agent observation.
+        const timer = setInterval(send, 500);
         timer.unref();
         const archiveStop = new AbortController();
         let archiveBusy = false,

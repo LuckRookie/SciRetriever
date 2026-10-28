@@ -78,11 +78,19 @@
   - 用回环装置复测本机延迟。
   - 在途 1 帧与 2 帧各测一次，结果写进交接记录。
   - 证据（2026-10-28）：回环同 fixture、第二个 headed Cloak 与旧管线复测已保存；最终 1/2 在途数据及与旧 30/58 ms 基线的差值见 `sandbox/reports/2026-10-28-plan17-04/backend.md`。“与实验对照”列出代次、首帧、停屏在途帧和冷画布耗时。`pnpm quick` 通过（含 Claude 的 6780daa）；Full、观看页和 Owner 实网验收留给 07/4.7/4.8。
-- [ ] **4.7 观看页**（Claude）
+- [x] **4.7 观看页**（Claude）
   - canvas 画面按视口缩放；输入采集，包括输入法组合与粘贴。
   - 控制状态清楚：“你正在操作”、交还。
   - 断线后重连，没有画面时显示状态。
   - 设计样例库用合成投屏源补各状态，截图后交 R-04。
+  - 证据（2026-10-28）：
+    - `screencast-client.ts` 管 WebSocket、画面与 ACK：只画当前订阅与代次的帧，画完才 ACK；第一次按下、滚轮、按键或输入带上帧的文档身份去取得控制，之后的输入等这次回执再按序发出；断线后重连，不重放输入。
+    - `ScreencastStage.tsx` 是画布与隐藏输入框：指针按 JPEG 像素换算，移动只在已控制时发送；键盘、粘贴、输入法组合与提交分别走 key、paste、composition、text。
+    - 观看页去掉旧的拉图与“页面输入框”表单；“你在操作 · Agent 已暂停”“正在交还”“另一个窗口正在操作”跟着投屏状态走；关闭与离开先交还，交还失败时保留窗口与控制。没有画面、重连中显示状态，原因码在技术详情。
+    - 测试：`next-browser-control.test.ts` 改为合成投屏源，验证观看不接管、第一次按下取得控制、交还失败保留、文档已换时这次按下不落到新页、离开页面只断开不交还；`next-parallel-browser.test.ts`、`browser-workbench`、`design-samples-browser`、`workbench-http`、`screencast-http` 共 14 项通过。
+    - R-04：`screencast-viewer-samples.test.ts`（设 `SCREENCAST_SAMPLE_OUTPUT` 才运行）生成进行中、你在操作、被其他窗口接管、断线重连、没有画面五种状态 × 1440 / 390，共 10 张，在 `sandbox/reports/design-samples/2026-10-28-r04/`，Claude 自审代 R-04。
+    - 顺带修复：04 把工作台视图推送从 750 ms 改成 3 秒，会话状态与动作记录最多晚 3 秒；现改为每 500 ms 比较一次，有变化就推送，3 秒心跳不变（`http.ts`）。
+  - 残余：真实 Cloak 的 `next-live-browser.test.ts` 查出 04 的缺陷：已有窗口观看静止页时，第二个观看者收不到首帧。已派 worker 修，测试按正确行为断言，修复前失败。
 - [ ] **4.8 Owner 实际观看**〔须 G-deploy〕
   - 部署后，Owner 在 4174 观看一次真实获取，并亲手点、滚、输入。
   - 按 P25 的检验确认。

@@ -3,14 +3,26 @@ import {
   loginWorkbenchPage,
 } from "../../server/test/workbench-auth-fixture.js";
 import { nextAssets } from "./next-workspace-fixture.js";
-import { chromium } from "playwright";
+import { chromium, type Page, type WebSocketRoute } from "playwright";
 import { expect, it, vi } from "vitest";
-import { WorkbenchSession } from "../../server/src/workbench/session.js";
 import { startWorkbenchHttp } from "../../server/src/workbench/http.js";
-import { FIXTURE_LITERATURE } from "../../server/src/workbench/synthetic-fixture.js";
+import { createSyntheticScreencastSession } from "../../server/src/workbench/synthetic-screencast.js";
+
+/** Pixels actually drawn on the live canvas (0 before the first frame). */
+const painted = (page: Page) =>
+  page.locator("canvas.browser-frame").evaluate((node) => {
+    const canvas = node as HTMLCanvasElement;
+    if (canvas.width < 2) return 0;
+    const data = canvas
+      .getContext("2d")!
+      .getImageData(0, 0, canvas.width, canvas.height).data;
+    let n = 0;
+    for (let i = 3; i < data.length; i += 4 * 97) if (data[i]) n++;
+    return n;
+  });
 
 it.each(["no-preference", "reduce"] as const)(
-  "observes without taking control, binds the first click, rejects stale replay and confirms release before closing (%s)",
+  "observes without taking control, binds the first press, rejects a replaced document and confirms release before closing (%s)",
   async (reducedMotion) => {
     const browser = await chromium.launch({
       ...(process.env.SCIRETRIEVER_BROWSER_EXECUTABLE
@@ -18,41 +30,7 @@ it.each(["no-preference", "reduce"] as const)(
         : {}),
       headless: true,
     });
-    const imagePage = await browser.newPage({
-      viewport: { width: 800, height: 600 },
-    });
-    await imagePage.setContent(
-      "<main>Synthetic browser control fixture</main>",
-    );
-    const screenshot = await imagePage.screenshot({ type: "jpeg" });
-    await imagePage.close();
-    let generation = 1;
-    const apply = vi.fn(async () => undefined);
-    const session = new WorkbenchSession(
-      FIXTURE_LITERATURE.literature_id,
-      {
-        id: "direct-click-page",
-        title: async () => "Direct click fixture",
-        url: () => "http://127.0.0.1/fixture",
-        close: async () => undefined,
-        apply,
-        snapshot: async () => ({
-          document_generation: generation,
-          title: "Direct click fixture",
-          url: "http://127.0.0.1/fixture",
-          text: "Synthetic",
-          viewport: { width: 800, height: 600, device_scale_factor: 1 },
-          screenshot,
-        }),
-      },
-      {
-        max_actions: 10,
-        max_model_calls: 1,
-        max_retries: 1,
-        max_bytes: 1024,
-        deadline_ms: 60000,
-      },
-    );
+    const { session, source } = createSyntheticScreencastSession();
     await session.refresh();
     const assets = await nextAssets();
     const server = await startWorkbenchHttp({
@@ -68,11 +46,41 @@ it.each(["no-preference", "reduce"] as const)(
       page.setDefaultTimeout(5000);
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
-      await page.route("**/*", (route) =>
-        new URL(route.request().url()).origin === server.origin
-          ? route.continue()
-          : route.abort(),
-      );
+      // A seam over the real socket: frames can be held back and a release refused,
+      // while every other message reaches the production relay unchanged.
+      let failRelease = false,
+        holdFrames = false;
+      await page.routeWebSocket(/\/api\/screencast$/u, (ws: WebSocketRoute) => {
+        const relay = ws.connectToServer();
+        ws.onMessage((message) => {
+          const value =
+            typeof message === "string" ? JSON.parse(message) : null;
+          if (failRelease && value?.type === "release") {
+            ws.send(
+              JSON.stringify({
+                type: "input-result",
+                seq: value.seq,
+                status: "rejected",
+                control_epoch: value.control_epoch,
+                problem: {
+                  display: "error",
+                  technical_details: {
+                    diagnostics: [
+                      { code: "synthetic-release-failure", scope: "runtime" },
+                    ],
+                  },
+                },
+              }),
+            );
+            return;
+          }
+          relay.send(message);
+        });
+        relay.onMessage((message) => {
+          if (holdFrames && typeof message !== "string") return;
+          ws.send(message);
+        });
+      });
       await loginWorkbenchPage(page, server.origin);
       await page.goto(`${server.origin}/?view=task`);
       await page
@@ -82,43 +90,28 @@ it.each(["no-preference", "reduce"] as const)(
       await page
         .getByRole("button", { name: "观看 Agent", exact: true })
         .click();
-      await expect
-        .poll(() =>
-          page.getByRole("img", { name: "真实 Browser 页面" }).isVisible(),
-        )
-        .toBe(true);
+      const picture = page.getByRole("img", { name: "Browser 页面实时画面" });
+      await expect.poll(() => painted(page)).toBeGreaterThan(0);
+      // Watching, even with the pointer over the picture, never takes control.
+      await picture.hover({ position: { x: 60, y: 60 } });
       expect(session.view().control.controller_id).toBeNull();
-      await page
-        .getByRole("img", { name: "真实 Browser 页面" })
-        .click({ position: { x: 30, y: 30 } });
-      await expect.poll(() => apply.mock.calls.length).toBe(1);
+      expect(source.inputs).toBe(0);
+
+      await picture.click({ position: { x: 30, y: 30 } });
+      await expect.poll(() => source.inputs).toBeGreaterThanOrEqual(2);
       await expect
         .poll(() => page.locator(".browser-control-note").textContent())
         .toContain("你在操作 · Agent 已暂停");
       const controller = session.view().control.controller_id;
-      await page.route("**/api/control?*", async (route) => {
-        if (route.request().postDataJSON().kind === "release")
-          await route.fulfill({
-            status: 503,
-            json: { code: "synthetic-release-failure" },
-          });
-        else await route.continue();
-      });
+      expect(controller).not.toBeNull();
+
+      // A refused hand-back keeps the dialog, the control and the URL.
+      failRelease = true;
       await page.getByRole("button", { name: "返回会话列表" }).click();
       await expect
-        .poll(() =>
-          page
-            .getByRole("status")
-            .filter({ hasText: /交还未完成|页面发生变化/ })
-            .textContent(),
-        )
+        .poll(() => page.locator(".browser-feedback").textContent())
         .toContain("交还未完成");
       expect(session.view().control.controller_id).toBe(controller);
-      expect(
-        await page.getByRole("dialog", { name: "观看 Agent" }).isVisible(),
-      ).toBe(true);
-      // Browser back is a navigation attempt too: a failed release keeps
-      // both the controlled view and its confirmed URL/history entry.
       await page.goBack();
       await expect
         .poll(() => new URL(page.url()).searchParams.get("view"))
@@ -127,104 +120,37 @@ it.each(["no-preference", "reduce"] as const)(
         await page.getByRole("dialog", { name: "观看 Agent" }).isVisible(),
       ).toBe(true);
       expect(session.view().control.controller_id).toBe(controller);
-      await page.unroute("**/api/control?*");
+
+      failRelease = false;
       await page.getByRole("button", { name: "返回会话列表" }).click();
       await expect
         .poll(() => page.getByRole("dialog", { name: "观看 Agent" }).count())
         .toBe(0);
       expect(session.view().control.controller_id).toBeNull();
+
+      // The first press is checked against the document it was aimed at.
       await page
         .getByRole("button", { name: "观看 Agent", exact: true })
         .click();
-      await page.getByRole("img", { name: "真实 Browser 页面" }).waitFor();
-      // The server applies input before its acknowledgement reaches the UI.
-      // A back navigation during that window must retain the controlled dialog;
-      // only a confirmed input may be followed by a release-and-leave attempt.
-      let acknowledgeAction: () => void = () => undefined;
-      const acknowledgement = new Promise<void>((resolve) => {
-        acknowledgeAction = resolve;
-      });
-      const actionPath = "**/api/action?*";
-      await page.route(actionPath, async (route) => {
-        const response = await route.fetch();
-        await acknowledgement;
-        await route.fulfill({ response });
-      });
-      try {
-        await page
-          .getByRole("img", { name: "真实 Browser 页面" })
-          .click({ position: { x: 30, y: 30 } });
-        await expect.poll(() => apply.mock.calls.length).toBe(2);
-        await page.goBack();
-        await expect
-          .poll(() => new URL(page.url()).searchParams.get("view"))
-          .toBe("web");
-        expect(session.view().control.controller_id).toBe(controller);
-        expect(
-          await page.getByRole("dialog", { name: "观看 Agent" }).isVisible(),
-        ).toBe(true);
-      } finally {
-        acknowledgeAction();
-      }
+      await expect.poll(() => painted(page)).toBeGreaterThan(0);
+      holdFrames = true;
+      source.navigate();
+      const before = source.inputs;
+      await picture.click({ position: { x: 40, y: 40 } });
       await expect
-        .poll(() =>
-          page.getByRole("button", { name: "返回会话列表" }).isEnabled(),
-        )
-        .toBe(true);
-      await page.unroute(actionPath);
-      await page.goBack();
-      await expect
-        .poll(() => new URL(page.url()).searchParams.get("view"))
-        .toBe("task");
-      await expect.poll(() => session.view().control.controller_id).toBeNull();
-      await expect
-        .poll(() => page.getByRole("dialog", { name: "观看 Agent" }).count())
-        .toBe(0);
-      await page.goForward();
-      await expect
-        .poll(() => new URL(page.url()).searchParams.get("view"))
-        .toBe("web");
-      await page
-        .getByRole("button", { name: "观看 Agent", exact: true })
-        .click();
-      await expect
-        .poll(() =>
-          page.getByRole("img", { name: "真实 Browser 页面" }).isVisible(),
-        )
-        .toBe(true);
-      await page.route(
-        "**/api/control?*",
-        async (route) => {
-          if (route.request().postDataJSON().kind === "takeover") {
-            generation += 1;
-            await session.refresh();
-          }
-          await route.continue();
-        },
-        { times: 1 },
-      );
-      await page
-        .getByRole("img", { name: "真实 Browser 页面" })
-        .click({ position: { x: 40, y: 40 } });
-      await expect
-        .poll(() =>
-          page
-            .getByRole("status")
-            .filter({ hasText: /交还未完成|页面发生变化/ })
-            .textContent(),
-        )
-        .toContain("页面发生变化");
-      expect(apply).toHaveBeenCalledTimes(2);
-      await page
-        .getByRole("img", { name: "真实 Browser 页面" })
-        .click({ position: { x: 40, y: 40 } });
-      await expect.poll(() => apply.mock.calls.length).toBe(3);
+        .poll(() => page.locator(".browser-feedback").textContent())
+        .toContain("页面没有接受这次操作");
+      // The Agent is paused by the attempt, but the press never reached the new page.
+      expect(source.inputs).toBe(before);
+      holdFrames = false;
+      source.emit();
+      await picture.click({ position: { x: 40, y: 40 } });
+      await expect.poll(() => source.inputs).toBeGreaterThan(before);
+
+      // Leaving the page detaches this window; it is never a successful release.
       const disconnected = session.view().control.controller_id!;
       const released = vi.spyOn(session, "release");
       const detached = vi.spyOn(session, "detach");
-      // Exercise the real unload handler and await its receipt before destroying
-      // the renderer. Whether page.close delivers keepalive before resolving is
-      // browser-specific; the contract is detach, never successful Agent release.
       await page.evaluate(() =>
         window.dispatchEvent(new PageTransitionEvent("pagehide")),
       );
@@ -232,7 +158,6 @@ it.each(["no-preference", "reduce"] as const)(
       expect(detached).toHaveBeenCalledWith(disconnected);
       await page.close();
       expect(released).not.toHaveBeenCalled();
-      expect(session.view().control.controller_id).toBeNull();
       expect(errors).toEqual([]);
     } finally {
       await server.close();

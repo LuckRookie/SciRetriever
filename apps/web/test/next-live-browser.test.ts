@@ -128,10 +128,15 @@ describe("live workbench on the installed Cloak runtime", () => {
         await loginWorkbenchPage(desktop, workbench.origin);
         await desktop.goto(`${workbench.origin}/?view=web`);
         await openWatch(desktop);
+        // Viewing never observes (ADR 0042); the Agent's observation is what lists the
+        // page's links and buttons, so take one here as the Agent would.
+        await workbench.session.refresh();
         await desktop.waitForFunction(
           () =>
-            document.querySelector<HTMLImageElement>(".browser-frame")
-              ?.naturalWidth,
+            // The live picture, and the Agent's first observation of the same page.
+            document.querySelector(".browser-frame-wrap[data-painted]") &&
+            document.querySelector(".browser-document-title")?.textContent !==
+              "等待当前页面",
         );
         await desktop
           .getByRole("button", { name: "暂停 Agent", exact: true })
@@ -196,6 +201,17 @@ describe("live workbench on the installed Cloak runtime", () => {
             },
           )
           .toContain("· 2");
+        // The desktop keeps working on the page while the second window opens: its
+        // moves hold the idle hand-back, so the takeover is taken from an active controller.
+        const desktopCanvas = desktop.locator("canvas.browser-frame");
+        let step = 0;
+        const working = setInterval(() => {
+          step = (step + 1) % 2;
+          // hover scrolls the picture into view; the dialog may have scrolled it off.
+          void desktopCanvas
+            .hover({ position: { x: 20 + step * 4, y: 20 }, timeout: 900 })
+            .catch(() => undefined);
+        }, 1000);
         const mobile = await context.newPage();
         mobile.setDefaultTimeout(10000);
         await mobile.setViewportSize({ width: 390, height: 844 });
@@ -203,11 +219,10 @@ describe("live workbench on the installed Cloak runtime", () => {
         // Both pages share one authenticated browser session; re-login revokes its existing grants.
         await mobile.goto(`${workbench.origin}/?view=web`);
         await openWatch(mobile);
-        await mobile.waitForFunction(
-          () =>
-            document.querySelector<HTMLImageElement>(".browser-frame")
-              ?.naturalWidth,
+        await mobile.waitForFunction(() =>
+          document.querySelector(".browser-frame-wrap[data-painted]"),
         );
+        clearInterval(working);
         await mobile
           .getByRole("button", { name: "暂停 Agent", exact: true })
           .click();
@@ -215,7 +230,12 @@ describe("live workbench on the installed Cloak runtime", () => {
           .poll(() => desktop.locator(".browser-control-note").innerText(), {
             timeout: 10000,
           })
-          .toBe("另一个操作者正在控制");
+          .toBe("另一个窗口正在操作");
+        // A fresh observation lists the page's buttons again in both windows.
+        await workbench.session.refresh();
+        await desktop
+          .getByRole("button", { name: "Download PDF", exact: true })
+          .waitFor();
         expect(
           await desktop
             .getByRole("button", { name: "Download PDF", exact: true })

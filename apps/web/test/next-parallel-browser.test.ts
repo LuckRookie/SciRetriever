@@ -287,7 +287,11 @@ it("selects the correct live article, explicitly returns control on close, while
       .toContain("PDF 已入库");
     await expect
       .poll(() => page.locator(".browser-log").textContent())
-      .toContain("资源清理未完成：浏览器网络连接未能及时关闭");
+      .toContain("浏览器资源清理未完成");
+    // The cause stays in the technical details, not the notice.
+    expect(await page.locator(".browser-log").textContent()).toContain(
+      "browser-network-drain-timeout",
+    );
     expect(workbench.view().session_outcome).toEqual({
       kind: "published",
       receipt_id: "publication-web-a",

@@ -19,11 +19,9 @@ import {
   Icon,
   PageHeader,
   PageNote,
-  Select,
   Skeleton,
   TechDetails,
   TextArea,
-  TextField,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import { registerNavigationGuard, useUrlState } from "../../data/url.js";
@@ -31,6 +29,11 @@ import { errorMessage, serviceMessage } from "../../strings.js";
 import { ProblemDetails, problemText } from "../sources/problem.js";
 import { randomId } from "../../../browser-platform.js";
 import { candidateStatus } from "../../data/candidate-status.js";
+import {
+  ScreencastStage,
+  type ScreencastStageHandle,
+} from "./ScreencastStage.js";
+import type { ScreencastState } from "./screencast-client.js";
 import { readLiterature } from "../../data/library.js";
 import {
   attemptsDetail,
@@ -452,15 +455,9 @@ function Viewer({
     lock = useRef(false),
     [feedback, setFeedback] = useState("");
   const lastInput = useRef(0);
-  const [text, setText] = useState(""),
-    [target, setTarget] = useState(""),
-    [guidance, setGuidance] = useState("");
-  const [frame, setFrame] = useState<{
-      url: string;
-      observed: WorkbenchObservation;
-    } | null>(null),
-    frameUrl = useRef<string | null>(null),
-    image = useRef<HTMLImageElement>(null);
+  const [guidance, setGuidance] = useState("");
+  const stage = useRef<ScreencastStageHandle>(null),
+    [cast, setCast] = useState<ScreencastState | null>(null);
   const bound = useCallback(() => {
     const current = api.view;
     if (
@@ -476,7 +473,12 @@ function Viewer({
     api.view.article_id === articleId &&
     api.view.control.controller_id === api.clientId;
   const active = view.session_id === sessionId && view.article_id === articleId;
-  const human = active && view.control.controller_id === api.clientId;
+  // The screencast answers first: its control state changes before the next view arrives.
+  const human =
+    cast?.control === "controlling" ||
+    (active &&
+      cast?.control !== "watching" &&
+      view.control.controller_id === api.clientId);
   const observed = active ? view.observation : null;
   const current = view.sessions?.find((s) => s.session_id === sessionId);
   const actions: readonly WorkbenchActionRecord[] = active
@@ -501,6 +503,21 @@ function Viewer({
     },
     [api, articleId, bound, sessionId],
   );
+  /**
+   * Hands the page back: through the screencast when this window controls it there,
+   * otherwise through the control endpoint (the Agent was paused without input).
+   */
+  const releaseControl = async () => {
+    if (stage.current?.state.control === "controlling")
+      await stage.current.release();
+    else if (mine()) await control("release");
+  };
+  const stillMine = () =>
+    stage.current?.state.control === "controlling" ||
+    (stage.current?.state.control !== "watching" && mine());
+  // The navigation guard is registered once; it reads the current hand-back functions.
+  const handback = useRef({ releaseControl, stillMine });
+  handback.current = { releaseControl, stillMine };
   const run = async (action: () => Promise<void>) => {
     if (lock.current) return;
     lock.current = true;
@@ -517,11 +534,11 @@ function Viewer({
   const close = async () => {
     if (lock.current) return;
     await run(async () => {
-      if (mine()) {
+      if (stillMine()) {
         setFeedback("正在交还控制权…");
         try {
-          await control("release");
-          if (mine()) throw new Error("交还未确认");
+          await releaseControl();
+          if (stillMine()) throw new Error("交还未确认");
         } catch (error) {
           throw new Error(
             `交还未完成：${errorMessage(error)}。请重试，或保留页面。`,
@@ -542,15 +559,10 @@ function Viewer({
         lock.current = true;
         setBusy(true);
         try {
-          if (
-            api.view?.session_id === sessionId &&
-            api.view.article_id === articleId &&
-            api.view.control.controller_id === api.clientId
-          ) {
+          if (handback.current.stillMine()) {
             setFeedback("正在交还控制权…");
-            await control("release");
-            if (api.view.control.controller_id === api.clientId)
-              throw new Error("交还未确认");
+            await handback.current.releaseControl();
+            if (handback.current.stillMine()) throw new Error("交还未确认");
           }
           onClose();
           return true;
@@ -565,69 +577,6 @@ function Viewer({
         }
       }),
     [api, articleId, control, onClose, sessionId],
-  );
-  const frameData = useQuery({
-    queryKey: [
-      "browser",
-      "frame",
-      sessionId,
-      observed?.frame_seq,
-      observed?.page_id,
-    ],
-    queryFn: async ({ signal }) => {
-      const observation = observed;
-      if (!observation) throw new Error("尚无画面");
-      const response = await api.fetch(
-        `/api/frame?session_id=${encodeURIComponent(sessionId)}&frame_seq=${observation.frame_seq}`,
-        { signal },
-      );
-      if (!response.ok) throw new Error("画面暂不可用");
-      return { blob: await response.blob(), observation };
-    },
-    enabled: active && !!observed?.frame_available && !busy,
-    gcTime: 0,
-    retry: false,
-  });
-  useEffect(() => {
-    const data = frameData.data;
-    if (!data) return;
-    let disposed = false;
-    const url = URL.createObjectURL(data.blob),
-      next = new Image();
-    next.src = url;
-    void next
-      .decode()
-      .then(() => {
-        const latest = api.view?.observation;
-        if (
-          disposed ||
-          latest?.session_id !== sessionId ||
-          latest.page_id !== data.observation.page_id ||
-          latest.frame_seq !== data.observation.frame_seq
-        ) {
-          URL.revokeObjectURL(url);
-          return;
-        }
-        const old = frameUrl.current;
-        frameUrl.current = url;
-        setFrame({ url, observed: data.observation });
-        if (old) URL.revokeObjectURL(old);
-      })
-      .catch((error) => {
-        URL.revokeObjectURL(url);
-        if (!disposed) setFeedback(`等待画面更新：${errorMessage(error)}`);
-      });
-    return () => {
-      disposed = true;
-      if (frameUrl.current !== url) URL.revokeObjectURL(url);
-    };
-  }, [api, frameData.data, sessionId]);
-  useEffect(
-    () => () => {
-      if (frameUrl.current) URL.revokeObjectURL(frameUrl.current);
-      frameUrl.current = null;
-    },
-    [],
   );
   const input = async (
     action: OperatorInput,
@@ -667,29 +616,7 @@ function Viewer({
       });
       api.accept(reply.view);
       setFeedback("页面操作已受理");
-      if (action.kind === "type-text") setText("");
     });
-  const inputRef = useRef(input);
-  inputRef.current = input;
-  useEffect(() => {
-    const node = image.current;
-    if (!node) return;
-    const wheel = (event: WheelEvent) => {
-      if (!frame || api.view?.control.controller_id !== api.clientId) return;
-      event.preventDefault();
-      void inputRef.current(
-        {
-          kind: "scroll-surface",
-          delta_x: Math.max(-2000, Math.min(2000, event.deltaX)),
-          delta_y: Math.max(-2000, Math.min(2000, event.deltaY)),
-          revision: frame.observed.observation_revision,
-        },
-        frame.observed,
-      );
-    };
-    node.addEventListener("wheel", wheel, { passive: false });
-    return () => node.removeEventListener("wheel", wheel);
-  }, [api, frame]);
   const tabs = useQuery({
     queryKey: ["browser", "tabs", sessionId],
     queryFn: async ({ signal }) => {
@@ -710,26 +637,23 @@ function Viewer({
     enabled: active && view.mode !== "production",
     refetchInterval: 2000,
   });
-  const editable =
-      observed?.elements.filter((element) => element.editable) ?? [],
-    selectedTarget = editable.some((element) => element.element_id === target)
-      ? target
-      : (editable[0]?.element_id ?? "");
   // A finished flow keeps its last frame for review; input would be refused.
   const readOnly = ended(view) || current?.phase === "closed";
+  // The screencast reports a takeover before the next view does.
   const otherController =
-    !human &&
-    !!view.control.controller_id &&
-    !view.control.controller_id.startsWith("agent-");
+    cast?.control === "taken-over" ||
+    (!human &&
+      !!view.control.controller_id &&
+      !view.control.controller_id.startsWith("agent-"));
   const status = !active
     ? "文章会话已切换"
     : otherController
-      ? "另一个操作者正在控制"
+      ? "另一个窗口正在操作"
       : current
         ? ""
         : (states[view.state] ?? view.state);
   // The Agent's pointer: its latest located action on the page now shown.
-  const pointer = frame
+  const pointer = observed
     ? [...actions]
         .reverse()
         .find(
@@ -738,10 +662,9 @@ function Viewer({
             action.point &&
             action.viewport &&
             (action.page_id === undefined ||
-              action.page_id === frame.observed.page_id) &&
+              action.page_id === observed.page_id) &&
             (action.document_generation === undefined ||
-              action.document_generation ===
-                frame.observed.document_generation),
+              action.document_generation === observed.document_generation),
         )
     : undefined;
   // Pressing the page pauses the Agent; it resumes after the person stops.
@@ -752,6 +675,8 @@ function Viewer({
       return;
     }
     if (!lastInput.current) lastInput.current = Date.now();
+    // The clock stood still while someone else had control; restart it now.
+    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(timer);
   }, [human]);
@@ -768,9 +693,7 @@ function Viewer({
       !lock.current
     ) {
       lastInput.current = now;
-      void run(async () => {
-        await control("release");
-      });
+      void run(releaseControl);
     }
   });
   return (
@@ -796,14 +719,20 @@ function Viewer({
             <Button
               onPress={() =>
                 run(async () => {
-                  await control("release");
-                  if (mine()) throw new Error("交还未确认");
+                  await releaseControl();
+                  if (stillMine()) throw new Error("交还未确认");
                 })
               }
             >
               现在继续
             </Button>
           </>
+        ) : cast?.control === "returning" ? (
+          <p className="browser-control-note" role="status">
+            正在交还 Agent…
+          </p>
+        ) : cast?.control === "taken-over" ? (
+          <p className="browser-control-note">另一个窗口正在操作</p>
         ) : status ? (
           <p className="browser-control-note">{status}</p>
         ) : null}
@@ -852,54 +781,17 @@ function Viewer({
           ) : null}
           {!active ? (
             <ErrorNotice message="文章会话已经切换；旧画面已停止接受输入。" />
-          ) : frame ? (
-            <div className="browser-frame-wrap">
-              <img
-                ref={image}
-                className="browser-frame"
-                src={frame.url}
-                alt="真实 Browser 页面"
-                tabIndex={0}
-                data-readonly={readOnly || undefined}
-                onClick={(event) => {
-                  if (readOnly) {
-                    setFeedback("流程已结束，画面只读。");
-                    return;
-                  }
-                  const bounds = event.currentTarget.getBoundingClientRect(),
-                    observation = frame.observed;
-                  if (bounds.width && bounds.height)
-                    void input(
-                      {
-                        kind: "click-point",
-                        x:
-                          ((event.clientX - bounds.left) *
-                            observation.viewport.width) /
-                          bounds.width,
-                        y:
-                          ((event.clientY - bounds.top) *
-                            observation.viewport.height) /
-                          bounds.height,
-                        revision: observation.observation_revision,
-                        viewport_version: observation.viewport_revision,
-                      },
-                      observation,
-                    );
-                }}
-                onKeyDown={(event) => {
-                  if (human && ["Enter", "Tab", "Escape"].includes(event.key)) {
-                    event.preventDefault();
-                    void input(
-                      {
-                        kind: "press-key",
-                        key: event.key as "Enter" | "Tab" | "Escape",
-                        revision: frame.observed.observation_revision,
-                      },
-                      frame.observed,
-                    );
-                  }
-                }}
-              />
+          ) : (
+            <ScreencastStage
+              ref={stage}
+              sessionId={sessionId}
+              readOnly={readOnly}
+              onActivity={() => {
+                lastInput.current = Date.now();
+              }}
+              onFeedback={setFeedback}
+              onState={setCast}
+            >
               {pointer && pointer.point && pointer.viewport ? (
                 <div
                   className="browser-pointer"
@@ -923,85 +815,11 @@ function Viewer({
                   </span>
                 </div>
               ) : null}
-            </div>
-          ) : (
-            <Skeleton label="等待当前会话画面" />
+            </ScreencastStage>
           )}
-          {frameData.isError ? (
-            <ErrorNotice
-              message="画面暂不可用"
-              retained={frame ? "上次画面仍保留，点击时会再次核对版本。" : ""}
-              onRetry={async () => {
-                await frameData.refetch();
-              }}
-            />
-          ) : null}
           <p className="browser-feedback" role="status" aria-live="polite">
             {feedback}
           </p>
-          {human ? (
-            <form
-              className="browser-input"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (frame && selectedTarget && text)
-                  void input(
-                    {
-                      kind: "type-text",
-                      element_id: selectedTarget,
-                      text,
-                      revision: frame.observed.observation_revision,
-                    },
-                    frame.observed,
-                  );
-              }}
-            >
-              <Select
-                label="页面输入框"
-                value={selectedTarget}
-                onChange={setTarget}
-                options={editable.map((element) => ({
-                  value: element.element_id,
-                  label: element.name || element.element_id,
-                }))}
-              />
-              <TextField
-                label="输入文字"
-                value={text}
-                onChange={(next) => {
-                  // Typing here is still the person working; hold the pause.
-                  lastInput.current = Date.now();
-                  setText(next);
-                }}
-                autoComplete="off"
-              />
-              <Button
-                type="submit"
-                isDisabled={busy || !selectedTarget || !text}
-              >
-                输入
-              </Button>
-              {(["Enter", "Tab", "Escape"] as const).map((key) => (
-                <Button
-                  key={key}
-                  isDisabled={busy || !frame}
-                  onPress={async () => {
-                    if (frame)
-                      await input(
-                        {
-                          kind: "press-key",
-                          key,
-                          revision: frame.observed.observation_revision,
-                        },
-                        frame.observed,
-                      );
-                  }}
-                >
-                  {key}
-                </Button>
-              ))}
-            </form>
-          ) : null}
         </div>
         <aside className="browser-log" aria-label="动作记录">
           <h2>动作记录</h2>
@@ -1050,14 +868,15 @@ function Viewer({
             <p>PDF 已入库</p>
           ) : null}
           {view.session_cleanup_failure ? (
-            <ErrorNotice
-              message={`资源清理未完成：${errorMessage(new Error(view.session_cleanup_failure))}`}
-            />
+            <>
+              <ErrorNotice message="浏览器资源清理未完成" />
+              <ProblemDetails problem={view.problem ?? null} />
+            </>
           ) : null}
           <Disclosure title="更多操作">
             <div className="browser-controls">
               <Button
-                isDisabled={busy || human || !observed || ended(view)}
+                isDisabled={busy || human || ended(view)}
                 onPress={() =>
                   run(async () => {
                     lastInput.current = Date.now();
