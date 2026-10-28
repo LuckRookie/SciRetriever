@@ -466,6 +466,11 @@ export interface ArchiveTextSessionResult<T> {
   readonly stop: ArchiveTextStop | null;
 }
 export const TEXT_CONTEXT_COMPACTION_BYTES = 384 * 1024;
+/** Text-equivalent context bytes of one image: estimated tokens at about 4 bytes each. */
+export function imageContextBytes(width: number, height: number): number {
+  const fit = Math.min(1, 1568 / Math.max(width, height, 1));
+  return Math.ceil((width * fit * (height * fit)) / 750) * 4;
+}
 export async function runArchiveTextSession<T>(
   runtime: DshAgentRuntime,
   input: {
@@ -535,16 +540,23 @@ export async function runArchiveTextSession<T>(
             input.progress.beforeCall();
           }
           if (request.purpose !== "inference") return;
-          const bytes = Buffer.byteLength(
-            JSON.stringify({
-              ...modelRequest,
-              messages: modelRequest.messages.map((m) => ({
-                ...m,
-                // Page images are bounded by the latest-image policy; this window bounds text growth.
-                parts: m.parts.map((p) => ("data" in p ? { ...p, data: "" } : p)),
-              })),
-            }),
-          );
+          // Models charge an image by its pixels, not its file size: count each one as the
+          // text it costs (about width × height / 750 tokens after a 1568 px long-edge fit).
+          let images = 0;
+          const bytes =
+            Buffer.byteLength(
+              JSON.stringify({
+                ...modelRequest,
+                messages: modelRequest.messages.map((m) => ({
+                  ...m,
+                  parts: m.parts.map((p) => {
+                    if (!("data" in p)) return p;
+                    images += imageContextBytes(p.width, p.height);
+                    return { ...p, data: "" };
+                  }),
+                })),
+              }),
+            ) + images;
           // A byte window, not a request-count or token budget. DSH retains session ownership.
           compactAfterTurn = bytes > TEXT_CONTEXT_COMPACTION_BYTES;
         },

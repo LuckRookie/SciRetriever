@@ -5,6 +5,7 @@ import { ArchivePageProofreadService } from "../src/proofread/page-service.js";
 import { ArchiveTextError } from "../src/archive/text-source.js";
 import {
   boundedTextWindow,
+  imageContextBytes,
   runArchiveTextSession,
   TextProgress,
   TextReadCoverage,
@@ -264,6 +265,8 @@ it("does not count page-image bytes toward the text compaction window", async ()
       memoryTextCache().cache,
     ).build(f.source);
     expect(result.usage.compaction_calls).toBe(0);
+    // A 1000 × 1400 page costs about 1,900 tokens, whatever its encoded size.
+    expect(imageContextBytes(1000, 1400)).toBe(7468);
   } finally {
     await runtime.close();
   }
