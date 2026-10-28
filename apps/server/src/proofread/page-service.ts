@@ -59,7 +59,11 @@ export interface PageProofreadResult {
 }
 const str = { type: "string" },
   integer = { type: "integer", minimum: 0 },
-  idList = { type: "array", items: str, maxItems: 20 };
+  idList = { type: "array", items: str, maxItems: 20 },
+  reasonText = {
+    type: "string",
+    description: "A short reason: one line, at most 120 characters.",
+  };
 const correctionSchema = objectSchema({
   kind: { const: "correct" },
   leaf_id: str,
@@ -68,7 +72,7 @@ const correctionSchema = objectSchema({
   original: str,
   replacement: str,
   basis_page_index: integer,
-  reason: str,
+  reason: reasonText,
 });
 const dispositionSchema = {
   anyOf: [
@@ -80,7 +84,7 @@ const dispositionSchema = {
     objectSchema({
       suspect_id: str,
       status: { type: "string", enum: ["draft-correct", "uncertain"] },
-      reason: str,
+      reason: reasonText,
     }),
   ],
 };
@@ -470,7 +474,7 @@ export class ArchivePageProofreadService {
           ),
           toolDeclaration(
             "put_dispositions",
-            "Resolve every suspect, citing host-generated correction IDs for fixed, or a one-word reason for draft-correct/uncertain.",
+            "Resolve every suspect, citing host-generated correction IDs for fixed, or a short reason (one line, at most 120 characters) for draft-correct/uncertain.",
             {
               dispositions: {
                 type: "array",

@@ -302,12 +302,20 @@ it.each([
 );
 it("uses code-point half-open correction ranges and rejects rewritten/overlong contracts", () => {
   expect(parseCorrectOperation(correct).original).toBe("😀");
+  // A real model explains a correction in a sentence; one short line is enough evidence.
+  expect(
+    parseCorrectOperation({
+      ...correct,
+      reason: "The image prints superscript citation 1 after the period.",
+    }).reason,
+  ).toContain("superscript");
   for (const change of [
     { end: 3 },
     { original: "wrong" },
     { replacement: "😀" },
-    { reason: "two words" },
-    { reason: "a".repeat(41) },
+    { reason: "two\nlines" },
+    { reason: "a".repeat(121) },
+    { reason: "  " },
     { start: -1 },
     { kind: "replace" },
     { extra: true },

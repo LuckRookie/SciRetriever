@@ -325,6 +325,12 @@ function word(v: unknown): string {
   if (!/^\S{1,40}$/u.test(s)) fail();
   return s;
 }
+/** A model-written reason: one short line, so a sentence is accepted but a paragraph is not. */
+function note(v: unknown): string {
+  const s = text(v, 480);
+  if (!s.trim() || /[\r\n]/u.test(s) || [...s].length > 120) fail();
+  return s;
+}
 function hash(v: unknown): string {
   const s = text(v, 64);
   if (!/^[a-f0-9]{64}$/u.test(s)) fail();
@@ -543,7 +549,7 @@ export function parseArrangementOperation(v: unknown): ArrangementOperation {
       leaf_id: parseAssetId(r.leaf_id),
       page_index: number(r.page_index, 9999),
       basis_page_index: number(r.basis_page_index, 9999),
-      reason: word(r.reason),
+      reason: note(r.reason),
     };
   }
   if (kind === "drop") {
@@ -577,7 +583,7 @@ export function parseParagraphBreakDecision(
   );
   const candidate_id = hash(r.candidate_id);
   return decision === "keep"
-    ? { candidate_id, decision, reason: word(r.reason) }
+    ? { candidate_id, decision, reason: note(r.reason) }
     : { candidate_id, decision };
 }
 export function parseArrangementSubmission(v: unknown): ArrangementSubmission {
@@ -720,7 +726,7 @@ export function parseCorrectOperation(v: unknown): CorrectOperation {
     original,
     replacement,
     basis_page_index: number(r.basis_page_index, 9999),
-    reason: word(r.reason),
+    reason: note(r.reason),
   };
 }
 export function parseSuspectDisposition(v: unknown): SuspectDisposition {
@@ -738,7 +744,7 @@ export function parseSuspectDisposition(v: unknown): SuspectDisposition {
   return {
     suspect_id: parseAssetId(r.suspect_id),
     status,
-    reason: word(r.reason),
+    reason: note(r.reason),
   };
 }
 export function parsePageProofreadSubmission(

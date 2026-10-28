@@ -46,6 +46,10 @@ import {
   type ArchiveTextSessionResult,
 } from "./text-session.js";
 const str = { type: "string" },
+  reasonText = {
+    type: "string",
+    description: "A short reason: one line, at most 120 characters.",
+  },
   integer = { type: "integer", minimum: 0 },
   strings = { type: "array", items: str, maxItems: 20 };
 const target = {
@@ -113,7 +117,7 @@ const opSchema = {
       leaf_id: str,
       page_index: integer,
       basis_page_index: integer,
-      reason: str,
+      reason: reasonText,
     }),
   ],
 };
@@ -123,7 +127,7 @@ const decisionSchema = {
     objectSchema({
       candidate_id: str,
       decision: { const: "keep" },
-      reason: str,
+      reason: reasonText,
     }),
   ],
 };
@@ -324,7 +328,7 @@ export class ArchiveArrangementService {
       ),
       toolDeclaration(
         "decide_breaks",
-        "Decide every current candidate; keep needs a one-word reason. A merge decision also needs a merge operation.",
+        "Decide every current candidate; keep needs a short reason (one line, at most 120 characters). A merge decision also needs a merge operation.",
         {
           reviewed_candidates_sha256: str,
           decisions: { type: "array", items: decisionSchema, maxItems: 20 },
