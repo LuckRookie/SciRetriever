@@ -408,3 +408,60 @@ it("resumes against a restored catalog's lower source revision without refreshin
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it("observes idle scalar lag, coalesces status reads and retries a temporarily busy index owner", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sciretriever-index-monitor-")),
+    catalog = join(root, "catalog.sqlite");
+  let source = 1,
+    indexed = 1,
+    calls = 0,
+    busy = true;
+  const service = new IndexRefreshService(
+    catalog,
+    {
+      refresh: async () => {
+        calls++;
+        if (busy) {
+          busy = false;
+          throw Object.assign(new Error("busy"), {
+            code: "write-admission-conflict",
+          });
+        }
+        indexed = source;
+        return generation(indexed);
+      },
+      build: async () => generation(source),
+    },
+    async () => source,
+    {
+      inspect: async () => ({
+        source_revision: source,
+        generation: { source_revision: indexed },
+      }),
+      interval_ms: 25,
+    },
+  );
+  try {
+    await service.start();
+    expect(calls).toBe(0);
+    source = 2;
+    await Promise.all(Array.from({ length: 8 }, () => service.status()));
+    expect((await service.status()).request_sequence).toBe(1);
+    await vi.waitFor(
+      async () =>
+        expect(await service.status()).toMatchObject({
+          status: "updated",
+          indexed_revision: 2,
+        }),
+      { timeout: 5000 },
+    );
+    expect(calls).toBe(2);
+    source = 3;
+    // No status read or new publication drives this pass.
+    await vi.waitFor(() => expect(indexed).toBe(3), { timeout: 5000 });
+    expect(calls).toBe(3);
+  } finally {
+    await service.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

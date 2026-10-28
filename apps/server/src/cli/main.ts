@@ -1032,6 +1032,17 @@ async function execute(
       () => application.close(),
       "query cleanup failed",
     );
+    if (
+      !options.json &&
+      queryRoutes[queryKey] === "context" &&
+      value &&
+      typeof value === "object" &&
+      "coverage" in value &&
+      value.coverage === "index-stale"
+    )
+      options.stdout?.(
+        "索引正在追赶：以下为旧索引中仍可核实的命中，部分最新内容暂时搜不到。只读查询不会启动刷新。\n",
+      );
     return output({ protocol_version: 1, result: value }, options);
   }
   const maintenanceRoutes: Readonly<Record<string, MaintenanceOperation>> = {

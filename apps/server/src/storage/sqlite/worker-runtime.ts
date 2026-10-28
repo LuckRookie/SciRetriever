@@ -4452,6 +4452,7 @@ port.on("message", (message: WorkerMessage) => {
           "insertEntries",
           "publish",
           "active",
+          "state",
           "search",
           "documentCoverage",
           "metadataSource",

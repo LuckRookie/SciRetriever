@@ -20,6 +20,7 @@ import {
   SqliteWorkerError,
 } from "../src/storage/sqlite/worker.js";
 import { RetrievalStorageClient } from "../src/storage/sqlite/retrieval-client.js";
+import { IndexRefreshService } from "../src/retrieval/refresh.js";
 import { CatalogWriteAdmission } from "../src/storage/write-admission.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
@@ -315,6 +316,11 @@ it("does not turn SQLITE_NOTADB into an uninitialized or merely unavailable cata
 
 it("verifies a catalog without a retrieval generation through CLI, HTTP and MCP and detects foreign-key damage", async () => {
   const e = await coreProcessingFixture();
+  // Keep this negative fixture unindexed across transport-owned Applications.
+  // Automatic startup catch-up is covered by retrieval-stale-serving instead.
+  const monitor = vi
+    .spyOn(IndexRefreshService.prototype, "start")
+    .mockResolvedValue(undefined);
   const q = await createQueryApplication(e.home);
   const web = await startQueryOnlyHttp({
     application: q,
@@ -396,5 +402,6 @@ it("verifies a catalog without a retrieval generation through CLI, HTTP and MCP 
     await web.close();
     await q.close();
     await e.close();
+    monitor.mockRestore();
   }
 }, 30000);

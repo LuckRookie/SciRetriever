@@ -416,6 +416,11 @@ export interface RetrievalGeneration {
   readonly entry_count: number;
   readonly source_count: number;
 }
+export interface RetrievalIndexState {
+  readonly generation: RetrievalGeneration | null;
+  readonly source_revision: number;
+  readonly state_token: string | null;
+}
 type SourceStamp = readonly [
   string,
   string,
@@ -846,7 +851,11 @@ export class RetrievalStorageEngine {
           Number(stage.fts_count) - oldCount,
           newSources - oldSources,
           RETRIEVAL_UNVERIFIED,
-          RETRIEVAL_UNVERIFIED,
+          // While the content certificate is invalid, this opaque marker
+          // changes atomically with every accepted paper, including equal-size edits.
+          createHash("sha256")
+            .update(`retrieval-mutation-v1:${staged}`)
+            .digest("hex"),
           active,
         );
       this.db
@@ -1254,6 +1263,32 @@ export class RetrievalStorageEngine {
       entry_count: row.entry_count,
       source_count: row.source_count,
     };
+  }
+  /** Fixed-size snapshot; never scans entries, FTS or source fingerprints. */
+  state(): RetrievalIndexState {
+    this.refreshReader();
+    this.db.exec("SAVEPOINT retrieval_state");
+    try {
+      const generation = this.active(),
+        source_revision = this.revision();
+      const certificate = generation
+        ? this.db
+            .prepare(
+              "SELECT content_sha256,posting_sha256 FROM retrieval_generations WHERE generation_id=?",
+            )
+            .get(generation.generation_id)
+        : null;
+      const state_token = generation
+        ? createHash("sha256")
+            .update(JSON.stringify([generation, certificate]))
+            .digest("hex")
+        : null;
+      this.db.exec("RELEASE retrieval_state");
+      return { generation, source_revision, state_token };
+    } catch (error) {
+      this.db.exec("ROLLBACK TO retrieval_state; RELEASE retrieval_state");
+      throw error;
+    }
   }
   search(
     ftsQuery: string,

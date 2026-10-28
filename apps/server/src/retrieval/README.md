@@ -15,6 +15,6 @@
 
 整代发布后与下次增量刷新先分批回收非 active 的 ready/building 代；清空条目与 FTS 后才删代头，每批重读 active 并释放 catalog admission，取消后可续清，不自动 VACUUM。查询将 active 身份和 FTS 候选放在同一 SQLite 快照，结果组装后再核对身份；退役状态和旧游标返回需重新查询，不读取部分回收的旧代。
 
-更新期间查询沿用现有口径：无就绪代为 `index-unavailable`，源版本领先于 active 时为 `index-stale` 且不返回过时命中；它们不等同于正在运行任务。读取只检查身份、ready、源版本与已知损坏标记；`data_version` 变化不重算全库哈希。完整健康检查仅在显式维护、备份/恢复和迁移边界执行。
+没有就绪代为 `index-unavailable`；源版本与 active 不同时以 `index-stale` 返回仍可验证的命中、缺口与续页，过时来源跳过后继续取有效项。游标固定代、水位及条目变更标记，增量接纳中也会失效。`refresh.ts` 的 Application owner 在启动、状态读取及周期监测时以标量检查发现落后，复用持久合并队列；只读查询不启动刷新。读取检查身份、ready、源版本与已知损坏标记，`data_version` 变化不重算全库哈希。完整健康检查仅在显式维护、备份/恢复和迁移边界执行。
 
 [上级目录](../README.md)

@@ -343,6 +343,7 @@ export type SqliteCommand =
         | "insertEntries"
         | "publish"
         | "active"
+        | "state"
         | "search"
         | "documentCoverage"
         | "metadataSource"

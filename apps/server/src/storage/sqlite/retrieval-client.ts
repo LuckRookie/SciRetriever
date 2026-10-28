@@ -53,6 +53,9 @@ export class RetrievalStorageClient {
   active(): Promise<RetrievalGeneration | null> {
     return this.worker.retrieval("active");
   }
+  state(): Promise<import("./retrieval-engine.js").RetrievalIndexState> {
+    return this.worker.retrieval("state");
+  }
   verifyCatalog(
     signal?: AbortSignal,
   ): Promise<import("./retrieval-engine.js").RetrievalCatalogInspection> {

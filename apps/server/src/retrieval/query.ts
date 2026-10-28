@@ -58,13 +58,15 @@ function encodeCursor(
   generation: string,
   revision: number,
   after: Position,
+  state: string,
 ): string {
   const payload = JSON.stringify({
-    version: 2,
+    version: 3,
     score_rule: RETRIEVAL_SCORE_RULE,
     fingerprint: fingerprint(request),
     generation,
     revision,
+    state,
     after,
   });
   return Buffer.from(
@@ -76,6 +78,7 @@ function decodeCursor(
   value: string,
   generation: string,
   revision: number,
+  state: string,
 ): Position {
   try {
     const envelope = JSON.parse(
@@ -88,6 +91,7 @@ function decodeCursor(
       fingerprint: string;
       generation: string;
       revision: number;
+      state: string;
       after: Position;
     };
     if (
@@ -95,12 +99,13 @@ function decodeCursor(
       typeof envelope.payload !== "string" ||
       typeof envelope.checksum !== "string" ||
       Object.keys(parsed).sort().join() !==
-        "after,fingerprint,generation,revision,score_rule,version" ||
-      parsed.version !== 2 ||
+        "after,fingerprint,generation,revision,score_rule,state,version" ||
+      parsed.version !== 3 ||
       parsed.score_rule !== RETRIEVAL_SCORE_RULE ||
       parsed.fingerprint !== fingerprint(request) ||
       parsed.generation !== generation ||
       parsed.revision !== revision ||
+      parsed.state !== state ||
       !parsed.after ||
       Object.keys(parsed.after).sort().join() !==
         "document_version_id,kind,literature_id,score,unit_ordinal" ||
@@ -154,7 +159,7 @@ export interface MaterialCandidateSession {
   readonly candidate_limit: boolean;
   readonly coverage_gaps: MaterialContextBundle["gaps"];
   expand(hit: RetrievalHit): Promise<{
-    item: MaterialContextItem;
+    item: MaterialContextItem | null;
     gaps: MaterialContextBundle["gaps"];
   }>;
   assertCurrent(): Promise<void>;
@@ -232,6 +237,7 @@ export class MaterialContextService {
     expected: {
       readonly generation_id: string;
       readonly source_revision: number;
+      readonly state_token?: string;
     },
     consume: (session: MaterialCandidateSession) => Promise<T>,
     signal?: AbortSignal,
@@ -247,22 +253,37 @@ export class MaterialContextService {
       throw new MaterialContextError("context-cursor-invalid");
     const pending = (async () => {
       check(signal);
-      const generation = await this.storage!.active();
-      const revision = await this.storage!.revision();
+      const initial = await this.storage!.state();
+      const generation = initial.generation;
       if (
         !generation ||
         generation.generation_id !== expected.generation_id ||
         generation.source_revision !== expected.source_revision ||
-        revision !== expected.source_revision
+        (expected.state_token !== undefined &&
+          initial.state_token !== expected.state_token)
       )
         throw new MaterialContextError("context-cursor-invalid");
       const scope =
         request.scope.kind === "library" ? [] : request.scope.literature_ids;
-      const coverage = await this.storage!.documentCoverage(
-        scope,
-        request.versions.kind === "default" ? null : request.versions.documents,
-        request.kinds.includes("document"),
-      );
+      let coverage: MaterialContextBundle["gaps"];
+      try {
+        coverage = await this.storage!.documentCoverage(
+          scope,
+          request.versions.kind === "default"
+            ? null
+            : request.versions.documents,
+          request.kinds.includes("document"),
+        );
+      } catch (error) {
+        if (
+          !(error instanceof RetrievalStorageError) ||
+          error.code !== "index-stale"
+        )
+          throw error;
+        if (initial.source_revision === generation.source_revision)
+          throw new MaterialContextError("context-source-integrity");
+        coverage = [{ code: "index-stale", literature_id: null }];
+      }
       const terms = queryTerms(request.query);
       const found = terms.length
         ? await this.storage!.search(
@@ -299,17 +320,17 @@ export class MaterialContextService {
       };
       const assertCurrent = async () => {
         check(signal);
-        const current = await this.storage!.active();
-        const revision = await this.storage!.revision();
+        const latest = await this.storage!.state();
+        const current = latest.generation;
         if (
           !current ||
           current.generation_id !== generation.generation_id ||
           current.source_revision !== generation.source_revision ||
-          revision !== generation.source_revision
+          latest.state_token !== initial.state_token
         )
           throw new MaterialContextError("context-cursor-invalid");
       };
-      const expand = async (hit: RetrievalHit) => {
+      const expandVerified = async (hit: RetrievalHit) => {
         check(signal);
         if (hit.kind === "document") {
           const id = hit.document_version_id;
@@ -455,6 +476,53 @@ export class MaterialContextService {
         };
         return { item, gaps };
       };
+      const sources = new Map<
+        string,
+        Awaited<ReturnType<RetrievalStorageClient["literatureSources"]>>
+      >();
+      const matches = async (hit: RetrievalHit, reload = false) => {
+        if (reload || !sources.has(hit.literature_id))
+          sources.set(
+            hit.literature_id,
+            await this.storage!.literatureSources(hit.literature_id),
+          );
+        const snapshot = sources.get(hit.literature_id)!;
+        const source =
+          hit.kind === "metadata"
+            ? snapshot.metadata
+            : snapshot.documents.find(
+                (s) => s.document_version_id === hit.document_version_id,
+              );
+        return (
+          !!source &&
+          source.meta_literature_id === hit.meta_literature_id &&
+          source.metadata_revision === hit.metadata_revision &&
+          source.metadata_sha256 === hit.metadata_sha256 &&
+          (hit.kind === "metadata"
+            ? source.primary_asset_id === hit.primary_asset_id
+            : source.representation_sha256 === hit.representation_sha256 &&
+              source.source_asset_id === hit.source_asset_id &&
+              source.source_asset_sha256 === hit.source_asset_sha256 &&
+              source.is_default === hit.is_default)
+        );
+      };
+      const expand = async (hit: RetrievalHit) => {
+        const stale = () => ({
+          item: null,
+          gaps: [
+            { code: "index-stale" as const, literature_id: hit.literature_id },
+          ],
+        });
+        check(signal);
+        if (!(await matches(hit))) return stale();
+        try {
+          return await expandVerified(hit);
+        } catch (error) {
+          check(signal);
+          if (!(await matches(hit, true))) return stale();
+          throw error;
+        }
+      };
       const session: MaterialCandidateSession = {
         generation_id: generation.generation_id,
         source_revision: generation.source_revision,
@@ -487,10 +555,11 @@ export class MaterialContextService {
     signal?: AbortSignal,
   ): Promise<MaterialContextBundle> {
     check(signal);
+    let generation: Awaited<ReturnType<RetrievalStorageClient["active"]>> =
+      null;
+    let revision: number | null = null;
     const base = (
       coverage: MaterialContextBundle["coverage"],
-      generation_id: string | null,
-      source_revision: number | null,
     ): MaterialContextBundle => ({
       score_rule: RETRIEVAL_SCORE_RULE,
       items: [],
@@ -498,48 +567,37 @@ export class MaterialContextService {
       ...(coverage === "index-corrupt"
         ? { maintenance_hint: "rebuild-index" as const }
         : {}),
-      generation_id,
-      source_revision,
+      generation_id: generation?.generation_id ?? null,
+      source_revision: revision,
+      indexed_revision: generation?.source_revision ?? null,
       gaps: [],
       usage: { bytes: 0, items: 0, tokens: null, tokenizer: null },
       truncated: false,
       continuation: null,
     });
-    const returnBundle = (bundle: MaterialContextBundle) => {
+    const finish = (value: MaterialContextBundle) => {
       check(signal);
-      const counted = withBytes(bundle);
+      const counted = withBytes(value);
       if (counted.usage.bytes > request.budget.max_bytes)
         throw new MaterialContextError("context-budget-invalid");
       return parseMaterialContextBundle(counted, request);
     };
-    if (!this.storage)
-      return returnBundle(base("index-unavailable", null, null));
-    let generation;
-    let revision: number;
+    if (!this.storage) return finish(base("index-unavailable"));
+    let snapshot;
     try {
-      generation = await this.storage.active();
-      revision = await this.storage.revision();
+      snapshot = await this.storage.state();
     } catch (error) {
       if (
         error instanceof RetrievalStorageError &&
         error.code === "index-corrupt"
       )
-        return returnBundle(base("index-corrupt", null, null));
+        return finish(base("index-corrupt"));
       throw error;
     }
-    if (!generation)
-      return returnBundle(base("index-unavailable", null, revision));
-    if (request.continuation !== null)
-      decodeCursor(
-        request,
-        request.continuation,
-        generation.generation_id,
-        generation.source_revision,
-      );
-    if (revision !== generation.source_revision)
-      return returnBundle(
-        base("index-stale", generation.generation_id, revision),
-      );
+    generation = snapshot.generation;
+    revision = snapshot.source_revision;
+    if (!generation) return finish(base("index-unavailable"));
+    const state = snapshot.state_token!;
     const after =
       request.continuation === null
         ? null
@@ -547,335 +605,168 @@ export class MaterialContextService {
             request,
             request.continuation,
             generation.generation_id,
-            revision,
+            generation.source_revision,
+            state,
           );
-    let coverageGaps: MaterialContextBundle["gaps"];
+    const gaps: MaterialContextBundle["gaps"][number][] = [];
+    const boundedGaps = () =>
+      gaps.length <= 32
+        ? [...gaps]
+        : [...new Set(gaps.map((g) => g.code))].map((code) => ({
+            code,
+            literature_id: null,
+          }));
+    const addGaps = (added: MaterialContextBundle["gaps"]) => {
+      for (const gap of added)
+        if (
+          !gaps.some(
+            (g) =>
+              g.code === gap.code &&
+              (g.literature_id === null ||
+                g.literature_id === gap.literature_id),
+          )
+        )
+          gaps.push(gap);
+    };
+    const items: MaterialContextItem[] = [];
+    let cursor: string | null = request.continuation,
+      truncated = false;
     try {
-      coverageGaps = await this.storage.documentCoverage(
-        request.scope.kind === "library" ? [] : request.scope.literature_ids,
-        request.versions.kind === "default" ? null : request.versions.documents,
-        request.kinds.includes("document"),
-      );
-    } catch (error) {
-      if (
-        error instanceof RetrievalStorageError &&
-        error.code === "index-stale"
-      )
-        throw new MaterialContextError("context-source-integrity");
-      return returnBundle(
-        base("index-corrupt", generation.generation_id, revision),
-      );
-    }
-    const terms = queryTerms(request.query);
-    if (!terms.length)
-      return returnBundle({
-        ...base(
-          coverageGaps.length ? "partial" : "complete",
-          generation.generation_id,
-          revision,
-        ),
-        gaps: coverageGaps,
-      });
-    const fts = terms.map((term) => `"${term}"`).join(" AND ");
-    const scope =
-      request.scope.kind === "library" ? [] : request.scope.literature_ids;
-    const versions =
-      request.versions.kind === "default"
-        ? null
-        : request.versions.documents.map((d) => d.document_version_id);
-    let search: Awaited<ReturnType<RetrievalStorageClient["search"]>>;
-    try {
-      search = await this.storage.search(
-        fts,
-        terms,
-        generation.generation_id,
-        scope,
-        request.kinds,
-        versions,
-        request.budget.max_items + 1,
-        after,
-      );
-    } catch (error) {
-      if (
-        error instanceof RetrievalStorageError &&
-        error.code === "index-stale"
-      )
-        throw new MaterialContextError("context-cursor-invalid");
-      return returnBundle(
-        base("index-corrupt", generation.generation_id, revision),
-      );
-    }
-    const { hits, candidateLimit } = search;
-    const selected = hits.slice(0, request.budget.max_items);
-    const documentHits = new Map<string, RetrievalHit[]>();
-    for (const hit of selected)
-      if (hit.kind === "document") {
-        if (!hit.document_version_id)
-          throw new MaterialContextError("context-source-integrity");
-        const list = documentHits.get(hit.document_version_id) ?? [];
-        list.push(hit);
-        documentHits.set(hit.document_version_id, list);
-      }
-    const expanded = new Map<number, MaterialContextItem>();
-    for (const [id, group] of documentHits) {
-      check(signal);
-      if (!this.documents)
-        throw new MaterialContextError("context-source-integrity");
-      await this.documents.withVerifiedVersion(
-        id,
-        async (version, markdown, structure) => {
-          const titles = new Map(
-            structure.sections.map((section) => [
-              section.section_id,
-              section.title,
-            ]),
-          );
-          for (const hit of group) {
+      await this.withCandidates(
+        { ...request, continuation: null },
+        { ...generation, state_token: state },
+        async (session) => {
+          addGaps(session.coverage_gaps);
+          if (session.candidate_limit)
+            addGaps([{ code: "candidate-limit", literature_id: null }]);
+          const follows = (hit: RetrievalHit) => {
+            if (!after) return true;
+            const left = position(hit),
+              keys = [
+                "score",
+                "kind",
+                "literature_id",
+                "document_version_id",
+                "unit_ordinal",
+              ] as const;
+            for (const key of keys) {
+              if (left[key] !== after[key]) return left[key] > after[key];
+            }
+            return false;
+          };
+          const hits = session.hits.filter(follows);
+          for (const [ordinal, hit] of hits.entries()) {
             check(signal);
+            if (items.length >= request.budget.max_items) {
+              truncated = true;
+              break;
+            }
+            const next = encodeCursor(
+              request,
+              generation!.generation_id,
+              generation!.source_revision,
+              position(hit),
+              state,
+            );
+            const expanded = await session.expand(hit);
+            if (!expanded.item) {
+              addGaps(expanded.gaps);
+              cursor = next;
+              truncated = ordinal + 1 < hits.length;
+              continue;
+            }
+            const full = { ...expanded.item, rank: items.length + 1 };
+            const make = (
+              item: MaterialContextItem,
+              extra: MaterialContextBundle["gaps"],
+            ) =>
+              withBytes({
+                ...base("partial"),
+                items: [...items, item],
+                gaps: extra,
+                truncated: true,
+                continuation: next,
+                usage: {
+                  bytes: 0,
+                  items: items.length + 1,
+                  tokens: null,
+                  tokenizer: null,
+                },
+              });
+            const proposedGaps = [...boundedGaps(), ...expanded.gaps];
+            // Check with a continuation even on the last item, preserving a safe
+            // budget if the next candidate needs a fresh page.
             if (
-              version.representation_sha256 !== hit.representation_sha256 ||
-              version.source_material_ref.literature_id !== hit.literature_id ||
-              version.source_material_ref.asset_id !== hit.source_asset_id ||
-              version.source_material_ref.asset_sha256 !==
-                hit.source_asset_sha256 ||
-              hit.unit_start_utf8 === null ||
-              hit.unit_end_utf8 === null ||
-              hit.unit_sha256 === null ||
-              hit.unit_end_utf8 > markdown.length
-            )
-              throw new MaterialContextError("context-source-integrity");
-            const bytes = markdown.subarray(
-              hit.unit_start_utf8,
-              hit.unit_end_utf8,
-            );
-            if (digest(bytes) !== hit.unit_sha256)
-              throw new MaterialContextError("context-source-integrity");
-            const evidence = documentEvidence(
-              version,
-              structure,
-              markdown,
-              hit,
-            );
-            expanded.set(hit.entry_id, {
-              kind: "source-text",
-              literature_id: hit.literature_id,
-              meta_literature_id: hit.meta_literature_id,
-              reference: {
-                kind: "document",
-                literature_id: hit.literature_id,
-                document_version_id: id,
-                representation_sha256: version.representation_sha256,
-                asset_id: version.source_material_ref.asset_id,
-                asset_sha256: version.source_material_ref.asset_sha256,
-                start_utf8: hit.unit_start_utf8,
-                end_utf8: hit.unit_end_utf8,
-              },
-              section_title:
-                hit.section_id === null
-                  ? null
-                  : (titles.get(hit.section_id) ?? null),
-              text: evidence ? decoder.decode(bytes) : "",
-              evidence: evidence ?? [],
-              rank: 0,
-              score: hit.score,
-              gap: evidence ? null : "evidence-limit",
-            });
+              make(
+                full,
+                proposedGaps.length <= 32 ? proposedGaps : boundedGaps(),
+              ).usage.bytes <= request.budget.max_bytes
+            ) {
+              items.push(full);
+              addGaps(expanded.gaps);
+            } else {
+              const extra = [
+                ...expanded.gaps,
+                {
+                  code: "context-too-large" as const,
+                  literature_id: hit.literature_id,
+                },
+              ];
+              const compact = {
+                ...full,
+                text: "",
+                evidence: [],
+                gap: "context-too-large" as const,
+              };
+              const all = [...boundedGaps(), ...extra];
+              if (
+                make(compact, all.length <= 32 ? all : boundedGaps()).usage
+                  .bytes > request.budget.max_bytes
+              ) {
+                if (!items.length)
+                  throw new MaterialContextError("context-budget-invalid");
+                truncated = true;
+                break;
+              }
+              items.push(compact);
+              addGaps(extra);
+            }
+            cursor = next;
+            truncated = ordinal + 1 < hits.length;
           }
         },
         signal,
       );
+    } catch (error) {
+      if (
+        error instanceof RetrievalStorageError &&
+        error.code === "index-corrupt"
+      )
+        return finish(base("index-corrupt"));
+      throw error;
     }
-    const items: MaterialContextItem[] = [];
-    const gaps: MaterialContextBundle["gaps"][number][] = [
-      ...coverageGaps,
-      ...(candidateLimit
-        ? [{ code: "candidate-limit" as const, literature_id: null }]
-        : []),
-    ];
-    let cursor: string | null = null;
-    let truncated = hits.length > selected.length;
-    for (const hit of selected) {
-      check(signal);
-      let item = expanded.get(hit.entry_id);
-      const itemGaps: MaterialContextBundle["gaps"][number][] = [];
-      if (!item) {
-        let detail;
-        try {
-          detail = await this.literature.detail(hit.literature_id);
-        } catch {
-          throw new MaterialContextError("context-source-integrity");
-        }
-        if (
-          detail.meta_literature.meta_literature_id !==
-            hit.meta_literature_id ||
-          detail.metadata_revision !== hit.metadata_revision ||
-          detail.metadata_sha256 !== hit.metadata_sha256 ||
-          (detail.primary_pdf?.asset.asset_id ?? null) !== hit.primary_asset_id
-        )
-          throw new MaterialContextError("context-source-integrity");
-        if (!detail.primary_pdf)
-          itemGaps.push({
-            code: "material-missing",
-            literature_id: hit.literature_id,
-          });
-        else if (
-          !(await this.storage.hasDefault(
-            hit.literature_id,
-            detail.primary_pdf.asset.asset_id,
-          ))
-        )
-          itemGaps.push({
-            code: "representation-missing",
-            literature_id: hit.literature_id,
-          });
-        item = {
-          kind: "metadata",
-          literature_id: hit.literature_id,
-          meta_literature_id: hit.meta_literature_id,
-          reference: {
-            kind: "metadata",
-            literature_id: hit.literature_id,
-            metadata_revision: hit.metadata_revision,
-            metadata_sha256: hit.metadata_sha256,
-          },
-          section_title: null,
-          text: [
-            detail.literature.metadata.title,
-            detail.literature.metadata.abstract,
-            detail.literature.metadata.authors
-              .map((author) => author.display_name)
-              .join(" "),
-            detail.literature.metadata.keywords.join(" "),
-            detail.literature.metadata.venue,
-            detail.literature.metadata.publisher,
-            detail.literature.metadata.publication_year?.toString(),
-          ]
-            .filter(Boolean)
-            .join("\n"),
-          evidence: [],
-          rank: 0,
-          score: hit.score,
-          gap: null,
-        };
-      }
-      if (item.gap === "evidence-limit")
-        itemGaps.push({
-          code: "evidence-limit",
-          literature_id: hit.literature_id,
-        });
-      const nextCursor = encodeCursor(
-        request,
-        generation.generation_id,
-        revision,
-        position(hit),
-      );
-      const full: MaterialContextItem = { ...item, rank: items.length + 1 };
-      const proposed = withBytes({
-        ...base("complete", generation.generation_id, revision),
-        items: [...items, full],
-        gaps: [...gaps, ...itemGaps],
-        truncated: true,
-        continuation: nextCursor,
-        usage: {
-          bytes: 0,
-          items: items.length + 1,
-          tokens: null,
-          tokenizer: null,
-        },
-      });
-      if (proposed.usage.bytes <= request.budget.max_bytes) {
-        items.push(full);
-        for (const gap of itemGaps)
-          if (
-            !gaps.some(
-              (existing) =>
-                existing.code === gap.code &&
-                (existing.literature_id === null ||
-                  existing.literature_id === gap.literature_id),
-            )
-          )
-            gaps.push(gap);
-      } else {
-        const compact: MaterialContextItem = {
-          ...full,
-          text: "",
-          evidence: [],
-          gap: "context-too-large",
-        };
-        const compactGaps = [
-          ...gaps,
-          ...itemGaps,
-          {
-            code: "context-too-large" as const,
-            literature_id: hit.literature_id,
-          },
-        ];
-        const limited = withBytes({
-          ...base("partial", generation.generation_id, revision),
-          items: [...items, compact],
-          gaps: compactGaps,
-          truncated: true,
-          continuation: nextCursor,
-          usage: {
-            bytes: 0,
-            items: items.length + 1,
-            tokens: null,
-            tokenizer: null,
-          },
-        });
-        if (limited.usage.bytes > request.budget.max_bytes) {
-          if (!items.length)
-            throw new MaterialContextError("context-budget-invalid");
-          truncated = true;
-          break;
-        }
-        items.push(compact);
-        for (const gap of [...itemGaps, compactGaps.at(-1)!])
-          if (
-            !gaps.some(
-              (existing) =>
-                existing.code === gap.code &&
-                (existing.literature_id === null ||
-                  existing.literature_id === gap.literature_id),
-            )
-          )
-            gaps.push(gap);
-      }
-      cursor = nextCursor;
-    }
-    if ((await this.storage.revision()) !== revision)
-      return returnBundle(
-        base(
-          "index-stale",
-          generation.generation_id,
-          await this.storage.revision(),
-        ),
-      );
-    const currentGeneration = await this.storage.active();
-    if (
-      !currentGeneration ||
-      currentGeneration.generation_id !== generation.generation_id ||
-      currentGeneration.source_revision !== generation.source_revision
-    )
+    // A source write alone does not invalidate this fixed index page. Each hit
+    // was verified against its exact source; an index mutation does invalidate it.
+    const latest = await this.storage.state();
+    if (latest.state_token !== state)
       throw new MaterialContextError("context-cursor-invalid");
-    const result = withBytes({
+    revision = latest.source_revision;
+    const stale =
+      revision !== generation.source_revision ||
+      gaps.some((g) => g.code === "index-stale");
+    return finish({
       ...base(
-        gaps.length || truncated ? "partial" : "complete",
-        generation.generation_id,
-        revision,
+        stale
+          ? "index-stale"
+          : gaps.length || truncated
+            ? "partial"
+            : "complete",
       ),
       items,
-      gaps:
-        gaps.length <= 32
-          ? gaps
-          : [...new Set(gaps.map((gap) => gap.code))].map((code) => ({
-              code,
-              literature_id: null,
-            })),
+      gaps: boundedGaps(),
       truncated,
       continuation: truncated ? cursor : null,
       usage: { bytes: 0, items: items.length, tokens: null, tokenizer: null },
     });
-    return returnBundle(result);
   }
 }

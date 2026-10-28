@@ -259,13 +259,16 @@ export interface MaterialContextBundle {
     | "index-stale";
   readonly generation_id: string | null;
   readonly source_revision: number | null;
+  /** Active index watermark; source_revision is the current source counter. */
+  readonly indexed_revision?: number | null;
   readonly gaps: readonly {
     readonly code:
       | "material-missing"
       | "representation-missing"
       | "context-too-large"
       | "evidence-limit"
-      | "candidate-limit";
+      | "candidate-limit"
+      | "index-stale";
     readonly literature_id: string | null;
   }[];
   readonly usage: {
@@ -291,6 +294,11 @@ export function parseMaterialContextBundle(
     "usage",
     "truncated",
     "continuation",
+    ...(value &&
+    typeof value === "object" &&
+    Object.hasOwn(value, "indexed_revision")
+      ? ["indexed_revision"]
+      : []),
     ...(value &&
     typeof value === "object" &&
     Object.hasOwn(value, "maintenance_hint")
@@ -323,6 +331,14 @@ export function parseMaterialContextBundle(
     r.source_revision === null
       ? null
       : integer(r.source_revision, 0, Number.MAX_SAFE_INTEGER);
+  const indexed = Object.hasOwn(r, "indexed_revision")
+    ? {
+        indexed_revision:
+          r.indexed_revision === null
+            ? null
+            : integer(r.indexed_revision, 0, Number.MAX_SAFE_INTEGER),
+      }
+    : {};
   const items = r.items.map((raw) => {
     const item = exact(raw, [
       "kind",
@@ -464,6 +480,7 @@ export function parseMaterialContextBundle(
         "context-too-large",
         "evidence-limit",
         "candidate-limit",
+        "index-stale",
       ].includes(String(gap.code))
     )
       fail();
@@ -485,9 +502,7 @@ export function parseMaterialContextBundle(
   const bytes = integer(usage.bytes, 0, request.budget.max_bytes);
   if (bytes !== utf8.encode(JSON.stringify(value)).length) fail();
   if (
-    (r.coverage === "index-unavailable" ||
-      r.coverage === "index-corrupt" ||
-      r.coverage === "index-stale") &&
+    (r.coverage === "index-unavailable" || r.coverage === "index-corrupt") &&
     (items.length !== 0 ||
       gaps.length !== 0 ||
       r.truncated ||
@@ -504,6 +519,7 @@ export function parseMaterialContextBundle(
     coverage: r.coverage as MaterialContextBundle["coverage"],
     generation_id,
     source_revision,
+    ...indexed,
     gaps: Object.freeze(gaps),
     usage: { bytes, items: items.length, tokens: null, tokenizer: null },
     truncated: r.truncated as boolean,

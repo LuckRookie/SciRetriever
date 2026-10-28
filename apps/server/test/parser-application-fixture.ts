@@ -69,6 +69,7 @@ export async function createParserFixtureApplication(
     },
   };
   const application = await createApplication(home, {
+    indexRefreshIntervalMs: null,
     ...rest,
     ...(parsing && !rest.proofreadPages ? { proofreadPages: pages } : {}),
     ...(parsing

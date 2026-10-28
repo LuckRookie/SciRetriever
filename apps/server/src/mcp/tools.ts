@@ -602,7 +602,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "search_context",
-    "Retrieve existing source or mixed knowledge context. request is the MaterialContextRequest or KnowledgeContextRequest contract, including scope/version/budget/continuation. Never rebuilds an index or generates content.",
+    "Retrieve existing source or mixed knowledge context. request is the MaterialContextRequest or KnowledgeContextRequest contract, including scope/version/budget/continuation. For material context, index-stale coverage may include verified items and continuation: source_revision is current, indexed_revision is the active watermark; stale-source hits are skipped with per-literature gaps. An index mutation invalidates old cursors and requires a new query. This read-only tool never refreshes/rebuilds an index or generates content.",
     object({
       kind: { enum: ["material", "knowledge"] },
       request: { type: "object" },

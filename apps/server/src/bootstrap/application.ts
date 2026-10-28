@@ -431,6 +431,8 @@ export type ApplicationStage =
   | "agents"
   | "schema";
 export interface ApplicationOptions {
+  /** Poll timing seam; null gives isolated tests explicit ownership of index phases. */
+  readonly indexRefreshIntervalMs?: number | null;
   readonly networkBudget?: NetworkBudgetCoordinator;
   readonly configurationSnapshot?: import("../configuration/owner.js").TypeScriptConfigurationSnapshot;
   readonly startupCredentials?: CredentialBundle;
@@ -1471,8 +1473,17 @@ async function createApplicationOwned(
       library,
       writes,
     );
-    indexRefresh = new IndexRefreshService(catalogPath, retrievalIndex, () =>
-      new RetrievalStorageClient(database!).revision(),
+    const refreshState = new RetrievalStorageClient(database);
+    indexRefresh = new IndexRefreshService(
+      catalogPath,
+      retrievalIndex,
+      () => refreshState.revision(),
+      options.indexRefreshIntervalMs === null
+        ? undefined
+        : {
+            inspect: () => refreshState.state(),
+            interval_ms: options.indexRefreshIntervalMs ?? 5000,
+          },
     );
     await indexRefresh.start();
     // One process-wide acquisition port, built here and shared by every caller: the
