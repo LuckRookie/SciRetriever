@@ -480,3 +480,28 @@ it("does not treat changed wording, removing/readding a draft or reading overlap
     );
   expect(q.state.stop?.validation?.issue_codes).toEqual(["missing", "unknown"]);
 });
+it("gives a compacted session a fresh no-progress window only after real work", () => {
+  // A real 57-suspect page disposed 40 suspects, compacted, and was stopped while
+  // re-reading its draft to dispose the last 17.
+  const run = (work: boolean) => {
+    const p = new TextProgress("proofread", 1);
+    const call = () => {
+      try {
+        p.beforeCall();
+        p.onDispatched();
+      } catch {
+        // The stop is read from state below.
+      }
+    };
+    call();
+    if (work) p.progress("dispositions", "s1");
+    for (let i = 0; i < 5; i++) call();
+    call(); // the compaction request
+    p.compacted();
+    for (let i = 0; i < 5; i++) call();
+    p.finish();
+    return p.state.stop?.code ?? null;
+  };
+  expect(run(true)).toBeNull();
+  expect(run(false)).toBe("no-progress");
+});

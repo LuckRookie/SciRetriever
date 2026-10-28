@@ -88,6 +88,7 @@ export class TextProgress {
   private accounted = 0;
   private priorRevision = 0;
   private stagnant = 0;
+  private compactedRevision = 0;
   private consecutive = 0;
   private fingerprint: string | null = null;
   private issueCodes: readonly string[] = [];
@@ -122,6 +123,17 @@ export class TextProgress {
   onDispatched() {
     this.dispatched++;
     this.priorRevision = this.revision;
+  }
+  /**
+   * A compacted model must re-read its draft before it can continue. Work since the
+   * previous compaction earns that reorientation a fresh window; an idle one does not.
+   */
+  compacted() {
+    if (this.revision > this.compactedRevision) {
+      this.stagnant = 0;
+      this.accounted = this.dispatched;
+    }
+    this.compactedRevision = this.revision;
   }
   rateLimited() {
     // The dispatched attempt consumed transport work, not a model decision.
@@ -600,7 +612,10 @@ export async function runArchiveTextSession<T>(
         onDispatched() {
           input.progress.onDispatched();
           calls++;
-          if (request.purpose === "compaction") compaction++;
+          if (request.purpose === "compaction") {
+            compaction++;
+            input.progress.compacted();
+          }
         },
         onUsage(usage) {
           if (

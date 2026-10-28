@@ -89,12 +89,15 @@ const correctionSchema = objectSchema({
 });
 // One shape for every status: a model that fixed a suspect still wants to say why.
 const dispositionSchema = objectSchema({
-  suspect_id: str,
+  suspect_id: {
+    type: "string",
+    description: "The suspect's short ID from read_reference, such as s12.",
+  },
   status: { type: "string", enum: ["fixed", "draft-correct", "uncertain"] },
   correction_ids: {
     ...idList,
     description:
-      "Host correction IDs that resolve this suspect: required for fixed, empty otherwise.",
+      "Short correction IDs (such as c3) that resolve this suspect: required for fixed, empty otherwise.",
   },
   reason: reasonText,
 });
@@ -130,6 +133,33 @@ function itemField(item: unknown): string {
   )
     return ".original";
   return "";
+}
+/**
+ * Page-local short names for host IDs. Real models mis-copied 36-character suspect
+ * UUIDs (a changed group, an extra digit, a truncated tail) and resent them unchanged;
+ * "s12" cannot drift that way. Records keep the real IDs.
+ */
+class PageHandles {
+  private readonly handles = new Map<string, string>();
+  private readonly ids = new Map<string, string>();
+  constructor(private readonly prefix: "s" | "c") {}
+  handle(id: string): string {
+    let h = this.handles.get(id);
+    if (!h) {
+      h = `${this.prefix}${this.handles.size + 1}`;
+      this.handles.set(id, h);
+      this.ids.set(h, id);
+    }
+    return h;
+  }
+  /** The handle a model knows, or the value itself when it never received one. */
+  name(id: string): string {
+    return this.handles.get(id) ?? id;
+  }
+  /** A handle, or a real ID sent directly, becomes the host ID; anything else stays as sent. */
+  id(value: unknown): unknown {
+    return typeof value === "string" ? (this.ids.get(value) ?? value) : value;
+  }
 }
 /** Parse a batch item by item so a rejection names each item to fix. */
 function batchItems<T>(
@@ -480,6 +510,8 @@ export class ArchivePageProofreadService {
         suspects = new Map<string, RetainedPageSuspect>(
           initialSuspects.map((s) => [s.suspect_id, s]),
         );
+      const suspectNames = new PageHandles("s"),
+        correctionNames = new PageHandles("c");
       let fullViewed = false,
         accepted: ReturnType<typeof acceptPageSubmission> | null = null;
       const progress = new TextProgress("proofread", page.page);
@@ -563,7 +595,7 @@ export class ArchivePageProofreadService {
         ),
         toolDeclaration(
           "put_corrections",
-          "Store leaf-local transcription corrections against original text. Host returns stable correction IDs and detects new suspects.",
+          "Store leaf-local transcription corrections against original text. Host returns one short correction ID (c1, c2, ...) per item in the order sent and detects new suspects.",
           {
             corrections: {
               type: "array",
@@ -574,12 +606,12 @@ export class ArchivePageProofreadService {
         ),
         toolDeclaration(
           "remove_corrections",
-          "Remove draft corrections by their stable IDs before replacing an overlapping draft.",
+          "Remove draft corrections by their short IDs (c1, c2, ...) before replacing an overlapping draft.",
           { correction_ids: idList },
         ),
         toolDeclaration(
           "put_dispositions",
-          "Resolve every suspect, citing host-generated correction IDs for fixed, or a short reason (one line, at most 120 characters) for draft-correct/uncertain.",
+          "Resolve every suspect by its short ID (s1, s2, ...), citing short correction IDs (c1, c2, ...) for fixed, or a short reason (one line, at most 120 characters) for draft-correct/uncertain.",
           {
             dispositions: {
               type: "array",
@@ -673,7 +705,7 @@ export class ArchivePageProofreadService {
               const rows: readonly unknown[] =
                 r.kind === "corrections"
                   ? [...corrections].map(([correction_id, operation]) => ({
-                      correction_id,
+                      correction_id: correctionNames.handle(correction_id),
                       leaf_id: operation.leaf_id,
                       start: operation.start,
                       end: operation.end,
@@ -686,7 +718,17 @@ export class ArchivePageProofreadService {
                       original_length: [...operation.original].length,
                       replacement_length: [...operation.replacement].length,
                     }))
-                  : [...dispositions.values()];
+                  : [...dispositions.values()].map((d) => ({
+                      ...d,
+                      suspect_id: suspectNames.handle(d.suspect_id),
+                      ...(d.status === "fixed"
+                        ? {
+                            correction_ids: d.correction_ids.map((id) =>
+                              correctionNames.handle(id),
+                            ),
+                          }
+                        : {}),
+                    }));
               return textReply({
                 draft: boundedItems(
                   rows,
@@ -736,6 +778,7 @@ export class ArchivePageProofreadService {
               const window = boundedItems(
                 [...suspects.values()].map((q) => ({
                   ...q,
+                  suspect_id: suspectNames.handle(q.suspect_id),
                   tokens: q.tokens.map((t) => cpSlice(t, 0, 200)),
                   tokens_truncated: q.tokens.some((t) => [...t].length > 200),
                 })),
@@ -805,7 +848,8 @@ export class ArchivePageProofreadService {
                   throw new ArchiveTextError("manual-conflict");
                 draft.set(correctRecordId(c, key), c);
               }
-              const applied = applyLeafCorrections(
+              // Rejects overlapping or out-of-leaf edits before the draft changes.
+              applyLeafCorrections(
                 retained,
                 [...draft.values()],
                 page.page,
@@ -820,9 +864,10 @@ export class ArchivePageProofreadService {
                   reason: "transcription",
                 });
               return textReply({
-                correction_ids: applied.records
-                  .map((c) => c.correction_id)
-                  .slice(-20),
+                // One ID per correction in this batch, in the order sent.
+                correction_ids: batch.map((c) =>
+                  correctionNames.handle(correctRecordId(c, key)),
+                ),
                 correction_count: corrections.size,
                 suspect_count: suspects.size,
               });
@@ -831,11 +876,15 @@ export class ArchivePageProofreadService {
               const r = toolRecord(args, ["correction_ids"]);
               if (
                 !Array.isArray(r.correction_ids) ||
-                r.correction_ids.length > 20 ||
-                r.correction_ids.some((id) => !corrections.has(String(id)))
+                r.correction_ids.length > 20
               )
                 throw new ArchiveTextError("tool-input");
-              for (const id of r.correction_ids) {
+              const removed = r.correction_ids.map((id) =>
+                String(correctionNames.id(id)),
+              );
+              if (removed.some((id) => !corrections.has(id)))
+                throw new ArchiveTextError("tool-input");
+              for (const id of removed) {
                 if (lockedIds.has(corrections.get(String(id))!.leaf_id))
                   throw new ArchiveTextError("manual-conflict");
                 corrections.delete(String(id));
@@ -849,7 +898,26 @@ export class ArchivePageProofreadService {
                 throw new ArchiveTextError("tool-input");
               const parsed = batchItems(
                 "dispositions",
-                r.dispositions,
+                r.dispositions.map((d: unknown) =>
+                  d && typeof d === "object" && !Array.isArray(d)
+                    ? {
+                        ...d,
+                        suspect_id: suspectNames.id(
+                          (d as Record<string, unknown>).suspect_id,
+                        ),
+                        ...(Array.isArray(
+                          (d as Record<string, unknown>).correction_ids,
+                        )
+                          ? {
+                              correction_ids: (
+                                (d as Record<string, unknown>)
+                                  .correction_ids as unknown[]
+                              ).map((id) => correctionNames.id(id)),
+                            }
+                          : {}),
+                      }
+                    : d,
+                ),
                 parseSuspectDisposition,
               );
               // Name each rejected item, or the model resends the same batch unchanged.
@@ -864,7 +932,7 @@ export class ArchivePageProofreadService {
                   "suspect-disposition-invalid",
                   invalid.map((d) => ({
                     code: "suspect-disposition-invalid",
-                    id: d.suspect_id,
+                    id: suspectNames.name(d.suspect_id),
                   })),
                 );
               for (const d of parsed) dispositions.set(d.suspect_id, d);

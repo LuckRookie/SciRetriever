@@ -819,6 +819,92 @@ it("names each rejected disposition so the model does not resend the same batch"
     await runtime.close();
   }
 });
+it("hands the model short page-local suspect and correction IDs and stores the real ones", async () => {
+  // Real models mis-copied 36-character suspect UUIDs and resent them unchanged.
+  const f = await archiveTextFixture([{ text: "Yield 67%." }], {
+      layers: ["Yield 97%."],
+    }),
+    snapshot = arranged(f.source),
+    leaf = snapshot.leaves[0]!;
+  const replies: Record<string, unknown>[] = [];
+  let calls = 0;
+  const runtime = fakeTextRuntime(async (request) => {
+    calls++;
+    // The view_page reply is an image, not JSON.
+    if (calls > 1 && calls !== 3) replies.push(toolJson(request));
+    if (calls === 1)
+      return modelTool("read_blocks", {
+        page_index: 0,
+        index: 0,
+        offset: 0,
+        limit: 20,
+      });
+    if (calls === 2)
+      return modelTool("view_page", { page_index: 0, region: null });
+    if (calls === 3)
+      return modelTool("read_reference", {
+        page_index: 0,
+        text_offset: 0,
+        suspect_offset: 0,
+      });
+    if (calls === 4)
+      return modelTool("put_corrections", {
+        corrections: [
+          {
+            kind: "correct",
+            leaf_id: leaf.leaf_id,
+            start: 6,
+            end: 8,
+            original: "67",
+            replacement: "97",
+            basis_page_index: 0,
+            reason: "The image prints 97.",
+          },
+        ],
+      });
+    if (calls === 5)
+      return modelTool("put_dispositions", {
+        dispositions: [
+          ...["s1", "s2"].map((suspect_id) => ({
+            suspect_id,
+            status: "fixed",
+            correction_ids: ["c1"],
+            reason: "The image prints 97.",
+          })),
+        ],
+      });
+    return modelTool("submit_page", { no_change: false });
+  });
+  try {
+    const result = await new ArchivePageProofreadService(
+      runtime,
+      fakePages(f.pages),
+      memoryTextCache().cache,
+    ).build(f.source, snapshot, f.pages);
+    expect(
+      (replies[1]!.suspects as { suspect_id: string }[]).map(
+        (q) => q.suspect_id,
+      ),
+    ).toEqual(["s1", "s2"]);
+    expect(replies[2]).toMatchObject({ correction_ids: ["c1"] });
+    expect(result.complete).toBe(true);
+    const page = result.pages[0]!,
+      correction = page.corrections[0]!.correction_id;
+    expect(page.dispositions).toEqual(
+      page.suspects.map((q) => ({
+        suspect_id: q.suspect_id,
+        status: "fixed",
+        correction_ids: [correction],
+      })),
+    );
+    expect(page.suspects.map((q) => q.suspect_id)).toEqual([
+      expect.stringMatching(/^[0-9a-f-]{36}$/u),
+      expect.stringMatching(/^[0-9a-f-]{36}$/u),
+    ]);
+  } finally {
+    await runtime.close();
+  }
+});
 it("names the batch item and field a mistyped id breaks", async () => {
   // A real page: one suspect id with an extra digit drew three identical resends.
   const f = await archiveTextFixture([{ text: "Yield 67%." }]);
