@@ -400,7 +400,7 @@ render 从保留叶块及已记录 correct 确定性生成 Markdown、DocumentSt
 
 结构注释采用独立 schema 2，直接从整理归属和图注挂接派生，role_source 为 arrangement 或 manual，不再调用章节分类模型。11 个新骨架角色与历史角色分别解码，不作名称映射。`body_content_leaf_ids` 记录真正具有保留正文 payload 的正文类叶块；纯标题不满足 READY。正文类角色恰为 introduction、methods、results-discussion、conclusion、additional。主文仍需完整校订、当前默认文档、派生注释、必需元数据与标签；补充材料和参考文献缺口不独自阻断主文。没有叶块的页所产生的 page-content-missing 是非阻断问题。
 
-元数据只读取 title/authors/abstract/keywords 保留片段，以及 bibliography 删除叶块的原始文字。后者带 raw parse、整理、源 span 的专门证据，不冒充文档 segment。参考文献、标签、检索和算子使用固定文档的保留内容。内容版本仍为 hash(文档版本, 结构注释)，变更经现有事务内事件使下游结果过时，不隐式重算。
+元数据按 [ADR 0045](../decisions/0045-archive-metadata-reads-whole-paper.md) 读取校订稿的全部保留片段，以及全部删除叶块的原始文字，删除叶块的角色写作 `dropped:<理由>`。后者带 raw parse、整理、源 span 和删除理由的专门证据，不冒充文档 segment。模型引用 `f1`、`f2` 等本次输入内的短编号，宿主按编号保存真实证据；输入上限为 4096 个片段、1 MiB。参考文献、标签、检索和算子使用固定文档的保留内容。内容版本仍为 hash(文档版本, 结构注释)，变更经现有事务内事件使下游结果过时，不隐式重算。
 
 新旧校订稿发布都只等待全文索引刷新请求持久化，回执为 index_status=scheduled；不等待整库扫描，也不因索引失败撤销发布或阻断建档完成。排队、失败读取与显式重试见[检索技术篇](06-retrieval-context.md#49-材料-context-的实现边界)。索引状态与固定文档、注释和 READY 分开。
 

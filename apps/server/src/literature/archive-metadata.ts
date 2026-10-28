@@ -75,12 +75,11 @@ export class ArchiveMetadataService {
         const roles = new Map(
           annotation.segment_roles.map((s) => [s.segment_id, s.role]),
         );
+        // Archive metadata reads the whole paper: kept segments and every dropped leaf.
         const fragments: MetadataFragment[] = structure.segments
           .filter((s) =>
             annotation.schema_version === 2
-              ? ["title", "authors", "abstract", "keywords"].includes(
-                  roles.get(s.segment_id) ?? "",
-                )
+              ? true
               : s.page === 0 ||
                 ["front-matter", "abstract", "keywords"].includes(
                   roles.get(s.segment_id) ?? "",
@@ -114,15 +113,11 @@ export class ArchiveMetadataService {
           )
             throw new Error("metadata-arrangement-required");
           for (const row of output.bundle.leaves) {
-            if (
-              row.destination.kind !== "dropped" ||
-              row.destination.reason !== "bibliography"
-            )
-              continue;
+            if (row.destination.kind !== "dropped") continue;
             fragments.push({
               fragment_id: row.leaf.leaf_id,
               page: row.leaf.page_index + 1,
-              role: "bibliography",
+              role: `dropped:${row.destination.reason}`,
               text: row.leaf.original_text,
               evidence: {
                 kind: "arrangement-leaf",
@@ -131,20 +126,25 @@ export class ArchiveMetadataService {
                 raw_parse_id: output.version.draft_input.raw_parse_id,
                 leaf_id: row.leaf.leaf_id,
                 source: row.leaf.source,
-                drop_reason: "bibliography",
+                drop_reason: row.destination.reason,
               },
             });
           }
         }
-        if (!fragments.length) throw new Error("metadata-fragments-missing");
+        // Evidence carries the real IDs; the model cites short ones it cannot mistype.
+        const cited =
+          annotation.schema_version === 2
+            ? fragments.map((f, i) => ({ ...f, fragment_id: `f${i + 1}` }))
+            : fragments;
+        if (!cited.length) throw new Error("metadata-fragments-missing");
         if (
-          fragments.length > 512 ||
-          Buffer.byteLength(JSON.stringify(fragments), "utf8") > 256 * 1024
+          cited.length > 4096 ||
+          Buffer.byteLength(JSON.stringify(cited), "utf8") > 1024 * 1024
         )
           throw new Error("metadata-input-limit");
-        const response = await proposer.propose(fragments, signal);
+        const response = await proposer.propose(cited, signal);
         return {
-          ...validateMetadataProposals(response.value, document, fragments),
+          ...validateMetadataProposals(response.value, document, cited),
           usage: response.usage,
           model: response.model,
         };

@@ -952,7 +952,7 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
               if (role.method === "section-role-dsh-v1")
                 return { role: "body" };
               if (
-                role.method === "archive-metadata-dsh-v1" ||
+                role.method === "archive-metadata-dsh-v2" ||
                 ["topics", "select", "consolidate"].includes(String(role.task))
               )
                 return archiveModel(role);

@@ -3,7 +3,11 @@ import {
   archiveList,
   type ArchiveMetadataFragmentEvidence,
 } from "./archive-publication.js";
-import { parseSourceSpan } from "./archive-text.js";
+import {
+  ARCHIVE_DROP_REASONS,
+  parseSourceSpan,
+  type ArchiveDropReason,
+} from "./archive-text.js";
 import {
   ContractValidationError,
   parseLiteratureMetadata,
@@ -155,7 +159,12 @@ export function parseMetadataFieldCandidate(
             "source",
             "drop_reason",
           ]);
-          if (q.kind !== "arrangement-leaf" || q.drop_reason !== "bibliography")
+          if (
+            q.kind !== "arrangement-leaf" ||
+            !(ARCHIVE_DROP_REASONS as readonly unknown[]).includes(
+              q.drop_reason,
+            )
+          )
             fail();
           return {
             kind: q.kind,
@@ -164,7 +173,7 @@ export function parseMetadataFieldCandidate(
             raw_parse_id: text(q.raw_parse_id),
             leaf_id: text(q.leaf_id),
             source: parseSourceSpan(q.source),
-            drop_reason: q.drop_reason,
+            drop_reason: q.drop_reason as ArchiveDropReason,
           };
         },
         64,

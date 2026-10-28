@@ -53,7 +53,7 @@ export async function archiveFixture(
 }
 
 export function archiveModel(input: ModelInput) {
-  if (input.method === "archive-metadata-dsh-v1") {
+  if (input.method === "archive-metadata-dsh-v2") {
     const fragments = input.fragments as { fragment_id: string }[];
     return {
       proposals: [

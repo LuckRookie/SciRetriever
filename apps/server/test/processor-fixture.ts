@@ -50,7 +50,7 @@ export async function processorFixture(
   e.setModel((input, signal) =>
     input.method === "section-role-dsh-v1"
       ? { role: "body" }
-      : input.method === "archive-metadata-dsh-v1" ||
+      : input.method === "archive-metadata-dsh-v2" ||
           ["topics", "select", "consolidate"].includes(String(input.task))
         ? archiveModel(input)
         : reply(input, signal),

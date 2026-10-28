@@ -580,7 +580,7 @@ export type ArchiveMetadataFragmentEvidence =
       readonly raw_parse_id: string;
       readonly leaf_id: string;
       readonly source: import("./archive-text.js").SourceSpan;
-      readonly drop_reason: "bibliography";
+      readonly drop_reason: import("./archive-text.js").ArchiveDropReason;
     };
 
 export function archivePageCursor(proofread_id: string, offset: number) {

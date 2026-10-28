@@ -18,6 +18,7 @@ ADR 记录已经接受并会长期约束后续设计的重要选择。ADR 不替
 
 ## 当前 ADR
 
+- [ADR 0045：建档元数据读取整篇论文](0045-archive-metadata-reads-whole-paper.md)：**Accepted**，2026-10-28（Owner 确认）；元数据步骤读取校订稿全部保留片段和全部删除区块，不再只读四个章节与书目行；模型引用短编号；部分取代 ADR 0041 第 5 节。
 - [ADR 0043：配置齐全的元数据来源默认启用](0043-configured-metadata-auto.md)：**Accepted**，2026-10-28（Owner 授权完成计划 17）；Metadata Auto 在公开集合之外，加入配置齐全的 Elsevier、Springer Nature 与 Web of Science；部分取代 ADR 0022 第 2 节的固定集合。
 - [ADR 0042：浏览器观看改用页面投屏，取得控制权后直接输入](0042-browser-screencast-and-direct-input.md)：**Accepted**，2026-10-28（Owner 授权完成计划 17）；人看的画面改用页面投屏，与 Agent 观察分开；取得控制权后人工输入直接派发，不再按观察 revision 校验；部分取代 ADR 0026 第 4 节的页面版本校验与 ADR 0032 第 5 节第 2 条。
 - [ADR 0041：建档先整理、再逐页校订保留内容](0041-arrange-then-per-page-proofread.md)：**Accepted**，2026-10-27；建档改为先由 Agent 提交整理操作（归属、删除、拆分、合并，不改字），再对保留叶块逐页开独立短会话校订；不设调用上限，只拦截无意义消耗；部分取代 ADR 0037 第 3、5 节等。

@@ -47,15 +47,15 @@ it("arranges a 160-section synthetic document in 36 calls using read-block leaf 
   }
 }, 30000);
 
-it("publishes the six-step X workflow, excludes dropped text from fixed documents, and gives metadata bibliography evidence", async () => {
+it("publishes the six-step X workflow, excludes dropped text from fixed documents, and gives metadata the whole paper", async () => {
   const e = await archiveFixture();
-  let fragments: { role: string; text: string }[] = [];
+  let fragments: { fragment_id: string; role: string; text: string }[] = [];
   try {
     e.setText(
       "DROP_HEADER Publisher interface.\n\nBIBLIOGRAPHY DOI: 10.1000/fixture.\n\n# Abstract\n\nFixture Author studies spectroscopy.\n\n# Introduction\n\nRetained synthetic body.\n\n# References\n\n[1] Example synthetic reference.\n",
     );
     e.setModel((input) => {
-      if (input.method === "archive-metadata-dsh-v1")
+      if (input.method === "archive-metadata-dsh-v2")
         fragments = input.fragments as typeof fragments;
       return archiveModel(input);
     });
@@ -81,12 +81,24 @@ it("publishes the six-step X workflow, excludes dropped text from fixed document
     expect(
       output.bundle.leaves.filter((l) => l.destination.kind === "dropped"),
     ).toHaveLength(2);
+    // Metadata reads kept and dropped text alike, citing short fragment IDs.
     expect(
       fragments.some(
-        (f) => f.role === "bibliography" && f.text.includes("BIBLIOGRAPHY"),
+        (f) =>
+          f.role === "dropped:bibliography" && f.text.includes("BIBLIOGRAPHY"),
       ),
     ).toBe(true);
-    expect(fragments.some((f) => f.text.includes("DROP_HEADER"))).toBe(false);
+    expect(
+      fragments.some(
+        (f) => f.role.startsWith("dropped:") && f.text.includes("DROP_HEADER"),
+      ),
+    ).toBe(true);
+    expect(
+      fragments.some((f) => f.text.includes("Retained synthetic body.")),
+    ).toBe(true);
+    expect(fragments.map((f) => f.fragment_id)).toEqual(
+      fragments.map((_, i) => `f${i + 1}`),
+    );
     await new SqliteDocumentStorage(
       e.app.database,
       e.app.files,
