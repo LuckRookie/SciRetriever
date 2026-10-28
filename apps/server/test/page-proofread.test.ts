@@ -819,6 +819,53 @@ it("names each rejected disposition so the model does not resend the same batch"
     await runtime.close();
   }
 });
+it.each([
+  ["distinct spans keep the page going", true],
+  ["the same search repeated stops it", false],
+] as const)(
+  "counts each newly located span as progress: %s",
+  async (_name, distinct) => {
+    // A real page: the model located a dozen spans before correcting, and was stopped.
+    const words =
+      "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+    const f = await archiveTextFixture([{ text: words + "." }]),
+      snapshot = arranged(f.source),
+      leaf = snapshot.leaves[0]!,
+      targets = words.split(" ");
+    let calls = 0;
+    const runtime = fakeTextRuntime(async () => {
+      calls++;
+      if (calls === 1)
+        return modelTool("read_blocks", {
+          page_index: 0,
+          index: 0,
+          offset: 0,
+          limit: 20,
+        });
+      if (calls === 2)
+        return modelTool("view_page", { page_index: 0, region: null });
+      if (calls <= 2 + targets.length)
+        return modelTool("find_text", {
+          leaf_id: leaf.leaf_id,
+          text: distinct ? targets[calls - 3]! : targets[0]!,
+          start: 0,
+        });
+      return modelTool("submit_page", { no_change: true });
+    });
+    try {
+      const result = await new ArchivePageProofreadService(
+        runtime,
+        fakePages(f.pages),
+        memoryTextCache().cache,
+      ).build(f.source, snapshot, f.pages);
+      expect(result.complete).toBe(distinct);
+      if (!distinct)
+        expect(result.pages[0]!.stop).toMatchObject({ code: "no-progress" });
+    } finally {
+      await runtime.close();
+    }
+  },
+);
 it("ends a page with a typed page-tools stop when image rendering fails", async () => {
   const f = await archiveTextFixture([{ text: "Content." }]),
     runtime = fakeTextRuntime(async () =>

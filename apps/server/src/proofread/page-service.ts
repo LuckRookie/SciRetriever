@@ -663,6 +663,9 @@ export class ArchivePageProofreadService {
                 const start = toolCount(r.start),
                   tail = cpSlice(leaf.original_text, start),
                   at = tail.indexOf(r.text);
+                // Locating a new span to correct is real work; a repeated search is not.
+                if (at >= 0)
+                  progress.progress("find", [leaf.leaf_id, r.text, start]);
                 return textReply({
                   start: at < 0 ? null : start + [...tail.slice(0, at)].length,
                   end:
