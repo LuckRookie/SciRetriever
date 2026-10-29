@@ -181,13 +181,13 @@ it(
           operation: "add",
           request: { folder_id: child.folder_id, literature_ids: [id] },
         }),
-      ).toEqual({ folder_id: child.folder_id, changed: 1 });
+      ).toEqual({ folder_id: child.folder_id, changed: 1, changed_ids: [id] });
       expect(
         await manageFolder(api, {
           operation: "add",
           request: { folder_id: child.folder_id, literature_ids: [id] },
         }),
-      ).toEqual({ folder_id: child.folder_id, changed: 0 });
+      ).toEqual({ folder_id: child.folder_id, changed: 0, changed_ids: [] });
       const query = parseLibrarySearchRequest({
         query: { folder: { id: root.folder_id, include_descendants: true } },
       }).query;

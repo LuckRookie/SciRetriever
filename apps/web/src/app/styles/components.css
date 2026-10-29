@@ -752,9 +752,6 @@
   .ui-overlay[data-entering] {
     animation: ui-overlay-in var(--dur-2);
   }
-  .ui-overlay[data-exiting] {
-    animation: ui-overlay-in var(--dur-1) var(--ease-in) reverse forwards;
-  }
   @keyframes ui-overlay-in {
     from {
       opacity: 0;
