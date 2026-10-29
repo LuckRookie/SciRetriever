@@ -8,7 +8,9 @@
 
 ## 当前提案
 
-当前没有独立活动提案。已被精简首版替代的完整版知识加工方案已完整移入[历史提案](../archive/2026-10-17-knowledge-processing-full-design/README.md)；其它已接受或被替代材料见[历史索引](../archive/README.md)。目标合同中尚待定稿的部分继续在其归属技术文档标明，不能当作已发布接口。
+- [阅读批注：高亮、笔记与框选](2026-10-29-reading-annotations.md)（under-review）：选区工具栏、高亮笔、笔记与标签、框选区域、批注面板，以及批注数据的归属与机器接口。
+
+已被精简首版替代的完整版知识加工方案已完整移入[历史提案](../archive/2026-10-17-knowledge-processing-full-design/README.md)；其它已接受或被替代材料见[历史索引](../archive/README.md)。目标合同中尚待定稿的部分继续在其归属技术文档标明，不能当作已发布接口。
 
 活动提案使用 TOML front matter：
 
