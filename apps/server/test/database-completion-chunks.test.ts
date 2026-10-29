@@ -57,7 +57,9 @@ async function fixture(count: number) {
   await mkdir(join(home, ".sciretriever"), { mode: 0o700 });
   await writeFile(
     join(home, ".sciretriever", "config.toml"),
-    "[execution]\nmax_concurrency = 2\n",
+    // No configured acquisition sources: Auto now includes Sci-Hub, which
+    // would send the synthetic DOIs to the real service.
+    '[execution]\nmax_concurrency = 2\n[sources.acquisition]\nmode = "custom"\nproviders = []\n',
     { mode: 0o600 },
   );
   const acquisitionResolver = vi.fn(async () => {

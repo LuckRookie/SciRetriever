@@ -358,11 +358,18 @@ describe("explicit maintenance operation across Application, CLI and durable Job
         await durable.app.jobs!.listAttempts(rows[0]!.target_id),
       ).toHaveLength(1);
       expect((await durable.app.jobs!.getBudget(job.job_id))?.attempts).toBe(1);
-      expect(
-        (await durable.app.jobs!.listEvents(job.job_id)).map(
-          (item) => item.kind,
-        ),
-      ).toEqual(["attempt-started", "attempt-skipped"]);
+      // Each source's try is recorded between the target's start and end
+      // (the task's acquisition trail); nothing else is.
+      const kinds = (await durable.app.jobs!.listEvents(job.job_id)).map(
+        (item) => item.kind,
+      );
+      expect([kinds[0], kinds.at(-1)]).toEqual([
+        "attempt-started",
+        "attempt-skipped",
+      ]);
+      expect(new Set(kinds.slice(1, -1))).toEqual(
+        new Set(["acquisition-attempt", "pdf-source-result"]),
+      );
       for (const report of [cliReport, directReport]) {
         expect(report.end.kind).toBe("finished");
         expect(report.skipped).toMatchObject([
