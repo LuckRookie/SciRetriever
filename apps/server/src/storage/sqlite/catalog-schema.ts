@@ -41,13 +41,13 @@ export async function catalogNeedsInitialization(
   if (!(await schemaTargetFile(path))) return true;
   const db = new DatabaseSync(path, { readOnly: true });
   try {
-    return !db
-      .prepare(
-        "SELECT 1 FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' LIMIT 1",
-      )
-      .get();
+    // An existing catalog must already name the current layout: refuse it
+    // here, read-only, before anything opens it for writing.
+    return !readCatalogIdentity(db, CURRENT_CATALOG_CONFIG);
   } catch (error) {
     throwCatalogCorruption(error);
+    if (error instanceof CatalogLayoutError)
+      throw new CatalogSchemaError(error.reason, { cause: error });
     throw new CatalogSchemaError("catalog-layout-not-current", {
       cause: error,
     });

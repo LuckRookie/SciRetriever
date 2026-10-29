@@ -151,8 +151,11 @@ describe("Web default storage", () => {
           await symlink(original, catalog);
         } else await writeFile(catalog, "not a database");
         const before = await readFile(original);
+        // Bytes that are not SQLite are reported as a corrupt catalog with a
+        // verify-catalog hint, never taken for an uninitialized one.
         await expect(open(home)).rejects.toMatchObject({
-          code: "catalog-schema-refused",
+          code:
+            kind === "corrupt" ? "catalog-corrupt" : "catalog-schema-refused",
         });
         expect(await readFile(original)).toEqual(before);
         await expect(stat(join(directory, "artifacts"))).rejects.toMatchObject({

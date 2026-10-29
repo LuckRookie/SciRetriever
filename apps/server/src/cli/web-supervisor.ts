@@ -87,9 +87,18 @@ export async function startWebSupervisor(
 ): Promise<WebSupervisor> {
   validateWorkbenchAccess(options.access);
   delete process.env.SCIRETRIEVER_WEB_PASSWORD;
+  // The worker is a separate Node process; when this module runs from source
+  // (tests), it starts the built worker, since there is no web-worker.js here.
   const entry =
     options.workerEntry ??
-    fileURLToPath(new URL("./web-worker.js", import.meta.url));
+    fileURLToPath(
+      new URL(
+        import.meta.url.endsWith(".ts")
+          ? "../../dist/cli/web-worker.js"
+          : "./web-worker.js",
+        import.meta.url,
+      ),
+    );
   let child: ChildProcess | undefined,
     ready: WorkerReady | undefined,
     generation = 0,

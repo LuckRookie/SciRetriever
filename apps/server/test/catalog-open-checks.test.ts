@@ -88,7 +88,11 @@ it("uses an empty-target probe while explicit schema inspection still checks dat
       db = new DatabaseSync(foreign);
     db.exec("CREATE TABLE foreign_data(value TEXT)");
     db.close();
-    expect(await catalogNeedsInitialization(foreign)).toBe(false);
+    // A foreign or older catalog is refused read-only, before anything opens it for writing.
+    await expect(catalogNeedsInitialization(foreign)).rejects.toMatchObject({
+      code: "catalog-schema-refused",
+      reason: "catalog-layout-not-current",
+    });
     const prepare = DatabaseSync.prototype.prepare;
     const probe = vi
       .spyOn(DatabaseSync.prototype, "prepare")
