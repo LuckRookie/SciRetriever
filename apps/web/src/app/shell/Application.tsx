@@ -2,11 +2,13 @@ import {
   Component,
   Fragment,
   Suspense,
+  createElement,
   lazy,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
+  type ComponentType,
   type ReactNode,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -55,32 +57,77 @@ import { ShellContext } from "./context.js";
 import { Icon } from "./icon.js";
 import { CommandPalette } from "./CommandPalette.js";
 import { sectionLabels, errorMessage } from "../strings.js";
+import { warmInterfaceFonts } from "../styles/warm-fonts.js";
 
-const Tags = lazy(() => import("../features/tags/Tags.js"));
-const Snapshots = lazy(() => import("../features/archive/Snapshots.js"));
-const Archive = lazy(() => import("../features/archive/Archive.js"));
-const Library = lazy(() => import("../features/library/Library.js"));
-const Reader = lazy(() => import("../features/reader/Reader.js"));
+/**
+ * Route chunks load on first visit; once the shell is idle the rest are fetched
+ * too. A page whose code is already here renders directly: going through
+ * `lazy` would still suspend once, and React holds a revealed boundary back for
+ * about 300 ms, which was most of a first section switch.
+ */
+const warm: (() => Promise<unknown>)[] = [];
+function page<P extends object>(
+  load: () => Promise<{ default: ComponentType<P> }>,
+) {
+  let loaded: ComponentType<P> | undefined;
+  const fetch = () =>
+    load().then((module) => {
+      loaded = module.default;
+      return module;
+    });
+  warm.push(fetch);
+  const Lazy = lazy(fetch);
+  return function Page(props: P) {
+    // One instance keeps the component it mounted with, so warming never remounts it.
+    const [View] = useState<ComponentType<P>>(() => loaded ?? Lazy);
+    return createElement(View, props);
+  };
+}
+function warmPages(): () => void {
+  let stopped = false;
+  const run = async () => {
+    warmInterfaceFonts();
+    for (const load of warm) {
+      if (stopped) return;
+      await load().catch(() => undefined);
+    }
+  };
+  const handle =
+    typeof requestIdleCallback === "function"
+      ? requestIdleCallback(() => void run(), { timeout: 4000 })
+      : window.setTimeout(() => void run(), 1500);
+  return () => {
+    stopped = true;
+    if (typeof cancelIdleCallback === "function") cancelIdleCallback(handle);
+    else window.clearTimeout(handle);
+  };
+}
+
+const Tags = page(() => import("../features/tags/Tags.js"));
+const Snapshots = page(() => import("../features/archive/Snapshots.js"));
+const Archive = page(() => import("../features/archive/Archive.js"));
+const Library = page(() => import("../features/library/Library.js"));
+const Reader = page(() => import("../features/reader/Reader.js"));
 const Lab = lazy(() => import("../features/lab/Lab.js"));
 const Gallery = lazy(() => import("../features/lab/Gallery.js"));
-const Tasks = lazy(() => import("../features/tasks/Tasks.js"));
+const Tasks = page(() => import("../features/tasks/Tasks.js"));
 const ActivityList = lazy(() =>
   import("../features/tasks/Tasks.js").then((module) => ({
     default: module.ActivityList,
   })),
 );
-const Agents = lazy(() => import("../features/agents/Agents.js"));
-const SourceStatistics = lazy(
+const Agents = page(() => import("../features/agents/Agents.js"));
+const SourceStatistics = page(
   () => import("../features/tasks/SourceStatistics.js"),
 );
-const Browser = lazy(() => import("../features/browser/Browser.js"));
-const Retrieval = lazy(() => import("../features/retrieval/Retrieval.js"));
-const Insights = lazy(() => import("../features/insights/Insights.js"));
-const Settings = lazy(() => import("../features/settings/Settings.js"));
-const Processing = lazy(() => import("../features/processing/Processing.js"));
-const Synthesis = lazy(() => import("../features/synthesis/Synthesis.js"));
-const Intake = lazy(() => import("../features/intake/Intake.js"));
-const Maintenance = lazy(
+const Browser = page(() => import("../features/browser/Browser.js"));
+const Retrieval = page(() => import("../features/retrieval/Retrieval.js"));
+const Insights = page(() => import("../features/insights/Insights.js"));
+const Settings = page(() => import("../features/settings/Settings.js"));
+const Processing = page(() => import("../features/processing/Processing.js"));
+const Synthesis = page(() => import("../features/synthesis/Synthesis.js"));
+const Intake = page(() => import("../features/intake/Intake.js"));
+const Maintenance = page(
   () => import("../features/maintenance/Maintenance.js"),
 );
 
@@ -142,6 +189,10 @@ export function Application() {
       api.close();
     };
   }, [api, queries]);
+  useEffect(
+    () => (connection.isSuccess ? warmPages() : undefined),
+    [connection.isSuccess],
+  );
   return (
     <PageBoundary resetKey="application">
       <ApiContext.Provider value={api}>

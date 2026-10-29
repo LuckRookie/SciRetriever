@@ -403,8 +403,11 @@
     border-bottom: 1px solid var(--line);
     transition: background-color var(--dur-1);
   }
+  /* Hover arrives in the same frame as the pointer and only fades on leave:
+     a fade-in never finished while the pointer swept down the list. */
   .paper-row:hover {
     background: var(--hover);
+    transition-duration: 0ms;
   }
   /* Row tools stay out of sight until the row is touched or a selection begins. */
   .paper-row > .paper-check,

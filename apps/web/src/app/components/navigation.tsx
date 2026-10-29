@@ -1,5 +1,4 @@
 import {
-  useId,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -27,12 +26,7 @@ import {
   Tooltip as AriaTooltip,
   TooltipTrigger,
 } from "react-aria-components";
-import { motion } from "motion/react";
-import {
-  AnimatedPanel,
-  useMotionPreference,
-  motionParameters,
-} from "../motion/index.js";
+import { AnimatedPanel, useMotionPreference } from "../motion/index.js";
 import { Icon } from "./icons.js";
 import { Button, IconButton } from "./actions.js";
 export interface TabItem {
@@ -58,14 +52,43 @@ function TabNavigation({
   segmented,
   orientation = "horizontal",
 }: TabsProps & { segmented: boolean }) {
-  const id = useId();
   const { reduced } = useMotionPreference();
+  const root = useRef<HTMLDivElement>(null);
+  const from = useRef<DOMRect | null>(null);
+  const indicator = () =>
+    root.current?.querySelector<HTMLElement>(
+      ".ui-tab[data-selected] .ui-tab-indicator",
+    );
+  // The indicator glides from the old tab only when the selection changes, so
+  // the page is measured once per change instead of on every render.
+  useLayoutEffect(() => {
+    const before = from.current,
+      now = indicator();
+    from.current = null;
+    if (!before || !now || reduced) return;
+    const after = now.getBoundingClientRect();
+    if (!after.width || !after.height) return;
+    now.animate(
+      [
+        {
+          transformOrigin: "0 0",
+          transform: `translate(${before.left - after.left}px, ${before.top - after.top}px) scale(${before.width / after.width}, ${before.height / after.height})`,
+        },
+        { transformOrigin: "0 0", transform: "none" },
+      ],
+      { duration: 220, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+    );
+  }, [value, reduced]);
   return (
     <AriaTabs
+      ref={root}
       className={segmented ? "ui-segmented" : "ui-tabs"}
       orientation={orientation}
       selectedKey={value}
-      onSelectionChange={(key) => onChange(String(key))}
+      onSelectionChange={(key) => {
+        from.current = indicator()?.getBoundingClientRect() ?? null;
+        onChange(String(key));
+      }}
       disabledKeys={items
         .filter((item) => item.disabled)
         .map((item) => item.id)}
@@ -75,17 +98,7 @@ function TabNavigation({
           <Tab key={item.id} id={item.id} className="ui-tab">
             {({ isSelected }) => (
               <>
-                {isSelected ? (
-                  <motion.span
-                    className="ui-tab-indicator"
-                    layoutId={`${id}-indicator`}
-                    transition={
-                      reduced
-                        ? { duration: 0 }
-                        : { type: "spring", ...motionParameters.spring }
-                    }
-                  />
-                ) : null}
+                {isSelected ? <span className="ui-tab-indicator" /> : null}
                 <span className="ui-tab-label">{item.label}</span>
               </>
             )}

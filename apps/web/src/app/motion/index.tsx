@@ -237,7 +237,9 @@ export function LayoutGroup({
   className?: string | undefined;
 }) {
   return (
-    <AnimatedPanel layout className={className} preset="fadeIn">
+    // No layout projection here: measuring the whole result region on every
+    // library update forced a full page layout per render.
+    <AnimatedPanel className={className} preset="fadeIn">
       {children}
     </AnimatedPanel>
   );

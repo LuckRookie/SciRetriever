@@ -2,6 +2,45 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { request } from "node:http";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+
+const source = fileURLToPath(new URL("./src/", import.meta.url));
+/**
+ * Every CJK character the interface copy uses, so the app can load the font
+ * slices it needs once at start instead of re-shaping the page each time a
+ * new section brings in another slice.
+ */
+function interfaceGlyphs() {
+  const id = "virtual:interface-glyphs",
+    resolved = "\0" + id;
+  return {
+    name: "sciretriever-interface-glyphs",
+    resolveId: (value) => (value === id ? resolved : undefined),
+    load(value) {
+      if (value !== resolved) return undefined;
+      const chars = new Set();
+      const walk = (dir) => {
+        for (const name of readdirSync(dir)) {
+          const path = join(dir, name);
+          if (statSync(path).isDirectory()) walk(path);
+          else if (/\.tsx?$/u.test(name) && !/\.test\./u.test(name)) {
+            this.addWatchFile(path);
+            for (const ch of readFileSync(path, "utf8"))
+              if (
+                /[\u3000-\u303f\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/u.test(
+                  ch,
+                )
+              )
+                chars.add(ch);
+          }
+        }
+      };
+      walk(source);
+      return `export default ${JSON.stringify([...chars].sort().join(""))};`;
+    },
+  };
+}
 
 const target =
   process.env.SCIRETRIEVER_WEB_API_ORIGIN ?? "http://127.0.0.1:4174";
@@ -56,6 +95,7 @@ export default defineConfig({
         });
       },
     },
+    interfaceGlyphs(),
     react(),
   ],
   resolve: {
