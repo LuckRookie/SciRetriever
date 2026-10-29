@@ -38,7 +38,7 @@ import { constants } from "node:fs";
 import { lstat, mkdir, mkdtemp, open, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import { acquireFileLock, type FileLock } from "../storage/locking.js";
 import type { BrowserPageSnapshot } from "./observation.js";
 import { randomUUID } from "node:crypto";
@@ -453,6 +453,8 @@ export class BrowserHost {
       try {
         await configurePdfDownloads(this.options.profile);
         await clearOwnedDebugEndpoint(this.options.profile);
+        // Playwright loads lazily so commands that never open a browser skip it.
+        const { chromium } = await import("playwright");
         this.context = await chromium.launchPersistentContext(
           this.options.profile,
           {

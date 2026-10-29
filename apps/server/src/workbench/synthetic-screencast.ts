@@ -1,4 +1,11 @@
-import { createCanvas } from "@napi-rs/canvas";
+import { createRequire } from "node:module";
+// The native canvas takes most of a second to load; only load it once an
+// image is drawn, so commands that never draw (most of the CLI) skip it.
+let canvasModule: typeof import("@napi-rs/canvas") | undefined;
+const nativeCanvas = () =>
+  (canvasModule ??= createRequire(import.meta.url)(
+    "@napi-rs/canvas",
+  ) as typeof import("@napi-rs/canvas"));
 import type {
   DirectBrowserInput,
   ScreencastFrame,
@@ -55,7 +62,7 @@ export class SyntheticScreencastSource implements BrowserScreencastSource {
     if (!this.observers.size || this.status !== "live") return null;
     const width = this.profile.width,
       height = Math.round((width * 720) / 1280);
-    const canvas = createCanvas(width, height),
+    const canvas = nativeCanvas().createCanvas(width, height),
       context = canvas.getContext("2d");
     context.fillStyle = "#eef3f7";
     context.fillRect(0, 0, width, height);

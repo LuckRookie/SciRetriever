@@ -1,4 +1,11 @@
-import { createCanvas, loadImage } from "@napi-rs/canvas";
+import { createRequire } from "node:module";
+// The native canvas takes most of a second to load; only load it once an
+// image is drawn, so commands that never draw (most of the CLI) skip it.
+let canvasModule: typeof import("@napi-rs/canvas") | undefined;
+const nativeCanvas = () =>
+  (canvasModule ??= createRequire(import.meta.url)(
+    "@napi-rs/canvas",
+  ) as typeof import("@napi-rs/canvas"));
 import type { Page } from "playwright";
 
 const sensitive = 'input[type="password"],input[autocomplete="one-time-code"]';
@@ -51,9 +58,10 @@ export async function captureObservationImage(
     const bytes = Buffer.from(captured.data, "base64");
     if (bytes.length > 32 * 1024 * 1024) return null;
     if (!before.length) return new Uint8Array(bytes);
+    const { createCanvas, loadImage } = nativeCanvas();
     const image = await loadImage(bytes);
-    const canvas = createCanvas(image.width, image.height);
-    const context = canvas.getContext("2d");
+    const surface = createCanvas(image.width, image.height);
+    const context = surface.getContext("2d");
     context.drawImage(image, 0, 0);
     context.fillStyle = "#202020";
     const sx = image.width / viewport.width,
@@ -65,7 +73,7 @@ export async function captureObservationImage(
         Math.ceil(rect.width * sx) + 8,
         Math.ceil(rect.height * sy) + 8,
       );
-    return new Uint8Array(await canvas.encode("jpeg", 65));
+    return new Uint8Array(await surface.encode("jpeg", 65));
   } catch {
     // A missing image is safer than emitting an unmasked observation.
     return null;

@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { chromium, type Browser } from "playwright-core";
+import type { Browser } from "playwright-core";
 import type { PageRegion } from "@sciretriever/contracts";
 import type { AgentImagePart } from "../agents/protocol.js";
 
@@ -66,12 +66,17 @@ export class PdfRegionRenderer {
       pageNumber > 10000
     )
       throw new Error("proofread-render-limit");
-    this.browser ??= chromium
-      .launch({
-        headless: true,
-        ...(this.executablePath ? { executablePath: this.executablePath } : {}),
-        env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
-      })
+    // Playwright loads lazily so commands that never render skip it.
+    this.browser ??= import("playwright-core")
+      .then(({ chromium }) =>
+        chromium.launch({
+          headless: true,
+          ...(this.executablePath
+            ? { executablePath: this.executablePath }
+            : {}),
+          env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
+        }),
+      )
       .catch((error) => {
         this.browser = null;
         throw error;
