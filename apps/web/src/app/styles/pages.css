@@ -137,6 +137,49 @@
     background: var(--sel);
     box-shadow: inset 0 0 0 1px var(--focus);
   }
+  /* The folder that just received papers answers once. */
+  .folder-row[data-landed] {
+    animation: folder-landed var(--dur-highlight) var(--ease-out);
+  }
+  @keyframes folder-landed {
+    0% {
+      background: var(--sel);
+      box-shadow: inset 0 0 0 1px var(--focus);
+    }
+  }
+  /* Rendered off-screen for one frame and copied by the browser as the drag image. */
+  .drag-ghost {
+    position: fixed;
+    top: -200px;
+    left: -400px;
+    display: grid;
+    gap: 2px;
+    max-width: 280px;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    color: var(--fg);
+    box-shadow: var(--shadow-pop);
+    font: var(--text-caption) / var(--lh-caption) var(--sans);
+    pointer-events: none;
+  }
+  .drag-ghost[data-stack] {
+    box-shadow:
+      var(--shadow-pop),
+      4px 4px 0 -1px var(--surface-raised),
+      4px 4px 0 0 var(--line2);
+  }
+  .drag-ghost strong {
+    color: var(--blue);
+    font-weight: 500;
+  }
+  .drag-ghost span {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-family: var(--serif);
+    color: var(--fg2);
+  }
   .navigation-content .folder-row > .ui-button {
     width: auto;
   }
@@ -442,6 +485,17 @@
   .library-range-selecting * {
     user-select: none;
     cursor: default;
+  }
+  .library-marquee {
+    position: fixed;
+    z-index: 60;
+    border: 1px solid var(--sel-line);
+    background: var(--sel);
+    border-radius: var(--radius-xs);
+    pointer-events: none;
+  }
+  .paper-row[data-selected][draggable="true"] {
+    cursor: grab;
   }
   .paper-tools {
     display: flex;

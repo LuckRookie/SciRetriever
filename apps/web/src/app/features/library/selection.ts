@@ -51,10 +51,17 @@ export function groupSelection(
 const EDGE = 56,
   SPEED = 18;
 
+/** Movement that turns a press on a row into a marquee instead of a click. */
+const MARQUEE_START = 4;
+
 /**
  * Pointer selection on the checkbox column: press and drag to select or clear
  * a run of rows, Shift+click to extend from the last row clicked. Keyboard
  * toggles still go through the checkbox itself.
+ *
+ * Pressing an unselected row and moving draws a marquee over the rows it
+ * crosses; it replaces the selection unless Shift, ⌘ or Ctrl is held. A
+ * selected row is not a marquee start: it is picked up and dragged to a folder.
  */
 export function useRangeSelection({
   items,
@@ -78,7 +85,32 @@ export function useRangeSelection({
     x: number;
     y: number;
     frame: number;
+    marquee?: { x: number; y: number; box: HTMLElement };
   } | null>(null);
+  const pending = useRef<{
+    index: number;
+    x: number;
+    y: number;
+    additive: boolean;
+    scroller: HTMLElement | null;
+  } | null>(null);
+  /** The marquee follows the content while the list scrolls under it. */
+  const paint = useCallback(() => {
+    const state = drag.current;
+    if (!state?.marquee || !state.scroller) return;
+    const view = state.scroller.getBoundingClientRect(),
+      top = state.marquee.y - state.scroller.scrollTop + view.top;
+    const y1 = Math.max(view.top, Math.min(top, state.y)),
+      y2 = Math.min(view.bottom, Math.max(top, state.y));
+    const x1 = Math.min(state.marquee.x, state.x),
+      x2 = Math.max(state.marquee.x, state.x);
+    Object.assign(state.marquee.box.style, {
+      left: `${x1}px`,
+      top: `${y1}px`,
+      width: `${Math.max(1, x2 - x1)}px`,
+      height: `${Math.max(1, y2 - y1)}px`,
+    });
+  }, []);
   const apply = useCallback(
     (from: number, to: number, mode: boolean, base: ReadonlySet<string>) => {
       const { items, setSelected } = latest.current;
@@ -100,12 +132,39 @@ export function useRangeSelection({
     return row ? Number(row.dataset.index) : null;
   };
   const stop = useCallback(() => {
+    pending.current = null;
     const state = drag.current;
     if (!state) return;
     cancelAnimationFrame(state.frame);
+    state.marquee?.box.remove();
     document.documentElement.classList.remove("library-range-selecting");
     drag.current = null;
   }, []);
+  /** Scroll while the pointer rests near the list edge, and keep extending the run. */
+  const autoscroll = useCallback(() => {
+    const state = drag.current;
+    if (!state?.scroller) return;
+    const box = state.scroller.getBoundingClientRect();
+    const step =
+      state.y < box.top + EDGE
+        ? -Math.ceil(((box.top + EDGE - state.y) / EDGE) * SPEED)
+        : state.y > box.bottom - EDGE
+          ? Math.ceil(((state.y - (box.bottom - EDGE)) / EDGE) * SPEED)
+          : 0;
+    if (step) {
+      state.scroller.scrollBy(0, step);
+      paint();
+      const index = rowAt(
+        state.x,
+        Math.min(Math.max(state.y, box.top + 1), box.bottom - 1),
+      );
+      if (index !== null && index !== state.current) {
+        state.current = index;
+        apply(state.start, index, state.mode, state.base);
+      }
+    }
+    state.frame = requestAnimationFrame(autoscroll);
+  }, [apply, paint]);
   useEffect(() => {
     const release = () => {
       stop();
@@ -113,10 +172,46 @@ export function useRangeSelection({
       setTimeout(() => (suppress.current = false));
     };
     const move = (event: PointerEvent) => {
+      const start = pending.current;
+      if (
+        start &&
+        !drag.current &&
+        Math.hypot(event.clientX - start.x, event.clientY - start.y) >
+          MARQUEE_START
+      ) {
+        pending.current = null;
+        // From here the press is a selection, not a click on the title.
+        suppress.current = true;
+        getSelection()?.removeAllRanges();
+        const box = document.createElement("div");
+        box.className = "library-marquee";
+        document.body.append(box);
+        const view = start.scroller?.getBoundingClientRect();
+        const base = start.additive ? latest.current.selected : new Set<string>();
+        drag.current = {
+          start: start.index,
+          current: start.index,
+          mode: true,
+          base: new Set(base),
+          scroller: start.scroller,
+          x: event.clientX,
+          y: event.clientY,
+          frame: 0,
+          marquee: {
+            x: start.x,
+            y: start.y - (view?.top ?? 0) + (start.scroller?.scrollTop ?? 0),
+            box,
+          },
+        };
+        document.documentElement.classList.add("library-range-selecting");
+        apply(start.index, start.index, true, base);
+        drag.current.frame = requestAnimationFrame(autoscroll);
+      }
       const state = drag.current;
       if (!state) return;
       state.x = event.clientX;
       state.y = event.clientY;
+      paint();
       const index = rowAt(event.clientX, event.clientY);
       if (index !== null && index !== state.current) {
         state.current = index;
@@ -132,31 +227,7 @@ export function useRangeSelection({
       window.removeEventListener("pointercancel", release);
       stop();
     };
-  }, [apply, stop]);
-  /** Scroll while the pointer rests near the list edge, and keep extending the run. */
-  const autoscroll = useCallback(() => {
-    const state = drag.current;
-    if (!state?.scroller) return;
-    const box = state.scroller.getBoundingClientRect();
-    const step =
-      state.y < box.top + EDGE
-        ? -Math.ceil(((box.top + EDGE - state.y) / EDGE) * SPEED)
-        : state.y > box.bottom - EDGE
-          ? Math.ceil(((state.y - (box.bottom - EDGE)) / EDGE) * SPEED)
-          : 0;
-    if (step) {
-      state.scroller.scrollBy(0, step);
-      const index = rowAt(
-        state.x,
-        Math.min(Math.max(state.y, box.top + 1), box.bottom - 1),
-      );
-      if (index !== null && index !== state.current) {
-        state.current = index;
-        apply(state.start, index, state.mode, state.base);
-      }
-    }
-    state.frame = requestAnimationFrame(autoscroll);
-  }, [apply]);
+  }, [apply, stop, paint, autoscroll]);
   const onPointerDown = useCallback(
     (index: number, event: ReactPointerEvent<HTMLElement>) => {
       if (event.button !== 0 || event.pointerType === "touch") return;
@@ -194,6 +265,30 @@ export function useRangeSelection({
     },
     [apply, autoscroll],
   );
+  /** A press on an unselected row may become a marquee once it moves. */
+  const onRowPointerDown = useCallback(
+    (index: number, event: ReactPointerEvent<HTMLElement>) => {
+      if (event.button !== 0 || event.pointerType === "touch") return;
+      const id = latest.current.items[index]?.literature.literature_id;
+      if (
+        !id ||
+        latest.current.selected.has(id) ||
+        (event.target as Element).closest(
+          ".paper-check, .paper-tools, input, textarea",
+        )
+      )
+        return;
+      pending.current = {
+        index,
+        x: event.clientX,
+        y: event.clientY,
+        additive: event.shiftKey || event.metaKey || event.ctrlKey,
+        scroller:
+          event.currentTarget.closest<HTMLElement>(".workspace-content"),
+      };
+    },
+    [],
+  );
   /** Clicks after a handled press are swallowed; keyboard toggles pass through. */
   const onClickCapture = useCallback((event: ReactMouseEvent) => {
     if (suppress.current) event.preventDefault();
@@ -207,5 +302,12 @@ export function useRangeSelection({
     anchor.current = id;
   }, []);
   const dragging = useCallback(() => drag.current !== null, []);
-  return { onPointerDown, onClickCapture, handledByPress, remember, dragging };
+  return {
+    onPointerDown,
+    onRowPointerDown,
+    onClickCapture,
+    handledByPress,
+    remember,
+    dragging,
+  };
 }

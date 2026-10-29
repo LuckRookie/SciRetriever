@@ -415,14 +415,20 @@ export default function Library() {
   // Dragging a selected row carries the whole selection to a folder.
   const selectedRef = useRef(shell.selected);
   selectedRef.current = shell.selected;
-  const onDragRow = useCallback((id: string, data: DataTransfer) => {
-    const ids = selectedRef.current.has(id)
-      ? [...selectedRef.current].slice(0, 1000)
-      : [id];
-    data.setData(LITERATURE_DRAG, JSON.stringify(ids));
-    data.setData("text/plain", `${ids.length} 篇文献`);
-    data.effectAllowed = "copy";
-  }, []);
+  const onDragRow = useCallback(
+    (id: string, data: DataTransfer, title: string) => {
+      const ids = selectedRef.current.has(id)
+        ? [...selectedRef.current].slice(0, 1000)
+        : [id];
+      // A press on the title or its text would otherwise drag that text.
+      data.clearData();
+      data.setData(LITERATURE_DRAG, JSON.stringify(ids));
+      data.setData("text/plain", `${ids.length} 篇文献`);
+      data.effectAllowed = "copy";
+      data.setDragImage(dragGhost(ids.length, title), 14, 14);
+    },
+    [],
+  );
   const mutable = api.kind === "workspace";
   const groups = groupSelection(shell.selected, known);
   /** Each batch button counts only the papers it would actually act on. */
@@ -799,6 +805,7 @@ export default function Library() {
           loadNextPage={next.fetchNextPage}
           onToggle={toggle}
           onCheckPointerDown={range.onPointerDown}
+          onRowPointerDown={range.onRowPointerDown}
           onCheckClickCapture={range.onClickCapture}
           selectingRange={range.dragging}
           onOpen={(...args) => {
@@ -1060,6 +1067,7 @@ const LibraryList = memo(function LibraryList({
   loadNextPage,
   onToggle,
   onCheckPointerDown,
+  onRowPointerDown,
   onCheckClickCapture,
   selectingRange,
   onOpen,
@@ -1084,13 +1092,14 @@ const LibraryList = memo(function LibraryList({
   loadNextPage: () => Promise<unknown>;
   onToggle: (id: string) => void;
   onCheckPointerDown: CheckPointerDown;
+  onRowPointerDown: CheckPointerDown;
   onCheckClickCapture: (event: ReactMouseEvent) => void;
   selectingRange: () => boolean;
   onOpen: ReturnType<typeof useShell>["openPaper"];
   onPreview: (id: string) => void;
   onFile: (id: string, file: File) => void;
   onRowAction: (id: string, title: string, kind: RowAction) => void;
-  onDragRow: (id: string, data: DataTransfer) => void;
+  onDragRow: (id: string, data: DataTransfer, title: string) => void;
 }) {
   const list = useRef<HTMLDivElement>(null);
   // The whole page scrolls; the list measures its offset inside that container.
@@ -1220,6 +1229,7 @@ const LibraryList = memo(function LibraryList({
             measure={virtual.measureElement}
             onToggle={onToggle}
             onCheckPointerDown={onCheckPointerDown}
+            onRowPointerDown={onRowPointerDown}
             onCheckClickCapture={onCheckClickCapture}
             selectingRange={selectingRange}
             onOpen={onOpen}
@@ -1274,6 +1284,7 @@ const LibraryRow = memo(function LibraryRow({
   measure,
   onToggle,
   onCheckPointerDown,
+  onRowPointerDown,
   onCheckClickCapture,
   selectingRange,
   onOpen,
@@ -1291,6 +1302,7 @@ const LibraryRow = memo(function LibraryRow({
   measure: (element: HTMLElement | null) => void;
   onToggle: (id: string) => void;
   onCheckPointerDown: CheckPointerDown;
+  onRowPointerDown: CheckPointerDown;
   onCheckClickCapture: (event: ReactMouseEvent) => void;
   selectingRange: () => boolean;
   onOpen: ReturnType<typeof useShell>["openPaper"];
@@ -1298,7 +1310,7 @@ const LibraryRow = memo(function LibraryRow({
   onFile: (id: string, file: File) => void;
   onRowAction: (id: string, title: string, kind: RowAction) => void;
   onMove: (index: number) => void;
-  onDragRow: (id: string, data: DataTransfer) => void;
+  onDragRow: (id: string, data: DataTransfer, title: string) => void;
 }) {
   const id = item.literature.literature_id,
     title = paperTitle(item);
@@ -1323,12 +1335,20 @@ const LibraryRow = memo(function LibraryRow({
           onMove(row.index + (event.key === "ArrowDown" ? 1 : -1));
         }
       }}
-      draggable={mutable}
+      // Selected rows are picked up and dragged to a folder; a press on any
+      // other row that moves draws a marquee instead.
+      draggable={mutable && selected}
+      onPointerDown={(event) => onRowPointerDown(row.index, event)}
+      onClickCapture={onCheckClickCapture}
       onDragStart={(event) => {
-        // A press on the checkbox column selects a run; it never drags the row.
-        if (selectingRange()) event.preventDefault();
-        else if (event.target === event.currentTarget)
-          onDragRow(id, event.dataTransfer);
+        // A press on the checkbox column selects a run; it never drags the
+        // row. Anywhere else, the title included, picks the row up.
+        if (
+          selectingRange() ||
+          (event.target as Element).closest?.(".paper-check, .paper-tools")
+        )
+          event.preventDefault();
+        else onDragRow(id, event.dataTransfer, title);
       }}
       onDragOver={(event) => {
         // Only a dropped file belongs to the row; folder drags go to the sidebar.
@@ -1618,4 +1638,20 @@ function Filters({
       </div>
     </form>
   );
+}
+
+/** What follows the pointer while papers are dragged onto a folder. */
+function dragGhost(count: number, title: string): HTMLElement {
+  const ghost = document.createElement("div"),
+    label = document.createElement("strong"),
+    name = document.createElement("span");
+  ghost.className = "drag-ghost";
+  if (count > 1) ghost.dataset.stack = "";
+  label.textContent = `${count.toLocaleString()} 篇文献`;
+  name.textContent = count > 1 ? `${title} 等` : title;
+  ghost.append(label, name);
+  document.body.append(ghost);
+  // The browser copies the element when the drag starts; it is not kept.
+  requestAnimationFrame(() => ghost.remove());
+  return ghost;
 }

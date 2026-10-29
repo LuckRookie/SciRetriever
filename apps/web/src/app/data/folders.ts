@@ -54,10 +54,17 @@ export async function manageFolder(
       r.folder_id !== command.request.folder_id ||
       !Number.isSafeInteger(r.changed) ||
       Number(r.changed) < 0 ||
-      Number(r.changed) > command.request.literature_ids.length
+      Number(r.changed) > command.request.literature_ids.length ||
+      !Array.isArray(r.changed_ids) ||
+      r.changed_ids.length !== Number(r.changed) ||
+      !r.changed_ids.every((id) => typeof id === "string")
     )
       throw new Error("文件夹成员回执无效");
-    return { folder_id: command.request.folder_id, changed: Number(r.changed) };
+    return {
+      folder_id: command.request.folder_id,
+      changed: Number(r.changed),
+      changed_ids: r.changed_ids as string[],
+    };
   }
   return parseFolderNode(result);
 }

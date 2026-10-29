@@ -291,7 +291,7 @@ Browser 复用前四层的实际响应准备有限文章入口，不增加 HEAD/
 
 - 文献检索默认 `intake-desc`，`intake_at` 为最早关联元数据观测的 UTC 时间，缺失排末尾。`literature counts --request` / `library_counts` 接收 `{query: LibraryQuery}`，返回 total、statuses、unavailable_pdf、recently_opened；忽略状态及无法获取快捷筛选。
 - `folders list` / `folders_query` 列出目录树；查询封套 `{operation:"list",request:{}}`。delete-preview 的 request 为 `{folder_id}`，返回子树与受影响文献数。
-- `folders <create|rename|move|delete|add|remove> --request FILE` / `folders_manage` 为显式写操作；MCP 封套 `{operation,request}`，CLI 文件只包含 request。create：`{name,parent_id?:null|id,position?:number}`；rename：`{folder_id,name}`；move：`{folder_id,parent_id,position}`；delete：`{folder_id}`；add/remove：`{folder_id,literature_ids}`（最多 1000，幂等）。删除包含子目录，只解除成员，不删除文献。
+- `folders <create|rename|move|delete|add|remove> --request FILE` / `folders_manage` 为显式写操作；MCP 封套 `{operation,request}`，CLI 文件只包含 request。create：`{name,parent_id?:null|id,position?:number}`；rename：`{folder_id,name}`；move：`{folder_id,parent_id,position}`；delete：`{folder_id}`；add/remove：`{folder_id,literature_ids}`（最多 1000，幂等），返回 `{folder_id,changed,changed_ids}`，`changed_ids` 是实际加入或移出的文献，可用于精确撤销。删除包含子目录，只解除成员，不删除文献。
 - `LibraryQuery.folder:{id,include_descendants}` 与其它筛选组合，可直接用于快照和算子范围。搜索结果包含 folder_ids；父目录的 total_count 按子树文献去重。
 - `literature open ID` / `reading_open {literature_id}` 显式更新共享阅读历史。`recently_opened:true` 选最近 30 天内满足其它筛选的最近 100 篇，支持 `opened-desc`；查询本身不写入历史。
 - `snapshot create --name NAME` / `snapshot_create` 可提供名称。`snapshot rename ID --name NAME` / `snapshot_rename {snapshot_id,name}` 改显示名，空名恢复默认，不改变内容哈希。

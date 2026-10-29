@@ -142,22 +142,30 @@ export function runFolderStorage(db: DatabaseSync, value: unknown): unknown {
           ) !== ids.length
         )
           fail("literature-not-found");
-        let changed = 0;
+        // The ids that really changed let a caller undo exactly this change.
+        const changedIds: string[] = [];
         for (const id of ids)
-          changed += Number(
-            op.operation === "add"
-              ? db
-                  .prepare(
-                    "INSERT INTO folder_members VALUES(?,?,?,?) ON CONFLICT DO NOTHING",
-                  )
-                  .run(op.request.folder_id, id, r.now!, r.actor!).changes
-              : db
-                  .prepare(
-                    "DELETE FROM folder_members WHERE folder_id=? AND literature_id=?",
-                  )
-                  .run(op.request.folder_id, id).changes,
-          );
-        result = { folder_id: op.request.folder_id, changed };
+          if (
+            Number(
+              op.operation === "add"
+                ? db
+                    .prepare(
+                      "INSERT INTO folder_members VALUES(?,?,?,?) ON CONFLICT DO NOTHING",
+                    )
+                    .run(op.request.folder_id, id, r.now!, r.actor!).changes
+                : db
+                    .prepare(
+                      "DELETE FROM folder_members WHERE folder_id=? AND literature_id=?",
+                    )
+                    .run(op.request.folder_id, id).changes,
+            )
+          )
+            changedIds.push(id);
+        result = {
+          folder_id: op.request.folder_id,
+          changed: changedIds.length,
+          changed_ids: changedIds,
+        };
       } else {
         const id =
           op.operation === "create" ? r.folder_id! : op.request.folder_id;

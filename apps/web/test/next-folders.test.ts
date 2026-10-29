@@ -71,10 +71,46 @@ it("organizes papers into nested folders by dialog and drag, scopes the library,
       .getByRole("button", { name: "取消选择", exact: true })
       .click();
 
-    // Drag: the second paper onto the nested folder.
+    // Marquee: pressing an unselected row and moving selects the rows crossed
+    // without opening the paper the press started on.
+    const title = (n: number) => rows.nth(n).locator(".paper-title");
+    const from = (await title(0).boundingBox())!,
+      to = (await title(1).boundingBox())!;
+    await p.mouse.move(from.x + 20, from.y + from.height / 2);
+    await p.mouse.down();
+    await p.mouse.move(from.x + 30, to.y + to.height / 2, { steps: 8 });
+    await p.mouse.up();
+    const selection = p.getByRole("region", { name: "文献选择" });
+    await expect
+      .poll(() => selection.locator("b").textContent())
+      .toBe("已选 2 篇");
+    expect(await p.locator(".paper-tab").count()).toBe(0);
+    await selection
+      .getByRole("button", { name: "取消选择", exact: true })
+      .click();
+
+    // Drag: select the second paper, then drag it onto the nested folder.
     const second = (await rows.nth(1).getAttribute("aria-label"))!;
+    await rows.nth(1).focus();
+    await p.keyboard.press("Space");
+    const toast = p.locator(".ui-toast");
+    await toast
+      .getByRole("button", { name: "关闭提示" })
+      .click()
+      .catch(() => undefined);
     await rows.nth(1).dragTo(folderRow(p, "碳链"));
     await expect.poll(() => folderRow(p, "碳链").textContent()).toContain("1");
+    await expect
+      .poll(() => toast.textContent())
+      .toContain("已加入「碳链」：新增 1 篇");
+    // Undo removes exactly what the drop added; then drop it again.
+    await toast.getByRole("button", { name: "撤销" }).click();
+    await expect.poll(() => folderRow(p, "碳链").textContent()).toBe("碳链0");
+    await rows.nth(1).dragTo(folderRow(p, "碳链"));
+    await expect.poll(() => folderRow(p, "碳链").textContent()).toContain("1");
+    await selection
+      .getByRole("button", { name: "取消选择", exact: true })
+      .click();
     await expect
       .poll(() => folderRow(p, "表面界面").textContent())
       .toContain("2");

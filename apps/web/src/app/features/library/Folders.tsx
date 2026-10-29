@@ -1,4 +1,4 @@
-import { useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 import {
   useMutation,
   useQuery,
@@ -15,6 +15,7 @@ import {
   Menu,
   Select,
   TextField,
+  useToast,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import { navigate, useUrlState } from "../../data/url.js";
@@ -168,6 +169,23 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
   const [name, setName] = useState("");
   const [removing, setRemoving] = useState<FolderNode | null>(null);
   const [target, setTarget] = useState<string | null | undefined>(undefined);
+  const [landed, setLanded] = useState<string | null>(null);
+  const toast = useToast();
+  // A collapsed folder held under a drag opens, so nested folders are reachable.
+  const opening = useRef<{
+    id: string;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  const stopOpening = () => {
+    if (opening.current) clearTimeout(opening.current.timer);
+    opening.current = null;
+  };
+  useEffect(() => {
+    if (!landed) return;
+    const timer = setTimeout(() => setLanded(null), 900);
+    return () => clearTimeout(timer);
+  }, [landed]);
+  useEffect(() => stopOpening, []);
   const manage = useMutation({
     mutationFn: (command: unknown) => manageFolder(api, command),
     onSuccess: () => {
@@ -207,10 +225,27 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
     event.preventDefault();
     event.dataTransfer.dropEffect = kind === "literature" ? "copy" : "move";
     setTarget(id);
+    if (
+      id &&
+      opening.current?.id !== id &&
+      (tree.get(id)?.length ?? 0) > 0 &&
+      !expanded.has(id)
+    ) {
+      stopOpening();
+      opening.current = { id, timer: setTimeout(() => toggle(id, true), 650) };
+    }
+  };
+  const leave = (event: DragEvent) => {
+    // Moving between a row's own children is not leaving it.
+    if (event.currentTarget.contains(event.relatedTarget as Node | null))
+      return;
+    setTarget(undefined);
+    stopOpening();
   };
   const drop = (id: string | null) => (event: DragEvent) => {
     event.preventDefault();
     setTarget(undefined);
+    stopOpening();
     const papers = event.dataTransfer.getData(LITERATURE_DRAG),
       folder = event.dataTransfer.getData(FOLDER_DRAG);
     if (papers && id) {
@@ -225,10 +260,33 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
             request: { folder_id: id, literature_ids: ids.slice(0, 1000) },
           },
           {
-            onSuccess: (result) =>
-              shell.notify(
-                `已加入「${label}」：新增 ${"changed" in result ? result.changed : 0} 篇`,
-              ),
+            onSuccess: (result) => {
+              const added = "changed_ids" in result ? result.changed_ids : [];
+              setLanded(id);
+              if (!added.length) {
+                toast(`这些文献已在「${label}」中`);
+                return;
+              }
+              toast({
+                message: `已加入「${label}」：新增 ${added.length.toLocaleString()} 篇`,
+                action: {
+                  label: "撤销",
+                  onPress: () =>
+                    manage.mutate(
+                      {
+                        operation: "remove",
+                        request: { folder_id: id, literature_ids: added },
+                      },
+                      {
+                        onSuccess: () =>
+                          toast(
+                            `已撤销，${added.length.toLocaleString()} 篇移出「${label}」`,
+                          ),
+                      },
+                    ),
+                },
+              });
+            },
           },
         );
     } else if (folder && folder !== id) {
@@ -247,13 +305,14 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
               className="folder-row"
               style={{ paddingInlineStart: `${depth * 14}px` }}
               data-drop={target === node.folder_id || undefined}
+              data-landed={landed === node.folder_id || undefined}
               draggable
               onDragStart={(event) => {
                 event.dataTransfer.setData(FOLDER_DRAG, node.folder_id);
                 event.dataTransfer.effectAllowed = "move";
               }}
               onDragOver={dragOver(node.folder_id)}
-              onDragLeave={() => setTarget(undefined)}
+              onDragLeave={leave}
               onDrop={drop(node.folder_id)}
             >
               {nested ? (

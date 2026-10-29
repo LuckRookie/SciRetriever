@@ -72,9 +72,11 @@ it(
         manage(operation, { folder_id, literature_ids: ns.map(id) });
       expect(await members("add", root.folder_id, [1, 2, 2])).toMatchObject({
         changed: 2,
+        changed_ids: [id(1), id(2)],
       });
       expect(await members("add", root.folder_id, [1, 2])).toMatchObject({
         changed: 0,
+        changed_ids: [],
       });
       await members("add", child.folder_id, [2, 3]);
       await members("add", leaf.folder_id, [3]);
