@@ -70,15 +70,23 @@ it(
         exact: true,
       });
       await input.waitFor();
+      // The arranged editor (a6bf978) only saves edits inside existing
+      // paragraphs, so correct one instead of appending a new paragraph.
+      const text = await input.inputValue(),
+        paragraph = text
+          .split("\n")
+          .find((line) => line.trim() && !line.startsWith("#"))!;
       await input.fill(
-        (await input.inputValue()) +
-          "\n\nVerified synthetic observation: 4.3 eV.\n\n",
+        text.replace(
+          paragraph,
+          paragraph + " Verified synthetic observation: 4.3 eV.",
+        ),
       );
       await editor
         .getByRole("button", { name: "保存修订", exact: true })
         .click();
       await editor
-        .getByText("修订已保存，全文、结构与引用已重建。", { exact: true })
+        .getByText("修订已保存，全文已重新生成。", { exact: true })
         .waitFor();
       expect(w.env.modelCalls).toBe(beforeCalls);
       await capture("reader-saved");

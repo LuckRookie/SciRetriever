@@ -73,7 +73,11 @@ beforeAll(async () => {
   ).document;
   env.setModel((input) => {
     submissions++;
-    const first = input.segments![0]!;
+    // Arranged documents render sections in role order (06ca0af, 44ebced), so
+    // the first segment is now the "## Abstract" heading; cite the finding.
+    const first =
+      input.segments!.find((s) => s.text.includes("A synthetic finding.")) ??
+      input.segments![0]!;
     statements = Array.from({ length: 7 }, (_, i) => ({
       statement_id: `s${i + 1}`,
       text: first.text,

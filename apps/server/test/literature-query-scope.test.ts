@@ -11,13 +11,16 @@ import {
   createApplication,
   createQueryApplication,
 } from "../src/bootstrap/application.js";
+import { SCHEMA_VERSION } from "../src/storage/sqlite/schema.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 
 const id = (n: number) =>
   `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 const emptyQuery = parseLibrarySearchRequest({ query: {} }).query;
 
-it.each([11])(
+// A fresh catalog is created at the current schema version (11 when written,
+// raised by 06ca0af and c9d8066).
+it.each([SCHEMA_VERSION])(
   "isolates discovery queries from unrelated invalid metadata in catalog v%i while validating selected versions",
   async (version) => {
     const home = await mkdtemp(join(tmpdir(), "sciretriever-query-scope-"));

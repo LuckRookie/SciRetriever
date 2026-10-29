@@ -3,8 +3,10 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { parseAsset, sha256 } from "@sciretriever/contracts";
-import { archiveFixture } from "./archive-fixture.js";
-import { SqliteAnnotationStorage } from "../src/storage/structure-annotations.js";
+import {
+  archiveFixture,
+  moveIntroductionToMethods,
+} from "./archive-fixture.js";
 import { workbenchPdf } from "../src/workbench/synthetic-fixture.js";
 it("marks only read content stale, including newly present supplementary material, and never recomputes on read", async () => {
   const e = await archiveFixture();
@@ -135,23 +137,28 @@ it("marks only read content stale, including newly present supplementary materia
       }),
     ]);
     expect(e.modelCalls).toBe(calls);
-    const state = await e.app.archive.status(e.id),
-      doc = state.parts.find((p) => p.part === "main")!.document_version_id!,
-      annotation = (await new SqliteAnnotationStorage(
-        e.app.database,
-        e.app.files,
-      ).current(doc))!;
-    await e.app.structureAnnotations!.setRole({
-      document_version_id: doc,
-      section_id: annotation.sections.find((s) => s.role === "introduction")!
-        .section_id,
-      role: "methods",
-      expected_manual_revision: 0,
-      actor: "fixture",
-    });
+    // Flow X (06ca0af) derives section roles from the arrangement; the v1
+    // annotation role edit is retired, so move the introduction text there.
+    await moveIntroductionToMethods(e, "fixture");
     const stale = await e.app.processorRead!.byId(main);
     expect(stale!.freshness?.state).toBe("stale");
-    expect(stale!.freshness?.reasons.length).toBe(1);
+    // An arrangement edit publishes the new proofread and renders it after
+    // (06ca0af), so the content head moves old -> none -> new: one reason per
+    // transition, and nothing else.
+    expect(stale!.freshness?.reasons).toEqual([
+      expect.objectContaining({
+        kind: "content-version-changed",
+        asset_id: e.asset.asset_id,
+        old_version: expect.any(String),
+        new_version: null,
+      }),
+      expect.objectContaining({
+        kind: "content-version-changed",
+        asset_id: e.asset.asset_id,
+        old_version: null,
+        new_version: expect.any(String),
+      }),
+    ]);
     expect((await e.app.processorRead!.byId(main))!.freshness).toEqual(
       stale!.freshness,
     );

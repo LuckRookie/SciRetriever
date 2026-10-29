@@ -125,11 +125,21 @@ describe("processor application acceptance", () => {
           null,
         ],
       ] as const) {
+        // Arranged documents render sections in role order (06ca0af), so the
+        // first segment is a heading; cite the measured sentence.
         env.setModel((input) => ({
           records: [
             {
               values: { conductivity: number },
-              evidence: { conductivity: [input.segments![0]!.segment_id] },
+              evidence: {
+                conductivity: [
+                  (
+                    input.segments!.find((s) =>
+                      s.text.includes("conductivity"),
+                    ) ?? input.segments![0]!
+                  ).segment_id,
+                ],
+              },
               missing: { conductivity: null },
             },
           ],

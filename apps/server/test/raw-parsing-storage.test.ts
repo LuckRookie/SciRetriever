@@ -77,6 +77,10 @@ describe("raw parsing catalog and immutable publication", () => {
         },
       );
       await e.store.publish(staged);
+      // The Application catches the retrieval index up in the background at
+      // startup (e854570), reading the existing document; let that settle so
+      // the spy counts only this load.
+      await e.f.app.maintenance!.refreshIndex!();
       const calls = vi.spyOn(e.f.app.database, "rawParse");
       const reads = vi.spyOn(e.f.app.files, "withVerified");
       expect(

@@ -1049,19 +1049,23 @@ describe("extraction candidate delivery on v5", () => {
       expect(again.receipt.receipt_id).toBe(
         (largeResult.body.result?.receipt as { receipt_id: string }).receipt_id,
       );
-      expect(() =>
-        env.app.extractionDelivery.submit({
-          ...large,
-          submission_key: "over-limit",
-          batch_id: "over-limit",
-          records: [
-            {
-              ...large.records[0]!,
-              payload: { value: large.records[0]!.payload.value + "x" },
-            },
-          ],
-        }),
-      ).toThrow();
+      // The restart-admission guard (df6e6dc) makes the call asynchronous, so
+      // the over-limit batch is refused by rejection rather than a sync throw.
+      await expect(
+        Promise.resolve().then(() =>
+          env.app.extractionDelivery.submit({
+            ...large,
+            submission_key: "over-limit",
+            batch_id: "over-limit",
+            records: [
+              {
+                ...large.records[0]!,
+                payload: { value: large.records[0]!.payload.value + "x" },
+              },
+            ],
+          }),
+        ),
+      ).rejects.toThrow();
       expect(
         await externalManifestFixture(query.documentRead!, {
           spec: env.prepared.spec,

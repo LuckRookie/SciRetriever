@@ -75,9 +75,12 @@ it.runIf(existsSync(executablePath))(
             y: Math.floor(box.y + box.height / 2),
           },
         );
-        expect(pixel[0]).toBeGreaterThan(220);
-        expect(pixel[1]).toBeLessThan(35);
-        expect(pixel[2]).toBeGreaterThan(220);
+        // The capture paints sensitive controls with an opaque #202020 block
+        // on the image pixels, not a Playwright DOM mask (7f1caaa).
+        for (const channel of pixel.slice(0, 3)) {
+          expect(channel).toBeGreaterThan(16);
+          expect(channel).toBeLessThan(48);
+        }
       }
     } finally {
       await host.close();

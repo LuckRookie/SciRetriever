@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { processorFixture } from "./processor-fixture.js";
@@ -7,6 +7,7 @@ import { createMcpServer } from "../src/mcp/server.js";
 import { executeMaintenance } from "../src/entry/maintenance-operations.js";
 import { withActivity, activityContext } from "../src/logging/activity.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
+import * as applicationBootstrap from "../src/bootstrap/application.js";
 import { executeQuery } from "../src/entry/query-operations.js";
 
 it(
@@ -40,14 +41,38 @@ it(
         asset_id: asset,
       });
       expect(read.result.text).toContain("A synthetic finding.");
+      // Flow X (06ca0af): proofread save is the arranged whole-Markdown save,
+      // bound to the arrangement and manual revision, and renders at once.
+      expect(read.result.format).toBe("arranged-v2");
+      // The arranged save re-reads the PDF pages, so the CLI's Application
+      // gets the fixture's synthetic page source instead of a real browser.
+      const boot = vi
+        .spyOn(applicationBootstrap, "createApplication")
+        .mockImplementationOnce(() => e.openAnother());
       const saved = await invoke(["proofread", "save", "--request", "-"], {
+        schema_version: 2,
         literature_id: id,
         asset_id: asset,
         proofread_id: read.result.proofread_id,
-        markdown: read.result.text + "\n\nCLI revision.\n\n",
+        expected_arrangement_id: read.result.arrangement_id,
+        expected_manual_revision: read.result.manual_revision,
+        markdown: read.result.text.replace(
+          "A synthetic finding.",
+          "A synthetic finding, CLI revision.",
+        ),
       });
-      expect(saved.rebuild.status).toBe("completed");
-      const server = createMcpServer({ home: e.home, maintenance: true }),
+      boot.mockRestore();
+      expect(saved).toMatchObject({
+        saved: true,
+        changed: true,
+        rebuild: { status: "done" },
+      });
+      const server = createMcpServer({
+          home: e.home,
+          maintenance: true,
+          // Same synthetic page source as the CLI save above.
+          applicationFactory: () => e.openAnother(),
+        }),
         client = new Client({ name: "review-test", version: "1" }),
         [a, b] = InMemoryTransport.createLinkedPair();
       try {
@@ -58,17 +83,36 @@ it(
           arguments: { asset_id: asset },
         });
         expect(read.isError).not.toBe(true);
-        const latest = await e.app.proofreading!.editor({ asset_id: asset });
+        const latest = (
+          read.structuredContent as {
+            result: {
+              proofread_id: string;
+              arrangement_id: string;
+              manual_revision: number;
+              text: string;
+            };
+          }
+        ).result;
+        expect(latest.proofread_id).toBe(saved.proofread_id);
         const write = await client.callTool({
           name: "proofread_save",
           arguments: {
+            schema_version: 2,
             literature_id: id,
             asset_id: asset,
             proofread_id: latest.proofread_id,
-            markdown: latest.text + "\n\nMCP revision.\n\n",
+            expected_arrangement_id: latest.arrangement_id,
+            expected_manual_revision: latest.manual_revision,
+            markdown: latest.text.replace(
+              "CLI revision.",
+              "CLI and MCP revision.",
+            ),
           },
         });
-        expect(write.isError).not.toBe(true);
+        expect(write.isError, JSON.stringify(write)).not.toBe(true);
+        expect(write.structuredContent).toMatchObject({
+          result: { saved: true, changed: true },
+        });
         const history = await client.callTool({
           name: "operation_history",
           arguments: { operation: "proofread-save" },

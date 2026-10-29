@@ -4,8 +4,10 @@ import { executeQuery } from "../src/entry/query-operations.js";
 import { randomUUID } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import { parseLiterature, type SnapshotMember } from "@sciretriever/contracts";
-import { archiveFixture } from "./archive-fixture.js";
-import { SqliteAnnotationStorage } from "../src/storage/structure-annotations.js";
+import {
+  archiveFixture,
+  moveIntroductionToMethods,
+} from "./archive-fixture.js";
 // Reached 2.8 s under Full (36/12) load, too close to the 5 s default.
 it("freezes ready members, reports exclusions and separates content from description differences", async () => {
   const e = await archiveFixture();
@@ -61,19 +63,9 @@ it("freezes ready members, reports exclusions and separates content from descrip
     expect((await e.app.snapshots.all(first.snapshot_id)).members).toEqual(
       before.members,
     );
-    const doc = before.members[0]!.parts[0]!.document_version_id!,
-      annotation = (await new SqliteAnnotationStorage(
-        e.app.database,
-        e.app.files,
-      ).current(doc))!;
-    await e.app.structureAnnotations!.setRole({
-      document_version_id: doc,
-      section_id: annotation.sections.find((s) => s.role === "introduction")!
-        .section_id,
-      role: "methods",
-      expected_manual_revision: 0,
-      actor: "snapshot-fixture",
-    });
+    // Flow X (06ca0af) derives section roles from the arrangement; the v1
+    // annotation role edit is retired, so move the introduction text there.
+    await moveIntroductionToMethods(e, "snapshot-fixture");
     const third = await e.app.snapshots.create({
       kind: "literatures",
       literature_ids: [e.id],

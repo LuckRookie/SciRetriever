@@ -62,16 +62,24 @@ it(
         exact: true,
       });
       await field.waitFor();
+      // The arranged editor (a6bf978) only saves edits inside existing
+      // paragraphs, so correct one instead of appending a new paragraph.
+      const text = await field.inputValue(),
+        paragraph = text
+          .split("\n")
+          .find((line) => line.trim() && !line.startsWith("#"))!;
       await field.fill(
-        (await field.inputValue()) +
-          "\n\nManually corrected measurement: 4.3 eV.\n\n",
+        text.replace(
+          paragraph,
+          paragraph + " Manually corrected measurement: 4.3 eV.",
+        ),
       );
       const calls = w.env.modelCalls;
       await editor
         .getByRole("button", { name: "保存修订", exact: true })
         .click();
       await editor
-        .getByText("修订已保存，全文、结构与引用已重建。", { exact: true })
+        .getByText("修订已保存，全文已重新生成。", { exact: true })
         .waitFor();
       expect(await field.inputValue()).toContain(
         "Manually corrected measurement: 4.3 eV.",
@@ -187,9 +195,15 @@ it(
         name: "文献参与的全部结果",
         exact: true,
       });
+      // A fresh navigation takes ~1.5 s to load this list; the 1 s poll
+      // default is too tight, so use the 15 s used elsewhere in this file.
       await expect
-        .poll(() =>
-          paper.getByRole("button", { name: "结果详情", exact: true }).count(),
+        .poll(
+          () =>
+            paper
+              .getByRole("button", { name: "结果详情", exact: true })
+              .count(),
+          { timeout: 15000 },
         )
         .toBe(2);
       expect(
@@ -362,7 +376,10 @@ it(
         })
         .toBe("completed");
       await w.page.reload();
-      await expect.poll(() => papers.innerText()).toContain("复用已有结果");
+      // Same too-tight 1 s default after a reload (~1.5 s to load).
+      await expect
+        .poll(() => papers.innerText(), { timeout: 15000 })
+        .toContain("复用已有结果");
       await w.page.setViewportSize({ width: 390, height: 844 });
       expect(
         await w.page.evaluate(() => document.documentElement.scrollWidth),

@@ -550,7 +550,7 @@ describe("bounded document and material reading", () => {
 
   // Reached 2.3 s under Full (36/12) load, too close to the 5 s default.
   it.each(["DDL", "foreign-key"] as const)(
-    "rechecks the catalog after external %s changes (DDL at once, data at the next start)",
+    "rechecks the catalog after external %s changes (DDL at once, data by verify-catalog)",
     async (kind) => {
       const env = await fixture();
       let raw: DatabaseSync | undefined;
@@ -582,10 +582,14 @@ describe("bounded document and material reading", () => {
             env.app.documentRead.describe(request),
           ).rejects.toBeInstanceOf(Error);
         else {
-          // Ordinary commits do not repeat the full check; the next start
-          // does, and refuses the damaged catalog.
+          // Ordinary commits do not repeat the full check, and since 9571cfb
+          // neither does the next start: the explicit verify-catalog does,
+          // and refuses the damaged catalog.
           expect(await env.app.documentRead.describe(request)).toEqual(first);
-          await expect(env.reopen()).rejects.toBeInstanceOf(Error);
+          await env.reopen();
+          await expect(
+            env.app.maintenance!.verifyCatalog!(),
+          ).rejects.toMatchObject({ code: "catalog-corrupt" });
         }
         if (kind === "DDL") raw.exec("DROP INDEX unexpected_document_index");
         else {

@@ -185,8 +185,12 @@ it("keeps parsing separate from document publication and reads existing verified
     await page.goto(
       `${server.origin}/?literature=${env.parseRequest.literature_id}&reader=doc&document=${seeded.document.document_version_id}`,
     );
+    // A fresh reader load takes ~1.9 s here; the 1 s poll default is too
+    // tight right after a navigation.
     await expect
-      .poll(() => page.locator(".reading-status:visible").textContent())
+      .poll(() => page.locator(".reading-status:visible").textContent(), {
+        timeout: 15000,
+      })
       .toContain("全文已加载");
     await page.getByRole("button", { name: "显示目录", exact: true }).click();
     await page.locator(".reader-outline button").first().click();
@@ -242,16 +246,20 @@ it("keeps parsing separate from document publication and reads existing verified
       `${server.origin}/?literature=${env.parseRequest.literature_id}&reader=know&result=${summaries[0]!.result_id}&resultHash=${summaries[0]!.content_sha256}`,
     );
     await expect
-      .poll(() => page.locator(".reader-summary-scroll").textContent())
+      .poll(() => page.locator(".reader-summary-scroll").textContent(), {
+        timeout: 15000,
+      })
       .toContain("A synthetic finding.");
     await page
       .locator(".reader-summary-scroll")
       .getByRole("button", { name: "[1.1]", exact: true })
       .first()
       .click();
+    // The cited segment is the finding paragraph; flow X (06ca0af) renders
+    // the title as its own section, so the title is no longer in it.
     await expect
       .poll(() => page.locator(".reader-evidence-preview").textContent())
-      .toContain("Synthetic literature workbench");
+      .toContain("A synthetic finding.");
     expect(env.modelCalls).toBe(callsAfterAnalysis);
     await page.keyboard.press("Escape");
     env.setModel((input) => {
@@ -284,7 +292,9 @@ it("keeps parsing separate from document publication and reads existing verified
       .toBe(3);
     await page.reload();
     await expect
-      .poll(() => page.locator(".reader-information").textContent())
+      .poll(() => page.locator(".reader-information").textContent(), {
+        timeout: 15000,
+      })
       .toContain("有证据支持");
     await page.getByRole("tab", { name: "结果", exact: true }).click();
     await page.getByRole("button", { name: "阅读总结", exact: true }).click();

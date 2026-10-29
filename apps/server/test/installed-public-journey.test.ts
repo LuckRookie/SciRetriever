@@ -1,5 +1,7 @@
 import { SCHEMA_VERSION } from "../src/storage/sqlite/schema.js";
 import { archiveModel } from "./archive-fixture.js";
+import { archiveChatReply } from "./archive-chat-fixture.js";
+import { imageBytes } from "./archive-text-fixture.js";
 import type { ModelInput } from "./core-processing-fixture.js";
 
 import { withRawParserFixture } from "./raw-parser-fixture.js";
@@ -495,8 +497,13 @@ async function installedBrowserJourney(
     ).toBe(409);
     const clicked = await post("/api/action", action, controller);
     expect(clicked.status, JSON.stringify(clicked.body)).toBe(200);
+    // The session reports finished a moment before the task's target counts.
     await vi.waitFor(
-      async () => expect((await view()).state).toBe("finished"),
+      async () => {
+        const v = await view();
+        expect(v.state).toBe("finished");
+        expect(v.operation_feedback?.targets?.completed).toBe(1);
+      },
       { timeout: 30_000 },
     );
     const finished = await view();
@@ -923,9 +930,13 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
             has_graphics: false,
           },
         ],
-        image: async () => {
-          throw new Error("Synthetic text fixture must not request images");
-        },
+        // Flow X page proofreading views the page image (ADR 0041, 06ca0af).
+        image: async () => ({
+          media_type: "image/png",
+          data: imageBytes,
+          width: 1,
+          height: 1,
+        }),
       },
       agentTransportFactory:
         () =>
@@ -1001,34 +1012,40 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
             const content = wire.messages[1]!.content as
               | string
               | { type: string; text: string }[];
+            // Flow X (ADR 0041, 06ca0af) arranges and proofreads pages
+            // through read_blocks tool sessions before any analysis.
             const reply = wire.tools?.some(
-              (tool) => tool.function.name === "submit_result",
+              (tool) => tool.function.name === "read_blocks",
             )
-              ? await dshChatReply(wire, answer)
-              : {
-                  choices: [
-                    {
-                      index: 0,
-                      finish_reason: "stop",
-                      message: {
-                        role: "assistant",
-                        content: JSON.stringify(
-                          answer(
-                            JSON.parse(
-                              typeof content === "string"
-                                ? content
-                                : content!
-                                    .filter((part) => part.type === "text")
-                                    .map((part) => part.text)
-                                    .join(""),
+              ? archiveChatReply(wire)
+              : wire.tools?.some(
+                    (tool) => tool.function.name === "submit_result",
+                  )
+                ? await dshChatReply(wire, answer)
+                : {
+                    choices: [
+                      {
+                        index: 0,
+                        finish_reason: "stop",
+                        message: {
+                          role: "assistant",
+                          content: JSON.stringify(
+                            answer(
+                              JSON.parse(
+                                typeof content === "string"
+                                  ? content
+                                  : content!
+                                      .filter((part) => part.type === "text")
+                                      .map((part) => part.text)
+                                      .join(""),
+                              ),
                             ),
                           ),
-                        ),
+                        },
                       },
-                    },
-                  ],
-                  usage: { prompt_tokens: 100, completion_tokens: 50 },
-                };
+                    ],
+                    usage: { prompt_tokens: 100, completion_tokens: 50 },
+                  };
             return {
               status: 200,
               headers: [],

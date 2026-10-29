@@ -1,4 +1,6 @@
 import type { ArchiveStep } from "@sciretriever/contracts";
+import { expect } from "vitest";
+import { SqliteArchiveTextStorage } from "../src/storage/archive-text.js";
 import {
   type ModelInput,
   coreProcessingFixture,
@@ -113,4 +115,43 @@ export function archiveModel(input: ModelInput) {
   }
   if (input.task === "consolidate") return { operations: [] };
   throw new Error("Unexpected model call");
+}
+
+/** Move the arranged introduction to methods: the flow X role edit. */
+export async function moveIntroductionToMethods(
+  e: Awaited<ReturnType<typeof archiveFixture>>,
+  actor: string,
+) {
+  const part = (await e.app.archive.status(e.id)).parts[0]!,
+    old = (await new SqliteArchiveTextStorage(e.app.database, e.app.files).load(
+      part.proofread_id!,
+    ))!,
+    leaves = old.bundle.leaves.filter(
+      (l) =>
+        l.destination.kind === "assigned" &&
+        l.destination.target.role === "introduction",
+    );
+  expect(leaves.length).toBeGreaterThan(0);
+  const edited = await e.app.archiveArrangement.edit(
+    {
+      schema_version: 2,
+      literature_id: e.id,
+      asset_id: e.asset.asset_id,
+      expected_proofread_id: old.version.proofread_id,
+      expected_arrangement_id: old.version.arrangement_id,
+      expected_manual_revision: 0,
+      changes: leaves.map((l) => ({
+        kind: "assign",
+        leaf_id: l.leaf.leaf_id,
+        target: { role: "methods" },
+        presentation:
+          l.destination.kind === "assigned"
+            ? l.destination.presentation
+            : { kind: "content" },
+      })),
+    },
+    actor,
+  );
+  // A role move keeps every page's retained text, so it renders at once.
+  expect(edited.pending_page_indexes).toEqual([]);
 }

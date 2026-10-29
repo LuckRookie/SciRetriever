@@ -7,7 +7,7 @@ it("requires a completed archive after parsing and preserves accepted material w
     const original = (await e.app.library.detail(e.id)).primary_pdf;
     expect((await e.app.archive.status(e.id)).missing_step).toBe("raw-parse");
     await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
-    expect((await e.app.archive.status(e.id)).missing_step).toBe("proofread");
+    expect((await e.app.archive.status(e.id)).missing_step).toBe("arrange");
     expect((await e.app.library.detail(e.id)).literature.status).not.toBe(
       "READY",
     );

@@ -27,7 +27,7 @@ function fixture(options: {
   const close = vi.fn(options.pageClose ?? (async () => {}));
   const popupClose = vi.fn(async () => {});
   const otherClose = vi.fn(async () => {});
-  const page = { isClosed: () => false, close };
+  const page = { isClosed: () => false, once: () => undefined, close };
   const sessions = new Map([[session.id, session]]);
   const stop = vi.fn(async () => {
     throw new BrowserProtocolError("target-inactive");
@@ -49,8 +49,14 @@ function fixture(options: {
     "pages",
     new Map([
       ["a", page],
-      ["popup-a", { isClosed: () => false, close: popupClose }],
-      ["b", { isClosed: () => false, close: otherClose }],
+      [
+        "popup-a",
+        { isClosed: () => false, once: () => undefined, close: popupClose },
+      ],
+      [
+        "b",
+        { isClosed: () => false, once: () => undefined, close: otherClose },
+      ],
     ]),
   );
   Reflect.set(host, "cdp", {

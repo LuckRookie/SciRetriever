@@ -113,7 +113,7 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
       });
     if (input.method === "section-role-dsh-v1") return { role: "body" };
     if (
-      input.method === "archive-metadata-dsh-v1" ||
+      input.method === "archive-metadata-dsh-v2" ||
       ["topics", "select", "consolidate"].includes(String(input.task))
     ) {
       if (failArchive) throw new Error("Synthetic archive model failure");

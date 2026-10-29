@@ -134,7 +134,10 @@ it.each(["generation", "recovery", "settled-recovery"] as const)(
     const entered = deferred<void>();
     const release = deferred<BrowserPageSnapshot>();
     const navigating = deferred<void>();
-    const page = { isClosed: () => false } as unknown as Page;
+    const page = {
+      isClosed: () => false,
+      once: () => undefined,
+    } as unknown as Page;
     const host = hostFixture(page, {
       documentGeneration: () => generation,
       navigationRecovery: () => recovery,
@@ -184,7 +187,10 @@ it.each(["stable", "generation", "target", "recovery"] as const)(
     const entered = deferred<void>();
     const release = deferred<BrowserPageSnapshot>();
     const cause = new Error("Synthetic uncategorized snapshot RPC failure");
-    const page = { isClosed: () => false } as unknown as Page;
+    const page = {
+      isClosed: () => false,
+      once: () => undefined,
+    } as unknown as Page;
     const host = hostFixture(page, {
       documentGeneration: () => generation,
       navigationRecovery: () => undefined,
@@ -238,7 +244,10 @@ it.each([
         : terminal === "page-crashed"
           ? new BrowserPageCrashedError()
           : new Error("Synthetic uncategorized snapshot RPC failure");
-    const page = { isClosed: () => closed } as unknown as Page;
+    const page = {
+      isClosed: () => closed,
+      once: () => undefined,
+    } as unknown as Page;
     const host = hostFixture(page, {
       documentGeneration: () => generation,
       navigationRecovery: () => undefined,
@@ -275,7 +284,10 @@ it.each([
 it.each(["cancelled", "crashed", "runtime", "policy", "closed"] as const)(
   "does not restore a navigation across the fatal %s boundary",
   async (boundary) => {
-    const page = { isClosed: () => boundary === "closed" } as unknown as Page;
+    const page = {
+      isClosed: () => boundary === "closed",
+      once: () => undefined,
+    } as unknown as Page;
     const host = hostFixture(page, {
       documentGeneration: () => 1,
       navigationRecovery: () => undefined,
@@ -327,6 +339,7 @@ it.each([false, true])(
     const closed = { isClosed: () => popupClosed } as unknown as Page;
     const parent = {
       isClosed: () => false,
+      once: () => undefined,
       bringToFront: vi.fn(async () => {}),
     } as unknown as Page;
     const other = {

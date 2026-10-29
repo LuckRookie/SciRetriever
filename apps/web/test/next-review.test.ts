@@ -2,7 +2,6 @@ import { expect, it } from "vitest";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { nextWorkspace } from "./next-workspace-fixture.js";
-import { SqliteAnnotationStorage } from "../../server/src/storage/structure-annotations.js";
 import { topicDraft } from "../../server/test/tag-fixture.js";
 
 it(
@@ -96,13 +95,19 @@ it(
   async () => {
     const w = await nextWorkspace();
     try {
+      // Flow X (06ca0af) retired the v1 document-role write; a role edit is
+      // now an arrangement edit, whose actor comes only from the session.
       const id = w.env.parseRequest.literature_id,
         part = (await w.env.app.archive.status(id)).parts[0]!;
-      const store = new SqliteAnnotationStorage(
-        w.env.app.database,
-        w.env.app.files,
-      );
-      const annotation = (await store.current(part.document_version_id!))!;
+      const old = (await w.env.app.archiveText!.storage.load(
+          part.proofread_id!,
+        ))!,
+        leaf = old.bundle.leaves.find(
+          (l) =>
+            l.destination.kind === "assigned" &&
+            l.destination.presentation.kind === "content" &&
+            l.destination.target.role !== "methods",
+        )!;
       const auth = await (
         await w.page.context().request.get(`${w.origin}/auth/status`)
       ).json();
@@ -118,7 +123,7 @@ it(
       const response = await w.page
         .context()
         .request.post(
-          `${w.origin}/api/v1/maintenance/document-role?client_id=${grant.client_id}`,
+          `${w.origin}/api/v1/maintenance/archive-arrangement-edit?client_id=${grant.client_id}`,
           {
             headers: {
               Origin: w.origin,
@@ -128,11 +133,20 @@ it(
             data: {
               protocol_version: 1,
               request: {
-                document_version_id: part.document_version_id,
-                section_id: annotation.sections[0]!.section_id,
-                role: "methods",
-                expected_manual_revision: annotation.manual_revision,
-                actor: "forged-person",
+                schema_version: 2,
+                literature_id: id,
+                asset_id: w.env.parseRequest.asset_id,
+                expected_proofread_id: old.version.proofread_id,
+                expected_arrangement_id: old.version.arrangement_id,
+                expected_manual_revision: 0,
+                changes: [
+                  {
+                    kind: "assign",
+                    leaf_id: leaf.leaf.leaf_id,
+                    target: { role: "methods" },
+                    presentation: { kind: "content" },
+                  },
+                ],
               },
             },
           },
@@ -145,9 +159,9 @@ it(
         expect(
           db
             .prepare(
-              "SELECT actor FROM structure_role_decisions WHERE document_version_id=?",
+              "SELECT actor FROM proofread_manual_decisions WHERE part_asset_id=?",
             )
-            .all(part.document_version_id!),
+            .all(w.env.parseRequest.asset_id),
         ).toEqual([{ actor: auth.actor }]);
       } finally {
         db.close();
@@ -344,18 +358,30 @@ it(
         .getByRole("button", { name: "继续编辑", exact: true })
         .click();
       expect(await field.inputValue()).toContain("My pending change.");
-      const current = (await w.env.app.archive.status(id)).parts[0]!
-        .proofread_id;
+      // Flow X (06ca0af): the concurrent save is the arranged whole-Markdown
+      // save, bound to the arrangement, and changes an existing paragraph.
+      const current = await w.env.app.proofreading!.editor({ asset_id: asset }),
+        paragraph = current.text
+          .split("\n")
+          .find((line: string) => line.trim() && !line.startsWith("#"))!;
       const { executeMaintenance } = await import(
         "../../server/src/entry/maintenance-operations.js"
       );
-      await executeMaintenance(w.env.app, "proofread-save", {
-        literature_id: id,
-        asset_id: asset,
-        proofread_id: current,
-        markdown: initial + "\n\nOther session change.\n\n",
-        actor: "test:concurrent-editor",
-      });
+      expect(
+        await executeMaintenance(w.env.app, "proofread-save", {
+          schema_version: 2,
+          literature_id: id,
+          asset_id: asset,
+          proofread_id: current.proofread_id,
+          expected_arrangement_id: current.arrangement_id,
+          expected_manual_revision: current.manual_revision,
+          markdown: current.text.replace(
+            paragraph,
+            paragraph + " Other session change.",
+          ),
+          actor: "test:concurrent-editor",
+        }),
+      ).toMatchObject({ saved: true, changed: true });
       await editor
         .getByRole("button", { name: "保存修订", exact: true })
         .click();
