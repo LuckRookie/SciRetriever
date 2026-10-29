@@ -24,7 +24,12 @@ export type IconName =
   | "filter"
   | "sort"
   | "folder"
-  | "clock";
+  | "clock"
+  | "pointer"
+  | "highlighter"
+  | "region"
+  | "note"
+  | "trash";
 const paths: Record<IconName, string> = {
   search: "m16 16 5 5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0",
   close: "m6 6 12 12 M18 6 6 18",
@@ -53,6 +58,11 @@ const paths: Record<IconName, string> = {
   folder:
     "M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z",
   clock: "M12 7v5l3 2 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
+  pointer: "M5 3.5 19 10.5l-6 1.5-3 6z",
+  highlighter: "M14.5 4 20 9.5l-9 9H5.5V13z M12.5 6l5.5 5.5 M3 21h7",
+  region: "M4 8V4h4 M16 4h4v4 M20 16v4h-4 M8 20H4v-4 M10 10h4v4h-4z",
+  note: "M4 4h16v11H11l-5 4v-4H4z",
+  trash: "M4 7h16 M10 7V4h4v3 M6 7l1 13h10l1-13",
 };
 export function Icon({
   name,

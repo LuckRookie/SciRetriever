@@ -38,6 +38,7 @@ import {
   NumberField,
   SearchField,
   SegmentedControl,
+  Tabs,
   Select,
   Skeleton,
   SplitPane,
@@ -65,6 +66,8 @@ import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
 import { ProofreadEditor } from "./ProofreadEditor.js";
 import { StructurePanel } from "../archive/StructurePanel.js";
+import { useReaderMarks } from "./marks/ReaderMarks.js";
+import type { MarkSurface } from "../../../reading/marks.js";
 import { download, OperationDialog } from "../library/OperationDialog.js";
 import { ReaderInformation } from "./ReaderInformation.js";
 import { RunOperatorDialog } from "../processing/RunOperator.js";
@@ -128,6 +131,7 @@ export default function Reader() {
     [],
   );
   const [readingSettings, setReadingSettings] = useState(false);
+  const [sideTab, setSideTab] = useState<"info" | "marks">("info");
   useLayoutEffect(() => {
     setDocumentLink(null);
     setZoomImage(null);
@@ -216,6 +220,17 @@ export default function Reader() {
     return value;
   }, [shell.reading, api.workspace.catalog, id]);
   const refresh = () => retry((value) => value + 1);
+  const marks = useReaderMarks({
+    detail: detail.data,
+    mode,
+    enabled: api.kind === "workspace",
+    notify: (message) => readerActions.current.notify(message),
+  });
+  // The engine mounts once per material; marks attach to that mount without remounting it.
+  const marksAttach = useRef(marks.attach);
+  marksAttach.current = marks.attach;
+  const marksActive = useRef(marks.active);
+  marksActive.current = marks.active;
   useLayoutEffect(() => {
     if (
       !detail.data ||
@@ -329,6 +344,20 @@ export default function Reader() {
           );
       },
     };
+    let marksSurface: MarkSurface | null = null;
+    if (marksActive.current && mode === "pdf" && sources.data.material) {
+      marksSurface = marksAttach.current(host, {
+        kind: "pdf",
+        sha256: sources.data.material.asset_sha256,
+      });
+      current.onPdfPage = (view) => marksSurface?.pdfPage(view);
+    } else if (marksActive.current && mode === "doc" && sources.data.document) {
+      marksSurface = marksAttach.current(host, {
+        kind: "doc",
+        version: sources.data.document.document_version_id,
+      });
+      current.onDocumentPaint = () => marksSurface?.documentPainted();
+    }
     frame.current = current;
     let url = "";
     const run = async () => {
@@ -379,6 +408,7 @@ export default function Reader() {
     });
     return () => {
       controller.abort();
+      marksSurface?.destroy();
       if (url) URL.revokeObjectURL(url);
       host.replaceChildren();
       delete host.dataset.literatureId;
@@ -697,6 +727,7 @@ export default function Reader() {
               <Icon name="menu" />
             </IconButton>
           ) : null}
+          {marks.tools}
         </div>
         <div className="reader-toolbar-context">
           {mode === "doc" || mode === "edit" ? (
@@ -921,7 +952,27 @@ export default function Reader() {
               className="reader-information"
               hidden={!layoutPosition.information}
             >
-              <AnimatedPanel preset="panelContent">{information}</AnimatedPanel>
+              {marks.active ? (
+                <Tabs
+                  label="信息栏"
+                  value={sideTab}
+                  onChange={(value) => setSideTab(value as "info" | "marks")}
+                  items={[
+                    { id: "info", label: "信息" },
+                    {
+                      id: "marks",
+                      label: marks.count ? `批注 ${marks.count}` : "批注",
+                    },
+                  ]}
+                />
+              ) : null}
+              {marks.active && sideTab === "marks" ? (
+                marks.panel
+              ) : (
+                <AnimatedPanel preset="panelContent">
+                  {information}
+                </AnimatedPanel>
+              )}
             </aside>
           )
         }
@@ -980,6 +1031,7 @@ export default function Reader() {
                 } as CSSProperties
               }
             />
+            {marks.rail}
             {source.value?.kind === "metadata" &&
               mode !== "know" &&
               mode !== "results" && (
@@ -1143,6 +1195,7 @@ export default function Reader() {
           />
         </Dialog>
       )}
+      {marks.overlays}
     </section>
   );
 }

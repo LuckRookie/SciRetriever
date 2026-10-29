@@ -301,6 +301,13 @@ export async function renderPdf(
       if (closed || rendered.get(n) !== entry) return;
       highlight(entry.text, n);
       placeholder.dataset.rendered = "true";
+      frame.onPdfPage?.({
+        page: n,
+        element: placeholder,
+        text: entry.text,
+        width: base.width,
+        height: base.height,
+      });
       ctx.root.dataset.readingReady = "true";
       if (firstPaint && n === state.page) {
         firstPaint = false;

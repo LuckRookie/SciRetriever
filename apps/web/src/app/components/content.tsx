@@ -415,6 +415,8 @@ export function TechDetails({
 export interface ToastMessage {
   message: string;
   action?: { label: string; onPress: () => void };
+  /** A newer toast with the same key replaces the shown and queued ones, so its undo always means the latest change. */
+  replace?: string;
 }
 interface QueuedToast extends ToastMessage {
   id: number;
@@ -440,7 +442,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider
       value={(message) =>
         setQueue((items) => [
-          ...items,
+          ...(typeof message !== "string" && message.replace
+            ? items.filter((item) => item.replace !== message.replace)
+            : items),
           {
             ...(typeof message === "string" ? { message } : message),
             id: ++next.current,

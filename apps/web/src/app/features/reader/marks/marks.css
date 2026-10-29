@@ -1,0 +1,689 @@
+@layer pages {
+  /* Highlighter inks as RGB triplets: one hue gives fill, hot fill and swatch. */
+  :where(
+    .mark-highlight,
+    .mark-region,
+    .mark-note,
+    .mark-flash,
+    .mark-dot,
+    .mark-swatch,
+    .mark-card,
+    .mark-note-popover,
+    .mark-rail button
+  ) {
+    --mark-c: 247 203 45;
+  }
+  :where(
+    .mark-highlight,
+    .mark-region,
+    .mark-note,
+    .mark-flash,
+    .mark-dot,
+    .mark-swatch,
+    .mark-card,
+    .mark-note-popover,
+    .mark-rail button
+  )[data-color="blue"] {
+    --mark-c: 84 178 212;
+  }
+  :where(
+    .mark-highlight,
+    .mark-region,
+    .mark-note,
+    .mark-flash,
+    .mark-dot,
+    .mark-swatch,
+    .mark-card,
+    .mark-note-popover,
+    .mark-rail button
+  )[data-color="green"] {
+    --mark-c: 104 190 128;
+  }
+  :where(
+    .mark-highlight,
+    .mark-region,
+    .mark-note,
+    .mark-flash,
+    .mark-dot,
+    .mark-swatch,
+    .mark-card,
+    .mark-note-popover,
+    .mark-rail button
+  )[data-color="red"] {
+    --mark-c: 238 122 108;
+  }
+  :where(
+    .mark-highlight,
+    .mark-region,
+    .mark-note,
+    .mark-flash,
+    .mark-dot,
+    .mark-swatch,
+    .mark-card,
+    .mark-note-popover,
+    .mark-rail button
+  )[data-color="purple"] {
+    --mark-c: 166 134 222;
+  }
+
+  /* PDF: marks under the text layer are multiplied like ink on paper; boxes,
+     note markers and flashes sit above it. Sizes are percent of the page. */
+  .react-reader .reading-pdf-page > .mark-under,
+  .react-reader .reading-pdf-page > .mark-over {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .react-reader .reading-pdf-page > .mark-under {
+    z-index: 0;
+  }
+  .react-reader .reading-pdf-page > .mark-over {
+    z-index: 2;
+  }
+  .mark-highlight {
+    position: absolute;
+    border-radius: 2px;
+    background: rgb(var(--mark-c) / 0.42);
+    mix-blend-mode: multiply;
+    transition: background-color var(--dur-out) var(--ease-out);
+  }
+  .mark-highlight[data-hot] {
+    background: rgb(var(--mark-c) / 0.66);
+    transition-duration: 0ms;
+  }
+  .mark-highlight[data-preview] {
+    background: rgb(var(--mark-c) / 0.5);
+  }
+  /* The one flourish: a new highlight is drawn left to right, like a stroke. */
+  .mark-highlight[data-sweep] {
+    animation: mark-sweep 260ms var(--ease-out) both;
+  }
+  @keyframes mark-sweep {
+    from {
+      clip-path: inset(0 100% 0 0 round 2px);
+    }
+  }
+  .mark-region {
+    position: absolute;
+    border: 1.5px solid rgb(var(--mark-c) / 0.95);
+    border-radius: 3px;
+    background: rgb(var(--mark-c) / 0.07);
+    transition:
+      background-color var(--dur-out) var(--ease-out),
+      box-shadow var(--dur-out) var(--ease-out);
+    animation: mark-region-in var(--dur-2) var(--ease-out);
+  }
+  .mark-region[data-hot] {
+    background: rgb(var(--mark-c) / 0.15);
+    box-shadow: 0 0 0 3px rgb(var(--mark-c) / 0.25);
+    transition-duration: 0ms;
+  }
+  @keyframes mark-region-in {
+    from {
+      opacity: 0;
+      transform: scale(0.985);
+    }
+  }
+  .mark-note {
+    position: absolute;
+    width: 22px;
+    height: 22px;
+    margin-top: -2px;
+    padding: 0;
+    border: 0;
+    border-radius: 50% 50% 50% 3px;
+    background: rgb(var(--mark-c));
+    color: #1d1d1b;
+    font: 600 var(--text-caption) / 22px var(--sans);
+    text-align: center;
+    cursor: pointer;
+    pointer-events: auto;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    transition: transform var(--dur-2) var(--ease-press);
+  }
+  .mark-note[data-side="left"] {
+    left: 4px;
+    border-radius: 50% 50% 3px 50%;
+  }
+  .mark-note[data-side="right"] {
+    right: 4px;
+  }
+  .mark-note:hover,
+  .mark-note[data-hot] {
+    transform: scale(1.15);
+  }
+  .mark-flash {
+    position: absolute;
+    margin: -1px -2px;
+    padding: 1px 2px;
+    border-radius: 3px;
+    box-sizing: content-box;
+    animation: mark-flash var(--dur-highlight) var(--ease-out) both;
+  }
+  @keyframes mark-flash {
+    0% {
+      box-shadow: 0 0 0 7px rgb(var(--mark-c) / 0);
+    }
+    25% {
+      box-shadow: 0 0 0 2.5px rgb(var(--mark-c));
+    }
+    100% {
+      box-shadow: 0 0 0 2px rgb(var(--mark-c) / 0);
+    }
+  }
+  .mark-marquee {
+    position: absolute;
+    border: 1.5px dashed var(--blue);
+    border-radius: 2px;
+    background: var(--sel);
+  }
+  .mark-marquee b {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: var(--space-1);
+    padding: 3px 6px;
+    border-radius: var(--radius-xs);
+    background: var(--blue);
+    color: var(--blue-fg);
+    font: 500 var(--text-caption) / 1.2 var(--sans);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .reader-engine-body[data-mark-tool="region"] .reading-pdf-page {
+    cursor: crosshair;
+  }
+  .reader-engine-body[data-mark-tool="region"] .textLayer {
+    user-select: none;
+  }
+  .reader-engine-body.marks-previewing ::selection {
+    background: transparent;
+  }
+
+  /* Full text: CSS highlights, so the article's DOM is never changed. */
+  ::highlight(mark-yellow) {
+    background-color: rgb(247 203 45 / 0.45);
+  }
+  ::highlight(mark-blue) {
+    background-color: rgb(84 178 212 / 0.36);
+  }
+  ::highlight(mark-green) {
+    background-color: rgb(104 190 128 / 0.38);
+  }
+  ::highlight(mark-red) {
+    background-color: rgb(238 122 108 / 0.36);
+  }
+  ::highlight(mark-purple) {
+    background-color: rgb(166 134 222 / 0.36);
+  }
+  ::highlight(mark-near-yellow),
+  ::highlight(mark-near-blue),
+  ::highlight(mark-near-green),
+  ::highlight(mark-near-red),
+  ::highlight(mark-near-purple) {
+    text-decoration: underline dotted 1.5px;
+    text-underline-offset: 0.2em;
+  }
+  ::highlight(mark-near-yellow) {
+    text-decoration-color: rgb(200 160 20);
+  }
+  ::highlight(mark-near-blue) {
+    text-decoration-color: rgb(54 148 182);
+  }
+  ::highlight(mark-near-green) {
+    text-decoration-color: rgb(74 160 98);
+  }
+  ::highlight(mark-near-red) {
+    text-decoration-color: rgb(208 92 78);
+  }
+  ::highlight(mark-near-purple) {
+    text-decoration-color: rgb(136 104 192);
+  }
+  ::highlight(mark-hot) {
+    background-color: rgb(55 53 47 / 0.1);
+  }
+  ::highlight(mark-flash) {
+    background-color: rgb(240 140 20 / 0.35);
+  }
+  ::highlight(mark-preview-yellow) {
+    background-color: rgb(247 203 45 / 0.5);
+  }
+  ::highlight(mark-preview-blue) {
+    background-color: rgb(84 178 212 / 0.42);
+  }
+  ::highlight(mark-preview-green) {
+    background-color: rgb(104 190 128 / 0.44);
+  }
+  ::highlight(mark-preview-red) {
+    background-color: rgb(238 122 108 / 0.42);
+  }
+  ::highlight(mark-preview-purple) {
+    background-color: rgb(166 134 222 / 0.42);
+  }
+
+  /* Overview rail: every mark as a tick beside the scroll track. */
+  .reader-surface {
+    position: relative;
+  }
+  .mark-rail {
+    position: absolute;
+    z-index: 3;
+    top: var(--space-1);
+    right: 2px;
+    bottom: var(--space-1);
+    width: 8px;
+    pointer-events: none;
+  }
+  .mark-rail button {
+    position: absolute;
+    left: 0;
+    width: 8px;
+    height: 4px;
+    padding: 0;
+    border: 0;
+    border-radius: 2px;
+    background: rgb(var(--mark-c));
+    cursor: pointer;
+    pointer-events: auto;
+    transition: transform var(--dur-out) var(--ease-out);
+  }
+  .mark-rail button:hover,
+  .mark-rail button[data-hot] {
+    transform: scale(1.6, 1.5);
+    transition-duration: 0ms;
+  }
+
+  /* Tools in the reader toolbar. */
+  .mark-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding-left: var(--space-2);
+    margin-left: var(--space-1);
+    border-left: 1px solid var(--line);
+  }
+  .mark-tools .ui-icon-button[aria-pressed="true"] {
+    background: var(--sel);
+    color: var(--blue);
+  }
+  .mark-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: var(--radius-round);
+    background: rgb(var(--mark-c));
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+    flex-shrink: 0;
+  }
+  .mark-pen-dot {
+    width: 12px;
+    height: 12px;
+  }
+
+  /* The ink bar: dark on a light page so it reads as a tool, not content. */
+  .mark-bar {
+    position: fixed;
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: var(--space-1);
+    border-radius: var(--radius-lg);
+    background: var(--fg);
+    color: var(--bg);
+    box-shadow: var(--shadow-pop);
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+    transition:
+      opacity var(--dur-1) var(--ease-out),
+      transform var(--dur-1) var(--ease-out);
+  }
+  .mark-bar[data-below] {
+    transform: translateY(-4px) scale(0.98);
+  }
+  .mark-bar[data-shown] {
+    opacity: 1;
+    transform: none;
+    transition-duration: var(--dur-2);
+  }
+  .mark-bar-colors {
+    display: flex;
+  }
+  .mark-bar-sep {
+    width: 1px;
+    height: 20px;
+    margin: 0 var(--space-1);
+    background: color-mix(in srgb, var(--bg) 18%, transparent);
+  }
+  .mark-swatch,
+  .mark-bar-button {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    min-width: 32px;
+    padding: 0 var(--space-2);
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: inherit;
+    font: var(--text-control) / 1 var(--sans);
+    cursor: pointer;
+    transition:
+      background-color var(--dur-out) var(--ease-out),
+      transform var(--dur-press) var(--ease-out);
+  }
+  .mark-swatch {
+    padding: 0;
+  }
+  .mark-bar-button:hover {
+    background: color-mix(in srgb, var(--bg) 12%, transparent);
+    transition-duration: 0ms, var(--dur-press);
+  }
+  .mark-bar-button:active,
+  .mark-swatch:active {
+    transform: scale(0.94);
+  }
+  .mark-bar-button[data-tone="danger"]:hover {
+    color: #ff9d8f;
+  }
+  .mark-swatch i {
+    width: 16px;
+    height: 16px;
+    border-radius: var(--radius-round);
+    background: rgb(var(--mark-c));
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14);
+    transition: transform var(--dur-2) var(--ease-press);
+  }
+  .mark-swatch:hover i,
+  .mark-swatch[data-current] i {
+    transform: scale(1.25);
+  }
+  .mark-swatch[data-current] i {
+    box-shadow:
+      inset 0 0 0 1px rgba(0, 0, 0, 0.14),
+      0 0 0 2px var(--fg),
+      0 0 0 3.5px rgb(var(--mark-c));
+  }
+  /* A tooltip waits before it shows, then reads at once. */
+  .mark-bar [data-tip]::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 50%;
+    padding: 5px var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--fg);
+    color: var(--bg);
+    box-shadow: var(--shadow-pop);
+    font: var(--text-caption) / 1.2 var(--sans);
+    white-space: nowrap;
+    opacity: 0;
+    transform: translate(-50%, 2px);
+    pointer-events: none;
+    transition:
+      opacity var(--dur-1) var(--ease-out),
+      transform var(--dur-1) var(--ease-out);
+  }
+  .mark-bar[data-below] [data-tip]::after {
+    top: calc(100% + 10px);
+    bottom: auto;
+  }
+  .mark-bar [data-tip]:hover::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
+    transition-delay: 450ms;
+  }
+
+  .mark-note-popover {
+    position: fixed;
+    z-index: 210;
+    width: min(360px, calc(100vw - 24px));
+    padding: var(--space-3);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    box-shadow:
+      0 0 0 1px var(--line2),
+      var(--shadow-pop);
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+    transition:
+      opacity var(--dur-1) var(--ease-out),
+      transform var(--dur-1) var(--ease-out);
+  }
+  .mark-note-popover[data-shown] {
+    opacity: 1;
+    transform: none;
+    transition-duration: var(--dur-2);
+  }
+  .mark-note-quote {
+    display: -webkit-box;
+    margin: 0 0 var(--space-2);
+    padding-left: var(--space-3);
+    overflow: hidden;
+    border-left: 3px solid rgb(var(--mark-c));
+    color: var(--fg2);
+    font: var(--text-interface) / 1.5 var(--serif);
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+  }
+  .mark-note-popover textarea {
+    width: 100%;
+    min-height: 92px;
+    padding: var(--space-2) var(--space-3);
+    resize: vertical;
+    border: 1px solid var(--control-border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--fg);
+    font: var(--text-interface) / 1.5 var(--sans);
+    transition: var(--feedback);
+  }
+  .mark-note-popover textarea:focus {
+    outline: none;
+    border-color: var(--focus);
+    box-shadow: 0 0 0 3px var(--sel);
+  }
+  .mark-note-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+    color: var(--fg3);
+    font-size: var(--text-caption);
+  }
+  .mark-note-actions > span {
+    flex: 1;
+  }
+  .mark-note-cancel,
+  .mark-note-save {
+    height: var(--control-small-height);
+    padding: 0 var(--space-3);
+    border: 0;
+    border-radius: var(--radius-sm);
+    font: var(--text-control) / 1 var(--sans);
+    cursor: pointer;
+    transition: var(--feedback);
+  }
+  .mark-note-cancel {
+    background: transparent;
+    color: var(--fg2);
+  }
+  .mark-note-cancel:hover {
+    background: var(--hover);
+    transition: var(--feedback-hot);
+  }
+  .mark-note-save {
+    background: var(--blue);
+    color: var(--blue-fg);
+    font-weight: 500;
+  }
+  .mark-note-save:hover {
+    filter: brightness(0.94);
+    transition: var(--feedback-hot);
+  }
+  .mark-note-cancel:active,
+  .mark-note-save:active {
+    transform: scale(0.98);
+  }
+
+  /* Side panel */
+  .reader-information > .ui-tabs {
+    margin: calc(-1 * var(--space-2)) 0 var(--space-3);
+  }
+  .marks-panel {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .marks-filters {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .marks-filters .ui-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .marks-filters .ui-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .marks-group h3 {
+    display: flex;
+    justify-content: space-between;
+    margin: var(--space-3) 0 var(--space-1);
+    color: var(--fg3);
+    font: 500 var(--text-caption) / 1.4 var(--sans);
+  }
+  .mark-card {
+    position: relative;
+    display: grid;
+    gap: var(--space-1);
+    margin: 0 calc(-1 * var(--space-2));
+    padding: var(--space-2);
+    border-radius: var(--radius-md);
+    transition: var(--feedback);
+  }
+  .mark-card:hover,
+  .mark-card[data-hot] {
+    background: var(--hover-soft);
+    transition: var(--feedback-hot);
+  }
+  .mark-card[data-active] {
+    background: var(--sel);
+  }
+  .mark-card > header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 26px;
+    color: var(--fg3);
+    font-size: var(--text-caption);
+  }
+  .mark-card-label {
+    color: var(--fg2);
+    font-weight: 500;
+  }
+  .mark-card-where {
+    color: var(--fg3);
+  }
+  .mark-card-tools {
+    display: flex;
+    gap: 2px;
+    margin-left: auto;
+    opacity: 0;
+    transition: opacity var(--dur-out) var(--ease-out);
+  }
+  .mark-card:is(:hover, :focus-within, [data-active]) .mark-card-tools {
+    opacity: 1;
+    transition-duration: 0ms;
+  }
+  @media (hover: none) {
+    .mark-card-tools {
+      opacity: 1;
+    }
+  }
+  .mark-card-open {
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .mark-card-quote {
+    display: -webkit-box;
+    overflow: hidden;
+    font: var(--text-interface) / 1.55 var(--serif);
+    color: var(--fg);
+    quotes: none;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+  }
+  .mark-card-quote > span {
+    padding: 0 1px;
+    border-radius: 2px;
+    background: rgb(var(--mark-c) / 0.3);
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+  .mark-card-region {
+    display: grid;
+    gap: var(--space-1);
+    color: var(--fg3);
+    font-size: var(--text-caption);
+  }
+  .mark-card-image {
+    display: block;
+    width: 100%;
+    max-height: 180px;
+    object-fit: contain;
+    object-position: left top;
+    border-radius: var(--radius-sm);
+    background: white;
+    box-shadow: 0 0 0 1px var(--line2);
+  }
+  .mark-card-note {
+    margin: 0;
+    color: var(--fg2);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .mark-tag {
+    color: var(--blue);
+    white-space: nowrap;
+  }
+  .mark-card-time {
+    margin: 0;
+    color: var(--fg-quiet);
+    font-size: var(--text-caption);
+  }
+  .marks-footer {
+    position: sticky;
+    bottom: calc(-1 * var(--space-5));
+    display: flex;
+    justify-content: flex-end;
+    margin: 0 calc(-1 * var(--space-5)) calc(-1 * var(--space-5));
+    padding: var(--space-3) var(--space-5);
+    border-top: 1px solid var(--line);
+    background: var(--bg);
+  }
+  .marks-export {
+    max-height: 50vh;
+    margin: var(--space-3) 0 0;
+    padding: var(--space-3) var(--space-4);
+    overflow: auto;
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+    font: var(--text-caption) / 1.6 var(--mono);
+    white-space: pre-wrap;
+  }
+}

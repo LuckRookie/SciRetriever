@@ -401,6 +401,9 @@ export async function renderDocument(
       const segment = segments.find(
         (s) => s.start_utf8 < block.end && s.end_utf8 > block.start,
       );
+      // A page hint for placing PDF marks; never shown as a location.
+      if (segment && typeof segment.page === "number")
+        el.dataset.page = String(segment.page + 1);
       if (segment && frame.onSegment) {
         const source = document.createElement("button");
         source.className = "reading-block-source";
@@ -469,6 +472,7 @@ export async function renderDocument(
     frame.status.textContent = `${finished ? "全文已加载" : "已加载部分正文 · 继续向下滚动自动加载"}${source?.kind === "document" ? " · 高亮为证据所在段落；无可靠 PDF 页码" : ""}`;
     frame.onIssue?.(null);
     ctx.root.dataset.readingReady = "true";
+    frame.onDocumentPaint?.();
   };
   const loadChunk = async () => {
     more.disabled = true;

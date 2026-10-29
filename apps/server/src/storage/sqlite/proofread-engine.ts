@@ -111,7 +111,7 @@ export function runProofreadStorage(
   args: unknown,
 ): unknown {
   if (
-    ![13].includes(
+    ![14].includes(
       Number(
         one(db, "SELECT schema_version FROM schema_identity WHERE singleton=1")
           ?.schema_version,

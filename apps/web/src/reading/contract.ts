@@ -21,6 +21,14 @@ export interface PdfControls {
   go(page: number): void;
   zoomTo(zoom: ReadingPosition["zoom"]): void;
 }
+/** One drawn PDF page: its box, its text layer and its size in PDF units at scale 1. */
+export interface PdfPageView {
+  readonly page: number;
+  readonly element: HTMLElement;
+  readonly text: HTMLElement;
+  readonly width: number;
+  readonly height: number;
+}
 export interface ReaderOutlineEntry {
   readonly title: string;
   readonly level: number;
@@ -56,6 +64,10 @@ export interface ReaderFrame {
   onDocumentLink?: (preview: DocumentLinkPreview) => void;
   onImage?: (url: string, label: string) => void;
   onPdfControls?: (controls: PdfControls) => void;
+  /** A page's text layer is drawn; called again for every redraw after zoom or resize. */
+  onPdfPage?: (view: PdfPageView) => void;
+  /** Full-text blocks were painted or extended. */
+  onDocumentPaint?: () => void;
   onOutline?: (entry: ReaderOutlineEntry) => void;
   onOutlineEmpty?: (message: string) => void;
   onFindNext?: (next: (() => void) | null) => void;
