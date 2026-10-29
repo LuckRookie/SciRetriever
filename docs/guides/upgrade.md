@@ -4,7 +4,7 @@
 负责：catalog 初始化与旧库离线切换（初始化与恢复）
 状态：现行
 
-SciRetriever 只维护一份当前数据库结构。正常打开与业务写入只接受当前布局，不自动迁移。专用离线脚本可校验其明确支持的旧布局，不形成逐级迁移链或业务读写分支。结构指纹用于确认实际布局；仅修改数据库中的版本号不能完成转换。
+SciRetriever 只维护一份当前数据库结构。正常打开与业务写入只接受当前布局，不自动迁移。专用离线脚本可校验其明确支持的旧布局，不形成运行时兼容分支或自动升级路径。结构指纹用于确认实际布局；仅修改数据库中的版本号不能完成转换。
 
 普通打开只核对布局；需检查全部 SQLite 数据与外键时，显式运行 `sciretriever maintenance verify-catalog --json`。当前库即使没有全文索引也可检查；命令不修复或迁移，返回损坏时先保留证据，再安排恢复或索引维护。完整检查的范围、HTTP/MCP 入口及损坏提示见[存储完整性验证](../architecture/technical/07-versioned-storage.md#5-存储完整性验证)。
 
@@ -31,7 +31,20 @@ sciretriever storage schema-init --catalog /absolute/data/catalog.sqlite --json
 
 切换后需要恢复时，先保存当前库及新增事实，不直接用旧备份覆盖唯一副本。旧格式备份只能在独立环境中读取或再次转换，不能交给当前程序强行写入。具体步骤见[数据库切换](cutover.md)。
 
-建档 schema 11 → 12 的离线转换入口和核对步骤见[文献建档指南](literature-archive.md#预计消耗与迁移)。历史全文版本的只读解码与 catalog 布局迁移是两件独立的事。
+历史全文版本的只读解码与 catalog 布局迁移是两件独立的事。
+
+## 状态投影 schema 13
+
+当前程序只打开精确匹配的 13 布局。先停止服务与 queued/running 任务、保存一致性备份，并在独立副本演练；构建服务端后，对绝对路径运行：
+
+```sh
+# 仅当输入还是精确匹配的 schema 11，先做固定的建档转换。
+node scripts/migrate-archive-v12.mjs /absolute/path/to/offline-copy.sqlite
+# 输入须是精确匹配的 schema 12。
+node scripts/migrate-library-state-v13.mjs /absolute/path/to/offline-copy.sqlite
+```
+
+12 → 13 工具只安装按篇状态失效提示与索引，不读个人配置、不调用模型、不改文献资产。它校验精确旧布局、SQLite 完整性与外键，事务内更新结构，核对所有旧表行数不变、新提示表为空；有运行中任务、未知结构或重复执行时拒绝。核对回执后再按前述步骤安排正式切换，不能只改版本号，也不能让旧程序继续写入新库。布局定义与派生状态规则见[存储技术合同](../architecture/technical/07-versioned-storage.md#41-当前-schema-与显式转换)。
 
 ## Web 守护的首次切换与程序升级
 

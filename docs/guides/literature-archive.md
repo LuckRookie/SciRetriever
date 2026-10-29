@@ -86,4 +86,4 @@ MCP 对应 `archive_query`（status/issues/stats/events）与 `archive_manage`�
 
 已有整理和页输入仍匹配时，估算扣除整理及已接纳页的模型工作；缺少可复用整理时按全部 PDF 页保守估计，字段 page_basis 明示依据。整篇复用数不把只完成前几步的文献计算在内。
 
-catalog schema 12 接纳新六步。打开旧库不会自动迁移；离线管理员先备份，在副本运行 `node scripts/migrate-archive-v12.mjs /absolute/path/to/offline-copy.sqlite`，核对行数与外键后再安排正式切换。脚本只支持匹配的 11 → 12，不修改文献资产或重建历史文档。
+新六步沿用 schema 12 引入的步骤合同；当前 catalog 的状态投影转换与旧库离线切换统一见[初始化与恢复](upgrade.md#状态投影-schema-13)。打开旧库不会自动迁移，正式切换前须先备份并在副本核对，不修改文献资产或重建历史文档。

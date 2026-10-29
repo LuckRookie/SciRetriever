@@ -1,3 +1,4 @@
+import { SCHEMA_VERSION } from "../src/storage/sqlite/schema.js";
 import { externalManifestFixture } from "./external-manifest-fixture.js";
 import { inspectFixtureRetrieval } from "./current-catalog-fixture.js";
 import { correctedDocumentFixture } from "./corrected-document-fixture.js";
@@ -127,13 +128,13 @@ it("keeps a real DocumentVersion and ready retrieval index through reopening and
     app = undefined;
     const before = await inspectFixtureRetrieval(catalog);
     expect(before).toMatchObject({
-      schema_version: 12,
+      schema_version: SCHEMA_VERSION,
       active_generation: expect.any(String),
     });
     query = await createQueryApplication(home);
     expect(query.readiness).toMatchObject({
       status: "ready",
-      schema_version: 12,
+      schema_version: SCHEMA_VERSION,
     });
     const described = await query.documentRead!.describe({
       document_version_id: receipt.document.document_version_id,
@@ -352,7 +353,7 @@ it("keeps a real DocumentVersion and ready retrieval index through reopening and
     const rebuilt = await app.maintenance!.rebuildIndex();
     expect(rebuilt).toBeTruthy();
     expect(await inspectFixtureRetrieval(catalog)).toMatchObject({
-      schema_version: 12,
+      schema_version: SCHEMA_VERSION,
       active_generation: expect.any(String),
     });
     await app.close();

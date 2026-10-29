@@ -34,6 +34,7 @@ import {
   prepareRetrievalVocab,
 } from "../src/storage/sqlite/retrieval-engine.js";
 import {
+  SCHEMA_VERSION,
   SCHEMA_FINGERPRINT,
   SCHEMA_MANIFEST,
 } from "../src/storage/sqlite/schema.js";
@@ -585,7 +586,10 @@ describe("explicit retrieval projection and bounded Context", () => {
             { home: env.home },
           )
         ).value,
-      ).toMatchObject({ schema_version: 12, active_generation: null });
+      ).toMatchObject({
+        schema_version: SCHEMA_VERSION,
+        active_generation: null,
+      });
       const published = (
         await runCli(["maintenance", "rebuild-index"], { home: env.home })
       ).value as {
@@ -867,7 +871,7 @@ describe("explicit retrieval projection and bounded Context", () => {
         const inspected = inspectCatalogWithRetrieval(
           reader,
           {
-            schema_version: 12,
+            schema_version: SCHEMA_VERSION,
             schema_fingerprint: SCHEMA_FINGERPRINT,
             schema_manifest: SCHEMA_MANIFEST,
             execution_schema_version: EXECUTION_SCHEMA_VERSION,

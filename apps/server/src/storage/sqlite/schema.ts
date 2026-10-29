@@ -2,7 +2,7 @@ import { PROCESSOR_METHOD_REVISION } from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
 
 // One current catalog layout. This is not a migration ladder or a list of supported historic layouts.
-export const SCHEMA_VERSION = 12 as const;
+export const SCHEMA_VERSION = 13 as const;
 // Inputs read by archiveStates/deriveCurrentState, including view dependencies.
 // Reading history, folders and processing outputs do not invalidate this projection.
 export const LIBRARY_STATE_INPUT_TABLES = [
@@ -32,14 +32,72 @@ const earliestIntake = (id: string) =>
   `(SELECT strftime('%Y-%m-%dT%H:%M:%fZ',min(julianday(p.observed_at))) FROM literature_metadata_observations lo JOIN metadata_observations o ON o.observation_id=lo.observation_id JOIN provenances p ON p.provenance_id=o.provenance_id WHERE lo.literature_id=${id})`;
 /** Explicit offline backfill only; opening a catalog never applies it. */
 export const LIBRARY_INTAKE_BACKFILL_SQL = `INSERT INTO literature_intake SELECT l.literature_id,${earliestIntake("l.literature_id")} FROM literatures l WHERE true ON CONFLICT(literature_id) DO UPDATE SET intake_at=excluded.intake_at`;
-export const LIBRARY_PERFORMANCE_SCHEMA = [
-  "CREATE TABLE library_state_revision(singleton INTEGER PRIMARY KEY CHECK(singleton=1),revision INTEGER NOT NULL CHECK(revision>=0)) STRICT",
-  ...LIBRARY_STATE_INPUT_TABLES.flatMap((table) =>
-    ["INSERT", "UPDATE", "DELETE"].map(
-      (event) =>
-        `CREATE TRIGGER library_state_${table}_${event.toLowerCase()} AFTER ${event} ON ${table} BEGIN INSERT INTO library_state_revision VALUES(1,1) ON CONFLICT(singleton) DO UPDATE SET revision=revision+1; END`,
-    ),
+const stateOwners = (table: string, side: string): string | null => {
+  if (["raw_parse_current", "raw_parses"].includes(table)) return null;
+  if (table === "execution_jobs")
+    return `SELECT DISTINCT literature_id FROM archive_runs WHERE job_id=${side}.job_id ORDER BY literature_id LIMIT 33`;
+  if (
+    [
+      "document_defaults",
+      "structure_annotation_current",
+      "structure_annotations",
+    ].includes(table)
+  )
+    return `SELECT literature_id FROM document_versions WHERE document_version_id=${side}.document_version_id`;
+  const asset =
+    table === "assets"
+      ? `${side}.asset_id`
+      : [
+            "proofread_current",
+            "proofread_versions",
+            "proofread_manual_state",
+          ].includes(table)
+        ? `${side}.part_asset_id`
+        : table === "raw_parse_pins"
+          ? `(SELECT part_asset_id FROM proofread_versions WHERE proofread_id=${side}.proofread_id)`
+          : null;
+  return asset
+    ? `SELECT DISTINCT literature_id FROM literature_assets WHERE asset_id=${asset} ORDER BY literature_id LIMIT 33`
+    : `SELECT ${side}.literature_id AS literature_id`;
+};
+/** Only invalidation hints, never another source of readiness facts. */
+export const LIBRARY_STATE_SCHEMA = [
+  "CREATE TABLE library_state_revision(singleton INTEGER PRIMARY KEY CHECK(singleton=1),revision INTEGER NOT NULL CHECK(revision>=0),full_revision INTEGER NOT NULL DEFAULT 0 CHECK(full_revision>=0),tracked_revision INTEGER NOT NULL DEFAULT 0 CHECK(tracked_revision>=0)) STRICT",
+  "CREATE TABLE library_state_changes(literature_id TEXT PRIMARY KEY CHECK(length(trim(literature_id))>0),revision INTEGER NOT NULL CHECK(revision>=0)) STRICT",
+  "CREATE INDEX library_state_changes_revision ON library_state_changes(revision,literature_id)",
+  "CREATE INDEX library_state_asset_owners ON literature_assets(asset_id,literature_id)",
+  "CREATE INDEX library_state_job_owners ON archive_runs(job_id,literature_id)",
+  ...["INSERT", "UPDATE"].map(
+    (event) =>
+      `CREATE TRIGGER library_state_revision_${event.toLowerCase()} AFTER ${event} ON library_state_revision WHEN NEW.revision<>NEW.tracked_revision BEGIN UPDATE library_state_revision SET full_revision=revision,tracked_revision=revision WHERE singleton=1; END`,
   ),
+  ...LIBRARY_STATE_INPUT_TABLES.flatMap((table) =>
+    ["INSERT", "UPDATE", "DELETE"].map((event) => {
+      const sides =
+        event === "INSERT"
+          ? ["NEW"]
+          : event === "DELETE"
+            ? ["OLD"]
+            : ["OLD", "NEW"];
+      const sources = sides.map((side) => stateOwners(table, side));
+      const owners =
+        sources.every((source) => source !== null) &&
+        !(table === "literatures" && event === "UPDATE")
+          ? sources
+              .map((source) => `SELECT literature_id FROM (${source})`)
+              .join(" UNION ")
+          : null;
+      const bump =
+        "INSERT INTO library_state_revision(singleton,revision,tracked_revision) VALUES(1,1,1) ON CONFLICT(singleton) DO UPDATE SET revision=revision+1,tracked_revision=revision+1;";
+      const invalidate = owners
+        ? `UPDATE library_state_revision SET full_revision=revision WHERE singleton=1 AND (SELECT count(*) FROM (${owners})) NOT BETWEEN 1 AND 32; INSERT INTO library_state_changes SELECT literature_id,(SELECT revision FROM library_state_revision WHERE singleton=1) FROM (${owners}) WHERE (SELECT full_revision<revision FROM library_state_revision WHERE singleton=1) ON CONFLICT(literature_id) DO UPDATE SET revision=excluded.revision;`
+        : "UPDATE library_state_revision SET full_revision=revision WHERE singleton=1;";
+      return `CREATE TRIGGER library_state_${table}_${event.toLowerCase()} AFTER ${event} ON ${table} BEGIN ${bump} ${invalidate} END`;
+    }),
+  ),
+] as const;
+export const LIBRARY_PERFORMANCE_SCHEMA = [
+  ...LIBRARY_STATE_SCHEMA,
   "CREATE TABLE literature_intake(literature_id TEXT PRIMARY KEY,intake_at TEXT,FOREIGN KEY(literature_id) REFERENCES literatures(literature_id) ON DELETE CASCADE ON UPDATE CASCADE) STRICT",
   "CREATE INDEX literature_intake_order ON literature_intake(intake_at DESC,literature_id ASC)",
   "CREATE TRIGGER literature_intake_create AFTER INSERT ON literatures BEGIN INSERT INTO literature_intake VALUES(NEW.literature_id,NULL); END",
@@ -71,7 +129,7 @@ export const LIBRARY_PERFORMANCE_SCHEMA = [
 
 export const SCHEMA_MANIFEST = [
   "CREATE TABLE proofread_correction_cache(cache_key TEXT NOT NULL PRIMARY KEY CHECK(length(cache_key)=64),cache_id TEXT NOT NULL UNIQUE,artifact_reference TEXT NOT NULL,sha256 TEXT NOT NULL,byte_size INTEGER NOT NULL,media_type TEXT NOT NULL,FOREIGN KEY(artifact_reference,sha256,byte_size,media_type) REFERENCES artifact_objects(relative_path,sha256,byte_size,media_type) ON DELETE RESTRICT) STRICT",
-  "CREATE TABLE schema_identity(singleton INTEGER NOT NULL PRIMARY KEY CHECK(singleton=1),product TEXT NOT NULL CHECK(product='sciretriever'),schema_version INTEGER NOT NULL CHECK(schema_version=12),schema_fingerprint TEXT NOT NULL CHECK(length(schema_fingerprint)=64 AND schema_fingerprint=lower(schema_fingerprint) AND schema_fingerprint NOT GLOB '*[^0-9a-f]*'),created_at TEXT NOT NULL CHECK(length(trim(created_at))>0)) STRICT",
+  "CREATE TABLE schema_identity(singleton INTEGER NOT NULL PRIMARY KEY CHECK(singleton=1),product TEXT NOT NULL CHECK(product='sciretriever'),schema_version INTEGER NOT NULL CHECK(schema_version=13),schema_fingerprint TEXT NOT NULL CHECK(length(schema_fingerprint)=64 AND schema_fingerprint=lower(schema_fingerprint) AND schema_fingerprint NOT GLOB '*[^0-9a-f]*'),created_at TEXT NOT NULL CHECK(length(trim(created_at))>0)) STRICT",
   "CREATE TABLE artifact_objects(artifact_id TEXT NOT NULL PRIMARY KEY CHECK(length(trim(artifact_id))>0),sha256 TEXT NOT NULL CHECK(length(sha256)=64 AND sha256=lower(sha256) AND sha256 NOT GLOB '*[^0-9a-f]*'),byte_size INTEGER NOT NULL CHECK(typeof(byte_size)='integer' AND byte_size>0),media_type TEXT NOT NULL CHECK(length(trim(media_type))>0),relative_path TEXT NOT NULL UNIQUE CHECK(length(trim(relative_path))>0 AND relative_path NOT LIKE '/%' AND relative_path NOT LIKE '%\\\\%' AND relative_path NOT LIKE '%//%' AND relative_path NOT LIKE '../%' AND relative_path NOT LIKE '%/../%' AND relative_path NOT LIKE './%' AND relative_path NOT LIKE '%/./%' AND relative_path NOT IN ('.','..')) ,UNIQUE(sha256,byte_size),UNIQUE(relative_path,sha256,byte_size,media_type)) STRICT",
   "CREATE TABLE provenances(provenance_id TEXT NOT NULL PRIMARY KEY CHECK(length(trim(provenance_id))>0),source_kind TEXT NOT NULL CHECK(source_kind IN ('metadata-provider','asset-provider','parser','analysis','user')),source_name TEXT NOT NULL CHECK(length(trim(source_name))>0),source_record_id TEXT CHECK(source_record_id IS NULL OR length(trim(source_record_id))>0),observed_at TEXT NOT NULL CHECK(length(trim(observed_at))>0),input_sha256 TEXT CHECK(input_sha256 IS NULL OR (length(input_sha256)=64 AND input_sha256=lower(input_sha256) AND input_sha256 NOT GLOB '*[^0-9a-f]*')),parameters_sha256 TEXT CHECK(parameters_sha256 IS NULL OR (length(parameters_sha256)=64 AND parameters_sha256=lower(parameters_sha256) AND parameters_sha256 NOT GLOB '*[^0-9a-f]*'))) STRICT",
   "CREATE TABLE meta_literatures(meta_literature_id TEXT NOT NULL PRIMARY KEY CHECK(length(trim(meta_literature_id))>0),representative_literature_id TEXT NOT NULL,FOREIGN KEY(meta_literature_id,representative_literature_id) REFERENCES literatures(meta_literature_id,literature_id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED) STRICT",

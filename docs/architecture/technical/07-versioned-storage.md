@@ -187,7 +187,11 @@ Catalog 只为会改变未来自动目标选择的稳定缺失保存一张最小
 
 `LiteratureSearchItem`、`LibrarySearchPage`、`LiteratureAssetView`、`LiteratureDetail`、`LiteratureReferencePage` 和 `ReferenceDetail` 都在查询时由上述权威行、唯一关系、聚合值和稳定 artifact 引用临时组装。Catalog 不建立 search item、page、detail、asset view、missing step、引用数量、关系读取 DTO 或其它完整读取 DTO 投影表；这些对象没有独立 ID、provenance、revision 或写入操作。`LiteratureDetail` 必须在同一个 read-only SQLite snapshot 中读取 Literature/MetaLiterature、metadata binding、observations、资产关系、当前原始解析/校订稿/建档状态、其它版本与 Reference 数量，再使用已经提交的不可变 artifact 引用读取需要的结构化内容，不能把不同时间点的 current facts 拼成一个结果。
 
-文献库性能路径（Owner 2026-10-23）：`literature_intake` 仅物化最早关联观测时间这一可重建的排序键，事务触发器维护，UTC 规范化与未物化时的 `min(julianday(observed_at))` 一致，无观测为 null；不产生独立业务身份或人工编辑入口。`library_state_revision` 仅作为内存状态缓存的失效序号，六态和缺失步骤仍由 Literature 在读取时推导，不保存第二份就绪事实。状态依赖、失效和取消检查点的当前实现见源码 [SQLite 说明](../../../apps/server/src/storage/sqlite/README.md)。已有 catalog 的同版追加、回填与切换必须显式授权并在离线副本核对，不在启动时自动执行。
+文献库性能路径：`literature_intake` 仅物化最早关联观测时间这一可重建的排序键，事务触发器维护，UTC 规范化与未物化时的 `min(julianday(observed_at))` 一致，无观测为 null；不产生独立业务身份或人工编辑入口。状态缓存的 `library_state_revision` 与 `library_state_changes` 只保存失效提示，六态、missing_step 及其它状态字段仍由同一个 archiveStates/deriveCurrentState 推导，不保存第二份就绪事实。
+
+状态输入触发器在原事务中推进 revision，并按文献 ID 更新变化表的最近 revision；删除保留无外键 tombstone，供不同只读连接各自按水位消费，不在读取时删掉提示。资产和任务的反向关联有专用索引，单个触发器最多定位 32 篇；找不到归属或超过此数则只推进 full_revision。原始解析版本/当前指针可能经 pin 影响其它校订稿，保守全量失效；身份行更新也全量失效。完整表集合及映射由 schema.ts 维护，写入不扫描全库。
+
+读取在同一快照中比较 catalog/schema 身份、标签上限、解析 profile 与版本水位。通常只读最近改变的至多 64 篇，再替换其派生值；更多篇、全量标记领先、未追踪的 revision 更新、身份或配置改变都退回全量。未追踪的计数器写入由 tracked_revision 守护提升全量标记。缓存先复制旧 Map，在候选 Map 中计算、移除已删除文献，最后一次 checkpoint 通过后才同时发布完整 Map 与水位；失败或取消保留原缓存。Map 的复制仍随缓存篇数增长，但不重读或重新推导未变化文献。冷连接仍需一次全量构建。已有 catalog 的转换必须显式离线执行，不在启动时自动迁移。
 
 `LiteratureReferencePage` 在同一 snapshot 中读取指定端点的权威 Reference、相关 Literature current facts 和每条边的 support count；`ReferenceDetail` 在同一 snapshot 中读取 Reference 两端和全部当前 support。正向和反向列表都查询 `literature_references`，不能物化 cited-by 副本。关系页面的固定排序、total 和 cursor 位置必须来自同一读取视图；后续页面可以看到后续提交的 current facts，但单页内部不能混合提交前后状态。
 
@@ -390,7 +394,7 @@ v1 文献事实与 v2 job/attempt/event/candidate/receipt 运行事实使用显�
 
 ### 4.1 当前 schema 与显式转换
 
-`storage/sqlite/schema.ts` 是唯一结构定义，内部标识 12 与精确指纹共同验证。启动不自动升级旧库。建档 11 → 12 的专用离线脚本只扩展步骤 CHECK 并更新身份，旧行保持原样，入口与核对口径见[文档与证据第 6.7 节](04-document-evidence.md#67-schema-与预计消耗)。`initializeCatalogSchema` 仅创建空目标；未知/旧结构拒绝。一次性转换先固定 SQLite 一致性备份，再写入新目录和当前 schema，并复核完整性、外键、数量、稳定 ID、元数据 hash 与原始资产字节。转换不恢复 schema-v\* 迁移阶梯。
+`storage/sqlite/schema.ts` 是唯一当前结构定义，内部标识 13 与精确指纹共同验证。启动不自动升级旧库。状态投影 12 → 13 的专用离线迁移增加失效提示及索引、替换触发器和身份，并核对完整布局、完整性、全部旧表行数及外键，不改文献资产或重建正文；已运行的任务须先停止。旧 11 → 12 建档转换仍固定到 12，再显式执行状态投影转换；历史布局只作为这些离线工具的精确输入，不被运行时接受。操作步骤归[初始化与恢复指南](../../guides/upgrade.md#状态投影-schema-13)。`initializeCatalogSchema` 仅创建空目标；未知/旧结构拒绝。转换不恢复运行时 schema-v\* 兼容或逐级自动迁移。
 
 Owner 已授权在转换副本删除旧总结、旧知识、旧算子结果和 markdown-utf8-v1 文档；VLM Markdown 经验证登记为原始解析，共享 PDF/图片不能删除。未知事实、外部回执引用等超出删除范围的依赖必须拒绝并报告。切换仍须单独确认，并先处理备份后的源库增量。
 

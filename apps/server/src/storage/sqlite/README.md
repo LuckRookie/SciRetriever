@@ -9,6 +9,7 @@
 - [worker.ts](worker.ts)：Worker 调用边界。
 - [worker-runtime.ts](worker-runtime.ts)：SQLite worker 运行实现。
 - [library-state-cache.ts](library-state-cache.ts)：基于事务内输入版本的建档状态缓存。
+- [library-state-schema-migration.ts](library-state-schema-migration.ts)：显式离线安装当前按篇失效结构；[library-state-previous-layout.ts](library-state-previous-layout.ts) 只描述工具的精确旧输入，不由 catalog opener 接受。
 - [library-page.ts](library-page.ts)：LibraryQuery 的只读 SQL 筛选、计数和游标分页，完整文献只装载当前页；不修改业务事实或 catalog schema。
 - [retrieval-engine.ts](retrieval-engine.ts)：材料检索持久化。
 - [processor-engine.ts](processor-engine.ts)：算子结果、集合与固定引用的持久化。
@@ -28,7 +29,7 @@
 
 - `metadata-rows.ts` / `metadata-field-storage.ts`：中性元数据读取及字段状态的原子保存；来源证据必须属于同一篇文献，建档提议提交时重新检查默认文档与结构注释。
 
-当前数据库结构只由 `schema.ts` 定义；`catalog-layout.ts` 统一初始化空库，`catalog-schema.ts` 提供检查和显式创建。旧 schema 定义与逐级迁移已删除。版本或指纹不匹配时拒绝按当前结构读取，不隐式转换已有库。
+当前数据库结构只由 `schema.ts` 定义；`catalog-layout.ts` 统一初始化空库，`catalog-schema.ts` 提供检查和显式创建。历史布局仅保留为专用离线工具的精确输入证明，不是运行时支持的另一套 schema。版本或指纹不匹配时拒绝按当前结构读取，不隐式转换已有库。
 
 `raw-parsing-engine.ts`、`proofread-engine.ts`、`structure-annotation-engine.ts`、`metadata-field-storage.ts` 和 `archive-reference-engine.ts` 在同一当前结构中分别保存对应 owner 提交的事实。模块拆分不产生独立数据库版本。
 
@@ -40,7 +41,7 @@
 
 ## 文献库查询投影与取消
 
-`library-state-cache.ts` 在只读事务中复用完整的状态映射，键包含 catalog 文件身份、SQLite `schema_version`、`library_state_revision`、标签上限和部署解析 profile。事务内触发器维护状态版本，因此其它连接提交后重开连接仍可复用未变化的映射；取消或失败的计算不发布半份映射。
+`library-state-cache.ts` 在只读事务中复用完整的状态映射，键包含 catalog 文件身份、SQLite `schema_version`、标签上限和部署解析 profile。事务内触发器维护 `library_state_revision` 与按篇的 `library_state_changes`，少量已定位变更只重新读取并推导对应文献；未知归属、大批量、身份或配置变化退回全量。不同连接独立记录已消费水位，不删除其它连接仍需的提示；删除文献保留失效 tombstone。候选 Map 和水位同时发布，取消或失败不改旧 Map。
 
 状态输入包括：文献与元数据完整性、作者存在性、文献资产角色与 PDF 类型/hash、当前原始解析与 pin、校订版本/当前指针/人工 revision、固定文档与默认指针、结构注释及当前指针、建档 run 与对应 job 状态、步骤、问题处置、标签数量和描述头。完整表集合与 INSERT/UPDATE/DELETE 触发器由 `schema.ts` 的 `LIBRARY_STATE_INPUT_TABLES` 定义。获取失败记录不改变六态，仍在每次计数/筛选的同一快照中读取；阅读历史、文件夹和算子结果不改变状态缓存版本。
 
@@ -48,6 +49,6 @@
 
 文献库计数和分页的取消从 HTTP/Entry 经查询服务传至 worker。每次可取消查询带一个共享原子标记，worker 在取出排队请求、状态计算阶段之间、SQL 扫描行及结果装载之间检查；取消时回滚只读事务，不返回部分结果。调用方立即收到 AbortError，worker 随后确认取消并继续处理后续请求。没有终止共享 worker，也不取消任何写事务；SQLite 无检查点的单条内部操作仍需运行到下一个检查点。这是协作式取消，不承诺任意指令处立即中断。
 
-当前 schema 12 接纳 arrange/render，并保留 document/structure 历史行。`archive-schema-migration.ts` 只提供显式离线 11 → 12 校验、事务迁移和行数/外键核对；catalog open 不调用它。
+当前 schema 13 增加按篇状态失效提示；archive_steps 仍接纳 arrange/render，并保留 document/structure 历史行。`archive-schema-migration.ts` 固定提供显式离线 11 → 12，`library-state-schema-migration.ts` 再执行 12 → 13；二者复用完整布局与行数核对，catalog open 都不会调用。历史定义仅供显式工具识别输入。
 
 只读 worker 的 query preflight 仅核对固定布局/版本，不执行逐表健康扫描；检索命令直接交给 `retrieval-engine.ts` 的独立连接，不顺带初始化普通写入连接。`active/search` 只作轻量检查，完整验证由显式索引维护承担。增量修改使用现有 building generation 暂存，按篇 CAS 接纳；未接纳的暂存不参与搜索。完整哈希证书的全零保留值表示失效，维护确认损坏的专用标记使查询直接拒绝，原始事实和 schema 不因此改变。

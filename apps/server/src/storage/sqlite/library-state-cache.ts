@@ -21,6 +21,8 @@ const { deriveCurrentState }: typeof State = await import(
 /** One complete projection per committed input revision; used inside the caller's read transaction. */
 export class LibraryStateCache {
   private key: string | null = null;
+  private revision = -1;
+  private fullRevision = -1;
   private states = new Map<string, ReturnType<typeof deriveCurrentState>>();
 
   read(
@@ -31,16 +33,44 @@ export class LibraryStateCache {
     checkpoint: () => void,
   ) {
     checkpoint();
-    const revision =
-      db
+    const stamp = db
+      .prepare(
+        "SELECT revision,full_revision,tracked_revision FROM library_state_revision WHERE singleton=1",
+      )
+      .get();
+    const revision = Number(stamp?.revision ?? 0);
+    const fullRevision = Number(stamp?.full_revision ?? 0);
+    const key = JSON.stringify([identity, maxTags, profile]);
+    if (
+      key === this.key &&
+      revision === this.revision &&
+      fullRevision === this.fullRevision
+    )
+      return this.states;
+    let ids: string[] | undefined;
+    if (
+      key === this.key &&
+      revision > this.revision &&
+      fullRevision <= this.revision &&
+      Number(stamp?.tracked_revision) === revision
+    ) {
+      const changed = db
         .prepare(
-          "SELECT revision FROM library_state_revision WHERE singleton=1",
+          "SELECT literature_id FROM library_state_changes WHERE revision>? AND revision<=? ORDER BY revision,literature_id LIMIT 65",
         )
-        .get()?.revision ?? 0;
-    const key = JSON.stringify([identity, revision, maxTags, profile]);
-    if (key === this.key) return this.states;
-    const next = new Map<string, ReturnType<typeof deriveCurrentState>>();
-    for (const [id, facts] of archiveStates(db, undefined, checkpoint)) {
+        .all(this.revision, revision);
+      // Large batches and missing invalidation hints conservatively rebuild.
+      if (changed.length > 0 && changed.length <= 64)
+        ids = changed.map((row) => String(row.literature_id));
+    }
+    checkpoint();
+    const next = ids
+      ? new Map(this.states)
+      : new Map<string, ReturnType<typeof deriveCurrentState>>();
+    // Tombstones have no FK: deletions must also invalidate older readers.
+    for (const id of ids ?? []) next.delete(id);
+    const scope = ids?.length === 1 ? ids[0] : ids;
+    for (const [id, facts] of archiveStates(db, scope, checkpoint)) {
       checkpoint();
       next.set(id, deriveCurrentState(facts, maxTags, profile));
     }
@@ -48,6 +78,8 @@ export class LibraryStateCache {
     // Never publish a partially computed/cancelled map.
     this.states = next;
     this.key = key;
+    this.revision = revision;
+    this.fullRevision = fullRevision;
     return next;
   }
 }

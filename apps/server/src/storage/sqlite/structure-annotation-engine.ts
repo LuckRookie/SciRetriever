@@ -93,7 +93,7 @@ export function runAnnotationStorage(
   args: unknown,
 ): unknown {
   if (
-    ![12].includes(
+    ![13].includes(
       Number(
         one(db, "SELECT schema_version FROM schema_identity WHERE singleton=1")
           ?.schema_version,

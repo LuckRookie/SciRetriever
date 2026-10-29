@@ -8,6 +8,7 @@ import { LibraryStateCache } from "../src/storage/sqlite/library-state-cache.js"
 import { deriveCurrentState } from "../src/literature/state.js";
 import { LiteratureQueryService } from "../src/literature/query.js";
 import { SqliteWorker } from "../src/storage/sqlite/worker.js";
+import { LIBRARY_STATE_INPUT_TABLES } from "../src/storage/sqlite/schema.js";
 
 it(
   "matches uncached state/counts/filters after each state input changes, including external commits and rollback",
@@ -71,6 +72,35 @@ it(
       expect(read().get(e.id)?.status).toBe("READY");
       const changes: [string, string][] = [
         [
+          "UPDATE literatures SET version_role=version_role",
+          "UPDATE literatures SET version_role=version_role",
+        ],
+        [
+          "UPDATE assets SET relative_path=relative_path",
+          "UPDATE assets SET relative_path=relative_path",
+        ],
+        [
+          "UPDATE raw_parses SET created_at=created_at",
+          "UPDATE raw_parses SET created_at=created_at",
+        ],
+        ["DELETE FROM raw_parse_pins", ""],
+        [
+          "UPDATE document_versions SET created_at=created_at",
+          "UPDATE document_versions SET created_at=created_at",
+        ],
+        [
+          "UPDATE structure_annotation_current SET revision=revision+1",
+          "UPDATE structure_annotation_current SET revision=revision-1",
+        ],
+        [
+          "UPDATE archive_steps SET status='pending'",
+          "UPDATE archive_steps SET status='done'",
+        ],
+        [
+          "UPDATE archive_description_heads SET source_json=source_json",
+          "UPDATE archive_description_heads SET source_json=source_json",
+        ],
+        [
           "UPDATE literature_assets SET role='supplementary-pdf' WHERE role='primary-pdf'",
           "UPDATE literature_assets SET role='primary-pdf' WHERE role='supplementary-pdf'",
         ],
@@ -113,9 +143,11 @@ it(
         ["DELETE FROM proofread_current", ""],
         ["DELETE FROM literature_metadata_authors", ""],
       ];
+      const touched = new Set<string>();
       for (const [change, restore] of changes) {
         // Save affected rows when the mutation removes pointers/assignments.
         const table = /(?:UPDATE|DELETE FROM) (\w+)/.exec(change)![1]!;
+        touched.add(table);
         const saved = db.prepare(`SELECT * FROM ${table}`).all();
         const before = read();
         const applied = db.prepare(change).run();
@@ -138,6 +170,9 @@ it(
         }
         await check("restored " + table);
       }
+      expect([...touched].sort()).toEqual(
+        [...LIBRARY_STATE_INPUT_TABLES].sort(),
+      );
       // Config is part of the key; compare each variant against the same domain function.
       for (const [maxTags, profile] of [
         [0, "vlm-engine"],

@@ -418,7 +418,7 @@ render 从保留叶块及已记录 correct 确定性生成 Markdown、DocumentSt
 
 ### 6.7 Schema 与预计消耗
 
-当前 catalog 为 schema 12；唯一结构变化是 archive_steps.step 的 CHECK 接纳 arrange/render，并保留历史 document/structure，同时更新 schema identity、指纹和版本守卫。打开旧库仍拒绝自动迁移。显式离线入口为 `node scripts/migrate-archive-v12.mjs /absolute/path/to/offline-copy.sqlite`，先核对旧布局，再在事务中重建 CHECK、核对全表行数及外键；正式切换前必须先在副本演练，迁移不执行任何获取或模型工作。
+建档沿用 schema 12 引入的 archive_steps.step CHECK：接纳 arrange/render，并保留历史 document/structure。当前 catalog 的状态投影结构与版本见[存储合同](07-versioned-storage.md#41-当前-schema-与显式转换)，离线转换入口和顺序见[初始化与恢复](../../guides/upgrade.md#状态投影-schema-13)；打开旧库不自动迁移，转换不执行获取或模型工作。
 
 `[proofread].max_calls_per_document` 不再生效；识别到字段名时不校验、使用或回显旧值，配置状态返回 configuration-option-removed、路径与固定删除说明，其它未知键仍严格拒绝。运行时停止条件见 6.4；协议大小限制继续有效。
 
