@@ -89,11 +89,14 @@
   }
   .task-table tbody tr {
     cursor: pointer;
-    transition: background-color var(--dur-1);
+    transition: var(--feedback);
   }
   .task-table tbody tr:hover,
   .task-table tbody tr[data-selected] {
     background: var(--hover);
+  }
+  .task-table tbody tr:hover {
+    transition: var(--feedback-hot);
   }
   .task-table td:nth-child(3) {
     width: 200px;

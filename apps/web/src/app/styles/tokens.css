@@ -83,6 +83,22 @@
     --dur-spin: 800ms;
     --ease-out: cubic-bezier(0.2, 0, 0, 1);
     --ease-in: cubic-bezier(0.4, 0, 1, 1);
+    /* Interaction feedback: a hovered or focused control changes at once and
+       fades back on leave; a press sinks quickly and settles with a slight
+       overshoot. `--feedback` goes on the control, `--feedback-hot` replaces
+       it while hovered so only the press keeps a transition. */
+    --dur-press: 90ms;
+    --dur-out: 140ms;
+    --ease-press: cubic-bezier(0.3, 1.35, 0.5, 1);
+    --feedback:
+      background-color var(--dur-out) var(--ease-out),
+      color var(--dur-out) var(--ease-out),
+      border-color var(--dur-out) var(--ease-out),
+      box-shadow var(--dur-out) var(--ease-out),
+      filter var(--dur-out) var(--ease-out),
+      opacity var(--dur-out) var(--ease-out),
+      transform var(--dur-out) var(--ease-press);
+    --feedback-hot: transform var(--dur-press) var(--ease-out);
     --disabled-opacity: 0.45;
     --type-page: 28px;
     --title-face: var(--serif);

@@ -48,10 +48,11 @@
   column-gap: var(--space-3);
   padding: var(--space-3) var(--space-2);
   border-bottom: 1px solid var(--line);
-  transition: background-color var(--dur-1);
+  transition: var(--feedback);
 }
 .archive-issue:hover {
   background: var(--hover);
+  transition: var(--feedback-hot);
 }
 .archive-issue[data-selected] {
   background: var(--sel);

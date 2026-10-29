@@ -334,10 +334,12 @@
     border: 1px solid var(--line);
     border-radius: var(--radius-md);
     background: var(--surface-raised);
-    transition: transform var(--dur-1) var(--ease-out);
+    transition: var(--feedback);
   }
+  /* Cards answer the pointer with their edge, not by floating. */
   .synthesis-card:hover {
-    transform: translateY(-2px);
+    border-color: var(--line3);
+    transition: var(--feedback-hot);
   }
   .synthesis-card h2 {
     font: 500 var(--text-literature) / var(--lh-literature) var(--serif);
