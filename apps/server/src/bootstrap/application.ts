@@ -55,6 +55,7 @@ import { ProcessorExternalRetention } from "../analysis/processor-external.js";
 import { createProcessorRegistry } from "../analysis/processor-registry.js";
 import { ProcessorService } from "../analysis/processor.js";
 import { FolderService } from "../literature/folders.js";
+import { MarkService } from "../literature/marks.js";
 import { SnapshotService } from "../analysis/snapshots.js";
 import { InterventionService } from "../application/jobs/interventions.js";
 import {
@@ -222,6 +223,7 @@ export interface Application {
   readonly archiveText: ArchiveTextPipeline | null;
   readonly snapshots: SnapshotService;
   readonly folders: FolderService;
+  readonly marks: MarkService;
   readonly archive: ArchiveService;
   readonly tags: TagService;
   readonly metadataFields: LiteratureMetadataService;
@@ -362,6 +364,7 @@ export interface QueryApplication {
   ) => Promise<unknown>;
   readonly archiveProfile?: "pipeline" | "vlm-engine";
   readonly folders?: Pick<FolderService, "query">;
+  readonly marks?: Pick<MarkService, "query">;
   readonly snapshots?: Pick<
     SnapshotService,
     "query" | "read" | "list" | "diff"
@@ -1722,6 +1725,7 @@ async function createApplicationOwned(
     const application: Application = {
       restartAdmission: admission,
       folders: new FolderService(database),
+      marks: new MarkService(database, (id) => library.detail(id)),
       snapshots: new SnapshotService(database, library),
       archive: new ArchiveService(database, processingTasks, library),
       archiveText: archiveText ?? null,
@@ -2160,6 +2164,7 @@ export async function createQueryApplication(
         new SqliteAnnotationStorage(database, files),
       ),
       folders: new FolderService(database),
+      marks: new MarkService(database, (id) => literature.detail(id)),
       snapshots: new SnapshotService(database, literature),
       archive: new ArchiveReader(database),
       archiveArrangement: new ArchiveArrangementAccess(

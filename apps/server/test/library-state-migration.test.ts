@@ -9,6 +9,7 @@ import {
   LIBRARY_STATE_PREVIOUS_FINGERPRINT,
 } from "../src/storage/sqlite/library-state-previous-layout.js";
 import { migrateLibraryStateSchema } from "../src/storage/sqlite/library-state-schema-migration.js";
+import { migrateReadingMarksSchema } from "../src/storage/sqlite/reading-marks-schema-migration.js";
 import { inspectCatalogSchema } from "../src/storage/sqlite/catalog-schema.js";
 import { CURRENT_CATALOG_CONFIG } from "../src/storage/sqlite/catalog-layout.js";
 import { LibraryStateCache } from "../src/storage/sqlite/library-state-cache.js";
@@ -64,9 +65,25 @@ it("migrates the exact 12 layout to 13 offline, preserves every old table count 
     for (const [table, count] of Object.entries(result.before))
       expect(result.after[table]).toBe(count);
     expect(result.after.library_state_changes).toBe(0);
+    // 13 is an intermediate layout now; the reading-marks step makes it current.
+    await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
+      reason: "catalog-layout-not-current",
+    });
+    const marks = await migrateReadingMarksSchema(path);
+    expect(marks).toMatchObject({
+      from_version: 13,
+      to_version: 14,
+      foreign_key_violations: 0,
+    });
+    for (const [table, count] of Object.entries(marks.before))
+      expect(marks.after[table]).toBe(count);
+    expect(marks.after.reading_marks).toBe(0);
     expect(await inspectCatalogSchema(path)).toMatchObject({
       status: "ready",
-      schema_version: 13,
+      schema_version: 14,
+    });
+    await expect(migrateReadingMarksSchema(path)).rejects.toMatchObject({
+      code: "reading-marks-schema-migration-refused",
     });
     const db = new DatabaseSync(path);
     try {

@@ -2,7 +2,7 @@ import { PROCESSOR_METHOD_REVISION } from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
 
 // One current catalog layout. This is not a migration ladder or a list of supported historic layouts.
-export const SCHEMA_VERSION = 13 as const;
+export const SCHEMA_VERSION = 14 as const;
 // Inputs read by archiveStates/deriveCurrentState, including view dependencies.
 // Reading history, folders and processing outputs do not invalidate this projection.
 export const LIBRARY_STATE_INPUT_TABLES = [
@@ -127,7 +127,8 @@ export const LIBRARY_PERFORMANCE_SCHEMA = [
   }),
 ] as const;
 
-export const SCHEMA_MANIFEST = [
+/** Frozen v13 layout: the 12 -> 13 migration target and the 13 -> 14 input. */
+export const SCHEMA_MANIFEST_V13 = [
   "CREATE TABLE proofread_correction_cache(cache_key TEXT NOT NULL PRIMARY KEY CHECK(length(cache_key)=64),cache_id TEXT NOT NULL UNIQUE,artifact_reference TEXT NOT NULL,sha256 TEXT NOT NULL,byte_size INTEGER NOT NULL,media_type TEXT NOT NULL,FOREIGN KEY(artifact_reference,sha256,byte_size,media_type) REFERENCES artifact_objects(relative_path,sha256,byte_size,media_type) ON DELETE RESTRICT) STRICT",
   "CREATE TABLE schema_identity(singleton INTEGER NOT NULL PRIMARY KEY CHECK(singleton=1),product TEXT NOT NULL CHECK(product='sciretriever'),schema_version INTEGER NOT NULL CHECK(schema_version=13),schema_fingerprint TEXT NOT NULL CHECK(length(schema_fingerprint)=64 AND schema_fingerprint=lower(schema_fingerprint) AND schema_fingerprint NOT GLOB '*[^0-9a-f]*'),created_at TEXT NOT NULL CHECK(length(trim(created_at))>0)) STRICT",
   "CREATE TABLE artifact_objects(artifact_id TEXT NOT NULL PRIMARY KEY CHECK(length(trim(artifact_id))>0),sha256 TEXT NOT NULL CHECK(length(sha256)=64 AND sha256=lower(sha256) AND sha256 NOT GLOB '*[^0-9a-f]*'),byte_size INTEGER NOT NULL CHECK(typeof(byte_size)='integer' AND byte_size>0),media_type TEXT NOT NULL CHECK(length(trim(media_type))>0),relative_path TEXT NOT NULL UNIQUE CHECK(length(trim(relative_path))>0 AND relative_path NOT LIKE '/%' AND relative_path NOT LIKE '%\\\\%' AND relative_path NOT LIKE '%//%' AND relative_path NOT LIKE '../%' AND relative_path NOT LIKE '%/../%' AND relative_path NOT LIKE './%' AND relative_path NOT LIKE '%/./%' AND relative_path NOT IN ('.','..')) ,UNIQUE(sha256,byte_size),UNIQUE(relative_path,sha256,byte_size,media_type)) STRICT",
@@ -387,6 +388,25 @@ export const SCHEMA_MANIFEST = [
   `CREATE VIEW processor_result_currentness AS SELECT f.result_id,CASE WHEN COALESCE(s.method_revision,'legacy')='${PROCESSOR_METHOD_REVISION}' THEN f.state ELSE 'stale' END AS state FROM processor_result_freshness f LEFT JOIN processor_result_summaries s USING(result_id)`,
   "CREATE TABLE processor_run_requests(job_id TEXT PRIMARY KEY,request_json TEXT NOT NULL) STRICT",
   ...LIBRARY_PERFORMANCE_SCHEMA,
+] as const;
+export const SCHEMA_FINGERPRINT_V13 = createHash("sha256")
+  .update(JSON.stringify(SCHEMA_MANIFEST_V13))
+  .digest("hex");
+/**
+ * Reading marks (ADR 0046): user data on one paper. The PDF anchor and the
+ * full-text anchor are each optional but never half-filled; a region always
+ * lives on a PDF page. No foreign key on the document version: the quote can
+ * place a mark again when versions change.
+ */
+export const READING_MARKS_SCHEMA = [
+  "CREATE TABLE reading_marks(mark_id TEXT NOT NULL PRIMARY KEY CHECK(length(mark_id)=36),literature_id TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('highlight','region')),color TEXT NOT NULL CHECK(color IN ('yellow','blue','green','red','purple')),note TEXT NOT NULL CHECK(length(note)<=20000),quote TEXT NOT NULL CHECK(length(quote)<=4000),quote_prefix TEXT NOT NULL CHECK(length(quote_prefix)<=200),quote_suffix TEXT NOT NULL CHECK(length(quote_suffix)<=200),pdf_sha256 TEXT CHECK(pdf_sha256 IS NULL OR (length(pdf_sha256)=64 AND pdf_sha256=lower(pdf_sha256) AND pdf_sha256 NOT GLOB '*[^0-9a-f]*')),pdf_page INTEGER CHECK(pdf_page IS NULL OR pdf_page>=1),pdf_rects_json TEXT CHECK(pdf_rects_json IS NULL OR json_valid(pdf_rects_json)),document_version_id TEXT,document_start_utf8 INTEGER,document_end_utf8 INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,deleted_at TEXT,actor TEXT NOT NULL,CHECK((pdf_sha256 IS NULL)=(pdf_page IS NULL) AND (pdf_page IS NULL)=(pdf_rects_json IS NULL)),CHECK((document_version_id IS NULL)=(document_start_utf8 IS NULL) AND (document_start_utf8 IS NULL)=(document_end_utf8 IS NULL) AND (document_start_utf8 IS NULL OR (document_start_utf8>=0 AND document_end_utf8>document_start_utf8))),CHECK(pdf_page IS NOT NULL OR document_version_id IS NOT NULL),CHECK(kind='highlight' OR pdf_page IS NOT NULL),FOREIGN KEY(literature_id) REFERENCES literatures(literature_id) ON DELETE CASCADE) STRICT",
+  "CREATE INDEX reading_marks_literature ON reading_marks(literature_id,deleted_at,created_at)",
+] as const;
+export const SCHEMA_MANIFEST = [
+  ...SCHEMA_MANIFEST_V13.map((sql) =>
+    sql.replace("CHECK(schema_version=13)", "CHECK(schema_version=14)"),
+  ),
+  ...READING_MARKS_SCHEMA,
 ] as const;
 export const SCHEMA_FINGERPRINT = createHash("sha256")
   .update(JSON.stringify(SCHEMA_MANIFEST))

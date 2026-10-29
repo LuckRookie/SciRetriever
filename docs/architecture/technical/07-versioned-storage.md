@@ -454,4 +454,4 @@ Analysis 的 `processor_result_summaries` 保存已发布结果用量/覆盖摘�
 
 任务发起身份和任务、策略、固定目标同一事务发布。综合逐篇进度使用原有 execution_events 中的 processor-map-progress 事件，不新增表；每篇新算、复用、部分完成、失败和中断均固定到本次目标。task-run 的 target_id/member_offset/member_limit 按页读取，根投影不隐式装载大型快照的全部成员。共享模型生命周期在关闭时等待过程记录收尾，再释放存储。
 
-第二轮库组织新增 `snapshot_labels`（显示名与不可变快照 hash 分离）、`folders`、`folder_members`、`reading_history`。已有 `processor_result_summaries` 增加 `method_revision`，`processor_result_currentness` 只读投影将旧方法标为过时；旧统计无法代表当前三计数时返回 null，不迁移、不当作零。所有 DDL 仍在 schema.ts，当前版本为 12；已有正式库需要授权后在副本显式更新，启动不会自动加表。
+第二轮库组织新增 `snapshot_labels`（显示名与不可变快照 hash 分离）、`folders`、`folder_members`、`reading_history`。已有 `processor_result_summaries` 增加 `method_revision`，`processor_result_currentness` 只读投影将旧方法标为过时；旧统计无法代表当前三计数时返回 null，不迁移、不当作零。所有 DDL 仍在 schema.ts。schema 13 换为按文献增量更新的文献状态投影；schema 14 新增 `reading_marks`（阅读批注，ADR 0046），由 `scripts/migrate-reading-marks-v14.mjs` 从 13 显式升级。已有正式库需要授权后在副本显式更新，启动不会自动加表。

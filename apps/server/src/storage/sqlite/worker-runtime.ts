@@ -59,6 +59,12 @@ const folderModule = await import(
     import.meta.url,
   ).href
 );
+const marksModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts") ? "./marks-engine.ts" : "./marks-engine.js",
+    import.meta.url,
+  ).href
+);
 const snapshotModule = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -4529,6 +4535,23 @@ port.on("message", (message: WorkerMessage) => {
               error && typeof error === "object" && "code" in error
                 ? error.code
                 : "folder-storage-failed",
+          };
+        }
+        break;
+      case "marks":
+        try {
+          value = {
+            ok: true,
+            value: marksModule.runMarkStorage(db, message.command.value),
+          };
+        } catch (error) {
+          throwCatalogCorruption(error);
+          value = {
+            ok: false,
+            code:
+              error && typeof error === "object" && "code" in error
+                ? error.code
+                : "mark-storage-failed",
           };
         }
         break;

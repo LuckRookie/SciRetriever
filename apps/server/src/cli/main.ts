@@ -193,6 +193,7 @@ function usage(options: CliOptions): CliResult {
     "  jobs runtime --workbench-url URL --request FILE|- [--maintenance] # operate in the Web owner\n" +
     "  archive build IDS [--mode full|legacy-vlm-markdown] [--from-step STEP]; archive status|resume ID; archive issues|stats|events; archive resolve --request FILE\n" +
     "  tags list|search|show|changes|consolidate|backfill; tags edit|undo --request FILE; literature tags ID / set|lock --request FILE\n" +
+    "  marks list|export|create|update|delete|restore --request FILE  # reading highlights, regions and notes of one paper\n" +
     "  storage schema-inspect|schema-init --catalog PATH\n" +
     "  maintenance rebuild-index\n" +
     "  maintenance refresh-index\n" +
@@ -671,6 +672,38 @@ async function execute(
       options.signal?.removeEventListener("abort", abort);
       await closeSourceProbes(sources);
     }
+  }
+  if (group === "marks") {
+    const request = parseStrictJsonValue(
+      await inputBytes(
+        argument(args, "--request") ?? invalidInput(),
+        options,
+        262144,
+      ),
+    );
+    const envelope = { operation: command, request };
+    if (command === "list" || command === "export") {
+      const q = await applicationBootstrap.createQueryApplication(
+        configurationHome(options),
+      );
+      try {
+        const result = await executeQuery(q, "marks", envelope, options.signal);
+        // `export` without --json prints the document itself, ready to save.
+        if (command === "export" && !options.json) {
+          options.stdout?.(String((result as { content: unknown }).content));
+          return { code: 0, value: result };
+        }
+        return output(result, options);
+      } finally {
+        await q.close();
+      }
+    }
+    return output(
+      await withApplication(options, (app) =>
+        executeMaintenance(app, "marks", envelope, options.signal),
+      ),
+      options,
+    );
   }
   if (group === "folders") {
     const file = argument(args, "--request");

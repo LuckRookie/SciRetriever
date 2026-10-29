@@ -1,6 +1,6 @@
 import {
   LIBRARY_STATE_SCHEMA,
-  SCHEMA_MANIFEST,
+  SCHEMA_MANIFEST_V13,
   LIBRARY_STATE_INPUT_TABLES,
 } from "./schema.js";
 
@@ -16,7 +16,7 @@ const previousState = [
     ),
   ),
 ];
-export const libraryStatePreviousManifest = SCHEMA_MANIFEST.flatMap((sql) => {
+export const libraryStatePreviousManifest = SCHEMA_MANIFEST_V13.flatMap((sql) => {
   if (sql === LIBRARY_STATE_SCHEMA[0]) return previousState;
   if ((LIBRARY_STATE_SCHEMA as readonly string[]).includes(sql)) return [];
   return [sql.replace("CHECK(schema_version=13)", "CHECK(schema_version=12)")];

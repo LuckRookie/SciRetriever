@@ -516,6 +516,14 @@ export const QUERY_TOOLS: readonly Tool[] = [
     }),
   ),
   tool(
+    "marks_query",
+    "Read one paper's reading marks (highlights, region captures and notes) in reading order, or export them. operation list request {literature_id}; export request {literature_id, format: markdown|json}. Does not write.",
+    object({
+      operation: { enum: ["list", "export"] },
+      request: { type: "object" },
+    }),
+  ),
+  tool(
     "library_counts",
     "Count library quick filters, ignoring statuses and needs_manual_pdf but preserving all other LibraryQuery facets. No writes.",
     object({ query: { type: "object" } }),
@@ -812,6 +820,15 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
       operation: {
         enum: ["create", "rename", "move", "delete", "add", "remove"],
       },
+      request: { type: "object" },
+    }),
+    false,
+  ),
+  tool(
+    "marks_manage",
+    "Explicit reading-mark create, update, delete or restore. create request {literature_id, kind: highlight|region, color: yellow|blue|green|red|purple, note?, quote?, quote_prefix?, quote_suffix?, pdf?: {sha256, page, rects: [[x,y,w,h]]}, document?: {document_version_id, start_utf8, end_utf8}}; a highlight needs its quote, a region needs pdf. update {mark_id, color?, note?, pdf?, document?}; delete and restore {mark_id}. Deleted marks stay restorable for 30 days. See MarkOperation contract.",
+    object({
+      operation: { enum: ["create", "update", "delete", "restore"] },
       request: { type: "object" },
     }),
     false,

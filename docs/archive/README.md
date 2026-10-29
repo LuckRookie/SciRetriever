@@ -14,6 +14,7 @@
 
 ## 历史材料
 
+- [阅读批注提案](2026-10-29-reading-annotations/README.md)：高亮、框选与笔记的评审方案，PDF 与校订稿对位的实测；决定见 ADR 0046。
 - [Web 设计改版（计划 14）](2026-10-23-web-design-overhaul/README.md)：中文字体与视觉基础、信息架构、逐页改版与命令面板，部署与提交证据及遗留事项。
 - [文档体系整理（计划 15）](2026-10-23-docs-consolidation/README.md)：归属表、头部三行、退役文档与检查脚本。
 - [Web 原型时期的设计记录](2026-10-15-web-prototype/README.md)。

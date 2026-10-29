@@ -242,6 +242,7 @@ export function createMcpServer(options: McpOptions = {}) {
       snapshot_create: "snapshots",
       snapshot_rename: "snapshot-rename",
       folders_manage: "folders",
+      marks_manage: "marks",
       reading_open: "reading-open",
       archive_manage: "archive",
       archive_arrangement_edit: "archive-arrangement-edit",
@@ -276,7 +277,12 @@ export function createMcpServer(options: McpOptions = {}) {
       const input =
         name === "discover_citations"
           ? { kind: "citation", ...args }
-          : ["folders_manage", "tags_manage", "archive_manage"].includes(name)
+          : [
+                "folders_manage",
+                "marks_manage",
+                "tags_manage",
+                "archive_manage",
+              ].includes(name)
             ? args
             : Object.hasOwn(args, "request")
               ? args.request
@@ -378,6 +384,7 @@ export function createMcpServer(options: McpOptions = {}) {
       return executeQuery(q, "reading-status", args, signal);
     if (name === "folders_query")
       return executeQuery(q, "folders", args, signal);
+    if (name === "marks_query") return executeQuery(q, "marks", args, signal);
     if (name === "library_counts")
       return executeQuery(q, "library-counts", args, signal);
     if (name === "search_library")

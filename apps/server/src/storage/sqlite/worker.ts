@@ -1,4 +1,5 @@
 import { FolderError } from "../../literature/folders.js";
+import { MarkError } from "../../literature/marks.js";
 import {
   canonicalJsonBytes,
   parseLibraryCounts,
@@ -278,6 +279,7 @@ function parseDiscoveryPublication(value: unknown): DiscoveryPublication {
 
 export type SqliteCommand =
   | { readonly kind: "folders"; readonly value: unknown }
+  | { readonly kind: "marks"; readonly value: unknown }
   | {
       readonly kind: "snapshot";
       readonly action: import("./snapshot-engine.js").SnapshotStorageAction;
@@ -1368,6 +1370,33 @@ export class SqliteWorker {
         throw new ExtractionStorageError(reply.code ?? "storage-failed");
       return reply.value as T;
     };
+    return read ? send() : this.admission!.run(send, signal);
+  }
+
+  async marks(
+    value: {
+      operation: string;
+      request: unknown;
+      now?: string;
+      actor?: string;
+      mark_id?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const read = ["list", "export"].includes(value.operation);
+    if (!read && (this.readOnly || !this.admission))
+      throw new MarkError("mark-write-unavailable");
+    const copy = structuredClone(value),
+      send = async () => {
+        if (signal?.aborted) throw new MarkError("mark-cancelled");
+        const reply = await this.send<{
+          ok: boolean;
+          value?: unknown;
+          code?: string;
+        }>({ kind: "marks", value: copy });
+        if (!reply.ok) throw new MarkError(reply.code ?? "mark-storage-failed");
+        return reply.value;
+      };
     return read ? send() : this.admission!.run(send, signal);
   }
 

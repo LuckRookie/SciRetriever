@@ -2188,6 +2188,7 @@ export async function startWorkbenchHttp(
 const ARCHIVE_HTTP_WRITES = [
   "archive-arrangement-edit",
   "folders",
+  "marks",
   "reading-open",
   "snapshot-rename",
   "archive",
@@ -2209,6 +2210,7 @@ const ARCHIVE_HTTP_READS = [
   "archive-arrangement",
   "reading-status",
   "folders",
+  "marks",
   "library-counts",
   "processor-runs",
   "literature-results",

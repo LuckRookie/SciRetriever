@@ -80,6 +80,7 @@ export const QUERY_OPERATIONS = [
   "library-search",
   "library-counts",
   "folders",
+  "marks",
   "literature-read",
   "artifact-chunk",
   "bibliography-export",
@@ -158,6 +159,10 @@ async function readQuery(
   if (operation === "folders") {
     if (!q.folders) unavailable();
     return q.folders.query(value, signal);
+  }
+  if (operation === "marks") {
+    if (!q.marks) unavailable();
+    return q.marks.query(value, signal);
   }
   if (operation === "snapshots") {
     if (!q.snapshots) unavailable();

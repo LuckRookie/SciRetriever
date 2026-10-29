@@ -12,10 +12,12 @@ import {
 } from "./library-state-previous-layout.js";
 import {
   LIBRARY_STATE_SCHEMA,
-  SCHEMA_MANIFEST,
-  SCHEMA_VERSION,
-  SCHEMA_FINGERPRINT,
+  SCHEMA_MANIFEST_V13 as SCHEMA_MANIFEST,
+  SCHEMA_FINGERPRINT_V13 as SCHEMA_FINGERPRINT,
 } from "./schema.js";
+
+/** This migration always produces the frozen v13 layout; 13 -> 14 is a separate step. */
+const SCHEMA_VERSION = 13;
 
 function refuse(): never {
   throw Object.assign(new Error("library state schema migration refused"), {

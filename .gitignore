@@ -239,3 +239,8 @@ archive/
 !/docs/archive/2026-10-23-docs-consolidation/
 /docs/archive/2026-10-23-docs-consolidation/*
 !/docs/archive/2026-10-23-docs-consolidation/README.md
+
+# Accepted reading-marks proposal archived on 2026-10-29; exact files only.
+!/docs/archive/2026-10-29-reading-annotations/
+/docs/archive/2026-10-29-reading-annotations/*
+!/docs/archive/2026-10-29-reading-annotations/README.md

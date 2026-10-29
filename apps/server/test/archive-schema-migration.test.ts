@@ -17,6 +17,7 @@ import {
 } from "../src/storage/sqlite/execution-schema.js";
 import { SCHEMA_FINGERPRINT } from "../src/storage/sqlite/schema.js";
 import { migrateLibraryStateSchema } from "../src/storage/sqlite/library-state-schema-migration.js";
+import { migrateReadingMarksSchema } from "../src/storage/sqlite/reading-marks-schema-migration.js";
 
 export function oldArchiveCatalog(path: string) {
   const db = new DatabaseSync(path);
@@ -71,8 +72,8 @@ it("explicitly migrates 11 to 12 without changing row counts, keys or historical
     expect(result.before).toEqual(result.after);
     expect(result.after.archive_steps).toBe(2);
     expect(result.foreign_key_violations).toBe(0);
-    // The preserved 11 -> 12 tool still targets exactly 12. Only the explicit
-    // state-projection migration then makes this the one current layout.
+    // The preserved 11 -> 12 tool still targets exactly 12. The explicit
+    // state-projection and reading-marks steps then make it current.
     await expect(inspectCatalogSchema(path)).rejects.toMatchObject({
       reason: "catalog-layout-not-current",
     });
@@ -81,9 +82,14 @@ it("explicitly migrates 11 to 12 without changing row counts, keys or historical
       to_version: 13,
       foreign_key_violations: 0,
     });
+    expect(await migrateReadingMarksSchema(path)).toMatchObject({
+      from_version: 13,
+      to_version: 14,
+      foreign_key_violations: 0,
+    });
     expect(await inspectCatalogSchema(path)).toMatchObject({
       status: "ready",
-      schema_version: 13,
+      schema_version: 14,
       schema_fingerprint: SCHEMA_FINGERPRINT,
     });
     const next = new DatabaseSync(path, { readOnly: true });

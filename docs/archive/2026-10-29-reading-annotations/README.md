@@ -1,22 +1,16 @@
-+++
-document_type = "proposal"
-status = "under-review"
-created = "2026-10-29"
-+++
-
 # 阅读批注：高亮、笔记与框选
 
-类型：提案
-负责：Claude 设计，Owner 评审
-状态：等待 Owner 评审（2026-10-29 Owner 要求“自由发挥给我看看”）
+类型：历史提案
+负责：阅读批注的评审方案与对位实测记录
+状态：已接受（2026-10-29），决定见 [ADR 0046](../../architecture/decisions/0046-reading-marks.md)；本文只作历史
 
 Owner 希望在文献阅读中加入高亮、笔记、标签和框选等辅助阅读功能，具体做法交给 Claude。本提案给出体验设计、性能做法、数据边界和分阶段范围。可交互原型见 `sandbox/cases/2026-10-29-reading-annotations/prototype.html`（已发布为私有 Artifact）。原型里的文献和数据都是虚构的，批注只存在页面内存里。
 
 ## 已有约束
 
-- [需求](../architecture/requirements.md)“阅读”一节：批注、笔记属于用户数据，要有来源、稳定保存、导出，并在同等授权下可由机器访问；具体范围另行设计。
-- [ADR 0032](../architecture/decisions/0032-library-centered-web-workspace.md)：当时没有引入批注和笔记；以后引入时须明确业务 owner、来源绑定、持久化、保留与导出。
-- [ADR 0033](../architecture/decisions/0033-machine-interfaces-cover-web-capabilities.md)：Web 的业务能力须被 CLI 和 MCP 覆盖，阅读器的视觉交互本身不必复制。
+- [需求](../../architecture/requirements.md)“阅读”一节：批注、笔记属于用户数据，要有来源、稳定保存、导出，并在同等授权下可由机器访问；具体范围另行设计。
+- [ADR 0032](../../architecture/decisions/0032-library-centered-web-workspace.md)：当时没有引入批注和笔记；以后引入时须明确业务 owner、来源绑定、持久化、保留与导出。
+- [ADR 0033](../../architecture/decisions/0033-machine-interfaces-cover-web-capabilities.md)：Web 的业务能力须被 CLI 和 MCP 覆盖，阅读器的视觉交互本身不必复制。
 - 证据规则不变：不伪造页码、坐标或高亮。批注无法定位时如实显示“未能定位”。
 
 所以实施前需要一个新 ADR（暂编 0046）定下批注的数据 owner 与机器接口。体验部分属于前端，由 Claude 决定。
@@ -35,7 +29,7 @@ Owner 希望在文献阅读中加入高亮、笔记、标签和框选等辅助�
 **笔记与标签**：笔记挂在一条高亮或一块框选上。
 - 有笔记的批注在页边显示一个带序号的小标记，点击直接打开笔记。
 - 笔记里写 `#标签` 即可归类，面板和搜索都认这些标签。
-- 这些标签是用户自己的，与 [ADR 0034](../architecture/decisions/0034-unified-processors-and-results.md) 的派生标签结果分开，不互相写入。
+- 这些标签是用户自己的，与 [ADR 0034](../../architecture/decisions/0034-unified-processors-and-results.md) 的派生标签结果分开，不互相写入。
 
 **框选区域**（R，或按住 Alt 拖动）：拖出矩形框住图、表、公式或一段排版。
 - 拖动时实时显示“第 n 页 · 宽 × 高 pt”。
@@ -60,7 +54,7 @@ Owner 希望在文献阅读中加入高亮、笔记、标签和框选等辅助�
 - 校订会改错字，整理会删掉杂项。
 
 所以实际做法是两步：
-1. **先按位置缩小范围**：校订稿的每个区块都保留了页码和区域（见 [04 文档证据](../architecture/technical/04-document-evidence.md)），先找出与高亮所在页、所在区域重叠的区块。
+1. **先按位置缩小范围**：校订稿的每个区块都保留了页码和区域（见 [04 文档证据](../../architecture/technical/04-document-evidence.md)），先找出与高亮所在页、所在区域重叠的区块。
 2. **再在这些区块里比对文字**：先把两边的文字统一写法（Unicode 规范化，统一破折号、引号、连字，去掉行末断词和标记），再按编辑距离对齐。
 
 结果分三档：
@@ -69,7 +63,7 @@ Owner 希望在文献阅读中加入高亮、笔记、标签和框选等辅助�
 - 对不上：标“仅 PDF”或“仅全文”，不伪造位置。
 
 另外：
-- 按 [ADR 0037](../architecture/decisions/0037-literature-archive-and-proofread-text.md)，区块的页码和区域只是定位提示，所以最终仍以文字比对为准。
+- 按 [ADR 0037](../../architecture/decisions/0037-literature-archive-and-proofread-text.md)，区块的页码和区域只是定位提示，所以最终仍以文字比对为准。
 - 没有文字层的扫描件只能框选。
 - 框选只属于 PDF。
 
@@ -169,3 +163,5 @@ PDF → 校订稿：在 PDF 文字层上模拟 816 次选取，每次 6–35 个
 1. 批注存进 catalog（推荐，随备份走），还是单独一个用户数据文件。
 2. 五种颜色及其默认含义是否合适。
 3. 第一阶段范围是否就是上面这些。第三阶段要不要做，什么时候做。
+
+Owner 2026-10-29 的决定：批注存进 catalog；五种颜色及其默认含义可以；第一阶段排在 P26–P32 之后实施。
