@@ -181,6 +181,20 @@ export class RestartAdmission {
     };
   }
 }
+/**
+ * Copies plain request data (objects and arrays) at call time, so a caller
+ * that changes its object while the call waits for admission cannot change
+ * the request. Functions, signals and class instances pass through as they are.
+ */
+function snapshot(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(snapshot);
+  if (value === null || typeof value !== "object") return value;
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  if (prototype !== Object.prototype && prototype !== null) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, snapshot(item)]),
+  );
+}
 /** Preserve each service's concrete receiver; internal calls share the admitted outer operation. */
 export function guardRuntimeMethods<T extends object>(
   target: T,
@@ -195,10 +209,12 @@ export function guardRuntimeMethods<T extends object>(
       const invoke = (...args: unknown[]) =>
         Reflect.apply(value, object, args) as unknown;
       return methods.includes(key as keyof T)
-        ? (...args: unknown[]) =>
-            continuation?.(key as keyof T, args)
+        ? (...given: unknown[]) => {
+            const args = given.map(snapshot);
+            return continuation?.(key as keyof T, args)
               ? admission.continuation(async () => invoke(...args))
-              : admission.newWork(async () => invoke(...args))
+              : admission.newWork(async () => invoke(...args));
+          }
         : invoke;
     },
   });

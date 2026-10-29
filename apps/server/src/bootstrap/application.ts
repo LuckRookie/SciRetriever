@@ -771,7 +771,9 @@ async function createApplicationOwned(
   const catalogPath =
     configuration.paths.catalog_path ?? join(home, "catalog.sqlite");
   const networkBudget = options.networkBudget ?? new NetworkBudgetCoordinator();
-  const writes = new CatalogWriteAdmission(catalogPath);
+  // Other processes (Web, CLI, MCP) hold the catalog lock for short batches;
+  // business writes wait briefly for them instead of failing at once.
+  const writes = new CatalogWriteAdmission(catalogPath, { waitMs: 10_000 });
   let closing: Promise<void> | undefined;
   const closeApplication = (): Promise<void> => {
     // Publish the shared result before invoking any resource callback. This also

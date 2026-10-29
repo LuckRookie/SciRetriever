@@ -11,6 +11,7 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 export class WriteAdmissionError extends Error {
   constructor(
@@ -223,12 +224,36 @@ export function acquireRestartLock(
 interface Scope {
   active: boolean;
 }
-/** FIFO inside one process, non-blocking conflict against other writers, reentrant only within the active operation. */
+/**
+ * FIFO inside one process, reentrant only within the active operation. Another
+ * holder of the lock is a conflict; with `waitMs` the operation backs off and
+ * retries until that deadline instead of failing at once.
+ */
 export class CatalogWriteAdmission {
   private readonly context = new AsyncLocalStorage<Scope>();
   private tail: Promise<unknown> = Promise.resolve();
   private closed = false;
-  constructor(readonly catalogPath: string) {}
+  constructor(
+    readonly catalogPath: string,
+    private readonly options: { readonly waitMs?: number } = {},
+  ) {}
+  private async lock(check: () => void, signal?: AbortSignal) {
+    const deadline = Date.now() + (this.options.waitMs ?? 0);
+    for (let pause = 20; ; pause = Math.min(pause * 2, 500)) {
+      try {
+        return await acquireCatalogWriteLock(this.catalogPath);
+      } catch (error) {
+        if (
+          !(error instanceof WriteAdmissionError) ||
+          error.code !== "write-admission-conflict" ||
+          Date.now() + pause > deadline
+        )
+          throw error;
+      }
+      await delay(pause, undefined, signal ? { signal } : {}).catch(() => {});
+      check();
+    }
+  }
   run<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     const check = () => {
       if (this.closed) throw new WriteAdmissionError("write-admission-closed");
@@ -251,7 +276,7 @@ export class CatalogWriteAdmission {
     }
     const pending = this.tail.then(async () => {
       check();
-      const lock = await acquireCatalogWriteLock(this.catalogPath);
+      const lock = await this.lock(check, signal);
       const scope = { active: true };
       try {
         check();
