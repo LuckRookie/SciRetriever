@@ -79,11 +79,16 @@ describe("shared manual PDF maintenance", () => {
     const bytes = workbenchPdf();
     try {
       await writeFile(source, bytes);
+      const revision = () =>
+        env.app.archive.query({ operation: "revision", request: {} });
+      const before = await revision();
       const receipt = await env.app.maintenance!.ingestPdf({
         literature_id: id,
         bytes: await readFile(source),
       });
       expect(receipt.sha256).toBe(await sha256(bytes));
+      // Open pages refresh on this revision; a new PDF must change it.
+      expect(await revision()).not.toEqual(before);
       expect(await readFile(source)).toEqual(Buffer.from(bytes));
       const detail = await env.app.library.detail(id);
       expect(detail.primary_pdf?.asset.sha256).toBe(receipt.sha256);

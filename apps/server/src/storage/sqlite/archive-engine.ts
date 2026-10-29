@@ -272,13 +272,14 @@ export function runArchiveStorage(
           }) as ArchiveVersionEvent,
       );
     // Reading history is not material: counting it here made every opened paper
-    // invalidate every open page within one poll.
+    // invalidate every open page within one poll. Attached files are: a PDF that
+    // arrives must refresh the open paper and its library row.
     if (action === "revision")
       return {
         revision: JSON.stringify(
           db
             .prepare(
-              "SELECT (SELECT COALESCE(MAX(sequence),0) FROM archive_version_events) AS facts,(SELECT count(*) FROM processor_results) AS results,(SELECT count(*) FROM snapshots) AS snapshots,(SELECT rowid||status FROM operation_records WHERE operation IN ('folders','snapshot-rename') ORDER BY rowid DESC LIMIT 1) AS organization,(SELECT version FROM vocabulary_state WHERE singleton=1) AS vocabulary,(SELECT MAX(started_at||COALESCE(finished_at,'')||state) FROM archive_runs) AS runs",
+              "SELECT (SELECT COALESCE(MAX(sequence),0) FROM archive_version_events) AS facts,(SELECT count(*) FROM processor_results) AS results,(SELECT count(*) FROM snapshots) AS snapshots,(SELECT rowid||status FROM operation_records WHERE operation IN ('folders','snapshot-rename') ORDER BY rowid DESC LIMIT 1) AS organization,(SELECT version FROM vocabulary_state WHERE singleton=1) AS vocabulary,(SELECT MAX(started_at||COALESCE(finished_at,'')||state) FROM archive_runs) AS runs,(SELECT count(*)||':'||COALESCE(MAX(rowid),0) FROM literature_assets) AS files",
             )
             .get(),
         ),
