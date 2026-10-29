@@ -151,9 +151,14 @@ describe("durable task workbench", () => {
         await form
           .getByRole("button", { name: "查看任务", exact: true })
           .click();
+        // The attempt budget is a technical detail, folded away at the end.
+        await drawer
+          .getByRole("button", { name: "技术详情", exact: true })
+          .last()
+          .click();
         await expect
           .poll(() => drawer.innerText(), { timeout: 10000 })
-          .toContain("0 / 12");
+          .toContain("尝试 0 / 12");
       };
       const control = (name: string) =>
         drawer
@@ -471,7 +476,7 @@ describe("durable task workbench", () => {
         .toBe("failed");
       await expect
         .poll(() => drawer.innerText(), { timeout: 10000 })
-        .toContain("1 / 2 项已完成");
+        .toContain("完成 1 项，失败 1 项");
       await drawer
         .getByRole("button", { name: "失败 1 项", exact: true })
         .waitFor();
@@ -480,7 +485,7 @@ describe("durable task workbench", () => {
       await page.reload();
       await expect
         .poll(() => drawer.innerText(), { timeout: 10000 })
-        .toContain("1 / 2 项已完成");
+        .toContain("完成 1 项，失败 1 项");
       await control("重试").click();
       // Background work started here can outlast the 1 s poll default under Full load.
       await expect
@@ -491,7 +496,7 @@ describe("durable task workbench", () => {
         .toBe("completed");
       await expect
         .poll(() => drawer.innerText(), { timeout: 10000 })
-        .toContain("2 / 2 项已完成");
+        .toContain("完成 2 项");
       const result = await env.app.processingTasks!.read(jobId);
       expect(result.results).toHaveLength(2);
       expect(result.results[0]).toEqual(firstResult);

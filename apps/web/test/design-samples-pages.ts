@@ -492,16 +492,27 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   },
   {
     id: "task-detail-pdf",
+    name: "任务 · 获取 PDF 总结",
+    route: (ids) => `/?view=task&task=${ids.pdfTask}`,
+    ready: ".task-split",
+  },
+  {
+    id: "task-detail-pdf-channels",
     name: "任务 · 获取 PDF 按渠道",
     route: (ids) => `/?view=task&task=${ids.pdfTask}`,
+    interaction: "展开渠道表现",
+    prepare: async (p) => {
+      await p.getByRole("button", { name: "渠道表现", exact: true }).click();
+    },
     ready: ".source-bars",
   },
   {
     id: "task-detail-pdf-table",
     name: "任务 · 获取 PDF 表格",
     route: (ids) => `/?view=task&task=${ids.pdfTask}`,
-    interaction: "切到表格",
+    interaction: "展开渠道表现并切到表格",
     prepare: async (p) => {
+      await p.getByRole("button", { name: "渠道表现", exact: true }).click();
       await p.getByRole("tab", { name: "表格" }).first().click();
     },
     ready: ".source-results-table",

@@ -22,7 +22,6 @@ import {
   SearchField,
   Skeleton,
   TechDetails,
-  RichTitle,
 } from "../../components/index.js";
 import { archiveQuery, rows } from "../../data/archive.js";
 import { useApi } from "../../data/query.js";
@@ -30,6 +29,7 @@ import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
 import { RunSwitch, useActiveTaskCount } from "./RunSwitch.js";
 import { SourceResults } from "./SourceResults.js";
+import { TaskSummary } from "./TaskSummary.js";
 import {
   agentRoleName,
   errorMessage,
@@ -46,12 +46,6 @@ import {
   operationLabels,
   type TaskDetail,
 } from "../../data/tasks.js";
-import { paperTitleParts, readLiterature } from "../../data/library.js";
-import {
-  attemptsDetail,
-  attemptsLine,
-} from "../../data/acquisition-wording.js";
-import type { AcquisitionTaskTrace } from "@sciretriever/contracts";
 import "./tasks.css";
 
 const terminal = (status: unknown) =>
@@ -516,8 +510,10 @@ export function TaskDetails({ id }: { id: string }) {
   const collection = task.collections.at(-1);
   return (
     <div className="task-detail">
-      <h2>{taskTitle(task.job)}</h2>
-      <TaskBadge status={status} />
+      <header className="task-detail-header">
+        <h2>{taskTitle(task.job)}</h2>
+        <TaskBadge status={status} />
+      </header>
       {detail.isError ? (
         <ErrorNotice
           message={errorMessage(detail.error)}
@@ -554,25 +550,50 @@ export function TaskDetails({ id }: { id: string }) {
           </Button>
         ))}
       </div>
-      {task.source_results && acquisitionTask(task.job) ? (
-        <SourceResults value={task.source_results} />
-      ) : null}
-      <TaskSessions id={id} />
-      <p>
-        {task.targets.filter((target) => target.stage === "completed").length} /{" "}
-        {task.targets.length} 项已完成
-      </p>
-      {!processor && task.budget && task.policy ? (
-        <p className="ui-description">
-          策略：{String(task.policy.mode)} · 已尝试{" "}
-          {String(task.budget.attempts)} / {String(task.budget.max_attempts)} ·
-          模型调用 {String(task.budget.model_calls)} /{" "}
-          {String(task.budget.max_model_calls)}
-        </p>
-      ) : null}
       {task.runtime_failure ? (
         <ErrorNotice message={task.runtime_failure} />
       ) : null}
+      {task.interventions
+        .filter((item) => item.status === "open")
+        .map((item) => (
+          <Card key={String(item.intervention_id)} title="任务等待处理">
+            <p>{detailsText(item)}</p>
+            <div className="task-actions">
+              {[
+                ["continue", "继续任务"],
+                ["skip", "跳过此项"],
+                ["cancel", "取消任务"],
+              ].map(([resolution, label]) => (
+                <Button
+                  key={resolution}
+                  onPress={async () => {
+                    await api.request(
+                      `/api/v1/jobs/${encodeURIComponent(id)}/interventions/${encodeURIComponent(String(item.intervention_id))}/resolve`,
+                      { resolution },
+                    );
+                    await refresh();
+                  }}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+            <TechDetails>
+              <pre>{JSON.stringify(item, null, 2)}</pre>
+            </TechDetails>
+          </Card>
+        ))}
+      <TaskSummary task={task} />
+      {task.source_results && acquisitionTask(task.job) ? (
+        task.source_results.pdf ? (
+          <Disclosure title="渠道表现">
+            <SourceResults value={task.source_results} />
+          </Disclosure>
+        ) : (
+          <SourceResults value={task.source_results} />
+        )
+      ) : null}
+      <TaskSessions id={id} />
       {processor &&
       collection &&
       typeof collection.collection_id === "string" ? (
@@ -605,49 +626,7 @@ export function TaskDetails({ id }: { id: string }) {
             : "暂未取得结果集合。可刷新任务核对，已保存的逐项结果仍可读取。"}
         </p>
       ) : null}
-      {task.interventions
-        .filter((item) => item.status === "open")
-        .map((item) => (
-          <Card key={String(item.intervention_id)} title="任务等待处理">
-            <p>{detailsText(item)}</p>
-            <div className="task-actions">
-              {[
-                ["continue", "继续任务"],
-                ["skip", "跳过此项"],
-                ["cancel", "取消任务"],
-              ].map(([resolution, label]) => (
-                <Button
-                  key={resolution}
-                  onPress={async () => {
-                    await api.request(
-                      `/api/v1/jobs/${encodeURIComponent(id)}/interventions/${encodeURIComponent(String(item.intervention_id))}/resolve`,
-                      { resolution },
-                    );
-                    await refresh();
-                  }}
-                >
-                  {label}
-                </Button>
-              ))}
-            </div>
-            <TechDetails>
-              <pre>{JSON.stringify(item, null, 2)}</pre>
-            </TechDetails>
-          </Card>
-        ))}
-      <TaskRun id={id} />
-      {task.acquisition_traces?.length ? (
-        <Disclosure
-          title={`逐篇经过 ${task.acquisition_traces.length} 篇${task.acquisition_traces_truncated ? "（较早记录已省略）" : ""}`}
-          defaultExpanded
-        >
-          <ul className="task-traces">
-            {task.acquisition_traces.map((trace) => (
-              <TraceRow key={trace.attempt_id} trace={trace} />
-            ))}
-          </ul>
-        </Disclosure>
-      ) : null}
+      <TaskRun id={id} targets={!task.acquisition_traces?.length} />
       {task.partial_results.length ? (
         <Disclosure
           title={`此前尝试的部分结果 ${task.partial_results.length} 项`}
@@ -725,6 +704,14 @@ export function TaskDetails({ id }: { id: string }) {
       </Disclosure>
       <TechDetails copyText={id}>
         <p>任务编号：{id}</p>
+        {!processor && task.budget && task.policy ? (
+          <p>
+            重试策略 {String(task.policy.mode)} · 尝试{" "}
+            {String(task.budget.attempts)} / {String(task.budget.max_attempts)}{" "}
+            · 模型调用 {String(task.budget.model_calls)} /{" "}
+            {String(task.budget.max_model_calls)}
+          </p>
+        ) : null}
         <pre>{JSON.stringify(task.results, null, 2)}</pre>
       </TechDetails>
     </div>
@@ -735,34 +722,6 @@ function count(value: JsonRecord, key: string) {
   if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0)
     throw new Error("处理结果计数无效");
   return total;
-}
-/** Which sources one paper went through, in order, before it got (or missed) its PDF. */
-function TraceRow({ trace }: { trace: AcquisitionTaskTrace }) {
-  const api = useApi(),
-    shell = useShell();
-  const detail = useQuery({
-    queryKey: ["literature", trace.literature_id],
-    queryFn: ({ signal }) => readLiterature(api, trace.literature_id, signal),
-  });
-  return (
-    <li>
-      <Button
-        variant="text"
-        size="compact"
-        onPress={() => shell.openPaper(trace.literature_id, "pdf")}
-      >
-        {detail.data ? (
-          <RichTitle parts={paperTitleParts(detail.data)} />
-        ) : (
-          trace.literature_id
-        )}
-      </Button>
-      <p className="task-trace-line" title={attemptsDetail(trace.attempts)}>
-        {attemptsLine(trace.attempts) || "没有记录到来源尝试"}
-        {trace.truncated ? " · 更早的尝试已省略" : ""}
-      </p>
-    </li>
-  );
 }
 function ResultLink({
   result,
