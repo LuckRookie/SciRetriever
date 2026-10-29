@@ -18,6 +18,29 @@ function code(error: unknown): string {
     ? error.code
     : "index-refresh-failed";
 }
+/** Live active-state probe is deliberately separate from the durable queue. */
+export async function readIndexRefreshStatus(
+  path: string,
+  active?: () => Promise<unknown | null>,
+): Promise<IndexRefreshStatus> {
+  const value = await IndexRefreshStateStore.status(path);
+  let index_state: IndexRefreshStatus["index_state"];
+  if (active) {
+    try {
+      index_state = (await active()) === null ? "missing" : "ready";
+    } catch (error) {
+      if (!["index-corrupt", "catalog-corrupt"].includes(code(error)))
+        throw error;
+      index_state = "corrupt";
+    }
+  }
+  return {
+    ...value,
+    operation: value.operation ?? null,
+    progress: value.progress ?? null,
+    ...(index_state ? { index_state } : {}),
+  };
+}
 /** Durable latest-request slot; one builder across processes, never held by publication. */
 export class IndexRefreshService {
   private readonly store: IndexRefreshStateStore;
@@ -37,7 +60,10 @@ export class IndexRefreshService {
         signal?: AbortSignal,
         progress?: (pending: number) => Promise<void>,
       ): Promise<RetrievalGenerationReceipt>;
-      build(signal?: AbortSignal): Promise<RetrievalGenerationReceipt>;
+      build(
+        signal?: AbortSignal,
+        progress?: (value: { done: number; total: number }) => Promise<void>,
+      ): Promise<RetrievalGenerationReceipt>;
     },
     private readonly revision: () => Promise<number>,
     private readonly monitor?: {
@@ -47,6 +73,7 @@ export class IndexRefreshService {
       }>;
       interval_ms?: number;
     },
+    private readonly activeIndex?: () => Promise<unknown | null>,
   ) {
     if (
       monitor &&
@@ -60,7 +87,10 @@ export class IndexRefreshService {
   }
   async status(): Promise<IndexRefreshStatus> {
     await this.checkLag();
-    const value = await IndexRefreshStateStore.status(this.store.path);
+    const value = await readIndexRefreshStatus(
+      this.store.path,
+      this.activeIndex,
+    );
     return this.failure
       ? {
           ...value,
@@ -103,6 +133,9 @@ export class IndexRefreshService {
       await this.schedule();
     })()
       .catch(async (error) => {
+        // A known bad projection is reported by index_state. Do not overwrite
+        // an explicitly queued repair merely because the monitor sees it.
+        if (["index-corrupt", "catalog-corrupt"].includes(code(error))) return;
         this.failure = code(error);
         await this.store
           .update((state) => ({
@@ -119,26 +152,56 @@ export class IndexRefreshService {
     return this.observing;
   }
   async schedule() {
+    await this.request("refresh");
+    return { index_status: "scheduled" as const };
+  }
+  async scheduleRefresh(): Promise<IndexRefreshStatus> {
+    await this.request("refresh");
+    return this.status();
+  }
+  async scheduleRebuild(): Promise<IndexRefreshStatus> {
+    await this.request("rebuild");
+    return this.status();
+  }
+  private async request(operation: "refresh" | "rebuild") {
     if (this.stopped) throw new Error("index-refresh-closed");
     const revision = await this.revision();
     await this.store
-      .update((state) => ({
-        ...state,
-        status: "scheduled",
-        request_sequence: state.request_sequence + 1,
-        requested_revision: Math.max(revision, state.requested_revision ?? 0),
-        requested_at: new Date().toISOString(),
-        finished_at: null,
-        technical_details: { code: null },
-        pending_literatures: null,
-      }))
-      .catch((error: unknown) => {
+      .update(
+        (state) => ({
+          ...state,
+          status: state.status === "running" ? "running" : "scheduled",
+          request_sequence: state.request_sequence + 1,
+          requested_revision: Math.max(revision, state.requested_revision ?? 0),
+          requested_at: new Date().toISOString(),
+          finished_at: null,
+          technical_details: { code: null },
+          pending_literatures: null,
+          operation: state.operation ?? null,
+          progress: state.progress ?? null,
+          ...(operation === "rebuild"
+            ? { rebuild_requested: state.request_sequence + 1 }
+            : {}),
+        }),
+        operation === "rebuild",
+      )
+      .catch((error) => {
         this.failure = code(error);
         throw error;
       });
     this.failure = null;
     this.kick();
-    return { index_status: "scheduled" as const };
+  }
+  /** Short-lived CLI retains ownership until the accepted queue work settles. */
+  async refresh(signal?: AbortSignal): Promise<IndexRefreshStatus> {
+    await this.request("refresh");
+    for (;;) {
+      signal?.throwIfAborted();
+      if (this.stopped) throw new Error("index-refresh-closed");
+      const state = await this.status();
+      if (state.status === "updated" || state.status === "failed") return state;
+      await delay(25, undefined, { ...(signal ? { signal } : {}) });
+    }
   }
   private kick() {
     if (this.work || this.stopped || this.retryTimer) return;
@@ -192,7 +255,13 @@ export class IndexRefreshService {
               return;
             const requested = state.requested_revision!;
             const sequence = state.request_sequence;
+            const rebuildSequence = state.rebuild_requested ?? 0;
+            const operation =
+              rebuildSequence > (state.rebuild_settled ?? 0)
+                ? "rebuild"
+                : "refresh";
             const attemptedRevision = await this.revision();
+            this.failure = null;
             await this.store.update((latest) => ({
               ...latest,
               // A restored catalog may have a lower source counter than its
@@ -203,36 +272,58 @@ export class IndexRefreshService {
                   ? attemptedRevision
                   : latest.requested_revision,
               status: "running",
+              operation,
+              progress: null,
               started_at: new Date().toISOString(),
               technical_details: { code: null },
               pending_literatures: null,
             }));
             const refreshStarted = performance.now();
             try {
-              const generation = await this.index.refresh(
-                this.stop.signal,
-                async (pending) => {
-                  await this.store.update((latest) => ({
-                    ...latest,
-                    pending_literatures: pending,
-                  }));
-                },
-              );
-              await this.store.update((latest) => ({
-                ...latest,
-                indexed_revision: generation.source_revision,
-                status:
-                  (latest.requested_revision ?? 0) > generation.source_revision
-                    ? "scheduled"
-                    : "updated",
-                finished_at: new Date().toISOString(),
-                technical_details: { code: null },
-                pending_literatures:
-                  (latest.requested_revision ?? 0) > generation.source_revision
-                    ? null
-                    : 0,
-                last_refresh_ms: Math.round(performance.now() - refreshStarted),
-              }));
+              const generation =
+                operation === "rebuild"
+                  ? await this.index.build(
+                      this.stop.signal,
+                      async (progress) => {
+                        await this.store.update((latest) => ({
+                          ...latest,
+                          progress,
+                        }));
+                      },
+                    )
+                  : await this.index.refresh(
+                      this.stop.signal,
+                      async (pending) => {
+                        await this.store.update((latest) => ({
+                          ...latest,
+                          pending_literatures: pending,
+                        }));
+                      },
+                    );
+              await this.store.update((latest) => {
+                const settled =
+                  operation === "rebuild"
+                    ? Math.max(latest.rebuild_settled ?? 0, rebuildSequence)
+                    : (latest.rebuild_settled ?? 0);
+                const pending =
+                  (latest.rebuild_requested ?? 0) > settled ||
+                  (latest.requested_revision ?? 0) > generation.source_revision;
+                return {
+                  ...latest,
+                  indexed_revision: generation.source_revision,
+                  rebuild_settled: settled,
+                  status: pending ? "scheduled" : "updated",
+                  operation,
+                  progress:
+                    operation === "rebuild" ? (latest.progress ?? null) : null,
+                  finished_at: new Date().toISOString(),
+                  technical_details: { code: null },
+                  pending_literatures: pending ? null : 0,
+                  last_refresh_ms: Math.round(
+                    performance.now() - refreshStarted,
+                  ),
+                };
+              });
               this.failure = null;
             } catch (error) {
               // Metadata can advance after render without another publication.
@@ -244,6 +335,17 @@ export class IndexRefreshService {
               const busy = code(error) === "write-admission-conflict";
               await this.store.update((latest) => ({
                 ...latest,
+                ...(operation === "rebuild" &&
+                !this.stopped &&
+                !busy &&
+                changedRevision === attemptedRevision
+                  ? {
+                      rebuild_settled: Math.max(
+                        latest.rebuild_settled ?? 0,
+                        rebuildSequence,
+                      ),
+                    }
+                  : {}),
                 requested_revision: Math.max(
                   latest.requested_revision ?? 0,
                   changedRevision,
@@ -286,7 +388,12 @@ export class IndexRefreshService {
   async rebuild(signal?: AbortSignal): Promise<RetrievalGenerationReceipt> {
     for (;;) {
       try {
-        return await this.owner.run(() => this.rebuildOwned(signal), signal);
+        const result = await this.owner.run(
+          () => this.rebuildOwned(signal),
+          signal,
+        );
+        if ((await this.store.read()).status === "scheduled") this.kick();
+        return result;
       } catch (error) {
         if (
           !(error instanceof WriteAdmissionError) ||
@@ -302,45 +409,79 @@ export class IndexRefreshService {
     }
   }
   private async rebuildOwned(signal?: AbortSignal) {
-    const sequence = (await IndexRefreshStateStore.status(this.store.path))
-      .request_sequence;
+    const revision = await this.revision();
+    const started = await this.store.update(
+      (state) => ({
+        ...state,
+        request_sequence: state.request_sequence + 1,
+        rebuild_requested: state.request_sequence + 1,
+        requested_revision: revision,
+        requested_at: new Date().toISOString(),
+        status: "running",
+        operation: "rebuild",
+        progress: null,
+        pending_literatures: null,
+        started_at: new Date().toISOString(),
+        finished_at: null,
+        technical_details: { code: null },
+      }),
+      true,
+    );
+    const begin = performance.now();
+    this.failure = null;
     let generation: RetrievalGenerationReceipt;
     try {
-      generation = await this.index.build(signal);
+      generation = await this.index.build(signal, async (progress) => {
+        await this.store.update((state) => ({ ...state, progress }));
+      });
     } catch (error) {
       this.failure = code(error);
       await this.store
         .update(
           (state) => ({
             ...state,
-            status: "failed",
+            rebuild_settled: Math.max(
+              state.rebuild_settled ?? 0,
+              started.request_sequence,
+            ),
+            status:
+              state.request_sequence > started.request_sequence
+                ? "scheduled"
+                : "failed",
+            operation: "rebuild",
             finished_at: new Date().toISOString(),
             technical_details: { code: this.failure },
+            last_refresh_ms: Math.round(performance.now() - begin),
           }),
           true,
         )
         .catch(() => {});
       throw error;
     }
-    await this.store.update(
-      (state) => ({
+    await this.store.update((state) => {
+      const settled = Math.max(
+        state.rebuild_settled ?? 0,
+        started.request_sequence,
+      );
+      const pending =
+        (state.rebuild_requested ?? 0) > settled ||
+        (state.requested_revision ?? 0) > generation.source_revision;
+      return {
         ...state,
         indexed_revision: generation.source_revision,
-        requested_revision:
-          state.request_sequence > sequence &&
-          (state.requested_revision ?? 0) > generation.source_revision
-            ? state.requested_revision
-            : generation.source_revision,
-        status:
-          state.request_sequence > sequence &&
-          (state.requested_revision ?? 0) > generation.source_revision
-            ? "scheduled"
-            : "updated",
+        rebuild_settled: settled,
+        requested_revision: Math.max(
+          state.requested_revision ?? 0,
+          generation.source_revision,
+        ),
+        status: pending ? "scheduled" : "updated",
+        operation: "rebuild",
         finished_at: new Date().toISOString(),
         technical_details: { code: null },
-      }),
-      true,
-    );
+        last_refresh_ms: Math.round(performance.now() - begin),
+        pending_literatures: pending ? null : 0,
+      };
+    }, true);
     this.failure = null;
     return generation;
   }

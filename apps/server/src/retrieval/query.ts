@@ -164,6 +164,14 @@ export interface MaterialCandidateSession {
   }>;
   assertCurrent(): Promise<void>;
 }
+export interface MaterialIndexSnapshot {
+  readonly state_token: string | null;
+  readonly coverage:
+    | "complete"
+    | "index-unavailable"
+    | "index-corrupt"
+    | "index-stale";
+}
 function check(signal?: AbortSignal): void {
   if (signal?.aborted) throw new MaterialContextError("context-cancelled");
 }
@@ -228,6 +236,34 @@ export class MaterialContextService {
       throw new MaterialContextError("context-tokenizer-unsupported");
     if (this.stopped) throw new MaterialContextError("context-cancelled");
     const pending = this.execute(request, signal);
+    this.active.add(pending);
+    return pending.finally(() => this.active.delete(pending));
+  }
+  /** Scalar state also pins mixed-context result pages after source paging ends. */
+  indexSnapshot(): Promise<MaterialIndexSnapshot> {
+    if (this.stopped) throw new MaterialContextError("context-cancelled");
+    const pending = (async (): Promise<MaterialIndexSnapshot> => {
+      if (!this.storage)
+        return { state_token: null, coverage: "index-unavailable" };
+      try {
+        const state = await this.storage.state();
+        return {
+          state_token: state.state_token,
+          coverage: !state.generation
+            ? "index-unavailable"
+            : state.source_revision !== state.generation.source_revision
+              ? "index-stale"
+              : "complete",
+        };
+      } catch (error) {
+        if (
+          error instanceof RetrievalStorageError &&
+          error.code === "index-corrupt"
+        )
+          return { state_token: null, coverage: "index-corrupt" };
+        throw error;
+      }
+    })();
     this.active.add(pending);
     return pending.finally(() => this.active.delete(pending));
   }

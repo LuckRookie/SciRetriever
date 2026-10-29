@@ -187,8 +187,10 @@ import { RawParsingService } from "../parsing/raw-service.js";
 import { pdfPages } from "../proofread/pdf-pages.js";
 import type { PdfPages } from "../proofread/contract.js";
 import { ProofreadService } from "../proofread/service.js";
-import { IndexRefreshService } from "../retrieval/refresh.js";
-import { IndexRefreshStateStore } from "../storage/retrieval-refresh.js";
+import {
+  IndexRefreshService,
+  readIndexRefreshStatus,
+} from "../retrieval/refresh.js";
 import { RetrievalIndexService } from "../retrieval/index.js";
 import { KnowledgeContextService } from "../retrieval/knowledge-query.js";
 import { MaterialContextService } from "../retrieval/query.js";
@@ -246,7 +248,10 @@ export interface Application {
     readonly ingestPdf: ManualPdfIngestionService["ingestPdf"];
     readonly parseDocuments: DocumentProcessingService["parseDocuments"];
     readonly documentDefault: SqliteWorker["documentDefault"];
-    readonly rebuildIndex: RetrievalIndexService["build"];
+    readonly rebuildIndex: IndexRefreshService["rebuild"];
+    readonly refreshIndex?: IndexRefreshService["refresh"];
+    readonly scheduleIndexRefresh?: IndexRefreshService["scheduleRefresh"];
+    readonly scheduleIndexRebuild?: IndexRefreshService["scheduleRebuild"];
     readonly verifyIndex: RetrievalIndexService["verify"];
     readonly verifyCatalog: RetrievalStorageClient["verifyCatalog"];
     readonly extraction: ExtractionDeliveryService;
@@ -1484,6 +1489,7 @@ async function createApplicationOwned(
             inspect: () => refreshState.state(),
             interval_ms: options.indexRefreshIntervalMs ?? 5000,
           },
+      () => refreshState.active(),
     );
     await indexRefresh.start();
     // One process-wide acquisition port, built here and shared by every caller: the
@@ -1752,6 +1758,11 @@ async function createApplicationOwned(
                 documentProcessing.parseDocuments.bind(documentProcessing),
               documentDefault: database.documentDefault.bind(database),
               rebuildIndex: indexRefresh.rebuild.bind(indexRefresh),
+              refreshIndex: indexRefresh.refresh.bind(indexRefresh),
+              scheduleIndexRefresh:
+                indexRefresh.scheduleRefresh.bind(indexRefresh),
+              scheduleIndexRebuild:
+                indexRefresh.scheduleRebuild.bind(indexRefresh),
               verifyIndex: retrievalIndex.verify.bind(retrievalIndex),
               verifyCatalog: (signal) =>
                 new RetrievalStorageClient(indexDatabase!).verifyCatalog(
@@ -1763,6 +1774,9 @@ async function createApplicationOwned(
               "ingestPdf",
               "parseDocuments",
               "rebuildIndex",
+              "refreshIndex",
+              "scheduleIndexRefresh",
+              "scheduleIndexRebuild",
               "verifyIndex",
               "verifyCatalog",
             ],
@@ -2179,7 +2193,9 @@ export async function createQueryApplication(
       context,
       knowledgeContext,
       indexRefreshStatus: () =>
-        IndexRefreshStateStore.status(`${catalogPath}.index-refresh.json`),
+        readIndexRefreshStatus(`${catalogPath}.index-refresh.json`, () =>
+          retrievalStorage.active(),
+        ),
 
       close,
     };

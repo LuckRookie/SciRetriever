@@ -271,7 +271,14 @@ export function parseKnowledgeContextBundle(
   }).continuation;
   if (
     r.truncated !== (continuation !== null) ||
-    r.coverage !== (gaps.length || r.truncated ? "partial" : "complete")
+    (gaps.some((g) => g.code === "material-index-stale") &&
+      request.kinds.every((kind) => kind === "knowledge")) ||
+    r.coverage !==
+      (gaps.some((g) => g.code === "material-index-stale")
+        ? "index-stale"
+        : gaps.length || r.truncated
+          ? "partial"
+          : "complete")
   )
     fail();
   return {

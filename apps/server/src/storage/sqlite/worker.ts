@@ -337,6 +337,7 @@ export type SqliteCommand =
       readonly kind: "retrieval";
       readonly operation:
         | "revision"
+        | "sourceCount"
         | "metadataPage"
         | "documentPage"
         | "beginGeneration"

@@ -18,6 +18,9 @@ import {
   parsePageRegion,
   parseRetrievalGenerationReceipt,
   parseIndexVerificationResult,
+  parseIndexRefreshStatus,
+  parseIndexRefreshRequest,
+  parseIndexRebuildRequest,
   parseStrictJsonObject,
   type ConfigurationReadiness,
   type AcquisitionRouteState,
@@ -2252,6 +2255,8 @@ export interface QueryOnlyHttpOptions {
       readonly revision: number;
     } | null>;
     readonly rebuildIndex?: (signal?: AbortSignal) => Promise<unknown>;
+    readonly scheduleIndexRefresh?: () => Promise<unknown>;
+    readonly scheduleIndexRebuild?: () => Promise<unknown>;
     readonly verifyIndex?: (signal?: AbortSignal) => Promise<unknown>;
     readonly verifyCatalog?: (signal?: AbortSignal) => Promise<unknown>;
     readonly extraction?: ExtractionDeliveryService;
@@ -2398,6 +2403,7 @@ function createQueryHttpHandler(
       url.pathname === "/api/v1/maintenance/parse-document" ||
       url.pathname === "/api/v1/maintenance/document-default" ||
       url.pathname === "/api/v1/maintenance/rebuild-index" ||
+      url.pathname === "/api/v1/maintenance/index-refresh" ||
       url.pathname === "/api/v1/maintenance/verify-index" ||
       url.pathname === "/api/v1/maintenance/verify-catalog" ||
       url.pathname === "/api/v1/maintenance/processor-submit" ||
@@ -2584,12 +2590,44 @@ function createQueryHttpHandler(
       if (
         [
           "/api/v1/maintenance/rebuild-index",
+          "/api/v1/maintenance/index-refresh",
           "/api/v1/maintenance/verify-index",
           "/api/v1/maintenance/verify-catalog",
         ].includes(url.pathname)
       ) {
         const catalog = url.pathname.endsWith("/verify-catalog");
         const verifying = url.pathname.endsWith("/verify-index");
+        const refreshing = url.pathname.endsWith("/index-refresh");
+        const command = object(await body(request), [
+          "protocol_version",
+          "request",
+        ]);
+        if (command.protocol_version !== 1) invalidInput();
+        let background = false;
+        if (refreshing) parseIndexRefreshRequest(command.request);
+        else if (catalog || verifying) {
+          if (object(command.request, ["kind"]).kind !== "verify")
+            invalidInput();
+        } else
+          background =
+            parseIndexRebuildRequest(command.request).background === true;
+        if (refreshing || background) {
+          const queue = refreshing
+            ? options.maintenance.scheduleIndexRefresh
+            : options.maintenance.scheduleIndexRebuild;
+          if (!queue) {
+            json(response, 503, {
+              protocol_version: 1,
+              code: "maintenance-unavailable",
+            });
+            return;
+          }
+          // Once accepted this belongs to Application, independent of the
+          // response/connection AbortController used by synchronous maintenance.
+          const result = parseIndexRefreshStatus(await queue());
+          json(response, 200, { protocol_version: 1, result });
+          return;
+        }
         const rebuild = catalog
           ? options.maintenance.verifyCatalog
           : verifying
@@ -2602,16 +2640,6 @@ function createQueryHttpHandler(
           });
           return;
         }
-        const command = object(await body(request), [
-          "protocol_version",
-          "request",
-        ]);
-        const intent = object(command.request, ["kind"]);
-        if (
-          command.protocol_version !== 1 ||
-          intent.kind !== (verifying || catalog ? "verify" : "rebuild")
-        )
-          invalidInput();
         const stop = new AbortController();
         const abort = () => stop.abort();
         response.once("close", abort);
@@ -3090,6 +3118,7 @@ function createQueryHttpHandler(
           request.url?.startsWith("/api/v1/maintenance/parse-document") ||
           request.url?.startsWith("/api/v1/maintenance/document-default") ||
           request.url?.startsWith("/api/v1/maintenance/rebuild-index") ||
+          request.url?.startsWith("/api/v1/maintenance/index-refresh") ||
           request.url?.startsWith("/api/v1/maintenance/verify-index") ||
           request.url?.startsWith("/api/v1/maintenance/verify-catalog") ||
           request.url?.startsWith("/api/v1/maintenance/extraction-")

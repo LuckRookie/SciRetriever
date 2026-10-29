@@ -504,7 +504,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "index_status",
-    "Read the durable post-publication index refresh queue and its last failure. Retry with rebuild_index. No initialization or external calls.",
+    "Read index_state (ready/missing/corrupt), the durable queue, current or last operation and rebuild source progress. Reading does not refresh or rebuild. Retry with refresh_index or rebuild_index as appropriate.",
     object({}),
   ),
   tool(
@@ -602,7 +602,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "search_context",
-    "Retrieve existing source or mixed knowledge context. request is the MaterialContextRequest or KnowledgeContextRequest contract, including scope/version/budget/continuation. For material context, index-stale coverage may include verified items and continuation: source_revision is current, indexed_revision is the active watermark; stale-source hits are skipped with per-literature gaps. An index mutation invalidates old cursors and requires a new query. This read-only tool never refreshes/rebuilds an index or generates content.",
+    "Retrieve existing source or mixed knowledge context. request is the MaterialContextRequest or KnowledgeContextRequest contract, including scope/version/budget/continuation. Both kinds can return index-stale coverage with verified items and continuation. Mixed context keeps per-literature index-stale gaps and a material-index-stale summary, and still returns verified processor results. Material receipts include current source_revision and active indexed_revision. An index mutation invalidates old cursors, including mixed pages of processor results, and requires a new query. This read-only tool never refreshes/rebuilds an index or generates content.",
     object({
       kind: { enum: ["material", "knowledge"] },
       request: { type: "object" },
@@ -1166,9 +1166,15 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     false,
   ),
   tool(
-    "rebuild_index",
-    "Explicitly rebuild the original-document search index from existing material; does not download or parse.",
+    "refresh_index",
+    "Schedule incremental index refresh in the existing background queue and immediately return IndexRefreshStatus. No download, parse or model calls.",
     object({}),
+    false,
+  ),
+  tool(
+    "rebuild_index",
+    "Rebuild the source index from existing material. By default waits and returns the generation receipt; background:true queues it and returns IndexRefreshStatus. Does not download or parse.",
+    object({ background: { type: "boolean" } }, []),
     false,
   ),
   tool(

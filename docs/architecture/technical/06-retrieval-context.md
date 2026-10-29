@@ -554,17 +554,27 @@ Context 是临时读取结果，不持久化成 KnowledgeArtifact。若用户要
 
 状态保存在 `<catalog>.index-refresh.json`，属于非秘密的可重建投影队列，不是资产、配置或业务事实。继续要求当前用户 0600 普通单链接文件，拒绝符号链接，独立短锁及 fsync/rename 保证原子替换；worker 锁和 catalog admission 分开。原状态 idle/scheduled/running/updated/failed、request_sequence、requested_revision、indexed_revision、三个时间戳与 technical_details.code 保留。可选 `pending_literatures` 是最近一次指纹比对后尚未接纳的篇数，新请求未比对时为 null；`last_refresh_ms` 是最近一次已结算刷新尝试的墙钟耗时，含失败/取消，不含队列等待。状态读取不重新比对来源，也不能把源水位差当作篇数。旧状态文件没有新增键仍可读。
 
+index-status 另有三个可选字段。`index_state=ready|missing|corrupt` 在读取时以 active 指针、ready 状态、已知损坏标记和固定布局检查派生；ready 不表示已经追上源，也不表示已做完整校验。`operation=refresh|rebuild|null` 是当前执行或最近结算的操作，无历史为 null；仅排队时保持最近操作，执行开始才切换。`progress={done,total}|null` 只记录重建已处理/总来源数，来源为每篇 metadata 与每个固定文档版本，不是 FTS 分块数。来源处理完仍可能在写入、校验、发布或旧代回收，不能把 done=total 当成任务已完成。进度约每 250 ms 更新并在末尾结算；增量刷新 progress=null，沿用 pending_literatures。
+
+显式增量刷新和后台重建共用持久队列与工作者锁。sidecar 的私有 rebuild_requested/rebuild_settled 记录最新重建意图与已结算序列，不进入 IndexRefreshStatus；旧 sidecar 缺这些字段仍可读。它们区分正在执行的操作和排队意图，保留重建期间的新请求，并使取消/进程关闭后的重建下次继续按重建执行。已结算的失败不会无限重建；显式新请求可重试。请求在通过认证并持久接纳后属于 Application，浏览器连接断开不取消；关闭 Application 则停止本次执行并保留未完成意图。
+
 | 动作 | HTTP | CLI | MCP |
 | --- | --- | --- | --- |
 | 读取状态 | POST /api/v1/query/index-status，request `{}` | maintenance index-status | index_status |
+| 增量刷新 | POST /api/v1/maintenance/index-refresh，request `{kind:"refresh"}` | maintenance refresh-index | refresh_index |
 | 完整重建/修复 | POST /api/v1/maintenance/rebuild-index，request `{kind:"rebuild"}` | maintenance rebuild-index | rebuild_index |
+| 后台重建 | 同上，request `{kind:"rebuild",background:true}` | 使用同步重建命令 | rebuild_index，`{background:true}` |
 | 完整核验 | POST /api/v1/maintenance/verify-index，request `{kind:"verify"}` | maintenance verify-index | verify_index |
 
-HTTP 继续使用 protocol_version=1 封套和现有维护认证。显式成功重建清除失败；验证不自动修复源或投影。短命 CLI 退出时可留下 scheduled 请求，长驻 Web 或下一次维护进程续跑；立即需要可查询的新索引时显式重建。scheduled 只表示排队事实，不承诺固定完成时间。
+HTTP 继续使用 protocol_version=1 封套和现有维护认证/Origin/CSRF。增量刷新和后台重建立即返回 IndexRefreshStatus，后续通过 index-status 读取进度；不带 background 的同步重建继续返回原 generation receipt，并可由请求取消。CLI refresh-index 等到队列结算后返回状态，失败输出同一状态且退出码 3；MCP refresh_index 立即返回排队状态。显式成功重建清除失败，验证不自动修复源或投影。其它短命进程退出时可留下已接纳请求，由长驻 Web 或下一次 Application 续跑。scheduled 只表示排队事实，不承诺固定完成时间。
 
 ### 4.10 处理器结果与混合 Context
 
 `knowledgeContext` 将材料 Context 与已发布处理器结果合并。原始文档和生成结果明确区分；固定结果及上游依赖通过 `processorRead` 核验，来源缺失、损坏、过时与未命中分别表达。覆盖、排序、预算及继续位置规则见本节前述合同；score 不表示科学可信度。
+
+混合读取的材料分支落后时，`KnowledgeContextBundle.coverage=index-stale`，仍可包含材料命中、已核验的算子结果及 continuation；不降成普通 partial，也不丢弃整页。`gaps` 保留材料返回的逐文献 index-stale 缺口，并给出 `material-index-stale` 汇总；重复项去重，超过 32 项时按原因归并为 literature_id=null。合同以该汇总标记核对落后覆盖，继续严格验证固定引用、范围、真实回执字节、条数及 truncation/continuation。材料不可用/损坏与算子结果自己的缺口仍分别保留，不把它们伪装成普通落后。材料失效命中的跳过与证据验证复用 [4.9](#49-材料-context-的实现边界)，不建立第二套来源校验。
+
+混合游标 v2 绑定请求和 active 的同一 state_token，包裹材料续页与算子结果的固定水位/位置。材料分支读完后，后续只含算子结果的混合页仍以常数级标量探针核对 active；增量接纳或切代后返回 context-cursor-invalid。旧混合游标同样要求重新查询。请求 kinds 只有 knowledge 时不检索材料，也不受材料索引落后影响，继续使用算子结果自身的固定水位。HTTP knowledge-context、CLI context knowledge 与 MCP search_context(kind=knowledge) 共用此服务；CLI 文本提示落后，JSON 回执保持纯机器封套。
 
 结果记录与全文投影由结果存储维护，生成成功但索引失败时保留不可变结果，可显式重建；不是另一份知识产物事实。结果输入及递归引用见[知识加工](05-knowledge-processing.md#3-结果格式与发布)，当前单一 catalog 与投影完整性见[存储](07-versioned-storage.md#4-知识版本依赖与回收)。
 

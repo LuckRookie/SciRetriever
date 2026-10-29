@@ -556,6 +556,16 @@ export class RetrievalStorageEngine {
       )
       .all(after, after, limit) as unknown as RetrievalSource[];
   }
+  sourceCount(): number {
+    this.refreshReader();
+    return Number(
+      this.db
+        .prepare(
+          "SELECT (SELECT count(*) FROM literatures JOIN literature_metadata USING(literature_id))+(SELECT count(*) FROM document_versions JOIN literatures USING(literature_id) JOIN literature_metadata USING(literature_id)) AS n",
+        )
+        .get()!.n,
+    );
+  }
   /** Only indexed scalar fingerprints: no artifact, body or FTS access. */
   private sourceStamps(literature?: string): SourceStamp[] {
     return this.db

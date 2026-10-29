@@ -3,7 +3,10 @@ import { join } from "node:path";
 import { expect, it, vi, type MockInstance } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { parseLiterature } from "@sciretriever/contracts";
+import {
+  parseKnowledgeContextRequest,
+  parseLiterature,
+} from "@sciretriever/contracts";
 import {
   createApplication,
   createQueryApplication,
@@ -317,6 +320,13 @@ it("detects idle runtime writes automatically and returns a fully archived scope
     };
     const before = await q.context!.search(input);
     expect(before.coverage).toBe("complete");
+    const knowledgeInput = parseKnowledgeContextRequest({
+      ...input,
+      schema_version: 3,
+      kinds: ["metadata", "document", "knowledge"],
+    });
+    const knowledgeBefore = await q.knowledgeContext!.search(knowledgeInput);
+    expect(knowledgeBefore.coverage).toBe("complete");
     const refresh = RetrievalIndexService.prototype.refresh;
     spy = vi
       .spyOn(RetrievalIndexService.prototype, "refresh")
@@ -334,6 +344,9 @@ it("detects idle runtime writes automatically and returns a fully archived scope
     const stale = await q.context!.search(input);
     expect(stale.coverage).toBe("index-stale");
     expect(stale.items).toEqual(before.items);
+    const knowledgeStale = await q.knowledgeContext!.search(knowledgeInput);
+    expect(knowledgeStale.coverage).toBe("index-stale");
+    expect(knowledgeStale.items).toEqual(knowledgeBefore.items);
     release.resolve();
     // QueryApplication reads do not schedule: only the owning runtime's monitor does.
     await vi.waitFor(
@@ -342,6 +355,9 @@ it("detects idle runtime writes automatically and returns a fully archived scope
       { timeout: 5000 },
     );
     expect(performance.now() - started).toBeLessThan(5000);
+    expect((await q.knowledgeContext!.search(knowledgeInput)).coverage).toBe(
+      "complete",
+    );
   } finally {
     release.resolve();
     spy?.mockRestore();

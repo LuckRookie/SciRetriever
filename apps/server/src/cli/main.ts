@@ -195,6 +195,7 @@ function usage(options: CliOptions): CliResult {
     "  tags list|search|show|changes|consolidate|backfill; tags edit|undo --request FILE; literature tags ID / set|lock --request FILE\n" +
     "  storage schema-inspect|schema-init --catalog PATH\n" +
     "  maintenance rebuild-index\n" +
+    "  maintenance refresh-index\n" +
     "  maintenance verify-index\n" +
     "  maintenance verify-catalog\n" +
     "  maintenance index-status\n" +
@@ -1034,7 +1035,7 @@ async function execute(
     );
     if (
       !options.json &&
-      queryRoutes[queryKey] === "context" &&
+      ["context", "knowledge-context"].includes(queryRoutes[queryKey]!) &&
       value &&
       typeof value === "object" &&
       "coverage" in value &&
@@ -1316,21 +1317,36 @@ async function execute(
   }
   if (
     group === "maintenance" &&
-    ["rebuild-index", "verify-index", "verify-catalog"].includes(command ?? "")
+    [
+      "rebuild-index",
+      "refresh-index",
+      "verify-index",
+      "verify-catalog",
+    ].includes(command ?? "")
   ) {
     if (args.length !== 2) invalidInput();
-    return output(
-      await withApplication(options, async (app) => {
-        if (!app.maintenance)
+    const value = await withApplication(options, async (app) => {
+      if (!app.maintenance)
+        throw new Error("maintenance runtime is unavailable");
+      if (command === "refresh-index") {
+        if (!app.maintenance.refreshIndex)
           throw new Error("maintenance runtime is unavailable");
-        return command === "verify-index"
-          ? app.maintenance.verifyIndex(options.signal)
-          : command === "verify-catalog"
-            ? app.maintenance.verifyCatalog(options.signal)
-            : app.maintenance.rebuildIndex(options.signal);
-      }),
-      options,
-    );
+        return app.maintenance.refreshIndex(options.signal);
+      }
+      return command === "verify-index"
+        ? app.maintenance.verifyIndex(options.signal)
+        : command === "verify-catalog"
+          ? app.maintenance.verifyCatalog(options.signal)
+          : app.maintenance.rebuildIndex(options.signal);
+    });
+    const result = output(value, options);
+    return command === "refresh-index" &&
+      value &&
+      typeof value === "object" &&
+      "status" in value &&
+      value.status === "failed"
+      ? { ...result, code: 3 }
+      : result;
   }
   if (group === "doctor" && command === undefined) {
     const owner = new TypeScriptConfigurationOwner(configurationHome(options));

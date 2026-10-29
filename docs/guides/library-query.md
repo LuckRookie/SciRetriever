@@ -59,9 +59,9 @@ await reader.close();
 
 `context.search` 检索已有元数据和文档；`knowledgeContext.search` 合并材料与处理器结果。对应 HTTP 为 `/api/v1/query/context` 与 `/api/v1/query/knowledge-context`，CLI/MCP 入口见[Agent 接口](agent-interface.md)。请求固定 scope、kinds、versions、budget，续页原样带回 continuation；无 tokenizer 时不接受 token_limit。
 
-材料索引缺失、过时或损坏会分别报告 `index-unavailable`、`index-stale`、`index-corrupt`。过时时仍返回旧索引中可核实的命中和续页，部分最新内容可能暂时搜不到；来源已变化的命中在 gaps 说明后跳过。长驻工作台自动追赶，只读 CLI/MCP 本身不刷新；CLI 文本模式会提示落后，`--json` 保持机器回执。损坏回执给出 rebuild-index 维护提示。搜索前只做轻量身份和版本检查，不做全库健康扫描。用 `sciretriever maintenance verify-index --json` 显式核验全部索引文字、倒排和来源，或执行 `sciretriever maintenance rebuild-index --json` 完整重建材料投影；结果索引维护由[处理器入口](knowledge-processors.md)提供。查询不会调用修复。水位字段、游标及刷新触发的精确合同见[检索与上下文](../architecture/technical/06-retrieval-context.md#49-材料-context-的实现边界)。
+材料索引缺失、过时或损坏会分别报告 `index-unavailable`、`index-stale`、`index-corrupt`。材料与混合知识上下文在索引过时时都继续返回可核实的命中和续页，混合结果也保留已核验的算子结果；部分最新内容可能暂时搜不到，来源已变化的命中在 gaps 说明后跳过。长驻工作台自动追赶，只读 CLI/MCP 本身不刷新；CLI 文本模式会提示落后，`--json` 保持机器回执。损坏回执给出 rebuild-index 维护提示。搜索前只做轻量身份和版本检查，不做全库健康扫描。用 `sciretriever maintenance verify-index --json` 显式核验全部索引文字、倒排和来源，或执行 `sciretriever maintenance rebuild-index --json` 完整重建材料投影；结果索引维护由[处理器入口](knowledge-processors.md)提供。查询不会调用修复。水位、游标与刷新触发见[材料合同](../architecture/technical/06-retrieval-context.md#49-材料-context-的实现边界)，混合覆盖与分页见[知识上下文](../architecture/technical/06-retrieval-context.md#410-处理器结果与混合-context)。
 
-建档发布会将全文索引按篇增量刷新排队，元数据仍在全文检索范围内，固定全文与建档完成无需等待。`sciretriever maintenance index-status` 返回 scheduled/running/updated/failed 等状态、源与已索引 revision 和技术原因；pending_literatures 表示最近比对后尚未更新的篇数（未知为 null），last_refresh_ms 是上次刷新尝试耗时；失败可用上述重建命令重试。索引刷新期间只读查询仍遵守过时检查，不返回未核实的旧命中。
+建档发布会将全文索引按篇增量刷新排队，元数据仍在全文检索范围内，固定全文与建档完成无需等待。`sciretriever maintenance index-status` 可查看索引是否存在/已知损坏、队列状态、当前或最近操作，以及重建的来源进度。需要手动追赶时运行 `sciretriever maintenance refresh-index --json`，它等待增量刷新结算；需要完整重建时使用上述重建命令。Web/MCP 可将重建放到后台，接纳后关闭页面仍继续；同步命令的行为保留。各字段含义、HTTP/MCP 请求与进度边界统一见[后台调度与状态](../architecture/technical/06-retrieval-context.md#49-材料-context-的实现边界)。
 
 ## 读取知识与准备外部提取
 

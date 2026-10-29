@@ -4,6 +4,8 @@ import {
   parseIndexRefreshStatus,
   parseArchiveModelUsage,
   parseIndexVerificationResult,
+  parseIndexRefreshRequest,
+  parseIndexRebuildRequest,
 } from "../src/index.js";
 
 it("accepts optional incremental queue metrics and rejects invalid counters or verification receipts", () => {
@@ -41,6 +43,49 @@ it("accepts optional incremental queue metrics and rejects invalid counters or v
     expect(() =>
       parseIndexVerificationResult({ ...receipt, ...extra }),
     ).toThrow();
+});
+it("accepts optional live index state and rebuild progress while retaining old sidecars", () => {
+  const old = idleIndexRefreshStatus();
+  expect(parseIndexRefreshStatus(old)).toEqual(old);
+  const current = {
+    ...old,
+    index_state: "corrupt",
+    operation: "rebuild",
+    progress: { done: 1, total: 3 },
+  };
+  expect(parseIndexRefreshStatus(current)).toEqual(current);
+  for (const extra of [
+    { index_state: "stale" },
+    { index_state: null },
+    { operation: "repair" },
+    { progress: { done: 4, total: 3 } },
+    { progress: { done: 1.1, total: 3 } },
+    { progress: { done: -1, total: 3 } },
+    { progress: { done: 1, total: 3, bytes: 2 } },
+    { operation: "refresh", progress: { done: 1, total: 3 } },
+  ])
+    expect(() => parseIndexRefreshStatus({ ...current, ...extra })).toThrow();
+  expect(parseIndexRefreshRequest({ kind: "refresh" })).toEqual({
+    kind: "refresh",
+  });
+  expect(
+    parseIndexRebuildRequest({ kind: "rebuild", background: true }),
+  ).toEqual({ kind: "rebuild", background: true });
+  expect(parseIndexRebuildRequest({ kind: "rebuild" })).toEqual({
+    kind: "rebuild",
+  });
+  for (const bad of [
+    { kind: "rebuild" },
+    { kind: "refresh", background: true },
+    {},
+  ])
+    expect(() => parseIndexRefreshRequest(bad)).toThrow();
+  for (const bad of [
+    { kind: "refresh" },
+    { kind: "rebuild", background: "yes" },
+    { kind: "rebuild", extra: true },
+  ])
+    expect(() => parseIndexRebuildRequest(bad)).toThrow();
 });
 
 it("round-trips refresh status and rejects unknown fields, raw errors and invalid revisions", () => {

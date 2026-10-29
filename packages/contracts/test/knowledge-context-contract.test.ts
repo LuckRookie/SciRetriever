@@ -130,3 +130,64 @@ it("rejects inconsistent continuation, truncation and coverage even with correct
       parseKnowledgeContextBundle(count({ ...bundle(), ...patch }), selected),
     ).toThrow();
 });
+
+it("accepts stale mixed source/result hits and continuation without relaxing byte, gap or coverage validation", () => {
+  const selected = parseKnowledgeContextRequest(request);
+  const metadata = {
+    kind: "metadata",
+    literature_id: lit,
+    meta_literature_id: lit,
+    reference: {
+      kind: "metadata",
+      literature_id: lit,
+      metadata_revision: 1,
+      metadata_sha256: hash,
+    },
+    section_title: null,
+    text: "A reported catalyst.",
+    evidence: [],
+    rank: 1,
+    score: -1,
+    gap: null,
+  };
+  for (const continuation of [null, "opaque_cursor"])
+    for (const items of [[item], [metadata, { ...item, rank: 2 }]]) {
+      const value = count({
+        ...bundle(items),
+        coverage: "index-stale",
+        gaps: [
+          { code: "material-index-stale", literature_id: null },
+          { code: "index-stale", literature_id: lit },
+        ],
+        continuation,
+        truncated: continuation !== null,
+      });
+      expect(parseKnowledgeContextBundle(value, selected)).toEqual(value);
+      for (const change of [
+        { coverage: "complete" },
+        { coverage: "partial" },
+        { gaps: [] },
+        { truncated: continuation === null },
+        { gaps: Array.from({ length: 33 }, () => value.gaps[0]) },
+        { usage: { ...value.usage, bytes: 0 } },
+      ])
+        expect(() =>
+          parseKnowledgeContextBundle(
+            "usage" in change
+              ? { ...value, ...change }
+              : count({ ...value, ...change }),
+            selected,
+          ),
+        ).toThrow();
+    }
+  expect(() =>
+    parseKnowledgeContextBundle(
+      count({
+        ...bundle(),
+        coverage: "index-stale",
+        gaps: [{ code: "material-index-stale", literature_id: null }],
+      }),
+      parseKnowledgeContextRequest({ ...request, kinds: ["knowledge"] }),
+    ),
+  ).toThrow();
+});

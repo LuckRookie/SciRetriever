@@ -361,6 +361,11 @@ describe("explicit retrieval projection and bounded Context", () => {
         mode: "reparse",
         expected_default_revision: null,
       });
+      // Publication legitimately schedules incremental work. Settle that real
+      // queue before measuring only the explicit full generation below.
+      expect((await env.app.maintenance!.refreshIndex!()).status).toBe(
+        "updated",
+      );
       insert.mockClear();
       const generation = await env.app.maintenance!.rebuildIndex();
       expect(generation.source_count).toBe(2);

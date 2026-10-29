@@ -260,6 +260,7 @@ export function createMcpServer(options: McpOptions = {}) {
       create_task: "task-create",
       resolve_intervention: "resolve-intervention",
       rebuild_index: "rebuild-index",
+      refresh_index: "index-refresh",
       verify_index: "verify-index",
       verify_catalog: "verify-catalog",
       create_extraction: "extraction-operation",

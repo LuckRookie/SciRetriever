@@ -16,6 +16,9 @@ export class RetrievalStorageClient {
   revision(): Promise<number> {
     return this.worker.retrieval("revision");
   }
+  sourceCount(): Promise<number> {
+    return this.worker.retrieval("sourceCount");
+  }
   metadataPage(
     after: string | null,
     limit: number,

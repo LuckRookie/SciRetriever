@@ -21,7 +21,9 @@ export class KnowledgeContextError extends Error {
 const hash = (value: unknown) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 interface Cursor {
+  version: 2;
   fingerprint: string;
+  index_token: string | null;
   phase: "source" | "result" | "done";
   source: string | null;
   watermark: number | null;
@@ -37,7 +39,9 @@ function decode(request: KnowledgeContextRequest): Cursor {
   const fingerprint = hash({ ...request, continuation: null });
   if (!request.continuation)
     return {
+      version: 2,
       fingerprint,
+      index_token: null,
       phase: request.kinds.some((k) => k !== "knowledge") ? "source" : "result",
       source: null,
       watermark: null,
@@ -50,9 +54,14 @@ function decode(request: KnowledgeContextRequest): Cursor {
     if (hash(envelope.payload) !== envelope.checksum) throw new Error();
     const c = JSON.parse(envelope.payload) as Cursor;
     if (
+      Object.keys(envelope).sort().join() !== "checksum,payload" ||
       Object.keys(c).sort().join() !==
-        "after,fingerprint,phase,source,watermark" ||
+        "after,fingerprint,index_token,phase,source,version,watermark" ||
+      c.version !== 2 ||
       c.fingerprint !== fingerprint ||
+      (c.index_token !== null &&
+        (typeof c.index_token !== "string" ||
+          !/^[a-f0-9]{64}$/u.test(c.index_token))) ||
       !["source", "result"].includes(c.phase) ||
       (c.source !== null &&
         (typeof c.source !== "string" || c.source.length > 1024)) ||
@@ -121,14 +130,51 @@ export class KnowledgeContextService {
     let cursor = decode(request);
     const items: KnowledgeContextItem[] = [],
       gaps: KnowledgeContextBundle["gaps"][number][] = [];
+    const addGap = (gap: KnowledgeContextBundle["gaps"][number]) => {
+      if (
+        gaps.some(
+          (g) =>
+            g.code === gap.code &&
+            (g.literature_id === null || g.literature_id === gap.literature_id),
+        )
+      )
+        return;
+      gaps.push(gap);
+      if (gaps.length > 32) {
+        const codes = [...new Set(gaps.map((g) => g.code))];
+        gaps.splice(
+          0,
+          gaps.length,
+          ...codes.map((code) => ({ code, literature_id: null })),
+        );
+      }
+    };
+    const material = request.kinds.some((kind) => kind !== "knowledge")
+      ? this.material
+      : null;
+    const initial = await material?.indexSnapshot();
+    if (
+      request.continuation &&
+      cursor.index_token !== (initial?.state_token ?? null)
+    )
+      throw new KnowledgeContextError("context-cursor-invalid");
+    cursor = { ...cursor, index_token: initial?.state_token ?? null };
+    const addIndexGap = (coverage: string) => {
+      if (coverage.startsWith("index-"))
+        addGap({ code: `material-${coverage}`, literature_id: null });
+    };
+    if (initial) addIndexGap(initial.coverage);
     const bundle = () =>
       count({
         schema_version: 3,
         score_rule: "sources-then-results-v1",
         items,
-        coverage:
-          gaps.length || cursor.phase !== "done" ? "partial" : "complete",
-        gaps: gaps.slice(0, 32),
+        coverage: gaps.some((gap) => gap.code === "material-index-stale")
+          ? "index-stale"
+          : gaps.length || cursor.phase !== "done"
+            ? "partial"
+            : "complete",
+        gaps,
         usage: { items: items.length, bytes: 0, tokens: null, tokenizer: null },
         truncated: cursor.phase !== "done",
         continuation: cursor.phase === "done" ? null : encode(cursor),
@@ -136,7 +182,7 @@ export class KnowledgeContextService {
     let scanned = 0;
     while (cursor.phase !== "done" && items.length < request.budget.max_items) {
       if (++scanned > 4096) {
-        gaps.push({ code: "candidate-limit", literature_id: null });
+        addGap({ code: "candidate-limit", literature_id: null });
         break;
       }
       if (signal?.aborted) throw new KnowledgeContextError("context-cancelled");
@@ -144,7 +190,7 @@ export class KnowledgeContextService {
       let item: KnowledgeContextItem | undefined;
       if (cursor.phase === "source") {
         if (!this.material) {
-          gaps.push({
+          addGap({
             code: "material-index-unavailable",
             literature_id: null,
           });
@@ -156,9 +202,8 @@ export class KnowledgeContextService {
             { ...source, budget: { ...source.budget, max_items: 1 } },
             signal,
           );
-        gaps.push(...page.gaps);
-        if (page.coverage.startsWith("index-"))
-          gaps.push({ code: `material-${page.coverage}`, literature_id: null });
+        page.gaps.forEach(addGap);
+        addIndexGap(page.coverage);
         item = page.items[0];
         cursor = {
           ...cursor,
@@ -171,7 +216,7 @@ export class KnowledgeContextService {
           continue;
         }
         if (!this.results) {
-          gaps.push({ code: "result-index-unavailable", literature_id: null });
+          addGap({ code: "result-index-unavailable", literature_id: null });
           cursor = { ...cursor, phase: "done" };
           continue;
         }
@@ -192,14 +237,14 @@ export class KnowledgeContextService {
             phase: page.row ? "result" : "done",
           };
           item = page.item ?? undefined;
-          if (page.gap) gaps.push({ code: page.gap, literature_id: null });
+          if (page.gap) addGap({ code: page.gap, literature_id: null });
         } catch (error) {
           if (signal?.aborted) throw error;
           if (
             error instanceof ProcessorQueryError &&
             error.code === "processor-index-stale"
           ) {
-            gaps.push({ code: "result-index-stale", literature_id: null });
+            addGap({ code: "result-index-stale", literature_id: null });
             cursor = { ...cursor, phase: "done" };
             continue;
           }
@@ -221,7 +266,7 @@ export class KnowledgeContextService {
           gap: "context-too-large",
           rank: 1,
         });
-        gaps.push({
+        addGap({
           code: "context-too-large",
           literature_id:
             item.kind === "generated-result" ? null : item.literature_id,
@@ -230,6 +275,15 @@ export class KnowledgeContextService {
           throw new KnowledgeContextError("context-budget-invalid");
       }
     }
-    return parseKnowledgeContextBundle(bundle(), request);
+    if (material) {
+      const latest = await material.indexSnapshot();
+      if (latest.state_token !== cursor.index_token)
+        throw new KnowledgeContextError("context-cursor-invalid");
+      addIndexGap(latest.coverage);
+    }
+    const result = bundle();
+    if (result.usage.bytes > request.budget.max_bytes)
+      throw new KnowledgeContextError("context-budget-invalid");
+    return parseKnowledgeContextBundle(result, request);
   }
 }

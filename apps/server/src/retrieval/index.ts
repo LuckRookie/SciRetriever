@@ -191,8 +191,11 @@ export class RetrievalIndexService {
     ));
   }
 
-  build(signal?: AbortSignal): Promise<RetrievalGeneration> {
-    return this.run(signal);
+  build(
+    signal?: AbortSignal,
+    progress?: (value: { done: number; total: number }) => Promise<void>,
+  ): Promise<RetrievalGeneration> {
+    return this.run(signal, progress);
   }
 
   /** Scan scalar fingerprints once, then publish only changed literatures. */
@@ -483,7 +486,10 @@ export class RetrievalIndexService {
     };
   }
 
-  private run(signal?: AbortSignal): Promise<RetrievalGeneration> {
+  private run(
+    signal?: AbortSignal,
+    progress?: (value: { done: number; total: number }) => Promise<void>,
+  ): Promise<RetrievalGeneration> {
     if (this.stopped)
       return Promise.reject(new RetrievalIndexError("index-cancelled"));
     const controller = new AbortController();
@@ -500,6 +506,9 @@ export class RetrievalIndexService {
         spoolRoot = await mkdtemp(join(tmpdir(), "sciretriever-index-"));
         const spoolPath = join(spoolRoot, "entries.ndjson");
         revision = await store.revision();
+        const total = progress ? await store.sourceCount() : 0;
+        let progressAt = performance.now();
+        await progress?.({ done: 0, total });
         const spool = await open(spoolPath, "wx", 0o600);
         let sourceCount = 0;
         let entryCount = 0;
@@ -552,6 +561,12 @@ export class RetrievalIndexService {
             batchBytes += bytes;
           }
           await flush();
+          if (progress && performance.now() - progressAt >= 250) {
+            if (sourceCount > total)
+              throw new RetrievalStorageError("index-stale");
+            await progress({ done: sourceCount, total });
+            progressAt = performance.now();
+          }
         };
         try {
           let after: string | null = null;
@@ -653,6 +668,11 @@ export class RetrievalIndexService {
           await spool.close();
         }
         check(signal);
+        if (progress) {
+          if (sourceCount !== total)
+            throw new RetrievalStorageError("index-stale");
+          await progress({ done: sourceCount, total });
+        }
         const generation = await store.beginGeneration(revision, signal);
         const input = createReadStream(spoolPath);
         const reader = createInterface({

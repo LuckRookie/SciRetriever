@@ -1,9 +1,18 @@
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  open,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+  type FileHandle,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { expect, it, vi } from "vitest";
 import { IndexRefreshService } from "../src/retrieval/refresh.js";
 import { IndexRefreshStateStore } from "../src/storage/retrieval-refresh.js";
+import { idleIndexRefreshStatus } from "@sciretriever/contracts";
 
 function deferred() {
   let resolve!: () => void;
@@ -12,6 +21,44 @@ function deferred() {
   });
   return { promise, resolve };
 }
+
+it("reopens the state when atomic replacement unlinks the opened inode before fstat", async () => {
+  const root = await mkdtemp(
+    join(tmpdir(), "sciretriever-index-state-rename-"),
+  );
+  const store = new IndexRefreshStateStore(join(root, "catalog.sqlite"));
+  let restore: (() => void) | undefined;
+  try {
+    await store.update((state) => state);
+    const replacement = `${store.path}.replacement`;
+    const next = {
+      ...idleIndexRefreshStatus(),
+      request_sequence: 1,
+      status: "scheduled",
+    };
+    await writeFile(replacement, JSON.stringify(next), { mode: 0o600 });
+    const probe = await open(store.path, "r");
+    const prototype = Object.getPrototypeOf(probe) as Pick<FileHandle, "stat">;
+    await probe.close();
+    const stat = prototype.stat;
+    let unlinked = false;
+    const pending = vi
+      .spyOn(prototype, "stat")
+      .mockImplementationOnce(async function (this: FileHandle) {
+        await rename(replacement, store.path);
+        const value = await stat.call(this);
+        unlinked = value.nlink === 0;
+        return value;
+      });
+    restore = () => pending.mockRestore();
+    expect(await store.read()).toMatchObject(next);
+    expect(unlinked).toBe(true);
+  } finally {
+    restore?.();
+    await store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 const generation = (revision: number) => ({
   generation_id: "00000000-0000-0000-0000-000000000101",
   source_revision: revision,

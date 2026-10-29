@@ -4446,6 +4446,7 @@ port.on("message", (message: WorkerMessage) => {
           fail();
         const allowed = [
           "revision",
+          "sourceCount",
           "metadataPage",
           "documentPage",
           "beginGeneration",

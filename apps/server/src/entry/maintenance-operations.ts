@@ -16,6 +16,7 @@ import {
   parseExtractionReceiptResult,
   parseExtractionSubmission,
   parseLiteratureId,
+  parseIndexRebuildRequest,
 } from "@sciretriever/contracts";
 import { SnapshotError } from "../analysis/snapshots.js";
 import { ArchiveError } from "../archive/orchestrator.js";
@@ -117,6 +118,7 @@ export const MAINTENANCE_OPERATIONS = [
   "task-create",
   "resolve-intervention",
   "rebuild-index",
+  "index-refresh",
   "verify-index",
   "verify-catalog",
   ...EXTRACTION_OPERATIONS.map((name) => `extraction-${name}` as const),
@@ -326,10 +328,22 @@ async function performMaintenance(
       );
     }
     case "rebuild-index": {
-      operationRecord(input, []);
+      const value = operationRecord(input, [], ["background"]);
+      const request = parseIndexRebuildRequest({ kind: "rebuild", ...value });
+      if (request.background) {
+        const queued = app.maintenance?.scheduleIndexRebuild;
+        if (!queued) throw new ProductOperationError("maintenance-unavailable");
+        return queued();
+      }
       const rebuild = app.maintenance?.rebuildIndex;
       if (!rebuild) throw new ProductOperationError("maintenance-unavailable");
       return rebuild(signal);
+    }
+    case "index-refresh": {
+      operationRecord(input, []);
+      const refresh = app.maintenance?.scheduleIndexRefresh;
+      if (!refresh) throw new ProductOperationError("maintenance-unavailable");
+      return refresh();
     }
     case "verify-index": {
       operationRecord(input, []);
