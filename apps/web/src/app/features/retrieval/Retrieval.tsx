@@ -42,6 +42,13 @@ import { navigate, useUrlState } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
 import { errorMessage } from "../../strings.js";
 import { download } from "../library/OperationDialog.js";
+import {
+  answerIndex,
+  IndexLine,
+  useIndexMark,
+  useIndexStatus,
+  type AnswerIndex,
+} from "./IndexLine.js";
 import "./retrieval.css";
 // Saved operator results are searched here too; the list lives with the results.
 const ResultList = lazy(() =>
@@ -63,6 +70,10 @@ interface State {
   next: string | null;
   basket: ReadonlyMap<string, KnowledgeContextItem>;
   status: string;
+  /** Index the last answer was read from; the index line reads it. */
+  answerIndex: AnswerIndex | null;
+  /** Index state the last answer was read against. */
+  indexMark: string | null;
   generation: number;
   technical: unknown;
 }
@@ -80,6 +91,8 @@ const initial = (): State => ({
   next: null,
   basket: new Map(),
   status: "输入关键词后检索已有材料。",
+  answerIndex: null,
+  indexMark: null,
   generation: 0,
   technical: null,
 });
@@ -131,9 +144,12 @@ function TextRetrieval({ header }: { header: ReactNode }) {
     queries = useQueryClient();
   const [state, setState] = useState(() => sessions.get(api) ?? initial()),
     [busy, setBusy] = useState(false),
+    [slow, setSlow] = useState(false),
     [error, setError] = useState<string | null>(null);
   const active = useRef<AbortController | null>(null),
     serial = useRef(0);
+  const index = useIndexStatus(state.answerIndex),
+    indexMark = useIndexMark();
   useEffect(() => {
     sessions.set(api, state);
   }, [api, state]);
@@ -160,7 +176,11 @@ function TextRetrieval({ header }: { header: ReactNode }) {
     active.current = controller;
     const version = ++serial.current;
     setBusy(true);
+    setSlow(false);
     setError(null);
+    const slowTimer = setTimeout(() => {
+      if (version === serial.current) setSlow(true);
+    }, 3000);
     try {
       const ids =
         state.draft.scope === "selection"
@@ -207,17 +227,11 @@ function TextRetrieval({ header }: { header: ReactNode }) {
         staleTime: 0,
       });
       if (version !== serial.current || controller.signal.aborted) return;
-      const codes = [bundle.coverage, ...bundle.gaps.map((gap) => gap.code)];
-      const issue = (
-        [
-          ["index-unavailable", "检索索引尚未建立"],
-          ["index-stale", "检索索引已过期"],
-          ["index-corrupt", "检索索引不可用"],
-        ] as const
-      )
-        .filter(([code]) => codes.some((value) => value.endsWith(code)))
-        .map(([, text]) => text)
-        .join("；");
+      // The index line below the search box explains an index that is not
+      // current; this line only describes the results themselves.
+      const answer = answerIndex(bundle),
+        indexed = answer !== "missing" && answer !== "corrupt";
+      const mark = indexMark();
       setState((value) => {
         const items = append ? [...value.items, ...bundle.items] : bundle.items;
         return {
@@ -226,7 +240,9 @@ function TextRetrieval({ header }: { header: ReactNode }) {
           next: bundle.continuation,
           items,
           generation: append ? value.generation : value.generation + 1,
-          status: `${items.length} 条结果${issue ? ` · ${issue}。请在设置的高级工具中显式重建相应索引；当前结果不代表完整检索。` : !items.length ? " · 未匹配当前关键词，可尝试原文用词或调整范围。" : bundle.truncated ? " · 当前结果包含部分片段，可以继续读取。" : ""}`,
+          answerIndex: answer,
+          indexMark: mark,
+          status: `${items.length} 条结果${!items.length && indexed ? " · 未匹配当前关键词，可尝试原文用词或调整范围。" : bundle.truncated ? " · 当前结果包含部分片段，可以继续读取。" : ""}`,
           technical: {
             coverage: bundle.coverage,
             gaps: bundle.gaps,
@@ -238,11 +254,24 @@ function TextRetrieval({ header }: { header: ReactNode }) {
       if (version === serial.current && !controller.signal.aborted)
         setError(errorMessage(error));
     } finally {
+      clearTimeout(slowTimer);
       if (version === serial.current && !controller.signal.aborted) {
         setBusy(false);
+        setSlow(false);
         active.current = null;
       }
     }
+  };
+  const cancel = () => {
+    serial.current++;
+    active.current?.abort();
+    active.current = null;
+    setBusy(false);
+    setSlow(false);
+    setState((value) => ({
+      ...value,
+      status: value.current ? "检索已取消，保留上次结果。" : "检索已取消。",
+    }));
   };
   const toggle = (item: KnowledgeContextItem) =>
     setState((value) => {
@@ -347,8 +376,27 @@ function TextRetrieval({ header }: { header: ReactNode }) {
             </div>
           </Disclosure>
         </form>
-        <p role="status" data-testid="retrieval-status">
-          {busy ? "正在检索已有材料与知识…" : state.status}
+        <IndexLine
+          status={index.data}
+          answer={state.answerIndex}
+          mark={state.indexMark}
+          onSearchAgain={() => void run()}
+        />
+        <p
+          role="status"
+          className="retrieval-status"
+          data-testid="retrieval-status"
+        >
+          {busy
+            ? slow
+              ? "仍在检索…"
+              : "正在检索已有材料与知识…"
+            : state.status}
+          {slow && (
+            <Button variant="text" size="compact" onPress={cancel}>
+              取消
+            </Button>
+          )}
         </p>
         {error && (
           <ErrorNotice
@@ -386,7 +434,13 @@ function TextRetrieval({ header }: { header: ReactNode }) {
           </Button>
         )}
         <TechDetails>
-          <pre>{JSON.stringify(state.technical, null, 2)}</pre>
+          <pre>
+            {JSON.stringify(
+              { results: state.technical, index: index.data ?? null },
+              null,
+              2,
+            )}
+          </pre>
         </TechDetails>
       </section>
       <aside className="context-basket" aria-label="上下文">

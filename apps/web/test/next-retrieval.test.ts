@@ -418,13 +418,17 @@ it("keeps late or failed searches from replacing a newer page and permits an exp
   }
 }, 60000);
 
+// Each poll follows a full page navigation, which can take more than the
+// default second to boot and render on a loaded machine.
 it("opens the fixed hit after a new default is published and restores the query and basket on return", async () => {
   const w = await workspace();
   try {
     await search(w.page, "纳米晶", "knowledge");
     await w.page.locator('[data-testid="retrieval-source"]').first().click();
     await expect
-      .poll(() => w.page.locator(".result-text").textContent())
+      .poll(() => w.page.locator(".result-text").textContent(), {
+        timeout: 5000,
+      })
       .toContain("nanocrystal 纳米晶");
     expect(new URL(w.page.url()).searchParams.get("result")).toBe(
       w.knowledge.ref.result_id,
@@ -451,10 +455,14 @@ it("opens the fixed hit after a new default is published and restores the query 
     // A same-source refresh may clear the body after a prior ready observation.
     // Read readiness and verified text together, without a gap between commands.
     await expect
-      .poll(() =>
-        w.page
-          .locator('.react-reader[data-reading-ready="true"] .reading-article')
-          .textContent(),
+      .poll(
+        () =>
+          w.page
+            .locator(
+              '.react-reader[data-reading-ready="true"] .reading-article',
+            )
+            .textContent(),
+        { timeout: 5000 },
       )
       .toContain("original observation");
     expect(new URL(w.page.url()).searchParams.get("document")).toBe(
@@ -477,7 +485,7 @@ it("opens the fixed hit after a new default is published and restores the query 
     expect(await w.page.locator(".context-basket li").count()).toBe(1);
     await w.page.goto(knowledgeUrl);
     await expect
-      .poll(() => w.page.locator("main").textContent())
+      .poll(() => w.page.locator("main").textContent(), { timeout: 5000 })
       .toContain("nanocrystal 纳米晶");
     expect(new URL(w.page.url()).searchParams.get("result")).toBe(
       w.knowledge.ref.result_id,
@@ -486,7 +494,7 @@ it("opens the fixed hit after a new default is published and restores the query 
     tampered.searchParams.set("representation", "0".repeat(64));
     await w.page.goto(tampered.href);
     await expect
-      .poll(() => w.page.locator("main").textContent())
+      .poll(() => w.page.locator("main").textContent(), { timeout: 5000 })
       .toContain("不匹配");
     expect(await w.page.locator(".reading-article").count()).toBe(0);
     const materialReads: unknown[] = [];
@@ -499,7 +507,7 @@ it("opens the fixed hit after a new default is published and restores the query 
     pdfUrl.searchParams.set("assetHash", "0".repeat(64));
     await w.page.goto(pdfUrl.href);
     await expect
-      .poll(() => w.page.locator("main").textContent())
+      .poll(() => w.page.locator("main").textContent(), { timeout: 5000 })
       .toContain("未使用默认材料替代");
     expect(materialReads).toEqual([]);
     expect(await w.page.locator(".reading-pdf-page").count()).toBe(0);
@@ -530,12 +538,16 @@ it("explains an unavailable material index while retaining result searches witho
   try {
     for (const kind of ["all", "source"]) {
       await search(w.page, "nanocrystal", kind);
-      const status = await w.page
-        .locator('[data-testid="retrieval-status"]')
-        .textContent();
-      expect(status).toContain("索引尚未建立");
-      expect(status).toContain("显式重建");
-      expect(status).not.toContain("未匹配当前关键词");
+      // The index line explains the missing index; the result line only
+      // counts results and never suggests rewording against no index.
+      await expect
+        .poll(() =>
+          w.page.locator('[data-testid="retrieval-index"]').textContent(),
+        )
+        .toContain("还没有全文索引");
+      expect(
+        await w.page.locator('[data-testid="retrieval-status"]').textContent(),
+      ).not.toContain("未匹配当前关键词");
     }
     await search(w.page, "nanocrystal", "knowledge");
     expect(

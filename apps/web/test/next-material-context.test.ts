@@ -131,16 +131,19 @@ it("rebuilds the v4 index explicitly and searches Context in the real browser pa
       if (request.url().includes("rebuild-index")) rebuilds++;
     });
     await page
-      .getByRole("button", { name: "重建材料索引", exact: true })
+      .getByRole("button", { name: "重建全文索引", exact: true })
       .click();
     expect(rebuilds).toBe(0);
     await page
-      .getByRole("dialog", { name: "重建材料索引？" })
-      .getByRole("button", { name: "重建材料索引", exact: true })
+      .getByRole("dialog", { name: "重建全文索引？" })
+      .getByRole("button", { name: "重建全文索引", exact: true })
       .click();
+    // The rebuild runs in the background; the card polls its status.
     await expect
-      .poll(() => page.getByRole("status").allTextContents())
-      .toContainEqual(expect.stringContaining("索引已发布"));
+      .poll(() => page.getByRole("status").allTextContents(), {
+        timeout: 15000,
+      })
+      .toContainEqual(expect.stringContaining("全文索引已重建"));
     expect(rebuilds).toBe(1);
     await page.goto(`${web.origin}/query?view=ask`);
     await page

@@ -6,7 +6,6 @@ import {
   parseExtractionPreparationRequest,
   parseExtractionPreparationResult,
   parseProcessingTaskRequest,
-  parseRetrievalGenerationReceipt,
   parseStrictJsonValue,
   type ExtractionSpec,
 } from "@sciretriever/contracts";
@@ -39,6 +38,12 @@ import { errorMessage } from "../../strings.js";
 import Snapshots from "../archive/Snapshots.js";
 import { boundedResponseBytes, extractionTransport } from "./delivery.js";
 import "./maintenance.css";
+import {
+  rebuildProgress,
+  useIndexStatus,
+  useRebuildIndex,
+  working,
+} from "../retrieval/IndexLine.js";
 import { maintain } from "./transport.js";
 
 export default function Maintenance({
@@ -707,38 +712,66 @@ function Materials() {
     </div>
   );
 }
+/** The rebuild runs on the server; the card only reads and queues it. */
+function IndexCard() {
+  const index = useIndexStatus(null).data,
+    rebuild = useRebuildIndex();
+  // The finish time seen when this page asked for a rebuild, so an older
+  // finished rebuild is not reported as this one.
+  const [asked, setAsked] = useState<string | null | undefined>(undefined);
+  const rebuilding = !!index && working(index) && index.operation === "rebuild";
+  let text = "";
+  if (rebuilding) {
+    const done = rebuildProgress(index);
+    text = `正在重建全文索引${done && `，${done}`}。期间照常可搜，可以离开本页。`;
+  } else if (index && working(index)) text = "全文索引正在更新最近变化的文献。";
+  else if (
+    asked !== undefined &&
+    index?.operation === "rebuild" &&
+    index.finished_at !== asked
+  )
+    text =
+      index.status === "failed"
+        ? "重建没有完成，旧索引仍照常可搜。可以重试。"
+        : `全文索引已重建${index.last_refresh_ms ? `，用时 ${Math.max(1, Math.round(index.last_refresh_ms / 1000))} 秒` : ""}。`;
+  else if (index?.index_state === "missing") text = "还没有全文索引。";
+  else if (index?.index_state === "corrupt")
+    text = "全文索引已损坏，需要重建。";
+  return (
+    <Card title="全文索引">
+      <p>
+        从已保存的元数据和原文重新建立全文索引，不下载
+        PDF、解析材料或调用模型。平时索引会随文献变化自动更新，只在索引缺失、损坏或检索结果明显不对时需要重建。
+      </p>
+      <Button
+        isDisabled={rebuilding}
+        confirm={{
+          title: "重建全文索引？",
+          description:
+            "约需几分钟，在后台进行，期间旧索引照常可搜。可以离开本页，完成后自动生效。",
+          confirmLabel: "重建全文索引",
+        }}
+        onPress={async () => {
+          setAsked(index?.finished_at ?? null);
+          await rebuild();
+        }}
+      >
+        重建全文索引
+      </Button>
+      <p role="status">{text}</p>
+    </Card>
+  );
+}
+
 function Indexes() {
   const api = useApi(),
     context = useOperationContext();
-  const [status, setStatus] = useState(""),
-    [raw, setRaw] = useState(""),
+  const [raw, setRaw] = useState(""),
     [start, setStart] = useState(false),
     [task, setTask] = useState("");
   return (
     <div className="maintenance-grid">
-      <Card title="检索索引">
-        <p>只重建已保存材料的检索投影，不下载 PDF、解析材料或调用模型。</p>
-        {([["rebuild-index", "重建材料索引"]] as const).map(([path, label]) => (
-          <Button
-            key={path}
-            confirm={{
-              title: `${label}？`,
-              description:
-                "将读取已有材料并发布新的检索投影，期间旧索引仍可使用。",
-              confirmLabel: label,
-            }}
-            onPress={async () => {
-              const result = parseRetrievalGenerationReceipt(
-                (await maintain(api, path, { kind: "rebuild" })).result,
-              );
-              setStatus(`索引已发布 · ${result.entry_count} 条检索记录。`);
-            }}
-          >
-            {label}
-          </Button>
-        ))}
-        <p role="status">{status}</p>
-      </Card>
+      <IndexCard />
       {api.kind === "workspace" ? (
         <Card title="提交加工请求 JSON">
           <p>

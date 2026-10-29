@@ -42,7 +42,37 @@
     font-size: var(--text-caption);
     color: var(--fg2);
   }
-  [data-testid="retrieval-status"] {
+  /* Index state sits between the query and the results, apart from them. */
+  .retrieval-index {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    margin: var(--space-3) 0 0;
+    padding: var(--space-2) var(--space-3);
+    border-left: 2px solid var(--line3);
+    border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+    background: var(--callout);
+    font-size: var(--text-caption);
+    line-height: var(--lh-caption);
+    color: var(--fg2);
+  }
+  .retrieval-index[data-tone="problem"] {
+    border-left-color: var(--t-yellow);
+    color: var(--fg);
+  }
+  .retrieval-index[data-tone="done"] {
+    border-left-color: var(--blue);
+  }
+  .retrieval-index > span {
+    flex: 1 1 24em;
+    min-width: 0;
+  }
+  .retrieval-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 28px;
     font-size: var(--text-caption);
     color: var(--fg2);
   }
