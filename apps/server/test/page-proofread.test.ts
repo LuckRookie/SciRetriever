@@ -2,17 +2,11 @@ import { expect, it } from "vitest";
 import type {
   ArrangementOperation,
   CorrectOperation,
-  PageReviewEvidence,
-  RetainedPageSuspect,
 } from "@sciretriever/contracts";
 import { AgentFailure } from "../src/agents/protocol.js";
+import type { ModelRequest } from "../src/agents/model-protocol.js";
 import { ArchivePageProofreadService } from "../src/proofread/page-service.js";
-import {
-  acceptPageSubmission,
-  applyLeafCorrections,
-  pageReviewSuspects,
-  retainedPageSuspects,
-} from "../src/proofread/leaf-corrections.js";
+import { applyLeafCorrections } from "../src/proofread/leaf-corrections.js";
 import { arrangementLeafId } from "../src/archive/arrangement.js";
 import { textHash } from "../src/archive/text-source.js";
 import {
@@ -24,34 +18,232 @@ import {
   initialPage,
   memoryTextCache,
   modelTool,
-  toolJson,
 } from "./archive-text-fixture.js";
 const hash = "d".repeat(64);
-it("retries only an explicitly selected failed page and preserves other unfinished records without charging them again", async () => {
+/** The page JSON the host sent: leaves, differences, figure text. */
+function pageInput(request: ModelRequest) {
+  for (const m of request.messages)
+    for (const p of m.parts)
+      if ("text" in p && p.text.startsWith("{")) {
+        const v = JSON.parse(p.text) as Record<string, unknown>;
+        if (Array.isArray(v.leaves))
+          return v as {
+            page_index: number;
+            leaves: { leaf: string; type: string; text: string }[];
+            differences?: {
+              leaf: string;
+              parsed: string;
+              text_layer: string;
+            }[];
+            note?: string;
+          };
+      }
+  throw Error("missing-page-input");
+}
+const submit = (
+  corrections: {
+    leaf: string;
+    original: string;
+    replacement: string;
+    reason: string;
+  }[] = [],
+  uncertain: { leaf: string; text: string; reason: string }[] = [],
+) => modelTool("submit_corrections", { corrections, uncertain });
+
+it("sends one request per page with the page image, its leaves and the text-layer differences", async () => {
+  const f = await archiveTextFixture(
+      [
+        {
+          text: "The sample was heated to 50 °C for 2 h and then cooled slowly.",
+        },
+      ],
+      {
+        layers: [
+          "The sample was heated to 60 °C for 2 h and then cooled slowly.",
+        ],
+      },
+    ),
+    requests: ModelRequest[] = [];
+  const runtime = fakeTextRuntime(async (request) => {
+    requests.push(request);
+    const input = pageInput(request);
+    return submit([
+      {
+        leaf: input.leaves[0]!.leaf,
+        original: "50 °C",
+        replacement: "60 °C",
+        reason: "image",
+      },
+    ]);
+  });
+  try {
+    const result = await new ArchivePageProofreadService(
+      runtime,
+      fakePages(f.pages),
+      memoryTextCache().cache,
+    ).build(f.source, arranged(f.source), f.pages);
+    expect(requests).toHaveLength(1);
+    const first = requests[0]!.messages.find((m) => m.role === "user")!;
+    expect("data" in first.parts[0]!).toBe(true);
+    expect(requests[0]!.tool_choice).toBe("required");
+    expect(pageInput(requests[0]!)).toMatchObject({
+      page_index: 0,
+      leaves: [{ leaf: "b1", type: "text" }],
+      differences: [{ leaf: "b1", parsed: "50", text_layer: "60" }],
+    });
+    const page = result.pages[0]!;
+    expect(result.complete).toBe(true);
+    expect(page.status).toBe("accepted");
+    expect(page.corrections.map((c) => c.operation.replacement)).toEqual([
+      "60 °C",
+    ]);
+    expect(page.evidence.viewed_full_page).toBe(true);
+    expect(page.review).toEqual({ refused: [], uncertain: [] });
+    expect(result.usage.calls).toBe(1);
+  } finally {
+    await runtime.close();
+  }
+});
+
+it("refuses edits that fail the program checks, keeps them in the review notes and corrects repeats everywhere", async () => {
+  const text =
+    "Pd2(dbab)3 and Pd2(dbab)3 gave 3a in 85% yield; see Seo, J.; Jeon, I.; Ryu, T. for details.";
+  const f = await archiveTextFixture([{ text }], {
+    layers: [text.replaceAll("dbab", "dba")],
+  });
+  const runtime = fakeTextRuntime(async (request) => {
+    const b = pageInput(request).leaves[0]!.leaf;
+    return submit(
+      [
+        {
+          leaf: b,
+          original: "Pd2(dbab)3",
+          replacement: "Pd2(dba)3",
+          reason: "printed dba",
+        },
+        {
+          leaf: b,
+          original: "Jeon, I.",
+          replacement: "Jeon, J.",
+          reason: "initial",
+        },
+        { leaf: b, original: "", replacement: "Figure 2", reason: "drawn" },
+        {
+          leaf: b,
+          original: "for details.",
+          replacement: "for details. © 2024 Elsevier",
+          reason: "footer",
+        },
+        { leaf: b, original: "85% yield", replacement: "% yield", reason: "x" },
+        {
+          leaf: "b9",
+          original: "3a",
+          replacement: "3b",
+          reason: "unknown leaf",
+        },
+      ],
+      [{ leaf: b, text: "Ryu, T.", reason: "blurred" }],
+    );
+  });
+  try {
+    const result = await new ArchivePageProofreadService(
+      runtime,
+      fakePages(f.pages),
+      memoryTextCache().cache,
+    ).build(f.source, arranged(f.source), f.pages);
+    const page = result.pages[0]!;
+    expect(page.status).toBe("accepted");
+    expect(
+      page.corrections.map((c) => [c.operation.start, c.operation.replacement]),
+    ).toEqual([
+      [0, "Pd2(dba)3"],
+      [15, "Pd2(dba)3"],
+    ]);
+    expect(page.review!.refused.map((r) => r.rule)).toEqual([
+      "not-printed",
+      "insert-from-nothing",
+      "copyright",
+      "drops-digits",
+    ]);
+    expect(page.review!.uncertain).toEqual([
+      expect.objectContaining({ leaf_id: null, text: "3a" }),
+      expect.objectContaining({
+        leaf_id: page.retained_leaf_ids[0],
+        text: "Ryu, T.",
+      }),
+    ]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+it("takes a DOI as the text layer prints it and never edits a leaf a person fixed", async () => {
+  const f = await archiveTextFixture(
+      [
+        {
+          text: "Available at https://doi.org/10.1002/smssc.202300070 online.",
+        },
+        { text: "Manually fixed sentence with a typo here." },
+      ],
+      {
+        layers: [
+          "Available at https://doi.org/10.1002/smsc.202300070 online. Manually fixed sentence with a typo here.",
+        ],
+      },
+    ),
+    snapshot = arranged(f.source),
+    locked = snapshot.leaves[1]!;
+  const runtime = fakeTextRuntime(async (request) =>
+    submit([
+      {
+        leaf: pageInput(request).leaves[1]!.leaf,
+        original: "typo",
+        replacement: "tpyo",
+        reason: "x",
+      },
+    ]),
+  );
+  try {
+    const result = await new ArchivePageProofreadService(
+      runtime,
+      fakePages(f.pages),
+      memoryTextCache().cache,
+    ).build(f.source, snapshot, f.pages, undefined, [
+      {
+        leaf_id: locked.leaf_id,
+        replacement: "Manually fixed sentence without a typo.",
+        decision_id: "00000000-0000-4000-8000-000000000123",
+      },
+    ]);
+    const page = result.pages[0]!;
+    expect(
+      page.corrections.map((c) => [c.source, c.operation.replacement]).sort(),
+    ).toEqual([
+      ["agent", "https://doi.org/10.1002/smsc.202300070"],
+      ["manual", "Manually fixed sentence without a typo."],
+    ]);
+    expect(page.review!.refused).toEqual([
+      expect.objectContaining({ leaf_id: locked.leaf_id, rule: "locked" }),
+    ]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+it("sends a failed request once more, then records only that page as failed", async () => {
   const f = await archiveTextFixture([
       { text: "FIRSTPAGE synthetic.", page: 0 },
       { text: "SECONDPAGE synthetic.", page: 1 },
     ]),
     snapshot = arranged(f.source),
     cache = memoryTextCache(),
-    steps = new Map<number, number>(),
     visited: number[] = [];
-  let fail = true;
+  let failing = new Set([0, 1]);
   const runtime = fakeTextRuntime(async (request) => {
     const { page_index } = initialPage(request);
     visited.push(page_index);
-    if (fail) throw new AgentFailure("agent-response-limit");
-    const n = (steps.get(page_index) ?? 0) + 1;
-    steps.set(page_index, n);
-    if (n === 1)
-      return modelTool("read_blocks", {
-        page_index,
-        index: 0,
-        offset: 0,
-        limit: 20,
-      });
-    if (n === 2) return modelTool("view_page", { page_index, region: null });
-    return modelTool("submit_page", { no_change: true });
+    if (failing.has(page_index)) throw new AgentFailure("agent-response-limit");
+    return submit();
   });
   try {
     const service = new ArchivePageProofreadService(
@@ -61,7 +253,10 @@ it("retries only an explicitly selected failed page and preserves other unfinish
     );
     const first = await service.build(f.source, snapshot, f.pages);
     expect(first.pages.map((p) => p.status)).toEqual(["failed", "failed"]);
-    fail = false;
+    expect(visited.sort()).toEqual([0, 0, 1, 1]);
+    expect(first.pages[0]!.usage.calls).toBe(2);
+    // A selected retry runs page 0 only and leaves page 1's record as it was.
+    failing = new Set();
     visited.length = 0;
     const second = await service.build(
       f.source,
@@ -72,12 +267,11 @@ it("retries only an explicitly selected failed page and preserves other unfinish
       undefined,
       new Map([[1, first.pages[1]!]]),
     );
-    expect(visited).toEqual([0, 0, 0]);
+    expect(visited).toEqual([0]);
     expect(second.pages.map((p) => p.status)).toEqual(["accepted", "failed"]);
     expect(second.pages[1]).toEqual(first.pages[1]);
     expect(second.untouched_page_indexes).toEqual([1]);
-    expect(second.complete).toBe(false);
-    expect(second.usage.calls).toBe(3);
+    expect(second.usage.calls).toBe(1);
     visited.length = 0;
     const third = await service.build(
       f.source,
@@ -88,18 +282,89 @@ it("retries only an explicitly selected failed page and preserves other unfinish
       undefined,
       new Map([[0, second.pages[0]!]]),
     );
-    expect(visited).toEqual([1, 1, 1]);
+    expect(visited).toEqual([1]);
     expect(third.complete).toBe(true);
     expect(third.reused_page_indexes).toEqual([0]);
-    expect(third.usage.calls).toBe(3);
   } finally {
     await runtime.close();
   }
 });
-const evidence = (ids: readonly string[]): PageReviewEvidence => ({
-  read_leaf_ids: ids,
-  viewed_full_page: true,
-  viewed_regions: [],
+
+it("isolates page context and reuses unchanged page inputs after rearrangement", async () => {
+  const f = await archiveTextFixture([
+      { text: "FIRSTPAGE secret synthetic.", page: 0 },
+      { text: "SECONDPAGE synthetic.", page: 1 },
+      { text: "SECONDNOTE synthetic.", page: 1 },
+      { text: "THIRDPAGE synthetic.", page: 2 },
+    ]),
+    snapshot = arranged(f.source),
+    cache = memoryTextCache(),
+    seenPages: number[] = [];
+  const runtime = fakeTextRuntime(async (request) => {
+    const { page_index } = initialPage(request);
+    seenPages.push(page_index);
+    const body = JSON.stringify(request.messages);
+    for (const [index, marker] of [
+      "FIRSTPAGE",
+      "SECONDPAGE",
+      "THIRDPAGE",
+    ].entries())
+      if (index !== page_index) expect(body).not.toContain(marker);
+    return submit();
+  });
+  try {
+    const service = () =>
+      new ArchivePageProofreadService(runtime, fakePages(f.pages), cache.cache);
+    const first = await service().build(f.source, snapshot, f.pages);
+    expect(first.complete).toBe(true);
+    expect(seenPages.sort()).toEqual([0, 1, 2]);
+    seenPages.length = 0;
+    const second = await service().build(f.source, snapshot, f.pages);
+    expect(second.reused_page_indexes).toEqual([0, 1, 2]);
+    expect(seenPages).toEqual([]);
+    const changed = assigned(f.source),
+      leaf = snapshot.leaves[2]!;
+    changed[2] = { kind: "drop", leaf_id: leaf.leaf_id, reason: "footer" };
+    const third = await service().build(
+      f.source,
+      arranged(f.source, changed),
+      f.pages,
+    );
+    expect(third.complete).toBe(true);
+    expect(third.reused_page_indexes).toEqual([0, 2]);
+    expect(seenPages).toEqual([1]);
+    expect(third.pages[1]!.page_input_sha256).not.toBe(
+      second.pages[1]!.page_input_sha256,
+    );
+  } finally {
+    await runtime.close();
+  }
+});
+
+it("ends a page with a typed page-tools stop and no request when image rendering fails", async () => {
+  const f = await archiveTextFixture([{ text: "Content." }]),
+    runtime = fakeTextRuntime(async () => submit());
+  try {
+    const result = await new ArchivePageProofreadService(
+      runtime,
+      {
+        ...fakePages(f.pages),
+        image: async () => {
+          throw Error("synthetic-render-failure");
+        },
+      },
+      memoryTextCache().cache,
+    ).build(f.source, arranged(f.source), f.pages);
+    expect(result.complete).toBe(false);
+    expect(result.pages[0]!.stop).toMatchObject({
+      code: "page-tools-unavailable",
+      page_index: 0,
+      scope: "page",
+    });
+    expect(result.usage.calls).toBe(0);
+  } finally {
+    await runtime.close();
+  }
 });
 it("applies leaf-local code-point corrections with an exact raw span, including insertions and deletions", async () => {
   const f = await archiveTextFixture([{ text: "prefix:A😀B12Z" }]),
@@ -224,309 +489,6 @@ it("refuses overlapping edits and flattened table corrections while retaining va
     ),
   ).toThrow();
 });
-it("subtracts only deleted token occurrences, retains repeated-number questions and has no cross-page suspect type", async () => {
-  const f = await archiveTextFixture(
-      [{ text: "Yield 5." }, { text: "5", type: "footer" }],
-      { layers: ["Yield 5 5 5."] },
-    ),
-    ops = assigned(f.source),
-    drop = ops[1]!;
-  ops[1] = {
-    kind: "drop",
-    leaf_id: "leaf_id" in drop ? drop.leaf_id : "",
-    reason: "footer",
-  };
-  const snapshot = arranged(f.source, ops),
-    suspects = retainedPageSuspects(
-      f.pages[0]!,
-      snapshot.leaves.slice(0, 1),
-      snapshot.leaves.slice(1),
-      hash,
-    );
-  // A number is counted once, as a token mismatch, not also as missing text.
-  expect(suspects.map((s) => [s.kind, s.tokens])).toEqual([
-    ["token-mismatch", ["5"]],
-  ]);
-  const badGlyph = await archiveTextFixture([{ text: "x\uFFFD" }], {
-    layers: ["x"],
-  });
-  expect(
-    retainedPageSuspects(
-      badGlyph.pages[0]!,
-      arranged(badGlyph.source).leaves,
-      [],
-      hash,
-    ).some((s) => s.tokens.includes("U+FFFD")),
-  ).toBe(true);
-});
-it("asks one question per run of adjacent differences and ignores where a compound hyphen breaks", async () => {
-  // A real RSC page: scheme text the layer lacks became 115 one-word questions, and a
-  // compound hyphen at a layer line end made "metal-catalyzed" two words on one side only.
-  const f = await archiveTextFixture(
-    [
-      {
-        text: "A metal-catalyzed route. Scheme scope with varied aryl iodides 97% yield.",
-      },
-    ],
-    { layers: ["A metal-\ncatalyzed route."] },
-  );
-  const suspects = retainedPageSuspects(
-    f.pages[0]!,
-    arranged(f.source).leaves,
-    [],
-    hash,
-  );
-  expect(suspects.map((s) => [s.kind, s.tokens])).toEqual([
-    [
-      "token-mismatch",
-      [
-        "Scheme",
-        "scope",
-        "with",
-        "varied",
-        "aryl",
-        "iodides",
-        "97",
-        "%",
-        "yield",
-      ],
-    ],
-  ]);
-});
-it("requires complete source reading, a full image and an explicit disposition for every original and newly introduced suspect", async () => {
-  const f = await archiveTextFixture([{ text: "Yield 67%." }], {
-      layers: ["Yield 97%."],
-    }),
-    leaves = arranged(f.source).leaves,
-    leaf = leaves[0]!,
-    initial = retainedPageSuspects(f.pages[0]!, leaves, [], hash),
-    base = {
-      page: f.pages[0]!,
-      retained: leaves,
-      deleted: [],
-      page_input_sha256: hash,
-      suspects: initial,
-      evidence: evidence([leaf.leaf_id]),
-    };
-  const value = {
-    schema_version: 2,
-    page_index: 0,
-    page_input_sha256: hash,
-    corrections: [],
-    no_change: true,
-    dispositions: initial.map((s) => ({
-      suspect_id: s.suspect_id,
-      status: "uncertain",
-      reason: "unclear",
-    })),
-  };
-  expect(() => acceptPageSubmission(base, value)).not.toThrow();
-  expect(() =>
-    acceptPageSubmission(
-      { ...base, evidence: { ...base.evidence, viewed_full_page: false } },
-      value,
-    ),
-  ).toThrow();
-  expect(() =>
-    acceptPageSubmission(
-      { ...base, evidence: { ...base.evidence, read_leaf_ids: [] } },
-      value,
-    ),
-  ).toThrow();
-  expect(() =>
-    acceptPageSubmission(base, { ...value, dispositions: [] }),
-  ).toThrow();
-  const operation: CorrectOperation = {
-      kind: "correct",
-      leaf_id: leaf.leaf_id,
-      start: 6,
-      end: 8,
-      original: "67",
-      replacement: "97",
-      basis_page_index: 0,
-      reason: "image",
-    },
-    applied = applyLeafCorrections(leaves, [operation], 0, hash),
-    fixed = {
-      ...value,
-      corrections: [operation],
-      no_change: false,
-      dispositions: initial.map((s) => ({
-        suspect_id: s.suspect_id,
-        status: "fixed",
-        correction_ids: [applied.records[0]!.correction_id],
-      })),
-    };
-  expect(acceptPageSubmission(base, fixed).texts.get(leaf.leaf_id)).toBe(
-    "Yield 97%.",
-  );
-  const introduces = { ...operation, replacement: "42" },
-    changed = applyLeafCorrections(leaves, [introduces], 0, hash),
-    questions = pageReviewSuspects(
-      f.pages[0]!,
-      leaves,
-      [],
-      hash,
-      changed.texts,
-    );
-  expect(questions.length).toBeGreaterThan(initial.length);
-  expect(() =>
-    acceptPageSubmission(base, {
-      ...value,
-      corrections: [introduces],
-      no_change: false,
-    }),
-  ).toThrow();
-  expect(() =>
-    acceptPageSubmission(
-      { ...base, suspects: questions },
-      {
-        ...value,
-        corrections: [introduces],
-        no_change: false,
-        dispositions: questions.map((s) => ({
-          suspect_id: s.suspect_id,
-          status: "uncertain",
-          reason: "unclear",
-        })),
-      },
-    ),
-  ).not.toThrow();
-});
-it.each(["text-layer", "image-only"] as const)(
-  "recovers a premature submission and crop-only view in one %s page session",
-  async (kind) => {
-    const f = await archiveTextFixture(
-        [{ text: "Page content." }],
-        kind === "image-only" ? { layers: [""] } : {},
-      ),
-      snapshot = arranged(f.source),
-      cache = memoryTextCache();
-    let calls = 0;
-    const runtime = fakeTextRuntime(async (request) => {
-      calls++;
-      const { page_index } = initialPage(request);
-      if (calls === 1) return modelTool("submit_page", { no_change: true });
-      if (calls === 2) {
-        expect(toolJson(request)).toMatchObject({ accepted: false });
-        return modelTool("view_page", { page_index, region: [0, 0, 500, 500] });
-      }
-      if (calls === 3)
-        return modelTool("read_blocks", {
-          page_index,
-          index: 0,
-          offset: 0,
-          limit: 20,
-        });
-      if (calls === 4) return modelTool("submit_page", { no_change: true });
-      if (calls === 5) {
-        expect(JSON.stringify(toolJson(request))).toContain(
-          "full-page-not-viewed",
-        );
-        return modelTool("view_page", { page_index, region: null });
-      }
-      return modelTool("submit_page", { no_change: true });
-    });
-    try {
-      const result = await new ArchivePageProofreadService(
-        runtime,
-        fakePages(f.pages),
-        cache.cache,
-      ).build(f.source, snapshot, f.pages);
-      expect(result.complete).toBe(true);
-      expect(result.pages[0]).toMatchObject({
-        status: "accepted",
-        no_change: true,
-        evidence: { viewed_full_page: true },
-        usage: { calls: 6 },
-      });
-      expect(cache.entries.size).toBe(1);
-    } finally {
-      await runtime.close();
-    }
-  },
-);
-it("isolates page context, retries only the failed page, and reuses unchanged page inputs after rearrangement", async () => {
-  const f = await archiveTextFixture([
-      { text: "FIRSTPAGE secret synthetic.", page: 0 },
-      { text: "SECONDPAGE synthetic.", page: 1 },
-      { text: "SECONDNOTE synthetic.", page: 1 },
-      { text: "THIRDPAGE synthetic.", page: 2 },
-    ]),
-    snapshot = arranged(f.source),
-    cache = memoryTextCache(),
-    steps = new Map<string, number>(),
-    seenPages: number[] = [];
-  let fail = true;
-  const runtime = fakeTextRuntime(async (request) => {
-    const { page_index, page_input_sha256 } = initialPage(request),
-      step = (steps.get(page_input_sha256) ?? 0) + 1;
-    steps.set(page_input_sha256, step);
-    seenPages.push(page_index);
-    const body = JSON.stringify(request.messages);
-    for (const [index, marker] of [
-      "FIRSTPAGE",
-      "SECONDPAGE",
-      "THIRDPAGE",
-    ].entries())
-      if (index !== page_index) expect(body).not.toContain(marker);
-    if (page_index === 1 && fail) {
-      fail = false;
-      steps.set(page_input_sha256, 0);
-      throw new AgentFailure("agent-response-limit");
-    }
-    if (step === 1)
-      return modelTool("read_blocks", {
-        page_index,
-        index: 0,
-        offset: 0,
-        limit: 20,
-      });
-    if (step === 2) return modelTool("view_page", { page_index, region: null });
-    return modelTool("submit_page", { no_change: true });
-  });
-  try {
-    const service = () =>
-      new ArchivePageProofreadService(runtime, fakePages(f.pages), cache.cache);
-    const first = await service().build(f.source, snapshot, f.pages);
-    expect(first.complete).toBe(false);
-    expect(first.pages.map((p) => p.status)).toEqual([
-      "accepted",
-      "failed",
-      "accepted",
-    ]);
-    expect(first.pages[1]!.stop?.code).toBe("response-too-large");
-    expect(first.pages[1]!.usage).toMatchObject({
-      calls: 1,
-      input_tokens: null,
-      output_tokens: null,
-      usage_complete: false,
-    });
-    seenPages.length = 0;
-    const second = await service().build(f.source, snapshot, f.pages);
-    expect(second.complete).toBe(true);
-    expect(second.reused_page_indexes).toEqual([0, 2]);
-    expect(seenPages).toEqual([1, 1, 1]);
-    expect(second.usage.calls).toBe(3);
-    const changed = assigned(f.source),
-      leaf = snapshot.leaves[2]!;
-    changed[2] = { kind: "drop", leaf_id: leaf.leaf_id, reason: "footer" };
-    seenPages.length = 0;
-    const third = await service().build(
-      f.source,
-      arranged(f.source, changed),
-      f.pages,
-    );
-    expect(third.complete).toBe(true);
-    expect(third.reused_page_indexes).toEqual([0, 2]);
-    expect(seenPages).toEqual([1, 1, 1]);
-    expect(third.pages[1]!.page_input_sha256).not.toBe(
-      second.pages[1]!.page_input_sha256,
-    );
-  } finally {
-    await runtime.close();
-  }
-});
 it("does not call a model for classified or missing pages, and reports a nonblocking content gap without inventing leaves", async () => {
   const f = await archiveTextFixture(
       [{ text: "Page header.", type: "header" }],
@@ -563,68 +525,6 @@ it("does not call a model for classified or missing pages, and reports a nonbloc
     await runtime.close();
   }
 });
-it("revalidates computed suspects on a page-cache hit instead of trusting an omitted question set", async () => {
-  const f = await archiveTextFixture([{ text: "Yield 67%." }], {
-      layers: ["Yield 97%."],
-    }),
-    snapshot = arranged(f.source),
-    cache = memoryTextCache();
-  let calls = 0;
-  const runtime = fakeTextRuntime(async (request) => {
-    calls++;
-    const { page_index } = initialPage(request);
-    if (calls === 1)
-      return modelTool("read_blocks", {
-        page_index,
-        index: 0,
-        offset: 0,
-        limit: 20,
-      });
-    if (calls === 2)
-      return modelTool("view_page", { page_index, region: null });
-    if (calls === 3)
-      return modelTool("read_reference", {
-        page_index,
-        text_offset: 0,
-        suspect_offset: 0,
-      });
-    if (calls === 4) {
-      const questions = toolJson(request).suspects as RetainedPageSuspect[];
-      return modelTool("put_dispositions", {
-        dispositions: questions.map((s) => ({
-          suspect_id: s.suspect_id,
-          status: "uncertain",
-          reason: "image",
-        })),
-      });
-    }
-    return modelTool("submit_page", { no_change: true });
-  });
-  try {
-    const service = () =>
-      new ArchivePageProofreadService(runtime, fakePages(f.pages), cache.cache);
-    expect((await service().build(f.source, snapshot, f.pages)).complete).toBe(
-      true,
-    );
-    expect(
-      (await service().build(f.source, snapshot, f.pages)).usage.calls,
-    ).toBe(0);
-    const entry = [...cache.entries.values()][0]!,
-      record = JSON.parse(Buffer.from(entry.bytes).toString()) as {
-        suspects: unknown[];
-        dispositions: unknown[];
-      };
-    record.suspects = [];
-    record.dispositions = [];
-    entry.bytes = Buffer.from(JSON.stringify(record));
-    await expect(
-      service().build(f.source, snapshot, f.pages),
-    ).rejects.toMatchObject({ code: "source-integrity" });
-    expect(calls).toBe(5);
-  } finally {
-    await runtime.close();
-  }
-});
 it("rejects a changed source mapping or missing page inspection before any model call", async () => {
   const f = await archiveTextFixture([{ text: "Stable." }]),
     snapshot = arranged(f.source),
@@ -651,470 +551,6 @@ it("rejects a changed source mapping or missing page inspection before any model
     await runtime.close();
   }
 });
-it("rejects neighbor-page access and does not count a short or cropped inspection as complete", async () => {
-  const f = await archiveTextFixture([
-      { text: "Only this page.", page: 0 },
-      { text: "OTHERPAGE hidden synthetic.", page: 1 },
-    ]),
-    ops = assigned(f.source),
-    other = ops[1]!;
-  ops[1] = {
-    kind: "drop",
-    leaf_id: "leaf_id" in other ? other.leaf_id : "",
-    reason: "interface",
-  };
-  let calls = 0;
-  const runtime = fakeTextRuntime(async (request) => {
-    calls++;
-    expect(JSON.stringify(request.messages)).not.toContain("OTHERPAGE");
-    if (calls === 1)
-      return modelTool("read_blocks", {
-        page_index: 1,
-        index: 0,
-        offset: 0,
-        limit: 20,
-      });
-    if (calls === 2) {
-      expect(JSON.stringify(toolJson(request))).toContain(
-        "page-outside-session",
-      );
-      return modelTool("read_blocks", {
-        page_index: 0,
-        index: 0,
-        offset: 5,
-        limit: 20,
-      });
-    }
-    if (calls === 3)
-      return modelTool("view_page", { page_index: 0, region: null });
-    if (calls === 4) return modelTool("submit_page", { no_change: true });
-    if (calls === 5) {
-      expect(JSON.stringify(toolJson(request))).toContain("leaf-not-read");
-      return modelTool("read_blocks", {
-        page_index: 0,
-        index: 0,
-        offset: 0,
-        limit: 20,
-      });
-    }
-    return modelTool("submit_page", { no_change: true });
-  });
-  try {
-    const result = await new ArchivePageProofreadService(
-      runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source, arranged(f.source, ops), f.pages);
-    expect(result.complete).toBe(true);
-    expect(calls).toBe(6);
-  } finally {
-    await runtime.close();
-  }
-});
-it("removes draft-only questions when their correction is removed and preserves source questions", async () => {
-  const f = await archiveTextFixture([{ text: "Yield 97%." }]),
-    snapshot = arranged(f.source),
-    leaf = snapshot.leaves[0]!;
-  let calls = 0,
-    correctionId = "";
-  const runtime = fakeTextRuntime(async (request) => {
-    calls++;
-    if (calls === 1)
-      return modelTool("read_blocks", {
-        page_index: 0,
-        index: 0,
-        offset: 0,
-        limit: 20,
-      });
-    if (calls === 2)
-      return modelTool("view_page", { page_index: 0, region: null });
-    if (calls === 3)
-      return modelTool("put_corrections", {
-        corrections: [
-          {
-            kind: "correct",
-            leaf_id: leaf.leaf_id,
-            start: 6,
-            end: 8,
-            original: "97",
-            replacement: "42",
-            basis_page_index: 0,
-            reason: "image",
-          },
-        ],
-      });
-    if (calls === 4) {
-      const data = toolJson(request);
-      expect(data.suspect_count).toBeGreaterThan(0);
-      correctionId = (data.correction_ids as string[])[0]!;
-      return modelTool("remove_corrections", {
-        correction_ids: [correctionId],
-      });
-    }
-    if (calls === 5)
-      // Paging suspects only: an offset past the layer end returns no text, not a rejection.
-      return modelTool("read_reference", {
-        page_index: 0,
-        text_offset: 9999,
-        suspect_offset: 0,
-      });
-    if (calls === 6) {
-      expect(toolJson(request)).toMatchObject({ text: "", suspects: [] });
-      return modelTool("submit_page", { no_change: true });
-    }
-    throw Error("unexpected-call");
-  });
-  try {
-    const result = await new ArchivePageProofreadService(
-      runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source, snapshot, f.pages);
-    expect(result.complete).toBe(true);
-    expect(result.pages[0]!.corrections).toEqual([]);
-    expect(calls).toBe(6);
-  } finally {
-    await runtime.close();
-  }
-});
-it("names each rejected disposition so the model does not resend the same batch", async () => {
-  // A real 112-suspect page: one bad id in a batch of 20 drew three identical resends.
-  const f = await archiveTextFixture([{ text: "Yield 67%." }], {
-    layers: ["Yield 97%."],
-  });
-  const replies: Record<string, unknown>[] = [];
-  let calls = 0;
-  const runtime = fakeTextRuntime(async (request) => {
-    calls++;
-    if (calls > 1) replies.push(toolJson(request));
-    return modelTool("put_dispositions", {
-      dispositions: [
-        {
-          suspect_id: "00000000-0000-4000-8000-000000000000",
-          status: "draft-correct",
-          correction_ids: [],
-          reason: "The image shows this text.",
-        },
-      ],
-    });
-  });
-  try {
-    const result = await new ArchivePageProofreadService(
-      runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source, arranged(f.source), f.pages);
-    expect(result.complete).toBe(false);
-    expect(replies[0]).toMatchObject({
-      accepted: false,
-      issues: [
-        {
-          code: "suspect-disposition-invalid",
-          id: "00000000-0000-4000-8000-000000000000",
-        },
-      ],
-      hint: expect.stringContaining("not a current suspect"),
-    });
-  } finally {
-    await runtime.close();
-  }
-});
-it("hands the model short page-local leaf, suspect and correction IDs and stores the real ones", async () => {
-  // Real models mis-copied 36-character suspect UUIDs and resent them unchanged.
-  const f = await archiveTextFixture([{ text: "Yield 67%." }], {
-      layers: ["Yield 97%."],
-    }),
-    snapshot = arranged(f.source),
-    leaf = snapshot.leaves[0]!;
-  const replies: Record<string, unknown>[] = [];
-  let calls = 0;
-  const runtime = fakeTextRuntime(async (request) => {
-    calls++;
-    // The view_page reply is an image, not JSON.
-    if (calls > 1 && calls !== 3) replies.push(toolJson(request));
-    if (calls === 1)
-      return modelTool("read_blocks", {
-        page_index: 0,
-        index: 0,
-        offset: 0,
-        limit: 20,
-      });
-    if (calls === 2)
-      return modelTool("view_page", { page_index: 0, region: null });
-    if (calls === 3)
-      return modelTool("read_reference", {
-        page_index: 0,
-        text_offset: 0,
-        suspect_offset: 0,
-      });
-    const correct = (replacement: string) =>
-      modelTool("put_corrections", {
-        corrections: [
-          {
-            kind: "correct",
-            leaf_id: "b1",
-            start: 6,
-            end: 8,
-            original: "67",
-            replacement,
-            basis_page_index: 0,
-            reason: `The image prints ${replacement}.`,
-          },
-        ],
-      });
-    const dispose = (correction: string) =>
-      modelTool("put_dispositions", {
-        dispositions: ["s1", "s2"].map((suspect_id) => ({
-          suspect_id,
-          status: "fixed",
-          correction_ids: [correction],
-          reason: "The image prints 97.",
-        })),
-      });
-    // A first correction that leaves the suspect in place is rejected by short ID.
-    if (calls === 4) return correct("68");
-    if (calls === 5) return dispose("c1");
-    if (calls === 7)
-      return modelTool("remove_corrections", { correction_ids: ["c1"] });
-    if (calls === 8) return correct("97");
-    if (calls === 9) return dispose("c2");
-    return modelTool("submit_page", { no_change: false });
-  });
-  try {
-    const result = await new ArchivePageProofreadService(
-      runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source, snapshot, f.pages);
-    expect(replies[0]).toMatchObject({ items: [{ id: "b1" }] });
-    expect(
-      (replies[1]!.suspects as { suspect_id: string }[]).map(
-        (q) => q.suspect_id,
-      ),
-    ).toEqual(["s1", "s2"]);
-    expect(
-      (replies[1]!.suspects as { leaf_ids: string[] }[]).flatMap(
-        (q) => q.leaf_ids,
-      ),
-    ).not.toContain(leaf.leaf_id);
-    expect(replies[2]).toMatchObject({ correction_ids: ["c1"] });
-    expect(replies[4]).toMatchObject({ accepted: false });
-    expect(replies[4]!.issues).toContainEqual({
-      code: "suspect-not-fixed",
-      id: "s1",
-    });
-    expect(replies[6]).toMatchObject({ correction_ids: ["c2"] });
-    expect(result.complete).toBe(true);
-    const page = result.pages[0]!,
-      correction = page.corrections[0]!.correction_id;
-    expect(page.corrections[0]!.operation.leaf_id).toBe(leaf.leaf_id);
-    expect(page.dispositions).toEqual(
-      page.suspects.map((q) => ({
-        suspect_id: q.suspect_id,
-        status: "fixed",
-        correction_ids: [correction],
-      })),
-    );
-    const known = new Set(page.suspects.map((q) => q.suspect_id));
-    expect(
-      (replies[4]!.issues as { id: string }[]).filter((i) => known.has(i.id)),
-    ).toEqual([]);
-    expect(page.suspects.map((q) => q.suspect_id)).toEqual([
-      expect.stringMatching(/^[0-9a-f-]{36}$/u),
-      expect.stringMatching(/^[0-9a-f-]{36}$/u),
-    ]);
-  } finally {
-    await runtime.close();
-  }
-});
-it("names the leaf field when a model mistypes a leaf ID", async () => {
-  // A real page: one hex digit off in a leaf UUID drew a misleading off-page rejection.
-  const f = await archiveTextFixture([{ text: "Yield 67%." }]);
-  const replies: Record<string, unknown>[] = [];
-  let calls = 0;
-  const runtime = fakeTextRuntime(async (request) => {
-    calls++;
-    if (calls > 1) replies.push(toolJson(request));
-    return modelTool("find_text", { leaf_id: "b9", text: "67", start: 0 });
-  });
-  try {
-    await new ArchivePageProofreadService(
-      runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source, arranged(f.source), f.pages);
-    expect(replies[0]).toMatchObject({
-      accepted: false,
-      issues: [{ code: "tool-input", id: "leaf_id" }],
-    });
-  } finally {
-    await runtime.close();
-  }
-});
-it("names the batch item and field a mistyped id breaks", async () => {
-  // A real page: one suspect id with an extra digit drew three identical resends.
-  const f = await archiveTextFixture([{ text: "Yield 67%." }]);
-  const replies: Record<string, unknown>[] = [];
-  let calls = 0;
-  const runtime = fakeTextRuntime(async (request) => {
-    calls++;
-    if (calls > 1) replies.push(toolJson(request));
-    return modelTool("put_dispositions", {
-      dispositions: [
-        {
-          suspect_id: "02eeb366-2d96-ad76-4349-8dacfe4b4590",
-          status: "uncertain",
-          correction_ids: [],
-          reason: "The image shows this text.",
-        },
-        {
-          suspect_id: "02eeb366-2d96-ad76-4349-8dacfe4b459",
-          status: "uncertain",
-          correction_ids: [],
-          reason: "The image shows this text.",
-        },
-      ],
-    });
-  });
-  try {
-    await new ArchivePageProofreadService(
-      runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source, arranged(f.source), f.pages);
-    expect(replies[0]).toMatchObject({
-      accepted: false,
-      issues: [{ code: "tool-input", id: "dispositions[1].suspect_id" }],
-      hint: expect.stringContaining("names a batch item"),
-    });
-  } finally {
-    await runtime.close();
-  }
-});
-it("caps an oversized window and counts only consecutive identical rejections", async () => {
-  // Real pages: models sent limit 25-200 as characters, and two rejections
-  // separated by accepted calls ended a page as validation-repeated.
-  const f = await archiveTextFixture([{ text: "alpha beta." }]);
-  const bad = () =>
-    modelTool("put_dispositions", {
-      dispositions: [
-        {
-          suspect_id: "not-an-id",
-          status: "uncertain",
-          correction_ids: [],
-          reason: "The image shows this text.",
-        },
-      ],
-    });
-  const script = [
-    () =>
-      modelTool("read_blocks", {
-        page_index: 0,
-        index: 0,
-        offset: 0,
-        limit: 200,
-      }),
-    () => modelTool("view_page", { page_index: 0, region: null }),
-    bad,
-    () =>
-      modelTool("draft_status", { kind: "corrections", offset: 0, limit: 50 }),
-    bad,
-    () =>
-      modelTool("draft_status", { kind: "dispositions", offset: 0, limit: 50 }),
-    bad,
-    () => modelTool("submit_page", { no_change: true }),
-  ];
-  let calls = 0;
-  const runtime = fakeTextRuntime(async () => {
-    return script[calls++]?.() ?? modelTool("submit_page", { no_change: true });
-  });
-  try {
-    const result = await new ArchivePageProofreadService(
-      runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source, arranged(f.source), f.pages);
-    expect(result.pages[0]!.stop).toBeNull();
-    expect(result.complete).toBe(true);
-  } finally {
-    await runtime.close();
-  }
-});
-it.each([
-  ["distinct spans keep the page going", true],
-  ["the same search repeated stops it", false],
-] as const)(
-  "counts each newly located span as progress: %s",
-  async (_name, distinct) => {
-    // A real page: the model located a dozen spans before correcting, and was stopped.
-    const words =
-      "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
-    const f = await archiveTextFixture([{ text: words + "." }]),
-      snapshot = arranged(f.source),
-      leaf = snapshot.leaves[0]!,
-      targets = words.split(" ");
-    let calls = 0;
-    const runtime = fakeTextRuntime(async () => {
-      calls++;
-      if (calls === 1)
-        return modelTool("read_blocks", {
-          page_index: 0,
-          index: 0,
-          offset: 0,
-          limit: 20,
-        });
-      if (calls === 2)
-        return modelTool("view_page", { page_index: 0, region: null });
-      if (calls <= 2 + targets.length)
-        return modelTool("find_text", {
-          leaf_id: leaf.leaf_id,
-          text: distinct ? targets[calls - 3]! : targets[0]!,
-          start: 0,
-        });
-      return modelTool("submit_page", { no_change: true });
-    });
-    try {
-      const result = await new ArchivePageProofreadService(
-        runtime,
-        fakePages(f.pages),
-        memoryTextCache().cache,
-      ).build(f.source, snapshot, f.pages);
-      expect(result.complete).toBe(distinct);
-      if (!distinct)
-        expect(result.pages[0]!.stop).toMatchObject({ code: "no-progress" });
-    } finally {
-      await runtime.close();
-    }
-  },
-);
-it("ends a page with a typed page-tools stop when image rendering fails", async () => {
-  const f = await archiveTextFixture([{ text: "Content." }]),
-    runtime = fakeTextRuntime(async () =>
-      modelTool("view_page", { page_index: 0, region: null }),
-    );
-  try {
-    const result = await new ArchivePageProofreadService(
-      runtime,
-      {
-        ...fakePages(f.pages),
-        image: async () => {
-          throw Error("synthetic-render-failure");
-        },
-      },
-      memoryTextCache().cache,
-    ).build(f.source, arranged(f.source), f.pages);
-    expect(result.complete).toBe(false);
-    expect(result.pages[0]!.stop).toMatchObject({
-      code: "page-tools-unavailable",
-      page_index: 0,
-      scope: "page",
-    });
-    expect(result.usage.calls).toBe(1);
-  } finally {
-    await runtime.close();
-  }
-});
-
 it("compares retained text with the text layer after removing notation differences", async () => {
   const { comparableTokens } = await import("../src/proofread/suspects.js");
   // Text layer (left) and parser text (right) from a real ACS page, 2026-10-28.

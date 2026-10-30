@@ -213,7 +213,11 @@ export async function coreProcessingFixture(
       optionsInput.inspectResponseSchema?.(
         wire.response_format?.json_schema?.schema,
       );
-      if (wire.tools?.some((t) => t.function.name === "read_blocks")) {
+      if (
+        wire.tools?.some((t) =>
+          ["read_blocks", "submit_corrections"].includes(t.function.name),
+        )
+      ) {
         return {
           status: 200,
           headers: [],

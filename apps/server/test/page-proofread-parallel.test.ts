@@ -21,19 +21,11 @@ const fixture = (count: number) =>
       page,
     })),
   );
-const decision = (page: number, step: number) =>
-  step === 1
-    ? modelTool("read_blocks", {
-        page_index: page,
-        index: 0,
-        offset: 0,
-        limit: 20,
-      })
-    : step === 2
-      ? modelTool("view_page", { page_index: page, region: null })
-      : modelTool("submit_page", { no_change: true });
+// ADR 0047: one request per page; the fixture finds nothing to change.
+const decision = (_page: number, _step: number) =>
+  modelTool("submit_corrections", { corrections: [], uncertain: [] });
 
-it("defaults to three independent page sessions, serializes progress, and orders accepted pages independently of completion", async () => {
+it("defaults to three independent page requests, serializes progress, and orders accepted pages independently of completion", async () => {
   const f = await fixture(5),
     steps = new Map<number, number>(),
     completed: number[] = [];
@@ -91,9 +83,7 @@ it("defaults to three independent page sessions, serializes progress, and orders
     expect(result.pages.map((p) => p.page_index)).toEqual([0, 1, 2, 3, 4]);
     expect(result.complete).toBe(true);
     expect(result.usage).toMatchObject({
-      calls: 15,
-      input_tokens: 195,
-      output_tokens: 105,
+      calls: 5,
       usage_complete: true,
     });
     expect(calls).toEqual([...calls].sort((a, b) => a - b));
@@ -113,7 +103,7 @@ it("defaults to three independent page sessions, serializes progress, and orders
   }
 });
 
-it.each(["validation-repeated", "no-progress"] as const)(
+it.each(["validation-repeated"] as const)(
   "isolates a page stopped for %s and retries or reuses exactly selected inputs",
   async (stop) => {
     const f = await fixture(4),
@@ -124,10 +114,12 @@ it.each(["validation-repeated", "no-progress"] as const)(
     const runtime = fakeTextRuntime(async (request) => {
       const p = initialPage(request).page_index;
       visited.add(p);
+      // A malformed submission is rejected the same way each time.
       if (p === 1 && broken)
-        return stop === "validation-repeated"
-          ? modelTool("submit_page", { no_change: true })
-          : decision(p, 1);
+        return modelTool("submit_corrections", {
+          corrections: "x",
+          uncertain: [],
+        });
       const step = (steps.get(p) ?? 0) + 1;
       steps.set(p, step);
       return decision(p, step);
@@ -164,7 +156,7 @@ it.each(["validation-repeated", "no-progress"] as const)(
       expect([...visited]).toEqual([1]);
       expect(second.complete).toBe(true);
       expect(second.reused_page_indexes).toEqual([0, 2, 3]);
-      expect(second.usage.calls).toBe(3);
+      expect(second.usage.calls).toBe(1);
       expect(cache.entries.size).toBe(4);
     } finally {
       await runtime.close();
@@ -211,7 +203,7 @@ it("retries throttled requests inside the same conversation, honors Retry-After,
     ).build(f.source, arranged(f.source), f.pages);
     expect(result.complete).toBe(true);
     expect(firstRequest).toBe(secondRequest);
-    expect(result.usage.calls).toBe(25);
+    expect(result.usage.calls).toBe(15);
     expect(result.usage.usage_complete).toBe(false);
     expect(result.usage.input_tokens).toBeNull();
     expect(result.usage.rate_limits).toHaveLength(10);
@@ -385,7 +377,7 @@ it("records each individual downgrade when two pages are throttled concurrently"
       memoryTextCache().cache,
     ).build(f.source, arranged(f.source), f.pages);
     expect(result.complete).toBe(true);
-    expect(result.usage.calls).toBe(11);
+    expect(result.usage.calls).toBe(5);
     expect(
       result.usage
         .rate_limits!.map((r) => [r.concurrency_before, r.concurrency_after])

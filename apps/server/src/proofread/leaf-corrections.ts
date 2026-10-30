@@ -1,26 +1,17 @@
 import {
   parseCorrectOperation,
-  parseSuspectDisposition,
-  parsePageProofreadSubmission,
   type ArrangementLeaf,
   type CorrectOperation,
   type CorrectRecord,
   type RetainedPageSuspect,
-  type SuspectDisposition,
-  type PageProofreadSubmission,
-  type PageReviewEvidence,
 } from "@sciretriever/contracts";
 import type { PdfPageInspection } from "../browser/pdf-region.js";
 import { comparableTokens } from "./suspects.js";
 import { requireTableMarkup } from "./contract.js";
-import {
-  ArchiveTextError,
-  cpSlice,
-  textHash,
-  textId,
-} from "../archive/text-source.js";
+import { ArchiveTextError, cpSlice, textId } from "../archive/text-source.js";
 export const LEAF_CORRECTION_METHOD = "leaf-correct-codepoint-v1";
-export const RETAINED_SUSPECT_METHOD = "retained-page-comparable-v4";
+/** Suspect IDs of pages proofread before ADR 0047; manual edits still recompute them. */
+const RETAINED_SUSPECT_METHOD = "retained-page-comparable-v4";
 function subtract(left: readonly string[], right: readonly string[]) {
   const counts = new Map<string, number>();
   for (const t of right) counts.set(t, (counts.get(t) ?? 0) + 1);
@@ -248,94 +239,4 @@ export function applyLeafCorrections(
     };
   });
   return { texts, records };
-}
-export function acceptPageSubmission(
-  input: {
-    page: PdfPageInspection;
-    retained: readonly ArrangementLeaf[];
-    deleted: readonly ArrangementLeaf[];
-    page_input_sha256: string;
-    suspects: readonly RetainedPageSuspect[];
-    evidence: PageReviewEvidence;
-  },
-  value: unknown,
-) {
-  const s: PageProofreadSubmission = parsePageProofreadSubmission(value),
-    issues: { code: string; id: string | null }[] = [];
-  if (
-    s.page_index !== input.page.page ||
-    s.page_input_sha256 !== input.page_input_sha256
-  )
-    issues.push({ code: "page-input-stale", id: null });
-  if (!input.evidence.viewed_full_page)
-    issues.push({ code: "full-page-not-viewed", id: null });
-  for (const l of input.retained)
-    if (!input.evidence.read_leaf_ids.includes(l.leaf_id))
-      issues.push({ code: "leaf-not-read", id: l.leaf_id });
-  const applied = applyLeafCorrections(
-    input.retained,
-    s.corrections,
-    input.page.page,
-    input.page_input_sha256,
-  );
-  const required = pageReviewSuspects(
-    input.page,
-    input.retained,
-    input.deleted,
-    input.page_input_sha256,
-    applied.texts,
-  );
-  if (textHash(required) !== textHash(input.suspects))
-    issues.push({ code: "suspect-set-stale", id: null });
-  const dispositions = new Map<string, SuspectDisposition>();
-  const current = retainedPageSuspects(
-    input.page,
-    input.retained,
-    input.deleted,
-    input.page_input_sha256,
-    applied.texts,
-  );
-  for (const d of s.dispositions.map(parseSuspectDisposition)) {
-    if (
-      dispositions.has(d.suspect_id) ||
-      !input.suspects.some((q) => q.suspect_id === d.suspect_id)
-    )
-      issues.push({ code: "suspect-disposition-invalid", id: d.suspect_id });
-    dispositions.set(d.suspect_id, d);
-    if (d.status === "fixed") {
-      const suspect = input.suspects.find((q) => q.suspect_id === d.suspect_id);
-      if (
-        d.correction_ids.some(
-          (id) => !applied.records.some((c) => c.correction_id === id),
-        ) ||
-        (suspect && current.some((c) => c.suspect_id === suspect.suspect_id)) ||
-        (suspect &&
-          !applied.records.some(
-            (c) =>
-              d.correction_ids.includes(c.correction_id) &&
-              (!suspect.leaf_ids.length ||
-                suspect.leaf_ids.includes(c.operation.leaf_id)),
-          ))
-      )
-        issues.push({ code: "suspect-not-fixed", id: d.suspect_id });
-    }
-  }
-  for (const q of input.suspects)
-    if (!dispositions.has(q.suspect_id))
-      issues.push({ code: "suspect-disposition-missing", id: q.suspect_id });
-  const priorKeys = new Set(
-    input.suspects.map((q) =>
-      textHash({ kind: q.kind, tokens: q.tokens, ids: q.leaf_ids }),
-    ),
-  );
-  for (const q of current)
-    if (
-      !priorKeys.has(
-        textHash({ kind: q.kind, tokens: q.tokens, ids: q.leaf_ids }),
-      )
-    )
-      issues.push({ code: "new-suspect-unresolved", id: q.suspect_id });
-  if (issues.length)
-    throw new ArchiveTextError("page-submission-invalid", issues);
-  return { submission: s, ...applied };
 }

@@ -1012,10 +1012,12 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
             const content = wire.messages[1]!.content as
               | string
               | { type: string; text: string }[];
-            // Flow X (ADR 0041, 06ca0af) arranges and proofreads pages
-            // through read_blocks tool sessions before any analysis.
-            const reply = wire.tools?.some(
-              (tool) => tool.function.name === "read_blocks",
+            // Archiving arranges through read_blocks sessions (ADR 0041) and
+            // proofreads each page with one submit_corrections request (ADR 0047).
+            const reply = wire.tools?.some((tool) =>
+              ["read_blocks", "submit_corrections"].includes(
+                tool.function.name,
+              ),
             )
               ? archiveChatReply(wire)
               : wire.tools?.some(

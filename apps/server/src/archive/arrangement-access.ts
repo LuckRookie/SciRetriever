@@ -282,13 +282,16 @@ export class ArchiveArrangementAccess {
             c
           );
         }),
-        suspects = pageReviewSuspects(
-          source.pages[page.page_index]!,
-          retained,
-          deleted,
-          page.page_input_sha256,
-          applied.texts,
-        );
+        // ADR 0047 pages carry review notes and no suspects; older pages recompute theirs.
+        suspects = page.review
+          ? []
+          : pageReviewSuspects(
+              source.pages[page.page_index]!,
+              retained,
+              deleted,
+              page.page_input_sha256,
+              applied.texts,
+            );
       pages.push({
         ...page,
         corrections,

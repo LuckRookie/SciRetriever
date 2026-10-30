@@ -66,9 +66,11 @@ MCP 对应 `archive_query`（status/issues/stats/events）与 `archive_manage`�
 
 ## 校订全文与单步处理
 
-后端的 `proofread text --request FILE|-` 有界读取当前或指定校订稿，按 next_start 续读。新稿返回 format=arranged-v2；历史稿按历史格式解码。`proofread inspect` 与 `document corrections` 提供对应格式的页处置、疑点和改字，不能把旧 edit union 用于新写入。
+后端的 `proofread text --request FILE|-` 有界读取当前或指定校订稿，按 next_start 续读。新稿返回 format=arranged-v2；历史稿按历史格式解码。`proofread inspect` 与 `document corrections` 提供对应格式的页处置、疑点和改字，不能把旧 edit union 用于新写入；按 ADR 0047 校订的页没有疑点，页记录的 `review` 列出被拒的改字与模型拿不准的地方。
 
 单步 `proofread build` 使用 `{schema_version:2, asset_id, arrangement_id, retry_page_indexes:null}`，只校已有整理结果；`document publish-proofread` 使用 `{schema_version:2, literature_id, asset_id, proofread_id, expected_default_revision}`，只渲染完整新校订稿；`document annotate` 使用 `{schema_version:2, document_version_id, arrangement_id}`，从固定整理派生注释。这些单步不会隐式解析或整理，渲染与注释不调用模型。
+
+每页校订只发一次请求：模型看着页面原图，裁决解析文字与 PDF 文字层不一致的地方，一次交回本页全部改字。每处改字先经程序检查（是否印在那里、是否删了内容、是否把版权行或结构式标签写进正文等），不通过的不应用，原文保持不变；同一错字在一个区块里出现多次时一起改。规则见[文档与证据](../architecture/technical/04-document-evidence.md#63-逐页校订与复用)。
 
 逐页校订可以同时运行几页，每页上下文仍独立；配置与限流降档见[配置指南](configuration.md#整理校订模型与停止保护)。一页停止不会撤销其它已接受页，指定页重试和页缓存复用保持原口径。任务回执按页码排序，运行中事件包含准确的必需、已接受、复用、待处理与失败计数。
 

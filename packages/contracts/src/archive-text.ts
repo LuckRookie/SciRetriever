@@ -293,6 +293,22 @@ export interface PageProofreadRecord {
     | null;
   readonly classified_leaf_ids: readonly string[];
   readonly stop: ArchiveTextStop | null;
+  /** ADR 0047 pages: edits the host refused and places the model could not settle. */
+  readonly review?: PageReviewNotes;
+}
+export interface PageReviewNotes {
+  readonly refused: readonly {
+    readonly leaf_id: string;
+    readonly original: string;
+    readonly replacement: string;
+    readonly rule: string;
+    readonly reason: string;
+  }[];
+  readonly uncertain: readonly {
+    readonly leaf_id: string | null;
+    readonly text: string;
+    readonly reason: string;
+  }[];
 }
 export interface ArchiveTextIssue {
   readonly code: "page-content-missing";
@@ -931,7 +947,7 @@ export function parsePageProofreadRecord(
 ): PageProofreadRecord {
   if (!Number.isSafeInteger(pageCount) || pageCount < 1 || pageCount > 10000)
     fail();
-  const r = record(v, [
+  const keys = [
     "schema_version",
     "page_index",
     "page_kind",
@@ -947,7 +963,14 @@ export function parsePageProofreadRecord(
     "not_required_reason",
     "classified_leaf_ids",
     "stop",
-  ]);
+  ];
+  // Records written before ADR 0047 have no review notes.
+  const r = record(
+    v,
+    v && typeof v === "object" && "review" in v ? [...keys, "review"] : keys,
+  );
+  const review =
+    r.review === undefined ? undefined : parsePageReviewNotes(r.review);
   if (r.schema_version !== 2) fail();
   const page_index = number(r.page_index, pageCount - 1),
     e = record(r.evidence, [
@@ -1094,5 +1117,43 @@ export function parsePageProofreadRecord(
     not_required_reason,
     classified_leaf_ids,
     stop,
+    ...(review ? { review } : {}),
+  };
+}
+function parsePageReviewNotes(v: unknown): PageReviewNotes {
+  const r = record(v, ["refused", "uncertain"]);
+  return {
+    refused: list(
+      r.refused,
+      (x) => {
+        const e = record(x, [
+          "leaf_id",
+          "original",
+          "replacement",
+          "rule",
+          "reason",
+        ]);
+        return {
+          leaf_id: parseAssetId(e.leaf_id),
+          original: text(e.original, 65536),
+          replacement: text(e.replacement, 65536),
+          rule: text(e.rule, 64),
+          reason: text(e.reason, 480),
+        };
+      },
+      1000,
+    ),
+    uncertain: list(
+      r.uncertain,
+      (x) => {
+        const e = record(x, ["leaf_id", "text", "reason"]);
+        return {
+          leaf_id: e.leaf_id === null ? null : parseAssetId(e.leaf_id),
+          text: text(e.text, 65536),
+          reason: text(e.reason, 480),
+        };
+      },
+      1000,
+    ),
   };
 }

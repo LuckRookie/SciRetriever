@@ -68,6 +68,9 @@ export function archiveChatReply(wire: {
   const history = (name: string) => messages.filter((m) => m.name === name),
     last = (name: string) => history(name).at(-1)?.value;
   const page = initial.page_index;
+  // ADR 0047: one proofreading request per page; this fixture finds nothing to change.
+  if (wire.tools?.some((t) => t.function.name === "submit_corrections"))
+    return invoke("submit_corrections", { corrections: [], uncertain: [] });
   const reads = history("read_blocks"),
     next = reads.length ? last("read_blocks")?.next : { index: 0, offset: 0 };
   if (next)
@@ -76,48 +79,6 @@ export function archiveChatReply(wire: {
       ...(next as object),
       limit: 20,
     });
-  if (page !== undefined) {
-    if (!history("view_page").length)
-      return invoke("view_page", { page_index: page, region: null });
-    const reference = last("read_reference");
-    if (!reference)
-      return invoke("read_reference", {
-        page_index: page,
-        text_offset: 0,
-        suspect_offset: 0,
-      });
-    const suspects = history("read_reference").flatMap(
-      (m) => (m.value.suspects ?? []) as { suspect_id: string }[],
-    );
-    const nextSuspect = reference.next_suspect_offset;
-    if (typeof nextSuspect === "number")
-      return invoke("read_reference", {
-        page_index: page,
-        text_offset: 0,
-        suspect_offset: nextSuspect,
-      });
-    const disposed = new Set(
-      calls
-        .filter((c) => c.function.name === "put_dispositions")
-        .flatMap((c) =>
-          (
-            JSON.parse(c.function.arguments) as {
-              dispositions: { suspect_id: string }[];
-            }
-          ).dispositions.map((d) => d.suspect_id),
-        ),
-    );
-    const pending = suspects.filter((s) => !disposed.has(s.suspect_id));
-    if (pending.length)
-      return invoke("put_dispositions", {
-        dispositions: pending.slice(0, 20).map((s) => ({
-          suspect_id: s.suspect_id,
-          status: "draft-correct",
-          reason: "image",
-        })),
-      });
-    return invoke("submit_page", { no_change: true });
-  }
   const rows = new Map<string, string>();
   const infos = new Map<
     string,

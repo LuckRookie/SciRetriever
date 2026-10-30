@@ -50,16 +50,11 @@ it.each(["arrange", "proofread"] as const)(
               toolJson(request).reviewed_candidates_sha256,
           });
         }
-        if (calls === 1)
-          return modelTool("read_blocks", {
-            page_index: 0,
-            index: 0,
-            offset: 0,
-            limit: 20,
-          });
-        if (calls === 2)
-          return modelTool("view_page", { page_index: 0, region: null });
-        return modelTool("submit_page", { no_change: true });
+        // ADR 0047: one proofreading request per page.
+        return modelTool("submit_corrections", {
+          corrections: [],
+          uncertain: [],
+        });
       });
       const cache = {
         read: memory.cache.read,
@@ -83,7 +78,7 @@ it.each(["arrange", "proofread"] as const)(
                 fakePages(f.pages),
                 cache,
               ).build(f.source, arranged(f.source), f.pages);
-        const expected = step === "arrange" ? 4 : 3;
+        const expected = step === "arrange" ? 4 : 1;
         if (conflict)
           expect((await build).usage).toMatchObject({
             calls: expected,

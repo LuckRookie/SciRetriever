@@ -8,10 +8,8 @@ import { LiteratureMetadataService } from "../literature/metadata-service.js";
 import type { TagService } from "../tags/service.js";
 import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
 import { ARRANGEMENT_METHOD } from "./arrangement.js";
-import {
-  LEAF_CORRECTION_METHOD,
-  RETAINED_SUSPECT_METHOD,
-} from "../proofread/leaf-corrections.js";
+import { LEAF_CORRECTION_METHOD } from "../proofread/leaf-corrections.js";
+import { PAGE_REVIEW_METHOD } from "../proofread/page-review.js";
 import { textHash } from "./text-source.js";
 import { archiveTextModelIdentity } from "./text-session.js";
 import { PDF_PAGES_METHOD } from "../proofread/pdf-pages.js";
@@ -36,7 +34,8 @@ export class ArchiveReusePreview {
     return {
       arrange: ARRANGEMENT_METHOD,
       page_classify: this.pagesMethod,
-      suspects: RETAINED_SUSPECT_METHOD,
+      // The key keeps its name; ADR 0047 pages are reviewed by the guarded single request.
+      suspects: PAGE_REVIEW_METHOD,
       correction: LEAF_CORRECTION_METHOD,
       model_config_sha256: textHash(archiveTextModelIdentity(this.models)),
     };
