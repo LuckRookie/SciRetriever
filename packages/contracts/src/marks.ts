@@ -121,6 +121,7 @@ function text(value: unknown, max: number): string {
   if (
     typeof value !== "string" ||
     value.length > max ||
+    // eslint-disable-next-line no-control-regex
     /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)
   )
     fail();

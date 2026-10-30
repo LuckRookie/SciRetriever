@@ -16,8 +16,12 @@ const previousState = [
     ),
   ),
 ];
-export const libraryStatePreviousManifest = SCHEMA_MANIFEST_V13.flatMap((sql) => {
-  if (sql === LIBRARY_STATE_SCHEMA[0]) return previousState;
-  if ((LIBRARY_STATE_SCHEMA as readonly string[]).includes(sql)) return [];
-  return [sql.replace("CHECK(schema_version=13)", "CHECK(schema_version=12)")];
-});
+export const libraryStatePreviousManifest = SCHEMA_MANIFEST_V13.flatMap(
+  (sql) => {
+    if (sql === LIBRARY_STATE_SCHEMA[0]) return previousState;
+    if ((LIBRARY_STATE_SCHEMA as readonly string[]).includes(sql)) return [];
+    return [
+      sql.replace("CHECK(schema_version=13)", "CHECK(schema_version=12)"),
+    ];
+  },
+);
