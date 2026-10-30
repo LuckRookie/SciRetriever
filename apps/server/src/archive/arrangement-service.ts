@@ -1,30 +1,27 @@
 import {
   ARCHIVE_SECTION_ROLES,
-  parseArrangementOperation,
-  parseParagraphBreakDecision,
-  parsePageRegion,
   parseArchiveModelUsage,
-  type ArrangementSnapshot,
-  type SourceSpan,
+  type ArchiveModelUsage,
+  type ArchiveSectionRole,
+  type ArchiveTextStop,
   type ArrangementOperation,
+  type ArrangementSnapshot,
+  type ArrangementSourceBlock,
   type ParagraphBreakDecision,
+  type SourceSpan,
 } from "@sciretriever/contracts";
-import type {
-  AgentCapabilityRunOptions,
-  AgentCapabilityToolResult,
-} from "../agents/capability.js";
 import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
 import type { PdfPages, ProofreadCache } from "../proofread/contract.js";
 import { textTokens } from "../proofread/suspects.js";
 import {
   ARRANGEMENT_METHOD,
   PARAGRAPH_BREAK_RULE,
-  arrangementOperationKey,
   arrangementLeafSpans,
   reviewArrangement,
   acceptArrangement,
   verifyArrangement,
   type ArrangementConstraints,
+  type ArrangementReview,
 } from "./arrangement.js";
 import {
   ArchiveTextError,
@@ -36,207 +33,224 @@ import {
   archiveTextModelIdentity,
   TextProgress,
   ARCHIVE_TEXT_STOP_POLICY,
-  objectSchema,
   toolDeclaration,
   textReply,
   toolRecord,
-  toolCount,
-  toolLimit,
-  boundedTextWindow,
-  boundedItems,
-  TextReadCoverage,
   runArchiveTextSession,
   emptyArchiveUsage,
+  sumArchiveUsage,
   archiveUsageFailure,
+  stopFor,
   type ArchiveTextSessionResult,
 } from "./text-session.js";
-const str = { type: "string" },
-  reasonText = {
-    type: "string",
-    description: "A short reason: one line, at most 120 characters.",
-  },
-  integer = { type: "integer", minimum: 0 },
-  windowLimit = {
-    type: "integer",
-    minimum: 1,
-    maximum: 20,
-    description:
-      "Number of items per window, not characters; a larger value returns 20.",
-  },
-  strings = { type: "array", items: str, maxItems: 20 },
-  leafId = { type: "string", description: "Short leaf ID (b1, b2, ...)." },
-  leafIds = { type: "array", items: leafId, maxItems: 20 },
-  rootId = { type: "string", description: "Short block ID (r1, r2, ...)." };
-const target = {
-  anyOf: [
-    objectSchema({
-      role: {
-        type: "string",
-        enum: ARCHIVE_SECTION_ROLES.filter((r) => r !== "additional"),
-      },
-    }),
-    objectSchema({
-      role: { const: "additional" },
-      original_heading_leaf_id: { anyOf: [leafId, { type: "null" }] },
-    }),
-  ],
-};
-const presentation = {
-  anyOf: [
-    objectSchema({
-      kind: { type: "string", enum: ["content", "section-heading"] },
-    }),
-    objectSchema({
-      kind: { const: "subheading" },
-      level: { type: "integer", minimum: 2, maximum: 6 },
-    }),
-  ],
-};
-const opSchema = {
-  anyOf: [
-    objectSchema({
-      kind: { const: "assign" },
-      leaf_id: leafId,
-      target,
-      presentation,
-    }),
-    objectSchema({
-      kind: { const: "drop" },
-      leaf_id: leafId,
-      reason: {
-        type: "string",
-        description:
-          "bibliography is only this article's own journal, volume, pages, DOI and dates; reference list entries are never dropped.",
-        enum: [
-          "header",
-          "footer",
-          "interface",
-          "bibliography",
-          "copyright",
-          "decoration",
-        ],
-      },
-    }),
-    objectSchema({
-      kind: { const: "split" },
-      root_block_id: rootId,
-      cuts: { type: "array", items: integer, maxItems: 100 },
-    }),
-    objectSchema({ kind: { const: "merge" }, leaf_ids: leafIds }),
-    objectSchema({
-      kind: { const: "caption" },
-      object_leaf_id: leafId,
-      caption_leaf_ids: leafIds,
-      object_kind: { type: "string", enum: ["figure", "table", "scheme"] },
-    }),
-    objectSchema({
-      kind: { const: "assign-page" },
-      leaf_id: leafId,
-      page_index: integer,
-      basis_page_index: integer,
-      reason: reasonText,
-    }),
-  ],
-};
-const decisionSchema = {
-  anyOf: [
-    objectSchema({ candidate_id: str, decision: { const: "merge" } }),
-    objectSchema({
-      candidate_id: str,
-      decision: { const: "keep" },
-      reason: reasonText,
-    }),
-  ],
-};
-/** Code points of text shown on each side of a paragraph-break candidate. */
-const BREAK_CONTEXT = 120;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
-const LEAF_FIELDS = new Set([
-  "leaf_id",
-  "leaf_ids",
-  "object_leaf_id",
-  "caption_leaf_ids",
-  "original_heading_leaf_id",
-  "left_leaf_id",
-  "right_leaf_id",
-]);
-const KEY_FIELDS = new Set(["key", "keys", "stored_keys"]);
+
+/** ADR 0048: one request answers every block; a second decides every paragraph break. */
+export const ARRANGEMENT_TOOLS = "arrangement-single-pass-v1";
 /**
- * Short names for the IDs a model must copy: blocks r1, r2, ... in source
- * order, leaves b1, b2, ... as the host first returns them. A real run dropped
- * one character of a 36-character leaf UUID three times and was rejected
- * without the field being named. Names exist only at the tool boundary; drafts,
- * progress and receipts keep real IDs, and real IDs are still accepted.
+ * The arrangement identity a proofread version records: a whole version is reused only
+ * when it was arranged by this same workflow and break rule.
  */
-class ArrangementNames {
-  private readonly names = new Map<string, string>();
-  private readonly ids = new Map<string, string>();
-  private leaves = 0;
-  constructor(roots: readonly string[]) {
-    roots.forEach((id, i) => this.bind(id, `r${i + 1}`));
+export const ARRANGEMENT_WORKFLOW = `${ARRANGEMENT_METHOD}/${ARRANGEMENT_TOOLS}/${PARAGRAPH_BREAK_RULE}`;
+export const ARRANGEMENT_SYSTEM = `You arrange the parsed blocks of one scientific article into a fixed skeleton without changing any characters.
+You receive every block in reading order with its short ID (r1, r2, ...), type, page hint and exact text. Answer with exactly one submit_arrangement call. Never output block text.
+Skeleton roles: ${ARCHIVE_SECTION_ROLES.join(", ")}.
+- sections: consecutive ranges of blocks in the given order that together cover every block exactly once; each range has one role. Figures, schemes, tables, captions, equations and footnotes stay in the section where they appear, except author notes (corresponding author, e-mail, present address, equal contribution), which belong to end-matter: give them a range of their own. A section starts at its heading; a block that continues the previous block's sentence (it starts mid-sentence, often after a page or column break) stays in the previous block's section. Use additional only for a body section that fits none of the body roles (introduction, methods, results-discussion, conclusion), with heading = the ID of its own title block; otherwise heading is null.
+- title is the article title only. authors contains names only. Affiliations, author information, corresponding author, ORCID, notes, funding, acknowledgments, abbreviations, associated content, author contributions, conflicts of interest and supporting-information notices belong to end-matter.
+- The reference list is content: its heading and every entry go to references. Reference entries are never dropped.
+- headings: the title blocks that head a skeleton section or a top-level heading of end-matter such as ASSOCIATED CONTENT, AUTHOR INFORMATION, Acknowledgements, Conflicts of interest, Data availability (section-heading), and the original subheadings under them (subheading, level 2-6). Every block not listed there is content; figure, scheme and table titles are content.
+- drops: this article's own bibliographic lines (journal, volume, pages, DOI, received/accepted/published dates, cite-this lines) as bibliography; running heads as header; page numbers and running feet as footer; download, navigation or link labels near the title (Read Online, Metrics & More, Article Recommendations, Supporting Information) as interface; copyright and license lines as copyright; ornaments as decoration. A dropped block may sit inside any section range; the drop wins.
+- captions: link each image or table block to its caption blocks, with kind figure, scheme or table.
+- Some blocks arrive already split into parts named r5#1, r5#2, ...: treat each part as a block in headings, drops and captions; sections use block IDs.
+- splits: only when one block still holds text that must be dropped together with text that must be kept. cuts are Unicode code-point offsets into the block text; the parts are named r5#1, r5#2, ... Never split for any other reason.
+Page hints come from the parser and can be wrong; they never decide a role. Image and table blocks carry their region on the page (0-1000 coordinates, x0, y0, x1, y1): a small image in a page corner or margin (logo, badge, license or open-access icon) is decoration; figures, schemes, structures and the graphical abstract are content.`;
+export const BREAK_SYSTEM = `You decide paragraph breaks in a scientific article. Each candidate is a place where a body paragraph may have been cut by a page or column end, or by a figure, scheme, table, caption or footnote placed in between (skipped).
+You see the end of the left block (left_tail; the whole block when left_is_whole) and the start of the right block (right_head), and the types of the elements in between (skipped).
+merge when the right side continues the same sentence or paragraph, also when it starts with a capital letter, a formula or a number that completes the left sentence. keep when the right side starts a new paragraph or when either side is not running text: a panel label, a legend entry, a symbol, a list item, a heading-like fragment. keep needs a short reason of one line.
+Answer with exactly one submit_breaks call that decides every candidate.`;
+/** A larger part stops as request-too-large until segmented arrangement is verified (ADR 0048 §5). */
+export const ARRANGE_INPUT_MAX_BYTES = 384 * 1024;
+/** Code points of each side shown for a break; a shorter block is sent whole. */
+const BREAK_CONTEXT = 120,
+  BREAK_WHOLE = 200;
+const id = { type: "string" },
+  dropReasons = [
+    "header",
+    "footer",
+    "interface",
+    "bibliography",
+    "copyright",
+    "decoration",
+  ] as const;
+const arrangementTool = toolDeclaration(
+  "submit_arrangement",
+  "Submit the whole arrangement at once.",
+  {
+    sections: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          first: id,
+          last: id,
+          role: { type: "string", enum: ARCHIVE_SECTION_ROLES },
+          heading: { anyOf: [id, { type: "null" }] },
+        },
+        required: ["first", "last", "role", "heading"],
+        additionalProperties: false,
+      },
+    },
+    headings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          block: id,
+          kind: { type: "string", enum: ["section-heading", "subheading"] },
+          level: {
+            anyOf: [
+              { type: "integer", minimum: 2, maximum: 6 },
+              { type: "null" },
+            ],
+          },
+        },
+        required: ["block", "kind", "level"],
+        additionalProperties: false,
+      },
+    },
+    drops: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          block: id,
+          reason: { type: "string", enum: dropReasons },
+        },
+        required: ["block", "reason"],
+        additionalProperties: false,
+      },
+    },
+    captions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          object: id,
+          captions: { type: "array", items: id },
+          kind: { type: "string", enum: ["figure", "table", "scheme"] },
+        },
+        required: ["object", "captions", "kind"],
+        additionalProperties: false,
+      },
+    },
+    splits: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          block: id,
+          cuts: { type: "array", items: { type: "integer", minimum: 1 } },
+        },
+        required: ["block", "cuts"],
+        additionalProperties: false,
+      },
+    },
+  },
+);
+const breakTool = toolDeclaration(
+  "submit_breaks",
+  "Decide every paragraph-break candidate at once.",
+  {
+    decisions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          candidate: id,
+          decision: { type: "string", enum: ["merge", "keep"] },
+          reason: { type: "string" },
+        },
+        required: ["candidate", "decision", "reason"],
+        additionalProperties: false,
+      },
+    },
+  },
+);
+type Issue = { code: string; id: string | null };
+const invalid = (issues: readonly Issue[]) =>
+  new ArchiveTextError("arrangement-invalid", issues.slice(0, 20));
+const COPYRIGHT_LINE =
+  /^\s*(?:©|\(c\)\s*\d{4}|copyright\b|this (?:article|journal) is licensed)/iu;
+const NO_SPLIT_TYPES = new Set(["header", "footer", "page-number"]);
+/** Where a copyright or license line glued to a block starts (ADR 0048 §2), or null. */
+export function copyrightCut(text: string): number | null {
+  let at = 0;
+  for (const line of text.split("\n")) {
+    if (at > 0 && COPYRIGHT_LINE.test(line)) return at;
+    at += [...line].length + 1;
   }
-  private bind(id: string, name: string) {
-    this.names.set(id, name);
-    this.ids.set(name, id);
+  const tail = /©\s*\d{4}[^\n]*$/u.exec(text);
+  return tail && tail.index > 0 ? [...text.slice(0, tail.index)].length : null;
+}
+/**
+ * The page a leaf belongs to by the text layer: every one of its words (at least four
+ * distinct) printed on exactly one text-layer page other than its hint (ADR 0048 §2).
+ */
+export function textLayerPage(
+  text: string,
+  hint: number,
+  layers: readonly ReadonlyMap<string, number>[],
+): number | null {
+  const need = new Map<string, number>();
+  for (const t of textTokens(text)) need.set(t, (need.get(t) ?? 0) + 1);
+  if (need.size < 4) return null;
+  const pages = layers.flatMap((layer, page) =>
+    layer.size && [...need].every(([t, n]) => (layer.get(t) ?? 0) >= n)
+      ? [page]
+      : [],
+  );
+  return pages.length === 1 && pages[0] !== hint ? pages[0]! : null;
+}
+interface Part {
+  readonly name: string;
+  readonly block: string;
+  readonly root: ArrangementSourceBlock;
+  readonly leaf_id: string;
+  readonly start: number;
+  readonly end: number;
+}
+interface Answer {
+  readonly sections: readonly {
+    first: string;
+    last: string;
+    role: ArchiveSectionRole;
+    heading: string | null;
+  }[];
+  readonly headings: readonly {
+    block: string;
+    kind: "section-heading" | "subheading";
+    level: number | null;
+  }[];
+  readonly drops: readonly {
+    block: string;
+    reason: (typeof dropReasons)[number];
+  }[];
+  readonly captions: readonly {
+    object: string;
+    captions: readonly string[];
+    kind: "figure" | "table" | "scheme";
+  }[];
+  readonly splits: readonly { block: string; cuts: readonly number[] }[];
+}
+function rows<T>(value: unknown, field: string, issues: Issue[]): T[] {
+  if (!Array.isArray(value)) {
+    issues.push({ code: "tool-input", id: field });
+    return [];
   }
-  private name(id: string, leaf: boolean): string {
-    let name = this.names.get(id);
-    if (!name && leaf && UUID.test(id))
-      this.bind(id, (name = `b${++this.leaves}`));
-    return name ?? id;
-  }
-  private key(key: string, name: (id: string, leaf: boolean) => string) {
-    const at = key.indexOf(":");
-    return at < 0
-      ? key
-      : key.slice(0, at + 1) +
-          name(key.slice(at + 1), key.slice(0, at) !== "split");
-  }
-  /** A known name or a well-formed ID; anything else names the field that broke. */
-  private id(value: unknown, path: string): unknown {
-    if (typeof value !== "string") return value;
-    const id = this.ids.get(value);
-    if (id) return id;
-    if (UUID.test(value)) return value;
-    throw new ArchiveTextError("tool-input", [
-      { code: "tool-input", id: path },
-    ]);
-  }
-  inbound(value: unknown, field = "", path = ""): unknown {
-    if (Array.isArray(value))
-      return value.map((v, i) => this.inbound(v, field, `${path}[${i}]`));
-    if (value && typeof value === "object")
-      return Object.fromEntries(
-        Object.entries(value).map(([k, v]) => [
-          k,
-          this.inbound(v, k, path ? `${path}.${k}` : k),
-        ]),
-      );
-    if (field === "root_block_id" || LEAF_FIELDS.has(field))
-      return this.id(value, path);
-    if (KEY_FIELDS.has(field) && typeof value === "string")
-      return this.key(value, (id) => String(this.id(id, path)));
-    return value;
-  }
-  outbound(value: unknown, field = ""): unknown {
-    if (Array.isArray(value)) return value.map((v) => this.outbound(v, field));
-    if (value && typeof value === "object")
-      return Object.fromEntries(
-        Object.entries(value).map(([k, v]) => [k, this.outbound(v, k)]),
-      );
-    if (typeof value !== "string") return value;
-    if (field === "root_block_id" || field === "id")
-      return this.name(value, false);
-    if (LEAF_FIELDS.has(field)) return this.name(value, true);
-    if (KEY_FIELDS.has(field))
-      return this.key(value, (id, leaf) => this.name(id, leaf));
-    return value;
-  }
-  /** Rejections name what they found: a known ID, or a draft key holding one. */
-  issue(id: string | null): string | null {
-    if (id === null) return null;
-    return this.names.get(id) ?? this.key(id, (v) => this.names.get(v) ?? v);
-  }
+  return value.filter((row: unknown, i) => {
+    const ok = !!row && typeof row === "object" && !Array.isArray(row);
+    if (!ok) issues.push({ code: "tool-input", id: `${field}[${i}]` });
+    return ok;
+  }) as T[];
 }
 export class ArchiveArrangementService {
   constructor(
@@ -253,15 +267,15 @@ export class ArchiveArrangementService {
     signal?.throwIfAborted();
     const method = textHash({
       arrange: ARRANGEMENT_METHOD,
-      tools: "arrangement-tools-v3",
+      tools: ARRANGEMENT_TOOLS,
+      prompt: textHash([ARRANGEMENT_SYSTEM, BREAK_SYSTEM]),
       breaks: PARAGRAPH_BREAK_RULE,
       stop: ARCHIVE_TEXT_STOP_POLICY,
-      image: "latest",
       pages: this.pages.method,
       model: archiveTextModelIdentity(this.runtime),
     });
     const key = textHash({
-      stage: "arrangement-checkpoint-v1",
+      stage: "arrangement-checkpoint-v2",
       manual: seed?.destinations.filter((d) => d.locked) ?? [],
       manual_revision: seed?.manual_revision ?? 0,
       locked_text_spans: lockedTextSpans,
@@ -288,7 +302,7 @@ export class ArchiveArrangementService {
           ],
         );
         if (
-          stored.schema_version !== 1 ||
+          stored.schema_version !== 2 ||
           stored.stage !== "arrange" ||
           stored.source_input_sha256 !== source.input_sha256 ||
           stored.method_sha256 !== method
@@ -296,23 +310,24 @@ export class ArchiveArrangementService {
           throw new ArchiveTextError("source-integrity");
         parseArchiveModelUsage(stored.usage);
         const evidence = toolRecord(stored.evidence, [
-          "read_root_ids",
-          "viewed_pages",
+          "evidence_pages",
+          "caption_fixes",
         ]);
         if (
-          !Array.isArray(evidence.read_root_ids) ||
-          textHash(evidence.read_root_ids) !==
-            textHash(source.blocks.map((b) => b.root_block_id)) ||
-          !Array.isArray(evidence.viewed_pages) ||
-          evidence.viewed_pages.some(
+          !Array.isArray(evidence.evidence_pages) ||
+          evidence.evidence_pages.some(
             (p) =>
-              !Number.isSafeInteger(p) || p < 0 || p >= source.raw.page_count,
-          )
+              !Number.isSafeInteger(p) ||
+              p < 0 ||
+              p >= source.raw.page_count ||
+              source.pages[p as number]?.kind !== "text-layer",
+          ) ||
+          !Array.isArray(evidence.caption_fixes)
         )
           throw new ArchiveTextError("source-integrity");
         return {
           value: verifyArrangement(source, stored.snapshot, method, {
-            viewed_pages: new Set<number>(evidence.viewed_pages),
+            evidence_pages: new Set<number>(evidence.evidence_pages),
           }),
           usage: emptyArchiveUsage(),
           stop: null,
@@ -321,506 +336,523 @@ export class ArchiveArrangementService {
         throw new ArchiveTextError("source-integrity");
       }
     }
-    const ops = new Map<string, ArrangementOperation>(
-        seed?.operations.map((o) => [arrangementOperationKey(o), o]) ?? [],
+    const locked = new Map(
+        seed?.destinations
+          .filter((d) => d.locked)
+          .map((d) => [d.leaf_id, d.destination]) ?? [],
       ),
-      decisions = new Map<string, ParagraphBreakDecision>();
-    const viewed = new Set<number>(
-        seed?.operations
-          .filter((o) => o.kind === "assign-page")
-          .map((o) => o.page_index) ?? [],
+      constraints: ArrangementConstraints = {
+        locked_spans: lockedTextSpans,
+        manual_revision: seed?.manual_revision ?? 0,
+        locked_destinations: locked,
+        locked_decisions: new Map(
+          seed?.destinations
+            .filter((d) => d.locked)
+            .map((d) => [d.leaf_id, d.decision_id!]) ?? [],
+        ),
+      };
+    // Roots whose leaves a person fixed keep the seed's split; glued copyright lines are
+    // split by the program; the model may split only what is left.
+    const seedLeaves = new Map(seed?.leaves.map((l) => [l.leaf_id, l]) ?? []);
+    const keptRoots = new Set([
+      ...[...locked.keys()].flatMap((id) => {
+        const leaf = seedLeaves.get(id);
+        return leaf ? [leaf.source.root_block_id] : [];
+      }),
+      ...lockedTextSpans.map((s) => s.root_block_id),
+    ]);
+    const fixedCuts = new Map<string, readonly number[]>();
+    for (const b of source.blocks) {
+      if (keptRoots.has(b.root_block_id)) {
+        const split = seed?.operations.find(
+          (o) => o.kind === "split" && o.root_block_id === b.root_block_id,
+        );
+        if (split?.kind === "split") fixedCuts.set(b.root_block_id, split.cuts);
+        continue;
+      }
+      if (NO_SPLIT_TYPES.has(b.type)) continue;
+      const cut = copyrightCut(b.text);
+      if (cut !== null) fixedCuts.set(b.root_block_id, [cut]);
+    }
+    const blockName = new Map(
+      source.blocks.map((b, i) => [b.root_block_id, `r${i + 1}`]),
+    );
+    const byName = new Map(
+      source.blocks.map((b) => [blockName.get(b.root_block_id)!, b]),
+    );
+    const partsOf = (b: ArrangementSourceBlock, cuts: readonly number[]) => {
+      const name = blockName.get(b.root_block_id)!,
+        spans = arrangementLeafSpans(b, source.raw.result_sha256, cuts);
+      return spans.map(
+        (s, i): Part => ({
+          name: spans.length > 1 ? `${name}#${i + 1}` : name,
+          block: name,
+          root: b,
+          leaf_id: s.leaf_id,
+          start: s.start,
+          end: s.end,
+        }),
+      );
+    };
+    const initial = {
+      source_input_sha256: source.input_sha256,
+      page_count: source.raw.page_count,
+      blocks: source.blocks.flatMap((b) =>
+        partsOf(b, fixedCuts.get(b.root_block_id) ?? []).map((p) => ({
+          id: p.name,
+          type: b.type,
+          page: b.page_hint,
+          ...(b.title_level !== null ? { title_level: b.title_level } : {}),
+          ...(["image", "table"].includes(b.type) && b.region_hint
+            ? { region: b.region_hint }
+            : {}),
+          text: cpSlice(b.text, p.start, p.end),
+        })),
       ),
-      read = new TextReadCoverage(),
-      progress = new TextProgress("arrange", null);
-    const layerTokens = source.pages.map((p) => {
+    };
+    if (Buffer.byteLength(JSON.stringify(initial)) > ARRANGE_INPUT_MAX_BYTES)
+      return {
+        value: null,
+        usage: emptyArchiveUsage(),
+        stop: stopFor(
+          new ArchiveTextError("request-too-large"),
+          "arrange",
+          null,
+        ),
+      };
+    const layers = source.pages.map((p) => {
       const counts = new Map<string, number>();
       if (p.kind === "text-layer")
         for (const t of textTokens(p.text))
           counts.set(t, (counts.get(t) ?? 0) + 1);
       return counts;
     });
-    let accepted: ArrangementSnapshot | null = null;
-    const constraints: ArrangementConstraints = {
-      locked_spans: lockedTextSpans,
-      viewed_pages: viewed,
-      manual_revision: seed?.manual_revision ?? 0,
-      locked_destinations: new Map(
-        seed?.destinations
-          .filter((d) => d.locked)
-          .map((d) => [d.leaf_id, d.destination]) ?? [],
-      ),
-      locked_decisions: new Map(
-        seed?.destinations
-          .filter((d) => d.locked)
-          .map((d) => [d.leaf_id, d.decision_id!]) ?? [],
-      ),
-    };
-    const review = () =>
-      reviewArrangement(source, [...ops.values()], constraints);
-    const tools = [
-      toolDeclaration(
-        "draft_status",
-        "Inspect bounded host-held operation drafts after compaction. This does not read source evidence.",
-        {
-          offset: integer,
-          limit: windowLimit,
-        },
-      ),
-      toolDeclaration(
-        "read_page_reference",
-        "Read bounded visible text-layer hints for a page. Hints are not authoritative and do not replace viewing the PDF.",
-        { page_index: integer, offset: integer },
-      ),
-      toolDeclaration(
-        "read_blocks",
-        "Read exact original block characters with type, page hint and current program-derived leaf IDs, including draft splits. Leaves intersect the returned text window. Follow next until null; offsets are Unicode code points. limit counts blocks per window (1-20), not characters.",
-        {
-          index: integer,
-          offset: integer,
-          limit: windowLimit,
-        },
-      ),
-      toolDeclaration(
-        "block_info",
-        "Refresh program-derived leaf IDs after a split, or request text-layer page hints. Otherwise use identities from read_blocks. Never infer IDs.",
-        { root_block_id: rootId },
-      ),
-      toolDeclaration(
-        "view_page",
-        "View an original PDF page or crop. Whole-page view is region=null. Pages are zero-based.",
-        {
-          page_index: integer,
-          region: {
-            anyOf: [
-              {
-                type: "array",
-                items: { type: "integer", minimum: 0, maximum: 1000 },
-                minItems: 4,
-                maxItems: 4,
-              },
-              { type: "null" },
-            ],
-          },
-        },
-      ),
-      toolDeclaration(
-        "find_text",
-        "Find exact text within one original block. Returned offsets are Unicode code points; searching alone does not count as reading new evidence.",
-        { root_block_id: rootId, text: str, start: integer },
-      ),
-      toolDeclaration(
-        "put_operations",
-        "Add or replace operation drafts by host-derived scope key. Submit batches; never send rewritten body text.",
-        {
-          operations: {
-            type: "array",
-            items: opSchema,
-            minItems: 1,
-            maxItems: 20,
-          },
-        },
-      ),
-      toolDeclaration(
-        "remove_operations",
-        "Remove stale draft operations by exact keys. Removal does not delete source content.",
-        { keys: strings },
-      ),
-      toolDeclaration(
-        "review_breaks",
-        "Validate complete destinations and return bounded paragraph-break candidates with the last and first characters on each side (left_tail, right_head). Decide from those; reread blocks only when they are not enough. Review hash changes when the draft changes.",
-        {
-          offset: integer,
-          limit: windowLimit,
-        },
-      ),
-      toolDeclaration(
-        "decide_breaks",
-        "Decide every current candidate; keep needs a short reason (one line, at most 120 characters). A merge decision also needs a merge operation.",
-        {
-          reviewed_candidates_sha256: str,
-          decisions: { type: "array", items: decisionSchema, maxItems: 20 },
-        },
-      ),
-      toolDeclaration(
-        "submit_operations",
-        "Accept the host-held operations after coverage, paragraph decisions and zero-character-difference validation.",
-        { reviewed_candidates_sha256: str },
-      ),
-    ];
-    const run = async (
-      name: string,
-      args: Record<string, unknown>,
-      context: Parameters<AgentCapabilityRunOptions["executeTool"]>[1],
-    ): Promise<AgentCapabilityToolResult> => {
-      if (name === "read_blocks") {
-        const r = toolRecord(args, ["index", "offset", "limit"]),
-          spans = new Map<string, ReturnType<typeof arrangementLeafSpans>>();
-        return textReply(
-          boundedTextWindow(
-            source.blocks.map((b) => ({
-              id: b.root_block_id,
-              text: b.text,
-              block: b,
-            })),
-            toolCount(r.index, source.blocks.length),
-            toolCount(r.offset),
-            toolLimit(r.limit),
-            (id, start, end) => {
-              if (read.add(id, start, end))
-                progress.progress("read-block", [id, start, end]);
-            },
-            (row, start, end) => {
-              let leaves = spans.get(row.id);
-              if (!leaves) {
-                const split = ops.get(`split:${row.id}`);
-                leaves = arrangementLeafSpans(
-                  row.block,
-                  source.raw.result_sha256,
-                  split?.kind === "split" ? split.cuts : [],
-                );
-                spans.set(row.id, leaves);
-              }
-              return {
-                type: row.block.type,
-                page_hint: row.block.page_hint,
-                image_ref: row.block.image_ref,
-                leaf_count: leaves.length,
-                leaves: leaves.filter((leaf) =>
-                  start === end
-                    ? leaf.start <= start && leaf.end >= end
-                    : leaf.start < end && leaf.end > start,
-                ),
-              };
-            },
-          ),
-        );
-      }
-      if (name === "draft_status") {
-        const r = toolRecord(args, ["offset", "limit"]);
-        return textReply({
-          operations: boundedItems(
-            [...ops].map(([key, operation]) => ({ key, operation })),
-            toolCount(r.offset),
-            toolLimit(r.limit),
-          ),
-          decision_count: decisions.size,
-          read_block_count: source.blocks.filter((b) =>
-            read.complete(b.root_block_id, [...b.text].length),
-          ).length,
-          viewed_pages: [...viewed].slice(0, 100),
-          block_count: source.blocks.length,
-        });
-      }
-      if (name === "read_page_reference") {
-        const r = toolRecord(args, ["page_index", "offset"]),
-          page =
-            source.pages[toolCount(r.page_index, source.pages.length - 1)]!;
-        return textReply(
-          boundedTextWindow(
-            [
-              {
-                id: String(page.page),
-                text: page.kind === "text-layer" ? page.text : "",
-              },
-            ],
-            0,
-            toolCount(r.offset),
-            1,
-            (id, start, end) => {
-              if (read.add(`reference:${id}`, start, end))
-                progress.progress("reference", [id, start, end]);
-            },
-          ),
-        );
-      }
-      if (name === "block_info") {
-        const r = toolRecord(args, ["root_block_id"]),
-          root = source.blocks.find((b) => b.root_block_id === r.root_block_id);
-        if (!root) throw new ArchiveTextError("unknown-root");
-        const split = ops.get(`split:${root.root_block_id}`);
-        const tokens = textTokens(root.text),
-          needed = new Map<string, number>();
-        for (const token of tokens)
-          needed.set(token, (needed.get(token) ?? 0) + 1);
-        const matches = source.pages
-          .filter(
-            (p) =>
-              tokens.length > 0 &&
-              p.kind === "text-layer" &&
-              [...needed].every(
-                ([t, count]) => (layerTokens[p.page]!.get(t) ?? 0) >= count,
-              ),
-          )
-          .map((p) => p.page);
-        return textReply({
-          root_block_id: root.root_block_id,
-          type: root.type,
-          page_hint: root.page_hint,
-          image_ref: root.image_ref,
-          text_layer_page_hints: matches.slice(0, 20),
-          text_layer_page_hint_count: matches.length,
-          leaves: arrangementLeafSpans(
-            root,
-            source.raw.result_sha256,
-            split?.kind === "split" ? split.cuts : [],
-          ),
-        });
-      }
-      if (name === "view_page") {
-        const r = toolRecord(args, ["page_index", "region"]),
-          page = toolCount(r.page_index, source.raw.page_count - 1),
-          region = r.region === null ? null : parsePageRegion(r.region);
-        const image = await this.pages
-          .image(
-            source.raw.source_asset_id,
-            source.raw.source_sha256,
-            page,
-            region,
-            context.signal,
-          )
-          .catch((error: unknown) => {
-            if (context.signal.aborted) throw error;
-            throw new ArchiveTextError("page-tools-unavailable", [], {
-              cause: error,
-            });
-          });
-        if (region === null) viewed.add(page);
-        progress.progress("page", page);
-        return { status: "success", parts: [image] };
-      }
-      if (name === "find_text") {
-        const r = toolRecord(args, ["root_block_id", "text", "start"]),
-          root = source.blocks.find((b) => b.root_block_id === r.root_block_id);
-        if (
-          !root ||
-          typeof r.text !== "string" ||
-          !r.text.length ||
-          [...r.text].length > 200
-        )
-          throw new ArchiveTextError("tool-input");
-        const start = toolCount(r.start),
-          tail = cpSlice(root.text, start),
-          at = tail.indexOf(r.text);
-        return textReply({
-          start: at < 0 ? null : start + [...tail.slice(0, at)].length,
-          end:
-            at < 0
-              ? null
-              : start + [...tail.slice(0, at + r.text.length)].length,
-        });
-      }
-      if (name === "put_operations") {
-        const r = toolRecord(args, ["operations"]);
-        if (
-          !Array.isArray(r.operations) ||
-          !r.operations.length ||
-          r.operations.length > 20
-        )
-          throw new ArchiveTextError("tool-input");
-        const parsed = r.operations.map(parseArrangementOperation);
-        const draft = new Map(ops);
-        for (const op of parsed) draft.set(arrangementOperationKey(op), op);
-        reviewArrangement(source, [...draft.values()], {
-          ...constraints,
-          allow_incomplete: true,
-        });
-        for (const op of parsed) ops.set(arrangementOperationKey(op), op);
-        decisions.clear();
-        for (const op of parsed)
-          progress.progress(
-            "operation-draft",
-            op.kind === "assign-page" ? { ...op, reason: "page" } : op,
+    const evidencePages = new Set<number>(),
+      captionFixes: string[] = [];
+    let review: ArrangementReview | null = null,
+      ops: ArrangementOperation[] = [];
+    // Short names in rejections, so the model can correct its own answer.
+    const shortIssue = (i: Issue, names: ReadonlyMap<string, string>) => ({
+      code: i.code,
+      id:
+        i.id === null ? null : (names.get(i.id) ?? blockName.get(i.id) ?? i.id),
+    });
+    const expand = (args: Record<string, unknown>) => {
+      evidencePages.clear();
+      captionFixes.length = 0;
+      const r = toolRecord(args, [
+          "sections",
+          "headings",
+          "drops",
+          "captions",
+          "splits",
+        ]),
+        issues: Issue[] = [];
+      const a: Answer = {
+        sections: rows(r.sections, "sections", issues),
+        headings: rows(r.headings, "headings", issues),
+        drops: rows(r.drops, "drops", issues),
+        captions: rows(r.captions, "captions", issues),
+        splits: rows(r.splits, "splits", issues),
+      };
+      const cuts = new Map(fixedCuts);
+      for (const s of a.splits) {
+        const b = byName.get(s.block);
+        if (!b || fixedCuts.has(b.root_block_id) || !Array.isArray(s.cuts))
+          issues.push({ code: "split-invalid", id: s.block });
+        else
+          cuts.set(
+            b.root_block_id,
+            [...new Set(s.cuts)].sort((x, y) => x - y),
           );
-        return textReply({
-          stored_keys: parsed.map(arrangementOperationKey),
-          operation_count: ops.size,
+      }
+      const parts = source.blocks.flatMap((b) =>
+        partsOf(b, cuts.get(b.root_block_id) ?? []),
+      );
+      const part = new Map(parts.map((p) => [p.name, p])),
+        names = new Map(parts.map((p) => [p.leaf_id, p.name])),
+        order = new Map([...byName.keys()].map((k, i) => [k, i]));
+      const leafOf = (name: string, field: string) => {
+        const p = part.get(name);
+        if (!p) issues.push({ code: "unknown-block", id: `${field}:${name}` });
+        return p;
+      };
+      const section = new Array<Answer["sections"][number] | null>(
+        source.blocks.length,
+      ).fill(null);
+      for (const s of a.sections) {
+        const i = order.get(String(s.first).split("#")[0]!),
+          j = order.get(String(s.last).split("#")[0]!);
+        if (i === undefined || j === undefined || j < i) {
+          issues.push({ code: "section-invalid", id: `${s.first}-${s.last}` });
+          continue;
+        }
+        for (let k = i; k <= j; k++) {
+          if (section[k])
+            issues.push({ code: "section-overlap", id: `r${k + 1}` });
+          section[k] = s;
+        }
+      }
+      section.forEach((s, k) => {
+        if (!s) issues.push({ code: "block-without-section", id: `r${k + 1}` });
+      });
+      const headings = new Map(a.headings.map((h) => [h.block, h])),
+        drops = new Map(a.drops.map((d) => [d.block, d.reason]));
+      for (const name of [...headings.keys(), ...drops.keys()])
+        leafOf(name, "headings/drops");
+      const next: ArrangementOperation[] = [];
+      for (const [root, c] of cuts)
+        if (c.length)
+          next.push({ kind: "split", root_block_id: root, cuts: c });
+      for (const p of parts) {
+        const lock = locked.get(p.leaf_id);
+        if (lock) {
+          next.push(
+            lock.kind === "dropped"
+              ? { kind: "drop", leaf_id: p.leaf_id, reason: lock.reason }
+              : {
+                  kind: "assign",
+                  leaf_id: p.leaf_id,
+                  target: lock.target,
+                  presentation: lock.presentation,
+                },
+          );
+          continue;
+        }
+        const s = section[order.get(p.block)!],
+          drop = drops.get(p.name) ?? drops.get(p.block);
+        if (drop) {
+          next.push({ kind: "drop", leaf_id: p.leaf_id, reason: drop });
+          continue;
+        }
+        if (!s) continue;
+        const h = headings.get(p.name) ?? headings.get(p.block);
+        const heading =
+          s.role === "additional" && s.heading
+            ? (leafOf(s.heading, "sections.heading")?.leaf_id ?? null)
+            : null;
+        next.push({
+          kind: "assign",
+          leaf_id: p.leaf_id,
+          target:
+            s.role === "additional"
+              ? { role: "additional", original_heading_leaf_id: heading }
+              : { role: s.role },
+          presentation: !h
+            ? { kind: "content" }
+            : h.kind === "subheading"
+              ? {
+                  kind: "subheading",
+                  level: Math.min(
+                    6,
+                    Math.max(2, Math.round(Number(h.level ?? 2)) || 2),
+                  ) as 2 | 3 | 4 | 5 | 6,
+                }
+              : { kind: "section-heading" },
         });
       }
-      if (name === "remove_operations") {
-        const r = toolRecord(args, ["keys"]);
+      // A leaf with a locked text correction stays retained where the person left it.
+      for (const span of lockedTextSpans) {
+        const p = parts.find(
+          (x) =>
+            x.root.root_block_id === span.root_block_id &&
+            x.start === span.start &&
+            x.end === span.end,
+        );
+        const prior =
+          p && seed?.destinations.find((d) => d.leaf_id === p.leaf_id);
+        const at = p
+          ? next.findIndex((o) => "leaf_id" in o && o.leaf_id === p.leaf_id)
+          : -1;
         if (
-          !Array.isArray(r.keys) ||
-          r.keys.length > 20 ||
-          r.keys.some((k) => typeof k !== "string" || !ops.has(k))
+          prior?.destination.kind === "assigned" &&
+          at >= 0 &&
+          next[at]!.kind === "drop"
         )
-          throw new ArchiveTextError("tool-input");
-        for (const key of r.keys) ops.delete(String(key));
-        decisions.clear();
-        return textReply({ operation_count: ops.size });
-      }
-      if (name === "review_breaks") {
-        const r = toolRecord(args, ["offset", "limit"]),
-          v = review(),
-          offset = toolCount(r.offset),
-          limit = toolLimit(r.limit);
-        if (limit < 1 || offset > v.candidates.length)
-          throw new ArchiveTextError("tool-input");
-        // The words on both sides decide most breaks; without them a real run
-        // reread every block around its candidates and stopped as no-progress.
-        const text = new Map(v.leaves.map((l) => [l.leaf_id, l.original_text])),
-          side = (id: string, tail: boolean) => {
-            const chars = [...(text.get(id) ?? "")];
-            return (
-              tail ? chars.slice(-BREAK_CONTEXT) : chars.slice(0, BREAK_CONTEXT)
-            ).join("");
+          next[at] = {
+            kind: "assign",
+            leaf_id: p!.leaf_id,
+            target: prior.destination.target,
+            presentation: prior.destination.presentation,
           };
-        return textReply({
-          reviewed_candidates_sha256: v.candidates_sha256,
-          candidates: v.candidates.slice(offset, offset + limit).map((c) => ({
-            candidate_id: c.candidate_id,
-            left_leaf_id: c.left_leaf_id,
-            right_leaf_id: c.right_leaf_id,
-            left_ends_with_hyphen: c.left_ends_with_hyphen,
-            skipped_leaf_count: c.skipped_leaf_ids.length,
-            left_tail: side(c.left_leaf_id, true),
-            right_head: side(c.right_leaf_id, false),
-          })),
-          total: v.candidates.length,
-          next_offset:
-            offset + limit < v.candidates.length ? offset + limit : null,
-        });
       }
-      if (name === "decide_breaks") {
-        const r = toolRecord(args, ["reviewed_candidates_sha256", "decisions"]),
-          v = review();
-        if (
-          r.reviewed_candidates_sha256 !== v.candidates_sha256 ||
-          !Array.isArray(r.decisions) ||
-          r.decisions.length > 20
-        )
-          throw new ArchiveTextError("break-review-stale");
-        const parsed = r.decisions.map(parseParagraphBreakDecision);
-        if (
-          parsed.some(
-            (d) => !v.candidates.some((c) => c.candidate_id === d.candidate_id),
-          )
-        )
-          throw new ArchiveTextError("break-decision-invalid");
-        for (const d of parsed) decisions.set(d.candidate_id, d);
-        for (const d of parsed)
-          progress.progress("break-decisions", {
-            candidate_id: d.candidate_id,
-            decision: d.decision,
-          });
-        return textReply({
-          decided: decisions.size,
-          total: v.candidates.length,
-        });
-      }
-      if (name === "submit_operations") {
-        const r = toolRecord(args, ["reviewed_candidates_sha256"]);
-        const unread = source.blocks.filter(
-          (b) => !read.complete(b.root_block_id, [...b.text].length),
-        );
-        if (unread.length)
-          throw new ArchiveTextError(
-            "arrangement-invalid",
-            unread.map((b) => ({
-              code: "block-not-read",
-              id: b.root_block_id,
-            })),
-          );
-        accepted = acceptArrangement(
-          source,
-          {
-            schema_version: 1,
-            source_input_sha256: source.input_sha256,
-            reviewed_candidates_sha256: r.reviewed_candidates_sha256,
-            operations: [...ops.values()],
-            break_decisions: [...decisions.values()],
+      const dropped = new Set(
+          next.filter((o) => o.kind === "drop").map((o) => o.leaf_id),
+        ),
+        captioned = new Set<string>();
+      for (const c of a.captions) {
+        const object = part.get(c.object);
+        const ids = (Array.isArray(c.captions) ? c.captions : []).flatMap(
+          (n) => {
+            const p = part.get(n);
+            const ok =
+              p &&
+              p.root.type === "caption" &&
+              !captioned.has(p.leaf_id) &&
+              !dropped.has(p.leaf_id);
+            if (!ok) captionFixes.push(`${c.object}<${n}`);
+            return ok ? [p.leaf_id] : [];
           },
-          method,
-          constraints,
         );
-        context.concludeTurn();
-        return textReply({
-          accepted: true,
-          arrangement_id: accepted.arrangement_id,
+        if (
+          object &&
+          ["image", "table"].includes(object.root.type) &&
+          !dropped.has(object.leaf_id) &&
+          ids.length
+        ) {
+          ids.forEach((x) => captioned.add(x));
+          next.push({
+            kind: "caption",
+            object_leaf_id: object.leaf_id,
+            caption_leaf_ids: ids,
+            object_kind: c.kind,
+          });
+        } else if (ids.length) captionFixes.push(`object ${c.object}`);
+      }
+      if (issues.length) throw invalid(issues);
+      for (const p of parts) {
+        if (dropped.has(p.leaf_id)) continue;
+        const page = textLayerPage(
+          cpSlice(p.root.text, p.start, p.end),
+          p.root.page_hint,
+          layers,
+        );
+        if (page === null) continue;
+        evidencePages.add(page);
+        next.push({
+          kind: "assign-page",
+          leaf_id: p.leaf_id,
+          page_index: page,
+          basis_page_index: page,
+          reason: "The text layer prints it on this page.",
         });
       }
-      throw new ArchiveTextError("tool-input");
-    };
-    const names = new ArrangementNames(
-      source.blocks.map((b) => b.root_block_id),
-    );
-    const result = await runArchiveTextSession(
-      this.runtime,
-      {
-        step: "arrange",
-        page_index: null,
-        input_sha256: key,
-        progress,
-        system:
-          "Arrange the original blocks without changing characters. Classify each terminal leaf exactly once. Use the fixed skeleton, keeping original subheadings. Authors contain names only; affiliations, funding, notes and final supporting-information notices belong to end-matter. Drop this article's own bibliographic lines (journal, volume, pages, DOI, dates), UI labels, headers, footers, copyright and decoration with their closed reason. The reference list is content: assign its heading and every entry to references, never drop them. Split embedded copyright then drop only that span. Never dehyphenate or normalize text. Cross independent footnotes/figures/tables/captions when merging, without losing them. Page hints can be wrong: view the destination page before assign-page. Read sources via bounded read_blocks, using its current leaf IDs, types and page hints. After each read_blocks window, put_operations for every leaf in that window before reading the next one; drafts are kept by the host, so context compaction never loses finished work. Use block_info only to refresh identities after a split or obtain text-layer page hints. Review and decide paragraph candidates from the text each candidate shows, without rereading or resubmitting finished blocks, then submit. Do not output full text.",
-        initial: {
-          source_input_sha256: source.input_sha256,
-          block_count: source.blocks.length,
-          page_count: source.raw.page_count,
-          roles: ARCHIVE_SECTION_ROLES,
-          coordinate_unit: "unicode-code-point-half-open",
-          instruction:
-            "Start at read_blocks index=0,offset=0. Use its short IDs exactly as returned (blocks r1, r2, ...; leaves b1, b2, ...) and follow next until null; leaf spans and text windows use Unicode code points. Splitting replaces leaf identities: reread the block or use block_info after changing a split.",
-        },
-        tools,
-        accepted: () => accepted,
-        execute: async (name, input, context) => {
-          try {
-            const reply = await run(
-              name,
-              names.inbound(input) as Record<string, unknown>,
-              context,
-            );
-            return {
-              ...reply,
-              parts: reply.parts.map((part) =>
-                part.media_type === "application/json" &&
-                "text" in part &&
-                typeof part.text === "string"
-                  ? {
-                      ...part,
-                      text: JSON.stringify(
-                        names.outbound(JSON.parse(part.text)),
-                      ),
-                    }
-                  : part,
-              ),
-            };
-          } catch (error) {
-            if (!(error instanceof ArchiveTextError) || !error.issues.length)
-              throw error;
-            throw new ArchiveTextError(
-              error.code,
-              error.issues.map((i) => ({ ...i, id: names.issue(i.id) })),
-              { cause: error },
-            );
-          }
-        },
-      },
-      signal,
-    );
-    if (result.value && !signal?.aborted) {
       try {
-        await this.cache.save(
-          key,
-          Buffer.from(
-            JSON.stringify({
-              schema_version: 1,
-              stage: "arrange",
-              source_input_sha256: source.input_sha256,
-              method_sha256: method,
-              snapshot: result.value,
-              usage: result.usage,
-              evidence: {
-                read_root_ids: source.blocks.map((b) => b.root_block_id),
-                viewed_pages: [...viewed],
-              },
-            }),
-          ),
-          "application/json",
+        review = reviewArrangement(source, next, {
+          ...constraints,
+          evidence_pages: evidencePages,
+        });
+      } catch (error) {
+        if (error instanceof ArchiveTextError && error.issues.length)
+          throw new ArchiveTextError(
+            error.code,
+            error.issues.map((i) => shortIssue(i, names)),
+            { cause: error },
+          );
+        throw error;
+      }
+      ops = next;
+    };
+    const usages: ArchiveModelUsage[] = [];
+    // One request, one correction of a rejected answer, one resend of a failed request.
+    const ask = async (
+      name: "arrange" | "breaks",
+      system: string,
+      tool: typeof arrangementTool,
+      input: unknown,
+      accept: (args: Record<string, unknown>) => void,
+    ): Promise<ArchiveTextStop | null> => {
+      let stop: ArchiveTextStop | null = null;
+      for (let attempt = 0; attempt < 2 && !signal?.aborted; attempt++) {
+        let done = false,
+          rejected = 0;
+        const progress = new TextProgress("arrange", null);
+        const session = await runArchiveTextSession(
+          this.runtime,
+          {
+            step: "arrange",
+            page_index: null,
+            input_sha256: textHash({ key, request: name }),
+            progress,
+            system,
+            initial: input,
+            tools: [tool],
+            toolChoice: "required",
+            accepted: () => (done ? true : null),
+            execute: async (call, args, context) => {
+              if (call !== tool.name) throw new ArchiveTextError("tool-input");
+              try {
+                accept(args);
+              } catch (error) {
+                if (++rejected > 1)
+                  throw Object.assign(new Error("arrangement rejected twice"), {
+                    code: "arrangement-invalid",
+                  });
+                throw error;
+              }
+              done = true;
+              progress.progress(name, true);
+              context.concludeTurn();
+              return textReply({ accepted: true });
+            },
+          },
           signal,
         );
-      } catch (error) {
+        usages.push(session.usage);
+        if (done) return null;
+        stop = session.stop;
+        if (stop?.cause_code === "arrangement-invalid") break;
+      }
+      return stop;
+    };
+    try {
+      const stop = await ask(
+        "arrange",
+        ARRANGEMENT_SYSTEM,
+        arrangementTool,
+        initial,
+        expand,
+      );
+      if (stop || !review)
+        return {
+          value: null,
+          usage: sumArchiveUsage(usages),
+          stop:
+            stop ?? stopFor(new Error("arrangement missing"), "arrange", null),
+        };
+      const reviewed: ArrangementReview = review;
+      const text = new Map(
+          reviewed.leaves.map((l) => [l.leaf_id, l.original_text]),
+        ),
+        types = new Map(reviewed.leaves.map((l) => [l.leaf_id, l.type]));
+      const candidates = reviewed.candidates.map((c, i) => ({
+        c,
+        name: `c${i + 1}`,
+      }));
+      let decisions: ParagraphBreakDecision[] = [],
+        merged = new Set<string>();
+      if (candidates.length) {
+        const side = (id: string, tail: boolean) => {
+          const chars = [...(text.get(id) ?? "")];
+          return chars.length <= BREAK_WHOLE
+            ? chars.join("")
+            : (tail
+                ? chars.slice(-BREAK_CONTEXT)
+                : chars.slice(0, BREAK_CONTEXT)
+              ).join("");
+        };
+        const stopBreaks = await ask(
+          "breaks",
+          BREAK_SYSTEM,
+          breakTool,
+          {
+            source_input_sha256: source.input_sha256,
+            candidates: candidates.map(({ c, name }) => ({
+              candidate: name,
+              left_tail: side(c.left_leaf_id, true),
+              right_head: side(c.right_leaf_id, false),
+              left_is_whole:
+                [...(text.get(c.left_leaf_id) ?? "")].length <= BREAK_WHOLE,
+              left_ends_with_hyphen: c.left_ends_with_hyphen,
+              skipped: c.skipped_leaf_ids.map((x) => types.get(x)),
+            })),
+          },
+          (args) => {
+            const r = toolRecord(args, ["decisions"]),
+              issues: Issue[] = [],
+              given = rows<{
+                candidate: string;
+                decision: string;
+                reason: string;
+              }>(r.decisions, "decisions", issues),
+              by = new Map<string, { decision: string; reason: string }>();
+            for (const d of given) {
+              if (
+                by.has(d.candidate) ||
+                !candidates.some((c) => c.name === d.candidate)
+              )
+                issues.push({
+                  code: "break-decision-invalid",
+                  id: String(d.candidate),
+                });
+              by.set(d.candidate, d);
+            }
+            const next = candidates.map(({ c, name }) => {
+              const d = by.get(name);
+              if (!d) issues.push({ code: "break-decision-missing", id: name });
+              if (d?.decision === "merge")
+                return {
+                  candidate_id: c.candidate_id,
+                  decision: "merge" as const,
+                };
+              const reason = String(d?.reason ?? "")
+                .split("\n")[0]!
+                .trim();
+              if (d && !reason)
+                issues.push({ code: "break-reason-missing", id: name });
+              return {
+                candidate_id: c.candidate_id,
+                decision: "keep" as const,
+                reason: [...reason].slice(0, 120).join(""),
+              };
+            });
+            if (issues.length) throw invalid(issues);
+            decisions = next;
+            merged = new Set(
+              candidates
+                .filter(({ name }) => by.get(name)?.decision === "merge")
+                .map(({ name }) => name),
+            );
+          },
+        );
+        if (stopBreaks)
+          return {
+            value: null,
+            usage: sumArchiveUsage(usages),
+            stop: stopBreaks,
+          };
+      }
+      // Adjacent merges a-b and b-c become one merge a-b-c.
+      const chains: string[][] = [];
+      for (const { c, name } of candidates)
+        if (merged.has(name)) {
+          const chain = chains.find((x) => x.at(-1) === c.left_leaf_id);
+          if (chain) chain.push(c.right_leaf_id);
+          else chains.push([c.left_leaf_id, c.right_leaf_id]);
+        }
+      const operations = [
+        ...ops,
+        ...chains.map(
+          (leaf_ids): ArrangementOperation => ({ kind: "merge", leaf_ids }),
+        ),
+      ];
+      const pageConstraints = { ...constraints, evidence_pages: evidencePages },
+        final = reviewArrangement(source, operations, pageConstraints);
+      const value = acceptArrangement(
+        source,
+        {
+          schema_version: 1,
+          source_input_sha256: source.input_sha256,
+          reviewed_candidates_sha256: final.candidates_sha256,
+          operations,
+          break_decisions: decisions,
+        },
+        method,
+        pageConstraints,
+      );
+      const usage = sumArchiveUsage(usages);
+      if (!signal?.aborted)
         try {
+          await this.cache.save(
+            key,
+            Buffer.from(
+              JSON.stringify({
+                schema_version: 2,
+                stage: "arrange",
+                source_input_sha256: source.input_sha256,
+                method_sha256: method,
+                snapshot: value,
+                usage,
+                evidence: {
+                  evidence_pages: [...evidencePages].sort((x, y) => x - y),
+                  caption_fixes: captionFixes.slice(0, 200),
+                },
+              }),
+            ),
+            "application/json",
+            signal,
+          );
+        } catch (error) {
           if (
             !error ||
             typeof error !== "object" ||
@@ -834,12 +866,11 @@ export class ArchiveArrangementService {
             seed,
             lockedTextSpans,
           );
-          return { ...result, value: winner.value };
-        } catch (failure) {
-          throw archiveUsageFailure(failure, result.usage);
+          return { value: winner.value, usage, stop: null };
         }
-      }
+      return { value, usage, stop: null };
+    } catch (failure) {
+      throw archiveUsageFailure(failure, sumArchiveUsage(usages));
     }
-    return result;
   }
 }

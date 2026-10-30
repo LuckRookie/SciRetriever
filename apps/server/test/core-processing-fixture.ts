@@ -215,7 +215,11 @@ export async function coreProcessingFixture(
       );
       if (
         wire.tools?.some((t) =>
-          ["read_blocks", "submit_corrections"].includes(t.function.name),
+          [
+            "submit_arrangement",
+            "submit_breaks",
+            "submit_corrections",
+          ].includes(t.function.name),
         )
       ) {
         return {

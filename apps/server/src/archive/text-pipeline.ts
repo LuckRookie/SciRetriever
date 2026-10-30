@@ -29,8 +29,10 @@ import {
   LEAF_CORRECTION_METHOD,
 } from "../proofread/leaf-corrections.js";
 import { PAGE_REVIEW_METHOD } from "../proofread/page-review.js";
-import { ArchiveArrangementService } from "./arrangement-service.js";
-import { ARRANGEMENT_METHOD } from "./arrangement.js";
+import {
+  ArchiveArrangementService,
+  ARRANGEMENT_WORKFLOW,
+} from "./arrangement-service.js";
 import {
   prepareArrangementSource,
   byteHash,
@@ -258,7 +260,7 @@ export class ArchiveTextPipeline {
   }
   private method(): ProofreadVersionV2["method"] {
     return {
-      arrange: ARRANGEMENT_METHOD,
+      arrange: ARRANGEMENT_WORKFLOW,
       page_classify: this.pdf.method,
       // The key keeps its name; ADR 0047 pages are reviewed by the guarded single request.
       suspects: PAGE_REVIEW_METHOD,

@@ -4,11 +4,9 @@ import {
   type ArrangementOperation,
 } from "@sciretriever/contracts";
 import { ArchiveArrangementService } from "../src/archive/arrangement-service.js";
-import { TEXT_TOOL_MAX_BYTES } from "../src/archive/text-session.js";
 import {
   acceptArrangement,
   arrangementLeafId,
-  arrangementLeafSpans,
   arrangementPreview,
   reviewArrangement,
   verifyArrangement,
@@ -19,6 +17,7 @@ import {
   prepareArrangementSource,
   textHash,
 } from "../src/archive/text-source.js";
+import type { ModelRequest } from "../src/agents/model-protocol.js";
 import {
   archiveTextFixture,
   arranged,
@@ -33,214 +32,6 @@ import {
 } from "./archive-text-fixture.js";
 const method = "c".repeat(64),
   foreign = "00000000-0000-0000-0000-000000000099";
-it("reads current leaf identities, types and page hints with exact text, including empty images and drafted splits", async () => {
-  const f = await archiveTextFixture([
-    { text: "A😀.B🙂." },
-    { text: "", type: "image", image: true, page: 1 },
-    { text: "Heading", type: "title", page: 1 },
-  ]);
-  type Item = {
-    id: string;
-    type: string;
-    page_hint: number;
-    text: string;
-    leaf_count: number;
-    leaves: { leaf_id: string; start: number; end: number }[];
-  };
-  let calls = 0,
-    items: Item[] = [];
-  const root = f.source.blocks[0]!,
-    expected = (start: number, end: number) =>
-      arrangementLeafId(
-        root.root_block_id,
-        start,
-        end,
-        f.source.raw.result_sha256,
-      ),
-    runtime = fakeTextRuntime(async (request) => {
-      calls++;
-      if (calls === 1)
-        return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
-      if (calls === 2) {
-        items = toolJson(request).items as Item[];
-        // The model copies short names; the host maps them back to real IDs.
-        expect(items[0]).toMatchObject({
-          id: "r1",
-          text: "A😀.B🙂.",
-          type: "text",
-          page_hint: 0,
-          leaf_count: 1,
-          leaves: [{ leaf_id: "b1", start: 0, end: 6 }],
-        });
-        expect(items[1]).toMatchObject({
-          text: "",
-          type: "image",
-          page_hint: 1,
-          leaf_count: 1,
-          leaves: [{ start: 0, end: 0 }],
-        });
-        expect(items[2]).toMatchObject({ type: "title", page_hint: 1 });
-        return modelTool("put_operations", {
-          operations: [{ kind: "split", root_block_id: "r1", cuts: [3] }],
-        });
-      }
-      if (calls === 3)
-        return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
-      if (calls === 4) {
-        items = toolJson(request).items as Item[];
-        // A split's new leaves get new names; the real block ID is still accepted.
-        expect(items[0]!.leaves).toEqual([
-          { leaf_id: "b4", start: 0, end: 3 },
-          { leaf_id: "b5", start: 3, end: 6 },
-        ]);
-        expect(items[0]!.leaf_count).toBe(2);
-        return modelTool("block_info", { root_block_id: root.root_block_id });
-      }
-      if (calls === 5) {
-        expect(toolJson(request).leaves).toEqual(items[0]!.leaves);
-        return modelTool("put_operations", {
-          operations: items.flatMap((i) =>
-            i.leaves.map((l) => ({
-              kind: "assign",
-              leaf_id: l.leaf_id,
-              target: { role: "methods" },
-              presentation: { kind: "content" },
-            })),
-          ),
-        });
-      }
-      if (calls === 6)
-        return modelTool("review_breaks", { offset: 0, limit: 20 });
-      return modelTool("submit_operations", {
-        reviewed_candidates_sha256:
-          toolJson(request).reviewed_candidates_sha256,
-      });
-    });
-  try {
-    const result = await new ArchiveArrangementService(
-      runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source);
-    expect(result.stop).toBeNull();
-    expect(result.usage.calls).toBe(7);
-    expect(result.value!.leaves.slice(0, 2).map((l) => l.leaf_id)).toEqual([
-      expected(0, 3),
-      expected(3, 6),
-    ]);
-    expect(result.value!.leaves.map((l) => l.original_text)).toEqual([
-      "A😀.",
-      "B🙂.",
-      "",
-      "Heading",
-    ]);
-  } finally {
-    await runtime.close();
-  }
-});
-it("paginates a large split root and its leaf metadata together without losing code points or read coverage", async () => {
-  const text = "🙂".repeat(100) + 'word "\\\n'.repeat(2000) + ".",
-    f = await archiveTextFixture([{ text }]),
-    root = f.source.blocks[0]!,
-    leaves = new Map<string, { leaf_id: string; start: number; end: number }>();
-  let phase = "split",
-    readText = "",
-    assignedCount = 0,
-    windows = 0;
-  const runtime = fakeTextRuntime(async (request) => {
-    if (phase === "split") {
-      phase = "read-start";
-      return modelTool("put_operations", {
-        operations: [
-          {
-            kind: "split",
-            root_block_id: root.root_block_id,
-            cuts: Array.from({ length: 100 }, (_, i) => i + 1),
-          },
-        ],
-      });
-    }
-    if (phase === "read-start") {
-      phase = "read";
-      return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
-    }
-    if (phase === "read") {
-      const reply = toolJson(request) as {
-        items: {
-          text: string;
-          start: number;
-          end: number;
-          leaf_count: number;
-          leaves: { leaf_id: string; start: number; end: number }[];
-        }[];
-        next: { index: number; offset: number } | null;
-      };
-      expect(Buffer.byteLength(JSON.stringify(reply))).toBeLessThanOrEqual(
-        TEXT_TOOL_MAX_BYTES,
-      );
-      expect(reply.items).toHaveLength(1);
-      const item = reply.items[0]!;
-      expect(item.leaf_count).toBe(101);
-      expect(item.start).toBe([...readText].length);
-      readText += item.text;
-      for (const l of item.leaves) leaves.set(l.leaf_id, l);
-      windows++;
-      if (reply.next) {
-        expect(item.end).toBeGreaterThan(item.start);
-        return modelTool("read_blocks", { ...reply.next, limit: 20 });
-      }
-      phase = "assign";
-    }
-    if (phase === "assign") {
-      const batch = [...leaves.values()].slice(
-        assignedCount,
-        assignedCount + 20,
-      );
-      if (batch.length) {
-        assignedCount += batch.length;
-        return modelTool("put_operations", {
-          operations: batch.map((l) => ({
-            kind: "assign",
-            leaf_id: l.leaf_id,
-            target: { role: "abstract" },
-            presentation: { kind: "content" },
-          })),
-        });
-      }
-      phase = "submit";
-      return modelTool("review_breaks", { offset: 0, limit: 20 });
-    }
-    return modelTool("submit_operations", {
-      reviewed_candidates_sha256: toolJson(request).reviewed_candidates_sha256,
-    });
-  });
-  try {
-    const result = await new ArchiveArrangementService(
-      runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source);
-    expect(result.stop).toBeNull();
-    expect(readText).toBe(text);
-    expect(windows).toBeGreaterThan(2);
-    expect(result.value!.leaves).toHaveLength(101);
-    expect(result.value!.leaves.map((l) => l.original_text).join("")).toBe(
-      text,
-    );
-    expect([...leaves.keys()]).toEqual(
-      Array.from({ length: 101 }, (_, i) => `b${i + 1}`),
-    );
-    expect(result.value!.leaves.map((l) => l.leaf_id)).toEqual(
-      arrangementLeafSpans(
-        root,
-        f.source.raw.result_sha256,
-        Array.from({ length: 100 }, (_, i) => i + 1),
-      ).map((l) => l.leaf_id),
-    );
-  } finally {
-    await runtime.close();
-  }
-});
 function accept(
   source: Parameters<typeof acceptArrangement>[0],
   operations: readonly ArrangementOperation[],
@@ -267,6 +58,30 @@ function accept(
     method,
   );
 }
+/** The JSON the host sent as the first message of a request. */
+function requestJson(request: ModelRequest): Record<string, unknown> {
+  for (const m of request.messages)
+    for (const p of m.parts)
+      if ("text" in p)
+        try {
+          return JSON.parse(p.text) as Record<string, unknown>;
+        } catch {
+          /* Not the host's JSON input. */
+        }
+  throw Error("missing-request-json");
+}
+const service = (
+  runtime: ReturnType<typeof fakeTextRuntime>,
+  f: { pages: Parameters<typeof fakePages>[0] },
+  cache = memoryTextCache().cache,
+) => new ArchiveArrangementService(runtime, fakePages(f.pages), cache);
+const wholeAnswer = (): Record<string, unknown> => ({
+  sections: [],
+  headings: [],
+  drops: [],
+  captions: [],
+  splits: [],
+});
 it("keeps raw headers, bibliography, interface labels and exact hyphenated text for explicit decisions", async () => {
   const f = await archiveTextFixture([
     { type: "header", text: "Journal header" },
@@ -447,7 +262,7 @@ it("requires decisions for all versioned paragraph candidates and refuses stale 
     ops = assigned(f.source),
     review = reviewArrangement(f.source, ops);
   expect(review.candidates).toHaveLength(1);
-  expect(review.candidates[0]?.rule_version).toBe("paragraph-break-v1");
+  expect(review.candidates[0]?.rule_version).toBe("paragraph-break-v2");
   const base = {
     schema_version: 1,
     source_input_sha256: f.source.input_sha256,
@@ -481,7 +296,7 @@ it("requires decisions for all versioned paragraph candidates and refuses stale 
     ),
   ).toThrow(ArchiveTextError);
 });
-it("requires page-image evidence for page reassignment and keeps source coordinates fixed", async () => {
+it("requires stated page evidence for page reassignment and keeps source coordinates fixed", async () => {
   const f = await archiveTextFixture([{ text: "Text from the other page." }], {
       page_count: 2,
       layers: ["", "Text from the other page."],
@@ -499,10 +314,10 @@ it("requires page-image evidence for page reassignment and keeps source coordina
     },
   ];
   expect(() =>
-    reviewArrangement(f.source, moved, { viewed_pages: new Set([0]) }),
+    reviewArrangement(f.source, moved, { evidence_pages: new Set([0]) }),
   ).toThrow(ArchiveTextError);
   const review = reviewArrangement(f.source, moved, {
-    viewed_pages: new Set([1]),
+    evidence_pages: new Set([1]),
   });
   expect(review.leaves[0]).toMatchObject({
     page_index: 1,
@@ -619,70 +434,6 @@ it("verifies immutable raw bytes and retains exact legacy Markdown substrings on
     ),
   ).rejects.toMatchObject({ code: "input-missing" });
 });
-it("corrects a rejected draft in the same real DSH conversation and restores a verified checkpoint without another call", async () => {
-  const f = await archiveTextFixture([{ text: "Synthetic paragraph." }]),
-    ops = assigned(f.source),
-    cache = memoryTextCache();
-  let calls = 0;
-  const runtime = fakeTextRuntime(async (request) => {
-    calls++;
-    expect(request.role).toBe("proofreading");
-    if (calls === 1)
-      return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
-    if (calls === 2)
-      return modelTool("put_operations", {
-        operations: [{ kind: "drop", leaf_id: foreign, reason: "header" }],
-      });
-    if (calls === 3) {
-      expect(lastTool(request)?.status).toBe("rejected");
-      expect(toolJson(request)).toMatchObject({ accepted: false });
-      return modelTool("put_operations", { operations: ops });
-    }
-    if (calls === 4)
-      return modelTool("review_breaks", { offset: 0, limit: 20 });
-    return modelTool("submit_operations", {
-      reviewed_candidates_sha256: toolJson(request).reviewed_candidates_sha256,
-    });
-  });
-  try {
-    const built = await new ArchiveArrangementService(
-      runtime,
-      fakePages(f.pages),
-      cache.cache,
-    ).build(f.source);
-    expect(built.stop).toBeNull();
-    expect(built.value?.leaves).toHaveLength(1);
-    expect(built.usage).toMatchObject({
-      calls: 5,
-      input_tokens: 65,
-      output_tokens: 35,
-      usage_complete: true,
-    });
-    const again = await new ArchiveArrangementService(
-      runtime,
-      fakePages(f.pages),
-      cache.cache,
-    ).build(f.source);
-    expect(again.value).toEqual(built.value);
-    expect(again.usage.calls).toBe(0);
-    expect(calls).toBe(5);
-    const entry = [...cache.entries.values()][0]!,
-      stored = JSON.parse(Buffer.from(entry.bytes).toString()) as {
-        snapshot: { leaves: { original_text: string }[] };
-      };
-    stored.snapshot.leaves[0]!.original_text = "Tampered paragraph.";
-    entry.bytes = Buffer.from(JSON.stringify(stored));
-    await expect(
-      new ArchiveArrangementService(
-        runtime,
-        fakePages(f.pages),
-        cache.cache,
-      ).build(f.source),
-    ).rejects.toMatchObject({ code: "source-integrity" });
-  } finally {
-    await runtime.close();
-  }
-});
 it("rejects mismatching cache and snapshot identities even when the payload remains superficially plausible", async () => {
   const f = await archiveTextFixture([{ text: "Unchanged." }]),
     snapshot = arranged(f.source);
@@ -697,249 +448,354 @@ it("rejects mismatching cache and snapshot identities even when the payload rema
     verifyArrangement(f.source, { ...snapshot, destinations: [] }, method),
   ).toThrow();
 });
-it("names the field when a model mistypes a leaf ID, so it can correct it in the same conversation", async () => {
-  const f = await archiveTextFixture([{ text: "Synthetic body paragraph." }]),
-    real = arrangementLeafSpans(
-      f.source.blocks[0]!,
-      f.source.raw.result_sha256,
-    )[0]!.leaf_id,
-    rejections: unknown[] = [];
+
+it("sends every block at once with short names, page hints, regions and exact text, then decides every break in one more request", async () => {
+  const f = await archiveTextFixture([
+    { text: "Synthetic Title", type: "title" },
+    { text: "Ada Author" },
+    { text: "Journal header", type: "header" },
+    { text: "Abstract text." },
+    { text: "", type: "image", image: true },
+    { text: "Figure 1. Synthetic.", type: "caption" },
+    { text: "Fragment of a sentence" },
+    { text: "Continues here." },
+  ]);
+  const seen: Record<string, unknown>[] = [];
+  const runtime = fakeTextRuntime(async (request) => {
+    seen.push(requestJson(request));
+    expect(request.tool_choice).toBe("required");
+    if (seen.length === 1)
+      return modelTool("submit_arrangement", {
+        ...wholeAnswer(),
+        sections: [
+          { first: "r1", last: "r1", role: "title", heading: null },
+          { first: "r2", last: "r2", role: "authors", heading: null },
+          { first: "r3", last: "r4", role: "abstract", heading: null },
+          {
+            first: "r5",
+            last: "r8",
+            role: "results-discussion",
+            heading: null,
+          },
+        ],
+        drops: [{ block: "r3", reason: "header" }],
+        captions: [{ object: "r5", captions: ["r6", "r7"], kind: "figure" }],
+      });
+    return modelTool("submit_breaks", {
+      decisions: [{ candidate: "c1", decision: "merge", reason: "" }],
+    });
+  });
+  try {
+    const result = await service(runtime, f).build(f.source);
+    expect(result.stop).toBeNull();
+    expect(result.usage.calls).toBe(2);
+    const blocks = seen[0]!.blocks as Record<string, unknown>[];
+    expect(blocks.map((b) => b.id)).toEqual([
+      "r1",
+      "r2",
+      "r3",
+      "r4",
+      "r5",
+      "r6",
+      "r7",
+      "r8",
+    ]);
+    expect(blocks[4]).toEqual({
+      id: "r5",
+      type: "image",
+      page: 0,
+      region: [0, 0, 900, 200],
+      text: "",
+    });
+    expect(blocks[6]).toEqual({
+      id: "r7",
+      type: "text",
+      page: 0,
+      text: "Fragment of a sentence",
+    });
+    expect(seen[1]!.candidates).toEqual([
+      {
+        candidate: "c1",
+        left_tail: "Fragment of a sentence",
+        right_head: "Continues here.",
+        left_is_whole: true,
+        left_ends_with_hyphen: false,
+        skipped: [],
+      },
+    ]);
+    const leaves = result.value!.leaves.map((l) => l.leaf_id),
+      ops = result.value!.operations;
+    expect(ops).toContainEqual({
+      kind: "drop",
+      leaf_id: leaves[2],
+      reason: "header",
+    });
+    // A text block listed as a caption is not linked; the caption is.
+    expect(ops).toContainEqual({
+      kind: "caption",
+      object_leaf_id: leaves[4],
+      caption_leaf_ids: [leaves[5]],
+      object_kind: "figure",
+    });
+    expect(ops).toContainEqual({
+      kind: "merge",
+      leaf_ids: [leaves[6], leaves[7]],
+    });
+    expect(arrangementPreview(result.value!).map((n) => n.text)).toContain(
+      "Fragment of a sentence Continues here.",
+    );
+  } finally {
+    await runtime.close();
+  }
+});
+it("splits a glued copyright line before the request and drops only that part", async () => {
+  const f = await archiveTextFixture([
+    { text: "Body paragraph.\n© 2024 Synthetic Publisher" },
+  ]);
+  const runtime = fakeTextRuntime(async (request) => {
+    const blocks = requestJson(request).blocks as {
+      id: string;
+      text: string;
+    }[];
+    expect(blocks).toMatchObject([
+      { id: "r1#1", text: "Body paragraph.\n" },
+      { id: "r1#2", text: "© 2024 Synthetic Publisher" },
+    ]);
+    return modelTool("submit_arrangement", {
+      ...wholeAnswer(),
+      sections: [
+        { first: "r1#1", last: "r1#2", role: "methods", heading: null },
+      ],
+      drops: [{ block: "r1#2", reason: "copyright" }],
+    });
+  });
+  try {
+    const result = await service(runtime, f).build(f.source);
+    expect(result.usage.calls).toBe(1);
+    expect(result.value!.operations).toContainEqual({
+      kind: "split",
+      root_block_id: f.source.blocks[0]!.root_block_id,
+      cuts: [16],
+    });
+    expect(result.value!.destinations.map((d) => d.destination.kind)).toEqual([
+      "assigned",
+      "dropped",
+    ]);
+  } finally {
+    await runtime.close();
+  }
+});
+it("returns a rejected answer to the same request once, reuses a verified checkpoint, and stops after a second rejection", async () => {
+  const f = await archiveTextFixture([
+      { text: "Synthetic paragraph." },
+      { text: "Another one." },
+    ]),
+    cache = memoryTextCache();
   let calls = 0;
-  const assign = (leaf_id: string) =>
-    modelTool("put_operations", {
-      operations: [
+  const runtime = fakeTextRuntime(async (request) => {
+    calls++;
+    if (calls === 2) {
+      expect(lastTool(request)?.status).toBe("rejected");
+      expect(toolJson(request)).toMatchObject({
+        accepted: false,
+        issues: [{ code: "block-without-section", id: "r2" }],
+      });
+    }
+    return modelTool("submit_arrangement", {
+      ...wholeAnswer(),
+      sections: [
         {
-          kind: "assign",
-          leaf_id,
-          target: { role: "methods" },
-          presentation: { kind: "content" },
+          first: "r1",
+          last: calls === 1 ? "r1" : "r2",
+          role: "methods",
+          heading: null,
         },
       ],
     });
-  const runtime = fakeTextRuntime(async (request) => {
-    calls++;
-    if (calls === 1)
-      return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
-    // The real run dropped one character of the UUID; then a name never returned.
-    if (calls === 2) return assign(real.slice(0, 14) + real.slice(15));
-    if (calls === 3) {
-      rejections.push(toolJson(request));
-      return assign("b9");
-    }
-    if (calls === 4) {
-      rejections.push(toolJson(request));
-      return assign("b1");
-    }
-    if (calls === 5)
-      return modelTool("review_breaks", { offset: 0, limit: 20 });
-    return modelTool("submit_operations", {
-      reviewed_candidates_sha256: toolJson(request).reviewed_candidates_sha256,
-    });
   });
   try {
-    const result = await new ArchiveArrangementService(
-      runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source);
-    expect(result.stop).toBeNull();
-    for (const rejection of rejections)
-      expect(rejection).toMatchObject({
-        accepted: false,
-        issues: [{ code: "tool-input", id: "operations[0].leaf_id" }],
-      });
-    expect(result.value!.leaves[0]!.leaf_id).toBe(real);
-  } finally {
-    await runtime.close();
-  }
-});
-it("shows the words on both sides of a paragraph-break candidate, so it is decided without rereading", async () => {
-  const f = await archiveTextFixture([
-    { text: "A synthetic sentence that continues" },
-    { text: "on the following block." },
-  ]);
-  let calls = 0,
-    reviewed: Record<string, unknown> = {};
-  const runtime = fakeTextRuntime(async (request) => {
-    calls++;
-    if (calls === 1)
-      return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
-    if (calls === 2)
-      return modelTool("put_operations", {
-        operations: ["b1", "b2"].map((leaf_id) => ({
-          kind: "assign",
-          leaf_id,
-          target: { role: "methods" },
-          presentation: { kind: "content" },
-        })),
-      });
-    if (calls === 3)
-      return modelTool("review_breaks", { offset: 0, limit: 20 });
-    if (calls === 4) {
-      reviewed = toolJson(request);
-      const [candidate] = reviewed.candidates as { candidate_id: string }[];
-      return modelTool("decide_breaks", {
-        reviewed_candidates_sha256: reviewed.reviewed_candidates_sha256,
-        decisions: [
-          {
-            candidate_id: candidate!.candidate_id,
-            decision: "keep",
-            reason: "Two sentences",
-          },
-        ],
-      });
-    }
-    return modelTool("submit_operations", {
-      reviewed_candidates_sha256: reviewed.reviewed_candidates_sha256,
+    const built = await service(runtime, f, cache.cache).build(f.source);
+    expect(built.stop).toBeNull();
+    expect(built.usage).toMatchObject({
+      calls: 2,
+      input_tokens: 26,
+      output_tokens: 14,
+      usage_complete: true,
     });
-  });
-  try {
-    const result = await new ArchiveArrangementService(
-      runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source);
-    expect(reviewed.candidates).toEqual([
-      expect.objectContaining({
-        left_leaf_id: "b1",
-        right_leaf_id: "b2",
-        left_tail: "A synthetic sentence that continues",
-        right_head: "on the following block.",
-      }),
-    ]);
-    expect(result.stop).toBeNull();
-    expect(result.usage.calls).toBe(5);
-  } finally {
-    await runtime.close();
-  }
-});
-it("provides text-layer wrong-page hints and program-derived leaf IDs, then verifies reassignment evidence on checkpoint reuse", async () => {
-  const f = await archiveTextFixture(
-      [{ text: "Misplaced synthetic paragraph." }],
-      { page_count: 2, layers: ["", "Misplaced synthetic paragraph."] },
-    ),
-    cache = memoryTextCache();
-  let calls = 0,
-    leaf = "";
-  const runtime = fakeTextRuntime(async (request) => {
-    calls++;
-    if (calls === 1)
-      return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
-    if (calls === 2)
-      return modelTool("block_info", {
-        root_block_id: f.source.blocks[0]!.root_block_id,
-      });
-    if (calls === 3) {
-      const data = toolJson(request);
-      expect(data.text_layer_page_hints).toEqual([1]);
-      leaf = (data.leaves as { leaf_id: string }[])[0]!.leaf_id;
-      return modelTool("view_page", { page_index: 1, region: null });
-    }
-    if (calls === 4)
-      return modelTool("put_operations", {
-        operations: [
-          {
-            kind: "assign",
-            leaf_id: leaf,
-            target: { role: "keywords" },
-            presentation: { kind: "content" },
-          },
-          {
-            kind: "assign-page",
-            leaf_id: leaf,
-            page_index: 1,
-            basis_page_index: 1,
-            reason: "image",
-          },
-        ],
-      });
-    if (calls === 5)
-      return modelTool("review_breaks", { offset: 0, limit: 20 });
-    return modelTool("submit_operations", {
-      reviewed_candidates_sha256: toolJson(request).reviewed_candidates_sha256,
-    });
-  });
-  try {
-    const service = () =>
-        new ArchiveArrangementService(runtime, fakePages(f.pages), cache.cache),
-      result = await service().build(f.source);
-    expect(result.stop).toBeNull();
-    expect(leaf).toBe("b1");
-    expect(result.value?.leaves[0]).toMatchObject({
-      page_index: 1,
-      region: null,
-      leaf_id: arrangementLeafSpans(
-        f.source.blocks[0]!,
-        f.source.raw.result_sha256,
-      )[0]!.leaf_id,
-    });
-    expect((await service().build(f.source)).usage.calls).toBe(0);
+    const again = await service(runtime, f, cache.cache).build(f.source);
+    expect(again.value).toEqual(built.value);
+    expect(again.usage.calls).toBe(0);
     const entry = [...cache.entries.values()][0]!,
       stored = JSON.parse(Buffer.from(entry.bytes).toString()) as {
-        evidence: { viewed_pages: number[] };
+        snapshot: { leaves: { original_text: string }[] };
       };
-    stored.evidence.viewed_pages = [];
+    stored.snapshot.leaves[0]!.original_text = "Tampered paragraph.";
     entry.bytes = Buffer.from(JSON.stringify(stored));
-    await expect(service().build(f.source)).rejects.toMatchObject({
-      code: "source-integrity",
+    await expect(
+      service(runtime, f, cache.cache).build(f.source),
+    ).rejects.toMatchObject({ code: "source-integrity" });
+  } finally {
+    await runtime.close();
+  }
+  let wrong = 0;
+  const stubborn = fakeTextRuntime(async () => {
+    wrong++;
+    return modelTool("submit_arrangement", {
+      ...wholeAnswer(),
+      sections: [{ first: "r1", last: "r1", role: "methods", heading: null }],
+    });
+  });
+  try {
+    const failed = await service(stubborn, f).build(f.source);
+    expect(failed.value).toBeNull();
+    expect(failed.stop).toMatchObject({
+      step: "arrange",
+      scope: "part",
+      cause_code: "arrangement-invalid",
+      retryable: true,
+    });
+    // No resend after a corrected answer was rejected again.
+    expect(wrong).toBe(2);
+  } finally {
+    await stubborn.close();
+  }
+});
+it("resends a request once when it ends without an answer", async () => {
+  const f = await archiveTextFixture([{ text: "Synthetic paragraph." }]);
+  let calls = 0;
+  const runtime = fakeTextRuntime(async () => {
+    calls++;
+    return calls === 1
+      ? modelText("no tool call")
+      : modelTool("submit_arrangement", {
+          ...wholeAnswer(),
+          sections: [
+            { first: "r1", last: "r1", role: "methods", heading: null },
+          ],
+        });
+  });
+  try {
+    const result = await service(runtime, f).build(f.source);
+    expect(result.stop).toBeNull();
+    expect(result.usage.calls).toBe(2);
+  } finally {
+    await runtime.close();
+  }
+});
+it("moves a leaf to the page whose text layer prints it, and verifies that evidence on checkpoint reuse", async () => {
+  const words = "Misplaced synthetic paragraph about sulfur hosts.";
+  const f = await archiveTextFixture([{ text: words }], {
+      page_count: 2,
+      layers: ["Other words entirely.", words],
+    }),
+    cache = memoryTextCache();
+  const runtime = fakeTextRuntime(async () =>
+    modelTool("submit_arrangement", {
+      ...wholeAnswer(),
+      sections: [
+        { first: "r1", last: "r1", role: "references", heading: null },
+      ],
+    }),
+  );
+  try {
+    const result = await service(runtime, f, cache.cache).build(f.source);
+    expect(result.stop).toBeNull();
+    expect(result.value!.leaves[0]).toMatchObject({
+      page_index: 1,
+      region: null,
+    });
+    expect(result.value!.operations).toContainEqual(
+      expect.objectContaining({
+        kind: "assign-page",
+        page_index: 1,
+        basis_page_index: 1,
+      }),
+    );
+    expect(
+      (await service(runtime, f, cache.cache).build(f.source)).usage.calls,
+    ).toBe(0);
+    const entry = [...cache.entries.values()][0]!,
+      stored = JSON.parse(Buffer.from(entry.bytes).toString()) as {
+        evidence: { evidence_pages: number[] };
+      };
+    stored.evidence.evidence_pages = [];
+    entry.bytes = Buffer.from(JSON.stringify(stored));
+    await expect(
+      service(runtime, f, cache.cache).build(f.source),
+    ).rejects.toMatchObject({ code: "source-integrity" });
+  } finally {
+    await runtime.close();
+  }
+});
+it("keeps a person's locked destination whatever the model answers", async () => {
+  const f = await archiveTextFixture([
+      { text: "Kept by hand." },
+      { text: "Ordinary text." },
+    ]),
+    seed = arranged(f.source);
+  const locked = {
+    ...seed,
+    destinations: seed.destinations.map((d, i) =>
+      i === 0
+        ? {
+            ...d,
+            destination: {
+              kind: "dropped" as const,
+              reason: "decoration" as const,
+            },
+            decision_id: "00000000-0000-4000-8000-000000000001",
+            locked: true,
+          }
+        : d,
+    ),
+  };
+  const runtime = fakeTextRuntime(async () =>
+    modelTool("submit_arrangement", {
+      ...wholeAnswer(),
+      sections: [{ first: "r1", last: "r2", role: "methods", heading: null }],
+    }),
+  );
+  try {
+    const result = await service(runtime, f).build(f.source, undefined, locked);
+    expect(result.stop).toBeNull();
+    expect(result.value!.destinations[0]).toMatchObject({
+      destination: { kind: "dropped", reason: "decoration" },
+      locked: true,
+    });
+    expect(result.value!.destinations[1]!.destination).toMatchObject({
+      kind: "assigned",
+      target: { role: "methods" },
     });
   } finally {
     await runtime.close();
   }
 });
-it("finishes an 80-block document past the old call cap with bounded requests and a complete host-held operation set", async () => {
-  const f = await archiveTextFixture(
-      Array.from({ length: 80 }, (_, i) => ({
-        text: `Paragraph ${i}: ` + "exact unchanged content ".repeat(150) + ".",
-      })),
-    ),
-    ops = assigned(f.source),
-    cache = memoryTextCache();
-  let step = 0,
-    maxRequest = 0;
-  const runtime = fakeTextRuntime(async (request) => {
-    maxRequest = Math.max(
-      maxRequest,
-      Buffer.byteLength(JSON.stringify(request)),
-    );
-    if (request.tool_choice === "none")
-      return modelText(
-        "Continue the same document; source reading and operation drafts are stored by the host. Inspect draft_status if needed.",
-      );
-    const current = step++;
-    if (current < 240) {
-      const index = Math.floor(current / 3);
-      if (current % 3 === 0)
-        return modelTool("read_blocks", { index, offset: 0, limit: 1 });
-      if (current % 3 === 1)
-        return modelTool("block_info", {
-          root_block_id: f.source.blocks[index]!.root_block_id,
-        });
-      return modelTool("put_operations", { operations: [ops[index]!] });
-    }
-    if (current === 240)
-      return modelTool("review_breaks", { offset: 0, limit: 20 });
-    return modelTool("submit_operations", {
-      reviewed_candidates_sha256: toolJson(request).reviewed_candidates_sha256,
-    });
+it("stops a part larger than the input limit before sending any request", async () => {
+  const f = await archiveTextFixture([{ text: "word ".repeat(80000) + "." }]);
+  let calls = 0;
+  const runtime = fakeTextRuntime(async () => {
+    calls++;
+    return modelText("unused");
   });
   try {
-    const result = await new ArchiveArrangementService(
-      runtime,
-      fakePages(f.pages),
-      cache.cache,
-    ).build(f.source);
-    expect(result.stop).toBeNull();
-    expect(result.value?.destinations).toHaveLength(80);
-    expect(result.usage.calls).toBeGreaterThanOrEqual(242);
-    expect(result.usage.compaction_calls).toBeGreaterThan(0);
-    expect(maxRequest).toBeLessThan(500 * 1024);
-    verifyArrangementPayload(
-      f.source,
-      result.value!,
-      arrangementPreview(result.value!).flatMap((n) => n.payloads),
-    );
+    const result = await service(runtime, f).build(f.source);
+    expect(result.stop).toMatchObject({
+      code: "request-too-large",
+      step: "arrange",
+    });
+    expect(calls).toBe(0);
   } finally {
     await runtime.close();
   }
-}, 30000);
+});
+it("finds a break where the next block starts with a capital letter or a formula", async () => {
+  const f = await archiveTextFixture([
+    { text: "selected diphenylphosphine oxide and" },
+    { text: "DBU as base." },
+    { text: "yields of" },
+    { text: "$67 - 91\\%$ were obtained." },
+  ]);
+  expect(
+    reviewArrangement(f.source, assigned(f.source)).candidates,
+  ).toHaveLength(2);
+});

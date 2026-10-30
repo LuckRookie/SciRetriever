@@ -1012,12 +1012,14 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
             const content = wire.messages[1]!.content as
               | string
               | { type: string; text: string }[];
-            // Archiving arranges through read_blocks sessions (ADR 0041) and
-            // proofreads each page with one submit_corrections request (ADR 0047).
+            // Archiving arranges with one submit_arrangement and one submit_breaks
+            // request (ADR 0048) and proofreads each page with one request (ADR 0047).
             const reply = wire.tools?.some((tool) =>
-              ["read_blocks", "submit_corrections"].includes(
-                tool.function.name,
-              ),
+              [
+                "submit_arrangement",
+                "submit_breaks",
+                "submit_corrections",
+              ].includes(tool.function.name),
             )
               ? archiveChatReply(wire)
               : wire.tools?.some(

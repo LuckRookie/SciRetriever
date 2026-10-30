@@ -719,7 +719,7 @@ export class ArchiveArrangementAccess {
           .filter((o) => o.kind === "assign-page")
           .map((o) => o.page_index),
       ),
-      review = reviewArrangement(source, ops, { viewed_pages: viewed }),
+      review = reviewArrangement(source, ops, { evidence_pages: viewed }),
       decisions = review.candidates.map((c) =>
         review.operations.some(
           (o) =>
@@ -745,7 +745,7 @@ export class ArchiveArrangementAccess {
       },
       snapshot.method_sha256,
       {
-        viewed_pages: viewed,
+        evidence_pages: viewed,
         manual_revision: state.manual_revision + 1,
         locked_decisions: locks,
       },

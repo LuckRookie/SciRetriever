@@ -7,7 +7,7 @@ import type { SqliteRawParseStorage } from "../storage/raw-parsing.js";
 import { LiteratureMetadataService } from "../literature/metadata-service.js";
 import type { TagService } from "../tags/service.js";
 import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
-import { ARRANGEMENT_METHOD } from "./arrangement.js";
+import { ARRANGEMENT_WORKFLOW } from "./arrangement-service.js";
 import { LEAF_CORRECTION_METHOD } from "../proofread/leaf-corrections.js";
 import { PAGE_REVIEW_METHOD } from "../proofread/page-review.js";
 import { textHash } from "./text-source.js";
@@ -32,7 +32,7 @@ export class ArchiveReusePreview {
   ) {}
   private textMethod() {
     return {
-      arrange: ARRANGEMENT_METHOD,
+      arrange: ARRANGEMENT_WORKFLOW,
       page_classify: this.pagesMethod,
       // The key keeps its name; ADR 0047 pages are reviewed by the guarded single request.
       suspects: PAGE_REVIEW_METHOD,

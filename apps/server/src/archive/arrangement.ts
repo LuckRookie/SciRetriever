@@ -19,7 +19,7 @@ import {
   type ArchiveTextSource,
 } from "./text-source.js";
 export const ARRANGEMENT_METHOD = "arrangement-operations-v1";
-export const PARAGRAPH_BREAK_RULE = "paragraph-break-v1";
+export const PARAGRAPH_BREAK_RULE = "paragraph-break-v2";
 export const BODY_ROLES = new Set([
   "introduction",
   "methods",
@@ -66,7 +66,8 @@ export interface ArrangementReview {
   readonly candidates_sha256: string;
 }
 export interface ArrangementConstraints {
-  readonly viewed_pages?: ReadonlySet<number>;
+  /** Pages whose text layer is the stated basis of a page reassignment (ADR 0048 §2). */
+  readonly evidence_pages?: ReadonlySet<number>;
   /** For host-held draft batches; final review and acceptance always require coverage. */
   readonly allow_incomplete?: boolean;
   readonly locked_destinations?: ReadonlyMap<string, LeafDestination>;
@@ -152,10 +153,10 @@ export function reviewArrangement(
       )
         add("invalid-page-assignment", op.leaf_id);
       else if (
-        constraints.viewed_pages &&
-        !constraints.viewed_pages.has(op.basis_page_index)
+        constraints.evidence_pages &&
+        !constraints.evidence_pages.has(op.basis_page_index)
       )
-        add("page-basis-not-viewed", op.leaf_id);
+        add("page-basis-missing", op.leaf_id);
     }
   }
   // Leaves are immutable contract values; replace page assignments rather than mutate callers.
@@ -291,8 +292,8 @@ export function reviewArrangement(
       if (
         keyTarget(a) === keyTarget(b) &&
         left.length > 0 &&
-        !/[.?!:;。？！：；]$/u.test(left) &&
-        /^[\p{Ll}\p{N})\]}’”"']/u.test(right)
+        right.length > 0 &&
+        !/[.?!:;。？！：；]$/u.test(left)
       ) {
         const body = {
           left_leaf_id: previous.leaf_id,

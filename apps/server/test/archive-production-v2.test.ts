@@ -15,7 +15,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { documentIdentity } from "../src/document/proofread-publication.js";
 
-it("arranges a 160-section synthetic document in 36 calls using read-block leaf identities in batches", async () => {
+it("arranges a 160-section synthetic document with one request (ADR 0048)", async () => {
   const e = await archiveFixture();
   try {
     e.setText(
@@ -34,12 +34,16 @@ it("arranges a 160-section synthetic document in 36 calls using read-block leaf 
         e.app.files,
       ).load(result.proofread_id))!;
     expect(output.bundle.arrangement!.leaves).toHaveLength(321);
-    // 17 read windows + 17 operation batches + one review + one submission.
-    expect(result.usage.calls).toBe(36);
-    expect(e.modelCalls - calls).toBe(36);
+    // A version arranged by an older workflow or break rule is never reused as this one.
+    expect(output.version.method.arrange).toBe(
+      "arrangement-operations-v1/arrangement-single-pass-v1/paragraph-break-v2",
+    );
+    // Every block in one request; no paragraph ends mid-sentence, so no break request.
+    expect(result.usage.calls).toBe(1);
+    expect(e.modelCalls - calls).toBe(1);
     expect(result.usage).toMatchObject({
-      input_tokens: 3600,
-      output_tokens: 1800,
+      input_tokens: 100,
+      output_tokens: 50,
       usage_complete: true,
     });
   } finally {

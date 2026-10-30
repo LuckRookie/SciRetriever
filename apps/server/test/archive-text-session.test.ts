@@ -4,15 +4,12 @@ import { ArchiveArrangementService } from "../src/archive/arrangement-service.js
 import { ArchivePageProofreadService } from "../src/proofread/page-service.js";
 import { ArchiveTextError } from "../src/archive/text-source.js";
 import {
-  boundedTextWindow,
   imageContextBytes,
   runArchiveTextSession,
   TextProgress,
-  TextReadCoverage,
   textReply,
   toolDeclaration,
   TEXT_CONTEXT_COMPACTION_BYTES,
-  TEXT_TOOL_MAX_BYTES,
 } from "../src/archive/text-session.js";
 import {
   archiveTextFixture,
@@ -22,7 +19,6 @@ import {
   memoryTextCache,
   modelText,
   modelTool,
-  assigned,
   arranged,
   toolJson,
 } from "./archive-text-fixture.js";
@@ -34,22 +30,19 @@ it.each(["arrange", "proofread"] as const)(
     for (const conflict of [false, true]) {
       const memory = memoryTextCache();
       let calls = 0;
-      const runtime = fakeTextRuntime(async (request) => {
+      const runtime = fakeTextRuntime(async () => {
         calls++;
-        if (step === "arrange") {
-          if (calls === 1)
-            return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
-          if (calls === 2)
-            return modelTool("put_operations", {
-              operations: assigned(f.source),
-            });
-          if (calls === 3)
-            return modelTool("review_breaks", { offset: 0, limit: 20 });
-          return modelTool("submit_operations", {
-            reviewed_candidates_sha256:
-              toolJson(request).reviewed_candidates_sha256,
+        // ADR 0048: one arrangement request; this paragraph leaves no break candidate.
+        if (step === "arrange")
+          return modelTool("submit_arrangement", {
+            sections: [
+              { first: "r1", last: "r1", role: "methods", heading: null },
+            ],
+            headings: [],
+            drops: [],
+            captions: [],
+            splits: [],
           });
-        }
         // ADR 0047: one proofreading request per page.
         return modelTool("submit_corrections", {
           corrections: [],
@@ -78,7 +71,7 @@ it.each(["arrange", "proofread"] as const)(
                 fakePages(f.pages),
                 cache,
               ).build(f.source, arranged(f.source), f.pages);
-        const expected = step === "arrange" ? 4 : 1;
+        const expected = 1;
         if (conflict)
           expect((await build).usage).toMatchObject({
             calls: expected,
@@ -104,80 +97,36 @@ it.each(["arrange", "proofread"] as const)(
     }
   },
 );
-it("bounds encoded JSON windows including escaping, and counts only newly read code points", () => {
-  const text = '"\\\n\t😀'.repeat(30000),
-    rows = [
-      { id: "long", text },
-      { id: "empty", text: "" },
-    ],
-    coverage = new TextReadCoverage();
-  let cursor: { index: number; offset: number } | null = {
-      index: 0,
-      offset: 0,
-    },
-    restored = "",
-    windows = 0;
-  while (cursor) {
-    const chunk: ReturnType<typeof boundedTextWindow> = boundedTextWindow(
-      rows,
-      cursor.index,
-      cursor.offset,
-      20,
-      (id, start, end) => coverage.add(id, start, end),
-    );
-    expect(Buffer.byteLength(JSON.stringify(chunk))).toBeLessThanOrEqual(
-      TEXT_TOOL_MAX_BYTES,
-    );
-    restored += chunk.items.map((i) => i.text).join("");
-    cursor = chunk.next;
-    windows++;
-  }
-  expect(restored).toBe(text);
-  expect(windows).toBeGreaterThan(2);
-  expect(coverage.complete("long", [...text].length)).toBe(true);
-  expect(coverage.complete("empty", 0)).toBe(true);
-  expect(coverage.add("long", 0, 30)).toBe(false);
-  expect(() =>
-    boundedTextWindow(rows, 0, [...text].length + 1, 1, () => undefined),
-  ).toThrow();
-});
-it("includes identities in the encoded window budget and never marks an oversized metadata reply as read", () => {
-  const read = vi.fn(),
-    rows = [{ id: "root", text: '😀"'.repeat(4000) }];
-  expect(() =>
-    boundedTextWindow(rows, 0, 0, 20, read, () => ({
-      identities: "x".repeat(TEXT_TOOL_MAX_BYTES),
-    })),
-  ).toThrow(ArchiveTextError);
-  expect(read).not.toHaveBeenCalled();
-  const reply = boundedTextWindow(rows, 0, 0, 20, read, () => ({
-    identities: "x".repeat(10000),
-  }));
-  expect(Buffer.byteLength(JSON.stringify(reply))).toBeLessThanOrEqual(
-    TEXT_TOOL_MAX_BYTES,
-  );
-  expect(reply.items[0]!.end).toBeGreaterThan(0);
-  expect(reply.next).toEqual({ index: 0, offset: reply.items[0]!.end });
-  expect(read).toHaveBeenCalledExactlyOnceWith(
-    "root",
-    0,
-    reply.items[0]!.end,
-    false,
-  );
-});
+/** A one-tool session over the real DSH runtime, for the shared stop rules. */
+function session(
+  runtime: ReturnType<typeof fakeTextRuntime>,
+  execute: Parameters<typeof runArchiveTextSession>[1]["execute"],
+  parameters: Record<string, unknown> = {},
+) {
+  return runArchiveTextSession(runtime, {
+    step: "arrange",
+    page_index: null,
+    input_sha256: "e".repeat(64),
+    system: "Synthetic stop-rule regression.",
+    initial: { synthetic: true },
+    tools: [toolDeclaration("work", "Synthetic work.", parameters)],
+    progress: new TextProgress("arrange", null),
+    accepted: () => null,
+    execute,
+  });
+}
 it("stops the third repeated validation problem set without mislabelling the task as cancelled", async () => {
-  const f = await archiveTextFixture([{ text: "Untouched." }]);
   let calls = 0;
   const runtime = fakeTextRuntime(async () => {
     calls++;
-    return modelTool("review_breaks", { offset: 0, limit: 20 });
+    return modelTool("work", {});
   });
   try {
-    const result = await new ArchiveArrangementService(
-      runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source);
+    const result = await session(runtime, async () => {
+      throw new ArchiveTextError("arrangement-invalid", [
+        { code: "leaf-destination-missing", id: null },
+      ]);
+    });
     expect(calls).toBe(3);
     expect(result.value).toBeNull();
     expect(result.stop).toMatchObject({
@@ -201,23 +150,28 @@ it("stops the third repeated validation problem set without mislabelling the tas
 });
 it("returns the declared schema with an out-of-range argument so a real model can correct it", async () => {
   // A real model read limit as characters (8000); a bare "tool-input" left it guessing.
-  // Larger counts are now capped, so a zero count stands in for the out-of-range value.
-  const f = await archiveTextFixture([{ text: "Untouched." }]);
   let calls = 0,
     rejection: Record<string, unknown> | null = null;
   const runtime = fakeTextRuntime(async (request) => {
     calls++;
-    if (calls === 1)
-      return modelTool("read_blocks", { index: 0, offset: 0, limit: 0 });
-    rejection ??= toolJson(request);
-    return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
+    if (calls > 1) rejection ??= toolJson(request);
+    return modelTool("work", { limit: calls === 1 ? 0 : 20 });
   });
   try {
-    await new ArchiveArrangementService(
+    await session(
       runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source);
+      async () => {
+        throw new ArchiveTextError("tool-input");
+      },
+      {
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 20,
+          description: "Number of items, not characters.",
+        },
+      },
+    );
     expect(rejection).toMatchObject({
       accepted: false,
       issues: [{ code: "tool-input" }],
@@ -238,30 +192,22 @@ it("returns the declared schema with an out-of-range argument so a real model ca
 });
 it("does not count page-image bytes toward the text compaction window", async () => {
   // A real 4-page paper compacted after its first page view: one image's base64 exceeded the window.
-  const f = await archiveTextFixture([{ text: "Untouched." }]);
   const big = new Uint8Array(600 * 1024);
-  const pages = {
-    ...fakePages(f.pages),
-    image: async () => ({
-      media_type: "image/png" as const,
-      data: big,
-      width: 1000,
-      height: 1400,
-    }),
-  };
   let calls = 0;
   const runtime = fakeTextRuntime(async () => {
     calls++;
-    return calls < 4
-      ? modelTool("view_page", { page_index: 0, region: null })
-      : modelTool("review_breaks", { offset: 0, limit: 20 });
+    return modelTool("work", {});
   });
   try {
-    const result = await new ArchiveArrangementService(
-      runtime,
-      pages,
-      memoryTextCache().cache,
-    ).build(f.source);
+    const result = await session(runtime, async () => {
+      if (calls >= 4) throw new ArchiveTextError("source-integrity");
+      return {
+        status: "success",
+        parts: [
+          { media_type: "image/png", data: big, width: 1000, height: 1400 },
+        ],
+      };
+    });
     expect(result.usage.compaction_calls).toBe(0);
     // A 1000 × 1400 page costs about 1,900 tokens, whatever its encoded size.
     expect(imageContextBytes(1000, 1400)).toBe(7468);
@@ -270,18 +216,15 @@ it("does not count page-image bytes toward the text compaction window", async ()
   }
 });
 it("counts actual dispatches and stops after eight calls with no new evidence or semantic operations", async () => {
-  const f = await archiveTextFixture([{ text: "Untouched." }]);
   let calls = 0;
   const runtime = fakeTextRuntime(async () => {
     calls++;
-    return modelTool("draft_status", { offset: 0, limit: 20 });
+    return modelTool("work", {});
   });
   try {
-    const result = await new ArchiveArrangementService(
-      runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source);
+    const result = await session(runtime, async () =>
+      textReply({ idle: true }),
+    );
     expect(calls).toBe(8);
     expect(result.stop).toMatchObject({
       code: "no-progress",
@@ -293,18 +236,13 @@ it("counts actual dispatches and stops after eight calls with no new evidence or
   }
 });
 it("also counts native DSH tool rejections toward the three-identical-errors stop", async () => {
-  const f = await archiveTextFixture([{ text: "Untouched." }]);
   let calls = 0;
   const runtime = fakeTextRuntime(async () => {
     calls++;
     return modelTool("not_declared", {});
   });
   try {
-    const result = await new ArchiveArrangementService(
-      runtime,
-      fakePages(f.pages),
-      memoryTextCache().cache,
-    ).build(f.source);
+    const result = await session(runtime, async () => textReply({}));
     expect(calls).toBe(3);
     expect(result.stop).toMatchObject({
       code: "validation-repeated",
@@ -451,16 +389,15 @@ it("does not manufacture token counts after a dispatched failure and keeps cance
     }
   }
 });
-it("does not treat changed wording, removing/readding a draft or reading overlapping windows as new progress", () => {
-  const p = new TextProgress("arrange", null),
-    coverage = new TextReadCoverage();
+it("does not treat changed wording, removing/readding a draft or repeating the same evidence as new progress", () => {
+  const p = new TextProgress("arrange", null);
   p.beforeCall();
   p.onDispatched();
-  if (coverage.add("a", 0, 20)) p.progress("read", ["a", 0, 20]);
+  p.progress("read", ["a", 0, 20]);
   p.beforeCall();
   for (let i = 0; i < 8; i++) {
     p.onDispatched();
-    if (coverage.add("a", i, 10 + i)) p.progress("read", ["a", i, 10 + i]);
+    p.progress("read", ["a", 0, 20]);
     if (i < 7) p.beforeCall();
   }
   p.finish();

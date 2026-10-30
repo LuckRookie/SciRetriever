@@ -22,7 +22,7 @@ const fixture = (count: number) =>
     })),
   );
 // ADR 0047: one request per page; the fixture finds nothing to change.
-const decision = (_page: number, _step: number) =>
+const decision = () =>
   modelTool("submit_corrections", { corrections: [], uncertain: [] });
 
 it("defaults to three independent page requests, serializes progress, and orders accepted pages independently of completion", async () => {
@@ -50,7 +50,7 @@ it("defaults to three independent page requests, serializes progress, and orders
     try {
       if (p === 0 && step === 1) await held;
       else await delay(3);
-      return decision(p, step);
+      return decision();
     } finally {
       active--;
     }
@@ -122,7 +122,7 @@ it.each(["validation-repeated"] as const)(
         });
       const step = (steps.get(p) ?? 0) + 1;
       steps.set(p, step);
-      return decision(p, step);
+      return decision();
     });
     try {
       const service = new ArchivePageProofreadService(
@@ -190,7 +190,7 @@ it("retries throttled requests inside the same conversation, honors Retry-After,
       await delay(2);
       const step = (steps.get(p) ?? 0) + 1;
       steps.set(p, step);
-      return decision(p, step);
+      return decision();
     } finally {
       active--;
     }
@@ -244,7 +244,7 @@ it("cancels all in-flight pages and records unstarted ones while preserving an a
     }
     const step = (steps.get(p) ?? 0) + 1;
     steps.set(p, step);
-    return decision(p, step);
+    return decision();
   });
   try {
     const result = await new ArchivePageProofreadService(
@@ -298,7 +298,7 @@ it("finishes publishing a host-accepted cache entry when cancellation arrives du
     const p = initialPage(request).page_index,
       step = (steps.get(p) ?? 0) + 1;
     steps.set(p, step);
-    return decision(p, step);
+    return decision();
   });
   try {
     const result = await new ArchivePageProofreadService(
@@ -368,7 +368,7 @@ it("records each individual downgrade when two pages are throttled concurrently"
     }
     const step = (steps.get(p) ?? 0) + 1;
     steps.set(p, step);
-    return decision(p, step);
+    return decision();
   });
   try {
     const result = await new ArchivePageProofreadService(
