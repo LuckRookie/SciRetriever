@@ -28,6 +28,7 @@
 | [providers/](providers/README.md)         | 文献供应商适配器          |
 | [retrieval/](retrieval/README.md)         | 已有材料与知识检索        |
 | [storage/](storage/README.md)             | 持久化实现                |
+| [translation/](translation/README.md)     | 阅读页划词翻译与翻译缓存  |
 | [workbench/](workbench/README.md)         | 工作台服务端适配          |
 
 ## 内容入口

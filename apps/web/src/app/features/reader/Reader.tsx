@@ -73,6 +73,8 @@ import { ReaderInformation } from "./ReaderInformation.js";
 import { RunOperatorDialog } from "../processing/RunOperator.js";
 import "./reading.css";
 import { SummaryView } from "./SummaryView.js";
+import { TranslationPanel } from "./translation/TranslationViews.js";
+import { useReaderTranslation } from "./translation/use-translation.js";
 
 export default function Reader() {
   const api = useApi(),
@@ -131,7 +133,9 @@ export default function Reader() {
     [],
   );
   const [readingSettings, setReadingSettings] = useState(false);
-  const [sideTab, setSideTab] = useState<"info" | "marks">("info");
+  const [sideTab, setSideTab] = useState<"info" | "marks" | "translation">(
+    "info",
+  );
   useLayoutEffect(() => {
     setDocumentLink(null);
     setZoomImage(null);
@@ -220,11 +224,18 @@ export default function Reader() {
     return value;
   }, [shell.reading, api.workspace.catalog, id]);
   const refresh = () => retry((value) => value + 1);
+  const notify = (message: string) => readerActions.current.notify(message);
+  const translation = useReaderTranslation(
+    id,
+    api.kind === "workspace" && (mode === "pdf" || mode === "doc"),
+  );
   const marks = useReaderMarks({
     detail: detail.data,
     mode,
     enabled: api.kind === "workspace",
-    notify: (message) => readerActions.current.notify(message),
+    notify,
+    translation,
+    onTranslate: () => setSideTab("translation"),
   });
   // The engine mounts once per material; marks attach to that mount without remounting it.
   const marksAttach = useRef(marks.attach);
@@ -956,18 +967,27 @@ export default function Reader() {
                 <Tabs
                   label="信息栏"
                   value={sideTab}
-                  onChange={(value) => setSideTab(value as "info" | "marks")}
+                  onChange={(value) => setSideTab(value as typeof sideTab)}
                   items={[
                     { id: "info", label: "信息" },
                     {
                       id: "marks",
                       label: marks.count ? `批注 ${marks.count}` : "批注",
                     },
+                    { id: "translation", label: "翻译" },
                   ]}
                 />
               ) : null}
               {marks.active && sideTab === "marks" ? (
                 marks.panel
+              ) : marks.active && sideTab === "translation" ? (
+                <TranslationPanel
+                  translation={translation}
+                  notify={notify}
+                  {...(pdf && mode === "pdf"
+                    ? { onPage: (page: number) => pdf.go(page) }
+                    : {})}
+                />
               ) : (
                 <AnimatedPanel preset="panelContent">
                   {information}

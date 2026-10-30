@@ -20,6 +20,7 @@ import { UsageEstimator } from "../analysis/usage-estimate.js";
 import { valueVerificationIdentity } from "../analysis/value-check.js";
 import {
   configuredAgentModels,
+  agentModel,
   configuredAgentIdentity,
   endpoint,
 } from "./agent-models.js";
@@ -43,6 +44,8 @@ import { acceptPdf } from "../acquisition/pdf-acceptance.js";
 import type { PublicAcquisitionRegistry } from "../acquisition/sources/public.js";
 import { AnthropicMessagesAdapter } from "../agents/anthropic.js";
 import { DshAgentRuntime, type AgentBinding } from "../agents/dsh/runtime.js";
+import { TranslationCache } from "../translation/cache.js";
+import { TranslationService } from "../translation/service.js";
 import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "../agents/openai.js";
 import type { AgentTransport } from "../agents/protocol.js";
 import {
@@ -224,6 +227,8 @@ export interface Application {
   readonly snapshots: SnapshotService;
   readonly folders: FolderService;
   readonly marks: MarkService;
+  /** Reader translation (ADR 0049); its cache lives outside the catalog. */
+  readonly translation: TranslationService;
   readonly archive: ArchiveService;
   readonly tags: TagService;
   readonly metadataFields: LiteratureMetadataService;
@@ -705,6 +710,8 @@ async function createApplicationOwned(
   let database: SqliteWorker | undefined;
   let files: FileStore | undefined;
   let agents: DshAgentRuntime | undefined;
+  const translationRuntimes = new Map<string, DshAgentRuntime>();
+  let translationCache: TranslationCache | undefined;
   let agentTraces: AgentTraceService | undefined;
   let browserAgentCapability: BrowserAgentCapability | undefined;
   let rawParsing: RawParsingService | undefined;
@@ -830,6 +837,8 @@ async function createApplicationOwned(
         () => rawParseStorage?.close(),
         () => networkBudget.close(),
         () => agents?.close(),
+        ...[...translationRuntimes.values()].map((r) => () => r.close()),
+        () => translationCache?.close(),
         () => agentTraces?.close(),
         () => writes.close(),
         () => files?.close(),
@@ -1274,6 +1283,49 @@ async function createApplicationOwned(
       agentTraces,
     );
     browserAgentCapability = createBrowserCapability(agents);
+    // Translation binds the model a reader picks, without traces: selected text
+    // and its translation never enter the catalog (ADR 0049 §4).
+    translationCache = new TranslationCache(
+      join(home, ".sciretriever", "cache", "translations.sqlite"),
+    );
+    const translation = new TranslationService({
+      models: Object.keys(configuration.models).filter(
+        (reference) =>
+          agentModel(configuration, "translation", reference) !== null,
+      ),
+      defaultModel: configuration.analyze.model,
+      cache: translationCache,
+      runtime: (reference) => {
+        let runtime = translationRuntimes.get(reference);
+        if (!runtime) {
+          const model = agentModel(configuration, "translation", reference);
+          let bindings: readonly AgentBinding[] = [];
+          try {
+            if (model)
+              bindings = buildAgentBindings(
+                configuration,
+                credentials,
+                networkBudget,
+                (request) =>
+                  configurationOwner.authorizeCurrentCredential(request),
+                (namespace, provider, field) =>
+                  configurationOwner.hasCurrentCredential(
+                    namespace,
+                    provider,
+                    field,
+                  ),
+                options.agentTransportFactory,
+                [model],
+              );
+          } catch {
+            // A model without its startup credential stays unavailable.
+          }
+          runtime = new DshAgentRuntime(bindings);
+          translationRuntimes.set(reference, runtime);
+        }
+        return runtime;
+      },
+    });
     await options.afterStage?.("agents");
     const artifactReclaimer = new ArtifactReclaimer(
       files.root,
@@ -1726,6 +1778,7 @@ async function createApplicationOwned(
       restartAdmission: admission,
       folders: new FolderService(database),
       marks: new MarkService(database, (id) => library.detail(id)),
+      translation,
       snapshots: new SnapshotService(database, library),
       archive: new ArchiveService(database, processingTasks, library),
       archiveText: archiveText ?? null,
@@ -2222,6 +2275,9 @@ function buildAgentBindings(
     field: string,
   ) => Promise<boolean>,
   transportFactory?: ApplicationOptions["agentTransportFactory"],
+  models: ReturnType<typeof configuredAgentModels> = configuredAgentModels(
+    configuration,
+  ),
 ): readonly AgentBinding[] {
   const bindings: AgentBinding[] = [];
   const adapters = new Map<string, AgentAdapter>();
@@ -2232,7 +2288,7 @@ function buildAgentBindings(
     modelName,
     provider,
     config,
-  } of configuredAgentModels(configuration)) {
+  } of models) {
     const key = `${providerName}\u0000${reference}`;
     let adapter = adapters.get(key);
     if (!adapter) {

@@ -7,6 +7,7 @@ export const AGENT_ROLES = [
   "tagging",
   "tag-consolidation",
   "tag-backfill",
+  "translation",
 ] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
 export type AgentCapability =

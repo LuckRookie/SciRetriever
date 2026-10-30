@@ -34,6 +34,8 @@ import { preferences } from "../../../data/preferences.js";
 import { MarkBar, MarkBarButton, NotePopover } from "./MarkOverlays.js";
 import { MarksPanel } from "./MarksPanel.js";
 import { useMarks } from "./use-marks.js";
+import { TranslationPopover } from "../translation/TranslationViews.js";
+import type { ReaderTranslation } from "../translation/use-translation.js";
 import "./marks.css";
 
 const PEN_KEY = "sciretriever:marks:pen:v1";
@@ -71,11 +73,17 @@ export function useReaderMarks({
   mode,
   enabled,
   notify,
+  translation,
+  onTranslate,
 }: {
   detail: LiteratureDetail | undefined;
   mode: string;
   enabled: boolean;
   notify: (message: string) => void;
+  /** Reader translation (ADR 0049): selections translate while the select tool is on. */
+  translation?: ReaderTranslation;
+  /** The 翻译 button on the selection bar, used when the popup is off. */
+  onTranslate?: () => void;
 }) {
   const id = detail?.literature.literature_id ?? "";
   const view: "pdf" | "doc" | null =
@@ -105,8 +113,8 @@ export function useReaderMarks({
     ),
     [exported, setExported] = useState<string | null>(null);
   const draft = useRef<SelectionDraft | null>(null);
-  const latest = useRef({ marks: store.marks, tool, pen, store });
-  latest.current = { marks: store.marks, tool, pen, store };
+  const latest = useRef({ marks: store.marks, tool, pen, store, translation });
+  latest.current = { marks: store.marks, tool, pen, store, translation };
   const setPen = (color: MarkColor) => {
     setPenState(color);
     preferences.write(PEN_KEY, color);
@@ -139,6 +147,7 @@ export function useReaderMarks({
       surface.current?.clearSelection();
       draft.current = null;
       setBar(null);
+      latest.current.translation?.dismiss();
       if (!quiet)
         toast({
           message: `已高亮为「${MARK_COLOR_LABELS[color]}」`,
@@ -164,13 +173,18 @@ export function useReaderMarks({
       },
       selection(next) {
         draft.current = next;
+        const t = latest.current.translation;
         if (!next) {
           setBar((b) => (b?.kind === "selection" ? null : b));
+          t?.dismiss();
           return;
         }
         setNote(null);
         if (latest.current.tool === "pen") highlight(latest.current.pen, true);
-        else setBar({ kind: "selection" });
+        else {
+          setBar({ kind: "selection" });
+          if (t?.settings.popup) t.selected(next.quote, next.pdf?.page ?? null);
+        }
       },
       region(next) {
         const mark = latest.current.store.create({
@@ -311,9 +325,10 @@ export function useReaderMarks({
       const k = event.key.toLowerCase();
       const digit = /^[1-5]$/u.test(k) ? MARK_COLORS[Number(k) - 1]! : null;
       if (event.key === "Escape") {
-        if (bar || note) {
+        if (bar || note || translation?.current) {
           setBar(null);
           setNote(null);
+          translation?.dismiss();
           surface.current?.preview(null);
           if (bar?.kind === "selection") surface.current?.clearSelection();
         }
@@ -367,7 +382,7 @@ export function useReaderMarks({
     };
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
-  }, [active, bar, note, highlight, cite, remove, step, view]);
+  }, [active, bar, note, highlight, cite, remove, step, view, translation]);
 
   const barMark = bar?.kind === "mark" ? find(bar.id) : undefined;
   const noteMark = note ? find(note) : undefined;
@@ -401,10 +416,13 @@ export function useReaderMarks({
             aria-hidden="true"
           />
         }
-        items={MARK_COLORS.map((color, index) => ({
+        items={MARK_COLORS.map((color) => ({
           id: color,
           label: MARK_COLOR_LABELS[color],
-          shortcut: String(index + 1),
+          // The colour itself names the pen; keys 1–5 still choose it.
+          trailing: (
+            <i className="mark-dot" data-color={color} aria-hidden="true" />
+          ),
           onAction: () => {
             setPen(color);
             setTool("pen");
@@ -489,7 +507,34 @@ export function useReaderMarks({
           >
             引用
           </MarkBarButton>
+          {translation && !translation.settings.popup ? (
+            <MarkBarButton
+              icon="translate"
+              label="翻译选中文字"
+              onPress={() => {
+                if (draft.current)
+                  void translation.translate(
+                    draft.current.quote,
+                    draft.current.pdf?.page ?? null,
+                  );
+                onTranslate?.();
+              }}
+            >
+              翻译
+            </MarkBarButton>
+          ) : null}
         </MarkBar>
+      ) : null}
+      {bar?.kind === "selection" &&
+      draft.current &&
+      translation?.settings.popup &&
+      translation.current ? (
+        <TranslationPopover
+          translation={translation}
+          anchor={() => draft.current?.anchor ?? null}
+          scroller={body.current}
+          notify={notify}
+        />
       ) : null}
       {barMark ? (
         <MarkBar

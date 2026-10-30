@@ -3626,3 +3626,4 @@ export * from "./source-results.js";
 
 export * from "./screencast.js";
 export * from "./index-refresh.js";
+export * from "./translation.js";

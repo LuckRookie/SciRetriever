@@ -29,6 +29,7 @@ export type IconName =
   | "highlighter"
   | "region"
   | "note"
+  | "translate"
   | "trash";
 const paths: Record<IconName, string> = {
   search: "m16 16 5 5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0",
@@ -62,6 +63,8 @@ const paths: Record<IconName, string> = {
   highlighter: "M14.5 4 20 9.5l-9 9H5.5V13z M12.5 6l5.5 5.5 M3 21h7",
   region: "M4 8V4h4 M16 4h4v4 M20 16v4h-4 M8 20H4v-4 M10 10h4v4h-4z",
   note: "M4 4h16v11H11l-5 4v-4H4z",
+  translate:
+    "M3 5h10 M8 3v2 M5 9c1.5 3 4 5 7 6 M11 5c-1 4.5-3.5 8-7 10 M13 21l4-9 4 9 M14.3 18h5.4",
   trash: "M4 7h16 M10 7V4h4v3 M6 7l1 13h10l1-13",
 };
 export function Icon({

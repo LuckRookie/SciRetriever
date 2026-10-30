@@ -246,6 +246,8 @@ export interface MenuOption {
   disabled?: boolean;
   description?: string;
   shortcut?: string;
+  /** A visual mark after the label in place of a shortcut, such as a colour dot. */
+  trailing?: ReactNode;
   /** Start a new group of items with a hairline above this one. */
   divider?: boolean;
 }
@@ -306,7 +308,8 @@ export function Menu({
               onAction={item.onAction}
             >
               <Text slot="label">{item.label}</Text>
-              {item.shortcut ? <kbd>{item.shortcut}</kbd> : null}
+              {item.trailing ??
+                (item.shortcut ? <kbd>{item.shortcut}</kbd> : null)}
               {item.description ? (
                 <Text slot="description" className="ui-description">
                   {item.description}

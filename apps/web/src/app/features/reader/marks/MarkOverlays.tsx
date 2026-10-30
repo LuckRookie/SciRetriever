@@ -14,7 +14,7 @@ import {
 import { Icon } from "../../../components/index.js";
 
 /** Keeps a floating layer beside its anchor while the reader scrolls under it. */
-function useAnchored(
+export function useAnchored(
   anchor: () => DOMRect | null,
   scroller: HTMLElement | null,
   size: { width: number; height: number },

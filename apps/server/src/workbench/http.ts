@@ -24,6 +24,7 @@ import {
   parseStrictJsonObject,
   type ConfigurationReadiness,
   type AcquisitionRouteState,
+  TranslationInputError,
 } from "@sciretriever/contracts";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
@@ -87,6 +88,10 @@ import {
 } from "../literature/query.js";
 import { ParsingFailure } from "../parsing/ports.js";
 import { RetrievalStorageError } from "../retrieval/model.js";
+import {
+  TranslationError,
+  type TranslationService,
+} from "../translation/service.js";
 import { RetrievalIndexError } from "../retrieval/index.js";
 import { KnowledgeContextError } from "../retrieval/knowledge-query.js";
 import { MaterialContextError } from "../retrieval/query.js";
@@ -173,6 +178,8 @@ export interface WorkbenchHttpOptions {
     signal: AbortSignal,
   ) => Promise<unknown>;
   readonly importBibliography?: (value: unknown) => Promise<unknown>;
+  /** Reader translation (ADR 0049); Web only, never recorded as an operation. */
+  readonly translation?: Pick<TranslationService, "catalog" | "translate">;
   /** Explicit article completion; absent from the synthetic preview. */
   readonly acquisition?: { start(articleId: string): void };
   readonly tabs?: {
@@ -1193,6 +1200,14 @@ export async function startWorkbenchHttp(
         } else json(response, 404, { code: "endpoint-not-found" });
         return;
       }
+      if (request.method === "GET" && pathname === "/api/translation") {
+        if (!options.translation) {
+          json(response, 503, { code: "translation-unavailable" });
+          return;
+        }
+        json(response, 200, { catalog: options.translation.catalog() });
+        return;
+      }
       if (request.method === "GET" && pathname === "/api/view") {
         json(response, 200, projectedView(clientId));
         return;
@@ -1469,6 +1484,38 @@ export async function startWorkbenchHttp(
             parts[3] as "pause" | "cancel" | "resume" | "retry",
           ),
         });
+        return;
+      }
+      if (pathname === "/api/translation") {
+        if (!options.translation) {
+          json(response, 503, { code: "translation-unavailable" });
+          return;
+        }
+        const value = await body(request);
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        response.once("close", abort);
+        try {
+          json(response, 200, {
+            result: await options.translation.translate(
+              value,
+              controller.signal,
+            ),
+          });
+        } catch (error) {
+          if (error instanceof TranslationInputError) invalidInput();
+          if (error instanceof TranslationError) {
+            json(
+              response,
+              error.code === "translation-model-unavailable" ? 409 : 502,
+              { code: error.code },
+            );
+            return;
+          }
+          throw error;
+        } finally {
+          response.off("close", abort);
+        }
         return;
       }
       if (pathname === "/api/discovery") {

@@ -514,6 +514,7 @@ async function startProductionWorkbenchOwned(
       acquisition: session,
       ...taskHttpAdapters(app),
       ...createMetadataOperations(app),
+      translation: app.translation,
       query: {
         application: query,
         ...(app.maintenance

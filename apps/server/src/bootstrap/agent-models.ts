@@ -31,15 +31,23 @@ export function configuredAgentModels(configuration: OrdinaryConfiguration) {
   ];
   for (const [role, reference] of roleModels) {
     if (reference === null) continue;
-    const providerName = reference.slice(0, reference.indexOf("/"));
-    const modelName = reference.slice(reference.indexOf("/") + 1);
-    const provider = configuration.providers[providerName];
-    if (!provider) continue;
-    const config = configuration.models[reference];
-    if (!config) continue;
-    values.push({ role, reference, providerName, modelName, provider, config });
+    const value = agentModel(configuration, role, reference);
+    if (value) values.push(value);
   }
   return values;
+}
+/** One registered model bound to one role, or null when it is not registered. */
+export function agentModel(
+  configuration: OrdinaryConfiguration,
+  role: import("../agents/protocol.js").AgentRole,
+  reference: string,
+) {
+  const providerName = reference.slice(0, reference.indexOf("/"));
+  const modelName = reference.slice(reference.indexOf("/") + 1);
+  const provider = configuration.providers[providerName];
+  const config = configuration.models[reference];
+  if (!provider || !config) return null;
+  return { role, reference, providerName, modelName, provider, config };
 }
 export function endpoint(baseUrl: string, api: string): string {
   const suffix =
