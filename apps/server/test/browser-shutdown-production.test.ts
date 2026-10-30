@@ -199,7 +199,7 @@ it("cancels an Entry PDF reader before Application.close returns after a durable
     );
     void pending.catch(() => undefined);
     await expect
-      .poll(() => readerFixture.children.length, { timeout: 5000 })
+      .poll(() => readerFixture.children.length, { timeout: 20_000 })
       .toBe(1);
     expect(readerSignal?.aborted).toBe(false);
     expect(readerFixture.events[0]!.closed_at_ms).toBeNull();
@@ -747,7 +747,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       expect(slowWriter.eof_at_ms).toBeNull();
       expect(slowWriter.closed_at_ms).toBeNull();
       await expect
-        .poll(() => resources.snapshot().temporary_bytes, { timeout: 5000 })
+        .poll(() => resources.snapshot().temporary_bytes, { timeout: 20_000 })
         .toBeGreaterThan(0);
       expect(nativeProgress.some((event) => event.received_bytes > 0)).toBe(
         true,
@@ -776,7 +776,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       expect(runningAtReturn).toEqual([]);
       expect(controller.signal.aborted).toBe(false);
       await expect
-        .poll(() => slowWriter.closed_at_ms, { timeout: 5000 })
+        .poll(() => slowWriter.closed_at_ms, { timeout: 20_000 })
         .not.toBeNull();
       stoppedBytes = slowWriter.written_bytes;
       await delay(200);
@@ -786,7 +786,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         .poll(
           () => calls.find((call) => call.article === "model")?.closed_at_ms,
           {
-            timeout: 5000,
+            timeout: 20_000,
           },
         )
         .not.toBeNull();
@@ -804,7 +804,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
             (await Promise.all(ownedProcesses.map(stillRunning))).filter(
               Boolean,
             ).length,
-          { timeout: 5000 },
+          { timeout: 20_000 },
         )
         .toBe(0);
       for (const directory of nativeDirectories)

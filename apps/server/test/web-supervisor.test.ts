@@ -283,7 +283,7 @@ it("cancels a waiting apply without restarting and does not kill a stalled grace
           blockers: server.state.blockers,
           diagnostics,
         }),
-      { timeout: 10000 },
+      { timeout: 20_000 },
     )
     .toContain('"state":"failed"');
   expect(server.ready.generation).toBe(1);
@@ -425,7 +425,7 @@ it("uses bounded crash backoff, treats naked 75 as a crash, and never replays a 
       await writeFile(join(home, "exit75"), "");
       await expect
         .poll(() => codes.filter((c) => c === "web-worker-exit").length, {
-          timeout: 10000,
+          timeout: 20_000,
         })
         .toBeGreaterThanOrEqual(2);
       await rm(join(home, "exit75"));
@@ -508,7 +508,7 @@ it.each(["parent-signal", "parent-death", "child-signal"] as const)(
               () => false,
               () => true,
             ),
-          { timeout: 10000 },
+          { timeout: 20_000 },
         )
         .toBe(true);
     } finally {

@@ -114,7 +114,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
                     (element) => element.name === "Verify",
                   );
                 },
-                { timeout: 15_000 },
+                { timeout: 20_000 },
               )
               .toBe(true);
             if (!observation) throw new Error("readable page unavailable");

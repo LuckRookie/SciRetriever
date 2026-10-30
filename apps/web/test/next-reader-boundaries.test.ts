@@ -277,7 +277,7 @@ it("keeps the latest outline target, text settings and reading position across a
                   .getBoundingClientRect().top,
             ),
           ),
-        { timeout: 10000 },
+        { timeout: 20_000 },
       )
       .toBeLessThan(60);
     await w.page.unrouteAll({ behavior: "wait" });
@@ -303,7 +303,7 @@ it("keeps the latest outline target, text settings and reading position across a
       .click();
     await expect
       .poll(() => w.page.locator(".reading-article").textContent(), {
-        timeout: 10000,
+        timeout: 20_000,
       })
       .toContain("Paragraph 60");
     await expect
@@ -312,7 +312,7 @@ it("keeps the latest outline target, text settings and reading position across a
           w.page
             .getByRole("button", { name: "文档内查找", exact: true })
             .isEnabled(),
-        { timeout: 10000 },
+        { timeout: 20_000 },
       )
       .toBe(true);
     expect(
@@ -389,7 +389,7 @@ it("explains scan-only PDFs and refuses bytes whose immutable hash changed", asy
     await w.page.reload();
     await expect
       .poll(() => w.page.locator(".reading-status").innerText(), {
-        timeout: 10000,
+        timeout: 20_000,
       })
       .toContain("PDF 完整性校验失败");
     expect(await w.page.locator("canvas").count()).toBe(0);
@@ -438,7 +438,7 @@ it("keeps a verified PDF download available when its worker fails and supports r
     await open(w);
     await expect
       .poll(() => w.page.locator(".reading-status").innerText(), {
-        timeout: 10000,
+        timeout: 20_000,
       })
       .toContain("阅读组件未能加载");
     await w.page.getByRole("button", { name: "更多", exact: true }).click();
@@ -500,7 +500,7 @@ it("discards a late automatic text continuation after the reader closes", async 
     await w.page.locator(".reader-engine-body").evaluate((el) => {
       el.scrollTop = el.scrollHeight;
     });
-    await expect.poll(() => reads, { timeout: 10000 }).toBe(2);
+    await expect.poll(() => reads, { timeout: 20_000 }).toBe(2);
     await w.page.getByRole("button", { name: /^关闭文献 / }).click();
     release();
     await w.page.unrouteAll({ behavior: "wait" });

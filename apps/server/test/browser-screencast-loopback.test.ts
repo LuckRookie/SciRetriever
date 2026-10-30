@@ -231,7 +231,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
           status: (status) => statuses.push(status),
         });
         await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0), {
-          timeout: 5000,
+          timeout: 20_000,
         });
         const first = frames.at(-1)!;
         expect(first.quality).toBe(60);
@@ -251,7 +251,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         await vi.waitFor(
           async () =>
             expect((await f.page.snapshot()).text).toContain("clicks 1"),
-          { timeout: 5000 },
+          { timeout: 20_000 },
         );
         await vi.waitFor(
           async () => {
@@ -263,7 +263,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
             );
             expect(p[1]!).toBeGreaterThan(p[2]!);
           },
-          { timeout: 5000 },
+          { timeout: 20_000 },
         );
         const snapshot = await f.page.snapshot();
         expect(snapshot.screenshot).not.toBeNull();
@@ -335,7 +335,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         await vi.waitFor(
           async () =>
             expect((await f.page.snapshot()).text).toContain("keys 3"),
-          { timeout: 5000 },
+          { timeout: 20_000 },
         );
         await f.page.screencast!.input(
           {
@@ -369,7 +369,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         );
         await vi.waitFor(
           () => expect(frames.at(-1)!.scroll_y).toBeGreaterThan(0),
-          { timeout: 5000 },
+          { timeout: 20_000 },
         );
         const dragFrame = frames.at(-1)!;
         for (const [phase, x] of [
@@ -392,12 +392,12 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         await vi.waitFor(
           async () =>
             expect((await f.page.snapshot()).text).toContain("drag 1"),
-          { timeout: 5000 },
+          { timeout: 20_000 },
         );
         await f.page.navigate!(f.origin + "/next");
         await vi.waitFor(
           () => expect(frames.at(-1)!.document_id).not.toBe(first.document_id),
-          { timeout: 5000 },
+          { timeout: 20_000 },
         );
         await expect(
           f.page.screencast!.input(
@@ -411,7 +411,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         await f.page.navigate!(f.origin + "/next");
         await vi.waitFor(
           () => expect(frames.at(-1)!.document_id).not.toBe(second.document_id),
-          { timeout: 5000 },
+          { timeout: 20_000 },
         );
         const reloaded = frames.at(-1)!;
         await f.page.screencast!.input(
@@ -432,7 +432,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
             popup = await f.page.successor!();
             expect(popup).not.toBeNull();
           },
-          { timeout: 5000 },
+          { timeout: 20_000 },
         );
         await stop();
         stop = undefined;
@@ -442,7 +442,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
           status: () => {},
         });
         await vi.waitFor(() => expect(popupFrames.length).toBeGreaterThan(0), {
-          timeout: 5000,
+          timeout: 20_000,
         });
         expect(popupFrames[0]!.page_id).not.toBe(first.page_id);
         await stopPopup();

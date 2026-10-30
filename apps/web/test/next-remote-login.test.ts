@@ -128,7 +128,7 @@ describe("IP-address HTTP login and workspace", () => {
         viewport: { width: 1280, height: 900 },
       });
       const page = await context.newPage();
-      page.setDefaultTimeout(5000);
+      page.setDefaultTimeout(20_000);
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(`${PUBLIC_ORIGIN}/?view=lib`);

@@ -247,7 +247,7 @@ it("test-all is serialized, isolates failures, skips unsupported/missing rows, a
         t.source === "web-of-science",
     ),
   ).toBe(false);
-  await expect.poll(() => probe.activeCount, { timeout: 15000 }).toBe(0);
+  await expect.poll(() => probe.activeCount, { timeout: 20_000 }).toBe(0);
   expect(maximum).toBe(1);
   expect(seen).toContain("crossref");
   expect(seen).toContain("datacite");

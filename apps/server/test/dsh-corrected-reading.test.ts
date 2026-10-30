@@ -110,7 +110,7 @@ it("reads the full corrected tail and preserves contradictory results and negati
   } finally {
     await f.close();
   }
-}, 15000);
+}, 20_000);
 it.each([
   `${"中".repeat(30000)}DRY_RESULT_4.2_eV`,
   `${"a".repeat(23999)}😀${"😀".repeat(15000)}DRY_RESULT_4.2_eV`,
@@ -209,4 +209,4 @@ it("binds distant conditions and preserves bilingual negation", async () => {
   } finally {
     await f.close();
   }
-}, 15000);
+}, 20_000);

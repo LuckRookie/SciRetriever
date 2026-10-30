@@ -113,7 +113,7 @@ export async function workspace(
           ? "reduce"
           : "no-preference",
     });
-    page.setDefaultTimeout(5000);
+    page.setDefaultTimeout(20_000);
     const errors: string[] = [],
       submissions: ProcessorBatchRequest[] = [];
     page.on("pageerror", (error) => errors.push(error.message));

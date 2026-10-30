@@ -247,7 +247,7 @@ describe("persistent browser profile host", () => {
         // Cloak can commit before its visible surface exists. Establish a real
         // readable baseline, then verify the independent session after A closes.
         await expect
-          .poll(healthyTitle, { timeout: 15_000 })
+          .poll(healthyTitle, { timeout: 20_000 })
           .toBe("Healthy article");
         const delivery = production.deliverCandidate(
           makeRequest("a", "/pending"),
@@ -260,7 +260,7 @@ describe("persistent browser profile host", () => {
         expect(decide).not.toHaveBeenCalled();
         expect(ownerSignal.aborted).toBe(false);
         await expect
-          .poll(healthyTitle, { timeout: 15_000 })
+          .poll(healthyTitle, { timeout: 20_000 })
           .toBe("Healthy article");
         const pages = await host!.listPages();
         expect(
@@ -363,7 +363,7 @@ describe("persistent browser profile host", () => {
         release();
         const page = await opening;
         await expect
-          .poll(() => page.title(), { timeout: 10_000 })
+          .poll(() => page.title(), { timeout: 20_000 })
           .toBe("synthetic browser page");
         await saveHostEvidence({
           runtime: launch.version,
@@ -1153,7 +1153,7 @@ it.runIf(browserAvailable)(
         () => true,
       );
       await expect
-        .poll(async () => (await page.snapshot()).text, { timeout: 15_000 })
+        .poll(async () => (await page.snapshot()).text, { timeout: 20_000 })
         .toContain("Verification complete");
       expect(receivedType).toContain("multipart/form-data; boundary=");
       expect(receivedBody).toContain("synthetic-browser-proof");

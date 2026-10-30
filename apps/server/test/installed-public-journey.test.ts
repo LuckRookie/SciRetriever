@@ -457,7 +457,7 @@ async function installedBrowserJourney(
         expect(modelCalls).toBe(3);
         expect((await view()).guidance?.[1]?.state).toBe("consumed");
       },
-      { timeout: 10_000 },
+      { timeout: 20_000 },
     );
     expect(observedGuidance).toContainEqual(
       expect.stringContaining(

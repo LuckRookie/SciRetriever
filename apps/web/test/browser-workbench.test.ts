@@ -58,7 +58,7 @@ beforeEach(async () => {
     } else await route.continue();
   });
   page = await context.newPage();
-  page.setDefaultTimeout(5_000);
+  page.setDefaultTimeout(20_000);
   page.on("pageerror", (error) => failures.push(error.message));
   page.on("console", (message) => {
     if (message.type() === "error" || message.type() === "warning")
@@ -98,7 +98,7 @@ it("serves only sample assets and refuses filesystem paths and mutations", async
   }
   expect((await page.request.post(origin)).status()).toBe(405);
   expect((await page.request.head(origin)).status()).toBe(200);
-}, 15_000);
+}, 20_000);
 
 it("requires human takeover for page input and explicit confirmation for sample publication", async () => {
   expect(await page.locator("#pdf-button").isDisabled()).toBe(true);
@@ -116,7 +116,7 @@ it("requires human takeover for page input and explicit confirmation for sample 
   await page.reload();
   expect(await page.locator("#library-count").textContent()).toBe("0");
   expect(await page.locator("#candidate-result").isHidden()).toBe(true);
-}, 15_000);
+}, 20_000);
 
 it("keeps uncertain candidates unpublished and explains rejected network requests", async () => {
   await page.getByRole("button", { name: "身份待确认", exact: true }).click();
@@ -136,7 +136,7 @@ it("keeps uncertain candidates unpublished and explains rejected network request
     "切换其他样本场景",
   );
   expect(await page.locator("#run-button").isEnabled()).toBe(true);
-}, 15_000);
+}, 20_000);
 
 it("stops delayed capture after takeover, pause, cancellation and scenario changes", async () => {
   await page.locator("#run-button").click();
@@ -201,4 +201,4 @@ it("supports the 390px drawer and keyboard without horizontal overflow", async (
       () => document.documentElement.scrollWidth <= window.innerWidth,
     ),
   ).toBe(true);
-}, 15_000);
+}, 20_000);

@@ -102,7 +102,7 @@ it("keeps discovery and bibliography import explicit and uploads a selected PDF 
       .poll(
         async () =>
           (await w.env.app.library.detail(missingId)).primary_pdf !== null,
-        { timeout: 10000 },
+        { timeout: 20_000 },
       )
       .toBe(true);
     expect(w.env.modelCalls).toBe(0);

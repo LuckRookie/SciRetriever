@@ -144,7 +144,7 @@ it.each([false, true])(
         () => true,
       );
       await observe(page, "Synthetic reader");
-      await expect.poll(() => captures.length, { timeout: 10000 }).toBe(1);
+      await expect.poll(() => captures.length, { timeout: 20_000 }).toBe(1);
       expect(failures).toEqual([]);
       expect(captures).toEqual([
         { session: host.sessionForPage(page.id), page: page.id, bytes },

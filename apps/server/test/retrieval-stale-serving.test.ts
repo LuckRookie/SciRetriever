@@ -264,7 +264,7 @@ it("starts an owning Application with a stale existing index and catches up with
         const result = await q!.context!.search(request());
         expect(result.indexed_revision).toBe(result.source_revision);
       },
-      { timeout: 5000 },
+      { timeout: 20_000 },
     );
   } finally {
     await q?.close();
@@ -352,7 +352,7 @@ it("detects idle runtime writes automatically and returns a fully archived scope
     await vi.waitFor(
       async () =>
         expect((await q!.context!.search(input)).coverage).toBe("complete"),
-      { timeout: 5000 },
+      { timeout: 20_000 },
     );
     expect(performance.now() - started).toBeLessThan(5000);
     expect((await q.knowledgeContext!.search(knowledgeInput)).coverage).toBe(

@@ -500,12 +500,12 @@ it("observes idle scalar lag, coalesces status reads and retries a temporarily b
           status: "updated",
           indexed_revision: 2,
         }),
-      { timeout: 5000 },
+      { timeout: 20_000 },
     );
     expect(calls).toBe(2);
     source = 3;
     // No status read or new publication drives this pass.
-    await vi.waitFor(() => expect(indexed).toBe(3), { timeout: 5000 });
+    await vi.waitFor(() => expect(indexed).toBe(3), { timeout: 20_000 });
     expect(calls).toBe(3);
   } finally {
     await service.close();

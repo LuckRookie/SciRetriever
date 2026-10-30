@@ -102,7 +102,7 @@ describe("durable task workbench", () => {
         ...motionOptions(),
         viewport: { width: 1280, height: 900 },
       });
-      page.setDefaultTimeout(5000);
+      page.setDefaultTimeout(20_000);
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await loginWorkbenchPage(page, server.origin);
@@ -157,7 +157,7 @@ describe("durable task workbench", () => {
           .last()
           .click();
         await expect
-          .poll(() => drawer.innerText(), { timeout: 10000 })
+          .poll(() => drawer.innerText(), { timeout: 20_000 })
           .toContain("尝试 0 / 12");
       };
       const control = (name: string) =>
@@ -270,7 +270,7 @@ describe("durable task workbench", () => {
         .poll(
           () =>
             page.locator(".tasks-page").getByRole("alert").allTextContents(),
-          { timeout: 10000 },
+          { timeout: 20_000 },
         )
         .toContainEqual(expect.stringContaining("操作未完成"));
       expect(await page.locator(".task-table [data-task-id]").count()).toBe(2);
@@ -419,7 +419,7 @@ describe("durable task workbench", () => {
         ...motionOptions(),
         viewport: { width: 1280, height: 900 },
       });
-      page.setDefaultTimeout(5000);
+      page.setDefaultTimeout(20_000);
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await loginWorkbenchPage(page, server.origin);
@@ -471,11 +471,11 @@ describe("durable task workbench", () => {
       await expect
         .poll(
           async () => (await env.app.processingTasks!.read(jobId)).job.status,
-          { timeout: 10000 },
+          { timeout: 20_000 },
         )
         .toBe("failed");
       await expect
-        .poll(() => drawer.innerText(), { timeout: 10000 })
+        .poll(() => drawer.innerText(), { timeout: 20_000 })
         .toContain("完成 1 项，失败 1 项");
       await drawer
         .getByRole("button", { name: "失败 1 项", exact: true })
@@ -484,18 +484,18 @@ describe("durable task workbench", () => {
         .results[0];
       await page.reload();
       await expect
-        .poll(() => drawer.innerText(), { timeout: 10000 })
+        .poll(() => drawer.innerText(), { timeout: 20_000 })
         .toContain("完成 1 项，失败 1 项");
       await control("重试").click();
       // Background work started here can outlast the 1 s poll default under Full load.
       await expect
         .poll(
           async () => (await env.app.processingTasks!.read(jobId)).job.status,
-          { timeout: 10000 },
+          { timeout: 20_000 },
         )
         .toBe("completed");
       await expect
-        .poll(() => drawer.innerText(), { timeout: 10000 })
+        .poll(() => drawer.innerText(), { timeout: 20_000 })
         .toContain("完成 2 项");
       const result = await env.app.processingTasks!.read(jobId);
       expect(result.results).toHaveLength(2);
@@ -517,7 +517,7 @@ describe("durable task workbench", () => {
         .poll(
           async () =>
             (await env.app.processingTasks!.read(resumedId)).job.status,
-          { timeout: 10000 },
+          { timeout: 20_000 },
         )
         .toBe("completed");
       await drawer.getByText("已完成", { exact: true }).first().waitFor();

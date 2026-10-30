@@ -218,10 +218,11 @@ export const designSamplePages: readonly DesignSamplePage[] = [
     prepare: async (p) => {
       const rows = p.locator(".paper-row");
       await rows.nth(1).waitFor();
-      await rows.first().focus();
-      await p.keyboard.press("Space");
-      await p.keyboard.press("ArrowDown");
-      await p.keyboard.press("Space");
+      // Focus each row directly: ArrowDown moves focus only on the next frame.
+      for (const n of [0, 1]) {
+        await rows.nth(n).focus();
+        await p.keyboard.press("Space");
+      }
       await p
         .getByRole("region", { name: "文献选择" })
         .getByRole("button", { name: "建档 2", exact: true })

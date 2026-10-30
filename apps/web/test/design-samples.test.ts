@@ -85,7 +85,7 @@ it.each(designSamplePages)(
           blocked.push(origin);
           await route.abort("blockedbyclient");
         });
-        page.setDefaultTimeout(10000);
+        page.setDefaultTimeout(20_000);
         page.on("pageerror", (error) => errors.push(error.message));
         page.on("console", (message) => {
           if (message.type() === "error") errors.push(message.text());

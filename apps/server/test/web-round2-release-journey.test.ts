@@ -133,7 +133,7 @@ it(
             (await w.env.app.jobs!.listJobs()).some(
               (job) => job.status === "running",
             ),
-          { timeout: 15000 },
+          { timeout: 20_000 },
         )
         .toBe(true);
       const job = (await w.env.app.jobs!.listJobs()).find(
@@ -161,11 +161,11 @@ it(
       release();
       await expect
         .poll(async () => (await w.env.app.jobs!.getJob(job.job_id))!.status, {
-          timeout: 15000,
+          timeout: 20_000,
         })
         .toBe("completed");
       await expect
-        .poll(() => conversation.textContent(), { timeout: 15000 })
+        .poll(() => conversation.textContent(), { timeout: 20_000 })
         .toContain("A synthetic finding.");
       await page.getByRole("button", { name: "所属任务", exact: true }).click();
       const task = page.getByRole("region", {

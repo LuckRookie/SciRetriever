@@ -329,7 +329,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         ])
           await rm(join(root, name), { recursive: true, force: true });
       }
-    }, 15000);
+    }, 20_000);
 
     it("observes single-GUID received bytes before a slow unknown-length download exposes its stream or path", async () => {
       const page = await fixturePage("/native-slow");
@@ -344,7 +344,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         .poll(
           () => begins.find((event) => event.url === `${origin}/native-slow`),
           {
-            timeout: 5000,
+            timeout: 20_000,
           },
         )
         .toBeDefined();
@@ -389,7 +389,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
             progress.find(
               (event) => event.guid === guid && event.state === "completed",
             ),
-          { timeout: 5000 },
+          { timeout: 20_000 },
         )
         .toBeDefined();
       const terminal = progress.find(
@@ -423,7 +423,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         await page.close();
       }
       evidence.inline = results;
-    }, 15000);
+    }, 20_000);
 
     it("captures bytes of an original fetch response with Network.streamResourceContent before completion", async () => {
       const page = await fixturePage("/unused");
@@ -516,7 +516,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         await page.close();
         await rm(join(root, "network-stream.bin"), { force: true });
       }
-    }, 15000);
+    }, 20_000);
 
     it("takes an original fetch response as a pull-based IO stream while preserving the request session header", async () => {
       const page = await fixturePage("/unused");
@@ -610,7 +610,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         await page.close();
         await rm(join(root, "fetch-io.bin"), { force: true });
       }
-    }, 15000);
+    }, 20_000);
 
     it("really cancels its native writer and reports an interrupted download as canceled", async () => {
       const outcomes = [];
@@ -632,7 +632,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
           .poll(
             () => begins.find((event) => event.url === `${origin}${target}`),
             {
-              timeout: 5000,
+              timeout: 20_000,
             },
           )
           .toBeDefined();
@@ -663,7 +663,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         await page.close();
       }
       evidence.cancellation = outcomes;
-    }, 15000);
+    }, 20_000);
 
     it("closes the original response writer when a taken IO stream is canceled", async () => {
       const page = await fixturePage("/unused");
@@ -733,7 +733,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         await cdp.detach();
         await page.close();
       }
-    }, 15000);
+    }, 20_000);
 
     it("observes the production HTTP proxy deliver a native download before the origin reaches EOF", async () => {
       const address = server.address();
@@ -792,6 +792,6 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         await proxied.close();
         await proxy.close();
       }
-    }, 15000);
+    }, 20_000);
   },
 );

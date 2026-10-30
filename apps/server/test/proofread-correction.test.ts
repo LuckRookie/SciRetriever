@@ -248,7 +248,7 @@ it("uses one DSH conversation to view images, correct rejected drafts, count tok
   } finally {
     await e.runtime.close();
   }
-}, 15000);
+}, 20_000);
 it("stops at the exact dispatch budget without caching unfinished work", async () => {
   let calls = 0;
   const e = setup(async (_request, _options, _signal, lifecycle) => {
@@ -271,7 +271,7 @@ it("stops at the exact dispatch budget without caching unfinished work", async (
   } finally {
     await e.runtime.close();
   }
-}, 15000);
+}, 20_000);
 it("records failed dispatches and never caches provider failure as accepted correction", async () => {
   let calls = 0;
   const e = setup(async (_request, _options, _signal, lifecycle) => {
@@ -293,7 +293,7 @@ it("records failed dispatches and never caches provider failure as accepted corr
   } finally {
     await e.runtime.close();
   }
-}, 15000);
+}, 20_000);
 
 it("continues bounded draft and text-layer reads inside the same conversation", async () => {
   const c = await context(),

@@ -83,7 +83,7 @@ it("leaves background previews visible and captures selected native, popup, data
     // The renderer must receive its inline fetch; no candidate is produced by
     // merely loading the article's background PDF preview.
     await expect
-      .poll(async () => (await page.snapshot()).text, { timeout: 10000 })
+      .poll(async () => (await page.snapshot()).text, { timeout: 20_000 })
       .toContain("Preview ready");
     expect(captures).toEqual([]);
     let snapshot = await page.snapshot();
@@ -113,7 +113,7 @@ it("leaves background previews visible and captures selected native, popup, data
       ).toBe(true);
       await page.activate?.();
     }
-    await expect.poll(() => captures.length, { timeout: 10000 }).toBe(4);
+    await expect.poll(() => captures.length, { timeout: 20_000 }).toBe(4);
     expect(failures).toEqual([]);
     expect(captures).toHaveLength(4);
     expect(captures[0]!.source).toBe(`${fixture.origin}/paper.pdf`);

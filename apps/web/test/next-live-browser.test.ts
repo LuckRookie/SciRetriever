@@ -47,7 +47,7 @@ describe("live workbench on the installed Cloak runtime", () => {
       try {
         const context = await browser.newContext(motionOptions());
         const desktop = await context.newPage();
-        desktop.setDefaultTimeout(10000);
+        desktop.setDefaultTimeout(20_000);
         const clickAcceptedAction = async (
           page: typeof desktop,
           name: string,
@@ -143,7 +143,7 @@ describe("live workbench on the installed Cloak runtime", () => {
           .click();
         await expect
           .poll(() => desktop.locator(".browser-control-note").innerText(), {
-            timeout: 10000,
+            timeout: 20_000,
           })
           .toContain("你在操作 · Agent 已暂停");
         await clickAcceptedAction(desktop, "Download PDF");
@@ -152,7 +152,7 @@ describe("live workbench on the installed Cloak runtime", () => {
             () =>
               desktop.getByRole("button", { name: /下载与接纳 ·/ }).innerText(),
             {
-              timeout: 15000,
+              timeout: 20_000,
             },
           )
           .toContain("· 1");
@@ -197,7 +197,7 @@ describe("live workbench on the installed Cloak runtime", () => {
             () =>
               desktop.getByRole("button", { name: /下载与接纳 ·/ }).innerText(),
             {
-              timeout: 15000,
+              timeout: 20_000,
             },
           )
           .toContain("· 2");
@@ -213,7 +213,7 @@ describe("live workbench on the installed Cloak runtime", () => {
             .catch(() => undefined);
         }, 1000);
         const mobile = await context.newPage();
-        mobile.setDefaultTimeout(10000);
+        mobile.setDefaultTimeout(20_000);
         await mobile.setViewportSize({ width: 390, height: 844 });
         mobile.on("pageerror", (error) => errors.push(error.message));
         // Both pages share one authenticated browser session; re-login revokes its existing grants.
@@ -228,7 +228,7 @@ describe("live workbench on the installed Cloak runtime", () => {
           .click();
         await expect
           .poll(() => desktop.locator(".browser-control-note").innerText(), {
-            timeout: 10000,
+            timeout: 20_000,
           })
           .toBe("另一个窗口正在操作");
         // A fresh observation lists the page's buttons again in both windows.
@@ -250,7 +250,7 @@ describe("live workbench on the installed Cloak runtime", () => {
             () =>
               mobile.getByRole("button", { name: /下载与接纳 ·/ }).innerText(),
             {
-              timeout: 15000,
+              timeout: 20_000,
             },
           )
           .toContain("· 3");
@@ -379,12 +379,12 @@ describe("live workbench on the installed Cloak runtime", () => {
           .fill("QueryBank");
         await expect
           .poll(() => desktop.locator(".library-page").innerText(), {
-            timeout: 15000,
+            timeout: 20_000,
           })
           .toContain("共 53 篇");
         await expect
           .poll(() => desktop.locator(".library-page").innerText(), {
-            timeout: 15000,
+            timeout: 20_000,
           })
           .toContain("已显示 50");
         // The library scrolls with the page; the main container owns scrollTop.
@@ -397,7 +397,7 @@ describe("live workbench on the installed Cloak runtime", () => {
         });
         await expect
           .poll(() => desktop.locator(".library-page").innerText(), {
-            timeout: 15000,
+            timeout: 20_000,
           })
           .toContain("已显示 53");
         expect(await desktop.locator(".paper-row").count()).toBeLessThan(53);

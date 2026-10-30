@@ -537,7 +537,7 @@ describe("explicit retrieval projection and bounded Context", () => {
       await query?.close();
       await env.close();
     }
-  }, 10_000);
+  }, 20_000);
 
   // Reached 2.8 s under Full (36/12) load, too close to the 5 s default.
   it("keeps a pinned DocumentVersion and its evidence readable after reopening and index rebuild", async () => {

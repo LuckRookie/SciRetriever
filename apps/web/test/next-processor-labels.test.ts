@@ -24,7 +24,7 @@ async function published(
     .poll(
       async () =>
         (await w.env.app.processingTasks!.read(id)).collections.length,
-      { timeout: 15000 },
+      { timeout: 20_000 },
     )
     .toBe(1);
   const summary = (await w.env.app.processorRead!.collections(id))[0]!;

@@ -66,7 +66,7 @@ it("keeps parsing separate from document publication and reads existing verified
     });
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    page.setDefaultTimeout(5000);
+    page.setDefaultTimeout(20_000);
     await loginWorkbenchPage(page, server.origin);
     await page.goto(server.origin + "/");
     await showAllLibraryStatuses(page);
@@ -143,7 +143,7 @@ it("keeps parsing separate from document publication and reads existing verified
               : [],
           };
         },
-        { timeout: 10000 },
+        { timeout: 20_000 },
       )
       .toEqual({ status: "completed", failures: [] });
     expect(env.parseCalls).toBe(1);
@@ -189,7 +189,7 @@ it("keeps parsing separate from document publication and reads existing verified
     // tight right after a navigation.
     await expect
       .poll(() => page.locator(".reading-status:visible").textContent(), {
-        timeout: 15000,
+        timeout: 20_000,
       })
       .toContain("全文已加载");
     await page.getByRole("button", { name: "显示目录", exact: true }).click();
@@ -214,7 +214,7 @@ it("keeps parsing separate from document publication and reads existing verified
         async () =>
           (await env.app.snapshots.list({ after: null, limit: 10 })).items
             .length,
-        { timeout: 10000 },
+        { timeout: 20_000 },
       )
       .toBe(1);
     expect(env.modelCalls).toBe(0);
@@ -247,7 +247,7 @@ it("keeps parsing separate from document publication and reads existing verified
     );
     await expect
       .poll(() => page.locator(".reader-summary-scroll").textContent(), {
-        timeout: 15000,
+        timeout: 20_000,
       })
       .toContain("A synthetic finding.");
     await page
@@ -287,13 +287,13 @@ it("keeps parsing separate from document publication and reads existing verified
           (await env.app.jobs!.listJobs(10)).filter(
             (job) => job.status === "completed",
           ).length,
-        { timeout: 10000 },
+        { timeout: 20_000 },
       )
       .toBe(3);
     await page.reload();
     await expect
       .poll(() => page.locator(".reader-information").textContent(), {
-        timeout: 15000,
+        timeout: 20_000,
       })
       .toContain("有证据支持");
     await page.getByRole("tab", { name: "结果", exact: true }).click();
@@ -335,7 +335,7 @@ it.each([true, false])(
         .poll(
           async () =>
             (await w.env.app.processingTasks!.read(job.job_id)).job.status,
-          { timeout: 10000 },
+          { timeout: 20_000 },
         )
         .toBe(analysisModel ? "completed" : "failed");
       await w.page

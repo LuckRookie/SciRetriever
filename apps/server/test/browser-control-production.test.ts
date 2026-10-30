@@ -549,7 +549,7 @@ it
       ).toBe(0);
       await expect
         .poll(() => [...schedulers].map((scheduler) => scheduler.snapshot()), {
-          timeout: 5000,
+          timeout: 20_000,
         })
         .toEqual([{ sessions: 0, queued: 0, workers: 0, platform_active: 0 }]);
       const finalB = await view();

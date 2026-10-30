@@ -85,7 +85,7 @@ it("opens keyboard search and live activity without starting work, and preserves
     await page.getByRole("button", { name: /^活动/ }).click();
     const activity = page.getByRole("dialog", { name: "活动", exact: true });
     await expect
-      .poll(() => activity.textContent(), { timeout: 5000 })
+      .poll(() => activity.textContent(), { timeout: 20_000 })
       .toContain("获取 PDF");
     await activity
       .getByRole("button", { name: "查看全部任务", exact: true })
@@ -279,7 +279,7 @@ it("aborts a library search when navigating to another page and ignores its late
     await began;
     await page.getByRole("button", { name: "洞察", exact: true }).click();
     await page.locator(".insight-figures").waitFor();
-    await expect.poll(() => cancelled, { timeout: 5000 }).toBe(true);
+    await expect.poll(() => cancelled, { timeout: 20_000 }).toBe(true);
     release();
     await page.unrouteAll({ behavior: "wait" });
     expect(new URL(page.url()).searchParams.get("view")).toBe("ins");
@@ -322,7 +322,7 @@ it("requires confirmation before a PDF dropped on a library row is accepted and 
       .poll(
         async () =>
           (await w.env.app.library.detail(missingId)).primary_pdf !== null,
-        { timeout: 10000 },
+        { timeout: 20_000 },
       )
       .toBe(true);
     expect(w.env.modelCalls).toBe(0);

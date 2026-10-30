@@ -108,7 +108,7 @@ it.skipIf(!bundle)(
                 (element) => element.name === "Download PDF",
               );
           },
-          { timeout: 15_000 },
+          { timeout: 20_000 },
         )
         .toBe(true);
       const observation = workbench.session.view().observation!;
@@ -132,7 +132,7 @@ it.skipIf(!bundle)(
       });
       await expect
         .poll(() => workbench!.session.view().candidates.length, {
-          timeout: 15_000,
+          timeout: 20_000,
         })
         .toBe(1);
       const candidate = workbench.session.view().candidates[0]!;

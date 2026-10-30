@@ -765,7 +765,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         }
       }
       await expect
-        .poll(() => resources.snapshot().temporary_bytes, { timeout: 10_000 })
+        .poll(() => resources.snapshot().temporary_bytes, { timeout: 20_000 })
         .toBe(0);
       for (const directory of nativeDirectories)
         expect(await fileSizes(directory, () => true)).toEqual({

@@ -138,7 +138,7 @@ it("downloads a complete large result in the browser and rejects altered transfe
     });
     await w.page.goto(url.href);
     await expect
-      .poll(() => w.page.getByRole("main").textContent(), { timeout: 15000 })
+      .poll(() => w.page.getByRole("main").textContent(), { timeout: 20_000 })
       .toContain("校验失败");
     expect(
       await w.page

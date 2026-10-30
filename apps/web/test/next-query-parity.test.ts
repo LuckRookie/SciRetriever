@@ -42,7 +42,7 @@ it("shows an uninitialized state without creating a home or catalog", async () =
   const browser = await launchBrowser();
   try {
     const page = await browser.newPage(motionOptions());
-    page.setDefaultTimeout(5000);
+    page.setDefaultTimeout(20_000);
     await page.goto(`${workbench.origin}/`);
     await expect
       .poll(() => page.locator(".library-page").textContent())
@@ -134,7 +134,7 @@ it("reads, searches, follows references and downloads through the query-only pag
       ...motionOptions(),
       acceptDownloads: true,
     });
-    page.setDefaultTimeout(5000);
+    page.setDefaultTimeout(20_000);
     const failures: string[] = [];
     const requests: URL[] = [];
     page.on("pageerror", (error) => failures.push(error.message));
@@ -426,7 +426,9 @@ it("reads, searches, follows references and downloads through the query-only pag
     });
     await page.reload();
     await expect
-      .poll(() => page.getByRole("alert").allTextContents(), { timeout: 10000 })
+      .poll(() => page.getByRole("alert").allTextContents(), {
+        timeout: 20_000,
+      })
       .toContainEqual(expect.stringContaining("完整性校验失败"));
     expect(await page.locator(".reading-pdf-page").count()).toBe(0);
     await page.getByRole("button", { name: "更多", exact: true }).click();

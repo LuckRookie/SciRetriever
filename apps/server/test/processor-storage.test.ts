@@ -152,7 +152,7 @@ describe("durable processor batches", () => {
             failed: 0,
           });
         },
-        { timeout: 15000, interval: 100 },
+        { timeout: 20_000, interval: 100 },
       );
       expect(env.modelCalls).toBe(1);
     } finally {

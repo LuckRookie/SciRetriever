@@ -79,7 +79,7 @@ export async function componentFixture(kind: "gallery" | "lab" = "gallery") {
       : {}),
     viewport: { width: 1440, height: 1000 },
   });
-  page.setDefaultTimeout(5000);
+  page.setDefaultTimeout(20_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {

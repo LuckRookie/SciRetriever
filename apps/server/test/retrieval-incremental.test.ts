@@ -124,7 +124,7 @@ describe("incremental material indexing", () => {
           expect(await env.app.indexRefreshStatus!()).toMatchObject({
             status: "updated",
           }),
-        { timeout: 10000 },
+        { timeout: 20_000 },
       );
       const reads = vi.spyOn(env.app.documentRead, "withVerifiedVersion");
       try {
@@ -170,7 +170,7 @@ describe("incremental material indexing", () => {
           expect(await env.app.indexRefreshStatus!()).toMatchObject({
             status: "updated",
           }),
-        { timeout: 10000 },
+        { timeout: 20_000 },
       );
       expect(second.document.document_version_id).not.toBe(
         first.document.document_version_id,

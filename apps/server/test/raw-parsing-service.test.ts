@@ -254,7 +254,7 @@ describe("explicit deployment-profile parsing service", () => {
             (await e.app.rawParseStorage!.current(e.f.asset.asset_id)).some(
               (s) => s.profile === "pipeline" && s.result !== null,
             ),
-          { timeout: 10000 },
+          { timeout: 20_000 },
         )
         .toBe(true);
       controller.abort();

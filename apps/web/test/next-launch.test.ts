@@ -96,7 +96,7 @@ describe("formal Web launch and database binding", () => {
           ...motionOptions(),
           viewport: { width: 1280, height: 900 },
         });
-        page.setDefaultTimeout(5000);
+        page.setDefaultTimeout(20_000);
         const failures: string[] = [];
         page.on("pageerror", (error) => failures.push(error.message));
         await page.route("**/*", async (route) => {

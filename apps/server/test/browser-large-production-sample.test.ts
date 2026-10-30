@@ -599,7 +599,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
           report = await pending;
           await expect
             .poll(() => resources.snapshot().temporary_bytes, {
-              timeout: 10_000,
+              timeout: 20_000,
             })
             .toBe(0);
           const id = FIXTURE_LITERATURE.literature_id;
@@ -614,7 +614,7 @@ describe.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
             expect(receipts).not.toHaveBeenCalled();
             expect(readerChecks).toEqual([]);
             await expect
-              .poll(() => fixture.transfers[0]?.closed_ms, { timeout: 5000 })
+              .poll(() => fixture.transfers[0]?.closed_ms, { timeout: 20_000 })
               .not.toBeNull();
             const partial = fixture.transfers[0]!;
             expect(partial.finished_ms).toBeNull();

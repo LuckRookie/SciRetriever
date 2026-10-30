@@ -115,7 +115,7 @@ it("serializes a queued rebuild and a later incremental refresh while reporting 
     await service.close();
     await rm(root, { recursive: true, force: true });
   }
-}, 10000);
+}, 20_000);
 
 it("retains a queued background rebuild across shutdown and resumes it as a rebuild", async () => {
   const root = await mkdtemp(

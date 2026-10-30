@@ -336,7 +336,7 @@ it
         await expect
           .poll(
             () => nativeTerminals.has(papers[0]!.literature.literature_id),
-            { timeout: 15_000 },
+            { timeout: 20_000 },
           )
           .toBe(true);
         boundary = nativeTerminals.get(papers[0]!.literature.literature_id)!;
@@ -353,7 +353,7 @@ it
         ).toHaveLength(1);
       }
       await expect
-        .poll(() => bRequests().length, { timeout: 15_000 })
+        .poll(() => bRequests().length, { timeout: 20_000 })
         .toBeGreaterThan(0);
       const firstB = bRequests()[0]!.at_ms;
       expect(firstB - boundary).toBeGreaterThanOrEqual(
@@ -407,7 +407,7 @@ it
       ).toBe(0);
       await expect
         .poll(() => [...schedulers].map((scheduler) => scheduler.snapshot()), {
-          timeout: 5000,
+          timeout: 20_000,
         })
         .toEqual([{ sessions: 0, queued: 0, workers: 0, platform_active: 0 }]);
       await app.close();

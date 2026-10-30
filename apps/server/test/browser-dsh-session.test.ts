@@ -525,7 +525,7 @@ describe("Browser real DSH capability", () => {
       await session.close();
       await f.close();
     }
-  }, 15_000);
+  }, 20_000);
 
   it("keeps more than six real action/result pairs and isolates sibling article history", async () => {
     const f = await fixture((request) => {

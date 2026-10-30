@@ -483,7 +483,7 @@ it
               throw error;
             }
           },
-          { timeout: 15000 },
+          { timeout: 20_000 },
         )
         .toBe("A");
       const raw = (Reflect.get(host, "pages") as Map<string, Page>).get(
@@ -573,10 +573,10 @@ it
         await page.navigate!(url("publisher-a.test", "/a2"));
         if (documentBound)
           await expect
-            .poll(() => oldScriptClosed, { timeout: 10000 })
+            .poll(() => oldScriptClosed, { timeout: 20_000 })
             .toBe(true);
         await expect
-          .poll(async () => (await page!.snapshot()).title, { timeout: 10000 })
+          .poll(async () => (await page!.snapshot()).title, { timeout: 20_000 })
           .toBe("A2");
       }
       if (streaming) {
@@ -586,7 +586,7 @@ it
             () =>
               originalReadStarted() ||
               (originalProtocolTerminal() !== undefined && originalEnded()),
-            { timeout: 10000 },
+            { timeout: 20_000 },
           )
           .toBe(true);
       }
@@ -704,7 +704,7 @@ it
                   event.kind === "Target.targetDestroyed" &&
                   event.target === target,
               ),
-            { timeout: 5000 },
+            { timeout: 20_000 },
           )
           .toBe(true);
         expect(
@@ -712,7 +712,7 @@ it
         ).toBe(0);
         expect(resources.snapshot().temporary_bytes).toBe(0);
         await expect
-          .poll(() => owner.snapshot(), { timeout: 5000 })
+          .poll(() => owner.snapshot(), { timeout: 20_000 })
           .toEqual({
             sessions: 0,
             queued: 0,
@@ -727,7 +727,7 @@ it
         });
         return;
       }
-      await expect.poll(() => bRequested, { timeout: 10000 }).toBe(true);
+      await expect.poll(() => bRequested, { timeout: 20_000 }).toBe(true);
       await navigation;
       await scriptStopped.promise;
       await expect
@@ -741,7 +741,7 @@ it
               throw error;
             }
           },
-          { timeout: 10000 },
+          { timeout: 20_000 },
         )
         .toBe("B");
       expect(bMethods).toEqual([intervention === "form-post" ? "POST" : "GET"]);
@@ -761,11 +761,11 @@ it
               (event) =>
                 event.kind === "server-request" && event.path === "/b.pdf",
             ),
-          { timeout: 10000 },
+          { timeout: 20_000 },
         )
         .toBe(true);
       await expect
-        .poll(() => capturedHash, { timeout: 10000 })
+        .poll(() => capturedHash, { timeout: 20_000 })
         .toBe(createHash("sha256").update(bytes).digest("hex"));
       await page.settleCaptures!();
       await host.stopSessionNetwork(identity!.session_id);

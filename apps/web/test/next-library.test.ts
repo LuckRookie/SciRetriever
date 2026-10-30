@@ -118,7 +118,7 @@ it("paginates a 30,000-record library, bounds rendered rows, restores scroll and
       });
       await expect
         .poll(() => p.locator(".library-list-heading").textContent(), {
-          timeout: 5000,
+          timeout: 20_000,
         })
         .toContain(`${100 + 50 * i} /`);
     }

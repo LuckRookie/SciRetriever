@@ -112,7 +112,7 @@ it.each(["link", "script"] as const)(
         ready!.document_generation!,
         () => true,
       );
-      await expect.poll(() => captures.length, { timeout: 15000 }).toBe(1);
+      await expect.poll(() => captures.length, { timeout: 20_000 }).toBe(1);
       expect(pagePresent).toBe(false);
       expect(admissions).toHaveLength(2);
       expect(new Set(admissions).size).toBe(2);

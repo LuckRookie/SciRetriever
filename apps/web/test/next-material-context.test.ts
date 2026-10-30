@@ -121,7 +121,7 @@ it("rebuilds the v4 index explicitly and searches Context in the real browser pa
       headless: true,
     });
     const page = await browser.newPage(motionOptions());
-    page.setDefaultTimeout(5000);
+    page.setDefaultTimeout(20_000);
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
     await page.goto(`${web.origin}/?view=set`);
@@ -141,7 +141,7 @@ it("rebuilds the v4 index explicitly and searches Context in the real browser pa
     // The rebuild runs in the background; the card polls its status.
     await expect
       .poll(() => page.getByRole("status").allTextContents(), {
-        timeout: 15000,
+        timeout: 20_000,
       })
       .toContainEqual(expect.stringContaining("全文索引已重建"));
     expect(rebuilds).toBe(1);

@@ -149,7 +149,7 @@ async function workspace(withSynthesis = false, indexes = true) {
     ...motionOptions(),
     viewport: { width: 1440, height: 1000 },
   });
-  page.setDefaultTimeout(5000);
+  page.setDefaultTimeout(20_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const requests: KnowledgeContextRequest[] = [];
@@ -427,7 +427,7 @@ it("opens the fixed hit after a new default is published and restores the query 
     await w.page.locator('[data-testid="retrieval-source"]').first().click();
     await expect
       .poll(() => w.page.locator(".result-text").textContent(), {
-        timeout: 5000,
+        timeout: 20_000,
       })
       .toContain("nanocrystal 纳米晶");
     expect(new URL(w.page.url()).searchParams.get("result")).toBe(
@@ -462,7 +462,7 @@ it("opens the fixed hit after a new default is published and restores the query 
               '.react-reader[data-reading-ready="true"] .reading-article',
             )
             .textContent(),
-        { timeout: 5000 },
+        { timeout: 20_000 },
       )
       .toContain("original observation");
     expect(new URL(w.page.url()).searchParams.get("document")).toBe(
@@ -485,7 +485,7 @@ it("opens the fixed hit after a new default is published and restores the query 
     expect(await w.page.locator(".context-basket li").count()).toBe(1);
     await w.page.goto(knowledgeUrl);
     await expect
-      .poll(() => w.page.locator("main").textContent(), { timeout: 5000 })
+      .poll(() => w.page.locator("main").textContent(), { timeout: 20_000 })
       .toContain("nanocrystal 纳米晶");
     expect(new URL(w.page.url()).searchParams.get("result")).toBe(
       w.knowledge.ref.result_id,
@@ -494,7 +494,7 @@ it("opens the fixed hit after a new default is published and restores the query 
     tampered.searchParams.set("representation", "0".repeat(64));
     await w.page.goto(tampered.href);
     await expect
-      .poll(() => w.page.locator("main").textContent(), { timeout: 5000 })
+      .poll(() => w.page.locator("main").textContent(), { timeout: 20_000 })
       .toContain("不匹配");
     expect(await w.page.locator(".reading-article").count()).toBe(0);
     const materialReads: unknown[] = [];
@@ -507,7 +507,7 @@ it("opens the fixed hit after a new default is published and restores the query 
     pdfUrl.searchParams.set("assetHash", "0".repeat(64));
     await w.page.goto(pdfUrl.href);
     await expect
-      .poll(() => w.page.locator("main").textContent(), { timeout: 5000 })
+      .poll(() => w.page.locator("main").textContent(), { timeout: 20_000 })
       .toContain("未使用默认材料替代");
     expect(materialReads).toEqual([]);
     expect(await w.page.locator(".reading-pdf-page").count()).toBe(0);

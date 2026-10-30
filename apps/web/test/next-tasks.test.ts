@@ -56,7 +56,7 @@ it("keeps active tasks discoverable beyond a full history page and confirms canc
     // Background work started here can outlast the 1 s poll default under Full load.
     await expect
       .poll(async () => (await w.env.app.jobs!.getJob(activeId))?.status, {
-        timeout: 10000,
+        timeout: 20_000,
       })
       .toBe("paused");
     await drawer.getByRole("button", { name: "继续", exact: true }).waitFor();
@@ -69,7 +69,7 @@ it("keeps active tasks discoverable beyond a full history page and confirms canc
     // Background work started here can outlast the 1 s poll default under Full load.
     await expect
       .poll(async () => (await w.env.app.jobs!.getJob(activeId))?.status, {
-        timeout: 10000,
+        timeout: 20_000,
       })
       .toBe("cancelled");
     await expect

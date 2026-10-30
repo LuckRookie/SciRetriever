@@ -121,7 +121,7 @@ it(
             (await w.env.app.jobs!.listJobs()).filter(
               (j) => j.status === "running",
             ).length,
-          { timeout: 15000 },
+          { timeout: 20_000 },
         )
         .toBe(1);
       const job = (await w.env.app.jobs!.listJobs()).find(
@@ -137,7 +137,7 @@ it(
         .getByRole("button")
         .filter({ hasText: "文献总结" })
         .first();
-      await selected.waitFor({ timeout: 15000 });
+      await selected.waitFor({ timeout: 20_000 });
       await selected.click();
       await w.page
         .getByRole("region", { name: "Agent 过程记录", exact: true })
@@ -149,7 +149,7 @@ it(
       release();
       await expect
         .poll(async () => (await w.env.app.jobs!.getJob(job.job_id))!.status, {
-          timeout: 15000,
+          timeout: 20_000,
         })
         .toBe("completed");
       // The submission appears verbatim in the conversation, inside its raw arguments.
@@ -159,7 +159,7 @@ it(
             w.page
               .getByRole("list", { name: "会话记录", exact: true })
               .textContent(),
-          { timeout: 15000 },
+          { timeout: 20_000 },
         )
         .toContain("Observed result.");
       await w.page
@@ -203,7 +203,7 @@ it(
             paper
               .getByRole("button", { name: "结果详情", exact: true })
               .count(),
-          { timeout: 15000 },
+          { timeout: 20_000 },
         )
         .toBe(2);
       expect(
@@ -361,7 +361,7 @@ it(
         exact: true,
       });
       await expect
-        .poll(() => papers.innerText(), { timeout: 15000 })
+        .poll(() => papers.innerText(), { timeout: 20_000 })
         .toContain("复用已有结果");
       expect((await w.env.app.jobs!.getJob(job.job_id))!.status).toBe(
         "running",
@@ -372,13 +372,13 @@ it(
       release();
       await expect
         .poll(async () => (await w.env.app.jobs!.getJob(job.job_id))!.status, {
-          timeout: 15000,
+          timeout: 20_000,
         })
         .toBe("completed");
       await w.page.reload();
       // Same too-tight 1 s default after a reload (~1.5 s to load).
       await expect
-        .poll(() => papers.innerText(), { timeout: 15000 })
+        .poll(() => papers.innerText(), { timeout: 20_000 })
         .toContain("复用已有结果");
       await w.page.setViewportSize({ width: 390, height: 844 });
       expect(

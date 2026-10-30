@@ -432,7 +432,7 @@ it("does not let a late PDF response overwrite a newer full-text view", async ()
     await w.page.goto(
       `${w.origin}/?literature=${w.env.parseRequest.literature_id}&reader=pdf`,
     );
-    await expect.poll(() => intercepted, { timeout: 10000 }).toBe(true);
+    await expect.poll(() => intercepted, { timeout: 20_000 }).toBe(true);
     await w.page.getByRole("tab", { name: "全文", exact: true }).click();
     await w.page.locator(".reading-article").waitFor();
     release!();

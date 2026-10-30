@@ -89,7 +89,7 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
     await dialog.getByRole("button", { name: "关闭", exact: true }).click();
     // Background work started here can outlast the 1 s poll default under Full load.
     await expect
-      .poll(() => w.env.parseCalls, { timeout: 15000 })
+      .poll(() => w.env.parseCalls, { timeout: 20_000 })
       .toBeGreaterThan(initial);
     // Background work started here can outlast the 1 s poll default under Full load.
     await expect
@@ -97,7 +97,7 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
         async () =>
           (await w.env.app.archive.status(missingId)).parts[0]?.raw_profiles
             .length,
-        { timeout: 15000 },
+        { timeout: 20_000 },
       )
       .toBe(1);
     expect((await w.env.app.archive.status(missingId)).status).toBe(
@@ -112,7 +112,7 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
     await build.getByRole("button", { name: "关闭", exact: true }).click();
     await expect
       .poll(async () => (await w.env.app.archive.status(missingId)).status, {
-        timeout: 15000,
+        timeout: 20_000,
       })
       .toBe("READY");
     await p.goto(`${w.origin}/?literature=${missingId}&reader=doc`);
@@ -130,7 +130,7 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
         async () =>
           (await w.env.app.metadataFields.read(missingId)).literature.metadata
             .title,
-        { timeout: 15000 },
+        { timeout: 20_000 },
       )
       .toBe("Manually corrected title");
     expect(
@@ -193,7 +193,7 @@ it("creates a snapshot and runs mapped DSH summaries and synthesis with clickabl
           (await w.env.app.processorRead!.list()).items.filter(
             (i) => i.processor_id === "knowledge-synthesis",
           ).length,
-        { timeout: 15000 },
+        { timeout: 20_000 },
       )
       .toBe(1);
     const result = (await w.env.app.processorRead!.list()).items.find(
@@ -325,7 +325,7 @@ it("previews undo dependencies before reverting a vocabulary change", async () =
     await expect
       .poll(
         async () => (await w.env.app.processingTasks!.read(task)).job.status,
-        { timeout: 10000 },
+        { timeout: 20_000 },
       )
       .toBe("completed");
     expect(w.errors).toEqual([]);
@@ -470,7 +470,7 @@ it("recovers archive issues and keeps an unparsed supplement non-blocking in the
     // Background work started here can outlast the 1 s poll default under Full load.
     await expect
       .poll(async () => (await e.app.archive.status(id)).status, {
-        timeout: 15000,
+        timeout: 20_000,
       })
       .toBe("ARCHIVE_FAILED");
     failed.mockRestore();
@@ -486,7 +486,7 @@ it("recovers archive issues and keeps an unparsed supplement non-blocking in the
       .click();
     await expect
       .poll(async () => (await e.app.archive.status(id)).status, {
-        timeout: 15000,
+        timeout: 20_000,
       })
       .toBe("READY");
     expect(

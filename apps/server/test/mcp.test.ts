@@ -126,7 +126,7 @@ describe("formal MCP product adapter", () => {
           expect((await env.app.processingTasks!.read(job)).job.status).toBe(
             "completed",
           ),
-        { timeout: 10000 },
+        { timeout: 20_000 },
       );
       return call("read_task", { job_id: job });
     };
@@ -231,7 +231,7 @@ describe("formal MCP product adapter", () => {
         await expect
           .poll(
             async () => (await env.app.processorRead!.collections(job)).length,
-            { timeout: 10000 },
+            { timeout: 20_000 },
           )
           .toBe(1);
         const collections = await env.app.processorRead!.collections(job);

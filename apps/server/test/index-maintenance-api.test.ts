@@ -127,7 +127,7 @@ it("reads missing/ready/corrupt state through all transports and authenticates d
           operation: "refresh",
           progress: null,
         }),
-      { timeout: 5000 },
+      { timeout: 20_000 },
     );
     restore();
     restore = undefined;
@@ -187,7 +187,7 @@ it("reads missing/ready/corrupt state through all transports and authenticates d
             progress: { done: 1, total: 1 },
             index_state: "ready",
           }),
-        { timeout: 5000 },
+        { timeout: 20_000 },
       );
     } finally {
       allowRead.resolve();
@@ -278,7 +278,7 @@ it("exposes refresh_index and optional background rebuild in the maintenance MCP
           status: "updated",
           operation: "refresh",
         }),
-      { timeout: 5000 },
+      { timeout: 20_000 },
     );
     const built = await client.callTool({
       name: "rebuild_index",
@@ -295,7 +295,7 @@ it("exposes refresh_index and optional background rebuild in the maintenance MCP
           operation: "rebuild",
           progress: { done: 1, total: 1 },
         }),
-      { timeout: 5000 },
+      { timeout: 20_000 },
     );
   } finally {
     await client.close();

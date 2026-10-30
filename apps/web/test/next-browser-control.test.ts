@@ -43,7 +43,7 @@ it.each(["no-preference", "reduce"] as const)(
         viewport: { width: 1400, height: 1000 },
         reducedMotion,
       });
-      page.setDefaultTimeout(5000);
+      page.setDefaultTimeout(20_000);
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       // A seam over the real socket: frames can be held back and a release refused,

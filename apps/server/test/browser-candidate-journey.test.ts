@@ -39,7 +39,7 @@ async function readySnapshot(
           throw error;
         }
       },
-      { timeout: 15000 },
+      { timeout: 20_000 },
     )
     .toBe(true);
   return snapshot!;

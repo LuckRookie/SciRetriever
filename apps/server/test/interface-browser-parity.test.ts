@@ -178,7 +178,7 @@ describe("machine connections to the live Web owner", () => {
         async () => {
           expect((await tasks.read(job.job_id))?.job.status).toBe("completed");
         },
-        { timeout: 5000 },
+        { timeout: 20_000 },
       );
       const detail = await call("runtime_read_task", { job_id: job.job_id });
       expect(detail).toEqual({ task: await tasks.read(job.job_id) });

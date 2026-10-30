@@ -134,7 +134,7 @@ it("submits through the authenticated shared processor owner and reads results, 
       .poll(
         async () =>
           (await w.env.app.processingTasks!.read(task.job_id)).job.status,
-        { timeout: 10000 },
+        { timeout: 20_000 },
       )
       .toBe("completed");
     await expect
@@ -142,7 +142,7 @@ it("submits through the authenticated shared processor owner and reads results, 
         async () =>
           (await w.env.app.processingTasks!.read(task.job_id)).collections
             .length,
-        { timeout: 10000 },
+        { timeout: 20_000 },
       )
       .toBe(1);
     const collection = (

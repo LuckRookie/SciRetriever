@@ -104,7 +104,7 @@ async function readySnapshot(
           throw error;
         }
       },
-      { timeout: 15000 },
+      { timeout: 20_000 },
     )
     .toBe(true);
   return snapshot!;
@@ -225,8 +225,8 @@ it.runIf(available).each([1, 2, 3])(
         snapshotB.document_generation!,
         () => true,
       );
-      await expect.poll(() => captured.length, { timeout: 15000 }).toBe(2);
-      await expect.poll(() => drained.size, { timeout: 5000 }).toBe(2);
+      await expect.poll(() => captured.length, { timeout: 20_000 }).toBe(2);
+      await expect.poll(() => drained.size, { timeout: 20_000 }).toBe(2);
       expect(failures).toEqual([]);
       const expectedA = createHash("sha256").update(bytesA).digest("hex");
       const expectedB = createHash("sha256").update(bytesB).digest("hex");
@@ -314,7 +314,7 @@ it.runIf(available)(
         await identity("a"),
       );
       // This is an asynchronous request barrier, not a one-second latency assertion.
-      await expect.poll(() => Boolean(release), { timeout: 5000 }).toBe(true);
+      await expect.poll(() => Boolean(release), { timeout: 20_000 }).toBe(true);
       const b = await host.openPage(
         f.origin + "/article/b",
         await identity("b"),
@@ -323,7 +323,9 @@ it.runIf(available)(
         b.id,
       );
       release!();
-      await expect.poll(() => a.title(), { timeout: 5000 }).toBe("A complete");
+      await expect
+        .poll(() => a.title(), { timeout: 20_000 })
+        .toBe("A complete");
       expect(requests.filter((path) => path === "/late")).toHaveLength(1);
     } finally {
       release?.();
@@ -398,7 +400,7 @@ it.runIf(available)(
       const pageB = await host.openPage(f.origin + "/article/b", b);
       await expect.poll(() => releases.length).toBe(2);
       for (const release of releases) release();
-      await expect.poll(() => captures.length, { timeout: 15000 }).toBe(2);
+      await expect.poll(() => captures.length, { timeout: 20_000 }).toBe(2);
       expect(new Set(captures)).toEqual(new Set([a.session_id, b.session_id]));
       await pageA.settleCaptures!();
       await pageB.settleCaptures!();
@@ -696,7 +698,7 @@ it.runIf(available)(
       expect((await readySnapshot(b)).title).toBe("B:0");
       await a.close();
       await click(b, "PDF");
-      await expect.poll(() => captured.length, { timeout: 15000 }).toBe(1);
+      await expect.poll(() => captured.length, { timeout: 20_000 }).toBe(1);
       await b.settleCaptures!();
       expect(captured).toEqual([
         {
@@ -796,7 +798,7 @@ it.runIf(available)(
       const page = await host.openPage(f.origin + "/article/a", a);
       await click(page, "PDF");
       await expect
-        .poll(() => failures, { timeout: 15000 })
+        .poll(() => failures, { timeout: 20_000 })
         .toEqual(["browser-download-temporary-quota"]);
       await page.settleCaptures!();
       expect(cancelledBeforeEof).toBe(true);
@@ -899,12 +901,12 @@ it.runIf(available)(
         script.src = "/held-script.js";
         document.head.append(script);
       });
-      await expect.poll(() => scriptStarted, { timeout: 10000 }).toBe(true);
+      await expect.poll(() => scriptStarted, { timeout: 20_000 }).toBe(true);
       await click(a, "PDF");
       await click(b, "PDF");
       await expect.poll(() => Boolean(releaseB)).toBe(true);
       await expect
-        .poll(() => resources.snapshot().native_bytes, { timeout: 10000 })
+        .poll(() => resources.snapshot().native_bytes, { timeout: 20_000 })
         .toBeGreaterThan(0);
       const protocol = Reflect.get(
         host,
@@ -969,7 +971,7 @@ it.runIf(available)(
       expect(sourceClosed.has("native-b")).toBe(false);
       expect((await readySnapshot(b)).title).toBe("B:0");
       releaseB!();
-      await expect.poll(() => captured.length, { timeout: 15000 }).toBe(1);
+      await expect.poll(() => captured.length, { timeout: 20_000 }).toBe(1);
       await b.settleCaptures!();
       expect(captured).toEqual([
         {

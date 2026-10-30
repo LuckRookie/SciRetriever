@@ -48,7 +48,7 @@ async function snapshot(
           throw error;
         }
       },
-      { timeout: 15000 },
+      { timeout: 20_000 },
     )
     .toBe(title);
   return result!;

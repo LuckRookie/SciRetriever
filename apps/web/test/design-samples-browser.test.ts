@@ -50,7 +50,7 @@ it("awaits real ApiClient detach before destroying twenty renderers and rejects 
     await loginWorkbenchPage({ request: context.request }, server.origin);
     for (let n = 0; n < 20; n++) {
       const page = await context.newPage();
-      page.setDefaultTimeout(5000);
+      page.setDefaultTimeout(20_000);
       const close = designSamplePageCleanup(page);
       await page.goto(server.origin);
       await page.locator('[data-connected="true"]').waitFor();

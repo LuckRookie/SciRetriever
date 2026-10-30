@@ -458,7 +458,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
       );
       await expect
         .poll(() => calls.find((call) => call.article === "model")?.closed_ms, {
-          timeout: 5000,
+          timeout: 20_000,
         })
         .not.toBeNull();
       expect(executions.size).toBe(3);

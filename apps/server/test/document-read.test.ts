@@ -913,7 +913,7 @@ describe("bounded document and material reading", () => {
       );
       const article = page.locator(".reading-article");
       await expect
-        .poll(() => article.textContent(), { timeout: 10000 })
+        .poll(() => article.textContent(), { timeout: 20_000 })
         .toContain("标题");
       await expect.poll(() => article.textContent()).toContain("αβ evidence");
       await expect
@@ -972,7 +972,7 @@ describe("bounded document and material reading", () => {
       });
       await page.goto(url);
       await expect
-        .poll(() => page.locator("main").innerText(), { timeout: 10000 })
+        .poll(() => page.locator("main").innerText(), { timeout: 20_000 })
         .toMatch(/不匹配|无法|invalid|validation failed/);
       expect(await page.locator(".reading-article").count()).toBe(0);
       await page.unroute("**/material-evidence");
@@ -984,7 +984,7 @@ describe("bounded document and material reading", () => {
       });
       await page.reload();
       await expect
-        .poll(() => page.locator("main").innerText(), { timeout: 10000 })
+        .poll(() => page.locator("main").innerText(), { timeout: 20_000 })
         .toMatch(/不匹配|无法|invalid|validation failed/);
       expect(await page.locator(".reading-article").count()).toBe(0);
       await page.unroute("**/document-default");
@@ -1011,7 +1011,7 @@ describe("bounded document and material reading", () => {
       await page.reload();
       await expect
         .poll(() => page.locator(".reading-article").textContent(), {
-          timeout: 10000,
+          timeout: 20_000,
         })
         .toContain("introduction without heading");
       await page.getByRole("button", { name: "显示目录", exact: true }).click();

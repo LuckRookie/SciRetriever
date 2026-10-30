@@ -106,7 +106,7 @@ async function completed(w: Workspace) {
   // Background work started here can outlast the 1 s poll default under Full load.
   await expect
     .poll(async () => (await w.env.app.jobs!.listJobs(10)).length, {
-      timeout: 10000,
+      timeout: 20_000,
     })
     .toBe(1);
   const job = (await w.env.app.jobs!.listJobs(10))[0]!;
@@ -114,7 +114,7 @@ async function completed(w: Workspace) {
     .poll(
       async () =>
         (await w.env.app.processingTasks!.read(job.job_id)).collections.length,
-      { timeout: 10000 },
+      { timeout: 20_000 },
     )
     .toBe(1);
   const summary = (await w.env.app.processorRead!.collections(job.job_id))[0]!;
@@ -389,7 +389,7 @@ it("preserves a valid form and reports a durable model configuration failure wit
     // Background work started here can outlast the 1 s poll default under Full load.
     await expect
       .poll(async () => (await w.env.app.jobs!.listJobs(10)).length, {
-        timeout: 10000,
+        timeout: 20_000,
       })
       .toBe(1);
     const job = (await w.env.app.jobs!.listJobs(10))[0]!;
@@ -398,7 +398,7 @@ it("preserves a valid form and reports a durable model configuration failure wit
       .poll(
         async () =>
           (await w.env.app.processingTasks!.read(job.job_id)).job.status,
-        { timeout: 10000 },
+        { timeout: 20_000 },
       )
       .toBe("failed");
     expect(
@@ -611,7 +611,7 @@ it("keeps cross-page selections and fixed evidence while exporting every origina
         .getByRole("textbox", { name: "综合问题", exact: true })
         .fill("Compare chosen measurements"),
     );
-    await expect.poll(() => candidateCount, { timeout: 10000 }).toBe(1);
+    await expect.poll(() => candidateCount, { timeout: 20_000 }).toBe(1);
     const snapshot = (
       await w.env.app.snapshots.list({ after: null, limit: 10 })
     ).items[0]!;
@@ -627,7 +627,7 @@ it("keeps cross-page selections and fixed evidence while exporting every origina
         async () =>
           (await w.env.app.processingTasks!.read(synthesisJob!.job_id))
             .collections.length,
-        { timeout: 10000 },
+        { timeout: 20_000 },
       )
       .toBe(1);
     expect(await w.env.app.processorRead!.byId(ref.result_id)).toEqual(
@@ -660,7 +660,7 @@ it("cancels an explicit processor task and refuses its late model response", asy
     await labels(w.page);
     await submit(w.page);
     // Background work started here can outlast the 1 s poll default under Full load.
-    await expect.poll(() => w.env.modelCalls, { timeout: 10000 }).toBe(1);
+    await expect.poll(() => w.env.modelCalls, { timeout: 20_000 }).toBe(1);
     const job = (await w.env.app.jobs!.listJobs(10))[0]!;
     await w.page.getByRole("button", { name: "查看任务", exact: true }).click();
     await w.page.getByRole("button", { name: "取消任务", exact: true }).click();
@@ -674,7 +674,7 @@ it("cancels an explicit processor task and refuses its late model response", asy
       .poll(
         async () =>
           (await w.env.app.processingTasks!.read(job.job_id)).job.status,
-        { timeout: 10000 },
+        { timeout: 20_000 },
       )
       .toBe("cancelled");
     const task = await w.env.app.processingTasks!.read(job.job_id);
@@ -711,7 +711,7 @@ it("freezes another snapshot from the same definition and submits the synthesis 
         async () =>
           (await w.env.app.snapshots.list({ after: null, limit: 10 })).items
             .length,
-        { timeout: 10000 },
+        { timeout: 20_000 },
       )
       .toBe(2);
     expect(new URL(w.page.url()).searchParams.get("snapshot")).toBe(

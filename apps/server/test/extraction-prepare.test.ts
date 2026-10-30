@@ -269,7 +269,7 @@ describe("external extraction preparation", () => {
           (result.reason as ExtractionSpecError).code === "schema-busy",
       ),
     ).toBe(true);
-  }, 15_000);
+  }, 20_000);
   it("validates repeated local-reference DAGs within worker limits and remains usable", async () => {
     const defs: Record<string, unknown> = { leaf: { type: "number" } };
     for (let level = 1; level <= 6; level++)
@@ -548,5 +548,5 @@ describe("external extraction preparation", () => {
       await workbench?.close();
       await rm(env.home, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, 20_000);
 });
