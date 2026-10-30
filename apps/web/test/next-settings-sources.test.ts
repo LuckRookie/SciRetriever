@@ -1,26 +1,19 @@
 import { expect, it } from "vitest";
 import type { Page } from "playwright";
 import { TypeScriptConfigurationOwner } from "../../server/src/configuration/owner.js";
+import { executeConfiguration } from "../../server/src/entry/configuration-operations.js";
 import { nextWorkspace } from "./next-workspace-fixture.js";
-async function mode(page: Page, label: string, option: string) {
-  await page
-    .getByRole("radiogroup", { name: label, exact: true })
-    .getByText(option, { exact: true })
-    .click();
-}
-async function select(page: Page, label: string, option: string) {
-  await page
+async function select(
+  scope: Page | ReturnType<Page["locator"]>,
+  page: Page,
+  label: string,
+  option: string,
+) {
+  await scope
     .getByRole("button", { name: new RegExp(label) })
     .and(page.locator('[aria-haspopup="listbox"]'))
     .click();
   await page.getByRole("option", { name: option, exact: true }).click();
-}
-async function check(page: Page, name: string, checked: boolean) {
-  const f = page.getByRole("checkbox", { name, exact: true });
-  if ((await f.isChecked()) !== checked) {
-    await f.focus();
-    await page.keyboard.press("Space");
-  }
 }
 it("preserves source parameters and runtime sections, rejects incomplete settings, and only probes saved configuration after confirmation", async () => {
   let owner: TypeScriptConfigurationOwner;
@@ -60,6 +53,8 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
       publishConfiguration: (c, r, sections, s) =>
         owner.publishConfiguration(c, r, sections, s),
       credential: (e, r, s) => owner.credential(e, r, s),
+      sourceOperation: (operation, value, s) =>
+        executeConfiguration(owner, operation, value, s),
     }),
   });
   try {
@@ -75,63 +70,98 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
     };
     const tab = async (name: string) =>
       page.getByRole("tab", { name, exact: true }).click();
-    await check(page, "Web of Science", true);
+    // Sources are chosen and configured in the directory; each change saves at once.
+    const directory = page.getByRole("region", {
+      name: "文献来源",
+      exact: true,
+    });
+    const row = (name: string) =>
+      directory.getByRole("row").filter({ hasText: name }).first();
+    const sources = async () => (await owner!.read()).configuration.sources;
+    const wos = directory.getByRole("checkbox", {
+      name: "Web of Science：主题检索",
+      exact: true,
+    });
+    await wos.focus();
+    await page.keyboard.press("Space");
+    await expect
+      .poll(async () => [...(await sources()).metadata.providers].sort())
+      .toEqual(["crossref", "openalex", "web-of-science"]);
+    await row("Web of Science").locator(".source-config-toggle").click();
+    const editor = directory.locator(".source-editor");
+    await select(editor, page, "产品", "Expanded");
+    await editor
+      .getByRole("textbox", { name: "数据库", exact: true })
+      .fill("WOS-Synthetic");
+    await editor
+      .getByRole("textbox", { name: "版本", exact: true })
+      .fill("2026");
+    await editor.getByRole("button", { name: "保存", exact: true }).click();
+    await expect
+      .poll(async () => (await sources()).metadata.web_of_science)
+      .toMatchObject({
+        product: "expanded",
+        database: "WOS-Synthetic",
+        edition: "2026",
+      });
+    // The form-level limit keeps what the directory saved.
     await page
       .getByRole("textbox", { name: "元数据结果上限", exact: true })
       .fill("37");
-    await select(page, "产品", "Expanded");
-    await page
-      .getByRole("textbox", { name: "数据库", exact: true })
-      .fill("WOS-Synthetic");
-    await page.getByRole("textbox", { name: "版本", exact: true }).fill("2026");
-    await mode(page, "获取来源模式", "自动");
     await save("保存来源配置");
-    expect((await owner!.read()).configuration.sources).toMatchObject({
+    expect(await sources()).toMatchObject({
       metadata: {
         mode: "custom",
-        providers: ["openalex", "crossref", "web-of-science"],
+        providers: expect.arrayContaining([
+          "openalex",
+          "crossref",
+          "web-of-science",
+        ]),
         limit: 37,
-        web_of_science: {
-          product: "expanded",
-          database: "WOS-Synthetic",
-          edition: "2026",
-        },
+        web_of_science: { product: "expanded", database: "WOS-Synthetic" },
       },
-      acquisition: { mode: "auto", providers: [] },
+      acquisition: { mode: "custom", providers: ["core"] },
     });
-    await mode(page, "获取来源模式", "自定义");
-    await check(page, "Unpaywall", true);
+    await directory
+      .getByRole("tablist", { name: "PDF 来源方式" })
+      .getByRole("tab", { name: "自动", exact: true })
+      .click();
+    await expect
+      .poll(async () => (await sources()).acquisition)
+      .toMatchObject({ mode: "auto", providers: [] });
+    // An invalid limit is refused and nothing is written.
     const beforeInvalid = (await owner!.read()).revision;
     await page
+      .getByRole("textbox", { name: "元数据结果上限", exact: true })
+      .fill("0");
+    await page
       .getByRole("button", { name: "保存来源配置", exact: true })
       .click();
     await expect
-      .poll(() => page.getByRole("alert").allTextContents())
-      .toContainEqual(expect.stringContaining("联系邮箱"));
+      .poll(() => page.getByText("结果上限需为正整数。").count())
+      .toBeGreaterThan(0);
     expect((await owner!.read()).revision).toBe(beforeInvalid);
     await page
-      .getByRole("textbox", { name: "Unpaywall 联系邮箱", exact: true })
+      .getByRole("textbox", { name: "元数据结果上限", exact: true })
+      .fill("37");
+    // A source missing a required value says so on its row until it is filled.
+    await expect
+      .poll(() => row("Unpaywall").textContent())
+      .toContain("缺联系邮箱");
+    await row("Unpaywall").locator(".source-config-toggle").click();
+    await editor
+      .getByRole("textbox", { name: "联系邮箱", exact: true })
       .fill("research@example.org");
-    await save("保存来源配置");
+    await editor.getByRole("button", { name: "保存", exact: true }).click();
+    await expect
+      .poll(async () => (await sources()).acquisition.unpaywall)
+      .toMatchObject({ contact_email: "research@example.org" });
+    await expect
+      .poll(() => row("Unpaywall").textContent())
+      .toContain("联系邮箱已配置");
     const saved = await owner!.read();
-    expect(saved.configuration.sources.acquisition).toMatchObject({
-      mode: "custom",
-      providers: ["unpaywall"],
-      unpaywall: { contact_email: "research@example.org" },
-    });
     expect(saved.configuration.providers).toEqual(providers);
     expect(saved.configuration.models).toEqual(models);
-    await page.getByRole("textbox", { name: "数据库", exact: true }).fill("");
-    await page
-      .getByRole("button", { name: "保存来源配置", exact: true })
-      .click();
-    await expect
-      .poll(() => page.getByRole("alert").allTextContents())
-      .toContainEqual(expect.stringContaining("产品和数据库"));
-    expect((await owner!.read()).revision).toBe(saved.revision);
-    await page
-      .getByRole("textbox", { name: "数据库", exact: true })
-      .fill("WOS-Synthetic");
     await tab("解析与 Browser");
     await page
       .getByRole("textbox", { name: "Browser profile", exact: true })
@@ -139,7 +169,7 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
     await page
       .getByRole("textbox", { name: "MinerU 服务地址", exact: true })
       .fill("http://127.0.0.1:8000");
-    await select(page, "MinerU 连接模式", "本机 loopback");
+    await select(page, page, "MinerU 连接模式", "本机 loopback");
     await page
       .getByRole("textbox", { name: "MinerU 模型", exact: true })
       .fill("synthetic-parser");

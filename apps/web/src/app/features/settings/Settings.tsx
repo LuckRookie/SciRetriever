@@ -35,7 +35,10 @@ import {
   runtimeStatus,
 } from "./configuration-data.js";
 import { ApplyConfiguration } from "../sources/ApplyConfiguration.js";
-import { SourceDirectoryPanel } from "../sources/SourceDirectory.js";
+import {
+  SourceDirectoryPanel,
+  sourceDirectoryKey,
+} from "../sources/SourceDirectory.js";
 import "./settings.css";
 
 const Maintenance = lazy(() => import("../maintenance/Maintenance.js"));
@@ -154,9 +157,57 @@ export default function Settings() {
     setDirty(new Set());
     setRuntime(value);
   };
+  // The source directory saves on its own and re-reads the configuration. Adopt
+  // that newer revision and keep only what was edited here; a section edited
+  // here and changed elsewhere keeps the old baseline, so saving reports it.
+  const rebase = (value: JsonRecord) => {
+    const saved = record(value.snapshot, "snapshot"),
+      next = record(saved.configuration, "configuration"),
+      before = record(snapshot!.configuration, "configuration");
+    if (!dirty.size) return accept(value);
+    const moved = Object.keys(next).filter(
+      (k) => JSON.stringify(next[k]) !== JSON.stringify(before[k]),
+    );
+    if (moved.some((k) => dirty.has(k) && k !== "sources")) return;
+    setSnapshot(saved);
+    setDraft((current) => {
+      if (!current) return structuredClone(next);
+      const merged: JsonRecord = {};
+      for (const k of Object.keys(next)) {
+        if (!dirty.has(k)) merged[k] = structuredClone(next[k]);
+        else if (k !== "sources") merged[k] = current[k];
+        else {
+          // This page edits only the result limit; the directory owns the rest.
+          const sources = record(next.sources, "sources");
+          merged.sources = {
+            ...structuredClone(sources),
+            metadata: {
+              ...record(sources.metadata, "metadata"),
+              limit: record(
+                record(current.sources, "sources").metadata,
+                "metadata",
+              ).limit,
+            },
+          };
+        }
+      }
+      return merged;
+    });
+    const rows = registry(next);
+    if (!dirty.has("providers")) setProviders(rows.providers);
+    if (!dirty.has("models")) setModels(rows.models);
+    setRuntime(value);
+  };
+  // Only a fresh read counts: after this page publishes, the cached read is older.
+  const onRead = useRef<(value: JsonRecord) => void>(() => {});
+  onRead.current = (value) => {
+    if (!snapshot) accept(value);
+    else if (record(value.snapshot, "snapshot").revision !== snapshot.revision)
+      rebase(value);
+  };
   useEffect(() => {
-    if (read.data && !snapshot) accept(read.data);
-  }, [read.data, snapshot]);
+    if (read.data) onRead.current(read.data);
+  }, [read.data, read.dataUpdatedAt]);
   useEffect(() => {
     if (!dirty.size) return;
     const before = (event: BeforeUnloadEvent) => {
@@ -221,6 +272,8 @@ export default function Settings() {
         : `${variables.sections.includes("sources") ? "来源配置" : variables.sections.includes("providers") ? "Provider/Model" : "运行配置"}已保存并重新读取。${result.application_restart_required === true ? "当前服务需重启后应用新配置。" : ""}`;
       setMessage(text);
       shell.notify(text);
+      // The source directory saves against the newest revision too.
+      void queries.invalidateQueries({ queryKey: sourceDirectoryKey });
       try {
         await queries.fetchQuery({
           queryKey: ["configuration", "status"],
