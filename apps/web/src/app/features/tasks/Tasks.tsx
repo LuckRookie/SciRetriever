@@ -34,6 +34,7 @@ import {
   agentRoleName,
   errorMessage,
   localTime,
+  skipReasons,
   statusLabels,
 } from "../../strings.js";
 import { jobRecord, record, type JsonRecord } from "../../data/wire.js";
@@ -446,7 +447,17 @@ function TaskSessions({ id }: { id: string }) {
 function formatDate(value: unknown) {
   return localTime(value);
 }
-function detailsText(value: JsonRecord): string {
+function detailsText(value: JsonRecord, task: TaskDetail): string {
+  // A skipped item's own event has no reason; the operation's receipt does.
+  const receipt = task.results.find((r) => r.target_id === value.target_id),
+    outcome =
+      receipt?.disposition === "skipped" &&
+      receipt.result &&
+      typeof receipt.result === "object" &&
+      "outcome" in receipt.result
+        ? String(receipt.result.outcome)
+        : null;
+  if (outcome && skipReasons[outcome]) return skipReasons[outcome];
   for (const name of ["reason", "message", "detail", "code", "kind", "status"])
     if (typeof value[name] === "string")
       return errorMessage(new Error(String(value[name])));
@@ -557,7 +568,7 @@ export function TaskDetails({ id }: { id: string }) {
         .filter((item) => item.status === "open")
         .map((item) => (
           <Card key={String(item.intervention_id)} title="任务等待处理">
-            <p>{detailsText(item)}</p>
+            <p>{detailsText(item, task)}</p>
             <div className="task-actions">
               {[
                 ["continue", "继续任务"],
@@ -653,7 +664,7 @@ export function TaskDetails({ id }: { id: string }) {
           >
             {list.map((value, index) => (
               <div key={index}>
-                <p>{detailsText(value)}</p>
+                <p>{detailsText(value, task)}</p>
                 {[
                   "knowledge-unconfigured",
                   "agent-role-unconfigured",

@@ -122,7 +122,9 @@ export async function moveIntroductionToMethods(
   e: Awaited<ReturnType<typeof archiveFixture>>,
   actor: string,
 ) {
-  const part = (await e.app.archive.status(e.id)).parts[0]!,
+  const part = (await e.app.archive.status(e.id)).parts.find(
+      (p) => p.part === "main",
+    )!,
     old = (await new SqliteArchiveTextStorage(e.app.database, e.app.files).load(
       part.proofread_id!,
     ))!,

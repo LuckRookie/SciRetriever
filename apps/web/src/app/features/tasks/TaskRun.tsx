@@ -11,6 +11,7 @@ import {
   processorName,
   statusLabels,
   processorMapStatus,
+  skipReasons,
 } from "../../strings.js";
 import { taskStatusLabel } from "../../data/tasks.js";
 
@@ -92,6 +93,12 @@ export function TaskRun({
                     ? ` · ${item.literature_count} 篇文献`
                     : ""}
                 </p>
+                {typeof item.skipped_because === "string" ? (
+                  <p className="task-run-reason">
+                    {skipReasons[item.skipped_because] ??
+                      archiveReason(item.skipped_because)}
+                  </p>
+                ) : null}
                 {item.synthesis ? (
                   <MappedPapers id={id} target={String(item.target_id)} />
                 ) : null}
@@ -108,7 +115,8 @@ export function TaskRun({
                     token
                   </p>
                 ) : null}
-                {item.archive ? (
+                {/* Archive steps are the paper's current ones; a skipped item made none. */}
+                {item.archive && item.status !== "skipped" ? (
                   <ArchiveSteps value={record(item.archive, "archive steps")} />
                 ) : steps.length ? (
                   <ol className="task-step-list">

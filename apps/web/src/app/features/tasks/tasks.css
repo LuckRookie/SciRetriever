@@ -409,6 +409,10 @@
     font-size: var(--text-caption);
     font-variant-numeric: tabular-nums;
   }
+  .task-run-reason {
+    margin: 0;
+    color: var(--fg2);
+  }
   /* One target per row, separated by a hairline rather than boxed. */
   .task-run-item {
     display: grid;

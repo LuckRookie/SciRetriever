@@ -71,7 +71,7 @@ export function archiveStates(
       : " WHERE literature_id IN (SELECT value FROM json_each(?))";
   const parts = rows(
     db,
-    `SELECT p.*,(SELECT json_group_array(profile) FROM raw_parse_current r WHERE r.source_asset_id=p.asset_id AND r.source_sha256=p.asset_sha256 AND r.raw_parse_id IS NOT NULL) AS profiles_json FROM archive_current_parts p${filter}`,
+    `SELECT p.*,(SELECT json_group_array(profile) FROM raw_parse_current r WHERE r.source_asset_id=p.asset_id AND r.source_sha256=p.asset_sha256 AND r.raw_parse_id IS NOT NULL) AS profiles_json FROM archive_current_parts p${filter} ORDER BY p.part<>'main', p.asset_id`,
     ...args,
   );
   checkpoint();
@@ -272,14 +272,15 @@ export function runArchiveStorage(
           }) as ArchiveVersionEvent,
       );
     // Reading history is not material: counting it here made every opened paper
-    // invalidate every open page within one poll. Attached files are: a PDF that
-    // arrives must refresh the open paper and its library row.
+    // invalidate every open page within one poll. Attached files and raw parses
+    // are: a PDF that arrives, or a parse that finishes, must refresh the open
+    // paper and its library row.
     if (action === "revision")
       return {
         revision: JSON.stringify(
           db
             .prepare(
-              "SELECT (SELECT COALESCE(MAX(sequence),0) FROM archive_version_events) AS facts,(SELECT count(*) FROM processor_results) AS results,(SELECT count(*) FROM snapshots) AS snapshots,(SELECT rowid||status FROM operation_records WHERE operation IN ('folders','snapshot-rename') ORDER BY rowid DESC LIMIT 1) AS organization,(SELECT version FROM vocabulary_state WHERE singleton=1) AS vocabulary,(SELECT MAX(started_at||COALESCE(finished_at,'')||state) FROM archive_runs) AS runs,(SELECT count(*)||':'||COALESCE(MAX(rowid),0) FROM literature_assets) AS files",
+              "SELECT (SELECT COALESCE(MAX(sequence),0) FROM archive_version_events) AS facts,(SELECT count(*) FROM processor_results) AS results,(SELECT count(*) FROM snapshots) AS snapshots,(SELECT rowid||status FROM operation_records WHERE operation IN ('folders','snapshot-rename') ORDER BY rowid DESC LIMIT 1) AS organization,(SELECT version FROM vocabulary_state WHERE singleton=1) AS vocabulary,(SELECT MAX(started_at||COALESCE(finished_at,'')||state) FROM archive_runs) AS runs,(SELECT count(*)||':'||COALESCE(MAX(rowid),0) FROM literature_assets) AS files,(SELECT count(*)||':'||COALESCE(MAX(rowid),0) FROM raw_parses) AS parses",
             )
             .get(),
         ),

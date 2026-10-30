@@ -857,6 +857,17 @@ export default function Library() {
                   </Button>
                   <Button
                     disabledReason={batchReason(
+                      "unparsed",
+                      "所选文献没有待解析的；解析需要先有 PDF",
+                    )}
+                    onPress={() =>
+                      setOperation({ ids: groups.unparsed, kind: "parse" })
+                    }
+                  >
+                    解析 PDF <span>{groups.unparsed.length}</span>
+                  </Button>
+                  <Button
+                    disabledReason={batchReason(
                       "ready",
                       "所选文献都还没有建档就绪",
                     )}
@@ -872,7 +883,9 @@ export default function Library() {
                   <Button
                     disabledReason={batchReason(
                       "unarchived",
-                      "所选文献没有待建档的；建档需要先有 PDF",
+                      groups.unparsed.length
+                        ? "所选文献还没有解析，请先解析 PDF"
+                        : "所选文献没有待建档的；建档需要先有 PDF 并完成解析",
                     )}
                     onPress={() =>
                       setOperation({ ids: groups.unarchived, kind: "archive" })
@@ -905,11 +918,6 @@ export default function Library() {
                             },
                           ]
                         : []),
-                      {
-                        id: "parse",
-                        label: "解析 PDF",
-                        onAction: () => void operate("parse", true),
-                      },
                       {
                         id: "identity",
                         label: "核验文章身份",
@@ -1253,7 +1261,7 @@ type CheckPointerDown = (
   index: number,
   event: ReactPointerEvent<HTMLElement>,
 ) => void;
-type RowAction = "run" | "folder" | "acquire" | "archive";
+type RowAction = "run" | "folder" | "acquire" | "parse" | "archive";
 /** A row shows at most three tags; the rest collapse into “+N”. */
 const ROW_TAGS = 3;
 const CJK = /[\u3400-\u9fff\uf900-\ufaff]/u;
@@ -1313,7 +1321,10 @@ const LibraryRow = memo(function LibraryRow({
   onDragRow: (id: string, data: DataTransfer, title: string) => void;
 }) {
   const id = item.literature.literature_id,
-    title = paperTitle(item);
+    title = paperTitle(item),
+    unparsed =
+      item.literature.status === "ASSET_READY" &&
+      item.missing_step === "raw-parse";
   return (
     <article
       ref={measure}
@@ -1481,8 +1492,19 @@ const LibraryRow = memo(function LibraryRow({
                 onAction: () => onRowAction(id, title, "acquire"),
               },
               {
+                id: "parse",
+                label: "解析 PDF",
+                ...(item.literature.status === "UNREVIEWED"
+                  ? { disabled: true, description: "需要先有 PDF" }
+                  : {}),
+                onAction: () => onRowAction(id, title, "parse"),
+              },
+              {
                 id: "archive",
                 label: "建档",
+                ...(unparsed
+                  ? { disabled: true, description: "需要先解析 PDF" }
+                  : {}),
                 onAction: () => onRowAction(id, title, "archive"),
               },
             ]}

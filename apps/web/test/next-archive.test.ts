@@ -17,6 +17,53 @@ async function select(page: Page, label: string, option: string) {
     .click();
   await page.getByRole("option", { name: option, exact: true }).click();
 }
+it("says what an unparsed paper waits for, and why archiving it skipped it", async () => {
+  const w = await nextWorkspace({
+    setup: async (e) => {
+      await e.app.maintenance!.ingestPdf({
+        literature_id: missingId,
+        bytes: workbenchPdf("10.1000/unparsed"),
+      });
+    },
+  });
+  try {
+    const p = w.page;
+    await p.goto(`${w.origin}/?literature=${missingId}&reader=pdf`);
+    const info = p.locator(".reader-info-status");
+    await expect.poll(() => info.innerText()).toContain("尚未解析");
+    await expect
+      .poll(() =>
+        info.getByRole("button", { name: "解析 PDF", exact: true }).count(),
+      )
+      .toBe(1);
+    // Archiving it anyway (as the CLI or an old tab can) skips it with the reason.
+    const job = await w.env.app.processingTasks!.submit({
+      schema_version: 1,
+      idempotency_key: "unparsed-archive",
+      operations: [
+        {
+          operation: "build-archive",
+          request: {
+            schema_version: 2,
+            literature_id: missingId,
+            mode: "full",
+            from_step: null,
+          },
+        },
+      ],
+    });
+    await w.env.app.processingTasks!.run(job.job_id);
+    await p.goto(`${w.origin}/?view=task&task=${job.job_id}`);
+    const detail = p.locator(".task-detail");
+    await expect
+      .poll(() => detail.innerText())
+      .toContain("还没有解析 PDF。先点“解析 PDF”，完成后再建档。");
+    expect(await detail.locator(".task-step-list").count()).toBe(0);
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.close();
+  }
+}, 60000);
 it("keeps manual parsing separate from archiving, then exposes ready state and metadata locks", async () => {
   const w = await nextWorkspace({
     setup: async (e) => {
@@ -32,11 +79,11 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
     await p.getByRole("checkbox", { name: "全选已加载", exact: true }).focus();
     await p.keyboard.press("Space");
     const initial = w.env.parseCalls;
+    // Parsing has its own button beside archiving, counting the papers waiting for it.
     await p
       .getByRole("region", { name: "文献选择" })
-      .getByRole("button", { name: "更多", exact: true })
+      .getByRole("button", { name: /^解析 PDF \d+$/ })
       .click();
-    await p.getByRole("menuitem", { name: "解析 PDF", exact: true }).click();
     const dialog = p.getByRole("dialog", { name: "解析 PDF", exact: true });
     await dialog.getByRole("button", { name: "确认启动", exact: true }).click();
     await dialog.getByRole("button", { name: "关闭", exact: true }).click();

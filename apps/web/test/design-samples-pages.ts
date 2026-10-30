@@ -209,20 +209,23 @@ export const designSamplePages: readonly DesignSamplePage[] = [
   {
     id: "archive-estimate",
     name: "建档 · 发起前预计消耗",
-    route: route("lib", "&sort=title-asc"),
-    interaction: "依次勾选，直到选中两篇尚未建档的文献，点“建档”",
+    // Only failed archives can be archived again here; the fixture still archives samples 15 and 16.
+    route: route(
+      "lib",
+      `&sort=title-asc&query=${query({ statuses: ["ARCHIVE_FAILED"] })}`,
+    ),
+    interaction: "在建档失败的文献里勾选两篇，点“建档”",
     prepare: async (p) => {
       const rows = p.locator(".paper-row");
       await rows.nth(1).waitFor();
-      const build = p
+      await rows.first().focus();
+      await p.keyboard.press("Space");
+      await p.keyboard.press("ArrowDown");
+      await p.keyboard.press("Space");
+      await p
         .getByRole("region", { name: "文献选择" })
-        .getByRole("button", { name: /^建档 \d+$/ });
-      for (let n = 0; n < 40; n++) {
-        await rows.nth(n).focus();
-        await p.keyboard.press("Space");
-        if ((await build.textContent()) === "建档 2") break;
-      }
-      await build.click();
+        .getByRole("button", { name: "建档 2", exact: true })
+        .click();
     },
     ready: '[aria-label="启动前用量预估"] table',
   },

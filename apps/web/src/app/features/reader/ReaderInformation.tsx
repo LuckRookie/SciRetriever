@@ -1,6 +1,7 @@
 import { Assignment } from "../tags/Assignment.js";
 import { MetadataFields } from "../archive/MetadataFields.js";
 import { StepActions } from "../archive/StepActions.js";
+import { OperationDialog } from "../library/OperationDialog.js";
 import { useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
@@ -161,7 +162,8 @@ export function ReaderInformation({
   const api = useApi(),
     shell = useShell(),
     [expanded, setExpanded] = useState(false),
-    [relation, setRelation] = useState<"references" | "cited-by" | null>(null);
+    [relation, setRelation] = useState<"references" | "cited-by" | null>(null),
+    [operation, setOperation] = useState<"parse" | "archive" | null>(null);
   const assetId = detail.primary_pdf?.asset.asset_id ?? null;
   // Where the reading text came from; absent before a corrected text exists.
   const reading = useQuery({
@@ -173,6 +175,14 @@ export function ReaderInformation({
   const id = detail.literature.literature_id,
     m = detail.literature.metadata,
     doi = m.identifiers.find((value) => value.namespace === "doi")?.value;
+  // Parsing and archiving are separate explicit steps (ADR 0037); the panel
+  // offers whichever one this paper is waiting for.
+  const next =
+    detail.literature.status !== "ASSET_READY"
+      ? null
+      : detail.missing_step === "raw-parse"
+        ? "parse"
+        : "archive";
   const identity = detail.primary_pdf
     ? {
         unverified: "未核验",
@@ -208,7 +218,12 @@ export function ReaderInformation({
                   ARCHIVING: "建档中",
                   ARCHIVE_FAILED: "建档失败",
                 } as Record<string, string>
-              )[detail.literature.status] ?? "尚未建档"}
+              )[detail.literature.status] ??
+                (next === "parse"
+                  ? "尚未解析"
+                  : next === "archive"
+                    ? "已解析，尚未建档"
+                    : "尚未建档")}
             </dd>
           </div>
           {reading.data ? (
@@ -245,6 +260,25 @@ export function ReaderInformation({
             </div>
           ) : null}
         </dl>
+        {next && api.workspace.capabilities.maintenance ? (
+          <div className="reader-next-step">
+            <p>
+              {next === "parse"
+                ? "下一步是解析：由 MinerU 读出版面和文字，完成后才能建档。"
+                : "下一步是建档：整理并逐页校订全文、补全元数据，会调用模型。"}
+            </p>
+            <Button variant="primary" onPress={() => setOperation(next)}>
+              {next === "parse" ? "解析 PDF" : "建档"}
+            </Button>
+          </div>
+        ) : null}
+        {operation ? (
+          <OperationDialog
+            ids={[id]}
+            kind={operation}
+            onClose={() => setOperation(null)}
+          />
+        ) : null}
         {api.workspace.capabilities.maintenance ? (
           <StepActions id={id} />
         ) : null}

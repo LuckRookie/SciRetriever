@@ -520,6 +520,15 @@ function taskRun(db: DatabaseSync, r: Record<string, unknown>) {
       .get(id, String(target.target_id));
     const payload = latest ? JSON.parse(String(latest.payload_json)) : null,
       result = payload?.result;
+    // A skipped target's last event carries no result; its receipt says why.
+    const skippedBecause =
+      target.stage === "skipped"
+        ? db
+            .prepare(
+              "SELECT json_extract(payload_json,'$.result.outcome') AS outcome FROM execution_events WHERE job_id=? AND json_extract(payload_json,'$.target_id')=? AND kind='processing-result' ORDER BY sequence DESC LIMIT 1",
+            )
+            .get(id, String(target.target_id))?.outcome
+        : null;
     const usage = { calls: 0, input_tokens: 0, output_tokens: 0 },
       sessions: Record<string, unknown>[] = [],
       steps: Record<string, unknown>[] = [],
@@ -671,6 +680,8 @@ function taskRun(db: DatabaseSync, r: Record<string, unknown>) {
       failure:
         payload?.failure ??
         (target.stage === "failed" ? "processing-failed" : null),
+      skipped_because:
+        typeof skippedBecause === "string" ? skippedBecause : null,
     };
   });
   return {

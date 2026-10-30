@@ -8,6 +8,7 @@ import { TEXT_TOOL_MAX_BYTES } from "../src/archive/text-session.js";
 import {
   acceptArrangement,
   arrangementLeafId,
+  arrangementLeafSpans,
   arrangementPreview,
   reviewArrangement,
   verifyArrangement,
@@ -62,13 +63,14 @@ it("reads current leaf identities, types and page hints with exact text, includi
         return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
       if (calls === 2) {
         items = toolJson(request).items as Item[];
+        // The model copies short names; the host maps them back to real IDs.
         expect(items[0]).toMatchObject({
-          id: root.root_block_id,
+          id: "r1",
           text: "A😀.B🙂.",
           type: "text",
           page_hint: 0,
           leaf_count: 1,
-          leaves: [{ leaf_id: expected(0, 6), start: 0, end: 6 }],
+          leaves: [{ leaf_id: "b1", start: 0, end: 6 }],
         });
         expect(items[1]).toMatchObject({
           text: "",
@@ -79,18 +81,17 @@ it("reads current leaf identities, types and page hints with exact text, includi
         });
         expect(items[2]).toMatchObject({ type: "title", page_hint: 1 });
         return modelTool("put_operations", {
-          operations: [
-            { kind: "split", root_block_id: root.root_block_id, cuts: [3] },
-          ],
+          operations: [{ kind: "split", root_block_id: "r1", cuts: [3] }],
         });
       }
       if (calls === 3)
         return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
       if (calls === 4) {
         items = toolJson(request).items as Item[];
+        // A split's new leaves get new names; the real block ID is still accepted.
         expect(items[0]!.leaves).toEqual([
-          { leaf_id: expected(0, 3), start: 0, end: 3 },
-          { leaf_id: expected(3, 6), start: 3, end: 6 },
+          { leaf_id: "b4", start: 0, end: 3 },
+          { leaf_id: "b5", start: 3, end: 6 },
         ]);
         expect(items[0]!.leaf_count).toBe(2);
         return modelTool("block_info", { root_block_id: root.root_block_id });
@@ -123,9 +124,10 @@ it("reads current leaf identities, types and page hints with exact text, includi
     ).build(f.source);
     expect(result.stop).toBeNull();
     expect(result.usage.calls).toBe(7);
-    expect(result.value!.leaves.map((l) => l.leaf_id)).toEqual(
-      items.flatMap((i) => i.leaves.map((l) => l.leaf_id)),
-    );
+    expect(result.value!.leaves.slice(0, 2).map((l) => l.leaf_id)).toEqual([
+      expected(0, 3),
+      expected(3, 6),
+    ]);
     expect(result.value!.leaves.map((l) => l.original_text)).toEqual([
       "A😀.",
       "B🙂.",
@@ -225,9 +227,16 @@ it("paginates a large split root and its leaf metadata together without losing c
     expect(result.value!.leaves.map((l) => l.original_text).join("")).toBe(
       text,
     );
-    expect(result.value!.leaves.map((l) => l.leaf_id)).toEqual([
-      ...leaves.keys(),
-    ]);
+    expect([...leaves.keys()]).toEqual(
+      Array.from({ length: 101 }, (_, i) => `b${i + 1}`),
+    );
+    expect(result.value!.leaves.map((l) => l.leaf_id)).toEqual(
+      arrangementLeafSpans(
+        root,
+        f.source.raw.result_sha256,
+        Array.from({ length: 100 }, (_, i) => i + 1),
+      ).map((l) => l.leaf_id),
+    );
   } finally {
     await runtime.close();
   }
@@ -688,6 +697,122 @@ it("rejects mismatching cache and snapshot identities even when the payload rema
     verifyArrangement(f.source, { ...snapshot, destinations: [] }, method),
   ).toThrow();
 });
+it("names the field when a model mistypes a leaf ID, so it can correct it in the same conversation", async () => {
+  const f = await archiveTextFixture([{ text: "Synthetic body paragraph." }]),
+    real = arrangementLeafSpans(
+      f.source.blocks[0]!,
+      f.source.raw.result_sha256,
+    )[0]!.leaf_id,
+    rejections: unknown[] = [];
+  let calls = 0;
+  const assign = (leaf_id: string) =>
+    modelTool("put_operations", {
+      operations: [
+        {
+          kind: "assign",
+          leaf_id,
+          target: { role: "methods" },
+          presentation: { kind: "content" },
+        },
+      ],
+    });
+  const runtime = fakeTextRuntime(async (request) => {
+    calls++;
+    if (calls === 1)
+      return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
+    // The real run dropped one character of the UUID; then a name never returned.
+    if (calls === 2) return assign(real.slice(0, 14) + real.slice(15));
+    if (calls === 3) {
+      rejections.push(toolJson(request));
+      return assign("b9");
+    }
+    if (calls === 4) {
+      rejections.push(toolJson(request));
+      return assign("b1");
+    }
+    if (calls === 5)
+      return modelTool("review_breaks", { offset: 0, limit: 20 });
+    return modelTool("submit_operations", {
+      reviewed_candidates_sha256: toolJson(request).reviewed_candidates_sha256,
+    });
+  });
+  try {
+    const result = await new ArchiveArrangementService(
+      runtime,
+      fakePages(f.pages),
+      memoryTextCache().cache,
+    ).build(f.source);
+    expect(result.stop).toBeNull();
+    for (const rejection of rejections)
+      expect(rejection).toMatchObject({
+        accepted: false,
+        issues: [{ code: "tool-input", id: "operations[0].leaf_id" }],
+      });
+    expect(result.value!.leaves[0]!.leaf_id).toBe(real);
+  } finally {
+    await runtime.close();
+  }
+});
+it("shows the words on both sides of a paragraph-break candidate, so it is decided without rereading", async () => {
+  const f = await archiveTextFixture([
+    { text: "A synthetic sentence that continues" },
+    { text: "on the following block." },
+  ]);
+  let calls = 0,
+    reviewed: Record<string, unknown> = {};
+  const runtime = fakeTextRuntime(async (request) => {
+    calls++;
+    if (calls === 1)
+      return modelTool("read_blocks", { index: 0, offset: 0, limit: 20 });
+    if (calls === 2)
+      return modelTool("put_operations", {
+        operations: ["b1", "b2"].map((leaf_id) => ({
+          kind: "assign",
+          leaf_id,
+          target: { role: "methods" },
+          presentation: { kind: "content" },
+        })),
+      });
+    if (calls === 3)
+      return modelTool("review_breaks", { offset: 0, limit: 20 });
+    if (calls === 4) {
+      reviewed = toolJson(request);
+      const [candidate] = reviewed.candidates as { candidate_id: string }[];
+      return modelTool("decide_breaks", {
+        reviewed_candidates_sha256: reviewed.reviewed_candidates_sha256,
+        decisions: [
+          {
+            candidate_id: candidate!.candidate_id,
+            decision: "keep",
+            reason: "Two sentences",
+          },
+        ],
+      });
+    }
+    return modelTool("submit_operations", {
+      reviewed_candidates_sha256: reviewed.reviewed_candidates_sha256,
+    });
+  });
+  try {
+    const result = await new ArchiveArrangementService(
+      runtime,
+      fakePages(f.pages),
+      memoryTextCache().cache,
+    ).build(f.source);
+    expect(reviewed.candidates).toEqual([
+      expect.objectContaining({
+        left_leaf_id: "b1",
+        right_leaf_id: "b2",
+        left_tail: "A synthetic sentence that continues",
+        right_head: "on the following block.",
+      }),
+    ]);
+    expect(result.stop).toBeNull();
+    expect(result.usage.calls).toBe(5);
+  } finally {
+    await runtime.close();
+  }
+});
 it("provides text-layer wrong-page hints and program-derived leaf IDs, then verifies reassignment evidence on checkpoint reuse", async () => {
   const f = await archiveTextFixture(
       [{ text: "Misplaced synthetic paragraph." }],
@@ -739,10 +864,14 @@ it("provides text-layer wrong-page hints and program-derived leaf IDs, then veri
         new ArchiveArrangementService(runtime, fakePages(f.pages), cache.cache),
       result = await service().build(f.source);
     expect(result.stop).toBeNull();
+    expect(leaf).toBe("b1");
     expect(result.value?.leaves[0]).toMatchObject({
       page_index: 1,
       region: null,
-      leaf_id: leaf,
+      leaf_id: arrangementLeafSpans(
+        f.source.blocks[0]!,
+        f.source.raw.result_sha256,
+      )[0]!.leaf_id,
     });
     expect((await service().build(f.source)).usage.calls).toBe(0);
     const entry = [...cache.entries.values()][0]!,
