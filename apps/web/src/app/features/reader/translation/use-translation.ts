@@ -14,14 +14,16 @@ import { useApi } from "../../../data/query.js";
 import { record } from "../../../data/wire.js";
 
 const SETTINGS_KEY = "sciretriever:translation:v1";
-/** How long a selection must rest before it is translated. */
-const SETTLE_MS = 350;
-const RECENT_LIMIT = 20;
+/** How long a selection must rest before it is translated; the popup shows at once. */
+const SETTLE_MS = 150;
 
 export interface TranslationSettings {
   /** A model from the catalog; null follows the service default. */
   readonly model: string | null;
   readonly language: TranslationLanguage;
+  /** Translate a selection as soon as it settles. */
+  readonly auto: boolean;
+  /** Show the translation in a floating card beside the selection. */
   readonly popup: boolean;
 }
 export interface TranslationEntry {
@@ -42,12 +44,14 @@ function readSettings(): TranslationSettings {
       language: isTranslationLanguage(v.language)
         ? v.language
         : TRANSLATION_DEFAULT_LANGUAGE,
+      auto: v.auto !== false,
       popup: v.popup !== false,
     };
   } catch {
     return {
       model: null,
       language: TRANSLATION_DEFAULT_LANGUAGE,
+      auto: true,
       popup: true,
     };
   }
@@ -81,9 +85,9 @@ const parseResult = (value: unknown): TranslationResult => {
 };
 
 /**
- * Reader translation (ADR 0049): browser-only settings, one request per
- * settled selection, the latest translation for the popup and a short list
- * of this paper's recent translations for the panel.
+ * Reader translation (ADR 0049, 0050): browser-only settings, the source text
+ * the panel compares with its translation, one request per settled selection,
+ * and the floating card's visibility and dragged position.
  */
 export function useReaderTranslation(literatureId: string, enabled: boolean) {
   const api = useApi();
@@ -103,13 +107,19 @@ export function useReaderTranslation(literatureId: string, enabled: boolean) {
     },
   });
   const [current, setCurrent] = useState<TranslationEntry | null>(null);
-  const [recent, setRecent] = useState<readonly TranslationEntry[]>([]);
+  const [source, setSource] = useState("");
+  const [popupOpen, setPopupOpen] = useState(false);
+  /** Where the reader dragged the card; it stays there until the reader closes it. */
+  const [popupAt, setPopupAt] = useState<{ left: number; top: number } | null>(
+    null,
+  );
   const pending = useRef<{ timer: number; abort: AbortController } | null>(
     null,
   );
   useEffect(() => {
-    setRecent([]);
     setCurrent(null);
+    setSource("");
+    setPopupOpen(false);
   }, [literatureId]);
   useEffect(
     () => () => {
@@ -177,12 +187,6 @@ export function useReaderTranslation(literatureId: string, enabled: boolean) {
         };
         if (abort.signal.aborted) return;
         setCurrent(entry);
-        setRecent((list) =>
-          [entry, ...list.filter((e) => e.text !== trimmed)].slice(
-            0,
-            RECENT_LIMIT,
-          ),
-        );
       } catch (error) {
         if (abort.signal.aborted) return;
         setCurrent({
@@ -197,28 +201,35 @@ export function useReaderTranslation(literatureId: string, enabled: boolean) {
     },
     [api],
   );
-  /** A selection settled in the reader: translate after a short rest. */
+  /**
+   * A selection in the reader fills the source box; with auto on it is
+   * translated after a short rest, and the card shows "翻译中" at once.
+   */
   const selected = useCallback(
     (text: string, page: number | null) => {
+      const trimmed = text.trim();
+      setSource(trimmed);
+      if (!latest.current.settings.auto || !trimmed) return;
       if (pending.current) {
         clearTimeout(pending.current.timer);
         pending.current.abort.abort();
       }
+      setCurrent({ text: trimmed, page, status: "loading" });
+      setPopupOpen(true);
       const abort = new AbortController();
       pending.current = {
         abort,
-        timer: window.setTimeout(() => void run(text, page), SETTLE_MS),
+        timer: window.setTimeout(() => void run(trimmed, page), SETTLE_MS),
       };
     },
     [run],
   );
-  const dismiss = useCallback(() => {
-    if (pending.current) {
-      clearTimeout(pending.current.timer);
-      pending.current.abort.abort();
-      pending.current = null;
-    }
-    setCurrent(null);
+  /** The card goes away; the panel keeps the source and its translation. */
+  const dismiss = useCallback(() => setPopupOpen(false), []);
+  /** The card's × also forgets where it was dragged. */
+  const close = useCallback(() => {
+    setPopupOpen(false);
+    setPopupAt(null);
   }, []);
   const load = useCallback(() => setWanted(true), []);
   return {
@@ -229,10 +240,15 @@ export function useReaderTranslation(literatureId: string, enabled: boolean) {
     catalogError: catalog.error,
     model,
     current,
-    recent,
+    source,
+    setSource,
+    popupOpen,
+    popupAt,
+    setPopupAt,
     translate: run,
     selected,
     dismiss,
+    close,
   };
 }
 export type ReaderTranslation = ReturnType<typeof useReaderTranslation>;

@@ -981,13 +981,7 @@ export default function Reader() {
               {marks.active && sideTab === "marks" ? (
                 marks.panel
               ) : marks.active && sideTab === "translation" ? (
-                <TranslationPanel
-                  translation={translation}
-                  notify={notify}
-                  {...(pdf && mode === "pdf"
-                    ? { onPage: (page: number) => pdf.go(page) }
-                    : {})}
-                />
+                <TranslationPanel translation={translation} notify={notify} />
               ) : (
                 <AnimatedPanel preset="panelContent">
                   {information}

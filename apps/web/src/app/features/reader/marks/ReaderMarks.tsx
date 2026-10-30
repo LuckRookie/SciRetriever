@@ -183,7 +183,7 @@ export function useReaderMarks({
         if (latest.current.tool === "pen") highlight(latest.current.pen, true);
         else {
           setBar({ kind: "selection" });
-          if (t?.settings.popup) t.selected(next.quote, next.pdf?.page ?? null);
+          t?.selected(next.quote, next.pdf?.page ?? null);
         }
       },
       region(next) {
@@ -325,7 +325,7 @@ export function useReaderMarks({
       const k = event.key.toLowerCase();
       const digit = /^[1-5]$/u.test(k) ? MARK_COLORS[Number(k) - 1]! : null;
       if (event.key === "Escape") {
-        if (bar || note || translation?.current) {
+        if (bar || note || translation?.popupOpen) {
           setBar(null);
           setNote(null);
           translation?.dismiss();
@@ -512,7 +512,8 @@ export function useReaderMarks({
               icon="translate"
               label="翻译选中文字"
               onPress={() => {
-                if (draft.current)
+                // With auto on the selection is already being translated.
+                if (draft.current && !translation.settings.auto)
                   void translation.translate(
                     draft.current.quote,
                     draft.current.pdf?.page ?? null,
@@ -528,6 +529,7 @@ export function useReaderMarks({
       {bar?.kind === "selection" &&
       draft.current &&
       translation?.settings.popup &&
+      translation.popupOpen &&
       translation.current ? (
         <TranslationPopover
           translation={translation}
