@@ -18,6 +18,7 @@ ADR 记录已经接受并会长期约束后续设计的重要选择。ADR 不替
 
 ## 当前 ADR
 
+- [ADR 0047：校订改为每页一次裁决，由程序防护把关](0047-single-pass-page-proofread.md)：**Proposed**，2026-10-30，待 Owner 接受；每页一次请求，模型按页面图裁决解析与文字层的差异，一次提交改字；改字经程序防护（按位置核对文字层、近似拼写、不删内容、结构式标签、标识符、凭空插入、版权、破折号与引号）后才应用，拿不准就保持原样；部分取代 ADR 0041 第 3 节第 1–4 条与第 6 节的校订部分。
 - [ADR 0046：阅读批注作为用户数据保存在 catalog](0046-reading-marks.md)：**Accepted**，2026-10-29（Owner 确认）；高亮、框选与笔记由 `marks` owner 存进 catalog（schema 14），PDF 与全文两种锚点各自完整并保存原文以便重新定位，对不上时如实标明；Web、CLI、MCP 用同一合同。
 - [ADR 0045：建档元数据读取整篇论文](0045-archive-metadata-reads-whole-paper.md)：**Accepted**，2026-10-28（Owner 确认）；元数据步骤读取校订稿全部保留片段和全部删除区块，不再只读四个章节与书目行；模型引用短编号；部分取代 ADR 0041 第 5 节。
 - [ADR 0043：配置齐全的元数据来源默认启用](0043-configured-metadata-auto.md)：**Accepted**，2026-10-28（Owner 授权完成计划 17）；Metadata Auto 在公开集合之外，加入配置齐全的 Elsevier、Springer Nature 与 Web of Science；部分取代 ADR 0022 第 2 节的固定集合。
