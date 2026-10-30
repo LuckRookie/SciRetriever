@@ -2,10 +2,7 @@ import { UsageEstimate } from "../processing/UsageEstimate.js";
 import { jobRecord } from "../../data/wire.js";
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  parseDocumentRequest,
-  type ProcessingOperation,
-} from "@sciretriever/contracts";
+import type { ProcessingOperation } from "@sciretriever/contracts";
 import {
   Button,
   Checkbox,
@@ -16,7 +13,6 @@ import {
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import { archiveWrite } from "../../data/archive.js";
-import { readLiterature } from "../../data/library.js";
 import {
   createTask,
   identityOperation,
@@ -38,7 +34,6 @@ export function download(blob: Blob, name: string) {
 }
 const labels: Record<string, string> = {
   acquire: "获取 PDF",
-  parse: "解析 PDF",
   analyze: "生成总结",
   archive: "建立文献档案",
   identity: "核验文章身份",
@@ -198,27 +193,7 @@ export function OperationDialog({
         try {
           if (kind === "identity")
             operations.push(await identityOperation(operationContext, id));
-          else if (kind === "parse") {
-            const detail = await readLiterature(
-                api,
-                id,
-                controller.current.signal,
-              ),
-              asset = detail.primary_pdf?.asset;
-            if (!asset) throw new Error("缺少 PDF");
-            const source = {
-              literature_id: id,
-              asset_id: asset.asset_id,
-              asset_sha256: asset.sha256,
-            };
-            operations.push({
-              operation: "parse-documents",
-              request: parseDocumentRequest({
-                ...source,
-                force: false,
-              }),
-            });
-          } else throw new Error("不支持的操作");
+          else throw new Error("不支持的操作");
         } catch (error) {
           missing.push(`${id}：${errorMessage(error)}`);
         }
@@ -321,8 +296,8 @@ export function OperationDialog({
           ? "导出已有书目信息，不改动文献库。"
           : kind === "acquire"
             ? "将使用配置的文献来源获取 PDF，必要时调用 Browser Agent；不会等待人工帮助。"
-            : kind === "parse"
-              ? "将调用配置的解析服务。已接纳的 PDF 和旧解析版本会保留。"
+            : kind === "archive"
+              ? "还没有解析的 PDF 先由解析服务读出版面和文字，已有解析直接复用；然后整理、逐页校订、补全元数据与标签，会调用模型。"
               : kind === "upload"
                 ? "将文件接纳到所选文献，现有主 PDF 不会被覆盖。"
                 : "将使用配置的模型处理已有材料；缺少的输入逐项说明，不自动生成前序材料。"}

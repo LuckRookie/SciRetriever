@@ -76,7 +76,7 @@ describe("supplement and human revision lifecycle", () => {
   afterAll(async () => {
     await e?.close();
   });
-  it("keeps an unparsed supplement non-blocking and publishes content/description changes on human edits", async () => {
+  it("parses a new supplement while archiving, keeps its failure non-blocking and publishes content/description changes on human edits", async () => {
     try {
       const before = await e.app.archive.status(e.id),
         bytes = workbenchPdf("10.1000/supplement"),
@@ -108,22 +108,17 @@ describe("supplement and human revision lifecycle", () => {
         },
       });
       expect((await e.app.archive.status(e.id)).status).toBe("READY");
-      await e.submit("with-supplement");
-      const unparsed = await e.app.archive.status(e.id);
-      expect(unparsed.status).toBe("READY");
-      expect(unparsed.issues).toContainEqual(
-        expect.objectContaining({
-          part: "supplementary",
-          affects_readiness: false,
-          reason: "needs-parse",
-        }),
-      );
+      // Archiving parses the new supplement first (Owner 2026-10-30); the main
+      // part keeps its parse.
       e.setText("# Methods\n\nSupplemental measurements.\n");
-      await e.app.documentProcessing.parseDocuments({
-        ...e.rawParseRequest,
-        asset_id: asset.asset_id,
-        asset_sha256: asset.sha256,
-      });
+      const parsesBefore = e.parseCalls;
+      await e.submit("with-supplement");
+      expect(e.parseCalls).toBe(parsesBefore + 1);
+      const parsed = await e.app.archive.status(e.id);
+      expect(parsed.status).toBe("READY");
+      expect(parsed.issues.filter((i) => i.reason === "needs-parse")).toEqual(
+        [],
+      );
       const original = e.app.archiveText!.proofread.bind(e.app.archiveText!);
       const failSupplement = vi
         .spyOn(e.app.archiveText!, "proofread")

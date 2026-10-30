@@ -640,6 +640,27 @@ function taskRun(db: DatabaseSync, r: Record<string, unknown>) {
                   : null,
               };
             })
+            // Parsing ran as this task's first step (Owner 2026-10-30); it has no archive_steps row.
+            .concat(
+              db
+                .prepare(
+                  "SELECT asset_id,step,status,reason,elapsed_ms FROM task_steps WHERE job_id=? AND literature_id=? AND step='parse'",
+                )
+                .all(id, request.literature_id)
+                .map((r) => ({
+                  ...r,
+                  usage: {
+                    calls: 0,
+                    compaction_calls: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    usage_complete: true,
+                    elapsed_ms: Number(r.elapsed_ms),
+                  },
+                  pages: null,
+                  page_status: null,
+                })),
+            )
         : null;
     return {
       ...(archiveRows

@@ -11,18 +11,12 @@ import type {
 } from "@sciretriever/contracts";
 
 /** What a selection can be acted on for; each batch action takes only its own group. */
-export type SelectionGroup =
-  | "no-pdf"
-  | "unparsed"
-  | "unarchived"
-  | "ready"
-  | "other";
+export type SelectionGroup = "no-pdf" | "unarchived" | "ready" | "other";
 export const SELECTION_GROUPS: readonly {
   group: SelectionGroup;
   label: string;
 }[] = [
   { group: "no-pdf", label: "无 PDF" },
-  { group: "unparsed", label: "待解析" },
   { group: "unarchived", label: "待建档" },
   { group: "ready", label: "已就绪" },
   { group: "other", label: "其他" },
@@ -42,7 +36,6 @@ export function groupSelection(
 ): Readonly<Record<SelectionGroup, string[]>> {
   const groups: Record<SelectionGroup, string[]> = {
     "no-pdf": [],
-    unparsed: [],
     unarchived: [],
     ready: [],
     other: [],
@@ -50,15 +43,9 @@ export function groupSelection(
   for (const id of ids) {
     const item = known.get(id),
       status = item?.literature.status;
-    // Archiving reads an existing raw parse (ADR 0037), so a paper still
-    // waiting for one goes to parsing first.
-    groups[
-      !status
-        ? "other"
-        : status === "ASSET_READY" && item.missing_step === "raw-parse"
-          ? "unparsed"
-          : GROUP_OF[status]
-    ].push(id);
+    // Archiving parses first when needed (Owner 2026-10-30), so a paper
+    // without a parse is simply waiting for archiving.
+    groups[!status ? "other" : GROUP_OF[status]].push(id);
   }
   return groups;
 }

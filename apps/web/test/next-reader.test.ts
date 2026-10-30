@@ -13,7 +13,6 @@ import { expect, it } from "vitest";
 
 import {
   nextWorkspace,
-  readerOperation,
   showAllLibraryStatuses,
 } from "./next-workspace-fixture.js";
 
@@ -99,11 +98,15 @@ it.each(["no-preference", "reduce"] as const)(
       await w.page
         .getByRole("button", { name: "显示信息", exact: true })
         .click();
-      await readerOperation(w.page, "解析 PDF");
-      await w.page
-        .getByRole("dialog", { name: "解析 PDF", exact: true })
-        .waitFor();
-      await w.page.getByRole("button", { name: "取消", exact: true }).click();
+      // Parsing is the first archive step; the reader offers no separate action.
+      await w.page.getByRole("button", { name: "更多", exact: true }).click();
+      await w.page.getByRole("menu").waitFor();
+      expect(
+        await w.page
+          .getByRole("menuitem", { name: "解析 PDF", exact: true })
+          .count(),
+      ).toBe(0);
+      await w.page.keyboard.press("Escape");
       expect(w.env.parseCalls).toBe(counts.parser);
       expect(w.env.modelCalls).toBe(counts.model);
       expect((await w.env.app.jobs!.listJobs(20)).length).toBe(counts.jobs);

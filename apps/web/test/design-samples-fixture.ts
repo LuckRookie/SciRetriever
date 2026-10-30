@@ -237,7 +237,8 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
         failArchive = false;
       }
     }
-    // An unparsed supplement is an owned, non-blocking archive issue.
+    // A supplement whose parse fails is an owned, non-blocking archive issue
+    // (archiving parses it first; the main part is already parsed).
     const supplement = Buffer.concat([
       syntheticReadingPdf(3),
       Buffer.from("\n% sample-supplement\n"),
@@ -270,7 +271,11 @@ export async function seedDesignSamples(options: { homeParent?: string } = {}) {
       },
     });
     e.setText(text(6));
+    e.setParseHook(async () => {
+      throw new Error("Synthetic supplement parse failure");
+    });
     await archive(papers[6]!, "design-supplement-issue");
+    e.setParseHook(async () => {});
     e.setText(text(15));
     const tags: string[] = [];
     for (const name of [

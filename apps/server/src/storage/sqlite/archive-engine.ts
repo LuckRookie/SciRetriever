@@ -27,7 +27,8 @@ export type ArchiveStorageAction =
   | "step"
   | "finish"
   | "resolve"
-  | "hook";
+  | "hook"
+  | "parse";
 export const ARCHIVE_READ_ACTIONS: readonly ArchiveStorageAction[] = [
   "state",
   "issues",
@@ -374,6 +375,74 @@ export function runArchiveStorage(
         new Date().toISOString(),
         String(r.literature_id),
         String(r.run_id),
+      );
+      return null;
+    }
+    // Parsing runs as the first archive step (Owner 2026-10-30). It keeps its own
+    // raw-parse attempts; here it only reports task progress, without a step row.
+    if (action === "parse") {
+      const now = new Date().toISOString(),
+        job = db
+          .prepare(
+            "SELECT job_id FROM archive_runs WHERE literature_id=? AND run_id=?",
+          )
+          .get(String(r.literature_id), String(r.run_id))?.job_id;
+      if (!job) return null;
+      const status = String(r.status),
+        elapsed = Math.max(0, Math.round(Number(r.elapsed_ms) || 0));
+      db.prepare(
+        "INSERT INTO task_steps VALUES(?,?,?,'parse',?,?,0,0,0,?,?) ON CONFLICT(job_id,literature_id,asset_id,step) DO UPDATE SET status=excluded.status,reason=excluded.reason,elapsed_ms=task_steps.elapsed_ms+excluded.elapsed_ms,updated_at=excluded.updated_at",
+      ).run(
+        job,
+        String(r.literature_id),
+        String(r.asset_id),
+        status,
+        r.reason === null ? null : String(r.reason),
+        elapsed,
+        now,
+      );
+      const sequence = Number(
+        db
+          .prepare(
+            "SELECT COALESCE(max(sequence),-1)+1 AS n FROM execution_events WHERE job_id=?",
+          )
+          .get(job)!.n,
+      );
+      db.prepare("INSERT INTO execution_events VALUES(?,?,?,?,?,?)").run(
+        `${String(r.run_id)}:${String(r.asset_id)}:parse:${sequence}`,
+        job,
+        sequence,
+        "archive-progress",
+        json({
+          schema_version: 2,
+          run_id: r.run_id,
+          attempt_id: `${String(r.run_id)}:${String(r.asset_id)}:parse`,
+          literature_id: r.literature_id,
+          asset_id: r.asset_id,
+          step: "parse",
+          phase:
+            status === "running"
+              ? "started"
+              : status === "done"
+                ? "completed"
+                : "stopped",
+          status,
+          reason: r.reason ?? null,
+          usage: {
+            calls: 0,
+            compaction_calls: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            usage_complete: true,
+            elapsed_ms: elapsed,
+          },
+          stop: null,
+          part: onePart(db, String(r.literature_id), String(r.asset_id)),
+          page_index: null,
+          pages: null,
+          page_status: null,
+        }),
+        now,
       );
       return null;
     }

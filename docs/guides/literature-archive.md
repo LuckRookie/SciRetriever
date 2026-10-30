@@ -4,11 +4,11 @@
 负责：建档发起、状态核对与问题处理
 状态：现行
 
-获取 PDF、原始解析、建档是三个独立操作。建档只读取已有的原始解析，按整理、逐页校订、渲染、元数据、参考文献、标签的顺序发布材料，不启动 MinerU，也不生成全文总结。
+获取 PDF 与建档是两个独立操作。建档依次为解析、整理、逐页校订、渲染、元数据、参考文献、标签：某个部分还没有部署 profile 的原始解析时先调用 MinerU，已有解析直接复用，重新建档不会重新解析；建档不生成全文总结。单独的解析操作（`parse-documents`、维护页“解析 PDF”）保留，用于排查和重新解析。
 
 后端与 HTTP/CLI/MCP 已接入新流程；Web 界面按新合同另行联调，本文不代表界面已部署。整理只提交操作：每部分一次发出全部区块、一次决定全部断段，粘在正文里的版权句、页归属由程序按 PDF 文字层处理；校订逐页对照原图。真实库转换和全量重建是独立维护步骤，现有用户库不会在启动时自动转换。
 
-显式解析需要可用的 MinerU 连接；建档使用已有解析，并需要可用的 DSH 模型。校订的页面渲染还需要已通过安装校验的 CloakBrowser runtime：`SCIRETRIEVER_CLOAK_BUNDLE` 应指向包含 `chrome` 和安装清单的具体版本目录，而不是它的缓存父目录，安装方式见[安装指南](installation.md)。`parser-unavailable` 表示解析后端尚不可用；建档问题中的 `proofread-renderer-unavailable` 表示页面渲染 runtime 不可用。两者应分别检查，已完成的 PDF 接纳和解析不会因此撤销。
+建档需要可用的 MinerU 连接（已有解析时不需要）和可用的 DSH 模型。校订的页面渲染还需要已通过安装校验的 CloakBrowser runtime：`SCIRETRIEVER_CLOAK_BUNDLE` 应指向包含 `chrome` 和安装清单的具体版本目录，而不是它的缓存父目录，安装方式见[安装指南](installation.md)。`parser-unavailable` 表示解析后端尚不可用；建档问题中的 `proofread-renderer-unavailable` 表示页面渲染 runtime 不可用。两者应分别检查，已完成的 PDF 接纳和解析不会因此撤销。
 
 ## 发起与恢复
 

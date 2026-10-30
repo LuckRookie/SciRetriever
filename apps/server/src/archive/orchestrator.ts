@@ -42,6 +42,20 @@ export interface ArchiveRuntime {
   readonly metadataFields: Pick<LiteratureMetadataService, "read">;
   readonly method_sha256: string;
   readonly archiveProfile?: "pipeline" | "vlm-engine";
+  /**
+   * Parse a part that has no raw parse for the deployment profile yet: Web, CLI
+   * and MCP archiving start with parsing (Owner 2026-10-30). Returns the failure
+   * code, or null once the part is parsed.
+   */
+  readonly parse?: (
+    input: {
+      readonly literature_id: string;
+      readonly asset_id: string;
+      readonly asset_sha256: string;
+      readonly profile: "pipeline" | "vlm-engine";
+    },
+    signal?: AbortSignal,
+  ) => Promise<string | null>;
 }
 export type ArchiveStatus = ArchiveState & {
   status: LiteratureStatus;
@@ -76,7 +90,9 @@ export class ArchiveOrchestrator {
             "vlm-engine-markdown-only",
           ]
         : ["vlm-engine-markdown-only"];
-    if (!profiles.some((p) => main.raw_profiles.includes(p)))
+    const profile = this.runtime.archiveProfile ?? "vlm-engine",
+      parses = request.mode === "full" && !!this.runtime.parse;
+    if (!parses && !profiles.some((p) => main.raw_profiles.includes(p)))
       return { outcome: "needs-parse", literature_id: id };
     const runId = randomUUID(),
       before = (await this.runtime.tags.state(signal)).version;
@@ -93,11 +109,61 @@ export class ArchiveOrchestrator {
     );
     let interrupted = false;
     try {
-      for (const part of [
+      for (let part of [
         main,
         ...initial.parts.filter((p) => p.part !== "main"),
       ]) {
         if (signal?.aborted) throw new ArchiveError("archive-cancelled");
+        // Parsing is the first step; an existing parse for the profile is reused.
+        if (parses && !part.raw_profiles.includes(profile)) {
+          const started = performance.now(),
+            progress = (status: string, reason: string | null) =>
+              this.database.archive("parse", {
+                run_id: runId,
+                literature_id: id,
+                asset_id: part.asset_id,
+                status,
+                reason,
+                elapsed_ms:
+                  status === "running" ? 0 : performance.now() - started,
+              });
+          await progress("running", null);
+          const failure = await withActivity(
+            { operation: "archive-parse", literature_id: id },
+            () =>
+              this.runtime.parse!(
+                {
+                  literature_id: id,
+                  asset_id: part.asset_id,
+                  asset_sha256: part.asset_sha256,
+                  profile,
+                },
+                signal,
+              ),
+          );
+          if (signal?.aborted) throw new ArchiveError("archive-cancelled");
+          await progress(failure ? "failed" : "done", failure);
+          if (failure) {
+            await this.save(
+              runId,
+              id,
+              part,
+              "arrange",
+              part.part === "main" ? "failed" : "unavailable",
+              "",
+              {},
+              failure,
+              0,
+              true,
+            );
+            if (part.part === "main") break;
+            continue;
+          }
+          const parsed = (await this.status(id, signal)).parts.find(
+            (p) => p.asset_id === part.asset_id,
+          );
+          if (parsed) part = parsed;
+        }
         if (!profiles.some((p) => part.raw_profiles.includes(p))) {
           await this.save(
             runId,

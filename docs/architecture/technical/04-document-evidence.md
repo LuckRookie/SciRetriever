@@ -326,7 +326,7 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 - 页码与坐标只是定位提示，不作为正确性依据。
 - 未知的 MinerU 类型会使转换失败，而不是被静默丢弃。
 - 现有文献只有 VLM Markdown，登记为 `vlm-engine-markdown-only`，可以直接作为初稿；段落页归属由文字层确定，无法确定时需重新解析。
-- 解析是独立阶段，建档不调用解析服务。
+- 完整建档以解析为第一步：部分缺少部署 profile 的原始解析时，编排先调用 `parseDocuments`（不强制重解析），已有解析直接复用；解析失败记为该部分整理步骤的问题，原因取解析的失败码。解析不写 `archive_steps` 行，只在任务中记 `task_steps` 与 `archive-progress` 事件（步骤名 `parse`），用时与页数仍在解析自己的尝试记录里。单独的解析操作保留。
 
 ### 6.2 整理与叶块
 

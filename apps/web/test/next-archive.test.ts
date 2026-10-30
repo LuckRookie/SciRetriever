@@ -17,7 +17,7 @@ async function select(page: Page, label: string, option: string) {
     .click();
   await page.getByRole("option", { name: option, exact: true }).click();
 }
-it("says what an unparsed paper waits for, and why archiving it skipped it", async () => {
+it("offers archiving for an unparsed paper, and archiving parses it first", async () => {
   const w = await nextWorkspace({
     setup: async (e) => {
       await e.app.maintenance!.ingestPdf({
@@ -30,13 +30,16 @@ it("says what an unparsed paper waits for, and why archiving it skipped it", asy
     const p = w.page;
     await p.goto(`${w.origin}/?literature=${missingId}&reader=pdf`);
     const info = p.locator(".reader-info-status");
-    await expect.poll(() => info.innerText()).toContain("尚未解析");
+    await expect.poll(() => info.innerText()).toContain("尚未建档（未解析）");
     await expect
       .poll(() =>
-        info.getByRole("button", { name: "解析 PDF", exact: true }).count(),
+        info.getByRole("button", { name: "建档", exact: true }).count(),
       )
       .toBe(1);
-    // Archiving it anyway (as the CLI or an old tab can) skips it with the reason.
+    expect(
+      await info.getByRole("button", { name: "解析 PDF", exact: true }).count(),
+    ).toBe(0);
+    const parses = w.env.parseCalls;
     const job = await w.env.app.processingTasks!.submit({
       schema_version: 1,
       idempotency_key: "unparsed-archive",
@@ -55,16 +58,16 @@ it("says what an unparsed paper waits for, and why archiving it skipped it", asy
     await w.env.app.processingTasks!.run(job.job_id);
     await p.goto(`${w.origin}/?view=task&task=${job.job_id}`);
     const detail = p.locator(".task-detail");
-    await expect
-      .poll(() => detail.innerText())
-      .toContain("还没有解析 PDF。先点“解析 PDF”，完成后再建档。");
-    expect(await detail.locator(".task-step-list").count()).toBe(0);
+    // Parsing is the first step the task shows.
+    await expect.poll(() => detail.innerText()).toContain("解析 · 完成");
+    expect(w.env.parseCalls).toBe(parses + 1);
+    expect((await w.env.app.archive.status(missingId)).status).toBe("READY");
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();
   }
 }, 60000);
-it("keeps manual parsing separate from archiving, then exposes ready state and metadata locks", async () => {
+it("archives a paper straight from its PDF, then exposes ready state and metadata locks", async () => {
   const w = await nextWorkspace({
     setup: async (e) => {
       await e.app.maintenance!.ingestPdf({
@@ -79,30 +82,13 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
     await p.getByRole("checkbox", { name: "全选已加载", exact: true }).focus();
     await p.keyboard.press("Space");
     const initial = w.env.parseCalls;
-    // Parsing has its own button beside archiving, counting the papers waiting for it.
-    await p
-      .getByRole("region", { name: "文献选择" })
-      .getByRole("button", { name: /^解析 PDF \d+$/ })
-      .click();
-    const dialog = p.getByRole("dialog", { name: "解析 PDF", exact: true });
-    await dialog.getByRole("button", { name: "确认启动", exact: true }).click();
-    await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-    // Background work started here can outlast the 1 s poll default under Full load.
-    await expect
-      .poll(() => w.env.parseCalls, { timeout: 20_000 })
-      .toBeGreaterThan(initial);
-    // Background work started here can outlast the 1 s poll default under Full load.
-    await expect
-      .poll(
-        async () =>
-          (await w.env.app.archive.status(missingId)).parts[0]?.raw_profiles
-            .length,
-        { timeout: 20_000 },
-      )
-      .toBe(1);
-    expect((await w.env.app.archive.status(missingId)).status).toBe(
-      "ASSET_READY",
-    );
+    // There is no separate parsing button; archiving parses first.
+    expect(
+      await p
+        .getByRole("region", { name: "文献选择" })
+        .getByRole("button", { name: /^解析 PDF/ })
+        .count(),
+    ).toBe(0);
     await p
       .getByRole("region", { name: "文献选择" })
       .getByRole("button", { name: /^建档 \d+$/ })
@@ -115,6 +101,7 @@ it("keeps manual parsing separate from archiving, then exposes ready state and m
         timeout: 20_000,
       })
       .toBe("READY");
+    expect(w.env.parseCalls).toBeGreaterThan(initial);
     await p.goto(`${w.origin}/?literature=${missingId}&reader=doc`);
     await p
       .getByRole("button", { name: "字段、来源与锁定", exact: true })
@@ -422,7 +409,7 @@ it("locks an edited block, marks its summary stale and locates the fixed PDF reg
   }
 }, 60000);
 
-it("recovers archive issues and keeps an unparsed supplement non-blocking in the reader", async () => {
+it("recovers archive issues and parses a new supplement in the same run, readable in the reader", async () => {
   const w = await nextWorkspace();
   try {
     const e = w.env,
@@ -489,11 +476,13 @@ it("recovers archive issues and keeps an unparsed supplement non-blocking in the
         timeout: 20_000,
       })
       .toBe("READY");
+    // The new supplement was parsed by the same archive run (Owner 2026-10-30).
+    const after = await e.app.archive.status(id);
     expect(
-      (await e.app.archive.status(id)).issues.some(
-        (i) => i.part === "supplementary" && !i.affects_readiness,
-      ),
-    ).toBe(true);
+      after.parts.find((part) => part.part === "supplementary")?.raw_profiles
+        .length,
+    ).toBeGreaterThan(0);
+    expect(after.issues.filter((i) => i.reason === "needs-parse")).toEqual([]);
     await p.goto(`${w.origin}/?literature=${id}&reader=pdf`);
     await select(p, "阅读部分", "补充材料 1");
     await expect

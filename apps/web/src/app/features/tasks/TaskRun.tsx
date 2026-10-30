@@ -349,6 +349,8 @@ function MappedPapers({ id, target }: { id: string; target: string }) {
 }
 
 const ARCHIVE_ORDER = [
+  // Parsing is the first step; a part with a parse already reuses it (Owner 2026-10-30).
+  "parse",
   "arrange",
   "proofread",
   "render",
@@ -391,7 +393,10 @@ function ArchiveSteps({ value }: { value: Record<string, unknown> }) {
                     ]
                   }
                 </strong>{" "}
-                · {stepStatus[String(s?.status ?? "pending")] ?? "停下"}
+                ·{" "}
+                {step === "parse" && !s && all.some((r) => r.asset_id === asset)
+                  ? "复用已有解析"
+                  : (stepStatus[String(s?.status ?? "pending")] ?? "停下")}
                 {pages && Number(pages.required) > 0 ? (
                   <span>
                     {" "}

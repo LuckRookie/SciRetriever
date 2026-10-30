@@ -1,20 +1,14 @@
 import { expect, it, vi } from "vitest";
 import { archiveFixture } from "./archive-fixture.js";
 
-it("requires explicit parsing, builds a durable archive, reuses model steps and records versions", async () => {
+it("parses first when needed, builds a durable archive, reuses the parse and model steps and records versions", async () => {
   const e = await archiveFixture();
   try {
     const { id, submit } = e;
     expect((await e.app.archive.status(id)).missing_step).toBe("raw-parse");
-    const blocked = await submit("archive-unparsed");
-    expect(blocked.results[0]).toMatchObject({
-      result: { outcome: "needs-parse" },
-    });
-    expect(e.parseCalls).toBe(0);
-    expect(e.modelCalls).toBe(0);
-    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
-    expect((await e.app.archive.status(id)).missing_step).toBe("arrange");
+    // Archiving starts with parsing (Owner 2026-10-30).
     const first = await submit("archive-first");
+    expect(e.parseCalls).toBe(1);
     expect(
       first.failures,
       JSON.stringify(await e.app.archive.status(id)),

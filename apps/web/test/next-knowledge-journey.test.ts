@@ -25,6 +25,30 @@ import {
   type WorkbenchStaticAsset,
 } from "../../server/src/workbench/http.js";
 import { ProductionWorkbenchSession } from "../../server/src/workbench/production-session.js";
+import { parseDocumentRequest } from "@sciretriever/contracts";
+
+/**
+ * The Web has no separate parse action (archiving parses first); raw parsing
+ * stays a processing operation, submitted and run here directly.
+ */
+async function runRawParse(
+  app: Awaited<ReturnType<typeof coreProcessingFixture>>["app"],
+  source: { literature_id: string; asset_id: string; asset_sha256: string },
+  key: string,
+) {
+  const job = await app.processingTasks!.submit({
+    schema_version: 1,
+    idempotency_key: key,
+    operations: [
+      {
+        operation: "parse-documents",
+        request: parseDocumentRequest({ ...source, force: false }),
+      },
+    ],
+  });
+  await app.processingTasks!.run(job.job_id);
+  return job.job_id;
+}
 
 it("keeps parsing separate from document publication and reads existing verified knowledge in the authenticated workspace", async () => {
   const env = await coreProcessingFixture();
@@ -126,12 +150,23 @@ it("keeps parsing separate from document publication and reads existing verified
         exact: true,
       })
       .click();
-    await readerOperation(page, "解析 PDF");
+    await page.getByRole("button", { name: "更多", exact: true }).click();
+    expect(
+      await page
+        .getByRole("menuitem", { name: "解析 PDF", exact: true })
+        .count(),
+    ).toBe(0);
+    await page.keyboard.press("Escape");
     expect(env.parseCalls).toBe(0);
-    await page.getByRole("button", { name: "确认启动", exact: true }).click();
-    await expect
-      .poll(() => page.getByRole("dialog").textContent())
-      .toContain("已提交 1 项");
+    const parseJob = await runRawParse(
+      env.app,
+      {
+        literature_id: env.parseRequest.literature_id,
+        asset_id: env.asset.asset_id,
+        asset_sha256: env.asset.sha256,
+      },
+      "journey-raw-parse",
+    );
     await expect
       .poll(
         async () => {
@@ -167,12 +202,14 @@ it("keeps parsing separate from document publication and reads existing verified
         .filter((s) => s.result)
         .map((s) => s.profile),
     ).toEqual(["vlm-engine"]);
-    await page.getByRole("button", { name: "查看任务", exact: true }).click();
+    await page.goto(`${server.origin}/?view=task&task=${parseJob}`);
     await expect
-      .poll(() =>
-        page
-          .getByRole("region", { name: "任务详情", exact: true })
-          .textContent(),
+      .poll(
+        () =>
+          page
+            .getByRole("region", { name: "任务详情", exact: true })
+            .textContent(),
+        { timeout: 20_000 },
       )
       .toContain("各模式的解析结果");
     expect(
@@ -320,15 +357,23 @@ it.each([true, false])(
       const id = w.env.parseRequest.literature_id;
       w.env.setText("# Revised fixture\nThe NEWLY PARSED text is different.\n");
       await w.page.goto(`${w.origin}/?literature=${id}&reader=doc`);
-      if (analysisModel) {
-        await readerOperation(w.page, "解析 PDF");
-        await w.page
-          .getByRole("button", { name: "确认启动", exact: true })
-          .click();
-      } else await runSummaryFromReader(w.page);
-      await expect
-        .poll(() => w.page.getByRole("dialog").textContent())
-        .toContain(analysisModel ? "已提交 1 项" : "任务已保存并启动");
+      const parseJob = analysisModel
+        ? await runRawParse(
+            w.env.app,
+            {
+              literature_id: id,
+              asset_id: w.env.asset.asset_id,
+              asset_sha256: w.env.asset.sha256,
+            },
+            "reader-raw-parse",
+          )
+        : null;
+      if (!parseJob) {
+        await runSummaryFromReader(w.page);
+        await expect
+          .poll(() => w.page.getByRole("dialog").textContent())
+          .toContain("任务已保存并启动");
+      }
       const job = (await w.env.app.jobs!.listJobs(10))[0]!;
       // Background work started here can outlast the 1 s poll default under Full load.
       await expect
@@ -338,9 +383,12 @@ it.each([true, false])(
           { timeout: 20_000 },
         )
         .toBe(analysisModel ? "completed" : "failed");
-      await w.page
-        .getByRole("button", { name: "查看任务", exact: true })
-        .click();
+      if (parseJob)
+        await w.page.goto(`${w.origin}/?view=task&task=${parseJob}`);
+      else
+        await w.page
+          .getByRole("button", { name: "查看任务", exact: true })
+          .click();
       if (analysisModel) {
         const current = await w.env.app.documentRead.default({
           literature_id: id,
@@ -350,11 +398,14 @@ it.each([true, false])(
         expect(current.default!.document_version_id).toBe(
           w.parsed.document.document_version_id,
         );
+        // A fresh task page load can outlast the 1 s poll default.
         await expect
-          .poll(() =>
-            w.page
-              .getByRole("region", { name: "任务详情", exact: true })
-              .textContent(),
+          .poll(
+            () =>
+              w.page
+                .getByRole("region", { name: "任务详情", exact: true })
+                .textContent(),
+            { timeout: 20_000 },
           )
           .toContain("各模式的解析结果");
         expect(

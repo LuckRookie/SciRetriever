@@ -83,6 +83,7 @@ export const archiveStrings = {
     incomplete: "读取不完整",
   },
   steps: {
+    parse: "解析",
     arrange: "整理",
     proofread: "校订",
     render: "全文发布",
@@ -106,7 +107,7 @@ export const dropReasons: Readonly<Record<string, string>> = {
 
 /** Why a processing task left a paper untouched, with what to do next. */
 export const skipReasons: Readonly<Record<string, string>> = {
-  "needs-parse": "还没有解析 PDF。先点“解析 PDF”，完成后再建档。",
+  "needs-parse": "还没有解析 PDF。点“建档”会先解析，再接着建档。",
   "needs-pdf": "还没有 PDF。先获取或补充 PDF。",
   blocked: "所需的前一步还没有完成，这一项暂时不能处理。",
   excluded: "文章性质为观点、评论、勘误或社论，不进入建档。",
@@ -119,7 +120,9 @@ export function archiveReason(code: string): string {
         "raw-parse": "原始解析",
         "primary-pdf": "获取 PDF",
         "tags-failed": "标签生成失败",
-        "needs-parse": "需要先解析 PDF",
+        "needs-parse": "还没有解析 PDF，重新建档会先解析",
+        "parser-unavailable": "解析服务尚不可用，请检查解析配置",
+        "parse-failed": "解析 PDF 没有完成",
         "proofread-incomplete": "校订尚未完成",
         "correction-model-unconfigured": "矫正模型未配置",
         "correction-budget-exhausted": "本次矫正预算已用完，可继续",

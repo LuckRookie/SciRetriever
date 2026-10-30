@@ -882,12 +882,6 @@ export default function Reader() {
                       onAction: () => setOperation("upload"),
                     },
                     {
-                      id: "parse",
-                      label: "解析 PDF",
-                      disabled: !detail.data.primary_pdf,
-                      onAction: () => setOperation("parse"),
-                    },
-                    {
                       id: "identity",
                       label: "核验文章身份",
                       disabled: !detail.data.primary_pdf,

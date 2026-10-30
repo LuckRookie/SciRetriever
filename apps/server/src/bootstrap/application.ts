@@ -1626,9 +1626,37 @@ async function createApplicationOwned(
       dshMetadataProposer(agents),
       new SqliteArchiveTextStorage(database, files),
     );
+    const parser = documentProcessing;
     const archiveOrchestrator = new ArchiveOrchestrator(database, {
       ...(archiveText ? { text: archiveText } : {}),
       archiveProfile: configuration.parsing.archive_profile,
+      parse: async (input, signal) => {
+        try {
+          const receipt = await parser.parseDocuments(
+            {
+              literature_id: input.literature_id,
+              asset_id: input.asset_id,
+              asset_sha256: input.asset_sha256,
+              profiles: [input.profile],
+              force: false,
+            },
+            signal,
+          );
+          const result = receipt.profiles.find(
+            (p) => p.profile === input.profile,
+          );
+          return result && result.status !== "failed"
+            ? null
+            : (result?.failure_code ?? "parse-failed");
+        } catch (error) {
+          return error &&
+            typeof error === "object" &&
+            "code" in error &&
+            typeof error.code === "string"
+            ? error.code
+            : "parse-failed";
+        }
+      },
       proofread: proofreading!,
       documents: proofreadDocuments,
       structure: structureAnnotations,

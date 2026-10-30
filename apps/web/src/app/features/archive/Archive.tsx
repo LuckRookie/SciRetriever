@@ -274,7 +274,7 @@ export default function Archive() {
       </Disclosure>
       {retryParse ? (
         <OperationDialog
-          kind="parse"
+          kind="archive"
           ids={[retryParse]}
           onClose={() => setRetryParse(null)}
         />
@@ -330,9 +330,10 @@ function IssueRow({
       <div className="archive-issue-actions">
         {reason === "needs-parse" ||
         reason.includes("raw-parse") ||
-        reason.includes("parse-failed") ? (
+        reason.includes("parse-failed") ||
+        reason.startsWith("parser-") ? (
           <Button variant="text" size="compact" onPress={onRetryParse}>
-            重试解析
+            重新建档
           </Button>
         ) : null}
         <Button
