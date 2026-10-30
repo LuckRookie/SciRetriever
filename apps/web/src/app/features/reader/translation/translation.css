@@ -200,6 +200,116 @@
     flex: 1;
   }
 
+  /* Full-text translation (ADR 0051): the translated twin of each PDF page.
+     It sits beside the page in 对照 and over it in 只看译文; the page
+     container reserves the twin's width so the pair stays centred. */
+  .react-reader .reading-pdf-pages[data-fulltext="pair"] {
+    padding-right: var(--ft-page-width, 0px);
+  }
+  .ft-twin {
+    position: absolute;
+    top: 0;
+    left: calc(100% + 24px);
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: white;
+    color: #1d1d1b;
+    box-shadow: var(--shadow-1);
+    user-select: none;
+  }
+  [data-fulltext="only"] .ft-twin {
+    left: 0;
+    z-index: 4;
+    box-shadow: none;
+  }
+  .ft-twin canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .ft-twin[data-state="pending"]::after {
+    content: "正在翻译这一页…";
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 4px 12px;
+    border-radius: var(--radius-pill);
+    background: rgb(23 25 28 / 0.78);
+    color: white;
+    font: 500 12px / 1.6 var(--sans);
+  }
+  .ft-block {
+    --mark-c: 247 203 45;
+    position: absolute;
+    box-sizing: border-box;
+    overflow: hidden;
+    padding: 0 1px;
+    background: white;
+    font-family: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+    line-height: 1.38;
+    text-align: justify;
+    word-break: break-word;
+  }
+  .ft-block[data-type="title"] {
+    font-weight: 600;
+    text-align: start;
+  }
+  .ft-block .katex {
+    font-size: 1em;
+  }
+  .ft-block[data-color="blue"] {
+    --mark-c: 84 178 212;
+  }
+  .ft-block[data-color="green"] {
+    --mark-c: 104 190 128;
+  }
+  .ft-block[data-color="red"] {
+    --mark-c: 238 122 108;
+  }
+  .ft-block[data-color="purple"] {
+    --mark-c: 166 134 222;
+  }
+  .ft-block[data-marks] {
+    background:
+      linear-gradient(rgb(var(--mark-c) / 0.24), rgb(var(--mark-c) / 0.24)),
+      white;
+    box-shadow: inset 3px 0 0 rgb(var(--mark-c));
+    cursor: pointer;
+  }
+  .ft-block[data-marks]:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+  .ft-region-mark {
+    background: none;
+    box-shadow: inset 0 0 0 2px rgb(var(--mark-c));
+    pointer-events: none;
+  }
+  .ft-unplaced {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    padding: 2px 8px;
+    border-radius: var(--radius-pill);
+    background: rgb(23 25 28 / 0.72);
+    color: white;
+    font: 500 11px / 1.6 var(--sans);
+    cursor: help;
+    user-select: none;
+  }
+  .ft-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .ft-status {
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+    white-space: nowrap;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .translation-popover {
       transition: none;

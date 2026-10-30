@@ -46,6 +46,7 @@ import { AnthropicMessagesAdapter } from "../agents/anthropic.js";
 import { DshAgentRuntime, type AgentBinding } from "../agents/dsh/runtime.js";
 import { TranslationCache } from "../translation/cache.js";
 import { TranslationService } from "../translation/service.js";
+import { FullTextTranslation } from "../translation/fulltext.js";
 import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "../agents/openai.js";
 import type { AgentTransport } from "../agents/protocol.js";
 import {
@@ -229,6 +230,8 @@ export interface Application {
   readonly marks: MarkService;
   /** Reader translation (ADR 0049); its cache lives outside the catalog. */
   readonly translation: TranslationService;
+  /** Full-text translation placed on the page (ADR 0051), kept outside the catalog. */
+  readonly fullTextTranslation: FullTextTranslation;
   readonly archive: ArchiveService;
   readonly tags: TagService;
   readonly metadataFields: LiteratureMetadataService;
@@ -1779,6 +1782,39 @@ async function createApplicationOwned(
       folders: new FolderService(database),
       marks: new MarkService(database, (id) => library.detail(id)),
       translation,
+      fullTextTranslation: new FullTextTranslation({
+        dir: join(home, ".sciretriever", "cache", "fulltext"),
+        translation,
+        source: async (literatureId, signal) => {
+          const asset = (await library.detail(literatureId)).primary_pdf?.asset;
+          const storage = archiveText?.storage;
+          if (!asset || !storage) return null;
+          const state = await storage.state(asset.asset_id, signal);
+          if (!state.current) return null;
+          const output = await storage.load(
+            String(state.current.proofread_id),
+            signal,
+          );
+          if (!output) return null;
+          return {
+            page_count: output.bundle.page_count,
+            blocks: output.bundle.leaves.flatMap((l) =>
+              l.destination.kind === "assigned"
+                ? [
+                    {
+                      leaf_id: l.leaf.leaf_id,
+                      type: l.leaf.type,
+                      role: l.destination.target.role,
+                      region: l.leaf.region,
+                      page_index: l.leaf.page_index,
+                      source: l.corrected_text ?? l.leaf.original_text,
+                    },
+                  ]
+                : [],
+            ),
+          };
+        },
+      }),
       snapshots: new SnapshotService(database, library),
       archive: new ArchiveService(database, processingTasks, library),
       archiveText: archiveText ?? null,

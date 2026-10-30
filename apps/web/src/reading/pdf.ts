@@ -384,9 +384,18 @@ export async function renderPdf(
       offset = state.pageOffset;
     generation++;
     for (const n of rendered.keys()) clearPage(n);
+    const columns = Math.max(1, frame.pdfColumns ?? 1);
     scale =
       state.zoom === "fit"
-        ? Math.max(0.15, Math.min(3, (frame.body.clientWidth - 52) / baseWidth))
+        ? Math.max(
+            0.15,
+            Math.min(
+              3,
+              (frame.body.clientWidth - 52 - (columns - 1) * 24) /
+                columns /
+                baseWidth,
+            ),
+          )
         : state.zoom;
     for (let i = 0; i < placeholders.length; i++) {
       const size = sizes.get(i + 1) ?? { width: baseWidth, height: baseHeight };

@@ -4,6 +4,7 @@ import type { DocumentReadResultMap } from "@sciretriever/contracts";
 import { parsePageRegion } from "@sciretriever/contracts";
 import { useQuery } from "@tanstack/react-query";
 import {
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -75,6 +76,12 @@ import "./reading.css";
 import { SummaryView } from "./SummaryView.js";
 import { TranslationPanel } from "./translation/TranslationViews.js";
 import { useReaderTranslation } from "./translation/use-translation.js";
+import {
+  createFullTextLayer,
+  type FullTextLayer,
+} from "./translation/fulltext-layer.js";
+import { FullTextControls } from "./translation/FullTextControls.js";
+import { useFullTextTranslation } from "./translation/use-fulltext.js";
 
 export default function Reader() {
   const api = useApi(),
@@ -237,6 +244,28 @@ export default function Reader() {
     translation,
     onTranslate: () => setSideTab("translation"),
   });
+  const fullText = useFullTextTranslation(id, translation, notify);
+  const fullTextLayer = useRef<FullTextLayer | null>(null),
+    fullTextMode = useRef(fullText.mode),
+    marksOpen = useRef(marks.open);
+  marksOpen.current = marks.open;
+  useEffect(() => {
+    fullTextLayer.current?.setPages(fullText.pages);
+  }, [fullText.pages, ready]);
+  useEffect(() => {
+    fullTextLayer.current?.setMarks(marks.list);
+  }, [marks.list, ready]);
+  useEffect(() => {
+    fullTextMode.current = fullText.mode;
+    const current = frame.current,
+      layer = fullTextLayer.current;
+    if (!current || !layer) return;
+    // Two columns share the width at 适宽; the engine redraws once, keeping the place.
+    const restore = current.beforeLayout();
+    current.pdfColumns = fullText.mode === "pair" ? 2 : 1;
+    layer.setMode(fullText.mode);
+    requestAnimationFrame(restore);
+  }, [fullText.mode, ready]);
   // The engine mounts once per material; marks attach to that mount without remounting it.
   const marksAttach = useRef(marks.attach);
   marksAttach.current = marks.attach;
@@ -356,12 +385,28 @@ export default function Reader() {
       },
     };
     let marksSurface: MarkSurface | null = null;
+    // The translated twin pages live as long as this PDF mount (ADR 0051).
+    const twins =
+      mode === "pdf"
+        ? createFullTextLayer(
+            () => host.querySelector<HTMLElement>(".reading-pdf-pages"),
+            (markId) => marksOpen.current(markId),
+          )
+        : null;
+    fullTextLayer.current = twins;
+    if (twins) {
+      current.pdfColumns = fullTextMode.current === "pair" ? 2 : 1;
+      current.onPdfPage = (view) => twins.page(view);
+    }
     if (marksActive.current && mode === "pdf" && sources.data.material) {
       marksSurface = marksAttach.current(host, {
         kind: "pdf",
         sha256: sources.data.material.asset_sha256,
       });
-      current.onPdfPage = (view) => marksSurface?.pdfPage(view);
+      current.onPdfPage = (view) => {
+        marksSurface?.pdfPage(view);
+        twins?.page(view);
+      };
     } else if (marksActive.current && mode === "doc" && sources.data.document) {
       marksSurface = marksAttach.current(host, {
         kind: "doc",
@@ -420,6 +465,8 @@ export default function Reader() {
     return () => {
       controller.abort();
       marksSurface?.destroy();
+      twins?.destroy();
+      if (fullTextLayer.current === twins) fullTextLayer.current = null;
       if (url) URL.revokeObjectURL(url);
       host.replaceChildren();
       delete host.dataset.literatureId;
@@ -741,6 +788,9 @@ export default function Reader() {
           {marks.tools}
         </div>
         <div className="reader-toolbar-context">
+          {mode === "pdf" && api.kind === "workspace" ? (
+            <FullTextControls fullText={fullText} translation={translation} />
+          ) : null}
           {mode === "doc" || mode === "edit" ? (
             <SegmentedControl
               label="全文模式"

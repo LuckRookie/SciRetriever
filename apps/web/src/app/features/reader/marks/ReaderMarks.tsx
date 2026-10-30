@@ -665,5 +665,8 @@ export function useReaderMarks({
     rail: railNode,
     count: store.marks.length,
     active,
+    /** For the translated pages: the marks to tint and how to show one in the original. */
+    list: store.marks,
+    open,
   };
 }

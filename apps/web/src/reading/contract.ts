@@ -64,6 +64,8 @@ export interface ReaderFrame {
   onDocumentLink?: (preview: DocumentLinkPreview) => void;
   onImage?: (url: string, label: string) => void;
   onPdfControls?: (controls: PdfControls) => void;
+  /** Columns that share the PDF width at 适宽: 2 while a translation twin sits beside each page (ADR 0051). */
+  pdfColumns?: number;
   /** A page's text layer is drawn; called again for every redraw after zoom or resize. */
   onPdfPage?: (view: PdfPageView) => void;
   /** Full-text blocks were painted or extended. */

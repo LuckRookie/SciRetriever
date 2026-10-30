@@ -92,6 +92,7 @@ import {
   TranslationError,
   type TranslationService,
 } from "../translation/service.js";
+import type { FullTextTranslation } from "../translation/fulltext.js";
 import { RetrievalIndexError } from "../retrieval/index.js";
 import { KnowledgeContextError } from "../retrieval/knowledge-query.js";
 import { MaterialContextError } from "../retrieval/query.js";
@@ -180,6 +181,8 @@ export interface WorkbenchHttpOptions {
   readonly importBibliography?: (value: unknown) => Promise<unknown>;
   /** Reader translation (ADR 0049); Web only, never recorded as an operation. */
   readonly translation?: Pick<TranslationService, "catalog" | "translate">;
+  /** Full-text translation (ADR 0051); Web only, kept outside the catalog. */
+  readonly fullTextTranslation?: Pick<FullTextTranslation, "summary" | "page">;
   /** Explicit article completion; absent from the synthetic preview. */
   readonly acquisition?: { start(articleId: string): void };
   readonly tabs?: {
@@ -1112,6 +1115,10 @@ export async function startWorkbenchHttp(
             !(
               pathname === "/api/tasks" &&
               ["cursor", "status_group"].includes(key)
+            ) &&
+            !(
+              pathname === "/api/translation/fulltext" &&
+              ["literature_id", "target_language"].includes(key)
             ),
         ) ||
         new Set(queryKeys).size !== queryKeys.length
@@ -1198,6 +1205,31 @@ export async function startWorkbenchHttp(
         ) {
           json(response, 200, { task: await options.tasks.read(parts[2]!) });
         } else json(response, 404, { code: "endpoint-not-found" });
+        return;
+      }
+      if (
+        request.method === "GET" &&
+        pathname === "/api/translation/fulltext"
+      ) {
+        if (!options.fullTextTranslation) {
+          json(response, 503, { code: "translation-unavailable" });
+          return;
+        }
+        try {
+          json(response, 200, {
+            summary: await options.fullTextTranslation.summary(
+              url.searchParams.get("literature_id"),
+              url.searchParams.get("target_language"),
+            ),
+          });
+        } catch (error) {
+          if (error instanceof TranslationInputError) invalidInput();
+          if (error instanceof TranslationError) {
+            json(response, 409, { code: error.code });
+            return;
+          }
+          throw error;
+        }
         return;
       }
       if (request.method === "GET" && pathname === "/api/translation") {
@@ -1484,6 +1516,36 @@ export async function startWorkbenchHttp(
             parts[3] as "pause" | "cancel" | "resume" | "retry",
           ),
         });
+        return;
+      }
+      if (pathname === "/api/translation/fulltext/page") {
+        if (!options.fullTextTranslation) {
+          json(response, 503, { code: "translation-unavailable" });
+          return;
+        }
+        const value = await body(request);
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        response.once("close", abort);
+        try {
+          json(response, 200, {
+            page: await options.fullTextTranslation.page(
+              value,
+              controller.signal,
+            ),
+          });
+        } catch (error) {
+          if (error instanceof TranslationInputError) invalidInput();
+          if (error instanceof TranslationError) {
+            json(response, error.code === "translation-failed" ? 502 : 409, {
+              code: error.code,
+            });
+            return;
+          }
+          throw error;
+        } finally {
+          response.off("close", abort);
+        }
         return;
       }
       if (pathname === "/api/translation") {
