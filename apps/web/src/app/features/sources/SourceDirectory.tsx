@@ -598,6 +598,7 @@ function SourceEditor({
                 if (el) secrets.current.set(f.field, el);
                 else secrets.current.delete(f.field);
               }}
+              className="ui-input"
               type="password"
               autoComplete="new-password"
               placeholder={f.present ? "填写新值以替换" : "填写后保存"}

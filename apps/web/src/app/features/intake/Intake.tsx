@@ -219,6 +219,7 @@ export default function Intake() {
                   <label className="ui-field">
                     <span className="ui-label">书目文件</span>
                     <input
+                      className="ui-file"
                       type="file"
                       accept=".bib,.ris,.json"
                       onChange={(event) =>
@@ -257,6 +258,7 @@ export default function Intake() {
                   <label className="ui-field">
                     <span className="ui-label">PDF 文件</span>
                     <input
+                      className="ui-file"
                       type="file"
                       accept="application/pdf"
                       onChange={(event) =>

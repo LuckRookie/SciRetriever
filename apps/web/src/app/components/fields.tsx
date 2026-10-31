@@ -208,6 +208,10 @@ export function Select({
         if (key !== null) onChange(String(key));
       }}
       placeholder={placeholder}
+      // Select owns the collection state; disabledKeys on the inner ListBox is ignored.
+      disabledKeys={options
+        .filter((option) => option.disabled)
+        .map((option) => option.value)}
       isDisabled={field.isDisabled ?? false}
       isRequired={field.isRequired ?? false}
       isInvalid={!!field.errorMessage}
@@ -218,13 +222,7 @@ export function Select({
           <Icon name="chevron" />
         </Button>
         <Popover className="ui-popover" placement="bottom start">
-          <ListBox
-            className="ui-listbox"
-            items={options}
-            disabledKeys={options
-              .filter((option) => option.disabled)
-              .map((option) => option.value)}
-          >
+          <ListBox className="ui-listbox" items={options}>
             {(option) => (
               <ListBoxItem
                 className="ui-option"
@@ -369,9 +367,6 @@ export function NumberField({
     >
       <Field {...field}>
         <Group className="ui-number">
-          <Button slot="decrement" className="ui-number-step" aria-label="减少">
-            <Icon name="minus" />
-          </Button>
           <Input
             className="ui-number-input"
             {...(placeholder ? { placeholder } : {})}
@@ -399,6 +394,9 @@ export function NumberField({
                 }
               : {})}
           />
+          <Button slot="decrement" className="ui-number-step" aria-label="减少">
+            <Icon name="minus" />
+          </Button>
           <Button slot="increment" className="ui-number-step" aria-label="增加">
             <Icon name="plus" />
           </Button>

@@ -26,7 +26,4 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
-  .maintenance-grid input[type="file"] {
-    max-width: 100%;
-  }
 }

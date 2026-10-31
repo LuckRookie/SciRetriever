@@ -1357,6 +1357,7 @@ function Credential({
           <span className="credential-field">
             <input
               ref={secret}
+              className="ui-input"
               aria-label="凭据值"
               type="password"
               autoComplete="new-password"

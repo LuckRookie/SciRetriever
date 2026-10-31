@@ -470,6 +470,7 @@ function Materials() {
         </label>
         <input
           id="maintenance-pdf"
+          className="ui-file"
           type="file"
           accept="application/pdf,.pdf"
           onChange={(event) => setFile(event.target.files?.[0] ?? null)}

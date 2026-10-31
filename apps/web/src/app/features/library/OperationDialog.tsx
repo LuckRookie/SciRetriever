@@ -317,6 +317,7 @@ export function OperationDialog({
         <label className="file-field">
           PDF 文件
           <input
+            className="ui-file"
             type="file"
             accept="application/pdf,.pdf"
             onChange={(event) =>

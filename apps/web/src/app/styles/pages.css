@@ -384,15 +384,21 @@
     align-items: center;
     gap: var(--space-1);
   }
+  /* Toolbar choices read as quiet menu buttons, not as entry slots. */
   .library-toolbar-actions .ui-select {
     width: auto;
     border-color: transparent;
+    background: transparent;
+    box-shadow: none;
     color: var(--fg2);
     font-weight: 500;
   }
-  .library-toolbar-actions .ui-select[data-hovered] {
+  .library-toolbar-actions .ui-select[data-hovered],
+  .library-toolbar-actions .ui-field[data-open] .ui-select {
     border-color: transparent;
     background: var(--hover);
+    box-shadow: none;
+    color: var(--fg);
   }
   .library-more {
     display: none;

@@ -220,12 +220,13 @@
   .ui-field {
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
+    gap: 6px;
     min-width: 0;
   }
   .ui-label {
     color: var(--fg2);
     font-size: var(--text-secondary);
+    font-weight: 500;
   }
   .ui-required {
     color: var(--t-red);
@@ -235,6 +236,8 @@
     font-size: var(--text-caption);
     line-height: 1.45;
   }
+  /* Text entry, choice triggers and steppers are one family of "slots": a
+     surface pressed slightly into the page, so they never read as buttons. */
   .ui-input,
   .ui-select,
   .ui-search,
@@ -245,13 +248,16 @@
     border: 1px solid var(--control-border);
     border-radius: var(--radius-sm);
     background: var(--surface);
+    box-shadow: var(--field-inset);
     padding: 0 var(--space-3);
     color: var(--fg);
+    font-size: var(--text-control);
     transition: var(--feedback);
   }
   .ui-input::placeholder,
-  .ui-search-input::placeholder {
-    color: var(--fg3);
+  .ui-search-input::placeholder,
+  .ui-number-input::placeholder {
+    color: var(--placeholder);
     opacity: 1;
   }
   .ui-input:hover,
@@ -261,8 +267,34 @@
     border-color: var(--line3);
     transition-duration: 0ms;
   }
+  .ui-search:focus-within,
+  .ui-number:focus-within,
+  .ui-input:focus,
+  .ui-select[data-focus-visible],
+  .ui-field[data-open] .ui-select {
+    outline: none;
+    border-color: var(--focus);
+    background: var(--surface);
+    box-shadow: 0 0 0 3px var(--focus-ring);
+  }
   .ui-field[data-invalid] :is(.ui-input, .ui-select, .ui-search, .ui-number) {
     border-color: var(--t-red);
+  }
+  .ui-field[data-invalid]
+    :is(
+      .ui-input:focus,
+      .ui-select[data-focus-visible],
+      .ui-search:focus-within,
+      .ui-number:focus-within
+    ) {
+    box-shadow: 0 0 0 3px var(--invalid-ring);
+  }
+  /* A locked value is printed, not entered: a quiet ground and a broken rule. */
+  .ui-field[data-disabled] :is(.ui-input, .ui-select, .ui-search, .ui-number) {
+    border-style: dashed;
+    border-color: var(--line3);
+    background: var(--surface-sunken);
+    box-shadow: none;
   }
   .ui-search,
   .ui-number,
@@ -271,20 +303,36 @@
     align-items: center;
     gap: var(--space-2);
   }
+  .ui-search > svg {
+    flex-shrink: 0;
+    color: var(--fg3);
+  }
   .ui-select {
     justify-content: space-between;
     text-align: left;
+    line-height: var(--lh-control);
+  }
+  .ui-select > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .ui-select [data-placeholder] {
-    color: var(--fg3);
+    color: var(--placeholder);
   }
-  .ui-search:focus-within,
-  .ui-number:focus-within,
-  .ui-input:focus {
-    outline: none;
-    border-color: var(--focus);
-    background: var(--surface);
-    box-shadow: 0 0 0 3px var(--sel);
+  /* The same small chevron as a menu button; it turns over while the list is open. */
+  .ui-select > svg {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    margin-right: -2px;
+    color: var(--fg3);
+    transition: transform var(--dur-2) var(--ease-out);
+  }
+  .ui-field[data-open] .ui-select > svg {
+    transform: rotate(180deg);
+    color: var(--focus);
   }
   .ui-search-input,
   .ui-number-input {
@@ -311,27 +359,89 @@
     height: var(--control-inline-height);
     flex-shrink: 0;
   }
+  .ui-clear {
+    margin-right: -6px;
+  }
+  .ui-clear svg {
+    width: 14px;
+    height: 14px;
+  }
   .ui-clear[data-hovered],
   .ui-number-step[data-hovered] {
     background: var(--hover);
+    color: var(--fg);
+  }
+  .ui-number-step[data-pressed] {
+    background: var(--active);
+  }
+  .ui-number-step[data-disabled] {
+    opacity: var(--disabled-opacity);
   }
   .ui-field[data-empty] .ui-clear {
     visibility: hidden;
   }
+  /* Grows with its content (see TextArea), so no drag handle. */
   .ui-textarea {
     padding: var(--space-2) var(--space-3);
     height: auto;
     min-height: 88px;
     max-height: 300px;
-    resize: vertical;
+    resize: none;
     line-height: 1.55;
   }
+  /* A count is short: the value reads from the left, its steppers sit
+     together at the right end, and the slot stays the width of a count. */
   .ui-number {
-    padding-inline: var(--space-1);
+    max-width: 240px;
+    gap: 0;
+    padding: 0 3px 0 var(--space-3);
   }
   .ui-number-input {
-    text-align: center;
     font-variant-numeric: tabular-nums;
+  }
+  .ui-number-step + .ui-number-step {
+    position: relative;
+    margin-left: 1px;
+  }
+  .ui-number-step + .ui-number-step::before {
+    content: "";
+    position: absolute;
+    left: -1px;
+    top: 6px;
+    bottom: 6px;
+    border-left: 1px solid var(--line2);
+  }
+  /* Native file pickers keep their platform dialog; the visible part matches. */
+  .ui-file {
+    max-width: 100%;
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+  }
+  .ui-file::file-selector-button {
+    height: var(--control-small-height);
+    margin-right: var(--space-3);
+    border: 0;
+    border-radius: var(--radius-sm);
+    padding: 0 var(--space-3);
+    background: var(--surface-raised);
+    box-shadow:
+      0 0 0 1px var(--line2),
+      0 1px 1px rgba(15, 15, 15, 0.03);
+    color: var(--fg);
+    font: inherit;
+    font-size: var(--text-control);
+    cursor: pointer;
+  }
+  .ui-file:hover::file-selector-button {
+    background: var(--hover);
+    box-shadow: 0 0 0 1px var(--line3);
+  }
+  .ui-file:focus-visible {
+    outline: none;
+  }
+  .ui-file:focus-visible::file-selector-button {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
   }
   .ui-choice {
     display: inline-flex;
@@ -623,6 +733,9 @@
   .ui-popover {
     min-width: var(--trigger-width);
     padding: var(--space-1);
+    box-shadow:
+      0 0 0 1px var(--line),
+      var(--shadow-pop);
   }
   /* Floating layers grow out of their trigger: they start slightly offset
      towards it and scale from the anchor point. */
@@ -690,9 +803,16 @@
     padding: 6px var(--space-3);
     border-radius: var(--radius-sm);
     outline: none;
-    font-size: var(--text-secondary);
+    font-size: var(--text-control);
+    line-height: var(--lh-control);
     cursor: pointer;
     transition: var(--feedback);
+  }
+  /* The chosen entry carries a tick at the right edge instead of a wash, so
+     the pointer's row and the current value never look alike. */
+  .ui-option {
+    position: relative;
+    padding-right: calc(var(--space-3) + 20px);
   }
   .ui-option[data-focused],
   .ui-menu-item[data-focused] {
@@ -703,8 +823,22 @@
     background: var(--active);
   }
   .ui-option[data-selected] {
-    background: var(--sel);
-    color: var(--blue);
+    font-weight: 500;
+  }
+  .ui-option[data-selected]::after {
+    content: "";
+    position: absolute;
+    right: calc(var(--space-3) + 2px);
+    top: 50%;
+    width: 9px;
+    height: 5px;
+    margin-top: -4px;
+    border-left: 1.75px solid var(--blue);
+    border-bottom: 1.75px solid var(--blue);
+    transform: rotate(-45deg);
+  }
+  .ui-option[data-selected]:has(.ui-description)::after {
+    top: 17px;
   }
   .ui-option[data-disabled],
   .ui-menu-item[data-disabled] {

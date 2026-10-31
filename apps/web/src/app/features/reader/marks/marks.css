@@ -477,14 +477,18 @@
     border: 1px solid var(--control-border);
     border-radius: var(--radius-sm);
     background: var(--surface);
+    box-shadow: var(--field-inset);
     color: var(--fg);
     font: var(--text-interface) / 1.5 var(--sans);
     transition: var(--feedback);
   }
+  .mark-note-popover textarea::placeholder {
+    color: var(--placeholder);
+  }
   .mark-note-popover textarea:focus {
     outline: none;
     border-color: var(--focus);
-    box-shadow: 0 0 0 3px var(--sel);
+    box-shadow: 0 0 0 3px var(--focus-ring);
   }
   .mark-note-actions {
     display: flex;

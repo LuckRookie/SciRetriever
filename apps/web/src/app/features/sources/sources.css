@@ -160,15 +160,6 @@
   .source-secret-state {
     color: var(--fg3);
   }
-  .source-secret input {
-    min-height: var(--control-height);
-    padding: 0 var(--space-2);
-    border: 1px solid var(--control-border);
-    border-radius: var(--radius-control, 4px);
-    background: var(--bg);
-    color: var(--fg);
-    font: inherit;
-  }
   .source-builtin {
     display: flex;
     align-items: center;
