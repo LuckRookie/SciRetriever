@@ -107,6 +107,27 @@ export class PdfRegionRenderer {
           return;
         }
         const name = u.pathname.slice(1);
+        // PDF.js reads the document in ranges, so no single protocol message
+        // carries the whole file (one message is capped near 100 MB).
+        const range = /^document\/(\d{1,10})-(\d{1,10})$/u.exec(name);
+        if (range) {
+          const start = Number(range[1]),
+            end = Number(range[2]);
+          if (start >= end || end > bytes.length || end - start > 16 << 20) {
+            await route.abort();
+            return;
+          }
+          await route.fulfill({
+            status: 200,
+            contentType: "application/octet-stream",
+            body: Buffer.from(
+              bytes.buffer,
+              bytes.byteOffset + start,
+              end - start,
+            ),
+          });
+          return;
+        }
         if (
           !/^(?:pdf(?:\.worker)?\.mjs|(?:cmaps|standard_fonts|wasm)\/[A-Za-z0-9_.-]+)$/u.test(
             name,
@@ -133,9 +154,13 @@ export class PdfRegionRenderer {
       const result = await page.evaluate<
         | { png: string; width: number; height: number }
         | readonly PdfPageInspection[]
-      >(`(async ({bytes,pageNumber,region,inspect})=>{
-    const {getDocument,GlobalWorkerOptions,OPS}=await import('/pdf.mjs');GlobalWorkerOptions.workerSrc='/pdf.worker.mjs';
-    const loading=getDocument({data:Uint8Array.from(atob(bytes),c=>c.charCodeAt(0)),isEvalSupported:false,enableXfa:false,cMapUrl:'/cmaps/',cMapPacked:true,standardFontDataUrl:'/standard_fonts/',wasmUrl:'/wasm/'});
+      >(`(async ({length,pageNumber,region,inspect})=>{
+    const {getDocument,GlobalWorkerOptions,OPS,PDFDataRangeTransport}=await import('/pdf.mjs');GlobalWorkerOptions.workerSrc='/pdf.worker.mjs';
+    const chunk=1<<20,read=async(start,end)=>{const r=await fetch('/document/'+start+'-'+end);if(!r.ok)throw new Error('proofread-render-input');return new Uint8Array(await r.arrayBuffer());};
+    const transport=new PDFDataRangeTransport(length,await read(0,Math.min(length,chunk)));
+    let loading;
+    transport.requestDataRange=(start,end)=>{read(start,end).then(data=>transport.onDataRange(start,data),()=>loading.destroy());};
+    loading=getDocument({range:transport,length,rangeChunkSize:chunk,disableAutoFetch:true,disableStream:true,isEvalSupported:false,enableXfa:false,cMapUrl:'/cmaps/',cMapPacked:true,standardFontDataUrl:'/standard_fonts/',wasmUrl:'/wasm/'});
     try{const doc=await loading.promise;
     if(inspect){
       if(doc.numPages>10000)throw new Error('proofread-page-limit');
@@ -185,7 +210,7 @@ export class PdfRegionRenderer {
      await p.render({canvas,canvasContext:ctx,viewport:v,transform:[1,0,0,1,-v.width*bounds[0]/1000,-v.height*bounds[1]/1000]}).promise;
      return {png:canvas.toDataURL('image/png').split(',')[1],width:canvas.width,height:canvas.height};
     }finally{await loading.destroy();}
-   })(${JSON.stringify({ bytes: Buffer.from(bytes).toString("base64"), pageNumber, region, inspect })})`);
+   })(${JSON.stringify({ length: bytes.length, pageNumber, region, inspect })})`);
       signal?.throwIfAborted();
       if (Array.isArray(result)) return result;
       if (!("png" in result)) throw new Error("proofread-render-invalid");

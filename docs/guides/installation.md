@@ -4,16 +4,19 @@
 负责：安装入口和运行支持边界
 状态：现行
 
-支持矩阵当前固定为 Linux x64、Node 22.19.0 runtime、Playwright 1.55.0、CloakBrowser 0.5.8 wrapper 与固定 binary release `146.0.7680.177.5`。免开发包自带 Node、contracts、server、Web 静态资源和 runtime manifest；CloakBrowser bundle 可在构建包时显式携带，也可以由 operator 通过 `SCIRETRIEVER_CLOAK_BUNDLE` 配置。系统需要 `flock`、`prlimit`、`pdfinfo` 和 `Xvfb`，不要求 Python、Rust、VNC 或本地编译器。其它 OS、ARM 和 runtime 版本不在当前声明的支持矩阵内。
+支持矩阵当前固定为 Linux x64、Node 22.19.0 runtime、Playwright 1.55.0、CloakBrowser 0.5.8 wrapper 与固定 binary release `146.0.7680.177.5`。免开发包自带 Node、contracts、server、Web 静态资源、runtime manifest 和渲染校订页面图用的 MuPDF `mutool` 1.28.6（`runtime/mupdf/`，需 glibc 2.38 或更新）；CloakBrowser bundle 可在构建包时显式携带，也可以由 operator 通过 `SCIRETRIEVER_CLOAK_BUNDLE` 配置。系统需要 `flock`、`prlimit`、`pdfinfo` 和 `Xvfb`，运行时不要求 Python、Rust、VNC 或本地编译器。其它 OS、ARM 和 runtime 版本不在当前声明的支持矩阵内。
 
 从源码安装并验证：
 
 ```bash
 pnpm install --frozen-lockfile
+pnpm vendor:mupdf
 pnpm build
 pnpm package:portable -- --output /tmp/sciretriever-portable
 /tmp/sciretriever-portable/bin/sciretriever doctor --json
 ```
+
+`pnpm vendor:mupdf` 下载固定的 MuPDF 官方源码包，校验 SHA-256 后在本机静态编译 `mutool`（需要 gcc 与 make），输出到 `build/vendor/mupdf/linux-x64/`；便携包把它连同 AGPL 协议文本和源码清单放进 `runtime/mupdf/`。源码工作区直接使用该输出；其它位置的 bundle 由 `SCIRETRIEVER_MUPDF` 指向，程序按清单核对版本与可执行文件指纹，不符时校订报告 `proofread-renderer-unavailable`。SciRetriever 以 MIT 协议发布，`mutool` 作为独立程序调用，仍按 AGPL-3.0 授权，见 [NOTICE](../../NOTICE)。
 
 `doctor` 只读检查平台和系统依赖，不启动浏览器、不访问网络、不读取凭据。CloakBrowser 未配置时报告 blocked 是预期结果；Browser 获取需要已校验的 runtime，普通 Web 工作台仍可启动。包内运行使用自带 Node，生产配置和凭据固定在 `~/.sciretriever/`；Catalog/ArtifactStore 由已保存的 `paths` 选择。正式 `sciretriever web` 首次启动会把缺失的两条路径保存为 `~/.sciretriever/catalog.sqlite` 和 `~/.sciretriever/artifacts/`，目标不存在时创建当前结构的空库，直接进入页面，无需配置向导。之后可在设置中修改位置，重启生效且不自动搬迁数据。CLI/MCP 读取相同配置。`SCIRETRIEVER_HOME` 不属于用户可见的配置路径选择，当前 CLI 不读取它；显式临时 home 只作为内部测试/隔离 seam。
 

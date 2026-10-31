@@ -16,6 +16,17 @@
     "playwright": "Apache-2.0",
     "playwright-core": "Apache-2.0",
     "cloakbrowser-wrapper": "MIT",
-    "cloakbrowser-binary": "operator-supplied; verify distribution rights separately"
+    "cloakbrowser-binary": "operator-supplied; verify distribution rights separately",
+    "sciretriever": "MIT",
+    "mupdf": "AGPL-3.0-or-later (separate process; COPYING and source manifest bundled)"
+  },
+  "bundled_tools": {
+    "mupdf": {
+      "version": "1.28.6",
+      "executable": "runtime/mupdf/bin/mutool",
+      "environment": "SCIRETRIEVER_MUPDF",
+      "build": "pnpm vendor:mupdf",
+      "minimum_glibc": "2.38"
+    }
   }
 }

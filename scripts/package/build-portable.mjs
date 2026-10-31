@@ -223,6 +223,22 @@ async function main() {
       join(repository, "release", "manifests", "runtime-support.json"),
       join(staging, "manifests", "runtime-support.json"),
     );
+    for (const name of ["LICENSE", "NOTICE"])
+      await copyFile(join(repository, name), join(staging, name));
+    // mutool runs as a separate AGPL program; its bundle keeps COPYING and the source manifest.
+    const mupdf = join(
+      repository,
+      "build/vendor/mupdf",
+      `${process.platform}-${process.arch}`,
+    );
+    if (!existsSync(join(mupdf, "manifest.json")))
+      throw new Error("MuPDF bundle missing; run pnpm vendor:mupdf first");
+    await cp(mupdf, join(staging, "runtime", "mupdf"), {
+      recursive: true,
+      dereference: false,
+      errorOnExist: true,
+      force: false,
+    });
     const cloakBundle = option("--cloak-bundle");
     if (cloakBundle) {
       if (!cloakBundle.startsWith("/"))
@@ -243,6 +259,7 @@ async function main() {
       cloakbrowser: cloakBundle
         ? "bundled-operator-runtime"
         : "operator-installed",
+      mupdf: "bundled",
       files: await files(staging),
     };
     await writeFile(

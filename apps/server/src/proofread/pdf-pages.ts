@@ -2,7 +2,10 @@ import { canonicalJsonBytes, sha256 } from "@sciretriever/contracts";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import type { FileStore } from "../storage/files/store.js";
 import type { PdfRegionRenderer } from "../browser/pdf-region.js";
+import { PAGE_IMAGE_METHOD, type MupdfPageRenderer } from "./mupdf.js";
 import type { PdfPages, ProofreadCache } from "./contract.js";
+// Archived work records this identity, so it names the page classification and
+// image geometry, not the image engine (which only keys the image cache).
 export const PDF_PAGES_METHOD =
   "pdfjs-6.4.299:visible-layout-v2:margin8:scale2:pixels2000000";
 export function pdfPages(
@@ -10,6 +13,7 @@ export function pdfPages(
   files: FileStore,
   cache: ProofreadCache,
   renderer: () => Promise<PdfRegionRenderer>,
+  images: () => Promise<MupdfPageRenderer>,
 ): PdfPages {
   const read = async (id: string, hash: string, signal?: AbortSignal) => {
     signal?.throwIfAborted();
@@ -47,7 +51,7 @@ export function pdfPages(
       // Verify the asset identity and bytes even for a cache hit.
       const bytes = await read(id, hash, signal),
         key = await sha256(
-          canonicalJsonBytes({ method: PDF_PAGES_METHOD, hash, page, region }),
+          canonicalJsonBytes({ method: PAGE_IMAGE_METHOD, hash, page, region }),
         );
       const old = await cache.read(key, signal);
       if (old) {
@@ -66,8 +70,8 @@ export function pdfPages(
         };
       }
       const image = await (
-        await renderer()
-      ).render(bytes, page + 1, region, signal);
+        await images()
+      ).render(bytes, hash, page, region, signal);
       await cache.save(key, image.data, image.media_type, signal);
       return image;
     },

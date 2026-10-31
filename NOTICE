@@ -1,8 +1,9 @@
 SciRetriever third-party notices
 ================================
 
-This file records third-party attribution and redistribution obligations.  It
-does not define the license of SciRetriever itself.
+This file records third-party attribution and redistribution obligations.
+SciRetriever itself is released under the MIT License (see LICENSE); that
+license does not extend to the third-party components below.
 
 ScanSci PDF
 -----------
@@ -52,3 +53,28 @@ fixtures, or build artifacts.  An operator must explicitly obtain a permitted
 binary from the vendor through SciRetriever's verified local runtime lifecycle.
 Hosted Browser, OEM, SaaS, redistribution, and third-party-control use cases
 may require separate permission from CloakHQ; this notice grants none.
+
+MuPDF command-line tool (mutool)
+--------------------------------
+
+Website: https://mupdf.com/
+Bundled version: 1.28.6
+Upstream license: GNU Affero General Public License v3.0 or later
+Copyright: Copyright (C) Artifex Software, Inc.
+
+Proofreading renders PDF page images by running the unmodified ``mutool``
+program as a separate process.  SciRetriever does not link MuPDF into its own
+code, so the AGPL applies to the bundled ``mutool`` binary and not to
+SciRetriever's MIT-licensed source.
+
+``pnpm vendor:mupdf`` (scripts/vendor/build-mupdf.mjs) builds the binary from
+the official, unmodified source release, verified by SHA-256 before building:
+
+  https://github.com/ArtifexSoftware/mupdf-downloads/releases/download/1.28.6/mupdf-1.28.6-source.tar.gz
+  sha256 dc85000640a45d90ca9b77b061f6ca67cce0c4d4fbecf8819647baf573eef101
+
+Every bundle (build/vendor/mupdf/linux-x64, or runtime/mupdf in a portable
+package) carries the AGPL text as COPYING and a manifest.json naming that
+source archive, its digest and the exact build options.  Together with the
+build script they form the Corresponding Source of the distributed binary.
+Anyone who receives the binary may obtain that source from the address above.

@@ -1,5 +1,13 @@
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -7,6 +15,11 @@ import { promisify } from "node:util";
 import { expect, it } from "vitest";
 import { parsePageRegion } from "@sciretriever/contracts";
 import { PdfRegionRenderer } from "../src/browser/pdf-region.js";
+import {
+  MupdfPageRenderer,
+  mupdfBundleCandidates,
+  resolveMupdfRuntime,
+} from "../src/proofread/mupdf.js";
 
 function pdf() {
   const streams = [
@@ -99,3 +112,116 @@ it("classifies visible Unicode, hidden OCR, unmapped glyphs, images and blank pa
     await rm(directory, { recursive: true, force: true });
   }
 }, 30000);
+
+async function readerAssets() {
+  const directory = await mkdtemp(join(tmpdir(), "sciretriever-pdf-pages-"));
+  await promisify(execFile)(process.execPath, [
+    "scripts/build-reader-assets.mjs",
+    directory,
+  ]);
+  return directory;
+}
+
+it("inspects a PDF larger than one browser protocol message by reading it in ranges", async () => {
+  const directory = await readerAssets();
+  const renderer = new PdfRegionRenderer(
+    process.env.SCIRETRIEVER_BROWSER_EXECUTABLE,
+    pathToFileURL(join(directory, "reader/")),
+  );
+  try {
+    // An unreferenced 80 MB object ahead of the pages: the whole file once
+    // exceeded the ~100 MB message after base64 encoding.
+    const original = Buffer.from(pdf()).toString("latin1"),
+      head = "%PDF-1.7\n",
+      padding = `% ${"x".repeat(80 * 1024 * 1024)}\n`,
+      shifted = original
+        .slice(head.length)
+        .replace(
+          /^(\d{10}) 00000 n /gmu,
+          (_, offset: string) =>
+            `${String(Number(offset) + padding.length).padStart(10, "0")} 00000 n `,
+        )
+        .replace(
+          /startxref\n(\d+)/u,
+          (_, offset: string) =>
+            `startxref\n${Number(offset) + padding.length}`,
+        );
+    const large = Buffer.from(head + padding + shifted, "latin1");
+    expect(large.length).toBeGreaterThan(80 * 1024 * 1024);
+    const pages = await renderer.inspect(large);
+    expect(pages.map((p) => p.kind)).toEqual(
+      (await renderer.inspect(pdf())).map((p) => p.kind),
+    );
+    expect(pages[0]!.text).toBe("Visible yield 12.5 C");
+  } finally {
+    await renderer.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 60000);
+
+it("renders page images with the bundled mutool at the same size as PDF.js", async () => {
+  const runtime = await resolveMupdfRuntime();
+  if (!runtime)
+    throw new Error("MuPDF bundle missing: run pnpm vendor:mupdf first");
+  const directory = await readerAssets();
+  const reference = new PdfRegionRenderer(
+      process.env.SCIRETRIEVER_BROWSER_EXECUTABLE,
+      pathToFileURL(join(directory, "reader/")),
+    ),
+    images = new MupdfPageRenderer(runtime);
+  const bytes = pdf(),
+    hash = createHash("sha256").update(bytes).digest("hex");
+  try {
+    for (const region of [null, parsePageRegion([0, 0, 1000, 500])]) {
+      const expected = await reference.render(bytes, 1, region),
+        image = await images.render(bytes, hash, 0, region);
+      expect(Buffer.from(image.data).subarray(0, 8).toString("hex")).toBe(
+        "89504e470d0a1a0a",
+      );
+      expect(Buffer.from(image.data).readUInt32BE(16)).toBe(image.width);
+      expect([image.width, image.height]).toEqual([
+        expected.width,
+        expected.height,
+      ]);
+    }
+    await expect(
+      images.render(bytes, hash, 0, null, AbortSignal.abort()),
+    ).rejects.toThrow();
+  } finally {
+    await reference.close();
+    await images.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 30000);
+
+it("uses a MuPDF bundle only when its manifest names the pinned version and executable digest", async () => {
+  expect(mupdfBundleCandidates("relative/bundle")).toEqual([]);
+  expect(mupdfBundleCandidates("/opt/mupdf")).toEqual(["/opt/mupdf"]);
+  const runtime = await resolveMupdfRuntime();
+  if (!runtime)
+    throw new Error("MuPDF bundle missing: run pnpm vendor:mupdf first");
+  const bundle = await mkdtemp(join(tmpdir(), "sciretriever-mupdf-bundle-"));
+  try {
+    await mkdir(join(bundle, "bin"));
+    await copyFile(runtime.executable, join(bundle, "bin", "mutool"));
+    const manifest = JSON.parse(
+      await readFile(join(runtime.executable, "../../manifest.json"), "utf8"),
+    ) as Record<string, unknown>;
+    await writeFile(join(bundle, "manifest.json"), JSON.stringify(manifest));
+    expect(await resolveMupdfRuntime([bundle])).toMatchObject({
+      version: "1.28.6",
+    });
+    await writeFile(
+      join(bundle, "manifest.json"),
+      JSON.stringify({ ...manifest, executable_sha256: "0".repeat(64) }),
+    );
+    expect(await resolveMupdfRuntime([bundle])).toBeUndefined();
+    await writeFile(
+      join(bundle, "manifest.json"),
+      JSON.stringify({ ...manifest, version: "1.27.0" }),
+    );
+    expect(await resolveMupdfRuntime([bundle])).toBeUndefined();
+  } finally {
+    await rm(bundle, { recursive: true, force: true });
+  }
+});

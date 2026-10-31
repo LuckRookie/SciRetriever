@@ -190,6 +190,7 @@ import type { RawParserBackend } from "../parsing/ports.js";
 import { ParsingFailure } from "../parsing/ports.js";
 import { RawParsingService } from "../parsing/raw-service.js";
 import { pdfPages } from "../proofread/pdf-pages.js";
+import { MupdfPageRenderer, resolveMupdfRuntime } from "../proofread/mupdf.js";
 import type { PdfPages } from "../proofread/contract.js";
 import { ProofreadService } from "../proofread/service.js";
 import {
@@ -725,6 +726,7 @@ async function createApplicationOwned(
   let valueVerifier: ProcessorValueVerifier | undefined;
   let rawParseStorage: SqliteRawParseStorage | undefined;
   let regionRenderer: PdfRegionRenderer | undefined;
+  let pageImages: MupdfPageRenderer | undefined;
   let completion: LiteratureCompletionService | undefined;
   let manualPdf: ManualPdfIngestionService | undefined;
   let pdfAcquisition: PdfAcquisitionPort | null = null;
@@ -825,6 +827,7 @@ async function createApplicationOwned(
         () => completion?.close(),
         () => manualPdf?.close(),
         () => regionRenderer?.close(),
+        () => pageImages?.close(),
 
         () => indexRefresh?.close(),
         () => retrievalIndex?.close(),
@@ -1435,18 +1438,31 @@ async function createApplicationOwned(
       const proofreadStorage = new SqliteProofreadStorage(database, files);
       const pages =
         options.proofreadPages ??
-        pdfPages(database, files, proofreadStorage, async () => {
-          if (!regionRenderer) {
-            const runtime =
-              verifiedBrowserRuntime ??
-              (await resolveVerifiedCloakRuntime(
-                process.env.SCIRETRIEVER_CLOAK_BUNDLE,
-              ));
-            if (!runtime) throw new Error("proofread-renderer-unavailable");
-            regionRenderer = new PdfRegionRenderer(runtime.executablePath);
-          }
-          return regionRenderer;
-        });
+        pdfPages(
+          database,
+          files,
+          proofreadStorage,
+          async () => {
+            if (!regionRenderer) {
+              const runtime =
+                verifiedBrowserRuntime ??
+                (await resolveVerifiedCloakRuntime(
+                  process.env.SCIRETRIEVER_CLOAK_BUNDLE,
+                ));
+              if (!runtime) throw new Error("proofread-renderer-unavailable");
+              regionRenderer = new PdfRegionRenderer(runtime.executablePath);
+            }
+            return regionRenderer;
+          },
+          async () => {
+            if (!pageImages) {
+              const runtime = await resolveMupdfRuntime();
+              if (!runtime) throw new Error("proofread-renderer-unavailable");
+              pageImages = new MupdfPageRenderer(runtime);
+            }
+            return pageImages;
+          },
+        );
       archiveText = new ArchiveTextPipeline(
         new SqliteArchiveTextStorage(database, files),
         rawParseStorage,
@@ -2072,6 +2088,7 @@ export async function createQueryApplication(
   let rawParseRead: SqliteRawParseStorage | null = null;
   let proofreadRead: ProofreadService | null = null;
   let proofreadRenderer: PdfRegionRenderer | undefined;
+  let proofreadImages: MupdfPageRenderer | undefined;
   let extractionPreparation: ExtractionPreparationService | null = null;
   let context: MaterialContextService | null = null;
   let knowledgeContext: KnowledgeContextService | null = null;
@@ -2091,6 +2108,7 @@ export async function createQueryApplication(
         async () => documentRead?.close(),
         async () => proofreadRead?.close(),
         () => proofreadRenderer?.close(),
+        () => proofreadImages?.close(),
         async () => rawParseRead?.close(),
         async () => files?.close(),
         () => database.close(),
@@ -2177,6 +2195,14 @@ export async function createQueryApplication(
               proofreadRenderer = new PdfRegionRenderer(runtime.executablePath);
             }
             return proofreadRenderer;
+          },
+          async () => {
+            if (!proofreadImages) {
+              const runtime = await resolveMupdfRuntime();
+              if (!runtime) throw new Error("proofread-renderer-unavailable");
+              proofreadImages = new MupdfPageRenderer(runtime);
+            }
+            return proofreadImages;
           },
         );
       proofreadRead = new ProofreadService(rawParseRead, storage, pages);

@@ -8,7 +8,7 @@
 
 后端与 HTTP/CLI/MCP 已接入新流程；Web 界面按新合同另行联调，本文不代表界面已部署。整理只提交操作：每部分一次发出全部区块、一次决定全部断段，粘在正文里的版权句、页归属由程序按 PDF 文字层处理；校订逐页对照原图。真实库转换和全量重建是独立维护步骤，现有用户库不会在启动时自动转换。
 
-建档需要可用的 MinerU 连接（已有解析时不需要）和可用的 DSH 模型。校订的页面渲染还需要已通过安装校验的 CloakBrowser runtime：`SCIRETRIEVER_CLOAK_BUNDLE` 应指向包含 `chrome` 和安装清单的具体版本目录，而不是它的缓存父目录，安装方式见[安装指南](installation.md)。`parser-unavailable` 表示解析后端尚不可用；建档问题中的 `proofread-renderer-unavailable` 表示页面渲染 runtime 不可用。两者应分别检查，已完成的 PDF 接纳和解析不会因此撤销。
+建档需要可用的 MinerU 连接（已有解析时不需要）和可用的 DSH 模型。校订的页面检查还需要已通过安装校验的 CloakBrowser runtime：`SCIRETRIEVER_CLOAK_BUNDLE` 应指向包含 `chrome` 和安装清单的具体版本目录，而不是它的缓存父目录；页面图由随包的 MuPDF `mutool` 渲染。安装方式见[安装指南](installation.md)。`parser-unavailable` 表示解析后端尚不可用；建档问题中的 `proofread-renderer-unavailable` 表示页面渲染 runtime 不可用。两者应分别检查，已完成的 PDF 接纳和解析不会因此撤销。
 
 ## 发起与恢复
 
