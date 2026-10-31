@@ -214,7 +214,12 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
       probes.push(route.request().postDataJSON());
       await route.fulfill({
         status: 200,
-        json: { result: { outcome: "passed", reason: "synthetic-probe" } },
+        json: {
+          result:
+            probes.length === 1
+              ? { outcome: "passed", reason: null }
+              : { outcome: "failed", reason: "model-authentication-rejected" },
+        },
       });
     });
     const beforeProbe = (await owner!.read()).revision;
@@ -230,6 +235,14 @@ it("preserves source parameters and runtime sections, rejects incomplete setting
       { owner: "parse", target: null, image: false },
       { owner: "browser-model", target: null, image: true },
     ]);
+    await expect
+      .poll(() => page.getByRole("status").allTextContents())
+      .toEqual(
+        expect.arrayContaining([
+          "测试通过，连接正常。",
+          "测试结果：失败。模型服务拒绝了 API key，请在凭据中检查这个服务商的密钥。",
+        ]),
+      );
     expect((await owner!.read()).revision).toBe(beforeProbe);
     await page.getByRole("button", { name: "刷新配置", exact: true }).click();
     await page.getByRole("button", { name: "读取保存值", exact: true }).click();

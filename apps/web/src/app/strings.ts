@@ -183,6 +183,27 @@ export const valueCheckBasisLabels: Readonly<Record<ProofreadBasis, string>> = {
   manual: "人工修改",
 };
 
+const probeReasons: Readonly<Record<string, string>> = {
+  "model-authentication-rejected":
+    "模型服务拒绝了 API key，请在凭据中检查这个服务商的密钥。",
+  "model-quota-limited": "模型服务限流或额度已用完，稍后再试或检查账户余额。",
+  "model-provider-unavailable": "模型服务出错（5xx），稍后再试。",
+  "model-request-rejected":
+    "模型服务拒绝了请求：远程名称可能写错，或这个模型不支持结构化输出。",
+  "model-timeout": "模型服务超时没有回应，稍后再试。",
+  "model-network-failed": "连不上模型服务，请检查网络或服务地址。",
+  "model-identity-mismatch": "服务返回的模型名称与登记的远程名称不一致。",
+  "model-response-invalid": "模型的回复不符合要求，请检查模型声明。",
+  "model-request-invalid": "请求没有发出：请检查服务商声明与凭据。",
+  "model-capability-unsupported": "这个模型不具备所需能力，请换一个模型。",
+  "model-probe-cancelled": "测试被中断，请重试。",
+  "probe-not-authorized": "测试需要确认后才会访问外部服务。",
+};
+/** Why a configuration probe did not pass; an unknown reason shows its code. */
+export function probeReason(code: string): string {
+  return probeReasons[code] ?? `没有通过（${code}）。`;
+}
+
 /** Transport diagnostics are codes, never copy for a human-facing notification. */
 export function serviceMessage(code: string): string {
   return (

@@ -1863,6 +1863,23 @@ export class ConfigurationProbeSession {
       );
     if (code === "agent-cancelled" || code === "agent-closed")
       return draft("failed", "model-probe-cancelled", "retry-later", described);
+    if (code === "agent-request")
+      return draft(
+        "failed",
+        "model-request-rejected",
+        "check-model-declaration",
+        {
+          ...described,
+          network_performed: true,
+        },
+      );
+    if (code === "agent-timeout")
+      return draft("failed", "model-timeout", "retry-later", {
+        ...described,
+        network_performed: true,
+      });
+    if (code === "agent-network")
+      return draft("failed", "model-network-failed", "retry-later", described);
     return draft("failed", "model-probe-failed", "retry-later", described);
   }
 

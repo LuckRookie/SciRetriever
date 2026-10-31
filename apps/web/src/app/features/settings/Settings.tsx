@@ -1,4 +1,4 @@
-import { serviceMessage } from "../../strings.js";
+import { probeReason } from "../../strings.js";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { parseConfigurationReadiness } from "@sciretriever/contracts";
@@ -1270,15 +1270,28 @@ function Probe({
           测试未完成：{errorMessage(probe.error)}。配置没有改变。
         </p>
       )}
-      {probe.data && (
-        <p role="status">
-          测试结果：{str(record(probe.data.result, "probe").outcome)} ·{" "}
-          {serviceMessage(str(record(probe.data.result, "probe").reason))}
-        </p>
-      )}
+      {probe.data && <ProbeResult value={probe.data.result} />}
     </div>
   );
 }
+function ProbeResult({ value }: { value: unknown }) {
+  const result = record(value, "probe"),
+    outcome = str(result.outcome),
+    reason = str(result.reason);
+  return (
+    <p role="status" data-outcome={outcome}>
+      {outcome === "passed"
+        ? "测试通过，连接正常。"
+        : `测试结果：${probeOutcomes[outcome] ?? outcome}。${reason ? probeReason(reason) : ""}`}
+    </p>
+  );
+}
+const probeOutcomes: Readonly<Record<string, string>> = {
+  failed: "失败",
+  blocked: "未执行",
+  skipped: "已跳过",
+  unavailable: "不可用",
+};
 function Credential({
   baseline,
   onResult,

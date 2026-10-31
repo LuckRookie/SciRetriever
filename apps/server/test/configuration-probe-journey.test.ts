@@ -1116,6 +1116,25 @@ max_total_output_tokens = 20000
     });
     expect(captured[1]).toMatchObject({ authorization: `Bearer ${SECRET}` });
     expect(captured[1]).not.toHaveProperty("x-api-key");
+    // A request the service refuses names the refusal, not a generic failure.
+    const refused = await runCli(
+      ["config", "test", "model", "openai-fixture/model", "--json"],
+      {
+        home: directory,
+        json: true,
+        probeSeams: await seams(directory, {
+          agent: async () => ({
+            status: 400,
+            headers: [],
+            body: new Uint8Array(),
+          }),
+        }),
+      },
+    );
+    expect(refused.value).toMatchObject({
+      outcome: "failed",
+      reason: "model-request-rejected",
+    });
 
     // The directory probe derives its header from the same shared mapping the
     // production adapter uses, so the two can never disagree.
