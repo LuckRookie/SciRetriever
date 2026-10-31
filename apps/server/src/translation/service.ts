@@ -8,6 +8,8 @@ import {
   type TranslationResult,
 } from "@sciretriever/contracts";
 import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
+import { AgentFailure } from "../agents/protocol.js";
+import { createLogger } from "../logging/index.js";
 import type { TranslationCache } from "./cache.js";
 
 /** Changing the prompt changes this version, so older cache entries no longer match. */
@@ -53,7 +55,22 @@ export class TranslationError extends Error {
   ) {
     super("translation failed", options);
     this.name = "TranslationError";
+    this.reason =
+      options?.cause instanceof AgentFailure ? options.cause.code : undefined;
   }
+  /** The model failure behind a failed translation, shown to the reader. */
+  readonly reason: string | undefined;
+}
+/** A failed model call, logged by its failure code only; no text is logged. */
+function failed(cause?: unknown): TranslationError {
+  const error = new TranslationError(
+    "translation-failed",
+    cause === undefined ? undefined : { cause },
+  );
+  createLogger("translation").warn("translation_failed", {
+    code: error.reason ?? "translation-empty",
+  });
+  return error;
 }
 const schema = {
   type: "object",
@@ -180,8 +197,7 @@ export class TranslationService {
       } catch (error) {
         if (signal?.aborted)
           throw new TranslationError("translation-cancelled", { cause: error });
-        if (attempt === 1)
-          throw new TranslationError("translation-failed", { cause: error });
+        if (attempt === 1) throw failed(error);
         continue;
       }
       const seen = new Set<string>();
@@ -246,13 +262,11 @@ export class TranslationService {
       translation =
         result.kind === "structured" ? result.value.translation : undefined;
     } catch (error) {
-      throw new TranslationError(
-        signal?.aborted ? "translation-cancelled" : "translation-failed",
-        { cause: error },
-      );
+      if (signal?.aborted)
+        throw new TranslationError("translation-cancelled", { cause: error });
+      throw failed(error);
     }
-    if (typeof translation !== "string" || !translation.trim())
-      throw new TranslationError("translation-failed");
+    if (typeof translation !== "string" || !translation.trim()) throw failed();
     const entry = {
       translation: translation.trim(),
       target_language: request.target_language,

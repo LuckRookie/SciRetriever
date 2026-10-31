@@ -56,7 +56,33 @@ function readSettings(): TranslationSettings {
     };
   }
 }
+/** What went wrong in the model call behind a failed translation. */
+const FAILURES: Readonly<Record<string, string>> = {
+  "agent-auth": "模型服务拒绝了 API key：在设置中检查这个模型的密钥。",
+  "agent-credentials": "没有读到这个模型的 API key：在设置中填写后重试。",
+  "agent-quota": "模型服务限流或额度已用完，稍后再试或检查账户余额。",
+  "agent-request":
+    "模型服务拒绝了这次请求：这个模型可能不支持结构化输出，换一个模型试试。",
+  "agent-remote": "模型服务出错，稍后重试。",
+  "agent-network": "连不上模型服务，请检查网络或服务地址。",
+  "agent-timeout": "模型服务超时没有回应，稍后重试。",
+  "agent-truncated": "译文超出模型的输出长度，请缩小选区。",
+  "agent-refusal": "模型拒绝翻译这段文字。",
+};
+/** A failed model call by its reason; null when the error is something else. */
+export function translationFailure(error: unknown): string | null {
+  if (!(error instanceof ApiError) || error.code !== "translation-failed")
+    return null;
+  return (
+    FAILURES[error.message] ??
+    (error.message === error.code
+      ? null
+      : `模型的回复无法使用（${error.message}），可以重试或换一个模型。`)
+  );
+}
 function message(error: unknown): string {
+  const failure = translationFailure(error);
+  if (failure) return failure;
   if (error instanceof ApiError) {
     if (error.code === "translation-model-unavailable")
       return "所选模型不可用：换一个模型，或在设置中登记模型后重启服务。";

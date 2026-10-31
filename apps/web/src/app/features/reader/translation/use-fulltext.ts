@@ -4,7 +4,10 @@ import { ApiError } from "../../../data/api.js";
 import { useApi } from "../../../data/query.js";
 import { record } from "../../../data/wire.js";
 import type { FullTextMode } from "./fulltext-layer.js";
-import type { ReaderTranslation } from "./use-translation.js";
+import {
+  translationFailure,
+  type ReaderTranslation,
+} from "./use-translation.js";
 
 /** Pages asked for at the same time (ADR 0051 §4). */
 const PARALLEL = 3;
@@ -15,6 +18,8 @@ export interface FullTextProgress {
   readonly running: boolean;
 }
 function message(error: unknown): string {
+  const failure = translationFailure(error);
+  if (failure) return failure;
   if (error instanceof ApiError) {
     if (error.code === "translation-not-archived")
       return "这篇文献还没有建档，建档后才能翻译全文。";

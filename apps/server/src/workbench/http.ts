@@ -1539,6 +1539,7 @@ export async function startWorkbenchHttp(
           if (error instanceof TranslationError) {
             json(response, error.code === "translation-failed" ? 502 : 409, {
               code: error.code,
+              ...(error.reason ? { reason: error.reason } : {}),
             });
             return;
           }
@@ -1570,7 +1571,10 @@ export async function startWorkbenchHttp(
             json(
               response,
               error.code === "translation-model-unavailable" ? 409 : 502,
-              { code: error.code },
+              {
+                code: error.code,
+                ...(error.reason ? { reason: error.reason } : {}),
+              },
             );
             return;
           }

@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { TranslationInputError } from "@sciretriever/contracts";
 import { DshAgentRuntime } from "../src/agents/dsh/runtime.js";
-import type { AgentCall, AgentResult } from "../src/agents/protocol.js";
+import {
+  AgentFailure,
+  type AgentCall,
+  type AgentResult,
+} from "../src/agents/protocol.js";
 import { TranslationCache } from "../src/translation/cache.js";
 import {
   TRANSLATION_PROMPT_VERSION,
@@ -16,7 +20,7 @@ const dirs: string[] = [];
 afterEach(async () => {
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true });
 });
-async function setup(limit?: number) {
+async function setup(limit?: number, failure?: AgentFailure) {
   const dir = await mkdtemp(join(tmpdir(), "translation-"));
   dirs.push(dir);
   const calls: AgentCall[] = [];
@@ -24,6 +28,7 @@ async function setup(limit?: number) {
     (model: string) =>
     async (call: AgentCall): Promise<AgentResult> => {
       calls.push(call);
+      if (failure) throw failure;
       const part = call.messages[1]!.parts[0]!;
       return {
         kind: "structured",
@@ -181,6 +186,26 @@ it("refuses an unregistered model, oversized or malformed input, and never calls
       "a\\u00a0 b".normalize("NFKC").replace(/\\s+/gu, " "),
     );
     expect(TRANSLATION_PROMPT_VERSION).toBe("translation-v1");
+  } finally {
+    await cache.close();
+  }
+});
+it("names the model failure behind a failed translation and caches nothing", async () => {
+  const { service, cache } = await setup(
+    undefined,
+    new AgentFailure("agent-auth"),
+  );
+  try {
+    await expect(service.translate(ask("x"))).rejects.toMatchObject({
+      code: "translation-failed",
+      reason: "agent-auth",
+    });
+    await expect(
+      service.translateBlocks([{ id: "a", text: "x" }], "zh-Hans", null),
+    ).rejects.toMatchObject({
+      code: "translation-failed",
+      reason: "agent-auth",
+    });
   } finally {
     await cache.close();
   }
