@@ -203,21 +203,6 @@
     margin: 0;
     padding: var(--space-2);
   }
-  .lab-type-sample {
-    margin-top: var(--space-5);
-    max-width: 70ch;
-  }
-  .lab-type-sample h3 {
-    font: var(--title-weight) var(--type-page) / var(--lh-heading)
-      var(--title-face);
-  }
-  .lab-type-sample p {
-    font: var(--text-reading) / var(--lh-reading) var(--serif);
-  }
-  .lab-type-sample[data-font="system"] {
-    --serif: "Songti SC", Georgia, serif;
-    --sans: -apple-system, BlinkMacSystemFont, sans-serif;
-  }
   @media (max-width: 1000px) {
     .lab-tuning {
       grid-template-columns: repeat(2, minmax(0, 1fr));

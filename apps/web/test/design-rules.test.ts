@@ -47,7 +47,7 @@ function collectViolations(): Violation[] {
   const content =
     ".reading-pdf-page, .reading-article, .reading-markdown, .katex, .proofread-source, .agent-raw, pre, code, .ui-tech-details, svg";
   const sizes = new Set([13, 14, 15, 16, 17, 18, 20, 22, 24, 26, 28]);
-  const families = ['"Source Sans 3"', '"Source Serif 4"', "SFMono-Regular"];
+  const families = ['"IBM Plex Sans"', '"Source Serif 4"', "SFMono-Regular"];
   const out: Violation[] = [];
   const visible = (el: Element) => {
     const box = el.getBoundingClientRect();

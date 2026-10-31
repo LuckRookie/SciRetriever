@@ -131,7 +131,7 @@ async function notices() {
   sections.push(
     "SciRetriever compatibility change: react-aria@3.52.1 usePreventScroll fixed CSS is shipped externally; the dependency toggles a root data attribute rather than injecting a style element. Copyright and Apache-2.0 license above remain unchanged.",
   );
-  for (const name of ["source-sans-3", "source-serif-4"])
+  for (const name of ["ibm-plex-sans", "source-serif-4"])
     sections.push(
       `${name} (SIL OFL 1.1)\n${await readFile(resolve(repository, `apps/web/src/app/styles/fonts/${name}-OFL.txt`), "utf8")}`,
     );

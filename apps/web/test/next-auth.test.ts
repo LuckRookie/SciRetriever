@@ -75,7 +75,7 @@ it.each(["no-preference", "reduce"] as const)(
       await page.getByRole("heading", { name: "打开你的文献库" }).waitFor();
       const fontStatus = await page.evaluate(async () => {
         const families = [
-          "Source Sans 3",
+          "IBM Plex Sans",
           "Source Serif 4",
           "Noto Sans SC",
           "Noto Serif SC",
@@ -96,7 +96,7 @@ it.each(["no-preference", "reduce"] as const)(
         );
       });
       expect(fontStatus).toEqual([
-        { family: "Source Sans 3", loaded: true },
+        { family: "IBM Plex Sans", loaded: true },
         { family: "Source Serif 4", loaded: true },
         { family: "Noto Sans SC", loaded: true },
         { family: "Noto Serif SC", loaded: true },

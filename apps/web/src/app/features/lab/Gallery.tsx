@@ -169,7 +169,7 @@ function Foundations() {
     <>
       <Example
         title="字体与字号"
-        usage="界面用 Source Sans 3 与思源黑体，标题、文献标题与阅读正文用 Source Serif 4 与思源宋体；全站只有这七种文字规格。"
+        usage="界面用 IBM Plex Sans 与思源黑体，标题、文献标题与阅读正文用 Source Serif 4 与思源宋体；全站只有这七种文字规格。"
       >
         <dl className="lab-type-scale">
           {typeScale.map((level) => (

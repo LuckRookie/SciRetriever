@@ -10,7 +10,7 @@
 
 正式 `/` 已使用 [src/app/](src/app/README.md) 中的 React 工作台。静态资源使用 `/assets/`，维护服务保留 `/query`。迁移期 `/next` 入口、旧 URL 别名与旧偏好兼容已经取消，界面只使用当前 React 路由和偏好。登录页、独立查询/维护与 4173 合成样本都使用同一 React 工程，各自认证和能力边界保持。Owner 已确认本版定稿；最终 Full 与离线安装结果见[Web 体验计划](../../docs/archive/2026-10-19-web-experience/README.md)。
 
-新界面以 React、React Aria、Motion、TanStack Query/Virtual/Table 和自有 CSS 实现，Vite 生成离线资源。Source Sans 3 / Source Serif 4 与思源黑体、思源宋体随包发布，工作台与登录页都使用，不加载 CDN；字体来源与许可证见[字体说明](src/app/styles/fonts/README.md)，其它依赖的许可证、版本与 CSP 结论见[前端依赖说明](../../docs/notes/web-frontend-dependencies.md)。界面规则见 [Web 设计](../../docs/architecture/web/README.md)。`script-src 'self'`、`style-src 'self'` 保持，不注入运行时 `<style>`。
+新界面以 React、React Aria、Motion、TanStack Query/Virtual/Table 和自有 CSS 实现，Vite 生成离线资源。IBM Plex Sans / Source Serif 4 与思源黑体、思源宋体随包发布，工作台与登录页都使用，不加载 CDN；字体来源与许可证见[字体说明](src/app/styles/fonts/README.md)，其它依赖的许可证、版本与 CSP 结论见[前端依赖说明](../../docs/notes/web-frontend-dependencies.md)。界面规则见 [Web 设计](../../docs/architecture/web/README.md)。`script-src 'self'`、`style-src 'self'` 保持，不注入运行时 `<style>`。
 
 布局与视觉以[设计内核与页面规格](../../docs/architecture/web/README.md)为准。阅读工具栏、分层信息、证据预览和公共控件按 2026-10-19 的 G4/G5 确认调整。[PRODUCT.md](PRODUCT.md) 与 [.impeccable/config.json](.impeccable/config.json) 是设计工作上下文，不替代需求、ADR 或当前行为指南，也不保存业务数据或凭据。
 

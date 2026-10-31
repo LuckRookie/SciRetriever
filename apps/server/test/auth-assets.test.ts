@@ -43,7 +43,7 @@ it(
           .sort(),
       ).toEqual([...new Set(urls)].sort());
       for (const family of [
-        "Source Sans 3",
+        "IBM Plex Sans",
         "Source Serif 4",
         "Noto Sans SC",
         "Noto Serif SC",

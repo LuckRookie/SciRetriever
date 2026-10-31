@@ -4,7 +4,10 @@
 
 ## 拉丁字体
 
-Source Sans 3 与 Source Serif 4 的可变字重拉丁子集，正常/斜体各一份，由 `../font-faces.css` 引入。来源为 npm `@fontsource-variable/source-sans-3@5.3.0` 和 `@fontsource-variable/source-serif-4@5.3.0`（2026-07-19 发布），原始字体由 Adobe 发布，SIL OFL 1.1 许可证全文为 `source-sans-3-OFL.txt`、`source-serif-4-OFL.txt`。
+IBM Plex Sans 与 Source Serif 4 的可变字重拉丁子集，正常/斜体各一份，由 `../font-faces.css` 引入。
+
+- IBM Plex Sans：npm `@fontsource-variable/ibm-plex-sans@5.3.0`（包 SHA-256 `0cdf43f91e27c4dcc53ffee829fd1ebe45c810c24684766bc1e5f5609d3ffc16`），取包内 `files/ibm-plex-sans-latin-wght-{normal,italic}.woff2`，文件字节与上游一致；原始字体由 IBM 发布，SIL OFL 1.1 许可证全文为 `ibm-plex-sans-OFL.txt`。
+- Source Serif 4：npm `@fontsource-variable/source-serif-4@5.3.0`（2026-07-19 发布），原始字体由 Adobe 发布，SIL OFL 1.1 许可证全文为 `source-serif-4-OFL.txt`。
 
 ## 中文字体
 

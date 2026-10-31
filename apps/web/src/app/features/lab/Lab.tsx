@@ -287,7 +287,6 @@ export default function Lab() {
     pressScale: 0.98,
     durationScale: 1,
   });
-  const [font, setFont] = useState("embedded");
   return (
     <MotionTuningProvider value={tuning}>
       <div
@@ -367,29 +366,6 @@ export default function Lab() {
             </div>
           </section>
         ))}
-        <section className="lab-section">
-          <h2>离线字体对照</h2>
-          <Select
-            label="字体方案"
-            value={font}
-            onChange={setFont}
-            options={[
-              { value: "embedded", label: "内置 Source 字体" },
-              { value: "system", label: "系统回退" },
-            ]}
-          />
-          <div className="lab-type-sample" data-font={font}>
-            <h3>Evidence-aware research materials</h3>
-            <p>
-              Precise reading keeps every claim close to its original source.
-              固定材料与证据让总结可以返回原文核对。
-            </p>
-          </div>
-          <p className="ui-description">
-            四份拉丁 woff2 共 159,612
-            字节。中文使用系统字体；当前系统展示不冒充其他平台截图。
-          </p>
-        </section>
         <TechDetails
           title="当前实验参数"
           copyText={JSON.stringify(tuning, null, 2)}

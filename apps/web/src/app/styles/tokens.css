@@ -81,7 +81,7 @@
     --text-secondary: 13px;
     --text-caption: 13px;
     --sans:
-      "Source Sans 3", "Noto Sans SC", -apple-system, BlinkMacSystemFont,
+      "IBM Plex Sans", "Noto Sans SC", -apple-system, BlinkMacSystemFont,
       "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     --serif: "Source Serif 4", "Noto Serif SC", "Songti SC", Georgia, serif;
     --mono: "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
