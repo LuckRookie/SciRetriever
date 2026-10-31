@@ -597,6 +597,7 @@
   /* A catalogue search card: bibliographic fields, then classification,
      then the year range, each cell as wide as a name or a choice. */
   .library-filters {
+    --field-fill: var(--surface);
     display: grid;
     grid-template-columns: repeat(
       auto-fill,

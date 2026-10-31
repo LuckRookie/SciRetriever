@@ -14,9 +14,12 @@
     --line2: rgba(55, 53, 47, 0.16);
     --line3: rgba(55, 53, 47, 0.32);
     --control-border: rgba(55, 53, 47, 0.24);
-    /* Fields sit into the page (a faint inner top shadow) where buttons rise
-       from it; focus and error rings follow the theme's own ink. */
-    --field-inset: inset 0 1px 2px rgba(15, 15, 15, 0.06);
+    /* Every control shares one edge, height, radius and focus ring. What you
+       press is paper with a hairline lift; what you type into is a faint
+       tint that turns to paper while you write. */
+    --control-edge: rgba(55, 53, 47, 0.2);
+    --control-raise: 0 1px 2px rgba(15, 15, 15, 0.06);
+    --field-fill: rgba(55, 53, 47, 0.035);
     --focus-ring: color-mix(in srgb, var(--focus) 22%, transparent);
     --invalid-ring: color-mix(in srgb, var(--t-red) 18%, transparent);
     --placeholder: color-mix(in srgb, var(--fg) 52%, var(--surface));
@@ -153,7 +156,9 @@
     --line2: rgba(255, 255, 255, 0.16);
     --line3: rgba(255, 255, 255, 0.36);
     --control-border: #969fa9;
-    --field-inset: inset 0 1px 2px rgba(0, 0, 0, 0.3);
+    --control-edge: rgba(255, 255, 255, 0.22);
+    --control-raise: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --field-fill: rgba(255, 255, 255, 0.045);
     --hover: rgba(255, 255, 255, 0.05);
     --hover-soft: rgba(255, 255, 255, 0.035);
     --active: rgba(255, 255, 255, 0.09);

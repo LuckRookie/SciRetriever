@@ -135,6 +135,7 @@
     color: var(--t-green);
   }
   .source-editor-row > td {
+    --field-fill: var(--surface);
     background: var(--side);
   }
   /* Keys, emails and choices are name-sized; saving sits under them. */

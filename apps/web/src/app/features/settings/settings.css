@@ -47,10 +47,12 @@
     gap: var(--space-2);
     padding-block: var(--space-4);
   }
+  /* Section, kind, record: each level smaller and quieter than the one above. */
   .settings-registry > h3 {
-    margin: var(--space-2) 0 0;
-    font-size: var(--text-secondary);
-    color: var(--fg2);
+    margin: var(--space-3) 0 0;
+    font-size: var(--text-interface);
+    font-weight: 600;
+    color: var(--fg);
   }
   .settings-registry fieldset {
     min-width: 0;
@@ -62,6 +64,8 @@
   .settings-registry legend {
     padding: 0;
     margin-bottom: var(--space-3);
+    color: var(--fg2);
+    font-size: var(--text-secondary);
     font-weight: 500;
   }
   .settings-registry .settings-grid {
@@ -111,10 +115,26 @@
   .settings-grid > .ui-field-long {
     grid-column: 1 / -1;
   }
-  /* Removing a record closes it: its own row, at the start, button-sized. */
+  /* Removing a record closes it: its own row, its text on the fields' edge. */
   .settings-grid > .ui-button {
     grid-column: 1 / -1;
     justify-self: start;
+  }
+  .settings-grid > .ui-button[data-variant="text"] {
+    margin-left: calc(-1 * var(--space-3));
+  }
+  .settings-choices {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 var(--space-5);
+  }
+  .settings-record-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: start;
+    gap: var(--space-2);
+    margin-top: var(--space-4);
   }
   .source-options {
     display: grid;

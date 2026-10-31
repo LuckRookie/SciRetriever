@@ -12,9 +12,10 @@
     border-radius: var(--radius-sm);
     padding: 0 var(--space-3);
     background: var(--surface-raised);
+    /* Drawn inside, so a button is exactly as tall as the field beside it. */
     box-shadow:
-      0 0 0 1px var(--line2),
-      0 1px 1px rgba(15, 15, 15, 0.03);
+      inset 0 0 0 1px var(--control-edge),
+      var(--control-raise);
     color: var(--fg);
     font-size: var(--text-control);
     font-weight: 400;
@@ -49,8 +50,20 @@
   .ui-button[data-hovered] {
     background: var(--hover);
     box-shadow:
-      0 0 0 1px var(--line3),
-      0 1px 2px rgba(15, 15, 15, 0.06);
+      inset 0 0 0 1px var(--line3),
+      var(--control-raise);
+  }
+  /* React Aria knows keyboard from pointer; a pointer that returns focus to
+     a menu button gets no ring the browser alone would draw. */
+  .ui-button:focus-visible:not([data-focus-visible]) {
+    outline: none;
+  }
+  /* The same focus as a field: the edge takes the ink and a soft ring. */
+  .ui-button[data-focus-visible] {
+    outline: none;
+    box-shadow:
+      inset 0 0 0 1px var(--focus),
+      0 0 0 3px var(--focus-ring);
   }
   .ui-button[data-pressed] {
     background: var(--active);
@@ -81,11 +94,17 @@
   }
   .ui-button[data-variant="danger"] {
     color: var(--t-red);
-    box-shadow: 0 0 0 1px var(--t-red);
+    box-shadow: inset 0 0 0 1px var(--t-red);
   }
   .ui-button[data-variant="danger"][data-hovered] {
     background: var(--t-red-bg);
-    box-shadow: 0 0 0 1px var(--t-red);
+    box-shadow: inset 0 0 0 1px var(--t-red);
+  }
+  .ui-button:is(
+      [data-variant="primary"],
+      [data-variant="text"]
+    )[data-focus-visible] {
+    box-shadow: 0 0 0 3px var(--focus-ring);
   }
   .ui-button[data-disabled],
   .ui-choice[data-disabled],
@@ -245,8 +264,8 @@
     font-size: var(--text-caption);
     line-height: 1.45;
   }
-  /* Text entry, choice triggers and steppers are one family of "slots": a
-     surface pressed slightly into the page, so they never read as buttons. */
+  /* Fields share the button's edge, height and radius; typing slots carry a
+     faint tint, the select is pressed like a button (see tokens). */
   .ui-input,
   .ui-select,
   .ui-search,
@@ -254,10 +273,10 @@
     height: var(--control-height);
     min-width: 0;
     width: 100%;
-    border: 1px solid var(--control-border);
+    border: 1px solid var(--control-edge);
     border-radius: var(--radius-sm);
-    background: var(--surface);
-    box-shadow: var(--field-inset);
+    background: var(--field-fill);
+    box-shadow: none;
     padding: 0 var(--space-3);
     color: var(--fg);
     font-size: var(--text-control);
@@ -320,6 +339,11 @@
     justify-content: space-between;
     text-align: left;
     line-height: var(--lh-control);
+    background: var(--surface-raised);
+    box-shadow: var(--control-raise);
+  }
+  .ui-select[data-hovered] {
+    background: var(--hover);
   }
   .ui-select > span {
     min-width: 0;
@@ -432,8 +456,8 @@
     padding: 0 var(--space-3);
     background: var(--surface-raised);
     box-shadow:
-      0 0 0 1px var(--line2),
-      0 1px 1px rgba(15, 15, 15, 0.03);
+      inset 0 0 0 1px var(--control-edge),
+      var(--control-raise);
     color: var(--fg);
     font: inherit;
     font-size: var(--text-control);
@@ -441,7 +465,9 @@
   }
   .ui-file:hover::file-selector-button {
     background: var(--hover);
-    box-shadow: 0 0 0 1px var(--line3);
+    box-shadow:
+      inset 0 0 0 1px var(--line3),
+      var(--control-raise);
   }
   .ui-file:focus-visible {
     outline: none;
@@ -1241,7 +1267,9 @@
     font-size: var(--text-caption);
     max-width: 65ch;
   }
+  /* A typing slot is one step off its ground: on a sunken card it is paper. */
   .ui-block {
+    --field-fill: var(--surface);
     background: var(--surface-sunken);
     border-radius: var(--radius-lg);
     padding: var(--space-1) var(--space-5);

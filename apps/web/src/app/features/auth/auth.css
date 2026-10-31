@@ -1,5 +1,6 @@
 @layer pages {
   .auth-page {
+    --field-fill: var(--surface);
     min-height: 100dvh;
     overflow: auto;
     font-size: var(--text-interface);
@@ -47,16 +48,16 @@
   }
   .auth-input {
     display: flex;
-    border: 1px solid var(--line3);
+    border: 1px solid var(--control-edge);
     border-radius: var(--radius-sm);
     margin-top: var(--space-2);
-    background: var(--surface);
-    box-shadow: var(--field-inset);
+    background: var(--field-fill);
     transition:
       border-color var(--dur-1),
       box-shadow var(--dur-1);
   }
   .auth-input:focus-within {
+    background: var(--surface);
     border-color: var(--focus);
     box-shadow: 0 0 0 3px var(--focus-ring);
   }

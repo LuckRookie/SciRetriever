@@ -756,33 +756,42 @@ export default function Settings() {
                                   label: value,
                                 }))}
                               />
-                              <Checkbox
-                                label={`Model ${index + 1} 支持图像`}
-                                isSelected={row.image}
-                                onChange={(image) => {
-                                  setModels(
-                                    models.map((item) =>
-                                      item.id === row.id
-                                        ? { ...item, image }
-                                        : item,
-                                    ),
-                                  );
-                                  mark("models");
-                                }}
-                              />
-                              <Checkbox
-                                label={`Model ${index + 1} 流式输出`}
-                                isSelected={row.stream}
-                                onChange={(stream) => {
-                                  setModels(
-                                    models.map((item) =>
-                                      item.id === row.id
-                                        ? { ...item, stream }
-                                        : item,
-                                    ),
-                                  );
-                                  mark("models");
-                                }}
+                              <div className="settings-choices">
+                                <Checkbox
+                                  label={`Model ${index + 1} 支持图像`}
+                                  isSelected={row.image}
+                                  onChange={(image) => {
+                                    setModels(
+                                      models.map((item) =>
+                                        item.id === row.id
+                                          ? { ...item, image }
+                                          : item,
+                                      ),
+                                    );
+                                    mark("models");
+                                  }}
+                                />
+                                <Checkbox
+                                  label={`Model ${index + 1} 流式输出`}
+                                  isSelected={row.stream}
+                                  onChange={(stream) => {
+                                    setModels(
+                                      models.map((item) =>
+                                        item.id === row.id
+                                          ? { ...item, stream }
+                                          : item,
+                                      ),
+                                    );
+                                    mark("models");
+                                  }}
+                                />
+                              </div>
+                            </div>
+                            <div className="settings-record-actions">
+                              <Probe
+                                owner="model"
+                                target={`${row.provider}/${row.name}`}
+                                image={row.image}
                               />
                               <Button
                                 variant="text"
@@ -806,11 +815,6 @@ export default function Settings() {
                                 移除 Model
                               </Button>
                             </div>
-                            <Probe
-                              owner="model"
-                              target={`${row.provider}/${row.name}`}
-                              image={row.image}
-                            />
                           </fieldset>
                         ))}
                         <Button
