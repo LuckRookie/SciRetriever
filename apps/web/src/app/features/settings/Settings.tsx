@@ -495,6 +495,7 @@ export default function Settings() {
                         >
                           <TextField
                             label="Catalog 路径"
+                            width="long"
                             value={str(value("paths", "catalog_path"))}
                             onChange={(value) =>
                               edit("paths", "catalog_path", value || null)
@@ -508,6 +509,7 @@ export default function Settings() {
                         >
                           <TextField
                             label="资产目录"
+                            width="long"
                             value={str(value("paths", "artifact_root"))}
                             onChange={(value) =>
                               edit("paths", "artifact_root", value || null)
@@ -564,6 +566,7 @@ export default function Settings() {
                         >
                           <TextField
                             label="元数据结果上限"
+                            width="short"
                             value={String(
                               record(
                                 record(draft.sources, "sources").metadata,
@@ -638,6 +641,7 @@ export default function Settings() {
                               />
                               <TextField
                                 label={`Provider ${index + 1} Base URL`}
+                                width="long"
                                 value={row.url}
                                 onChange={(url) => {
                                   setProviders(
@@ -973,6 +977,7 @@ export default function Settings() {
                         <Definition term="Browser profile">
                           <TextField
                             label="Browser profile"
+                            width="long"
                             value={str(value("browser", "profile"))}
                             onChange={(value) =>
                               edit("browser", "profile", value || null)
@@ -1005,6 +1010,7 @@ export default function Settings() {
                         <Definition term="服务地址">
                           <TextField
                             label="MinerU 服务地址"
+                            width="long"
                             value={str(value("parsing", "base_url"))}
                             onChange={(value) =>
                               edit("parsing", "base_url", value || null)

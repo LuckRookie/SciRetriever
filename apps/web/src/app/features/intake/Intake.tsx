@@ -133,6 +133,7 @@ export default function Intake() {
                 >
                   <TextField
                     label="主题或检索式"
+                    width="long"
                     value={query}
                     onChange={setQuery}
                     isRequired

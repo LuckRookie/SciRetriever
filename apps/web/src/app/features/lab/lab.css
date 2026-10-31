@@ -39,9 +39,11 @@
   }
   .lab-fields {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, var(--field-medium)));
     gap: var(--space-5);
-    max-width: 800px;
+  }
+  .lab-fields > :is(.ui-field-long, .ui-field-full) {
+    grid-column: 1 / -1;
   }
   .lab-split-content {
     padding: var(--space-5);

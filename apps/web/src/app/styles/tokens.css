@@ -67,6 +67,10 @@
     --control-height: 34px;
     --control-small-height: 30px;
     --control-inline-height: 26px;
+    /* Field slots are as long as their value: a count, a name, a path. */
+    --field-short: 160px;
+    --field-medium: 320px;
+    --field-long: 600px;
     --text-interface: 15px;
     --text-control: 14px;
     --text-literature: 16px;

@@ -32,7 +32,12 @@ export function TagEditor({
     change(mutation, reason.trim() || "人工编辑词表");
   return (
     <Disclosure title="编辑标签">
-      <TextField label="修改理由" value={reason} onChange={setReason} />
+      <TextField
+        label="修改理由"
+        width="long"
+        value={reason}
+        onChange={setReason}
+      />
       <TextField label="中文名称" value={name} onChange={setName} />
       <TextField label="英文名称" value={english} onChange={setEnglish} />
       <TextArea

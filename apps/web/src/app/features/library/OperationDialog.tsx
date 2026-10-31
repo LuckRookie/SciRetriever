@@ -363,8 +363,18 @@ export function OperationDialog({
               { value: "pause", label: "暂停等待人工" },
             ]}
           />
-          <TextField label="尝试上限" value={attempts} onChange={setAttempts} />
-          <TextField label="重试上限" value={retries} onChange={setRetries} />
+          <TextField
+            label="尝试上限"
+            width="short"
+            value={attempts}
+            onChange={setAttempts}
+          />
+          <TextField
+            label="重试上限"
+            width="short"
+            value={retries}
+            onChange={setRetries}
+          />
           <Checkbox
             label="保存后立即执行"
             isSelected={start}

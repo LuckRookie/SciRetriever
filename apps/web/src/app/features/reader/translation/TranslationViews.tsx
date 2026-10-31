@@ -223,6 +223,7 @@ export function TranslationPanel({
       <div className="translation-source">
         <TextArea
           label="原文"
+          width="full"
           value={source}
           rows={6}
           maxLength={catalog?.max_chars ?? 4000}

@@ -223,6 +223,15 @@
     gap: 6px;
     min-width: 0;
   }
+  .ui-field-short {
+    max-width: var(--field-short);
+  }
+  .ui-field-medium {
+    max-width: var(--field-medium);
+  }
+  .ui-field-long {
+    max-width: var(--field-long);
+  }
   .ui-label {
     color: var(--fg2);
     font-size: var(--text-secondary);
@@ -389,10 +398,8 @@
     resize: none;
     line-height: 1.55;
   }
-  /* A count is short: the value reads from the left, its steppers sit
-     together at the right end, and the slot stays the width of a count. */
+  /* A count reads from the left; its steppers sit together at the right end. */
   .ui-number {
-    max-width: 240px;
     gap: 0;
     padding: 0 3px 0 var(--space-3);
   }
@@ -1271,7 +1278,7 @@
     min-width: 0;
   }
   .ui-definition > dd .ui-field {
-    width: min(100%, 360px);
+    width: 100%;
   }
   .ui-definition-value {
     color: var(--fg2);

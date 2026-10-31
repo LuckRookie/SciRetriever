@@ -759,6 +759,7 @@ function SpecFields({
           />
           <TextField
             label="纳入条件（可选）"
+            width="long"
             value={draft.inclusion}
             onChange={(value) => set("inclusion", value)}
             {...(error("inclusion")

@@ -534,7 +534,12 @@ export default function Tags() {
               .map((t) => ({ value: t.tag_id, label: tagName(t) })),
           ]}
         />
-        <TextField label="创建理由" value={reason} onChange={setReason} />
+        <TextField
+          label="创建理由"
+          width="long"
+          value={reason}
+          onChange={setReason}
+        />
       </Dialog>
       <Dialog
         title="确认撤销词表变更"

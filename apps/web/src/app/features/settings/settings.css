@@ -98,11 +98,23 @@
     font-weight: 600;
     margin-bottom: var(--space-4);
   }
+  /* Columns as wide as a name or a choice; a URL or path takes its own row. */
   .settings-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(
+      auto-fill,
+      minmax(min(100%, 240px), var(--field-medium))
+    );
     align-items: end;
-    gap: var(--space-4);
+    gap: var(--space-4) var(--space-5);
+  }
+  .settings-grid > .ui-field-long {
+    grid-column: 1 / -1;
+  }
+  /* Removing a record closes it: its own row, at the start, button-sized. */
+  .settings-grid > .ui-button {
+    grid-column: 1 / -1;
+    justify-self: start;
   }
   .source-options {
     display: grid;
@@ -115,10 +127,12 @@
   }
   .credential-field {
     display: grid;
+    width: min(100%, var(--field-medium));
     gap: var(--space-2);
   }
   .configuration-probe {
     display: grid;
+    justify-items: start;
     gap: var(--space-2);
   }
   .settings-sources {

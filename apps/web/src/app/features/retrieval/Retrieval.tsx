@@ -369,6 +369,7 @@ function TextRetrieval({ header }: { header: ReactNode }) {
               />
               <TextField
                 label="精确传输预算"
+                width="short"
                 value={state.draft.bytes}
                 onChange={(bytes) => draft({ bytes })}
                 description="高级选项：1,024–262,144 UTF-8 字节，包含引用信息。"

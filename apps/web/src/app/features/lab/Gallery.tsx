@@ -348,6 +348,7 @@ export default function Gallery() {
         <div className="lab-fields">
           <TextField
             label="文献标题"
+            width="long"
             value={text}
             onChange={setText}
             placeholder="输入标题"

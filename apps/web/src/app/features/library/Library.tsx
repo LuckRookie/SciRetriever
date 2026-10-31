@@ -1548,18 +1548,6 @@ function Filters({
       }}
     >
       <TextField
-        label="年份起"
-        value={from}
-        onChange={setFrom}
-        placeholder="如 2015"
-      />
-      <TextField
-        label="年份止"
-        value={to}
-        onChange={setTo}
-        placeholder="如 2026"
-      />
-      <TextField
         label="作者"
         value={author}
         onChange={setAuthor}
@@ -1577,6 +1565,7 @@ function Filters({
         onChange={setKeyword}
         placeholder="文献关键词"
       />
+      <TextField label="DOI" value={doi} onChange={setDoi} placeholder="10.…" />
       <Select
         label="出版形式"
         value={form}
@@ -1624,7 +1613,22 @@ function Filters({
           { value: "primary", label: "主标签" },
         ]}
       />
-      <TextField label="DOI" value={doi} onChange={setDoi} placeholder="10.…" />
+      <div className="library-filter-years">
+        <TextField
+          label="年份起"
+          width="short"
+          value={from}
+          onChange={setFrom}
+          placeholder="如 2015"
+        />
+        <TextField
+          label="年份止"
+          width="short"
+          value={to}
+          onChange={setTo}
+          placeholder="如 2026"
+        />
+      </div>
       {error && <p role="alert">{error}</p>}
       <div className="form-actions">
         <Button variant="text" onPress={() => onApply(emptyQuery())}>

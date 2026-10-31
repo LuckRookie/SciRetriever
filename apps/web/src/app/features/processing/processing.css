@@ -378,12 +378,6 @@
     gap: var(--space-4);
     padding-block: var(--space-2) var(--space-6);
   }
-  .intake-form .ui-definition > dd .ui-field:has(.ui-number) {
-    width: 160px;
-  }
-  .intake-form .ui-definition > dd .ui-field:has(.ui-input) {
-    width: min(100%, 480px);
-  }
   .intake-range {
     display: flex;
     align-items: center;

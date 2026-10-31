@@ -28,14 +28,23 @@ import {
   TextField as AriaTextField,
 } from "react-aria-components";
 import { Icon } from "./icons.js";
+/**
+ * How much the value needs: a count or year (short), a name or choice
+ * (medium), a path, URL or sentence (long), or the whole line (full). Each
+ * field has a default; the slot never stretches past what its value needs.
+ */
+export type FieldWidth = "short" | "medium" | "long" | "full";
 export interface FieldProps {
   label: string;
   description?: string;
   errorMessage?: string;
   isRequired?: boolean;
   isDisabled?: boolean;
+  width?: FieldWidth;
   children?: ReactNode;
 }
+const fieldClass = (width: FieldWidth | undefined, fallback: FieldWidth) =>
+  `ui-field ui-field-${width ?? fallback}`;
 export function Field({
   label,
   description,
@@ -89,7 +98,7 @@ export function TextField({
 }: TextFieldProps) {
   return (
     <AriaTextField
-      className="ui-field"
+      className={fieldClass(field.width, "medium")}
       value={value}
       onChange={onChange}
       type={type}
@@ -121,7 +130,7 @@ export function SearchField({
 }) {
   return (
     <AriaSearchField
-      className="ui-field"
+      className={fieldClass(field.width, "full")}
       value={value}
       onChange={onChange}
       {...(onSubmit ? { onSubmit } : {})}
@@ -163,7 +172,7 @@ export function TextArea({
   }, [value]);
   return (
     <AriaTextField
-      className="ui-field"
+      className={fieldClass(field.width, "long")}
       value={value}
       onChange={onChange}
       isDisabled={field.isDisabled ?? false}
@@ -202,7 +211,7 @@ export function Select({
 }) {
   return (
     <AriaSelect
-      className="ui-field"
+      className={fieldClass(field.width, "medium")}
       selectedKey={value}
       onSelectionChange={(key) => {
         if (key !== null) onChange(String(key));
@@ -266,7 +275,7 @@ export function SuggestField({
   const label = suggestions.find((option) => option.value === selected)?.label;
   return (
     <AriaComboBox
-      className="ui-field"
+      className={fieldClass(field.width, "full")}
       allowsCustomValue
       menuTrigger="focus"
       inputValue={selected ? (label ?? "") : text}
@@ -351,7 +360,7 @@ export function NumberField({
   const [draft, setDraft] = useState(value);
   return (
     <AriaNumberField
-      className="ui-field"
+      className={fieldClass(field.width, "short")}
       value={focused ? draft : value}
       onChange={(next) => {
         setDraft(next);

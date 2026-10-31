@@ -594,14 +594,26 @@
     background: var(--status-excluded-bg);
     color: var(--status-excluded);
   }
+  /* A catalogue search card: bibliographic fields, then classification,
+     then the year range, each cell as wide as a name or a choice. */
   .library-filters {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-4);
+    grid-template-columns: repeat(
+      auto-fill,
+      minmax(min(100%, 220px), var(--field-medium))
+    );
+    gap: var(--space-4) var(--space-5);
     padding: var(--space-5);
     background: var(--surface-sunken);
     border-radius: var(--radius-md);
     margin-block: var(--space-3);
+  }
+  .library-filter-years {
+    display: flex;
+    gap: var(--space-2);
+  }
+  .library-filter-years > .ui-field {
+    flex: 1;
   }
   .form-actions {
     display: flex;

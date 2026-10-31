@@ -171,6 +171,7 @@ function Delivery({ onUseSelected }: { onUseSelected: () => Promise<string> }) {
         </Button>
         <TextArea
           label="规范 JSON"
+          width="full"
           description="可省略 spec_sha256，由本页计算。规范与领域含义由调用方负责。"
           value={spec}
           onChange={change(setSpec)}
@@ -179,6 +180,7 @@ function Delivery({ onUseSelected }: { onUseSelected: () => Promise<string> }) {
         />
         <TextArea
           label="显式输入 JSON 数组"
+          width="full"
           value={inputs}
           onChange={change(setInputs)}
           rows={5}
@@ -250,6 +252,7 @@ function Delivery({ onUseSelected }: { onUseSelected: () => Promise<string> }) {
           />
           <TextArea
             label="输入准备结果 JSON"
+            width="full"
             value={prepared}
             onChange={change(setPrepared)}
             rows={6}
@@ -287,6 +290,7 @@ function Delivery({ onUseSelected }: { onUseSelected: () => Promise<string> }) {
           />
           <TextArea
             label="候选批次 JSON"
+            width="full"
             value={batch}
             onChange={change(setBatch)}
             rows={8}
@@ -781,6 +785,7 @@ function Indexes() {
           </p>
           <TextArea
             label="加工请求 JSON"
+            width="full"
             value={raw}
             onChange={setRaw}
             rows={10}

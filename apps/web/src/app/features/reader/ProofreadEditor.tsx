@@ -372,6 +372,7 @@ export function ProofreadEditor({
                     <div onFocus={() => onPage(pageIndex + 1)}>
                       <TextArea
                         label={`${label}校订稿`}
+                        width="full"
                         value={segment.text}
                         onChange={(value) => {
                           setDraft((current) =>

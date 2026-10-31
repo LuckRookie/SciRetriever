@@ -280,7 +280,12 @@ export function Assignment({ id }: { id: string }) {
       {excerpt.error ? (
         <ErrorNotice message={errorMessage(excerpt.error)} />
       ) : null}
-      <TextField label="标签理由" value={reason} onChange={setReason} />
+      <TextField
+        label="标签理由"
+        width="long"
+        value={reason}
+        onChange={setReason}
+      />
       <Button
         isDisabled={
           !tag ||
