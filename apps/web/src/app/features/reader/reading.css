@@ -328,30 +328,102 @@
   .reader-information section > p {
     margin: 0 0 var(--space-1);
   }
-  .reader-information .reader-facts {
+  /* Label column and values read left to right; a long value wraps under itself. */
+  .reader-information .reader-fields {
     display: grid;
-    margin: var(--space-3) 0;
-    padding: var(--space-1) var(--space-3);
-    background: var(--surface-sunken);
-    border-radius: var(--radius-md);
+    grid-template-columns: 4.5em minmax(0, 1fr);
+    gap: var(--space-1) var(--space-3);
+    margin: 0 0 var(--space-3);
+    font-size: var(--text-secondary);
   }
-  .reader-facts > div {
+  .reader-fields > div {
+    display: contents;
+  }
+  .reader-fields dt {
+    color: var(--fg2);
+  }
+  .reader-information .reader-fields dd {
+    margin: 0;
+    word-break: normal;
+    overflow-wrap: break-word;
+  }
+  .reader-fields cite {
+    font-family: var(--serif);
+    font-style: italic;
+  }
+  .reader-quiet {
+    color: var(--fg2);
+  }
+  .reader-tags {
+    margin: 0 0 var(--space-1);
+    font-size: var(--text-secondary);
+  }
+  .reader-folders,
+  .reader-relation-list,
+  .reader-steps {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  /* A relation is one row: its name, then the count on the right edge. */
+  .reader-relation-list .ui-button,
+  .reader-relation-empty {
     display: flex;
     justify-content: space-between;
-    gap: var(--space-3);
-    padding: var(--space-1) 0;
+    width: 100%;
+    padding-inline: 0;
   }
-  .reader-facts > div + div {
-    border-top: 1px solid var(--line);
-  }
-  .reader-facts dt {
-    flex-shrink: 0;
+  .reader-relation-empty {
+    padding-block: var(--space-1);
     color: var(--fg2);
-    white-space: nowrap;
   }
-  .reader-information .reader-facts dd {
-    margin: 0;
-    text-align: right;
+  .reader-count {
+    color: var(--fg2);
+    font-variant-numeric: tabular-nums;
+  }
+  .reader-steps {
+    display: grid;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+  }
+  .reader-step {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr);
+    gap: var(--space-2);
+    align-items: start;
+  }
+  .reader-step > span {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    margin-top: 0.25em;
+    border-radius: 50%;
+    border: 1.5px solid var(--fg3);
+  }
+  .reader-step > span svg {
+    width: 12px;
+    height: 12px;
+  }
+  .reader-step[data-state="done"] > span {
+    border-color: var(--t-green);
+    color: var(--t-green);
+  }
+  .reader-step[data-state="pending"] > span {
+    border-color: var(--blue);
+    border-right-color: transparent;
+  }
+  .reader-step[data-state="warning"] > span {
+    border: 0;
+    border-radius: 0;
+    color: var(--t-red);
+  }
+  .reader-step[data-state="warning"] > span svg {
+    width: 16px;
+    height: 16px;
+  }
+  .reader-step[data-state="todo"] > div {
+    color: var(--fg2);
   }
   .reader-next-step {
     display: grid;
@@ -369,9 +441,17 @@
   .reader-information .reader-doi {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
     gap: var(--space-1);
     word-break: break-all;
+  }
+  .reader-information .reader-action-group {
+    gap: var(--space-1);
+  }
+  /* A text action that starts a line keeps its label on the text edge. */
+  .reader-information section > .ui-button[data-variant="text"],
+  .reader-step .ui-button[data-variant="text"],
+  .reader-action-group > .ui-button[data-variant="text"]:first-child {
+    margin-left: calc(-1 * var(--space-3));
   }
   .reader-information a {
     color: var(--blue);

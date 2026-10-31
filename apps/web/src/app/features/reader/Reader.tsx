@@ -48,6 +48,7 @@ import {
 } from "../../components/index.js";
 import { archiveJsonStream, archiveQuery, rows } from "../../data/archive.js";
 import {
+  paperCitation,
   paperTitle,
   paperTitleParts,
   readLiterature,
@@ -923,8 +924,7 @@ export default function Reader() {
                 id: "copy",
                 label: "复制引用",
                 onAction: () => {
-                  const text = `${detail.data!.literature.metadata.authors.map((a) => a.display_name).join(", ")}. ${detail.data!.literature.metadata.title ?? ""}. ${detail.data!.literature.metadata.venue ?? ""} (${detail.data!.literature.metadata.publication_year ?? ""}).`;
-                  void copyText(text)
+                  void copyText(paperCitation(detail.data!))
                     .then(() => shell.notify("引用已复制"))
                     .catch(() =>
                       shell.notify(

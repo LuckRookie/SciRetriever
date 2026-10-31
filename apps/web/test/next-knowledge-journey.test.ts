@@ -332,7 +332,7 @@ it("keeps parsing separate from document publication and reads existing verified
       .poll(() => page.locator(".reader-information").textContent(), {
         timeout: 20_000,
       })
-      .toContain("有证据支持");
+      .toContain("已核对：PDF 就是这篇文章");
     await page.getByRole("tab", { name: "结果", exact: true }).click();
     await page.getByRole("button", { name: "阅读总结", exact: true }).click();
     await expect

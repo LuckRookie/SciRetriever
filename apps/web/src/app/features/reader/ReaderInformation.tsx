@@ -1,10 +1,13 @@
 import { Assignment } from "../tags/Assignment.js";
+import { openFolder, folderPaths, useFolders } from "../library/Folders.js";
 import { MetadataFields } from "../archive/MetadataFields.js";
 import { StepActions } from "../archive/StepActions.js";
 import { OperationDialog } from "../library/OperationDialog.js";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
+  ARTICLE_KIND_LABELS,
+  PUBLICATION_FORM_LABELS,
   parseLiteratureSearchItem,
   parseReferenceDetail,
   type DocumentReadingRef,
@@ -21,11 +24,15 @@ import {
   RichTitle,
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
-import { paperAuthors, paperTitleParts } from "../../data/library.js";
+import {
+  paperAuthors,
+  paperCitation,
+  paperTitleParts,
+} from "../../data/library.js";
 import { titleParts } from "../../../reading/title.js";
 import { useShell } from "../../shell/context.js";
 import { record } from "../../data/wire.js";
-import { errorMessage, localTime, statusLabels } from "../../strings.js";
+import { errorMessage, localTime } from "../../strings.js";
 import type { ReaderResourceEntry } from "../../../reading/contract.js";
 import { copyText } from "../../../browser-platform.js";
 import { EvidencePreview } from "./SummaryView.js";
@@ -150,6 +157,27 @@ function Relations({
     </div>
   );
 }
+/** One archive fact: done, in progress, needs attention, or not yet. */
+function Step({
+  state,
+  children,
+}: {
+  state: "done" | "pending" | "warning" | "todo";
+  children: ReactNode;
+}) {
+  return (
+    <li className="reader-step" data-state={state}>
+      <span aria-hidden="true">
+        {state === "done" ? (
+          <Icon name="check" />
+        ) : state === "warning" ? (
+          <Icon name="warning" />
+        ) : null}
+      </span>
+      <div>{children}</div>
+    </li>
+  );
+}
 export function ReaderInformation({
   detail,
   document,
@@ -161,10 +189,17 @@ export function ReaderInformation({
 }) {
   const api = useApi(),
     shell = useShell(),
+    folders = useFolders(),
     [expanded, setExpanded] = useState(false),
-    [relation, setRelation] = useState<"references" | "cited-by" | null>(null),
-    [operation, setOperation] = useState<"archive" | null>(null);
-  const assetId = detail.primary_pdf?.asset.asset_id ?? null;
+    [editing, setEditing] = useState<"metadata" | "tags" | null>(null),
+    [relation, setRelation] = useState<
+      "references" | "cited-by" | "versions" | "resources" | null
+    >(null),
+    [operation, setOperation] = useState<
+      "archive" | "export" | "identity" | null
+    >(null);
+  const assetId = detail.primary_pdf?.asset.asset_id ?? null,
+    maintenance = api.workspace.capabilities.maintenance;
   // Where the reading text came from; absent before a corrected text exists.
   const reading = useQuery({
     queryKey: ["document", "reading-status", assetId],
@@ -174,97 +209,428 @@ export function ReaderInformation({
   });
   const id = detail.literature.literature_id,
     m = detail.literature.metadata,
-    doi = m.identifiers.find((value) => value.namespace === "doi")?.value;
+    doi = m.identifiers.find((value) => value.namespace === "doi")?.value,
+    otherIdentifiers = m.identifiers.filter(
+      (value) => value.namespace !== "doi",
+    );
   // Archiving parses first when needed (Owner 2026-10-30): one next step.
   const next = detail.literature.status === "ASSET_READY" ? "archive" : null,
     unparsed = next && detail.missing_step === "raw-parse";
   const identity = detail.primary_pdf
-    ? {
-        unverified: "未核验",
-        "match-supported": "有证据支持",
-        conflict: "存在冲突",
-        "insufficient-evidence": "证据不足",
-      }[detail.primary_pdf.article_identity_status ?? "unverified"]
+    ? (detail.primary_pdf.article_identity_status ?? "unverified")
     : null;
+  const tags = [...(detail.tags ?? [])].sort((a, b) => a.rank - b.rank),
+    paths = new Map(
+      folderPaths(folders.data?.items ?? []).map((p) => [p.id, p.label]),
+    ),
+    memberOf = (detail.folder_ids ?? []).filter((f) => paths.has(f));
+  const kind = [
+    m.publication_form ? PUBLICATION_FORM_LABELS[m.publication_form] : null,
+    m.article_kind ? ARTICLE_KIND_LABELS[m.article_kind] : null,
+  ].filter(Boolean);
+  // Only what the metadata holds: a missing field is left out, not "未提供".
+  const fields: [string, ReactNode][] = [
+    ["作者", paperAuthors(detail)],
+    ...(m.venue
+      ? [["期刊", <cite key="venue">{m.venue}</cite>] as [string, ReactNode]]
+      : []),
+    ...(m.publication_date || m.publication_year
+      ? [
+          ["发表", m.publication_date ?? String(m.publication_year)] as [
+            string,
+            ReactNode,
+          ],
+        ]
+      : []),
+    ...(m.volume || m.issue
+      ? [
+          [
+            "卷期",
+            [m.volume && `第 ${m.volume} 卷`, m.issue && `第 ${m.issue} 期`]
+              .filter(Boolean)
+              .join("，"),
+          ] as [string, ReactNode],
+        ]
+      : []),
+    ...(m.pages ? [["页码", m.pages] as [string, ReactNode]] : []),
+    ...(m.publisher ? [["出版方", m.publisher] as [string, ReactNode]] : []),
+    ...(kind.length ? [["类型", kind.join("，")] as [string, ReactNode]] : []),
+    ...(m.language ? [["语言", m.language] as [string, ReactNode]] : []),
+    ...(doi
+      ? [
+          [
+            "DOI",
+            <span className="reader-doi" key="doi">
+              <a
+                href={`https://doi.org/${encodeURIComponent(doi)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {doi}
+              </a>
+              <IconButton
+                size="inline"
+                variant="text"
+                aria-label="复制 DOI"
+                icon={<Icon name="copy" />}
+                onPress={() => {
+                  void copyText(doi)
+                    .then(() => shell.notify("DOI 已复制"))
+                    .catch(() =>
+                      shell.notify("浏览器未允许复制，可选择 DOI 文本复制。"),
+                    );
+                }}
+              />
+            </span>,
+          ] as [string, ReactNode],
+        ]
+      : []),
+    ...otherIdentifiers.map(
+      (i) => [i.namespace.toUpperCase(), i.value] as [string, ReactNode],
+    ),
+    ...(m.keywords.length
+      ? [["关键词", m.keywords.join("；")] as [string, ReactNode]]
+      : []),
+  ];
+  const relations: {
+    key: "references" | "cited-by" | "versions" | "resources";
+    label: string;
+    count: number;
+    unit: string;
+  }[] = [
+    {
+      key: "references",
+      label: "参考文献",
+      count: detail.reference_count,
+      unit: "条",
+    },
+    {
+      key: "cited-by",
+      label: "库内被引",
+      count: detail.cited_by_count,
+      unit: "次",
+    },
+    {
+      key: "versions",
+      label: "其他版本",
+      count: detail.other_versions.length,
+      unit: "个",
+    },
+    {
+      key: "resources",
+      label: "图表资源",
+      count: resources.length,
+      unit: "项",
+    },
+  ];
   return (
     <>
-      <section className="reader-info-status">
-        <h3>状态</h3>
-        <span className="paper-status" data-state={detail.literature.status}>
-          {statusLabels[detail.literature.status]}
-        </span>
-        <dl className="reader-facts">
-          <div>
-            <dt>原始 PDF</dt>
-            <dd>{detail.primary_pdf ? "已保存" : "未获取"}</dd>
-          </div>
-          {identity ? (
-            <div>
-              <dt>文章身份</dt>
-              <dd>{identity}</dd>
+      <section className="reader-info-metadata" aria-label="元数据">
+        {/* The title is already on the tab and the page; the panel adds the rest. */}
+        <dl className="reader-fields">
+          {fields.map(([label, value]) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{value}</dd>
             </div>
-          ) : null}
-          <div>
-            <dt>全文</dt>
-            <dd>
-              {(
-                {
-                  READY: "已建档",
-                  ARCHIVING: "建档中",
-                  ARCHIVE_FAILED: "建档失败",
-                } as Record<string, string>
-              )[detail.literature.status] ??
-                (unparsed
-                  ? "尚未建档（未解析）"
-                  : next
-                    ? "已解析，尚未建档"
-                    : "尚未建档")}
-            </dd>
-          </div>
-          {reading.data ? (
-            <>
-              <div>
-                <dt>文字来源</dt>
-                <dd>
-                  解析 {reading.data.blocks.parser} · Agent 矫正{" "}
-                  {reading.data.blocks.agent} · 人工{" "}
-                  {reading.data.blocks.manual} 块
-                </dd>
-              </div>
-              <div>
-                <dt>文字层</dt>
-                <dd>
-                  {reading.data.text_layer_pages} / {reading.data.total_pages}{" "}
-                  页有文字层
-                </dd>
-              </div>
-              <div>
-                <dt>最后人工修改</dt>
-                <dd>
-                  {reading.data.last_manual_edit
-                    ? `${reading.data.last_manual_edit.actor_label} · ${localTime(reading.data.last_manual_edit.at)}`
-                    : "尚无"}
-                </dd>
-              </div>
-            </>
-          ) : null}
-          {resources.length > 0 ? (
-            <div>
-              <dt>图表资源</dt>
-              <dd>{resources.length} 项</dd>
-            </div>
-          ) : null}
+          ))}
         </dl>
-        {next && api.workspace.capabilities.maintenance ? (
+        <div className="reader-action-group">
+          <Button
+            variant="text"
+            size="compact"
+            onPress={() => {
+              void copyText(paperCitation(detail))
+                .then(() => shell.notify("引用已复制"))
+                .catch(() =>
+                  shell.notify("浏览器未允许复制，可选择书目信息手动复制。"),
+                );
+            }}
+          >
+            复制引用
+          </Button>
+          {api.kind === "workspace" ? (
+            <Button
+              variant="text"
+              size="compact"
+              onPress={() => setOperation("export")}
+            >
+              导出书目
+            </Button>
+          ) : null}
+          <Button
+            variant="text"
+            size="compact"
+            aria-expanded={editing === "metadata"}
+            onPress={() =>
+              setEditing((value) => (value === "metadata" ? null : "metadata"))
+            }
+          >
+            {editing === "metadata" ? "收起元数据编辑" : "编辑元数据"}
+          </Button>
+        </div>
+        {editing === "metadata" ? <MetadataFields id={id} /> : null}
+      </section>
+      <section>
+        <h3>摘要</h3>
+        {m.abstract ? (
+          <>
+            <p className={expanded ? "" : "reader-abstract-clamped"}>
+              {m.abstract}
+            </p>
+            <Button
+              size="compact"
+              variant="text"
+              onPress={() => setExpanded((value) => !value)}
+            >
+              {expanded ? "收起摘要" : "展开摘要"}
+            </Button>
+          </>
+        ) : (
+          <p className="reader-quiet">
+            {detail.literature.status === "READY"
+              ? "元数据里没有摘要，可在“编辑元数据”中补上。"
+              : "元数据里没有摘要，建档时会从全文补上。"}
+          </p>
+        )}
+      </section>
+      <section>
+        <h3>标签</h3>
+        <div className="paper-tags reader-tags">
+          {tags.map((t) => (
+            <span
+              key={t.tag_id}
+              className={t.rank === 1 ? "paper-tag primary" : "paper-tag"}
+              title={t.rank === 1 ? "主标签" : undefined}
+            >
+              {t.name}
+            </span>
+          ))}
+          {!tags.length ? (
+            <span className="reader-quiet">还没有标签。</span>
+          ) : null}
+        </div>
+        <Button
+          variant="text"
+          size="compact"
+          aria-expanded={editing === "tags"}
+          onPress={() =>
+            setEditing((value) => (value === "tags" ? null : "tags"))
+          }
+        >
+          {editing === "tags" ? "收起标签编辑" : "编辑标签"}
+        </Button>
+        {editing === "tags" ? <Assignment id={id} /> : null}
+      </section>
+      {memberOf.length ? (
+        <section>
+          <h3>文件夹</h3>
+          <ul className="reader-folders">
+            {memberOf.map((folder) => (
+              <li key={folder}>
+                <Button
+                  variant="text"
+                  size="compact"
+                  icon={<Icon name="folder" />}
+                  onPress={() => openFolder(folder)}
+                >
+                  {paths.get(folder)}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      <section>
+        <h3>关联</h3>
+        <ul className="reader-relation-list">
+          {relations
+            .filter((r) => r.key !== "resources" || r.count > 0)
+            .map((r) => (
+              <li key={r.key}>
+                {/* Saved relations can exist where the source gave no count. */}
+                {r.count > 0 ||
+                r.key === "references" ||
+                r.key === "cited-by" ? (
+                  <Button
+                    variant="text"
+                    size="compact"
+                    aria-label={`${r.label} ${r.count.toLocaleString()} ${r.unit}`}
+                    aria-expanded={relation === r.key}
+                    onPress={() =>
+                      setRelation((value) => (value === r.key ? null : r.key))
+                    }
+                  >
+                    <span>{r.label}</span>
+                    <span className="reader-count">
+                      {r.count.toLocaleString()} {r.unit}
+                    </span>
+                  </Button>
+                ) : (
+                  <span className="reader-relation-empty">
+                    <span>{r.label}</span>
+                    <span className="reader-count">无</span>
+                  </span>
+                )}
+              </li>
+            ))}
+        </ul>
+        {relation === "references" || relation === "cited-by" ? (
+          <Relations key={relation} id={id} direction={relation} />
+        ) : null}
+        {relation === "versions" ? (
+          <div className="reader-relations">
+            {detail.other_versions.map((version) => (
+              <div key={version.literature.literature_id}>
+                <Button
+                  variant="text"
+                  onPress={() =>
+                    shell.openPaper(version.literature.literature_id)
+                  }
+                >
+                  <RichTitle parts={paperTitleParts(version)} />
+                </Button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {relation === "resources" ? (
+          <div className="reader-resources">
+            {resources.map((resource) => (
+              <Button
+                key={resource.reference}
+                variant="text"
+                onPress={resource.open}
+              >
+                {resource.reference}
+              </Button>
+            ))}
+          </div>
+        ) : null}
+      </section>
+      <section className="reader-info-archive">
+        <h3>档案</h3>
+        <ul className="reader-steps">
+          <Step state={detail.primary_pdf ? "done" : "todo"}>
+            {detail.primary_pdf ? "原始 PDF 已保存" : "还没有原始 PDF"}
+          </Step>
+          {identity ? (
+            <Step
+              state={
+                identity === "match-supported"
+                  ? "done"
+                  : identity === "conflict"
+                    ? "warning"
+                    : "todo"
+              }
+            >
+              {
+                {
+                  unverified: "尚未核对这份 PDF 是否就是这篇文章",
+                  "match-supported": "已核对：PDF 就是这篇文章",
+                  conflict: "PDF 与这篇文章可能不符",
+                  "insufficient-evidence":
+                    "核对过，但证据不足以确认 PDF 就是这篇",
+                }[identity]
+              }
+              {detail.primary_pdf?.article_identity_assessment ? (
+                <Disclosure title="核对依据">
+                  <p>{detail.primary_pdf.article_identity_assessment.reason}</p>
+                  <div className="reader-evidence-list">
+                    {detail.primary_pdf.article_identity_assessment.evidence.map(
+                      (item, index) => (
+                        <Popover
+                          key={index}
+                          label={`核对依据 ${index + 1}`}
+                          trigger={<span>[{index + 1}]</span>}
+                        >
+                          <EvidencePreview
+                            evidence={item.evidence}
+                            index={index + 1}
+                          />
+                        </Popover>
+                      ),
+                    )}
+                  </div>
+                </Disclosure>
+              ) : null}
+              {identity !== "match-supported" && maintenance ? (
+                <Button
+                  variant="text"
+                  size="compact"
+                  onPress={() => setOperation("identity")}
+                >
+                  核对身份
+                </Button>
+              ) : null}
+            </Step>
+          ) : null}
+          <Step
+            state={
+              detail.literature.status === "READY"
+                ? "done"
+                : detail.literature.status === "ARCHIVE_FAILED"
+                  ? "warning"
+                  : detail.literature.status === "ARCHIVING"
+                    ? "pending"
+                    : "todo"
+            }
+          >
+            {(
+              {
+                READY: "全文已建档",
+                ARCHIVING: "正在建档",
+                ARCHIVE_FAILED: "建档失败，可以重新建档",
+              } as Record<string, string>
+            )[detail.literature.status] ??
+              (next && !unparsed ? "已解析，全文尚未建档" : "全文尚未建档")}
+          </Step>
+        </ul>
+        {reading.data ? (
+          <dl className="reader-fields">
+            <div>
+              <dt>文字来源</dt>
+              <dd>
+                解析 {reading.data.blocks.parser} 块，Agent 矫正{" "}
+                {reading.data.blocks.agent} 块，人工{" "}
+                {reading.data.blocks.manual} 块
+              </dd>
+            </div>
+            <div>
+              <dt>文字层</dt>
+              <dd>
+                {reading.data.text_layer_pages} / {reading.data.total_pages}{" "}
+                页有文字层
+              </dd>
+            </div>
+            <div>
+              <dt>人工修改</dt>
+              <dd>
+                {reading.data.last_manual_edit
+                  ? `${reading.data.last_manual_edit.actor_label}，${localTime(reading.data.last_manual_edit.at)}`
+                  : "尚无"}
+              </dd>
+            </div>
+          </dl>
+        ) : null}
+        {next && maintenance ? (
           <div className="reader-next-step">
             <p>
+              建档后可以读全文、翻译和运行算子。
               {unparsed
-                ? "下一步是建档：先由 MinerU 解析版面和文字，再整理并逐页校订全文、补全元数据，会调用模型。"
-                : "下一步是建档：整理并逐页校订全文、补全元数据，会调用模型。"}
+                ? "会先用 MinerU 解析版面，再调用模型校订全文、补全元数据。"
+                : "会调用模型校订全文、补全元数据。"}
             </p>
-            <Button variant="primary" onPress={() => setOperation(next)}>
-              建档
-            </Button>
+          </div>
+        ) : null}
+        {maintenance ? (
+          <div className="reader-action-group">
+            {next ? (
+              <Button variant="primary" onPress={() => setOperation(next)}>
+                建档
+              </Button>
+            ) : null}
+            <StepActions id={id} />
           </div>
         ) : null}
         {operation ? (
@@ -274,144 +640,6 @@ export function ReaderInformation({
             onClose={() => setOperation(null)}
           />
         ) : null}
-        {api.workspace.capabilities.maintenance ? (
-          <StepActions id={id} />
-        ) : null}
-      </section>
-      <section className="reader-info-bibliography">
-        <h3>书目</h3>
-        {/* The title is already on the tab and the page; the panel adds the rest. */}
-        <dl className="reader-facts">
-          <div>
-            <dt>作者</dt>
-            <dd>{paperAuthors(detail)}</dd>
-          </div>
-          <div>
-            <dt>期刊</dt>
-            <dd>
-              {m.venue ?? <span className="paper-venue-missing">未提供</span>}
-            </dd>
-          </div>
-          <div>
-            <dt>年份</dt>
-            <dd>{m.publication_year ?? "未提供"}</dd>
-          </div>
-          {doi ? (
-            <div>
-              <dt>DOI</dt>
-              <dd className="reader-doi">
-                <a
-                  href={`https://doi.org/${encodeURIComponent(doi)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {doi}
-                </a>
-                <IconButton
-                  size="inline"
-                  variant="text"
-                  aria-label="复制 DOI"
-                  icon={<Icon name="copy" />}
-                  onPress={() => {
-                    void copyText(doi)
-                      .then(() => shell.notify("DOI 已复制"))
-                      .catch(() =>
-                        shell.notify("浏览器未允许复制，可选择 DOI 文本复制。"),
-                      );
-                  }}
-                />
-              </dd>
-            </div>
-          ) : null}
-        </dl>
-        <h4>摘要</h4>
-        <p className={expanded ? "" : "reader-abstract-clamped"}>
-          {m.abstract || "此来源未提供摘要。"}
-        </p>
-        {m.abstract && (
-          <Button
-            size="compact"
-            variant="text"
-            onPress={() => setExpanded((value) => !value)}
-          >
-            {expanded ? "收起摘要" : "展开摘要"}
-          </Button>
-        )}
-      </section>
-      <section>
-        <h3>标签</h3>
-        <Disclosure title="编辑标签">
-          <Assignment id={id} />
-        </Disclosure>
-      </section>
-      <section>
-        <h3>元数据</h3>
-        <Disclosure title="字段、来源与锁定">
-          <MetadataFields id={id} />
-        </Disclosure>
-        {detail.primary_pdf?.article_identity_assessment && (
-          <Disclosure title="身份核验证据">
-            <p>{detail.primary_pdf.article_identity_assessment.reason}</p>
-            <div className="reader-evidence-list">
-              {detail.primary_pdf.article_identity_assessment.evidence.map(
-                (item, index) => (
-                  <Popover
-                    key={index}
-                    label={`核验证据 ${index + 1}`}
-                    trigger={<span>[{index + 1}]</span>}
-                  >
-                    <EvidencePreview
-                      evidence={item.evidence}
-                      index={index + 1}
-                    />
-                  </Popover>
-                ),
-              )}
-            </div>
-          </Disclosure>
-        )}
-        {detail.other_versions.length > 0 && (
-          <Disclosure title={`其他版本（${detail.other_versions.length}）`}>
-            {detail.other_versions.map((version) => (
-              <Button
-                key={version.literature.literature_id}
-                variant="text"
-                onPress={() =>
-                  shell.openPaper(version.literature.literature_id)
-                }
-              >
-                <RichTitle parts={paperTitleParts(version)} />
-              </Button>
-            ))}
-          </Disclosure>
-        )}
-      </section>
-      <section>
-        <h3>参考文献</h3>
-        <div className="reader-action-group">
-          <Button variant="text" onPress={() => setRelation("references")}>
-            参考文献 {detail.reference_count.toLocaleString()} 条
-          </Button>
-          <Button variant="text" onPress={() => setRelation("cited-by")}>
-            库内被引 {detail.cited_by_count.toLocaleString()} 次
-          </Button>
-        </div>
-        {relation && <Relations key={relation} id={id} direction={relation} />}
-        {resources.length > 0 && (
-          <Disclosure title={`图表资源（${resources.length}）`}>
-            <div className="reader-resources">
-              {resources.map((resource) => (
-                <Button
-                  key={resource.reference}
-                  variant="text"
-                  onPress={resource.open}
-                >
-                  {resource.reference}
-                </Button>
-              ))}
-            </div>
-          </Disclosure>
-        )}
       </section>
       <TechDetails
         copyText={JSON.stringify(

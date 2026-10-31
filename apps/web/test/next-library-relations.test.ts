@@ -123,7 +123,7 @@ it("restores search and detail history and reads more than 25 references with th
     expect(new URL(page.url()).searchParams.get("literature")).toBe(id);
     await expect
       .poll(() => page.locator(".reader-information").textContent())
-      .toContain("文章身份未核验");
+      .toContain("尚未核对这份 PDF 是否就是这篇文章");
     await page.getByRole("button", { name: /^参考文献 \d/ }).click();
     await page
       .getByRole("button", { name: "加载更多引用", exact: true })

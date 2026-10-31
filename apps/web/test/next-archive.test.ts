@@ -29,8 +29,8 @@ it("offers archiving for an unparsed paper, and archiving parses it first", asyn
   try {
     const p = w.page;
     await p.goto(`${w.origin}/?literature=${missingId}&reader=pdf`);
-    const info = p.locator(".reader-info-status");
-    await expect.poll(() => info.innerText()).toContain("尚未建档（未解析）");
+    const info = p.locator(".reader-info-archive");
+    await expect.poll(() => info.innerText()).toContain("全文尚未建档");
     await expect
       .poll(() =>
         info.getByRole("button", { name: "建档", exact: true }).count(),
@@ -103,9 +103,7 @@ it("archives a paper straight from its PDF, then exposes ready state and metadat
       .toBe("READY");
     expect(w.env.parseCalls).toBeGreaterThan(initial);
     await p.goto(`${w.origin}/?literature=${missingId}&reader=doc`);
-    await p
-      .getByRole("button", { name: "字段、来源与锁定", exact: true })
-      .click();
+    await p.getByRole("button", { name: "编辑元数据", exact: true }).click();
     await p.getByRole("button", { name: "编辑标题", exact: true }).click();
     await p
       .getByRole("textbox", { name: "标题", exact: true })

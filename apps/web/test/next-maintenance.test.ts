@@ -357,8 +357,8 @@ it("accepts a selected PDF in Chromium, reads the same fact, and reports rejecti
       .locator('.reading-pdf-page[data-rendered="true"]')
       .first()
       .waitFor();
-    expect(await page.locator(".reader-facts").first().innerText()).toMatch(
-      /文章身份\s+未核验/u,
+    expect(await page.locator(".reader-steps").innerText()).toMatch(
+      /尚未核对这份 PDF 是否就是这篇文章/u,
     );
     const read = await page.evaluate(async (literatureId) => {
       const response = await fetch("/api/v1/query/read", {

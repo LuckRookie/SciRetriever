@@ -107,6 +107,10 @@ function openScope(
     { clearSource: true },
   );
 }
+/** The library scoped to one folder, as clicking it in the tree does. */
+export function openFolder(id: string) {
+  openScope({ folder: { id, include_descendants: true } });
+}
 function dragKind(event: DragEvent) {
   const types = event.dataTransfer.types;
   return types.includes(LITERATURE_DRAG)
@@ -211,7 +215,7 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
     preferences.write(EXPANDED_KEY, JSON.stringify([...next]));
   };
   const open = (node: FolderNode) => {
-    openScope({ folder: { id: node.folder_id, include_descendants: true } });
+    openFolder(node.folder_id);
     onNavigate();
   };
   const move = (id: string, parent: string | null, position: number) =>

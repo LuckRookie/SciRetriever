@@ -71,6 +71,28 @@ export function paperAuthors(item: LiteratureSearchItem): string {
       .join(", ") || "作者未提供"
   );
 }
+/** One plain-text reference: authors. Title. Venue volume(issue), pages (year). DOI link. */
+export function paperCitation(item: LiteratureSearchItem): string {
+  const m = item.literature.metadata,
+    doi = m.identifiers.find((i) => i.namespace === "doi")?.value,
+    issue = m.issue ? `(${m.issue})` : "",
+    source = [
+      [m.venue, m.volume ? `${m.volume}${issue}` : issue]
+        .filter(Boolean)
+        .join(" "),
+      m.pages,
+    ]
+      .filter(Boolean)
+      .join(", ");
+  return [
+    `${paperAuthors(item)}.`,
+    m.title ? `${paperTitle(item)}.` : "",
+    `${source}${m.publication_year ? ` (${m.publication_year})` : ""}.`,
+    doi ? `https://doi.org/${doi}` : "",
+  ]
+    .filter((part) => part && part !== ".")
+    .join(" ");
+}
 /** Every item in the current scope, at most 1,000; used to select or act on all of it. */
 export async function scopeItems(
   api: ApiClient,
