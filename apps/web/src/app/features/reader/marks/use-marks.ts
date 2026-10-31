@@ -44,6 +44,8 @@ type Command =
  * One paper's marks (ADR 0046). Changes show at once and are saved behind
  * them; a failed save puts the list back and says so.
  */
+// One empty list while marks load: effects keyed on the list must not rerun every render.
+const NO_MARKS: readonly ReadingMark[] = [];
 export function useMarks(
   literatureId: string,
   enabled: boolean,
@@ -155,7 +157,7 @@ export function useMarks(
     [literatureId, write],
   );
   return {
-    marks: list.data ?? [],
+    marks: list.data ?? NO_MARKS,
     ready: list.isSuccess,
     saving: write.isPending,
     create,
