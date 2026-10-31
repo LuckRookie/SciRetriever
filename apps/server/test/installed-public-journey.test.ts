@@ -551,14 +551,8 @@ async function installedBrowserJourney(
       .click();
     await expect.poll(() => ui.url()).toContain(`literature=${literatureId}`);
     await expect
-      .poll(() =>
-        ui
-          .locator(".reader-information .reader-facts > div")
-          .filter({ has: ui.getByText("文章身份", { exact: true }) })
-          .locator("dd")
-          .textContent(),
-      )
-      .toBe("未核验");
+      .poll(() => ui.locator(".reader-information .reader-steps").innerText())
+      .toContain("尚未核对这份 PDF 是否就是这篇文章");
     await ui
       .locator('.reading-pdf-page[data-rendered="true"]')
       .first()

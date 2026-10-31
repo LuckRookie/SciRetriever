@@ -479,7 +479,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
         "run",
       );
       await ui.reload();
-      await ui.locator(".reader-information .reader-facts").first().waitFor();
+      await ui.locator(".reader-information .reader-fields").first().waitFor();
       await ui
         .getByLabel("主导航")
         .getByRole("button", { name: /^文献库/ })
@@ -489,7 +489,7 @@ it.runIf(!!process.env.SCIRETRIEVER_CLOAK_BUNDLE)(
           `[data-literature-id="${SECOND_LITERATURE.literature_id}"] .paper-open`,
         )
         .click();
-      await ui.locator(".reader-information .reader-facts").first().waitFor();
+      await ui.locator(".reader-information .reader-fields").first().waitFor();
       await ui
         .getByLabel("主导航")
         .getByRole("button", { name: "浏览器", exact: true })
