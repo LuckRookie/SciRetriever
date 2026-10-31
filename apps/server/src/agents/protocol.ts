@@ -53,10 +53,22 @@ export interface AgentCall {
   readonly tools?: readonly AgentToolDeclaration[];
   /** Omit to use the model service's native generation limit. */
   readonly max_output_tokens?: number;
+  /**
+   * Opaque, stable per conversation (DSH `sessionId`). Adapters send it as
+   * cache routing metadata so a relay keeps one conversation on one upstream.
+   */
+  readonly cache_key?: string;
 }
+/** `input_tokens` counts every prompt token, cached or not; the details are optional. */
 export interface AgentUsage {
   readonly input_tokens: number;
   readonly output_tokens: number;
+  /** Prompt tokens read from the provider's prompt cache. */
+  readonly cached_input_tokens?: number;
+  /** Prompt tokens written to the provider's prompt cache. */
+  readonly cache_write_tokens?: number;
+  /** Output tokens spent on hidden reasoning. */
+  readonly reasoning_tokens?: number;
 }
 export interface AgentProvenance {
   readonly provider: string;
@@ -259,7 +271,10 @@ export function validateAgentCall(
       (!Number.isSafeInteger(call.max_output_tokens) ||
         call.max_output_tokens < 1 ||
         call.max_output_tokens > 1_000_000)) ||
-    (call.response_schema !== undefined && call.tools !== undefined)
+    (call.response_schema !== undefined && call.tools !== undefined) ||
+    (call.cache_key !== undefined &&
+      (typeof call.cache_key !== "string" ||
+        !/^[A-Za-z0-9_-]{1,64}$/u.test(call.cache_key)))
   )
     invalid();
   let imageBytes = 0;

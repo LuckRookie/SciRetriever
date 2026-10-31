@@ -3,6 +3,7 @@ import {
   AgentFailure,
   type AgentCall,
   type AgentCallLifecycle,
+  type AgentUsage,
   type AgentResult,
   type AgentTransport,
   type AgentTransportResponse,
@@ -235,13 +236,26 @@ export function modelRequestBody(
         previous.content.push(...message.content);
       else turns.push(message);
     }
+    // Messages caches nothing without breakpoints; mark the system prompt, the
+    // last tool and the newest user turn, as DSH's Anthropic route does.
+    const cached = (blocks: unknown[]) =>
+      blocks.map((block, index) =>
+        index === blocks.length - 1
+          ? { ...(block as object), cache_control: { type: "ephemeral" } }
+          : block,
+      );
+    const last = turns.at(-1);
+    if (last?.role === "user" && Array.isArray(last.content))
+      turns[turns.length - 1] = { ...last, content: cached(last.content) };
     return {
       messages: turns,
       ...(messages.some((m) => m.role === "system")
         ? {
-            system: messages
-              .filter((m) => m.role === "system")
-              .flatMap((m) => m.content),
+            system: cached(
+              messages
+                .filter((m) => m.role === "system")
+                .flatMap((m) => m.content as unknown[]),
+            ),
           }
         : {}),
       // Messages requires max_tokens; this protocol default is not a publication budget.
@@ -251,11 +265,13 @@ export function modelRequestBody(
         : {}),
       ...(call.tools?.length
         ? {
-            tools: call.tools.map((t) => ({
-              name: t.name,
-              description: t.description,
-              input_schema: t.parameters,
-            })),
+            tools: cached(
+              call.tools.map((t) => ({
+                name: t.name,
+                description: t.description,
+                input_schema: t.parameters,
+              })),
+            ),
             tool_choice: {
               type:
                 call.tool_choice === "required"
@@ -311,7 +327,7 @@ export function modelRequestBody(
 
 export async function post(
   config: AdapterConfig,
-  call: Pick<AgentCall, "role">,
+  call: Pick<AgentCall, "role" | "cache_key">,
   body: Record<string, unknown>,
   stream: boolean,
   signal?: AbortSignal,
@@ -347,6 +363,13 @@ export async function post(
       ...(protocol === "anthropic" ? [ANTHROPIC_API_VERSION_HEADER] : []),
       ...(credential === null ? [] : [credentialHeader(protocol, credential)]),
       ["accept", stream ? "text/event-stream" : "application/json"],
+      // Conversation affinity, as DSH's OpenAI Responses adapter sends it.
+      ...(call.cache_key !== undefined && protocol !== "anthropic"
+        ? [
+            ["session_id", call.cache_key] as [string, string],
+            ["x-client-request-id", call.cache_key] as [string, string],
+          ]
+        : []),
     ],
     body: encoded,
     ...(lifecycle ? { onDispatched: lifecycle.onDispatched } : {}),
@@ -432,23 +455,60 @@ export function sseEvents(
   return events;
 }
 
-export function usage(value: unknown): {
-  input_tokens: number;
-  output_tokens: number;
-} {
+/**
+ * Opaque cache routing key for one conversation or call family: a digest, so
+ * internal session identifiers never leave the process.
+ */
+export function promptCacheKey(scope: string): string {
+  return `sr-${createHash("sha256").update(`sciretriever-cache:${scope}`).digest("hex").slice(0, 40)}`;
+}
+/** DSH token usage: uncached input apart from cache reads and writes. */
+export function harnessUsage(value: AgentUsage) {
+  const read = value.cached_input_tokens ?? 0,
+    written = value.cache_write_tokens ?? 0;
+  return {
+    inputTokens: value.input_tokens - read - written,
+    outputTokens: value.output_tokens,
+    totalTokens: value.input_tokens + value.output_tokens,
+    ...(value.cached_input_tokens === undefined
+      ? {}
+      : { cacheReadTokens: value.cached_input_tokens }),
+    ...(value.cache_write_tokens === undefined
+      ? {}
+      : { cacheWriteTokens: value.cache_write_tokens }),
+    ...(value.reasoning_tokens === undefined
+      ? {}
+      : { reasoningTokens: value.reasoning_tokens }),
+  };
+}
+export function usage(value: unknown): AgentUsage {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     throw new AgentFailure("agent-response");
   const record = value as Record<string, unknown>;
+  const count = (key: string) =>
+    Number.isSafeInteger(record[key]) && (record[key] as number) >= 0;
+  const optional = [
+    "cached_input_tokens",
+    "cache_write_tokens",
+    "reasoning_tokens",
+  ] as const;
   if (
-    !Number.isSafeInteger(record.input_tokens) ||
-    !Number.isSafeInteger(record.output_tokens) ||
-    (record.input_tokens as number) < 0 ||
-    (record.output_tokens as number) < 0
+    !count("input_tokens") ||
+    !count("output_tokens") ||
+    optional.some((key) => record[key] !== undefined && !count(key)) ||
+    ((record.cached_input_tokens as number | undefined) ?? 0) +
+      ((record.cache_write_tokens as number | undefined) ?? 0) >
+      (record.input_tokens as number)
   )
     throw new AgentFailure("agent-response");
   return {
     input_tokens: record.input_tokens as number,
     output_tokens: record.output_tokens as number,
+    ...Object.fromEntries(
+      optional
+        .filter((key) => record[key] !== undefined)
+        .map((key) => [key, record[key] as number]),
+    ),
   };
 }
 
@@ -456,7 +516,7 @@ export function resultText(
   provider: string,
   model: string,
   text: string,
-  tokenUsage: { input_tokens: number; output_tokens: number },
+  tokenUsage: AgentUsage,
   schema?: Record<string, unknown>,
 ): AgentResult {
   if (!text || text.length > 4_194_304)
@@ -483,7 +543,7 @@ export function toolResult(
   model: string,
   name: string,
   argumentsText: string,
-  tokenUsage: { input_tokens: number; output_tokens: number },
+  tokenUsage: AgentUsage,
   schema?: Record<string, unknown>,
 ): AgentResult {
   let value: unknown;
@@ -619,7 +679,7 @@ export function modelResponse(
   model: string,
   text: string,
   calls: readonly ModelToolCall[],
-  tokenUsage: { input_tokens: number; output_tokens: number },
+  tokenUsage: AgentUsage,
   continuation?: ModelContinuation,
 ): ModelResponse {
   if (new Set(calls.map((call) => call.id)).size !== calls.length)

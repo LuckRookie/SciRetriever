@@ -11,6 +11,7 @@ import {
   type AgentCall,
   type AgentCallLifecycle,
   type AgentResult,
+  type AgentUsage,
   type ReasoningEffort,
 } from "./protocol.js";
 import {
@@ -25,6 +26,31 @@ import {
   usage,
   type AdapterConfig,
 } from "./common.js";
+
+/**
+ * Messages reports uncached input apart from cache reads and writes; the
+ * shared usage counts every prompt token in `input_tokens`.
+ */
+function messagesUsage(raw: Record<string, unknown>): AgentUsage {
+  const optional = (key: string) =>
+    raw[key] === undefined || raw[key] === null
+      ? undefined
+      : (raw[key] as number);
+  const read = optional("cache_read_input_tokens"),
+    written = optional("cache_creation_input_tokens");
+  const input = raw.input_tokens;
+  return usage({
+    input_tokens:
+      Number.isSafeInteger(input) &&
+      (read === undefined || Number.isSafeInteger(read)) &&
+      (written === undefined || Number.isSafeInteger(written))
+        ? (input as number) + (read ?? 0) + (written ?? 0)
+        : input,
+    output_tokens: raw.output_tokens,
+    ...(read === undefined ? {} : { cached_input_tokens: read }),
+    ...(written === undefined ? {} : { cache_write_tokens: written }),
+  });
+}
 
 function record(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value))
@@ -115,7 +141,7 @@ export class AnthropicMessagesAdapter implements AgentAdapter {
       )
         throw new AgentFailure("agent-protocol");
     };
-    let tokenUsage: { input_tokens: number; output_tokens: number };
+    let tokenUsage: AgentUsage;
     let stopReason: string | undefined;
     if (!options.stream) {
       const value = parseJson(response);
@@ -157,10 +183,7 @@ export class AnthropicMessagesAdapter implements AgentAdapter {
         else throw new AgentFailure("agent-protocol");
         orderedBlocks.push(item);
       }
-      tokenUsage = usage({
-        input_tokens: record(value.usage).input_tokens,
-        output_tokens: record(value.usage).output_tokens,
-      });
+      tokenUsage = messagesUsage(record(value.usage));
     } else {
       let started = false;
       let stopped = false;
@@ -178,7 +201,7 @@ export class AnthropicMessagesAdapter implements AgentAdapter {
             initialInput?: Record<string, unknown>;
           }
         | undefined;
-      let inputTokens: unknown;
+      let inputUsage: Record<string, unknown> = {};
       let outputTokens: unknown;
       for (const event of sseEvents(response, false)) {
         const type = event.type;
@@ -193,7 +216,7 @@ export class AnthropicMessagesAdapter implements AgentAdapter {
           )
             throw new AgentFailure("agent-model-mismatch");
           started = true;
-          inputTokens = record(message.usage).input_tokens;
+          inputUsage = record(message.usage);
         } else if (type === "content_block_start") {
           if (!started || messageDeltaSeen || active)
             throw new AgentFailure("agent-protocol");
@@ -287,7 +310,16 @@ export class AnthropicMessagesAdapter implements AgentAdapter {
         } else if (type === "message_delta") {
           if (!started || active || messageDeltaSeen)
             throw new AgentFailure("agent-protocol");
-          outputTokens = record(event.usage).output_tokens;
+          const delta = record(event.usage);
+          outputTokens = delta.output_tokens;
+          // A cumulative delta may restate input and cache counts.
+          for (const key of [
+            "input_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+          ])
+            if (delta[key] !== undefined && delta[key] !== null)
+              inputUsage = { ...inputUsage, [key]: delta[key] };
           stopReason = textValue(record(event.delta).stop_reason);
           messageDeltaSeen = true;
         } else if (type === "message_stop") {
@@ -303,12 +335,12 @@ export class AnthropicMessagesAdapter implements AgentAdapter {
         !stopped ||
         !messageDeltaSeen ||
         active ||
-        !Number.isSafeInteger(inputTokens) ||
+        !Number.isSafeInteger(inputUsage.input_tokens) ||
         !Number.isSafeInteger(outputTokens)
       )
         throw new AgentFailure("agent-truncated");
-      tokenUsage = usage({
-        input_tokens: inputTokens,
+      tokenUsage = messagesUsage({
+        ...inputUsage,
         output_tokens: outputTokens,
       });
     }

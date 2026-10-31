@@ -9,7 +9,7 @@ DSH/Cordis 是唯一的模型与 Agent 执行底座，提供单次调用、完�
 - [dsh/runtime.ts](dsh/runtime.ts)：唯一 `DshAgentRuntime` 公开门面，无旧兼容入口或执行后端。
 - [protocol.ts](protocol.ts)：兼容的 `AgentCall/AgentResult`、严格 schema 与单次生命周期。
 - [model-protocol.ts](model-protocol.ts)：内部多轮消息、工具调用 ID、结果状态、图像与私有续接状态；不属于文献持久化 schema。
-- [common.ts](common.ts)、[openai.ts](openai.ts)、[anthropic.ts](anthropic.ts)：共享凭据和 Network 路径上的三种 wire，不自动重试。
+- [common.ts](common.ts)、[openai.ts](openai.ts)、[anthropic.ts](anthropic.ts)：共享凭据和 Network 路径上的三种 wire，不自动重试。缓存路由照 DSH 官方适配器：调用带 `cache_key` 时，OpenAI 两种 wire 发送 `session_id` 与 `x-client-request-id` 请求头，Responses 另在请求体带 `prompt_cache_key`，Chat 只在直连 `api.openai.com` 时带；Anthropic 在系统提示、最后一个工具和最新用户回合上标 `cache_control`。用量的 `input_tokens` 计入全部输入，另报缓存读写与推理 token（OpenAI `*_tokens_details`、DeepSeek `prompt_cache_hit_tokens`、Anthropic `cache_*_input_tokens`）。
 - [capability.ts](capability.ts)：中性会话、工具、取消和逐请求准入合同。
 - [dsh/](dsh/README.md)：统一配置绑定、原生 LlmRuntime 调用、AgentLoop 会话、附件及压缩适配；vendor 类型不进入业务模块。
 

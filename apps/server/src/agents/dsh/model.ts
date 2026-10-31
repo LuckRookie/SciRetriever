@@ -20,6 +20,7 @@ import type {
 } from "../model-protocol.js";
 import type { SessionAttachments } from "./attachments.js";
 import { createLogger } from "../../logging/index.js";
+import { harnessUsage, promptCacheKey } from "../common.js";
 
 const logger = createLogger("agents.dsh");
 
@@ -176,7 +177,7 @@ export class ControlledModelAdapter extends LlmAdapter {
       model: this.options.modelContext.model,
     };
     let dispatchedAt: number | undefined;
-    let tokens: { input_tokens: number; output_tokens: number } | undefined;
+    let tokens: import("../protocol.js").AgentUsage | undefined;
     logger.info("model_request_requested", identity);
     try {
       signal.throwIfAborted();
@@ -207,6 +208,8 @@ export class ControlledModelAdapter extends LlmAdapter {
           ...(options.tools?.length ? ["tool_decision" as const] : []),
         ],
         input_sha256: this.options.input_sha256,
+        // DSH stamps the session for routing; adapters turn it into cache affinity.
+        cache_key: promptCacheKey(this.options.id),
         ...(options.tools?.length ? { tools: options.tools } : {}),
         ...(options.maxTokens === undefined ||
         (this.options.role === "analysis" &&
@@ -297,13 +300,7 @@ export class ControlledModelAdapter extends LlmAdapter {
         yield { type: "block-end", index, block };
         index += 1;
       }
-      yield {
-        type: "usage",
-        usage: {
-          inputTokens: result.provenance.usage.input_tokens,
-          outputTokens: result.provenance.usage.output_tokens,
-        },
-      };
+      yield { type: "usage", usage: harnessUsage(result.provenance.usage) };
       yield {
         type: "finish",
         reason: {

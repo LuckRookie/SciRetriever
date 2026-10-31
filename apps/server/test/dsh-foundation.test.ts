@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import LlmRuntime from "@deepseek-ai/dsh-llm";
+import { promptCacheKey } from "../src/agents/common.js";
 import {
   DshAgentRuntime,
   type AgentBinding,
@@ -161,7 +162,11 @@ describe("one DSH foundation for model calls and application sessions", () => {
     await expect(
       host.execute(call, undefined, { onDispatched: dispatched }),
     ).resolves.toMatchObject({ value: { answer: "42 mg, dry only" } });
-    expect(observed[0]).toEqual(call);
+    // A single call shares its role's cache route.
+    expect(observed[0]).toEqual({
+      ...call,
+      cache_key: promptCacheKey(`call:${call.role}`),
+    });
     expect(dispatched).toHaveBeenCalledTimes(1);
     await host.executeModel({
       ...call,
@@ -211,7 +216,12 @@ describe("one DSH foundation for model calls and application sessions", () => {
       host.execute(call),
       host.execute(second),
     ]);
-    expect(seen).toEqual([call, second]);
+    expect(seen).toEqual(
+      [call, second].map((c) => ({
+        ...c,
+        cache_key: promptCacheKey(`call:${c.role}`),
+      })),
+    );
     expect(results).toMatchObject([
       { value: { answer: call.input_sha256 } },
       { value: { answer: second.input_sha256 } },

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { activityContext } from "../../logging/activity.js";
 import type { AgentTraceRecorder, AgentTraceSubject } from "../trace.js";
 import { tracedSession } from "../traced-session.js";
+import { promptCacheKey } from "../common.js";
 import {
   createDshCapabilityRuntime,
   type DshExecutionRuntime,
@@ -45,6 +46,12 @@ export interface AgentBinding {
 }
 
 /** Configuration-facing facade over the sole DSH execution foundation. */
+/** A single call without its own conversation shares one cache route per role. */
+function keyed<T extends Pick<AgentCall, "role" | "cache_key">>(call: T): T {
+  return call.cache_key === undefined
+    ? { ...call, cache_key: promptCacheKey(`call:${call.role}`) }
+    : call;
+}
 export class DshAgentRuntime {
   private readonly bindings: ReadonlyMap<AgentRole, AgentBinding>;
   private closed = false;
@@ -183,7 +190,7 @@ export class DshAgentRuntime {
             signal: active,
             invoke: (signal) =>
               binding.adapter.execute(
-                call,
+                keyed(call),
                 { reasoning: binding.reasoning, stream: binding.stream },
                 signal,
                 {
@@ -234,7 +241,7 @@ export class DshAgentRuntime {
         signal: active,
         invoke: (signal) =>
           invoke(
-            request,
+            keyed(request),
             { reasoning: binding.reasoning, stream: binding.stream },
             signal,
             lifecycle,

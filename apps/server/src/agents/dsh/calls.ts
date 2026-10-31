@@ -1,6 +1,7 @@
 import { visibleConversation } from "./events.js";
 import type { AgentConversationEvent } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
+import { harnessUsage } from "../common.js";
 import type { Context } from "@deepseek-ai/cordis";
 import {
   BlockAssembler,
@@ -138,13 +139,7 @@ class CallAdapter<T extends AgentResult | ModelResponse> extends LlmAdapter {
           };
         yield { type: "block-end", index, block };
       }
-      yield {
-        type: "usage",
-        usage: {
-          inputTokens: result.provenance.usage.input_tokens,
-          outputTokens: result.provenance.usage.output_tokens,
-        },
-      };
+      yield { type: "usage", usage: harnessUsage(result.provenance.usage) };
       yield {
         type: "finish",
         reason: {

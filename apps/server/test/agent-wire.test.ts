@@ -224,8 +224,13 @@ it.each(variants)(
               format: { type: "json_schema", schema },
             },
           });
+          // Cache breakpoints close the system prompt and the newest user turn.
           expect(body.system).toEqual([
-            { type: "text", text: "Return structured evidence." },
+            {
+              type: "text",
+              text: "Return structured evidence.",
+              cache_control: { type: "ephemeral" },
+            },
           ]);
           expect(body.messages).toEqual([
             {
@@ -239,6 +244,7 @@ it.each(variants)(
                     media_type: "image/png",
                     data: "AQID",
                   },
+                  cache_control: { type: "ephemeral" },
                 },
               ],
             },
@@ -327,6 +333,7 @@ it.each(variants)(
                       name: tool.name,
                       description: tool.description,
                       input_schema: schema,
+                      cache_control: { type: "ephemeral" },
                     },
                   ],
           );

@@ -11,6 +11,7 @@ import {
   type AgentCall,
   type AgentCallLifecycle,
   type AgentResult,
+  type AgentUsage,
   type ReasoningEffort,
 } from "./protocol.js";
 import {
@@ -30,10 +31,13 @@ function string(value: unknown): string {
   if (typeof value !== "string") throw new AgentFailure("agent-protocol");
   return value;
 }
-function modelUsage(value: Record<string, unknown>): {
-  input_tokens: number;
-  output_tokens: number;
-} {
+/** Optional detail counter: absent or null reads as unreported. */
+function detail(container: unknown, key: string): number | undefined {
+  if (container === undefined || container === null) return undefined;
+  const value = record(container)[key];
+  return value === undefined || value === null ? undefined : (value as number);
+}
+function modelUsage(value: Record<string, unknown>): AgentUsage {
   const tokens = record(value.usage);
   if (
     tokens.prompt_tokens !== undefined &&
@@ -47,9 +51,21 @@ function modelUsage(value: Record<string, unknown>): {
     tokens.completion_tokens !== tokens.output_tokens
   )
     throw new AgentFailure("agent-response");
+  // Responses and Chat report cache reads inside the prompt total; DeepSeek's
+  // Chat API names them prompt_cache_hit_tokens.
+  const input = tokens.input_tokens_details ?? tokens.prompt_tokens_details,
+    output = tokens.output_tokens_details ?? tokens.completion_tokens_details,
+    cached =
+      detail(input, "cached_tokens") ??
+      detail(tokens, "prompt_cache_hit_tokens"),
+    written = detail(input, "cache_write_tokens"),
+    reasoning = detail(output, "reasoning_tokens");
   return usage({
     input_tokens: tokens.input_tokens ?? tokens.prompt_tokens,
     output_tokens: tokens.output_tokens ?? tokens.completion_tokens,
+    ...(cached === undefined ? {} : { cached_input_tokens: cached }),
+    ...(written === undefined ? {} : { cache_write_tokens: written }),
+    ...(reasoning === undefined ? {} : { reasoning_tokens: reasoning }),
   });
 }
 function record(value: unknown): Record<string, unknown> {
@@ -170,6 +186,9 @@ export class OpenAIResponsesAdapter implements AgentAdapter {
     const body = {
       ...modelRequestBody(call, "openai-responses"),
       ...(!legacy ? { include: ["reasoning.encrypted_content"] } : {}),
+      ...(call.cache_key === undefined
+        ? {}
+        : { prompt_cache_key: call.cache_key }),
       model: this.model,
       ...(options.stream ? { stream: true } : {}),
       ...(options.reasoning !== "default"
@@ -345,6 +364,11 @@ export class OpenAIChatAdapter implements AgentAdapter {
     const body = {
       ...modelRequestBody(call, "openai-chat"),
       ...(options.stream ? { stream_options: { include_usage: true } } : {}),
+      // Other Chat-compatible services may reject the field; headers carry affinity there.
+      ...(call.cache_key !== undefined &&
+      new URL(this.config.endpoint).hostname === "api.openai.com"
+        ? { prompt_cache_key: call.cache_key }
+        : {}),
       model: this.model,
       ...(options.stream ? { stream: true } : {}),
       ...(options.reasoning !== "default"
@@ -364,7 +388,7 @@ export class OpenAIChatAdapter implements AgentAdapter {
     let reasoningContent: string | undefined;
     let finishReason: string | undefined;
     const calls: ModelToolCall[] = [];
-    let tokenUsage: { input_tokens: number; output_tokens: number };
+    let tokenUsage: AgentUsage;
     const finish = (reason: unknown): void => {
       finishReason = String(reason);
       if (reason === "length") throw new AgentFailure("agent-truncated");
