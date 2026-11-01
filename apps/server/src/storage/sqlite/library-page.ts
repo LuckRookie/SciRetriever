@@ -356,8 +356,9 @@ export function acquirePdfSelection(
   const items: Array<PdfSelection["items"][number]> = [];
   for (const id of ids) {
     const row = byId.get(id)!;
-    if (row.has_pdf) counts.skipped_has_pdf++;
-    else if (row.unavailable) counts.skipped_unavailable++;
+    if (selector.kind === "query" && row.has_pdf) counts.skipped_has_pdf++;
+    else if (selector.kind === "query" && row.unavailable)
+      counts.skipped_unavailable++;
     else if (
       selector.kind === "query" &&
       selector.limit !== null &&

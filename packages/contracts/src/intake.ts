@@ -94,6 +94,7 @@ export interface LibraryFacets {
     readonly count: number;
   }[];
 }
+/** Query scopes skip existing PDFs/exhaustion; explicit Literature IDs retain all targets. */
 export type AcquirePdfSelector =
   | {
       readonly kind: "query";

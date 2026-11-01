@@ -606,7 +606,7 @@ export class ExecutionJobService {
       ? selection.items.map((item) => ({
           target: { kind: "literature", literature_id: item.literature_id },
           candidates: [item.literature_id],
-          clear_exhaustion: false,
+          clear_exhaustion: selector.kind === "literatures",
         }))
       : await this.completion.freezeRequest({
           selector,

@@ -9,7 +9,9 @@ import {
   parseIntakeBatch,
   parseIntakeBatchPage,
   parseLibrarySearchRequest,
+  parseLiteratureId,
   type IntakeBatchId,
+  type LiteratureId,
 } from "@sciretriever/contracts";
 import { createApplication } from "../src/bootstrap/application.js";
 import { startIntake, finishIntake } from "../src/literature/intake.js";
@@ -17,6 +19,9 @@ import { createMetadataOperations } from "../src/entry/metadata-operations.js";
 import { withActivity } from "../src/logging/activity.js";
 import { TopicDiscoveryService } from "../src/entry/discovery.js";
 import { ObservationRepository } from "../src/storage/sqlite/repositories.js";
+import { ExecutionTaskService } from "../src/application/jobs/service.js";
+import { DatabaseCompletionService } from "../src/entry/database-completion.js";
+import { workbenchPdf } from "../src/workbench/synthetic-fixture.js";
 
 export function intakeObservation(
   record: string,
@@ -430,12 +435,97 @@ it("previews and freezes ordered PDF scope beyond one thousand rows, with disjoi
     });
     expect(explicit.counts).toEqual({
       matched: 3,
-      process: 1,
-      skipped_has_pdf: 1,
-      skipped_unavailable: 1,
+      process: 3,
+      skipped_has_pdf: 0,
+      skipped_unavailable: 0,
       over_limit: 0,
     });
     expect(
       (await tasks.list()).tasks.find((t) => t.job_id === job.job_id)?.scope,
     ).toEqual(read.scope);
+  }));
+
+it("keeps explicit PDF and exhausted targets in preview and submission, and retries exhausted targets only on execution", () =>
+  fixture(async (app) => {
+    const ids: LiteratureId[] = [];
+    for (const record of ["has-pdf", "exhausted", "missing-pdf"]) {
+      const decision = await app.identity.observe(intakeObservation(record));
+      if (decision.disposition !== "accepted")
+        throw new Error("fixture literature was not accepted");
+      ids.push(parseLiteratureId(decision.literature_id));
+    }
+    await app.maintenance!.ingestPdf({
+      literature_id: ids[0]!,
+      bytes: workbenchPdf(),
+    });
+    await app.database.setAutomaticPdfExhaustion(ids[1]!);
+    const selector = { kind: "literatures" as const, literature_ids: ids };
+    const preview = await app.library.pdfSelection(selector);
+    expect(preview.counts).toEqual({
+      matched: 3,
+      process: 3,
+      skipped_has_pdf: 0,
+      skipped_unavailable: 0,
+      over_limit: 0,
+    });
+    expect(preview.items.map((item) => item.literature_id)).toEqual(ids);
+    const queryPreview = await app.library.pdfSelection({
+      kind: "query",
+      query: {},
+      sort: "title-asc",
+      limit: null,
+    });
+    expect(queryPreview.counts).toEqual({
+      matched: 3,
+      process: 1,
+      skipped_has_pdf: 1,
+      skipped_unavailable: 1,
+      over_limit: 0,
+    });
+    const { createTaskOperations } = await import(
+      "../src/entry/task-operations.js"
+    );
+    const tasks = createTaskOperations(app)!;
+    const job = await tasks.create({
+      kind: "acquire-pdf",
+      selector,
+      idempotency_key: "explicit-pdf-retry",
+    });
+    const saved = await tasks.read(job.job_id);
+    expect(saved.scope).toEqual({ selector, counts: preview.counts });
+    expect(saved.targets.map((target) => target.literature_id)).toEqual(ids);
+    expect(job.selector).toMatchObject({
+      frozen_targets: ids.map((id) => ({
+        target: { kind: "literature", literature_id: id },
+        candidates: [id],
+        clear_exhaustion: true,
+      })),
+    });
+    expect(await app.database.hasAutomaticPdfExhaustion(ids[1]!)).toBe(true);
+    const acquired: LiteratureId[] = [];
+    const completion = new DatabaseCompletionService({
+      library: app.library,
+      database: app.database,
+      writes: app.writes,
+      completion: null,
+      acquisition: {
+        acquire: async ({ literature_id }) => {
+          expect(
+            await app.database.hasAutomaticPdfExhaustion(literature_id),
+          ).toBe(false);
+          acquired.push(literature_id);
+          return { kind: "exhausted" };
+        },
+      },
+    });
+    const runner = new ExecutionTaskService(
+      app.jobs!,
+      app.queue!,
+      app.interventions!,
+      { completion },
+    );
+    const results = await runner.runJob(job.job_id);
+    expect(results).toHaveLength(3);
+    expect(acquired).toEqual([ids[1], ids[2]]);
+    expect((await tasks.read(job.job_id)).job.status).toBe("completed");
   }));
