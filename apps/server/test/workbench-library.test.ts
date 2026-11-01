@@ -307,7 +307,20 @@ it("serves batch reads, full-scope facets and PDF preview alongside authenticate
       selector: { kind: "literatures", literature_ids: [lit] },
     });
     expect(preview.status).toBe(200);
+    // Named papers are all fetched again; a filter skips the ones with a PDF.
     expect(await preview.json()).toMatchObject({
+      result: { matched: 1, process: 1, skipped_has_pdf: 0 },
+    });
+    const scoped = await env.post("acquire-pdf/preview", {
+      selector: {
+        kind: "query",
+        query: { intake_batch_ids: [batch] },
+        sort: "intake-desc",
+        limit: null,
+      },
+    });
+    expect(scoped.status).toBe(200);
+    expect(await scoped.json()).toMatchObject({
       result: { matched: 1, process: 0, skipped_has_pdf: 1 },
     });
   } finally {
