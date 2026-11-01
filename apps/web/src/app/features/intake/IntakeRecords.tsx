@@ -179,9 +179,11 @@ function Record({
           </form>
         ) : (
           <div className="intake-record-title">
-            <span className="intake-record-kind">
-              {BATCH_KINDS[batch.kind]}
-            </span>
+            {batch.label !== BATCH_KINDS[batch.kind] ? (
+              <span className="intake-record-kind">
+                {BATCH_KINDS[batch.kind]}
+              </span>
+            ) : null}
             <span className="intake-record-name">{batch.label}</span>
             {status ? (
               <Badge status={status.badge}>{status.label}</Badge>

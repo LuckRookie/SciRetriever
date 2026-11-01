@@ -1068,6 +1068,15 @@
   }
 
   /* Get PDF: the scope first, as label/value lines on a sunken block. */
+  .acquire-form {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-4);
+  }
+  .acquire-form > p {
+    margin: 0;
+  }
   .acquire-scope {
     display: grid;
     grid-template-columns: 3em minmax(0, 1fr);

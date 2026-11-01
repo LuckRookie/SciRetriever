@@ -181,90 +181,92 @@ export function AcquireDialog({
         )
       }
     >
-      <dl className="acquire-scope">
-        <dt>范围</dt>
-        <dd>{scope.label}</dd>
-        <dt>处理</dt>
-        <dd role="status">
-          {preview.isPending ? (
-            "正在核对…"
-          ) : counts ? (
-            <>
-              <b>{process.toLocaleString()} 篇</b>
-              {scope.kind === "query" ? "还没有 PDF 的文献" : null}
-            </>
-          ) : (
-            "—"
-          )}
-        </dd>
-        <dt>跳过</dt>
-        <dd className="acquire-skipped">
-          {counts ? skippedText(counts) : "—"}
-        </dd>
-      </dl>
-      {preview.isError ? (
-        <ErrorNotice
-          message={errorMessage(preview.error)}
-          onRetry={() => void preview.refetch()}
-        />
-      ) : null}
-      {submit.isError ? (
-        <ErrorNotice message={`任务未提交：${errorMessage(submit.error)}`} />
-      ) : null}
-      {task ? (
-        <p role="status">任务已保存；执行进度与结果请查看任务。</p>
-      ) : (
-        <>
-          {scope.kind === "query" ? (
-            <div className="acquire-limit">
-              <TextField
-                label="本次最多"
-                width="short"
-                value={limitText}
-                onChange={setLimitText}
-                placeholder="不限"
-                {...(limitInvalid
-                  ? { errorMessage: "填正整数，或留空表示不限" }
-                  : {})}
-              />
-              <span className="muted">
-                篇，按“{SORT_LABELS[scope.sort]}”顺序取前面的
-              </span>
-            </div>
-          ) : null}
-          <p className="muted">
-            将使用配置的文献来源获取 PDF，必要时调用 Browser
-            Agent；成员在提交时固定，之后入库的文献不会加入。
-          </p>
-          <Select
-            label="受阻时"
-            value={policy}
-            onChange={setPolicy}
-            options={[
-              { value: "never", label: "自动处理" },
-              { value: "notify", label: "通知并继续" },
-              { value: "pause", label: "暂停等待人工" },
-            ]}
+      <div className="acquire-form">
+        <dl className="acquire-scope">
+          <dt>范围</dt>
+          <dd>{scope.label}</dd>
+          <dt>处理</dt>
+          <dd role="status">
+            {preview.isPending ? (
+              "正在核对…"
+            ) : counts ? (
+              <>
+                <b>{process.toLocaleString()} 篇</b>
+                {scope.kind === "query" ? "还没有 PDF 的文献" : null}
+              </>
+            ) : (
+              "—"
+            )}
+          </dd>
+          <dt>跳过</dt>
+          <dd className="acquire-skipped">
+            {counts ? skippedText(counts) : "—"}
+          </dd>
+        </dl>
+        {preview.isError ? (
+          <ErrorNotice
+            message={errorMessage(preview.error)}
+            onRetry={() => void preview.refetch()}
           />
-          <TextField
-            label="尝试上限"
-            width="short"
-            value={attempts}
-            onChange={setAttempts}
-          />
-          <TextField
-            label="重试上限"
-            width="short"
-            value={retries}
-            onChange={setRetries}
-          />
-          <Checkbox
-            label="保存后立即执行"
-            isSelected={start}
-            onChange={setStart}
-          />
-        </>
-      )}
+        ) : null}
+        {submit.isError ? (
+          <ErrorNotice message={`任务未提交：${errorMessage(submit.error)}`} />
+        ) : null}
+        {task ? (
+          <p role="status">任务已保存；执行进度与结果请查看任务。</p>
+        ) : (
+          <>
+            {scope.kind === "query" ? (
+              <div className="acquire-limit">
+                <TextField
+                  label="本次最多"
+                  width="short"
+                  value={limitText}
+                  onChange={setLimitText}
+                  placeholder="不限"
+                  {...(limitInvalid
+                    ? { errorMessage: "填正整数，或留空表示不限" }
+                    : {})}
+                />
+                <span className="muted">
+                  篇，按“{SORT_LABELS[scope.sort]}”顺序取前面的
+                </span>
+              </div>
+            ) : null}
+            <p className="muted">
+              将使用配置的文献来源获取 PDF，必要时调用 Browser
+              Agent；成员在提交时固定，之后入库的文献不会加入。
+            </p>
+            <Select
+              label="受阻时"
+              value={policy}
+              onChange={setPolicy}
+              options={[
+                { value: "never", label: "自动处理" },
+                { value: "notify", label: "通知并继续" },
+                { value: "pause", label: "暂停等待人工" },
+              ]}
+            />
+            <TextField
+              label="尝试上限"
+              width="short"
+              value={attempts}
+              onChange={setAttempts}
+            />
+            <TextField
+              label="重试上限"
+              width="short"
+              value={retries}
+              onChange={setRetries}
+            />
+            <Checkbox
+              label="保存后立即执行"
+              isSelected={start}
+              onChange={setStart}
+            />
+          </>
+        )}
+      </div>
     </Dialog>
   );
 }
