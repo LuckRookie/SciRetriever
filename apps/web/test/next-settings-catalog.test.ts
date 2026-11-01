@@ -198,7 +198,7 @@ it("registers an empty model catalog, binds and probes the saved Browser model, 
         .getByRole("button", { name: "确认测试", exact: true })
         .click();
       await expect.poll(() => calls.length).toBe(beforeProbe + 1);
-      await message("测试结果：passed");
+      await message("测试通过，连接正常。");
       expect((await owner!.read()).revision).toBe(before);
     };
     let beforeProbe = 0;

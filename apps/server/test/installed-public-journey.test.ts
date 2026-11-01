@@ -282,8 +282,10 @@ async function installedBrowserJourney(
     ui.on("pageerror", (error) => errors.push(error.message));
     await loginWorkbenchPage(ui, origin);
     await ui.goto(`${origin}/?view=web`);
+    // The Browser page is a lazy route chunk; on a loaded machine it can take
+    // longer than the default one-second poll to replace 正在打开….
     await expect
-      .poll(() => ui.getByRole("main").textContent())
+      .poll(() => ui.getByRole("main").textContent(), { timeout: 20_000 })
       .toContain("没有正在使用的会话");
     for (const path of [
       "/reader/pdf.worker.mjs",
@@ -497,12 +499,15 @@ async function installedBrowserJourney(
     ).toBe(409);
     const clicked = await post("/api/action", action, controller);
     expect(clicked.status, JSON.stringify(clicked.body)).toBe(200);
-    // The session reports finished a moment before the task's target counts.
+    // The session reports finished a moment before the task's target counts,
+    // and the primary PDF is checked through Library only after both, when
+    // the operation phase ends.
     await vi.waitFor(
       async () => {
         const v = await view();
         expect(v.state).toBe("finished");
         expect(v.operation_feedback?.targets?.completed).toBe(1);
+        expect(v.operation_feedback?.phase).toBe("ended");
       },
       { timeout: 30_000 },
     );

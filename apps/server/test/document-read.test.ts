@@ -1134,7 +1134,7 @@ describe("bounded document and material reading", () => {
       // validated page as the resource descriptor source for this pagination probe.
       await page.reload();
       await page
-        .getByRole("button", { name: "图表资源（51）", exact: true })
+        .getByRole("button", { name: "图表资源 51 项", exact: true })
         .click();
       expect(await page.locator(".reader-resources button").count()).toBe(51);
       expect(

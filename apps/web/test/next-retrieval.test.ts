@@ -347,8 +347,10 @@ it("keeps late or failed searches from replacing a newer page and permits an exp
     await w.page.route(
       "**/api/v1/query/knowledge-context?*",
       async (route) => {
-        const response = await route.fetch();
+        // Mark the interception before the real search answers: the server can
+        // take longer than the poll below allows on a loaded machine.
         intercepted = true;
+        const response = await route.fetch();
         await gate;
         await route.fulfill({ response });
         completed();
