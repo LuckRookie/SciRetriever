@@ -982,3 +982,263 @@
     font-variant-numeric: tabular-nums;
   }
 }
+
+/* Plan 17 · 08: intake batches, terms in scope, stated acquisition scope. */
+@layer pages {
+  /* Sidebar: the newest batches hang under “最近入库”, indented like a tree. */
+  .folder-batches {
+    display: grid;
+  }
+  .navigation .folder-navigation .ui-button.folder-batch {
+    padding-left: calc(var(--space-2) + 16px + var(--space-2));
+    color: var(--fg2);
+  }
+  .navigation .folder-navigation .ui-button.folder-batch[aria-current="page"] {
+    color: var(--fg);
+  }
+
+  /* Rows without tags list the paper's own terms, quieter than tags. */
+  .paper-terms {
+    display: block;
+    margin-top: 2px;
+    color: var(--fg3);
+    font-size: var(--text-caption);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  /* The commonest terms in the results: a quiet tray under the filters. */
+  .scope-terms {
+    display: grid;
+    gap: var(--space-1);
+    margin-bottom: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+    transition: opacity var(--dur-2) var(--ease-out);
+  }
+  .scope-terms[data-stale] {
+    opacity: 0.6;
+  }
+  .scope-terms-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+  }
+  .scope-terms-label {
+    flex: none;
+    width: 5.5em;
+    color: var(--fg3);
+    font-size: var(--text-caption);
+  }
+  .scope-terms-values {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  .ui-button.scope-term {
+    height: auto;
+    min-height: 24px;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-xs);
+    color: var(--fg);
+    background: var(--surface);
+    box-shadow: inset 0 0 0 1px var(--line2);
+    font-size: var(--text-caption);
+  }
+  .ui-button.scope-term[aria-pressed="true"] {
+    color: var(--mark-fg);
+    background: var(--mark);
+    box-shadow: none;
+  }
+  .scope-term-count {
+    margin-left: 4px;
+    color: var(--fg3);
+    font-variant-numeric: tabular-nums;
+  }
+  .scope-term[aria-pressed="true"] .scope-term-count {
+    color: inherit;
+    opacity: 0.7;
+  }
+  .scope-terms-more {
+    justify-self: start;
+    margin-left: calc(5.5em + var(--space-2));
+  }
+
+  /* Get PDF: the scope first, as label/value lines on a sunken block. */
+  .acquire-scope {
+    display: grid;
+    grid-template-columns: 3em minmax(0, 1fr);
+    gap: var(--space-1) var(--space-3);
+    margin: 0;
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+  }
+  .acquire-scope dt {
+    color: var(--fg3);
+  }
+  .acquire-scope dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
+  }
+  .acquire-scope b {
+    font-weight: 600;
+    margin-right: 4px;
+  }
+  .acquire-skipped {
+    color: var(--fg2);
+  }
+  .acquire-limit {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .acquire-limit > .muted {
+    padding-bottom: 8px;
+  }
+
+  /* Intake records: what came in, and how far its PDFs have got. */
+  .intake-records {
+    max-width: 960px;
+    padding-bottom: var(--space-6);
+  }
+  .intake-records > h2 {
+    margin: 0 0 var(--space-2);
+  }
+  .intake-record-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .intake-record {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-2) var(--space-5);
+    padding: var(--space-3) 0;
+    border-top: 1px solid var(--line);
+  }
+  .intake-record[data-open] {
+    margin-inline: calc(-1 * var(--space-3));
+    padding-inline: var(--space-3);
+    border-radius: var(--radius-md);
+    border-top-color: transparent;
+    background: var(--sel);
+  }
+  .intake-record-main {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+  .intake-record-title {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .intake-record-kind {
+    color: var(--fg3);
+    font-size: var(--text-caption);
+  }
+  .intake-record-name {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .intake-record-edit {
+    opacity: 0;
+  }
+  .intake-record:hover .intake-record-edit,
+  .intake-record-edit[data-focus-visible] {
+    opacity: 1;
+  }
+  @media (hover: none) {
+    .intake-record-edit {
+      opacity: 1;
+    }
+  }
+  .intake-record-rename {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .intake-record-meta,
+  .intake-record-pdf {
+    color: var(--fg3);
+    font-size: var(--text-caption);
+  }
+  .intake-record-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-3);
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  .intake-record-counts b {
+    color: var(--fg);
+  }
+  .intake-record-counts .quiet {
+    color: var(--fg3);
+  }
+  .intake-record-side {
+    display: grid;
+    justify-items: end;
+    align-content: start;
+    gap: var(--space-1);
+  }
+  .intake-record-bar {
+    display: flex;
+    width: 160px;
+    height: 6px;
+    overflow: hidden;
+    border-radius: 3px;
+    background: var(--t-gray-bg);
+  }
+  .intake-record-bar > i[data-part="has"] {
+    background: var(--t-green);
+  }
+  .intake-record-bar > i[data-part="unavailable"] {
+    background: var(--t-red);
+  }
+  .intake-record-pdf {
+    font-variant-numeric: tabular-nums;
+  }
+  .intake-record-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
+  @media (max-width: 700px) {
+    .intake-record {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .intake-record-side {
+      justify-items: start;
+    }
+    .intake-record-actions {
+      justify-content: flex-start;
+    }
+  }
+
+  /* A scoped PDF task says what it covered. */
+  .task-scope {
+    display: grid;
+    grid-template-columns: 3em minmax(0, 1fr);
+    gap: 2px var(--space-3);
+    margin: 0 0 var(--space-3);
+    font-size: var(--text-secondary);
+  }
+  .task-scope dt {
+    color: var(--fg3);
+  }
+  .task-scope dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+}

@@ -49,6 +49,7 @@ LibraryQuery
   document_types: tuple[str, ...]
   languages: tuple[str, ...]
   keywords: tuple[str, ...]
+  subject_terms: tuple[str, ...]
 
   version_roles: tuple[VersionRole, ...]
   statuses: tuple[LiteratureStatus, ...]
@@ -56,6 +57,7 @@ LibraryQuery
   needs_manual_pdf: bool | None
 
   discovery_run_ids: tuple[DiscoveryRunId, ...]
+  intake_batch_ids: tuple[IntakeBatchId, ...]
 
 LiteratureMissingStep =
     "primary-pdf"
@@ -63,7 +65,7 @@ LiteratureMissingStep =
   | "literature-content"
 ```
 
-全部可选单值默认为 `None`，全部多值字段默认为空 tuple；完全空的 `LibraryQuery` 表示查询全部具体 `Literature`。字符串去除边界空白后必须非空，多值字段去重并保持调用方顺序。不同字段之间使用 AND；一般多值字段内部使用 OR；`keywords` 内部使用 AND，即当前 metadata 必须同时具有全部给定完整关键词。
+全部可选单值默认为 `None`，全部多值字段默认为空 tuple；完全空的 `LibraryQuery` 表示查询全部具体 `Literature`。字符串去除边界空白后必须非空，多值字段去重并保持调用方顺序。不同字段之间使用 AND；一般多值字段内部使用 OR；`keywords` 与 `subject_terms` 内部使用 AND，即当前 metadata 必须同时具有全部给定的完整词。
 
 `text` 是普通用户文本，只搜索当前权威视图中的：
 
@@ -72,7 +74,7 @@ LiteratureMissingStep =
 - identifiers；
 - abstract；
 - venue、publisher、volume、issue 和 pages；
-- 当前 `LiteratureMetadata.keywords`；
+- 当前 `LiteratureMetadata.keywords` 与 `subject_terms`；
 - 当前 `LiteratureContent.sections` 的标题和 Markdown 正文。
 
 `text` 不搜索 `MetadataObservation`、provenance、AssetHint/URL、供应商参考文献原文、`LiteratureContent.references`、Provider 原始响应、Discovery/Report/日志/失败、Parser/LLM 型号或文件路径，也不接受裸 SQL 或 FTS5 查询语法。专门字段的语义为：
@@ -83,7 +85,8 @@ LiteratureMissingStep =
 - 年份范围：`1..9999`、包含边界，两个边界同时存在时必须有序；
 - `document_types`：开放字符串，按当前规范值精确匹配，内部 OR；
 - `languages`：按当前 metadata 规范值精确匹配，内部 OR；
-- `keywords`：按完整规范关键词精确匹配，全部给定关键词必须存在；
+- `keywords`：作者关键词，按完整词忽略大小写匹配，全部给定的词必须存在；
+- `subject_terms`：数据库给的学科分类（主题词），匹配规则同 `keywords`；两层词的来源划分见 [ADR 0052](../decisions/0052-intake-batches-and-explicit-scope.md)；
 - `version_roles`：只接受 `published | accepted-manuscript | preprint | other`；
 - `statuses`：只接受 `UNREVIEWED | ASSET_READY | CONTENT_READY`。
 
@@ -107,13 +110,17 @@ CONTENT_READY
 
 `discovery_run_ids` 查询一次或多次 DiscoveryRun 当时实际发现的具体 Literature，内部 OR。Topic cause 通过当时接纳的 `metadata_observation_id` 找到其具体 Literature；Citation cause 使用 source/target 两端中与该 `DiscoveryResult.meta_literature_id` 对应的实际具体 Literature，references 方向通常是 target，cited-by 方向通常是 source。不能把后来加入同一 MetaLiterature 的其它版本反算为该次发现对象。
 
+`intake_batch_ids` 查询一个或多个入库批次的成员，内部 OR。成员是该次入库命中的全部具体 Literature，包括入库前已经存在的；引用扩展的种子不算成员。schema 15 之前已在库的文献都属于迁移时建立的“早期入库”批次。批次本身的读取见 [2.1.6](#216-入库批次范围词频与-pdf-获取范围)。
+
 `LibraryQuery` 不加入 Collection、Provider 私有字段、observation 内容筛选、citation count 范围、URL/OA/license、普通失败/history、Report/log/attempt、Parser/LLM identity、文件路径、sort、pagination、cursor、include flag 或 raw SQL/FTS 字段。`QuerySelector` 只复用这个查询条件，不复用列表请求的排序、limit 或 cursor。
 
 #### 2.1.2 搜索请求与页面
 
 ```text
 LibrarySort =
-    "publication-year-desc"
+    "intake-desc"
+  | "opened-desc"
+  | "publication-year-desc"
   | "publication-year-asc"
   | "title-asc"
   | "title-desc"
@@ -276,6 +283,41 @@ Artifact 读取直接接受既有 `Asset | ParserArtifactRef | ArtifactRef`，�
 stream、用户目标路径和 context manager 是运行时 I/O 对象，不能进入 contracts、JSON、
 Catalog、Report 或 `LiteratureDetail`。因此 Detail 本身不增加 `open()`、`export()` 等业务
 方法；调用方从 Detail 取得引用，再交给 Entry/Literature 的独立 artifact 操作。
+
+#### 2.1.6 入库批次、范围词频与 PDF 获取范围
+
+精确类型与解析在 `packages/contracts/src/intake.ts`；决策见 [ADR 0052](../decisions/0052-intake-batches-and-explicit-scope.md)。
+
+```text
+IntakeBatch
+  batch_id, kind: topic | citation | import | legacy
+  origin: web | cli | mcp | migration
+  status, created_at, finished_at
+  label, default_label, renamed
+  request            # 用户输入的简要形式；多种子、双方向的完整参数留在 DiscoveryRun
+  counts: hits, created, enriched, matched, rejected
+  pdf: has_pdf, unavailable, pending   # 读取时按当前库现算
+  source_failures
+
+LibraryFacets
+  total
+  keywords: tuple[{value, count}, ...]
+  subject_terms: tuple[{value, count}, ...]
+
+AcquirePdfSelector =
+    {kind: "query", query: LibraryQuery, sort: LibrarySort, limit: int | None}
+  | {kind: "literatures", literature_ids: tuple[LiteratureId, ...]}
+
+AcquirePdfCounts
+  matched, process, skipped_has_pdf, skipped_unavailable, over_limit
+```
+
+- **批次**：每次主题发现、引用扩展和书目导入各形成一个批次，入口不论 Web、CLI 还是 MCP。成员与身份发布在同一事务提交；同一篇按 created > enriched > matched 计一次。`counts.hits` 是成员数；`legacy` 批次的 hits 不满足 created + enriched + matched 等式。异常或进程退出的批次保留已接纳的成员，状态读作 `interrupted`。列表按 `created_at` 倒序翻页，人工改名为单行 1–120 字。
+- **词频**：对一个 `LibraryQuery` 的全部命中统计作者关键词和主题词，同篇同词计一次，按篇数降序、词升序，每层最多 30 个。
+- **PDF 范围**：预览与创建任务使用同一个选择函数。
+  - `query`：服务端展开全部命中，不受前端已加载行数限制；先跳过已有主 PDF 的和已标记无法获取的，再按 `sort` 取前 `limit` 篇，其余计入 `over_limit`。
+  - `literatures`：调用方明确点名的文献全部处理，包括已有 PDF（重新获取）和已标记无法获取的；`process = matched`，三项跳过都为 0。
+  - 成员在创建任务时固定，之后入库的文献不加入。任务保存 `scope: {selector, counts}`，任务列表、详情和运行记录返回同一份；旧任务为 `None`。
 
 ### 2.2 查询
 

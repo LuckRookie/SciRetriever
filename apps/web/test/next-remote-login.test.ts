@@ -185,9 +185,7 @@ describe("IP-address HTTP login and workspace", () => {
         .getByRole("checkbox", { name: "保存后立即执行", exact: true })
         .focus();
       await page.keyboard.press("Space");
-      await acquire
-        .getByRole("button", { name: "确认启动", exact: true })
-        .click();
+      await acquire.getByRole("button", { name: /^获取 \d+ 篇$/ }).click();
       await expect.poll(() => acquire.textContent()).toContain("任务已保存");
       await acquire.getByRole("button", { name: "关闭", exact: true }).click();
       await page.addScriptTag({ url: "/test-platform.js" });

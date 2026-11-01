@@ -38,6 +38,17 @@ export const operationLabels: Readonly<Record<string, string>> = {
   "run-processor": "知识处理",
 };
 
+/** The range a scoped PDF task fixed at creation: on the job in lists, inside its selector in detail. */
+export function taskScope(job: {
+  readonly scope?: unknown;
+  readonly selector?: unknown;
+}) {
+  if (job.scope !== undefined && job.scope !== null) return job.scope;
+  const selector = job.selector;
+  return selector && typeof selector === "object" && "scope" in selector
+    ? ((selector as { scope?: unknown }).scope ?? null)
+    : null;
+}
 export function taskTitle(job: Json): string {
   const selector = record(job.selector, "task selector");
   if (selector.schema_version === 3) {
@@ -67,7 +78,14 @@ export function taskTitle(job: Json): string {
   if (input.kind === "query") {
     const query = record(input.query, "task query");
     scope =
-      typeof query.text === "string" && query.text ? query.text : "全部文献";
+      Array.isArray(query.intake_batch_ids) && query.intake_batch_ids.length
+        ? "入库批次"
+        : typeof query.text === "string" && query.text
+          ? query.text
+          : "按筛选";
+    const fixed = taskScope(job);
+    const counts = fixed ? record(fixed, "task scope").counts : null;
+    if (counts) scope += ` ${record(counts, "scope counts").process} 篇`;
   } else if (
     input.kind === "literatures" &&
     Array.isArray(input.literature_ids)

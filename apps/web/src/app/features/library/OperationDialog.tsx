@@ -3,18 +3,10 @@ import { jobRecord } from "../../data/wire.js";
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ProcessingOperation } from "@sciretriever/contracts";
-import {
-  Button,
-  Checkbox,
-  Dialog,
-  Select,
-  TextArea,
-  TextField,
-} from "../../components/index.js";
+import { Button, Dialog, Select, TextArea } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import { archiveWrite } from "../../data/archive.js";
 import {
-  createTask,
   identityOperation,
   processingTask,
   type OperationContext,
@@ -22,6 +14,7 @@ import {
 import { navigate } from "../../data/url.js";
 import { useShell } from "../../shell/context.js";
 import { randomId } from "../../../browser-platform.js";
+import { AcquireDialog } from "./AcquireDialog.js";
 import { errorMessage } from "../../strings.js";
 
 export function download(blob: Blob, name: string) {
@@ -33,24 +26,37 @@ export function download(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 const labels: Record<string, string> = {
-  acquire: "获取 PDF",
   analyze: "生成总结",
   archive: "建立文献档案",
   identity: "核验文章身份",
   export: "导出书目",
   upload: "补充 PDF",
 };
-export function OperationDialog({
-  ids,
-  kind,
-  file,
-  onClose,
-}: {
+type OperationProps = {
   ids: readonly string[];
   kind: string;
   file?: File;
   onClose: () => void;
-}) {
+};
+export function OperationDialog(props: OperationProps) {
+  // Getting PDFs states its scope first; it has its own dialog.
+  return props.kind === "acquire" ? (
+    <AcquireDialog
+      scope={{
+        kind: "literatures",
+        ids: props.ids,
+        label:
+          props.ids.length === 1
+            ? "这篇文献"
+            : `${props.ids.length.toLocaleString()} 篇文献`,
+      }}
+      onClose={props.onClose}
+    />
+  ) : (
+    <MaterialDialog {...props} />
+  );
+}
+function MaterialDialog({ ids, kind, file, onClose }: OperationProps) {
   const api = useApi(),
     shell = useShell(),
     queries = useQueryClient();
@@ -58,10 +64,6 @@ export function OperationDialog({
     [purpose, setPurpose] = useState("overview"),
     [question, setQuestion] = useState(""),
     [format, setFormat] = useState("bibtex"),
-    [policy, setPolicy] = useState("never"),
-    [attempts, setAttempts] = useState("1000"),
-    [retries, setRetries] = useState("1"),
-    [start, setStart] = useState(true),
     [selectedFile, setSelectedFile] = useState<File | null>(file ?? null);
   const [status, setStatus] = useState(""),
     [skipped, setSkipped] = useState<string[]>([]),
@@ -128,24 +130,6 @@ export function OperationDialog({
         });
         await api.json(response);
         return "PDF 已接纳，原有材料已保留。";
-      }
-      if (kind === "acquire") {
-        const id = await createTask(
-          operationContext,
-          {
-            kind: "acquire-pdf",
-            idempotency_key: key,
-            selector: { kind: "literatures", literature_ids: unique },
-            policy: {
-              mode: policy,
-              max_attempts: Number(attempts),
-              max_retries: Number(retries),
-            },
-          },
-          start,
-        );
-        setTasks([id]);
-        return "任务已保存；执行进度与结果请查看任务。";
       }
       if (kind === "archive") {
         await archiveWrite(
@@ -294,13 +278,11 @@ export function OperationDialog({
       <p className="muted">
         {kind === "export"
           ? "导出已有书目信息，不改动文献库。"
-          : kind === "acquire"
-            ? "将使用配置的文献来源获取 PDF，必要时调用 Browser Agent；不会等待人工帮助。"
-            : kind === "archive"
-              ? "还没有解析的 PDF 先由解析服务读出版面和文字，已有解析直接复用；然后整理、逐页校订、补全元数据与标签，会调用模型。"
-              : kind === "upload"
-                ? "将文件接纳到所选文献，现有主 PDF 不会被覆盖。"
-                : "将使用配置的模型处理已有材料；缺少的输入逐项说明，不自动生成前序材料。"}
+          : kind === "archive"
+            ? "还没有解析的 PDF 先由解析服务读出版面和文字，已有解析直接复用；然后整理、逐页校订、补全元数据与标签，会调用模型。"
+            : kind === "upload"
+              ? "将文件接纳到所选文献，现有主 PDF 不会被覆盖。"
+              : "将使用配置的模型处理已有材料；缺少的输入逐项说明，不自动生成前序材料。"}
       </p>
       {kind === "export" && (
         <Select
@@ -349,37 +331,6 @@ export function OperationDialog({
           <p className="muted">
             DSH 在同一会话中阅读原文、图像与证据后提交结果。
           </p>
-        </>
-      )}
-      {kind === "acquire" && (
-        <>
-          <Select
-            label="受阻时"
-            value={policy}
-            onChange={setPolicy}
-            options={[
-              { value: "never", label: "自动处理" },
-              { value: "notify", label: "通知并继续" },
-              { value: "pause", label: "暂停等待人工" },
-            ]}
-          />
-          <TextField
-            label="尝试上限"
-            width="short"
-            value={attempts}
-            onChange={setAttempts}
-          />
-          <TextField
-            label="重试上限"
-            width="short"
-            value={retries}
-            onChange={setRetries}
-          />
-          <Checkbox
-            label="保存后立即执行"
-            isSelected={start}
-            onChange={setStart}
-          />
         </>
       )}
       <p role={mutation.isError ? "alert" : "status"}>{status}</p>

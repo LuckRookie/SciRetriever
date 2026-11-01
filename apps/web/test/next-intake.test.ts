@@ -84,6 +84,7 @@ it("keeps discovery and bibliography import explicit and uploads a selected PDF 
     expect(imports[0]).toEqual({
       format: "bibtex",
       content: "@article{fixture,title={Synthetic bibliography}}",
+      file_name: "fixture.bib",
     });
     await w.page.getByRole("tab", { name: "上传 PDF", exact: true }).click();
     await w.page.getByRole("textbox", { name: "目标文献 ID" }).fill(missingId);
@@ -114,62 +115,88 @@ it("keeps discovery and bibliography import explicit and uploads a selected PDF 
   }
 }, 60000);
 
-it("retains only the latest 30 discovery reports during a session and clears them on reload", async () => {
+it("records each import as a batch, narrows it by its keywords and gets PDFs for exactly the stated scope", async () => {
   const w = await nextWorkspace({
     path: "/?view=disc",
     ready: ".intake-form",
   });
   try {
     const page = w.page;
-    let calls = 0;
-    await page.route("**/api/discovery?*", async (route) => {
-      calls++;
-      await route.fulfill({
-        status: 200,
-        json: {
-          report: {
-            status: "COMPLETED",
-            accepted_count: calls,
-            matched_count: 0,
-            source_results: [],
-          },
-        },
-      });
+    await page.getByRole("tab", { name: "导入书目", exact: true }).click();
+    await page.getByLabel("书目文件", { exact: true }).setInputFiles({
+      name: "batch-fixture.bib",
+      mimeType: "text/plain",
+      buffer: Buffer.from(
+        [
+          "@article{a,title={Argyrodite electrolyte one},year={2021},doi={10.5555/batch-a},keywords={Argyrodite, Interface}}",
+          "@article{b,title={Argyrodite electrolyte two},year={2022},doi={10.5555/batch-b},keywords={Argyrodite}}",
+          "@article{c,title={Halide electrolyte three},year={2023},doi={10.5555/batch-c},keywords={Halide}}",
+        ].join("\n"),
+      ),
     });
+    await page.getByRole("button", { name: "导入", exact: true }).click();
     await page
-      .getByRole("textbox", { name: "主题或检索式" })
-      .fill("synthetic history boundary");
-    for (let i = 1; i <= 31; i++) {
-      await page.getByRole("button", { name: "开始发现", exact: true }).click();
-      await page
-        .getByRole("dialog", { name: "确认发现文献", exact: true })
-        .getByRole("button", { name: "确认执行", exact: true })
-        .click();
-      await expect
-        .poll(() => page.locator(".intake-report").first().textContent())
-        .toContain(`已接纳 ${i} 条元数据`);
-    }
-    expect(calls).toBe(31);
-    expect(await page.locator(".intake-report").count()).toBe(30);
-    expect(await page.locator(".intake-report").last().textContent()).toContain(
-      "已接纳 2 条元数据",
-    );
-    await page
-      .getByRole("button", { name: /^文献库/ })
-      .first()
+      .getByRole("dialog", { name: "导入书目", exact: true })
+      .getByRole("button", { name: "确认执行", exact: true })
       .click();
-    await page.locator(".paper-row").first().waitFor();
-    await page
-      .getByRole("main")
-      .getByRole("button", { name: "入库", exact: true })
-      .click();
-    await expect.poll(() => page.locator(".intake-report").count()).toBe(30);
+    // The import is a persistent record, not a session receipt.
+    const record = page.locator(".intake-record", {
+      hasText: "batch-fixture.bib",
+    });
+    await expect.poll(() => record.textContent()).toContain("命中 3");
+    expect(await record.textContent()).toContain("新增 3");
+    expect(await record.textContent()).toContain("待获取 3");
     await page.reload();
-    await page.getByText("尚未执行发现或导入。", { exact: true }).waitFor();
-    expect(await page.locator(".intake-report").count()).toBe(0);
-    expect(calls).toBe(31);
+    await record.waitFor();
+    // The sidebar lists it under the newest batches.
+    await page
+      .getByRole("group", { name: "最近入库" })
+      .getByRole("button", { name: /batch-fixture\.bib/ })
+      .click();
+    await expect.poll(() => page.locator(".paper-row").count()).toBe(3);
+    const query = JSON.parse(new URL(page.url()).searchParams.get("query")!);
+    expect(query.intake_batch_ids).toHaveLength(1);
+    await page.getByRole("heading", { name: /batch-fixture\.bib/ }).waitFor();
+    // The commonest terms in scope narrow it further.
+    const terms = page.getByRole("region", { name: "范围内的词" });
+    await terms
+      .getByRole("button", { name: "作者关键词 Argyrodite，2 篇", exact: true })
+      .click();
+    await expect.poll(() => page.locator(".paper-row").count()).toBe(2);
+    // “Current results” takes the whole filter, and the dialog states it before submitting.
+    await page.getByRole("button", { name: /^用当前结果/ }).click();
+    await page
+      .getByRole("menuitem", { name: "获取 PDF…", exact: true })
+      .click();
+    const dialog = page.getByRole("dialog", { name: "获取 PDF", exact: true });
+    await expect
+      .poll(() => dialog.locator(".acquire-scope").textContent())
+      .toContain("2 篇");
+    expect(await dialog.locator(".acquire-scope").textContent()).toContain(
+      "作者关键词：Argyrodite",
+    );
+    await dialog.getByRole("textbox", { name: "本次最多" }).fill("1");
+    await expect
+      .poll(() => dialog.locator(".acquire-scope").textContent())
+      .toContain("1 篇超出本次上限");
+    await dialog
+      .getByRole("checkbox", { name: "保存后立即执行", exact: true })
+      .press("Space");
+    await dialog
+      .getByRole("button", { name: "获取 1 篇", exact: true })
+      .click();
+    await dialog
+      .getByRole("button", { name: "查看任务", exact: true })
+      .waitFor();
+    const jobs = await w.env.app.jobs!.listJobs(10);
+    expect(jobs).toHaveLength(1);
+    expect(JSON.stringify(jobs[0])).toContain("intake_batch_ids");
+    await dialog.getByRole("button", { name: "查看任务", exact: true }).click();
+    await page.locator(".task-scope").waitFor();
+    expect(await page.locator(".task-scope").textContent()).toContain(
+      "作者关键词：Argyrodite",
+    );
     expect(w.env.modelCalls).toBe(0);
-    expect(await w.env.app.jobs!.listJobs(10)).toHaveLength(0);
     expect(w.errors).toEqual([]);
   } finally {
     await w.close();

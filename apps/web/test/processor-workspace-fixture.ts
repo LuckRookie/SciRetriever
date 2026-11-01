@@ -1,3 +1,4 @@
+import { createMetadataOperations } from "../../server/src/entry/metadata-operations.js";
 import {
   workbenchTestAccess,
   loginWorkbenchPage,
@@ -93,6 +94,8 @@ export async function workspace(
         queries: env.app.library,
         artifacts: env.app.literatureArtifacts,
       },
+      // Bibliography import is local and network-free, so the real one runs.
+      importBibliography: createMetadataOperations(env.app).importBibliography,
       assets,
       ...(options?.configuration
         ? { configuration: options.configuration(env) }

@@ -331,7 +331,7 @@
   /* Label column and values read left to right; a long value wraps under itself. */
   .reader-information .reader-fields {
     display: grid;
-    grid-template-columns: 4.5em minmax(0, 1fr);
+    grid-template-columns: 5em minmax(0, 1fr);
     gap: var(--space-1) var(--space-3);
     margin: 0 0 var(--space-3);
     font-size: var(--text-secondary);
@@ -353,6 +353,33 @@
   }
   .reader-quiet {
     color: var(--fg2);
+  }
+  /* Keywords and subjects are chips that open the library on the term. */
+  .reader-terms,
+  .reader-batches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+  .reader-information .ui-button.reader-term {
+    height: auto;
+    min-height: 22px;
+    margin: 0;
+    padding: 0 6px;
+    border-radius: var(--radius-xs);
+    color: var(--t-gray);
+    background: var(--t-gray-bg);
+    font-size: var(--text-caption);
+  }
+  .reader-terms[data-field="subject_terms"] .ui-button.reader-term {
+    color: var(--fg3);
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--line2);
+  }
+  .reader-information .reader-batches .ui-button {
+    height: auto;
+    padding: 0;
+    color: var(--blue);
   }
   .reader-tags {
     margin: 0 0 var(--space-1);

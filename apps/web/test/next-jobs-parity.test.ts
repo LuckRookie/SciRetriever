@@ -145,9 +145,7 @@ describe("durable task workbench", () => {
         await form
           .getByRole("checkbox", { name: "保存后立即执行", exact: true })
           .press("Space");
-        await form
-          .getByRole("button", { name: "确认启动", exact: true })
-          .click();
+        await form.getByRole("button", { name: /^获取 \d+ 篇$/ }).click();
         await form
           .getByRole("button", { name: "查看任务", exact: true })
           .click();

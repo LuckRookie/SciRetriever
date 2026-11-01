@@ -59,7 +59,11 @@ import {
   searchLibrary,
   scopeIds,
   scopeItems,
+  SORT_LABELS,
 } from "../../data/library.js";
+import { useIntakeBatch } from "../../data/intake-batches.js";
+import { AcquireDialog, type AcquireScope } from "./AcquireDialog.js";
+import { ScopeTerms } from "./ScopeTerms.js";
 import { useShell } from "../../shell/context.js";
 import { randomId } from "../../../browser-platform.js";
 import { archiveQuery, useArchiveAction, rows } from "../../data/archive.js";
@@ -136,12 +140,19 @@ export default function Library() {
   if (!rowMeasurements.has(api)) rowMeasurements.set(api, new Map());
   const positions = scrollPositions.get(api)!;
   const measurements = rowMeasurements.get(api)!;
+  const batchId =
+    route.query.intake_batch_ids.length === 1
+      ? route.query.intake_batch_ids[0]!
+      : null;
+  const batch = useIntakeBatch(batchId);
   const chips = Object.entries(route.query).flatMap(([key, value]) => {
     const names: Record<string, string> = {
       text: "搜索",
       author: "作者",
       venue: "期刊",
-      keywords: "关键词",
+      keywords: "作者关键词",
+      subject_terms: "主题词",
+      intake_batch_ids: "入库批次",
       identifiers: "标识符",
       publication_year_from: "起始年份",
       publication_year_to: "结束年份",
@@ -162,17 +173,21 @@ export default function Library() {
       return [];
     if (key === "tags" && !route.query.tags?.ids.length) return [];
     const label =
-      key === "tags"
-        ? `${route.query.tags!.ids.length} 个${route.query.tags!.mode === "primary" ? "主标签" : "标签"}`
-        : key === "identifiers"
-          ? route.query.identifiers.map((id) => id.value).join("、")
-          : key === "statuses"
-            ? route.query.statuses
-                .map((status) => statusLabels[status])
-                .join("、")
-            : Array.isArray(value)
-              ? value.join("、")
-              : String(value);
+      key === "intake_batch_ids"
+        ? route.query.intake_batch_ids.length === 1
+          ? (batch.data?.label ?? "…")
+          : `${route.query.intake_batch_ids.length} 批`
+        : key === "tags"
+          ? `${route.query.tags!.ids.length} 个${route.query.tags!.mode === "primary" ? "主标签" : "标签"}`
+          : key === "identifiers"
+            ? route.query.identifiers.map((id) => id.value).join("、")
+            : key === "statuses"
+              ? route.query.statuses
+                  .map((status) => statusLabels[status])
+                  .join("、")
+              : Array.isArray(value)
+                ? value.join("、")
+                : String(value);
     return [
       {
         key,
@@ -190,6 +205,15 @@ export default function Library() {
       },
     ];
   });
+  /** The current filter in words, for dialogs that act on all of it. */
+  const scopeLabel = () =>
+    [
+      folderLabel ? `文件夹：${folderLabel}` : "",
+      route.query.recently_opened ? "最近阅读" : "",
+      ...chips.map((chip) => chip.label),
+    ]
+      .filter(Boolean)
+      .join("；") || "全部文献";
   const [text, setText] = useState(route.query.text ?? "");
   const [filters, setFilters] = useState(false);
   const [mobileTools, setMobileTools] = useState(false);
@@ -205,6 +229,12 @@ export default function Library() {
     file?: File;
   } | null>(null);
   const [choosing, setChoosing] = useState(false);
+  const [acquire, setAcquire] = useState<AcquireScope | null>(null);
+  // Set when “select all N” took the whole filter; acquisition then submits the filter itself.
+  const [wholeScope, setWholeScope] = useState<{
+    key: string;
+    size: number;
+  } | null>(null);
   const [runner, setRunner] = useState<{
     scope: OperatorScope;
     label: string;
@@ -329,6 +359,7 @@ export default function Library() {
     setChoosing(true);
     try {
       const all = await scopeItems(api, route.query, route.sort);
+      setWholeScope({ key: scrollKey, size: all.length });
       const selected = new Set(shell.selected);
       for (const item of all) {
         known.set(item.literature.literature_id, item);
@@ -391,6 +422,8 @@ export default function Library() {
           label: `《${title}》`,
         });
       else if (kind === "folder") setAdding([id]);
+      else if (kind === "acquire")
+        setAcquire({ kind: "literatures", ids: [id], label: `《${title}》` });
       else setOperation({ ids: [id], kind });
     },
     [],
@@ -510,15 +543,10 @@ export default function Library() {
             parseLibrarySearchRequest({ query: route.query, sort }).sort,
           )
         }
-        options={[
-          { value: "intake-desc", label: "最近入库" },
-          { value: "opened-desc", label: "最近阅读" },
-          { value: "publication-year-desc", label: "年份：新到旧" },
-          { value: "publication-year-asc", label: "年份：旧到新" },
-          { value: "title-asc", label: "标题：A–Z" },
-          { value: "title-desc", label: "标题：Z–A" },
-          { value: "relevance", label: "相关性" },
-        ]}
+        options={Object.entries(SORT_LABELS).map(([value, label]) => ({
+          value,
+          label,
+        }))}
       />
       {(next.data?.pages[0]?.backfillPending ?? 0) > 0 ? (
         <p role="status">
@@ -546,6 +574,20 @@ export default function Library() {
           indicator
           variant="text"
           items={[
+            {
+              id: "acquire",
+              label: "获取 PDF…",
+              disabled: total === 0,
+              onAction: () => {
+                setMobileTools(false);
+                setAcquire({
+                  kind: "query",
+                  query: route.query,
+                  sort: route.sort,
+                  label: scopeLabel(),
+                });
+              },
+            },
             {
               id: "run",
               label: "运行算子…",
@@ -596,7 +638,12 @@ export default function Library() {
     <section className="library-page">
       <PageHeader
         title={
-          folderLabel ?? (route.query.recently_opened ? "最近阅读" : "文献库")
+          folderLabel ??
+          (route.query.recently_opened
+            ? "最近阅读"
+            : batchId && batch.data
+              ? batch.data.label
+              : "文献库")
         }
         count={
           counts.data
@@ -715,6 +762,19 @@ export default function Library() {
             </Button>
           </div>
         )}
+        {chips.length > 0 ? (
+          <ScopeTerms
+            query={route.query}
+            onPick={(field, value) =>
+              updateQuery({
+                ...route.query,
+                [field]: route.query[field].includes(value)
+                  ? route.query[field].filter((v) => v !== value)
+                  : [...route.query[field], value],
+              })
+            }
+          />
+        ) : null}
         <Presence>
           {filters && (
             <AnimatedPanel key="filters" preset="collapse">
@@ -771,7 +831,7 @@ export default function Library() {
                 isPending={choosing}
                 disabledReason={
                   total > 1000
-                    ? `共 ${total.toLocaleString()} 篇，超过 1,000 篇上限；请先筛选。`
+                    ? `共 ${total.toLocaleString()} 篇，超过 1,000 篇上限。获取 PDF 可用“用当前结果 → 获取 PDF”整体提交。`
                     : undefined
                 }
                 onPress={selectScope}
@@ -850,7 +910,24 @@ export default function Library() {
                     variant="primary"
                     disabledReason={batchReason("no-pdf", "所选文献都已有 PDF")}
                     onPress={() =>
-                      setOperation({ ids: groups["no-pdf"], kind: "acquire" })
+                      setAcquire(
+                        wholeScope?.key === scrollKey &&
+                          wholeScope.size === shell.selected.size
+                          ? {
+                              kind: "query",
+                              query: route.query,
+                              sort: route.sort,
+                              label: scopeLabel(),
+                            }
+                          : {
+                              kind: "literatures",
+                              ids: groups["no-pdf"],
+                              label:
+                                groups["no-pdf"].length === shell.selected.size
+                                  ? `勾选的 ${shell.selected.size.toLocaleString()} 篇`
+                                  : `勾选的 ${shell.selected.size.toLocaleString()} 篇中还没有 PDF 的 ${groups["no-pdf"].length.toLocaleString()} 篇`,
+                            },
+                      )
                     }
                   >
                     获取 PDF <span>{groups["no-pdf"].length}</span>
@@ -1032,8 +1109,15 @@ export default function Library() {
       {operation && (
         <OperationDialog {...operation} onClose={() => setOperation(null)} />
       )}
+      {acquire && (
+        <AcquireDialog scope={acquire} onClose={() => setAcquire(null)} />
+      )}
     </section>
   );
+}
+function rowTerms(item: LiteratureSearchItem) {
+  const m = item.literature.metadata;
+  return (m.keywords.length ? m.keywords : m.subject_terms).slice(0, ROW_TAGS);
 }
 const STATUS_FILTERS = [
   { id: "", label: "全部" },
@@ -1400,6 +1484,9 @@ const LibraryRow = memo(function LibraryRow({
               </span>
             ) : null}
           </span>
+        ) : rowTerms(item).length ? (
+          // Without tags, the paper's own keywords (or the source's subjects) say what it is about.
+          <span className="paper-terms">{rowTerms(item).join(" · ")}</span>
         ) : null}
       </button>
       {item.literature.status === "UNREVIEWED" && !item.needs_manual_pdf ? (

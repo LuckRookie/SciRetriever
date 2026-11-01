@@ -1,7 +1,6 @@
 import "../processing/processing.css";
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { parseDiscoveryRunId } from "@sciretriever/contracts";
 import {
   Button,
   Definition,
@@ -19,10 +18,10 @@ import {
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import type { ApiClient } from "../../data/api.js";
-import { navigate, useUrlState } from "../../data/url.js";
 import { OperationDialog } from "../library/OperationDialog.js";
 import type { JsonRecord } from "../../data/wire.js";
 import { readIntakeReport, type IntakeReport } from "../../data/intake.js";
+import { IntakeRecords } from "./IntakeRecords.js";
 import { errorMessage } from "../../strings.js";
 const reports = new WeakMap<
   ApiClient,
@@ -30,8 +29,7 @@ const reports = new WeakMap<
 >();
 export default function Intake() {
   const api = useApi(),
-    queries = useQueryClient(),
-    route = useUrlState();
+    queries = useQueryClient();
   const [mode, setMode] = useState("topic"),
     [query, setQuery] = useState(""),
     [limit, setLimit] = useState(200),
@@ -53,6 +51,7 @@ export default function Intake() {
         response = await api.request("/api/import", {
           format,
           content: await file.text(),
+          file_name: file.name,
         });
       } else {
         if (mode === "topic" && !query.trim())
@@ -90,7 +89,7 @@ export default function Intake() {
           report,
         },
         ...history,
-      ].slice(0, 30);
+      ].slice(0, 1);
       reports.set(api, next);
       setHistory(next);
       void queries.invalidateQueries({ queryKey: ["library"] });
@@ -308,59 +307,46 @@ export default function Intake() {
           ) : null}
           {mutation.isSuccess ? (
             <p role="status">
-              操作已结束，逐项结果见下方；未自动启动 PDF 获取。
+              操作已结束，结果见下方入库记录；未自动启动 PDF 获取。
             </p>
           ) : null}
         </div>
       </Tabs>
-      <section className="intake-history">
-        <h2>本次会话的运行结果</h2>
-        {history.length ? (
-          history.map((item, index) => (
-            <div className="intake-report" key={index}>
-              <ListRow
-                title={item.name}
-                badge={
-                  <Badge status={item.report.status}>{item.report.label}</Badge>
-                }
-                bibliography={item.report.summary}
-              />
-              {item.report.notices.length ? (
-                <ul aria-label="运行提示">
-                  {item.report.notices.map((notice, i) => (
-                    <li key={i}>{notice}</li>
-                  ))}
-                </ul>
-              ) : null}
-              {typeof item.report.raw.discovery_run_id === "string" ? (
-                <Button
-                  onPress={() =>
-                    navigate({
-                      view: "lib",
-                      query: JSON.stringify({
-                        ...route.query,
-                        discovery_run_ids: [
-                          parseDiscoveryRunId(item.report.raw.discovery_run_id),
-                        ],
-                      }),
-                    })
-                  }
-                >
-                  在文献库查看本次发现
-                </Button>
-              ) : null}
-              <TechDetails
-                copyText={JSON.stringify(item.report.raw, null, 2)}
-                title="运行明细"
-              >
-                <pre>{JSON.stringify(item.report.raw, null, 2)}</pre>
-              </TechDetails>
-            </div>
-          ))
-        ) : (
-          <p className="ui-description">尚未执行发现或导入。</p>
-        )}
-      </section>
+      {history[0] ? (
+        <section className="intake-history" aria-label="刚才的提交">
+          <div className="intake-report">
+            <ListRow
+              title={history[0].name}
+              badge={
+                <Badge status={history[0].report.status}>
+                  {history[0].report.label}
+                </Badge>
+              }
+              bibliography={history[0].report.summary}
+            />
+            {history[0].report.notices.length ? (
+              <ul aria-label="运行提示">
+                {history[0].report.notices.map((notice, i) => (
+                  <li key={i}>{notice}</li>
+                ))}
+              </ul>
+            ) : null}
+            <TechDetails
+              copyText={JSON.stringify(history[0].report.raw, null, 2)}
+              title="运行明细"
+            >
+              <pre>{JSON.stringify(history[0].report.raw, null, 2)}</pre>
+            </TechDetails>
+          </div>
+        </section>
+      ) : null}
+      <IntakeRecords
+        highlight={
+          typeof history[0]?.report.raw.intake_batch_id === "string"
+            ? history[0].report.raw.intake_batch_id
+            : null
+        }
+      />
       {upload && file ? (
         <OperationDialog
           ids={[literature.trim()]}

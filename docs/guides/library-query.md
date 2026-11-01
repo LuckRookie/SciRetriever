@@ -72,3 +72,5 @@ await reader.close();
 ## CLI 查询与导出
 
 `literature search/show/references/cited-by` 和 `export metadata/pdf/content` 使用查询组装。未初始化或不可用库返回明确错误；需要新增事实时另行导入或维护。导出按显式目标写出副本，不修改库内原件。查询结果、任务完成标志与模型科学质量是不同事实。
+
+入库批次与范围词频也走 JSON 请求：`library batches` 列出批次或读取单个批次，`library batch-rename` 改名或恢复默认名，`library facets` 统计一组筛选结果里最常见的作者关键词和主题词。MCP 对应 `intake_batches`、`intake_batch_rename`、`library_facets`；改名需要维护模式，其余在默认只读模式即可用。筛选条件 `intake_batch_ids`、`subject_terms` 与其它 `LibraryQuery` 字段一起使用，见 [technical/06 §2.1.1](../architecture/technical/06-retrieval-context.md#211-libraryquery)。

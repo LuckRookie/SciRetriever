@@ -12,10 +12,11 @@ import {
 } from "../../data/acquisition-wording.js";
 import { paperTitleParts, readLiterature } from "../../data/library.js";
 import { useApi } from "../../data/query.js";
-import type { TaskDetail } from "../../data/tasks.js";
+import { taskScope, type TaskDetail } from "../../data/tasks.js";
 import { useShell } from "../../shell/context.js";
 import { localTime } from "../../strings.js";
 import { problemText } from "../sources/problem.js";
+import { TaskScope } from "./TaskScope.js";
 
 const count = new Intl.NumberFormat("zh-CN");
 const TERMINAL = ["completed", "cancelled", "failed", "interrupted"];
@@ -119,6 +120,7 @@ export function TaskSummary({ task }: { task: TaskDetail }) {
         {running ? `已用时 ${duration(elapsed)}` : `用时 ${duration(elapsed)}`}
         {when ? <span> · {when}</span> : null}
       </p>
+      <TaskScope value={taskScope(task.job)} />
       <div className="ui-block task-summary-block">
         {pdf ? (
           <PdfSummary pdf={pdf} papers={papers} running={running} />

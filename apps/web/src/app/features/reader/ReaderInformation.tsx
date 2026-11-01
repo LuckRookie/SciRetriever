@@ -1,5 +1,10 @@
 import { Assignment } from "../tags/Assignment.js";
-import { openFolder, folderPaths, useFolders } from "../library/Folders.js";
+import {
+  openBatch,
+  openFolder,
+  folderPaths,
+  useFolders,
+} from "../library/Folders.js";
 import { MetadataFields } from "../archive/MetadataFields.js";
 import { StepActions } from "../archive/StepActions.js";
 import { OperationDialog } from "../library/OperationDialog.js";
@@ -25,10 +30,12 @@ import {
 } from "../../components/index.js";
 import { useApi } from "../../data/query.js";
 import {
+  emptyQuery,
   paperAuthors,
   paperCitation,
   paperTitleParts,
 } from "../../data/library.js";
+import { navigate } from "../../data/url.js";
 import { titleParts } from "../../../reading/title.js";
 import { useShell } from "../../shell/context.js";
 import { record } from "../../data/wire.js";
@@ -228,6 +235,32 @@ export function ReaderInformation({
     m.publication_form ? PUBLICATION_FORM_LABELS[m.publication_form] : null,
     m.article_kind ? ARTICLE_KIND_LABELS[m.article_kind] : null,
   ].filter(Boolean);
+  /** Each term opens the library filtered by it. */
+  const terms = (
+    field: "keywords" | "subject_terms",
+    values: readonly string[],
+  ) => (
+    <span className="reader-terms" data-field={field}>
+      {values.map((value) => (
+        <Button
+          key={value}
+          variant="text"
+          size="compact"
+          className="reader-term"
+          aria-label={`在文献库查看${field === "keywords" ? "作者关键词" : "主题词"}“${value}”`}
+          onPress={() =>
+            navigate({
+              view: "lib",
+              literature: null,
+              query: JSON.stringify({ ...emptyQuery(), [field]: [value] }),
+            })
+          }
+        >
+          {value}
+        </Button>
+      ))}
+    </span>
+  );
   // Only what the metadata holds: a missing field is left out, not "未提供".
   const fields: [string, ReactNode][] = [
     ["作者", paperAuthors(detail)],
@@ -289,7 +322,34 @@ export function ReaderInformation({
       (i) => [i.namespace.toUpperCase(), i.value] as [string, ReactNode],
     ),
     ...(m.keywords.length
-      ? [["关键词", m.keywords.join("；")] as [string, ReactNode]]
+      ? [["作者关键词", terms("keywords", m.keywords)] as [string, ReactNode]]
+      : []),
+    ...(m.subject_terms.length
+      ? [
+          ["主题词", terms("subject_terms", m.subject_terms)] as [
+            string,
+            ReactNode,
+          ],
+        ]
+      : []),
+    ...(detail.intake_batches.length
+      ? [
+          [
+            "入库",
+            <span className="reader-batches" key="batches">
+              {detail.intake_batches.map((batch) => (
+                <Button
+                  key={batch.batch_id}
+                  variant="text"
+                  size="compact"
+                  onPress={() => openBatch(batch.batch_id)}
+                >
+                  {batch.label}
+                </Button>
+              ))}
+            </span>,
+          ] as [string, ReactNode],
+        ]
       : []),
   ];
   const relations: {

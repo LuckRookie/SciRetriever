@@ -31,6 +31,7 @@ import { errorMessage } from "../../strings.js";
 import { archiveQuery } from "../../data/archive.js";
 import { record } from "../../data/wire.js";
 import { Icon as SectionIcon } from "../../shell/icon.js";
+import { useRecentBatches } from "../../data/intake-batches.js";
 
 /** Drag payloads between library rows and the folder tree. */
 export const LITERATURE_DRAG = "application/x-sciretriever-literature";
@@ -107,6 +108,18 @@ function openScope(
     { clearSource: true },
   );
 }
+/** The library limited to one intake batch, newest intake first. */
+export function openBatch(id: string) {
+  navigate(
+    {
+      view: "lib",
+      literature: null,
+      query: JSON.stringify({ ...emptyQuery(), intake_batch_ids: [id] }),
+      sort: "intake-desc",
+    },
+    { clearSource: true },
+  );
+}
 /** The library scoped to one folder, as clicking it in the tree does. */
 export function openFolder(id: string) {
   openScope({ folder: { id, include_descendants: true } });
@@ -127,6 +140,7 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
     shell = useShell(),
     queries = useQueryClient();
   const folders = useFolders();
+  const batches = useRecentBatches();
   // Only the total is needed; it shares the archive query prefix so issue
   // actions refresh it.
   const issues = useQuery({
@@ -450,6 +464,48 @@ export function LibraryFolders({ onNavigate }: { onNavigate: () => void }) {
           {issues.data?.toLocaleString() ?? ""}
         </span>
       </Button>
+      {batches.data?.items.length ? (
+        <div className="folder-batches" role="group" aria-label="最近入库">
+          <Button
+            variant="text"
+            className="folder-open folder-recent"
+            aria-current={route.section === "disc" ? "page" : false}
+            icon={<SectionIcon name="disc" />}
+            onPress={() => {
+              navigate({ view: "disc", literature: null });
+              onNavigate();
+            }}
+          >
+            <span className="folder-name">最近入库</span>
+          </Button>
+          {batches.data.items.map((batch) => {
+            const current =
+              route.section === "lib" &&
+              route.query.intake_batch_ids.length === 1 &&
+              route.query.intake_batch_ids[0] === batch.batch_id;
+            return (
+              <Button
+                key={batch.batch_id}
+                variant="text"
+                className="folder-open folder-batch"
+                aria-current={current ? "page" : false}
+                aria-label={`${batch.label}，${batch.counts.hits} 篇`}
+                onPress={() => {
+                  openBatch(batch.batch_id);
+                  onNavigate();
+                }}
+              >
+                <span className="folder-name" title={batch.label}>
+                  {batch.label}
+                </span>
+                <span className="navigation-count">
+                  {batch.counts.hits.toLocaleString()}
+                </span>
+              </Button>
+            );
+          })}
+        </div>
+      ) : null}
       {folders.isError ? (
         <Button variant="text" onPress={() => void folders.refetch()}>
           文件夹读取失败，重试

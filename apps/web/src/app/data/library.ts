@@ -11,6 +11,15 @@ import { record } from "./wire.js";
 import { titleParts, titleText, type TitlePart } from "../../reading/title.js";
 import type { ApiClient } from "./api.js";
 export const emptyQuery = () => parseLibrarySearchRequest({ query: {} }).query;
+export const SORT_LABELS: Record<LibrarySort, string> = {
+  "intake-desc": "最近入库",
+  "opened-desc": "最近阅读",
+  "publication-year-desc": "年份：新到旧",
+  "publication-year-asc": "年份：旧到新",
+  "title-asc": "标题：A–Z",
+  "title-desc": "标题：Z–A",
+  relevance: "相关性",
+};
 export async function searchLibrary(
   api: ApiClient,
   query: LibraryQuery,
