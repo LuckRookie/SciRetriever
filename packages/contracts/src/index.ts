@@ -28,6 +28,7 @@ export const CONTRACTS_VERSION = "v1" as const;
 
 export * from "./article-identity.js";
 export * from "./operations.js";
+export * from "./intake.js";
 import {
   parseArticleIdentityAssessment,
   type ArticleIdentityAssessment,
@@ -3659,5 +3660,3 @@ export * from "./source-results.js";
 export * from "./screencast.js";
 export * from "./index-refresh.js";
 export * from "./translation.js";
-
-export * from "./intake.js";
