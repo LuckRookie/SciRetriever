@@ -83,6 +83,7 @@ export const EMPTY_METADATA: LiteratureMetadata = Object.freeze({
   pages: null,
   identifiers: [],
   keywords: [],
+  subject_terms: [],
 });
 
 function fail(): never {

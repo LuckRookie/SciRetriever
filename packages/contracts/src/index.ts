@@ -199,6 +199,7 @@ export interface LiteratureMetadata {
   readonly pages: string | null;
   readonly identifiers: readonly Identifier[];
   readonly keywords: readonly string[];
+  readonly subject_terms: readonly string[];
 }
 export interface MetaLiterature {
   readonly meta_literature_id: MetaLiteratureId;
@@ -255,11 +256,13 @@ export interface LibraryQuery {
   readonly article_kinds: readonly ArticleKind[];
   readonly languages: readonly string[];
   readonly keywords: readonly string[];
+  readonly subject_terms: readonly string[];
   readonly version_roles: readonly VersionRole[];
   readonly statuses: readonly LiteratureStatus[];
   readonly missing_steps: readonly MissingStep[];
   readonly needs_manual_pdf: boolean | null;
   readonly discovery_run_ids: readonly DiscoveryRunId[];
+  readonly intake_batch_ids: readonly import("./intake.js").IntakeBatchId[];
   readonly tags?: {
     readonly ids: readonly string[];
     readonly mode: "primary" | "any";
@@ -959,7 +962,7 @@ export function parseAuthor(
 }
 export function parseLiteratureMetadata(value: unknown): LiteratureMetadata {
   const record = exact(
-    value,
+    { subject_terms: [], ...object(value, []) },
     [
       "title",
       "authors",
@@ -976,6 +979,7 @@ export function parseLiteratureMetadata(value: unknown): LiteratureMetadata {
       "pages",
       "identifiers",
       "keywords",
+      "subject_terms",
     ],
     [],
   );
@@ -998,6 +1002,9 @@ export function parseLiteratureMetadata(value: unknown): LiteratureMetadata {
     issue: nullableText(record.issue, ["issue"]),
     pages: nullableText(record.pages, ["pages"]),
     identifiers: list(record.identifiers, ["identifiers"], parseIdentifier),
+    subject_terms: list(record.subject_terms, ["subject_terms"], (item, path) =>
+      text(item, path, true),
+    ),
     keywords: list(record.keywords, ["keywords"], (item, path) =>
       text(item, path, true),
     ),
@@ -1094,6 +1101,8 @@ export function parseAsset(value: unknown): Asset {
 export function parseLibraryQuery(value: unknown): LibraryQuery {
   const record = exact(
     {
+      intake_batch_ids: [],
+      subject_terms: [],
       tags: undefined,
       folder: undefined,
       recently_opened: undefined,
@@ -1113,6 +1122,8 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
       "article_kinds",
       "languages",
       "keywords",
+      "subject_terms",
+      "intake_batch_ids",
       "version_roles",
       "statuses",
       "missing_steps",
@@ -1161,6 +1172,14 @@ export function parseLibraryQuery(value: unknown): LibraryQuery {
     ),
     languages: list(record.languages, ["languages"], (item, path) =>
       text(item, path, true),
+    ),
+    intake_batch_ids: list(
+      record.intake_batch_ids,
+      ["intake_batch_ids"],
+      (v, p) => id<"IntakeBatchId">(v, p),
+    ),
+    subject_terms: list(record.subject_terms, ["subject_terms"], (v, p) =>
+      text(v, p, true),
     ),
     keywords: list(record.keywords, ["keywords"], (item, path) =>
       text(item, path, true),
@@ -3289,6 +3308,10 @@ export interface LiteratureAssetView {
   readonly literature_asset: LiteratureAsset;
 }
 export interface LiteratureDetail extends LiteratureSearchItem {
+  readonly intake_batches: readonly {
+    readonly batch_id: import("./intake.js").IntakeBatchId;
+    readonly label: string;
+  }[];
   readonly meta_literature: MetaLiterature;
   readonly metadata_observations: readonly MetadataObservation[];
   readonly primary_pdf: LiteratureAssetView | null;
@@ -3531,6 +3554,7 @@ export async function parseLiteratureDetail(
 ): Promise<LiteratureDetail> {
   const r = exact(
     {
+      intake_batches: [],
       tags: undefined,
       intake_at: null,
       last_opened_at: null,
@@ -3538,6 +3562,7 @@ export async function parseLiteratureDetail(
       ...object(value, []),
     },
     [
+      "intake_batches",
       "tags",
       "intake_at",
       "last_opened_at",
@@ -3570,6 +3595,13 @@ export async function parseLiteratureDetail(
   });
   return Object.freeze({
     ...item,
+    intake_batches: list(r.intake_batches, ["intake_batches"], (v, p) => {
+      const row = exact(v, ["batch_id", "label"], p);
+      return Object.freeze({
+        batch_id: id<"IntakeBatchId">(row.batch_id, p),
+        label: text(row.label, p, true),
+      });
+    }),
     meta_literature: parseMetaLiterature(r.meta_literature),
     metadata_observations: Object.freeze(
       array(r.metadata_observations, []).map(parseMetadataObservation),
@@ -3627,3 +3659,5 @@ export * from "./source-results.js";
 export * from "./screencast.js";
 export * from "./index-refresh.js";
 export * from "./translation.js";
+
+export * from "./intake.js";

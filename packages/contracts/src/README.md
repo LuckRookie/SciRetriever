@@ -5,6 +5,7 @@
 ## 内容入口
 
 - [index.ts](index.ts)：包公开导出与基础合同。
+- [intake.ts](intake.ts)：入库批次、范围内词频与 PDF 获取范围/预览的中性合同；新筛选及主题词在基础合同中解码，旧字段缺省为空。
 - [acquisition.ts](acquisition.ts)：当前/待生效来源与有界安全获取轨迹，供配置、任务和浏览器读取。
 - [document.ts](document.ts)：文档合同。
 - [raw-parsing.ts](raw-parsing.ts)：双 profile 原始解析与中性区块合同，校验坐标、页码、资源引用和不可变清单身份。
