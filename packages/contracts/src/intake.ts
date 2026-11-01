@@ -119,12 +119,12 @@ export interface AcquirePdfScope {
 function fail(): never {
   throw new ContractValidationError(["intake"]);
 }
-function text(value: unknown, max = 8192): string {
+function text(value: unknown, max = 8192, multiline = false): string {
   if (
     typeof value !== "string" ||
     !value.trim() ||
     value.trim().length > max ||
-    /[\p{Cc}\p{Cf}]/u.test(value)
+    /[\p{Cc}\p{Cf}]/u.test(multiline ? value.replace(/[\r\n\t]/gu, "") : value)
   )
     fail();
   return value.trim().normalize("NFC");
@@ -302,7 +302,7 @@ export function parseIntakeBatch(value: unknown): IntakeBatch {
           : [],
   );
   const request: IntakeBatch["request"] = {
-    ...(q.query === undefined ? {} : { query: text(q.query) }),
+    ...(q.query === undefined ? {} : { query: text(q.query, 8192, true) }),
     ...(q.seed_literature_id === undefined
       ? {}
       : { seed_literature_id: parseLiteratureId(q.seed_literature_id) }),
@@ -339,8 +339,8 @@ export function parseIntakeBatch(value: unknown): IntakeBatch {
     request.year_from > request.year_to
   )
     fail();
-  const label = text(r.label),
-    default_label = text(r.default_label);
+  const label = text(r.label, 8192, !r.renamed),
+    default_label = text(r.default_label, 8192, true);
   if (
     (!r.renamed && label !== default_label) ||
     (r.renamed && label.length > 120)

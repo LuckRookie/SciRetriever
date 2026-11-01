@@ -185,6 +185,7 @@ function usage(options: CliOptions): CliResult {
     "  context search|knowledge --request FILE|-; analysis prepare --request FILE|-; extraction prepare --request FILE|-\n" +
     "  literature status; literature search|read|references|reference|identity|artifact-chunk|bibliography --request FILE|-\n" +
     "  jobs list|inspect|create-request|resolve --request FILE|- (create-request only saves)\n" +
+    "  library batches|facets|batch-rename --request FILE|-; acquire-pdf preview --request FILE|-\n" +
     "  extraction create|read|submit|receipt|close|cancel|cleanup --request FILE|-\n" +
     "  config read; config preview|publish|credential|probe --request FILE|-\n" +
     "  import bibliography --request FILE|-; discover request --request FILE|-\n" +
@@ -459,6 +460,8 @@ function query(
     article_kinds: argumentsOf(args, "--article-kind"),
     languages: argumentsOf(args, "--language"),
     keywords: argumentsOf(args, "--keyword"),
+    subject_terms: argumentsOf(args, "--subject-term"),
+    intake_batch_ids: argumentsOf(args, "--intake-batch-id"),
     version_roles: argumentsOf(args, "--version-role"),
     statuses: argumentsOf(args, "--status"),
     missing_steps: argumentsOf(args, "--missing-step"),
@@ -985,6 +988,9 @@ async function execute(
     }
   }
   const queryRoutes: Readonly<Record<string, QueryOperation>> = {
+    "library batches": "intake-batches",
+    "library facets": "library-facets",
+    "acquire-pdf preview": "acquire-pdf-preview",
     "maintenance index-status": "index-status",
     "literature metadata-fields": "metadata-fields",
     "jobs list": "task-list",
@@ -1080,6 +1086,7 @@ async function execute(
     return output({ protocol_version: 1, result: value }, options);
   }
   const maintenanceRoutes: Readonly<Record<string, MaintenanceOperation>> = {
+    "library batch-rename": "intake-batch-rename",
     "literature resolve-references": "archive-references",
     "literature metadata-edit": "metadata-edit",
     "archive arrangement-edit": "archive-arrangement-edit",
@@ -1643,7 +1650,10 @@ async function execute(
     const bytes = await inputBytes(path, options);
     const value = await withApplication(options, async (app) => {
       const decoded = decodeBibliography(bytes, format);
-      return importBibliography(decoded, app.identity);
+      return importBibliography(decoded, app.identity, {
+        database: app.database,
+        file_name: path === "-" ? null : (path.split("/").at(-1) ?? format),
+      });
     });
     return output(value, options);
   }

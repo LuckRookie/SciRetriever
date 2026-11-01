@@ -73,7 +73,11 @@ it("publishes mixed-case Europe PMC DOI relations against canonical local identi
   const f = await fixture([adapter]);
   try {
     await f.app.identity.observe(observation("other", "mixed"));
-    const report = await f.app.citations.run({ ...f.request, max_depth: 1 });
+    const report = await f.app.citations.run({
+      origin: "cli",
+      ...f.request,
+      max_depth: 1,
+    });
     expect(report.source_results).toEqual([
       { provider_name: "europe-pmc", outcome: "EXHAUSTED", failure: null },
     ]);
@@ -207,7 +211,7 @@ it("continues after a target 404 through the rest of its references and every fi
   };
   const f = await fixture([p], [lookup]);
   try {
-    const report = await f.app.citations.run(f.request);
+    const report = await f.app.citations.run({ ...f.request, origin: "cli" });
     expect(report).toMatchObject({ status: "PARTIAL", result_count: 4 });
     expect(calls).toEqual(["primary:seed", "primary:a", "primary:b"]);
     const saved = await f.app.database.getDiscovery(report.discovery_run_id);
@@ -242,7 +246,7 @@ it("falls through on empty or malformed responses and restarts priority for each
   );
   const f = await fixture([primary, free]);
   try {
-    const result = await f.app.citations.run(f.request);
+    const result = await f.app.citations.run({ ...f.request, origin: "cli" });
     expect(result).toMatchObject({ status: "PARTIAL", result_count: 4 });
     expect(calls).toEqual([
       "primary:seed",
@@ -273,7 +277,7 @@ it("keeps using a provider on later nodes after one malformed seed record", asyn
   const free = port("free", () => [], calls);
   const f = await fixture([primary, free]);
   try {
-    const result = await f.app.citations.run(f.request);
+    const result = await f.app.citations.run({ ...f.request, origin: "cli" });
     expect(result).toMatchObject({ status: "PARTIAL", result_count: 3 });
     expect(calls).toEqual([
       "primary:seed",
@@ -333,6 +337,7 @@ it("resolves a missing target through a later source without leaking native IDs 
   );
   try {
     const report = await f.app.citations.run({
+      origin: "cli",
       ...f.request,
       max_depth: 1,
       providers: [
@@ -381,7 +386,7 @@ it.each([
     );
     const f = await fixture([primary, free]);
     try {
-      const report = await f.app.citations.run(f.request);
+      const report = await f.app.citations.run({ ...f.request, origin: "cli" });
       expect(report).toMatchObject({ status: "PARTIAL", result_count: 2 });
       expect(calls).toEqual(["primary:seed", "free:seed", "free:a"]);
     } finally {
@@ -416,6 +421,7 @@ it("does not start fallback after cancellation during a target lookup", async ()
   );
   try {
     const report = await f.app.citations.run({
+      origin: "cli",
       ...f.request,
       signal: abort.signal,
     });
@@ -445,7 +451,7 @@ it("excludes seeds reached through cycles and does not report uncalled sources a
   );
   const f = await fixture([primary, free]);
   try {
-    const report = await f.app.citations.run(f.request);
+    const report = await f.app.citations.run({ ...f.request, origin: "cli" });
     expect(report).toMatchObject({ status: "COMPLETED", result_count: 2 });
     expect(calls).toEqual(["primary:seed", "primary:a"]);
     expect(report.source_results.map((x) => x.provider_name)).toEqual([
@@ -501,7 +507,7 @@ it("does not try a foreign lookup with only the original provider's native recor
     ],
   );
   try {
-    const report = await f.app.citations.run(f.request);
+    const report = await f.app.citations.run({ ...f.request, origin: "cli" });
     expect(report.result_count).toBe(0);
     expect(foreignLookups).toBe(0);
     expect(calls).toEqual(["primary:seed", "free:seed"]);

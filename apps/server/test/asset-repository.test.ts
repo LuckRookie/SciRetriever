@@ -95,6 +95,7 @@ describe("asset repository", () => {
           pages: null,
           identifiers: [],
           keywords: [],
+          subject_terms: [],
         },
       };
       await worker.putLiterature(literature);

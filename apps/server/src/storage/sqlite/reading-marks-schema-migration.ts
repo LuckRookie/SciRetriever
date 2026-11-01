@@ -7,13 +7,13 @@ import {
 } from "./archive-schema-migration.js";
 import {
   READING_MARKS_SCHEMA,
-  SCHEMA_FINGERPRINT,
+  SCHEMA_FINGERPRINT_V14 as SCHEMA_FINGERPRINT,
   SCHEMA_FINGERPRINT_V13,
-  SCHEMA_MANIFEST,
+  SCHEMA_MANIFEST_V14 as SCHEMA_MANIFEST,
   SCHEMA_MANIFEST_V13,
-  SCHEMA_VERSION,
 } from "./schema.js";
 
+const SCHEMA_VERSION = 14;
 function refuse(): never {
   throw Object.assign(new Error("reading marks schema migration refused"), {
     code: "reading-marks-schema-migration-refused",

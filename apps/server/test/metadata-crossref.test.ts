@@ -34,6 +34,7 @@ describe("Crossref REST metadata adapter", () => {
     };
     const input = {
       ...record("10.1000/whitespace", "Photoredox\n  catalysis"),
+      subject: ["Physical Chemistry"],
       author: [
         {
           given: "Ada\tAugusta",
@@ -50,6 +51,10 @@ describe("Crossref REST metadata adapter", () => {
     };
     const observation = await parseCrossrefRecord(input, options);
     expect(observation.metadata.title).toBe("Photoredox catalysis");
+    expect(observation.metadata).toMatchObject({
+      keywords: [],
+      subject_terms: ["Physical Chemistry"],
+    });
     expect(observation.metadata.authors[0]).toMatchObject({
       given_name: "Ada Augusta",
       affiliations: [{ name: "Institute of Chemistry" }],

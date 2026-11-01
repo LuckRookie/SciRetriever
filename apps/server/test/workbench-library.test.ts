@@ -270,3 +270,47 @@ it("refuses corrupted artifact bytes before sending a successful download", asyn
     await env.close();
   }
 });
+
+it("serves batch reads, full-scope facets and PDF preview alongside authenticated library search", async () => {
+  const env = await fixture();
+  try {
+    const { startIntake, finishIntake } = await import(
+      "../src/literature/intake.js"
+    );
+    const batch = await startIntake(
+      env.app.database,
+      "topic",
+      "Scope",
+      { query: "Scope" },
+      "cli",
+    );
+    await env.app.database.writeIntake({
+      operation: "member",
+      member: { batch_id: batch, literature_id: lit, disposition: "matched" },
+    });
+    await finishIntake(env.app.database, batch, "completed");
+    const read = await env.post("intake-batches", {
+      operation: "get",
+      request: { batch_id: batch },
+    });
+    expect(read.status).toBe(200);
+    expect(await read.json()).toMatchObject({
+      result: { batch_id: batch, counts: { hits: 1, matched: 1 } },
+    });
+    const facets = await env.post("facets", {
+      query: { intake_batch_ids: [batch] },
+      limit: 10,
+    });
+    expect(facets.status).toBe(200);
+    expect(await facets.json()).toMatchObject({ result: { total: 1 } });
+    const preview = await env.post("acquire-pdf/preview", {
+      selector: { kind: "literatures", literature_ids: [lit] },
+    });
+    expect(preview.status).toBe(200);
+    expect(await preview.json()).toMatchObject({
+      result: { matched: 1, process: 0, skipped_has_pdf: 1 },
+    });
+  } finally {
+    await env.close();
+  }
+});

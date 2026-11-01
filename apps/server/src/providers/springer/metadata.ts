@@ -202,7 +202,7 @@ export class SpringerRestAdapter
               language: record.language,
               venue: record.publicationName,
               publisher: record.publisher,
-              keywords: record.subjects,
+              subjectTerms: record.subjects,
               assetHints: hints,
               raw: record,
               observationId: await this.observationId(),

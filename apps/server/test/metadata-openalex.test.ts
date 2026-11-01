@@ -225,3 +225,34 @@ it("fails an OpenAlex cited-by page that replays its cursor", async () => {
   );
   expect(result.outcome).toBe("FAILED");
 });
+
+it("keeps concepts out of author keywords and filters level/score before taking the eight best subject terms", async () => {
+  const adapter = new OpenAlexRestAdapter({
+    origin: "https://api.openalex.test",
+    transport: {
+      request: async () => ({
+        ...work("W3", "Scoped"),
+        concepts: [
+          { display_name: "broad", level: 0, score: 1 },
+          { display_name: "weak", level: 3, score: 0.29 },
+          { display_name: "unknown", level: 1 },
+          ...Array.from({ length: 12 }, (_, i) => ({
+            display_name: `field ${i}`,
+            level: 2,
+            score: 0.3 + i / 20,
+          })),
+        ],
+      }),
+    },
+  });
+  const result = await new MetadataService({ lookup_ports: [adapter] }).lookup({
+    provider_name: "openalex",
+    key: { record_id: "W3", identifiers: [] },
+    scan_limit: 1,
+  });
+  expect(result.observations[0]?.metadata.keywords).toEqual([]);
+  expect(result.observations[0]?.declared_keywords).toEqual([]);
+  expect(result.observations[0]?.metadata.subject_terms).toEqual(
+    Array.from({ length: 8 }, (_, i) => `field ${11 - i}`),
+  );
+});

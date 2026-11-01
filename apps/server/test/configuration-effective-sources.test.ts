@@ -1,3 +1,4 @@
+import { parseIntakeBatchId } from "@sciretriever/contracts";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +17,9 @@ describe("effective metadata source configuration", () => {
     const topic = vi
       .spyOn(TopicDiscoveryService.prototype, "run")
       .mockResolvedValue({
+        intake_batch_id: parseIntakeBatchId(
+          "00000000-0000-0000-0000-000000001008",
+        ),
         discovery_run_id: "00000000-0000-0000-0000-000000000001",
         status: "COMPLETED",
         accepted_count: 0,
@@ -25,6 +29,9 @@ describe("effective metadata source configuration", () => {
     const citations = vi
       .spyOn(CitationDiscoveryService.prototype, "run")
       .mockResolvedValue({
+        intake_batch_id: parseIntakeBatchId(
+          "00000000-0000-0000-0000-000000001008",
+        ),
         discovery_run_id: "00000000-0000-0000-0000-000000000002",
         status: "COMPLETED",
         result_count: 0,

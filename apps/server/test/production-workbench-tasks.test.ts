@@ -1,3 +1,4 @@
+import { parseIntakeBatchId } from "@sciretriever/contracts";
 import { SCHEMA_VERSION } from "../src/storage/sqlite/schema.js";
 import { withRawParserFixture } from "./raw-parser-fixture.js";
 import {
@@ -299,6 +300,7 @@ describe("production task workbench composition", () => {
         await repository.updateJob(jobId, item.status);
         expected.set(jobId, {
           ...job,
+          scope: null,
           status: item.status,
           progress: { total: item.dispositions.length, done: item.done },
         });
@@ -381,6 +383,7 @@ describe("production task workbench composition", () => {
       const run = vi
         .spyOn(env.server.application.citations, "run")
         .mockResolvedValue({
+          intake_batch_id: parseIntakeBatchId(randomUUID()),
           discovery_run_id: randomUUID(),
           status: "COMPLETED",
           result_count: 0,

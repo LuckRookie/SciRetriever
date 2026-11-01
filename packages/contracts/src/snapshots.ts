@@ -229,6 +229,26 @@ export function parseSnapshotMember(value: unknown): SnapshotMember {
     tags,
   };
 }
+/** Empty fields introduced after v1 do not change immutable historical hashes. */
+export function snapshotMemberValue(member: SnapshotMember) {
+  const { subject_terms, ...metadata } = member.metadata;
+  return {
+    ...member,
+    metadata: subject_terms.length ? member.metadata : metadata,
+  };
+}
+export function snapshotDefinitionValue(definition: SnapshotDefinition) {
+  if (definition.kind !== "query") return definition;
+  const { intake_batch_ids, subject_terms, ...query } = definition.query;
+  return {
+    ...definition,
+    query: {
+      ...query,
+      ...(intake_batch_ids.length ? { intake_batch_ids } : {}),
+      ...(subject_terms.length ? { subject_terms } : {}),
+    },
+  };
+}
 export async function snapshotHash(
   definition: SnapshotDefinition,
   members: readonly SnapshotMember[],
@@ -236,8 +256,13 @@ export async function snapshotHash(
   const manifest = await Promise.all(
     members.map(async (m) => ({
       literature_id: m.literature_id,
-      sha256: await sha256(canonicalJsonBytes(m)),
+      sha256: await sha256(canonicalJsonBytes(snapshotMemberValue(m))),
     })),
   );
-  return sha256(canonicalJsonBytes({ definition, members: manifest }));
+  return sha256(
+    canonicalJsonBytes({
+      definition: snapshotDefinitionValue(definition),
+      members: manifest,
+    }),
+  );
 }

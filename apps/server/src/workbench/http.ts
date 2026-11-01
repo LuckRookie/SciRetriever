@@ -1837,6 +1837,41 @@ export async function startWorkbenchHttp(
           return;
         }
         switch (pathname) {
+          case "/api/library/intake-batches":
+            json(response, 200, {
+              result: await library.queries.intakeBatches(value),
+            });
+            return;
+          case "/api/library/facets":
+            json(response, 200, {
+              result: await library.queries.facets(value, stopUploads.signal),
+            });
+            return;
+          case "/api/library/acquire-pdf/preview": {
+            const r = object(value, ["selector"]);
+            json(response, 200, {
+              result: (
+                await library.queries.pdfSelection(
+                  r.selector,
+                  stopUploads.signal,
+                )
+              ).counts,
+            });
+            return;
+          }
+          case "/api/library/intake-batches/rename":
+            if (!options.query?.archiveOperation) {
+              json(response, 503, { code: "operation-unavailable" });
+              return;
+            }
+            json(response, 200, {
+              result: await options.query.archiveOperation(
+                "intake-batch-rename",
+                value,
+                stopUploads.signal,
+              ),
+            });
+            return;
           case "/api/library/search": {
             const stop = new AbortController();
             const abort = () => stop.abort();
@@ -2299,6 +2334,7 @@ export async function startWorkbenchHttp(
 }
 
 const ARCHIVE_HTTP_WRITES = [
+  "intake-batch-rename",
   "archive-arrangement-edit",
   "folders",
   "marks",
@@ -2318,6 +2354,9 @@ const ARCHIVE_HTTP_WRITES = [
   "archive-references",
 ] as const;
 const ARCHIVE_HTTP_READS = [
+  "intake-batches",
+  "library-facets",
+  "acquire-pdf-preview",
   "index-status",
   "source-statistics",
   "archive-arrangement",

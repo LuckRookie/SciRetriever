@@ -27,3 +27,5 @@ CLI/MCP/HTTP 只适配请求；供应商协议、材料验收和事实写入仍�
 `proofread-save.ts` 在显式保存后重建文档、无模型结构规则与参考文献；后续失败保留人工版本并返回已保存状态。`query-operations.ts` 同时提供过程、任务运行、历史预估、运行列表、文献结果和操作历史的三端公共读取。
 
 `metadata-task.ts` 在准入时冻结来源并保存/运行现有加工任务；`metadata-task-runtime.ts` 编排主题、引用与逐篇补全，只由身份 owner 接纳观察，来源计数不成为另一份文献事实。
+
+入库批次读取（intake-batches）、批次改名（intake-batch-rename）、范围词频（library-facets）与 PDF 预览（acquire-pdf-preview）复用 Literature/SQLite owner。PDF 任务创建在 catalog admission 内解析筛选、排序、排除已有/无法获取项并固定成员，scope 保存原选择器与 disjoint 计数；任务详情和列表读取同一 scope。

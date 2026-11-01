@@ -4,7 +4,8 @@
 
 ## 内容入口
 
-- [identity.ts](identity.ts)：文献身份接纳。
+- [identity.ts](identity.ts)：文献身份接纳，与入库批次成员在同一事务接纳。
+- [intake.ts](intake.ts)：主题、引用及书目导入批次的生命周期与真实入口归属；中断保留已接纳的成员。
 - [metadata-rules.ts](metadata-rules.ts)：来源元数据的确定性处理。
 - [primary-pdf.ts](primary-pdf.ts)：主 PDF 关系。
 - [query.ts](query.ts)：文献库查询。
@@ -26,3 +27,5 @@
 - `reference-matching.ts` / `archive-references.ts`：固定校订稿参考文献的保守库内匹配与原子关系支持；不依靠模糊题名猜测。`bibliography-import.ts` 是书目解码与导入的共享实现，Entry 不再持有重复副本。
 
 - [folders.ts](folders.ts)：文献文件夹、批量成员与显式阅读历史的操作边界；目录与阅读历史不改变文献事实、资产或就绪状态。`query.ts` 的快速筛选计数与搜索共享筛选条件，入库排序取最早关联观测时间。
+
+`metadata-rules.ts` 将作者声明（declared_keywords）投影为作者关键词，逐字段裁决仍保留人工 > 校订证据 > 来源的优先级及锁。数据库主题词由 provider 顺序合并、忽略大小写去重并限于 8 项；不进入书目导出的作者关键词。`query.ts` 提供批次读取、整个筛选范围的词频，以及按当前排序冻结的 PDF 获取预览；分页搜索与批量范围使用同一 SQL 条件。

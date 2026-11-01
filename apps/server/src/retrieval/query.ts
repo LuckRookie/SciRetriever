@@ -499,6 +499,7 @@ export class MaterialContextService {
               .map((author) => author.display_name)
               .join(" "),
             detail.literature.metadata.keywords.join(" "),
+            detail.literature.metadata.subject_terms.join(" "),
             detail.literature.metadata.venue,
             detail.literature.metadata.publisher,
             detail.literature.metadata.publication_year?.toString(),

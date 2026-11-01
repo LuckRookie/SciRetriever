@@ -1,3 +1,6 @@
+import { withActivity } from "../src/logging/activity.js";
+const runMetadataTask: typeof runMetadataTaskInternal = (...args) =>
+  withActivity({ actor: "cli:test" }, () => runMetadataTaskInternal(...args));
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -15,7 +18,7 @@ import { createApplication } from "../src/bootstrap/application.js";
 import { createTaskReader } from "../src/entry/task-read.js";
 import {
   prepareMetadataTask,
-  runMetadataTask,
+  runMetadataTask as runMetadataTaskInternal,
 } from "../src/entry/metadata-task.js";
 import { sourceStatistics } from "../src/application/source-statistics.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
@@ -140,11 +143,13 @@ it("records request/returned progress while a source is still running and reuses
       "crossref",
       "openalex",
     ]);
-    const job = await app.processingTasks!.submit({
-      schema_version: 1,
-      idempotency_key: "live",
-      operations: [{ operation: "acquire-metadata", request }],
-    });
+    const job = await withActivity({ actor: "cli:test" }, () =>
+      app.processingTasks!.submit({
+        schema_version: 1,
+        idempotency_key: "live",
+        operations: [{ operation: "acquire-metadata", request }],
+      }),
+    );
     const reader = createTaskReader(app.jobs!);
     run = app.processingTasks!.run(job.job_id);
     await vi.waitFor(async () => {
@@ -527,21 +532,23 @@ it("does not turn cancellation during a dispatched source into a request error o
   });
   let running: Promise<unknown> | undefined;
   try {
-    const job = await app.processingTasks!.submit({
-      schema_version: 1,
-      idempotency_key: "cancel-source",
-      operations: [
-        {
-          operation: "acquire-metadata",
-          request: prepareMetadataTask(app, {
-            kind: "topic",
-            query: "synthetic",
-            year_from: null,
-            year_to: null,
-          }),
-        },
-      ],
-    });
+    const job = await withActivity({ actor: "cli:test" }, () =>
+      app.processingTasks!.submit({
+        schema_version: 1,
+        idempotency_key: "cancel-source",
+        operations: [
+          {
+            operation: "acquire-metadata",
+            request: prepareMetadataTask(app, {
+              kind: "topic",
+              query: "synthetic",
+              year_from: null,
+              year_to: null,
+            }),
+          },
+        ],
+      }),
+    );
     running = app.processingTasks!.run(job.job_id, abort.signal);
     await dispatched;
     abort.abort();

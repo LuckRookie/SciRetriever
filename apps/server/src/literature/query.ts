@@ -1,4 +1,10 @@
 import {
+  parseLibraryFacetsRequest,
+  parseAcquirePdfSelector,
+  parseIntakeBatchQuery,
+  type LibraryFacets,
+} from "@sciretriever/contracts";
+import {
   canonicalJsonBytes,
   LITERATURE_STATUSES,
   type LibraryCounts,
@@ -31,7 +37,34 @@ export interface SearchSnapshotRow {
   readonly tag_match?: boolean;
   readonly scope_match?: boolean;
 }
+export interface PdfSelectionRequest {
+  readonly selector: import("@sciretriever/contracts").AcquirePdfSelector;
+  readonly ftsQuery: string | null;
+}
+export interface PdfSelection {
+  readonly counts: import("@sciretriever/contracts").AcquirePdfCounts;
+  readonly items: readonly {
+    readonly literature_id: import("@sciretriever/contracts").LiteratureId;
+    readonly version_role: import("@sciretriever/contracts").VersionRole;
+  }[];
+}
 export interface LibraryQueryRepository {
+  intakeBatches?(
+    value: unknown,
+  ): Promise<
+    | import("@sciretriever/contracts").IntakeBatch
+    | import("@sciretriever/contracts").IntakeBatchPage
+  >;
+  libraryFacets?(
+    query: LibraryQuery,
+    limit: number,
+    ftsQuery: string | null,
+    signal?: AbortSignal,
+  ): Promise<LibraryFacets>;
+  acquirePdfSelection?(
+    request: PdfSelectionRequest,
+    signal?: AbortSignal,
+  ): Promise<PdfSelection>;
   libraryCounts(
     query: LibraryQuery,
     ftsQuery: string | null,
@@ -151,6 +184,12 @@ export function queryFingerprint(query: LibraryQuery): string {
     author: contains(query.author),
     author_orcids: unique(query.author_orcids),
     discovery_run_ids: unique(query.discovery_run_ids),
+    ...(query.intake_batch_ids?.length
+      ? { intake_batch_ids: unique(query.intake_batch_ids) }
+      : {}),
+    ...(query.subject_terms?.length
+      ? { subject_terms: unique(query.subject_terms.map(normalizeQueryText)) }
+      : {}),
     ...(query.tags?.ids.length
       ? { tags: { ids: unique(query.tags.ids), mode: query.tags.mode } }
       : {}),
@@ -419,7 +458,16 @@ function matches(row: SearchSnapshotRow, q: LibraryQuery): boolean {
     any(q.publication_forms, [m.publication_form]) &&
     any(q.article_kinds, [m.article_kind]) &&
     any(q.languages, [m.language]) &&
-    q.keywords.every((value) => m.keywords.includes(value)) &&
+    q.keywords.every((value) =>
+      m.keywords.some(
+        (k) => normalizeQueryText(k) === normalizeQueryText(value),
+      ),
+    ) &&
+    (q.subject_terms ?? []).every((value) =>
+      m.subject_terms.some(
+        (k) => normalizeQueryText(k) === normalizeQueryText(value),
+      ),
+    ) &&
     any(q.version_roles, [l.version_role]) &&
     any(q.statuses, [l.status]) &&
     any(q.missing_steps, [row.item.missing_step]) &&
@@ -488,6 +536,52 @@ export async function verifyLiteratureDetailSnapshot(
 }
 export class LiteratureQueryService {
   constructor(private readonly repository: LibraryQueryRepository) {}
+  intakeBatches(value: unknown) {
+    if (!this.repository.intakeBatches) throw new LiteratureQueryError();
+    return this.repository.intakeBatches(parseIntakeBatchQuery(value));
+  }
+  facets(value: unknown, signal?: AbortSignal) {
+    if (!this.repository.libraryFacets) throw new LiteratureQueryError();
+    const r = parseLibraryFacetsRequest(value);
+    if (r.query.text !== null && queryTerms(r.query.text).length === 0)
+      return Promise.resolve({ total: 0, keywords: [], subject_terms: [] });
+    return this.repository.libraryFacets(
+      r.query,
+      r.limit,
+      r.query.text === null
+        ? null
+        : queryTerms(r.query.text)
+            .map((t) => `"${t}"`)
+            .join(" AND "),
+      signal,
+    );
+  }
+  pdfSelection(value: unknown, signal?: AbortSignal) {
+    if (!this.repository.acquirePdfSelection) throw new LiteratureQueryError();
+    const selector = parseAcquirePdfSelector(value);
+    if (
+      selector.kind === "query" &&
+      selector.query.text !== null &&
+      queryTerms(selector.query.text).length === 0
+    )
+      return Promise.resolve({
+        counts: {
+          matched: 0,
+          process: 0,
+          skipped_has_pdf: 0,
+          skipped_unavailable: 0,
+          over_limit: 0,
+        },
+        items: [],
+      });
+    const ftsQuery =
+      selector.kind !== "query" || selector.query.text === null
+        ? null
+        : queryTerms(selector.query.text)
+            .map((t) => `"${t}"`)
+            .join(" AND ");
+    return this.repository.acquirePdfSelection({ selector, ftsQuery }, signal);
+  }
   async detail(value: unknown): Promise<LiteratureDetail> {
     const id = parseLiteratureId(value);
     const snapshot = await this.repository.literatureDetailSnapshot(id);
@@ -666,7 +760,9 @@ export class LiteratureQueryService {
       [],
       [],
       query.tags,
-      query.folder || query.recently_opened ? query : undefined,
+      query.folder || query.recently_opened || query.intake_batch_ids?.length
+        ? query
+        : undefined,
     );
     // A sibling included for completeness may not match FTS or the other query
     // fields. It must not become a new seed for the selected scope.

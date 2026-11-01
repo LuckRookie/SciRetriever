@@ -181,3 +181,61 @@ it("serves bounded pages through the shared query boundary and CLI without model
     await e.close();
   }
 }, 0);
+
+it("reads frozen v14 snapshot bytes and hashes after empty intake/subject defaults are introduced", async () => {
+  const e = await archiveFixture();
+  try {
+    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    await e.submit("ready");
+    const { DatabaseSync } = await import("node:sqlite"),
+      { join } = await import("node:path"),
+      { canonicalJsonBytes, parseLibrarySearchRequest, sha256 } = await import(
+        "@sciretriever/contracts"
+      );
+    const s = await e.app.snapshots.create({
+      kind: "query",
+      query: parseLibrarySearchRequest({ query: { statuses: ["READY"] } })
+        .query,
+    });
+    const raw = new DatabaseSync(join(e.home, "catalog.sqlite"));
+    try {
+      const m = raw
+        .prepare("SELECT * FROM snapshot_members WHERE snapshot_id=?")
+        .get(s.snapshot_id)!;
+      const body = JSON.parse(String(m.member_json));
+      expect(body.metadata.subject_terms).toBeUndefined();
+      expect(await sha256(canonicalJsonBytes(body))).toBe(m.member_sha256);
+      const h = raw
+        .prepare("SELECT * FROM snapshots WHERE snapshot_id=?")
+        .get(s.snapshot_id)!;
+      const definition = JSON.parse(String(h.definition_json));
+      expect(definition.query.subject_terms).toBeUndefined();
+      expect(definition.query.intake_batch_ids).toBeUndefined();
+      expect(
+        await sha256(
+          canonicalJsonBytes({
+            definition,
+            members: [{ literature_id: e.id, sha256: m.member_sha256 }],
+          }),
+        ),
+      ).toBe(h.content_sha256);
+      expect(
+        (await e.app.snapshots.all(s.snapshot_id)).members[0]?.metadata
+          .subject_terms,
+      ).toEqual([]);
+      body.metadata.subject_terms = ["unverified alteration"];
+      raw
+        .prepare(
+          "UPDATE snapshot_members SET member_json=? WHERE snapshot_id=?",
+        )
+        .run(JSON.stringify(body), s.snapshot_id);
+      await expect(e.app.snapshots.all(s.snapshot_id)).rejects.toMatchObject({
+        code: "snapshot-integrity",
+      });
+    } finally {
+      raw.close();
+    }
+  } finally {
+    await e.close();
+  }
+});

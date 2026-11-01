@@ -185,6 +185,11 @@ export async function parseCrossrefRecord(
       pages: text("page"),
       identifiers: [{ namespace: "doi", value: doi }],
       keywords: [],
+      subject_terms: Array.isArray(record.subject)
+        ? record.subject
+            .filter((v): v is string => typeof v === "string" && !!v.trim())
+            .slice(0, 8)
+        : [],
     },
     version_role: "published",
     version_links: [],

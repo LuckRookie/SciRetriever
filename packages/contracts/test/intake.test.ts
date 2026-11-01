@@ -39,6 +39,15 @@ const batch = {
 };
 it("validates batch counters including the legacy exception and closed kind-specific inputs", () => {
   expect(parseIntakeBatch(batch)).toEqual(batch);
+  const query = "energy\nAND storage";
+  expect(
+    parseIntakeBatch({
+      ...batch,
+      label: query,
+      default_label: query,
+      request: { ...batch.request, query },
+    }).request.query,
+  ).toBe(query);
   expect(parseIntakeBatchId(id)).toBe(id);
   expect(
     parseIntakeBatchPage({ items: [batch], next_cursor: null }).items,
@@ -100,7 +109,8 @@ it("bounds list, rename and facets requests without accepting unknown fields", (
   ).toThrow();
 });
 it("decodes historic metadata and queries with empty new fields and preserves new selectors", () => {
-  const { subject_terms: _oldTerms, ...old } = EMPTY_METADATA;
+  const old: Record<string, unknown> = { ...EMPTY_METADATA };
+  delete old.subject_terms;
   expect(parseLiteratureMetadata(old).subject_terms).toEqual([]);
   expect(
     parseLiteratureMetadata({ ...old, subject_terms: ["Physics"] })

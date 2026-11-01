@@ -112,6 +112,7 @@ export async function observation(
     readonly issue?: unknown;
     readonly pages?: unknown;
     readonly keywords?: unknown;
+    readonly subjectTerms?: unknown;
     readonly citedByCount?: unknown;
     readonly referenceCount?: unknown;
     readonly assetHints?: readonly {
@@ -178,6 +179,14 @@ export async function observation(
       issue: text(record.issue),
       pages: text(record.pages),
       identifiers: record.identifiers,
+      subject_terms: Array.isArray(record.subjectTerms)
+        ? record.subjectTerms
+            .flatMap((item) => {
+              const value = text(item);
+              return value ? [value] : [];
+            })
+            .slice(0, 8)
+        : [],
       keywords: Array.isArray(record.keywords)
         ? record.keywords.flatMap((item) => {
             const value = text(item);
@@ -187,7 +196,12 @@ export async function observation(
     },
     version_role: "published",
     version_links: [],
-    declared_keywords: [],
+    declared_keywords: Array.isArray(record.keywords)
+      ? record.keywords.flatMap((item) => {
+          const value = text(item);
+          return value ? [value] : [];
+        })
+      : [],
     reference_texts: [],
     reference_count: record.referenceCount,
     cited_by_count: record.citedByCount,

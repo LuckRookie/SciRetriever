@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
   canonicalJsonBytes,
+  snapshotMemberValue,
+  snapshotDefinitionValue,
   parseSnapshotMember,
   parseSnapshotDefinition,
   type SnapshotMember,
@@ -199,14 +201,17 @@ export function runSnapshotStorage(
         fail("snapshot-input-changed");
       const manifest = members.map((m) => ({
           literature_id: m.literature_id,
-          sha256: hash(m),
+          sha256: hash(snapshotMemberValue(m)),
         })),
-        digest = hash({ definition, members: manifest });
+        digest = hash({
+          definition: snapshotDefinitionValue(definition),
+          members: manifest,
+        });
       if (r.content_sha256 !== digest) fail("snapshot-integrity");
       db.prepare("INSERT INTO snapshots VALUES(?,?,?,?,?,?)").run(
         String(r.snapshot_id),
         String(r.created_at),
-        json(definition),
+        json(snapshotDefinitionValue(definition)),
         digest,
         members.length,
         Number(r.excluded_count),
@@ -219,8 +224,8 @@ export function runSnapshotStorage(
           String(r.snapshot_id),
           member.literature_id,
           ordinal,
-          hash(member),
-          json(member),
+          hash(snapshotMemberValue(member)),
+          json(snapshotMemberValue(member)),
         );
       if (r.name !== null && r.name !== undefined)
         db.prepare("INSERT INTO snapshot_labels VALUES(?,?,?,?)").run(
@@ -276,7 +281,8 @@ export function runSnapshotStorage(
           .get(String(r.snapshot_id), String(r.literature_id));
         if (!saved) fail("snapshot-member-missing");
         member = parseSnapshotMember(JSON.parse(String(saved.member_json)));
-        if (hash(member) !== saved.member_sha256) fail("snapshot-integrity");
+        if (hash(snapshotMemberValue(member)) !== saved.member_sha256)
+          fail("snapshot-integrity");
       }
       result = { ...header(db, row), member };
     } else if (action === "read") {
@@ -305,7 +311,8 @@ export function runSnapshotStorage(
           break;
         }
         const parsed = parseSnapshotMember(JSON.parse(String(m.member_json)));
-        if (hash(parsed) !== m.member_sha256) fail("snapshot-integrity");
+        if (hash(snapshotMemberValue(parsed)) !== m.member_sha256)
+          fail("snapshot-integrity");
         members.push(parsed);
         bytes += size;
       }

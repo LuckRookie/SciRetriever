@@ -11,7 +11,12 @@ import { LiteratureNotFoundError } from "../literature/query.js";
 export type LiteratureSelector =
   | { readonly kind: "all-pending" }
   | { readonly kind: "discovery-run"; readonly discovery_run_id: string }
-  | { readonly kind: "query"; readonly query: LibraryQuery }
+  | {
+      readonly kind: "query";
+      readonly query: LibraryQuery;
+      readonly sort?: import("@sciretriever/contracts").LibrarySort;
+      readonly limit?: number | null;
+    }
   | {
       readonly kind: "meta-literatures";
       readonly meta_literature_ids: readonly MetaLiteratureId[];
@@ -39,6 +44,8 @@ const emptyQuery = (): LibraryQuery => ({
   article_kinds: [],
   languages: [],
   keywords: [],
+  subject_terms: [],
+  intake_batch_ids: [],
   version_roles: [],
   statuses: [],
   missing_steps: [],

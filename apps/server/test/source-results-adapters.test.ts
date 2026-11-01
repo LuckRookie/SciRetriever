@@ -1,3 +1,6 @@
+import { withActivity } from "../src/logging/activity.js";
+const runMetadataTask: typeof runMetadataTaskInternal = (...args) =>
+  withActivity({ actor: "cli:test" }, () => runMetadataTaskInternal(...args));
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,7 +19,7 @@ import {
 } from "../src/bootstrap/application.js";
 import * as applicationBootstrap from "../src/bootstrap/application.js";
 import { createTaskReader } from "../src/entry/task-read.js";
-import { runMetadataTask } from "../src/entry/metadata-task.js";
+import { runMetadataTask as runMetadataTaskInternal } from "../src/entry/metadata-task.js";
 import { startQueryOnlyHttp } from "../src/workbench/http.js";
 import { runCli } from "../src/cli/main.js";
 import { createMcpServer } from "../src/mcp/server.js";

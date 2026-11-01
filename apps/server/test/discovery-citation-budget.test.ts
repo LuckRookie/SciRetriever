@@ -122,7 +122,7 @@ it.each(["references", "cited-by"] as const)(
         result_limit: 5,
         providers: [{ provider_name: "fixture", scan_limit: 1 }],
       };
-      const first = await app.citations.run(request);
+      const first = await app.citations.run({ ...request, origin: "cli" });
       const page = await app.library.references({
         literature_id: seedId,
         direction,
@@ -136,7 +136,7 @@ it.each(["references", "cited-by"] as const)(
           ? page.items[0]?.reference.source_literature_id
           : page.items[0]?.reference.target_literature_id,
       ).toBe(seedId);
-      const again = await app.citations.run(request);
+      const again = await app.citations.run({ ...request, origin: "cli" });
       const repeated = await app.library.references({
         literature_id: seedId,
         direction,
@@ -189,6 +189,7 @@ it("interleaves lookups with relation scanning within one provider raw budget", 
   const { app, seedId } = await application(port, lookup);
   try {
     const report = await app.citations.run({
+      origin: "cli",
       seed_literature_ids: [seedId],
       direction: "references",
       max_depth: 1,
@@ -231,6 +232,7 @@ it.each(["cancel", "provider-failure"] as const)(
     const { app, seedId } = await application(port);
     try {
       const report = await app.citations.run({
+        origin: "cli",
         seed_literature_ids: [seedId],
         direction: "references",
         max_depth: 1,
@@ -280,6 +282,7 @@ it("expands breadth first to the requested depth without scanning beyond its res
   const { app, seedId } = await application(port);
   try {
     const report = await app.citations.run({
+      origin: "cli",
       seed_literature_ids: [seedId],
       direction: "references",
       max_depth: 5,
@@ -322,6 +325,7 @@ it("does not admit a lookup response that identifies an unrelated work", async (
   const { app, seedId } = await application(port, lookup);
   try {
     const report = await app.citations.run({
+      origin: "cli",
       seed_literature_ids: [seedId],
       direction: "references",
       max_depth: 1,
@@ -361,8 +365,12 @@ it("publishes Semantic Scholar inline records and relation provenance atomically
       result_limit: 10,
       providers: [{ provider_name: "semantic-scholar", scan_limit: 1 }],
     };
-    expect((await app.citations.run(request)).result_count).toBe(1);
-    expect((await app.citations.run(request)).result_count).toBe(1);
+    expect(
+      (await app.citations.run({ ...request, origin: "cli" })).result_count,
+    ).toBe(1);
+    expect(
+      (await app.citations.run({ ...request, origin: "cli" })).result_count,
+    ).toBe(1);
     const edges = await app.library.references({
       literature_id: seedId,
       direction: "references",
@@ -443,6 +451,7 @@ it("keeps a provider-native seed key alongside DOI identifiers for reverse citat
   const { app, seedId } = await application(port);
   try {
     const report = await app.citations.run({
+      origin: "cli",
       seed_literature_ids: [seedId],
       direction: "cited-by",
       max_depth: 1,

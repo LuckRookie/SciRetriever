@@ -31,6 +31,7 @@ const makeLiterature = (id: string) => ({
       },
     ],
     keywords: [],
+    subject_terms: [],
   },
 });
 
@@ -113,6 +114,7 @@ describe("literature reference repository", () => {
           pages: null,
           identifiers: [],
           keywords: [],
+          subject_terms: [],
         },
         declared_keywords: [],
         reference_texts: ["A source reference text"],

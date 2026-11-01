@@ -7,7 +7,7 @@ import { normalizeExecutionPolicy } from "../storage/execution/repository.js";
 import type { LiteratureSelector } from "./selectors.js";
 import {
   ContractValidationError,
-  parseLibraryQuery,
+  parseAcquirePdfSelector,
   parseMetaLiteratureId,
   parseDiscoveryRunId,
   parseLiteratureId,
@@ -17,15 +17,21 @@ function taskSelector(value: unknown): LiteratureSelector {
   const item = inputRecord(
     value,
     ["kind"],
-    ["query", "literature_ids", "meta_literature_ids", "discovery_run_id"],
+    [
+      "query",
+      "sort",
+      "limit",
+      "literature_ids",
+      "meta_literature_ids",
+      "discovery_run_id",
+    ],
   );
   switch (item.kind) {
     case "all-pending":
       inputRecord(value, ["kind"]);
       return { kind: "all-pending" };
     case "query":
-      inputRecord(value, ["kind", "query"]);
-      return { kind: "query", query: parseLibraryQuery(item.query) };
+      return parseAcquirePdfSelector(value);
     case "discovery-run":
       inputRecord(value, ["kind", "discovery_run_id"]);
       return {
@@ -143,9 +149,9 @@ export function createTaskOperations(app: Application) {
         !/^[A-Za-z0-9._:-]{1,128}$/u.test(r.idempotency_key)
       )
         throw new ContractValidationError();
-      let policy;
+      let policy: Partial<ReturnType<typeof normalizeExecutionPolicy>>;
       try {
-        policy = normalizeExecutionPolicy(
+        const raw =
           r.policy === undefined
             ? {}
             : inputRecord(
@@ -159,8 +165,17 @@ export function createTaskOperations(app: Application) {
                   "max_model_calls",
                   "intervention_timeout_ms",
                 ],
-              ),
-        );
+              );
+        const full = normalizeExecutionPolicy(raw);
+        policy = Object.hasOwn(raw, "max_attempts")
+          ? full
+          : {
+              mode: full.mode,
+              max_retries: full.max_retries,
+              max_network_bytes: full.max_network_bytes,
+              max_model_calls: full.max_model_calls,
+              intervention_timeout_ms: full.intervention_timeout_ms,
+            };
       } catch {
         throw new ContractValidationError();
       }

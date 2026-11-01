@@ -77,6 +77,9 @@ export const QUERY_OPERATIONS = [
   "tags",
   "metadata-fields",
   "status",
+  "intake-batches",
+  "library-facets",
+  "acquire-pdf-preview",
   "library-search",
   "library-counts",
   "folders",
@@ -218,6 +221,12 @@ async function readQuery(
     else operationRecord(value, ["literature_id"], ["offset", "limit"]);
     return q.reviewRead(operation, value);
   }
+  if (operation === "intake-batches") return q.query.intakeBatches(value);
+  if (operation === "library-facets") return q.query.facets(value, signal);
+  if (operation === "acquire-pdf-preview") {
+    const r = operationRecord(value, ["selector"]);
+    return (await q.query.pdfSelection(r.selector, signal)).counts;
+  }
   if (operation === "usage-estimate") {
     if (!q.usageEstimate) unavailable();
     return q.usageEstimate(value, signal);
@@ -232,7 +241,11 @@ async function readQuery(
     const report = await q.reviewRead("task-run", value);
     if (!report || !q.tasks) return report;
     const task = await q.tasks.read(String(r.job_id));
-    return { ...report, source_results: task.source_results };
+    return {
+      ...report,
+      source_results: task.source_results,
+      scope: task.scope,
+    };
   }
   if (operation === "agent-sessions") {
     if (!q.reviewRead) unavailable();

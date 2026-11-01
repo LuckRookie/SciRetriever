@@ -73,6 +73,7 @@ describe("topic discovery migration slice", () => {
     });
     try {
       const report = await application.discovery.run({
+        origin: "cli",
         query: "  retrieval ",
         year_from: 2020,
         year_to: 2026,
@@ -96,6 +97,7 @@ describe("topic discovery migration slice", () => {
       ).toBe(1);
 
       const partial = await application.discovery.run({
+        origin: "cli",
         query: "retrieval",
         providers: [
           { provider_name: "unavailable-fixture", scan_limit: 2 },
@@ -139,6 +141,7 @@ it("keeps provider date variants outside the requested normalized publication ye
   });
   try {
     const report = await app.discovery.run({
+      origin: "cli",
       query: "retrieval",
       year_to: 2025,
       providers: [{ provider_name: "fixture", scan_limit: 5 }],

@@ -43,6 +43,7 @@ const metadata = (
   pages: null,
   identifiers: [],
   keywords: [],
+  subject_terms: [],
   ...overrides,
 });
 const literature = (n: number, value: LiteratureMetadata, meta = id(100 + n)) =>

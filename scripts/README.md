@@ -27,6 +27,8 @@
 - [migrate-archive-v12.mjs](migrate-archive-v12.mjs)：构建服务端后，显式对一个离线 catalog 副本执行 11 → 12；校验精确旧布局，在事务中扩展 archive_steps 的步骤 CHECK，更新版本/指纹并核对全部表行数与外键。只接受绝对路径，不自动迁移或重建文献，正式切换前须先备份并在副本演练。
 - [migrate-library-state-v13.mjs](migrate-library-state-v13.mjs)：对精确匹配的离线 12 库安装按篇状态失效提示、反向索引和当前 13 身份，完整校验并保持全部旧表行数；只接受绝对路径，打开库不会调用它。旧建档转换工具仍固定到 12，之后显式使用本工具。
 
+- [migrate-intake-v15.mjs](migrate-intake-v15.mjs)：构建 server 后对绝对路径的离线 14 库执行 14 → 15；在同一事务中回填批次、重解释主题词、重投影作者关键词并更新全文索引。保留文献、观测与来源 hash，核对旧事实行数及外键；正式执行前必须完整备份并先在副本演练。
+
 ## 放置边界
 
 一次性调试与真实测试脚本进入 sandbox/cases；业务逻辑进入 apps 或 packages，避免藏在构建脚本里。

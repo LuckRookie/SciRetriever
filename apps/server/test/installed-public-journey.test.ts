@@ -802,6 +802,7 @@ it("passes producer IDs, hashes and evidence through installed public SDK, CLI a
       },
     });
     const discovery = await application.discovery.run({
+      origin: "cli",
       query: "installed journey",
       providers: [{ provider_name: "fixture", scan_limit: 2 }],
     });

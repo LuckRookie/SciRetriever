@@ -43,6 +43,12 @@ export function readMetadataRow(
         `SELECT namespace,value FROM ${prefix}_identifiers WHERE ${key}=? ORDER BY ordinal`,
       )
       .all(id),
+    subject_terms: db
+      .prepare(
+        `SELECT term FROM ${prefix}_subject_terms WHERE ${key}=? ORDER BY ordinal`,
+      )
+      .all(id)
+      .map((row) => row.term),
     keywords: db
       .prepare(
         `SELECT keyword FROM ${prefix}_keywords WHERE ${key}=? ORDER BY ordinal`,

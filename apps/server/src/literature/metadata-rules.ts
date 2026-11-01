@@ -1,3 +1,4 @@
+import { normalizeQueryText } from "./unicode-casefold.js";
 import {
   adjudicateMetadataFields,
   metadataFieldEmpty,
@@ -125,9 +126,12 @@ function orderedObservations(
   const users = observations.filter(
     (item) => item.provenance.source_kind === "user",
   );
-  const providers = observations.filter(
-    (item) => item.provenance.source_kind === "metadata-provider",
-  );
+  const providers = observations
+    .filter((item) => item.provenance.source_kind === "metadata-provider")
+    .map((item) => ({
+      ...item,
+      metadata: { ...item.metadata, keywords: item.declared_keywords },
+    }));
   const listed = new Set(precedence);
   return Object.freeze([
     ...users,
@@ -237,17 +241,27 @@ function buildProjection(observations: readonly MetadataObservation[]): {
       );
   }
   const keywords =
-    observations.find(
-      (observation) =>
-        observation.provenance.source_kind === "user" &&
-        observation.metadata.keywords.length > 0,
-    )?.metadata.keywords ?? [];
+    observations.find((o) => o.metadata.keywords.length > 0)?.metadata
+      .keywords ?? [];
+  const subject_terms: string[] = [],
+    termsSeen = new Set<string>();
+  for (const o of observations.filter(
+    (o) => o.provenance.source_kind === "metadata-provider",
+  ))
+    for (const term of o.metadata.subject_terms) {
+      const key = normalizeQueryText(term);
+      if (!termsSeen.has(key)) {
+        termsSeen.add(key);
+        subject_terms.push(term);
+      }
+    }
   return {
     metadata: parseLiteratureMetadata({
       ...values,
       authors,
       identifiers,
       keywords,
+      subject_terms: subject_terms.slice(0, 8),
     }),
     failure: null,
   };
@@ -300,7 +314,10 @@ export function metadataObservationCandidates(
     const sources = ordered.filter(
       (o) =>
         o.provenance.source_name !== "manual-metadata" &&
-        !metadataFieldEmpty(o.metadata[field]),
+        !metadataFieldEmpty(o.metadata[field]) &&
+        (field !== "keywords" ||
+          o.provenance.source_kind !== "metadata-provider" ||
+          o.declared_keywords.length > 0),
     );
     for (let index = 0; index < sources.length; index++) {
       const observation = sources[index]!;
@@ -364,23 +381,30 @@ export function projectMetadata(
     return rejectedProjection(metadataRevision, built.failure!);
   if (current && pairConflict(current, built.metadata))
     return rejectedProjection(metadataRevision, "stable-identifier-conflict");
-  const candidates = metadataObservationCandidates(ordered);
+  const candidates = metadataObservationCandidates(
+    ordered,
+    options.provider_precedence,
+  );
   const resolved = adjudicateMetadataFields({
     current: current ?? EMPTY_METADATA,
     states: options.field_states ?? [],
     candidates,
     preserve_nonempty: contentReady,
   });
+  const projectedMetadata = parseLiteratureMetadata({
+    ...resolved.metadata,
+    subject_terms: built.metadata.subject_terms,
+  });
   const stateOrder = (states: readonly MetadataFieldState[]) =>
     [...states].sort((a, b) => a.field.localeCompare(b.field));
   const same =
     current !== null &&
-    equal(current, resolved.metadata) &&
+    equal(current, projectedMetadata) &&
     (options.field_states === undefined ||
       equal(stateOrder(options.field_states), stateOrder(resolved.states)));
   return {
     outcome: same ? (contentReady ? "preserved" : "unchanged") : "projected",
-    metadata: resolved.metadata,
+    metadata: projectedMetadata,
     field_states: resolved.states,
     metadata_revision: metadataRevision + (current && !same ? 1 : 0),
     changed: !same,
@@ -393,11 +417,12 @@ export function projectMetadata(
 function observationSemanticValue(
   observation: MetadataObservation,
 ): Record<string, unknown> {
+  const { subject_terms, ...historicMetadata } = observation.metadata;
   return {
     asset_hints: observation.asset_hints,
     cited_by_count: observation.cited_by_count,
     declared_keywords: observation.declared_keywords,
-    metadata: observation.metadata,
+    metadata: subject_terms.length ? observation.metadata : historicMetadata,
     source_type: observation.source_type,
     source_type_mapping_version: observation.source_type_mapping_version,
     provenance: {

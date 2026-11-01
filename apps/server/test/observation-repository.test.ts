@@ -47,6 +47,7 @@ const observation: MetadataObservation = {
     pages: null,
     identifiers: [{ namespace: "doi", value: "10.1234/observed" }],
     keywords: ["typed"],
+    subject_terms: [],
   },
   declared_keywords: ["typed"],
   reference_texts: ["A cited work"],
@@ -144,6 +145,7 @@ describe("metadata observation repository", () => {
           pages: null,
           identifiers: [],
           keywords: [],
+          subject_terms: [],
         },
       };
       await worker.putLiterature(literature);

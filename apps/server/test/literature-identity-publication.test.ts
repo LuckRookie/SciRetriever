@@ -43,6 +43,7 @@ const metadata = (
   pages: null,
   identifiers,
   keywords: [],
+  subject_terms: [],
   ...overrides,
 });
 

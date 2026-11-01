@@ -303,6 +303,24 @@ export const QUERY_TOOLS: readonly Tool[] = [
     object({ range: { enum: ["last-30-days", "all"] } }),
   ),
   tool(
+    "intake_batches",
+    "Read persistent intake batches. request is {operation:list,request:{limit?,cursor?}} or {operation:get,request:{batch_id}}.",
+    object({ request: { type: "object" } }),
+  ),
+  tool(
+    "library_facets",
+    "Count author keywords and subject terms over the entire filtered library, not one page.",
+    object({
+      query: { type: "object" },
+      limit: { type: "integer", minimum: 1, maximum: 30 },
+    }),
+  ),
+  tool(
+    "acquire_pdf_preview",
+    "Preview the frozen PDF acquisition scope. selector is {kind:query,query,sort,limit} or {kind:literatures,literature_ids}.",
+    object({ selector: { type: "object" } }),
+  ),
+  tool(
     "agent_sessions",
     "Read DSH session list, bounded tool history, or revision. Ended histories expire after seven days; viewing never controls agents. operation=list|read|revision, request uses session_id/after/limit for read, job_id/literature_id/status/before/limit for list.",
     object(
@@ -1135,10 +1153,14 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   tool(
     "import_bibliography",
     "Explicitly import supplied bibliography bytes as text into the shared library; no PDF acquisition.",
-    object({
-      format: { enum: ["bibtex", "biblatex", "ris", "csl-json"] },
-      content: { type: "string", maxLength: 786432 },
-    }),
+    object(
+      {
+        format: { enum: ["bibtex", "biblatex", "ris", "csl-json"] },
+        content: { type: "string", maxLength: 786432 },
+        file_name: nullable({ type: "string", minLength: 1, maxLength: 1024 }),
+      },
+      ["format", "content"],
+    ),
     false,
   ),
   tool(
@@ -1163,6 +1185,15 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
       seed_literature_id: id,
       direction: { enum: ["references", "cited-by"] },
       scan_limit: { type: "integer", minimum: 1, maximum: 10000 },
+    }),
+    false,
+  ),
+  tool(
+    "intake_batch_rename",
+    "Rename one intake batch; null restores its default label.",
+    object({
+      batch_id: id,
+      label: nullable({ type: "string", minLength: 1, maxLength: 120 }),
     }),
     false,
   ),

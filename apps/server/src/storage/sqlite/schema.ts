@@ -2,7 +2,7 @@ import { PROCESSOR_METHOD_REVISION } from "@sciretriever/contracts";
 import { createHash } from "node:crypto";
 
 // One current catalog layout. This is not a migration ladder or a list of supported historic layouts.
-export const SCHEMA_VERSION = 14 as const;
+export const SCHEMA_VERSION = 15 as const;
 // Inputs read by archiveStates/deriveCurrentState, including view dependencies.
 // Reading history, folders and processing outputs do not invalidate this projection.
 export const LIBRARY_STATE_INPUT_TABLES = [
@@ -402,11 +402,35 @@ export const READING_MARKS_SCHEMA = [
   "CREATE TABLE reading_marks(mark_id TEXT NOT NULL PRIMARY KEY CHECK(length(mark_id)=36),literature_id TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('highlight','region')),color TEXT NOT NULL CHECK(color IN ('yellow','blue','green','red','purple')),note TEXT NOT NULL CHECK(length(note)<=20000),quote TEXT NOT NULL CHECK(length(quote)<=4000),quote_prefix TEXT NOT NULL CHECK(length(quote_prefix)<=200),quote_suffix TEXT NOT NULL CHECK(length(quote_suffix)<=200),pdf_sha256 TEXT CHECK(pdf_sha256 IS NULL OR (length(pdf_sha256)=64 AND pdf_sha256=lower(pdf_sha256) AND pdf_sha256 NOT GLOB '*[^0-9a-f]*')),pdf_page INTEGER CHECK(pdf_page IS NULL OR pdf_page>=1),pdf_rects_json TEXT CHECK(pdf_rects_json IS NULL OR json_valid(pdf_rects_json)),document_version_id TEXT,document_start_utf8 INTEGER,document_end_utf8 INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,deleted_at TEXT,actor TEXT NOT NULL,CHECK((pdf_sha256 IS NULL)=(pdf_page IS NULL) AND (pdf_page IS NULL)=(pdf_rects_json IS NULL)),CHECK((document_version_id IS NULL)=(document_start_utf8 IS NULL) AND (document_start_utf8 IS NULL)=(document_end_utf8 IS NULL) AND (document_start_utf8 IS NULL OR (document_start_utf8>=0 AND document_end_utf8>document_start_utf8))),CHECK(pdf_page IS NOT NULL OR document_version_id IS NOT NULL),CHECK(kind='highlight' OR pdf_page IS NOT NULL),FOREIGN KEY(literature_id) REFERENCES literatures(literature_id) ON DELETE CASCADE) STRICT",
   "CREATE INDEX reading_marks_literature ON reading_marks(literature_id,deleted_at,created_at)",
 ] as const;
-export const SCHEMA_MANIFEST = [
+export const SCHEMA_MANIFEST_V14 = [
   ...SCHEMA_MANIFEST_V13.map((sql) =>
     sql.replace("CHECK(schema_version=13)", "CHECK(schema_version=14)"),
   ),
   ...READING_MARKS_SCHEMA,
+] as const;
+export const SCHEMA_FINGERPRINT_V14 = createHash("sha256")
+  .update(JSON.stringify(SCHEMA_MANIFEST_V14))
+  .digest("hex");
+
+/** Durable acquisition cohorts and provider-neutral classification terms. */
+export const INTAKE_SCHEMA = [
+  "CREATE TABLE intake_batches(batch_id TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('topic','citation','import','legacy')),default_label TEXT NOT NULL,label TEXT CHECK(label IS NULL OR length(trim(label)) BETWEEN 1 AND 120),origin TEXT NOT NULL CHECK(origin IN ('web','cli','mcp','migration')),created_at TEXT NOT NULL,finished_at TEXT,status TEXT NOT NULL CHECK(status IN ('running','completed','partial','failed','interrupted')),request_json TEXT NOT NULL CHECK(json_valid(request_json)),discovery_run_id TEXT UNIQUE,rejected INTEGER NOT NULL DEFAULT 0 CHECK(rejected>=0),source_failures INTEGER NOT NULL DEFAULT 0 CHECK(source_failures>=0),owner_pid INTEGER,FOREIGN KEY(discovery_run_id) REFERENCES discovery_runs(discovery_run_id) ON DELETE RESTRICT) STRICT",
+  "CREATE INDEX intake_batches_order ON intake_batches(created_at DESC,batch_id DESC)",
+  "CREATE TABLE intake_batch_members(batch_id TEXT NOT NULL,literature_id TEXT NOT NULL,disposition TEXT NOT NULL CHECK(disposition IN ('created','enriched','matched','legacy')),PRIMARY KEY(batch_id,literature_id),FOREIGN KEY(batch_id) REFERENCES intake_batches(batch_id) ON DELETE CASCADE,FOREIGN KEY(literature_id) REFERENCES literatures(literature_id) ON DELETE CASCADE ON UPDATE CASCADE) STRICT",
+  "CREATE INDEX intake_batch_members_literature ON intake_batch_members(literature_id,batch_id)",
+  "CREATE TABLE literature_metadata_subject_terms(literature_id TEXT NOT NULL,ordinal INTEGER NOT NULL CHECK(ordinal>=0 AND ordinal<8),term TEXT NOT NULL CHECK(length(trim(term))>0),normalized_term TEXT NOT NULL,PRIMARY KEY(literature_id,ordinal),UNIQUE(literature_id,normalized_term),FOREIGN KEY(literature_id) REFERENCES literature_metadata(literature_id) ON DELETE CASCADE) STRICT",
+  "CREATE INDEX literature_subject_terms_normalized ON literature_metadata_subject_terms(normalized_term,literature_id,term)",
+  "CREATE TABLE metadata_observation_subject_terms(observation_id TEXT NOT NULL,ordinal INTEGER NOT NULL CHECK(ordinal>=0),term TEXT NOT NULL CHECK(length(trim(term))>0),PRIMARY KEY(observation_id,ordinal),FOREIGN KEY(observation_id) REFERENCES metadata_observations(observation_id) ON DELETE CASCADE) STRICT",
+  ...["INSERT", "UPDATE", "DELETE"].map(
+    (event) =>
+      `CREATE TRIGGER retrieval_revision_subject_terms_${event.toLowerCase()} AFTER ${event} ON literature_metadata_subject_terms BEGIN UPDATE retrieval_source_revision SET revision=revision+1 WHERE singleton=1; END`,
+  ),
+] as const;
+export const SCHEMA_MANIFEST = [
+  ...SCHEMA_MANIFEST_V14.map((sql) =>
+    sql.replace("CHECK(schema_version=14)", "CHECK(schema_version=15)"),
+  ),
+  ...INTAKE_SCHEMA,
 ] as const;
 export const SCHEMA_FINGERPRINT = createHash("sha256")
   .update(JSON.stringify(SCHEMA_MANIFEST))

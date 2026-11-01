@@ -101,7 +101,9 @@ export class ExecutionRepository {
       "schema_version" in input.selector &&
       (input.selector.schema_version === 2 ||
         input.selector.schema_version === 3)
-        ? 4_194_304
+        ? "scope" in input.selector
+          ? 32 * 1024 * 1024
+          : 4_194_304
         : 65_536;
     if (selectorBytes.byteLength > selectorLimit)
       throw new TypeError("execution selector is invalid");

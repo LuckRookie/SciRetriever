@@ -75,6 +75,11 @@ it("maps DataCite JSON:API pages and DOI lookup", async () => {
     topic_search_ports: [adapter],
   }).searchTopicProvider("datacite", topicSearchQuery("quantum"), 10);
   expect(search.outcome).toBe("EXHAUSTED");
+  expect(search.observations[0]?.metadata).toMatchObject({
+    keywords: [],
+    subject_terms: ["quantum"],
+  });
+  expect(search.observations[0]?.declared_keywords).toEqual([]);
   expect(search.observations.map((item) => item.metadata.title)).toEqual([
     "First",
     "Second",

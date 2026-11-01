@@ -318,6 +318,7 @@ async function identityReadRequest(
                 pages: null,
                 identifiers: link.identifiers,
                 keywords: [],
+                subject_terms: [],
               }),
             }),
           )
@@ -332,13 +333,27 @@ export class LiteratureIdentityService {
     private readonly providerPrecedence: readonly string[] = [],
   ) {}
 
-  observe(value: unknown): Promise<LiteratureIdentityDecision> {
+  observe(
+    value: unknown,
+    options: {
+      readonly intake_batch_id?: import("@sciretriever/contracts").IntakeBatchId;
+      readonly intake_exclude_ids?: readonly string[];
+    } = {},
+  ): Promise<LiteratureIdentityDecision> {
     const observation = parseMetadataObservation(value);
-    return this.writes.run(() => this.observeAdmitted(observation));
+    return this.writes.run(() =>
+      this.observeAdmitted(
+        observation,
+        options.intake_batch_id,
+        options.intake_exclude_ids,
+      ),
+    );
   }
 
   private async observeAdmitted(
     observation: MetadataObservation,
+    intakeBatchId?: import("@sciretriever/contracts").IntakeBatchId,
+    excludeIds: readonly string[] = [],
   ): Promise<LiteratureIdentityDecision> {
     const context = await this.database.readIdentity(
       await identityReadRequest(observation),
@@ -394,8 +409,29 @@ export class LiteratureIdentityService {
           acceptance.observation,
           acceptance.projection,
         );
+    const intake_member =
+      intakeBatchId && !excludeIds.includes(publication.result.literature_id)
+        ? {
+            batch_id: intakeBatchId,
+            literature_id: publication.result.literature_id,
+            disposition:
+              current === null
+                ? ("created" as const)
+                : acceptance.deduplicated
+                  ? ("matched" as const)
+                  : ("enriched" as const),
+          }
+        : undefined;
     if (!acceptance.deduplicated)
-      await this.database.publishIdentityObservation(publication);
+      await this.database.publishIdentityObservation({
+        ...publication,
+        ...(intake_member ? { intake_member } : {}),
+      });
+    else if (intake_member)
+      await this.database.writeIntake({
+        operation: "member",
+        member: intake_member,
+      });
     const outcome =
       current === null
         ? "created"

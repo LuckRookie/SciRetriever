@@ -40,6 +40,7 @@ const metadata = (
   pages: null,
   identifiers: [],
   keywords: [],
+  subject_terms: [],
   ...overrides,
 });
 const observation = (
@@ -88,6 +89,7 @@ describe("Literature metadata rules", () => {
         ],
         identifiers: [{ namespace: "doi", value: "10.1000/work" }],
         keywords: ["provider-keyword"],
+        subject_terms: [],
       }),
     );
     const user = observation(
@@ -97,6 +99,7 @@ describe("Literature metadata rules", () => {
         title: "User title",
         authors: [author("ADA  LOVELACE", "0000-0000-0000-0001")],
         keywords: ["user-keyword"],
+        subject_terms: [],
       }),
     );
     const result = projectMetadata([provider, user]);
@@ -107,6 +110,7 @@ describe("Literature metadata rules", () => {
         title: "User title",
         abstract: "Provider abstract",
         keywords: ["user-keyword"],
+        subject_terms: [],
       },
     });
     expect(result.metadata?.authors[0]).toMatchObject({
@@ -254,4 +258,95 @@ describe("Literature metadata rules", () => {
       reason: "missing-title-or-doi",
     });
   });
+});
+
+it("selects declared provider author keywords below proofread/manual values and merges at most eight normalized subject terms", () => {
+  const first = observation(
+    31,
+    "metadata-provider",
+    metadata({
+      title: "Scope",
+      keywords: ["Provider keyword"],
+      subject_terms: [
+        "Physics",
+        "PHYSICS",
+        "Materials",
+        ...Array.from({ length: 9 }, (_, i) => `Field ${i}`),
+      ],
+    }),
+    "first",
+  );
+  const source = { ...first, declared_keywords: first.metadata.keywords };
+  const other = {
+    ...observation(
+      32,
+      "metadata-provider",
+      metadata({ keywords: ["Other"], subject_terms: ["Biology"] }),
+      "other",
+    ),
+    declared_keywords: ["Other"],
+  };
+  const projected = projectMetadata([other, source], {
+    provider_precedence: ["first", "other"],
+  });
+  if (projected.outcome === "rejected") throw new Error(projected.reason);
+  expect(projected.metadata.keywords).toEqual(["Provider keyword"]);
+  expect(projected.metadata.subject_terms).toEqual([
+    "Physics",
+    "Materials",
+    ...Array.from({ length: 6 }, (_, i) => `Field ${i}`),
+  ]);
+  const proofread = {
+    field: "keywords" as const,
+    value: ["From paper"],
+    evidence: {
+      source: "proofread" as const,
+      document_version_id: id(900),
+      fragment_ids: ["fragment"],
+    },
+    locked: false,
+    conflict: false,
+    conflicts: [],
+  };
+  const proof = projectMetadata([source], {
+    current_metadata: metadata({ title: "Scope", keywords: ["From paper"] }),
+    field_states: [proofread],
+  });
+  expect(proof.metadata?.keywords).toEqual(["From paper"]);
+  const manual = observation(
+    33,
+    "user",
+    metadata({ title: "Scope", keywords: ["Manual"] }),
+  );
+  expect(
+    projectMetadata([source, manual], {
+      current_metadata: metadata({ title: "Scope", keywords: ["From paper"] }),
+      field_states: [proofread],
+    }).metadata?.keywords,
+  ).toEqual(["Manual"]);
+  expect(
+    projectMetadata([{ ...source, declared_keywords: [] }]).metadata?.keywords,
+  ).toEqual([]);
+});
+
+it("projects historical author declarations even when observation.metadata.keywords was empty", () => {
+  const declared = {
+    ...observation(
+      41,
+      "metadata-provider",
+      metadata({ title: "Declared" }),
+      "europe-pmc",
+    ),
+    declared_keywords: ["Author supplied"],
+  };
+  expect(projectMetadata([declared]).metadata?.keywords).toEqual([
+    "Author supplied",
+  ]);
+});
+
+it("keeps the v14 semantic identity of imports that predate subject_terms", async () => {
+  const legacy = observation(51, "user", metadata({ title: "Legacy import" }));
+  expect(await userObservationSemanticSha256(legacy)).toBe(
+    "58f0a0c6a01810d01536af5b8bcbca540827347c4c09642bf6590f25eee74ee0",
+  );
 });

@@ -143,10 +143,20 @@ function observation(
         ]
       : [];
   });
-  const keywords = list(record.concepts).flatMap((item) => {
-    const value = text(item.display_name);
-    return value ? [value] : [];
-  });
+  const subject_terms = list(record.concepts)
+    .filter(
+      (item) =>
+        typeof item.score === "number" &&
+        item.score >= 0.3 &&
+        typeof item.level === "number" &&
+        item.level >= 1,
+    )
+    .sort((a, b) => Number(b.score) - Number(a.score))
+    .flatMap((item) => {
+      const value = text(item.display_name);
+      return value ? [value] : [];
+    })
+    .slice(0, 8);
   const oa =
     record.open_access &&
     typeof record.open_access === "object" &&
@@ -192,11 +202,12 @@ function observation(
       identifiers: doi
         ? [{ namespace: "doi", value: doi }]
         : [{ namespace: "openalex", value: sourceRecordId }],
-      keywords,
+      keywords: [],
+      subject_terms,
     },
     version_role: "published",
     version_links: [],
-    declared_keywords: keywords,
+    declared_keywords: [],
     reference_texts: [],
     reference_count: Array.isArray(record.referenced_works)
       ? record.referenced_works.length

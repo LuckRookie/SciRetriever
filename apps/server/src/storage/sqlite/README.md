@@ -10,6 +10,8 @@
 - [worker-runtime.ts](worker-runtime.ts)：SQLite worker 运行实现。
 - [library-state-cache.ts](library-state-cache.ts)：基于事务内输入版本的建档状态缓存。
 - [library-state-schema-migration.ts](library-state-schema-migration.ts)：显式离线安装当前按篇失效结构；[library-state-previous-layout.ts](library-state-previous-layout.ts) 只描述工具的精确旧输入，不由 catalog opener 接受。
+- [intake-engine.ts](intake-engine.ts)：入库批次及按文献去重的成员写入、改名与当前 PDF 状态读取；成员与 identity 发布共用事务。
+- [intake-schema-migration.ts](intake-schema-migration.ts)：显式离线 14 → 15，旧运行回填、早期批次、主题词映射及确定性元数据/索引投影；[intake-metadata-migration.ts](intake-metadata-migration.ts) 复用元数据裁决与读取。
 - [library-page.ts](library-page.ts)：LibraryQuery 的只读 SQL 筛选、计数和游标分页，完整文献只装载当前页；不修改业务事实或 catalog schema。
 - [retrieval-engine.ts](retrieval-engine.ts)：材料检索持久化。
 - [processor-engine.ts](processor-engine.ts)：算子结果、集合与固定引用的持久化。
@@ -49,6 +51,8 @@
 
 文献库计数和分页的取消从 HTTP/Entry 经查询服务传至 worker。每次可取消查询带一个共享原子标记，worker 在取出排队请求、状态计算阶段之间、SQL 扫描行及结果装载之间检查；取消时回滚只读事务，不返回部分结果。调用方立即收到 AbortError，worker 随后确认取消并继续处理后续请求。没有终止共享 worker，也不取消任何写事务；SQLite 无检查点的单条内部操作仍需运行到下一个检查点。这是协作式取消，不承诺任意指令处立即中断。
 
-当前 schema 13 增加按篇状态失效提示；archive_steps 仍接纳 arrange/render，并保留 document/structure 历史行。`archive-schema-migration.ts` 固定提供显式离线 11 → 12，`library-state-schema-migration.ts` 再执行 12 → 13；二者复用完整布局与行数核对，catalog open 都不会调用。历史定义仅供显式工具识别输入。
+当前 schema 15 增加入库批次、成员与主题词；13 的按篇状态失效提示和 14 的阅读批注继续保留。archive_steps 仍接纳 arrange/render，并保留 document/structure 历史行。`archive-schema-migration.ts` 固定提供显式离线 11 → 12，`library-state-schema-migration.ts` 再执行 12 → 13；二者复用完整布局与行数核对，catalog open 都不会调用。历史定义仅供显式工具识别输入。
 
 只读 worker 的 query preflight 仅核对固定布局/版本，不执行逐表健康扫描；检索命令直接交给 `retrieval-engine.ts` 的独立连接，不顺带初始化普通写入连接。`active/search` 只作轻量检查，完整验证由显式索引维护承担。增量修改使用现有 building generation 暂存，按篇 CAS 接纳；未接纳的暂存不参与搜索。完整哈希证书的全零保留值表示失效，维护确认损坏的专用标记使查询直接拒绝，原始事实和 schema 不因此改变。
+
+`schema.ts` 中冻结的 13、14 manifest 仅供相应离线迁移证明输入/输出，普通 opener 只接纳当前 15。14 → 15 修正规范化的来源关键词子表，保留 Provider 原始响应的 provenance hash；全部文献更新关键词投影、metadata revision/hash 和 Library FTS，再生成新的 active 检索代，复用未改变的文档证据。若输入索引原本落后，保留落后水位，由既有后台刷新追赶；已知损坏或文档存在而索引缺失时先拒绝，须在旧版本完成显式重建后重试。

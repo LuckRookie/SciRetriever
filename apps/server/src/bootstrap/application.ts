@@ -402,7 +402,14 @@ export interface QueryApplication {
   /** Read-only literature and artifact operations. No maintenance or Job port is exposed. */
   readonly query: Pick<
     LiteratureQueryService,
-    "search" | "counts" | "detail" | "references" | "referenceDetail"
+    | "search"
+    | "counts"
+    | "detail"
+    | "references"
+    | "referenceDetail"
+    | "intakeBatches"
+    | "facets"
+    | "pdfSelection"
   > | null;
   readonly literatureArtifacts: LiteratureArtifactService | null;
   readonly indexRefreshStatus?: () => Promise<
@@ -1616,7 +1623,12 @@ async function createApplicationOwned(
         acquisition: pdfAcquisition,
       });
     if (jobs && databaseCompletion)
-      jobService = new ExecutionJobService(jobs, databaseCompletion, library);
+      jobService = new ExecutionJobService(
+        jobs,
+        databaseCompletion,
+        library,
+        writes,
+      );
     if (jobs && queue && interventions && databaseCompletion)
       taskService = new ExecutionTaskService(jobs, queue, interventions, {
         completion: databaseCompletion,

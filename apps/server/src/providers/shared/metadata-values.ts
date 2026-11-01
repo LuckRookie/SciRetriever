@@ -211,6 +211,9 @@ export function parseProviderObservation(
       return author ? [author] : [];
     });
   metadata.keywords = fields.strings(metadata.keywords, "metadata.keywords");
+  metadata.subject_terms = fields
+    .strings(metadata.subject_terms ?? [], "metadata.subject_terms")
+    .slice(0, 8);
   const asset_hints = fields
     .list(input.asset_hints, "asset_hints")
     .flatMap((value, i) => {

@@ -134,6 +134,12 @@ describe("commercial metadata REST adapters", () => {
                 {
                   eid: "2-s2.0-1",
                   "dc:title": "Elsevier fixture",
+                  authkeywords: {
+                    "author-keyword": [
+                      { $: "Spectroscopy" },
+                      { $: "Catalysis" },
+                    ],
+                  },
                   "prism:doi": "DOI:10.1000/Elsevier",
                   "prism:publicationName": "Fixture Journal",
                   "prism:coverDate": "2026-02-03",
@@ -153,6 +159,14 @@ describe("commercial metadata REST adapters", () => {
       value: "10.1000/elsevier",
     });
     expect(result.observations[0]?.cited_by_count).toBe(4);
+    expect(result.observations[0]?.metadata.keywords).toEqual([
+      "Spectroscopy",
+      "Catalysis",
+    ]);
+    expect(result.observations[0]?.declared_keywords).toEqual([
+      "Spectroscopy",
+      "Catalysis",
+    ]);
     expect(calls[0]?.headers).toMatchObject({
       "x-els-apikey": "elsevier-key",
       "x-els-insttoken": "institution-token",

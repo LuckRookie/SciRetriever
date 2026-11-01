@@ -61,6 +61,25 @@ async function* chunks(
   }
   yield current;
 }
+/** Shared by normal indexing and the explicit offline keyword-layout migration. */
+export function metadataIndexBody(metadata: LiteratureMetadata): string {
+  return [
+    metadata.abstract,
+    metadata.authors.map((a) => a.display_name).join(" "),
+    metadata.keywords.join(" "),
+    metadata.subject_terms.join(" "),
+    metadata.venue,
+    metadata.publisher,
+    metadata.publication_year?.toString(),
+  ]
+    .filter((v): v is string => !!v)
+    .join("\n");
+}
+export async function* metadataIndexChunks(metadata: LiteratureMetadata) {
+  const title = ftsIndexText(metadata.title ?? "");
+  for await (const chunk of chunks(metadataIndexBody(metadata)))
+    yield { title, body: ftsIndexText(chunk) };
+}
 interface Unit {
   readonly start: number;
   readonly end: number;
@@ -332,18 +351,7 @@ export class RetrievalIndexService {
       const s = source.metadata,
         metadata = await this.verifiedMetadata(s);
       const title = ftsIndexText(metadata.title ?? ""),
-        body = [
-          metadata.abstract,
-          metadata.authors.map((a) => a.display_name).join(" "),
-          metadata.keywords.join(" "),
-          metadata.venue,
-          metadata.publisher,
-          metadata.publication_year === null
-            ? null
-            : String(metadata.publication_year),
-        ]
-          .filter((v) => v !== null && v !== "")
-          .join("\n");
+        body = metadataIndexBody(metadata);
       for await (const chunk of chunks(body, signal))
         yield {
           kind: "metadata",
@@ -577,16 +585,7 @@ export class RetrievalIndexService {
               check(signal);
               const metadata = await this.verifiedMetadata(source);
               const title = ftsIndexText(metadata.title ?? "");
-              const body = [
-                metadata.abstract,
-                metadata.authors.map((author) => author.display_name).join(" "),
-                metadata.keywords.join(" "),
-                metadata.venue,
-                metadata.publisher,
-                metadata.publication_year?.toString(),
-              ]
-                .filter((value): value is string => !!value)
-                .join("\n");
+              const body = metadataIndexBody(metadata);
               await collect(
                 (async function* () {
                   for await (const chunk of chunks(body, signal))

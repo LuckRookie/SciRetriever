@@ -1,3 +1,9 @@
+import { parseAcquirePdfScope } from "@sciretriever/contracts";
+function taskScope(selector: unknown) {
+  return selector && typeof selector === "object" && "scope" in selector
+    ? parseAcquirePdfScope(selector.scope)
+    : null;
+}
 import {
   parseAcquisitionAttempt,
   parseAcquisitionTaskTrace,
@@ -61,6 +67,7 @@ export function createTaskReader(repository: ExecutionRepository) {
     }
     return {
       ...task,
+      scope: taskScope(task.job.selector),
       acquisition_traces: [...traces.values()].map(parseAcquisitionTaskTrace),
       acquisition_traces_truncated: acquisition.truncated,
       events: [...events].reverse(),
@@ -127,7 +134,10 @@ export function createTaskReader(repository: ExecutionRepository) {
         next !== null &&
         (await repository.listJobs(1, order, next, statuses)).length > 0;
       return {
-        tasks,
+        tasks: tasks.map((task) => ({
+          ...task,
+          scope: taskScope(task.selector),
+        })),
         next_cursor: hasNext
           ? Buffer.from(JSON.stringify({ ...next, order })).toString(
               "base64url",

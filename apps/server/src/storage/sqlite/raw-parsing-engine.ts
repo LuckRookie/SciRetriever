@@ -64,7 +64,7 @@ export function runRawParseStorage(
   args: unknown,
 ): unknown {
   if (
-    ![14].includes(
+    ![15].includes(
       Number(
         one(db, "SELECT schema_version FROM schema_identity WHERE singleton=1")
           ?.schema_version,

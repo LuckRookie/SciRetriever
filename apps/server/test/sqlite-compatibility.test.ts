@@ -38,6 +38,7 @@ const literature = {
     pages: null,
     identifiers: [{ namespace: "doi", value: "10.1234/worker" }],
     keywords: ["offline"],
+    subject_terms: [],
   },
 };
 
@@ -58,6 +59,7 @@ describe("typed sqlite worker", () => {
           title: "Worker fixture",
           authors: [{ display_name: "Ada Lovelace" }],
           keywords: ["offline"],
+          subject_terms: [],
         },
       });
       await expect(worker.snapshotCounts()).resolves.toMatchObject({

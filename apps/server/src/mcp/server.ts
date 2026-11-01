@@ -419,6 +419,13 @@ export function createMcpServer(options: McpOptions = {}) {
     if (name === "usage_estimate")
       return executeQuery(q, "usage-estimate", args, signal);
     if (name === "task_run") return executeQuery(q, "task-run", args, signal);
+    if (name === "intake_batch_rename")
+      return executeMaintenance(
+        await application(),
+        "intake-batch-rename",
+        args,
+        signal,
+      );
     if (name === "source_statistics")
       return executeQuery(q, "source-statistics", args, signal);
     if (name === "agent_sessions")
@@ -451,6 +458,9 @@ export function createMcpServer(options: McpOptions = {}) {
       export_bibliography: "bibliography-export",
       inspect_task: "task-detail",
       status: "status",
+      intake_batches: "intake-batches",
+      library_facets: "library-facets",
+      acquire_pdf_preview: "acquire-pdf-preview",
       index_status: "index-status",
       read_literature: "literature-read",
       read_task: "task-read",

@@ -1,3 +1,5 @@
+import { startIntake, finishIntake, type IntakeOrigin } from "./intake.js";
+import type { SqliteWorker } from "../storage/sqlite/worker.js";
 import {
   mapSourceType,
   SOURCE_TYPE_MAPPING_VERSION,
@@ -28,7 +30,12 @@ export interface BibliographyDecodeResult {
   readonly items: readonly BibliographyDecodeItem[];
 }
 export interface BibliographyIdentityPort {
-  observe(value: MetadataObservation): Promise<{
+  observe(
+    value: MetadataObservation,
+    options?: {
+      readonly intake_batch_id?: import("@sciretriever/contracts").IntakeBatchId;
+    },
+  ): Promise<{
     readonly disposition: "accepted" | "rejected" | "uncertain";
     readonly literature_id?: string;
     readonly meta_literature_id?: string;
@@ -50,6 +57,7 @@ export interface BibliographyImportItem {
   readonly reason: string | null;
 }
 export interface BibliographyImportResult {
+  readonly intake_batch_id?: import("@sciretriever/contracts").IntakeBatchId;
   readonly format: BibliographyInputFormat;
   readonly items: readonly BibliographyImportItem[];
 }
@@ -267,6 +275,7 @@ function metadata(
     pages: text(fields.pages),
     identifiers: identifiers(fields),
     keywords: splitKeywords(fields.keywords),
+    subject_terms: [],
   };
 }
 
@@ -902,6 +911,11 @@ export function decodeBibliography(
 export async function importBibliography(
   decoded: BibliographyDecodeResult,
   identity: BibliographyIdentityPort,
+  options?: {
+    readonly database: SqliteWorker;
+    readonly file_name?: string | null;
+    readonly origin?: IntakeOrigin;
+  },
 ): Promise<BibliographyImportResult> {
   if (
     !decoded ||
@@ -910,48 +924,84 @@ export async function importBibliography(
     typeof identity.observe !== "function"
   )
     throw new TypeError("invalid bibliography import input");
-  const items: BibliographyImportItem[] = [];
-  for (const item of decoded.items) {
-    if (item.status !== "decoded" || item.observation === null) {
-      items.push({
-        record_index: item.record_index,
-        disposition: "rejected",
-        literature_id: null,
-        meta_literature_id: null,
-        reason: item.reason ?? "malformed-record",
-      });
-      continue;
-    }
-    try {
-      const decision = await identity.observe(item.observation);
-      if (decision.disposition === "accepted") {
-        items.push({
-          record_index: item.record_index,
-          disposition:
-            decision.outcome ??
-            (decision.created === true ? "created" : "matched"),
-          literature_id: decision.literature_id ?? null,
-          meta_literature_id: decision.meta_literature_id ?? null,
-          reason: null,
-        });
-      } else {
+  const batchId = options
+    ? await startIntake(
+        options.database,
+        "import",
+        options.file_name ?? decoded.format,
+        { format: decoded.format, file_name: options.file_name ?? null },
+        options.origin,
+      )
+    : undefined;
+  let settled = false;
+  try {
+    const items: BibliographyImportItem[] = [];
+    for (const item of decoded.items) {
+      if (item.status !== "decoded" || item.observation === null) {
         items.push({
           record_index: item.record_index,
           disposition: "rejected",
           literature_id: null,
           meta_literature_id: null,
-          reason: decision.reason ?? "identity-rejected",
+          reason: item.reason ?? "malformed-record",
+        });
+        continue;
+      }
+      try {
+        const decision = await identity.observe(
+          item.observation,
+          batchId ? { intake_batch_id: batchId } : {},
+        );
+        if (decision.disposition === "accepted") {
+          items.push({
+            record_index: item.record_index,
+            disposition:
+              decision.outcome ??
+              (decision.created === true ? "created" : "matched"),
+            literature_id: decision.literature_id ?? null,
+            meta_literature_id: decision.meta_literature_id ?? null,
+            reason: null,
+          });
+        } else {
+          items.push({
+            record_index: item.record_index,
+            disposition: "rejected",
+            literature_id: null,
+            meta_literature_id: null,
+            reason: decision.reason ?? "identity-rejected",
+          });
+        }
+      } catch {
+        items.push({
+          record_index: item.record_index,
+          disposition: "rejected",
+          literature_id: null,
+          meta_literature_id: null,
+          reason: "identity-failed",
         });
       }
-    } catch {
-      items.push({
-        record_index: item.record_index,
-        disposition: "rejected",
-        literature_id: null,
-        meta_literature_id: null,
-        reason: "identity-failed",
-      });
     }
+    if (options && batchId)
+      await finishIntake(
+        options.database,
+        batchId,
+        items.every((i) => i.disposition === "rejected")
+          ? "failed"
+          : items.some((i) => i.disposition === "rejected")
+            ? "partial"
+            : "completed",
+        null,
+        0,
+        items.filter((i) => i.disposition === "rejected").length,
+      );
+    settled = true;
+    return {
+      format: decoded.format,
+      items: Object.freeze(items),
+      ...(batchId ? { intake_batch_id: batchId } : {}),
+    };
+  } finally {
+    if (options && batchId && !settled)
+      await finishIntake(options.database, batchId, "interrupted");
   }
-  return { format: decoded.format, items: Object.freeze(items) };
 }

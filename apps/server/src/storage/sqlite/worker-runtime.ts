@@ -149,6 +149,14 @@ const libraryPageModule = await import(
     import.meta.url,
   ).href
 );
+const intakeModule = await import(
+  new URL(
+    import.meta.url.endsWith(".ts")
+      ? "./intake-engine.ts"
+      : "./intake-engine.js",
+    import.meta.url,
+  ).href
+);
 const queryTextModule = await import(
   new URL(
     import.meta.url.endsWith(".ts")
@@ -480,6 +488,19 @@ function writeMetadataAtRevision(
     const x = m.identifiers[i];
     identifier.run(literatureId, i, x.namespace, x.value);
   }
+  db.prepare(
+    "DELETE FROM literature_metadata_subject_terms WHERE literature_id=?",
+  ).run(literatureId);
+  const subject = db.prepare(
+    "INSERT INTO literature_metadata_subject_terms(literature_id,ordinal,term,normalized_term) VALUES(?,?,?,?)",
+  );
+  for (const [i, term] of (m.subject_terms ?? []).entries())
+    subject.run(
+      literatureId,
+      i,
+      term,
+      queryTextModule.normalizeQueryText(term),
+    );
   const keyword = db.prepare(
     "INSERT INTO literature_metadata_keywords(literature_id,ordinal,keyword) VALUES(?,?,?)",
   );
@@ -526,7 +547,7 @@ function indexMetadata(literatureId: Dynamic, m: Dynamic): Dynamic {
     index(
       m.identifiers.flatMap((x: Dynamic) => [x.namespace, x.value]).join(" "),
     ),
-    index(m.keywords.join(" ")),
+    index([...m.keywords, ...(m.subject_terms ?? [])].join(" ")),
     index(m.venue),
     index(m.publisher),
     index(m.volume),
@@ -578,7 +599,18 @@ function getLiterature(id: Dynamic): Dynamic {
     meta_literature_id: l.meta_literature_id,
     version_role: l.version_role,
     status,
-    metadata: { ...m, authors, identifiers, keywords },
+    metadata: {
+      ...m,
+      authors,
+      identifiers,
+      keywords,
+      subject_terms: db
+        .prepare(
+          "SELECT term FROM literature_metadata_subject_terms WHERE literature_id=? ORDER BY ordinal",
+        )
+        .all(id)
+        .map((r: Dynamic) => r.term),
+    },
   };
 }
 function getLiteratures(ids: Dynamic): Dynamic {
@@ -641,6 +673,16 @@ function getLiteratures(ids: Dynamic): Dynamic {
     namespace: row.namespace,
     value: row.value,
   }));
+  const subjectMap = new Map<string, string[]>();
+  for (const r of db
+    .prepare(
+      "SELECT literature_id,term FROM literature_metadata_subject_terms WHERE literature_id IN (SELECT value FROM json_each(?)) ORDER BY literature_id,ordinal",
+    )
+    .all(json)) {
+    const id = String(r.literature_id);
+    if (!subjectMap.has(id)) subjectMap.set(id, []);
+    subjectMap.get(id)!.push(String(r.term));
+  }
   const keywordMap = grouped(
     keywords,
     "ordinal",
@@ -670,6 +712,7 @@ function getLiteratures(ids: Dynamic): Dynamic {
         authors: nestedAuthors,
         identifiers: identifierMap.get(literature_id) ?? [],
         keywords: keywordMap.get(literature_id) ?? [],
+        subject_terms: subjectMap.get(literature_id) ?? [],
       },
       __state: state,
     };
@@ -1281,6 +1324,11 @@ function storeObservation(o: Dynamic): Dynamic {
   );
   for (let i = 0; i < o.metadata.keywords.length; i++)
     keyword.run(o.observation_id, i, o.metadata.keywords[i]);
+  const subject = db.prepare(
+    "INSERT INTO metadata_observation_subject_terms(observation_id,ordinal,term) VALUES(?,?,?) ON CONFLICT DO NOTHING",
+  );
+  for (const [i, term] of o.metadata.subject_terms.entries())
+    subject.run(o.observation_id, i, term);
   const declared = db.prepare(
     "INSERT INTO metadata_observation_declared_keywords(observation_id,ordinal,keyword) VALUES(?,?,?) ON CONFLICT DO NOTHING",
   );
@@ -1421,6 +1469,12 @@ function getObservation(id: Dynamic): Dynamic {
       authors,
       identifiers,
       keywords,
+      subject_terms: db
+        .prepare(
+          "SELECT term FROM metadata_observation_subject_terms WHERE observation_id=? ORDER BY ordinal",
+        )
+        .all(id)
+        .map((r: Dynamic) => r.term),
     },
     declared_keywords,
     reference_texts,
@@ -1888,6 +1942,7 @@ function publishIdentityObservation(p: Dynamic): Dynamic {
         "DELETE FROM automatic_pdf_acquisition_exhaustions WHERE literature_id=?",
       ).run(literatureId);
     }
+    if (p.intake_member) intakeModule.recordIntakeMember(db, p.intake_member);
     return true;
   });
 }
@@ -1953,6 +2008,22 @@ function acceptObservation(c: Dynamic): Dynamic {
     db.prepare(
       "INSERT INTO literature_metadata_observations(literature_id,observation_id) VALUES(?,?)",
     ).run(c.literatureId, c.observationId);
+    db.prepare(
+      "DELETE FROM literature_metadata_subject_terms WHERE literature_id=?",
+    ).run(c.literatureId);
+    for (const r of db
+      .prepare(
+        "SELECT ordinal,term FROM metadata_observation_subject_terms WHERE observation_id=? AND ordinal<8 ORDER BY ordinal",
+      )
+      .all(c.observationId))
+      db.prepare(
+        "INSERT INTO literature_metadata_subject_terms VALUES(?,?,?,?)",
+      ).run(
+        c.literatureId,
+        r.ordinal,
+        r.term,
+        queryTextModule.normalizeQueryText(r.term),
+      );
     indexMetadata(c.literatureId, getLiterature(c.literatureId).metadata);
     // Accepting a new MetadataObservation invalidates the automatic acquisition exhaustion fact.
     db.prepare(
@@ -2515,7 +2586,12 @@ function consumeExecutionBudget(
 }
 function listExecutionTargets(jobId: Dynamic, limit: Dynamic): Dynamic {
   requireRuntime();
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10000) fail();
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > Number.MAX_SAFE_INTEGER
+  )
+    fail();
   return db
     .prepare(
       "SELECT * FROM execution_targets WHERE job_id=? ORDER BY ordinal,target_id LIMIT ?",
@@ -4082,6 +4158,7 @@ function literatureDetailSnapshot(
       .map((row: Dynamic) => searchItem(row.literature_id));
     const detail = {
       ...searchItem(id),
+      intake_batches: intakeModule.intakeMemberships(db, id),
       meta_literature,
       metadata_observations,
       primary_pdf,
@@ -4986,6 +5063,45 @@ port.on("message", (message: WorkerMessage) => {
             command.query,
             command.ftsQuery,
           );
+        });
+        break;
+      }
+      case "intake_read": {
+        const c = message.command;
+        value = readTransaction(() => {
+          registerLibraryStates();
+          return intakeModule.queryIntakeBatches(db, c.value);
+        });
+        break;
+      }
+      case "intake_write": {
+        const c = message.command;
+        value = transaction(() => intakeModule.writeIntakeBatch(db, c.action));
+        break;
+      }
+      case "library_facets": {
+        const c = message.command;
+        value = readTransaction(() => {
+          if (
+            c.request.statuses.length ||
+            c.request.missing_steps.length ||
+            c.request.needs_manual_pdf === true
+          )
+            registerLibraryStates();
+          return libraryPageModule.libraryFacets(
+            db,
+            c.request,
+            c.ftsQuery,
+            c.limit,
+          );
+        });
+        break;
+      }
+      case "acquire_pdf_selection": {
+        const c = message.command;
+        value = readTransaction(() => {
+          registerLibraryStates();
+          return libraryPageModule.acquirePdfSelection(db, c.request);
         });
         break;
       }

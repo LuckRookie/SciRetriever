@@ -1,3 +1,8 @@
+import type { CatalogWriteAdmission } from "../../storage/write-admission.js";
+import {
+  parseAcquirePdfSelector,
+  type AcquirePdfScope,
+} from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
 import type {
   ExecutionAttempt,
@@ -6,6 +11,7 @@ import type {
 } from "../../storage/sqlite/worker.js";
 import {
   ExecutionRepository,
+  normalizeExecutionPolicy,
   type CreateExecutionJobInput,
 } from "../../storage/execution/repository.js";
 import { canonicalJsonBytes, sha256 } from "@sciretriever/contracts";
@@ -508,16 +514,47 @@ export class ExecutionJobService {
   constructor(
     private readonly repository: ExecutionRepository,
     private readonly completion: DatabaseCompletionService,
-    private readonly library: Pick<LiteratureQueryService, "detail">,
+    private readonly library: Pick<LiteratureQueryService, "detail"> &
+      Partial<Pick<LiteratureQueryService, "pdfSelection">>,
+    private readonly writes?: CatalogWriteAdmission,
   ) {}
 
-  async create(
+  create(
+    input: Omit<CreateExecutionJobInput, "selector"> & {
+      readonly selector: LiteratureSelector;
+      readonly goal?: "pdf" | "parser";
+    },
+  ) {
+    return this.writes
+      ? this.writes.run(() => this.createOwned(input))
+      : this.createOwned(input);
+  }
+  private async createOwned(
     input: Omit<CreateExecutionJobInput, "selector"> & {
       readonly selector: LiteratureSelector;
       readonly goal?: "pdf" | "parser";
     },
   ) {
     const { selector, goal = "parser", ...jobInput } = input;
+    const policyForCount = (count: number) =>
+      jobInput.policy.max_attempts === undefined && goal === "pdf"
+        ? {
+            ...jobInput.policy,
+            max_attempts: Math.max(
+              normalizeExecutionPolicy({}).max_attempts,
+              count,
+            ),
+          }
+        : jobInput.policy;
+    const admissionPolicy = async (count: number, scoped: boolean) => {
+      const policy = normalizeExecutionPolicy(policyForCount(count));
+      return {
+        policy,
+        policy_version: scoped
+          ? `${jobInput.policy_version}:${await sha256(canonicalJsonBytes(policy))}`
+          : jobInput.policy_version,
+      };
+    };
     const jobId =
       jobInput.job_id ??
       `job-${(
@@ -527,11 +564,19 @@ export class ExecutionJobService {
       ).slice(0, 32)}`;
     const existing = await this.repository.getJob(jobId);
     if (existing) {
-      const saved = existing.selector as { selector?: unknown; goal?: unknown };
+      const saved = existing.selector as {
+        selector?: unknown;
+        goal?: unknown;
+        scope?: AcquirePdfScope;
+      };
+      const savedPolicy = await admissionPolicy(
+        saved.scope?.counts.process ?? 0,
+        saved.scope !== undefined,
+      );
       if (
         existing.idempotency_key !== jobInput.idempotency_key ||
         existing.target_kind !== jobInput.target_kind ||
-        existing.policy_version !== jobInput.policy_version ||
+        existing.policy_version !== savedPolicy.policy_version ||
         saved.goal !== goal ||
         !Buffer.from(canonicalJsonBytes(saved.selector)).equals(
           Buffer.from(canonicalJsonBytes(selector)),
@@ -542,13 +587,32 @@ export class ExecutionJobService {
         ...jobInput,
         job_id: jobId,
         selector: existing.selector,
+        ...savedPolicy,
       });
     }
-    const frozen = await this.completion.freezeRequest({
-      selector,
-      goal: goal === "pdf" ? "ASSET_READY" : "PARSER_RESULT_READY",
-    });
-    if (frozen.length > 10_000)
+    const selection =
+      goal === "pdf" &&
+      this.library.pdfSelection &&
+      (selector.kind === "query" || selector.kind === "literatures")
+        ? await this.library.pdfSelection(parseAcquirePdfSelector(selector))
+        : null;
+    const scope: AcquirePdfScope | null = selection
+      ? {
+          selector: parseAcquirePdfSelector(selector),
+          counts: selection.counts,
+        }
+      : null;
+    const frozen: readonly FrozenCompletionTarget[] = selection
+      ? selection.items.map((item) => ({
+          target: { kind: "literature", literature_id: item.literature_id },
+          candidates: [item.literature_id],
+          clear_exhaustion: false,
+        }))
+      : await this.completion.freezeRequest({
+          selector,
+          goal: goal === "pdf" ? "ASSET_READY" : "PARSER_RESULT_READY",
+        });
+    if (!selection && frozen.length > 10_000)
       throw new TypeError("execution selector is too large");
     const targetInputs: ExecutionTarget[] = [];
     for (const [ordinal, item] of frozen.entries()) {
@@ -564,8 +628,10 @@ export class ExecutionJobService {
         job_id: jobId,
         ordinal,
         literature_id: item.candidates[0] ?? null,
-        version_role: (await this.library.detail(item.candidates[0]!))
-          .literature.version_role,
+        version_role: selection
+          ? selection.items[ordinal]!.version_role
+          : (await this.library.detail(item.candidates[0]!)).literature
+              .version_role,
         stage: "queued",
         disposition: "pending",
         next_eligible_at: null,
@@ -574,8 +640,18 @@ export class ExecutionJobService {
     return this.repository.createJob({
       ...jobInput,
       job_id: jobId,
-      selector: { schema_version: 2, goal, selector, frozen_targets: frozen },
+      selector: {
+        schema_version: 2,
+        goal,
+        selector,
+        frozen_targets: frozen,
+        ...(scope ? { scope } : {}),
+      },
       targets: targetInputs,
+      ...(await admissionPolicy(
+        selection?.counts.process ?? 0,
+        selection !== null,
+      )),
     });
   }
 }
@@ -617,8 +693,14 @@ export class ExecutionTaskService {
     const job = await this.repository.getJob(jobId);
     if (!job) throw new TypeError("execution job is unavailable");
     if (!["queued", "running"].includes(job.status)) return [];
-    const max = options.max_targets ?? 1000;
-    if (!Number.isSafeInteger(max) || max < 1 || max > 10000)
+    const max =
+      options.max_targets ??
+      (job.selector &&
+      typeof job.selector === "object" &&
+      "scope" in job.selector
+        ? Number.MAX_SAFE_INTEGER
+        : 1000);
+    if (!Number.isSafeInteger(max) || max < 1 || max > Number.MAX_SAFE_INTEGER)
       throw new TypeError("execution queue bound is invalid");
     const maxRetries = Math.min(options.max_retries ?? 100, 100);
     const retryDelay = options.retry_delay_ms ?? 0;
@@ -630,7 +712,10 @@ export class ExecutionTaskService {
       retryDelay > 86_400_000
     )
       throw new TypeError("execution retry bounds are invalid");
-    const all = await this.repository.listTargets(jobId, 10000);
+    const all = await this.repository.listTargets(
+      jobId,
+      Number.MAX_SAFE_INTEGER,
+    );
     const snapshot = decodeCompletionSnapshot(job.selector, all);
     const eligibleAt = options.now ?? new Date().toISOString();
     const eligible = all
@@ -790,9 +875,9 @@ export class ExecutionTaskService {
       else if (report?.end.kind === "interrupted") {
         if (
           options.signal?.aborted ||
-          !(await this.repository.listTargets(jobId, 10000)).some(
-            (row) => row.stage === "queued",
-          )
+          !(
+            await this.repository.listTargets(jobId, Number.MAX_SAFE_INTEGER)
+          ).some((row) => row.stage === "queued")
         )
           await this.repository.updateJobIfActive(
             jobId,
@@ -1005,7 +1090,10 @@ export class ExecutionTaskService {
       ["paused", "cancelled", "failed", "interrupted"].includes(job.status)
     )
       return;
-    const targets = await this.repository.listTargets(jobId, 10000);
+    const targets = await this.repository.listTargets(
+      jobId,
+      Number.MAX_SAFE_INTEGER,
+    );
     if (
       targets.some((target) =>
         ["queued", "acquisition", "parsing", "analysis", "literature"].includes(

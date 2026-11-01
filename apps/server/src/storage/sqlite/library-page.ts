@@ -74,8 +74,18 @@ function libraryFilter(
   any("l.version_role", q.version_roles);
   for (const keyword of q.keywords)
     add(
-      "EXISTS(SELECT 1 FROM literature_metadata_keywords k WHERE k.literature_id=l.literature_id AND k.keyword=?)",
+      "EXISTS(SELECT 1 FROM literature_metadata_keywords k WHERE k.literature_id=l.literature_id AND sr_normalize(k.keyword)=sr_normalize(?))",
       keyword,
+    );
+  for (const term of q.subject_terms ?? [])
+    add(
+      "EXISTS(SELECT 1 FROM literature_metadata_subject_terms s WHERE s.literature_id=l.literature_id AND s.normalized_term=sr_normalize(?))",
+      term,
+    );
+  if (q.intake_batch_ids?.length)
+    add(
+      "EXISTS(SELECT 1 FROM intake_batch_members b WHERE b.literature_id=l.literature_id AND b.batch_id IN (SELECT value FROM json_each(?)))",
+      JSON.stringify(q.intake_batch_ids),
     );
   any("sr_status(l.literature_id)", q.statuses);
   any("sr_missing(l.literature_id)", q.missing_steps);
@@ -241,4 +251,127 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
       ? { tag_backfill_pending: tagBackfillPending(db, tagIds, q.tags!.mode) }
       : {}),
   };
+}
+
+export function libraryFacets(
+  db: DatabaseSync,
+  query: LibraryQuery,
+  ftsQuery: string | null,
+  limit: number,
+) {
+  const unfiltered =
+    ftsQuery === null &&
+    !query.folder &&
+    !query.recently_opened &&
+    !query.tags?.ids.length &&
+    Object.entries(query).every(
+      ([key, value]) =>
+        ["folder", "recently_opened", "tags"].includes(key) ||
+        value === null ||
+        value === undefined ||
+        (Array.isArray(value) && value.length === 0),
+    );
+  const wholeCount = () =>
+    Number(
+      db.prepare("SELECT count(*) AS n FROM literature_metadata").get()!.n,
+    );
+  const aggregateWhole = (total: number) => {
+    const keywords = db
+      .prepare(
+        "SELECT min(keyword) AS value,count(DISTINCT literature_id) AS count FROM literature_metadata_keywords GROUP BY sr_normalize(keyword) ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?",
+      )
+      .all(limit) as { value: string; count: number }[];
+    // A normalized subject term is unique within one paper. Its covering
+    // index permits a single ordered aggregate without materializing all IDs.
+    const subject_terms = db
+      .prepare(
+        "SELECT min(term) AS value,count(*) AS count FROM literature_metadata_subject_terms INDEXED BY literature_subject_terms_normalized GROUP BY normalized_term ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?",
+      )
+      .all(limit) as { value: string; count: number }[];
+    return { total, keywords, subject_terms };
+  };
+  if (unfiltered) return aggregateWhole(wholeCount());
+  const { from, where, args } = libraryFilter(db, query, ftsQuery);
+  const match = `SELECT l.literature_id ${from} ${where}`;
+  const total = Number(
+    db.prepare(`SELECT count(*) AS n FROM (${match})`).get(...args)!.n,
+  );
+  if (total === wholeCount()) return aggregateWhole(total);
+  const aggregate = (table: string, value: string, normalized: string) =>
+    db
+      .prepare(
+        `WITH matches AS MATERIALIZED (${match}) SELECT min(t.${value}) AS value,count(DISTINCT t.literature_id) AS count FROM ${table} t JOIN matches m ON m.literature_id=t.literature_id GROUP BY ${normalized} ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?`,
+      )
+      .all(...args, limit) as { value: string; count: number }[];
+  return {
+    total,
+    keywords: aggregate(
+      "literature_metadata_keywords",
+      "keyword",
+      "sr_normalize(t.keyword)",
+    ),
+    subject_terms: aggregate(
+      "literature_metadata_subject_terms",
+      "term",
+      "t.normalized_term",
+    ),
+  };
+}
+import type {
+  PdfSelectionRequest,
+  PdfSelection,
+} from "../../literature/query.js";
+export function acquirePdfSelection(
+  db: DatabaseSync,
+  request: PdfSelectionRequest,
+): PdfSelection {
+  const selector = request.selector;
+  const ids =
+    selector.kind === "query"
+      ? libraryPageIds(db, {
+          query: selector.query,
+          sort: selector.sort,
+          after: null,
+          limit: Number.MAX_SAFE_INTEGER,
+          ftsQuery: request.ftsQuery,
+        }).rows.map((row) => String(row.literature_id))
+      : [...selector.literature_ids];
+  const facts = db
+    .prepare(
+      "SELECT l.literature_id,l.version_role,EXISTS(SELECT 1 FROM literature_assets a WHERE a.literature_id=l.literature_id AND a.role='primary-pdf') AS has_pdf,EXISTS(SELECT 1 FROM automatic_pdf_acquisition_exhaustions ex WHERE ex.literature_id=l.literature_id) AND sr_status(l.literature_id)='UNREVIEWED' AS unavailable FROM literatures l WHERE l.literature_id IN (SELECT value FROM json_each(?))",
+    )
+    .all(JSON.stringify(ids));
+  if (facts.length !== ids.length)
+    throw Object.assign(new Error("literature not found"), {
+      code: "literature-not-found",
+    });
+  const byId = new Map(facts.map((r) => [r.literature_id, r]));
+  const counts = {
+    matched: ids.length,
+    process: 0,
+    skipped_has_pdf: 0,
+    skipped_unavailable: 0,
+    over_limit: 0,
+  };
+  const items: Array<PdfSelection["items"][number]> = [];
+  for (const id of ids) {
+    const row = byId.get(id)!;
+    if (row.has_pdf) counts.skipped_has_pdf++;
+    else if (row.unavailable) counts.skipped_unavailable++;
+    else if (
+      selector.kind === "query" &&
+      selector.limit !== null &&
+      items.length >= selector.limit
+    )
+      counts.over_limit++;
+    else {
+      items.push({
+        literature_id: id as PdfSelection["items"][number]["literature_id"],
+        version_role:
+          row.version_role as PdfSelection["items"][number]["version_role"],
+      });
+      counts.process++;
+    }
+  }
+  return { counts, items };
 }

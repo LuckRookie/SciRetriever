@@ -1,3 +1,4 @@
+import { parseIntakeBatchRename } from "@sciretriever/contracts";
 import { RetrievalStorageError } from "../retrieval/model.js";
 import {
   archiveHash,
@@ -97,6 +98,7 @@ export async function executeExtraction(
   }
 }
 export const MAINTENANCE_OPERATIONS = [
+  "intake-batch-rename",
   "snapshots",
   "snapshot-rename",
   "folders",
@@ -160,6 +162,14 @@ async function performMaintenance(
   signal?: AbortSignal,
 ): Promise<unknown> {
   if (signal?.aborted) throw new ProductOperationError("operation-cancelled");
+  if (operation === "intake-batch-rename") {
+    const r = parseIntakeBatchRename(input);
+    await app.database.writeIntake({ operation: "rename", request: r });
+    return app.library.intakeBatches({
+      operation: "get",
+      request: { batch_id: r.batch_id },
+    });
+  }
   if (operation === "archive-arrangement-edit")
     return app.archiveArrangement.edit(input, activityContext().actor, signal);
   if (operation === "proofread-save")

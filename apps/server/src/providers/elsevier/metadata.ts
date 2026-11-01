@@ -80,6 +80,18 @@ function authorValues(record: Record<string, unknown>): readonly unknown[] {
   return records(authors);
 }
 
+function authorKeywords(value: unknown): readonly string[] {
+  if (typeof value === "string")
+    return value.split(/\s*[;|]\s*/u).filter(Boolean);
+  if (Array.isArray(value)) return value.flatMap(authorKeywords);
+  if (value && typeof value === "object") {
+    const r = value as Record<string, unknown>;
+    if ("author-keyword" in r) return authorKeywords(r["author-keyword"]);
+    if (typeof r.$ === "string") return [r.$];
+  }
+  return [];
+}
+
 export class ElsevierRestAdapter
   implements TopicSearchPort, MetadataLookupPort
 {
@@ -300,6 +312,7 @@ export class ElsevierRestAdapter
           volume: core["prism:volume"],
           issue: core["prism:issueIdentifier"],
           pages: core["prism:pageRange"],
+          keywords: authorKeywords(record.authkeywords ?? core.authkeywords),
           citedByCount: core["citedby-count"],
           assetHints: links,
           raw: record,

@@ -433,6 +433,7 @@ it("persists valid observations and provenance through discovery despite another
   let observationId: string;
   try {
     const report = await app.discovery.run({
+      origin: "cli",
       query: "chemistry",
       providers: [{ provider_name: "crossref", scan_limit: 10 }],
     });

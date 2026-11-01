@@ -119,6 +119,7 @@ describe("citation discovery migration slice", () => {
     try {
       await application.database.putLiterature(seed);
       const report = await application.citations.run({
+        origin: "cli",
         seed_literature_ids: [seed.literature_id],
         direction: "references",
         max_depth: 1,

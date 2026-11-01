@@ -219,6 +219,7 @@ export interface IdentityReadContext {
 }
 
 export interface IdentityPublicationCommand {
+  readonly intake_member?: import("./intake-engine.js").IntakeMember;
   readonly document_condition?: {
     readonly literature_id: string;
     readonly document_version_id: string;
@@ -278,6 +279,21 @@ function parseDiscoveryPublication(value: unknown): DiscoveryPublication {
 }
 
 export type SqliteCommand =
+  | { readonly kind: "intake_read"; readonly value: unknown }
+  | {
+      readonly kind: "intake_write";
+      readonly action: import("./intake-engine.js").IntakeWrite;
+    }
+  | {
+      readonly kind: "library_facets";
+      readonly request: import("@sciretriever/contracts").LibraryQuery;
+      readonly limit: number;
+      readonly ftsQuery: string | null;
+    }
+  | {
+      readonly kind: "acquire_pdf_selection";
+      readonly request: import("../../literature/query.js").PdfSelectionRequest;
+    }
   | { readonly kind: "folders"; readonly value: unknown }
   | { readonly kind: "marks"; readonly value: unknown }
   | {
@@ -832,7 +848,8 @@ export interface ExecutionRuntimeInspection {
     | 12
     | 12
     | 13
-    | 14;
+    | 14
+    | 15;
   readonly catalog_fingerprint: string;
   readonly version: number | null;
   readonly fingerprint: string | null;
@@ -1190,6 +1207,9 @@ export class SqliteWorker {
       return Promise.reject(new SqliteWorkerError());
     const copy = structuredClone(command);
     const readOnly = new Set<string>([
+      "intake_read",
+      "library_facets",
+      "acquire_pdf_selection",
       "metadata_fields_read",
       "article_identity_get",
       "article_identity_current",
@@ -1239,9 +1259,12 @@ export class SqliteWorker {
     ]);
     if (this.readOnly && !readOnly.has(copy.kind))
       return Promise.reject(new SqliteWorkerError());
-    const cancellableQuery = ["library_counts", "library_search_page"].includes(
-      copy.kind,
-    );
+    const cancellableQuery = [
+      "library_counts",
+      "library_search_page",
+      "library_facets",
+      "acquire_pdf_selection",
+    ].includes(copy.kind);
     const send = () => {
       if (signal?.aborted)
         return Promise.reject(
@@ -1812,7 +1835,11 @@ export class SqliteWorker {
     limit = 1000,
   ): Promise<readonly ExecutionTarget[]> {
     executionText(jobId);
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10000)
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > Number.MAX_SAFE_INTEGER
+    )
       throw new SqliteWorkerError();
     const value = await this.run<unknown>({
       kind: "execution_list_targets",
@@ -2461,6 +2488,35 @@ export class SqliteWorker {
       readonly status: "ready" | "not-initialized" | "unavailable";
       readonly schema: Readonly<Record<string, unknown>> | null;
     };
+  }
+  intakeBatches(value: unknown) {
+    return this.run<
+      | import("@sciretriever/contracts").IntakeBatchPage
+      | import("@sciretriever/contracts").IntakeBatch
+    >({ kind: "intake_read", value });
+  }
+  writeIntake(action: import("./intake-engine.js").IntakeWrite) {
+    return this.run<boolean>({ kind: "intake_write", action });
+  }
+  libraryFacets(
+    query: import("@sciretriever/contracts").LibraryQuery,
+    limit: number,
+    ftsQuery: string | null,
+    signal?: AbortSignal,
+  ) {
+    return this.run<import("@sciretriever/contracts").LibraryFacets>(
+      { kind: "library_facets", request: query, limit, ftsQuery },
+      signal,
+    );
+  }
+  acquirePdfSelection(
+    request: import("../../literature/query.js").PdfSelectionRequest,
+    signal?: AbortSignal,
+  ) {
+    return this.run<import("../../literature/query.js").PdfSelection>(
+      { kind: "acquire_pdf_selection", request },
+      signal,
+    );
   }
   async putDiscovery(
     publication: DiscoveryPublication,

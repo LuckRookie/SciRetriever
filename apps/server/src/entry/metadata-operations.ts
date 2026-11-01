@@ -101,7 +101,15 @@ export function createMetadataOperations(app: Application) {
       );
     },
     importBibliography: async (value: unknown) => {
-      const r = inputRecord(value, ["format", "content"]);
+      const r = inputRecord(value, ["format", "content"], ["file_name"]);
+      if (
+        r.file_name !== undefined &&
+        r.file_name !== null &&
+        (typeof r.file_name !== "string" ||
+          !r.file_name.trim() ||
+          r.file_name.length > 1024)
+      )
+        throw new ContractValidationError();
       if (
         typeof r.content !== "string" ||
         !["bibtex", "biblatex", "ris", "csl-json"].includes(r.format as string)
@@ -113,6 +121,10 @@ export function createMetadataOperations(app: Application) {
           r.format as BibliographyInputFormat,
         ),
         app.identity,
+        {
+          database: app.database,
+          file_name: (r.file_name ?? null) as string | null,
+        },
       );
     },
   };
