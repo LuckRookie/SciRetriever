@@ -28,6 +28,7 @@
 - [migrate-library-state-v13.mjs](migrate-library-state-v13.mjs)：对精确匹配的离线 12 库安装按篇状态失效提示、反向索引和当前 13 身份，完整校验并保持全部旧表行数；只接受绝对路径，打开库不会调用它。旧建档转换工具仍固定到 12，之后显式使用本工具。
 
 - [migrate-intake-v15.mjs](migrate-intake-v15.mjs)：构建 server 后对绝对路径的离线 14 库执行 14 → 15；在同一事务中回填批次、重解释主题词、重投影作者关键词并更新全文索引。保留文献、观测与来源 hash，核对旧事实行数及外键；正式执行前必须完整备份并先在副本演练。
+- [cleanup-openalex-top-concepts.mjs](cleanup-openalex-top-concepts.mjs)：构建 server 后对绝对路径的离线 schema 15 库清理旧 OpenAlex 顶层大类，单事务重排观测 ordinal、按篇重投影并同步 Library FTS；可重复运行，无 schema 变更。正式执行须先停服和完整备份，先在独立副本演练；全量检索索引由既有增量刷新追赶，不在此脚本重建。
 
 ## 放置边界
 

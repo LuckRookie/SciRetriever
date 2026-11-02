@@ -27,6 +27,15 @@ export function migrateKeywordLayers(db: DatabaseSync) {
   db.exec(
     `DELETE FROM metadata_observation_keywords WHERE observation_id IN (${old}); DELETE FROM metadata_observation_declared_keywords WHERE observation_id IN (${old})`,
   );
+  return reprojectKeywordLayers(db);
+}
+
+/** Shared by explicit offline maintenance; the caller owns the single transaction. */
+export function reprojectKeywordLayers(
+  db: DatabaseSync,
+  literatureIds?: readonly string[],
+) {
+  if (literatureIds?.length === 0) return 0;
   const ftsIds = new Map(
     db
       .prepare("SELECT rowid,literature_id FROM literature_search_fts")
@@ -36,9 +45,9 @@ export function migrateKeywordLayers(db: DatabaseSync) {
   let projected = 0;
   for (const row of db
     .prepare(
-      "SELECT literature_id,metadata_revision FROM literature_metadata ORDER BY literature_id",
+      `SELECT literature_id,metadata_revision FROM literature_metadata ${literatureIds ? "WHERE literature_id IN (SELECT value FROM json_each(?))" : ""} ORDER BY literature_id`,
     )
-    .all()) {
+    .all(...(literatureIds ? [JSON.stringify(literatureIds)] : []))) {
     const id = String(row.literature_id),
       current = readMetadataRow(db, "literature", id),
       states = readMetadataFields(db, id);
@@ -72,6 +81,9 @@ export function migrateKeywordLayers(db: DatabaseSync) {
         i,
         keyword,
       );
+    db.prepare(
+      "DELETE FROM literature_metadata_subject_terms WHERE literature_id=?",
+    ).run(id);
     for (const [i, term] of next.subject_terms.entries())
       db.prepare(
         "INSERT INTO literature_metadata_subject_terms VALUES(?,?,?,?)",
