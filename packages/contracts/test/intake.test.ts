@@ -96,17 +96,54 @@ it("bounds list, rename and facets requests without accepting unknown fields", (
   expect(
     parseLibraryFacets({
       total: 3,
-      keywords: [{ value: "Energy", count: 2 }],
+      coverage: { tags: 0, keywords: 2, subject_terms: 0 },
+      tags: [],
+      keywords: [{ value: "Energy", count: 2, tag: null }],
       subject_terms: [],
     }).keywords[0]?.count,
   ).toBe(2);
   expect(() =>
     parseLibraryFacets({
       total: 1,
-      keywords: [{ value: "a", count: 2 }],
+      coverage: { tags: 0, keywords: 1, subject_terms: 0 },
+      tags: [],
+      keywords: [{ value: "a", count: 2, tag: null }],
       subject_terms: [],
     }),
   ).toThrow();
+});
+it("requires all three facet layers, bounded coverage and closed nullable keyword tag links", () => {
+  const facets = {
+    total: 4,
+    coverage: { tags: 2, keywords: 3, subject_terms: 4 },
+    tags: [{ tag_id: id, value: "Energy", count: 2 }],
+    keywords: [
+      { value: "Batteries", count: 3, tag: { tag_id: id, name: "Energy" } },
+    ],
+    subject_terms: [{ value: "Physics", count: 4 }],
+  };
+  expect(parseLibraryFacets(facets)).toEqual(facets);
+  for (const invalid of [
+    { total: 4, keywords: [], subject_terms: [] },
+    { ...facets, coverage: { ...facets.coverage, tags: 5 } },
+    { ...facets, coverage: { ...facets.coverage, tags: -1 } },
+    { ...facets, coverage: { ...facets.coverage, keywords: 0.5 } },
+    { ...facets, coverage: { ...facets.coverage, subject_terms: Infinity } },
+    { ...facets, coverage: { ...facets.coverage, extra: 0 } },
+    { ...facets, tags: [{ tag_id: "invalid", value: "Energy", count: 2 }] },
+    { ...facets, tags: [{ tag_id: id, value: "Energy", count: 3 }] },
+    { ...facets, tags: Array.from({ length: 31 }, () => facets.tags[0]) },
+    { ...facets, keywords: [{ value: "a", count: 1 }] },
+    { ...facets, keywords: [{ value: "a", count: 1, tag: { tag_id: id } }] },
+    {
+      ...facets,
+      keywords: [
+        { value: "a", count: 1, tag: { tag_id: id, name: "", extra: true } },
+      ],
+    },
+    { ...facets, subject_terms: [{ value: "Physics", count: 0 }] },
+  ])
+    expect(() => parseLibraryFacets(invalid)).toThrow();
 });
 it("decodes historic metadata and queries with empty new fields and preserves new selectors", () => {
   const old: Record<string, unknown> = { ...EMPTY_METADATA };

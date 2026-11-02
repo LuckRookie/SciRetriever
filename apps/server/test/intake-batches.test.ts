@@ -244,10 +244,20 @@ it("filters batches with OR and both keyword layers with case-insensitive AND; f
     expect(page.items).toHaveLength(1);
     expect(
       await app.library.facets({ query: { text: "!!!" }, limit: 10 }),
-    ).toEqual({ total: 0, keywords: [], subject_terms: [] });
+    ).toEqual({
+      total: 0,
+      coverage: { tags: 0, keywords: 0, subject_terms: 0 },
+      tags: [],
+      keywords: [],
+      subject_terms: [],
+    });
     const facets = await app.library.facets({ query, limit: 10 });
     expect(facets.total).toBe(2);
-    expect(facets.keywords[0]).toEqual({ value: "ENERGY", count: 2 });
+    expect(facets.keywords[0]).toEqual({
+      value: "ENERGY",
+      count: 2,
+      tag: null,
+    });
     expect(facets.subject_terms[0]).toEqual({ value: "Physics", count: 2 });
     expect(
       (

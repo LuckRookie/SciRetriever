@@ -85,9 +85,20 @@ export interface IntakeBatchPage {
 }
 export interface LibraryFacets {
   readonly total: number;
+  readonly coverage: {
+    readonly tags: number;
+    readonly keywords: number;
+    readonly subject_terms: number;
+  };
+  readonly tags: readonly {
+    readonly tag_id: string;
+    readonly value: string;
+    readonly count: number;
+  }[];
   readonly keywords: readonly {
     readonly value: string;
     readonly count: number;
+    readonly tag: { readonly tag_id: string; readonly name: string } | null;
   }[];
   readonly subject_terms: readonly {
     readonly value: string;
@@ -381,20 +392,56 @@ export function parseIntakeBatchPage(value: unknown): IntakeBatchPage {
   };
 }
 export function parseLibraryFacets(value: unknown): LibraryFacets {
-  const r = tagRecord(value, ["total", "keywords", "subject_terms"]),
-    total = tagInteger(r.total);
-  const terms = (v: unknown) => {
+  const r = tagRecord(value, [
+      "total",
+      "coverage",
+      "tags",
+      "keywords",
+      "subject_terms",
+    ]),
+    total = tagInteger(r.total),
+    c = tagRecord(r.coverage, ["tags", "keywords", "subject_terms"]),
+    coverage = {
+      tags: tagInteger(c.tags),
+      keywords: tagInteger(c.keywords),
+      subject_terms: tagInteger(c.subject_terms),
+    };
+  if (Object.values(coverage).some((count) => count > total)) fail();
+  const terms = (
+    v: unknown,
+    covered: number,
+    extra: readonly string[] = [],
+  ) => {
     if (!Array.isArray(v) || v.length > 30) fail();
     return v.map((x) => {
-      const row = tagRecord(x, ["value", "count"]);
+      const row = tagRecord(x, ["value", "count", ...extra]);
       const count = tagInteger(row.count, 1);
-      if (count > total) fail();
-      return { value: text(row.value), count };
+      if (count > covered) fail();
+      return { row, value: text(row.value), count };
     });
   };
   return {
     total,
-    keywords: terms(r.keywords),
-    subject_terms: terms(r.subject_terms),
+    coverage,
+    tags: terms(r.tags, coverage.tags, ["tag_id"]).map(({ row, ...term }) => ({
+      ...term,
+      tag_id: parseAssetId(row.tag_id),
+    })),
+    keywords: terms(r.keywords, coverage.keywords, ["tag"]).map(
+      ({ row, ...term }) => {
+        const tag =
+          row.tag === null ? null : tagRecord(row.tag, ["tag_id", "name"]);
+        return {
+          ...term,
+          tag:
+            tag === null
+              ? null
+              : { tag_id: parseAssetId(tag.tag_id), name: text(tag.name) },
+        };
+      },
+    ),
+    subject_terms: terms(r.subject_terms, coverage.subject_terms).map(
+      ({ value, count }) => ({ value, count }),
+    ),
   };
 }

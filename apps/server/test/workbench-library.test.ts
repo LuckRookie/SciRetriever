@@ -6,7 +6,8 @@ import { expect, it } from "vitest";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setup, lit, id } from "./content-fixture.js";
-import { parseLiterature } from "@sciretriever/contracts";
+import { parseLiterature, parseLibraryFacets } from "@sciretriever/contracts";
+import { facetTag, facetAssignments } from "./library-facets-fixture.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
 import { startWorkbenchHttp } from "../src/workbench/http.js";
 import { WorkbenchSession } from "../src/workbench/session.js";
@@ -297,12 +298,19 @@ it("serves batch reads, full-scope facets and PDF preview alongside authenticate
     expect(await read.json()).toMatchObject({
       result: { batch_id: batch, counts: { hits: 1, matched: 1 } },
     });
+    const tagId = await facetTag(env.app, "Library tag");
+    facetAssignments(env.home, [{ literature_id: lit, tag_ids: [tagId] }]);
     const facets = await env.post("facets", {
       query: { intake_batch_ids: [batch] },
       limit: 10,
     });
     expect(facets.status).toBe(200);
-    expect(await facets.json()).toMatchObject({ result: { total: 1 } });
+    const facetResult = ((await facets.json()) as { result: unknown }).result;
+    expect(parseLibraryFacets(facetResult)).toMatchObject({
+      total: 1,
+      coverage: { tags: 1 },
+      tags: [{ tag_id: tagId, value: "Library tag", count: 1 }],
+    });
     const preview = await env.post("acquire-pdf/preview", {
       selector: { kind: "literatures", literature_ids: [lit] },
     });

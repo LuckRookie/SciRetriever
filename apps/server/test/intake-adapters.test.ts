@@ -9,6 +9,7 @@ import {
   parseIntakeBatchPage,
   parseLiterature,
   parseLibrarySearchRequest,
+  parseLibraryFacets,
 } from "@sciretriever/contracts";
 import {
   createApplication,
@@ -19,6 +20,7 @@ import { createMcpServer } from "../src/mcp/server.js";
 import { runCli } from "../src/cli/main.js";
 import { startIntake, finishIntake } from "../src/literature/intake.js";
 import { FIXTURE_LITERATURE } from "../src/workbench/synthetic-fixture.js";
+import { facetTag, facetAssignments } from "./library-facets-fixture.js";
 it("shares batch, facets, preview and rename shapes over HTTP, CLI and MCP without starting external work", async () => {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-intake-parity-")),
     app = await createApplication(home);
@@ -47,6 +49,8 @@ it("shares batch, facets, preview and rename shapes over HTTP, CLI and MCP witho
     member: { batch_id: batch, literature_id: id, disposition: "created" },
   });
   await finishIntake(app.database, batch, "completed");
+  const tagId = await facetTag(app, "Energy", { name_zh: "能量" });
+  facetAssignments(home, [{ literature_id: id, tag_ids: [tagId] }]);
   const queryApp = await createQueryApplication(home);
   const http = await startQueryOnlyHttp({
     application: queryApp,
@@ -139,6 +143,16 @@ it("shares batch, facets, preview and rename shapes over HTTP, CLI and MCP witho
       ],
     ] as const) {
       const expected = await web(operation, request);
+      if (operation === "library-facets")
+        expect(parseLibraryFacets(expected)).toEqual({
+          total: 1,
+          coverage: { tags: 1, keywords: 1, subject_terms: 1 },
+          tags: [{ tag_id: tagId, value: "能量", count: 1 }],
+          keywords: [
+            { value: "Energy", count: 1, tag: { tag_id: tagId, name: "能量" } },
+          ],
+          subject_terms: [{ value: "Physics", count: 1 }],
+        });
       expect(await cli([...args], request)).toEqual(expected);
       expect(
         await mcp(tool, mcpRequest ? { request } : { ...request }),

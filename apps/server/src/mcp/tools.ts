@@ -309,7 +309,7 @@ export const QUERY_TOOLS: readonly Tool[] = [
   ),
   tool(
     "library_facets",
-    "Count author keywords and subject terms over the entire filtered library, not one page.",
+    "Count direct active tags, author keywords and subject terms over the entire filtered library. Includes per-layer literature coverage and exact keyword-to-tag alias links.",
     object({
       query: { type: "object" },
       limit: { type: "integer", minimum: 1, maximum: 30 },

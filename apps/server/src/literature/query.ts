@@ -544,7 +544,13 @@ export class LiteratureQueryService {
     if (!this.repository.libraryFacets) throw new LiteratureQueryError();
     const r = parseLibraryFacetsRequest(value);
     if (r.query.text !== null && queryTerms(r.query.text).length === 0)
-      return Promise.resolve({ total: 0, keywords: [], subject_terms: [] });
+      return Promise.resolve<LibraryFacets>({
+        total: 0,
+        coverage: { tags: 0, keywords: 0, subject_terms: 0 },
+        tags: [],
+        keywords: [],
+        subject_terms: [],
+      });
     return this.repository.libraryFacets(
       r.query,
       r.limit,

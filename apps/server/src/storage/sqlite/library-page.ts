@@ -5,8 +5,11 @@ const { resolveLibraryTagIds, tagBackfillPending }: typeof Tags = await import(
     import.meta.url,
   ).href
 );
-import { LITERATURE_STATUSES } from "@sciretriever/contracts";
-import type { LibraryQuery } from "@sciretriever/contracts";
+import {
+  LITERATURE_STATUSES,
+  normalizedTagName,
+} from "@sciretriever/contracts";
+import type { LibraryFacets, LibraryQuery } from "@sciretriever/contracts";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { LibraryPageQuery } from "../../literature/query.js";
 
@@ -253,12 +256,41 @@ export function libraryPageIds(db: DatabaseSync, request: LibraryPageQuery) {
   };
 }
 
+const TAG_DISPLAY_NAME =
+  "coalesce(nullif(json_extract(t.row_json,'$.name_zh'),''),json_extract(t.row_json,'$.name_en'))";
+type FacetWord = { value: string; count: number };
+
+/** Resolve only the returned keyword window through the indexed alias key. */
+function keywordTags(
+  db: DatabaseSync,
+  words: readonly FacetWord[],
+): LibraryFacets["keywords"] {
+  const names = [
+    ...new Set(words.map((word) => normalizedTagName(word.value))),
+  ];
+  const links = new Map<string, { tag_id: string; name: string }>();
+  if (names.length)
+    for (const row of db
+      .prepare(
+        `SELECT a.normalized_name,t.tag_id,${TAG_DISPLAY_NAME} AS name FROM tag_aliases a JOIN tags t ON t.tag_id=a.tag_id WHERE a.normalized_name IN (SELECT value FROM json_each(?)) AND t.status='active'`,
+      )
+      .all(JSON.stringify(names)))
+      links.set(String(row.normalized_name), {
+        tag_id: String(row.tag_id),
+        name: String(row.name),
+      });
+  return words.map((word) => ({
+    ...word,
+    tag: links.get(normalizedTagName(word.value)) ?? null,
+  }));
+}
+
 export function libraryFacets(
   db: DatabaseSync,
   query: LibraryQuery,
   ftsQuery: string | null,
   limit: number,
-) {
+): LibraryFacets {
   const unfiltered =
     ftsQuery === null &&
     !query.folder &&
@@ -276,6 +308,16 @@ export function libraryFacets(
       db.prepare("SELECT count(*) AS n FROM literature_metadata").get()!.n,
     );
   const aggregateWhole = (total: number) => {
+    const coverage = db
+      .prepare(
+        "SELECT (SELECT count(DISTINCT literature_id) FROM literature_tag_items) AS tags,(SELECT count(DISTINCT literature_id) FROM literature_metadata_keywords) AS keywords,(SELECT count(DISTINCT literature_id) FROM literature_metadata_subject_terms) AS subject_terms",
+      )
+      .get() as { tags: number; keywords: number; subject_terms: number };
+    const tags = db
+      .prepare(
+        `SELECT c.tag_id,${TAG_DISPLAY_NAME} AS value,c.count FROM (SELECT tag_id,count(DISTINCT literature_id) AS count FROM literature_tag_items GROUP BY tag_id) c JOIN tags t ON t.tag_id=c.tag_id WHERE t.status='active' ORDER BY c.count DESC,value COLLATE BINARY ASC,c.tag_id LIMIT ?`,
+      )
+      .all(limit) as Array<LibraryFacets["tags"][number]>;
     const keywords = db
       .prepare(
         "SELECT min(keyword) AS value,count(DISTINCT literature_id) AS count FROM literature_metadata_keywords GROUP BY sr_normalize(keyword) ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?",
@@ -288,7 +330,13 @@ export function libraryFacets(
         "SELECT min(term) AS value,count(*) AS count FROM literature_metadata_subject_terms INDEXED BY literature_subject_terms_normalized GROUP BY normalized_term ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?",
       )
       .all(limit) as { value: string; count: number }[];
-    return { total, keywords, subject_terms };
+    return {
+      total,
+      coverage,
+      tags,
+      keywords: keywordTags(db, keywords),
+      subject_terms,
+    };
   };
   if (unfiltered) return aggregateWhole(wholeCount());
   const { from, where, args } = libraryFilter(db, query, ftsQuery);
@@ -297,24 +345,44 @@ export function libraryFacets(
     db.prepare(`SELECT count(*) AS n FROM (${match})`).get(...args)!.n,
   );
   if (total === wholeCount()) return aggregateWhole(total);
-  const aggregate = (table: string, value: string, normalized: string) =>
-    db
-      .prepare(
-        `WITH matches AS MATERIALIZED (${match}) SELECT min(t.${value}) AS value,count(DISTINCT t.literature_id) AS count FROM ${table} t JOIN matches m ON m.literature_id=t.literature_id GROUP BY ${normalized} ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?`,
-      )
-      .all(...args, limit) as { value: string; count: number }[];
+  // Share the filtered membership and layer rows between coverage and top terms.
+  // All fields are read in the caller's one SQLite snapshot, without loading details.
+  const result = db
+    .prepare(
+      `WITH matches AS MATERIALIZED (${match}),
+      scope_tags AS MATERIALIZED (SELECT i.literature_id,i.tag_id FROM literature_tag_items i JOIN matches m USING(literature_id)),
+      scope_keywords AS MATERIALIZED (SELECT k.literature_id,k.keyword FROM literature_metadata_keywords k JOIN matches m USING(literature_id)),
+      scope_subjects AS MATERIALIZED (SELECT s.literature_id,s.term,s.normalized_term FROM literature_metadata_subject_terms s JOIN matches m USING(literature_id))
+    SELECT
+      (SELECT count(DISTINCT literature_id) FROM scope_tags) AS tags_coverage,
+      (SELECT count(DISTINCT literature_id) FROM scope_keywords) AS keywords_coverage,
+      (SELECT count(DISTINCT literature_id) FROM scope_subjects) AS subjects_coverage,
+      (SELECT json_group_array(json_object('tag_id',tag_id,'value',value,'count',count)) FROM (
+        SELECT c.tag_id,${TAG_DISPLAY_NAME} AS value,c.count FROM (SELECT tag_id,count(DISTINCT literature_id) AS count FROM scope_tags GROUP BY tag_id) c JOIN tags t ON t.tag_id=c.tag_id WHERE t.status='active' ORDER BY c.count DESC,value COLLATE BINARY ASC,c.tag_id LIMIT ?
+      )) AS tags_json,
+      (SELECT json_group_array(json_object('value',value,'count',count)) FROM (
+        SELECT min(keyword) AS value,count(DISTINCT literature_id) AS count FROM scope_keywords GROUP BY sr_normalize(keyword) ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?
+      )) AS keywords_json,
+      (SELECT json_group_array(json_object('value',value,'count',count)) FROM (
+        SELECT min(term) AS value,count(DISTINCT literature_id) AS count FROM scope_subjects GROUP BY normalized_term ORDER BY count DESC,value COLLATE BINARY ASC LIMIT ?
+      )) AS subjects_json`,
+    )
+    .get(...args, limit, limit, limit)!;
   return {
     total,
-    keywords: aggregate(
-      "literature_metadata_keywords",
-      "keyword",
-      "sr_normalize(t.keyword)",
+    coverage: {
+      tags: Number(result.tags_coverage),
+      keywords: Number(result.keywords_coverage),
+      subject_terms: Number(result.subjects_coverage),
+    },
+    tags: JSON.parse(String(result.tags_json)) as LibraryFacets["tags"],
+    keywords: keywordTags(
+      db,
+      JSON.parse(String(result.keywords_json)) as FacetWord[],
     ),
-    subject_terms: aggregate(
-      "literature_metadata_subject_terms",
-      "term",
-      "t.normalized_term",
-    ),
+    subject_terms: JSON.parse(
+      String(result.subjects_json),
+    ) as LibraryFacets["subject_terms"],
   };
 }
 import type {
