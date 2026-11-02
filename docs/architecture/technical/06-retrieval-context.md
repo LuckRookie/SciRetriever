@@ -301,7 +301,9 @@ IntakeBatch
 
 LibraryFacets
   total
-  keywords: tuple[{value, count}, ...]
+  coverage: {tags, keywords, subject_terms}   # 当前结果里有这一层词的篇数
+  tags: tuple[{tag_id, value, count}, ...]   # value 为标签当前名称
+  keywords: tuple[{value, count, tag: {tag_id, name} | None}, ...]
   subject_terms: tuple[{value, count}, ...]
 
 AcquirePdfSelector =
@@ -313,7 +315,10 @@ AcquirePdfCounts
 ```
 
 - **批次**：每次主题发现、引用扩展和书目导入各形成一个批次，入口不论 Web、CLI 还是 MCP。成员与身份发布在同一事务提交；同一篇按 created > enriched > matched 计一次。`counts.hits` 是成员数；`legacy` 批次的 hits 不满足 created + enriched + matched 等式。异常或进程退出的批次保留已接纳的成员，状态读作 `interrupted`。列表按 `created_at` 倒序翻页，人工改名为单行 1–120 字。
-- **词频**：对一个 `LibraryQuery` 的全部命中统计作者关键词和主题词，同篇同词计一次，按篇数降序、词升序，每层最多 30 个。
+- **词频**（层次与排列见 [ADR 0053](../decisions/0053-scope-terms-led-by-tags.md)）：对一个 `LibraryQuery` 的全部命中统计标签、作者关键词和主题词，同篇同词计一次，按篇数降序、词升序，每层最多 30 个。
+  - 标签只计 `active` 的标签直接标注的篇数，主次都算；`tag_id` 即标签筛选用的 ID。标签筛选包含子标签，所以父标签筛出的篇数可能多于词频。
+  - 作者关键词规范化后等于某个 `active` 标签的名称或别名时，`tag` 给出该标签，否则为 `None`。
+  - `coverage` 各项是当前结果里至少有一个该层词的篇数，不超过 `total`。
 - **PDF 范围**：预览与创建任务使用同一个选择函数。
   - `query`：服务端展开全部命中，不受前端已加载行数限制；先跳过已有主 PDF 的和已标记无法获取的，再按 `sort` 取前 `limit` 篇，其余计入 `over_limit`。
   - `literatures`：调用方明确点名的文献全部处理，包括已有 PDF（重新获取）和已标记无法获取的；`process = matched`，三项跳过都为 0。

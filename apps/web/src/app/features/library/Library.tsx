@@ -763,17 +763,7 @@ export default function Library() {
           </div>
         )}
         {chips.length > 0 ? (
-          <ScopeTerms
-            query={route.query}
-            onPick={(field, value) =>
-              updateQuery({
-                ...route.query,
-                [field]: route.query[field].includes(value)
-                  ? route.query[field].filter((v) => v !== value)
-                  : [...route.query[field], value],
-              })
-            }
-          />
+          <ScopeTerms query={route.query} onChange={updateQuery} />
         ) : null}
         <Presence>
           {filters && (

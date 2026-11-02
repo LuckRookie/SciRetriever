@@ -1010,6 +1010,7 @@
 
   /* The commonest terms in the results: a quiet tray under the filters. */
   .scope-terms {
+    --scope-label: 8.5em;
     display: grid;
     gap: var(--space-1);
     margin-bottom: var(--space-2);
@@ -1028,9 +1029,16 @@
   }
   .scope-terms-label {
     flex: none;
-    width: 5.5em;
-    color: var(--fg3);
+    display: flex;
+    flex-direction: column;
+    width: var(--scope-label);
+    color: var(--fg2);
     font-size: var(--text-caption);
+  }
+  /* How many results the layer covers: its counts only compare within it. */
+  .scope-terms-coverage {
+    color: var(--fg3);
+    font-variant-numeric: tabular-nums;
   }
   .scope-terms-values {
     display: flex;
@@ -1062,9 +1070,25 @@
     color: inherit;
     opacity: 0.7;
   }
-  .scope-terms-more {
+  .scope-terms-more,
+  .scope-terms-hint {
     justify-self: start;
-    margin-left: calc(5.5em + var(--space-2));
+    margin-left: calc(var(--scope-label) + var(--space-2));
+  }
+  .scope-terms-hint {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    margin-block: 0;
+    color: var(--fg2);
+    font-size: var(--text-caption);
+  }
+  .scope-term-tag {
+    width: 12px;
+    height: 12px;
+    margin-left: 3px;
+    color: var(--t-blue);
+    align-self: center;
   }
 
   /* Get PDF: the scope first, as label/value lines on a sunken block. */
