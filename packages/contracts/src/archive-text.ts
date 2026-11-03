@@ -43,6 +43,18 @@ export type SourceLocator =
       readonly start_utf8: number;
       readonly end_utf8: number;
     };
+export interface PdfBlockGeometry {
+  readonly line_count: number;
+  readonly line_height: number;
+  readonly first_indent: number;
+  readonly last_line_fill: number;
+  readonly font_size: number;
+  readonly font: string;
+}
+export interface ProgramArrangementRule {
+  readonly source?: "program";
+  readonly rule?: string;
+}
 export interface ArrangementSourceBlock {
   readonly root_block_id: string;
   readonly locator: SourceLocator;
@@ -55,6 +67,7 @@ export interface ArrangementSourceBlock {
   readonly region_hint: PageRegion | null;
   readonly image_ref: string | null;
   readonly title_level: number | null;
+  readonly pdf_geometry?: PdfBlockGeometry;
 }
 export interface SourceSpan {
   readonly root_block_id: string;
@@ -98,13 +111,18 @@ export type ArrangementOperation =
       readonly kind: "drop";
       readonly leaf_id: string;
       readonly reason: ArchiveDropReason;
+      readonly source?: "program";
+      readonly rule?: string;
     }
   | {
       readonly kind: "split";
       readonly root_block_id: string;
       readonly cuts: readonly number[];
     }
-  | { readonly kind: "merge"; readonly leaf_ids: readonly string[] }
+  | ({
+      readonly kind: "merge";
+      readonly leaf_ids: readonly string[];
+    } & ProgramArrangementRule)
   | {
       readonly kind: "caption";
       readonly object_leaf_id: string;
@@ -126,6 +144,9 @@ export interface ParagraphBreakCandidate {
   readonly input_sha256: string;
   readonly rule_version: string;
   readonly left_ends_with_hyphen: boolean;
+  readonly basis?: "text" | "layout";
+  readonly boundary?: "page" | "column" | "float" | null;
+  readonly automatic?: boolean;
 }
 export type ParagraphBreakDecision =
   | { readonly candidate_id: string; readonly decision: "merge" }
@@ -319,12 +340,19 @@ export interface ArchiveTextIssue {
 function fail(): never {
   throw new ContractValidationError();
 }
-function record(v: unknown, keys: readonly string[]): Record<string, unknown> {
+function record(
+  v: unknown,
+  keys: readonly string[],
+  optional: readonly string[] = [],
+): Record<string, unknown> {
   if (
     !v ||
     typeof v !== "object" ||
     Array.isArray(v) ||
-    Object.keys(v).sort().join() !== [...keys].sort().join()
+    Object.keys(v)
+      .filter((k) => !optional.includes(k))
+      .sort()
+      .join() !== [...keys].sort().join()
   )
     fail();
   return v as Record<string, unknown>;
@@ -434,25 +462,64 @@ export function parseSourceSpan(v: unknown): SourceSpan {
     end,
   };
 }
+export function parsePdfBlockGeometry(v: unknown): PdfBlockGeometry {
+  const r = record(v, [
+    "line_count",
+    "line_height",
+    "first_indent",
+    "last_line_fill",
+    "font_size",
+    "font",
+  ]);
+  const finite = (v: unknown, min: number, max: number) => {
+    if (typeof v !== "number" || !Number.isFinite(v) || v < min || v > max)
+      fail();
+    return v;
+  };
+  const line_count = number(r.line_count, 20000);
+  if (!line_count) fail();
+  return {
+    line_count,
+    line_height: finite(r.line_height, 0.01, 1000),
+    first_indent: finite(r.first_indent, -1000, 1000),
+    last_line_fill: finite(r.last_line_fill, 0, 2),
+    font_size: finite(r.font_size, 0.01, 1000),
+    font: text(r.font, 128),
+  };
+}
+function programRule(r: Record<string, unknown>): ProgramArrangementRule {
+  if (r.source === undefined && r.rule === undefined) return {};
+  if (
+    r.source !== "program" ||
+    typeof r.rule !== "string" ||
+    !/^[a-z0-9:/.-]{1,120}$/u.test(r.rule)
+  )
+    fail();
+  return { source: "program", rule: r.rule };
+}
 export function parseArrangementSourceBlock(
   v: unknown,
   pageCount: number,
 ): ArrangementSourceBlock {
   if (!Number.isSafeInteger(pageCount) || pageCount < 1 || pageCount > 10000)
     fail();
-  const r = record(v, [
-    "root_block_id",
-    "locator",
-    "raw_parse_id",
-    "result_sha256",
-    "source_sha256",
-    "type",
-    "text",
-    "page_hint",
-    "region_hint",
-    "image_ref",
-    "title_level",
-  ]);
+  const r = record(
+    v,
+    [
+      "root_block_id",
+      "locator",
+      "raw_parse_id",
+      "result_sha256",
+      "source_sha256",
+      "type",
+      "text",
+      "page_hint",
+      "region_hint",
+      "image_ref",
+      "title_level",
+    ],
+    ["pdf_geometry"],
+  );
   const raw = r.locator;
   const kind = choice(
     raw && typeof raw === "object" && "kind" in raw ? raw.kind : undefined,
@@ -489,6 +556,9 @@ export function parseArrangementSourceBlock(
     image_ref:
       r.image_ref === null ? null : parseRawResourceReference(r.image_ref),
     title_level: title,
+    ...(r.pdf_geometry === undefined
+      ? {}
+      : { pdf_geometry: parsePdfBlockGeometry(r.pdf_geometry) }),
   };
 }
 export function parseArrangementLeaf(
@@ -536,10 +606,10 @@ export function parseArrangementOperation(v: unknown): ArrangementOperation {
     return { kind, root_block_id: parseAssetId(r.root_block_id), cuts };
   }
   if (kind === "merge") {
-    const r = record(v, ["kind", "leaf_ids"]),
+    const r = record(v, ["kind", "leaf_ids"], ["source", "rule"]),
       leaf_ids = ids(r.leaf_ids);
     if (leaf_ids.length < 2) fail();
-    return { kind, leaf_ids };
+    return { kind, leaf_ids, ...programRule(r) };
   }
   if (kind === "caption") {
     const r = record(v, [
@@ -578,11 +648,12 @@ export function parseArrangementOperation(v: unknown): ArrangementOperation {
     };
   }
   if (kind === "drop") {
-    const r = record(v, ["kind", "leaf_id", "reason"]);
+    const r = record(v, ["kind", "leaf_id", "reason"], ["source", "rule"]);
     return {
       kind,
       leaf_id: parseAssetId(r.leaf_id),
       reason: choice(r.reason, ARCHIVE_DROP_REASONS),
+      ...programRule(r),
     };
   }
   const r = record(v, ["kind", "leaf_id", "target", "presentation"]);
@@ -669,15 +740,19 @@ export function parseArrangementSnapshot(
   )
     fail();
   const break_candidates = list(r.break_candidates, (x) => {
-    const c = record(x, [
-      "candidate_id",
-      "left_leaf_id",
-      "right_leaf_id",
-      "skipped_leaf_ids",
-      "input_sha256",
-      "rule_version",
-      "left_ends_with_hyphen",
-    ]);
+    const c = record(
+      x,
+      [
+        "candidate_id",
+        "left_leaf_id",
+        "right_leaf_id",
+        "skipped_leaf_ids",
+        "input_sha256",
+        "rule_version",
+        "left_ends_with_hyphen",
+      ],
+      ["basis", "boundary", "automatic"],
+    );
     return {
       candidate_id: hash(c.candidate_id),
       left_leaf_id: parseAssetId(c.left_leaf_id),
@@ -686,6 +761,18 @@ export function parseArrangementSnapshot(
       input_sha256: hash(c.input_sha256),
       rule_version: word(c.rule_version),
       left_ends_with_hyphen: bool(c.left_ends_with_hyphen),
+      ...(c.basis === undefined
+        ? {}
+        : { basis: choice(c.basis, ["text", "layout"] as const) }),
+      ...(c.boundary === undefined
+        ? {}
+        : {
+            boundary:
+              c.boundary === null
+                ? null
+                : choice(c.boundary, ["page", "column", "float"] as const),
+          }),
+      ...(c.automatic === undefined ? {} : { automatic: bool(c.automatic) }),
     };
   });
   const candidateIds = new Set(break_candidates.map((c) => c.candidate_id));

@@ -131,7 +131,9 @@ export async function analyzeDocumentSession(
         throw new KnowledgeAnalysisFailure("knowledge-input-invalidated");
       // The verified arranged builder keeps deterministic scaffold bytes
       // outside source leaf segments. Legacy documents cover every byte.
-      const scaffold = version.builder_version === "arranged-leaves-v2";
+      const scaffold =
+        version.builder_version === "arranged-leaves-v2" ||
+        version.builder_version === "source-order-leaves-v3";
       let end = 0;
       const segments = await Promise.all(
         structure.segments.map(async (s) => {

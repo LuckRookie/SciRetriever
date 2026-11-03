@@ -2,6 +2,8 @@ import { SqliteArchiveTextStorage } from "../storage/archive-text.js";
 import {
   renderArrangement,
   ARRANGED_DOCUMENT_BUILDER,
+  LEGACY_ARRANGED_DOCUMENT_BUILDER,
+  isArrangedBuilder,
 } from "../archive/render.js";
 import { parseProofreadBlocksV1 } from "@sciretriever/contracts";
 import { SqliteProofreadStorage } from "../storage/proofread.js";
@@ -66,7 +68,7 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     const parsed = parseDocumentRepresentationInput(input);
     if ("proofread_id" in parsed) {
       try {
-        if (parsed.builder_version === ARRANGED_DOCUMENT_BUILDER) {
+        if (isArrangedBuilder(parsed.builder_version)) {
           const output = await new SqliteArchiveTextStorage(
             this.database,
             this.files,
@@ -84,6 +86,7 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
           const built = renderArrangement(
             output.bundle,
             output.version.resources,
+            parsed.builder_version,
           );
           return built.sha256 === parsed.structure.sha256 &&
             built.markdown.length === parsed.markdown.byte_size &&
@@ -172,9 +175,11 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
       throw new Error("document artifact limit exceeded");
     if (
       v.schema_version !== 2 ||
-      ![PROOFREAD_DOCUMENT_BUILDER_VERSION, ARRANGED_DOCUMENT_BUILDER].includes(
-        v.builder_version,
-      )
+      ![
+        PROOFREAD_DOCUMENT_BUILDER_VERSION,
+        ARRANGED_DOCUMENT_BUILDER,
+        LEGACY_ARRANGED_DOCUMENT_BUILDER,
+      ].includes(v.builder_version)
     )
       throw new Error("document builder unsupported");
     if (
@@ -263,7 +268,7 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     signal?: AbortSignal,
     reserveVerifiedBytes?: (bytes: number) => void,
   ) {
-    if (v.builder_version === ARRANGED_DOCUMENT_BUILDER) {
+    if (isArrangedBuilder(v.builder_version)) {
       const output = await new SqliteArchiveTextStorage(
         this.database,
         this.files,
@@ -277,7 +282,11 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
       )
         throw new Error("document proofread binding mismatch");
       reserveVerifiedBytes?.(output.version.blocks.byte_size);
-      const built = renderArrangement(output.bundle, output.version.resources);
+      const built = renderArrangement(
+        output.bundle,
+        output.version.resources,
+        v.builder_version,
+      );
       if (!Buffer.from(markdown).equals(built.markdown))
         throw new Error("document source-map mismatch");
       return built;
@@ -301,7 +310,7 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
   ) {
     if (document.schema_version !== 2)
       throw new Error("document corrections unsupported");
-    if (document.builder_version === ARRANGED_DOCUMENT_BUILDER) {
+    if (isArrangedBuilder(document.builder_version)) {
       const output = await new SqliteArchiveTextStorage(
         this.database,
         this.files,

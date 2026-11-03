@@ -330,46 +330,56 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 
 ### 6.2 整理与叶块
 
-按 [ADR 0041](../decisions/0041-arrange-then-per-page-proofread.md)，每个部分先整理，再对保留内容逐页校订；整理按 [ADR 0048](../decisions/0048-single-pass-arrangement.md) 每部分两次请求，校订按 [ADR 0047](../decisions/0047-single-pass-page-proofread.md) 每页一次请求、由程序防护把关。整理与校订都使用现有 `proofreading` 模型角色，不增加角色配置。
+按 [ADR 0041](../decisions/0041-arrange-then-per-page-proofread.md)，每个部分先整理，再对保留内容逐页校订；整理按 [ADR 0048](../decisions/0048-single-pass-arrangement.md) 每部分一次整理请求、按需一次断段请求，校订按 [ADR 0047](../decisions/0047-single-pass-page-proofread.md) 每页一次请求、由程序防护把关。整理与校订都使用现有 `proofreading` 模型角色，不增加角色配置。
 
 **来源和坐标**：
 
-- 从不可变 `RawParse` 的中性区块直接构造 `ArrangementSourceBlock`，不经过会删除、合并或去连字符的 `cleanRawBlocks`。校验原始清单身份、字节长度、SHA-256、页数和资源闭包；页眉、页脚、书目等都保留到显式整理决定。
+- 从不可变 `RawParse` 的中性区块直接构造 `ArrangementSourceBlock`，不经过会删除、合并或去连字符的 `cleanRawBlocks`。校验原始清单身份、字节长度、SHA-256、页数和资源闭包。全部原始区块保留在来源清单里；规则预处理只形成显式删除操作，不修改原始字节。
 - 表格以原始 HTML 为 canonical text，其余以原始 text 为准，不同时计算两份正文。Markdown-only 输入保留原始子串，只有页归属唯一且顺序一致才进入整理。
 - `page_index` 从 0 起始；字符坐标是 Unicode code point 的半开区间 `[start,end)`，不是 UTF-16 下标或 UTF-8 字节。`region` 继续采用 0–1000 的归一化区域；公开 `page-region-v1` 定位的页码仍从 1 起始，在表示边界转换。
 - root ID 绑定 raw result 和原始定位；叶块 ID 绑定 raw result、root ID 与源区间，由宿主生成。拆分后的叶块连续且完整覆盖原块；空文字图片也有一个叶块和明确去向。归属或责任页变化不改变相同源区间的叶块 ID。
 
-**去向**：每个最终叶块恰好归属或删除一次。骨架固定为 `title` 标题、`authors` 作者、`abstract` 摘要、`keywords` 关键词、`introduction` 引言、`methods` 方法、`results-discussion` 结果与讨论、`conclusion` 结论、`end-matter` 文末信息、`references` 参考文献、`additional` 附加章节。没有内容的章节留空；论文自己的标题文字保留为章节标题或小标题。附加章节的原标题引用现有标题叶块，不能由 Agent 新写标题。
+**去向**：每个最终叶块恰好归属或删除一次。骨架固定为 `title` 标题、`authors` 作者、`abstract` 摘要、`keywords` 关键词、`introduction` 引言、`methods` 方法、`results-discussion` 结果与讨论、`conclusion` 结论、`end-matter` 文末信息、`references` 参考文献、`additional` 附加章节。角色只供结构注释与算子选材，不决定渲染顺序或生成标题；论文自己的标题文字保留为章节标题或小标题。附加章节的原标题引用现有标题叶块，不能由 Agent 新写标题。
 
 作者章节只收姓名；单位、通讯作者、致谢、资助、利益声明、作者贡献、注释和文末支持信息进入文末信息。书目行不进入阅读正文，标题区的期刊、年份与 DOI 由元数据渲染。参考文献表是内容，标题和每一条都归入 `references`，不能用 `bibliography` 删除；提示词与该理由的说明都写明这一点。2026-10-29 发现模型把 `bibliography` 理解成参考文献表，整表删除：1.9 的 5 篇真实样本中有 2 篇、P28 样本 1 篇因此在引用关系一步报 `references-missing`。
 
 删除理由为封闭枚举，不接受自由理由或“其他”：
 
-| 值             | 含义                          |
-| -------------- | ----------------------------- |
-| `header`       | 页眉                          |
-| `footer`       | 页脚                          |
-| `interface`    | 页面界面杂项与链接标签        |
-| `bibliography` | 期刊卷期页、DOI、日期等书目行 |
-| `copyright`    | 版权句                        |
-| `decoration`   | 装饰                          |
+| 值             | 含义                     |
+| -------------- | ------------------------ |
+| `header`       | 页眉                     |
+| `footer`       | 页脚                     |
+| `interface`    | 页面界面杂项与链接标签   |
+| `bibliography` | 期刊卷期页、DOI 等书目行 |
+| `copyright`    | 版权句                   |
+| `decoration`   | 装饰                     |
 
 正文中夹带的版权句用 split 后 drop 对应叶块处理：页眉、页脚、页码以外的区块里，从 `©`、`(c) 年份`、Copyright 或“This article/journal is licensed”开始的一行，以及以“© 年份”结尾的块尾，由程序在该处预拆（`copyrightCut`），模型只决定各部分去向。整理不改任何原文字符；split、merge、caption、assign-page 都不代替唯一的去向。
 
-**断段与合并**（规则版本 `paragraph-break-v2`）：
+**整理前预处理**（`page-chrome-v1`）：
 
-1. 按原始阅读顺序检查同一章节或同一附加组的正文文本叶块；跳过已删除内容及独立的脚注、图、表、图注，普通保留正文或标题会阻断跳过。
-2. 前块最后一个非空白字符不在句末符号集合 `.?!:;。？！：；` 中、后块不为空时，生成候选；不再看后块的首字符。`paragraph-break-v1` 还要求后块以小写字母、数字或右括号、右引号开头，2026-10-30 实验中因此漏掉 5 处以大写字母、公式或数字开头的跨页续接。
-3. 每条候选必须决定 merge 或 keep；keep 附一行理由（不超过 120 code points）。候选与 review hash 绑定当前操作集合，提交时重算；旧决定不能覆盖变化后的候选。
-4. merge 只允许同一正文流的有序文本叶块，禁止重复成员、交叠合并或跨过普通保留正文。被跨过的保留图表、图注、脚注紧随合并段，不丢失或重复；图注仍有自己的去向，并挂接到保留对象。
-5. 前叶块去掉尾部空白仅用于判断：若以 `-` 结尾，程序使用空 joiner 且保留原 `-`；其余 joiner 是一个空格。原文自身的空白不 trim。结构 joiner 与原文 payload 分开计量，逐叶校验保留 payload 与源区间逐字一致。
+- MinerU 类型 header、footer、page-number、aside 直接形成 drop，理由分别为 header、footer、footer、interface；footnote 是内容，不在此列。
+- text 块整块在页面顶部 9% 内或底部 9% 内时，页码直接删除；同一边缘的归一文字不少于 4 个字母、至多 80 个词，出现在至少 3 页，或至少 2 页且占全文不少于 30%，删除；与 MinerU 已标页眉页脚文字相同且至多 25 词的也删除。归一键采用 NFKC、小写、连续数字换成 `#`，仅保留字母与该占位符。
+- 删除操作附 `source=program` 与命中的 `rule`，仍参加“每个最终叶块恰好一个去向”的验证。已被程序删除的块不进入整理请求；人工恢复或文字锁所在原块优先，下一次整理会再次提供。书目和版权仍按显式整理决定；首页收稿、接受和发表日期保留为 end-matter。
+- `ArrangementSourceBlock.pdf_geometry` 是可选的文字层度量：行数、PDF 点单位的行高与主字体字号、首行缩进/行高、末行占宽与主字体。使用 PDF 的真实页面宽高换算 0–1000 坐标；与解析页宽高比相差超过 2%、隐藏 OCR、旋转方向不可靠、无可见水平文字层或超过单页 20,000 个文字项时不做度量。不根据 MinerU 的框估计行宽。几何参与整理输入身份，不进入页校订缓存键。
 
-**两次请求**（`arrangement-single-pass-v1`，ADR 0048）：
+**断段与合并**（规则版本 `paragraph-break-v3`）：
 
-- **整理请求**一次发出本部分全部区块：短编号（按来源顺序 `r1`、`r2`…，程序预拆的部分为 `r5#1`、`r5#2`…）、类型、原始页提示、`title_level`、图片与表格的 `region`、完整原文。强制以 `submit_arrangement` 作答：`sections`（按阅读顺序连续、合起来恰好覆盖全部区块的范围，每段一个角色；`additional` 注明自己的标题区块）、`headings`（章节标题或 2–6 级小标题，其余都是内容）、`drops`（区块或部分及封闭理由，优先于所在范围）、`captions`（图片或表格对象与图注区块）、`splits`（程序未预拆、且块内同时有要删和要留的文字时使用）。提示词以 `apps/server/src/archive/arrangement-service.ts` 的 `ARRANGEMENT_SYSTEM` 为准。
-- 宿主把回答展开成 assign、drop、split、caption 操作，再执行上面的全部校验。图注只挂到模型列出的第一个对象上；不是 `caption` 类型的区块、已删除的对象不挂，被去掉的挂接记在整理检查点的 `caption_fixes`。
+1. 按来源顺序检查正文文本叶块，不要求同章节或附加组；跳过已删除内容及独立脚注、图、表、图注，首页已归 end-matter、确定为单位/作者信息或日期的文字属于独立文章信息，不阻断跨页续接；其它保留正文或标题会阻断跳过。
+2. 程序先判定版面边界：前块是本页/栏最后一块正文，后块是下一页/栏首块正文；或者中间只隔独立图、表、图注、脚注。文字为字母加连字符结尾、小写字母开头，或非句末标点结尾、小写字母开头，且双方均为正文而非标题、列表项、图注、参考条目/分图标签时，直接合并。程序合并记录 source、规则和候选依据，不请求模型。
+3. 论文采用首行缩进（至少 5 个不短于 3 行的正文块可度量、其中至少 60% 首行缩进超过 0.8 个行高）时，句末标点结尾、末行占宽至少 93%、下块首行缩进小于 0.3 个行高、跨页/栏的组合新增为 layout 候选，交模型裁决；没有可用文字层不生成这一类候选。其余前块未以 `.?!:;。？！：；`（可带闭引号/括号）结束、后块非空的现有候选继续交模型。
+4. 每条候选都有 merge 或 keep 决定；模型 keep 附一行理由（至多 120 code points）。候选与 review hash 绑定当前操作集合，提交时重算。没有待模型裁决候选时不发断段请求。
+5. merge 仅允许有序正文叶块，禁止重复成员、交叠合并或跨过普通保留正文。跨章节合并后，各叶块原角色不变，合并段归前段所在章节，后章边界顺延到合并段后；图表、图注、脚注紧随合并段，不丢失或重复。
+6. 前叶块去掉尾部空白仅用于判断：若以 `-` 结尾，使用空 joiner 且保留原 `-`；其余 joiner 是一个空格。原文空白不 trim。结构 joiner 与原文 payload 分开计量，逐叶校验原文与源区间逐字一致。
+
+阅读顺序纠正已实现但默认关闭：仅在有可靠双/三栏与明显栏次序倒置时调整该版面带内的区块，图表跟随其上方正文；含糊页面保持来源顺序。真实双栏误序样本验证、Owner 确认前不在生产启用。
+
+**整理与按需断段请求**（`arrangement-single-pass-v2`）：
+
+- **整理请求**一次发出本部分未被程序删除的全部区块：短编号（按来源顺序 `r1`、`r2`…，程序预拆的部分为 `r5#1`、`r5#2`…）、类型、原始页提示、`title_level`、图片与表格的 `region`、完整原文。强制以 `submit_arrangement` 作答：`sections`（按阅读顺序连续、合起来恰好覆盖请求内全部区块的范围，每段一个角色；`additional` 注明自己的标题区块）、`headings`（章节标题或 2–6 级小标题，其余都是内容）、`drops`（区块或部分及封闭理由，优先于所在范围）、`captions`（图片或表格对象与图注区块）、`splits`（程序未预拆、且块内同时有要删和要留的文字时使用）。提示词以 `apps/server/src/archive/arrangement-service.ts` 的 `ARRANGEMENT_SYSTEM` 为准。
+- 宿主把回答展开成 assign、drop、split、caption 操作，再执行上面的全部校验。同一图的多个对象可以共享完全相同的图注列表及类型；互相冲突的挂接、不属于 `caption` 类型的区块或已删除的对象不挂，被去掉的挂接记在整理检查点的 `caption_fixes`。
 - **页归属**：保留叶块的词至少 4 个不同、且只在另一个 `text-layer` 页的文字层里全部出现（含次数）时，宿主加一条 assign-page，依据页即该页；`image-only` 页不作为目标。assign-page 要求目标页等于依据页，且依据页在本次的文字层证据页集合里（`evidence_pages`）；改变责任页时清除旧 bbox，不改 raw locator。人工也可以改页归属并锁定。
-- **断段请求**：展开通过后，对全部断段候选再发一次请求，每条给出左块结尾与右块开头各 120 code points（不超过 200 的块给全文）、前块是否以连字符结尾、中间跨过的元素类型；强制以 `submit_breaks` 作答。相连的 merge 接成一条合并操作。没有候选时不发这次请求。提示词以 `BREAK_SYSTEM` 为准。
+- **断段请求**：展开通过后，只对尚待模型裁决的断段候选再发一次请求，每条给出左块结尾与右块开头各 120 code points（不超过 200 的块给全文）、前块是否以连字符结尾、中间跨过的元素类型；强制以 `submit_breaks` 作答。相连的 merge 接成一条合并操作。没有候选时不发这次请求。提示词以 `BREAK_SYSTEM` 为准。
 - **人工锁定**：锁定叶块的去向按人工决定，所在原块沿用人工版本的拆分；带人工文字修正的叶块若被模型删除，恢复为人工版本的去向。
 - **退回与重发**：回答无法展开（编号不认识、范围重叠或漏块）或校验不通过时，问题以短编号退回同一请求，模型只能修正一次；再被拒，本部分整理停为 `model-failed`，`cause_code` 为 `arrangement-invalid`。请求没有得到回答（网络、服务或格式问题）时自动重发一次。
 - **大小上限**：整理请求的输入 JSON 超过 384 KiB 时不发请求，停为 `request-too-large`；分段整理验证前，超长部分按此停下（ADR 0048 第 5 节）。
@@ -415,7 +425,13 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 
 新建档固定执行 `arrange → proofread → render → metadata → references → tags`。整理和逐页校订都绑定 `proofreading` 角色。`archive/text-pipeline.ts` 组装 source、整理、逐页校订与接纳清单；检查点和页缓存继续使用现有不可变 artifact、校订版本和 raw pin，不另建业务库。新的写入请求为 schema 2；旧步骤与旧写请求返回 `archive-contract-obsolete`，不把 document/structure 当作新步骤别名。
 
-render 从保留叶块及已记录 correct 确定性生成 Markdown、DocumentStructureV2 和叶块 UTF-8 source map。骨架、标题标记、公式分隔符、合并接缝、资源语法和段落分隔单独记录；原生 section-heading 可直接作为所属骨架标题，不重复输出固定标题。保留 payload 恰好出现一次。跨脚注、图表或图注合并时，独立内容位于合并段落之后。图片区块只引用保留内容所需的已登记资源。书目标题区由阅读层从 catalog 元数据投影，不进入不可变正文。
+render 从保留叶块及已记录 correct 确定性生成普通 Markdown、DocumentStructureV2 和叶块 UTF-8 source map。新 builder 为 `source-order-leaves-v3`；历史 `arranged-leaves-v2` 保留原骨架渲染算法，固定旧版本读取与 hash 校验不使用新排版。同一 proofread 的派生 Markdown 按 builder 与内容 hash 分别登记，文档发布核对实际资源 hash/path，不覆盖旧排版资源。保留 payload 恰好出现一次，标题标记、公式分隔符、合并接缝、资源语法和段落分隔单独记录；不插自定义指令、HTML 注释或固定角色标题。原文顺序决定章节顺序，同角色可分多段，原文没有标题的章节 title=null。
+
+标题层级先依章节编号（1 / 1.1 / 1.1.1），其次依可见 PDF 文字层的重复字号/字体样式；至少 90% 标题有样式且嵌套一致率不少于 90% 才使用样式层级，否则沿用整理给出的层级。文末信息与参考文献标题固定同正文章节层级。首页单位、通讯作者/作者注释及收稿/发表信息仍归 end-matter，排在作者后；正文标题区的期刊、年份与 DOI 继续由 catalog 元数据在阅读层投影，不进入不可变正文。
+
+同一图注的面板图片连续排列、图注紧随其后，结构记录图片行列；关系不明的无图注图片独立保留。紧邻已有标题表格、宽度相近而没有自己标题的续表合成一组。脚注有本页引用标记时放在首次引用段落之后；没有标记的留在原位置。独立内容不会插入合并段内部。
+
+`DocumentStructureV2.layout`（可选 schema 1）保存 article_info 字节区间、figure_groups（figure/scheme/table 的对象及图注区间、segment ID、0 起始 row/column 和每行数量 rows）以及 footnotes（每条脚注区间、segment ID、0 起始 page_index）。区间均为固定校订稿 UTF-8 半开区间。文档 describe 原样返回可选 layout；outline 继续分页返回 title（string|null）、role、level 与起止字节。HTTP、CLI 与 MCP 共用同一读取合同，历史无 layout 的结果照旧读取。
 
 结构注释采用独立 schema 2，直接从整理归属和图注挂接派生，role_source 为 arrangement 或 manual，不再调用章节分类模型。11 个新骨架角色与历史角色分别解码，不作名称映射。`body_content_leaf_ids` 记录真正具有保留正文 payload 的正文类叶块；纯标题不满足 READY。正文类角色恰为 introduction、methods、results-discussion、conclusion、additional。主文仍需完整校订、当前默认文档、派生注释、必需元数据与标签；补充材料和参考文献缺口不独自阻断主文。没有叶块的页所产生的 page-content-missing 是非阻断问题。
 

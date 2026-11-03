@@ -1,4 +1,9 @@
 import {
+  programChromeDrops,
+  CHROME_RULE,
+  articleInformationText,
+} from "./preprocess.js";
+import {
   ARCHIVE_SECTION_ROLES,
   parseArchiveModelUsage,
   type ArchiveModelUsage,
@@ -45,25 +50,26 @@ import {
 } from "./text-session.js";
 
 /** ADR 0048: one request answers every block; a second decides every paragraph break. */
-export const ARRANGEMENT_TOOLS = "arrangement-single-pass-v1";
+export const ARRANGEMENT_TOOLS = "arrangement-single-pass-v2";
 /**
  * The arrangement identity a proofread version records: a whole version is reused only
  * when it was arranged by this same workflow and break rule.
  */
 export const ARRANGEMENT_WORKFLOW = `${ARRANGEMENT_METHOD}/${ARRANGEMENT_TOOLS}/${PARAGRAPH_BREAK_RULE}`;
 export const ARRANGEMENT_SYSTEM = `You arrange the parsed blocks of one scientific article into a fixed skeleton without changing any characters.
-You receive every block in reading order with its short ID (r1, r2, ...), type, page hint and exact text. Answer with exactly one submit_arrangement call. Never output block text.
+Program-removed page chrome is absent. You receive the remaining blocks in reading order with its short ID (r1, r2, ...), type, page hint and exact text. Answer with exactly one submit_arrangement call. Never output block text.
 Skeleton roles: ${ARCHIVE_SECTION_ROLES.join(", ")}.
 - sections: consecutive ranges of blocks in the given order that together cover every block exactly once; each range has one role. Figures, schemes, tables, captions, equations and footnotes stay in the section where they appear, except author notes (corresponding author, e-mail, present address, equal contribution), which belong to end-matter: give them a range of their own. A section starts at its heading; a block that continues the previous block's sentence (it starts mid-sentence, often after a page or column break) stays in the previous block's section. Use additional only for a body section that fits none of the body roles (introduction, methods, results-discussion, conclusion), with heading = the ID of its own title block; otherwise heading is null.
 - title is the article title only. authors contains names only. Affiliations, author information, corresponding author, ORCID, notes, funding, acknowledgments, abbreviations, associated content, author contributions, conflicts of interest and supporting-information notices belong to end-matter.
 - The reference list is content: its heading and every entry go to references. Reference entries are never dropped.
 - headings: the title blocks that head a skeleton section or a top-level heading of end-matter such as ASSOCIATED CONTENT, AUTHOR INFORMATION, Acknowledgements, Conflicts of interest, Data availability (section-heading), and the original subheadings under them (subheading, level 2-6). Every block not listed there is content; figure, scheme and table titles are content.
-- drops: this article's own bibliographic lines (journal, volume, pages, DOI, received/accepted/published dates, cite-this lines) as bibliography; running heads as header; page numbers and running feet as footer; download, navigation or link labels near the title (Read Online, Metrics & More, Article Recommendations, Supporting Information) as interface; copyright and license lines as copyright; ornaments as decoration. A dropped block may sit inside any section range; the drop wins.
-- captions: link each image or table block to its caption blocks, with kind figure, scheme or table.
+- drops: this article's own bibliographic lines (journal, volume, pages, DOI, cite-this lines) as bibliography; running heads as header; page numbers and running feet as footer; download, navigation or link labels near the title (Read Online, Metrics & More, Article Recommendations, Supporting Information) as interface; copyright and license lines as copyright; ornaments as decoration. A dropped block may sit inside any section range; the drop wins.
+- First-page received/accepted/published dates are article information and belong to end-matter; retain them.
+- captions: link each image or table block to its caption blocks, with kind figure, scheme or table. Multiple panels of the same figure may share the same caption.
 - Some blocks arrive already split into parts named r5#1, r5#2, ...: treat each part as a block in headings, drops and captions; sections use block IDs.
 - splits: only when one block still holds text that must be dropped together with text that must be kept. cuts are Unicode code-point offsets into the block text; the parts are named r5#1, r5#2, ... Never split for any other reason.
 Page hints come from the parser and can be wrong; they never decide a role. Image and table blocks carry their region on the page (0-1000 coordinates, x0, y0, x1, y1): a small image in a page corner or margin (logo, badge, license or open-access icon) is decoration; figures, schemes, structures and the graphical abstract are content.`;
-export const BREAK_SYSTEM = `You decide paragraph breaks in a scientific article. Each candidate is a place where a body paragraph may have been cut by a page or column end, or by a figure, scheme, table, caption or footnote placed in between (skipped).
+export const BREAK_SYSTEM = `You decide paragraph breaks in a scientific article. Each candidate is a place where a body paragraph may have been cut by a page or column end, or by a figure, scheme, table, caption, footnote or first-page article information placed in between (skipped).
 You see the end of the left block (left_tail; the whole block when left_is_whole) and the start of the right block (right_head), and the types of the elements in between (skipped).
 merge when the right side continues the same sentence or paragraph, also when it starts with a capital letter, a formula or a number that completes the left sentence. keep when the right side starts a new paragraph or when either side is not running text: a panel label, a legend entry, a symbol, a list item, a heading-like fragment. keep needs a short reason of one line.
 Answer with exactly one submit_breaks call that decides every candidate.`;
@@ -270,6 +276,7 @@ export class ArchiveArrangementService {
       tools: ARRANGEMENT_TOOLS,
       prompt: textHash([ARRANGEMENT_SYSTEM, BREAK_SYSTEM]),
       breaks: PARAGRAPH_BREAK_RULE,
+      chrome: CHROME_RULE,
       stop: ARCHIVE_TEXT_STOP_POLICY,
       pages: this.pages.method,
       model: archiveTextModelIdentity(this.runtime),
@@ -361,6 +368,14 @@ export class ArchiveArrangementService {
       }),
       ...lockedTextSpans.map((s) => s.root_block_id),
     ]);
+    const chrome = programChromeDrops(
+      source.blocks,
+      source.raw.page_count,
+      keptRoots,
+    );
+    const modelBlocks = source.blocks.filter(
+      (b) => !chrome.has(b.root_block_id),
+    );
     const fixedCuts = new Map<string, readonly number[]>();
     for (const b of source.blocks) {
       if (keptRoots.has(b.root_block_id)) {
@@ -370,15 +385,15 @@ export class ArchiveArrangementService {
         if (split?.kind === "split") fixedCuts.set(b.root_block_id, split.cuts);
         continue;
       }
-      if (NO_SPLIT_TYPES.has(b.type)) continue;
+      if (chrome.has(b.root_block_id) || NO_SPLIT_TYPES.has(b.type)) continue;
       const cut = copyrightCut(b.text);
       if (cut !== null) fixedCuts.set(b.root_block_id, [cut]);
     }
     const blockName = new Map(
-      source.blocks.map((b, i) => [b.root_block_id, `r${i + 1}`]),
+      modelBlocks.map((b, i) => [b.root_block_id, `r${i + 1}`]),
     );
     const byName = new Map(
-      source.blocks.map((b) => [blockName.get(b.root_block_id)!, b]),
+      modelBlocks.map((b) => [blockName.get(b.root_block_id)!, b]),
     );
     const partsOf = (b: ArrangementSourceBlock, cuts: readonly number[]) => {
       const name = blockName.get(b.root_block_id)!,
@@ -397,7 +412,7 @@ export class ArchiveArrangementService {
     const initial = {
       source_input_sha256: source.input_sha256,
       page_count: source.raw.page_count,
-      blocks: source.blocks.flatMap((b) =>
+      blocks: modelBlocks.flatMap((b) =>
         partsOf(b, fixedCuts.get(b.root_block_id) ?? []).map((p) => ({
           id: p.name,
           type: b.type,
@@ -466,7 +481,7 @@ export class ArchiveArrangementService {
             [...new Set(s.cuts)].sort((x, y) => x - y),
           );
       }
-      const parts = source.blocks.flatMap((b) =>
+      const parts = modelBlocks.flatMap((b) =>
         partsOf(b, cuts.get(b.root_block_id) ?? []),
       );
       const part = new Map(parts.map((p) => [p.name, p])),
@@ -478,7 +493,7 @@ export class ArchiveArrangementService {
         return p;
       };
       const section = new Array<Answer["sections"][number] | null>(
-        source.blocks.length,
+        modelBlocks.length,
       ).fill(null);
       for (const s of a.sections) {
         const i = order.get(String(s.first).split("#")[0]!),
@@ -500,7 +515,16 @@ export class ArchiveArrangementService {
         drops = new Map(a.drops.map((d) => [d.block, d.reason]));
       for (const name of [...headings.keys(), ...drops.keys()])
         leafOf(name, "headings/drops");
-      const next: ArrangementOperation[] = [];
+      const next: ArrangementOperation[] = source.blocks.flatMap((b) => {
+        const rule = chrome.get(b.root_block_id);
+        return rule
+          ? arrangementLeafSpans(b, source.raw.result_sha256).map((p) => ({
+              kind: "drop" as const,
+              leaf_id: p.leaf_id,
+              ...rule,
+            }))
+          : [];
+      });
       for (const [root, c] of cuts)
         if (c.length)
           next.push({ kind: "split", root_block_id: root, cuts: c });
@@ -579,7 +603,7 @@ export class ArchiveArrangementService {
       const dropped = new Set(
           next.filter((o) => o.kind === "drop").map((o) => o.leaf_id),
         ),
-        captioned = new Set<string>();
+        captioned = new Map<string, string>();
       for (const c of a.captions) {
         const object = part.get(c.object);
         const ids = (Array.isArray(c.captions) ? c.captions : []).flatMap(
@@ -588,7 +612,8 @@ export class ArchiveArrangementService {
             const ok =
               p &&
               p.root.type === "caption" &&
-              !captioned.has(p.leaf_id) &&
+              (!captioned.has(p.leaf_id) ||
+                captioned.get(p.leaf_id) === textHash([c.kind, c.captions])) &&
               !dropped.has(p.leaf_id);
             if (!ok) captionFixes.push(`${c.object}<${n}`);
             return ok ? [p.leaf_id] : [];
@@ -600,7 +625,7 @@ export class ArchiveArrangementService {
           !dropped.has(object.leaf_id) &&
           ids.length
         ) {
-          ids.forEach((x) => captioned.add(x));
+          ids.forEach((x) => captioned.set(x, textHash([c.kind, c.captions])));
           next.push({
             kind: "caption",
             object_leaf_id: object.leaf_id,
@@ -696,13 +721,22 @@ export class ArchiveArrangementService {
       return stop;
     };
     try {
-      const stop = await ask(
-        "arrange",
-        ARRANGEMENT_SYSTEM,
-        arrangementTool,
-        initial,
-        expand,
-      );
+      const stop = modelBlocks.length
+        ? await ask(
+            "arrange",
+            ARRANGEMENT_SYSTEM,
+            arrangementTool,
+            initial,
+            expand,
+          )
+        : (expand({
+            sections: [],
+            headings: [],
+            drops: [],
+            captions: [],
+            splits: [],
+          }),
+          null);
       if (stop || !review)
         return {
           value: null,
@@ -714,14 +748,35 @@ export class ArchiveArrangementService {
       const text = new Map(
           reviewed.leaves.map((l) => [l.leaf_id, l.original_text]),
         ),
-        types = new Map(reviewed.leaves.map((l) => [l.leaf_id, l.type]));
+        types = new Map(
+          reviewed.leaves.map((l) => {
+            const d = reviewed.destinations.get(l.leaf_id);
+            return [
+              l.leaf_id,
+              l.page_index === 0 &&
+              d?.kind === "assigned" &&
+              d.target.role === "end-matter" &&
+              articleInformationText(l.original_text)
+                ? "article-information"
+                : l.type,
+            ];
+          }),
+        );
       const candidates = reviewed.candidates.map((c, i) => ({
         c,
         name: `c${i + 1}`,
       }));
-      let decisions: ParagraphBreakDecision[] = [],
-        merged = new Set<string>();
-      if (candidates.length) {
+      let decisions: ParagraphBreakDecision[] = candidates
+          .filter(({ c }) => c.automatic)
+          .map(({ c }) => ({
+            candidate_id: c.candidate_id,
+            decision: "merge",
+          })),
+        merged = new Set(
+          candidates.filter(({ c }) => c.automatic).map(({ name }) => name),
+        );
+      const pending = candidates.filter(({ c }) => !c.automatic);
+      if (pending.length) {
         const side = (id: string, tail: boolean) => {
           const chars = [...(text.get(id) ?? "")];
           return chars.length <= BREAK_WHOLE
@@ -737,7 +792,7 @@ export class ArchiveArrangementService {
           breakTool,
           {
             source_input_sha256: source.input_sha256,
-            candidates: candidates.map(({ c, name }) => ({
+            candidates: pending.map(({ c, name }) => ({
               candidate: name,
               left_tail: side(c.left_leaf_id, true),
               right_head: side(c.right_leaf_id, false),
@@ -759,7 +814,7 @@ export class ArchiveArrangementService {
             for (const d of given) {
               if (
                 by.has(d.candidate) ||
-                !candidates.some((c) => c.name === d.candidate)
+                !pending.some((c) => c.name === d.candidate)
               )
                 issues.push({
                   code: "break-decision-invalid",
@@ -767,7 +822,7 @@ export class ArchiveArrangementService {
                 });
               by.set(d.candidate, d);
             }
-            const next = candidates.map(({ c, name }) => {
+            const next = pending.map(({ c, name }) => {
               const d = by.get(name);
               if (!d) issues.push({ code: "break-decision-missing", id: name });
               if (d?.decision === "merge")
@@ -787,10 +842,20 @@ export class ArchiveArrangementService {
               };
             });
             if (issues.length) throw invalid(issues);
-            decisions = next;
+            decisions = [
+              ...decisions.filter((d) =>
+                candidates.some(
+                  ({ c }) => c.automatic && c.candidate_id === d.candidate_id,
+                ),
+              ),
+              ...next,
+            ];
             merged = new Set(
               candidates
-                .filter(({ name }) => by.get(name)?.decision === "merge")
+                .filter(
+                  ({ c, name }) =>
+                    c.automatic || by.get(name)?.decision === "merge",
+                )
                 .map(({ name }) => name),
             );
           },
@@ -813,7 +878,22 @@ export class ArchiveArrangementService {
       const operations = [
         ...ops,
         ...chains.map(
-          (leaf_ids): ArrangementOperation => ({ kind: "merge", leaf_ids }),
+          (leaf_ids): ArrangementOperation => ({
+            kind: "merge",
+            leaf_ids,
+            ...(candidates
+              .filter(
+                ({ c }) =>
+                  leaf_ids.includes(c.left_leaf_id) &&
+                  leaf_ids.includes(c.right_leaf_id),
+              )
+              .every(({ c }) => c.automatic)
+              ? {
+                  source: "program" as const,
+                  rule: PARAGRAPH_BREAK_RULE + "/text-boundary",
+                }
+              : {}),
+          }),
         ),
       ];
       const pageConstraints = { ...constraints, evidence_pages: evidencePages },

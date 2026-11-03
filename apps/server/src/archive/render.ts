@@ -1,33 +1,24 @@
 import {
-  ARCHIVE_SECTION_ROLES,
   parseArchiveTextBundleV2,
   parseDocumentStructureV2,
   canonicalJsonBytes,
   type ArchiveTextBundleV2,
   type DocumentStructureV2,
-  type ArchiveSectionRole,
   type ArrangementStructureAnnotationV2,
   type RawParseResource,
   type ProofreadSegmentKind,
+  type DocumentLayout,
 } from "@sciretriever/contracts";
-import { arrangementPreview, BODY_ROLES } from "./arrangement.js";
+import { BODY_ROLES } from "./arrangement.js";
 import { byteHash, textHash } from "./text-source.js";
 import { structureReferences } from "../document/structure-extract.js";
-
-export const ARRANGED_DOCUMENT_BUILDER = "arranged-leaves-v2";
-const titles: Record<ArchiveSectionRole, string> = {
-  title: "标题",
-  authors: "作者",
-  abstract: "摘要",
-  keywords: "关键词",
-  introduction: "引言",
-  methods: "方法",
-  "results-discussion": "结果与讨论",
-  conclusion: "结论",
-  "end-matter": "文末信息",
-  references: "参考文献",
-  additional: "附加章节",
-};
+import { arrangeSourceLayout, headingLevels } from "./source-layout.js";
+import { renderLegacyArrangement } from "./render-legacy.js";
+export const ARRANGED_DOCUMENT_BUILDER = "source-order-leaves-v3";
+export const LEGACY_ARRANGED_DOCUMENT_BUILDER = "arranged-leaves-v2";
+export const isArrangedBuilder = (value: string) =>
+  value === ARRANGED_DOCUMENT_BUILDER ||
+  value === LEGACY_ARRANGED_DOCUMENT_BUILDER;
 export interface LeafSourceMap {
   readonly leaf_id: string;
   readonly start_utf8: number;
@@ -35,22 +26,26 @@ export interface LeafSourceMap {
   readonly source: ArchiveTextBundleV2["leaves"][number]["leaf"]["source"];
   readonly correction_ids: readonly string[];
 }
-/** Only structural bytes and recorded corrections may differ from retained originals. */
+/** New source-order layout; historical builders are reproduced byte for byte. */
 export function renderArrangement(
   value: ArchiveTextBundleV2,
   available: readonly RawParseResource[],
+  builder: string = ARRANGED_DOCUMENT_BUILDER,
 ) {
-  const bundle = parseArchiveTextBundleV2(value),
-    snapshot = bundle.arrangement;
-  if (!snapshot) throw new Error("arrangement-required");
-  const rows = new Map(bundle.leaves.map((l) => [l.leaf.leaf_id, l]));
-  const nodes = arrangementPreview(snapshot);
-  const roleOf = (id: string) => {
-    const d = rows.get(id)!.destination;
-    if (d.kind !== "assigned") throw new Error("render-dropped");
-    return d.target.role;
+  if (builder === LEGACY_ARRANGED_DOCUMENT_BUILDER)
+    return renderLegacyArrangement(value, available);
+  if (builder !== ARRANGED_DOCUMENT_BUILDER)
+    throw Error("render-builder-unsupported");
+  const bundle = parseArchiveTextBundleV2(value);
+  if (!bundle.arrangement) throw Error("arrangement-required");
+  const rows = new Map(bundle.leaves.map((r) => [r.leaf.leaf_id, r])),
+    planned = arrangeSourceLayout(bundle),
+    levels = headingLevels(bundle);
+  type Section = {
+    -readonly [K in keyof DocumentStructureV2["sections"][number]]: DocumentStructureV2["sections"][number][K];
   };
-  const sections: DocumentStructureV2["sections"][number][] = [],
+  const sections: Section[] = [],
+    stack: Section[] = [],
     segments: DocumentStructureV2["segments"][number][] = [],
     source_map: LeafSourceMap[] = [],
     structural_ranges: {
@@ -58,8 +53,12 @@ export function renderArrangement(
       start_utf8: number;
       end_utf8: number;
     }[] = [];
+  const emitted = new Set<string>(),
+    resources = new Map<string, RawParseResource>();
   let text = "",
-    offset = 0;
+    offset = 0,
+    activeRole: string | null = null,
+    infoRun = false;
   const append = (s: string) => {
     const start = offset;
     text += s;
@@ -67,144 +66,139 @@ export function renderArrangement(
     return { start_utf8: start, end_utf8: offset };
   };
   const structure = (s: string, kind: string) => {
-    if (s.length) structural_ranges.push({ kind, ...append(s) });
+    if (s) structural_ranges.push({ kind, ...append(s) });
   };
-  const resources = new Map<string, RawParseResource>();
-  const emitted = new Set<string>();
-  const flows: (typeof nodes)[number][][] = [];
-  for (const node of nodes) {
-    if (node.out_of_flow && flows.length) flows.at(-1)!.push(node);
-    else flows.push([node]);
-  }
-  for (const role of ARCHIVE_SECTION_ROLES) {
-    const selected = flows
-      .filter((flow) => roleOf(flow[0]!.leaf_ids[0]!) === role)
-      .flat();
-    if (!selected.length) continue;
-    const start = offset,
-      section_id = `s-${role}`,
-      first = rows.get(selected[0]!.leaf_ids[0]!)!,
-      nativeHeading =
-        first.destination.kind === "assigned" &&
-        (role === "title" ||
-          first.destination.presentation.kind === "section-heading"),
-      sectionLevel = role === "title" ? 1 : 2;
-    if (!nativeHeading) structure(`## ${titles[role]}\n\n`, "skeleton");
-    type MutableSection = {
-      -readonly [K in keyof DocumentStructureV2["sections"][number]]: DocumentStructureV2["sections"][number][K];
-    };
-    const children: MutableSection[] = [],
-      stack: MutableSection[] = [];
-    let activeSection = section_id;
-    for (const node of selected) {
-      for (const [index, id] of node.leaf_ids.entries()) {
-        if (emitted.has(id)) throw new Error("render-duplicate-leaf");
-        emitted.add(id);
-        const row = rows.get(id)!,
-          leaf = row.leaf,
-          d = row.destination;
-        if (d.kind !== "assigned") throw new Error("render-dropped");
-        if (index) structure(node.joiners[index - 1]!, "merge-joiner");
-        const segmentStart = offset;
-        if (nativeHeading && id === first.leaf.leaf_id) {
-          if (!/^\s*#{1,6}\s/u.test(row.corrected_text))
-            structure(`${"#".repeat(sectionLevel)} `, "section-heading-marker");
-        } else if (d.presentation.kind !== "content") {
-          const level =
-            d.presentation.kind === "subheading"
-              ? Math.max(3, d.presentation.level)
-              : 3;
-          while (stack.length && stack.at(-1)!.level >= level)
-            stack.pop()!.end_utf8 = segmentStart;
-          const child = {
-            section_id: `h-${id}`,
-            title: row.corrected_text,
-            level,
-            start_utf8: segmentStart,
-            end_utf8: 0,
-            role: null,
-            role_source: null,
-          };
-          children.push(child);
-          stack.push(child);
-          activeSection = child.section_id;
-          if (!/^\s*#{1,6}\s/u.test(row.corrected_text))
-            structure(`${"#".repeat(level)} `, "subheading-marker");
-        }
-        if (leaf.image_ref) {
-          const resource = available.find(
-            (r) => r.reference === leaf.image_ref,
-          );
-          if (!resource) throw new Error("render-resource-missing");
-          resources.set(resource.reference, resource);
-          structure(`![](${resource.reference})\n`, "resource-reference");
-        }
-        const mathWrapper =
-          leaf.type === "equation" &&
-          row.corrected_text.trim().length > 0 &&
-          !/^\s*(?:\$\$|\\\[)/u.test(row.corrected_text);
-        if (mathWrapper) structure("$$\n", "equation-delimiter");
-        const range = append(row.corrected_text);
-        source_map.push({
-          leaf_id: id,
-          ...range,
-          source: leaf.source,
-          correction_ids: row.correction_ids,
-        });
-        if (mathWrapper) structure("\n$$", "equation-delimiter");
-        for (const r of available)
-          if (row.corrected_text.includes(r.reference))
-            resources.set(r.reference, r);
-        if (offset === segmentStart) structure("\n", "empty-object");
-        const kind: ProofreadSegmentKind =
-          d.presentation.kind !== "content" || leaf.type === "title"
-            ? "heading"
-            : leaf.type === "reference"
-              ? "reference-item"
-              : [
-                    "aside",
-                    "header",
-                    "footer",
-                    "page-number",
-                    "discarded",
-                  ].includes(leaf.type)
-                ? "text"
-                : (leaf.type as ProofreadSegmentKind);
-        segments.push({
-          segment_id: id,
-          block_id: id,
-          kind,
-          section_id: activeSection,
-          start_utf8: segmentStart,
-          end_utf8: offset,
-          page: leaf.page_index,
-          region: leaf.region,
-          continuation_regions: [],
-          locate: leaf.region ? "region" : "page",
-          source: row.text_source,
-          basis: row.basis,
-        });
-      }
-      structure("\n\n", "paragraph-separator");
-    }
-    for (const child of stack) child.end_utf8 = offset;
-    sections.push({
-      section_id,
-      title: nativeHeading ? first.corrected_text : titles[role],
-      level: sectionLevel,
-      start_utf8: start,
-      end_utf8: offset,
+  const begin = (id: string, title: string | null, level: number) => {
+    while (stack.length && stack.at(-1)!.level >= level)
+      stack.pop()!.end_utf8 = offset;
+    const section: Section = {
+      section_id: id,
+      title,
+      level,
+      start_utf8: offset,
+      end_utf8: 0,
       role: null,
       role_source: null,
-    });
-    sections.push(...children);
+    };
+    sections.push(section);
+    stack.push(section);
+  };
+  for (const node of planned.nodes) {
+    const first = rows.get(node.leaf_ids[0]!)!,
+      d = first.destination;
+    if (d.kind !== "assigned") throw Error("render-dropped");
+    const info = planned.article_info.has(first.leaf.leaf_id),
+      heading = levels.has(first.leaf.leaf_id) && !info,
+      float = ["footnote", "image", "table", "caption", "equation"].includes(
+        first.leaf.type,
+      );
+    const newRole = activeRole !== d.target.role && !node.out_of_flow && !float;
+    if (heading) {
+      begin(
+        `h-${first.leaf.leaf_id}`,
+        first.corrected_text,
+        levels.get(first.leaf.leaf_id)!,
+      );
+      activeRole = d.target.role;
+    } else if (!stack.length || info !== infoRun || newRole) {
+      begin(`s-${first.leaf.leaf_id}`, null, 2);
+      activeRole = d.target.role;
+    }
+    infoRun = info;
+    for (const [i, id] of node.leaf_ids.entries()) {
+      if (emitted.has(id)) throw Error("render-duplicate-leaf");
+      emitted.add(id);
+      const row = rows.get(id)!,
+        leaf = row.leaf;
+      if (i) structure(node.joiners[i - 1]!, "merge-joiner");
+      const start = offset;
+      if (i === 0 && heading && !/^\s*#{1,6}\s/u.test(row.corrected_text))
+        structure(`${"#".repeat(levels.get(id)!)} `, "heading-marker");
+      if (leaf.image_ref) {
+        const r = available.find((r) => r.reference === leaf.image_ref);
+        if (!r) throw Error("render-resource-missing");
+        resources.set(r.reference, r);
+        structure(`![](${r.reference})\n`, "resource-reference");
+      }
+      const math =
+        leaf.type === "equation" &&
+        !!row.corrected_text.trim() &&
+        !/^\s*(?:\$\$|\\\[)/u.test(row.corrected_text);
+      if (math) structure("$$\n", "equation-delimiter");
+      source_map.push({
+        leaf_id: id,
+        ...append(row.corrected_text),
+        source: leaf.source,
+        correction_ids: row.correction_ids,
+      });
+      if (math) structure("\n$$", "equation-delimiter");
+      for (const r of available)
+        if (row.corrected_text.includes(r.reference))
+          resources.set(r.reference, r);
+      if (offset === start) structure("\n", "empty-object");
+      const kind: ProofreadSegmentKind =
+        i === 0 && heading
+          ? "heading"
+          : leaf.type === "reference"
+            ? "reference-item"
+            : [
+                  "aside",
+                  "header",
+                  "footer",
+                  "page-number",
+                  "discarded",
+                  "title",
+                ].includes(leaf.type)
+              ? "text"
+              : (leaf.type as ProofreadSegmentKind);
+      segments.push({
+        segment_id: id,
+        block_id: id,
+        kind,
+        section_id: stack.at(-1)!.section_id,
+        start_utf8: start,
+        end_utf8: offset,
+        page: leaf.page_index,
+        region: leaf.region,
+        continuation_regions: [],
+        locate: leaf.region ? "region" : "page",
+        source: row.text_source,
+        basis: row.basis,
+      });
+    }
+    structure("\n\n", "paragraph-separator");
   }
+  for (const s of stack) s.end_utf8 = offset;
   if (
+    !offset ||
     emitted.size !==
-      bundle.leaves.filter((l) => l.destination.kind === "assigned").length ||
-    !offset
+      bundle.leaves.filter((r) => r.destination.kind === "assigned").length
   )
-    throw new Error("render-payload-missing");
+    throw Error("render-payload-missing");
+  const bySegment = new Map(segments.map((s) => [s.segment_id, s]));
+  const range = (id: string) => {
+    const s = bySegment.get(id)!;
+    return { segment_id: id, start_utf8: s.start_utf8, end_utf8: s.end_utf8 };
+  };
+  const layout: DocumentLayout = {
+    schema_version: 1,
+    article_info: segments
+      .filter((s) => planned.article_info.has(s.segment_id))
+      .map((s) => ({ start_utf8: s.start_utf8, end_utf8: s.end_utf8 })),
+    figure_groups: planned.groups.map((g) => ({
+      group_id: `g-${g.objects[0]}`,
+      kind: g.kind,
+      objects: g.objects.map((id) => ({
+        ...range(id),
+        ...g.positions.get(id)!,
+      })),
+      captions: g.captions.map(range),
+      rows: g.rows,
+    })),
+    footnotes: segments
+      .filter((s) => s.kind === "footnote")
+      .map((s) => ({ ...range(s.segment_id), page_index: s.page })),
+  };
   const markdown = Buffer.from(text),
     documentStructure = parseDocumentStructureV2(
       {
@@ -213,15 +207,16 @@ export function renderArrangement(
         page_count: bundle.page_count,
         sections,
         segments,
+        layout,
       },
       markdown.length,
     );
-  for (const range of source_map)
+  for (const r of source_map)
     if (
-      markdown.subarray(range.start_utf8, range.end_utf8).toString("utf8") !==
-      rows.get(range.leaf_id)!.corrected_text
+      markdown.subarray(r.start_utf8, r.end_utf8).toString("utf8") !==
+      rows.get(r.leaf_id)!.corrected_text
     )
-      throw new Error("render-text-difference");
+      throw Error("render-text-difference");
   const bytes = canonicalJsonBytes(documentStructure);
   return {
     markdown,

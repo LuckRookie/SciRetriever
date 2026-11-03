@@ -333,6 +333,7 @@ export class ArchiveTextPipeline {
       old &&
       old.bundle.arrangement &&
       old.version.draft_input.result_sha256 === source.raw.result_sha256 &&
+      old.bundle.arrangement.source_input_sha256 === source.input_sha256 &&
       textHash(old.version.method) === textHash(this.method())
     )
       return {
@@ -352,8 +353,8 @@ export class ArchiveTextPipeline {
       ).build(
         source,
         signal,
-        old?.bundle.arrangement?.source_input_sha256 === source.input_sha256
-          ? old.bundle.arrangement
+        old?.version.draft_input.result_sha256 === source.raw.result_sha256
+          ? (old.bundle.arrangement ?? undefined)
           : undefined,
         state.items.flatMap((v) => {
           if (
@@ -678,7 +679,12 @@ export class ArchiveTextPipeline {
         paths[r.reference] = a.reference;
       }
       const derivedResources = [
-        { ...markdown, kind: "markdown" as const, logical_reference: "" },
+        {
+          ...markdown,
+          kind: "markdown" as const,
+          logical_reference:
+            "render/" + ARRANGED_DOCUMENT_BUILDER + "/" + markdown.sha256,
+        },
       ];
       const publishedResources: import("../storage/sqlite/proofread-engine.js").ProofreadPublication["resources"][number][] =
         [...derivedResources];

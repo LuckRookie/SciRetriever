@@ -11,6 +11,32 @@ export interface PdfPageInspection {
   readonly unmapped_glyphs: number;
   readonly hidden_glyphs: number;
   readonly has_graphics: boolean;
+  /** Visible, horizontal text runs in viewport points; absent for hidden OCR or oversized pages. */
+  readonly layout?: {
+    readonly width: number;
+    readonly height: number;
+    readonly items: readonly {
+      readonly bbox: readonly [number, number, number, number];
+      readonly font_size: number;
+      readonly font: string;
+      readonly length: number;
+    }[];
+  };
+}
+
+/** Stable text-only input used by pre-layout page cache identities. */
+export function pdfPageText(
+  page: PdfPageInspection,
+): Omit<PdfPageInspection, "layout"> {
+  return {
+    page: page.page,
+    kind: page.kind,
+    text: page.text,
+    visible_glyphs: page.visible_glyphs,
+    unmapped_glyphs: page.unmapped_glyphs,
+    hidden_glyphs: page.hidden_glyphs,
+    has_graphics: page.has_graphics,
+  };
 }
 
 /** Disposable, network-denied renderer. It has no user profile, cookies or acquisition session. */
@@ -187,18 +213,28 @@ export class PdfRegionRenderer {
           }
           if(run.trim())text.push(run);
         }
-        let value=text.join(' ');
+        let value=text.join(' '),layout;
         // TJ numeric adjustments are kerning, not word separators. PDF.js already
         // reconstructs text layout and explicit spaces for pages without hidden
         // glyphs. Keep visibility-filtered operator text for mixed OCR pages so
         // hidden text never leaks into the comparison reference.
         if(hidden===0 && visible>unmapped){
           const content=await p.getTextContent();
+          const viewport=p.getViewport({scale:1}), items=[];
+          if(content.items.length<=20000 && viewport.rotation % 180 === 0)for(const item of content.items){
+            if(typeof item.str!=='string'||!item.str.trim()||item.dir==='ttb')continue;
+            const t=item.transform, size=Math.hypot(t[2],t[3]), width=item.width;
+            if(!t.every(Number.isFinite)||!Number.isFinite(width)||width<=0||size<=0||Math.abs(t[1])>0.01||Math.abs(t[2])>0.01)continue;
+            const points=[[t[4],t[5]],[t[4]+width,t[5]],[t[4],t[5]+size],[t[4]+width,t[5]+size]].map(([x,y])=>viewport.convertToViewportPoint(x,y));
+            const xs=points.map(q=>q[0]),ys=points.map(q=>q[1]);
+            items.push({bbox:[Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)],font_size:size,font:String(item.fontName??'').slice(0,128),length:item.str.length});
+          }
+          if(items.length)layout={width:viewport.width,height:viewport.height,items};
           value=content.items.filter(item=>typeof item.str==='string').map(item=>item.str+(item.hasEOL?'\\n':'')).join('').replace(/[\\uFFFD\\p{Co}\\p{Cc}\\p{Cs}]/gu,c=>c==='\\n'||c==='\\t'?c:'').trim();
         }
         chars+=value.length;
         if(chars>32*1024*1024)throw new Error('proofread-text-layer-limit');
-        pages.push({page:n-1,kind:value.trim()?'text-layer':visible||hidden||graphics?'image-only':'blank',text:value,visible_glyphs:visible,unmapped_glyphs:unmapped,hidden_glyphs:hidden,has_graphics:graphics});
+        pages.push({page:n-1,kind:value.trim()?'text-layer':visible||hidden||graphics?'image-only':'blank',text:value,visible_glyphs:visible,unmapped_glyphs:unmapped,hidden_glyphs:hidden,has_graphics:graphics,...(layout?{layout}:{} )});
         p.cleanup();
       }
       return pages;

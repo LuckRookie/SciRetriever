@@ -1,3 +1,4 @@
+import { parseDocumentLayout, type DocumentLayout } from "./document-layout.js";
 import { parseSectionRole, type SectionRole } from "./section-roles.js";
 import type { SectionRoleSource } from "./structure-annotation.js";
 import { parsePageRegion } from "./raw-parsing.js";
@@ -464,8 +465,10 @@ function section(value: unknown) {
     ...(annotated ? ["role", "role_source"] : []),
   ]);
   if (
-    typeof r.title !== "string" ||
-    encoder.encode(r.title).length > DOCUMENT_READ_MAX_TITLE_BYTES ||
+    (r.title !== null &&
+      (typeof r.title !== "string" ||
+        encoder.encode(r.title).length > DOCUMENT_READ_MAX_TITLE_BYTES)) ||
+    (r.title === null && r.title_truncated !== false) ||
     typeof r.title_truncated !== "boolean" ||
     !Number.isSafeInteger(r.level) ||
     (r.level as number) < 1 ||
@@ -489,7 +492,7 @@ function section(value: unknown) {
         }
       : {}),
     section_id: token(r.section_id),
-    title: r.title,
+    title: r.title as string | null,
     title_truncated: r.title_truncated,
     level: r.level as number,
     ...range(
@@ -605,7 +608,7 @@ interface ReadSection {
   readonly role?: SectionRole | null;
   readonly role_source?: SectionRoleSource | null;
   readonly section_id: string;
-  readonly title: string;
+  readonly title: string | null;
   readonly title_truncated: boolean;
   readonly level: number;
   readonly start_utf8: number;
@@ -631,6 +634,7 @@ export interface DocumentReadResultMap {
     readonly document: DocumentReadingRef;
     readonly capabilities: DocumentReadCapabilities;
     readonly gaps: readonly DocumentReadGap[];
+    readonly layout?: DocumentLayout;
     readonly section_count: number;
     readonly segment_count: number;
     readonly resource_count: number;
@@ -743,6 +747,9 @@ function parseResult<K extends DocumentReadOperation>(
         "section_count",
         "segment_count",
         "resource_count",
+        ...(value && typeof value === "object" && "layout" in value
+          ? ["layout"]
+          : []),
       ]);
       const document = parseDocumentReadingRef(r.document);
       matchDocument(document, req as DocumentReadRequestMap["describe"]);
@@ -753,6 +760,9 @@ function parseResult<K extends DocumentReadOperation>(
         section_count: nonnegative(r.section_count),
         segment_count: nonnegative(r.segment_count),
         resource_count: nonnegative(r.resource_count),
+        ...(r.layout === undefined
+          ? {}
+          : { layout: parseDocumentLayout(r.layout) }),
       });
     }
     case "outline":
@@ -1055,10 +1065,11 @@ function parseResult<K extends DocumentReadOperation>(
 }
 
 /** Truncate only the read projection; the published structure hash is unchanged. */
-export function documentReadTitle(title: string): {
-  readonly title: string;
+export function documentReadTitle(title: string | null): {
+  readonly title: string | null;
   readonly title_truncated: boolean;
 } {
+  if (title === null) return { title: null, title_truncated: false };
   const bytes = encoder.encode(title);
   if (bytes.length <= DOCUMENT_READ_MAX_TITLE_BYTES)
     return { title, title_truncated: false };

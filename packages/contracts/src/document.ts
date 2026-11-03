@@ -49,7 +49,10 @@ export interface ProofreadDocumentRepresentationInput {
   readonly source_material_ref: DocumentMaterialRef;
   readonly proofread_id: string;
   readonly proofread_content_sha256: Sha256;
-  readonly builder_version: "proofread-blocks-v1" | "arranged-leaves-v2";
+  readonly builder_version:
+    | "proofread-blocks-v1"
+    | "arranged-leaves-v2"
+    | "source-order-leaves-v3";
   readonly locator_scheme: "utf8-segment-v1";
   readonly markdown: ArtifactRef;
   readonly structure: ArtifactRef;
@@ -269,7 +272,8 @@ export function parseDocumentRepresentationInput(
     proofread_content_sha256: digest(r.proofread_content_sha256),
     builder_version:
       r.builder_version === "proofread-blocks-v1" ||
-      r.builder_version === "arranged-leaves-v2"
+      r.builder_version === "arranged-leaves-v2" ||
+      r.builder_version === "source-order-leaves-v3"
         ? r.builder_version
         : fail(),
     locator_scheme: "utf8-segment-v1",

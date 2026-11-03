@@ -178,7 +178,7 @@ export async function assignSectionRoles(input: {
   if (Object.keys(input.locked).some((id) => !ids.has(id)))
     throw new Error("annotation-manual-conflict");
   const rules = input.structure.sections.map((s) =>
-    ruleSectionRole(s.title, input.part),
+    ruleSectionRole(s.title ?? "", input.part),
   );
   const result: AssignedSection[] = [];
   const stack: { level: number; assigned: AssignedSection }[] = [];
@@ -228,7 +228,7 @@ export async function assignSectionRoles(input: {
           role = parseSectionRole(
             await input.classify(
               {
-                title: section.title,
+                title: section.title ?? "",
                 prefix,
                 part: input.part,
                 previous_role: result.at(-1)?.role ?? null,

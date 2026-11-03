@@ -47,3 +47,4 @@
 `source-results.ts` 定义元数据任务请求、安全来源进度、最终 PDF 渠道、任务来源汇总与来源统计；比例显式带分子分母，历史无记录可区分，所有问题沿用 source-configuration 的安全诊断。
 
 `screencast.ts` 定义人类观看的认证握手、订阅、二进制 JPEG 封套、直接输入及控制/连接状态，包含严格边界解析；它与 Agent 的 WorkbenchObservation 分离。
+\n`document-layout.ts` 定义普通 Markdown 的文章信息、图表分组和逐条页脚注 UTF-8 区间；新文档通过 describe 返回，outline 的无原标题项以 null 表示。\n

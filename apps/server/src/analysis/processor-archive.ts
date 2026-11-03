@@ -164,7 +164,9 @@ export class ProcessorArchiveSource {
                       s.start_utf8 < section.end_utf8,
                   )
                   .sort((a, b) => a.level - b.level)
-                  .map((section) => section.title),
+                  .flatMap((section) =>
+                    section.title === null ? [] : [section.title],
+                  ),
                 ...(s.kind === "heading"
                   ? {
                       heading_level:

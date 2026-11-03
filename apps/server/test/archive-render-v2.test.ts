@@ -142,11 +142,11 @@ it("keeps original subheadings and excludes heading-only sections from readiness
     rendered = renderArrangement(b, []),
     annotation = arrangementAnnotation(doc, "main", b, rendered);
   expect(rendered.markdown.toString()).toContain("### Experimental Section");
-  expect(rendered.structure.sections).toHaveLength(2);
+  expect(rendered.structure.sections).toHaveLength(1);
   expect(annotation.body_content_leaf_ids).toEqual([]);
   expect(arrangedStructureSatisfied(annotation, b)).toBe(false);
 });
-it("renders skeleton order even when a later section comes from an earlier page", async () => {
+it("keeps first-page article information before the body instead of sorting by skeleton role", async () => {
   const f = await archiveTextFixture([
       { text: "Affiliation: Northlight Institute.", page: 0 },
       { text: "We introduce the work.", page: 0 },
@@ -160,10 +160,10 @@ it("renders skeleton order even when a later section comes from an earlier page"
     ]),
     rendered = renderArrangement(b, []),
     text = rendered.markdown.toString();
-  expect(text.indexOf("The work is concluded.")).toBeLessThan(
+  expect(text.indexOf("The work is concluded.")).toBeGreaterThan(
     text.indexOf("Affiliation: Northlight Institute."),
   );
-  expect(rendered.structure.segments.map((s) => s.page)).toEqual([0, 2, 0]);
+  expect(rendered.structure.segments.map((s) => s.page)).toEqual([0, 0, 2]);
 });
 it("renders native headings once and adds display-math structure without altering formula payload", async () => {
   const f = await archiveTextFixture([

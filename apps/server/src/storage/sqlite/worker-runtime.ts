@@ -3573,9 +3573,9 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
       if (manualRevision !== p.expected_manual_revision || stale) fail();
       const markdown = db
         .prepare(
-          "SELECT * FROM proofread_resources WHERE proofread_id=? AND kind='markdown'",
+          "SELECT * FROM proofread_resources WHERE proofread_id=? AND kind='markdown' AND sha256=? AND artifact_reference=? LIMIT 1",
         )
-        .get(v.proofread_id);
+        .get(v.proofread_id, v.markdown.sha256, p.markdown_artifact_path);
       if (
         markdown?.sha256 !== v.markdown.sha256 ||
         markdown?.artifact_reference !== p.markdown_artifact_path

@@ -1,3 +1,5 @@
+import { articleInformationText } from "./preprocess.js";
+import { paragraphBreakEvidence } from "./paragraph-breaks.js";
 import {
   parseArrangementOperation,
   parseArrangementSubmission,
@@ -18,8 +20,8 @@ import {
   textId,
   type ArchiveTextSource,
 } from "./text-source.js";
-export const ARRANGEMENT_METHOD = "arrangement-operations-v1";
-export const PARAGRAPH_BREAK_RULE = "paragraph-break-v2";
+export const ARRANGEMENT_METHOD = "arrangement-operations-v2";
+export const PARAGRAPH_BREAK_RULE = "paragraph-break-v3";
 export const BODY_ROLES = new Set([
   "introduction",
   "methods",
@@ -213,7 +215,7 @@ export function reviewArrangement(
         add("additional-heading-invalid", id);
     }
   }
-  const captions = new Set<string>();
+  const captions = new Map<string, string>();
   for (const op of ops.filter((o) => o.kind === "caption")) {
     const object = finalById.get(op.object_leaf_id);
     if (
@@ -229,10 +231,11 @@ export function reviewArrangement(
         leaf.type !== "caption" ||
         destinations.get(id)?.kind !== "assigned" ||
         id === op.object_leaf_id ||
-        captions.has(id)
+        (captions.has(id) &&
+          captions.get(id) !== textHash([op.object_kind, op.caption_leaf_ids]))
       )
         add("caption-invalid", id);
-      captions.add(id);
+      captions.set(id, textHash([op.object_kind, op.caption_leaf_ids]));
     }
   }
   const eligible = (id: string) => {
@@ -251,23 +254,20 @@ export function reviewArrangement(
       d = destinations.get(id);
     return (
       d?.kind === "dropped" ||
+      (l?.page_index === 0 &&
+        d?.kind === "assigned" &&
+        d.target.role === "end-matter" &&
+        d.presentation.kind === "content" &&
+        articleInformationText(l.original_text)) ||
       (!!l && ["footnote", "image", "table", "caption"].includes(l.type))
     );
   };
   const merged = new Set<string>();
   for (const op of ops.filter((o) => o.kind === "merge")) {
     let prior = -1;
-    const target = destinations.get(op.leaf_ids[0]!);
     for (const id of op.leaf_ids) {
       const index = assignedLeaves.findIndex((l) => l.leaf_id === id);
-      if (
-        index <= prior ||
-        !eligible(id) ||
-        merged.has(id) ||
-        keyTarget(
-          destinations.get(id) ?? { kind: "dropped", reason: "decoration" },
-        ) !== keyTarget(target ?? { kind: "dropped", reason: "decoration" })
-      )
+      if (index <= prior || !eligible(id) || merged.has(id))
         add("merge-invalid", id);
       if (prior >= 0)
         for (const l of assignedLeaves.slice(prior + 1, index))
@@ -278,6 +278,7 @@ export function reviewArrangement(
   }
   if (issues.length) throw new ArchiveTextError("arrangement-invalid", issues);
   const candidates: ParagraphBreakCandidate[] = [];
+  const evidence = paragraphBreakEvidence(source, assignedLeaves, destinations);
   let previous: ArrangementLeaf | undefined;
   for (const leaf of assignedLeaves) {
     if (!eligible(leaf.leaf_id)) {
@@ -285,16 +286,13 @@ export function reviewArrangement(
       continue;
     }
     if (previous) {
-      const left = previous.original_text.trimEnd(),
-        right = leaf.original_text.trimStart(),
-        a = destinations.get(previous.leaf_id)!,
-        b = destinations.get(leaf.leaf_id)!;
-      if (
-        keyTarget(a) === keyTarget(b) &&
-        left.length > 0 &&
-        right.length > 0 &&
-        !/[.?!:;。？！：；]$/u.test(left)
-      ) {
+      const left = previous.original_text.trimEnd();
+      const skipped = assignedLeaves.slice(
+        assignedLeaves.indexOf(previous) + 1,
+        assignedLeaves.indexOf(leaf),
+      );
+      const proof = evidence(previous, leaf, skipped);
+      if (proof.candidate) {
         const body = {
           left_leaf_id: previous.leaf_id,
           right_leaf_id: leaf.leaf_id,
@@ -306,6 +304,9 @@ export function reviewArrangement(
             .map((l) => l.leaf_id),
           input_sha256: source.input_sha256,
           rule_version: PARAGRAPH_BREAK_RULE,
+          basis: proof.basis,
+          boundary: proof.boundary,
+          automatic: proof.automatic,
           left_ends_with_hyphen: left.endsWith("-"),
         };
         candidates.push({ candidate_id: textHash(body), ...body });

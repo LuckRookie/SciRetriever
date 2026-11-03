@@ -21,7 +21,12 @@ import {
   type ArchiveTextPipeline,
 } from "./text-pipeline.js";
 import { emptyArchiveUsage } from "./text-session.js";
-import { renderArrangement } from "./render.js";
+import {
+  renderArrangement,
+  ARRANGED_DOCUMENT_BUILDER,
+  LEGACY_ARRANGED_DOCUMENT_BUILDER,
+  isArrangedBuilder,
+} from "./render.js";
 import { mapMarkdownEdit } from "./markdown-edit.js";
 import {
   applyLeafCorrections,
@@ -144,6 +149,27 @@ export class ArchiveArrangementAccess {
       next_offset: end < bytes.length ? end : null,
     };
   }
+  private async renderFixed(
+    bundle: import("@sciretriever/contracts").ArchiveTextBundleV2,
+    version: import("@sciretriever/contracts").ProofreadVersionV2,
+    signal?: AbortSignal,
+  ) {
+    const binding = await this.storage.database.proofread<{
+      document_version_id: string;
+    } | null>("binding", version.part_asset_id, signal);
+    const fixed = binding
+      ? await this.storage.database.documentVersion(binding.document_version_id)
+      : null;
+    const builder =
+      fixed?.version.schema_version === 2 &&
+      fixed.version.proofread_id === version.proofread_id &&
+      isArrangedBuilder(fixed.version.builder_version)
+        ? fixed.version.builder_version
+        : version.method.arrange.includes("/arrangement-single-pass-v2/")
+          ? ARRANGED_DOCUMENT_BUILDER
+          : LEGACY_ARRANGED_DOCUMENT_BUILDER;
+    return renderArrangement(bundle, version.resources, builder);
+  }
   async save(value: unknown, actor: string, signal?: AbortSignal) {
     if (
       !value ||
@@ -181,7 +207,7 @@ export class ArchiveArrangementAccess {
     const literature = parseAssetId(r.literature_id),
       binding = await this.storage.database.documentMaterial(literature, asset);
     if (!binding) throw new ArchiveTextError("input-stale");
-    const rendered = renderArrangement(old.bundle, old.version.resources),
+    const rendered = await this.renderFixed(old.bundle, old.version, signal),
       mapped = mapMarkdownEdit(
         rendered.markdown,
         r.markdown,
@@ -520,7 +546,7 @@ export class ArchiveArrangementAccess {
     }
     const rendered =
       version.status === "complete" && snapshot
-        ? renderArrangement(bundle, version.resources)
+        ? await this.renderFixed(bundle, version, signal)
         : null;
     const data =
       q.kind === "breaks"

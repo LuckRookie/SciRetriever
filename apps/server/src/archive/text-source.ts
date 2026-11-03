@@ -1,3 +1,5 @@
+import { correctReadingOrder } from "./reading-order.js";
+import { measurePdfBlock } from "./pdf-geometry.js";
 import { createHash } from "node:crypto";
 import {
   canonicalJsonBytes,
@@ -8,7 +10,7 @@ import {
   type RawParse,
 } from "@sciretriever/contracts";
 import type { ProofreadInputReader } from "../proofread/draft.js";
-import type { PdfPageInspection } from "../browser/pdf-region.js";
+import { pdfPageText, type PdfPageInspection } from "../browser/pdf-region.js";
 import { textTokens } from "../proofread/suspects.js";
 export const textHash = (value: unknown) =>
   createHash("sha256").update(canonicalJsonBytes(value)).digest("hex");
@@ -45,6 +47,7 @@ export async function prepareArrangementSource(
   reader: ProofreadInputReader,
   pages: readonly PdfPageInspection[],
   signal?: AbortSignal,
+  options: { readonly correct_reading_order?: boolean } = {},
 ): Promise<ArchiveTextSource> {
   const raw = await parseRawParse(rawValue);
   signal?.throwIfAborted();
@@ -96,6 +99,30 @@ export async function prepareArrangementSource(
     );
     if (parsed.page_count !== raw.page_count)
       throw new ArchiveTextError("source-integrity");
+    const columnBox = (block: (typeof parsed.blocks)[number]) => {
+      const box = block.bbox,
+        width = box[2] - box[0];
+      if (width > 600 || !["text", "list", "reference"].includes(block.type))
+        return box;
+      const same = parsed.blocks.filter(
+        (b) =>
+          b.page === block.page &&
+          b.type === "text" &&
+          b.bbox[2] - b.bbox[0] >= 180 &&
+          b.bbox[2] - b.bbox[0] <= 560 &&
+          (box[0] + box[2]) / 2 >= b.bbox[0] &&
+          (box[0] + box[2]) / 2 <= b.bbox[2] &&
+          Math.abs(b.bbox[0] - box[0]) < 70,
+      );
+      return same.length
+        ? ([
+            Math.min(...same.map((b) => b.bbox[0])),
+            0,
+            Math.max(...same.map((b) => b.bbox[2])),
+            1000,
+          ] as const)
+        : box;
+    };
     for (const b of parsed.blocks) {
       const field = b.type === "table" && b.html !== null ? "html" : "text";
       add({
@@ -111,6 +138,15 @@ export async function prepareArrangementSource(
         region_hint: b.bbox,
         image_ref: b.image_ref,
         title_level: b.title_level,
+        ...(() => {
+          const pdf_geometry = measurePdfBlock(
+            b.bbox,
+            pages[b.page],
+            raw.page_sizes[b.page],
+            columnBox(b),
+          );
+          return pdf_geometry ? { pdf_geometry } : {};
+        })(),
       });
     }
   } else {
@@ -152,15 +188,16 @@ export async function prepareArrangementSource(
   }
   if (new Set(sources.map((b) => b.root_block_id)).size !== sources.length)
     throw new ArchiveTextError("source-integrity");
+  const ordered = correctReadingOrder(sources, options.correct_reading_order);
   return {
     raw,
-    blocks: sources,
+    blocks: ordered,
     pages,
     input_sha256: textHash({
       method: "archive-source-v1",
       raw: raw.result_sha256,
-      blocks: sources,
-      pages,
+      blocks: ordered,
+      pages: pages.map(pdfPageText),
     }),
   };
 }

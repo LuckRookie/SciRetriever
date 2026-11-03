@@ -262,7 +262,7 @@ it("requires decisions for all versioned paragraph candidates and refuses stale 
     ops = assigned(f.source),
     review = reviewArrangement(f.source, ops);
   expect(review.candidates).toHaveLength(1);
-  expect(review.candidates[0]?.rule_version).toBe("paragraph-break-v2");
+  expect(review.candidates[0]?.rule_version).toBe("paragraph-break-v3");
   const base = {
     schema_version: 1,
     source_input_sha256: f.source.input_sha256,
@@ -449,7 +449,7 @@ it("rejects mismatching cache and snapshot identities even when the payload rema
   ).toThrow();
 });
 
-it("sends every block at once with short names, page hints, regions and exact text, then decides every break in one more request", async () => {
+it("sends retained blocks at once with short names, page hints, regions and exact text, then decides every break in one more request", async () => {
   const f = await archiveTextFixture([
     { text: "Synthetic Title", type: "title" },
     { text: "Ada Author" },
@@ -470,16 +470,16 @@ it("sends every block at once with short names, page hints, regions and exact te
         sections: [
           { first: "r1", last: "r1", role: "title", heading: null },
           { first: "r2", last: "r2", role: "authors", heading: null },
-          { first: "r3", last: "r4", role: "abstract", heading: null },
+          { first: "r3", last: "r3", role: "abstract", heading: null },
           {
-            first: "r5",
-            last: "r8",
+            first: "r4",
+            last: "r7",
             role: "results-discussion",
             heading: null,
           },
         ],
-        drops: [{ block: "r3", reason: "header" }],
-        captions: [{ object: "r5", captions: ["r6", "r7"], kind: "figure" }],
+        drops: [],
+        captions: [{ object: "r4", captions: ["r5", "r6"], kind: "figure" }],
       });
     return modelTool("submit_breaks", {
       decisions: [{ candidate: "c1", decision: "merge", reason: "" }],
@@ -498,17 +498,16 @@ it("sends every block at once with short names, page hints, regions and exact te
       "r5",
       "r6",
       "r7",
-      "r8",
     ]);
-    expect(blocks[4]).toEqual({
-      id: "r5",
+    expect(blocks[3]).toEqual({
+      id: "r4",
       type: "image",
       page: 0,
       region: [0, 0, 900, 200],
       text: "",
     });
-    expect(blocks[6]).toEqual({
-      id: "r7",
+    expect(blocks[5]).toEqual({
+      id: "r6",
       type: "text",
       page: 0,
       text: "Fragment of a sentence",
@@ -529,6 +528,8 @@ it("sends every block at once with short names, page hints, regions and exact te
       kind: "drop",
       leaf_id: leaves[2],
       reason: "header",
+      source: "program",
+      rule: "page-chrome-v1/mineru-header",
     });
     // A text block listed as a caption is not linked; the caption is.
     expect(ops).toContainEqual({

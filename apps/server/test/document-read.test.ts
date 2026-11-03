@@ -734,9 +734,10 @@ describe("bounded document and material reading", () => {
         limit: 1,
         cursor: null,
       });
-      expect(Buffer.byteLength(outline.sections[0]!.title)).toBeLessThanOrEqual(
-        512,
-      );
+      expect(outline.sections[0]!.title).not.toBeNull();
+      expect(
+        Buffer.byteLength(outline.sections[0]!.title!),
+      ).toBeLessThanOrEqual(512);
       expect(outline.sections[0]!.title_truncated).toBe(true);
       expect(outline.gaps).toContain("outline-title-truncated");
 

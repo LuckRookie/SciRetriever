@@ -90,6 +90,14 @@ it("classifies visible Unicode, hidden OCR, unmapped glyphs, images and blank pa
       "text-layer",
     ]);
     expect(pages[0]!.text).toBe("Visible yield 12.5 C");
+    expect(pages[0]!.layout).toMatchObject({
+      width: 200,
+      height: 200,
+      items: [expect.objectContaining({ font_size: 14 })],
+    });
+    expect(pages[0]!.layout!.items[0]!.bbox[0]).toBe(20);
+    expect(pages[1]!.layout).toBeUndefined();
+    expect(pages[5]!.layout).toBeUndefined();
     expect(pages[1]).toMatchObject({ text: "", has_graphics: true });
     expect(pages[1]!.hidden_glyphs).toBeGreaterThan(0);
     expect(pages[4]!.unmapped_glyphs).toBe(1);
@@ -153,6 +161,14 @@ it("inspects a PDF larger than one browser protocol message by reading it in ran
       (await renderer.inspect(pdf())).map((p) => p.kind),
     );
     expect(pages[0]!.text).toBe("Visible yield 12.5 C");
+    expect(pages[0]!.layout).toMatchObject({
+      width: 200,
+      height: 200,
+      items: [expect.objectContaining({ font_size: 14 })],
+    });
+    expect(pages[0]!.layout!.items[0]!.bbox[0]).toBe(20);
+    expect(pages[1]!.layout).toBeUndefined();
+    expect(pages[5]!.layout).toBeUndefined();
   } finally {
     await renderer.close();
     await rm(directory, { recursive: true, force: true });

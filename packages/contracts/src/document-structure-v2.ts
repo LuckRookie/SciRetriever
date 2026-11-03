@@ -1,3 +1,4 @@
+import { parseDocumentLayout, type DocumentLayout } from "./document-layout.js";
 import {
   ContractValidationError,
   parsePageRegion,
@@ -21,9 +22,10 @@ export interface DocumentStructureV2 {
   readonly schema_version: 2;
   readonly text_encoding: "utf8";
   readonly page_count: number;
+  readonly layout?: DocumentLayout;
   readonly sections: readonly {
     readonly section_id: string;
-    readonly title: string;
+    readonly title: string | null;
     readonly level: number;
     readonly start_utf8: number;
     readonly end_utf8: number;
@@ -88,6 +90,9 @@ export function parseDocumentStructureV2(
     "page_count",
     "sections",
     "segments",
+    ...(value && typeof value === "object" && "layout" in value
+      ? ["layout"]
+      : []),
   ]);
   if (
     r.schema_version !== 2 ||
@@ -112,8 +117,8 @@ export function parseDocumentStructureV2(
         "role_source",
       ]);
       if (
-        typeof s.title !== "string" ||
-        s.title.length > 65536 ||
+        (s.title !== null &&
+          (typeof s.title !== "string" || s.title.length > 65536)) ||
         s.role !== null ||
         s.role_source !== null
       )
@@ -122,7 +127,7 @@ export function parseDocumentStructureV2(
         end = integer(s.end_utf8, start + 1, markdownBytes);
       return {
         section_id: token(s.section_id),
-        title: s.title,
+        title: s.title as string | null,
         level: integer(s.level, 1, 6),
         start_utf8: start,
         end_utf8: end,
@@ -206,14 +211,46 @@ export function parseDocumentStructureV2(
     new Set(segments.map((s) => s.block_id)).size !== segments.length
   )
     fail();
-  // Arranged documents follow the section skeleton, so a later segment may come from an earlier page.
+  // Presentation may place article information and floats before later source pages.
   for (let i = 1; i < segments.length; i++)
     if (segments[i]!.start_utf8 < segments[i - 1]!.end_utf8) fail();
+  const layout =
+    r.layout === undefined
+      ? undefined
+      : parseDocumentLayout(r.layout, markdownBytes, pages);
+  if (layout) {
+    const bySegment = new Map(segments.map((s) => [s.segment_id, s]));
+    for (const row of [
+      ...layout.figure_groups.flatMap((g) => [...g.objects, ...g.captions]),
+      ...layout.footnotes,
+    ]) {
+      const s = bySegment.get(row.segment_id);
+      if (
+        !s ||
+        row.start_utf8 !== s.start_utf8 ||
+        row.end_utf8 !== s.end_utf8 ||
+        ("page_index" in row &&
+          (row.page_index !== s.page || s.kind !== "footnote"))
+      )
+        fail();
+    }
+    for (const g of layout.figure_groups) {
+      if (
+        g.objects.some(
+          (o) =>
+            !["image", "table"].includes(bySegment.get(o.segment_id)!.kind),
+        ) ||
+        g.captions.some((c) => bySegment.get(c.segment_id)!.kind !== "caption")
+      )
+        fail();
+    }
+  }
   return {
     schema_version: 2,
     text_encoding: "utf8",
     page_count: pages,
     sections,
     segments,
+    ...(layout ? { layout } : {}),
   };
 }

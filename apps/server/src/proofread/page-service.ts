@@ -14,7 +14,7 @@ import {
 import { PageProofreadConcurrency } from "./page-concurrency.js";
 import type { DshAgentRuntime } from "../agents/dsh/runtime.js";
 import type { AgentImagePart } from "../agents/protocol.js";
-import type { PdfPageInspection } from "../browser/pdf-region.js";
+import { pdfPageText, type PdfPageInspection } from "../browser/pdf-region.js";
 import type { PdfPages, ProofreadCache } from "./contract.js";
 import {
   LEAF_CORRECTION_METHOD,
@@ -152,12 +152,13 @@ export function pageProofreadInputKey(
   page: PdfPageInspection,
   method: string,
 ) {
+  const proofreadPage = pdfPageText(page);
   return textHash({
     stage: "independent-page-v1",
     asset: source.raw.source_asset_id,
     asset_sha256: source.raw.source_sha256,
     raw_parse: source.raw.result_sha256,
-    page,
+    page: proofreadPage,
     leaves,
     deleted,
     method,

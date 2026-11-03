@@ -1,5 +1,9 @@
+import { documentRepresentationHash } from "../src/document/contract.js";
 import { expect, it, vi } from "vitest";
-import { parseArchiveTextStop } from "@sciretriever/contracts";
+import {
+  parseArchiveTextStop,
+  parseArtifactRef,
+} from "@sciretriever/contracts";
 import { ArchiveTextError } from "../src/archive/text-source.js";
 import { archiveFixture, archiveModel } from "./archive-fixture.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
@@ -36,7 +40,7 @@ it("arranges a 160-section synthetic document with one request (ADR 0048)", asyn
     expect(output.bundle.arrangement!.leaves).toHaveLength(321);
     // A version arranged by an older workflow or break rule is never reused as this one.
     expect(output.version.method.arrange).toBe(
-      "arrangement-operations-v1/arrangement-single-pass-v1/paragraph-break-v2",
+      "arrangement-operations-v2/arrangement-single-pass-v2/paragraph-break-v3",
     );
     // Every block in one request; no paragraph ends mid-sentence, so no break request.
     expect(result.usage.calls).toBe(1);
@@ -361,6 +365,9 @@ it("shares arrangement queries across HTTP, CLI and MCP and rejects obsolete arc
   const e = await archiveFixture();
   let web: Awaited<ReturnType<typeof startQueryOnlyWorkbench>> | undefined;
   try {
+    e.setText(
+      "# Original document\n\nRetained unheaded text.\n\n# References\n\n[1] Example synthetic reference.\n",
+    );
     await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
     await e.submit("interface-base");
     const part = (await e.app.archive.status(e.id)).parts[0]!,
@@ -431,6 +438,69 @@ it("shares arrangement queries across HTTP, CLI and MCP and rejects obsolete arc
       });
       expect(result.isError).not.toBe(true);
       expect(JSON.stringify(result)).toContain("arranged-v2");
+      for (const operation of ["describe", "outline"] as const) {
+        const request = {
+          document_version_id: part.document_version_id!,
+          ...(operation === "outline" ? { limit: 200, cursor: null } : {}),
+        };
+        const expected =
+          operation === "describe"
+            ? await e.app.documentRead.describe(request)
+            : await e.app.documentRead.outline(request);
+        const http = await fetch(
+          web!.origin + "/api/v1/query/document-" + operation,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-SciRetriever-Protocol-Version": "1",
+            },
+            body: JSON.stringify({ protocol_version: 1, request }),
+          },
+        );
+        expect(http.status).toBe(200);
+        expect(await http.json()).toEqual({
+          protocol_version: 1,
+          result: expected,
+        });
+        let text = "";
+        expect(
+          (
+            await runCli(["document", operation, "--request", "-"], {
+              home: e.home,
+              stdin: (async function* () {
+                yield Buffer.from(JSON.stringify(request));
+              })(),
+              stdout: (s) => {
+                text += s;
+              },
+            })
+          ).code,
+        ).toBe(0);
+        expect(JSON.parse(text).result).toEqual(expected);
+        const mcp = await client.callTool({
+          name: "document_read",
+          arguments: { operation, request },
+        });
+        expect(mcp.isError).not.toBe(true);
+        expect(mcp.structuredContent).toEqual({
+          protocol_version: 1,
+          result: expected,
+        });
+        if (operation === "describe")
+          expect(expected).toHaveProperty("layout.schema_version", 1);
+        else
+          expect(expected).toHaveProperty(
+            "sections",
+            expect.arrayContaining([
+              expect.objectContaining({
+                title: null,
+                role: "additional",
+                title_truncated: false,
+              }),
+            ]),
+          );
+      }
     } finally {
       await client.close();
       await server.close();
@@ -507,6 +577,143 @@ it("retains an accepted manual text decision after render failure, returns a typ
     expect(e.modelCalls).toBe(calls);
   } finally {
     vi.restoreAllMocks();
+    await e.close();
+  }
+}, 30000);
+
+it("publishes a new layout from the same accepted proofread without overwriting historical Markdown or calling a model", async () => {
+  const e = await archiveFixture();
+  try {
+    e.setText(
+      "# Original document\n\nA complete synthetic study.\n\n# References\n\n[1] Example synthetic reference.\n",
+    );
+    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    await e.submit("layout-republication");
+    const part = (await e.app.archive.status(e.id)).parts[0]!,
+      output = (await e.app.archiveText!.storage.load(part.proofread_id!))!;
+    const old = renderArrangement(
+        output.bundle,
+        output.version.resources,
+        "arranged-leaves-v2",
+      ),
+      storage = e.app.archiveText!.storage;
+    const markdown = await storage.write(
+        "proofread-markdown",
+        old.markdown,
+        "text/markdown",
+      ),
+      structure = await storage.write("document-structure", old.bytes);
+    await e.app.database.proofread("render-resources", {
+      proofread_id: part.proofread_id,
+      manual_revision: 0,
+      resources: [{ ...markdown, kind: "markdown", logical_reference: "" }],
+    });
+    const material = (await e.app.database.documentMaterial(
+      e.id,
+      e.asset.asset_id,
+    ))!;
+    const ref = (a: typeof markdown) =>
+      parseArtifactRef({
+        sha256: a.sha256,
+        byte_size: a.byte_size,
+        media_type: a.media_type,
+      });
+    const representation = {
+      source_material_ref: material.material,
+      proofread_id: part.proofread_id!,
+      proofread_content_sha256: output.version.content_sha256,
+      builder_version: "arranged-leaves-v2" as const,
+      locator_scheme: "utf8-segment-v1" as const,
+      markdown: ref(markdown),
+      structure: ref(structure),
+      resources: [],
+    };
+    const oldId = "00000000-0000-4000-8000-000000000071",
+      current = (await e.app.database.documentDefault(
+        e.id,
+        e.asset.asset_id,
+        e.asset.sha256,
+      ))!;
+    await e.app.database.commitDocumentVersion({
+      version: {
+        schema_version: 2,
+        document_id: documentIdentity(e.id, e.asset.asset_id),
+        document_version_id: oldId,
+        representation_sha256: await documentRepresentationHash(representation),
+        ...representation,
+      },
+      source_artifact_path: material.path,
+      markdown_artifact_path: markdown.reference,
+      structure_artifact_path: structure.reference,
+      resource_artifact_paths: {},
+      expected_default_revision: current.revision,
+      expected_manual_revision: 0,
+    });
+    const calls = e.modelCalls,
+      published = await e.app.archiveText!.render(e.id, e.asset.asset_id);
+    expect(published.document_version_id).not.toBe(oldId);
+    expect(published.proofread_id).toBe(part.proofread_id);
+    expect(e.modelCalls).toBe(calls);
+    const documents = new SqliteDocumentStorage(e.app.database, e.app.files);
+    await documents.withVerifiedDocument(oldId, async (_v, bytes) =>
+      expect(Buffer.from(bytes)).toEqual(old.markdown),
+    );
+    await documents.withVerifiedDocument(
+      published.document_version_id,
+      async (v, bytes, structure) => {
+        expect(v.builder_version).toBe("source-order-leaves-v3");
+        expect(Buffer.from(bytes).toString()).not.toContain("## 附加章节");
+        expect(structure).toHaveProperty("layout.schema_version", 1);
+      },
+    );
+    const resources = await e.app.database.proofread<
+      { kind: string; reference: string; sha256: string }[]
+    >("resources", part.proofread_id);
+    expect(resources.filter((r) => r.kind === "markdown")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ reference: "", sha256: markdown.sha256 }),
+        expect.objectContaining({
+          reference: expect.stringContaining("render/source-order-leaves-v3/"),
+        }),
+      ]),
+    );
+  } finally {
+    await e.close();
+  }
+}, 30000);
+
+it("revalidates arrangement inputs when PDF geometry changes without changing raw bytes or model settings", async () => {
+  const e = await archiveFixture();
+  try {
+    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+    const pipeline = e.app.archiveText!,
+      first = await pipeline.arrange(e.asset.asset_id, "full"),
+      source = await pipeline.source(e.asset.asset_id, "full");
+    const inspect = pipeline.pdf.inspect.bind(pipeline.pdf),
+      size = source.raw.page_sizes[0]!;
+    vi.spyOn(pipeline.pdf, "inspect").mockImplementation(async (...args) =>
+      (await inspect(...args)).map((p) => ({
+        ...p,
+        layout: {
+          width: size[0],
+          height: size[1],
+          items: [
+            {
+              bbox: [10, 10, 100, 20] as const,
+              font_size: 10,
+              font: "Synthetic",
+              length: 12,
+            },
+          ],
+        },
+      })),
+    );
+    const calls = e.modelCalls,
+      second = await pipeline.arrange(e.asset.asset_id, "full");
+    expect(second).not.toHaveProperty("reused", true);
+    expect(second.proofread_id).not.toBe(first.proofread_id);
+    expect(e.modelCalls).toBe(calls + 1);
+  } finally {
     await e.close();
   }
 }, 30000);
