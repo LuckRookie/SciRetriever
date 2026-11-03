@@ -70,6 +70,17 @@ pnpm sciretriever web --port 4174
 
 本机可能还保留 `archive/`（退役代码快照）、`work/`（早期工作材料）、`.agent-teams/`（工具状态）和 `.vscode/`（编辑器配置）；这些目录的说明只保存在本机。它们不作为新业务源码或新测试的落点。`.git/`、`node_modules/`、`build/`、`dist/`、缓存、原始运行数据及历史快照内部由工具或原始材料结构决定，不逐层插入 README；其身份在所属上级目录说明。
 
+## 参考项目
+
+设计时研究并借鉴过下列项目的做法。SciRetriever 没有复制它们的代码；第三方许可与归属义务见 [NOTICE](NOTICE)。
+
+| 项目 | 借鉴了什么 | 相关文档 |
+| ---- | ---------- | -------- |
+| [Mktero](https://github.com/tenglvjun/mktero)（MIT） | MinerU 结果的规则整理：页眉页脚识别、按版面证据接断段、分栏阅读顺序纠正，以及按原文排版（章节顺序、标题层级、组图、脚注位置） | [ADR 0054](docs/architecture/decisions/0054-rule-preprocessing-and-source-order-layout.md) |
+| [ScanSci PDF](https://github.com/Rimagination/scansci-pdf)（Apache-2.0） | PDF 获取的候选发现方式与分阶段获取路径 | [获取路径调研](docs/notes/pdf-acquisition-reference-paths.md)、[许可审计](docs/notes/scansci-migration-audit.md) |
+| [Zotero](https://github.com/zotero/zotero)（“Find Available PDF”与 Zotero Connector） | PDF 发现、按站点的 Translator 与下载后验证 | [获取路径调研](docs/notes/pdf-acquisition-reference-paths.md) |
+| Zotero Full-Text Downloader（2026-08-03 本地快照，没有公开仓库） | 开放来源到浏览器的回退顺序与 PDF 校验 | [获取路径调研](docs/notes/pdf-acquisition-reference-paths.md) |
+
 ## 开发与贡献
 
 开发、构建、预览和打包命令见[TypeScript 开发入口](docs/development/typescript-foundation.md)。测试选择、并发与 Full 规则见 [HARNESS](HARNESS.md#54-typescript-开发验证)；不把历史测试结果当作当前版本的通过声明。
