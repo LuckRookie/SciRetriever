@@ -218,6 +218,94 @@
     color: var(--fg2);
     background: var(--side);
   }
+  /* ADR 0054: presentation from the structure's byte ranges. */
+  .react-reader .reading-article-info-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0.4em 0 0.8em;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-family: var(--sans);
+    font-size: var(--text-interface);
+    color: var(--fg2);
+    cursor: pointer;
+  }
+  .react-reader .reading-article-info-toggle::before {
+    content: "";
+    width: 0.45em;
+    height: 0.45em;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform var(--dur-1) ease;
+  }
+  .react-reader .reading-article-info-toggle[aria-expanded="true"]::before {
+    transform: rotate(45deg);
+  }
+  .react-reader .reading-article-info-toggle:hover {
+    color: var(--fg);
+  }
+  .react-reader
+    .reading-article[data-article-info="collapsed"]
+    .reading-article-info {
+    display: none;
+  }
+  .react-reader .reading-article-info {
+    font-size: 0.85em;
+    color: var(--fg2);
+  }
+  .react-reader .reading-article-info p {
+    margin: 0.3em 0;
+  }
+  .react-reader .reading-figure-cell {
+    --figure-gap: var(--space-3);
+    display: inline-block;
+    vertical-align: top;
+    width: calc(
+      (100% - (var(--figure-columns) - 1) * var(--figure-gap)) /
+        var(--figure-columns)
+    );
+    margin-left: var(--figure-gap);
+  }
+  .react-reader .reading-figure-cell[data-figure-row-start] {
+    margin-left: 0;
+  }
+  .react-reader .reading-figure-cell p {
+    margin: 0;
+  }
+  .react-reader .reading-figure-cell .reading-resource {
+    margin: 0.5em 0 0;
+  }
+  .react-reader .reading-figure-caption {
+    font-size: 0.88em;
+    line-height: 1.55;
+    color: var(--fg2);
+  }
+  .react-reader .reading-figure-caption p {
+    margin: 0.4em 0 1.2em;
+  }
+  .react-reader .reading-footnote {
+    font-size: 0.85em;
+    line-height: 1.55;
+    color: var(--fg2);
+    border-left: 2px solid var(--line2);
+    padding-left: 0.9em;
+  }
+  .react-reader .reading-footnote p {
+    margin: 0.4em 0;
+  }
+  .reader-outline > .reader-outline-entry[data-level="3"] {
+    padding-left: var(--space-4);
+  }
+  .reader-outline > .reader-outline-entry[data-level="4"] {
+    padding-left: var(--space-6);
+  }
+  .reader-outline > .reader-outline-entry[data-untitled] {
+    color: var(--fg3);
+  }
   .react-reader .reading-resource img {
     display: block;
     max-width: 100%;

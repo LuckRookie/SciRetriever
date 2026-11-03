@@ -30,7 +30,9 @@ export interface PdfPageView {
   readonly height: number;
 }
 export interface ReaderOutlineEntry {
-  readonly title: string;
+  /** null: the paper has no heading here; show the role name instead (ADR 0054). */
+  readonly title: string | null;
+  readonly role?: string | null;
   readonly level: number;
   activate(): void | Promise<void>;
 }

@@ -65,7 +65,7 @@ import {
 } from "../../data/url.js";
 import { AnimatedPanel } from "../../motion/index.js";
 import { useShell } from "../../shell/context.js";
-import { errorMessage } from "../../strings.js";
+import { errorMessage, sectionRoleNames } from "../../strings.js";
 import { ProofreadEditor } from "./ProofreadEditor.js";
 import { StructurePanel } from "../archive/StructurePanel.js";
 import { useReaderMarks } from "./marks/ReaderMarks.js";
@@ -1041,8 +1041,17 @@ export default function Reader() {
               <h2>目录</h2>
               {outline.length ? (
                 outline.map((entry, index) => (
-                  <Button key={index} variant="text" onPress={entry.activate}>
-                    {entry.title}
+                  <Button
+                    key={index}
+                    variant="text"
+                    className="reader-outline-entry"
+                    data-level={Math.min(entry.level, 4)}
+                    data-untitled={entry.title === null || undefined}
+                    onPress={entry.activate}
+                  >
+                    {entry.title ??
+                      (entry.role && sectionRoleNames[entry.role]) ??
+                      "未命名章节"}
                   </Button>
                 ))
               ) : (

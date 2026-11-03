@@ -1,5 +1,6 @@
 import {
   sha256,
+  type DocumentLayout,
   type DocumentReadingRef,
   type DocumentResource,
   type DocumentReadResultMap,
@@ -71,8 +72,17 @@ export async function renderDocument(
       resources.set(resource.reference, resource);
     cursor = page.next_cursor;
   } while (cursor);
+  const described: DocumentReadResultMap["describe"] = await readDocument(
+    ctx,
+    "describe",
+    { document_version_id: docId },
+  );
+  bound(described);
+  const layout: DocumentLayout | null = described.layout ?? null;
   const article = document.createElement("article");
   article.className = "reading-article library-reading-text";
+  // Folded front-page article information (ADR 0054); session state only.
+  article.dataset.articleInfo = "collapsed";
   if (frame.documentTitle) {
     const title = document.createElement("h1");
     title.className = "reading-document-title";
@@ -225,6 +235,48 @@ export async function renderDocument(
   const blocks = () => [
     ...article.querySelectorAll<HTMLElement>("[data-byte-start]"),
   ];
+  const folded = (block: HTMLElement) =>
+    article.dataset.articleInfo === "collapsed" &&
+    block.classList.contains("reading-article-info");
+  // Synchronous on purpose: a jump into folded text unfolds before measuring.
+  const infoToggle = document.createElement("button");
+  infoToggle.type = "button";
+  infoToggle.className = "reading-article-info-toggle";
+  infoToggle.textContent = "文章信息";
+  infoToggle.setAttribute("aria-expanded", "false");
+  const setInfoOpen = (open: boolean) => {
+    article.dataset.articleInfo = open ? "open" : "collapsed";
+    infoToggle.setAttribute("aria-expanded", String(open));
+  };
+  infoToggle.onclick = () =>
+    setInfoOpen(article.dataset.articleInfo !== "open");
+  const overlaps = (
+    r: { start_utf8: number; end_utf8: number },
+    start: number,
+    end: number,
+  ) => r.start_utf8 < end && r.end_utf8 > start;
+  /** Presentation from the structure's byte ranges; the Markdown carries no markers. */
+  const decorate = (el: HTMLElement, start: number, end: number) => {
+    if (!layout) return;
+    if (layout.article_info.some((r) => overlaps(r, start, end)))
+      el.classList.add("reading-article-info");
+    if (layout.footnotes.some((r) => overlaps(r, start, end)))
+      el.classList.add("reading-footnote");
+    for (const group of layout.figure_groups) {
+      const objects = group.objects.filter((o) => overlaps(o, start, end));
+      if (objects.length === 1 && group.objects.length > 1) {
+        const object = objects[0]!;
+        el.classList.add("reading-figure-cell");
+        el.style.setProperty(
+          "--figure-columns",
+          String(Math.max(1, group.rows[object.row] ?? 1)),
+        );
+        if (object.column === 0) el.dataset.figureRowStart = "true";
+      }
+      if (group.captions.some((c) => overlaps(c, start, end)))
+        el.classList.add("reading-figure-caption");
+    }
+  };
   const capture = (closing = false) => {
     if (
       restoring ||
@@ -234,7 +286,9 @@ export async function renderDocument(
     )
       return;
     const top = frame.body.getBoundingClientRect().top;
-    const block = blocks().find((b) => b.getBoundingClientRect().bottom > top);
+    const block = blocks().find(
+      (b) => !folded(b) && b.getBoundingClientRect().bottom > top,
+    );
     if (block) {
       state.textOffset = Number(block.dataset.byteStart);
       state.blockOffset = Math.max(
@@ -250,6 +304,7 @@ export async function renderDocument(
     const block =
       blocks().find((b) => Number(b.dataset.byteEnd) > offset) ??
       blocks().at(-1);
+    if (block && folded(block)) setInfoOpen(true);
     if (block) {
       const delta =
         block.getBoundingClientRect().top -
@@ -398,6 +453,7 @@ export async function renderDocument(
       el.dataset.byteStart = String(block.start);
       el.dataset.byteEnd = String(block.end);
       el.innerHTML = html;
+      decorate(el, block.start, block.end);
       const segment = segments.find(
         (s) => s.start_utf8 < block.end && s.end_utf8 > block.start,
       );
@@ -465,6 +521,9 @@ export async function renderDocument(
         observer.unobserve(resource);
       previous.element.remove();
     }
+    const firstInfo = article.querySelector(".reading-article-info");
+    if (firstInfo && firstInfo.previousElementSibling !== infoToggle)
+      firstInfo.before(infoToggle);
     wireDocumentLinks();
     more.hidden = true;
     tail.hidden = finished;
@@ -610,7 +669,8 @@ export async function renderDocument(
       };
       if (frame.onOutline)
         frame.onOutline({
-          title: section.title || "未命名章节",
+          title: section.title,
+          role: section.role ?? null,
           level: section.level,
           activate,
         });
