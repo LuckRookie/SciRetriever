@@ -79,8 +79,8 @@ export function useRecentBatches(limit = 5) {
     enabled: api.kind === "workspace" && api.workspace.readiness === "ready",
   });
 }
-/** Every batch, newest first, a page at a time. */
-export function useIntakeBatches() {
+/** Every batch, newest first, a page at a time; refreshed while one runs or a submission is open. */
+export function useIntakeBatches(submitting = false) {
   const api = useApi();
   return useInfiniteQuery({
     queryKey: [...batchKey, "all"],
@@ -88,6 +88,13 @@ export function useIntakeBatches() {
     queryFn: ({ pageParam, signal }) =>
       listIntakeBatches(api, 20, pageParam, signal),
     getNextPageParam: (page) => page.next_cursor,
+    refetchInterval: (query) =>
+      submitting ||
+      query.state.data?.pages.some((page) =>
+        page.items.some((batch) => batch.status === "running"),
+      )
+        ? 3000
+        : false,
   });
 }
 /** One batch by id, for titles and filter chips. */

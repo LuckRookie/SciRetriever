@@ -281,7 +281,7 @@ export default function Intake() {
           ) : (
             <Button
               variant="primary"
-              isPending={mutation.isPending}
+              isDisabled={mutation.isPending}
               confirm={{
                 title: mode === "bib" ? "导入书目" : "确认发现文献",
                 description:
@@ -294,11 +294,27 @@ export default function Intake() {
                     : `每来源最多 ${limit} 条`,
                 service: mode === "bib" ? "本地书目导入" : "已配置的文献来源",
               }}
-              onPress={() => mutation.mutateAsync().then(() => {})}
+              // Discovery can take minutes; the dialog closes at once and the
+              // batch's progress shows in the records below.
+              onPress={() => {
+                mutation.mutate();
+              }}
             >
-              {mode === "bib" ? "导入" : "开始发现"}
+              {mutation.isPending
+                ? mode === "bib"
+                  ? "正在导入…"
+                  : "正在发现…"
+                : mode === "bib"
+                  ? "导入"
+                  : "开始发现"}
             </Button>
           )}
+          {mutation.isPending ? (
+            <p role="status">
+              {mode === "bib" ? "正在导入" : "正在查找"}
+              ，进度见下方入库记录；完成前请不要关闭本页。
+            </p>
+          ) : null}
           {mutation.isError ? (
             <ErrorNotice
               message={errorMessage(mutation.error)}
@@ -341,6 +357,7 @@ export default function Intake() {
         </section>
       ) : null}
       <IntakeRecords
+        submitting={mutation.isPending}
         highlight={
           typeof history[0]?.report.raw.intake_batch_id === "string"
             ? history[0].report.raw.intake_batch_id

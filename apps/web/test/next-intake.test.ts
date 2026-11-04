@@ -12,8 +12,14 @@ it("keeps discovery and bibliography import explicit and uploads a selected PDF 
     await captureFeature(w.page, "react-intake");
     const discoveries: unknown[] = [],
       imports: unknown[] = [];
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     await w.page.route("**/api/discovery?*", async (route) => {
       discoveries.push(route.request().postDataJSON());
+      // The first discovery stays open, as a slow source would keep it.
+      if (discoveries.length === 1) await held;
       await route.fulfill({
         status: 200,
         json: {
@@ -48,6 +54,22 @@ it("keeps discovery and bibliography import explicit and uploads a selected PDF 
       .getByRole("button", { name: "确认执行", exact: true })
       .click();
     await expect.poll(() => discoveries.length).toBe(1);
+    // The dialog closes at once; the running batch is followed in the records.
+    await w.page
+      .getByRole("dialog", { name: "确认发现文献" })
+      .waitFor({ state: "hidden" });
+    const running = w.page.getByRole("button", {
+      name: "正在发现…",
+      exact: true,
+    });
+    expect(await running.isDisabled()).toBe(true);
+    expect(await w.page.getByText("正在查找，进度见下方入库记录").count()).toBe(
+      1,
+    );
+    release();
+    await w.page
+      .getByRole("button", { name: "开始发现", exact: true })
+      .waitFor();
     expect(discoveries[0]).toEqual({
       query: "photoredox catalysis",
       scan_limit: 200,

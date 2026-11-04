@@ -49,8 +49,14 @@ function timeText(batch: IntakeBatch) {
   return `${localTime(batch.created_at).slice(0, 10)} 起`;
 }
 
-export function IntakeRecords({ highlight }: { highlight: string | null }) {
-  const batches = useIntakeBatches();
+export function IntakeRecords({
+  highlight,
+  submitting = false,
+}: {
+  highlight: string | null;
+  submitting?: boolean;
+}) {
+  const batches = useIntakeBatches(submitting);
   const [acquire, setAcquire] = useState<AcquireScope | null>(null);
   const items = batches.data?.pages.flatMap((page) => page.items) ?? [];
   return (
