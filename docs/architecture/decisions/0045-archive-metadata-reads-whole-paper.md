@@ -7,7 +7,7 @@
 - Date: 2026-10-28
 - 依据：Owner 2026-10-28：“元数据直接给他看全部区块就行了。简简单单。”
 - 部分取代：[ADR 0041](0041-arrange-then-per-page-proofread.md) 第 5 节。
-- Related: [计划 17](../../plans/2026-10-27-web-usage-review/README.md) P23；[文档与证据](../technical/04-document-evidence.md) 第 6.5 节
+- Related: [计划 17](../../archive/2026-10-27-web-usage-review/README.md) P23；[文档与证据](../technical/04-document-evidence.md) 第 6.5 节
 
 ## 背景
 

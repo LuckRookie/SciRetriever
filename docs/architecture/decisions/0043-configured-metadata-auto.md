@@ -7,7 +7,7 @@
 - Date: 2026-10-28
 - 依据：Owner 2026-10-27 在计划 17 P15 中提出：“自动模式应把所有能用的来源都用上”。
 - 部分取代：[ADR 0022](0022-default-safe-source-selection-and-per-source-limits.md) 第 2 节中“Metadata Auto 是版本固定集合、Key 只改善已启用 Source、不改变集合”的部分；[ADR 0039](0039-configured-acquisition-auto-and-traces.md) 依据行中“Metadata Auto 不变”一句。
-- Related: [计划 17](../../plans/2026-10-27-web-usage-review/README.md) P13–P16 与 [02 块](../../plans/2026-10-27-web-usage-review/02-sources-and-acquisition.md)
+- Related: [计划 17](../../archive/2026-10-27-web-usage-review/README.md) P13–P16 与 [02 块](../../archive/2026-10-27-web-usage-review/02-sources-and-acquisition.md)
 
 ## 背景
 

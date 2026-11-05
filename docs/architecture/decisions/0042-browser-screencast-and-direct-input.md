@@ -10,7 +10,7 @@
   - [ADR 0026](0026-agent-knowledge-and-human-collaboration.md) 第 4 节中“直接点击或输入……不能省略……页面版本校验”里的页面版本校验；
   - [ADR 0032](0032-library-centered-web-workspace.md) 第 5 节第 2 条“输入绑定实际看到的页面 revision 与视口”。
   - 两份 ADR 的其余内容不变，包括服务端授权、控制 epoch、单一控制者、接管使旧决定失效、交还后重新观察，以及多窗口竞争。
-- Related: [计划 17](../../plans/2026-10-27-web-usage-review/README.md) P25 与 [04 块](../../plans/2026-10-27-web-usage-review/04-browser-screencast.md)；[Browser 控制](../technical/08-browser-control.md)；[ADR 0030](0030-browser-transport-and-progress.md)
+- Related: [计划 17](../../archive/2026-10-27-web-usage-review/README.md) P25 与 [04 块](../../archive/2026-10-27-web-usage-review/04-browser-screencast.md)；[Browser 控制](../technical/08-browser-control.md)；[ADR 0030](0030-browser-transport-and-progress.md)
 
 ## 背景
 

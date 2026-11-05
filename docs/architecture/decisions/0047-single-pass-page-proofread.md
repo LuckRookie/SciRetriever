@@ -7,7 +7,7 @@
 - Date: 2026-10-30
 - 依据：Owner 2026-10-29/30 的讨论与决定——“目标是内容正确、格式干净的校订稿”；“以 PDF 为准”，不设可信度分级，拿不准的地方保持原样；模型调用统一用 medium 强度，主模型为 terra（配置事项，不在本 ADR 固定）；“补齐后写 ADR”。
 - 部分取代：[ADR 0041](0041-arrange-then-per-page-proofread.md) 第 3 节第 1、2、3、4 条，第 6 节中针对校订的“无意义消耗”停止条件与“只保留最新一张页面图”。ADR 0041 其余各节（整理、渲染与结构注释、元数据读取范围、已有建档结果）不变，第 3 节第 5、6 条（原图为准、人工锁定、按叶块坐标保存、失败只重跑该页）不变。
-- Related: [计划 17](../../plans/2026-10-27-web-usage-review/README.md) P28；[文档与证据](../technical/04-document-evidence.md) 第 6 节
+- Related: [计划 17](../../archive/2026-10-27-web-usage-review/README.md) P28；[文档与证据](../technical/04-document-evidence.md) 第 6 节
 
 ## 背景
 

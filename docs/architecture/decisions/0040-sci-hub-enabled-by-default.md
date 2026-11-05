@@ -21,4 +21,4 @@ Owner 实际使用中，多数受订阅限制的文献在出版社 API 与公开
 
 ## 后果
 
-Auto 模式下获取 PDF 会向 Sci-Hub 镜像发出请求，可能减少交给 Browser Agent 的篇数。通过 Sci-Hub 获取全文在许多司法辖区受版权限制；是否使用由 Owner 决定，Owner 已知悉并选择默认启用，需要时可改为 Custom 关闭。实现规则归[文献材料技术篇](../technical/03-literature-materials.md)，用户操作归[PDF 获取指南](../../guides/pdf-acquisition.md)与[配置指南](../../guides/configuration.md)；实施见[计划 17](../../plans/2026-10-27-web-usage-review/README.md) P15。
+Auto 模式下获取 PDF 会向 Sci-Hub 镜像发出请求，可能减少交给 Browser Agent 的篇数。通过 Sci-Hub 获取全文在许多司法辖区受版权限制；是否使用由 Owner 决定，Owner 已知悉并选择默认启用，需要时可改为 Custom 关闭。实现规则归[文献材料技术篇](../technical/03-literature-materials.md)，用户操作归[PDF 获取指南](../../guides/pdf-acquisition.md)与[配置指南](../../guides/configuration.md)；实施见[计划 17](../../archive/2026-10-27-web-usage-review/README.md) P15。

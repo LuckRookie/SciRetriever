@@ -7,7 +7,7 @@
 - Date: 2026-10-30
 - 依据：Owner 2026-10-30 的要求——问“整理为什么这么耗时”，并决定“先做沙箱实验”“写 ADR”；模型调用统一用 medium 强度，主模型为 terra（配置事项，不在本 ADR 固定）。
 - 部分取代：[ADR 0041](0041-arrange-then-per-page-proofread.md) 第 2 节开头“每篇的每个部分一个整理会话，会话可以读全部区块、查看任意页面图、按文字查找”，第 2 节第 3 条的初始判定规则，第 2 节第 4 条中“整理会话可以调整叶块的页归属”，第 2 节第 5 条最后一项“退回会话修正”，第 6 节中针对整理的“无意义消耗”停止条件。ADR 0041 第 2 节的操作种类（归属、删除、拆分、合并、图注挂接）、骨架、作者与书目规则、程序校验的各项要求，以及其余各节不变。
-- Related: [ADR 0047](0047-single-pass-page-proofread.md)；[计划 17](../../plans/2026-10-27-web-usage-review/README.md)；[文档与证据](../technical/04-document-evidence.md) 第 6.2 节
+- Related: [ADR 0047](0047-single-pass-page-proofread.md)；[计划 17](../../archive/2026-10-27-web-usage-review/README.md)；[文档与证据](../technical/04-document-evidence.md) 第 6.2 节
 
 ## 背景
 

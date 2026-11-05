@@ -61,6 +61,6 @@
   - 只有完全相同的语句（规范化后）才命中，改动一个词就重新请求；
   - 不同模型的译文共用一条缓存，显示的是最后一次翻译所用的模型；
   - 浏览器偏好只在当前浏览器有效，换浏览器需要重新选择。
-- 实现规则归阅读界面与服务端翻译模块各自的 README，用户说明归 [Web 任务工作台](../../guides/web-workbench.md)；实施与验收见[计划 17](../../plans/2026-10-27-web-usage-review/README.md)。
+- 实现规则归阅读界面与服务端翻译模块各自的 README，用户说明归 [Web 任务工作台](../../guides/web-workbench.md)；实施与验收见[计划 17](../../archive/2026-10-27-web-usage-review/README.md)。
 
 [ADR 索引](README.md)
