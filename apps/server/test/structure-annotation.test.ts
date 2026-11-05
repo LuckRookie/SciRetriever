@@ -1,4 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { createHash } from "node:crypto";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../src/mcp/server.js";
 import { runCli } from "../src/cli/main.js";
@@ -8,12 +9,13 @@ import { SqliteAnnotationStorage } from "../src/storage/structure-annotations.js
 import { executeMaintenance } from "../src/entry/maintenance-operations.js";
 import { createQueryApplication } from "../src/bootstrap/application.js";
 import { executeQuery } from "../src/entry/query-operations.js";
-async function prepared(model = true) {
+async function prepared(
+  model = true,
+  text = "# Methods\n\nA synthetic experiment.\n\n# Electronic landscape\n\n🧪αβγ synthetic paragraph.\n\n# References\n\n[1] Example. doi:10.1234/example\n",
+) {
   const e = await coreProcessingFixture({ analysisModel: model });
   try {
-    e.setText(
-      "# Methods\n\nA synthetic experiment.\n\n# Electronic landscape\n\n🧪αβγ synthetic paragraph.\n\n# References\n\n[1] Example. doi:10.1234/example\n",
-    );
+    e.setText(text);
     e.setModel(() => ({ role: "discussion" }));
     await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
     const p = await e.app.proofreading!.build({ asset_id: e.asset.asset_id });
@@ -313,6 +315,225 @@ it("returns annotated outline and role-filtered segments, and pins old roles aft
       cursor: outline.next_cursor,
     });
     expect(page.sections[0]?.role).toBe("references");
+  } finally {
+    await e.close();
+  }
+}, 30000);
+
+it("pages annotated segments to the end in source order, including role filters and annotated outline", async () => {
+  const paragraphs = (start: number) =>
+    Array.from(
+      { length: 215 },
+      (_, i) => `Synthetic paragraph ${start + i} with exact evidence.\n\n`,
+    ).join("");
+  const { e, id, store } = await prepared(
+    false,
+    `# Methods\n\n${paragraphs(0)}# Results\n\n${paragraphs(215)}# References\n\n[1] Example.\n`,
+  );
+  try {
+    const first = await e.app.structureAnnotations!.build({
+      document_version_id: id,
+      max_prefix_characters: 20,
+    });
+    const annotation = (await store.byId(first.annotation_id))!;
+    const structure = await e.app.documentRead.withVerifiedVersion(
+      id,
+      async (_v, _bytes, s) => s,
+    );
+    expect(structure.segments.length).toBeGreaterThan(400);
+    const rolesById = new Map(
+      annotation.segment_roles.map((r) => [r.segment_id, r.role]),
+    );
+    for (const roles of [undefined, ["methods", "results"] as const]) {
+      const expected = structure.segments
+        .filter(
+          (s) => !roles || roles.some((r) => r === rolesById.get(s.segment_id)),
+        )
+        .map((s) => s.segment_id);
+      const ids: string[] = [];
+      let cursor: string | null = null,
+        pinned: string | undefined,
+        pages = 0;
+      do {
+        const page = await e.app.documentRead.segments({
+          document_version_id: id,
+          section_id: null,
+          limit: 200,
+          cursor,
+          ...(pinned ? { annotation_id: pinned } : {}),
+          ...(roles ? { roles } : {}),
+        });
+        expect(page.annotation_id).toBe(first.annotation_id);
+        expect(page.total).toBe(expected.length);
+        expect(page.segments.length).toBeLessThanOrEqual(200);
+        ids.push(...page.segments.map((s) => s.segment_id));
+        cursor = page.next_cursor;
+        pinned = page.annotation_id;
+        pages++;
+      } while (cursor);
+      expect(pages).toBe(3);
+      expect(ids).toEqual(expected);
+    }
+    const sectionIds: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = await e.app.documentRead.outline({
+        document_version_id: id,
+        annotation_id: first.annotation_id,
+        limit: 1,
+        cursor,
+      });
+      expect(page.annotation_id).toBe(first.annotation_id);
+      sectionIds.push(...page.sections.map((s) => s.section_id));
+      cursor = page.next_cursor;
+    } while (cursor);
+    expect(sectionIds).toEqual(structure.sections.map((s) => s.section_id));
+  } finally {
+    await e.close();
+  }
+}, 30000);
+
+it("rejects annotated segment cursor tampering and cross-version reuse while preserving a pinned annotation", async () => {
+  const { e, id, store } = await prepared(false);
+  try {
+    const annotation = await e.app.structureAnnotations!.build({
+      document_version_id: id,
+      max_prefix_characters: 20,
+    });
+    const request = {
+      document_version_id: id,
+      section_id: null,
+      annotation_id: annotation.annotation_id,
+      roles: ["methods", "body", "references"],
+      limit: 1,
+      cursor: null,
+    };
+    const first = await e.app.documentRead.segments(request);
+    expect(first.next_cursor).not.toBeNull();
+    const decoded = JSON.parse(
+      Buffer.from(first.next_cursor!, "base64url").toString(),
+    ) as Record<string, unknown>;
+    const selector = decoded.selector as Record<string, unknown>;
+    const changed = (patch: Record<string, unknown>, rehash = true) => {
+      const value = { ...decoded, ...patch };
+      const core = {
+        kind: value.kind,
+        version: value.version,
+        representation: value.representation,
+        selector: value.selector,
+        next: value.next,
+      };
+      return Buffer.from(
+        JSON.stringify({
+          ...value,
+          checksum: rehash
+            ? createHash("sha256").update(JSON.stringify(core)).digest("hex")
+            : decoded.checksum,
+        }),
+      ).toString("base64url");
+    };
+    const reordered = changed({
+      selector: {
+        roles: selector.roles,
+        annotation_id: selector.annotation_id,
+        section_id: selector.section_id,
+      },
+    });
+    const next = await e.app.documentRead.segments({
+      ...request,
+      cursor: reordered,
+    });
+    expect(next.segments).toHaveLength(1);
+    expect(next.segments[0]!.segment_id).not.toBe(
+      first.segments[0]!.segment_id,
+    );
+    const current = (await store.current(id))!;
+    for (const patch of [
+      {
+        selector: { ...selector, section_id: current.sections[0]!.section_id },
+      },
+      { selector: { ...selector, annotation_id: "f".repeat(64) } },
+      { selector: { ...selector, roles: ["references"] } },
+      { selector: { ...selector, roles: [...request.roles].reverse() } },
+      { selector: { ...selector, extra: true } },
+      {
+        selector: { section_id: null, annotation_id: annotation.annotation_id },
+      },
+      { selector: null },
+      { kind: "outline" },
+      { version: "00000000-0000-0000-0000-000000000999" },
+      { representation: "f".repeat(64) },
+      { next: -1 },
+      { next: 1.5 },
+      { next: first.total + 1 },
+      { extra: true },
+    ])
+      await expect(
+        e.app.documentRead.segments({ ...request, cursor: changed(patch) }),
+      ).rejects.toMatchObject({ code: "document-invalid" });
+    await expect(
+      e.app.documentRead.segments({
+        ...request,
+        cursor: changed({ next: 2 }, false),
+      }),
+    ).rejects.toMatchObject({ code: "document-invalid" });
+    await expect(
+      e.app.documentRead.segments({
+        ...request,
+        section_id: current.sections[0]!.section_id,
+        cursor: first.next_cursor,
+      }),
+    ).rejects.toMatchObject({ code: "document-invalid" });
+    await expect(
+      e.app.documentRead.segments({
+        ...request,
+        roles: ["references"],
+        cursor: first.next_cursor,
+      }),
+    ).rejects.toMatchObject({ code: "document-invalid" });
+    await e.app.structureAnnotations!.setRole({
+      document_version_id: id,
+      section_id: current.sections[0]!.section_id,
+      role: "results",
+      expected_manual_revision: 0,
+      actor: "synthetic-user",
+    });
+    await expect(
+      e.app.documentRead.segments({ ...request, cursor: first.next_cursor }),
+    ).resolves.toMatchObject({
+      annotation_id: annotation.annotation_id,
+      segments: next.segments,
+    });
+    await expect(
+      e.app.documentRead.segments({
+        ...request,
+        annotation_id: null,
+        cursor: first.next_cursor,
+      }),
+    ).rejects.toMatchObject({ code: "document-invalid" });
+    e.setText("# Methods\n\nA new fixed document.\n");
+    await e.app.documentProcessing.parseDocuments({
+      ...e.rawParseRequest,
+      force: true,
+    });
+    const proofread = await e.app.proofreading!.build({
+      asset_id: e.asset.asset_id,
+    });
+    const newer = await e.app.proofreadDocuments.publish({
+      literature_id: e.rawParseRequest.literature_id,
+      asset_id: e.asset.asset_id,
+      proofread_id: proofread.version.proofread_id,
+      expected_default_revision: 1,
+    });
+    expect(newer.document.document_version_id).not.toBe(id);
+    await expect(
+      e.app.documentRead.segments({
+        ...request,
+        document_version_id: newer.document.document_version_id,
+        annotation_id: null,
+        cursor: first.next_cursor,
+      }),
+    ).rejects.toMatchObject({ code: "document-invalid" });
   } finally {
     await e.close();
   }

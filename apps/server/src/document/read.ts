@@ -3,12 +3,12 @@ import { segmentLocation, segmentPageRegion, readSegment } from "./location.js";
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import {
   ContractValidationError,
   parseDocumentReadRequest,
   parseDocumentMaterialBytesRequest,
   parseDocumentResourceBytesRequest,
-  parseDocumentSelector,
   documentReadTitle,
   DOCUMENT_READ_MAX_BYTES,
   DOCUMENT_READ_MAX_EVIDENCE,
@@ -114,16 +114,6 @@ function cursorPosition(
   } catch {
     return invalid();
   }
-  const normalizedSelector = (input: unknown): unknown => {
-    if (input === null || typeof input === "string") return input;
-    try {
-      return parseDocumentSelector(input);
-    } catch {
-      return invalid();
-    }
-  };
-  const actualSelector = normalizedSelector(item.selector);
-  const expectedSelector = normalizedSelector(selector);
   const core = {
     kind: item.kind,
     version: item.version,
@@ -138,7 +128,9 @@ function cursorPosition(
     item.kind !== kind ||
     item.version !== version.document_version_id ||
     item.representation !== version.representation_sha256 ||
-    JSON.stringify(actualSelector) !== JSON.stringify(expectedSelector) ||
+    // The expected selector already passed its operation's request parser.
+    // Match its exact shape and values without treating every object as a slice.
+    !isDeepStrictEqual(item.selector, selector) ||
     !Number.isSafeInteger(item.next) ||
     (item.next as number) < start ||
     (item.next as number) >= end
