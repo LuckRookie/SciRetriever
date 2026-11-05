@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { SqliteArchiveTextStorage } from "../storage/archive-text.js";
 import { renderArrangement, isArrangedBuilder } from "../archive/render.js";
 import { parseProofreadBlocksV1 } from "@sciretriever/contracts";
@@ -17,6 +18,12 @@ import {
 } from "@sciretriever/contracts";
 import type { FileStore } from "../storage/files/store.js";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
+import type { FileFingerprint } from "../storage/files/reader.js";
+import {
+  DocumentVerificationCache,
+  type DocumentVerificationCacheLimits,
+  type DocumentVerificationProof,
+} from "./verification-cache.js";
 import type { DocumentStoragePort } from "./contract.js";
 import { documentRepresentationHash } from "./contract.js";
 import {
@@ -26,10 +33,14 @@ import {
 
 /** Verifies the immutable closure of a corrected Document. */
 export class SqliteDocumentStorage implements DocumentStoragePort {
+  private readonly verification: DocumentVerificationCache;
   constructor(
     private readonly database: SqliteWorker,
     private readonly files: FileStore,
-  ) {}
+    cacheLimits: DocumentVerificationCacheLimits = {},
+  ) {
+    this.verification = new DocumentVerificationCache(cacheLimits);
+  }
 
   async publishImmutableArtifact(
     reference: string,
@@ -150,6 +161,29 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     signal?: AbortSignal,
     reserveVerifiedBytes?: (bytes: number) => void,
   ): Promise<T> {
+    let verified;
+    try {
+      verified = await this.verifiedDocument(
+        documentVersionId,
+        signal,
+        reserveVerifiedBytes,
+      );
+    } catch (error) {
+      this.verification.discardVersion(documentVersionId);
+      throw error;
+    }
+    return consume(
+      verified.version,
+      new Uint8Array(verified.proof.markdown),
+      structuredClone(verified.proof.structure),
+    );
+  }
+  private async verifiedDocument(
+    documentVersionId: string,
+    signal?: AbortSignal,
+    reserveVerifiedBytes?: (bytes: number) => void,
+  ) {
+    this.files.assertOpen();
     if (signal?.aborted) throw new Error("document read cancelled");
     const snapshot = await this.database.documentVersion(documentVersionId);
     if (!snapshot) throw new Error("document version missing");
@@ -189,8 +223,11 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
       })) !== v.representation_sha256
     )
       throw new Error("document representation hash mismatch");
-    // Admit the declared closure before opening its first byte stream. The
-    // callback also covers callers that share a budget across document owners.
+    const key = `${documentVersionId}:${v.representation_sha256}`;
+    this.verification.discardVersion(documentVersionId, key);
+    const binding = await this.proofreadBinding(v, signal);
+    // A cache hit admits the same logical closure as a cold verification. It
+    // must not let a caller bypass its aggregate verified-byte budget.
     reserveVerifiedBytes?.(
       v.source_material_ref.byte_size +
         v.markdown.byte_size +
@@ -200,67 +237,163 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
           0,
         ),
     );
-    const closure: [string, ArtifactRef][] = [
+    if (!isArrangedBuilder(v.builder_version))
+      reserveVerifiedBytes?.(binding.manifest.artifact.byte_size);
+    reserveVerifiedBytes?.(binding.blocks.artifact.byte_size);
+    const binary: [string, ArtifactRef][] = [
       [snapshot.source_artifact_path, v.source_material_ref.artifact],
     ];
     for (const resource of v.resources) {
       const path = snapshot.resource_artifact_paths[resource.reference];
       if (!path) throw new Error("document resource missing");
-      closure.push([path, resource.artifact]);
+      binary.push([path, resource.artifact]);
     }
-    // Bounded independent reads preserve every byte/path check without walking
-    // hundreds of image paths serially. Settle all readers before returning.
+    const paths = [
+      ...new Set([
+        ...binary.map(([path]) => path),
+        snapshot.markdown_artifact_path,
+        snapshot.structure_artifact_path,
+        binding.manifest.reference,
+        binding.blocks.reference,
+      ]),
+    ];
+    const declarations = JSON.stringify({
+      version: v,
+      binary,
+      markdown_path: snapshot.markdown_artifact_path,
+      structure_path: snapshot.structure_artifact_path,
+      binding,
+    });
+    const cached = this.verification.get(key, declarations);
+    let proof: DocumentVerificationProof;
+    if (
+      cached &&
+      isDeepStrictEqual(
+        cached.fingerprints,
+        await this.fingerprints(paths, signal),
+      )
+    ) {
+      this.verification.touch(key, cached);
+      proof = cached;
+    } else {
+      this.verification.delete(key);
+      proof = await this.verification.verify(
+        key,
+        declarations,
+        async (stop) => {
+          const before = await this.fingerprints(paths, stop);
+          let next = 0;
+          const checks = await Promise.allSettled(
+            Array.from({ length: Math.min(8, binary.length) }, async () => {
+              while (next < binary.length) {
+                const [path, expected] = binary[next++]!;
+                await this.withVerifiedArtifact(
+                  path,
+                  expected,
+                  async (chunks) => {
+                    for await (const chunk of chunks) {
+                      void chunk;
+                      stop.throwIfAborted();
+                    }
+                  },
+                  stop,
+                );
+              }
+            }),
+          );
+          const failure = checks.find((result) => result.status === "rejected");
+          if (failure?.status === "rejected") throw failure.reason;
+          const markdown = await this.readBytes(
+            snapshot.markdown_artifact_path,
+            v.markdown,
+            MAX_DOCUMENT_MARKDOWN_BYTES,
+            stop,
+          );
+          const structure = await this.readBytes(
+            snapshot.structure_artifact_path,
+            v.structure,
+            MAX_DOCUMENT_STRUCTURE_BYTES,
+            stop,
+          );
+          const built = await this.verifiedProofreadStructure(
+            v,
+            markdown,
+            stop,
+          );
+          if (!Buffer.from(built.bytes).equals(Buffer.from(structure)))
+            throw new Error("document structure mismatch");
+          const afterBinding = await this.proofreadBinding(v, stop);
+          const after = await this.fingerprints(paths, stop);
+          if (
+            !isDeepStrictEqual(before, after) ||
+            !isDeepStrictEqual(binding, afterBinding)
+          )
+            throw new Error("document changed during verification");
+          this.files.assertOpen();
+          stop.throwIfAborted();
+          const metadata = JSON.stringify([...after], (_key, value: unknown) =>
+            typeof value === "bigint" ? value.toString() : value,
+          );
+          return {
+            declarations,
+            fingerprints: after,
+            markdown,
+            structure: built.structure,
+            weight:
+              markdown.byteLength +
+              structure.byteLength +
+              Buffer.byteLength(declarations) +
+              Buffer.byteLength(metadata) +
+              512,
+          };
+        },
+        signal,
+      );
+    }
+    this.files.assertOpen();
+    signal?.throwIfAborted();
+    return { version: v, proof };
+  }
+  private async fingerprints(paths: readonly string[], signal?: AbortSignal) {
+    const result = new Map<string, FileFingerprint>();
     let next = 0;
     const checks = await Promise.allSettled(
-      Array.from({ length: Math.min(8, closure.length) }, async () => {
-        while (next < closure.length) {
-          const [path, expected] = closure[next++]!;
-          await this.withVerifiedArtifact(
-            path,
-            expected,
-            async (chunks) => {
-              for await (const chunk of chunks) {
-                void chunk;
-                if (signal?.aborted) throw new Error("document read cancelled");
-              }
-            },
-            signal,
-          );
+      Array.from({ length: Math.min(8, paths.length) }, async () => {
+        while (next < paths.length) {
+          signal?.throwIfAborted();
+          const path = paths[next++]!;
+          result.set(path, await this.files.fingerprint(path, signal));
         }
       }),
     );
-    const failure = checks.find((result) => result.status === "rejected");
+    const failure = checks.find((r) => r.status === "rejected");
     if (failure?.status === "rejected") throw failure.reason;
-    const markdown = await this.readBytes(
-      snapshot.markdown_artifact_path,
-      v.markdown,
-      MAX_DOCUMENT_MARKDOWN_BYTES,
-      signal,
-    );
-    const structure = await this.readBytes(
-      snapshot.structure_artifact_path,
-      v.structure,
-      MAX_DOCUMENT_STRUCTURE_BYTES,
-      signal,
-    );
-    const built = await this.verifiedProofreadStructure(
-      v,
-      markdown,
-      signal,
-      reserveVerifiedBytes,
-    );
-    if (!Buffer.from(built.bytes).equals(Buffer.from(structure)))
-      throw new Error("document structure mismatch");
-    // The current catalog protects published artifacts; this fixed version remains
-    // durable through the callback. Future GC must add a cross-process read pin.
-    if (signal?.aborted) throw new Error("document read cancelled");
-    return consume(v, markdown, built.structure);
+    return result;
+  }
+  private async proofreadBinding(
+    v: Extract<DocumentRef, { schema_version: 2 }>,
+    signal?: AbortSignal,
+  ) {
+    const binding = await new SqliteProofreadStorage(
+      this.database,
+      this.files,
+    ).documentBinding(v.proofread_id, signal);
+    if (
+      binding.proofread_id !== v.proofread_id ||
+      binding.status !== "complete" ||
+      binding.content_sha256 !== v.proofread_content_sha256 ||
+      binding.part_asset_id !== v.source_material_ref.asset_id ||
+      binding.part_sha256 !== v.source_material_ref.asset_sha256 ||
+      binding.manifest.artifact.byte_size > 32 * 1024 * 1024 ||
+      binding.blocks.artifact.byte_size > 32 * 1024 * 1024
+    )
+      throw new Error("document proofread binding mismatch");
+    return binding;
   }
   private async verifiedProofreadStructure(
     v: Extract<DocumentRef, { schema_version: 2 }>,
     markdown: Uint8Array,
     signal?: AbortSignal,
-    reserveVerifiedBytes?: (bytes: number) => void,
   ) {
     if (isArrangedBuilder(v.builder_version)) {
       const output = await new SqliteArchiveTextStorage(
@@ -275,7 +408,6 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
         output.version.part_sha256 !== v.source_material_ref.asset_sha256
       )
         throw new Error("document proofread binding mismatch");
-      reserveVerifiedBytes?.(output.version.blocks.byte_size);
       const built = renderArrangement(
         output.bundle,
         output.version.resources,
@@ -288,7 +420,7 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
     const output = await new SqliteProofreadStorage(
       this.database,
       this.files,
-    ).documentSource(v.proofread_id, signal, reserveVerifiedBytes);
+    ).documentSource(v.proofread_id, signal);
     if (
       output.version.content_sha256 !== v.proofread_content_sha256 ||
       output.version.part_asset_id !== v.source_material_ref.asset_id ||

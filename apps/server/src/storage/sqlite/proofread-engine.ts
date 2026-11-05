@@ -11,6 +11,7 @@ export type ProofreadStorageAction =
   | "binding"
   | "current"
   | "get"
+  | "document-source"
   | "state"
   | "resources"
   | "render-resources"
@@ -171,6 +172,19 @@ export function runProofreadStorage(
       "SELECT * FROM proofread_versions WHERE proofread_id=?",
       String(args),
     );
+  if (action === "document-source")
+    return transaction(db, false, () => ({
+      version: one(
+        db,
+        "SELECT * FROM proofread_versions WHERE proofread_id=?",
+        String(args),
+      ),
+      blocks: one(
+        db,
+        "SELECT * FROM proofread_resources WHERE proofread_id=? AND kind='blocks' AND reference=''",
+        String(args),
+      ),
+    }));
   if (action === "resources")
     return db
       .prepare(

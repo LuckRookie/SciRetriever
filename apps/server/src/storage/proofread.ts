@@ -42,6 +42,45 @@ export class SqliteProofreadStorage {
     private readonly database: SqliteWorker,
     private readonly files: FileStore,
   ) {}
+  /** Indexed metadata only; never loads or reconstructs the source payload. */
+  async documentBinding(id: string, signal?: AbortSignal) {
+    const rows = await this.database.proofread<{
+      version: Row | null;
+      blocks: Row | null;
+    }>("document-source", id, signal);
+    const row = rows.version,
+      block = rows.blocks;
+    if (
+      !row ||
+      !block ||
+      typeof row.manifest_reference !== "string" ||
+      typeof block.artifact_reference !== "string"
+    )
+      fail("proofread-missing");
+    return {
+      proofread_id: row.proofread_id,
+      content_sha256: row.content_sha256,
+      part_asset_id: row.part_asset_id,
+      part_sha256: row.part_sha256,
+      status: row.status,
+      manifest: {
+        reference: row.manifest_reference,
+        artifact: parseArtifactRef({
+          sha256: row.manifest_sha256,
+          byte_size: row.manifest_size,
+          media_type: row.manifest_media_type,
+        }),
+      },
+      blocks: {
+        reference: block.artifact_reference,
+        artifact: parseArtifactRef({
+          sha256: block.sha256,
+          byte_size: block.byte_size,
+          media_type: block.media_type,
+        }),
+      },
+    };
+  }
   async arranged(id: string, signal?: AbortSignal) {
     return new SqliteArchiveTextStorage(this.database, this.files).load(
       id,

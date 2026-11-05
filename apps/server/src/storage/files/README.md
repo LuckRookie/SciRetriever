@@ -7,7 +7,7 @@
 - [store.ts](store.ts)：文件存储入口。
 - [staging.ts](staging.ts)：未发布字节。
 - [publication.ts](publication.ts)：不可变发布。
-- [reader.ts](reader.ts)：受控读取。
+- [reader.ts](reader.ts)：受控字节读取，以及沿同一无符号链接路径检查文件指纹。
 - [recovery.ts](recovery.ts)：恢复。
 - [reclamation.ts](reclamation.ts)：回收。
 

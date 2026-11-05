@@ -5,6 +5,8 @@ import type {
 } from "@sciretriever/contracts";
 import {
   openVerifiedFile,
+  storedFileFingerprint,
+  type FileFingerprint,
   type VerifiedFileScope,
   type ArtifactReadOptions,
   type ScopedFileReader,
@@ -38,6 +40,7 @@ export class FileStore {
   private readonly stages = new Set<StagingFile>();
   private readonly readerStop = new AbortController();
   private readonly opening = new Set<Promise<VerifiedFileScope>>();
+  private readonly fingerprinting = new Set<Promise<FileFingerprint>>();
   private readonly readers = new Set<VerifiedFileScope>();
   private readonly preparing = new Set<Promise<PreparedFilePublication>>();
   private readonly prepared = new Set<PreparedFilePublication>();
@@ -53,6 +56,28 @@ export class FileStore {
     if (typeof root !== "string" || !root.startsWith("/"))
       throw new FileStoreError();
     this.root = root;
+  }
+
+  assertOpen(): void {
+    if (this.closed) throw new FileStoreError();
+  }
+  async fingerprint(
+    reference: string,
+    signal?: AbortSignal,
+  ): Promise<FileFingerprint> {
+    this.assertOpen();
+    const stop = signal
+      ? AbortSignal.any([signal, this.readerStop.signal])
+      : this.readerStop.signal;
+    const pending = storedFileFingerprint(this.root, reference, stop);
+    this.fingerprinting.add(pending);
+    try {
+      const result = await pending;
+      this.assertOpen();
+      return result;
+    } finally {
+      this.fingerprinting.delete(pending);
+    }
   }
 
   async stage(options: StagingOptions = {}): Promise<StagingFile> {
@@ -223,6 +248,7 @@ export class FileStore {
     if (this.closed) return;
     this.closed = true;
     this.readerStop.abort();
+    await Promise.allSettled([...this.fingerprinting]);
     const opening = await Promise.allSettled([...this.opening]);
     const preparing = await Promise.allSettled([...this.preparing]);
     await Promise.allSettled(

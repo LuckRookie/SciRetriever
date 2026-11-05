@@ -1568,6 +1568,7 @@ export class SqliteWorker {
   ): Promise<T> {
     const read = [
       "get",
+      "document-source",
       "current",
       "state",
       "resources",

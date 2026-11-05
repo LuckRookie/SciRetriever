@@ -15,6 +15,13 @@ export interface ArtifactReadOptions {
   readonly maxBytes?: number;
   readonly signal?: AbortSignal;
 }
+export interface FileFingerprint {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  readonly size: bigint;
+  readonly mtimeNs: bigint;
+  readonly ctimeNs: bigint;
+}
 const CHUNK = 1024 * 1024;
 const DIRECTORY =
   constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
@@ -152,6 +159,31 @@ async function verifyName(
     fail();
   } finally {
     await named.close();
+  }
+}
+
+/** Metadata proof only; uses the same no-link path traversal as verified reads. */
+export async function storedFileFingerprint(
+  root: string,
+  reference: string,
+  signal?: AbortSignal,
+): Promise<FileFingerprint> {
+  checkSignal(signal);
+  const opened = await openFile(root, reference);
+  try {
+    const stat = await opened.file.stat({ bigint: true });
+    if (!stat.isFile() || stat.nlink !== 1n) fail();
+    await verifyName(root, reference, stat);
+    checkSignal(signal);
+    return Object.freeze({
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      mtimeNs: stat.mtimeNs,
+      ctimeNs: stat.ctimeNs,
+    });
+  } finally {
+    await opened.close();
   }
 }
 

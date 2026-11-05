@@ -11,8 +11,17 @@
 - [proofread-publication.ts](proofread-publication.ts)：完整校订版本到固定文档的显式发布与默认版本 CAS；索引刷新失败单独报告，不撤销有效文档。
 - [location.ts](location.ts)：统一存储页码到公开页码的转换。
 - [storage.ts](storage.ts)：文档存储协作接口。
+- [verification-cache.ts](verification-cache.ts)：有界校验证明、LRU 淘汰与同版本首次核验合并。
 
-`read.ts` 的内部 `withReadScope` 供知识／结果读取在一次逻辑操作内复用已核验文档；最多保留 16 份、32 MiB 的正文与序列化结构计量，结束即清空，独立请求重新验证。带独立预算计量的检索不走此复用。发布流程不跨写入保留读取证明。`storage.ts` 对资源采用有界并发完整校验，等待全部文件 reader 关闭后才交付结果；文件路径、hash 和篡改拒绝不变。
+`read.ts` 的内部 `withReadScope` 供知识／结果读取在一次逻辑操作内复用已核验文档；最多保留 16 份、32 MiB 的正文与序列化结构计量，结束即清空。带独立预算计量的检索不走此复用。
+
+`storage.ts` 在同一实例与 FileStore 内跨请求缓存整篇校验证明，键绑定 document_version_id 与 representation_sha256。每次仍核对版本声明、builder、限额及表示 hash，并通过索引查询校对稿的 complete 状态、content hash、part 绑定及 manifest/blocks 描述。正常校对稿写入只追加版本，派生资源只能补登记且不能覆盖；缓存仍比较上述 SQLite 绑定，不仅依赖这一写入约定。
+
+证明记录 PDF、全部资源、正文、结构、校对稿 manifest 与 blocks 的 bigint dev/ino/size/mtimeNs/ctimeNs。每次命中通过文件 owner 的无符号链接路径与单硬链接检查，逐个比对指纹；变化或核验失败清除旧证明，完整校验通过后才能重新写入。首次完整核验前后也比较全部指纹和校对稿绑定，拒绝核验中变化。命中不读 PDF/图片字节，也不重建结构；正文和结构从受限缓存复制交付，调用方修改返回值不会污染证明。独立交付 PDF/图片等字节时仍用 verified artifact reader 做 hash 及读中/结束校验。
+
+缓存默认最多 16 条、32 MiB，按正文、序列化结构、声明和指纹的字节计量淘汰 LRU；JavaScript 对象有额外开销，但数量和内容规模均有界，超大条目不保留。预算回调在冷读和命中时都提前计入相同的逻辑闭包与校对源字节，不因避免磁盘读取而绕过调用方预算。同版本、同声明的首次核验共享一次；取消一位等待者不会取消其他人，最后一人取消会终止并等待核验清理。FileStore 关闭后证明不能继续使用。完整核验和指纹检查都采用有界并发，并等待全部 reader/指纹操作结束。
+
+指纹检查提供检查时点的一致性，不是跨进程文件锁。保持 dev/ino/size/mtime/ctime 全不变的篡改（例如更高权限或异常存储行为）不在此证明的检测范围内；检查完成后的并发改写由下一次请求的指纹比较发现。实际字节交付仍独立核验，不把此证明当作资源流的校验替代。
 
 ## 放置边界
 

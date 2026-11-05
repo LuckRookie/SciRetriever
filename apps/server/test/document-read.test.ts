@@ -1348,19 +1348,13 @@ describe("bounded document and material reading", () => {
         .toMatch(/无法|invalid|失败|validation failed/);
       expect(await page.locator(".reading-article section").count()).toBe(0);
       await page.unroute("**/document-slice");
-      await page.route("**/document-resource", async (route) => {
+      await page.route("**/document-resource-bytes", async (route) => {
         const response = await route.fetch();
-        const value = await response.json();
-        value.result.bytes_base64 = Buffer.from(figure.subarray(0, 5)).toString(
-          "base64",
-        );
-        value.result.actual_range = { start_byte: 0, end_byte: 5 };
-        value.result.truncated = false;
-        value.result.continuation = null;
-        await route.fulfill({ response, json: value });
+        // Preserve the declared hash/size, but truncate the delivered image.
+        await route.fulfill({ response, body: figure.subarray(0, 5) });
       });
       const corruptedResource = page.waitForResponse((response) =>
-        new URL(response.url()).pathname.endsWith("/document-resource"),
+        new URL(response.url()).pathname.endsWith("/document-resource-bytes"),
       );
       await page.reload();
       await page.locator(".reading-resource").scrollIntoViewIfNeeded();
@@ -1371,7 +1365,7 @@ describe("bounded document and material reading", () => {
         .poll(() => page.locator(".reading-resource").innerText())
         .toMatch(/无法|失败|暂不可读/);
       expect(await page.locator(".reading-resource img").count()).toBe(0);
-      await page.unroute("**/document-resource");
+      await page.unroute("**/document-resource-bytes");
       let resourcePages = 0;
       let resourceBase:
         | {
