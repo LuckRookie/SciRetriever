@@ -3,6 +3,7 @@ import {
   sha256,
   type DocumentMaterialRef,
   type DocumentReadingRef,
+  type DocumentResource,
   type DocumentReadOperation,
   type DocumentReadRequestMap,
   type DocumentReadResultMap,
@@ -162,6 +163,69 @@ export async function readPdfBytes(
     (await sha256(bytes)) !== material.asset_sha256
   )
     throw new Error("PDF 完整性校验失败");
+  ctx.signal.throwIfAborted();
+  return bytes;
+}
+
+/** One whole picture of a fixed document version, checked against its header and hash. */
+export async function readResourceBytes(
+  ctx: ReadingContext,
+  document: DocumentReadingRef,
+  resource: DocumentResource,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const response = await ctx.api.fetch(
+    "/api/v1/query/document-resource-bytes",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        protocol_version: 1,
+        request: {
+          document_version_id: document.document_version_id,
+          resource_id: resource.resource_id,
+        },
+      }),
+      signal: ctx.signal,
+    },
+  );
+  // A refused read shows the reader's general "unreadable" message.
+  if (!response.ok) throw new Error("document-resource-unavailable");
+  const header = (name: string) => response.headers.get(name);
+  if (
+    header("Content-Type")?.split(";")[0] !== resource.artifact.media_type ||
+    header("x-sciretriever-document-version-id") !==
+      document.document_version_id ||
+    header("x-sciretriever-representation-sha256") !==
+      document.representation_sha256 ||
+    header("x-sciretriever-resource-id") !== resource.resource_id ||
+    header("x-sciretriever-resource-sha256") !== resource.artifact.sha256 ||
+    header("x-sciretriever-byte-size") !== String(resource.artifact.byte_size)
+  )
+    throw new Error("图片响应与固定文档不一致");
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("图片响应无字节");
+  const bytes = new Uint8Array(resource.artifact.byte_size);
+  let offset = 0;
+  try {
+    for (;;) {
+      ctx.signal.throwIfAborted();
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      if (offset + chunk.value.byteLength > bytes.length)
+        throw new Error("图片响应超过声明大小");
+      bytes.set(chunk.value, offset);
+      offset += chunk.value.byteLength;
+    }
+  } finally {
+    await reader.cancel();
+    reader.releaseLock();
+  }
+  // A stream cut short by a failed end-of-read check never shows as a picture.
+  if (
+    offset !== bytes.length ||
+    (await sha256(bytes)) !== resource.artifact.sha256
+  )
+    throw new Error("图片完整性校验失败");
   ctx.signal.throwIfAborted();
   return bytes;
 }

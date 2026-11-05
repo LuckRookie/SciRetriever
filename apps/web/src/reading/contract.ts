@@ -34,6 +34,8 @@ export interface ReaderOutlineEntry {
   readonly title: string | null;
   readonly role?: string | null;
   readonly level: number;
+  /** UTF-8 offset where the section starts in the full text, for following the reading position. */
+  readonly start?: number;
   activate(): void | Promise<void>;
 }
 export interface DocumentLinkPreview {
@@ -73,6 +75,8 @@ export interface ReaderFrame {
   /** Full-text blocks were painted or extended. */
   onDocumentPaint?: () => void;
   onOutline?: (entry: ReaderOutlineEntry) => void;
+  /** The full text's first visible block moved to this UTF-8 offset. */
+  onPosition?: (offset: number) => void;
   onOutlineEmpty?: (message: string) => void;
   onFindNext?: (next: (() => void) | null) => void;
   onIssue?: (

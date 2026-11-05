@@ -635,6 +635,10 @@ export function createDocumentMarkSurface(
   const sections = () => [
     ...body.querySelectorAll<HTMLElement>("section[data-byte-start]"),
   ];
+  const indexed = new WeakMap<
+    HTMLElement,
+    { content: string; index: ReturnType<typeof indexText> }
+  >();
   const skip = (node: Text) =>
     !!node.parentElement?.closest(".reading-block-source");
   const paintHighlights = () => {
@@ -669,7 +673,16 @@ export function createDocumentMarkSurface(
       paintHighlights();
       return;
     }
-    const spans = all.map((el) => ({ el, index: indexText(el, skip) }));
+    const spans = all.map((el) => {
+      // Index a section again only when its text changed (an image replacing
+      // its placeholder); painted sections otherwise keep their text nodes.
+      const content = el.textContent ?? "",
+        cached = indexed.get(el);
+      if (cached?.content === content) return { el, index: cached.index };
+      const index = indexText(el, skip);
+      indexed.set(el, { content, index });
+      return { el, index };
+    });
     const searchIn = (list: typeof spans) => {
       let text = "";
       const at: { span: (typeof spans)[number]; offset: number }[] = [];

@@ -73,6 +73,18 @@
     display: flex;
     position: relative;
     overflow: hidden;
+    container: reader-center / inline-size;
+  }
+  /* Too narrow for the outline beside a readable column: it floats over the
+     text instead of squeezing it, and closes once a heading is chosen. */
+  @container reader-center (max-width: 820px) {
+    .reader-outline {
+      position: absolute;
+      inset: 0 auto 0 0;
+      z-index: 5;
+      width: min(300px, 85%);
+      box-shadow: var(--shadow-pop);
+    }
   }
   .reader-surface {
     min-width: 0;
@@ -100,41 +112,157 @@
     padding: 0;
     background: var(--bg);
   }
+  /* Full text sits on the page itself, not on a card over the PDF backdrop. */
+  .react-reader .reading-scroll[data-mode="doc"] {
+    padding: var(--space-6) var(--space-6) var(--space-7);
+    background: var(--bg);
+  }
   .react-reader .reading-scroll[hidden] {
     display: none;
   }
+  /* Outline: one quiet row per heading, 12px further in per level, the
+     section being read on the active tint. */
   .reader-outline {
-    width: 220px;
+    width: 260px;
     flex-shrink: 0;
-    overflow: auto;
-    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     border-right: 1px solid var(--line);
     background: var(--side);
   }
-  .reader-outline h2 {
-    font-size: var(--text-interface);
-  }
-  .reader-outline > .ui-button {
+  .reader-outline-header {
     display: flex;
-    width: 100%;
-    height: auto;
-    justify-content: flex-start;
-    text-align: left;
-    white-space: normal;
-    line-height: 1.5;
-    margin-bottom: var(--space-1);
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-2) var(--space-2) var(--space-4);
   }
+  .reader-outline-header h2 {
+    margin: 0;
+    font-size: var(--text-secondary);
+    font-weight: 600;
+    color: var(--fg2);
+  }
+  .reader-outline-all {
+    padding: 0;
+    border: 0;
+    background: none;
+    font-family: var(--sans);
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+    cursor: pointer;
+  }
+  .reader-outline-all:hover {
+    color: var(--fg);
+  }
+  .reader-outline-list {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 0 var(--space-2) var(--space-5);
+  }
+  .reader-outline-row {
+    display: flex;
+    align-items: flex-start;
+    border-radius: var(--radius-sm);
+  }
+  .reader-outline-row[data-depth="1"] {
+    padding-left: 12px;
+  }
+  .reader-outline-row[data-depth="2"] {
+    padding-left: 24px;
+  }
+  .reader-outline-row[data-depth="3"] {
+    padding-left: 36px;
+  }
+  .reader-outline-row:hover {
+    background: var(--hover-soft);
+  }
+  .reader-outline-row[data-active] {
+    background: var(--active);
+  }
+  .reader-outline-toggle {
+    flex: 0 0 20px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--fg3);
+  }
+  button.reader-outline-toggle {
+    cursor: pointer;
+  }
+  button.reader-outline-toggle:hover {
+    color: var(--fg);
+  }
+  .reader-outline-toggle svg {
+    width: 14px;
+    height: 14px;
+    transition: transform var(--dur-1) ease;
+  }
+  .reader-outline-toggle[aria-expanded="false"] svg {
+    transform: rotate(-90deg);
+  }
+  /* Long titles take two lines at most; the full title is the tooltip. */
+  .reader-outline-entry {
+    flex: 1;
+    min-width: 0;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    margin: 5px var(--space-2) 5px 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-family: var(--sans);
+    font-size: var(--text-interface);
+    font-weight: 500;
+    line-height: 1.35;
+    text-align: left;
+    color: var(--fg);
+    cursor: pointer;
+  }
+  .reader-outline-row[data-depth="1"] .reader-outline-entry {
+    font-weight: 400;
+    color: var(--side-fg);
+  }
+  .reader-outline-row:is([data-depth="2"], [data-depth="3"])
+    .reader-outline-entry {
+    font-size: var(--text-secondary);
+    font-weight: 400;
+    color: var(--fg2);
+  }
+  .reader-outline-row[data-active] .reader-outline-entry {
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .reader-outline-entry[data-untitled] {
+    color: var(--fg3);
+  }
+  .reader-outline-note {
+    margin: 0;
+    padding: 0 var(--space-2);
+    font-size: var(--text-secondary);
+    color: var(--fg2);
+  }
+  /* The column is measured in em, so it widens with the reading size:
+     舒适 36em (720px at 20px), 宽 46em, 全宽 the whole pane. */
   .react-reader .reading-article {
     font-family: var(--serif);
     font-size: var(--reading-font-size, 20px);
-    line-height: 1.7;
-    max-width: 70ch;
+    line-height: 1.75;
+    max-width: min(100%, 36em);
     margin: 0 auto;
-    padding: var(--space-6) var(--space-7);
-    background: var(--bg);
     color: var(--fg);
-    overflow-wrap: anywhere;
-    border-radius: var(--radius-md);
+    overflow-wrap: break-word;
+    text-wrap: pretty;
+  }
+  .react-reader .reading-article :lang(en) {
+    hyphens: auto;
   }
   .react-reader .reading-full .reading-article {
     max-width: none;
@@ -143,32 +271,46 @@
     display: none;
   }
   .react-reader .reading-wide .reading-article {
-    max-width: 90ch;
+    max-width: min(100%, 46em);
   }
-  .reading-article :lang(zh) {
-    max-width: 38em;
+  /* Each heading level a step apart: title, section, subsection, then two quieter levels. */
+  .react-reader .reading-article :is(h1, h2, h3, h4, h5, h6) {
+    font-weight: 600;
+    text-wrap: balance;
   }
   .react-reader .reading-article h1 {
-    font-size: 1.55em;
+    font-size: 1.6em;
     line-height: 1.3;
     margin: 0 0 1em;
   }
   .react-reader .reading-article section + section h1 {
-    font-size: 1.3em;
-    margin: 1.6em 0 0.6em;
+    font-size: 1.4em;
+    line-height: 1.35;
+    margin: 2em 0 0.6em;
   }
   .react-reader .reading-article h2 {
-    font-size: 1.3em;
-    margin: 1.7em 0 0.55em;
-    line-height: 1.4;
+    font-size: 1.4em;
+    line-height: 1.35;
+    margin: 2em 0 0.6em;
   }
-  .react-reader .reading-article h3,
+  .react-reader .reading-article h3 {
+    font-size: 1.2em;
+    line-height: 1.4;
+    margin: 1.6em 0 0.5em;
+  }
   .react-reader .reading-article h4 {
-    font-size: 1.1em;
-    margin: 1.4em 0 0.5em;
+    font-size: 1.05em;
+    line-height: 1.5;
+    margin: 1.4em 0 0.4em;
+  }
+  .react-reader .reading-article :is(h5, h6) {
+    font-size: 1em;
+    line-height: 1.5;
+    margin: 1.2em 0 0.4em;
+    color: var(--fg2);
   }
   .react-reader .reading-article p {
-    margin: 0.75em 0;
+    margin: 0 0 1em;
   }
   .react-reader .reading-article ul,
   .react-reader .reading-article ol {
@@ -185,24 +327,41 @@
     margin: 1em 0;
     color: var(--fg2);
   }
-  .react-reader .reading-table,
-  .react-reader .katex-display {
+  .react-reader .reading-table {
     overflow: auto;
     max-width: 100%;
-    margin: 1em 0;
+    margin: 1.5em 0;
   }
+  /* Display math: centred, unboxed, scrolls sideways only when it must. */
+  .react-reader .katex-display {
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-width: 100%;
+    margin: 1.25em 0;
+    padding-block: 0.15em;
+  }
+  .react-reader .katex-display > .katex {
+    font-size: 1.1em;
+  }
+  /* Tables use rules between rows only; numbers line up. */
   .react-reader .reading-table table {
     border-collapse: collapse;
     width: 100%;
-    font-size: 0.9em;
+    font-size: 0.85em;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
   }
   .react-reader .reading-table :is(th, td) {
-    border: 1px solid var(--line);
-    padding: var(--space-3);
+    border-bottom: 1px solid var(--line);
+    padding: 0.5em 0.75em;
     text-align: left;
+    vertical-align: top;
   }
   .react-reader .reading-table th {
-    background: var(--side);
+    border-bottom-color: var(--line2);
+    color: var(--fg2);
+    font-weight: 600;
+    background: var(--bg);
     position: sticky;
     top: 0;
   }
@@ -212,10 +371,13 @@
   }
   .react-reader .reading-resource {
     display: block;
-    margin: 1em 0;
-    padding: var(--space-3);
+    margin: 1.5em 0;
     font-size: 0.85em;
     color: var(--fg2);
+  }
+  /* Until its picture arrives, a resource shows as a tinted placeholder. */
+  .react-reader .reading-resource:not(:has(img)) {
+    padding: var(--space-3);
     background: var(--side);
   }
   /* ADR 0054: presentation from the structure's byte ranges. */
@@ -306,15 +468,6 @@
   }
   .react-reader .reading-footnote p {
     margin: 0.4em 0;
-  }
-  .reader-outline > .reader-outline-entry[data-level="3"] {
-    padding-left: var(--space-4);
-  }
-  .reader-outline > .reader-outline-entry[data-level="4"] {
-    padding-left: var(--space-6);
-  }
-  .reader-outline > .reader-outline-entry[data-untitled] {
-    color: var(--fg3);
   }
   .react-reader .reading-resource img {
     display: block;
@@ -705,12 +858,6 @@
       flex-basis: 100%;
       justify-content: flex-start;
     }
-    .react-reader .reading-article {
-      padding: var(--space-5);
-    }
-    .reader-outline {
-      width: 190px;
-    }
   }
   @media (max-width: 900px) {
     .react-reader {
@@ -762,10 +909,8 @@
     .reader-toolbar-end > .ui-icon-button:not([aria-haspopup]) {
       display: none;
     }
-    .react-reader .reading-scroll {
-      padding: var(--space-3);
-    }
-    .react-reader .reading-article {
+    .react-reader .reading-scroll,
+    .react-reader .reading-scroll[data-mode="doc"] {
       padding: var(--space-4);
     }
     .reader-return > span {

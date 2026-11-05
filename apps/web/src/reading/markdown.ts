@@ -59,34 +59,42 @@ export const markdown = createMarkdown(false);
 /** Only the fixed-document owner wires and validates these fragment links. */
 export const documentMarkdown = createMarkdown(true);
 
-/** Marked normalizes CRLF. Map its UTF-16 token boundaries back to original UTF-8. */
+/**
+ * Marked normalizes CRLF. Map its UTF-16 token boundaries back to original
+ * UTF-8, offset by `base` bytes when `original` is a suffix of a longer text.
+ * `index` is the token's end as a UTF-16 index into `original`.
+ */
 export function markdownBlocks(
   original: string,
-): { token: Token; start: number; end: number }[] {
-  let normalized = "",
-    bytes = 0;
-  const positions: number[] = [0],
-    encoder = new TextEncoder();
+  base = 0,
+): { token: Token; start: number; end: number; index: number }[] {
+  const positions: number[] = [base],
+    origins: number[] = [0];
+  let bytes = base;
   for (let i = 0; i < original.length; ) {
-    const c = String.fromCodePoint(original.codePointAt(i)!);
-    if (c === "\r") {
-      const count = original[i + 1] === "\n" ? 2 : 1;
-      normalized += "\n";
+    const code = original.charCodeAt(i);
+    if (code === 13) {
+      const count = original.charCodeAt(i + 1) === 10 ? 2 : 1;
       bytes += count;
-      positions.push(bytes);
       i += count;
     } else {
-      normalized += c;
-      for (let n = 1; n < c.length; n++) positions.push(bytes);
-      bytes += encoder.encode(c).length;
-      positions.push(bytes);
-      i += c.length;
+      const point = original.codePointAt(i)!,
+        units = point > 0xffff ? 2 : 1;
+      if (units === 2) {
+        positions.push(bytes);
+        origins.push(i + 1);
+      }
+      // A lone surrogate encodes as U+FFFD, three bytes, as TextEncoder does.
+      bytes += point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+      i += units;
     }
+    positions.push(bytes);
+    origins.push(i);
   }
   let offset = 0;
-  return markdown.lexer(normalized).map((token) => {
+  return markdown.lexer(original.replace(/\r\n?/gu, "\n")).map((token) => {
     const start = positions[offset]!;
     offset += token.raw.length;
-    return { token, start, end: positions[offset]! };
+    return { token, start, end: positions[offset]!, index: origins[offset]! };
   });
 }

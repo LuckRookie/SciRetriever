@@ -15,11 +15,16 @@ const open = (
 ) => w.page.goto(`${w.origin}/?literature=${id}&reader=${mode}`);
 const ready = (w: Workspace) =>
   w.page.locator('.reading-pdf-page[data-rendered="true"]').first().waitFor();
-const longDocument = Array.from(
-  { length: 140 },
-  (_, i) =>
-    `Paragraph ${i}: a reported measurement with conditions and evidence.\n\n`,
-).join("");
+const paragraphs = (length: number) =>
+  Array.from(
+    { length },
+    (_, i) =>
+      `Paragraph ${i}: a reported measurement with conditions and evidence.\n\n`,
+  ).join("");
+// A slice carries up to 200 segments: these span two segment pages, and
+// several slices when continuation is held back.
+const mediumDocument = paragraphs(300);
+const longDocument = paragraphs(1400);
 
 it("continues fixed Unicode Markdown without rebuilding stable blocks and recovers a failed continuation", async () => {
   const w = await nextWorkspace({
@@ -27,7 +32,7 @@ it("continues fixed Unicode Markdown without rebuilding stable blocks and recove
     setup: async (env) => {
       env.setText(
         '# Original 文献🙂\r\n\r\nText with $E=mc^2$.\r\n\r\n| Sample | Value |\r\n|---|---|\r\n| A | 4.2 eV |\r\n\r\n$$\r\nE = mc^2\r\n$$\r\n\r\n<span onclick="window.attacked=true">unsafe HTML</span>\r\n\r\n[unsafe](javascript:alert(1)) ![image](valid.png) ![missing](missing.png)\r\n\r\n' +
-          longDocument +
+          mediumDocument +
           '\n\n<table><tr><td><img src="tail.png" alt="Final figure"></td></tr></table>\n',
       );
       const bytes = Buffer.from(
@@ -76,21 +81,35 @@ it("continues fixed Unicode Markdown without rebuilding stable blocks and recove
         } else await route.continue();
       },
     );
+    // Pictures arrive whole by resource ID; the listing maps IDs to references.
+    const references = new Map<string, string>();
     await w.page.route(
-      (url) => url.pathname === "/api/v1/query/document-resource",
+      (url) => url.pathname === "/api/v1/query/document-resources",
       async (route) => {
         const response = await route.fetch();
         const value = (await response.json()) as {
-          result: { resource: { reference: string } };
+          result: { resources: { resource_id: string; reference: string }[] };
         };
-        if (value.result.resource.reference === "missing.png")
+        for (const r of value.result.resources)
+          references.set(r.resource_id, r.reference);
+        await route.fulfill({ response });
+      },
+    );
+    await w.page.route(
+      (url) => url.pathname === "/api/v1/query/document-resource-bytes",
+      async (route) => {
+        const request = route.request().postDataJSON() as {
+          request: { resource_id: string };
+        };
+        const reference = references.get(request.request.resource_id);
+        const response = await route.fetch();
+        if (reference === "missing.png")
           await route.fulfill({
             status: 503,
             json: { code: "synthetic-resource-failure" },
           });
         else {
-          if (value.result.resource.reference === "valid.png")
-            await imageBarrier;
+          if (reference === "valid.png") await imageBarrier;
           await route.fulfill({ response });
         }
       },
@@ -185,7 +204,7 @@ it("continues fixed Unicode Markdown without rebuilding stable blocks and recove
         .poll(() => w.page.locator(".reading-continuation").innerText())
         .not.toContain("正在加载");
     }
-    await expect.poll(() => article.innerText()).toContain("Paragraph 139:");
+    await expect.poll(() => article.innerText()).toContain("Paragraph 299:");
     expect(await article.locator("[data-preserved=yes]").count()).toBe(1);
     expect(await w.page.locator(".reading-status").innerText()).toContain(
       "全文已加载",
@@ -228,7 +247,7 @@ it("keeps the latest outline target, text settings and reading position across a
       env.setText(
         "# Original document\n\n" +
           Array.from(
-            { length: 160 },
+            { length: 400 },
             (_, index) =>
               `## Section ${index}\n\nParagraph ${index} 中文 α🙂. ${"A reported observation with conditions. ".repeat(3)}\n\n`,
           ).join(""),
@@ -255,17 +274,17 @@ it("keeps the latest outline target, text settings and reading position across a
     });
     await w.page
       .locator(".reader-outline")
-      .getByRole("button", { name: "Section 20", exact: true })
+      .getByRole("button", { name: "Section 150", exact: true })
       .click();
     await started;
     await w.page
       .locator(".reader-outline")
-      .getByRole("button", { name: "Section 60", exact: true })
+      .getByRole("button", { name: "Section 300", exact: true })
       .click();
     release();
     const heading = w.page
       .locator(".reading-article")
-      .getByRole("heading", { name: "Section 60", exact: true });
+      .getByRole("heading", { name: "Section 300", exact: true });
     await expect
       .poll(
         () =>
@@ -305,7 +324,7 @@ it("keeps the latest outline target, text settings and reading position across a
       .poll(() => w.page.locator(".reading-article").textContent(), {
         timeout: 20_000,
       })
-      .toContain("Paragraph 60");
+      .toContain("Paragraph 300");
     await expect
       .poll(
         () =>
@@ -331,13 +350,13 @@ it("keeps the latest outline target, text settings and reading position across a
       name: "文档内查找",
       exact: true,
     });
-    await search.fill("Paragraph 60");
+    await search.fill("Paragraph 300");
     await search.press("Enter");
     expect(
       await w.page.locator(".reader-find [role=status]").textContent(),
     ).toContain("已加载范围");
     expect(await w.page.locator(".reading-match").textContent()).toContain(
-      "Paragraph 60",
+      "Paragraph 300",
     );
     expect(requests.every((url) => new URL(url).origin === w.origin)).toBe(
       true,

@@ -6,6 +6,7 @@
 
 ## 活动索引
 
+- [计划19：全文阅读](2026-11-05-reader-fulltext/README.md)。
 - [计划18：出网代理](2026-11-05-outbound-proxy/README.md)。
 
 已完成、取消或被替代的计划从[历史索引](../archive/README.md)查找；验收数字、授权记录与残余事项留在各计划中。

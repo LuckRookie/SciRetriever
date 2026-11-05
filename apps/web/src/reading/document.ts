@@ -1,5 +1,4 @@
 import {
-  sha256,
   type DocumentLayout,
   type DocumentReadingRef,
   type DocumentResource,
@@ -10,7 +9,7 @@ import type { FixedSource } from "./source.js";
 import { button, readerErrorMessage } from "./dom.js";
 import type { ReaderFrame } from "./contract.js";
 import type { ReadingPosition } from "./state.js";
-import { readDocument } from "./transport.js";
+import { readDocument, readResourceBytes } from "./transport.js";
 import { appendTitle, titleParts } from "./title.js";
 import { documentMarkdown as markdown, markdownBlocks } from "./markdown.js";
 
@@ -110,45 +109,7 @@ export async function renderDocument(
         resource.artifact.byte_size > 16 * 1024 * 1024
       )
         throw new Error("此资源不支持内嵌预览");
-      const bytes = new Uint8Array(resource.artifact.byte_size);
-      let offset = 0,
-        continuation: string | null = null;
-      do {
-        const page: DocumentReadResultMap["resource"] = await readDocument(
-          ctx,
-          "resource",
-          {
-            document_version_id: docId,
-            resource_id: resource.resource_id,
-            max_bytes: 65536,
-            continuation,
-          },
-        );
-        bound(page);
-        if (
-          JSON.stringify(page.resource) !== JSON.stringify(resource) ||
-          !page.bytes_base64 ||
-          !page.actual_range ||
-          page.actual_range.start_byte !== offset
-        )
-          throw new Error("图片读取无法核验");
-        const chunk = Uint8Array.from(atob(page.bytes_base64), (c) =>
-          c.charCodeAt(0),
-        );
-        if (
-          offset + chunk.length > bytes.length ||
-          page.actual_range.end_byte !== offset + chunk.length
-        )
-          throw new Error("图片范围不匹配");
-        bytes.set(chunk, offset);
-        offset += chunk.length;
-        continuation = page.continuation;
-      } while (continuation);
-      if (
-        offset !== bytes.length ||
-        (await sha256(bytes)) !== resource.artifact.sha256
-      )
-        throw new Error("图片完整性校验失败");
+      const bytes = await readResourceBytes(ctx, ref, resource);
       ctx.signal.throwIfAborted();
       const url = URL.createObjectURL(
         new Blob([bytes], { type: resource.artifact.media_type }),
@@ -240,9 +201,19 @@ export async function renderDocument(
     autoFailed = false;
   let pending: Promise<void> | null = null,
     jumpRevision = 0;
-  const blocks = () => [
-    ...article.querySelectorAll<HTMLElement>("[data-byte-start]"),
-  ];
+  const rendered: { html: string; element: HTMLElement }[] = [];
+  const blocks = () => rendered.map((r) => r.element);
+  /** Index of the first rendered block for which `after` holds; blocks are in document order. */
+  const search = (after: (block: HTMLElement) => boolean) => {
+    let low = 0,
+      high = rendered.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (after(rendered[mid]!.element)) high = mid;
+      else low = mid + 1;
+    }
+    return low;
+  };
   const folded = (block: HTMLElement) =>
     article.dataset.articleInfo === "collapsed" &&
     block.classList.contains("reading-article-info");
@@ -294,9 +265,10 @@ export async function renderDocument(
     )
       return;
     const top = frame.body.getBoundingClientRect().top;
-    const block = blocks().find(
-      (b) => !folded(b) && b.getBoundingClientRect().bottom > top,
-    );
+    // Folded article information has no height; take the next visible block.
+    let at = search((b) => b.getBoundingClientRect().bottom > top);
+    while (at < rendered.length && folded(rendered[at]!.element)) at++;
+    const block = rendered[at]?.element;
     if (block) {
       state.textOffset = Number(block.dataset.byteStart);
       state.blockOffset = Math.max(
@@ -307,10 +279,11 @@ export async function renderDocument(
     }
     state.loadedEnd = end;
     state.scroll = frame.body.scrollTop;
+    if (block) frame.onPosition?.(state.textOffset);
   };
   const go = (offset: number, ratio = 0, animate = false) => {
     const block =
-      blocks().find((b) => Number(b.dataset.byteEnd) > offset) ??
+      rendered[search((b) => Number(b.dataset.byteEnd) > offset)]?.element ??
       blocks().at(-1);
     if (block && folded(block)) setInfoOpen(true);
     if (block) {
@@ -368,7 +341,6 @@ export async function renderDocument(
   more.id = "reader-load-more";
   more.hidden = true;
   frame.body.append(tail, more);
-  const rendered: { html: string; element: HTMLElement }[] = [];
   const wireDocumentLinks = () => {
     // Only an explicit fragment link resolving to a rendered Markdown heading
     // is navigable. Bare reference numbers and unverified PDF page maps stay text.
@@ -387,7 +359,7 @@ export async function renderDocument(
       headings.set(occurrence ? `${slug}-${occurrence}` : slug, heading);
     }
     for (const link of article.querySelectorAll<HTMLAnchorElement>(
-      "a[data-reading-fragment]",
+      "a[data-reading-fragment]:not([data-reading-wired])",
     )) {
       let fragment = link.dataset.readingFragment!;
       try {
@@ -405,6 +377,8 @@ export async function renderDocument(
         continue;
       }
       link.removeAttribute("aria-disabled");
+      // A resolved link keeps its target; later chunks only add headings.
+      link.dataset.readingWired = "";
       const section = heading.closest<HTMLElement>("[data-byte-start]")!;
       const snippets = [section.textContent ?? ""];
       let next = section.nextElementSibling;
@@ -440,10 +414,18 @@ export async function renderDocument(
       };
     }
   };
+  // Blocks before this point are settled: later bytes cannot change them, so
+  // each new chunk lexes and renders only the text after it.
+  let settled = { index: 0, bytes: 0, count: 0 };
+  /** Paints new text; returns where the first replaced block started (Infinity when it only appended). */
   const paint = () => {
-    let index = 0;
-    for (const block of markdownBlocks(text)) {
-      if (block.token.type === "space") continue;
+    let index = settled.count,
+      changed = Infinity;
+    const fresh = markdownBlocks(
+      text.slice(settled.index),
+      settled.bytes,
+    ).filter((block) => block.token.type !== "space");
+    for (const block of fresh) {
       const html = markdown.parser([block.token]);
       const previous = rendered[index];
       // Keep stable DOM (including decoded images and tables) when more bytes
@@ -510,6 +492,7 @@ export async function renderDocument(
         wrap.append(table);
       }
       if (previous) {
+        changed = Math.min(changed, Number(previous.element.dataset.byteStart));
         for (const resource of previous.element.querySelectorAll(
           "[data-resource]",
         ))
@@ -523,11 +506,23 @@ export async function renderDocument(
         observer.observe(resource);
     }
     for (const previous of rendered.splice(index)) {
+      changed = Math.min(changed, Number(previous.element.dataset.byteStart));
       for (const resource of previous.element.querySelectorAll(
         "[data-resource]",
       ))
         observer.unobserve(resource);
       previous.element.remove();
+    }
+    // Markdown crossing a read boundary recovers from the last blocks, so they
+    // stay open until more text follows them.
+    const open = finished ? 0 : 2;
+    if (fresh.length > open) {
+      const last = fresh[fresh.length - open - 1]!;
+      settled = {
+        index: settled.index + last.index,
+        bytes: last.end,
+        count: settled.count + fresh.length - open,
+      };
     }
     const firstInfo = article.querySelector(".reading-article-info");
     if (firstInfo && firstInfo.previousElementSibling !== infoToggle)
@@ -540,6 +535,7 @@ export async function renderDocument(
     frame.onIssue?.(null);
     ctx.root.dataset.readingReady = "true";
     frame.onDocumentPaint?.();
+    return changed;
   };
   const loadChunk = async () => {
     more.disabled = true;
@@ -577,8 +573,10 @@ export async function renderDocument(
       capture();
       const offset = state.textOffset,
         ratio = state.blockOffset;
-      paint();
-      if (!restoring) go(offset, ratio);
+      // Text above a replaced block keeps its place; only a reader inside the
+      // replaced tail needs to be put back (measuring forces a full layout).
+      const changed = paint();
+      if (!restoring && offset >= changed) go(offset, ratio);
       state.loadedEnd = end;
     } catch (error) {
       if (!ctx.signal.aborted) {
@@ -680,6 +678,7 @@ export async function renderDocument(
           title: section.title,
           role: section.role ?? null,
           level: section.level,
+          start: section.start_utf8,
           activate,
         });
       else

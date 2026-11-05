@@ -65,7 +65,7 @@ import {
 } from "../../data/url.js";
 import { AnimatedPanel } from "../../motion/index.js";
 import { useShell } from "../../shell/context.js";
-import { errorMessage, sectionRoleNames } from "../../strings.js";
+import { errorMessage } from "../../strings.js";
 import { ProofreadEditor } from "./ProofreadEditor.js";
 import { StructurePanel } from "../archive/StructurePanel.js";
 import { useReaderMarks } from "./marks/ReaderMarks.js";
@@ -82,6 +82,7 @@ import {
   type FullTextLayer,
 } from "./translation/fulltext-layer.js";
 import { FullTextControls } from "./translation/FullTextControls.js";
+import { ReaderOutline } from "./ReaderOutline.js";
 import { useFullTextTranslation } from "./translation/use-fulltext.js";
 
 export default function Reader() {
@@ -113,7 +114,8 @@ export default function Reader() {
     body = useRef<HTMLDivElement>(null),
     status = useRef<HTMLDivElement>(null),
     findStatus = useRef<HTMLSpanElement>(null),
-    frame = useRef<ReaderFrame | null>(null);
+    frame = useRef<ReaderFrame | null>(null),
+    positionFrame = useRef(0);
   const [revision, retry] = useState(0),
     [layout, setLayout] = useState(0),
     [findOpen, setFindOpen] = useState(false),
@@ -122,6 +124,7 @@ export default function Reader() {
     [pdfUrl, setPdfUrl] = useState(""),
     [outline, setOutline] = useState<ReaderOutlineEntry[]>([]),
     [outlineNote, setOutlineNote] = useState(""),
+    [readingOffset, setReadingOffset] = useState<number | null>(null),
     [nextMatch, setNextMatch] = useState<(() => void) | null>(null),
     [issue, setIssue] = useState<{
       message: string;
@@ -301,6 +304,7 @@ export default function Reader() {
     setPdfUrl("");
     setOutline([]);
     setOutlineNote("");
+    setReadingOffset(null);
     setIssue(null);
     setReady(false);
     setNextMatch(null);
@@ -375,6 +379,14 @@ export default function Reader() {
           setOutline((values) => [...values, entry]);
       },
       onOutlineEmpty: setOutlineNote,
+      onPosition: (offset) => {
+        // Scroll reports arrive per frame; the outline needs at most one update each.
+        if (controller.signal.aborted || positionFrame.current) return;
+        positionFrame.current = requestAnimationFrame(() => {
+          positionFrame.current = 0;
+          if (!controller.signal.aborted) setReadingOffset(offset);
+        });
+      },
       onFindNext: (value) => {
         if (!controller.signal.aborted) setNextMatch(() => value);
       },
@@ -1037,31 +1049,22 @@ export default function Reader() {
       >
         <div className="reader-center">
           {mode !== "edit" && mode !== "results" && layoutPosition.outline && (
-            <nav className="reader-outline" aria-label="文档目录">
-              <h2>目录</h2>
-              {outline.length ? (
-                outline.map((entry, index) => (
-                  <Button
-                    key={index}
-                    variant="text"
-                    className="reader-outline-entry"
-                    data-level={Math.min(entry.level, 4)}
-                    data-untitled={entry.title === null || undefined}
-                    onPress={entry.activate}
-                  >
-                    {entry.title ??
-                      (entry.role && sectionRoleNames[entry.role]) ??
-                      "未命名章节"}
-                  </Button>
-                ))
-              ) : (
-                <p>
+            <ReaderOutline
+              entries={outline}
+              position={readingOffset}
+              onDismiss={() =>
+                changeLayout(() => {
+                  layoutPosition.outline = false;
+                })
+              }
+              empty={
+                <p className="reader-outline-note">
                   {mode === "know"
                     ? "总结按条目呈现，点击短证据编号核对原文。"
                     : outlineNote || "暂无可靠章节目录。"}
                 </p>
-              )}
-            </nav>
+              }
+            />
           )}
           <div className="reader-surface">
             {sources.isFetching && mode !== "know" && mode !== "results" && (
@@ -1086,6 +1089,7 @@ export default function Reader() {
             )}
             <div
               ref={body}
+              data-mode={mode}
               className={`reading-scroll reader-engine-body ${showSources ? "reading-show-sources" : ""} ${layoutPosition.fullWidth ? "reading-full" : layoutPosition.wide ? "reading-wide" : ""}`}
               hidden={
                 mode === "know" ||
