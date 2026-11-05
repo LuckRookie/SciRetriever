@@ -193,7 +193,8 @@ it("marks a long document above the text, in the information panel and in the li
   // The flag is the server's (ADR 0055 contract); this checks the page.
   const withLong = async (
     route: import("playwright").Route,
-    mutate: (body: Record<string, any>) => void,
+    // Response bodies are untyped JSON; each route edits its own known path.
+    mutate: (body: ReturnType<typeof JSON.parse>) => void,
   ) => {
     const response = await route.fetch();
     const body = await response.json();
