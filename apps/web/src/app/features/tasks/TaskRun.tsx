@@ -397,7 +397,15 @@ function ArchiveSteps({ value }: { value: Record<string, unknown> }) {
                 {step === "parse" && !s && all.some((r) => r.asset_id === asset)
                   ? "复用已有解析"
                   : (stepStatus[String(s?.status ?? "pending")] ?? "停下")}
-                {pages && Number(pages.required) > 0 ? (
+                {pages && Number(pages.unreviewed) > 0 ? (
+                  <span>
+                    {" "}
+                    · 长文档，未逐页校订（{Number(pages.unreviewed)} 页）
+                    {Number(pages.accepted)
+                      ? `，${Number(pages.accepted)} 页已校订`
+                      : ""}
+                  </span>
+                ) : pages && Number(pages.required) > 0 ? (
                   <span>
                     {" "}
                     · {Number(pages.accepted)} / {Number(pages.required)} 页

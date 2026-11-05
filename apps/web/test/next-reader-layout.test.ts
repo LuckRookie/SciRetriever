@@ -182,3 +182,68 @@ it("folds article information, lays out figure groups and footnotes, and names u
     await w.close();
   }
 }, 90000);
+
+it("marks a long document above the text, in the information panel and in the library row", async () => {
+  const w = await nextWorkspace({ ready: "body" });
+  const long = {
+    pages: 294,
+    arrange_input_bytes: 796130,
+    reasons: ["pages", "arrange-input"],
+  };
+  // The flag is the server's (ADR 0055 contract); this checks the page.
+  const withLong = async (
+    route: import("playwright").Route,
+    mutate: (body: Record<string, any>) => void,
+  ) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    mutate(body);
+    await route.fulfill({ response, json: body });
+  };
+  try {
+    await w.page.route(
+      (url) => url.pathname === "/api/v1/query/document-describe",
+      (route) =>
+        withLong(route, (body) => {
+          body.result.long_document = long;
+        }),
+    );
+    await w.page.route(
+      (url) => url.pathname === "/api/v1/query/read",
+      (route) =>
+        withLong(route, (body) => {
+          const r = body.result ?? body;
+          (r.detail ?? r).long_document = long;
+        }),
+    );
+    await w.page.route(
+      (url) => url.pathname === "/api/v1/query/search",
+      (route) =>
+        withLong(route, (body) => {
+          const r = body.result ?? body;
+          for (const item of (r.page ?? r).items ?? [])
+            item.long_document = long;
+        }),
+    );
+    await w.page.goto(
+      `${w.origin}/?literature=${w.env.parseRequest.literature_id}&reader=doc`,
+    );
+    const note = w.page.locator(".reading-long-document");
+    await note.waitFor();
+    expect(await note.innerText()).toBe(
+      "长文档（294 页）：按简化流程建档，未逐页校订，文字可能含解析错误；以 PDF 为准。",
+    );
+    expect(await w.page.getByText("长文档（294 页）· 未逐页校订").count()).toBe(
+      1,
+    );
+    await w.page.goto(`${w.origin}/?view=lib`);
+    await w.page
+      .locator(".paper-status small", { hasText: "长文档" })
+      .first()
+      .waitFor();
+    expect(w.errors).toEqual([]);
+  } finally {
+    await w.page.unrouteAll({ behavior: "wait" });
+    await w.close();
+  }
+}, 90000);

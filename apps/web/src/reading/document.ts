@@ -89,6 +89,14 @@ export async function renderDocument(
     appendTitle(title, titleParts(frame.documentTitle));
     article.append(title);
   }
+  // ADR 0055: a long document took the simplified path; say so above the text.
+  if (described.long_document) {
+    const note = document.createElement("p");
+    note.className = "reading-long-document";
+    note.setAttribute("role", "note");
+    note.textContent = `长文档（${described.long_document.pages} 页）：按简化流程建档，未逐页校订，文字可能含解析错误；以 PDF 为准。`;
+    article.append(note);
+  }
   frame.body.append(article);
   const urls = new Map<string, string>(),
     inFlight = new Map<string, Promise<string>>();

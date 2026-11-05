@@ -1495,6 +1495,11 @@ const LibraryRow = memo(function LibraryRow({
           {item.literature.status === "ASSET_READY" ? (
             <small>待建档</small>
           ) : null}
+          {item.literature.status === "READY" && item.long_document ? (
+            <small title="按简化流程建档，未逐页校订；以 PDF 为准">
+              长文档
+            </small>
+          ) : null}
           {item.literature.status === "ARCHIVING" ? (
             <small>
               {item.missing_step

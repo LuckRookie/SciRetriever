@@ -644,6 +644,12 @@ export function ReaderInformation({
               } as Record<string, string>
             )[detail.literature.status] ??
               (next && !unparsed ? "已解析，全文尚未建档" : "全文尚未建档")}
+            {detail.literature.status === "READY" && detail.long_document ? (
+              <p className="ui-description">
+                长文档（{detail.long_document.pages} 页）·
+                未逐页校订，文字可能含解析错误；以 PDF 为准
+              </p>
+            ) : null}
           </Step>
         </ul>
         {reading.data ? (
