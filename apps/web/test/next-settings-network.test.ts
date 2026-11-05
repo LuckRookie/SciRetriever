@@ -77,9 +77,9 @@ it("saves the proxy and the requesters that use it separately, tests the proxy, 
         .getByRole("textbox", { name: "代理地址", exact: true })
         .inputValue(),
     ).toBe("http://127.0.0.1:7891");
-    expect(
-      await page.getByRole("button", { name: "保存走代理" }).count(),
-    ).toBe(0);
+    expect(await page.getByRole("button", { name: "保存走代理" }).count()).toBe(
+      0,
+    );
     await page
       .getByRole("textbox", { name: "代理地址", exact: true })
       .fill("http://127.0.0.1:7890");
