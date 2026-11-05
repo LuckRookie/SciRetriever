@@ -24,4 +24,6 @@ Codex：修复与副本验证。Claude：部署、在正式库上发布、记录
 
 2026-11-05 已满足：4174 换到 `40ebc49`，停服后备份正式库（`production-30/backup-schema15-before`），发布得到 `fed03d89-8b22-19af-af6d-45142a485acd`（revision 2，结构标注已发布），新旧两个版本都通过校验读取。证据在 `sandbox/reports/2026-11-05-plan19-05-deploy/`。
 
-遗留：第一次用 `archive build --from-step render` 尝试时，它先跑整理步骤并以 `page-tools-unavailable` 停下（0 次模型调用），该文献的整理步骤因此记为失败，文献库会显示“建档失败”。全文阅读不受影响。恢复方式待 Owner 决定。
+遗留：第一次用 `archive build --from-step render` 尝试时，它先跑整理步骤并以 `page-tools-unavailable` 停下（0 次模型调用），该文献的整理步骤因此记为失败，文献库会显示“建档失败”。
+
+2026-11-06 Owner 选择重新建档，已解决：停服后备份（`production-31/backup-schema15-before`），用部署的 CLI 按常规建档（`--mode full`，不带 from-step）重跑，新任务 `processing-fcef6f94…` 完成，文献恢复 READY，旧失败任务保留为历史。整理与校订复用（长文档流程，0 次调用），模型共调用 3 次（元数据 1、标签 2）；默认版本仍是 `fed03d89…` revision 2。因为默认全文换成 v4，元数据与标签按规则重跑：摘要措辞略有变化（元数据 revision 3），标签换掉一个（“穆斯堡尔谱”改为新建的“磁性对称性”，词表 v20）。证据在 `sandbox/reports/2026-11-06-plan19-rearchive/`。
