@@ -569,8 +569,8 @@ MinerU 和可选 CloakBrowser secret 操作只更新同目录下的 `credentials
 TypeScript owner，可编辑 Sources 的 Auto/Custom、来源和扫描上限、WOS/Unpaywall 参数，管理 Model Provider/Model 注册表，并选择 Browser/Analyze 模型和编辑已有 Parser/Browser 字段。按 revision 校验并发布；冲突时
 保留浏览器中的草稿，刷新最新 snapshot 后允许用户修正或重试。Probe 按请求重读设置和凭据，随后
 重新读取 readiness；页面加载和普通刷新不会隐式联网，probe 结果不写入配置或 Catalog。长寿命
-Workbench Application 仍保留启动时的普通配置：页面会提示 Browser/Jobs 业务操作需要重启服务后应用
-新普通设置。凭据则由每个新外部请求在 Network/adapter 派发边界从固定 credentials 文件重读并按
+Workbench Application 在点击页头“应用配置”前仍使用启动时的普通配置；“应用配置”只重建当前程序的运行时，
+不需要在终端重启服务，也不构建程序或迁移数据库（见[初始化与恢复](upgrade.md#web-守护的首次切换与程序升级)）。凭据则由每个新外部请求在 Network/adapter 派发边界从固定 credentials 文件重读并按
 origin/operation 重新授权；保存或撤销后，已进入传输的动作可结算，后续动作使用新值或稳定拒绝。
 Probe 也在每次点击时重读配置和凭据。Model Provider、Source 和 MinerU 凭据通过独立 password 输入保存，
 提交后输入立即清空；页面只显示 presence，不回显值，也不会把 secret 放入 URL、history、DOM 或普通错误。

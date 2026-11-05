@@ -6,9 +6,11 @@
 
 获取 PDF 与建档是两个独立操作。建档依次为解析、整理、逐页校订、渲染、元数据、参考文献、标签：某个部分还没有部署 profile 的原始解析时先调用 MinerU，已有解析直接复用，重新建档不会重新解析；建档不生成全文总结。单独的解析操作（`parse-documents`、维护页“解析 PDF”）保留，用于排查和重新解析。
 
-后端与 HTTP/CLI/MCP 已接入新流程；Web 界面按新合同另行联调，本文不代表界面已部署。整理只提交操作：每部分一次发出全部区块、一次决定全部断段，粘在正文里的版权句、页归属由程序按 PDF 文字层处理；校订逐页对照原图。真实库转换和全量重建是独立维护步骤，现有用户库不会在启动时自动转换。
+Web、HTTP、CLI、MCP 走同一流程。整理只提交操作：页眉、页脚、页码和页边文字由程序在整理前删除并记录规则；确定的断段（跨页、跨栏或跨图表且前句未完、后块小写开头，或行尾连字符）由程序直接合并，其余断段与“末行排满、下段不缩进”的跨页跨栏续接交模型一次裁决；粘在正文里的版权句、页归属由程序按 PDF 文字层处理；校订逐页对照原图。校订稿按原文的章节顺序与原文标题排版，不写原文没有的标题；首页的单位、日期等文章信息排在作者之后，同一图注的分图合成一组，页脚注放在引用它的段落之后，这些排版信息由文档结构给出，Markdown 正文不加标记（[ADR 0054](../architecture/decisions/0054-rule-preprocessing-and-source-order-layout.md)）。真实库转换和全量重建是独立维护步骤，现有用户库不会在启动时自动转换。
 
-建档需要可用的 MinerU 连接（已有解析时不需要）和可用的 DSH 模型。校订的页面检查还需要已通过安装校验的 CloakBrowser runtime：`SCIRETRIEVER_CLOAK_BUNDLE` 应指向包含 `chrome` 和安装清单的具体版本目录，而不是它的缓存父目录；页面图由随包的 MuPDF `mutool` 渲染。安装方式见[安装指南](installation.md)。`parser-unavailable` 表示解析后端尚不可用；建档问题中的 `proofread-renderer-unavailable` 表示页面渲染 runtime 不可用。两者应分别检查，已完成的 PDF 接纳和解析不会因此撤销。
+**长文档**：超过 50 页或整理输入超过单次上限的部分自动按简化流程建档（[ADR 0055](../architecture/decisions/0055-long-document-simplified-archive.md)）：整理按整页分段，校订不调用模型、各页记为未逐页校订，元数据只读前 20 页与最后 5 页。建档完成后状态仍为 READY，`archive status`、`document describe` 与文献列表带 `long_document`（页数、整理输入字节数、命中的条件），阅读页、文献库与任务详情注明“长文档，未逐页校订，以 PDF 为准”。需要时可用 `retry_page_indexes` 对选中的页按普通方式校订。
+
+建档需要可用的 MinerU 连接（已有解析时不需要）和可用的 DSH 模型。校订的页面检查还需要已通过安装校验的 CloakBrowser runtime：`SCIRETRIEVER_CLOAK_BUNDLE` 应指向包含 `chrome` 和安装清单的具体版本目录，而不是它的缓存父目录；页面图由随包的 MuPDF `mutool` 渲染；从源码工作区或没有随包 runtime 的目录用 CLI 建档时，用 `SCIRETRIEVER_MUPDF` 指向本机 MuPDF bundle 目录，否则整理或校订报 `page-tools-unavailable`。安装方式见[安装指南](installation.md)。`parser-unavailable` 表示解析后端尚不可用；建档问题中的 `proofread-renderer-unavailable` 表示页面渲染 runtime 不可用。两者应分别检查，已完成的 PDF 接纳和解析不会因此撤销。
 
 ## 发起与恢复
 
