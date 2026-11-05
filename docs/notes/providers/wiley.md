@@ -210,7 +210,7 @@ origin、模板、marker 或成功结论在 SciRetriever 中仍成立，详见
 [ScanSci 迁移审计](../scansci-migration-audit.md)。当前实现不继承这些 URL/marker，也不继承上游
 CARSI Cookie、Profile 数据或 success verdict；这些历史观察只可用于通用 fixture 设计。
 
-Browser 使用当前机器正常网络出口和共享 persistent Profile/context，所有文章共用
+Browser 使用浏览器所选出口（直连或经代理）和共享 persistent Profile/context，所有文章共用
 `browser-generic` policy，不再建立 Wiley lane。自动流程不导入或读取 Cookie、不填写凭据；
 第一版不提供可见 Browser 认证入口。TDM API 的认证、quota、service
 或 network failure 仍按第二层
@@ -232,6 +232,6 @@ article-local 隔离与临时下载工作区清理；Wiley 候选和其它站点
 IP-based TDM API 支持。更新这些事实前应再次核对 Wiley 官方材料；真实 Provider 探测
 只能由用户明确发起，仓库测试继续使用离线 fake。2026-08-19 本轮没有读取 token、调用真实
 Wiley API、访问真实文章或下载真实 PDF。Production Planner 认识 `api:wiley-tdm-v1` 与唯一
-`browser:generic`，并严格保持 Public → API → Browser；Browser 使用所选持久 Profile 与当前机器
-正常网络出口。Profile 是否存在、是否保存过登录状态、机构 IP 和当前文章 entitlement 是分立
+`browser:generic`，并严格保持 Public → API → Browser；Browser 使用所选持久 Profile 与浏览器
+所选出口。Profile 是否存在、是否保存过登录状态、机构 IP 和当前文章 entitlement 是分立
 事实，仍在真实页面逐文章判断。

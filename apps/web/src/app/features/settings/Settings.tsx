@@ -35,6 +35,7 @@ import {
   runtimeStatus,
 } from "./configuration-data.js";
 import { ApplyConfiguration } from "../sources/ApplyConfiguration.js";
+import { NetworkSettings, networkOf } from "./Network.js";
 import {
   SourceDirectoryPanel,
   sourceDirectoryKey,
@@ -47,6 +48,7 @@ const tabs = [
   { id: "sources", label: "文献来源" },
   { id: "models", label: "模型" },
   { id: "parser", label: "解析与 Browser" },
+  { id: "network", label: "网络" },
   { id: "archive", label: "建档" },
   { id: "cred", label: "凭据" },
   { id: "status", label: "运行状态" },
@@ -54,6 +56,8 @@ const tabs = [
   { id: "advanced", label: "高级" },
 ];
 const str = (value: unknown) => (typeof value === "string" ? value : "");
+/** The network section saves its two halves separately; each has its own mark. */
+const networkMarks = { proxy: "network-proxy", via_proxy: "network-routes" };
 interface ProviderRow {
   id: string;
   name: string;
@@ -115,6 +119,8 @@ export default function Settings() {
     [message, setMessage] = useState(""),
     [refreshConfirm, setRefreshConfirm] = useState(false);
   const [leaveConfirm, setLeaveConfirm] = useState(false);
+  const dirtyNow = useRef(dirty);
+  dirtyNow.current = dirty;
   const leaveDecision = useRef<((allow: boolean) => void) | null>(null);
   useEffect(() => {
     if (!dirty.size) return;
@@ -237,6 +243,8 @@ export default function Settings() {
     }: {
       sections: string[];
       configuration: JsonRecord;
+      /** Draft marks this save settles; the sections themselves by default. */
+      marks?: string[];
     }) => {
       if (!snapshot) throw new Error("请先读取当前配置。");
       return api.request("/api/configuration/publish-json", {
@@ -250,10 +258,19 @@ export default function Settings() {
         config = record(saved.configuration, "configuration");
       setSnapshot(saved);
       setRuntime(result);
+      const marks = variables.marks ?? variables.sections;
       setDraft((current) => {
         const next = { ...(current ?? config) };
         for (const name of variables.sections)
           next[name] = structuredClone(config[name]);
+        // The half of the network section that was not saved keeps its draft.
+        if (current && variables.sections.includes("network"))
+          for (const [field, part] of Object.entries(networkMarks))
+            if (!marks.includes(part) && dirtyNow.current.has(part))
+              next.network = {
+                ...record(next.network, "network"),
+                [field]: record(current.network, "network")[field],
+              };
         return next;
       });
       if (variables.sections.includes("providers")) {
@@ -261,15 +278,17 @@ export default function Settings() {
         setProviders(rows.providers);
         setModels(rows.models);
       }
-      setDirty(
-        (current) =>
-          new Set(
-            [...current].filter((name) => !variables.sections.includes(name)),
-          ),
-      );
+      setDirty((current) => {
+        const left = new Set(
+          [...current].filter((name) => !marks.includes(name)),
+        );
+        if (!Object.values(networkMarks).some((part) => left.has(part)))
+          left.delete("network");
+        return left;
+      });
       const text = variables.sections.includes("paths")
         ? "数据库绑定已保存。当前进程继续使用启动时的数据库；重启服务后生效。已有数据没有移动。"
-        : `${variables.sections.includes("sources") ? "来源配置" : variables.sections.includes("providers") ? "Provider/Model" : "运行配置"}已保存并重新读取。${result.application_restart_required === true ? "当前服务需重启后应用新配置。" : ""}`;
+        : `${variables.sections.includes("sources") ? "来源配置" : variables.sections.includes("providers") ? "Provider/Model" : variables.sections.includes("network") ? "网络设置" : "运行配置"}已保存并重新读取。${result.application_restart_required === true ? "当前服务需重启后应用新配置。" : ""}`;
       setMessage(text);
       shell.notify(text);
       // The source directory saves against the newest revision too.
@@ -299,12 +318,52 @@ export default function Settings() {
       guard.current = false;
     },
   });
-  const save = (sections: string[], configuration = draft) => {
+  const save = (
+    sections: string[],
+    configuration = draft,
+    marks?: string[],
+  ) => {
     if (!configuration || guard.current) return;
     guard.current = true;
     setMessage("正在校验并保存…");
-    publish.mutate({ sections, configuration });
+    publish.mutate({ sections, configuration, ...(marks ? { marks } : {}) });
   };
+  const savedConfiguration = snapshot
+    ? record(snapshot.configuration, "saved configuration")
+    : null;
+  /** Saves one half of the network section; the other keeps its saved value. */
+  const saveNetwork = (field: keyof typeof networkMarks) => {
+    if (!draft || !savedConfiguration) return;
+    const current = networkOf(draft),
+      next = { ...networkOf(savedConfiguration), [field]: current[field] };
+    if (typeof next.proxy === "string") next.proxy = next.proxy.trim() || null;
+    save(["network"], { ...draft, network: next }, [networkMarks[field]]);
+  };
+  /** A half edited back to its saved value is no longer an unsaved change. */
+  const editNetwork = (field: keyof typeof networkMarks, value: unknown) => {
+    setDraft((current) =>
+      current
+        ? { ...current, network: { ...networkOf(current), [field]: value } }
+        : current,
+    );
+    // Lists compare as sets: unticking and ticking again restores the saved value.
+    const canonical = (v: unknown) =>
+      JSON.stringify(v, (_, x: unknown) =>
+        Array.isArray(x) ? [...(x as string[])].sort() : x,
+      );
+    const same =
+      canonical(value) === canonical(networkOf(savedConfiguration)[field]);
+    setDirty((current) => {
+      const next = new Set(current);
+      if (same) next.delete(networkMarks[field]);
+      else next.add(networkMarks[field]);
+      if (Object.values(networkMarks).some((part) => next.has(part)))
+        next.add("network");
+      else next.delete("network");
+      return next;
+    });
+  };
+  const proxied = networkOf(savedConfiguration).via_proxy;
   const refresh = async () => {
     setRefreshConfirm(false);
     try {
@@ -608,7 +667,12 @@ export default function Settings() {
                         <h3>Provider</h3>
                         {providers.map((row, index) => (
                           <fieldset key={row.id}>
-                            <legend>Provider {index + 1}</legend>
+                            <legend>
+                              Provider {index + 1}
+                              {proxied.providers.includes(row.name) ? (
+                                <span className="settings-egress">经代理</span>
+                              ) : null}
+                            </legend>
                             <div className="settings-grid">
                               <TextField
                                 label={`Provider ${index + 1} 名称`}
@@ -1054,6 +1118,32 @@ export default function Settings() {
                     </Section>
                   </>
                 )}
+                {section === "network" && savedConfiguration && (
+                  <NetworkSettings
+                    configuration={draft}
+                    saved={savedConfiguration}
+                    authentication={
+                      readiness.data?.network?.proxy_authentication === true
+                    }
+                    baseline={str(snapshot?.revision)}
+                    proxyAction={saveButton(
+                      [networkMarks.proxy],
+                      "保存代理",
+                      () => saveNetwork("proxy"),
+                    )}
+                    routesAction={saveButton(
+                      [networkMarks.via_proxy],
+                      "保存走代理",
+                      () => saveNetwork("via_proxy"),
+                    )}
+                    onProxy={(proxy) => editNetwork("proxy", proxy)}
+                    onRoutes={(routes) => editNetwork("via_proxy", routes)}
+                    onCredential={(result) => {
+                      setRuntime(result);
+                      void readiness.refetch();
+                    }}
+                  />
+                )}
                 {section === "cred" && (
                   <Credential
                     baseline={str(snapshot?.revision)}
@@ -1281,7 +1371,9 @@ function ProbeResult({ value }: { value: unknown }) {
   return (
     <p role="status" data-outcome={outcome}>
       {outcome === "passed"
-        ? "测试通过，连接正常。"
+        ? result.egress === "proxy"
+          ? "测试通过，经代理连接正常。"
+          : "测试通过，连接正常。"
         : `测试结果：${probeOutcomes[outcome] ?? outcome}。${reason ? probeReason(reason) : ""}`}
     </p>
   );

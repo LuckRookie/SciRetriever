@@ -63,7 +63,7 @@ viewer:  /stamp/stamp.jsp?...&arnumber={arnumber}
 
 因此 `ieee-xplore` 状态为 `unsupported`，没有 Browser route 或新增 Metadata credential。若未来先
 补齐官方政策、封闭规则和离线证据，并由用户另行授权现场核实，也必须使用普通配置选中的持久
-Profile、当前机器正常网络出口和一篇批准样本；无 GUI Linux 使用 Xvfb，probe 不开放交互，按
+Profile、浏览器所选出口和一篇批准样本；无 GUI Linux 使用 Xvfb，probe 不开放交互，按
 独立 IEEE risk group 串行。自动流程不得填写凭据、导入 Cookie 或处理 MFA/challenge；需要用户
 认证的样本不属于第一版自动 Browser 现场核实范围。现场结果仍不能替代 Full-Text API 的
 独立产品合同，也不能证明 Profile 已登录或任意文章 entitlement。

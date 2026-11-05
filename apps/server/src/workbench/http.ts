@@ -425,6 +425,7 @@ function validUiLocation(url: URL): boolean {
         "sources",
         "models",
         "parser",
+        "network",
         "cred",
         "status",
         "advanced",

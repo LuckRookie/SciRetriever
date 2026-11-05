@@ -21,11 +21,11 @@ Codex（`sciretriever-web`）：`packages/contracts`、`apps/server` 及测试�
 
 ## Tasks
 
-- [ ] **1.1 合同**：配置字段、凭据字段、出口值、`proxy-unavailable`、测试代理的请求与结果、出口标注字段；写进回执 `contract.md`。
-- [ ] **1.2 连接**：`connectVerified` 与浏览器 loopback 代理的上游支持经代理 CONNECT；隧道内 TLS 与证书校验照旧。
-- [ ] **1.3 路由**：各发起方把出口带进 Network；本机与局域网目标始终直连。
-- [ ] **1.4 配置、凭据与测试入口**：校验（经代理而未配代理地址时拒绝保存）、CLI `config`、HTTP、测试代理。
-- [ ] **1.5 文档**：技术文档 02 第 7 节、08 中“原始出口”“不改变服务器原始出口”等表述改为现行规则。
+- [x] **1.1 合同**：配置字段、凭据字段、出口值、`proxy-unavailable`、测试代理的请求与结果、出口标注字段；写进回执 `contract.md`。
+- [x] **1.2 连接**：`connectVerified` 与浏览器 loopback 代理的上游支持经代理 CONNECT；隧道内 TLS 与证书校验照旧。
+- [x] **1.3 路由**：各发起方把出口带进 Network；本机与局域网目标始终直连。
+- [x] **1.4 配置、凭据与测试入口**：校验（经代理而未配代理地址时拒绝保存）、CLI `config`、HTTP、测试代理。
+- [x] **1.5 文档**：技术文档 02 第 7 节、08 中“原始出口”“不改变服务器原始出口”等表述改为现行规则。
 
 ## 验证
 
@@ -36,3 +36,5 @@ Codex（`sciretriever-web`）：`packages/contracts`、`apps/server` 及测试�
 ## 退出条件
 
 回执 `DONE.md` 给出提交、合同与验证结果；02 可以按 `contract.md` 接界面。
+
+2026-11-05 已满足：提交 `e4cae62`，回执 `sandbox/reports/2026-11-05-plan18-01/`。真实验证中测试代理与 Crossref 直连通过；Semantic Scholar 经代理已到达目标，但匿名请求两次（Claude 复验一次）都得到 429 限流，见计划进度。

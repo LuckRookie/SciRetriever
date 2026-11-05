@@ -230,4 +230,10 @@
       display: block;
     }
   }
+  .source-egress {
+    margin-left: var(--space-2);
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+    font-weight: 400;
+  }
 }

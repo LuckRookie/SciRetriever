@@ -198,6 +198,9 @@ const probeReasons: Readonly<Record<string, string>> = {
   "model-capability-unsupported": "这个模型不具备所需能力，请换一个模型。",
   "model-probe-cancelled": "测试被中断，请重试。",
   "probe-not-authorized": "测试需要确认后才会访问外部服务。",
+  "proxy-unavailable": "连不上代理，或代理拒绝了连接。请在“网络”分区测试代理。",
+  "proxy-test-target-unavailable": "测试用的公网主机暂时无法解析，稍后再试。",
+  "network-proxy-required": "还没有保存代理地址。",
 };
 /** Why a configuration probe did not pass; an unknown reason shows its code. */
 export function probeReason(code: string): string {
@@ -252,6 +255,16 @@ export function serviceMessage(code: string): string {
         "Failed to fetch": "网络连接失败，请检查连接后重试。",
         "fetch failed": "网络连接失败，请检查连接后重试。",
         "request-cancelled": "操作已取消。",
+        "network-proxy-invalid": "代理地址只接受 http://主机:端口。",
+        "network-proxy-required":
+          "有服务选择了走代理，代理地址不能为空。请先取消这些选择，或填写代理地址。",
+        "network-source-unknown": "走代理的来源中有未知项，请刷新配置后重试。",
+        "network-provider-unknown":
+          "走代理的模型服务中有已删除的 Provider，请刷新配置后重试。",
+        "network-local-target":
+          "本机或局域网上的服务始终直连，不能选择走代理。",
+        "network-target-unresolved":
+          "无法解析所选服务的域名，暂时不能确认它不在局域网内，请稍后再试。",
         "archive-tagging": "建档时自动生成标签",
         "correction-failed": "本次矫正未完成",
         "correction-edit-conflict": "矫正与当前文字存在冲突，请重新核对",

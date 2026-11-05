@@ -242,7 +242,8 @@ urls = [
 Sci-Hub Source 在 Acquisition Auto 中默认启用；Custom 模式只在 `providers` 列入它时使用。启用且没有 `[sources.acquisition.sci-hub]` 时使用当前版本 bundled
 mirror set；custom `urls` 一旦存在就完整覆盖 builtin，升级不会改写它。operator 仍须自行确认
 适用法律、机构政策、内容许可与服务条款。有效列表顺序就是尝试顺序：系统不会并发或自动发现
-镜像，也不会配置 API key、Cookie、session、代理、selector 或脚本。resolver 只对具有规范 DOI
+镜像，也不会配置 API key、Cookie、session、selector 或脚本；它的出口与其他来源一样在
+[`[network]`](#network) 中选择。resolver 只对具有规范 DOI
 的 Literature 适用；实际 landing/PDF 仍经过共享 Network、有限静态 PDF locator 解析和统一 PDF
 字节检查。Challenge、登录页或普通 HTML 不能冒充 PDF。
 
@@ -419,6 +420,40 @@ PDF 验收或官方 `Retry-After` 语义。
 runtime failure 熔断；override 只能进一步收紧这些值。较大的 `max_concurrency` 不会启动多个
 Browser，也不会让 `browser-generic` 同时处理多篇文章。
 
+### `[network]`
+
+出网代理与各发起方的出口，规则见 [ADR 0056](../architecture/decisions/0056-outbound-proxy-by-requester.md)。默认全部直连：
+
+```toml
+[network]
+proxy = "http://127.0.0.1:7890"
+
+[network.via_proxy]
+sources = ["semantic-scholar"]
+doi_resolution = false
+providers = ["openai"]
+mineru = false
+browser = false
+```
+
+| 字段                       | 类型              | 默认值  | 约束                                                                                                                |
+| -------------------------- | ----------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `proxy`                    | 字符串            | 未配置  | 只接受 `http://主机:端口`，端口必须显式写出；不接受 userinfo、路径、query 或 fragment。主机可以是本机或局域网地址。 |
+| `via_proxy.sources`        | 来源 ID 数组      | `[]`    | 这些来源的检索、元数据、API 下载、由它给出的 PDF 链接和来源测试经代理。                                             |
+| `via_proxy.doi_resolution` | 布尔值            | `false` | 获取流程对 doi.org 的解析及其后续重定向经代理。                                                                     |
+| `via_proxy.providers`      | Provider 名称数组 | `[]`    | 这些 Model Provider 的全部模型调用与模型测试经代理。                                                                |
+| `via_proxy.mineru`         | 布尔值            | `false` | 远程 MinerU 的提交、轮询与取回经代理；只适用于 `connection_mode = "remote"`。                                       |
+| `via_proxy.browser`        | 布尔值            | `false` | 浏览器的全部页面请求经代理。                                                                                        |
+
+- 只填 `proxy` 不改变任何请求；有任何一项选择经代理而 `proxy` 缺失时拒绝保存（`network-proxy-required`）。
+- 本机或局域网上的模型服务和 MinerU 始终直连，选择经代理会被拒绝（`network-local-target`）；保存时会解析
+  所选远程服务的域名来确认这一点，解析失败报 `network-target-unresolved`。
+- 不读取 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 等环境变量；只支持 HTTP CONNECT，不支持 SOCKS5、PAC
+  或按域名配置规则。
+- 经代理时仍在本机检查目标 URL 与 DNS，再由代理建隧道；TLS 在隧道内由 SciRetriever 或 Chromium 端到端完成，照常校验证书。
+- 代理连不上、认证失败或拒绝 CONNECT 时报 `proxy-unavailable`，不回退直连。
+- 修改后与其他普通配置一样，需要“应用配置”或重启服务才进入正在运行的服务。
+
 配置不接受逐 Publisher 的本地许可、route、selector 或规则字段。`enabled = true` 启用唯一通用
 route，但不会证明组织合同、机构 IP、Profile 已登录或具体文章权限；每篇文章仍区分正文捕获、
 付费墙、通用拒绝、challenge、限流、错误文章、补充材料和证据不足。
@@ -426,18 +461,19 @@ route，但不会证明组织合同、机构 IP、Profile 已登录或具体文�
 Browser 选择完整 Model reference，不覆盖 Model 的 Provider、reasoning、image 或 stream，也不改变
 Analyze。tool decision、当前生产 Observation 的 `image/jpeg`、图片数量/字节与单次调用上限由
 Acquisition/Bootstrap 派生。
-当前 Browser 使用本机正常网络出口和一个 operator-managed 持久 Profile，固定以
+当前 Browser 使用 [`[network]`](#network) 为浏览器选择的出口和一个 operator-managed 持久 Profile，固定以
 `headless = false` 启动一个 Chrome process/persistent context；无 GUI Linux 使用 Xvfb 虚拟显示。
 Publisher 请求由 Chrome 原生网络栈完成，本机 CONNECT proxy 只执行已审核 hostname/port 到精确
-IP 的绑定和加密字节透传。普通配置只接受 opaque Profile identity，不接受 Profile 路径、Cookie、
-local storage、登录名、机构身份或代理设置；这些认证内容也不进入 `credentials.toml`。Chrome
+IP 的绑定和加密字节透传；浏览器选择经代理时，由它向上游代理发 CONNECT。普通配置只接受 opaque
+Profile identity，不接受 Profile 路径、Cookie、local storage、登录名或机构身份；这些认证内容也不进入
+`credentials.toml`。Chrome
 自己管理的 Cookie、Local Storage、IndexedDB、SSO 状态、偏好和历史只留在固定 owner-only Profile
 目录中。Network 的 URL、DNS、TLS、redirect、origin、请求/响应预算、限速、`Retry-After` 与
 脱敏策略仍来自固定 Provider/Profile 合同，普通配置只能收紧。
 
 ## 3. 统一凭据文件
 
-文献 Provider、Model Provider 与远程 MinerU secret 只有一个生产来源：
+文献 Provider、Model Provider、远程 MinerU 与代理认证的 secret 只有一个生产来源：
 
 ```text
 ~/.sciretriever/credentials.toml
@@ -495,7 +531,15 @@ origin = "https://api.openai.com"
 [mineru]
 bearer_token = "<secret>"
 origin = "https://mineru.example.invalid"
+
+[proxy]
+basic_auth = "<user>:<password>"
+origin = "http://127.0.0.1:7890"
 ```
+
+`[proxy]` 的 `basic_auth` 以第一个冒号分隔用户名和密码，`origin` 与普通配置的 `network.proxy`
+精确绑定：代理地址改变后，旧认证不会发往新地址。认证只出现在发给代理的 CONNECT 请求里，
+不进入 status、日志或 Web 数据。Web 设置页“网络”分区与 `config` 交互管理器的 Network 都只写不读。
 
 `[providers.<provider>]` 与 `[mineru]` 的 secret 必须与保存时的规范 origin 精确绑定。Model
 Provider section name 必须对应普通配置中的 `[providers.<provider>]`；同一 Provider 下的多个
@@ -529,6 +573,7 @@ sciretriever config test search --all [--json]
 sciretriever config test download <source> [--json]
 sciretriever config test download --all [--json]
 sciretriever config test parse [--json]
+sciretriever config test proxy [--json]
 sciretriever config test analyze [--json]
 sciretriever config test browser model [--json]
 sciretriever config test browser site <publisher-access-key> [--json]
@@ -671,7 +716,7 @@ Profile identity 只是 `config.toml` 中不含敏感信息的选择名；真实
 identity manifest 进入固定私有目录。manifest 固化 native Linux persona、locale、timezone、
 screen、Browser version policy 和 seed 派生身份；seed、Profile 路径与站点状态不会进入普通配置、
 status 或日志。初始化与配置修改在同一确认后完成；取消不会创建 Profile、修改 `[browser]` 或启动
-Browser。自动 Browser 使用当前机器正常网络出口和同一持久 Profile，无 GUI Linux 使用 Xvfb。
+Browser。自动 Browser 使用 [`[network]`](#network) 为浏览器选择的出口和同一持久 Profile，无 GUI Linux 使用 Xvfb。
 第一版不提供可见 Browser 登录、机构选择、MFA 或 Cookie 导入导出入口。
 SciRetriever 不导航登录页、不填写凭据、不选择机构、不读取 Cookie 或登录结果，也不处理或绕过
 MFA。页面 Challenge 与普通文章页使用同一 Observation/Action 合同。当前 production Browser route
@@ -778,12 +823,15 @@ sciretriever config test search --all [--json]
 sciretriever config test download <source> [--json]
 sciretriever config test download --all [--json]
 sciretriever config test parse [--json]
+sciretriever config test proxy [--json]
 sciretriever config test analyze [--json]
 sciretriever config test browser model [--json]
 sciretriever config test browser site <publisher-access-key> [--json]
 sciretriever config test --all [--json]
 ```
 
+- `proxy` 用已保存的代理地址与认证，向固定公网主机 `api.crossref.org:443` 发一次 CONNECT，只报告
+  能否连通与耗时，不向目标发 HTTP 请求，也不证明任何来源或模型可用。
 - `provider <name>` 对已经配置的 Model Provider 执行一次有界、无 redirect/retry 的模型目录
   GET，只报告数量与是否截断；目录成功不证明某个 Model 支持 reasoning、strict output、图片或工具。
 - `model <provider/model>` 对精确 Model 发送固定极小 strict-schema Text 请求；`--image` 改为一张

@@ -68,7 +68,7 @@ Provider 的目标能力集合、领域发现启用边界、Acquisition 证据�
 
 [ADR 0015](../decisions/0015-publisher-aware-tiered-pdf-acquisition.md)进一步把原文访问方识别、运行时计划与执行分开。缺 PDF 目标各自依次执行 direct → publisher-api → general-api → public-web → Browser admission；API 按官方 quota policy，Browser 使用一个 operator-managed 持久身份 Profile、一个共享 Browser process/context，以及 `browser-generic` 聚合政策与实际平台文章网络准入。Resolution、Plan、route hint、Browser queue/runtime/circuit 只属于当前操作，不进入文献数据库；Browser 自己管理的认证状态只留在 owner-only Profile 中。具体唯一 runtime 与固定身份由 ADR 0016 修订，通用 Agent route 由 ADR 0023 修订。
 
-[ADR 0016](../decisions/0016-cloakbrowser-fixed-identity-runtime.md)把生产 Browser runtime 切换为 CloakBrowser patched Chromium，同时保留 Playwright API、一个长期 Profile/process/context、原始出口、Provider 调度和 Network guard。Profile 使用固定设备身份；经证据确认的 challenge dependency 只在发起页面、frame ancestry、当前文章 permit 和页面生命周期内加载，Challenge 与普通页面使用同一 Observation/Action/capture 合同。
+[ADR 0016](../decisions/0016-cloakbrowser-fixed-identity-runtime.md)把生产 Browser runtime 切换为 CloakBrowser patched Chromium，同时保留 Playwright API、一个长期 Profile/process/context、原始出口、Provider 调度和 Network guard；出口后由 [ADR 0056](../decisions/0056-outbound-proxy-by-requester.md) 改为 Owner 为浏览器选择的出口。Profile 使用固定设备身份；经证据确认的 challenge dependency 只在发起页面、frame ancestry、当前文章 permit 和页面生命周期内加载，Challenge 与普通页面使用同一 Observation/Action/capture 合同。
 
 [ADR 0017](../decisions/0017-shared-agents-and-controlled-browser-agent.md)把共享单次模型层收敛为 Provider-neutral、无状态 Runtime。每个 role binding 冻结 model、capability 与默认 reasoning effort；显式配置模型目录读取短生命周期经过 Network 且不持久化。[ADR 0031](../decisions/0031-dsh-backed-agent-capabilities.md)已选定在 Agents 内增加受控 DSH 会话与工具循环，尚未实施。Analysis 保留用例编排、prompt/schema 和验收；Browser/Acquisition 保留文章、动作语义、进展和文件接纳；原 Network/Browser 边界继续执行准入、观察、动作、捕获与清理。ADR 0023 的唯一通用 Browser 路线不变。
 

@@ -27,11 +27,11 @@ Owner 2026-11-05：“开始实施，同时修正旧文档错误”。
 
 ## 结果块
 
-| 块                           | 结果                                                             | 负责   | 依赖      | 状态        |
-| ---------------------------- | ---------------------------------------------------------------- | ------ | --------- | ----------- |
-| [01](01-network-egress.md)   | Network 按发起方选择出口；配置、凭据、测试与机器接口             | Codex  | —         | In progress |
-| [02](02-settings-network.md) | 设置页“网络”分区与“经代理”标记；配置说明、页面规格与相关文档同步 | Claude | 01 的合同 | Pending     |
-| [03](03-doc-corrections.md)  | 旧文档错误修正                                                   | Claude | —         | In progress |
+| 块                           | 结果                                                             | 负责   | 依赖      | 状态 |
+| ---------------------------- | ---------------------------------------------------------------- | ------ | --------- | ---- |
+| [01](01-network-egress.md)   | Network 按发起方选择出口；配置、凭据、测试与机器接口             | Codex  | —         | Done |
+| [02](02-settings-network.md) | 设置页“网络”分区与“经代理”标记；配置说明、页面规格与相关文档同步 | Claude | 01 的合同 | Done |
+| [03](03-doc-corrections.md)  | 旧文档错误修正                                                   | Claude | —         | Done |
 
 ## 完成标准
 
@@ -42,3 +42,5 @@ Owner 2026-11-05：“开始实施，同时修正旧文档错误”。
 ## 进度
 
 - 2026-11-05：ADR 0056 Accepted（`989fc8b`）。01 派给 Codex：`sandbox/prompts/2026-11-05-plan18-01-network-egress.md`，回执 `sandbox/reports/2026-11-05-plan18-01/`。
+- 2026-11-05：01 交付 `e4cae62`，Claude 核对合同、核心连接与测试。02 完成设置页“网络”分区、来源行与模型行的“经代理”标记、来源测试“可用 · 经代理”，Web 定向测试 `apps/web/test/next-settings-network.test.ts`；`setting=network` 加入服务端页面地址白名单。2.3 与 3.2 的文档同步完成。
+- 2026-11-05：沙箱（无凭据）真实复验：测试代理 passed（43 ms），Crossref 直连 passed；Semantic Scholar 经代理 CONNECT 成功、目标返回 429（`metadata-provider-rate-limited`）。完成标准中的 Semantic Scholar 一项未满足，原因是匿名额度，不是出口；待匿名额度恢复后在同一沙箱复测，或由 Owner 在正式配置下测试。

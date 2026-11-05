@@ -178,7 +178,7 @@ Provider secret 只存在于当前用户的固定 `~/.sciretriever/credentials.t
 - [ ] 人类是否观察同一生产 Browser，指导是否绑定当前流程，接管/交还是否阻止旧动作并重新观察？
 - [ ] Agent 与人类是否共享业务语义，并明确区分读取、生成、材料与模型解释？
 - [ ] 所有外部访问是否经过当前进程的 provider/channel/host 共享准入，网页独占与冷却是否覆盖普通 HTTP 和浏览器，API 是否遵守对应供应商规则？
-- [ ] 生产 Browser 是否只使用一个固定身份 CloakBrowser Profile/process/context，且没有 stock runtime fallback、随机设备身份、环境代理或绕过 CONNECT/Network guard 的第二执行路径？
+- [ ] 生产 Browser 是否只使用一个固定身份 CloakBrowser Profile/process/context，且没有 stock runtime fallback、随机设备身份、环境代理或绕过 CONNECT/Network guard 的第二执行路径？出口是否只来自 `[network]` 的显式选择？
 - [ ] Challenge 必需资源是否只在已核实 Publisher、frame ancestry、当前文章 permit 和页面生命周期内加载；Challenge 是否使用统一 Observation/Action，且本地阻断没有冒充页面拒绝或 Agent 失败？
 - [ ] 单次调用与持续会话是否统一进入 DSH 并共享配置和 Network，消费模块是否仍掌握业务 workflow、prompt、工具语义与结果验收；Browser 控制版本、封闭动作和下载交接是否由原 owner 强制执行？
 - [ ] Provider secret 是否只来自固定 owner-only 凭据文件并保持在适配边界；status/test 是否不泄漏或持久化 secret/测试结果，离线门禁是否没有真实联网？

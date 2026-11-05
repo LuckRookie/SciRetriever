@@ -708,8 +708,8 @@ Source 与 Browser runtime readiness 分开，并支持：
 
 配置菜单把动作含义同时编码为颜色和单色仍可见的标记：配置 `◆`、查看 `◇`、测试 `▶`、危险
 `!`、返回 `←`、退出 `×`。说明必须明确：自动 CloakBrowser patched Chromium 固定以
-`headless = false` 使用当前机器正常
-网络出口和一个持久固定身份 Profile；无 GUI Linux 由 Xvfb 提供完整窗口栈，但不提供用户可见
+`headless = false` 使用浏览器一项所选的
+出口（直连或经代理，见 [ADR 0056](../decisions/0056-outbound-proxy-by-requester.md)）和一个持久固定身份 Profile；无 GUI Linux 由 Xvfb 提供完整窗口栈，但不提供用户可见
 交互窗口。产品没有 Browser 登录、机构选择、MFA 或 Cookie 导入导出入口；SciRetriever 不自动
 导航登录页、不填写凭据、不选择机构、不读取 Cookie/登录结果，也不处理 MFA。Challenge 不需要
 单独配置入口：Browser Model readiness 通过后，唯一 Agent controller 可以在同一 Profile/IP、
@@ -870,8 +870,8 @@ entitlement，也不
 持久化结果。开关或 runtime 未就绪时以
 精确 action code 稳定 `skipped`；未支持 access key 不启动 runtime、不导航、不猜 URL。
 页面可打开、机构 IP entitlement 和具体文章 entitlement 始终是不同结果。这些 access key 只用于
-显式 reachability probe，不是九条下载 route；生产文章统一进入 `browser:generic` 并使用当前机器
-网络出口，只有具体文章响应才能分类 IP 放行、login/MFA/action-required、paywall 或其它授权结果。
+显式 reachability probe，不是九条下载 route；生产文章统一进入 `browser:generic` 并使用浏览器所选
+出口，只有具体文章响应才能分类 IP 放行、login/MFA/action-required、paywall 或其它授权结果。
 
 probe 使用受限 Browser 模式：顶层主文档、经 production Profile 精确允许的 redirect，
 以及由目标页面/frame ancestry 实际发起的受限 challenge dependency 仍经过 destination/DNS/IP/

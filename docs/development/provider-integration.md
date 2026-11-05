@@ -88,7 +88,7 @@ Browser 下载统一使用 `browser-generic`，同一时刻只有一个文章流
 全局 Browser cap 只保护本机资源；重试、popup、多个标签页、Provider 名称或备用入口不能拆出新的
 group。未知 Provider 只要拥有安全 canonical landing 也可进入 generic Browser，这不放宽 Network
 admission 或 PDF 文章归属验收。该 cap 默认 `5`，只接受大于 `1` 的整数且不设上限。生产 Browser
-使用当前机器正常网络出口、
+使用浏览器所选出口（直连或经代理）、
 一个 operator-managed 固定身份 Profile、一个共享 CloakBrowser patched Chromium process/context；
 SciRetriever 继续以 Playwright API 控制它，无 GUI Linux 使用 Xvfb。Publisher 请求由 Chromium
 原生网络栈完成；broker 关闭或进程退出后删除临时下载工作区但保留 Profile。普通配置只接受
@@ -102,7 +102,7 @@ Browser 状态。第一版不提供人工 Browser 认证流程。
 - 日志、failure、catalog 和报告的脱敏断言：
 - `~/.sciretriever/credentials.toml` 中允许的字段、必需性、owner/权限和 adapter 注入边界：
 - `config status` 的纯本地状态与 `config test` 的最小只读 probe（均不得包含 secret 特征或持久结果）：
-- 当前机器网络出口、持久 Profile identity/presence、共享 Browser runtime/context、Cookie/Profile
+- 浏览器所选出口、持久 Profile identity/presence、共享 Browser runtime/context、Cookie/Profile
   内容、`browser-generic` readiness 与 action-required 的边界：
 - 禁用该能力后的回退：
 

@@ -854,8 +854,8 @@ Network 已提供使用所选 Profile identity 的 process-local session broker�
 Broker 关闭或进程退出后删除临时下载目录、释放 Profile lease，但保留 Profile 中 Chromium 管理的
 Cookie/认证状态。Bootstrap 已把同一个 broker 与 scheduler、admission、cohort executor 注入
 Acquisition 运行对象图。总开关关闭、Browser Model/Profile 缺失或 runtime 未就绪时不构造可执行
-client。自动流程只使用当前
-机器正常网络出口和所选固定身份 Profile，固定以 `headless = false` 启动 CloakBrowser patched Chromium；无 GUI Linux
+client。自动流程只使用浏览器一项所选的
+出口（直连或经代理，见 [ADR 0056](../decisions/0056-outbound-proxy-by-requester.md)）和所选固定身份 Profile，固定以 `headless = false` 启动 CloakBrowser patched Chromium；无 GUI Linux
 由 Xvfb 提供完整窗口栈，但不开放用户可见 Browser 认证流程。自动流程不填写登录表单、
 不选择机构、不读取 Cookie/登录结果，也不处理 MFA；这些身份页面形成 action-required 并暂停对应
 group。Challenge 页面不是身份登录流程；Agent controller 通过统一页面合同处理，Agent

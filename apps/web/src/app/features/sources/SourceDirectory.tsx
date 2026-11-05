@@ -368,7 +368,12 @@ export function SourceDirectoryPanel() {
                   }
                   data-open={open || undefined}
                 >
-                  <th scope="row">{row.name}</th>
+                  <th scope="row">
+                    {row.name}
+                    {row.egress === "proxy" ? (
+                      <span className="source-egress">经代理</span>
+                    ) : null}
+                  </th>
                   {markCell(row, row.uses.topic_search, "metadata", "主题检索")}
                   {markCell(row, row.uses.lookup, "metadata", "补全书目")}
                   {markCell(
@@ -453,7 +458,9 @@ function TestCell({
         <span role="status">测试中…</span>
       ) : slot.latest ? (
         slot.latest.status === "available" ? (
-          <span className="source-test-ok">可用</span>
+          <span className="source-test-ok">
+            {slot.latest.egress === "proxy" ? "可用 · 经代理" : "可用"}
+          </span>
         ) : (
           <ProblemLabel display={slot.latest.status} />
         )

@@ -242,4 +242,33 @@
       grid-column: 2;
     }
   }
+  /* Network: which requester leaves through the proxy. */
+  .settings-egress {
+    margin-left: var(--space-2);
+    color: var(--fg2);
+    font-size: var(--text-secondary);
+    font-weight: 400;
+  }
+  .settings-network-test,
+  .settings-network-auth {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .settings-network-test [data-outcome="passed"] {
+    color: var(--t-green);
+  }
+  .settings-network-credential {
+    display: grid;
+    gap: var(--space-3);
+    justify-items: start;
+  }
+  .settings-network-credential .settings-record-actions {
+    margin-top: 0;
+  }
+  .settings-network-empty,
+  .settings-network-note {
+    color: var(--fg2);
+  }
 }

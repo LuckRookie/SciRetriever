@@ -17,8 +17,8 @@ Claude：`apps/web/` 与上述文档。
 ## Tasks
 
 - [x] **2.1 页面规格**：设置页“网络”分区与“经代理”标记，写入[页面规格](../../architecture/web/page-specs.md)“设置 · 网络”。
-- [ ] **2.2 界面**：按 01 的 `contract.md` 实现，Web 测试覆盖开关保存、未配代理时不可选、测试代理结果与出口标注。
-- [ ] **2.3 文档**：`docs/guides/configuration.md`（新增代理字段，删除浏览器一节“不接受代理设置”与“本机正常网络出口”的表述）、`docs/architecture/principles.md` 浏览器检查项、`docs/notes/` 与 `docs/development/provider-integration.md` 中的“正常网络出口”。
+- [x] **2.2 界面**：按 01 的 `contract.md` 实现，Web 测试覆盖开关保存、未配代理时不可选、测试代理结果与出口标注。
+- [x] **2.3 文档**：`docs/guides/configuration.md`（新增代理字段，删除浏览器一节“不接受代理设置”与“本机正常网络出口”的表述）、`docs/architecture/principles.md` 浏览器检查项、`docs/notes/` 与 `docs/development/provider-integration.md` 中的“正常网络出口”。
 
 ## 验证
 

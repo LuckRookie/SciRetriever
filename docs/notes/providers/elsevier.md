@@ -377,7 +377,7 @@ ScienceDirect 页面在 `body` 中明确显示机构“不订阅此内容”时�
 
 历史现场结果见Browser 切换测试记录（本地文件：`sandbox/reports/browser-cutover-validation-2026-08-22.md`，不随仓库分发）。
 
-Browser 使用当前机器正常网络出口和共享固定身份 Profile/context，所有文章共用
+Browser 使用浏览器所选出口（直连或经代理）和共享固定身份 Profile/context，所有文章共用
 `browser-generic` policy，不再建立 Elsevier lane。无 GUI Linux 使用 Xvfb。自动流程不导入或
 读取 Cookie、不填写凭据，也不会通过 Browser 绕过 API quota、429、临时错误或人工 challenge；
 第一版不提供可见 Browser 认证入口。旧离线真实 Chromium 场景覆盖外部 JavaScript、未批准

@@ -275,7 +275,7 @@ adapter 应保留每个安全 HTTPS 候选的 format/platform/provenance；legac
 - Open Access/Full Text API 的 JATS/XML 不是 PDF，当前没有授权 PDF API route；
 - 没有 SpringerLink 专属 Browser route、rule 或 DOI PDF template。可信 landing/asset hint 或安全 DOI resolve 形成起点后统一进入 `browser:generic`；Agent 决定封闭页面动作，Network 负责稳定观察和 capture，Acquisition 独立验证媒体类型、PDF reader、页面树、目标 DOI/标题/作者、起点 lineage 与补充材料排除；
 - 2026-08-16 的脱敏现场检查确认 `https://link.springer.com/` 当时经 `https://idp.springer.com/authorize` 返回 Link。该记录只为首页 reachability probe 和通用导航回归提供历史证据；检查未读取或记录 `Set-Cookie`、账号信息或 profile 内容，到达该入口也不评估机构 IP 或文章 entitlement；
-- Browser 使用运行机器的正常网络出口及共享固定身份 Profile/context，无 GUI Linux 使用 Xvfb。自动流程不填写凭据、不选择机构、不读取登录结果，也不处理 SSO/CARSI、MFA/CAPTCHA；所有文章共享 `browser-generic` 调度政策，不按 Publisher 建立 lane；
+- Browser 使用浏览器所选出口（直连或经代理）及共享固定身份 Profile/context，无 GUI Linux 使用 Xvfb。自动流程不填写凭据、不选择机构、不读取登录结果，也不处理 SSO/CARSI、MFA/CAPTCHA；所有文章共享 `browser-generic` 调度政策，不按 Publisher 建立 lane；
 - 登录、paywall、challenge、429、403、account warning 和 404 由通用页面观察与终态表达；`static-content.springer.com/esm/`、supplement 文件名和错误文章仍不能成为 primary PDF；
 - Profile 状态为 `production-ready`，但只声明访问画像、evidence fixture 与首页 probe 合同闭环；它不声明专属 Browser 下载实现、当前 IP、机构协议或某篇文章有 entitlement。
 
