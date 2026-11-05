@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：P7、P8、P13、P14、P15、P16，以及 P20 在设置页的部分
-状态：In progress（实现完成，仅剩 2.8 真实来源测试）
+状态：Done（2026-11-05）
 
 ## Outcome
 
@@ -117,9 +117,22 @@
       - 设计样例新增 `settings-sources-expanded`；
       - R-02 截图在本机 `sandbox/reports/design-samples/2026-10-28-r02-sources/`，Claude 自审通过。
     - 未覆盖：样例库离线，测试结果“可用 / 错误 / 三种可处理情况”只在直接测试与 2.8 的真实测试中出现，截图里没有。
-- [ ] **2.8 真实来源测试**〔须 G-real〕
+- [x] **2.8 真实来源测试**〔须 G-real〕（2026-11-05）
   - 在 4174 或只读副本上，对已配置的来源各点一次“测试”，逐个记录结果。
   - 由 Owner 抽查一篇真实 Wiley 文章，确认 Agent 先点直接 PDF。
+  - 结果：
+    - Owner 确认 Wiley 上 Agent 能拿到 PDF；Owner 在 4174 点了“全部测试”。
+    - 可用：Elsevier、Wiley、Crossref、OpenAlex、DataCite、arXiv、Sci-Hub。
+    - 报错：Semantic Scholar、OpenCitations、Europe PMC。
+    - CLI `config test search --all` 另测了检索来源。
+  - 查出并修复三个 bug（Codex）：
+    - Elsevier 零结果的占位记录被当成真实记录（`73a2699`）；
+    - OpenCitations 的 Meta 请求缺 operation 与 typed PID，多 PID 字段也无法解析（`fc1a944`）；
+    - Europe PMC 按 PMCID 查询时多加了引号（`fc1a944`）。修复后用正式配置复测，Elsevier、OpenCitations 通过。
+  - 外部原因，没有改动：
+    - Europe PMC 取 PDF 时，`europepmc.org` 返回 Cloudflare 人机验证页（HTTP 403），这一项仍显示“错误”；
+    - Semantic Scholar 从这台服务器直连超时，只有经本机代理才能访问，而程序不走代理，与 API Key 无关；是否加代理设置由 Owner 另定，不在本计划。
+  - 证据在本机 `sandbox/reports/2026-11-05-plan17-2.8/`、`sandbox/reports/2026-11-05-plan17-2.8-elsevier/`、`sandbox/reports/2026-11-05-plan17-2.8-web/`。
 
 ## 集成与影响
 
