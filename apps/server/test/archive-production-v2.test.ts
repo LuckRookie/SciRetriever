@@ -581,106 +581,113 @@ it("retains an accepted manual text decision after render failure, returns a typ
   }
 }, 30000);
 
-it("publishes a new layout from the same accepted proofread without overwriting historical Markdown or calling a model", async () => {
-  const e = await archiveFixture();
-  try {
-    e.setText(
-      "# Original document\n\nA complete synthetic study.\n\n# References\n\n[1] Example synthetic reference.\n",
-    );
-    await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
-    await e.submit("layout-republication");
-    const part = (await e.app.archive.status(e.id)).parts[0]!,
-      output = (await e.app.archiveText!.storage.load(part.proofread_id!))!;
-    const old = renderArrangement(
-        output.bundle,
-        output.version.resources,
-        "arranged-leaves-v2",
-      ),
-      storage = e.app.archiveText!.storage;
-    const markdown = await storage.write(
-        "proofread-markdown",
-        old.markdown,
-        "text/markdown",
-      ),
-      structure = await storage.write("document-structure", old.bytes);
-    await e.app.database.proofread("render-resources", {
-      proofread_id: part.proofread_id,
-      manual_revision: 0,
-      resources: [{ ...markdown, kind: "markdown", logical_reference: "" }],
-    });
-    const material = (await e.app.database.documentMaterial(
-      e.id,
-      e.asset.asset_id,
-    ))!;
-    const ref = (a: typeof markdown) =>
-      parseArtifactRef({
-        sha256: a.sha256,
-        byte_size: a.byte_size,
-        media_type: a.media_type,
+it.each(["arranged-leaves-v2", "source-order-leaves-v3"] as const)(
+  "publishes v4 from the same accepted %s proofread without overwriting historical Markdown or calling a model",
+  async (oldBuilder) => {
+    const e = await archiveFixture();
+    try {
+      e.setText(
+        "# Original document\n\nA complete synthetic study.\n\n# References\n\n[1] Example synthetic reference.\n",
+      );
+      await e.app.documentProcessing.parseDocuments(e.rawParseRequest);
+      await e.submit("layout-republication");
+      const part = (await e.app.archive.status(e.id)).parts[0]!,
+        output = (await e.app.archiveText!.storage.load(part.proofread_id!))!;
+      const old = renderArrangement(
+          output.bundle,
+          output.version.resources,
+          oldBuilder,
+        ),
+        storage = e.app.archiveText!.storage;
+      const markdown = await storage.write(
+          "proofread-markdown",
+          old.markdown,
+          "text/markdown",
+        ),
+        structure = await storage.write("document-structure", old.bytes);
+      await e.app.database.proofread("render-resources", {
+        proofread_id: part.proofread_id,
+        manual_revision: 0,
+        resources: [{ ...markdown, kind: "markdown", logical_reference: "" }],
       });
-    const representation = {
-      source_material_ref: material.material,
-      proofread_id: part.proofread_id!,
-      proofread_content_sha256: output.version.content_sha256,
-      builder_version: "arranged-leaves-v2" as const,
-      locator_scheme: "utf8-segment-v1" as const,
-      markdown: ref(markdown),
-      structure: ref(structure),
-      resources: [],
-    };
-    const oldId = "00000000-0000-4000-8000-000000000071",
-      current = (await e.app.database.documentDefault(
+      const material = (await e.app.database.documentMaterial(
         e.id,
         e.asset.asset_id,
-        e.asset.sha256,
       ))!;
-    await e.app.database.commitDocumentVersion({
-      version: {
-        schema_version: 2,
-        document_id: documentIdentity(e.id, e.asset.asset_id),
-        document_version_id: oldId,
-        representation_sha256: await documentRepresentationHash(representation),
-        ...representation,
-      },
-      source_artifact_path: material.path,
-      markdown_artifact_path: markdown.reference,
-      structure_artifact_path: structure.reference,
-      resource_artifact_paths: {},
-      expected_default_revision: current.revision,
-      expected_manual_revision: 0,
-    });
-    const calls = e.modelCalls,
-      published = await e.app.archiveText!.render(e.id, e.asset.asset_id);
-    expect(published.document_version_id).not.toBe(oldId);
-    expect(published.proofread_id).toBe(part.proofread_id);
-    expect(e.modelCalls).toBe(calls);
-    const documents = new SqliteDocumentStorage(e.app.database, e.app.files);
-    await documents.withVerifiedDocument(oldId, async (_v, bytes) =>
-      expect(Buffer.from(bytes)).toEqual(old.markdown),
-    );
-    await documents.withVerifiedDocument(
-      published.document_version_id,
-      async (v, bytes, structure) => {
-        expect(v.builder_version).toBe("source-order-leaves-v3");
-        expect(Buffer.from(bytes).toString()).not.toContain("## 附加章节");
-        expect(structure).toHaveProperty("layout.schema_version", 1);
-      },
-    );
-    const resources = await e.app.database.proofread<
-      { kind: string; reference: string; sha256: string }[]
-    >("resources", part.proofread_id);
-    expect(resources.filter((r) => r.kind === "markdown")).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ reference: "", sha256: markdown.sha256 }),
-        expect.objectContaining({
-          reference: expect.stringContaining("render/source-order-leaves-v3/"),
-        }),
-      ]),
-    );
-  } finally {
-    await e.close();
-  }
-}, 30000);
+      const ref = (a: typeof markdown) =>
+        parseArtifactRef({
+          sha256: a.sha256,
+          byte_size: a.byte_size,
+          media_type: a.media_type,
+        });
+      const representation = {
+        source_material_ref: material.material,
+        proofread_id: part.proofread_id!,
+        proofread_content_sha256: output.version.content_sha256,
+        builder_version: oldBuilder,
+        locator_scheme: "utf8-segment-v1" as const,
+        markdown: ref(markdown),
+        structure: ref(structure),
+        resources: [],
+      };
+      const oldId = "00000000-0000-4000-8000-000000000071",
+        current = (await e.app.database.documentDefault(
+          e.id,
+          e.asset.asset_id,
+          e.asset.sha256,
+        ))!;
+      await e.app.database.commitDocumentVersion({
+        version: {
+          schema_version: 2,
+          document_id: documentIdentity(e.id, e.asset.asset_id),
+          document_version_id: oldId,
+          representation_sha256:
+            await documentRepresentationHash(representation),
+          ...representation,
+        },
+        source_artifact_path: material.path,
+        markdown_artifact_path: markdown.reference,
+        structure_artifact_path: structure.reference,
+        resource_artifact_paths: {},
+        expected_default_revision: current.revision,
+        expected_manual_revision: 0,
+      });
+      const calls = e.modelCalls,
+        published = await e.app.archiveText!.render(e.id, e.asset.asset_id);
+      expect(published.document_version_id).not.toBe(oldId);
+      expect(published.proofread_id).toBe(part.proofread_id);
+      expect(e.modelCalls).toBe(calls);
+      const documents = new SqliteDocumentStorage(e.app.database, e.app.files);
+      await documents.withVerifiedDocument(oldId, async (_v, bytes) =>
+        expect(Buffer.from(bytes)).toEqual(old.markdown),
+      );
+      await documents.withVerifiedDocument(
+        published.document_version_id,
+        async (v, bytes, structure) => {
+          expect(v.builder_version).toBe("source-order-leaves-v4");
+          expect(Buffer.from(bytes).toString()).not.toContain("## 附加章节");
+          expect(structure).toHaveProperty("layout.schema_version", 1);
+        },
+      );
+      const resources = await e.app.database.proofread<
+        { kind: string; reference: string; sha256: string }[]
+      >("resources", part.proofread_id);
+      expect(resources.filter((r) => r.kind === "markdown")).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ reference: "", sha256: markdown.sha256 }),
+          expect.objectContaining({
+            reference: expect.stringContaining(
+              "render/source-order-leaves-v4/",
+            ),
+          }),
+        ]),
+      );
+    } finally {
+      await e.close();
+    }
+  },
+  30000,
+);
 
 it("revalidates arrangement inputs when PDF geometry changes without changing raw bytes or model settings", async () => {
   const e = await archiveFixture();

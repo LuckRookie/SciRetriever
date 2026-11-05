@@ -1,10 +1,5 @@
 import { SqliteArchiveTextStorage } from "../storage/archive-text.js";
-import {
-  renderArrangement,
-  ARRANGED_DOCUMENT_BUILDER,
-  LEGACY_ARRANGED_DOCUMENT_BUILDER,
-  isArrangedBuilder,
-} from "../archive/render.js";
+import { renderArrangement, isArrangedBuilder } from "../archive/render.js";
 import { parseProofreadBlocksV1 } from "@sciretriever/contracts";
 import { SqliteProofreadStorage } from "../storage/proofread.js";
 import {
@@ -13,6 +8,7 @@ import {
 } from "./proofread-builder.js";
 import {
   sha256,
+  DOCUMENT_READ_MAX_RESOURCE_BYTES,
   parseDocumentRepresentationInput,
   type ArtifactRef,
   type DocumentRef,
@@ -163,7 +159,8 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
       v.markdown.byte_size > MAX_DOCUMENT_MARKDOWN_BYTES ||
       v.resources.length > 4096 ||
       v.resources.some(
-        (resource) => resource.artifact.byte_size > 32 * 1024 * 1024,
+        (resource) =>
+          resource.artifact.byte_size > DOCUMENT_READ_MAX_RESOURCE_BYTES,
       ) ||
       v.resources.reduce(
         (sum, resource) => sum + resource.artifact.byte_size,
@@ -175,11 +172,8 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
       throw new Error("document artifact limit exceeded");
     if (
       v.schema_version !== 2 ||
-      ![
-        PROOFREAD_DOCUMENT_BUILDER_VERSION,
-        ARRANGED_DOCUMENT_BUILDER,
-        LEGACY_ARRANGED_DOCUMENT_BUILDER,
-      ].includes(v.builder_version)
+      (v.builder_version !== PROOFREAD_DOCUMENT_BUILDER_VERSION &&
+        !isArrangedBuilder(v.builder_version))
     )
       throw new Error("document builder unsupported");
     if (

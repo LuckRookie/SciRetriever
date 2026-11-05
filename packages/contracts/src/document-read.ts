@@ -25,7 +25,8 @@ import {
 
 export const DOCUMENT_READ_MAX_BYTES = 64 * 1024;
 export const DOCUMENT_READ_MAX_ITEMS = 200;
-export const DOCUMENT_READ_MAX_EVIDENCE = 32;
+export const DOCUMENT_READ_MAX_EVIDENCE = DOCUMENT_READ_MAX_ITEMS;
+export const DOCUMENT_READ_MAX_RESOURCE_BYTES = 32 * 1024 * 1024;
 export const DOCUMENT_READ_MAX_TITLE_BYTES = 512;
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const encoder = new TextEncoder();
@@ -314,6 +315,20 @@ export function parseDocumentMaterialBytesRequest(
     literature_id: literature(r.literature_id),
     asset_id: uuid(r.asset_id),
     asset_sha256: hash(r.asset_sha256),
+  });
+}
+
+export interface DocumentResourceBytesRequest {
+  readonly document_version_id: string;
+  readonly resource_id: string;
+}
+export function parseDocumentResourceBytesRequest(
+  value: unknown,
+): DocumentResourceBytesRequest {
+  const r = object(value, ["document_version_id", "resource_id"]);
+  return Object.freeze({
+    document_version_id: uuid(r.document_version_id),
+    resource_id: token(r.resource_id),
   });
 }
 

@@ -15,10 +15,12 @@ import { byteHash, textHash } from "./text-source.js";
 import { structureReferences } from "../document/structure-extract.js";
 import { arrangeSourceLayout, headingLevels } from "./source-layout.js";
 import { renderLegacyArrangement } from "./render-legacy.js";
-export const ARRANGED_DOCUMENT_BUILDER = "source-order-leaves-v3";
+export const ARRANGED_DOCUMENT_BUILDER = "source-order-leaves-v4";
+export const SOURCE_ORDER_DOCUMENT_BUILDER_V3 = "source-order-leaves-v3";
 export const LEGACY_ARRANGED_DOCUMENT_BUILDER = "arranged-leaves-v2";
 export const isArrangedBuilder = (value: string) =>
   value === ARRANGED_DOCUMENT_BUILDER ||
+  value === SOURCE_ORDER_DOCUMENT_BUILDER_V3 ||
   value === LEGACY_ARRANGED_DOCUMENT_BUILDER;
 export interface LeafSourceMap {
   readonly leaf_id: string;
@@ -35,8 +37,7 @@ export function renderArrangement(
 ) {
   if (builder === LEGACY_ARRANGED_DOCUMENT_BUILDER)
     return renderLegacyArrangement(value, available);
-  if (builder !== ARRANGED_DOCUMENT_BUILDER)
-    throw Error("render-builder-unsupported");
+  if (!isArrangedBuilder(builder)) throw Error("render-builder-unsupported");
   const bundle = parseArchiveTextBundleV2(value);
   if (!bundle.arrangement) throw Error("arrangement-required");
   const rows = new Map(bundle.leaves.map((r) => [r.leaf.leaf_id, r])),
@@ -115,7 +116,14 @@ export function renderArrangement(
       const start = offset;
       if (i === 0 && heading && !/^\s*#{1,6}\s/u.test(row.corrected_text))
         structure(`${"#".repeat(levels.get(id)!)} `, "heading-marker");
-      if (leaf.image_ref) {
+      if (
+        leaf.image_ref &&
+        !(
+          builder === ARRANGED_DOCUMENT_BUILDER &&
+          leaf.type === "equation" &&
+          row.corrected_text.trim()
+        )
+      ) {
         const r = available.find((r) => r.reference === leaf.image_ref);
         if (!r) throw Error("render-resource-missing");
         resources.set(r.reference, r);

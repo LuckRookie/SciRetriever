@@ -52,7 +52,8 @@ export interface ProofreadDocumentRepresentationInput {
   readonly builder_version:
     | "proofread-blocks-v1"
     | "arranged-leaves-v2"
-    | "source-order-leaves-v3";
+    | "source-order-leaves-v3"
+    | "source-order-leaves-v4";
   readonly locator_scheme: "utf8-segment-v1";
   readonly markdown: ArtifactRef;
   readonly structure: ArtifactRef;
@@ -273,7 +274,8 @@ export function parseDocumentRepresentationInput(
     builder_version:
       r.builder_version === "proofread-blocks-v1" ||
       r.builder_version === "arranged-leaves-v2" ||
-      r.builder_version === "source-order-leaves-v3"
+      r.builder_version === "source-order-leaves-v3" ||
+      r.builder_version === "source-order-leaves-v4"
         ? r.builder_version
         : fail(),
     locator_scheme: "utf8-segment-v1",

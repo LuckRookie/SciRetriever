@@ -7,10 +7,12 @@ import {
   ContractValidationError,
   parseDocumentReadRequest,
   parseDocumentMaterialBytesRequest,
+  parseDocumentResourceBytesRequest,
   parseDocumentSelector,
   documentReadTitle,
   DOCUMENT_READ_MAX_BYTES,
   DOCUMENT_READ_MAX_EVIDENCE,
+  DOCUMENT_READ_MAX_RESOURCE_BYTES,
   parseDocumentMaterialRef,
   parseEvidenceRef,
   sha256,
@@ -18,6 +20,7 @@ import {
   type DocumentReadRequestMap,
   type DocumentMaterialRef,
   type DocumentRef,
+  type DocumentResource,
   type DocumentStructure,
   type EvidenceRef,
 } from "@sciretriever/contracts";
@@ -936,6 +939,98 @@ export class DocumentReadService {
         granularity: "file",
         gaps: ["page-location-unavailable", "field-location-unavailable"],
       };
+    });
+  }
+  withResourceBytes<T>(
+    value: unknown,
+    consume: (
+      document: DocumentRef,
+      resource: DocumentResource,
+      chunks: AsyncIterable<Uint8Array>,
+    ) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return this.run(async () => {
+      let selected;
+      try {
+        selected = parseDocumentResourceBytesRequest(value);
+      } catch (error) {
+        if (error instanceof ContractValidationError) return invalid();
+        throw error;
+      }
+      let consumerError: unknown;
+      let consumerFailed = false;
+      try {
+        return await this.version(
+          selected.document_version_id,
+          signal,
+          async (document) => {
+            const resource = document.resources.find(
+              (item) => item.resource_id === selected.resource_id,
+            );
+            if (!resource) invalid();
+            if (
+              !/^image\/(png|jpeg|gif|webp)$/.test(
+                resource.artifact.media_type,
+              ) ||
+              resource.artifact.byte_size > DOCUMENT_READ_MAX_RESOURCE_BYTES
+            )
+              throw new DocumentReadError("document-unsupported");
+            const snapshot = await this.database.documentVersion(
+              selected.document_version_id,
+            );
+            const path = snapshot?.resource_artifact_paths[resource.reference];
+            if (
+              !path ||
+              snapshot?.version.representation_sha256 !==
+                document.representation_sha256
+            )
+              throw new DocumentReadError("document-integrity");
+            return this.storage.withVerifiedArtifact(
+              path,
+              resource.artifact,
+              async (chunks) => {
+                try {
+                  return await consume(document, resource, {
+                    async *[Symbol.asyncIterator]() {
+                      try {
+                        for await (const chunk of chunks) {
+                          check(signal);
+                          yield chunk;
+                        }
+                      } catch (error) {
+                        if (error instanceof DocumentReadError) throw error;
+                        throw new DocumentReadError(
+                          signal?.aborted
+                            ? "document-cancelled"
+                            : "document-integrity",
+                          { cause: error },
+                        );
+                      }
+                    },
+                  });
+                } catch (error) {
+                  consumerFailed = true;
+                  consumerError = error;
+                  throw error;
+                }
+              },
+              signal,
+            );
+          },
+        );
+      } catch (error) {
+        if (signal?.aborted)
+          throw new DocumentReadError("document-cancelled", { cause: error });
+        if (
+          consumerFailed &&
+          (error === consumerError ||
+            (error instanceof DocumentReadError &&
+              error.cause === consumerError))
+        )
+          throw consumerError;
+        throw error;
+      }
     });
   }
   withMaterialBytes<T>(

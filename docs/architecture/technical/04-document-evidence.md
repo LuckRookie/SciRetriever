@@ -237,7 +237,7 @@ interface DocumentResource {
 
 ### 3.4 版本绑定的有界读取
 
-建议读取面包括 `describe`、`outline`、`readSlice`、`readResource` 和 `resolveEvidence`。查询型操作不调用 builder 或 parser；表示不存在直接返回缺口。
+建议读取面包括 `describe`、`outline`、`readSlice`、`readResource` 和 `resolveEvidence`。查询型操作不触发新建档或 parser；已有表示由 verified reader 按记录的 builder 核对，表示不存在直接返回缺口。
 
 ```ts
 interface SliceRequest {
@@ -262,11 +262,13 @@ interface DocumentSlice {
 }
 ```
 
-`DocumentLocator` 是按 locator_scheme 判别的封闭类型。不能接受 SQL、任意 XPath、文件路径或 parser 私有 JSON。版本/schema 不匹配在读取前拒绝；预算必须为合法正整数且不超过服务上限，精确上限由实现合同统一公布。
+`DocumentLocator` 是按 locator_scheme 判别的封闭类型。不能接受 SQL、任意 XPath、文件路径或 parser 私有 JSON。版本/schema 不匹配在读取前拒绝；预算必须为合法正整数且不超过服务上限。读取合同规定 slice 正文最多 64 KiB、完整片段 evidence/location 最多 200 条；outline、segments、resources 的分页上限也是 200 条。正文预算与 JSON 元数据条目边界分别生效；触及 evidence 上限时返回 `evidence-page-limit` 和 continuation，不丢弃后续段落。
 
 继续位置绑定版本、selector 与返回顺序，不能把上一版本 cursor 用于新版本。一个 slice 的文本、资源和 evidence 由同一固定版本组成。预算不足以容纳完整单元时返回截断和可继续位置；对大表格说明仅返回哪些行及重复的表头，不能伪称整表已读。
 
 以字节作为基础资源计量。文本边界不能截断 UTF-8 字符；若公开文本 offset，locator scheme 必须明确采用 UTF-8 byte、Unicode code point 或其它单位，不能混用 JavaScript UTF-16 索引。token 预算需要声明 tokenizer，由 Q/Analysis 管理，不从字符数猜成准确 token。
+
+资源 JSON 读取继续提供有界 Base64 分页。阅读器也可向 `POST /api/v1/query/document-resource-bytes` 提交协议 1 包装的 `{document_version_id, resource_id}`，一次流式读取此固定版本的完整 PNG/JPEG/GIF/WebP 图片，单图上限 32 MiB。此接口与原始 PDF 的 material-bytes 同属 HTTP 二进制运输面，沿用查询认证、取消、背压与停服等待；CLI/MCP 保留原资源 JSON 读取。每次请求先经 verified reader 校验完整文档闭包，再校验所交付资源，响应头绑定文档版本、representation hash、resource ID/hash 与字节数。流结束前资源核验失败时中断响应，不能把部分字节视为成功；不使用跨请求验证缓存。
 
 ## 4. 证据定位、版本与生命周期
 
@@ -428,7 +430,7 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 
 新建档固定执行 `arrange → proofread → render → metadata → references → tags`。整理和逐页校订都绑定 `proofreading` 角色。`archive/text-pipeline.ts` 组装 source、整理、逐页校订与接纳清单；检查点和页缓存继续使用现有不可变 artifact、校订版本和 raw pin，不另建业务库。新的写入请求为 schema 2；旧步骤与旧写请求返回 `archive-contract-obsolete`，不把 document/structure 当作新步骤别名。
 
-render 从保留叶块及已记录 correct 确定性生成普通 Markdown、DocumentStructureV2 和叶块 UTF-8 source map。新 builder 为 `source-order-leaves-v3`；历史 `arranged-leaves-v2` 保留原骨架渲染算法，固定旧版本读取与 hash 校验不使用新排版。同一 proofread 的派生 Markdown 按 builder 与内容 hash 分别登记，文档发布核对实际资源 hash/path，不覆盖旧排版资源。保留 payload 恰好出现一次，标题标记、公式分隔符、合并接缝、资源语法和段落分隔单独记录；不插自定义指令、HTML 注释或固定角色标题。原文顺序决定章节顺序，同角色可分多段，原文没有标题的章节 title=null。
+render 从保留叶块及已记录 correct 确定性生成普通 Markdown、DocumentStructureV2 和叶块 UTF-8 source map。新建档及显式重新发布采用 `source-order-leaves-v4`：公式叶块有非空 LaTeX 时只输出 LaTeX，不再同时输出该叶块截图或将未使用截图加入资源闭包；LaTeX 为空时保留截图兜底。历史 `source-order-leaves-v3` 保留公式图片与文字并列的原行为，`arranged-leaves-v2` 保留原骨架渲染算法；固定旧版本读取与 hash 校验按记录的 builder 逐字节重建。同一 proofread 的派生 Markdown 按 builder 与内容 hash 分别登记，文档发布核对实际资源 hash/path，不覆盖旧排版资源。保留 payload 恰好出现一次，标题标记、公式分隔符、合并接缝、资源语法和段落分隔单独记录；不插自定义指令、HTML 注释或固定角色标题。原文顺序决定章节顺序，同角色可分多段，原文没有标题的章节 title=null。
 
 标题层级先依章节编号（1 / 1.1 / 1.1.1），其次依可见 PDF 文字层的重复字号/字体样式；至少 90% 标题有样式且嵌套一致率不少于 90% 才使用样式层级，否则沿用整理给出的层级。文末信息与参考文献标题固定同正文章节层级。首页单位、通讯作者/作者注释及收稿/发表信息仍归 end-matter，排在作者后；正文标题区的期刊、年份与 DOI 继续由 catalog 元数据在阅读层投影，不进入不可变正文。
 

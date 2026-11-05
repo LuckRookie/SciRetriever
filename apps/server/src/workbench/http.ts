@@ -3126,6 +3126,53 @@ function createQueryHttpHandler(
         });
         return;
       }
+      case "/api/v1/query/document-resource-bytes": {
+        if (!application.documentRead) {
+          json(response, 503, {
+            protocol_version: 1,
+            code: "query-unavailable",
+          });
+          return;
+        }
+        const stop = new AbortController();
+        const abort = () => stop.abort();
+        response.once("close", abort);
+        streams.add(response);
+        verifiedBinaryStreams.add(response);
+        try {
+          await application.documentRead.withResourceBytes(
+            command.request,
+            async (document, resource, chunks) => {
+              const extension = resource.artifact.media_type.slice(6);
+              response.writeHead(200, {
+                "Content-Type": resource.artifact.media_type,
+                "Content-Disposition": `inline; filename="${resource.artifact.sha256}.${extension === "jpeg" ? "jpg" : extension}"`,
+                "X-Sciretriever-Protocol-Version": "1",
+                "X-Sciretriever-Document-Version-Id":
+                  document.document_version_id,
+                "X-Sciretriever-Representation-Sha256":
+                  document.representation_sha256,
+                "X-Sciretriever-Resource-Id": resource.resource_id,
+                "X-Sciretriever-Resource-Sha256": resource.artifact.sha256,
+                "X-Sciretriever-Byte-Size": String(resource.artifact.byte_size),
+              });
+              for await (const chunk of chunks) {
+                if (stop.signal.aborted)
+                  throw new DocumentReadError("document-cancelled");
+                if (!response.write(chunk))
+                  await once(response, "drain", { signal: stop.signal });
+              }
+            },
+            stop.signal,
+          );
+          response.end();
+        } finally {
+          verifiedBinaryStreams.delete(response);
+          streams.delete(response);
+          response.off("close", abort);
+        }
+        return;
+      }
       case "/api/v1/query/material-bytes": {
         if (!application.documentRead) {
           json(response, 503, {

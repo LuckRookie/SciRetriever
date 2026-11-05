@@ -133,7 +133,8 @@ export async function analyzeDocumentSession(
       // outside source leaf segments. Legacy documents cover every byte.
       const scaffold =
         version.builder_version === "arranged-leaves-v2" ||
-        version.builder_version === "source-order-leaves-v3";
+        version.builder_version === "source-order-leaves-v3" ||
+        version.builder_version === "source-order-leaves-v4";
       let end = 0;
       const segments = await Promise.all(
         structure.segments.map(async (s) => {

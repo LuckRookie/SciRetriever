@@ -7,6 +7,7 @@ import {
   parseDocumentReadRequest,
   parseDocumentReadResult,
   parseDocumentMaterialBytesRequest,
+  parseDocumentResourceBytesRequest,
   parseEvidenceRef,
 } from "../src/index.js";
 
@@ -22,6 +23,19 @@ const artifact = (digit: string, media_type: string) => ({
 });
 
 describe("Document reading response bounds", () => {
+  it("binds complete resource byte requests to a fixed document and rejects paths and pagination", () => {
+    const selected = { document_version_id: versionId, resource_id: "r1" };
+    expect(parseDocumentResourceBytesRequest(selected)).toEqual(selected);
+    for (const invalid of [
+      { ...selected, document_version_id: "bad" },
+      { ...selected, resource_id: "../private.png" },
+      { ...selected, path: "objects/figure.png" },
+      { ...selected, url: "https://example.org/figure.png" },
+      { ...selected, max_bytes: 65536 },
+      { ...selected, continuation: null },
+    ])
+      expect(() => parseDocumentResourceBytesRequest(invalid)).toThrow();
+  });
   it("binds original PDF byte requests to exact stable IDs and expected hash", () => {
     const selected = {
       literature_id: literatureId,
@@ -61,6 +75,52 @@ describe("Document reading response bounds", () => {
     page: false,
     bbox: false,
   };
+
+  it("accepts 200 slice evidence records while preserving item and text byte limits", () => {
+    const request = parseDocumentReadRequest("slice", {
+      document_version_id: versionId,
+      selector: { kind: "range", start_utf8: 0, end_utf8: 400 },
+      max_bytes: 65536,
+      continuation: null,
+    });
+    const evidence = Array.from({ length: 200 }, (_, i) => ({
+      schema_version: 1,
+      target_kind: "document",
+      locator_scheme: "utf8-segment-v1",
+      document_version_id: versionId,
+      representation_sha256: hash("1"),
+      locator: { kind: "segment", segment_id: `s${i}` },
+      content_sha256: null,
+    }));
+    const result = {
+      document,
+      selector: request.selector,
+      actual_range: { start_utf8: 0, end_utf8: 400 },
+      text: "α".repeat(200),
+      evidence,
+      related_resources: [],
+      truncated: false,
+      continuation: null,
+      capabilities,
+      gaps: [],
+    };
+    expect(
+      parseDocumentReadResult("slice", result, request).evidence,
+    ).toHaveLength(200);
+    expect(() =>
+      parseDocumentReadResult(
+        "slice",
+        { ...result, evidence: [...evidence, evidence[0]] },
+        request,
+      ),
+    ).toThrow();
+    expect(() =>
+      parseDocumentReadResult("slice", result, { ...request, max_bytes: 399 }),
+    ).toThrow();
+    expect(() =>
+      parseDocumentReadRequest("slice", { ...request, max_bytes: 65537 }),
+    ).toThrow();
+  });
 
   it("rejects more page items than requested and false resource completion", () => {
     const listRequest = parseDocumentReadRequest("resources", {
@@ -254,6 +314,26 @@ const representation = {
 };
 
 describe("Document and Evidence boundary parsers", () => {
+  it.each([
+    "proofread-blocks-v1",
+    "arranged-leaves-v2",
+    "source-order-leaves-v3",
+    "source-order-leaves-v4",
+  ])(
+    "accepts the published %s builder without changing its identity",
+    (builder_version) => {
+      expect(
+        parseDocumentRepresentationInput({ ...representation, builder_version })
+          .builder_version,
+      ).toBe(builder_version);
+      expect(() =>
+        parseDocumentRepresentationInput({
+          ...representation,
+          builder_version: "source-order-leaves-v999",
+        }),
+      ).toThrow();
+    },
+  );
   it("copies a closed processing request and rejects inconsistent receipts", () => {
     const mutable = {
       literature_id: literatureId,

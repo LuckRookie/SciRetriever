@@ -8,6 +8,7 @@ import {
   type ArrangementOperation,
 } from "@sciretriever/contracts";
 import { archiveTextFixture, arranged } from "./archive-text-fixture.js";
+import { byteHash } from "../src/archive/text-source.js";
 import {
   renderArrangement,
   arrangementAnnotation,
@@ -34,6 +35,71 @@ const assigned = (
   presentation: { kind: "content" },
 });
 const doc = "00000000-0000-0000-0000-000000000999";
+it("renders equation LaTeX once and excludes its unused screenshot from the v4 closure", async () => {
+  const f = await archiveTextFixture([
+    { text: "E = mc^2", type: "equation", image: true },
+    { text: "$$\nF = ma\n$$", type: "equation", image: true },
+    { text: "\\[x = y\\]", type: "equation", image: true },
+  ]);
+  const b = bundle(f.source),
+    rendered = renderArrangement(b, f.source.raw.resources);
+  expect(rendered.markdown.toString()).toBe(
+    "$$\nE = mc^2\n$$\n\n$$\nF = ma\n$$\n\n\\[x = y\\]\n\n",
+  );
+  expect(rendered.resources).toEqual([]);
+  expect(
+    rendered.structural_ranges.some((r) => r.kind === "resource-reference"),
+  ).toBe(false);
+  for (const span of rendered.source_map)
+    expect(
+      rendered.markdown.subarray(span.start_utf8, span.end_utf8).toString(),
+    ).toBe(
+      b.leaves.find((r) => r.leaf.leaf_id === span.leaf_id)!.corrected_text,
+    );
+});
+it("retains screenshots for empty equations and ordinary images in v4", async () => {
+  const f = await archiveTextFixture([
+    { text: "", type: "equation", image: true },
+    { text: "  \n", type: "equation", image: true },
+    { text: "", type: "image", image: true },
+  ]);
+  const rendered = renderArrangement(bundle(f.source), f.source.raw.resources);
+  expect(
+    rendered.markdown.toString().match(/!\[\]\(images\/fixture.png\)/g),
+  ).toHaveLength(3);
+  expect(rendered.markdown.toString()).not.toContain("$$");
+  expect(rendered.resources).toEqual(f.source.raw.resources);
+});
+it.each([
+  [
+    "source-order-leaves-v3",
+    "7a92ccddc553c1ea08e919065d9bef3a4421cefe1aed7450c6ff14a1514babb3",
+    "9368139eedf87760b496db2d9b6f96628ee999765d5e741ce87753e93b7e93f5",
+  ],
+  [
+    "arranged-leaves-v2",
+    "530626c8ab28d7df6c254abf14835af733d601a657a660d22f347dc65b2c8fdf",
+    "93602e341a1fcb7ae625d7eb1d0b75eccaf4d42f0161fc17a3cdb8cfb72430d3",
+  ],
+] as const)(
+  "reproduces the pre-v4 Markdown and structure bytes for %s",
+  async (builder, markdownHash, structureHash) => {
+    const f = await archiveTextFixture([
+      { text: "Original equation heading", type: "title" },
+      { text: "E = mc^2", type: "equation", image: true },
+      { text: "$$\nF = ma\n$$", type: "equation", image: true },
+      { text: "原文 α🙂 continues.", page: 1 },
+    ]);
+    const rendered = renderArrangement(
+      bundle(f.source),
+      f.source.raw.resources,
+      builder,
+    );
+    expect(byteHash(rendered.markdown)).toBe(markdownHash);
+    expect(rendered.sha256).toBe(structureHash);
+    expect(rendered.resources).toEqual(f.source.raw.resources);
+  },
+);
 function bundle(
   source: Awaited<ReturnType<typeof archiveTextFixture>>["source"],
   operations?: readonly ArrangementOperation[],

@@ -12,6 +12,8 @@ import {
   parseAsset,
   parseProvenance,
   sha256,
+  DOCUMENT_READ_MAX_EVIDENCE,
+  DOCUMENT_READ_MAX_RESOURCE_BYTES,
   type ArtifactRef,
 } from "@sciretriever/contracts";
 import {
@@ -23,6 +25,7 @@ import { startQueryOnlyWorkbench } from "../src/bootstrap/workbench.js";
 import { TypeScriptParserArtifactRules } from "../src/parsing/artifact-rules.js";
 import type { ParserBackend } from "./parser-fixture-types.js";
 import { DocumentReadError } from "../src/document/read.js";
+import { SqliteDocumentStorage } from "../src/document/storage.js";
 import {
   FIXTURE_LITERATURE,
   workbenchPdf,
@@ -40,10 +43,14 @@ const artifact = (bytes: Uint8Array, media_type: string): ArtifactRef => ({
   media_type,
 });
 
-async function fixture() {
+async function fixture(
+  resourceBytes: Uint8Array = figure,
+  mediaType = "image/png",
+) {
   const home = await mkdtemp(join(tmpdir(), "sciretriever-document-read-"));
   let app: Application | undefined;
-  let markdown = "# 标题\nαβ evidence\n![figure](fig.png)\n";
+  const resourceReference = mediaType === "image/bmp" ? "fig.bmp" : "fig.png";
+  let markdown = `# 标题\nαβ evidence\n![figure](${resourceReference})\n`;
   let calls = 0;
   const backend: ParserBackend = {
     parse: async (request) => {
@@ -56,8 +63,11 @@ async function fixture() {
         markdown: { artifact: artifact(bytes, "text/markdown"), bytes },
         resources: [
           {
-            reference: "fig.png",
-            content: { artifact: artifact(figure, "image/png"), bytes: figure },
+            reference: resourceReference,
+            content: {
+              artifact: artifact(resourceBytes, mediaType),
+              bytes: resourceBytes,
+            },
           },
         ],
         provenance: {
@@ -167,6 +177,271 @@ async function segmentId(app: Application, version: string, ordinal: number) {
   ).segments[ordinal]!.segment_id;
 }
 describe("bounded document and material reading", () => {
+  it("streams a complete large image in one verified HTTP request and retains bounded JSON paging", async () => {
+    const image = Buffer.alloc(256 * 1024, 42);
+    figure.copy(image);
+    const env = await fixture(image);
+    let web: Awaited<ReturnType<typeof startQueryOnlyWorkbench>> | undefined;
+    try {
+      const receipt = await correctedDocumentFixture(env.app).parseDocuments(
+        env.request("reparse"),
+      );
+      const version = receipt.document;
+      let continuation: string | null = null;
+      const parts: Buffer[] = [];
+      do {
+        const part = await env.app.documentRead.resource({
+          document_version_id: version.document_version_id,
+          resource_id: "r1",
+          max_bytes: 65536,
+          continuation,
+        });
+        parts.push(Buffer.from(part.bytes_base64!, "base64"));
+        continuation = part.continuation;
+      } while (continuation);
+      expect(parts).toHaveLength(4);
+      expect(Buffer.concat(parts)).toEqual(image);
+      await env.app.close();
+      web = await startQueryOnlyWorkbench({
+        home: env.home,
+        assets: new Map(),
+      });
+      const selected = {
+        document_version_id: version.document_version_id,
+        resource_id: "r1",
+      };
+      const read = (request: unknown, origin?: string) =>
+        fetch(`${web!.origin}/api/v1/query/document-resource-bytes`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(origin ? { Origin: origin } : {}),
+          },
+          body: JSON.stringify({ protocol_version: 1, request }),
+        });
+      const verified = vi.spyOn(
+        SqliteDocumentStorage.prototype,
+        "withVerifiedDocument",
+      );
+      const response = await read(selected);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("image/png");
+      expect(response.headers.get("content-length")).toBeNull();
+      expect(response.headers.get("content-disposition")).toBe(
+        `inline; filename="${await sha256(image)}.png"`,
+      );
+      expect(response.headers.get("x-sciretriever-protocol-version")).toBe("1");
+      expect(response.headers.get("x-sciretriever-document-version-id")).toBe(
+        version.document_version_id,
+      );
+      expect(response.headers.get("x-sciretriever-representation-sha256")).toBe(
+        version.representation_sha256,
+      );
+      expect(response.headers.get("x-sciretriever-resource-id")).toBe("r1");
+      expect(response.headers.get("x-sciretriever-resource-sha256")).toBe(
+        await sha256(image),
+      );
+      expect(response.headers.get("x-sciretriever-byte-size")).toBe(
+        String(image.length),
+      );
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(image);
+      const again = await read(selected);
+      expect(Buffer.from(await again.arrayBuffer())).toEqual(image);
+      expect(verified).toHaveBeenCalledTimes(2);
+      const missing = await read({ ...selected, resource_id: "missing" });
+      expect(missing.status).toBe(400);
+      expect(await missing.json()).toMatchObject({ code: "document-invalid" });
+      expect(
+        (await read({ ...selected, path: "objects/source.pdf" })).status,
+      ).toBe(400);
+      expect(
+        (await read({ ...selected, document_version_id: id(999) })).status,
+      ).toBe(404);
+      expect((await read(selected, "https://other.example")).status).toBe(403);
+      await writeFile(
+        join(env.home, "artifacts/objects/source.pdf"),
+        Buffer.alloc(env.asset.size_bytes, 0),
+      );
+      const corrupt = await read(selected);
+      expect(corrupt.status).toBe(503);
+      expect(await corrupt.json()).toMatchObject({
+        code: "document-integrity",
+      });
+    } finally {
+      vi.restoreAllMocks();
+      await web?.close();
+      await env.close();
+    }
+  });
+
+  it("cancels resource streams, waits for active consumers at shutdown, and detects changes during delivery", async () => {
+    const image = Buffer.alloc(2 * 1024 * 1024, 42);
+    figure.copy(image);
+    const env = await fixture(image);
+    let query: Awaited<ReturnType<typeof createQueryApplication>> | undefined;
+    try {
+      const receipt = await correctedDocumentFixture(env.app).parseDocuments(
+        env.request("reparse"),
+      );
+      query = await createQueryApplication(env.home);
+      const selected = {
+        document_version_id: receipt.document.document_version_id,
+        resource_id: "r1",
+      };
+      const stop = new AbortController();
+      await expect(
+        query.documentRead!.withResourceBytes(
+          selected,
+          async (_d, _r, chunks) => {
+            for await (const chunk of chunks) {
+              void chunk;
+              stop.abort();
+            }
+          },
+          stop.signal,
+        ),
+      ).rejects.toMatchObject({ code: "document-cancelled" });
+      const consumerFailure = new Error("consumer failed");
+      await expect(
+        query.documentRead!.withResourceBytes(selected, async () => {
+          throw consumerFailure;
+        }),
+      ).rejects.toBe(consumerFailure);
+      let release!: () => void, entered!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const active = query.documentRead!.withResourceBytes(
+        selected,
+        async (_d, _r, chunks) => {
+          entered();
+          await gate;
+          for await (const chunk of chunks) void chunk;
+        },
+      );
+      await started;
+      let closed = false;
+      const closing = query.documentRead!.close().then(() => {
+        closed = true;
+      });
+      await Promise.resolve();
+      expect(closed).toBe(false);
+      await expect(
+        query.documentRead!.withResourceBytes(selected, async () => null),
+      ).rejects.toMatchObject({ code: "document-closed" });
+      release();
+      await active;
+      await closing;
+      await query.close();
+      query = await createQueryApplication(env.home);
+      const snapshot = (await env.app.database.documentVersion(
+        selected.document_version_id,
+      ))!;
+      const path =
+        snapshot.resource_artifact_paths[
+          receipt.document.resources[0]!.reference
+        ]!;
+      await expect(
+        query.documentRead!.withResourceBytes(
+          selected,
+          async (_d, _r, chunks) => {
+            for await (const chunk of chunks) void chunk;
+            await writeFile(
+              join(env.home, "artifacts", path),
+              Buffer.alloc(image.length, 0),
+            );
+          },
+        ),
+      ).rejects.toMatchObject({ code: "document-integrity" });
+      await writeFile(join(env.home, "artifacts", path), image);
+      await expect(
+        query.documentRead!.withResourceBytes(
+          selected,
+          async (_d, _r, chunks) => {
+            let count = 0;
+            for await (const chunk of chunks) {
+              void chunk;
+              if (++count === 1)
+                await writeFile(
+                  join(env.home, "artifacts", path),
+                  Buffer.alloc(image.length, 0),
+                );
+            }
+          },
+        ),
+      ).rejects.toMatchObject({ code: "document-integrity" });
+      const consume = vi.fn(async () => null);
+      await expect(
+        query.documentRead!.withResourceBytes(selected, consume),
+      ).rejects.toMatchObject({ code: "document-integrity" });
+      expect(consume).not.toHaveBeenCalled();
+    } finally {
+      await query?.close();
+      await env.close();
+    }
+  });
+
+  it("rejects unsupported resource media without delivering bytes", async () => {
+    const env = await fixture(Buffer.from("BMsynthetic bitmap"), "image/bmp");
+    try {
+      const receipt = await correctedDocumentFixture(env.app).parseDocuments(
+        env.request("reparse"),
+      );
+      const consume = vi.fn(async () => null);
+      await expect(
+        env.app.documentRead.withResourceBytes(
+          {
+            document_version_id: receipt.document.document_version_id,
+            resource_id: "r1",
+          },
+          consume,
+        ),
+      ).rejects.toMatchObject({ code: "document-unsupported" });
+      expect(consume).not.toHaveBeenCalled();
+    } finally {
+      await env.close();
+    }
+  });
+
+  it("retains the complete-document resource size limit before streaming", async () => {
+    const env = await fixture();
+    try {
+      const receipt = await correctedDocumentFixture(env.app).parseDocuments(
+        env.request("reparse"),
+      );
+      const selected = {
+        document_version_id: receipt.document.document_version_id,
+        resource_id: "r1",
+      };
+      const snapshot = (await env.app.database.documentVersion(
+        selected.document_version_id,
+      ))!;
+      vi.spyOn(env.app.database, "documentVersion").mockResolvedValue({
+        ...snapshot,
+        version: {
+          ...snapshot.version,
+          resources: snapshot.version.resources.map((r) => ({
+            ...r,
+            artifact: {
+              ...r.artifact,
+              byte_size: DOCUMENT_READ_MAX_RESOURCE_BYTES + 1,
+            },
+          })),
+        },
+      });
+      const consume = vi.fn(async () => null);
+      await expect(
+        env.app.documentRead.withResourceBytes(selected, consume),
+      ).rejects.toMatchObject({ code: "document-integrity" });
+      expect(consume).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+      await env.close();
+    }
+  });
   // Reached 2.5 s under Full (36/12) load, too close to the 5 s default.
   it("creates and resolves file evidence without parser or document version", async () => {
     const env = await fixture();
@@ -797,7 +1072,7 @@ describe("bounded document and material reading", () => {
     try {
       await env.reopen();
       const lines = Array.from(
-        { length: 90 },
+        { length: DOCUMENT_READ_MAX_EVIDENCE * 3 },
         (_, index) => `line ${index}.\n\n`,
       ).join("");
       env.setMarkdown(
@@ -820,8 +1095,14 @@ describe("bounded document and material reading", () => {
           max_bytes: 65536,
           continuation,
         });
-        expect(part.evidence.length).toBeLessThanOrEqual(32);
-        if (pages === 0) expect(part.gaps).toContain("evidence-page-limit");
+        expect(part.evidence.length).toBeLessThanOrEqual(200);
+        expect(part).toHaveProperty("locations");
+        if ("locations" in part)
+          expect(part.locations.length).toBeLessThanOrEqual(200);
+        if (pages === 0) {
+          expect(part.evidence).toHaveLength(200);
+          expect(part.gaps).toContain("evidence-page-limit");
+        }
         combined += part.text;
         continuation = part.continuation;
         pages++;
