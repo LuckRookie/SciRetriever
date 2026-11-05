@@ -173,6 +173,106 @@ describe("commercial metadata REST adapters", () => {
     });
   });
 
+  it.each([
+    ["array", [{ "@_fa": "true", error: "Result set was empty" }]],
+    ["singleton", { "@_fa": "true", error: "Result set was empty" }],
+  ])(
+    "treats Elsevier's %s empty-result placeholder as exhaustion",
+    async (_, entry) => {
+      let requests = 0;
+      const adapter = new ElsevierRestAdapter({
+        ...ids(),
+        transport: {
+          async request() {
+            requests++;
+            return {
+              "search-results": { "opensearch:totalResults": "0", entry },
+            };
+          },
+        },
+      });
+      const result = await new MetadataService({
+        topic_search_ports: [adapter],
+      }).searchTopicProvider(
+        "elsevier",
+        topicSearchQuery("sciretriever configuration probe"),
+        10,
+      );
+      expect(result).toMatchObject({
+        outcome: "EXHAUSTED",
+        raw_item_count: 0,
+        observations: [],
+        relations: [],
+        failure: null,
+      });
+      expect(requests).toBe(1);
+    },
+  );
+
+  it.each(["singleton", "multiple"] as const)(
+    "preserves Elsevier's %s real-record response",
+    async (shape) => {
+      const first = { eid: "2-s2.0-1", "dc:title": "First Elsevier record" };
+      const second = {
+        "dc:identifier": "SCOPUS_ID:2",
+        "dc:title": "Second Elsevier record",
+      };
+      const adapter = new ElsevierRestAdapter({
+        ...ids(),
+        transport: {
+          request: async () => ({
+            "search-results": {
+              entry: shape === "singleton" ? first : [first, second],
+            },
+          }),
+        },
+      });
+      const result = await new MetadataService({
+        topic_search_ports: [adapter],
+      }).searchTopicProvider("elsevier", topicSearchQuery("fixture"), 10);
+      expect(result).toMatchObject({
+        outcome: "EXHAUSTED",
+        raw_item_count: shape === "singleton" ? 1 : 2,
+        failure: null,
+      });
+      expect(result.observations.map((o) => o.metadata.title)).toEqual(
+        shape === "singleton"
+          ? ["First Elsevier record"]
+          : ["First Elsevier record", "Second Elsevier record"],
+      );
+      expect(
+        result.observations.map((o) => o.provenance.source_record_id),
+      ).toEqual(shape === "singleton" ? ["2-s2.0-1"] : ["2-s2.0-1", "2"]);
+    },
+  );
+
+  it.each([
+    { error: "Result set was empty", "dc:title": "Missing identity" },
+    { error: "Result set was empty", eid: null },
+    { error: "Result set was empty", coredata: {} },
+    { error: "Result set was empty", unexpected: true },
+    { error: null },
+    {},
+  ])(
+    "does not hide malformed Elsevier records as empty results: %j",
+    async (entry) => {
+      const adapter = new ElsevierRestAdapter({
+        transport: {
+          request: async () => ({ "search-results": { entry: [entry] } }),
+        },
+      });
+      const result = await new MetadataService({
+        topic_search_ports: [adapter],
+      }).searchTopicProvider("elsevier", topicSearchQuery("fixture"), 10);
+      expect(result).toMatchObject({
+        outcome: "FAILED",
+        raw_item_count: 1,
+        observations: [],
+        failure: { code: "metadata-record-invalid" },
+      });
+    },
+  );
+
   it("maps Web of Science Starter pages and DOI/PMID fields", async () => {
     const adapter = new WebOfScienceStarterRestAdapter({
       origin: "https://api.clarivate.test/apis/wos-starter/v2",

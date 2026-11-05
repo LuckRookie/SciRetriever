@@ -45,9 +45,20 @@ function nested(value: unknown): Record<string, unknown> {
 }
 function entries(root: Record<string, unknown>): readonly unknown[] {
   const values = root.entry ?? root.coredata;
-  return values && !Array.isArray(values) && typeof values === "object"
-    ? [values as Record<string, unknown>]
-    : rawItems(values);
+  const items =
+    values && !Array.isArray(values) && typeof values === "object"
+      ? [values as Record<string, unknown>]
+      : rawItems(values);
+  return items.filter((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return true;
+    const record = item as Record<string, unknown>;
+    // Scopus represents an empty result with an error-only placeholder entry.
+    // Any record fields, even invalid ones, must still reach conversion.
+    return !(
+      text(record.error) !== null &&
+      Object.keys(record).every((key) => key === "error" || key === "@_fa")
+    );
+  });
 }
 function identifierList(
   record: Record<string, unknown>,
