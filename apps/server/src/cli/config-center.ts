@@ -13,6 +13,7 @@ const AREAS = [
   ["p", "Parse"],
   ["a", "Analyze"],
   ["b", "Browser"],
+  ["n", "Network"],
   ["i", "Status"],
   ["t", "Theme"],
   ["q", "Quit"],
@@ -70,7 +71,7 @@ export async function runConfigurationCenter(
     const key = line.trim().toLowerCase();
     const area = AREAS.find(([shortcut]) => shortcut === key);
     if (!area) {
-      diagnose("Choose M/S/D/P/A/B/I/T/Q.\n");
+      diagnose("Choose M/S/D/P/A/B/N/I/T/Q.\n");
       continue;
     }
     if (area[0] === "q") break;

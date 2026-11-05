@@ -1,3 +1,5 @@
+import { ProxyUnavailableError } from "../network/egress.js";
+import { outboundEgress } from "../configuration/egress.js";
 import {
   RestartAdmission,
   guardRuntimeMethods,
@@ -593,6 +595,12 @@ function assembleConfiguredTypeScriptParser(
   const raw = transportFactory
     ? null
     : createAgentTransport({
+        egress: outboundEgress(
+          configuration.network,
+          { kind: "mineru" },
+          credentials,
+          currentCredential,
+        ),
         resolver:
           resolver ??
           (async (hostname) =>
@@ -916,7 +924,17 @@ async function createApplicationOwned(
       browserProxy === undefined &&
       browserAdmitNavigation === undefined
     ) {
-      const network = createBrowserNetworkAdmission({ budget: networkBudget });
+      const network = createBrowserNetworkAdmission({
+        budget: networkBudget,
+        egress: outboundEgress(
+          configuration.network,
+          { kind: "browser" },
+          credentials,
+          configurationOwner.authorizeCurrentCredential.bind(
+            configurationOwner,
+          ),
+        ),
+      });
       browserProxy = await network.proxy.start();
       browserAdmitNavigation = network.admitNavigation;
       ownedBrowserProxy = network.proxy;
@@ -931,6 +949,10 @@ async function createApplicationOwned(
       injectedBrowserHostFactory ??
         createProductionBrowserHostFactory({
           runtime: verifiedBrowserRuntime,
+          networkFailure: (url) =>
+            ownedBrowserProxy?.failureFor(url)
+              ? new ProxyUnavailableError()
+              : null,
           maxSessions: browserCapacity.effective_sessions,
           ...(browserProxy ? { proxy: browserProxy } : {}),
           ...(browserAdmitNavigation
@@ -1584,6 +1606,14 @@ async function createApplicationOwned(
       pdfAcquisition = new EntryPdfAcquisitionService({
         registry: acquisition,
         network_budget: networkBudget,
+        acquisition_options: {
+          network: configuration.network,
+          credentials,
+          currentCredential:
+            configurationOwner.authorizeCurrentCredential.bind(
+              configurationOwner,
+            ),
+        },
         transfers: execution.transfers,
         acceptance: execution.acceptance,
         // The Browser tier is the same owned session the Application exposes, reached
@@ -2412,6 +2442,12 @@ function buildAgentBindings(
       const rawTransport =
         transportFactory?.(providerName, origin) ??
         createAgentTransport({
+          egress: outboundEgress(
+            configuration.network,
+            { kind: "provider", id: providerName },
+            credentials,
+            authorizeCredential,
+          ),
           resolver: async (hostname) =>
             (await lookup(hostname, { all: true })).map((item) => item.address),
           policy: {

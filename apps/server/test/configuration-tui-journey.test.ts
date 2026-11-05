@@ -310,7 +310,7 @@ describe("TypeScript configuration center", () => {
       });
       expect(result.code).toBe(0);
       expect(stdout.join("")).toContain("SciRetriever configuration center");
-      expect(stdout.join("")).toContain("Choose M/S/D/P/A/B/I/T/Q.");
+      expect(stdout.join("")).toContain("Choose M/S/D/P/A/B/N/I/T/Q.");
       expect(stderr.join("")).toBe("");
 
       // An invalid menu selection is a diagnostic: stderr, never a re-render
@@ -323,7 +323,7 @@ describe("TypeScript configuration center", () => {
         stdout: (text) => invalidStdout.push(text),
         stderr: (text) => invalid.push(text),
       });
-      expect(invalid.join("")).toContain("Choose M/S/D/P/A/B/I/T/Q.");
+      expect(invalid.join("")).toContain("Choose M/S/D/P/A/B/N/I/T/Q.");
       expect(
         invalidStdout.join("").match(/SciRetriever configuration center/gu),
       ).toHaveLength(1);

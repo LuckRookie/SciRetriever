@@ -1,3 +1,5 @@
+import { outboundEgress } from "../configuration/egress.js";
+import type { OutboundNetworkConfiguration } from "@sciretriever/contracts";
 import { networkRequestDispatched } from "../network/request-activity.js";
 import { selectedAcquisitionSources } from "../configuration/acquisition-selection.js";
 import { lookup } from "node:dns/promises";
@@ -62,6 +64,7 @@ import {
 export { BUILTIN_SCI_HUB_MIRROR_URLS } from "../providers/sci-hub/definition.js";
 
 export interface PublicAcquisitionAssemblyOptions {
+  readonly network?: OutboundNetworkConfiguration;
   readonly resolver?: Resolver;
   readonly connection?: ConnectionDependencies;
   readonly credentials?: CredentialBundle;
@@ -228,7 +231,7 @@ export function assemblePublicPdfDownloadTransport(
   coordinator: NetworkBudgetCoordinator,
   options: Pick<
     PublicAcquisitionAssemblyOptions,
-    "resolver" | "connection"
+    "resolver" | "connection" | "network" | "credentials" | "currentCredential"
   > = {},
 ): PdfDownloadTransport {
   const target = new URL(candidate.locator);
@@ -260,6 +263,14 @@ export function assemblePublicPdfDownloadTransport(
   return {
     request: (url, requestOptions = {}) => {
       return requestFollowingRedirects(url, resolver, policy, {
+        egress: outboundEgress(
+          options.network,
+          candidate.source === "doi-landing"
+            ? { kind: "doi-resolution" }
+            : { kind: "source", id: candidate.requester ?? candidate.source },
+          options.credentials,
+          options.currentCredential,
+        ),
         headers: [["accept", "application/pdf,text/html;q=0.8"]],
         body: new Uint8Array(),
         timeoutMs: 30_000,
@@ -310,6 +321,12 @@ function unpaywallTransport(
 ): PublicAcquisitionTransport {
   const origin = ORIGINS.unpaywall;
   const transportOptions: AgentTransportOptions = {
+    egress: outboundEgress(
+      options.network,
+      { kind: "source", id: "unpaywall" },
+      options.credentials,
+      options.currentCredential,
+    ),
     resolver:
       options.resolver ??
       (async (hostname) =>
@@ -403,6 +420,12 @@ function authorizedTransport(
   const request = injected
     ? null
     : createAgentTransport({
+        egress: outboundEgress(
+          options.network,
+          { kind: "source", id: provider },
+          options.credentials,
+          options.currentCredential,
+        ),
         resolver:
           options.resolver ??
           (async (hostname) =>
@@ -520,10 +543,15 @@ function sourceCredential(
 
 /** Assemble the public locator sources without probing; selection is resolved from local configuration. */
 export function assemblePublicAcquisitionRegistry(
-  configuration: Pick<OrdinaryConfiguration, "sources">,
+  configuration: Pick<OrdinaryConfiguration, "sources"> &
+    Partial<Pick<OrdinaryConfiguration, "network">>,
   coordinator: NetworkBudgetCoordinator,
   options: PublicAcquisitionAssemblyOptions = {},
 ): PublicAcquisitionRegistry {
+  options = {
+    ...options,
+    ...(configuration.network ? { network: configuration.network } : {}),
+  };
   const selected = selectedAcquisitionSources(
     configuration,
     options.credentials ? bundlePreview(options.credentials) : { sections: [] },

@@ -6,6 +6,8 @@ import {
   type AcquisitionAttempt,
 } from "@sciretriever/contracts";
 import { observeNetworkRequests } from "../network/request-activity.js";
+import { observeNetworkEgress, isProxyUnavailable } from "../network/egress.js";
+import { outboundEgress, selectedEgress } from "../configuration/egress.js";
 import { sourceProblem } from "../providers/shared/source-problem.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -154,6 +156,7 @@ export interface PdfAcquisitionCohortOutcome {
 }
 
 export interface EntryPdfAcquisitionPorts {
+  readonly acquisition_options?: import("../acquisition/assembly.js").PublicAcquisitionAssemblyOptions;
   readonly registry: PublicAcquisitionRegistry;
   readonly network_budget: NetworkBudgetCoordinator;
   readonly transfers: BrowserTransferCollector;
@@ -386,6 +389,7 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     let requested = false;
     let resolutionResult: AcquisitionAttempt["result"] = "miss";
     let resolutionCode = "access-evidence-ready";
+    const egresses = new Set<import("@sciretriever/contracts").NetworkEgress>();
     const candidates = this.publisherCandidates(request);
     createLogger("pdf-acquisition").debug("Resolving article access evidence", {
       candidate_count: candidates.length,
@@ -395,25 +399,32 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     try {
       if (request.signal.aborted)
         throw new DOMException("Acquisition cancelled", "AbortError");
-      const target = await observeNetworkRequests(
-        () => {
-          requested = true;
-        },
+      const target = await observeNetworkEgress(
+        (egress) => egresses.add(egress),
         () =>
-          (
-            this.ports.resolve_doi_landing ??
-            ((url, signal, options) =>
-              resolveDoiLanding(
-                url,
-                this.ports.network_budget,
-                signal,
-                options,
-              ))
-          )(doi, request.signal, {
-            on_response: (response) => {
-              context.doi_response = { url: doi, response };
+          observeNetworkRequests(
+            () => {
+              requested = true;
             },
-          }),
+            () =>
+              (
+                this.ports.resolve_doi_landing ??
+                ((url, signal, options) =>
+                  resolveDoiLanding(url, this.ports.network_budget, signal, {
+                    ...options,
+                    egress: outboundEgress(
+                      this.ports.acquisition_options?.network,
+                      { kind: "doi-resolution" },
+                      this.ports.acquisition_options?.credentials,
+                      this.ports.acquisition_options?.currentCredential,
+                    ),
+                  }))
+              )(doi, request.signal, {
+                on_response: (response) => {
+                  context.doi_response = { url: doi, response };
+                },
+              }),
+          ),
       );
       if (request.signal.aborted)
         throw new DOMException("Acquisition cancelled", "AbortError");
@@ -446,7 +457,9 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
       return null;
     } catch (error) {
       resolutionResult = "failed";
-      resolutionCode = "doi-resolution-failed";
+      resolutionCode = isProxyUnavailable(error)
+        ? "proxy-unavailable"
+        : "doi-resolution-failed";
       const kind = classifyAcquisitionFailure(error, request.signal);
       if (kind === "cancel") return { kind: "cancelled" };
       if (kind !== "route" && !(error instanceof AcquisitionRouteError))
@@ -469,6 +482,7 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
         requested,
         result: resolutionResult,
         code: resolutionCode,
+        egresses: [...egresses],
       });
     }
   }
@@ -764,7 +778,20 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
     value: AcquisitionAttempt,
   ): Promise<void> {
     if (context.attempts.length >= MAX_ACQUISITION_ATTEMPTS) return;
-    const attempt = parseAcquisitionAttempt(value);
+    const attempt = parseAcquisitionAttempt(
+      value.source === "browser" &&
+        value.requested &&
+        value.egresses === undefined
+        ? {
+            ...value,
+            egresses: [
+              selectedEgress(this.ports.acquisition_options?.network, {
+                kind: "browser",
+              }),
+            ],
+          }
+        : value,
+    );
     context.attempts.push(attempt);
     await request.on_attempt?.(attempt);
   }
@@ -884,6 +911,7 @@ export class EntryPdfAcquisitionService implements PdfAcquisitionPort {
               const transport = assemblePublicPdfDownloadTransport(
                 candidate,
                 this.ports.network_budget,
+                this.ports.acquisition_options,
               );
               durable = await downloadPdfCandidate(
                 candidate,

@@ -1,3 +1,4 @@
+import { ProxyUnavailableError } from "../src/network/egress.js";
 import { BrowserNetworkProxy } from "../src/network/browser-proxy.js";
 import { NetworkBudgetCoordinator } from "../src/network/budget.js";
 import { resolveDestination } from "../src/network/policy.js";
@@ -1162,4 +1163,44 @@ it.runIf(browserAvailable)(
     }
   },
   30000, // Covers browser startup plus the explicit 15-second response wait.
+);
+
+it.skipIf(!browserAvailable && !bundle)(
+  "keeps a committed document usable when another request at that origin has a proxy diagnosis",
+  async () => {
+    const launch = await fixtureLaunch();
+    const url = await fixture();
+    const diagnosis = vi.fn(() => new ProxyUnavailableError());
+    const host = new BrowserHost({
+      profile: await profile(),
+      ...launch.options,
+      networkFailure: diagnosis,
+      admitNavigation: (target) => {
+        if (new URL(target).origin !== new URL(url).origin)
+          throw new BrowserHostError();
+        return target;
+      },
+    });
+    try {
+      await host.start();
+      const page = await host.openPage(url);
+      await expect
+        .poll(
+          async () => {
+            try {
+              return (await page.snapshot()).title;
+            } catch (error) {
+              if (error instanceof BrowserPageTransitionError) return null;
+              throw error;
+            }
+          },
+          { timeout: 20_000 },
+        )
+        .toBe("synthetic browser page");
+      expect(diagnosis).not.toHaveBeenCalled();
+      await page.close();
+    } finally {
+      await host.close();
+    }
+  },
 );

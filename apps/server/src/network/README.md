@@ -6,6 +6,7 @@
 
 - [http.ts](http.ts)：受控 HTTP 传输。
 - [request-activity.ts](request-activity.ts)：隔离并发请求的无参数派发通知，不携带 URL、凭据或响应。
+- [egress.ts](egress.ts)、[proxy-tunnel.ts](proxy-tunnel.ts)：进程内出口 capability、显式 HTTP CONNECT 与脱敏失败。
 - [policy.ts](policy.ts)：网络访问策略。
 - [budget.ts](budget.ts)：共享访问额度。
 - [browser-admission.ts](browser-admission.ts)：浏览器请求准入。

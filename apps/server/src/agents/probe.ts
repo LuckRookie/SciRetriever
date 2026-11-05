@@ -1,3 +1,4 @@
+import type { OutboundEgress } from "../network/egress.js";
 import { createHash } from "node:crypto";
 import type { NetworkBudgetCoordinator } from "../network/budget.js";
 import type { ConnectionDependencies } from "../network/connection.js";
@@ -189,6 +190,7 @@ export function resolveProbeModelTarget(
 }
 
 export interface ProbeAgentRuntimeOptions {
+  readonly egress?: OutboundEgress;
   readonly coordinator: NetworkBudgetCoordinator;
   readonly role: AgentRole;
   readonly capabilities: readonly AgentCapability[];
@@ -209,6 +211,7 @@ export function createProbeAgentRuntime(
     const url = new URL(target.endpoint);
     const local = url.protocol === "http:";
     const raw = createAgentTransport({
+      ...(options.egress ? { egress: options.egress } : {}),
       resolver: options.resolver ?? systemResolver(),
       policy: {
         allowed_schemes: [local ? "http" : "https"],

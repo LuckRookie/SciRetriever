@@ -736,6 +736,8 @@ apps/server/src/network/
   policy.ts          # URL/DNS/origin、地址类别、凭据转发与脱敏
   budget.ts          # NetworkBudgetCoordinator、进程内共享准入
   connection.ts      # VerifiedConnection 与目标绑定
+  egress.ts          # 进程内出口 capability 与脱敏代理失败
+  proxy-tunnel.ts    # 显式 HTTP CONNECT 代理隧道
   http.ts            # 受控 HTTP、模型 transport
   browser-proxy.ts   # loopback CONNECT、精确目标 binding
   probe.ts           # 复用生产协议的显式诊断
@@ -919,6 +921,38 @@ redirect-target guard 并显式启用 guarded opaque-path 模式；guard 在目�
 预算检查，但不对 Provider 签发的 opaque segment 做多层解码后再猜测 path 语义。该模式
 不会扩大普通 redirect，跨 origin 时也不会转发 credential。
 
+#### 显式出口与 CONNECT
+
+按 [ADR 0056](../decisions/0056-outbound-proxy-by-requester.md)，出口由发起方选择，
+默认直连。Configuration/Bootstrap 把来源 ID、DOI 解析、Model Provider ID、远程 MinerU
+或 Browser 映射为 `direct | proxy` capability；Network 不按最终域名重新选择，也不读取
+`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 或小写等价项。
+来源给出的 PDF hint 保留来源 requester；重定向继续使用同一出口，目标凭据仍受 origin
+检查。没有来源归属的显式 PDF hint 默认直连，不为已归属的同 URL 再生成无归属候选。
+
+唯一显式代理为带 host:port 的 `http://` origin，代理跳可位于本机或局域网。
+Network 先照常审核目标 URL、本机 DNS 和地址类别，再连接代理并发送
+`CONNECT hostname:port`；明文 HTTP 也走隧道。代理按 hostname 解析上游，隧道内
+目标 TLS 的证书、主机名和可信 CA 校验不变。已明确准入的本机/局域网模型或 MinerU
+始终直连；配置 preview/publish 拒绝把这些服务选为经代理。只填代理地址不改变流量。
+
+代理 TCP 失败、CONNECT 超时、407、非 2xx 或无效回执统一为 `proxy-unavailable`，
+不回退直连；成功建隧道后的目标 TLS/HTTP 失败保持原分类。普通 HTTP 与 Browser
+loopback 代理上游共用 `proxy-tunnel.ts`，Chromium 的 loopback 配置不变。
+
+来源测试、单项配置/模型测试返回 `egress`；获取轨迹返回 `egresses`，记录实际建连
+观察到的出口集合（无建连时为空，同一 direct 通道可包含多个来源）。历史回执缺少
+这些字段仍可读。readiness 的 `network` 只给代理配置/认证 presence 和发起方选择。
+代理用户名密码由凭据 owner 按精确 proxy origin 授权，只在 CONNECT 的
+`Proxy-Authorization` 中出现；primary/next 过渡槽保留旧进程 origin，每次 CONNECT
+重新读取授权，清除后后续隧道不再携带认证。
+
+显式 `config test proxy`、HTTP `/api/configuration/probe` 和 MCP
+`configuration_probe` 使用同一 owner=proxy 请求，只审核固定 `api.crossref.org:443`
+并测试 CONNECT，不发送目标 HTTP 或证明文献权限。它们沿用配置操作的授权、CSRF、
+预算与取消边界；耗时在 `execution.elapsed_ms`，代理故障码为 `proxy-unavailable`。
+配置字段和默认值由[配置手册](../../guides/configuration.md)统一维护。
+
 ### 7.9 调用方向
 
 ```text
@@ -936,7 +970,7 @@ network.browser           -> network.policy + network.admission
 
 ### 7.10 凭据、配置测试与诊断
 
-- Network 不读取普通 TOML、环境变量、`~/.sciretriever/credentials.toml` 或任何 secret reference/value；Provider secret 由 `sciretriever.configuration` 私有解析，再由 `sciretriever.bootstrap` 注入具体 adapter；
+- Network 不自行读取普通 TOML、环境变量或 `~/.sciretriever/credentials.toml`；目标和代理凭据由 configuration owner 私有解析，再由 Bootstrap 注入 adapter 或进程内授权 capability；
 - Adapter 声明允许附着凭据的 origin 和不含 secret 的 quota scope；
 - 跨 origin redirect 默认移除凭据，除非 policy 明确允许；
 - 凭据值不得进入 scope、内存限速状态、日志、异常、诊断、SQLite、provenance、URL、文件名或用户输出；
@@ -950,7 +984,7 @@ network.browser           -> network.policy + network.admission
 `config status` 是纯本地 configuration/readiness 检查，不得调用 Network。LLM 向导只有在用户
 明确选择“获取可用模型”后，才通过 Bootstrap 与共享 HTTP 对 candidate origin 执行一次有界、
 无 redirect/retry 的 `GET /models`；credential 仍只附着到该规范 origin，结果不持久化，失败回到
-手工输入。用户显式执行 owner-scoped `config test provider/model/search/parse/analyze/browser` 或
+手工输入。用户显式执行 owner-scoped `config test proxy/provider/model/search/parse/analyze/browser` 或
 `config test --all` 时，Bootstrap 组装的实际外部 probe 必须像普通 adapter 一样经过共享 Coordinator、
 安全 HTTP、URL/DNS/redirect、timeout、响应预算、quota、`Retry-After` 和脱敏。Provider probe
 只做官方允许的最小只读请求，Analysis probe 只发送固定最小 schema 内容，Browser Agent probe

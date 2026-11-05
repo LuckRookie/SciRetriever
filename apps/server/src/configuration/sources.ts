@@ -1,3 +1,4 @@
+import { selectedEgress } from "./egress.js";
 import {
   LITERATURE_SOURCE_IDS,
   parseSourceDirectory,
@@ -233,12 +234,21 @@ export class SourceConfigurationOwner {
       return sourceDigest({
         method: SOURCE_METHOD_VERSION,
         browser: c.browser,
+        network: {
+          egress: selectedEgress(c.network, { kind: "browser" }),
+          proxy: c.network.via_proxy.browser ? c.network.proxy : null,
+        },
         generation: snap.state.generations.browser,
       });
     const def = LITERATURE_PROVIDERS[source]!,
       parameters = sourceParameters(c, source);
     return sourceDigest({
       method: SOURCE_METHOD_VERSION,
+      egress: selectedEgress(c.network, { kind: "source", id: source }),
+      proxy:
+        selectedEgress(c.network, { kind: "source", id: source }) === "proxy"
+          ? c.network.proxy
+          : null,
       source,
       generation: snap.state.generations[source],
       parameters,
@@ -486,6 +496,7 @@ export class SourceConfigurationOwner {
       return {
         source,
         name: def.displayName ?? source,
+        egress: selectedEgress(c.network, { kind: "source", id: source }),
         group:
           def.acquisitionStage === "publisher-api"
             ? "publisher-api"
@@ -571,11 +582,7 @@ export class SourceConfigurationOwner {
         Number(b.configuration.state === "missing") -
         Number(a.configuration.state === "missing"),
     );
-    const browserRevision = sourceDigest({
-      method: SOURCE_METHOD_VERSION,
-      browser: c.browser,
-      generation: snap.state.generations.browser,
-    });
+    const browserRevision = this.sourceRevision("browser", snap);
     const bl = snap.state.results.browser,
       bt = this.tests?.slot("browser");
     return parseSourceDirectory({

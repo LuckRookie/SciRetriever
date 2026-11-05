@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isProxyUnavailable } from "../network/egress.js";
 import {
   AgentFailure,
   type AgentCall,
@@ -351,30 +352,38 @@ export async function post(
   }
   if (encoded.byteLength > 4_194_304)
     throw new AgentFailure("agent-request-limit");
-  const response = await config.transport({
-    endpoint: config.endpoint,
-    method: "POST",
-    timeout_ms: 120_000,
-    ...(["analysis", "proofreading"].includes(call.role)
-      ? { timeout_mode: "idle" as const }
-      : {}),
-    headers: [
-      ["content-type", "application/json"],
-      ...(protocol === "anthropic" ? [ANTHROPIC_API_VERSION_HEADER] : []),
-      ...(credential === null ? [] : [credentialHeader(protocol, credential)]),
-      ["accept", stream ? "text/event-stream" : "application/json"],
-      // Conversation affinity, as DSH's OpenAI Responses adapter sends it.
-      ...(call.cache_key !== undefined && protocol !== "anthropic"
-        ? [
-            ["session_id", call.cache_key] as [string, string],
-            ["x-client-request-id", call.cache_key] as [string, string],
-          ]
-        : []),
-    ],
-    body: encoded,
-    ...(lifecycle ? { onDispatched: lifecycle.onDispatched } : {}),
-    ...(signal ? { signal } : {}),
-  });
+  const response = await config
+    .transport({
+      endpoint: config.endpoint,
+      method: "POST",
+      timeout_ms: 120_000,
+      ...(["analysis", "proofreading"].includes(call.role)
+        ? { timeout_mode: "idle" as const }
+        : {}),
+      headers: [
+        ["content-type", "application/json"],
+        ...(protocol === "anthropic" ? [ANTHROPIC_API_VERSION_HEADER] : []),
+        ...(credential === null
+          ? []
+          : [credentialHeader(protocol, credential)]),
+        ["accept", stream ? "text/event-stream" : "application/json"],
+        // Conversation affinity, as DSH's OpenAI Responses adapter sends it.
+        ...(call.cache_key !== undefined && protocol !== "anthropic"
+          ? [
+              ["session_id", call.cache_key] as [string, string],
+              ["x-client-request-id", call.cache_key] as [string, string],
+            ]
+          : []),
+      ],
+      body: encoded,
+      ...(lifecycle ? { onDispatched: lifecycle.onDispatched } : {}),
+      ...(signal ? { signal } : {}),
+    })
+    .catch((error: unknown) => {
+      if (isProxyUnavailable(error))
+        throw new AgentFailure("proxy-unavailable", true, { cause: error });
+      throw error;
+    });
   if (response.body.byteLength > (config.maxResponseBytes ?? 4_194_304))
     throw new AgentFailure("agent-response-limit");
   if (response.status < 200 || response.status > 299) {

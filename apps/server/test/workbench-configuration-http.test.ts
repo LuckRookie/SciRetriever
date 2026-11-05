@@ -788,3 +788,140 @@ describe("workbench configuration HTTP boundary", () => {
     }
   });
 });
+
+it("publishes network and write-only proxy authentication, then requires CSRF for a real CONNECT probe", async () => {
+  const { connectProxyFixture } = await import("./network-egress-fixture.js");
+  const proxy = await connectProxyFixture();
+  const home = await mkdtemp(join(tmpdir(), "sciretriever-network-http-"));
+  const owner = new TypeScriptConfigurationOwner(home);
+  const session = fixtureSession();
+  await session.refresh();
+  const server = await startWorkbenchHttp({
+    access: workbenchTestAccess,
+    session,
+    assets: new Map([
+      ["/", { contentType: "text/html", body: "<html></html>" }],
+    ]),
+    configuration: {
+      status: (signal) => owner.status(signal),
+      read: (signal) => owner.read(signal),
+      publishConfiguration: (c, b, s, signal) =>
+        owner.publishConfiguration(c, b, s, signal),
+      credential: (edit, b, signal) => owner.credential(edit, b, signal),
+      probe: async (request, options) => {
+        const probe = await ConfigurationProbeSession.create(owner, {
+          resolver: () => ["93.184.216.34"],
+        });
+        try {
+          return await probe.run(request, {
+            authorized: true,
+            ...(options ? { signal: options } : {}),
+          });
+        } finally {
+          probe.close();
+        }
+      },
+    },
+  });
+  try {
+    const auth = await workbenchLogin(server.origin);
+    const root = await exchange(server.origin, "/", "GET", { Cookie: auth });
+    const cookie = `${auth}; ${(root.headers["set-cookie"] as string[])[0]!.split(";")[0]!}`;
+    const init = await exchange(
+      server.origin,
+      "/api/clients",
+      "POST",
+      {
+        Cookie: cookie,
+        Origin: server.origin,
+        "Content-Type": "application/json",
+        "X-Workbench-Init": "1",
+      },
+      "{}",
+    );
+    const grant = JSON.parse(init.text) as { client_id: string; csrf: string };
+    const headers = {
+      Cookie: cookie,
+      Origin: server.origin,
+      "Content-Type": "application/json",
+      "X-Workbench-Csrf": grant.csrf,
+    };
+    const endpoint = (name: string) =>
+      `/api/configuration/${name}?client_id=${grant.client_id}`;
+    const baseline = await owner.read();
+    const published = await exchange(
+      server.origin,
+      endpoint("publish-json"),
+      "POST",
+      headers,
+      JSON.stringify({
+        baseline: baseline.revision,
+        sections: ["network"],
+        configuration: {
+          ...baseline.configuration,
+          network: { ...baseline.configuration.network, proxy: proxy.origin },
+        },
+      }),
+    );
+    expect(published.status).toBe(200);
+    const snapshot = await owner.read();
+    expect(snapshot.configuration.network.proxy).toBe(proxy.origin);
+    const credential = await exchange(
+      server.origin,
+      endpoint("credential"),
+      "POST",
+      headers,
+      JSON.stringify({
+        baseline: snapshot.revision,
+        edit: {
+          namespace: "proxy",
+          target: "proxy",
+          kind: "set",
+          value: "http-fixture:synthetic-pass",
+        },
+      }),
+    );
+    expect(credential.status).toBe(200);
+    expect(credential.text).not.toContain("synthetic-pass");
+    expect(JSON.parse(credential.text).status.network).toMatchObject({
+      proxy_configured: true,
+      proxy_authentication: true,
+    });
+    const body = JSON.stringify({ owner: "proxy", target: null, image: false });
+    const denied = await exchange(
+      server.origin,
+      endpoint("probe"),
+      "POST",
+      { ...headers, "X-Workbench-Csrf": "invalid" },
+      body,
+    );
+    expect(denied.status).toBe(403);
+    expect(proxy.connections).toEqual([]);
+    const tested = await exchange(
+      server.origin,
+      endpoint("probe"),
+      "POST",
+      headers,
+      body,
+    );
+    expect(tested.status).toBe(200);
+    expect(JSON.parse(tested.text).result).toMatchObject({
+      outcome: "passed",
+      egress: "proxy",
+    });
+    expect(proxy.connections).toEqual([
+      {
+        authority: "api.crossref.org:443",
+        authorization: `Basic ${Buffer.from("http-fixture:synthetic-pass").toString("base64")}`,
+      },
+    ]);
+    await expect(readFile(join(home, "catalog.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  } finally {
+    await server.close();
+    await session.close();
+    await proxy.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});

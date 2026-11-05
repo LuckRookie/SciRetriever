@@ -1,3 +1,5 @@
+import { parseNetworkReadiness, type NetworkReadiness } from "./network.js";
+export * from "./network.js";
 import {
   parseAcquisitionAttempts,
   parseAcquisitionRouteState,
@@ -3108,6 +3110,7 @@ export interface ConfigurationReadinessItem {
     | "explicit-test";
 }
 export interface ConfigurationReadiness {
+  readonly network?: NetworkReadiness;
   readonly diagnostics?: readonly {
     readonly code: "configuration-option-removed";
     readonly path: "proofread.max_calls_per_document";
@@ -3136,6 +3139,9 @@ export function parseConfigurationReadiness(
   const r = exact(
     value,
     [
+      ...(value && typeof value === "object" && "network" in value
+        ? ["network"]
+        : []),
       "version",
       "network_performed",
       "browser_launched",
@@ -3242,6 +3248,9 @@ export function parseConfigurationReadiness(
             return { code: q.code, path: q.path, message: q.message };
           }),
         }),
+    ...(r.network === undefined
+      ? {}
+      : { network: parseNetworkReadiness(r.network) }),
     ...(r.acquisition_routes === undefined
       ? {}
       : {

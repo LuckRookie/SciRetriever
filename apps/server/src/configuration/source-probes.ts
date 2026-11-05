@@ -1,3 +1,5 @@
+import { selectedEgress } from "./egress.js";
+import { isProxyUnavailable } from "../network/egress.js";
 import { RestartAdmission } from "../application/restart-admission.js";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -312,6 +314,7 @@ export class SourceProbeService {
     }, this.seams.timeout_ms ?? 90_000);
     const signal = run.controller.signal;
     if (run.state !== "cancelled") run.state = "running";
+    let egress: import("@sciretriever/contracts").NetworkEgress = "direct";
     const checks: SourceTestCheck[] = [];
     let requests = 0,
       bytes = 0,
@@ -319,6 +322,7 @@ export class SourceProbeService {
     let status: SourceTestResult["status"] = "available";
     const base = (purpose: SourceTestCheck["purpose"]): SourceTestCheck => ({
       purpose,
+      egress,
       result: "not-exercised",
       requested: false,
       pdf_validated: false,
@@ -329,6 +333,12 @@ export class SourceProbeService {
     try {
       if (signal.aborted) throw new Error("cancelled");
       const snap = await this.sources.snapshot();
+      egress = selectedEgress(
+        snap.current.configuration.network,
+        source === "browser"
+          ? { kind: "browser" }
+          : { kind: "source", id: source },
+      );
       if ((await this.sources.testRevision(source, snap)) !== source_revision)
         throw new SourceConfigurationError("source-test-conflict");
       if (source === "browser") {
@@ -456,6 +466,7 @@ export class SourceProbeService {
               };
               const options = {
                 ...this.seams.acquisition,
+                network: snap.current.configuration.network,
                 credentials: snap.bundle,
                 currentCredential: (
                   request: Parameters<
@@ -595,6 +606,7 @@ export class SourceProbeService {
       status = "error";
     return parseSourceTestResult({
       test_id,
+      egress,
       source,
       source_revision,
       method_version: SOURCE_METHOD_VERSION,
@@ -620,6 +632,7 @@ export class SourceProbeService {
   }
 }
 const SAFE_PROBE_CODES = new Set([
+  "proxy-unavailable",
   "metadata-provider-authentication",
   "metadata-provider-authorization",
   "metadata-provider-rate-limited",
@@ -644,6 +657,12 @@ export function probeFailure(
   code: string;
   authentication: SourceTestCheck["authentication"];
 } {
+  if (isProxyUnavailable(error))
+    return {
+      status: "error",
+      code: "proxy-unavailable",
+      authentication: "not-proven",
+    };
   let current = error;
   for (
     let i = 0;

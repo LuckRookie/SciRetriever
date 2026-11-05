@@ -11,6 +11,7 @@
 - [source-probes.ts](source-probes.ts)：显式固定样本测试与串行队列，共用 Application Network；不产生文献或资产事实。
 - [source-state.ts](source-state.ts)：非秘密测试缓存、发布身份和来源版本；读取不重写缓存。
 - [apply.ts](apply.ts)：应用请求的安全状态、等待/取消与已绑定运行时检查；不执行 shell。
+- [network.ts](network.ts)、[egress.ts](egress.ts)：按发起方验证显式出口、选中远程服务的 DNS，以及 origin 绑定的代理认证 capability。
 - [credentials.ts](credentials.ts)：凭据边界与授权。
 - [cloak-runtime.ts](cloak-runtime.ts)：Cloak runtime 身份与可用性。
 

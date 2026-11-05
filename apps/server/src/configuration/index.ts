@@ -1,3 +1,8 @@
+import {
+  parseOutboundNetworkConfiguration,
+  type OutboundNetworkConfiguration,
+} from "@sciretriever/contracts";
+import { validateNetworkServices } from "./network.js";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import {
@@ -138,6 +143,7 @@ export interface TagsConfig {
   readonly backfill_model: string | null;
 }
 export interface OrdinaryConfiguration {
+  readonly network: OutboundNetworkConfiguration;
   readonly paths: PathsConfig;
   readonly sources: SourcesConfig;
   readonly assets: Record<string, never>;
@@ -156,6 +162,7 @@ export interface OrdinaryConfiguration {
 }
 
 const ROOT_KEYS = [
+  "network",
   "paths",
   "sources",
   "assets",
@@ -1033,7 +1040,13 @@ function parseConfigurationObject(
       ? false
       : booleanValue(parsing.remote_upload_authorized);
   if (connection !== "remote" && remoteUpload) invalid();
+  const network = parseOutboundNetworkConfiguration(raw.network);
+  validateNetworkServices(network, {
+    providers,
+    parsing: { base_url: baseUrl, connection_mode: connection },
+  });
   const result: OrdinaryConfiguration = {
+    network,
     paths: Object.freeze({
       catalog_path: textOrNull(paths.catalog_path),
       artifact_root: textOrNull(paths.artifact_root),

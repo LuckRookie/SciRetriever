@@ -1,3 +1,13 @@
+import { connectProxyTunnel } from "../network/proxy-tunnel.js";
+import { resolveDestination } from "../network/policy.js";
+import { outboundEgress, selectedEgress } from "./egress.js";
+import { isProxyUnavailable } from "../network/egress.js";
+import {
+  NetworkConfigurationError,
+  parseOutboundNetworkConfiguration,
+} from "@sciretriever/contracts";
+import { hasProxyCredential, readProxyCredential } from "./credentials.js";
+import { validateNetworkServiceDns } from "./network.js";
 import { RestartAdmission } from "../application/restart-admission.js";
 import { sourceFileIdentity, sourceStateChanged } from "./source-state.js";
 import { acquisitionRouteState } from "./acquisition-selection.js";
@@ -53,7 +63,11 @@ import { NetworkBudgetCoordinator } from "../network/budget.js";
 import type { ConnectionDependencies } from "../network/connection.js";
 import { NetworkHttpError } from "../network/http.js";
 import { NetworkPolicyError, type Resolver } from "../network/policy.js";
-import { ProbeRequestError, readOnlyProbeRequest } from "../network/probe.js";
+import {
+  ProbeRequestError,
+  readOnlyProbeRequest,
+  systemResolver,
+} from "../network/probe.js";
 import {
   createMinerUHealthProbe,
   MinerUHealthError,
@@ -98,6 +112,7 @@ export class ConfigurationOwnerError extends Error {
 }
 
 export type ConfigurationSection =
+  | "network"
   | "paths"
   | "sources"
   | "providers"
@@ -122,6 +137,7 @@ export type TypeScriptCredentialEdit = CredentialEdit;
 
 const MAX_BYTES = 1_048_576;
 const SECTIONS = new Set<ConfigurationSection>([
+  "network",
   "paths",
   "sources",
   "providers",
@@ -235,6 +251,7 @@ function renderConfiguration(configuration: OrdinaryConfiguration): string {
   const lines: string[] = [];
   const root = configuration as unknown as Record<string, unknown>;
   for (const section of [
+    "network",
     "paths",
     "sources",
     "parsing",
@@ -245,7 +262,13 @@ function renderConfiguration(configuration: OrdinaryConfiguration): string {
     "execution",
     "library",
   ] as const)
-    writeTable(lines, [section], root[section] as Record<string, unknown>);
+    writeTable(
+      lines,
+      [section],
+      (section === "network"
+        ? (root[section] ?? parseOutboundNetworkConfiguration())
+        : root[section]) as Record<string, unknown>,
+    );
   for (const [provider, value] of Object.entries(configuration.providers))
     writeTable(
       lines,
@@ -276,7 +299,13 @@ function renderSections(
   const root = configuration as unknown as Record<string, unknown>;
   for (const section of sections) {
     if (section === "providers" || section === "models") continue;
-    writeTable(lines, [section], root[section] as Record<string, unknown>);
+    writeTable(
+      lines,
+      [section],
+      (section === "network"
+        ? (root[section] ?? parseOutboundNetworkConfiguration())
+        : root[section]) as Record<string, unknown>,
+    );
   }
   if (sections.includes("providers"))
     for (const [provider, value] of Object.entries(configuration.providers))
@@ -603,7 +632,9 @@ function validateCredentialEdit(
   if (!edit || typeof edit !== "object" || Array.isArray(edit)) invalid();
   const value = edit as Record<string, unknown>;
   if (
-    !["model", "source", "mineru"].includes(value.namespace as string) ||
+    !["model", "source", "mineru", "proxy"].includes(
+      value.namespace as string,
+    ) ||
     typeof value.target !== "string" ||
     !value.target.trim() ||
     !["keep", "remove", "set"].includes(value.kind as string)
@@ -642,7 +673,10 @@ function validateCredentialEdit(
  * share one revision check and one filesystem lock.
  */
 export class TypeScriptConfigurationOwner {
-  constructor(readonly home = homedir()) {
+  constructor(
+    readonly home = homedir(),
+    readonly networkResolver?: import("../network/policy.js").Resolver,
+  ) {
     if (!home.startsWith("/")) invalid();
   }
 
@@ -702,6 +736,12 @@ export class TypeScriptConfigurationOwner {
     signal?: AbortSignal,
   ): Promise<TypeScriptConfigurationDiff> {
     const candidate = this.validate(payload, signal);
+    await validateNetworkServiceDns(
+      candidate.network,
+      candidate,
+      this.networkResolver,
+    );
+    cancelled(signal);
     const current = await snapshot(this.home);
     if (revision(baseline) !== current.revision)
       throw new ConfigurationOwnerError("configuration-conflict");
@@ -789,6 +829,13 @@ export class TypeScriptConfigurationOwner {
         candidate,
         section,
       );
+    // Validate the committed graph: selected exits may belong to an untouched section.
+    await validateNetworkServiceDns(
+      merged.network,
+      merged,
+      this.networkResolver,
+    );
+    cancelled(signal);
     const rendered =
       currentBytes === null
         ? renderConfiguration(merged)
@@ -833,6 +880,13 @@ export class TypeScriptConfigurationOwner {
     const preview = bundlePreview(credentials);
     return parseConfigurationReadiness({
       ...readiness(current.configuration, preview),
+      network: {
+        proxy_configured: current.configuration.network.proxy !== null,
+        proxy_authentication: current.configuration.network.proxy
+          ? hasProxyCredential(credentials, current.configuration.network.proxy)
+          : false,
+        via_proxy: current.configuration.network.via_proxy,
+      },
       diagnostics: configurationDiagnostics(current.configuration),
       acquisition_routes: acquisitionRouteState(
         current.configuration,
@@ -869,6 +923,15 @@ export class TypeScriptConfigurationOwner {
   ): Promise<string | null> {
     cancelled(signal);
     const bundle = await loadCredentialBundle(this.home);
+    if (request.namespace === "core" && request.provider === "proxy") {
+      if (
+        request.field !== "basic_auth" ||
+        request.operation !== "proxy-connect" ||
+        !request.origin
+      )
+        return null;
+      return readProxyCredential(bundle, request.origin);
+    }
     const preview = bundlePreview(bundle);
     const section =
       request.namespace === "provider"
@@ -974,6 +1037,13 @@ export class TypeScriptConfigurationOwner {
       } else if (edit.namespace === "mineru") {
         if (edit.kind === "set")
           origin = serviceOrigin(current.configuration.parsing.base_url);
+      } else if (edit.namespace === "proxy") {
+        if (edit.target !== "proxy") invalid();
+        if (edit.kind === "set") {
+          if (!current.configuration.network.proxy)
+            throw new NetworkConfigurationError("network-proxy-required");
+          origin = current.configuration.network.proxy;
+        }
       } else if (edit.namespace !== "source") {
         invalid();
       }
@@ -986,7 +1056,16 @@ export class TypeScriptConfigurationOwner {
           this.home,
           identity,
           await sourceFileIdentity(this.home, current.revision),
-          edit.namespace === "source" ? [edit.target] : [],
+          edit.namespace === "source"
+            ? [edit.target]
+            : edit.namespace === "proxy"
+              ? [
+                  ...current.configuration.network.via_proxy.sources,
+                  ...(current.configuration.network.via_proxy.browser
+                    ? ["browser"]
+                    : []),
+                ]
+              : [],
         );
       }
     } finally {
@@ -1017,6 +1096,7 @@ export function fixedConfigurationHome(): string {
  * ------------------------------------------------------------------------- */
 
 export type ConfigurationProbeOwner =
+  | "proxy"
   | "provider"
   | "model"
   | "search"
@@ -1028,6 +1108,7 @@ export type ConfigurationProbeOwner =
   | "all";
 
 const PROBE_OWNERS = new Set<ConfigurationProbeOwner>([
+  "proxy",
   "provider",
   "model",
   "search",
@@ -1078,6 +1159,7 @@ export interface ConfigurationProbeExecution {
 }
 
 export interface ConfigurationProbeResult {
+  readonly egress?: import("@sciretriever/contracts").NetworkEgress;
   readonly owner: ConfigurationProbeOwner;
   readonly target: string | null;
   readonly outcome: ConfigurationProbeOutcome;
@@ -1140,6 +1222,7 @@ export interface ConfigurationProbeSeams {
 }
 
 interface ProbeDraft {
+  readonly egress?: import("@sciretriever/contracts").NetworkEgress;
   readonly outcome: ConfigurationProbeOutcome;
   readonly reason: string | null;
   readonly action: string | null;
@@ -1285,6 +1368,7 @@ export class ConfigurationProbeSession {
       seams.credentials ?? (await loadCredentialBundle(owner.home));
     const network = seams.network ?? new NetworkBudgetCoordinator();
     const shared = {
+      currentCredential: owner.authorizeCurrentCredential.bind(owner),
       ...(seams.resolver ? { resolver: seams.resolver } : {}),
       ...(seams.connection ? { connection: seams.connection } : {}),
     };
@@ -1320,6 +1404,12 @@ export class ConfigurationProbeSession {
                   ? createProductionBrowserSiteProbe(
                       runtime,
                       join(owner.home, "profile"),
+                      outboundEgress(
+                        snapshot.configuration.network,
+                        { kind: "browser" },
+                        credentials,
+                        owner.authorizeCurrentCredential.bind(owner),
+                      ),
                     )
                   : null;
               }),
@@ -1361,7 +1451,11 @@ export class ConfigurationProbeSession {
     )
       throw new ConfigurationProbeError("configuration-probe-invalid");
     let value: ProbeDraft;
-    if (owner === "provider") {
+    if (owner === "proxy") {
+      if (target !== null || image)
+        throw new ConfigurationProbeError("configuration-probe-invalid");
+      value = await this.probeProxy(options);
+    } else if (owner === "provider") {
       if (target === null)
         throw new ConfigurationProbeError("configuration-probe-invalid");
       value = await this.probeProvider(target, options);
@@ -1396,6 +1490,92 @@ export class ConfigurationProbeSession {
     return this.finalize(owner, target, value, started);
   }
 
+  private async probeProxy(options: {
+    readonly authorized: boolean;
+    readonly signal?: AbortSignal;
+  }): Promise<ProbeDraft> {
+    const described = {
+      egress: "proxy" as const,
+      method: "CONNECT",
+      endpoint: "https://api.crossref.org:443",
+    };
+    if (!this.configuration.network.proxy)
+      return draft(
+        "blocked",
+        "network-proxy-required",
+        "configure-proxy",
+        described,
+      );
+    if (!options.authorized)
+      return draft(
+        "blocked",
+        "probe-not-authorized",
+        "confirm-or-use-json",
+        described,
+      );
+    let permit:
+      | Awaited<ReturnType<NetworkBudgetCoordinator["acquire"]>>
+      | undefined;
+    try {
+      const destination = await resolveDestination(
+        "https://api.crossref.org/",
+        this.seams.resolver ?? systemResolver(),
+        {
+          allowed_schemes: ["https"],
+          allowed_classes: ["public"],
+          allowed_ports: [{ scheme: "https", port: 443 }],
+        },
+      );
+      permit = await this.network.acquire(
+        "configuration-proxy-test",
+        destination.url.hostname,
+        {
+          maxConcurrency: 1,
+          maxHostConcurrency: 1,
+          maxResponseBytes: 16384,
+          maxRedirects: 0,
+          maxRetries: 0,
+        },
+        {
+          ...(options.signal ? { signal: options.signal } : {}),
+          timeoutMs: 30000,
+        },
+      );
+      const route = outboundEgress(
+        this.configuration.network,
+        { kind: "proxy-test" },
+        this.credentials,
+        this.owner.authorizeCurrentCredential.bind(this.owner),
+      );
+      const socket = await connectProxyTunnel(
+        route.proxy!,
+        destination.url.hostname,
+        destination.url.port,
+        30000,
+        options.signal,
+        this.seams.connection?.connect,
+      );
+      socket.destroy();
+      return passedDraft({
+        ...described,
+        network_performed: true,
+        checks: ["http-connect"],
+      });
+    } catch (error) {
+      this.checkCancelled(options.signal);
+      return draft(
+        "failed",
+        isProxyUnavailable(error)
+          ? "proxy-unavailable"
+          : "proxy-test-target-unavailable",
+        "check-proxy",
+        { ...described, network_performed: true },
+      );
+    } finally {
+      permit?.release();
+    }
+  }
+
   private now(): number {
     return this.seams.now ? this.seams.now() : Date.now();
   }
@@ -1425,6 +1605,26 @@ export class ConfigurationProbeSession {
     return Object.freeze({
       owner,
       target,
+      ...(owner === "all" ||
+      (target === null && (owner === "search" || owner === "download"))
+        ? {}
+        : {
+            egress:
+              value.egress ??
+              selectedEgress(
+                this.configuration.network,
+                owner === "search" || owner === "download"
+                  ? { kind: "source", id: target ?? "" }
+                  : owner === "parse"
+                    ? { kind: "mineru" }
+                    : owner === "browser-site"
+                      ? { kind: "browser" }
+                      : {
+                          kind: "provider",
+                          id: value.provider ?? target ?? "",
+                        },
+              ),
+          }),
       outcome: value.outcome,
       method: value.method ?? null,
       endpoint: value.endpoint ?? null,
@@ -1581,6 +1781,12 @@ export class ConfigurationProbeSession {
     try {
       response = await readOnlyProbeRequest({
         url: endpoint,
+        egress: outboundEgress(
+          this.configuration.network,
+          { kind: "provider", id: target },
+          this.credentials,
+          this.owner.authorizeCurrentCredential.bind(this.owner),
+        ),
         headers: requestHeaders.headers,
         ...(requestHeaders.credential_headers.length
           ? { credential_headers: requestHeaders.credential_headers }
@@ -1593,6 +1799,11 @@ export class ConfigurationProbeSession {
       });
     } catch (error) {
       this.checkCancelled(options.signal);
+      if (isProxyUnavailable(error))
+        return draft("failed", "proxy-unavailable", "check-proxy", {
+          ...described,
+          network_performed: true,
+        });
       if (error instanceof ProbeRequestError)
         return draft(
           "failed",
@@ -1750,6 +1961,12 @@ export class ConfigurationProbeSession {
       );
     const runtime = createProbeAgentRuntime(target, {
       coordinator: this.network,
+      egress: outboundEgress(
+        this.configuration.network,
+        { kind: "provider", id: target.provider_name },
+        this.credentials,
+        this.owner.authorizeCurrentCredential.bind(this.owner),
+      ),
       role,
       capabilities,
       ...(this.seams.resolver ? { resolver: this.seams.resolver } : {}),
@@ -1788,6 +2005,11 @@ export class ConfigurationProbeSession {
       readonly model: string;
     },
   ): ProbeDraft {
+    if (isProxyUnavailable(error))
+      return draft("failed", "proxy-unavailable", "check-proxy", {
+        ...described,
+        network_performed: true,
+      });
     const code = error instanceof AgentFailure ? error.code : "agent-internal";
     if (code === "agent-auth")
       return draft(
@@ -2109,6 +2331,12 @@ export class ConfigurationProbeSession {
     else {
       try {
         probe = createMinerUHealthProbe({
+          egress: outboundEgress(
+            this.configuration.network,
+            { kind: "mineru" },
+            this.credentials,
+            this.owner.authorizeCurrentCredential.bind(this.owner),
+          ),
           base_url: parsing.base_url,
           connection_mode: parsing.connection_mode,
           credentials: this.credentials,
@@ -2161,6 +2389,11 @@ export class ConfigurationProbeSession {
       });
     } catch (error) {
       this.checkCancelled(options.signal);
+      if (isProxyUnavailable(error))
+        return draft("failed", "proxy-unavailable", "check-proxy", {
+          ...describedFull,
+          network_performed: true,
+        });
       if (!(error instanceof MinerUHealthError)) throw error;
       const actions: Readonly<Record<string, string>> = {
         "parser-unhealthy": "check-parser-service",
@@ -2245,17 +2478,24 @@ export class ConfigurationProbeSession {
     } catch (error) {
       this.checkCancelled(options.signal);
       if (error instanceof ConfigurationProbeError) throw error;
-      return draft("failed", "browser-site-unreachable", "retry-later", {
-        ...described,
-        network_performed:
-          error instanceof BrowserSiteProbeError
-            ? error.network_performed
-            : true,
-        browser_launched:
-          error instanceof BrowserSiteProbeError
-            ? error.browser_launched
-            : true,
-      });
+      return draft(
+        "failed",
+        isProxyUnavailable(error)
+          ? "proxy-unavailable"
+          : "browser-site-unreachable",
+        isProxyUnavailable(error) ? "check-proxy" : "retry-later",
+        {
+          ...described,
+          network_performed:
+            error instanceof BrowserSiteProbeError
+              ? error.network_performed
+              : true,
+          browser_launched:
+            error instanceof BrowserSiteProbeError
+              ? error.browser_launched
+              : true,
+        },
+      );
     }
   }
 

@@ -17,8 +17,9 @@ export function dedupe(
   const seen = new Set<string>();
   return Object.freeze(
     candidates.filter((candidate) => {
-      if (seen.has(candidate.locator)) return false;
-      seen.add(candidate.locator);
+      const key = `${candidate.locator}\u0000${candidate.requester ?? candidate.source}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
       return true;
     }),
   );

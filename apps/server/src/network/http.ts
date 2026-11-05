@@ -1,3 +1,4 @@
+import { ProxyUnavailableError, type OutboundEgress } from "./egress.js";
 import {
   networkRequestDispatched,
   networkResponseBytes,
@@ -69,6 +70,7 @@ export interface HttpResponseSink {
   readonly lifetimeMs: number;
 }
 export interface HttpRequestOptions {
+  readonly egress?: OutboundEgress;
   readonly responseSink?: HttpResponseSink;
   /** Runs after permit/connection acquisition, immediately before sending. */
   readonly onDispatched?: () => void;
@@ -96,6 +98,7 @@ export type AccessResolver = (url: string) => {
   readonly limits: Partial<BudgetLimits>;
 };
 export interface AgentTransportOptions {
+  readonly egress?: OutboundEgress;
   readonly resolver: Resolver;
   readonly policy: DestinationPolicy;
   readonly coordinator: NetworkBudgetCoordinator;
@@ -239,11 +242,16 @@ export async function requestOnce(
       remaining(),
       options.connection,
       signal,
+      options.egress,
     );
   } catch (error) {
     permit?.release();
     if (signal?.aborted) invalid("cancelled", error);
-    if (error instanceof NetworkConnectionError) throw error;
+    if (
+      error instanceof NetworkConnectionError ||
+      error instanceof ProxyUnavailableError
+    )
+      throw error;
     if (error instanceof NetworkHttpError) throw error;
     invalid("budget", error);
   }
@@ -544,6 +552,7 @@ export function createAgentTransport(
         body: input.body,
         ...(input.onDispatched ? { onDispatched: input.onDispatched } : {}),
         ...(input.signal ? { signal: input.signal } : {}),
+        ...(options.egress ? { egress: options.egress } : {}),
         ...(options.connection ? { connection: options.connection } : {}),
         ...(options.maxRedirects !== undefined
           ? { maxRedirects: options.maxRedirects }

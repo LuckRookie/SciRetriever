@@ -1,3 +1,4 @@
+import { isProxyUnavailable } from "../network/egress.js";
 import { parseAcquisitionAttempts } from "@sciretriever/contracts";
 import { BrowserActivityLog } from "./activity.js";
 import { BrowserElementUnavailableError } from "./page-runtime.js";
@@ -1931,6 +1932,7 @@ function isLocalCaptureFailure(code: string): boolean {
 }
 
 function stableBrowserFlowFailureCode(error: unknown): string {
+  if (isProxyUnavailable(error)) return "proxy-unavailable";
   const code =
     error instanceof Error
       ? (error as Error & { readonly code?: unknown }).code

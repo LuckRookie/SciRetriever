@@ -1289,6 +1289,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
           uniqueItems: true,
           items: {
             enum: [
+              "network",
               "paths",
               "sources",
               "providers",
@@ -1310,7 +1311,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
   ),
   tool(
     "configuration_credential",
-    "Explicitly set/remove a credential through the configuration owner. Never reads or returns secret values. edit uses namespace model/source/mineru, target, kind keep/remove/set and value (model/mineru) or fields (source) only for set.",
+    "Explicitly set/remove a credential through the configuration owner. Never reads or returns secret values. edit uses namespace model/source/mineru/proxy, target, kind keep/remove/set and value (model/mineru/proxy) or fields (source) only for set. Proxy authentication is bound to the saved network.proxy origin.",
     object({ baseline: text, edit: { type: "object" } }),
     false,
   ),
@@ -1320,6 +1321,7 @@ export const MAINTENANCE_TOOLS: readonly Tool[] = [
     object({
       owner: {
         enum: [
+          "proxy",
           "provider",
           "model",
           "search",

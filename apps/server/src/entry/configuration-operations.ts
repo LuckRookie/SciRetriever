@@ -128,7 +128,11 @@ export async function executeConfiguration(
   let payload: unknown = r.payload;
   if (Object.hasOwn(r, "configuration")) {
     const current = await owner.read(signal);
-    operationRecord(r.configuration, Object.keys(current.configuration));
+    operationRecord(
+      r.configuration,
+      Object.keys(current.configuration).filter((key) => key !== "network"),
+      ["network"],
+    );
     try {
       payload = renderConfigurationText(
         r.configuration as OrdinaryConfiguration,

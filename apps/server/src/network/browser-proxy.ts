@@ -1,3 +1,10 @@
+import { connectProxyTunnel } from "./proxy-tunnel.js";
+import {
+  networkEgressSelected,
+  isProxyUnavailable,
+  ProxyUnavailableError,
+  type OutboundEgress,
+} from "./egress.js";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
   createServer,
@@ -28,6 +35,7 @@ export class BrowserProxyError extends Error {
   }
 }
 export interface BrowserProxyOptions {
+  readonly egress?: OutboundEgress;
   readonly resolver: Resolver;
   readonly policy: DestinationPolicy;
   readonly coordinator: NetworkBudgetCoordinator;
@@ -73,7 +81,7 @@ function connectPinned(destination: ResolvedDestination): Socket {
   });
 }
 
-/** DNS-pinned CONNECT preserves Chromium's own TLS and the original network exit. */
+/** Target admission preserves Chromium TLS; only the configured upstream exit changes. */
 export class BrowserNetworkProxy {
   private readonly username = randomBytes(16).toString("hex");
   private readonly password = randomBytes(32).toString("hex");
@@ -82,6 +90,28 @@ export class BrowserNetworkProxy {
   private readonly abort = new AbortController();
   private closed = false;
   private activeTunnels = 0;
+  private readonly failures = new Map<string, number>();
+  failureFor(url: string): "proxy-unavailable" | null {
+    let origin: string;
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      return null;
+    }
+    const at = this.failures.get(origin);
+    return at !== undefined && Date.now() - at < 30000
+      ? "proxy-unavailable"
+      : null;
+  }
+  private recordProxyFailure(url: string): void {
+    const origin = new URL(url).origin;
+    this.failures.delete(origin);
+    for (const [key, at] of this.failures)
+      if (Date.now() - at >= 30000) this.failures.delete(key);
+    if (this.failures.size >= 256)
+      this.failures.delete(this.failures.keys().next().value!);
+    this.failures.set(origin, Date.now());
+  }
   private readonly timeoutMs: number;
   constructor(private readonly options: BrowserProxyOptions) {
     this.timeoutMs = options.timeoutMs ?? 30000;
@@ -183,7 +213,10 @@ export class BrowserNetworkProxy {
       clearTimeout(timer);
       await requestOnce(destination, destination.addresses[0]!, {
         method: request.method ?? "GET",
-        connection: { connect: () => connectPinned(destination) },
+        ...(this.options.egress?.mode === "proxy" &&
+        destination.classes.every((c) => c === "public")
+          ? { egress: this.options.egress }
+          : { connection: { connect: () => connectPinned(destination) } }),
         headers,
         body: Buffer.concat(chunks),
         signal: abort.signal,
@@ -211,8 +244,17 @@ export class BrowserNetworkProxy {
           limits: this.options.limits,
         },
       });
+      this.failures.delete(new URL(request.url).origin);
       response.end();
-    } catch {
+    } catch (error) {
+      if (isProxyUnavailable(error) && request.url) {
+        this.recordProxyFailure(request.url);
+        if (!response.headersSent)
+          response.setHeader(
+            "X-SciRetriever-Network-Error",
+            "proxy-unavailable",
+          );
+      }
       if (response.headersSent) response.destroy();
       else {
         response.writeHead(502);
@@ -238,6 +280,7 @@ export class BrowserNetworkProxy {
     let upstream: Socket | undefined;
     let permit: BudgetPermit | undefined;
     let counted = false;
+    let connectingProxy = false;
     const abort = new AbortController();
     const cancel = () => {
       abort.abort();
@@ -246,7 +289,11 @@ export class BrowserNetworkProxy {
     };
     this.abort.signal.addEventListener("abort", cancel, { once: true });
     client.once("close", cancel);
-    const timer = setTimeout(cancel, this.timeoutMs);
+    const timer = setTimeout(() => {
+      if (connectingProxy && request.url)
+        this.recordProxyFailure(`https://${request.url}/`);
+      cancel();
+    }, this.timeoutMs);
     try {
       if (
         this.closed ||
@@ -273,10 +320,27 @@ export class BrowserNetworkProxy {
         { signal: abort.signal, timeoutMs: this.timeoutMs },
       );
       if (abort.signal.aborted) throw new BrowserProxyError();
-      upstream = connectPinned(destination);
+      const viaProxy =
+        this.options.egress?.mode === "proxy" &&
+        destination.classes.every((c) => c === "public");
+      networkEgressSelected(viaProxy ? "proxy" : "direct");
+      if (viaProxy) {
+        connectingProxy = true;
+        if (!this.options.egress?.proxy) throw new ProxyUnavailableError();
+        upstream = await connectProxyTunnel(
+          this.options.egress.proxy,
+          destination.url.hostname,
+          destination.url.port,
+          this.timeoutMs,
+          abort.signal,
+        );
+      } else {
+        upstream = connectPinned(destination);
+        await once(upstream, "connect", { signal: abort.signal });
+      }
       this.track(upstream);
-      await once(upstream, "connect", { signal: abort.signal });
       if (abort.signal.aborted) throw new BrowserProxyError();
+      this.failures.delete(new URL(`https://${request.url}/`).origin);
       permit.release();
       permit = undefined;
       clearTimeout(timer);
@@ -288,9 +352,16 @@ export class BrowserNetworkProxy {
       if (head.byteLength) upstream.write(head);
       client.pipe(upstream);
       upstream.pipe(client);
+      upstream.resume();
       await once(upstream, "close");
-    } catch {
-      cancel();
+    } catch (error) {
+      if (isProxyUnavailable(error) && request.url && !this.closed) {
+        this.recordProxyFailure(`https://${request.url}/`);
+        if (!client.destroyed)
+          client.end(
+            "HTTP/1.1 502 Proxy Unavailable\r\nX-SciRetriever-Network-Error: proxy-unavailable\r\nConnection: close\r\n\r\n",
+          );
+      } else cancel();
     } finally {
       clearTimeout(timer);
       this.abort.signal.removeEventListener("abort", cancel);
@@ -298,7 +369,7 @@ export class BrowserNetworkProxy {
       permit?.release();
       if (counted) this.activeTunnels--;
       upstream?.destroy();
-      client.destroy();
+      if (!client.writableEnded) client.destroy();
     }
   }
   async close(): Promise<void> {

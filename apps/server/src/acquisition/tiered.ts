@@ -1,3 +1,4 @@
+import { observeNetworkEgress, isProxyUnavailable } from "../network/egress.js";
 import {
   parseAcquisitionAttempt,
   type AcquisitionAttempt,
@@ -23,6 +24,7 @@ export type AcquisitionBatchDisposition =
   | "interrupted";
 
 export type AcquisitionFailureCode =
+  | "proxy-unavailable"
   | "source-discovery-failed"
   | "candidate-download-failed"
   | "download-unavailable"
@@ -184,6 +186,7 @@ export function classifyAcquisitionFailure(
   // A stop signal cannot erase a known persistence/publication failure, including
   // one raised while discarding a receipt. Ordinary aborted I/O remains a cancel.
   if (signal.aborted) return "cancel";
+  if (isProxyUnavailable(error)) return "route";
   // Retrying this source and trying an independent source are separate decisions.
   if (error instanceof AcquisitionRouteError) return "route";
   // An explicit low-risk unavailability is a route outcome by declaration: it never leaves
@@ -302,6 +305,15 @@ export function routeFailure(
   source: string,
   fallback: AcquisitionBatchFailure,
 ): AcquisitionBatchFailure {
+  if (isProxyUnavailable(error))
+    return failure(
+      "proxy-unavailable",
+      source,
+      "The configured outbound proxy is unavailable.",
+      true,
+      null,
+      true,
+    );
   if (error instanceof AcquisitionRouteError)
     return failure(
       error.code,
@@ -516,6 +528,11 @@ export class TieredAcquisitionService {
     ];
     for (const source of sources) {
       const startedAt = new Date().toISOString();
+      const egresses = new Set<
+        import("@sciretriever/contracts").NetworkEgress
+      >();
+      const egressWork = <T>(work: () => Promise<T>) =>
+        observeNetworkEgress((e) => egresses.add(e), work);
       let problem: SourceProblem | undefined;
       let requested = false,
         candidateCount = 0;
@@ -547,7 +564,7 @@ export class TieredAcquisitionService {
         let candidates: readonly SourceCandidate[];
         try {
           candidates = await observeNetworkRequests(markRequested, () =>
-            source.discover(item.request, signal),
+            egressWork(() => source.discover(item.request, signal)),
           );
         } catch (error) {
           // A discovery failure is one route outcome; an explicitly classified
@@ -613,7 +630,7 @@ export class TieredAcquisitionService {
             );
           try {
             await observeNetworkRequests(markRequested, () =>
-              download(item, source, candidate, signal),
+              egressWork(() => download(item, source, candidate, signal)),
             );
             trace.result = "hit";
             problem = undefined;
@@ -726,6 +743,7 @@ export class TieredAcquisitionService {
         }
         await onAttempt?.(
           parseAcquisitionAttempt({
+            egresses: [...egresses],
             stage:
               source.acquisition_stage ??
               (source.acquisition_tier === "authorized-api"

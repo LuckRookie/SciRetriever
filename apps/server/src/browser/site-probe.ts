@@ -1,3 +1,7 @@
+import {
+  ProxyUnavailableError,
+  type OutboundEgress,
+} from "../network/egress.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,8 +42,15 @@ export class BrowserSiteProbeError extends Error {
 export function createProductionBrowserSiteProbe(
   runtime: VerifiedCloakRuntime,
   profile: string,
+  egress?: OutboundEgress,
 ): ConfigurationProbeBrowserSite {
-  return createBrowserSiteProbe(runtime, SITE_HOMES, profile);
+  return createBrowserSiteProbe(
+    runtime,
+    SITE_HOMES,
+    profile,
+    undefined,
+    egress,
+  );
 }
 
 /** Internal fixture seam: production always calls the fixed HTTPS map above. */
@@ -51,6 +62,7 @@ export function createBrowserSiteProbe(
     options: BrowserHostOptions,
   ) => Pick<BrowserHost, "start" | "openPage" | "close"> = (options) =>
     new BrowserHost(options),
+  egress?: OutboundEgress,
 ): ConfigurationProbeBrowserSite {
   return Object.freeze({
     access_keys: Object.freeze(Object.keys(homes)),
@@ -65,6 +77,7 @@ export function createBrowserSiteProbe(
       const budget = new NetworkBudgetCoordinator();
       const network = createBrowserNetworkAdmission({
         budget,
+        ...(egress ? { egress } : {}),
         policy: {
           allowed_schemes: fixtureLoopback ? ["http"] : ["https"],
           allowed_classes: fixtureLoopback ? ["loopback"] : ["public"],
@@ -100,6 +113,8 @@ export function createBrowserSiteProbe(
           runtime,
           profile: profile ?? join(directory!, "profile"),
           proxy: connection,
+          networkFailure: (url) =>
+            network.proxy.failureFor(url) ? new ProxyUnavailableError() : null,
           probeDocumentUrl: url.toString(),
           admitNavigation: async (requested) => {
             if (requested !== url.toString())

@@ -2,6 +2,7 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { NetworkBudgetCoordinator } from "../network/budget.js";
 import type { ConnectionDependencies } from "../network/connection.js";
+import type { OutboundEgress } from "../network/egress.js";
 import { requestOnce, type HttpResponse } from "../network/http.js";
 import {
   classifyAddress,
@@ -25,6 +26,7 @@ export async function resolveDoiLanding(
   options: {
     readonly resolver?: Resolver;
     readonly connection?: ConnectionDependencies;
+    readonly egress?: OutboundEgress;
     /** Reuse this response only in the current operation; never persist or log it. */
     readonly on_response?: (response: HttpResponse) => void;
   } = {},
@@ -67,6 +69,7 @@ export async function resolveDoiLanding(
     maxResponseBytes: DEFAULT_PDF_DOWNLOAD_MAX_BYTES,
     signal,
     ...(options.connection ? { connection: options.connection } : {}),
+    ...(options.egress ? { egress: options.egress } : {}),
     budget: {
       coordinator,
       scope: service.quotaGroup,

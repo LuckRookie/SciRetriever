@@ -1,3 +1,8 @@
+import {
+  LITERATURE_SOURCE_IDS,
+  NetworkConfigurationError,
+} from "@sciretriever/contracts";
+import { validateNetworkServices } from "../configuration/network.js";
 import { sourceConfiguration } from "../configuration/sources.js";
 import { checkbox, confirm, input, password, select } from "@inquirer/prompts";
 import type {
@@ -245,6 +250,13 @@ function summaryRows(
     : "off";
   return [
     [
+      colors.accent("◆ Network"),
+      config.network.proxy
+        ? `Proxy configured · ${config.network.via_proxy.sources.length} Sources · ${config.network.via_proxy.providers.length} Providers · authentication ${status.network?.proxy_authentication ? "configured" : "not set"}`
+        : "Direct connections",
+      colors.ready("configured"),
+    ],
+    [
       colors.accent("◆ Models"),
       `${Object.keys(config.models).length} Models · ${Object.keys(config.providers).length} Providers`,
       Object.keys(config.models).length
@@ -340,11 +352,13 @@ export function renderConfigurationTest(
     owner?: string;
     target?: string | null;
     outcome?: string;
+    egress?: string;
     readiness?: ConfigurationReadiness;
   };
   const lines = [
     `Owner     ${payload.owner ?? "unknown"}`,
     `Target    ${payload.target ?? "all configured targets"}`,
+    ...(payload.egress ? [`Egress    ${payload.egress}`] : []),
     `Outcome   ${payload.outcome === "passed" ? colors.ready("PASSED") : colors.warning(payload.outcome ?? "blocked")}`,
     colors.muted(
       "This probe is bounded and does not launch Browser automatically.",
@@ -444,7 +458,11 @@ async function publishWithReview(
     return true;
   } catch (error) {
     const reason =
-      error instanceof Error ? error.message : "configuration-publish-failed";
+      error instanceof NetworkConfigurationError
+        ? error.code
+        : error instanceof Error
+          ? error.message
+          : "configuration-publish-failed";
     write(
       `${colors.danger(`Configuration was not saved: ${reason}. The draft has not been persisted.`)}\n`,
     );
@@ -1163,6 +1181,163 @@ async function browserPage(
   );
 }
 
+async function networkPage(
+  options: ConfigUiOptions,
+  theme: ConfigTheme,
+): Promise<void> {
+  const colors = palette(theme);
+  const snapshot = await options.owner.read();
+  const status = await options.owner.status();
+  const current = snapshot.configuration.network;
+  options.write(
+    `${panel(
+      "Network",
+      [
+        `Proxy          ${current.proxy ?? "not configured"}`,
+        `Authentication ${status.network?.proxy_authentication ? "configured" : "not set"}`,
+        `Sources        ${current.via_proxy.sources.join(", ") || "direct"}`,
+        `Providers      ${current.via_proxy.providers.join(", ") || "direct"}`,
+        `DOI / MinerU / Browser  ${current.via_proxy.doi_resolution} / ${current.via_proxy.mineru} / ${current.via_proxy.browser}`,
+      ],
+      colors,
+    )}\n`,
+  );
+  const action = await select(
+    {
+      message: "Network action",
+      choices: [
+        { name: "Configure proxy and requester exits", value: "configure" },
+        { name: "Set proxy authentication", value: "authentication" },
+        { name: "Clear proxy authentication", value: "clear" },
+        { name: "Test proxy CONNECT", value: "test" },
+        { name: "Back", value: "back" },
+      ],
+    },
+    { input: process.stdin, output: process.stderr },
+  );
+  if (action === "back") return;
+  if (action === "test") {
+    await runInteractiveProbe(
+      options,
+      { owner: "proxy", target: null, image: false },
+      colors,
+    );
+    return;
+  }
+  if (action === "authentication" || action === "clear") {
+    if (action === "clear")
+      await saveCredential(
+        options,
+        { namespace: "proxy", target: "proxy", kind: "remove" },
+        snapshot.revision,
+        colors,
+      );
+    else {
+      const value = await password(
+        { message: "Proxy username:password (empty keeps current)" },
+        { input: process.stdin, output: process.stderr },
+      );
+      if (value)
+        await saveCredential(
+          options,
+          { namespace: "proxy", target: "proxy", kind: "set", value },
+          snapshot.revision,
+          colors,
+        );
+    }
+    return;
+  }
+  const address = await input(
+    {
+      message: "HTTP CONNECT proxy (host:port URL; empty clears)",
+      default: current.proxy ?? "",
+    },
+    { input: process.stdin, output: process.stderr },
+  );
+  const choices = [
+    ...LITERATURE_SOURCE_IDS.map((id) => ({
+      name: `Source · ${id}`,
+      value: `source:${id}`,
+    })),
+    { name: "DOI resolution", value: "doi" },
+    ...Object.keys(snapshot.configuration.providers).map((id) => {
+      let disabled = false;
+      try {
+        validateNetworkServices(
+          {
+            ...current,
+            via_proxy: {
+              sources: [],
+              providers: [id],
+              doi_resolution: false,
+              mineru: false,
+              browser: false,
+            },
+          },
+          snapshot.configuration,
+        );
+      } catch {
+        disabled = true;
+      }
+      return {
+        name: `Model Provider · ${id}`,
+        value: `provider:${id}`,
+        disabled,
+      };
+    }),
+    {
+      name: "Remote MinerU",
+      value: "mineru",
+      disabled: snapshot.configuration.parsing.connection_mode !== "remote",
+    },
+    { name: "Browser", value: "browser" },
+  ];
+  const before = [
+    ...current.via_proxy.sources.map((id) => `source:${id}`),
+    ...current.via_proxy.providers.map((id) => `provider:${id}`),
+    ...(current.via_proxy.doi_resolution ? ["doi"] : []),
+    ...(current.via_proxy.mineru ? ["mineru"] : []),
+    ...(current.via_proxy.browser ? ["browser"] : []),
+  ];
+  const selected = address.trim()
+    ? await checkbox(
+        {
+          message: "Requesters using proxy (others connect directly)",
+          choices: choices.map((c) => ({
+            ...c,
+            checked: before.includes(c.value),
+          })),
+        },
+        { input: process.stdin, output: process.stderr },
+      )
+    : [];
+  const candidate = {
+    ...snapshot.configuration,
+    network: {
+      proxy: address.trim() || null,
+      via_proxy: {
+        sources: selected
+          .filter((v) => v.startsWith("source:"))
+          .map((v) => v.slice(7)),
+        providers: selected
+          .filter((v) => v.startsWith("provider:"))
+          .map((v) => v.slice(9)),
+        doi_resolution: selected.includes("doi"),
+        mineru: selected.includes("mineru"),
+        browser: selected.includes("browser"),
+      },
+    },
+  };
+  await publishWithReview(
+    options.owner,
+    snapshot,
+    "network",
+    candidate,
+    options.write,
+    colors,
+  );
+}
+
 async function themePage(
   currentTheme: ConfigTheme,
   write: (text: string) => void,
@@ -1211,6 +1386,7 @@ export async function runRichConfigurationCenter(
             { name: "Parse", value: "parse" },
             { name: "Analyze", value: "analyze" },
             { name: "Browser", value: "browser" },
+            { name: "Network", value: "network" },
             { name: "Status", value: "status" },
             { name: "Theme", value: "theme" },
             { name: "Quit", value: "quit" },
@@ -1225,6 +1401,8 @@ export async function runRichConfigurationCenter(
         );
       } else if (action === "theme") {
         theme = await themePage(theme, options.write);
+      } else if (action === "network") {
+        await networkPage(options, theme);
       } else if (action === "models") {
         await modelsPage(options, theme);
       } else if (action === "search") {
@@ -1264,6 +1442,6 @@ export function renderPlainHome(
       colors,
     ),
     "",
-    "Choose M/S/D/P/A/B/I/T/Q.",
+    "Choose M/S/D/P/A/B/N/I/T/Q.",
   ].join("\n");
 }

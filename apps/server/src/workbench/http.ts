@@ -1,3 +1,4 @@
+import { NetworkConfigurationError } from "@sciretriever/contracts";
 import { catalogCorruption } from "../storage/sqlite/errors.js";
 import { ScreencastRelay } from "./screencast-relay.js";
 import {
@@ -289,6 +290,7 @@ const UI_SORTS = new Set([
   "relevance",
 ]);
 const CONFIGURATION_ROOT_KEYS = [
+  "network",
   "paths",
   "sources",
   "assets",
@@ -911,26 +913,28 @@ export async function startWorkbenchHttp(
           return;
         }
         const code =
-          error instanceof ProcessingTaskError
+          error instanceof NetworkConfigurationError
             ? error.code
-            : error instanceof WorkbenchSessionError
+            : error instanceof ProcessingTaskError
               ? error.code
-              : error instanceof ManualPdfInputError ||
-                  error instanceof LiteraturePublicationError ||
-                  error instanceof CandidateAcceptanceError
+              : error instanceof WorkbenchSessionError
                 ? error.code
-                : error instanceof PdfAcceptanceError
-                  ? "manual-pdf-invalid"
-                  : error instanceof ConfigurationOwnerError ||
-                      error instanceof SourceConfigurationError ||
-                      error instanceof RestartAdmissionError ||
-                      error instanceof ConfigurationProbeError
-                    ? error.code
-                    : error instanceof WorkbenchInputError
+                : error instanceof ManualPdfInputError ||
+                    error instanceof LiteraturePublicationError ||
+                    error instanceof CandidateAcceptanceError
+                  ? error.code
+                  : error instanceof PdfAcceptanceError
+                    ? "manual-pdf-invalid"
+                    : error instanceof ConfigurationOwnerError ||
+                        error instanceof SourceConfigurationError ||
+                        error instanceof RestartAdmissionError ||
+                        error instanceof ConfigurationProbeError
                       ? error.code
-                      : error instanceof ContractValidationError
-                        ? "invalid-command"
-                        : "command-rejected";
+                      : error instanceof WorkbenchInputError
+                        ? error.code
+                        : error instanceof ContractValidationError
+                          ? "invalid-command"
+                          : "command-rejected";
         if (response.destroyed) return;
         if (response.headersSent) {
           response.destroy();
@@ -955,7 +959,8 @@ export async function startWorkbenchHttp(
                   : error instanceof CandidateAcceptanceError &&
                       error.code === "literature-not-found"
                     ? 404
-                    : error instanceof WorkbenchInputError ||
+                    : error instanceof NetworkConfigurationError ||
+                        error instanceof WorkbenchInputError ||
                         error instanceof ContractValidationError ||
                         (error instanceof SourceConfigurationError &&
                           error.code === "source-configuration-invalid") ||
@@ -2075,7 +2080,14 @@ export async function startWorkbenchHttp(
           command.sections.some((section) => !isConfigurationSection(section))
         )
           invalidInput();
-        object(command.configuration, CONFIGURATION_ROOT_KEYS);
+        object(
+          command.configuration,
+          command.configuration &&
+            typeof command.configuration === "object" &&
+            !Object.hasOwn(command.configuration, "network")
+            ? CONFIGURATION_ROOT_KEYS.filter((key) => key !== "network")
+            : CONFIGURATION_ROOT_KEYS,
+        );
         const snapshot = await options.configuration.publishConfiguration(
           command.configuration,
           command.baseline,

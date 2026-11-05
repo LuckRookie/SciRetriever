@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { isProxyUnavailable } from "../../../network/egress.js";
 import {
   parseStrictJsonObject,
   parseRawParseProfile,
@@ -142,6 +143,8 @@ export function createMinerUProtocolTransport(
         return await request(`${suffix}/result`, "GET");
       } catch (error) {
         check();
+        if (isProxyUnavailable(error))
+          throw new ParsingFailure("proxy-unavailable");
         if (error instanceof ParsingFailure) throw error;
         throw new ParsingFailure("parser-unavailable");
       } finally {

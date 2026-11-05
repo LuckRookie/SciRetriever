@@ -1,3 +1,4 @@
+import { parseNetworkEgress, type NetworkEgress } from "./network.js";
 import { ContractValidationError, parseUtcTimestamp } from "./index.js";
 import type { AcquisitionRouteStage } from "./acquisition.js";
 
@@ -113,6 +114,7 @@ export type SourceConfigurationField = SourceFieldBase &
       }
   );
 export interface SourceTestCheck {
+  readonly egress?: NetworkEgress;
   readonly purpose: "lookup" | "pdf" | "runtime";
   readonly result:
     | "ok"
@@ -132,6 +134,7 @@ export interface SourceTestCheck {
   readonly technical_details: SourceTechnicalDetails;
 }
 export interface SourceTestResult {
+  readonly egress?: NetworkEgress;
   readonly test_id: string;
   readonly source: SourceTestTarget;
   readonly source_revision: string;
@@ -155,6 +158,7 @@ export interface SourceTestSlot {
   readonly latest: SourceTestResult | null;
 }
 export interface SourceDirectoryRow {
+  readonly egress?: NetworkEgress;
   readonly source: LiteratureSourceId;
   readonly name: string;
   readonly group:
@@ -541,21 +545,26 @@ const field: Reader<SourceConfigurationField> = (v) => {
       );
 };
 const check: Reader<SourceTestCheck> = (v) => {
-  const r = object<SourceTestCheck>(v, {
-    purpose: one(["lookup", "pdf", "runtime"]),
-    result: one(["ok", "empty", "not-applicable", "not-exercised", "error"]),
-    requested: bool,
-    pdf_validated: bool,
-    authentication: one([
-      "not-attempted",
-      "not-required",
-      "accepted",
-      "rejected",
-      "not-proven",
-    ]),
-    fixture_entitlement: one(["not-proven", "granted", "denied"]),
-    technical_details: parseSourceTechnicalDetails,
-  });
+  const r = object<SourceTestCheck>(
+    v,
+    {
+      egress: parseNetworkEgress,
+      purpose: one(["lookup", "pdf", "runtime"]),
+      result: one(["ok", "empty", "not-applicable", "not-exercised", "error"]),
+      requested: bool,
+      pdf_validated: bool,
+      authentication: one([
+        "not-attempted",
+        "not-required",
+        "accepted",
+        "rejected",
+        "not-proven",
+      ]),
+      fixture_entitlement: one(["not-proven", "granted", "denied"]),
+      technical_details: parseSourceTechnicalDetails,
+    },
+    ["egress"],
+  );
   if (
     r.pdf_validated &&
     (r.purpose !== "pdf" || r.result !== "ok" || !r.requested)
@@ -564,29 +573,34 @@ const check: Reader<SourceTestCheck> = (v) => {
   return r;
 };
 export const parseSourceTestResult: Reader<SourceTestResult> = (v) => {
-  const r = object<SourceTestResult>(v, {
-    test_id: token,
-    source: target,
-    source_revision: token,
-    method_version: token,
-    started_at: parseUtcTimestamp,
-    finished_at: parseUtcTimestamp,
-    elapsed_ms: num,
-    status: one([
-      "available",
-      "error",
-      "not-configured",
-      "credential-invalid",
-      "no-fulltext-permission",
-    ]),
-    checks: array(check, 3),
-    requests_started: integer,
-    received_bytes: integer,
-    browser_launched: bool,
-    library_written: literal(false),
-    assets_published: literal(false),
-    technical_details: parseSourceTechnicalDetails,
-  });
+  const r = object<SourceTestResult>(
+    v,
+    {
+      egress: parseNetworkEgress,
+      test_id: token,
+      source: target,
+      source_revision: token,
+      method_version: token,
+      started_at: parseUtcTimestamp,
+      finished_at: parseUtcTimestamp,
+      elapsed_ms: num,
+      status: one([
+        "available",
+        "error",
+        "not-configured",
+        "credential-invalid",
+        "no-fulltext-permission",
+      ]),
+      checks: array(check, 3),
+      requests_started: integer,
+      received_bytes: integer,
+      browser_launched: bool,
+      library_written: literal(false),
+      assets_published: literal(false),
+      technical_details: parseSourceTechnicalDetails,
+    },
+    ["egress"],
+  );
   if (
     r.finished_at < r.started_at ||
     (r.status === "available" && r.checks.some((c) => c.result === "error")) ||
@@ -645,23 +659,38 @@ const pdf: Reader<SourcePdfCell> = (v) => {
   return r;
 };
 export const parseSourceDirectoryRow: Reader<SourceDirectoryRow> = (v) =>
-  object(v, {
-    source: parseLiteratureSourceId,
-    name: str,
-    group: one(["publisher-api", "general-api", "metadata", "public-builtin"]),
-    pdf_stage: nullable(stage),
-    source_revision: token,
-    uses: (v) =>
-      object(v, { topic_search: use, lookup: use, reference_query: use, pdf }),
-    configuration: (v) =>
-      object(v, {
-        state: configurationState,
-        fields: array(field, 12),
-        expandable: bool,
-      }),
-    test: slot,
-    technical_details: parseSourceTechnicalDetails,
-  });
+  object<SourceDirectoryRow>(
+    v,
+    {
+      egress: parseNetworkEgress,
+      source: parseLiteratureSourceId,
+      name: str,
+      group: one([
+        "publisher-api",
+        "general-api",
+        "metadata",
+        "public-builtin",
+      ]),
+      pdf_stage: nullable(stage),
+      source_revision: token,
+      uses: (v) =>
+        object(v, {
+          topic_search: use,
+          lookup: use,
+          reference_query: use,
+          pdf,
+        }),
+      configuration: (v) =>
+        object(v, {
+          state: configurationState,
+          fields: array(field, 12),
+          expandable: bool,
+        }),
+      test: slot,
+      technical_details: parseSourceTechnicalDetails,
+    },
+    ["egress"],
+  );
 export const parseSourceSelection: Reader<SourceSelection> = (v) => {
   const r = object<SourceSelection>(v, {
     mode: one(["auto", "custom"]),

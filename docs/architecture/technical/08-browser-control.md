@@ -981,9 +981,10 @@ Agent 的 click、scroll 和 wait 复用同一 patched Page/Locator；不得用 
 
 #### 6.3.5 子进程环境与凭据来源
 
-现有 headed-display helper 会复制进程环境。Cloak runtime 必须改为最小 child environment 或在
-传递前删除 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 及小写等价项，并删除所有
-`CLOAKBROWSER_*` 下载、cache、binary、update、license 环境变量。当前固定 older-free v146 的
+Cloak runtime 使用只含 PATH、固定 LANG/TZ 与专用 DISPLAY 的最小 child environment，
+不传递 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 及小写等价项，
+也不传递 `CLOAKBROWSER_*` 下载、cache、binary、update、license 环境变量。
+环境代理不参与出口选择，出口仅来自显式配置（见②第 7.8 节）。当前固定 older-free v146 的
 显式安装和普通 launch 都不消费 license key；即使保留的 origin-bound `credentials.toml`
 `[cloakbrowser]` section 已配置，status 也只报告 `reserved-not-used-by-pinned-free-binary`。未来若
 另行审查 Pro/latest 版本线，secret 仍只能来自规范 origin `https://cloakbrowser.dev` 绑定的
@@ -1026,6 +1027,8 @@ v0.5.8 wrapper 在 Linux 上默认追加 `--fingerprint-platform=windows`。READ
 `launch_persistent_context()` 支持 `user_data_dir`、`headless`、`proxy`、`args`、
 `stealth_args`、`user_agent`、`viewport`、`locale`、`timezone`、`color_scheme`、`humanize`、
 `human_preset`、`human_config`、`license_key`、`browser_version` 等参数。SciRetriever 只传当前
-合同所需的显式值；不启用 geo-IP、代理轮换或任意扩展路径。唯一 Browser proxy 是当前 loopback
-`BrowserConnectProxy`，它继续执行 URL/DNS/IP/host/TLS/预算和 Publisher permit；该 loopback
-proxy 不改变服务器原始出口。
+合同所需的显式值；不启用 geo-IP、代理轮换或任意扩展路径。Chromium 唯一使用的 Browser proxy 仍是当前 loopback
+`BrowserNetworkProxy`，它继续执行 URL/DNS/IP/host/TLS/预算和 Publisher permit；该 loopback
+proxy 的上游按显式 Browser 出口选择直连或 HTTP CONNECT；目标 DNS、公网准入与
+Chromium 端到端 TLS 校验保持不变。出口、认证与失败的完整规则见
+[② 第 7.8 节](02-task-coordination.md#78-http-实现)。

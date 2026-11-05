@@ -1,3 +1,4 @@
+import { ProxyUnavailableError, type OutboundEgress } from "./egress.js";
 import { lookup } from "node:dns/promises";
 import { NetworkBudgetCoordinator, type BudgetLimits } from "./budget.js";
 import type { ConnectionDependencies } from "./connection.js";
@@ -132,6 +133,7 @@ function checkCredentialHeaders(
 }
 
 export interface ReadOnlyProbeRequest {
+  readonly egress?: OutboundEgress;
   readonly url: string;
   readonly headers?: readonly (readonly [string, string])[];
   /**
@@ -211,6 +213,7 @@ export async function readOnlyProbeRequest(
     const destination = await resolveDestination(url, resolver, policy);
     return await requestOnce(destination, destination.addresses[0]!, {
       method: "GET",
+      ...(request.egress ? { egress: request.egress } : {}),
       headers,
       timeoutMs,
       maxResponseBytes,
@@ -225,6 +228,7 @@ export async function readOnlyProbeRequest(
     });
   } catch (error) {
     if (
+      error instanceof ProxyUnavailableError ||
       error instanceof NetworkHttpError ||
       error instanceof NetworkPolicyError
     )

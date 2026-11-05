@@ -85,6 +85,7 @@ export function createProductionBrowserHostFactory(options: {
   readonly runtime: BrowserHostOptions["runtime"] | undefined;
   /** Network-owned proxy connection, required once a Browser actually runs. */
   readonly proxy?: BrowserHostOptions["proxy"];
+  readonly networkFailure?: BrowserHostOptions["networkFailure"];
   /** Intake-owned capture callbacks; this factory never interprets bytes itself. */
   readonly transfers?: BrowserHostOptions["transfers"];
   readonly admitNavigation?: BrowserHostOptions["admitNavigation"];
@@ -142,6 +143,9 @@ export function createProductionBrowserHostFactory(options: {
         : {}),
       ...(options.transfers ? { transfers: options.transfers } : {}),
       admitNavigation: networkAdmission,
+      ...(options.networkFailure
+        ? { networkFailure: options.networkFailure }
+        : {}),
       ...(options.beforeRequest
         ? { beforeRequest: options.beforeRequest }
         : {}),

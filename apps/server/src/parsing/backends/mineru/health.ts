@@ -1,3 +1,4 @@
+import type { OutboundEgress } from "../../../network/egress.js";
 import { parseStrictJsonObject } from "@sciretriever/contracts";
 import {
   bundlePreview,
@@ -97,6 +98,7 @@ export function parseMinerUHealth(body: Uint8Array): MinerUHealthReport {
  * credential. Nothing else of the parser protocol is reachable from here.
  */
 export function createMinerUHealthProbe(options: {
+  readonly egress?: OutboundEgress;
   readonly base_url: string;
   readonly connection_mode: "loopback" | "remote" | null;
   readonly credentials: CredentialBundle;
@@ -177,6 +179,7 @@ export function createMinerUHealthProbe(options: {
                 ] as const,
               }),
           coordinator: options.coordinator,
+          ...(options.egress ? { egress: options.egress } : {}),
           ...(options.resolver ? { resolver: options.resolver } : {}),
           ...(options.connection ? { connection: options.connection } : {}),
           ...(signal ? { signal } : {}),

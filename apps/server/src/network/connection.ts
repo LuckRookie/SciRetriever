@@ -1,3 +1,9 @@
+import { connectProxyTunnel } from "./proxy-tunnel.js";
+import {
+  networkEgressSelected,
+  ProxyUnavailableError,
+  type OutboundEgress,
+} from "./egress.js";
 import {
   createConnection,
   isIP,
@@ -72,6 +78,7 @@ export async function connectVerified(
   timeoutMs = 10_000,
   dependencies: ConnectionDependencies = {},
   signal?: AbortSignal,
+  egress?: OutboundEgress,
 ): Promise<VerifiedConnection> {
   assertResolvedDestination(destination);
   if (
@@ -89,12 +96,28 @@ export async function connectVerified(
       throw new NetworkConnectionError();
     if (signal?.aborted) throw new NetworkConnectionError();
     const connector = dependencies.connect ?? createConnection;
-    socket = connector({ host: address, port: destination.url.port });
+    const viaProxy =
+      egress?.mode === "proxy" &&
+      destination.classes.every((c) => c === "public");
+    networkEgressSelected(viaProxy ? "proxy" : "direct");
+    if (viaProxy) {
+      if (!egress.proxy) throw new ProxyUnavailableError();
+      socket = await connectProxyTunnel(
+        egress.proxy,
+        destination.url.hostname,
+        destination.url.port,
+        timeoutMs,
+        signal,
+        connector,
+      );
+    } else socket = connector({ host: address, port: destination.url.port });
     // Retain a fixed error handler during ownership transfer to the HTTP consumer.
     socket.on("error", () => undefined);
-    await waitFor(socket, "connect", timeoutMs, signal);
-    if (destination.url.scheme === "http")
+    if (!viaProxy) await waitFor(socket, "connect", timeoutMs, signal);
+    if (destination.url.scheme === "http") {
+      if (viaProxy) socket.resume();
       return { socket, address, servername: null };
+    }
     const remaining = Math.ceil(timeoutMs - (performance.now() - started));
     if (remaining < 1 || signal?.aborted) throw new NetworkConnectionError();
     const connectorTls = dependencies.tlsConnect ?? tlsConnect;
@@ -113,9 +136,10 @@ export async function connectVerified(
     )
       throw new NetworkConnectionError();
     return { socket: secure, address, servername: destination.url.hostname };
-  } catch {
+  } catch (error) {
     secure?.destroy();
     socket?.destroy();
+    if (error instanceof ProxyUnavailableError) throw error;
     throw new NetworkConnectionError();
   }
 }

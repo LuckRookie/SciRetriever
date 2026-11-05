@@ -1,5 +1,6 @@
 export interface SourceCandidate {
   readonly source: string;
+  readonly requester?: string;
   readonly locator: string;
   readonly kind: "pdf" | "landing";
   readonly source_record_id: string | null;

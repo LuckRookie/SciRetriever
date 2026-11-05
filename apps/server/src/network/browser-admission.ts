@@ -1,3 +1,4 @@
+import type { OutboundEgress } from "./egress.js";
 import {
   resolveBrowserDestination,
   type DestinationPolicy,
@@ -10,6 +11,7 @@ import type { NetworkBudgetCoordinator } from "./budget.js";
 /** Shared Network admission for a production Browser and an explicit Site probe. */
 export function createBrowserNetworkAdmission(options: {
   readonly budget: NetworkBudgetCoordinator;
+  readonly egress?: OutboundEgress;
   readonly resolver?: Resolver;
   readonly policy?: DestinationPolicy;
 }) {
@@ -19,6 +21,7 @@ export function createBrowserNetworkAdmission(options: {
     allowed_classes: ["public"],
   };
   const proxy = new BrowserNetworkProxy({
+    ...(options.egress ? { egress: options.egress } : {}),
     resolver,
     policy,
     coordinator: options.budget,

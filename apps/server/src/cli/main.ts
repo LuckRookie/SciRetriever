@@ -1,3 +1,4 @@
+import { NetworkConfigurationError } from "@sciretriever/contracts";
 import {
   sourceConfiguration,
   SourceConfigurationError,
@@ -323,6 +324,10 @@ function parseProbeRequest(args: readonly string[]): ConfigurationProbeRequest {
     return { owner: "all", target: null, image: false };
   }
   if (all && head !== "search" && head !== "download") invalidInput();
+  if (head === "proxy") {
+    if (positionals.length !== 1 || targetFlag || image || all) invalidInput();
+    return { owner: "proxy", target: null, image: false };
+  }
   if (head === "provider" || head === "model") {
     const target = positionals[1] ?? targetFlag;
     if (!target || positionals.length > 2) invalidInput();
@@ -2084,6 +2089,7 @@ export async function runCli(
         error.code === "source-configuration-invalid") ||
       probeInvalid;
     const configuration =
+      error instanceof NetworkConfigurationError ||
       error instanceof ConfigurationOwnerError ||
       error instanceof ConfigurationBoundaryError;
     const business =
@@ -2117,41 +2123,43 @@ export async function runCli(
               ? 3
               : 70;
     const failure =
-      error instanceof WorkbenchAccessError
+      error instanceof NetworkConfigurationError
         ? error.code
-        : error instanceof SourceConfigurationError ||
-            error instanceof RestartAdmissionError ||
-            error instanceof WebSupervisorError
+        : error instanceof WorkbenchAccessError
           ? error.code
-          : error instanceof LiteratureNotFoundError &&
-              !args.includes("--request")
-            ? "business-failed"
-            : isQueryFailure(error) ||
-                isMaintenanceFailure(error) ||
-                error instanceof MachineWorkbenchError
-              ? error.code
-              : error instanceof DocumentProcessingError ||
-                  error instanceof ParsingFailure ||
-                  error instanceof ArticleIdentityError ||
-                  error instanceof ProcessingTaskError ||
-                  error instanceof ProcessorError ||
-                  error instanceof ProcessorQueryError
+          : error instanceof SourceConfigurationError ||
+              error instanceof RestartAdmissionError ||
+              error instanceof WebSupervisorError
+            ? error.code
+            : error instanceof LiteratureNotFoundError &&
+                !args.includes("--request")
+              ? "business-failed"
+              : isQueryFailure(error) ||
+                  isMaintenanceFailure(error) ||
+                  error instanceof MachineWorkbenchError
                 ? error.code
-                : error instanceof QueryApplicationError
+                : error instanceof DocumentProcessingError ||
+                    error instanceof ParsingFailure ||
+                    error instanceof ArticleIdentityError ||
+                    error instanceof ProcessingTaskError ||
+                    error instanceof ProcessorError ||
+                    error instanceof ProcessorQueryError
                   ? error.code
-                  : probeCancelled
-                    ? "configuration-test-cancelled"
-                    : interrupted
-                      ? "operation-interrupted"
-                      : input
-                        ? "invalid-command-input"
-                        : configuration
-                          ? "configuration-failed"
-                          : catalog
-                            ? "catalog-schema-refused"
-                            : business
-                              ? "business-failed"
-                              : "internal-failed";
+                  : error instanceof QueryApplicationError
+                    ? error.code
+                    : probeCancelled
+                      ? "configuration-test-cancelled"
+                      : interrupted
+                        ? "operation-interrupted"
+                        : input
+                          ? "invalid-command-input"
+                          : configuration
+                            ? "configuration-failed"
+                            : catalog
+                              ? "catalog-schema-refused"
+                              : business
+                                ? "business-failed"
+                                : "internal-failed";
     effective.stderr?.(
       `${JSON.stringify({
         code: failure,

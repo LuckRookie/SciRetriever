@@ -1,3 +1,4 @@
+import { normalizeNetworkProxy } from "@sciretriever/contracts";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, mkdir, open, rename } from "node:fs/promises";
@@ -12,7 +13,8 @@ export type CredentialOperation =
   | "model-directory"
   | "parser-upload"
   | "parser-health"
-  | "provider-request";
+  | "provider-request"
+  | "proxy-connect";
 
 /** One exact credential use requested immediately before an external dispatch. */
 export interface CredentialReadRequest {
@@ -94,6 +96,7 @@ const OPERATIONS = new Set<CredentialOperation>([
   "parser-upload",
   "parser-health",
   "provider-request",
+  "proxy-connect",
 ]);
 const FIELD_NAMES = new Set([
   "api_key",
@@ -267,7 +270,10 @@ export function issueCredentialGrant(
 ): CredentialGrant {
   const data = bundles.get(bundle as object);
   if (!data || (namespace !== "model" && namespace !== "core")) invalid();
-  const canonicalOrigin = normalizeOrigin(origin);
+  const canonicalOrigin =
+    provider === "proxy" && namespace === "core"
+      ? proxyOrigin(origin)
+      : normalizeOrigin(origin);
   const canonicalProvider =
     namespace === "model" ? normalizeModelProviderName(provider) : provider;
   if (
@@ -293,8 +299,9 @@ export function issueCredentialGrant(
       operation !== "model-request" &&
       operation !== "model-directory") ||
     (namespace === "core" &&
-      operation !== "parser-upload" &&
-      operation !== "parser-health")
+      (provider === "proxy"
+        ? operation !== "proxy-connect"
+        : operation !== "parser-upload" && operation !== "parser-health"))
   )
     invalid();
   const claims = data[namespace === "model" ? "models" : "core"].get(
@@ -387,7 +394,8 @@ export function parseCredentialText(
     if (
       section === "providers" ||
       section === "mineru" ||
-      section === "cloakbrowser"
+      section === "cloakbrowser" ||
+      section === "proxy"
     ) {
       parseOriginBoundSection(section, value, models, core, previews);
     } else if (section in PROVIDER_FIELDS) {
@@ -491,7 +499,12 @@ function parseOriginBoundSection(
     }
     return;
   }
-  const spec = section === "mineru" ? "bearer_token" : "license_key";
+  const spec =
+    section === "proxy"
+      ? "basic_auth"
+      : section === "mineru"
+        ? "bearer_token"
+        : "license_key";
   const record = exact(
     value,
     [spec, "origin"],
@@ -506,20 +519,38 @@ function parseOriginBoundSection(
     keys.has(`next_${spec}`) !== keys.has("next_origin")
   )
     invalid();
-  const origin = normalizeOrigin(record.origin);
-  if (transition && normalizeOrigin(record.next_origin) === origin) invalid();
+  const origin =
+    section === "proxy"
+      ? proxyOrigin(record.origin)
+      : normalizeOrigin(record.origin);
+  if (
+    transition &&
+    (section === "proxy"
+      ? proxyOrigin(record.next_origin)
+      : normalizeOrigin(record.next_origin)) === origin
+  )
+    invalid();
   core.set(grantKey(section, spec), {
     provider: section,
     field: spec,
-    value: secretValue(record[spec]),
+    value:
+      section === "proxy"
+        ? proxySecret(record[spec])
+        : secretValue(record[spec]),
     origin,
   });
   if (transition)
     core.set(grantKey(section, `next_${spec}`), {
       provider: section,
       field: `next_${spec}`,
-      value: secretValue(record[`next_${spec}`]),
-      origin: normalizeOrigin(record.next_origin),
+      value:
+        section === "proxy"
+          ? proxySecret(record[`next_${spec}`])
+          : secretValue(record[`next_${spec}`]),
+      origin:
+        section === "proxy"
+          ? proxyOrigin(record.next_origin)
+          : normalizeOrigin(record.next_origin),
     });
   previews.push({
     section,
@@ -552,7 +583,7 @@ export interface CredentialBundle {
 /** The value-safe edit protocol shared by the configuration owner and TUI. */
 export type CredentialEdit =
   | {
-      readonly namespace: "model" | "mineru";
+      readonly namespace: "model" | "mineru" | "proxy";
       readonly target: string;
       readonly kind: "keep" | "remove" | "set";
       readonly value?: string;
@@ -585,20 +616,30 @@ function renderCredentialBundle(data: CredentialBundleData): Uint8Array {
     lines.push("");
   };
 
-  for (const service of ["mineru", "cloakbrowser"] as const) {
+  for (const service of ["mineru", "cloakbrowser", "proxy"] as const) {
     const values: Record<string, string> = {};
     for (const claim of data.core.values()) {
       if (claim.provider === service) values[claim.field] = claim.value;
     }
-    const primary = values.bearer_token ?? values.license_key;
+    const primary =
+      values.basic_auth ?? values.bearer_token ?? values.license_key;
     const origin = [...data.core.values()].find(
       (claim) =>
         claim.provider === service &&
-        claim.field === (values.bearer_token ? "bearer_token" : "license_key"),
+        claim.field ===
+          (values.basic_auth
+            ? "basic_auth"
+            : values.bearer_token
+              ? "bearer_token"
+              : "license_key"),
     )?.origin;
     if (primary !== undefined && origin !== undefined) {
       const field =
-        values.bearer_token !== undefined ? "bearer_token" : "license_key";
+        values.basic_auth !== undefined
+          ? "basic_auth"
+          : values.bearer_token !== undefined
+            ? "bearer_token"
+            : "license_key";
       const rendered: Record<string, string> = { [field]: primary, origin };
       const next = [...data.core.values()].find(
         (claim) =>
@@ -705,17 +746,49 @@ export function editCredentialBundle(
       edit.namespace === "model"
         ? normalizeModelProviderName(edit.target)
         : edit.target;
-    if (edit.namespace === "mineru" && target !== "mineru") invalid();
-    const field = edit.namespace === "mineru" ? "bearer_token" : "api_key";
-    const namespace = edit.namespace === "mineru" ? core : models;
+    if (
+      (edit.namespace === "mineru" && target !== "mineru") ||
+      (edit.namespace === "proxy" && target !== "proxy")
+    )
+      invalid();
+    const field =
+      edit.namespace === "proxy"
+        ? "basic_auth"
+        : edit.namespace === "mineru"
+          ? "bearer_token"
+          : "api_key";
+    const namespace = edit.namespace === "model" ? models : core;
     if (edit.kind === "keep") return null;
     if (edit.kind === "remove") {
       for (const [key, claim] of namespace)
         if (claim.provider === target) namespace.delete(key);
     } else {
-      const value = editValue(edit.value);
+      const value =
+        edit.namespace === "proxy"
+          ? proxySecret(edit.value)
+          : editValue(edit.value);
       if (!value) return null;
-      const canonicalOrigin = normalizeOrigin(origin);
+      const canonicalOrigin =
+        edit.namespace === "proxy"
+          ? proxyOrigin(origin)
+          : normalizeOrigin(origin);
+      if (edit.namespace === "proxy") {
+        const primary = core.get(grantKey("proxy", "basic_auth"));
+        const selected =
+          primary && primary.origin !== canonicalOrigin
+            ? "next_basic_auth"
+            : "basic_auth";
+        core.set(grantKey("proxy", selected), {
+          provider: "proxy",
+          field: selected,
+          value,
+          origin: canonicalOrigin,
+        });
+        const next = makeBundle(providers, models, core, []);
+        const bytes = renderCredentialBundle(bundles.get(next as object)!);
+        parseCredentialText(bytes);
+        return bytes;
+      }
       for (const [key, claim] of namespace)
         if (claim.provider === target) namespace.delete(key);
       namespace.set(grantKey(target, field), {
@@ -844,7 +917,10 @@ export function readCredential(
 ): string {
   const data = bundles.get(bundle as object);
   if (!data) invalid();
-  const canonicalOrigin = normalizeOrigin(origin);
+  const canonicalOrigin =
+    provider === "proxy" && grant.namespace === "core"
+      ? proxyOrigin(origin)
+      : normalizeOrigin(origin);
   const canonicalProvider =
     grant.namespace === "model"
       ? normalizeModelProviderName(provider)
@@ -969,4 +1045,59 @@ export async function loadCredentialBundle(
     await directoryFile?.close().catch(() => undefined);
   }
   return invalid();
+}
+
+function proxyOrigin(value: unknown): string {
+  try {
+    return normalizeNetworkProxy(value);
+  } catch {
+    throw new CredentialBoundaryError();
+  }
+}
+function proxySecret(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length > 4096 ||
+    value.indexOf(":") < 1 ||
+    /[\p{Cc}\p{Cf}]/u.test(value)
+  )
+    throw new CredentialBoundaryError();
+  return value;
+}
+export function hasProxyCredential(
+  bundle: CredentialBundle,
+  origin: string,
+): boolean {
+  const data = bundles.get(bundle as object);
+  const normalized = proxyOrigin(origin);
+  return ["basic_auth", "next_basic_auth"].some(
+    (field) => data?.core.get(grantKey("proxy", field))?.origin === normalized,
+  );
+}
+export function readProxyCredential(
+  bundle: CredentialBundle,
+  origin: string,
+): string | null {
+  const data = bundles.get(bundle as object);
+  const normalized = proxyOrigin(origin);
+  const field = ["basic_auth", "next_basic_auth"].find(
+    (field) => data?.core.get(grantKey("proxy", field))?.origin === normalized,
+  );
+  if (!field) return null;
+  const grant = issueCredentialGrant(
+    bundle,
+    "core",
+    "proxy",
+    field,
+    normalized,
+    "proxy-connect",
+  );
+  return readCredential(
+    bundle,
+    grant,
+    "proxy",
+    field,
+    normalized,
+    "proxy-connect",
+  );
 }

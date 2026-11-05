@@ -59,6 +59,7 @@ export class ParsingFailure extends Error {
     readonly code:
       | "parser-structure"
       | "parser-unavailable"
+      | "proxy-unavailable"
       | "parser-cancelled"
       | "parser-stale"
       | "parser-publication",

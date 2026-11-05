@@ -1,3 +1,4 @@
+import { outboundEgress } from "../configuration/egress.js";
 import { lookup } from "node:dns/promises";
 import {
   bundlePreview,
@@ -224,12 +225,19 @@ function providerTransport(
   credentials: CredentialBundle,
   coordinator: NetworkBudgetCoordinator,
   options: MetadataAssemblyOptions,
+  network: OrdinaryConfiguration["network"],
 ): MetadataTransport {
   const expectedOrigin = new URL(baseUrl).origin;
   const injected = options.transportFactory?.(provider, expectedOrigin);
   const raw = injected
     ? null
     : createAgentTransport({
+        egress: outboundEgress(
+          network,
+          { kind: "source", id: provider },
+          credentials,
+          options.currentCredential,
+        ),
         resolver:
           options.resolver ??
           (async (hostname) =>
@@ -340,7 +348,14 @@ export function assembleMetadataRegistry(
       references.push(adapter as ReferenceQueryPort);
   };
   const transport = (provider: ProviderName, base: string) =>
-    providerTransport(provider, base, credentials, coordinator, options);
+    providerTransport(
+      provider,
+      base,
+      credentials,
+      coordinator,
+      options,
+      configuration.network,
+    );
 
   const crossref = configuration.sources.metadata.crossref as {
     readonly mode?: string;

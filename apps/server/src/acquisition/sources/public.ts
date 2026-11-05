@@ -412,12 +412,24 @@ export class DirectPdfSource implements AcquisitionSourcePort {
   async discover(
     request: AcquisitionSourceRequest,
   ): Promise<readonly SourceCandidate[]> {
-    return dedupe(
-      (request.asset_hints ?? []).flatMap((hint) => {
+    const attributed = (request.observations ?? []).flatMap((observation) =>
+      observation.asset_hints.flatMap((hint) => {
         const candidate = hintedPdf(hint, request.target_version);
-        return candidate ? [candidate] : [];
+        return candidate
+          ? [{ ...candidate, requester: observation.provenance.source_name }]
+          : [];
       }),
     );
+    const attributedUrls = new Set(
+      attributed.map((candidate) => candidate.locator),
+    );
+    return dedupe([
+      ...attributed,
+      ...(request.asset_hints ?? []).flatMap((hint) => {
+        const c = hintedPdf(hint, request.target_version);
+        return c && !attributedUrls.has(c.locator) ? [c] : [];
+      }),
+    ]);
   }
 }
 

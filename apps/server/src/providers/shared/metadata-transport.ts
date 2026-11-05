@@ -1,3 +1,4 @@
+import { isProxyUnavailable } from "../../network/egress.js";
 import {
   parseMetadataObservation,
   type MetadataObservation,
@@ -25,6 +26,16 @@ export function metadataTransportFailure(
   error: unknown,
 ): MetadataProviderFailure {
   if (error instanceof MetadataProviderFailure) return error;
+  if (isProxyUnavailable(error))
+    return new MetadataProviderFailure(
+      {
+        code: "proxy-unavailable",
+        reason: "The configured outbound proxy is unavailable.",
+        action: "Check the configured proxy and its authentication.",
+        retryable: true,
+      },
+      { cause: error },
+    );
   const category =
     error instanceof NetworkHttpError
       ? error.reason

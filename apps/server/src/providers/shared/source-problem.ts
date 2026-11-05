@@ -4,6 +4,7 @@ import type {
   SourceTechnicalDetails,
 } from "@sciretriever/contracts";
 import { AuthorizedProviderError } from "./authorized-pdf.js";
+import { isProxyUnavailable } from "../../network/egress.js";
 
 /** Stable facts only: never use a vendor message, URL, header or response body. */
 export function sourceProblem(
@@ -11,6 +12,7 @@ export function sourceProblem(
   scope: "metadata" | "pdf" | "runtime",
   error?: unknown,
 ): SourceProblem {
+  if (isProxyUnavailable(error)) code = "proxy-unavailable";
   let display: SourceProblem["display"] =
     scope !== "runtime" &&
     [

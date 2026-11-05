@@ -91,6 +91,8 @@ export interface BrowserHostOptions {
   readonly transfers?: BrowserTransferCallbacks;
   readonly runtime?: VerifiedCloakRuntime;
   readonly proxy?: BrowserProxyConnection;
+  /** Network-owned diagnosis, without proxy authentication. */
+  readonly networkFailure?: (url: string) => Error | null;
   readonly profile: string;
   readonly executablePath?: string;
   readonly headless?: boolean;
@@ -1214,6 +1216,13 @@ export class BrowserHost {
     const failed = session
       ? this.navigationFailures.get(session.id)
       : undefined;
+    const requested = failed?.error.target ?? this.navigationUrls.get(id);
+    // An origin-level proxy diagnosis only refines a recorded navigation failure.
+    // A failed subresource must not invalidate an already committed document.
+    const networkFailure =
+      failed && requested ? this.options.networkFailure?.(requested) : null;
+    if (networkFailure)
+      throw new BrowserHostNavigationError(networkFailure, false, requested);
     if (
       this.blockedNavigations.has(id) ||
       (failed && this.blockedNavigations.has(failed.identity.page_id))
@@ -1343,6 +1352,9 @@ export class BrowserHost {
         return;
       } catch (error) {
         if (this.runtimeLost) throw new BrowserHostRuntimeError(error);
+        const networkFailure = this.options.networkFailure?.(url);
+        if (networkFailure)
+          throw new BrowserHostNavigationError(networkFailure, false, url);
         if (
           awaitRecovery &&
           error instanceof Error &&

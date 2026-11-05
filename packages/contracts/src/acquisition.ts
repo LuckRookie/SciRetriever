@@ -1,3 +1,4 @@
+import { parseNetworkEgress, type NetworkEgress } from "./network.js";
 import { ContractValidationError, parseUtcTimestamp } from "./index.js";
 import {
   parseSourceProblem,
@@ -45,6 +46,7 @@ export const ACQUISITION_ATTEMPT_RESULTS = [
   "escalated",
 ] as const;
 export interface AcquisitionAttempt {
+  readonly egresses?: readonly NetworkEgress[];
   readonly stage: AcquisitionRouteStage;
   readonly source: string;
   readonly started_at: string;
@@ -82,6 +84,7 @@ function stage(value: unknown): AcquisitionRouteStage {
 }
 export function parseAcquisitionAttempt(value: unknown): AcquisitionAttempt {
   const r = record(value, [
+    "egresses",
     "stage",
     "source",
     "started_at",
@@ -110,7 +113,21 @@ export function parseAcquisitionAttempt(value: unknown): AcquisitionAttempt {
         Number(r.candidates) > 1000))
   )
     fail();
+  if (
+    r.egresses !== undefined &&
+    (!Array.isArray(r.egresses) ||
+      r.egresses.length > 2 ||
+      new Set(r.egresses).size !== r.egresses.length)
+  )
+    fail();
   return Object.freeze({
+    ...(r.egresses === undefined
+      ? {}
+      : {
+          egresses: Object.freeze(
+            (r.egresses as unknown[]).map(parseNetworkEgress),
+          ),
+        }),
     stage: stage(r.stage),
     source: token(r.source),
     started_at: started,
