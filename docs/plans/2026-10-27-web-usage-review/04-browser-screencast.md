@@ -2,7 +2,7 @@
 
 类型：计划（结果块）
 负责：P25 的实施与验收
-状态：Ready（ADR 0042 已 Accepted）
+状态：In progress（实现完成，仅剩 4.8 Owner 实际观看）
 
 ## Outcome
 
