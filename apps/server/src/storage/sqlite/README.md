@@ -36,6 +36,8 @@
 
 `raw-parsing-engine.ts`、`proofread-engine.ts`、`structure-annotation-engine.ts`、`metadata-field-storage.ts` 和 `archive-reference-engine.ts` 在同一当前结构中分别保存对应 owner 提交的事实。模块拆分不产生独立数据库版本。
 
+`worker-runtime.ts` 的文档版本提交保留校订稿来源、raw pin、人工 revision、产物登记及默认版本 CAS 检查。`source-order-leaves-v4` 允许省略已登记的公式截图，实际引用的图片仍须逐一匹配同一校订稿的 reference、hash、路径和完整 artifact 描述；历史 builder 保留原来的图片数量检查。文档提交失败仅跨 worker 传递 `errors.ts` 中的有限错误码，不透传 SQL 文本、参数或文件路径。
+
 `tag-engine.ts` 实现词表与有序标签的事务端口、名称唯一索引、检索、回溯覆盖和可逆变更。业务变更规则由源码树内的 `tags/` 模块决定，数据库只提交已裁决事实。
 
 `archive-engine.ts` 保存建档步骤、问题与统计，读取当前材料和描述的版本投影；就绪状态统一调用 `literature/state.ts`。版本变化在原事实的写入事务中记录，不依赖读取触发，不启动后续任务。

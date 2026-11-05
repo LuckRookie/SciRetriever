@@ -2,7 +2,10 @@ import { archiveChatReply } from "./archive-chat-fixture.js";
 import { imageBytes } from "./archive-text-fixture.js";
 import { rawParserFixture } from "./raw-parser-fixture.js";
 import { dshChatReply } from "./dsh-analysis-fixture.js";
-import type { StagedParserResource } from "../src/parsing/ports.js";
+import type {
+  StagedParserResource,
+  RawParserBackend,
+} from "../src/parsing/ports.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -45,6 +48,7 @@ export async function coreProcessingFixture(
     analysisModel?: boolean;
     textLayer?: (text: string) => string;
     headerOnly?: boolean;
+    rawParser?: RawParserBackend;
     archiveProfile?: "pipeline" | "vlm-engine";
     inspectResponseSchema?: (schema: unknown) => void;
     metadata?: ApplicationOptions["metadata"];
@@ -156,47 +160,49 @@ export async function coreProcessingFixture(
       },
     },
     parsing: {
-      rawParser: rawParserFixture(
-        {
-          parse: async (request, signal) => {
-            parseCalls++;
-            assetTexts.set(request.source_asset_id, text);
-            await parseHook(signal);
-            const bytes = Buffer.from(text);
-            return {
-              source_asset_id: request.source_asset_id,
-              source_sha256: request.source_sha256,
-              page_count: optionsInput.pageCount ?? 1,
-              markdown: {
-                artifact: {
-                  sha256: await sha256(bytes),
-                  byte_size: bytes.length,
-                  media_type: "text/markdown",
-                } as ArtifactRef,
-                bytes,
-              },
-              resources,
-              provenance: {
-                provenance: parseProvenance({
-                  provenance_id: randomUUID(),
-                  source_kind: "parser",
-                  source_name: "synthetic",
-                  source_record_id: null,
-                  observed_at: new Date().toISOString(),
-                  input_sha256: request.source_sha256,
-                  parameters_sha256: "a".repeat(64),
-                }),
-                parser_version: "fixture-1",
-                mode: null,
-                model_identity: null,
-              },
-            };
+      rawParser:
+        optionsInput.rawParser ??
+        rawParserFixture(
+          {
+            parse: async (request, signal) => {
+              parseCalls++;
+              assetTexts.set(request.source_asset_id, text);
+              await parseHook(signal);
+              const bytes = Buffer.from(text);
+              return {
+                source_asset_id: request.source_asset_id,
+                source_sha256: request.source_sha256,
+                page_count: optionsInput.pageCount ?? 1,
+                markdown: {
+                  artifact: {
+                    sha256: await sha256(bytes),
+                    byte_size: bytes.length,
+                    media_type: "text/markdown",
+                  } as ArtifactRef,
+                  bytes,
+                },
+                resources,
+                provenance: {
+                  provenance: parseProvenance({
+                    provenance_id: randomUUID(),
+                    source_kind: "parser",
+                    source_name: "synthetic",
+                    source_record_id: null,
+                    observed_at: new Date().toISOString(),
+                    input_sha256: request.source_sha256,
+                    parameters_sha256: "a".repeat(64),
+                  }),
+                  parser_version: "fixture-1",
+                  mode: null,
+                  model_identity: null,
+                },
+              };
+            },
           },
-        },
-        optionsInput.headerOnly,
-        (optionsInput.pageCount ?? 1) > 1,
-        optionsInput.pageText,
-      ),
+          optionsInput.headerOnly,
+          (optionsInput.pageCount ?? 1) > 1,
+          optionsInput.pageText,
+        ),
     },
     agentTransportFactory: () => async (request) => {
       modelCalls++;

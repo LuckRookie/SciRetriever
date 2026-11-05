@@ -92,12 +92,19 @@ import {
   SCHEMA_VERSION,
 } from "./schema.js";
 
-import { CatalogCorruptionError } from "./errors.js";
+import {
+  CatalogCorruptionError,
+  isDocumentCommitFailureCode,
+  type DocumentCommitFailureCode,
+} from "./errors.js";
 export { CatalogCorruptionError } from "./errors.js";
 
 export class SqliteWorkerError extends Error {
-  readonly code = "sqlite-worker" as const;
-  constructor() {
+  constructor(
+    readonly code:
+      | "sqlite-worker"
+      | DocumentCommitFailureCode = "sqlite-worker",
+  ) {
     super("sqlite worker operation failed");
     this.name = "SqliteWorkerError";
   }
@@ -1181,7 +1188,11 @@ export class SqliteWorker {
             ? new DOMException("Library query cancelled", "AbortError")
             : reply.code === "catalog-corrupt"
               ? new CatalogCorruptionError(reply.sqlite_code ?? null)
-              : new SqliteWorkerError(),
+              : new SqliteWorkerError(
+                  isDocumentCommitFailureCode(reply.code)
+                    ? reply.code
+                    : "sqlite-worker",
+                ),
         );
     });
     this.worker.on("error", () => {

@@ -200,7 +200,12 @@ const { readCatalogIdentity } = await import(
     import.meta.url,
   ).href
 );
-const { catalogCorruption, throwCatalogCorruption } = await import(
+const {
+  catalogCorruption,
+  throwCatalogCorruption,
+  DocumentCommitError,
+  isDocumentCommitFailureCode,
+} = await import(
   new URL(
     import.meta.url.endsWith(".ts") ? "./errors.ts" : "./errors.js",
     import.meta.url,
@@ -3543,8 +3548,9 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
       source.media_type !== v.source_material_ref.media_type ||
       source.relative_path !== p.source_artifact_path
     )
-      fail();
-    if (v.schema_version !== 2) fail();
+      throw new DocumentCommitError("document-source-stale");
+    if (v.schema_version !== 2)
+      throw new DocumentCommitError("document-version-invalid");
     {
       const proofread = db
         .prepare(
@@ -3564,7 +3570,8 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
           v.source_material_ref.literature_id,
           v.source_material_ref.asset_id,
         );
-      if (!proofread || !binding) fail();
+      if (!proofread || !binding)
+        throw new DocumentCommitError("document-proofread-stale");
       const manualRevision =
         db
           .prepare(
@@ -3576,7 +3583,9 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
           "SELECT 1 FROM raw_parse_pins pin JOIN raw_parses p ON p.raw_parse_id=pin.raw_parse_id LEFT JOIN raw_parse_current c ON c.source_asset_id=p.source_asset_id AND c.profile=p.profile WHERE pin.proofread_id=? AND (c.raw_parse_id IS NULL OR c.raw_parse_id!=p.raw_parse_id) LIMIT 1",
         )
         .get(v.proofread_id);
-      if (manualRevision !== p.expected_manual_revision || stale) fail();
+      if (manualRevision !== p.expected_manual_revision)
+        throw new DocumentCommitError("document-manual-stale");
+      if (stale) throw new DocumentCommitError("document-raw-stale");
       const markdown = db
         .prepare(
           "SELECT * FROM proofread_resources WHERE proofread_id=? AND kind='markdown' AND sha256=? AND artifact_reference=? LIMIT 1",
@@ -3586,14 +3595,17 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
         markdown?.sha256 !== v.markdown.sha256 ||
         markdown?.artifact_reference !== p.markdown_artifact_path
       )
-        fail();
+        throw new DocumentCommitError("document-markdown-unregistered");
       const images = db
         .prepare(
           "SELECT * FROM proofread_resources WHERE proofread_id=? AND kind='image'",
         )
         .all(v.proofread_id);
       if (
-        images.length !== v.resources.length ||
+        // v4 intentionally leaves equation screenshots in the immutable
+        // proofread source while publishing only its rendered resource closure.
+        (v.builder_version !== "source-order-leaves-v4" &&
+          images.length !== v.resources.length) ||
         v.resources.some(
           (r: Dynamic) =>
             !images.some(
@@ -3604,7 +3616,7 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
             ),
         )
       )
-        fail();
+        throw new DocumentCommitError("document-resources-mismatch");
     }
     const exactArtifact = (path: Dynamic, a: Dynamic): void => {
       if (
@@ -3614,12 +3626,12 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
           )
           .get(path, a.sha256, a.byte_size, a.media_type)
       )
-        fail();
+        throw new DocumentCommitError("document-artifact-unregistered");
     };
     exactArtifact(p.source_artifact_path, v.source_material_ref.artifact);
     exactArtifact(p.markdown_artifact_path, v.markdown);
     if (Object.keys(p.resource_artifact_paths).length !== v.resources.length)
-      fail();
+      throw new DocumentCommitError("document-resources-mismatch");
     for (const r of v.resources)
       exactArtifact(p.resource_artifact_paths[r.reference], r.artifact);
     const previousStructure = db
@@ -3662,7 +3674,7 @@ function commitDocumentVersion(p: Dynamic): Dynamic {
         JSON.stringify(stable(existing.resource_artifact_paths)) !==
           JSON.stringify(stable(p.resource_artifact_paths)))
     )
-      fail();
+      throw new DocumentCommitError("document-version-conflict");
     if (!existing) {
       db.prepare(
         `INSERT INTO document_versions(document_version_id,document_id,schema_version,literature_id,source_asset_id,source_sha256,source_byte_size,source_media_type,source_artifact_path,builder_version,locator_scheme,representation_sha256,markdown_artifact_path,markdown_sha256,markdown_byte_size,markdown_media_type,structure_artifact_path,structure_sha256,structure_byte_size,structure_media_type,created_at,proofread_id,proofread_content_sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -5304,13 +5316,22 @@ port.on("message", (message: WorkerMessage) => {
     port.postMessage({ id: message.id, ok: true, value });
   } catch (error) {
     const corruption = catalogCorruption(error);
+    const publicationCode =
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      isDocumentCommitFailureCode(error.code)
+        ? error.code
+        : "document-publication-failed";
     port.postMessage({
       id: message.id,
       ok: false,
       value: null,
       ...(corruption
         ? { code: corruption.code, sqlite_code: corruption.sqlite_code }
-        : {}),
+        : message.command.kind === "document_commit"
+          ? { code: publicationCode }
+          : {}),
       cancelled: !!cancellation && Atomics.load(cancellation, 0) !== 0,
     });
   } finally {

@@ -15,6 +15,8 @@ import {
   type DocumentRef,
   type DocumentRepresentationInput,
   type DocumentStructure,
+  type RawParseResource,
+  type DocumentResource,
 } from "@sciretriever/contracts";
 import type { FileStore } from "../storage/files/store.js";
 import type { SqliteWorker } from "../storage/sqlite/worker.js";
@@ -30,6 +32,24 @@ import {
   MAX_DOCUMENT_MARKDOWN_BYTES,
   MAX_DOCUMENT_STRUCTURE_BYTES,
 } from "./limits.js";
+
+function sameResourceClosure(
+  built: readonly RawParseResource[],
+  declared: readonly DocumentResource[],
+) {
+  const byReference = new Map(built.map((r) => [r.reference, r.artifact]));
+  return (
+    built.length === declared.length &&
+    declared.every((r) => {
+      const expected = byReference.get(r.reference);
+      return (
+        expected?.sha256 === r.artifact.sha256 &&
+        expected.byte_size === r.artifact.byte_size &&
+        expected.media_type === r.artifact.media_type
+      );
+    })
+  );
+}
 
 /** Verifies the immutable closure of a corrected Document. */
 export class SqliteDocumentStorage implements DocumentStoragePort {
@@ -95,7 +115,8 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
             output.version.resources,
             parsed.builder_version,
           );
-          return built.sha256 === parsed.structure.sha256 &&
+          return sameResourceClosure(built.resources, parsed.resources) &&
+            built.sha256 === parsed.structure.sha256 &&
             built.markdown.length === parsed.markdown.byte_size &&
             (await sha256(built.markdown)) === parsed.markdown.sha256
             ? "available"
@@ -415,6 +436,8 @@ export class SqliteDocumentStorage implements DocumentStoragePort {
       );
       if (!Buffer.from(markdown).equals(built.markdown))
         throw new Error("document source-map mismatch");
+      if (!sameResourceClosure(built.resources, v.resources))
+        throw new Error("document resource closure mismatch");
       return built;
     }
     const output = await new SqliteProofreadStorage(

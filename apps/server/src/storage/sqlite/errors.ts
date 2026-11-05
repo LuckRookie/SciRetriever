@@ -1,3 +1,33 @@
+const DOCUMENT_COMMIT_CODES = [
+  "document-source-stale",
+  "document-version-invalid",
+  "document-proofread-stale",
+  "document-manual-stale",
+  "document-raw-stale",
+  "document-markdown-unregistered",
+  "document-resources-mismatch",
+  "document-artifact-unregistered",
+  "document-version-conflict",
+  "document-publication-failed",
+] as const;
+export type DocumentCommitFailureCode = (typeof DOCUMENT_COMMIT_CODES)[number];
+export function isDocumentCommitFailureCode(
+  value: unknown,
+): value is DocumentCommitFailureCode {
+  return (
+    typeof value === "string" &&
+    (DOCUMENT_COMMIT_CODES as readonly string[]).includes(value)
+  );
+}
+/** Stable publication diagnostics; raw SQLite messages and paths stay private. */
+export class DocumentCommitError extends Error {
+  readonly code: DocumentCommitFailureCode;
+  constructor(code: DocumentCommitFailureCode) {
+    super("Document publication rejected");
+    this.code = code;
+  }
+}
+
 export class CatalogCorruptionError extends Error {
   readonly code = "catalog-corrupt";
   readonly maintenance_hint = "verify-catalog";

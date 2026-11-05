@@ -1,3 +1,4 @@
+import { isDocumentCommitFailureCode } from "../storage/sqlite/errors.js";
 import {
   longDocumentInfo,
   LONG_DOCUMENT_MAX_PAGES,
@@ -726,20 +727,31 @@ export class ArchiveTextPipeline {
         asset,
         v.part_sha256,
       );
-      const result = await db.commitDocumentVersion(
-        {
-          version: document,
-          source_artifact_path: material.path,
-          markdown_artifact_path: markdown.reference,
-          structure_artifact_path: structure.reference,
-          resource_artifact_paths: paths,
-          expected_default_revision: expected
-            ? expected.default_revision
-            : (previous?.revision ?? null),
-          expected_manual_revision: state.manual_revision,
-        },
-        signal?.aborted ? undefined : signal,
-      );
+      const result = await db
+        .commitDocumentVersion(
+          {
+            version: document,
+            source_artifact_path: material.path,
+            markdown_artifact_path: markdown.reference,
+            structure_artifact_path: structure.reference,
+            resource_artifact_paths: paths,
+            expected_default_revision: expected
+              ? expected.default_revision
+              : (previous?.revision ?? null),
+            expected_manual_revision: state.manual_revision,
+          },
+          signal?.aborted ? undefined : signal,
+        )
+        .catch((error: unknown) => {
+          if (
+            error &&
+            typeof error === "object" &&
+            "code" in error &&
+            isDocumentCommitFailureCode(error.code)
+          )
+            throw new ArchiveTextError(error.code, [], { cause: error });
+          throw error;
+        });
       // A version that did not become the default is not a published archive.
       if (!result.default_updated)
         throw new ArchiveTextError("publication-conflict");
