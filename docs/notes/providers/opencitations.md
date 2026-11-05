@@ -202,9 +202,13 @@ OpenCitations 可以分别作为 citation source 和 metadata source 候选；�
 
 ## 10. 当前实现边界
 
-当前 `OpenCitationsAdapter` 实现 Meta 的稳定 PID metadata lookup，以及 Index 的 references/citations
-查询与方向转换；它显式解析多 PID、可选 index 前缀、作者/venue 字符串和中性关系端点，并由生产
-registry 注入共享 `HttpClient`、Access Coordinator、`opencitations/api` policy 与可选 token。
-OpenCitations 不参加主题 DiscoveryRun、不作为 Acquisition 来源，也没有第三类 Citation Provider；
-当前没有 dump importer。实现证据为离线 fake/fixture，2026-08-07 的匿名小请求不证明高被引响应
-可在默认预算内完成，本轮没有读取 token、访问 API 或下载 dump。
+当前生产 `OpenCitationsRestAdapter` 经共享 Network/Metadata transport 调用 Meta 的
+`/meta/v1/metadata/{typed-pid}` 与 Index 的 `/index/v2/references/{typed-pid}`，请求标识显式携带
+`doi:`、`pmid:` 或 `omid:`。它解析多 PID、已知 Index 前缀和作者/容器的标识后缀，保留引用方向、
+原始响应 hash 与 provenance；未知 Index 前缀、无效标识和仅有 count 的响应仍报错。
+Meta 观测可保留 ISBN；仅有 ISBN 的实体不作为本适配器的文章引用端点。当前 reference-query
+只实现 references，cited-by 显式拒绝，没有 dump importer，也不参加主题检索或 PDF 获取。
+
+2026-11-05 匿名最小只读复核中，上述正确路径分别返回 Meta 1 条、references 37 条；少了 operation
+的旧路径返回 404。自动测试使用合成 fixture，真实小请求不证明高被引响应可在默认预算内完成。
+请求字段与多 PID 语义分别以第 3、4 节为准。

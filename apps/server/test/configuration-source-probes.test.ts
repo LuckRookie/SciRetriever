@@ -207,7 +207,43 @@ it("preserves empty lookup as normal and uses scan=1 with a provider-native fixt
     requests_started: 1,
     checks: [{ purpose: "lookup", result: "empty", requested: true }],
   });
-  expect(requested).toContain("/meta/v1/");
+  expect(new URL(requested).pathname).toBe(
+    "/meta/v1/metadata/doi%3A10.1038%2Fs41586-020-2649-2",
+  );
+});
+
+it("tests OpenCitations through the real Meta operation and multi-PID response shape", async () => {
+  const { sources, probe } = await fixture({
+    metadata: {
+      transportFactory: (source) => ({
+        request: async (url) => {
+          expect(source).toBe("opencitations");
+          expect(new URL(url).pathname).toBe(
+            "/meta/v1/metadata/doi%3A10.1038%2Fs41586-020-2649-2",
+          );
+          networkRequestDispatched();
+          return [
+            {
+              id: "omid:br/123 doi:10.1038/s41586-020-2649-2 pmid:12345",
+              title: "Synthetic source-probe record",
+            },
+          ];
+        },
+      }),
+    },
+  });
+  await probe.test({
+    source: "opencitations",
+    source_revision: await sources.testRevision("opencitations"),
+    request_id: randomUUID(),
+  });
+  expect(await probe.wait("opencitations")).toMatchObject({
+    status: "available",
+    requests_started: 1,
+    checks: [{ purpose: "lookup", result: "ok", requested: true }],
+    library_written: false,
+    assets_published: false,
+  });
 });
 
 it("test-all is serialized, isolates failures, skips unsupported/missing rows, and shares one budget", async () => {

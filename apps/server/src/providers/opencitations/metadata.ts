@@ -7,6 +7,7 @@ import {
   parseIdentifier,
   parseProvenance,
   sha256,
+  type Identifier,
   type MetadataObservation,
   type ProviderLiteratureKey,
 } from "@sciretriever/contracts";
@@ -34,21 +35,79 @@ export interface OpenCitationsAdapterOptions {
 }
 const text = (value: unknown): string | null =>
   typeof value === "string" && value.trim() ? value.trim() : null;
-const doiValue = (value: unknown): string | null =>
-  text(value)
-    ?.replace(/^https?:\/\/(?:dx\.)?doi\.org\//iu, "")
-    .toLowerCase() ?? null;
+const INDEX_NAMES = new Set(["coci", "poci", "croci", "doci"]);
+const PID_NAMES = new Set(["doi", "pmid", "isbn", "openalex", "omid"]);
+function pids(value: unknown): readonly Identifier[] {
+  const raw = text(value);
+  if (!raw) return [];
+  // Retain the single DOI shape accepted by older adapter callers/fixtures.
+  if (/^(?:10\.\d{4,9}\/|https?:\/\/(?:dx\.)?doi\.org\/)/iu.test(raw))
+    return [parseIdentifier({ namespace: "doi", value: raw })];
+  const result: Identifier[] = [];
+  for (const group of raw.split(/\s*;\s*(?=\[)/u)) {
+    const prefixed = /^\[([^\]]+)\]\s*=>\s*(.+)$/u.exec(group);
+    if (group.startsWith("[") && (!prefixed || !INDEX_NAMES.has(prefixed[1]!)))
+      throw new Error("OpenCitations index prefix is invalid");
+    for (const token of (prefixed?.[2] ?? group).split(/\s+/u)) {
+      const match = /^([a-z]+):(.+)$/iu.exec(token);
+      if (!match || !PID_NAMES.has(match[1]!.toLowerCase()))
+        throw new Error("OpenCitations identifier namespace is invalid");
+      const identifier = parseIdentifier({
+        namespace: match[1],
+        value: match[2],
+      });
+      if (
+        !result.some(
+          (item) =>
+            item.namespace === identifier.namespace &&
+            item.value === identifier.value,
+        )
+      )
+        result.push(identifier);
+    }
+  }
+  return result;
+}
+function recordId(identifiers: readonly Identifier[]): string | null {
+  const identity =
+    identifiers.find((item) => item.namespace === "doi") ??
+    identifiers.find((item) => item.namespace === "pmid") ??
+    identifiers.find((item) => item.namespace === "omid") ??
+    identifiers[0];
+  return identity
+    ? identity.namespace === "doi"
+      ? identity.value
+      : `${identity.namespace}:${identity.value}`
+    : null;
+}
+function requestId(key: ProviderLiteratureKey): string {
+  const identifier = [...pids(key.record_id), ...key.identifiers].find((item) =>
+    ["doi", "pmid", "omid"].includes(item.namespace),
+  );
+  if (!identifier) throw new TypeError("OpenCitations lookup key is empty");
+  const normalized = parseIdentifier(identifier);
+  return `${normalized.namespace}:${normalized.value}`;
+}
+function nameValue(value: unknown): string | null {
+  return text(text(value)?.replace(/\s*\[[^\]]*\]\s*$/u, ""));
+}
 function authors(value: unknown) {
   return (text(value) ?? "").split(/\s*;\s*/u).flatMap((item) => {
-    const name = text(item);
+    const name = nameValue(item);
+    const identifiers = /\[([^\]]*)\]\s*$/u.exec(item)?.[1];
+    const orcid = /(?:^|\s)orcid:([^\s]+)/u.exec(identifiers ?? "")?.[1];
+    const comma = name?.indexOf(",") ?? -1;
     return name
       ? [
           {
             kind: "person" as const,
             display_name: name,
-            given_name: null,
-            family_name: name.split(/\s+/u).at(-1) ?? name,
-            orcid: null,
+            given_name: comma < 0 ? null : text(name.slice(comma + 1)),
+            family_name:
+              comma < 0
+                ? (name.split(/\s+/u).at(-1) ?? name)
+                : text(name.slice(0, comma)),
+            orcid: orcid ?? null,
             affiliations: [],
           },
         ]
@@ -62,10 +121,11 @@ function endpoint(value: unknown): {
     readonly value: string;
   }[];
 } {
-  const doi = doiValue(value);
+  // ISBN-only entities are not article relation endpoints for this adapter.
+  const identifiers = pids(value).filter((item) => item.namespace !== "isbn");
   return {
-    record_id: doi,
-    identifiers: doi ? [parseIdentifier({ namespace: "doi", value: doi })] : [],
+    record_id: recordId(identifiers),
+    identifiers,
   };
 }
 function relation(
@@ -110,8 +170,10 @@ function observation(
     readonly inputSha256: string;
   },
 ): MetadataObservation {
-  const doi = doiValue(record.doi ?? record.id);
-  if (!doi) throw new Error("OpenCitations metadata identity is missing");
+  const identifiers = pids(record.doi ?? record.id);
+  const sourceRecordId = recordId(identifiers);
+  if (!sourceRecordId)
+    throw new Error("OpenCitations metadata identity is missing");
 
   return parseProviderObservation({
     observation_id: options.observationId,
@@ -119,7 +181,7 @@ function observation(
       provenance_id: options.provenanceId,
       source_kind: "metadata-provider",
       source_name: "opencitations",
-      source_record_id: doi,
+      source_record_id: sourceRecordId,
       observed_at: options.observedAt,
       input_sha256: options.inputSha256,
       parameters_sha256: null,
@@ -132,12 +194,12 @@ function observation(
       publication_date: text(record.pub_date),
       publication_year: metadataDate(record.pub_date)?.slice(0, 4) ?? null,
       language: null,
-      venue: text(record.venue),
-      publisher: null,
+      venue: nameValue(record.venue),
+      publisher: nameValue(record.publisher),
       volume: text(record.volume),
       issue: text(record.issue),
       pages: text(record.page),
-      identifiers: [{ namespace: "doi", value: doi }],
+      identifiers,
       keywords: [],
     },
     version_role: "published",
@@ -171,21 +233,14 @@ export class OpenCitationsRestAdapter
     this.clock = options.clock ?? (() => new Date().toISOString());
   }
   open_lookup(key: ProviderLiteratureKey): RawItemSession {
-    const value =
-      key.record_id ??
-      key.identifiers.find((item) => item.namespace === "doi")?.value;
-    if (!value) throw new TypeError("OpenCitations lookup key is empty");
-    return this.session("meta", doiValue(value) ?? value);
+    return this.session("meta", requestId(key));
   }
   open_reference_query(query: ReferenceQueryContext): RawItemSession {
     if (query.direction === "cited-by")
       throw new Error("OpenCitations cited-by capability is unavailable");
-    const value =
-      query.keys[0]?.record_id ??
-      query.keys[0]?.identifiers.find((item) => item.namespace === "doi")
-        ?.value;
-    if (!value) throw new TypeError("OpenCitations reference key is empty");
-    return this.session("index", doiValue(value) ?? value);
+    const key = query.keys[0];
+    if (!key) throw new TypeError("OpenCitations reference key is empty");
+    return this.session("index", requestId(key));
   }
   private session(kind: "meta" | "index", value: string): RawItemSession {
     let items: readonly unknown[] | null = null;
@@ -194,7 +249,7 @@ export class OpenCitationsRestAdapter
       pull_raw_item: async () => {
         if (items === null) {
           const url = new URL(
-            `${this.origin.toString().replace(/\/$/u, "")}/${kind === "meta" ? "meta/v1" : "index/v2"}/${encodeURIComponent(value)}`,
+            `${this.origin.toString().replace(/\/$/u, "")}/${kind === "meta" ? "meta/v1/metadata" : "index/v2/references"}/${encodeURIComponent(value)}`,
           );
           const response = await this.options.transport.request(url.toString());
           if (!Array.isArray(response))

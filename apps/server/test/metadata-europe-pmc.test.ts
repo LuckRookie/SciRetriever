@@ -61,6 +61,7 @@ it("translates publication years and typed identifiers to Europe PMC field queri
       record_id: null,
       identifiers: [{ namespace: "pmcid", value: "PMC12345" }],
     },
+    { record_id: "pmc12345", identifiers: [] },
     { record_id: null, identifiers: [{ namespace: "pmid", value: "12345" }] },
   ];
   for (const key of keys) await adapter.open_lookup(key).pull_raw_item();
@@ -70,7 +71,8 @@ it("translates publication years and typed identifiers to Europe PMC field queri
     'EXT_ID:"12345" AND SRC:MED',
     'EXT_ID:"PPR123" AND SRC:PPR',
     'DOI:"10.1000/example"',
-    'PMCID:"PMC12345"',
+    "PMCID:PMC12345",
+    "PMCID:PMC12345",
     'EXT_ID:"12345" AND SRC:MED',
   ]);
   expect(
@@ -80,6 +82,46 @@ it("translates publication years and typed identifiers to Europe PMC field queri
     ),
   ).toBe(true);
 });
+
+it.each([
+  { record_id: "pmc12345", identifiers: [] },
+  {
+    record_id: null,
+    identifiers: [{ namespace: "pmcid", value: "PMC12345" }],
+  },
+])(
+  "finds PMCID records through the unquoted exact identifier field",
+  async (key) => {
+    const adapter = new EuropePmcRestAdapter({
+      transport: {
+        request: async (url) => {
+          // Europe PMC accepts this PMCID token but does not match the quoted form.
+          const found =
+            new URL(url).searchParams.get("query") === "PMCID:PMC12345";
+          return {
+            hitCount: found ? 1 : 0,
+            resultList: {
+              result: found ? [result("12345", "Found by PMCID")] : [],
+            },
+          };
+        },
+      },
+    });
+    const output = await new MetadataService({
+      lookup_ports: [adapter],
+    }).lookup({
+      provider_name: "europe-pmc",
+      key,
+      scan_limit: 1,
+    });
+    expect(output.failure).toBeNull();
+    expect(output.observations).toHaveLength(1);
+    expect(output.observations[0]?.metadata.identifiers).toContainEqual({
+      namespace: "pmcid",
+      value: "PMC12345",
+    });
+  },
+);
 
 it.each(["references", "cited-by"] as const)(
   "uses page ordinals for %s with multiple records per page",

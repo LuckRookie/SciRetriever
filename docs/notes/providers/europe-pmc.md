@@ -40,6 +40,7 @@ Europe PMC 的开放全文能力只适用于相应收录与许可集合。元数
 `GET https://www.ebi.ac.uk/europepmc/webservices/rest/search` 常用参数：
 
 - `query`：必需；支持字段查询（如 `EXT_ID:`、`DOI:`、`PMCID:`）与布尔表达式；
+- PMCID 精确查询使用规范化后的无引号标识（如 `PMCID:PMC7759461`）；2026-11-05 最小只读复核中该写法返回 1 条，而 `PMCID:"PMC7759461"` 返回 0 条。其它文本字段仍由各自的查询语法转义。
 - `resultType=idlist|lite|core`：默认 `lite`；`core` 才包含摘要、作者细节、全文 link、MeSH 等完整字段；
 - `format=xml|json|dc`：默认 XML；DC 始终按 core 语义；
 - `pageSize`：本页数量；

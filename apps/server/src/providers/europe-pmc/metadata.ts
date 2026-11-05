@@ -427,7 +427,7 @@ export class EuropePmcRestAdapter
         match
           ? `EXT_ID:${literal(match[2]!)} AND SRC:${match[1]!.toUpperCase()}`
           : /^PMC\d+$/iu.test(key.record_id)
-            ? `PMCID:${literal(key.record_id)}`
+            ? `PMCID:${parseIdentifier({ namespace: "pmcid", value: key.record_id }).value}`
             : `EXT_ID:${literal(key.record_id)} AND SRC:MED`,
         {},
       );
@@ -436,6 +436,8 @@ export class EuropePmcRestAdapter
       ["pmid", "pmcid", "doi"].includes(item.namespace),
     );
     if (identifier) {
+      if (identifier.namespace === "pmcid")
+        return this.session(`PMCID:${parseIdentifier(identifier).value}`, {});
       const field = { pmid: "EXT_ID", pmcid: "PMCID", doi: "DOI" }[
         identifier.namespace as "pmid" | "pmcid" | "doi"
       ];
