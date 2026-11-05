@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：建档中整理一步的请求形状、程序预处理、断段候选与失败处理
-状态：Accepted（2026-10-30，Owner 确认：“接受并落地”）；部分被取代：第 3 节断段候选的“同一章节”要求与第 1 节由模型给出标题层级见 [ADR 0054](0054-rule-preprocessing-and-source-order-layout.md)
+状态：Accepted（2026-10-30，Owner 确认：“接受并落地”）；部分被取代：第 3 节断段候选的“同一章节”要求与第 1 节由模型给出标题层级见 [ADR 0054](0054-rule-preprocessing-and-source-order-layout.md)；第 5 节“验证前超长的部分停下”见 [ADR 0055](0055-long-document-simplified-archive.md)
 
 - Date: 2026-10-30
 - 依据：Owner 2026-10-30 的要求——问“整理为什么这么耗时”，并决定“先做沙箱实验”“写 ADR”；模型调用统一用 medium 强度，主模型为 terra（配置事项，不在本 ADR 固定）。

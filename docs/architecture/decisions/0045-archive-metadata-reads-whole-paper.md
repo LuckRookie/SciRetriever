@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：建档元数据步骤读取的片段范围
-状态：Accepted（2026-10-28，Owner 确认）
+状态：Accepted（2026-10-28，Owner 确认）；部分被取代：长文档只读前 20 页与最后 5 页，见 [ADR 0055](0055-long-document-simplified-archive.md)
 
 - Date: 2026-10-28
 - 依据：Owner 2026-10-28：“元数据直接给他看全部区块就行了。简简单单。”
