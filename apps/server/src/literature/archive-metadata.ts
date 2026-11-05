@@ -75,8 +75,13 @@ export class ArchiveMetadataService {
         const roles = new Map(
           annotation.segment_roles.map((s) => [s.segment_id, s.role]),
         );
-        // Archive metadata reads the whole paper: kept segments and every dropped leaf.
+        const long =
+          "long_document" in structure ? structure.long_document : null;
+        const includesPage = (page: number) =>
+          !long || page < 20 || page >= long.pages - 5;
+        // Ordinary papers use the whole paper; long documents use the first 20 and last 5 pages.
         const fragments: MetadataFragment[] = structure.segments
+          .filter((s) => includesPage(s.page))
           .filter((s) =>
             annotation.schema_version === 2
               ? true
@@ -113,7 +118,11 @@ export class ArchiveMetadataService {
           )
             throw new Error("metadata-arrangement-required");
           for (const row of output.bundle.leaves) {
-            if (row.destination.kind !== "dropped") continue;
+            if (
+              row.destination.kind !== "dropped" ||
+              !includesPage(row.leaf.page_index)
+            )
+              continue;
             fragments.push({
               fragment_id: row.leaf.leaf_id,
               page: row.leaf.page_index + 1,
@@ -142,12 +151,28 @@ export class ArchiveMetadataService {
           Buffer.byteLength(JSON.stringify(cited), "utf8") > 1024 * 1024
         )
           throw new Error("metadata-input-limit");
-        const response = await proposer.propose(cited, signal);
-        return {
-          ...validateMetadataProposals(response.value, document, cited),
-          usage: response.usage,
-          model: response.model,
-        };
+        const response = await proposer.propose(
+          cited,
+          signal,
+          long ? { long_document: true } : undefined,
+        );
+        try {
+          return {
+            ...validateMetadataProposals(response.value, document, cited),
+            usage: response.usage,
+            model: response.model,
+          };
+        } catch (error) {
+          // Rejected metadata still spent an actual model call.
+          throw Object.assign(
+            error instanceof Error
+              ? error
+              : new Error("metadata-proposal-invalid", { cause: error }),
+            {
+              output: { usage: response.usage, model: response.model },
+            },
+          );
+        }
       },
       signal,
     );

@@ -1,3 +1,4 @@
+import { longDocumentInfo } from "@sciretriever/contracts";
 import {
   parseArchiveTextBundleV2,
   parseDocumentStructureV2,
@@ -205,6 +206,13 @@ export function renderArrangement(
         schema_version: 2,
         text_encoding: "utf8",
         page_count: bundle.page_count,
+        ...(longDocumentInfo(bundle.arrangement.classification)
+          ? {
+              long_document: longDocumentInfo(
+                bundle.arrangement.classification,
+              ),
+            }
+          : {}),
         sections,
         segments,
         layout,

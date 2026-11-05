@@ -82,6 +82,26 @@ it("uses DSH over corrected front matter, keeps authority bibliography, applies 
       }),
     ).rejects.toThrow("metadata-revision-stale");
     expect(e.modelCalls - calls).toBe(1);
+    e.setModel(() => ({
+      proposals: [
+        {
+          field: "abstract",
+          value: "Invalid\u0000abstract",
+          fragment_ids: [fragment],
+        },
+      ],
+    }));
+    await expect(
+      e.app.archiveMetadata.build({
+        literature_id: e.rawParseRequest.literature_id,
+        document_version_id: doc.document_version_id,
+        annotation_id: annotation.annotation_id,
+        expected_revision: after.metadata_revision,
+      }),
+    ).rejects.toMatchObject({
+      output: { usage: { calls: 1, input_tokens: 100, output_tokens: 50 } },
+    });
+    expect(e.modelCalls - calls).toBe(2);
   } finally {
     await e.close();
   }

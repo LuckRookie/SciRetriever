@@ -29,6 +29,11 @@ export const CONTRACTS_VERSION = "v1" as const;
 export * from "./article-identity.js";
 export * from "./operations.js";
 export * from "./intake.js";
+export * from "./long-document.js";
+import {
+  parseLongDocumentInfo,
+  type LongDocumentInfo,
+} from "./long-document.js";
 import {
   parseArticleIdentityAssessment,
   type ArticleIdentityAssessment,
@@ -291,6 +296,7 @@ export interface LibrarySearchRequest {
   readonly cursor: string | null;
 }
 export interface LiteratureSearchItem {
+  readonly long_document?: LongDocumentInfo | null;
   readonly folder_ids?: readonly string[];
   readonly last_opened_at?: string | null;
   /** Earliest attached metadata observation, UTC; null when unavailable. */
@@ -528,6 +534,7 @@ export function parseLiteratureSearchItem(
   const r = exact(
     {
       tags: undefined,
+      long_document: null,
       intake_at: null,
       last_opened_at: null,
       folder_ids: [],
@@ -535,6 +542,7 @@ export function parseLiteratureSearchItem(
     },
     [
       "tags",
+      "long_document",
       "intake_at",
       "last_opened_at",
       "folder_ids",
@@ -554,6 +562,8 @@ export function parseLiteratureSearchItem(
   )
     fail(["intake_at"]);
   return Object.freeze({
+    long_document:
+      r.long_document === null ? null : parseLongDocumentInfo(r.long_document),
     intake_at: r.intake_at as string | null,
     last_opened_at:
       r.last_opened_at === null ? null : parseUtcTimestamp(r.last_opened_at),
@@ -3555,6 +3565,7 @@ export async function parseLiteratureDetail(
 ): Promise<LiteratureDetail> {
   const r = exact(
     {
+      long_document: null,
       intake_batches: [],
       tags: undefined,
       intake_at: null,
@@ -3564,6 +3575,7 @@ export async function parseLiteratureDetail(
     },
     [
       "intake_batches",
+      "long_document",
       "tags",
       "intake_at",
       "last_opened_at",
@@ -3591,6 +3603,7 @@ export async function parseLiteratureDetail(
     literature: r.literature,
     metadata_revision: r.metadata_revision,
     metadata_sha256: r.metadata_sha256,
+    long_document: r.long_document,
     missing_step: r.missing_step,
     needs_manual_pdf: r.needs_manual_pdf,
   });

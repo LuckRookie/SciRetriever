@@ -4,6 +4,7 @@ import {
   parseArrangementOperation,
   parseArrangementSubmission,
   parseArrangementSnapshot,
+  type ArchiveDocumentClassification,
   type ArrangementOperation,
   type ArrangementLeaf,
   type ArrangementSourceBlock,
@@ -68,6 +69,8 @@ export interface ArrangementReview {
   readonly candidates_sha256: string;
 }
 export interface ArrangementConstraints {
+  /** Optional on historical snapshots; retained across manual destination edits. */
+  readonly classification?: ArchiveDocumentClassification | undefined;
   /** Pages whose text layer is the stated basis of a page reassignment (ADR 0048 §2). */
   readonly evidence_pages?: ReadonlySet<number>;
   /** For host-held draft batches; final review and acceptance always require coverage. */
@@ -365,6 +368,9 @@ export function acceptArrangement(
   if (issues.length) throw new ArchiveTextError("arrangement-invalid", issues);
   const body = {
     schema_version: 1 as const,
+    ...(constraints.classification
+      ? { classification: constraints.classification }
+      : {}),
     source_input_sha256: source.input_sha256,
     method_sha256: methodHash,
     leaves: review.leaves,
@@ -425,7 +431,11 @@ export function verifyArrangement(
         break_decisions: old.break_decisions,
       },
       methodHash,
-      { ...constraints, manual_revision: old.manual_revision },
+      {
+        ...constraints,
+        classification: old.classification,
+        manual_revision: old.manual_revision,
+      },
     );
   if (textHash(old) !== textHash(fresh))
     throw new ArchiveTextError("source-integrity");

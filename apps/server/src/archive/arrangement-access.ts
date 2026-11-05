@@ -1,6 +1,7 @@
 import { SqliteRawParseStorage } from "../storage/raw-parsing.js";
 import { randomUUID } from "node:crypto";
 import {
+  longDocumentInfo,
   annotationRecord,
   annotationInteger,
   parseAssetId,
@@ -309,15 +310,16 @@ export class ArchiveArrangementAccess {
           );
         }),
         // ADR 0047 pages carry review notes and no suspects; older pages recompute theirs.
-        suspects = page.review
-          ? []
-          : pageReviewSuspects(
-              source.pages[page.page_index]!,
-              retained,
-              deleted,
-              page.page_input_sha256,
-              applied.texts,
-            );
+        suspects =
+          page.review || page.status === "unreviewed"
+            ? []
+            : pageReviewSuspects(
+                source.pages[page.page_index]!,
+                retained,
+                deleted,
+                page.page_input_sha256,
+                applied.texts,
+              );
       pages.push({
         ...page,
         corrections,
@@ -437,7 +439,7 @@ export class ArchiveArrangementAccess {
           }>("state", binding.document_version_id, signal)
         : null;
       const pending = version.pages.filter(
-        (p) => !["accepted", "not-required"].includes(p.status),
+        (p) => !["accepted", "not-required", "unreviewed"].includes(p.status),
       );
       const statuses = [];
       for (const p of version.pages.slice(0, 200)) {
@@ -452,6 +454,7 @@ export class ArchiveArrangementAccess {
       }
       return {
         ...header,
+        long_document: longDocumentInfo(snapshot?.classification),
         default_annotation_id: annotation?.current?.annotation_id ?? null,
         editable:
           inputCurrent &&
@@ -772,6 +775,7 @@ export class ArchiveArrangementAccess {
       snapshot.method_sha256,
       {
         evidence_pages: viewed,
+        classification: snapshot.classification,
         manual_revision: state.manual_revision + 1,
         locked_decisions: locks,
       },
@@ -786,7 +790,9 @@ export class ArchiveArrangementAccess {
           : p;
       }),
       pendingIndexes = pages
-        .filter((p) => !["accepted", "not-required"].includes(p.status))
+        .filter(
+          (p) => !["accepted", "not-required", "unreviewed"].includes(p.status),
+        )
         .map((p) => p.page_index);
     const replaced = new Set(manualItems.map((i) => i.scope_key)),
       prior = state.decisions

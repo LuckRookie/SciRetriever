@@ -1,4 +1,5 @@
 import {
+  longDocumentInfo,
   canonicalJsonBytes,
   parseArtifactRef,
   parseArchiveTextBundleV2,
@@ -29,7 +30,9 @@ function verifyText(version: ProofreadVersionV2, bundle: ArchiveTextBundleV2) {
   };
   if (
     bundle.page_count !== version.pages.length ||
-    (bundle.arrangement?.arrangement_id ?? null) !== version.arrangement_id
+    (bundle.arrangement?.arrangement_id ?? null) !== version.arrangement_id ||
+    (version.pages.some((p) => p.status === "unreviewed") &&
+      !longDocumentInfo(bundle.arrangement?.classification))
   )
     refuse();
   for (const root of bundle.source_blocks)

@@ -1,5 +1,6 @@
 import {
   parsePageProofreadRecord,
+  longDocumentInfo,
   type ArrangementSnapshot,
   type ArrangementLeaf,
   type ArchiveTextStop,
@@ -188,6 +189,7 @@ export class ArchivePageProofreadService {
       counts: NonNullable<ArchiveStepReceipt["pages"]>,
     ) => Promise<void>,
     preservedPages: ReadonlyMap<number, PageProofreadRecord> = new Map(),
+    skipReview = false,
   ): Promise<PageProofreadResult> {
     const snapshot = verifyArrangement(source, value, value.method_sha256);
     if (
@@ -228,6 +230,9 @@ export class ArchivePageProofreadService {
         );
         const accepted = finished.filter((p) => p.status === "accepted").length;
         const failed = finished.filter((p) => p.status === "failed").length;
+        const unreviewed = finished.filter(
+          (p) => p.status === "unreviewed",
+        ).length;
         await onPage?.(record, wasReused, sumArchiveUsage(attempts), {
           required,
           accepted,
@@ -235,7 +240,8 @@ export class ArchivePageProofreadService {
           reused: finished.filter(
             (p) => p.status === "accepted" && reused.includes(p.page_index),
           ).length,
-          pending: required - accepted - failed,
+          ...(unreviewed ? { unreviewed } : {}),
+          pending: required - accepted - failed - unreviewed,
         });
       });
       publication = work.catch(() => {});
@@ -445,6 +451,43 @@ export class ArchivePageProofreadService {
         reused.push(page.page);
         await reportPage(records.at(-1)!, true);
         return records.at(-1)!;
+      }
+      if (skipReview) {
+        if (!longDocumentInfo(snapshot.classification))
+          throw new ArchiveTextError("source-integrity");
+        const corrections = applyLeafCorrections(
+          retained,
+          manualOperations,
+          page.page,
+          key,
+        ).records.map(withManual);
+        const record = parsePageProofreadRecord(
+          {
+            schema_version: 2,
+            page_index: page.page,
+            page_kind: page.kind,
+            page_input_sha256: key,
+            retained_leaf_ids: retained.map((l) => l.leaf_id),
+            evidence: {
+              read_leaf_ids: [],
+              viewed_full_page: false,
+              viewed_regions: [],
+            },
+            suspects: [],
+            dispositions: [],
+            corrections,
+            usage: emptyArchiveUsage(),
+            status: "unreviewed",
+            unreviewed_reason: "long-document",
+            no_change: corrections.length === 0,
+            not_required_reason: null,
+            classified_leaf_ids: deleted.map((l) => l.leaf_id),
+            stop: null,
+          },
+          source.raw.page_count,
+        );
+        await reportPage(record, false);
+        return record;
       }
       const plan = pageReviewPlan(page, retained),
         leafNames = new PageHandles("b");
@@ -752,8 +795,8 @@ export class ArchivePageProofreadService {
       return {
         complete:
           records.length === pages.length &&
-          records.every(
-            (r) => r.status === "accepted" || r.status === "not-required",
+          records.every((r) =>
+            ["accepted", "not-required", "unreviewed"].includes(r.status),
           ),
         pages: records,
         issues,

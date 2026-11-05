@@ -782,6 +782,7 @@ function searchItem(id: Dynamic, literature: Dynamic = undefined): Dynamic {
     tags: libraryTagBadges([id]).get(id) ?? [],
     intake_at: libraryPageModule.intakeAt(db, id),
     ...folderModule.libraryMembership(db, id),
+    long_document: state.long_document ?? null,
     missing_step: state.missing_step,
     needs_manual_pdf: state.status === "UNREVIEWED" && exhausted,
   };
@@ -1059,6 +1060,10 @@ function librarySnapshot(
       const tagBadges = libraryTagBadges(
         rows.map((row: Dynamic) => String(row.literature_id)),
       );
+      const longDocuments = archiveModule.archiveLongDocuments(
+        db,
+        rows.map((row: Dynamic) => String(row.literature_id)),
+      );
       result = rows.map((row: Dynamic) => {
         const loaded = literatureById.get(row.literature_id);
         const metadata = metadataById.get(row.literature_id);
@@ -1073,6 +1078,7 @@ function librarySnapshot(
             tags: tagBadges.get(String(row.literature_id)) ?? [],
             intake_at: libraryPageModule.intakeAt(db, row.literature_id),
             ...folderModule.libraryMembership(db, row.literature_id),
+            long_document: longDocuments.get(String(row.literature_id)) ?? null,
             missing_step: __state.missing_step,
             needs_manual_pdf: __state.status === "UNREVIEWED" && hasExhaustion,
           },

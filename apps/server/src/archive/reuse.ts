@@ -64,7 +64,8 @@ export class ArchiveReusePreview {
       total_pdf_pages: source?.page_count ?? null,
       expected_proofread_pages: accepted
         ? output.version.pages.filter(
-            (p) => !["accepted", "not-required"].includes(p.status),
+            (p) =>
+              !["accepted", "not-required", "unreviewed"].includes(p.status),
           ).length
         : (source?.page_count ?? null),
       page_basis: accepted

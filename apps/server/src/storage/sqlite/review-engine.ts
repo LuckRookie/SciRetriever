@@ -620,6 +620,13 @@ function taskRun(db: DatabaseSync, r: Record<string, unknown>) {
                 ...s,
                 pages: Array.isArray(pages)
                   ? {
+                      ...(pages.some((p) => p.status === "unreviewed")
+                        ? {
+                            unreviewed: pages.filter(
+                              (p) => p.status === "unreviewed",
+                            ).length,
+                          }
+                        : {}),
                       required: pages.filter((p) => p.status !== "not-required")
                         .length,
                       accepted: pages.filter((p) => p.status === "accepted")

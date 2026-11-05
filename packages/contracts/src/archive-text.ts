@@ -1,4 +1,8 @@
 import {
+  parseArchiveDocumentClassification,
+  type ArchiveDocumentClassification,
+} from "./long-document.js";
+import {
   ContractValidationError,
   parseAssetId,
   parsePageRegion,
@@ -163,6 +167,7 @@ export interface ArrangementSubmission {
   readonly break_decisions: readonly ParagraphBreakDecision[];
 }
 export interface ArrangementSnapshot {
+  readonly classification?: ArchiveDocumentClassification;
   readonly schema_version: 1;
   readonly arrangement_id: string;
   readonly source_input_sha256: string;
@@ -305,7 +310,13 @@ export interface PageProofreadRecord {
   readonly dispositions: readonly SuspectDisposition[];
   readonly corrections: readonly CorrectRecord[];
   readonly usage: ArchiveModelUsage;
-  readonly status: "accepted" | "not-required" | "pending" | "failed";
+  readonly status:
+    | "accepted"
+    | "not-required"
+    | "unreviewed"
+    | "pending"
+    | "failed";
+  readonly unreviewed_reason?: "long-document";
   readonly no_change: boolean;
   readonly not_required_reason:
     | "blank"
@@ -705,19 +716,28 @@ export function parseArrangementSnapshot(
 ): ArrangementSnapshot {
   if (!Number.isSafeInteger(pageCount) || pageCount < 1 || pageCount > 10000)
     fail();
-  const r = record(v, [
-    "schema_version",
-    "arrangement_id",
-    "source_input_sha256",
-    "method_sha256",
-    "leaves",
-    "operations",
-    "destinations",
-    "break_candidates",
-    "break_decisions",
-    "manual_revision",
-  ]);
+  const r = record(
+    v,
+    [
+      "schema_version",
+      "arrangement_id",
+      "source_input_sha256",
+      "method_sha256",
+      "leaves",
+      "operations",
+      "destinations",
+      "break_candidates",
+      "break_decisions",
+      "manual_revision",
+    ],
+    ["classification"],
+  );
   if (r.schema_version !== 1) fail();
+  if (
+    r.classification !== undefined &&
+    parseArchiveDocumentClassification(r.classification).pages !== pageCount
+  )
+    fail();
   const leaves = list(r.leaves, (x) => parseArrangementLeaf(x, pageCount));
   const leafIds = new Set(leaves.map((x) => x.leaf_id));
   if (leafIds.size !== leaves.length) fail();
@@ -797,6 +817,11 @@ export function parseArrangementSnapshot(
     fail();
   return {
     schema_version: 1,
+    ...(r.classification === undefined
+      ? {}
+      : {
+          classification: parseArchiveDocumentClassification(r.classification),
+        }),
     arrangement_id: hash(r.arrangement_id),
     source_input_sha256: hash(r.source_input_sha256),
     method_sha256: hash(r.method_sha256),
@@ -1052,10 +1077,7 @@ export function parsePageProofreadRecord(
     "stop",
   ];
   // Records written before ADR 0047 have no review notes.
-  const r = record(
-    v,
-    v && typeof v === "object" && "review" in v ? [...keys, "review"] : keys,
-  );
+  const r = record(v, keys, ["review", "unreviewed_reason"]);
   const review =
     r.review === undefined ? undefined : parsePageReviewNotes(r.review);
   if (r.schema_version !== 2) fail();
@@ -1109,6 +1131,7 @@ export function parsePageProofreadRecord(
   const status = choice(r.status, [
       "accepted",
       "not-required",
+      "unreviewed",
       "pending",
       "failed",
     ] as const),
@@ -1128,6 +1151,16 @@ export function parsePageProofreadRecord(
     viewed_full_page: bool(e.viewed_full_page),
     viewed_regions: list(e.viewed_regions, parsePageRegion),
   };
+  const parsedUsage = parseArchiveModelUsage(r.usage);
+  if (
+    status === "unreviewed" &&
+    (parsedUsage.calls !== 0 ||
+      parsedUsage.compaction_calls !== 0 ||
+      parsedUsage.input_tokens !== 0 ||
+      parsedUsage.output_tokens !== 0 ||
+      !parsedUsage.usage_complete)
+  )
+    fail();
   const dispositions = list(r.dispositions, parseSuspectDisposition),
     classified_leaf_ids = ids(r.classified_leaf_ids);
   const retainedIds = new Set(retained_leaf_ids),
@@ -1151,6 +1184,9 @@ export function parsePageProofreadRecord(
     ) ||
     (status === "accepted" && dispositions.length !== suspects.length) ||
     (status !== "not-required" && not_required_reason !== null) ||
+    (status === "unreviewed"
+      ? r.unreviewed_reason !== "long-document"
+      : r.unreviewed_reason !== undefined) ||
     (stop !== null &&
       (stop.scope !== "page" ||
         stop.step !== "proofread" ||
@@ -1172,6 +1208,17 @@ export function parsePageProofreadRecord(
         suspects.length ||
         dispositions.length ||
         !no_change)) ||
+    (status === "unreviewed" &&
+      (stop !== null ||
+        !retained_leaf_ids.length ||
+        evidence.viewed_full_page ||
+        evidence.read_leaf_ids.length ||
+        evidence.viewed_regions.length ||
+        suspects.length ||
+        dispositions.length ||
+        corrections.some((c) => c.source !== "manual") ||
+        no_change !== (corrections.length === 0) ||
+        (review && (review.refused.length || review.uncertain.length)))) ||
     (["failed", "pending"].includes(status) && stop === null)
   )
     fail();
@@ -1198,8 +1245,11 @@ export function parsePageProofreadRecord(
     suspects,
     dispositions,
     corrections,
-    usage: parseArchiveModelUsage(r.usage),
+    usage: parsedUsage,
     status,
+    ...(status === "unreviewed"
+      ? { unreviewed_reason: "long-document" as const }
+      : {}),
     no_change,
     not_required_reason,
     classified_leaf_ids,

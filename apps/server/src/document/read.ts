@@ -499,6 +499,8 @@ export class DocumentReadService {
         section_count: structure.sections.length,
         segment_count: structure.segments.length,
         resource_count: document.resources.length,
+        long_document:
+          "long_document" in structure ? structure.long_document : null,
         ...("layout" in structure && structure.layout
           ? { layout: structure.layout }
           : {}),

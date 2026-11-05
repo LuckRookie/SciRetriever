@@ -40,6 +40,7 @@ export async function coreProcessingFixture(
     offline?: boolean;
     sourcePdf?: Uint8Array;
     pageCount?: number;
+    pageText?: (page: number, text: string) => string;
     pageMethod?: string;
     analysisModel?: boolean;
     textLayer?: (text: string) => string;
@@ -194,6 +195,7 @@ export async function coreProcessingFixture(
         },
         optionsInput.headerOnly,
         (optionsInput.pageCount ?? 1) > 1,
+        optionsInput.pageText,
       ),
     },
     agentTransportFactory: () => async (request) => {

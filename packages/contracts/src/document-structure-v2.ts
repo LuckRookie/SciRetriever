@@ -1,3 +1,7 @@
+import {
+  parseLongDocumentInfo,
+  type LongDocumentInfo,
+} from "./long-document.js";
 import { parseDocumentLayout, type DocumentLayout } from "./document-layout.js";
 import {
   ContractValidationError,
@@ -19,6 +23,7 @@ export const PROOFREAD_SEGMENT_KINDS = [
 export type ProofreadSegmentKind = (typeof PROOFREAD_SEGMENT_KINDS)[number];
 /** Stored page indices are zero based. Human-facing evidence readers display page + 1. */
 export interface DocumentStructureV2 {
+  readonly long_document?: LongDocumentInfo;
   readonly schema_version: 2;
   readonly text_encoding: "utf8";
   readonly page_count: number;
@@ -90,6 +95,9 @@ export function parseDocumentStructureV2(
     "page_count",
     "sections",
     "segments",
+    ...(value && typeof value === "object" && "long_document" in value
+      ? ["long_document"]
+      : []),
     ...(value && typeof value === "object" && "layout" in value
       ? ["layout"]
       : []),
@@ -105,6 +113,11 @@ export function parseDocumentStructureV2(
     fail();
   integer(markdownBytes, 1, 8 * 1024 * 1024);
   const pages = integer(r.page_count, 1, 10000);
+  if (
+    r.long_document !== undefined &&
+    parseLongDocumentInfo(r.long_document).pages !== pages
+  )
+    fail();
   const sections = r.sections.map(
     (value): DocumentStructureV2["sections"][number] => {
       const s = object(value, [
@@ -246,6 +259,9 @@ export function parseDocumentStructureV2(
     }
   }
   return {
+    ...(r.long_document === undefined
+      ? {}
+      : { long_document: parseLongDocumentInfo(r.long_document) }),
     schema_version: 2,
     text_encoding: "utf8",
     page_count: pages,

@@ -15,6 +15,7 @@ export function rawParserFixture(
   parser: ParserBackend,
   headerOnly = false,
   repeatPages = false,
+  pageText?: (page: number, text: string) => string,
 ): RawParserBackend {
   const identity = async (profile: RawParseProfile) => ({
     parser_version: "fixture-raw-1",
@@ -40,17 +41,19 @@ export function rawParserFixture(
         blocks: Array.from(
           { length: repeatPages ? output.page_count : 1 },
           (_, page) =>
-            markdownDraft(text).map((block, index) => ({
-              page,
-              index,
-              type: headerOnly ? "header" : block.type,
-              title_level: block.title_level,
-              text: block.text,
-              html: block.html,
-              image_ref: block.image_ref,
-              bbox: [0, 0, 1000, 1000],
-              source_type: "fixture",
-            })),
+            markdownDraft(pageText?.(page, text) ?? text).map(
+              (block, index) => ({
+                page,
+                index,
+                type: headerOnly ? "header" : block.type,
+                title_level: block.title_level,
+                text: block.text,
+                html: block.html,
+                image_ref: block.image_ref,
+                bbox: [0, 0, 1000, 1000],
+                source_type: "fixture",
+              }),
+            ),
         ).flat(),
       });
       const privateBytes = Buffer.from("[]");

@@ -330,7 +330,7 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 
 ### 6.2 整理与叶块
 
-按 [ADR 0041](../decisions/0041-arrange-then-per-page-proofread.md)，每个部分先整理，再对保留内容逐页校订；整理按 [ADR 0048](../decisions/0048-single-pass-arrangement.md) 每部分一次整理请求、按需一次断段请求，校订按 [ADR 0047](../decisions/0047-single-pass-page-proofread.md) 每页一次请求、由程序防护把关。整理与校订都使用现有 `proofreading` 模型角色，不增加角色配置。
+按 [ADR 0041](../decisions/0041-arrange-then-per-page-proofread.md)，每个部分先整理，再对保留内容逐页校订；普通文献的整理按 [ADR 0048](../decisions/0048-single-pass-arrangement.md) 每部分一次整理请求、按需一次断段请求，校订按 [ADR 0047](../decisions/0047-single-pass-page-proofread.md) 每页一次请求、由程序防护把关。长文档按 [ADR 0055](../decisions/0055-long-document-simplified-archive.md) 使用下面的分段与简化规则。整理与校订都使用现有 `proofreading` 模型角色，不增加角色配置。
 
 **来源和坐标**：
 
@@ -382,13 +382,15 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 - **断段请求**：展开通过后，只对尚待模型裁决的断段候选再发一次请求，每条给出左块结尾与右块开头各 120 code points（不超过 200 的块给全文）、前块是否以连字符结尾、中间跨过的元素类型；强制以 `submit_breaks` 作答。相连的 merge 接成一条合并操作。没有候选时不发这次请求。提示词以 `BREAK_SYSTEM` 为准。
 - **人工锁定**：锁定叶块的去向按人工决定，所在原块沿用人工版本的拆分；带人工文字修正的叶块若被模型删除，恢复为人工版本的去向。
 - **退回与重发**：回答无法展开（编号不认识、范围重叠或漏块）或校验不通过时，问题以短编号退回同一请求，模型只能修正一次；再被拒，本部分整理停为 `model-failed`，`cause_code` 为 `arrangement-invalid`。请求没有得到回答（网络、服务或格式问题）时自动重发一次。
-- **大小上限**：整理请求的输入 JSON 超过 384 KiB 时不发请求，停为 `request-too-large`；分段整理验证前，超长部分按此停下（ADR 0048 第 5 节）。
+- **判定与大小上限**：规则预处理后，计算未分段整理输入 JSON 的 UTF-8 字节数；PDF 页数超过 50 或该字节数超过 384 KiB（`ARRANGE_INPUT_MAX_BYTES`）即为长文档，等于阈值不触发。新快照的可选 `classification={pages,arrange_input_bytes,reasons}` 保存本次判定，原因按 pages、arrange-input 顺序列出，普通文献为空数组；旧快照缺字段照旧读取。重新整理重新判定。
+- **长文档分段**：按完整 PDF 页、来源顺序贪心装入请求，每个请求连同 `previous_section` 外壳均不超过同一字节上限，依次调用；前段末尾保留块的角色及附加章节原标题身份由宿主交接。后段起始若延续 additional 且没有新标题，宿主沿用该附加章节的标题叶块，不能凭空生成标题。程序删除、人工锁、预拆和页归属规则照常，全部段合并后重验完整覆盖与零改字。单页本身超过请求上限时仍返回 request-too-large，不截断正文或擅自拆页。整理回执 stats.segment_count 记录段数。
+- **长文档断段**：在合并后的完整整理上生成全部候选，保留跨段候选；待裁决请求按序、按实际输入 JSON 字节数分批，每批受同一上限约束，保留所有已接纳批次的决定，最后全局接纳。
 - 整理检查点为 `arrangement-checkpoint-v2`，保存快照、用量、文字层证据页与 `caption_fixes`；命中时重验快照并按证据页重验页归属。
 
 ### 6.3 逐页校订与复用
 
 - PDF 页分类继续按可见字形区分 `text-layer`、`image-only`、`blank`；隐藏 OCR 不进入参照文字，页面原图始终是最终依据。
-- 每个有保留叶块的页发**一次**请求（`page-review-guards-v1`）：整页原图、本页保留叶块（按阅读顺序编为 `b1`、`b2`…，带类型与原文）、程序算出的差异、图内文字叶块清单；人工锁定的叶块单列并注明不改。请求不含邻页、已删除叶块或整理历史，并强制以 `submit_corrections` 作答：改字列表（叶块、原文片段、改成什么、一行理由）与拿不准的地方（叶块、文字、理由）。宿主收到后把短编号换回真实 ID。
+- 普通文献每个有保留叶块的页发**一次**请求（`page-review-guards-v1`）：整页原图、本页保留叶块（按阅读顺序编为 `b1`、`b2`…，带类型与原文）、程序算出的差异、图内文字叶块清单；人工锁定的叶块单列并注明不改。请求不含邻页、已删除叶块或整理历史，并强制以 `submit_corrections` 作答：改字列表（叶块、原文片段、改成什么、一行理由）与拿不准的地方（叶块、文字、理由）。宿主收到后把短编号换回真实 ID。
 - 页请求按配置的并发数运行，默认与范围见[配置手册](../../guides/configuration.md#整理校订模型与停止保护)。完成次序不影响最终页码顺序；进度提交串行执行，required/accepted/reused/pending/failed 始终按已接纳状态计数。PDF 渲染保留内部队列，缓存及 SQLite 写入沿用共享 admission，接受后的缓存写入不因随后取消而丢失。
 - **差异**：逐叶块把解析文字与本页文字层对齐（Ratcliff/Obershelp 序列匹配）。对齐前先去掉记号差异：NFKC、文字层的断行连字符、LaTeX 命令与 `$…$` 内的空白和上下标标记、连接号与弯引号。一个叶块的词在文字层中匹配不到 30% 时视为图内文字，单列为图内文字叶块；其余叶块匹配率合计不低于 90% 的 `text-layer` 页为可信页，发送逐处差异，否则不发差异，请模型对照原图校整页。只是分词不同的地方不算差异。
 - **提示规则**以 `apps/server/src/proofread/page-review.ts` 的 `PAGE_REVIEW_SYSTEM` 为准，要点：照印刷原样转录，作者原文不改；不删内容，可疑的放进拿不准；不转写结构式中的原子与基团标签；破折号和引号按印刷，印刷是连字符的不改；印刷分开而解析粘在一起的单位拆开；图或反应式里的文字不进图注、表格和正文。
@@ -407,12 +409,13 @@ asset ID/hash、DocumentVersion/representation hash、metadata revision/hash；�
 - 页记录的 `review` 保存被拒的改字（叶块、原文、改成、规则、理由）与拿不准的地方；`suspects`、`dispositions` 为空；证据记录请求携带的全部保留叶块与整页图。`review` 只供诊断与人工查看，不进入阅读视图，也不形成可信度。ADR 0047 之前的页记录没有 `review`，照旧读取；人工改这类页时仍按旧规则重算疑点。
 - 一页请求因网络、服务或格式问题失败时，自动重发该页一次；仍失败时该页为 failed，可以只重试该页。页面图渲染失败时不发请求，记 `page-tools-unavailable`。
 - 没有保留叶块的页返回 not-required，不调用模型。PDF 有可见内容而没有任何叶块时，同时产生不阻断就绪的 `page-content-missing` 问题和页码，供后续“需处理”投影与重新解析；不虚构正文叶块。
-- 显式 retry_page_indexes 只重试所选页；未选的未完成页保留原记录，本次不计执行或模型消耗，整篇仍须所有必需页完成。所选重试对应的方法已变时返回 input-stale，应重新检查完整页输入，不能沿用旧方法的局部提交。
+- 长文档默认不调用页模型或页面图工具，保留叶块的解析文字直接发布，人工文字锁仍有效。有保留叶块的页记 status=unreviewed、unreviewed_reason=long-document；无伪造阅读证据、无模型改字，用量为零。这是简化流程已完成，允许 complete；无保留叶块继续 not-required。required 仍计有保留叶块的页，新增可选 unreviewed 计数，pending 不包括这些页，accepted 只计实际校订通过。unreviewed 不写入成功页缓存；已有 accepted 页及人工决定照常复用。
+- 显式 retry_page_indexes 只重试所选页；未选页（含 unreviewed 与未完成页）保留原记录，本次不计执行或模型消耗；所选长文档页按正常页校订规则运行，成功后改为 accepted。整篇仍须所有必需页完成或按简化流程免校订。所选重试对应的方法已变时返回 input-stale，应重新检查完整页输入，不能沿用旧方法的局部提交。
 - `page_input_sha256` 绑定 PDF/raw 身份、本页分类与文字层、保留及已删除叶块、改字方法、校订方法与提示词 hash、页面工具方法和有效模型设置，不绑定全篇 arrangement ID。重新整理后，只重校页输入变化的页。成功页记录按键保存，命中时重验来源与改字映射；失败页不作为成功缓存。返回历史页用量与本次新消耗时分别计量，复用页本次消耗为 0。
 
 ### 6.4 停止保护与受控上下文
 
-整理和逐页校订服务不设每篇调用次数或 token 上限。保护规则版本为 `validation3-progress8-v1`。整理每部分两次请求、各只有一个工具，被拒的回答只能修正一次（6.2 节）；校订每页一次请求、一个工具。实际起作用的是“同一校验问题连续 3 次”与限流规则；下面关于无进展、读取窗口与压缩的规则保留在共用会话里，现在不会被整理或校订触发：
+整理和逐页校订服务不设每篇调用次数或 token 上限。保护规则版本为 `validation3-progress8-v1`。普通整理每部分至多两次请求，长文档按各整理段和断段批分别请求，各只有一个工具，被拒的回答只能修正一次（6.2 节）；校订每页一次请求、一个工具。实际起作用的是“同一校验问题连续 3 次”与限流规则；下面关于无进展、读取窗口与压缩的规则保留在共用会话里，现在不会被整理或校订触发：
 
 - 同一校验问题集连续 **3 次**返回，停止该部分整理或该页校订；中间有一次被接受的工具调用就重新计数。问题集按稳定 code 与 ID 排序去重后计算 fingerprint，错误措辞不参与；批量提交中格式不合法的项，以“字段名[序号].字段”作为 ID，告诉模型具体要改哪一项。停下记录 fingerprint、issue_codes、实际次数与阈值。
 - 连续 **8 次实际派发的模型调用**没有新进展，停止该会话。新进展是读到新的源字符、页面或参照窗口，或提交新的合法语义操作/疑点处置；重复读取、去掉再放回同一操作或只改理由措辞不计。压缩调用也如实计入实际调用。压缩后模型需要重读草案才能接着做：上次压缩以来有过新进展时，压缩后重新计数；没有进展的压缩不重新计数，避免空转循环。
@@ -433,9 +436,11 @@ render 从保留叶块及已记录 correct 确定性生成普通 Markdown、Docu
 
 `DocumentStructureV2.layout`（可选 schema 1）保存 article_info 字节区间、figure_groups（figure/scheme/table 的对象及图注区间、segment ID、0 起始 row/column 和每行数量 rows）以及 footnotes（每条脚注区间、segment ID、0 起始 page_index）。区间均为固定校订稿 UTF-8 半开区间。文档 describe 原样返回可选 layout；outline 继续分页返回 title（string|null）、role、level 与起止字节。HTTP、CLI 与 MCP 共用同一读取合同，历史无 layout 的结果照旧读取。
 
-结构注释采用独立 schema 2，直接从整理归属和图注挂接派生，role_source 为 arrangement 或 manual，不再调用章节分类模型。11 个新骨架角色与历史角色分别解码，不作名称映射。`body_content_leaf_ids` 记录真正具有保留正文 payload 的正文类叶块；纯标题不满足 READY。正文类角色恰为 introduction、methods、results-discussion、conclusion、additional。主文仍需完整校订、当前默认文档、派生注释、必需元数据与标签；补充材料和参考文献缺口不独自阻断主文。没有叶块的页所产生的 page-content-missing 是非阻断问题。
+结构注释采用独立 schema 2，直接从整理归属和图注挂接派生，role_source 为 arrangement 或 manual，不再调用章节分类模型。11 个新骨架角色与历史角色分别解码，不作名称映射。`body_content_leaf_ids` 记录真正具有保留正文 payload 的正文类叶块；纯标题不满足 READY。正文类角色恰为 introduction、methods、results-discussion、conclusion、additional。主文仍需校订流程 complete（包括长文档的 unreviewed 页）、当前默认文档、派生注释、必需元数据与标签；补充材料和参考文献缺口不独自阻断主文。没有叶块的页所产生的 page-content-missing 是非阻断问题。
 
-元数据按 [ADR 0045](../decisions/0045-archive-metadata-reads-whole-paper.md) 读取校订稿的全部保留片段，以及全部删除叶块的原始文字，删除叶块的角色写作 `dropped:<理由>`。后者带 raw parse、整理、源 span 和删除理由的专门证据，不冒充文档 segment。模型引用 `f1`、`f2` 等本次输入内的短编号，宿主按编号保存真实证据；输入上限为 4096 个片段、1 MiB。参考文献、标签、检索和算子使用固定文档的保留内容。内容版本仍为 hash(文档版本, 结构注释)，变更经现有事务内事件使下游结果过时，不隐式重算。
+普通文献的元数据按 [ADR 0045](../decisions/0045-archive-metadata-reads-whole-paper.md) 读取校订稿的全部保留片段，以及全部删除叶块的原始文字；长文档只读取前 20 页与最后 5 页的并集，保留片段及删除叶块都按各自实际责任页过滤（跨页合并段的叶块片段仍各有页码），删除叶块的角色写作 `dropped:<理由>`。后者带 raw parse、整理、源 span 和删除理由的专门证据，不冒充文档 segment。模型引用 `f1`、`f2` 等本次输入内的短编号，宿主按编号保存真实证据；输入上限为 4096 个片段、1 MiB。参考文献、标签、检索和算子使用固定文档的保留内容。内容版本仍为 hash(文档版本, 结构注释)，变更经现有事务内事件使下游结果过时，不隐式重算。
+
+机器读取的 `long_document` 为非空 reasons 的判定对象，普通与历史未标记结果为 null。archive status 顶层及文献库条目表示主 PDF，parts[] 分别表示各部分；来源为当前资产整理步骤的非秘密 JSON 回执，列表按本页 ID 批量读取，不读正文。document describe 的标记属于指定不可变文档版本，来自结构 JSON 可选字段 long_document；只在长文档结构中写入，普通结构字节不变。archive-arrangement summary 也提供标记。HTTP、CLI、MCP 共享这些读取；Markdown 正文不加标记，骨架角色和下游选材不变。
 
 新旧校订稿发布都只等待全文索引刷新请求持久化，回执为 index_status=scheduled；不等待整库扫描，也不因索引失败撤销发布或阻断建档完成。排队、失败读取与显式重试见[检索技术篇](06-retrieval-context.md#49-材料-context-的实现边界)。索引状态与固定文档、注释和 READY 分开。
 

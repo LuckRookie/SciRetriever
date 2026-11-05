@@ -1,3 +1,7 @@
+import {
+  parseLongDocumentInfo,
+  type LongDocumentInfo,
+} from "./long-document.js";
 import { parseDocumentLayout, type DocumentLayout } from "./document-layout.js";
 import { parseSectionRole, type SectionRole } from "./section-roles.js";
 import type { SectionRoleSource } from "./structure-annotation.js";
@@ -631,6 +635,7 @@ export interface DocumentReadResultMap {
     readonly gap: "document-missing" | null;
   };
   describe: {
+    readonly long_document?: LongDocumentInfo | null;
     readonly document: DocumentReadingRef;
     readonly capabilities: DocumentReadCapabilities;
     readonly gaps: readonly DocumentReadGap[];
@@ -747,6 +752,9 @@ function parseResult<K extends DocumentReadOperation>(
         "section_count",
         "segment_count",
         "resource_count",
+        ...(value && typeof value === "object" && "long_document" in value
+          ? ["long_document"]
+          : []),
         ...(value && typeof value === "object" && "layout" in value
           ? ["layout"]
           : []),
@@ -760,6 +768,14 @@ function parseResult<K extends DocumentReadOperation>(
         section_count: nonnegative(r.section_count),
         segment_count: nonnegative(r.segment_count),
         resource_count: nonnegative(r.resource_count),
+        ...(r.long_document === undefined
+          ? {}
+          : {
+              long_document:
+                r.long_document === null
+                  ? null
+                  : parseLongDocumentInfo(r.long_document),
+            }),
         ...(r.layout === undefined
           ? {}
           : { layout: parseDocumentLayout(r.layout) }),

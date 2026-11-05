@@ -139,3 +139,27 @@ it("does not accept a DOI that is only a prefix of the cited identifier", () => 
     ]).candidates,
   ).toHaveLength(1);
 });
+
+it("accepts copied paragraph breaks in an abstract as one catalog scalar without relaxing other text validation", () => {
+  const value = {
+    proposals: [
+      {
+        field: "abstract",
+        value:
+          "First α paragraph.\n\nSecond paragraph with 42 units.\r\nThird.",
+        fragment_ids: ["p2"],
+      },
+    ],
+  };
+  const result = validateMetadataProposals(value, "fixed", fragments);
+  expect(result.candidates[0]!.value).toBe(
+    "First α paragraph. Second paragraph with 42 units. Third.",
+  );
+  expect(() =>
+    validateMetadataProposals(
+      { proposals: [{ ...value.proposals[0], value: "Invalid\u0000text" }] },
+      "fixed",
+      fragments,
+    ),
+  ).toThrow();
+});

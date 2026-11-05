@@ -148,7 +148,14 @@ export function validateMetadataProposals(
     try {
       metadata = parseLiteratureMetadata({
         ...EMPTY_METADATA,
-        [field]: p.value,
+        // Catalog scalar text is one line. A copied multi-paragraph abstract
+        // has presentation breaks, not different bibliographic content.
+        [field]:
+          field === "abstract" &&
+          typeof p.value === "string" &&
+          /[\r\n]/u.test(p.value)
+            ? p.value.replace(/[\r\n]+/gu, " ")
+            : p.value,
       });
     } catch (error) {
       if (field !== "identifiers") throw error;

@@ -1,9 +1,17 @@
 import {
+  boundedArrangementBatches,
+  arrangementPages,
+} from "./arrangement-batches.js";
+import {
   programChromeDrops,
   CHROME_RULE,
   articleInformationText,
 } from "./preprocess.js";
 import {
+  classifyArchiveDocument,
+  longDocumentInfo,
+  type ArchiveDocumentClassification,
+  type SectionTarget,
   ARCHIVE_SECTION_ROLES,
   parseArchiveModelUsage,
   type ArchiveModelUsage,
@@ -69,12 +77,15 @@ Skeleton roles: ${ARCHIVE_SECTION_ROLES.join(", ")}.
 - Some blocks arrive already split into parts named r5#1, r5#2, ...: treat each part as a block in headings, drops and captions; sections use block IDs.
 - splits: only when one block still holds text that must be dropped together with text that must be kept. cuts are Unicode code-point offsets into the block text; the parts are named r5#1, r5#2, ... Never split for any other reason.
 Page hints come from the parser and can be wrong; they never decide a role. Image and table blocks carry their region on the page (0-1000 coordinates, x0, y0, x1, y1): a small image in a page corner or margin (logo, badge, license or open-access icon) is decoration; figures, schemes, structures and the graphical abstract are content.`;
+const LONG_ARRANGEMENT_SYSTEM =
+  ARRANGEMENT_SYSTEM +
+  "\nThis is one whole-page batch of a long document. previous_section describes the preceding batch's last retained block. Continue that role at the start when appropriate; for a continuing additional section set heading=null. Do not introduce another copy of its heading. Cover only the blocks in this request.";
 export const BREAK_SYSTEM = `You decide paragraph breaks in a scientific article. Each candidate is a place where a body paragraph may have been cut by a page or column end, or by a figure, scheme, table, caption, footnote or first-page article information placed in between (skipped).
 You see the end of the left block (left_tail; the whole block when left_is_whole) and the start of the right block (right_head), and the types of the elements in between (skipped).
 merge when the right side continues the same sentence or paragraph, also when it starts with a capital letter, a formula or a number that completes the left sentence. keep when the right side starts a new paragraph or when either side is not running text: a panel label, a legend entry, a symbol, a list item, a heading-like fragment. keep needs a short reason of one line.
 Answer with exactly one submit_breaks call that decides every candidate.`;
-/** A larger part stops as request-too-large until segmented arrangement is verified (ADR 0048 §5). */
-export const ARRANGE_INPUT_MAX_BYTES = 384 * 1024;
+/** The same bound applies to every page batch and break-decision request. */
+export { ARRANGE_INPUT_MAX_BYTES } from "@sciretriever/contracts";
 /** Code points of each side shown for a break; a shorter block is sent whole. */
 const BREAK_CONTEXT = 120,
   BREAK_WHOLE = 200;
@@ -269,80 +280,13 @@ export class ArchiveArrangementService {
     signal?: AbortSignal,
     seed?: ArrangementSnapshot,
     lockedTextSpans: readonly SourceSpan[] = [],
-  ): Promise<ArchiveTextSessionResult<ArrangementSnapshot>> {
-    signal?.throwIfAborted();
-    const method = textHash({
-      arrange: ARRANGEMENT_METHOD,
-      tools: ARRANGEMENT_TOOLS,
-      prompt: textHash([ARRANGEMENT_SYSTEM, BREAK_SYSTEM]),
-      breaks: PARAGRAPH_BREAK_RULE,
-      chrome: CHROME_RULE,
-      stop: ARCHIVE_TEXT_STOP_POLICY,
-      pages: this.pages.method,
-      model: archiveTextModelIdentity(this.runtime),
-    });
-    const key = textHash({
-      stage: "arrangement-checkpoint-v2",
-      manual: seed?.destinations.filter((d) => d.locked) ?? [],
-      manual_revision: seed?.manual_revision ?? 0,
-      locked_text_spans: lockedTextSpans,
-      source: source.input_sha256,
-      method,
-    });
-    const old = await this.cache.read(key, signal);
-    if (old) {
-      try {
-        if (old.media_type !== "application/json")
-          throw new ArchiveTextError("source-integrity");
-        const stored = toolRecord(
-          JSON.parse(
-            new TextDecoder("utf-8", { fatal: true }).decode(old.bytes),
-          ),
-          [
-            "schema_version",
-            "stage",
-            "source_input_sha256",
-            "method_sha256",
-            "snapshot",
-            "usage",
-            "evidence",
-          ],
-        );
-        if (
-          stored.schema_version !== 2 ||
-          stored.stage !== "arrange" ||
-          stored.source_input_sha256 !== source.input_sha256 ||
-          stored.method_sha256 !== method
-        )
-          throw new ArchiveTextError("source-integrity");
-        parseArchiveModelUsage(stored.usage);
-        const evidence = toolRecord(stored.evidence, [
-          "evidence_pages",
-          "caption_fixes",
-        ]);
-        if (
-          !Array.isArray(evidence.evidence_pages) ||
-          evidence.evidence_pages.some(
-            (p) =>
-              !Number.isSafeInteger(p) ||
-              p < 0 ||
-              p >= source.raw.page_count ||
-              source.pages[p as number]?.kind !== "text-layer",
-          ) ||
-          !Array.isArray(evidence.caption_fixes)
-        )
-          throw new ArchiveTextError("source-integrity");
-        return {
-          value: verifyArrangement(source, stored.snapshot, method, {
-            evidence_pages: new Set<number>(evidence.evidence_pages),
-          }),
-          usage: emptyArchiveUsage(),
-          stop: null,
-        };
-      } catch {
-        throw new ArchiveTextError("source-integrity");
-      }
+  ): Promise<
+    ArchiveTextSessionResult<ArrangementSnapshot> & {
+      classification: ArchiveDocumentClassification;
+      segment_count: number;
     }
+  > {
+    signal?.throwIfAborted();
     const locked = new Map(
         seed?.destinations
           .filter((d) => d.locked)
@@ -392,9 +336,6 @@ export class ArchiveArrangementService {
     const blockName = new Map(
       modelBlocks.map((b, i) => [b.root_block_id, `r${i + 1}`]),
     );
-    const byName = new Map(
-      modelBlocks.map((b) => [blockName.get(b.root_block_id)!, b]),
-    );
     const partsOf = (b: ArrangementSourceBlock, cuts: readonly number[]) => {
       const name = blockName.get(b.root_block_id)!,
         spans = arrangementLeafSpans(b, source.raw.result_sha256, cuts);
@@ -425,16 +366,118 @@ export class ArchiveArrangementService {
         })),
       ),
     };
-    if (Buffer.byteLength(JSON.stringify(initial)) > ARRANGE_INPUT_MAX_BYTES)
+    const classification = classifyArchiveDocument(
+      source.raw.page_count,
+      Buffer.byteLength(JSON.stringify(initial)),
+    );
+    const longDocument = longDocumentInfo(classification);
+    const method = textHash({
+      arrange: ARRANGEMENT_METHOD,
+      tools: ARRANGEMENT_TOOLS,
+      prompt: textHash([
+        longDocument ? LONG_ARRANGEMENT_SYSTEM : ARRANGEMENT_SYSTEM,
+        BREAK_SYSTEM,
+      ]),
+      breaks: PARAGRAPH_BREAK_RULE,
+      chrome: CHROME_RULE,
+      stop: ARCHIVE_TEXT_STOP_POLICY,
+      pages: this.pages.method,
+      model: archiveTextModelIdentity(this.runtime),
+    });
+    const key = textHash({
+      stage: "arrangement-checkpoint-v2",
+      manual: seed?.destinations.filter((d) => d.locked) ?? [],
+      manual_revision: seed?.manual_revision ?? 0,
+      locked_text_spans: lockedTextSpans,
+      source: source.input_sha256,
+      method,
+      ...(longDocument ? { long_document_policy: "simplified-v1" } : {}),
+    });
+    // Reserve the largest handoff envelope, so later section context cannot overflow a page batch.
+    const previousEnvelope = {
+      role: "results-discussion",
+      original_heading_leaf_id: "00000000-0000-0000-0000-000000000000",
+    };
+    let batches: readonly (readonly (typeof initial.blocks)[number][])[];
+    try {
+      batches = longDocument
+        ? boundedArrangementBatches(
+            arrangementPages(initial.blocks),
+            (blocks) => ({
+              ...initial,
+              blocks,
+              previous_section: previousEnvelope,
+            }),
+          )
+        : initial.blocks.length
+          ? [initial.blocks]
+          : [];
+    } catch (error) {
       return {
         value: null,
+        classification,
+        segment_count: 0,
         usage: emptyArchiveUsage(),
-        stop: stopFor(
-          new ArchiveTextError("request-too-large"),
-          "arrange",
-          null,
-        ),
+        stop: stopFor(error, "arrange", null),
       };
+    }
+    const segment_count = batches.length;
+    const old = await this.cache.read(key, signal);
+    if (old) {
+      try {
+        if (old.media_type !== "application/json")
+          throw new ArchiveTextError("source-integrity");
+        const stored = toolRecord(
+          JSON.parse(
+            new TextDecoder("utf-8", { fatal: true }).decode(old.bytes),
+          ),
+          [
+            "schema_version",
+            "stage",
+            "source_input_sha256",
+            "method_sha256",
+            "snapshot",
+            "usage",
+            "evidence",
+          ],
+        );
+        if (
+          stored.schema_version !== 2 ||
+          stored.stage !== "arrange" ||
+          stored.source_input_sha256 !== source.input_sha256 ||
+          stored.method_sha256 !== method
+        )
+          throw new ArchiveTextError("source-integrity");
+        parseArchiveModelUsage(stored.usage);
+        const evidence = toolRecord(stored.evidence, [
+          "evidence_pages",
+          "caption_fixes",
+        ]);
+        if (
+          !Array.isArray(evidence.evidence_pages) ||
+          evidence.evidence_pages.some(
+            (p) =>
+              !Number.isSafeInteger(p) ||
+              p < 0 ||
+              p >= source.raw.page_count ||
+              source.pages[p as number]?.kind !== "text-layer",
+          ) ||
+          !Array.isArray(evidence.caption_fixes)
+        )
+          throw new ArchiveTextError("source-integrity");
+        return {
+          value: verifyArrangement(source, stored.snapshot, method, {
+            evidence_pages: new Set<number>(evidence.evidence_pages),
+          }),
+          classification,
+          segment_count,
+          usage: emptyArchiveUsage(),
+          stop: null,
+        };
+      } catch {
+        throw new ArchiveTextError("source-integrity");
+      }
+    }
     const layers = source.pages.map((p) => {
       const counts = new Map<string, number>();
       if (p.kind === "text-layer")
@@ -452,9 +495,18 @@ export class ArchiveArrangementService {
       id:
         i.id === null ? null : (names.get(i.id) ?? blockName.get(i.id) ?? i.id),
     });
-    const expand = (args: Record<string, unknown>) => {
+    let previousSection: SectionTarget | null = null;
+    const expand = (
+      args: Record<string, unknown>,
+      windowBlocks = modelBlocks,
+      previousOps: ArrangementOperation[] = [],
+      priorCaptionFixes: readonly string[] = [],
+    ) => {
       evidencePages.clear();
-      captionFixes.length = 0;
+      previousOps
+        .filter((o) => o.kind === "assign-page")
+        .forEach((o) => evidencePages.add(o.page_index));
+      captionFixes.splice(0, captionFixes.length, ...priorCaptionFixes);
       const r = toolRecord(args, [
           "sections",
           "headings",
@@ -471,8 +523,13 @@ export class ArchiveArrangementService {
         splits: rows(r.splits, "splits", issues),
       };
       const cuts = new Map(fixedCuts);
+      for (const op of previousOps)
+        if (op.kind === "split") cuts.set(op.root_block_id, op.cuts);
+      const windowNames = new Map(
+        windowBlocks.map((b) => [blockName.get(b.root_block_id)!, b]),
+      );
       for (const s of a.splits) {
-        const b = byName.get(s.block);
+        const b = windowNames.get(s.block);
         if (!b || fixedCuts.has(b.root_block_id) || !Array.isArray(s.cuts))
           issues.push({ code: "split-invalid", id: s.block });
         else
@@ -481,19 +538,19 @@ export class ArchiveArrangementService {
             [...new Set(s.cuts)].sort((x, y) => x - y),
           );
       }
-      const parts = modelBlocks.flatMap((b) =>
+      const parts = windowBlocks.flatMap((b) =>
         partsOf(b, cuts.get(b.root_block_id) ?? []),
       );
       const part = new Map(parts.map((p) => [p.name, p])),
         names = new Map(parts.map((p) => [p.leaf_id, p.name])),
-        order = new Map([...byName.keys()].map((k, i) => [k, i]));
+        order = new Map([...windowNames.keys()].map((k, i) => [k, i]));
       const leafOf = (name: string, field: string) => {
         const p = part.get(name);
         if (!p) issues.push({ code: "unknown-block", id: `${field}:${name}` });
         return p;
       };
       const section = new Array<Answer["sections"][number] | null>(
-        modelBlocks.length,
+        windowBlocks.length,
       ).fill(null);
       for (const s of a.sections) {
         const i = order.get(String(s.first).split("#")[0]!),
@@ -504,29 +561,41 @@ export class ArchiveArrangementService {
         }
         for (let k = i; k <= j; k++) {
           if (section[k])
-            issues.push({ code: "section-overlap", id: `r${k + 1}` });
+            issues.push({
+              code: "section-overlap",
+              id: blockName.get(windowBlocks[k]!.root_block_id)!,
+            });
           section[k] = s;
         }
       }
       section.forEach((s, k) => {
-        if (!s) issues.push({ code: "block-without-section", id: `r${k + 1}` });
+        if (!s)
+          issues.push({
+            code: "block-without-section",
+            id: blockName.get(windowBlocks[k]!.root_block_id)!,
+          });
       });
       const headings = new Map(a.headings.map((h) => [h.block, h])),
         drops = new Map(a.drops.map((d) => [d.block, d.reason]));
       for (const name of [...headings.keys(), ...drops.keys()])
         leafOf(name, "headings/drops");
-      const next: ArrangementOperation[] = source.blocks.flatMap((b) => {
-        const rule = chrome.get(b.root_block_id);
-        return rule
-          ? arrangementLeafSpans(b, source.raw.result_sha256).map((p) => ({
-              kind: "drop" as const,
-              leaf_id: p.leaf_id,
-              ...rule,
-            }))
-          : [];
-      });
+      const next: ArrangementOperation[] = previousOps.length
+        ? [...previousOps]
+        : source.blocks.flatMap((b) => {
+            const rule = chrome.get(b.root_block_id);
+            return rule
+              ? arrangementLeafSpans(b, source.raw.result_sha256).map((p) => ({
+                  kind: "drop" as const,
+                  leaf_id: p.leaf_id,
+                  ...rule,
+                }))
+              : [];
+          });
       for (const [root, c] of cuts)
-        if (c.length)
+        if (
+          c.length &&
+          !next.some((o) => o.kind === "split" && o.root_block_id === root)
+        )
           next.push({ kind: "split", root_block_id: root, cuts: c });
       for (const p of parts) {
         const lock = locked.get(p.leaf_id);
@@ -554,7 +623,11 @@ export class ArchiveArrangementService {
         const heading =
           s.role === "additional" && s.heading
             ? (leafOf(s.heading, "sections.heading")?.leaf_id ?? null)
-            : null;
+            : s.role === "additional" &&
+                previousSection?.role === "additional" &&
+                s === section[0]
+              ? previousSection.original_heading_leaf_id
+              : null;
         next.push({
           kind: "assign",
           leaf_id: p.leaf_id,
@@ -655,6 +728,25 @@ export class ArchiveArrangementService {
       try {
         review = reviewArrangement(source, next, {
           ...constraints,
+          allow_incomplete: windowBlocks.length !== modelBlocks.length,
+          locked_destinations: new Map(
+            [...locked].filter(([id]) =>
+              next.some((o) => "leaf_id" in o && o.leaf_id === id),
+            ),
+          ),
+          locked_spans: lockedTextSpans.filter((span) =>
+            next.some(
+              (o) =>
+                o.kind === "assign" &&
+                arrangementLeafSpans(
+                  source.blocks.find(
+                    (b) => b.root_block_id === span.root_block_id,
+                  )!,
+                  source.raw.result_sha256,
+                  cuts.get(span.root_block_id) ?? [],
+                ).some((l) => l.leaf_id === o.leaf_id),
+            ),
+          ),
           evidence_pages: evidencePages,
         });
       } catch (error) {
@@ -676,6 +768,7 @@ export class ArchiveArrangementService {
       tool: typeof arrangementTool,
       input: unknown,
       accept: (args: Record<string, unknown>) => void,
+      batchIndex = 0,
     ): Promise<ArchiveTextStop | null> => {
       let stop: ArchiveTextStop | null = null;
       for (let attempt = 0; attempt < 2 && !signal?.aborted; attempt++) {
@@ -687,7 +780,11 @@ export class ArchiveArrangementService {
           {
             step: "arrange",
             page_index: null,
-            input_sha256: textHash({ key, request: name }),
+            input_sha256: textHash({
+              key,
+              request: name,
+              ...(batchIndex ? { batch: batchIndex } : {}),
+            }),
             progress,
             system,
             initial: input,
@@ -721,30 +818,60 @@ export class ArchiveArrangementService {
       return stop;
     };
     try {
-      const stop = modelBlocks.length
-        ? await ask(
-            "arrange",
-            ARRANGEMENT_SYSTEM,
-            arrangementTool,
-            initial,
-            expand,
-          )
-        : (expand({
-            sections: [],
-            headings: [],
-            drops: [],
-            captions: [],
-            splits: [],
-          }),
-          null);
+      let stop: ArchiveTextStop | null = null;
+      if (!batches.length)
+        expand({
+          sections: [],
+          headings: [],
+          drops: [],
+          captions: [],
+          splits: [],
+        });
+      for (const [batchIndex, blocks] of batches.entries()) {
+        const names = new Set(blocks.map((b) => b.id.split("#")[0]));
+        const windowBlocks = modelBlocks.filter((b) =>
+          names.has(blockName.get(b.root_block_id)!),
+        );
+        const previousOps = ops,
+          previousCaptionFixes = [...captionFixes];
+        const context =
+          previousSection === null
+            ? null
+            : {
+                role: previousSection.role,
+                original_heading_leaf_id:
+                  previousSection.role === "additional"
+                    ? previousSection.original_heading_leaf_id
+                    : null,
+              };
+        stop = await ask(
+          "arrange",
+          longDocument ? LONG_ARRANGEMENT_SYSTEM : ARRANGEMENT_SYSTEM,
+          arrangementTool,
+          longDocument
+            ? { ...initial, blocks, previous_section: context }
+            : initial,
+          (args) =>
+            expand(args, windowBlocks, previousOps, previousCaptionFixes),
+          batchIndex,
+        );
+        if (stop) break;
+        const last = [...ops].reverse().find((o) => o.kind === "assign");
+        if (last?.kind === "assign") previousSection = last.target;
+      }
       if (stop || !review)
         return {
           value: null,
+          classification,
+          segment_count,
           usage: sumArchiveUsage(usages),
           stop:
             stop ?? stopFor(new Error("arrangement missing"), "arrange", null),
         };
-      const reviewed: ArrangementReview = review;
+      const reviewed: ArrangementReview = reviewArrangement(source, ops, {
+        ...constraints,
+        evidence_pages: evidencePages,
+      });
       const text = new Map(
           reviewed.leaves.map((l) => [l.leaf_id, l.original_text]),
         ),
@@ -786,86 +913,99 @@ export class ArchiveArrangementService {
                 : chars.slice(0, BREAK_CONTEXT)
               ).join("");
         };
-        const stopBreaks = await ask(
-          "breaks",
-          BREAK_SYSTEM,
-          breakTool,
-          {
-            source_input_sha256: source.input_sha256,
-            candidates: pending.map(({ c, name }) => ({
-              candidate: name,
-              left_tail: side(c.left_leaf_id, true),
-              right_head: side(c.right_leaf_id, false),
-              left_is_whole:
-                [...(text.get(c.left_leaf_id) ?? "")].length <= BREAK_WHOLE,
-              left_ends_with_hyphen: c.left_ends_with_hyphen,
-              skipped: c.skipped_leaf_ids.map((x) => types.get(x)),
-            })),
-          },
-          (args) => {
-            const r = toolRecord(args, ["decisions"]),
-              issues: Issue[] = [],
-              given = rows<{
-                candidate: string;
-                decision: string;
-                reason: string;
-              }>(r.decisions, "decisions", issues),
-              by = new Map<string, { decision: string; reason: string }>();
-            for (const d of given) {
-              if (
-                by.has(d.candidate) ||
-                !pending.some((c) => c.name === d.candidate)
-              )
-                issues.push({
-                  code: "break-decision-invalid",
-                  id: String(d.candidate),
-                });
-              by.set(d.candidate, d);
-            }
-            const next = pending.map(({ c, name }) => {
-              const d = by.get(name);
-              if (!d) issues.push({ code: "break-decision-missing", id: name });
-              if (d?.decision === "merge")
+        const breakInput = (items: readonly (typeof pending)[number][]) => ({
+          source_input_sha256: source.input_sha256,
+          candidates: items.map(({ c, name }) => ({
+            candidate: name,
+            left_tail: side(c.left_leaf_id, true),
+            right_head: side(c.right_leaf_id, false),
+            left_is_whole:
+              [...(text.get(c.left_leaf_id) ?? "")].length <= BREAK_WHOLE,
+            left_ends_with_hyphen: c.left_ends_with_hyphen,
+            skipped: c.skipped_leaf_ids.map((x) => types.get(x)),
+          })),
+        });
+        const breakBatches = boundedArrangementBatches(
+          pending.map((c) => [c]),
+          breakInput,
+        );
+        for (const [batchIndex, batch] of breakBatches.entries()) {
+          const stopBreaks = await ask(
+            "breaks",
+            BREAK_SYSTEM,
+            breakTool,
+            breakInput(batch),
+            (args) => {
+              const r = toolRecord(args, ["decisions"]),
+                issues: Issue[] = [],
+                given = rows<{
+                  candidate: string;
+                  decision: string;
+                  reason: string;
+                }>(r.decisions, "decisions", issues),
+                by = new Map<string, { decision: string; reason: string }>();
+              for (const d of given) {
+                if (
+                  by.has(d.candidate) ||
+                  !batch.some((c) => c.name === d.candidate)
+                )
+                  issues.push({
+                    code: "break-decision-invalid",
+                    id: String(d.candidate),
+                  });
+                by.set(d.candidate, d);
+              }
+              const next = batch.map(({ c, name }) => {
+                const d = by.get(name);
+                if (!d)
+                  issues.push({ code: "break-decision-missing", id: name });
+                if (d?.decision === "merge")
+                  return {
+                    candidate_id: c.candidate_id,
+                    decision: "merge" as const,
+                  };
+                const reason = String(d?.reason ?? "")
+                  .split("\n")[0]!
+                  .trim();
+                if (d && !reason)
+                  issues.push({ code: "break-reason-missing", id: name });
                 return {
                   candidate_id: c.candidate_id,
-                  decision: "merge" as const,
+                  decision: "keep" as const,
+                  reason: [...reason].slice(0, 120).join(""),
                 };
-              const reason = String(d?.reason ?? "")
-                .split("\n")[0]!
-                .trim();
-              if (d && !reason)
-                issues.push({ code: "break-reason-missing", id: name });
-              return {
-                candidate_id: c.candidate_id,
-                decision: "keep" as const,
-                reason: [...reason].slice(0, 120).join(""),
-              };
-            });
-            if (issues.length) throw invalid(issues);
-            decisions = [
-              ...decisions.filter((d) =>
-                candidates.some(
-                  ({ c }) => c.automatic && c.candidate_id === d.candidate_id,
+              });
+              if (issues.length) throw invalid(issues);
+              decisions = [
+                ...decisions.filter(
+                  (d) =>
+                    !batch.some(({ c }) => c.candidate_id === d.candidate_id),
                 ),
-              ),
-              ...next,
-            ];
-            merged = new Set(
-              candidates
-                .filter(
-                  ({ c, name }) =>
-                    c.automatic || by.get(name)?.decision === "merge",
-                )
-                .map(({ name }) => name),
-            );
-          },
-        );
-        if (stopBreaks)
-          return {
-            value: null,
-            usage: sumArchiveUsage(usages),
-            stop: stopBreaks,
-          };
+                ...next,
+              ];
+              merged = new Set(
+                candidates
+                  .filter(({ c }) =>
+                    decisions.some(
+                      (d) =>
+                        d.candidate_id === c.candidate_id &&
+                        d.decision === "merge",
+                    ),
+                  )
+                  .map(({ name }) => name),
+              );
+            },
+            batchIndex,
+          );
+          if (stopBreaks)
+            return {
+              value: null,
+              classification,
+              segment_count,
+              usage: sumArchiveUsage(usages),
+              stop: stopBreaks,
+            };
+        }
       }
       // Adjacent merges a-b and b-c become one merge a-b-c.
       const chains: string[][] = [];
@@ -896,7 +1036,11 @@ export class ArchiveArrangementService {
           }),
         ),
       ];
-      const pageConstraints = { ...constraints, evidence_pages: evidencePages },
+      const pageConstraints = {
+          ...constraints,
+          classification,
+          evidence_pages: evidencePages,
+        },
         final = reviewArrangement(source, operations, pageConstraints);
       const value = acceptArrangement(
         source,
@@ -946,9 +1090,15 @@ export class ArchiveArrangementService {
             seed,
             lockedTextSpans,
           );
-          return { value: winner.value, usage, stop: null };
+          return {
+            value: winner.value,
+            classification,
+            segment_count,
+            usage,
+            stop: winner.stop,
+          };
         }
-      return { value, usage, stop: null };
+      return { value, classification, segment_count, usage, stop: null };
     } catch (failure) {
       throw archiveUsageFailure(failure, sumArchiveUsage(usages));
     }

@@ -1,4 +1,6 @@
 import {
+  longDocumentInfo,
+  LONG_DOCUMENT_MAX_PAGES,
   annotationRecord,
   parseSourceSpan,
   parseAssetId,
@@ -146,7 +148,9 @@ export async function archiveTextVersion(
       manual_decision_ids: [...manualIds].sort(),
       status:
         arrangement &&
-        pages.every((p) => ["accepted", "not-required"].includes(p.status))
+        pages.every((p) =>
+          ["accepted", "not-required", "unreviewed"].includes(p.status),
+        )
           ? ("complete" as const)
           : stop
             ? ("failed" as const)
@@ -334,13 +338,17 @@ export class ArchiveTextPipeline {
       old.bundle.arrangement &&
       old.version.draft_input.result_sha256 === source.raw.result_sha256 &&
       old.bundle.arrangement.source_input_sha256 === source.input_sha256 &&
-      textHash(old.version.method) === textHash(this.method())
+      textHash(old.version.method) === textHash(this.method()) &&
+      (source.raw.page_count <= LONG_DOCUMENT_MAX_PAGES ||
+        !!longDocumentInfo(old.bundle.arrangement.classification))
     )
       return {
         proofread_id: old.version.proofread_id,
         arrangement_id: old.version.arrangement_id,
         usage: emptyArchiveUsage(),
         reused: true,
+        long_document: longDocumentInfo(old.bundle.arrangement.classification),
+        classification: old.bundle.arrangement.classification ?? null,
       };
     const cache = new SqliteProofreadStorage(
         this.storage.database,
@@ -396,6 +404,8 @@ export class ArchiveTextPipeline {
             output: {
               proofread_id: output.version.proofread_id,
               usage: result.usage,
+              classification: result.classification,
+              long_document: longDocumentInfo(result.classification),
               stop: result.stop,
             },
           },
@@ -404,7 +414,10 @@ export class ArchiveTextPipeline {
         proofread_id: output.version.proofread_id,
         arrangement_id: result.value.arrangement_id,
         usage: result.usage,
+        classification: result.classification,
+        long_document: longDocumentInfo(result.classification),
         stats: {
+          segment_count: result.segment_count,
           dropped_count: result.value.destinations.filter(
             (d) => d.destination.kind === "dropped",
           ).length,
@@ -462,9 +475,11 @@ export class ArchiveTextPipeline {
           page_index: p.page_index,
           status: p.status,
           stop: p.stop,
-          reused: true,
+          reused: p.status === "accepted",
+          attempted: false,
         })),
         issues: [],
+        long_document: longDocumentInfo(old.bundle.arrangement.classification),
         stop: null,
       };
     const manualTexts = state.items.flatMap((value) => {
@@ -532,6 +547,7 @@ export class ArchiveTextPipeline {
                 .map((p) => [p.page_index, p]),
             )
           : undefined,
+        !!longDocumentInfo(old.bundle.arrangement.classification) && !retry,
       );
     try {
       const output = await archiveTextVersion(
@@ -556,13 +572,14 @@ export class ArchiveTextPipeline {
         proofread_id: output.version.proofread_id,
         arrangement_id: output.version.arrangement_id,
         usage: result.usage,
+        long_document: longDocumentInfo(old.bundle.arrangement.classification),
         pages: result.pages.map((p) => ({
           page_index: p.page_index,
           status: p.status,
           stop: p.stop,
           reused: result.reused_page_indexes.includes(p.page_index),
           attempted:
-            p.status !== "not-required" &&
+            !["not-required", "unreviewed"].includes(p.status) &&
             !result.reused_page_indexes.includes(p.page_index) &&
             !result.untouched_page_indexes.includes(p.page_index),
         })),
@@ -571,7 +588,7 @@ export class ArchiveTextPipeline {
         stats: {
           executed_pages: result.pages.filter(
             (p) =>
-              p.status !== "not-required" &&
+              !["not-required", "unreviewed"].includes(p.status) &&
               !result.reused_page_indexes.includes(p.page_index) &&
               !result.untouched_page_indexes.includes(p.page_index),
           ).length,
@@ -757,6 +774,9 @@ export class ArchiveTextPipeline {
         structure_satisfied: arrangedStructureSatisfied(
           annotation,
           output.bundle,
+        ),
+        long_document: longDocumentInfo(
+          output.bundle.arrangement?.classification,
         ),
         source_map: rendered.source_map.length,
         usage: emptyArchiveUsage(),

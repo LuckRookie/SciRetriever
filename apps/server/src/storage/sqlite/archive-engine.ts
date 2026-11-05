@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
+  parseLongDocumentInfo,
+  type LongDocumentInfo,
   canonicalJsonBytes,
   archivePageCursor,
   type ArchiveState,
@@ -106,7 +108,17 @@ export function archiveStates(
       stepRows = groupedSteps.get(key) ?? [];
     const main = material.find((p) => p.part === "main"),
       started = !!main && main.asset_id === m.run_asset;
+    const longDocument = (asset: unknown) => {
+      const step = stepRows.find(
+        (s) => s.asset_id === asset && s.step === "arrange",
+      );
+      const marker = step
+        ? JSON.parse(String(step.output_json)).long_document
+        : null;
+      return marker ? parseLongDocumentInfo(marker) : null;
+    };
     result.set(key, {
+      long_document: longDocument(main?.asset_id),
       literature_id: key,
       mode: m.mode === "legacy-vlm-markdown" ? m.mode : "full",
       started,
@@ -127,6 +139,7 @@ export function archiveStates(
       tag_count: Number(m.tag_count),
       description_version: version(m.description_json),
       parts: material.map((p) => ({
+        long_document: longDocument(p.asset_id),
         format: stepRows.some(
           (s) => s.asset_id === p.asset_id && s.step === "arrange",
         )
@@ -219,6 +232,24 @@ export function archiveStates(
     });
   }
   return result;
+}
+/** One bounded page projection; marker is produced by arrangement, never inferred from titles. */
+export function archiveLongDocuments(
+  db: DatabaseSync,
+  ids: readonly string[],
+): Map<string, LongDocumentInfo> {
+  const markers = new Map<string, LongDocumentInfo>();
+  if (!ids.length) return markers;
+  for (const row of rows(
+    db,
+    "SELECT p.literature_id,json_extract(s.output_json,'$.long_document') AS marker FROM archive_current_parts p JOIN archive_steps s ON s.literature_id=p.literature_id AND s.asset_id=p.asset_id AND s.step='arrange' WHERE p.part='main' AND p.literature_id IN (SELECT value FROM json_each(?)) AND json_type(s.output_json,'$.long_document')='object'",
+    JSON.stringify(ids),
+  ))
+    markers.set(
+      String(row.literature_id),
+      parseLongDocumentInfo(JSON.parse(String(row.marker))),
+    );
+  return markers;
 }
 export function archiveState(
   db: DatabaseSync,
@@ -551,6 +582,13 @@ export function runArchiveStorage(
           page_index: null,
           pages: Array.isArray(s.output.pages)
             ? {
+                ...(s.output.pages.some((p) => p.status === "unreviewed")
+                  ? {
+                      unreviewed: s.output.pages.filter(
+                        (p) => p.status === "unreviewed",
+                      ).length,
+                    }
+                  : {}),
                 required: s.output.pages.filter(
                   (p) => p.status !== "not-required",
                 ).length,
@@ -671,6 +709,12 @@ function projectArchiveReceipt(o: Record<string, unknown>) {
     },
     pages: pages
       ? {
+          ...(pages.some((p) => p.status === "unreviewed")
+            ? {
+                unreviewed: pages.filter((p) => p.status === "unreviewed")
+                  .length,
+              }
+            : {}),
           required: pages.filter((p) => p.status !== "not-required").length,
           accepted: pages.filter((p) => p.status === "accepted").length,
           reused: pages.filter((p) => p.reused).length,

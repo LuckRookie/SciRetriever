@@ -163,6 +163,7 @@ export interface ArchiveProgressV2 {
     | "completed";
   readonly page_index: number | null;
   readonly pages: {
+    readonly unreviewed?: number;
     readonly required: number;
     readonly accepted: number;
     readonly reused: number;
@@ -362,7 +363,9 @@ export async function parseProofreadVersionV2(
     (v.status === "complete" &&
       (!v.arrangement_id ||
         v.stop ||
-        pages.some((p) => !["accepted", "not-required"].includes(p.status))))
+        pages.some(
+          (p) => !["accepted", "not-required", "unreviewed"].includes(p.status),
+        )))
   )
     throw new ContractValidationError();
   const { proofread_id, content_sha256 } = v;
