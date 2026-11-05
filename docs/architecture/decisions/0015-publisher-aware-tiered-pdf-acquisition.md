@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：访问方感知的五层 PDF 获取与 Browser 调度
-状态：Accepted；public-web 只含显式启用 Sci-Hub 镜像的限定被 [ADR 0040](0040-sci-hub-enabled-by-default.md) 取代
+状态：Accepted；public-web 只含显式启用 Sci-Hub 镜像的限定被 [ADR 0040](0040-sci-hub-enabled-by-default.md) 取代；自动流程“首先使用当前机器正常网络出口”改为使用 Owner 为各发起方选择的出口，见 [ADR 0056](0056-outbound-proxy-by-requester.md)
 
 - Date: 2026-08-15
 - Last amended: 2026-10-13
