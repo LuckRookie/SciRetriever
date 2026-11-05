@@ -44,3 +44,4 @@ Owner 2026-11-05：“开始实施，同时修正旧文档错误”。
 - 2026-11-05：ADR 0056 Accepted（`989fc8b`）。01 派给 Codex：`sandbox/prompts/2026-11-05-plan18-01-network-egress.md`，回执 `sandbox/reports/2026-11-05-plan18-01/`。
 - 2026-11-05：01 交付 `e4cae62`，Claude 核对合同、核心连接与测试。02 完成设置页“网络”分区、来源行与模型行的“经代理”标记、来源测试“可用 · 经代理”，Web 定向测试 `apps/web/test/next-settings-network.test.ts`；`setting=network` 加入服务端页面地址白名单。2.3 与 3.2 的文档同步完成。
 - 2026-11-05：沙箱（无凭据）真实复验：测试代理 passed（43 ms），Crossref 直连 passed；Semantic Scholar 经代理 CONNECT 成功、目标返回 429（`metadata-provider-rate-limited`）。完成标准中的 Semantic Scholar 一项未满足，原因是匿名额度，不是出口；待匿名额度恢复后在同一沙箱复测，或由 Owner 在正式配置下测试。
+- 2026-11-05：收尾全量（`05d7724`）：格式、lint、类型检查与构建通过；测试 2779 通过、44 跳过、1 失败。失败的是 `apps/server/test/extraction-delivery.test.ts` 的“does not post a queued cancelled write…”，报 `catalog write admission failed`，单独复跑 3 次失败 2 次；计划 18 没有改动抽取或存储代码，记为已有的不稳定，另行处理。前一轮全量中 `browser-recoverable-navigation` 的 connection 两例和 `next-library` 的 3 万条分页在负载下失败，单独复跑均通过。
