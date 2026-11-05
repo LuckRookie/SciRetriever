@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
-import { TypeScriptConfigurationOwner } from "../../server/src/configuration/owner.js";
+import {
+  TypeScriptConfigurationOwner,
+  type ConfigurationProbeResult,
+} from "../../server/src/configuration/owner.js";
 import { executeConfiguration } from "../../server/src/entry/configuration-operations.js";
-import type { ConfigurationProbeResult } from "@sciretriever/contracts";
 import { nextWorkspace } from "./next-workspace-fixture.js";
 
 it("saves the proxy and the requesters that use it separately, tests the proxy, and keeps its authentication write-only", async () => {
