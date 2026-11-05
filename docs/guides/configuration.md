@@ -239,7 +239,7 @@ urls = [
 | ------ | ------------------ | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `urls` | 一到八项字符串数组 | 不写入时使用当前版本 builtin | 可选 custom override；完整覆盖 builtin；有序、规范化后不可重复；只接受 hostname-based HTTPS 默认端口，不接受 userinfo、query、fragment、IP literal、loopback 或不安全路径。 |
 
-Sci-Hub Source 默认关闭。显式启用且没有 `[sources.acquisition.sci-hub]` 时使用当前版本 bundled
+Sci-Hub Source 在 Acquisition Auto 中默认启用；Custom 模式只在 `providers` 列入它时使用。启用且没有 `[sources.acquisition.sci-hub]` 时使用当前版本 bundled
 mirror set；custom `urls` 一旦存在就完整覆盖 builtin，升级不会改写它。operator 仍须自行确认
 适用法律、机构政策、内容许可与服务条款。有效列表顺序就是尝试顺序：系统不会并发或自动发现
 镜像，也不会配置 API key、Cookie、session、代理、selector 或脚本。resolver 只对具有规范 DOI
