@@ -239,6 +239,8 @@ interface DocumentResource {
 
 建议读取面包括 `describe`、`outline`、`readSlice`、`readResource` 和 `resolveEvidence`。查询型操作不触发新建档或 parser；已有表示由 verified reader 按记录的 builder 核对，表示不存在直接返回缺口。
 
+verified reader 在进程内按文档版本与 representation hash 保留有界的整篇校验证明（Owner 2026-11-05 决定）。每次读取仍核对版本声明、限额、表示 hash 与校对稿绑定，并比对闭包中每个文件的 dev/ino/size/mtime/ctime；全部一致才跳过重算 PDF 与资源 hash 和重建结构，任一不同即完整核验，失败不留证明。证明不跨进程、不落盘；保持五项文件元数据全不变的篡改不在其检测范围内。交付给调用方的字节仍逐字节核验。规则细节见 `apps/server/src/document/README.md`。
+
 ```ts
 interface SliceRequest {
   readonly document: DocumentRef;
@@ -268,7 +270,7 @@ interface DocumentSlice {
 
 以字节作为基础资源计量。文本边界不能截断 UTF-8 字符；若公开文本 offset，locator scheme 必须明确采用 UTF-8 byte、Unicode code point 或其它单位，不能混用 JavaScript UTF-16 索引。token 预算需要声明 tokenizer，由 Q/Analysis 管理，不从字符数猜成准确 token。
 
-资源 JSON 读取继续提供有界 Base64 分页。阅读器也可向 `POST /api/v1/query/document-resource-bytes` 提交协议 1 包装的 `{document_version_id, resource_id}`，一次流式读取此固定版本的完整 PNG/JPEG/GIF/WebP 图片，单图上限 32 MiB。此接口与原始 PDF 的 material-bytes 同属 HTTP 二进制运输面，沿用查询认证、取消、背压与停服等待；CLI/MCP 保留原资源 JSON 读取。每次请求先经 verified reader 校验完整文档闭包，再校验所交付资源，响应头绑定文档版本、representation hash、resource ID/hash 与字节数。流结束前资源核验失败时中断响应，不能把部分字节视为成功；不使用跨请求验证缓存。
+资源 JSON 读取继续提供有界 Base64 分页。阅读器也可向 `POST /api/v1/query/document-resource-bytes` 提交协议 1 包装的 `{document_version_id, resource_id}`，一次流式读取此固定版本的完整 PNG/JPEG/GIF/WebP 图片，单图上限 32 MiB。此接口与原始 PDF 的 material-bytes 同属 HTTP 二进制运输面，沿用查询认证、取消、背压与停服等待；CLI/MCP 保留原资源 JSON 读取。每次请求先经 verified reader 校验完整文档闭包，再校验所交付资源，响应头绑定文档版本、representation hash、resource ID/hash 与字节数。流结束前资源核验失败时中断响应，不能把部分字节视为成功。整篇闭包可由上述校验证明命中，所交付资源本身每次都完整核验。
 
 ## 4. 证据定位、版本与生命周期
 
