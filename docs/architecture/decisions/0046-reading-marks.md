@@ -2,7 +2,7 @@
 
 类型：决策（ADR）
 负责：阅读批注（高亮、框选与笔记）的归属、锚点、保存与机器访问
-状态：Accepted（2026-10-29，Owner 确认：“1、存进去 2、可以 3、排在之前那批问题之后吧”）
+状态：Accepted（2026-10-29，Owner 确认：“1、存进去 2、可以 3、排在之前那批问题之后吧”）；部分被取代：从 Zotero 单向导入批注见 [ADR 0057](0057-zotero-import-and-browser-capture.md) 第 3、4 节
 
 - Date: 2026-10-29
 - 依据：Owner 2026-10-29 要求在阅读中加入高亮、笔记、标签和框选，做法交给 Claude；评审过的方案见[历史提案](../../archive/2026-10-29-reading-annotations/README.md)。
