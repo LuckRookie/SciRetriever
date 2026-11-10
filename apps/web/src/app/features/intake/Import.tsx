@@ -222,11 +222,10 @@ export function ImportForm() {
   );
 }
 
-/** Active and recent sessions from every entry, Agents included. */
-export function ImportSessions() {
-  const api = useApi(),
-    devices = useDeviceNames();
-  const sessions = useQuery({
+/** The most recent import sessions from every entry, polled while the page is open. */
+export function useImportSessions() {
+  const api = useApi();
+  return useQuery({
     queryKey: sessionsKey,
     queryFn: async ({ signal }) => {
       const page = await api.call(
@@ -238,6 +237,12 @@ export function ImportSessions() {
     },
     refetchInterval: 3000,
   });
+}
+
+/** Active and recent sessions from every entry, Agents included. */
+export function ImportSessions() {
+  const devices = useDeviceNames(),
+    sessions = useImportSessions();
   return (
     <section className="intake-import-sessions" aria-label="导入会话">
       <h2>导入会话</h2>

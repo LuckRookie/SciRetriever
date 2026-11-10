@@ -150,8 +150,9 @@ it("shows an Agent's import session, confirms it on the page, uploads matching P
   }
 }, 120000);
 
-it("previews an uploaded BibTeX export without writing, then imports it", async () => {
+it("previews an uploaded BibTeX export without writing, then imports it with the PDF it refers to", async () => {
   const w = await nextWorkspace({ path: "/?view=disc", ready: ".intake-form" });
+  const folder = await mkdtemp(join(tmpdir(), "sciretriever-upload-pdfs-"));
   try {
     const page = w.page;
     await page.getByRole("tab", { name: "导入", exact: true }).click();
@@ -159,12 +160,19 @@ it("previews an uploaded BibTeX export without writing, then imports it", async 
       name: "library.bib",
       mimeType: "text/plain",
       buffer: Buffer.from(
-        "@article{one,\n  title = {Uploaded paper},\n  doi = {10.5555/upload-one},\n  year = {2025}\n}\n",
+        "@article{one,\n  title = {Uploaded paper},\n  doi = {10.5555/upload-one},\n  year = {2025},\n  file = {Full Text PDF:files/7/upload.pdf:application/pdf}\n}\n",
       ),
     });
-    expect(
-      await page.getByRole("button", { name: "格式" }).textContent(),
-    ).toContain("BibTeX");
+    // The format is read from the file once its text has loaded.
+    await expect
+      .poll(() => page.getByRole("button", { name: "格式" }).textContent())
+      .toContain("BibTeX");
+    // The PDF the export refers to is in the folder chosen with it.
+    await writeFile(
+      join(folder, "upload.pdf"),
+      workbenchPdf("10.5555/upload-one"),
+    );
+    await page.getByLabel("PDF 文件夹").setInputFiles(folder);
     await page.getByRole("button", { name: "预览导入", exact: true }).click();
     const view = page.getByRole("region", { name: "导入会话" });
     await view.getByRole("heading", { name: "library.bib" }).waitFor();
@@ -179,6 +187,7 @@ it("previews an uploaded BibTeX export without writing, then imports it", async 
       .getByRole("button", { name: "确认导入", exact: true })
       .click();
     await view.getByRole("heading", { name: "报告" }).waitFor();
+    await view.getByText("已上传 1").waitFor();
     await view.getByText("完成").first().waitFor();
     await view.getByRole("button", { name: "返回入库" }).click();
     await page
@@ -186,8 +195,15 @@ it("previews an uploaded BibTeX export without writing, then imports it", async 
       .getByRole("row", { name: /library\.bib/u })
       .getByText("网页")
       .waitFor();
+    // The intake record of this import leads back to its report.
+    await page
+      .locator(".intake-record", { hasText: "library.bib" })
+      .getByRole("button", { name: "导入报告" })
+      .click();
+    await view.getByRole("heading", { name: "报告" }).waitFor();
     expect(w.errors).toEqual([]);
   } finally {
+    await rm(folder, { recursive: true, force: true });
     await w.close();
   }
 }, 120000);

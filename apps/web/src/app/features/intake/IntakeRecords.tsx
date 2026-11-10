@@ -17,6 +17,8 @@ import {
 } from "../../data/intake-batches.js";
 import { emptyQuery } from "../../data/library.js";
 import { openBatch } from "../library/Folders.js";
+import { navigate } from "../../data/url.js";
+import { useImportSessions } from "./Import.js";
 import { AcquireDialog, type AcquireScope } from "../library/AcquireDialog.js";
 import { errorMessage, localTime } from "../../strings.js";
 
@@ -56,7 +58,8 @@ export function IntakeRecords({
   highlight: string | null;
   submitting?: boolean;
 }) {
-  const batches = useIntakeBatches(submitting);
+  const batches = useIntakeBatches(submitting),
+    sessions = useImportSessions().data;
   const [acquire, setAcquire] = useState<AcquireScope | null>(null);
   const items = batches.data?.pages.flatMap((page) => page.items) ?? [];
   return (
@@ -76,6 +79,11 @@ export function IntakeRecords({
               key={batch.batch_id}
               batch={batch}
               open={batch.batch_id === highlight}
+              session={
+                sessions?.find(
+                  (session) => session.intake_batch_id === batch.batch_id,
+                )?.session_id ?? null
+              }
               onAcquire={() =>
                 setAcquire({
                   kind: "query",
@@ -93,7 +101,7 @@ export function IntakeRecords({
       ) : (
         <EmptyState
           title="还没有入库记录"
-          description="用上方的主题发现、引用扩展或导入书目带进文献后，每一次都会在这里留下一条记录。"
+          description="用上方的主题发现、引用扩展或导入带进文献后，每一次都会在这里留下一条记录。"
         />
       )}
       {batches.hasNextPage ? (
@@ -115,10 +123,13 @@ export function IntakeRecords({
 function Record({
   batch,
   open,
+  session,
   onAcquire,
 }: {
   batch: IntakeBatch;
   open: boolean;
+  /** The import session that formed this batch, when it is among the recent ones. */
+  session: string | null;
   onAcquire: () => void;
 }) {
   const api = useApi(),
@@ -271,6 +282,9 @@ function Record({
           <Button onPress={() => openBatch(batch.batch_id)}>
             在文献库查看
           </Button>
+          {session ? (
+            <Button onPress={() => navigate({ session })}>导入报告</Button>
+          ) : null}
           {pdf.pending > 0 && batch.status !== "running" ? (
             <Button variant="primary" onPress={onAcquire}>
               获取 PDF <span>{pdf.pending.toLocaleString()}</span>
