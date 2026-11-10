@@ -4,7 +4,7 @@
 负责：文档类型和更新流程
 状态：现行
 
-SciRetriever 面向科研 Agent 供应文献材料、知识压缩与通用提取交付，也提供人类配置、生产浏览器协作和阅读。查询已有数据库与主动扩充/加工是独立操作；缺口不自动启动搜索或下载。
+SciRetriever 是通用的文献知识库，服务人和 Agent 两类对象，定位见[产品需求](architecture/requirements.md)第 1 节。查询已有数据库与主动扩充/加工是独立操作；缺口不自动启动搜索或下载。
 
 ## 文档类型
 
@@ -52,6 +52,7 @@ SciRetriever 面向科研 Agent 供应文献材料、知识压缩与通用提取
 | Provider 名称与接入责任                      | [供应商治理](development/provider-governance.md)（名称/责任）、[接入步骤](development/provider-integration.md)（接入步骤）                                                                                            | technical/03、配置手册；外部事实归 notes/providers     |
 | 业务指南操作与技术接口合同                   | [各能力指南](guides/README.md)（使用步骤）、[对应技术篇](architecture/technical.md)（字段/不变量）                                                                                                                    | agent-interface 只导航到专门能力                       |
 | 文档类型和更新流程                           | [文档导航](README.md)                                                                                                                                                                                                 | documentation-map、HARNESS、typescript-baseline        |
+| 总设计师的指定方式、职责与工作方法           | [总设计师](development/chief-designer.md)                                                                                                                                                                             |
 | 计划编写/恢复规范与历史验收台账              | [计划导航](plans/README.md)（计划结构）、[具体归档计划](archive/README.md)（历史证据）                                                                                                                                | archive 索引；验证政策归 HARNESS                       |
 | technical 中早期形式化接口                   | [各模块技术篇](architecture/technical.md)的“目标接口（尚未实现）”小节                                                                                                                                                 | 当前实现以源码为准，不据此撤销目标合同                 |
 | Browser binary/Profile 完整生命周期          | [Browser 技术篇](architecture/technical/08-browser-control.md#6-目标接口尚未实现)                                                                                                                                     | technical/01 只链接；notes/cloakbrowser 只保留外部事实 |

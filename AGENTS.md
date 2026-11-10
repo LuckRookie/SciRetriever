@@ -24,17 +24,17 @@
 
 ## 2. 项目画像
 
-| 字段       | 值                                                                                                             |
-| ---------- | -------------------------------------------------------------------------------------------------------------- |
-| 项目定位   | 科研 Agent 的原始论文材料供给与有证据知识压缩组件；提供正式人类配置、Browser 观看/指导和知识阅读，保持领域中立 |
-| 主要语言   | TypeScript/Node 22.19.0；Python 仅为历史维护材料                                                               |
-| 包管理     | `pnpm`，锁文件 `pnpm-lock.yaml`                                                                                |
-| 活动源码   | `packages/`、`apps/server/src/`、`apps/web/src/`                                                               |
-| 测试       | `packages/*/test/`、`apps/*/test/`，Vitest；`tests/fixtures/` 仅保存合成兼容 fixture                           |
-| 质量入口   | `pnpm quick / test / full`；Python Harness 仅为历史维护入口                                                    |
-| CI         | 普通非 master 分支 push 运行 TS Quick；PR、master 和手动运行执行 TS Full（Node 22.19.0）                       |
-| 临时文件   | 本机真实/一次性测试用 `sandbox/`；自动化回归的临时 home/合成库及短期工具文件用系统临时目录 `sciretriever-*`    |
-| 不提交内容 | `sandbox/`、个人配置、运行时 catalog、文献资产、用户语料、`.venv/`、`build/`、`dist/`、缓存和临时文件          |
+| 字段       | 值                                                                                                          |
+| ---------- | ----------------------------------------------------------------------------------------------------------- |
+| 项目定位   | 通用的文献知识库，服务人和 Agent 两类对象：获取已有知识（PDF），并对知识加工处理；保持领域中立              |
+| 主要语言   | TypeScript/Node 22.19.0；Python 仅为历史维护材料                                                            |
+| 包管理     | `pnpm`，锁文件 `pnpm-lock.yaml`                                                                             |
+| 活动源码   | `packages/`、`apps/server/src/`、`apps/web/src/`                                                            |
+| 测试       | `packages/*/test/`、`apps/*/test/`，Vitest；`tests/fixtures/` 仅保存合成兼容 fixture                        |
+| 质量入口   | `pnpm quick / test / full`；Python Harness 仅为历史维护入口                                                 |
+| CI         | 普通非 master 分支 push 运行 TS Quick；PR、master 和手动运行执行 TS Full（Node 22.19.0）                    |
+| 临时文件   | 本机真实/一次性测试用 `sandbox/`；自动化回归的临时 home/合成库及短期工具文件用系统临时目录 `sciretriever-*` |
+| 不提交内容 | `sandbox/`、个人配置、运行时 catalog、文献资产、用户语料、`.venv/`、`build/`、`dist/`、缓存和临时文件       |
 
 当前活动实现是按功能模块组织的 TypeScript/Node 模块化单体：
 
