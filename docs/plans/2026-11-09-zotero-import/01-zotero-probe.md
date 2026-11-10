@@ -1,7 +1,7 @@
 # 01 · Zotero 接口探测
 
 类型：计划（结果块）
-负责：在写合同之前，看清两种 Zotero API 实际返回什么
+负责：在写 Zotero 适配器与 skill 之前，看清 Zotero 接口实际返回什么
 状态：In progress（1.1 完成；1.2、1.3 等 Owner 运行探测扩展）
 
 ## Outcome
@@ -12,8 +12,9 @@
   - 本地 API 的 `/items/<key>/file` 怎样给出本机路径（重定向到 `file://` 还是别的）；
   - 批注能否用 `itemType=annotation` 列出，`annotationPosition` 的结构；
   - 网络 API 的 `Backoff`、`Retry-After` 与限流表现；Zotero 存储附件的下载方式。
+- 库编号的形式（本地 API 里个人库的 `library.id` 是不是真实用户编号），以及没开同步时条目版本号的取值。
 - 浏览器扩展能否访问本地 API 的结论（只记录，不在本计划内实现）。
-- 一组合成的假 Zotero 响应样本，供 02、03、07 的测试使用。样本里不含 Owner 文献库的任何内容。
+- 一组合成的假 Zotero 响应样本，供 04、10 的测试与 06 的 skill 使用。样本里不含 Owner 文献库的任何内容。
 
 ## 进入条件
 
@@ -23,14 +24,14 @@ G1：Owner 说明 Zotero 所在电脑，并同意探测；Owner 授权开始实�
 
 Claude。只写 `sandbox/cases/2026-11-09-zotero-probe/` 与本块。不改源码。
 
-G1 答复是 Zotero 与 4174 不在同一台电脑上，所以 Owner 的真实导入走网络 API，本地 API 只服务同机的用户。为此 1.2 与 1.3 合并成一个开发者模式扩展，在 Owner 装 Zotero 的电脑上运行：Chrome、Edge 在 Windows 和 macOS 上用法相同，不需要知道系统、也不需要 Node 或 `curl`；它同时探测本地 API 和网络 API，网络 API 用 Owner 当场粘贴的只读 key，key 不离开那台电脑。
+G1 答复是 Zotero 与 4174 不在同一台电脑上。按 ADR 0058，Owner 的真实导入由自己电脑上的 Agent 读 Zotero 本地 API，再交给文献库，所以本地 API 的格式是适配器和 skill 的主要依据。1.2 与 1.3 合并成一个开发者模式扩展，在 Owner 装 Zotero 的电脑上运行：Chrome、Edge 在 Windows 和 macOS 上用法相同，不需要 Node 或 `curl`。它同时探测本地 API 和网络 API；网络 API 用 Owner 当场粘贴的只读 key，key 不离开那台电脑。
 
 ## Tasks
 
 - [x] **1.1 网络 API**：2026-11-10 从 4174 所在机器匿名读公开库，共约 60 次请求，未遇到 `Backoff`。可读的公开群组都只对成员开放，改用 Zotero 文档示例中的公开个人库。结论见下文。
-- [ ] **1.2 Owner 文献库的结构**（与 1.3 合并为探测扩展）：扩展在 `sandbox/cases/2026-11-09-zotero-probe/extension/`，已打包交给 Owner。只发 GET，只输出字段名、类型与计数，不输出标题、作者、笔记、批注文字、文件名或路径。覆盖本地 API 与网络 API 的条目、CSL JSON、附件、文件访问、批注、分类、标签与群组，并统计 PDF 有多少在 Zotero 存储里。
+- [ ] **1.2 Owner 文献库的结构**（与 1.3 合并为探测扩展）：扩展在 `sandbox/cases/2026-11-09-zotero-probe/extension/`，已打包交给 Owner（0.2.0：本地 API 的请求带 `Zotero-Allowed-Request` 头，并记录不带时的状态）。只发 GET，只输出字段名、类型与计数，不输出标题、作者、笔记、批注文字、文件名或路径。覆盖本地 API 与网络 API 的条目、CSL JSON、附件、文件访问、批注、分类、标签与群组，并统计 PDF 有多少在 Zotero 存储里。
 - [ ] **1.3 扩展访问本地 API**：同一个扩展，结果里的 `local.root` 与各请求状态即结论。
-- [ ] **1.4 样本与结论**：网络 API 部分已写（`fixtures/web-api.json`，由 `make-fixtures.py` 生成），批注部分按 Zotero 的数据结构写，标为未验证；本地 API 部分等 1.2。按 1.1、1.2 的结构写合成样本（条目、分类、附件、批注、CSL JSON，各含边界情况：无 DOI、Extra 里的 arXiv 号、多 PDF、链接附件、独立 PDF、群组库），放在探测目录，02 开工时由 Codex 移进测试 fixture。
+- [ ] **1.4 样本与结论**：网络 API 部分已写（`fixtures/web-api.json`，由 `make-fixtures.py` 生成），批注部分按 Zotero 的数据结构写，标为未验证；本地 API 部分等 1.2。按 1.1、1.2 的结构写合成样本（条目、分类、附件、批注、CSL JSON，各含边界情况：无 DOI、Extra 里的 arXiv 号、多 PDF、链接附件、独立 PDF、群组库），放在探测目录，04 开工时由 Codex 移进测试 fixture。
 
 ## 探测结论
 
@@ -58,8 +59,8 @@ G1 答复是 Zotero 与 4174 不在同一台电脑上，所以 Owner 的真实�
 
 ## 退出条件
 
-上述各项都有结论或明确标为“未验证”。与 ADR 0057 不符之处先分清是 bug 还是设计问题；设计问题拿去和 Owner 讨论，再派 02。
+上述各项都有结论或明确标为“未验证”。与 ADR 0057 不符之处先分清是 bug 还是设计问题；设计问题拿去和 Owner 讨论，再派 04。
 
 ## 恢复与交接
 
-探测失败只影响本块。本地 API 拿不到时，02 先按网络 API 的格式实现，本地 API 部分标为待验证，在 09 的真实导入中补验。
+探测失败只影响本块。本地 API 拿不到时，04 先按网络 API 的格式实现，本地 API 部分标为待验证，在 G2 的真实导入中补验。
