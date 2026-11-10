@@ -6,7 +6,7 @@
 
 ## 阅读顺序与责任
 
-1. [requirements](requirements.md)：科研Agent文献/知识目标，人类协作、调用方提取、查询与显式扩充分离，R1–R13验收。
+1. [requirements](requirements.md)：通用文献知识库的目标，人和 Agent 两类服务对象，收、读、理、炼、用五件事及其验收。
 2. [ADR索引](decisions/README.md)：0026/0027/0028决定产品方向；0031选定受控 DSH/Cordis 执行基础；旧身份/来源/安全规则保留适用部分。
 3. [principles](principles.md)、[design](design.md)：稳定不变量与目标模块/数据所有权。
 4. [八模块技术导航](technical.md)：与 design 一一对应的 8 篇正文，分别给出内部结构、字段、接口、运行和存储设计。

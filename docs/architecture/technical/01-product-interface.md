@@ -718,7 +718,7 @@ Provider。
 Network 对规范 `/models` 执行一次无 redirect、无 retry、最多 1 MiB/100 项的 GET，返回非持久
 typed observation 后立即关闭 client。目录只用于选择 Model ID；所有失败稳定、脱敏，只有失败、
 空目录或协议无可用结果时才提示 `Manual`。取消不保存部分 Provider、Model 或 key；首页、Status、
-打开 Models 和普通业务命令的目录调用计数为零。
+打开 Models 和普通业务命令的目录调用计数为零。保存前展示不含 secret 的配置摘要。
 
 具体 Model 对象页的 `Edit` 只修改 reasoning、image 与 stream，`Test` 验证该精确 Model 而不改变任务选择。reasoning schema 接受
 `default/none/minimal/low/medium/high/xhigh/max`；`default` 完全省略 wire 字段，其它值由 adapter

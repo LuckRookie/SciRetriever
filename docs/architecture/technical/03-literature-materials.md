@@ -373,7 +373,7 @@ Metadata 形成中性 observation 后，通过自己拥有的 publication Port �
 
 直接测试至少覆盖：
 
-- 目标领域搜索 Provider 矩阵按“项目目标、Auto/Custom 有效选择、生产实现、readiness”分层选择；默认 Auto 集合与 Custom 精确/空列表均可离线确定，Key 不改变选择；OpenCitations 只参加精确 lookup/引用，不参加主题搜索；
+- 目标领域搜索 Provider 矩阵按“项目目标、Auto/Custom 有效选择、生产实现、readiness”分层选择；默认 Auto 集合与 Custom 精确/空列表均可离线确定；必需凭据与普通参数配置齐全的来源按 [ADR 0043](../decisions/0043-configured-metadata-auto.md) 进入 Auto，集合只看本地字段是否齐全，不联网判定；OpenCitations 只参加精确 lookup/引用，不参加主题搜索；
 - 领域发现无需也不能按 publisher 预选 Provider，全部已启用且就绪的 search adapter 各自在自己的覆盖范围内执行；明确启用但 adapter、必需普通参数/凭据或 AccessPolicy 缺失时开始前失败；
 - 领域 DiscoveryRun 把 `sources.metadata.limit` 分别应用给每个参与 Provider，过滤、缺少标题/DOI、重复和未接纳 item 都消耗本 Source 上限；默认是 500，结果耗尽或达到上限后正常停止，Provider cursor、过程计数、搜索分数、未接纳候选和请求/响应不进入 Model 或 Storage；
 - 接纳一条领域结果不会自动触发该 Literature 的全 Provider 精确补查、PDF、Parsing 或 Analysis，Metadata API 不接收 Collection 或 Batch 状态；
@@ -414,6 +414,7 @@ Metadata 形成中性 observation 后，通过自己拥有的 publication Port �
 - 同一 API quota 被 Metadata search、reference query 与 Acquisition 共用时，在当前进程使用同一 AccessScope；不同供应商仍可逻辑并发，但真实请求分别服从其共享 policy；
 - `429`、`Retry-After` 和 quota 阻塞会限制同一 scope 的其它调用方，取消或重跑不能立即绕过；
 - 缺失 policy、vendor SDK 绕过受控 transport 或 adapter 私建局部 limiter 时 readiness/架构检查失败；
+- 出版社名称维护：规则与别名归类保留来源原文；范围扫描区分 resolved、unknown 与 conflict；AI 建议保留输入 hash 与模型来源，须显式接纳；配置 revision 变化或站点、别名冲突时拒绝旧建议；名称不能独自启动文章 API，也不证明授权；
 - 未提供生产 client 的选择键不能被写成可用集成。
 
 测试使用 fake provider 和本地 transport，不访问真实供应商。
@@ -424,7 +425,7 @@ Metadata 的 search/lookup/reference 都可能访问外部服务，属于显式�
 
 普通 Provider 选择和 scan limit 来自本次 Application 配置快照，CLI 未指定 `--scan-limit` 时消费已保存值；显式参数只覆盖本操作，不改写配置。`sources.metadata.limit=7` 表示每个已选择 Source 最多扫描 7 条原始 item，不是最终去重后文献总数。
 
-引用发现 Auto 的执行顺序由 Metadata registry 在既有选择集合内根据 Credential owner 的非敏字段存在性稳定排序：有凭据者在前，公开匿名者在后；Custom 顺序保持不变。Entry 对每个 BFS 节点按顺序消费完整分页，只有正常耗尽、有可用关系且已识别范围内全部目标时才短路后续来源。目标必要 lookup 优先使用关系来源，再按当前优先级尝试其它来源；跨来源 key 移除私有 `record_id`，只携带共同稳定标识。所有精确补查消费调用来源的剩余 raw-item 预算；没有共同标识时，不向其它来源发送私有 ID。
+引用发现 Auto 的执行顺序由 Metadata registry 在既有选择集合内根据 Credential owner 的非敏字段存在性稳定排序：有凭据者在前，公开匿名者在后；Custom 顺序保持不变。Entry 对每个 BFS 节点按顺序消费完整分页，只有正常耗尽、有可用关系且已识别范围内全部目标时才短路后续来源。目标必要 lookup 优先使用关系来源，再按当前优先级尝试其它来源；跨来源 key 移除私有 `record_id`，只携带共同稳定标识。所有精确补查消费调用来源的剩余 raw-item 预算；没有共同标识时，不向其它来源发送私有 ID。 两层扩展在用户边界内处理完第一层接纳的全部节点，再统一去重；未完成或存在缺口时，不把阶段数量表述为完整的两层结果。
 
 引用运行的 `failure` 汇总与本来源能否继续调用分别处理。目标 404、记录转换或单节点失败只留下诊断，不把整来源设为终止；鉴权/授权失败和 429 暂停该来源，扫描上限停止本来源，其他独立来源继续。存储异常不被吞掉，取消不触发后续来源。已有结果且存在失败时报告 `PARTIAL`；无结果且全部实际尝试来源失败时才为 `FAILED`。`source_results` 只包含实际引用查询或目标 lookup 尝试过的来源，完整选择范围仍保留在 `providers`；未调用不等于 `EXHAUSTED`。种子在引用环中再次出现时保留边和来源支持，但不作为新增发现结果计数。上述变化不新增 catalog schema 或配置字段。
 
@@ -1282,6 +1283,7 @@ Application 的 writes 为 FileStore 与 SQLite 提供同一短写入准入。�
 - 当前进程内的失败、超时和取消不能泄漏网页 permit 或清空仍有效的冷却/`blocked_until`；新进程不恢复这些动态状态；
 - 同次运行使用临时 tried set 避免立即重试，新运行允许重新发现且数据库不保存无效 candidate/route/decision；
 - 新 MetadataObservation、成功自动或手动主 PDF、用户明确重试都会清除自动获取耗尽事实；全库自动补全默认跳过仍有该事实的 Literature；
+- Sci-Hub 来源：Auto 默认启用，Custom 可以不选；没有 custom 列表时使用当前版本内置的有序镜像，custom 列表完整覆盖内置列表并在升级后保持不变；Reset 恢复跟随内置列表，禁用时保留 custom；请求按序而非并发执行，继续经过统一的 Network 与 PDF 验收；不配置凭据、会话或绕过能力，出口按统一的出网选择；
 - Parser/LLM 调用失败、ParserResult 乱码/截断/只有资源引用或无法判断时不删除 PDF；
 - 无效候选不留下候选级长期详情；Analysis 明确无内容只终止本次尝试，不删除已接纳 PDF、ParserResult、原始 MetadataObservation 或 AssetHint；
 

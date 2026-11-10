@@ -94,5 +94,5 @@ secret-free Profile 位于 `src/sciretriever/acquisition/profile_catalog.py`，�
 生产证据；不保存真实 DOI、正文、Cookie、账号、机构或 Browser profile。
 
 `unsupported` Profile 不进入 production catalog，不新增 APS credential section，也不会启动
-Browser。替代路径仍是现有通用 Public/OA 来源和用户独立的手动 PDF 接纳；两者都继续服从 R3
+Browser。替代路径仍是现有通用 Public/OA 来源和用户独立的手动 PDF 接纳；两者都继续服从需求收2（取得全文）
 资产验证、provenance、lineage 与不可变发布边界。
