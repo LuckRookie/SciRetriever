@@ -74,7 +74,7 @@ M2 与 M3 可以合成一次部署，由 Owner 决定。
 | [05](05-import-web.md)         | 设置页“设备连接”分区，入库页“导入”与会话页                                    | Claude | 02、03 的合同   | Done        |
 | [06](06-agent-skill.md)        | 文献库自带的 skill 与“复制给 Agent 的话”，由新的 Agent 会话试跑通过           | Claude | 01、03、04      | Pending     |
 | [07](07-http-mcp.md)           | HTTP 版 MCP：同一地址、令牌认证、按用途给出工具                               | Codex  | 02              | Done        |
-| [08](08-capture-backend.md)    | 收藏后端：收藏接口、`web-capture` 来源、按日批次、扩展安装包下载              | Codex  | 02、03          | Pending     |
+| [08](08-capture-backend.md)    | 收藏后端：收藏接口、`web-capture` 来源、按日批次、扩展安装包下载              | Codex  | 02、03          | Done        |
 | [09](09-browser-extension.md)  | 浏览器扩展本体                                                                | Claude | 08 的合同       | Pending     |
 | [10](10-zotero-annotations.md) | Zotero 批注导入                                                               | Codex  | 03、04          | Pending     |
 | [11](11-closing.md)            | 各里程碑的部署与迁移、真实环境验证、收尾全量                                  | Claude | 各里程碑；G2–G4 | Pending     |
@@ -123,7 +123,8 @@ M2 与 M3 可以合成一次部署，由 Owner 决定。
 - 2026-11-10：04 等 01 的探测结果，先做 07。07 完成（`bbbd8d5`）：同一地址上的 `/mcp`，与 stdio 版共用工具，读取 42 个、操作 40 个工具按用途列出与调用，撤销后已建立的连接立即中断；新增导入会话的只读工具。定向测试复跑通过。回执在 `sandbox/reports/2026-11-10-plan20-07/`。05 接入时发现三处后端缺口（无库号的导出文件建会话、网页下载 skill、设置分区地址），另派 03b。
 - 2026-11-10：03b 完成（`316526a`）：没有库号的导出文件以一次性来源建会话，网页登录用户可下载说明与 skill，`setting=devices` 进入地址白名单。05 完成（`8e174cb`）：设置页“设备连接”、入库页“导入”与会话页，页面规格与 Web 指南同步；Web 定向测试通过，截图在 `sandbox/reports/2026-11-10-plan20-05/`。书目适配器还不读附件字段，网页上传时随附的 PDF 文件夹暂时匹配不到文件，另派 03c。
 - 2026-11-10：03c 完成（`3f204fa`）：BibTeX/BibLaTeX 的 `file` 与 RIS 的 `L1` 给出首选 PDF，绝对路径不外露本机目录。网页上传连同 PDF 文件夹已端到端测通；入库记录加上“导入报告”入口，05 收齐。
+- 2026-11-10：08 完成（`afe75c3`）：`/api/v1/capture/...` 的查询、文件夹、保存（`web-capture` 来源，无 DOI/arXiv 拒绝，同步排入元数据补全）、PDF 上传（与导入共用文件通道）；每设备每天一个批次（按 UTC）；扩展安装包下载接受收藏令牌与网页登录。表并入 schema 16。定向测试复跑通过。回执在 `sandbox/reports/2026-11-10-plan20-08/`。
 
 ## 下一安全动作
 
-派 08（收藏后端）给 Codex。04 等 Owner 在装 Zotero 的电脑上运行探测扩展并发回结果。
+09（浏览器扩展本体）开工，设置页加“下载扩展安装包”。04 等 Owner 在装 Zotero 的电脑上运行探测扩展并发回结果。
