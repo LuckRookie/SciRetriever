@@ -72,7 +72,7 @@ M2 与 M3 可以合成一次部署，由 Owner 决定。
 | [03](03-import-sessions.md)    | 导入模型、适配器接口、导入会话的 HTTP 接口、文件通道、外部编号对应、schema 16 | Codex  | 02              | Done        |
 | [04](04-zotero-adapter.md)     | Zotero 适配器：书目、分组、标签、首选附件                                     | Codex  | 01、03          | Pending     |
 | [05](05-import-web.md)         | 设置页“设备连接”分区，入库页“导入”与会话页                                    | Claude | 02、03 的合同   | Done        |
-| [06](06-agent-skill.md)        | 文献库自带的 skill 与“复制给 Agent 的话”，由新的 Agent 会话试跑通过           | Claude | 01、03、04      | Pending     |
+| [06](06-agent-skill.md)        | 文献库自带的 skill 与“复制给 Agent 的话”，由新的 Agent 会话试跑通过           | Claude | 01、03、04      | 进行中      |
 | [07](07-http-mcp.md)           | HTTP 版 MCP：同一地址、令牌认证、按用途给出工具                               | Codex  | 02              | Done        |
 | [08](08-capture-backend.md)    | 收藏后端：收藏接口、`web-capture` 来源、按日批次、扩展安装包下载              | Codex  | 02、03          | Done        |
 | [09](09-browser-extension.md)  | 浏览器扩展本体                                                                | Claude | 08 的合同       | 待 G4       |
@@ -125,8 +125,9 @@ M2 与 M3 可以合成一次部署，由 Owner 决定。
 - 2026-11-10：03c 完成（`3f204fa`）：BibTeX/BibLaTeX 的 `file` 与 RIS 的 `L1` 给出首选 PDF，绝对路径不外露本机目录。网页上传连同 PDF 文件夹已端到端测通；入库记录加上“导入报告”入口，05 收齐。
 - 2026-11-10：08 完成（`afe75c3`）：`/api/v1/capture/...` 的查询、文件夹、保存（`web-capture` 来源，无 DOI/arXiv 拒绝，同步排入元数据补全）、PDF 上传（与导入共用文件通道）；每设备每天一个批次（按 UTC）；扩展安装包下载接受收藏令牌与网页登录。表并入 schema 16。定向测试复跑通过。回执在 `sandbox/reports/2026-11-10-plan20-08/`。
 - 2026-11-10：09 实现完成，待 G4（`d12cdb7`、`4c39563`、`e9bdbee`）：`apps/browser-extension/` 的 MV3 扩展，连接码连接、读页、查询、收藏、浏览器内下载并上传 PDF；`pnpm build` 打出安装包，设置页可下载；指南 `docs/guides/browser-extension.md`。页面读取与对合成文献库的收藏流程测试通过。
+- 2026-11-11：06 通用部分完成：skill 源文件在 `skills/sciretriever/`（连接、导入、Zotero 导出、使用文献库、失败与恢复，附上传脚本），`pnpm build` 打成 `skill.zip` 与合并的 `instructions.md`；“复制给 Agent 的话”定稿；Agent 接口指南与目录说明同步。全新子代理试跑两次，第二次一次通过，记录见 06。Zotero 直接读取等 01、04。
 
 ## 下一安全动作
 
-- 09 待 G4：Owner 在 Chrome 或 Edge 里加载扩展，在 3–5 个有权限的出版社或预印本页面上试收藏。部署 4174 需另问。
-- 04、10 等 Owner 在装 Zotero 的电脑上运行探测扩展并发回结果；06（skill）的通用部分可以先写。
+- 04、10 与 06 的 Zotero 直接读取，等 Owner 在装 Zotero 的电脑上运行探测扩展并发回结果。
+- 09 待 G4，需要先部署：M1（01–06 中已完成的部分）与 M3 的后端、schema 15→16 迁移，部署 4174 要另问 Owner。
