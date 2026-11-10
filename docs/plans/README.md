@@ -6,6 +6,7 @@
 
 ## 活动索引
 
+- [计划21：初稿成为正式文本](2026-11-10-draft-text/README.md)。
 - [计划20：导入系统、Agent 接入与网页收藏](2026-11-09-zotero-import/README.md)。
 - [计划19：全文阅读](2026-11-05-reader-fulltext/README.md)。
 - [计划18：出网代理](2026-11-05-outbound-proxy/README.md)。

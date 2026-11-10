@@ -1,0 +1,63 @@
+# 08 · 长文档未逐页校订页的核对依据
+
+类型：计划（结果块）
+负责：长文档简化建档时，未逐页校订页上片段的核对依据改取初稿的三种取值
+状态：Pending
+
+## Outcome
+
+- 新建档的长文档（ADR 0055）：
+  - 未逐页校订（`unreviewed`）的页上，片段的 `basis` 取 `text-layer-match`、`text-layer-differs` 或 `no-text-layer`，与初稿用同一套对比规则；
+  - 用“重试指定页”校订过的页，取校订稿的取值（`text-layer`、`image-only`、`manual`）。
+- 长文档的文本等级仍是校订稿，“长文档”标记与说明文字不变。
+- 普通文献的校订稿完全不变。
+- 已发布的长文档版本按 1.13 的规定处理。
+
+规格：[04 §8.3](../../architecture/technical/04-document-evidence.md#83-初稿的结构与核对依据) 的长文档例外；[§6.3](../../architecture/technical/04-document-evidence.md#63-逐页校订与复用) 的长文档规则；01 的 1.13。
+
+## 进入条件
+
+02 的 2.1（取值类型）、2.4（对比函数）合入；01 的 1.13 已写进规格。不依赖 03–07。
+
+## 责任边界
+
+- 负责：后端实施者。
+- 触达：
+  - `apps/server/src/archive/text-pipeline.ts`（叶块 `basis` 现在只按页面类型取 `text-layer` 或 `image-only`）；
+  - `packages/contracts` 中 `ArchiveTextBundleV2`、`DocumentStructureV2`、`archive-publication.ts` 对 `basis` 的解析；
+  - `apps/server/src/archive/render.ts`（若 1.13 要求新的 builder 版本）。
+- 不改：长文档的判定、分段整理与断段；逐页校订请求；普通文献的任何输出字节。
+
+## Tasks
+
+- [ ] **8.1 取值**：建档组装校订内容时，对 `unreviewed` 页上的保留叶块调用 02 的对比函数，按 1.1 的合并规则得到片段取值。
+- [ ] **8.2 合同**：校订内容与结构的解析接受初稿取值，但只允许出现在长文档的未校订页上（按 1.13）；其余情形照旧拒绝。
+- [ ] **8.3 builder 与已发布版本**：按 1.13 处理。若要新的 builder 版本，旧版本仍按记录的 builder 逐字节重建与校验。
+- [ ] **8.4 对外读取**：segments、slice、evidence 返回这些取值；`processor-value-checks.ts` 已在 07 的 7.7 放宽。若本块先于 07 合入，在本块放宽该合同。
+
+## 集成与影响
+
+只影响此后新建档（或按 1.13 重新发布）的长文档。正式库中的长文档数量很少（实际文献库完成建档的有 3 篇）。
+
+## 验证
+
+扩展 `archive-long-document.test.ts`（合成长文档），证明：
+
+- 未校订页：文字与文字层一致的片段为 `text-layer-match`；故意改错的为 `text-layer-differs`；扫描页为 `no-text-layer`。
+- 用 `retry_page_indexes` 校订的页：取 `text-layer` 或 `image-only`。
+- 普通文献：校订内容与结构字节不变。
+- 已发布的长文档版本按记录的 builder 校验通过，读取结果不变。
+
+回归：`archive-long-document-production.test.ts`、`archive-render-v2.test.ts`；合同：`packages/contracts/test/long-document.test.ts`、`archive-text.test.ts`。
+
+## 证据
+
+提交号；定向测试结果。
+
+## 退出条件
+
+新建档的长文档在未校订页上带初稿的取值；普通文献不变。
+
+## 恢复与交接
+
+若 1.13 决定需要新的 builder 版本而这会影响计划 19 正在改的渲染，先与计划 19 的负责人确认顺序，记入本块。
