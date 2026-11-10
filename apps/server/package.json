@@ -11,7 +11,8 @@
     "dist/web/auth.html",
     "dist/web/auth.css",
     "dist/web/auth-fonts.json",
-    "dist/web/auth-fonts/*.woff2"
+    "dist/web/auth-fonts/*.woff2",
+    "dist/agent-access/**"
   ],
   "type": "module",
   "main": "./dist/index.js",

@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "SciRetriever 收藏",
+  "description": "在出版社或预印本页面上，把文献连同 PDF 收进自己的 SciRetriever 文献库。",
+  "version": "0.1.0",
+  "action": { "default_title": "收进文献库", "default_popup": "popup.html" },
+  "permissions": ["activeTab", "scripting", "storage"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "minimum_chrome_version": "116"
+}
